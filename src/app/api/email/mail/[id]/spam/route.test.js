@@ -2,7 +2,7 @@
 //
 // "Not spam" RELEASES: the flag clears, the conversation is back in the
 // inbox, and the notifications the webhook deliberately skipped at ingest
-// fire now — the staff push (maybeNotifyInboundEmail, with the ticket's own
+// fire now — the staff push (maybeNotifyInboundEmail, with the conversation's own
 // facts) and the unread mirror (email_tickets.unread_count set to the number
 // of unseen inbound messages, the same derivation the seen route uses).
 //
@@ -13,7 +13,7 @@
 // already-released conversation writes nothing and pings nobody, so a double
 // click (or two operators) cannot double-notify.
 //
-// The gate is loadTicketForUser's, unchanged — every refusal is a 404.
+// The gate is loadConversationForUser's, unchanged — every refusal is a 404.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -127,14 +127,14 @@ describe('not spam — release', () => {
     expect(body.data.notified).toBe(true)
   })
 
-  it('fires the staff push the webhook skipped at ingest, with the ticket’s own facts', async () => {
+  it('fires the staff push the webhook skipped at ingest, with the conversation’s own facts', async () => {
     await spam(T_STUDIO.id, { spam: false })
     expect(maybeNotifyInboundEmail).toHaveBeenCalledTimes(1)
     const [, args] = maybeNotifyInboundEmail.mock.calls[0]
     expect(args).toMatchObject({
       locationId: LOC_A,
-      ticketId: T_STUDIO.id,
-      ticketMailboxId: MB_MAIL.id,
+      conversationId: T_STUDIO.id,
+      conversationMailboxId: MB_MAIL.id,
       fromEmail: 'member@example.com',
       requesterName: 'Ada Member',
       subject: 'Class times',

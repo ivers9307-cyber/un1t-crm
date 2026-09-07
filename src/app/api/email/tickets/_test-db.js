@@ -1,11 +1,11 @@
-// Test double for the service-role client, shared by the ticket route tests.
+// Test double for the service-role client, shared by the conversation route tests.
 // (The legacy /api/email/conversations tests next door no longer need it —
 // EMAIL-CONV-STOP.1 retired those routes to 410 Gone, and their tests now
 // assert that no client is ever created.)
 //
 // It honours eq / in / is / not / or / ilike / order / limit rather than
 // no-opping them, because the property under test IS a filter: "a coach
-// granted studio@ must not see accounts@ tickets" is only proven if the
+// granted studio@ must not see accounts@ conversations" is only proven if the
 // route's own .in('mailbox_id', …) actually excludes rows. A permissive fake
 // would pass those tests with the gate deleted.
 //
@@ -235,7 +235,7 @@ export function makeDb(state = {}) {
     // rows; a fake that dropped the options would have answered `{ data: rows }`
     // with `count` undefined, so the nav-badge route's `count || 0` would read
     // 0 for every input and every assertion about the badge — including "a
-    // coach must not be counted accounts@ tickets" — would pass with the
+    // coach must not be counted accounts@ conversations" — would pass with the
     // mailbox scope deleted. Exactly the permissive-fake trap this file's
     // header warns about.
     const wantsCount = !!b._selectOptions?.count

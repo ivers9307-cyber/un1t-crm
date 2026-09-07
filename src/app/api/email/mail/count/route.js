@@ -4,7 +4,7 @@
 // THE ONE PRINCIPLE THIS FILE EXISTS FOR: "each badge counts exactly the rows
 // its own queue lists" (MAIL-TRIAL.B). The reasoning about WHAT the number
 // means — `open` AND an inbound last message, not the whole live queue, not
-// `unread_count>0`, not `unassigned` — was argued in full on the ticket
+// `unread_count>0`, not `unassigned` — was argued in full on the conversation
 // badge's header (now a deprecated shim next door); it applies unchanged.
 //
 // TWO GATES, same as every route on this surface. `email_inbox` gates the
@@ -17,7 +17,7 @@
 // out: NULL-mailbox conversations live on this surface since the queue was
 // deleted, so the badge scopes with the same shared helper as the list.
 //
-// Shape and posture otherwise follow the ticket badge exactly: parameterless,
+// Shape and posture otherwise follow the conversation badge exactly: parameterless,
 // count 0 (not an error) for a session that is not eligible at all, and a
 // FAILED visibility or count lookup is a 500 — never a badge of 0, which is
 // the same silent-wrong-answer shape EMAIL-TICKET-CLEANUP.2 fixed there.
@@ -28,7 +28,7 @@ import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import {
   loadVisibleMailboxes, scopeToVisibleMailboxes, scopeToNeedsReply, scopeToUnmerged,
-} from '../../tickets/_helpers'
+} from '../_conversation'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'

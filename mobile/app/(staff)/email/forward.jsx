@@ -1,5 +1,5 @@
-// MOBILE-MAIL-FORWARD.1 — passing one message on the ticket to somebody else
-// (approved item 7's last piece; pushed as /email/forward?ticketId=…&messageId=…).
+// MOBILE-MAIL-FORWARD.1 — passing one message on the conversation to somebody else
+// (approved item 7's last piece; pushed as /email/forward?conversationId=…&messageId=…).
 //
 // THE THIRD SEND SURFACE, and the one whose recipients are furthest from the
 // member: Reply writes to people the member put on the thread; New email
@@ -43,7 +43,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAuth } from '../../../lib/auth-context'
 import { canMobile } from '../../../lib/permissions'
-import { getTicket, forwardMessage, fetchSignatureContexts } from '../../../lib/email-api'
+import { getConversation, forwardMessage, fetchSignatureContexts } from '../../../lib/email-api'
 import { searchContacts, contactDisplayName } from '../../../lib/contacts-api'
 import {
   addRecipients, addContactPill, removePill, popPill, pillInitials, contactTag,
@@ -56,8 +56,8 @@ import {
   selectedForwardRows, forwardSendState,
 } from '../../../lib/mail-forward'
 import {
-  formatAttachmentSize, ticketAttachmentSkippedLabel, ticketAttachmentIcon,
-} from '../../../lib/email-tickets'
+  formatAttachmentSize, conversationAttachmentSkippedLabel, conversationAttachmentIcon,
+} from '../../../lib/mail-conversations'
 import { resolveSignatureHint } from '../../../lib/signature-hint'
 
 // Same cadence as the compose sheet's autocomplete.
@@ -71,7 +71,7 @@ function tagChip(contact) {
 }
 
 export default function ForwardMessage() {
-  const { ticketId, messageId } = useLocalSearchParams()
+  const { conversationId, messageId } = useLocalSearchParams()
   const { profile, activeLocation } = useAuth()
   const insets = useSafeAreaInsets()
   const locationId = activeLocation?.id
@@ -114,7 +114,7 @@ export default function ForwardMessage() {
   // studio is the TICKET'S, not this phone's active location: `locationId`
   // above is only the request-scoping header, while the route resolves the
   // signature against the conversation's own location.
-  const [ticketLocationId, setTicketLocationId] = useState(null)
+  const [conversationLocationId, setConversationLocationId] = useState(null)
   const [signatureContexts, setSignatureContexts] = useState([])
 
   const toInputRef = useRef(null)
@@ -125,13 +125,13 @@ export default function ForwardMessage() {
     if (!canEmail) return
     // A push with no ids is a coding error upstream — an honest sentence, not
     // a spinner that never resolves.
-    if (!ticketId || !messageId) {
+    if (!conversationId || !messageId) {
       setLoading(false)
       setLoadError('That message is no longer on this conversation.')
       return
     }
     let alive = true
-    getTicket(ticketId, locationId).then(res => {
+    getConversation(conversationId, locationId).then(res => {
       if (!alive) return
       setLoading(false)
       if (!res.success) {
@@ -139,7 +139,7 @@ export default function ForwardMessage() {
         return
       }
       setAttachmentsUnavailable(res.attachmentsUnavailable === true)
-      setTicketLocationId(res.ticket?.location_id || null)
+      setConversationLocationId(res.ticket?.location_id || null)
       const m = (res.messages || []).find(x => x?.id === messageId) || null
       setMessage(m)
       // The pre-tick decision is the lib's (everything when everything fits,
@@ -148,7 +148,7 @@ export default function ForwardMessage() {
       setSelected(defaultForwardSelection(forwardableAttachments(m?.attachments)))
     })
     return () => { alive = false }
-  }, [ticketId, messageId, locationId, canEmail])
+  }, [conversationId, messageId, locationId, canEmail])
 
   // The viewer's per-studio signature contexts. Fetched per mount and NEVER
   // cached at module level: on a shared front-desk phone a cache outlives the
@@ -160,7 +160,7 @@ export default function ForwardMessage() {
     return () => { cancelled = true }
   }, [canEmail])
 
-  const signatureHint = resolveSignatureHint(signatureContexts, ticketLocationId)
+  const signatureHint = resolveSignatureHint(signatureContexts, conversationLocationId)
 
   // Contact autocomplete — debounced, stale responses dropped (compose's rule).
   useEffect(() => {
@@ -248,7 +248,7 @@ export default function ForwardMessage() {
     setSending(true)
     setError(null)
     const res = await forwardMessage({
-      ticketId,
+      conversationId,
       messageId,
       to: toPills.map(p => p.address),
       note: note.trim() ? note : undefined,
@@ -439,7 +439,7 @@ export default function ForwardMessage() {
           />
 
           {/* MOBILE-SIGHINT.1 — what the route is about to append. The web
-              forward composer shows the same thing (TicketForward.jsx); this
+              forward composer shows the same thing (ForwardForm.jsx); this
               screen was the last composer on either platform still signing
               invisibly. Placed under the note because that is where the
               signature lands: BELOW the note and below the forwarded block.
@@ -530,7 +530,7 @@ export default function ForwardMessage() {
                       style={{ marginRight: 7 }}
                     />
                     <Ionicons
-                      name={ticketAttachmentIcon(file.mime_type, file.filename)}
+                      name={conversationAttachmentIcon(file.mime_type, file.filename)}
                       size={13}
                       color="#64748B"
                       style={{ marginRight: 5 }}
@@ -553,7 +553,7 @@ export default function ForwardMessage() {
                   <View className="flex-1">
                     <Text className="text-xs text-un1t-text" numberOfLines={1}>{file.filename}</Text>
                     <Text className="text-[11px] text-amber-700">
-                      {ticketAttachmentSkippedLabel(file.skipped_reason)} — can’t be forwarded
+                      {conversationAttachmentSkippedLabel(file.skipped_reason)} — can’t be forwarded
                     </Text>
                   </View>
                 </View>

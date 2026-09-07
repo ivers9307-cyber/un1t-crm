@@ -315,7 +315,7 @@ describe('markSeen', () => {
     // reasoning that a CRM-only unread mark undoes itself. That reasoning was
     // right about the danger and wrong about the fix: the answer is the paired
     // IMAP write, not the missing button — without it the mail surface goes
-    // into the trial with no defer verb at all while the ticket queue has
+    // into the trial with no defer verb at all while the conversation queue has
     // reopen, which biases the comparison it exists to settle.
     const db = makeDb()
     const { client, deps } = fakeImap()

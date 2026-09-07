@@ -92,7 +92,7 @@ const config = [
       'src/app/email/templates/**',
       'src/app/whatsapp/templates/**',
       'src/components/communications/**',
-      'src/components/tickets/**',
+      'src/components/mail/**',
       // Root-level components rendered by the Communications pages. Named
       // individually because src/components/ as a whole is the entire app.
       'src/components/CampaignDetail.jsx',

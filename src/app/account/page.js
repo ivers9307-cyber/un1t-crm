@@ -48,7 +48,7 @@ export default async function AccountPage() {
   // staff at another would otherwise lose the editor for their own
   // signature whenever their session happened to be pointed at the
   // second one — the same active-vs-requested mix-up EMAIL-TICKET.5
-  // fixed on /api/email/tickets.
+  // fixed on /api/email/mail.
   const worksAQueue = (user.locations || []).some(
     (l) => hasPermissionForLocation(user, l.id, 'email_inbox')
   )

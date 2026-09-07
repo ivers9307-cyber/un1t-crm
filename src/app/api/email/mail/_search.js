@@ -107,7 +107,7 @@ export function normalizeQuery(raw) {
  * FTS leg and never part of a real name or address, so a quoted name should
  * still match the requester fields.
  */
-async function senderTicketIds(db, { locationId, query }) {
+async function senderConversationIds(db, { locationId, query }) {
   const term = query.replace(/"/g, '').trim()
   if (term.length < 2) return { ok: true, ids: [] }
 
@@ -151,7 +151,7 @@ async function senderTicketIds(db, { locationId, query }) {
  *   {ok: false, error: string}
  * >}
  */
-export async function searchTicketIds(db, { locationId, q }) {
+export async function searchConversationIds(db, { locationId, q }) {
   const query = normalizeQuery(q)
   if (!query || !locationId) {
     // `ids: null`, not `[]`. "No query typed" and "the query ran and matched
@@ -196,7 +196,7 @@ export async function searchTicketIds(db, { locationId, q }) {
     return { ok: false, error: error.message }
   }
 
-  const sender = await senderTicketIds(db, { locationId, query })
+  const sender = await senderConversationIds(db, { locationId, query })
   if (!sender.ok) {
     // Both legs are halves of ONE answer. Returning the FTS half while the
     // sender half silently failed would tell an operator that the person they

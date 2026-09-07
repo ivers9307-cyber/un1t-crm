@@ -219,7 +219,7 @@ export const WEB_PERMISSIONS = Object.freeze([
   // individual account within it. Holding this key alone shows nothing — a
   // studio with no mailboxes, or a person with no grants, gets no inbox.
   { key: 'email_inbox', label: 'Mail',
-    hint: 'Ticketed inbox for the studio email accounts (accounts@, sales@, studio@). Access to each individual account is granted separately per person. Master + owner + manager by default.' },
+    hint: 'Mail inbox for the studio email accounts (accounts@, sales@, studio@). Access to each individual account is granted separately per person. Master + owner + manager by default.' },
   // EQUIP-MAINT.1 — equipment maintenance. Two keys, deliberately
   // split: `equipment_admin` is the setup surface (register, types,
   // intervals, inspection weekday) and is owner + master only;
@@ -683,9 +683,9 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   { key: 'notify_whatsapp',    label: '… WhatsApp messages',      hint: 'Notify on inbound WhatsApp (subject to inbox permission)',      mobileOnly: true, isNotify: true },
   { key: 'notify_instagram',   label: '… Instagram messages',     hint: 'Notify on inbound Instagram DMs (subject to inbox permission)', mobileOnly: true, isNotify: true },
   // EMAIL-INBOUND-PUSH.1 — recipients are already narrowed server-side to
-  // people who could open the ticket (email_inbox at its location + a grant
+  // people who could open the conversation (email_inbox at its location + a grant
   // on its mailbox, or elevated); this key is only the personal opt-out.
-  { key: 'notify_email',       label: '… Email tickets',          hint: 'Notify when new inbound email lands in a mailbox you can open (subject to inbox permission)', mobileOnly: true, isNotify: true },
+  { key: 'notify_email',       label: '… Inbound email',          hint: 'Notify when new inbound email lands in a mailbox you can open (subject to inbox permission)', mobileOnly: true, isNotify: true },
   { key: 'notify_agent_activity', label: '… Mia is handling a chat', hint: 'One quiet ping per active chat when the AI agent is handling a customer (subject to inbox permission)', mobileOnly: true, isNotify: true },
   // APPROVALS-STUDIO.1 — a customer approval landed in the queue (Mia
   // booking issue, /start funnel review, pause/cancel request). Fans out

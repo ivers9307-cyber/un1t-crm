@@ -7,11 +7,11 @@
 // remote images, attachment chips and their signed-URL downloads, the internal
 // note panel, the delivery marker, the mail-client marker, join markers, the
 // message envelope, the composer with its signature and its locked recipient
-// chips — lives in TicketThread/TicketReplyBox and is used here UNCHANGED.
+// chips — lives in ConversationThread/ReplyBox and is used here UNCHANGED.
 //
 // Forking it was the obvious way to build a second surface and it would have
 // been the wrong one twice over. The sandbox attribute and the show-images
-// swap are asserted against TicketThread.jsx's own source by
+// swap are asserted against ConversationThread.jsx's own source by
 // src/lib/email-html.test.js, so a copy would be a copy with nothing guarding
 // its security literals; and this repo has already watched two restatements of
 // deliveryMeta drift apart inside a week. One implementation, three slots.
@@ -35,8 +35,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Archive, ArchiveRestore, Link2, Mail, MailOpen, ShieldAlert, ShieldCheck, X } from 'lucide-react'
 import { EmptyState, Modal } from '@/components/ui'
-import TicketThread from '@/components/tickets/TicketThread'
-import { requesterLabel } from '@/lib/ticket-display'
+import ConversationThread from '@/components/mail/ConversationThread'
+import { requesterLabel } from '@/lib/mail/conversation-display'
 import { isArchived, needsReply, isUnread, isSpam, MAIL_SHORTCUTS } from './mail-vocabulary'
 // MAIL-REFINE.1 (03) — relating conversations. All decisions are pure and live
 // in mail-relate.js; this file owns only the fetch lifecycle and the pixels.
@@ -86,7 +86,7 @@ export default function MailThread({
   onModalOpenChange,
   // MAIL-DOCK.1 — which card the thread is living in ('dock' | 'full'),
   // forwarded verbatim so the sandboxed frames size to their window. Absent
-  // (a caller that never heard of the dock) TicketThread keeps its pre-dock
+  // (a caller that never heard of the dock) ConversationThread keeps its pre-dock
   // heights.
   frameSize,
 }) {
@@ -253,14 +253,14 @@ export default function MailThread({
 
   return (
     <>
-    <TicketThread
+    <ConversationThread
       hasSelection={hasSelection}
-      ticket={conversation}
+      conversation={conversation}
       messages={messages}
       // MAIL-DOCK.1 — the card is a smaller window than the old pane, so the
       // frames size to it, and the composer opens as the mockup's slim pill
       // in BOTH dock and full (a saved draft auto-expands it; see
-      // TicketReplyBox's startCollapsed).
+      // ReplyBox's startCollapsed).
       frameSize={frameSize}
       replyStartCollapsed
       mergedSources={mergedSources}
@@ -487,7 +487,7 @@ export default function MailThread({
  * The verbs, and nothing else.
  *
  * Archive is styled as the primary action because on this surface it IS the
- * work: the ticket queue's equivalent is buried in a four-state segmented
+ * work: the conversation queue's equivalent is buried in a four-state segmented
  * control inside the thread, which is precisely the ceremony the trial is
  * testing against.
  *

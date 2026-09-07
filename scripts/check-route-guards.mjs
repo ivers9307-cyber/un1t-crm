@@ -76,6 +76,34 @@ const SESSION_GUARDS = [
   'getCurrentHost(',
 ]
 
+// MAIL-RENAME.1 — a pure re-export shim (`export { POST } from '@/app/api/…'`,
+// plus at most segment-config literals) has no guard of its own: it is exactly
+// as guarded as the handler it re-exports, so it is classified BY FOLLOWING the
+// re-export to that file. Recognised STRUCTURALLY — every statement must be a
+// re-export or a segment-config literal — never by the import path text, so an
+// unrelated file that happens to import something from the mail tree proves
+// nothing. Deleted with the shims in the shim sweep.
+const REEXPORT_LINE = /^export\s+(\{[^}]*\}|\*)\s+from\s+'([^']+)'\s*;?$/
+const SEGMENT_CONFIG_LINE = /^export const (runtime|dynamic|maxDuration|revalidate|preferredRegion)\s*=\s*['"][^'"]*['"]\s*;?$/
+function reExportTarget(src) {
+  let target = null
+  for (const raw of src.split('\n')) {
+    const line = raw.trim()
+    if (!line) continue
+    const m = line.match(REEXPORT_LINE)
+    if (m) {
+      if (target && target !== m[2]) return null
+      target = m[2]
+      continue
+    }
+    if (SEGMENT_CONFIG_LINE.test(line)) continue
+    return null
+  }
+  if (!target || !target.startsWith('@/')) return null
+  const file = path.join(process.cwd(), 'src', `${target.slice(2)}.js`)
+  return fs.existsSync(file) ? file : null
+}
+
 // Webhooks authenticate the SENDER (HMAC / shared secret / provider
 // signature). Matches verifyMetaSignature, verifySharedSecret,
 // verifyTwilioSignature, verifyPostmarkRequest, verifyWebhookSignature,
@@ -127,6 +155,9 @@ const INBOX_ROUTE_PREFIXES = [
   // RLS, so the `email_inbox` check IS the channel gate (the per-account
   // email_mailbox_access gate sits behind it).
   'src/app/api/email/tickets',
+  // MAIL-RENAME.1 — the ticket routes moved here (mail is the same surface,
+  // same gate); the tickets prefix above stays for the deprecated shims.
+  'src/app/api/email/mail',
 ]
 
 // EMAIL-TICKET-CLEANUP.1 — the last two entries are location-scoped forms of
@@ -184,7 +215,15 @@ const INBOX_PERMISSION_GUARDS = [
   'hasPermission(',
   'hasPermissionForLocation(',
   'loadTicketForUser(',
+  // MAIL-RENAME.1 — loadTicketForUser was renamed to loadConversationForUser
+  // in src/app/api/email/mail/_conversation.js; the old name stays above
+  // until the identifier sweep (Task 9) removes every caller of it.
+  'loadConversationForUser(',
   'loadAttachmentForTicket(',
+  // MAIL-RENAME.1 (Task 9) — loadAttachmentForTicket was renamed to
+  // loadAttachmentForConversation in the mail/[id]/attachments _helpers.js;
+  // the old name stays above until nothing calls it any more.
+  'loadAttachmentForConversation(',
   'loadSendingMailbox(',
 ]
 
@@ -192,6 +231,8 @@ function checkInboxPermission(file) {
   const rel = file.split(path.sep).join('/')
   if (!INBOX_ROUTE_PREFIXES.some((p) => rel.startsWith(p))) return true
   const src = stripComments(fs.readFileSync(file, 'utf8'))
+  const target = reExportTarget(src)
+  if (target) return checkInboxPermission(target)
   return INBOX_PERMISSION_GUARDS.some((t) => src.includes(t))
 }
 
@@ -209,6 +250,8 @@ function classify(file) {
   if (rel.includes('/api/public/')) return { ok: true, kind: 'public' }
   if (EXEMPT[rel]) return { ok: true, kind: 'exempt' }
   const src = stripComments(fs.readFileSync(file, 'utf8'))
+  const target = reExportTarget(src)
+  if (target) return classify(target)
   if (rel.includes('/api/webhooks/')) {
     return { ok: WEBHOOK_GUARD.test(src), kind: 'webhook' }
   }

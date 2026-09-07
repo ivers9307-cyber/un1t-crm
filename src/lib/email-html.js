@@ -40,6 +40,7 @@
 // file in src/ — see "no client component imports this module" in the tests.
 
 import sanitizeHtml from 'sanitize-html'
+import { parseDocument, DomUtils } from 'htmlparser2'
 
 // ── The two constants the browser side must match ────────────────────
 //
@@ -78,7 +79,7 @@ export const BLOCKED_CSS_URL_PREFIX = 'x-un1t-blocked:'
 // the FINISHED document string:
 //   ` data-original-src="`  →  ` src="`     (the <img> case)
 //   `x-un1t-blocked:`       →  ``           (the CSS url() case)
-// TicketThread.jsx performs exactly these. They are safe because of the
+// ConversationThread.jsx performs exactly these. They are safe because of the
 // guarantee above — every parked value was proven http(s) here and escaped by
 // sanitize-html — and because Layer 1 means even a botched swap cannot execute
 // anything. In a text node the literal string would simply stay a text node
@@ -524,5 +525,101 @@ export function emailHtmlDocument(raw) {
     return { document: emailFrameDocument(html), blockedImages, failed: false }
   } catch {
     return { document: null, blockedImages: 0, failed: true }
+  }
+}
+
+// MAIL-REPLY-QUOTE.1 — where a mail client's quoted chain starts in HTML.
+//
+// Runs on SANITISED output only (see emailHtmlDocuments): the sanitiser keeps
+// `class`, `id` and `blockquote`, so the markers survive, and nothing
+// unsanitised is ever split or returned. The first recognised container in
+// document order, plus every sibling after it, is the quote; the document
+// with those removed is the body.
+
+const QUOTE_CLASSES = ['gmail_quote', 'gmail_quote_container', 'yahoo_quoted']
+const QUOTE_IDS = ['divRplyFwdMsg', 'appendonsend']
+// Cheap pre-check before any parse: most mail has no quote chain at all, and a
+// thread GET runs this once per message, so the common case must not pay for
+// a DOM build and a full tree walk. Every container below carries one of these.
+const QUOTE_MARKERS = ['type="cite"', ...QUOTE_CLASSES, ...QUOTE_IDS, '<hr']
+const FROM_LINE = /^\s*From:/i
+
+// Text stays text: the default serialiser turns every non-ASCII character into a
+// numeric entity, which renders the same inside the utf-8 srcdoc but inflates
+// the HTML budget for any non-Latin mail. Only & < > " are encoded.
+const SERIALIZE = { encodeEntities: 'utf8' }
+
+// Outlook desktop's reply header: a rule, then a block that opens "From:".
+// Look past whitespace text nodes at the next two element siblings.
+function isOutlookRule(el) {
+  if (el.name !== 'hr') return false
+  let node = el.next
+  let looked = 0
+  while (node && looked < 2) {
+    if (node.type === 'tag') {
+      looked += 1
+      if (FROM_LINE.test(DomUtils.textContent(node))) return true
+    } else if (node.type === 'text' && node.data.trim()) {
+      return FROM_LINE.test(node.data)
+    }
+    node = node.next
+  }
+  return false
+}
+
+function isQuoteContainer(el) {
+  if (el.type !== 'tag') return false
+  const attribs = el.attribs || {}
+  if (el.name === 'blockquote' && String(attribs.type || '').toLowerCase() === 'cite') return true
+  if (QUOTE_IDS.includes(attribs.id)) return true
+  if (isOutlookRule(el)) return true
+  const classes = String(attribs.class || '').split(/\s+/)
+  return classes.some(c => QUOTE_CLASSES.includes(c))
+}
+
+/**
+ * @param {string} html  sanitised body HTML (a fragment, not a document)
+ * @returns {{ body: string, quoted: string }}
+ */
+export function splitQuotedHtml(html) {
+  const source = typeof html === 'string' ? html : ''
+  if (!source.trim()) return { body: '', quoted: '' }
+  if (!QUOTE_MARKERS.some(m => source.includes(m))) return { body: source, quoted: '' }
+  const dom = parseDocument(source)
+  const match = DomUtils.findOne(isQuoteContainer, dom.children, true)
+  if (!match) return { body: source, quoted: '' }
+
+  const tail = []
+  for (let node = match; node; node = node.next) tail.push(node)
+  const quoted = tail.map(n => DomUtils.getOuterHTML(n, SERIALIZE)).join('')
+  for (const node of tail) DomUtils.removeElement(node)
+  const body = DomUtils.getInnerHTML(dom, SERIALIZE)
+  // A message that is ONLY a quote (someone replied with no words) keeps
+  // everything as the body: a blank frame above a folded quote is worse than
+  // an unfolded one.
+  if (!DomUtils.textContent(dom).trim()) return { body: source, quoted: '' }
+  return { body, quoted }
+}
+
+/**
+ * emailHtmlDocument, plus the quoted half as its own document.
+ *
+ * @returns {{ document: string|null, quotedDocument: string|null, blockedImages: number, failed: boolean }}
+ */
+export function emailHtmlDocuments(raw) {
+  const empty = { document: null, quotedDocument: null, blockedImages: 0, failed: false }
+  if (!raw || typeof raw !== 'string' || !raw.trim()) return empty
+  try {
+    const { html, blockedImages } = sanitizeEmailHtml(raw)
+    if (!html.trim()) return empty
+    const { body, quoted } = splitQuotedHtml(html)
+    return {
+      document: emailFrameDocument(body),
+      quotedDocument: quoted ? emailFrameDocument(quoted) : null,
+      blockedImages,
+      failed: false,
+    }
+  } catch {
+    return { document: null, quotedDocument: null, blockedImages: 0, failed: true }
   }
 }

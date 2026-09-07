@@ -14,7 +14,7 @@
 // which ticketToInboxRow already nulls unless the caller can see 2+
 // mailboxes. The one chip left is ARCHIVED (search results and the Archived
 // view wear it). All of that is one lib verdict — mailRowDisplay in
-// mobile/lib/email-tickets.js — so the rail, dot, chip and tag can never
+// mobile/lib/mail-conversations.js — so the rail, dot, chip and tag can never
 // disagree about one row.
 //
 // DELIBERATELY BARE: no Swipeable in here. The inbox screen wraps this with
@@ -29,7 +29,7 @@
 
 import { View, Text, Pressable, ActivityIndicator } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
-import { requesterLabel, mailRowTime, mailRowMarks, mailRowDisplay } from '../lib/email-tickets'
+import { requesterLabel, mailRowTime, mailRowMarks, mailRowDisplay } from '../lib/mail-conversations'
 import { splitHighlight } from '../lib/mail-search'
 
 export default function MailRow({ row, onPress, onArchiveToggle, archiving = false, highlight }) {

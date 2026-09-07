@@ -68,7 +68,7 @@ import { Check, AlertCircle, Plus, X, Upload, ImageOff } from 'lucide-react'
 import { Button, Field } from '@/components/ui'
 import { resolveSendSignature } from '@/lib/email-signature'
 import { signatureContextFor, signatureStudiosToOffer } from '@/lib/signature-context'
-import { markSignatureUpdated } from '@/components/tickets/SignatureHint'
+import { markSignatureUpdated } from '@/components/mail/SignatureHint'
 import { compressImageForUpload, parseUploadResponse } from '@/lib/landing-media-upload'
 import {
   RICH_FIELD_CAPS,

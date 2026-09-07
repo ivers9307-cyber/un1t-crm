@@ -1,4 +1,4 @@
-// Shared fixtures for the ticket route tests.
+// Shared fixtures for the conversation route tests.
 //
 // TWO MAILBOXES AT ONE LOCATION, ALWAYS. Every fixture set carries both
 // studio@ (granted to the coach) and accounts@ (not granted), because the
@@ -49,14 +49,14 @@ export const T_ACCOUNTS = {
 
 // EMAIL-TICKET-CLEANUP.1 — every user below now carries assignmentsByLocation
 // as well as rolesByLocation, because the surface gate moved into
-// loadTicketForUser and resolves through the REAL hasPermissionForLocation,
+// loadConversationForUser and resolves through the REAL hasPermissionForLocation,
 // which reads assignments (guardMasterOrOwner, the elevation check, reads
 // rolesByLocation — two different shapes, and getCurrentUser populates both).
 // Thin fixtures would have made the real resolver answer false for everyone and
 // every test pass a 404 for the wrong reason.
 
 /**
- * A ticket at the OTHER studio (LOC_B), on LOC_B's own mailbox.
+ * A conversation at the OTHER studio (LOC_B), on LOC_B's own mailbox.
  *
  * The whole point of it: a caller can be legitimately assigned to LOC_B and
  * hold a grant on that mailbox, so assertLocationAccess AND the per-account
@@ -149,7 +149,7 @@ export const GRANT_MULTI_OTHER_LOCATION = {
 /** …and their grant at LOC_A, where they DO hold the key. */
 export const GRANT_MULTI_STUDIO = { mailbox_id: MB_STUDIO.id, profile_id: MULTI_LOCATION.id }
 
-/** Both mailboxes + both tickets at LOC_A — the standard world. */
+/** Both mailboxes + both conversations at LOC_A — the standard world. */
 export function baseState(extra = {}) {
   return {
     mailboxes: [MB_STUDIO, MB_ACCOUNTS, MB_OTHER_LOCATION],

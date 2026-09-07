@@ -3,7 +3,7 @@
 // and vitest-tested (mobile screens have no render harness — contract rule 6).
 //
 // THE SERVER IS THE GATE, THIS FILE IS THE AFFORDANCE — the forward route
-// (POST /api/email/tickets/[id]/forward) refuses notes, unstored files and an
+// (POST /api/email/mail/[id]/forward) refuses notes, unstored files and an
 // over-budget set with operator-facing sentences, and this file exists so the
 // screen predicts every one of those refusals BEFORE the wire. A refused send
 // the screen could have foreseen is a bug, not a safety net.
@@ -13,7 +13,7 @@
 // there). The three rules that must not drift, and what pins each:
 //
 //   1. AN INTERNAL NOTE CANNOT BE FORWARDED (canForwardMessage — web's
-//      src/lib/ticket-display.js rule verbatim). A note is staff-to-staff text
+//      src/lib/conversation-display.js rule verbatim). A note is staff-to-staff text
 //      that was never sent to anybody; mailing it to a third party under the
 //      studio's own address is the single worst thing this surface could do.
 //      The route 400s it too — that is the gate, this is why the affordance
@@ -40,7 +40,7 @@
 //
 // No React Native imports — this file runs under vitest's node environment.
 
-import { formatAttachmentSize } from './email-tickets'
+import { formatAttachmentSize } from './mail-conversations'
 
 /**
  * The most RAW bytes one outbound email may carry — a restatement of
@@ -56,7 +56,7 @@ export const MAX_FORWARD_ATTACHMENT_TOTAL_BYTES = 7 * 1024 * 1024
 
 /**
  * Can this message be forwarded as mail at all? Web's canForwardMessage
- * (src/lib/ticket-display.js), verbatim: everything except an internal note.
+ * (src/lib/conversation-display.js), verbatim: everything except an internal note.
  */
 export function canForwardMessage(message) {
   return !!message && !message.is_internal_note
@@ -64,7 +64,7 @@ export function canForwardMessage(message) {
 
 /**
  * What the thread's ⋮ overflow acts on: the NEWEST forwardable message.
- * Messages arrive oldest-first from getTicket, so this walks from the end —
+ * Messages arrive oldest-first from getConversation, so this walks from the end —
  * skipping trailing internal notes, because "forward" from the thread menu
  * means the correspondence on top, never the staff commentary about it.
  */
@@ -150,7 +150,7 @@ export function forwardPreviewMeta(message) {
 
 /**
  * The original's attachments that COULD be forwarded — stored bytes only.
- * Accepts either vocabulary for the same fact (web rule): the ticket detail
+ * Accepts either vocabulary for the same fact (web rule): the conversation detail
  * route exposes `stored` (it never returns storage_path to a client — the
  * bucket is private), while a raw row would carry `storage_path`.
  */

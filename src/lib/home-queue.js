@@ -1,10 +1,10 @@
 // HOME.3 — the needs-attention queue: one assembler over the three surfaces
-// an operator already checks separately (approvals, email tickets, the
+// an operator already checks separately (approvals, email conversations, the
 // unified WhatsApp/Instagram inbox), merged into a single triage list.
 //
 // WHY THIS EXISTS
 // Each surface already has its own count + list (getPendingApprovals,
-// the ticket routes, the WA/IG unread-count route). This module does not
+// the conversation routes, the WA/IG unread-count route). This module does not
 // re-implement any of them — it fans out to the SAME gates and, where a
 // cheap true-count already exists, the SAME count queries, and merges the
 // results into one sorted list. Two counters disagreeing about the same
@@ -25,22 +25,22 @@
 //   are NEVER capped — `counts.<source>` is always the true, uncapped number
 //   (reusing each surface's own count query), because a badge that reads
 //   lower than the queue actually holding is the "click it, find nothing
-//   behind it" trap this estate has hit before (email ticket badge, approvals
+//   behind it" trap this estate has hit before (email conversation badge, approvals
 //   badge).
 //
 // GATES
 //   Per-source gates mirror each surface's own count route exactly:
 //     approvals → the registry's own per-provider isVisible/permissionKey
 //                 gates (nothing extra here — see fetchApprovalsSource).
-//     tickets   → hasPermissionForLocation(user, activeLocationId,
+//     conversations   → hasPermissionForLocation(user, activeLocationId,
 //                 'email_inbox') + per-account mailbox visibility
-//                 (src/app/api/email/tickets/_helpers.js), same as
+//                 (src/app/api/email/mail/_helpers.js), same as
 //                 the mail count route.
 //     inbox     → hasPermission(user, 'whatsapp'), same as
 //                 /api/whatsapp/unread-count (one permission gates both
 //                 WhatsApp and Instagram, as it does there).
 //   No active location → the WHOLE queue is empty (not per-source): every
-//   source here is location-scoped in practice (tickets and inbox always
+//   source here is location-scoped in practice (conversations and inbox always
 //   are; approvals' one org-scoped provider, host_events, still requires an
 //   active location to resolve the viewer's organisation), so there is
 //   nothing a queue can show without one.
@@ -61,7 +61,7 @@ import {
   scopeToVisibleMailboxes,
   scopeToNeedsReply,
   scopeToUnmerged,
-} from '@/app/api/email/tickets/_helpers'
+} from '@/app/api/email/mail/_conversation'
 
 export const SOURCE_PRE_CAP = 20
 export const GLOBAL_CAP = 30
@@ -111,26 +111,26 @@ async function fetchApprovalsSource(db, user) {
   return { rows, count }
 }
 
-// ── Tickets ──────────────────────────────────────────────────────────────
+// ── Conversations ──────────────────────────────────────────────────────────────
 
 // EMAIL-TICKET-CLEANUP.2 — a FAILED mailbox-visibility lookup is NOT "no
 // mailboxes" (mailboxesUnavailable() in _helpers.js exists precisely
 // because the two used to collapse into the same empty answer). A generic
-// tickets failure — the row/count query itself erroring — is allowed to
+// conversations failure — the row/count query itself erroring — is allowed to
 // fold into the ordinary degraded-source path (counts.tickets = 0, same as
 // any other source); THIS failure is not, because "0" here reads as "no
-// tickets need a reply" when the true answer is "we don't know". A
+// conversations need a reply" when the true answer is "we don't know". A
 // dedicated error type lets assembleHomeQueue and getHomeQueueCount each
 // catch this ONE case and answer honestly instead of a confident zero —
 // see both call sites below.
-class TicketsVisibilityUnavailableError extends Error {}
+class ConversationsVisibilityUnavailableError extends Error {}
 
-async function ticketsVisibility(db, user, locationId) {
+async function conversationsVisibility(db, user, locationId) {
   if (!hasPermissionForLocation(user, locationId, 'email_inbox')) return null
   const visibility = await loadVisibleMailboxes(db, user, locationId)
   if (visibility.response) {
-    throw new TicketsVisibilityUnavailableError(
-      'tickets: mailbox visibility lookup failed — EMAIL-TICKET-CLEANUP.2'
+    throw new ConversationsVisibilityUnavailableError(
+      'conversations: mailbox visibility lookup failed — EMAIL-TICKET-CLEANUP.2'
     )
   }
   const { elevated, mailboxes } = visibility
@@ -140,18 +140,18 @@ async function ticketsVisibility(db, user, locationId) {
 
 // Same three-scope stack (visible mailboxes → needs-reply → unmerged) as
 // /api/email/mail/count, applied in the same order, so the row list, the
-// count and the nav badge can never disagree about which tickets qualify.
-function applyTicketScope(query, vis) {
+// count and the nav badge can never disagree about which conversations qualify.
+function applyConversationScope(query, vis) {
   return scopeToUnmerged(scopeToNeedsReply(scopeToVisibleMailboxes(query, vis)))
 }
 
 /**
  * RETIRE-TICKETS.1 — every email row is a Mail row. The two-surface routing
  * that lived here (MAILBOX-SURFACE.1: a per-row surface map deciding between
- * '/communications/tickets' and Mail) retired with the ticket queue; the old
+ * '/communications/conversations' and Mail) retired with the conversation queue; the old
  * URL still redirects to Mail for anything that bookmarked it.
  */
-function toTicketRow(t) {
+function toConversationRow(t) {
   return {
     source: 'mail',
     sourceLabel: 'Mail',
@@ -166,11 +166,11 @@ function toTicketRow(t) {
   }
 }
 
-async function fetchTicketsSource(db, user, locationId) {
-  const vis = await ticketsVisibility(db, user, locationId)
+async function fetchConversationsSource(db, user, locationId) {
+  const vis = await conversationsVisibility(db, user, locationId)
   if (!vis) return { rows: [], count: 0 }
 
-  const rowsQuery = applyTicketScope(
+  const rowsQuery = applyConversationScope(
     db.from('email_tickets')
       // mailbox_id rides along for MAILBOX-SURFACE.1 — a row has to know which
       // surface LISTS its mail before it can offer a link there.
@@ -202,19 +202,19 @@ async function fetchTicketsSource(db, user, locationId) {
   // The query above already carries .limit(SOURCE_PRE_CAP); the slice is a
   // defence-in-depth backstop (cheap on an already-≤20 array) so the pre-cap
   // invariant holds even if a future edit drops the query-level limit.
-  const rows = (data || []).slice(0, SOURCE_PRE_CAP).map(toTicketRow)
+  const rows = (data || []).slice(0, SOURCE_PRE_CAP).map(toConversationRow)
   return { rows, count: count || 0 }
 }
 
-async function countTicketsNeedsReply(db, user, locationId) {
-  const vis = await ticketsVisibility(db, user, locationId)
+async function countConversationsNeedsReply(db, user, locationId) {
+  const vis = await conversationsVisibility(db, user, locationId)
   if (!vis) return 0
-  const q = applyTicketScope(
+  const q = applyConversationScope(
     db.from('email_tickets').select('*', { count: 'exact', head: true }).eq('location_id', locationId),
     vis
   )
   const { count, error } = await q
-  if (error) throw new Error(`tickets count: ${error.message}`)
+  if (error) throw new Error(`conversations count: ${error.message}`)
   return count || 0
 }
 
@@ -285,7 +285,7 @@ async function countInboxNeedsAction(db, user, locationId) {
  * @param {object} user  getCurrentUser() result
  * @returns {Promise<{
  *   rows: object[],
- *   counts: { approvals: number, tickets: number|null, inbox: number },
+ *   counts: { approvals: number, conversations: number|null, inbox: number },
  *   total: number,
  *   degraded?: string[],
  * }>}
@@ -298,7 +298,7 @@ export async function assembleHomeQueue(db, user) {
 
   const settled = await Promise.allSettled([
     fetchApprovalsSource(db, user),
-    fetchTicketsSource(db, user, locationId),
+    fetchConversationsSource(db, user, locationId),
     fetchInboxSource(db, user, locationId),
   ])
 
@@ -310,7 +310,7 @@ export async function assembleHomeQueue(db, user) {
     if (s.status === 'fulfilled') {
       counts[name] = s.value.count
       rows = rows.concat(s.value.rows)
-    } else if (name === 'mail' && s.reason instanceof TicketsVisibilityUnavailableError) {
+    } else if (name === 'mail' && s.reason instanceof ConversationsVisibilityUnavailableError) {
       // EMAIL-TICKET-CLEANUP.2 — see the error class above: null, not 0.
       // "No mail needs a reply" and "we could not find out" must stay
       // distinguishable all the way to the response.
@@ -327,7 +327,7 @@ export async function assembleHomeQueue(db, user) {
   rows.sort(byOccurredAtDesc)
   rows = rows.slice(0, GLOBAL_CAP)
 
-  // `null` (visibility-unavailable tickets) is excluded from the sum rather
+  // `null` (visibility-unavailable conversations) is excluded from the sum rather
   // than treated as 0 — the same reasoning as above applies to `total`: an
   // unknown contributor must not silently read as a known zero. The
   // `degraded` array is what tells a caller the total is a floor, not the
@@ -343,7 +343,7 @@ export async function assembleHomeQueue(db, user) {
 /**
  * Cheap count-only variant for the sidebar/nav badge — sums each source's
  * TRUE count without materialising any rows (no approval item lists, no
- * ticket subjects, no conversation contact embeds).
+ * conversation subjects, no conversation contact embeds).
  *
  * EMAIL-TICKET-CLEANUP.2 — this endpoint answers ONE number, with no room
  * for a per-source `degraded` flag the way assembleHomeQueue has, so a
@@ -445,13 +445,13 @@ export async function getHomeQueueCount(db, user) {
 
   const settled = await Promise.allSettled([
     getPendingApprovalsCount(db, user),
-    countTicketsNeedsReply(db, user, locationId),
+    countConversationsNeedsReply(db, user, locationId),
     countInboxNeedsAction(db, user, locationId),
   ])
 
-  const [, ticketsSettled] = settled
-  if (ticketsSettled.status === 'rejected' && ticketsSettled.reason instanceof TicketsVisibilityUnavailableError) {
-    throw ticketsSettled.reason
+  const [, conversationsSettled] = settled
+  if (conversationsSettled.status === 'rejected' && conversationsSettled.reason instanceof ConversationsVisibilityUnavailableError) {
+    throw conversationsSettled.reason
   }
 
   return settled.reduce((sum, s) => sum + (s.status === 'fulfilled' ? (s.value || 0) : 0), 0)

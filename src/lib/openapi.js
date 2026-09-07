@@ -1235,7 +1235,7 @@ registry.registerPath({
 // Email inbox conversations (cookie auth) — EMAIL-INBOX.1, now RETIRED.
 //
 // EMAIL-CONV-STOP.1 (2026-08-07): all four operations answer **410 Gone** and
-// touch no data. Superseded by /api/email/tickets* (mig 482). The routes still
+// touch no data. Superseded by /api/email/mail* (mig 482). The routes still
 // exist only so installed mobile builds on frozen OTA lanes get an actionable
 // error rather than a 404 they cannot tell apart from a network failure.
 //
@@ -1268,7 +1268,7 @@ registry.registerPath({
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
   summary: 'RETIRED — email conversation + message thread (410 Gone)',
-  description: 'Retired by EMAIL-CONV-STOP.1. Was the conversation and its recent messages (and reset unread_count); now returns 410 Gone and reads nothing. Use GET /api/email/tickets/{id}.',
+  description: 'Retired by EMAIL-CONV-STOP.1. Was the conversation and its recent messages (and reset unread_count); now returns 410 Gone and reads nothing. Use GET /api/email/mail/{id}.',
   request: {
     params: z.object({ id: uuidLike }),
   },
@@ -1295,7 +1295,7 @@ registry.registerPath({
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
   summary: 'RETIRED — reply to an email conversation (410 Gone)',
-  description: 'Retired by EMAIL-CONV-STOP.1. Was a plain-text operator reply on Postmark’s transactional stream; now returns 410 Gone and never reaches Postmark. Use POST /api/email/tickets/{id}/reply.',
+  description: 'Retired by EMAIL-CONV-STOP.1. Was a plain-text operator reply on Postmark’s transactional stream; now returns 410 Gone and never reaches Postmark. Use POST /api/email/mail/{id}/reply.',
   request: {
     params: z.object({ id: uuidLike }),
     body: { content: { 'application/json': { schema: z.object({ text: z.string().min(1).max(10000), subject: z.string().max(500).optional() }).openapi('EmailInboxReply') } } },
@@ -1370,7 +1370,7 @@ registry.registerPath({
   security: [{ CookieAuth: [] }],
   summary: 'Other conversations from the same sender',
   description:
-    'MAIL-REFINE.1 — feeds the thread\u2019s "N other open conversations" nudge and the merge picker. Access is the detail route\u2019s then the list\u2019s: the anchor goes through loadTicketForUser (404 on every refusal) and candidates are scoped to the caller\u2019s visible mailboxes, so relatedness never widens access. Sender match is case-insensitive EQUALITY via escaped ilike (a stored `%` must not relate the whole domain). Returns up to 10 unmerged same-sender threads newest first, plus `open_count` — a TRUE uncapped count of the live ones, so the nudge never understates. `message_count` is best-effort (null when the bounded scan cannot say, never 0). \ud83d\udd34 A failed lookup is a 500, never an empty list \u2014 "no duplicates" is an answer the operator acts on. Merging itself is POST /api/email/tickets/{id}/merge (unchanged).',
+    'MAIL-REFINE.1 — feeds the thread\u2019s "N other open conversations" nudge and the merge picker. Access is the detail route\u2019s then the list\u2019s: the anchor goes through loadConversationForUser (404 on every refusal) and candidates are scoped to the caller\u2019s visible mailboxes, so relatedness never widens access. Sender match is case-insensitive EQUALITY via escaped ilike (a stored `%` must not relate the whole domain). Returns up to 10 unmerged same-sender threads newest first, plus `open_count` — a TRUE uncapped count of the live ones, so the nudge never understates. `message_count` is best-effort (null when the bounded scan cannot say, never 0). \ud83d\udd34 A failed lookup is a 500, never an empty list \u2014 "no duplicates" is an answer the operator acts on. Merging itself is POST /api/email/mail/{id}/merge (unchanged).',
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: '{ related: [{ id, subject, status, last_message_at, requester_name, message_count }], open_count }' },
@@ -1427,7 +1427,7 @@ registry.registerPath({
   security: [{ CookieAuth: [] }],
   summary: 'Mark one conversation as spam, or release it (Not spam)',
   description:
-    'Flips `email_tickets.is_spam` (mig 584) — a flag ORTHOGONAL to `status`, never a fifth lifecycle value, so a quarantined conversation keeps whatever status the bump machinery gave it and is simply excluded from every Mail view but Spam. `{ spam: true }` quarantines: spam_flagged_at = now (the 30-day purge clock runs from the operator\u2019s decision), spam_verdict_source = operator, and NOBODY is notified. `{ spam: false }` RELEASES and fires what the webhook withheld at ingest — the staff push (maybeNotifyInboundEmail with the ticket\u2019s own facts, preUnreadCount 0) and the unread mirror (unread_count set to the number of unseen inbound messages, the seen route\u2019s own derivation) — both best-effort and logged, never failing the release. Idempotent by the UPDATE\u2019s own transition filter (`.eq(is_spam, !spam)`): a conversation already in the requested state, or one another operator just moved, is answered without a write and without a ping (`notified: false`). The spam_score recorded at ingest is never touched. Gates are loadTicketForUser\u2019s (location access, `email_inbox` at the TICKET\u2019s location, per-mailbox grant); every refusal is a 404.',
+    'Flips `email_tickets.is_spam` (mig 584) — a flag ORTHOGONAL to `status`, never a fifth lifecycle value, so a quarantined conversation keeps whatever status the bump machinery gave it and is simply excluded from every Mail view but Spam. `{ spam: true }` quarantines: spam_flagged_at = now (the 30-day purge clock runs from the operator\u2019s decision), spam_verdict_source = operator, and NOBODY is notified. `{ spam: false }` RELEASES and fires what the webhook withheld at ingest — the staff push (maybeNotifyInboundEmail with the ticket\u2019s own facts, preUnreadCount 0) and the unread mirror (unread_count set to the number of unseen inbound messages, the seen route\u2019s own derivation) — both best-effort and logged, never failing the release. Idempotent by the UPDATE\u2019s own transition filter (`.eq(is_spam, !spam)`): a conversation already in the requested state, or one another operator just moved, is answered without a write and without a ping (`notified: false`). The spam_score recorded at ingest is never touched. Gates are loadConversationForUser\u2019s (location access, `email_inbox` at the TICKET\u2019s location, per-mailbox grant); every refusal is a 404.',
   request: {
     params: z.object({ id: uuidLike }),
     body: { content: { 'application/json': { schema: z.object({ spam: z.boolean() }).openapi('MailSpamVerdict') } } },
@@ -1468,11 +1468,11 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'get',
-  path: '/api/email/tickets/{id}',
+  path: '/api/email/mail/{id}',
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
-  summary: 'Ticket + its message thread',
-  description: 'Returns the ticket (with its mailbox and linked contact) and the thread oldest-first, text bodies only. EMAIL-CC.1: each message also carries to_emails, cc_emails and bcc_emails, and the payload carries reply_recipients = { to, mode: reply | reply_all, over_cap, empty } — who a reply would reach, derived by the same code the reply route sends with, or null when that could not be worked out. EMAIL-PARTICIPANTS.4: `to` is the union of the WHOLE thread (minus the studio’s own addresses and anyone removed via PATCH /participants), not the latest message; over_cap:true means that set exceeds the 25-recipient cap and the reply route will refuse to send; empty:true means every participant has been excluded and there is nobody left to reply to. Both are refusals the composer should surface BEFORE the operator types, not send-time surprises. bcc_emails is STAFF-ONLY: this route is behind the ticket gate (location + email_inbox at that location + a grant on the ticket mailbox), it must never be rendered on a member-visible surface, and it is never an input to a later reply or forward. 404 — never 403 — when the ticket is missing, at a foreign location, or on a mailbox the caller cannot see. Does NOT mark it read; that is POST /read. EMAIL-DELIVERY.1: each OUTBOUND message also carries delivery_status (null | delivered | bounced | complained), delivery_status_at, delivery_detail and delivery_bounce_type (hard | soft | transient). NULL means sent with no provider event yet — it is NOT a failure and must never render as one.',
+  summary: 'Conversation + its message thread',
+  description: 'Returns the conversation (with its mailbox and linked contact) and the thread oldest-first, text bodies only. EMAIL-CC.1: each message also carries to_emails, cc_emails and bcc_emails, and the payload carries reply_recipients = { to, mode: reply | reply_all, over_cap, empty } — who a reply would reach, derived by the same code the reply route sends with, or null when that could not be worked out. EMAIL-PARTICIPANTS.4: `to` is the union of the WHOLE thread (minus the studio’s own addresses and anyone removed via PATCH /participants), not the latest message; over_cap:true means that set exceeds the 25-recipient cap and the reply route will refuse to send; empty:true means every participant has been excluded and there is nobody left to reply to. Both are refusals the composer should surface BEFORE the operator types, not send-time surprises. bcc_emails is STAFF-ONLY: this route is behind the conversation gate (location + email_inbox at that location + a grant on the conversation mailbox), it must never be rendered on a member-visible surface, and it is never an input to a later reply or forward. 404 — never 403 — when the conversation is missing, at a foreign location, or on a mailbox the caller cannot see. Does NOT mark it read; that is POST /read. EMAIL-DELIVERY.1: each OUTBOUND message also carries delivery_status (null | delivered | bounced | complained), delivery_status_at, delivery_detail and delivery_bounce_type (hard | soft | transient). NULL means sent with no provider event yet — it is NOT a failure and must never render as one.',
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: '{ ticket, messages }' },
@@ -1482,11 +1482,11 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'post',
-  path: '/api/email/tickets/{id}/reply',
+  path: '/api/email/mail/{id}/reply',
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
-  summary: 'Reply to a ticket, or add an internal note',
-  description: "internal:true writes a staff-only note to the thread and sends NOTHING (no first_response_at, no status change) and MUST carry no recipients and no files — a note with to/cc/bcc or attachments is a 400. Otherwise the reply goes out on Postmark's transactional stream ('outbound', no marketing-consent gate — the member wrote to us first), threaded off the last inbound message, Reply-To the ticket's own mailbox; the ticket then moves to pending and stamps first_response_at if unset. A failed send leaves the ticket untouched. EMAIL-PARTICIPANTS.5 — THE RECIPIENT SET IS DERIVED, NOT CHOSEN, AND IT IS THE WHOLE THREAD: the server sends to every participant the conversation accumulated — the From + To + Cc of EVERY non-note, non-forward message on the ticket, unioned — minus the studio's own addresses and minus anyone an operator removed via PATCH /api/email/tickets/{id}/participants. It is deliberately NOT the latest message: deriving from that let whoever wrote last silently redefine the audience, and on 2026-08-12 it dropped the shared mailbox that had opened a thread out of the answer to its own question. A one-person set is a Reply and a wider one is a Reply All, with no way to express the difference on the wire. That set can now be EMPTY (every participant removed) or OVER THE CAP (more than 25 derived participants) — each is a 400 with NOTHING SENT, never a silent truncation and never a send to a set the operator did not choose. GET /api/email/tickets/{id} answers the same two flags as reply_recipients.over_cap / .empty, so the composer can say so before the operator types. `to`/`cc`/`bcc` in the body ADD people on top of the derived set; there is deliberately no way to remove one HERE — removal is the participants route, where it is a visible act with an undo. bcc_emails of earlier messages is NEVER read back as a recipient. All three lists are deduped case-insensitively across each other (To beats Cc beats Bcc) and capped at 25 addresses COMBINED. Bcc goes out in Postmark's own Bcc field, so no recipient sees it. Response carries { recipients: { to, cc, bcc }, mode }. EMAIL-OUTBOUND-ATTACH.1: `attachments` carries REFERENCES to files already uploaded via /api/email/attachments/upload-sign, never bytes — the platform rejects a body over ~4.5 MB before this handler runs. They are read back out of Storage and size-checked BEFORE the send (7 MB of raw file bytes per email, from Postmark's 10 MB post-base64 ceiling), so an oversized or unreadable set is a 400 with nothing sent and nothing written — the thread never shows a reply claiming files that did not go.",
+  summary: 'Reply to a conversation, or add an internal note',
+  description: "internal:true writes a staff-only note to the thread and sends NOTHING (no first_response_at, no status change) and MUST carry no recipients and no files — a note with to/cc/bcc or attachments is a 400. Otherwise the reply goes out on Postmark's transactional stream ('outbound', no marketing-consent gate — the member wrote to us first), threaded off the last inbound message, Reply-To the conversation's own mailbox; the conversation then moves to pending and stamps first_response_at if unset. A failed send leaves the conversation untouched. EMAIL-PARTICIPANTS.5 — THE RECIPIENT SET IS DERIVED, NOT CHOSEN, AND IT IS THE WHOLE THREAD: the server sends to every participant the conversation accumulated — the From + To + Cc of EVERY non-note, non-forward message on the conversation, unioned — minus the studio's own addresses and minus anyone an operator removed via PATCH /api/email/mail/{id}/participants. It is deliberately NOT the latest message: deriving from that let whoever wrote last silently redefine the audience, and on 2026-08-12 it dropped the shared mailbox that had opened a thread out of the answer to its own question. A one-person set is a Reply and a wider one is a Reply All, with no way to express the difference on the wire. That set can now be EMPTY (every participant removed) or OVER THE CAP (more than 25 derived participants) — each is a 400 with NOTHING SENT, never a silent truncation and never a send to a set the operator did not choose. GET /api/email/mail/{id} answers the same two flags as reply_recipients.over_cap / .empty, so the composer can say so before the operator types. `to`/`cc`/`bcc` in the body ADD people on top of the derived set; there is deliberately no way to remove one HERE — removal is the participants route, where it is a visible act with an undo. bcc_emails of earlier messages is NEVER read back as a recipient. All three lists are deduped case-insensitively across each other (To beats Cc beats Bcc) and capped at 25 addresses COMBINED. Bcc goes out in Postmark's own Bcc field, so no recipient sees it. Response carries { recipients: { to, cc, bcc }, mode }. EMAIL-OUTBOUND-ATTACH.1: `attachments` carries REFERENCES to files already uploaded via /api/email/attachments/upload-sign, never bytes — the platform rejects a body over ~4.5 MB before this handler runs. They are read back out of Storage and size-checked BEFORE the send (7 MB of raw file bytes per email, from Postmark's 10 MB post-base64 ceiling), so an oversized or unreadable set is a 400 with nothing sent and nothing written — the thread never shows a reply claiming files that did not go.",
   request: {
     params: z.object({ id: uuidLike }),
     body: { content: { 'application/json': { schema: z.object({
@@ -1510,18 +1510,18 @@ registry.registerPath({
   },
 })
 
-// EMAIL-FORWARD.1 (mig 501) — pass one message on the ticket to a third party.
+// EMAIL-FORWARD.1 (mig 501) — pass one message on the conversation to a third party.
 registry.registerPath({
   method: 'post',
-  path: '/api/email/tickets/{id}/link-contact',
+  path: '/api/email/mail/{id}/link-contact',
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
-  summary: 'Link (or create) the contact for a ticket\u2019s sender',
-  description: 'EMAIL-CONTACT-CHIP.2 \u2014 resolves ticket.requester_email to a contact via findOrCreateRaceContact (restrictToOrg: true, the LEADCAP.1 create-or-link helper \u2014 email is globally unique on contacts). Idempotent: a ticket that already carries contact_id answers 200 with that contact rather than erroring or re-linking. Backfills contact_id onto the ticket\u2019s own messages that have none, mirroring what the inbound webhook denormalises at ingest. Gated through loadTicketForUser like every ticket write: 404, never 403, for a ticket that does not exist, is at a location the caller cannot reach, is on a mailbox they cannot see, or is at a location where they lack email_inbox.',
+  summary: 'Link (or create) the contact for a conversation\u2019s sender',
+  description: 'EMAIL-CONTACT-CHIP.2 \u2014 resolves conversation.requester_email to a contact via findOrCreateRaceContact (restrictToOrg: true, the LEADCAP.1 create-or-link helper \u2014 email is globally unique on contacts). Idempotent: a conversation that already carries contact_id answers 200 with that contact rather than erroring or re-linking. Backfills contact_id onto the conversation\u2019s own messages that have none, mirroring what the inbound webhook denormalises at ingest. Gated through loadConversationForUser like every conversation write: 404, never 403, for a conversation that does not exist, is at a location the caller cannot reach, is on a mailbox they cannot see, or is at a location where they lack email_inbox.',
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: 'Linked (or already-linked) contact: { id, name, first_name, email, pipeline_stage_slug }' },
-    400: { description: 'Ticket has no requester_email to link from', content: { 'application/json': { schema: ErrorResponse } } },
+    400: { description: 'Conversation has no requester_email to link from', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'Contact resolution or a write failed \u2014 nothing changed, or a cosmetic mirror missed', content: { 'application/json': { schema: ErrorResponse } } },
   },
@@ -1529,11 +1529,11 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'post',
-  path: '/api/email/tickets/{id}/forward',
+  path: '/api/email/mail/{id}/forward',
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
-  summary: 'Forward one message on a ticket to somebody else',
-  description: "Sends `message_id` (a message on THIS ticket) to addresses the operator types, and files the result as an OUTBOUND message on the SAME ticket carrying forwarded_message_id — the record of 'we sent this to the accountant' belongs with the correspondence it is about, and the recipient's reply threads back onto this ticket through the ordinary inbound path. THE TICKET IS DELIBERATELY NOT MOVED: no status change, no last_message_at, no first_response_at, because `needs_reply` is (open AND inbound last message) and stamping an outbound one would drop a ticket the member is still waiting on out of the queue. AN INTERNAL NOTE CANNOT BE FORWARDED — 400, since a note was never sent to anyone and mailing staff-only commentary to a third party under the studio's address is the worst thing this surface could do. RECIPIENTS ARE TYPED, NEVER DERIVED (the opposite of a reply): nothing on this route reads bcc_emails off stored correspondence, and the quoted header block is a closed list of five — From, Date, Subject, To, Cc — so a forward reveals exactly what it would have had the original's Bcc never been typed. The shared model still applies: deduped case-insensitively across To/Cc/Bcc (To beats Cc beats Bcc), the studio's own addresses excluded from all three, 25 addresses combined, Bcc in Postmark's own Bcc field only. THE BODY IS PLAIN TEXT: text_body is quoted and HTML-escaped, and the original's html_body never reaches the wire — re-sending a stranger's markup under our own DKIM signature is how forwarding launders a phish, and our sanitiser's permissiveness is bought by the sandboxed iframe the thread renders into, which a recipient's mail client is not. `attachment_ids` chooses which of the ORIGINAL'S files ride along; they are read from the bytes already in the bucket (nothing is copied to a new key), the forwarded rows point at the same storage_path with forwarded_from_id set, and the mailbox quota is not charged twice. A file with no stored bytes, an id from another message, an unreadable object, or a set past the 7 MB outbound ceiling is a 400 with NOTHING SENT — files are never silently dropped. No email_sends row is written (a forward goes to a third party, not to the member). Every address is written to audit_events under the sender's name.",
+  summary: 'Forward one message on a conversation to somebody else',
+  description: "Sends `message_id` (a message on THIS conversation) to addresses the operator types, and files the result as an OUTBOUND message on the SAME conversation carrying forwarded_message_id — the record of 'we sent this to the accountant' belongs with the correspondence it is about, and the recipient's reply threads back onto this conversation through the ordinary inbound path. THE TICKET IS DELIBERATELY NOT MOVED: no status change, no last_message_at, no first_response_at, because `needs_reply` is (open AND inbound last message) and stamping an outbound one would drop a conversation the member is still waiting on out of the queue. AN INTERNAL NOTE CANNOT BE FORWARDED — 400, since a note was never sent to anyone and mailing staff-only commentary to a third party under the studio's address is the worst thing this surface could do. RECIPIENTS ARE TYPED, NEVER DERIVED (the opposite of a reply): nothing on this route reads bcc_emails off stored correspondence, and the quoted header block is a closed list of five — From, Date, Subject, To, Cc — so a forward reveals exactly what it would have had the original's Bcc never been typed. The shared model still applies: deduped case-insensitively across To/Cc/Bcc (To beats Cc beats Bcc), the studio's own addresses excluded from all three, 25 addresses combined, Bcc in Postmark's own Bcc field only. THE BODY IS PLAIN TEXT: text_body is quoted and HTML-escaped, and the original's html_body never reaches the wire — re-sending a stranger's markup under our own DKIM signature is how forwarding launders a phish, and our sanitiser's permissiveness is bought by the sandboxed iframe the thread renders into, which a recipient's mail client is not. `attachment_ids` chooses which of the ORIGINAL'S files ride along; they are read from the bytes already in the bucket (nothing is copied to a new key), the forwarded rows point at the same storage_path with forwarded_from_id set, and the mailbox quota is not charged twice. A file with no stored bytes, an id from another message, an unreadable object, or a set past the 7 MB outbound ceiling is a 400 with NOTHING SENT — files are never silently dropped. No email_sends row is written (a forward goes to a third party, not to the member). Every address is written to audit_events under the sender's name.",
   request: {
     params: z.object({ id: uuidLike }),
     body: { content: { 'application/json': { schema: z.object({
@@ -1548,7 +1548,7 @@ registry.registerPath({
   responses: {
     200: { description: '{ message, message_id, recipients, forwarded_message_id, attachment_count }' },
     400: { description: 'Invalid body, an internal note, no usable recipient, an unforwardable file, or the send failed', content: { 'application/json': { schema: ErrorResponse } } },
-    404: { description: 'Ticket not accessible, or the message is not on this ticket', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Conversation not accessible, or the message is not on this conversation', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'A pre-send lookup failed (nothing sent), or the forward went out but could not be filed — do NOT resend', content: { 'application/json': { schema: ErrorResponse } } },
     503: { description: 'The ticketing Postmark server is unconfigured — nothing was sent', content: { 'application/json': { schema: ErrorResponse } } },
   },
@@ -1559,11 +1559,11 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'patch',
-  path: '/api/email/tickets/{id}/participants',
+  path: '/api/email/mail/{id}/participants',
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
-  summary: 'Take an address off a ticket’s reply audience, or put it back',
-  description: 'EMAIL-PARTICIPANTS.6 — the only writer of email_tickets.excluded_participants (mig 534). The audience itself is NOT stored: it is derived from the thread on every read, so it cannot drift from the mail that actually arrived; only the operator’s subtractions are kept, and the reply route applies them on its next send with no other moving part. Addresses are stored NORMALISED (lowercased, angle-brackets stripped) so a case variant cannot dodge an exclusion later — and `restore` matches the same way, so an exclusion can always be lifted by whoever is looking at it. Set semantics: re-removing an already-excluded address is a no-op, not a duplicate. An address named in BOTH lists ends up removed. An address the server cannot parse is a 400 with NOTHING written — a typo in this column would be a permanent exclusion matching nobody. Gated through loadTicketForUser like every ticket write: 404, never 403, for a ticket that is missing, at a foreign location, or on a mailbox the caller cannot see.',
+  summary: 'Take an address off a conversation’s reply audience, or put it back',
+  description: 'EMAIL-PARTICIPANTS.6 — the only writer of email_tickets.excluded_participants (mig 534). The audience itself is NOT stored: it is derived from the thread on every read, so it cannot drift from the mail that actually arrived; only the operator’s subtractions are kept, and the reply route applies them on its next send with no other moving part. Addresses are stored NORMALISED (lowercased, angle-brackets stripped) so a case variant cannot dodge an exclusion later — and `restore` matches the same way, so an exclusion can always be lifted by whoever is looking at it. Set semantics: re-removing an already-excluded address is a no-op, not a duplicate. An address named in BOTH lists ends up removed. An address the server cannot parse is a 400 with NOTHING written — a typo in this column would be a permanent exclusion matching nobody. Gated through loadConversationForUser like every conversation write: 404, never 403, for a conversation that is missing, at a foreign location, or on a mailbox the caller cannot see.',
   request: {
     params: z.object({ id: uuidLike }),
     body: { content: { 'application/json': { schema: z.object({
@@ -1581,46 +1581,46 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'post',
-  path: '/api/email/tickets/{id}/merge',
+  path: '/api/email/mail/{id}/merge',
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
-  summary: 'Fold this ticket into another one',
-  description: 'EMAIL-MERGE.4 (mig 536) — two tickets that are really one conversation, joined so a correspondent cannot be answered twice. The ticket in the path is the SOURCE and becomes a tombstone: `closed` PLUS merged_into_id, deliberately not a fifth status value, hidden from every list and count by one shared scope. Its messages are REPARENTED onto the target — that is the mechanism, not the bookkeeping, because the inbound webhook threads replies on email_inbox_messages.ticket_id, so the survivor becomes the live thread and a later reply lands there. Every moved row is stamped merged_from_ticket_id so DELETE restores exactly those and nothing else. The target absorbs the summed unread_count, the EARLIER first_response_at and the newer message’s preview. BOTH tickets go through the same gate as every other ticket route, so a missing ticket, a foreign location, a missing email_inbox key at the ticket’s location and a mailbox the caller cannot see are all 404 — as are a self-merge, a cross-location merge, a ticket already merged, and a ticket on EITHER side that has itself ALREADY ABSORBED a merge (any message carrying merged_from_ticket_id) — chains are refused so the undo stays exact, since merging a survivor onward would re-stamp the rows it absorbed and strand the earlier merge; unmerge first, then merge onward. The tombstone RETAINS its unread_count: it is a counter rather than a property of the messages, so it cannot be re-derived, and it is the record of what the survivor absorbed — inert while merged, since tombstones are hidden from the list and the badge and nothing sums the column. There is no transaction: the messages move first, the target updates second, the tombstone is stamped LAST — conditionally, on the source not already being merged, so two operators merging one ticket into different targets cannot both stamp it (the loser gets 409). An interrupted merge leaves a visibly empty but LIVE source that re-running finishes, never a hidden ticket whose mail never moved; re-running does add the source’s unread to the survivor a second time, a badge that clears the moment the ticket is opened. Attachments key on message_id and ride along untouched; email_storage_usage is NOT adjusted, because merging moves no bytes. Writes an audit_events row (business / email_ticket.merged) naming both tickets and how many messages moved — the ticket rows alone cannot tell the story, since the undo nulls merged_by.',
+  summary: 'Fold this conversation into another one',
+  description: 'EMAIL-MERGE.4 (mig 536) — two conversations that are really one conversation, joined so a correspondent cannot be answered twice. The conversation in the path is the SOURCE and becomes a tombstone: `closed` PLUS merged_into_id, deliberately not a fifth status value, hidden from every list and count by one shared scope. Its messages are REPARENTED onto the target — that is the mechanism, not the bookkeeping, because the inbound webhook threads replies on email_inbox_messages.email_tickets, so the survivor becomes the live thread and a later reply lands there. Every moved row is stamped email_tickets so DELETE restores exactly those and nothing else. The target absorbs the summed unread_count, the EARLIER first_response_at and the newer message’s preview. BOTH conversations go through the same gate as every other conversation route, so a missing conversation, a foreign location, a missing email_inbox key at the conversation’s location and a mailbox the caller cannot see are all 404 — as are a self-merge, a cross-location merge, a conversation already merged, and a conversation on EITHER side that has itself ALREADY ABSORBED a merge (any message carrying email_tickets) — chains are refused so the undo stays exact, since merging a survivor onward would re-stamp the rows it absorbed and strand the earlier merge; unmerge first, then merge onward. The tombstone RETAINS its unread_count: it is a counter rather than a property of the messages, so it cannot be re-derived, and it is the record of what the survivor absorbed — inert while merged, since tombstones are hidden from the list and the badge and nothing sums the column. There is no transaction: the messages move first, the target updates second, the tombstone is stamped LAST — conditionally, on the source not already being merged, so two operators merging one conversation into different targets cannot both stamp it (the loser gets 409). An interrupted merge leaves a visibly empty but LIVE source that re-running finishes, never a hidden conversation whose mail never moved; re-running does add the source’s unread to the survivor a second time, a badge that clears the moment the conversation is opened. Attachments key on message_id and ride along untouched; email_storage_usage is NOT adjusted, because merging moves no bytes. Writes an audit_events row (business / email_ticket.merged) naming both conversations and how many messages moved — the conversation rows alone cannot tell the story, since the undo nulls merged_by.',
   request: {
     params: z.object({ id: uuidLike }),
     body: { content: { 'application/json': { schema: z.object({ into: uuidLike }).openapi('EmailTicketMerge') } } },
   },
   responses: {
-    200: { description: '{ ticket_id, merged_into_id }' },
+    200: { description: '{ email_tickets, merged_into_id }' },
     400: { description: 'No target given, or one that is not UUID-shaped', content: { 'application/json': { schema: ErrorResponse } } },
-    404: { description: 'Either ticket missing or not accessible, or the pair cannot be merged', content: { 'application/json': { schema: ErrorResponse } } },
-    409: { description: 'Somebody else merged this ticket first — its pointer was not overwritten', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Either conversation missing or not accessible, or the pair cannot be merged', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Somebody else merged this conversation first — its pointer was not overwritten', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'A step failed — the response says which, and re-running finishes the job', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
 registry.registerPath({
   method: 'delete',
-  path: '/api/email/tickets/{id}/merge',
+  path: '/api/email/mail/{id}/merge',
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
   summary: 'Undo a merge',
-  description: 'EMAIL-MERGE.4 — the exact reverse, on the TOMBSTONE’s id. Moves back only the messages stamped merged_from_ticket_id = this ticket, clearing the stamp, then clears merged_into_id / merged_at / merged_by; a ticket that was never merged is a 404. Keyed on the stamp rather than on the survivor’s ticket_id, so a survivor that had its own correspondence — or had absorbed an earlier merge — does not hand it to the wrong ticket. It is a real undo, not just a move: once the rows are back, BOTH tickets have their denormalised fields REBUILT from the messages that now sit on them (last-message trio and first_response_at, skipping internal notes and forwards, clocked on created_at because an inbound sent_at is the sender’s own Date header), and the survivor gives back exactly the unread_count the tombstone retained, clamped at zero. Left alone the survivor would keep advertising a last message that has left it — a preview and a queue sort key it does not own. Same ordering discipline as the merge: the messages move back first and the pointer clears LAST, so a failed undo leaves a tombstone that can simply be unmerged again (a retried undo subtracts the unread twice, a badge that clears when the ticket is opened). BOTH tickets go through the same gate as the merge did — this route takes messages OFF the survivor and rewrites its counters, so gating only the tombstone would let a caller reshape a ticket they cannot see. Writes an audit_events row (business / email_ticket.unmerged): once merged_into_id / merged_at / merged_by are cleared the rows carry no trace that the correspondence was ever moved, so that event is the only surviving record of it. The source stays `closed`; reopening it is the status route’s job, since merging is not a status decision.',
+  description: 'EMAIL-MERGE.4 — the exact reverse, on the TOMBSTONE’s id. Moves back only the messages stamped merged_from_ticket_id = this conversation, clearing the stamp, then clears merged_into_id / merged_at / merged_by; a conversation that was never merged is a 404. Keyed on the stamp rather than on the survivor’s merged_from_ticket_id, so a survivor that had its own correspondence — or had absorbed an earlier merge — does not hand it to the wrong conversation. It is a real undo, not just a move: once the rows are back, BOTH conversations have their denormalised fields REBUILT from the messages that now sit on them (last-message trio and first_response_at, skipping internal notes and forwards, clocked on created_at because an inbound sent_at is the sender’s own Date header), and the survivor gives back exactly the unread_count the tombstone retained, clamped at zero. Left alone the survivor would keep advertising a last message that has left it — a preview and a queue sort key it does not own. Same ordering discipline as the merge: the messages move back first and the pointer clears LAST, so a failed undo leaves a tombstone that can simply be unmerged again (a retried undo subtracts the unread twice, a badge that clears when the conversation is opened). BOTH conversations go through the same gate as the merge did — this route takes messages OFF the survivor and rewrites its counters, so gating only the tombstone would let a caller reshape a conversation they cannot see. Writes an audit_events row (business / email_ticket.merged): once merged_into_id / merged_at / merged_by are cleared the rows carry no trace that the correspondence was ever moved, so that event is the only surviving record of it. The source stays `closed`; reopening it is the status route’s job, since merging is not a status decision.',
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: '{ ticket_id }' },
-    404: { description: 'Not found / not accessible, or not a merged ticket', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found / not accessible, or not a merged conversation', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'A step failed — the response says which, and re-running finishes the job', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
 registry.registerPath({
   method: 'post',
-  path: '/api/email/tickets/compose',
+  path: '/api/email/mail/compose',
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
-  summary: 'Start a new ticket by emailing someone',
-  description: "A new email IS a ticket whose first message is outbound — one email_tickets row plus one outbound email_inbox_messages row, and thereafter an ordinary ticket (their reply threads back through the normal inbound path). The location comes off the MAILBOX, never the request, and `mailbox_id` must be in the caller's visible set: anything else is a 404, never a 403, so mailbox ids can't be enumerated. Sends on Postmark's transactional stream ('outbound') with Reply-To the chosen mailbox, links a contact when one matches the recipient, and stamps first_response_at. THE SEND HAPPENS FIRST: a failed send writes nothing at all, so there is never a ticket queued for an email that did not go. EMAIL-CC.1 — to[0] is the PRIMARY recipient: it is what requester_email records, what the contact link resolves against and what email_sends logs. Cc/Bcc are deduped case-insensitively against To and each other (To beats Cc beats Bcc), the studio's own mailbox addresses are stripped from all three (cc'ing one would file a phantom inbound ticket), and the combined total is capped at 25. Every address on a composed email was typed by a person, so the whole set is written to audit_events under the sender's name.",
+  summary: 'Start a new conversation by emailing someone',
+  description: "A new email IS a conversation whose first message is outbound — one email_tickets row plus one outbound email_inbox_messages row, and thereafter an ordinary conversation (their reply threads back through the normal inbound path). The location comes off the MAILBOX, never the request, and `mailbox_id` must be in the caller's visible set: anything else is a 404, never a 403, so mailbox ids can't be enumerated. Sends on Postmark's transactional stream ('outbound') with Reply-To the chosen mailbox, links a contact when one matches the recipient, and stamps first_response_at. THE SEND HAPPENS FIRST: a failed send writes nothing at all, so there is never a conversation queued for an email that did not go. EMAIL-CC.1 — to[0] is the PRIMARY recipient: it is what requester_email records, what the contact link resolves against and what email_sends logs. Cc/Bcc are deduped case-insensitively against To and each other (To beats Cc beats Bcc), the studio's own mailbox addresses are stripped from all three (cc'ing one would file a phantom inbound conversation), and the combined total is capped at 25. Every address on a composed email was typed by a person, so the whole set is written to audit_events under the sender's name.",
   request: {
     body: { content: { 'application/json': { schema: z.object({
       mailbox_id: uuidLike,
@@ -1647,16 +1647,16 @@ registry.registerPath({
     400: { description: 'Invalid body, or the send failed', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Missing email_inbox permission', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Mailbox missing, inactive, or not visible to the caller', content: { 'application/json': { schema: ErrorResponse } } },
-    500: { description: 'Sent, but the ticket/message could not be filed — do NOT resend', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Sent, but the conversation/message could not be filed — do NOT resend', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
 registry.registerPath({
   method: 'post',
-  path: '/api/email/tickets/{id}/read',
+  path: '/api/email/mail/{id}/read',
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
-  summary: 'Mark a ticket read',
+  summary: 'Mark a conversation read',
   description: 'Zeroes unread_count and nothing else (updated_at deliberately does not move). Its own endpoint so the detail GET stays free of writes.',
   request: { params: z.object({ id: uuidLike }) },
   responses: {
@@ -1668,11 +1668,226 @@ registry.registerPath({
 // ── Attachments + storage quota — EMAIL-ATTACH.1 (mig 496) ──────────────────
 registry.registerPath({
   method: 'get',
-  path: '/api/email/tickets/{id}/attachments/{attachmentId}',
+  path: '/api/email/mail/{id}/attachments/{attachmentId}',
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
   summary: 'Short-lived signed URL for one stored attachment',
-  description: "The email-attachments bucket is private, so this is the only way a client sees the bytes; the URL expires in 5 minutes. Access is the TICKET's access (location + the mailbox the ticket arrived at) PLUS a check that the attachment belongs to THIS ticket — without that pairing check, any ticket the caller can open would unlock any attachment id in the estate. 404 — never 403 — for a missing attachment, one on another ticket, and one whose bytes were never stored (the body then names the skipped_reason so staff can ask for a resend). storage_path is never returned.",
+  description: "The email-attachments bucket is private, so this is the only way a client sees the bytes; the URL expires in 5 minutes. Access is the TICKET's access (location + the mailbox the conversation arrived at) PLUS a check that the attachment belongs to THIS conversation — without that pairing check, any conversation the caller can open would unlock any attachment id in the estate. 404 — never 403 — for a missing attachment, one on another conversation, and one whose bytes were never stored (the body then names the skipped_reason so staff can ask for a resend). storage_path is never returned.",
+  request: { params: z.object({ id: uuidLike, attachmentId: uuidLike }) },
+  responses: {
+    200: { description: '{ url, filename, mime_type, size_bytes, expires_in }' },
+    404: { description: 'Not found / not accessible / not stored', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Recorded as stored but Storage would not sign it', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/email/mail/{id}/attachments/{attachmentId}/preview',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Short-lived signed INLINE URL for one stored attachment',
+  description: "EMAIL-ATTACH-PREVIEW.1 — the same object as the route above, signed WITHOUT the download flag so the browser renders it instead of saving it. Two routes rather than one route with a ?disposition= parameter, deliberately: the disposition must never be something a request asserts, and neither route accepts a Storage option of any kind. Identical gate (the conversation's access plus the attachment-belongs-to-this-conversation pairing check) and identical 5-minute TTL. Mints a URL ONLY for an allow-list of types that are safe AND universally renderable — image/jpeg, image/png, image/gif, image/webp, application/pdf — enforced here and again in the signer. Everything else is 404 with preview_kind null, which the UI renders as 'download instead', never as an error: image/svg+xml is scriptable markup from an unauthenticated stranger and never gets an inline handle; image/heic and image/heif are what iPhones send and no mainstream browser can decode them; Word/Excel/PowerPoint have no native renderer and are NOT sent to any third-party viewer. storage_path is never returned.",
+  request: { params: z.object({ id: uuidLike, attachmentId: uuidLike }) },
+  responses: {
+    200: { description: '{ url, preview_kind, filename, mime_type, size_bytes, expires_in }' },
+    404: { description: 'Not found / not accessible / not stored / no preview for this type', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Recorded as stored but Storage would not sign it', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// ── MAIL-RENAME.1 — deprecated /api/email/tickets/* shims ───────────────────
+// One-line re-exports of the /api/email/mail/* handlers above, kept for the
+// staff-app bundle still in the field. Documented separately so the spec
+// still shows the path an old client hits, without duplicating the handler's
+// own request/response detail. Removed once the shim sweep confirms nothing
+// calls them any more.
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/email/tickets/{id}',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'DEPRECATED SHIM — use GET /api/email/mail/{id}',
+  description: 'MAIL-RENAME.1 — a shim for the staff-app bundle still in the field; use GET /api/email/mail/{id}. Removed in the shim sweep.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ ticket, messages }' },
+    404: { description: 'Not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/email/tickets/{id}/reply',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'DEPRECATED SHIM — use POST /api/email/mail/{id}/reply',
+  description: 'MAIL-RENAME.1 — a shim for the staff-app bundle still in the field; use POST /api/email/mail/{id}/reply. Removed in the shim sweep.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      text: z.string().min(1).max(10000),
+      internal: z.boolean().optional(),
+      to: z.array(z.string().email()).max(25).optional(),
+      cc: z.array(z.string().email()).max(25).optional(),
+      bcc: z.array(z.string().email()).max(25).optional(),
+    }) } } },
+  },
+  responses: {
+    200: { description: 'Note written / reply sent' },
+    400: { description: 'Invalid body, no recipient, or the send failed', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/email/tickets/{id}/link-contact',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'DEPRECATED SHIM — use POST /api/email/mail/{id}/link-contact',
+  description: 'MAIL-RENAME.1 — a shim for the staff-app bundle still in the field; use POST /api/email/mail/{id}/link-contact. Removed in the shim sweep.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Linked (or already-linked) contact: { id, name, first_name, email, pipeline_stage_slug }' },
+    400: { description: 'Conversation has no requester_email to link from', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Contact resolution or a write failed — nothing changed, or a cosmetic mirror missed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/email/tickets/{id}/forward',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'DEPRECATED SHIM — use POST /api/email/mail/{id}/forward',
+  description: 'MAIL-RENAME.1 — a shim for the staff-app bundle still in the field; use POST /api/email/mail/{id}/forward. Removed in the shim sweep.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      message_id: uuidLike,
+      to: z.array(z.string().email()).min(1).max(25),
+      cc: z.array(z.string().email()).max(25).optional(),
+      bcc: z.array(z.string().email()).max(25).optional(),
+      note: z.string().max(10000).optional(),
+      attachment_ids: z.array(uuidLike).max(10).optional(),
+    }) } } },
+  },
+  responses: {
+    200: { description: '{ message, message_id, recipients, forwarded_message_id, attachment_count }' },
+    400: { description: 'Invalid body, an internal note, no usable recipient, an unforwardable file, or the send failed', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Conversation not accessible, or the message is not on this conversation', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'A pre-send lookup failed (nothing sent), or the forward went out but could not be filed — do NOT resend', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'The email-sending Postmark server is unconfigured — nothing was sent', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'patch',
+  path: '/api/email/tickets/{id}/participants',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'DEPRECATED SHIM — use PATCH /api/email/mail/{id}/participants',
+  description: 'MAIL-RENAME.1 — a shim for the staff-app bundle still in the field; use PATCH /api/email/mail/{id}/participants. Removed in the shim sweep.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      remove: z.array(z.string()).max(25).optional(),
+      restore: z.array(z.string()).max(25).optional(),
+    }) } } },
+  },
+  responses: {
+    200: { description: '{ excluded_participants } — the full list after the change', content: { 'application/json': { schema: SuccessResponse(z.object({ excluded_participants: z.array(z.string()) })) } } },
+    400: { description: 'Neither list given, or an address the server cannot use', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The update failed — nothing changed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/email/tickets/{id}/merge',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'DEPRECATED SHIM — use POST /api/email/mail/{id}/merge',
+  description: 'MAIL-RENAME.1 — a shim for the staff-app bundle still in the field; use POST /api/email/mail/{id}/merge. Removed in the shim sweep.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ into: uuidLike }) } } },
+  },
+  responses: {
+    200: { description: '{ ticket_id, merged_into_id }' },
+    400: { description: 'No target given, or one that is not UUID-shaped', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Either conversation missing or not accessible, or the pair cannot be merged', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Somebody else merged this conversation first — its pointer was not overwritten', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'A step failed — the response says which, and re-running finishes the job', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/email/tickets/{id}/merge',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'DEPRECATED SHIM — use DELETE /api/email/mail/{id}/merge',
+  description: 'MAIL-RENAME.1 — a shim for the staff-app bundle still in the field; use DELETE /api/email/mail/{id}/merge. Removed in the shim sweep.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ ticket_id }' },
+    404: { description: 'Not found / not accessible, or not a merged conversation', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'A step failed — the response says which, and re-running finishes the job', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/email/tickets/compose',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'DEPRECATED SHIM — use POST /api/email/mail/compose',
+  description: 'MAIL-RENAME.1 — a shim for the staff-app bundle still in the field; use POST /api/email/mail/compose. Removed in the shim sweep.',
+  request: {
+    body: { content: { 'application/json': { schema: z.object({
+      mailbox_id: uuidLike,
+      to: z.union([z.string().email(), z.array(z.string().email()).max(25).min(1)]),
+      cc: z.array(z.string().email()).max(25).optional(),
+      bcc: z.array(z.string().email()).max(25).optional(),
+      subject: z.string().min(1).max(200),
+      text: z.string().min(1).max(10000),
+    }) } } },
+  },
+  responses: {
+    200: { description: '{ ticket_id, ticket, message, message_id }' },
+    400: { description: 'Invalid body, or the send failed', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Missing email_inbox permission', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Mailbox missing, inactive, or not visible to the caller', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Sent, but the conversation/message could not be filed — do NOT resend', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/email/tickets/{id}/read',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'DEPRECATED SHIM — use POST /api/email/mail/{id}/read',
+  description: 'MAIL-RENAME.1 — a shim for the staff-app bundle still in the field; use POST /api/email/mail/{id}/read. Removed in the shim sweep.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Marked read' },
+    404: { description: 'Not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/email/tickets/{id}/attachments/{attachmentId}',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'DEPRECATED SHIM — use GET /api/email/mail/{id}/attachments/{attachmentId}',
+  description: 'MAIL-RENAME.1 — a shim for the staff-app bundle still in the field; use GET /api/email/mail/{id}/attachments/{attachmentId}. Removed in the shim sweep.',
   request: { params: z.object({ id: uuidLike, attachmentId: uuidLike }) },
   responses: {
     200: { description: '{ url, filename, mime_type, size_bytes, expires_in }' },
@@ -1686,8 +1901,8 @@ registry.registerPath({
   path: '/api/email/tickets/{id}/attachments/{attachmentId}/preview',
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
-  summary: 'Short-lived signed INLINE URL for one stored attachment',
-  description: "EMAIL-ATTACH-PREVIEW.1 — the same object as the route above, signed WITHOUT the download flag so the browser renders it instead of saving it. Two routes rather than one route with a ?disposition= parameter, deliberately: the disposition must never be something a request asserts, and neither route accepts a Storage option of any kind. Identical gate (the ticket's access plus the attachment-belongs-to-this-ticket pairing check) and identical 5-minute TTL. Mints a URL ONLY for an allow-list of types that are safe AND universally renderable — image/jpeg, image/png, image/gif, image/webp, application/pdf — enforced here and again in the signer. Everything else is 404 with preview_kind null, which the UI renders as 'download instead', never as an error: image/svg+xml is scriptable markup from an unauthenticated stranger and never gets an inline handle; image/heic and image/heif are what iPhones send and no mainstream browser can decode them; Word/Excel/PowerPoint have no native renderer and are NOT sent to any third-party viewer. storage_path is never returned.",
+  summary: 'DEPRECATED SHIM — use GET /api/email/mail/{id}/attachments/{attachmentId}/preview',
+  description: 'MAIL-RENAME.1 — a shim for the staff-app bundle still in the field; use GET /api/email/mail/{id}/attachments/{attachmentId}/preview. Removed in the shim sweep.',
   request: { params: z.object({ id: uuidLike, attachmentId: uuidLike }) },
   responses: {
     200: { description: '{ url, preview_kind, filename, mime_type, size_bytes, expires_in }' },
@@ -3999,7 +4214,7 @@ registry.registerPath({
   tags: ['Communications'],
   security: [{ CookieAuth: [] }],
   summary: 'Inbound spam threshold for a location',
-  description: 'Returns { enabled, threshold, default_threshold, can_edit } (company_settings.email_spam_filter_enabled / email_spam_threshold, mig 584; defaults enabled=true, 5.0 — SpamAssassin\u2019s own required_score). The inbound webhook quarantines an email whose Postmark SpamScore (fallback: the X-Spam-Score / X-Spam-Status headers) is AT OR ABOVE this threshold: the ticket is created but flagged is_spam — no staff push, no unread/badge count, shown only on Mail\u2019s Spam view — until Not spam releases it or the 30-day purge (/api/cron/purge-spam-tickets) deletes it. FAIL OPEN everywhere: no readable score is never spam, a disabled filter quarantines nothing (the score is still recorded), and an unreadable threshold falls back to the default rather than to 0. A location with no company_settings row returns the defaults rather than 404. can_edit is the PUT gate\u2019s own answer, so the card never offers a Save the server refuses.',
+  description: 'Returns { enabled, threshold, default_threshold, can_edit } (company_settings.email_spam_filter_enabled / email_spam_threshold, mig 584; defaults enabled=true, 5.0 — SpamAssassin\u2019s own required_score). The inbound webhook quarantines an email whose Postmark SpamScore (fallback: the X-Spam-Score / X-Spam-Status headers) is AT OR ABOVE this threshold: the conversation is created but flagged is_spam — no staff push, no unread/badge count, shown only on Mail\u2019s Spam view — until Not spam releases it or the 30-day purge (/api/cron/purge-spam-tickets) deletes it. FAIL OPEN everywhere: no readable score is never spam, a disabled filter quarantines nothing (the score is still recorded), and an unreadable threshold falls back to the default rather than to 0. A location with no company_settings row returns the defaults rather than 404. can_edit is the PUT gate\u2019s own answer, so the card never offers a Save the server refuses.',
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: 'Current spam-filter setting' },

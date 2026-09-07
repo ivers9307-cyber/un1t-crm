@@ -49,7 +49,7 @@ function stubFetch({ mailboxes = 'none', composeOk = true, prefs = null } = {}) 
       if (mailboxes === 'forbidden') return { ok: false, status: 403, json: async () => ({ success: false, error: 'Forbidden' }) }
       return { ok: true, status: 200, json: async () => ({ success: true, data: { mailboxes: mailboxes === 'none' ? [] : mailboxes, conversations: [] } }) }
     }
-    if (u === '/api/email/tickets/compose') {
+    if (u === '/api/email/mail/compose') {
       return composeOk
         ? { ok: true, status: 200, json: async () => ({ success: true, data: { ticket_id: 't-9' } }) }
         : { ok: false, status: 500, json: async () => ({ success: false, error: 'send exploded' }) }
@@ -118,7 +118,7 @@ describe('ContactComposer — Email via Mail', () => {
     fireEvent.change(screen.getByPlaceholderText(/Email John/), { target: { value: 'Hi John, attached below.' } })
     fireEvent.click(screen.getByRole('button', { name: /Send email/ }))
     await waitFor(() => {
-      const compose = calls.find(c => c.url === '/api/email/tickets/compose')
+      const compose = calls.find(c => c.url === '/api/email/mail/compose')
       expect(compose?.body).toEqual({
         mailbox_id: 'mb-accounts',
         to: ['john@example.com'],
@@ -132,7 +132,7 @@ describe('ContactComposer — Email via Mail', () => {
     fireEvent.change(screen.getByPlaceholderText(/Email John/), { target: { value: 'Second.' } })
     fireEvent.click(screen.getByRole('button', { name: /Send email/ }))
     await waitFor(() => {
-      const sends = calls.filter(c => c.url === '/api/email/tickets/compose')
+      const sends = calls.filter(c => c.url === '/api/email/mail/compose')
       expect(sends[1]?.body.mailbox_id).toBe('mb-studio')
     })
     // …and never the company route.
@@ -149,7 +149,7 @@ describe('ContactComposer — Email via Mail', () => {
     await waitFor(() => {
       expect(calls.some(c => c.url === '/api/contacts/c-1/email')).toBe(true)
     })
-    expect(calls.some(c => c.url === '/api/email/tickets/compose')).toBe(false)
+    expect(calls.some(c => c.url === '/api/email/mail/compose')).toBe(false)
   })
 
   // MAIL-FOLLOWUPS.1 — a failed list is the company path (never a dead Email
@@ -183,7 +183,7 @@ describe('ContactComposer — Email via Mail', () => {
     await waitFor(() => {
       expect(calls.some(c => c.url === '/api/contacts/c-1/email')).toBe(true)
     })
-    expect(calls.some(c => c.url === '/api/email/tickets/compose')).toBe(false)
+    expect(calls.some(c => c.url === '/api/email/mail/compose')).toBe(false)
   })
 
   it('a THROWN account lookup (network down) settles on the company path and says the list could not load', async () => {
@@ -223,7 +223,7 @@ describe('ContactComposer — Email via Mail', () => {
       const u = String(url)
       calls.push({ url: u, method: init?.method || 'GET', body: init?.body ? JSON.parse(init.body) : null })
       if (u.startsWith('/api/email/mail?')) return listPromise
-      if (u === '/api/email/tickets/compose') return { ok: true, status: 200, json: async () => ({ success: true, data: { ticket_id: 't-9' } }) }
+      if (u === '/api/email/mail/compose') return { ok: true, status: 200, json: async () => ({ success: true, data: { ticket_id: 't-9' } }) }
       return { ok: true, status: 200, json: async () => ({ success: true }) }
     }))
     renderComposer()
@@ -247,7 +247,7 @@ describe('ContactComposer — Email via Mail', () => {
     expect(screen.getByRole('button', { name: /Send email/ }).disabled).toBe(false)
     fireEvent.click(screen.getByRole('button', { name: /Send email/ }))
     await waitFor(() => {
-      const compose = calls.find(c => c.url === '/api/email/tickets/compose')
+      const compose = calls.find(c => c.url === '/api/email/mail/compose')
       expect(compose?.body).toEqual({
         mailbox_id: 'mb-accounts',
         to: ['john@example.com'],

@@ -4,7 +4,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import {
-  loadTicketForUser, statusTimestamps, stampMailRow,
+  loadConversationForUser, statusTimestamps, stampMailRow,
 } from '../../_helpers'
 import { applyWriteback, writebackNotice } from '../../_writeback'
 
@@ -31,14 +31,14 @@ const ArchiveSchema = z.object({
 // something this route gets to assert. Restoring `pending` would silently
 // claim we had already answered.
 //
-// WHY THIS IS NOT A CALL TO /api/email/tickets/[id]/status:
+// WHY THIS IS NOT A CALL TO /api/email/conversations/[id]/status:
 //   • that route accepts all four lifecycle values, and this surface must be
 //     structurally incapable of producing the other two — an inbox that can
 //     write `solved` has grown the ceremony it exists to drop;
 //   • it has no surface guard, so it would happily archive a TICKETING
-//     mailbox's ticket from the mail screen;
+//     mailbox's conversation from the mail screen;
 //   • it is the archive verb that the IMAP write-back hangs off (see below).
-// Everything it actually does is still shared: loadTicketForUser is the gate,
+// Everything it actually does is still shared: loadConversationForUser is the gate,
 // statusTimestamps is the stamp logic, both imported rather than restated.
 //
 // 🔴 ARCHIVING IS A PAIRED WRITE: `status='closed'` here AND a move to the
@@ -62,7 +62,7 @@ const ArchiveSchema = z.object({
 // operator the thing they just did in order to tell them half of it did not
 // happen, which is trading a divergence for a certain loss.
 //
-// ALL THREE GATES: loadTicketForUser carries the location access, the
+// ALL THREE GATES: loadConversationForUser carries the location access, the
 // `email_inbox` key resolved at the TICKET's location, and the per-mailbox
 // grant. Every refusal is the same 404, so an id cannot be probed.
 // (RETIRE-TICKETS.1 removed the fourth, surface, gate along with the surface
@@ -78,15 +78,15 @@ export async function POST(request, props) {
   const { archived } = validation.data
 
   const db = createServerClient()
-  const loaded = await loadTicketForUser(db, user, params.id)
+  const loaded = await loadConversationForUser(db, user, params.id)
   if (loaded.response) return loaded.response
-  const { ticket } = loaded
+  const { conversation } = loaded
 
   const status = archived ? 'closed' : 'open'
   const now = new Date().toISOString()
   const { data: updated, error } = await db.from('email_tickets')
-    .update({ status, updated_at: now, ...statusTimestamps(status, ticket, now) })
-    .eq('id', ticket.id)
+    .update({ status, updated_at: now, ...statusTimestamps(status, conversation, now) })
+    .eq('id', conversation.id)
     .select('*')
     .single()
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
@@ -99,7 +99,7 @@ export async function POST(request, props) {
   if (archived) {
     const { data: inbound, error: inboundErr } = await db.from('email_inbox_messages')
       .select('id, rfc_message_id')
-      .eq('ticket_id', ticket.id)
+      .eq('ticket_id', conversation.id)
       .eq('direction', 'inbound')
       // 🔴 NEWEST FIRST, AND THE ORDER IS LOAD-BEARING. applyWriteback moves at
       // most WRITEBACK_MAX_MESSAGES of these, so on a longer conversation this
@@ -120,7 +120,7 @@ export async function POST(request, props) {
       writeback = { attempted: 0, applied: 0, skipped: 0, unreferenced: 1, failures: [] }
     } else {
       writeback = await applyWriteback(
-        db, ticket.mailbox_id, (inbound || []).map(m => m.rfc_message_id), 'archive'
+        db, conversation.mailbox_id, (inbound || []).map(m => m.rfc_message_id), 'archive'
       )
     }
   }

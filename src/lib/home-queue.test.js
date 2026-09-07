@@ -1,10 +1,10 @@
 // HOME.3 — the needs-attention queue assembler. Merges three sources
-// (approvals, tickets, unified inbox) into one sorted, capped list plus
+// (approvals, conversations, unified inbox) into one sorted, capped list plus
 // TRUE (uncapped) per-source counts.
 //
 // Dependencies are mocked at the module boundary rather than re-modelled
-// here: the approvals registry (src/lib/approvals/registry.js), the ticket
-// visibility helpers (src/app/api/email/tickets/_helpers.js) and the
+// here: the approvals registry (src/lib/approvals/registry.js), the conversation
+// visibility helpers (src/app/api/email/mail/_helpers.js) and the
 // permission gates each have their own test coverage already. These tests
 // are about assembleHomeQueue's OWN job — gating, row shaping, merge/sort,
 // per-source and global caps, TRUE counts, and the degraded-source path —
@@ -20,7 +20,7 @@ vi.mock('@/lib/permissions', () => ({
   hasPermission: vi.fn(),
   hasPermissionForLocation: vi.fn(),
 }))
-vi.mock('@/app/api/email/tickets/_helpers', () => ({
+vi.mock('@/app/api/email/mail/_conversation', () => ({
   loadVisibleMailboxes: vi.fn(),
   scopeToVisibleMailboxes: vi.fn((q) => q),
   scopeToNeedsReply: vi.fn((q) => q),
@@ -37,7 +37,7 @@ import {
 } from './home-queue'
 import { getPendingApprovals, getPendingApprovalsCount } from '@/lib/approvals/registry'
 import { hasPermission, hasPermissionForLocation } from '@/lib/permissions'
-import { loadVisibleMailboxes } from '@/app/api/email/tickets/_helpers'
+import { loadVisibleMailboxes } from '@/app/api/email/mail/_conversation'
 
 const LOC = 'loc-1'
 const userAt = (over = {}) => ({ id: 'u1', role: 'staff', activeLocation: { id: LOC }, ...over })
@@ -170,7 +170,7 @@ describe('assembleHomeQueue — mail source', () => {
     expect(result.counts.mail).toBe(0)
   })
 
-  it('builds rows from needs-reply unmerged tickets', async () => {
+  it('builds rows from needs-reply unmerged conversations', async () => {
     hasPermissionForLocation.mockReturnValue(true)
     loadVisibleMailboxes.mockResolvedValue({ elevated: true, mailboxes: [{ id: 'mb1' }] })
     const db = makeDb({
@@ -190,7 +190,7 @@ describe('assembleHomeQueue — mail source', () => {
     expect(result.counts.mail).toBe(1)
   })
 
-  it('falls back to requester email when the ticket has no subject or name', async () => {
+  it('falls back to requester email when the conversation has no subject or name', async () => {
     hasPermissionForLocation.mockReturnValue(true)
     loadVisibleMailboxes.mockResolvedValue({ elevated: true, mailboxes: [{ id: 'mb1' }] })
     const db = makeDb({
@@ -319,7 +319,7 @@ describe('assembleHomeQueue — merge, sort and caps', () => {
   })
 
   it('caps the merged total at GLOBAL_CAP, keeping the most recent rows', async () => {
-    const ticketRows = Array.from({ length: 20 }, (_, i) => ({
+    const conversationRows = Array.from({ length: 20 }, (_, i) => ({
       id: `t${i}`, subject: `T${i}`, requester_name: null, requester_email: 'x@x.com',
       // Older half of the timeline.
       last_message_at: new Date(Date.UTC(2026, 7, 1 + i)).toISOString(),
@@ -331,13 +331,13 @@ describe('assembleHomeQueue — merge, sort and caps', () => {
       last_message_direction: 'inbound', agent_handed_off_at: null, contacts: null,
     }))
     const db = makeDb({
-      email_tickets: { rows: ticketRows, count: 20 },
+      email_tickets: { rows: conversationRows, count: 20 },
       whatsapp_conversations: { rows: waRows },
     })
     const result = await assembleHomeQueue(db, userAt())
     expect(result.rows).toHaveLength(GLOBAL_CAP)
-    // All 20 WA rows are newer than every ticket row, so the 30-cap should
-    // keep all 20 WA rows plus the 10 most recent tickets.
+    // All 20 WA rows are newer than every conversation row, so the 30-cap should
+    // keep all 20 WA rows plus the 10 most recent conversations.
     expect(result.rows.filter((r) => r.source === 'inbox')).toHaveLength(20)
     expect(result.rows.filter((r) => r.source === 'mail')).toHaveLength(10)
     // TRUE counts are unaffected by the global cap.
@@ -403,7 +403,7 @@ describe('getHomeQueueCount', () => {
 // EMAIL-TICKET-CLEANUP.2 — a FAILED mailbox-visibility lookup is not "no
 // mailboxes": collapsing the two into the same 0 is exactly the silent
 // wrong-answer shape that invariant exists to prevent (src/app/api/email/
-// tickets/_helpers.js's loadVisibleMailboxes / mailboxesUnavailable). The
+// mail/_helpers.js's loadVisibleMailboxes / mailboxesUnavailable). The
 // generic degraded-source path (any other mail failure — a query error,
 // say) still folds to counts.mail = 0, proven below alongside it so the
 // distinction is pinned, not assumed.
@@ -540,7 +540,7 @@ describe('groupQueueRows', () => {
 })
 
 describe('getHomeQueueCount — mail visibility-lookup failure (EMAIL-TICKET-CLEANUP.2)', () => {
-  it('rejects (mirrors /api/email/tickets/count returning 500) rather than answering a confident number', async () => {
+  it('rejects (mirrors /api/email/mail/count returning 500) rather than answering a confident number', async () => {
     hasPermissionForLocation.mockReturnValue(true)
     loadVisibleMailboxes.mockResolvedValue({ response: 'mailboxes-unavailable' })
     getPendingApprovalsCount.mockResolvedValue(2)
@@ -559,9 +559,9 @@ describe('getHomeQueueCount — mail visibility-lookup failure (EMAIL-TICKET-CLE
 
 // RETIRE-TICKETS.1 — every email row is a Mail row, always deep-linked.
 // The per-mailbox surface routing that lived here (MAILBOX-SURFACE.1)
-// retired with the ticket queue.
+// retired with the conversation queue.
 describe('assembleHomeQueue — every email row is a Mail row', () => {
-  const ticket = (over = {}) => ({
+  const conversation = (over = {}) => ({
     id: 't1', subject: 'Billing', requester_name: 'Bob', requester_email: 'bob@x.com',
     last_message_at: '2026-08-10T09:00:00Z', mailbox_id: 'mb1', ...over,
   })
@@ -579,24 +579,24 @@ describe('assembleHomeQueue — every email row is a Mail row', () => {
   // it, or the operator lands on the top of the list rather than on the
   // conversation this row named.
   it('links every row to Mail with a deep link, labelled Mail', async () => {
-    const r = await rowFor({ mailboxes: [{ id: 'mb1' }], row: ticket() })
+    const r = await rowFor({ mailboxes: [{ id: 'mb1' }], row: conversation() })
     expect(r.href).toBe('/communications/mail?c=t1')
     expect(r.source).toBe('mail')
     expect(r.sourceLabel).toBe('Mail')
   })
 
-  // The `?c=` value must be THIS ticket's own id, not a fixed string — a
+  // The `?c=` value must be THIS conversation's own id, not a fixed string — a
   // second fixture with a different id catches a hard-coded '?c=t1'.
-  it('carries the SPECIFIC ticket id in the deep link, not a fixed value', async () => {
-    const r = await rowFor({ mailboxes: [{ id: 'mb1' }], row: ticket({ id: 't-other' }) })
+  it('carries the SPECIFIC conversation id in the deep link, not a fixed value', async () => {
+    const r = await rowFor({ mailboxes: [{ id: 'mb1' }], row: conversation({ id: 't-other' }) })
     expect(r.href).toBe('/communications/mail?c=t-other')
   })
 
   // An ORPHAN (mailbox deleted → ON DELETE SET NULL, or pre-mig-484) must
   // still land somewhere real — Mail shows it to elevated callers now that
-  // the ticket queue, its old home, is gone.
-  it('routes a ticket with no mailbox to Mail too', async () => {
-    const r = await rowFor({ mailboxes: [{ id: 'mb1' }], row: ticket({ mailbox_id: null }) })
+  // the conversation queue, its old home, is gone.
+  it('routes a conversation with no mailbox to Mail too', async () => {
+    const r = await rowFor({ mailboxes: [{ id: 'mb1' }], row: conversation({ mailbox_id: null }) })
     expect(r.href).toBe('/communications/mail?c=t1')
     expect(r.source).toBe('mail')
   })

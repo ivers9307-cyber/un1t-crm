@@ -2,9 +2,9 @@
 // sender (MAIL-REFINE.1 — feeds the thread's "N other open conversations"
 // nudge and the merge picker's candidate list).
 //
-// ACCESS IS THE DETAIL ROUTE'S, THEN THE LIST'S. The anchor ticket goes
-// through loadTicketForUser — location access, the email_inbox key AT the
-// ticket's location, per-mailbox visibility, 404 on every refusal — and the
+// ACCESS IS THE DETAIL ROUTE'S, THEN THE LIST'S. The anchor conversation goes
+// through loadConversationForUser — location access, the email_inbox key AT the
+// conversation's location, per-mailbox visibility, 404 on every refusal — and the
 // candidates are then scoped by the same visible-mailbox rule as the list, so
 // this route can never show a thread the caller could not open from the
 // inbox. Relatedness never widens access; it only orders what is already
@@ -18,7 +18,7 @@
 // RELATEDNESS NEVER CROSSES THE QUARANTINE FLAG (MAIL-SPAM.1). The picker
 // merges related → current, so a live anchor offering a quarantined candidate
 // would fold spam into a member's thread, and a spam anchor offering the
-// sender's live thread would fold that thread into the spam ticket — where
+// sender's live thread would fold that thread into the spam conversation — where
 // the 30-day purge deletes it. Candidates carry the anchor's own is_spam, and
 // the nudge's open_count follows the same scope.
 //
@@ -31,7 +31,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { escapeLikePattern } from '@/lib/like-escape'
-import { loadTicketForUser, loadVisibleMailboxes, scopeToVisibleMailboxes } from '../../../tickets/_helpers'
+import { loadConversationForUser, loadVisibleMailboxes, scopeToVisibleMailboxes } from '../../_conversation'
 import { loadConversationCounts, LIVE_STATUSES, stampMailRow } from '../../_helpers'
 
 export const runtime = 'nodejs'
@@ -57,31 +57,31 @@ export async function GET(request, props) {
   const { id } = await props.params
   const db = createServerClient()
 
-  const loaded = await loadTicketForUser(db, user, id)
+  const loaded = await loadConversationForUser(db, user, id)
   if (loaded.response) return loaded.response
-  const { ticket } = loaded
+  const { conversation } = loaded
 
-  // A sender-less ticket (rare legacy rows) has nothing to relate BY — that
+  // A sender-less conversation (rare legacy rows) has nothing to relate BY — that
   // is a real empty answer, not a failure.
-  if (!ticket.requester_email) {
+  if (!conversation.requester_email) {
     return NextResponse.json({ success: true, data: { related: [], open_count: 0 } })
   }
 
-  // loadTicketForUser proves the anchor is visible but returns only ITS
+  // loadConversationForUser proves the anchor is visible but returns only ITS
   // mailbox; the candidate scope needs the caller's whole visible set.
-  const visibility = await loadVisibleMailboxes(db, user, ticket.location_id)
+  const visibility = await loadVisibleMailboxes(db, user, conversation.location_id)
   if (visibility.response) return visibility.response
   const { elevated, mailboxes } = visibility
 
   const scoped = (query) => scopeToVisibleMailboxes(
     query
-      .eq('location_id', ticket.location_id)
-      .neq('id', ticket.id)
-      .ilike('requester_email', escapeLikePattern(ticket.requester_email))
+      .eq('location_id', conversation.location_id)
+      .neq('id', conversation.id)
+      .ilike('requester_email', escapeLikePattern(conversation.requester_email))
       .is('merged_into_id', null)
       // The anchor's own side of the flag — see the header. `=== true` so a
       // pre-mig-584 row (no column) anchors the live side, never both.
-      .eq('is_spam', ticket.is_spam === true),
+      .eq('is_spam', conversation.is_spam === true),
     { mailboxes, elevated },
   )
 

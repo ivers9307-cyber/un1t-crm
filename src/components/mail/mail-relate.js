@@ -13,7 +13,7 @@
 //   newest first, capped at 10, same requester + location, caller-visible
 //   mailboxes only, unmerged, self excluded. Failure is a REAL error — the
 //   route never answers an empty list for "could not look".
-//   Merge / unmerge: POST / DELETE /api/email/tickets/[id]/merge ({into} on
+//   Merge / unmerge: POST / DELETE /api/email/mail/[id]/merge ({into} on
 //   POST) — both pre-existing; called, never re-implemented.
 //
 // 🔴 TWO RULES, mirrored in the tests:
@@ -24,7 +24,7 @@
 //     stops at the first failure, and reports exactly which ids succeeded so
 //     the caller can refresh honestly (the ones that merged really did merge).
 
-import { relativeTime } from '@/lib/ticket-display'
+import { relativeTime } from '@/lib/mail/conversation-display'
 // MAIL-ARCH.4 — the related route stamps `archived` (MAIL-ARCH.3); read the
 // stamp through the shared vocabulary, never `status`, so a legacy `solved`
 // row the server calls LIVE is open here exactly as it is on the phone.
@@ -152,7 +152,7 @@ export async function mergeConversations({ ids = [], into, fetchImpl = globalThi
   const merged = []
   for (const id of ids) {
     const error = await attempt(
-      `/api/email/tickets/${encodeURIComponent(id)}/merge`,
+      `/api/email/mail/${encodeURIComponent(id)}/merge`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -176,7 +176,7 @@ export async function unmergeConversations({ ids = [], fetchImpl = globalThis.fe
   const unmerged = []
   for (const id of ids) {
     const error = await attempt(
-      `/api/email/tickets/${encodeURIComponent(id)}/merge`,
+      `/api/email/mail/${encodeURIComponent(id)}/merge`,
       { method: 'DELETE' },
       fetchImpl,
       'Could not undo that merge'

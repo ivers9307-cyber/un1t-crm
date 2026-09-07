@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { loadTicketForUser } from '../../_helpers'
+import { loadConversationForUser } from '../../_helpers'
 import { applyWriteback, writebackNotice } from '../../_writeback'
 
 const SeenSchema = z.object({
@@ -34,7 +34,7 @@ const SeenSchema = z.object({
 // mark is converged away within a quarter of an hour — a button that silently
 // undoes itself being worse than a missing one. That was right about the
 // danger and wrong about the remedy: the mail surface would have entered the
-// trial with NO defer verb while the ticket queue has reopen, which biases the
+// trial with NO defer verb while the conversation queue has reopen, which biases the
 // very comparison the trial exists to settle. So markUnseen() was added and
 // this route pairs it exactly as it pairs the read direction.
 //
@@ -51,7 +51,7 @@ const SeenSchema = z.object({
 // nobody uses for this mailbox, and refusing the request over it would cost
 // the operator the read state they asked for.
 //
-// ALL THE GATES ARE loadTicketForUser's: location access, the `email_inbox`
+// ALL THE GATES ARE loadConversationForUser's: location access, the `email_inbox`
 // key at the TICKET's location, and the per-mailbox grant. Every refusal is
 // the same 404. (RETIRE-TICKETS.1 removed the fourth, surface, gate along
 // with the surface itself — mig 578. Orphan conversations are writable here
@@ -67,9 +67,9 @@ export async function POST(request, props) {
   if (!validation.ok) return validation.response
 
   const db = createServerClient()
-  const loaded = await loadTicketForUser(db, user, params.id)
+  const loaded = await loadConversationForUser(db, user, params.id)
   if (loaded.response) return loaded.response
-  const { ticket } = loaded
+  const { conversation } = loaded
 
   const { seen } = validation.data
   const now = new Date().toISOString()
@@ -85,7 +85,7 @@ export async function POST(request, props) {
   const patch = seen ? { seen_at: now } : { seen_at: null }
   let update = db.from('email_inbox_messages')
     .update(patch)
-    .eq('ticket_id', ticket.id)
+    .eq('ticket_id', conversation.id)
     .eq('direction', 'inbound')
   update = seen ? update.is('seen_at', null) : update.not('seen_at', 'is', null)
   const { data: changed, error } = await update.select('id, rfc_message_id')
@@ -104,7 +104,7 @@ export async function POST(request, props) {
   // The mailbox half. Only the messages this write actually changed — usually
   // one — so the common case is a single connection.
   const writeback = await applyWriteback(
-    db, ticket.mailbox_id, rows.map(r => r.rfc_message_id), seen ? 'seen' : 'unseen'
+    db, conversation.mailbox_id, rows.map(r => r.rfc_message_id), seen ? 'seen' : 'unseen'
   )
 
   // Derived from the rows this route actually changed, never incremented
@@ -112,17 +112,17 @@ export async function POST(request, props) {
   // at an empty list.
   const { error: mirrorErr } = await db.from('email_tickets')
     .update({ unread_count: seen ? 0 : rows.length })
-    .eq('id', ticket.id)
+    .eq('id', conversation.id)
     .select('id')
   // Logged, never surfaced and never failed on — see the header.
   if (mirrorErr) {
-    console.error('[email/mail] unread_count mirror failed for ticket', ticket.id, mirrorErr.message)
+    console.error('[email/mail] unread_count mirror failed for conversation', conversation.id, mirrorErr.message)
   }
 
   return NextResponse.json({
     success: true,
     data: {
-      id: ticket.id,
+      id: conversation.id,
       unread: seen ? 0 : rows.length,
       changed: rows.length,
       // The action SUCCEEDED — it is recorded here and the conversation is

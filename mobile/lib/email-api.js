@@ -1,10 +1,10 @@
-// Mail API helpers for mobile (MOBILE-MAIL.1; was the ticket-queue client,
+// Mail API helpers for mobile (MOBILE-MAIL.1; was the conversation-queue client,
 // EMAIL-TICKET-M.1).
 //
 // The CRM's email surface is Mail (/communications/mail on web —
-// RETIRE-TICKETS.1 retired the ticket queue and mig 578 the surface split).
+// RETIRE-TICKETS.1 retired the conversation queue and mig 578 the surface split).
 // The LIST and the two verbs (archive, read state) ride /api/email/mail*;
-// the thread, reply and attachments stay on the shared /api/email/tickets/[id]
+// the thread, reply and attachments stay on the shared /api/email/mail/[id]
 // detail routes, which are NOT deprecated — only the old list/count/assign/
 // status routes are, kept alive solely for bundles older than this one.
 //
@@ -19,15 +19,15 @@
 // the UI offers something every call refuses.
 //
 // EMAIL-TICKET-CLEANUP.1 — that permission now resolves AT the location the
-// call is about (the ticket's own, or the one the list route was handed) rather
+// call is about (the conversation's own, or the one the list route was handed) rather
 // than the caller's active one, which matters more on mobile than on web: the
 // app carries x-active-location per request, so a staffer switching studios
 // used to change what they could read at BOTH. The list route still answers 403
-// when the key is missing; the per-ticket routes answer 404, since there the
-// refusal has to be indistinguishable from "no such ticket".
+// when the key is missing; the per-conversation routes answer 404, since there the
+// refusal has to be indistinguishable from "no such conversation".
 //
 // TWO DIFFERENCES FROM THE OLD CONVERSATIONS API, both deliberate:
-//   • the list route returns { mailboxes, tickets }, NOT a flat list — the
+//   • the list route returns { mailboxes, conversations }, NOT a flat list — the
 //     mailboxes are the access model made visible and are what lets a row say
 //     which account it arrived at.
 //   • reading a conversation does not clear its unread state as a side
@@ -36,16 +36,16 @@
 import { api } from './api'
 import { supabase } from './supabase'
 import { readFileAsArrayBuffer } from './upload-bytes'
-import { ticketsToInboxRows } from './email-tickets'
+import { conversationsToInboxRows } from './mail-conversations'
 
 // Re-exported so screens that already import their display helper from here
-// keep one import for "the email surface". requesterLabel is the ticket-era
+// keep one import for "the email surface". requesterLabel is the conversation-era
 // precedence: requester_name → requester_email.
-export { requesterLabel as emailDisplayName } from './email-tickets'
+export { requesterLabel as emailDisplayName } from './mail-conversations'
 
 // The three views the mail route whitelists. Anything else is a 400, and
 // omitting the param entirely is the inbox (live conversations). The screen's
-// chips map their id onto these via ticketViewWire() in ./email-tickets.
+// chips map their id onto these via conversationViewWire() in ./mail-conversations.
 export const MAIL_VIEWS = Object.freeze(['inbox', 'needs_reply', 'archived'])
 
 /**
@@ -96,7 +96,7 @@ export async function listMail(locationId, { view, q, before, mailboxId } = {}) 
   const mailboxes = res.data?.mailboxes || []
   return {
     success: true,
-    data: ticketsToInboxRows({ tickets: res.data?.conversations || [], mailboxes }),
+    data: conversationsToInboxRows({ conversations: res.data?.conversations || [], mailboxes }),
     mailboxes,
     needsReplyCount: res.data?.needs_reply_count ?? 0,
     nextBefore: res.data?.next_before ?? null,
@@ -157,8 +157,8 @@ export async function fetchMailDigest(view) {
  * that half could not land. For Postmark accounts and orphans that half is a
  * silent no-op — there is no mailbox to change.
  */
-export function archiveConversation(ticketId, archived, locationId) {
-  return api(`/api/email/mail/${ticketId}/archive`, {
+export function archiveConversation(conversationId, archived, locationId) {
+  return api(`/api/email/mail/${conversationId}/archive`, {
     method: 'POST',
     body: { archived: !!archived },
     locationId,
@@ -167,12 +167,12 @@ export function archiveConversation(ticketId, archived, locationId) {
 
 /**
  * Read state, both directions. seen=true stamps every unread inbound message
- * (fire on open — replaces the ticket-era /read call, and unlike it also
+ * (fire on open — replaces the conversation-era /read call, and unlike it also
  * mirrors \Seen into a connected real mailbox); seen=false is Mark as
  * unread, the mail-app gesture for "deal with this later".
  */
-export function setConversationSeen(ticketId, seen, locationId) {
-  return api(`/api/email/mail/${ticketId}/seen`, {
+export function setConversationSeen(conversationId, seen, locationId) {
+  return api(`/api/email/mail/${conversationId}/seen`, {
     method: 'POST',
     body: { seen: !!seen },
     locationId,
@@ -180,15 +180,15 @@ export function setConversationSeen(ticketId, seen, locationId) {
 }
 
 /**
- * One ticket and its thread, oldest message first.
+ * One conversation and its thread, oldest message first.
  *
  * Does NOT clear the unread state — call setConversationSeen() for that.
- * 404s (not 403s) for a ticket the caller may not see, so an id can't be
+ * 404s (not 403s) for a conversation the caller may not see, so an id can't be
  * probed; surface it as a plain "not found" rather than a permission story.
  */
-export async function getTicket(ticketId, locationId) {
-  const res = await api(`/api/email/tickets/${ticketId}`, { locationId })
-  if (!res.success) return { success: false, error: res.error || 'Failed to load ticket' }
+export async function getConversation(conversationId, locationId) {
+  const res = await api(`/api/email/mail/${conversationId}`, { locationId })
+  if (!res.success) return { success: false, error: res.error || 'Failed to load conversation' }
   return {
     success: true,
     ticket: res.data?.ticket || null,
@@ -204,12 +204,12 @@ export async function getTicket(ticketId, locationId) {
     // the WHOLE thread server-side. This used to be dropped here, so the
     // composer footer fell back to a hard-coded "Sends an email to
     // <requester>" even though a reply from this screen has always gone to
-    // everyone the server derives (replyToTicket below posts { text, internal }
+    // everyone the server derives (replyToConversation below posts { text, internal }
     // only — the route adds the rest). That understated the true audience on
     // every multi-party thread (2026-08-09 audit). null means the route could
-    // not derive one (an own-address lookup blip); ticketReplyAudienceMeta()
-    // in email-tickets.js falls back to the requester address for that case,
-    // same as TicketReplyBox.jsx does on web.
+    // not derive one (an own-address lookup blip); conversationReplyAudienceMeta()
+    // in mail-conversations.js falls back to the requester address for that case,
+    // same as ConversationReplyBox.jsx does on web.
     reply_recipients: res.data?.reply_recipients || null,
   }
 }
@@ -218,7 +218,7 @@ export async function getTicket(ticketId, locationId) {
  * Answer the member, or add a staff-only note.
  *
  * `internal: true` writes to the thread and SENDS NOTHING — the member never
- * sees it, and the ticket does not move to pending. Callers must make which
+ * sees it, and the conversation does not move to pending. Callers must make which
  * one happened unmistakable in the UI before this is invoked.
  *
  * A real reply rides Postmark's transactional stream with threading headers
@@ -232,12 +232,12 @@ export async function getTicket(ticketId, locationId) {
  * body claiming files rode a message that never left would be refused — or
  * worse, silently ignored — either way a chip lying about what the member got.
  */
-export function replyToTicket(ticketId, text, { internal = false, locationId, attachments } = {}) {
+export function replyToConversation(conversationId, text, { internal = false, locationId, attachments } = {}) {
   const body = { text, internal: !!internal }
   if (!internal && Array.isArray(attachments) && attachments.length > 0) {
     body.attachments = attachments
   }
-  return api(`/api/email/tickets/${ticketId}/reply`, {
+  return api(`/api/email/mail/${conversationId}/reply`, {
     method: 'POST',
     locationId,
     body,
@@ -246,7 +246,7 @@ export function replyToTicket(ticketId, text, { internal = false, locationId, at
 
 /**
  * Start a conversation — a new email FROM one of the studio's mailboxes
- * (MOBILE-MAIL-A.1; POST /api/email/tickets/compose).
+ * (MOBILE-MAIL-A.1; POST /api/email/mail/compose).
  *
  * THE ENVELOPE PASSES THROUGH UNTOUCHED, refusals included. The route owns
  * every rule — the 25-recipient cap + dedupe, the mailbox gate (a mailbox the
@@ -282,12 +282,12 @@ export function composeEmail({
   if (Array.isArray(cc) && cc.length > 0) body.cc = cc
   if (Array.isArray(bcc) && bcc.length > 0) body.bcc = bcc
   if (Array.isArray(attachments) && attachments.length > 0) body.attachments = attachments
-  return api('/api/email/tickets/compose', { method: 'POST', body, locationId })
+  return api('/api/email/mail/compose', { method: 'POST', body, locationId })
 }
 
 /**
- * Pass one message on the ticket to somebody else (MOBILE-MAIL-FORWARD.1;
- * POST /api/email/tickets/[id]/forward — the same non-deprecated per-ticket
+ * Pass one message on the conversation to somebody else (MOBILE-MAIL-FORWARD.1;
+ * POST /api/email/mail/[id]/forward — the same non-deprecated per-conversation
  * family as reply).
  *
  * THE ENVELOPE PASSES THROUGH UNTOUCHED, refusals included — the route owns
@@ -297,13 +297,13 @@ export function composeEmail({
  * courtesy copy of the predictable half; this wrapper re-implements none of
  * it.
  *
- * Send happens FIRST server-side and the ticket is deliberately not touched
+ * Send happens FIRST server-side and the conversation is deliberately not touched
  * (a forward is not an answer to the member — the thread stays in
  * needs-reply). The rare sent-but-unfiled branch answers success:false WITH
  * `data.sent: true` — surface it as "do not resend", exactly like compose.
  *
  * @param {object} args
- * @param {string}   args.ticketId      the ticket the message lives on
+ * @param {string}   args.conversationId      the conversation the message lives on
  * @param {string}   args.messageId     the ONE message being forwarded
  * @param {string[]} args.to            typed by the operator; at least one
  * @param {string[]} [args.cc]
@@ -314,7 +314,7 @@ export function composeEmail({
  * @param {string}   [args.locationId]
  */
 export function forwardMessage({
-  ticketId, messageId, to, cc, bcc, note, attachmentIds, locationId,
+  conversationId, messageId, to, cc, bcc, note, attachmentIds, locationId,
 } = {}) {
   const body = { message_id: messageId, to }
   // Empty lists and a blank note stay off the wire — the route defaults them,
@@ -323,7 +323,7 @@ export function forwardMessage({
   if (Array.isArray(bcc) && bcc.length > 0) body.bcc = bcc
   if (typeof note === 'string' && note.trim()) body.note = note
   if (Array.isArray(attachmentIds) && attachmentIds.length > 0) body.attachment_ids = attachmentIds
-  return api(`/api/email/tickets/${ticketId}/forward`, { method: 'POST', body, locationId })
+  return api(`/api/email/mail/${conversationId}/forward`, { method: 'POST', body, locationId })
 }
 
 // ── Related conversations + merge (MAIL-REFINE.1 §03) ───────────────
@@ -346,8 +346,8 @@ export function forwardMessage({
  * @returns {Promise<{success: true, related: object[], openCount: number|null}
  *                  |{success: false, error: string}>}
  */
-export async function fetchRelatedConversations(ticketId, locationId) {
-  const res = await api(`/api/email/mail/${ticketId}/related`, { locationId })
+export async function fetchRelatedConversations(conversationId, locationId) {
+  const res = await api(`/api/email/mail/${conversationId}/related`, { locationId })
   if (!res.success || !res.data) {
     return { success: false, error: res.error || 'Could not check for related conversations' }
   }
@@ -365,26 +365,26 @@ export async function fetchRelatedConversations(ticketId, locationId) {
  * target. Envelope passes through untouched — the picker runs these
  * sequentially via runMerges and stops on the first failure.
  */
-export function mergeConversation(ticketId, intoTicketId, locationId) {
-  return api(`/api/email/tickets/${ticketId}/merge`, {
+export function mergeConversation(conversationId, intoConversationId, locationId) {
+  return api(`/api/email/mail/${conversationId}/merge`, {
     method: 'POST',
-    body: { into: intoTicketId },
+    body: { into: intoConversationId },
     locationId,
   })
 }
 
 /** Un-merge a conversation merged by the call above — the Undo on the
  * success notice (and nothing else; there is no persistent un-merge UI). */
-export function unmergeConversation(ticketId, locationId) {
-  return api(`/api/email/tickets/${ticketId}/merge`, {
+export function unmergeConversation(conversationId, locationId) {
+  return api(`/api/email/mail/${conversationId}/merge`, {
     method: 'DELETE',
     locationId,
   })
 }
 
-// RETIRE-TICKETS.1 removed assignTicket + setTicketStatus + markTicketRead:
+// RETIRE-TICKETS.1 removed assignConversation + setConversationStatus + markConversationRead:
 // assignment and the four-state lifecycle are not on the Mail surface (zero
-// tickets were ever assigned in the queue's whole life), and read state is
+// conversations were ever assigned in the queue's whole life), and read state is
 // setConversationSeen above — which, unlike the old /read call, also mirrors
 // \Seen into a connected real mailbox. The old routes live on as deprecated
 // shims for bundles older than this one; nothing here may call them.
@@ -463,11 +463,11 @@ export async function fetchSignatureContexts() {
  *
  * A 404 here is NORMAL, not a fault: it is how the server says "no preview for
  * this type" (a Word document, a HEIC photo, an SVG). Callers fall back to
- * downloadTicketAttachment(), which is the path that works for everything.
+ * downloadConversationAttachment(), which is the path that works for everything.
  */
-export async function previewTicketAttachment(ticketId, attachmentId, locationId) {
+export async function previewConversationAttachment(conversationId, attachmentId, locationId) {
   const res = await api(
-    `/api/email/tickets/${ticketId}/attachments/${attachmentId}/preview`,
+    `/api/email/mail/${conversationId}/attachments/${attachmentId}/preview`,
     { locationId },
   )
   if (!res.success || !res.data?.url) {
@@ -482,8 +482,8 @@ export async function previewTicketAttachment(ticketId, attachmentId, locationId
  * OS save it rather than render it — which is what makes it the safe fallback
  * for the types no preview will ever cover.
  */
-export async function downloadTicketAttachment(ticketId, attachmentId, locationId) {
-  const res = await api(`/api/email/tickets/${ticketId}/attachments/${attachmentId}`, { locationId })
+export async function downloadConversationAttachment(conversationId, attachmentId, locationId) {
+  const res = await api(`/api/email/mail/${conversationId}/attachments/${attachmentId}`, { locationId })
   if (!res.success || !res.data?.url) {
     return { success: false, error: res.error || 'That file could not be opened.' }
   }
@@ -498,7 +498,7 @@ export async function downloadTicketAttachment(ticketId, attachmentId, locationI
 // direct-to-storage flow (same shape as card receipts and invoices):
 //
 //   1. signOutboundAttachment() — POST /api/email/attachments/upload-sign.
-//      The server authorises against the SEND'S OWN gate (the ticket a reply
+//      The server authorises against the SEND'S OWN gate (the conversation a reply
 //      belongs to, or the mailbox a new email leaves from) and mints a signed
 //      token for a path IT built from the caller's own profile id. The phone
 //      never proposes a path and can only ever address its own drafts.
@@ -556,8 +556,8 @@ export function draftUuid() {
 /**
  * Step 1 — authorise one file and get its signed upload slot.
  *
- * EXACTLY ONE of ticketId / mailboxId, the same rule the route 400s on:
- * a reply's file is authorised against its ticket, a new email's against the
+ * EXACTLY ONE of conversationId / mailboxId, the same rule the route 400s on:
+ * a reply's file is authorised against its conversation, a new email's against the
  * mailbox it will leave from. Refused locally so a coding error surfaces on
  * the first tap rather than as a route sentence written for another case.
  *
@@ -575,7 +575,7 @@ export function draftUuid() {
  * @param {string} [args.mime]    falls back to application/octet-stream; it
  *   must MATCH what uploadSignedAttachment stores, or the send route
  *   re-derives a different extension and refuses (deliberately)
- * @param {string} [args.ticketId]  authorise against an existing ticket
+ * @param {string} [args.conversationId]  authorise against an existing conversation
  * @param {string} [args.mailboxId] authorise against a sending mailbox
  * @param {string} [args.draftId]   see above; default = fresh uuid
  * @param {number} [args.index]     see above; default = 0
@@ -587,12 +587,12 @@ export function draftUuid() {
  *   `draft` is the ref the send body carries, verbatim.
  */
 export async function signOutboundAttachment({
-  filename, size, mime, ticketId, mailboxId, draftId, index = 0, locationId,
+  filename, size, mime, conversationId, mailboxId, draftId, index = 0, locationId,
 } = {}) {
   // Both or neither is a bug in the caller, not a request worth sending —
   // mirrors the route's own exactly-one rule.
-  if (!ticketId === !mailboxId) {
-    return { success: false, error: 'Attach a file to either an existing ticket or a mailbox, not both.' }
+  if (!conversationId === !mailboxId) {
+    return { success: false, error: 'Attach a file to either an existing conversation or a mailbox, not both.' }
   }
 
   const draft = {
@@ -602,7 +602,7 @@ export async function signOutboundAttachment({
     mime: mime || 'application/octet-stream',
   }
   const body = { ...draft, size }
-  if (ticketId) body.ticket_id = ticketId
+  if (conversationId) body.ticket_id = conversationId
   else body.mailbox_id = mailboxId
 
   const res = await api('/api/email/attachments/upload-sign', { method: 'POST', body, locationId })

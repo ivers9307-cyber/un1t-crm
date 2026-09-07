@@ -14,8 +14,8 @@
 //     Newest first, self excluded, capped at 10. Failure = a real error,
 //     never an empty list.
 //
-//   POST   /api/email/tickets/[R]/merge  { into: current }  — R merges in.
-//   DELETE /api/email/tickets/[R]/merge                     — un-merges R.
+//   POST   /api/email/mail/[R]/merge  { into: current }  — R merges in.
+//   DELETE /api/email/mail/[R]/merge                     — un-merges R.
 //
 // THE RULE THAT MUST NOT BEND: an unknown count never renders as anything —
 // not 0, not a banner. relatedNudge answers null for a count it cannot read,
@@ -23,7 +23,7 @@
 // (the MAIL-ALLLOC.1 rule, one surface over).
 
 import { isArchived } from 'shared/mail-vocabulary'
-import { mailRowTime } from './email-tickets'
+import { mailRowTime } from './mail-conversations'
 
 // ── The nudge (§03 A) ────────────────────────────────────────────────
 /**

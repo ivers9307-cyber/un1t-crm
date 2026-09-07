@@ -6,7 +6,7 @@
 // what is being compared is not the data — both screens run on the same rows —
 // but what an operator sees and can reach. So the assertions here are about
 // exactly that: is an unread conversation visibly heavier, is archive reachable
-// without opening anything, and has the ticket lifecycle really gone rather
+// without opening anything, and has the conversation lifecycle really gone rather
 // than merely been renamed.
 
 import { describe, it, expect, afterEach, vi } from 'vitest'
@@ -148,9 +148,9 @@ describe('MailList — one status signal survives, and only one', () => {
     expect(screen.getByText('Archived')).toBeTruthy()
   })
 
-  // 🔴 The reskin test. If these words appear, the surface has kept the ticket
+  // 🔴 The reskin test. If these words appear, the surface has kept the conversation
   // lifecycle and merely renamed the screen.
-  it('never shows the ticket lifecycle words', () => {
+  it('never shows the conversation lifecycle words', () => {
     render(
       <MailList
         conversations={[

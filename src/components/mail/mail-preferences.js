@@ -152,11 +152,11 @@ export function restoreTarget(prevMode) {
 /* ── MAIL-DOCK.1 — message-frame heights & the Expand memory ───────── */
 //
 // The sandboxed email iframe cannot report its own height (no scripts — see
-// TicketThread's EmailFrame header), so it gets a fixed box. That box used to
+// ConversationThread's EmailFrame header), so it gets a fixed box. That box used to
 // be one size for one layout; the dock gives the thread two very different
 // windows, so the height is now CONTEXT-SIZED via a `frameSize` prop threaded
-// MailSurface → MailThread → TicketThread → EmailFrame. The defaults preserve
-// the pre-dock values for any render without the prop — the ticket surface's
+// MailSurface → MailThread → ConversationThread → EmailFrame. The defaults preserve
+// the pre-dock values for any render without the prop — the conversation surface's
 // tests pin those, and a caller that never heard of the dock must not move.
 const FRAME_HEIGHTS = {
   dock: { collapsed: 'h-[38vh]', expanded: 'h-[52vh]' },
@@ -189,7 +189,7 @@ export const writeBodyExpanded = bodyExpanded.write
 // words nobody else has a copy of:
 //   • 🔴 THE ESC LADDER IS DIRTY-AWARE. Esc on a dirty compose MINIMISES,
 //     never discards (full → dock → min, and min is the floor); only ✕ —
-//     with TicketCompose's own confirm — can throw a typed draft away. A
+//     with ComposeForm's own confirm — can throw a typed draft away. A
 //     pristine compose closes on Esc from any shape, exactly like the reader.
 //   • ONE BOTTOM-RIGHT SLOT. Compose and the reader share the corner: at
 //     most one of them is a CARD at a time. Opening/restoring one card
@@ -228,7 +228,7 @@ export function composeRestoreTarget(prevMode) {
  * Dirty: `full → dock → min`, and min answers ITSELF (the bar is the floor —
  * the caller compares and does nothing). Pristine: null from every shape,
  * meaning requestClose — which closes silently, because the same dirty flag
- * that routed here is the one TicketCompose's confirm checks.
+ * that routed here is the one ComposeForm's confirm checks.
  *
  * An UNKNOWN mode fails toward the draft: dirty parks at min rather than
  * closing, because the cost of being wrong is somebody's typed email.

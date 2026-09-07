@@ -7,22 +7,22 @@ import {
   scopeToNeedsReply, scopeToUnmerged, scopeToSpamView, stampMailRow,
   MAIL_VIEWS, applyView,
 } from './_helpers'
-import { scopeToVisibleMailboxes } from '../tickets/_helpers'
-import { searchTicketIds } from './_search'
+import { scopeToVisibleMailboxes } from './_conversation'
+import { searchConversationIds } from './_search'
 
 // GET /api/email/mail — THE email surface's conversation list (MAIL-TRIAL.B,
 // sole surface since RETIRE-TICKETS.1).
 //
-// Mail started as one half of a head-to-head trial against the ticket queue;
+// Mail started as one half of a head-to-head trial against the conversation queue;
 // the trial ended 2026-08-29 with Mail the winner, the queue UI deleted and
 // the mig-575 `surface` split retired (mig 578). This route answers with BOTH
 // halves of the screen in one round-trip — the mailbox strip (the access
 // model made visible) and the conversations themselves — and it now lists
 // every mailbox the caller may see.
 //
-// WHAT IT DELIBERATELY DOES NOT HAVE, kept from the old ticket queue:
+// WHAT IT DELIBERATELY DOES NOT HAVE, kept from the old conversation queue:
 //   • no `unassigned` / `mine` views — assignment is not on this surface at
-//     all (0 tickets assigned in 17 days of the ticket surface being live)
+//     all (0 conversations assigned in 17 days of the conversation surface being live)
 //   • no four-state lifecycle. There are two places a conversation can be:
 //     the inbox, or the archive. Archive IS `status='closed'`, presented as
 //     "Archived" — one lifecycle, two vocabularies, never a second column.
@@ -32,7 +32,7 @@ import { searchTicketIds } from './_search'
 // is the one thing a plain mail client cannot tell you. It is a filter AND a
 // per-row flag, stamped server-side so nothing downstream re-derives it.
 //
-// TWO GATES, both the ticket surface's own (see _helpers.js). `email_inbox`
+// TWO GATES, both the conversation surface's own (see _helpers.js). `email_inbox`
 // gates the surface, resolved at the REQUESTED location rather than the
 // caller's active one — this route takes location_id as a parameter, so
 // hasPermission() would answer a different question than the one asked. A row
@@ -46,7 +46,7 @@ import { searchTicketIds } from './_search'
 // via the import above because tests read it from this module.
 export { MAIL_VIEWS }
 
-// One screenful. The ticket queue handed back 200 in one go because it was a
+// One screenful. The conversation queue handed back 200 in one go because it was a
 // work QUEUE narrowed by filters; a mail list is scrolled, so it pages — and
 // a smaller page keeps the per-conversation message scan comfortably inside
 // the 1,000-row select cap.
@@ -141,7 +141,7 @@ export async function GET(request) {
 
   // 🔴 ORPHANS LIVE HERE NOW (RETIRE-TICKETS.1). A NULL-mailbox conversation
   // (mailbox_id is ON DELETE SET NULL; mig 484's backfill predates the
-  // column) used to be shown only on the ticket queue, to elevated callers.
+  // column) used to be shown only on the conversation queue, to elevated callers.
   // That queue is deleted — if this surface excluded them too, deleting a
   // mailbox would silently disappear a member's correspondence, the one
   // outcome the retirement must never produce. So the unfiltered list uses
@@ -171,7 +171,7 @@ export async function GET(request) {
   // for the round trip (and every existing, unsearched test relies on that:
   // a page load with no query must never touch the search scan).
   if (q) {
-    const searched = await searchTicketIds(db, { locationId, q })
+    const searched = await searchConversationIds(db, { locationId, q })
     if (!searched.ok) {
       // A failed search is NOT "no results". Reporting it as an empty list
       // would tell the operator a member's mail does not exist.

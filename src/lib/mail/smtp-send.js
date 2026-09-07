@@ -1,4 +1,4 @@
-// MAILBOX-CONNECT.7 — sending a ticket reply as the CONNECTED address, over
+// MAILBOX-CONNECT.7 — sending a conversation reply as the CONNECTED address, over
 // that mailbox's own SMTP server.
 // Spec: docs/superpowers/specs/2026-08-26-imap-mailbox-connector-design.md §4
 //
@@ -65,9 +65,9 @@
 // counted them. Every consumer of email_sends was traced 2026-08-27:
 //
 //   • communications hub stats — filters `.eq('postmark_stream','broadcast')`.
-//     Ticket replies write TICKET_INTERNAL_STREAM ('outbound'), so they were
+//     Conversation replies write TICKET_INTERNAL_STREAM ('outbound'), so they were
 //     ALREADY outside every rate on that surface, by rule rather than accident.
-//   • campaign + sequence stats — scoped by campaign_id / sequence_id. A ticket
+//   • campaign + sequence stats — scoped by campaign_id / sequence_id. A conversation
 //     reply belongs to neither and cannot enter the denominator.
 //   • the contact timeline (emailStatusPill) — falls through to **"Sent"** when
 //     delivered_at is null, which is exactly true of an SMTP send. It reads
@@ -82,7 +82,7 @@
 // them accurately. The row stays. `postmark_message_id IS NULL` is a reliable
 // discriminator on this path if a FUTURE rate ever needs to segment (the id is
 // minted by Postmark and the row is written after the API returns, so a
-// Postmark ticket send always has one) — but do not spend it on a problem that
+// Postmark conversation send always has one) — but do not spend it on a problem that
 // does not exist yet.
 //
 // ── AT-LEAST-ONCE, NOT EXACTLY-ONCE: THE DUPLICATE WINDOW ─────────────────
@@ -115,13 +115,13 @@
 // a pre-send stamp.
 //
 // ── Fail-safe shape ───────────────────────────────────────────────────────
-// NOTHING HERE THROWS. Same verdict envelope as sendTicketEmail, because this
-// IS one of sendTicketEmail's two branches and the routes must not be able to
+// NOTHING HERE THROWS. Same verdict envelope as sendConversationEmail, because this
+// IS one of sendConversationEmail's two branches and the routes must not be able to
 // tell which one ran:
 //   { ok: true,  result, fromEmail, degraded, deliveryTracked }
 //   { ok: false, reason: 'not_configured'|'send_failed', error }
 // The two reasons are not interchangeable — the routes answer 503 for the
-// first and 400 for the second (see the docblock on sendTicketEmail) — so the
+// first and 400 for the second (see the docblock on sendConversationEmail) — so the
 // split below is by "is this about the deployment/config, or about this
 // particular message", not by where the error happened to be thrown.
 import nodemailer from 'nodemailer'
@@ -133,7 +133,7 @@ import { resolveFreshAuth } from './oauth-tokens.js'
  * Timeouts, deliberately far below nodemailer's defaults (2min connect /
  * 30s greeting / 10min socket).
  *
- * A ticket reply is sent inside a user-facing request: an operator clicks
+ * A conversation reply is sent inside a user-facing request: an operator clicks
  * Send and waits. Two minutes staring at a spinner because the customer's
  * SMTP host is unreachable is not an outcome anyone should get — a fast, clear
  * failure they can retry is. These mirror src/lib/mail/imap-connection.js so
@@ -258,7 +258,7 @@ export function adaptAuthForNodemailer(auth) {
  * `{ key: undefined, value: undefined }` for every entry — producing a message
  * whose In-Reply-To and References are gone. The reply still sends, so nothing
  * fails; it just silently starts a new thread in the member's mail client and
- * opens a duplicate ticket when they answer. Threading is the entire reason
+ * opens a duplicate conversation when they answer. Threading is the entire reason
  * these headers exist, so the mapping is explicit and tested.
  *
  * Entries without a usable name are dropped rather than passed through — a
@@ -335,7 +335,7 @@ export function bareMessageId(value) {
   return /[<>]/.test(bare) ? null : bare
 }
 
-/** Failure verdict, in sendTicketEmail's envelope. */
+/** Failure verdict, in sendConversationEmail's envelope. */
 function fail(reason, error) {
   return { ok: false, reason, error }
 }
@@ -415,9 +415,9 @@ export async function verifySmtpConnection({ host, port, secure, auth }, deps = 
 }
 
 /**
- * Send one ticket email over the mailbox's own SMTP server.
+ * Send one conversation email over the mailbox's own SMTP server.
  *
- * NEVER THROWS. Returns sendTicketEmail's verdict envelope, plus one extra key
+ * NEVER THROWS. Returns sendConversationEmail's verdict envelope, plus one extra key
  * on success:
  *
  *   { ok: true, result, fromEmail, degraded: null, deliveryTracked: false }
@@ -437,7 +437,7 @@ export async function verifySmtpConnection({ host, port, secure, auth }, deps = 
  * `metadata` in particular carries POSTMARK-RACE.1's send marker, which exists
  * so a Delivery webhook arriving before the email_sends row can be matched
  * later. There are no webhooks on this path, so carrying them would be
- * inventing bookkeeping for events that never happen. sendTicketEmail drops
+ * inventing bookkeeping for events that never happen. sendConversationEmail drops
  * them at the branch; that is deliberate and documented there.
  *
  * @param {object} args
@@ -451,7 +451,7 @@ export async function sendViaSmtp({
 }, deps = {}) {
   const fromEmail = typeof mailbox?.address === 'string' ? mailbox.address.trim() : ''
   if (!mailbox?.id || !fromEmail) {
-    // Unreachable through the ticket routes (a mailbox row always has both),
+    // Unreachable through the conversation routes (a mailbox row always has both),
     // but this is the guard that makes "the From never falls back" true by
     // construction rather than by inspection: with no address there is nothing
     // legitimate to send as, so the answer is a refusal and not a substitution.
@@ -522,7 +522,7 @@ export async function sendViaSmtp({
   // The OAuth seam. Verdicts other than `not_configured` (decrypt_failed,
   // oauth_expired, oauth_revoked, oauth_refresh_failed, provider_unavailable,
   // unsupported_auth_type) are all mapped onto `not_configured` HERE rather
-  // than widening sendTicketEmail's envelope: they are the same KIND of thing
+  // than widening sendConversationEmail's envelope: they are the same KIND of thing
   // from the route's point of view — nothing was attempted, the fault is in
   // the stored configuration, retry once it is fixed — and the envelope is a
   // contract three routes already branch on. The verdict's own sentence is
@@ -620,7 +620,7 @@ export async function sendViaSmtp({
         // BARE — brackets stripped. Two things read this and both need the bare
         // form:
         //
-        //   1. THREADING. The three ticket routes write it to
+        //   1. THREADING. The three conversation routes write it to
         //      email_inbox_messages.rfc_message_id, and the inbound webhook
         //      resolves a thread with `.in('rfc_message_id', candidates)` where
         //      the candidates come from parseMessageIdTokens() — which strips

@@ -1,4 +1,4 @@
-// EMAIL-FORWARD.1 — the pure rules for forwarding one message off a ticket:
+// EMAIL-FORWARD.1 — the pure rules for forwarding one message off a conversation:
 // the subject, the quoted header block, the body, and which of the original's
 // files may ride along.
 //
@@ -62,7 +62,7 @@
 // stronger guarantee than sanitisation rather than a weaker one.
 //
 // The operator is told, in the composer and in the mail itself, that
-// formatting was dropped. The full original stays on the ticket.
+// formatting was dropped. The full original stays on the conversation.
 
 import { formatBytes } from './email-attachment-quota'
 import {
@@ -256,7 +256,7 @@ export function buildForwardText({ note, message } = {}) {
  * cannot be sent.
  *
  * TWO SHAPES, ONE QUESTION. The server sees the row and asks `storage_path`;
- * the browser sees what the ticket detail route chose to expose and asks
+ * the browser sees what the conversation detail route chose to expose and asks
  * `stored`, because that route deliberately never returns storage_path to a
  * client (the bucket is private and the path is signed server-side only). They
  * are the same fact — the route computes `stored: !!row.storage_path` — so
@@ -314,7 +314,7 @@ export function selectForwardAttachments(rows, ids) {
     if (!row) {
       return {
         ok: false,
-        error: 'One of the files you chose is not on that message any more. Reopen the ticket and try again — nothing was sent.',
+        error: 'One of the files you chose is not on that message any more. Reopen the conversation and try again — nothing was sent.',
       }
     }
     if (!row.storage_path) {
@@ -387,7 +387,7 @@ export function defaultForwardSelection(rows) {
  */
 export function forwardRefusal(message) {
   if (!message) {
-    return 'That message is not on this ticket.'
+    return 'That message is not on this conversation.'
   }
   if (message.is_internal_note) {
     return 'An internal note was never sent to anyone and is staff-only, so it cannot be forwarded. ' +

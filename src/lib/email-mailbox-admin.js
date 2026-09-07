@@ -104,7 +104,7 @@ export function addressTakenMessage({ address, existing, locationId, otherLocati
   const label = existing?.label ? `“${existing.label}”` : 'another account'
   if (existing?.location_id === locationId) {
     return existing?.active === false
-      ? `${address} is already set up at this studio as ${label}, but it is deactivated. Reactivate that account instead of adding it again — its ticket history is still attached to it.`
+      ? `${address} is already set up at this studio as ${label}, but it is deactivated. Reactivate that account instead of adding it again — its conversation history is still attached to it.`
       : `${address} is already set up at this studio as ${label}.`
   }
   const who = otherLocationName ? ` It belongs to ${otherLocationName}.` : ''
@@ -144,7 +144,7 @@ export function mailboxConstraintMessage(error) {
   // name gives this function nothing to key on, and the operator gets the raw
   // "new row violates check constraint" string under a 500 instead.
   if (/email_mailboxes_surface_check/i.test(msg)) {
-    return 'An account can be shown in Tickets or in Mail, and nothing else.'
+    return 'An account can be shown in Conversations or in Mail, and nothing else.'
   }
   return null
 }

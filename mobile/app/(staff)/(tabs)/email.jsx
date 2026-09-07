@@ -69,7 +69,7 @@ import {
   ticketViewTab, ticketViewWire, mailListState, mergeMailPages,
   mailboxFilterChips, archiveToggleMeta, readToggleMeta, segCountLabel,
   insertRowAt,
-} from '../../../lib/email-tickets'
+} from '../../../lib/mail-conversations'
 // MAIL-ALLLOC.1 — every multi-location decision (tiles, sections, scope
 // persistence, last-good totals, the optimistic ops over the digest) lives
 // in mail-digest.js under test; this screen wires verdicts to pixels.

@@ -35,7 +35,7 @@ import { buildMonthMatrix } from '@shared/roster-month'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { fetchTodayFeed } from '@/lib/today-feed-data'
 import { assembleHomeQueue, queueCountLabel, groupQueueRows } from '@/lib/home-queue'
-import { relativeTime } from '@/lib/ticket-display'
+import { relativeTime } from '@/lib/mail/conversation-display'
 import {
   KpiCard, KpiRow, SectionHeader, ListCard, PendingRow,
 } from '@/components/dashboard/Cards'

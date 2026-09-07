@@ -13,7 +13,7 @@
 import { describe, it, expect } from 'vitest'
 import * as shared from '../shared/mail-vocabulary.js'
 import * as web from '../src/components/mail/mail-vocabulary.js'
-import * as mobile from '../mobile/lib/email-tickets.js'
+import * as mobile from '../mobile/lib/mail-conversations.js'
 import * as mobileRelate from '../mobile/lib/mail-relate.js'
 import * as webRelate from '../src/components/mail/mail-relate.js'
 import { readFileSync } from 'node:fs'
@@ -82,7 +82,7 @@ describe('mobile agrees with the shared predicates on every row', () => {
     })
   })
 
-  it('mailRowDisplay / mailStatusChip / ticketToInboxRow agree on every STAMPED row (the wire shape)', () => {
+  it('mailRowDisplay / mailStatusChip / conversationToInboxRow agree on every STAMPED row (the wire shape)', () => {
     for (const row of stamped) {
       const archived = shared.isArchived(row)
       const waiting = shared.needsReply(row)
@@ -92,7 +92,7 @@ describe('mobile agrees with the shared predicates on every row', () => {
       const chip = mobile.mailStatusChip(row)
       expect(chip?.label === 'Archived', JSON.stringify(row)).toBe(archived)
       expect(chip?.label === 'Needs reply', JSON.stringify(row)).toBe(!archived && waiting)
-      expect(mobile.ticketToInboxRow(row).archived, JSON.stringify(row)).toBe(archived)
+      expect(mobile.conversationToInboxRow(row).archived, JSON.stringify(row)).toBe(archived)
     }
   })
 
@@ -107,9 +107,9 @@ describe('mobile agrees with the shared predicates on every row', () => {
   })
 
   // MAIL-ARCH.4 — there is NO residual any more. MAIL-ARCH.3 left one:
-  // mailStatusChip / mailRowDisplay / ticketToInboxRow (and the thread screen
+  // mailStatusChip / mailRowDisplay / conversationToInboxRow (and the thread screen
   // and mail-relate.js) read shared.archivedOrStatus, whose stampless
-  // fallback was the ticket-era `solved || closed`, kept for the window between
+  // fallback was the conversation-era `solved || closed`, kept for the window between
   // the Vercel deploy that taught the thread/related routes to stamp and the
   // OTA that taught the phone to read it. That window closed (#1619 live,
   // 5 Sep 2026) and the sibling is deleted, so every mobile helper reads
@@ -118,12 +118,12 @@ describe('mobile agrees with the shared predicates on every row', () => {
   it('unstamped rows: the mobile display helpers agree with shared on EVERY row — no `solved` residual', () => {
     for (const row of unstamped) {
       const chipSaysArchived = mobile.mailStatusChip(row)?.label === 'Archived'
-      const rowSaysArchived = mobile.ticketToInboxRow(row).archived
+      const rowSaysArchived = mobile.conversationToInboxRow(row).archived
       expect(chipSaysArchived, JSON.stringify(row)).toBe(shared.isArchived(row))
       expect(rowSaysArchived, JSON.stringify(row)).toBe(shared.isArchived(row))
     }
     // Spelled out: the row the two readings used to disagree on.
-    expect(mobile.ticketToInboxRow({ id: 't', status: 'solved' }).archived).toBe(false)
+    expect(mobile.conversationToInboxRow({ id: 't', status: 'solved' }).archived).toBe(false)
     expect(mobile.mailStatusChip({ status: 'solved', needs_reply: false })).toBeNull()
   })
 })
@@ -151,16 +151,16 @@ describe('MAIL-ARCH.4 — isArchived is the ONE reading of the stamp, on every s
   })
 
   // resolved_at follows the SAME verdict as `archived`: a row the server
-  // stamps LIVE carries no resolution time even if the ticket-era solved_at
+  // stamps LIVE carries no resolution time even if the conversation-era solved_at
   // column is set — mobile/lib/inbox.js's needs-reply queue keys on it, and a
   // stamped-live row with a resolved_at would be filed as resolved.
-  it('ticketToInboxRow.resolved_at is null exactly when the row is live — on every row of the matrix', () => {
+  it('conversationToInboxRow.resolved_at is null exactly when the row is live — on every row of the matrix', () => {
     for (const row of ROWS) {
-      const shaped = mobile.ticketToInboxRow({ ...row, solved_at: '2026-08-06T12:00:00Z', closed_at: null, updated_at: null })
+      const shaped = mobile.conversationToInboxRow({ ...row, solved_at: '2026-08-06T12:00:00Z', closed_at: null, updated_at: null })
       expect(shaped.resolved_at === null, JSON.stringify(row)).toBe(!shared.isArchived(row))
     }
     // The twin row, spelled out: solved on disk, LIVE on the wire, not resolved.
-    const live = mobile.ticketToInboxRow({ status: 'solved', archived: false, solved_at: '2026-08-06T12:00:00Z' })
+    const live = mobile.conversationToInboxRow({ status: 'solved', archived: false, solved_at: '2026-08-06T12:00:00Z' })
     expect(live.archived).toBe(false)
     expect(live.resolved_at).toBeNull()
   })
@@ -197,13 +197,13 @@ describe('MAIL-ARCH.4 — isArchived is the ONE reading of the stamp, on every s
   // The thread screen is a React Native component vitest cannot mount; pin
   // its two call sites at source level so the re-derivation cannot creep back
   // under a different import.
-  it('the mobile thread screen reads isArchived(ticket) twice and nothing older', () => {
+  it('the mobile thread screen reads isArchived(conversation) twice and nothing older', () => {
     const here = dirname(fileURLToPath(import.meta.url))
-    const src = readFileSync(join(here, '..', 'mobile/app/(staff)/email/[ticketId].jsx'), 'utf8')
+    const src = readFileSync(join(here, '..', 'mobile/app/(staff)/email/[conversationId].jsx'), 'utf8')
     expect(src).not.toMatch(/isArchivedStatus|archivedOrStatus\(/)
     expect(src).toMatch(/from 'shared\/mail-vocabulary'/)
     // Both twins: the toggle's `next` and the header's `archived`.
-    expect(src.match(/isArchived\(ticket\)/g)?.length).toBe(2)
+    expect(src.match(/isArchived\(conversation\)/g)?.length).toBe(2)
   })
 
   it('neither mail-relate twin re-derives from status any more', () => {
@@ -218,7 +218,7 @@ describe('MAIL-ARCH.4 — isArchived is the ONE reading of the stamp, on every s
     }
   })
 
-  it('isArchivedStatus is gone from mobile/lib/email-tickets.js — the reading lives in shared', () => {
+  it('isArchivedStatus is gone from mobile/lib/mail-conversations.js — the reading lives in shared', () => {
     expect(mobile.isArchivedStatus).toBeUndefined()
   })
 })

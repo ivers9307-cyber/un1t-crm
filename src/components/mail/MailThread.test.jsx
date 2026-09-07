@@ -3,16 +3,16 @@
 // MAIL-TRIAL.B — the reading pane.
 //
 // 🔴 WHAT THIS FILE IS REALLY PINNING is that reuse and difference are both
-// real at the same time. MailThread is a WRAPPER around TicketThread: if it
+// real at the same time. MailThread is a WRAPPER around ConversationThread: if it
 // ever becomes a fork, the shared half (the sandboxed HTML frame, attachments,
 // the delivery marker, the mail-client marker, the composer) starts drifting
-// and the security literals in TicketThread.jsx that src/lib/email-html.test.js
+// and the security literals in ConversationThread.jsx that src/lib/email-html.test.js
 // asserts against would be guarding a file nobody renders on this screen.
 //
 // So the tests come in two halves:
 //   • the shared half must still be there — a message renders, the composer
 //     renders, the participant line renders;
-//   • the ticket-only half must be GONE — not renamed, not hidden behind a
+//   • the conversation-only half must be GONE — not renamed, not hidden behind a
 //     menu: no four-state control, no claim/release/assign, no merge.
 // A reskin would pass the first half and fail the second.
 
@@ -70,7 +70,7 @@ function renderThread(props = {}) {
 }
 
 describe('MailThread — the shared half is genuinely reused', () => {
-  it('renders the correspondence through TicketThread, not a copy of it', () => {
+  it('renders the correspondence through ConversationThread, not a copy of it', () => {
     renderThread()
     expect(screen.getByText('Can I freeze my membership from Monday?')).toBeTruthy()
     // MAIL-REFINE.1 (02) — the flat message header names the sender and their
@@ -95,17 +95,17 @@ describe('MailThread — the shared half is genuinely reused', () => {
     // operator answering the wrong person is a mail problem.
     renderThread({ conversation: { ...CONVERSATION }, replyRecipients: { to: ['ella@member.ie'], mode: 'reply' } })
     // Mail-client form, name attached to the one address it belongs to —
-    // TicketThread's own rule, inherited rather than restated.
+    // ConversationThread's own rule, inherited rather than restated.
     expect(screen.getByText('On this thread: Ella Byrne <ella@member.ie>')).toBeTruthy()
     expect(screen.getByText(/To Studio/)).toBeTruthy()
   })
 })
 
 // 🔴 The half that makes this a different surface rather than a reskin.
-describe('MailThread — the ticket lifecycle is gone, not renamed', () => {
+describe('MailThread — the conversation lifecycle is gone, not renamed', () => {
   it('has no four-state status control', () => {
     renderThread()
-    expect(screen.queryByRole('group', { name: 'Ticket status' })).toBeNull()
+    expect(screen.queryByRole('group', { name: 'Conversation status' })).toBeNull()
     for (const label of ['Open', 'Pending', 'Solved', 'Closed']) {
       expect(screen.queryByRole('button', { name: label })).toBeNull()
     }
@@ -156,7 +156,7 @@ describe('MailThread — archive is the verb, in this surface’s own words', ()
     // what an archived conversation shows first, same as a live one.
     fireEvent.click(screen.getByRole('button', { name: 'Reply to Ella…' }))
     expect(screen.getByText(/replying brings it back to the inbox/)).toBeTruthy()
-    // The composer's own default sentence is the ticket lifecycle's. On this
+    // The composer's own default sentence is the conversation lifecycle's. On this
     // screen it would contradict the chip six lines above it.
     expect(screen.queryByText(/back to pending/)).toBeNull()
   })

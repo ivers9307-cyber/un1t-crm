@@ -135,10 +135,14 @@ const PAIRS = {
     mode: 'reexport',
     why:
       'MAIL-ARCH.2 moved the Mail surface\'s archive / needs-reply / unread / spam predicates and its view list to ' +
-      'shared/ because mobile/lib/email-tickets.js had mirrored them by hand and DRIFTED (archiveToggleMeta OR-ed ' +
+      'shared/ because mobile/lib/mail-conversations.js had mirrored them by hand and DRIFTED (archiveToggleMeta OR-ed ' +
       'the ticket-era status back over the server\'s `archived` stamp and reopened live `solved` rows). src/lib is an ' +
       '`export * from` shim; src/components/mail/mail-vocabulary.js re-exports it for the web components and mobile ' +
       "imports 'shared/mail-vocabulary' directly, so the two surfaces read the very same functions.",
+  },
+  'mail-quote.js': {
+    mode: 'reexport',
+    why: 'MAIL-REPLY-QUOTE.1 — the quoted-text splitter serves the web thread and the mobile thread; src/lib re-exports shared.',
   },
   'sonos-playback.js': {
     mode: 'reexport',

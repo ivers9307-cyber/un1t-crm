@@ -1,47 +1,47 @@
 // MAIL-ARCH.2 — the REPLY-DRAFT store, split out of mail-display.js. Pure
 // apart from window.localStorage, every access of which is guarded. Consumed
-// by TicketReplyBox; its mobile mirror (over AsyncStorage) is
+// by ReplyBox; its mobile mirror (over AsyncStorage) is
 // mobile/lib/mail-drafts.js, whose header pins the SEMANTICS below as the
 // contract.
 
 /* ─────────────────────────── reply drafts ─────────────────────────── */
 
 /**
- * TicketReplyBox holds its text in plain useState, and TicketThread
- * deliberately REMOUNTS it on every ticket switch (`key={ticketId}`) — that
+ * ReplyBox holds its text in plain useState, and ConversationThread
+ * deliberately REMOUNTS it on every conversation switch (`key={conversationId}`) — that
  * remount is TICKET-COMPOSER-LEAK.1's guard against member A's half-written
  * reply going out addressed to member B. Losing the words on every switch,
  * every `e` (archive auto-advances the selection), every refresh and every
  * crash was the cost of that guard, paid by the operator instead.
  *
  * These functions pay it back WITHOUT touching the guard: the draft is
- * looked up by ticket id, so the remount that protects against the leak is
- * also exactly what makes "restore the right draft for the right ticket"
- * free — there is no cross-ticket state to leak because there is no
- * cross-ticket key. A single shared key (or a key that fell back to
- * something other than the ticket id) would reopen the same leak this store
+ * looked up by conversation id, so the remount that protects against the leak is
+ * also exactly what makes "restore the right draft for the right conversation"
+ * free — there is no cross-conversation state to leak because there is no
+ * cross-conversation key. A single shared key (or a key that fell back to
+ * something other than the conversation id) would reopen the same leak this store
  * exists downstream of, by a different door.
  *
  * 🔴 WHAT IS PERSISTED, AND WHAT NEVER IS. A draft is `{ text, mode, savedAt }`
  * — the words an operator actually typed, which of the two composer modes
  * they were in, and when. Recipients, Cc/Bcc, removed participants and
- * attached files are NEVER part of it: those are derived per ticket from the
- * thread itself (see TicketReplyBox's own header comment on `lockedTo`),
+ * attached files are NEVER part of it: those are derived per conversation from the
+ * thread itself (see ReplyBox's own header comment on `lockedTo`),
  * which is precisely the surface TICKET-COMPOSER-LEAK.1 guards. Persisting
  * them here would recreate the leak the remount was built to close — a
- * restored draft naming yesterday's recipients on today's ticket.
+ * restored draft naming yesterday's recipients on today's conversation.
  *
  * 🔴 CROSS-TICKET IS IMPOSSIBLE; CROSS-LOCATION IS IMPOSSIBLE TOO, FOR THE
  * SAME REASON; CROSS-USER ON A SHARED BROWSER IS REAL, AND STATED HONESTLY
- * RATHER THAN LEFT IMPLIED. Ticket ids are globally unique across every
+ * RATHER THAN LEFT IMPLIED. Conversation ids are globally unique across every
  * location this CRM serves, so there is no location dimension to this key at
- * all — the per-ticket key already closes both doors structurally, the same
- * way it closes the cross-ticket one. What it does NOT close is per-BROWSER
+ * all — the per-conversation key already closes both doors structurally, the same
+ * way it closes the cross-conversation one. What it does NOT close is per-BROWSER
  * vs per-OPERATOR: this store lives in one origin's localStorage, which is
  * shared by whoever is sitting at the machine, not by whoever is logged in.
  * On a shared front-desk machine, staff-A's half-written reply hydrates into
- * staff-B's composer under B's identity the moment B opens the same ticket —
- * one Send from a mis-send. That exposure is bounded (only tickets whose
+ * staff-B's composer under B's identity the moment B opens the same conversation —
+ * one Send from a mis-send. That exposure is bounded (only conversations whose
  * mailbox both staff can see; drafts expire; see the TTL/count eviction
  * below), but it is real, and the orchestrator is flagging the shared-machine
  * judgment call to Richard rather than this file quietly deciding it away.
@@ -58,7 +58,7 @@
  * palette), not just drafts. Every write now stamps `savedAt` and prunes,
  * scoped STRICTLY to this store's own prefix — a prune must never remove a
  * key it does not own. TTL first (14 days — long enough to survive a
- * weekend, short enough that an abandoned draft does not outlive its ticket),
+ * weekend, short enough that an abandoned draft does not outlive its conversation),
  * then a max-entry count (30) evicting the oldest survivors by `savedAt`.
  * `readReplyDraft` treats an entry the TTL would evict as absent, and clears
  * it on the way out rather than leaving a dead key for the next prune to find.
@@ -71,22 +71,22 @@ export const REPLY_DRAFT_MODES = ['reply', 'note']
 // A cap, not a promise the composer itself already enforces (its <textarea>
 // has its own maxLength) — this is the store's OWN backstop, so a caller
 // that skips the textarea (a paste event, a future composer that forgets the
-// prop) still cannot grow one ticket's localStorage entry without bound.
+// prop) still cannot grow one conversation's localStorage entry without bound.
 export const REPLY_DRAFT_MAX_LENGTH = 10000
 
 // How long an unattended draft is worth keeping, and how many can exist at
 // once. Both are eviction bounds, not product limits: an operator who is
-// actively working a ticket never notices either — writing keeps re-stamping
+// actively working a conversation never notices either — writing keeps re-stamping
 // `savedAt`, and 30 concurrent drafts is far more than one desk juggles.
 export const REPLY_DRAFT_TTL_MS = 14 * 24 * 60 * 60 * 1000 // 14 days
 export const REPLY_DRAFT_MAX_ENTRIES = 30
 
 /**
- * MAIL-DRAFTSCOPE.1 — the key is `<prefix><userId>.<mailboxId|none>.<ticketId>`.
+ * MAIL-DRAFTSCOPE.1 — the key is `<prefix><userId>.<mailboxId|none>.<conversationId>`.
  *
  * 🔴 PER USER AND PER EMAIL ACCOUNT, BY RICHARD'S CALL (2026-08-29). The
- * original per-ticket key made cross-TICKET and cross-LOCATION leakage
- * structurally impossible (ticket ids are globally-unique uuids) but was
+ * original per-conversation key made cross-TICKET and cross-LOCATION leakage
+ * structurally impossible (conversation ids are globally-unique uuids) but was
  * per-BROWSER: on a shared front-desk machine, staff-A's half-written reply
  * hydrated into staff-B's composer under B's identity. Scoping the key by the
  * signed-in user makes that impossible too — and it is what lets drafts
@@ -95,7 +95,7 @@ export const REPLY_DRAFT_MAX_ENTRIES = 30
  * returning operator finds their draft where they left it, bounded by the TTL).
  *
  * The mailbox segment scopes drafts to the email ACCOUNT the conversation
- * belongs to; an orphan ticket (mailbox deleted → NULL) uses the 'none'
+ * belongs to; an orphan conversation (mailbox deleted → NULL) uses the 'none'
  * sentinel so it still persists, per-user. All three segments are uuids or
  * 'none', so the '.' separator can never be ambiguous.
  *
@@ -104,9 +104,9 @@ export const REPLY_DRAFT_MAX_ENTRIES = 30
  * broken-session edge case is the cheaper failure by far.
  */
 function replyDraftKey(scope) {
-  const { userId, mailboxId, ticketId } = scope || {}
-  if (!userId || !ticketId) return null
-  return `${REPLY_DRAFT_PREFIX}${userId}.${mailboxId || 'none'}.${ticketId}`
+  const { userId, mailboxId, conversationId } = scope || {}
+  if (!userId || !conversationId) return null
+  return `${REPLY_DRAFT_PREFIX}${userId}.${mailboxId || 'none'}.${conversationId}`
 }
 
 /** Every key this store owns, in whatever order localStorage happens to hold them. */
@@ -177,8 +177,8 @@ function pruneReplyDrafts() {
 }
 
 /**
- * The saved draft for this ticket, or null — no draft, corrupt storage, an
- * expired entry, an unavailable localStorage, or a falsy ticket id all
+ * The saved draft for this conversation, or null — no draft, corrupt storage, an
+ * expired entry, an unavailable localStorage, or a falsy conversation id all
  * collapse to the same "start blank" answer, because none of them is a
  * distinction the composer can act on differently.
  */
@@ -207,11 +207,11 @@ export function readReplyDraft(scope) {
 }
 
 /**
- * Save a draft for this ticket.
+ * Save a draft for this conversation.
  *
  * 🔴 EMPTY TEXT IS THE CLEAR PATH, NOT A ONE-CHARACTER DRAFT. A composer
  * whose operator cleared their own text (or never wrote anything) has
- * nothing worth restoring, and storing a blank entry per ticket ever typed
+ * nothing worth restoring, and storing a blank entry per conversation ever typed
  * into is exactly the unbounded growth this function exists to avoid — so
  * whitespace-only text takes the same branch as none at all.
  */
@@ -238,7 +238,7 @@ export function writeReplyDraft(scope, draft) {
   }
 }
 
-/** Remove a ticket's saved draft outright (send succeeded; there is nothing left to restore). */
+/** Remove a conversation's saved draft outright (send succeeded; there is nothing left to restore). */
 export function clearReplyDraft(scope) {
   const key = replyDraftKey(scope)
   if (!key) return
@@ -254,7 +254,7 @@ export function clearReplyDraft(scope) {
  * Remove EVERY user's reply drafts on this device.
  *
  * MAIL-DRAFTSCOPE.2 — deliberately UNWIRED since drafts became per-user: the
- * sign-out wipe existed only because per-ticket keys let the next login
+ * sign-out wipe existed only because per-conversation keys let the next login
  * inherit them, and per-user keys remove the reason (a returning operator now
  * finds their draft where they left it, bounded by the TTL). Kept exported
  * for a future explicit "clear drafts on this device" affordance and for

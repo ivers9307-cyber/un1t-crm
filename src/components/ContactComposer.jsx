@@ -21,7 +21,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { MessageCircle, MessageSquare, Send, StickyNote, Mail } from 'lucide-react'
-import SignatureHint from '@/components/tickets/SignatureHint'
+import SignatureHint from '@/components/mail/SignatureHint'
 import {
   resolveContactEmailSend, contactEmailFooter, mailboxesFromListResponse, defaultMailboxId,
   MAILBOXES_UNAVAILABLE,
@@ -222,7 +222,7 @@ export default function ContactComposer({
     // Belt to the disabled-prop braces: an awaiting plan is not a send.
     if (plan.path === 'awaiting') return
     if (plan.path === 'mail') {
-      const ok = await post('/api/email/tickets/compose', {
+      const ok = await post('/api/email/mail/compose', {
         mailbox_id: plan.mailboxId,
         to: plan.to,
         subject: subject.trim(),
