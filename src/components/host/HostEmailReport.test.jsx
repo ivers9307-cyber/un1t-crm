@@ -77,6 +77,9 @@ describe('reminder + paused helpers (HOST-EMAILS.2)', () => {
     expect(reminderConfirmCopy(12, '2026-09-05T10:00:00Z', now)).not.toContain('Opens keep arriving')
     expect(reminderConfirmCopy(12, '2026-09-05T10:00:00Z', now)).toBe("Create a reminder draft for the 12 people who didn't open this email? You can edit it before sending.")
   })
+  it('reminderConfirmCopy pluralises for a count of 1', () => {
+    expect(reminderConfirmCopy(1, null)).toBe("Create a reminder draft for the 1 person who didn't open this email? You can edit it before sending.")
+  })
   it('pausedCopy', () => {
     expect(pausedCopy('sender_not_verified')).toBe('Paused. Sending is not enabled yet. Ask UN1T.')
     expect(pausedCopy(null)).toBe('')
@@ -317,6 +320,43 @@ describe('HostEmailReport (render)', () => {
     render(<HostEmailReport campaignId="c1" />)
     await screen.findByText('Counts are unavailable right now. The recipient list below is still complete.')
     expect(screen.queryByText(/Send a reminder/)).toBeNull()
+  })
+
+  it('a successful reminder create keeps the button disabled while navigation is in flight, so a second click cannot queue a second draft', async () => {
+    let postCalls = 0
+    const fn = vi.fn(async (url, init) => {
+      if (init?.method === 'POST') {
+        postCalls += 1
+        return { ok: true, status: 200, json: async () => ({ success: true, data: { id: 'r1' } }) }
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          success: true,
+          data: {
+            campaign: { id: 'c1', subject: 'Race day info', status: 'sent', audience_kind: 'all', sent_at: '2026-09-01T09:00:00Z', non_openers_count: 12, stats: null },
+            recipients: [],
+          },
+        }),
+      }
+    })
+    vi.stubGlobal('fetch', fn)
+    vi.stubGlobal('confirm', vi.fn(() => true))
+
+    render(<HostEmailReport campaignId="c1" />)
+    const button = await screen.findByText("Send a reminder to 12 who didn't open")
+    fireEvent.click(button)
+
+    // router.push() (mocked, synchronous) returns before any real navigation
+    // happens, so the button must stay disabled rather than flip back to
+    // enabled — clicking it again must not fire a second POST.
+    const creating = await screen.findByText('Creating…')
+    expect(creating.closest('button').disabled).toBe(true)
+    fireEvent.click(creating)
+    fireEvent.click(creating)
+
+    expect(postCalls).toBe(1)
   })
 })
 

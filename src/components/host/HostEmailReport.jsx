@@ -38,6 +38,7 @@ const AUDIENCE_LABEL = {
   all: 'All contacts',
   mailing_list: 'Mailing list signups',
   event: 'Event attendees',
+  non_openers: "People who didn't open the original email",
 }
 
 const WHEN_FORMATTER = new Intl.DateTimeFormat('en-IE', {
@@ -200,7 +201,8 @@ export function reminderLabel(count) {
  * @param {number} [nowMs]
  */
 export function reminderConfirmCopy(count, sentAt, nowMs = Date.now()) {
-  const base = `Create a reminder draft for the ${count} people who didn't open this email? You can edit it before sending.`
+  const who = `${count} ${count === 1 ? 'person' : 'people'}`
+  const base = `Create a reminder draft for the ${who} who didn't open this email? You can edit it before sending.`
   const sentMs = sentAt ? Date.parse(sentAt) : NaN
   const young = Number.isFinite(sentMs) && nowMs - sentMs < 24 * 3600 * 1000
   return young ? `${base} Opens keep arriving for a day or two. A reminder this soon reaches people who may simply not have got to it yet.` : base
@@ -227,6 +229,7 @@ export default function HostEmailReport({ campaignId }) {
   const [reloadKey, setReloadKey] = useState(0)
   const [resending, setResending] = useState(false)
   const [reminding, setReminding] = useState(false)
+  const [navigating, setNavigating] = useState(false)
   const [actionError, setActionError] = useState('')
   const router = useRouter()
 
@@ -285,12 +288,17 @@ export default function HostEmailReport({ campaignId }) {
       const json = await res.json().catch(() => ({}))
       if (!res.ok || !json.success) {
         setActionError(json.error || 'Could not create the reminder.')
+        setReminding(false)
         return
       }
+      // Leave `reminding` (and the button) disabled on the success path —
+      // router.push() returns before navigation completes, so resetting it
+      // in a `finally` here would re-enable the button while the page is
+      // still this one and let a second click queue a second draft.
+      setNavigating(true)
       router.push('/host/emails?notice=reminder')
     } catch {
       setActionError('Could not create the reminder.')
-    } finally {
       setReminding(false)
     }
   }
@@ -342,7 +350,7 @@ export default function HostEmailReport({ campaignId }) {
               <button
                 type="button"
                 onClick={createReminder}
-                disabled={reminding}
+                disabled={reminding || navigating}
                 className="shrink-0 rounded-full border border-white/25 text-white px-3 py-1.5 text-xs font-medium disabled:opacity-50"
               >
                 {reminding ? 'Creating…' : reminderLabel(campaign.non_openers_count)}
