@@ -345,7 +345,7 @@ export async function addEventAttendeesToHostList(db, raceEventId) {
  * @param {string} hostId
  * @returns {Promise<Array<{contact_id:string, name:string, email:string,
  *   source:string, created_at:string, marketing_consent:boolean,
- *   emailable:boolean}>>}
+ *   emailable:boolean, emailable_reason:string|null}>>}
  */
 export async function fetchHostContactRows(db, hostId) {
   const memberships = []
@@ -388,6 +388,8 @@ export async function fetchHostContactRows(db, hostId) {
       created_at: m.created_at,
       marketing_consent: m.marketing_consent === true,
       emailable: isEmailable(contact, suppressedIds.has(m.contact_id), { hostConsent: m.marketing_consent === true }),
+      // HOST-EMAILS.2 — why not, in the send path's own vocabulary (null when emailable).
+      emailable_reason: emailabilityReason(contact, suppressedIds.has(m.contact_id), { hostConsent: m.marketing_consent === true }),
     }
   })
 }

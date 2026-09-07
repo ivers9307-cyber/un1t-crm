@@ -9,6 +9,7 @@ import { redirect } from 'next/navigation'
 import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
 import { fetchHostContactRows } from '@/lib/host-contact-list'
+import { failureCopy } from '@/lib/host-campaign-outcome'
 
 export const dynamic = 'force-dynamic'
 
@@ -78,6 +79,9 @@ export default async function HostContacts() {
                       >
                         {r.emailable ? 'Emailable' : 'No'}
                       </span>
+                      {!r.emailable && r.emailable_reason && (
+                        <p className="text-[11px] text-white/40 mt-1">{failureCopy(r.emailable_reason)}</p>
+                      )}
                     </td>
                   </tr>
                 ))}
