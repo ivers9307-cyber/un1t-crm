@@ -37,9 +37,13 @@ const CONTENT_STRIP_TAGS = /<script\b[^>]*>[\s\S]*?<\/script\s*>/gi
 // URL in the message at another host — no attribute of its own needs to be
 // dangerous, its mere presence is.
 //
-// plaintext/textarea/noscript/noembed/xmp/template are on the list for a
-// different reason: each one opens a parsing mode in which everything after
-// it STOPS BEING MARKUP, and `<plaintext>` can never be closed at all. The
+// plaintext/textarea/title/noframes/noscript/noembed/xmp/template are on the
+// list for a different reason: each one opens a parsing mode in which
+// everything after it STOPS BEING MARKUP, and `<plaintext>` can never be
+// closed at all. `title` and `noframes` joined them in round 4: both are
+// raw-text/RCDATA elements IN THE BODY too (the parser does not care that a
+// <title> "belongs" in the head), so one unclosed `<title>` at the end of a
+// host body swallows the injected footer exactly like `<plaintext>` does. The
 // mandatory footer (host name + unsubscribe link + consent-basis line) is
 // injected server-side AFTER this sanitizer runs, so one unclosed
 // `<plaintext>` at the end of a host body would swallow the entire footer
@@ -49,7 +53,7 @@ const CONTENT_STRIP_TAGS = /<script\b[^>]*>[\s\S]*?<\/script\s*>/gi
 //
 // This also sweeps any stray unclosed <script>/<style> open tag left after
 // the block pass above.
-const TAG_STRIP = /<\/?(script|style|iframe|object|embed|form|link|meta|base|svg|math|plaintext|textarea|noscript|noembed|xmp|template)\b[^>]*>/gi
+const TAG_STRIP = /<\/?(script|style|iframe|object|embed|form|link|meta|base|svg|math|plaintext|textarea|title|noframes|noscript|noembed|xmp|template)\b[^>]*>/gi
 // HOST-EMAILS.2 — lifted before the strip passes and restored after them.
 // The placeholder prefix is stripped from the input first so a host cannot
 // forge one (it is plain text, never a tag, so the strip passes ignore it).
@@ -61,10 +65,11 @@ const VIEWPORT_META_SAFE = '<meta name="viewport" content="width=device-width, i
 // The placeholder tokens carry a per-call random NONCE (see makeNonce below),
 // and THE NONCE IS THE WHOLE DEFENCE: a host cannot predict it, so cannot
 // write a live token into the input ahead of time. The literal prefix is also
-// stripped to a fixed point first, belt and braces, before the nonce even
-// exists — `html.split(PREFIX).join('')` is only a single pass, and a nested
-// forgery like `@@UN1T@@UN1T__STYLE_0@@` would otherwise reconstitute a live
-// token after that one pass.
+// stripped from the INPUT first, belt and braces, before the nonce even
+// exists — see stripPlaceholderPrefix, which reaches the fixed point in ONE
+// linear pass (a nested forgery like `@@UN1T@@UN1T__STYLE_0@@` reconstitutes
+// a fresh prefix after a naive `.split().join()`, so a single such pass is
+// not enough and REPEATING it is quadratic — the round-4 DoS).
 //
 // Note what that fixed-point strip does NOT buy: the strip passes below can
 // RE-SPLICE a literal `@@UN1T_` out of pieces the host wrote around a
@@ -73,6 +78,47 @@ const VIEWPORT_META_SAFE = '<meta name="viewport" content="width=device-width, i
 // placeholder regex — and that is exactly the point: forgery is impossible
 // because of the nonce, not because the prefix can never appear.
 const PLACEHOLDER_PREFIX = '@@UN1T_'
+
+/**
+ * Remove every occurrence of the literal placeholder prefix, to a TRUE FIXED
+ * POINT, in ONE LINEAR PASS.
+ *
+ * The obvious `while (s.includes(P)) s = s.split(P).join('')` is a fixed point
+ * but it is QUADRATIC, and a host can drive it deliberately: with
+ * `'@@UN1T'.repeat(k) + '@@UN1T_' + '_'.repeat(k)` every pass deletes exactly
+ * one prefix and welds the next one together, so k passes each re-copy the
+ * whole document. At the API's 300,000-char body cap that measured ~13s of
+ * server CPU for one render — a single-request denial of service (round-4
+ * security review).
+ *
+ * This is the standard stack formulation instead: append one character at a
+ * time and, whenever the ACCUMULATOR ends with the prefix, drop those
+ * characters. Because removals only ever come off the tail, everything before
+ * the tail is final, so an occurrence ending at any earlier position was
+ * already checked against identical preceding text — the accumulator therefore
+ * never contains the prefix at any point, which is the fixed point, reached in
+ * O(input x prefix length).
+ */
+function stripPlaceholderPrefix(s) {
+  const P = PLACEHOLDER_PREFIX
+  const n = P.length
+  const last = P[n - 1]
+  const buf = new Array(s.length)
+  let len = 0
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i]
+    buf[len++] = ch
+    // Only a character that could END the prefix can complete an occurrence.
+    if (ch !== last || len < n) continue
+    let hit = true
+    for (let k = 0; k < n - 1; k++) {
+      if (buf[len - n + k] !== P[k]) { hit = false; break }
+    }
+    if (hit) len -= n
+  }
+  buf.length = len
+  return buf.join('')
+}
 
 // crypto.randomUUID() when available (Node 19+, edge runtimes); Math.random
 // fallback keeps the file importable anywhere. Never used for anything
@@ -118,6 +164,8 @@ const STYLE_ATTR = /([\s/"'])style\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi
 // "ship what we have" one — an unconverged document is precisely one where a
 // deletion's splice has not been re-scanned.
 const MAX_INNER_PASSES = 10
+// Reachable from ~1.5 KB of nested `<scr<script>…` (one round per nesting
+// level), and that is fine: exhausting it fails closed and warns, loudly.
 const MAX_OUTER_PASSES = 20
 
 // Minimal entity decode for scheme sniffing: numeric (dec/hex) plus the named
@@ -201,6 +249,33 @@ function scrubStyleAttrValue(rawValue, counter) {
 }
 
 /**
+ * Neutralise an UNTERMINATED comment opener — the fourth footer-swallowing
+ * device, and the one no tag rule can catch because `<!--` is not a tag.
+ * `<p>Sale!</p><!--` puts every later byte inside a comment, so the
+ * server-injected footer (host name + unsubscribe link + consent basis) is
+ * appended INTO it and renders as nothing: the single thing the send path
+ * exists to guarantee, gone, with no stripped tag anywhere to notice.
+ *
+ * A comment is dangling when the LAST `<!--` has no `-->` and no `--!>` (the
+ * "abrupt closing" form real parsers accept) after it. That final opener and
+ * everything after it are deleted.
+ *
+ * THIS IS A DELETION, but uniquely it is a TAIL deletion: by construction
+ * nothing follows it, so it splices nothing together and cannot weld a new
+ * construct out of the text on either side. It still runs INSIDE the fixed
+ * point, so the shortened document is re-scanned like every other pass.
+ * Balanced comments are untouched, and so are Outlook conditional comments
+ * (`<!--[if mso]>…<![endif]-->`), whose `<![endif]-->` supplies the closer.
+ */
+function neutralizeDanglingComment(html) {
+  const open = html.lastIndexOf('<!--')
+  if (open === -1) return html
+  const rest = open + 4
+  if (html.indexOf('-->', rest) !== -1 || html.indexOf('--!>', rest) !== -1) return html
+  return html.slice(0, open)
+}
+
+/**
  * Strip active content to a FIXED POINT: removing one construct can splice a
  * new one together (`<scr<script>ipt>`), so every pass re-scans the whole
  * string and the loop only stops when a pass changes nothing. Bounded at
@@ -238,6 +313,10 @@ function stripActiveContent(html, counter) {
         const safe = scrubStyleAttrValue(rawValue, counter)
         return safe ? `${boundary}style="${safe}"` : boundary
       })
+    // Last, and after the other passes: a strip above can UNCOVER a dangling
+    // opener (`<!<script></script>--` welds into `<!--`), so this has to see
+    // their output — and its own tail deletion is re-scanned by the next pass.
+    out = neutralizeDanglingComment(out)
     if (out === before) break
   }
   return out
@@ -270,11 +349,42 @@ function isTagNameStart(ch) {
  * One scan answers both, and it is O(document) rather than O(document) per
  * placeholder — which matters, because the number of placeholders is the
  * number of <style> blocks the host chose to write.
+ *
+ * THE QUOTE RULE IS `=`-GATED, like a real tokenizer: an attribute value is
+ * only quoted when the quote is the FIRST character after `=` (whitespace
+ * allowed between). A stray quote anywhere else in a tag stays in
+ * attribute-name position and does not open a value. Tracking parity on every
+ * quote instead flipped the machine out of the tag early — round 4's
+ * `<a href=x" y="z>AAA" BBB=…>` reads its `>` as closing the `<a`, so a
+ * placeholder still inside the tag scanned as ordinary text and a `<style>`
+ * element was restored into the attribute list.
+ *
+ * CONDITIONAL COMMENTS are not comments for this purpose. Every Unlayer and
+ * Outlook export ships `<!--[if mso]><style>…</style><![endif]-->`, and mso
+ * really does parse the contents — so treating the whole thing as COMMENT
+ * stranded the placeholder and silently deleted the Outlook stylesheet from
+ * every export that had one. `<!--[if …]>` and `<![endif]-->` (with or
+ * without a leading `<!--`) are therefore scanned as TAGS that end at their
+ * first `>`, leaving what is between them as TEXT. An ORDINARY `<!--` still
+ * enters COMMENT, and a placeholder inside one is still dropped.
+ *
+ * This is a tokenizer-faithful APPROXIMATION, not a proof: it is a hand-rolled
+ * scanner over a deny-list sanitizer's output, not a spec parser, and a
+ * construct neither it nor the strip passes model could still mis-place a
+ * position. What makes restoration safe is not this scan but what restoration
+ * can DO — insert `<style>` around a scrubCss body that provably contains no
+ * `<` and no `>`, or the one fixed literal meta tag. Getting a position wrong
+ * therefore misplaces a stylesheet; it cannot mint an attribute or a tag.
  */
+const COND_TAGS = ['<!--<![endif]', '<![endif]', '<!--[if']
+
 function strandedOffsets(whole, offsets) {
   const stranded = new Set()
   let state = 'TEXT'
   let next = 0
+  // TAG only: has the scan just passed an `=` (possibly then whitespace)?
+  // Only then does a quote open an attribute value.
+  let afterEq = false
   for (let i = 0; i < whole.length; i++) {
     while (next < offsets.length && offsets[next] === i) {
       if (state !== 'TEXT') stranded.add(offsets[next])
@@ -284,19 +394,23 @@ function strandedOffsets(whole, offsets) {
     const ch = whole[i]
     if (state === 'TEXT') {
       if (ch === '<') {
-        if (whole.startsWith('<!--', i)) state = 'COMMENT'
-        else if (isTagNameStart(whole[i + 1])) state = 'TAG'
+        if (COND_TAGS.some((t) => whole.startsWith(t, i))) { state = 'TAG'; afterEq = false }
+        else if (whole.startsWith('<!--', i)) state = 'COMMENT'
+        else if (isTagNameStart(whole[i + 1])) { state = 'TAG'; afterEq = false }
       }
     } else if (state === 'TAG') {
-      if (ch === '"') state = 'TAG_DQ'
-      else if (ch === "'") state = 'TAG_SQ'
-      else if (ch === '>') state = 'TEXT'
+      if (ch === '>') { state = 'TEXT'; afterEq = false }
+      else if (ch === '=') afterEq = true
+      else if (ch === '"' && afterEq) { state = 'TAG_DQ'; afterEq = false }
+      else if (ch === "'" && afterEq) { state = 'TAG_SQ'; afterEq = false }
+      else if (!/\s/.test(ch)) afterEq = false // whitespace after `=` is allowed
     } else if (state === 'TAG_DQ') {
-      if (ch === '"') state = 'TAG'
+      if (ch === '"') { state = 'TAG'; afterEq = false }
     } else if (state === 'TAG_SQ') {
-      if (ch === "'") state = 'TAG'
+      if (ch === "'") { state = 'TAG'; afterEq = false }
     } else if (state === 'COMMENT') {
-      if (ch === '>' && whole.slice(i - 2, i) === '--') state = 'TEXT'
+      // `-->` and the abrupt-close `--!>` both end a comment.
+      if (ch === '>' && (whole.slice(i - 2, i) === '--' || whole.slice(i - 3, i) === '--!')) state = 'TEXT'
     }
   }
   return stranded
@@ -372,12 +486,12 @@ export function sanitizeCampaignHtml(html) {
   const styles = []
   // Belt and braces: strip the literal placeholder prefix to a FIXED POINT
   // first (a single `.split().join()` pass would let a nested forgery like
-  // `@@UN1T@@UN1T__STYLE_0@@` reconstitute after one pass). The per-call
-  // nonce below is the real defense; this loop only clears the literal text
-  // out of the INPUT — the strip passes can splice it back in later, inert.
-  // See PLACEHOLDER_PREFIX.
-  let out = html
-  while (out.includes(PLACEHOLDER_PREFIX)) out = out.split(PLACEHOLDER_PREFIX).join('')
+  // `@@UN1T@@UN1T__STYLE_0@@` reconstitute after one pass; LOOPING that pass
+  // is quadratic and was a live DoS). stripPlaceholderPrefix does both in one
+  // linear pass. The per-call nonce below is the real defense; this only
+  // clears the literal text out of the INPUT — the strip passes can splice it
+  // back in later, inert. See PLACEHOLDER_PREFIX.
+  let out = stripPlaceholderPrefix(html)
 
   // A host cannot predict this, so cannot forge `@@UN1T_${nonce}_STYLE_0@@`
   // (or the viewport equivalent) into the input ahead of time.
@@ -482,11 +596,21 @@ const FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-s
  * unsubscribe link + consent-basis line). Email-client safe: tables + inline
  * styles only, no external CSS, no JS.
  *
+ * `sanitized: true` says bodyHtml has ALREADY been through
+ * sanitizeCampaignHtml and must be used as-is. It exists for the send queue,
+ * which renders the SAME body once per recipient (only the unsubscribe URL
+ * differs) and would otherwise re-run the whole fixed-point sanitizer for
+ * every address in the campaign. The flag is a promise the CALLER makes:
+ * anywhere host-authored HTML arrives fresh — the composer preview, the test
+ * send — it stays false and the body is sanitized here. Sanitizing is
+ * idempotent, so the flag is a cost saving, never a security decision.
+ *
  * @param {{ host: {name?:string, sender_name?:string}|null, subject: string,
- *   bodyHtml: string, unsubscribeUrl: string }} args
+ *   bodyHtml: string, unsubscribeUrl: string, sanitized?: boolean }} args
  * @returns {string} full HTML document
  */
-export function renderHostCampaignHtml({ host, subject, bodyHtml, unsubscribeUrl }) {
+export function renderHostCampaignHtml({ host, subject, bodyHtml, unsubscribeUrl, sanitized = false }) {
+  const sanitize = (h) => (sanitized ? String(h || '') : sanitizeCampaignHtml(h))
   const senderName = escapeHtml(host?.sender_name || host?.name || '')
   const hostName = escapeHtml(host?.name || host?.sender_name || '')
   const safeSubject = escapeHtml(subject || '')
@@ -499,7 +623,7 @@ export function renderHostCampaignHtml({ host, subject, bodyHtml, unsubscribeUrl
   // before </body> instead. The footer stays server-injected AFTER
   // sanitization so a host can never omit or strip it.
   if (/<\s*(!doctype|html)[\s>]/i.test(String(bodyHtml || '').slice(0, 500))) {
-    const safeDoc = sanitizeCampaignHtml(bodyHtml)
+    const safeDoc = sanitize(bodyHtml)
     const footer = `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;"><tr><td align="center" style="padding:16px 8px;font-family:${FONT};font-size:11px;line-height:1.5;color:#888888;">${hostName} &middot; <a href="${unsub}" style="color:#888888;text-decoration:underline;">Unsubscribe</a><br>You&#39;re receiving this because you attended an event or joined the mailing list.</td></tr></table>`
     if (/<\/body\s*>/i.test(safeDoc)) {
       return safeDoc.replace(/<\/body\s*>/i, `${footer}</body>`)
@@ -507,7 +631,7 @@ export function renderHostCampaignHtml({ host, subject, bodyHtml, unsubscribeUrl
     return safeDoc + footer
   }
 
-  const safeBody = sanitizeCampaignHtml(bodyHtml)
+  const safeBody = sanitize(bodyHtml)
 
   return `<!DOCTYPE html>
 <html>

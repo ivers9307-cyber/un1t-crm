@@ -31,10 +31,17 @@ vi.mock('./postmark.js', async (importOriginal) => ({
 }))
 vi.mock('./app-url.js', () => ({ getAppUrl: () => 'https://crm.test' }))
 vi.mock('./host-unsubscribe.js', () => ({ signHostUnsubToken: vi.fn(() => 'tok') }))
-vi.mock('./host-campaign-email.js', () => ({ renderHostCampaignHtml: vi.fn(() => '<html>rendered</html>') }))
+// The sanitizer is mocked as an identity-with-a-marker so the queue's
+// "sanitize once, render N times" contract is observable: the tests below
+// count its calls and assert every render received its output.
+vi.mock('./host-campaign-email.js', () => ({
+  renderHostCampaignHtml: vi.fn(() => '<html>rendered</html>'),
+  sanitizeCampaignHtml: vi.fn((html) => `SAFE(${html})`),
+}))
 vi.mock('./log.js', () => ({ logError: vi.fn() }))
 
 import { sendEmail } from './postmark.js'
+import { renderHostCampaignHtml, sanitizeCampaignHtml } from './host-campaign-email.js'
 import { logError } from './log.js'
 import { processHostCampaignChunk, BATCH_SIZE } from './host-campaign-queue.js'
 
@@ -493,5 +500,60 @@ describe('processHostCampaignChunk — HOST-METRICS.1', () => {
     const failed = statements.find((s) => s.table === 'host_campaign_sends' && op(s, 'update')?.args[0]?.status === 'failed')
     expect(op(failed, 'update').args[0]).toEqual({ status: 'failed', failed_reason: 'send_error' })
     expect(op(failed, 'eq').args).toEqual(['id', 's1'])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The host body is sanitized ONCE PER CHUNK, not once per recipient.
+//
+// Every row in a chunk renders the SAME campaign.body_html — only the
+// unsubscribe URL differs — and sanitizeCampaignHtml is a fixed-point scanner
+// over a body the API caps at 300,000 characters. Calling it per recipient
+// multiplied the single expensive step in the send loop by the size of the
+// audience (BATCH_SIZE = 50 per chunk) for byte-identical output. The queue
+// now hoists it above the loop and hands renderHostCampaignHtml the finished
+// body with `sanitized: true`.
+// ---------------------------------------------------------------------------
+describe('processHostCampaignChunk — sanitizes the body once per chunk', () => {
+  const N = 12
+  const ids = Array.from({ length: N }, (_, i) => `s${i}`)
+  const manyRecipients = {
+    candidates: ids.map((id) => ({ id })),
+    claimed: ids.map((id, i) => ({ id, contact_id: `c${i}`, email: `u${i}@x.ie` })),
+    contacts: ids.map((_id, i) => emailableContact(`c${i}`, `u${i}@x.ie`)),
+    hostContacts: ids.map((_id, i) => ({ contact_id: `c${i}`, marketing_consent: true })),
+    pendingLeft: 0, claimedLeft: 0, sentCount: N,
+  }
+
+  it('calls sanitizeCampaignHtml exactly once for N recipients', async () => {
+    const { db } = makeDb(routeFor(manyRecipients))
+    await processHostCampaignChunk(db, CAMPAIGN_ID)
+    expect(sendEmail).toHaveBeenCalledTimes(N)
+    expect(sanitizeCampaignHtml).toHaveBeenCalledTimes(1)
+    expect(sanitizeCampaignHtml).toHaveBeenCalledWith(CAMPAIGN.body_html)
+  })
+
+  it('every render gets the SAME already-sanitized body, flagged sanitized:true', async () => {
+    const { db } = makeDb(routeFor(manyRecipients))
+    await processHostCampaignChunk(db, CAMPAIGN_ID)
+    expect(renderHostCampaignHtml).toHaveBeenCalledTimes(N)
+    const bodies = new Set(renderHostCampaignHtml.mock.calls.map(([a]) => a.bodyHtml))
+    expect(bodies.size).toBe(1) // identical for every recipient — nothing per-contact in it
+    expect([...bodies][0]).toBe(`SAFE(${CAMPAIGN.body_html})`)
+    for (const [arg] of renderHostCampaignHtml.mock.calls) {
+      expect(arg.sanitized).toBe(true)
+      // Raw host HTML must never reach the renderer once the flag is set.
+      expect(arg.bodyHtml).not.toBe(CAMPAIGN.body_html)
+    }
+    // …and the ONE thing that legitimately varies per recipient still does.
+    const urls = new Set(renderHostCampaignHtml.mock.calls.map(([a]) => a.unsubscribeUrl))
+    expect(urls.size).toBe(1) // signHostUnsubToken is mocked to a constant here
+    expect([...urls][0]).toBe('https://crm.test/unsubscribe/host/tok')
+  })
+
+  it('does not sanitize at all when the chunk claims nothing', async () => {
+    const { db } = makeDb(routeFor({ candidates: [], pendingLeft: 4, claimedLeft: 0 }))
+    await processHostCampaignChunk(db, CAMPAIGN_ID)
+    expect(sanitizeCampaignHtml).not.toHaveBeenCalled()
   })
 })

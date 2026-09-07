@@ -51,7 +51,7 @@
 // mailbox_blocked | no_email | no_administrative_consent), a thrown send
 // writes send_error, and a sent row stamps postmark_message_id.
 
-import { renderHostCampaignHtml } from './host-campaign-email.js'
+import { renderHostCampaignHtml, sanitizeCampaignHtml } from './host-campaign-email.js'
 import { emailabilityReason } from './host-contact-list.js'
 import { signHostUnsubToken } from './host-unsubscribe.js'
 import { sendEmail, applyMergeTags } from './postmark.js'
@@ -204,6 +204,17 @@ async function runChunk(db, campaignId) {
     const senderName = host.sender_name || host.name || ''
     const from = `"${senderName.replace(/"/g, "'")}" <${host.sender_email}>`
 
+    // Sanitize the host-authored body ONCE per chunk, not once per recipient.
+    // Every row renders the SAME body_html — only the unsubscribe URL differs
+    // — and sanitizeCampaignHtml is a fixed-point scanner over a body capped
+    // at 300,000 characters, so re-running it 50 times a chunk multiplied the
+    // one expensive step in the send loop by the size of the audience for no
+    // change in output. renderHostCampaignHtml is then told the body is
+    // already safe (`sanitized: true`); it is the ONLY caller that may say so,
+    // because it is the only one holding a body it sanitized itself. The
+    // preview and test-send routes render once and keep sanitizing inline.
+    const safeBody = sanitizeCampaignHtml(campaign.body_html)
+
     for (const row of sendable) {
       // Fresh per-contact unsubscribe token — the footer link is per-host,
       // per-contact (host_email_suppressions), injected by the renderer.
@@ -219,7 +230,8 @@ async function runChunk(db, campaignId) {
       const htmlBody = applyMergeTags(renderHostCampaignHtml({
         host,
         subject: campaign.subject,
-        bodyHtml: campaign.body_html,
+        bodyHtml: safeBody,
+        sanitized: true,
         unsubscribeUrl,
       }), tagContact, { unsubscribe_url: unsubscribeUrl })
       const mergedSubject = applyMergeTags(campaign.subject, tagContact) || campaign.subject

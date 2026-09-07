@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
+import { parse } from 'parse5'
 import {
   sanitizeCampaignHtml,
   renderHostCampaignHtml,
@@ -1086,5 +1087,258 @@ describe('sanitizeCampaignHtml — the outer fixed point fails CLOSED', () => {
     } finally {
       warn.mockRestore()
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// FOURTH security review (round 4). Four findings, all verified against a real
+// HTML parser rather than a regex, which is why the earlier rounds missed
+// them:
+//
+//   1. DoS — the literal-prefix strip was a `while (includes) split/join`
+//      fixed point. `'@@UN1T'.repeat(k) + '@@UN1T_' + '_'.repeat(k)` deletes
+//      one prefix per pass and welds the next one together, so k passes each
+//      re-copy the document: 13 SECONDS of server CPU at the API's
+//      300,000-char body cap, for one render, from one request.
+//   2. `<title>` and `<noframes>` were missing from TAG_STRIP. Both are
+//      raw-text/RCDATA elements in the BODY as well, so one unclosed
+//      `<title>` at the end of a host body swallowed the injected footer —
+//      the `<plaintext>` class, two tags short.
+//   3. An unterminated `<!--` did the same thing, and NO tag rule could ever
+//      catch it, because it is not a tag.
+//   4. The quote scan flipped state on ANY quote inside a tag, not only one
+//      opening an attribute value after `=`, so a stray quote desynchronised
+//      it from the real tokenizer and a placeholder still inside an open tag
+//      scanned as ordinary text.
+//
+// And one FIDELITY finding, the reverse direction: Outlook conditional
+// comments were being treated as ordinary comments, so the `<style>` block
+// every Unlayer/Canva export puts inside `<!--[if mso]>…<![endif]-->` was
+// silently deleted from the email.
+// ---------------------------------------------------------------------------
+
+describe('sanitizeCampaignHtml — the literal-prefix strip is LINEAR (round-4 DoS)', () => {
+  it('sanitizes the 280 KB nested-prefix construction in well under 200ms', () => {
+    // k=40000 → '@@UN1T' x k + '@@UN1T_' + '_' x k. Under the old
+    // `while (out.includes(PREFIX)) out = out.split(PREFIX).join('')` this is
+    // k passes over a 280 KB string (~13s measured at the 300,000-char cap).
+    // The stack formulation reaches the same fixed point in one pass.
+    const k = 40000
+    const payload = '@@UN1T'.repeat(k) + '@@UN1T_' + '_'.repeat(k)
+    expect(payload.length).toBeGreaterThan(280_000)
+    const started = Date.now()
+    const out = sanitizeCampaignHtml(payload)
+    const elapsed = Date.now() - started
+    expect(elapsed).toBeLessThan(200)
+    // Still a true fixed point: no live token, and no literal prefix either.
+    expect(out).not.toContain('@@UN1T_')
+  })
+
+  it('is still a FIXED POINT, so a nested forgery cannot reconstitute a prefix', () => {
+    // The linear pass must not be weaker than the loop it replaced: these are
+    // the round-3 forgeries, re-asserted against the new implementation.
+    expect(sanitizeCampaignHtml('<p>@@UN1T@@UN1T__STYLE_0@@</p>')).not.toContain('@@UN1T_')
+    expect(sanitizeCampaignHtml('<p>@@UN1T@@UN1T@@UN1T___STYLE_0@@</p>')).not.toContain('@@UN1T_')
+  })
+})
+
+describe('sanitizeCampaignHtml — <title> and <noframes> (round-4 footer swallowers)', () => {
+  it('strips an unclosed <title>, which is RCDATA in the body too', () => {
+    const out = sanitizeCampaignHtml('<p>x</p><title>hidden footer')
+    expect(out).not.toMatch(/<title/i)
+    expect(out).toBe('<p>x</p>hidden footer') // the TAG goes, its text stays
+  })
+
+  it('strips an unclosed <noframes>', () => {
+    const out = sanitizeCampaignHtml('<p>x</p><noframes>hidden footer')
+    expect(out).not.toMatch(/<noframes/i)
+    expect(out).toBe('<p>x</p>hidden footer')
+  })
+
+  it('strips the closing forms too, keeping the inner text', () => {
+    expect(sanitizeCampaignHtml('<title>a</title><noframes>b</noframes>')).toBe('ab')
+  })
+})
+
+describe('sanitizeCampaignHtml — unterminated comments (round-4)', () => {
+  it('deletes a dangling <!-- that would swallow everything after it', () => {
+    expect(sanitizeCampaignHtml('<p>Sale!</p><!--')).toBe('<p>Sale!</p>')
+    expect(sanitizeCampaignHtml('<p>Sale!</p><!-- x')).toBe('<p>Sale!</p>')
+  })
+
+  it('leaves BALANCED comments alone', () => {
+    expect(sanitizeCampaignHtml('<!-- a --><p>k</p>')).toBe('<!-- a --><p>k</p>')
+    expect(sanitizeCampaignHtml('<p>k</p><!-- trailing note -->')).toBe('<p>k</p><!-- trailing note -->')
+  })
+
+  it('deletes only the LAST, unterminated opener — earlier balanced ones survive', () => {
+    expect(sanitizeCampaignHtml('<!-- a --><p>k</p><!-- b')).toBe('<!-- a --><p>k</p>')
+  })
+
+  it('accepts the abrupt close --!> as terminating a comment', () => {
+    expect(sanitizeCampaignHtml('<p>k</p><!-- a --!>')).toBe('<p>k</p><!-- a --!>')
+  })
+
+  it('the tail deletion cannot weld a new construct together (nothing follows it)', () => {
+    const out = sanitizeCampaignHtml('<p>ok</p><scr<!--ipt>alert(1)')
+    expect(out).not.toContain('<script')
+    expect(out).not.toContain('alert(1)')
+    expect(out).toContain('<p>ok</p>')
+  })
+})
+
+describe('sanitizeCampaignHtml — Outlook conditional comments survive (round-4 fidelity)', () => {
+  it('keeps the <style> inside <!--[if mso]>…<![endif]-->', () => {
+    // The standard Unlayer/Outlook export pattern. Scanning it as an ordinary
+    // comment stranded the placeholder and deleted the whole mso stylesheet.
+    const out = sanitizeCampaignHtml('<!--[if mso]><style>.a{color:red}</style><![endif]--><p>x</p>')
+    expect(out).toContain('<style>.a{color:red}</style>')
+    expect(out).toContain('<!--[if mso]>')
+    expect(out).toContain('<![endif]-->')
+  })
+
+  it('keeps it with the downlevel-revealed <!--<![endif]--> close too', () => {
+    const out = sanitizeCampaignHtml('<!--[if mso]><style>.a{color:red}</style><!--<![endif]--><p>x</p>')
+    expect(out).toContain('<style>.a{color:red}</style>')
+  })
+
+  it('keeps a <style> that follows an abruptly-closed comment', () => {
+    const out = sanitizeCampaignHtml('<!-- draft --!><style>.b{color:red}</style><p>x</p>')
+    expect(out).toContain('<style>.b{color:red}</style>')
+  })
+
+  it('but an ORDINARY comment still swallows its placeholder — the style is dropped', () => {
+    const out = sanitizeCampaignHtml('<!-- hide <style>.c{color:red}</style> --><p>x</p>')
+    expect(out).not.toContain('<style')
+    expect(out).not.toContain('color:red')
+    expect(out).toContain('<p>x</p>')
+  })
+})
+
+describe('sanitizeCampaignHtml — quotes only open a value after `=` (round-4)', () => {
+  it("a stray quote in attribute-name position does not flip the scan out of the tag", () => {
+    // Tracking parity on EVERY quote desynchronised the scan from a real
+    // tokenizer: here the first `"` (part of the unquoted value `x"`) opened a
+    // phantom value, the `>` inside `y="z>AAA"` then read as closing the <a>,
+    // and the placeholder that is genuinely still inside the tag scanned as
+    // ordinary text — so a <style> element was restored into the attribute
+    // list of a live <a>.
+    const out = sanitizeCampaignHtml('<a href=x" y="z>AAA" BBB=<style>a{color:red}</style> >L')
+    expect(out).not.toMatch(/<a[^>]*<style/)
+    expect(out).not.toContain('color:red')
+  })
+
+  it('a normally-quoted attribute value still shields its > from the scan', () => {
+    // The round-3 false negative must stay fixed: `=`-gating must not stop
+    // legitimate quoted values from being recognised.
+    const out = sanitizeCampaignHtml('<img title="a>b" style="<style>a{color:red}</style>">')
+    expect(out).not.toContain('<style')
+    expect(out).toContain('title="a>b"')
+  })
+
+  it('whitespace between = and the quote still opens a value', () => {
+    const out = sanitizeCampaignHtml('<img title = "a>b" alt="<style>a{color:red}</style>">')
+    expect(out).not.toContain('<style')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The footer is checked with a REAL PARSER, not a substring search.
+//
+// Every earlier footer test asserted `html.toContain('Unsubscribe')`, which is
+// exactly the assertion that cannot see this bug class: an unclosed
+// `<plaintext>` / `<title>` / `<!--` leaves the footer present in the SOURCE
+// and inert in the DOM — the text is there, the link is not. parse5 answers
+// the question that matters: does a live <a href="<unsub>"> element exist?
+// ---------------------------------------------------------------------------
+describe('renderHostCampaignHtml — the unsubscribe link survives as a LIVE DOM element', () => {
+  const UNSUB = 'https://crm.test/unsubscribe/host/tok.sig'
+  const host = { name: 'Acme Events', sender_name: 'Acme Team' }
+
+  /** Walk the parse5 tree for an <a> whose href is exactly `href`. */
+  function hasLiveUnsubLink(html, href = UNSUB) {
+    const walk = (node) => {
+      if (node.tagName === 'a' && (node.attrs || []).some((a) => a.name === 'href' && a.value === href)) return true
+      for (const child of node.childNodes || []) if (walk(child)) return true
+      return false
+    }
+    return walk(parse(html))
+  }
+
+  it('the helper is a real detector — it says NO when the footer is swallowed', () => {
+    // Negative control. Without it, nine green assertions below would prove
+    // nothing: a helper that always returned true would pass every one.
+    const swallowed = `<html><body><p>hi</p><plaintext><a href="${UNSUB}">Unsubscribe</a></body></html>`
+    expect(hasLiveUnsubLink(swallowed)).toBe(false)
+    expect(swallowed).toContain('Unsubscribe') // …which the old substring test happily accepted
+  })
+
+  // Every construct that opens a "stop parsing markup" mode, unclosed.
+  const SWALLOWERS = ['<plaintext>', '<textarea>', '<title>', '<noframes>', '<xmp>', '<!--', '<!-- x', '<script>', '<style>']
+
+  for (const trap of SWALLOWERS) {
+    it(`shell path — a body ending in an unclosed ${trap} still ships a live unsubscribe link`, () => {
+      const html = renderHostCampaignHtml({
+        host, subject: 's', bodyHtml: `<p>hi</p>${trap}`, unsubscribeUrl: UNSUB,
+      })
+      expect(hasLiveUnsubLink(html)).toBe(true)
+    })
+
+    it(`full-document path — a body ending in an unclosed ${trap} still ships a live unsubscribe link`, () => {
+      const html = renderHostCampaignHtml({
+        host, subject: 's',
+        bodyHtml: `<!DOCTYPE html><html><body><p>hi</p>${trap}</body></html>`,
+        unsubscribeUrl: UNSUB,
+      })
+      expect(hasLiveUnsubLink(html)).toBe(true)
+    })
+  }
+
+  it('an ordinary body ships one too (the baseline the traps are measured against)', () => {
+    expect(hasLiveUnsubLink(renderHostCampaignHtml({ host, subject: 's', bodyHtml: '<p>hi</p>', unsubscribeUrl: UNSUB }))).toBe(true)
+    expect(hasLiveUnsubLink(renderHostCampaignHtml({
+      host, subject: 's', bodyHtml: '<!DOCTYPE html><html><body><p>hi</p></body></html>', unsubscribeUrl: UNSUB,
+    }))).toBe(true)
+  })
+})
+
+describe('renderHostCampaignHtml — the `sanitized` flag (send-queue hoist)', () => {
+  const host = { name: 'Acme', sender_name: 'Acme' }
+  const UNSUB = 'https://crm.test/u/t'
+
+  it('defaults to false: an unflagged body IS sanitized', () => {
+    const html = renderHostCampaignHtml({ host, subject: 's', bodyHtml: '<p onclick="x()">Hi</p><script>steal()</script>', unsubscribeUrl: UNSUB })
+    expect(html).not.toContain('steal()')
+    expect(html).not.toMatch(/onclick/i)
+  })
+
+  it('sanitized:true uses the body as-is — and sanitizing is idempotent, so the two agree', () => {
+    // The queue sanitizes once per chunk and renders per recipient. The flag
+    // is a cost saving, never a security decision: the same input rendered
+    // both ways must produce the same document.
+    const raw = '<p onclick="x()">Hi</p><script>steal()</script><style>.a{color:red}</style>'
+    const viaFlag = renderHostCampaignHtml({ host, subject: 's', bodyHtml: sanitizeCampaignHtml(raw), sanitized: true, unsubscribeUrl: UNSUB })
+    const viaRender = renderHostCampaignHtml({ host, subject: 's', bodyHtml: raw, unsubscribeUrl: UNSUB })
+    expect(viaFlag).toBe(viaRender)
+    expect(viaFlag).not.toContain('steal()')
+  })
+
+  it('agrees with the inline path on the FULL-DOCUMENT branch too', () => {
+    // The Unlayer branch is chosen by sniffing bodyHtml for a doctype/<html>,
+    // so the flag must not change which branch a body takes: the queue would
+    // otherwise ship a differently-shaped email than the preview the host
+    // approved. Sanitizing leaves the doctype alone, which is why they agree.
+    const doc = '<!DOCTYPE html><html><head><title>t</title></head><body><p onclick="x()">Hi</p><script>steal()</script></body></html>'
+    const viaFlag = renderHostCampaignHtml({ host, subject: 's', bodyHtml: sanitizeCampaignHtml(doc), sanitized: true, unsubscribeUrl: UNSUB })
+    const viaRender = renderHostCampaignHtml({ host, subject: 's', bodyHtml: doc, unsubscribeUrl: UNSUB })
+    expect(viaFlag).toBe(viaRender)
+    expect(viaFlag).toContain('</body>') // took the inject-before-</body> branch, not the shell
+    expect(viaFlag).not.toContain('steal()')
+  })
+
+  it('the footer is injected even when the caller pre-sanitized', () => {
+    const html = renderHostCampaignHtml({ host, subject: 's', bodyHtml: sanitizeCampaignHtml('<p>hi</p><plaintext>'), sanitized: true, unsubscribeUrl: UNSUB })
+    expect(html).toContain('Unsubscribe')
+    expect(html).not.toMatch(/<plaintext/i)
   })
 })
