@@ -1,7 +1,7 @@
 // EMAIL-CONTACT-CHIP.2 — "Add to contacts" on an unlinked thread.
 //
-// Gated through the same loadTicketForUser chain as every other ticket
-// mutation route (status, assign, participants): 404 for a ticket the caller
+// Gated through the same loadConversationForUser chain as every other conversation
+// mutation route (status, assign, participants): 404 for a conversation the caller
 // cannot see, whatever the reason. Linking itself goes through
 // findOrCreateRaceContact with restrictToOrg: true — the house LEADCAP.1
 // create-or-link helper — so these tests prove this route calls it correctly
@@ -44,7 +44,7 @@ const GRANT_ACCOUNTS = { mailbox_id: MB_ACCOUNTS.id, profile_id: COACH.id }
 
 function post(id) {
   return POST(
-    new Request(`http://x/api/email/tickets/${id}/link-contact`, { method: 'POST' }),
+    new Request(`http://x/api/email/conversations/${id}/link-contact`, { method: 'POST' }),
     { params: Promise.resolve({ id }) }
   )
 }
@@ -68,22 +68,22 @@ describe('POST …/link-contact — gates', () => {
     expect((await post(T_ACCOUNTS.id)).status).toBe(401)
   })
 
-  // Same 404 posture as every sibling ticket-mutation route: a caller who
+  // Same 404 posture as every sibling conversation-mutation route: a caller who
   // holds the mailbox grant but lacks email_inbox AT THE TICKET'S location
   // is refused indistinguishably from a bad id.
-  it('404s without the email_inbox permission at the ticket’s location, writing nothing', async () => {
+  it('404s without the email_inbox permission at the conversation’s location, writing nothing', async () => {
     getCurrentUser.mockResolvedValue(COACH_NO_INBOX)
     expect((await post(T_ACCOUNTS.id)).status).toBe(404)
     expect(writesTo(db)).toEqual([])
   })
 
-  it('404s on a ticket at a foreign location', async () => {
+  it('404s on a conversation at a foreign location', async () => {
     setupDb({ tickets: [{ ...T_STUDIO }, { ...T_ACCOUNTS }, { ...T_OTHER_LOCATION }] })
     expect((await post(T_OTHER_LOCATION.id)).status).toBe(404)
     expect(writesTo(db)).toEqual([])
   })
 
-  it('404s on a ticket that does not exist', async () => {
+  it('404s on a conversation that does not exist', async () => {
     expect((await post('00000000-0000-4000-8000-000000000000')).status).toBe(404)
   })
 })
@@ -98,7 +98,7 @@ describe('POST …/link-contact — creates + links', () => {
     expect(body.success).toBe(true)
     expect(body.data.contact.email).toBe('payer@example.com')
 
-    // Exactly one contact created, at the ticket's own location.
+    // Exactly one contact created, at the conversation's own location.
     const created = insertsInto(db, 'contacts')
     expect(created).toHaveLength(1)
     expect(created[0].payload.location_id).toBe(LOC_A)
@@ -111,11 +111,11 @@ describe('POST …/link-contact — creates + links', () => {
     expect(created[0].payload.source).toBe('email_inbox')
     expect(created[0].payload.lead_source).toBeNull()
 
-    // The ticket row now carries it.
+    // The conversation row now carries it.
     const newContactId = db._state.contacts.find(c => c.email === 'payer@example.com').id
     expect(body.data.contact.id).toBe(newContactId)
-    const ticketWrite = updatesTo(db, 'email_tickets').find(u => u.filters.some(f => f[0] === 'eq' && f[1] === 'id' && f[2] === T_ACCOUNTS.id))
-    expect(ticketWrite.payload.contact_id).toBe(newContactId)
+    const conversationWrite = updatesTo(db, 'email_tickets').find(u => u.filters.some(f => f[0] === 'eq' && f[1] === 'id' && f[2] === T_ACCOUNTS.id))
+    expect(conversationWrite.payload.contact_id).toBe(newContactId)
   })
 
   // H1 — the audit finding this suite exists to pin. requester_name is NULL
@@ -134,7 +134,7 @@ describe('POST …/link-contact — creates + links', () => {
   })
 
   // H1 — insertFields must apply ONLY on create. Linking an EXISTING contact
-  // must never touch its name/source, whatever the ticket's requester_name is.
+  // must never touch its name/source, whatever the conversation's requester_name is.
   it('leaves an existing contact\'s name/source untouched on the link path (insertFields is create-only)', async () => {
     const existing = { id: 'existing-contact-1', location_id: LOC_A, email: 'payer@example.com', name: 'Bob The Payer', source: 'manual' }
     setupDb({ contacts: [existing], tickets: [{ ...T_ACCOUNTS, requester_name: null }] })
@@ -160,19 +160,19 @@ describe('POST …/link-contact — creates + links', () => {
     expect(insertsInto(db, 'contacts')).toHaveLength(0)
     expect(db._state.contacts).toHaveLength(1)
 
-    const ticketWrite = updatesTo(db, 'email_tickets')[0]
-    expect(ticketWrite.payload.contact_id).toBe('existing-contact-1')
+    const conversationWrite = updatesTo(db, 'email_tickets')[0]
+    expect(conversationWrite.payload.contact_id).toBe('existing-contact-1')
   })
 
-  it('backfills contact_id onto the ticket’s own messages that have none, mirroring ingest', async () => {
+  it('backfills contact_id onto the conversation’s own messages that have none, mirroring ingest', async () => {
     setupDb({
       messages: [
         { id: 'm1', ticket_id: T_ACCOUNTS.id, contact_id: null, location_id: LOC_A, direction: 'inbound' },
         { id: 'm2', ticket_id: T_ACCOUNTS.id, contact_id: null, location_id: LOC_A, direction: 'outbound' },
-        // A different ticket's message must never be touched by this write.
+        // A different conversation's message must never be touched by this write.
         { id: 'm3', ticket_id: T_STUDIO.id, contact_id: null, location_id: LOC_A, direction: 'inbound' },
         // Already carries a DIFFERENT contact (e.g. a forwarded copy on this
-        // same ticket, filed under someone else) — the .is('contact_id',
+        // same conversation, filed under someone else) — the .is('contact_id',
         // null) guard must never clobber it.
         { id: 'm4', ticket_id: T_ACCOUNTS.id, contact_id: 'someone-else', location_id: LOC_A, direction: 'inbound' },
       ],
@@ -201,12 +201,12 @@ describe('POST …/link-contact — creates + links', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.success).toBe(true)
-    // The ticket itself is still linked — only the cosmetic mirror failed.
+    // The conversation itself is still linked — only the cosmetic mirror failed.
     expect(updatesTo(db, 'email_tickets')[0].payload.contact_id).toBeTruthy()
   })
 
   it('500s when the final contact lookup fails AFTER a successful create+link', async () => {
-    // The create/insert must succeed (so the ticket really does get linked)
+    // The create/insert must succeed (so the conversation really does get linked)
     // and only the RESPONSE-SHAPING lookup that follows must fail — `errors`
     // fails every operation on a table uniformly, so this one case needs a
     // local double: fail `contacts` selects, but only once an insert into it
@@ -231,7 +231,7 @@ describe('POST …/link-contact — creates + links', () => {
     expect(body.success).toBe(false)
   })
 
-  it('500s and writes nothing to the ticket when contact resolution itself fails', async () => {
+  it('500s and writes nothing to the conversation when contact resolution itself fails', async () => {
     // Every contacts operation errors, including the create — the ONLY way
     // to make findOrCreateRaceContact itself return null rather than an id
     // (it never throws; a hard failure is reported as null).
@@ -264,7 +264,7 @@ describe('POST …/link-contact — idempotent', () => {
 })
 
 describe('POST …/link-contact — refuses with no requester_email', () => {
-  it('400s and writes nothing when the ticket has no requester_email', async () => {
+  it('400s and writes nothing when the conversation has no requester_email', async () => {
     setupDb({ tickets: [{ ...T_ACCOUNTS, requester_email: null }] })
     const res = await post(T_ACCOUNTS.id)
     expect(res.status).toBe(400)
@@ -273,7 +273,7 @@ describe('POST …/link-contact — refuses with no requester_email', () => {
 })
 
 describe('POST …/link-contact — the write is error-checked', () => {
-  it('500s when the ticket update fails, rather than reporting success', async () => {
+  it('500s when the conversation update fails, rather than reporting success', async () => {
     failWrites(db, ['email_tickets'])
     const res = await post(T_ACCOUNTS.id)
     expect(res.status).toBe(500)

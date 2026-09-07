@@ -1,4 +1,4 @@
-// EMAIL-TICKET.4 — the three ticket-inbox display rules that are silently
+// EMAIL-TICKET.4 — the three conversation-inbox display rules that are silently
 // wrong when they break: the wire vocabulary for ?view=, the internal-note
 // classification, and the light-theme chip ramp.
 
@@ -150,13 +150,13 @@ describe('status + priority chips', () => {
     expect(isArchivedStatus('pending')).toBe(false)
   })
 
-  // A reply to a CLOSED ticket REOPENS it — it does not fork (Richard,
+  // A reply to a CLOSED conversation REOPENS it — it does not fork (Richard,
   // 2026-08-07, reversing an earlier draft). The hint predated that call and
-  // still promised a new ticket, which teaches operators the wrong model.
-  it('tells operators a member reply reopens an archived ticket — both statuses', () => {
+  // still promised a new conversation, which teaches operators the wrong model.
+  it('tells operators a member reply reopens an archived conversation — both statuses', () => {
     for (const s of ['solved', 'closed']) {
       expect(STATUS_META[s].hint).toMatch(/reopens/)
-      expect(STATUS_META[s].hint).not.toMatch(/new ticket/i)
+      expect(STATUS_META[s].hint).not.toMatch(/new conversation/i)
     }
   })
 })

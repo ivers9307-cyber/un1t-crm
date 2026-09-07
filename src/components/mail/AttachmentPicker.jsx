@@ -64,7 +64,7 @@ export function hasPendingUploads(files) {
 /**
  * @param {object} props
  * @param {{ticket_id?: string, mailbox_id?: string}} props.scope what the upload
- *   is authorised against — an existing ticket, or the mailbox a new email will
+ *   is authorised against — an existing conversation, or the mailbox a new email will
  *   be sent from. Passed straight to the sign route, which applies the SEND's
  *   own gate to it.
  * @param {Array} props.files    the picker's list, owned by the composer so it

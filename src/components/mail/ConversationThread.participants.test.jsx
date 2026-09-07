@@ -3,11 +3,11 @@
 // EMAIL-PARTICIPANTS.8 — the thread has to read like a mail thread.
 //
 // THE INCIDENT THESE TESTS EXIST FOR (2026-08-12)
-// A ticket's requester_email was ratesoffice@dublincity.ie. The rates office
+// A conversation's requester_email was ratesoffice@dublincity.ie. The rates office
 // forwarded the mail internally to a named officer, eleanor.brennan@…, who
 // replied. Every message from that point on was with Eleanor — and the header
 // still said ratesoffice@, with nothing anywhere saying a new person had
-// joined. The operator, reading the wrong name, opened a second ticket and
+// joined. The operator, reading the wrong name, opened a second conversation and
 // sent the same reply twice.
 //
 // Tasks 2-7 fixed WHO a reply reaches. None of that is visible, so none of it
@@ -57,7 +57,7 @@ function renderThread(props = {}) {
   return render(
     <ConversationThread
       hasSelection
-      ticket={TICKET}
+      conversation={TICKET}
       messages={[]}
       currentUserId="me-1"
       onBack={noop}
@@ -99,7 +99,7 @@ describe('ConversationThread — where a participant joined', () => {
   })
 })
 
-describe('ConversationThread — who the ticket is actually with', () => {
+describe('ConversationThread — who the conversation is actually with', () => {
   it('names the live correspondent in the header, not only the requester', () => {
     renderThread({
       // The audience as the server derived it from the whole thread: Eleanor
@@ -129,14 +129,14 @@ describe('ConversationThread — who the ticket is actually with', () => {
     ).toBeTruthy()
 
     // And the requester is not erased — demoted. "Opened by" is how an
-    // operator reconciles the ticket in front of them with the address it
+    // operator reconciles the conversation in front of them with the address it
     // arrived from, and it appears BECAUSE the two have diverged.
     expect(screen.getByText('Opened by Rates Office <rates@council.ie>')).toBeTruthy()
   })
 
   it('says nothing about who opened it while the requester is still the counterparty', () => {
     renderThread({
-      // The ordinary ticket: nobody new has arrived, so the audience still
+      // The ordinary conversation: nobody new has arrived, so the audience still
       // leads with the address the first message came from.
       replyRecipients: {
         to: ['rates@council.ie', 'clerk@council.ie'],
@@ -147,7 +147,7 @@ describe('ConversationThread — who the ticket is actually with', () => {
     })
 
     // "Opened by" earns its place by MEANING something. Printed on every
-    // ticket it is a line an operator learns to skip — and the one ticket
+    // conversation it is a line an operator learns to skip — and the one conversation
     // where the thread had moved on is the one they would skip it on.
     expect(screen.queryByText(/^Opened by/)).toBeNull()
     expect(
@@ -195,7 +195,7 @@ describe('ConversationThread — who the ticket is actually with', () => {
 // The header fell back to naming the requester whenever `to` was empty, which
 // swallowed the case where the operator had just taken everybody off: it put
 // the person they removed back at the top of the pane, described as who the
-// ticket is with, directly above a composer saying nobody is left and a route
+// conversation is with, directly above a composer saying nobody is left and a route
 // that 400s the send. ReplyBox.jsx has forbidden exactly this since
 // EMAIL-PARTICIPANTS.7 (see `lockedTo`) — never name somebody who will not be
 // mailed — and the header contradicted it one component up.
@@ -261,7 +261,7 @@ describe('ConversationThread — a message\'s own envelope', () => {
     // about a Bcc address never re-entering a recipient list — so it must not
     // be the thing an operator has to go looking for.
     expect(screen.getByText('secret@x.com')).toBeTruthy()
-    expect(screen.getByText(/Only staff on this ticket can see this/)).toBeTruthy()
+    expect(screen.getByText(/Only staff on this conversation can see this/)).toBeTruthy()
 
     fireEvent.click(details)
 
@@ -276,7 +276,7 @@ describe('ConversationThread — a message\'s own envelope', () => {
 
     // Bcc is shown here and NOWHERE else — never in the header's participant
     // list, and never as a join marker, where it would leak to everyone
-    // reading the ticket.
+    // reading the conversation.
     expect(screen.queryByText(/secret@x\.com joined this thread/i)).toBeNull()
 
     // Collapsing takes To and Cc away again, and leaves the Bcc where it was.

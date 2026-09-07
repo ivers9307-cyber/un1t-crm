@@ -5,7 +5,7 @@
 // so a rule deleted here is a rule deleted everywhere.
 
 import { describe, it, expect } from 'vitest'
-import { canMerge, mergedTicketFields, ticketFieldsFromMessages } from './conversation-merge'
+import { canMerge, mergedTicketFields, conversationFieldsFromMessages } from './conversation-merge'
 
 const T = (over = {}) => ({
   id: 'a', location_id: 'loc-1', merged_into_id: null,
@@ -15,10 +15,10 @@ const T = (over = {}) => ({
 })
 
 describe('canMerge', () => {
-  it('allows two ordinary tickets at the same location', () => {
+  it('allows two ordinary conversations at the same location', () => {
     expect(canMerge(T({ id: 'a' }), T({ id: 'b' }))).toEqual({ ok: true })
   })
-  it('refuses merging a ticket into itself', () => {
+  it('refuses merging a conversation into itself', () => {
     // Pin the exact reason, not just ok:false — nothing consumes .reason yet
     // (no merge route exists), so a transposed string here would ship silently
     // and only surface once a later PR wires user-facing copy to it.
@@ -38,13 +38,13 @@ describe('canMerge', () => {
     expect(canMerge(T({ id: 'a' }), T({ id: 'b', merged_into_id: 'c' })))
       .toEqual({ ok: false, reason: 'target_is_merged' })
   })
-  it('refuses a missing ticket', () => {
+  it('refuses a missing conversation', () => {
     expect(canMerge(null, T())).toEqual({ ok: false, reason: 'missing_ticket' })
     expect(canMerge(T(), null)).toEqual({ ok: false, reason: 'missing_ticket' })
   })
   // MAIL-SPAM.1 review — a merge across the quarantine flag is refused in BOTH
   // directions. Live → spam is the dangerous one: the live row becomes a
-  // tombstone pointing at the spam ticket, vanishes from Inbox and the count,
+  // tombstone pointing at the spam conversation, vanishes from Inbox and the count,
   // and the 30-day purge then deletes target AND tombstone — a member's
   // thread destroyed by a merge. Spam → live is refused too, so a quarantined
   // thread cannot be laundered into a live one without an explicit release.
@@ -56,7 +56,7 @@ describe('canMerge', () => {
     expect(canMerge(T({ id: 'a', is_spam: true }), T({ id: 'b', is_spam: false })))
       .toEqual({ ok: false, reason: 'spam_mismatch' })
   })
-  it('allows two quarantined tickets to merge, and treats an absent flag as live', () => {
+  it('allows two quarantined conversations to merge, and treats an absent flag as live', () => {
     expect(canMerge(T({ id: 'a', is_spam: true }), T({ id: 'b', is_spam: true }))).toEqual({ ok: true })
     // Rows read before mig 584 (or fixtures without the column) are live.
     expect(canMerge(T({ id: 'a' }), T({ id: 'b', is_spam: false }))).toEqual({ ok: true })
@@ -91,7 +91,7 @@ describe('mergedTicketFields', () => {
 // claim to be an undo rather than a move. Each rule below mirrors a WRITER; a
 // derivation that disagreed with one would silently rewrite correct rows on
 // every unmerge, so they are pinned individually rather than through the route.
-describe('ticketFieldsFromMessages', () => {
+describe('conversationFieldsFromMessages', () => {
   const M = (over = {}) => ({
     direction: 'inbound', text_body: 'hello', subject: 'Subj',
     is_internal_note: false, forwarded_message_id: null,
@@ -99,7 +99,7 @@ describe('ticketFieldsFromMessages', () => {
   })
 
   it('takes the trio from the newest message', () => {
-    const out = ticketFieldsFromMessages([
+    const out = conversationFieldsFromMessages([
       M({ created_at: '2026-08-01T00:00:00Z', text_body: 'older' }),
       M({ created_at: '2026-08-09T00:00:00Z', text_body: 'newer', direction: 'outbound' }),
     ])
@@ -108,8 +108,8 @@ describe('ticketFieldsFromMessages', () => {
     expect(out.last_message_preview).toBe('newer')
   })
 
-  it('ignores internal notes — the reply route never lets one advance a ticket', () => {
-    const out = ticketFieldsFromMessages([
+  it('ignores internal notes — the reply route never lets one advance a conversation', () => {
+    const out = conversationFieldsFromMessages([
       M({ created_at: '2026-08-01T00:00:00Z', text_body: 'real' }),
       M({ created_at: '2026-08-09T00:00:00Z', text_body: 'staff only', is_internal_note: true }),
     ])
@@ -118,7 +118,7 @@ describe('ticketFieldsFromMessages', () => {
   })
 
   it('ignores forwards — the forward route never touches email_tickets', () => {
-    const out = ticketFieldsFromMessages([
+    const out = conversationFieldsFromMessages([
       M({ created_at: '2026-08-01T00:00:00Z', text_body: 'real' }),
       M({ created_at: '2026-08-09T00:00:00Z', text_body: 'fwd', forwarded_message_id: 'm-1', direction: 'outbound' }),
     ])
@@ -129,7 +129,7 @@ describe('ticketFieldsFromMessages', () => {
   it('clocks on created_at, NEVER sent_at — inbound sent_at is the sender’s own Date header', () => {
     // A remote Date header years in the future would otherwise seize the top of
     // the queue and rewrite last_message_at on every unmerge.
-    const out = ticketFieldsFromMessages([
+    const out = conversationFieldsFromMessages([
       M({ created_at: '2026-08-09T00:00:00Z', sent_at: '2035-01-01T00:00:00Z', text_body: 'spoofed date' }),
       M({ created_at: '2026-08-10T00:00:00Z', sent_at: '2019-01-01T00:00:00Z', text_body: 'actually newest' }),
     ])
@@ -138,7 +138,7 @@ describe('ticketFieldsFromMessages', () => {
   })
 
   it('stamps first_response_at from the FIRST non-note outbound', () => {
-    const out = ticketFieldsFromMessages([
+    const out = conversationFieldsFromMessages([
       M({ created_at: '2026-08-02T00:00:00Z', direction: 'outbound', text_body: 'first answer' }),
       M({ created_at: '2026-08-03T00:00:00Z', direction: 'outbound', text_body: 'second answer' }),
       M({ created_at: '2026-08-01T00:00:00Z', direction: 'inbound' }),
@@ -147,20 +147,20 @@ describe('ticketFieldsFromMessages', () => {
   })
 
   it('leaves first_response_at null when nobody has answered', () => {
-    expect(ticketFieldsFromMessages([M(), M()]).first_response_at).toBeNull()
+    expect(conversationFieldsFromMessages([M(), M()]).first_response_at).toBeNull()
   })
 
   it('falls back to the subject for a bodyless message, as the webhook does', () => {
-    expect(ticketFieldsFromMessages([M({ text_body: '', subject: 'Just a subject' })]).last_message_preview)
+    expect(conversationFieldsFromMessages([M({ text_body: '', subject: 'Just a subject' })]).last_message_preview)
       .toBe('Just a subject')
   })
 
-  it('answers all-null for a ticket with no messages left', () => {
-    expect(ticketFieldsFromMessages([])).toEqual({
+  it('answers all-null for a conversation with no messages left', () => {
+    expect(conversationFieldsFromMessages([])).toEqual({
       first_response_at: null, last_message_at: null,
       last_message_direction: null, last_message_preview: null,
     })
-    expect(ticketFieldsFromMessages(null).last_message_at).toBeNull()
+    expect(conversationFieldsFromMessages(null).last_message_at).toBeNull()
   })
 })
 

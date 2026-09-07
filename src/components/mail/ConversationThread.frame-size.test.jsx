@@ -52,7 +52,7 @@ function renderThread(props = {}) {
   return render(
     <ConversationThread
       hasSelection
-      ticket={TICKET}
+      conversation={TICKET}
       messages={[HTML_MESSAGE]}
       onBack={() => {}}
       onSend={() => {}}

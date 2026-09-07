@@ -5,7 +5,7 @@
 // The pill is a RESTING state of the same composer, not a second composer:
 // every hook — viewer resolution, draft hydration, write-through — runs
 // identically whether the form is showing or not. What this file pins:
-//   • default callers keep the always-open form byte-for-byte (the ticket
+//   • default callers keep the always-open form byte-for-byte (the conversation
 //     surface's own tests never pass startCollapsed);
 //   • the pill names the requester by FIRST name and expands on click,
 //     focusing the textarea — a click that leaves focus on a vanished button
@@ -28,7 +28,7 @@ vi.mock('@/components/mail/viewer-id', () => ({
   resolveViewerId: vi.fn(),
 }))
 
-const S = (ticketId, userId = 'user-1', mailboxId = 'mb-1') => ({ userId, mailboxId, ticketId })
+const S = (conversationId, userId = 'user-1', mailboxId = 'mb-1') => ({ userId, mailboxId, conversationId })
 
 beforeEach(() => {
   resolveViewerId.mockResolvedValue('user-1')
@@ -41,9 +41,9 @@ afterEach(() => {
   window.localStorage.clear()
 })
 
-function ticket(over = {}) {
+function conversation(over = {}) {
   return {
-    id: 'ticket-1',
+    id: 'conversation-1',
     subject: 'Membership freeze',
     requester_email: 'helen@member.ie',
     requester_name: 'Helen Lawlor',
@@ -56,7 +56,7 @@ function ticket(over = {}) {
 function renderBox(props = {}) {
   return render(
     <ReplyBox
-      ticket={ticket()}
+      conversation={conversation()}
       replyRecipients={{ to: ['helen@member.ie'], mode: 'reply', over_cap: false, empty: false }}
       onSend={vi.fn()}
       onRemoveRecipient={vi.fn()}
@@ -110,7 +110,7 @@ describe('ReplyBox — the slim pill', () => {
   })
 
   it('🔴 a saved draft auto-expands the pill — without stealing focus', async () => {
-    writeReplyDraft(S('ticket-1'), { text: 'Half-written already', mode: 'reply' })
+    writeReplyDraft(S('conversation-1'), { text: 'Half-written already', mode: 'reply' })
     renderBox({ startCollapsed: true })
     await waitFor(() => expect(composer()).toBeTruthy())
     expect(composer().value).toBe('Half-written already')
@@ -131,15 +131,15 @@ describe('ReplyBox — the slim pill', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Reply ↵' }))
     fireEvent.change(composer(), { target: { value: 'Morning Helen' } })
     await waitFor(() => {
-      expect(readReplyDraft(S('ticket-1'))).toEqual({ text: 'Morning Helen', mode: 'reply' })
+      expect(readReplyDraft(S('conversation-1'))).toEqual({ text: 'Morning Helen', mode: 'reply' })
     })
   })
 
   it('falls back to the address, then to a bare Reply…, when there is no name', () => {
-    renderBox({ startCollapsed: true, ticket: ticket({ requester_name: null }) })
+    renderBox({ startCollapsed: true, conversation: conversation({ requester_name: null }) })
     expect(screen.getByRole('button', { name: 'Reply to helen@member.ie…' })).toBeTruthy()
     cleanup()
-    renderBox({ startCollapsed: true, ticket: ticket({ requester_name: null, requester_email: null }) })
+    renderBox({ startCollapsed: true, conversation: conversation({ requester_name: null, requester_email: null }) })
     expect(screen.getByRole('button', { name: 'Reply…' })).toBeTruthy()
   })
 })

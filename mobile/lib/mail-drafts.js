@@ -8,18 +8,18 @@
 //   1. THE REPLY-DRAFT STORE — the mobile mirror of the web store in
 //      src/components/mail/mail-display.js, over AsyncStorage instead of
 //      localStorage. The SEMANTICS are the contract and must not drift:
-//      keyed `<prefix><userId>.<mailboxId|'none'>.<ticketId>`, fail CLOSED
+//      keyed `<prefix><userId>.<mailboxId|'none'>.<conversationId>`, fail CLOSED
 //      with no user id (an unscoped draft is a draft another signed-in user
 //      could hydrate — losing persistence in a broken-session edge case is
 //      the cheaper failure), 14-day TTL, 30-entry eviction pruned strictly
 //      inside this store's own prefix, empty text = the clear path. Only
 //      { text, mode } are ever persisted — recipients and files are derived
-//      per ticket from the thread itself, and persisting them would recreate
-//      the cross-ticket leak the web store's header comment documents
+//      per conversation from the thread itself, and persisting them would recreate
+//      the cross-conversation leak the web store's header comment documents
 //      (TICKET-COMPOSER-LEAK.1).
 //   2. THE HYDRATION DECISION (resolveDraftHydration) — the clobber trap.
 //      Hydration is async on mobile by construction (AsyncStorage + waiting
-//      for the ticket row to learn mailbox_id), and web's first cut of the
+//      for the conversation row to learn mailbox_id), and web's first cut of the
 //      same shape called setText('') when hydration landed and ERASED words
 //      an operator had started typing. Live typing outranks the stored draft,
 //      always; the rule is a pure function so the screen cannot re-derive it
@@ -35,7 +35,7 @@
 //      failed send), the 10-file cap, and composerSendState — the ONE
 //      answer to "is Send live", so the button and the submit guard cannot
 //      disagree. 🔴 ONE DELIBERATE DIVERGENCE FROM WEB (round-2 polish): a
-//      failed/oversize chip BLOCKS send here, where web's TicketReplyBox only
+//      failed/oversize chip BLOCKS send here, where web's ConversationReplyBox only
 //      shows a red caption and lets the reply leave without the file whose
 //      chip is still on screen. Mobile aligns with mail-compose's posture
 //      instead — see composerSendState's comment.
@@ -58,18 +58,18 @@ export const REPLY_DRAFT_PREFIX = 'un1t.email.reply-draft.'
 export const REPLY_DRAFT_MODES = ['reply', 'note']
 
 // The store's own backstop, matching the composer's maxLength — a caller
-// that skips the input cannot grow one ticket's entry without bound.
+// that skips the input cannot grow one conversation's entry without bound.
 export const REPLY_DRAFT_MAX_LENGTH = 10000
 
 // Eviction bounds, not product limits (web store's numbers, verbatim): long
 // enough to survive a weekend, small enough that an abandoned draft never
-// outlives its ticket. Writing re-stamps savedAt, so an active draft ages
+// outlives its conversation. Writing re-stamps savedAt, so an active draft ages
 // from its last keystroke.
 export const REPLY_DRAFT_TTL_MS = 14 * 24 * 60 * 60 * 1000 // 14 days
 export const REPLY_DRAFT_MAX_ENTRIES = 30
 
 /**
- * `<prefix><userId>.<mailboxId|'none'>.<ticketId>`, or null.
+ * `<prefix><userId>.<mailboxId|'none'>.<conversationId>`, or null.
  *
  * 🔴 FAIL CLOSED: no userId → NO key → no persistence at all. All three
  * segments are uuids or 'none', so the '.' separator can never be ambiguous.
@@ -77,9 +77,9 @@ export const REPLY_DRAFT_MAX_ENTRIES = 30
  * tests pin the exact shape — the key IS the cross-user boundary.
  */
 export function replyDraftKey(scope) {
-  const { userId, mailboxId, ticketId } = scope || {}
-  if (!userId || !ticketId) return null
-  return `${REPLY_DRAFT_PREFIX}${userId}.${mailboxId || 'none'}.${ticketId}`
+  const { userId, mailboxId, conversationId } = scope || {}
+  if (!userId || !conversationId) return null
+  return `${REPLY_DRAFT_PREFIX}${userId}.${mailboxId || 'none'}.${conversationId}`
 }
 
 /** Every key this store owns. Its OWN prefix only — the prune below iterates
@@ -165,7 +165,7 @@ export async function readReplyDraft(scope, now = Date.now()) {
  * screen's "Draft saved" caption reads this, so it is stated, not hoped.
  *
  * 🔴 EMPTY TEXT IS THE CLEAR PATH, not a one-character draft: a composer the
- * operator emptied has nothing worth restoring, and a blank entry per ticket
+ * operator emptied has nothing worth restoring, and a blank entry per conversation
  * ever typed into is exactly the unbounded growth the eviction exists to
  * avoid.
  */
@@ -224,10 +224,10 @@ export async function clearAllReplyDrafts() {
  * What to do when the async draft read finally lands.
  *
  * 🔴 LIVE TYPING OUTRANKS THE STORED DRAFT. On mobile hydration waits on
- * AsyncStorage AND on the ticket row (the mailbox key segment rides on it),
+ * AsyncStorage AND on the conversation row (the mailbox key segment rides on it),
  * so an operator can be mid-sentence before the read resolves. Web's first
  * cut of exactly this shape set the composer to the stored draft regardless
- * and erased their words (TicketReplyBox.jsx's hydration comment); the rule
+ * and erased their words (ConversationReplyBox.jsx's hydration comment); the rule
  * is a pure function here so the screen applies it rather than re-deriving
  * it.
  *
@@ -293,7 +293,7 @@ function collapsedWhen(iso, now) {
  * The one line a collapsed message shows: who, what happened, when.
  *
  * THE NOTE TONE SURVIVES COLLAPSE. is_internal_note is tested FIRST, same as
- * ticketMessageKind — a staff-only note folded into a row that reads like
+ * conversationMessageKind — a staff-only note folded into a row that reads like
  * correspondence is the one mistake this surface must never make, expanded
  * or not (the screen tints tone 'note' rows amber).
  *
@@ -427,7 +427,7 @@ export function composerSendState({ text, isNote = false, files = [], audienceDi
   if (hasPendingUploads(files)) return { canSend: false, reason: 'uploading' }
   // 🔴 A failed (or oversize) chip on screen BLOCKS the send — a DELIBERATE
   // DIVERGENCE FROM WEB (round-2 polish, aligning with mail-compose's
-  // hasBlockedAttachments posture instead): web's TicketReplyBox lets a reply
+  // hasBlockedAttachments posture instead): web's ConversationReplyBox lets a reply
   // leave while a failed chip shows only a red caption, which means a reply
   // can go out WITHOUT a file whose chip is still visible on screen — the
   // email-shaped version of the silent-subset lie. Remove the chip or retry;

@@ -28,17 +28,17 @@
 //     toggle above it, the audience sentence and a "Draft saved" caption
 //     inside it, a paperclip + photo picker for OUTBOUND attachments, and an
 //     ink-square send. Note mode re-skins the whole card amber.
-//   • Drafts persist per user + account + ticket over AsyncStorage
+//   • Drafts persist per user + account + conversation over AsyncStorage
 //     (lib/mail-drafts.js — the web store's semantics: fail closed with no
 //     user id, 14-day TTL, 30-entry eviction, live-typing-wins hydration).
 //   • UNCHANGED: every safety rule this screen already carried. Note-first
-//     rendering (ticketMessageKind), plain text only, delivery panels,
+//     rendering (conversationMessageKind), plain text only, delivery panels,
 //     recipient lines, the attachment preview/download split, the settle/
 //     steady poll, and the GET-stays-a-GET read marking.
 //
 // THE ONE THING THIS FILE MUST NEVER GET WRONG
 // An internal note is stored with direction='outbound' — same as a real sent
-// reply. ticketMessageKind() (lib/mail-conversations.js) tests is_internal_note
+// reply. conversationMessageKind() (lib/mail-conversations.js) tests is_internal_note
 // FIRST and this file only paints what it decides — collapsed rows included
 // (flatMessageMeta applies the same ordering, so a folded note keeps its
 // amber and its lock). Nobody must ever be able to think a note went to the member, or
@@ -54,7 +54,7 @@
 //
 // OUTBOUND ATTACHMENTS (MOBILE-MAIL-THREAD.1) ride the repo's standard
 // three-step direct-to-storage flow via lib/email-api.js's helpers: sign
-// (authorised against THIS ticket), upload the bytes device→bucket, then the
+// (authorised against THIS conversation), upload the bytes device→bucket, then the
 // reply body carries the returned draft refs. Every size/count decision is
 // lib maths (admitPickedFile / attachmentBudget / composerSendState), so an
 // oversize pick is a refusal sentence BEFORE any upload — a red chip, never a
@@ -73,7 +73,7 @@
 // thread IS a reply-all, identically to web. The ADD side (chip input,
 // Cc/Bcc) stays web-only — a confidentiality control that wants real device
 // QA. All three places a name appears (header line, placeholder, audience
-// sentence) come from ONE derivation (ticketReplyAudience in
+// sentence) come from ONE derivation (conversationReplyAudience in
 // lib/mail-conversations.js), so this screen cannot say three things about who a
 // reply reaches.
 
@@ -98,11 +98,11 @@ import {
 } from '../../../lib/email-api'
 import { resolveSignatureHint } from '../../../lib/signature-hint'
 import {
-  ticketMessageKind, mailStatusChip, mailboxLabel, ticketDeliveryMeta,
-  ticketMessageRecipients, sentToLabel,
-  formatAttachmentSize, ticketAttachmentSkippedLabel, ticketAttachmentIcon,
-  threadRefreshMs, ticketReplyAudienceMeta, ticketReplyPlaceholder,
-  ticketThreadAudienceLines, ticketSendOriginMeta,
+  conversationMessageKind, mailStatusChip, mailboxLabel, conversationDeliveryMeta,
+  conversationMessageRecipients, sentToLabel,
+  formatAttachmentSize, conversationAttachmentSkippedLabel, conversationAttachmentIcon,
+  threadRefreshMs, conversationReplyAudienceMeta, conversationReplyPlaceholder,
+  conversationThreadAudienceLines, conversationSendOriginMeta,
   flatThreadPlan, flatMessageMeta, mergedInDividers,
 } from '../../../lib/mail-conversations'
 // MAIL-ARCH.3 — the thread route stamps `archived` now; read the stamp, never
@@ -152,7 +152,7 @@ const DRAFT_WRITE_DEBOUNCE_MS = 600
  * first time. Two questions, two props.
  */
 function RecipientLines({ msg, toShownInHeader = false }) {
-  const lines = ticketMessageRecipients(msg, { toShownInHeader })
+  const lines = conversationMessageRecipients(msg, { toShownInHeader })
   if (lines.length === 0) return null
   return (
     <View className="mb-1">
@@ -238,7 +238,7 @@ function Attachments({ conversationId, locationId, attachments, onViewImage }) {
             className={`flex-row items-center rounded-lg border border-un1t-border bg-un1t-bg px-2 py-1.5 mt-1 ${busy === att.id ? 'opacity-60' : ''}`}
           >
             <Ionicons
-              name={ticketAttachmentIcon(att.mime_type, att.filename)}
+              name={conversationAttachmentIcon(att.mime_type, att.filename)}
               size={14}
               color="#64748B"
               style={{ marginRight: 6 }}
@@ -274,7 +274,7 @@ function Attachments({ conversationId, locationId, attachments, onViewImage }) {
               {/* Kept in words, on the chip. Staff ACT on this text — it is the
                   difference between "ask them to resend" and "we lost it". */}
               <Text className={"text-[11px] text-amber-700"}>
-                {ticketAttachmentSkippedLabel(att.skipped_reason)} · {formatAttachmentSize(att.size_bytes)}
+                {conversationAttachmentSkippedLabel(att.skipped_reason)} · {formatAttachmentSize(att.size_bytes)}
               </Text>
             </View>
           </View>
@@ -407,7 +407,7 @@ function ForwardIcon({ onForward, onAccent = false, label }) {
  * header folds the message back to its one-line row.
  */
 function FlatMessage({ msg, conversationId, locationId, fallbackName, onViewImage, onForward, onCollapse }) {
-  const kind = ticketMessageKind(msg)
+  const kind = conversationMessageKind(msg)
   const meta = flatMessageMeta(msg, { fallbackName })
   const stamp = formatTime(msg.sent_at || msg.created_at)
   const body = msg.text_body || '(no text content)'
@@ -444,8 +444,8 @@ function FlatMessage({ msg, conversationId, locationId, fallbackName, onViewImag
   // and every message written before mig 498. Nothing is rendered for it, so
   // the row makes no claim it cannot back up. MAILBOX-COEXIST.1 — origin is
   // null for everything composed in the CRM.
-  const delivery = kind === 'outbound' ? ticketDeliveryMeta(msg) : null
-  const origin = kind === 'outbound' ? ticketSendOriginMeta(msg) : null
+  const delivery = kind === 'outbound' ? conversationDeliveryMeta(msg) : null
+  const origin = kind === 'outbound' ? conversationSendOriginMeta(msg) : null
 
   return (
     <View className="border-b border-un1t-border bg-un1t-bg px-4 py-3">
@@ -552,12 +552,12 @@ function FlatMessage({ msg, conversationId, locationId, fallbackName, onViewImag
   )
 }
 
-export default function EmailTicket() {
+export default function EmailConversation() {
   const { conversationId } = useLocalSearchParams()
   const { profile, activeLocation } = useAuth()
   const headerHeight = useHeaderHeight()
   const insets = useSafeAreaInsets()
-  const [ticket, setTicket] = useState(null)
+  const [conversation, setConversation] = useState(null)
   const [messages, setMessages] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -607,7 +607,7 @@ export default function EmailTicket() {
   // MAIL-REFINE.2 — provenance for the Merged-in dividers.
   const [mergedSources, setMergedSources] = useState([])
   // EMAIL-PARTICIPANTS.9 — { to, mode, over_cap, empty } | null, straight off
-  // getConversation(). Kept alongside `ticket` rather than folded into it: it comes
+  // getConversation(). Kept alongside `conversation` rather than folded into it: it comes
   // back from the SAME response but is answered as its own top-level field.
   const [replyRecipients, setReplyRecipients] = useState(null)
   // EMAIL-ATTACH-PREVIEW.1 — the one image being looked at, if any.
@@ -634,12 +634,12 @@ export default function EmailTicket() {
   useEffect(() => { filesRef.current = files })
 
   // The draft's identity: per USER (fail closed without one — lib rule), per
-  // EMAIL ACCOUNT (the ticket's mailbox; orphans use the lib's 'none'
-  // sentinel), per ticket. mailbox_id only exists once the ticket has loaded,
+  // EMAIL ACCOUNT (the conversation's mailbox; orphans use the lib's 'none'
+  // sentinel), per conversation. mailbox_id only exists once the conversation has loaded,
   // which is why hydration below waits for it.
   const draftScope = useMemo(
-    () => ({ userId: profile?.id, mailboxId: ticket?.mailbox_id, conversationId }),
-    [profile?.id, ticket?.mailbox_id, conversationId]
+    () => ({ userId: profile?.id, mailboxId: conversation?.mailbox_id, conversationId }),
+    [profile?.id, conversation?.mailbox_id, conversationId]
   )
 
   // `quiet` is a background re-read of a thread already on screen (the poll
@@ -649,11 +649,11 @@ export default function EmailTicket() {
   const refresh = useCallback(async ({ quiet = false } = {}) => {
     const res = await getConversation(conversationId, activeLocation?.id)
     if (!res.success) {
-      if (!quiet) setError(res.error || 'Failed to load ticket')
+      if (!quiet) setError(res.error || 'Failed to load conversation')
       return
     }
     setError(null)
-    setTicket(res.ticket)
+    setConversation(res.ticket)
     // Audit A2 — a poll appending a new message re-points the newest-expanded
     // default at the arrival, silently folding the message being READ. Seed an
     // explicit keep-open override for the previous newest before the list
@@ -678,7 +678,7 @@ export default function EmailTicket() {
 
     // Read state is its own call. Fire-and-forget and once per screen: it is
     // idempotent, and a failure here must never look like the thread failed
-    // to open. Unlike the ticket-era /read this also mirrors \Seen into a
+    // to open. Unlike the conversation-era /read this also mirrors \Seen into a
     // connected real mailbox, so opening it here marks it read at the desk
     // and in the operator's own mail app too.
     if (!readMarked.current) {
@@ -708,9 +708,9 @@ export default function EmailTicket() {
 
   useEffect(() => { loadRelated() }, [loadRelated])
 
-  // DRAFT HYDRATION — once, after BOTH the viewer and the ticket are known
-  // (the key needs profile.id and the ticket's mailbox_id; reading under a
-  // wrong 'none' segment before the ticket lands would look up — and later
+  // DRAFT HYDRATION — once, after BOTH the viewer and the conversation are known
+  // (the key needs profile.id and the conversation's mailbox_id; reading under a
+  // wrong 'none' segment before the conversation lands would look up — and later
   // write — a different key than the one this conversation saves under).
   //
   // 🔴 LIVE TYPING OUTRANKS THE STORED DRAFT (resolveDraftHydration, tested in
@@ -720,9 +720,9 @@ export default function EmailTicket() {
   // is only restored into a composer that is still blank.
   useEffect(() => {
     if (hydrationStarted.current) return
-    if (!profile?.id || !ticket) return
+    if (!profile?.id || !conversation) return
     hydrationStarted.current = true
-    const scope = { userId: profile.id, mailboxId: ticket.mailbox_id, conversationId }
+    const scope = { userId: profile.id, mailboxId: conversation.mailbox_id, conversationId }
     readReplyDraft(scope).then((draft) => {
       const decision = resolveDraftHydration({ liveText: liveRef.current.text, draft })
       if (decision.action === 'hydrate') {
@@ -738,7 +738,7 @@ export default function EmailTicket() {
       // Only now may the write-through below run — see draftReady's comment.
       setDraftReady(true)
     })
-  }, [profile?.id, ticket, conversationId])
+  }, [profile?.id, conversation, conversationId])
 
   // DRAFT WRITE-THROUGH — debounced, gated on hydration having settled. Only
   // { text, mode } are ever persisted (never recipients or files — the web
@@ -802,16 +802,16 @@ export default function EmailTicket() {
     return () => { cancelled = true }
   }, [])
 
-  const canReply = !!ticket?.requester_email
+  const canReply = !!conversation?.requester_email
   // EMAIL-PARTICIPANTS.9 — the audience sentence and whether a reply is even
   // possible. `audience.disabled` covers "no requester", "everyone removed"
   // and over_cap; composerSendState folds it into the one send gate.
-  const audience = ticketReplyAudienceMeta(ticket, replyRecipients)
+  const audience = conversationReplyAudienceMeta(conversation, replyRecipients)
   // EMAIL-PARTICIPANTS.12 — one derivation for every string that names the
   // audience (lib/mail-conversations.js), so this screen cannot say three things
   // about who a reply reaches.
-  const threadLines = ticketThreadAudienceLines(ticket, replyRecipients)
-  const replyPlaceholder = ticketReplyPlaceholder(ticket, replyRecipients)
+  const threadLines = conversationThreadAudienceLines(conversation, replyRecipients)
+  const replyPlaceholder = conversationReplyPlaceholder(conversation, replyRecipients)
 
   // THE send gate — one lib answer read by the button AND the submit guard,
   // so they cannot disagree (lib/mail-drafts.js).
@@ -821,11 +821,11 @@ export default function EmailTicket() {
 
   // MOBILE-SIGHINT.1 — what THIS reply will be signed with. The sending
   // context is the TICKET's location (the reply route resolves the studio
-  // off the ticket, not off the phone's active location — a coach reading a
+  // off the conversation, not off the phone's active location — a coach reading a
   // Hatch thread while switched to Stillorgan still sends as Hatch), so that
   // is what the hint resolves by. All the branching lives in the lib; null
   // means the hint hides.
-  const signatureHint = resolveSignatureHint(signatureContexts, ticket?.location_id || null)
+  const signatureHint = resolveSignatureHint(signatureContexts, conversation?.location_id || null)
   const budget = attachmentBudget(files)
 
   function patchFile(key, patch) {
@@ -833,15 +833,15 @@ export default function EmailTicket() {
   }
 
   // Sign → upload → hold the draft ref. Both steps are lib/email-api.js's
-  // helpers; a reply's file authorises against THIS ticket (the sign route's
-  // exactly-one-of rule — ticketId, never mailboxId, for replies).
+  // helpers; a reply's file authorises against THIS conversation (the sign route's
+  // exactly-one-of rule — conversationId, never mailboxId, for replies).
   async function uploadOne(entry) {
     try {
       const sign = await signOutboundAttachment({
         filename: entry.filename,
         size: entry.size,
         mime: entry.mime,
-        ticketId: conversationId,
+        conversationId: conversationId,
         locationId: activeLocation?.id,
       })
       if (!sign.success) {
@@ -955,7 +955,7 @@ export default function EmailTicket() {
   }
 
   // RETIRE-TICKETS.1 — assignment and the four-state lifecycle left with the
-  // ticket queue. The two verbs of this surface, now riding the header:
+  // conversation queue. The two verbs of this surface, now riding the header:
 
   // Archive / bring back. The response's conversation row is stamped (MAIL-
   // ARCH.2) but not enriched — no mailbox, no contact — so merge, never replace
@@ -968,7 +968,7 @@ export default function EmailTicket() {
   // thread-screen twin of the swipe-reopen bug #1618 killed on the list.
   async function toggleArchive() {
     if (savingAction) return
-    const next = !isArchived(ticket)
+    const next = !isArchived(conversation)
     setSavingAction(true)
     const res = await archiveConversation(conversationId, next, activeLocation?.id)
     setSavingAction(false)
@@ -977,14 +977,14 @@ export default function EmailTicket() {
       return
     }
     if (res.data?.conversation) {
-      setTicket(prev => (prev ? { ...prev, ...res.data.conversation } : prev))
+      setConversation(prev => (prev ? { ...prev, ...res.data.conversation } : prev))
     } else {
       refresh({ quiet: true })
     }
     // The mailbox half (moving the real message in a connected account) can
     // refuse independently; the DB half above stands either way.
     // Audit F1 — the route answers `writeback_notice` (a string), and this
-    // read had said `writeback.notice` since the ticket era: the "the mailbox
+    // read had said `writeback.notice` since the conversation era: the "the mailbox
     // move failed" valve could never fire, anywhere, while nothing ever
     // reconciles archive state after the fact.
     if (res.data?.writeback_notice) {
@@ -1072,7 +1072,7 @@ export default function EmailTicket() {
   // affordances land here: the header ⋮ (with the newest forwardable message)
   // and the per-message icon (with its own).
   function pushForward(messageId) {
-    router.push({ pathname: '/email/forward', params: { ticketId: conversationId, messageId } })
+    router.push({ pathname: '/email/forward', params: { conversationId: conversationId, messageId } })
   }
 
   // The ⋮ overflow — one action, acting on the NEWEST forwardable message
@@ -1096,9 +1096,9 @@ export default function EmailTicket() {
   // 'Email' rather than the display helper's "Unknown sender" fallback while
   // the thread is still loading — a header that briefly accuses us of not
   // knowing who wrote in reads as a bug.
-  const name = ticket ? emailDisplayName(ticket) : 'Email'
-  const chip = mailStatusChip(ticket)
-  const archived = isArchived(ticket)
+  const name = conversation ? emailDisplayName(conversation) : 'Email'
+  const chip = mailStatusChip(conversation)
+  const archived = isArchived(conversation)
 
   // The folded/unfolded plan (MAIL-REFINE.1 §02, flatThreadPlan in
   // lib/mail-conversations.js): ONLY the newest opens by default; taps override
@@ -1106,7 +1106,7 @@ export default function EmailTicket() {
   const plan = flatThreadPlan(messages, foldOverrides)
   const mergedDividers = mergedInDividers(messages, mergedSources)
   // Audit A1 — merged-away = read-only everywhere, not just banner'd.
-  const tombstone = !!ticket?.merged_into_id
+  const tombstone = !!conversation?.merged_into_id
   function setFolded(id, expanded) {
     // Growing content would yank the viewport to the composer (audit F6) —
     // and so would shrinking it back. One-shot suppression either way.
@@ -1147,7 +1147,7 @@ export default function EmailTicket() {
             <View className="flex-row items-center">
               <Pressable
                 onPress={markUnread}
-                disabled={savingAction || !ticket || tombstone}
+                disabled={savingAction || !conversation || tombstone}
                 hitSlop={6}
                 accessibilityLabel="Mark as unread"
                 className={`px-2 py-1 ${savingAction ? 'opacity-50' : ''}`}
@@ -1156,7 +1156,7 @@ export default function EmailTicket() {
               </Pressable>
               <Pressable
                 onPress={toggleArchive}
-                disabled={savingAction || !ticket || tombstone}
+                disabled={savingAction || !conversation || tombstone}
                 hitSlop={6}
                 accessibilityLabel={archived ? 'Bring back to inbox' : 'Archive'}
                 className={`px-2 py-1 ${savingAction ? 'opacity-50' : ''}`}
@@ -1165,7 +1165,7 @@ export default function EmailTicket() {
               </Pressable>
               <Pressable
                 onPress={openOverflow}
-                disabled={savingAction || !ticket || tombstone}
+                disabled={savingAction || !conversation || tombstone}
                 hitSlop={6}
                 accessibilityLabel="More actions"
                 className={`pl-2 py-1 ${savingAction ? 'opacity-50' : ''}`}
@@ -1194,9 +1194,9 @@ export default function EmailTicket() {
               the server, with the requester demoted to "Opened by" only when
               the two have actually diverged. */}
           <View className="border-b border-un1t-border bg-un1t-surface px-4 pt-2.5 pb-3">
-            {ticket?.subject ? (
+            {conversation?.subject ? (
               <Text className="text-[17px] font-extrabold text-un1t-text leading-snug" numberOfLines={2}>
-                {ticket.subject}
+                {conversation.subject}
               </Text>
             ) : (
               <Text className="text-[17px] font-extrabold text-un1t-subtle leading-snug">
@@ -1214,7 +1214,7 @@ export default function EmailTicket() {
                   than hiding it — the no-mailbox case is said in words. */}
               <View className="px-1.5 py-0.5 rounded bg-slate-500/10">
                 <Text className="text-[10px] font-semibold text-slate-700" numberOfLines={1}>
-                  {ticket?.mailbox ? `@ ${mailboxLabel(ticket.mailbox)}` : 'No mailbox on this ticket'}
+                  {conversation?.mailbox ? `@ ${mailboxLabel(conversation.mailbox)}` : 'No mailbox on this conversation'}
                 </Text>
               </View>
             </View>
@@ -1230,9 +1230,9 @@ export default function EmailTicket() {
 
           {/* §03 — a MERGED-AWAY thread is a tombstone: its messages live on
               the target now. Keep it reachable — one pointer, no rebuild. */}
-          {ticket?.merged_into_id ? (
+          {conversation?.merged_into_id ? (
             <Pressable
-              onPress={() => router.push(`/email/${ticket.merged_into_id}`)}
+              onPress={() => router.push(`/email/${conversation.merged_into_id}`)}
               accessibilityRole="button"
               accessibilityLabel="Open the conversation this one was merged into"
               className="flex-row items-center border-b border-un1t-border bg-un1t-surface px-4 py-2.5 active:opacity-70"
@@ -1248,7 +1248,7 @@ export default function EmailTicket() {
           {/* §03 A — the nudge: the same requester has other OPEN
               conversations here. Shown off the related endpoint's verdict
               only (relatedNudge — an unknown count shows nothing). */}
-          {nudge && !ticket?.merged_into_id ? (
+          {nudge && !conversation?.merged_into_id ? (
             <View className="flex-row items-center border-b border-blue-500/20 bg-blue-500/10 px-4 py-2">
               <Ionicons name="link-outline" size={13} color="#1D4ED8" style={{ marginRight: 6 }} />
               <Text className="text-[12px] text-blue-700 flex-1" numberOfLines={2}>
@@ -1288,7 +1288,7 @@ export default function EmailTicket() {
             {attachmentsUnavailable && (
               <View className="mx-4 mt-3 mb-1 rounded-xl border border-amber-500/60 bg-amber-500/10 px-3.5 py-2.5">
                 <Text className="text-[11px] text-amber-700">
-                  Attachments could not be loaded for this ticket. Messages sent with files may
+                  Attachments could not be loaded for this conversation. Messages sent with files may
                   look as though they had none.
                 </Text>
               </View>
@@ -1315,7 +1315,7 @@ export default function EmailTicket() {
                 {collapsed ? (
                   <FlatCollapsedRow
                     msg={m}
-                    fallbackName={ticket?.requester_name || ''}
+                    fallbackName={conversation?.requester_name || ''}
                     onExpand={() => setFolded(m.id, true)}
                   />
                 ) : (
@@ -1323,7 +1323,7 @@ export default function EmailTicket() {
                     msg={m}
                     conversationId={conversationId}
                     locationId={activeLocation?.id}
-                    fallbackName={ticket?.requester_name || ''}
+                    fallbackName={conversation?.requester_name || ''}
                     onViewImage={setViewingImage}
                     onCollapse={() => setFolded(m.id, false)}
                     // The precise affordance — expanded non-note messages
@@ -1342,7 +1342,7 @@ export default function EmailTicket() {
               and the sentence naming exactly who receives what.
               Audit A1 — a MERGED-AWAY thread is read-only: its messages live
               on the target now, so offering a composer here invites typing a
-              reply the server will 409 (ticketMergedAway). The pointer banner
+              reply the server will 409 (conversationMergedAway). The pointer banner
               above is the way forward. */}
           {tombstone ? null : (
           <View
@@ -1392,7 +1392,7 @@ export default function EmailTicket() {
                   numberOfLines={2}
                 >
                   {isNote
-                    ? `Staff only — written to the ticket and NOT sent to ${ticket?.requester_email || 'the member'}.`
+                    ? `Staff only — written to the conversation and NOT sent to ${conversation?.requester_email || 'the member'}.`
                     : audience.text}
                 </Text>
                 {draftSaved && text.trim() ? (
@@ -1432,7 +1432,7 @@ export default function EmailTicket() {
                         <ActivityIndicator size="small" style={{ marginRight: 6, transform: [{ scale: 0.7 }] }} />
                       ) : (
                         <Ionicons
-                          name={f.status === 'failed' ? 'alert-circle-outline' : ticketAttachmentIcon(f.mime, f.filename)}
+                          name={f.status === 'failed' ? 'alert-circle-outline' : conversationAttachmentIcon(f.mime, f.filename)}
                           size={14}
                           color={f.status === 'failed' ? '#B91C1C' : '#64748B'}
                           style={{ marginRight: 6 }}
@@ -1550,7 +1550,7 @@ export default function EmailTicket() {
             {/* MOBILE-SIGHINT.1 — what the server is about to append, shown
                 BEFORE the send rather than discovered in the sent thread.
                 Reply mode only: an internal note is sent to nobody and the
-                route appends no signature to one (web's TicketReplyBox gates
+                route appends no signature to one (web's ConversationReplyBox gates
                 the same way), so a sign-off here would be a third claim
                 contradicting the two the note card already makes.
                 No "Edit signature" affordance, unlike web: the editor lives
@@ -1601,7 +1601,7 @@ export default function EmailTicket() {
           >
             <Text className="text-[15px] font-bold text-un1t-text">Merge conversations</Text>
             <Text className="text-[12px] text-un1t-subtle mt-1 mb-2">
-              Their messages move into “{ticket?.subject || 'this conversation'}”. Each merged
+              Their messages move into “{conversation?.subject || 'this conversation'}”. Each merged
               conversation keeps a pointer here — nothing is deleted.
             </Text>
             <ScrollView style={{ maxHeight: 320 }}>

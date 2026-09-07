@@ -144,7 +144,7 @@ function alternativeMessage(uid, { messageId = `m${uid}@x.com` } = {}) {
 /**
  * What a reply typed in Gmail looks like once it lands in the Sent folder:
  * FROM the connected mailbox, TO the member, carrying the threading headers
- * that let Phase 8A find the ticket.
+ * that let Phase 8A find the conversation.
  */
 function sentMessage(uid, { messageId = `s${uid}@mail.gmail.com`, inReplyTo = '<m11@x.com>' } = {}) {
   return {
@@ -169,7 +169,7 @@ function sentMessage(uid, { messageId = `s${uid}@mail.gmail.com`, inReplyTo = '<
 /**
  * A stand-in for ImapFlow. `timeline` is shared with the fake fetch so the
  * ORDER of "download the body" against "POST the payload" can be asserted —
- * that ordering is the difference between a real ticket and a blank one.
+ * that ordering is the difference between a real conversation and a blank one.
  */
 function fakeImap({
   uidValidity = 12345n,
@@ -472,7 +472,7 @@ beforeEach(() => {
   // not have to state one. Set after clearAllMocks, which clears calls only —
   // an implementation set once at module scope would survive, but stating it
   // here is what makes each test's override obviously an override.
-  fileClientSentReply.mockResolvedValue({ ok: true, outcome: 'filed', ticketId: 'tkt-1', messageId: 'msg-1' })
+  fileClientSentReply.mockResolvedValue({ ok: true, outcome: 'filed', conversationId: 'tkt-1', messageId: 'msg-1' })
 })
 
 afterEach(() => {
@@ -484,7 +484,7 @@ afterEach(() => {
 describe('cold start', () => {
   it('🔴 anchors the watermark and ingests NOTHING', async () => {
     // §3.5. The alternative — treating an unanchored mailbox as "everything is
-    // new" — files years of a customer's correspondence as fresh tickets, with
+    // new" — files years of a customer's correspondence as fresh conversations, with
     // push notifications. There is no backfill, ever.
     const timeline = []
     const { fn } = stubFetch({ timeline })
@@ -801,14 +801,14 @@ describe('bodies', () => {
     expect(order.filter(o => o === 'download' || o === 'POST')).toEqual(['download', 'download', 'POST'])
   })
 
-  it('🔴 a body that will not download is NOT filed as a blank ticket — the watermark is held', async () => {
+  it('🔴 a body that will not download is NOT filed as a blank conversation — the watermark is held', async () => {
     // IMAP-BLANKBODY.1, and it is silent PERMANENT data loss, not a cosmetic
     // gap. downloadBodyPart() swallows every error and returns null, so
     // nothing throws: the mapper emits TextBody '', the route files it,
     // answers 200 and the cursor advances past it. It can never be repaired —
     // the synthetic MessageID is deterministic, so a re-POST comes back
     // `200 deduped` and the body is never back-filled. One dropped socket
-    // mid-backlog files a tick's worth of member emails as empty tickets.
+    // mid-backlog files a tick's worth of member emails as empty conversations.
     //
     // Holding the tick costs five minutes and loses nothing: the watermark
     // does not move, so the next tick downloads the same message again.
@@ -838,9 +838,9 @@ describe('bodies', () => {
     expect(lastCursor(db).last_ok_at).toBeUndefined()
   })
 
-  it('files a message whose text downloaded but whose html did not — one half is a real ticket', async () => {
+  it('files a message whose text downloaded but whose html did not — one half is a real conversation', async () => {
     // The rule is "every body part we ATTEMPTED failed", not "any failed". A
-    // ticket with its plain text is one an operator can answer, and the route
+    // conversation with its plain text is one an operator can answer, and the route
     // derives nothing from HTML it was not given; holding the mailbox for it
     // would trade a complete outcome for a delayed one at no gain.
     const { calls } = stubFetch({})
@@ -872,7 +872,7 @@ describe('bodies', () => {
     // right; holding on a permanent one is the denial-of-inbox this file
     // spends its length avoiding, because no message behind it would ever be
     // ingested again. Past MAX_STALL_TICKS the message files with an empty
-    // body and a loud error — a poor ticket beats no mail, ever.
+    // body and a loud error — a poor conversation beats no mail, ever.
     const { calls } = stubFetch({})
     const { deps } = fakeImap({
       uidNext: 12,
@@ -899,7 +899,7 @@ describe('bodies', () => {
 
   it('a message with NO body part at all is logged rather than filed in silence', async () => {
     // An attachments-only email is legitimate, so this is not a failure — but
-    // the ticket WILL look empty to whoever opens it, and "no log line at all"
+    // the conversation WILL look empty to whoever opens it, and "no log line at all"
     // is how that becomes an unexplainable support question.
     const { calls } = stubFetch({})
     const attachmentsOnly = plainMessage(11)
@@ -933,7 +933,7 @@ describe('bodies', () => {
 
   it('selectBodyParts never reads an attachment or a forwarded message as the body', () => {
     // A .txt attachment is text/plain. So is the body of a forwarded .eml.
-    // Reading either as THE body puts the wrong words on the ticket.
+    // Reading either as THE body puts the wrong words on the conversation.
     const structure = {
       type: 'multipart/mixed',
       childNodes: [
@@ -1384,7 +1384,7 @@ describe('a message files into the mailbox that RECEIVED it', () => {
 
   it('🔴 two connected mailboxes on one thread each file THEIR OWN copy', async () => {
     // The double-filing half. `To: hatchstreet@, Cc: stillorgan@` used to make
-    // the Stillorgan poll resolve HATCH STREET, so Hatch got two tickets and
+    // the Stillorgan poll resolve HATCH STREET, so Hatch got two conversations and
     // Stillorgan got none — and mailbox visibility is grant-gated, so a coach
     // granted only Stillorgan never saw their own correspondence.
     const { calls } = stubFetch({ status: 200 })
@@ -1423,7 +1423,7 @@ describe('a message files into the mailbox that RECEIVED it', () => {
     expect(byRecipient[MAILBOX.address].CcFull).toEqual([])
     expect(byRecipient[OTHER_MAILBOX.address].ToFull).toEqual([])
     expect(byRecipient[OTHER_MAILBOX.address].CcFull.map(r => r.Email)).toEqual([OTHER_MAILBOX.address])
-    // Two mailboxes on one email is two tickets by design — the synthetic
+    // Two mailboxes on one email is two conversations by design — the synthetic
     // MessageID folds mailboxId into the digest for exactly this.
     expect(byRecipient[MAILBOX.address].MessageID)
       .not.toBe(byRecipient[OTHER_MAILBOX.address].MessageID)
@@ -1631,7 +1631,7 @@ describe('a message that cannot be forwarded never stalls the mailbox forever', 
 
     expect(out.ingested).toBe(1)
     expect(Buffer.byteLength(JSON.stringify(calls[0].body), 'utf8')).toBeLessThan(3_500_000)
-    // Trimmed, not emptied — the ticket still carries what fits.
+    // Trimmed, not emptied — the conversation still carries what fits.
     expect(calls[0].body.TextBody.length).toBeGreaterThan(0)
     expect(logWarn).toHaveBeenCalledWith(
       'imap-poll', expect.stringContaining('forward budget'), expect.objectContaining({ uid: 11 }),
@@ -2043,7 +2043,7 @@ describe('the sent lane files a reply instead of posting it', () => {
     expect(args.mailbox).toBe(MAILBOX)
     expect(args.msg.uid).toBe(11)
     expect(args.payload.TextBody).toBe('Thanks, see you Tuesday.')
-    // Threading is what makes the reply land on the right ticket at all.
+    // Threading is what makes the reply land on the right conversation at all.
     expect(args.payload.Headers.find(h => h.Name === 'In-Reply-To').Value).toBe('<m11@x.com>')
     expect(args.payload.Headers.find(h => h.Name === 'Message-ID').Value).toBe('<s11@mail.gmail.com>')
   })
@@ -2102,15 +2102,15 @@ describe('the sent lane files a reply instead of posting it', () => {
   })
 
   it('🔴 duplicate and orphan are HANDLED — both advance the watermark', async () => {
-    // The contract's own words. A `duplicate` is a reply already on the ticket
+    // The contract's own words. A `duplicate` is a reply already on the conversation
     // (ours over SMTP, or one a previous tick filed); an `orphan` is a reply
     // on a thread we never ingested, which the writer deliberately does NOT
-    // conjure a ticket for. Re-reading either next tick produces the same
+    // conjure a conversation for. Re-reading either next tick produces the same
     // answer forever, so holding the watermark would stall the lane on a
     // message nothing can change — a denial of the whole Sent folder.
     for (const outcome of ['duplicate', 'orphan']) {
       vi.clearAllMocks()
-      fileClientSentReply.mockResolvedValue({ ok: true, outcome, ticketId: 'tkt-1' })
+      fileClientSentReply.mockResolvedValue({ ok: true, outcome, conversationId: 'tkt-1' })
       stubFetch({ status: 200 })
       const { deps, db } = sentSetup()
 
@@ -2205,7 +2205,7 @@ describe('the sent lane files a reply instead of posting it', () => {
 
   it('stages a mail-client reply’s files and REDEEMS them when it is filed', async () => {
     fileClientSentReply.mockResolvedValue({
-      ok: true, outcome: 'filed', ticketId: 'tk-1', messageId: 'msg-99',
+      ok: true, outcome: 'filed', conversationId: 'tk-1', messageId: 'msg-99',
     })
     const { db, deps } = sentWorld(11)
 
@@ -2230,7 +2230,7 @@ describe('the sent lane files a reply instead of posting it', () => {
     // only other discard (the permanent-rejection path) is never reached. If
     // the accepted path did not drop these, every re-poll of our own SMTP
     // sends would leak a fresh copy into a metered bucket for ever.
-    fileClientSentReply.mockResolvedValue({ ok: true, outcome: 'duplicate', ticketId: 'tk-1' })
+    fileClientSentReply.mockResolvedValue({ ok: true, outcome: 'duplicate', conversationId: 'tk-1' })
     const { db, deps } = sentWorld(11)
 
     const out = await pollMailbox(db, MAILBOX, { now: NOW, folder: 'sent', deps })
@@ -2251,11 +2251,11 @@ describe('the sent lane files a reply instead of posting it', () => {
   })
 
   it('keeps the reply when attachment filing throws — bookkeeping never costs the message', async () => {
-    // The reply is already on the ticket. Turning an attachment fault into a
+    // The reply is already on the conversation. Turning an attachment fault into a
     // retry would re-file the message; the operator sees the reply without its
     // files, which is the old behaviour, not a loss.
     fileClientSentReply.mockResolvedValue({
-      ok: true, outcome: 'filed', ticketId: 'tk-1', messageId: 'msg-99',
+      ok: true, outcome: 'filed', conversationId: 'tk-1', messageId: 'msg-99',
     })
     storeInboundAttachments.mockRejectedValueOnce(new Error('storage is down'))
     const { db, deps } = sentWorld(11)
@@ -2292,7 +2292,7 @@ describe('the sent lane files a reply instead of posting it', () => {
     // is what proves the writer is healthy before anything is stepped over.
     fileClientSentReply
       .mockResolvedValueOnce({ ok: false, reason: 'insert_failed' })
-      .mockResolvedValue({ ok: true, outcome: 'filed', ticketId: 'tkt-1' })
+      .mockResolvedValue({ ok: true, outcome: 'filed', conversationId: 'tkt-1' })
     stubFetch({ status: 200 })
     const { deps } = fakeImap({
       uidNext: 14,
@@ -2317,7 +2317,7 @@ describe('the sent lane files a reply instead of posting it', () => {
 
   it('cold start on the sent lane ingests NOTHING, exactly as inbox does', async () => {
     // A mailbox connected mid-conversation must not have its whole Sent folder
-    // filed as fresh outbound rows on tickets that may not exist.
+    // filed as fresh outbound rows on conversations that may not exist.
     stubFetch({ status: 200 })
     const { deps, db } = sentSetup({ ingress: {} })
 

@@ -3,10 +3,10 @@
 // EMAIL-TICKET.4 — the composer.
 //
 // TWO MODES, AND THEY MUST NEVER BLUR INTO EACH OTHER:
-//   Reply         — sends an email to the requester and moves the ticket to
+//   Reply         — sends an email to the requester and moves the conversation to
 //                   pending.
 //   Internal note — writes staff-only text onto the thread. NOTHING is sent,
-//                   the ticket does not move, the member never sees it.
+//                   the conversation does not move, the member never sees it.
 //
 // The mode is stated three times over — the selected pill, the colour of the
 // composer, and the sentence under it naming exactly who receives what — on
@@ -37,7 +37,7 @@
 // box to type a new address (Richard). Subtracting from a derived set cannot
 // reach anyone the thread did not already include; adding to it can, and that
 // is what compose and forward are for. The removal is sticky, stored per
-// ticket by the participants route, and it is the SERVER's answer that
+// conversation by the participants route, and it is the SERVER's answer that
 // repaints the chips — this box never edits the list it renders.
 //
 // ONE LIST, NOT TWO. The × lives on the RecipientEditor chips that were
@@ -56,7 +56,7 @@
 // had done it, because the only evidence was an address that was no longer
 // there. And an operator who removed EVERYBODY was told to "restore one to
 // reply" by a composer offering nothing to restore with — a one-way door out
-// of ever answering that ticket. Restore is not an exception to remove-only:
+// of ever answering that conversation. Restore is not an exception to remove-only:
 // it can only ever put back an address the thread already carried.
 //
 // Cc and Bcc ADD people and live behind the editor's own toggle. An internal
@@ -83,9 +83,9 @@ import SignatureHint from './SignatureHint'
 import RecipientEditor, { EMPTY_RECIPIENTS } from './RecipientEditor'
 import AttachmentPicker, { readyDrafts, hasPendingUploads } from './AttachmentPicker'
 // MAIL-TRIAL draft persistence — see that file's header comment for why the
-// draft is keyed per ticket id rather than anything shared: ConversationThread's
-// `key={ticketId}` remount is TICKET-COMPOSER-LEAK.1's guard against a
-// cross-ticket send, and this store rides on exactly that key rather than
+// draft is keyed per conversation id rather than anything shared: ConversationThread's
+// `key={conversationId}` remount is TICKET-COMPOSER-LEAK.1's guard against a
+// cross-conversation send, and this store rides on exactly that key rather than
 // creating a second one.
 import { readReplyDraft, writeReplyDraft, clearReplyDraft } from '@/components/mail/reply-drafts'
 import { replyPillLabel } from '@/components/mail/mail-vocabulary'
@@ -94,7 +94,7 @@ import { resolveViewerId } from '@/components/mail/viewer-id'
 const MAX_LENGTH = 10000
 
 export default function ReplyBox({
-  ticket,
+  conversation,
   replyRecipients = null,
   onSend,
   onRemoveRecipient,
@@ -103,10 +103,10 @@ export default function ReplyBox({
   // a different, much smaller thing: the chip buttons, and nothing else.
   participantSaving = false,
   sending = false,
-  // MAIL-TRIAL.B — the ONE sentence in this composer written in the ticket
+  // MAIL-TRIAL.B — the ONE sentence in this composer written in the conversation
   // lifecycle's own vocabulary. The Mail surface reuses this box whole (see
   // ConversationThread.jsx's slot comment for why forking it is not an option) and
-  // calls the same state "Archived", so a line reading "This ticket is closed"
+  // calls the same state "Archived", so a line reading "This conversation is closed"
   // would be the composer contradicting every other word on that screen.
   // `undefined` keeps the sentence exactly as it was; a node replaces it;
   // `null` drops it.
@@ -115,8 +115,8 @@ export default function ReplyBox({
   // Reply ↵) instead of the full form, until (a) the operator clicks it, or
   // (b) draft hydration finds a non-empty draft, which auto-expands. Default
   // false: every existing caller keeps the always-open composer unchanged.
-  // Collapse state is component-local and resets per ticket via the
-  // `key={ticketId}` remount ConversationThread already does — the same remount
+  // Collapse state is component-local and resets per conversation via the
+  // `key={conversationId}` remount ConversationThread already does — the same remount
   // that is TICKET-COMPOSER-LEAK.1's guard, which this must never weaken.
   startCollapsed = false,
 }) {
@@ -148,10 +148,10 @@ export default function ReplyBox({
     }
   }, [collapsed])
 
-  const ticketId = ticket?.id
+  const conversationId = conversation?.id
 
   // DRAFT PERSISTENCE (never initial useState — that would run during SSR,
-  // where there is no window and no ticket-specific draft to read yet).
+  // where there is no window and no conversation-specific draft to read yet).
   //
   // `skipNextWriteRef` exists to stop the write-through effect below from
   // firing on the SAME render pass this hydration effect runs on: both
@@ -159,12 +159,12 @@ export default function ReplyBox({
   // 'reply') still in their closures, and without the guard that pass would
   // write-through the blank state and immediately clear the very draft this
   // effect just read back off disk. It is consumed exactly once per
-  // ticket — read here, spent by the write-through effect's first run for
-  // this ticket — and reset whenever the ticket id changes again.
+  // conversation — read here, spent by the write-through effect's first run for
+  // this conversation — and reset whenever the conversation id changes again.
   const skipNextWriteRef = useRef(true)
 
   // MAIL-DRAFTSCOPE.2 — drafts are keyed per USER and per EMAIL ACCOUNT as
-  // well as per ticket (Richard's call), so hydration has to know who is
+  // well as per conversation (Richard's call), so hydration has to know who is
   // signed in. `undefined` = still resolving (persist nothing yet, hydrate
   // nothing yet); `null` = resolution failed, and the store fails CLOSED — no
   // key, no persistence — rather than writing a draft some other signed-in
@@ -177,10 +177,10 @@ export default function ReplyBox({
     return () => { cancelled = true }
   }, [])
 
-  // The mailbox segment comes off the ticket itself (loadTicketForUser
-  // selects *, so mailbox_id rides along); an orphan ticket's NULL becomes
+  // The mailbox segment comes off the conversation itself (loadConversationForUser
+  // selects *, so mailbox_id rides along); an orphan conversation's NULL becomes
   // the 'none' sentinel inside replyDraftKey.
-  const draftScope = { userId: viewerId, mailboxId: ticket?.mailbox_id, ticketId }
+  const draftScope = { userId: viewerId, mailboxId: conversation?.mailbox_id, conversationId }
 
   // What the composer holds RIGHT NOW, readable from the async hydration
   // effect below without widening its deps (deps of [text] would re-run
@@ -199,7 +199,7 @@ export default function ReplyBox({
     // unscoped draft is exactly the cross-user bleed the scope exists to
     // prevent.
     if (viewerId === undefined) return
-    const scope = { userId: viewerId, mailboxId: ticket?.mailbox_id, ticketId }
+    const scope = { userId: viewerId, mailboxId: conversation?.mailbox_id, conversationId }
 
     // 🔴 LIVE TYPING OUTRANKS THE STORED DRAFT. Hydration is now async (it
     // waits on the session), and an operator can start typing before it
@@ -235,11 +235,11 @@ export default function ReplyBox({
     // Recipients/files are never restored — see mail-display.js's header
     // comment on why only { text, mode } are ever persisted.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ticketId, viewerId])
+  }, [conversationId, viewerId])
 
   // Write-through: every change to the words or the mode is saved, so a row
   // switch, an `e`, a refresh or a crash can never destroy them again. Never
-  // recipients, files, or anything else derived per ticket — same reason.
+  // recipients, files, or anything else derived per conversation — same reason.
   // With no resolved viewer the store's own null-key guard makes this a no-op.
   useEffect(() => {
     if (skipNextWriteRef.current) {
@@ -248,13 +248,13 @@ export default function ReplyBox({
     }
     writeReplyDraft(draftScope, { text, mode })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ticketId, viewerId, text, mode])
+  }, [conversationId, viewerId, text, mode])
 
   const isNote = mode === 'note'
   // The reply route 400s without a requester address. Say so up front rather
   // than letting an operator type a reply into a dead end.
-  const canReply = !!ticket?.requester_email
-  const archived = isArchivedStatus(ticket?.status)
+  const canReply = !!conversation?.requester_email
+  const archived = isArchivedStatus(conversation?.status)
 
   // Everybody the server will include whether or not this box asks it to.
   //
@@ -270,12 +270,12 @@ export default function ReplyBox({
     ? []
     : replyRecipients?.to?.length
       ? replyRecipients.to
-      : [ticket?.requester_email].filter(Boolean)
+      : [conversation?.requester_email].filter(Boolean)
   const sendLabel = replyActionLabel(replyRecipients, recipients.to.length)
 
   // EMAIL-PARTICIPANTS.8 — THE PLACEHOLDER NAMES THE REAL AUDIENCE, not the
-  // requester. It read `Reply to ${ticket.requester_email}` — the address the
-  // FIRST message arrived from. On the 2026-08-12 ticket that meant the box an
+  // requester. It read `Reply to ${conversation.requester_email}` — the address the
+  // FIRST message arrived from. On the 2026-08-12 conversation that meant the box an
   // operator types into said "Reply to ratesoffice@dublincity.ie" while the
   // reply was actually going to Eleanor: the same wrong-name-in-a-prominent-
   // place defect as the header, one component along.
@@ -309,14 +309,14 @@ export default function ReplyBox({
   // both free to catch here because nothing has been sent. A note reaches
   // nobody by design, so neither can ever apply to one.
   const overCap = !isNote && !!replyRecipients?.over_cap
-  // Gated on canReply so a ticket with no requester address keeps its own,
+  // Gated on canReply so a conversation with no requester address keeps its own,
   // more accurate sentence rather than being told to restore somebody nobody
   // ever removed.
   const noAudience = !isNote && canReply && audienceEmpty
-  // The operator's own subtractions, straight off the ticket row. NOT derived
+  // The operator's own subtractions, straight off the conversation row. NOT derived
   // and never guessed: these are exactly the addresses the participants route
   // has stored, which is what makes the restore below able to lift them.
-  const removedParticipants = ticket?.excluded_participants || []
+  const removedParticipants = conversation?.excluded_participants || []
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -372,7 +372,7 @@ export default function ReplyBox({
           onClick={() => expand('reply')}
           className="min-w-0 flex-1 truncate text-left text-xs text-un1t-subtle transition-colors hover:text-un1t-text"
         >
-          {replyPillLabel(ticket)}
+          {replyPillLabel(conversation)}
         </button>
         <button
           type="button"
@@ -494,10 +494,10 @@ export default function ReplyBox({
       )}
 
       {/* Word for word what the reply route answers, so the composer and the
-          400 cannot describe the same ticket differently. */}
+          400 cannot describe the same conversation differently. */}
       {noAudience && (
         <p className="mb-2 text-[11px] text-amber-700" role="alert">
-          This ticket has no recipients left — restore one to reply.
+          This conversation has no recipients left — restore one to reply.
         </p>
       )}
       {overCap && (
@@ -527,10 +527,10 @@ export default function ReplyBox({
       {/* Auto-appended sign-off — the shared hint, so the reply box and the
           composer can never disagree about what the server adds. Never shown
           on a note: a note is sent to nobody. MAILFIX-SIGTRUTH.1: the
-          ticket's location IS the sending context for a reply (the send
-          resolves the studio half of the signature off ticket.location_id),
+          conversation's location IS the sending context for a reply (the send
+          resolves the studio half of the signature off conversation.location_id),
           so the hint resolves against the same studio. */}
-      {!isNote && <SignatureHint locationId={ticket?.location_id || null} />}
+      {!isNote && <SignatureHint locationId={conversation?.location_id || null} />}
 
       {/* Files ride on a reply only. In note mode the picker is gone but any
           already-attached files stay visible in the notice below — dropping
@@ -538,7 +538,7 @@ export default function ReplyBox({
           everywhere else. */}
       {!isNote && canReply && (
         <AttachmentPicker
-          scope={{ ticket_id: ticket?.id }}
+          scope={{ ticket_id: conversation?.id }}
           files={files}
           onChange={setFiles}
           disabled={sending}
@@ -559,8 +559,8 @@ export default function ReplyBox({
           {isNote ? (
             <>
               <Lock size={11} className="mr-1 inline align-[-1px]" aria-hidden="true" />
-              Staff only — this is written to the ticket and <strong>not sent</strong> to{' '}
-              {ticket?.requester_email || 'the member'}.
+              Staff only — this is written to the conversation and <strong>not sent</strong> to{' '}
+              {conversation?.requester_email || 'the member'}.
             </>
           ) : !canReply ? (
             'This conversation has no sender address, so it cannot be replied to. You can still add an internal note.'
@@ -578,7 +578,7 @@ export default function ReplyBox({
               {recipients.bcc.length > 0 && (
                 <> · bcc {recipients.bcc.join(', ')} (hidden from everyone else)</>
               )}
-              {ticket?.mailbox?.address && <> · replies come back to {ticket.mailbox.address}</>}
+              {conversation?.mailbox?.address && <> · replies come back to {conversation.mailbox.address}</>}
             </>
           )}
         </p>
@@ -605,7 +605,7 @@ export default function ReplyBox({
       {!isNote && archived && (
         archivedHint !== undefined ? archivedHint : (
           <p className="mt-1.5 text-[11px] text-un1t-muted">
-            This ticket is {statusMeta(ticket?.status).label.toLowerCase()} — sending a reply moves it back to pending.
+            This conversation is {statusMeta(conversation?.status).label.toLowerCase()} — sending a reply moves it back to pending.
           </p>
         )
       )}

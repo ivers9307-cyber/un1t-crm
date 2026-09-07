@@ -1,6 +1,6 @@
 'use client'
 
-// EMAIL-TICKET.4 — the thread pane: the ticket's header, its correspondence in
+// EMAIL-TICKET.4 — the thread pane: the conversation's header, its correspondence in
 // order, and the lifecycle control.
 //
 // THE ONE THING THIS FILE MUST NEVER GET WRONG
@@ -8,7 +8,7 @@
 // reply. It is rendered here as a full-width amber panel with the words
 // "Internal note — not sent to the member" on it, so it can never be mistaken
 // for correspondence the member received, and a real reply can never be
-// mistaken for a private note. messageKind() (lib/ticket-display.js) makes the
+// mistaken for a private note. messageKind() (lib/conversation-display.js) makes the
 // call; this file only paints it. Notes are PLAIN TEXT — they never go
 // through the HTML path below, whatever the payload says.
 //
@@ -34,11 +34,11 @@
 // attachment row); this file never forms that judgement.
 //
 // IT IS AN EMAIL INBOX, SO IT HAS TO READ LIKE ONE (EMAIL-PARTICIPANTS.8)
-// On 2026-08-12 a ticket whose requester_email was a council's rates office
+// On 2026-08-12 a conversation whose requester_email was a council's rates office
 // was forwarded internally to a named officer, who replied. Every message
 // afterwards was with her — and this pane still showed the rates office in the
 // header, with nothing anywhere saying a new person had joined. The operator
-// answered the wrong name, opened a second ticket, and sent the same reply
+// answered the wrong name, opened a second conversation, and sent the same reply
 // twice. Tasks 2-7 fixed who a reply REACHES; none of that is visible, so none
 // of it would have stopped this. Three things here are the visible half:
 //   • the header names the LIVE audience (ThreadParticipants), not the address
@@ -143,7 +143,7 @@ function stageChipLabel(slug) {
 
 export default function ConversationThread({
   hasSelection,
-  ticket,
+  conversation,
   messages = [],
   // MAIL-REFINE.2 — [{id, subject, merged_at}] per conversation merged into
   // this one; the divider above each absorbed group is keyed off it.
@@ -180,7 +180,7 @@ export default function ConversationThread({
   // ── MAIL-TRIAL.B — three slots, so a SECOND surface can reuse this pane ──
   //
   // The Mail surface (/communications/mail) is an inbox-shaped alternative to
-  // the ticket queue, running against the same rows for the trial. Everything
+  // the conversation queue, running against the same rows for the trial. Everything
   // below the header — the thread, the HTML sandbox, attachments, the delivery
   // marker, the mail-client marker, join markers, the composer — is identical
   // on both and must stay ONE implementation: this file already carries two
@@ -189,12 +189,12 @@ export default function ConversationThread({
   // those. (This codebase has been bitten by exactly that: two restatements of
   // deliveryMeta drifted inside a week.)
   //
-  // What genuinely differs is the ticket-only CHROME, so that is what became a
+  // What genuinely differs is the conversation-only CHROME, so that is what became a
   // slot. Each prop is a node to render in that position, or null/undefined
-  // for nothing. MAIL-ARCH.2 removed the last `undefined → ticket chrome`
+  // for nothing. MAIL-ARCH.2 removed the last `undefined → conversation chrome`
   // fallbacks (the statusMeta lifecycle chip, the priority chip, the "Select a
-  // ticket" empty state): MailThread is the only mounter and always passes
-  // its own node for every slot, the ticket queue that rendered the fallbacks
+  // conversation" empty state): MailThread is the only mounter and always passes
+  // its own node for every slot, the conversation queue that rendered the fallbacks
   // is deleted (RETIRE-TICKETS.1), nothing writes `priority` (every row in
   // prod is 'normal', which priorityMeta already mapped to no chip), and a
   // fallback nobody can reach is the dead code this sweep exists to remove.
@@ -205,12 +205,12 @@ export default function ConversationThread({
   controls,     // under the header: status + owner + duplicate rows
   // MAIL-REFINE.1 (03) — between the header and the correspondence: the
   // caller's own notice strip (Mail puts its related-conversations nudge
-  // here). Same undefined/null/node contract as the other slots; the ticket
+  // here). Same undefined/null/node contract as the other slots; the conversation
   // chrome never had anything in this position, so undefined renders nothing.
   banner,
   emptyState,   // with no selection: the caller's own empty state
   // Forwarded verbatim to the composer — the one sentence in there written in
-  // the ticket lifecycle's vocabulary. See ReplyBox.jsx.
+  // the conversation lifecycle's vocabulary. See ReplyBox.jsx.
   archivedHint,
   // MAIL-DOCK.1 — which window the thread is rendering into ('dock' |
   // 'full'). Only the email frames read it (via frameHeightClass); absent,
@@ -238,7 +238,7 @@ export default function ConversationThread({
 
   // EMAIL-ATTACH-PREVIEW.1 — the attachment overlay is owned HERE, not by the
   // message that holds the file: exactly one may be open at a time, it must
-  // cover the whole pane rather than a bubble, and switching tickets has to
+  // cover the whole pane rather than a bubble, and switching conversations has to
   // close it. Only the row is held; the signed URL is minted by the overlay
   // when it opens and lives no longer than it does.
   const [openAttachment, setOpenAttachment] = useState(null)
@@ -247,19 +247,19 @@ export default function ConversationThread({
     return () => onOverlayOpenChange?.(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- report open-state changes only
   }, [openAttachment])
-  const ticketId = ticket?.id
-  useEffect(() => { setOpenAttachment(null) }, [ticketId])
+  const conversationId = conversation?.id
+  useEffect(() => { setOpenAttachment(null) }, [conversationId])
 
   // MAIL-REFINE.1 (02) — which messages are open. Only the NEWEST message
   // expands by default (defaultExpandedMessageId); everything older collapses
   // to a single line until tapped. `overrides` holds only what the operator
   // has explicitly toggled, keyed by message id, so a poll delivering a new
   // message naturally collapses the previous newest (it loses its default)
-  // without touching anything the operator opened by hand. Reset on ticket
+  // without touching anything the operator opened by hand. Reset on conversation
   // switch — message ids are globally unique, but a stale map is still a
   // stale map.
   const [expandOverrides, setExpandOverrides] = useState({})
-  useEffect(() => { setExpandOverrides({}) }, [ticketId])
+  useEffect(() => { setExpandOverrides({}) }, [conversationId])
   const newestId = defaultExpandedMessageId(messages)
   const isMessageExpanded = (id) => expandOverrides[id] ?? (id === newestId)
   const toggleMessage = (id) =>
@@ -272,8 +272,8 @@ export default function ConversationThread({
   // A callback here would need BOTH TicketInbox and MailSurface — owned by
   // other agents on this branch — to wire it up, so this one mutation is
   // self-contained instead: it POSTs its own route and holds the result in
-  // local state, same shape as openAttachment above (reset on ticket change,
-  // never mixed with another ticket's result).
+  // local state, same shape as openAttachment above (reset on conversation change,
+  // never mixed with another conversation's result).
   const [linkedContact, setLinkedContact] = useState(null)
   const [linkingContact, setLinkingContact] = useState(false)
   const [linkContactError, setLinkContactError] = useState(null)
@@ -281,14 +281,14 @@ export default function ConversationThread({
     setLinkedContact(null)
     setLinkingContact(false)
     setLinkContactError(null)
-  }, [ticketId])
+  }, [conversationId])
 
   async function handleLinkContact() {
-    if (!ticketId || linkingContact) return
+    if (!conversationId || linkingContact) return
     setLinkingContact(true)
     setLinkContactError(null)
     try {
-      const res = await fetch(`/api/email/mail/${ticketId}/link-contact`, { method: 'POST' })
+      const res = await fetch(`/api/email/mail/${conversationId}/link-contact`, { method: 'POST' })
       const body = await res.json().catch(() => null)
       if (!res.ok || !body?.success) {
         setLinkContactError(body?.error || 'Could not add this contact. Try again.')
@@ -304,11 +304,11 @@ export default function ConversationThread({
 
   if (!hasSelection) return emptyState ?? null
 
-  const name = requesterLabel(ticket)
-  // EMAIL-CONTACT-CHIP.2 — the ticket's own embed wins; local state only fills
+  const name = requesterLabel(conversation)
+  // EMAIL-CONTACT-CHIP.2 — the conversation's own embed wins; local state only fills
   // in right after a successful link, before the next full fetch replaces
-  // `ticket` with the server's own copy (which will carry `contact` too).
-  const effectiveContact = ticket?.contact?.id ? ticket.contact : linkedContact
+  // `conversation` with the server's own copy (which will carry `contact` too).
+  const effectiveContact = conversation?.contact?.id ? conversation.contact : linkedContact
   // EMAIL-FORWARD.1 — so a forward's bubble can name the message it passed on.
   // Built once per render rather than inside the map, which would be quadratic
   // on a thread at the 200-message cap.
@@ -355,21 +355,21 @@ export default function ConversationThread({
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="truncate text-sm font-semibold text-un1t-text">
-                {ticket?.subject || '(no subject)'}
+                {conversation?.subject || '(no subject)'}
               </h2>
               {statusChip}
             </div>
 
             <ThreadParticipants
-              ticket={ticket}
+              conversation={conversation}
               name={name}
               replyRecipients={replyRecipients}
             />
 
             <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-un1t-muted">
-              {ticket?.mailbox ? (
-                <span title={ticket.mailbox.address || undefined}>
-                  To {mailboxLabel(ticket.mailbox)}
+              {conversation?.mailbox ? (
+                <span title={conversation.mailbox.address || undefined}>
+                  To {mailboxLabel(conversation.mailbox)}
                 </span>
               ) : (
                 // mailbox_id is ON DELETE SET NULL, so a deleted address
@@ -392,7 +392,7 @@ export default function ConversationThread({
                     </span>
                   )}
                 </>
-              ) : ticket?.requester_email ? (
+              ) : conversation?.requester_email ? (
                 <button
                   type="button"
                   onClick={handleLinkContact}
@@ -412,7 +412,7 @@ export default function ConversationThread({
         </div>
 
         {/* RETIRE-TICKETS.2 — the `controls` slot survives; its FALLBACK is
-            gone. The fallback was the ticket queue's chrome (four-state
+            gone. The fallback was the conversation queue's chrome (four-state
             lifecycle, assignment, duplicate folding) rendered when no slot
             was passed — and since RETIRE-TICKETS.1 deleted that queue, the
             only mounter (MailThread) always passes its own controls, the
@@ -439,7 +439,7 @@ export default function ConversationThread({
           // error banner below owns the "we could not read it" case.
           !error && (
             <p className="py-6 text-center text-xs text-un1t-muted">
-              No messages on this ticket yet.
+              No messages on this conversation yet.
             </p>
           )
         ) : (
@@ -470,8 +470,8 @@ export default function ConversationThread({
               <JoinMarkers addresses={joinPoints.get(m.id)} />
               <ThreadMessage
                 message={m}
-                ticket={ticket}
-                ticketId={ticketId}
+                conversation={conversation}
+                conversationId={conversationId}
                 expanded={isMessageExpanded(m.id)}
                 onToggle={() => toggleMessage(m.id)}
                 onOpenAttachment={setOpenAttachment}
@@ -486,7 +486,7 @@ export default function ConversationThread({
       </div>
 
       <AttachmentPreview
-        ticketId={ticketId}
+        conversationId={conversationId}
         attachment={openAttachment}
         onClose={() => setOpenAttachment(null)}
       />
@@ -504,24 +504,24 @@ export default function ConversationThread({
       )}
 
       {/* NO COMPOSER ON A TOMBSTONE (EMAIL-MERGE.6).
-          The reply route gates on loadTicketForUser, which deliberately does
-          not care whether a ticket has been merged — so a reply sent from here
-          WOULD reach the member and would then be filed on a ticket
+          The reply route gates on loadConversationForUser, which deliberately does
+          not care whether a conversation has been merged — so a reply sent from here
+          WOULD reach the member and would then be filed on a conversation
           scopeToUnmerged hides from every queue and count. That is the
           duplicate-reply failure this whole feature exists to end, wearing the
-          feature's own hat, and merging now LEAVES the operator on this ticket
+          feature's own hat, and merging now LEAVES the operator on this conversation
           (so the undo stays reachable), which puts them in front of that box.
           The correspondence lives on the survivor; so does replying to it. */}
-      {ticket?.merged_into_id ? (
+      {conversation?.merged_into_id ? (
         <p className="border-t border-un1t-border px-4 py-3 text-xs text-un1t-muted">
-          This ticket was merged, so it is read-only.{' '}
+          This conversation was merged, so it is read-only.{' '}
           {onOpenMergedInto ? (
             // MAIL-REFINE.2 — the pointer is a VERB, not a sentence: mobile
             // got a tappable banner, web's dead-end text was the gap.
             <button
               type="button"
               className="font-semibold text-un1t-text underline"
-              onClick={() => onOpenMergedInto(ticket.merged_into_id)}
+              onClick={() => onOpenMergedInto(conversation.merged_into_id)}
             >
               Open the conversation it lives in now →
             </button>
@@ -530,7 +530,7 @@ export default function ConversationThread({
           )}
         </p>
       ) : (
-        /* Keyed on the ticket so switching tickets REMOUNTS the composer.
+        /* Keyed on the conversation so switching conversations REMOUNTS the composer.
            Its draft text, reply/note mode, added Cc/Bcc and attached files are
            all local state — carried across a switch, member A's half-written
            reply (and Bcc chips) would send to member B's requester
@@ -538,8 +538,8 @@ export default function ConversationThread({
            The inbox already clears the server-derived replyRecipients on
            switch; this is the same rule for the operator-typed half. */
         <ReplyBox
-          key={ticketId}
-          ticket={ticket}
+          key={conversationId}
+          conversation={conversation}
           startCollapsed={replyStartCollapsed}
           replyRecipients={replyRecipients}
           onSend={onSend}
@@ -699,7 +699,7 @@ function HtmlOmittedNotice() {
  * The bytes themselves are never in this payload. Both actions ask the server
  * for a short-lived signed URL, which is also where the access check lives.
  */
-function Attachments({ ticketId, attachments, onAccent = false, onOpen }) {
+function Attachments({ conversationId, attachments, onAccent = false, onOpen }) {
   const [busy, setBusy] = useState(null)
   const [failed, setFailed] = useState(null)
 
@@ -714,7 +714,7 @@ function Attachments({ ticketId, attachments, onAccent = false, onOpen }) {
     setBusy(att.id)
     setFailed(null)
     try {
-      const res = await fetch(`/api/email/mail/${ticketId}/attachments/${att.id}`)
+      const res = await fetch(`/api/email/mail/${conversationId}/attachments/${att.id}`)
       const j = await res.json()
       if (!res.ok || !j.success || !j.data?.url) {
         setFailed(j.error || 'That file could not be opened.')
@@ -896,7 +896,7 @@ function DeliveryFailureNotice({ delivery, stamp }) {
  * WHO THE TICKET IS ACTUALLY WITH (EMAIL-PARTICIPANTS.8).
  *
  * This line used to be the requester: `requester_name || requester_email`,
- * plus the address, on every ticket unconditionally. That is the person the
+ * plus the address, on every conversation unconditionally. That is the person the
  * FIRST message came from and nothing more. When a shared mailbox hands a
  * thread to a named person — a rates office forwarding to an officer,
  * 2026-08-12 — every message afterwards is with somebody this header never
@@ -909,9 +909,9 @@ function DeliveryFailureNotice({ delivery, stamp }) {
  * that keeps the composer off `messages`.
  *
  * "OPENED BY …" APPEARS ONLY WHEN THE TWO HAVE DIVERGED, i.e. when the
- * requester is not the first person on that list. On an ordinary ticket they
- * are the same address and the line would be noise on every ticket — which is
- * exactly how the one ticket that needed it would get skipped over.
+ * requester is not the first person on that list. On an ordinary conversation they
+ * are the same address and the line would be noise on every conversation — which is
+ * exactly how the one conversation that needed it would get skipped over.
  *
  * With no derived audience (the server could not work one out — an own-address
  * lookup blip) this falls back to the requester line it replaced. That is the
@@ -921,16 +921,16 @@ function DeliveryFailureNotice({ delivery, stamp }) {
  * anybody" and "the operator took everybody off" are different answers and
  * only the first one is a gap the requester fills. Falling back on the second
  * printed the person who had just been removed at the top of the pane, named
- * as who the ticket is with, directly above a composer saying nobody is left
+ * as who the conversation is with, directly above a composer saying nobody is left
  * and a route that 400s the send. ReplyBox.jsx has forbidden exactly
  * that since EMAIL-PARTICIPANTS.7 — never name somebody who will not be
  * mailed — and this header was contradicting it one component up. It says the
  * true thing instead, in the composer's own words, and the removed addresses
  * stay visible where they are restorable: on the composer's own chips.
  */
-function ThreadParticipants({ ticket, name, replyRecipients }) {
+function ThreadParticipants({ conversation, name, replyRecipients }) {
   const people = (Array.isArray(replyRecipients?.to) ? replyRecipients.to : []).filter(Boolean)
-  const requester = ticket?.requester_email || ''
+  const requester = conversation?.requester_email || ''
 
   if (replyRecipients?.empty) {
     return (
@@ -967,7 +967,7 @@ function ThreadParticipants({ ticket, name, replyRecipients }) {
   // participant and leaves everyone else as the address they are. It is the
   // only name we hold: requester_name is a column, the rest are bare addresses
   // off message headers.
-  const requesterName = ticket?.requester_name || ''
+  const requesterName = conversation?.requester_name || ''
   const withName = (address) => (
     requesterName && norm(address) === norm(requester)
       ? `${requesterName} <${address}>`
@@ -1005,7 +1005,7 @@ function ThreadParticipants({ ticket, name, replyRecipients }) {
  *
  * The addresses come from joinPointsByMessage(), which never reads
  * `bcc_emails`: a Bcc'd person is not visibly on the thread, and a marker
- * naming them would leak the Bcc to everyone reading the ticket.
+ * naming them would leak the Bcc to everyone reading the conversation.
  */
 function JoinMarkers({ addresses }) {
   if (!addresses || addresses.length === 0) return null
@@ -1028,7 +1028,7 @@ function JoinMarkers({ addresses }) {
  * A message's real envelope, COLLAPSED BY DEFAULT (EMAIL-PARTICIPANTS.8,
  * replacing EMAIL-CC.1's always-open recipient lines).
  *
- * The lines themselves come from messageEnvelope() (src/lib/ticket-display.js),
+ * The lines themselves come from messageEnvelope() (src/lib/conversation-display.js),
  * which is where the rules about what an envelope contains live — including
  * why the To is unconditional, and the sentence attached to a Bcc. This
  * component decides only how they are shown.
@@ -1114,7 +1114,7 @@ function AttachmentsUnavailableNotice() {
   return (
     <p className="flex items-center gap-1.5 border-t border-un1t-border bg-amber-500/10 px-4 py-2 text-xs text-amber-700">
       <FileWarning size={12} className="shrink-0" aria-hidden="true" />
-      Attachments could not be loaded for this ticket. Messages sent with files may look as though
+      Attachments could not be loaded for this conversation. Messages sent with files may look as though
       they had none.
     </p>
   )
@@ -1193,7 +1193,7 @@ function MessageAvatar({ me, label }) {
  *     panel exists because "I replied, that's done" is exactly the wrong
  *     mental model, and a collapsed row must not make it quietly right again.
  */
-function ThreadMessage({ message, ticket, ticketId, expanded, onToggle, onOpenAttachment, onForward, messagesById, frameSize }) {
+function ThreadMessage({ message, conversation, conversationId, expanded, onToggle, onOpenAttachment, onForward, messagesById, frameSize }) {
   const kind = messageKind(message)
   const stamp = messageTimestamp(message.sent_at || message.created_at)
   const body = message.text_body || '(no text content)'
@@ -1203,7 +1203,7 @@ function ThreadMessage({ message, ticket, ticketId, expanded, onToggle, onOpenAt
   const forwarded = forwardedMarker(message, messagesById)
   const isNote = kind === 'note'
   const me = kind !== 'inbound'
-  const senderLabel = collapsedSenderLabel(message, ticket)
+  const senderLabel = collapsedSenderLabel(message, conversation)
   const avatarLabel = kind === 'outbound' ? (message.author_name || 'Me') : senderLabel
   // EMAIL-DELIVERY.1 — null for "sent, no event yet", which is most messages
   // and every message written before mig 498. Nothing is rendered for it.
@@ -1328,7 +1328,7 @@ function ThreadMessage({ message, ticket, ticketId, expanded, onToggle, onOpenAt
             )}
             {message.html_unsafe && <UnsafeHtmlNotice />}
             {message.html_omitted && <HtmlOmittedNotice />}
-            <Attachments ticketId={ticketId} attachments={message.attachments} onOpen={onOpenAttachment} />
+            <Attachments conversationId={conversationId} attachments={message.attachments} onOpen={onOpenAttachment} />
             <div className="mt-1.5">
               <ForwardAction message={message} onForward={onForward} />
             </div>
@@ -1372,7 +1372,7 @@ function ThreadMessage({ message, ticket, ticketId, expanded, onToggle, onOpenAt
         )}
         {message.html_unsafe && <UnsafeHtmlNotice />}
         {message.html_omitted && <HtmlOmittedNotice />}
-        <Attachments ticketId={ticketId} attachments={message.attachments} onOpen={onOpenAttachment} />
+        <Attachments conversationId={conversationId} attachments={message.attachments} onOpen={onOpenAttachment} />
         <div className="mt-1.5">
           <ForwardAction message={message} onForward={onForward} />
         </div>

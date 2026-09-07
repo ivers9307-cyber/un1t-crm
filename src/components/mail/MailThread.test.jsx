@@ -12,7 +12,7 @@
 // So the tests come in two halves:
 //   • the shared half must still be there — a message renders, the composer
 //     renders, the participant line renders;
-//   • the ticket-only half must be GONE — not renamed, not hidden behind a
+//   • the conversation-only half must be GONE — not renamed, not hidden behind a
 //     menu: no four-state control, no claim/release/assign, no merge.
 // A reskin would pass the first half and fail the second.
 
@@ -102,10 +102,10 @@ describe('MailThread — the shared half is genuinely reused', () => {
 })
 
 // 🔴 The half that makes this a different surface rather than a reskin.
-describe('MailThread — the ticket lifecycle is gone, not renamed', () => {
+describe('MailThread — the conversation lifecycle is gone, not renamed', () => {
   it('has no four-state status control', () => {
     renderThread()
-    expect(screen.queryByRole('group', { name: 'Ticket status' })).toBeNull()
+    expect(screen.queryByRole('group', { name: 'Conversation status' })).toBeNull()
     for (const label of ['Open', 'Pending', 'Solved', 'Closed']) {
       expect(screen.queryByRole('button', { name: label })).toBeNull()
     }
@@ -156,7 +156,7 @@ describe('MailThread — archive is the verb, in this surface’s own words', ()
     // what an archived conversation shows first, same as a live one.
     fireEvent.click(screen.getByRole('button', { name: 'Reply to Ella…' }))
     expect(screen.getByText(/replying brings it back to the inbox/)).toBeTruthy()
-    // The composer's own default sentence is the ticket lifecycle's. On this
+    // The composer's own default sentence is the conversation lifecycle's. On this
     // screen it would contradict the chip six lines above it.
     expect(screen.queryByText(/back to pending/)).toBeNull()
   })

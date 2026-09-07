@@ -13,7 +13,7 @@
 // there). The three rules that must not drift, and what pins each:
 //
 //   1. AN INTERNAL NOTE CANNOT BE FORWARDED (canForwardMessage — web's
-//      src/lib/ticket-display.js rule verbatim). A note is staff-to-staff text
+//      src/lib/conversation-display.js rule verbatim). A note is staff-to-staff text
 //      that was never sent to anybody; mailing it to a third party under the
 //      studio's own address is the single worst thing this surface could do.
 //      The route 400s it too — that is the gate, this is why the affordance
@@ -56,7 +56,7 @@ export const MAX_FORWARD_ATTACHMENT_TOTAL_BYTES = 7 * 1024 * 1024
 
 /**
  * Can this message be forwarded as mail at all? Web's canForwardMessage
- * (src/lib/ticket-display.js), verbatim: everything except an internal note.
+ * (src/lib/conversation-display.js), verbatim: everything except an internal note.
  */
 export function canForwardMessage(message) {
   return !!message && !message.is_internal_note
@@ -150,7 +150,7 @@ export function forwardPreviewMeta(message) {
 
 /**
  * The original's attachments that COULD be forwarded — stored bytes only.
- * Accepts either vocabulary for the same fact (web rule): the ticket detail
+ * Accepts either vocabulary for the same fact (web rule): the conversation detail
  * route exposes `stored` (it never returns storage_path to a client — the
  * bucket is private), while a raw row would carry `storage_path`.
  */

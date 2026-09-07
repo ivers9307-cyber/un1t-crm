@@ -25,10 +25,10 @@ beforeEach(() => {
   // preferences GET simply never settles, so the hint stays hidden
   // (cosmetic; SignatureHint.test.jsx is where it is exercised).
   vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
-  // Every case here mounts ticket-1. Since the composer now hydrates a
-  // per-ticket draft from localStorage on mount (see ReplyBox.draft
+  // Every case here mounts conversation-1. Since the composer now hydrates a
+  // per-conversation draft from localStorage on mount (see ReplyBox.draft
   // .test.jsx), a value typed in one test would otherwise leak into the next
-  // test's fresh render of the "same" ticket — nothing to do with the
+  // test's fresh render of the "same" conversation — nothing to do with the
   // recipient behaviour these tests actually pin.
   window.localStorage.clear()
 })
@@ -39,7 +39,7 @@ afterEach(() => {
 })
 
 const TICKET = {
-  id: 'ticket-1',
+  id: 'conversation-1',
   subject: 'Membership freeze',
   requester_email: 'a@x.com',
   status: 'open',
@@ -58,7 +58,7 @@ function audience(to) {
 function renderBox(props = {}) {
   return render(
     <ReplyBox
-      ticket={TICKET}
+      conversation={TICKET}
       replyRecipients={audience(['a@x.com'])}
       onSend={vi.fn()}
       onRemoveRecipient={vi.fn()}
@@ -102,7 +102,7 @@ describe('ReplyBox — the reply audience', () => {
     const to = Array.from({ length: 26 }, (_, i) => `p${i}@x.com`)
     const onSend = vi.fn()
     const { container } = renderBox({
-      ticket: { ...TICKET, requester_email: 'p0@x.com' },
+      conversation: { ...TICKET, requester_email: 'p0@x.com' },
       replyRecipients: audience(to),
       onSend,
     })
@@ -133,7 +133,7 @@ describe('ReplyBox — the reply audience', () => {
     // set, deliberately, NOT "we could not work out who" — and the requester
     // sitting in excluded_participants is how it got that way.
     const { container } = renderBox({
-      ticket: { ...TICKET, excluded_participants: ['a@x.com'] },
+      conversation: { ...TICKET, excluded_participants: ['a@x.com'] },
       replyRecipients: audience([]),
       onSend,
     })
@@ -151,7 +151,7 @@ describe('ReplyBox — the reply audience', () => {
 
     // And the thing that sentence tells them to do is on screen. Without it
     // the empty state is a one-way door: the copy says "restore one" and there
-    // is nothing to restore with, so the ticket can never be replied to again.
+    // is nothing to restore with, so the conversation can never be replied to again.
     expect(screen.getByRole('button', { name: 'Restore a@x.com' })).toBeTruthy()
 
     fireEvent.change(screen.getByLabelText('Reply to the member'), {
@@ -166,7 +166,7 @@ describe('ReplyBox — the reply audience', () => {
 describe('ReplyBox — the people taken off it', () => {
   it('shows removed participants as restorable, and not as recipients', () => {
     renderBox({
-      ticket: { ...TICKET, excluded_participants: ['gone@x.com', 'also@y.com'] },
+      conversation: { ...TICKET, excluded_participants: ['gone@x.com', 'also@y.com'] },
       replyRecipients: audience(['a@x.com']),
     })
 
@@ -189,7 +189,7 @@ describe('ReplyBox — the people taken off it', () => {
 
   it('disables both chip actions while a participants write is in flight', () => {
     renderBox({
-      ticket: { ...TICKET, excluded_participants: ['gone@x.com'] },
+      conversation: { ...TICKET, excluded_participants: ['gone@x.com'] },
       replyRecipients: audience(['a@x.com']),
       participantSaving: true,
     })
@@ -205,7 +205,7 @@ describe('ReplyBox — the people taken off it', () => {
   it("calls onRestoreRecipient with the chip's own address", () => {
     const onRestoreRecipient = vi.fn()
     renderBox({
-      ticket: { ...TICKET, excluded_participants: ['gone@x.com', 'also@y.com'] },
+      conversation: { ...TICKET, excluded_participants: ['gone@x.com', 'also@y.com'] },
       replyRecipients: audience(['a@x.com']),
       onRestoreRecipient,
     })
@@ -219,12 +219,12 @@ describe('ReplyBox — the people taken off it', () => {
 
 describe('ReplyBox — the box names who it will reach', () => {
   it('placeholders the derived audience, not the requester', () => {
-    // The 2026-08-12 ticket: opened by the rates office, now with Eleanor. The
-    // placeholder read `Reply to ${ticket.requester_email}`, so the box an
+    // The 2026-08-12 conversation: opened by the rates office, now with Eleanor. The
+    // placeholder read `Reply to ${conversation.requester_email}`, so the box an
     // operator types into named the wrong person — the same defect as the
     // header, one component along, and in the most prominent place of all.
     renderBox({
-      ticket: { ...TICKET, requester_email: 'rates@council.ie' },
+      conversation: { ...TICKET, requester_email: 'rates@council.ie' },
       replyRecipients: audience(['eleanor@council.ie']),
     })
 
@@ -235,7 +235,7 @@ describe('ReplyBox — the box names who it will reach', () => {
 
   it('counts the rest rather than naming one of several', () => {
     renderBox({
-      ticket: { ...TICKET, requester_email: 'rates@council.ie' },
+      conversation: { ...TICKET, requester_email: 'rates@council.ie' },
       replyRecipients: audience(['eleanor@council.ie', 'rates@council.ie', 'clerk@council.ie']),
     })
 
@@ -248,7 +248,7 @@ describe('ReplyBox — the box names who it will reach', () => {
 
   it('names nobody once the audience has been emptied', () => {
     renderBox({
-      ticket: { ...TICKET, excluded_participants: ['a@x.com'] },
+      conversation: { ...TICKET, excluded_participants: ['a@x.com'] },
       replyRecipients: audience([]),
     })
 

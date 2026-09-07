@@ -15,7 +15,7 @@
 // EMAIL-CONV-STOP.1 (2026-08-07) removed its third: a non-fatal mirror that
 // stamped conversation_id onto the outbound row and refreshed the mig 394
 // email_conversations summary. The final describe block below inverts those
-// tests — the route must leave that table alone even when a ticket's earlier
+// tests — the route must leave that table alone even when a conversation's earlier
 // messages still carry a conversation_id, which every row the webhook wrote
 // before today does. That is the case that would otherwise keep the write
 // alive, so it is the one the fixture uses.
@@ -55,7 +55,7 @@ import {
 
 function post(id, body) {
   return POST(
-    new Request(`http://x/api/email/tickets/${id}/reply`, {
+    new Request(`http://x/api/email/conversations/${id}/reply`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
     }),
     { params: Promise.resolve({ id }) }
@@ -73,7 +73,7 @@ const LAST_INBOUND = {
 // An inbound message as the webhook USED to write it: carrying both ids. Every
 // row written before EMAIL-CONV-STOP.1 looks like this, and that
 // conversation_id was the only thing that made the legacy mirror reachable from
-// a ticket — so it is the fixture that would expose a surviving mirror.
+// a conversation — so it is the fixture that would expose a surviving mirror.
 const CONVERSATION_ID = 'ccccccc1-0000-4000-8000-000000000001'
 const LAST_INBOUND_DUAL = { ...LAST_INBOUND, conversation_id: CONVERSATION_ID }
 
@@ -110,7 +110,7 @@ describe('POST …/reply — gates', () => {
   })
 
   // EMAIL-TICKET-CLEANUP.1 — 404, not the 403 this used to be. The gate moved
-  // into loadTicketForUser so it can resolve at the TICKET'S location, which
+  // into loadConversationForUser so it can resolve at the TICKET'S location, which
   // means it now runs AFTER the row is read — and a 403 there would say "this
   // id exists, at a studio where you lack the key" while a bad id says 404.
   // Every other way to be refused on this surface is already indistinguishable;
@@ -124,7 +124,7 @@ describe('POST …/reply — gates', () => {
     expect(writesTo(db)).toEqual([])
   })
 
-  it('404s on a ticket whose mailbox the caller cannot see, and sends nothing', async () => {
+  it('404s on a conversation whose mailbox the caller cannot see, and sends nothing', async () => {
     expect((await post(T_ACCOUNTS.id, { text: 'hi' })).status).toBe(404)
     expect(sendEmail).not.toHaveBeenCalled()
   })
@@ -152,7 +152,7 @@ describe('POST …/reply — internal note', () => {
     expect(msg.payload.postmark_message_id).toBeUndefined()
   })
 
-  it('does not stamp first_response_at or advance the ticket', async () => {
+  it('does not stamp first_response_at or advance the conversation', async () => {
     await post(T_STUDIO.id, { text: 'internal', internal: true })
     expect(updatesTo(db, 'email_tickets')).toHaveLength(0)
     expect(db._state.tickets.find(t => t.id === T_STUDIO.id).first_response_at).toBeNull()
@@ -188,7 +188,7 @@ describe('POST …/reply — internal note', () => {
 })
 
 describe('POST …/reply — real reply', () => {
-  it('sends on the transactional stream, replying from the ticket’s own mailbox', async () => {
+  it('sends on the transactional stream, replying from the conversation’s own mailbox', async () => {
     const res = await post(T_STUDIO.id, { text: 'We open at 6.' })
     expect(res.status).toBe(200)
 
@@ -199,7 +199,7 @@ describe('POST …/reply — real reply', () => {
       // THIS APP'S stream — transactional, gated on email_administrative.
       stream: 'outbound',
       // Reply-To is the address the member wrote to, so their next reply
-      // threads back onto this ticket.
+      // threads back onto this conversation.
       replyTo: MB_STUDIO.address,
       textBody: 'We open at 6.',
     })
@@ -240,7 +240,7 @@ describe('POST …/reply — real reply', () => {
     expect((await res.json()).error).toContain('POSTMARK_EMAIL_INBOX_SERVER_TOKEN')
     // It must NOT quietly leave on the marketing server instead.
     expect(sendEmail).not.toHaveBeenCalled()
-    // And nothing is written — the ticket does not claim to have been answered.
+    // And nothing is written — the conversation does not claim to have been answered.
     expect(insertsInto(db, 'email_inbox_messages')).toHaveLength(0)
     expect(updatesTo(db, 'email_tickets')).toHaveLength(0)
   })
@@ -269,7 +269,7 @@ describe('POST …/reply — real reply', () => {
     expect(msg.payload.from_email).toBe('UN1T <hello@un1t.ie>')
   })
 
-  it('moves the ticket to pending and refreshes the queue summary', async () => {
+  it('moves the conversation to pending and refreshes the queue summary', async () => {
     await post(T_STUDIO.id, { text: 'We open at 6.' })
     const [update] = updatesTo(db, 'email_tickets')
     expect(update.payload).toMatchObject({
@@ -289,7 +289,7 @@ describe('POST …/reply — real reply', () => {
     expect(updatesTo(db, 'email_tickets')[1].payload.first_response_at).toBeUndefined()
   })
 
-  it('clears solved_at/closed_at when a reply pulls a solved ticket back into play', async () => {
+  it('clears solved_at/closed_at when a reply pulls a solved conversation back into play', async () => {
     setupDb(baseState({
       grants: [GRANT_STUDIO], messages: [LAST_INBOUND],
       tickets: [{ ...T_STUDIO, status: 'solved', solved_at: '2026-08-05T00:00:00Z' }],
@@ -329,7 +329,7 @@ describe('POST …/reply — real reply', () => {
     expect(insertsInto(db, 'email_inbox_messages')).toHaveLength(1)
   })
 
-  it('a failed send leaves the ticket untouched — never a false "pending"', async () => {
+  it('a failed send leaves the conversation untouched — never a false "pending"', async () => {
     sendEmail.mockRejectedValue(new Error('Postmark rejected the recipient'))
     const res = await post(T_STUDIO.id, { text: 'We open at 6.' })
     expect(res.status).toBe(400)
@@ -400,14 +400,14 @@ describe('POST …/reply — signature (EMAIL-TICKET.5)', () => {
   it('keeps the queue preview unsigned', async () => {
     getCurrentUser.mockResolvedValue(SIGNED_COACH)
     await post(T_STUDIO.id, { text: 'We open at 6.' })
-    // Otherwise every short reply looks identical in the ticket list.
+    // Otherwise every short reply looks identical in the conversation list.
     const [update] = updatesTo(db, 'email_tickets')
     expect(update.payload.last_message_preview).toBe('We open at 6.')
   })
 })
 
 describe('POST …/reply — the legacy mirror is GONE (EMAIL-CONV-STOP.1)', () => {
-  it('leaves email_conversations alone even when the ticket HAS one', async () => {
+  it('leaves email_conversations alone even when the conversation HAS one', async () => {
     setupDb(baseState({ grants: [GRANT_STUDIO], messages: [LAST_INBOUND_DUAL] }))
     const res = await post(T_STUDIO.id, { text: 'We open at 6.' })
     expect(res.status).toBe(200)
@@ -493,7 +493,7 @@ describe('POST …/reply — query failures are loud', () => {
 // getting it wrong wrote to the OUTSIDE WORLD: a manager at one studio who is
 // merely staff at another could send real mail, from the second studio's
 // correspondence, over a key they hold somewhere else entirely. Reading the
-// wrong ticket is a leak; answering it as the business is a forgery.
+// wrong conversation is a leak; answering it as the business is a forgery.
 //
 // ONE user, TWO studios, opposite answers, real resolver. They are assigned to
 // both and hold a mailbox grant at both, so the location and per-account gates
@@ -527,7 +527,7 @@ describe('POST …/reply — the permission follows the TICKET’S location', ()
   it('DENIES an INTERNAL NOTE there too — the note branch is not a side door', async () => {
     // The internal-note branch returns long before the send, so it would have
     // been easy to leave ungated. A note is staff-to-staff correspondence on
-    // another studio's ticket; it is not less private for never being emailed.
+    // another studio's conversation; it is not less private for never being emailed.
     expect((await post(T_OTHER_LOCATION.id, { text: 'fyi', internal: true })).status).toBe(404)
     expect(writesTo(db)).toEqual([])
   })
@@ -612,7 +612,7 @@ describe('POST …/reply — attachments', () => {
     expect(res.status).toBe(400)
     expect((await res.json()).error).toContain('Nothing was sent')
     expect(sendEmail).not.toHaveBeenCalled()
-    // THE WHOLE POINT: the ticket does not advance and the thread shows nothing.
+    // THE WHOLE POINT: the conversation does not advance and the thread shows nothing.
     expect(writesTo(db)).toEqual([])
   })
 
@@ -638,7 +638,7 @@ describe('POST …/reply — attachments', () => {
     expect(sendEmail).not.toHaveBeenCalled()
   })
 
-  it('a send that FAILS leaves the thread with no attachment row and no ticket move', async () => {
+  it('a send that FAILS leaves the thread with no attachment row and no conversation move', async () => {
     seedDraft(0)
     sendEmail.mockRejectedValue(new Error('Postmark said no'))
     const res = await post(T_STUDIO.id, { text: 'Here you go.', attachments: [draftRef(0)] })
@@ -741,7 +741,7 @@ describe('POST …/reply — the derived recipient set', () => {
 
   // Our own mailbox is necessarily in the inbound To — the member wrote to it.
   // Mailing it delivers our own reply back to our own inbound webhook, which
-  // files it on THIS ticket as an inbound message: the ticket reopens and the
+  // files it on THIS conversation as an inbound message: the conversation reopens and the
   // needs-reply badge lights up for mail nobody sent us.
   it('never writes to the studio’s own mailbox, which the inbound To always contains', async () => {
     setupDb(baseState({ grants: [GRANT_STUDIO], messages: [CC_INBOUND] }))
@@ -764,7 +764,7 @@ describe('POST …/reply — the derived recipient set', () => {
   // set is estate-wide, not per-location: a member who wrote to accounts@ here
   // and cc'd another studio's address would otherwise get our reply-all
   // delivered into THAT studio's inbound webhook, where nothing threads
-  // (threading is location-scoped) — so it mints a brand-new "inbound" ticket
+  // (threading is location-scoped) — so it mints a brand-new "inbound" conversation
   // from our own address, once per reply-all, forever.
   it('never writes to another studio’s mailbox — the exclusion set is estate-wide', async () => {
     setupDb(baseState({
@@ -804,7 +804,7 @@ describe('POST …/reply — the derived recipient set', () => {
   })
 
   // …and THIS is how someone actually comes off a thread now: an operator says
-  // so, on the ticket (mig 534). A visible act with an undo, rather than a
+  // so, on the conversation (mig 534). A visible act with an undo, rather than a
   // derivation rule nobody can see. The guarantee the inverted test above used
   // to carry — "a person can be dropped from the audience" — lives here.
   it('drops exactly the participant an operator removed, and nobody else', async () => {
@@ -836,7 +836,7 @@ describe('POST …/reply — the derived recipient set', () => {
       .toBe('member@example.com, colleague@example.com, boss@example.com')
   })
 
-  // A composed ticket nobody has answered yet has no inbound at all. One rule
+  // A composed conversation nobody has answered yet has no inbound at all. One rule
   // has to cover both directions or this is a special case nobody tested.
   it('derives the set from our OWN last outbound when nobody has replied yet', async () => {
     setupDb(baseState({
@@ -853,7 +853,7 @@ describe('POST …/reply — the derived recipient set', () => {
     expect(sendEmail.mock.calls[0][0].to).toBe('member@example.com, colleague@example.com')
   })
 
-  it('falls back to the requester when a ticket has no usable correspondence', async () => {
+  it('falls back to the requester when a conversation has no usable correspondence', async () => {
     setupDb(baseState({ grants: [GRANT_STUDIO], messages: [] }))
     await post(T_STUDIO.id, { text: 'hi' })
     expect(sendEmail.mock.calls[0][0].to).toBe('member@example.com')
@@ -918,7 +918,7 @@ describe('POST …/reply — the audience is the whole thread (EMAIL-PARTICIPANT
     // dropped, silently, on a reply the operator watched succeed.
     expect(sent.to).toContain('rates@council.ie')
     // Our own address is still never written to — a reply-all that mailed
-    // studio@ re-enters our own inbound webhook and files onto this ticket.
+    // studio@ re-enters our own inbound webhook and files onto this conversation.
     expect(sent.to).not.toContain(MB_STUDIO.address)
     // …and the row records the same set the wire carried.
     const [msg] = insertsInto(db, 'email_inbox_messages')
@@ -932,7 +932,7 @@ describe('POST …/reply — the audience is the whole thread (EMAIL-PARTICIPANT
   it('400s rather than sending when every participant has been removed', async () => {
     setupDb(baseState({
       grants: [GRANT_STUDIO],
-      // The operator took the only correspondent off this ticket (mig 534).
+      // The operator took the only correspondent off this conversation (mig 534).
       // Mailing them anyway is not an acceptable way to avoid an error message.
       tickets: [{ ...T_STUDIO, excluded_participants: ['member@example.com'] }, { ...T_ACCOUNTS }],
       messages: [{
@@ -981,7 +981,7 @@ describe('POST …/reply — the audience is the whole thread (EMAIL-PARTICIPANT
 // ── THE BCC GUARANTEE, AT THE ROUTE ──────────────────────────────────
 //
 // email-recipients.test.js mutation-checks the pure function. These prove the
-// ROUTE wires it up: a bcc stored on this ticket's own history must not appear
+// ROUTE wires it up: a bcc stored on this conversation's own history must not appear
 // anywhere in the next reply's payload, and a bcc the operator types must
 // reach Postmark's Bcc field and nothing else.
 describe('POST …/reply — bcc never leaks', () => {
@@ -993,7 +993,7 @@ describe('POST …/reply — bcc never leaks', () => {
     bcc_emails: ['secret@example.com'], created_at: '2026-08-06T10:00:00Z',
   }
 
-  it('does NOT re-copy an address this ticket was previously blind-copied to', async () => {
+  it('does NOT re-copy an address this conversation was previously blind-copied to', async () => {
     setupDb(baseState({ grants: [GRANT_STUDIO], messages: [OUTBOUND_WITH_BCC] }))
     await post(T_STUDIO.id, { text: 'follow up' })
     const sent = sendEmail.mock.calls[0][0]
@@ -1051,7 +1051,7 @@ describe('POST …/reply — added recipients', () => {
   // can catch is an operator TYPING one of our mailboxes into Cc/Bcc. Same
   // consequence as a derived one: Postmark delivers the copy to our own
   // inbound webhook, whose In-Reply-To still names this thread, so our own
-  // reply is filed on this ticket as INBOUND and lights the needs-reply badge.
+  // reply is filed on this conversation as INBOUND and lights the needs-reply badge.
   // Mutation-checked — deleting `exclude: own.addresses` turns this red and
   // nothing else on the route.
   it('strips a HAND-TYPED address of ours from every list', async () => {
@@ -1093,7 +1093,7 @@ describe('POST …/reply — added recipients', () => {
 
   // email_sends is the per-contact email history and contact_id is NOT NULL —
   // inventing rows for cc'd colleagues would put mail in strangers' histories.
-  it('logs ONE email_sends row, for the ticket’s own contact', async () => {
+  it('logs ONE email_sends row, for the conversation’s own contact', async () => {
     setupDb(baseState({ grants: [GRANT_STUDIO], messages: [CC_INBOUND] }))
     await post(T_STUDIO.id, { text: 'hi', cc: ['newperson@example.com'] })
     const sends = insertsInto(db, 'email_sends')
@@ -1101,7 +1101,7 @@ describe('POST …/reply — added recipients', () => {
     expect(sends[0].payload.to_email).toBe('member@example.com')
   })
 
-  // THE "ADDING A STRANGER" ANSWER. There is no consent gate on ticket mail by
+  // THE "ADDING A STRANGER" ANSWER. There is no consent gate on conversation mail by
   // design, so instead the act is attributable: an address nobody on the
   // thread involved carries the sender's name at the moment they added it.
   it('audit-logs an address the operator added that nobody on the thread involved', async () => {
@@ -1197,7 +1197,7 @@ describe('POST …/reply — filing fails AFTER the send (EMAIL-REPLY-UNFILED.1)
     expect(errors).toHaveBeenCalled()
   })
 
-  it('records the delivered send as a dead letter, at the ticket’s location', async () => {
+  it('records the delivered send as a dead letter, at the conversation’s location', async () => {
     failWrites(db, ['email_inbox_messages'])
     getCurrentUser.mockResolvedValue(SIGNED_COACH)
     await post(T_STUDIO.id, { text: 'We open at 6.' })
@@ -1224,7 +1224,7 @@ describe('POST …/reply — filing fails AFTER the send (EMAIL-REPLY-UNFILED.1)
     expect(dead.payload.payload.recipients.to).toEqual([T_STUDIO.requester_email])
   })
 
-  it('still logs email_sends and advances the ticket — the queue must not invite a second send', async () => {
+  it('still logs email_sends and advances the conversation — the queue must not invite a second send', async () => {
     failWrites(db, ['email_inbox_messages'])
     await post(T_STUDIO.id, { text: 'We open at 6.' })
 
@@ -1237,7 +1237,7 @@ describe('POST …/reply — filing fails AFTER the send (EMAIL-REPLY-UNFILED.1)
       source_type: 'inbox_reply',
     })
     // And the queue stops saying "needs reply" about a member who has one —
-    // same posture as compose, whose ticket row STAYS for exactly this reason.
+    // same posture as compose, whose conversation row STAYS for exactly this reason.
     const [update] = updatesTo(db, 'email_tickets')
     expect(update.payload).toMatchObject({
       status: 'pending',
@@ -1276,13 +1276,13 @@ describe('POST …/reply — filing fails AFTER the send (EMAIL-REPLY-UNFILED.1)
 // ── MAILFIX-GUARDRAILS.1 — bookkeeping AFTER the send is LOGGED, never failed on ──
 //
 // Every write below the send is about a reply the member already has. Four of
-// them were bare awaits — the email_sends log and the ticket patch, on BOTH
+// them were bare awaits — the email_sends log and the conversation patch, on BOTH
 // the success path and the unfiled-send breadcrumb path — and a supabase
 // builder RESOLVES with { error }, so a blip reported nothing: the member had
 // the reply and the thread kept saying needs-reply with no line to explain the
 // stuck flag. The fix is log-and-continue ONLY. These pin both halves: the
 // response is exactly the one the send earned, AND a structural logError line
-// names the ticket. A route that started failing the response on one of these
+// names the conversation. A route that started failing the response on one of these
 // writes fails the first assertion — that is the point (CLAUDE.md: removing a
 // silent failure must never create a louder one).
 describe('POST …/reply — a lost bookkeeping write after the send is LOGGED, never surfaced (MAILFIX-GUARDRAILS.1)', () => {
@@ -1307,13 +1307,13 @@ describe('POST …/reply — a lost bookkeeping write after the send is LOGGED, 
     expect(sendEmail).toHaveBeenCalledTimes(1)
     expect(logError).toHaveBeenCalledTimes(1)
     expect(logError).toHaveBeenCalledWith(
-      'tickets/reply',
+      'conversations/reply',
       'email_sends log failed (mail already sent)',
-      expect.objectContaining({ ticketId: T_STUDIO.id, messageId: 'pm-out-1', error: expect.objectContaining({ code: 'XX000' }) }),
+      expect.objectContaining({ conversationId: T_STUDIO.id, messageId: 'pm-out-1', error: expect.objectContaining({ code: 'XX000' }) }),
     )
   })
 
-  it('ticket patch fails on the SUCCESS path → 200 unchanged, one structural log line naming the ticket', async () => {
+  it('conversation patch fails on the SUCCESS path → 200 unchanged, one structural log line naming the conversation', async () => {
     failWrites(db, ['email_tickets'])
     const res = await post(T_STUDIO.id, { text: 'We open at 6.' })
 
@@ -1325,15 +1325,15 @@ describe('POST …/reply — a lost bookkeeping write after the send is LOGGED, 
     expect(insertsInto(db, 'email_sends')).toHaveLength(1)
     expect(logError).toHaveBeenCalledTimes(1)
     expect(logError).toHaveBeenCalledWith(
-      'tickets/reply',
-      expect.stringMatching(/^ticket patch failed after a successful send/),
-      expect.objectContaining({ ticketId: T_STUDIO.id, messageId: 'pm-out-1', error: expect.objectContaining({ code: 'XX000' }) }),
+      'conversations/reply',
+      expect.stringMatching(/^conversation patch failed after a successful send/),
+      expect.objectContaining({ conversationId: T_STUDIO.id, messageId: 'pm-out-1', error: expect.objectContaining({ code: 'XX000' }) }),
     )
   })
 
-  it('ticket patch matches NO row (the ticket vanished between read and write) → 200 unchanged, logged as zero rows', async () => {
+  it('conversation patch matches NO row (the conversation vanished between read and write) → 200 unchanged, logged as zero rows', async () => {
     // PostgREST reports NO error for a zero-row UPDATE, so `{ error }` alone
-    // would miss this. The ticket exists for the read at the top of the route;
+    // would miss this. The conversation exists for the read at the top of the route;
     // a concurrent delete removes it just before the patch.
     const realFrom = db.from
     db.from = (table) => {
@@ -1354,9 +1354,9 @@ describe('POST …/reply — a lost bookkeeping write after the send is LOGGED, 
     expect((await res.json()).success).toBe(true)
     expect(logError).toHaveBeenCalledTimes(1)
     expect(logError).toHaveBeenCalledWith(
-      'tickets/reply',
-      'ticket patch matched no row after a successful send',
-      expect.objectContaining({ ticketId: T_STUDIO.id, rows: 0 }),
+      'conversations/reply',
+      'conversation patch matched no row after a successful send',
+      expect.objectContaining({ conversationId: T_STUDIO.id, rows: 0 }),
     )
   })
 
@@ -1373,14 +1373,14 @@ describe('POST …/reply — a lost bookkeeping write after the send is LOGGED, 
     expect(sendEmail).toHaveBeenCalledTimes(1)
     expect(logError).toHaveBeenCalledTimes(2)
     expect(logError).toHaveBeenCalledWith(
-      'tickets/reply',
+      'conversations/reply',
       'email_sends log failed after an unfiled send (mail already sent)',
-      expect.objectContaining({ ticketId: T_STUDIO.id, messageId: 'pm-out-1' }),
+      expect.objectContaining({ conversationId: T_STUDIO.id, messageId: 'pm-out-1' }),
     )
     expect(logError).toHaveBeenCalledWith(
-      'tickets/reply',
-      'ticket patch failed after an unfiled send (mail already sent)',
-      expect.objectContaining({ ticketId: T_STUDIO.id, messageId: 'pm-out-1' }),
+      'conversations/reply',
+      'conversation patch failed after an unfiled send (mail already sent)',
+      expect.objectContaining({ conversationId: T_STUDIO.id, messageId: 'pm-out-1' }),
     )
   })
 
@@ -1393,7 +1393,7 @@ describe('POST …/reply — a lost bookkeeping write after the send is LOGGED, 
 
 // EMAIL-MERGE.6 — nothing leaves a tombstone.
 //
-// THE ROUTE IS THE GATE. TicketThread hides the composer on a merged ticket,
+// THE ROUTE IS THE GATE. TicketThread hides the composer on a merged conversation,
 // but this route runs on the service-role client, so RLS does nothing and the
 // client-side guard protects only the client. The callers that matter are the
 // ones that never had it: a stale tab, a bookmarked deep link, a push
@@ -1401,10 +1401,10 @@ describe('POST …/reply — a lost bookkeeping write after the send is LOGGED, 
 // has no concept of merge at all, polls, and ships a reply button.
 //
 // What it prevents is the failure this whole feature exists to remove: the
-// reply reaches the member, and is then filed on a ticket scopeToUnmerged hides
+// reply reaches the member, and is then filed on a conversation scopeToUnmerged hides
 // from every queue and count — so nobody sees it was answered and the next
 // person answers again. A duplicate reply, produced by the duplicate-reply fix.
-describe('a merged ticket cannot be replied from', () => {
+describe('a merged conversation cannot be replied from', () => {
   const MERGED = { ...T_STUDIO, merged_into_id: T_ACCOUNTS.id, status: 'closed' }
 
   function setupMerged() {
@@ -1421,14 +1421,14 @@ describe('a merged ticket cannot be replied from', () => {
     const res = await post(T_STUDIO.id, { text: 'Sorry for the delay.' })
 
     // 409, not the 404 every other refusal here returns: the caller has
-    // already passed loadTicketForUser, so they can see this ticket and are
-    // owed a reason. The request conflicts with what the ticket has become.
+    // already passed loadConversationForUser, so they can see this conversation and are
+    // owed a reason. The request conflicts with what the conversation has become.
     expect(res.status).toBe(409)
     const body = await res.json()
     expect(body.success).toBe(false)
     expect(body.error).toMatch(/merged into another one/i)
     // The survivor's id rides on the failure body so a client can route there
-    // rather than dead-ending on a ticket it cannot send from.
+    // rather than dead-ending on a conversation it cannot send from.
     expect(body.data.merged_into_id).toBe(T_ACCOUNTS.id)
 
     // THE HALF THAT MATTERS. A refusal that still put the mail on the wire
@@ -1446,14 +1446,14 @@ describe('a merged ticket cannot be replied from', () => {
     const res = await post(T_STUDIO.id, { text: 'Rang the council back.', internal: true })
 
     // A note puts no mail on the wire, so it is not the dangerous case — but it
-    // would be written onto a ticket hidden from every queue and count, which
+    // would be written onto a conversation hidden from every queue and count, which
     // is an operator typing up what they found and losing it silently.
     expect(res.status).toBe(409)
     expect(insertsInto(db, 'email_inbox_messages')).toEqual([])
     expect(sendEmail).not.toHaveBeenCalled()
   })
 
-  it('still replies normally on an ordinary ticket', async () => {
+  it('still replies normally on an ordinary conversation', async () => {
     // The negative half: a guard that refused everything would pass both tests
     // above while breaking the queue.
     setupDb(baseState({ grants: [GRANT_STUDIO], messages: [LAST_INBOUND] }))

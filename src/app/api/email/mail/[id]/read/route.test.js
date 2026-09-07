@@ -1,4 +1,4 @@
-// EMAIL-TICKET.4 — marking a ticket read.
+// EMAIL-TICKET.4 — marking a conversation read.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -19,7 +19,7 @@ import {
 
 function post(id) {
   return POST(
-    new Request(`http://x/api/email/tickets/${id}/read`, { method: 'POST' }),
+    new Request(`http://x/api/email/conversations/${id}/read`, { method: 'POST' }),
     { params: Promise.resolve({ id }) }
   )
 }
@@ -39,7 +39,7 @@ describe('POST …/read', () => {
   })
 
   // EMAIL-TICKET-CLEANUP.1 — 404, not the 403 this used to be. The gate moved
-  // into loadTicketForUser so it can resolve at the TICKET'S location, which
+  // into loadConversationForUser so it can resolve at the TICKET'S location, which
   // means it now runs AFTER the row is read — and a 403 there would say "this
   // id exists, at a studio where you lack the key" while a bad id says 404.
   // Every other way to be refused on this surface is already indistinguishable;
@@ -52,7 +52,7 @@ describe('POST …/read', () => {
     expect(db.updates).toHaveLength(0)
   })
 
-  it('404s on a ticket whose mailbox the caller cannot see, and writes nothing', async () => {
+  it('404s on a conversation whose mailbox the caller cannot see, and writes nothing', async () => {
     expect((await post(T_ACCOUNTS.id)).status).toBe(404)
     expect(db.updates).toHaveLength(0)
     expect(db._state.tickets.find(t => t.id === T_ACCOUNTS.id).unread_count).toBe(1)
@@ -63,7 +63,7 @@ describe('POST …/read', () => {
     expect(res.status).toBe(200)
     expect((await res.json()).data).toEqual({ unread_count: 0 })
     expect(db._state.tickets.find(t => t.id === T_STUDIO.id).unread_count).toBe(0)
-    // Reading is not a change to the ticket — updated_at must not move, or any
+    // Reading is not a change to the conversation — updated_at must not move, or any
     // queue sorted on it silently reorders every time someone looks.
     expect(updatesTo(db, 'email_tickets')[0].payload).toEqual({ unread_count: 0 })
   })
@@ -72,7 +72,7 @@ describe('POST …/read', () => {
 // EMAIL-TICKET-CLEANUP.1 — the permission follows the TICKET'S location.
 //
 // The gate used to be hasPermission(), resolved against the caller's ACTIVE
-// location, which is not the question a route keyed on a ticket id is asked.
+// location, which is not the question a route keyed on a conversation id is asked.
 // ONE user, TWO studios, opposite answers — and the real resolver rather than a
 // mock, because a mock cannot fail the way the shipped code did.
 //
@@ -109,7 +109,7 @@ describe('POST …/read — the permission follows the TICKET’S location', () 
 // EMAIL-TICKET-CLEANUP.2 — a FAILED visibility lookup is not "no mailboxes".
 //
 // Left as `|| []` it fell through the per-account gate as an empty visible set,
-// so every detail route answered 404 — telling an operator the ticket in front
+// so every detail route answered 404 — telling an operator the conversation in front
 // of them does not exist, on the strength of a blipped query. Revert the error
 // branch in loadVisibleMailboxes and this goes back to 404 and fails.
 describe('POST …/read — a failed mailbox lookup is not an empty one', () => {

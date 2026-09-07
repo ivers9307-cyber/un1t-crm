@@ -1,5 +1,5 @@
 // EMAIL-ATTACH-PREVIEW.1 —
-// GET /api/email/tickets/[id]/attachments/[attachmentId]/preview
+// GET /api/email/conversations/[id]/attachments/[attachmentId]/preview
 //
 // Mints a short-lived signed INLINE URL for ONE stored attachment, so the
 // operator can look at a member's photo or PDF without downloading it first.
@@ -14,7 +14,7 @@
 // to a parameter that carries more than a disposition.
 //
 // So there is no parameter. There are two routes, each with one hard-coded
-// behaviour, sharing one gate (../../_helpers → loadAttachmentForTicket):
+// behaviour, sharing one gate (../../_helpers → loadAttachmentForConversation):
 //
 //   …/attachments/[attachmentId]           always downloads, every type
 //   …/attachments/[attachmentId]/preview   always inline, allow-listed types only
@@ -33,7 +33,7 @@
 // an inline handle to its bytes, not even one nothing renders yet.
 //
 // 404 — never 403 — for every refusal, and a non-previewable type is one of
-// them: the caller already holds the ticket and already knows the file exists
+// them: the caller already holds the conversation and already knows the file exists
 // (the thread lists it), so this says nothing new, and it keeps every refusal
 // on this surface indistinguishable.
 //
@@ -45,7 +45,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { signedAttachmentPreviewUrl } from '@/lib/email-attachments-server'
 import { attachmentPreviewKind } from '@/lib/email-attachment-preview'
-import { loadAttachmentForTicket } from '../../_helpers'
+import { loadAttachmentForConversation } from '../../_helpers'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -62,7 +62,7 @@ export async function GET(request, props) {
 
   const db = createServerClient()
 
-  const loaded = await loadAttachmentForTicket(db, user, params.id, params.attachmentId)
+  const loaded = await loadAttachmentForConversation(db, user, params.id, params.attachmentId)
   if (loaded.response) return loaded.response
   const { attachment } = loaded
 

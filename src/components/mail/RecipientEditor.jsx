@@ -1,6 +1,6 @@
 'use client'
 
-// EMAIL-CC.1 — the recipient editor, shared by every ticket send surface.
+// EMAIL-CC.1 — the recipient editor, shared by every conversation send surface.
 //
 // WHY IT IS ITS OWN COMPONENT AND NOT INLINE IN THE COMPOSER
 // Three surfaces need it — New email, Reply, and the Forward that lands next —

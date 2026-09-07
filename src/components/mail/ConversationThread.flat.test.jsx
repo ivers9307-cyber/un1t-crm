@@ -70,7 +70,7 @@ function renderThread(props = {}) {
   return render(
     <ConversationThread
       hasSelection
-      ticket={TICKET}
+      conversation={TICKET}
       messages={[OLDEST, MIDDLE, NEWEST]}
       currentUserId="me-1"
       onBack={noop}
@@ -211,7 +211,7 @@ describe('merged-in provenance', () => {
   it('the tombstone pointer is a working verb when the surface can navigate', () => {
     const onOpenMergedInto = vi.fn()
     renderThread({
-      ticket: { ...TICKET, merged_into_id: 'T-target' },
+      conversation: { ...TICKET, merged_into_id: 'T-target' },
       onOpenMergedInto,
     })
     fireEvent.click(screen.getByRole('button', { name: /Open the conversation it lives in now/ }))

@@ -1,9 +1,9 @@
-// EMAIL-TICKET-M.1 — pure presentation rules for the MOBILE email ticket
-// surface (the Email tab's queue + the ticket thread screen). Email was a
+// EMAIL-TICKET-M.1 — pure presentation rules for the MOBILE email conversation
+// surface (the Email tab's queue + the conversation thread screen). Email was a
 // channel inside the Messages tab until INBOX-SPLIT.M1 moved it to a tab of
 // its own, matching web; nothing in this file assumes either arrangement.
 //
-// The web equivalent is src/lib/ticket-display.js. This is a deliberate
+// The web equivalent is src/lib/conversation-display.js. This is a deliberate
 // re-statement rather than an import: mobile cannot reach into src/lib
 // (CLAUDE.md — `shared/` is the seam, and that file is web-side, carrying
 // Tailwind chip recipes and a URL builder for a surface mobile does not
@@ -16,11 +16,11 @@
 //      staff-only note paints exactly like a reply the member received — the
 //      one mistake this surface must never make.
 //   2. THE FOUR DELIVERY STATES, and which of them is silent — see the block
-//      comment above ticketDeliveryMeta. A NULL status means "we have not
+//      comment above conversationDeliveryMeta. A NULL status means "we have not
 //      heard", which is neither delivered nor failed.
 //   3. A REPLY SENT FROM SOMEBODY'S OWN MAIL CLIENT IS MARKED AS SUCH
 //      (MAILBOX-COEXIST.1) — and the CRM never claims to have sent it. See
-//      ticketSendOriginMeta and the mail-client branch of ticketDeliveryMeta.
+//      conversationSendOriginMeta and the mail-client branch of conversationDeliveryMeta.
 //
 // Rule 2 has already diverged once (web shipped the not-tracked branch and
 // mobile did not, so one message read differently on a phone and at the desk),
@@ -33,7 +33,7 @@
 // here. They come from shared/mail-vocabulary.js, the same implementation the
 // web Mail surface reads (src/components/mail/mail-vocabulary.js re-exports
 // it), because the hand-mirrored copy HAD drifted: archiveToggleMeta OR-ed the
-// ticket-era status back into a decision the server's `archived` stamp had
+// conversation-era status back into a decision the server's `archived` stamp had
 // already made, and a legacy `solved` row the server calls live was presented
 // as archived — the swipe then sent `{archived:false}`, reopening nothing.
 import { isArchived, needsReply } from 'shared/mail-vocabulary'
@@ -46,7 +46,7 @@ import { isArchived, needsReply } from 'shared/mail-vocabulary'
 // (background, on the chip View) and `text` (foreground, on the Text) because
 // RN does not inherit text colour through a View — the same shape
 // contact-command-centre.js uses.
-// RETIRE-TICKETS.1 — the four-state lifecycle left with the ticket queue.
+// RETIRE-TICKETS.1 — the four-state lifecycle left with the conversation queue.
 // On Mail a conversation is in the inbox or it is Archived; the one other
 // fact worth a chip is Needs reply. Same vocabulary as the web surface
 // (src/components/mail/mail-display.js), restated for the file-header reason.
@@ -54,7 +54,7 @@ export function mailStatusChip(row) {
   // The server-stamped flags outrank re-derivation when present (the route
   // stamps `archived` + `needs_reply` on every mail row precisely so no
   // client re-derives the one predicate the surface exists to keep); the
-  // status/direction fallbacks cover ticket-shaped callers with no stamps.
+  // status/direction fallbacks cover conversation-shaped callers with no stamps.
   // MAIL-ARCH.4 — that reading IS shared's isArchived, the only one left: a
   // stampless legacy `solved` reads live, as the server stamps it.
   const archived = isArchived(row)
@@ -78,7 +78,7 @@ export function mailStatusChip(row) {
 // an absent view as the inbox, which is what the tab lands on. The non-null
 // values are exactly the ones the route whitelists — anything else is a 400.
 //
-// Vocabulary matches the web (src/lib/ticket-display.js) on purpose: the same
+// Vocabulary matches the web (src/lib/conversation-display.js) on purpose: the same
 // person works this queue on a phone and at the desk, and a queue that is
 // named differently in the two places is a queue they will mis-read. It is a
 // re-statement rather than an import for the reason in the file header.
@@ -140,7 +140,7 @@ export function ticketViewWire(id) {
  *
  * @returns {'note'|'outbound'|'inbound'}
  */
-export function ticketMessageKind(message) {
+export function conversationMessageKind(message) {
   if (!message) return 'inbound'
   if (message.is_internal_note) return 'note'
   return message.direction === 'outbound' ? 'outbound' : 'inbound'
@@ -149,7 +149,7 @@ export function ticketMessageKind(message) {
 // ── Where a reply was actually sent from (MAILBOX-COEXIST.1) ─────────
 //
 // Rule 3 in the file header. A re-statement of sendOriginMeta in
-// src/lib/ticket-display.js — same predicate, same words, for the reason the
+// src/lib/conversation-display.js — same predicate, same words, for the reason the
 // header gives.
 //
 // Phase 8 polls a connected mailbox's Sent folder, so a reply somebody typed
@@ -161,7 +161,7 @@ export function ticketMessageKind(message) {
 // not from where — and with no author to name, the origin is the only honest
 // answer to "who replied?" there is.
 //
-// ticketMessageKind deliberately does NOT grow a fourth value: it IS an
+// conversationMessageKind deliberately does NOT grow a fourth value: it IS an
 // outbound message, and that function's three-case note-first ordering is the
 // safety property of this whole screen. This is a separate rule beside it.
 
@@ -173,14 +173,14 @@ export function ticketMessageKind(message) {
  * first: an inbound message's origin is the sender's own business, and a note
  * was never sent from anywhere.
  *
- * `icon` is an Ionicons name, matching the shape ticketDeliveryMeta returns —
+ * `icon` is an Ionicons name, matching the shape conversationDeliveryMeta returns —
  * the web version leaves icon choice to its component, which is the same split
  * this file already lives with.
  *
  * @param {object|null} message
  * @returns {null | { source: 'mail_client', label: string, detail: string, icon: string }}
  */
-export function ticketSendOriginMeta(message) {
+export function conversationSendOriginMeta(message) {
   if (!message) return null
   if (message.is_internal_note) return null
   if (message.direction !== 'outbound') return null
@@ -197,7 +197,7 @@ export function ticketSendOriginMeta(message) {
 
 // ── Recipients (EMAIL-CC.1) ──────────────────────────────────────────
 //
-// A re-statement of src/lib/ticket-display.js's messageEnvelope, for the
+// A re-statement of src/lib/conversation-display.js's messageEnvelope, for the
 // reason in this file's header. MOBILE SHOWS RECIPIENTS BUT DOES NOT EDIT
 // THEM: the reply box here posts `{ text, internal }` and nothing else, so the
 // server derives everybody on the thread and includes them — a mobile reply is
@@ -209,7 +209,7 @@ export function ticketSendOriginMeta(message) {
 //
 // THE BCC RULE IS THE SAME ONE AND IT IS WHY BCC IS RENDERED AT ALL. This
 // screen is behind the identical gate as the web thread (location + the
-// email_inbox key + a grant on the ticket's mailbox), so the sender seeing
+// email_inbox key + a grant on the conversation's mailbox), so the sender seeing
 // their own blind-copy list is correct. `staffOnly` exists so the screen can
 // say, in words, that no recipient of the email could see it.
 /**
@@ -277,7 +277,7 @@ export function sentToLabel(message, fallback = 'the member') {
  *   exactly one and only the first of several otherwise
  * @returns {{ key: string, label: string, addresses: string[], staffOnly: boolean }[]}
  */
-export function ticketMessageRecipients(message, { toShownInHeader = false } = {}) {
+export function conversationMessageRecipients(message, { toShownInHeader = false } = {}) {
   if (!message) return []
   const list = (v) => (Array.isArray(v) ? v.filter(Boolean) : [])
   const to = toAddresses(message)
@@ -297,7 +297,7 @@ export function ticketMessageRecipients(message, { toShownInHeader = false } = {
 //
 // GET .../[id] derives the reply audience from the WHOLE thread and answers
 // it as reply_recipients = { to, mode, over_cap, empty } — the same shape
-// TicketReplyBox.jsx reads on web. Before this, the composer footer below
+// ConversationReplyBox.jsx reads on web. Before this, the composer footer below
 // said "Sends an email to <requester>" unconditionally, even though a reply
 // from this screen has ALWAYS gone to everyone the server derives (this
 // file's own header — mobile posts { text, internal } and the route adds the
@@ -319,7 +319,7 @@ export function ticketMessageRecipients(message, { toShownInHeader = false } = {
 //   3. over_cap — more recipients than one email may carry.
 //   4. the normal case — name them.
 // (1) is checked first regardless of what reply_recipients says, matching
-// TicketReplyBox.jsx's `canReply` gate on web exactly.
+// ConversationReplyBox.jsx's `canReply` gate on web exactly.
 
 /**
  * The composer footer's text and whether Send must be disabled, for a reply
@@ -346,15 +346,15 @@ export function ticketMessageRecipients(message, { toShownInHeader = false } = {
  * named whoever happened to be earliest rather than whoever was being
  * answered.)
  *
- * @param {{requester_email?: string, mailbox?: {address?: string}}|null} ticket
+ * @param {{requester_email?: string, mailbox?: {address?: string}}|null} conversation
  * @param {{to: string[], mode: string, over_cap: boolean, empty: boolean}|null} replyRecipients
  * @returns {{ text: string, disabled: boolean }}
  */
-export function ticketReplyAudienceMeta(ticket, replyRecipients) {
-  if (!ticket?.requester_email) {
+export function conversationReplyAudienceMeta(conversation, replyRecipients) {
+  if (!conversation?.requester_email) {
     return {
       disabled: true,
-      text: 'This ticket has no requester address, so it cannot be replied to. You can still add an internal note.',
+      text: 'This conversation has no requester address, so it cannot be replied to. You can still add an internal note.',
     }
   }
 
@@ -366,7 +366,7 @@ export function ticketReplyAudienceMeta(ticket, replyRecipients) {
     }
   }
 
-  const to = ticketReplyAudience(ticket, replyRecipients)
+  const to = conversationReplyAudience(conversation, replyRecipients)
 
   if (replyRecipients?.over_cap) {
     return {
@@ -375,7 +375,7 @@ export function ticketReplyAudienceMeta(ticket, replyRecipients) {
     }
   }
 
-  const mailboxNote = ticket?.mailbox?.address ? ` · replies come back to ${ticket.mailbox.address}` : ''
+  const mailboxNote = conversation?.mailbox?.address ? ` · replies come back to ${conversation.mailbox.address}` : ''
   const text = to.length === 1
     ? `Sends an email to ${to[0]}${mailboxNote}`
     : `Sends an email to ${to[0]} and ${to.length - 1} ${to.length === 2 ? 'other' : 'others'}${mailboxNote}`
@@ -388,9 +388,9 @@ export function ticketReplyAudienceMeta(ticket, replyRecipients) {
  *
  * The footer, the composer placeholder and the header line all answer "who
  * does this reach", and three of them working it out separately is three
- * chances to disagree about one ticket. That is not hypothetical: it is
+ * chances to disagree about one conversation. That is not hypothetical: it is
  * precisely what shipped. Web keeps its equivalent in ONE place too
- * (TicketReplyBox's `lockedTo`, read by both its placeholder and its
+ * (ConversationReplyBox's `lockedTo`, read by both its placeholder and its
  * sentence), and the server keeps its own in ticketParticipants().
  *
  * THE EMPTY RULE, which is the whole reason this is a function and not an
@@ -401,23 +401,23 @@ export function ticketReplyAudienceMeta(ticket, replyRecipients) {
  * own-address lookup blip) is a DIFFERENT answer and the only one the
  * requester fills.
  *
- * @param {{requester_email?: string}|null} ticket
+ * @param {{requester_email?: string}|null} conversation
  * @param {{to?: string[], empty?: boolean}|null} replyRecipients
  * @returns {string[]}  possibly empty, never holding a hole
  */
-export function ticketReplyAudience(ticket, replyRecipients) {
+export function conversationReplyAudience(conversation, replyRecipients) {
   if (replyRecipients?.empty) return []
   const derived = (Array.isArray(replyRecipients?.to) ? replyRecipients.to : []).filter(Boolean)
   if (derived.length) return derived
-  return ticket?.requester_email ? [ticket.requester_email] : []
+  return conversation?.requester_email ? [conversation.requester_email] : []
 }
 
 /**
  * What the composer's text box says before anything is typed.
  *
- * It read `Reply to ${ticket.requester_email}…` — the address the FIRST
+ * It read `Reply to ${conversation.requester_email}…` — the address the FIRST
  * message arrived from — until EMAIL-PARTICIPANTS.12. On the 2026-08-12
- * ticket that put "Reply to ratesoffice@dublincity.ie" in the box an operator
+ * conversation that put "Reply to ratesoffice@dublincity.ie" in the box an operator
  * types into, directly above a footer saying the mail goes to Eleanor and one
  * other: the composer contradicting itself in two adjacent lines, on the
  * screen where the wrong name is most expensive. Web fixed the same string in
@@ -427,17 +427,17 @@ export function ticketReplyAudience(ticket, replyRecipients) {
  * placeholder already use, and the reason the first entry has to be the live
  * counterparty rather than whoever appeared earliest.
  *
- * @param {{requester_email?: string}|null} ticket
+ * @param {{requester_email?: string}|null} conversation
  * @param {{to?: string[], empty?: boolean}|null} replyRecipients
  * @returns {string}
  */
-export function ticketReplyPlaceholder(ticket, replyRecipients) {
-  // Checked first, exactly like ticketReplyAudienceMeta and web's `canReply`:
-  // a ticket with no requester address cannot be replied to at all, whatever
+export function conversationReplyPlaceholder(conversation, replyRecipients) {
+  // Checked first, exactly like conversationReplyAudienceMeta and web's `canReply`:
+  // a conversation with no requester address cannot be replied to at all, whatever
   // reply_recipients says.
-  if (!ticket?.requester_email) return 'No requester address — add an internal note instead'
+  if (!conversation?.requester_email) return 'No requester address — add an internal note instead'
 
-  const to = ticketReplyAudience(ticket, replyRecipients)
+  const to = conversationReplyAudience(conversation, replyRecipients)
   if (to.length === 0) return 'Reply…'
   if (to.length === 1) return `Reply to ${to[0]}…`
   return `Reply to ${to[0]} and ${to.length - 1} ${to.length === 2 ? 'other' : 'others'}…`
@@ -447,7 +447,7 @@ export function ticketReplyPlaceholder(ticket, replyRecipients) {
  * WHO THE TICKET IS ACTUALLY WITH — the line under the subject, and the
  * "Opened by" line beneath it (mobile's half of EMAIL-PARTICIPANTS.8/.12).
  *
- * This line was `ticket.requester_email` raw: the person the FIRST message
+ * This line was `conversation.requester_email` raw: the person the FIRST message
  * came from and nothing more. When a shared mailbox hands a thread to a named
  * person — a rates office forwarding to an officer, 2026-08-12 — every message
  * afterwards is with somebody this header never named, and an operator reading
@@ -455,19 +455,19 @@ export function ticketReplyPlaceholder(ticket, replyRecipients) {
  * reply.
  *
  * "OPENED BY …" APPEARS ONLY WHEN THE TWO HAVE DIVERGED, i.e. the requester is
- * not the live counterparty. On an ordinary ticket they are the same address
- * and the line would be noise on every ticket — which is exactly how the one
- * ticket that needed it would get skipped over. The requester's NAME rides on
+ * not the live counterparty. On an ordinary conversation they are the same address
+ * and the line would be noise on every conversation — which is exactly how the one
+ * conversation that needed it would get skipped over. The requester's NAME rides on
  * their own address rather than sitting on a line of its own, for the same
  * reason web does it: a name floating above the participants is the wrong name
  * in the most prominent place the moment the thread moves to somebody else.
  *
- * @param {{requester_email?: string, requester_name?: string}|null} ticket
+ * @param {{requester_email?: string, requester_name?: string}|null} conversation
  * @param {{to?: string[], empty?: boolean}|null} replyRecipients
  * @returns {{ primary: string, opener: string|null }}
  */
-export function ticketThreadAudienceLines(ticket, replyRecipients) {
-  const requester = ticket?.requester_email || ''
+export function conversationThreadAudienceLines(conversation, replyRecipients) {
+  const requester = conversation?.requester_email || ''
 
   if (replyRecipients?.empty) {
     return { primary: 'Nobody is left on this thread — every recipient was removed.', opener: null }
@@ -482,7 +482,7 @@ export function ticketThreadAudienceLines(ticket, replyRecipients) {
   // a stored column, the other is derived off message headers a stranger's
   // mail client wrote. A case difference is not a change of counterparty.
   const norm = (a) => String(a || '').trim().toLowerCase()
-  const name = ticket?.requester_name || ''
+  const name = conversation?.requester_name || ''
   const withName = (address) => (
     name && norm(address) === norm(requester) ? `${name} <${address}>` : address
   )
@@ -497,7 +497,7 @@ export function ticketThreadAudienceLines(ticket, replyRecipients) {
 
 // ── Delivery status (EMAIL-DELIVERY.1) ───────────────────────────────
 //
-// A re-statement of src/lib/ticket-display.js's deliveryMeta, for the reason
+// A re-statement of src/lib/conversation-display.js's deliveryMeta, for the reason
 // in this file's header (mobile cannot reach into src/lib; the web version
 // carries Tailwind chip strings shaped for the web DOM). The RULES are the
 // ones that must not diverge, so they are spelled out again here:
@@ -533,7 +533,7 @@ const BOUNCE_ADVICE = Object.freeze({
  *   headline?: string, advice?: string, detail?: string|null,
  *   cls?: string, text?: string, icon?: string, iconColor?: string}}
  */
-export function ticketDeliveryMeta(message) {
+export function conversationDeliveryMeta(message) {
   if (!message) return null
   if (message.is_internal_note) return null
   if (message.direction !== 'outbound') return null
@@ -577,7 +577,7 @@ export function ticketDeliveryMeta(message) {
 
   // MAILBOX-COEXIST.1 — A REPLY WE ONLY OBSERVED, AND NEVER SENT.
   //
-  // Mirrors the branch of the same name in src/lib/ticket-display.js; rule 3
+  // Mirrors the branch of the same name in src/lib/conversation-display.js; rule 3
   // in the file header.
   //
   // 🔴 IT EXISTS BECAUSE THE BRANCH BELOW WOULD OTHERWISE SWALLOW IT AND SAY
@@ -608,7 +608,7 @@ export function ticketDeliveryMeta(message) {
 
   // MAILBOX-CONNECT.7 — SENT OVER THE MAILBOX'S OWN SMTP SERVER.
   //
-  // Mirrors the branch of the same name in src/lib/ticket-display.js; this is
+  // Mirrors the branch of the same name in src/lib/conversation-display.js; this is
   // one of the RULES the header above says must not diverge, and it was missed
   // on the first pass (web said "Not tracked", mobile said nothing about the
   // same message).
@@ -638,9 +638,9 @@ export function ticketDeliveryMeta(message) {
 
 // ── Labels ───────────────────────────────────────────────────────────
 /** Who wrote in: their name if we have one, else the address they wrote from. */
-export function requesterLabel(ticket) {
-  if (!ticket) return 'Unknown sender'
-  return ticket.requester_name || ticket.requester_email || 'Unknown sender'
+export function requesterLabel(conversation) {
+  if (!conversation) return 'Unknown sender'
+  return conversation.requester_name || conversation.requester_email || 'Unknown sender'
 }
 
 /** A mailbox's human name for a row chip or the thread header. */
@@ -651,33 +651,33 @@ export function mailboxLabel(mailbox) {
 
 // ── Queue rows ───────────────────────────────────────────────────────
 /**
- * Turn one ticket into a row for the Email tab's list.
+ * Turn one conversation into a row for the Email tab's list.
  *
- * Two fields are conversation-shaped rather than ticket-shaped. They date
+ * Two fields are conversation-shaped rather than conversation-shaped. They date
  * from INBOX-EMAIL-M.1, when these rows were merged into the Messages list
  * beside WhatsApp and Instagram; INBOX-SPLIT.M1 gave email its own tab, which
  * filters server-side via ?view= and reads neither. They are kept because
- * each states something TRUE about a ticket that a conversation-shaped
+ * each states something TRUE about a conversation that a conversation-shaped
  * consumer would otherwise guess wrong:
  *
  *   • `resolved_at` — mobile/lib/inbox.js's needs-reply queue keys on it, and
- *     tickets have no such column. Solved/closed IS the resolved half of the
+ *     conversations have no such column. Solved/closed IS the resolved half of the
  *     lifecycle, so it maps to the stamp; open/pending map to null. A row
- *     that lied about being unresolved would file a closed ticket under
+ *     that lied about being unresolved would file a closed conversation under
  *     "needs reply", which is the sort of thing that is never noticed.
  *   • `pending_approval: false` — stated rather than left undefined. There is
  *     no customer agent on email, so no email row can ever hold an approval,
  *     and the Messages tab's `?? pendingIds.has(id)` backfill (keyed on
- *     WhatsApp conversation ids) must never run against a ticket id.
+ *     WhatsApp conversation ids) must never run against a conversation id.
  *
- * @param {object} ticket
+ * @param {object} conversation
  * @param {object} [opts]
  * @param {Record<string, object>} [opts.mailboxById]
  * @param {boolean} [opts.showMailbox] true when the caller can see more than
  *   one account, and a row therefore has to say which one it arrived at
  */
-export function ticketToInboxRow(ticket, { mailboxById = {}, showMailbox = false } = {}) {
-  const t = ticket || {}
+export function conversationToInboxRow(conversation, { mailboxById = {}, showMailbox = false } = {}) {
+  const t = conversation || {}
   const mailbox = t.mailbox_id ? mailboxById[t.mailbox_id] || null : null
   return {
     id: t.id,
@@ -690,9 +690,9 @@ export function ticketToInboxRow(ticket, { mailboxById = {}, showMailbox = false
     last_message_direction: t.last_message_direction || null,
     last_message_preview: t.last_message_preview || null,
     // MOBILE-MAIL.1 — the mail list's own read model: per-message seen_at,
-    // mirrored from IMAP \Seen where an account is connected. The ticket-era
+    // mirrored from IMAP \Seen where an account is connected. The conversation-era
     // unread_count column rides as the fallback for any caller still shaping
-    // ticket rows through this.
+    // conversation rows through this.
     unread_count: t.unread_count_messages ?? t.unread_count ?? 0,
     unread: t.unread === true,
     needs_reply: t.needs_reply === true,
@@ -707,7 +707,7 @@ export function ticketToInboxRow(ticket, { mailboxById = {}, showMailbox = false
     // in the Inbox), and an OR over isArchivedStatus overrode that explicit
     // false — so swiping one sent `{archived:false}` and REOPENED a resolved
     // conversation instead of archiving it. The status fallback now applies
-    // only when the flag is absent (a ticket-era caller shaping raw rows) —
+    // only when the flag is absent (a conversation-era caller shaping raw rows) —
     // MAIL-ARCH.4: that reading is shared's isArchived (archivedOrStatus and
     // its `solved` fallback are gone), and `resolved_at` follows the SAME
     // verdict so a row the server calls live can never carry a resolution
@@ -725,20 +725,20 @@ export function ticketToInboxRow(ticket, { mailboxById = {}, showMailbox = false
  * Takes BOTH halves because the mailbox names live on `mailboxes`, and
  * whether a row shows one at all depends on how many there are.
  */
-export function ticketsToInboxRows({ tickets = [], mailboxes = [] } = {}) {
+export function conversationsToInboxRows({ conversations = [], mailboxes = [] } = {}) {
   const mailboxById = {}
   for (const m of mailboxes) {
     if (m?.id) mailboxById[m.id] = m
   }
   const showMailbox = mailboxes.length > 1
-  return tickets.map(t => ticketToInboxRow(t, { mailboxById, showMailbox }))
+  return conversations.map(t => conversationToInboxRow(t, { mailboxById, showMailbox }))
 }
 
 // ── Attachments (EMAIL-ATTACH-PREVIEW.1) ────────────────────────────
 //
 // Mobile showed NOTHING for a message's files until this — not the names, not
 // the sizes, and not the sentence explaining that an over-quota one was never
-// stored. A coach reading a ticket on their phone saw a member's photo email as
+// stored. A coach reading a conversation on their phone saw a member's photo email as
 // an empty message, which is the same operator-facing bug the web thread had.
 //
 // The two display helpers below are DELIBERATE COPIES of the web ones in
@@ -771,7 +771,7 @@ export function formatAttachmentSize(value) {
  * A NOT-STORED ATTACHMENT IS SHOWN, NOT HIDDEN — a file that simply vanished
  * from the thread would have staff telling a member "you never sent it".
  */
-export function ticketAttachmentSkippedLabel(reason) {
+export function conversationAttachmentSkippedLabel(reason) {
   switch (reason) {
     case 'quota': return 'Not stored — mailbox was full'
     case 'too_large': return 'Not stored — over the size limit'
@@ -788,7 +788,7 @@ export function ticketAttachmentSkippedLabel(reason) {
  * safeMimeType caps a subtype at 60 characters and that one is 61). Cosmetic:
  * the filename never influences anything that touches bytes.
  */
-export function ticketAttachmentIcon(mimeType, filename) {
+export function conversationAttachmentIcon(mimeType, filename) {
   const mime = String(mimeType || '').toLowerCase()
   const parts = String(filename || '').toLowerCase().split('.')
   const ext = parts.length > 1 ? parts[parts.length - 1] : ''
@@ -803,7 +803,7 @@ export function ticketAttachmentIcon(mimeType, filename) {
 
 // ── How often an OPEN thread re-reads itself (EMAIL-ATTACH-RACE.1) ───
 //
-// The web statement of this is threadRefreshMs in src/lib/ticket-display.js,
+// The web statement of this is threadRefreshMs in src/lib/conversation-display.js,
 // with the full account of the race. The short version: the inbound webhook
 // files the message row FIRST and writes email_ticket_attachments AFTER it —
 // the attachment rows carry a foreign key to the message, and attachment work
@@ -818,7 +818,7 @@ export function ticketAttachmentIcon(mimeType, filename) {
 //
 // Two speeds — fast while the newest message is young enough that rows may
 // still be arriving, slow otherwise. The numbers match web on purpose: an
-// operator watching the same ticket on a phone and a laptop should not see one
+// operator watching the same conversation on a phone and a laptop should not see one
 // of them catch up first for reasons neither of them can see.
 
 export const THREAD_SETTLE_MS = 5_000
@@ -1037,7 +1037,7 @@ export function segCountLabel(n) {
 //
 // The approved 31 Aug mockup (§01 row, §02 thread). Same posture as the rest
 // of this file: every branchable decision lives here where vitest reaches it;
-// MailRow.jsx and [ticketId].jsx lay the verdicts out.
+// MailRow.jsx and [conversationId].jsx lay the verdicts out.
 
 // ── §01 — what the redesigned row shows ──────────────────────────────
 /**
@@ -1052,7 +1052,7 @@ export function segCountLabel(n) {
  *   • `chip`  — ARCHIVED only now (via mailStatusChip, which already returns
  *     exactly that for archived rows). Live rows carry no chip at all.
  *   • `accountTag` — the small muted mailbox label ("accounts@"), non-null
- *     only when the caller can see 2+ mailboxes (ticketToInboxRow already
+ *     only when the caller can see 2+ mailboxes (conversationToInboxRow already
  *     nulls it otherwise — this passes that verdict through).
  *
  * THE SERVER STAMP OUTRANKS RE-DERIVATION, same as mailStatusChip and the

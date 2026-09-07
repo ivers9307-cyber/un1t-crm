@@ -3,14 +3,14 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { loadConversationForUser } from '../../_conversation'
 
-// POST /api/email/tickets/[id]/read — zero the unread badge
+// POST /api/email/conversations/[id]/read — zero the unread badge
 // (EMAIL-TICKET.4).
 //
 // Its own endpoint rather than a side effect of the detail GET, so opening a
-// ticket to read it is an explicit, idempotent action and the GET stays free
-// of writes. Same 404 rules as every other ticket route.
+// conversation to read it is an explicit, idempotent action and the GET stays free
+// of writes. Same 404 rules as every other conversation route.
 //
-// updated_at is deliberately NOT bumped: reading a ticket is not a change to
+// updated_at is deliberately NOT bumped: reading a conversation is not a change to
 // it, and bumping it would reorder any queue sorted on it.
 //
 // BOTH GATES LIVE IN loadConversationForUser (EMAIL-TICKET-CLEANUP.1) — the
@@ -26,11 +26,11 @@ export async function POST(request, props) {
   const db = createServerClient()
   const loaded = await loadConversationForUser(db, user, params.id)
   if (loaded.response) return loaded.response
-  const { ticket } = loaded
+  const { conversation } = loaded
 
   const { error } = await db.from('email_tickets')
     .update({ unread_count: 0 })
-    .eq('id', ticket.id)
+    .eq('id', conversation.id)
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
 
   return NextResponse.json({ success: true, data: { unread_count: 0 } })

@@ -4,13 +4,13 @@
 //
 // WHY THIS FILE EXISTS
 // Phase 8 polls a connected mailbox's Sent folder, so a reply typed in Gmail
-// is now filed on the ticket as an outbound row: source 'mail_client', no
+// is now filed on the conversation as an outbound row: source 'mail_client', no
 // author (nobody signed in to send it), no Postmark id, an RFC Message-ID.
 // The whole phase exists to stop TWO PEOPLE ANSWERING ONE MEMBER — and the
 // thread pane is where the second of them would start typing.
 //
 // The lib being honest is not enough, which is the lesson this file is really
-// pinning. Before this change src/lib/ticket-display.js already had a careful
+// pinning. Before this change src/lib/conversation-display.js already had a careful
 // "Not tracked" verdict for a message no provider event can ever confirm, and
 // this component printed the literal word "Delivered" for it anyway, because
 // it keyed on `tone === 'quiet'` and hard-coded the label. So the one row in
@@ -87,7 +87,7 @@ function renderThread(messages) {
   return render(
     <ConversationThread
       hasSelection
-      ticket={TICKET}
+      conversation={TICKET}
       messages={messages}
       currentUserId="me-1"
       onBack={noop}

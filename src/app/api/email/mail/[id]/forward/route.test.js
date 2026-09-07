@@ -12,7 +12,7 @@
 //     own address. Refused, with nothing sent and nothing written.
 //   • THE TICKET DOES NOT MOVE. `needs_reply` is (open AND inbound last
 //     message), so a forward that stamped an outbound last message would drop
-//     a ticket the member is still waiting on out of the queue.
+//     a conversation the member is still waiting on out of the queue.
 //   • ATTACHMENTS ARE SHARED, NOT COPIED, AND NEVER SILENTLY DROPPED. The
 //     forwarded rows point at the ORIGINAL'S key, carry forwarded_from_id, and
 //     an over-budget set is a refusal rather than a truncation.
@@ -44,7 +44,7 @@ import {
 
 function post(id, body) {
   return POST(
-    new Request(`http://x/api/email/tickets/${id}/forward`, {
+    new Request(`http://x/api/email/conversations/${id}/forward`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
     }),
     { params: Promise.resolve({ id }) }
@@ -89,7 +89,7 @@ const OTHER_TICKET_MESSAGE = {
   direction: 'inbound', from_email: 'payer@example.com',
   to_email: 'accounts@un1tdublin.com', to_emails: ['accounts@un1tdublin.com'],
   cc_emails: [], bcc_emails: [],
-  subject: 'Something else', text_body: 'Different ticket entirely.',
+  subject: 'Something else', text_body: 'Different conversation entirely.',
   html_body: null, is_internal_note: false, created_at: '2026-08-06T10:00:00Z',
 }
 
@@ -125,7 +125,7 @@ function setupDb(state) {
   return db
 }
 
-/** The world every test starts in: one ticket, one forwardable message. */
+/** The world every test starts in: one conversation, one forwardable message. */
 function world(extra = {}) {
   return baseState({
     grants: [GRANT_STUDIO],
@@ -166,7 +166,7 @@ describe('POST …/forward — gates', () => {
 
   // The surface key, resolved at the TICKET'S location — the caller holds the
   // grant and the location and is still refused.
-  it('404s without email_inbox at the ticket’s location', async () => {
+  it('404s without email_inbox at the conversation’s location', async () => {
     getCurrentUser.mockResolvedValue(COACH_NO_INBOX)
     const res = await post(T_STUDIO.id, GOOD)
     expect(res.status).toBe(404)
@@ -191,9 +191,9 @@ describe('POST …/forward — gates', () => {
     expect(sendEmail).not.toHaveBeenCalled()
   })
 
-  // Scoped to THIS ticket, so an id from another ticket is simply not found —
+  // Scoped to THIS conversation, so an id from another conversation is simply not found —
   // the caller learns nothing about whether it exists.
-  it('404s for a message that belongs to another ticket', async () => {
+  it('404s for a message that belongs to another conversation', async () => {
     const res = await post(T_STUDIO.id, { ...GOOD, message_id: OTHER_TICKET_MESSAGE.id })
     expect(res.status).toBe(404)
     expect(sendEmail).not.toHaveBeenCalled()
@@ -314,7 +314,7 @@ describe('POST …/forward — bcc never leaves the thread it was typed on', () 
 // ══ OUR OWN ADDRESSES ═══════════════════════════════════════════════
 describe('POST …/forward — our own addresses are excluded', () => {
   // Forwarding to one of our own mailboxes would deliver into the inbound
-  // webhook and file a phantom ticket at the same studio.
+  // webhook and file a phantom conversation at the same studio.
   it('drops a studio mailbox address typed into To', async () => {
     const res = await post(T_STUDIO.id, {
       ...GOOD, to: ['accountant@example.com', MB_STUDIO.address],
@@ -341,7 +341,7 @@ describe('POST …/forward — the mail', () => {
     expect(payload.sender.serverToken).toBe('ticketing-server-token')
     expect(payload.sender.fromEmail).toBe(MB_STUDIO.address)
     expect(payload.replyTo).toBe(MB_STUDIO.address)
-    expect(payload.tag).toBe('ticket-forward')
+    expect(payload.tag).toBe('conversation-forward')
   })
 
   it('prefixes the subject once', async () => {
@@ -387,7 +387,7 @@ describe('POST …/forward — the mail', () => {
 
   // MAIL-SIGDEFAULT.1 — the studio block goes out for everyone. A forward by
   // a person who never opted in carries it, in the rich placement (below the
-  // forwarded block), resolved off the ticket's studio.
+  // forwarded block), resolved off the conversation's studio.
   it('MAIL-SIGDEFAULT.1 — a NEW HIRE forwards with the studio block below the forward, in both parts', async () => {
     getCurrentUser.mockResolvedValue({ ...COACH, email_signature: null, email_signature_rich: null })
     setupDb(world({
@@ -448,7 +448,7 @@ describe('POST …/forward — the mail', () => {
 
 // ══ WHAT IS WRITTEN ═════════════════════════════════════════════════
 describe('POST …/forward — what it writes', () => {
-  it('writes ONE outbound message on the SAME ticket, naming what it forwarded', async () => {
+  it('writes ONE outbound message on the SAME conversation, naming what it forwarded', async () => {
     const res = await post(T_STUDIO.id, { ...GOOD, cc: ['bookkeeper@example.com'] })
     expect(res.status).toBe(200)
     const rows = insertsInto(db, 'email_inbox_messages')
@@ -469,16 +469,16 @@ describe('POST …/forward — what it writes', () => {
   })
 
   // THE ONE THAT KEEPS THE QUEUE HONEST. needs_reply is (open AND inbound last
-  // message); an outbound stamp here would drop a ticket the member is still
+  // message); an outbound stamp here would drop a conversation the member is still
   // waiting on out of the queue because somebody asked the accountant about it.
-  it('does NOT touch the ticket — no status, no last_message, no first_response', async () => {
+  it('does NOT touch the conversation — no status, no last_message, no first_response', async () => {
     await post(T_STUDIO.id, GOOD)
     expect(updatesTo(db, 'email_tickets')).toEqual([])
-    const ticket = db._state.tickets.find(t => t.id === T_STUDIO.id)
-    expect(ticket.status).toBe('open')
-    expect(ticket.last_message_direction).toBe('inbound')
-    expect(ticket.first_response_at).toBeNull()
-    expect(ticket.last_message_preview).toBe('What time is the 6am?')
+    const conversation = db._state.tickets.find(t => t.id === T_STUDIO.id)
+    expect(conversation.status).toBe('open')
+    expect(conversation.last_message_direction).toBe('inbound')
+    expect(conversation.first_response_at).toBeNull()
+    expect(conversation.last_message_preview).toBe('What time is the 6am?')
   })
 
   // A forward goes to a THIRD PARTY. An email_sends row against the member's
@@ -762,7 +762,7 @@ describe('POST …/forward — filing fails AFTER the send', () => {
     expect(dead.payload.payload.text_body).toContain(INBOUND.text_body)
   })
 
-  it('still refuses to touch the ticket — an unfiled forward moves nothing either', async () => {
+  it('still refuses to touch the conversation — an unfiled forward moves nothing either', async () => {
     setupDb(world())
     failWrites(db, ['email_inbox_messages'])
     await post(T_STUDIO.id, GOOD)
@@ -774,7 +774,7 @@ describe('POST …/forward — filing fails AFTER the send', () => {
 //
 // Same rule as the reply route, and it belongs here for a sharper reason: a
 // forward takes what the MEMBER sent us and hands it to a third party. Doing
-// that from a ticket scopeToUnmerged hides means the member's correspondence
+// that from a conversation scopeToUnmerged hides means the member's correspondence
 // goes to an outsider from a thread nobody is watching, with no row anywhere a
 // colleague would find. The messages themselves have already moved to the
 // survivor — forwarding one belongs there.
@@ -782,14 +782,14 @@ describe('POST …/forward — filing fails AFTER the send', () => {
 // The route is the gate: this runs on the service-role client, so the
 // composer being hidden on the web protects only the web. The mobile app has
 // no concept of merge at all.
-describe('a merged ticket cannot be forwarded from', () => {
+describe('a merged conversation cannot be forwarded from', () => {
   it('refuses with 409 and names the survivor — and SENDS NOTHING', async () => {
     setupDb(world({ tickets: [{ ...T_STUDIO, merged_into_id: T_ACCOUNTS.id, status: 'closed' }, { ...T_ACCOUNTS }] }))
 
     const res = await post(T_STUDIO.id, GOOD)
 
     // 409 rather than the 404 the other refusals here use: the caller got past
-    // loadTicketForUser, so the ticket is one they can see and the reason is
+    // loadConversationForUser, so the conversation is one they can see and the reason is
     // one they are owed.
     expect(res.status).toBe(409)
     const body = await res.json()
@@ -805,7 +805,7 @@ describe('a merged ticket cannot be forwarded from', () => {
     expect(writesTo(db)).toEqual([])
   })
 
-  it('still forwards normally on an ordinary ticket', async () => {
+  it('still forwards normally on an ordinary conversation', async () => {
     // The negative half — a guard that refused everything would pass the test
     // above while quietly breaking forwarding.
     const res = await post(T_STUDIO.id, GOOD)

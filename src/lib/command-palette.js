@@ -25,15 +25,15 @@ export const NAV_COMMANDS = [
   // HUBS.2f — relabelled "Messages" to match the sidebar's collapsed entry
   // (nav-items.js), and email_inbox folded into the OR for the same reason
   // as the sidebar's: an accounts@/sales@-only user (email_inbox only)
-  // still needs to find this command. The email-tickets entry below stays
-  // separate — its own deep link into the ticket queue tab.
+  // still needs to find this command. The email-mail entry below stays
+  // separate — its own deep link into the conversation queue tab.
   { id: 'communications', label: 'Messages', href: '/communications', anyPermission: ['email', 'whatsapp', 'sms', 'email_inbox'] },
   // EMAIL-TICKET.4 — the studio email surface. `email_inbox`, not the
   // marketing `email` key (different population of people). INBOX-SPLIT.1
   // relabelled it "Email"; COMMS-IA.3 relabels it again to "Email inbox" so a
   // palette search for "inbox" finds it and it is not confused with sending.
   // The id, href and permission are unchanged.
-  { id: 'email-tickets', label: 'Mail', href: '/communications/mail', permission: 'email_inbox' },
+  { id: 'email-mail', label: 'Mail', href: '/communications/mail', permission: 'email_inbox' },
   { id: 'schedule', label: 'Schedule', href: '/schedule', permission: 'schedule' },
   { id: 'events', label: 'Events', href: '/events', permission: 'races' },
   // EQUIP-MAINT.1 — mirrors the nav-items.js Sidebar entry's gate.

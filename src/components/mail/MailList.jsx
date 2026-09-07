@@ -7,19 +7,19 @@
 // surfaces genuinely disagree about how email is worked:
 //
 //   • READ/UNREAD IS THE PRIMARY WEIGHT. An unread conversation is bold with a
-//     solid dot; a read one recedes. The ticket queue's primary weight is
+//     solid dot; a read one recedes. The conversation queue's primary weight is
 //     STATUS — which is a thing an operator has to maintain, whereas read
 //     state maintains itself (and, via mig 575's seen_at, maintains itself
 //     from the operator's own mail client).
 //   • ARCHIVE IS ON THE ROW. The primary verb is one click from the list,
 //     without opening the conversation — which is how a mail user clears an
-//     inbox. On the ticket surface the lifecycle lives inside the thread, so
+//     inbox. On the conversation surface the lifecycle lives inside the thread, so
 //     closing anything costs an open.
 //   • ONE STATUS SIGNAL SURVIVES, and only one: needs-reply. "Has this member
 //     been answered" is the single thing a mail client cannot tell you, so it
 //     earns a chip; open/pending/solved do not appear at all.
 //   • THE MESSAGE COUNT IS ON THE ROW, because the unit here is a
-//     CONVERSATION. A ticket row describes an issue; a mail row describes an
+//     CONVERSATION. A conversation row describes an issue; a mail row describes an
 //     exchange, and the count is what says so at a glance.
 //
 // Presentational: every action is a callback up to MailSurface.

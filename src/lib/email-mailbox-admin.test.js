@@ -144,7 +144,7 @@ describe('mailboxConstraintMessage — the race backstop', () => {
   // rather than silently downgrading the operator to a raw Postgres string.
   it('translates the surface CHECK', () => {
     expect(mailboxConstraintMessage({ message: 'new row for relation "email_mailboxes" violates check constraint "email_mailboxes_surface_check"' }))
-      .toMatch(/Tickets or in Mail/i)
+      .toMatch(/Conversations or in Mail/i)
   })
 
   it('returns null for anything it does not recognise, so the route does not invent a friendly lie', () => {

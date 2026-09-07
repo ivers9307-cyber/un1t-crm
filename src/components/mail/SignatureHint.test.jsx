@@ -9,14 +9,14 @@
 //     empty plain column included (the exact case the old hint hid)
 //   • the text is the EFFECTIVE signature for `locationId` — studio name,
 //     studio phone/links where the studio card defines them — for EVERY
-//     permitted studio, mailbox or not (an orphan ticket still resolves)
+//     permitted studio, mailbox or not (an orphan conversation still resolves)
 //   • HIDDEN when nothing will be appended, and HIDDEN for a studio the
 //     caller has no context for — never the person's unresolved values
 //   • a photo-only block draws no "-- " separator (the send appends none)
 //   • fetched per mount, and REFETCHED when another tab saves a signature
 //     (`storage` event) or the tab comes back into view (throttled)
-//   • the reply box hands it the ticket's own location (the send resolves
-//     the studio half off ticket.location_id, so the hint must too)
+//   • the reply box hands it the conversation's own location (the send resolves
+//     the studio half off conversation.location_id, so the hint must too)
 
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { render, cleanup, screen, act, waitFor } from '@testing-library/react'
@@ -42,7 +42,7 @@ const CONTEXTS = [
     studio_signature: { phone: '01 555 0001', links: [{ label: 'Book Stillorgan', url: 'https://un1t.ie/stillorgan' }] },
     has_mailbox: true,
   },
-  // Permitted, NO mailbox — the orphan-ticket studio. Still resolves.
+  // Permitted, NO mailbox — the orphan-conversation studio. Still resolves.
   { location_id: 'loc-hatch', location_name: 'UN1T Hatch Street', studio_signature: null, has_mailbox: false },
 ]
 
@@ -278,13 +278,13 @@ describe('SignatureHint — a mounted composer never goes stale', () => {
   })
 })
 
-describe('ReplyBox hands the hint the ticket’s own location', () => {
-  it('a reply on a MAILBOX-LESS orphan ticket at a permitted studio resolves that studio — never the stored note', async () => {
+describe('ReplyBox hands the hint the conversation’s own location', () => {
+  it('a reply on a MAILBOX-LESS orphan conversation at a permitted studio resolves that studio — never the stored note', async () => {
     stubPreferences({ email_signature: '', email_signature_rich: RICH })
     render(
       <ReplyBox
-        ticket={{
-          id: 'ticket-1', subject: 'Freeze', requester_email: 'a@x.com',
+        conversation={{
+          id: 'conversation-1', subject: 'Freeze', requester_email: 'a@x.com',
           // Orphan: no mailbox (ON DELETE SET NULL), at Hatch — which runs
           // no mailbox at all. The send still resolves Hatch; so must this.
           status: 'open', mailbox_id: null, location_id: 'loc-hatch',

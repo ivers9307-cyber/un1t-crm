@@ -92,12 +92,12 @@ export function AttachmentIcon({ mimeType, filename, ...props }) {
  * The overlay. Rendered once by the thread, for whichever attachment is open.
  *
  * @param {object} props
- * @param {string} props.ticketId
+ * @param {string} props.conversationId
  * @param {object|null} props.attachment  the row from the thread payload, or
  *   null when nothing is open. Carries `preview_kind` from the server.
  * @param {()=>void} props.onClose
  */
-export default function AttachmentPreview({ ticketId, attachment, onClose }) {
+export default function AttachmentPreview({ conversationId, attachment, onClose }) {
   const [state, setState] = useState({ status: 'idle', url: null, error: null })
   const [downloading, setDownloading] = useState(false)
   const [downloadError, setDownloadError] = useState(null)
@@ -110,11 +110,11 @@ export default function AttachmentPreview({ ticketId, attachment, onClose }) {
   const previewKind = attachment?.preview_kind || null
 
   const loadPreview = useCallback(async () => {
-    if (!ticketId || !attachmentId || !previewKind) return
+    if (!conversationId || !attachmentId || !previewKind) return
     requestFor.current = attachmentId
     setState({ status: 'loading', url: null, error: null })
     try {
-      const res = await fetch(`/api/email/mail/${ticketId}/attachments/${attachmentId}/preview`)
+      const res = await fetch(`/api/email/mail/${conversationId}/attachments/${attachmentId}/preview`)
       const j = await res.json().catch(() => ({}))
       if (requestFor.current !== attachmentId) return // superseded
       if (!res.ok || !j.success || !j.data?.url) {
@@ -132,7 +132,7 @@ export default function AttachmentPreview({ ticketId, attachment, onClose }) {
       if (requestFor.current !== attachmentId) return
       setState({ status: 'error', url: null, error: 'That preview could not be loaded.' })
     }
-  }, [ticketId, attachmentId, previewKind])
+  }, [conversationId, attachmentId, previewKind])
 
   useEffect(() => {
     setDownloadError(null)
@@ -151,11 +151,11 @@ export default function AttachmentPreview({ ticketId, attachment, onClose }) {
   }, [open, previewKind, loadPreview])
 
   async function download() {
-    if (!ticketId || !attachmentId || downloading) return
+    if (!conversationId || !attachmentId || downloading) return
     setDownloading(true)
     setDownloadError(null)
     try {
-      const res = await fetch(`/api/email/mail/${ticketId}/attachments/${attachmentId}`)
+      const res = await fetch(`/api/email/mail/${conversationId}/attachments/${attachmentId}`)
       const j = await res.json().catch(() => ({}))
       if (!res.ok || !j.success || !j.data?.url) {
         setDownloadError(j.error || 'That file could not be downloaded.')

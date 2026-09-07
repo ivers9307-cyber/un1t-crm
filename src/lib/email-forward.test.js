@@ -376,6 +376,6 @@ describe('forwardRefusal — an internal note is not mail', () => {
   })
 
   it('refuses a message that is not there', () => {
-    expect(forwardRefusal(null)).toMatch(/not on this ticket/i)
+    expect(forwardRefusal(null)).toMatch(/not on this conversation/i)
   })
 })

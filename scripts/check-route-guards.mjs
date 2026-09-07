@@ -194,6 +194,10 @@ const INBOX_PERMISSION_GUARDS = [
   // until the identifier sweep (Task 9) removes every caller of it.
   'loadConversationForUser(',
   'loadAttachmentForTicket(',
+  // MAIL-RENAME.1 (Task 9) — loadAttachmentForTicket was renamed to
+  // loadAttachmentForConversation in the mail/[id]/attachments _helpers.js;
+  // the old name stays above until nothing calls it any more.
+  'loadAttachmentForConversation(',
   'loadSendingMailbox(',
   // MAIL-RENAME.1 — a one-line shim inherits the guard of the handler it re-exports; deleted in the shim sweep.
   "from '@/app/api/email/mail/",

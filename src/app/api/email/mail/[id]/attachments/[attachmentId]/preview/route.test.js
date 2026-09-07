@@ -2,8 +2,8 @@
 //
 // THE TWO PROPERTIES THIS FILE EXISTS FOR
 //
-// 1. It is gated exactly like the download route beside it — the ticket's gate
-//    plus the attachment-belongs-to-this-ticket pairing check. Both routes hand
+// 1. It is gated exactly like the download route beside it — the conversation's gate
+//    plus the attachment-belongs-to-this-conversation pairing check. Both routes hand
 //    out a bearer handle to a private object; a preview URL that were reachable
 //    one notch wider than the download URL would be the whole IDOR back again,
 //    on the newer of the two files where nobody would look for it. So the gate
@@ -105,18 +105,18 @@ beforeEach(() => {
   createServerClient.mockImplementation(() => db)
 })
 
-async function preview(ticketId, attachmentId) {
+async function preview(conversationId, attachmentId) {
   const res = await GET(
-    new Request(`http://x/api/email/tickets/${ticketId}/attachments/${attachmentId}/preview`),
-    { params: Promise.resolve({ id: ticketId, attachmentId }) }
+    new Request(`http://x/api/email/conversations/${conversationId}/attachments/${attachmentId}/preview`),
+    { params: Promise.resolve({ id: conversationId, attachmentId }) }
   )
   return { res, body: await res.json() }
 }
 
-async function download(ticketId, attachmentId) {
+async function download(conversationId, attachmentId) {
   const res = await DOWNLOAD(
-    new Request(`http://x/api/email/tickets/${ticketId}/attachments/${attachmentId}`),
-    { params: Promise.resolve({ id: ticketId, attachmentId }) }
+    new Request(`http://x/api/email/conversations/${conversationId}/attachments/${attachmentId}`),
+    { params: Promise.resolve({ id: conversationId, attachmentId }) }
   )
   return { res, body: await res.json() }
 }
@@ -141,11 +141,11 @@ describe('the gate — the same one as the download route', () => {
     expect(JSON.stringify(body)).not.toContain('storage.test')
   })
 
-  // THE IDOR. A ticket the caller CAN open, plus an attachment id from one they
+  // THE IDOR. A conversation the caller CAN open, plus an attachment id from one they
   // cannot. Both halves are individually legitimate; only the pairing check
   // refuses it — and it must refuse the preview exactly as it refuses the
   // download, or the newer route is a way around the older one.
-  it('REFUSES an attachment from another ticket even when the ticket id is legitimate', async () => {
+  it('REFUSES an attachment from another conversation even when the conversation id is legitimate', async () => {
     const { res, body } = await preview(T_STUDIO.id, ACCOUNTS_PHOTO.id)
     expect(res.status).toBe(404)
     expect(JSON.stringify(body)).not.toContain('storage.test')
@@ -157,7 +157,7 @@ describe('the gate — the same one as the download route', () => {
     expect((await preview(T_ACCOUNTS.id, ACCOUNTS_PHOTO.id)).res.status).toBe(200)
   })
 
-  it('404s for an unknown attachment id, a malformed one, and an unknown ticket', async () => {
+  it('404s for an unknown attachment id, a malformed one, and an unknown conversation', async () => {
     expect((await preview(T_STUDIO.id, 'no-such-id')).res.status).toBe(404)
     expect((await preview(T_STUDIO.id, 'not a uuid')).res.status).toBe(404)
     expect((await preview('aaaaaaa9-0000-4000-8000-000000000009', PHOTO.id)).res.status).toBe(404)
@@ -175,10 +175,10 @@ describe('the gate — the same one as the download route', () => {
       [T_STUDIO.id, 'no-such-id'],
       [T_STUDIO.id, SKIPPED.id],
     ]
-    for (const [ticketId, attId] of pairs) {
-      const p = await preview(ticketId, attId)
-      const d = await download(ticketId, attId)
-      expect(p.res.status, `${ticketId}/${attId}`).toBe(d.res.status)
+    for (const [conversationId, attId] of pairs) {
+      const p = await preview(conversationId, attId)
+      const d = await download(conversationId, attId)
+      expect(p.res.status, `${conversationId}/${attId}`).toBe(d.res.status)
     }
   })
 })
@@ -287,7 +287,7 @@ describe('a photo the operator is allowed to see', () => {
     // path ids, which is what stops a request choosing a Storage option.
     const withJunk = await GET(
       new Request(
-        `http://x/api/email/tickets/${T_STUDIO.id}/attachments/${PHOTO.id}/preview`
+        `http://x/api/email/conversations/${T_STUDIO.id}/attachments/${PHOTO.id}/preview`
         + '?download=evil.html&disposition=attachment&transform=1&ttl=99999&expiresIn=99999',
       ),
       { params: Promise.resolve({ id: T_STUDIO.id, attachmentId: PHOTO.id }) },

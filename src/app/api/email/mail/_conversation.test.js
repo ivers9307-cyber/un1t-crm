@@ -11,7 +11,7 @@ describe('resolveReplyAudience', () => {
   it('derives the union and flags nothing when under the cap', () => {
     const out = resolveReplyAudience({
       messages: [M(), M({ from_email: 'colleague@x.com', created_at: '2026-08-02T00:00:00Z' })],
-      ticket: { requester_email: 'member@x.com', excluded_participants: [] },
+      conversation: { requester_email: 'member@x.com', excluded_participants: [] },
       ownAddresses: ['us@ours.com'],
     })
     expect(out.to).toEqual(['colleague@x.com', 'member@x.com'])
@@ -22,7 +22,7 @@ describe('resolveReplyAudience', () => {
   it('falls back to the requester when there is no usable correspondence', () => {
     const out = resolveReplyAudience({
       messages: [M({ is_internal_note: true })],
-      ticket: { requester_email: 'member@x.com', excluded_participants: [] },
+      conversation: { requester_email: 'member@x.com', excluded_participants: [] },
       ownAddresses: ['us@ours.com'],
     })
     expect(out.to).toEqual(['member@x.com'])
@@ -33,7 +33,7 @@ describe('resolveReplyAudience', () => {
   it('does not resurrect an excluded requester through the fallback', () => {
     const out = resolveReplyAudience({
       messages: [M({ is_internal_note: true })],
-      ticket: { requester_email: 'member@x.com', excluded_participants: ['member@x.com'] },
+      conversation: { requester_email: 'member@x.com', excluded_participants: ['member@x.com'] },
       ownAddresses: ['us@ours.com'],
     })
     expect(out.to).toEqual([])
@@ -45,7 +45,7 @@ describe('resolveReplyAudience', () => {
       M({ from_email: `p${i}@x.com`, created_at: `2026-08-01T00:00:${String(i).padStart(2, '0')}Z` }))
     const out = resolveReplyAudience({
       messages: many,
-      ticket: { requester_email: 'p0@x.com', excluded_participants: [] },
+      conversation: { requester_email: 'p0@x.com', excluded_participants: [] },
       ownAddresses: ['us@ours.com'],
     })
     expect(out.over_cap).toBe(true)

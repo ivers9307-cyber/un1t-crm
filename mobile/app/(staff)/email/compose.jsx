@@ -344,7 +344,7 @@ export default function ComposeEmail() {
     setFiles(prev => [...prev, ...entries])
     // Files survive a later change of From — safe, not just convenient: the
     // draft key derives from the SENDER's profile, and the send re-runs the
-    // full send-as gate at the mailbox finally chosen (web TicketCompose).
+    // full send-as gate at the mailbox finally chosen (web ComposeForm).
     for (const entry of entries) {
       if (entry.status === 'uploading') uploadEntry(entry, mailboxId)
     }

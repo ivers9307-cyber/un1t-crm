@@ -3,7 +3,7 @@
 // MAIL-TRIAL.B — the Mail surface: list on the left, the conversation on the
 // right, archive as the verb that empties the left.
 //
-// WHY IT EXISTS AT ALL. `accounts@hatchstreetfitness.com` stays on the ticket
+// WHY IT EXISTS AT ALL. `accounts@hatchstreetfitness.com` stays on the conversation
 // queue, `hatchstreet@un1t.com` runs here, and Richard picks one. So this has
 // to be a genuine alternative rather than the same queue in different words —
 // if the two surfaces agree about how mail is worked, the trial answers
@@ -17,13 +17,13 @@
 //   • the new-email composer            — ComposeForm, unchanged
 //   • the forward composer              — ForwardForm, unchanged
 //   • reading a conversation            — GET /api/email/mail/[id]
-//   • sending, forwarding, participants — the same routes as the ticket queue
+//   • sending, forwarding, participants — the same routes as the conversation queue
 // Only the LIST and the two verbs this surface actually adds (archive, read
-// state) are new routes, because only they are things the ticket surface does
+// state) are new routes, because only they are things the conversation surface does
 // not have. A second reply path would be a second chance to send a member the
 // wrong thing.
 //
-// POLLING, NOT REALTIME, for the same reason the ticket queue polls: the email
+// POLLING, NOT REALTIME, for the same reason the conversation queue polls: the email
 // tables' RESTRICTIVE-policy history (mig 485) means a listener that silently
 // never fires is a real failure mode here, and a poll that visibly works beats
 // a subscription that quietly does not.
@@ -74,7 +74,7 @@ const SEARCH_DEBOUNCE_MS = 350
 // anything — every id in this system is one, so a non-uuid `?c=` is not a
 // legitimate deep link and is ignored outright, the same as if it were
 // absent. The shape is the house one from `@/lib/uuid-shape` (homed there by
-// MAIL-ARCH.2, #1618) — it used to be replicated here because the tickets
+// MAIL-ARCH.2, #1618) — it used to be replicated here because the conversations
 // route helper that owned it did not export it.
 
 // MAIL-ALLLOC.1 — `locations` is the page-resolved eligible set ({id, name},
@@ -298,7 +298,7 @@ export default function MailSurface({ locationId, locationName, userId, location
     return () => clearTimeout(timer)
   }, [queryText])
 
-  // Which request each pane currently belongs to — the ticket surface's
+  // Which request each pane currently belongs to — the conversation surface's
   // TICKET-FETCH-RACE.1 idiom, kept because the failure it prevents is worse
   // here: handleSend posts to `selectedId`, so a late thread read painting the
   // WRONG conversation over the pane is one click from mailing the wrong
@@ -705,7 +705,7 @@ export default function MailSurface({ locationId, locationName, userId, location
     }
   }, [])
   // ── Conversation ───────────────────────────────────────────────────
-  // The ticket surface's own detail route, unchanged. Its payload is what
+  // The conversation surface's own detail route, unchanged. Its payload is what
   // ConversationThread already knows how to render, and a second read path would be
   // a second sanitiser decision, a second attachment shape and a second
   // reply-audience derivation.
@@ -734,7 +734,7 @@ export default function MailSurface({ locationId, locationName, userId, location
       // CONTRACTS finding 1+2 — the deep-link mark-read belongs HERE, keyed
       // off a genuinely successful load of THIS id, not off list membership
       // (see deepLinkMarkReadRef's own comment near the top of this file).
-      // Unconditional on unread state: the ticket-detail payload carries no
+      // Unconditional on unread state: the conversation-detail payload carries no
       // `unread` flag to check, and marking an already-read conversation
       // read again is a harmless no-op — the only failure mode worth
       // avoiding is the one this replaces (never marking it at all, or
@@ -789,7 +789,7 @@ export default function MailSurface({ locationId, locationName, userId, location
     if (selectedId !== id) return // the operator has since moved on
     const row = conversations.find(c => c.id === id)
     if (!row) return
-    // `row` first, whatever loadThread already painted last — the ticket
+    // `row` first, whatever loadThread already painted last — the conversation
     // detail may carry richer fields (mailbox, contact) the list row does
     // not, and those must not be clobbered by reconciling against it.
     setConversation(prev => ({ ...row, ...(prev || {}) }))
@@ -914,7 +914,7 @@ export default function MailSurface({ locationId, locationName, userId, location
 
   // ── Archive ────────────────────────────────────────────────────────
   //
-  // THE PRIMARY VERB, and the one thing this surface does that the ticket
+  // THE PRIMARY VERB, and the one thing this surface does that the conversation
   // queue expresses as a lifecycle transition. On disk it IS that transition
   // (`status='closed'`) — there is no second lifecycle — but the route only
   // accepts the two states this surface can mean, so the inbox is structurally
@@ -1106,7 +1106,7 @@ export default function MailSurface({ locationId, locationName, userId, location
   })
 
   // ── Send / participants ────────────────────────────────────────────
-  // Both are the ticket surface's routes, unchanged — see the header.
+  // Both are the conversation surface's routes, unchanged — see the header.
   async function handleSend(text, internal, extras = {}) {
     const { recipients, attachments = [] } = extras
     if (!selectedId || sending) return { ok: false }
@@ -1182,15 +1182,15 @@ export default function MailSurface({ locationId, locationName, userId, location
     await loadThread(selectedId)
   }
 
-  function handleComposed(newTicket) {
+  function handleComposed(newConversation) {
     closeCompose()
     refreshList(true)
-    // MAIL-DOCK.2 — the send frees the slot, and opening the new ticket is a
+    // MAIL-DOCK.2 — the send frees the slot, and opening the new conversation is a
     // deliberate open: restore the reader's CARD if compose had minimised it,
     // or the fresh conversation would appear as a bare bar nobody asked for.
-    if (newTicket?.id) {
+    if (newConversation?.id) {
       unminimiseReader()
-      selectConversation(newTicket)
+      selectConversation(newConversation)
     }
   }
 
@@ -1459,7 +1459,7 @@ export default function MailSurface({ locationId, locationName, userId, location
   }
 
   // No mail-surface mailboxes is a NORMAL state — every existing mailbox
-  // defaults to the ticket surface, so this is what a studio that has not
+  // defaults to the conversation surface, so this is what a studio that has not
   // opted into the trial sees.
   if (!loading && noMailboxesAnywhere) {
     return (
@@ -1708,7 +1708,7 @@ export default function MailSurface({ locationId, locationName, userId, location
 
       {forwarding && conversation && (
         <ForwardForm
-          ticket={conversation}
+          conversation={conversation}
           message={forwarding}
           onClose={() => setForwarding(null)}
           onSent={handleForwarded}

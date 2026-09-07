@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 //
-// TICKET-COMPOSER-LEAK.1 — switching tickets must not carry the composer.
+// TICKET-COMPOSER-LEAK.1 — switching conversations must not carry the composer.
 //
 // The bug (2026-08-08 audit, confirmed HIGH): ReplyBox holds its mode,
 // draft text, added Cc/Bcc and attached files in local state, and ConversationThread
 // rendered it without a key — so React kept the same component instance across
-// a ticket switch. Member A's half-written reply, internal-note mode and
-// committed Bcc chips all survived onto member B's ticket, where Send would
+// a conversation switch. Member A's half-written reply, internal-note mode and
+// committed Bcc chips all survived onto member B's conversation, where Send would
 // deliver them to B's requester. TicketInbox already scrupulously clears the
 // server-derived replyRecipients on switch; this pins the same discipline for
 // the operator-typed half.
@@ -33,10 +33,10 @@ afterEach(() => {
 
 const noop = () => {}
 
-function threadProps(ticket) {
+function threadProps(conversation) {
   return {
     hasSelection: true,
-    ticket,
+    conversation,
     messages: [],
     replyRecipients: null,
     loading: false,
@@ -50,11 +50,11 @@ function threadProps(ticket) {
   }
 }
 
-const TICKET_A = { id: 'ticket-a', subject: 'Membership freeze', requester_email: 'alice@example.com', status: 'open' }
-const TICKET_B = { id: 'ticket-b', subject: 'Billing question', requester_email: 'bob@example.com', status: 'open' }
+const TICKET_A = { id: 'conversation-a', subject: 'Membership freeze', requester_email: 'alice@example.com', status: 'open' }
+const TICKET_B = { id: 'conversation-b', subject: 'Billing question', requester_email: 'bob@example.com', status: 'open' }
 
-describe('ConversationThread — the composer belongs to one ticket', () => {
-  it('drops a half-written draft when the operator switches tickets', () => {
+describe('ConversationThread — the composer belongs to one conversation', () => {
+  it('drops a half-written draft when the operator switches conversations', () => {
     const { rerender } = render(<ConversationThread {...threadProps(TICKET_A)} />)
 
     const draft = screen.getByLabelText('Reply to the member')
@@ -68,7 +68,7 @@ describe('ConversationThread — the composer belongs to one ticket', () => {
     expect(screen.getByLabelText('Reply to the member').value).toBe('')
   })
 
-  it('resets internal-note mode to reply when the operator switches tickets', () => {
+  it('resets internal-note mode to reply when the operator switches conversations', () => {
     const { rerender } = render(<ConversationThread {...threadProps(TICKET_A)} />)
 
     fireEvent.click(screen.getByRole('button', { name: 'Internal note' }))
@@ -77,7 +77,7 @@ describe('ConversationThread — the composer belongs to one ticket', () => {
 
     rerender(<ConversationThread {...threadProps(TICKET_B)} />)
 
-    // Mode must not follow the operator to the next ticket — a reply typed
+    // Mode must not follow the operator to the next conversation — a reply typed
     // into a composer silently left in note mode is never sent, and the
     // member waits on an answer staff believe went out.
     expect(screen.getByLabelText('Reply to the member')).toBeTruthy()

@@ -3,7 +3,7 @@
 // The cross-platform half — ARCHIVED_STATUS, isArchived, needsReply, isUnread,
 // isSpam, MAIL_VIEWS, DEFAULT_MAIL_VIEW, mailView — lives in
 // shared/mail-vocabulary.js and is re-exported here through the
-// @/lib/mail-vocabulary shim, so this module and mobile/lib/email-tickets.js
+// @/lib/mail-vocabulary shim, so this module and mobile/lib/email-conversations.js
 // read the very same functions. What is DEFINED below is the web-only remainder
 // of MAIL-TRIAL.B's pure module: the list URL (a wire contract with the mail
 // route), the keyboard helpers (they touch DOM tag names), and the row /
@@ -185,11 +185,11 @@ export function collapsedSenderLabel(message, conversation) {
  * on the expanded composer's placeholder and audience sentence. Falls back to
  * the address, then to a bare "Reply…" — never "Reply to undefined".
  */
-export function replyPillLabel(ticket) {
-  const name = String(ticket?.requester_name || '').trim()
+export function replyPillLabel(conversation) {
+  const name = String(conversation?.requester_name || '').trim()
   const first = name.split(/\s+/)[0]
   if (first) return `Reply to ${first}…`
-  const email = String(ticket?.requester_email || '').trim()
+  const email = String(conversation?.requester_email || '').trim()
   if (email) return `Reply to ${email}…`
   return 'Reply…'
 }

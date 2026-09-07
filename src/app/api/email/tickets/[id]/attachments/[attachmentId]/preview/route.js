@@ -4,4 +4,8 @@
 // before MAIL-RENAME.1); an OTA lands on next launch, not on deploy. Delete
 // in the shim sweep (~2 weeks after the OTA publishes), with the matching row
 // in shims.test.js.
-export { GET, runtime, dynamic } from '@/app/api/email/mail/[id]/attachments/[attachmentId]/preview/route'
+// Segment config cannot be re-exported (Next parses it statically), so the two
+// literals are restated here and shims.test.js asserts they equal the handler's.
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+export { GET } from '@/app/api/email/mail/[id]/attachments/[attachmentId]/preview/route'

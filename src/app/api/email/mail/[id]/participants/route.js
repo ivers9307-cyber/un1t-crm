@@ -1,4 +1,4 @@
-// EMAIL-PARTICIPANTS.6 — take an address off a ticket's reply audience, or put
+// EMAIL-PARTICIPANTS.6 — take an address off a conversation's reply audience, or put
 // it back.
 //
 // THE SET ITSELF IS NOT STORED. resolveReplyAudience() derives it from the
@@ -7,7 +7,7 @@
 // 534. The ONE piece of state is the operator's subtractions
 // (email_tickets.excluded_participants), and this route is the only thing that
 // writes them. resolveReplyAudience already reads and applies the column, so a
-// removal takes effect on the very next read of the ticket, and on the very
+// removal takes effect on the very next read of the conversation, and on the very
 // next reply, with no other moving part.
 //
 // STORED NORMALISED, ALWAYS. The exclusions are matched against
@@ -18,7 +18,7 @@
 // means `restore` matches whatever case the operator happens to send, so an
 // exclusion can always be lifted by the person looking at it.
 //
-// THE GATE IS loadConversationForUser, not a check in this handler. A ticket's
+// THE GATE IS loadConversationForUser, not a check in this handler. A conversation's
 // location is not knowable until the row is read, so a per-route hasPermission
 // resolves at the CALLER'S ACTIVE location and lets someone holding email_inbox
 // at one studio act on another studio's mail (EMAIL-TICKET-CLEANUP.1). Refusals
@@ -26,7 +26,7 @@
 // every other way to be refused on this surface is already indistinguishable.
 //
 // The address-validity 400 sits AFTER the load for the same reason: a caller
-// who may not open the ticket learns nothing from this route beyond "not
+// who may not open the conversation learns nothing from this route beyond "not
 // found", whatever they put in the body.
 
 import { NextResponse } from 'next/server'
@@ -46,7 +46,7 @@ import { loadConversationForUser } from '../../_conversation'
 // is the ceiling on how many could be on one. It was two hard-coded 25s under
 // a comment claiming this exact link (EMAIL-PARTICIPANTS.12) — true by
 // coincidence, and two places to forget the day the constant moves.
-// TicketReplyBox.jsx imports it for its own sentence citing the same rule.
+// ConversationReplyBox.jsx imports it for its own sentence citing the same rule.
 const ParticipantsSchema = z.object({
   remove: z.array(z.string()).max(MAX_RECIPIENTS).optional(),
   restore: z.array(z.string()).max(MAX_RECIPIENTS).optional(),
@@ -66,12 +66,12 @@ export async function PATCH(request, props) {
   const db = createServerClient()
   const loaded = await loadConversationForUser(db, user, params.id)
   if (loaded.response) return loaded.response
-  const { ticket } = loaded
+  const { conversation } = loaded
 
   const remove = normalizeAddressList(validation.data.remove || [])
   const restore = normalizeAddressList(validation.data.restore || [])
   // A typo that reached the column would be a permanent exclusion matching
-  // nobody — invisible on the ticket, and liftable only by typing the same typo
+  // nobody — invisible on the conversation, and liftable only by typing the same typo
   // back. Refused whole rather than partially applied.
   const invalid = [...remove.invalid, ...restore.invalid]
   if (invalid.length) {
@@ -88,16 +88,16 @@ export async function PATCH(request, props) {
   const restoreSet = new Set(restore.valid)
   const next = [
     ...new Set([
-      ...(ticket.excluded_participants || []).filter(a => !restoreSet.has(a)),
+      ...(conversation.excluded_participants || []).filter(a => !restoreSet.has(a)),
       ...remove.valid,
     ]),
   ]
 
   const { error } = await db.from('email_tickets')
     .update({ excluded_participants: next, updated_at: new Date().toISOString() })
-    .eq('id', ticket.id)
+    .eq('id', conversation.id)
   if (error) {
-    console.error('[tickets/:id/participants] update failed:', error.message)
+    console.error('[conversations/:id/participants] update failed:', error.message)
     return NextResponse.json({ success: false, error: error.message }, { status: 500 })
   }
 

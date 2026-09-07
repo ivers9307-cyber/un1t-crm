@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { sendTicketEmail, TICKET_INTERNAL_STREAM } from '@/lib/email-inbox-send'
+import { sendConversationEmail, TICKET_INTERNAL_STREAM } from '@/lib/email-inbox-send'
 import { replySubject, buildReplyHeaders, inboundPreview } from '@/lib/email-inbox'
 import { shouldStampFirstResponse } from '@/lib/mail/conversation'
 import { appendSignature, resolveSendSignature } from '@/lib/email-signature'
@@ -41,9 +41,9 @@ const extraRecipients = z.array(z.string().trim().toLowerCase().pipe(emailAddres
 
 const ReplySchema = z.object({
   text: z.string().trim().min(1).max(10000),
-  // An internal note is staff-to-staff on the ticket. It is written to the
+  // An internal note is staff-to-staff on the conversation. It is written to the
   // thread and NOTHING is sent — the member never sees it, so it also never
-  // stamps first_response_at and never advances the ticket.
+  // stamps first_response_at and never advances the conversation.
   internal: z.boolean().optional().default(false),
   // EMAIL-CC.1 — people the operator ADDED. The thread's own participants are
   // derived server-side and are not in here; see THE RECIPIENT RULE below.
@@ -73,7 +73,7 @@ function textToHtml(text) {
   return `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;font-size:14px;line-height:1.5;white-space:pre-wrap;">${escaped}</div>`
 }
 
-// POST /api/email/tickets/[id]/reply — answer a ticket, or add an internal
+// POST /api/email/conversations/[id]/reply — answer a conversation, or add an internal
 // note (EMAIL-TICKET.4).
 //
 // Replies ride Postmark's TRANSACTIONAL stream ('outbound'), NOT broadcast,
@@ -91,7 +91,7 @@ function textToHtml(text) {
 // stamped conversation_id onto the outbound message row and refreshed the mig
 // 394 email_conversations summary, so a reply also showed on the old unified
 // inbox. That surface is gone (INBOX-SPLIT.1 dropped email from the web
-// inbox; EMAIL-TICKET-M.1 moved mobile onto tickets), and the webhook no
+// inbox; EMAIL-TICKET-M.1 moved mobile onto conversations), and the webhook no
 // longer writes a conversation for it to find. The mirror was already
 // non-fatal, so nothing about the reply path's behaviour changes — only the
 // response's now-always-null `conversation_id` field is gone with it.
@@ -107,7 +107,7 @@ function textToHtml(text) {
 //
 // They are the same code path. The set is `resolveReplyAudience()` over
 // `loadParticipantMessages()` — the From + To + Cc of every non-note, non-
-// forward message on the ticket, unioned, minus our own addresses and minus
+// forward message on the conversation, unioned, minus our own addresses and minus
 // anyone the operator removed; whether that comes back as one person or four
 // is what makes it a reply or a reply-all, and the UI's button says which
 // ("Reply All (4 people)").
@@ -126,7 +126,7 @@ function textToHtml(text) {
 //
 // bcc_emails IS NOT PART OF "EVERYBODY ON THE THREAD", under any reading.
 // ticketParticipants() does not name the column, and PARTICIPANT_COLUMNS does
-// not select it. A ticket whose last outbound carried a Bcc reply-alls to
+// not select it. A conversation whose last outbound carried a Bcc reply-alls to
 // exactly the people it would have reached had that Bcc never been typed. That
 // is the confidentiality guarantee the whole feature exists to keep, and
 // email-recipients.test.js mutation-checks it.
@@ -141,7 +141,7 @@ function textToHtml(text) {
 // the thread, while a hand-typed Cc/Bcc is capped (MAX_RECIPIENTS across all
 // three lists), validated, stored on the message where every colleague can see
 // it, and written to audit_events with the sender's name on it. There is
-// deliberately no marketing-consent gate — ticket mail is transactional
+// deliberately no marketing-consent gate — conversation mail is transactional
 // (Richard) — and Postmark's own inactive-recipient rejection is the
 // deliverability gate, so a second one here would be redundant.
 //
@@ -168,7 +168,7 @@ export async function POST(request, props) {
   // An internal note is sent to nobody, so there is nothing for a file to ride
   // on and nothing that would make a stored copy honest. Refused rather than
   // ignored: silently dropping them would leave the operator believing the
-  // files are on the ticket, and leave their draft objects with nothing to
+  // files are on the conversation, and leave their draft objects with nothing to
   // consume them. (The composer hides the picker in note mode; this is the
   // belt.)
   if (internal && Array.isArray(drafts) && drafts.length > 0) {
@@ -181,7 +181,7 @@ export async function POST(request, props) {
   const db = createServerClient()
   const loaded = await loadConversationForUser(db, user, params.id)
   if (loaded.response) return loaded.response
-  const { ticket, mailbox } = loaded
+  const { conversation, mailbox } = loaded
 
   // EMAIL-MERGE.6 — nothing leaves a tombstone. BEFORE the send, and before
   // the note branch below it: this route sends first and writes second, so
@@ -189,10 +189,10 @@ export async function POST(request, props) {
   //
   // It covers the INTERNAL NOTE path too, deliberately. A note puts no mail on
   // the wire, so it is not the dangerous case — but it would be written onto a
-  // ticket hidden from every queue and count, which is an operator typing up
+  // conversation hidden from every queue and count, which is an operator typing up
   // what they found and losing it silently. The composer is gone on the web
   // either way; this is for the callers that never had one.
-  if (ticket.merged_into_id) return conversationMergedAway(ticket)
+  if (conversation.merged_into_id) return conversationMergedAway(conversation)
 
   const now = new Date().toISOString()
 
@@ -210,9 +210,9 @@ export async function POST(request, props) {
       }, { status: 400 })
     }
     const { data: note, error: noteErr } = await db.from('email_inbox_messages').insert({
-      ticket_id: ticket.id,
-      contact_id: ticket.contact_id || null,
-      location_id: ticket.location_id,
+      ticket_id: conversation.id,
+      contact_id: conversation.contact_id || null,
+      location_id: conversation.location_id,
       direction: 'outbound',
       // WHO wrote it (mig 493). Set on notes as well as replies — on a shared
       // queue "who left this note" is the whole point of a note.
@@ -222,7 +222,7 @@ export async function POST(request, props) {
       // From, which is what actually went on the wire.
       from_email: user.email || null,
       to_email: null,
-      subject: ticket.subject || null,
+      subject: conversation.subject || null,
       // NOT signed (EMAIL-TICKET.5). A note is sent to nobody, so a sign-off
       // on it is noise on a staff-only line — appendSignature is deliberately
       // absent from this branch.
@@ -233,15 +233,15 @@ export async function POST(request, props) {
     }).select('*').single()
     if (noteErr) return NextResponse.json({ success: false, error: noteErr.message }, { status: 500 })
 
-    // The ticket is deliberately untouched: last_message_preview is the
+    // The conversation is deliberately untouched: last_message_preview is the
     // member-visible correspondence, and a note must not re-describe the
     // queue row or move it up the list.
-    return NextResponse.json({ success: true, data: { message: note, status: ticket.status, internal: true } })
+    return NextResponse.json({ success: true, data: { message: note, status: conversation.status, internal: true } })
   }
 
   // ── Real reply ────────────────────────────────────────────────────
-  if (!ticket.requester_email) {
-    return NextResponse.json({ success: false, error: 'No recipient address for this ticket' }, { status: 400 })
+  if (!conversation.requester_email) {
+    return NextResponse.json({ success: false, error: 'No sender address for this conversation' }, { status: 400 })
   }
 
   // Thread off the last thing the member sent us, so the reply lands in their
@@ -258,7 +258,7 @@ export async function POST(request, props) {
   // last INBOUND message (changing that would change which mail-client thread
   // a reply lands in, and threading is explicitly out of scope), while
   // "everybody on the thread" is a property of EVERY message in EITHER
-  // direction — otherwise a ticket we composed and nobody has answered yet has
+  // direction — otherwise a conversation we composed and nobody has answered yet has
   // no participants at all and reply-all silently degrades to the requester.
   //
   // EMAIL-PARTICIPANTS.5 — the recipient half is now loadParticipantMessages(),
@@ -272,15 +272,15 @@ export async function POST(request, props) {
   ] = await Promise.all([
     db.from('email_inbox_messages')
       .select('rfc_message_id, references_header, subject')
-      .eq('ticket_id', ticket.id)
+      .eq('ticket_id', conversation.id)
       .eq('direction', 'inbound')
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle(),
-    loadParticipantMessages(db, ticket.id),
+    loadParticipantMessages(db, conversation.id),
   ])
   if (lastInboundErr) {
-    console.error('[tickets/reply] threading lookup failed BEFORE sending:', lastInboundErr.message)
+    console.error('[conversations/reply] threading lookup failed BEFORE sending:', lastInboundErr.message)
     return NextResponse.json({ success: false, error: lastInboundErr.message }, { status: 500 })
   }
   if (recentErr) {
@@ -288,24 +288,24 @@ export async function POST(request, props) {
     // refusing costs a retry. Falling back to "just the requester" would look
     // like a successful reply while quietly dropping everyone else on the
     // thread — the exact failure the derived-mode rule exists to prevent.
-    console.error('[tickets/reply] recipient lookup failed BEFORE sending:', recentErr.message)
+    console.error('[conversations/reply] recipient lookup failed BEFORE sending:', recentErr.message)
     return NextResponse.json({ success: false, error: recentErr.message }, { status: 500 })
   }
 
   // Our own addresses, so a reply-all cannot mail the studio and loop back
-  // through the inbound webhook onto this same ticket. See loadOwnAddresses.
+  // through the inbound webhook onto this same conversation. See loadOwnAddresses.
   const own = await loadOwnAddresses(db)
   if (own.response) return own.response
 
   // ── Who this reaches (EMAIL-PARTICIPANTS.5) ───────────────────────
   // The union across the whole thread, minus our own addresses and minus
-  // anyone the operator removed. A ticket with no usable correspondence (every
+  // anyone the operator removed. A conversation with no usable correspondence (every
   // message an internal note, or a backfilled row with no addresses on it)
   // still falls back to its requester — inside resolveReplyAudience, where the
   // removals apply to the fallback too.
   const audience = resolveReplyAudience({
     messages: recentMessages || [],
-    ticket,
+    conversation,
     ownAddresses: own.addresses,
   })
   // NOTHING HAS BEEN SENT YET, so both refusals are free — and both exist
@@ -313,7 +313,7 @@ export async function POST(request, props) {
   if (audience.empty) {
     return NextResponse.json({
       success: false,
-      error: 'This ticket has no recipients left — restore one to reply.',
+      error: 'This conversation has no recipients left — restore one to reply.',
     }, { status: 400 })
   }
   if (audience.over_cap) {
@@ -336,7 +336,7 @@ export async function POST(request, props) {
   const wire = toPostmarkFields(recipients)
   const mode = replyMode(recipients.to)
 
-  const subject = replySubject(lastInbound?.subject || ticket.subject)
+  const subject = replySubject(lastInbound?.subject || conversation.subject)
   const headers = buildReplyHeaders({
     rfcMessageId: lastInbound?.rfc_message_id || null,
     referencesHeader: lastInbound?.references_header || null,
@@ -364,7 +364,7 @@ export async function POST(request, props) {
   // the /account preview and the composer hint: the personal rich block when
   // enabled, else the STUDIO block wherever the studio has configured one
   // (plain column above it), else null → the plain path below, unchanged.
-  const sigCtx = await loadSignatureContext(db, ticket.location_id)
+  const sigCtx = await loadSignatureContext(db, conversation.location_id)
   const richSig = resolveSendSignature(user, sigCtx)
   const outboundText = richSig
     ? appendSignature(text, richSig.text)
@@ -395,16 +395,16 @@ export async function POST(request, props) {
   // happened.
   //
   // EMAIL-OUTBOUND-SERVER.1 owns HOW: the reply leaves on the SUPPORT INBOX'S
-  // OWN Postmark server, from the ticket's own mailbox address, on Postmark's
-  // `email-send` stream. All three live in sendTicketEmail; see that file's
+  // OWN Postmark server, from the conversation's own mailbox address, on Postmark's
+  // `email-send` stream. All three live in sendConversationEmail; see that file's
   // header for the topology and for why a Postmark stream id must never be
   // confused with our internal 'outbound'.
   //
-  // Reply-To stays the ticket's mailbox so the member's next reply comes back
-  // to the address they wrote to and threads onto this ticket. A ticket with no
+  // Reply-To stays the conversation's mailbox so the member's next reply comes back
+  // to the address they wrote to and threads onto this conversation. A conversation with no
   // mailbox (an elevated caller answering correspondence whose address was
   // deleted) still sends, from a domain we own.
-  const send = await sendTicketEmail({
+  const send = await sendConversationEmail({
     mailboxAddress: mailbox?.address || null,
     // MAILBOX-CONNECT.7 — see the compose route. `mailbox` may be null here (an
     // elevated caller answering correspondence whose address was deleted); the
@@ -417,19 +417,19 @@ export async function POST(request, props) {
     subject,
     htmlBody: richSig ? textToHtml(text) + richSig.html : textToHtml(outboundText),
     textBody: outboundText,
-    tag: 'ticket-reply',
+    tag: 'conversation-reply',
     // POSTMARK-RACE.1 — marked iff `sendLogRow` will be built (same
-    // `ticket.contact_id` condition); an unattributed reply stays unmarked.
-    metadata: ticket.contact_id
-      ? withSendMarker({ ticket_id: ticket.id, contact_id: ticket.contact_id })
-      : { ticket_id: ticket.id, contact_id: '' },
+    // `conversation.contact_id` condition); an unattributed reply stays unmarked.
+    metadata: conversation.contact_id
+      ? withSendMarker({ ticket_id: conversation.id, contact_id: conversation.contact_id })
+      : { ticket_id: conversation.id, contact_id: '' },
     headers,
     // undefined when there are none, so the Postmark payload is byte-identical
     // to every reply this route has ever sent.
     attachments: collected.postmark,
   })
   if (!send.ok) {
-    // Send failed → the ticket does NOT advance to pending. A queue that says
+    // Send failed → the conversation does NOT advance to pending. A queue that says
     // "waiting on the member" when the member was never written to is the
     // worst possible lie for a support tool to tell.
     //
@@ -455,7 +455,7 @@ export async function POST(request, props) {
   const preview = inboundPreview(text)
 
   // We answered → the ball is with the member. Nothing auto-closes from here
-  // (Richard, 2026-08-06): a ticket ages in `pending` until someone replies or
+  // (Richard, 2026-08-06): a conversation ages in `pending` until someone replies or
   // an operator closes it.
   const patch = {
     status: 'pending',
@@ -463,13 +463,13 @@ export async function POST(request, props) {
     last_message_direction: 'outbound',
     last_message_preview: preview,
     updated_at: now,
-    ...statusTimestamps('pending', ticket, now),
+    ...statusTimestamps('pending', conversation, now),
   }
   // Only ever on a real outbound send: the internal-note branch above returns
   // long before this and never touches email_tickets at all, so a note can
-  // neither stamp a first response nor move the ticket.
+  // neither stamp a first response nor move the conversation.
   if (shouldStampFirstResponse({
-    firstResponseAt: ticket.first_response_at,
+    firstResponseAt: conversation.first_response_at,
     direction: 'outbound',
     isInternalNote: false,
   })) {
@@ -482,9 +482,9 @@ export async function POST(request, props) {
   // unlinked requester gets no row (null here) — the message row is still the
   // operator-facing record.
   //
-  // EMAIL-CC.1 — ONE row, for the ticket's own contact, whatever the reply's
+  // EMAIL-CC.1 — ONE row, for the conversation's own contact, whatever the reply's
   // recipient count. email_sends is the per-contact email history; a Cc'd
-  // colleague is not this ticket's contact and inventing rows for them would
+  // colleague is not this conversation's contact and inventing rows for them would
   // put mail in strangers' histories and skew every campaign metric that
   // reads the table. to_email logs the primary recipient, matching the
   // message row.
@@ -498,9 +498,9 @@ export async function POST(request, props) {
   // consent classification (consentFieldForStream → email_administrative) and
   // the email-hygiene sweeps' `= 'broadcast'` filters; a provider slug in it
   // would be read as "not marketing" by accident rather than by rule.
-  const sendLogRow = ticket.contact_id ? {
-    contact_id: ticket.contact_id,
-    location_id: ticket.location_id,
+  const sendLogRow = conversation.contact_id ? {
+    contact_id: conversation.contact_id,
+    location_id: conversation.location_id,
     source_type: 'inbox_reply',
     subject,
     from_email: send.fromEmail,
@@ -511,9 +511,9 @@ export async function POST(request, props) {
   } : null
 
   const { data: message, error: msgErr } = await db.from('email_inbox_messages').insert({
-    ticket_id: ticket.id,
-    contact_id: ticket.contact_id || null,
-    location_id: ticket.location_id,
+    ticket_id: conversation.id,
+    contact_id: conversation.contact_id || null,
+    location_id: conversation.location_id,
     direction: 'outbound',
     // WHO sent it (mig 493). from_email stays the Postmark From, which is what
     // actually went on the wire — it is not an author field. EMAIL-OUTBOUND
@@ -540,7 +540,7 @@ export async function POST(request, props) {
     postmark_message_id: result.messageId,
     // MAILBOX-CONNECT.7 — the threading key on the SMTP path; see the compose
     // route for the full reasoning. An SMTP send carries no Postmark id, so
-    // without this the member's reply to OUR reply forks a new ticket. NULL on
+    // without this the member's reply to OUR reply forks a new conversation. NULL on
     // the Postmark path, which is today's behaviour.
     rfc_message_id: result.rfcMessageId || null,
     in_reply_to: lastInbound?.rfc_message_id || null,
@@ -557,7 +557,7 @@ export async function POST(request, props) {
     // delivered send everywhere that can still take it, then say DO NOT
     // RESEND, with `data.sent` so the composer can tell this 500 from every
     // other without string-matching the copy.
-    console.error('[tickets/reply] message insert failed AFTER a successful send:', msgErr.message)
+    console.error('[conversations/reply] message insert failed AFTER a successful send:', msgErr.message)
     try {
       // The full record — recipients, signed body, threading anchor — because
       // the message row that should have been its record does not exist; this
@@ -568,7 +568,7 @@ export async function POST(request, props) {
         provider: 'email_ticket_reply',
         eventType: 'sent_not_filed',
         payload: {
-          ticket_id: ticket.id,
+          ticket_id: conversation.id,
           postmark_message_id: result.messageId,
           // MAILBOX-CONNECT.7 — the re-fileable record needs the threading key;
           // on the SMTP path the RFC id is the only one that exists.
@@ -582,7 +582,7 @@ export async function POST(request, props) {
           sent_at: now,
         },
         error: msgErr,
-        locationId: ticket.location_id,
+        locationId: conversation.location_id,
       })
       // The halves of the normal path that never needed the message row:
       // the contact's history + delivery-webhook correlation, and the queue
@@ -597,32 +597,32 @@ export async function POST(request, props) {
       if (sendLogRow) {
         const { error: sendLogErr } = await db.from('email_sends').insert(sendLogRow)
         if (sendLogErr) {
-          logError('tickets/reply', 'email_sends log failed after an unfiled send (mail already sent)', {
-            ticketId: ticket.id, messageId: result.messageId, error: sendLogErr,
+          logError('conversations/reply', 'email_sends log failed after an unfiled send (mail already sent)', {
+            conversationId: conversation.id, messageId: result.messageId, error: sendLogErr,
           })
         }
       }
-      // The ticket was loaded by id above, so it MUST exist — judge the rows
+      // The conversation was loaded by id above, so it MUST exist — judge the rows
       // touched too, because PostgREST reports NO error for a zero-row UPDATE.
       const { data: patched, error: patchErr } = await db.from('email_tickets')
-        .update(patch).eq('id', ticket.id).select('id')
+        .update(patch).eq('id', conversation.id).select('id')
       if (patchErr) {
-        logError('tickets/reply', 'ticket patch failed after an unfiled send (mail already sent)', {
-          ticketId: ticket.id, messageId: result.messageId, error: patchErr,
+        logError('conversations/reply', 'conversation patch failed after an unfiled send (mail already sent)', {
+          conversationId: conversation.id, messageId: result.messageId, error: patchErr,
         })
       } else if (!patched?.length) {
-        logError('tickets/reply', 'ticket patch matched no row after an unfiled send (mail already sent)', {
-          ticketId: ticket.id, messageId: result.messageId, rows: 0,
+        logError('conversations/reply', 'conversation patch matched no row after an unfiled send (mail already sent)', {
+          conversationId: conversation.id, messageId: result.messageId, rows: 0,
         })
       }
     } catch (e) {
       // Best-effort by construction: a DB bad enough to fail four writes must
       // still not turn "already sent" back into a retryable-looking error.
-      console.error('[tickets/reply] breadcrumbs after the unfiled send also failed:', e?.message)
+      console.error('[conversations/reply] breadcrumbs after the unfiled send also failed:', e?.message)
     }
     return NextResponse.json({
       success: false,
-      error: 'The email was sent, but could not be filed on the ticket — the thread will not show it. Do not resend: the member already has it. Add an internal note if the text needs to be on the record.',
+      error: 'The email was sent, but could not be filed on the conversation — the thread will not show it. Do not resend: the member already has it. Add an internal note if the text needs to be on the record.',
       data: { sent: true, message_id: result.messageId },
     }, { status: 500 })
   }
@@ -638,8 +638,8 @@ export async function POST(request, props) {
   await fileOutboundAttachments(db, {
     files: collected.files,
     messageId: message.id,
-    locationId: ticket.location_id,
-    mailboxId: ticket.mailbox_id || null,
+    locationId: conversation.location_id,
+    mailboxId: conversation.mailbox_id || null,
   })
 
   // Log to email_sends — the row was built above, before the filing insert;
@@ -651,8 +651,8 @@ export async function POST(request, props) {
     // here reads as "try again", which is a real second email in a real inbox.
     const { error: sendLogErr } = await db.from('email_sends').insert(sendLogRow)
     if (sendLogErr) {
-      logError('tickets/reply', 'email_sends log failed (mail already sent)', {
-        ticketId: ticket.id, messageId: result.messageId, error: sendLogErr,
+      logError('conversations/reply', 'email_sends log failed (mail already sent)', {
+        conversationId: conversation.id, messageId: result.messageId, error: sendLogErr,
       })
     }
   }
@@ -669,15 +669,15 @@ export async function POST(request, props) {
   // earlier-participant over-report this used to carry is gone — those people
   // are in `derivedTo` now, and `added` is only ever a genuinely hand-typed
   // address. The requester stays in `known` unconditionally: they opened the
-  // ticket, so they were on the thread whatever the audience says today.
-  const added = newRecipients(recipients, [...derivedTo, ticket.requester_email])
+  // conversation, so they were on the thread whatever the audience says today.
+  const added = newRecipients(recipients, [...derivedTo, conversation.requester_email])
   if (added.length) {
     await logAuditEvent({
       category: 'business',
       action: 'email_ticket.recipients_added',
       actor: { id: user.id, full_name: user.full_name, email: user.email },
-      target: { resource: `email_ticket/${ticket.id}`, label: ticket.subject || null },
-      locationId: ticket.location_id,
+      target: { resource: `email_ticket/${conversation.id}`, label: conversation.subject || null },
+      locationId: conversation.location_id,
       details: { added, mode, recipient_count: recipients.count },
       request,
     })
@@ -688,19 +688,19 @@ export async function POST(request, props) {
   // MAILFIX-GUARDRAILS.1 — this was a bare await with the result discarded,
   // not even logged: if it blipped, the member had the reply and the thread
   // kept saying needs-reply, with no line anywhere to explain the stuck flag.
-  // The ticket was loaded by id above, so it MUST exist — judge the rows
+  // The conversation was loaded by id above, so it MUST exist — judge the rows
   // touched too, because PostgREST reports NO error for an UPDATE that matches
   // nothing. Log and CONTINUE either way: the send already earned this
   // success, and a 500 here reads as "try again" — a real second email.
   const { data: patched, error: patchErr } = await db.from('email_tickets')
-    .update(patch).eq('id', ticket.id).select('id')
+    .update(patch).eq('id', conversation.id).select('id')
   if (patchErr) {
-    logError('tickets/reply', 'ticket patch failed after a successful send (thread may still read needs-reply)', {
-      ticketId: ticket.id, messageId: result.messageId, error: patchErr,
+    logError('conversations/reply', 'conversation patch failed after a successful send (thread may still read needs-reply)', {
+      conversationId: conversation.id, messageId: result.messageId, error: patchErr,
     })
   } else if (!patched?.length) {
-    logError('tickets/reply', 'ticket patch matched no row after a successful send', {
-      ticketId: ticket.id, messageId: result.messageId, rows: 0,
+    logError('conversations/reply', 'conversation patch matched no row after a successful send', {
+      conversationId: conversation.id, messageId: result.messageId, rows: 0,
     })
   }
 
@@ -712,7 +712,7 @@ export async function POST(request, props) {
       message_id: result.messageId,
       // What actually went out, so the surface can confirm it rather than
       // re-deriving it. `bcc` is here because the SENDER is staff on this
-      // ticket and seeing their own Bcc list is correct — it is the same
+      // conversation and seeing their own Bcc list is correct — it is the same
       // audience as the thread itself, and the same audience mig 482's own
       // COMMENT names. It never travels any further than this response.
       recipients: { to: recipients.to, cc: recipients.cc, bcc: recipients.bcc },

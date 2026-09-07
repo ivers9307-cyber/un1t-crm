@@ -1,7 +1,7 @@
 'use client'
 
 // The auto-appended sign-off preview, shared by every composer that rides a
-// ticket send — the reply box, New email, Forward, and the contact profile's
+// conversation send — the reply box, New email, Forward, and the contact profile's
 // Mail-backed Email tab (EMAIL-TICKET.5 follow-up, 2026-08-08 audit; widened
 // in MAILFIX-SIGTRUTH.1). Every one of those routes appends the effective
 // signature server-side; a composer that hides what the server will add has
@@ -22,7 +22,7 @@
 // for a person with NOTHING of their own at a studio that has a card — the
 // new hire — because that studio's block goes out on their sends.
 //
-// `locationId` IS THE SENDING CONTEXT: the ticket's location on a reply or
+// `locationId` IS THE SENDING CONTEXT: the conversation's location on a reply or
 // forward, the selected From mailbox's location on a compose — so switching
 // the From account re-resolves the hint to that studio's phone/links/name,
 // exactly as the send would. Resolution is pure and client-side; no refetch
@@ -41,8 +41,8 @@
 // client-side sign-out/sign-in (signOut({scope:'local'}) + router.push, no
 // hard navigation) showed user B the previous user's signature until it
 // expired; and it made the reply box STALER than a plain fetch, since the
-// box remounts per ticket. Three bounded reads per composer mount is the
-// right cost. The signature belongs to the VIEWER, not the ticket, so it is
+// box remounts per conversation. Three bounded reads per composer mount is the
+// right cost. The signature belongs to the VIEWER, not the conversation, so it is
 // fetched here rather than threaded through props that have nothing else
 // to do with it. A failed lookup just hides the preview — the route appends
 // the signature server-side either way, so this is cosmetic.

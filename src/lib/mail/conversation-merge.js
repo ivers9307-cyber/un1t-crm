@@ -1,6 +1,6 @@
-// EMAIL-MERGE.1 — pure rules for folding one ticket into another.
+// EMAIL-MERGE.1 — pure rules for folding one conversation into another.
 //
-// The problem: two tickets that are really one conversation. An operator
+// The problem: two conversations that are really one conversation. An operator
 // answered both, and the correspondent got the same reply twice. Merge joins
 // them; mig 536 makes it reversible (email_tickets.merged_into_id, and
 // email_inbox_messages.merged_from_ticket_id stamped on every row that moves,
@@ -10,7 +10,7 @@
 // rather than inferred from a route's control flow — the same argument
 // email-recipients.js is built on.
 //
-// NOTE ON STATUS: a merged ticket stays in the `open|pending|solved|closed`
+// NOTE ON STATUS: a merged conversation stays in the `open|pending|solved|closed`
 // vocabulary — it is CLOSED plus a pointer. A fifth enum value would have to be
 // audited through every view filter, the count endpoint, the mobile status
 // picker and the needs-reply badge, and this estate has been bitten by exactly
@@ -36,7 +36,7 @@ export function canMerge(source, target) {
   if (source.merged_into_id) return { ok: false, reason: 'source_already_merged' }
   if (target.merged_into_id) return { ok: false, reason: 'target_is_merged' }
   // MAIL-SPAM.1 — never across the quarantine flag, in either direction. A
-  // live thread merged INTO a quarantined ticket becomes a tombstone pointing
+  // live thread merged INTO a quarantined conversation becomes a tombstone pointing
   // at spam: gone from Inbox and the count at once, and deleted with its
   // target by the 30-day purge. Spam merged into a live thread would launder
   // a quarantined conversation past the operator's release decision. Release
@@ -47,21 +47,21 @@ export function canMerge(source, target) {
 }
 
 /**
- * EMAIL-MERGE.4 — a ticket's denormalised fields DERIVED from its messages, so
- * unmerge can put both tickets back the way it found them.
+ * EMAIL-MERGE.4 — a conversation's denormalised fields DERIVED from its messages, so
+ * unmerge can put both conversations back the way it found them.
  *
  * mergedTicketFields() overwrites the survivor's last-message trio with the
  * newer of the two. Undoing that needs the survivor's own former values, and
  * nothing stores them — so they are re-derived from the rows that are actually
- * on the ticket once the moved ones have gone. Left alone, the survivor would
- * keep advertising a message that now lives on another ticket: wrong preview in
+ * on the conversation once the moved ones have gone. Left alone, the survivor would
+ * keep advertising a message that now lives on another conversation: wrong preview in
  * the queue, and a sort key it does not own.
  *
  * THE RULES MIRROR THE WRITERS, because a derivation that disagrees with them
  * would rewrite correct rows every time an unmerge ran:
  *   • NOTES AND FORWARDS ARE SKIPPED. The reply route returns before touching
  *     email_tickets for an internal note, and the forward route never updates
- *     the ticket at all — so neither has ever advanced a trio, and neither may
+ *     the conversation at all — so neither has ever advanced a trio, and neither may
  *     start now.
  *   • created_at IS THE CLOCK, NOT sent_at. sent_at on an inbound row is the
  *     SENDER'S Date header (postmark-inbound: `parseEmailDate(body.Date)`) —
@@ -73,9 +73,9 @@ export function canMerge(source, target) {
  *   • The preview uses inboundPreview() with the same subject fallback the
  *     webhook uses, so a derived preview is byte-identical to the stored one.
  *
- * @param {object[]} messages  every message on the ticket (any order)
+ * @param {object[]} messages  every message on the conversation (any order)
  */
-export function ticketFieldsFromMessages(messages) {
+export function conversationFieldsFromMessages(messages) {
   const real = (messages || []).filter(m => m && !m.is_internal_note && !m.forwarded_message_id)
   const inOrder = [...real].sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')))
   const newest = inOrder[inOrder.length - 1] || null

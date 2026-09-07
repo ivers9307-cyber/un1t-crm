@@ -37,7 +37,7 @@ describe('RETIRE-TICKETS.1 — the email surface is "Mail" at /communications/ma
   it('keeps the permission and id — the deep link moved, its gate did not', () => {
     const cmd = byHref(NAV_COMMANDS, '/communications/mail')
     expect(cmd.permission).toBe('email_inbox')
-    expect(cmd.id).toBe('email-tickets')
+    expect(cmd.id).toBe('email-mail')
   })
 
   it('offers NO palette command for the retired ticket queue', () => {

@@ -57,7 +57,7 @@ describe('GET /api/email/mail/[id]/related', () => {
     expect((await call()).res.status).toBe(401)
   })
 
-  it('404s a ticket the caller cannot see', async () => {
+  it('404s a conversation the caller cannot see', async () => {
     setupDb(mailState())
     expect((await call('eeeeeeee-0000-4000-8000-000000000009')).res.status).toBe(404)
   })
@@ -134,7 +134,7 @@ describe('GET /api/email/mail/[id]/related', () => {
   // picker merges related → current, so a live anchor offering a quarantined
   // candidate would let a merge fold spam INTO a member's thread, and a spam
   // anchor offering the sender's live thread would fold that thread into the
-  // spam ticket — where the 30-day purge deletes it. The nudge's open_count
+  // spam conversation — where the 30-day purge deletes it. The nudge's open_count
   // follows the same scope, so "N other open conversations" never counts mail
   // the operator cannot see from where they are standing.
   it('a LIVE anchor never lists or counts the sender’s quarantined threads', async () => {
@@ -174,7 +174,7 @@ describe('GET /api/email/mail/[id]/related', () => {
     expect(body.data.related).toEqual([])
   })
 
-  it('a sender-less ticket has no relations, not an error', async () => {
+  it('a sender-less conversation has no relations, not an error', async () => {
     setupDb(mailState({ tickets: [{ ...T_STUDIO, requester_email: null }] }))
     const { res, body } = await call()
     expect(res.status).toBe(200)
@@ -187,13 +187,13 @@ describe('GET /api/email/mail/[id]/related', () => {
     setupDb(state)
     // Fail every email_tickets read AFTER the detail load succeeded — the
     // wrapper pattern failWrites uses, aimed at reads instead.
-    let ticketReads = 0
+    let conversationReads = 0
     const realFrom = db.from
     db.from = (table) => {
       const b = realFrom(table)
       if (table === 'email_tickets') {
-        ticketReads += 1
-        if (ticketReads > 1) {
+        conversationReads += 1
+        if (conversationReads > 1) {
           const failure = { data: null, error: { code: '08006', message: 'reset' } }
           b.then = (res, rej) => Promise.resolve(failure).then(res, rej)
           b.maybeSingle = () => Promise.resolve(failure)

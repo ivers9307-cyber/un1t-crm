@@ -31,12 +31,12 @@ const ArchiveSchema = z.object({
 // something this route gets to assert. Restoring `pending` would silently
 // claim we had already answered.
 //
-// WHY THIS IS NOT A CALL TO /api/email/tickets/[id]/status:
+// WHY THIS IS NOT A CALL TO /api/email/conversations/[id]/status:
 //   • that route accepts all four lifecycle values, and this surface must be
 //     structurally incapable of producing the other two — an inbox that can
 //     write `solved` has grown the ceremony it exists to drop;
 //   • it has no surface guard, so it would happily archive a TICKETING
-//     mailbox's ticket from the mail screen;
+//     mailbox's conversation from the mail screen;
 //   • it is the archive verb that the IMAP write-back hangs off (see below).
 // Everything it actually does is still shared: loadConversationForUser is the gate,
 // statusTimestamps is the stamp logic, both imported rather than restated.
@@ -80,13 +80,13 @@ export async function POST(request, props) {
   const db = createServerClient()
   const loaded = await loadConversationForUser(db, user, params.id)
   if (loaded.response) return loaded.response
-  const { ticket } = loaded
+  const { conversation } = loaded
 
   const status = archived ? 'closed' : 'open'
   const now = new Date().toISOString()
   const { data: updated, error } = await db.from('email_tickets')
-    .update({ status, updated_at: now, ...statusTimestamps(status, ticket, now) })
-    .eq('id', ticket.id)
+    .update({ status, updated_at: now, ...statusTimestamps(status, conversation, now) })
+    .eq('id', conversation.id)
     .select('*')
     .single()
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
@@ -99,7 +99,7 @@ export async function POST(request, props) {
   if (archived) {
     const { data: inbound, error: inboundErr } = await db.from('email_inbox_messages')
       .select('id, rfc_message_id')
-      .eq('ticket_id', ticket.id)
+      .eq('ticket_id', conversation.id)
       .eq('direction', 'inbound')
       // 🔴 NEWEST FIRST, AND THE ORDER IS LOAD-BEARING. applyWriteback moves at
       // most WRITEBACK_MAX_MESSAGES of these, so on a longer conversation this
@@ -120,7 +120,7 @@ export async function POST(request, props) {
       writeback = { attempted: 0, applied: 0, skipped: 0, unreferenced: 1, failures: [] }
     } else {
       writeback = await applyWriteback(
-        db, ticket.mailbox_id, (inbound || []).map(m => m.rfc_message_id), 'archive'
+        db, conversation.mailbox_id, (inbound || []).map(m => m.rfc_message_id), 'archive'
       )
     }
   }

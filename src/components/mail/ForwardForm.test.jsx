@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 //
 // MAILFIX-SIGTRUTH.1 — Forward is the THIRD send path (forward/route.js
-// appends the sender's effective signature, resolved for the ticket's studio,
+// appends the sender's effective signature, resolved for the conversation's studio,
 // under the note and above the forwarded block) and it had no hint. It now
 // renders the same shared <SignatureHint/> as the reply box and the composer,
-// handed the ticket's own location — so the three cannot disagree.
+// handed the conversation's own location — so the three cannot disagree.
 
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, cleanup, screen } from '@testing-library/react'
@@ -56,7 +56,7 @@ afterEach(() => {
 describe('ForwardForm — signature hint', () => {
   it('shows the effective signature for the TICKET’S studio beneath the note', async () => {
     stubPreferences({ email_signature: '', email_signature_rich: RICH })
-    render(<ForwardForm ticket={TICKET} message={MESSAGE} onClose={() => {}} onSent={() => {}} />)
+    render(<ForwardForm conversation={TICKET} message={MESSAGE} onClose={() => {}} onSent={() => {}} />)
 
     expect(await screen.findByText(/added automatically/i)).toBeTruthy()
     const pre = screen.getByText(/UN1T Stillorgan/, { selector: 'pre' })

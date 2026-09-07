@@ -1,8 +1,8 @@
-// EMAIL-TICKET.4 — shared access resolution for the ticket routes.
+// EMAIL-TICKET.4 — shared access resolution for the conversation routes.
 // Spec: docs/superpowers/specs/2026-08-05-email-ticketing-design.md
 //
 // WHY THIS FILE EXISTS
-// Every /api/email/tickets route runs on the service-role client, so RLS does
+// Every /api/email/conversations route runs on the service-role client, so RLS does
 // NOTHING here — this code IS the gate. The gate has two levels and both have
 // to be applied on every single route, so they live in one place:
 //
@@ -10,7 +10,7 @@
 //   2. a row in email_mailbox_access gates each individual ACCOUNT
 //
 // THE RULE THAT MATTERS
-// A caller must never see a ticket whose mailbox is not in their visible set.
+// A caller must never see a conversation whose mailbox is not in their visible set.
 // `accounts@` carries billing correspondence a coach has no business reading,
 // and a location-scoped check alone would hand it to them — every staffer at
 // the studio passes assertLocationAccess. The mailbox is the access unit.
@@ -20,7 +20,7 @@
 // EMAIL-TICKET-CLEANUP.1 — LEVEL 1 MOVED IN HERE, FOR THE DETAIL ROUTES.
 // It used to sit at the top of each route as hasPermission(user, 'email_inbox'),
 // which resolves against the caller's ACTIVE location — a different question
-// from the one a ticket route is asked, because the ticket names its own
+// from the one a conversation route is asked, because the conversation names its own
 // location. One user, two studios, and it answered wrong in BOTH directions:
 // a manager at Stillorgan who is only staff at Hatch could open Hatch's
 // `accounts@` correspondence whenever their session happened to point at
@@ -28,7 +28,7 @@
 // queue whenever it pointed at Hatch. The list route fixed exactly this for
 // itself in EMAIL-TICKET.5 — it takes location_id as a parameter, so it could
 // resolve at the target directly. A detail route cannot: the location is only
-// knowable once the ticket row is read, so the check is ORDERING-SENSITIVE and
+// knowable once the conversation row is read, so the check is ORDERING-SENSITIVE and
 // has to run after the load. That is why it lives here now rather than in five
 // copies that would each have to remember to run late.
 //
@@ -50,9 +50,9 @@ import { UUID_SHAPE } from '@/lib/uuid-shape'
 // MAILBOX-CONNECT.7 — `egress` ('postmark' | 'smtp', mig 572) rides along.
 // There is no select('*') on email_mailboxes anywhere in this repo, so a
 // column is invisible to the API until a named list asks for it, and this is
-// the list every ticket route's mailbox object comes from (loadConversationForUser
+// the list every conversation route's mailbox object comes from (loadConversationForUser
 // and loadSendingMailbox both resolve through loadVisibleMailboxes below).
-// sendTicketEmail reads `mailbox.egress` to choose its transport; without the
+// sendConversationEmail reads `mailbox.egress` to choose its transport; without the
 // column it would read `undefined` on a connected mailbox and quietly keep
 // sending that customer's replies through Postmark — signed by a domain they
 // do not own, i.e. the exact DMARC failure the connector exists to remove, and
@@ -98,7 +98,7 @@ export function isElevatedAtLocation(user, locationId) {
  *
  * Unlike `attachments_unavailable` this is NOT a soft flag on an otherwise
  * complete payload, because there is nothing left to degrade to: the visible
- * set is what scopes the ticket query, so without it there is no correct list
+ * set is what scopes the conversation query, so without it there is no correct list
  * to show at all. Refusing is the only honest answer.
  */
 export function mailboxesUnavailable() {
@@ -149,7 +149,7 @@ export async function loadVisibleMailboxes(db, user, locationId) {
   // so the surface looks healthy and simply shows them nothing.
   if (mailboxRes?.error || grantRes?.error) {
     console.error(
-      '[email/tickets] mailbox visibility lookup failed:',
+      '[email/conversations] mailbox visibility lookup failed:',
       mailboxRes?.error?.message || grantRes?.error?.message
     )
     return { response: mailboxesUnavailable() }
@@ -173,8 +173,8 @@ export async function loadVisibleMailboxes(db, user, locationId) {
  * A reply-all is derived from a thread that necessarily contains the address
  * the member wrote TO — one of ours. Without this list we would put it on the
  * wire, Postmark would deliver our own reply back to our own inbound webhook,
- * and the webhook would file it on the SAME ticket as an inbound message
- * (its In-Reply-To still names the thread): the ticket flips back to `open`,
+ * and the webhook would file it on the SAME conversation as an inbound message
+ * (its In-Reply-To still names the thread): the conversation flips back to `open`,
  * unread_count increments, and the needs-reply badge lights up for mail nobody
  * sent us. Once per reply, forever. Nothing has been sent at the point this is
  * called, so refusing costs a retry and can never produce a wrong outcome —
@@ -186,10 +186,10 @@ export async function loadVisibleMailboxes(db, user, locationId) {
  * scoped to a LOCATION either. A deactivated mailbox still owns its address as
  * far as DNS and Postmark's inbound routing are concerned, and "which
  * addresses are ours" is not a question about who is asking OR about which
- * studio the ticket sits at: a member who cc'd a SISTER studio's address would
+ * studio the conversation sits at: a member who cc'd a SISTER studio's address would
  * otherwise get our reply-all delivered into that studio's inbound webhook,
  * where nothing threads (threading is location-scoped), minting a recurring
- * phantom "inbound" ticket there from our own address. The list is used ONLY
+ * phantom "inbound" conversation there from our own address. The list is used ONLY
  * as an exclusion set — it is never returned to a client, so it leaks nothing
  * about what addresses any studio runs.
  *
@@ -201,7 +201,7 @@ export async function loadOwnAddresses(db) {
     .select('address')
     .limit(MAILBOX_LIMIT)
   if (error) {
-    console.error('[email/tickets] own-address lookup failed BEFORE sending:', error.message)
+    console.error('[email/conversations] own-address lookup failed BEFORE sending:', error.message)
     return {
       response: NextResponse.json({
         success: false,
@@ -211,7 +211,7 @@ export async function loadOwnAddresses(db) {
   }
   const { valid } = normalizeAddressList([
     ...(data || []).map(m => m?.address),
-    // The From every ticket send actually goes out as. Excluded for the same
+    // The From every conversation send actually goes out as. Excluded for the same
     // reason as a mailbox address: a reply-all derived from one of our own
     // outbound messages would otherwise carry it.
     process.env.POSTMARK_FROM_EMAIL,
@@ -228,7 +228,7 @@ export async function loadOwnAddresses(db) {
  * the list then refuses to show is worse than no badge — the operator clicks it,
  * finds nothing, and learns to ignore the red dot.
  *
- * Elevated callers ALSO get tickets with no mailbox at all: mig 484's backfill
+ * Elevated callers ALSO get conversations with no mailbox at all: mig 484's backfill
  * predates the column and mailbox_id is ON DELETE SET NULL, so deleting an
  * address would otherwise erase its correspondence from every queue. `.in()`
  * never matches NULL, hence the `.or()`.
@@ -250,8 +250,8 @@ export function scopeToVisibleMailboxes(query, { mailboxes, elevated }) {
   // returned early on an empty visible set, and the branch above covered the
   // rest), so it fell through to `.in('mailbox_id', [])` — which matches
   // nothing, NULLs included. It arises now: a studio can legitimately move
-  // EVERY mailbox to the inbox surface, leaving the ticket queue with no
-  // mailboxes but still holding tickets whose mailbox was deleted
+  // EVERY mailbox to the inbox surface, leaving the conversation queue with no
+  // mailboxes but still holding conversations whose mailbox was deleted
   // (ON DELETE SET NULL) or which predate the column (mig 484's backfill).
   // Falling through would have made those vanish from the only surface that
   // shows them — a visible record silently disappearing, which is the one
@@ -264,7 +264,7 @@ export function scopeToVisibleMailboxes(query, { mailboxes, elevated }) {
  * "They wrote to us and nobody has answered yet" — ONE definition, shared by
  * the `needs_reply` view and the nav badge (EMAIL-TICKET-CLEANUP.3).
  *
- * `open` alone is not it: a ticket we composed starts `open` with an OUTBOUND
+ * `open` alone is not it: a conversation we composed starts `open` with an OUTBOUND
  * last message, and there is nothing to do about mail we just sent. `pending`
  * is not it either — that means we already replied and the ball is with the
  * member. Since NOTHING in this feature auto-closes (Richard, 2026-08-06),
@@ -272,7 +272,7 @@ export function scopeToVisibleMailboxes(query, { mailboxes, elevated }) {
  * number nobody can drive to zero is a number everybody learns to ignore.
  *
  * This one clears itself the moment the work is actually done: replying flips
- * the ticket to `pending` with an outbound last message, and closing it leaves
+ * the conversation to `pending` with an outbound last message, and closing it leaves
  * `open` behind. Both are the operator finishing the job.
  */
 export function scopeToNeedsReply(query) {
@@ -284,7 +284,7 @@ export function scopeToNeedsReply(query) {
 }
 
 /**
- * MAIL-SPAM.1 — the quarantine, as a scope. A quarantined ticket (mig 584
+ * MAIL-SPAM.1 — the quarantine, as a scope. A quarantined conversation (mig 584
  * `is_spam`) appears in EXACTLY ONE place, the `spam` view; every other view,
  * count and search excludes it. Applied by applyView (so the digest and the
  * scoped list agree) and by the list route's SEARCH branch, which bypasses
@@ -299,13 +299,13 @@ export function scopeToSpamView(query, view) {
 }
 
 /**
- * Hide merged-away tickets (EMAIL-MERGE.3, mig 536).
+ * Hide merged-away conversations (EMAIL-MERGE.3, mig 536).
  *
- * ONE definition, applied by every surface that lists or counts tickets. A
- * tombstone missed by a filter shows up as an ordinary closed ticket — which is
+ * ONE definition, applied by every surface that lists or counts conversations. A
+ * tombstone missed by a filter shows up as an ordinary closed conversation — which is
  * the duplicate this feature exists to remove, wearing a different hat.
  *
- * Status cannot do this job, and that is by design: a merged ticket is `closed`
+ * Status cannot do this job, and that is by design: a merged conversation is `closed`
  * plus a pointer rather than a fifth enum value, so the `closed` view — which
  * asks for exactly solved+closed — is precisely where a tombstone would surface
  * looking like ordinary resolved history. The pointer is the only thing that
@@ -327,26 +327,26 @@ export function conversationNotFound() {
 }
 
 /**
- * EMAIL-MERGE.6 — refuse a SEND from a ticket that has been merged away.
+ * EMAIL-MERGE.6 — refuse a SEND from a conversation that has been merged away.
  *
- * THE ROUTE IS THE GATE, THE UI IS AN AFFORDANCE. TicketThread hides the
+ * THE ROUTE IS THE GATE, THE UI IS AN AFFORDANCE. ConversationThread hides the
  * composer on a tombstone, and that guard is worth keeping — but these routes
  * run on the service-role client, so RLS does nothing and a client-side check
- * is not a check at all. Anything holding a ticket id can still POST: a stale
+ * is not a check at all. Anything holding a conversation id can still POST: a stale
  * tab, a bookmarked deep link, a push notification opened after somebody else
  * merged, a direct API call — and THE MOBILE APP, which has no concept of
- * merge whatsoever, polls, and ships a reply button. A ticket that becomes a
+ * merge whatsoever, polls, and ships a reply button. A conversation that becomes a
  * tombstone while a phone has it open is the case that will actually happen.
  *
  * WHAT IT PREVENTS is precisely the failure this feature exists to remove: the
- * reply reaches the member, and is then filed on a ticket scopeToUnmerged hides
+ * reply reaches the member, and is then filed on a conversation scopeToUnmerged hides
  * from every queue and count — so nobody sees it was answered, and the next
  * person answers again. A duplicate reply, produced by the duplicate-reply fix.
  *
  * 409, NOT 404, and deliberately so. Every other refusal on this surface is a
  * 404 because the caller must not learn whether an id exists — but they have
- * already passed loadConversationForUser here, so they can see this ticket and are
- * owed a reason. The ticket genuinely exists; the request conflicts with what
+ * already passed loadConversationForUser here, so they can see this conversation and are
+ * owed a reason. The conversation genuinely exists; the request conflicts with what
  * it has become. It is the same code the merge route returns for the lost
  * race, which is the same shape of answer: you are acting on a state that has
  * moved out from under you.
@@ -355,22 +355,22 @@ export function conversationNotFound() {
  * survivor rather than dead-ending. `data` on a failure body is this surface's
  * existing idiom (the reply route's own `data.sent` unfiled case).
  */
-export function conversationMergedAway(ticket) {
+export function conversationMergedAway(conversation) {
   return NextResponse.json({
     success: false,
-    error: 'This ticket was merged into another one, so nothing can be sent from it. Open the ticket it was merged into and send from there.',
-    data: { merged_into_id: ticket?.merged_into_id || null },
+    error: 'This conversation was merged into another one, so nothing can be sent from it. Open the conversation it was merged into and send from there.',
+    data: { merged_into_id: conversation?.merged_into_id || null },
   }, { status: 409 })
 }
 
 /**
- * Load a ticket for a caller, or the 404 that says they may not have it.
+ * Load a conversation for a caller, or the 404 that says they may not have it.
  *
  * Four ways to get a 404, all indistinguishable from outside:
- *   • no such ticket
- *   • the ticket is at a location the caller has no access to
+ *   • no such conversation
+ *   • the conversation is at a location the caller has no access to
  *   • the caller does not hold `email_inbox` AT THAT LOCATION
- *   • the ticket is on a mailbox the caller cannot see
+ *   • the conversation is on a mailbox the caller cannot see
  *
  * The permission refusal is a 404 like the other three, not the 403 the routes
  * used to return, and that is deliberate. Once the check resolves at the
@@ -380,48 +380,48 @@ export function conversationMergedAway(ticket) {
  * that refusals are indistinguishable. The header docstring's promise is that
  * every way to be refused looks the same; a fourth reason has to keep it.
  *
- * A ticket with NULL mailbox_id is visible to ELEVATED callers only. That is
+ * A conversation with NULL mailbox_id is visible to ELEVATED callers only. That is
  * not a hypothetical: email_tickets.mailbox_id is ON DELETE SET NULL, so
  * removing a mailbox orphans its correspondence, and mig 484's backfill
  * predates the column. No mailbox means no grant can exist, so falling back to
  * "the people who need no grants" keeps the history reachable by an owner
  * without ever widening it to a coach.
  *
- * @returns {{ response: NextResponse } | { ticket: object, mailbox: object|null, elevated: boolean }}
+ * @returns {{ response: NextResponse } | { conversation: object, mailbox: object|null, elevated: boolean }}
  */
-export async function loadConversationForUser(db, user, ticketId) {
-  const { data: ticket, error } = await db.from('email_tickets')
+export async function loadConversationForUser(db, user, conversationId) {
+  const { data: conversation, error } = await db.from('email_tickets')
     .select('*')
-    .eq('id', ticketId)
+    .eq('id', conversationId)
     .maybeSingle()
   // A malformed id is a Postgres cast error (22P02), not a row — same 404.
-  if (error || !ticket) return { response: conversationNotFound() }
+  if (error || !conversation) return { response: conversationNotFound() }
 
-  const guard = assertLocationAccessOr404(user, ticket.location_id)
+  const guard = assertLocationAccessOr404(user, conversation.location_id)
   if (guard) return { response: guard }
 
   // LEVEL 1, resolved at the TICKET'S location rather than the caller's active
   // one — see the file header. It runs after assertLocationAccessOr404 so the
   // cheaper, broader refusal wins first and the two can't disagree.
-  if (!hasPermissionForLocation(user, ticket.location_id, 'email_inbox')) {
+  if (!hasPermissionForLocation(user, conversation.location_id, 'email_inbox')) {
     return { response: conversationNotFound() }
   }
 
-  const visibility = await loadVisibleMailboxes(db, user, ticket.location_id)
+  const visibility = await loadVisibleMailboxes(db, user, conversation.location_id)
   // A FAILED visibility lookup is not "no mailboxes" (EMAIL-TICKET-CLEANUP.2).
   // Left as an empty set it made every detail route answer 404 — telling an
-  // operator the ticket they are looking at does not exist, on the strength of
+  // operator the conversation they are looking at does not exist, on the strength of
   // a blipped query.
   if (visibility.response) return { response: visibility.response }
   const { elevated, mailboxes } = visibility
 
-  const mailbox = ticket.mailbox_id
-    ? mailboxes.find(m => m.id === ticket.mailbox_id) || null
+  const mailbox = conversation.mailbox_id
+    ? mailboxes.find(m => m.id === conversation.mailbox_id) || null
     : null
-  const visible = ticket.mailbox_id ? !!mailbox : elevated
+  const visible = conversation.mailbox_id ? !!mailbox : elevated
   if (!visible) return { response: conversationNotFound() }
 
-  return { ticket, mailbox, elevated }
+  return { conversation, mailbox, elevated }
 }
 
 /**
@@ -484,20 +484,20 @@ export async function loadSendingMailbox(db, user, mailboxId) {
  * The solved_at / closed_at stamps that go with a status.
  *
  * Moving INTO solved/closed stamps the timestamp (keeping an existing one, so
- * re-solving an already-solved ticket doesn't rewrite history); moving OUT
- * clears it. `closed` keeps solved_at, because a ticket that was solved and
+ * re-solving an already-solved conversation doesn't rewrite history); moving OUT
+ * clears it. `closed` keeps solved_at, because a conversation that was solved and
  * then closed genuinely was both.
  */
-export function statusTimestamps(status, ticket, now) {
-  if (status === 'solved') return { solved_at: ticket?.solved_at || now, closed_at: null }
-  if (status === 'closed') return { solved_at: ticket?.solved_at || null, closed_at: ticket?.closed_at || now }
+export function statusTimestamps(status, conversation, now) {
+  if (status === 'solved') return { solved_at: conversation?.solved_at || now, closed_at: null }
+  if (status === 'closed') return { solved_at: conversation?.solved_at || null, closed_at: conversation?.closed_at || now }
   return { solved_at: null, closed_at: null }
 }
 
 /**
  * How many messages the audience is derived from.
  *
- * The reply route used to scan 10, which on a ticket with 11+ internal notes
+ * The reply route used to scan 10, which on a conversation with 11+ internal notes
  * could push every real correspondent out of the window and silently narrow
  * "Reply All (N)". A union has to see the whole conversation. 500 is far above
  * any real support thread and still bounded — an unbounded select would hit
@@ -528,13 +528,13 @@ const PARTICIPANT_COLUMNS =
  * error stays in the caller's hands.
  *
  * @param {object} db  service-role client
- * @param {string} ticketId
+ * @param {string} conversationId
  * @returns {Promise<{ data: object[]|null, error: object|null }>}
  */
-export async function loadParticipantMessages(db, ticketId) {
+export async function loadParticipantMessages(db, conversationId) {
   return db.from('email_inbox_messages')
     .select(PARTICIPANT_COLUMNS)
-    .eq('ticket_id', ticketId)
+    .eq('ticket_id', conversationId)
     .order('created_at', { ascending: false })
     .limit(PARTICIPANT_SCAN_LIMIT)
 }
@@ -548,8 +548,8 @@ export async function loadParticipantMessages(db, ticketId) {
  *
  * @returns {{ to: string[], mode: 'reply'|'reply_all', over_cap: boolean, empty: boolean }}
  */
-export function resolveReplyAudience({ messages, ticket, ownAddresses }) {
-  const removed = ticket?.excluded_participants || []
+export function resolveReplyAudience({ messages, conversation, ownAddresses }) {
+  const removed = conversation?.excluded_participants || []
   const off = new Set(normalizeAddressList(removed).valid)
 
   const derived = ticketParticipants(messages || [], {
@@ -558,7 +558,7 @@ export function resolveReplyAudience({ messages, ticket, ownAddresses }) {
   })
   // Exclusions apply to the fallback too — see _helpers.test.js: 'does not
   // resurrect an excluded requester through the fallback'.
-  const fallback = normalizeAddressList([ticket?.requester_email])
+  const fallback = normalizeAddressList([conversation?.requester_email])
     .valid.filter(a => !off.has(a))
 
   const to = derived.length ? derived : fallback

@@ -9,9 +9,9 @@ import {
 } from '../_conversation'
 import { stampMailRow } from '../../mail/_helpers'
 
-// GET /api/email/tickets/[id] — one ticket and its thread (EMAIL-TICKET.4).
+// GET /api/email/conversations/[id] — one conversation and its thread (EMAIL-TICKET.4).
 //
-// 404 — never 403 — for a ticket that does not exist, sits at a location the
+// 404 — never 403 — for a conversation that does not exist, sits at a location the
 // caller cannot reach, sits at a location where they do not hold `email_inbox`,
 // OR sits on a mailbox they cannot see. All four are the same answer from
 // outside, so an id can't be probed and the set of addresses a studio runs
@@ -20,13 +20,13 @@ import { stampMailRow } from '../../mail/_helpers'
 // All four live in loadConversationForUser (EMAIL-TICKET-CLEANUP.1). The permission
 // one used to sit at the top of this route, where it could only ever resolve at
 // the caller's ACTIVE location — a different question from the one a route
-// keyed on a ticket id is asked.
+// keyed on a conversation id is asked.
 //
 // Unlike the conversations route this does NOT reset unread_count as a side
 // effect of reading: marking read is its own POST (…/read), so opening a
-// ticket to look at it is idempotent and a GET stays a GET.
+// conversation to look at it is idempotent and a GET stays a GET.
 
-// A ticket thread is short by construction (a long one is a sign it should
+// A conversation thread is short by construction (a long one is a sign it should
 // have been split), but fetch newest-first and reverse anyway: ascending +
 // limit is what froze the Instagram pane once a thread outgrew the cap.
 const MESSAGE_LIMIT = 200
@@ -40,9 +40,9 @@ const MESSAGE_LIMIT = 200
 // "never appears in any client-facing payload". THE AUDIENCE IS THE POINT: the
 // only client this route has is a staff member who already passed
 // loadConversationForUser — location access, the email_inbox key AT THAT LOCATION,
-// and a grant on the mailbox this ticket arrived at. That is exactly the
+// and a grant on the mailbox this conversation arrived at. That is exactly the
 // population mig 482's own COMMENT names ("thereafter read only by staff on
-// the ticket"), and a colleague who cannot tell whether accounts@ was copied
+// the conversation"), and a colleague who cannot tell whether accounts@ was copied
 // on a refund reply is being asked to work blind. The rule that actually
 // matters is unchanged and stricter for being stated separately: bcc_emails
 // must never reach a MEMBER-VISIBLE surface and must never be read back as a
@@ -62,7 +62,7 @@ const MESSAGE_COLUMNS = [
   // 536); the thread renders a provenance divider above each absorbed group.
   'merged_from_ticket_id',
   // EMAIL-FORWARD.1 (mig 501) — set on an outbound message that is a FORWARD,
-  // naming the message on this same ticket whose content it passed on. NULL on
+  // naming the message on this same conversation whose content it passed on. NULL on
   // everything else. The thread renders its marker off this rather than off the
   // "Fwd: " subject prefix, which is editable text.
   'forwarded_message_id',
@@ -82,7 +82,7 @@ const AUTHOR_LIMIT = 200
 // list rather than an error.
 const ATTACHMENT_LIMIT = 500
 
-// A ticket may hold 200 messages and each html_body may be 300k, so an
+// A conversation may hold 200 messages and each html_body may be 300k, so an
 // unbudgeted response is 60 MB of quoted marketing chain. Sanitised documents
 // are produced newest-first (the fetch is already descending) until this much
 // output exists; older messages fall back to their text with a note saying so.
@@ -98,7 +98,7 @@ export async function GET(request, props) {
   const db = createServerClient()
   const loaded = await loadConversationForUser(db, user, params.id)
   if (loaded.response) return loaded.response
-  const { ticket, mailbox } = loaded
+  const { conversation, mailbox } = loaded
 
   const [
     { data: messagesDesc, error: messagesErr },
@@ -106,13 +106,13 @@ export async function GET(request, props) {
   ] = await Promise.all([
     db.from('email_inbox_messages')
       .select(MESSAGE_COLUMNS)
-      .eq('ticket_id', ticket.id)
+      .eq('ticket_id', conversation.id)
       .order('created_at', { ascending: false })
       .limit(MESSAGE_LIMIT),
-    ticket.contact_id
+    conversation.contact_id
       ? db.from('contacts')
         .select('id, name, first_name, email, pipeline_stage_slug')
-        .eq('id', ticket.contact_id)
+        .eq('id', conversation.contact_id)
         .maybeSingle()
       : Promise.resolve({ data: null, error: null }),
   ])
@@ -124,11 +124,11 @@ export async function GET(request, props) {
   // "the member never wrote", which is the single worst thing a support queue
   // can say, and nothing was logged for anyone to notice it happening.
   if (messagesErr) {
-    console.error('[tickets/:id] messages query failed:', messagesErr.message)
+    console.error('[conversations/:id] messages query failed:', messagesErr.message)
     return NextResponse.json({ success: false, error: messagesErr.message }, { status: 500 })
   }
   if (contactErr) {
-    console.error('[tickets/:id] contact lookup failed:', contactErr.message)
+    console.error('[conversations/:id] contact lookup failed:', contactErr.message)
     return NextResponse.json({ success: false, error: contactErr.message }, { status: 500 })
   }
 
@@ -142,12 +142,12 @@ export async function GET(request, props) {
   // just whoever happened to write last — via resolveReplyAudience() over its
   // OWN query. Deliberately not a reuse of `messagesDesc`: that list is capped
   // for RENDERING (MESSAGE_LIMIT), and an audience derived from a render cap is
-  // how a long ticket silently loses recipients.
+  // how a long conversation silently loses recipients.
   //
   // THE REPLY ROUTE DERIVES THROUGH THE SAME PAIR (EMAIL-PARTICIPANTS.5), so
   // this IS parity, not an approximation of it: both routes call
   // loadParticipantMessages() for the window and resolveReplyAudience() for the
-  // set, and both feed it the same ticket. A label saying "Reply All (4
+  // set, and both feed it the same conversation. A label saying "Reply All (4
   // people)" and the send that follows cannot name different sets — there is
   // one derivation and they share it. Keep it that way: a second implementation
   // on either side is a second chance to disagree, and the disagreement is
@@ -160,14 +160,14 @@ export async function GET(request, props) {
   const own = await loadOwnAddresses(db)
   let replyRecipients = null
   if (!own.response) {
-    const { data: participantRows, error: participantErr } = await loadParticipantMessages(db, ticket.id)
+    const { data: participantRows, error: participantErr } = await loadParticipantMessages(db, conversation.id)
     if (participantErr) {
-      console.error('[tickets/:id] participant lookup failed:', participantErr.message)
+      console.error('[conversations/:id] participant lookup failed:', participantErr.message)
       return NextResponse.json({ success: false, error: participantErr.message }, { status: 500 })
     }
     replyRecipients = resolveReplyAudience({
       messages: participantRows || [],
-      ticket,
+      conversation,
       ownAddresses: own.addresses,
     })
   }
@@ -185,7 +185,7 @@ export async function GET(request, props) {
     try {
       const { data: sources } = await db.from('email_tickets')
         .select('id, subject, merged_at')
-        .eq('location_id', ticket.location_id)
+        .eq('location_id', conversation.location_id)
         .in('id', mergedFromIds)
       // Explicit shape, not a projected row — nothing beyond these three
       // fields belongs on the wire.
@@ -197,10 +197,10 @@ export async function GET(request, props) {
   // grant for `authenticated`, so the name resolves here or nowhere. An
   // unresolved name degrades to null ('Assigned'), never a failure.
   let assigneeName = null
-  if (ticket.assigned_to) {
+  if (conversation.assigned_to) {
     try {
       const { data: assignee } = await db.from('profiles')
-        .select('full_name').eq('id', ticket.assigned_to).maybeSingle()
+        .select('full_name').eq('id', conversation.assigned_to).maybeSingle()
       assigneeName = assignee?.full_name || null
     } catch { /* cosmetic */ }
   }
@@ -208,7 +208,7 @@ export async function GET(request, props) {
   return NextResponse.json({
     success: true,
     data: {
-      // `mailbox` is the account this ticket arrived at, resolved through the
+      // `mailbox` is the account this conversation arrived at, resolved through the
       // caller's visible set — so it is safe to render, and it is what the
       // reply goes back out from.
       //
@@ -222,14 +222,14 @@ export async function GET(request, props) {
       // both clients read it. loadConversationForUser selects `*`, so status /
       // last_message_direction / is_spam are all on the row and the stamp is
       // truthful.
-      ticket: stampMailRow({ ...ticket, mailbox, contact: contact || null, assignee_name: assigneeName }),
+      ticket: stampMailRow({ ...conversation, mailbox, contact: contact || null, assignee_name: assigneeName }),
       messages,
       // MAIL-REFINE.2 — [{ id, subject, merged_at }] for each conversation
       // whose messages were merged into this one; [] when none were.
       merged_sources: mergedSources,
       // EMAIL-ASSIGN.1 — the reassign control gates on this; claiming needs
       // no elevation, assigning somebody ELSE does.
-      viewer_is_elevated: isElevatedAtLocation(user, ticket.location_id),
+      viewer_is_elevated: isElevatedAtLocation(user, conversation.location_id),
       // { to: string[], mode: 'reply' | 'reply_all', over_cap, empty }, or
       // null — see above. `to` is derived from From/To/Cc only; bcc_emails is
       // never a participant, so it can never appear here.
@@ -258,7 +258,7 @@ export async function GET(request, props) {
  * fixed for the thread itself — an operator reading "no attachments" when the
  * member did send one will tell them so. It is NOT a 500, though: the
  * correspondence is complete and readable either way, and refusing to open a
- * support ticket over an attachment query is the disproportionate answer.
+ * support conversation over an attachment query is the disproportionate answer.
  *
  * storage_path never leaves this function. The client gets `stored` and, when
  * it wants the bytes, hits …/attachments/[attachmentId] for a signed URL.
@@ -272,7 +272,7 @@ async function loadAttachments(db, messageIds) {
     .order('attachment_index', { ascending: true })
     .limit(ATTACHMENT_LIMIT)
   if (error) {
-    console.error('[tickets/:id] attachment lookup failed:', error.message)
+    console.error('[conversations/:id] attachment lookup failed:', error.message)
     return { byMessage: new Map(), unavailable: true }
   }
 
@@ -333,9 +333,9 @@ async function shapeMessages(db, rows) {
     // the thread itself is complete either way, and an unresolved name degrades
     // to `author_name: null` — already the normal render for every message
     // written before mig 493 added the column. Refusing to open a support
-    // ticket because a display-name lookup blipped would be the disproportionate
+    // conversation because a display-name lookup blipped would be the disproportionate
     // answer. It is logged rather than swallowed so it is still discoverable.
-    if (authorErr) console.error('[tickets/:id] author name lookup failed:', authorErr.message)
+    if (authorErr) console.error('[conversations/:id] author name lookup failed:', authorErr.message)
     authorNames = new Map((profiles || []).map(p => [p.id, p.full_name]))
   }
 

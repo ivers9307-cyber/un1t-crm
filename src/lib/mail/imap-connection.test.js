@@ -372,7 +372,7 @@ describe('fetchSince', () => {
 
   it('🔴 fetches References explicitly — imapflow’s ENVELOPE does not carry it', async () => {
     // Without References, a reply deep in a chain threads onto nothing and
-    // opens a duplicate ticket.
+    // opens a duplicate conversation.
     const client = fetchingClient([])
     await fetchSince(client, { sinceUid: 0 })
     expect(client.calls[0].query.headers).toEqual(['message-id', 'in-reply-to', 'references'])
@@ -451,7 +451,7 @@ describe('fetchSince', () => {
 
   it('🔴 REFUSES an unusable cursor rather than backfilling the whole mailbox', async () => {
     // "No backfill, ever" (§3.5). A NaN cursor coerced to 0 would fetch `1:*`
-    // and file years of correspondence as fresh tickets with push
+    // and file years of correspondence as fresh conversations with push
     // notifications. This is the narrow case where failing closed is right:
     // proceeding is actively harmful and irreversible.
     const client = fetchingClient([msg(1)])

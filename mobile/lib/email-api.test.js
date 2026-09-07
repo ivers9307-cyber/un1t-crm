@@ -428,15 +428,15 @@ describe('composeEmail', () => {
   })
 })
 
-// MOBILE-MAIL-FORWARD.1 — pass one message on the ticket to somebody else.
+// MOBILE-MAIL-FORWARD.1 — pass one message on the conversation to somebody else.
 // The route owns every refusal (the note ban, unstored files, the recipient
 // cap, the 7 MiB ceiling re-measured on real bytes); this wrapper's whole job
 // is the right wire shape and passing the envelope through UNTOUCHED.
 describe('forwardMessage', () => {
-  it('posts the full wire body to the ticket forward route', async () => {
+  it('posts the full wire body to the conversation forward route', async () => {
     api.mockResolvedValue({ success: true, data: { message_id: 'pm-1' } })
     const res = await forwardMessage({
-      ticketId: 'T-1', messageId: 'm-1',
+      conversationId: 'T-1', messageId: 'm-1',
       to: ['acct@x.com'], cc: ['b@x.com'], bcc: ['c@x.com'],
       note: 'For the August books', attachmentIds: ['att-1', 'att-2'],
       locationId: 'loc-1',
@@ -454,7 +454,7 @@ describe('forwardMessage', () => {
   it('omits empty cc/bcc/note/attachment_ids — the smallest body is the shape nothing can misread', async () => {
     api.mockResolvedValue({ success: true, data: {} })
     await forwardMessage({
-      ticketId: 'T-1', messageId: 'm-1', to: ['acct@x.com'],
+      conversationId: 'T-1', messageId: 'm-1', to: ['acct@x.com'],
       cc: [], bcc: [], note: '', attachmentIds: [], locationId: 'loc-1',
     })
     expect(api).toHaveBeenCalledWith('/api/email/mail/T-1/forward', {
@@ -465,7 +465,7 @@ describe('forwardMessage', () => {
 
   it('a whitespace-only note stays off the wire too — the route would store a blank covering note', async () => {
     api.mockResolvedValue({ success: true, data: {} })
-    await forwardMessage({ ticketId: 'T-1', messageId: 'm-1', to: ['a@x.com'], note: '   ', locationId: 'loc-1' })
+    await forwardMessage({ conversationId: 'T-1', messageId: 'm-1', to: ['a@x.com'], note: '   ', locationId: 'loc-1' })
     const [, opts] = api.mock.calls[0]
     expect(opts.body.note).toBeUndefined()
   })
@@ -473,11 +473,11 @@ describe('forwardMessage', () => {
   it('passes a refusal through untouched — including the sent-but-unfiled "do not resend" answer with its data marker', async () => {
     const unfiled = {
       success: false,
-      error: 'The forward was sent but could not be filed on the ticket. Do not resend — check with the recipient before trying again.',
+      error: 'The forward was sent but could not be filed on the conversation. Do not resend — check with the recipient before trying again.',
       data: { sent: true, message_id: 'pm-9' },
     }
     api.mockResolvedValue(unfiled)
-    const res = await forwardMessage({ ticketId: 'T-1', messageId: 'm-1', to: ['a@x.com'], locationId: 'loc-1' })
+    const res = await forwardMessage({ conversationId: 'T-1', messageId: 'm-1', to: ['a@x.com'], locationId: 'loc-1' })
     expect(res).toEqual(unfiled)
   })
 })
@@ -565,11 +565,11 @@ describe('signOutboundAttachment', () => {
     })
   })
 
-  it('signs against a ticket for a reply — ticket_id on the wire, no mailbox_id', async () => {
+  it('signs against a conversation for a reply — ticket_id on the wire, no mailbox_id', async () => {
     api.mockResolvedValue({ success: true, data: { path: 'p', token: 't' } })
     await signOutboundAttachment({
       filename: 'a.pdf', size: 10, mime: 'application/pdf',
-      ticketId: 'T-1', locationId: 'loc-1',
+      conversationId: 'T-1', locationId: 'loc-1',
     })
     const [, opts] = api.mock.calls[0]
     expect(opts.body.ticket_id).toBe('T-1')
@@ -579,7 +579,7 @@ describe('signOutboundAttachment', () => {
   it('refuses locally when BOTH or NEITHER target is given — the route 400s the same rule', async () => {
     const both = await signOutboundAttachment({
       filename: 'a.pdf', size: 10, mime: 'application/pdf',
-      ticketId: 'T-1', mailboxId: 'mb-1', locationId: 'loc-1',
+      conversationId: 'T-1', mailboxId: 'mb-1', locationId: 'loc-1',
     })
     const neither = await signOutboundAttachment({
       filename: 'a.pdf', size: 10, mime: 'application/pdf', locationId: 'loc-1',
@@ -763,7 +763,7 @@ describe('fetchRelatedConversations', () => {
 })
 
 describe('mergeConversation / unmergeConversation', () => {
-  it('POSTs { into: target } at the SOURCE ticket — R merges into the current one', async () => {
+  it('POSTs { into: target } at the SOURCE conversation — R merges into the current one', async () => {
     api.mockResolvedValue({ success: true })
     await mergeConversation('R-1', 'T-current', 'loc-1')
     expect(api).toHaveBeenCalledWith('/api/email/mail/R-1/merge', {
@@ -773,7 +773,7 @@ describe('mergeConversation / unmergeConversation', () => {
     })
   })
 
-  it('unmerge is a DELETE at the merged ticket, no body', async () => {
+  it('unmerge is a DELETE at the merged conversation, no body', async () => {
     api.mockResolvedValue({ success: true })
     await unmergeConversation('R-1', 'loc-1')
     expect(api).toHaveBeenCalledWith('/api/email/mail/R-1/merge', {

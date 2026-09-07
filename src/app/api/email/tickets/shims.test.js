@@ -1,4 +1,4 @@
-// MAIL-RENAME.1 — every old ticket route is the SAME function as its mail
+// MAIL-RENAME.1 — every old conversation route is the SAME function as its mail
 // route, asserted by runtime identity so a shim can never drift into a copy.
 import { describe, it, expect } from 'vitest'
 
@@ -15,7 +15,7 @@ const PAIRS = [
   ['[id]/attachments/[attachmentId]/preview', ['GET']],
 ]
 
-describe('/api/email/tickets shims', () => {
+describe('/api/email/conversations shims', () => {
   for (const [sub, verbs] of PAIRS) {
     it(`${sub} re-exports ${verbs.join('/')} from /api/email/mail/${sub}`, async () => {
       const shimPath = `./${sub}/route.js`

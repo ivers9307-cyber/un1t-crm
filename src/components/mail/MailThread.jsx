@@ -255,7 +255,7 @@ export default function MailThread({
     <>
     <ConversationThread
       hasSelection={hasSelection}
-      ticket={conversation}
+      conversation={conversation}
       messages={messages}
       // MAIL-DOCK.1 — the card is a smaller window than the old pane, so the
       // frames size to it, and the composer opens as the mockup's slim pill
@@ -487,7 +487,7 @@ export default function MailThread({
  * The verbs, and nothing else.
  *
  * Archive is styled as the primary action because on this surface it IS the
- * work: the ticket queue's equivalent is buried in a four-state segmented
+ * work: the conversation queue's equivalent is buried in a four-state segmented
  * control inside the thread, which is precisely the ceremony the trial is
  * testing against.
  *

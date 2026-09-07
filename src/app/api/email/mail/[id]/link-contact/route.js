@@ -4,18 +4,18 @@ import { getCurrentUser } from '@/lib/auth'
 import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
 import { loadConversationForUser } from '../../_conversation'
 
-// POST /api/email/tickets/[id]/link-contact — EMAIL-CONTACT-CHIP.2.
+// POST /api/email/conversations/[id]/link-contact — EMAIL-CONTACT-CHIP.2.
 //
 // "Add to contacts" on an unlinked thread. Gated through loadConversationForUser
-// like every other ticket write on this surface: 404, never 403, for a
-// ticket that does not exist, sits at a location the caller cannot reach, is
+// like every other conversation write on this surface: 404, never 403, for a
+// conversation that does not exist, sits at a location the caller cannot reach, is
 // on a mailbox they cannot see, or is at a location where they lack
 // `email_inbox` — all four indistinguishable from outside, same as GET
-// …/tickets/[id] and every sibling mutation route.
+// …/conversations/[id] and every sibling mutation route.
 //
-// IDEMPOTENT. A ticket that already carries contact_id answers 200 with that
+// IDEMPOTENT. A conversation that already carries contact_id answers 200 with that
 // contact rather than an error or a second write — a double-click, a retry
-// after a flaky response, or two staff opening the same ticket must not
+// after a flaky response, or two staff opening the same conversation must not
 // fight each other or leave an inconsistent contact behind.
 //
 // REUSES findOrCreateRaceContact with restrictToOrg: true — the SAME
@@ -35,37 +35,37 @@ export async function POST(request, props) {
   const db = createServerClient()
   const loaded = await loadConversationForUser(db, user, params.id)
   if (loaded.response) return loaded.response
-  const { ticket } = loaded
+  const { conversation } = loaded
 
   // Already linked — answer with the existing contact rather than doing (or
   // refusing) a second write. See the idempotency note above.
-  if (ticket.contact_id) {
+  if (conversation.contact_id) {
     const { data: contact, error: contactErr } = await db.from('contacts')
       .select(CONTACT_COLUMNS)
-      .eq('id', ticket.contact_id)
+      .eq('id', conversation.contact_id)
       .maybeSingle()
     if (contactErr) {
-      console.error('[tickets/:id/link-contact] existing contact lookup failed:', contactErr.message)
+      console.error('[conversations/:id/link-contact] existing contact lookup failed:', contactErr.message)
       return NextResponse.json({ success: false, error: contactErr.message }, { status: 500 })
     }
     return NextResponse.json({ success: true, data: { contact: contact || null } })
   }
 
   // Nothing to resolve an identity from. The UI only ever shows the "Add to
-  // contacts" button when requester_email is set (TicketThread.jsx), but this
-  // route is the actual gate — anything holding a ticket id can still POST.
-  if (!ticket.requester_email) {
+  // contacts" button when requester_email is set (ConversationThread.jsx), but this
+  // route is the actual gate — anything holding a conversation id can still POST.
+  if (!conversation.requester_email) {
     return NextResponse.json({
       success: false,
-      error: 'This ticket has no sender email to link to a contact.',
+      error: 'This conversation has no sender email to link to a contact.',
     }, { status: 400 })
   }
 
   const contactId = await findOrCreateRaceContact({
     db,
-    locationId: ticket.location_id,
-    email: ticket.requester_email,
-    name: ticket.requester_name,
+    locationId: conversation.location_id,
+    email: conversation.requester_email,
+    name: conversation.requester_name,
     // LEADCAP.1 — match/create anywhere in the SAME organisation, never a
     // bare location match and never a global one: contacts_email_unique is a
     // GLOBAL index, so without org scope a known email either 500s on
@@ -101,7 +101,7 @@ export async function POST(request, props) {
     // pending a real classification, exactly as CLASSIFY.2 already leaves it
     // for every other non-web-form contact.
     insertFields: {
-      name: ticket.requester_name || ticket.requester_email,
+      name: conversation.requester_name || conversation.requester_email,
       source: 'email_inbox',
       lead_source: null,
     },
@@ -118,9 +118,9 @@ export async function POST(request, props) {
 
   const { error: updateErr } = await db.from('email_tickets')
     .update({ contact_id: contactId, updated_at: new Date().toISOString() })
-    .eq('id', ticket.id)
+    .eq('id', conversation.id)
   if (updateErr) {
-    console.error('[tickets/:id/link-contact] ticket update failed:', updateErr.message)
+    console.error('[conversations/:id/link-contact] conversation update failed:', updateErr.message)
     return NextResponse.json({ success: false, error: updateErr.message }, { status: 500 })
   }
 
@@ -128,17 +128,17 @@ export async function POST(request, props) {
   // stamps this at ingest time on every message row
   // (postmark-inbound/[token]/route.js), so a thread linked after the fact
   // should read exactly like one that arrived already linked. Best-effort and
-  // logged rather than failing the request: the ticket is already linked at
+  // logged rather than failing the request: the conversation is already linked at
   // this point (the write above committed), and turning a cosmetic backfill
   // miss into a 500 would report failure for a request that in fact
   // succeeded — the CLAUDE.md rule that removing a silent failure must never
   // create a louder one.
   const { error: backfillErr } = await db.from('email_inbox_messages')
     .update({ contact_id: contactId })
-    .eq('ticket_id', ticket.id)
+    .eq('ticket_id', conversation.id)
     .is('contact_id', null)
   if (backfillErr) {
-    console.error('[tickets/:id/link-contact] message contact_id backfill failed:', backfillErr.message)
+    console.error('[conversations/:id/link-contact] message contact_id backfill failed:', backfillErr.message)
   }
 
   const { data: contact, error: contactErr } = await db.from('contacts')
@@ -146,7 +146,7 @@ export async function POST(request, props) {
     .eq('id', contactId)
     .maybeSingle()
   if (contactErr) {
-    console.error('[tickets/:id/link-contact] linked contact lookup failed:', contactErr.message)
+    console.error('[conversations/:id/link-contact] linked contact lookup failed:', contactErr.message)
     return NextResponse.json({ success: false, error: contactErr.message }, { status: 500 })
   }
 

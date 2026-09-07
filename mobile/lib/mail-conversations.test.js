@@ -5,21 +5,21 @@ import {
   mailStatusChip,
   ticketViewTab,
   ticketViewWire,
-  ticketMessageKind,
-  ticketMessageRecipients,
+  conversationMessageKind,
+  conversationMessageRecipients,
   sentToLabel,
-  ticketReplyAudienceMeta,
-  ticketReplyPlaceholder,
-  ticketThreadAudienceLines,
-  ticketDeliveryMeta,
-  ticketSendOriginMeta,
+  conversationReplyAudienceMeta,
+  conversationReplyPlaceholder,
+  conversationThreadAudienceLines,
+  conversationDeliveryMeta,
+  conversationSendOriginMeta,
   requesterLabel,
   mailboxLabel,
-  ticketToInboxRow,
-  ticketsToInboxRows,
+  conversationToInboxRow,
+  conversationsToInboxRows,
   formatAttachmentSize,
-  ticketAttachmentSkippedLabel,
-  ticketAttachmentIcon,
+  conversationAttachmentSkippedLabel,
+  conversationAttachmentIcon,
   threadRefreshMs,
   newestMessageAt,
   THREAD_SETTLE_MS,
@@ -30,49 +30,49 @@ import {
   flatMessageMeta,
 } from './mail-conversations'
 
-describe('ticketMessageKind', () => {
+describe('conversationMessageKind', () => {
   // THE regression guard for this surface. A note is written with
   // direction='outbound' (the reply route), so testing direction first would
   // paint staff-only text exactly like a reply the member received.
   it('calls an internal note a note even though it is stored as outbound', () => {
-    expect(ticketMessageKind({ direction: 'outbound', is_internal_note: true })).toBe('note')
+    expect(conversationMessageKind({ direction: 'outbound', is_internal_note: true })).toBe('note')
   })
 
   it('calls an inbound-flagged note a note too', () => {
-    expect(ticketMessageKind({ direction: 'inbound', is_internal_note: true })).toBe('note')
+    expect(conversationMessageKind({ direction: 'inbound', is_internal_note: true })).toBe('note')
   })
 
   it('calls a real reply outbound', () => {
-    expect(ticketMessageKind({ direction: 'outbound', is_internal_note: false })).toBe('outbound')
+    expect(conversationMessageKind({ direction: 'outbound', is_internal_note: false })).toBe('outbound')
   })
 
   it('calls the member inbound', () => {
-    expect(ticketMessageKind({ direction: 'inbound' })).toBe('inbound')
+    expect(conversationMessageKind({ direction: 'inbound' })).toBe('inbound')
   })
 
   it('defaults to inbound for junk', () => {
-    expect(ticketMessageKind(null)).toBe('inbound')
-    expect(ticketMessageKind({})).toBe('inbound')
+    expect(conversationMessageKind(null)).toBe('inbound')
+    expect(conversationMessageKind({})).toBe('inbound')
   })
 
   // MAILBOX-COEXIST.1 — a reply typed in Gmail IS outbound: it reached the
   // member and it is not a note. Where it came FROM is a separate rule
-  // (ticketSendOriginMeta), deliberately not a fourth value in the one
+  // (conversationSendOriginMeta), deliberately not a fourth value in the one
   // function on this screen whose three-case ordering is the safety property.
   it('calls a mail-client reply outbound — no fourth kind', () => {
-    expect(ticketMessageKind({
+    expect(conversationMessageKind({
       direction: 'outbound', is_internal_note: false, source: 'mail_client',
     })).toBe('outbound')
   })
 })
 
 // MAILBOX-COEXIST.1 — rule 3 in the module header, and a mirror of
-// sendOriginMeta's block in src/lib/ticket-display.test.js. Phase 8 polls a
+// sendOriginMeta's block in src/lib/conversation-display.test.js. Phase 8 polls a
 // connected mailbox's Sent folder, so an outbound row can now be a reply
 // somebody typed in Gmail with no CRM author on it. The phase exists to stop
 // two people answering one member, and this screen is where the second of them
 // would start typing — so it has to be able to say a reply came from outside.
-describe('ticketSendOriginMeta (MAILBOX-COEXIST.1)', () => {
+describe('conversationSendOriginMeta (MAILBOX-COEXIST.1)', () => {
   const mailClient = (extra) => ({
     direction: 'outbound',
     is_internal_note: false,
@@ -84,7 +84,7 @@ describe('ticketSendOriginMeta (MAILBOX-COEXIST.1)', () => {
   })
 
   it('marks a reply sent from someone’s own mail client, in the same words as web', () => {
-    const origin = ticketSendOriginMeta(mailClient())
+    const origin = conversationSendOriginMeta(mailClient())
     expect(origin).not.toBeNull()
     expect(origin.source).toBe('mail_client')
     expect(origin.label).toBe('Sent from the mail client')
@@ -94,20 +94,20 @@ describe('ticketSendOriginMeta (MAILBOX-COEXIST.1)', () => {
   })
 
   it('says NOTHING about a reply composed in the CRM', () => {
-    expect(ticketSendOriginMeta(mailClient({ source: 'operator' }))).toBeNull()
+    expect(conversationSendOriginMeta(mailClient({ source: 'operator' }))).toBeNull()
     // Every outbound row written before Phase 8 stamped a source.
-    expect(ticketSendOriginMeta(mailClient({ source: null }))).toBeNull()
-    expect(ticketSendOriginMeta(mailClient({ source: undefined }))).toBeNull()
+    expect(conversationSendOriginMeta(mailClient({ source: null }))).toBeNull()
+    expect(conversationSendOriginMeta(mailClient({ source: undefined }))).toBeNull()
   })
 
   it('says nothing about inbound mail or an internal note', () => {
-    expect(ticketSendOriginMeta({ direction: 'inbound', source: 'mail_client' })).toBeNull()
-    expect(ticketSendOriginMeta(mailClient({ is_internal_note: true }))).toBeNull()
+    expect(conversationSendOriginMeta({ direction: 'inbound', source: 'mail_client' })).toBeNull()
+    expect(conversationSendOriginMeta(mailClient({ is_internal_note: true }))).toBeNull()
   })
 
   it('does not throw on a malformed row', () => {
-    expect(ticketSendOriginMeta(null)).toBeNull()
-    expect(ticketSendOriginMeta({})).toBeNull()
+    expect(conversationSendOriginMeta(null)).toBeNull()
+    expect(conversationSendOriginMeta({})).toBeNull()
   })
 })
 
@@ -216,7 +216,7 @@ describe('mailboxLabel', () => {
   })
 })
 
-describe('ticketToInboxRow', () => {
+describe('conversationToInboxRow', () => {
   const base = {
     id: 't1',
     status: 'open',
@@ -231,7 +231,7 @@ describe('ticketToInboxRow', () => {
   }
 
   it('carries the fields the merged Messages list renders', () => {
-    const row = ticketToInboxRow(base)
+    const row = conversationToInboxRow(base)
     expect(row).toMatchObject({
       id: 't1',
       channel: 'email',
@@ -244,49 +244,49 @@ describe('ticketToInboxRow', () => {
   })
 
   it('never carries a pending approval — there is no agent on email', () => {
-    expect(ticketToInboxRow(base).pending_approval).toBe(false)
+    expect(conversationToInboxRow(base).pending_approval).toBe(false)
   })
 
-  it('leaves an open ticket unresolved so it lands in the needs-reply queue', () => {
-    expect(ticketToInboxRow(base).resolved_at).toBeNull()
-    expect(ticketToInboxRow({ ...base, status: 'pending' }).resolved_at).toBeNull()
+  it('leaves an open conversation unresolved so it lands in the needs-reply queue', () => {
+    expect(conversationToInboxRow(base).resolved_at).toBeNull()
+    expect(conversationToInboxRow({ ...base, status: 'pending' }).resolved_at).toBeNull()
   })
 
-  it('maps an archived ticket onto resolved_at so it never reads as needing a reply', () => {
+  it('maps an archived conversation onto resolved_at so it never reads as needing a reply', () => {
     // Stamped archived: the timestamp follows the verdict, whatever the status.
-    expect(ticketToInboxRow({ ...base, status: 'solved', archived: true, solved_at: 'S' }).resolved_at).toBe('S')
-    expect(ticketToInboxRow({ ...base, status: 'closed', closed_at: 'C' }).resolved_at).toBe('C')
+    expect(conversationToInboxRow({ ...base, status: 'solved', archived: true, solved_at: 'S' }).resolved_at).toBe('S')
+    expect(conversationToInboxRow({ ...base, status: 'closed', closed_at: 'C' }).resolved_at).toBe('C')
     // No stamp: `closed` still reads as resolved, not as unresolved.
-    expect(ticketToInboxRow({ ...base, status: 'closed', updated_at: 'U' }).resolved_at).toBe('U')
+    expect(conversationToInboxRow({ ...base, status: 'closed', updated_at: 'U' }).resolved_at).toBe('U')
     // MAIL-ARCH.4 — a stampless legacy `solved` is LIVE (the server's own
     // reading), so it carries NO resolution time; the old solved||closed
     // fallback that gave it one is gone.
-    expect(ticketToInboxRow({ ...base, status: 'solved', solved_at: 'S' }).resolved_at).toBeNull()
+    expect(conversationToInboxRow({ ...base, status: 'solved', solved_at: 'S' }).resolved_at).toBeNull()
   })
 
-  it('falls back to created_at when a ticket has no message yet', () => {
-    const row = ticketToInboxRow({ id: 't2', created_at: '2026-01-01T00:00:00Z' })
+  it('falls back to created_at when a conversation has no message yet', () => {
+    const row = conversationToInboxRow({ id: 't2', created_at: '2026-01-01T00:00:00Z' })
     expect(row.last_message_at).toBe('2026-01-01T00:00:00Z')
     expect(row.unread_count).toBe(0)
   })
 
-  it('survives a null ticket rather than throwing in a list render', () => {
-    expect(ticketToInboxRow(null).channel).toBe('email')
+  it('survives a null conversation rather than throwing in a list render', () => {
+    expect(conversationToInboxRow(null).channel).toBe('email')
   })
 
   // MOBILE-MAIL.1 — the mail list's own facts ride the row, strictly typed:
-  // only a literal true reads as true, so an absent field (a ticket-era
+  // only a literal true reads as true, so an absent field (a conversation-era
   // response, or a counts-unavailable page) can never claim unread mail or a
   // phantom paperclip.
   it('carries the mail fields — unread, needs_reply, has_attachments — as strict booleans', () => {
-    const mailRow = ticketToInboxRow({
+    const mailRow = conversationToInboxRow({
       ...base, unread: true, needs_reply: true, has_attachments: true,
     })
     expect(mailRow.unread).toBe(true)
     expect(mailRow.needs_reply).toBe(true)
     expect(mailRow.has_attachments).toBe(true)
 
-    const bare = ticketToInboxRow(base)
+    const bare = conversationToInboxRow(base)
     expect(bare.unread).toBe(false)
     expect(bare.needs_reply).toBe(false)
     expect(bare.has_attachments).toBe(false)
@@ -297,54 +297,54 @@ describe('ticketToInboxRow', () => {
   // fallback, or the swipe verb inverts: "archive" sends {archived:false}
   // and reopens a resolved conversation.
   it('honours a server-stamped archived:false over the solved-status fallback', () => {
-    const row = ticketToInboxRow({ ...base, status: 'solved', archived: false })
+    const row = conversationToInboxRow({ ...base, status: 'solved', archived: false })
     expect(row.archived).toBe(false)
   })
 
   it('falls back to status only when the stamp is absent — and that fallback is `closed`, never `solved` (MAIL-ARCH.4)', () => {
-    expect(ticketToInboxRow({ ...base, status: 'closed' }).archived).toBe(true)
-    expect(ticketToInboxRow({ ...base, status: 'solved' }).archived).toBe(false)
-    expect(ticketToInboxRow({ ...base, status: 'closed', archived: true }).archived).toBe(true)
-    expect(ticketToInboxRow({ ...base, status: 'solved', archived: true }).archived).toBe(true)
+    expect(conversationToInboxRow({ ...base, status: 'closed' }).archived).toBe(true)
+    expect(conversationToInboxRow({ ...base, status: 'solved' }).archived).toBe(false)
+    expect(conversationToInboxRow({ ...base, status: 'closed', archived: true }).archived).toBe(true)
+    expect(conversationToInboxRow({ ...base, status: 'solved', archived: true }).archived).toBe(true)
   })
 
-  it('prefers the mail response\'s per-message unread count over the ticket-era column', () => {
-    expect(ticketToInboxRow({ ...base, unread_count_messages: 5 }).unread_count).toBe(5)
+  it('prefers the mail response\'s per-message unread count over the conversation-era column', () => {
+    expect(conversationToInboxRow({ ...base, unread_count_messages: 5 }).unread_count).toBe(5)
     // 0 is a real answer, not an absence — ?? not ||.
-    expect(ticketToInboxRow({ ...base, unread_count_messages: 0 }).unread_count).toBe(0)
-    // Absent → the ticket-era fallback.
-    expect(ticketToInboxRow(base).unread_count).toBe(2)
+    expect(conversationToInboxRow({ ...base, unread_count_messages: 0 }).unread_count).toBe(0)
+    // Absent → the conversation-era fallback.
+    expect(conversationToInboxRow(base).unread_count).toBe(2)
   })
 })
 
-describe('ticketsToInboxRows', () => {
+describe('conversationsToInboxRows', () => {
   const mailboxes = [
     { id: 'mb1', label: 'Accounts', address: 'accounts@x.com' },
     { id: 'mb2', label: 'Sales', address: 'sales@x.com' },
   ]
-  const tickets = [
+  const conversations = [
     { id: 't1', mailbox_id: 'mb1', status: 'open' },
     { id: 't2', mailbox_id: 'mb2', status: 'open' },
   ]
 
   it('labels each row with the account it arrived at when there is more than one', () => {
-    const rows = ticketsToInboxRows({ tickets, mailboxes })
+    const rows = conversationsToInboxRows({ conversations, mailboxes })
     expect(rows.map(r => r.mailbox_label)).toEqual(['Accounts', 'Sales'])
   })
 
   it('omits the chip when there is only one account to see', () => {
-    const rows = ticketsToInboxRows({ tickets: [tickets[0]], mailboxes: [mailboxes[0]] })
+    const rows = conversationsToInboxRows({ conversations: [conversations[0]], mailboxes: [mailboxes[0]] })
     expect(rows[0].mailbox_label).toBeNull()
   })
 
-  it('says "No mailbox" for an orphaned ticket in a multi-account studio', () => {
-    const rows = ticketsToInboxRows({ tickets: [{ id: 't3', mailbox_id: null }], mailboxes })
+  it('says "No mailbox" for an orphaned conversation in a multi-account studio', () => {
+    const rows = conversationsToInboxRows({ conversations: [{ id: 't3', mailbox_id: null }], mailboxes })
     expect(rows[0].mailbox_label).toBe('No mailbox')
   })
 
   it('handles the empty payload a studio with no addresses returns', () => {
-    expect(ticketsToInboxRows({})).toEqual([])
-    expect(ticketsToInboxRows({ tickets: [], mailboxes: [] })).toEqual([])
+    expect(conversationsToInboxRows({})).toEqual([])
+    expect(conversationsToInboxRows({ conversations: [], mailboxes: [] })).toEqual([])
   })
 })
 
@@ -355,18 +355,18 @@ describe('ticketsToInboxRows', () => {
 // A re-statement drifts unless both sides are pinned, and the two rules that
 // must never drift are the ones asserted here: NULL says nothing, and a note
 // never claims delivery.
-describe('ticketDeliveryMeta (EMAIL-DELIVERY.1)', () => {
+describe('conversationDeliveryMeta (EMAIL-DELIVERY.1)', () => {
   const outbound = (extra) => ({ direction: 'outbound', is_internal_note: false, ...extra })
 
   it('says NOTHING about a message with no provider event yet', () => {
-    expect(ticketDeliveryMeta(outbound({ delivery_status: null }))).toBeNull()
-    expect(ticketDeliveryMeta(outbound({}))).toBeNull()
-    expect(ticketDeliveryMeta(null)).toBeNull()
+    expect(conversationDeliveryMeta(outbound({ delivery_status: null }))).toBeNull()
+    expect(conversationDeliveryMeta(outbound({}))).toBeNull()
+    expect(conversationDeliveryMeta(null)).toBeNull()
   })
 
   it('never claims anything about an internal note or an inbound message', () => {
-    expect(ticketDeliveryMeta({ direction: 'outbound', is_internal_note: true, delivery_status: 'delivered' })).toBeNull()
-    expect(ticketDeliveryMeta({ direction: 'inbound', delivery_status: 'delivered' })).toBeNull()
+    expect(conversationDeliveryMeta({ direction: 'outbound', is_internal_note: true, delivery_status: 'delivered' })).toBeNull()
+    expect(conversationDeliveryMeta({ direction: 'inbound', delivery_status: 'delivered' })).toBeNull()
   })
 
   // MAILBOX-CONNECT.7 — web/mobile parity on the SMTP case. The first pass
@@ -374,7 +374,7 @@ describe('ticketDeliveryMeta (EMAIL-DELIVERY.1)', () => {
   // a desktop and said nothing on a phone. The header of this section lists the
   // rules that must not diverge; this is one of them.
   it('says NOT TRACKED for an SMTP send, matching web', () => {
-    const meta = ticketDeliveryMeta(outbound({
+    const meta = conversationDeliveryMeta(outbound({
       delivery_status: null, postmark_message_id: null, rfc_message_id: 'a@theirgym.ie',
     }))
     expect(meta).not.toBeNull()
@@ -388,7 +388,7 @@ describe('ticketDeliveryMeta (EMAIL-DELIVERY.1)', () => {
   // was sent from the mailbox's own server. Nothing of ours sent it: the
   // poller read a copy of it out of a folder.
   it('does NOT tell an operator a mail-client reply went out over our SMTP', () => {
-    const meta = ticketDeliveryMeta(outbound({
+    const meta = conversationDeliveryMeta(outbound({
       delivery_status: null, source: 'mail_client',
       postmark_message_id: null, rfc_message_id: 'CAF=9x@mail.gmail.com',
     }))
@@ -398,7 +398,7 @@ describe('ticketDeliveryMeta (EMAIL-DELIVERY.1)', () => {
   })
 
   it('says NOT TRACKED for a mail-client reply, in web’s words', () => {
-    const meta = ticketDeliveryMeta(outbound({
+    const meta = conversationDeliveryMeta(outbound({
       delivery_status: null, source: 'mail_client',
       postmark_message_id: null, rfc_message_id: 'CAF=9x@mail.gmail.com',
     }))
@@ -412,7 +412,7 @@ describe('ticketDeliveryMeta (EMAIL-DELIVERY.1)', () => {
   })
 
   it('reads a mail-client row by its source, not by the shape of its ids', () => {
-    const meta = ticketDeliveryMeta(outbound({
+    const meta = conversationDeliveryMeta(outbound({
       delivery_status: null, source: 'mail_client',
       postmark_message_id: null, rfc_message_id: null,
     }))
@@ -422,12 +422,12 @@ describe('ticketDeliveryMeta (EMAIL-DELIVERY.1)', () => {
   // Both orderings the branch rests on: below the status branches, above the
   // SMTP one. Nothing else would notice if it moved.
   it('keeps a real outcome on a mail-client row, and beats the SMTP branch', () => {
-    expect(ticketDeliveryMeta(outbound({
+    expect(conversationDeliveryMeta(outbound({
       delivery_status: 'bounced', source: 'mail_client',
       postmark_message_id: null, rfc_message_id: 'a@b.com',
     })).label).toBe('Not delivered')
 
-    expect(ticketDeliveryMeta(outbound({
+    expect(conversationDeliveryMeta(outbound({
       delivery_status: null, source: 'mail_client',
       postmark_message_id: null, rfc_message_id: 'a@b.com',
     })).detail).toMatch(/did not send this/i)
@@ -437,20 +437,20 @@ describe('ticketDeliveryMeta (EMAIL-DELIVERY.1)', () => {
     // Keying on the missing Postmark id alone would also match the whole
     // back-catalogue and the degraded-sender path, and tell the operator those
     // went out over SMTP. Saying nothing is the honest answer.
-    expect(ticketDeliveryMeta(outbound({
+    expect(conversationDeliveryMeta(outbound({
       delivery_status: null, postmark_message_id: null, rfc_message_id: null,
     }))).toBeNull()
   })
 
   it('renders a delivery quietly — no panel classes at all', () => {
-    const m = ticketDeliveryMeta(outbound({ delivery_status: 'delivered' }))
+    const m = conversationDeliveryMeta(outbound({ delivery_status: 'delivered' }))
     expect(m).toMatchObject({ tone: 'quiet', label: 'Delivered' })
     expect(m.cls).toBeUndefined()
     expect(m.headline).toBeUndefined()
   })
 
   it('renders a bounce loudly, with the light-theme chip ramp and an icon', () => {
-    const m = ticketDeliveryMeta(outbound({
+    const m = conversationDeliveryMeta(outbound({
       delivery_status: 'bounced', delivery_bounce_type: 'hard', delivery_detail: 'User unknown',
     }))
     expect(m.tone).toBe('alarm')
@@ -464,21 +464,21 @@ describe('ticketDeliveryMeta (EMAIL-DELIVERY.1)', () => {
   })
 
   it('gives hard and soft bounces different advice', () => {
-    const hard = ticketDeliveryMeta(outbound({ delivery_status: 'bounced', delivery_bounce_type: 'hard' }))
-    const soft = ticketDeliveryMeta(outbound({ delivery_status: 'bounced', delivery_bounce_type: 'soft' }))
+    const hard = conversationDeliveryMeta(outbound({ delivery_status: 'bounced', delivery_bounce_type: 'hard' }))
+    const soft = conversationDeliveryMeta(outbound({ delivery_status: 'bounced', delivery_bounce_type: 'soft' }))
     expect(hard.advice).not.toBe(soft.advice)
     expect(soft.advice).toMatch(/mailbox full/i)
   })
 
   it('treats a spam complaint as its own problem, not as non-delivery', () => {
-    const m = ticketDeliveryMeta(outbound({ delivery_status: 'complained' }))
+    const m = conversationDeliveryMeta(outbound({ delivery_status: 'complained' }))
     expect(m.tone).toBe('warn')
     expect(m.text).toBe('text-amber-700')
     expect(m.headline).not.toMatch(/never got/i)
   })
 
   it('says nothing about an unrecognised status', () => {
-    expect(ticketDeliveryMeta(outbound({ delivery_status: 'opened' }))).toBeNull()
+    expect(conversationDeliveryMeta(outbound({ delivery_status: 'opened' }))).toBeNull()
   })
 })
 
@@ -489,22 +489,22 @@ describe('ticketDeliveryMeta (EMAIL-DELIVERY.1)', () => {
 // mobile reply on a multi-party thread is automatically a reply-all. What this
 // screen must get right is the RENDERING, and specifically that a Bcc line is
 // never mistaken for something the other recipients could see.
-describe('ticketMessageRecipients', () => {
+describe('conversationMessageRecipients', () => {
   // MOBILE-ENV.1 — the two bubbles carry DIFFERENT headers, and the old rule
   // was written as though they carried the same one.
   it('shows a single To on the INBOUND bubble — its header names the sender, not us', () => {
-    const [line] = ticketMessageRecipients({ to_emails: ['ada@example.com'] })
+    const [line] = conversationMessageRecipients({ to_emails: ['ada@example.com'] })
     expect(line).toMatchObject({ key: 'to', label: 'To', staffOnly: false })
     expect(line.addresses).toEqual(['ada@example.com'])
   })
 
   it('omits a single To on the OUTBOUND bubble — "Sent to …" already names it in full', () => {
-    expect(ticketMessageRecipients({ to_emails: ['ada@example.com'] }, { toShownInHeader: true }))
+    expect(conversationMessageRecipients({ to_emails: ['ada@example.com'] }, { toShownInHeader: true }))
       .toEqual([])
   })
 
   it('shows the To on the OUTBOUND bubble once the header can only name the first', () => {
-    const [line] = ticketMessageRecipients(
+    const [line] = conversationMessageRecipients(
       { to_emails: ['ada@x.com', 'bob@x.com'] },
       { toShownInHeader: true },
     )
@@ -513,19 +513,19 @@ describe('ticketMessageRecipients', () => {
   })
 
   it('shows the member’s Cc — the reason inbound capture exists', () => {
-    const lines = ticketMessageRecipients({ to_emails: ['a@x.com'], cc_emails: ['bob@x.com'] })
+    const lines = conversationMessageRecipients({ to_emails: ['a@x.com'], cc_emails: ['bob@x.com'] })
     const line = lines.find(l => l.key === 'cc')
     expect(line).toMatchObject({ key: 'cc', staffOnly: false })
     expect(line.addresses).toEqual(['bob@x.com'])
   })
 
   it('marks Bcc staffOnly so the screen can say no recipient could see it', () => {
-    const lines = ticketMessageRecipients({ to_emails: ['a@x.com'], bcc_emails: ['secret@x.com'] })
+    const lines = conversationMessageRecipients({ to_emails: ['a@x.com'], bcc_emails: ['secret@x.com'] })
     expect(lines.find(l => l.key === 'bcc')).toMatchObject({ key: 'bcc', staffOnly: true })
   })
 
   it('reads the scalar to_email on a row written before mig 499', () => {
-    const [line] = ticketMessageRecipients({ to_email: 'a@x.com', cc_emails: ['b@x.com'] })
+    const [line] = conversationMessageRecipients({ to_email: 'a@x.com', cc_emails: ['b@x.com'] })
     expect(line).toMatchObject({ key: 'to' })
     expect(line.addresses).toEqual(['a@x.com'])
   })
@@ -534,15 +534,15 @@ describe('ticketMessageRecipients', () => {
   // Every reader of this field filters before measuring; this one always did,
   // and now says so out loud.
   it('takes the scalar fallback for a to_emails array holding nothing usable', () => {
-    const [line] = ticketMessageRecipients({ to_emails: [null], to_email: 'a@x.com' })
+    const [line] = conversationMessageRecipients({ to_emails: [null], to_email: 'a@x.com' })
     expect(line.addresses).toEqual(['a@x.com'])
   })
 
   it('omits empty lists rather than rendering a blank Cc', () => {
-    expect(ticketMessageRecipients({ to_emails: ['a@x.com'], cc_emails: [], bcc_emails: [] }))
+    expect(conversationMessageRecipients({ to_emails: ['a@x.com'], cc_emails: [], bcc_emails: [] }))
       .toEqual([{ key: 'to', label: 'To', addresses: ['a@x.com'], staffOnly: false }])
-    expect(ticketMessageRecipients({ to_emails: [], cc_emails: [], bcc_emails: [] })).toEqual([])
-    expect(ticketMessageRecipients(null)).toEqual([])
+    expect(conversationMessageRecipients({ to_emails: [], cc_emails: [], bcc_emails: [] })).toEqual([])
+    expect(conversationMessageRecipients(null)).toEqual([])
   })
 })
 
@@ -582,41 +582,41 @@ describe('sentToLabel', () => {
 //
 // GET .../[id] now derives the reply audience from the WHOLE thread
 // (reply_recipients = { to, mode, over_cap, empty } — the same shape
-// TicketReplyBox.jsx reads on web). Before this, mobile's composer footer
+// ConversationReplyBox.jsx reads on web). Before this, mobile's composer footer
 // said "Sends an email to <requester>" unconditionally, even though a reply
 // from this screen has always reached everyone the server derives (the file
 // header's RECIPIENTS note — mobile posts { text, internal } only). That
 // understated the true audience on every multi-party thread, a known
 // standing defect as of the 2026-08-09 audit.
-describe('ticketReplyAudienceMeta (EMAIL-PARTICIPANTS.9)', () => {
-  const ticket = (extra) => ({ requester_email: 'ada@x.com', ...extra })
+describe('conversationReplyAudienceMeta (EMAIL-PARTICIPANTS.9)', () => {
+  const conversation = (extra) => ({ requester_email: 'ada@x.com', ...extra })
   const audience = (to, extra) => ({ to, mode: to.length > 1 ? 'reply_all' : 'reply', over_cap: false, empty: false, ...extra })
 
   it('names the one recipient on a one-person thread', () => {
-    const m = ticketReplyAudienceMeta(ticket(), audience(['ada@x.com']))
+    const m = conversationReplyAudienceMeta(conversation(), audience(['ada@x.com']))
     expect(m).toEqual({ disabled: false, text: 'Sends an email to ada@x.com' })
   })
 
   it('names the first and counts the rest on a wider thread — the first is the live counterparty, server-ordered', () => {
-    const m = ticketReplyAudienceMeta(ticket(), audience(['bob@x.com', 'ada@x.com', 'carol@x.com']))
+    const m = conversationReplyAudienceMeta(conversation(), audience(['bob@x.com', 'ada@x.com', 'carol@x.com']))
     expect(m).toEqual({ disabled: false, text: 'Sends an email to bob@x.com and 2 others' })
   })
 
   it('says "1 other" rather than "1 others" for exactly two people', () => {
-    const m = ticketReplyAudienceMeta(ticket(), audience(['bob@x.com', 'ada@x.com']))
+    const m = conversationReplyAudienceMeta(conversation(), audience(['bob@x.com', 'ada@x.com']))
     expect(m.text).toBe('Sends an email to bob@x.com and 1 other')
   })
 
-  it('names where replies land when the ticket has a mailbox', () => {
-    const m = ticketReplyAudienceMeta(
-      ticket({ mailbox: { address: 'accounts@x.com' } }),
+  it('names where replies land when the conversation has a mailbox', () => {
+    const m = conversationReplyAudienceMeta(
+      conversation({ mailbox: { address: 'accounts@x.com' } }),
       audience(['ada@x.com']),
     )
     expect(m.text).toBe('Sends an email to ada@x.com · replies come back to accounts@x.com')
   })
 
   it('disables send and says there is nobody to reply to once every recipient has been removed', () => {
-    const m = ticketReplyAudienceMeta(ticket(), audience([], { empty: true }))
+    const m = conversationReplyAudienceMeta(conversation(), audience([], { empty: true }))
     expect(m).toEqual({
       disabled: true,
       text: 'Every recipient has been removed from this thread, so there is nobody to reply to. '
@@ -626,31 +626,31 @@ describe('ticketReplyAudienceMeta (EMAIL-PARTICIPANTS.9)', () => {
 
   it('disables send and explains the recipient cap — an enabled button here would be a dead click (the route 400s)', () => {
     const wide = Array.from({ length: 30 }, (_, i) => `p${i}@x.com`)
-    const m = ticketReplyAudienceMeta(ticket(), audience(wide, { mode: 'reply_all', over_cap: true }))
+    const m = conversationReplyAudienceMeta(conversation(), audience(wide, { mode: 'reply_all', over_cap: true }))
     expect(m).toEqual({
       disabled: true,
       text: 'This thread has 30 recipients — too many for one reply. Remove some on the web before replying.',
     })
   })
 
-  it('disables send when the ticket has no requester address, regardless of what reply_recipients says', () => {
-    const m = ticketReplyAudienceMeta(ticket({ requester_email: null }), audience(['ada@x.com']))
+  it('disables send when the conversation has no requester address, regardless of what reply_recipients says', () => {
+    const m = conversationReplyAudienceMeta(conversation({ requester_email: null }), audience(['ada@x.com']))
     expect(m.disabled).toBe(true)
     expect(m.text).toBe(
-      'This ticket has no requester address, so it cannot be replied to. You can still add an internal note.',
+      'This conversation has no requester address, so it cannot be replied to. You can still add an internal note.',
     )
   })
 
   it('falls back to the requester address when the route could not derive one (null) — same as web', () => {
-    const m = ticketReplyAudienceMeta(ticket(), null)
+    const m = conversationReplyAudienceMeta(conversation(), null)
     expect(m).toEqual({ disabled: false, text: 'Sends an email to ada@x.com' })
   })
 
   it('never invents an over_cap/empty refusal off a null reply_recipients', () => {
     // null means "we don't know", not "we checked and it's fine" — but it must
     // ALSO not be misread as a refusal. The one-person fallback above is the
-    // only safe reading, same as TicketReplyBox.jsx's lockedTo on web.
-    expect(ticketReplyAudienceMeta(ticket(), null).disabled).toBe(false)
+    // only safe reading, same as ConversationReplyBox.jsx's lockedTo on web.
+    expect(conversationReplyAudienceMeta(conversation(), null).disabled).toBe(false)
   })
 })
 
@@ -658,62 +658,62 @@ describe('ticketReplyAudienceMeta (EMAIL-PARTICIPANTS.9)', () => {
 //
 // EMAIL-PARTICIPANTS.9 moved mobile's composer FOOTER onto the real audience
 // and left the two most prominent strings on the screen still reading
-// `ticket.requester_email` raw: the header line under the ticket subject, and
+// `conversation.requester_email` raw: the header line under the conversation subject, and
 // the composer's own placeholder. Web changed both in .8, citing this exact
-// defect. On the 2026-08-12 ticket that left the phone saying "Reply to
+// defect. On the 2026-08-12 conversation that left the phone saying "Reply to
 // ratesoffice@dublincity.ie" in the box an operator types into, directly above
 // a footer saying the mail goes to Eleanor and one other — the composer
 // contradicting itself in two adjacent lines.
 //
 // MOBILE STAYS READ-ONLY. These describe the audience the server settled on;
 // there is no remove/restore on this screen and these add none.
-describe('ticketReplyPlaceholder (EMAIL-PARTICIPANTS.12)', () => {
-  const ticket = (extra) => ({ requester_email: 'rates@council.ie', ...extra })
+describe('conversationReplyPlaceholder (EMAIL-PARTICIPANTS.12)', () => {
+  const conversation = (extra) => ({ requester_email: 'rates@council.ie', ...extra })
   const audience = (to, extra) => ({ to, mode: to.length > 1 ? 'reply_all' : 'reply', over_cap: false, empty: false, ...extra })
 
-  it('names the live counterparty, not the address the ticket arrived from', () => {
-    const p = ticketReplyPlaceholder(ticket(), audience(['eleanor@council.ie', 'rates@council.ie']))
+  it('names the live counterparty, not the address the conversation arrived from', () => {
+    const p = conversationReplyPlaceholder(conversation(), audience(['eleanor@council.ie', 'rates@council.ie']))
     expect(p).toBe('Reply to eleanor@council.ie and 1 other…')
   })
 
   it('names the only recipient on a one-person thread', () => {
-    expect(ticketReplyPlaceholder(ticket(), audience(['rates@council.ie'])))
+    expect(conversationReplyPlaceholder(conversation(), audience(['rates@council.ie'])))
       .toBe('Reply to rates@council.ie…')
   })
 
   it('says "others" once there are more than two', () => {
-    expect(ticketReplyPlaceholder(ticket(), audience(['a@x.com', 'b@x.com', 'c@x.com'])))
+    expect(conversationReplyPlaceholder(conversation(), audience(['a@x.com', 'b@x.com', 'c@x.com'])))
       .toBe('Reply to a@x.com and 2 others…')
   })
 
-  // The same rule TicketReplyBox.jsx's lockedTo enforces on web: an emptied
+  // The same rule ConversationReplyBox.jsx's lockedTo enforces on web: an emptied
   // audience must never put the removed person back into a prompt, because the
   // route would refuse the send to them.
   it('names NOBODY once every recipient has been removed', () => {
-    const p = ticketReplyPlaceholder(ticket(), audience([], { empty: true }))
+    const p = conversationReplyPlaceholder(conversation(), audience([], { empty: true }))
     expect(p).toBe('Reply…')
     expect(p).not.toContain('rates@council.ie')
   })
 
   it('falls back to the requester when the route derived no audience (null)', () => {
-    expect(ticketReplyPlaceholder(ticket(), null)).toBe('Reply to rates@council.ie…')
+    expect(conversationReplyPlaceholder(conversation(), null)).toBe('Reply to rates@council.ie…')
   })
 
-  it('says a ticket with no requester address cannot be replied to at all', () => {
-    expect(ticketReplyPlaceholder(ticket({ requester_email: null }), audience(['a@x.com'])))
+  it('says a conversation with no requester address cannot be replied to at all', () => {
+    expect(conversationReplyPlaceholder(conversation({ requester_email: null }), audience(['a@x.com'])))
       .toBe('No requester address — add an internal note instead')
   })
 })
 
-describe('ticketThreadAudienceLines (EMAIL-PARTICIPANTS.12)', () => {
-  const ticket = (extra) => ({
+describe('conversationThreadAudienceLines (EMAIL-PARTICIPANTS.12)', () => {
+  const conversation = (extra) => ({
     requester_email: 'rates@council.ie', requester_name: 'Rates Office', ...extra,
   })
   const audience = (to, extra) => ({ to, mode: to.length > 1 ? 'reply_all' : 'reply', over_cap: false, empty: false, ...extra })
 
   it('names the live audience in the header, with the requester demoted to "Opened by"', () => {
-    const lines = ticketThreadAudienceLines(
-      ticket(), audience(['eleanor@council.ie', 'rates@council.ie']),
+    const lines = conversationThreadAudienceLines(
+      conversation(), audience(['eleanor@council.ie', 'rates@council.ie']),
     )
     expect(lines).toEqual({
       primary: 'On this thread: eleanor@council.ie, Rates Office <rates@council.ie>',
@@ -722,7 +722,7 @@ describe('ticketThreadAudienceLines (EMAIL-PARTICIPANTS.12)', () => {
   })
 
   it('says nothing about who opened it while the requester is still the counterparty', () => {
-    const lines = ticketThreadAudienceLines(ticket(), audience(['rates@council.ie', 'clerk@council.ie']))
+    const lines = conversationThreadAudienceLines(conversation(), audience(['rates@council.ie', 'clerk@council.ie']))
     expect(lines.primary).toBe('On this thread: Rates Office <rates@council.ie>, clerk@council.ie')
     expect(lines.opener).toBeNull()
   })
@@ -731,11 +731,11 @@ describe('ticketThreadAudienceLines (EMAIL-PARTICIPANTS.12)', () => {
   // stranger's mail client produced — so a case difference is not a change of
   // counterparty and must not be announced as one.
   it('does not call a case difference a change of counterparty', () => {
-    expect(ticketThreadAudienceLines(ticket(), audience(['Rates@Council.IE'])).opener).toBeNull()
+    expect(conversationThreadAudienceLines(conversation(), audience(['Rates@Council.IE'])).opener).toBeNull()
   })
 
   it('never names the removed requester once the audience is empty', () => {
-    const lines = ticketThreadAudienceLines(ticket(), audience([], { empty: true }))
+    const lines = conversationThreadAudienceLines(conversation(), audience([], { empty: true }))
     expect(lines.primary).toBe('Nobody is left on this thread — every recipient was removed.')
     expect(lines.primary).not.toContain('rates@council.ie')
     expect(lines.opener).toBeNull()
@@ -744,12 +744,12 @@ describe('ticketThreadAudienceLines (EMAIL-PARTICIPANTS.12)', () => {
   it('keeps the plain requester line when the route derived no audience (null)', () => {
     // Not an operator act — an own-address lookup blip. The requester address
     // is the honest answer, and it is what this line has always shown.
-    expect(ticketThreadAudienceLines(ticket(), null))
+    expect(conversationThreadAudienceLines(conversation(), null))
       .toEqual({ primary: 'rates@council.ie', opener: null })
   })
 
-  it('still says so when the ticket has no requester address', () => {
-    expect(ticketThreadAudienceLines(ticket({ requester_email: null }), null))
+  it('still says so when the conversation has no requester address', () => {
+    expect(conversationThreadAudienceLines(conversation({ requester_email: null }), null))
       .toEqual({ primary: 'No requester address', opener: null })
   })
 })
@@ -777,51 +777,51 @@ describe('formatAttachmentSize', () => {
   })
 })
 
-describe('ticketAttachmentSkippedLabel', () => {
+describe('conversationAttachmentSkippedLabel', () => {
   it('names every reason the DB allows, in words staff can act on', () => {
-    expect(ticketAttachmentSkippedLabel('quota')).toMatch(/full/i)
-    expect(ticketAttachmentSkippedLabel('too_large')).toMatch(/size limit/i)
+    expect(conversationAttachmentSkippedLabel('quota')).toMatch(/full/i)
+    expect(conversationAttachmentSkippedLabel('too_large')).toMatch(/size limit/i)
     // Its own sentence rather than folded into too_large: staff ACT on this,
     // and "over the size limit" would send them asking a member to compress a
     // file that was never oversized.
-    expect(ticketAttachmentSkippedLabel('too_many')).toMatch(/too many files/i)
-    expect(ticketAttachmentSkippedLabel('rehost_failed')).toMatch(/upload failed/i)
-    expect(ticketAttachmentSkippedLabel('pruned')).toMatch(/free space/i)
+    expect(conversationAttachmentSkippedLabel('too_many')).toMatch(/too many files/i)
+    expect(conversationAttachmentSkippedLabel('rehost_failed')).toMatch(/upload failed/i)
+    expect(conversationAttachmentSkippedLabel('pruned')).toMatch(/free space/i)
   })
 
   it('still says SOMETHING for an unknown reason — never an empty chip', () => {
-    expect(ticketAttachmentSkippedLabel('invented')).toBe('Not stored')
-    expect(ticketAttachmentSkippedLabel(null)).toBe('Not stored')
+    expect(conversationAttachmentSkippedLabel('invented')).toBe('Not stored')
+    expect(conversationAttachmentSkippedLabel(null)).toBe('Not stored')
   })
 })
 
-describe('ticketAttachmentIcon', () => {
+describe('conversationAttachmentIcon', () => {
   it('reads the type first', () => {
-    expect(ticketAttachmentIcon('image/jpeg', 'x.jpg')).toBe('image-outline')
-    expect(ticketAttachmentIcon('application/pdf', 'x.pdf')).toBe('document-text-outline')
-    expect(ticketAttachmentIcon('text/csv', 'members.csv')).toBe('grid-outline')
+    expect(conversationAttachmentIcon('image/jpeg', 'x.jpg')).toBe('image-outline')
+    expect(conversationAttachmentIcon('application/pdf', 'x.pdf')).toBe('document-text-outline')
+    expect(conversationAttachmentIcon('text/csv', 'members.csv')).toBe('grid-outline')
     // A .png name on a PDF must not turn it into a photo.
-    expect(ticketAttachmentIcon('application/pdf', 'invoice.png')).toBe('document-text-outline')
+    expect(conversationAttachmentIcon('application/pdf', 'invoice.png')).toBe('document-text-outline')
   })
 
   it('falls back to the filename when the type says nothing', () => {
     // The real .pptx MIME subtype is 61 characters and safeMimeType caps a
     // subtype at 60, so every PowerPoint deck is stored as octet-stream.
-    expect(ticketAttachmentIcon('application/octet-stream', 'Q3 deck.pptx')).toBe('easel-outline')
-    expect(ticketAttachmentIcon('application/octet-stream', 'photos.zip')).toBe('archive-outline')
-    expect(ticketAttachmentIcon('application/octet-stream', 'letter.docx')).toBe('document-outline')
+    expect(conversationAttachmentIcon('application/octet-stream', 'Q3 deck.pptx')).toBe('easel-outline')
+    expect(conversationAttachmentIcon('application/octet-stream', 'photos.zip')).toBe('archive-outline')
+    expect(conversationAttachmentIcon('application/octet-stream', 'letter.docx')).toBe('document-outline')
   })
 
   it('always returns a glyph, never undefined', () => {
-    expect(ticketAttachmentIcon(null, null)).toBe('attach-outline')
-    expect(ticketAttachmentIcon('', 'noextension')).toBe('attach-outline')
-    expect(ticketAttachmentIcon(undefined, undefined)).toBe('attach-outline')
+    expect(conversationAttachmentIcon(null, null)).toBe('attach-outline')
+    expect(conversationAttachmentIcon('', 'noextension')).toBe('attach-outline')
+    expect(conversationAttachmentIcon(undefined, undefined)).toBe('attach-outline')
   })
 })
 
 // EMAIL-ATTACH-RACE.1 — mobile's copy of the thread re-read cadence. The
-// numbers must match web (src/lib/ticket-display.js): an operator watching one
-// ticket on a phone and a laptop should not see one of them catch up first.
+// numbers must match web (src/lib/conversation-display.js): an operator watching one
+// conversation on a phone and a laptop should not see one of them catch up first.
 describe('threadRefreshMs', () => {
   const NOW = Date.parse('2026-08-07T21:00:00.000Z')
   const at = (iso) => [{ id: 'm1', created_at: iso }]
@@ -1065,9 +1065,9 @@ describe('archiveToggleMeta (mockup §02 — swipe right, five-second undo)', ()
   })
 
   it('with no stamp at all, only `closed` reads as archived — the same fallback the server and web use', () => {
-    // Unreachable from the Mail tab (ticketToInboxRow always stamps a
+    // Unreachable from the Mail tab (conversationToInboxRow always stamps a
     // boolean), pinned so the fallback agrees with shared/mail-vocabulary's
-    // isArchived rather than the ticket-era solved||closed reading.
+    // isArchived rather than the conversation-era solved||closed reading.
     expect(archiveToggleMeta({ status: 'closed' }).next).toBe(false)
     expect(archiveToggleMeta({ status: 'solved' }).next).toBe(true)
     expect(archiveToggleMeta({ status: 'open' }).next).toBe(true)
@@ -1124,14 +1124,14 @@ describe('segCountLabel (the Needs reply count on the view strip)', () => {
   })
 })
 
-describe('ticketToInboxRow.archived (the swipe verb reads it, so the row must carry it)', () => {
+describe('conversationToInboxRow.archived (the swipe verb reads it, so the row must carry it)', () => {
   it('is true for the server flag and for a stampless closed row, false for live rows (stampless solved is live — MAIL-ARCH.4)', () => {
-    expect(ticketToInboxRow({ id: 't', archived: true, status: 'open' }).archived).toBe(true)
-    expect(ticketToInboxRow({ id: 't', status: 'closed' }).archived).toBe(true)
-    expect(ticketToInboxRow({ id: 't', status: 'solved' }).archived).toBe(false)
-    expect(ticketToInboxRow({ id: 't', status: 'solved', archived: true }).archived).toBe(true)
-    expect(ticketToInboxRow({ id: 't', status: 'open' }).archived).toBe(false)
-    expect(ticketToInboxRow({ id: 't', status: 'pending' }).archived).toBe(false)
+    expect(conversationToInboxRow({ id: 't', archived: true, status: 'open' }).archived).toBe(true)
+    expect(conversationToInboxRow({ id: 't', status: 'closed' }).archived).toBe(true)
+    expect(conversationToInboxRow({ id: 't', status: 'solved' }).archived).toBe(false)
+    expect(conversationToInboxRow({ id: 't', status: 'solved', archived: true }).archived).toBe(true)
+    expect(conversationToInboxRow({ id: 't', status: 'open' }).archived).toBe(false)
+    expect(conversationToInboxRow({ id: 't', status: 'pending' }).archived).toBe(false)
   })
 })
 
@@ -1206,7 +1206,7 @@ describe('mailRowDisplay', () => {
     expect(d.chip).toBeNull()
   })
 
-  it('falls back to status/direction for ticket-shaped callers with no stamps', () => {
+  it('falls back to status/direction for conversation-shaped callers with no stamps', () => {
     expect(mailRowDisplay({ status: 'open', last_message_direction: 'inbound' }).rail).toBe(true)
     expect(mailRowDisplay({ status: 'open', last_message_direction: 'outbound' }).rail).toBe(false)
     expect(mailRowDisplay({ status: 'closed' }).chip?.label).toBe('Archived')

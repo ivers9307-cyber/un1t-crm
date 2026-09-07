@@ -36,7 +36,7 @@
 // this file copies.
 
 import AsyncStorage from '@react-native-async-storage/async-storage'
-import { ticketToInboxRow, segCountLabel } from './mail-conversations'
+import { conversationToInboxRow, segCountLabel } from './mail-conversations'
 
 /* ───────────────────────── scope persistence ───────────────────────── */
 
@@ -181,7 +181,7 @@ export function sectionUnavailableCopy(name) {
  *   state 'empty' — the current view is genuinely empty here (view_total 0);
  *                   header + SECTION_EMPTY_TEXT, never hidden.
  *   state 'rows'  — the digest's ≤5 rows, shaped through the SAME
- *                   ticketToInboxRow as list rows (so a digest row and a
+ *                   conversationToInboxRow as list rows (so a digest row and a
  *                   list row can never disagree about one conversation),
  *                   each stamped with its location_id — the seam the swipe
  *                   verbs thread into archive/seen. mailbox_label stays null:
@@ -207,7 +207,7 @@ export function buildDigestSections(locations) {
       }
     }
     const data = (l?.conversations || []).map(t => ({
-      ...ticketToInboxRow(t, { showMailbox: false }),
+      ...conversationToInboxRow(t, { showMailbox: false }),
       location_id: l.location_id,
     }))
     const total = Number(l?.view_total)

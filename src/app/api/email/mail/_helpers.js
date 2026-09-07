@@ -1,7 +1,7 @@
 // MAIL-TRIAL.B → RETIRE-TICKETS.1 — shared resolution for /api/email/mail.
 //
 // WHY THIS FILE IS THIN, AND DELIBERATELY SO
-// Mail started as one half of a head-to-head trial against the ticket queue.
+// Mail started as one half of a head-to-head trial against the conversation queue.
 // The trial is over (mig 578: Mail won, the queue UI is deleted, every
 // mailbox is on this surface) — but the reason this file stays thin outlived
 // it: the access model must NOT be re-implemented here, because a second
@@ -11,11 +11,11 @@
 // So every gate here is the original email access model, imported verbatim:
 //   • loadVisibleMailboxes  — the email_inbox key + per-mailbox grants
 //   • loadConversationForUser — the same, resolved at the TICKET's location
-//     (and the orphan rule: a NULL-mailbox ticket is visible to ELEVATED
+//     (and the orphan rule: a NULL-mailbox conversation is visible to ELEVATED
 //     callers only — mailbox_id is ON DELETE SET NULL and mig 484's backfill
 //     predates the column, so orphans genuinely exist)
 //   • scopeToNeedsReply     — the ONE definition of "they wrote, nobody answered"
-//   • scopeToUnmerged       — merged tickets are tombstones everywhere
+//   • scopeToUnmerged       — merged conversations are tombstones everywhere
 //   • statusTimestamps      — solved_at/closed_at, one implementation
 //
 // The `surface` filter that used to be layered on top is GONE — mig 578
@@ -30,7 +30,7 @@ import {
 } from './_conversation'
 
 // Re-exported so the routes in this tree import their gates from ONE place and
-// a reader can see, in one import line, that they are the ticket surface's.
+// a reader can see, in one import line, that they are the conversation surface's.
 export { scopeToNeedsReply, scopeToUnmerged, scopeToSpamView, statusTimestamps, loadConversationForUser, conversationNotFound }
 
 /**
@@ -58,7 +58,7 @@ export async function loadInboxMailboxes(db, user, locationId) {
  *
  * It is kept because it is the one thing a plain mail client cannot tell an
  * operator: not "is there mail" but "has this member been answered". Everything
- * else in the ticket lifecycle is dropped on this surface; this is not.
+ * else in the conversation lifecycle is dropped on this surface; this is not.
  */
 export function isNeedsReply(row) {
   // `!== true` rather than `!row.is_spam`: a row from a fixture or an older
@@ -180,13 +180,13 @@ export const MESSAGE_SCAN_LIMIT = 1000
  * @returns {Promise<{ counts: Map<string, {messages: number, unread: number, hasAttachments: boolean}>,
  *                     partial: boolean, unavailable: boolean }>}
  */
-export async function loadConversationCounts(db, ticketIds) {
+export async function loadConversationCounts(db, conversationIds) {
   const empty = { counts: new Map(), partial: false, unavailable: false }
-  if (!Array.isArray(ticketIds) || ticketIds.length === 0) return empty
+  if (!Array.isArray(conversationIds) || conversationIds.length === 0) return empty
 
   const { data, error } = await db.from('email_inbox_messages')
     .select('ticket_id, direction, seen_at, email_ticket_attachments(id)')
-    .in('ticket_id', ticketIds)
+    .in('ticket_id', conversationIds)
     // Ordered so the truncation, if it happens, is a clean suffix rather than
     // an arbitrary sample — which is what makes `partial` a usable answer.
     .order('ticket_id', { ascending: true })

@@ -4,9 +4,9 @@
 // 🔴 A MAIL-SURFACE VERB MUST NOT REACH A TICKETING MAILBOX. Both routes take
 // an id from the caller, and every id in the system is the same shape, so the
 // only thing standing between "archive my mail" and "archive somebody else's
-// ticket" is assertInboxSurface. It is the mirror of the guard on the IMAP
+// conversation" is assertInboxSurface. It is the mirror of the guard on the IMAP
 // write helper, and the fixture world is built so that dropping it fails here:
-// accounts@ sits at the SAME location, the caller is an owner, and its ticket
+// accounts@ sits at the SAME location, the caller is an owner, and its conversation
 // is one POST away.
 //
 // The second property is smaller and just as easy to lose: this surface must be
@@ -106,7 +106,7 @@ describe('POST /api/email/mail/[id]/archive', () => {
   })
 
   it('archives an ORPHAN (no mailbox) for an elevated caller — DB half only, no IMAP write', async () => {
-    // The ticket queue was the orphan's only home; it lives here now. The
+    // The conversation queue was the orphan's only home; it lives here now. The
     // mailbox half short-circuits on the null id (applyWriteback), so nothing
     // ever tries to open a connection for an account that does not exist.
     setupDb(mailState({ tickets: [{ ...T_STUDIO, mailbox_id: null }] }))
@@ -390,7 +390,7 @@ describe('POST /api/email/mail/[id]/seen', () => {
   // correctly, because there was no markUnseen() to pair with and the poller
   // converges a CRM-only unread mark away within about a quarter of an hour.
   // The remedy was the paired IMAP write, not a permanently missing verb: the
-  // ticket queue has reopen, so a mail surface with no defer verb at all would
+  // conversation queue has reopen, so a mail surface with no defer verb at all would
   // have biased the comparison the trial exists to settle.
   it('marks unread in BOTH halves — the column and the mailbox', async () => {
     withMessages([message({ id: 'm1', rfc_message_id: '<1@mail>', seen_at: '2026-08-06T09:30:00Z' })])

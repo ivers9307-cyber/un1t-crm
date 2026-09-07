@@ -1,4 +1,4 @@
-// EMAIL-TICKET.4 — pure presentation rules for the email ticket inbox.
+// EMAIL-TICKET.4 — pure presentation rules for the email conversation inbox.
 // Spec: docs/superpowers/specs/2026-08-05-email-ticketing-design.md
 //
 // WHY THIS IS A LIB AND NOT INLINE JSX
@@ -20,12 +20,12 @@
 //      washed-out chip has shipped and been operator-reported before.
 //
 // Pure: no DOM, no fetch, no clock (callers pass `now`). Tested in
-// ticket-display.test.js.
+// conversation-display.test.js.
 
 // (RETIRE-TICKETS.2 — the Views block that lived here — TICKET_VIEWS,
-// DEFAULT_VIEW_ID, ticketView, viewWireValue, buildTicketsUrl — went with the
+// DEFAULT_VIEW_ID, conversationView, viewWireValue, buildConversationsUrl — went with the
 // deleted list-route shim. The mobile Mail surface keeps its own view tabs in
-// mobile/lib/email-tickets.js.)
+// mobile/lib/email-conversations.js.)
 
 // ── Status + priority ────────────────────────────────────────────────
 //
@@ -51,14 +51,14 @@ export const STATUS_META = Object.freeze({
   closed: {
     label: 'Closed',
     chip: 'bg-slate-500/10 text-slate-700',
-    // A reply to a closed ticket REOPENS it — it does not fork (Richard,
+    // A reply to a closed conversation REOPENS it — it does not fork (Richard,
     // 2026-08-07). What separates issues is threading, not the closed state.
     hint: 'Done — a member reply reopens it',
   },
 })
 
 // The lifecycle in the order an operator walks it. Rendered as a segmented
-// control on the open ticket, all four always visible: NOTHING in this system
+// control on the open conversation, all four always visible: NOTHING in this system
 // closes itself (Richard, 2026-08-06), so closing has to be one click from
 // the thread rather than something buried in a menu.
 export const STATUS_ORDER = Object.freeze(['open', 'pending', 'solved', 'closed'])
@@ -193,7 +193,7 @@ export function canForwardMessage(message) {
 export function forwardedMarker(message, byId) {
   if (!message?.forwarded_message_id) return null
   const source = byId?.get?.(message.forwarded_message_id) || null
-  if (!source) return 'Forwarded a message from this ticket'
+  if (!source) return 'Forwarded a message from this conversation'
   const who = source.from_email || (source.direction === 'outbound' ? 'this studio' : 'the member')
   const when = messageTimestamp(source.sent_at || source.created_at)
   return `Forwarded the message from ${who}${when ? ` · ${when}` : ''}`
@@ -237,7 +237,7 @@ export function replyActionLabel(replyRecipients, added = 0) {
  * that sometimes omits the To is not an envelope.
  *
  * BCC IS MARKED `staffOnly` AND MUST BE RENDERED AS SUCH. The list is real —
- * the sender is staff on this ticket and seeing who they blind-copied is the
+ * the sender is staff on this conversation and seeing who they blind-copied is the
  * point of recording it — but it never went on the delivered message, so a
  * surface that shows it beside To and Cc with no distinction implies the other
  * recipients saw it. They did not, and never will. The sentence saying so is
@@ -250,7 +250,7 @@ export function replyActionLabel(replyRecipients, added = 0) {
  * `to_emails` IS FILTERED BEFORE IT IS MEASURED. A row carrying `to_emails:
  * [null]` has no addresses, so it must fall back to the scalar rather than
  * count a hole — the same rule ticketParticipants() and mobile's
- * ticketMessageRecipients() follow. Readers of this field disagreeing about
+ * conversationMessageRecipients() follow. Readers of this field disagreeing about
  * one row is the defect (EMAIL-PARTICIPANTS.12), whatever writes it today.
  *
  * @param {object|null} message
@@ -278,7 +278,7 @@ export function messageEnvelope(message) {
       label: 'Bcc',
       addresses: bcc,
       staffOnly: true,
-      note: 'Only staff on this ticket can see this — no recipient of the email could.',
+      note: 'Only staff on this conversation can see this — no recipient of the email could.',
     })
   }
   return out
@@ -385,7 +385,7 @@ export function deliveryMeta(message) {
   // It sits ABOVE the SMTP branch so the more specific fact wins, and BELOW
   // the status branches so a real outcome is never swallowed — the same
   // ordering rule the SMTP branch already lives under. Both orderings are
-  // pinned in ticket-display.test.js, because nothing else would notice.
+  // pinned in conversation-display.test.js, because nothing else would notice.
   //
   // The LABEL is deliberately the same "Not tracked". To an operator the
   // delivery fact is identical — nothing is known, and nothing is ever
@@ -457,9 +457,9 @@ export function deliveryTimestamp(message) {
 
 // ── Labels ───────────────────────────────────────────────────────────
 /** Who wrote in: their name if we have one, else the address they wrote from. */
-export function requesterLabel(ticket) {
-  if (!ticket) return 'Unknown sender'
-  return ticket.requester_name || ticket.requester_email || 'Unknown sender'
+export function requesterLabel(conversation) {
+  if (!conversation) return 'Unknown sender'
+  return conversation.requester_name || conversation.requester_email || 'Unknown sender'
 }
 
 /** Two-letter initials — mirrors EmailInbox/UnifiedInbox so tiles read the same everywhere. */
@@ -479,12 +479,12 @@ export function initialsOf(name) {
  * We hold an id, not a name, so the only honest distinctions are "yours",
  * "somebody's" and "nobody's".
  */
-export function assigneeLabel(ticket, currentUserId) {
-  if (!ticket?.assigned_to) return 'Unassigned'
-  if (currentUserId && ticket.assigned_to === currentUserId) return 'Assigned to you'
+export function assigneeLabel(conversation, currentUserId) {
+  if (!conversation?.assigned_to) return 'Unassigned'
+  if (currentUserId && conversation.assigned_to === currentUserId) return 'Assigned to you'
   // EMAIL-ASSIGN.1 — the routes resolve assignee_name server-side (profiles
   // is unreadable client-side); an unresolved name degrades to 'Assigned'.
-  if (ticket.assignee_name) return `Assigned to ${ticket.assignee_name}`
+  if (conversation.assignee_name) return `Assigned to ${conversation.assignee_name}`
   return 'Assigned'
 }
 
@@ -554,8 +554,8 @@ export function messageTimestamp(value) {
 // takes, the thread is READABLE AND INCOMPLETE — a message whose photo has no
 // row yet.
 //
-// On the `create` path the ticket row is inserted before either, so the queue
-// can surface a brand-new ticket inside that window; an operator who clicks it
+// On the `create` path the conversation row is inserted before either, so the queue
+// can surface a brand-new conversation inside that window; an operator who clicks it
 // there gets a thread rendered from a correct read of an incomplete moment.
 // Nothing was wrong with the read. The bug was that it was the LAST one: the
 // thread was fetched once per selection and never again, so the photo stayed
@@ -586,7 +586,7 @@ export const THREAD_STEADY_MS = 60_000
 /**
  * How long a message counts as "still settling". Generous on purpose: an
  * attachment write normally completes in well under a second, and the cost of
- * being wrong in this direction is a handful of extra reads of one ticket that
+ * being wrong in this direction is a handful of extra reads of one conversation that
  * somebody is actively looking at.
  */
 export const THREAD_SETTLE_WINDOW_MS = 120_000

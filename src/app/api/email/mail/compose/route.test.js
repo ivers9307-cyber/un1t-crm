@@ -5,9 +5,9 @@
 //     sending as accounts@ is not a cosmetic bug — it is billing
 //     correspondence going out under an address they have no claim to, and it
 //     is a 404 so the id cannot even be probed.
-//   • the ticket belongs to the MAILBOX's location, never to anything the
+//   • the conversation belongs to the MAILBOX's location, never to anything the
 //     caller named.
-//   • a failed send leaves NOTHING behind. A ticket in the queue for an email
+//   • a failed send leaves NOTHING behind. A conversation in the queue for an email
 //     that never went out is the worst lie a support tool can tell.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -44,7 +44,7 @@ import {
 const UNKNOWN_MAILBOX = '99999999-9999-4999-8999-999999999999'
 
 function post(body) {
-  return POST(new Request('http://x/api/email/tickets/compose', {
+  return POST(new Request('http://x/api/email/conversations/compose', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
@@ -90,7 +90,7 @@ afterEach(() => {
   delete process.env.POSTMARK_EMAIL_INBOX_SERVER_TOKEN
 })
 
-describe('POST /api/email/tickets/compose — gates', () => {
+describe('POST /api/email/conversations/compose — gates', () => {
   it('401s when unauthenticated', async () => {
     getCurrentUser.mockResolvedValue(null)
     expect((await post(VALID)).status).toBe(401)
@@ -145,7 +145,7 @@ describe('POST /api/email/tickets/compose — gates', () => {
   })
 })
 
-describe('POST /api/email/tickets/compose — validation', () => {
+describe('POST /api/email/conversations/compose — validation', () => {
   it('400s on a malformed recipient address', async () => {
     for (const to of ['not-an-email', 'nobody@', '@example.com', '']) {
       expect((await post({ ...VALID, to })).status).toBe(400)
@@ -167,7 +167,7 @@ describe('POST /api/email/tickets/compose — validation', () => {
   })
 })
 
-describe('POST /api/email/tickets/compose — the send', () => {
+describe('POST /api/email/conversations/compose — the send', () => {
   it('sends on the transactional stream, FROM and Reply-To the chosen mailbox', async () => {
     const res = await post(VALID)
     expect(res.status).toBe(200)
@@ -209,7 +209,7 @@ describe('POST /api/email/tickets/compose — the send', () => {
     expect(send.payload.from_email).toBe(MB_STUDIO.address)
   })
 
-  it('503s without sending — and without filing a ticket — when unconfigured', async () => {
+  it('503s without sending — and without filing a conversation — when unconfigured', async () => {
     delete process.env.POSTMARK_EMAIL_INBOX_SERVER_TOKEN
     const res = await post(VALID)
 
@@ -234,7 +234,7 @@ describe('POST /api/email/tickets/compose — the send', () => {
     expect(msg.payload.from_email).toBe('UN1T <hello@un1t.ie>')
   })
 
-  it('a failed send leaves NO ticket and NO message behind', async () => {
+  it('a failed send leaves NO conversation and NO message behind', async () => {
     sendEmail.mockRejectedValue(new Error('Postmark rejected the recipient'))
     const res = await post(VALID)
     expect(res.status).toBe(400)
@@ -242,12 +242,12 @@ describe('POST /api/email/tickets/compose — the send', () => {
     expect(insertsInto(db, 'email_tickets')).toHaveLength(0)
     expect(insertsInto(db, 'email_inbox_messages')).toHaveLength(0)
     expect(insertsInto(db, 'email_sends')).toHaveLength(0)
-    expect(db._state.tickets).toHaveLength(2) // the two fixture tickets, untouched
+    expect(db._state.tickets).toHaveLength(2) // the two fixture conversations, untouched
   })
 })
 
-describe('POST /api/email/tickets/compose — what it creates', () => {
-  it('creates one ticket + one outbound message and returns the ticket id', async () => {
+describe('POST /api/email/conversations/compose — what it creates', () => {
+  it('creates one conversation + one outbound message and returns the conversation id', async () => {
     const res = await post(VALID)
     expect(res.status).toBe(200)
     const body = await res.json()
@@ -255,16 +255,16 @@ describe('POST /api/email/tickets/compose — what it creates', () => {
     expect(body.data.ticket_id).toBeTruthy()
     expect(body.data.ticket_id).toBe(body.data.ticket.id)
 
-    const tickets = insertsInto(db, 'email_tickets')
-    expect(tickets).toHaveLength(1)
-    expect(tickets[0].payload).toMatchObject({
+    const conversations = insertsInto(db, 'email_tickets')
+    expect(conversations).toHaveLength(1)
+    expect(conversations[0].payload).toMatchObject({
       mailbox_id: MB_STUDIO.id,
       requester_email: VALID.to,
       subject: VALID.subject,
       status: 'open',
       last_message_direction: 'outbound',
     })
-    expect(tickets[0].payload.last_message_preview).toContain('you asked about the 6am class')
+    expect(conversations[0].payload.last_message_preview).toContain('you asked about the 6am class')
 
     const messages = insertsInto(db, 'email_inbox_messages')
     expect(messages).toHaveLength(1)
@@ -279,7 +279,7 @@ describe('POST /api/email/tickets/compose — what it creates', () => {
     })
   })
 
-  it('takes location_id from the MAILBOX, on the ticket and the message alike', async () => {
+  it('takes location_id from the MAILBOX, on the conversation and the message alike', async () => {
     await post(VALID)
     expect(insertsInto(db, 'email_tickets')[0].payload.location_id).toBe(MB_STUDIO.location_id)
     expect(insertsInto(db, 'email_inbox_messages')[0].payload.location_id).toBe(MB_STUDIO.location_id)
@@ -302,7 +302,7 @@ describe('POST /api/email/tickets/compose — what it creates', () => {
   })
 })
 
-describe('POST /api/email/tickets/compose — contact linkage', () => {
+describe('POST /api/email/conversations/compose — contact linkage', () => {
   it('links a contact whose email matches the recipient, case-insensitively', async () => {
     setupDb(baseState({ grants: [GRANT_STUDIO], contacts: [MEMBER_CONTACT] }))
     await post(VALID)
@@ -367,7 +367,7 @@ describe('POST /api/email/tickets/compose — contact linkage', () => {
 })
 
 // EMAIL-TICKET.6 — the contact lookup no longer swallows its error.
-describe('POST /api/email/tickets/compose — query failures are loud', () => {
+describe('POST /api/email/conversations/compose — query failures are loud', () => {
   it('500s BEFORE sending when the contact lookup errors', async () => {
     setupDb(baseState({
       grants: [GRANT_STUDIO],
@@ -380,8 +380,8 @@ describe('POST /api/email/tickets/compose — query failures are loud', () => {
 
     expect(res.status).toBe(500)
     expect((await res.json()).success).toBe(false)
-    // Swallowing this used to file the ticket against NOBODY. Failing before
-    // the send means there is no unlinked ticket and no unsent-but-filed state.
+    // Swallowing this used to file the conversation against NOBODY. Failing before
+    // the send means there is no unlinked conversation and no unsent-but-filed state.
     expect(sendEmail).not.toHaveBeenCalled()
     expect(insertsInto(db, 'email_tickets')).toHaveLength(0)
     expect(errors).toHaveBeenCalled()
@@ -392,11 +392,11 @@ describe('POST /api/email/tickets/compose — query failures are loud', () => {
 // EMAIL-TICKET-CLEANUP.1 — the permission follows the MAILBOX'S location.
 //
 // This route never takes a location: it reads one off the mailbox, precisely so
-// a ticket can only land at the studio that owns the sending address. The old
+// a conversation can only land at the studio that owns the sending address. The old
 // hasPermission() gate therefore asked about a studio the mail was NOT going
 // to. Composing FROM an address is the strongest thing this surface does — the
 // recipient sees that studio's name — so a key held elsewhere must not buy it.
-describe('POST /api/email/tickets/compose — the permission follows the MAILBOX’S location', () => {
+describe('POST /api/email/conversations/compose — the permission follows the MAILBOX’S location', () => {
   beforeEach(() => {
     getCurrentUser.mockResolvedValue(MULTI_LOCATION)
     setupDb(baseState({
@@ -424,7 +424,7 @@ describe('POST /api/email/tickets/compose — the permission follows the MAILBOX
 })
 
 // EMAIL-TICKET-CLEANUP.2 — a FAILED visibility lookup is not "no mailboxes".
-describe('POST /api/email/tickets/compose — a failed mailbox lookup is not an empty one', () => {
+describe('POST /api/email/conversations/compose — a failed mailbox lookup is not an empty one', () => {
   it('500s instead of 404ing, and sends nothing', async () => {
     // As an empty set this 404'd — telling the operator the address they just
     // picked out of the composer's own dropdown does not exist. Nothing has
@@ -443,9 +443,9 @@ describe('POST /api/email/tickets/compose — a failed mailbox lookup is not an 
 // ── EMAIL-OUTBOUND-ATTACH.1 ─────────────────────────────────────────
 // A new email can carry files. Same rules as the reply route, deliberately —
 // one composer, one set of limits — so these tests cover the compose-specific
-// half: the mailbox (not a ticket) is what the upload was authorised against,
-// and the ticket + message + attachment rows all land together.
-describe('POST /api/email/tickets/compose — attachments', () => {
+// half: the mailbox (not a conversation) is what the upload was authorised against,
+// and the conversation + message + attachment rows all land together.
+describe('POST /api/email/conversations/compose — attachments', () => {
   const DRAFT = '22222222-2222-4222-8222-222222222222'
   const draftRef = (index, mime = 'application/pdf', filename = 'terms.pdf') =>
     ({ draft_id: DRAFT, index, filename, mime })
@@ -456,7 +456,7 @@ describe('POST /api/email/tickets/compose — attachments', () => {
     return path
   }
 
-  it('sends the file and files it against the new ticket’s first message', async () => {
+  it('sends the file and files it against the new conversation’s first message', async () => {
     seedDraft(0)
     const res = await post({ ...VALID, attachments: [draftRef(0)] })
     expect(res.status).toBe(200)
@@ -492,7 +492,7 @@ describe('POST /api/email/tickets/compose — attachments', () => {
     const res = await post({ ...VALID, attachments: [draftRef(0)] })
     expect(res.status).toBe(400)
     expect(sendEmail).not.toHaveBeenCalled()
-    // No ticket in the queue for an email that never went — the property this
+    // No conversation in the queue for an email that never went — the property this
     // route's send-first ordering exists to guarantee, now extended to files.
     expect(writesTo(db)).toEqual([])
   })
@@ -519,9 +519,9 @@ describe('POST /api/email/tickets/compose — attachments', () => {
 //
 // Unlike a reply, NOTHING here is derived: every address on a composed email
 // is one a person typed, because nobody wrote to us first. That is the one
-// place ticket mail can reach an address the member never involved, so the
+// place conversation mail can reach an address the member never involved, so the
 // bounds under test are the cap, the validation and the attribution.
-describe('POST /api/email/tickets/compose — recipients', () => {
+describe('POST /api/email/conversations/compose — recipients', () => {
   it('still accepts the SCALAR `to` that shipped before EMAIL-CC.1', async () => {
     expect((await post(VALID)).status).toBe(200)
     expect(sendEmail.mock.calls[0][0].to).toBe('lead@example.com')
@@ -542,14 +542,14 @@ describe('POST /api/email/tickets/compose — recipients', () => {
     expect(sent.cc).not.toContain('boss@example.com')
   })
 
-  // ONE ticket has ONE counterpart. to[0] is who requester_email names, who
+  // ONE conversation has ONE counterpart. to[0] is who requester_email names, who
   // the contact link resolves against, and who a later reply threads from.
-  it('files the ticket against the PRIMARY recipient, not a cc’d colleague', async () => {
+  it('files the conversation against the PRIMARY recipient, not a cc’d colleague', async () => {
     setupDb(baseState({ grants: [GRANT_STUDIO], contacts: [MEMBER_CONTACT, OTHER_CONTACT] }))
     await post({ ...VALID, to: ['lead@example.com', 'partner@example.com'], cc: ['someone.else@example.com'] })
-    const [ticket] = insertsInto(db, 'email_tickets')
-    expect(ticket.payload.requester_email).toBe('lead@example.com')
-    expect(ticket.payload.contact_id).toBe(MEMBER_CONTACT.id)
+    const [conversation] = insertsInto(db, 'email_tickets')
+    expect(conversation.payload.requester_email).toBe('lead@example.com')
+    expect(conversation.payload.contact_id).toBe(MEMBER_CONTACT.id)
   })
 
   it('stores all three lists on the message row', async () => {
@@ -581,7 +581,7 @@ describe('POST /api/email/tickets/compose — recipients', () => {
 
   // Cc'ing one of our own mailboxes delivers a copy to our own inbound
   // webhook, which — with no threading header to match — files a brand-new
-  // ticket at the same studio. A phantom enquiry, from us, on every send.
+  // conversation at the same studio. A phantom enquiry, from us, on every send.
   it('strips the studio’s own addresses from every list', async () => {
     await post({ ...VALID, cc: [MB_STUDIO.address], bcc: [MB_ACCOUNTS.address] })
     const sent = sendEmail.mock.calls[0][0]
@@ -649,12 +649,12 @@ describe('POST /api/email/tickets/compose — recipients', () => {
 // missing (audit 2026-08-08, residual from EMAIL-REPLY-UNFILED.1) was any
 // coverage of either branch, the machine-readable `data.sent` flag the reply
 // route now carries, and a durable record of the delivered send — in the
-// ticket-insert case NOTHING referenced it anywhere.
+// conversation-insert case NOTHING referenced it anywhere.
 //
 // `failWrites` (shared harness, ../../tickets/_test-db.js) fails WRITES only —
 // `state.errors` would fail the mailbox read too and the route would 404
 // before sending.
-describe('POST /api/email/tickets/compose — filing fails AFTER the send (EMAIL-COMPOSE-UNFILED.1)', () => {
+describe('POST /api/email/conversations/compose — filing fails AFTER the send (EMAIL-COMPOSE-UNFILED.1)', () => {
   let errors
   beforeEach(() => {
     errors = vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -677,7 +677,7 @@ describe('POST /api/email/tickets/compose — filing fails AFTER the send (EMAIL
   })
 
   it('TICKET insert fails → the delivered send is dead-lettered AND logged for the contact', async () => {
-    // Without these two rows the send would exist NOWHERE — no ticket, no
+    // Without these two rows the send would exist NOWHERE — no conversation, no
     // message, nothing for the delivery webhook to correlate against.
     setupDb(baseState({ grants: [GRANT_STUDIO], contacts: [MEMBER_CONTACT] }))
     failWrites(db, ['email_tickets'])
@@ -708,7 +708,7 @@ describe('POST /api/email/tickets/compose — filing fails AFTER the send (EMAIL
     })
   })
 
-  it('MESSAGE insert fails → the ticket STAYS, and the flag carries its id', async () => {
+  it('MESSAGE insert fails → the conversation STAYS, and the flag carries its id', async () => {
     setupDb(baseState({ grants: [GRANT_STUDIO], contacts: [MEMBER_CONTACT] }))
     failWrites(db, ['email_inbox_messages'])
     const res = await post(VALID)
@@ -718,7 +718,7 @@ describe('POST /api/email/tickets/compose — filing fails AFTER the send (EMAIL
     expect(body.error).toMatch(/was sent/i)
     expect(body.error).toMatch(/do not resend/i)
     expect(body.data).toMatchObject({ sent: true, message_id: 'pm-compose-1' })
-    // The ticket row survives — the queue still shows what was sent and to
+    // The conversation row survives — the queue still shows what was sent and to
     // whom (the branch's existing behaviour, now pinned)…
     expect(body.data.ticket_id).toBeTruthy()
     expect(db._state.tickets.find(t => t.id === body.data.ticket_id)).toBeTruthy()
@@ -749,8 +749,8 @@ describe('POST /api/email/tickets/compose — filing fails AFTER the send (EMAIL
 // breadcrumb inside recordUnfiledSend — were bare awaits, and the breadcrumb
 // sat inside a try whose catch cannot fire for a RESOLVED { error }. The fix
 // is log-and-continue ONLY; these pin that the response is exactly what the
-// send already earned AND that a structural line names the ticket.
-describe('POST /api/email/tickets/compose — a lost email_sends log after the send is LOGGED, never surfaced (MAILFIX-GUARDRAILS.1)', () => {
+// send already earned AND that a structural line names the conversation.
+describe('POST /api/email/conversations/compose — a lost email_sends log after the send is LOGGED, never surfaced (MAILFIX-GUARDRAILS.1)', () => {
   let errors
   beforeEach(() => {
     // A linked contact, or there is no email_sends row to lose.
@@ -768,16 +768,16 @@ describe('POST /api/email/tickets/compose — a lost email_sends log after the s
     expect(body.success).toBe(true)
     expect(body.data.ticket_id).toBeTruthy()
     expect(body.data.message_id).toBe('pm-compose-1')
-    // The ticket and the message still landed; only the log row is gone.
+    // The conversation and the message still landed; only the log row is gone.
     expect(insertsInto(db, 'email_tickets')).toHaveLength(1)
     expect(insertsInto(db, 'email_inbox_messages')).toHaveLength(1)
     expect(insertsInto(db, 'email_sends')).toHaveLength(0)
     expect(sendEmail).toHaveBeenCalledTimes(1)
     expect(logError).toHaveBeenCalledTimes(1)
     expect(logError).toHaveBeenCalledWith(
-      'tickets/compose',
+      'conversations/compose',
       'email_sends log failed (mail already sent)',
-      expect.objectContaining({ ticketId: body.data.ticket_id, messageId: 'pm-compose-1', error: expect.objectContaining({ code: 'XX000' }) }),
+      expect.objectContaining({ conversationId: body.data.ticket_id, messageId: 'pm-compose-1', error: expect.objectContaining({ code: 'XX000' }) }),
     )
   })
 
@@ -795,9 +795,9 @@ describe('POST /api/email/tickets/compose — a lost email_sends log after the s
     expect(sendEmail).toHaveBeenCalledTimes(1)
     expect(logError).toHaveBeenCalledTimes(1)
     expect(logError).toHaveBeenCalledWith(
-      'tickets/compose',
+      'conversations/compose',
       'email_sends log failed after an unfiled send (mail already sent)',
-      expect.objectContaining({ ticketId: body.data.ticket_id, messageId: 'pm-compose-1', error: expect.objectContaining({ code: 'XX000' }) }),
+      expect.objectContaining({ conversationId: body.data.ticket_id, messageId: 'pm-compose-1', error: expect.objectContaining({ code: 'XX000' }) }),
     )
   })
 
@@ -810,7 +810,7 @@ describe('POST /api/email/tickets/compose — a lost email_sends log after the s
 
 // ─────────────────────────────────────────────────────────────────────
 // Signature (the EMAIL-TICKET.5 TODO, finally honoured). A composed new
-// email is a ticket whose first message is outbound — NOT a second concept —
+// email is a conversation whose first message is outbound — NOT a second concept —
 // so it signs exactly the way a reply does: appendSignature() before the
 // text→HTML conversion, the SIGNED body on the wire AND on the row, and the
 // queue preview left unsigned. Mirrors the reply route's suite so the two
@@ -866,8 +866,8 @@ describe('sender signature', () => {
   it('keeps the queue preview unsigned', async () => {
     getCurrentUser.mockResolvedValue(SIGNED)
     await post(VALID)
-    const [ticket] = insertsInto(db, 'email_tickets')
-    expect(ticket.payload.last_message_preview).not.toContain('Sarah')
+    const [conversation] = insertsInto(db, 'email_tickets')
+    expect(conversation.payload.last_message_preview).not.toContain('Sarah')
   })
 
   it('dead-letters the SIGNED body when the send is unfiled — the re-fileable record', async () => {
@@ -882,7 +882,7 @@ describe('sender signature', () => {
   })
 })
 
-// MAIL-SENT.1 — outbound-born: the ticket starts in Sent, not Inbox.
+// MAIL-SENT.1 — outbound-born: the conversation starts in Sent, not Inbox.
 it('a composed conversation is born has_inbound: false', async () => {
   setupDb(baseState({ grants: [GRANT_STUDIO] }))
   const res = await post(VALID)

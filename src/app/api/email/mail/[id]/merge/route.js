@@ -1,15 +1,15 @@
-// EMAIL-MERGE.4 — fold one ticket into another, reversibly.
+// EMAIL-MERGE.4 — fold one conversation into another, reversibly.
 //
-// BOTH tickets go through loadConversationForUser. The gate lives there and not in
-// this handler because a ticket's location is not knowable until the row is
-// read (#1266); checking one ticket and trusting the other would let someone
+// BOTH conversations go through loadConversationForUser. The gate lives there and not in
+// this handler because a conversation's location is not knowable until the row is
+// read (#1266); checking one conversation and trusting the other would let someone
 // move mail out of a studio they cannot see. Every refusal is 404 — a 403 after
 // the row is read is an existence oracle.
 //
 // REPARENTING IS THE POINT, NOT THE BOOKKEEPING. The inbound webhook threads
 // replies via email_inbox_messages.ticket_id, so repointing that column is what
 // makes the survivor the live thread; a merge that only stamped the pointer
-// would send the correspondent's next reply back to the dead ticket.
+// would send the correspondent's next reply back to the dead conversation.
 //
 // ORDER IS LOAD-BEARING. There is no cross-statement transaction here, so the
 // writes are ordered to leave a finishable state if the process dies:
@@ -18,12 +18,12 @@
 //   3. stamp the source tombstone LAST
 // A crash before 3 leaves messages moved and the source still live but empty —
 // visibly odd and fixed by re-running the merge. Stamping the tombstone first
-// would instead hide a ticket whose messages never moved, which is silent loss.
+// would instead hide a conversation whose messages never moved, which is silent loss.
 //
 // ACCEPTED, AND DELIBERATE: re-running an interrupted merge adds the source's
 // unread_count to the target a second time (mergedTicketFields sums, it does not
 // reconcile), and a retried unmerge subtracts it twice. Both are a badge being
-// wrong by a small number on a ticket somebody is already looking at, and both
+// wrong by a small number on a conversation somebody is already looking at, and both
 // clear the instant it is opened — the alternative is a reconciliation table for
 // a counter no report is derived from.
 //
@@ -40,14 +40,14 @@ import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { logAuditEvent } from '@/lib/audit'
-import { canMerge, mergedTicketFields, ticketFieldsFromMessages } from '@/lib/mail/conversation-merge'
+import { canMerge, mergedTicketFields, conversationFieldsFromMessages } from '@/lib/mail/conversation-merge'
 import { loadConversationForUser, conversationNotFound, PARTICIPANT_SCAN_LIMIT } from '../../_conversation'
 
 // uuidLike, NOT z.string().uuid(): Stillorgan's seeded ids carry a version
 // digit of 0, which Zod's RFC-strict .uuid() rejects and Postgres accepts.
 const schema = z.object({ into: uuidLike })
 
-// Everything ticketFieldsFromMessages reads. bodies are needed for the preview,
+// Everything conversationFieldsFromMessages reads. bodies are needed for the preview,
 // so this is the one query on this route that is not trivially small — bounded
 // by the same window the participant derivation uses.
 const TRIO_COLUMNS = 'direction, text_body, subject, is_internal_note, forwarded_message_id, created_at'
@@ -56,10 +56,10 @@ const failed = (message) =>
   NextResponse.json({ success: false, error: message }, { status: 500 })
 
 /**
- * Has either of these tickets already absorbed a merge?
+ * Has either of these conversations already absorbed a merge?
  *
  * A SURVIVOR IS NOT A TOMBSTONE, which is the hole this closes. canMerge refuses
- * chains in the tombstone direction (a merged ticket can be neither source nor
+ * chains in the tombstone direction (a merged conversation can be neither source nor
  * target), but A→B leaves B perfectly mergeable, and B→C would then re-stamp A's
  * rows as having come from B — after which unmerging A restores nothing at all.
  * The headline promise of this feature is that a merge is exactly reversible, so
@@ -71,10 +71,10 @@ const failed = (message) =>
  * It lives here rather than in canMerge because it needs a query, and that file
  * is pure so its refusals can be tested exhaustively.
  */
-async function absorbedMerge(db, ticketIds) {
+async function absorbedMerge(db, conversationIds) {
   const { data, error } = await db.from('email_inbox_messages')
     .select('ticket_id')
-    .in('ticket_id', ticketIds)
+    .in('ticket_id', conversationIds)
     .not('merged_from_ticket_id', 'is', null)
     .limit(1)
   // A FAILED lookup is not "nothing absorbed" — the EMAIL-TICKET-CLEANUP.2
@@ -85,11 +85,11 @@ async function absorbedMerge(db, ticketIds) {
   return { absorbedBy: data?.[0]?.ticket_id ?? null }
 }
 
-/** The messages on one ticket, newest first, for the trio derivation. */
-function messagesOn(db, ticketId) {
+/** The messages on one conversation, newest first, for the trio derivation. */
+function messagesOn(db, conversationId) {
   return db.from('email_inbox_messages')
     .select(TRIO_COLUMNS)
-    .eq('ticket_id', ticketId)
+    .eq('ticket_id', conversationId)
     // Newest first, so the window can only ever truncate the OLD end: the
     // last-message trio — the queue's sort key and preview — is exact whatever
     // the thread length, and only first_response_at on a 500+ message thread
@@ -114,10 +114,10 @@ export async function POST(request, props) {
   const loadedTarget = await loadConversationForUser(db, user, validation.data.into)
   if (loadedTarget.response) return loadedTarget.response
 
-  const source = loadedSource.ticket
-  const target = loadedTarget.ticket
+  const source = loadedSource.conversation
+  const target = loadedTarget.conversation
 
-  // Same-ticket, cross-location, already-merged and across-the-spam-flag
+  // Same-conversation, cross-location, already-merged and across-the-spam-flag
   // (MAIL-SPAM.1 — both rows arrive via loadConversationForUser's select('*'), so
   // is_spam is on each) all refuse here, and all
   // refuse as 404: the caller has already been told both ids exist by getting
@@ -139,17 +139,17 @@ export async function POST(request, props) {
     // surface where four different refusals look identical, "merge just says
     // not found" is otherwise unanswerable from the outside. This is the only
     // consumer of the reason strings EMAIL-MERGE.3 pinned.
-    console.error('[tickets/:id/merge] refused:', eligible.reason, source.id, '→', target.id)
+    console.error('[conversations/:id/merge] refused:', eligible.reason, source.id, '→', target.id)
     return conversationNotFound()
   }
 
   const absorbed = await absorbedMerge(db, [source.id, target.id])
   if (absorbed.error) {
-    console.error('[tickets/:id/merge] absorbed-merge check failed:', absorbed.error.message)
-    return failed('Could not check whether these tickets have been merged before. Nothing was changed — try again.')
+    console.error('[conversations/:id/merge] absorbed-merge check failed:', absorbed.error.message)
+    return failed('Could not check whether these conversations have been merged before. Nothing was changed — try again.')
   }
   if (absorbed.absorbedBy) {
-    console.error('[tickets/:id/merge] refused: already_absorbed_a_merge', absorbed.absorbedBy)
+    console.error('[conversations/:id/merge] refused: already_absorbed_a_merge', absorbed.absorbedBy)
     return conversationNotFound()
   }
 
@@ -164,7 +164,7 @@ export async function POST(request, props) {
     .eq('ticket_id', source.id)
     .select('id')
   if (moveError) {
-    console.error('[tickets/:id/merge] reparent failed:', moveError.message)
+    console.error('[conversations/:id/merge] reparent failed:', moveError.message)
     return failed('Could not move the messages. Nothing was merged — try again.')
   }
 
@@ -175,13 +175,13 @@ export async function POST(request, props) {
     .update({ ...mergedTicketFields(source, target), updated_at: now })
     .eq('id', target.id)
   if (targetError) {
-    console.error('[tickets/:id/merge] target update failed:', targetError.message)
-    return failed('The messages moved but the surviving ticket did not update. Nothing was merged away — try again.')
+    console.error('[conversations/:id/merge] target update failed:', targetError.message)
+    return failed('The messages moved but the surviving conversation did not update. Nothing was merged away — try again.')
   }
 
   // 3. THE TOMBSTONE, LAST. `closed` plus a pointer — never a fifth status
   // value. closed_at is preserved when the source already had one, the same rule
-  // statusTimestamps applies (a ticket that was already closed genuinely closed
+  // statusTimestamps applies (a conversation that was already closed genuinely closed
   // then, not now); solved_at is deliberately not written, because merging is
   // not a lifecycle transition.
   //
@@ -190,12 +190,12 @@ export async function POST(request, props) {
   // increment_email_ticket_unread, zeroed by …/read — so it is NOT derivable
   // from the message rows, and zeroing it here would destroy the only record of
   // what the survivor absorbed, making unmerge unable to give it back. On the
-  // tombstone it is inert: scopeToUnmerged hides merged tickets from the list
+  // tombstone it is inert: scopeToUnmerged hides merged conversations from the list
   // and the badge, and nothing anywhere sums this column.
   //
   // CONDITIONAL ON THE SOURCE NOT ALREADY BEING MERGED, and PGRST116 (no row
   // matched) is the refusal — the shape the assign route's claim race uses. Two
-  // operators merging the same ticket into DIFFERENT targets would otherwise
+  // operators merging the same conversation into DIFFERENT targets would otherwise
   // both stamp it: the pointer would name one survivor while the messages sat
   // split across two, and the undo would restore half a conversation.
   //
@@ -206,7 +206,7 @@ export async function POST(request, props) {
   // The result is two tombstones pointing at each other, and since
   // scopeToUnmerged hides both, the conversation disappears from every list and
   // count. No PostgREST condition can close it — the guard would have to assert
-  // something about the OTHER ticket in the same statement, which only a DB
+  // something about the OTHER conversation in the same statement, which only a DB
   // trigger (or a real transaction) could do.
   //
   // Accepted rather than fixed, deliberately: it needs two operators merging
@@ -231,21 +231,21 @@ export async function POST(request, props) {
     .select('id')
     .single()
   if (sourceError?.code === 'PGRST116') {
-    console.error('[tickets/:id/merge] lost the race — already merged elsewhere:', source.id)
+    console.error('[conversations/:id/merge] lost the race — already merged elsewhere:', source.id)
     return NextResponse.json({
       success: false,
-      error: 'Somebody else merged this ticket while you were looking at it. Reload to see where its messages went.',
+      error: 'Somebody else merged this conversation while you were looking at it. Reload to see where its messages went.',
     }, { status: 409 })
   }
   if (sourceError) {
-    console.error('[tickets/:id/merge] tombstone failed:', sourceError.message)
-    return failed('The messages moved but the old ticket is still open. Re-run the merge to finish it.')
+    console.error('[conversations/:id/merge] tombstone failed:', sourceError.message)
+    return failed('The messages moved but the old conversation is still open. Re-run the merge to finish it.')
   }
 
-  // Moving a member's correspondence from one ticket to another is the most
+  // Moving a member's correspondence from one conversation to another is the most
   // audit-worthy act on this surface — more so than the sends, which at least
   // leave a message row behind. BOTH ids and the count go in the details,
-  // because after an unmerge the ticket rows themselves say nothing: DELETE
+  // because after an unmerge the conversation rows themselves say nothing: DELETE
   // nulls merged_by, so without this the fact a conversation was moved at all
   // would survive nowhere. logAuditEvent never throws and the merge has already
   // happened either way, exactly as the compose/reply/forward calls are built.
@@ -269,7 +269,7 @@ export async function POST(request, props) {
   })
 }
 
-// DELETE — undo, and a real one: both tickets come back as they were.
+// DELETE — undo, and a real one: both conversations come back as they were.
 //
 // The messages go back FIRST and the pointer clears LAST, for the mirror of the
 // merge's reason. Clearing the pointer first and then failing would strand the
@@ -292,48 +292,48 @@ export async function DELETE(request, props) {
   const db = createServerClient()
   const loaded = await loadConversationForUser(db, user, params.id)
   if (loaded.response) return loaded.response
-  const { ticket } = loaded
+  const { conversation } = loaded
 
   // Not a tombstone, nothing to undo — 404 like every other refusal here.
-  if (!ticket.merged_into_id) return conversationNotFound()
-  const targetId = ticket.merged_into_id
+  if (!conversation.merged_into_id) return conversationNotFound()
+  const targetId = conversation.merged_into_id
 
   // THE SURVIVOR GOES THROUGH THE SAME GATE AS THE MERGE PUT IT THROUGH. This
-  // route takes messages OFF that ticket and rewrites its counters, so gating
+  // route takes messages OFF that conversation and rewrites its counters, so gating
   // only the tombstone would leave the pair asymmetric — and asymmetric gating
   // on two operations that mirror each other is how the next reader concludes
   // the looser one is the intended pattern.
   const loadedTarget = await loadConversationForUser(db, user, targetId)
   if (loadedTarget.response) return loadedTarget.response
-  const target = loadedTarget.ticket
+  const target = loadedTarget.conversation
 
   // EXACTLY the rows this merge moved, found by the stamp rather than by "every
   // message on the survivor". The survivor has its own correspondence, and
-  // keyed on ticket_id an undo would hand that to the wrong ticket.
+  // keyed on ticket_id an undo would hand that to the wrong conversation.
   // `.select('id')` for the audit count, as on the way in.
   const { data: movedBack, error: moveError } = await db.from('email_inbox_messages')
-    .update({ ticket_id: ticket.id, merged_from_ticket_id: null })
-    .eq('merged_from_ticket_id', ticket.id)
+    .update({ ticket_id: conversation.id, merged_from_ticket_id: null })
+    .eq('merged_from_ticket_id', conversation.id)
     .select('id')
   if (moveError) {
-    console.error('[tickets/:id/merge] unmerge move-back failed:', moveError.message)
+    console.error('[conversations/:id/merge] unmerge move-back failed:', moveError.message)
     return failed('Could not move the messages back. Nothing was unmerged — try again.')
   }
 
   const [targetMessages, sourceMessages] = await Promise.all([
     messagesOn(db, targetId),
-    messagesOn(db, ticket.id),
+    messagesOn(db, conversation.id),
   ])
   // A failed read here is not an empty thread: acting on one would blank both
-  // tickets' previews and null their sort keys — the same silent-wrong-answer
+  // conversations' previews and null their sort keys — the same silent-wrong-answer
   // shape EMAIL-TICKET.6 fixed for the thread view. The rows are already back
   // where they belong, so refusing costs a retry and nothing else.
   if (targetMessages.error || sourceMessages.error) {
     console.error(
-      '[tickets/:id/merge] unmerge rebuild read failed:',
+      '[conversations/:id/merge] unmerge rebuild read failed:',
       targetMessages.error?.message || sourceMessages.error?.message
     )
-    return failed('The messages moved back but the ticket totals could not be rebuilt. Try again.')
+    return failed('The messages moved back but the conversation totals could not be rebuilt. Try again.')
   }
 
   // The survivor gives back exactly what it took — the tombstone's own retained
@@ -346,34 +346,34 @@ export async function DELETE(request, props) {
   // conversation to Sent). Two head-counts answer presence outright; a
   // failed count leaves the column untouched — wrongly-in-Inbox is the
   // visible direction, wrongly-in-Sent is the buried one.
-  const hasInboundOf = async (ticketId) => {
+  const hasInboundOf = async (conversationId) => {
     const { count, error } = await db.from('email_inbox_messages')
       .select('*', { count: 'exact', head: true })
-      .eq('ticket_id', ticketId)
+      .eq('ticket_id', conversationId)
       .eq('direction', 'inbound')
       .eq('is_internal_note', false)
     if (error) {
-      console.error('[tickets/:id/merge] has_inbound recount failed:', error.message)
+      console.error('[conversations/:id/merge] has_inbound recount failed:', error.message)
       return null
     }
     return (count || 0) > 0
   }
   const [targetHasInbound, sourceHasInbound] = await Promise.all([
     hasInboundOf(targetId),
-    hasInboundOf(ticket.id),
+    hasInboundOf(conversation.id),
   ])
 
   const { error: targetError } = await db.from('email_tickets')
     .update({
-      ...ticketFieldsFromMessages(targetMessages.data),
+      ...conversationFieldsFromMessages(targetMessages.data),
       ...(targetHasInbound === null ? {} : { has_inbound: targetHasInbound }),
-      unread_count: Math.max(0, (target.unread_count || 0) - (ticket.unread_count || 0)),
+      unread_count: Math.max(0, (target.unread_count || 0) - (conversation.unread_count || 0)),
       updated_at: new Date().toISOString(),
     })
     .eq('id', targetId)
   if (targetError) {
-    console.error('[tickets/:id/merge] unmerge target rebuild failed:', targetError.message)
-    return failed('The messages moved back but the surviving ticket was not rebuilt. Try again.')
+    console.error('[conversations/:id/merge] unmerge target rebuild failed:', targetError.message)
+    return failed('The messages moved back but the surviving conversation was not rebuilt. Try again.')
   }
 
   // LAST, with the pointer. The source's own trio was never overwritten by the
@@ -381,29 +381,29 @@ export async function DELETE(request, props) {
   // one that drifted.
   const { error: clearError } = await db.from('email_tickets')
     .update({
-      ...ticketFieldsFromMessages(sourceMessages.data),
+      ...conversationFieldsFromMessages(sourceMessages.data),
       ...(sourceHasInbound === null ? {} : { has_inbound: sourceHasInbound }),
       merged_into_id: null,
       merged_at: null,
       merged_by: null,
       updated_at: new Date().toISOString(),
     })
-    .eq('id', ticket.id)
+    .eq('id', conversation.id)
   if (clearError) {
-    console.error('[tickets/:id/merge] unmerge clear failed:', clearError.message)
-    return failed('The messages moved back but the ticket is still marked merged. Try again.')
+    console.error('[conversations/:id/merge] unmerge clear failed:', clearError.message)
+    return failed('The messages moved back but the conversation is still marked merged. Try again.')
   }
 
   // The undo is logged for the same reason the merge is, and MORE urgently:
   // this write nulls merged_into_id / merged_at / merged_by, so the moment it
-  // lands the ticket rows carry no trace that the correspondence was ever moved.
+  // lands the conversation rows carry no trace that the correspondence was ever moved.
   // This event is the only surviving record of the second move.
   await logAuditEvent({
     category: 'business',
     action: 'email_ticket.unmerged',
     actor: { id: user.id, full_name: user.full_name, email: user.email },
-    target: { resource: `email_ticket/${ticket.id}`, label: ticket.subject || null },
-    locationId: ticket.location_id,
+    target: { resource: `email_ticket/${conversation.id}`, label: conversation.subject || null },
+    locationId: conversation.location_id,
     details: {
       unmerged_from_id: targetId,
       unmerged_from_subject: target.subject || null,
@@ -412,5 +412,5 @@ export async function DELETE(request, props) {
     request,
   })
 
-  return NextResponse.json({ success: true, data: { ticket_id: ticket.id, unmerged_from: targetId } })
+  return NextResponse.json({ success: true, data: { ticket_id: conversation.id, unmerged_from: targetId } })
 }

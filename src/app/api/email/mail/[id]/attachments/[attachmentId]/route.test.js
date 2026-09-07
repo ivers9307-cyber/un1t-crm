@@ -2,9 +2,9 @@
 //
 // THE PROPERTY THIS FILE EXISTS FOR
 // The signed URL this route mints is a bearer handle to a private object. The
-// gate is the TICKET's gate (loadTicketForUser), plus one extra check that the
-// attachment actually belongs to that ticket — and that extra check is the
-// whole IDOR. Without it, a coach with a grant on studio@ could pass a ticket
+// gate is the TICKET's gate (loadConversationForUser), plus one extra check that the
+// attachment actually belongs to that conversation — and that extra check is the
+// whole IDOR. Without it, a coach with a grant on studio@ could pass a conversation
 // they can open together with ANY attachment id in the estate and be handed the
 // bytes of the billing correspondence the per-mailbox model exists to withhold.
 //
@@ -76,10 +76,10 @@ beforeEach(() => {
   createServerClient.mockImplementation(() => db)
 })
 
-async function get(ticketId, attachmentId) {
+async function get(conversationId, attachmentId) {
   const res = await GET(
-    new Request(`http://x/api/email/tickets/${ticketId}/attachments/${attachmentId}`),
-    { params: Promise.resolve({ id: ticketId, attachmentId }) }
+    new Request(`http://x/api/email/conversations/${conversationId}/attachments/${attachmentId}`),
+    { params: Promise.resolve({ id: conversationId, attachmentId }) }
   )
   return { res, body: await res.json() }
 }
@@ -92,7 +92,7 @@ describe('the gate', () => {
   })
 
   // EMAIL-TICKET-CLEANUP.1 — 404, not the 403 this used to be. The gate moved
-  // into loadTicketForUser so it can resolve at the TICKET'S location, which
+  // into loadConversationForUser so it can resolve at the TICKET'S location, which
   // means it now runs AFTER the row is read — and a 403 there would say "this
   // id exists, at a studio where you lack the key" while a bad id says 404.
   // Every other way to be refused on this surface is already indistinguishable;
@@ -126,10 +126,10 @@ describe('the gate', () => {
     expect(JSON.stringify(body)).not.toContain('storage.test')
   })
 
-  // THE IDOR. A ticket the caller CAN open, plus an attachment id from one
+  // THE IDOR. A conversation the caller CAN open, plus an attachment id from one
   // they cannot. Both halves are individually legitimate; only the pairing
   // check refuses it.
-  it('REFUSES an attachment from another ticket even when the ticket id is legitimate', async () => {
+  it('REFUSES an attachment from another conversation even when the conversation id is legitimate', async () => {
     const { res, body } = await get(T_STUDIO.id, ACCOUNTS_ATT.id)
     expect(res.status).toBe(404)
     expect(JSON.stringify(body)).not.toContain('storage.test')
@@ -137,8 +137,8 @@ describe('the gate', () => {
 
   it('refuses the same pairing for an elevated caller too — it is not a permissions question', async () => {
     getCurrentUser.mockResolvedValue(OWNER)
-    // An owner may open BOTH tickets, so this is purely "that file is not on
-    // that ticket".
+    // An owner may open BOTH conversations, so this is purely "that file is not on
+    // that conversation".
     expect((await get(T_STUDIO.id, ACCOUNTS_ATT.id)).res.status).toBe(404)
     // …and the correct pairing still works for them.
     expect((await get(T_ACCOUNTS.id, ACCOUNTS_ATT.id)).res.status).toBe(200)
@@ -149,7 +149,7 @@ describe('the gate', () => {
     expect((await get(T_STUDIO.id, 'not a uuid')).res.status).toBe(404)
   })
 
-  it('404s for an unknown ticket id without ever looking at the attachment', async () => {
+  it('404s for an unknown conversation id without ever looking at the attachment', async () => {
     const { res } = await get('aaaaaaa9-0000-4000-8000-000000000009', STUDIO_ATT.id)
     expect(res.status).toBe(404)
   })

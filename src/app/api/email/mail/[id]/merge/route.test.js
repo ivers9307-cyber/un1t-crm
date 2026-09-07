@@ -1,11 +1,11 @@
-// EMAIL-MERGE.4 — folding one ticket into another, and undoing it.
+// EMAIL-MERGE.4 — folding one conversation into another, and undoing it.
 //
 // The load-bearing assertions here are about DATA, not status codes. Merge
-// moves another ticket's correspondence, so the tests assert on the rows the
-// fake actually holds afterwards: which ticket each message belongs to, and
+// moves another conversation's correspondence, so the tests assert on the rows the
+// fake actually holds afterwards: which conversation each message belongs to, and
 // which of them carry the merged_from_ticket_id stamp. A route that reparented
 // nothing and only flipped the pointer would pass every response-shape check
-// and quietly strand the conversation on a hidden ticket.
+// and quietly strand the conversation on a hidden conversation.
 //
 // hasPermission IS NOT MOCKED, deliberately. Six email route test files once
 // stubbed it, so the location gate never ran and a real authorisation bug
@@ -30,7 +30,7 @@ import {
 
 function post(id, body) {
   return POST(
-    new Request(`http://x/api/email/tickets/${id}/merge`, {
+    new Request(`http://x/api/email/conversations/${id}/merge`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
     }),
     { params: Promise.resolve({ id }) }
@@ -39,7 +39,7 @@ function post(id, body) {
 
 function del(id) {
   return DELETE(
-    new Request(`http://x/api/email/tickets/${id}/merge`, { method: 'DELETE' }),
+    new Request(`http://x/api/email/conversations/${id}/merge`, { method: 'DELETE' }),
     { params: Promise.resolve({ id }) }
   )
 }
@@ -61,9 +61,9 @@ const M_TARGET_NATIVE = {
 let db
 /**
  * The fake applies updates IN PLACE, so every message must be a fresh copy —
- * baseState() already spreads its tickets for this reason and the messages come
+ * baseState() already spreads its conversations for this reason and the messages come
  * in unspread. Sharing them let one merge leave `merged_from_ticket_id` set on
- * a module-level constant, which the next test then read as a ticket that had
+ * a module-level constant, which the next test then read as a conversation that had
  * absorbed a previous merge. Found by the absorbed-merge check itself.
  */
 function setupDb(extra = {}) {
@@ -73,7 +73,7 @@ function setupDb(extra = {}) {
   return db
 }
 
-const ticketRow = (id) => db._state.tickets.find(t => t.id === id)
+const conversationRow = (id) => db._state.tickets.find(t => t.id === id)
 const messageRow = (id) => db._state.messages.find(m => m.id === id)
 
 beforeEach(() => {
@@ -100,7 +100,7 @@ describe('POST …/merge', () => {
   // THE CORE. Reparenting is not cosmetic: the inbound webhook threads replies
   // on email_inbox_messages.ticket_id, so moving that column is what makes the
   // survivor the live thread. A merge that only flipped the pointer would send
-  // the council's next reply back to the dead ticket.
+  // the council's next reply back to the dead conversation.
   it('reparents the source messages and tombstones the source', async () => {
     const res = await post(T_ACCOUNTS.id, { into: T_STUDIO.id })
     expect(res.status).toBe(200)
@@ -113,7 +113,7 @@ describe('POST …/merge', () => {
     expect(messageRow('m-native').ticket_id).toBe(T_STUDIO.id)
     expect(messageRow('m-native').merged_from_ticket_id ?? null).toBeNull()
 
-    const source = ticketRow(T_ACCOUNTS.id)
+    const source = conversationRow(T_ACCOUNTS.id)
     expect(source.merged_into_id).toBe(T_STUDIO.id)
     expect(source.merged_at).toBeTruthy()
     expect(source.merged_by).toBe(OWNER.id)
@@ -128,7 +128,7 @@ describe('POST …/merge', () => {
     expect(source.unread_count).toBe(1)
 
     // 1 (accounts) + 2 (studio) — the conversation's unread mail, in one place.
-    expect(ticketRow(T_STUDIO.id).unread_count).toBe(3)
+    expect(conversationRow(T_STUDIO.id).unread_count).toBe(3)
   })
 
   it('keeps a closed_at the source already had', async () => {
@@ -139,10 +139,10 @@ describe('POST …/merge', () => {
       ],
     })
     expect((await post(T_ACCOUNTS.id, { into: T_STUDIO.id })).status).toBe(200)
-    expect(ticketRow(T_ACCOUNTS.id).closed_at).toBe('2026-08-05T00:00:00Z')
+    expect(conversationRow(T_ACCOUNTS.id).closed_at).toBe('2026-08-05T00:00:00Z')
   })
 
-  // The gate is loadTicketForUser on BOTH tickets. Checking only the one named
+  // The gate is loadConversationForUser on BOTH conversations. Checking only the one named
   // in the path would let a caller move mail INTO a studio they cannot see —
   // or, run the other way, out of one.
   it('404s when the caller cannot open the TARGET, writing nothing', async () => {
@@ -154,18 +154,18 @@ describe('POST …/merge', () => {
     expect((await post(T_STUDIO.id, { into: T_ACCOUNTS.id })).status).toBe(404)
 
     expect(writesTo(db)).toEqual([])
-    const source = ticketRow(T_STUDIO.id)
+    const source = conversationRow(T_STUDIO.id)
     expect(source.merged_into_id ?? null).toBeNull()
     expect(source.status).toBe('open')
     expect(messageRow('m-native').ticket_id).toBe(T_STUDIO.id)
   })
 
-  it('404s on merging a ticket into itself', async () => {
+  it('404s on merging a conversation into itself', async () => {
     expect((await post(T_STUDIO.id, { into: T_STUDIO.id })).status).toBe(404)
     expect(writesTo(db)).toEqual([])
   })
 
-  it('404s on merging a ticket that is already merged', async () => {
+  it('404s on merging a conversation that is already merged', async () => {
     // Chains are refused so unmerge stays exact (canMerge, EMAIL-MERGE.2).
     setupDb({
       tickets: [{ ...T_STUDIO }, { ...T_ACCOUNTS, merged_into_id: T_STUDIO.id }],
@@ -175,17 +175,17 @@ describe('POST …/merge', () => {
   })
 
   // ORDER IS LOAD-BEARING: there is no transaction, so the tombstone is stamped
-  // LAST. A failed reparent must leave the source LIVE — a hidden ticket whose
+  // LAST. A failed reparent must leave the source LIVE — a hidden conversation whose
   // messages never moved is silent loss, and nothing would ever surface it.
   //
   // failWrites, not `errors`: the injected-error harness fails every operation
   // on the table, which would refuse at the absorbed-merge READ above and never
   // reach the reparent this test is about.
   // MAIL-SPAM.1 review — the picker merges related → current, so from the Spam
-  // view a live thread could be folded INTO a quarantined ticket and purged
+  // view a live thread could be folded INTO a quarantined conversation and purged
   // with it 30 days later. Refused at the rule, in both directions, before any
   // write; 404 like every other canMerge refusal (the reason goes to the log).
-  it('404s on merging a LIVE ticket into a QUARANTINED one, writing nothing', async () => {
+  it('404s on merging a LIVE conversation into a QUARANTINED one, writing nothing', async () => {
     setupDb({ tickets: [
       { ...T_STUDIO, is_spam: true, spam_flagged_at: '2026-08-01T00:00:00Z' },
       { ...T_ACCOUNTS },
@@ -194,10 +194,10 @@ describe('POST …/merge', () => {
     expect(res.status).toBe(404)
     expect(writesTo(db)).toEqual([])
     expect(messageRow('m-src').ticket_id).toBe(T_ACCOUNTS.id)
-    expect(ticketRow(T_ACCOUNTS.id).merged_into_id ?? null).toBeNull()
+    expect(conversationRow(T_ACCOUNTS.id).merged_into_id ?? null).toBeNull()
   })
 
-  it('404s on merging a QUARANTINED ticket into a LIVE one, writing nothing', async () => {
+  it('404s on merging a QUARANTINED conversation into a LIVE one, writing nothing', async () => {
     setupDb({ tickets: [
       { ...T_STUDIO },
       { ...T_ACCOUNTS, is_spam: true, spam_flagged_at: '2026-08-01T00:00:00Z' },
@@ -205,16 +205,16 @@ describe('POST …/merge', () => {
     const res = await post(T_ACCOUNTS.id, { into: T_STUDIO.id })
     expect(res.status).toBe(404)
     expect(writesTo(db)).toEqual([])
-    expect(ticketRow(T_ACCOUNTS.id).merged_into_id ?? null).toBeNull()
+    expect(conversationRow(T_ACCOUNTS.id).merged_into_id ?? null).toBeNull()
   })
 
-  it('merges two QUARANTINED tickets — the flag must match, not be clear', async () => {
+  it('merges two QUARANTINED conversations — the flag must match, not be clear', async () => {
     setupDb({ tickets: [
       { ...T_STUDIO, is_spam: true, spam_flagged_at: '2026-08-01T00:00:00Z' },
       { ...T_ACCOUNTS, is_spam: true, spam_flagged_at: '2026-08-01T00:00:00Z' },
     ] })
     expect((await post(T_ACCOUNTS.id, { into: T_STUDIO.id })).status).toBe(200)
-    expect(ticketRow(T_ACCOUNTS.id).merged_into_id).toBe(T_STUDIO.id)
+    expect(conversationRow(T_ACCOUNTS.id).merged_into_id).toBe(T_STUDIO.id)
   })
 
   it('500s without tombstoning the source when the reparent fails', async () => {
@@ -222,7 +222,7 @@ describe('POST …/merge', () => {
     expect((await post(T_ACCOUNTS.id, { into: T_STUDIO.id })).status).toBe(500)
 
     expect(updatesTo(db, 'email_tickets')).toEqual([])
-    const source = ticketRow(T_ACCOUNTS.id)
+    const source = conversationRow(T_ACCOUNTS.id)
     expect(source.merged_into_id ?? null).toBeNull()
     expect(source.status).toBe('open')
   })
@@ -230,7 +230,7 @@ describe('POST …/merge', () => {
   // A SURVIVOR IS NOT A TOMBSTONE — the hole canMerge cannot see. A→B leaves B
   // mergeable, and B→C would re-stamp A's rows as having come from B, after
   // which unmerging A restores nothing. Both directions are refused: the check
-  // is about either ticket having absorbed, not about which side it is on.
+  // is about either conversation having absorbed, not about which side it is on.
   it('404s when the SOURCE has already absorbed a merge', async () => {
     setupDb({
       messages: [
@@ -255,7 +255,7 @@ describe('POST …/merge', () => {
 
   it('merges again once the earlier merge has been undone', async () => {
     // The refusal is a state, not a life sentence: clearing the stamps makes
-    // the ticket mergeable again, which is what "unmerge first" has to mean.
+    // the conversation mergeable again, which is what "unmerge first" has to mean.
     expect((await post(T_ACCOUNTS.id, { into: T_STUDIO.id })).status).toBe(200)
     expect((await del(T_ACCOUNTS.id)).status).toBe(200)
     expect((await post(T_ACCOUNTS.id, { into: T_STUDIO.id })).status).toBe(200)
@@ -269,7 +269,7 @@ describe('POST …/merge', () => {
     expect(writesTo(db)).toEqual([])
   })
 
-  // The same-source race: two operators merging one ticket into DIFFERENT
+  // The same-source race: two operators merging one conversation into DIFFERENT
   // targets. Without the conditional both stamps land, the pointer names one
   // survivor while the messages sit split across two, and the undo restores
   // half a conversation. Simulated by having the concurrent writer land while
@@ -283,7 +283,7 @@ describe('POST …/merge', () => {
       const origUpdate = b.update
       b.update = (payload) => {
         // …the other operator's merge commits here, between our two writes.
-        ticketRow(T_ACCOUNTS.id).merged_into_id = otherTarget
+        conversationRow(T_ACCOUNTS.id).merged_into_id = otherTarget
         return origUpdate(payload)
       }
       return b
@@ -291,7 +291,7 @@ describe('POST …/merge', () => {
 
     expect((await post(T_ACCOUNTS.id, { into: T_STUDIO.id })).status).toBe(409)
     // Their pointer stands — ours never overwrote it.
-    expect(ticketRow(T_ACCOUNTS.id).merged_into_id).toBe(otherTarget)
+    expect(conversationRow(T_ACCOUNTS.id).merged_into_id).toBe(otherTarget)
   })
 })
 
@@ -302,7 +302,7 @@ describe('DELETE …/merge — unmerge', () => {
     expect(writesTo(db)).toEqual([])
   })
 
-  it('404s on a ticket that was never merged', async () => {
+  it('404s on a conversation that was never merged', async () => {
     expect((await del(T_ACCOUNTS.id)).status).toBe(404)
     expect(writesTo(db)).toEqual([])
   })
@@ -321,7 +321,7 @@ describe('DELETE …/merge — unmerge', () => {
     // The target kept the one it always had.
     expect(messageRow('m-native').ticket_id).toBe(T_STUDIO.id)
 
-    const source = ticketRow(T_ACCOUNTS.id)
+    const source = conversationRow(T_ACCOUNTS.id)
     expect(source.merged_into_id).toBeNull()
     expect(source.merged_at).toBeNull()
     expect(source.merged_by).toBeNull()
@@ -333,16 +333,16 @@ describe('DELETE …/merge — unmerge', () => {
   // fixtures' stored trios are exactly what their messages imply, so anything
   // the derivation gets wrong shows up here as drift rather than as a pass.
   const DENORMALISED = ['unread_count', 'first_response_at', 'last_message_at', 'last_message_direction', 'last_message_preview']
-  const snapshot = (id) => Object.fromEntries(DENORMALISED.map(k => [k, ticketRow(id)[k]]))
+  const snapshot = (id) => Object.fromEntries(DENORMALISED.map(k => [k, conversationRow(id)[k]]))
 
-  it('leaves BOTH tickets as they were — a merge and its undo cancel out', async () => {
+  it('leaves BOTH conversations as they were — a merge and its undo cancel out', async () => {
     const before = { source: snapshot(T_ACCOUNTS.id), target: snapshot(T_STUDIO.id) }
 
     expect((await post(T_ACCOUNTS.id, { into: T_STUDIO.id })).status).toBe(200)
     // Mid-merge the survivor really did absorb the lot — otherwise this test
     // would pass just as well against a merge that did nothing.
-    expect(ticketRow(T_STUDIO.id).unread_count).toBe(3)
-    expect(ticketRow(T_STUDIO.id).last_message_preview).toBe('My DD bounced')
+    expect(conversationRow(T_STUDIO.id).unread_count).toBe(3)
+    expect(conversationRow(T_STUDIO.id).last_message_preview).toBe('My DD bounced')
 
     expect((await del(T_ACCOUNTS.id)).status).toBe(200)
 
@@ -352,14 +352,14 @@ describe('DELETE …/merge — unmerge', () => {
 
   it('does not drive the survivor’s unread negative when somebody read it meanwhile', async () => {
     expect((await post(T_ACCOUNTS.id, { into: T_STUDIO.id })).status).toBe(200)
-    ticketRow(T_STUDIO.id).unread_count = 0   // an operator opened it
+    conversationRow(T_STUDIO.id).unread_count = 0   // an operator opened it
     expect((await del(T_ACCOUNTS.id)).status).toBe(200)
-    expect(ticketRow(T_STUDIO.id).unread_count).toBe(0)
+    expect(conversationRow(T_STUDIO.id).unread_count).toBe(0)
   })
 
   // The mirror of the merge's own gate. This route takes messages OFF the
   // survivor and rewrites its counters, so gating only the tombstone would let
-  // a caller reshape a ticket they cannot see.
+  // a caller reshape a conversation they cannot see.
   it('404s when the caller cannot open the SURVIVOR, writing nothing', async () => {
     // The coach holds studio@ only. Tombstone on studio@, survivor on accounts@.
     getCurrentUser.mockResolvedValue(COACH)
@@ -395,16 +395,16 @@ describe('DELETE …/merge — unmerge', () => {
     expect((await del(T_ACCOUNTS.id)).status).toBe(500)
 
     expect(updatesTo(db, 'email_tickets')).toEqual([])
-    expect(ticketRow(T_ACCOUNTS.id).merged_into_id).toBe(T_STUDIO.id)
+    expect(conversationRow(T_ACCOUNTS.id).merged_into_id).toBe(T_STUDIO.id)
   })
 })
 
-// Moving a member's correspondence between tickets is the most audit-worthy act
-// on this surface, and the ticket rows do NOT keep the story: the undo nulls
+// Moving a member's correspondence between conversations is the most audit-worthy act
+// on this surface, and the conversation rows do NOT keep the story: the undo nulls
 // merged_by, so without these events a conversation that was moved twice leaves
 // no trace of either move.
 describe('…/merge — audit trail', () => {
-  it('records the merge with both tickets and how many messages moved', async () => {
+  it('records the merge with both conversations and how many messages moved', async () => {
     await post(T_ACCOUNTS.id, { into: T_STUDIO.id })
     const [audit] = insertsInto(db, 'audit_events')
     expect(audit.payload.action).toBe('email_ticket.merged')
@@ -423,14 +423,14 @@ describe('…/merge — audit trail', () => {
     expect(audit.payload.details.unmerged_from_id).toBe(T_STUDIO.id)
     expect(audit.payload.details.message_count).toBe(1)
     // The row itself now says nothing — merged_by is null again.
-    expect(ticketRow(T_ACCOUNTS.id).merged_by).toBeNull()
+    expect(conversationRow(T_ACCOUNTS.id).merged_by).toBeNull()
   })
 
   it('never fails the operation because the log failed', async () => {
     setupDb({ errors: { audit_events: { code: 'XX000', message: 'audit exploded' } } })
     expect((await post(T_ACCOUNTS.id, { into: T_STUDIO.id })).status).toBe(200)
-    expect(ticketRow(T_ACCOUNTS.id).merged_into_id).toBe(T_STUDIO.id)
+    expect(conversationRow(T_ACCOUNTS.id).merged_into_id).toBe(T_STUDIO.id)
     expect((await del(T_ACCOUNTS.id)).status).toBe(200)
-    expect(ticketRow(T_ACCOUNTS.id).merged_into_id).toBeNull()
+    expect(conversationRow(T_ACCOUNTS.id).merged_into_id).toBeNull()
   })
 })

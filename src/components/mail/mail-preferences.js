@@ -156,7 +156,7 @@ export function restoreTarget(prevMode) {
 // be one size for one layout; the dock gives the thread two very different
 // windows, so the height is now CONTEXT-SIZED via a `frameSize` prop threaded
 // MailSurface → MailThread → ConversationThread → EmailFrame. The defaults preserve
-// the pre-dock values for any render without the prop — the ticket surface's
+// the pre-dock values for any render without the prop — the conversation surface's
 // tests pin those, and a caller that never heard of the dock must not move.
 const FRAME_HEIGHTS = {
   dock: { collapsed: 'h-[38vh]', expanded: 'h-[52vh]' },

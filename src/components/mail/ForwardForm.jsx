@@ -1,6 +1,6 @@
 'use client'
 
-// EMAIL-FORWARD.1 — passing one message on the ticket to somebody else.
+// EMAIL-FORWARD.1 — passing one message on the conversation to somebody else.
 //
 // THE THIRD SEND SURFACE, and the one whose recipients are furthest from the
 // member. Reply writes to people the member put on the thread; New email writes
@@ -65,7 +65,7 @@ const FORM_ID = 'conversation-forward-form'
 const INPUT_CLASSES =
   'w-full rounded-md border border-un1t-border bg-un1t-bg px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-subtle/60 focus:outline-none focus:ring-1 focus:ring-un1t-text/30'
 
-export default function ForwardForm({ ticket, message, onClose, onSent }) {
+export default function ForwardForm({ conversation, message, onClose, onSent }) {
   const [recipients, setRecipients] = useState(EMPTY_RECIPIENTS)
   const [note, setNote] = useState('')
   const files = forwardableAttachments(message?.attachments)
@@ -88,7 +88,7 @@ export default function ForwardForm({ ticket, message, onClose, onSent }) {
     setSending(true)
     setError(null)
     try {
-      const res = await fetch(`/api/email/mail/${ticket.id}/forward`, {
+      const res = await fetch(`/api/email/mail/${conversation.id}/forward`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -147,9 +147,9 @@ export default function ForwardForm({ ticket, message, onClose, onSent }) {
       <form id={FORM_ID} onSubmit={handleSubmit} className="space-y-3">
         <p className="text-xs text-un1t-subtle">
           Sending from{' '}
-          <span className="text-un1t-text">{ticket?.mailbox?.address || 'this studio'}</span>
+          <span className="text-un1t-text">{conversation?.mailbox?.address || 'this studio'}</span>
           {' · '}
-          <span className="text-un1t-muted">{forwardSubject(message?.subject || ticket?.subject)}</span>
+          <span className="text-un1t-muted">{forwardSubject(message?.subject || conversation?.subject)}</span>
         </p>
 
         {/* NOTHING IS LOCKED HERE, unlike a reply. The people on the thread are
@@ -181,7 +181,7 @@ export default function ForwardForm({ ticket, message, onClose, onSent }) {
             note, above the forwarded block; this is the third send path and
             it had no hint. Same shared component as the reply box and the
             composer, so the three cannot disagree. */}
-        <SignatureHint locationId={ticket?.location_id || null} />
+        <SignatureHint locationId={conversation?.location_id || null} />
 
         {/* WHAT THEY WILL BE ABLE TO READ. Shown as plain text, because plain
             text is exactly what goes out — the preview and the mail are the
@@ -263,12 +263,12 @@ export default function ForwardForm({ ticket, message, onClose, onSent }) {
 
         {/* Said once, plainly, at the point of decision: this leaves the
             conversation the member started and goes to somebody they did not
-            name. There is no consent gate on ticket mail (it is transactional),
+            name. There is no consent gate on conversation mail (it is transactional),
             so the counterweight is that the act is attributable — the route
             writes every address to audit_events under the sender's name. */}
         <p className="text-[11px] text-un1t-muted">
           This sends the member&rsquo;s message to someone outside the conversation, from the
-          studio&rsquo;s own address. It is recorded on the ticket under your name.
+          studio&rsquo;s own address. It is recorded on the conversation under your name.
         </p>
 
         {error && (

@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { sendTicketEmail } from '@/lib/email-inbox-send'
+import { sendConversationEmail } from '@/lib/email-inbox-send'
 import { appendSignature, resolveSendSignature } from '@/lib/email-signature'
 import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
 import { logAuditEvent } from '@/lib/audit'
@@ -27,21 +27,21 @@ import {
 import { MAX_OUTBOUND_ATTACHMENTS } from '@/lib/email-outbound-attachments'
 import { loadConversationForUser, loadOwnAddresses, conversationMergedAway , loadSignatureContext } from '../../_conversation'
 
-// POST /api/email/tickets/[id]/forward — pass one message on the ticket to
+// POST /api/email/conversations/[id]/forward — pass one message on the conversation to
 // somebody else (EMAIL-FORWARD.1, mig 501).
 //
 // ══ 1. WHERE THE FORWARD LIVES: ON THIS TICKET ══════════════════════
-// A forward is an OUTBOUND message on the SAME ticket as the message it
-// quotes. Not a new ticket, not a "sent items" folder, not a note.
+// A forward is an OUTBOUND message on the SAME conversation as the message it
+// quotes. Not a new conversation, not a "sent items" folder, not a note.
 //
-// The alternative — mint a ticket for the forward — splits one issue across
+// The alternative — mint a conversation for the forward — splits one issue across
 // two queue rows: the member's refund question in one, the accountant's answer
 // in another, neither carrying the other's context. The record that matters is
 // "we sent this to the accountant ABOUT THIS", and the only place that reads as
 // one fact is the correspondence it is about. It also makes the accountant's
-// reply land where it belongs: the forward's Reply-To is the ticket's own
+// reply land where it belongs: the forward's Reply-To is the conversation's own
 // mailbox and its Postmark MessageID is stored on the message row, so their
-// answer threads back onto THIS ticket through the ordinary inbound path — the
+// answer threads back onto THIS conversation through the ordinary inbound path — the
 // same mechanism a composed email uses.
 //
 // WHAT THE THREAD SHOWS: an ordinary outbound bubble — "Sent to
@@ -58,7 +58,7 @@ import { loadConversationForUser, loadOwnAddresses, conversationMergedAway , loa
 // here would DROP THE TICKET OUT OF THE NEEDS-REPLY QUEUE. Forwarding a
 // member's question to the accountant is not answering the member — they are
 // still waiting, and the queue must keep saying so. Nor is a forward the
-// ticket's first response: it went to a third party.
+// conversation's first response: it went to a third party.
 //
 // ══ 3. RECIPIENTS ARE TYPED, NEVER DERIVED ═════════════════════════
 // The opposite of a reply. A reply's recipients come from the thread; a
@@ -76,7 +76,7 @@ import { loadConversationForUser, loadOwnAddresses, conversationMergedAway , loa
 // deduped case-insensitively across To/Cc/Bcc (To beats Cc beats Bcc), our own
 // mailbox addresses excluded from all three, 25 addresses combined. The
 // exclusion matters as much here as on a reply — forwarding to one of our own
-// mailboxes would deliver into the inbound webhook and file a phantom ticket.
+// mailboxes would deliver into the inbound webhook and file a phantom conversation.
 //
 // ══ 4. INTERNAL NOTES CANNOT BE FORWARDED ══════════════════════════
 // Refused with a 400, not hidden and hoped about. A note is staff-to-staff text
@@ -86,7 +86,7 @@ import { loadConversationForUser, loadOwnAddresses, conversationMergedAway , loa
 // action on notes too — this is the gate, that is the affordance.
 //
 // ══ 5. NO email_sends ROW ═══════════════════════════════════════════
-// Reply and compose log one, for the ticket's own contact. A forward must not:
+// Reply and compose log one, for the conversation's own contact. A forward must not:
 // it goes to a THIRD PARTY, so a row against the member's contact_id would put
 // "we emailed you" in the member's own history for mail they never received —
 // and would count toward their engagement metrics. Delivery tracking is
@@ -179,37 +179,37 @@ export async function POST(request, props) {
 
   const db = createServerClient()
 
-  // The ticket gate: location access, `email_inbox` AT THE TICKET'S location,
+  // The conversation gate: location access, `email_inbox` AT THE TICKET'S location,
   // and a grant on the mailbox it arrived at. Every refusal is a 404.
   const loaded = await loadConversationForUser(db, user, params.id)
   if (loaded.response) return loaded.response
-  const { ticket, mailbox } = loaded
+  const { conversation, mailbox } = loaded
 
   // EMAIL-MERGE.6 — nothing leaves a tombstone. Before the source lookup and
-  // well before the send, so a merged ticket cannot put a member's message in
+  // well before the send, so a merged conversation cannot put a member's message in
   // front of a third party from a thread nobody is watching. The messages
   // themselves have moved to the survivor; forwarding one belongs there.
-  if (ticket.merged_into_id) return conversationMergedAway(ticket)
+  if (conversation.merged_into_id) return conversationMergedAway(conversation)
 
   // ── The message being forwarded ───────────────────────────────────
-  // Scoped to THIS ticket, so a message id from anywhere else in the estate
+  // Scoped to THIS conversation, so a message id from anywhere else in the estate
   // simply is not found — the caller learns nothing about whether it exists.
   const { data: source, error: sourceErr } = await db.from('email_inbox_messages')
     .select(SOURCE_COLUMNS)
     .eq('id', messageId)
-    .eq('ticket_id', ticket.id)
+    .eq('ticket_id', conversation.id)
     .maybeSingle()
   if (sourceErr) {
     // NOTHING HAS BEEN SENT. Refusing costs a retry; carrying on with a message
     // we could not read would forward an empty quote under the member's
     // subject line.
-    console.error('[tickets/forward] source message lookup failed BEFORE sending:', sourceErr.message)
+    console.error('[conversations/forward] source message lookup failed BEFORE sending:', sourceErr.message)
     return NextResponse.json({ success: false, error: sourceErr.message }, { status: 500 })
   }
 
   const refusal = forwardRefusal(source)
   if (refusal) {
-    // 404 for "not on this ticket" (an id that may or may not exist elsewhere),
+    // 404 for "not on this conversation" (an id that may or may not exist elsewhere),
     // 400 for an internal note (an id that is plainly here and plainly not
     // forwardable — pretending it is missing would be a worse answer than the
     // sentence explaining why).
@@ -252,7 +252,7 @@ export async function POST(request, props) {
       // Same ordering argument: nothing sent, so refusing is free. Falling back
       // to "forward it without the files" would send a forward the operator
       // believes carried an invoice.
-      console.error('[tickets/forward] attachment lookup failed BEFORE sending:', attachErr.message)
+      console.error('[conversations/forward] attachment lookup failed BEFORE sending:', attachErr.message)
       return NextResponse.json({
         success: false,
         error: 'Could not check the files on that message. Nothing was sent — try again.',
@@ -288,20 +288,20 @@ export async function POST(request, props) {
   // enabled, else the STUDIO block wherever the studio has configured one
   // (plain column above it, in the rich placement below the forward), else
   // null → the plain in-note path below, unchanged.
-  const sigCtx = await loadSignatureContext(db, ticket.location_id)
+  const sigCtx = await loadSignatureContext(db, conversation.location_id)
   const richSig = resolveSendSignature(user, sigCtx)
   const unsignedText = buildForwardText({ note, message: source })
   const outboundText = richSig
     ? appendSignature(unsignedText, richSig.text)
     : buildForwardText({ note: appendSignature(note, user.email_signature), message: source })
-  const subject = forwardSubject(source.subject || ticket.subject)
+  const subject = forwardSubject(source.subject || conversation.subject)
 
   // No threading headers, deliberately. In-Reply-To pointing at the member's
   // Message-ID would file our forward inside a thread the recipient has never
-  // seen. Their reply still comes back to this ticket: Reply-To is the mailbox,
+  // seen. Their reply still comes back to this conversation: Reply-To is the mailbox,
   // and Postmark's outbound RFC Message-ID embeds the API MessageID stored on
   // the row below, which is what the inbound webhook threads on.
-  const send = await sendTicketEmail({
+  const send = await sendConversationEmail({
     mailboxAddress: mailbox?.address || null,
     // MAILBOX-CONNECT.7 — see the compose route.
     mailbox: mailbox || null,
@@ -311,8 +311,8 @@ export async function POST(request, props) {
     subject,
     htmlBody: richSig ? textToHtml(unsignedText) + richSig.html : textToHtml(outboundText),
     textBody: outboundText,
-    tag: 'ticket-forward',
-    metadata: { ticket_id: ticket.id, contact_id: ticket.contact_id || '' },
+    tag: 'conversation-forward',
+    metadata: { ticket_id: conversation.id, contact_id: conversation.contact_id || '' },
     // undefined when nothing rides along, so a bare forward's Postmark payload
     // is byte-identical to a reply's.
     attachments: collected.postmark,
@@ -329,9 +329,9 @@ export async function POST(request, props) {
   const now = new Date().toISOString()
 
   const { data: message, error: msgErr } = await db.from('email_inbox_messages').insert({
-    ticket_id: ticket.id,
-    contact_id: ticket.contact_id || null,
-    location_id: ticket.location_id,
+    ticket_id: conversation.id,
+    contact_id: conversation.contact_id || null,
+    location_id: conversation.location_id,
     direction: 'outbound',
     author_profile_id: user.id,
     from_email: send.fromEmail || null,
@@ -346,7 +346,7 @@ export async function POST(request, props) {
     postmark_message_id: send.result.messageId,
     // MAILBOX-CONNECT.7 — the threading key on the SMTP path; see the compose
     // route for the full reasoning. An SMTP send carries no Postmark id, so
-    // without this a recipient's reply forks a new ticket. NULL on the Postmark
+    // without this a recipient's reply forks a new conversation. NULL on the Postmark
     // path, which is today's behaviour.
     rfc_message_id: send.result.rfcMessageId || null,
     // mig 501 — WHAT was passed on. The thread renders the marker off this
@@ -365,12 +365,12 @@ export async function POST(request, props) {
     // contract as reply and compose). deadLetterWebhook never throws; the
     // provider is deliberately NOT a REPLAYABLE_PROVIDERS key — a replay of a
     // send that already happened would BE the double-send.
-    console.error('[tickets/forward] message insert failed AFTER a successful send:', msgErr.message)
+    console.error('[conversations/forward] message insert failed AFTER a successful send:', msgErr.message)
     await deadLetterWebhook(db, {
       provider: 'email_ticket_forward',
       eventType: 'sent_not_filed',
       payload: {
-        ticket_id: ticket.id,
+        ticket_id: conversation.id,
         // WHAT was passed on — the one fact a forward adds over a reply, and
         // the SENT text (note + quoted correspondence) a third party now has.
         forwarded_message_id: source.id,
@@ -386,11 +386,11 @@ export async function POST(request, props) {
         sent_at: now,
       },
       error: msgErr,
-      locationId: ticket.location_id,
+      locationId: conversation.location_id,
     })
     return NextResponse.json({
       success: false,
-      error: 'The forward was sent but could not be filed on the ticket. Do not resend — check with the recipient before trying again.',
+      error: 'The forward was sent but could not be filed on the conversation. Do not resend — check with the recipient before trying again.',
       data: { sent: true, message_id: send.result.messageId },
     }, { status: 500 })
   }
@@ -401,8 +401,8 @@ export async function POST(request, props) {
   await fileForwardedAttachments(db, {
     files: collected.files,
     messageId: message.id,
-    locationId: ticket.location_id,
-    mailboxId: ticket.mailbox_id || null,
+    locationId: conversation.location_id,
+    mailboxId: conversation.mailbox_id || null,
   })
 
   // ── Attribution ───────────────────────────────────────────────────
@@ -416,8 +416,8 @@ export async function POST(request, props) {
     category: 'business',
     action: 'email_ticket.forwarded',
     actor: { id: user.id, full_name: user.full_name, email: user.email },
-    target: { resource: `email_ticket/${ticket.id}`, label: subject },
-    locationId: ticket.location_id,
+    target: { resource: `email_ticket/${conversation.id}`, label: subject },
+    locationId: conversation.location_id,
     details: {
       added: newRecipients(recipients, []),
       recipient_count: recipients.count,
@@ -429,14 +429,14 @@ export async function POST(request, props) {
 
   // THE TICKET IS NOT UPDATED — see the header. A forward is not an answer to
   // the member, and stamping an outbound last message here would drop the
-  // ticket out of the needs-reply queue while they are still waiting.
+  // conversation out of the needs-reply queue while they are still waiting.
   return NextResponse.json({
     success: true,
     data: {
       message,
       message_id: send.result.messageId,
       // What actually went out. `bcc` is here for the same reason the reply
-      // route returns it: the caller is staff on this ticket, and it travels no
+      // route returns it: the caller is staff on this conversation, and it travels no
       // further than this response.
       recipients: { to: recipients.to, cc: recipients.cc, bcc: recipients.bcc },
       forwarded_message_id: source.id,

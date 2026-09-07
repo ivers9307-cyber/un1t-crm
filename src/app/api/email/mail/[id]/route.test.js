@@ -1,8 +1,8 @@
-// EMAIL-TICKET.4 — the ticket detail route.
+// EMAIL-TICKET.4 — the conversation detail route.
 //
-// The load-bearing assertion is 404 (never 403) for a ticket on a mailbox the
+// The load-bearing assertion is 404 (never 403) for a conversation on a mailbox the
 // caller cannot see: a 403 would confirm the id exists and let an authenticated
-// coach enumerate the studio's billing tickets by id.
+// coach enumerate the studio's billing conversations by id.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -22,7 +22,7 @@ import {
 } from '../../tickets/_test-fixtures'
 
 function get(id) {
-  return GET(new Request(`http://x/api/email/tickets/${id}`), { params: Promise.resolve({ id }) })
+  return GET(new Request(`http://x/api/email/conversations/${id}`), { params: Promise.resolve({ id }) })
 }
 
 const MESSAGES = [
@@ -56,14 +56,14 @@ beforeEach(() => {
   setupDb(baseState({ grants: [GRANT_STUDIO], messages: MESSAGES }))
 })
 
-describe('GET /api/email/tickets/[id]', () => {
+describe('GET /api/email/conversations/[id]', () => {
   it('401s when unauthenticated', async () => {
     getCurrentUser.mockResolvedValue(null)
     expect((await get(T_STUDIO.id)).status).toBe(401)
   })
 
   // EMAIL-TICKET-CLEANUP.1 — 404, not the 403 this used to be. The gate moved
-  // into loadTicketForUser so it can resolve at the TICKET'S location, which
+  // into loadConversationForUser so it can resolve at the TICKET'S location, which
   // means it now runs AFTER the row is read — and a 403 there would say "this
   // id exists, at a studio where you lack the key" while a bad id says 404.
   // Every other way to be refused on this surface is already indistinguishable;
@@ -75,7 +75,7 @@ describe('GET /api/email/tickets/[id]', () => {
     expect((await get(T_STUDIO.id)).status).toBe(404)
   })
 
-  it('404s for a ticket on a mailbox the caller cannot see — NOT 403', async () => {
+  it('404s for a conversation on a mailbox the caller cannot see — NOT 403', async () => {
     const res = await get(T_ACCOUNTS.id)
     expect(res.status).toBe(404)
     // Byte-identical to a genuinely missing id: nothing distinguishes them.
@@ -86,7 +86,7 @@ describe('GET /api/email/tickets/[id]', () => {
     expect((await get('aaaaaaa9-0000-4000-8000-000000000009')).status).toBe(404)
   })
 
-  it('404s for a ticket at another location', async () => {
+  it('404s for a conversation at another location', async () => {
     setupDb(baseState({
       grants: [GRANT_STUDIO],
       tickets: [{ ...T_STUDIO, id: 'foreign-1', location_id: LOC_B }],
@@ -94,18 +94,18 @@ describe('GET /api/email/tickets/[id]', () => {
     expect((await get('foreign-1')).status).toBe(404)
   })
 
-  it('returns the ticket, its mailbox and the thread oldest-first', async () => {
+  it('returns the conversation, its mailbox and the thread oldest-first', async () => {
     const res = await get(T_STUDIO.id)
     expect(res.status).toBe(200)
     const { data } = await res.json()
     expect(data.ticket.id).toBe(T_STUDIO.id)
     expect(data.ticket.mailbox.address).toBe(MB_STUDIO.address)
     expect(data.messages.map(m => m.id)).toEqual(['m-1', 'm-2'])
-    // Another ticket's messages never bleed in.
+    // Another conversation's messages never bleed in.
     expect(data.messages.map(m => m.id)).not.toContain('m-other')
   })
 
-  it('lets an elevated caller open a ticket on any active mailbox', async () => {
+  it('lets an elevated caller open a conversation on any active mailbox', async () => {
     getCurrentUser.mockResolvedValue(OWNER)
     setupDb(baseState({ grants: [], messages: MESSAGES }))
     const res = await get(T_ACCOUNTS.id)
@@ -113,7 +113,7 @@ describe('GET /api/email/tickets/[id]', () => {
     expect((await res.json()).data.ticket.mailbox.address).toBe(MB_ACCOUNTS.address)
   })
 
-  it('does not mark the ticket read as a side effect of reading it', async () => {
+  it('does not mark the conversation read as a side effect of reading it', async () => {
     await get(T_STUDIO.id)
     // Marking read is its own POST — a GET must not write.
     expect(db.updates).toHaveLength(0)
@@ -124,12 +124,12 @@ describe('GET /api/email/tickets/[id]', () => {
 //
 // The messages select used to be destructured as `{ data: messagesDesc }` with
 // `.error` never inspected and the result used as `messagesDesc || []`, so ANY
-// failure returned HTTP 200 with a ticket and zero messages — on web and on
+// failure returned HTTP 200 with a conversation and zero messages — on web and on
 // mobile, nothing logged, nothing surfaced. That is also the landmine under the
 // email_conversations retirement: MESSAGE_COLUMNS named `conversation_id`, so
-// dropping the column would have turned every ticket in the estate into a
+// dropping the column would have turned every conversation in the estate into a
 // silently empty thread rather than an outage anybody could see.
-describe('GET /api/email/tickets/[id] — query failures are loud', () => {
+describe('GET /api/email/conversations/[id] — query failures are loud', () => {
   it('500s when the messages query errors — never 200 with an empty thread', async () => {
     setupDb(baseState({
       grants: [GRANT_STUDIO],
@@ -184,8 +184,8 @@ describe('GET /api/email/tickets/[id] — query failures are loud', () => {
 // This is the cheap half of the feature and the easy half to break: the
 // stamper can be writing delivery_status perfectly while the GET quietly omits
 // it from MESSAGE_COLUMNS, and every bounced reply then renders as an ordinary
-// one — the exact failure this ticket exists to fix, restored by omission.
-describe('GET /api/email/tickets/[id] — delivery status reaches the thread', () => {
+// one — the exact failure this conversation exists to fix, restored by omission.
+describe('GET /api/email/conversations/[id] — delivery status reaches the thread', () => {
   beforeEach(() => {
     setupDb(baseState({
       grants: [GRANT_STUDIO],
@@ -228,7 +228,7 @@ describe('GET /api/email/tickets/[id] — delivery status reaches the thread', (
 //
 // TWO SEPARATE CLAIMS, and conflating them is the whole risk of this route.
 //   1. bcc_emails IS returned. The only caller is a staff member who already
-//      passed the ticket gate, and a colleague who cannot see whether
+//      passed the conversation gate, and a colleague who cannot see whether
 //      accounts@ was blind-copied on a refund reply is working blind.
 //   2. bcc_emails is STILL never a recipient. reply_recipients is derived from
 //      From/To/Cc only, so the set this route hands the composer is the set
@@ -271,8 +271,8 @@ describe('GET …/[id] — recipients (EMAIL-CC.1)', () => {
     expect(msg.cc_emails).toEqual(['colleague@example.com'])
   })
 
-  // Claim 1: staff on the ticket see their own blind-copy list.
-  it('returns bcc_emails to the staff member on the ticket', async () => {
+  // Claim 1: staff on the conversation see their own blind-copy list.
+  it('returns bcc_emails to the staff member on the conversation', async () => {
     setupDb(baseState({ grants: [GRANT_STUDIO], messages: [OUTBOUND_WITH_BCC] }))
     const res = await get(T_STUDIO.id)
     const [msg] = (await res.json()).data.messages
@@ -313,7 +313,7 @@ describe('GET …/[id] — recipients (EMAIL-CC.1)', () => {
       .toEqual({ to: ['member@example.com'], mode: 'reply', over_cap: false, empty: false })
   })
 
-  it('falls back to the requester on a ticket with no messages', async () => {
+  it('falls back to the requester on a conversation with no messages', async () => {
     setupDb(baseState({ grants: [GRANT_STUDIO], messages: [] }))
     const res = await get(T_STUDIO.id)
     expect((await res.json()).data.reply_recipients)
@@ -361,7 +361,7 @@ describe('GET …/[id] — reply_recipients unions the whole thread (EMAIL-PARTI
     // bug; a wider window is the fix.
     expect(reply.to).toContain('rates@council.ie')
     // Our own address is still never a recipient — a reply-all that mailed
-    // studio@ would re-enter our own inbound webhook and file onto this ticket.
+    // studio@ would re-enter our own inbound webhook and file onto this conversation.
     expect(reply.to).not.toContain(MB_STUDIO.address)
     expect(reply.over_cap).toBe(false)
   })
@@ -404,7 +404,7 @@ describe('GET …/[id] — reply_recipients unions the whole thread (EMAIL-PARTI
     // participant branch refusing, not the messages branch tested twice.
     expect((await res.json()).error).toContain('statement timeout')
     expect(errors).toHaveBeenCalledWith(
-      '[tickets/:id] participant lookup failed:',
+      '[conversations/:id] participant lookup failed:',
       'canceling statement due to statement timeout',
     )
     errors.mockRestore()
@@ -415,7 +415,7 @@ describe('GET …/[id] — reply_recipients unions the whole thread (EMAIL-PARTI
 // the viewer may reassign; both resolved here, where the service role can
 // read `profiles`.
 describe('assignment enrichment', () => {
-  it('resolves assignee_name on the ticket, null when unassigned or unresolvable', async () => {
+  it('resolves assignee_name on the conversation, null when unassigned or unresolvable', async () => {
     setupDb(baseState({
       grants: [GRANT_STUDIO],
       tickets: [{ ...T_STUDIO, assigned_to: 'profile-owner' }],
@@ -443,18 +443,18 @@ describe('assignment enrichment', () => {
 
 // EMAIL-MERGE.5 — the survivor pointer reaches the client.
 //
-// A merged ticket is a TOMBSTONE (status `closed` plus merged_into_id), and
+// A merged conversation is a TOMBSTONE (status `closed` plus merged_into_id), and
 // scopeToUnmerged hides it from the queue and the badge. This route is
 // deliberately NOT scoped that way: a bookmark or a push-notification link
-// pointing at a ticket that has since been folded into another must land
-// somewhere useful, not on "Not found". So the ticket stays READABLE and the
+// pointing at a conversation that has since been folded into another must land
+// somewhere useful, not on "Not found". So the conversation stays READABLE and the
 // payload carries the pointer, which is the only thing the UI can redirect on.
 //
 // Both halves are pinned here because either alone is useless: a readable
 // tombstone with no pointer is a dead end (the operator reads a thread whose
 // messages have moved and has no way to reach the live one), and a pointer on
 // a 404 never arrives.
-describe('a merged ticket keeps pointing at its survivor', () => {
+describe('a merged conversation keeps pointing at its survivor', () => {
   it('returns merged_into_id — the redirect target — rather than 404ing', async () => {
     setupDb(baseState({
       grants: [GRANT_STUDIO],
@@ -495,16 +495,16 @@ describe('a merged ticket keeps pointing at its survivor', () => {
     // but does not PROJECT by it, so a select narrowed to a hand-written column
     // set would still hand back a whole fixture row here while returning
     // undefined against Postgres. Pinning the select is what makes this a test
-    // of the route rather than of the double: loadTicketForUser reads `*`, so
+    // of the route rather than of the double: loadConversationForUser reads `*`, so
     // every mig 536 column arrives, and narrowing it later fails HERE instead
     // of silently emptying the banner in production.
-    const [ticketRead] = selectsFrom(db, 'email_tickets')
+    const [conversationRead] = selectsFrom(db, 'email_tickets')
     expect(
-      ticketRead.columns === '*' || ticketRead.columns.includes('merged_into_id')
+      conversationRead.columns === '*' || conversationRead.columns.includes('merged_into_id')
     ).toBe(true)
   })
 
-  it('leaves merged_into_id null on an ordinary ticket', async () => {
+  it('leaves merged_into_id null on an ordinary conversation', async () => {
     // The negative half: a pointer that is always set is a banner that always
     // shows, and the UI keys the merged banner on exactly this field.
     const { data } = await (await get(T_STUDIO.id)).json()
@@ -560,8 +560,8 @@ describe('merged_sources', () => {
 // from the thread, a solved conversation showed "Bring back" and a tap wrote
 // status='open' over a row that was never closed. The stamp travels now, and
 // both clients read it instead of re-deriving.
-describe('GET …/[id] — the ticket is stamped through stampMailRow (MAIL-ARCH.3)', () => {
-  it('an open ticket carries archived:false and a truthful needs_reply', async () => {
+describe('GET …/[id] — the conversation is stamped through stampMailRow (MAIL-ARCH.3)', () => {
+  it('an open conversation carries archived:false and a truthful needs_reply', async () => {
     const { data } = await (await get(T_STUDIO.id)).json()
     expect(data.ticket.archived).toBe(false)
     // T_STUDIO is open + last inbound + not spam: the one definition of
@@ -569,7 +569,7 @@ describe('GET …/[id] — the ticket is stamped through stampMailRow (MAIL-ARCH
     expect(data.ticket.needs_reply).toBe(true)
   })
 
-  it('🔴 a legacy solved ticket is stamped LIVE — archived:false, the same answer the list gives', async () => {
+  it('🔴 a legacy solved conversation is stamped LIVE — archived:false, the same answer the list gives', async () => {
     setupDb(baseState({
       grants: [GRANT_STUDIO],
       tickets: [{ ...T_STUDIO, status: 'solved', solved_at: '2026-08-06T12:00:00Z' }],
@@ -582,7 +582,7 @@ describe('GET …/[id] — the ticket is stamped through stampMailRow (MAIL-ARCH
     expect(data.ticket.needs_reply).toBe(false)
   })
 
-  it('a closed ticket is stamped archived:true', async () => {
+  it('a closed conversation is stamped archived:true', async () => {
     setupDb(baseState({
       grants: [GRANT_STUDIO],
       tickets: [{ ...T_STUDIO, status: 'closed', closed_at: '2026-08-06T12:00:00Z' }],

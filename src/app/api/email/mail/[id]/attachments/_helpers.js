@@ -10,20 +10,20 @@
 //
 // ══ THE GATE, IN ORDER ══════════════════════════════════════════════
 //
-// 1. loadConversationForUser() — the two-level check the whole ticket surface runs
-//    on: the caller must reach the ticket's LOCATION, must hold `email_inbox`
+// 1. loadConversationForUser() — the two-level check the whole conversation surface runs
+//    on: the caller must reach the conversation's LOCATION, must hold `email_inbox`
 //    THERE, and must be able to see the MAILBOX it arrived at (or be elevated,
-//    for a ticket whose mailbox is gone). Nothing here re-derives any of it.
+//    for a conversation whose mailbox is gone). Nothing here re-derives any of it.
 //
 // 2. THE PAIRING CHECK, WHICH IS THE WHOLE IDOR. The attachment must belong to
-//    THIS ticket. Without it a coach with a grant on `sales@` could pass any
-//    ticket they can open as `[id]` together with any attachment id in the
+//    THIS conversation. Without it a coach with a grant on `sales@` could pass any
+//    conversation they can open as `[id]` together with any attachment id in the
 //    estate as `[attachmentId]`, and be handed the billing correspondence the
 //    per-mailbox model exists to keep from them. Both halves of that request
 //    are individually legitimate; only this check refuses it.
 //
 // 404, NEVER 403, for every refusal — no such attachment, an attachment on
-// another ticket, and (for the caller) an attachment whose bytes were never
+// another conversation, and (for the caller) an attachment whose bytes were never
 // stored are all the same answer from outside, so ids cannot be probed.
 //
 // storage_path is selected here because signing needs it. It MUST NOT be put in
@@ -42,19 +42,19 @@ const ATTACHMENT_COLUMNS =
  *
  * @param {object} db  service-role client
  * @param {object} user  getCurrentUser() result
- * @param {string} ticketId
+ * @param {string} conversationId
  * @param {string} attachmentId
- * @returns {Promise<{ response: NextResponse } | { ticket: object, attachment: object }>}
+ * @returns {Promise<{ response: NextResponse } | { conversation: object, attachment: object }>}
  *   A resolved `attachment` is guaranteed to have a non-null storage_path — the
  *   never-stored case is answered here, with its reason, so neither caller has
  *   to remember to check.
  */
-export async function loadAttachmentForTicket(db, user, ticketId, attachmentId) {
+export async function loadAttachmentForConversation(db, user, conversationId, attachmentId) {
   // The gate. Everything below inherits the location + mailbox scoping it
   // applied.
-  const loaded = await loadConversationForUser(db, user, ticketId)
+  const loaded = await loadConversationForUser(db, user, conversationId)
   if (loaded.response) return { response: loaded.response }
-  const { ticket } = loaded
+  const { conversation } = loaded
 
   const { data: attachment, error } = await db.from('email_ticket_attachments')
     .select(ATTACHMENT_COLUMNS)
@@ -63,21 +63,21 @@ export async function loadAttachmentForTicket(db, user, ticketId, attachmentId) 
   // A malformed id is a Postgres cast error (22P02), not a row — same 404.
   if (error || !attachment) return { response: conversationNotFound() }
 
-  // Belt: the attachment's own location must match the ticket's. Braces: the
-  // message it hangs off must belong to THIS ticket. The second is the real
-  // check — the first would pass for every ticket at the same studio.
-  if (attachment.location_id !== ticket.location_id) return { response: conversationNotFound() }
+  // Belt: the attachment's own location must match the conversation's. Braces: the
+  // message it hangs off must belong to THIS conversation. The second is the real
+  // check — the first would pass for every conversation at the same studio.
+  if (attachment.location_id !== conversation.location_id) return { response: conversationNotFound() }
 
   const { data: message, error: msgErr } = await db.from('email_inbox_messages')
     .select('id, ticket_id')
     .eq('id', attachment.message_id)
     .maybeSingle()
-  if (msgErr || !message || message.ticket_id !== ticket.id) return { response: conversationNotFound() }
+  if (msgErr || !message || message.ticket_id !== conversation.id) return { response: conversationNotFound() }
 
   if (!attachment.storage_path) {
     // Not an error state — mig 482's XOR guarantees a reason, and staff are
     // entitled to know which one so they can ask for a resend. Still a 404:
-    // there is nothing to serve, and the caller already holds the ticket, so
+    // there is nothing to serve, and the caller already holds the conversation, so
     // naming the reason discloses nothing they cannot already read.
     return {
       response: NextResponse.json({
@@ -88,5 +88,5 @@ export async function loadAttachmentForTicket(db, user, ticketId, attachmentId) 
     }
   }
 
-  return { ticket, attachment }
+  return { conversation, attachment }
 }

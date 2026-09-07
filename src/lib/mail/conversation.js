@@ -1,4 +1,4 @@
-// EMAIL-TICKET.1 — pure ticket identity + lifecycle rules for the email
+// EMAIL-TICKET.1 — pure conversation identity + lifecycle rules for the email
 // channel. Spec: docs/superpowers/specs/2026-08-05-email-ticketing-design.md
 //
 // WHY THIS IS SEPARATE FROM email-inbox.js
@@ -9,46 +9,46 @@
 // THE RULE THAT MATTERS
 // mig 394 kept one conversation per (location, address) forever, so a member
 // with two unrelated questions had one immortal thread. Here a reply to a
-// CLOSED ticket mints a NEW ticket rather than resurrecting the old one. That
-// single rule is what stops a ticket decaying back into a per-person thread.
+// CLOSED conversation mints a NEW conversation rather than resurrecting the old one. That
+// single rule is what stops a conversation decaying back into a per-person thread.
 //
 // Everything here is pure (no DB, no env, no clock) so the webhook's decisions
 // are unit-testable; the route owns the queries and passes `now` in.
 
 /**
- * Given the ticket an inbound message threaded to (or null), decide whether
+ * Given the conversation an inbound message threaded to (or null), decide whether
  * to append to it or mint a new one.
  *
  * `reopen` and `reopenedFrom` mean OPPOSITE things:
- *   • append + reopen: true     — THIS ticket goes back to open
- *   • create + reopenedFrom: X  — a NEW ticket; X stays CLOSED, and is merely
+ *   • append + reopen: true     — THIS conversation goes back to open
+ *   • create + reopenedFrom: X  — a NEW conversation; X stays CLOSED, and is merely
  *     its predecessor. Never write status='open' against X.
  *
- * @param {{ id?: string, status: string }|null} threadedTicket
+ * @param {{ id?: string, status: string }|null} threadedConversation
  * @returns {{ action: 'append', ticketId: string, reopen: boolean }
  *          |{ action: 'create', reopenedFrom: string|null }}
  */
-export function resolveTicketAction(threadedTicket) {
-  if (!threadedTicket || !threadedTicket.id) {
+export function resolveTicketAction(threadedConversation) {
+  if (!threadedConversation || !threadedConversation.id) {
     return { action: 'create', reopenedFrom: null }
   }
-  // A CLOSED ticket reopens on reply — it does NOT fork into a new one
+  // A CLOSED conversation reopens on reply — it does NOT fork into a new one
   // (Richard, 2026-08-07). Closing is internal bookkeeping: the member is never
-  // told a ticket closed, so from their side they are simply continuing the
-  // conversation, and splitting their reply into a second ticket would make the
+  // told a conversation closed, so from their side they are simply continuing the
+  // conversation, and splitting their reply into a second conversation would make the
   // studio's own record disagree with the thread sitting in their mail client.
   //
-  // An earlier draft forked here, to stop a ticket decaying into mig 394's
+  // An earlier draft forked here, to stop a conversation decaying into mig 394's
   // immortal per-person thread. That worry was already covered elsewhere and
   // better: RFC threading headers are what separate one issue from the next, so
   // a genuinely new enquiry has no In-Reply-To/References match, resolves to no
-  // ticket at all, and starts a fresh one via the branch above. Closing was a
+  // conversation at all, and starts a fresh one via the branch above. Closing was a
   // second, redundant boundary — and the only one a member could trip by
   // replying to their own old email.
   return {
     action: 'append',
-    ticketId: threadedTicket.id,
-    reopen: threadedTicket.status !== 'open',
+    ticketId: threadedConversation.id,
+    reopen: threadedConversation.status !== 'open',
   }
 }
 
@@ -68,7 +68,7 @@ export function shouldStampFirstResponse({ firstResponseAt, direction, isInterna
 }
 
 /**
- * A ticket is named by the issue that opened it. Deliberately unlike mig 394,
+ * A conversation is named by the issue that opened it. Deliberately unlike mig 394,
  * where `subject` tracked the most recent inbound and a thread's name drifted
  * with every "Re: Re: Fwd:".
  */
@@ -84,7 +84,7 @@ export function ticketSubject(existingSubject, inboundSubject) {
  * property of the messages that arrived.
  *
  * WHY THIS EXISTS (EMAIL-PARTICIPANTS.8)
- * A ticket opened by ratesoffice@dublincity.ie was forwarded internally to a
+ * A conversation opened by ratesoffice@dublincity.ie was forwarded internally to a
  * named officer, who replied. From that message on the conversation was with
  * her — and nothing on screen said so, so an operator answered the wrong
  * person twice. The recipient half of that is fixed upstream; this is the fact
@@ -94,7 +94,7 @@ export function ticketSubject(existingSubject, inboundSubject) {
  * rather than a rendering preference, which is why it lives here where the
  * pure tests can pin it. The people on the first message did not JOIN the
  * conversation — they started it. Saying they joined claims an arrival at
- * something that already existed, and a marker that fires on every ticket's
+ * something that already existed, and a marker that fires on every conversation's
  * first message means "is present" rather than "is new", which is neither what
  * it says nor what it is for. Their addresses are still consumed, so nobody
  * gets announced later for having been there from the start.
@@ -112,7 +112,7 @@ export function ticketSubject(existingSubject, inboundSubject) {
  *
  * `bcc_emails` IS DELIBERATELY ABSENT from the field list. A Bcc'd person is
  * not visibly on the thread, and announcing them would leak the Bcc to
- * everyone reading the ticket. Do not add it.
+ * everyone reading the conversation. Do not add it.
  *
  * @param {object[]} messages  ascending by created_at
  * @returns {Map<string, string[]>}  message id → addresses first seen there
@@ -124,7 +124,7 @@ export function joinPointsByMessage(messages) {
   for (const m of Array.isArray(messages) ? messages : []) {
     if (!m || m.is_internal_note || m.forwarded_message_id) continue
     // The legacy scalar fallback, mirroring messageEnvelope()
-    // (src/lib/ticket-display.js). Migrations
+    // (src/lib/conversation-display.js). Migrations
     // backfilled `to_emails`, so a scalar-only row should not exist — but two
     // functions in the same feature disagreeing about whether to trust that is
     // the smell, and the failure is not inert: an unread recipient on the
@@ -151,19 +151,19 @@ export function joinPointsByMessage(messages) {
 }
 
 /**
- * Which ticket a set of threading-matched message rows belongs to.
+ * Which conversation a set of threading-matched message rows belongs to.
  *
  * A long reply chain touches many of our messages, so several rows can match
  * one In-Reply-To/References header. The most recent wins: a member replying
- * to an old message in a thread that has since moved on means the live ticket,
+ * to an old message in a thread that has since moved on means the live conversation,
  * not the archived one.
  *
- * Ties break on the lowest ticket id so the result is deterministic — rows
+ * Ties break on the lowest conversation id so the result is deterministic — rows
  * written in one transaction share a timestamp, and a coin-flip there is the
  * same class of bug as routing by database row order.
  *
  * @param {Array<{ticket_id: string|null, created_at: string}>} rows
- * @returns {string|null} ticket id, or null if nothing threads
+ * @returns {string|null} conversation id, or null if nothing threads
  */
 export function pickThreadedTicket(rows) {
   if (!Array.isArray(rows)) return null

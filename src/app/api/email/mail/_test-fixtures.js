@@ -3,7 +3,7 @@
 // LAYERED ON THE TICKET-ERA FIXTURES, NEVER RESTATED. The access model is
 // shared verbatim (see _helpers.js), so its fixtures are too: a second set of
 // users, grants and locations would drift from the ones the (now shimmed)
-// ticket route tests exercise, and the whole point of importing
+// conversation route tests exercise, and the whole point of importing
 // loadVisibleMailboxes rather than re-implementing it is that both are proven
 // by the same world.
 //
@@ -29,7 +29,7 @@ export {
 /** studio@ — the account COACH holds a grant on. */
 export const MB_MAIL = { ...MB_STUDIO }
 /** accounts@ — same studio, NO coach grant. (Historic name: it sat on the
- * retired ticket surface. Kept because renaming it across every mail test
+ * retired conversation surface. Kept because renaming it across every mail test
  * buys nothing — the access split it now stands for is real.) */
 export const MB_TICKETS = { ...MB_ACCOUNTS }
 /** The other studio's address. */

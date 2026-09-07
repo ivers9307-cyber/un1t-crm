@@ -4,7 +4,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, email as emailAddress } from '@/lib/schemas'
-import { sendTicketEmail, TICKET_INTERNAL_STREAM } from '@/lib/email-inbox-send'
+import { sendConversationEmail, TICKET_INTERNAL_STREAM } from '@/lib/email-inbox-send'
 import { appendSignature, resolveSendSignature } from '@/lib/email-signature'
 import { normalizeEmail, pickContact, inboundPreview } from '@/lib/email-inbox'
 import { ticketSubject } from '@/lib/mail/conversation'
@@ -26,20 +26,20 @@ import { withSendMarker } from '@/lib/postmark-send-marker'
 import { logError } from '@/lib/log'
 import { loadSendingMailbox, loadOwnAddresses , loadSignatureContext } from '../_conversation'
 
-// POST /api/email/tickets/compose — start a conversation (EMAIL-TICKET.5).
+// POST /api/email/conversations/compose — start a conversation (EMAIL-TICKET.5).
 // Spec: docs/superpowers/specs/2026-08-05-email-ticketing-design.md
 //
 // WHAT A "NEW EMAIL" IS
 // A TICKET WHOSE FIRST MESSAGE IS OUTBOUND. There is no second concept here:
 // one composed email creates one email_tickets row plus one outbound
-// email_inbox_messages row, and from that moment it is an ordinary ticket —
+// email_inbox_messages row, and from that moment it is an ordinary conversation —
 // the same queue, the same status lifecycle, the same reply box. The
 // recipient's answer threads back into it through the normal inbound path
 // (Postmark's outbound RFC Message-ID embeds the API MessageID stored below,
 // which is exactly what the webhook matches on).
 //
 // THE GATE. Service-role client, so RLS does nothing: this code IS the gate,
-// and it has two levels, the same two every other ticket route applies.
+// and it has two levels, the same two every other conversation route applies.
 // `email_inbox` gates the surface; a row in email_mailbox_access gates each
 // individual account. The second one is what stops someone with sales@ sending
 // as accounts@ — the sender may only ever pick a mailbox that comes back from
@@ -127,7 +127,7 @@ export async function POST(request) {
   // ── The mailbox decides the location, and the location decides nothing ──
   // Both gates, in order, in one place: the mailbox row is read first (the
   // caller does NOT get to name a location — it comes off the mailbox, so the
-  // ticket can only land at the studio that owns the sending address), then
+  // conversation can only land at the studio that owns the sending address), then
   // location access, then `email_inbox` AT THAT LOCATION, then the per-account
   // visible-set check. Everything downstream uses the row loadSendingMailbox
   // returned, never the id the caller named.
@@ -143,7 +143,7 @@ export async function POST(request) {
   // ── Who this reaches (EMAIL-CC.1) ─────────────────────────────────
   // Our own addresses are excluded from all three lists. Cc'ing one of our
   // mailboxes would deliver a copy to our own inbound webhook, which files it
-  // as a brand-new ticket at the same studio — a phantom enquiry, from us, on
+  // as a brand-new conversation at the same studio — a phantom enquiry, from us, on
   // every composed email. See loadOwnAddresses.
   const own = await loadOwnAddresses(db)
   if (own.response) return own.response
@@ -155,18 +155,18 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: recipients.error }, { status: 400 })
   }
   const wire = toPostmarkFields(recipients)
-  // The PRIMARY recipient. One ticket has one counterpart: it is who
+  // The PRIMARY recipient. One conversation has one counterpart: it is who
   // requester_email names, who the contact link resolves against and who a
   // later reply threads back from. Cc'd people are on the correspondence, not
-  // the subject of the ticket.
+  // the subject of the conversation.
   const to = recipients.to[0]
 
   // ── Link a contact if the recipient is one ────────────────────────
   // Same resolution as the inbound webhook (pickContact), deliberately: a
-  // ticket we start and a ticket they start must agree on who the member is.
+  // conversation we start and a conversation they start must agree on who the member is.
   //
   // `_` is an ILIKE wildcard AND a legal email character, so an unescaped
-  // `a_b@x.com` also matches `axb@x.com` server-side — filing a ticket against
+  // `a_b@x.com` also matches `axb@x.com` server-side — filing a conversation against
   // the wrong member is far worse than filing it against nobody.
   // escapeLikePattern makes the QUERY mean what it says (ILIKE-WILDCARD.1 fixed
   // the same shape in the inbound webhook and six other lookups); the JS
@@ -178,17 +178,17 @@ export async function POST(request) {
   // no such gate (it parses the sender with the permissive normalizeEmail
   // regex), which is why the `%@domain` variant was live there and not here.
   //
-  // EMAIL-TICKET.6 — `.error` is inspected. Swallowing it filed the ticket
+  // EMAIL-TICKET.6 — `.error` is inspected. Swallowing it filed the conversation
   // against NOBODY: no contact link, no email_sends row, so the member's own
   // history silently omitted an email we sent them and their reply threaded
-  // back to an unlinked ticket. Same ordering argument as the reply route —
+  // back to an unlinked conversation. Same ordering argument as the reply route —
   // this runs BEFORE the send, so refusing costs a retry and nothing else.
   const { data: candidates, error: candidatesErr } = await db.from('contacts')
     .select('id, location_id, email, created_at')
     .ilike('email', escapeLikePattern(to))
     .limit(CONTACT_MATCH_LIMIT)
   if (candidatesErr) {
-    console.error('[tickets/compose] contact lookup failed BEFORE sending:', candidatesErr.message)
+    console.error('[conversations/compose] contact lookup failed BEFORE sending:', candidatesErr.message)
     return NextResponse.json({ success: false, error: candidatesErr.message }, { status: 500 })
   }
   const exact = (candidates || []).filter(c => normalizeEmail(c.email) === to)
@@ -196,8 +196,8 @@ export async function POST(request) {
 
   // EMAIL-OUTBOUND-ATTACH.1 — read the draft objects back out of Storage and
   // turn them into Postmark's array, BEFORE the send. Every way an attachment
-  // can be refused has to be a refusal to send at all: a ticket in the queue
-  // showing files the recipient never got is the same lie as a ticket for an
+  // can be refused has to be a refusal to send at all: a conversation in the queue
+  // showing files the recipient never got is the same lie as a conversation for an
   // email that never went. Nothing is written or sent at this point.
   const collected = await collectOutboundAttachments(db, { drafts, profileId: user.id })
   if (!collected.ok) {
@@ -205,7 +205,7 @@ export async function POST(request) {
   }
 
   // ── SEND FIRST, THEN WRITE ────────────────────────────────────────
-  // Ordering is deliberate and matches the reply route. A ticket sitting in
+  // Ordering is deliberate and matches the reply route. A conversation sitting in
   // the queue for an email that never went out is the worst lie this tool can
   // tell — an operator sees "we emailed them" and stops chasing. Sending
   // first makes that state unreachable: a failed send returns 400 with nothing
@@ -215,22 +215,22 @@ export async function POST(request) {
   // The residual risk runs the other way — a send that succeeds and a write
   // that then fails — and it is the cheaper one: the email genuinely reached
   // the member, their reply still lands (the inbound webhook mints a fresh
-  // ticket when nothing threads), and the errors below say plainly that the
+  // conversation when nothing threads), and the errors below say plainly that the
   // mail went out so nobody re-sends it blind.
   //
   // EMAIL-CC.1 — all three lists via toPostmarkFields(), the single site where
   // a resolved set becomes wire values. Bcc reaches Postmark's own Bcc field
-  // and nothing else. Note the WIRE strings go out while the ticket below is
+  // and nothing else. Note the WIRE strings go out while the conversation below is
   // filed against `to` (= recipients.to[0]), the primary recipient.
   //
   // EMAIL-OUTBOUND-SERVER.1 — sent FROM the chosen mailbox, on the support
   // inbox's own Postmark server and stream, with Reply-To that same mailbox so
-  // the answer threads back onto this ticket. Same call as the reply route;
+  // the answer threads back onto this conversation. Same call as the reply route;
   // changing it is one change for both.
   // The sender's sign-off, exactly as the reply route builds it: appended
   // BEFORE the HTML conversion so textToHtml escapes body and signature in one
   // pass, and stored below so the row records what was actually sent. A
-  // composed email is a ticket whose first message is outbound — not a second
+  // composed email is a conversation whose first message is outbound — not a second
   // concept — so it does not get a second signature rule either.
   // MAIL-SIG.1 — the rich signature outranks the plain column when enabled.
   // The TEXT part rides through appendSignature (same separator, same
@@ -250,9 +250,9 @@ export async function POST(request) {
     ? appendSignature(text, richSig.text)
     : appendSignature(text, user.email_signature)
 
-  const send = await sendTicketEmail({
+  const send = await sendConversationEmail({
     mailboxAddress: mailbox.address,
-    // MAILBOX-CONNECT.7 — the mailbox ROW, not just its address. sendTicketEmail
+    // MAILBOX-CONNECT.7 — the mailbox ROW, not just its address. sendConversationEmail
     // reads `egress` off it to choose the transport; a mailbox connected over
     // IMAP/SMTP sends as its own address over its own SMTP, because Postmark
     // cannot DKIM-sign a domain we do not control. Omitting this is not a
@@ -265,9 +265,9 @@ export async function POST(request) {
     subject,
     htmlBody: richSig ? textToHtml(text) + richSig.html : textToHtml(outboundText),
     textBody: outboundText,
-    tag: 'ticket-compose',
+    tag: 'conversation-compose',
     // POSTMARK-RACE.1 — marked iff `sendLogRow` will be built, which is the
-    // same `contact?.id` condition. An outbound ticket mail to an address with
+    // same `contact?.id` condition. An outbound conversation mail to an address with
     // no contact writes no email_sends row and must stay unmarked.
     metadata: contact?.id
       ? withSendMarker({ mailbox_id: mailbox.id, contact_id: contact.id })
@@ -315,20 +315,20 @@ export async function POST(request) {
 
   // EMAIL-COMPOSE-UNFILED.1 — the delivered send has to be recorded SOMEWHERE
   // when a filing insert fails, because the rows that should have been its
-  // record don't exist: in the ticket-insert case NOTHING referenced it at
+  // record don't exist: in the conversation-insert case NOTHING referenced it at
   // all. Dead letter carries everything a human re-files from; provider is
   // deliberately NOT a REPLAYABLE_PROVIDERS key (a replay of a send that
   // already happened would BE the double-send); location-stamped so
   // integration health counts it. Best-effort by construction — a DB bad
   // enough to fail these too must still not turn "already sent" back into a
   // retryable-looking error.
-  async function recordUnfiledSend({ ticketId, error }) {
+  async function recordUnfiledSend({ conversationId, error }) {
     try {
       await deadLetterWebhook(db, {
         provider: 'email_ticket_compose',
         eventType: 'sent_not_filed',
         payload: {
-          ticket_id: ticketId,
+          ticket_id: conversationId,
           mailbox_id: mailbox.id,
           postmark_message_id: result.messageId,
           // MAILBOX-CONNECT.7 — this payload is the re-fileable record, so it
@@ -355,17 +355,17 @@ export async function POST(request) {
       if (sendLogRow) {
         const { error: sendLogErr } = await db.from('email_sends').insert(sendLogRow)
         if (sendLogErr) {
-          logError('tickets/compose', 'email_sends log failed after an unfiled send (mail already sent)', {
-            ticketId, messageId: result.messageId, error: sendLogErr,
+          logError('conversations/compose', 'email_sends log failed after an unfiled send (mail already sent)', {
+            conversationId, messageId: result.messageId, error: sendLogErr,
           })
         }
       }
     } catch (e) {
-      console.error('[tickets/compose] breadcrumbs after the unfiled send also failed:', e?.message)
+      console.error('[conversations/compose] breadcrumbs after the unfiled send also failed:', e?.message)
     }
   }
 
-  const { data: ticket, error: ticketErr } = await db.from('email_tickets').insert({
+  const { data: conversation, error: conversationErr } = await db.from('email_tickets').insert({
     // Both come off the mailbox, never off the request.
     location_id: locationId,
     mailbox_id: mailbox.id,
@@ -374,7 +374,7 @@ export async function POST(request) {
     subject: ticketSubject(subject, null),
     // `open`, not `pending`: we started this, so it is ours to chase until
     // they answer. `pending` means "waiting on the member" and belongs to a
-    // ticket they opened. This also keeps it out of the needs_reply view,
+    // conversation they opened. This also keeps it out of the needs_reply view,
     // which filters on an INBOUND last message.
     status: 'open',
     // MAIL-SENT.1 — outbound-born: lives in Sent until a reply arrives.
@@ -383,16 +383,16 @@ export async function POST(request) {
     last_message_direction: 'outbound',
     last_message_preview: inboundPreview(text),
     // This outbound IS the first response — there was never anything to
-    // respond to, and a support metric that counts this ticket as unanswered
+    // respond to, and a support metric that counts this conversation as unanswered
     // forever would be worse than not counting it at all.
     first_response_at: now,
   }).select('*').single()
-  if (ticketErr || !ticket) {
-    console.error('[tickets/compose] ticket insert failed AFTER a successful send:', ticketErr?.message)
-    await recordUnfiledSend({ ticketId: null, error: ticketErr })
+  if (conversationErr || !conversation) {
+    console.error('[conversations/compose] conversation insert failed AFTER a successful send:', conversationErr?.message)
+    await recordUnfiledSend({ conversationId: null, error: conversationErr })
     return NextResponse.json({
       success: false,
-      error: 'The email was sent but could not be filed as a ticket. Do not resend — check with the recipient before trying again.',
+      error: 'The email was sent but could not be filed as a conversation. Do not resend — check with the recipient before trying again.',
       // Machine-readable, so the composer can tell this 500 from every other
       // without string-matching the copy (same contract as the reply route).
       data: { sent: true, message_id: result.messageId },
@@ -400,7 +400,7 @@ export async function POST(request) {
   }
 
   const { data: message, error: msgErr } = await db.from('email_inbox_messages').insert({
-    ticket_id: ticket.id,
+    ticket_id: conversation.id,
     contact_id: contact?.id || null,
     location_id: locationId,
     direction: 'outbound',
@@ -418,7 +418,7 @@ export async function POST(request) {
     text_body: outboundText,
     postmark_message_id: result.messageId,
     // MAILBOX-CONNECT.7 — THE THREADING KEY ON THE SMTP PATH, and the reason a
-    // reply to a connected mailbox lands on this ticket instead of forking a
+    // reply to a connected mailbox lands on this conversation instead of forking a
     // new one.
     //
     // The inbound webhook resolves a thread by matching the incoming
@@ -430,7 +430,7 @@ export async function POST(request) {
     // An SMTP send has no Postmark id at all — sendViaSmtp returns
     // `messageId: null` on purpose, because no provider event will ever arrive
     // for it. So without this line an SMTP-sent message matches NEITHER column,
-    // and every customer reply to it opens a brand new ticket while the
+    // and every customer reply to it opens a brand new conversation while the
     // original sits unanswered. Nodemailer returns the RFC id it actually
     // generated; store it.
     //
@@ -446,15 +446,15 @@ export async function POST(request) {
     sent_at: now,
   }).select('*').single()
   if (msgErr) {
-    // The ticket STAYS. It carries last_message_preview, so the queue still
+    // The conversation STAYS. It carries last_message_preview, so the queue still
     // shows what was sent and to whom — deleting it would erase the only
     // record of an email that genuinely went out.
-    console.error('[tickets/compose] message insert failed AFTER a successful send:', msgErr.message)
-    await recordUnfiledSend({ ticketId: ticket.id, error: msgErr })
+    console.error('[conversations/compose] message insert failed AFTER a successful send:', msgErr.message)
+    await recordUnfiledSend({ conversationId: conversation.id, error: msgErr })
     return NextResponse.json({
       success: false,
-      error: 'The email was sent and the ticket created, but the message could not be filed. Do not resend.',
-      data: { sent: true, ticket_id: ticket.id, message_id: result.messageId },
+      error: 'The email was sent and the conversation created, but the message could not be filed. Do not resend.',
+      data: { sent: true, ticket_id: conversation.id, message_id: result.messageId },
     }, { status: 500 })
   }
 
@@ -477,8 +477,8 @@ export async function POST(request) {
     // 500 here reads as "try again", which is a real second email.
     const { error: sendLogErr } = await db.from('email_sends').insert(sendLogRow)
     if (sendLogErr) {
-      logError('tickets/compose', 'email_sends log failed (mail already sent)', {
-        ticketId: ticket.id, messageId: result.messageId, error: sendLogErr,
+      logError('conversations/compose', 'email_sends log failed (mail already sent)', {
+        conversationId: conversation.id, messageId: result.messageId, error: sendLogErr,
       })
     }
   }
@@ -487,13 +487,13 @@ export async function POST(request) {
   // EVERY address on a composed email is one a staff member typed — nobody
   // wrote to us first — so the whole set is logged, not just the extras. This
   // is the deliberate half of the "adding a stranger" answer: there is no
-  // consent gate on ticket mail (it is transactional, Richard), so instead the
+  // consent gate on conversation mail (it is transactional, Richard), so instead the
   // act is capped, validated and attributable. logAuditEvent never throws.
   await logAuditEvent({
     category: 'business',
     action: 'email_ticket.composed',
     actor: { id: user.id, full_name: user.full_name, email: user.email },
-    target: { resource: `email_ticket/${ticket.id}`, label: subject },
+    target: { resource: `email_ticket/${conversation.id}`, label: subject },
     locationId,
     details: {
       added: newRecipients(recipients, []),
@@ -506,12 +506,12 @@ export async function POST(request) {
   return NextResponse.json({
     success: true,
     data: {
-      ticket_id: ticket.id,
-      ticket,
+      ticket_id: conversation.id,
+      ticket: conversation,
       message,
       message_id: result.messageId,
       // Confirms what went out. bcc is included because the sender is staff on
-      // the ticket they just created; it goes no further than this response.
+      // the conversation they just created; it goes no further than this response.
       recipients: { to: recipients.to, cc: recipients.cc, bcc: recipients.bcc },
     },
   })

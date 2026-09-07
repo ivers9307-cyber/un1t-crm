@@ -365,7 +365,7 @@ export function sendFailureMessage(res) {
 /**
  * Which account the sheet opens on: an explicit initial id when it is in the
  * caller's visible set, else the location's default, else the first, else
- * null. Same precedence as the web composer (TicketCompose.jsx) — the two
+ * null. Same precedence as the web composer (ComposeForm.jsx) — the two
  * surfaces must not open on different accounts for the same person.
  */
 export function defaultMailboxId(mailboxes, initialId = null) {

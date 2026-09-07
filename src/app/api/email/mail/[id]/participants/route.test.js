@@ -15,8 +15,8 @@
 //      the normalised form so the case the operator happens to type cannot
 //      strand an exclusion nobody can lift.
 //
-// The gate is loadTicketForUser and the refusal is 404 — the same posture as
-// every other ticket route, tested with the REAL permission resolver rather
+// The gate is loadConversationForUser and the refusal is 404 — the same posture as
+// every other conversation route, tested with the REAL permission resolver rather
 // than a mocked hasPermission (six email route test files once mocked it, and
 // a real cross-location authorization bug shipped underneath).
 
@@ -39,7 +39,7 @@ import {
 
 function patch(id, body) {
   return PATCH(
-    new Request(`http://x/api/email/tickets/${id}/participants`, {
+    new Request(`http://x/api/email/conversations/${id}/participants`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
@@ -55,7 +55,7 @@ function setupDb(extra = {}) {
   return db
 }
 
-/** What the route actually put on the wire for this ticket. */
+/** What the route actually put on the wire for this conversation. */
 const written = () => updatesTo(db, 'email_tickets')[0]?.payload?.excluded_participants
 /** …and what the row holds afterwards. */
 const stored = () => db._state.tickets.find(t => t.id === T_STUDIO.id).excluded_participants
@@ -134,8 +134,8 @@ describe('PATCH …/participants', () => {
   // gets a test rather than only a comment: a refactor that drops the
   // `.refine` turns this red instead of shipping a button that lies.
   //
-  // Refused BEFORE the ticket is loaded, which is safe here and only here: the
-  // answer does not depend on the ticket, so it is the same 400 for an id the
+  // Refused BEFORE the conversation is loaded, which is safe here and only here: the
+  // answer does not depend on the conversation, so it is the same 400 for an id the
   // caller may open and one they may not. (The address-validity 400 below
   // cannot say that, which is exactly why it sits after the load.)
   it('400s on a body naming NEITHER remove nor restore, writing nothing', async () => {
@@ -177,11 +177,11 @@ describe('PATCH …/participants', () => {
     expect(writesTo(db)).toEqual([])
   })
 
-  // The gate is loadTicketForUser, not a check in the handler: a per-route
+  // The gate is loadConversationForUser, not a check in the handler: a per-route
   // hasPermission resolves at the CALLER'S active location, which is a
-  // different question from the one a ticket route is asked. 404, never 403 —
+  // different question from the one a conversation route is asked. 404, never 403 —
   // a 403 after the row is read is an existence oracle.
-  it('404s for a ticket at a location the caller has no access to, writing nothing', async () => {
+  it('404s for a conversation at a location the caller has no access to, writing nothing', async () => {
     setupDb({ tickets: [{ ...T_STUDIO }, { ...T_OTHER_LOCATION }] })
 
     const res = await patch(T_OTHER_LOCATION.id, { remove: ['hatch@example.com'] })

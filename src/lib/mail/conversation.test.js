@@ -1,4 +1,4 @@
-// Tests for the pure ticket identity + lifecycle rules.
+// Tests for the pure conversation identity + lifecycle rules.
 // No DB, no env — every function here is a pure decision function so the
 // webhook can be reasoned about without a database.
 
@@ -12,30 +12,30 @@ import {
 } from './conversation'
 
 describe('resolveTicketAction', () => {
-  it('creates a fresh ticket when nothing threaded', () => {
+  it('creates a fresh conversation when nothing threaded', () => {
     expect(resolveTicketAction(null)).toEqual({ action: 'create', reopenedFrom: null })
   })
 
-  it('creates a fresh ticket when the threaded row has no id', () => {
+  it('creates a fresh conversation when the threaded row has no id', () => {
     expect(resolveTicketAction({ status: 'open' })).toEqual({ action: 'create', reopenedFrom: null })
   })
 
-  it('appends to an open ticket without reopening it', () => {
+  it('appends to an open conversation without reopening it', () => {
     expect(resolveTicketAction({ id: 't1', status: 'open' }))
       .toEqual({ action: 'append', ticketId: 't1', reopen: false })
   })
 
-  it('appends to a pending ticket and reopens it', () => {
+  it('appends to a pending conversation and reopens it', () => {
     expect(resolveTicketAction({ id: 't2', status: 'pending' }))
       .toEqual({ action: 'append', ticketId: 't2', reopen: true })
   })
 
-  it('appends to a solved ticket and reopens it', () => {
+  it('appends to a solved conversation and reopens it', () => {
     expect(resolveTicketAction({ id: 't3', status: 'solved' }))
       .toEqual({ action: 'append', ticketId: 't3', reopen: true })
   })
 
-  it('REOPENS a closed ticket rather than forking a new one', () => {
+  it('REOPENS a closed conversation rather than forking a new one', () => {
     // Richard, 2026-08-07. Closing is internal bookkeeping — the member is never
     // told, so replying to their own old email is just continuing the
     // conversation. Forking here would make our record disagree with the thread
@@ -80,13 +80,13 @@ describe('shouldStampFirstResponse', () => {
 })
 
 describe('ticketSubject', () => {
-  it('takes the inbound subject for a new ticket', () => {
+  it('takes the inbound subject for a new conversation', () => {
     expect(ticketSubject(null, 'Billing question')).toBe('Billing question')
   })
 
-  it('KEEPS the original subject on an existing ticket', () => {
+  it('KEEPS the original subject on an existing conversation', () => {
     // Deliberately unlike mig 394, where subject tracked the most recent inbound.
-    // A ticket is named by the issue that opened it.
+    // A conversation is named by the issue that opened it.
     expect(ticketSubject('Billing question', 'Re: Billing question')).toBe('Billing question')
   })
 
@@ -100,7 +100,7 @@ describe('pickThreadedTicket', () => {
   const a = { ticket_id: 'T1', created_at: '2026-08-01T10:00:00Z' }
   const b = { ticket_id: 'T2', created_at: '2026-08-05T10:00:00Z' }
 
-  it('picks the most recent message’s ticket, whatever order the rows arrive in', () => {
+  it('picks the most recent message’s conversation, whatever order the rows arrive in', () => {
     expect(pickThreadedTicket([a, b])).toBe('T2')
     expect(pickThreadedTicket([b, a])).toBe('T2')
   })
@@ -137,7 +137,7 @@ describe('pickThreadedTicket', () => {
 
 // EMAIL-PARTICIPANTS.8 — WHERE each address first appears on the thread.
 //
-// The bug: a ticket opened by ratesoffice@dublincity.ie was forwarded
+// The bug: a conversation opened by ratesoffice@dublincity.ie was forwarded
 // internally to eleanor.brennan@dublincity.ie, who replied. Every message from
 // then on was with Eleanor, and nothing on screen said so. This is the derived
 // fact the thread needs to render "eleanor… joined this thread" against the
@@ -146,7 +146,7 @@ describe('joinPointsByMessage', () => {
   it('reports nobody for the message that OPENED the thread', () => {
     // The people on the first message did not join a conversation — they
     // started one. "Joined this thread" claims an arrival at something that
-    // already existed, and firing it on every ticket's first message turns the
+    // already existed, and firing it on every conversation's first message turns the
     // marker into "is present", which is neither what it says nor what it is
     // for: its whole job is to make a NEW arrival impossible to miss.
     expect(joinPointsByMessage([
@@ -242,7 +242,7 @@ describe('joinPointsByMessage', () => {
       { id: 'm2', from_email: 'b@x.com', to_emails: ['a@x.com'], bcc_emails: ['secret@x.com'] },
     ])
     // A Bcc'd person is not visibly on the thread, and announcing them leaks
-    // the Bcc to everyone reading the ticket.
+    // the Bcc to everyone reading the conversation.
     expect(points.get('m2')).toEqual(['b@x.com'])
   })
 

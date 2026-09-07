@@ -1,4 +1,4 @@
-// EMAIL-ATTACH.1 — GET /api/email/tickets/[id]/attachments/[attachmentId]
+// EMAIL-ATTACH.1 — GET /api/email/conversations/[id]/attachments/[attachmentId]
 //
 // Mints a short-lived signed DOWNLOAD URL for ONE stored attachment. The
 // `email-attachments` bucket is private, so this route and its `/preview`
@@ -15,7 +15,7 @@
 // under the sanitised filename off the row.
 //
 // ACCESS IS THE TICKET'S ACCESS, DELIBERATELY REUSED — resolved by
-// loadAttachmentForTicket (../_helpers), shared with the preview route so the
+// loadAttachmentForConversation (../_helpers), shared with the preview route so the
 // two can never disagree about who may read `accounts@`. Every refusal is a
 // 404, never a 403.
 
@@ -23,7 +23,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { signedAttachmentUrl } from '@/lib/email-attachments-server'
-import { loadAttachmentForTicket } from '../_helpers'
+import { loadAttachmentForConversation } from '../_helpers'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -40,7 +40,7 @@ export async function GET(request, props) {
 
   const db = createServerClient()
 
-  const loaded = await loadAttachmentForTicket(db, user, params.id, params.attachmentId)
+  const loaded = await loadAttachmentForConversation(db, user, params.id, params.attachmentId)
   if (loaded.response) return loaded.response
   const { attachment } = loaded
 

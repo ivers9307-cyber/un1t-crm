@@ -6,13 +6,13 @@
 //
 //   1. The reply-draft store — the MOBILE mirror of the web store in
 //      src/components/mail/mail-display.js, over AsyncStorage. The SEMANTICS
-//      are the contract: keyed per user + mailbox + ticket, fail CLOSED with
+//      are the contract: keyed per user + mailbox + conversation, fail CLOSED with
 //      no user id, 14-day TTL, 30-entry LRU prune scoped strictly to its own
 //      prefix, empty text = the clear path.
 //   2. The hydration decision — the live-typing-wins clobber trap. Web's
 //      first cut called setText('') when async hydration landed and ERASED
-//      words mid-sentence (TicketReplyBox.jsx); mobile hydration is async by
-//      construction (AsyncStorage + the ticket load), so the same trap is
+//      words mid-sentence (ConversationReplyBox.jsx); mobile hydration is async by
+//      construction (AsyncStorage + the conversation load), so the same trap is
 //      structural here and the rule is tested as a pure function.
 //   3. Thread collapse — all but the newest two messages fold to one-line
 //      rows until tapped.
@@ -88,7 +88,7 @@ const {
 const emailApi = await import('./email-api.js')
 
 const NOW = 1_756_400_000_000 // fixed epoch so TTL tests are exact
-const SCOPE = { userId: 'user-a', mailboxId: 'mb-1', ticketId: 'T-1' }
+const SCOPE = { userId: 'user-a', mailboxId: 'mb-1', conversationId: 'T-1' }
 
 beforeEach(() => {
   store.clear()
@@ -99,20 +99,20 @@ beforeEach(() => {
 /* ─────────────────────────── the key ─────────────────────────── */
 
 describe('replyDraftKey', () => {
-  it('is <prefix><userId>.<mailboxId>.<ticketId> — the exact web key shape', () => {
+  it('is <prefix><userId>.<mailboxId>.<conversationId> — the exact web key shape', () => {
     expect(replyDraftKey(SCOPE)).toBe('un1t.email.reply-draft.user-a.mb-1.T-1')
   })
 
-  it('a missing mailbox uses the "none" sentinel (an orphan ticket still persists, per-user)', () => {
-    expect(replyDraftKey({ userId: 'user-a', ticketId: 'T-1' }))
+  it('a missing mailbox uses the "none" sentinel (an orphan conversation still persists, per-user)', () => {
+    expect(replyDraftKey({ userId: 'user-a', conversationId: 'T-1' }))
       .toBe('un1t.email.reply-draft.user-a.none.T-1')
   })
 
   it('FAILS CLOSED: no userId → no key at all', () => {
-    expect(replyDraftKey({ mailboxId: 'mb-1', ticketId: 'T-1' })).toBeNull()
+    expect(replyDraftKey({ mailboxId: 'mb-1', conversationId: 'T-1' })).toBeNull()
   })
 
-  it('fails closed on a missing ticketId too', () => {
+  it('fails closed on a missing conversationId too', () => {
     expect(replyDraftKey({ userId: 'user-a', mailboxId: 'mb-1' })).toBeNull()
     expect(replyDraftKey(null)).toBeNull()
   })
@@ -137,7 +137,7 @@ describe('draft round trip', () => {
   })
 
   it('fail closed: with no userId a write stores NOTHING and a read answers null', async () => {
-    const bad = { mailboxId: 'mb-1', ticketId: 'T-1' }
+    const bad = { mailboxId: 'mb-1', conversationId: 'T-1' }
     expect(await writeReplyDraft(bad, { text: 'secret words' }, NOW)).toBe(false)
     expect(store.size).toBe(0)
     expect(await readReplyDraft(bad, NOW)).toBeNull()
@@ -158,13 +158,13 @@ describe('draft round trip', () => {
 
   it('clearReplyDraft removes exactly this scope’s entry', async () => {
     await writeReplyDraft(SCOPE, { text: 'mine' }, NOW)
-    await writeReplyDraft({ ...SCOPE, ticketId: 'T-2' }, { text: 'other ticket' }, NOW)
+    await writeReplyDraft({ ...SCOPE, conversationId: 'T-2' }, { text: 'other conversation' }, NOW)
     await clearReplyDraft(SCOPE)
     expect(await readReplyDraft(SCOPE, NOW)).toBeNull()
-    expect(await readReplyDraft({ ...SCOPE, ticketId: 'T-2' }, NOW)).toEqual({ text: 'other ticket', mode: 'reply' })
+    expect(await readReplyDraft({ ...SCOPE, conversationId: 'T-2' }, NOW)).toEqual({ text: 'other conversation', mode: 'reply' })
   })
 
-  it('two users on one device never see each other’s draft for the same ticket', async () => {
+  it('two users on one device never see each other’s draft for the same conversation', async () => {
     await writeReplyDraft(SCOPE, { text: 'A’s half-written reply' }, NOW)
     expect(await readReplyDraft({ ...SCOPE, userId: 'user-b' }, NOW)).toBeNull()
   })
@@ -227,20 +227,20 @@ describe('TTL (14 days)', () => {
 
 describe('prune on write', () => {
   it('a write sweeps TTL-expired siblings', async () => {
-    await writeReplyDraft({ ...SCOPE, ticketId: 'T-old' }, { text: 'ancient' }, NOW - REPLY_DRAFT_TTL_MS - 1000)
+    await writeReplyDraft({ ...SCOPE, conversationId: 'T-old' }, { text: 'ancient' }, NOW - REPLY_DRAFT_TTL_MS - 1000)
     await writeReplyDraft(SCOPE, { text: 'fresh' }, NOW)
-    expect(store.has(replyDraftKey({ ...SCOPE, ticketId: 'T-old' }))).toBe(false)
+    expect(store.has(replyDraftKey({ ...SCOPE, conversationId: 'T-old' }))).toBe(false)
     expect(store.has(replyDraftKey(SCOPE))).toBe(true)
   })
 
   it(`the ${'count'} cap evicts the OLDEST once entries exceed REPLY_DRAFT_MAX_ENTRIES`, async () => {
     for (let i = 0; i < REPLY_DRAFT_MAX_ENTRIES + 2; i++) {
-      await writeReplyDraft({ ...SCOPE, ticketId: `T-${i}` }, { text: `draft ${i}` }, NOW + i)
+      await writeReplyDraft({ ...SCOPE, conversationId: `T-${i}` }, { text: `draft ${i}` }, NOW + i)
     }
     // The two oldest are gone; everything newer survives.
-    expect(store.has(replyDraftKey({ ...SCOPE, ticketId: 'T-0' }))).toBe(false)
-    expect(store.has(replyDraftKey({ ...SCOPE, ticketId: 'T-1' }))).toBe(false)
-    expect(store.has(replyDraftKey({ ...SCOPE, ticketId: 'T-2' }))).toBe(true)
+    expect(store.has(replyDraftKey({ ...SCOPE, conversationId: 'T-0' }))).toBe(false)
+    expect(store.has(replyDraftKey({ ...SCOPE, conversationId: 'T-1' }))).toBe(false)
+    expect(store.has(replyDraftKey({ ...SCOPE, conversationId: 'T-2' }))).toBe(true)
     const draftKeys = [...store.keys()].filter(k => k.startsWith(REPLY_DRAFT_PREFIX))
     expect(draftKeys.length).toBe(REPLY_DRAFT_MAX_ENTRIES)
   })
@@ -248,7 +248,7 @@ describe('prune on write', () => {
   it('🔴 the prune only ever touches its own prefix — a stranger’s key survives', async () => {
     store.set('physical_location_snapshot_v1', 'not ours')
     store.set('un1t.mail.density', 'compact')
-    await writeReplyDraft({ ...SCOPE, ticketId: 'T-old' }, { text: 'ancient' }, NOW - REPLY_DRAFT_TTL_MS - 1000)
+    await writeReplyDraft({ ...SCOPE, conversationId: 'T-old' }, { text: 'ancient' }, NOW - REPLY_DRAFT_TTL_MS - 1000)
     await writeReplyDraft(SCOPE, { text: 'fresh' }, NOW)
     expect(store.get('physical_location_snapshot_v1')).toBe('not ours')
     expect(store.get('un1t.mail.density')).toBe('compact')
@@ -264,7 +264,7 @@ describe('prune on write', () => {
 describe('clearAllReplyDrafts', () => {
   it('removes every draft, counts them, and leaves foreign keys alone', async () => {
     await writeReplyDraft(SCOPE, { text: 'one' }, NOW)
-    await writeReplyDraft({ ...SCOPE, ticketId: 'T-2' }, { text: 'two' }, NOW)
+    await writeReplyDraft({ ...SCOPE, conversationId: 'T-2' }, { text: 'two' }, NOW)
     store.set('unrelated', 'stays')
     expect(await clearAllReplyDrafts()).toBe(2)
     expect([...store.keys()]).toEqual(['unrelated'])

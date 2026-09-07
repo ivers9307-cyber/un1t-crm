@@ -13,7 +13,7 @@
 //
 // 2. Archiving REMOVES THE ROW and moves on. Waiting for the 60s poll to clear
 //    a conversation the operator has just dealt with is what turns a list back
-//    into a queue — which is the thing the ticket surface already is.
+//    into a queue — which is the thing the conversation surface already is.
 //
 // 3. The needs-reply filter asks the SERVER for needs_reply. A client-side
 //    filter over the loaded page would silently disagree with the badge beside
@@ -119,7 +119,7 @@ function stubNetwork({ conversations = [CONV_A, CONV_B], needsReplyCount = 1 } =
     }
     // MAIL-RENAME.1 — the detail GET and the archive/seen/spam actions now
     // share the same `/api/email/mail/{id}` prefix (they used to live on the
-    // separate `/api/email/tickets/` namespace, which never collided). The
+    // separate `/api/email/conversations/` namespace, which never collided). The
     // suffixed actions must be matched FIRST, or the generic detail branch
     // below swallows them and hands back a thread body with no `conversation`/
     // `writeback_notice`, which is silent to `calls` but wrong to the caller.
@@ -246,7 +246,7 @@ describe('MailSurface — the filter strip', () => {
 })
 
 describe('MailSurface — opening a conversation', () => {
-  it('reads the thread through the ticket surface’s own detail route', async () => {
+  it('reads the thread through the conversation surface’s own detail route', async () => {
     // A second read path would be a second sanitiser decision, a second
     // attachment shape and a second reply-audience derivation.
     renderSurface()
@@ -1113,7 +1113,7 @@ describe('MailSurface — deep link (?c=)', () => {
     currentSearchParams = new URLSearchParams(`c=${OFF_LIST_UUID}`)
     renderSurface()
     // The deep link selects this id (thread pane header) even though it is
-    // not in the stubbed list at all — the fallback ticket-detail response
+    // not in the stubbed list at all — the fallback conversation-detail response
     // below still names it "Membership freeze".
     await screen.findByText('Message on Membership freeze')
     expect(listCalls().every(c => !c.url.includes('c='))).toBe(true)
@@ -1122,7 +1122,7 @@ describe('MailSurface — deep link (?c=)', () => {
 
   // Reconciliation: the synthesized `{ id }` selection the mount effect seeds
   // carries none of the list row's own fields (unread, archived, …) —
-  // loadThread's ticket-detail response doesn't carry them either (confirmed
+  // loadThread's conversation-detail response doesn't carry them either (confirmed
   // by reading src/app/api/email/mail/[id]/route.js). Once the list DOES
   // contain the row, an unread one must be marked read exactly as a click
   // would — an operator landing here from a link should not still see it bold.
@@ -1182,7 +1182,7 @@ describe('MailSurface — deep link (?c=)', () => {
     await waitFor(() => expect(seenCalls.length).toBeGreaterThan(0))
     expect(seenCalls[0].url).toBe(`/api/email/mail/${DEEP_LINK_UUID}/seen`)
     expect(seenCalls[0].body).toEqual({ seen: true })
-    // The toggle itself renders coherently afterwards — the ticket-detail
+    // The toggle itself renders coherently afterwards — the conversation-detail
     // payload carries no `unread` flag, so without this fix the pane could
     // show "Mark unread" for a conversation that was never actually marked.
     await screen.findByRole('button', { name: 'Mark unread' })

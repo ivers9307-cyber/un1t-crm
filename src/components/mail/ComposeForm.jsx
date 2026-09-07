@@ -1,21 +1,21 @@
 'use client'
 
-// EMAIL-TICKET.5 — starting a conversation from the ticket inbox.
+// EMAIL-TICKET.5 — starting a conversation from the conversation inbox.
 //
-// Every ticket used to begin with an inbound email: staff could only ever
+// Every conversation used to begin with an inbound email: staff could only ever
 // answer what a member had already sent. This is the other half — chase an
 // unanswered enquiry, follow up a billing query, email the member who phoned.
 //
 // WHAT IT IS, AND IS NOT
 // It is a TICKET whose first message is outbound. There is no separate "sent
-// mail" concept: POST /compose creates the ticket, the parent selects it, and
-// from that moment it is an ordinary ticket in the ordinary queue.
+// mail" concept: POST /compose creates the conversation, the parent selects it, and
+// from that moment it is an ordinary conversation in the ordinary queue.
 //
 // RECIPIENTS (EMAIL-CC.1). Several To addresses, plus Cc and Bcc behind the
 // editor's own toggle. Unlike a reply, NOTHING here is derived: every address
 // on a composed email is one a person typed, because nobody wrote to us first.
 // That is why the route logs the whole set to audit_events rather than only
-// the additions — a composed email is the one place ticket mail can reach an
+// the additions — a composed email is the one place conversation mail can reach an
 // address the member never involved, so the act carries the sender's name.
 //
 // TWO THINGS THIS FILE IS CAREFUL ABOUT
@@ -134,13 +134,13 @@ export default function ComposeForm({ mailboxes = [], initialMailboxId = null, o
         // email IS with the recipient and only the filing failed. The modal
         // stays open with the copy above ("Do not resend") and the draft — the
         // only remaining record of what they received — while the parent
-        // quietly refetches the queue: when the ticket row WAS created, it
+        // quietly refetches the queue: when the conversation row WAS created, it
         // should appear behind this modal rather than look like nothing
         // happened.
         if (body?.data?.sent) onSentUnfiled?.()
         return
       }
-      // The parent owns closing and opening the new ticket — the modal does
+      // The parent owns closing and opening the new conversation — the modal does
       // not know what a queue is.
       onSent?.(body.data?.ticket || null, body.data?.ticket_id || null)
     } catch {
