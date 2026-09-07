@@ -122,6 +122,30 @@ describe('launchHostCampaign — non_openers audience', () => {
     await launch(db)
     expect(resolveHostRecipients).toHaveBeenCalledWith(db, HOST_ID, expect.objectContaining({ nonOpenersOf: 'p0000000-0000-0000-0000-0000000000p1', mailingListOnly: false, audienceEventId: null }))
   })
+
+  it('a stale audience_event_id on a non_openers row never reaches the resolver — audienceEventId is forced null', async () => {
+    // A non_openers campaign cloned from (or predating a fix to) an event
+    // campaign can carry a leftover audience_event_id. If that leaked
+    // through, resolverOptionsFor would hand the resolver BOTH options and
+    // its event branch (which can return []) would win over nonOpenersOf.
+    const { db } = makeDb(routeFor({
+      campaign: {
+        id: CAMPAIGN_ID,
+        status: 'draft',
+        email_type: 'marketing',
+        audience_kind: 'non_openers',
+        audience_event_id: 'ev-stale',
+        audience_campaign_id: 'p0000000-0000-0000-0000-0000000000p1',
+      },
+    }))
+    await launch(db)
+    expect(resolveHostRecipients).toHaveBeenCalledWith(db, HOST_ID, {
+      audienceEventId: null,
+      mailingListOnly: false,
+      emailType: 'marketing',
+      nonOpenersOf: 'p0000000-0000-0000-0000-0000000000p1',
+    })
+  })
 })
 
 describe('launchHostCampaign — happy path', () => {

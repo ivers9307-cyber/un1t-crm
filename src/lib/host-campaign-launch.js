@@ -119,12 +119,17 @@ export function hostSendBlockReason(host, campaign) {
  * The resolver options a campaign row implies. HOST-GROWTH.11 — audience_kind
  * picks the population. Legacy-row guard: an event id on a non-mailing_list
  * row always means a per-event audience (pre-mig-460 writers left
- * audience_kind at its 'all' default). HOST-EMAILS.2 — 'non_openers' resolves
- * to the reminder audience via audience_campaign_id (the parent campaign).
+ * audience_kind at its 'all' default) — but a 'non_openers' row is resolved
+ * by audience_campaign_id alone, so its audienceEventId is forced to null
+ * too: a stale audience_event_id left on a non_openers row (e.g. cloned from
+ * an event campaign) would otherwise produce BOTH options, and the resolver's
+ * event branch would run first and could return [] before nonOpenersOf is
+ * ever consulted. HOST-EMAILS.2 — 'non_openers' resolves to the reminder
+ * audience via audience_campaign_id (the parent campaign).
  * @param {{ audience_kind?: string, audience_event_id?: string|null, audience_campaign_id?: string|null, email_type?: string }} campaign
  */
 export function resolverOptionsFor(campaign) {
-  const audienceEventId = campaign.audience_kind !== 'mailing_list' ? campaign.audience_event_id || null : null
+  const audienceEventId = campaign.audience_kind !== 'mailing_list' && campaign.audience_kind !== 'non_openers' ? campaign.audience_event_id || null : null
   return {
     audienceEventId,
     mailingListOnly: campaign.audience_kind === 'mailing_list',
@@ -144,7 +149,7 @@ export function resolverOptionsFor(campaign) {
  * count behind the report page's button), so the button and the send can't
  * disagree.
  * @param {object} db  service-role client
- * @param {{ hostId: string, campaign: { id: string, audience_kind?: string, audience_event_id?: string|null, email_type?: string } }} args
+ * @param {{ hostId: string, campaign: { id: string, audience_kind?: string, audience_event_id?: string|null, audience_campaign_id?: string|null, email_type?: string } }} args
  * @returns {Promise<{ missed: Array<{ contact_id: string, email: string }>, totalRows: number }>}
  */
 export async function resolveMissedRecipients(db, { hostId, campaign }) {

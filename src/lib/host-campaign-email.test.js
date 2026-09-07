@@ -436,13 +436,40 @@ describe('resolveHostRecipients — nonOpenersOf', () => {
     { contact_id: 'c1', campaign_id: PARENT, status: 'sent', delivered_at: '2026-09-01T00:00:00Z', opened_at: null, clicked_at: null, bounced_at: null, complained_at: null, unsubscribed_at: null },
     { contact_id: 'c2', campaign_id: PARENT, status: 'sent', delivered_at: '2026-09-01T00:00:00Z', opened_at: '2026-09-02T00:00:00Z', clicked_at: null, bounced_at: null, complained_at: null, unsubscribed_at: null },
     { contact_id: 'c3', campaign_id: PARENT, status: 'sent', delivered_at: '2026-09-01T00:00:00Z', opened_at: null, clicked_at: null, bounced_at: '2026-09-01T01:00:00Z', complained_at: null, unsubscribed_at: null },
+    // c5 — delivered/unopened/unclicked/unbounced/uncomplained/unsubscribed:
+    // qualifies under the sends-history filter, so only the normal
+    // emailability gate (host_contacts.marketing_consent, below) can exclude
+    // it. Pins that the gate actually runs — see HOST_CONTACTS.
+    { contact_id: 'c5', campaign_id: PARENT, status: 'sent', delivered_at: '2026-09-01T00:00:00Z', opened_at: null, clicked_at: null, bounced_at: null, complained_at: null, unsubscribed_at: null },
+    // c6 — never delivered (delivered_at null). Excluded by the resolver's
+    // `.not('delivered_at', 'is', null)` — this fake only drops the row when
+    // that exact op is present (see applySendsOps' 'not'/'is' branch), so a
+    // resolver that forgot the filter would leak c6 through.
+    { contact_id: 'c6', campaign_id: PARENT, status: 'sent', delivered_at: null, opened_at: null, clicked_at: null, bounced_at: null, complained_at: null, unsubscribed_at: null },
+    // c7 — complained. Excluded by `.is('complained_at', null)`.
+    { contact_id: 'c7', campaign_id: PARENT, status: 'sent', delivered_at: '2026-09-01T00:00:00Z', opened_at: null, clicked_at: null, bounced_at: null, complained_at: '2026-09-01T02:00:00Z', unsubscribed_at: null },
+    // c8 — unsubscribed. Excluded by `.is('unsubscribed_at', null)`.
+    { contact_id: 'c8', campaign_id: PARENT, status: 'sent', delivered_at: '2026-09-01T00:00:00Z', opened_at: null, clicked_at: null, bounced_at: null, complained_at: null, unsubscribed_at: '2026-09-01T03:00:00Z' },
   ]
 
-  const HOST_CONTACTS = ['c1', 'c2', 'c3', 'c4'].map((id) => ({
-    contact_id: id,
-    marketing_consent: true,
-    contact: { id, email: `${id}@x.ie`, email_marketing: true, email_status: 'active', email_suppressed_at: null },
-  }))
+  const HOST_CONTACTS = [
+    ...['c1', 'c2', 'c3', 'c4'].map((id) => ({
+      contact_id: id,
+      marketing_consent: true,
+      contact: { id, email: `${id}@x.ie`, email_marketing: true, email_status: 'active', email_suppressed_at: null },
+    })),
+    // c5 passes every sends-history filter above — only a withdrawn
+    // host_contacts.marketing_consent (the normal emailability gate) can
+    // still keep it out. If resolveHostRecipients's isEmailable() call were
+    // deleted, c5 would leak through and the "then the normal emailability
+    // gate" test's `toEqual(['c1'])` assertion below would fail (c5 would
+    // appear in the result).
+    {
+      contact_id: 'c5',
+      marketing_consent: false,
+      contact: { id: 'c5', email: 'c5@x.ie', email_marketing: true, email_status: 'active', email_suppressed_at: null },
+    },
+  ]
 
   function applySendsOps(rows, ops) {
     return rows.filter((row) => ops.every((o) => {
@@ -489,6 +516,12 @@ describe('resolveHostRecipients — nonOpenersOf', () => {
   it('only the parent\'s delivered, unopened, unclicked, unbounced rows, then the normal emailability gate', async () => {
     const { db, statements } = makeDb(routeFor())
     const out = await resolveHostRecipients(db, HOST_ID, { nonOpenersOf: PARENT })
+    // The data assertion carries the weight: c2 (opened), c3 (bounced), c6
+    // (never delivered), c7 (complained) and c8 (unsubscribed) are excluded
+    // by the sends-history filter; c5 passes that filter but is excluded
+    // ONLY by host_contacts.marketing_consent === false — deleting the
+    // resolver's isEmailable() call would let c5 through and turn this
+    // assertion red.
     expect(out.map((r) => r.contact_id)).toEqual(['c1'])
 
     const sendsQuery = statements.find((s) => s.table === 'host_campaign_sends')
@@ -497,7 +530,8 @@ describe('resolveHostRecipients — nonOpenersOf', () => {
     for (const col of ['opened_at', 'clicked_at', 'bounced_at', 'complained_at', 'unsubscribed_at']) {
       expect(sendsQuery.ops.some((o) => o.method === 'is' && o.args[0] === col && o.args[1] === null)).toBe(true)
     }
-    expect(sendsQuery.ops.some((o) => o.method === 'not' && o.args[0] === 'delivered_at')).toBe(true)
+    // Full args, not just the column: `.not('delivered_at', 'is', null)`.
+    expect(sendsQuery.ops.some((o) => o.method === 'not' && o.args[0] === 'delivered_at' && o.args[1] === 'is' && o.args[2] === null)).toBe(true)
 
     const parentRead = statements.find((s) => s.table === 'host_campaigns')
     expect(hasEq(parentRead, 'id', PARENT)).toBe(true)
