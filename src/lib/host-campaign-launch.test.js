@@ -15,7 +15,7 @@ vi.mock('@/lib/qstash', () => ({
   HOST_CAMPAIGNS_WORKER_PATH: '/api/webhooks/qstash/host-campaigns',
 }))
 
-import { launchHostCampaign, LAUNCH_MESSAGES, LAUNCH_GATE_REASONS } from './host-campaign-launch.js'
+import { launchHostCampaign, resolveMissedRecipients, LAUNCH_MESSAGES, LAUNCH_GATE_REASONS } from './host-campaign-launch.js'
 import { resolveHostRecipients } from '@/lib/host-campaign-email'
 import { publishQueuePush, HOST_CAMPAIGNS_WORKER_PATH } from '@/lib/qstash'
 
@@ -329,5 +329,186 @@ describe('launchHostCampaign — refusals (nothing enqueued, nothing published)'
     expect(r).toMatchObject({ ok: false, reason: 'enqueue_failed', status: 500, error: 'Queueing failed: chunk 2 failed' })
     expect(publishQueuePush).not.toHaveBeenCalled()
     expect(statements.filter((s) => s.table === 'host_campaign_sends')).toHaveLength(2)
+  })
+})
+
+// HOST-RESEND.1 — trigger 'resend_missed': the same gates as Send now, then
+// the recipient list is diffed against the campaign's own send rows. A
+// contact with a 'sent' row is never queued again; a contact the resolver
+// returns NOW with no 'sent' row (never queued, or a 'failed' row of any
+// reason) is queued through a MERGING upsert (ignoreDuplicates: false) that
+// resets an old failed row to pending. The CAS is from 'sent', and
+// recipient_count becomes the row total after the enqueue.
+describe('launchHostCampaign — resend_missed', () => {
+  const SENT_CAMPAIGN = { id: CAMPAIGN_ID, status: 'sent', email_type: 'marketing', audience_kind: 'all', audience_event_id: null }
+
+  // Existing send rows for the campaign: c1 sent, c2 failed (send_error),
+  // c3 failed (no_host_consent); the resolver returns c1, c2, c3 and a
+  // never-queued c4.
+  const EXISTING = [
+    { contact_id: 'c1', status: 'sent' },
+    { contact_id: 'c2', status: 'failed' },
+    { contact_id: 'c3', status: 'failed' },
+  ]
+
+  function resendRoute(cfg = {}) {
+    const base = routeFor({ campaign: SENT_CAMPAIGN, ...cfg })
+    return (state) => {
+      if (state.table === 'host_campaign_sends') {
+        const first = state.ops[0]
+        if (first.method === 'select') {
+          if (cfg.existingErr) return { data: null, error: cfg.existingErr }
+          return { data: cfg.existing ?? EXISTING, error: null }
+        }
+        return { error: cfg.enqueueErr ?? null }
+      }
+      return base(state)
+    }
+  }
+
+  beforeEach(() => {
+    resolveHostRecipients.mockResolvedValue([
+      { contact_id: 'c1', email: 'a@x.ie' },
+      { contact_id: 'c2', email: 'b@x.ie' },
+      { contact_id: 'c3', email: 'c@x.ie' },
+      { contact_id: 'c4', email: 'd@x.ie' },
+    ])
+  })
+
+  it('queues only the contacts with no sent row, resets failed rows through a merging upsert, CASes from sent', async () => {
+    const { db, statements } = makeDb(resendRoute())
+    const r = await launch(db, 'resend_missed')
+    expect(r).toEqual({ ok: true, recipientCount: 3 })
+
+    const existingRead = statements.find((s) => s.table === 'host_campaign_sends' && op(s, 'select'))
+    expect(hasEq(existingRead, 'campaign_id', CAMPAIGN_ID)).toBe(true)
+
+    const cas = statements.find((s) => s.table === 'host_campaigns' && op(s, 'update'))
+    // 3 existing rows + c4 new = 4 rows after the enqueue.
+    expect(op(cas, 'update').args[0]).toEqual({ status: 'sending', recipient_count: 4 })
+    expect(hasEq(cas, 'status', 'sent')).toBe(true)
+    expect(hasEq(cas, 'id', CAMPAIGN_ID)).toBe(true)
+
+    const enqueue = statements.find((s) => s.table === 'host_campaign_sends' && op(s, 'upsert'))
+    expect(op(enqueue, 'upsert').args[0]).toEqual([
+      { campaign_id: CAMPAIGN_ID, contact_id: 'c2', email: 'b@x.ie', status: 'pending', failed_reason: null, claimed_at: null },
+      { campaign_id: CAMPAIGN_ID, contact_id: 'c3', email: 'c@x.ie', status: 'pending', failed_reason: null, claimed_at: null },
+      { campaign_id: CAMPAIGN_ID, contact_id: 'c4', email: 'd@x.ie', status: 'pending', failed_reason: null, claimed_at: null },
+    ])
+    expect(op(enqueue, 'upsert').args[1]).toEqual({ onConflict: 'campaign_id,contact_id', ignoreDuplicates: false })
+
+    // The kick carries its own dedup id: the original launch's id must not
+    // swallow it inside QStash's dedup window. Still dash-only.
+    expect(publishQueuePush).toHaveBeenCalledTimes(1)
+    const [{ deduplicationId, body, path }] = publishQueuePush.mock.calls[0]
+    expect(path).toBe(HOST_CAMPAIGNS_WORKER_PATH)
+    expect(body).toEqual({ campaignId: CAMPAIGN_ID })
+    expect(deduplicationId).toMatch(new RegExp(`^host-campaign-${CAMPAIGN_ID}-resend-\\d+$`))
+    expect(deduplicationId).not.toContain(':')
+  })
+
+  it('the existing-rows read pages past 1,000 rows', async () => {
+    const fullPage = Array.from({ length: 1000 }, (_, i) => ({ contact_id: `s${i}`, status: 'sent' }))
+    let reads = 0
+    const { db, statements } = makeDb((state) => {
+      if (state.table === 'host_campaign_sends' && state.ops[0].method === 'select') {
+        reads += 1
+        return { data: reads === 1 ? fullPage : [{ contact_id: 'c1', status: 'sent' }], error: null }
+      }
+      return resendRoute()(state)
+    })
+    const r = await launch(db, 'resend_missed')
+    expect(r).toEqual({ ok: true, recipientCount: 3 })
+    const readStatements = statements.filter((s) => s.table === 'host_campaign_sends' && op(s, 'select'))
+    expect(readStatements).toHaveLength(2)
+    expect(op(readStatements[0], 'range').args).toEqual([0, 999])
+    expect(op(readStatements[1], 'range').args).toEqual([1000, 1999])
+    const cas = statements.find((s) => s.table === 'host_campaigns' && op(s, 'update'))
+    expect(op(cas, 'update').args[0].recipient_count).toBe(1001 + 3)
+  })
+
+  it('nobody_missed 409 when every emailable contact already has a sent row (nothing written, no kick)', async () => {
+    resolveHostRecipients.mockResolvedValue([{ contact_id: 'c1', email: 'a@x.ie' }])
+    const { db, statements } = makeDb(resendRoute())
+    const r = await launch(db, 'resend_missed')
+    expect(r).toMatchObject({ ok: false, reason: 'nobody_missed', status: 409, error: 'Everyone who can be emailed already received this.' })
+    expect(statements.some((s) => s.table === 'host_campaigns' && op(s, 'update'))).toBe(false)
+    expect(statements.some((s) => s.table === 'host_campaign_sends' && op(s, 'upsert'))).toBe(false)
+    expect(publishQueuePush).not.toHaveBeenCalled()
+  })
+
+  it('nobody_missed 409 when the resolver returns nobody at all', async () => {
+    resolveHostRecipients.mockResolvedValue([])
+    const { db } = makeDb(resendRoute())
+    const r = await launch(db, 'resend_missed')
+    expect(r).toMatchObject({ ok: false, reason: 'nobody_missed', status: 409 })
+    expect(publishQueuePush).not.toHaveBeenCalled()
+  })
+
+  it('not_sent 409 when the campaign is not in sent (draft / sending / scheduled), before any gate', async () => {
+    for (const status of ['draft', 'sending', 'scheduled', 'failed']) {
+      vi.clearAllMocks()
+      const { db, statements } = makeDb(resendRoute({ campaign: { ...SENT_CAMPAIGN, status } }))
+      const r = await launch(db, 'resend_missed')
+      expect(r).toMatchObject({ ok: false, reason: 'not_sent', status: 409, error: 'Only a sent email can be resent.' })
+      expect(statements.map((s) => s.table)).toEqual(['host_campaigns'])
+      expect(resolveHostRecipients).not.toHaveBeenCalled()
+    }
+  })
+
+  it('the Send now gates still apply: sender_not_verified, no_stream, daily_cap', async () => {
+    let r = await launch(makeDb(resendRoute({ host: { ...HOST_ROW, sender_domain_verified: false } })).db, 'resend_missed')
+    expect(r).toMatchObject({ ok: false, reason: 'sender_not_verified', status: 409 })
+    r = await launch(makeDb(resendRoute({ host: { ...HOST_ROW, postmark_stream_id: null } })).db, 'resend_missed')
+    expect(r).toMatchObject({ ok: false, reason: 'no_stream', status: 409 })
+    r = await launch(makeDb(resendRoute({ sentToday: 2 })).db, 'resend_missed')
+    expect(r).toMatchObject({ ok: false, reason: 'daily_cap', status: 409 })
+    expect(publishQueuePush).not.toHaveBeenCalled()
+  })
+
+  it('resolve_failed 500 when the existing-rows read errors (no write)', async () => {
+    const { db, statements } = makeDb(resendRoute({ existingErr: { message: 'sends read broke' } }))
+    const r = await launch(db, 'resend_missed')
+    expect(r).toMatchObject({ ok: false, reason: 'resolve_failed', status: 500 })
+    expect(r.error).toContain('sends read broke')
+    expect(statements.some((s) => op(s, 'update') || op(s, 'upsert'))).toBe(false)
+  })
+
+  it('cas_lost 409 with resend wording when the sent→sending CAS matches no row', async () => {
+    const { db } = makeDb(resendRoute({ casRows: [] }))
+    const r = await launch(db, 'resend_missed')
+    expect(r).toMatchObject({ ok: false, reason: 'cas_lost', status: 409, error: 'This email is already being resent.' })
+    expect(publishQueuePush).not.toHaveBeenCalled()
+  })
+
+  it('not_found 404 for another host\'s campaign', async () => {
+    const { db } = makeDb(resendRoute({ campaign: null }))
+    const r = await launch(db, 'resend_missed')
+    expect(r).toMatchObject({ ok: false, reason: 'not_found', status: 404 })
+  })
+})
+
+describe('resolveMissedRecipients', () => {
+  it('returns the missed list and the post-enqueue row total, in resolver order', async () => {
+    resolveHostRecipients.mockResolvedValue([
+      { contact_id: 'c1', email: 'a@x.ie' },
+      { contact_id: 'c2', email: 'b@x.ie' },
+      { contact_id: 'c9', email: 'z@x.ie' },
+    ])
+    const { db } = makeDb((state) => {
+      if (state.table === 'host_campaign_sends') return { data: [{ contact_id: 'c1', status: 'sent' }, { contact_id: 'c2', status: 'failed' }, { contact_id: 'c5', status: 'failed' }], error: null }
+      return {}
+    })
+    const r = await resolveMissedRecipients(db, {
+      hostId: HOST_ID,
+      campaign: { id: CAMPAIGN_ID, email_type: 'utility', audience_kind: 'event', audience_event_id: 'ev-1' },
+    })
+    expect(r).toEqual({ missed: [{ contact_id: 'c2', email: 'b@x.ie' }, { contact_id: 'c9', email: 'z@x.ie' }], totalRows: 4 })
+    expect(resolveHostRecipients).toHaveBeenCalledWith(db, HOST_ID, { audienceEventId: 'ev-1', mailingListOnly: false, emailType: 'utility' })
+  })
+
+  it('throws (never returns a partial list) when the rows read errors', async () => {
+    const { db } = makeDb((state) => (state.table === 'host_campaign_sends' ? { data: null, error: { message: 'nope' } } : {}))
+    await expect(resolveMissedRecipients(db, { hostId: HOST_ID, campaign: { id: CAMPAIGN_ID } })).rejects.toThrow(/nope/)
   })
 })

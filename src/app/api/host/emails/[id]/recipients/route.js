@@ -2,12 +2,21 @@
 // the campaign with its stats (host_campaign_stats(), mig 590) and every send
 // row with its DERIVED outcome (host-campaign-outcome.js). Tenancy:
 // getCurrentHost() + .eq('host_id') on the campaign → 404, no enumeration.
+//
+// HOST-RESEND.1 — a SENT campaign also carries `missed_count`: how many
+// contacts a "Resend to those who missed it" would reach right now, from the
+// SAME helper the resend route enqueues with (resolveMissedRecipients), so
+// the button's number and the send can't disagree. Null (never 0) when the
+// helper fails, and null for any non-sent status; `resent_at` (mig 593)
+// rides along for the header.
 
 import { NextResponse } from 'next/server'
 import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
 import { loadHostCampaignStats, ZERO_STATS } from '@/lib/host-campaign-stats'
 import { deriveOutcome, outcomeAt, failureCopy } from '@/lib/host-campaign-outcome'
+import { resolveMissedRecipients } from '@/lib/host-campaign-launch'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -38,7 +47,7 @@ export async function GET(_request, props) {
   const db = createServerClient()
   const { data: campaign, error: campaignErr } = await db
     .from('host_campaigns')
-    .select('id, subject, status, email_type, audience_kind, audience_event_id, sent_at, created_at, recipient_count, sent_count, scheduled_for')
+    .select('id, subject, status, email_type, audience_kind, audience_event_id, sent_at, resent_at, created_at, recipient_count, sent_count, scheduled_for')
     .eq('id', params.id)
     .eq('host_id', session.host.id)
     .maybeSingle()
@@ -50,6 +59,16 @@ export async function GET(_request, props) {
   // recipient list (the unknown-count-never-renders-0 rule).
   const { byCampaign, error: statsErr } = await loadHostCampaignStats(db, session.host.id)
   const stats = statsErr ? null : (byCampaign.get(campaign.id) || ZERO_STATS)
+
+  // Unknown never renders 0: a failed diff hides the count, not the button.
+  let missedCount = null
+  if (campaign.status === 'sent') {
+    try {
+      missedCount = (await resolveMissedRecipients(db, { hostId: session.host.id, campaign })).missed.length
+    } catch (err) {
+      logError('host-campaigns', 'missed-count diff failed', { campaign_id: campaign.id, error: err?.message || String(err) })
+    }
+  }
 
   const recipients = []
   for (let from = 0; from < MAX_ROWS; from += PAGE) {
@@ -88,5 +107,5 @@ export async function GET(_request, props) {
     if (!page || page.length < PAGE) break
   }
 
-  return NextResponse.json({ success: true, data: { campaign: { ...campaign, stats }, recipients } })
+  return NextResponse.json({ success: true, data: { campaign: { ...campaign, stats, missed_count: missedCount }, recipients } })
 }

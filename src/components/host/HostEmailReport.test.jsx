@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, cleanup, screen, fireEvent } from '@testing-library/react'
-import HostEmailReport, { statTiles, filterRecipients, FILTERS, outcomeChipClass, formatWhen } from './HostEmailReport.jsx'
+import HostEmailReport, { statTiles, filterRecipients, FILTERS, outcomeChipClass, formatWhen, resendLabel, resendConfirmCopy } from './HostEmailReport.jsx'
 
 afterEach(() => {
   cleanup()
@@ -205,5 +205,122 @@ describe('HostEmailReport (render)', () => {
     })
     render(<HostEmailReport campaignId="c1" />)
     expect(await screen.findByText('Nothing delivered yet. If this persists, contact UN1T.')).toBeTruthy()
+  })
+})
+
+// HOST-RESEND.1 — the header button, the confirm, the POST and the re-fetch.
+describe('resend copy', () => {
+  it('labels with the count, or without one when unknown', () => {
+    expect(resendLabel(44)).toBe('Resend to 44 who missed it')
+    expect(resendLabel(1)).toBe('Resend to 1 who missed it')
+    expect(resendLabel(null)).toBe('Resend to those who missed it')
+    expect(resendLabel(undefined)).toBe('Resend to those who missed it')
+  })
+  it('confirm copy pluralises and never uses a dash', () => {
+    expect(resendConfirmCopy(44)).toBe('Send this email again to the 44 people who did not receive it? Anyone who already got it will not be emailed twice.')
+    expect(resendConfirmCopy(1)).toContain('the 1 person who')
+    expect(resendConfirmCopy(null)).toContain('everyone who did not receive it')
+    for (const n of [44, 1, null]) {
+      expect(resendConfirmCopy(n)).not.toMatch(/[—–]/)
+      expect(resendLabel(n)).not.toMatch(/[—–]/)
+    }
+  })
+})
+
+describe('HostEmailReport (resend)', () => {
+  const sentCampaign = (extra = {}) => ({
+    id: 'c1', subject: 'Session 6 & 7', status: 'sent', audience_kind: 'all',
+    sent_at: '2026-09-04T10:58:14Z', resent_at: null, missed_count: 44,
+    stats: { sent: 120, delivered: 118, opened: 40, clicked: 9, bounced: 1, complained: 0, unsubscribed: 1, failed: 4 },
+    ...extra,
+  })
+  const okReport = (campaign) => ({ ok: true, status: 200, json: async () => ({ success: true, data: { campaign, recipients: [] } }) })
+
+  // fetch fake keyed on method: GETs return the report (first then second
+  // fixture), the POST returns `post`. Records every call.
+  function stubFetch({ reports, post }) {
+    let gets = 0
+    const fn = vi.fn(async (url, init) => {
+      if (init?.method === 'POST') return post
+      const r = reports[Math.min(gets, reports.length - 1)]
+      gets += 1
+      return r
+    })
+    vi.stubGlobal('fetch', fn)
+    return fn
+  }
+
+  it('a sent campaign shows "Sent <first>" and the button with the missed count', async () => {
+    stubFetch({ reports: [okReport(sentCampaign())] })
+    render(<HostEmailReport campaignId="c1" />)
+    expect(await screen.findByText('Resend to 44 who missed it')).toBeTruthy()
+    expect(screen.getByText(/^Sent 4 Sept, \d{2}:\d{2} · All contacts$/)).toBeTruthy()
+    expect(screen.queryByText(/Resent/)).toBeNull()
+  })
+
+  it('after a resend the header reads "Sent <first> · Resent <latest>"', async () => {
+    stubFetch({ reports: [okReport(sentCampaign({ resent_at: '2026-09-07T10:38:00Z', missed_count: 0 }))] })
+    render(<HostEmailReport campaignId="c1" />)
+    await screen.findByText('Sent')
+    expect(screen.getByText(/^Sent 4 Sept, \d{2}:\d{2} · Resent 7 Sept, \d{2}:\d{2} · All contacts$/)).toBeTruthy()
+  })
+
+  it('hides the button when nobody missed it (0), and for a campaign that is not sent', async () => {
+    stubFetch({ reports: [okReport(sentCampaign({ missed_count: 0 }))] })
+    render(<HostEmailReport campaignId="c1" />)
+    await screen.findByText('Sent')
+    expect(screen.queryByRole('button', { name: /Resend/ })).toBeNull()
+    cleanup()
+    stubFetch({ reports: [okReport(sentCampaign({ status: 'sending', missed_count: 44 }))] })
+    render(<HostEmailReport campaignId="c1" />)
+    await screen.findByText('Still sending, numbers update as it goes.')
+    expect(screen.queryByRole('button', { name: /Resend/ })).toBeNull()
+  })
+
+  it('an unknown count (null) keeps the button without a number', async () => {
+    stubFetch({ reports: [okReport(sentCampaign({ missed_count: null }))] })
+    render(<HostEmailReport campaignId="c1" />)
+    expect(await screen.findByText('Resend to those who missed it')).toBeTruthy()
+  })
+
+  it('confirm → POST resend-missed → re-fetches the report', async () => {
+    const fetchFn = stubFetch({
+      reports: [okReport(sentCampaign()), okReport(sentCampaign({ status: 'sending', missed_count: 0 }))],
+      post: { ok: true, status: 200, json: async () => ({ success: true, data: { queued: 44 } }) },
+    })
+    vi.stubGlobal('confirm', vi.fn(() => true))
+    render(<HostEmailReport campaignId="c1" />)
+    fireEvent.click(await screen.findByText('Resend to 44 who missed it'))
+    expect(window.confirm).toHaveBeenCalledWith(resendConfirmCopy(44))
+    await screen.findByText('Still sending, numbers update as it goes.')
+    const calls = fetchFn.mock.calls.map(([url, init]) => `${init?.method || 'GET'} ${url}`)
+    expect(calls).toEqual([
+      'GET /api/host/emails/c1/recipients',
+      'POST /api/host/emails/c1/resend-missed',
+      'GET /api/host/emails/c1/recipients',
+    ])
+    expect(screen.queryByRole('button', { name: /Resend/ })).toBeNull()
+  })
+
+  it('cancelling the confirm posts nothing', async () => {
+    const fetchFn = stubFetch({ reports: [okReport(sentCampaign())] })
+    vi.stubGlobal('confirm', vi.fn(() => false))
+    render(<HostEmailReport campaignId="c1" />)
+    fireEvent.click(await screen.findByText('Resend to 44 who missed it'))
+    expect(fetchFn.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false)
+    expect(fetchFn).toHaveBeenCalledTimes(1)
+  })
+
+  it("a refused resend shows the server's message and keeps the button", async () => {
+    const fetchFn = stubFetch({
+      reports: [okReport(sentCampaign())],
+      post: { ok: false, status: 409, json: async () => ({ success: false, error: 'Everyone who can be emailed already received this.' }) },
+    })
+    vi.stubGlobal('confirm', vi.fn(() => true))
+    render(<HostEmailReport campaignId="c1" />)
+    fireEvent.click(await screen.findByText('Resend to 44 who missed it'))
+    expect(await screen.findByText('Everyone who can be emailed already received this.')).toBeTruthy()
+    expect(screen.getByText('Resend to 44 who missed it')).toBeTruthy()
+    expect(fetchFn).toHaveBeenCalledTimes(2) // no re-fetch on a refusal
   })
 })

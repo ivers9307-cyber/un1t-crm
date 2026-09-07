@@ -7365,6 +7365,23 @@ registry.registerPath({
 })
 
 registry.registerPath({
+  method: 'post',
+  path: '/api/host/emails/{id}/resend-missed',
+  tags: ['Host Portal'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Resend a sent host campaign to the contacts who missed it (HOST-RESEND.1)',
+  description: "Host session; the campaign must belong to the session host (404 otherwise, so ids stay un-enumerable) and must be `sent` (409 otherwise). Queues the email again for every contact the recipient resolver returns NOW who has no `sent` row on this campaign: contacts never queued at the time, plus any `failed` row (reset to pending; the queue re-gates it). Anyone with a `sent` row is never emailed twice. Runs the Send now gates (sender domain verified, a Postmark stream for a marketing campaign, the daily cap), then compare-and-sets `sent` → `sending` so a double click launches once; the queue drains it and, on finish, keeps the first `sent_at` and stamps `resent_at`. The number a resend would reach is `missed_count` on GET /api/host/emails/{id}/recipients.",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Queued — how many contacts were queued', content: { 'application/json': { schema: SuccessResponse(z.object({ queued: z.number().int() })) } } },
+    401: { description: 'Unauthorized — no host session', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found, or not this host\'s campaign', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Not a sent campaign; sender domain unverified; no stream for a marketing campaign; daily cap; nobody missed ("Everyone who can be emailed already received this."); already being resent', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'A read failed, the recipient diff failed, or the enqueue failed part-way (the sweeper drains what landed)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
   method: 'get',
   path: '/api/host/list-page',
   tags: ['Host Portal'],

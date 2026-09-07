@@ -41,6 +41,11 @@
 // `sent`/`failed` counts ride along on chunk_sent/drained for the cron's
 // run summary.
 //
+// HOST-RESEND.1 — finalisation keeps the FIRST sent_at (set only while
+// null) and stamps resent_at when the campaign already had one: a resend
+// (launchHostCampaign trigger 'resend_missed') drains through this same
+// path, and the report shows "Sent <first>" plus "Resent <latest>".
+//
 // HOST-METRICS.1 — every 'failed' row stamps failed_reason: the gate loop
 // writes emailabilityReason's verdict (no_host_consent | host_unsubscribed |
 // mailbox_blocked | no_email | no_administrative_consent), a thrown send
@@ -79,7 +84,7 @@ async function runChunk(db, campaignId) {
   // unknown) campaign is a clean skip for either consumer.
   const { data: campaign, error: campErr } = await db
     .from('host_campaigns')
-    .select('id, host_id, subject, body_html, status, email_type, recipient_count, sent_count')
+    .select('id, host_id, subject, body_html, status, email_type, recipient_count, sent_count, sent_at')
     .eq('id', campaignId)
     .eq('status', 'sending')
     .maybeSingle()
@@ -292,16 +297,21 @@ async function runChunk(db, campaignId) {
         .eq('campaign_id', campaign.id)
         .eq('status', 'sent')
       if (sentErr) throw new Error(`sent count failed: ${sentErr.message}`)
-      // Every row failed → 'failed'; anything delivered → 'sent'.
+      // Every row failed → 'failed'; anything delivered → 'sent'. sentTotal
+      // is campaign-wide, so a resend (HOST-RESEND.1) whose new rows all
+      // failed still reads 'sent' on the strength of the original sends.
       const finalStatus = (sentTotal || 0) === 0 ? 'failed' : 'sent'
-      await db.from('host_campaigns')
-        .update({
-          status: finalStatus,
-          sent_count: sentTotal || 0,
-          ...(finalStatus === 'sent' ? { sent_at: new Date().toISOString() } : {}),
-        })
+      // HOST-RESEND.1 — the FIRST sent_at is the campaign's send time and is
+      // never overwritten; a campaign that already carries one is being
+      // resent, and that drain lands on resent_at (mig 593) instead.
+      const stamp = finalStatus !== 'sent' ? {}
+        : campaign.sent_at ? { resent_at: new Date().toISOString() }
+        : { sent_at: new Date().toISOString() }
+      const { error: finaliseErr } = await db.from('host_campaigns')
+        .update({ status: finalStatus, sent_count: sentTotal || 0, ...stamp })
         .eq('id', campaign.id)
         .eq('status', 'sending')
+      if (finaliseErr) throw new Error(`finalise failed: ${finaliseErr.message}`)
       return { status: 'drained', sent, failed }
     }
   }
