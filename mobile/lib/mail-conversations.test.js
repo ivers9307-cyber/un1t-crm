@@ -1342,3 +1342,13 @@ describe('mergedInDividers', () => {
     expect(mergedInDividers(null, null).size).toBe(0)
   })
 })
+
+// ── MAIL-REPLY-QUOTE.1 — snippet excludes quoted text ────────────────────
+import { flatMessageMeta as flatMessageMetaForQuote } from './mail-conversations'
+
+describe('flatMessageMeta — snippet excludes quoted text (MAIL-REPLY-QUOTE.1)', () => {
+  it('previews only the words above the quote', () => {
+    const meta = flatMessageMetaForQuote({ direction: 'outbound', text_body: 'Yes.\n\nOn Mon 7 Sep 2026 at 13:34, A <a@b.c> wrote:\n> old', created_at: '2026-09-07T12:40:00Z' })
+    expect(meta.snippet).toBe('Yes.')
+  })
+})

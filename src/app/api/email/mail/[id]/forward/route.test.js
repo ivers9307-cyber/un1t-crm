@@ -341,7 +341,7 @@ describe('POST …/forward — the mail', () => {
     expect(payload.sender.serverToken).toBe('ticketing-server-token')
     expect(payload.sender.fromEmail).toBe(MB_STUDIO.address)
     expect(payload.replyTo).toBe(MB_STUDIO.address)
-    expect(payload.tag).toBe('conversation-forward')
+    expect(payload.tag).toBe('ticket-forward')
   })
 
   it('prefixes the subject once', async () => {

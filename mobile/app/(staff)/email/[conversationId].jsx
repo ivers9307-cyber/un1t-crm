@@ -109,6 +109,7 @@ import {
 // `status` (legacy `solved` is LIVE on the wire). MAIL-ARCH.4 — the one
 // reading is shared's isArchived; see shared/mail-vocabulary.js.
 import { isArchived } from 'shared/mail-vocabulary'
+import { splitQuotedText } from 'shared/mail-quote'
 import {
   readReplyDraft, writeReplyDraft, clearReplyDraft, resolveDraftHydration,
   attachmentBudget, readyAttachmentRefs, admitPickedFile, composerSendState,
@@ -411,6 +412,9 @@ function FlatMessage({ msg, conversationId, locationId, fallbackName, onViewImag
   const meta = flatMessageMeta(msg, { fallbackName })
   const stamp = formatTime(msg.sent_at || msg.created_at)
   const body = msg.text_body || '(no text content)'
+  const split = splitQuotedText(msg.text_body || '')
+  const shown = split.body || body
+  const [quoteOpen, setQuoteOpen] = useState(false)
 
   // ── Internal note: staff only, nothing was sent ───────────────────
   // Keeps its amber styling as a flat block — full width, hairline, and the
@@ -501,7 +505,22 @@ function FlatMessage({ msg, conversationId, locationId, fallbackName, onViewImag
         <RecipientLines msg={msg} toShownInHeader={kind === 'outbound'} />
       </View>
 
-      <Text className="text-base text-un1t-text">{body}</Text>
+      <Text className="text-base text-un1t-text">{shown}</Text>
+      {split.quoted ? (
+        <View className="mt-2">
+          <Pressable
+            onPress={() => setQuoteOpen(v => !v)}
+            accessibilityRole="button"
+            accessibilityLabel={quoteOpen ? 'Hide quoted text' : 'Show quoted text'}
+            className="self-start rounded-full border border-un1t-border bg-un1t-surface px-2 py-0.5"
+          >
+            <Text className="text-[11px] text-un1t-subtle">{quoteOpen ? 'Hide quoted text' : '··· Show quoted text'}</Text>
+          </Pressable>
+          {quoteOpen ? (
+            <Text className="mt-2 border-l-2 border-un1t-border pl-3 text-sm text-un1t-subtle">{split.quoted}</Text>
+          ) : null}
+        </View>
+      ) : null}
       <Attachments
         conversationId={conversationId}
         locationId={locationId}

@@ -201,8 +201,10 @@ describe('POST …/reply — real reply', () => {
       // Reply-To is the address the member wrote to, so their next reply
       // threads back onto this conversation.
       replyTo: MB_STUDIO.address,
-      textBody: 'We open at 6.',
     })
+    // MAIL-REPLY-QUOTE.1 — the operator's words lead; the seeded inbound
+    // message is now quoted under them, so this is a prefix, not equality.
+    expect(sent.textBody.startsWith('We open at 6.')).toBe(true)
     // EMAIL-OUTBOUND-SERVER.1 — From IS the mailbox address now, carried on the
     // sender override alongside the ticketing server's own token.
     expect(sent.sender).toEqual({
@@ -210,7 +212,7 @@ describe('POST …/reply — real reply', () => {
       fromEmail: MB_STUDIO.address,
       fromName: null,
     })
-    // Threading anchors come off the last inbound message.
+    // Threading anchors come off the anchor — here, the only message there is.
     expect(JSON.stringify(sent.headers)).toContain(LAST_INBOUND.rfc_message_id)
   })
 
@@ -308,7 +310,10 @@ describe('POST …/reply — real reply', () => {
       direction: 'outbound',
       is_internal_note: false,
       postmark_message_id: 'pm-out-1',
-      in_reply_to: LAST_INBOUND.rfc_message_id,
+      // MAIL-REPLY-QUOTE.1 — stored BARE, matching every row before today;
+      // the wire header is the bracketed form.
+      in_reply_to: LAST_INBOUND.rfc_message_id.replace(/^<|>$/g, ''),
+      references_header: '<older@mail.example.com> <inbound-1@mail.example.com>',
       status: 'sent',
     })
     const [send] = insertsInto(db, 'email_sends')
@@ -355,7 +360,8 @@ describe('POST …/reply — signature (EMAIL-TICKET.5)', () => {
     await post(T_STUDIO.id, { text: 'We open at 6.' })
 
     const sent = sendEmail.mock.calls[0][0]
-    expect(sent.textBody).toBe('We open at 6.\n\n-- \nSarah\nUN1T Stillorgan')
+    // MAIL-REPLY-QUOTE.1 — the quote follows the signature, so prefix.
+    expect(sent.textBody.startsWith('We open at 6.\n\n-- \nSarah\nUN1T Stillorgan')).toBe(true)
     // The HTML body is the SAME string through the route's escaper, so the
     // signature can never take a different (un-escaped) path to the member.
     expect(sent.htmlBody).toContain('We open at 6.\n\n-- \nSarah\nUN1T Stillorgan')
@@ -384,17 +390,20 @@ describe('POST …/reply — signature (EMAIL-TICKET.5)', () => {
     await post(T_STUDIO.id, { text: 'We open at 6.' })
 
     const sent = sendEmail.mock.calls[0][0]
-    expect(sent.textBody).toBe('We open at 6.')
+    // MAIL-REPLY-QUOTE.1 — prefix, not equality: the seeded inbound message
+    // is quoted below. Nothing signature-shaped is added either way.
+    expect(sent.textBody.startsWith('We open at 6.')).toBe(true)
     expect(sent.textBody).not.toContain('--')
     const [msg] = insertsInto(db, 'email_inbox_messages')
-    expect(msg.payload.text_body).toBe('We open at 6.')
+    expect(msg.payload.text_body.startsWith('We open at 6.')).toBe(true)
   })
 
   it('stores the SIGNED body on the message row — the record of what was sent', async () => {
     getCurrentUser.mockResolvedValue(SIGNED_COACH)
     await post(T_STUDIO.id, { text: 'We open at 6.' })
     const [msg] = insertsInto(db, 'email_inbox_messages')
-    expect(msg.payload.text_body).toBe('We open at 6.\n\n-- \nSarah\nUN1T Stillorgan')
+    // MAIL-REPLY-QUOTE.1 — plus the quote; the row is what was SENT.
+    expect(msg.payload.text_body.startsWith('We open at 6.\n\n-- \nSarah\nUN1T Stillorgan')).toBe(true)
   })
 
   it('keeps the queue preview unsigned', async () => {
@@ -1219,8 +1228,9 @@ describe('POST …/reply — filing fails AFTER the send (EMAIL-REPLY-UNFILED.1)
     expect(dead.payload.payload).toMatchObject({
       ticket_id: T_STUDIO.id,
       postmark_message_id: 'pm-out-1',
-      text_body: 'We open at 6.\n\n-- \nSarah\nUN1T Stillorgan',
     })
+    // MAIL-REPLY-QUOTE.1 — the quote rides along in the breadcrumb too.
+    expect(dead.payload.payload.text_body.startsWith('We open at 6.\n\n-- \nSarah\nUN1T Stillorgan')).toBe(true)
     expect(dead.payload.payload.recipients.to).toEqual([T_STUDIO.requester_email])
   })
 
@@ -1511,9 +1521,10 @@ describe('POST …/reply — the studio block goes out for everyone (MAIL-SIGDEF
     const res = await post(T_STUDIO.id, { text: 'Reply body' })
     expect(res.status).toBe(200)
     const sent = sendEmail.mock.calls[0][0]
-    expect(sent.textBody).toBe(
+    // MAIL-REPLY-QUOTE.1 — prefix: the seeded inbound message is quoted below.
+    expect(sent.textBody.startsWith(
       'Reply body\n\n-- \nUN1T Hatch Street\n(01) 574 1871\nBook a class: https://un1tdublin.com/welcome/hatch-street#start'
-    )
+    )).toBe(true)
     expect(sent.htmlBody).toContain('border-top:3px solid #0f172a')
     expect(sent.htmlBody).toContain('(01) 574 1871')
     expect(sent.htmlBody).toContain('href="https://un1tdublin.com/welcome/hatch-street#start"')
@@ -1528,9 +1539,9 @@ describe('POST …/reply — the studio block goes out for everyone (MAIL-SIGDEF
     setupDb(withCard())
     await post(T_STUDIO.id, { text: 'Reply body' })
     const sent = sendEmail.mock.calls[0][0]
-    expect(sent.textBody).toBe(
+    expect(sent.textBody.startsWith(
       'Reply body\n\n-- \nSarah\nHead Coach\n\nUN1T Hatch Street\n(01) 574 1871\nBook a class: https://un1tdublin.com/welcome/hatch-street#start'
-    )
+    )).toBe(true)
     expect(sent.htmlBody).toContain('Sarah')
     expect(sent.htmlBody.indexOf('Sarah')).toBeLessThan(sent.htmlBody.indexOf('border-top:3px solid #0f172a'))
     expect(sent.htmlBody).not.toContain('Nope')
@@ -1541,7 +1552,7 @@ describe('POST …/reply — the studio block goes out for everyone (MAIL-SIGDEF
     setupDb(withCard({ companySettings: [] }))
     await post(T_STUDIO.id, { text: 'Reply body' })
     const sent = sendEmail.mock.calls[0][0]
-    expect(sent.textBody).toBe('Reply body')
+    expect(sent.textBody.startsWith('Reply body')).toBe(true)
     expect(sent.textBody).not.toContain('-- ')
     expect(sent.htmlBody).not.toContain('border-top:3px solid #0f172a')
   })
@@ -1555,10 +1566,130 @@ describe('POST …/reply — the studio block goes out for everyone (MAIL-SIGDEF
     setupDb(withCard())
     await post(T_STUDIO.id, { text: 'Reply body' })
     const sent = sendEmail.mock.calls[0][0]
-    expect(sent.textBody).toBe(
+    expect(sent.textBody.startsWith(
       'Reply body\n\n-- \nAlex Example\nHead Coach · UN1T Hatch Street\n(01) 574 1871\nBook a class: https://un1tdublin.com/welcome/hatch-street#start'
-    )
+    )).toBe(true)
     expect(sent.textBody).not.toContain('plain fallback')
     expect(sent.htmlBody).toContain('Alex Example')
+  })
+})
+
+// ── MAIL-REPLY-QUOTE.1 ──────────────────────────────────────────────────
+// A reply is a reply to the MOST RECENT message in the conversation, whoever
+// wrote it: it quotes that message's text under the operator's words and
+// threads onto it. The route used to key both on the last INBOUND message,
+// which meant a follow-up after our own reply quoted nothing and threaded off
+// a message two turns back.
+describe('POST …/reply — quotes and threads off the MOST RECENT message (MAIL-REPLY-QUOTE.1)', () => {
+  const inboundRow = (over = {}) => ({
+    id: 'm-in', ticket_id: T_STUDIO.id, location_id: T_STUDIO.location_id,
+    direction: 'inbound', from_email: T_STUDIO.requester_email,
+    subject: 'Re: Booking', text_body: 'Can I move to 7?\n> earlier',
+    rfc_message_id: 'CANz@mail.gmail.com',
+    in_reply_to: '<pm-0@mtasv.net>', references_header: '<pm-0@mtasv.net>',
+    created_at: '2026-09-07T12:34:15Z', is_internal_note: false, ...over,
+  })
+  const outboundRow = (over = {}) => ({
+    id: 'm-out', ticket_id: T_STUDIO.id, location_id: T_STUDIO.location_id,
+    direction: 'outbound', from_email: MB_STUDIO.address,
+    subject: 'Booking', text_body: 'We open at 6.',
+    rfc_message_id: null, postmark_message_id: 'pm-1',
+    in_reply_to: null, references_header: null,
+    created_at: '2026-09-07T12:40:00Z', is_internal_note: false, ...over,
+  })
+
+  it('quotes the last INBOUND message and threads onto it', async () => {
+    db._state.messages.push(inboundRow())
+    const res = await post(T_STUDIO.id, { text: 'Yes, 7 is fine.' })
+    expect(res.status).toBe(200)
+    const call = sendEmail.mock.calls[0][0]
+    expect(call.textBody).toContain('Yes, 7 is fine.')
+    // The attribution line Gmail itself writes, then the quote — and a line
+    // already starting with ">" cascades to ">>".
+    expect(call.textBody).toMatch(
+      /\n\nOn Mon 7 Sep 2026 at 13:34, Ada Member <member@example\.com> wrote:\n> Can I move to 7\?\n>> earlier$/
+    )
+    expect(call.htmlBody).toContain('<blockquote type="cite"')
+    // The quoted text is ESCAPED before concatenation, exactly as a forward
+    // escapes it — a stranger's plain text can never become markup here.
+    expect(call.htmlBody).toContain('&gt; earlier')
+    expect(call.headers).toEqual([
+      { Name: 'In-Reply-To', Value: '<CANz@mail.gmail.com>' },
+      { Name: 'References', Value: '<pm-0@mtasv.net> <CANz@mail.gmail.com>' },
+    ])
+    // The subject keys on the ANCHOR, not the conversation row.
+    expect(call.subject).toBe('Re: Booking')
+  })
+
+  it('quotes the last OUTBOUND message when the studio wrote last, deriving its Postmark Message-ID', async () => {
+    db._state.messages.push(inboundRow(), outboundRow())
+    await post(T_STUDIO.id, { text: 'Following up.' })
+    const call = sendEmail.mock.calls[0][0]
+    expect(call.textBody).toMatch(
+      new RegExp(`On Mon 7 Sep 2026 at 13:40, ${MB_STUDIO.label} <${MB_STUDIO.address}> wrote:\\n> We open at 6\\.$`)
+    )
+    // A Postmark-sent row carries no rfc_message_id; Postmark mints it as
+    // <{MessageID}@mtasv.net>, which is what the member's client will quote back.
+    expect(call.headers).toEqual([
+      { Name: 'In-Reply-To', Value: '<pm-1@mtasv.net>' },
+      { Name: 'References', Value: '<pm-1@mtasv.net>' },
+    ])
+  })
+
+  it('uses the rfc id of an SMTP-sent outbound anchor', async () => {
+    db._state.messages.push(outboundRow({ rfc_message_id: 'smtp-1@un1t.com', postmark_message_id: null }))
+    await post(T_STUDIO.id, { text: 'Hi' })
+    expect(sendEmail.mock.calls[0][0].headers[0]).toEqual({ Name: 'In-Reply-To', Value: '<smtp-1@un1t.com>' })
+  })
+
+  it('never anchors on an internal note', async () => {
+    db._state.messages.push(
+      inboundRow(),
+      outboundRow(),
+      outboundRow({ id: 'note', is_internal_note: true, text_body: 'staff', created_at: '2026-09-07T13:00:00Z' }),
+    )
+    await post(T_STUDIO.id, { text: 'Hi' })
+    // A note is never on the wire, so it can neither be quoted to the member
+    // nor be the message their client threads onto.
+    expect(sendEmail.mock.calls[0][0].textBody).not.toContain('staff')
+    expect(sendEmail.mock.calls[0][0].headers[0].Value).toBe('<pm-1@mtasv.net>')
+  })
+
+  it('sends no threading headers and no quote when there is nothing to anchor on', async () => {
+    setupDb(baseState({ grants: [GRANT_STUDIO], messages: [] }))
+    const res = await post(T_STUDIO.id, { text: 'Hello' })
+    expect(res.status).toBe(200)
+    const call = sendEmail.mock.calls[0][0]
+    expect(call.headers).toEqual([])
+    expect(call.textBody).not.toContain('wrote:')
+  })
+
+  it('stores exactly what went out, plus in_reply_to and references_header, and previews only the words', async () => {
+    db._state.messages.push(inboundRow())
+    await post(T_STUDIO.id, { text: 'Yes, 7 is fine.' })
+    const call = sendEmail.mock.calls[0][0]
+    const [msg] = insertsInto(db, 'email_inbox_messages')
+    // The row is the record of what the member received — quote included.
+    expect(msg.payload.text_body).toBe(call.textBody)
+    // Bare id in in_reply_to (every row before today looks like this);
+    // References verbatim, so the next reply continues the chain.
+    expect(msg.payload.in_reply_to).toBe('CANz@mail.gmail.com')
+    expect(msg.payload.references_header).toBe('<pm-0@mtasv.net> <CANz@mail.gmail.com>')
+    // The queue list must never preview the quote.
+    const [patch] = updatesTo(db, 'email_tickets')
+    expect(patch.payload.last_message_preview).toBe('Yes, 7 is fine.')
+  })
+
+  it('500s BEFORE sending when the anchor lookup fails', async () => {
+    // EMAIL-TICKET.6 ordering: nothing has been sent, so refusing costs a
+    // retry and can never produce a wrong outcome. The anchor read runs
+    // before any insert, so a failing email_inbox_messages fails it first.
+    setupDb({
+      ...baseState({ grants: [GRANT_STUDIO], messages: [inboundRow()] }),
+      errors: { email_inbox_messages: { code: 'XX000', message: 'boom' } },
+    })
+    const res = await post(T_STUDIO.id, { text: 'Yes, 7 is fine.' })
+    expect(res.status).toBe(500)
+    expect(sendEmail).not.toHaveBeenCalled()
   })
 })

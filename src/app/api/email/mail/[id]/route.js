@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
-import { emailHtmlDocument } from '@/lib/email-html'
+import { emailHtmlDocuments } from '@/lib/email-html'
 import { attachmentPreviewKind } from '@/lib/email-attachment-preview'
 import {
   loadConversationForUser, loadOwnAddresses, isElevatedAtLocation,
@@ -351,6 +351,9 @@ async function shapeMessages(db, rows) {
       author_name: authorNames.get(row.author_profile_id) || null,
       attachments: attachmentsByMessage.get(row.id) || [],
       html_document: null,
+      // MAIL-REPLY-QUOTE.1 — the quoted chain as its own srcdoc, folded
+      // behind "Show quoted text" in the thread. null when nothing is quoted.
+      html_quoted_document: null,
       html_blocked_images: 0,
       html_unsafe: false,
       html_omitted: false,
@@ -363,13 +366,17 @@ async function shapeMessages(db, rows) {
 
     if (budget <= 0) return { ...base, html_omitted: true }
 
-    // emailHtmlDocument() swallows its own throw and reports `failed`; there
+    // emailHtmlDocuments() swallows its own throw and reports `failed`; there
     // is no branch anywhere that returns `raw`.
-    const { document, blockedImages, failed } = emailHtmlDocument(raw)
-    budget -= document ? document.length : 0
+    const { document, quotedDocument, blockedImages, failed } = emailHtmlDocuments(raw)
+    // BOTH halves are charged to the budget: the quote is the part that makes a
+    // thread enormous, and billing only the body would let a folded cascade
+    // spend the response unmetered.
+    budget -= (document ? document.length : 0) + (quotedDocument ? quotedDocument.length : 0)
     return {
       ...base,
       html_document: document,
+      html_quoted_document: quotedDocument,
       html_blocked_images: blockedImages,
       html_unsafe: failed,
     }

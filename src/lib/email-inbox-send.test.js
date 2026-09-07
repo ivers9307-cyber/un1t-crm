@@ -80,7 +80,7 @@ const SEND = Object.freeze({
   subject: 'Re: Class times',
   htmlBody: '<div>We open at 6.</div>',
   textBody: 'We open at 6.',
-  tag: 'conversation-reply',
+  tag: 'ticket-reply',
   metadata: { ticket_id: 't-1', contact_id: 'c-1' },
 })
 

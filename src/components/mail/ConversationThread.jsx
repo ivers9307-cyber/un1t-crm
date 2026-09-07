@@ -94,6 +94,7 @@ import {
   writeBodyExpanded,
 } from '@/components/mail/mail-preferences'
 import { joinPointsByMessage } from '@/lib/mail/conversation'
+import { splitQuotedText } from '@/lib/mail-quote'
 // EMAIL-CONTACT-CHIP.1 — the house funnel/off-funnel taxonomy (FUNNEL.1),
 // reused ONLY for the chip's colour/intent grouping. There is no single
 // canonical slug→label lib in this codebase for the TEXT (three independent
@@ -657,6 +658,40 @@ function EmailFrame({ html, blockedImages = 0, label, onAccent = false, frameSiz
   )
 }
 
+/**
+ * MAIL-REPLY-QUOTE.1 — the folded chain under a message. A mail client hides
+ * the quoted history by default and offers it on demand; this is that pill.
+ * Without it, one reply in a five-deep thread renders the whole thread again.
+ *
+ * `text` is the plain quoted block, `html` a SECOND sanitised srcdoc — never
+ * both, and the HTML path goes through EmailFrame above rather than an iframe
+ * of its own: there is exactly one sandbox literal in this file, and
+ * src/lib/email-html.test.js reads that as code.
+ *
+ * State is local and per message: opening one message's history says nothing
+ * about anyone else's.
+ */
+function QuotedText({ text, html, frameSize, label }) {
+  const [open, setOpen] = useState(false)
+  if (!text && !html) return null
+  return (
+    <div className="mt-2">
+      <button
+        type="button"
+        onClick={() => setOpen(v => !v)}
+        aria-expanded={open}
+        className="rounded-full border border-un1t-border bg-un1t-surface px-2 py-0.5 text-[11px] text-un1t-subtle hover:text-un1t-text"
+      >
+        {open ? 'Hide quoted text' : '··· Show quoted text'}
+      </button>
+      {open && (html
+        ? <EmailFrame html={html} label={`${label}, quoted text`} frameSize={frameSize} />
+        : <p className="mt-2 whitespace-pre-wrap break-words border-l-2 border-un1t-border pl-3 text-sm text-un1t-subtle">{text}</p>
+      )}
+    </div>
+  )
+}
+
 /** "HTML could not be displayed safely" — shown INSTEAD of the HTML, never beside it. */
 function UnsafeHtmlNotice() {
   return (
@@ -1197,6 +1232,10 @@ function ThreadMessage({ message, conversation, conversationId, expanded, onTogg
   const kind = messageKind(message)
   const stamp = messageTimestamp(message.sent_at || message.created_at)
   const body = message.text_body || '(no text content)'
+  // MAIL-REPLY-QUOTE.1 — what the person WROTE, and the chain under it. The
+  // note branch below keeps `body` whole: a note is never a reply to mail.
+  const split = splitQuotedText(message.text_body || '')
+  const textBody = split.body || body
   // Notes never take the HTML path, whatever the payload contains: the route
   // does not emit a document for them, and this guard says so twice.
   const html = kind === 'note' ? null : message.html_document || null
@@ -1324,8 +1363,14 @@ function ThreadMessage({ message, conversation, conversationId, expanded, onTogg
                 frameSize={frameSize}
               />
             ) : (
-              <p className="whitespace-pre-wrap break-words text-sm text-un1t-text">{body}</p>
+              <p className="whitespace-pre-wrap break-words text-sm text-un1t-text">{textBody}</p>
             )}
+            <QuotedText
+              text={html ? '' : split.quoted}
+              html={html ? message.html_quoted_document : null}
+              frameSize={frameSize}
+              label={`Reply sent to ${message.to_email || 'the member'}`}
+            />
             {message.html_unsafe && <UnsafeHtmlNotice />}
             {message.html_omitted && <HtmlOmittedNotice />}
             <Attachments conversationId={conversationId} attachments={message.attachments} onOpen={onOpenAttachment} />
@@ -1368,8 +1413,14 @@ function ThreadMessage({ message, conversation, conversationId, expanded, onTogg
             frameSize={frameSize}
           />
         ) : (
-          <p className="whitespace-pre-wrap break-words text-sm text-un1t-text">{body}</p>
+          <p className="whitespace-pre-wrap break-words text-sm text-un1t-text">{textBody}</p>
         )}
+        <QuotedText
+          text={html ? '' : split.quoted}
+          html={html ? message.html_quoted_document : null}
+          frameSize={frameSize}
+          label={`Email from ${message.from_email || 'the member'}`}
+        />
         {message.html_unsafe && <UnsafeHtmlNotice />}
         {message.html_omitted && <HtmlOmittedNotice />}
         <Attachments conversationId={conversationId} attachments={message.attachments} onOpen={onOpenAttachment} />

@@ -18,6 +18,7 @@
 // three for one release.
 export * from '@/lib/mail-vocabulary'
 import { DEFAULT_MAIL_VIEW } from '@/lib/mail-vocabulary'
+import { splitQuotedText } from '@shared/mail-quote'
 
 /**
  * The list URL.
@@ -147,10 +148,15 @@ const SNIPPET_MAX = 140
  * A message's one-line stand-in while collapsed. Whitespace (including the
  * newlines every real email is full of) collapses to single spaces; empty in,
  * empty out — the component decides what an empty snippet renders as.
+ *
+ * MAIL-REPLY-QUOTE.1 — the QUOTED chain is dropped first. A reply is mostly
+ * the mail it replies to, so a snippet cut from the raw body previews the
+ * PREVIOUS message; every line down a long thread then reads the same words
+ * back and the list stops distinguishing anything. Preview what was written.
  */
 export function messageSnippet(message) {
   const text = typeof message?.text_body === 'string' ? message.text_body : ''
-  return text.replace(/\s+/g, ' ').trim().slice(0, SNIPPET_MAX)
+  return splitQuotedText(text).body.replace(/\s+/g, ' ').trim().slice(0, SNIPPET_MAX)
 }
 
 /**

@@ -311,7 +311,7 @@ export async function POST(request, props) {
     subject,
     htmlBody: richSig ? textToHtml(unsignedText) + richSig.html : textToHtml(outboundText),
     textBody: outboundText,
-    tag: 'conversation-forward',
+    tag: 'ticket-forward',
     metadata: { ticket_id: conversation.id, contact_id: conversation.contact_id || '' },
     // undefined when nothing rides along, so a bare forward's Postmark payload
     // is byte-identical to a reply's.

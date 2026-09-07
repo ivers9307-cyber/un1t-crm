@@ -218,3 +218,67 @@ describe('merged-in provenance', () => {
     expect(onOpenMergedInto).toHaveBeenCalledWith('T-target')
   })
 })
+
+// ── MAIL-REPLY-QUOTE.1 — the chain folds behind a pill ─────────────────
+//
+// Every mail client hides the quoted history by default. Without that, one
+// reply in a five-deep thread renders the whole thread again, and the fifth
+// renders it five times. Collapsed by default, per message, on demand.
+describe('quoted text is folded (MAIL-REPLY-QUOTE.1)', () => {
+  const QUOTED_REPLY = {
+    ...MIDDLE,
+    id: 'q1',
+    text_body: 'Yes, 7 is fine.\n\nOn Mon 7 Sep 2026 at 13:34, A <a@b.c> wrote:\n> can I move',
+  }
+
+  it('renders the words, a "Show quoted text" pill, and NOT the quote, for a text message', () => {
+    renderThread({ messages: [QUOTED_REPLY] })
+    expect(screen.getByText('Yes, 7 is fine.')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Show quoted text/ })).toBeTruthy()
+    expect(screen.queryByText(/can I move/)).toBeNull()
+  })
+
+  it('reveals the quote on click and folds it away again', () => {
+    renderThread({ messages: [QUOTED_REPLY] })
+    const pill = screen.getByRole('button', { name: /Show quoted text/ })
+    expect(pill.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(pill)
+    expect(screen.getByText(/can I move/)).toBeTruthy()
+    const open = screen.getByRole('button', { name: /Hide quoted text/ })
+    expect(open.getAttribute('aria-expanded')).toBe('true')
+    fireEvent.click(open)
+    expect(screen.queryByText(/can I move/)).toBeNull()
+  })
+
+  it('renders no pill when nothing is quoted', () => {
+    renderThread({ messages: [{ ...MIDDLE, id: 'q2', text_body: 'Plain.' }] })
+    expect(screen.queryByRole('button', { name: /quoted text/ })).toBeNull()
+  })
+
+  it('renders the pill and only the body frame for an HTML message with a quoted document', () => {
+    const { container } = renderThread({
+      messages: [{
+        ...NEWEST,
+        id: 'q3',
+        html_document: '<!doctype html><html><body>BODY</body></html>',
+        html_quoted_document: '<!doctype html><html><body>QUOTED</body></html>',
+      }],
+    })
+    expect(screen.getByRole('button', { name: /Show quoted text/ })).toBeTruthy()
+    const collapsed = [...container.querySelectorAll('iframe')].map(f => f.getAttribute('srcdoc'))
+    expect(collapsed).toHaveLength(1)
+    expect(collapsed[0]).toContain('BODY')
+    expect(collapsed.join('')).not.toContain('QUOTED')
+    fireEvent.click(screen.getByRole('button', { name: /Show quoted text/ }))
+    const opened = [...container.querySelectorAll('iframe')].map(f => f.getAttribute('srcdoc'))
+    expect(opened).toHaveLength(2)
+    expect(opened[1]).toContain('QUOTED')
+  })
+
+  it('leaves an HTML message with no quoted document without a pill', () => {
+    renderThread({
+      messages: [{ ...NEWEST, id: 'q4', html_document: '<!doctype html><html><body>BODY</body></html>' }],
+    })
+    expect(screen.queryByRole('button', { name: /quoted text/ })).toBeNull()
+  })
+})

@@ -4,7 +4,12 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { sendConversationEmail, TICKET_INTERNAL_STREAM } from '@/lib/email-inbox-send'
-import { replySubject, buildReplyHeaders, inboundPreview } from '@/lib/email-inbox'
+import { replySubject, inboundPreview } from '@/lib/email-inbox'
+// MAIL-REPLY-QUOTE.1 — what a reply quotes and what it threads onto, pure.
+import {
+  selectReplyAnchor, replyThreadingHeaders, replyReferences, anchorMessageId,
+  buildReplyText, buildReplyHtml,
+} from '@/lib/mail/reply-quote'
 import { shouldStampFirstResponse } from '@/lib/mail/conversation'
 import { appendSignature, resolveSendSignature } from '@/lib/email-signature'
 import { logAuditEvent } from '@/lib/audit'
@@ -244,8 +249,11 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: 'No sender address for this conversation' }, { status: 400 })
   }
 
-  // Thread off the last thing the member sent us, so the reply lands in their
-  // existing mail-client thread rather than starting a new one.
+  // MAIL-REPLY-QUOTE.1 — thread off, and quote, the MOST RECENT message in
+  // either direction, so the reply lands in the member's existing mail-client
+  // thread under the thing it is actually answering. Keying on the last
+  // INBOUND (what this did until today) meant a follow-up after our own reply
+  // quoted nothing and threaded off a message two turns back.
   //
   // EMAIL-TICKET.6 — `.error` is inspected. Swallowing it degraded silently:
   // no In-Reply-To/References, so every reply started a NEW thread in the
@@ -254,12 +262,13 @@ export async function POST(request, props) {
   // outcome — the ordering is what makes 500 the safe answer here.
   //
   // EMAIL-CC.1 runs a SECOND, separate lookup beside it for the recipient set.
-  // Deliberately not merged into one query: threading must keep keying on the
-  // last INBOUND message (changing that would change which mail-client thread
-  // a reply lands in, and threading is explicitly out of scope), while
-  // "everybody on the thread" is a property of EVERY message in EITHER
-  // direction — otherwise a conversation we composed and nobody has answered yet has
-  // no participants at all and reply-all silently degrades to the requester.
+  // Deliberately not merged into one query even now that both look at every
+  // direction: the ANCHOR is one message (the newest non-note) and decides
+  // what is quoted and threaded, while "everybody on the thread" is a union
+  // over EVERY message and a different window — otherwise a conversation we
+  // composed and nobody has answered yet has no participants at all and
+  // reply-all silently degrades to the requester. The anchor NEVER decides who
+  // is written to (EMAIL-PARTICIPANTS.5 is untouched by MAIL-REPLY-QUOTE.1).
   //
   // EMAIL-PARTICIPANTS.5 — the recipient half is now loadParticipantMessages(),
   // the SAME window and the SAME columns the detail route derives its
@@ -267,22 +276,26 @@ export async function POST(request, props) {
   // this reach", and the one the operator can see would not be the one that
   // sends. `bcc_emails` is still not among the columns it asks for.
   const [
-    { data: lastInbound, error: lastInboundErr },
+    { data: anchorRows, error: anchorErr },
     { data: recentMessages, error: recentErr },
   ] = await Promise.all([
+    // MAIL-REPLY-QUOTE.1 — the message this reply is a reply TO: the most
+    // recent in EITHER direction, notes excluded. A mail client threads onto
+    // and quotes the last thing in the conversation, whoever wrote it. Several
+    // rows, not one, so a newest-is-a-note conversation still finds the real
+    // anchor beneath it; selectReplyAnchor drops notes.
     db.from('email_inbox_messages')
-      .select('rfc_message_id, references_header, subject')
+      .select('id, direction, from_email, subject, text_body, rfc_message_id, postmark_message_id, in_reply_to, references_header, created_at, sent_at, is_internal_note, forwarded_message_id')
       .eq('ticket_id', conversation.id)
-      .eq('direction', 'inbound')
       .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle(),
+      .limit(5),
     loadParticipantMessages(db, conversation.id),
   ])
-  if (lastInboundErr) {
-    console.error('[conversations/reply] threading lookup failed BEFORE sending:', lastInboundErr.message)
-    return NextResponse.json({ success: false, error: lastInboundErr.message }, { status: 500 })
+  if (anchorErr) {
+    console.error('[conversations/reply] anchor lookup failed BEFORE sending:', anchorErr.message)
+    return NextResponse.json({ success: false, error: anchorErr.message }, { status: 500 })
   }
+  const anchor = selectReplyAnchor(anchorRows || [])
   if (recentErr) {
     // Same ordering argument as the threading lookup: nothing has been sent, so
     // refusing costs a retry. Falling back to "just the requester" would look
@@ -336,11 +349,8 @@ export async function POST(request, props) {
   const wire = toPostmarkFields(recipients)
   const mode = replyMode(recipients.to)
 
-  const subject = replySubject(lastInbound?.subject || conversation.subject)
-  const headers = buildReplyHeaders({
-    rfcMessageId: lastInbound?.rfc_message_id || null,
-    referencesHeader: lastInbound?.references_header || null,
-  })
+  const subject = replySubject(anchor?.subject || conversation.subject)
+  const headers = replyThreadingHeaders(anchor)
 
   // EMAIL-TICKET.5 — sign off as whoever is sending.
   //
@@ -369,6 +379,19 @@ export async function POST(request, props) {
   const outboundText = richSig
     ? appendSignature(text, richSig.text)
     : appendSignature(text, user.email_signature)
+
+  // MAIL-REPLY-QUOTE.1 — words, signature, then the quoted anchor. The text
+  // part is what the row stores (the record of what the recipient received);
+  // the HTML part gets the same quote as an escaped cite blockquote. Only
+  // PLAIN text is ever quoted, the forward path's refusal for the same reason:
+  // re-sending a stranger's sanitised HTML from the studio's own address is
+  // not worth a prettier quote.
+  const quoteCtx = { anchor, conversation, mailbox: mailbox || null }
+  const wireText = buildReplyText({ signedText: outboundText, ...quoteCtx })
+  const wireHtml = buildReplyHtml({
+    bodyHtml: richSig ? textToHtml(text) + richSig.html : textToHtml(outboundText),
+    ...quoteCtx,
+  })
 
   // EMAIL-OUTBOUND-ATTACH.1 — read the draft objects back out of Storage and
   // turn them into Postmark's array. BEFORE THE SEND, deliberately: every way
@@ -415,9 +438,9 @@ export async function POST(request, props) {
     cc: wire.cc,
     bcc: wire.bcc,
     subject,
-    htmlBody: richSig ? textToHtml(text) + richSig.html : textToHtml(outboundText),
-    textBody: outboundText,
-    tag: 'conversation-reply',
+    htmlBody: wireHtml,
+    textBody: wireText,
+    tag: 'ticket-reply',
     // POSTMARK-RACE.1 — marked iff `sendLogRow` will be built (same
     // `conversation.contact_id` condition); an unattributed reply stays unmarked.
     metadata: conversation.contact_id
@@ -534,16 +557,21 @@ export async function POST(request, props) {
     // reuses this model. See the RECIPIENT RULE header.
     bcc_emails: recipients.bcc,
     subject,
-    // The SIGNED body — the message row is the record of what the member
-    // received, so it must not show a shorter message than was sent.
-    text_body: outboundText,
+    // The SIGNED body, quote and all — the message row is the record of what
+    // the member received, so it must not show a shorter message than was sent.
+    text_body: wireText,
     postmark_message_id: result.messageId,
     // MAILBOX-CONNECT.7 — the threading key on the SMTP path; see the compose
     // route for the full reasoning. An SMTP send carries no Postmark id, so
     // without this the member's reply to OUR reply forks a new conversation. NULL on
     // the Postmark path, which is today's behaviour.
     rfc_message_id: result.rfcMessageId || null,
-    in_reply_to: lastInbound?.rfc_message_id || null,
+    // MAIL-REPLY-QUOTE.1 — both anchors as SENT, so the next reply in this
+    // conversation (ours or theirs) continues the chain. Storing In-Reply-To
+    // alone lost the history through every studio reply. Bare id in
+    // in_reply_to, matching every row before today; References verbatim.
+    in_reply_to: anchor ? (anchorMessageId(anchor) || '').replace(/^<|>$/g, '') || null : null,
+    references_header: anchor ? (replyReferences(anchor) || null) : null,
     is_internal_note: false,
     source: 'operator',
     status: 'sent',
@@ -576,8 +604,9 @@ export async function POST(request, props) {
           from_email: send.fromEmail || null,
           recipients: { to: recipients.to, cc: recipients.cc, bcc: recipients.bcc },
           subject,
-          text_body: outboundText,
-          in_reply_to: lastInbound?.rfc_message_id || null,
+          text_body: wireText,
+          in_reply_to: anchor ? (anchorMessageId(anchor) || '').replace(/^<|>$/g, '') || null : null,
+          references_header: anchor ? (replyReferences(anchor) || null) : null,
           author_profile_id: user.id,
           sent_at: now,
         },

@@ -265,7 +265,7 @@ export async function POST(request) {
     subject,
     htmlBody: richSig ? textToHtml(text) + richSig.html : textToHtml(outboundText),
     textBody: outboundText,
-    tag: 'conversation-compose',
+    tag: 'ticket-compose',
     // POSTMARK-RACE.1 — marked iff `sendLogRow` will be built, which is the
     // same `contact?.id` condition. An outbound conversation mail to an address with
     // no contact writes no email_sends row and must stay unmarked.

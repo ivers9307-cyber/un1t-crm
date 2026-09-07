@@ -605,3 +605,82 @@ describe('GET …/[id] — the conversation is stamped through stampMailRow (MAI
     expect(data.ticket).toEqual(expect.objectContaining({ ...T_STUDIO }))
   })
 })
+
+// MAIL-REPLY-QUOTE.1 — the quoted chain travels as its own srcdoc.
+//
+// The thread folds it behind "Show quoted text", so the body document must not
+// still contain it and the quote must not be lost: two documents, one budget.
+describe('GET …/[id] — html_quoted_document (MAIL-REPLY-QUOTE.1)', () => {
+  // One message on T_STUDIO, newest in the thread — data.messages.at(-1).
+  function seedHtml(html_body, extra = {}) {
+    setupDb(baseState({
+      grants: [GRANT_STUDIO],
+      messages: [{
+        id: 'm-html', ticket_id: T_STUDIO.id, location_id: T_STUDIO.location_id,
+        direction: 'inbound', text_body: 'text fallback', is_internal_note: false,
+        created_at: '2026-08-06T11:00:00Z',
+        html_body, ...extra,
+      }],
+    }))
+  }
+
+  it('splits an inbound Gmail cascade into body and quoted documents', async () => {
+    seedHtml('<div dir="ltr">Test test 2</div><div class="gmail_quote">old</div>')
+    const { data } = await (await get(T_STUDIO.id)).json()
+    const m = data.messages.at(-1)
+    expect(m.html_document).toContain('Test test 2')
+    expect(m.html_document).not.toContain('gmail_quote')
+    expect(m.html_quoted_document).toContain('gmail_quote')
+    expect(m.html_quoted_document).toContain('old')
+    // The raw column never leaves the route, quote split or not.
+    expect(m.html_body).toBeUndefined()
+  })
+
+  it('is null when nothing is quoted, and for notes and text-only rows', async () => {
+    seedHtml('<p>plain</p>')
+    let { data } = await (await get(T_STUDIO.id)).json()
+    expect(data.messages.at(-1).html_document).toContain('plain')
+    expect(data.messages.at(-1).html_quoted_document).toBeNull()
+
+    // An internal note never goes near the HTML path…
+    seedHtml('<p>note body</p>', { is_internal_note: true })
+    ;({ data } = await (await get(T_STUDIO.id)).json())
+    expect(data.messages.at(-1).html_document).toBeNull()
+    expect(data.messages.at(-1).html_quoted_document).toBeNull()
+
+    // …and neither does a row that has no html at all.
+    seedHtml(null)
+    ;({ data } = await (await get(T_STUDIO.id)).json())
+    expect(data.messages.at(-1).html_quoted_document).toBeNull()
+  })
+
+  it('charges both halves to the HTML budget', async () => {
+    setupDb(baseState({
+      grants: [GRANT_STUDIO],
+      messages: [
+        {
+          id: 'm-huge', ticket_id: T_STUDIO.id, location_id: T_STUDIO.location_id,
+          direction: 'inbound', text_body: 'huge', is_internal_note: false,
+          created_at: '2026-08-06T12:00:00Z',
+          html_body: '<p>' + 'x'.repeat(1_500_001) + '</p>',
+        },
+        {
+          id: 'm-small', ticket_id: T_STUDIO.id, location_id: T_STUDIO.location_id,
+          direction: 'inbound', text_body: 'small', is_internal_note: false,
+          created_at: '2026-08-06T09:00:00Z',
+          html_body: '<p>small</p>',
+        },
+      ],
+    }))
+    const { data } = await (await get(T_STUDIO.id)).json()
+    // Newest first spends the budget; the older message falls back to its text
+    // and SAYS SO rather than silently rendering nothing.
+    const [older, newer] = data.messages
+    expect(newer.id).toBe('m-huge')
+    expect(newer.html_omitted).toBe(false)
+    expect(older.id).toBe('m-small')
+    expect(older.html_omitted).toBe(true)
+    expect(older.html_document).toBeNull()
+    expect(older.html_quoted_document).toBeNull()
+  })
+})

@@ -37,6 +37,7 @@
 // already made, and a legacy `solved` row the server calls live was presented
 // as archived — the swipe then sent `{archived:false}`, reopening nothing.
 import { isArchived, needsReply } from 'shared/mail-vocabulary'
+import { splitQuotedText } from 'shared/mail-quote'
 
 // ── Status ───────────────────────────────────────────────────────────
 //
@@ -1124,7 +1125,7 @@ function avatarInitials(nameOrEmail) {
  */
 export function flatMessageMeta(message, { fallbackName = '', now = new Date() } = {}) {
   const m = message || {}
-  const snippet = String(m.text_body || '').replace(/\s+/g, ' ').trim()
+  const snippet = splitQuotedText(String(m.text_body || '')).body.replace(/\s+/g, ' ').trim()
   const when = mailRowTime(m.sent_at || m.created_at, now)
   if (m.is_internal_note) {
     const who = m.author_name || 'Staff'
