@@ -3,14 +3,14 @@ import { splitQuotedText } from './mail-quote.js'
 
 describe('splitQuotedText', () => {
   it('returns the whole text as body when nothing is quoted', () => {
-    expect(splitQuotedText('Hello\n\nThanks,\nRichard')).toEqual({ body: 'Hello\n\nThanks,\nRichard', quoted: '' })
+    expect(splitQuotedText('Hello\n\nThanks,\nJordan')).toEqual({ body: 'Hello\n\nThanks,\nJordan', quoted: '' })
   })
 
   it('splits at a one-line attribution', () => {
-    const text = 'Sounds good.\n\nOn Mon 7 Sep 2026 at 13:34, Richard Ivers <richard@richardivers.com> wrote:\n> test\n> more'
+    const text = 'Sounds good.\n\nOn Mon 7 Sep 2026 at 13:34, Jordan Sample <jordan@example.test> wrote:\n> test\n> more'
     expect(splitQuotedText(text)).toEqual({
       body: 'Sounds good.',
-      quoted: 'On Mon 7 Sep 2026 at 13:34, Richard Ivers <richard@richardivers.com> wrote:\n> test\n> more',
+      quoted: 'On Mon 7 Sep 2026 at 13:34, Jordan Sample <jordan@example.test> wrote:\n> test\n> more',
     })
   })
 
@@ -47,13 +47,13 @@ describe('splitQuotedText', () => {
   })
 
   it('does not split at a signature delimiter', () => {
-    const text = 'Thanks\n\n-- \nRichard Ivers\nUN1T'
+    const text = 'Thanks\n\n-- \nJordan Sample\nUN1T'
     expect(splitQuotedText(text)).toEqual({ body: text, quoted: '' })
   })
 
   it('keeps the signature in the body when a quote follows it', () => {
     const text = 'Thanks\n\n-- \nRichard\n\nOn Mon 7 Sep 2026 at 13:34, A <a@b.c> wrote:\n> hi'
-    expect(splitQuotedText(text).body).toBe('Thanks\n\n-- \nRichard')
+    expect(splitQuotedText(text).body).toBe('Thanks\n\n-- \nJordan')
   })
 
   it('normalises CRLF and trims trailing blank lines off the body', () => {

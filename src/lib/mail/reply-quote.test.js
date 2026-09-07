@@ -7,18 +7,18 @@ import {
 import { FORWARD_QUOTE_MAX_CHARS, FORWARD_TRUNCATED_NOTE } from '@/lib/email-forward'
 
 const inbound = {
-  id: 'in-1', direction: 'inbound', from_email: 'Richard@richardivers.com', subject: 'Re: test',
+  id: 'in-1', direction: 'inbound', from_email: 'Jordan@example.test', subject: 'Re: test',
   text_body: 'Test test 2\n> test', rfc_message_id: 'CANz@mail.gmail.com', postmark_message_id: 'pm-in',
   in_reply_to: '<80d4@mtasv.net>', references_header: '<80d4@mtasv.net>', created_at: '2026-09-07T12:34:15Z',
 }
 const outboundPostmark = {
   id: 'out-1', direction: 'outbound', from_email: 'accounts@hatchstreetfitness.com', subject: 'test',
-  text_body: 'test\n\n-- \nRichard', rfc_message_id: null, postmark_message_id: '80d4bc38-22a5-4462-b93e-5dd29704d473',
+  text_body: 'test\n\n-- \nJordan', rfc_message_id: null, postmark_message_id: '80d4bc38-22a5-4462-b93e-5dd29704d473',
   in_reply_to: null, references_header: null, created_at: '2026-09-07T12:33:47Z', is_internal_note: false,
 }
 const outboundSmtp = { ...outboundPostmark, id: 'out-2', rfc_message_id: 'e6c4@un1t.com', postmark_message_id: null }
 const note = { id: 'n-1', direction: 'outbound', is_internal_note: true, text_body: 'staff only', created_at: '2026-09-07T12:40:00Z' }
-const conversation = { requester_email: 'richard@richardivers.com', requester_name: 'Richard Ivers' }
+const conversation = { requester_email: 'jordan@example.test', requester_name: 'Jordan Sample' }
 const mailbox = { address: 'accounts@hatchstreetfitness.com', label: 'Hatch Street Fitness Accounts' }
 
 describe('selectReplyAnchor', () => {
@@ -91,7 +91,7 @@ describe('attributionStamp', () => {
 describe('attributionLine', () => {
   it('names the sender when the inbound address is the requester', () => {
     expect(attributionLine(inbound, { conversation, mailbox }))
-      .toBe('On Mon 7 Sep 2026 at 13:34, Richard Ivers <Richard@richardivers.com> wrote:')
+      .toBe('On Mon 7 Sep 2026 at 13:34, Jordan Sample <Jordan@example.test> wrote:')
   })
   it('uses the bare address for an inbound from someone else', () => {
     expect(attributionLine({ ...inbound, from_email: 'colm@x.ie' }, { conversation, mailbox }))
@@ -107,7 +107,7 @@ describe('attributionLine', () => {
   })
   it('drops the stamp when there is none', () => {
     expect(attributionLine({ ...inbound, created_at: null, sent_at: null }, { conversation, mailbox }))
-      .toBe('Richard Ivers <Richard@richardivers.com> wrote:')
+      .toBe('Jordan Sample <Jordan@example.test> wrote:')
   })
 })
 
@@ -127,10 +127,10 @@ describe('quotedTextBlock', () => {
 
 describe('buildReplyText', () => {
   it('lays out words, signature, attribution, quote', () => {
-    const text = buildReplyText({ signedText: 'test test 3\n\n-- \nRichard', anchor: inbound, conversation, mailbox })
+    const text = buildReplyText({ signedText: 'test test 3\n\n-- \nJordan', anchor: inbound, conversation, mailbox })
     expect(text).toBe(
       'test test 3\n\n-- \nRichard\n\n'
-      + 'On Mon 7 Sep 2026 at 13:34, Richard Ivers <Richard@richardivers.com> wrote:\n'
+      + 'On Mon 7 Sep 2026 at 13:34, Jordan Sample <Jordan@example.test> wrote:\n'
       + '> Test test 2\n>> test',
     )
   })
@@ -147,7 +147,7 @@ describe('buildReplyHtml', () => {
   it('appends an attribution div and a cite blockquote with escaped text', () => {
     const html = buildReplyHtml({ bodyHtml: '<div>body</div>', anchor: { ...inbound, text_body: '<script>x</script>\n& more' }, conversation, mailbox })
     expect(html.startsWith('<div>body</div>')).toBe(true)
-    expect(html).toContain('On Mon 7 Sep 2026 at 13:34, Richard Ivers &lt;Richard@richardivers.com&gt; wrote:')
+    expect(html).toContain('On Mon 7 Sep 2026 at 13:34, Jordan Sample &lt;Jordan@example.test&gt; wrote:')
     expect(html).toContain('<blockquote type="cite"')
     expect(html).toContain('&lt;script&gt;x&lt;/script&gt;\n&amp; more')
     expect(html).not.toContain('<script>')
