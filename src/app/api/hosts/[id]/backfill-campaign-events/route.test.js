@@ -11,12 +11,14 @@ vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/hosts', async (orig) => ({ ...(await orig()), loadHostForOrg: vi.fn() }))
 vi.mock('@/lib/host-campaign-backfill', () => ({ backfillHostCampaignEvents: vi.fn() }))
+vi.mock('@/lib/log', () => ({ logInfo: vi.fn() }))
 
 import { POST } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { loadHostForOrg } from '@/lib/hosts'
 import { backfillHostCampaignEvents } from '@/lib/host-campaign-backfill'
+import { logInfo } from '@/lib/log'
 
 const HOST_ID = 'h-1'
 const ORG_ID = 'org-1'
@@ -65,6 +67,8 @@ describe('POST /api/hosts/[id]/backfill-campaign-events', () => {
     expect(json.success).toBe(true)
     expect(json.data).toEqual(SUMMARY)
     expect(backfillHostCampaignEvents).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ hostId: HOST_ID, dry: true }))
+    // Audit trail: a preview and a live run must be distinguishable in the logs.
+    expect(logInfo).toHaveBeenCalledWith('host-campaign-backfill', 'backfill preview', expect.objectContaining({ host_id: HOST_ID, dry: true, scanned: SUMMARY.scanned }))
   })
 
   it('?dry=0 opts into a live run', async () => {
@@ -73,6 +77,7 @@ describe('POST /api/hosts/[id]/backfill-campaign-events', () => {
     const res = await POST(makeRequest('?dry=0'), props)
     expect(res.status).toBe(200)
     expect(backfillHostCampaignEvents).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ dry: false }))
+    expect(logInfo).toHaveBeenCalledWith('host-campaign-backfill', 'backfill run', expect.objectContaining({ host_id: HOST_ID, dry: false }))
   })
 
   it('passes the loaded host id (org-scoped, not the raw param) and a from/to window', async () => {

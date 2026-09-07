@@ -17,6 +17,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { loadHostForOrg } from '@/lib/hosts'
 import { backfillHostCampaignEvents } from '@/lib/host-campaign-backfill'
+import { logInfo } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -58,5 +59,13 @@ export async function POST(request, props) {
   const toDate = ymd(new Date(now + 24 * 60 * 60 * 1000))
 
   const summary = await backfillHostCampaignEvents(db, { hostId: host.id, dry, fromDate, toDate })
+  // Audit trail: the only other record of a run is the operator's screen.
+  // (7 Sep 2026: a "did the backfill run?" question could not be answered
+  // from the logs because a preview and a live run looked identical.)
+  logInfo('host-campaign-backfill', dry ? 'backfill preview' : 'backfill run', {
+    host_id: host.id, dry, from: fromDate, to: toDate, user_id: g.user.id,
+    scanned: summary.scanned, matched: summary.matched, stamped: summary.stamped,
+    updated: summary.updated, skipped: summary.skipped, errors: summary.errors.length,
+  })
   return NextResponse.json({ success: true, data: summary })
 }
