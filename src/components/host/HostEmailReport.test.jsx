@@ -129,6 +129,58 @@ describe('HostEmailReport (render)', () => {
     render(<HostEmailReport campaignId="c1" />)
     expect(await screen.findByText('Counts are unavailable right now. The recipient list below is still complete.')).toBeTruthy()
     expect(screen.queryByText('Nothing delivered yet. If this persists, contact UN1T.')).toBeNull()
+    // No scheduled_for on this fixture, so no "Scheduled for" bit renders.
+    expect(screen.queryByText(/Scheduled for/)).toBeNull()
+  })
+
+  it('scheduled_for renders "Scheduled for <dublinScheduleLabel>"', async () => {
+    mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: true,
+        data: {
+          campaign: {
+            id: 'c1',
+            subject: 'Race day info',
+            status: 'scheduled',
+            audience_kind: 'all',
+            sent_at: null,
+            scheduled_for: '2026-09-10T09:00:00Z',
+            stats: null,
+          },
+          recipients: [],
+        },
+      }),
+    })
+    render(<HostEmailReport campaignId="c1" />)
+    expect(await screen.findByText(/Scheduled for \w{3} \d{1,2} \w{3}, \d{2}:\d{2}/)).toBeTruthy()
+  })
+
+  it('a sent campaign whose scheduled_for the sweeper left behind renders both "Sent " and "Scheduled for"', async () => {
+    mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: true,
+        data: {
+          campaign: {
+            id: 'c1',
+            subject: 'Race day info',
+            status: 'sent',
+            audience_kind: 'all',
+            sent_at: '2026-09-01T10:00:00Z',
+            scheduled_for: '2026-09-01T10:00:00Z',
+            stats: null,
+          },
+          recipients: [],
+        },
+      }),
+    })
+    render(<HostEmailReport campaignId="c1" />)
+    await screen.findByText('Counts are unavailable right now. The recipient list below is still complete.')
+    expect(screen.getByText(/Sent /)).toBeTruthy()
+    expect(screen.getByText(/Scheduled for/)).toBeTruthy()
   })
 
   it('sent >1h ago with zero delivered shows the stale-delivery note', async () => {

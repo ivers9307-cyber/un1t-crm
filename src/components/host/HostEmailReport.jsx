@@ -22,6 +22,7 @@
 // recipe used across the portal).
 
 import { useEffect, useState } from 'react'
+import { dublinScheduleLabel } from '@/lib/host-schedule-time'
 
 const AUDIENCE_LABEL = {
   all: 'All contacts',
@@ -191,6 +192,12 @@ export default function HostEmailReport({ campaignId }) {
 
   const sentAt = campaign?.sent_at
   const whenStr = formatWhen(sentAt)
+  const scheduledStr = dublinScheduleLabel(campaign?.scheduled_for)
+  const headerBits = [
+    whenStr && `Sent ${whenStr}`,
+    scheduledStr && `Scheduled for ${scheduledStr}`,
+    AUDIENCE_LABEL[campaign?.audience_kind] || 'All contacts',
+  ].filter(Boolean)
   const staleNoDelivery = hasStats
     && campaign?.status === 'sent'
     && (campaign.stats.delivered || 0) === 0
@@ -202,9 +209,7 @@ export default function HostEmailReport({ campaignId }) {
       <div className="mt-3">
         <h1 className="text-2xl font-bold">{campaign?.subject || ''}</h1>
         <p className="text-white/55 text-sm mt-1 flex items-center gap-2 flex-wrap">
-          {whenStr && <span>{whenStr}</span>}
-          {whenStr && <span>·</span>}
-          <span>{AUDIENCE_LABEL[campaign?.audience_kind] || 'All contacts'}</span>
+          <span>{headerBits.join(' · ')}</span>
           {campaign?.email_type === 'utility' && (
             <span className="rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide bg-sky-500/15 text-sky-300">
               Utility

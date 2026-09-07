@@ -38,7 +38,7 @@ export async function GET(_request, props) {
   const db = createServerClient()
   const { data: campaign, error: campaignErr } = await db
     .from('host_campaigns')
-    .select('id, subject, status, email_type, audience_kind, audience_event_id, sent_at, created_at, recipient_count, sent_count')
+    .select('id, subject, status, email_type, audience_kind, audience_event_id, sent_at, created_at, recipient_count, sent_count, scheduled_for')
     .eq('id', params.id)
     .eq('host_id', session.host.id)
     .maybeSingle()

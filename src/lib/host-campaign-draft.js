@@ -2,6 +2,13 @@
 // PATCH update). Lives outside the route files because Next route modules
 // may only export HTTP methods.
 
+// HOST-SCHEDULE.1 — one row shape for every host-campaign list/create/
+// schedule response. Typed once here (route modules may only export
+// handlers) and reused by the emails list route (GET + POST) and the
+// schedule/unschedule routes, so a column added to one response is added
+// to all of them.
+export const HOST_CAMPAIGN_LIST_COLUMNS = 'id, subject, status, audience_kind, audience_event_id, email_type, recipient_count, sent_count, created_at, sent_at, scheduled_for, schedule_error'
+
 // The design document is host-authored JSON we store verbatim — cap its
 // serialized size so a hostile client can't balloon the row.
 export function designJsonTooBig(designJson) {
