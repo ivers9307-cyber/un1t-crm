@@ -31,11 +31,11 @@ vi.mock('@/lib/auth', async () => {
 import { PATCH } from './route'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
-import { makeDb, failWrites, updatesTo, writesTo } from '../../_test-db'
+import { makeDb, failWrites, updatesTo, writesTo } from '../../../tickets/_test-db'
 import { MAX_RECIPIENTS } from '@/lib/email-recipients'
 import {
   T_STUDIO, T_OTHER_LOCATION, COACH, GRANT_STUDIO, baseState,
-} from '../../_test-fixtures'
+} from '../../../tickets/_test-fixtures'
 
 function patch(id, body) {
   return PATCH(

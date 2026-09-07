@@ -102,7 +102,7 @@ import { joinPointsByMessage } from '@/lib/mail/conversation'
 // this file adds a fourth only for the one thing that IS a real shared
 // registry: which slugs are member-ish vs still-a-lead.
 import { FUNNEL_STAGE_SLUGS, RETURNING_STAGE_SLUGS, OFF_FUNNEL_STAGE_SLUGS } from '@/lib/pipeline-classifier'
-import TicketReplyBox from './TicketReplyBox'
+import ReplyBox from './ReplyBox'
 
 // member-ish (green): the off-funnel "steady state" slugs (minus the two that
 // are really a lead who went cold/quiet, not a member) plus 'converted' —
@@ -141,7 +141,7 @@ function stageChipLabel(slug) {
   return slug.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
-export default function TicketThread({
+export default function ConversationThread({
   hasSelection,
   ticket,
   messages = [],
@@ -210,7 +210,7 @@ export default function TicketThread({
   banner,
   emptyState,   // with no selection: the caller's own empty state
   // Forwarded verbatim to the composer — the one sentence in there written in
-  // the ticket lifecycle's vocabulary. See TicketReplyBox.jsx.
+  // the ticket lifecycle's vocabulary. See ReplyBox.jsx.
   archivedHint,
   // MAIL-DOCK.1 — which window the thread is rendering into ('dock' |
   // 'full'). Only the email frames read it (via frameHeightClass); absent,
@@ -288,7 +288,7 @@ export default function TicketThread({
     setLinkingContact(true)
     setLinkContactError(null)
     try {
-      const res = await fetch(`/api/email/tickets/${ticketId}/link-contact`, { method: 'POST' })
+      const res = await fetch(`/api/email/mail/${ticketId}/link-contact`, { method: 'POST' })
       const body = await res.json().catch(() => null)
       if (!res.ok || !body?.success) {
         setLinkContactError(body?.error || 'Could not add this contact. Try again.')
@@ -374,7 +374,7 @@ export default function TicketThread({
               ) : (
                 // mailbox_id is ON DELETE SET NULL, so a deleted address
                 // orphans its correspondence rather than hiding it.
-                <span>No mailbox on this ticket</span>
+                <span>No mailbox on this conversation</span>
               )}
               {effectiveContact?.id ? (
                 <>
@@ -526,7 +526,7 @@ export default function TicketThread({
               Open the conversation it lives in now →
             </button>
           ) : (
-            'Open the ticket it was merged into to reply.'
+            'Open the conversation it was merged into to reply.'
           )}
         </p>
       ) : (
@@ -534,10 +534,10 @@ export default function TicketThread({
            Its draft text, reply/note mode, added Cc/Bcc and attached files are
            all local state — carried across a switch, member A's half-written
            reply (and Bcc chips) would send to member B's requester
-           (TICKET-COMPOSER-LEAK.1, pinned in TicketThread.composer-reset.test.jsx).
+           (TICKET-COMPOSER-LEAK.1, pinned in ConversationThread.composer-reset.test.jsx).
            The inbox already clears the server-derived replyRecipients on
            switch; this is the same rule for the operator-typed half. */
-        <TicketReplyBox
+        <ReplyBox
           key={ticketId}
           ticket={ticket}
           startCollapsed={replyStartCollapsed}
@@ -714,7 +714,7 @@ function Attachments({ ticketId, attachments, onAccent = false, onOpen }) {
     setBusy(att.id)
     setFailed(null)
     try {
-      const res = await fetch(`/api/email/tickets/${ticketId}/attachments/${att.id}`)
+      const res = await fetch(`/api/email/mail/${ticketId}/attachments/${att.id}`)
       const j = await res.json()
       if (!res.ok || !j.success || !j.data?.url) {
         setFailed(j.error || 'That file could not be opened.')
@@ -922,7 +922,7 @@ function DeliveryFailureNotice({ delivery, stamp }) {
  * only the first one is a gap the requester fills. Falling back on the second
  * printed the person who had just been removed at the top of the pane, named
  * as who the ticket is with, directly above a composer saying nobody is left
- * and a route that 400s the send. TicketReplyBox.jsx has forbidden exactly
+ * and a route that 400s the send. ReplyBox.jsx has forbidden exactly
  * that since EMAIL-PARTICIPANTS.7 — never name somebody who will not be
  * mailed — and this header was contradicting it one component up. It says the
  * true thing instead, in the composer's own words, and the removed addresses

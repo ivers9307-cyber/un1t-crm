@@ -1,13 +1,13 @@
 // MAIL-ARCH.2 — the REPLY-DRAFT store, split out of mail-display.js. Pure
 // apart from window.localStorage, every access of which is guarded. Consumed
-// by TicketReplyBox; its mobile mirror (over AsyncStorage) is
+// by ReplyBox; its mobile mirror (over AsyncStorage) is
 // mobile/lib/mail-drafts.js, whose header pins the SEMANTICS below as the
 // contract.
 
 /* ─────────────────────────── reply drafts ─────────────────────────── */
 
 /**
- * TicketReplyBox holds its text in plain useState, and TicketThread
+ * ReplyBox holds its text in plain useState, and ConversationThread
  * deliberately REMOUNTS it on every ticket switch (`key={ticketId}`) — that
  * remount is TICKET-COMPOSER-LEAK.1's guard against member A's half-written
  * reply going out addressed to member B. Losing the words on every switch,
@@ -26,7 +26,7 @@
  * — the words an operator actually typed, which of the two composer modes
  * they were in, and when. Recipients, Cc/Bcc, removed participants and
  * attached files are NEVER part of it: those are derived per ticket from the
- * thread itself (see TicketReplyBox's own header comment on `lockedTo`),
+ * thread itself (see ReplyBox's own header comment on `lockedTo`),
  * which is precisely the surface TICKET-COMPOSER-LEAK.1 guards. Persisting
  * them here would recreate the leak the remount was built to close — a
  * restored draft naming yesterday's recipients on today's ticket.

@@ -2,8 +2,8 @@
 //
 // TICKET-COMPOSER-LEAK.1 — switching tickets must not carry the composer.
 //
-// The bug (2026-08-08 audit, confirmed HIGH): TicketReplyBox holds its mode,
-// draft text, added Cc/Bcc and attached files in local state, and TicketThread
+// The bug (2026-08-08 audit, confirmed HIGH): ReplyBox holds its mode,
+// draft text, added Cc/Bcc and attached files in local state, and ConversationThread
 // rendered it without a key — so React kept the same component instance across
 // a ticket switch. Member A's half-written reply, internal-note mode and
 // committed Bcc chips all survived onto member B's ticket, where Send would
@@ -16,10 +16,10 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, cleanup, screen, fireEvent } from '@testing-library/react'
-import TicketThread from './TicketThread.jsx'
+import ConversationThread from './ConversationThread.jsx'
 
 beforeEach(() => {
-  // TicketReplyBox fetches the viewer's signature on mount. Never resolving is
+  // ReplyBox fetches the viewer's signature on mount. Never resolving is
   // the quiet stub: the composer treats a missing signature as cosmetic.
   vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
   // jsdom implements no layout — the thread's scroll-to-newest effect needs
@@ -53,15 +53,15 @@ function threadProps(ticket) {
 const TICKET_A = { id: 'ticket-a', subject: 'Membership freeze', requester_email: 'alice@example.com', status: 'open' }
 const TICKET_B = { id: 'ticket-b', subject: 'Billing question', requester_email: 'bob@example.com', status: 'open' }
 
-describe('TicketThread — the composer belongs to one ticket', () => {
+describe('ConversationThread — the composer belongs to one ticket', () => {
   it('drops a half-written draft when the operator switches tickets', () => {
-    const { rerender } = render(<TicketThread {...threadProps(TICKET_A)} />)
+    const { rerender } = render(<ConversationThread {...threadProps(TICKET_A)} />)
 
     const draft = screen.getByLabelText('Reply to the member')
     fireEvent.change(draft, { target: { value: 'Hi Alice — about your freeze…' } })
     expect(draft.value).toBe('Hi Alice — about your freeze…')
 
-    rerender(<TicketThread {...threadProps(TICKET_B)} />)
+    rerender(<ConversationThread {...threadProps(TICKET_B)} />)
 
     // A draft written for Alice must never sit in Bob's composer: Send there
     // delivers it to Bob's requester.
@@ -69,13 +69,13 @@ describe('TicketThread — the composer belongs to one ticket', () => {
   })
 
   it('resets internal-note mode to reply when the operator switches tickets', () => {
-    const { rerender } = render(<TicketThread {...threadProps(TICKET_A)} />)
+    const { rerender } = render(<ConversationThread {...threadProps(TICKET_A)} />)
 
     fireEvent.click(screen.getByRole('button', { name: 'Internal note' }))
     // Note mode is on: the textarea is now labelled as the staff-only field.
     expect(screen.getByLabelText('Internal note (staff only)')).toBeTruthy()
 
-    rerender(<TicketThread {...threadProps(TICKET_B)} />)
+    rerender(<ConversationThread {...threadProps(TICKET_B)} />)
 
     // Mode must not follow the operator to the next ticket — a reply typed
     // into a composer silently left in note mode is never sent, and the

@@ -258,7 +258,7 @@ export function buildSearchSections(locations, results) {
  *
  * `perLocation` is `[{ locationId, name, mailboxes }]` in display order. With
  * 2+ studios actually holding mailboxes, each option's label is prefixed with
- * its studio name — TicketCompose renders labels flat (it is not this task's
+ * its studio name — ComposeForm renders labels flat (it is not this task's
  * file to change), so the studio name IN the label is what "grouped by
  * studio" means on this surface. With one studio the mailboxes pass through
  * untouched: no prefix noise for a choice that has no cross-studio ambiguity.

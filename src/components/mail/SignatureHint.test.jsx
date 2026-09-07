@@ -21,7 +21,7 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { render, cleanup, screen, act, waitFor } from '@testing-library/react'
 import SignatureHint, { SIGNATURE_UPDATED_KEY, markSignatureUpdated } from './SignatureHint.jsx'
-import TicketReplyBox from './TicketReplyBox.jsx'
+import ReplyBox from './ReplyBox.jsx'
 import { resolveViewerId } from '@/components/mail/viewer-id'
 
 // The reply box resolves the signed-in user for draft scoping; mocked so the
@@ -278,11 +278,11 @@ describe('SignatureHint — a mounted composer never goes stale', () => {
   })
 })
 
-describe('TicketReplyBox hands the hint the ticket’s own location', () => {
+describe('ReplyBox hands the hint the ticket’s own location', () => {
   it('a reply on a MAILBOX-LESS orphan ticket at a permitted studio resolves that studio — never the stored note', async () => {
     stubPreferences({ email_signature: '', email_signature_rich: RICH })
     render(
-      <TicketReplyBox
+      <ReplyBox
         ticket={{
           id: 'ticket-1', subject: 'Freeze', requester_email: 'a@x.com',
           // Orphan: no mailbox (ON DELETE SET NULL), at Hatch — which runs

@@ -5,7 +5,7 @@
 // and can be mutation-tested.
 //
 // THE SERVER IS THE GATE, THIS FILE IS THE AFFORDANCE. The compose route
-// (POST /api/email/tickets/compose) validates addresses with the strict Zod
+// (POST /api/email/mail/compose) validates addresses with the strict Zod
 // email schema, enforces the 25-recipient cap and dedupes across To/Cc/Bcc —
 // none of that is re-implemented here (CONTRACTS: surface refusals, don't
 // re-derive them). What this file DOES own is the phone-side experience the
@@ -30,7 +30,7 @@
 // No React Native imports — this file runs under vitest's node environment
 // (vitest.config.js includes mobile/lib).
 
-import { formatAttachmentSize } from './email-tickets'
+import { formatAttachmentSize } from './mail-conversations'
 
 // ── Recipients ───────────────────────────────────────────────────────
 

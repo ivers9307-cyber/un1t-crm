@@ -3,10 +3,10 @@
 // MAIL-TRIAL.B — the reading pane.
 //
 // 🔴 WHAT THIS FILE IS REALLY PINNING is that reuse and difference are both
-// real at the same time. MailThread is a WRAPPER around TicketThread: if it
+// real at the same time. MailThread is a WRAPPER around ConversationThread: if it
 // ever becomes a fork, the shared half (the sandboxed HTML frame, attachments,
 // the delivery marker, the mail-client marker, the composer) starts drifting
-// and the security literals in TicketThread.jsx that src/lib/email-html.test.js
+// and the security literals in ConversationThread.jsx that src/lib/email-html.test.js
 // asserts against would be guarding a file nobody renders on this screen.
 //
 // So the tests come in two halves:
@@ -70,7 +70,7 @@ function renderThread(props = {}) {
 }
 
 describe('MailThread — the shared half is genuinely reused', () => {
-  it('renders the correspondence through TicketThread, not a copy of it', () => {
+  it('renders the correspondence through ConversationThread, not a copy of it', () => {
     renderThread()
     expect(screen.getByText('Can I freeze my membership from Monday?')).toBeTruthy()
     // MAIL-REFINE.1 (02) — the flat message header names the sender and their
@@ -95,7 +95,7 @@ describe('MailThread — the shared half is genuinely reused', () => {
     // operator answering the wrong person is a mail problem.
     renderThread({ conversation: { ...CONVERSATION }, replyRecipients: { to: ['ella@member.ie'], mode: 'reply' } })
     // Mail-client form, name attached to the one address it belongs to —
-    // TicketThread's own rule, inherited rather than restated.
+    // ConversationThread's own rule, inherited rather than restated.
     expect(screen.getByText('On this thread: Ella Byrne <ella@member.ie>')).toBeTruthy()
     expect(screen.getByText(/To Studio/)).toBeTruthy()
   })

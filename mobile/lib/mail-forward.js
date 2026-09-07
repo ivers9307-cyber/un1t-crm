@@ -3,7 +3,7 @@
 // and vitest-tested (mobile screens have no render harness — contract rule 6).
 //
 // THE SERVER IS THE GATE, THIS FILE IS THE AFFORDANCE — the forward route
-// (POST /api/email/tickets/[id]/forward) refuses notes, unstored files and an
+// (POST /api/email/mail/[id]/forward) refuses notes, unstored files and an
 // over-budget set with operator-facing sentences, and this file exists so the
 // screen predicts every one of those refusals BEFORE the wire. A refused send
 // the screen could have foreseen is a bug, not a safety net.
@@ -40,7 +40,7 @@
 //
 // No React Native imports — this file runs under vitest's node environment.
 
-import { formatAttachmentSize } from './email-tickets'
+import { formatAttachmentSize } from './mail-conversations'
 
 /**
  * The most RAW bytes one outbound email may carry — a restatement of
@@ -64,7 +64,7 @@ export function canForwardMessage(message) {
 
 /**
  * What the thread's ⋮ overflow acts on: the NEWEST forwardable message.
- * Messages arrive oldest-first from getTicket, so this walks from the end —
+ * Messages arrive oldest-first from getConversation, so this walks from the end —
  * skipping trailing internal notes, because "forward" from the thread menu
  * means the correspondence on top, never the staff commentary about it.
  */

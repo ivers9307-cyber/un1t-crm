@@ -10,7 +10,7 @@
 //
 // So every gate here is the original email access model, imported verbatim:
 //   • loadVisibleMailboxes  — the email_inbox key + per-mailbox grants
-//   • loadTicketForUser     — the same, resolved at the TICKET's location
+//   • loadConversationForUser — the same, resolved at the TICKET's location
 //     (and the orphan rule: a NULL-mailbox ticket is visible to ELEVATED
 //     callers only — mailbox_id is ON DELETE SET NULL and mig 484's backfill
 //     predates the column, so orphans genuinely exist)
@@ -26,12 +26,12 @@
 
 import {
   loadVisibleMailboxes, scopeToNeedsReply, scopeToUnmerged, scopeToSpamView, statusTimestamps,
-  loadTicketForUser, ticketNotFound,
-} from '../tickets/_helpers'
+  loadConversationForUser, conversationNotFound,
+} from './_conversation'
 
 // Re-exported so the routes in this tree import their gates from ONE place and
 // a reader can see, in one import line, that they are the ticket surface's.
-export { scopeToNeedsReply, scopeToUnmerged, scopeToSpamView, statusTimestamps, loadTicketForUser, ticketNotFound }
+export { scopeToNeedsReply, scopeToUnmerged, scopeToSpamView, statusTimestamps, loadConversationForUser, conversationNotFound }
 
 /**
  * The mailboxes this caller may see at this location, in tab order.

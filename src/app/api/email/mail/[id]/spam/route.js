@@ -3,8 +3,8 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { loadTicketForUser, stampMailRow } from '../../_helpers'
-import { loadOwnAddresses } from '../../../tickets/_helpers'
+import { loadConversationForUser, stampMailRow } from '../../_helpers'
+import { loadOwnAddresses } from '../../_conversation'
 import { maybeNotifyInboundEmail } from '@/lib/email-inbound-push'
 import { logError } from '@/lib/log'
 
@@ -53,7 +53,7 @@ const MESSAGE_LIMIT = 500
 // notify: PostgREST returns the rows it changed, and zero rows means the
 // other click won.
 //
-// ALL THE GATES ARE loadTicketForUser's: location access, the `email_inbox`
+// ALL THE GATES ARE loadConversationForUser's: location access, the `email_inbox`
 // key at the TICKET's location, and the per-mailbox grant. Every refusal is
 // the same 404.
 export async function POST(request, props) {
@@ -66,7 +66,7 @@ export async function POST(request, props) {
   const { spam } = validation.data
 
   const db = createServerClient()
-  const loaded = await loadTicketForUser(db, user, params.id)
+  const loaded = await loadConversationForUser(db, user, params.id)
   if (loaded.response) return loaded.response
   const { ticket } = loaded
 

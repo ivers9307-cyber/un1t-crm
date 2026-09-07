@@ -17,7 +17,7 @@
 //     avatar). ONLY the newest message opens by default; every other folds
 //     to a one-line row (avatar, sender, snippet, time) until tapped, and an
 //     open header taps closed again (flatThreadPlan/flatMessageMeta in
-//     lib/email-tickets.js).
+//     lib/mail-conversations.js).
 //   • MAIL-REFINE.1 §03 — a nudge banner under the header when the same
 //     requester has other OPEN conversations here (relatedNudge over the
 //     related endpoint — an unknown count shows NOTHING, never 0), a
@@ -38,7 +38,7 @@
 //
 // THE ONE THING THIS FILE MUST NEVER GET WRONG
 // An internal note is stored with direction='outbound' — same as a real sent
-// reply. ticketMessageKind() (lib/email-tickets.js) tests is_internal_note
+// reply. ticketMessageKind() (lib/mail-conversations.js) tests is_internal_note
 // FIRST and this file only paints what it decides — collapsed rows included
 // (flatMessageMeta applies the same ordering, so a folded note keeps its
 // amber and its lock). Nobody must ever be able to think a note went to the member, or
@@ -74,7 +74,7 @@
 // Cc/Bcc) stays web-only — a confidentiality control that wants real device
 // QA. All three places a name appears (header line, placeholder, audience
 // sentence) come from ONE derivation (ticketReplyAudience in
-// lib/email-tickets.js), so this screen cannot say three things about who a
+// lib/mail-conversations.js), so this screen cannot say three things about who a
 // reply reaches.
 
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react'
@@ -90,8 +90,8 @@ import * as DocumentPicker from 'expo-document-picker'
 import * as ImagePicker from 'expo-image-picker'
 import { useAuth } from '../../../lib/auth-context'
 import {
-  getTicket, replyToTicket, archiveConversation, setConversationSeen, emailDisplayName,
-  previewTicketAttachment, downloadTicketAttachment,
+  getConversation, replyToConversation, archiveConversation, setConversationSeen, emailDisplayName,
+  previewConversationAttachment, downloadConversationAttachment,
   signOutboundAttachment, uploadSignedAttachment,
   fetchRelatedConversations, mergeConversation, unmergeConversation,
   fetchSignatureContexts,
@@ -104,7 +104,7 @@ import {
   threadRefreshMs, ticketReplyAudienceMeta, ticketReplyPlaceholder,
   ticketThreadAudienceLines, ticketSendOriginMeta,
   flatThreadPlan, flatMessageMeta, mergedInDividers,
-} from '../../../lib/email-tickets'
+} from '../../../lib/mail-conversations'
 // MAIL-ARCH.3 — the thread route stamps `archived` now; read the stamp, never
 // `status` (legacy `solved` is LIVE on the wire). MAIL-ARCH.4 — the one
 // reading is shared's isArchived; see shared/mail-vocabulary.js.
@@ -192,7 +192,7 @@ function RecipientLines({ msg, toShownInHeader = false }) {
  * bytes, and a spinner that ended in an error would bury the one sentence staff
  * act on.
  */
-function Attachments({ ticketId, locationId, attachments, onViewImage }) {
+function Attachments({ conversationId, locationId, attachments, onViewImage }) {
   const [busy, setBusy] = useState(null)
   if (!attachments || attachments.length === 0) return null
 
@@ -201,7 +201,7 @@ function Attachments({ ticketId, locationId, attachments, onViewImage }) {
     setBusy(att.id)
     try {
       if (att.preview_kind === 'image') {
-        const res = await previewTicketAttachment(ticketId, att.id, locationId)
+        const res = await previewConversationAttachment(conversationId, att.id, locationId)
         if (res.success) {
           onViewImage({ url: res.url, filename: att.filename })
           return
@@ -209,7 +209,7 @@ function Attachments({ ticketId, locationId, attachments, onViewImage }) {
         // Fall through to the download path rather than dead-ending: the file
         // is still reachable, which is the guarantee that holds for every type.
       }
-      const dl = await downloadTicketAttachment(ticketId, att.id, locationId)
+      const dl = await downloadConversationAttachment(conversationId, att.id, locationId)
       if (!dl.success) {
         Alert.alert('Couldn’t open file', dl.error)
         return
@@ -406,7 +406,7 @@ function ForwardIcon({ onForward, onAccent = false, label }) {
  * recipient lines, and the delivery verdicts, quiet and loud). Tapping the
  * header folds the message back to its one-line row.
  */
-function FlatMessage({ msg, ticketId, locationId, fallbackName, onViewImage, onForward, onCollapse }) {
+function FlatMessage({ msg, conversationId, locationId, fallbackName, onViewImage, onForward, onCollapse }) {
   const kind = ticketMessageKind(msg)
   const meta = flatMessageMeta(msg, { fallbackName })
   const stamp = formatTime(msg.sent_at || msg.created_at)
@@ -503,7 +503,7 @@ function FlatMessage({ msg, ticketId, locationId, fallbackName, onViewImage, onF
 
       <Text className="text-base text-un1t-text">{body}</Text>
       <Attachments
-        ticketId={ticketId}
+        conversationId={conversationId}
         locationId={locationId}
         attachments={msg.attachments}
         onViewImage={onViewImage}
@@ -553,7 +553,7 @@ function FlatMessage({ msg, ticketId, locationId, fallbackName, onViewImage, onF
 }
 
 export default function EmailTicket() {
-  const { ticketId } = useLocalSearchParams()
+  const { conversationId } = useLocalSearchParams()
   const { profile, activeLocation } = useAuth()
   const headerHeight = useHeaderHeight()
   const insets = useSafeAreaInsets()
@@ -607,7 +607,7 @@ export default function EmailTicket() {
   // MAIL-REFINE.2 — provenance for the Merged-in dividers.
   const [mergedSources, setMergedSources] = useState([])
   // EMAIL-PARTICIPANTS.9 — { to, mode, over_cap, empty } | null, straight off
-  // getTicket(). Kept alongside `ticket` rather than folded into it: it comes
+  // getConversation(). Kept alongside `ticket` rather than folded into it: it comes
   // back from the SAME response but is answered as its own top-level field.
   const [replyRecipients, setReplyRecipients] = useState(null)
   // EMAIL-ATTACH-PREVIEW.1 — the one image being looked at, if any.
@@ -638,8 +638,8 @@ export default function EmailTicket() {
   // sentinel), per ticket. mailbox_id only exists once the ticket has loaded,
   // which is why hydration below waits for it.
   const draftScope = useMemo(
-    () => ({ userId: profile?.id, mailboxId: ticket?.mailbox_id, ticketId }),
-    [profile?.id, ticket?.mailbox_id, ticketId]
+    () => ({ userId: profile?.id, mailboxId: ticket?.mailbox_id, conversationId }),
+    [profile?.id, ticket?.mailbox_id, conversationId]
   )
 
   // `quiet` is a background re-read of a thread already on screen (the poll
@@ -647,7 +647,7 @@ export default function EmailTicket() {
   // background read must not replace correspondence the operator is reading
   // with a failure message. What is on screen is still true, just seconds old.
   const refresh = useCallback(async ({ quiet = false } = {}) => {
-    const res = await getTicket(ticketId, activeLocation?.id)
+    const res = await getConversation(conversationId, activeLocation?.id)
     if (!res.success) {
       if (!quiet) setError(res.error || 'Failed to load ticket')
       return
@@ -683,9 +683,9 @@ export default function EmailTicket() {
     // and in the operator's own mail app too.
     if (!readMarked.current) {
       readMarked.current = true
-      setConversationSeen(ticketId, true, activeLocation?.id).catch(() => {})
+      setConversationSeen(conversationId, true, activeLocation?.id).catch(() => {})
     }
-  }, [ticketId, activeLocation])
+  }, [conversationId, activeLocation])
 
   useEffect(() => {
     setLoading(true)
@@ -701,10 +701,10 @@ export default function EmailTicket() {
     // Audit A4 — last-write-wins raced a post-merge reload against a slow
     // initial fetch and could resurrect a just-merged row in the picker.
     const seq = ++relatedSeqRef.current
-    const res = await fetchRelatedConversations(ticketId, activeLocation?.id)
+    const res = await fetchRelatedConversations(conversationId, activeLocation?.id)
     if (seq !== relatedSeqRef.current) return
     setRelated(res.success ? res : null)
-  }, [ticketId, activeLocation?.id])
+  }, [conversationId, activeLocation?.id])
 
   useEffect(() => { loadRelated() }, [loadRelated])
 
@@ -722,7 +722,7 @@ export default function EmailTicket() {
     if (hydrationStarted.current) return
     if (!profile?.id || !ticket) return
     hydrationStarted.current = true
-    const scope = { userId: profile.id, mailboxId: ticket.mailbox_id, ticketId }
+    const scope = { userId: profile.id, mailboxId: ticket.mailbox_id, conversationId }
     readReplyDraft(scope).then((draft) => {
       const decision = resolveDraftHydration({ liveText: liveRef.current.text, draft })
       if (decision.action === 'hydrate') {
@@ -738,7 +738,7 @@ export default function EmailTicket() {
       // Only now may the write-through below run — see draftReady's comment.
       setDraftReady(true)
     })
-  }, [profile?.id, ticket, ticketId])
+  }, [profile?.id, ticket, conversationId])
 
   // DRAFT WRITE-THROUGH — debounced, gated on hydration having settled. Only
   // { text, mode } are ever persisted (never recipients or files — the web
@@ -779,10 +779,10 @@ export default function EmailTicket() {
   // nothing.
   const threadPollMs = threadRefreshMs(messages)
   useEffect(() => {
-    if (!ticketId) return undefined
+    if (!conversationId) return undefined
     const timer = setInterval(() => { refresh({ quiet: true }) }, threadPollMs)
     return () => clearInterval(timer)
-  }, [ticketId, threadPollMs, refresh])
+  }, [conversationId, threadPollMs, refresh])
 
   useEffect(() => {
     if (messages.length && scrollRef.current) {
@@ -808,7 +808,7 @@ export default function EmailTicket() {
   // and over_cap; composerSendState folds it into the one send gate.
   const audience = ticketReplyAudienceMeta(ticket, replyRecipients)
   // EMAIL-PARTICIPANTS.12 — one derivation for every string that names the
-  // audience (lib/email-tickets.js), so this screen cannot say three things
+  // audience (lib/mail-conversations.js), so this screen cannot say three things
   // about who a reply reaches.
   const threadLines = ticketThreadAudienceLines(ticket, replyRecipients)
   const replyPlaceholder = ticketReplyPlaceholder(ticket, replyRecipients)
@@ -841,7 +841,7 @@ export default function EmailTicket() {
         filename: entry.filename,
         size: entry.size,
         mime: entry.mime,
-        ticketId,
+        ticketId: conversationId,
         locationId: activeLocation?.id,
       })
       if (!sign.success) {
@@ -932,11 +932,11 @@ export default function EmailTicket() {
     if (!sendState.canSend) return
     const body = text.trim()
     setSending(true)
-    const res = await replyToTicket(ticketId, body, {
+    const res = await replyToConversation(conversationId, body, {
       internal: isNote,
       locationId: activeLocation?.id,
       // Ready refs only (lib rule: STATUS gates, not the ref's presence) —
-      // and replyToTicket itself refuses to put attachments on a note.
+      // and replyToConversation itself refuses to put attachments on a note.
       attachments: readyAttachmentRefs(files),
     })
     setSending(false)
@@ -970,7 +970,7 @@ export default function EmailTicket() {
     if (savingAction) return
     const next = !isArchived(ticket)
     setSavingAction(true)
-    const res = await archiveConversation(ticketId, next, activeLocation?.id)
+    const res = await archiveConversation(conversationId, next, activeLocation?.id)
     setSavingAction(false)
     if (!res.success) {
       Alert.alert(next ? 'Couldn’t archive' : 'Couldn’t bring it back', res.error || 'Unknown error')
@@ -998,7 +998,7 @@ export default function EmailTicket() {
   async function markUnread() {
     if (savingAction) return
     setSavingAction(true)
-    const res = await setConversationSeen(ticketId, false, activeLocation?.id)
+    const res = await setConversationSeen(conversationId, false, activeLocation?.id)
     setSavingAction(false)
     if (!res.success) {
       Alert.alert('Couldn’t mark as unread', res.error || 'Unknown error')
@@ -1021,7 +1021,7 @@ export default function EmailTicket() {
     const ids = rows.map(r => r.id).filter(id => mergeSelected.has(id))
     if (merging || ids.length === 0) return
     setMerging(true)
-    const out = await runMerges(ids, (id) => mergeConversation(id, ticketId, activeLocation?.id))
+    const out = await runMerges(ids, (id) => mergeConversation(id, conversationId, activeLocation?.id))
     setMerging(false)
     if (out.merged.length > 0) {
       setMergeSelected(new Set())
@@ -1072,7 +1072,7 @@ export default function EmailTicket() {
   // affordances land here: the header ⋮ (with the newest forwardable message)
   // and the per-message icon (with its own).
   function pushForward(messageId) {
-    router.push({ pathname: '/email/forward', params: { ticketId, messageId } })
+    router.push({ pathname: '/email/forward', params: { ticketId: conversationId, messageId } })
   }
 
   // The ⋮ overflow — one action, acting on the NEWEST forwardable message
@@ -1101,7 +1101,7 @@ export default function EmailTicket() {
   const archived = isArchived(ticket)
 
   // The folded/unfolded plan (MAIL-REFINE.1 §02, flatThreadPlan in
-  // lib/email-tickets.js): ONLY the newest opens by default; taps override
+  // lib/mail-conversations.js): ONLY the newest opens by default; taps override
   // per message, both directions.
   const plan = flatThreadPlan(messages, foldOverrides)
   const mergedDividers = mergedInDividers(messages, mergedSources)
@@ -1295,7 +1295,7 @@ export default function EmailTicket() {
             )}
             {plan.length === 0 ? (
               <Text className="text-xs text-un1t-subtle text-center py-6">
-                No messages on this ticket yet.
+                No messages in this conversation yet.
               </Text>
             ) : (
               plan.map(({ message: m, collapsed }) => (
@@ -1321,7 +1321,7 @@ export default function EmailTicket() {
                 ) : (
                   <FlatMessage
                     msg={m}
-                    ticketId={ticketId}
+                    conversationId={conversationId}
                     locationId={activeLocation?.id}
                     fallbackName={ticket?.requester_name || ''}
                     onViewImage={setViewingImage}

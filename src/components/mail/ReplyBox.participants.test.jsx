@@ -17,7 +17,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, cleanup, screen, fireEvent } from '@testing-library/react'
-import TicketReplyBox from './TicketReplyBox.jsx'
+import ReplyBox from './ReplyBox.jsx'
 
 beforeEach(() => {
   // Nothing in these tests wants the network. A never-resolving fetch is the
@@ -26,7 +26,7 @@ beforeEach(() => {
   // (cosmetic; SignatureHint.test.jsx is where it is exercised).
   vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
   // Every case here mounts ticket-1. Since the composer now hydrates a
-  // per-ticket draft from localStorage on mount (see TicketReplyBox.draft
+  // per-ticket draft from localStorage on mount (see ReplyBox.draft
   // .test.jsx), a value typed in one test would otherwise leak into the next
   // test's fresh render of the "same" ticket — nothing to do with the
   // recipient behaviour these tests actually pin.
@@ -57,7 +57,7 @@ function audience(to) {
 
 function renderBox(props = {}) {
   return render(
-    <TicketReplyBox
+    <ReplyBox
       ticket={TICKET}
       replyRecipients={audience(['a@x.com'])}
       onSend={vi.fn()}
@@ -68,7 +68,7 @@ function renderBox(props = {}) {
   )
 }
 
-describe('TicketReplyBox — the reply audience', () => {
+describe('ReplyBox — the reply audience', () => {
   it('shows every derived recipient as a chip', () => {
     const to = ['a@x.com', 'b@y.com', 'c@z.com']
     renderBox({ replyRecipients: audience(to) })
@@ -163,7 +163,7 @@ describe('TicketReplyBox — the reply audience', () => {
   })
 })
 
-describe('TicketReplyBox — the people taken off it', () => {
+describe('ReplyBox — the people taken off it', () => {
   it('shows removed participants as restorable, and not as recipients', () => {
     renderBox({
       ticket: { ...TICKET, excluded_participants: ['gone@x.com', 'also@y.com'] },
@@ -217,7 +217,7 @@ describe('TicketReplyBox — the people taken off it', () => {
   })
 })
 
-describe('TicketReplyBox — the box names who it will reach', () => {
+describe('ReplyBox — the box names who it will reach', () => {
   it('placeholders the derived audience, not the requester', () => {
     // The 2026-08-12 ticket: opened by the rates office, now with Eleanor. The
     // placeholder read `Reply to ${ticket.requester_email}`, so the box an

@@ -13,7 +13,7 @@
 import { describe, it, expect } from 'vitest'
 import * as shared from '../shared/mail-vocabulary.js'
 import * as web from '../src/components/mail/mail-vocabulary.js'
-import * as mobile from '../mobile/lib/email-tickets.js'
+import * as mobile from '../mobile/lib/mail-conversations.js'
 import * as mobileRelate from '../mobile/lib/mail-relate.js'
 import * as webRelate from '../src/components/mail/mail-relate.js'
 import { readFileSync } from 'node:fs'
@@ -199,7 +199,7 @@ describe('MAIL-ARCH.4 — isArchived is the ONE reading of the stamp, on every s
   // under a different import.
   it('the mobile thread screen reads isArchived(ticket) twice and nothing older', () => {
     const here = dirname(fileURLToPath(import.meta.url))
-    const src = readFileSync(join(here, '..', 'mobile/app/(staff)/email/[ticketId].jsx'), 'utf8')
+    const src = readFileSync(join(here, '..', 'mobile/app/(staff)/email/[conversationId].jsx'), 'utf8')
     expect(src).not.toMatch(/isArchivedStatus|archivedOrStatus\(/)
     expect(src).toMatch(/from 'shared\/mail-vocabulary'/)
     // Both twins: the toggle's `next` and the header's `archived`.
@@ -218,7 +218,7 @@ describe('MAIL-ARCH.4 — isArchived is the ONE reading of the stamp, on every s
     }
   })
 
-  it('isArchivedStatus is gone from mobile/lib/email-tickets.js — the reading lives in shared', () => {
+  it('isArchivedStatus is gone from mobile/lib/mail-conversations.js — the reading lives in shared', () => {
     expect(mobile.isArchivedStatus).toBeUndefined()
   })
 })

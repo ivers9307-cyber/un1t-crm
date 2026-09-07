@@ -721,7 +721,7 @@ export function ticketToInboxRow(ticket, { mailboxById = {}, showMailbox = false
 }
 
 /**
- * The whole `GET /api/email/tickets` payload → rows for the Email tab.
+ * The whole `GET /api/email/mail` payload → rows for the Email tab.
  * Takes BOTH halves because the mailbox names live on `mailboxes`, and
  * whether a row shows one at all depends on how many there are.
  */
@@ -1080,7 +1080,7 @@ export function mailRowDisplay(row) {
  * appends a new message (moving the "newest" default off a row somebody
  * collapsed) cannot silently flip their choice back open.
  *
- * Messages arrive oldest-first from getTicket; trusted, not re-sorted (the
+ * Messages arrive oldest-first from getConversation; trusted, not re-sorted (the
  * threadDisplayPlan rule — re-sorting here and not on screen would make the
  * plan disagree with what is painted).
  */

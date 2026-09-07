@@ -35,12 +35,12 @@ import { EMAIL_ATTACHMENT_BUCKET } from '@/lib/email-attachment-quota'
 import { MAX_OUTBOUND_ATTACHMENT_TOTAL_BYTES } from '@/lib/email-outbound-attachments'
 import {
   makeDb, insertsInto, updatesTo, writesTo, seedObject, objectKeys, usageFor, failWrites,
-} from '../../_test-db'
+} from '../../../tickets/_test-db'
 import {
   MB_STUDIO, T_STUDIO, T_ACCOUNTS, T_OTHER_LOCATION,
   COACH, COACH_NO_INBOX, MULTI_LOCATION,
   GRANT_STUDIO, GRANT_MULTI_STUDIO, GRANT_MULTI_OTHER_LOCATION, baseState,
-} from '../../_test-fixtures'
+} from '../../../tickets/_test-fixtures'
 
 function post(id, body) {
   return POST(
@@ -720,7 +720,7 @@ describe('POST …/forward — the files ride along, shared not copied', () => {
 // tell this 500 from every other) and any durable record of the delivered
 // send — the message row that failed to write was the only thing that would
 // ever have referenced it. `failWrites` is the shared write-only-failure
-// harness (../../_test-db.js).
+// harness (../../../tickets/_test-db.js).
 describe('POST …/forward — filing fails AFTER the send', () => {
   let errors
   beforeEach(() => {

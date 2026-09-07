@@ -8,7 +8,7 @@
 
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, cleanup, screen } from '@testing-library/react'
-import TicketForward from './TicketForward.jsx'
+import ForwardForm from './ForwardForm.jsx'
 
 const RICH = {
   enabled: true, name: 'Alex Example', title: 'Head Coach',
@@ -53,10 +53,10 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-describe('TicketForward — signature hint', () => {
+describe('ForwardForm — signature hint', () => {
   it('shows the effective signature for the TICKET’S studio beneath the note', async () => {
     stubPreferences({ email_signature: '', email_signature_rich: RICH })
-    render(<TicketForward ticket={TICKET} message={MESSAGE} onClose={() => {}} onSent={() => {}} />)
+    render(<ForwardForm ticket={TICKET} message={MESSAGE} onClose={() => {}} onSent={() => {}} />)
 
     expect(await screen.findByText(/added automatically/i)).toBeTruthy()
     const pre = screen.getByText(/UN1T Stillorgan/, { selector: 'pre' })

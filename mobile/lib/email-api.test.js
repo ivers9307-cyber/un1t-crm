@@ -1,7 +1,7 @@
 // The mobile wire layer for the Mail surface — historically the one untested
 // module
 // in the email footprint (2026-08-08 audit). The case that forced the file:
-// GET /api/email/tickets/[id] returns `attachments_unavailable: true` when the
+// GET /api/email/mail/[id] returns `attachments_unavailable: true` when the
 // attachment lookup failed, precisely so a client can say "attachments
 // unknown" instead of the silent wrong answer "no attachments". Web honours it
 // (AttachmentsUnavailableNotice); mobile dropped the flag on the floor, so a
@@ -23,9 +23,9 @@ import { api } from './api'
 import { supabase } from './supabase'
 import { readFileAsArrayBuffer } from './upload-bytes'
 import {
-  getTicket, getEstateMailCount, listMail, fetchMailDigest,
+  getConversation, getEstateMailCount, listMail, fetchMailDigest,
   archiveConversation, setConversationSeen,
-  replyToTicket, composeEmail, forwardMessage, draftUuid,
+  replyToConversation, composeEmail, forwardMessage, draftUuid,
   signOutboundAttachment, uploadSignedAttachment,
   fetchRelatedConversations, mergeConversation, unmergeConversation,
   fetchSignatureContexts,
@@ -36,13 +36,13 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
-describe('getTicket', () => {
+describe('getConversation', () => {
   it('passes attachments_unavailable through — a failed lookup must not read as "no attachments"', async () => {
     api.mockResolvedValue({
       success: true,
       data: { ticket: { id: 'T-1' }, messages: [], attachments_unavailable: true },
     })
-    const res = await getTicket('T-1', 'loc-1')
+    const res = await getConversation('T-1', 'loc-1')
     expect(res.success).toBe(true)
     expect(res.attachmentsUnavailable).toBe(true)
   })
@@ -52,13 +52,13 @@ describe('getTicket', () => {
       success: true,
       data: { ticket: { id: 'T-1' }, messages: [] },
     })
-    const res = await getTicket('T-1', 'loc-1')
+    const res = await getConversation('T-1', 'loc-1')
     expect(res.attachmentsUnavailable).toBe(false)
   })
 
   it('still surfaces a failure as a failure', async () => {
     api.mockResolvedValue({ success: false, error: 'nope' })
-    const res = await getTicket('T-1', 'loc-1')
+    const res = await getConversation('T-1', 'loc-1')
     expect(res.success).toBe(false)
     expect(res.error).toBe('nope')
   })
@@ -66,7 +66,7 @@ describe('getTicket', () => {
   // EMAIL-PARTICIPANTS.9 — reply_recipients used to be dropped here, so the
   // composer footer fell back to a hard-coded "Sends an email to <requester>"
   // even though a reply from this screen has always gone to everyone the
-  // server derives (this file's replyToTicket doc — `{ text, internal }` only,
+  // server derives (this file's replyToConversation doc — `{ text, internal }` only,
   // the route adds the rest). That understated the true audience on every
   // multi-party thread (2026-08-09 audit).
   it('passes reply_recipients through — the footer needs the real audience, not just the requester', async () => {
@@ -78,7 +78,7 @@ describe('getTicket', () => {
         reply_recipients: { to: ['a@x.com', 'b@x.com'], mode: 'reply_all', over_cap: false, empty: false },
       },
     })
-    const res = await getTicket('T-1', 'loc-1')
+    const res = await getConversation('T-1', 'loc-1')
     expect(res.reply_recipients).toEqual({
       to: ['a@x.com', 'b@x.com'], mode: 'reply_all', over_cap: false, empty: false,
     })
@@ -89,7 +89,7 @@ describe('getTicket', () => {
       success: true,
       data: { ticket: { id: 'T-1' }, messages: [] },
     })
-    const res = await getTicket('T-1', 'loc-1')
+    const res = await getConversation('T-1', 'loc-1')
     expect(res.reply_recipients).toBeNull()
   })
 })
@@ -345,19 +345,19 @@ describe('fetchSignatureContexts', () => {
 // ReplySchema names; the wire shape without them stays byte-identical to before
 // (older bundles keep working, and a reply with no files posts what it always
 // posted).
-describe('replyToTicket', () => {
+describe('replyToConversation', () => {
   it('posts { text, internal } only when there are no attachments — unchanged wire shape', async () => {
     api.mockResolvedValue({ success: true, data: {} })
-    await replyToTicket('T-1', 'hello', { locationId: 'loc-1' })
-    expect(api).toHaveBeenCalledWith('/api/email/tickets/T-1/reply', {
+    await replyToConversation('T-1', 'hello', { locationId: 'loc-1' })
+    expect(api).toHaveBeenCalledWith('/api/email/mail/T-1/reply', {
       method: 'POST', locationId: 'loc-1', body: { text: 'hello', internal: false },
     })
   })
 
   it('leaves an EMPTY attachments array off the wire too', async () => {
     api.mockResolvedValue({ success: true, data: {} })
-    await replyToTicket('T-1', 'hello', { locationId: 'loc-1', attachments: [] })
-    expect(api).toHaveBeenCalledWith('/api/email/tickets/T-1/reply', {
+    await replyToConversation('T-1', 'hello', { locationId: 'loc-1', attachments: [] })
+    expect(api).toHaveBeenCalledWith('/api/email/mail/T-1/reply', {
       method: 'POST', locationId: 'loc-1', body: { text: 'hello', internal: false },
     })
   })
@@ -365,8 +365,8 @@ describe('replyToTicket', () => {
   it('carries attachment draft refs on the body when given', async () => {
     api.mockResolvedValue({ success: true, data: {} })
     const drafts = [{ draft_id: 'd-1', index: 0, filename: 'a.pdf', mime: 'application/pdf' }]
-    await replyToTicket('T-1', 'hello', { locationId: 'loc-1', attachments: drafts })
-    expect(api).toHaveBeenCalledWith('/api/email/tickets/T-1/reply', {
+    await replyToConversation('T-1', 'hello', { locationId: 'loc-1', attachments: drafts })
+    expect(api).toHaveBeenCalledWith('/api/email/mail/T-1/reply', {
       method: 'POST', locationId: 'loc-1',
       body: { text: 'hello', internal: false, attachments: drafts },
     })
@@ -375,8 +375,8 @@ describe('replyToTicket', () => {
   it('does not attach files to an internal note — the route would send nothing, so claiming files went out would lie', async () => {
     api.mockResolvedValue({ success: true, data: {} })
     const drafts = [{ draft_id: 'd-1', index: 0, filename: 'a.pdf', mime: 'application/pdf' }]
-    await replyToTicket('T-1', 'note', { internal: true, locationId: 'loc-1', attachments: drafts })
-    expect(api).toHaveBeenCalledWith('/api/email/tickets/T-1/reply', {
+    await replyToConversation('T-1', 'note', { internal: true, locationId: 'loc-1', attachments: drafts })
+    expect(api).toHaveBeenCalledWith('/api/email/mail/T-1/reply', {
       method: 'POST', locationId: 'loc-1', body: { text: 'note', internal: true },
     })
   })
@@ -397,7 +397,7 @@ describe('composeEmail', () => {
       attachments,
       locationId: 'loc-1',
     })
-    expect(api).toHaveBeenCalledWith('/api/email/tickets/compose', {
+    expect(api).toHaveBeenCalledWith('/api/email/mail/compose', {
       method: 'POST', locationId: 'loc-1',
       body: {
         mailbox_id: 'mb-1', to: ['a@x.com'], cc: ['b@x.com'], bcc: ['c@x.com'],
@@ -413,7 +413,7 @@ describe('composeEmail', () => {
       mailboxId: 'mb-1', to: ['a@x.com'], cc: [], bcc: [], attachments: [],
       subject: 'Hi', text: 'Body', locationId: 'loc-1',
     })
-    expect(api).toHaveBeenCalledWith('/api/email/tickets/compose', {
+    expect(api).toHaveBeenCalledWith('/api/email/mail/compose', {
       method: 'POST', locationId: 'loc-1',
       body: { mailbox_id: 'mb-1', to: ['a@x.com'], subject: 'Hi', text: 'Body' },
     })
@@ -441,7 +441,7 @@ describe('forwardMessage', () => {
       note: 'For the August books', attachmentIds: ['att-1', 'att-2'],
       locationId: 'loc-1',
     })
-    expect(api).toHaveBeenCalledWith('/api/email/tickets/T-1/forward', {
+    expect(api).toHaveBeenCalledWith('/api/email/mail/T-1/forward', {
       method: 'POST', locationId: 'loc-1',
       body: {
         message_id: 'm-1', to: ['acct@x.com'], cc: ['b@x.com'], bcc: ['c@x.com'],
@@ -457,7 +457,7 @@ describe('forwardMessage', () => {
       ticketId: 'T-1', messageId: 'm-1', to: ['acct@x.com'],
       cc: [], bcc: [], note: '', attachmentIds: [], locationId: 'loc-1',
     })
-    expect(api).toHaveBeenCalledWith('/api/email/tickets/T-1/forward', {
+    expect(api).toHaveBeenCalledWith('/api/email/mail/T-1/forward', {
       method: 'POST', locationId: 'loc-1',
       body: { message_id: 'm-1', to: ['acct@x.com'] },
     })
@@ -719,8 +719,8 @@ describe('outbound attachment limits', () => {
 //
 // Built against the pinned server contract (CONTRACTS-REFINE.md):
 //   GET  /api/email/mail/[id]/related → { success, data: { related, open_count } }
-//   POST /api/email/tickets/[id]/merge   body { into }
-//   DELETE /api/email/tickets/[id]/merge
+//   POST /api/email/mail/[id]/merge   body { into }
+//   DELETE /api/email/mail/[id]/merge
 // The merge routes exist already; the related route may land after this
 // code — these tests pin the wire shape, not the server.
 
@@ -766,7 +766,7 @@ describe('mergeConversation / unmergeConversation', () => {
   it('POSTs { into: target } at the SOURCE ticket — R merges into the current one', async () => {
     api.mockResolvedValue({ success: true })
     await mergeConversation('R-1', 'T-current', 'loc-1')
-    expect(api).toHaveBeenCalledWith('/api/email/tickets/R-1/merge', {
+    expect(api).toHaveBeenCalledWith('/api/email/mail/R-1/merge', {
       method: 'POST',
       body: { into: 'T-current' },
       locationId: 'loc-1',
@@ -776,7 +776,7 @@ describe('mergeConversation / unmergeConversation', () => {
   it('unmerge is a DELETE at the merged ticket, no body', async () => {
     api.mockResolvedValue({ success: true })
     await unmergeConversation('R-1', 'loc-1')
-    expect(api).toHaveBeenCalledWith('/api/email/tickets/R-1/merge', {
+    expect(api).toHaveBeenCalledWith('/api/email/mail/R-1/merge', {
       method: 'DELETE',
       locationId: 'loc-1',
     })
@@ -792,17 +792,17 @@ describe('mergeConversation / unmergeConversation', () => {
 
 // MAIL-REFINE.2 — dropping this passthrough would silently kill the thread's
 // Merged-in dividers (the screen would render an unmarked interleave).
-describe('getTicket merged_sources passthrough', () => {
+describe('getConversation merged_sources passthrough', () => {
   it('carries merged_sources through, [] when absent', async () => {
     const { api } = await import('./api')
     api.mockResolvedValueOnce({
       success: true,
       data: { ticket: { id: 't1' }, messages: [], merged_sources: [{ id: 's1', subject: 'RE: x' }] },
     })
-    const { getTicket } = await import('./email-api')
-    const res = await getTicket('t1', 'loc-1')
+    const { getConversation } = await import('./email-api')
+    const res = await getConversation('t1', 'loc-1')
     expect(res.mergedSources).toEqual([{ id: 's1', subject: 'RE: x' }])
     api.mockResolvedValueOnce({ success: true, data: { ticket: { id: 't1' }, messages: [] } })
-    expect((await getTicket('t1', 'loc-1')).mergedSources).toEqual([])
+    expect((await getConversation('t1', 'loc-1')).mergedSources).toEqual([])
   })
 })

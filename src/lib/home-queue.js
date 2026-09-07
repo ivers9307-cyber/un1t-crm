@@ -61,7 +61,7 @@ import {
   scopeToVisibleMailboxes,
   scopeToNeedsReply,
   scopeToUnmerged,
-} from '@/app/api/email/tickets/_helpers'
+} from '@/app/api/email/mail/_conversation'
 
 export const SOURCE_PRE_CAP = 20
 export const GLOBAL_CAP = 30

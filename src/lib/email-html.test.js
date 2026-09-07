@@ -737,7 +737,7 @@ describe('iframe sandbox — Layer 1', () => {
   // attributes and the import list, so a comment explaining the rule can never
   // be mistaken for a violation of it — nor a violation hidden in a comment.
   const component = readFileSync(
-    path.join(process.cwd(), 'src/components/tickets/TicketThread.jsx'),
+    path.join(process.cwd(), 'src/components/mail/ConversationThread.jsx'),
     'utf8',
   )
   const sandboxes = [...component.matchAll(/sandbox="([^"]*)"/g)].map(m => m[1])

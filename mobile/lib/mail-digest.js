@@ -36,7 +36,7 @@
 // this file copies.
 
 import AsyncStorage from '@react-native-async-storage/async-storage'
-import { ticketToInboxRow, segCountLabel } from './email-tickets'
+import { ticketToInboxRow, segCountLabel } from './mail-conversations'
 
 /* ───────────────────────── scope persistence ───────────────────────── */
 
@@ -263,7 +263,7 @@ export function removeConversation(locations, rowId) {
 
 /**
  * Put an undone conversation back where it was (the section-shaped twin of
- * email-tickets' insertRowAt, same rules): the index is clamped, a negative
+ * mail-conversations' insertRowAt, same rules): the index is clamped, a negative
  * one appends, and a row the section already holds again is left alone —
  * a duplicate key would turn an undo into a crash. view_total goes back up
  * only when the row actually re-enters. Pure; a location no longer in the

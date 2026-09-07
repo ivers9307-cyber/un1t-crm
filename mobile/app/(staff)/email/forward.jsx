@@ -43,7 +43,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAuth } from '../../../lib/auth-context'
 import { canMobile } from '../../../lib/permissions'
-import { getTicket, forwardMessage, fetchSignatureContexts } from '../../../lib/email-api'
+import { getConversation, forwardMessage, fetchSignatureContexts } from '../../../lib/email-api'
 import { searchContacts, contactDisplayName } from '../../../lib/contacts-api'
 import {
   addRecipients, addContactPill, removePill, popPill, pillInitials, contactTag,
@@ -57,7 +57,7 @@ import {
 } from '../../../lib/mail-forward'
 import {
   formatAttachmentSize, ticketAttachmentSkippedLabel, ticketAttachmentIcon,
-} from '../../../lib/email-tickets'
+} from '../../../lib/mail-conversations'
 import { resolveSignatureHint } from '../../../lib/signature-hint'
 
 // Same cadence as the compose sheet's autocomplete.
@@ -131,7 +131,7 @@ export default function ForwardMessage() {
       return
     }
     let alive = true
-    getTicket(ticketId, locationId).then(res => {
+    getConversation(ticketId, locationId).then(res => {
       if (!alive) return
       setLoading(false)
       if (!res.success) {

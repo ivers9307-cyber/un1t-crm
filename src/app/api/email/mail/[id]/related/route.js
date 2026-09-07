@@ -3,7 +3,7 @@
 // nudge and the merge picker's candidate list).
 //
 // ACCESS IS THE DETAIL ROUTE'S, THEN THE LIST'S. The anchor ticket goes
-// through loadTicketForUser — location access, the email_inbox key AT the
+// through loadConversationForUser — location access, the email_inbox key AT the
 // ticket's location, per-mailbox visibility, 404 on every refusal — and the
 // candidates are then scoped by the same visible-mailbox rule as the list, so
 // this route can never show a thread the caller could not open from the
@@ -31,7 +31,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { escapeLikePattern } from '@/lib/like-escape'
-import { loadTicketForUser, loadVisibleMailboxes, scopeToVisibleMailboxes } from '../../../tickets/_helpers'
+import { loadConversationForUser, loadVisibleMailboxes, scopeToVisibleMailboxes } from '../../_conversation'
 import { loadConversationCounts, LIVE_STATUSES, stampMailRow } from '../../_helpers'
 
 export const runtime = 'nodejs'
@@ -57,7 +57,7 @@ export async function GET(request, props) {
   const { id } = await props.params
   const db = createServerClient()
 
-  const loaded = await loadTicketForUser(db, user, id)
+  const loaded = await loadConversationForUser(db, user, id)
   if (loaded.response) return loaded.response
   const { ticket } = loaded
 
@@ -67,7 +67,7 @@ export async function GET(request, props) {
     return NextResponse.json({ success: true, data: { related: [], open_count: 0 } })
   }
 
-  // loadTicketForUser proves the anchor is visible but returns only ITS
+  // loadConversationForUser proves the anchor is visible but returns only ITS
   // mailbox; the candidate scope needs the caller's whole visible set.
   const visibility = await loadVisibleMailboxes(db, user, ticket.location_id)
   if (visibility.response) return visibility.response

@@ -10,7 +10,7 @@
 //
 // ══ THE GATE, IN ORDER ══════════════════════════════════════════════
 //
-// 1. loadTicketForUser() — the two-level check the whole ticket surface runs
+// 1. loadConversationForUser() — the two-level check the whole ticket surface runs
 //    on: the caller must reach the ticket's LOCATION, must hold `email_inbox`
 //    THERE, and must be able to see the MAILBOX it arrived at (or be elevated,
 //    for a ticket whose mailbox is gone). Nothing here re-derives any of it.
@@ -32,7 +32,7 @@
 
 import { NextResponse } from 'next/server'
 import { SKIPPED_REASON_LABEL } from '@/lib/email-attachment-quota'
-import { loadTicketForUser, ticketNotFound } from '../../_helpers'
+import { loadConversationForUser, conversationNotFound } from '../../_conversation'
 
 const ATTACHMENT_COLUMNS =
   'id, message_id, location_id, filename, mime_type, size_bytes, storage_path, skipped_reason'
@@ -52,7 +52,7 @@ const ATTACHMENT_COLUMNS =
 export async function loadAttachmentForTicket(db, user, ticketId, attachmentId) {
   // The gate. Everything below inherits the location + mailbox scoping it
   // applied.
-  const loaded = await loadTicketForUser(db, user, ticketId)
+  const loaded = await loadConversationForUser(db, user, ticketId)
   if (loaded.response) return { response: loaded.response }
   const { ticket } = loaded
 
@@ -61,18 +61,18 @@ export async function loadAttachmentForTicket(db, user, ticketId, attachmentId) 
     .eq('id', attachmentId)
     .maybeSingle()
   // A malformed id is a Postgres cast error (22P02), not a row — same 404.
-  if (error || !attachment) return { response: ticketNotFound() }
+  if (error || !attachment) return { response: conversationNotFound() }
 
   // Belt: the attachment's own location must match the ticket's. Braces: the
   // message it hangs off must belong to THIS ticket. The second is the real
   // check — the first would pass for every ticket at the same studio.
-  if (attachment.location_id !== ticket.location_id) return { response: ticketNotFound() }
+  if (attachment.location_id !== ticket.location_id) return { response: conversationNotFound() }
 
   const { data: message, error: msgErr } = await db.from('email_inbox_messages')
     .select('id, ticket_id')
     .eq('id', attachment.message_id)
     .maybeSingle()
-  if (msgErr || !message || message.ticket_id !== ticket.id) return { response: ticketNotFound() }
+  if (msgErr || !message || message.ticket_id !== ticket.id) return { response: conversationNotFound() }
 
   if (!attachment.storage_path) {
     // Not an error state — mig 482's XOR guarantees a reason, and staff are

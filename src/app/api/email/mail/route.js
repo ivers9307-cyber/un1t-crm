@@ -7,7 +7,7 @@ import {
   scopeToNeedsReply, scopeToUnmerged, scopeToSpamView, stampMailRow,
   MAIL_VIEWS, applyView,
 } from './_helpers'
-import { scopeToVisibleMailboxes } from '../tickets/_helpers'
+import { scopeToVisibleMailboxes } from './_conversation'
 import { searchTicketIds } from './_search'
 
 // GET /api/email/mail — THE email surface's conversation list (MAIL-TRIAL.B,

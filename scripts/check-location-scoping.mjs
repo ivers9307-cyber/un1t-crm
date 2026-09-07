@@ -113,6 +113,10 @@ const SCOPING_HELPERS = [
   // by ticket_id, contacts by the ticket's own contact_id — inherit that
   // scoping, which is why the handlers look unscoped in isolation.
   'loadTicketForUser(',
+  // MAIL-RENAME.1 — loadTicketForUser was renamed to loadConversationForUser
+  // in src/app/api/email/mail/_conversation.js; the old name stays above
+  // until the identifier sweep (Task 9) removes every caller of it.
+  'loadConversationForUser(',
   'loadVisibleMailboxes(',
   // src/app/api/email/tickets/_helpers.js — the SEND-AS gate (EMAIL-OUTBOUND
   // -ATTACH.1), extracted verbatim from the compose route. Reads the named

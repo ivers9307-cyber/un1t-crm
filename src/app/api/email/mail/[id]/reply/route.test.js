@@ -46,12 +46,12 @@ import { EMAIL_ATTACHMENT_BUCKET } from '@/lib/email-attachment-quota'
 import { outboundDraftPath } from '@/lib/email-outbound-attachments'
 import {
   makeDb, insertsInto, updatesTo, writesTo, selectsFrom, seedObject, objectKeys, failWrites,
-} from '../../_test-db'
+} from '../../../tickets/_test-db'
 import {
   MB_STUDIO, MB_OTHER_LOCATION, T_STUDIO, T_ACCOUNTS, T_OTHER_LOCATION,
   COACH, COACH_NO_INBOX, MULTI_LOCATION,
   GRANT_STUDIO, GRANT_MULTI_STUDIO, GRANT_MULTI_OTHER_LOCATION, baseState,
-} from '../../_test-fixtures'
+} from '../../../tickets/_test-fixtures'
 
 function post(id, body) {
   return POST(
@@ -1167,7 +1167,7 @@ describe('POST …/reply — added recipients', () => {
 // delivered send has to be recorded SOMEWHERE a human can find it, because the
 // message row that should have been its record does not exist.
 
-// `failWrites` (shared harness, ../../_test-db.js) fails WRITES only —
+// `failWrites` (shared harness, ../../../tickets/_test-db.js) fails WRITES only —
 // `state.errors` would fail the threading lookup too, and the route would then
 // refuse before sending, which is precisely not the case under test.
 

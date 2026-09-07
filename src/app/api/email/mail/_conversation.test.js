@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { resolveReplyAudience, PARTICIPANT_SCAN_LIMIT } from './_helpers'
+import { resolveReplyAudience, PARTICIPANT_SCAN_LIMIT } from './_conversation'
 
 const M = (over = {}) => ({
   from_email: 'member@x.com', to_emails: ['us@ours.com'], cc_emails: [],

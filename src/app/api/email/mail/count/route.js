@@ -28,7 +28,7 @@ import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import {
   loadVisibleMailboxes, scopeToVisibleMailboxes, scopeToNeedsReply, scopeToUnmerged,
-} from '../../tickets/_helpers'
+} from '../_conversation'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'

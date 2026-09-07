@@ -27,8 +27,8 @@ function codeOf(source) {
     .replace(/^\s*\/\/.*$/gm, '')
 }
 
-const PREVIEW = codeOf(read('src/components/tickets/AttachmentPreview.jsx'))
-const THREAD = codeOf(read('src/components/tickets/TicketThread.jsx'))
+const PREVIEW = codeOf(read('src/components/mail/AttachmentPreview.jsx'))
+const THREAD = codeOf(read('src/components/mail/ConversationThread.jsx'))
 
 // The raw-HTML escape hatch, spelled in pieces so this file does not itself
 // trip a scanner looking for the literal.

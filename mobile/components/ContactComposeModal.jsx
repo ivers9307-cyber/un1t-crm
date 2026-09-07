@@ -11,7 +11,7 @@
 //   • email    → subject + body. MOBILE-MAILPARITY.1 — the web card's
 //                PROFILE-MAIL.1 branch, ported: with a usable studio account
 //                at the CONTACT'S location the send IS a Mail compose
-//                (POST /api/email/tickets/compose, mailbox_id + the contact's
+//                (POST /api/email/mail/compose, mailbox_id + the contact's
 //                address), filed as a conversation the reply threads back
 //                into; only with none does it fall back to the company
 //                sender (POST /api/contacts/[id]/email), which is what the

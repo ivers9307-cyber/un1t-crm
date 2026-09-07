@@ -114,7 +114,7 @@ export default function AttachmentPreview({ ticketId, attachment, onClose }) {
     requestFor.current = attachmentId
     setState({ status: 'loading', url: null, error: null })
     try {
-      const res = await fetch(`/api/email/tickets/${ticketId}/attachments/${attachmentId}/preview`)
+      const res = await fetch(`/api/email/mail/${ticketId}/attachments/${attachmentId}/preview`)
       const j = await res.json().catch(() => ({}))
       if (requestFor.current !== attachmentId) return // superseded
       if (!res.ok || !j.success || !j.data?.url) {
@@ -155,7 +155,7 @@ export default function AttachmentPreview({ ticketId, attachment, onClose }) {
     setDownloading(true)
     setDownloadError(null)
     try {
-      const res = await fetch(`/api/email/tickets/${ticketId}/attachments/${attachmentId}`)
+      const res = await fetch(`/api/email/mail/${ticketId}/attachments/${attachmentId}`)
       const j = await res.json().catch(() => ({}))
       if (!res.ok || !j.success || !j.data?.url) {
         setDownloadError(j.error || 'That file could not be downloaded.')

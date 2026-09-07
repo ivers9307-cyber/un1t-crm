@@ -9,7 +9,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/react'
-import TicketThread from './TicketThread.jsx'
+import ConversationThread from './ConversationThread.jsx'
 
 function fetchMock(linkContactImpl) {
   return vi.fn((url, opts) => {
@@ -53,11 +53,11 @@ function threadProps(ticket) {
 
 const BASE_TICKET = { id: 'ticket-a', subject: 'Membership freeze', requester_email: 'alice@example.com', status: 'open' }
 
-describe('TicketThread — membership-stage chip', () => {
+describe('ConversationThread — membership-stage chip', () => {
   it('renders the human label, never the raw slug', () => {
     vi.stubGlobal('fetch', fetchMock(() => new Promise(() => {})))
     const ticket = { ...BASE_TICKET, contact: { id: 'c1', name: 'Alice', first_name: 'Alice', email: 'alice@example.com', pipeline_stage_slug: 'new_lead' } }
-    render(<TicketThread {...threadProps(ticket)} />)
+    render(<ConversationThread {...threadProps(ticket)} />)
 
     expect(screen.getByText('New Lead')).toBeTruthy()
     // The raw slug must never appear anywhere on the page.
@@ -67,7 +67,7 @@ describe('TicketThread — membership-stage chip', () => {
   it('renders no chip when pipeline_stage_slug is null', () => {
     vi.stubGlobal('fetch', fetchMock(() => new Promise(() => {})))
     const ticket = { ...BASE_TICKET, contact: { id: 'c1', name: 'Alice', first_name: 'Alice', email: 'alice@example.com', pipeline_stage_slug: null } }
-    const { container } = render(<TicketThread {...threadProps(ticket)} />)
+    const { container } = render(<ConversationThread {...threadProps(ticket)} />)
 
     expect(screen.getByRole('link', { name: 'View contact' })).toBeTruthy()
     // No stray chip for a stage that isn't there — scoped to the chip's own
@@ -80,7 +80,7 @@ describe('TicketThread — membership-stage chip', () => {
   it('picks the member-ish colour recipe for a member-ish slug', () => {
     vi.stubGlobal('fetch', fetchMock(() => new Promise(() => {})))
     const ticket = { ...BASE_TICKET, contact: { id: 'c1', name: 'Alice', pipeline_stage_slug: 'member' } }
-    render(<TicketThread {...threadProps(ticket)} />)
+    render(<ConversationThread {...threadProps(ticket)} />)
     const chip = screen.getByText('Member')
     expect(chip.className).toContain('bg-emerald-500/10')
     expect(chip.className).toContain('text-emerald-700')
@@ -89,7 +89,7 @@ describe('TicketThread — membership-stage chip', () => {
   it('picks the lead-ish colour recipe for a lead-ish slug', () => {
     vi.stubGlobal('fetch', fetchMock(() => new Promise(() => {})))
     const ticket = { ...BASE_TICKET, contact: { id: 'c1', name: 'Alice', pipeline_stage_slug: 'trial_done' } }
-    render(<TicketThread {...threadProps(ticket)} />)
+    render(<ConversationThread {...threadProps(ticket)} />)
     const chip = screen.getByText('Trial Done')
     expect(chip.className).toContain('bg-amber-500/10')
     expect(chip.className).toContain('text-amber-700')
@@ -98,7 +98,7 @@ describe('TicketThread — membership-stage chip', () => {
   it('picks the neutral colour recipe for a cold/dormant slug', () => {
     vi.stubGlobal('fetch', fetchMock(() => new Promise(() => {})))
     const ticket = { ...BASE_TICKET, contact: { id: 'c1', name: 'Alice', pipeline_stage_slug: 'dormant' } }
-    render(<TicketThread {...threadProps(ticket)} />)
+    render(<ConversationThread {...threadProps(ticket)} />)
     const chip = screen.getByText('Dormant')
     expect(chip.className).toContain('bg-gray-500/10')
     expect(chip.className).toContain('text-gray-700')
@@ -110,21 +110,21 @@ describe('TicketThread — membership-stage chip', () => {
   it('never reads glofox_membership_status', () => {
     vi.stubGlobal('fetch', fetchMock(() => new Promise(() => {})))
     const ticket = { ...BASE_TICKET, contact: { id: 'c1', name: 'Alice', pipeline_stage_slug: null, glofox_membership_status: 'active' } }
-    render(<TicketThread {...threadProps(ticket)} />)
+    render(<ConversationThread {...threadProps(ticket)} />)
     expect(screen.queryByText(/active/i)).toBeNull()
   })
 })
 
-describe('TicketThread — Add to contacts', () => {
+describe('ConversationThread — Add to contacts', () => {
   it('shows the button only when unlinked AND requester_email is present', () => {
     vi.stubGlobal('fetch', fetchMock(() => new Promise(() => {})))
-    render(<TicketThread {...threadProps({ ...BASE_TICKET, contact: null, requester_email: 'alice@example.com' })} />)
+    render(<ConversationThread {...threadProps({ ...BASE_TICKET, contact: null, requester_email: 'alice@example.com' })} />)
     expect(screen.getByRole('button', { name: 'Add to contacts' })).toBeTruthy()
   })
 
   it('falls back to the plain "not linked" text when there is no requester_email', () => {
     vi.stubGlobal('fetch', fetchMock(() => new Promise(() => {})))
-    render(<TicketThread {...threadProps({ ...BASE_TICKET, contact: null, requester_email: null })} />)
+    render(<ConversationThread {...threadProps({ ...BASE_TICKET, contact: null, requester_email: null })} />)
     expect(screen.queryByRole('button', { name: 'Add to contacts' })).toBeNull()
     expect(screen.getByText('Not linked to a contact')).toBeTruthy()
   })
@@ -132,7 +132,7 @@ describe('TicketThread — Add to contacts', () => {
   it('does not show the button once a contact is already linked', () => {
     vi.stubGlobal('fetch', fetchMock(() => new Promise(() => {})))
     const ticket = { ...BASE_TICKET, contact: { id: 'c1', name: 'Alice', pipeline_stage_slug: null } }
-    render(<TicketThread {...threadProps(ticket)} />)
+    render(<ConversationThread {...threadProps(ticket)} />)
     expect(screen.queryByRole('button', { name: 'Add to contacts' })).toBeNull()
   })
 
@@ -146,12 +146,12 @@ describe('TicketThread — Add to contacts', () => {
     }))
     vi.stubGlobal('fetch', fetchMock(post))
 
-    render(<TicketThread {...threadProps({ ...BASE_TICKET, contact: null, requester_email: 'alice@example.com' })} />)
+    render(<ConversationThread {...threadProps({ ...BASE_TICKET, contact: null, requester_email: 'alice@example.com' })} />)
 
     fireEvent.click(screen.getByRole('button', { name: 'Add to contacts' }))
 
     expect(post).toHaveBeenCalledWith(
-      '/api/email/tickets/ticket-a/link-contact',
+      '/api/email/mail/ticket-a/link-contact',
       expect.objectContaining({ method: 'POST' })
     )
 
@@ -168,7 +168,7 @@ describe('TicketThread — Add to contacts', () => {
     }))
     vi.stubGlobal('fetch', fetchMock(post))
 
-    render(<TicketThread {...threadProps({ ...BASE_TICKET, contact: null, requester_email: 'alice@example.com' })} />)
+    render(<ConversationThread {...threadProps({ ...BASE_TICKET, contact: null, requester_email: 'alice@example.com' })} />)
     fireEvent.click(screen.getByRole('button', { name: 'Add to contacts' }))
 
     await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy())
@@ -189,13 +189,13 @@ describe('TicketThread — Add to contacts', () => {
     const TICKET_A = { ...BASE_TICKET, id: 'ticket-a', contact: null, requester_email: 'alice@example.com' }
     const TICKET_B = { id: 'ticket-b', subject: 'Billing question', requester_email: 'bob@example.com', status: 'open', contact: null }
 
-    const { rerender } = render(<TicketThread {...threadProps(TICKET_A)} />)
+    const { rerender } = render(<ConversationThread {...threadProps(TICKET_A)} />)
     fireEvent.click(screen.getByRole('button', { name: 'Add to contacts' }))
     await waitFor(() => expect(screen.getByRole('link', { name: 'View contact' })).toBeTruthy())
 
     // Switching to a DIFFERENT, still-unlinked ticket must not carry ticket
     // A's just-linked contact onto ticket B's header.
-    rerender(<TicketThread {...threadProps(TICKET_B)} />)
+    rerender(<ConversationThread {...threadProps(TICKET_B)} />)
     expect(screen.queryByRole('link', { name: 'View contact' })).toBeNull()
     expect(screen.getByRole('button', { name: 'Add to contacts' })).toBeTruthy()
   })

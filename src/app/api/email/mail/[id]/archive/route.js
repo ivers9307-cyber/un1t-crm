@@ -4,7 +4,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import {
-  loadTicketForUser, statusTimestamps, stampMailRow,
+  loadConversationForUser, statusTimestamps, stampMailRow,
 } from '../../_helpers'
 import { applyWriteback, writebackNotice } from '../../_writeback'
 
@@ -38,7 +38,7 @@ const ArchiveSchema = z.object({
 //   • it has no surface guard, so it would happily archive a TICKETING
 //     mailbox's ticket from the mail screen;
 //   • it is the archive verb that the IMAP write-back hangs off (see below).
-// Everything it actually does is still shared: loadTicketForUser is the gate,
+// Everything it actually does is still shared: loadConversationForUser is the gate,
 // statusTimestamps is the stamp logic, both imported rather than restated.
 //
 // 🔴 ARCHIVING IS A PAIRED WRITE: `status='closed'` here AND a move to the
@@ -62,7 +62,7 @@ const ArchiveSchema = z.object({
 // operator the thing they just did in order to tell them half of it did not
 // happen, which is trading a divergence for a certain loss.
 //
-// ALL THREE GATES: loadTicketForUser carries the location access, the
+// ALL THREE GATES: loadConversationForUser carries the location access, the
 // `email_inbox` key resolved at the TICKET's location, and the per-mailbox
 // grant. Every refusal is the same 404, so an id cannot be probed.
 // (RETIRE-TICKETS.1 removed the fourth, surface, gate along with the surface
@@ -78,7 +78,7 @@ export async function POST(request, props) {
   const { archived } = validation.data
 
   const db = createServerClient()
-  const loaded = await loadTicketForUser(db, user, params.id)
+  const loaded = await loadConversationForUser(db, user, params.id)
   if (loaded.response) return loaded.response
   const { ticket } = loaded
 

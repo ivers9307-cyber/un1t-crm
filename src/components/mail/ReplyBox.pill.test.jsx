@@ -20,7 +20,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/react'
-import TicketReplyBox from './TicketReplyBox.jsx'
+import ReplyBox from './ReplyBox.jsx'
 import { readReplyDraft, writeReplyDraft } from '@/components/mail/mail-display'
 import { resolveViewerId } from '@/components/mail/viewer-id'
 
@@ -55,7 +55,7 @@ function ticket(over = {}) {
 
 function renderBox(props = {}) {
   return render(
-    <TicketReplyBox
+    <ReplyBox
       ticket={ticket()}
       replyRecipients={{ to: ['helen@member.ie'], mode: 'reply', over_cap: false, empty: false }}
       onSend={vi.fn()}
@@ -66,9 +66,9 @@ function renderBox(props = {}) {
   )
 }
 
-const composer = () => document.getElementById('ticket-composer')
+const composer = () => document.getElementById('conversation-composer')
 
-describe('TicketReplyBox — without startCollapsed nothing changed', () => {
+describe('ReplyBox — without startCollapsed nothing changed', () => {
   it('renders the full form immediately, no pill', () => {
     renderBox()
     expect(composer()).toBeTruthy()
@@ -76,7 +76,7 @@ describe('TicketReplyBox — without startCollapsed nothing changed', () => {
   })
 })
 
-describe('TicketReplyBox — the slim pill', () => {
+describe('ReplyBox — the slim pill', () => {
   it('renders as the bar — first name, Note, Reply ↵ — with no textarea yet', () => {
     renderBox({ startCollapsed: true })
     expect(screen.getByRole('button', { name: 'Reply to Helen…' })).toBeTruthy()

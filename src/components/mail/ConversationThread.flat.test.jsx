@@ -13,7 +13,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, cleanup, screen, fireEvent } from '@testing-library/react'
-import TicketThread from './TicketThread.jsx'
+import ConversationThread from './ConversationThread.jsx'
 
 beforeEach(() => {
   window.HTMLElement.prototype.scrollIntoView = vi.fn()
@@ -68,7 +68,7 @@ const NEWEST = {
 
 function renderThread(props = {}) {
   return render(
-    <TicketThread
+    <ConversationThread
       hasSelection
       ticket={TICKET}
       messages={[OLDEST, MIDDLE, NEWEST]}
@@ -80,7 +80,7 @@ function renderThread(props = {}) {
   )
 }
 
-describe('TicketThread — only the newest message opens by default', () => {
+describe('ConversationThread — only the newest message opens by default', () => {
   it('renders the newest in full and the older ones as single collapsed lines', () => {
     renderThread()
     // Newest: full body on screen.
@@ -119,7 +119,7 @@ describe('TicketThread — only the newest message opens by default', () => {
   })
 })
 
-describe('TicketThread — the note never loses its identity', () => {
+describe('ConversationThread — the note never loses its identity', () => {
   const NOTE = {
     id: 'n1',
     direction: 'outbound',
@@ -147,7 +147,7 @@ describe('TicketThread — the note never loses its identity', () => {
   })
 })
 
-describe('TicketThread — a delivery failure refuses to collapse away', () => {
+describe('ConversationThread — a delivery failure refuses to collapse away', () => {
   it('shows the failure panel even while its message is folded', () => {
     const BOUNCED = {
       ...MIDDLE,
@@ -164,7 +164,7 @@ describe('TicketThread — a delivery failure refuses to collapse away', () => {
   })
 })
 
-describe('TicketThread — the banner slot', () => {
+describe('ConversationThread — the banner slot', () => {
   it('renders the caller’s banner between the header and the thread; nothing when unset', () => {
     renderThread({ banner: <div data-testid="the-banner">related things</div> })
     expect(screen.getByTestId('the-banner')).toBeTruthy()

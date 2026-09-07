@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// TICKET-COMPOSER-LEAK.1's remount (TicketThread keys TicketReplyBox on the
+// TICKET-COMPOSER-LEAK.1's remount (ConversationThread keys ReplyBox on the
 // ticket id) protects against a cross-ticket send, but paid for it with the
 // draft: switching tickets mid-reply, `e` (archive auto-advances the
 // selection), a refresh, or a crash all used to destroy whatever an operator
@@ -14,7 +14,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/react'
-import TicketReplyBox from './TicketReplyBox.jsx'
+import ReplyBox from './ReplyBox.jsx'
 import { readReplyDraft, writeReplyDraft } from '@/components/mail/mail-display'
 import { resolveViewerId } from '@/components/mail/viewer-id'
 
@@ -48,7 +48,7 @@ function ticket(over = {}) {
 
 function renderBox(props = {}) {
   return render(
-    <TicketReplyBox
+    <ReplyBox
       ticket={ticket()}
       replyRecipients={{ to: ['a@x.com'], mode: 'reply', over_cap: false, empty: false }}
       onSend={vi.fn()}
@@ -59,7 +59,7 @@ function renderBox(props = {}) {
   )
 }
 
-describe('TicketReplyBox — draft persistence', () => {
+describe('ReplyBox — draft persistence', () => {
   it('hydrates a saved draft on mount, invisibly — no banner, just the text', async () => {
     writeReplyDraft(S('ticket-1'), { text: 'Sorry for the delay', mode: 'reply' })
     renderBox()
@@ -128,14 +128,14 @@ describe('TicketReplyBox — draft persistence', () => {
   })
 
   // 🔴 THE ISOLATION GUARANTEE, one component up from mail-display.test.js.
-  // A remount (the real TicketThread mechanism) must load the NEW ticket's
+  // A remount (the real ConversationThread mechanism) must load the NEW ticket's
   // own draft, never the ticket that was just left.
   it('never shows one ticket’s draft under another ticket — even across a remount', async () => {
     writeReplyDraft(S('ticket-A'), { text: 'For A only', mode: 'reply' })
     writeReplyDraft(S('ticket-B'), { text: 'For B only', mode: 'reply' })
 
     const { rerender } = render(
-      <TicketReplyBox
+      <ReplyBox
         key="ticket-A"
         ticket={ticket({ id: 'ticket-A' })}
         replyRecipients={{ to: ['a@x.com'], mode: 'reply', over_cap: false, empty: false }}
@@ -144,11 +144,11 @@ describe('TicketReplyBox — draft persistence', () => {
     )
     await waitFor(() => expect(screen.getByLabelText('Reply to the member').value).toBe('For A only'))
 
-    // A different `key` is what TicketThread actually does — this is the
+    // A different `key` is what ConversationThread actually does — this is the
     // remount TICKET-COMPOSER-LEAK.1 relies on, exercised for real rather
     // than assumed.
     rerender(
-      <TicketReplyBox
+      <ReplyBox
         key="ticket-B"
         ticket={ticket({ id: 'ticket-B' })}
         replyRecipients={{ to: ['b@y.com'], mode: 'reply', over_cap: false, empty: false }}
@@ -167,7 +167,7 @@ describe('TicketReplyBox — draft persistence', () => {
   })
 })
 
-describe('TicketReplyBox — draft scoping (MAIL-DRAFTSCOPE.2)', () => {
+describe('ReplyBox — draft scoping (MAIL-DRAFTSCOPE.2)', () => {
   beforeEach(() => {
     resolveViewerId.mockResolvedValue('user-1')
     window.localStorage.clear()
@@ -180,7 +180,7 @@ describe('TicketReplyBox — draft scoping (MAIL-DRAFTSCOPE.2)', () => {
   })
 
   const mount = (over = {}) => render(
-    <TicketReplyBox
+    <ReplyBox
       ticket={{ id: 'ticket-1', subject: 'S', requester_email: 'a@x.com', status: 'open', mailbox_id: 'mb-1' }}
       replyRecipients={{ to: ['a@x.com'], mode: 'reply', over_cap: false, empty: false }}
       onSend={vi.fn()}

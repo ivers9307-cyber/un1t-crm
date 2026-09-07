@@ -16,7 +16,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, cleanup, screen, fireEvent } from '@testing-library/react'
-import TicketThread from './TicketThread.jsx'
+import ConversationThread from './ConversationThread.jsx'
 
 beforeEach(() => {
   window.HTMLElement.prototype.scrollIntoView = vi.fn()
@@ -50,7 +50,7 @@ const HTML_MESSAGE = {
 
 function renderThread(props = {}) {
   return render(
-    <TicketThread
+    <ConversationThread
       hasSelection
       ticket={TICKET}
       messages={[HTML_MESSAGE]}

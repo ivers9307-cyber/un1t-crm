@@ -23,10 +23,10 @@ vi.mock('@/lib/auth', async () => {
 import { POST, DELETE } from './route'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
-import { makeDb, writesTo, updatesTo, failWrites, insertsInto } from '../../_test-db'
+import { makeDb, writesTo, updatesTo, failWrites, insertsInto } from '../../../tickets/_test-db'
 import {
   T_STUDIO, T_ACCOUNTS, COACH, OWNER, GRANT_STUDIO, baseState,
-} from '../../_test-fixtures'
+} from '../../../tickets/_test-fixtures'
 
 function post(id, body) {
   return POST(

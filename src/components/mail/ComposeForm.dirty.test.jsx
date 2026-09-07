@@ -12,7 +12,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, cleanup, screen, fireEvent } from '@testing-library/react'
-import TicketCompose from './TicketCompose.jsx'
+import ComposeForm from './ComposeForm.jsx'
 
 const MAILBOX = { id: 'mb-1', label: 'Front desk', address: 'hello@example.com', is_default: true }
 const noop = () => {}
@@ -26,10 +26,10 @@ afterEach(() => {
 })
 
 function compose(onClose) {
-  return <TicketCompose mailboxes={[MAILBOX]} onClose={onClose} onSent={noop} />
+  return <ComposeForm mailboxes={[MAILBOX]} onClose={onClose} onSent={noop} />
 }
 
-describe('TicketCompose — dismissing a dirty draft asks first', () => {
+describe('ComposeForm — dismissing a dirty draft asks first', () => {
   it('closes a pristine compose on Esc without asking', () => {
     const confirmSpy = vi.fn()
     vi.stubGlobal('confirm', confirmSpy)

@@ -6,7 +6,7 @@
 //
 // 1. 🔴 A DIRTY DRAFT IS SACRED. Esc minimises a dirty compose — full → dock
 //    → min, the bar is the floor — and NEVER discards; only ✕, behind
-//    TicketCompose's own confirm, can throw typed words away. Get that
+//    ComposeForm's own confirm, can throw typed words away. Get that
 //    backwards once and an operator loses an email they had already written.
 //
 // 2. ONE BOTTOM-RIGHT SLOT. Compose and the reader trade the corner by
@@ -88,10 +88,10 @@ function stubNetwork() {
         },
       })
     }
-    if (u.startsWith('/api/email/tickets/') && u.endsWith('compose')) {
+    if (u.startsWith('/api/email/mail/') && u.endsWith('compose')) {
       return json({ success: true, data: { ticket: { ...CONV_A, id: 'conv-new', subject: 'Fresh outbound' }, ticket_id: 'conv-new' } })
     }
-    if (u.startsWith('/api/email/tickets/')) {
+    if (u.startsWith('/api/email/mail/')) {
       const id = u.split('/')[4]
       const row = [CONV_A, CONV_B].find(c => c.id === id) || { ...CONV_A, id }
       return json({

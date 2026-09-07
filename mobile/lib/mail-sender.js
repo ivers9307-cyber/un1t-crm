@@ -98,7 +98,7 @@ function isAwaiting({ mailboxes, contactEmail, contactLocationId }) {
  * the Mail one.
  *
  *   { path: 'mail', mailboxId, to: [contactEmail], locationId }
- *     — POST /api/email/tickets/compose. `locationId` is the MAILBOX'S
+ *     — POST /api/email/mail/compose. `locationId` is the MAILBOX'S
  *       studio (the mailbox decides the location, exactly as the route
  *       does), falling back to the contact's when the row carries no stamp
  *       (single-location list rows do not).

@@ -30,10 +30,10 @@ import { POST } from './route'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
-import { makeDb, writesTo, insertsInto, updatesTo, failWrites } from '../../_test-db'
+import { makeDb, writesTo, insertsInto, updatesTo, failWrites } from '../../../tickets/_test-db'
 import {
   T_STUDIO, T_ACCOUNTS, T_OTHER_LOCATION, COACH, COACH_NO_INBOX, GRANT_STUDIO, MB_ACCOUNTS, baseState, LOC_A,
-} from '../../_test-fixtures'
+} from '../../../tickets/_test-fixtures'
 
 // The coach's studio@ grant alone cannot see T_ACCOUNTS (that split is the
 // whole point of the fixture, per _test-fixtures.js) — these tests are about

@@ -519,7 +519,7 @@ export default function MailboxConnectionSection({ locationId, mailbox, reachabi
     // the same card uses it); a bespoke modal here would be the only one.
     if (!window.confirm(
       `Stop pulling mail into ${mailbox.label} <${mailbox.address}>?\n\n` +
-      'The stored password is deleted. Tickets that already arrived are kept, and mail sent to this ' +
+      'The stored password is deleted. Conversations that already arrived are kept, and mail sent to this ' +
       'address goes back to the standard route.'
     )) return
 

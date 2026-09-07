@@ -60,12 +60,12 @@ import SignatureHint from './SignatureHint'
 
 // The submit button lives in the Modal's footer, a SIBLING of the form, so it
 // is wired by id. Only one forward modal exists at a time.
-const FORM_ID = 'ticket-forward-form'
+const FORM_ID = 'conversation-forward-form'
 
 const INPUT_CLASSES =
   'w-full rounded-md border border-un1t-border bg-un1t-bg px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-subtle/60 focus:outline-none focus:ring-1 focus:ring-un1t-text/30'
 
-export default function TicketForward({ ticket, message, onClose, onSent }) {
+export default function ForwardForm({ ticket, message, onClose, onSent }) {
   const [recipients, setRecipients] = useState(EMPTY_RECIPIENTS)
   const [note, setNote] = useState('')
   const files = forwardableAttachments(message?.attachments)
@@ -88,7 +88,7 @@ export default function TicketForward({ ticket, message, onClose, onSent }) {
     setSending(true)
     setError(null)
     try {
-      const res = await fetch(`/api/email/tickets/${ticket.id}/forward`, {
+      const res = await fetch(`/api/email/mail/${ticket.id}/forward`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -156,13 +156,13 @@ export default function TicketForward({ ticket, message, onClose, onSent }) {
             deliberately absent: forwarding to them would be a reply, and this
             is the one send whose audience is entirely the operator's choice. */}
         <RecipientEditor
-          idPrefix="ticket-forward"
+          idPrefix="conversation-forward"
           value={recipients}
           onChange={setRecipients}
           disabled={sending}
         />
 
-        <Field id="ticket-forward-note" label="Add a note" hint="Optional — it goes above the forwarded message.">
+        <Field id="conversation-forward-note" label="Add a note" hint="Optional — it goes above the forwarded message.">
           {(p) => (
             <textarea
               {...p}

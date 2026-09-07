@@ -13,7 +13,7 @@
 //   newest first, capped at 10, same requester + location, caller-visible
 //   mailboxes only, unmerged, self excluded. Failure is a REAL error — the
 //   route never answers an empty list for "could not look".
-//   Merge / unmerge: POST / DELETE /api/email/tickets/[id]/merge ({into} on
+//   Merge / unmerge: POST / DELETE /api/email/mail/[id]/merge ({into} on
 //   POST) — both pre-existing; called, never re-implemented.
 //
 // 🔴 TWO RULES, mirrored in the tests:
@@ -152,7 +152,7 @@ export async function mergeConversations({ ids = [], into, fetchImpl = globalThi
   const merged = []
   for (const id of ids) {
     const error = await attempt(
-      `/api/email/tickets/${encodeURIComponent(id)}/merge`,
+      `/api/email/mail/${encodeURIComponent(id)}/merge`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -176,7 +176,7 @@ export async function unmergeConversations({ ids = [], fetchImpl = globalThis.fe
   const unmerged = []
   for (const id of ids) {
     const error = await attempt(
-      `/api/email/tickets/${encodeURIComponent(id)}/merge`,
+      `/api/email/mail/${encodeURIComponent(id)}/merge`,
       { method: 'DELETE' },
       fetchImpl,
       'Could not undo that merge'

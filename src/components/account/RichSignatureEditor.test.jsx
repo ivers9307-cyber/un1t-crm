@@ -33,7 +33,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react'
 import EmailSignatureForm from '@/components/EmailSignatureForm'
 import { MAX_SIGNATURE_LINKS, renderRichSignature } from '@/lib/email-signature'
-import { SIGNATURE_UPDATED_KEY } from '@/components/tickets/SignatureHint'
+import { SIGNATURE_UPDATED_KEY } from '@/components/mail/SignatureHint'
 
 // jsdom cannot decode images (no createImageBitmap, and its <img> never fires
 // onload/onerror), so the real compressor's decode step never settles. Pass

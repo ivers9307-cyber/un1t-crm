@@ -5,9 +5,9 @@
 // THIN ON PURPOSE, exactly like MailDock: every branchable decision — which
 // modes persist, what Esc does while dirty, who yields the bottom-right slot
 // — lives in mail-display.js where it is unit-tested; MailSurface owns the
-// state and TicketCompose owns the fields and the send. This file is the
+// state and ComposeForm owns the fields and the send. This file is the
 // pixels: the same dark title bar, the same control set and geometry as the
-// reader's card, wrapped around TicketCompose's form.
+// reader's card, wrapped around ComposeForm's form.
 //
 // THREE MODES, ONE CARD (MAIL-DOCK.1's vocabulary, verbatim):
 //   dock — bottom-right of the Mail pane, the list still working underneath.
@@ -21,7 +21,7 @@
 //     minimise gesture (Gmail's behaviour), so the card carries its own
 //     keydown and stops propagation — the surface's window listener (whose
 //     Esc ladder belongs to the READER) never sees it. The ladder itself is
-//     the caller's (dirty lives in TicketCompose); this file only routes.
+//     the caller's (dirty lives in ComposeForm); this file only routes.
 //   • THE TITLE BAR IS ALWAYS VISIBLE, not hidden below md. MailDock hides
 //     its bar there because the thread has its own mobile header; this form
 //     has no other chrome. A mobile OPEN never reaches this component at all
@@ -194,10 +194,10 @@ export default function ComposeDock({
   onRestore,    // the bar (or ─ again) while minimised
   onExpand,     // ⤢ dock → full
   onContract,   // ⤡ full → dock
-  onClose,      // ✕ — requestClose (TicketCompose's own dirty-confirm)
+  onClose,      // ✕ — requestClose (ComposeForm's own dirty-confirm)
   onEscape,     // the dirty-aware ladder — the caller decides, this routes
   footer,       // the submit row, moved inside the card bottom
-  children,     // TicketCompose's form
+  children,     // ComposeForm's form
 }) {
   const min = mode === COMPOSE_MODE_MIN
   const full = mode === 'full'

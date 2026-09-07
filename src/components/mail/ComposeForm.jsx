@@ -41,7 +41,7 @@ import SignatureHint from './SignatureHint'
 // The submit button lives in the Modal's footer, which is a SIBLING of the
 // form, not a descendant — so it is wired to the form by id. Only one compose
 // modal exists at a time, so a constant id is safe.
-const FORM_ID = 'ticket-compose-form'
+const FORM_ID = 'conversation-compose-form'
 
 const INPUT_CLASSES =
   'w-full rounded-md border border-un1t-border bg-un1t-bg px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-subtle/60 focus:outline-none focus:ring-1 focus:ring-un1t-text/30'
@@ -54,7 +54,7 @@ const INPUT_CLASSES =
 // `footer` the same Cancel/Send pair, and `requestClose` the same
 // confirm-guarded close. With no shell (every pre-existing call site, and
 // every below-md compose), the Modal renders byte-for-byte as it always has.
-export default function TicketCompose({ mailboxes = [], initialMailboxId = null, onClose, onSent, onSentUnfiled, shell }) {
+export default function ComposeForm({ mailboxes = [], initialMailboxId = null, onClose, onSent, onSentUnfiled, shell }) {
   // The queue route already orders the tabs default-first, but say it out loud
   // rather than leaning on that ordering from another file.
   const [mailboxId, setMailboxId] = useState(() => (
@@ -109,7 +109,7 @@ export default function TicketCompose({ mailboxes = [], initialMailboxId = null,
       // Storage from the picker; a multipart body this size would be rejected
       // by the platform before the route ran.
       const attachments = readyDrafts(files)
-      const res = await fetch('/api/email/tickets/compose', {
+      const res = await fetch('/api/email/mail/compose', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -169,7 +169,7 @@ export default function TicketCompose({ mailboxes = [], initialMailboxId = null,
             decision — but the operator still has to know which address the
             reply will come back to, so it is stated rather than hidden. */}
         {mailboxes.length > 1 ? (
-          <Field id="ticket-compose-mailbox" label="From" hint="The reply comes back to this account, and the ticket is filed under it.">
+          <Field id="conversation-compose-mailbox" label="From" hint="The reply comes back to this account, and the conversation is filed under it.">
             {(p) => (
               <select
                 {...p}
@@ -192,13 +192,13 @@ export default function TicketCompose({ mailboxes = [], initialMailboxId = null,
         )}
 
         <RecipientEditor
-          idPrefix="ticket-compose"
+          idPrefix="conversation-compose"
           value={recipients}
           onChange={setRecipients}
           disabled={sending}
         />
 
-        <Field id="ticket-compose-subject" label="Subject" required>
+        <Field id="conversation-compose-subject" label="Subject" required>
           {(p) => (
             <input
               {...p}
@@ -212,7 +212,7 @@ export default function TicketCompose({ mailboxes = [], initialMailboxId = null,
           )}
         </Field>
 
-        <Field id="ticket-compose-text" label="Message" required>
+        <Field id="conversation-compose-text" label="Message" required>
           {(p) => (
             <textarea
               {...p}

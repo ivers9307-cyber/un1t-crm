@@ -4,7 +4,7 @@
 // the sender's signature exactly as the reply route does, so the composer must
 // SHOW it exactly as the reply box does — an operator reading an unsigned
 // preview of a signed email would keep typing their name twice. The block is
-// the shared <SignatureHint/>, the same component TicketReplyBox renders.
+// the shared <SignatureHint/>, the same component ReplyBox renders.
 //
 // MAILFIX-SIGTRUTH.1 — the hint is now the EFFECTIVE signature for the
 // selected From account's studio (the send resolves the studio half off the
@@ -14,7 +14,7 @@
 
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, cleanup, screen, fireEvent, act } from '@testing-library/react'
-import TicketCompose from './TicketCompose.jsx'
+import ComposeForm from './ComposeForm.jsx'
 
 const MAILBOX = { id: 'mb-1', label: 'Front desk', address: 'hello@example.com', is_default: true, location_id: 'loc-still' }
 const noop = () => {}
@@ -78,10 +78,10 @@ function stubPreferences(data) {
   return read
 }
 
-describe('TicketCompose — signature preview', () => {
+describe('ComposeForm — signature preview', () => {
   it('shows the auto-appended sign-off once the viewer’s signature loads', async () => {
     stubPreferences({ email_signature: 'Sarah\nUN1T Stillorgan' })
-    render(<TicketCompose mailboxes={[MAILBOX]} onClose={noop} onSent={noop} />)
+    render(<ComposeForm mailboxes={[MAILBOX]} onClose={noop} onSent={noop} />)
 
     expect(await screen.findByText(/added automatically/i)).toBeTruthy()
     expect(screen.getByText(/UN1T Stillorgan/)).toBeTruthy()
@@ -90,7 +90,7 @@ describe('TicketCompose — signature preview', () => {
   it('shows nothing when the viewer has no signature AND the From studio has no card — no stray "--" box', async () => {
     // MAIL-SIGDEFAULT.1 — Hatch has no studio card, so nothing at all appends.
     const read = stubPreferences({ email_signature: '' })
-    render(<TicketCompose mailboxes={[{ ...HATCH_BOX, is_default: true }]} onClose={noop} onSent={noop} />)
+    render(<ComposeForm mailboxes={[{ ...HATCH_BOX, is_default: true }]} onClose={noop} onSent={noop} />)
 
     // Anchor on the payload having been consumed, then flush React — an
     // absence asserted before the fetch settles would pass vacuously.
@@ -102,7 +102,7 @@ describe('TicketCompose — signature preview', () => {
 
   it('MAIL-SIGDEFAULT.1 — a viewer with NO signature of their own still sees the STUDIO block the From studio adds', async () => {
     stubPreferences({ email_signature: '' })
-    render(<TicketCompose mailboxes={[MAILBOX]} onClose={noop} onSent={noop} />)
+    render(<ComposeForm mailboxes={[MAILBOX]} onClose={noop} onSent={noop} />)
 
     expect(await screen.findByText(/added automatically/i)).toBeTruthy()
     const pre = document.querySelector('pre')
@@ -112,7 +112,7 @@ describe('TicketCompose — signature preview', () => {
 
   it('APPEARS with the rich signature enabled and the plain column empty — the case the old hint hid', async () => {
     stubPreferences({ email_signature: '', email_signature_rich: RICH })
-    render(<TicketCompose mailboxes={[STILLORGAN_BOX]} onClose={noop} onSent={noop} />)
+    render(<ComposeForm mailboxes={[STILLORGAN_BOX]} onClose={noop} onSent={noop} />)
 
     expect(await screen.findByText(/added automatically/i)).toBeTruthy()
     const pre = document.querySelector('pre')
@@ -122,7 +122,7 @@ describe('TicketCompose — signature preview', () => {
 
   it('re-resolves when the From account’s studio changes — what the hint shows is what THAT send appends', async () => {
     stubPreferences({ email_signature: '', email_signature_rich: RICH })
-    render(<TicketCompose mailboxes={[STILLORGAN_BOX, HATCH_BOX]} onClose={noop} onSent={noop} />)
+    render(<ComposeForm mailboxes={[STILLORGAN_BOX, HATCH_BOX]} onClose={noop} onSent={noop} />)
 
     // Default From = the default mailbox = Stillorgan: its name, its phone.
     expect(await screen.findByText(/added automatically/i)).toBeTruthy()
@@ -144,7 +144,7 @@ describe('TicketCompose — signature preview', () => {
 
   it('with NO From account the hint is not mounted — nothing can send, so there is nothing truthful to preview', async () => {
     stubPreferences({ email_signature: 'Plain Sarah', email_signature_rich: RICH })
-    render(<TicketCompose mailboxes={[]} onClose={noop} onSent={noop} />)
+    render(<ComposeForm mailboxes={[]} onClose={noop} onSent={noop} />)
     // The hint never mounted, so the GET never fired — the strongest form of
     // "not shown".
     await act(async () => {})

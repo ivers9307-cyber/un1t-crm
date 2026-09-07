@@ -117,22 +117,12 @@ function stubNetwork({ conversations = [CONV_A, CONV_B], needsReplyCount = 1 } =
         },
       })
     }
-    if (u.startsWith('/api/email/tickets/')) {
-      const id = u.split('/')[4]
-      const row = conversations.find(c => c.id === id) || CONV_A
-      return json({
-        success: true,
-        data: {
-          ticket: { ...row, mailbox: MAILBOX },
-          messages: [{
-            id: `m-${id}`, direction: 'inbound', is_internal_note: false,
-            from_email: row.requester_email, text_body: `Message on ${row.subject}`,
-            created_at: '2026-08-26T08:00:00Z',
-          }],
-          reply_recipients: { to: [row.requester_email], mode: 'reply' },
-        },
-      })
-    }
+    // MAIL-RENAME.1 — the detail GET and the archive/seen/spam actions now
+    // share the same `/api/email/mail/{id}` prefix (they used to live on the
+    // separate `/api/email/tickets/` namespace, which never collided). The
+    // suffixed actions must be matched FIRST, or the generic detail branch
+    // below swallows them and hands back a thread body with no `conversation`/
+    // `writeback_notice`, which is silent to `calls` but wrong to the caller.
     if (u.includes('/archive')) {
       const id = u.split('/')[4]
       if (init?.body && JSON.parse(init.body).archived) archivedIds.add(id)
@@ -157,6 +147,22 @@ function stubNetwork({ conversations = [CONV_A, CONV_B], needsReplyCount = 1 } =
         data: {
           conversation: { ...(conversations.find(c => c.id === id) || CONV_A), is_spam: spam, needs_reply: !spam },
           notified: !spam,
+        },
+      })
+    }
+    if (u.startsWith('/api/email/mail/')) {
+      const id = u.split('/')[4]
+      const row = conversations.find(c => c.id === id) || CONV_A
+      return json({
+        success: true,
+        data: {
+          ticket: { ...row, mailbox: MAILBOX },
+          messages: [{
+            id: `m-${id}`, direction: 'inbound', is_internal_note: false,
+            from_email: row.requester_email, text_body: `Message on ${row.subject}`,
+            created_at: '2026-08-26T08:00:00Z',
+          }],
+          reply_recipients: { to: [row.requester_email], mode: 'reply' },
         },
       })
     }
@@ -246,7 +252,7 @@ describe('MailSurface — opening a conversation', () => {
     renderSurface()
     fireEvent.click(await screen.findByText('Membership freeze'))
     await screen.findByText('Message on Membership freeze')
-    expect(calls.some(c => c.url === '/api/email/tickets/conv-a')).toBe(true)
+    expect(calls.some(c => c.url === '/api/email/mail/conv-a')).toBe(true)
   })
 
   it('marks an unread conversation read on open, and does not touch a read one', async () => {
@@ -359,7 +365,7 @@ describe('MailSurface — keyboard', () => {
     // MAIL-DOCK.1 — the dock opens the composer as the slim pill; typing
     // means expanding it first, which is exactly what an operator does.
     fireEvent.click(screen.getByRole('button', { name: 'Reply ↵' }))
-    const composer = document.getElementById('ticket-composer')
+    const composer = document.getElementById('conversation-composer')
     expect(composer).toBeTruthy()
     // Flushed so the listener provably holds the OPEN selection — otherwise a
     // stale closure with no selectedId makes this pass vacuously (e would
@@ -555,7 +561,7 @@ describe('MailSurface — the dock', () => {
   it('Esc does NOT fire while the operator is typing', async () => {
     await openFirst()
     fireEvent.click(screen.getByRole('button', { name: 'Reply ↵' }))
-    const composer = document.getElementById('ticket-composer')
+    const composer = document.getElementById('conversation-composer')
     await flushEffects()
     fireEvent.keyDown(composer, { key: 'Escape' })
     // Still open, still reading the same conversation.
@@ -852,7 +858,7 @@ describe('MailSurface — paging a search', () => {
           },
         })
       }
-      if (u.startsWith('/api/email/tickets/')) {
+      if (u.startsWith('/api/email/mail/')) {
         return json({ success: true, data: { ticket: { ...CONV_A, mailbox: MAILBOX }, messages: [], reply_recipients: null } })
       }
       return json({ success: true, data: {} })
@@ -918,7 +924,13 @@ describe('MailSurface — archiving during a search', () => {
           },
         })
       }
-      if (u.startsWith('/api/email/tickets/')) {
+      if (u.includes('/archive')) {
+        const id = u.split('/')[4]
+        archivedId = id
+        return json({ success: true, data: { conversation: { id, archived: true, status: 'closed' }, writeback_notice: null } })
+      }
+      if (u.includes('/seen')) return json({ success: true, data: { unread: 0, writeback_notice: null } })
+      if (u.startsWith('/api/email/mail/')) {
         const id = u.split('/')[4]
         const row = [CONV_A, CONV_B].find(c => c.id === id) || CONV_A
         return json({
@@ -934,12 +946,6 @@ describe('MailSurface — archiving during a search', () => {
           },
         })
       }
-      if (u.includes('/archive')) {
-        const id = u.split('/')[4]
-        archivedId = id
-        return json({ success: true, data: { conversation: { id, archived: true, status: 'closed' }, writeback_notice: null } })
-      }
-      if (u.includes('/seen')) return json({ success: true, data: { unread: 0, writeback_notice: null } })
       return json({ success: true, data: {} })
     }))
 
@@ -1072,7 +1078,7 @@ describe('MailSurface — deep link (?c=)', () => {
           },
         })
       }
-      if (u === `/api/email/tickets/${DEEP_LINK_UUID}`) {
+      if (u === `/api/email/mail/${DEEP_LINK_UUID}`) {
         return json({
           success: true,
           data: {
@@ -1100,7 +1106,7 @@ describe('MailSurface — deep link (?c=)', () => {
     currentSearchParams = new URLSearchParams('c=../../foo')
     renderSurface()
     await screen.findByText('Membership freeze')
-    expect(calls.some(c => c.url.startsWith('/api/email/tickets/'))).toBe(false)
+    expect(calls.some(c => c.url.startsWith('/api/email/mail/'))).toBe(false)
   })
 
   it('never lets ?c reach the list-fetch URL — buildMailUrl has no idea it exists', async () => {
@@ -1117,7 +1123,7 @@ describe('MailSurface — deep link (?c=)', () => {
   // Reconciliation: the synthesized `{ id }` selection the mount effect seeds
   // carries none of the list row's own fields (unread, archived, …) —
   // loadThread's ticket-detail response doesn't carry them either (confirmed
-  // by reading src/app/api/email/tickets/[id]/route.js). Once the list DOES
+  // by reading src/app/api/email/mail/[id]/route.js). Once the list DOES
   // contain the row, an unread one must be marked read exactly as a click
   // would — an operator landing here from a link should not still see it bold.
   it('reconciles a deep-linked, unread row once the list contains it — marking it read like a click would', async () => {
@@ -1150,7 +1156,7 @@ describe('MailSurface — deep link (?c=)', () => {
           },
         })
       }
-      if (u === `/api/email/tickets/${DEEP_LINK_UUID}`) {
+      if (u === `/api/email/mail/${DEEP_LINK_UUID}`) {
         return json({
           success: true,
           data: {
@@ -1210,10 +1216,16 @@ describe('MailSurface — deep link (?c=)', () => {
           data: { mailboxes: [MAILBOX], conversations: rows, next_before: null, needs_reply_count: 0, counts_unavailable: false, counts_partial: false },
         })
       }
-      if (u === `/api/email/tickets/${DEEP_LINK_UUID}`) {
+      if (u === `/api/email/mail/${DEEP_LINK_UUID}`) {
         return json({ success: true, data: { ticket: { id: DEEP_LINK_UUID, subject: 'Off-page', mailbox: MAILBOX }, messages: [], reply_recipients: null } })
       }
-      if (u.startsWith('/api/email/tickets/')) {
+      // MAIL-RENAME.1 — /seen shares the detail GET's prefix now, so it must
+      // be matched before the generic startsWith below swallows it.
+      if (u.includes('/seen')) {
+        seenCalls.push({ url: u, body: JSON.parse(init.body) })
+        return json({ success: true, data: { unread: 0, writeback_notice: null } })
+      }
+      if (u.startsWith('/api/email/mail/')) {
         const id = u.split('/')[4]
         const row = [CONV_A, CONV_B].find(c => c.id === id) || CONV_A
         return json({
@@ -1224,10 +1236,6 @@ describe('MailSurface — deep link (?c=)', () => {
             reply_recipients: { to: [row.requester_email], mode: 'reply' },
           },
         })
-      }
-      if (u.includes('/seen')) {
-        seenCalls.push({ url: u, body: JSON.parse(init.body) })
-        return json({ success: true, data: { unread: 0, writeback_notice: null } })
       }
       return json({ success: true, data: {} })
     }))
@@ -1295,7 +1303,7 @@ describe('MailSurface — deep link (?c=)', () => {
           },
         })
       }
-      if (u === `/api/email/tickets/${DEEP_LINK_UUID}`) {
+      if (u === `/api/email/mail/${DEEP_LINK_UUID}`) {
         return json({
           success: true,
           data: {
@@ -1366,18 +1374,6 @@ describe('MailSurface — the archive queue', () => {
           data: { mailboxes: [MAILBOX], conversations: [CONV_A, CONV_B], next_before: null, needs_reply_count: 0, counts_unavailable: false, counts_partial: false },
         })
       }
-      if (u.startsWith('/api/email/tickets/')) {
-        const id = u.split('/')[4]
-        const row = [CONV_A, CONV_B].find(c => c.id === id) || CONV_A
-        return json({
-          success: true,
-          data: {
-            ticket: { ...row, mailbox: MAILBOX },
-            messages: [{ id: `m-${id}`, direction: 'inbound', is_internal_note: false, from_email: row.requester_email, text_body: `Message on ${row.subject}`, created_at: '2026-08-26T08:00:00Z' }],
-            reply_recipients: { to: [row.requester_email], mode: 'reply' },
-          },
-        })
-      }
       if (u.includes('/archive')) {
         const id = u.split('/')[4]
         const body = JSON.parse(init.body)
@@ -1389,6 +1385,18 @@ describe('MailSurface — the archive queue', () => {
         return json({ success: true, data: { conversation: { id, status: body.archived ? 'closed' : 'open', archived: body.archived }, writeback_notice: null } })
       }
       if (u.includes('/seen')) return json({ success: true, data: { unread: 0, writeback_notice: null } })
+      if (u.startsWith('/api/email/mail/')) {
+        const id = u.split('/')[4]
+        const row = [CONV_A, CONV_B].find(c => c.id === id) || CONV_A
+        return json({
+          success: true,
+          data: {
+            ticket: { ...row, mailbox: MAILBOX },
+            messages: [{ id: `m-${id}`, direction: 'inbound', is_internal_note: false, from_email: row.requester_email, text_body: `Message on ${row.subject}`, created_at: '2026-08-26T08:00:00Z' }],
+            reply_recipients: { to: [row.requester_email], mode: 'reply' },
+          },
+        })
+      }
       return json({ success: true, data: {} })
     }))
 
@@ -1420,16 +1428,16 @@ describe('MailSurface — the archive queue', () => {
           data: { mailboxes: [MAILBOX], conversations: [CONV_A, CONV_B], next_before: null, needs_reply_count: 0, counts_unavailable: false, counts_partial: false },
         })
       }
-      if (u.startsWith('/api/email/tickets/')) {
-        const id = u.split('/')[4]
-        const row = [CONV_A, CONV_B].find(c => c.id === id) || CONV_A
-        return json({ success: true, data: { ticket: { ...row, mailbox: MAILBOX }, messages: [], reply_recipients: null } })
-      }
       if (u.includes('/archive')) {
         archiveUrls.push(u)
         const id = u.split('/')[4]
         if (id === 'conv-a') await pendingA
         return json({ success: true, data: { conversation: { id, status: 'closed', archived: true }, writeback_notice: null } })
+      }
+      if (u.startsWith('/api/email/mail/')) {
+        const id = u.split('/')[4]
+        const row = [CONV_A, CONV_B].find(c => c.id === id) || CONV_A
+        return json({ success: true, data: { ticket: { ...row, mailbox: MAILBOX }, messages: [], reply_recipients: null } })
       }
       return json({ success: true, data: {} })
     }))
@@ -1467,7 +1475,14 @@ describe('MailSurface — the archive queue', () => {
           data: { mailboxes: [MAILBOX], conversations: live, next_before: null, needs_reply_count: 0, counts_unavailable: false, counts_partial: false },
         })
       }
-      if (u.startsWith('/api/email/tickets/')) {
+      if (u.includes('/archive')) {
+        const id = u.split('/')[4]
+        if (id === 'conv-a') return json({ success: false, error: 'Could not archive that' })
+        archivedIds.add(id)
+        return json({ success: true, data: { conversation: { id, status: 'closed', archived: true }, writeback_notice: null } })
+      }
+      if (u.includes('/seen')) return json({ success: true, data: { unread: 0, writeback_notice: null } })
+      if (u.startsWith('/api/email/mail/')) {
         const id = u.split('/')[4]
         const row = [CONV_A, CONV_B].find(c => c.id === id) || CONV_A
         return json({
@@ -1479,13 +1494,6 @@ describe('MailSurface — the archive queue', () => {
           },
         })
       }
-      if (u.includes('/archive')) {
-        const id = u.split('/')[4]
-        if (id === 'conv-a') return json({ success: false, error: 'Could not archive that' })
-        archivedIds.add(id)
-        return json({ success: true, data: { conversation: { id, status: 'closed', archived: true }, writeback_notice: null } })
-      }
-      if (u.includes('/seen')) return json({ success: true, data: { unread: 0, writeback_notice: null } })
       return json({ success: true, data: {} })
     }))
 
@@ -1520,14 +1528,14 @@ describe('MailSurface — the archive queue', () => {
           data: { mailboxes: [MAILBOX], conversations: [CONV_A, CONV_B], next_before: null, needs_reply_count: 0, counts_unavailable: false, counts_partial: false },
         })
       }
-      if (u.startsWith('/api/email/tickets/')) {
-        return json({ success: true, data: { ticket: { ...CONV_A, mailbox: MAILBOX }, messages: [], reply_recipients: null } })
-      }
       if (u.includes('/archive')) {
         archiveUrls.push(u)
         const id = u.split('/')[4]
         if (id === 'conv-a') await pendingA
         return json({ success: true, data: { conversation: { id, status: 'closed', archived: true }, writeback_notice: null } })
+      }
+      if (u.startsWith('/api/email/mail/')) {
+        return json({ success: true, data: { ticket: { ...CONV_A, mailbox: MAILBOX }, messages: [], reply_recipients: null } })
       }
       return json({ success: true, data: {} })
     }))
@@ -1639,7 +1647,7 @@ function stubMultiNetwork(state) {
       })
     }
     if (u.includes('/seen')) return json({ success: true, data: { unread: 0, writeback_notice: null } })
-    if (u.startsWith('/api/email/tickets/')) {
+    if (u.startsWith('/api/email/mail/')) {
       const id = u.split('/')[4]
       const all = state.locations.flatMap(l => l.rows || [])
       const row = all.find(r => r.id === id) || CONV_A

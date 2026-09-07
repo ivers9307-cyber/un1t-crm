@@ -3,7 +3,7 @@
 // Mail tab's FAB: From is the studio account picker (default = the location's
 // default mailbox), To autocompletes against the CRM's own contacts (tagged
 // MEMBER/LEAD) alongside free-typed addresses, and sending files it as a
-// conversation like any other — POST /api/email/tickets/compose via
+// conversation like any other — POST /api/email/mail/compose via
 // composeEmail(), which sends FIRST server-side, so a failed send writes
 // nothing and the draft stays on this screen.
 //
@@ -67,7 +67,7 @@ import {
 } from '../../../lib/mail-compose'
 import { ALL_SCOPE, parseLocationsParam } from '../../../lib/mail-digest'
 import { resolveSignatureHint } from '../../../lib/signature-hint'
-import { formatAttachmentSize } from '../../../lib/email-tickets'
+import { formatAttachmentSize } from '../../../lib/mail-conversations'
 
 // How long a keystroke rests before the directory is asked. Matches the feel
 // of the search screen's debounce without importing its state machine — this

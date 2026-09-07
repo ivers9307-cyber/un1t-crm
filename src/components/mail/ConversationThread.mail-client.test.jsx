@@ -21,7 +21,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, cleanup, screen } from '@testing-library/react'
-import TicketThread from './TicketThread.jsx'
+import ConversationThread from './ConversationThread.jsx'
 
 beforeEach(() => {
   // jsdom has no scrollIntoView; the thread scroll-follows new messages.
@@ -85,7 +85,7 @@ const FROM_CRM = {
 
 function renderThread(messages) {
   return render(
-    <TicketThread
+    <ConversationThread
       hasSelection
       ticket={TICKET}
       messages={messages}
@@ -98,7 +98,7 @@ function renderThread(messages) {
   )
 }
 
-describe('TicketThread — a reply sent from the mail client', () => {
+describe('ConversationThread — a reply sent from the mail client', () => {
   it('says on the message that it was sent from the mail client', () => {
     renderThread([FROM_GMAIL])
     expect(screen.getByText('Sent from the mail client')).toBeTruthy()

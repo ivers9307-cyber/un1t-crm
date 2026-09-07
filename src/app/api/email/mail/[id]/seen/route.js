@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { loadTicketForUser } from '../../_helpers'
+import { loadConversationForUser } from '../../_helpers'
 import { applyWriteback, writebackNotice } from '../../_writeback'
 
 const SeenSchema = z.object({
@@ -51,7 +51,7 @@ const SeenSchema = z.object({
 // nobody uses for this mailbox, and refusing the request over it would cost
 // the operator the read state they asked for.
 //
-// ALL THE GATES ARE loadTicketForUser's: location access, the `email_inbox`
+// ALL THE GATES ARE loadConversationForUser's: location access, the `email_inbox`
 // key at the TICKET's location, and the per-mailbox grant. Every refusal is
 // the same 404. (RETIRE-TICKETS.1 removed the fourth, surface, gate along
 // with the surface itself — mig 578. Orphan conversations are writable here
@@ -67,7 +67,7 @@ export async function POST(request, props) {
   if (!validation.ok) return validation.response
 
   const db = createServerClient()
-  const loaded = await loadTicketForUser(db, user, params.id)
+  const loaded = await loadConversationForUser(db, user, params.id)
   if (loaded.response) return loaded.response
   const { ticket } = loaded
 

@@ -4,7 +4,7 @@
 // The CRM's email surface is Mail (/communications/mail on web —
 // RETIRE-TICKETS.1 retired the ticket queue and mig 578 the surface split).
 // The LIST and the two verbs (archive, read state) ride /api/email/mail*;
-// the thread, reply and attachments stay on the shared /api/email/tickets/[id]
+// the thread, reply and attachments stay on the shared /api/email/mail/[id]
 // detail routes, which are NOT deprecated — only the old list/count/assign/
 // status routes are, kept alive solely for bundles older than this one.
 //
@@ -36,16 +36,16 @@
 import { api } from './api'
 import { supabase } from './supabase'
 import { readFileAsArrayBuffer } from './upload-bytes'
-import { ticketsToInboxRows } from './email-tickets'
+import { ticketsToInboxRows } from './mail-conversations'
 
 // Re-exported so screens that already import their display helper from here
 // keep one import for "the email surface". requesterLabel is the ticket-era
 // precedence: requester_name → requester_email.
-export { requesterLabel as emailDisplayName } from './email-tickets'
+export { requesterLabel as emailDisplayName } from './mail-conversations'
 
 // The three views the mail route whitelists. Anything else is a 400, and
 // omitting the param entirely is the inbox (live conversations). The screen's
-// chips map their id onto these via ticketViewWire() in ./email-tickets.
+// chips map their id onto these via ticketViewWire() in ./mail-conversations.
 export const MAIL_VIEWS = Object.freeze(['inbox', 'needs_reply', 'archived'])
 
 /**
@@ -186,8 +186,8 @@ export function setConversationSeen(ticketId, seen, locationId) {
  * 404s (not 403s) for a ticket the caller may not see, so an id can't be
  * probed; surface it as a plain "not found" rather than a permission story.
  */
-export async function getTicket(ticketId, locationId) {
-  const res = await api(`/api/email/tickets/${ticketId}`, { locationId })
+export async function getConversation(ticketId, locationId) {
+  const res = await api(`/api/email/mail/${ticketId}`, { locationId })
   if (!res.success) return { success: false, error: res.error || 'Failed to load ticket' }
   return {
     success: true,
@@ -204,11 +204,11 @@ export async function getTicket(ticketId, locationId) {
     // the WHOLE thread server-side. This used to be dropped here, so the
     // composer footer fell back to a hard-coded "Sends an email to
     // <requester>" even though a reply from this screen has always gone to
-    // everyone the server derives (replyToTicket below posts { text, internal }
+    // everyone the server derives (replyToConversation below posts { text, internal }
     // only — the route adds the rest). That understated the true audience on
     // every multi-party thread (2026-08-09 audit). null means the route could
     // not derive one (an own-address lookup blip); ticketReplyAudienceMeta()
-    // in email-tickets.js falls back to the requester address for that case,
+    // in mail-conversations.js falls back to the requester address for that case,
     // same as TicketReplyBox.jsx does on web.
     reply_recipients: res.data?.reply_recipients || null,
   }
@@ -232,12 +232,12 @@ export async function getTicket(ticketId, locationId) {
  * body claiming files rode a message that never left would be refused — or
  * worse, silently ignored — either way a chip lying about what the member got.
  */
-export function replyToTicket(ticketId, text, { internal = false, locationId, attachments } = {}) {
+export function replyToConversation(ticketId, text, { internal = false, locationId, attachments } = {}) {
   const body = { text, internal: !!internal }
   if (!internal && Array.isArray(attachments) && attachments.length > 0) {
     body.attachments = attachments
   }
-  return api(`/api/email/tickets/${ticketId}/reply`, {
+  return api(`/api/email/mail/${ticketId}/reply`, {
     method: 'POST',
     locationId,
     body,
@@ -246,7 +246,7 @@ export function replyToTicket(ticketId, text, { internal = false, locationId, at
 
 /**
  * Start a conversation — a new email FROM one of the studio's mailboxes
- * (MOBILE-MAIL-A.1; POST /api/email/tickets/compose).
+ * (MOBILE-MAIL-A.1; POST /api/email/mail/compose).
  *
  * THE ENVELOPE PASSES THROUGH UNTOUCHED, refusals included. The route owns
  * every rule — the 25-recipient cap + dedupe, the mailbox gate (a mailbox the
@@ -282,12 +282,12 @@ export function composeEmail({
   if (Array.isArray(cc) && cc.length > 0) body.cc = cc
   if (Array.isArray(bcc) && bcc.length > 0) body.bcc = bcc
   if (Array.isArray(attachments) && attachments.length > 0) body.attachments = attachments
-  return api('/api/email/tickets/compose', { method: 'POST', body, locationId })
+  return api('/api/email/mail/compose', { method: 'POST', body, locationId })
 }
 
 /**
  * Pass one message on the ticket to somebody else (MOBILE-MAIL-FORWARD.1;
- * POST /api/email/tickets/[id]/forward — the same non-deprecated per-ticket
+ * POST /api/email/mail/[id]/forward — the same non-deprecated per-ticket
  * family as reply).
  *
  * THE ENVELOPE PASSES THROUGH UNTOUCHED, refusals included — the route owns
@@ -323,7 +323,7 @@ export function forwardMessage({
   if (Array.isArray(bcc) && bcc.length > 0) body.bcc = bcc
   if (typeof note === 'string' && note.trim()) body.note = note
   if (Array.isArray(attachmentIds) && attachmentIds.length > 0) body.attachment_ids = attachmentIds
-  return api(`/api/email/tickets/${ticketId}/forward`, { method: 'POST', body, locationId })
+  return api(`/api/email/mail/${ticketId}/forward`, { method: 'POST', body, locationId })
 }
 
 // ── Related conversations + merge (MAIL-REFINE.1 §03) ───────────────
@@ -366,7 +366,7 @@ export async function fetchRelatedConversations(ticketId, locationId) {
  * sequentially via runMerges and stops on the first failure.
  */
 export function mergeConversation(ticketId, intoTicketId, locationId) {
-  return api(`/api/email/tickets/${ticketId}/merge`, {
+  return api(`/api/email/mail/${ticketId}/merge`, {
     method: 'POST',
     body: { into: intoTicketId },
     locationId,
@@ -376,7 +376,7 @@ export function mergeConversation(ticketId, intoTicketId, locationId) {
 /** Un-merge a conversation merged by the call above — the Undo on the
  * success notice (and nothing else; there is no persistent un-merge UI). */
 export function unmergeConversation(ticketId, locationId) {
-  return api(`/api/email/tickets/${ticketId}/merge`, {
+  return api(`/api/email/mail/${ticketId}/merge`, {
     method: 'DELETE',
     locationId,
   })
@@ -463,11 +463,11 @@ export async function fetchSignatureContexts() {
  *
  * A 404 here is NORMAL, not a fault: it is how the server says "no preview for
  * this type" (a Word document, a HEIC photo, an SVG). Callers fall back to
- * downloadTicketAttachment(), which is the path that works for everything.
+ * downloadConversationAttachment(), which is the path that works for everything.
  */
-export async function previewTicketAttachment(ticketId, attachmentId, locationId) {
+export async function previewConversationAttachment(ticketId, attachmentId, locationId) {
   const res = await api(
-    `/api/email/tickets/${ticketId}/attachments/${attachmentId}/preview`,
+    `/api/email/mail/${ticketId}/attachments/${attachmentId}/preview`,
     { locationId },
   )
   if (!res.success || !res.data?.url) {
@@ -482,8 +482,8 @@ export async function previewTicketAttachment(ticketId, attachmentId, locationId
  * OS save it rather than render it — which is what makes it the safe fallback
  * for the types no preview will ever cover.
  */
-export async function downloadTicketAttachment(ticketId, attachmentId, locationId) {
-  const res = await api(`/api/email/tickets/${ticketId}/attachments/${attachmentId}`, { locationId })
+export async function downloadConversationAttachment(ticketId, attachmentId, locationId) {
+  const res = await api(`/api/email/mail/${ticketId}/attachments/${attachmentId}`, { locationId })
   if (!res.success || !res.data?.url) {
     return { success: false, error: res.error || 'That file could not be opened.' }
   }

@@ -165,7 +165,7 @@ describe('the quoted header block NEVER contains a bcc', () => {
   // from stored correspondence changes the shape.
   it('the forward route mentions bcc_emails exactly once, and only to WRITE its own', () => {
     const source = readFileSync(
-      join(process.cwd(), 'src/app/api/email/tickets/[id]/forward/route.js'),
+      join(process.cwd(), 'src/app/api/email/mail/[id]/forward/route.js'),
       'utf8',
     )
     const code = source.split('\n').filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n')
@@ -177,7 +177,7 @@ describe('the quoted header block NEVER contains a bcc', () => {
   // fetched cannot be reproduced by any amount of carelessness downstream.
   it('the forward route does not fetch bcc_emails off the message it quotes', () => {
     const source = readFileSync(
-      join(process.cwd(), 'src/app/api/email/tickets/[id]/forward/route.js'),
+      join(process.cwd(), 'src/app/api/email/mail/[id]/forward/route.js'),
       'utf8',
     )
     const block = source.match(/const SOURCE_COLUMNS = \[([\s\S]*?)\]/)

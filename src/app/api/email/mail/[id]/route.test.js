@@ -15,11 +15,11 @@ vi.mock('@/lib/auth', async () => {
 import { GET } from './route'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
-import { makeDb, selectsFrom } from '../_test-db'
+import { makeDb, selectsFrom } from '../../tickets/_test-db'
 import {
   LOC_B, MB_STUDIO, MB_ACCOUNTS, T_STUDIO, T_ACCOUNTS,
   COACH, COACH_NO_INBOX, OWNER, GRANT_STUDIO, baseState,
-} from '../_test-fixtures'
+} from '../../tickets/_test-fixtures'
 
 function get(id) {
   return GET(new Request(`http://x/api/email/tickets/${id}`), { params: Promise.resolve({ id }) })

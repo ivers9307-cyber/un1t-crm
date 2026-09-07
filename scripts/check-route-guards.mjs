@@ -74,6 +74,8 @@ const SESSION_GUARDS = [
   // returns null for staff/non-host users; every /api/host route 401s on null
   // and scopes all reads to host.id — verified in src/lib/host-auth.js. (HOST-PORTAL.1)
   'getCurrentHost(',
+  // MAIL-RENAME.1 — a one-line shim inherits the guard of the handler it re-exports; deleted in the shim sweep.
+  "from '@/app/api/email/mail/",
 ]
 
 // Webhooks authenticate the SENDER (HMAC / shared secret / provider
@@ -127,6 +129,9 @@ const INBOX_ROUTE_PREFIXES = [
   // RLS, so the `email_inbox` check IS the channel gate (the per-account
   // email_mailbox_access gate sits behind it).
   'src/app/api/email/tickets',
+  // MAIL-RENAME.1 — the ticket routes moved here (mail is the same surface,
+  // same gate); the tickets prefix above stays for the deprecated shims.
+  'src/app/api/email/mail',
 ]
 
 // EMAIL-TICKET-CLEANUP.1 — the last two entries are location-scoped forms of
@@ -184,8 +189,14 @@ const INBOX_PERMISSION_GUARDS = [
   'hasPermission(',
   'hasPermissionForLocation(',
   'loadTicketForUser(',
+  // MAIL-RENAME.1 — loadTicketForUser was renamed to loadConversationForUser
+  // in src/app/api/email/mail/_conversation.js; the old name stays above
+  // until the identifier sweep (Task 9) removes every caller of it.
+  'loadConversationForUser(',
   'loadAttachmentForTicket(',
   'loadSendingMailbox(',
+  // MAIL-RENAME.1 — a one-line shim inherits the guard of the handler it re-exports; deleted in the shim sweep.
+  "from '@/app/api/email/mail/",
 ]
 
 function checkInboxPermission(file) {

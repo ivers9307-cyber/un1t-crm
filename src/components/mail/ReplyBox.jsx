@@ -83,7 +83,7 @@ import SignatureHint from './SignatureHint'
 import RecipientEditor, { EMPTY_RECIPIENTS } from './RecipientEditor'
 import AttachmentPicker, { readyDrafts, hasPendingUploads } from './AttachmentPicker'
 // MAIL-TRIAL draft persistence — see that file's header comment for why the
-// draft is keyed per ticket id rather than anything shared: TicketThread's
+// draft is keyed per ticket id rather than anything shared: ConversationThread's
 // `key={ticketId}` remount is TICKET-COMPOSER-LEAK.1's guard against a
 // cross-ticket send, and this store rides on exactly that key rather than
 // creating a second one.
@@ -93,7 +93,7 @@ import { resolveViewerId } from '@/components/mail/viewer-id'
 
 const MAX_LENGTH = 10000
 
-export default function TicketReplyBox({
+export default function ReplyBox({
   ticket,
   replyRecipients = null,
   onSend,
@@ -105,7 +105,7 @@ export default function TicketReplyBox({
   sending = false,
   // MAIL-TRIAL.B — the ONE sentence in this composer written in the ticket
   // lifecycle's own vocabulary. The Mail surface reuses this box whole (see
-  // TicketThread.jsx's slot comment for why forking it is not an option) and
+  // ConversationThread.jsx's slot comment for why forking it is not an option) and
   // calls the same state "Archived", so a line reading "This ticket is closed"
   // would be the composer contradicting every other word on that screen.
   // `undefined` keeps the sentence exactly as it was; a node replaces it;
@@ -116,7 +116,7 @@ export default function TicketReplyBox({
   // (b) draft hydration finds a non-empty draft, which auto-expands. Default
   // false: every existing caller keeps the always-open composer unchanged.
   // Collapse state is component-local and resets per ticket via the
-  // `key={ticketId}` remount TicketThread already does — the same remount
+  // `key={ticketId}` remount ConversationThread already does — the same remount
   // that is TICKET-COMPOSER-LEAK.1's guard, which this must never weaken.
   startCollapsed = false,
 }) {
@@ -420,7 +420,7 @@ export default function TicketReplyBox({
       {!isNote && canReply && (
         <div className="mb-2">
           <RecipientEditor
-            idPrefix="ticket-reply-recipients"
+            idPrefix="conversation-reply-recipients"
             value={recipients}
             onChange={setRecipients}
             lockedTo={lockedTo}
@@ -505,11 +505,11 @@ export default function TicketReplyBox({
           This thread has {lockedTo.length} recipients and the limit is {MAX_RECIPIENTS}. Remove some before replying.
         </p>
       )}
-      <label className="sr-only" htmlFor="ticket-composer">
+      <label className="sr-only" htmlFor="conversation-composer">
         {isNote ? 'Internal note (staff only)' : 'Reply to the member'}
       </label>
       <textarea
-        id="ticket-composer"
+        id="conversation-composer"
         ref={textareaRef}
         value={text}
         onChange={(e) => setText(e.target.value)}
@@ -563,7 +563,7 @@ export default function TicketReplyBox({
               {ticket?.requester_email || 'the member'}.
             </>
           ) : !canReply ? (
-            'This ticket has no requester address, so it cannot be replied to. You can still add an internal note.'
+            'This conversation has no sender address, so it cannot be replied to. You can still add an internal note.'
           ) : noAudience ? (
             // Without this branch the line below renders "Sends an email to"
             // followed by nothing, which reads as a set still being worked out.

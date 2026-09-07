@@ -20,7 +20,7 @@ vi.mock('@/lib/permissions', () => ({
   hasPermission: vi.fn(),
   hasPermissionForLocation: vi.fn(),
 }))
-vi.mock('@/app/api/email/tickets/_helpers', () => ({
+vi.mock('@/app/api/email/mail/_conversation', () => ({
   loadVisibleMailboxes: vi.fn(),
   scopeToVisibleMailboxes: vi.fn((q) => q),
   scopeToNeedsReply: vi.fn((q) => q),
@@ -37,7 +37,7 @@ import {
 } from './home-queue'
 import { getPendingApprovals, getPendingApprovalsCount } from '@/lib/approvals/registry'
 import { hasPermission, hasPermissionForLocation } from '@/lib/permissions'
-import { loadVisibleMailboxes } from '@/app/api/email/tickets/_helpers'
+import { loadVisibleMailboxes } from '@/app/api/email/mail/_conversation'
 
 const LOC = 'loc-1'
 const userAt = (over = {}) => ({ id: 'u1', role: 'staff', activeLocation: { id: LOC }, ...over })

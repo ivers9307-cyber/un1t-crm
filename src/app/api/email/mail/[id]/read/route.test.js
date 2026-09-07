@@ -11,11 +11,11 @@ vi.mock('@/lib/auth', async () => {
 import { POST } from './route'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
-import { makeDb, updatesTo, writesTo } from '../../_test-db'
+import { makeDb, updatesTo, writesTo } from '../../../tickets/_test-db'
 import {
   T_STUDIO, T_ACCOUNTS, T_OTHER_LOCATION, COACH, COACH_NO_INBOX, MULTI_LOCATION,
   GRANT_STUDIO, GRANT_MULTI_STUDIO, GRANT_MULTI_OTHER_LOCATION, baseState,
-} from '../../_test-fixtures'
+} from '../../../tickets/_test-fixtures'
 
 function post(id) {
   return POST(

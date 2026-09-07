@@ -32,7 +32,7 @@
 // has to run after the load. That is why it lives here now rather than in five
 // copies that would each have to remember to run late.
 //
-// It is NOT redundant with the two checks below it. loadTicketForUser gates on
+// It is NOT redundant with the two checks below it. loadConversationForUser gates on
 // location ACCESS and on mailbox VISIBILITY; neither asks whether the caller
 // holds the email_inbox key. A staffer with a mailbox grant but the surface
 // switched off would sail through both — grants are minted on the mailbox-admin
@@ -50,7 +50,7 @@ import { UUID_SHAPE } from '@/lib/uuid-shape'
 // MAILBOX-CONNECT.7 — `egress` ('postmark' | 'smtp', mig 572) rides along.
 // There is no select('*') on email_mailboxes anywhere in this repo, so a
 // column is invisible to the API until a named list asks for it, and this is
-// the list every ticket route's mailbox object comes from (loadTicketForUser
+// the list every ticket route's mailbox object comes from (loadConversationForUser
 // and loadSendingMailbox both resolve through loadVisibleMailboxes below).
 // sendTicketEmail reads `mailbox.egress` to choose its transport; without the
 // column it would read `undefined` on a connected mailbox and quietly keep
@@ -322,7 +322,7 @@ export function scopeToUnmerged(query) {
 }
 
 /** 404, never 403 — a detail route must not confirm that an id exists. */
-export function ticketNotFound() {
+export function conversationNotFound() {
   return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
 }
 
@@ -345,7 +345,7 @@ export function ticketNotFound() {
  *
  * 409, NOT 404, and deliberately so. Every other refusal on this surface is a
  * 404 because the caller must not learn whether an id exists — but they have
- * already passed loadTicketForUser here, so they can see this ticket and are
+ * already passed loadConversationForUser here, so they can see this ticket and are
  * owed a reason. The ticket genuinely exists; the request conflicts with what
  * it has become. It is the same code the merge route returns for the lost
  * race, which is the same shape of answer: you are acting on a state that has
@@ -355,7 +355,7 @@ export function ticketNotFound() {
  * survivor rather than dead-ending. `data` on a failure body is this surface's
  * existing idiom (the reply route's own `data.sent` unfiled case).
  */
-export function ticketMergedAway(ticket) {
+export function conversationMergedAway(ticket) {
   return NextResponse.json({
     success: false,
     error: 'This ticket was merged into another one, so nothing can be sent from it. Open the ticket it was merged into and send from there.',
@@ -389,13 +389,13 @@ export function ticketMergedAway(ticket) {
  *
  * @returns {{ response: NextResponse } | { ticket: object, mailbox: object|null, elevated: boolean }}
  */
-export async function loadTicketForUser(db, user, ticketId) {
+export async function loadConversationForUser(db, user, ticketId) {
   const { data: ticket, error } = await db.from('email_tickets')
     .select('*')
     .eq('id', ticketId)
     .maybeSingle()
   // A malformed id is a Postgres cast error (22P02), not a row — same 404.
-  if (error || !ticket) return { response: ticketNotFound() }
+  if (error || !ticket) return { response: conversationNotFound() }
 
   const guard = assertLocationAccessOr404(user, ticket.location_id)
   if (guard) return { response: guard }
@@ -404,7 +404,7 @@ export async function loadTicketForUser(db, user, ticketId) {
   // one — see the file header. It runs after assertLocationAccessOr404 so the
   // cheaper, broader refusal wins first and the two can't disagree.
   if (!hasPermissionForLocation(user, ticket.location_id, 'email_inbox')) {
-    return { response: ticketNotFound() }
+    return { response: conversationNotFound() }
   }
 
   const visibility = await loadVisibleMailboxes(db, user, ticket.location_id)
@@ -419,7 +419,7 @@ export async function loadTicketForUser(db, user, ticketId) {
     ? mailboxes.find(m => m.id === ticket.mailbox_id) || null
     : null
   const visible = ticket.mailbox_id ? !!mailbox : elevated
-  if (!visible) return { response: ticketNotFound() }
+  if (!visible) return { response: conversationNotFound() }
 
   return { ticket, mailbox, elevated }
 }
@@ -459,13 +459,13 @@ export async function loadSendingMailbox(db, user, mailboxId) {
     .select('id, location_id')
     .eq('id', mailboxId)
     .maybeSingle()
-  if (mailboxErr || !named) return { response: ticketNotFound() }
+  if (mailboxErr || !named) return { response: conversationNotFound() }
 
   const guard = assertLocationAccessOr404(user, named.location_id)
   if (guard) return { response: guard }
 
   if (!hasPermissionForLocation(user, named.location_id, 'email_inbox')) {
-    return { response: ticketNotFound() }
+    return { response: conversationNotFound() }
   }
 
   const visibility = await loadVisibleMailboxes(db, user, named.location_id)
@@ -475,7 +475,7 @@ export async function loadSendingMailbox(db, user, mailboxId) {
   if (visibility.response) return { response: visibility.response }
 
   const mailbox = visibility.mailboxes.find(m => m.id === mailboxId) || null
-  if (!mailbox) return { response: ticketNotFound() }
+  if (!mailbox) return { response: conversationNotFound() }
 
   return { mailbox, locationId: mailbox.location_id }
 }
@@ -521,7 +521,7 @@ const PARTICIPANT_COLUMNS =
  * Two windows would be two answers to "who does this reach".
  *
  * Deliberately returns the raw supabase result rather than the
- * `{ response } | { ... }` shape used by loadOwnAddresses/loadTicketForUser:
+ * `{ response } | { ... }` shape used by loadOwnAddresses/loadConversationForUser:
  * those wrap access/visibility failures into one canonical refusal, but a
  * content-query failure here logs a route-specific message at each call site
  * (as the pre-existing message queries in both routes already did), so the

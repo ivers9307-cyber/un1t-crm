@@ -28,7 +28,7 @@ import {
   mailRowDisplay,
   flatThreadPlan,
   flatMessageMeta,
-} from './email-tickets'
+} from './mail-conversations'
 
 describe('ticketMessageKind', () => {
   // THE regression guard for this surface. A note is written with
@@ -885,7 +885,7 @@ import {
   ARCHIVE_UNDO_MS,
   MAIL_ERROR_STATE,
   ARCHIVED_FOOTNOTE,
-} from './email-tickets'
+} from './mail-conversations'
 
 describe('mergeMailPages (keyset paging, INCLUSIVE cursor)', () => {
   const r = (id) => ({ id, subject: `s-${id}` })
@@ -1150,7 +1150,7 @@ describe('redesign constants', () => {
   })
 })
 
-import { insertRowAt } from './email-tickets'
+import { insertRowAt } from './mail-conversations'
 
 describe('insertRowAt (undo puts the row back where it was)', () => {
   const r = (id) => ({ id })
@@ -1319,7 +1319,7 @@ describe('flatMessageMeta', () => {
 })
 
 // ── MAIL-REFINE.2 — merged-in provenance dividers ───────────────────────
-import { mergedInDividers } from './email-tickets'
+import { mergedInDividers } from './mail-conversations'
 
 describe('mergedInDividers', () => {
   const msgs = [

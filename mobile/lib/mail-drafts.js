@@ -260,7 +260,7 @@ export const THREAD_TAIL_EXPANDED = 2
  * collapsed row. Everything older than the newest THREAD_TAIL_EXPANDED
  * collapses unless the operator has tapped it open (`expandedIds`).
  *
- * Messages arrive oldest-first from getTicket — this trusts the order rather
+ * Messages arrive oldest-first from getConversation — this trusts the order rather
  * than re-sorting, because re-sorting here and not on screen would make the
  * plan disagree with what is painted.
  */

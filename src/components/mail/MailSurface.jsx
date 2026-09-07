@@ -12,11 +12,11 @@
 // the keyboard.
 //
 // WHAT IT REUSES, AND WHY IT MUST
-//   • the thread + composer            — TicketThread / TicketReplyBox, through
+//   • the thread + composer            — ConversationThread / ReplyBox, through
 //                                        three slots rather than a fork
-//   • the new-email composer            — TicketCompose, unchanged
-//   • the forward composer              — TicketForward, unchanged
-//   • reading a conversation            — GET /api/email/tickets/[id]
+//   • the new-email composer            — ComposeForm, unchanged
+//   • the forward composer              — ForwardForm, unchanged
+//   • reading a conversation            — GET /api/email/mail/[id]
 //   • sending, forwarding, participants — the same routes as the ticket queue
 // Only the LIST and the two verbs this surface actually adds (archive, read
 // state) are new routes, because only they are things the ticket surface does
@@ -33,8 +33,8 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { Mail, RefreshCw, AlertCircle, Plus } from 'lucide-react'
 import { EmptyState, Button } from '@/components/ui'
 import { NO_MAILBOX_EMPTY, threadRefreshMs } from '@/lib/mail/conversation-display'
-import TicketCompose from '@/components/tickets/TicketCompose'
-import TicketForward from '@/components/tickets/TicketForward'
+import ComposeForm from '@/components/mail/ComposeForm'
+import ForwardForm from '@/components/mail/ForwardForm'
 import MailList from './MailList'
 import MailRail from './MailRail'
 import MailThread from './MailThread'
@@ -706,7 +706,7 @@ export default function MailSurface({ locationId, locationName, userId, location
   }, [])
   // ── Conversation ───────────────────────────────────────────────────
   // The ticket surface's own detail route, unchanged. Its payload is what
-  // TicketThread already knows how to render, and a second read path would be
+  // ConversationThread already knows how to render, and a second read path would be
   // a second sanitiser decision, a second attachment shape and a second
   // reply-audience derivation.
   const loadThread = useCallback(async (id, { quiet = false } = {}) => {
@@ -716,7 +716,7 @@ export default function MailSurface({ locationId, locationName, userId, location
       setThreadError(null)
     }
     try {
-      const res = await fetch(`/api/email/tickets/${encodeURIComponent(id)}`, { cache: 'no-store' })
+      const res = await fetch(`/api/email/mail/${encodeURIComponent(id)}`, { cache: 'no-store' })
       const body = await res.json()
       if (threadFor.current !== id) return // superseded — the operator moved on
       if (!body?.success) {
@@ -1113,7 +1113,7 @@ export default function MailSurface({ locationId, locationName, userId, location
     setSending(true)
     setThreadError(null)
     try {
-      const res = await fetch(`/api/email/tickets/${encodeURIComponent(selectedId)}/reply`, {
+      const res = await fetch(`/api/email/mail/${encodeURIComponent(selectedId)}/reply`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(internal ? { text, internal: true } : {
@@ -1156,7 +1156,7 @@ export default function MailSurface({ locationId, locationName, userId, location
     setParticipantSaving(true)
     setThreadError(null)
     try {
-      const res = await fetch(`/api/email/tickets/${encodeURIComponent(id)}/participants`, {
+      const res = await fetch(`/api/email/mail/${encodeURIComponent(id)}/participants`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -1199,7 +1199,7 @@ export default function MailSurface({ locationId, locationName, userId, location
   // The digest carries no mailboxes (it is a triage payload), so the From
   // options are gathered on FIRST compose-open by asking each digest studio's
   // own list route — the exact payload the scoped surface would have had —
-  // then grouped by studio name (groupMailboxesByStudio; TicketCompose
+  // then grouped by studio name (groupMailboxesByStudio; ComposeForm
   // renders a flat select, and that file is not this task's to change, so
   // "grouped" is the studio name leading each option's label). Cached in a
   // ref for the session: mailbox sets change on an admin's timescale, not a
@@ -1211,7 +1211,7 @@ export default function MailSurface({ locationId, locationName, userId, location
   // recoverable (retry by reopening), an unopenable composer is not. Only
   // when NOTHING loads does the surface refuse, out loud.
   //
-  // State, not a ref, because TicketCompose renders from it (react-hooks/refs
+  // State, not a ref, because ComposeForm renders from it (react-hooks/refs
   // forbids a `.current` read during render — and rightly: a ref write does
   // not re-render, so the composer could open against a stale value).
   const [composeMailboxes, setComposeMailboxes] = useState(null)
@@ -1363,7 +1363,7 @@ export default function MailSurface({ locationId, locationName, userId, location
   // (Mounted only while open, so a fresh compose never inherits the last
   // one's draft.)
   const composeEl = composeOpen ? (
-        <TicketCompose
+        <ComposeForm
           key="compose-dock"
           // All mode: the lazily-gathered, studio-labelled union (see
           // openCompose); scoped/single mode: the list's own mailboxes,
@@ -1380,7 +1380,7 @@ export default function MailSurface({ locationId, locationName, userId, location
           onSentUnfiled={() => refreshList(true)}
           // MAIL-DOCK.2 — the dock shell, only for a session opened at md+
           // (the variant froze at open, so a resize cannot remount the form
-          // mid-draft). Below md there is no shell and TicketCompose renders
+          // mid-draft). Below md there is no shell and ComposeForm renders
           // its Modal byte-for-byte. `dirty` and `requestClose` are the
           // component's own — the card's ✕ and Esc ladder reuse the exact
           // confirm the Modal always had.
@@ -1707,7 +1707,7 @@ export default function MailSurface({ locationId, locationName, userId, location
       </div>
 
       {forwarding && conversation && (
-        <TicketForward
+        <ForwardForm
           ticket={conversation}
           message={forwarding}
           onClose={() => setForwarding(null)}

@@ -16,14 +16,14 @@
 // screen, in each of the three places an operator looks: the header, the
 // message it happened on, and that message's own envelope.
 //
-// jsdom + testing-library (the Modal.focus.test.jsx / TicketThread.assign
+// jsdom + testing-library (the Modal.focus.test.jsx / ConversationThread.assign
 // idiom) because these are questions about what renders — the join markers are
 // computed from the messages rather than handed in as a prop, and the envelope
 // is a behaviour (a click) that static markup cannot see.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, cleanup, screen, fireEvent } from '@testing-library/react'
-import TicketThread from './TicketThread.jsx'
+import ConversationThread from './ConversationThread.jsx'
 // The REAL derivation, not a hand-written array (EMAIL-PARTICIPANTS.12). One
 // test below feeds this component exactly what the route would hand it for a
 // given thread, because the header's divergence marker is a fact about the
@@ -55,7 +55,7 @@ const noop = () => {}
 
 function renderThread(props = {}) {
   return render(
-    <TicketThread
+    <ConversationThread
       hasSelection
       ticket={TICKET}
       messages={[]}
@@ -69,7 +69,7 @@ function renderThread(props = {}) {
   )
 }
 
-describe('TicketThread — where a participant joined', () => {
+describe('ConversationThread — where a participant joined', () => {
   it('marks the message a new participant joined on', () => {
     renderThread({
       messages: [
@@ -99,7 +99,7 @@ describe('TicketThread — where a participant joined', () => {
   })
 })
 
-describe('TicketThread — who the ticket is actually with', () => {
+describe('ConversationThread — who the ticket is actually with', () => {
   it('names the live correspondent in the header, not only the requester', () => {
     renderThread({
       // The audience as the server derived it from the whole thread: Eleanor
@@ -196,13 +196,13 @@ describe('TicketThread — who the ticket is actually with', () => {
 // swallowed the case where the operator had just taken everybody off: it put
 // the person they removed back at the top of the pane, described as who the
 // ticket is with, directly above a composer saying nobody is left and a route
-// that 400s the send. TicketReplyBox.jsx has forbidden exactly this since
+// that 400s the send. ReplyBox.jsx has forbidden exactly this since
 // EMAIL-PARTICIPANTS.7 (see `lockedTo`) — never name somebody who will not be
 // mailed — and the header contradicted it one component up.
 //
 // `empty: true` and "no audience at all" are DIFFERENT ANSWERS and only the
 // second is a gap the requester fills, so both are pinned here.
-describe('TicketThread — an audience with nobody left on it', () => {
+describe('ConversationThread — an audience with nobody left on it', () => {
   it('does not name the removed requester as the counterparty', () => {
     renderThread({
       replyRecipients: { to: [], mode: 'reply', over_cap: false, empty: true },
@@ -229,7 +229,7 @@ describe('TicketThread — an audience with nobody left on it', () => {
   })
 })
 
-describe('TicketThread — a message\'s own envelope', () => {
+describe('ConversationThread — a message\'s own envelope', () => {
   it('hides the envelope until asked, then shows the real From / To / Cc', () => {
     renderThread({
       messages: [{

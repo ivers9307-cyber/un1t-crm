@@ -24,10 +24,10 @@ vi.mock('@/lib/auth', async () => {
 import { GET } from './route'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
-import { makeDb } from '../../../_test-db'
+import { makeDb } from '../../../../tickets/_test-db'
 import {
   LOC_A, T_STUDIO, T_ACCOUNTS, COACH, COACH_NO_INBOX, OWNER, GRANT_STUDIO, baseState,
-} from '../../../_test-fixtures'
+} from '../../../../tickets/_test-fixtures'
 
 const STUDIO_MSG = { id: 'm-studio', ticket_id: T_STUDIO.id, location_id: LOC_A }
 const ACCOUNTS_MSG = { id: 'm-accounts', ticket_id: T_ACCOUNTS.id, location_id: LOC_A }

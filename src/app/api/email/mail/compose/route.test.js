@@ -34,12 +34,12 @@ import { logError } from '@/lib/log'
 import { _resetInboxSenderCache, TICKET_INTERNAL_STREAM } from '@/lib/email-inbox-send'
 import { EMAIL_ATTACHMENT_BUCKET } from '@/lib/email-attachment-quota'
 import { outboundDraftPath } from '@/lib/email-outbound-attachments'
-import { makeDb, insertsInto, writesTo, seedObject, failWrites } from '../_test-db'
+import { makeDb, insertsInto, writesTo, seedObject, failWrites } from '../../tickets/_test-db'
 import {
   LOC_A, MB_STUDIO, MB_ACCOUNTS, MB_OTHER_LOCATION,
   COACH, COACH_NO_INBOX, OWNER, MULTI_LOCATION,
   GRANT_STUDIO, GRANT_MULTI_STUDIO, GRANT_MULTI_OTHER_LOCATION, baseState,
-} from '../_test-fixtures'
+} from '../../tickets/_test-fixtures'
 
 const UNKNOWN_MAILBOX = '99999999-9999-4999-8999-999999999999'
 
@@ -651,7 +651,7 @@ describe('POST /api/email/tickets/compose — recipients', () => {
 // route now carries, and a durable record of the delivered send — in the
 // ticket-insert case NOTHING referenced it anywhere.
 //
-// `failWrites` (shared harness, ../_test-db.js) fails WRITES only —
+// `failWrites` (shared harness, ../../tickets/_test-db.js) fails WRITES only —
 // `state.errors` would fail the mailbox read too and the route would 404
 // before sending.
 describe('POST /api/email/tickets/compose — filing fails AFTER the send (EMAIL-COMPOSE-UNFILED.1)', () => {
