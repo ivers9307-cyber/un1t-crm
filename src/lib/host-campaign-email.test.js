@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   sanitizeCampaignHtml,
   renderHostCampaignHtml,
@@ -857,5 +857,234 @@ describe('sanitizeCampaignHtml — viewport-meta splice bypass (security re-revi
     // can do about it.
     expect(sanitizeCampaignHtml('<style>.a > .b{color:red}</style><p>x</p>'))
       .toBe('<style>.a  .b{color:red}</style><p>x</p>')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// THIRD security review — the same defect class, third instance.
+//
+// The stranded-placeholder drop was written as
+// `insideOpenTag(whole, offset) ? '' : <restore>` INSIDE the restore step,
+// i.e. a DELETION PERFORMED AFTER the last strip pass, whose splice nothing
+// ever re-scanned. That is exactly the shape of the viewport-meta bypass the
+// previous review fixed, and it shipped the same live payloads — this time
+// with no decoy meta needed, because the host's own `<style>` element is the
+// saw:
+//
+//   <img src=x on<style>a{color:red}</style>error=alert(1)>  → live onerror
+//   <scr<style>…</style>ipt>alert(1)                          → live <script>
+//   <a href="javascri<style>…</style>pt:alert(1)">            → javascript:
+//   <ifra<style>…</style>me src="https://evil.example/">      → live <iframe>
+//   <ba<style>…</style>se href="//evil.example/">             → live <base>
+//   <p>Sale!</p><sty<style>…</style>le>                       → unclosed
+//     <style> that swallows the server-injected footer
+//
+// The earlier splice tests all missed it because every one of them opened
+// with a decoy `<meta name=viewport>`, which absorbed the single viewport
+// placeholder and left the injected device to be stripped normally. THE
+// PAYLOADS BELOW CARRY NO DECOY.
+//
+// The fix is structural, and the invariant is now stated on
+// sanitizeCampaignHtml: every deletion (the strip passes AND the stranded-
+// placeholder drop) happens inside ONE outer fixed point that re-scans, and
+// restoration only ever INSERTS, at positions the final round proved lie
+// outside any open tag.
+// ---------------------------------------------------------------------------
+describe('sanitizeCampaignHtml — stranded-placeholder splice bypass (third security review)', () => {
+  // Two devices, one payload table. Either element gets lifted out of the
+  // document before the strip passes run, so either can saw a construct in
+  // half; the <style> one needs no meta at all.
+  const DEVICES = {
+    style: '<style>a{color:red}</style>',
+    viewport: '<meta name="viewport" content="w">',
+  }
+
+  const styleTagsBalanced = (out) => {
+    const open = (out.match(/<style\b/gi) || []).length
+    const close = (out.match(/<\/style\b/gi) || []).length
+    expect(open).toBe(close)
+  }
+
+  const PAYLOADS = [
+    {
+      name: 'an on* handler sawn in half',
+      html: (d) => `<img src=x on${d}error=alert(1)>`,
+      check: (out) => {
+        expect(out).not.toMatch(/onerror/i)
+        expect(out).not.toContain('alert(1)')
+      },
+    },
+    {
+      name: 'a <script> open tag sawn in half',
+      html: (d) => `<scr${d}ipt>alert(1)`,
+      check: (out) => {
+        expect(out).not.toContain('<script')
+        expect(out).not.toMatch(/<scr/i)
+      },
+    },
+    {
+      name: 'a javascript: href sawn in half',
+      html: (d) => `<a href="javascri${d}pt:alert(1)">x</a>`,
+      check: (out) => {
+        expect(out).not.toMatch(/javascript:/i)
+        expect(out).toContain('href="#"')
+      },
+    },
+    {
+      name: 'an <iframe> sawn in half',
+      html: (d) => `<ifra${d}me src="https://evil.example/">`,
+      check: (out) => {
+        expect(out).not.toMatch(/<\/?iframe/i)
+        expect(out).not.toContain('evil.example')
+      },
+    },
+    {
+      name: 'a <base> sawn in half',
+      html: (d) => `<ba${d}se href="//evil.example/">`,
+      check: (out) => {
+        expect(out).not.toMatch(/<base\b/i)
+        expect(out).not.toContain('evil.example')
+      },
+    },
+    {
+      name: 'an unclosed <style> sawn in half (would swallow the injected footer)',
+      html: (d) => `<p>Sale!</p><sty${d}le>`,
+      check: (out) => {
+        expect(out).toContain('<p>Sale!</p>')
+        // The footer is appended AFTER this sanitizer runs, so an unclosed
+        // <style> here eats it. Balance is the assertion that matters.
+        styleTagsBalanced(out)
+        expect(out).not.toMatch(/<style/i)
+      },
+    },
+  ]
+
+  for (const [deviceName, device] of Object.entries(DEVICES)) {
+    for (const payload of PAYLOADS) {
+      it(`${payload.name} — spliced with a ${deviceName} placeholder, NO decoy meta`, () => {
+        payload.check(sanitizeCampaignHtml(payload.html(device)))
+      })
+    }
+  }
+
+  it('the same payloads never reassemble when the footer is appended after them', () => {
+    // renderHostCampaignHtml injects the footer AFTER sanitization; the
+    // unclosed-<style> payload is the one that could hide it.
+    const html = renderHostCampaignHtml({
+      host: { name: 'Acme', sender_name: 'Acme' },
+      subject: 's',
+      bodyHtml: '<p>Sale!</p><sty<style>a{color:red}</style>le>',
+      unsubscribeUrl: 'https://x/u/t',
+    })
+    expect(html).toContain('Unsubscribe')
+    expect(html).toContain('attended an event or joined the mailing list')
+    styleTagsBalanced(html)
+  })
+})
+
+describe('sanitizeCampaignHtml — quote-aware open-tag scan (third security review)', () => {
+  it('a bare `<` in ordinary copy does NOT strand a legitimate <style> block', () => {
+    // FALSE POSITIVE in the old `lastIndexOf('<') > lastIndexOf('>')` test:
+    // `5 < 6` looked like an unclosed tag, so the placeholder after it read as
+    // stranded and the whole (perfectly legitimate) style block was silently
+    // deleted from the email. HTML opens a tag only on `<` + letter/`/`/`!`/`?`.
+    const out = sanitizeCampaignHtml('5 < 6 and <style>a{color:red}</style> here')
+    expect(out).toBe('5 < 6 and <style>a{color:red}</style> here')
+  })
+
+  it('a `>` inside a quoted attribute value does NOT close the tag — no <style> is restored inside it', () => {
+    // FALSE NEGATIVE in the old test: the `>` in title="a>b" moved
+    // lastIndexOf('>') past the `<`, so a placeholder genuinely inside the tag
+    // read as outside it and a real <style> element was restored into the
+    // attribute list.
+    const out = sanitizeCampaignHtml('<img title="a>b" style="<style>a{color:red}</style>">')
+    expect(out).not.toContain('<style')
+    expect(out).not.toContain('color:red')
+    expect(out).not.toMatch(/<img[^>]*<style/)
+    expect(out).toContain('title="a>b"')
+  })
+
+  it('a <style> block inside an HTML comment is dropped, not restored', () => {
+    const out = sanitizeCampaignHtml('<!-- draft <style>a{color:red}</style> --><p>x</p>')
+    expect(out).not.toContain('<style')
+    expect(out).toContain('<p>x</p>')
+  })
+})
+
+describe('sanitizeCampaignHtml — footer-swallowing tags (third security review)', () => {
+  it('strips <plaintext>, which can never be closed and would eat the footer', () => {
+    const out = sanitizeCampaignHtml('<p>x</p><plaintext>hidden footer')
+    expect(out).not.toMatch(/<plaintext/i)
+    expect(out).toContain('<p>x</p>')
+    expect(out).toContain('hidden footer') // the TAG goes, its text stays
+  })
+
+  it('strips <textarea>, <noscript>, <noembed>, <xmp> and <template> the same way', () => {
+    const out = sanitizeCampaignHtml(
+      '<textarea>a</textarea><noscript>b</noscript><noembed>c</noembed><xmp>d</xmp><template>e</template>'
+    )
+    expect(out).not.toMatch(/<\/?(textarea|noscript|noembed|xmp|template)\b/i)
+    expect(out).toBe('abcde')
+  })
+})
+
+describe('sanitizeCampaignHtml — inline-style CSS budget is per pass, not per document', () => {
+  it('a 2,000-cell table keeps every inline style', () => {
+    // REGRESSION for counter amplification. The budget (CSS_TOTAL_MAX_CHARS,
+    // 250,000) used to be a single per-document counter shared by every
+    // fixed-point pass, so the passes multiplied against it: this document
+    // spends 88,000 characters per scan, and three scans would exhaust the
+    // budget and make scrubCss start returning '' — silently wiping every
+    // inline style in an entirely legitimate marketing email. It is now reset
+    // at the top of each pass, because the bound is meant to size ONE linear
+    // scan of the document.
+    const CELL = 'color:#ff0000;padding:4px 8px;font-size:14px'
+    const html = `<table>${Array.from({ length: 2000 }, (_, i) => `<tr><td style="${CELL}">c${i}</td></tr>`).join('')}</table>`
+    const out = sanitizeCampaignHtml(html)
+    expect((out.match(/style="color:#ff0000;padding:4px 8px;font-size:14px"/g) || [])).toHaveLength(2000)
+    expect(out).toContain('c1999')
+  })
+})
+
+describe('sanitizeCampaignHtml — the outer fixed point fails CLOSED', () => {
+  // A drop→strip→drop chain that costs one outer round per link. Each link is
+  //   `<lin` + <inner> + <style>…</style> + `k>`
+  // The inner construct collapses to nothing, splicing `<lin` onto `k>` to
+  // make a fresh `<link>` — which the NEXT round strips, stranding the next
+  // placeholder, and so on. Depth n needs n+2 rounds, so anything past
+  // MAX_OUTER_PASSES - 2 exhausts the bound.
+  const S = '<style>a{}</style>'
+  const chain = (n) => {
+    let s = `<lin${S}k>`
+    for (let i = 2; i <= n; i++) s = `<lin${s}${S}k>`
+    return s
+  }
+
+  it('a chain that converges inside the bound sanitizes normally and keeps the rest of the body', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const out = sanitizeCampaignHtml(`${chain(5)}<p>keep me</p>`)
+      expect(out).toBe('<p>keep me</p>')
+      expect(warn).not.toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('a chain that does NOT converge returns the empty string and warns', () => {
+    // Fail closed, loudly: an unconverged document is by definition one whose
+    // last deletion was never re-scanned, which is precisely the state all
+    // three bypasses shipped from. The legitimate `<p>keep me</p>` is dropped
+    // too — that is the trade, and an empty campaign body is something an
+    // operator sees and reports.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const out = sanitizeCampaignHtml(`${chain(25)}<p>keep me</p>`)
+      expect(out).toBe('')
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(String(warn.mock.calls[0][0])).toMatch(/failed closed/)
+    } finally {
+      warn.mockRestore()
+    }
   })
 })

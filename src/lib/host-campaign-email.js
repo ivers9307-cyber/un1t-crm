@@ -35,9 +35,21 @@ const CONTENT_STRIP_TAGS = /<script\b[^>]*>[\s\S]*?<\/script\s*>/gi
 // parsing contexts (mXSS classics), so both are stripped. `base` is here
 // because a single `<base href="//evil/">` silently re-points EVERY relative
 // URL in the message at another host — no attribute of its own needs to be
-// dangerous, its mere presence is. Also sweeps any stray unclosed
-// <script>/<style> open tag left after the block pass above.
-const TAG_STRIP = /<\/?(script|style|iframe|object|embed|form|link|meta|base|svg|math)\b[^>]*>/gi
+// dangerous, its mere presence is.
+//
+// plaintext/textarea/noscript/noembed/xmp/template are on the list for a
+// different reason: each one opens a parsing mode in which everything after
+// it STOPS BEING MARKUP, and `<plaintext>` can never be closed at all. The
+// mandatory footer (host name + unsubscribe link + consent-basis line) is
+// injected server-side AFTER this sanitizer runs, so one unclosed
+// `<plaintext>` at the end of a host body would swallow the entire footer
+// into inert text — the single thing the send path exists to guarantee.
+// Removing the TAGS while keeping their inner text costs a host nothing
+// legitimate in email HTML.
+//
+// This also sweeps any stray unclosed <script>/<style> open tag left after
+// the block pass above.
+const TAG_STRIP = /<\/?(script|style|iframe|object|embed|form|link|meta|base|svg|math|plaintext|textarea|noscript|noembed|xmp|template)\b[^>]*>/gi
 // HOST-EMAILS.2 — lifted before the strip passes and restored after them.
 // The placeholder prefix is stripped from the input first so a host cannot
 // forge one (it is plain text, never a tag, so the strip passes ignore it).
@@ -100,6 +112,14 @@ const SAFE_URL_SCHEMES = new Set(['http', 'https', 'mailto', 'tel'])
 // earlier strip is scrubbed too.
 const STYLE_ATTR = /([\s/"'])style\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi
 
+// Fixed-point bounds. The INNER bound belongs to one stripActiveContent call;
+// the OUTER one bounds the strip+drop rounds in sanitizeCampaignHtml.
+// Exhausting the outer bound is a FAIL-CLOSED condition (return ''), never a
+// "ship what we have" one — an unconverged document is precisely one where a
+// deletion's splice has not been re-scanned.
+const MAX_INNER_PASSES = 10
+const MAX_OUTER_PASSES = 20
+
 // Minimal entity decode for scheme sniffing: numeric (dec/hex) plus the named
 // entities usable to obfuscate a scheme. Decode-for-CHECK only — a value that
 // passes is kept byte-for-byte as authored.
@@ -142,9 +162,16 @@ function unquoteAttrValue(raw) {
 //
 // The cosmetic leftover space before `>` (`<a href="x" >`) is simply KEPT.
 // The `\s+>` collapse that used to tidy it ran over the WHOLE finished
-// document, so it also rewrote a CSS child combinator (`.a > .b`) into a
-// descendant selector inside restored <style> bodies, and edited text nodes —
-// a silent layout change that inert whitespace is not worth.
+// document, so it edited ordinary copy and attribute values (`5 > 3` became
+// `5> 3`) — a silent rewrite of the host's text that inert whitespace is not
+// worth. It is NOT, however, what costs a restored <style> body its child
+// combinators: scrubCss (email-html.js) ends with `.replace(/[<>]/g, '')`, so
+// a `>` never survives ANY CSS this sanitizer emits, and `.a > .b` degrades
+// to the descendant selector `.a  .b` regardless of anything done here. That
+// angle-bracket strip is load-bearing for security — it is the guarantee that
+// a scrubbed body can never reconstitute a `</style>` and break out of the
+// element it is re-wrapped in — so the fidelity limit is inherited from the
+// CRM's scrubber and stays.
 function stripOnAttrsFromCss(css) {
   return css
     .replace(ON_ATTR_DQ, '$1')
@@ -176,17 +203,30 @@ function scrubStyleAttrValue(rawValue, counter) {
 /**
  * Strip active content to a FIXED POINT: removing one construct can splice a
  * new one together (`<scr<script>ipt>`), so every pass re-scans the whole
- * string and the loop only stops when a pass changes nothing. Bounded at 10 —
- * each pass only removes or narrows, so it converges fast.
+ * string and the loop only stops when a pass changes nothing. Bounded at
+ * MAX_INNER_PASSES — each pass only removes or narrows, so it converges fast.
  *
- * EVERY deletion this sanitizer makes must happen in here. A deletion done
- * AFTER the loop splices its surrounding text together and nothing ever looks
- * at the result — that was the HOST-EMAILS.2 bypass (see step 2 below).
+ * `counter` is the CSS budget for the INLINE `style=` scrub only (the
+ * document-level <style>-BLOCK budget lives in sanitizeCampaignHtml and is
+ * spent once, before the loop). It is reset to zero at the top of EVERY pass,
+ * and the caller hands in a fresh one for every outer round, because the
+ * budget is meant to bound ONE linear scan of the document — not the number
+ * of times a fixed point happens to re-scan it. Sharing it across passes made
+ * the passes multiply against CSS_TOTAL_MAX_CHARS, so on a large but entirely
+ * legitimate message (a long table of styled cells) a later pass would start
+ * returning '' for every value and silently wipe every inline style in the
+ * email.
+ *
+ * This is no longer the only place deletions happen, and this comment no
+ * longer claims it is: dropStrandedPlaceholders deletes too. The invariant
+ * that replaced the claim is stated on sanitizeCampaignHtml — every deletion
+ * happens INSIDE the outer fixed point, so the splice it makes is re-scanned.
  */
 function stripActiveContent(html, counter) {
   let out = html
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < MAX_INNER_PASSES; i++) {
     const before = out
+    counter.cssChars = 0
     out = out
       .replace(CONTENT_STRIP_TAGS, '')
       .replace(TAG_STRIP, '')
@@ -203,15 +243,89 @@ function stripActiveContent(html, counter) {
   return out
 }
 
+/** Does `ch` turn a `<` into the start of a tag? (`<` + space is just text.) */
+function isTagNameStart(ch) {
+  if (!ch) return false
+  return ch === '/' || ch === '!' || ch === '?' || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+}
+
 /**
- * Is `offset` sitting INSIDE an open tag — after a `<` that no `>` has closed
- * yet? A placeholder that landed there (`<a href="x" @@…@@>`) must never be
- * restored into a real element: that would put a `<style>` tag inside another
- * tag's attribute list. It is dropped instead.
+ * QUOTE-AWARE tag-position scan. Walks `whole` ONCE tracking
+ * TEXT / TAG / TAG_DQ / TAG_SQ / COMMENT, and returns the subset of
+ * `offsets` (which MUST be ascending) sitting anywhere other than TEXT — i.e.
+ * inside an open tag, inside one of its quoted attribute values, or inside a
+ * comment.
+ *
+ * The `before.lastIndexOf('<') > before.lastIndexOf('>')` test this replaced
+ * was wrong in BOTH directions:
+ *   FALSE POSITIVE — a bare `<` in ordinary copy (`book if 5 < 6`) starts no
+ *     tag at all, yet it made every later placeholder read as stranded, so a
+ *     legitimate <style> block was silently deleted from the email. HTML only
+ *     opens a tag when the `<` is followed by a letter, `/`, `!` or `?`.
+ *   FALSE NEGATIVE — a `>` inside a quoted attribute value
+ *     (`<img title="a>b" style="…">`) does not close the tag, but it pushed
+ *     lastIndexOf('>') past the `<`, so a placeholder genuinely INSIDE that
+ *     tag read as outside it and a `<style>` element was restored into
+ *     another tag's attribute list.
+ * One scan answers both, and it is O(document) rather than O(document) per
+ * placeholder — which matters, because the number of placeholders is the
+ * number of <style> blocks the host chose to write.
  */
-function insideOpenTag(whole, offset) {
-  const before = whole.slice(0, offset)
-  return before.lastIndexOf('<') > before.lastIndexOf('>')
+function strandedOffsets(whole, offsets) {
+  const stranded = new Set()
+  let state = 'TEXT'
+  let next = 0
+  for (let i = 0; i < whole.length; i++) {
+    while (next < offsets.length && offsets[next] === i) {
+      if (state !== 'TEXT') stranded.add(offsets[next])
+      next++
+    }
+    if (next >= offsets.length) break
+    const ch = whole[i]
+    if (state === 'TEXT') {
+      if (ch === '<') {
+        if (whole.startsWith('<!--', i)) state = 'COMMENT'
+        else if (isTagNameStart(whole[i + 1])) state = 'TAG'
+      }
+    } else if (state === 'TAG') {
+      if (ch === '"') state = 'TAG_DQ'
+      else if (ch === "'") state = 'TAG_SQ'
+      else if (ch === '>') state = 'TEXT'
+    } else if (state === 'TAG_DQ') {
+      if (ch === '"') state = 'TAG'
+    } else if (state === 'TAG_SQ') {
+      if (ch === "'") state = 'TAG'
+    } else if (state === 'COMMENT') {
+      if (ch === '>' && whole.slice(i - 2, i) === '--') state = 'TEXT'
+    }
+  }
+  return stranded
+}
+
+/**
+ * Delete every placeholder token that is NOT sitting in ordinary text. One
+ * that landed inside an open tag (`<a href="x" @@…@@>`) must never be
+ * restored into a real element — that would put a `<style>` tag inside
+ * another tag's attribute list — so it is dropped instead.
+ *
+ * THIS IS A DELETION, and a deletion splices the text on either side of it
+ * together: `<img src=x on@@…@@error=alert(1)>` becomes a live `onerror=`
+ * the instant the token goes. That is exactly why the call site is INSIDE the
+ * outer fixed point and never after it — see sanitizeCampaignHtml.
+ */
+function dropStrandedPlaceholders(html, tokenRe) {
+  const offsets = []
+  for (const m of html.matchAll(tokenRe)) offsets.push(m.index)
+  if (offsets.length === 0) return html
+  const stranded = strandedOffsets(html, offsets)
+  if (stranded.size === 0) return html
+  return html.replace(tokenRe, (m, offset) => (stranded.has(offset) ? '' : m))
+}
+
+function warnFailClosed(reason) {
+  // Once per failed call, and loud: a campaign that reaches here renders with
+  // an EMPTY body, which an operator sees immediately and reports.
+  console.warn(`host campaign sanitizer failed closed (${reason}) — body dropped`)
 }
 
 /**
@@ -219,12 +333,42 @@ function insideOpenTag(whole, offset) {
  * parser — good enough for email HTML (email clients don't run JS either;
  * this protects the operator preview surfaces and keeps abuse out of the
  * outbound mail). Applied EVERY render, on the server.
+ *
+ * THE INVARIANT, and the whole shape of this function:
+ *
+ *   EVERY DELETION HAPPENS INSIDE THE OUTER FIXED POINT, so the splice it
+ *   makes is re-scanned by the next round's strip pass. RESTORATION ONLY
+ *   INSERTS, and only at positions the final round proved lie outside any
+ *   open tag.
+ *
+ * Two security reviews were spent learning that, once each:
+ *   1. the extra-viewport-meta deletion ran AFTER the strip loop, so
+ *      `<meta name=viewport><scr<meta name=viewport>ipt>…` shipped a live
+ *      <script>: the sanitizer welded back together what the host had sawn in
+ *      half. Fixed by placeholdering only the FIRST viewport meta.
+ *   2. the SAME defect survived as `insideOpenTag(...) ? '' : …` in the
+ *      restore step — dropping a stranded placeholder is a deletion too, and
+ *      it also ran after the last strip pass. With no decoy meta to absorb
+ *      the token, `<img src=x on<style>a{color:red}</style>error=alert(1)>`
+ *      shipped a live onerror, and the same trick rebuilt <script>, <iframe>,
+ *      <base>, a javascript: href, and an unclosed <style> that swallowed the
+ *      mandatory footer. Every existing splice test carried a decoy
+ *      `<meta name=viewport>` that absorbed the single placeholder, which is
+ *      the only reason they stayed green.
+ *
+ * So the drop moved INTO the loop (step 3), and the restore (step 4) is now
+ * pure insertion: a `<style>` wrapper around a scrubCss result (which
+ * provably contains no `<` and no `>`), or one fixed literal meta tag.
+ *
  * @param {string} html
  * @returns {string}
  */
 export function sanitizeCampaignHtml(html) {
   if (!html || typeof html !== 'string') return ''
-  const counter = { cssChars: 0 }
+  // The <style>-BLOCK budget is per DOCUMENT and spent exactly once, in step
+  // 1 below. The inline `style=` budget is per PASS and lives in
+  // stripActiveContent — see its doc comment.
+  const blockCounter = { cssChars: 0 }
   const styles = []
   // Belt and braces: strip the literal placeholder prefix to a FIXED POINT
   // first (a single `.split().join()` pass would let a nested forgery like
@@ -240,11 +384,14 @@ export function sanitizeCampaignHtml(html) {
   const nonce = makeNonce()
   const stylePlaceholder = new RegExp(`@@UN1T_${nonce}_STYLE_(\\d+)@@`, 'g')
   const viewportPlaceholder = `@@UN1T_${nonce}_VIEWPORT@@`
+  // Every token this call can mint, with NO capture group — the drop step's
+  // replace callback reads (match, offset).
+  const anyPlaceholder = new RegExp(`@@UN1T_${nonce}_(?:STYLE_\\d+|VIEWPORT)@@`, 'g')
 
   // 1. Lift and scrub every <style> body. An empty result after the scrub
   //    drops the block entirely.
   out = out.replace(STYLE_BLOCK, (_m, css) => {
-    const safe = scrubCss(stripOnAttrsFromCss(css), counter).trim()
+    const safe = scrubCss(stripOnAttrsFromCss(css), blockCounter).trim()
     if (!safe) return ''
     styles.push(safe)
     return `@@UN1T_${nonce}_STYLE_${styles.length - 1}@@`
@@ -252,14 +399,7 @@ export function sanitizeCampaignHtml(html) {
   // 2. Placeholder the FIRST viewport meta ONLY. Every later one is returned
   //    EXACTLY AS AUTHORED, so TAG_STRIP removes it inside the loop below
   //    (`meta` is on that list) and the splice its removal makes is
-  //    re-scanned.
-  //
-  //    This used to placeholder them all and then delete the extras AFTER the
-  //    loop, and that was a COMPLETE SANITIZER BYPASS: a post-loop deletion
-  //    splices the surrounding text together and nothing looks at the result,
-  //    so `<meta name=viewport><scr<meta name=viewport>ipt>…` shipped a live
-  //    <script>, and the same trick reassembled `onerror=`, a `javascript:`
-  //    href and an <iframe>.
+  //    re-scanned. See review 1 in the header note.
   let viewportSeen = false
   out = out.replace(VIEWPORT_META, (m) => {
     if (viewportSeen) return m
@@ -267,32 +407,61 @@ export function sanitizeCampaignHtml(html) {
     return viewportPlaceholder
   })
 
-  // 3a. Strip to a fixed point.
-  out = stripActiveContent(out, counter)
-  // 3b. Exactly ONE viewport placeholder can exist here — step 2 inserts at
-  //     most one, and a host cannot forge a nonced token. Assert that rather
-  //     than trust it: delete any further occurrence outright…
-  const extras = out.split(viewportPlaceholder)
-  if (extras.length > 2) out = `${extras[0]}${viewportPlaceholder}${extras.slice(1).join('')}`
-  // 3c. …and run the strip loop AGAIN over the result, so any splice that
-  //     deletion could have made is re-scanned. It has to happen here, before
-  //     anything is restored: TAG_STRIP would eat the canonical <meta> and the
-  //     <style> wrappers if they were already in the string. The two
-  //     restorations below only ever INSERT `<style>scrubbed</style>` (no `<`
-  //     or `>` can be inside a scrubCss result) and the fixed canonical meta
-  //     tag, both by construction.
-  out = stripActiveContent(out, counter)
-  // 4a. Restore the scrubbed <style> bodies.
-  out = out.replace(stylePlaceholder, (_m, i, offset, whole) => (
-    insideOpenTag(whole, offset) ? '' : `<style>${styles[Number(i)] ?? ''}</style>`
-  ))
-  // 4b. Restore the single viewport meta in its canonical form — never as
-  //     authored, so no attribute can be smuggled through it. A string
-  //     replace() hits only the first occurrence, and after 3b there is only
-  //     ever one.
-  out = out.replace(viewportPlaceholder, (_m, offset, whole) => (
-    insideOpenTag(whole, offset) ? '' : VIEWPORT_META_SAFE
-  ))
+  // 3. The OUTER fixed point: strip, then drop the placeholders now stranded
+  //    inside an open tag — and go round again, because that drop spliced
+  //    text together and the splice has not been scanned yet. The loop stops
+  //    only when a whole round changes nothing, which is the proof that (a)
+  //    no active construct is left and (b) no SURVIVING placeholder sits
+  //    inside an open tag.
+  //
+  //    stripActiveContent gets a FRESH inline-CSS budget every round: the
+  //    budget bounds one scan of the document, and a shared one would let the
+  //    rounds multiply against it and wipe the inline styles of a large,
+  //    entirely legitimate email.
+  let converged = false
+  for (let i = 0; i < MAX_OUTER_PASSES; i++) {
+    const before = out
+    out = stripActiveContent(out, { cssChars: 0 })
+    out = dropStrandedPlaceholders(out, anyPlaceholder)
+    if (out === before) { converged = true; break }
+  }
+  //    Fail CLOSED. An unconverged document is by definition one whose last
+  //    deletion was never re-scanned — exactly the state both bypasses above
+  //    shipped from. Dropping the body is visible and recoverable; shipping
+  //    an unscanned splice is neither.
+  if (!converged) {
+    warnFailClosed('strip/drop fixed point did not converge')
+    return ''
+  }
+  //    Assert, don't trust: step 2 mints at most ONE viewport placeholder and
+  //    a host cannot forge a nonced token, so a second occurrence here would
+  //    mean an invariant broke. Fail closed rather than DELETE the extra — a
+  //    deletion at this point is the very defect this structure exists to
+  //    prevent.
+  if (out.split(viewportPlaceholder).length > 2) {
+    warnFailClosed('duplicate viewport placeholder')
+    return ''
+  }
+
+  // 4. Restore. Both replacements are pure INSERTIONS, at positions the final
+  //    loop round proved sit in ordinary text, and both insert balanced
+  //    markup, so neither can move another placeholder into a tag:
+  //      - `<style>` + a scrubCss result + `</style>` — scrubCss's output
+  //        provably contains no `<` and no `>` (it ends with
+  //        `.replace(/[<>]/g, '')`), so the body cannot close its own element.
+  //      - the fixed canonical viewport meta, never the authored one, so no
+  //        attribute can be smuggled through it.
+  //    Nothing is deleted here.
+  out = out.replace(stylePlaceholder, (_m, i) => `<style>${styles[Number(i)] ?? ''}</style>`)
+  out = out.split(viewportPlaceholder).join(VIEWPORT_META_SAFE)
+
+  // 5. Defensive: no live token may reach an operator's screen or a mailbox.
+  //    Unreachable by construction (step 4 replaces every token this call
+  //    could have minted), which is exactly why it is worth asserting.
+  if (out.includes(`@@UN1T_${nonce}`)) {
+    warnFailClosed('placeholder token survived restoration')
+    return ''
+  }
   return out
 }
 
