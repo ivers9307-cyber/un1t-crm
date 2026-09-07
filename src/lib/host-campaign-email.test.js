@@ -591,7 +591,10 @@ describe('sanitizeCampaignHtml — styles and viewport (HOST-EMAILS.2)', () => {
     expect(out).not.toContain('<form')
     expect(out).not.toContain('<svg')
     expect(out).not.toContain('onclick')
-    expect(out).toContain('<a href="https://ok">ok</a>')
+    // The space the removed on* handler left behind is KEPT now: the `\s+>`
+    // collapse that used to tidy it also rewrote `.a > .b` inside restored
+    // <style> bodies into a descendant selector (security review).
+    expect(out).toMatch(/<a href="https:\/\/ok"\s*>ok<\/a>/)
   })
 
   it('a forged placeholder in the input cannot inject a style block', () => {
@@ -686,5 +689,134 @@ describe('sanitizeCampaignHtml — on* boundary + placeholder-forgery regression
     const b = sanitizeCampaignHtml('<style>.b{color:blue}</style><p>bye</p>')
     expect(a).toContain('<style>.a{color:red}</style>')
     expect(b).toContain('<style>.b{color:blue}</style>')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Security re-review — the COMPLETE SANITIZER BYPASS in the just-landed
+// HOST-EMAILS.2 sanitizer, plus the three smaller holes found beside it.
+//
+// Root cause of the bypass: step 2 replaced EVERY `<meta name=viewport>` with
+// a placeholder, and the restore step then deleted every placeholder but the
+// first — a DELETION PERFORMED AFTER the fixed-point strip loop. It spliced
+// the surrounding text together and nothing ever re-scanned the result, so a
+// host could saw any dangerous construct in half with `<meta name=viewport>`
+// and have the sanitizer weld it back together on the way out. Every one of
+// the four payloads below shipped LIVE active content.
+//
+// The fix is structural: only the FIRST viewport meta becomes a placeholder;
+// every other one is left exactly as authored so TAG_STRIP removes it INSIDE
+// the loop, where the splice is re-scanned. Nothing is ever deleted after the
+// loop — the two restorations only insert a scrubbed <style> body or the
+// fixed canonical meta tag.
+// ---------------------------------------------------------------------------
+describe('sanitizeCampaignHtml — viewport-meta splice bypass (security re-review)', () => {
+  const oneMeta = (out) => expect(out.match(/<meta/g) || []).toHaveLength(1)
+
+  it('cannot weld a live <script> back together through split viewport metas', () => {
+    const out = sanitizeCampaignHtml(
+      '<meta name=viewport><scr<meta name=viewport>ipt>window.__pwned=1</scr<meta name=viewport>ipt>'
+    )
+    expect(out).not.toContain('<script')
+    expect(out).not.toContain('__pwned')
+    oneMeta(out)
+  })
+
+  it('cannot weld a live onerror= handler back together through a split viewport meta', () => {
+    const out = sanitizeCampaignHtml('<meta name=viewport><img src=x on<meta name=viewport>error=alert(1)>')
+    expect(out).not.toMatch(/onerror/i)
+    expect(out).not.toContain('alert(1)')
+    oneMeta(out)
+  })
+
+  it('cannot weld a javascript: href back together through a split viewport meta', () => {
+    const out = sanitizeCampaignHtml('<meta name=viewport><a href="java<meta name=viewport>script:alert(1)">x</a>')
+    expect(out).not.toMatch(/javascript:/i)
+    expect(out).toContain('href="#"')
+    oneMeta(out)
+  })
+
+  it('cannot weld an <iframe> back together through split viewport metas', () => {
+    const out = sanitizeCampaignHtml(
+      '<meta name=viewport><ifra<meta name=viewport>me src="https://evil"></ifra<meta name=viewport>me>'
+    )
+    expect(out).not.toMatch(/<\/?iframe/i)
+    expect(out).not.toContain('evil')
+    oneMeta(out)
+  })
+
+  it('still keeps exactly one canonical viewport meta when several are authored', () => {
+    const out = sanitizeCampaignHtml(
+      '<meta name="viewport" content="a"><p>x</p><meta name="viewport" content="b">'
+    )
+    oneMeta(out)
+    expect(out).toContain('<meta name="viewport" content="width=device-width, initial-scale=1">')
+    expect(out).not.toContain('content="a"')
+    expect(out).not.toContain('content="b"')
+  })
+
+  it('a GENUINE <style> block inside an open tag is dropped, not restored there', () => {
+    // The forged-placeholder version of this is covered above; a real <style>
+    // element is lifted to a placeholder, so the restore has to refuse to put
+    // it back inside another tag's attribute list.
+    const out = sanitizeCampaignHtml('<a href="https://ok" <style>onerror=alert(1)</style>>hi</a>')
+    expect(out).not.toMatch(/<a[^>]*<style/)
+    expect(out).not.toMatch(/<a[^>]*onerror\s*=/i)
+    expect(out).toContain('hi')
+  })
+
+  it('strips <base>, which would re-point every relative URL in the message', () => {
+    const out = sanitizeCampaignHtml('<base href="//evil/"><a href="/offer">o</a>')
+    expect(out).not.toMatch(/<base\b/i)
+    expect(out).not.toContain('evil')
+    expect(out).toContain('href="/offer"')
+  })
+
+  it('scheme-checks poster / formaction / background like href and src', () => {
+    expect(sanitizeCampaignHtml('<video poster="javascript:alert(1)"></video>')).not.toMatch(/javascript:/i)
+    expect(sanitizeCampaignHtml('<video poster="javascript:alert(1)"></video>')).toContain('poster="#"')
+    expect(sanitizeCampaignHtml('<button formaction="javascript:alert(1)">go</button>')).toContain('formaction="#"')
+    expect(sanitizeCampaignHtml('<td background="data:text/html,x">c</td>')).toContain('background="#"')
+    // a legitimate http(s) value is untouched
+    expect(sanitizeCampaignHtml('<video poster="https://cdn/p.png"></video>')).toContain('poster="https://cdn/p.png"')
+  })
+
+  it('scrubs the inline style attribute (a remote url() is a tracking pixel)', () => {
+    const out = sanitizeCampaignHtml('<td style="background:url(https://tracker/x.gif)">hi</td>')
+    expect(out).not.toMatch(/url\(\s*['"]?https:\/\/tracker/i)
+    expect(out).toContain('hi')
+    // parked behind the CRM's unresolvable scheme (or dropped) — never live
+    if (/tracker/.test(out)) expect(out).toContain('x-un1t-blocked:https://tracker/x.gif')
+  })
+
+  it('scrubs a single-quoted inline style and cannot break out of the attribute', () => {
+    const out = sanitizeCampaignHtml("<p style='background:url(\"https://tracker/y.gif\")'>hi</p>")
+    expect(out).not.toMatch(/url\(\s*['"]?https:\/\/tracker/i)
+    expect(out).not.toMatch(/<p[^>]*>[^<]*"/)
+    expect(out).toContain('hi')
+  })
+
+  it('keeps a harmless inline style', () => {
+    expect(sanitizeCampaignHtml('<p style="color:red">hi</p>')).toContain('style="color:red"')
+  })
+
+  it('the `\\s+>` collapse is gone: text nodes and attribute values keep their spacing', () => {
+    // It ran over the WHOLE finished document, so every ` >` in ordinary copy
+    // or in an attribute was rewritten. `5 > 3` became `5> 3`.
+    expect(sanitizeCampaignHtml('<p>book if 5 > 3</p>')).toBe('<p>book if 5 > 3</p>')
+    expect(sanitizeCampaignHtml('<a href="https://ok" title="a > b">x</a>'))
+      .toBe('<a href="https://ok" title="a > b">x</a>')
+  })
+
+  it('a CSS child combinator loses its `>` to scrubCss, NOT to this sanitizer', () => {
+    // Pinned so the loss is not re-attributed to the deleted `\s+>` collapse:
+    // scrubCss (email-html.js) ends with `.replace(/[<>]/g, '')`, which is the
+    // guarantee that a <style> body can never reconstitute a tag. `.a > .b`
+    // therefore arrives as a DESCENDANT selector — a real (pre-existing,
+    // out-of-scope) fidelity loss for Canva/Unlayer exports, not a security
+    // one. Whitespace either side is preserved now, which is all this change
+    // can do about it.
+    expect(sanitizeCampaignHtml('<style>.a > .b{color:red}</style><p>x</p>'))
+      .toBe('<style>.a  .b{color:red}</style><p>x</p>')
   })
 })

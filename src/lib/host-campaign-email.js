@@ -32,9 +32,12 @@ const PAGE = 1000 // the supabase-js 1k select cap — always .range()-paginate
 const CONTENT_STRIP_TAGS = /<script\b[^>]*>[\s\S]*?<\/script\s*>/gi
 // Remaining dangerous tags — the tags go, their inner content (plain text
 // fallback for iframe/object/form) stays. svg/math open foreign-content
-// parsing contexts (mXSS classics), so both are stripped. Also sweeps any
-// stray unclosed <script>/<style> open tag left after the block pass above.
-const TAG_STRIP = /<\/?(script|style|iframe|object|embed|form|link|meta|svg|math)\b[^>]*>/gi
+// parsing contexts (mXSS classics), so both are stripped. `base` is here
+// because a single `<base href="//evil/">` silently re-points EVERY relative
+// URL in the message at another host — no attribute of its own needs to be
+// dangerous, its mere presence is. Also sweeps any stray unclosed
+// <script>/<style> open tag left after the block pass above.
+const TAG_STRIP = /<\/?(script|style|iframe|object|embed|form|link|meta|base|svg|math)\b[^>]*>/gi
 // HOST-EMAILS.2 — lifted before the strip passes and restored after them.
 // The placeholder prefix is stripped from the input first so a host cannot
 // forge one (it is plain text, never a tag, so the strip passes ignore it).
@@ -43,12 +46,20 @@ const TAG_STRIP = /<\/?(script|style|iframe|object|embed|form|link|meta|svg|math
 const STYLE_BLOCK = /<style\b[^>]*>([\s\S]*?)<\/style\s*>/gi
 const VIEWPORT_META = /<meta\b[^>]*\bname\s*=\s*["']?viewport["']?[^>]*>/gi
 const VIEWPORT_META_SAFE = '<meta name="viewport" content="width=device-width, initial-scale=1">'
-// The placeholder tokens carry a per-call random NONCE (see makeNonce below)
-// so a host cannot forge one: `html.split(PREFIX).join('')` is only a single
-// pass, and a nested forgery like `@@UN1T@@UN1T__STYLE_0@@` would otherwise
-// reconstitute a live token after that one pass. The literal prefix is still
+// The placeholder tokens carry a per-call random NONCE (see makeNonce below),
+// and THE NONCE IS THE WHOLE DEFENCE: a host cannot predict it, so cannot
+// write a live token into the input ahead of time. The literal prefix is also
 // stripped to a fixed point first, belt and braces, before the nonce even
-// exists.
+// exists — `html.split(PREFIX).join('')` is only a single pass, and a nested
+// forgery like `@@UN1T@@UN1T__STYLE_0@@` would otherwise reconstitute a live
+// token after that one pass.
+//
+// Note what that fixed-point strip does NOT buy: the strip passes below can
+// RE-SPLICE a literal `@@UN1T_` out of pieces the host wrote around a
+// stripped tag (`@@UN1<script></script>T_`), so the OUTPUT can still contain
+// that text. It is inert — plain text carrying no nonce, matching no
+// placeholder regex — and that is exactly the point: forgery is impossible
+// because of the nonce, not because the prefix can never appear.
 const PLACEHOLDER_PREFIX = '@@UN1T_'
 
 // crypto.randomUUID() when available (Node 19+, edge runtimes); Math.random
@@ -68,14 +79,26 @@ function makeNonce() {
 const ON_ATTR_DQ = /([\s/"'])on[a-z]+\s*=\s*"[^"]*"/gi
 const ON_ATTR_SQ = /([\s/"'])on[a-z]+\s*=\s*'[^']*'/gi
 const ON_ATTR_BARE = /([\s/"'])on[a-z]+\s*=\s*[^\s>'"][^\s>]*/gi
-// URL-carrying attributes (href / src / xlink:href, any boundary/quoting).
+// URL-carrying attributes (href / src / poster / formaction / background, and
+// the xlink: form; any boundary/quoting). Each of these carries a SINGLE URL,
+// so each is scheme-checked exactly like href/src: `poster` fetches a video
+// still, `formaction` re-points a submit, and `background` is a tracking
+// pixel wearing a table cell (`<td background="http://tracker/x.png">`) that
+// nothing else here would look at.
 // neutralizeUrlAttr scheme-checks the value against an ALLOWLIST after
 // entity-decoding + control-char stripping, so entity-encoded or
 // control-obfuscated schemes and any scheme outside the allowlist all
 // neutralize to "#", while https/http/mailto/tel and scheme-less relative
 // URLs pass through verbatim.
-const URL_ATTR = /([\s/"'])((?:xlink:)?(?:href|src))\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi
+const URL_ATTR = /([\s/"'])((?:xlink:)?(?:href|src|poster|formaction|background))\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi
 const SAFE_URL_SCHEMES = new Set(['http', 'https', 'mailto', 'tel'])
+// The inline `style="…"` attribute — the same posture as the CRM's own
+// safeStyle (email-html.js). Without it the <style>-BLOCK scrub covers only
+// half the surface: `style="background:url(https://tracker/x.gif)"` on a
+// single <td> is an unconsented remote fetch that no other rule here looks
+// at. Applied INSIDE the fixed-point loop, so a value spliced together by an
+// earlier strip is scrubbed too.
+const STYLE_ATTR = /([\s/"'])style\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi
 
 // Minimal entity decode for scheme sniffing: numeric (dec/hex) plus the named
 // entities usable to obfuscate a scheme. Decode-for-CHECK only — a value that
@@ -89,6 +112,14 @@ function decodeEntitiesForCheck(s) {
 
 function fromCodePointSafe(code) {
   return Number.isFinite(code) && code >= 0 && code <= 0x10ffff ? String.fromCodePoint(code) : ''
+}
+
+/** Drop the surrounding quotes from a captured attribute value, if any. */
+function unquoteAttrValue(raw) {
+  if (raw.length >= 2 && ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'")))) {
+    return raw.slice(1, -1)
+  }
+  return raw
 }
 
 // HOST-EMAILS.2 — a <style> body captured via the backslash-close trick (see
@@ -107,9 +138,13 @@ function fromCodePointSafe(code) {
 // them. Dropping it merges the two, e.g. `<a onclick="1"href="...">` would
 // lose the space between attributes and become `<ahref="...">` (and its
 // href would then never reach URL_ATTR's scheme check because it's no
-// longer a `href=` attribute boundary at all). A cosmetic leftover space
-// before `>` (`<a href="x" >`) is swept up once, at the very end of
-// sanitizeCampaignHtml, after everything else has run.
+// longer a `href=` attribute boundary at all).
+//
+// The cosmetic leftover space before `>` (`<a href="x" >`) is simply KEPT.
+// The `\s+>` collapse that used to tidy it ran over the WHOLE finished
+// document, so it also rewrote a CSS child combinator (`.a > .b`) into a
+// descendant selector inside restored <style> bodies, and edited text nodes —
+// a silent layout change that inert whitespace is not worth.
 function stripOnAttrsFromCss(css) {
   return css
     .replace(ON_ATTR_DQ, '$1')
@@ -118,10 +153,7 @@ function stripOnAttrsFromCss(css) {
 }
 
 function neutralizeUrlAttr(match, boundary, attr, rawValue) {
-  let value = rawValue
-  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-    value = value.slice(1, -1)
-  }
+  const value = unquoteAttrValue(rawValue)
   // Browsers strip ASCII controls/whitespace anywhere in a URL before scheme
   // detection — mirror that (after entity-decoding) before sniffing.
   const decoded = decodeEntitiesForCheck(value).replace(/[\u0000-\u0020\u00a0]/g, '')
@@ -129,6 +161,57 @@ function neutralizeUrlAttr(match, boundary, attr, rawValue) {
   if (!scheme) return match // relative / fragment / '#' — inert, keep verbatim
   if (SAFE_URL_SCHEMES.has(scheme[1].toLowerCase())) return match
   return `${boundary}${attr}="#"`
+}
+
+/**
+ * Scrub one inline style attribute value. scrubCss's output contains no `<`
+ * and no `>` by construction; the quotes are stripped here as well, so the
+ * scrubbed value can never break OUT of the attribute it is re-emitted into
+ * whichever quoting the author used.
+ */
+function scrubStyleAttrValue(rawValue, counter) {
+  return scrubCss(unquoteAttrValue(rawValue), counter).replace(/["']/g, '').trim()
+}
+
+/**
+ * Strip active content to a FIXED POINT: removing one construct can splice a
+ * new one together (`<scr<script>ipt>`), so every pass re-scans the whole
+ * string and the loop only stops when a pass changes nothing. Bounded at 10 —
+ * each pass only removes or narrows, so it converges fast.
+ *
+ * EVERY deletion this sanitizer makes must happen in here. A deletion done
+ * AFTER the loop splices its surrounding text together and nothing ever looks
+ * at the result — that was the HOST-EMAILS.2 bypass (see step 2 below).
+ */
+function stripActiveContent(html, counter) {
+  let out = html
+  for (let i = 0; i < 10; i++) {
+    const before = out
+    out = out
+      .replace(CONTENT_STRIP_TAGS, '')
+      .replace(TAG_STRIP, '')
+      .replace(ON_ATTR_DQ, '$1')
+      .replace(ON_ATTR_SQ, '$1')
+      .replace(ON_ATTR_BARE, '$1')
+      .replace(URL_ATTR, neutralizeUrlAttr)
+      .replace(STYLE_ATTR, (_m, boundary, rawValue) => {
+        const safe = scrubStyleAttrValue(rawValue, counter)
+        return safe ? `${boundary}style="${safe}"` : boundary
+      })
+    if (out === before) break
+  }
+  return out
+}
+
+/**
+ * Is `offset` sitting INSIDE an open tag — after a `<` that no `>` has closed
+ * yet? A placeholder that landed there (`<a href="x" @@…@@>`) must never be
+ * restored into a real element: that would put a `<style>` tag inside another
+ * tag's attribute list. It is dropped instead.
+ */
+function insideOpenTag(whole, offset) {
+  const before = whole.slice(0, offset)
+  return before.lastIndexOf('<') > before.lastIndexOf('>')
 }
 
 /**
@@ -146,8 +229,9 @@ export function sanitizeCampaignHtml(html) {
   // Belt and braces: strip the literal placeholder prefix to a FIXED POINT
   // first (a single `.split().join()` pass would let a nested forgery like
   // `@@UN1T@@UN1T__STYLE_0@@` reconstitute after one pass). The per-call
-  // nonce below is the real defense — this loop just removes any leftover
-  // '@@UN1T_' text so it can never collide with a nonced token either.
+  // nonce below is the real defense; this loop only clears the literal text
+  // out of the INPUT — the strip passes can splice it back in later, inert.
+  // See PLACEHOLDER_PREFIX.
   let out = html
   while (out.includes(PLACEHOLDER_PREFIX)) out = out.split(PLACEHOLDER_PREFIX).join('')
 
@@ -165,42 +249,50 @@ export function sanitizeCampaignHtml(html) {
     styles.push(safe)
     return `@@UN1T_${nonce}_STYLE_${styles.length - 1}@@`
   })
-  // 2. Remember whether the author had a viewport meta; every occurrence
-  //    becomes the placeholder, and only the first is re-emitted.
-  let hadViewport = false
-  out = out.replace(VIEWPORT_META, () => { hadViewport = true; return viewportPlaceholder })
-  // 3. Iterate to a fixed point: stripping one construct can splice a new one
-  //    together (e.g. <scr<script>ipt>). Bounded — each pass only removes.
-  for (let i = 0; i < 10; i++) {
-    const before = out
-    out = out
-      .replace(CONTENT_STRIP_TAGS, '')
-      .replace(TAG_STRIP, '')
-      .replace(ON_ATTR_DQ, '$1')
-      .replace(ON_ATTR_SQ, '$1')
-      .replace(ON_ATTR_BARE, '$1')
-      .replace(URL_ATTR, neutralizeUrlAttr)
-    if (out === before) break
-  }
-  // 4. Restore. scrubCss guarantees no `<`/`>` inside a style body, so the
-  //    only tags introduced here are the ones written on this line.
-  out = out.replace(stylePlaceholder, (_m, i) => `<style>${styles[Number(i)] ?? ''}</style>`)
-  // reduce() has no idx-0 callback here since split() always starts a fresh
-  // accumulator — write the restore as a plain loop instead: join every
-  // fragment back together, emitting the canonical viewport tag exactly
-  // once (at the first placeholder site) when the author had one, '' at
-  // every other site.
-  const viewportParts = out.split(viewportPlaceholder)
-  out = viewportParts[0]
-  for (let i = 1; i < viewportParts.length; i++) {
-    out += (i === 1 && hadViewport ? VIEWPORT_META_SAFE : '') + viewportParts[i]
-  }
-  // Cosmetic-only: a removed on* attribute that abutted whitespace (the
-  // normal case) leaves that whitespace boundary in place, which can leave
-  // a lone space before `>` (`<a href="x" >`). Collapse it here, once, at
-  // the very end — never during the strip passes, and never touching a
-  // boundary BETWEEN two attributes (only whitespace immediately before `>`).
-  out = out.replace(/\s+>/g, '>')
+  // 2. Placeholder the FIRST viewport meta ONLY. Every later one is returned
+  //    EXACTLY AS AUTHORED, so TAG_STRIP removes it inside the loop below
+  //    (`meta` is on that list) and the splice its removal makes is
+  //    re-scanned.
+  //
+  //    This used to placeholder them all and then delete the extras AFTER the
+  //    loop, and that was a COMPLETE SANITIZER BYPASS: a post-loop deletion
+  //    splices the surrounding text together and nothing looks at the result,
+  //    so `<meta name=viewport><scr<meta name=viewport>ipt>…` shipped a live
+  //    <script>, and the same trick reassembled `onerror=`, a `javascript:`
+  //    href and an <iframe>.
+  let viewportSeen = false
+  out = out.replace(VIEWPORT_META, (m) => {
+    if (viewportSeen) return m
+    viewportSeen = true
+    return viewportPlaceholder
+  })
+
+  // 3a. Strip to a fixed point.
+  out = stripActiveContent(out, counter)
+  // 3b. Exactly ONE viewport placeholder can exist here — step 2 inserts at
+  //     most one, and a host cannot forge a nonced token. Assert that rather
+  //     than trust it: delete any further occurrence outright…
+  const extras = out.split(viewportPlaceholder)
+  if (extras.length > 2) out = `${extras[0]}${viewportPlaceholder}${extras.slice(1).join('')}`
+  // 3c. …and run the strip loop AGAIN over the result, so any splice that
+  //     deletion could have made is re-scanned. It has to happen here, before
+  //     anything is restored: TAG_STRIP would eat the canonical <meta> and the
+  //     <style> wrappers if they were already in the string. The two
+  //     restorations below only ever INSERT `<style>scrubbed</style>` (no `<`
+  //     or `>` can be inside a scrubCss result) and the fixed canonical meta
+  //     tag, both by construction.
+  out = stripActiveContent(out, counter)
+  // 4a. Restore the scrubbed <style> bodies.
+  out = out.replace(stylePlaceholder, (_m, i, offset, whole) => (
+    insideOpenTag(whole, offset) ? '' : `<style>${styles[Number(i)] ?? ''}</style>`
+  ))
+  // 4b. Restore the single viewport meta in its canonical form — never as
+  //     authored, so no attribute can be smuggled through it. A string
+  //     replace() hits only the first occurrence, and after 3b there is only
+  //     ever one.
+  out = out.replace(viewportPlaceholder, (_m, offset, whole) => (
+    insideOpenTag(whole, offset) ? '' : VIEWPORT_META_SAFE
+  ))
   return out
 }
 
