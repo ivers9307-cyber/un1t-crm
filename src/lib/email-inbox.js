@@ -199,10 +199,13 @@ export function replySubject(subject) {
  * plus that id. Returns [] when the inbound carried no Message-ID
  * (the reply still sends, it just starts a fresh thread client-side).
  */
-export function buildReplyHeaders({ rfcMessageId, referencesHeader }) {
+export function buildReplyHeaders({ rfcMessageId, referencesHeader, inReplyTo }) {
   if (!rfcMessageId) return []
-  const bracketed = rfcMessageId.startsWith('<') ? rfcMessageId : `<${rfcMessageId}>`
-  const refs = (referencesHeader || '').trim()
+  const bracket = (id) => (String(id).startsWith('<') ? String(id) : `<${id}>`)
+  const bracketed = bracket(rfcMessageId)
+  // RFC 5322 §3.6.4: the parent's References, or its In-Reply-To when it has
+  // none, then the parent's own id.
+  const refs = (referencesHeader || '').trim() || (inReplyTo ? bracket(String(inReplyTo).trim()) : '')
   return [
     { Name: 'In-Reply-To', Value: bracketed },
     { Name: 'References', Value: refs ? `${refs} ${bracketed}` : bracketed },

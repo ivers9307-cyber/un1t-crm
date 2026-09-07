@@ -34,6 +34,8 @@ vi.mock('sanitize-html', async (importOriginal) => {
 import {
   sanitizeEmailHtml,
   emailHtmlDocument,
+  emailHtmlDocuments,
+  splitQuotedHtml,
   emailFrameDocument,
   unblockImages,
   isRemoteImageUrl,
@@ -795,5 +797,64 @@ describe('iframe sandbox — Layer 1', () => {
     }
     walk(path.join(process.cwd(), 'src'))
     expect(offenders).toEqual([])
+  })
+})
+
+describe('splitQuotedHtml', () => {
+  it('splits at Gmail\'s gmail_quote container and keeps everything after it in the quote', () => {
+    const html = '<div dir="ltr">Test test 2</div><div class="gmail_quote"><div dir="ltr">On Mon…wrote:</div><blockquote>test</blockquote></div><div>trailer</div>'
+    const out = splitQuotedHtml(html)
+    expect(out.body).toBe('<div dir="ltr">Test test 2</div>')
+    // Serialised with encodeEntities 'utf8': non-ASCII text stays text.
+    expect(out.quoted).toBe('<div class="gmail_quote"><div dir="ltr">On Mon…wrote:</div><blockquote>test</blockquote></div><div>trailer</div>')
+  })
+  it('splits at Apple Mail\'s cite blockquote', () => {
+    const out = splitQuotedHtml('<div>Yes</div><br><blockquote type="cite"><div>hi</div></blockquote>')
+    expect(out.body).toBe('<div>Yes</div><br>')
+    expect(out.quoted).toBe('<blockquote type="cite"><div>hi</div></blockquote>')
+  })
+  it('splits at Outlook\'s reply divider and at appendonsend', () => {
+    expect(splitQuotedHtml('<p>Ok</p><div id="divRplyFwdMsg"><b>From:</b> x</div><p>old</p>').body).toBe('<p>Ok</p>')
+    expect(splitQuotedHtml('<p>Ok</p><div id="appendonsend"></div><p>old</p>').quoted).toBe('<div id="appendonsend"></div><p>old</p>')
+  })
+  it('splits at Yahoo\'s yahoo_quoted', () => {
+    expect(splitQuotedHtml('<div>a</div><div class="yahoo_quoted">b</div>').quoted).toBe('<div class="yahoo_quoted">b</div>')
+  })
+  it('matches a nested container and removes only it and its following siblings', () => {
+    const out = splitQuotedHtml('<div><p>a</p><div class="gmail_quote">q</div><p>after</p></div><p>outside</p>')
+    expect(out.body).toBe('<div><p>a</p></div><p>outside</p>')
+    expect(out.quoted).toBe('<div class="gmail_quote">q</div><p>after</p>')
+  })
+  it('does not split when the whole message is the quote (nothing to show above it)', () => {
+    const html = '<div class="gmail_quote">only</div>'
+    expect(splitQuotedHtml(html)).toEqual({ body: html, quoted: '' })
+  })
+  it('does not split when there is no recognised container', () => {
+    expect(splitQuotedHtml('<p>plain</p><blockquote>styled but not cite</blockquote>')).toEqual({ body: '<p>plain</p><blockquote>styled but not cite</blockquote>', quoted: '' })
+  })
+  it('handles empty input', () => {
+    expect(splitQuotedHtml('')).toEqual({ body: '', quoted: '' })
+    expect(splitQuotedHtml(null)).toEqual({ body: '', quoted: '' })
+  })
+})
+
+describe('emailHtmlDocuments', () => {
+  it('sanitises first, then splits, and wraps both halves', () => {
+    const raw = '<div>hi<script>x()</script></div><blockquote type="cite">old</blockquote>'
+    const out = emailHtmlDocuments(raw)
+    expect(out.failed).toBe(false)
+    expect(out.document).toContain('<div>hi</div>')
+    expect(out.document).not.toContain('script')
+    expect(out.document.startsWith('<!doctype html>')).toBe(true)
+    expect(out.quotedDocument).toContain('<blockquote type="cite">old</blockquote>')
+    expect(out.quotedDocument.startsWith('<!doctype html>')).toBe(true)
+  })
+  it('returns a null quotedDocument when nothing is quoted', () => {
+    const out = emailHtmlDocuments('<p>just this</p>')
+    expect(out.document).toContain('<p>just this</p>')
+    expect(out.quotedDocument).toBeNull()
+  })
+  it('matches emailHtmlDocument on the empty and failed cases', () => {
+    expect(emailHtmlDocuments('')).toEqual({ document: null, quotedDocument: null, blockedImages: 0, failed: false })
   })
 })

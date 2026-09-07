@@ -40,6 +40,7 @@
 // file in src/ — see "no client component imports this module" in the tests.
 
 import sanitizeHtml from 'sanitize-html'
+import { parseDocument, DomUtils } from 'htmlparser2'
 
 // ── The two constants the browser side must match ────────────────────
 //
@@ -524,5 +525,76 @@ export function emailHtmlDocument(raw) {
     return { document: emailFrameDocument(html), blockedImages, failed: false }
   } catch {
     return { document: null, blockedImages: 0, failed: true }
+  }
+}
+
+// MAIL-REPLY-QUOTE.1 — where a mail client's quoted chain starts in HTML.
+//
+// Runs on SANITISED output only (see emailHtmlDocuments): the sanitiser keeps
+// `class`, `id` and `blockquote`, so the markers survive, and nothing
+// unsanitised is ever split or returned. The first recognised container in
+// document order, plus every sibling after it, is the quote; the document
+// with those removed is the body.
+
+const QUOTE_CLASSES = ['gmail_quote', 'gmail_quote_container', 'yahoo_quoted']
+const QUOTE_IDS = ['divRplyFwdMsg', 'appendonsend']
+
+// Text stays text: the default serialiser turns every non-ASCII character into a
+// numeric entity, which renders the same inside the utf-8 srcdoc but inflates
+// the HTML budget for any non-Latin mail. Only & < > " are encoded.
+const SERIALIZE = { encodeEntities: 'utf8' }
+
+function isQuoteContainer(el) {
+  if (el.type !== 'tag') return false
+  const attribs = el.attribs || {}
+  if (el.name === 'blockquote' && String(attribs.type || '').toLowerCase() === 'cite') return true
+  if (QUOTE_IDS.includes(attribs.id)) return true
+  const classes = String(attribs.class || '').split(/\s+/)
+  return classes.some(c => QUOTE_CLASSES.includes(c))
+}
+
+/**
+ * @param {string} html  sanitised body HTML (a fragment, not a document)
+ * @returns {{ body: string, quoted: string }}
+ */
+export function splitQuotedHtml(html) {
+  const source = typeof html === 'string' ? html : ''
+  if (!source.trim()) return { body: '', quoted: '' }
+  const dom = parseDocument(source)
+  const match = DomUtils.findOne(isQuoteContainer, dom.children, true)
+  if (!match) return { body: source, quoted: '' }
+
+  const tail = []
+  for (let node = match; node; node = node.next) tail.push(node)
+  const quoted = tail.map(n => DomUtils.getOuterHTML(n, SERIALIZE)).join('')
+  for (const node of tail) DomUtils.removeElement(node)
+  const body = DomUtils.getInnerHTML(dom, SERIALIZE)
+  // A message that is ONLY a quote (someone replied with no words) keeps
+  // everything as the body: a blank frame above a folded quote is worse than
+  // an unfolded one.
+  if (!DomUtils.textContent(dom).trim()) return { body: source, quoted: '' }
+  return { body, quoted }
+}
+
+/**
+ * emailHtmlDocument, plus the quoted half as its own document.
+ *
+ * @returns {{ document: string|null, quotedDocument: string|null, blockedImages: number, failed: boolean }}
+ */
+export function emailHtmlDocuments(raw) {
+  const empty = { document: null, quotedDocument: null, blockedImages: 0, failed: false }
+  if (!raw || typeof raw !== 'string' || !raw.trim()) return empty
+  try {
+    const { html, blockedImages } = sanitizeEmailHtml(raw)
+    if (!html.trim()) return empty
+    const { body, quoted } = splitQuotedHtml(html)
+    return {
+      document: emailFrameDocument(body),
+      quotedDocument: quoted ? emailFrameDocument(quoted) : null,
+      blockedImages,
+      failed: false,
+    }
+  } catch {
+    return { document: null, quotedDocument: null, blockedImages: 0, failed: true }
   }
 }

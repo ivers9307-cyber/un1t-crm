@@ -258,3 +258,18 @@ describe('truncateHtmlBody', () => {
     expect(truncateHtmlBody(null)).toBe(null)
   })
 })
+
+describe('buildReplyHeaders — References fallback', () => {
+  it('uses In-Reply-To as the chain when References is empty', () => {
+    expect(buildReplyHeaders({ rfcMessageId: 'a@x', referencesHeader: '', inReplyTo: '<p@x>' })).toEqual([
+      { Name: 'In-Reply-To', Value: '<a@x>' },
+      { Name: 'References', Value: '<p@x> <a@x>' },
+    ])
+  })
+  it('brackets a bare In-Reply-To', () => {
+    expect(buildReplyHeaders({ rfcMessageId: 'a@x', inReplyTo: 'p@x' })[1].Value).toBe('<p@x> <a@x>')
+  })
+  it('prefers References when both are present', () => {
+    expect(buildReplyHeaders({ rfcMessageId: 'a@x', referencesHeader: '<r@x>', inReplyTo: '<p@x>' })[1].Value).toBe('<r@x> <a@x>')
+  })
+})

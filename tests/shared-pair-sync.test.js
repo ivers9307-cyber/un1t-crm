@@ -140,6 +140,10 @@ const PAIRS = {
       '`export * from` shim; src/components/mail/mail-vocabulary.js re-exports it for the web components and mobile ' +
       "imports 'shared/mail-vocabulary' directly, so the two surfaces read the very same functions.",
   },
+  'mail-quote.js': {
+    mode: 'reexport',
+    why: 'MAIL-REPLY-QUOTE.1 — the quoted-text splitter serves the web thread and the mobile thread; src/lib re-exports shared.',
+  },
   'sonos-playback.js': {
     mode: 'reexport',
     shared: 'shared/sonos-playback.js',
