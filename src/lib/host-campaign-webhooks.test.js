@@ -23,18 +23,23 @@ function stubDb({ failTable, sendRow = null, stampChanged = true, failUpdates = 
   const sendSelects = []
   const sendUpdates = []
   const rpcCalls = []
+  const clickUpserts = []
   return {
     contactUpdates,
     sendSelects,
     sendUpdates,
     rpcCalls,
+    clickUpserts,
     from: (table) => {
       const filters = []
       let hasUpdate = false
+      let hasUpsert = false
       let values
+      let upsertOpts
       const chain = {
         select: () => chain,
         update: (v) => { values = v; hasUpdate = true; return chain },
+        upsert: (v, opts) => { values = v; upsertOpts = opts; hasUpsert = true; return chain },
         eq: (c, v) => { filters.push([c, v]); return chain },
         in: (c, v) => { filters.push(['in', c, v]); return chain },
         is: (c, v) => { filters.push(['is', c, v]); return chain },
@@ -48,6 +53,7 @@ function stubDb({ failTable, sendRow = null, stampChanged = true, failUpdates = 
         then: (resolve, reject) => {
           if (table === 'contacts') contactUpdates.push({ values, filters })
           if (table === 'host_campaign_sends' && hasUpdate) sendUpdates.push({ values, filters })
+          if (table === 'host_campaign_clicks' && hasUpsert) clickUpserts.push({ values, opts: upsertOpts })
           let result
           if (table === failTable) {
             result = { data: null, error: { message: 'boom' } }
@@ -214,6 +220,31 @@ describe('processHostCampaignEvent — send row outcomes (HOST-METRICS.1)', () =
     expect(db.sendUpdates.some((u) => 'clicked_at' in u.values)).toBe(true)
     expect(db.sendUpdates.some((u) => 'opened_at' in u.values)).toBe(true)
     expect(db.rpcCalls).toEqual([['bump_host_send_counter', { p_send_id: 'send-1', p_field: 'click_count' }]])
+  })
+  it('Click inserts a host_campaign_clicks row from OriginalLink, deduped on (send_id, url, clicked_at)', async () => {
+    const db = stubDb({ sendRow: ROW })
+    const r = await processHostCampaignEvent(db, ev('Click', { OriginalLink: 'https://x/a', ReceivedAt: '2026-09-07T10:38:47Z' }))
+    expect(r.ok).toBe(true)
+    expect(db.clickUpserts).toEqual([{
+      values: {
+        host_id: 'h-1', campaign_id: 'hc-1', send_id: 'send-1', contact_id: 'c-1',
+        url: 'https://x/a', clicked_at: '2026-09-07T10:38:47Z', postmark_message_id: 'pm-9',
+      },
+      opts: { onConflict: 'send_id,url,clicked_at', ignoreDuplicates: true },
+    }])
+  })
+  it('Click without OriginalLink writes no click row', async () => {
+    const db = stubDb({ sendRow: ROW })
+    await processHostCampaignEvent(db, ev('Click', { ReceivedAt: 't' }))
+    expect(db.clickUpserts).toEqual([])
+  })
+  it('a failed click row insert is logged but never fails the event', async () => {
+    const db = stubDb({ sendRow: ROW, failTable: 'host_campaign_clicks' })
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const r = await processHostCampaignEvent(db, ev('Click', { OriginalLink: 'https://x/a', ReceivedAt: 't' }))
+    expect(r.ok).toBe(true)
+    expect(spy).toHaveBeenCalledTimes(1)
+    spy.mockRestore()
   })
   it('HardBounce stamps bounced_at + bounce_type on the row AND the shared mailbox fact', async () => {
     const db = stubDb({ sendRow: ROW })

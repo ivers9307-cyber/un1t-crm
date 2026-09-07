@@ -25,7 +25,7 @@ vi.mock('./postmark-messages.js', () => ({
 vi.mock('./log.js', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 
 import { listOutboundMessages, getOutboundMessageDetails, listBounces } from './postmark-messages.js'
-import { foldMessageEvents, backfillHostCampaignEvents } from './host-campaign-backfill.js'
+import { foldMessageEvents, foldClickEvents, backfillHostCampaignEvents } from './host-campaign-backfill.js'
 
 // ── chainable fake, modeled on host-campaign-queue.test.js ──────────
 function makeDb(route) {
@@ -107,6 +107,18 @@ describe('foldMessageEvents', () => {
   })
 })
 
+describe('foldClickEvents (HOST-EMAILS.2)', () => {
+  it('returns one entry per LinkClicked with Details.Link, in order, skipping events without a link', () => {
+    expect(foldClickEvents([
+      { Type: 'Delivered', ReceivedAt: '2026-09-04T10:58:14Z' },
+      { Type: 'LinkClicked', ReceivedAt: '2026-09-04T11:00:00Z', Details: { Link: 'https://a' } },
+      { Type: 'LinkClicked', ReceivedAt: '2026-09-04T11:00:01Z', Details: {} },
+      { Type: 'LinkClicked', ReceivedAt: '2026-09-04T11:00:02Z', Details: { Link: 'https://b' } },
+    ])).toEqual([{ url: 'https://a', at: '2026-09-04T11:00:00Z' }, { url: 'https://b', at: '2026-09-04T11:00:02Z' }])
+  })
+  it('is empty for non-arrays', () => expect(foldClickEvents(null)).toEqual([]))
+})
+
 describe('backfillHostCampaignEvents', () => {
   const msg = (id, campaign = 'hc-1', contact = 'c-1', tag = 'host-campaign') => ({ MessageID: id, Tag: tag, Metadata: { host_campaign_id: campaign, host_id: 'h-1', contact_id: contact } })
   const row = (id, campaign = 'hc-1', contact = 'c-1', extra = {}) => ({
@@ -126,7 +138,7 @@ describe('backfillHostCampaignEvents', () => {
     listOutboundMessages.mockResolvedValueOnce({ total: 1, messages: [msg('m1')], error: null })
     const { db, statements } = makeDb(routeFor({ rows: [row('s1')] }))
     const r = await backfillHostCampaignEvents(db, { hostId: 'h-1', dry: true, fromDate: '2026-07-23', toDate: '2026-09-07', sleep: async () => {} })
-    expect(r).toEqual({ dry: true, scanned: 1, matched: 1, stamped: 1, updated: 1, skipped: 0, errors: [] })
+    expect(r).toEqual({ dry: true, scanned: 1, matched: 1, stamped: 1, updated: 1, skipped: 0, clicks: 0, errors: [] })
     expect(statements.some((s) => s.table === 'host_campaign_sends' && op(s, 'update'))).toBe(false)
     expect(listOutboundMessages).toHaveBeenCalledWith({ tag: 'host-campaign', fromDate: '2026-07-23', toDate: '2026-09-07', count: 500, offset: 0 })
   })
@@ -143,6 +155,46 @@ describe('backfillHostCampaignEvents', () => {
     expect(deliv.ops.some((o) => o.method === 'is' && o.args[0] === 'delivered_at')).toBe(true)
     const cnt = upds.find((s) => 'open_count' in op(s, 'update').args[0])
     expect(cnt.ops.some((o) => o.method === 'eq' && o.args[0] === 'open_count' && o.args[1] === 0)).toBe(true)
+  })
+
+  it('live: writes one host_campaign_clicks upsert of every LinkClicked event and counts them (HOST-EMAILS.2)', async () => {
+    listOutboundMessages.mockResolvedValueOnce({ total: 1, messages: [msg('m1')], error: null })
+    getOutboundMessageDetails.mockResolvedValueOnce({
+      details: {
+        MessageEvents: [
+          { Type: 'Delivered', ReceivedAt: 'd' },
+          { Type: 'LinkClicked', ReceivedAt: 'c1', Details: { Link: 'https://a' } },
+          { Type: 'LinkClicked', ReceivedAt: 'c2', Details: { Link: 'https://b' } },
+        ],
+      },
+      error: null,
+    })
+    const { db, statements } = makeDb(routeFor({ rows: [row('s1')] }))
+    const r = await backfillHostCampaignEvents(db, { hostId: 'h-1', dry: false, sleep: async () => {} })
+    expect(r.clicks).toBe(2)
+    const clickIns = statements.find((s) => s.table === 'host_campaign_clicks')
+    expect(op(clickIns, 'upsert').args[0]).toEqual([
+      { host_id: 'h-1', campaign_id: 'hc-1', send_id: 's1', contact_id: 'c-1', url: 'https://a', clicked_at: 'c1', postmark_message_id: 'm1' },
+      { host_id: 'h-1', campaign_id: 'hc-1', send_id: 's1', contact_id: 'c-1', url: 'https://b', clicked_at: 'c2', postmark_message_id: 'm1' },
+    ])
+    expect(op(clickIns, 'upsert').args[1]).toEqual({ onConflict: 'send_id,url,clicked_at', ignoreDuplicates: true })
+  })
+
+  it('dry run: counts clicks but writes no host_campaign_clicks row', async () => {
+    listOutboundMessages.mockResolvedValueOnce({ total: 1, messages: [msg('m1')], error: null })
+    getOutboundMessageDetails.mockResolvedValueOnce({
+      details: {
+        MessageEvents: [
+          { Type: 'LinkClicked', ReceivedAt: 'c1', Details: { Link: 'https://a' } },
+          { Type: 'LinkClicked', ReceivedAt: 'c2', Details: { Link: 'https://b' } },
+        ],
+      },
+      error: null,
+    })
+    const { db, statements } = makeDb(routeFor({ rows: [row('s1')] }))
+    const r = await backfillHostCampaignEvents(db, { hostId: 'h-1', dry: true, sleep: async () => {} })
+    expect(r.clicks).toBe(2)
+    expect(statements.some((s) => s.table === 'host_campaign_clicks')).toBe(false)
   })
 
   it('a row that already has counts is not re-counted and an existing id is not re-stamped', async () => {

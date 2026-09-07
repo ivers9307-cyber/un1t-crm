@@ -22,7 +22,7 @@ import { logInfo } from '@/lib/log'
 
 const HOST_ID = 'h-1'
 const ORG_ID = 'org-1'
-const SUMMARY = { dry: true, scanned: 0, matched: 0, stamped: 0, updated: 0, skipped: 0, errors: [] }
+const SUMMARY = { dry: true, scanned: 0, matched: 0, stamped: 0, updated: 0, skipped: 0, clicks: 0, errors: [] }
 
 function makeRequest(qs = '') {
   return new Request(`http://localhost/api/hosts/${HOST_ID}/backfill-campaign-events${qs}`, { method: 'POST' })

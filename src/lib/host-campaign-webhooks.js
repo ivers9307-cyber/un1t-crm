@@ -217,6 +217,22 @@ export async function processHostCampaignEvent(db, body) {
         // Clicks have no "first only" setting — click_count is a true count,
         // bumped unconditionally.
         await bump(db, row.id, 'click_count')
+        // HOST-EMAILS.2 — one row per click for the report's link breakdown.
+        // Best effort: a failed insert is logged, never fails the event.
+        if (typeof body.OriginalLink === 'string' && body.OriginalLink) {
+          const { error: clickRowErr } = await db
+            .from('host_campaign_clicks')
+            .upsert({
+              host_id: hostId,
+              campaign_id: meta.host_campaign_id,
+              send_id: row.id,
+              contact_id: contactId,
+              url: body.OriginalLink,
+              clicked_at: at(body.ReceivedAt),
+              postmark_message_id: isValidMessageId(body.MessageID) ? body.MessageID : null,
+            }, { onConflict: 'send_id,url,clicked_at', ignoreDuplicates: true })
+          if (clickRowErr) console.warn('[host-campaign webhooks] click row insert failed', { row_id: row.id, error: clickRowErr.message })
+        }
       }
       return { ok: true }
     }
