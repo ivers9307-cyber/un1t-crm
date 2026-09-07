@@ -310,18 +310,58 @@ export default function MailThread({
           onMarkUnread={onMarkUnread}
         />
       }
-      banner={
-        // MAIL-REFINE.1 (03) — the related-conversations nudge, under the
-        // header. Rendered only when the related endpoint reported ≥1 OPEN
-        // conversation for this requester; a failed read renders nothing
-        // (never a confident zero).
+      // MAIL-READER.1 (05) — reading mode folds the header to one line, and
+      // ONE action survives the fold. On this surface that is Archive: it is
+      // the verb the whole trial is about, and it is the only one an operator
+      // mid-reply plausibly reaches for. Spam, Mark read and the shortcut
+      // cheat sheet are a caret press away. Same component, same two-state
+      // label, same handler as the full row — declared once here rather than
+      // reached into MailControls, because a second Archive button that could
+      // ever say something different is worse than a repeated three lines.
+      compactControls={
+        <IconAction
+          label={archived ? 'Move back to inbox' : 'Archive'}
+          icon={archived ? ArchiveRestore : Archive}
+          disabled={actionSaving}
+          onClick={() => onArchive?.(!archived)}
+          tone="primary"
+        />
+      }
+      // The same nudge, counted. The folded line has room for a fact, not for
+      // a sentence and two buttons — so the chip keeps its blue, its
+      // role="status" and its full wording in the `title`, and its two actions
+      // stay one caret press away on the unfolded header. It never renders at
+      // the same time as `banner`: the header is folded or it is not.
+      compactBanner={
         nudge && (
-        <div
+          <span
+            role="status"
+            title={`${nudge.name} has ${nudge.label}`}
+            className="shrink-0 rounded-full bg-blue-500/10 px-2 py-0.5 text-[11px] text-blue-700"
+          >
+            {nudge.count} other
+          </span>
+        )
+      }
+      banner={
+        // MAIL-REFINE.1 (03) — the related-conversations nudge. Rendered only
+        // when the related endpoint reported ≥1 OPEN conversation for this
+        // requester; a failed read renders nothing (never a confident zero).
+        //
+        // MAIL-READER.1 — it is a CHIP on the participants line now, not a
+        // full-width blue bar between the header and the first message. Same
+        // data, same two actions, same role="status" — what changed is that a
+        // fact about a DIFFERENT conversation no longer takes a whole row of a
+        // 78vh reader card, in the loudest treatment on the screen, above the
+        // email the operator opened. ConversationThread places it; this file
+        // owns its shape.
+        nudge && (
+        <span
           role="status"
-          className="flex flex-wrap items-center gap-x-1.5 gap-y-1 border-b border-blue-500/20 bg-blue-500/10 px-4 py-2 text-xs text-blue-700"
+          className="mt-1 inline-flex max-w-full flex-wrap items-center gap-x-1.5 gap-y-0.5 rounded-full bg-blue-500/10 px-2 py-0.5 text-[11px] text-blue-700"
         >
-          <Link2 size={12} className="shrink-0" aria-hidden="true" />
-          <span>
+          <Link2 size={11} className="shrink-0" aria-hidden="true" />
+          <span className="min-w-0">
             <span className="font-semibold">{nudge.name}</span>
             {' has '}
             <span className="font-semibold">{nudge.label}</span>
@@ -346,7 +386,7 @@ export default function MailThread({
           >
             Merge into this one
           </button>
-        </div>
+        </span>
       )}
       // Replying to an archived conversation brings it back — the reply route
       // moves the row to `pending`, which is a live status on this surface.
@@ -506,42 +546,79 @@ function MailControls({ archived, spam, unread, saving, onArchive, onSpam, onMar
   // release: the conversation goes back to Inbox and the push/badge the
   // quarantine withheld fire then. "Mark as spam" is the reverse, silently.
   const SpamIcon = spam ? ShieldCheck : ShieldAlert
+  const archiveLabel = archived ? 'Move back to inbox' : 'Archive'
+  const spamLabel = spam ? 'Not spam' : 'Mark as spam'
+  const readLabel = unread ? 'Mark read' : 'Mark unread'
   return (
-    <div className="mt-3 flex flex-wrap items-center gap-2">
-      <button
-        type="button"
+    <div className="flex items-center gap-1">
+      <IconAction
+        label={archiveLabel}
+        icon={ArchiveIcon}
+        disabled={saving}
         onClick={() => onArchive?.(!archived)}
+        tone="primary"
+      />
+      <IconAction
+        label={spamLabel}
+        icon={SpamIcon}
         disabled={saving}
-        className="inline-flex items-center gap-1.5 rounded-md border border-transparent bg-un1t-text px-2.5 py-1 text-xs font-medium text-un1t-bg transition-opacity hover:opacity-90 disabled:opacity-50"
-      >
-        <ArchiveIcon size={13} aria-hidden="true" />
-        {archived ? 'Move back to inbox' : 'Archive'}
-      </button>
-      <button
-        type="button"
         onClick={() => onSpam?.(!spam)}
+      />
+      <IconAction
+        label={readLabel}
+        icon={unread ? MailOpen : Mail}
         disabled={saving}
-        className="inline-flex items-center gap-1.5 rounded-md border border-un1t-border px-2.5 py-1 text-xs text-un1t-subtle transition-colors hover:text-un1t-text disabled:opacity-50"
-      >
-        <SpamIcon size={13} aria-hidden="true" />
-        {spam ? 'Not spam' : 'Mark as spam'}
-      </button>
-      <button
-        type="button"
         onClick={() => (unread ? onMarkRead?.() : onMarkUnread?.())}
-        disabled={saving}
-        className="inline-flex items-center gap-1.5 rounded-md border border-un1t-border px-2.5 py-1 text-xs text-un1t-subtle transition-colors hover:text-un1t-text disabled:opacity-50"
-      >
-        {unread ? <MailOpen size={13} aria-hidden="true" /> : <Mail size={13} aria-hidden="true" />}
-        {unread ? 'Mark read' : 'Mark unread'}
-      </button>
+      />
       {/* A write-back notice deliberately does NOT live here. It describes the
           last ACTION, and archiving moves the operator on — so the
           conversation it belonged to is often no longer the one on screen.
           MailSurface renders it once, above the list. */}
-      <span className="text-[11px] text-un1t-muted">
-        {MAIL_SHORTCUTS.map(s => `${s.keys} · ${s.description}`).join('   ')}
-      </span>
+      {/* MAIL-READER.1 — the cheat sheet is a TOOLTIP, not a sentence. The
+          rule above it still stands (an undiscoverable shortcut is the same as
+          no shortcut) and a "?" is discoverable; what is gone is a full line of
+          a 78vh card spent printing three key/description pairs that stop
+          being read after the first day. Same string, same order — read off
+          MAIL_SHORTCUTS, never retyped. type="button": the header sits inside
+          no form today, but the convention is what keeps it true if it ever
+          does. */}
+      <button
+        type="button"
+        aria-label="Keyboard shortcuts"
+        title={MAIL_SHORTCUTS.map(s => `${s.keys} · ${s.description}`).join('   ')}
+        className="ml-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-md border border-un1t-border text-[11px] font-semibold text-un1t-subtle transition-colors hover:text-un1t-text"
+      >
+        <span aria-hidden="true">?</span>
+      </button>
     </div>
+  )
+}
+
+/**
+ * MAIL-READER.1 — one of the three lifecycle actions, as an icon.
+ *
+ * 🔴 THE WORDS DID NOT GO ANYWHERE. Each button carries the label it used to
+ * print in BOTH `aria-label` and `title`, so the accessible name a screen
+ * reader announces, the tooltip a mouse finds, and the string every existing
+ * test asks for by name are one value declared once. An icon-only button whose
+ * meaning lives only in its glyph is the failure mode this shape invites, and
+ * naming it in two places is the cheap defence.
+ */
+function IconAction({ label, icon: Icon, disabled, onClick, tone }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={label}
+      title={label}
+      className={`grid h-7 w-7 shrink-0 place-items-center rounded-md border transition-colors disabled:opacity-50 ${
+        tone === 'primary'
+          ? 'border-transparent bg-un1t-text text-un1t-bg hover:opacity-90'
+          : 'border-un1t-border text-un1t-subtle hover:text-un1t-text'
+      }`}
+    >
+      <Icon size={15} aria-hidden="true" />
+    </button>
   )
 }

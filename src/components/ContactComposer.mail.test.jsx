@@ -75,26 +75,32 @@ function renderComposer(props = {}) {
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
-// ── MAILFIX-SIGTRUTH.1 — the Mail path appends a signature, so it says so ──
-describe('ContactComposer — signature hint', () => {
-  it('shows the auto-appended signature on the Mail path, resolved for the chosen account’s studio', async () => {
+// ── MAIL-READER.1 — no signature preview in a composer, on EITHER path ──
+//
+// This suite used to pin the opposite on the Mail leg (MAILFIX-SIGTRUTH.1: the
+// /compose route appends the sender's effective signature, so the composer said
+// so). The SEND is unchanged — what moved is the read-only copy of the block,
+// which now lives only on the account page, beside the field that edits it.
+// Reprinting it in four composers was the same unchangeable text in four
+// places. The company-sender leg was already hint-less and stays that way, so
+// the two paths now agree by construction rather than by a branch.
+describe('ContactComposer — no signature preview', () => {
+  it('previews nothing on the Mail path, and never asks for the signature', async () => {
     stubFetch({ mailboxes: LOCATED_MAILBOXES, prefs: RICH_PREFS })
     renderComposer()
     await screen.findByRole('combobox')
-    expect(await screen.findByText(/added automatically/i)).toBeTruthy()
-    const pre = screen.getByText(/UN1T Hatch Street/, { selector: 'pre' })
-    expect(pre.textContent).toContain('Alex Example')
-    expect(pre.textContent).toContain('01 555 0002') // Hatch's card phone over the person's
-    expect(pre.textContent).not.toContain('087 111 2222')
+    await act(async () => {})
+    expect(screen.queryByText(/added automatically/i)).toBeNull()
+    expect(document.querySelector('pre')).toBeNull()
+    expect(calls.some(c => c.url.includes('/api/me/preferences'))).toBe(false)
   })
 
-  it('shows NO hint on the company-sender path — that route appends nothing, so absence is the truth', async () => {
+  it('previews nothing on the company-sender path either — that route appends nothing at all', async () => {
     stubFetch({ mailboxes: 'none', prefs: RICH_PREFS })
     renderComposer()
     await screen.findByText('Sent from the company address')
     await act(async () => {})
     expect(screen.queryByText(/added automatically/i)).toBeNull()
-    // The hint never mounted, so the preferences GET never fired.
     expect(calls.some(c => c.url.includes('/api/me/preferences'))).toBe(false)
   })
 })

@@ -14,13 +14,25 @@
 // or that a reply stayed private. The submit button says which one it is too;
 // it never just says "Send".
 //
-// SIGNATURE (EMAIL-TICKET.5). The server appends the sender's signature to
-// every real reply, so the composer shows it — a writer must be able to see
-// what is going out over their name. It is rendered OUTSIDE the textarea, read
-// only, and labelled as automatic: making it editable here would imply a
-// one-off edit the design does not support (the column is per person, and the
-// route reads it fresh at send time). It never appears in note mode, because
-// notes are never signed.
+// SIGNATURE (MAIL-READER.1, reversing EMAIL-TICKET.5's preview). The server
+// still appends the sender's signature to every real reply. It is NOT
+// previewed here any more. The preview was a dashed box reprinting the whole
+// signature — three or four lines of a docked 78vh card, above a composer,
+// above the email — saying something the writer already knows and cannot
+// change from here. It is configured on the account page and previewed THERE,
+// beside the field that edits it, which is the one place a preview earns its
+// space. ComposeForm, ForwardForm and ContactComposer dropped it for the same
+// reason on the same day.
+//
+// THE CARD SHOWS THE EMAIL, NOT THE CHROME (MAIL-READER.1). The expanded form
+// is capped at 40% of the reader card and scrolls inside that cap, so the
+// thread above it can never be squeezed to a single line by a composer with a
+// lot of recipients. The footer is ONE row: attachments left, Send right. The
+// sentence naming every recipient moved onto the Send button's tooltip and an
+// sr-only description — it is still exact and still announced, it just stopped
+// repeating the chips two inches above it. What stayed VISIBLE is only what
+// changes what the button does: the note-mode warning, and the reasons a
+// disabled Send is disabled.
 //
 // RECIPIENTS (EMAIL-CC.1). THERE IS NO REPLY / REPLY-ALL CHOICE, deliberately
 // (Richard, 2026-08-07). The server derives everybody on the thread and always
@@ -71,7 +83,7 @@
 // blocks the note until they are removed. The route refuses the combination
 // too, so the rule is stated in both places.
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useId, useRef } from 'react'
 import { Send, Lock, Users, AlertCircle, RotateCcw } from 'lucide-react'
 import { Button } from '@/components/ui'
 import { isArchivedStatus, statusMeta, replyActionLabel } from '@/lib/mail/conversation-display'
@@ -79,7 +91,6 @@ import { isArchivedStatus, statusMeta, replyActionLabel } from '@/lib/mail/conve
 // sentence below: the route interpolates this same constant into its 400, and
 // two hand-written 25s are two places to forget when it moves.
 import { MAX_RECIPIENTS } from '@/lib/email-recipients'
-import SignatureHint from './SignatureHint'
 import RecipientEditor, { EMPTY_RECIPIENTS } from './RecipientEditor'
 import AttachmentPicker, { readyDrafts, hasPendingUploads } from './AttachmentPicker'
 // MAIL-TRIAL draft persistence — see that file's header comment for why the
@@ -119,6 +130,25 @@ export default function ReplyBox({
   // `key={conversationId}` remount ConversationThread already does — the same remount
   // that is TICKET-COMPOSER-LEAK.1's guard, which this must never weaken.
   startCollapsed = false,
+  // MAIL-READER.1 (05) — READING MODE. The parent (ConversationThread) owns
+  // it; this box only reports the two events that drive it and reads back the
+  // one thing that changes here.
+  //
+  // `reading` widens the cap from 40% to 46% of the card: with the header
+  // folded to a single line the thread and the draft are meant to share what
+  // is left roughly half and half. It is a CLASS, not a measurement — jsdom
+  // has no layout engine, so the recipe is all a test can pin (a recorded
+  // trap: a green suite once shipped a toggle that did nothing).
+  reading = false,
+  // Fired from the textarea's own focus. The parent folds the header on it,
+  // which is why it is the TEXTAREA and not the form: clicking Attach or a
+  // recipient chip is not the operator settling in to write.
+  onComposerFocus,
+  // Fired whenever `collapsed` changes — INCLUDING the draft hydration's
+  // auto-expand, which is a real expansion the parent must see. Reported from
+  // an effect rather than from each setter so there is exactly one place that
+  // can ever disagree with the state.
+  onCollapsedChange,
 }) {
   const [mode, setMode] = useState('reply')
   const [text, setText] = useState('')
@@ -135,6 +165,11 @@ export default function ReplyBox({
   // isTypingTarget exists to prevent, manufactured from the inside.
   const [collapsed, setCollapsed] = useState(startCollapsed)
   const textareaRef = useRef(null)
+  // MAIL-READER.1 — the id the Send button's aria-describedby points at. From
+  // useId rather than a module constant so two composers on one page (the
+  // reader card and a compose dock) can never both claim the same id and hand
+  // a screen reader the wrong audience.
+  const audienceDescriptionId = useId()
   const focusOnExpandRef = useRef(false)
   function expand(nextMode) {
     if (nextMode) setMode(nextMode)
@@ -250,6 +285,17 @@ export default function ReplyBox({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId, viewerId, text, mode])
 
+  // MAIL-READER.1 (05) — tell the parent which shape this box is in. Declared
+  // LAST on purpose: the draft effects above are order-sensitive (latestRef
+  // before hydration, hydration before write-through) and this one must never
+  // be inserted among them. Deps are `collapsed` alone — the callback is an
+  // inline arrow in the parent, so depending on its identity would re-fire
+  // this on every parent render.
+  useEffect(() => {
+    onCollapsedChange?.(collapsed)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- report state changes only
+  }, [collapsed])
+
   const isNote = mode === 'note'
   // The reply route 400s without a requester address. Say so up front rather
   // than letting an operator type a reply into a dead end.
@@ -317,6 +363,43 @@ export default function ReplyBox({
   // and never guessed: these are exactly the addresses the participants route
   // has stored, which is what makes the restore below able to lift them.
   const removedParticipants = conversation?.excluded_participants || []
+
+  // MAIL-READER.1 — the audience sentence, verbatim, as a STRING. It used to
+  // be a paragraph across the bottom of the card naming every recipient a
+  // second time (the RecipientEditor chips two inches above are the first).
+  // It now feeds the Send button's `title` and its sr-only description, and a
+  // string is what both of those take: a title attribute cannot hold markup,
+  // and an sr-only node built separately from the tooltip would be two
+  // different answers to "who gets this". Bcc is still named AS private —
+  // someone about to press send has to be able to see that they blind-copied
+  // three people, and that the other recipients cannot.
+  const audienceSummary = !isNote && canReply && !noAudience && lockedTo.length > 0
+    ? [
+        `Sends an email to ${lockedTo.join(', ')}`,
+        recipients.cc.length > 0 ? `cc ${recipients.cc.join(', ')}` : null,
+        recipients.bcc.length > 0
+          ? `bcc ${recipients.bcc.join(', ')} (hidden from everyone else)`
+          : null,
+        conversation?.mailbox?.address
+          ? `replies come back to ${conversation.mailbox.address}`
+          : null,
+      ].filter(Boolean).join(' · ')
+    : null
+
+  // The one line that may still occupy the surface, and only when it changes
+  // what the button DOES. "Nobody is left on this reply" is deliberately not
+  // here: noAudience already prints its own line beside the recipient box that
+  // caused it, and saying it twice in one form is how a composer stops being
+  // read at all.
+  const noteOrBlockedLine = isNote ? (
+    <>
+      <Lock size={11} className="mr-1 inline align-[-1px]" aria-hidden="true" />
+      Staff only — this is written to the conversation and <strong>not sent</strong> to{' '}
+      {conversation?.requester_email || 'the member'}.
+    </>
+  ) : !canReply ? (
+    'This conversation has no sender address, so it cannot be replied to. You can still add an internal note.'
+  ) : null
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -395,7 +478,17 @@ export default function ReplyBox({
   return (
     <form
       onSubmit={handleSubmit}
-      className={`border-t px-4 py-3 ${isNote ? 'border-amber-500/40 bg-amber-500/10' : 'border-un1t-border bg-un1t-bg'}`}
+      // MAIL-READER.1 — the composer may never own more than ~40% of the
+      // reader card. `max-h-[40%]` resolves against the card's flex column
+      // (MailDock gives it a definite height); where that height is
+      // indeterminate the cap simply computes to `none` and the form behaves
+      // exactly as it did before, which is the right way for a cap to fail.
+      // `shrink-0` keeps the flex layout from squeezing it instead of the
+      // thread — the thread carries `flex-1 min-h-0` and is the part that is
+      // supposed to absorb the height.
+      // MAIL-READER.1 (05) — 46% while the header is folded: reading mode
+      // trades a header the operator has stopped reading for draft room.
+      className={`shrink-0 ${reading ? 'max-h-[46%]' : 'max-h-[40%]'} overflow-y-auto border-t px-4 py-3 ${isNote ? 'border-amber-500/40 bg-amber-500/10' : 'border-un1t-border bg-un1t-bg'}`}
     >
       {/* Mode switch. type="button" on both — a bare <button> inside a <form>
           defaults to submit and would fire the send (CLAUDE.md). */}
@@ -513,7 +606,14 @@ export default function ReplyBox({
         ref={textareaRef}
         value={text}
         onChange={(e) => setText(e.target.value)}
-        rows={3}
+        // MAIL-READER.1 (05) — the operator settling in to write is what
+        // enters reading mode. Nothing here folds anything; the parent owns
+        // that decision and may refuse it (a manual unfold sticks).
+        onFocus={() => onComposerFocus?.()}
+        // Four rows, not three: with the signature box and the recipient
+        // sentence gone the words are what the composer is FOR, and the form's
+        // own cap plus its scroll is what keeps that from eating the thread.
+        rows={4}
         maxLength={MAX_LENGTH}
         disabled={!isNote && !canReply}
         placeholder={isNote ? 'Staff-only note. Nothing is sent.' : replyPlaceholder}
@@ -524,27 +624,6 @@ export default function ReplyBox({
         }`}
       />
 
-      {/* Auto-appended sign-off — the shared hint, so the reply box and the
-          composer can never disagree about what the server adds. Never shown
-          on a note: a note is sent to nobody. MAILFIX-SIGTRUTH.1: the
-          conversation's location IS the sending context for a reply (the send
-          resolves the studio half of the signature off conversation.location_id),
-          so the hint resolves against the same studio. */}
-      {!isNote && <SignatureHint locationId={conversation?.location_id || null} />}
-
-      {/* Files ride on a reply only. In note mode the picker is gone but any
-          already-attached files stay visible in the notice below — dropping
-          them silently would be the thing this composer is most careful about
-          everywhere else. */}
-      {!isNote && canReply && (
-        <AttachmentPicker
-          scope={{ ticket_id: conversation?.id }}
-          files={files}
-          onChange={setFiles}
-          disabled={sending}
-        />
-      )}
-
       {filesBlockNote && (
         <p className="mt-2 flex items-start gap-1.5 text-[11px] text-amber-700" role="alert">
           <AlertCircle size={11} className="mt-0.5 shrink-0" aria-hidden="true" />
@@ -554,52 +633,79 @@ export default function ReplyBox({
         </p>
       )}
 
-      <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-        <p className={`text-[11px] ${isNote ? 'text-amber-700' : 'text-un1t-subtle'}`}>
-          {isNote ? (
-            <>
-              <Lock size={11} className="mr-1 inline align-[-1px]" aria-hidden="true" />
-              Staff only — this is written to the conversation and <strong>not sent</strong> to{' '}
-              {conversation?.requester_email || 'the member'}.
-            </>
-          ) : !canReply ? (
-            'This conversation has no sender address, so it cannot be replied to. You can still add an internal note.'
-          ) : noAudience ? (
-            // Without this branch the line below renders "Sends an email to"
-            // followed by nothing, which reads as a set still being worked out.
-            'Nobody is left on this reply.'
-          ) : (
-            <>
-              Sends an email to <strong>{lockedTo.join(', ')}</strong>
-              {recipients.cc.length > 0 && <> · cc {recipients.cc.join(', ')}</>}
-              {/* Named, and named as private. Someone about to press send has
-                  to be able to see that they blind-copied three people — and
-                  that the other recipients cannot. */}
-              {recipients.bcc.length > 0 && (
-                <> · bcc {recipients.bcc.join(', ')} (hidden from everyone else)</>
-              )}
-              {conversation?.mailbox?.address && <> · replies come back to {conversation.mailbox.address}</>}
-            </>
-          )}
-        </p>
+      {/* MAIL-READER.1 — ONE toolbar row: what you can attach on the left,
+          what happens when you click on the right. It replaces two stacked
+          blocks (a full-width picker, then a paragraph-plus-button row) that
+          between them owned as much of the card as the message body did.
 
-        <Button
-          type="submit"
-          size="sm"
-          variant={isNote ? 'secondary' : 'primary'}
-          loading={sending}
-          // overCap/noAudience join filesBlockNote here as well as in
-          // handleSubmit: a button that looks live and silently does nothing is
-          // worse than a disabled one beside a sentence saying why.
-          disabled={!text.trim() || (!isNote && !canReply) || uploading || filesBlockNote || overCap || noAudience}
-          icon={isNote ? Lock : (sendLabel === 'Reply' ? Send : Users)}
-        >
-          {/* The label IS the guard rail — see the header. It states the
-              number of people before the click, never after; a file still on
-              its way up displaces it only because pressing send then would be
-              the one click that cannot do what the label says. */}
-          {isNote ? 'Add internal note' : uploading ? 'Waiting for files…' : sendLabel}
-        </Button>
+          The picker keeps its own full form and simply wraps here — it has no
+          compact variant, and inventing one would fork the size rules,
+          the wording and the failure states away from the New email composer
+          that mounts the very same component. */}
+      <div
+        data-composer-toolbar=""
+        className="mt-2 flex flex-wrap items-end justify-between gap-x-3 gap-y-1"
+      >
+        <div className="min-w-0 flex-1">
+          {/* Files ride on a reply only. In note mode the picker is gone but
+              any already-attached files stay visible in the notice above —
+              dropping them silently would be the thing this composer is most
+              careful about everywhere else. */}
+          {!isNote && canReply && (
+            <AttachmentPicker
+              scope={{ ticket_id: conversation?.id }}
+              files={files}
+              onChange={setFiles}
+              disabled={sending}
+            />
+          )}
+
+          {/* THE ONLY SENTENCES LEFT ON THE SURFACE, and they are here because
+              each one changes what the button does rather than merely
+              describing it. The note warning says the click sends nothing to
+              the member; the no-sender line says why Send is dead. The
+              emptied-audience and over-cap lines already sit above the
+              textarea, next to the box that caused them, and are not repeated.
+              Everything else about the audience is on the button itself. */}
+          {noteOrBlockedLine && (
+            <p className={`mt-2 text-[11px] ${isNote ? 'text-amber-700' : 'text-un1t-subtle'}`}>
+              {noteOrBlockedLine}
+            </p>
+          )}
+        </div>
+
+        <div className="flex shrink-0 items-center gap-2">
+          <Button
+            type="submit"
+            size="sm"
+            variant={isNote ? 'secondary' : 'primary'}
+            loading={sending}
+            // The audience sentence, verbatim, as a tooltip. It is not a
+            // shortened paraphrase: someone about to click has to be able to
+            // find out that they blind-copied three people, and where the
+            // answers will land.
+            title={audienceSummary || undefined}
+            // …and the same words for a screen reader, tied to the button so
+            // they are announced WITH it rather than orphaned somewhere in the
+            // form. A tooltip alone would have deleted the information for
+            // anyone not using a mouse.
+            aria-describedby={audienceSummary ? audienceDescriptionId : undefined}
+            // overCap/noAudience join filesBlockNote here as well as in
+            // handleSubmit: a button that looks live and silently does nothing is
+            // worse than a disabled one beside a sentence saying why.
+            disabled={!text.trim() || (!isNote && !canReply) || uploading || filesBlockNote || overCap || noAudience}
+            icon={isNote ? Lock : (sendLabel === 'Reply' ? Send : Users)}
+          >
+            {/* The label IS the guard rail — see the header. It states the
+                number of people before the click, never after; a file still on
+                its way up displaces it only because pressing send then would be
+                the one click that cannot do what the label says. */}
+            {isNote ? 'Add internal note' : uploading ? 'Waiting for files…' : sendLabel}
+          </Button>
+          {audienceSummary && (
+            <span id={audienceDescriptionId} className="sr-only">{audienceSummary}</span>
+          )}
+        </div>
       </div>
 
       {!isNote && archived && (
