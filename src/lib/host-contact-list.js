@@ -380,6 +380,9 @@ export async function fetchHostContactRows(db, hostId) {
 
   return memberships.map((m) => {
     const contact = m.contact || null
+    // HOST-EMAILS.2 — one call: `reason` is null iff emailable, and doubles
+    // as emailable_reason (why not, in the send path's own vocabulary).
+    const reason = emailabilityReason(contact, suppressedIds.has(m.contact_id), { hostConsent: m.marketing_consent === true })
     return {
       contact_id: m.contact_id,
       name: contact?.name || '',
@@ -387,9 +390,8 @@ export async function fetchHostContactRows(db, hostId) {
       source: m.source,
       created_at: m.created_at,
       marketing_consent: m.marketing_consent === true,
-      emailable: isEmailable(contact, suppressedIds.has(m.contact_id), { hostConsent: m.marketing_consent === true }),
-      // HOST-EMAILS.2 — why not, in the send path's own vocabulary (null when emailable).
-      emailable_reason: emailabilityReason(contact, suppressedIds.has(m.contact_id), { hostConsent: m.marketing_consent === true }),
+      emailable: reason === null,
+      emailable_reason: reason,
     }
   })
 }

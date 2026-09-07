@@ -44,6 +44,11 @@ function InvalidLink() {
   )
 }
 
+// A Next.js searchParams value is a string for one occurrence of a key but
+// an array for a repeated one (e.g. ?done=1&done=2) — normalise before
+// comparing so a repeated/duped query param can't dodge the done/error checks.
+const first = (v) => (Array.isArray(v) ? v[0] : v)
+
 export default async function HostUnsubscribePage(props) {
   const params = await props.params
   const sp = await props.searchParams
@@ -61,12 +66,12 @@ export default async function HostUnsubscribePage(props) {
   const db = createServerClient()
   const { data: host } = await db
     .from('event_hosts')
-    .select('id, name, postmark_stream_id')
+    .select('id, name')
     .eq('id', ids.hostId)
     .maybeSingle()
   if (!host) return <InvalidLink />
 
-  if (sp?.done === '1') {
+  if (first(sp?.done) === '1') {
     return (
       <Shell>
         <p className="text-xs font-semibold uppercase tracking-[0.3em] text-white/50">Unsubscribed</p>
@@ -86,7 +91,7 @@ export default async function HostUnsubscribePage(props) {
       <p className="mt-4 text-sm text-white/70">
         This only affects emails from {host.name}. Your other email preferences are unchanged.
       </p>
-      {sp?.error === '1' && (
+      {first(sp?.error) === '1' && (
         <p className="mt-4 text-sm text-red-300">That did not work. Please try again.</p>
       )}
       <form method="post" action={`/api/unsubscribe/host/${encodeURIComponent(params.token)}`} className="mt-6">

@@ -170,12 +170,16 @@ export function foldClickEvents(events) {
  *
  * @param {import('@supabase/supabase-js').SupabaseClient} db  service-role client
  * @param {{hostId: string, dry?: boolean, fromDate?: string, toDate?: string, sleep?: (ms:number)=>Promise<void>}} opts
- * @returns {Promise<{dry: boolean, scanned: number, matched: number, stamped: number, updated: number, skipped: number, clicks: number, errors: Array<object>}>}
+ * @returns {Promise<{dry: boolean, scanned: number, matched: number, stamped: number, updated: number, skipped: number, clicks_seen: number, clicks_written: number, errors: Array<object>}>}
  *   Never throws — a list/campaign-load failure is collected in `errors` and
- *   the summary returned so far.
+ *   the summary returned so far. `clicks_seen` counts LinkClicked events
+ *   observed in Postmark's timeline; `clicks_written` counts rows the upsert
+ *   actually inserted (from `.select('id')` — `ignoreDuplicates` returns
+ *   nothing for a skipped row), so a re-run against already-folded messages
+ *   reports clicks_seen > 0 but clicks_written: 0 rather than looking live.
  */
 export async function backfillHostCampaignEvents(db, { hostId, dry = true, fromDate, toDate, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
-  const summary = { dry, scanned: 0, matched: 0, stamped: 0, updated: 0, skipped: 0, clicks: 0, errors: [] }
+  const summary = { dry, scanned: 0, matched: 0, stamped: 0, updated: 0, skipped: 0, clicks_seen: 0, clicks_written: 0, errors: [] }
 
   // 1. Which campaigns belong to this host — scopes every message match
   // below so a stray Metadata collision can never touch another host's rows.
@@ -291,14 +295,15 @@ export async function backfillHostCampaignEvents(db, { hostId, dry = true, fromD
       }
 
       // Nothing left to learn: every timestamp column this backfill can set
-      // is already set, so no patch derived from the details call could
-      // ever change this row. Skip the (rate-limited) details call outright.
-      // HOST-EMAILS.2: a fully-learned row's historic clicks are therefore
-      // NOT collected by this path either — the one-off script (Task 10)
-      // covers that tail.
+      // is already set AND no clicks are recorded, so no patch derived from
+      // the details call could ever change this row and there are no click
+      // rows to collect. Skip the (rate-limited) details call outright.
+      // HOST-EMAILS.2: a row WITH recorded clicks still needs the details
+      // call even when fully stamped, to fold its click rows — the unique
+      // index on host_campaign_clicks keeps a re-run idempotent.
       const nothingLeftToLearn =
         row.postmark_message_id && row.delivered_at && row.opened_at && row.clicked_at &&
-        (row.bounced_at || row.complained_at || row.unsubscribed_at)
+        (row.bounced_at || row.complained_at || row.unsubscribed_at) && row.click_count === 0
       if (nothingLeftToLearn) continue
 
       const { details, error: detailsError } = await getOutboundMessageDetails(message.MessageID)
@@ -353,17 +358,20 @@ export async function backfillHostCampaignEvents(db, { hostId, dry = true, fromD
       // Best effort: a failed insert is logged as an error but does not
       // abort the run.
       if (clicks.length) {
-        summary.clicks += clicks.length
+        summary.clicks_seen += clicks.length
         if (!dry) {
-          const { error: clickErr } = await db
+          const { data: clickRows, error: clickErr } = await db
             .from('host_campaign_clicks')
             .upsert(clicks.map((c) => ({
               host_id: hostId, campaign_id: row.campaign_id, send_id: row.id, contact_id: row.contact_id,
               url: c.url, clicked_at: c.at, postmark_message_id: message.MessageID,
             })), { onConflict: 'send_id,url,clicked_at', ignoreDuplicates: true })
+            .select('id')
           if (clickErr) {
             logWarn('host-campaign-backfill', 'failed to write click rows', { row_id: row.id, error: clickErr })
             summary.errors.push({ message_id: message.MessageID, error: clickErr })
+          } else {
+            summary.clicks_written += clickRows?.length ?? 0
           }
         }
       }

@@ -65,7 +65,7 @@ export async function POST(request, props) {
   logInfo('host-campaign-backfill', dry ? 'backfill preview' : 'backfill run', {
     host_id: host.id, dry, from: fromDate, to: toDate, user_id: g.user.id,
     scanned: summary.scanned, matched: summary.matched, stamped: summary.stamped,
-    updated: summary.updated, skipped: summary.skipped, clicks: summary.clicks, errors: summary.errors.length,
+    updated: summary.updated, skipped: summary.skipped, clicks_seen: summary.clicks_seen, clicks_written: summary.clicks_written, errors: summary.errors.length,
   })
   return NextResponse.json({ success: true, data: summary })
 }

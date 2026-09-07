@@ -138,7 +138,7 @@ describe('backfillHostCampaignEvents', () => {
     listOutboundMessages.mockResolvedValueOnce({ total: 1, messages: [msg('m1')], error: null })
     const { db, statements } = makeDb(routeFor({ rows: [row('s1')] }))
     const r = await backfillHostCampaignEvents(db, { hostId: 'h-1', dry: true, fromDate: '2026-07-23', toDate: '2026-09-07', sleep: async () => {} })
-    expect(r).toEqual({ dry: true, scanned: 1, matched: 1, stamped: 1, updated: 1, skipped: 0, clicks: 0, errors: [] })
+    expect(r).toEqual({ dry: true, scanned: 1, matched: 1, stamped: 1, updated: 1, skipped: 0, clicks_seen: 0, clicks_written: 0, errors: [] })
     expect(statements.some((s) => s.table === 'host_campaign_sends' && op(s, 'update'))).toBe(false)
     expect(listOutboundMessages).toHaveBeenCalledWith({ tag: 'host-campaign', fromDate: '2026-07-23', toDate: '2026-09-07', count: 500, offset: 0 })
   })
@@ -169,15 +169,20 @@ describe('backfillHostCampaignEvents', () => {
       },
       error: null,
     })
-    const { db, statements } = makeDb(routeFor({ rows: [row('s1')] }))
+    const baseRoute = routeFor({ rows: [row('s1')] })
+    const { db, statements } = makeDb((state) => {
+      if (state.table === 'host_campaign_clicks') return { data: [{ id: 'cl-1' }, { id: 'cl-2' }], error: null }
+      return baseRoute(state)
+    })
     const r = await backfillHostCampaignEvents(db, { hostId: 'h-1', dry: false, sleep: async () => {} })
-    expect(r.clicks).toBe(2)
+    expect(r).toMatchObject({ clicks_seen: 2, clicks_written: 2 })
     const clickIns = statements.find((s) => s.table === 'host_campaign_clicks')
     expect(op(clickIns, 'upsert').args[0]).toEqual([
       { host_id: 'h-1', campaign_id: 'hc-1', send_id: 's1', contact_id: 'c-1', url: 'https://a', clicked_at: 'c1', postmark_message_id: 'm1' },
       { host_id: 'h-1', campaign_id: 'hc-1', send_id: 's1', contact_id: 'c-1', url: 'https://b', clicked_at: 'c2', postmark_message_id: 'm1' },
     ])
     expect(op(clickIns, 'upsert').args[1]).toEqual({ onConflict: 'send_id,url,clicked_at', ignoreDuplicates: true })
+    expect(op(clickIns, 'select')).toEqual({ method: 'select', args: ['id'] })
   })
 
   it('dry run: counts clicks but writes no host_campaign_clicks row', async () => {
@@ -193,7 +198,7 @@ describe('backfillHostCampaignEvents', () => {
     })
     const { db, statements } = makeDb(routeFor({ rows: [row('s1')] }))
     const r = await backfillHostCampaignEvents(db, { hostId: 'h-1', dry: true, sleep: async () => {} })
-    expect(r.clicks).toBe(2)
+    expect(r).toMatchObject({ clicks_seen: 2, clicks_written: 0 })
     expect(statements.some((s) => s.table === 'host_campaign_clicks')).toBe(false)
   })
 

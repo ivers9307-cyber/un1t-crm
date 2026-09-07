@@ -243,7 +243,7 @@ export default function HostEmailReport({ campaignId }) {
         if (!res.ok || !json.success) { setState('error'); return }
         setCampaign(json.data?.campaign || null)
         setRecipients(Array.isArray(json.data?.recipients) ? json.data.recipients : [])
-        setLinks(json.data?.links || [])
+        setLinks(Array.isArray(json.data?.links) ? json.data.links : [])
         setState('ready')
       } catch {
         if (!cancelled) setState('error')

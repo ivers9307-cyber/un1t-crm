@@ -43,6 +43,11 @@
 //
 // Contract mirrors processPostmarkEvent: {ok:true} = processed, {ok:false,error}
 // = leave the queue row unprocessed so it retries (bounded by MAX_ATTEMPTS).
+//
+// HOST-EMAILS.2 — a redelivered Click event bumps click_count again (it has
+// no dedup, unlike opened_at above) while host_campaign_clicks dedupes on
+// (send_id, url, clicked_at), so the Clicks tile can read higher than the
+// row count in the report's Links table.
 
 import { revokeHostConsent } from './host-consent.js'
 import { bounceTypeFrom } from './host-campaign-outcome.js'

@@ -54,6 +54,10 @@ export async function POST(request, props) {
   }
   const origin = getRequestOrigin(request)
   const pageUrl = (qs) => `${origin}/unsubscribe/host/${encodeURIComponent(params.token)}${qs}`
+  // Every failure path answers the same way: a browser confirm-post gets
+  // bounced back to the landing page's error state, a provider POST gets
+  // the JSON error it already expects. One place decides which.
+  const fail = (json) => (wantsRedirect ? NextResponse.redirect(pageUrl('?error=1'), 303) : json)
 
   let ids = null
   try {
@@ -64,8 +68,7 @@ export async function POST(request, props) {
   if (!ids) {
     const limit = await checkRateLimit(db, `host-unsub-invalid:${ip}`, INVALID_TOKEN_BUDGET)
     if (!limit.allowed) return rateLimitResponse(limit)
-    if (wantsRedirect) return NextResponse.redirect(pageUrl('?error=1'), 303)
-    return NextResponse.json({ success: false, error: 'Invalid token' }, { status: 404 })
+    return fail(NextResponse.json({ success: false, error: 'Invalid token' }, { status: 404 }))
   }
 
   const { data: host } = await db
@@ -74,8 +77,7 @@ export async function POST(request, props) {
     .eq('id', ids.hostId)
     .maybeSingle()
   if (!host) {
-    if (wantsRedirect) return NextResponse.redirect(pageUrl('?error=1'), 303)
-    return NextResponse.json({ success: false, error: 'Invalid token' }, { status: 404 })
+    return fail(NextResponse.json({ success: false, error: 'Invalid token' }, { status: 404 }))
   }
 
   const result = await revokeHostConsent(db, {
@@ -88,13 +90,11 @@ export async function POST(request, props) {
       // FK violation: the contact was erased since the mail went out. There is
       // nobody left to unsubscribe — answer like any other dead token so the
       // provider stops retrying.
-      if (wantsRedirect) return NextResponse.redirect(pageUrl('?error=1'), 303)
-      return NextResponse.json({ success: false, error: 'Invalid token' }, { status: 404 })
+      return fail(NextResponse.json({ success: false, error: 'Invalid token' }, { status: 404 }))
     }
     // The person pressed the button; do not report success on a failed write.
     logError('host-unsubscribe', 'one-click revoke failed', { err: result.error, host_id: host.id })
-    if (wantsRedirect) return NextResponse.redirect(pageUrl('?error=1'), 303)
-    return NextResponse.json({ success: false, error: 'Could not unsubscribe, please try again.' }, { status: 500 })
+    return fail(NextResponse.json({ success: false, error: 'Could not unsubscribe, please try again.' }, { status: 500 }))
   }
 
   // Pushed on every click, not only when the row flipped: the consent-drift
