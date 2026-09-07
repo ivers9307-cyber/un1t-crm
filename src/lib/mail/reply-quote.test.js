@@ -129,7 +129,7 @@ describe('buildReplyText', () => {
   it('lays out words, signature, attribution, quote', () => {
     const text = buildReplyText({ signedText: 'test test 3\n\n-- \nJordan', anchor: inbound, conversation, mailbox })
     expect(text).toBe(
-      'test test 3\n\n-- \nRichard\n\n'
+      'test test 3\n\n-- \nJordan\n\n'
       + 'On Mon 7 Sep 2026 at 13:34, Jordan Sample <Jordan@example.test> wrote:\n'
       + '> Test test 2\n>> test',
     )

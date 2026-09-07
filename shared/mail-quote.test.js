@@ -52,7 +52,7 @@ describe('splitQuotedText', () => {
   })
 
   it('keeps the signature in the body when a quote follows it', () => {
-    const text = 'Thanks\n\n-- \nRichard\n\nOn Mon 7 Sep 2026 at 13:34, A <a@b.c> wrote:\n> hi'
+    const text = 'Thanks\n\n-- \nJordan\n\nOn Mon 7 Sep 2026 at 13:34, A <a@b.c> wrote:\n> hi'
     expect(splitQuotedText(text).body).toBe('Thanks\n\n-- \nJordan')
   })
 
