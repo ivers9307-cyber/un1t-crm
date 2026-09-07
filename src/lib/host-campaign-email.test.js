@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { parse } from 'parse5'
+import { JSDOM } from 'jsdom'
 import {
   sanitizeCampaignHtml,
   renderHostCampaignHtml,
@@ -1336,9 +1337,269 @@ describe('renderHostCampaignHtml — the `sanitized` flag (send-queue hoist)', (
     expect(viaFlag).not.toContain('steal()')
   })
 
+  it('the two paths agree even when the doctype only APPEARS after sanitizing (round-5)', () => {
+    // The branch used to be chosen by sniffing the RAW body, and the queue
+    // hands in an already-sanitized one — so the same campaign could take
+    // DIFFERENT branches on the two paths. Here the doctype sits past the
+    // 500-char sniff window behind a <script> block: the composer preview and
+    // the test send saw "not a document" and rendered the branded shell, the
+    // queue saw the sanitized body (script gone, doctype first) and sent the
+    // bare document. The host approved one email and the list got another.
+    // The renderer now sanitizes FIRST and sniffs the sanitized text, so the
+    // input to the sniff is identical on both paths.
+    const bodyHtml = '<script>' + 'A'.repeat(600) + '</script><!DOCTYPE html><html><body><p>Hi</p></body></html>'
+    const viaRender = renderHostCampaignHtml({ host, subject: 's', bodyHtml, unsubscribeUrl: UNSUB })
+    const viaFlag = renderHostCampaignHtml({ host, subject: 's', bodyHtml: sanitizeCampaignHtml(bodyHtml), sanitized: true, unsubscribeUrl: UNSUB })
+    expect(viaFlag).toBe(viaRender)
+    // …and BOTH take the full-document branch, because that is what the body
+    // sanitizes down to.
+    expect(viaRender.startsWith('<!DOCTYPE html><html><body><p>Hi</p>')).toBe(true)
+    expect(viaRender).toContain('Unsubscribe')
+    expect(viaRender).not.toContain('AAAA')
+  })
+
   it('the footer is injected even when the caller pre-sanitized', () => {
     const html = renderHostCampaignHtml({ host, subject: 's', bodyHtml: sanitizeCampaignHtml('<p>hi</p><plaintext>'), sanitized: true, unsubscribeUrl: UNSUB })
     expect(html).toContain('Unsubscribe')
     expect(html).not.toMatch(/<plaintext/i)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// ROUND-5 SECURITY REVIEW — three findings, three describes.
+//
+// 1. every pass of the sanitizer is LINEAR (it was quadratic, and a host could
+//    buy 94 seconds of server CPU with one 300 KB preview);
+// 2. an UNTERMINATED tag survives verbatim and the injected footer supplies
+//    its `>`, which puts the unsubscribe anchor inside a <script> text node;
+// 3. the comment rules mishandled a `<!--` inside a quoted attribute value and
+//    the two abrupt-closing comment forms.
+// ---------------------------------------------------------------------------
+
+describe('sanitizeCampaignHtml — one pass is LINEAR (round-5 DoS)', () => {
+  // /api/host/emails/preview caps a body at 300,000 characters, so these are
+  // the worst inputs an authenticated host can actually post.
+  //
+  // THE BOUND IS DELIBERATELY LOOSE. Every case below runs in 5-55 ms on a
+  // 2024 laptop; the assertion is 1,500 ms, roughly 30x the slowest, because a
+  // shared CI runner under load is not a benchmark and a flaky timing test
+  // gets deleted rather than fixed. What it has to catch is the QUADRATIC —
+  // the same inputs measured 8.4s, 6.8s, 4.6s and 94s before the tokenizer —
+  // and two orders of magnitude of headroom still catches that.
+  const CAP = 300_000
+  const BUDGET_MS = 1500
+  const fill = (unit) => unit.repeat(Math.ceil(CAP / unit.length)).slice(0, CAP)
+  const msFor = (html) => {
+    const started = performance.now()
+    sanitizeCampaignHtml(html)
+    return performance.now() - started
+  }
+
+  // Ten inner passes in ONE outer round: each `<sc…ript>` layer only becomes a
+  // real tag once the layer inside it is deleted, so the fixed point has to
+  // re-scan the whole document ten times. Quadratic x 10 was the 94s case.
+  const chainPrefix = (() => {
+    let c = '<script>'
+    for (let i = 0; i < 9; i++) c = '<sc' + c + 'ript>'
+    return c
+  })()
+  // Multiple OUTER rounds: every unit strands a <style> placeholder inside an
+  // open tag, the drop welds `onerror=` back together, and the next round has
+  // to strip it.
+  const weldUnit = '<img src=x on<style>a{color:red}</style>error=alert(1)>'
+
+  const CASES = [
+    ['many <script openers, no `>` anywhere (8.4s before)', fill('<script ')],
+    ['many <script> openers, no closer (1.7s before)', fill('<script>')],
+    ['many <style> openers, no closer', fill('<style>')],
+    ['many openers sharing ONE far `>` (4.6s before)', '<meta x'.repeat(42_000) + '>'],
+    ['many conditional openers sharing ONE `-->`', '<!--[if mso]>'.repeat(23_000) + '-->'],
+    ['many <svg openers (6.8s before)', fill('<svg ')],
+    ['ten inner passes, then a <script tail (94s before)', chainPrefix + '<script '.repeat(Math.floor((CAP - chainPrefix.length) / 8))],
+    ['a placeholder-drop weld chain (multiple OUTER rounds)', weldUnit.repeat(Math.floor(CAP / weldUnit.length))],
+    ['many openers, one far `>`, quotes never opened', '<a x'.repeat(75_000) + '>'],
+    ['many unclosed quoted values', '<a q="'.repeat(50_000)],
+    ['many comment openers', '<!-- '.repeat(60_000)],
+    ['300 KB of perfectly ordinary tags', '<td a=1>'.repeat(37_500)],
+  ]
+
+  for (const [name, html] of CASES) {
+    it(`${name} — under ${BUDGET_MS}ms`, () => {
+      expect(msFor(html)).toBeLessThan(BUDGET_MS)
+    })
+  }
+
+  it('a closer shared by N openers is searched for ONCE, not N times', () => {
+    // The absolute bounds above cannot see this one on their own: with the
+    // closer memo removed, 23,000 conditional openers sharing a single `-->`
+    // cost 615ms against 9ms — 65x worse, and still inside a bound loose
+    // enough not to flake on CI. The SHAPE gives it away instead: quadratic
+    // work QUADRUPLES when the input doubles, and a ratio compares two
+    // measurements on the same machine, so a slow runner moves both.
+    const unit = '<!--[if mso]>'
+    const best = (n) => {
+      const html = unit.repeat(Math.floor(n / unit.length)) + '-->'
+      let ms = Infinity
+      for (let i = 0; i < 3; i++) ms = Math.min(ms, msFor(html))
+      return Math.max(ms, 0.05) // never divide by a zero-length measurement
+    }
+    best(75_000) // warm the JIT before either measurement counts
+    const small = best(75_000)
+    const big = best(300_000)
+    // 4x the input: linear costs about 4x, quadratic about 16x.
+    expect(big / small).toBeLessThan(8)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// An UNTERMINATED open tag used to survive VERBATIM: `<p>hi</p><script `
+// sanitized to itself, and the render shell then handed it the `>` out of the
+// server-injected footer. The host name, the unsubscribe anchor and the
+// consent line all ended up inside a <script> text node — present in the
+// source, absent from the DOM, which is why these parse instead of grepping.
+//
+// The nine traps in the describe above this one are all TERMINATED
+// (`'<script>'`, not `'<script '`), which is exactly why the suite was green.
+// ---------------------------------------------------------------------------
+describe('renderHostCampaignHtml — an UNTERMINATED tag cannot eat the footer (round-5)', () => {
+  const UNSUB = 'https://crm.test/unsubscribe/host/tok.sig'
+  const host = { name: 'Acme Events', sender_name: 'Acme Team' }
+
+  function hasLiveUnsubLink(html, href = UNSUB) {
+    const walk = (node) => {
+      if (node.tagName === 'a' && (node.attrs || []).some((a) => a.name === 'href' && a.value === href)) return true
+      for (const child of node.childNodes || []) if (walk(child)) return true
+      return false
+    }
+    return walk(parse(html))
+  }
+  const shellOf = (bodyHtml) => renderHostCampaignHtml({ host, subject: 's', bodyHtml, unsubscribeUrl: UNSUB })
+  const docOf = (bodyHtml) => renderHostCampaignHtml({
+    host, subject: 's', bodyHtml: `<!DOCTYPE html><html><body><p>hi</p>${bodyHtml}</body></html>`, unsubscribeUrl: UNSUB,
+  })
+
+  it('the detector still says NO when the footer really is swallowed', () => {
+    // Negative control: without it every green assertion below proves nothing.
+    const swallowed = `<html><body><p>hi</p><script <a href="${UNSUB}">Unsubscribe</a></body></html>`
+    expect(hasLiveUnsubLink(swallowed)).toBe(false)
+    expect(swallowed).toContain('Unsubscribe') // …which a substring test accepts
+  })
+
+  // Every construct that opens a "stop parsing markup" mode, left UNTERMINATED
+  // — no `>` at all, so the next `>` in the document is the footer's.
+  const UNTERMINATED = [
+    '<script ', '<script/', '<style ', '<style x', '<title ', '<title x="y',
+    '<textarea ', '<plaintext ', '<xmp ', '<noframes ', '<noscript ', '<iframe ', '<template ',
+  ]
+
+  for (const trap of UNTERMINATED) {
+    it(`shell path — a body ending in ${JSON.stringify(trap)} still ships a live unsubscribe link`, () => {
+      expect(hasLiveUnsubLink(shellOf(`<p>hi</p>${trap}`))).toBe(true)
+    })
+    it(`full-document path — a body ending in ${JSON.stringify(trap)} still ships a live unsubscribe link`, () => {
+      expect(hasLiveUnsubLink(docOf(trap))).toBe(true)
+    })
+  }
+
+  it('jsdom agrees with parse5 on the <script case, both paths', () => {
+    // Two independent parsers, because the bug is "the source says
+    // Unsubscribe and the DOM has no anchor" and one parser could be wrong.
+    for (const html of [shellOf('<p>hi</p><script '), docOf('<script ')]) {
+      const { window } = new JSDOM(html)
+      expect(window.document.querySelector(`a[href="${UNSUB}"]`)).not.toBeNull()
+      expect(html).toContain('Unsubscribe')
+    }
+  })
+
+  it('an unclosed <select> does not delete the anchor (parse5 "in select" mode)', () => {
+    // Nothing here is unterminated — `<select>` is a perfectly well-formed
+    // tag. It is the INSERTION MODE that kills the footer: parse5 and every
+    // browser ignore an `<a>` while "in select", so the anchor vanished from
+    // the document with the source untouched. select/option/optgroup are on
+    // the strip list for that.
+    expect(hasLiveUnsubLink(docOf('<select><option>Pick one'))).toBe(true)
+    expect(hasLiveUnsubLink(shellOf('<p>hi</p><select><option>Pick one'))).toBe(true)
+    expect(sanitizeCampaignHtml('<p>hi</p><select><option>a</option>')).toBe('<p>hi</p>a')
+  })
+
+  it('an UNTERMINATED QUOTED VALUE is dropped like an unterminated tag', () => {
+    // The fuzz found this one, and no hand-written case in this file reached
+    // it: `='` opens an attribute value that never closes, so a browser runs
+    // to EOF inside the tag and DROPS it — while the sanitizer kept it, and
+    // the footer (appended in the shell, injected before `</body>` in the
+    // document) landed inside that open quote. Both paths lost the anchor.
+    const body = `<img src=x ='"<!--[if mso]><!--<!--[if mso]>`
+    expect(sanitizeCampaignHtml(body)).toBe('')
+    expect(hasLiveUnsubLink(shellOf(body))).toBe(true)
+    expect(hasLiveUnsubLink(docOf(body))).toBe(true)
+    // The plain shape, pinned directly: the tag goes, the host's real content
+    // before it stays.
+    expect(sanitizeCampaignHtml("<p>hi</p><a title='x")).toBe('<p>hi</p>')
+    expect(sanitizeCampaignHtml('<p>hi</p><a title="x')).toBe('<p>hi</p>')
+    expect(sanitizeCampaignHtml('<p>hi</p><b c=d')).toBe('<p>hi</p>')
+  })
+
+  it('a partial tag keeps its attributes SCRUBBED, not as authored', () => {
+    // `<a href=javascript:<p>` is a tag cut short by the `<p`; a browser reads
+    // its href as `javascript:<p`, so leaving the partial as authored shipped
+    // a live javascript: link. (Also found by the fuzz.)
+    const out = sanitizeCampaignHtml('<a href=javascript:<p>KEEPME</p>')
+    expect(out).not.toMatch(/javascript:/i)
+    expect(out).toContain('href="#"')
+    expect(out).toContain('KEEPME')
+  })
+
+  it('a `"` inside an UNQUOTED attribute value does not open a quoted value', () => {
+    // `<a href=alert(1)="…>` — the second `=` and the `"` are ordinary
+    // characters inside an unquoted value, so the tag ends at its `>`. Reading
+    // them as opening a quoted value ran the scan past that `>` and left a tag
+    // with an unbalanced quote for the footer to fall into.
+    const out = sanitizeCampaignHtml('<a href=x="y" title=z>keep</a>')
+    expect(out).toContain('keep')
+    expect(out).toContain('title=z')
+  })
+
+  it('an ordinary body still ships one (the baseline the traps are measured against)', () => {
+    expect(hasLiveUnsubLink(shellOf('<p>hi</p>'))).toBe(true)
+    expect(hasLiveUnsubLink(docOf('<p>bye</p>'))).toBe(true)
+  })
+})
+
+describe('sanitizeCampaignHtml — comment openers come from the tokenizer walk (round-5)', () => {
+  it('a `<!--` inside a QUOTED attribute value is literal text, not a comment opener', () => {
+    // The raw `lastIndexOf('<!--')` saw a dangling comment here and deleted
+    // the rest of the message. To a browser that `<!--` is part of the title
+    // value and nothing after it is inside a comment.
+    const html = '<a href="/x" title="a<!--b">Link</a><p>KEEPME</p>'
+    expect(sanitizeCampaignHtml(html)).toBe(html)
+  })
+
+  it('`<!-->` and `<!--->` are COMPLETE comments (abrupt closing), not danglers', () => {
+    // Per the tokenizer's comment-start / comment-start-dash states, both of
+    // these close immediately. The old rule treated them as unterminated and
+    // tail-deleted everything after them.
+    expect(sanitizeCampaignHtml('<p>a</p><!--><p>KEEPME</p>')).toBe('<p>a</p><!--><p>KEEPME</p>')
+    expect(sanitizeCampaignHtml('<p>a</p><!---><p>KEEPME</p>')).toBe('<p>a</p><!---><p>KEEPME</p>')
+  })
+
+  it('a conditional opener with NO closer is still tail-deleted, and that is CORRECT', () => {
+    // Not a fidelity bug to be fixed later: `<!--[if mso]` with no `-->` after
+    // it is an UNTERMINATED COMMENT in every client that is not Outlook, so
+    // everything after it — including the footer the send path exists to
+    // guarantee — would be swallowed there. Pinned so it is not "fixed".
+    expect(sanitizeCampaignHtml('<!--[if mso]<style>evil{x:y}</style>')).toBe('')
+    // …while the properly closed form keeps its Outlook stylesheet.
+    expect(sanitizeCampaignHtml('<!--[if mso]><style>.a{color:red}</style><![endif]--><p>x</p>'))
+      .toContain('<style>.a{color:red}</style>')
+  })
+
+  it('a balanced comment survives, and its contents are still stripped', () => {
+    expect(sanitizeCampaignHtml('<p>a</p><!-- x --><p>b</p>')).toBe('<p>a</p><!-- x --><p>b</p>')
+    expect(sanitizeCampaignHtml('<!-- draft <script>evil()</script> --><p>x</p>')).toBe('<!-- draft  --><p>x</p>')
+  })
+
+  it('a genuinely dangling comment is still tail-deleted', () => {
+    expect(sanitizeCampaignHtml('<p>Sale!</p><!--')).toBe('<p>Sale!</p>')
+    expect(sanitizeCampaignHtml('<p>Sale!</p><!-- half a thought')).toBe('<p>Sale!</p>')
   })
 })

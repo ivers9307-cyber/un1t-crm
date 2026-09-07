@@ -443,6 +443,22 @@ describe('pathological CSS cannot burn CPU', () => {
     expect(out).not.toContain('behavior')
   })
 
+  it('survives many unclosed comment openers, which used to re-scan the chunk', () => {
+    // `/*a` repeated has no `*\/` anywhere, so the old lazy regex scanned to
+    // the end of the chunk from EVERY opener: 433 ms per 99k chunk, 2.4 s
+    // across a document's CSS budget. 99k keeps it under CSS_CHUNK_MAX_CHARS
+    // so the scrubber genuinely runs rather than the cap answering.
+    const css = '/*a'.repeat(33_000)
+    expect(css.length).toBeLessThan(100_000)
+    const payload = `<style>${css}</style>`
+    expect(timed(() => sanitizeEmailHtml(payload))).toBeLessThan(BUDGET_MS)
+    // Semantics unchanged: an opener with no closer stays, a balanced one goes,
+    // and `/*\/` does not close itself.
+    expect(clean('<style>.a{color:red}/* x */.b{color:blue}/*c</style>')).toContain('.a{color:red}.b{color:blue}/*c')
+    expect(clean('<style>/*/.a{color:red}*/.b{color:blue}</style>')).toContain('.b{color:blue}')
+    expect(clean('<style>/*/.a{color:red}*/.b{color:blue}</style>')).not.toContain('.a{color:red}')
+  })
+
   it('drops CSS past the per-message budget rather than processing it', () => {
     // Belt and braces behind the linear scrub: a bound that exists cannot be
     // a denial of service, whatever a future edit does to the scrubber.

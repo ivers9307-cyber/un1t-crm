@@ -308,6 +308,29 @@ const CSS_TOTAL_MAX_CHARS = 250_000
  * a tag out of it. CSS needs neither character.
  */
 /**
+ * Linear CSS comment strip, equivalent to `/\/\*[\s\S]*?\*\//g`: a comment runs
+ * from `/*` to the first `*\/` that starts at least two characters later, and
+ * an opener with no closer is left in place (the regex would not match it
+ * either). The regex was quadratic in exactly that no-closer case: every
+ * opener re-scanned to the end of the chunk looking for a `*\/` that was not
+ * there (433 ms per 99 KB chunk, 2.4 s across a document's budget). Here the
+ * first failed search ends the walk, so each character is visited once.
+ */
+function stripCssComments(css) {
+  let out = ''
+  let pos = 0
+  for (;;) {
+    const open = css.indexOf('/*', pos)
+    if (open === -1) break
+    const close = css.indexOf('*/', open + 2)
+    if (close === -1) break
+    out += css.slice(pos, open)
+    pos = close + 2
+  }
+  return out + css.slice(pos)
+}
+
+/**
  * HOST-EMAILS.2 — exported for the host campaign sanitizer, which keeps
  * <style> blocks. `counter` is `{ cssChars: 0 }` per document (the total
  * budget below is per document). Output never contains `<` or `>`.
@@ -318,8 +341,7 @@ export function scrubCss(css, counter) {
   if (counter.cssChars + input.length > CSS_TOTAL_MAX_CHARS) return ''
   counter.cssChars += input.length
 
-  const stripped = input
-    .replace(/\/\*[\s\S]*?\*\//g, '')
+  const stripped = stripCssComments(input)
     .replace(/\\/g, '')
     .replace(/@import[^;{}]*;?/gi, '')
   return parkCssUrls(dropExecutableDeclarations(stripped), counter)
