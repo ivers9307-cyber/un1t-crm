@@ -22,8 +22,9 @@
 // `bg-<c>-500/15 text-<c>-300`; host paths are exempt from the light-theme
 // -700 chip rule.
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import {
   nextQuarterHour, isoToDublinInputs, dublinLocalToIso, dublinScheduleLabel, scheduleErrorCopy, TIME_OPTIONS,
 } from '@/lib/host-schedule-time'
@@ -64,7 +65,22 @@ export function rowSubline(c) {
       ? `Not sent. ${scheduleErrorCopy(c.schedule_error)}. Schedule it again or send it now.`
       : 'Not sent yet'
   }
+  if (c.status === 'sending' && c.paused_reason) return `Paused. ${scheduleErrorCopy(c.paused_reason)}. Ask UN1T.`
   return statsLine(c.stats) || `${c.sent_count || 0}/${c.recipient_count ?? '—'} sent`
+}
+
+/** HOST-EMAILS.2 — fixed audience line for a reminder draft; '' otherwise. */
+export function audienceSummary(c, campaignsById) {
+  if (c?.audience_kind !== 'non_openers') return ''
+  const parent = campaignsById?.get(c.audience_campaign_id)
+  return parent?.subject ? `People who didn't open '${parent.subject}'` : "People who didn't open the original email"
+}
+
+/** The Send confirm text, per audience kind. */
+export function sendConfirmCopy(c, audienceLabelText, campaignsById) {
+  const typeNote = c?.email_type === 'utility' ? ' as a UTILITY email (reaches attendees regardless of marketing opt-in)' : ''
+  if (c?.audience_kind === 'non_openers') return `Send this email to ${audienceSummary(c, campaignsById).replace(/^People/, 'people')}${typeNote}?`
+  return `Send this email to ${audienceLabelText}${typeNote}?`
 }
 
 /**
@@ -119,6 +135,18 @@ export default function HostEmails() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const editorInited = useRef(false)
+  // HOST-EMAILS.2 — reminder-draft audience, "designed draft waits for the
+  // designer" state, preview-as-sent modal, and delete/duplicate row state.
+  const [audienceCampaignId, setAudienceCampaignId] = useState(null) // parent id when editing a reminder draft, else null
+  const pendingDesignRef = useRef(null)
+  const [designerNotice, setDesignerNotice] = useState('') // '' | 'loading' | 'failed'
+  const [designDropped, setDesignDropped] = useState(false)
+  const [preview, setPreview] = useState(null) // { html, width } or null
+  const [previewBusy, setPreviewBusy] = useState(false)
+  const [rowBusyId, setRowBusyId] = useState(null) // delete/duplicate in flight
+  const searchParams = useSearchParams()
+
+  const campaignsById = useMemo(() => new Map((campaigns || []).map((c) => [c.id, c])), [campaigns])
 
   const load = useCallback(async () => {
     try {
@@ -140,6 +168,12 @@ export default function HostEmails() {
       .catch(() => {})
   }, [])
 
+  // HOST-EMAILS.2 — the reminder report page navigates here after creating
+  // a non-openers draft.
+  useEffect(() => {
+    if (searchParams?.get('notice') === 'reminder') setNotice('Reminder draft created. Edit it, test it, then send or schedule.')
+  }, [searchParams])
+
   // Load the Unlayer embed script once; fall back to plain text if it never
   // arrives (blocked network, script error) so the host can always write.
   useEffect(() => {
@@ -148,7 +182,7 @@ export default function HostEmails() {
     const existing = document.querySelector(`script[src="${UNLAYER_SRC}"]`)
     const script = existing || document.createElement('script')
     const onLoad = () => setUnlayerReady(true)
-    const onError = () => setMode('text')
+    const onError = () => { setDesignerNotice('failed'); if (!pendingDesignRef.current) setMode('text') }
     script.addEventListener('load', onLoad)
     script.addEventListener('error', onError)
     if (!existing) {
@@ -182,6 +216,20 @@ export default function HostEmails() {
       ],
     })
     editorInited.current = true
+    if (pendingDesignRef.current) {
+      try { window.unlayer.loadDesign(pendingDesignRef.current) } catch { /* stale design doc */ }
+      pendingDesignRef.current = null
+      setDesignerNotice('')
+    }
+  }, [unlayerReady, mode])
+
+  // The editor may already be initialised (from an earlier draft) by the
+  // time a new draft with a pending design is opened — load it then too.
+  useEffect(() => {
+    if (!unlayerReady || !editorInited.current || !window.unlayer || !pendingDesignRef.current) return
+    try { window.unlayer.loadDesign(pendingDesignRef.current) } catch { /* stale design doc */ }
+    pendingDesignRef.current = null
+    setDesignerNotice('')
   }, [unlayerReady, mode])
 
   function exportDesign() {
@@ -201,12 +249,27 @@ export default function HostEmails() {
     setAudienceEventId('')
     setEmailType('marketing')
     setEditingId(null)
+    pendingDesignRef.current = null
+    setDesignerNotice('')
+    setDesignDropped(false)
+    setAudienceCampaignId(null)
     if (editorInited.current && window.unlayer) {
       try {
         if (typeof window.unlayer.loadBlankTemplate === 'function') window.unlayer.loadBlankTemplate()
         else window.unlayer.loadDesign({ body: { rows: [] } })
       } catch { /* leave whatever design is showing */ }
     }
+  }
+
+  // HOST-EMAILS.2 — deliberately drop a loaded/pending design and switch to
+  // plain text. "Edit as text instead" is the only way in: a designed draft
+  // always opens in design mode (Step 3f below).
+  function dropDesign() {
+    if (!window.confirm('This drops the saved design and keeps only the HTML.')) return
+    pendingDesignRef.current = null
+    setDesignerNotice('')
+    setDesignDropped(true)
+    setMode('text')
   }
 
   async function editDraft(id) {
@@ -225,9 +288,22 @@ export default function HostEmails() {
       setSubject(c.subject || '')
       setAudienceEventId(c.audience_kind === 'mailing_list' ? '__mailing_list__' : (c.audience_event_id || ''))
       setEmailType(c.email_type === 'utility' ? 'utility' : 'marketing')
-      if (c.design_json && unlayerReady && window.unlayer) {
+      setAudienceCampaignId(c.audience_kind === 'non_openers' ? c.audience_campaign_id || null : null)
+      setDesignDropped(false)
+      if (c.design_json) {
+        // HOST-EMAILS.2 — a designed draft ALWAYS opens in design mode. If the
+        // designer is not up yet the design waits in pendingDesignRef and
+        // loads the moment the editor initialises; text mode is only ever
+        // reached through "Edit as text instead".
         setMode('design')
-        try { window.unlayer.loadDesign(c.design_json) } catch { /* stale design doc — editor keeps its current state */ }
+        setTextBody(c.body_html || '')
+        if (editorInited.current && window.unlayer) {
+          try { window.unlayer.loadDesign(c.design_json) } catch { /* stale design doc */ }
+          setDesignerNotice('')
+        } else {
+          pendingDesignRef.current = c.design_json
+          setDesignerNotice(designerNotice === 'failed' ? 'failed' : 'loading')
+        }
       } else {
         setMode('text')
         setTextBody(c.body_html || '')
@@ -261,8 +337,9 @@ export default function HostEmails() {
         subject,
         body,
         design_json: designJson,
-        audience_kind: audienceEventId === '__mailing_list__' ? 'mailing_list' : (audienceEventId ? 'event' : 'all'),
-        audience_event_id: audienceEventId && audienceEventId !== '__mailing_list__' ? audienceEventId : null,
+        audience_kind: audienceCampaignId ? 'non_openers' : (audienceEventId === '__mailing_list__' ? 'mailing_list' : (audienceEventId ? 'event' : 'all')),
+        audience_event_id: audienceCampaignId ? null : (audienceEventId && audienceEventId !== '__mailing_list__' ? audienceEventId : null),
+        audience_campaign_id: audienceCampaignId,
         email_type: emailType,
       }
       const res = await fetch(editingId ? `/api/host/emails/${editingId}` : '/api/host/emails', {
@@ -333,14 +410,14 @@ export default function HostEmails() {
     }
   }
 
-  async function send(id, campaignAudienceId, campaignType) {
-    const typeNote = campaignType === 'utility' ? ' as a UTILITY email (reaches attendees regardless of marketing opt-in)' : ''
-    if (!window.confirm(`Send this email to ${audienceLabel(campaignAudienceId)}${typeNote}?`)) return
+  async function send(c) {
+    const audienceLabelText = audienceLabel(c.audience_kind === 'mailing_list' ? '__mailing_list__' : (c.audience_event_id || ''))
+    if (!window.confirm(sendConfirmCopy(c, audienceLabelText, campaignsById))) return
     setError('')
     setNotice('')
-    setSendingId(id)
+    setSendingId(c.id)
     try {
-      const res = await fetch(`/api/host/emails/${id}/send`, { method: 'POST' })
+      const res = await fetch(`/api/host/emails/${c.id}/send`, { method: 'POST' })
       const json = await res.json().catch(() => ({}))
       if (!res.ok || !json.success) {
         // The 409 messages ("Daily send limit reached.", "No emailable
@@ -355,6 +432,70 @@ export default function HostEmails() {
       setError('Could not send the email.')
     } finally {
       setSendingId(null)
+    }
+  }
+
+  // HOST-EMAILS.2 — preview as sent: same HTML the recipient's inbox gets
+  // (unsubscribe footer included), rendered in a sandboxed iframe so nothing
+  // in the design can run script or navigate the host portal.
+  async function previewAsSent() {
+    setError('')
+    setPreviewBusy(true)
+    try {
+      let body = textBody
+      if (mode === 'design') {
+        const exported = await exportDesign()
+        body = exported.html || ''
+      }
+      if (!body.trim()) { setError('Add some content first.'); return }
+      const res = await fetch('/api/host/emails/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subject, body_html: body }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok || !json.success) { setError(json.error || 'Could not build the preview.'); return }
+      setPreview({ html: json.data.html, width: 375 })
+    } catch {
+      setError('Could not build the preview.')
+    } finally {
+      setPreviewBusy(false)
+    }
+  }
+
+  async function deleteCampaign(c) {
+    if (!window.confirm(`Delete "${c.subject}"? This cannot be undone.`)) return
+    setError('')
+    setNotice('')
+    setRowBusyId(c.id)
+    try {
+      const res = await fetch(`/api/host/emails/${c.id}`, { method: 'DELETE' })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok || !json.success) { setError(json.error || 'Could not delete the email.'); await load(); return }
+      if (editingId === c.id) resetComposer()
+      setNotice('Email deleted.')
+      await load()
+    } catch {
+      setError('Could not delete the email.')
+    } finally {
+      setRowBusyId(null)
+    }
+  }
+
+  async function duplicateCampaign(c) {
+    setError('')
+    setNotice('')
+    setRowBusyId(c.id)
+    try {
+      const res = await fetch(`/api/host/emails/${c.id}/duplicate`, { method: 'POST' })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok || !json.success) { setError(json.error || 'Could not duplicate the email.'); return }
+      setNotice(`Draft created: ${json.data?.subject || 'Copy'}.`)
+      await load()
+    } catch {
+      setError('Could not duplicate the email.')
+    } finally {
+      setRowBusyId(null)
     }
   }
 
@@ -493,24 +634,31 @@ export default function HostEmails() {
             </div>
             <div>
               <label htmlFor="host-email-audience" className="block text-xs text-white/50 mb-1">Send to</label>
-              <select
-                id="host-email-audience"
-                value={audienceEventId}
-                onChange={(e) => setAudienceEventId(e.target.value)}
-                className={input}
-              >
-                <option value="">
-                  Everyone{audiences.all_count != null ? ` (${audiences.all_count})` : ''}
-                </option>
-                <option value="__mailing_list__">
-                  Mailing list signups{audiences.mailing_list_count != null ? ` (${audiences.mailing_list_count})` : ''}
-                </option>
-                {audiences.events.map((ev) => (
-                  <option key={ev.id} value={ev.id}>
-                    Attended · {ev.name} — {ev.race_date} ({ev.count})
+              {audienceCampaignId ? (
+                <p id="host-email-audience" className={`${input} text-white/70`}>
+                  {audienceSummary({ audience_kind: 'non_openers', audience_campaign_id: audienceCampaignId }, campaignsById)}
+                  <span className="block text-[11px] text-white/40 mt-0.5">Resolved when you send: anyone who has opened since then is left out. Duplicate this email to pick a different audience.</span>
+                </p>
+              ) : (
+                <select
+                  id="host-email-audience"
+                  value={audienceEventId}
+                  onChange={(e) => setAudienceEventId(e.target.value)}
+                  className={input}
+                >
+                  <option value="">
+                    Everyone{audiences.all_count != null ? ` (${audiences.all_count})` : ''}
                   </option>
-                ))}
-              </select>
+                  <option value="__mailing_list__">
+                    Mailing list signups{audiences.mailing_list_count != null ? ` (${audiences.mailing_list_count})` : ''}
+                  </option>
+                  {audiences.events.map((ev) => (
+                    <option key={ev.id} value={ev.id}>
+                      Attended · {ev.name} — {ev.race_date} ({ev.count})
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
           </div>
 
@@ -550,7 +698,7 @@ export default function HostEmails() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setMode('text')}
+                  onClick={() => ((pendingDesignRef.current || (editingId && mode === 'design' && !designDropped)) ? dropDesign() : setMode('text'))}
                   className={`rounded px-2 py-0.5 ${mode === 'text' ? 'bg-white/15 text-white' : 'text-white/45 hover:text-white'}`}
                 >
                   Plain text
@@ -564,8 +712,13 @@ export default function HostEmails() {
                     container needs a DEFINITE height — min-height alone lets
                     the iframe collapse (squashed toolbar + dead space). */}
                 <div id={EDITOR_DIV_ID} style={{ height: 620 }}>
-                  {!unlayerReady && (
-                    <p className="text-white/40 text-sm p-4">Loading the designer…</p>
+                  {(!unlayerReady || designerNotice) && (
+                    <div className="p-4 text-sm text-white/60">
+                      <p>{designerNotice === 'failed' ? 'The designer could not load. Reload the page, or edit as text (this drops the design).' : 'Loading the designer…'}</p>
+                      {designerNotice !== '' && (
+                        <button type="button" onClick={dropDesign} className="mt-2 text-xs underline text-white/70 hover:text-white">Edit as text instead</button>
+                      )}
+                    </div>
                   )}
                 </div>
               </div>
@@ -586,13 +739,18 @@ export default function HostEmails() {
               {' '}Personalise with variables: {'{{first_name}}'}, {'{{last_name}}'}, {'{{name}}'}, {'{{email}}'} — in the designer they&apos;re under the text toolbar&apos;s merge-tags menu.
             </p>
           </div>
-          <button
-            type="submit"
-            disabled={busy}
-            className="rounded-lg bg-white text-black text-sm font-semibold px-4 py-2 hover:bg-white/90 disabled:opacity-50"
-          >
-            {busy ? 'Saving…' : editingId ? 'Save changes' : 'Save draft'}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="submit"
+              disabled={busy}
+              className="rounded-lg bg-white text-black text-sm font-semibold px-4 py-2 hover:bg-white/90 disabled:opacity-50"
+            >
+              {busy ? 'Saving…' : editingId ? 'Save changes' : 'Save draft'}
+            </button>
+            <button type="button" onClick={previewAsSent} disabled={previewBusy} className={btnSecondary}>
+              {previewBusy ? 'Building…' : 'Preview as sent'}
+            </button>
+          </div>
         </form>
       </section>
 
@@ -637,6 +795,9 @@ export default function HostEmails() {
                       </p>
                       <p className="text-xs text-white/45 mt-0.5">
                         {rowSubline(c)}
+                        {c.audience_kind === 'non_openers' && (
+                          <span className="text-white/35"> · {audienceSummary(c, campaignsById)}</span>
+                        )}
                         {c.status !== 'scheduled' && (
                           <>
                             {' · '}
@@ -645,73 +806,97 @@ export default function HostEmails() {
                         )}
                       </p>
                     </div>
-                    {c.status === 'draft' && (
-                      <div className="shrink-0 flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => editDraft(c.id)}
-                          disabled={loadingDraftId === c.id}
-                          className={btnSecondary}
-                        >
-                          {loadingDraftId === c.id ? 'Opening…' : 'Edit'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => sendTest(c.id)}
-                          disabled={testingId === c.id}
-                          className={btnSecondary}
-                        >
-                          {testingId === c.id ? 'Sending…' : 'Test'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => (schedulingId === c.id ? setSchedulingId(null) : openSchedule(c))}
-                          aria-expanded={schedulingId === c.id}
-                          aria-controls={`schedule-panel-${c.id}`}
-                          className={btnSecondary}
-                        >
-                          Schedule
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => send(c.id, c.audience_kind === 'mailing_list' ? '__mailing_list__' : (c.audience_event_id || ''), c.email_type)}
-                          disabled={sendingId === c.id}
-                          className={btnPrimary}
-                        >
-                          {sendingId === c.id ? 'Sending…' : 'Send'}
-                        </button>
-                      </div>
-                    )}
-                    {c.status === 'scheduled' && (
-                      <div className="shrink-0 flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => (schedulingId === c.id ? setSchedulingId(null) : openSchedule(c))}
-                          disabled={schedulingBusyId === c.id}
-                          aria-expanded={schedulingId === c.id}
-                          aria-controls={`schedule-panel-${c.id}`}
-                          className={btnSecondary}
-                        >
-                          Change time
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => editScheduled(c.id)}
-                          disabled={loadingDraftId === c.id || schedulingBusyId === c.id}
-                          className={btnSecondary}
-                        >
-                          {schedulingBusyId === c.id || loadingDraftId === c.id ? 'Opening…' : 'Edit'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => cancelSchedule(c.id)}
-                          disabled={schedulingBusyId === c.id}
-                          className="rounded-lg border border-red-400/40 text-red-300 text-xs font-semibold px-3 py-1.5 hover:border-red-300 disabled:opacity-50"
-                        >
-                          {schedulingBusyId === c.id ? 'Cancelling…' : 'Cancel'}
-                        </button>
-                      </div>
-                    )}
+                    <div className="shrink-0 flex items-center gap-3">
+                      {c.status === 'draft' && (
+                        <div className="shrink-0 flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => editDraft(c.id)}
+                            disabled={loadingDraftId === c.id}
+                            className={btnSecondary}
+                          >
+                            {loadingDraftId === c.id ? 'Opening…' : 'Edit'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => sendTest(c.id)}
+                            disabled={testingId === c.id}
+                            className={btnSecondary}
+                          >
+                            {testingId === c.id ? 'Sending…' : 'Test'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => (schedulingId === c.id ? setSchedulingId(null) : openSchedule(c))}
+                            aria-expanded={schedulingId === c.id}
+                            aria-controls={`schedule-panel-${c.id}`}
+                            className={btnSecondary}
+                          >
+                            Schedule
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => send(c)}
+                            disabled={sendingId === c.id}
+                            className={btnPrimary}
+                          >
+                            {sendingId === c.id ? 'Sending…' : 'Send'}
+                          </button>
+                        </div>
+                      )}
+                      {c.status === 'scheduled' && (
+                        <div className="shrink-0 flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => (schedulingId === c.id ? setSchedulingId(null) : openSchedule(c))}
+                            disabled={schedulingBusyId === c.id}
+                            aria-expanded={schedulingId === c.id}
+                            aria-controls={`schedule-panel-${c.id}`}
+                            className={btnSecondary}
+                          >
+                            Change time
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => editScheduled(c.id)}
+                            disabled={loadingDraftId === c.id || schedulingBusyId === c.id}
+                            className={btnSecondary}
+                          >
+                            {schedulingBusyId === c.id || loadingDraftId === c.id ? 'Opening…' : 'Edit'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => cancelSchedule(c.id)}
+                            disabled={schedulingBusyId === c.id}
+                            className="rounded-lg border border-red-400/40 text-red-300 text-xs font-semibold px-3 py-1.5 hover:border-red-300 disabled:opacity-50"
+                          >
+                            {schedulingBusyId === c.id ? 'Cancelling…' : 'Cancel'}
+                          </button>
+                        </div>
+                      )}
+                      {c.status !== 'sending' && (
+                        <div className="shrink-0 flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => duplicateCampaign(c)}
+                            disabled={rowBusyId === c.id}
+                            className="text-xs text-white/50 hover:text-white disabled:opacity-50"
+                          >
+                            Duplicate
+                          </button>
+                          {(c.status === 'draft' || c.status === 'scheduled') && (
+                            <button
+                              type="button"
+                              onClick={() => deleteCampaign(c)}
+                              disabled={rowBusyId === c.id}
+                              className="text-xs text-red-300/80 hover:text-red-300 disabled:opacity-50"
+                            >
+                              {rowBusyId === c.id ? 'Working…' : 'Delete'}
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   </div>
                   {schedulingId === c.id && (c.status === 'draft' || c.status === 'scheduled') && (
                     <div
@@ -764,6 +949,43 @@ export default function HostEmails() {
           </ul>
         )}
       </section>
+
+      {preview && (
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Preview as sent">
+          <div className="bg-[#111] border border-white/15 rounded-xl w-full max-w-4xl max-h-[92vh] flex flex-col">
+            <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-white/10">
+              <p className="text-sm text-white/70">This is what a recipient gets, including the unsubscribe footer.</p>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPreview((p) => ({ ...p, width: 375 }))}
+                  aria-pressed={preview.width === 375}
+                  className={`rounded px-2 py-1 text-xs ${preview.width === 375 ? 'bg-white text-black' : 'text-white/60'}`}
+                >
+                  Mobile
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPreview((p) => ({ ...p, width: 700 }))}
+                  aria-pressed={preview.width === 700}
+                  className={`rounded px-2 py-1 text-xs ${preview.width === 700 ? 'bg-white text-black' : 'text-white/60'}`}
+                >
+                  Desktop
+                </button>
+                <button type="button" onClick={() => setPreview(null)} className="text-xs text-white/60 hover:text-white px-2 py-1">Close</button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-auto bg-[#f4f4f5] flex justify-center p-4">
+              <iframe
+                title="Email preview"
+                sandbox=""
+                srcDoc={preview.html}
+                style={{ width: preview.width, height: '75vh', border: 0, background: '#fff' }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

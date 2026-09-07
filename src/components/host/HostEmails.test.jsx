@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { buildTestSendBody, statsLine, rowSubline, schedulePanelDefaults } from './HostEmails.jsx'
+import {
+  buildTestSendBody, statsLine, rowSubline, schedulePanelDefaults, audienceSummary, sendConfirmCopy,
+} from './HostEmails.jsx'
 
 // HOST-EMAIL.10 — the Test button prompts for an address and posts it to
 // /api/host/emails/[id]/send-test. Pure-function test only (the repo's host
@@ -73,5 +75,38 @@ describe('schedulePanelDefaults', () => {
   })
   it('falls back to the next quarter hour when scheduled_for is garbage', () => {
     expect(schedulePanelDefaults({ scheduled_for: 'nope' }, Date.parse('2026-09-07T10:03:00Z'))).toEqual({ date: '2026-09-07', time: '11:30' })
+  })
+})
+
+describe('rowSubline — paused (HOST-EMAILS.2)', () => {
+  it('a sending row with a paused_reason says why and who to ask', () => {
+    expect(rowSubline({ status: 'sending', paused_reason: 'no_stream' })).toBe('Paused. Marketing sending is not set up yet. Ask UN1T.')
+  })
+  it('a sending row without a reason keeps the stats line fallback', () => {
+    expect(rowSubline({ status: 'sending', sent_count: 3, recipient_count: 10 })).toBe('3/10 sent')
+  })
+})
+
+describe('audienceSummary', () => {
+  const byId = new Map([['p1', { id: 'p1', subject: 'Race week' }]])
+  it('names the parent for a reminder draft', () => {
+    expect(audienceSummary({ audience_kind: 'non_openers', audience_campaign_id: 'p1' }, byId)).toBe("People who didn't open 'Race week'")
+  })
+  it('falls back when the parent is gone', () => {
+    expect(audienceSummary({ audience_kind: 'non_openers', audience_campaign_id: 'zz' }, byId)).toBe("People who didn't open the original email")
+  })
+  it('is empty for ordinary audiences (the select shows those)', () => {
+    expect(audienceSummary({ audience_kind: 'all' }, byId)).toBe('')
+  })
+})
+
+describe('sendConfirmCopy', () => {
+  it('reminder drafts confirm against the parent subject', () => {
+    expect(sendConfirmCopy({ audience_kind: 'non_openers', audience_campaign_id: 'p1', email_type: 'marketing' }, 'attendees', new Map([['p1', { subject: 'Race week' }]])))
+      .toBe("Send this email to people who didn't open 'Race week'?")
+  })
+  it('ordinary drafts keep the audience label and the utility note', () => {
+    expect(sendConfirmCopy({ audience_kind: 'all', email_type: 'utility' }, 'all 10 contacts (where emailable)', new Map()))
+      .toBe('Send this email to all 10 contacts (where emailable) as a UTILITY email (reaches attendees regardless of marketing opt-in)?')
   })
 })

@@ -3,6 +3,7 @@
 // (client) talks to /api/host/emails, where every send gate lives
 // (verified sender, daily cap, consent/suppression, CAS double-send guard).
 
+import { Suspense } from 'react'
 import { redirect } from 'next/navigation'
 import { getCurrentHost } from '@/lib/host-auth'
 import HostEmails from '@/components/host/HostEmails'
@@ -24,7 +25,9 @@ export default async function HostEmailsPage() {
         </p>
       </div>
 
-      <HostEmails />
+      <Suspense fallback={null}>
+        <HostEmails />
+      </Suspense>
     </div>
   )
 }
