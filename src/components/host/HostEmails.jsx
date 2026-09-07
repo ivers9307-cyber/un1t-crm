@@ -28,6 +28,7 @@ import { useSearchParams } from 'next/navigation'
 import {
   nextQuarterHour, isoToDublinInputs, dublinLocalToIso, dublinScheduleLabel, scheduleErrorCopy, TIME_OPTIONS,
 } from '@/lib/host-schedule-time'
+import HostEmailPreviewModal from './HostEmailPreviewModal.jsx'
 
 /**
  * Request body for a test send. A blank or cancelled prompt yields {} so the
@@ -106,6 +107,42 @@ export function rowActions(status) {
   return { duplicate: true, delete: false }
 }
 
+/**
+ * HOST-EMAILS.2 — the whole design-mode decision `editDraft` makes when a
+ * draft is opened, as one pure function so it can be tested (and so the
+ * text-only branch can never again forget to clear state the designed
+ * branch set).
+ *
+ * A designed draft ALWAYS opens in design mode. If the editor is up the
+ * design loads immediately (`loadNow`); if it is not, the design waits in
+ * `pendingDesign` and the composer says so. A draft with no design opens in
+ * text mode with everything design-shaped cleared — pending design included,
+ * because a stale pending design from a PREVIOUS draft would otherwise be
+ * loaded into this one the moment the designer initialised, and a save would
+ * then write the previous draft's design onto this one.
+ *
+ * @param {object|null} draft                   campaign row from GET /api/host/emails/[id]
+ * @param {object}      [opts]
+ * @param {boolean}     [opts.editorInited]     has window.unlayer.init() already run?
+ * @param {boolean}     [opts.unlayerReady]     is the Unlayer script up (window.unlayer present)?
+ * @param {string}      [opts.previousNotice]   current designerNotice ('' | 'loading' | 'failed')
+ * @returns {{ mode: 'design'|'text', pendingDesign: object|null, notice: ''|'loading'|'failed', hasDesign: boolean, loadNow: boolean }}
+ */
+export function designStateForDraft(draft, { editorInited = false, unlayerReady = false, previousNotice = '' } = {}) {
+  const design = draft?.design_json || null
+  if (!design) return { mode: 'text', pendingDesign: null, notice: '', hasDesign: false, loadNow: false }
+  const loadNow = Boolean(editorInited) && Boolean(unlayerReady)
+  return {
+    mode: 'design',
+    pendingDesign: loadNow ? null : design,
+    // A designer that already failed to load stays failed: telling the host
+    // it is "loading" when the script is never coming would be a lie.
+    notice: loadNow ? '' : (previousNotice === 'failed' ? 'failed' : 'loading'),
+    hasDesign: true,
+    loadNow,
+  }
+}
+
 const STATUS_CHIP = {
   draft: 'bg-white/10 text-white/70',
   scheduled: 'bg-sky-500/15 text-sky-300',
@@ -124,6 +161,8 @@ const STATUS_LABEL = {
 
 const UNLAYER_SRC = 'https://editor.unlayer.com/embed.js'
 const EDITOR_DIV_ID = 'host-email-designer'
+// How long to wait for the embed script before telling the host it failed.
+const UNLAYER_LOAD_TIMEOUT_MS = 15000
 
 export default function HostEmails() {
   const [campaigns, setCampaigns] = useState(null) // null = loading
@@ -195,8 +234,10 @@ export default function HostEmails() {
     if (window.unlayer) { setUnlayerReady(true); return }
     const existing = document.querySelector(`script[src="${UNLAYER_SRC}"]`)
     const script = existing || document.createElement('script')
-    const onLoad = () => setUnlayerReady(true)
-    const onError = () => { setDesignerNotice('failed'); if (!pendingDesignRef.current) setMode('text') }
+    let loaded = false
+    let timer
+    const onLoad = () => { loaded = true; clearTimeout(timer); setUnlayerReady(true) }
+    const onError = () => { clearTimeout(timer); setDesignerNotice('failed'); if (!pendingDesignRef.current) setMode('text') }
     script.addEventListener('load', onLoad)
     script.addEventListener('error', onError)
     if (!existing) {
@@ -204,7 +245,15 @@ export default function HostEmails() {
       script.async = true
       document.body.appendChild(script)
     }
+    // A tag that is ALREADY in the DOM has usually already fired its `load`
+    // event, and it will not fire again for this listener — so the designer
+    // would sit on "Loading the designer..." forever. Same shape if the
+    // network stalls the request. Give it a bounded wait, then say so.
+    timer = setTimeout(() => {
+      if (!loaded && !window.unlayer) setDesignerNotice('failed')
+    }, UNLAYER_LOAD_TIMEOUT_MS)
     return () => {
+      clearTimeout(timer)
       script.removeEventListener('load', onLoad)
       script.removeEventListener('error', onError)
     }
@@ -257,6 +306,18 @@ export default function HostEmails() {
     })
   }
 
+  // Wipe the designer canvas. Whenever the composer stops showing a design
+  // (new email, or a draft that has no design_json) the editor must be
+  // blanked, or the PREVIOUS draft's design stays on screen and a save
+  // exports it onto the draft now being edited.
+  function blankEditor() {
+    if (!editorInited.current || typeof window === 'undefined' || !window.unlayer) return
+    try {
+      if (typeof window.unlayer.loadBlankTemplate === 'function') window.unlayer.loadBlankTemplate()
+      else window.unlayer.loadDesign({ body: { rows: [] } })
+    } catch { /* leave whatever design is showing */ }
+  }
+
   function resetComposer() {
     setSubject('')
     setTextBody('')
@@ -268,12 +329,7 @@ export default function HostEmails() {
     setDesignDropped(false)
     setHasDesign(false)
     setAudienceCampaignId(null)
-    if (editorInited.current && window.unlayer) {
-      try {
-        if (typeof window.unlayer.loadBlankTemplate === 'function') window.unlayer.loadBlankTemplate()
-        else window.unlayer.loadDesign({ body: { rows: [] } })
-      } catch { /* leave whatever design is showing */ }
-    }
+    blankEditor()
   }
 
   // HOST-EMAILS.2 — deliberately drop a loaded/pending design and switch to
@@ -306,25 +362,29 @@ export default function HostEmails() {
       setEmailType(c.email_type === 'utility' ? 'utility' : 'marketing')
       setAudienceCampaignId(c.audience_kind === 'non_openers' ? c.audience_campaign_id || null : null)
       setDesignDropped(false)
-      setHasDesign(Boolean(c.design_json))
-      if (c.design_json) {
-        // HOST-EMAILS.2 — a designed draft ALWAYS opens in design mode. If the
-        // designer is not up yet the design waits in pendingDesignRef and
-        // loads the moment the editor initialises; text mode is only ever
-        // reached through "Edit as text instead".
-        setMode('design')
-        setTextBody(c.body_html || '')
-        if (editorInited.current && window.unlayer) {
-          try { window.unlayer.loadDesign(c.design_json) } catch { /* stale design doc */ }
-          setDesignerNotice('')
-        } else {
-          pendingDesignRef.current = c.design_json
-          setDesignerNotice(designerNotice === 'failed' ? 'failed' : 'loading')
-        }
-      } else {
-        setMode('text')
-        setTextBody(c.body_html || '')
+      setTextBody(c.body_html || '')
+      // HOST-EMAILS.2 — one decision, in designStateForDraft (tested there).
+      // A designed draft ALWAYS opens in design mode: if the designer is not
+      // up yet the design waits in pendingDesignRef and loads the moment the
+      // editor initialises; text mode is only ever reached through "Edit as
+      // text instead", or by opening a draft that has no design at all.
+      const next = designStateForDraft(c, {
+        editorInited: editorInited.current,
+        unlayerReady: typeof window !== 'undefined' && Boolean(window.unlayer),
+        previousNotice: designerNotice,
+      })
+      setMode(next.mode)
+      setHasDesign(next.hasDesign)
+      if (next.loadNow) {
+        try { window.unlayer.loadDesign(c.design_json) } catch { /* stale design doc */ }
+      } else if (!next.hasDesign) {
+        // No design on THIS draft: drop any design still parked for another
+        // one and clear the canvas, so nothing of the previous draft can be
+        // loaded in later or exported over this draft on save.
+        blankEditor()
       }
+      pendingDesignRef.current = next.pendingDesign
+      setDesignerNotice(next.notice)
       document.getElementById('host-email-subject')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
     } catch {
       setError('Could not open the draft.')
@@ -480,6 +540,9 @@ export default function HostEmails() {
     }
   }
 
+  const closePreview = useCallback(() => setPreview(null), [])
+  const setPreviewWidth = useCallback((width) => setPreview((p) => (p ? { ...p, width } : p)), [])
+
   async function deleteCampaign(c) {
     if (!window.confirm(`Delete "${c.subject}"? This cannot be undone.`)) return
     setError('')
@@ -493,7 +556,10 @@ export default function HostEmails() {
       setNotice('Email deleted.')
       await load()
     } catch {
+      // The request may have deleted the row before the network gave out, so
+      // never leave a phantom row on screen: re-read the list either way.
       setError('Could not delete the email.')
+      await load()
     } finally {
       setRowBusyId(null)
     }
@@ -837,7 +903,7 @@ export default function HostEmails() {
                           <button
                             type="button"
                             onClick={() => editDraft(c.id)}
-                            disabled={loadingDraftId === c.id}
+                            disabled={loadingDraftId === c.id || rowBusyId === c.id}
                             className={btnSecondary}
                           >
                             {loadingDraftId === c.id ? 'Opening…' : 'Edit'}
@@ -845,7 +911,7 @@ export default function HostEmails() {
                           <button
                             type="button"
                             onClick={() => sendTest(c.id)}
-                            disabled={testingId === c.id}
+                            disabled={testingId === c.id || rowBusyId === c.id}
                             className={btnSecondary}
                           >
                             {testingId === c.id ? 'Sending…' : 'Test'}
@@ -853,6 +919,7 @@ export default function HostEmails() {
                           <button
                             type="button"
                             onClick={() => (schedulingId === c.id ? setSchedulingId(null) : openSchedule(c))}
+                            disabled={rowBusyId === c.id}
                             aria-expanded={schedulingId === c.id}
                             aria-controls={`schedule-panel-${c.id}`}
                             className={btnSecondary}
@@ -862,7 +929,7 @@ export default function HostEmails() {
                           <button
                             type="button"
                             onClick={() => send(c)}
-                            disabled={sendingId === c.id}
+                            disabled={sendingId === c.id || rowBusyId === c.id}
                             className={btnPrimary}
                           >
                             {sendingId === c.id ? 'Sending…' : 'Send'}
@@ -874,7 +941,7 @@ export default function HostEmails() {
                           <button
                             type="button"
                             onClick={() => (schedulingId === c.id ? setSchedulingId(null) : openSchedule(c))}
-                            disabled={schedulingBusyId === c.id}
+                            disabled={schedulingBusyId === c.id || rowBusyId === c.id}
                             aria-expanded={schedulingId === c.id}
                             aria-controls={`schedule-panel-${c.id}`}
                             className={btnSecondary}
@@ -884,7 +951,7 @@ export default function HostEmails() {
                           <button
                             type="button"
                             onClick={() => editScheduled(c.id)}
-                            disabled={loadingDraftId === c.id || schedulingBusyId === c.id}
+                            disabled={loadingDraftId === c.id || schedulingBusyId === c.id || rowBusyId === c.id}
                             className={btnSecondary}
                           >
                             {schedulingBusyId === c.id || loadingDraftId === c.id ? 'Opening…' : 'Edit'}
@@ -892,7 +959,7 @@ export default function HostEmails() {
                           <button
                             type="button"
                             onClick={() => cancelSchedule(c.id)}
-                            disabled={schedulingBusyId === c.id}
+                            disabled={schedulingBusyId === c.id || rowBusyId === c.id}
                             className="rounded-lg border border-red-400/40 text-red-300 text-xs font-semibold px-3 py-1.5 hover:border-red-300 disabled:opacity-50"
                           >
                             {schedulingBusyId === c.id ? 'Cancelling…' : 'Cancel'}
@@ -908,7 +975,7 @@ export default function HostEmails() {
                               disabled={rowBusyId === c.id}
                               className="text-xs text-white/50 hover:text-white disabled:opacity-50"
                             >
-                              Duplicate
+                              {rowBusyId === c.id ? 'Duplicating…' : 'Duplicate'}
                             </button>
                           )}
                           {actions.delete && (
@@ -978,40 +1045,12 @@ export default function HostEmails() {
       </section>
 
       {preview && (
-        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Preview as sent">
-          <div className="bg-[#111] border border-white/15 rounded-xl w-full max-w-4xl max-h-[92vh] flex flex-col">
-            <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-white/10">
-              <p className="text-sm text-white/70">This is what a recipient gets, including the unsubscribe footer.</p>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setPreview((p) => ({ ...p, width: 375 }))}
-                  aria-pressed={preview.width === 375}
-                  className={`rounded px-2 py-1 text-xs ${preview.width === 375 ? 'bg-white text-black' : 'text-white/60'}`}
-                >
-                  Mobile
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPreview((p) => ({ ...p, width: 700 }))}
-                  aria-pressed={preview.width === 700}
-                  className={`rounded px-2 py-1 text-xs ${preview.width === 700 ? 'bg-white text-black' : 'text-white/60'}`}
-                >
-                  Desktop
-                </button>
-                <button type="button" onClick={() => setPreview(null)} className="text-xs text-white/60 hover:text-white px-2 py-1">Close</button>
-              </div>
-            </div>
-            <div className="flex-1 overflow-auto bg-[#f4f4f5] flex justify-center p-4">
-              <iframe
-                title="Email preview"
-                sandbox=""
-                srcDoc={preview.html}
-                style={{ width: preview.width, height: '75vh', border: 0, background: '#fff' }}
-              />
-            </div>
-          </div>
-        </div>
+        <HostEmailPreviewModal
+          html={preview.html}
+          width={preview.width}
+          onWidth={setPreviewWidth}
+          onClose={closePreview}
+        />
       )}
     </div>
   )

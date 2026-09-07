@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest'
+import { renderToStaticMarkup } from 'react-dom/server'
+import HostEmailPreviewModal from './HostEmailPreviewModal.jsx'
 import {
   buildTestSendBody, statsLine, rowSubline, schedulePanelDefaults, audienceSummary, sendConfirmCopy, rowActions,
+  designStateForDraft,
 } from './HostEmails.jsx'
 
 // HOST-EMAIL.10 — the Test button prompts for an address and posts it to
@@ -129,5 +132,75 @@ describe('sendConfirmCopy', () => {
   it('ordinary drafts keep the audience label and the utility note', () => {
     expect(sendConfirmCopy({ audience_kind: 'all', email_type: 'utility' }, 'all 10 contacts (where emailable)', new Map()))
       .toBe('Send this email to all 10 contacts (where emailable) as a UTILITY email (reaches attendees regardless of marketing opt-in)?')
+  })
+})
+
+// HOST-EMAILS.2 — opening a draft is a design-state decision, and the bug
+// worth a test is the CROSS-DRAFT LEAK: designed draft A parks its design in
+// pendingDesignRef while the Unlayer script loads; text-only draft B is
+// opened next; the script arrives and A's design loads into B, and saving B
+// writes A's design onto it. The text branch must therefore clear the
+// pending design, not merely switch mode.
+describe('designStateForDraft', () => {
+  const designed = { id: 'a', design_json: { body: { rows: [{ id: 'r1' }] } } }
+  const textOnly = { id: 'b', design_json: null, body_html: '<p>hi</p>' }
+
+  it('a designed draft with the editor already up loads the design straight in', () => {
+    expect(designStateForDraft(designed, { editorInited: true, unlayerReady: true }))
+      .toEqual({ mode: 'design', pendingDesign: null, notice: '', hasDesign: true, loadNow: true })
+  })
+
+  it('a designed draft opened before the editor is up parks the design and says it is loading', () => {
+    expect(designStateForDraft(designed, { editorInited: false, unlayerReady: false }))
+      .toEqual({ mode: 'design', pendingDesign: designed.design_json, notice: 'loading', hasDesign: true, loadNow: false })
+  })
+
+  it('keeps the failed notice when the script has already given up, rather than claiming it is loading', () => {
+    expect(designStateForDraft(designed, { editorInited: false, unlayerReady: false, previousNotice: 'failed' }))
+      .toEqual({ mode: 'design', pendingDesign: designed.design_json, notice: 'failed', hasDesign: true, loadNow: false })
+  })
+
+  it('a text-only draft opened after a designed one clears the pending design (no cross-draft leak)', () => {
+    // The designed draft parked its design first...
+    const parked = designStateForDraft(designed, { editorInited: false, unlayerReady: false })
+    expect(parked.pendingDesign).toBe(designed.design_json)
+    // ...and opening the text-only draft must drop it, not carry it over.
+    expect(designStateForDraft(textOnly, { editorInited: false, unlayerReady: false, previousNotice: parked.notice }))
+      .toEqual({ mode: 'text', pendingDesign: null, notice: '', hasDesign: false, loadNow: false })
+  })
+
+  it('a text-only draft with the editor up still carries no design (the canvas gets blanked)', () => {
+    expect(designStateForDraft(textOnly, { editorInited: true, unlayerReady: true }))
+      .toEqual({ mode: 'text', pendingDesign: null, notice: '', hasDesign: false, loadNow: false })
+  })
+
+  it('a missing draft is treated as text-only rather than throwing', () => {
+    expect(designStateForDraft(null).mode).toBe('text')
+  })
+})
+
+// HOST-EMAILS.2 — the preview dialog, rendered to static markup (this repo
+// runs vitest under node with no jsdom, so the effects that add Escape /
+// focus / scroll-lock are not exercised here; the markup contract is).
+describe('HostEmailPreviewModal', () => {
+  const render = (width) => renderToStaticMarkup(
+    <HostEmailPreviewModal html="<p>hello</p>" width={width} onWidth={() => {}} onClose={() => {}} />,
+  )
+
+  it('is a modal dialog', () => {
+    const html = render(375)
+    expect(html).toContain('role="dialog"')
+    expect(html).toContain('aria-modal="true"')
+  })
+
+  it('renders the preview in a fully sandboxed iframe so nothing in the design can run', () => {
+    const html = render(375)
+    expect(html).toMatch(/<iframe[^>]*sandbox=""/)
+    expect(html).toContain('&lt;p&gt;hello&lt;/p&gt;') // srcDoc, escaped into the attribute
+  })
+
+  it('marks the active width with aria-pressed', () => {
+    expect(render(375)).toMatch(/aria-pressed="true"[^>]*>Mobile/)
+    expect(render(700)).toMatch(/aria-pressed="true"[^>]*>Desktop/)
   })
 })
