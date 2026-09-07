@@ -9,10 +9,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/host-auth', () => ({ getCurrentHost: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
+vi.mock('@/lib/host-campaign-launch', () => ({ resolveMissedRecipients: vi.fn() }))
+vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 
 import { GET } from './route.js'
 import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
+import { resolveMissedRecipients } from '@/lib/host-campaign-launch'
 
 const HOST_ID = 'b0000000-0000-0000-0000-0000000000b1'
 const CAMPAIGN_ID = 'a0000000-0000-0000-0000-0000000000a1'
@@ -85,6 +88,7 @@ const props = { params: Promise.resolve({ id: CAMPAIGN_ID }) }
 beforeEach(() => {
   vi.clearAllMocks()
   getCurrentHost.mockResolvedValue({ host: { id: HOST_ID } })
+  resolveMissedRecipients.mockResolvedValue({ missed: [], totalRows: 3 })
 })
 
 describe('GET /api/host/emails/[id]/recipients', () => {
@@ -213,5 +217,51 @@ describe('GET /api/host/emails/[id]/recipients', () => {
     expect(orderCalls[0].args).toEqual(['sent_at', { ascending: false, nullsFirst: false }])
     expect(orderCalls[1].args[0]).toBe('email')
     expect(orderCalls[2].args).toEqual(['id', { ascending: true }])
+  })
+})
+
+// HOST-RESEND.1 — missed_count / resent_at on the campaign payload.
+describe('GET /api/host/emails/[id]/recipients — missed_count (HOST-RESEND.1)', () => {
+  it('selects resent_at with the campaign', async () => {
+    const { db, statements } = makeDb(routeFor({ pages: [[]] }))
+    createServerClient.mockReturnValue(db)
+    await GET(makeRequest(), props)
+    expect(op(statements.find((s) => s.table === 'host_campaigns'), 'select').args[0]).toContain('resent_at')
+  })
+
+  it('a sent campaign carries the diff helper\'s missed length, resolved for the session host and this campaign', async () => {
+    resolveMissedRecipients.mockResolvedValue({ missed: [{ contact_id: 'x', email: 'x@x.ie' }, { contact_id: 'y', email: 'y@x.ie' }], totalRows: 5 })
+    const { db } = makeDb(routeFor({ pages: [[]] }))
+    createServerClient.mockReturnValue(db)
+    const res = await GET(makeRequest(), props)
+    const body = await res.json()
+    expect(body.data.campaign.missed_count).toBe(2)
+    expect(resolveMissedRecipients).toHaveBeenCalledWith(db, { hostId: HOST_ID, campaign: expect.objectContaining({ id: CAMPAIGN_ID, audience_kind: 'all' }) })
+  })
+
+  it('zero missed is a real 0 (the button hides)', async () => {
+    const { db } = makeDb(routeFor({ pages: [[]] }))
+    createServerClient.mockReturnValue(db)
+    expect((await (await GET(makeRequest(), props)).json()).data.campaign.missed_count).toBe(0)
+  })
+
+  it('a helper failure gives null, never 0, and still 200s', async () => {
+    resolveMissedRecipients.mockRejectedValue(new Error('resolver broke'))
+    const { db } = makeDb(routeFor({ pages: [[]] }))
+    createServerClient.mockReturnValue(db)
+    const res = await GET(makeRequest(), props)
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.campaign.missed_count).toBeNull()
+  })
+
+  it('a non-sent campaign never runs the diff and reports null', async () => {
+    for (const status of ['draft', 'scheduled', 'sending', 'failed']) {
+      vi.clearAllMocks()
+      const { db } = makeDb(routeFor({ pages: [[]], campaign: { ...DEFAULT_CAMPAIGN, status } }))
+      createServerClient.mockReturnValue(db)
+      const res = await GET(makeRequest(), props)
+      expect((await res.json()).data.campaign.missed_count).toBeNull()
+      expect(resolveMissedRecipients).not.toHaveBeenCalled()
+    }
   })
 })

@@ -17,6 +17,15 @@
 // stats RPC fails — the tiles grid then gives way to a plain "unavailable"
 // line rather than a wall of zeros that reads as "nobody opened this".
 //
+// HOST-RESEND.1 — a sent campaign's header carries "Resend to N who missed
+// it" (N = `campaign.missed_count` from the recipients route, the same diff
+// the resend route enqueues with). Confirm → POST /api/host/emails/[id]/
+// resend-missed → re-fetch, so the page flips to "Still sending" with the
+// queued rows in the table. missed_count 0 hides the button; null (the diff
+// failed) keeps it, uncounted, and lets the server answer. The header reads
+// "Sent <first sent_at>" and, after a resend has drained, "Resent
+// <resent_at>" (mig 593). Resent rows keep their own sent_at in the table.
+//
 // Dark UN1T host-portal styling (bg-black page; chips use the -300 dark-chip
 // ramp, tiles are the `rounded-xl border border-white/10 bg-white/[0.03]`
 // recipe used across the portal).
@@ -151,6 +160,28 @@ export function outcomeChipClass(outcome) {
 
 const chipCls = (o) => `rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${outcomeChipClass(o)}`
 
+/**
+ * Header button label. A known count reads "Resend to 44 who missed it"; an
+ * unknown one (the diff failed server-side, missed_count null) drops the
+ * number rather than inventing one. Callers hide the button at 0.
+ * @param {number|null|undefined} missedCount
+ */
+export function resendLabel(missedCount) {
+  if (missedCount == null) return 'Resend to those who missed it'
+  return `Resend to ${missedCount} who missed it`
+}
+
+/**
+ * The window.confirm copy behind the button. Plain sentences, no dashes.
+ * @param {number|null|undefined} missedCount
+ */
+export function resendConfirmCopy(missedCount) {
+  const who = missedCount == null
+    ? 'everyone who did not receive it'
+    : `the ${missedCount} ${missedCount === 1 ? 'person' : 'people'} who did not receive it`
+  return `Send this email again to ${who}? Anyone who already got it will not be emailed twice.`
+}
+
 const HOUR_MS = 60 * 60 * 1000
 
 export default function HostEmailReport({ campaignId }) {
@@ -158,6 +189,9 @@ export default function HostEmailReport({ campaignId }) {
   const [campaign, setCampaign] = useState(null)
   const [recipients, setRecipients] = useState([])
   const [filter, setFilter] = useState('all')
+  const [reloadKey, setReloadKey] = useState(0)
+  const [resending, setResending] = useState(false)
+  const [actionError, setActionError] = useState('')
 
   useEffect(() => {
     let cancelled = false
@@ -179,7 +213,29 @@ export default function HostEmailReport({ campaignId }) {
     }
     load()
     return () => { cancelled = true }
-  }, [campaignId])
+  }, [campaignId, reloadKey])
+
+  async function resendMissed() {
+    if (!campaign) return
+    if (!window.confirm(resendConfirmCopy(campaign.missed_count))) return
+    setResending(true)
+    setActionError('')
+    try {
+      const res = await fetch(`/api/host/emails/${campaignId}/resend-missed`, { method: 'POST' })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok || !json.success) {
+        setActionError(json.error || 'Could not resend this email.')
+        return
+      }
+      // Re-fetch rather than patch state: the queued rows, the counts and
+      // the "Still sending" note all come from the recipients route.
+      setReloadKey((k) => k + 1)
+    } catch {
+      setActionError('Could not resend this email.')
+    } finally {
+      setResending(false)
+    }
+  }
 
   if (state === 'loading') return <p className="text-white/40 text-sm mt-6">Loading…</p>
   if (state === 'not_found') return <p className="text-white/50 text-sm mt-6">This email was not found.</p>
@@ -192,12 +248,15 @@ export default function HostEmailReport({ campaignId }) {
 
   const sentAt = campaign?.sent_at
   const whenStr = formatWhen(sentAt)
+  const resentStr = formatWhen(campaign?.resent_at)
   const scheduledStr = dublinScheduleLabel(campaign?.scheduled_for)
   const headerBits = [
     whenStr && `Sent ${whenStr}`,
+    resentStr && `Resent ${resentStr}`,
     scheduledStr && `Scheduled for ${scheduledStr}`,
     AUDIENCE_LABEL[campaign?.audience_kind] || 'All contacts',
   ].filter(Boolean)
+  const canResend = campaign?.status === 'sent' && campaign?.missed_count !== 0
   const staleNoDelivery = hasStats
     && campaign?.status === 'sent'
     && (campaign.stats.delivered || 0) === 0
@@ -207,7 +266,20 @@ export default function HostEmailReport({ campaignId }) {
   return (
     <div>
       <div className="mt-3">
-        <h1 className="text-2xl font-bold">{campaign?.subject || ''}</h1>
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <h1 className="text-2xl font-bold">{campaign?.subject || ''}</h1>
+          {canResend && (
+            <button
+              type="button"
+              onClick={resendMissed}
+              disabled={resending}
+              className="shrink-0 rounded-full bg-white text-black px-3 py-1.5 text-xs font-medium disabled:opacity-50"
+            >
+              {resending ? 'Queueing…' : resendLabel(campaign.missed_count)}
+            </button>
+          )}
+        </div>
+        {actionError && <p className="text-red-300 text-xs mt-2">{actionError}</p>}
         <p className="text-white/55 text-sm mt-1 flex items-center gap-2 flex-wrap">
           <span>{headerBits.join(' · ')}</span>
           {campaign?.email_type === 'utility' && (

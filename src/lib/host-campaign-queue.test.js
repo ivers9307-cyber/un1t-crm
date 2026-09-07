@@ -302,6 +302,46 @@ describe('processHostCampaignChunk — finalisation', () => {
     expect(hasEq(finalise, 'status', 'sending')).toBe(true) // CAS against a concurrent finaliser
   })
 
+  it("a first finalise keeps resent_at untouched and reads sent_at off the campaign row", async () => {
+    const { db, statements } = makeDb(routeFor(drainedBatch))
+    await processHostCampaignChunk(db, CAMPAIGN_ID)
+    const read = statements.find((s) => s.table === 'host_campaigns' && op(s, 'select'))
+    expect(op(read, 'select').args[0]).toContain('sent_at')
+    const finalise = statements.filter((s) => s.table === 'host_campaigns' && op(s, 'update'))
+      .find((s) => op(s, 'update').args[0].status)
+    expect(op(finalise, 'update').args[0]).not.toHaveProperty('resent_at')
+  })
+
+  // HOST-RESEND.1 — a resend drains through this same finaliser. The FIRST
+  // sent_at is the campaign's send time and must survive; the resend is
+  // recorded on resent_at (mig 593) instead.
+  it("finalising a campaign that already has a sent_at stamps resent_at and leaves sent_at alone", async () => {
+    const { db, statements } = makeDb(routeFor({ ...drainedBatch, campaign: { ...CAMPAIGN, sent_at: '2026-09-04T10:58:14Z' } }))
+    const result = await processHostCampaignChunk(db, CAMPAIGN_ID)
+    expect(result.status).toBe('drained')
+    const finalise = statements.filter((s) => s.table === 'host_campaigns' && op(s, 'update'))
+      .find((s) => op(s, 'update').args[0].status)
+    const patch = op(finalise, 'update').args[0]
+    expect(patch).toMatchObject({ status: 'sent', sent_count: 3 })
+    expect(patch).not.toHaveProperty('sent_at')
+    expect(patch.resent_at).toBeTruthy()
+    expect(hasEq(finalise, 'status', 'sending')).toBe(true)
+  })
+
+  it("a resend where every NEW row failed still finalises to 'sent' (the original sends count) and stamps resent_at", async () => {
+    // sentCount is the campaign-wide total, so the earlier successful sends
+    // keep the status at 'sent' even when this drain delivered nothing.
+    const { db, statements } = makeDb(routeFor({ ...drainedBatch, sentCount: 120, campaign: { ...CAMPAIGN, sent_at: '2026-09-04T10:58:14Z' } }))
+    sendEmail.mockRejectedValue(new Error('postmark down'))
+    const result = await processHostCampaignChunk(db, CAMPAIGN_ID)
+    expect(result.status).toBe('drained')
+    const finalise = statements.filter((s) => s.table === 'host_campaigns' && op(s, 'update'))
+      .find((s) => op(s, 'update').args[0].status)
+    expect(op(finalise, 'update').args[0]).toMatchObject({ status: 'sent', sent_count: 120 })
+    expect(op(finalise, 'update').args[0].resent_at).toBeTruthy()
+    expect(op(finalise, 'update').args[0]).not.toHaveProperty('sent_at')
+  })
+
   it("finalises to 'failed' when every row failed (nothing delivered)", async () => {
     const { db, statements } = makeDb(routeFor({ ...drainedBatch, sentCount: 0 }))
     sendEmail.mockRejectedValue(new Error('postmark down'))
