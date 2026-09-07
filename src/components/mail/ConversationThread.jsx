@@ -51,7 +51,7 @@
 //     something you work out by comparing addresses.
 // None of it is stored: it is derived from the messages already on screen.
 
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import {
   ArrowLeft, Lock, AlertCircle, MailCheck, ImageOff, Maximize2, Minimize2,
@@ -1234,7 +1234,7 @@ function ThreadMessage({ message, conversation, conversationId, expanded, onTogg
   const body = message.text_body || '(no text content)'
   // MAIL-REPLY-QUOTE.1 — what the person WROTE, and the chain under it. The
   // note branch below keeps `body` whole: a note is never a reply to mail.
-  const split = splitQuotedText(message.text_body || '')
+  const split = useMemo(() => splitQuotedText(message.text_body || ''), [message.text_body])
   const textBody = split.body || body
   // Notes never take the HTML path, whatever the payload contains: the route
   // does not emit a document for them, and this guard says so twice.

@@ -310,9 +310,9 @@ describe('POST …/reply — real reply', () => {
       direction: 'outbound',
       is_internal_note: false,
       postmark_message_id: 'pm-out-1',
-      // MAIL-REPLY-QUOTE.1 — stored BARE, matching every row before today;
-      // the wire header is the bracketed form.
-      in_reply_to: LAST_INBOUND.rfc_message_id.replace(/^<|>$/g, ''),
+      // MAIL-REPLY-QUOTE.1 — stored AS SENT (bracketed), the same convention
+      // the inbound webhook and the Sent-folder poller use for the column.
+      in_reply_to: `<${LAST_INBOUND.rfc_message_id.replace(/^<|>$/g, '')}>`,
       references_header: '<older@mail.example.com> <inbound-1@mail.example.com>',
       status: 'sent',
     })
@@ -1671,9 +1671,9 @@ describe('POST …/reply — quotes and threads off the MOST RECENT message (MAI
     const [msg] = insertsInto(db, 'email_inbox_messages')
     // The row is the record of what the member received — quote included.
     expect(msg.payload.text_body).toBe(call.textBody)
-    // Bare id in in_reply_to (every row before today looks like this);
-    // References verbatim, so the next reply continues the chain.
-    expect(msg.payload.in_reply_to).toBe('CANz@mail.gmail.com')
+    // Both headers verbatim as sent (bracketed, like every other writer of
+    // these columns), so the next reply continues the chain.
+    expect(msg.payload.in_reply_to).toBe('<CANz@mail.gmail.com>')
     expect(msg.payload.references_header).toBe('<pm-0@mtasv.net> <CANz@mail.gmail.com>')
     // The queue list must never preview the quote.
     const [patch] = updatesTo(db, 'email_tickets')

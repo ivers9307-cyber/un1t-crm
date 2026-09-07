@@ -193,24 +193,10 @@ export function replySubject(subject) {
   return /^re:/i.test(s) ? s : `Re: ${s}`
 }
 
-/**
- * RFC 5322 threading headers for a reply: In-Reply-To = the inbound
- * message's Message-ID; References = the inbound References chain
- * plus that id. Returns [] when the inbound carried no Message-ID
- * (the reply still sends, it just starts a fresh thread client-side).
- */
-export function buildReplyHeaders({ rfcMessageId, referencesHeader, inReplyTo }) {
-  if (!rfcMessageId) return []
-  const bracket = (id) => (String(id).startsWith('<') ? String(id) : `<${id}>`)
-  const bracketed = bracket(rfcMessageId)
-  // RFC 5322 §3.6.4: the parent's References, or its In-Reply-To when it has
-  // none, then the parent's own id.
-  const refs = (referencesHeader || '').trim() || (inReplyTo ? bracket(String(inReplyTo).trim()) : '')
-  return [
-    { Name: 'In-Reply-To', Value: bracketed },
-    { Name: 'References', Value: refs ? `${refs} ${bracketed}` : bracketed },
-  ]
-}
+// MAIL-REPLY-QUOTE.1 — the reply's threading headers (In-Reply-To /
+// References, with the RFC 5322 §3.6.4 fallback) live in
+// src/lib/mail/reply-quote.js (replyThreadingHeaders); buildReplyHeaders,
+// which threaded off the last INBOUND only, was deleted with its last caller.
 
 /** Queue-row preview: whitespace collapsed, 100 chars (matches WA/IG). */
 export function inboundPreview(text) {

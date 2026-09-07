@@ -858,3 +858,19 @@ describe('emailHtmlDocuments', () => {
     expect(emailHtmlDocuments('')).toEqual({ document: null, quotedDocument: null, blockedImages: 0, failed: false })
   })
 })
+
+describe('splitQuotedHtml — Outlook rule and the no-marker fast path', () => {
+  it("splits at Outlook desktop's hr followed by a From: block", () => {
+    const out = splitQuotedHtml('<p>Ok</p><hr><p><b>From:</b> Colm</p><p>old</p>')
+    expect(out.body).toBe('<p>Ok</p>')
+    expect(out.quoted).toBe('<hr><p><b>From:</b> Colm</p><p>old</p>')
+  })
+  it('does not treat a decorative hr as a quote boundary', () => {
+    const html = '<p>Ok</p><hr><p>Thanks</p>'
+    expect(splitQuotedHtml(html)).toEqual({ body: html, quoted: '' })
+  })
+  it('returns the input untouched, byte for byte, when no marker is present (no parse)', () => {
+    const html = '<div dir="ltr">Just  this<br/>and   that</div>'
+    expect(splitQuotedHtml(html)).toEqual({ body: html, quoted: '' })
+  })
+})

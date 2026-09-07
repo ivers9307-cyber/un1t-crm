@@ -53,7 +53,13 @@ export function splitQuotedText(text) {
       || isOutlookHeader(lines, i)
     ) { at = i; break }
   }
-  if (at < 0) return { body: lines.join('\n').replace(/\n+$/, ''), quoted: '' }
+  // A message that is ONLY a quote, or one whose writer opened with a `>` line
+  // of their own, keeps everything as the body: a blank message above a folded
+  // quote reads as empty, and the renderer's fallback would then paint the
+  // same text twice (once as body, once behind the pill).
+  if (at < 0 || !lines.slice(0, at).join('\n').trim()) {
+    return { body: lines.join('\n').replace(/\n+$/, ''), quoted: '' }
+  }
   return {
     body: lines.slice(0, at).join('\n').replace(/\n+$/, ''),
     quoted: lines.slice(at).join('\n').replace(/\n+$/, ''),

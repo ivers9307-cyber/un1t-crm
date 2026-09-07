@@ -6,6 +6,7 @@ import { validateBody } from '@/lib/validate'
 import { uuidLike, email as emailAddress } from '@/lib/schemas'
 import { sendConversationEmail, TICKET_INTERNAL_STREAM } from '@/lib/email-inbox-send'
 import { appendSignature, resolveSendSignature } from '@/lib/email-signature'
+import { textToHtml } from '@/lib/mail/text-to-html'
 import { normalizeEmail, pickContact, inboundPreview } from '@/lib/email-inbox'
 import { ticketSubject } from '@/lib/mail/conversation'
 import { escapeLikePattern } from '@/lib/like-escape'
@@ -95,19 +96,6 @@ const ComposeSchema = z.object({
 // the caller asks for, so the bound is stated.
 const CONTACT_MATCH_LIMIT = 50
 
-// Minimal text → HTML, identical to the reply route: a 1:1 human email is
-// escaped text with line breaks, not designed mail.
-//
-// TODO(EMAIL-TICKET.5): collapses into the shared email-html helper once the
-// sibling HTML plan lands — deliberately duplicated rather than imported
-// against a module that does not exist on this branch yet.
-function textToHtml(text) {
-  const escaped = text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-  return `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;font-size:14px;line-height:1.5;white-space:pre-wrap;">${escaped}</div>`
-}
 
 export async function POST(request) {
   const user = await getCurrentUser()

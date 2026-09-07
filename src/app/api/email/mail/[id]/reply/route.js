@@ -12,6 +12,7 @@ import {
 } from '@/lib/mail/reply-quote'
 import { shouldStampFirstResponse } from '@/lib/mail/conversation'
 import { appendSignature, resolveSendSignature } from '@/lib/email-signature'
+import { textToHtml } from '@/lib/mail/text-to-html'
 import { logAuditEvent } from '@/lib/audit'
 import { email as emailAddress } from '@/lib/schemas'
 import {
@@ -70,13 +71,6 @@ const ReplySchema = z.object({
 // replacements as the operator's own words. That ordering is the whole safety
 // story for signatures — escape-then-concatenate would hand an operator a raw
 // HTML injection point into outbound mail.
-function textToHtml(text) {
-  const escaped = text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-  return `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;font-size:14px;line-height:1.5;white-space:pre-wrap;">${escaped}</div>`
-}
 
 // POST /api/email/conversations/[id]/reply — answer a conversation, or add an internal
 // note (EMAIL-TICKET.4).
@@ -281,14 +275,16 @@ export async function POST(request, props) {
   ] = await Promise.all([
     // MAIL-REPLY-QUOTE.1 — the message this reply is a reply TO: the most
     // recent in EITHER direction, notes excluded. A mail client threads onto
-    // and quotes the last thing in the conversation, whoever wrote it. Several
-    // rows, not one, so a newest-is-a-note conversation still finds the real
-    // anchor beneath it; selectReplyAnchor drops notes.
+    // and quotes the last thing in the conversation, whoever wrote it. Notes
+    // are excluded IN THE QUERY: a bounded window of mixed rows could be all
+    // notes (five staff notes in a row is ordinary) and then the reply would
+    // silently start a fresh thread with a real anchor sitting just beneath.
     db.from('email_inbox_messages')
       .select('id, direction, from_email, subject, text_body, rfc_message_id, postmark_message_id, in_reply_to, references_header, created_at, sent_at, is_internal_note, forwarded_message_id')
       .eq('ticket_id', conversation.id)
+      .eq('is_internal_note', false)
       .order('created_at', { ascending: false })
-      .limit(5),
+      .limit(1),
     loadParticipantMessages(db, conversation.id),
   ])
   if (anchorErr) {
@@ -570,7 +566,7 @@ export async function POST(request, props) {
     // conversation (ours or theirs) continues the chain. Storing In-Reply-To
     // alone lost the history through every studio reply. Bare id in
     // in_reply_to, matching every row before today; References verbatim.
-    in_reply_to: anchor ? (anchorMessageId(anchor) || '').replace(/^<|>$/g, '') || null : null,
+    in_reply_to: anchor ? anchorMessageId(anchor) : null,
     references_header: anchor ? (replyReferences(anchor) || null) : null,
     is_internal_note: false,
     source: 'operator',
@@ -605,7 +601,7 @@ export async function POST(request, props) {
           recipients: { to: recipients.to, cc: recipients.cc, bcc: recipients.bcc },
           subject,
           text_body: wireText,
-          in_reply_to: anchor ? (anchorMessageId(anchor) || '').replace(/^<|>$/g, '') || null : null,
+          in_reply_to: anchor ? anchorMessageId(anchor) : null,
           references_header: anchor ? (replyReferences(anchor) || null) : null,
           author_profile_id: user.id,
           sent_at: now,

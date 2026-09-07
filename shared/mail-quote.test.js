@@ -66,3 +66,14 @@ describe('splitQuotedText', () => {
     expect(splitQuotedText(42)).toEqual({ body: '', quoted: '' })
   })
 })
+
+describe('splitQuotedText — a message that is only a quote is not split', () => {
+  it('keeps a message whose first line the writer opened with ">" as the body', () => {
+    const text = '> checklist item one\nDone, see above.'
+    expect(splitQuotedText(text)).toEqual({ body: text, quoted: '' })
+  })
+  it('keeps a bare quoted chain as the body rather than an empty message', () => {
+    const text = 'On Mon 7 Sep 2026 at 13:34, A <a@b.c> wrote:\n> hi'
+    expect(splitQuotedText(text)).toEqual({ body: text, quoted: '' })
+  })
+})

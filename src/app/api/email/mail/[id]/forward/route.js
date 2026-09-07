@@ -5,6 +5,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { sendConversationEmail } from '@/lib/email-inbox-send'
 import { appendSignature, resolveSendSignature } from '@/lib/email-signature'
+import { textToHtml } from '@/lib/mail/text-to-html'
 import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
 import { logAuditEvent } from '@/lib/audit'
 import { uuidLike, email as emailAddress } from '@/lib/schemas'
@@ -145,23 +146,10 @@ const SOURCE_COLUMNS = [
 // .select() caps at 1,000 regardless, so the bound is stated.
 const ATTACHMENT_LIMIT = 50
 
-// Minimal text → HTML, identical to the reply and compose routes.
-//
-// THIS IS THE WHOLE ANSWER TO HOSTILE INBOUND HTML. The quoted body reaching
-// this function is PLAIN TEXT (email_inbox_messages.text_body — Postmark's own
-// TextBody, or htmlToPlainText of the HtmlBody when the sender supplied none),
-// and these three replacements escape it. So a stranger's markup is not
-// sanitised on its way onto the wire; it never becomes markup at all. That is
-// strictly stronger than reusing email-html.js's sanitiser, whose permissiveness
-// is bought by the sandboxed iframe it renders into — an iframe that does not
-// exist in a recipient's mail client.
-function textToHtml(text) {
-  const escaped = text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-  return `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;font-size:14px;line-height:1.5;white-space:pre-wrap;">${escaped}</div>`
-}
+// The quoted body reaching textToHtml is PLAIN TEXT (email_inbox_messages
+// .text_body — Postmark's own TextBody, or htmlToPlainText of the HtmlBody
+// when the sender supplied none); see src/lib/mail/text-to-html.js for why
+// escaping it is the whole answer to hostile inbound HTML on the wire.
 
 export async function POST(request, props) {
   const params = await props.params
