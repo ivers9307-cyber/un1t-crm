@@ -16,10 +16,11 @@ function fetchMock(linkContactImpl) {
     if (typeof url === 'string' && url.includes('/link-contact')) {
       return linkContactImpl(url, opts)
     }
-    // /api/me/preferences (SignatureHint) and any other incidental fetch this
-    // pane makes on mount — never resolves, same idiom as the composer-reset
-    // suite: the composer treats a missing signature as cosmetic, and nothing
-    // under test here depends on it settling.
+    // Any incidental fetch this pane makes on mount — never resolves, same
+    // idiom as the composer-reset suite: nothing under test here depends on
+    // one settling. (It used to catch the signature hint's own
+    // /api/me/preferences; MAIL-READER.1 removed that hint from every
+    // composer, so the composer no longer asks for anything on mount.)
     return new Promise(() => {})
   })
 }

@@ -21,7 +21,6 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { MessageCircle, MessageSquare, Send, StickyNote, Mail } from 'lucide-react'
-import SignatureHint from '@/components/mail/SignatureHint'
 import {
   resolveContactEmailSend, contactEmailFooter, mailboxesFromListResponse, defaultMailboxId,
   MAILBOXES_UNAVAILABLE,
@@ -160,10 +159,6 @@ export default function ContactComposer({
   // The list is in flight: no send may leave until it answers, because the
   // path it takes is not yet known. Never true when there is nothing to await.
   const awaitingAccounts = emailPlan.path === 'awaiting'
-  const chosenMailbox = emailPlan.path === 'mail'
-    ? mailboxes.find(m => m.id === emailPlan.mailboxId) || null
-    : null
-
   async function post(urlPath, payload) {
     setSending(true)
     setError(null)
@@ -417,14 +412,11 @@ export default function ContactComposer({
                 placeholder={`Email ${contactName || 'the customer'}…`}
                 className="w-full bg-un1t-bg border border-un1t-border rounded p-2 text-sm text-un1t-text placeholder:text-un1t-muted resize-none focus:outline-none focus:border-un1t-muted"
               />
-              {/* MAILFIX-SIGTRUTH.1 — the Mail path rides /compose, which
-                  appends the sender's effective signature for the chosen
-                  account's studio, so it gets the same hint every ticket
-                  composer has. ONLY on that path: the company-sender
-                  fallback appends nothing, and absence is the truth there. */}
-              {emailPlan.path === 'mail' && (
-                <SignatureHint locationId={chosenMailbox?.location_id || null} />
-              )}
+              {/* MAIL-READER.1 — no signature preview in a composer. The
+                  Mail path still rides /compose, which appends the sender's
+                  effective signature for the chosen account's studio; the
+                  read-only copy of it now lives only on the account page,
+                  beside the field that edits it. */}
               <div className="flex items-center justify-between mt-2 gap-2">
                 {emailPlan.path === 'mail' ? (
                   <label className="flex min-w-0 items-center gap-1.5 text-[11px] text-un1t-muted">

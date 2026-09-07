@@ -367,6 +367,16 @@ export default function ConversationThread({
               replyRecipients={replyRecipients}
             />
 
+            {/* MAIL-READER.1 — the caller's notice (Mail's related-conversations
+                nudge) sits INSIDE the header column, on the participants line,
+                because it is a fact about this correspondent rather than a
+                separate announcement. It used to be a full-width bar with its
+                own bottom border wedged between the header and the first
+                message: a whole row of a 78vh card, in the loudest treatment on
+                the screen, spent on a DIFFERENT conversation. The caller owns
+                the shape (Mail renders a chip); this file only says where. */}
+            {banner}
+
             <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-un1t-muted">
               {conversation?.mailbox ? (
                 <span title={conversation.mailbox.address || undefined}>
@@ -410,29 +420,37 @@ export default function ConversationThread({
               )}
             </div>
           </div>
+
+          {/* RETIRE-TICKETS.2 — the `controls` slot survives; its FALLBACK is
+              gone. The fallback was the conversation queue's chrome (four-state
+              lifecycle, assignment, duplicate folding) rendered when no slot
+              was passed — and since RETIRE-TICKETS.1 deleted that queue, the
+              only mounter (MailThread) always passes its own controls, the
+              handlers' routes are deleted, and a fallback nobody can reach is
+              exactly the dead code this sweep exists to remove. Merge lives on
+              as DATA (tombstones, scopeToUnmerged, the merge route) — offering
+              it on Mail again means building a Mail affordance, not reviving
+              this block.
+
+              MAIL-READER.1 — the slot moved INTO this flex row, right-aligned
+              beside the subject, instead of a `mt-3` row of its own beneath the
+              whole header. Three labelled buttons on their own line is a row of
+              the card; the same three as icons on the subject's line is none.
+              `shrink-0` because the subject truncates and the actions must
+              not. */}
+          <div className="ml-auto shrink-0">{controls}</div>
         </div>
-
-        {/* RETIRE-TICKETS.2 — the `controls` slot survives; its FALLBACK is
-            gone. The fallback was the conversation queue's chrome (four-state
-            lifecycle, assignment, duplicate folding) rendered when no slot
-            was passed — and since RETIRE-TICKETS.1 deleted that queue, the
-            only mounter (MailThread) always passes its own controls, the
-            handlers' routes are deleted, and a fallback nobody can reach is
-            exactly the dead code this sweep exists to remove. Merge lives on
-            as DATA (tombstones, scopeToUnmerged, the merge route) — offering
-            it on Mail again means building a Mail affordance, not reviving
-            this block. */}
-        {controls}
       </div>
-
-      {/* The caller's notice strip (Mail's related-conversations nudge) —
-          between the header and the correspondence, never inside either. */}
-      {banner}
 
       {/* Thread — MAIL-REFINE.1 (02): flat full-width messages separated by
           hairlines, not chat bubbles. Each message owns its padding and its
-          bottom border; the container only scrolls. */}
-      <div className="flex-1 overflow-y-auto bg-un1t-bg">
+          bottom border; the container only scrolls.
+
+          MAIL-READER.1 — `min-h-0` is what makes THIS the part that absorbs the
+          card's height. Without it a flex item's automatic minimum size is its
+          content, so a composer that had grown would push the thread out of the
+          card rather than be capped by its own max-h. */}
+      <div className="min-h-0 flex-1 overflow-y-auto bg-un1t-bg">
         {loading && messages.length === 0 ? (
           <Loading label="Loading thread…" />
         ) : messages.length === 0 ? (

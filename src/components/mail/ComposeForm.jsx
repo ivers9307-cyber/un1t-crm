@@ -36,7 +36,6 @@ import { Modal, Button, Field } from '@/components/ui'
 import { mailboxLabel } from '@/lib/mail/conversation-display'
 import RecipientEditor, { EMPTY_RECIPIENTS } from './RecipientEditor'
 import AttachmentPicker, { readyDrafts, hasPendingUploads } from './AttachmentPicker'
-import SignatureHint from './SignatureHint'
 
 // The submit button lives in the Modal's footer, which is a SIBLING of the
 // form, not a descendant — so it is wired to the form by id. Only one compose
@@ -226,15 +225,13 @@ export default function ComposeForm({ mailboxes = [], initialMailboxId = null, o
           )}
         </Field>
 
-        {/* The sign-off the route now appends (EMAIL-TICKET.5 follow-up) —
-            same shared hint as the reply box, so the preview cannot disagree
-            with what the member receives. MAILFIX-SIGTRUTH.1: the selected
-            From account's location IS the sending context (the send resolves
-            the studio half of the signature off the mailbox's own location),
-            so switching From re-resolves the hint to that studio. With NO
-            From account nothing can send, so there is no sending context to
-            preview — the hint is not mounted rather than shown unresolved. */}
-        {mailbox && <SignatureHint locationId={mailbox.location_id || null} />}
+        {/* MAIL-READER.1 — NO signature preview here. The route still appends
+            the sender's effective signature for the From account's studio;
+            what is gone is the dashed box reprinting it in every composer.
+            The signature is CONFIGURED on the account page and previewed
+            there, next to the field that changes it — a read-only copy in
+            three composers was the same text in four places, and in a docked
+            reader card it cost more rows than the email body got. */}
 
         {/* Files survive a change of From address, and that is safe rather than
             merely convenient: the draft key is derived from the SENDER'S profile

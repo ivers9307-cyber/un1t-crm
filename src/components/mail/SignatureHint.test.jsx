@@ -15,17 +15,20 @@
 //   • a photo-only block draws no "-- " separator (the send appends none)
 //   • fetched per mount, and REFETCHED when another tab saves a signature
 //     (`storage` event) or the tab comes back into view (throttled)
-//   • the reply box hands it the conversation's own location (the send resolves
-//     the studio half off conversation.location_id, so the hint must too)
+//
+// MAIL-READER.1 — the component is unchanged; what changed around it is WHO
+// mounts it. No composer previews the signature any more, so the account page
+// (EmailSignatureForm / account/RichSignatureEditor) is the only mounter left,
+// and the reply-box integration case that used to close this file is gone with
+// the mount it exercised. Everything above is asserted at this component's own
+// boundary and is untouched by that.
 
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { render, cleanup, screen, act, waitFor } from '@testing-library/react'
 import SignatureHint, { SIGNATURE_UPDATED_KEY, markSignatureUpdated } from './SignatureHint.jsx'
-import ReplyBox from './ReplyBox.jsx'
 import { resolveViewerId } from '@/components/mail/viewer-id'
 
-// The reply box resolves the signed-in user for draft scoping; mocked so the
-// integration case below runs without a supabase client.
+// Mocked so nothing in this file reaches for a supabase client on mount.
 vi.mock('@/components/mail/viewer-id', () => ({ resolveViewerId: vi.fn() }))
 
 const BUCKET_PHOTO = 'https://iyvtbjjxdggiadzwwvdj.supabase.co/storage/v1/object/public/branding/signatures/u/p.jpg'
@@ -278,28 +281,12 @@ describe('SignatureHint — a mounted composer never goes stale', () => {
   })
 })
 
-describe('ReplyBox hands the hint the conversation’s own location', () => {
-  it('a reply on a MAILBOX-LESS orphan conversation at a permitted studio resolves that studio — never the stored note', async () => {
-    stubPreferences({ email_signature: '', email_signature_rich: RICH })
-    render(
-      <ReplyBox
-        conversation={{
-          id: 'conversation-1', subject: 'Freeze', requester_email: 'a@x.com',
-          // Orphan: no mailbox (ON DELETE SET NULL), at Hatch — which runs
-          // no mailbox at all. The send still resolves Hatch; so must this.
-          status: 'open', mailbox_id: null, location_id: 'loc-hatch',
-        }}
-        replyRecipients={{ to: ['a@x.com'], mode: 'reply', over_cap: false, empty: false }}
-        onSend={vi.fn()}
-        onRemoveRecipient={vi.fn()}
-        onRestoreRecipient={vi.fn()}
-      />
-    )
-
-    expect(await screen.findByText(/added automatically/i)).toBeTruthy()
-    const pre = screen.getByText(/UN1T Hatch Street/, { selector: 'pre' })
-    expect(pre.textContent).toContain('087 111 2222') // Hatch has no card — person's phone stands
-    expect(pre.textContent).not.toContain('01 555 0001')
-    expect(pre.textContent).not.toContain('typed note')
-  })
-})
+// MAIL-READER.1 — the "ReplyBox hands the hint the conversation's own
+// location" suite that stood here is GONE with the mount it exercised. No
+// composer previews the signature any more (ReplyBox, ComposeForm, ForwardForm
+// and ContactComposer all dropped it the same day); the account page is the one
+// surface that still renders this component, beside the field that edits it.
+// The RESOLUTION rule that suite was really pinning — a mailbox-less orphan
+// conversation resolves its own studio, never the stored note — is unchanged
+// and still covered above, at the component's own boundary, by "a PERMITTED,
+// mailbox-less studio resolves".
