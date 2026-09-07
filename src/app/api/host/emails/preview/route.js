@@ -4,10 +4,12 @@
 // host's sender name; stores nothing.
 //
 // The composer's own live preview renders the raw body — this route exists
-// because that is not faithful: renderHostCampaignHtml sanitizes (strips
-// <style>/<meta>/<script>) and injects the mandatory unsubscribe footer, so
-// a host could otherwise approve a layout no recipient will ever see (the
-// same gap send-test closed for the actual send).
+// because that is not faithful: renderHostCampaignHtml sanitizes (keeps
+// <style> with its CSS scrubbed, keeps one canonical viewport <meta>, strips
+// scripts/iframes/forms/other <meta>/on* handlers) and injects the mandatory
+// unsubscribe footer, so a host could otherwise approve a layout no
+// recipient will ever see (the same gap send-test closed for the actual
+// send).
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'

@@ -7465,7 +7465,7 @@ registry.registerPath({
   tags: ['Host Portal'],
   security: [{ CookieAuth: [] }],
   summary: 'Render a faithful preview of a host campaign body (HOST-EMAILS.2)',
-  description: "Host session. Renders through the SAME renderHostCampaignHtml the queue and the test send use — so the sanitizer (strips <style>/<meta>/<script>) and the injected unsubscribe footer are both exercised, unlike the composer's own raw-body live preview. Merge tags render against sample values ('Sample Recipient'), and the unsubscribe link is the same inert placeholder token send-test uses. Stores nothing; not scoped to an existing campaign id.",
+  description: "Host session. Renders through the SAME renderHostCampaignHtml the queue and the test send use — so the sanitizer (keeps <style> with its CSS scrubbed, keeps one canonical viewport <meta>, strips scripts/iframes/forms/other <meta>/on* handlers) and the injected unsubscribe footer are both exercised, unlike the composer's own raw-body live preview. Merge tags render against sample values ('Sample Recipient'), and the unsubscribe link is the same inert placeholder token send-test uses. Stores nothing; not scoped to an existing campaign id.",
   request: { body: { content: { 'application/json': { schema: HostEmailPreviewBody } } } },
   responses: {
     200: { description: 'Rendered HTML', content: { 'application/json': { schema: SuccessResponse(z.object({ html: z.string() })) } } },

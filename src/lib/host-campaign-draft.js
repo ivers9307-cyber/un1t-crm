@@ -17,15 +17,20 @@ export function designJsonTooBig(designJson) {
 }
 
 // The audience event must be one of THIS host's events (404-shaped error
-// keeps ids unenumerable).
+// keeps ids unenumerable). A read error is a distinct failure — the caller
+// (PATCH) maps any non-null string here to a 404, so a query that actually
+// failed (not "no rows") must NOT read as "no such event"; keep the string
+// contract but make its text distinguishable ('Could not check the event.')
+// rather than silently swallowing `error` and reporting 'Event not found'.
 export async function assertAudienceEventOwned(db, hostId, audienceEventId) {
   if (!audienceEventId) return null
-  const { data } = await db
+  const { data, error } = await db
     .from('race_events')
     .select('id')
     .eq('id', audienceEventId)
     .eq('host_id', hostId)
     .maybeSingle()
+  if (error) return 'Could not check the event.'
   return data ? null : 'Event not found'
 }
 

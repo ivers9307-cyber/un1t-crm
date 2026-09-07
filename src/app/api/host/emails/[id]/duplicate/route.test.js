@@ -11,6 +11,7 @@ vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 import { POST } from './route.js'
 import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
+import { HOST_CAMPAIGN_LIST_COLUMNS } from '@/lib/host-campaign-draft'
 
 const HOST_ID = 'b0000000-0000-0000-0000-0000000000b1'
 const CAMPAIGN_ID = 'a0000000-0000-0000-0000-0000000000a1'
@@ -91,6 +92,17 @@ describe('POST /api/host/emails/[id]/duplicate', () => {
       host_id: HOST_ID, subject: 'Copy of Race week', body_html: '<p>x</p>', design_json: { a: 1 },
       audience_kind: 'event', audience_event_id: EVENT_ID, audience_campaign_id: null, email_type: 'utility', status: 'draft',
     })
+  })
+
+  it('selects HOST_CAMPAIGN_LIST_COLUMNS on the insert and returns exactly the row the db handed back', async () => {
+    const inserted = { id: NEW_ID, subject: 'Copy of Race week', status: 'draft', audience_campaign_id: null }
+    const { db, statements } = makeDb(routeFor({ inserted }))
+    createServerClient.mockReturnValue(db)
+    const res = await POST(req(), props)
+    expect(res.status).toBe(200)
+    const ins = statements.find((s) => s.table === 'host_campaigns' && op(s, 'insert'))
+    expect(op(ins, 'select').args[0]).toEqual(HOST_CAMPAIGN_LIST_COLUMNS)
+    expect((await res.json()).data).toEqual(inserted)
   })
 
   it('reads scoped by host_id + id', async () => {

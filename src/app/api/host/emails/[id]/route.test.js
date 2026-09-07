@@ -88,6 +88,24 @@ describe('GET /api/host/emails/[id]', () => {
     expect(res.status).toBe(200)
     expect((await res.json()).data).toEqual(row)
   })
+
+  // HOST-EMAILS.2 review fix — the select had omitted audience_campaign_id,
+  // so a 'non_openers' draft round-tripped into the composer with it
+  // undefined and a save silently turned the reminder into an all-contacts
+  // send.
+  it('selects audience_campaign_id, and a non_openers row carries it in the response', async () => {
+    const row = {
+      id: CAMPAIGN_ID, subject: 'Reminder: Race week', body_html: '<p>x</p>', status: 'draft',
+      audience_kind: 'non_openers', audience_campaign_id: PARENT_ID,
+    }
+    const { db, statements } = makeDb(() => ({ data: row, error: null }))
+    createServerClient.mockReturnValue(db)
+    const res = await GET(req('GET'), props)
+    expect(res.status).toBe(200)
+    const read = statements[0]
+    expect(op(read, 'select').args[0]).toContain('audience_campaign_id')
+    expect((await res.json()).data.audience_campaign_id).toBe(PARENT_ID)
+  })
 })
 
 describe('PATCH /api/host/emails/[id]', () => {
