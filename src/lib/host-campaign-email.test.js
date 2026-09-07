@@ -542,6 +542,45 @@ describe('resolveHostRecipients — nonOpenersOf', () => {
     const { db } = makeDb(routeFor({ parent: null }))
     await expect(resolveHostRecipients(db, HOST_ID, { nonOpenersOf: PARENT })).rejects.toThrow(/parent campaign/)
   })
+
+  it('an empty non-openers set short-circuits — [] with no host_contacts or host_email_suppressions statements', async () => {
+    const { db, statements } = makeDb((state) => {
+      if (state.table === 'host_campaigns') return { data: { id: PARENT }, error: null }
+      if (state.table === 'host_campaign_sends') return { data: [], error: null }
+      return {}
+    })
+    const out = await resolveHostRecipients(db, HOST_ID, { nonOpenersOf: PARENT })
+    expect(out).toEqual([])
+    expect(statements.some((s) => s.table === 'host_contacts')).toBe(false)
+    expect(statements.some((s) => s.table === 'host_email_suppressions')).toBe(false)
+  })
+
+  it('paginates the non-openers read past 1000 rows', async () => {
+    // 1005 qualifying rows: page one is s0..s999 (range 0-999), page two is
+    // s1000..s1004 (range 1000-1999, only 5 rows). host_contacts is kept
+    // deliberately tiny — only the two contacts this test cares about.
+    const TOTAL = 1005
+    const sendsRows = Array.from({ length: TOTAL }, (_, i) => ({ contact_id: `s${i}` }))
+    const hostContacts = ['s0', 's1000'].map((id) => ({
+      contact_id: id,
+      marketing_consent: true,
+      contact: { id, email: `${id}@x.ie`, email_marketing: true, email_status: 'active', email_suppressed_at: null },
+    }))
+    const { db, statements } = makeDb((state) => {
+      if (state.table === 'host_campaigns') return { data: { id: PARENT }, error: null }
+      if (state.table === 'host_email_suppressions') return { data: [], error: null }
+      if (state.table === 'host_contacts') return { data: hostContacts, error: null }
+      if (state.table === 'host_campaign_sends') {
+        const [from, to] = state.ops.find((o) => o.method === 'range').args
+        return { data: sendsRows.slice(from, to + 1), error: null }
+      }
+      return {}
+    })
+    const out = await resolveHostRecipients(db, HOST_ID, { nonOpenersOf: PARENT })
+    const sendsQueries = statements.filter((s) => s.table === 'host_campaign_sends')
+    expect(sendsQueries.map((s) => s.ops.find((o) => o.method === 'range').args)).toEqual([[0, 999], [1000, 1999]])
+    expect(out.map((r) => r.contact_id)).toContain('s1000') // from page two
+  })
 })
 
 // HOST-EMAILS.2 — <style> survives (scrubbed), the viewport meta survives

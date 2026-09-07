@@ -447,6 +447,8 @@ export async function resolveHostRecipients(db, hostId, { audienceEventId = null
       for (const row of data || []) if (row.contact_id) allowedContactIds.add(row.contact_id)
       if (!data || data.length < PAGE) break
     }
+    // The well-performing campaign — where everyone opened — is the common case and should be free.
+    if (allowedContactIds.size === 0) return []
   }
 
   const suppressed = new Set()
