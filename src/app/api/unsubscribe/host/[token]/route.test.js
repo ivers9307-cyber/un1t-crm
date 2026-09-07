@@ -100,6 +100,55 @@ describe('POST /api/unsubscribe/host/[token]', () => {
     expect((await POST(req(), props)).status).toBe(404)
     expect(suppressAtPostmark).not.toHaveBeenCalled()
   })
+
+  // HOST-EMAILS.2 — the landing page's confirm button posts here with
+  // redirect=1 and expects a browser redirect; a mail provider's RFC 8058
+  // one-click POST also arrives form-encoded but never carries redirect.
+  it('a form POST with redirect=1 revokes and 303s to the done page (the confirm button)', async () => {
+    verifyHostUnsubToken.mockReturnValue({ hostId: 'h-1', contactId: 'c-1' })
+    createServerClient.mockReturnValue(stubDb())
+    const req = new Request('http://localhost/api/unsubscribe/host/tok', {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: 'redirect=1',
+    })
+    const res = await POST(req, props)
+    expect(res.status).toBe(303)
+    expect(res.headers.get('location')).toBe('http://localhost/unsubscribe/host/tok?done=1')
+    expect(revokeHostConsent).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ source: 'host_unsubscribe_page' }))
+  })
+
+  it('a one-click POST (form body without redirect) still answers JSON and uses the one-click source', async () => {
+    verifyHostUnsubToken.mockReturnValue({ hostId: 'h-1', contactId: 'c-1' })
+    createServerClient.mockReturnValue(stubDb())
+    const req = new Request('http://localhost/api/unsubscribe/host/tok', {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: 'List-Unsubscribe=One-Click',
+    })
+    const res = await POST(req, props)
+    expect(res.status).toBe(200)
+    expect(revokeHostConsent).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ source: 'host_one_click_unsubscribe' }))
+  })
+
+  it('a form POST with redirect=1 whose revoke fails 303s to ?error=1', async () => {
+    verifyHostUnsubToken.mockReturnValue({ hostId: 'h-1', contactId: 'c-1' })
+    revokeHostConsent.mockResolvedValueOnce({ ok: false, changed: false, error: 'boom', code: null })
+    createServerClient.mockReturnValue(stubDb())
+    const req = new Request('http://localhost/api/unsubscribe/host/tok', {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: 'redirect=1',
+    })
+    const res = await POST(req, props)
+    expect(res.status).toBe(303)
+    expect(res.headers.get('location')).toBe('http://localhost/unsubscribe/host/tok?error=1')
+  })
+
+  it('a form POST with redirect=1 against an invalid token 303s to ?error=1', async () => {
+    verifyHostUnsubToken.mockReturnValue(null)
+    createServerClient.mockReturnValue(stubDb())
+    const req = new Request('http://localhost/api/unsubscribe/host/tok', {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: 'redirect=1',
+    })
+    const res = await POST(req, props)
+    expect(res.status).toBe(303)
+    expect(res.headers.get('location')).toBe('http://localhost/unsubscribe/host/tok?error=1')
+  })
 })
 
 describe('GET /api/unsubscribe/host/[token]', () => {

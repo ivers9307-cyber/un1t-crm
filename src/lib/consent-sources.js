@@ -99,6 +99,7 @@ export const CONSENT_SOURCE_CATEGORY = Object.freeze({
   host_resubscribe:               VOLUNTARY, // re-signup after a host unsubscribe
   host_unsubscribe_page:          VOLUNTARY, // host footer link landing page
   host_one_click_unsubscribe:     VOLUNTARY, // RFC 8058 POST on host mail
+  scanner_reversal:               VOLUNTARY, // HOST-EMAILS.2: restoring a contact a link scanner opted out
 
   // ── deliverability: the address failed ────────────────────────────
   postmark_hard_bounce:           DELIVERABILITY,
