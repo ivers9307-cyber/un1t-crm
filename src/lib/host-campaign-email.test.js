@@ -17,11 +17,13 @@ describe('sanitizeCampaignHtml', () => {
     expect(out).toBe('<p>hi</p><p>bye</p>')
   })
 
-  it('strips <style> tags WITH their content', () => {
+  it('keeps <style> tags, scrubbed, instead of stripping them (HOST-EMAILS.2)', () => {
+    // Was "strips <style> tags WITH their content" — HOST-EMAILS.2 keeps
+    // <style> so a Canva/Unlayer export stays responsive; the CSS itself is
+    // still scrubbed (here the non-http(s) url() is parked to `none`).
     const out = sanitizeCampaignHtml('<style>body{background:url(evil)}</style><p>ok</p>')
-    expect(out).not.toContain('style')
+    expect(out).toBe('<style>body{background:none}</style><p>ok</p>')
     expect(out).not.toContain('evil')
-    expect(out).toBe('<p>ok</p>')
   })
 
   it('strips script tags case-insensitively and with attributes', () => {
@@ -418,5 +420,70 @@ describe('resolveHostRecipients — per-event audience', () => {
     const db = eventDb({ attendees: [], hostContacts: ['a'] })
     const out = await resolveHostRecipients(db, 'h1', { audienceEventId: 'ev1' })
     expect(out).toEqual([])
+  })
+})
+
+// HOST-EMAILS.2 — <style> survives (scrubbed), the viewport meta survives
+// (canonicalised), everything else on the strip list still goes. A Canva or
+// Unlayer export keeps its whole responsive layer in a <style> block; before
+// this it rendered as a fixed 600px table on phones.
+describe('sanitizeCampaignHtml — styles and viewport (HOST-EMAILS.2)', () => {
+  const CANVA = '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="x-apple-disable-message-reformatting"><style>@import url("https://evil.example/x.css"); .wrap{min-width:600px} @media (max-width:600px){ .wrap{min-width:0 !important;width:100% !important} }</style></head><body><table class="wrap"><tr><td>Hi</td></tr></table></body></html>'
+
+  it('keeps the <style> block with its media query and drops the @import', () => {
+    const out = sanitizeCampaignHtml(CANVA)
+    expect(out).toContain('<style>')
+    expect(out).toContain('@media (max-width:600px)')
+    expect(out).toContain('width:100% !important')
+    expect(out).not.toContain('@import')
+    expect(out).not.toContain('evil.example')
+  })
+
+  it('keeps exactly one canonical viewport meta and strips the other metas', () => {
+    const out = sanitizeCampaignHtml(CANVA)
+    expect(out.match(/<meta/g)).toHaveLength(1)
+    expect(out).toContain('<meta name="viewport" content="width=device-width, initial-scale=1">')
+    expect(out).not.toContain('x-apple-disable-message-reformatting')
+    expect(out).not.toContain('charset')
+  })
+
+  it('never lets an authored viewport meta carry extra attributes through', () => {
+    const out = sanitizeCampaignHtml('<meta name="viewport" content="width=device-width" onload="x()" http-equiv="refresh"><p>x</p>')
+    expect(out).toContain('<meta name="viewport" content="width=device-width, initial-scale=1">')
+    expect(out).not.toContain('refresh')
+    expect(out).not.toContain('onload')
+  })
+
+  it('a <style> that tries to close itself early cannot smuggle a tag', () => {
+    const out = sanitizeCampaignHtml('<style>.a{}</style ><script>alert(1)</script><style>.b{color:red}</st\\yle><img src=x onerror=alert(1)></style>')
+    expect(out).not.toContain('<script')
+    expect(out).not.toContain('onerror')
+    expect(out).not.toMatch(/<style>[^<]*<img/)
+  })
+
+  it('still strips script, iframe, form, link, svg and on* handlers', () => {
+    const out = sanitizeCampaignHtml('<style>.a{}</style><link rel="stylesheet" href="https://x/y.css"><script>1</script><iframe src="x"></iframe><form action="x"><input></form><svg onload="1"></svg><a href="https://ok" onclick="1">ok</a>')
+    expect(out).toContain('<style>.a{}</style>')
+    expect(out).not.toContain('<link')
+    expect(out).not.toContain('<script')
+    expect(out).not.toContain('<iframe')
+    expect(out).not.toContain('<form')
+    expect(out).not.toContain('<svg')
+    expect(out).not.toContain('onclick')
+    expect(out).toContain('<a href="https://ok">ok</a>')
+  })
+
+  it('a forged placeholder in the input cannot inject a style block', () => {
+    const out = sanitizeCampaignHtml('<p>@@UN1T_STYLE_0@@ @@UN1T_VIEWPORT@@</p><style>.z{}</style>')
+    expect(out).not.toContain('@@UN1T_')
+    expect((out.match(/<style>/g) || []).length).toBe(1)
+    expect(out).not.toContain('<meta')
+  })
+
+  it('renderHostCampaignHtml keeps a full-document export responsive', () => {
+    const html = renderHostCampaignHtml({ host: { name: 'Club', sender_name: 'Club' }, subject: 's', bodyHtml: CANVA, unsubscribeUrl: 'https://x/u' })
+    expect(html).toContain('@media (max-width:600px)')
+    expect(html).toContain('name="viewport"')
+    expect(html).toContain('https://x/u')
   })
 })

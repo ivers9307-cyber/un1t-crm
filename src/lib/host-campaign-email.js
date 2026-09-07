@@ -4,12 +4,13 @@
 // input: body_html. Everything else (sender name, host name, subject, the
 // unsubscribe link) is escaped, and the body itself goes through
 // sanitizeCampaignHtml — a strip-list sanitizer that removes active content
-// (script/style/iframe/object/embed/form/link/meta/svg/math, on* handlers,
-// and every URL scheme outside http/https/mailto/tel — checked after
-// entity-decoding). The footer — host name + per-host unsubscribe link
-// + the "why you're receiving this" line — is injected server-side AFTER
-// sanitization, so a host can never omit or strip it (spec: "enforced in the
-// send path, not the composer").
+// (script/iframe/object/embed/form/link/svg/math, non-viewport meta, on*
+// handlers, and every URL scheme outside http/https/mailto/tel — checked
+// after entity-decoding), keeps `<style>` scrubbed and one canonical
+// viewport meta (HOST-EMAILS.2). The footer — host name + per-host
+// unsubscribe link + the "why you're receiving this" line — is injected
+// server-side AFTER sanitization, so a host can never omit or strip it
+// (spec: "enforced in the send path, not the composer").
 //
 // Recipient resolution happens AT SEND TIME (never stored): host_contacts
 // membership joined to host consent (host_contacts.marketing_consent — the
@@ -18,18 +19,33 @@
 // only — no Postmark here.
 
 import { isEmailable } from './host-contact-list'
+import { scrubCss } from './email-html'
 
 const PAGE = 1000 // the supabase-js 1k select cap — always .range()-paginate
 
 // ── Sanitizer ──────────────────────────────────────────────────────
 
-// Tags whose CONTENT is dangerous too — removed as a block.
-const CONTENT_STRIP_TAGS = /<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi
+// Tags whose CONTENT is dangerous too — removed as a block. <style> is NOT
+// here any more (HOST-EMAILS.2): its body is lifted out, scrubbed by the
+// CRM's scrubCss (no @import, no expression(), no remote url(), never a
+// `<` or `>` in the output) and put back after the strip passes.
+const CONTENT_STRIP_TAGS = /<script\b[^>]*>[\s\S]*?<\/script\s*>/gi
 // Remaining dangerous tags — the tags go, their inner content (plain text
 // fallback for iframe/object/form) stays. svg/math open foreign-content
 // parsing contexts (mXSS classics), so both are stripped. Also sweeps any
 // stray unclosed <script>/<style> open tag left after the block pass above.
 const TAG_STRIP = /<\/?(script|style|iframe|object|embed|form|link|meta|svg|math)\b[^>]*>/gi
+// HOST-EMAILS.2 — lifted before the strip passes and restored after them.
+// The placeholder prefix is stripped from the input first so a host cannot
+// forge one (it is plain text, never a tag, so the strip passes ignore it).
+// The viewport meta is always re-emitted in its canonical form, never as
+// authored (no attribute smuggling).
+const STYLE_BLOCK = /<style\b[^>]*>([\s\S]*?)<\/style\s*>/gi
+const VIEWPORT_META = /<meta\b[^>]*\bname\s*=\s*["']?viewport["']?[^>]*>/gi
+const VIEWPORT_META_SAFE = '<meta name="viewport" content="width=device-width, initial-scale=1">'
+const PLACEHOLDER_PREFIX = '@@UN1T_'
+const STYLE_PLACEHOLDER = /@@UN1T_STYLE_(\d+)@@/g
+const VIEWPORT_PLACEHOLDER = '@@UN1T_VIEWPORT@@'
 // on* event-handler attributes: double-quoted, single-quoted, bare. The
 // boundary before the attribute name may be whitespace, a `/` (SVG-style
 // `<img/onerror=…>`), or a quote closing the previous attribute's value
@@ -61,6 +77,27 @@ function fromCodePointSafe(code) {
   return Number.isFinite(code) && code >= 0 && code <= 0x10ffff ? String.fromCodePoint(code) : ''
 }
 
+// Drops a pure-whitespace boundary along with the on* handler it captured
+// (e.g. `<a href="x" onclick="1">` → `<a href="x">`, not `<a href="x" >`);
+// a quote or `/` boundary is structural and MUST be kept — it is closing the
+// previous attribute's value or standing in for the removed one.
+function dropOnAttrBoundary(match, boundary) {
+  return /\s/.test(boundary) ? '' : boundary
+}
+
+// HOST-EMAILS.2 — a <style> body captured via the backslash-close trick (see
+// STYLE_BLOCK below) can smuggle HTML-attribute-shaped text — `onerror=…` —
+// past scrubCss, which only understands CSS syntax and leaves it as inert
+// text. Stripping on* handlers from the raw capture BEFORE scrubCss runs
+// keeps that text out of the shipped message even though it can never
+// become a live attribute.
+function stripOnAttrsFromCss(css) {
+  return css
+    .replace(ON_ATTR_DQ, dropOnAttrBoundary)
+    .replace(ON_ATTR_SQ, dropOnAttrBoundary)
+    .replace(ON_ATTR_BARE, dropOnAttrBoundary)
+}
+
 function neutralizeUrlAttr(match, boundary, attr, rawValue) {
   let value = rawValue
   if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
@@ -85,20 +122,44 @@ function neutralizeUrlAttr(match, boundary, attr, rawValue) {
  */
 export function sanitizeCampaignHtml(html) {
   if (!html || typeof html !== 'string') return ''
-  let out = html
-  // Iterate to a fixed point: stripping one construct can splice a new one
-  // together (e.g. <scr<script>ipt>). Bounded — each pass only removes.
+  const counter = { cssChars: 0 }
+  const styles = []
+  let out = html.split(PLACEHOLDER_PREFIX).join('')
+  // 1. Lift and scrub every <style> body. An empty result after the scrub
+  //    drops the block entirely.
+  out = out.replace(STYLE_BLOCK, (_m, css) => {
+    const safe = scrubCss(stripOnAttrsFromCss(css), counter).trim()
+    if (!safe) return ''
+    styles.push(safe)
+    return `@@UN1T_STYLE_${styles.length - 1}@@`
+  })
+  // 2. Remember whether the author had a viewport meta; every occurrence
+  //    becomes the placeholder, and only the first is re-emitted.
+  let hadViewport = false
+  out = out.replace(VIEWPORT_META, () => { hadViewport = true; return VIEWPORT_PLACEHOLDER })
+  // 3. Iterate to a fixed point: stripping one construct can splice a new one
+  //    together (e.g. <scr<script>ipt>). Bounded — each pass only removes.
   for (let i = 0; i < 10; i++) {
     const before = out
     out = out
       .replace(CONTENT_STRIP_TAGS, '')
       .replace(TAG_STRIP, '')
-      .replace(ON_ATTR_DQ, '$1')
-      .replace(ON_ATTR_SQ, '$1')
-      .replace(ON_ATTR_BARE, '$1')
+      .replace(ON_ATTR_DQ, dropOnAttrBoundary)
+      .replace(ON_ATTR_SQ, dropOnAttrBoundary)
+      .replace(ON_ATTR_BARE, dropOnAttrBoundary)
       .replace(URL_ATTR, neutralizeUrlAttr)
     if (out === before) break
   }
+  // 4. Restore. scrubCss guarantees no `<`/`>` inside a style body, so the
+  //    only tags introduced here are the ones written on this line.
+  out = out.replace(STYLE_PLACEHOLDER, (_m, i) => `<style>${styles[Number(i)] ?? ''}</style>`)
+  let viewportEmitted = false
+  out = out.split(VIEWPORT_PLACEHOLDER).reduce((acc, part, idx) => {
+    if (idx === 0) return part
+    const tag = hadViewport && !viewportEmitted ? VIEWPORT_META_SAFE : ''
+    viewportEmitted = true
+    return acc + tag + part
+  }, '')
   return out
 }
 

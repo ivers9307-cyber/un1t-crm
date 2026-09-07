@@ -3,8 +3,10 @@
 // The host analog of /api/campaigns/[id]/send-test. Hosts had no way to see a
 // draft in their own inbox before sending it to the whole list, so the only
 // review surface was the composer preview — which does NOT run the sanitizer
-// (it strips <style>/<meta>, so a pasted Canva/Unlayer export loses every
-// media query) and does NOT show the injected unsubscribe footer.
+// (HOST-EMAILS.2: the sanitizer keeps a scrubbed <style> block and one
+// canonical viewport meta, but strips everything else — non-viewport meta,
+// script/iframe/object/embed/form/link/svg/math, on* handlers) and does NOT
+// show the injected unsubscribe footer.
 //
 // Contract, mirroring the real send so the test is faithful:
 //   - host session or 401; own campaign or 404 (.eq('host_id') tenancy)
@@ -220,9 +222,13 @@ describe('POST /api/host/emails/[id]/send-test', () => {
     expect(html).toContain('Pride Training Club')
   })
 
-  it('runs the sanitizer, so a style block in the body never reaches the inbox', async () => {
+  it('runs the sanitizer, so the style block survives scrubbed (HOST-EMAILS.2)', async () => {
     await post()
-    expect(sendEmail.mock.calls[0][0].htmlBody).not.toContain('<style')
+    const html = sendEmail.mock.calls[0][0].htmlBody
+    // Was "…so a style block in the body never reaches the inbox" — the
+    // sanitizer now keeps <style>, scrubbed, rather than stripping it, so a
+    // Canva/Unlayer export stays responsive on a phone.
+    expect(html).toContain('<style>.x{color:red}</style>')
   })
 
   it('substitutes merge tags rather than shipping the raw token', async () => {

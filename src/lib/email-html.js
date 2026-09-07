@@ -307,7 +307,12 @@ const CSS_TOTAL_MAX_CHARS = 250_000
  * both characters, so no ordering of deletions — present or future — can build
  * a tag out of it. CSS needs neither character.
  */
-function scrubCss(css, counter) {
+/**
+ * HOST-EMAILS.2 — exported for the host campaign sanitizer, which keeps
+ * <style> blocks. `counter` is `{ cssChars: 0 }` per document (the total
+ * budget below is per document). Output never contains `<` or `>`.
+ */
+export function scrubCss(css, counter) {
   const input = String(css)
   if (input.length > CSS_CHUNK_MAX_CHARS) return ''
   if (counter.cssChars + input.length > CSS_TOTAL_MAX_CHARS) return ''
