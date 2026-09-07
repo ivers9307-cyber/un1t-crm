@@ -100,11 +100,28 @@ function refuse(reason, error) {
 }
 
 /**
+ * HOST-EMAILS.2 — the one predicate for "this host cannot send this campaign
+ * right now". Used by the launch (refusal), the schedule route (early
+ * feedback), and the list/report routes (a 'sending' campaign with a
+ * reason here is PAUSED: the queue returns 'halted' for the same two
+ * conditions and the campaign waits for UN1T).
+ * @param {{ sender_domain_verified?: boolean, sender_email?: string|null, postmark_stream_id?: string|null }|null} host
+ * @param {{ email_type?: string }} campaign
+ * @returns {'sender_not_verified'|'no_stream'|null}
+ */
+export function hostSendBlockReason(host, campaign) {
+  if (!host || !host.sender_domain_verified || !host.sender_email) return 'sender_not_verified'
+  if ((campaign?.email_type ?? 'marketing') !== 'utility' && !host.postmark_stream_id) return 'no_stream'
+  return null
+}
+
+/**
  * The resolver options a campaign row implies. HOST-GROWTH.11 — audience_kind
  * picks the population. Legacy-row guard: an event id on a non-mailing_list
  * row always means a per-event audience (pre-mig-460 writers left
- * audience_kind at its 'all' default).
- * @param {{ audience_kind?: string, audience_event_id?: string|null, email_type?: string }} campaign
+ * audience_kind at its 'all' default). HOST-EMAILS.2 — 'non_openers' resolves
+ * to the reminder audience via audience_campaign_id (the parent campaign).
+ * @param {{ audience_kind?: string, audience_event_id?: string|null, audience_campaign_id?: string|null, email_type?: string }} campaign
  */
 export function resolverOptionsFor(campaign) {
   const audienceEventId = campaign.audience_kind !== 'mailing_list' ? campaign.audience_event_id || null : null
@@ -112,6 +129,7 @@ export function resolverOptionsFor(campaign) {
     audienceEventId,
     mailingListOnly: campaign.audience_kind === 'mailing_list',
     emailType: campaign.email_type === 'utility' ? 'utility' : 'marketing',
+    nonOpenersOf: campaign.audience_kind === 'non_openers' ? campaign.audience_campaign_id || null : null,
   }
 }
 
@@ -165,7 +183,7 @@ export async function launchHostCampaign(db, { campaignId, hostId, trigger }) {
 
   const { data: campaign, error: campaignErr } = await db
     .from('host_campaigns')
-    .select('id, status, audience_kind, audience_event_id, email_type')
+    .select('id, status, audience_kind, audience_event_id, audience_campaign_id, email_type')
     .eq('id', campaignId)
     .eq('host_id', hostId)
     .maybeSingle()
@@ -186,10 +204,11 @@ export async function launchHostCampaign(db, { campaignId, hostId, trigger }) {
     .maybeSingle()
   if (hostErr) return refuse('db_error', hostErr.message)
   if (!host) return refuse('not_found')
-  if (!host.sender_domain_verified || !host.sender_email) return refuse('sender_not_verified')
 
-  // HOST-CONSENT.1 — marketing needs the host's own Postmark stream.
-  if (campaign.email_type !== 'utility' && !host.postmark_stream_id) return refuse('no_stream')
+  // HOST-CONSENT.1 kill switch + marketing-needs-a-stream, in one predicate
+  // (HOST-EMAILS.2) shared with the schedule route and the list/report PAUSED state.
+  const blocked = hostSendBlockReason(host, campaign)
+  if (blocked) return refuse(blocked)
 
   // Daily cap: campaigns this host has put into flight today (UTC midnight —
   // matches the cap's plain reading, no BST wobble on the boundary). The

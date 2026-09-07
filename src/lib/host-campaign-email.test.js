@@ -423,6 +423,93 @@ describe('resolveHostRecipients — per-event audience', () => {
   })
 })
 
+// resolveHostRecipients — nonOpenersOf (HOST-EMAILS.2). A chainable ops-
+// tracking fake (same shape as host-campaign-launch.test.js's makeDb) so the
+// exact filters applied to host_campaign_sends can be asserted AND used to
+// compute the fake's own canned response — the way a real .is()/.not() chain
+// would narrow the rows.
+describe('resolveHostRecipients — nonOpenersOf', () => {
+  const HOST_ID = 'h1'
+  const PARENT = 'p0000000-0000-0000-0000-0000000000p1'
+
+  const SEND_ROWS = [
+    { contact_id: 'c1', campaign_id: PARENT, status: 'sent', delivered_at: '2026-09-01T00:00:00Z', opened_at: null, clicked_at: null, bounced_at: null, complained_at: null, unsubscribed_at: null },
+    { contact_id: 'c2', campaign_id: PARENT, status: 'sent', delivered_at: '2026-09-01T00:00:00Z', opened_at: '2026-09-02T00:00:00Z', clicked_at: null, bounced_at: null, complained_at: null, unsubscribed_at: null },
+    { contact_id: 'c3', campaign_id: PARENT, status: 'sent', delivered_at: '2026-09-01T00:00:00Z', opened_at: null, clicked_at: null, bounced_at: '2026-09-01T01:00:00Z', complained_at: null, unsubscribed_at: null },
+  ]
+
+  const HOST_CONTACTS = ['c1', 'c2', 'c3', 'c4'].map((id) => ({
+    contact_id: id,
+    marketing_consent: true,
+    contact: { id, email: `${id}@x.ie`, email_marketing: true, email_status: 'active', email_suppressed_at: null },
+  }))
+
+  function applySendsOps(rows, ops) {
+    return rows.filter((row) => ops.every((o) => {
+      if (o.method === 'eq') return row[o.args[0]] === o.args[1]
+      if (o.method === 'is') return row[o.args[0]] === o.args[1]
+      if (o.method === 'not' && o.args[1] === 'is') return row[o.args[0]] !== o.args[2]
+      return true
+    }))
+  }
+
+  function makeDb(route) {
+    const statements = []
+    const db = {
+      from(table) {
+        const state = { table, ops: [] }
+        statements.push(state)
+        const b = new Proxy({}, {
+          get(_, method) {
+            if (method === 'then') {
+              const p = Promise.resolve(route(state) ?? {})
+              return p.then.bind(p)
+            }
+            return (...args) => { state.ops.push({ method, args }); return b }
+          },
+        })
+        return b
+      },
+    }
+    return { db, statements }
+  }
+
+  const hasEq = (state, col, val) => state.ops.some((o) => o.method === 'eq' && o.args[0] === col && o.args[1] === val)
+
+  function routeFor({ parent = { id: PARENT } } = {}) {
+    return (state) => {
+      if (state.table === 'host_campaigns') return { data: parent, error: null }
+      if (state.table === 'host_email_suppressions') return { data: [], error: null }
+      if (state.table === 'host_contacts') return { data: HOST_CONTACTS, error: null }
+      if (state.table === 'host_campaign_sends') return { data: applySendsOps(SEND_ROWS, state.ops), error: null }
+      return {}
+    }
+  }
+
+  it('only the parent\'s delivered, unopened, unclicked, unbounced rows, then the normal emailability gate', async () => {
+    const { db, statements } = makeDb(routeFor())
+    const out = await resolveHostRecipients(db, HOST_ID, { nonOpenersOf: PARENT })
+    expect(out.map((r) => r.contact_id)).toEqual(['c1'])
+
+    const sendsQuery = statements.find((s) => s.table === 'host_campaign_sends')
+    expect(hasEq(sendsQuery, 'campaign_id', PARENT)).toBe(true)
+    expect(hasEq(sendsQuery, 'status', 'sent')).toBe(true)
+    for (const col of ['opened_at', 'clicked_at', 'bounced_at', 'complained_at', 'unsubscribed_at']) {
+      expect(sendsQuery.ops.some((o) => o.method === 'is' && o.args[0] === col && o.args[1] === null)).toBe(true)
+    }
+    expect(sendsQuery.ops.some((o) => o.method === 'not' && o.args[0] === 'delivered_at')).toBe(true)
+
+    const parentRead = statements.find((s) => s.table === 'host_campaigns')
+    expect(hasEq(parentRead, 'id', PARENT)).toBe(true)
+    expect(hasEq(parentRead, 'host_id', HOST_ID)).toBe(true)
+  })
+
+  it('a parent that is not this host\'s throws (no cross-host audience)', async () => {
+    const { db } = makeDb(routeFor({ parent: null }))
+    await expect(resolveHostRecipients(db, HOST_ID, { nonOpenersOf: PARENT })).rejects.toThrow(/parent campaign/)
+  })
+})
+
 // HOST-EMAILS.2 — <style> survives (scrubbed), the viewport meta survives
 // (canonicalised), everything else on the strip list still goes. A Canva or
 // Unlayer export keeps its whole responsive layer in a <style> block; before

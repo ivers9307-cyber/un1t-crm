@@ -245,13 +245,19 @@ You&#39;re receiving this because you attended an event or joined the mailing li
  *
  * @param {SupabaseClient} db  service-role client
  * @param {string} hostId
- * @param {{audienceEventId?: string|null, emailType?: string, mailingListOnly?: boolean}} [options]
+ * @param {{audienceEventId?: string|null, emailType?: string, mailingListOnly?: boolean, nonOpenersOf?: string|null}} [options]
  * @param {boolean} [options.mailingListOnly] restrict the host_contacts query
  *   to source='mailing_list' (excludes 'event'-sourced membership rows).
  *   Every consent/suppression gate below is unaffected.
+ * @param {string|null} [options.nonOpenersOf] HOST-EMAILS.2 — a reminder draft's
+ *   audience: contacts with a 'sent', delivered, unopened, unclicked,
+ *   unbounced/uncomplained/unsubscribed row on this PARENT campaign (which
+ *   must belong to this host). Re-gated below by the normal emailability
+ *   rules, so a contact who withdrew consent since the parent send is still
+ *   excluded.
  * @returns {Promise<Array<{contact_id: string, email: string}>>}
  */
-export async function resolveHostRecipients(db, hostId, { audienceEventId = null, emailType = 'marketing', mailingListOnly = false } = {}) {
+export async function resolveHostRecipients(db, hostId, { audienceEventId = null, emailType = 'marketing', mailingListOnly = false, nonOpenersOf = null } = {}) {
   // HOST-EMAIL.4 — per-event audience. Resolved from CONFIRMED registrations
   // at send time (host_contacts.source_event_id only records the FIRST event
   // that added a contact, so it cannot answer "who attended event X").
@@ -278,6 +284,36 @@ export async function resolveHostRecipients(db, hostId, { audienceEventId = null
       if (!data || data.length < PAGE) break
     }
     if (allowedContactIds.size === 0) return []
+  }
+
+  // HOST-EMAILS.2 — reminder audience: the parent's rows that were delivered
+  // but never opened nor clicked (and not bounced/complained/unsubscribed),
+  // re-gated below by the normal emailability rules at SEND time. The parent
+  // must be this host's: a foreign id resolves nobody, loudly.
+  if (nonOpenersOf) {
+    const { data: parent, error: parentErr } = await db
+      .from('host_campaigns').select('id').eq('id', nonOpenersOf).eq('host_id', hostId).maybeSingle()
+    if (parentErr) throw new Error(`host campaign: parent campaign read failed: ${parentErr.message}`)
+    if (!parent) throw new Error('host campaign: parent campaign not found for this host')
+    allowedContactIds = new Set()
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await db
+        .from('host_campaign_sends')
+        .select('contact_id')
+        .eq('campaign_id', nonOpenersOf)
+        .eq('status', 'sent')
+        .not('delivered_at', 'is', null)
+        .is('opened_at', null)
+        .is('clicked_at', null)
+        .is('bounced_at', null)
+        .is('complained_at', null)
+        .is('unsubscribed_at', null)
+        .order('id')
+        .range(from, from + PAGE - 1)
+      if (error) throw new Error(`host campaign: non-openers query failed: ${error.message}`)
+      for (const row of data || []) if (row.contact_id) allowedContactIds.add(row.contact_id)
+      if (!data || data.length < PAGE) break
+    }
   }
 
   const suppressed = new Set()

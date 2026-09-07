@@ -15,7 +15,7 @@ vi.mock('@/lib/qstash', () => ({
   HOST_CAMPAIGNS_WORKER_PATH: '/api/webhooks/qstash/host-campaigns',
 }))
 
-import { launchHostCampaign, resolveMissedRecipients, LAUNCH_MESSAGES, LAUNCH_GATE_REASONS } from './host-campaign-launch.js'
+import { launchHostCampaign, resolveMissedRecipients, hostSendBlockReason, LAUNCH_MESSAGES, LAUNCH_GATE_REASONS } from './host-campaign-launch.js'
 import { resolveHostRecipients } from '@/lib/host-campaign-email'
 import { publishQueuePush, HOST_CAMPAIGNS_WORKER_PATH } from '@/lib/qstash'
 
@@ -101,6 +101,29 @@ describe('LAUNCH_GATE_REASONS', () => {
   })
 })
 
+describe('hostSendBlockReason', () => {
+  const host = { sender_domain_verified: true, sender_email: 'a@b.ie', postmark_stream_id: 'colm-events' }
+  it('null when verified with a stream', () => expect(hostSendBlockReason(host, { email_type: 'marketing' })).toBe(null))
+  it('sender_not_verified when unverified or no sender email or no host', () => {
+    expect(hostSendBlockReason({ ...host, sender_domain_verified: false }, { email_type: 'marketing' })).toBe('sender_not_verified')
+    expect(hostSendBlockReason({ ...host, sender_email: null }, { email_type: 'marketing' })).toBe('sender_not_verified')
+    expect(hostSendBlockReason(null, { email_type: 'marketing' })).toBe('sender_not_verified')
+  })
+  it('no_stream for marketing (and a missing email_type, legacy rows) without a stream; utility passes', () => {
+    expect(hostSendBlockReason({ ...host, postmark_stream_id: null }, { email_type: 'marketing' })).toBe('no_stream')
+    expect(hostSendBlockReason({ ...host, postmark_stream_id: null }, {})).toBe('no_stream')
+    expect(hostSendBlockReason({ ...host, postmark_stream_id: null }, { email_type: 'utility' })).toBe(null)
+  })
+})
+
+describe('launchHostCampaign — non_openers audience', () => {
+  it('passes nonOpenersOf = audience_campaign_id to the resolver', async () => {
+    const { db } = makeDb(routeFor({ campaign: { id: CAMPAIGN_ID, status: 'draft', email_type: 'marketing', audience_kind: 'non_openers', audience_event_id: null, audience_campaign_id: 'p0000000-0000-0000-0000-0000000000p1' } }))
+    await launch(db)
+    expect(resolveHostRecipients).toHaveBeenCalledWith(db, HOST_ID, expect.objectContaining({ nonOpenersOf: 'p0000000-0000-0000-0000-0000000000p1', mailingListOnly: false, audienceEventId: null }))
+  })
+})
+
 describe('launchHostCampaign — happy path', () => {
   it("send_now: CAS draft→sending, enqueues, kicks once, returns the recipient count", async () => {
     const { db, statements } = makeDb(routeFor())
@@ -176,7 +199,7 @@ describe('launchHostCampaign — happy path', () => {
     await launch(db)
     const read = statements.find((s) => s.table === 'host_campaigns')
     expect(hasEq(read, 'host_id', HOST_ID)).toBe(true)
-    expect(resolveHostRecipients).toHaveBeenCalledWith(db, HOST_ID, { audienceEventId: 'ev1', mailingListOnly: false, emailType: 'utility' })
+    expect(resolveHostRecipients).toHaveBeenCalledWith(db, HOST_ID, { audienceEventId: 'ev1', mailingListOnly: false, emailType: 'utility', nonOpenersOf: null })
   })
 })
 
@@ -504,7 +527,7 @@ describe('resolveMissedRecipients', () => {
       campaign: { id: CAMPAIGN_ID, email_type: 'utility', audience_kind: 'event', audience_event_id: 'ev-1' },
     })
     expect(r).toEqual({ missed: [{ contact_id: 'c2', email: 'b@x.ie' }, { contact_id: 'c9', email: 'z@x.ie' }], totalRows: 4 })
-    expect(resolveHostRecipients).toHaveBeenCalledWith(db, HOST_ID, { audienceEventId: 'ev-1', mailingListOnly: false, emailType: 'utility' })
+    expect(resolveHostRecipients).toHaveBeenCalledWith(db, HOST_ID, { audienceEventId: 'ev-1', mailingListOnly: false, emailType: 'utility', nonOpenersOf: null })
   })
 
   it('throws (never returns a partial list) when the rows read errors', async () => {
