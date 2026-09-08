@@ -474,6 +474,39 @@ describe('interpretBookingResult', () => {
     warn.mockRestore()
   })
 
+  // MIA-BOOK.3 — the real live success shape, finally captured. Prod logged
+  // `body keys: success,Booking` on every clean-2xx booking (2026-09-08, three
+  // occurrences), so the id was never missing — it was one level down under a
+  // PascalCase wrapper the harvest list didn't know about. Glofox spells the
+  // booking id `_id` on the /2.0/bookings GET item and `id` on the webhook
+  // payload, so the wrapper is read with both.
+  it('harvests the id from the live { success, Booking } wrapper, both id spellings', () => {
+    for (const Booking of [{ _id: 'bk7' }, { id: 'bk7' }]) {
+      expect(interpretBookingResult({ ok: true, status: 200, body: { success: true, Booking } }))
+        .toMatchObject({ booked: true, bookingId: 'bk7' })
+    }
+  })
+
+  it('stops warning once the id is harvestable', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    interpretBookingResult({ ok: true, status: 200, body: { success: true, Booking: { _id: 'bk7' } } })
+    expect(warn).not.toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
+  // The diagnostic that found this one only printed TOP-LEVEL keys, so proving
+  // where the id lived took a second production incident. A still-unharvestable
+  // body now prints one level down too, so the next unknown shape is readable
+  // from the log line alone.
+  it('a still-unharvestable 2xx logs the nested keys, not just the top level', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    interpretBookingResult({ ok: true, status: 200, body: { success: true, Reservation: { ref: 'x', slot: 1 } } })
+    const msg = warn.mock.calls.at(-1)[0]
+    expect(msg).toContain('body keys: success,Reservation')
+    expect(msg).toContain('Reservation keys: ref,slot')
+    warn.mockRestore()
+  })
+
   it('non-2xx → not booked, message_code surfaced (message as fallback)', () => {
     expect(interpretBookingResult({ ok: false, status: 400, body: { message_code: 'EVENT_FULL' } }))
       .toMatchObject({ booked: false, messageCode: 'EVENT_FULL' })
