@@ -33,6 +33,8 @@ import { E } from './EditableField'
 import EditableImage from './EditableImage'
 import HeroMediaTools from './HeroMediaTools'
 import LogoSwapper from './LogoSwapper'
+import OfferPanel from './OfferPanel'
+import { offerOf } from '@/lib/landing-page-blocks'
 
 // Shared section header: hairline + uppercase tracked label. The label
 // is presentational chrome (not operator data) so it stays consistent
@@ -302,6 +304,11 @@ export function EventBlock({ block }) {
 }
 
 export function LeadFormBlock({ block, onEdit, publicPath, campaign }) {
+  // offerOf() is the one place that decides whether there is an offer
+  // to show; a malformed group returns null and we render exactly
+  // what this section rendered before the group existed.
+  const offer = offerOf(block)
+  const eyebrow = offer ? (offer.section_eyebrow || 'Two ways in') : 'Join us'
   return (
     <section id="waitlist" className="scroll-mt-20 relative bg-black text-white py-24 md:py-32 border-t border-white/10 overflow-hidden">
       {/* Faint outlined watermark drifting behind the form — depth
@@ -309,32 +316,68 @@ export function LeadFormBlock({ block, onEdit, publicPath, campaign }) {
       <div className="absolute inset-y-0 -right-10 hidden lg:flex items-center pointer-events-none" aria-hidden="true">
         <span className="lp-outline font-display font-extrabold leading-none text-[13rem]">UN1T</span>
       </div>
-      <div className="relative max-w-6xl mx-auto px-6 grid lg:grid-cols-2 gap-12 lg:gap-20 items-center">
-        <div>
-          <Eyebrow>Join us</Eyebrow>
-          {(block.heading || onEdit) && (
-            <h2 className="lp-reveal font-display font-extrabold uppercase text-3xl md:text-5xl leading-[1.04] tracking-tight mb-5">
-              <E value={block.heading} onEdit={onEdit} path={['heading']} />
+
+      {offer ? (
+        <div className="relative max-w-6xl mx-auto px-6">
+          <Eyebrow>{eyebrow}</Eyebrow>
+          {(offer.section_heading || onEdit) && (
+            <h2 className="lp-reveal whitespace-pre-line font-display font-extrabold uppercase text-3xl md:text-5xl leading-[1.04] tracking-tight mb-12 md:mb-16 max-w-2xl">
+              <E value={offer.section_heading} onEdit={onEdit} path={['offer', 'section_heading']} multiline />
             </h2>
           )}
-          {(block.subtext || onEdit) && (
-            <p className="lp-reveal lp-d1 text-white/70 leading-relaxed max-w-md text-base md:text-lg">
-              <E value={block.subtext} onEdit={onEdit} path={['subtext']} multiline />
-            </p>
-          )}
-        </div>
-        <div className="lp-reveal lp-d2">
-          <div className="lp-card-glow rounded-2xl p-6 md:p-8">
-            <WaitlistWidget
-              publicPath={publicPath}
-              campaign={campaign}
-              buttonLabel={block.button_label}
-              successMessage={block.success_message}
-              consentLabel={block.consent_label}
-            />
+          <div className="grid lg:grid-cols-[1.25fr_1fr] gap-6 lg:gap-8 items-stretch">
+            <OfferPanel offer={offer} onEdit={onEdit} />
+            <div className="lp-reveal lp-d2 rounded-2xl border border-white/12 p-8 md:p-10 flex flex-col">
+              {(block.heading || onEdit) && (
+                <h3 className="font-display font-extrabold uppercase text-xl md:text-2xl tracking-tight mb-3">
+                  <E value={block.heading} onEdit={onEdit} path={['heading']} />
+                </h3>
+              )}
+              {(block.subtext || onEdit) && (
+                <p className="text-white/60 leading-relaxed text-sm md:text-base mb-7">
+                  <E value={block.subtext} onEdit={onEdit} path={['subtext']} multiline />
+                </p>
+              )}
+              <div className="mt-auto">
+                <WaitlistWidget
+                  publicPath={publicPath}
+                  campaign={campaign}
+                  buttonLabel={block.button_label}
+                  successMessage={block.success_message}
+                  consentLabel={block.consent_label}
+                />
+              </div>
+            </div>
           </div>
         </div>
-      </div>
+      ) : (
+        <div className="relative max-w-6xl mx-auto px-6 grid lg:grid-cols-2 gap-12 lg:gap-20 items-center">
+          <div>
+            <Eyebrow>{eyebrow}</Eyebrow>
+            {(block.heading || onEdit) && (
+              <h2 className="lp-reveal font-display font-extrabold uppercase text-3xl md:text-5xl leading-[1.04] tracking-tight mb-5">
+                <E value={block.heading} onEdit={onEdit} path={['heading']} />
+              </h2>
+            )}
+            {(block.subtext || onEdit) && (
+              <p className="lp-reveal lp-d1 text-white/70 leading-relaxed max-w-md text-base md:text-lg">
+                <E value={block.subtext} onEdit={onEdit} path={['subtext']} multiline />
+              </p>
+            )}
+          </div>
+          <div className="lp-reveal lp-d2">
+            <div className="lp-card-glow rounded-2xl p-6 md:p-8">
+              <WaitlistWidget
+                publicPath={publicPath}
+                campaign={campaign}
+                buttonLabel={block.button_label}
+                successMessage={block.success_message}
+                consentLabel={block.consent_label}
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   )
 }
