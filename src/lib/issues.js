@@ -99,6 +99,20 @@ export function validateSubmission({ description, photos = [] } = {}) {
   if (desc.length > DESCRIPTION_MAX) {
     return { ok: false, code: 'description_too_long', error: `Description must be ${DESCRIPTION_MAX} characters or fewer.` }
   }
+  const photoCheck = validatePhotos(photos)
+  if (!photoCheck.ok) return photoCheck
+  return { ok: true, normalised: { description: desc, photos } }
+}
+
+/**
+ * Validate photo METADATA — `{ filename, size, type }` per photo, no bytes.
+ * Extracted from validateSubmission (REPORT-ISSUE.3) so the rules have ONE
+ * definition and the direct-to-storage flow can apply them twice: once to
+ * the client's declared metadata when minting upload slots, and again to
+ * what Supabase Storage says it actually stored. The second pass is the
+ * load-bearing one — a client can declare any size/mime it likes.
+ */
+export function validatePhotos(photos = []) {
   if (!Array.isArray(photos)) {
     return { ok: false, code: 'photos_bad_shape', error: 'Photos must be a list.' }
   }
@@ -131,7 +145,25 @@ export function validateSubmission({ description, photos = [] } = {}) {
       }
     }
   }
-  return { ok: true, normalised: { description: desc, photos } }
+  return { ok: true }
+}
+
+// REPORT-ISSUE.3 — a storage path the device uploaded to directly, as minted
+// by POST /api/issues/upload-sign: `{location}/{draft}/{attachment}-{slug}`.
+// The finalise route pins the first segment to the CALLER'S active location,
+// so a path from another studio is refused before anything is read. The two
+// uuid segments are unguessable and the bucket is private (no client can
+// list it), and finalise additionally refuses a path an issue already
+// references — so an abandoned upload can't be re-attached by someone else.
+// Deliberately NOT time-boxed: a report written slowly, or resent after a
+// network failure, must still find its photos.
+const ISSUE_PHOTO_PATH_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[a-z0-9_.-]+$/
+
+export function isIssuePhotoPath(path, locationId) {
+  if (typeof path !== 'string' || !locationId) return false
+  if (!ISSUE_PHOTO_PATH_RE.test(path.toLowerCase())) return false
+  return path.toLowerCase().startsWith(`${String(locationId).toLowerCase()}/`)
 }
 
 /**

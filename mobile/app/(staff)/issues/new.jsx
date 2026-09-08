@@ -80,6 +80,12 @@ export default function NewIssueScreen() {
     setPhotos((prev) => prev.filter((_, i) => i !== idx))
   }
 
+  // REPORT-ISSUE.3 — the spinner is cleared in a `finally`, always.
+  // This screen used to await submitIssue() bare: when the submit rejected
+  // (a photo upload that died on the device), setSubmitting(false) never
+  // ran, `error` stayed null, and the button sat on "Sending…" forever with
+  // nothing on screen to say why. submitIssue() now answers an envelope for
+  // every failure it can see; the catch below covers the ones it cannot.
   async function onSubmit() {
     setError(null)
     if (description.trim().length === 0) {
@@ -87,14 +93,25 @@ export default function NewIssueScreen() {
       return
     }
     setSubmitting(true)
-    const r = await submitIssue({ description, photos })
-    setSubmitting(false)
-    if (r.success === false) {
-      setError(r.error || 'Submit failed')
-      return
+    try {
+      const r = await submitIssue({ description, photos, locationId: activeLocation?.id })
+      if (!r || r.success === false) {
+        setError(r?.error || 'Submit failed')
+        return
+      }
+      if (!r.data?.id) {
+        // Sent, but we have nothing to navigate to. Say so rather than
+        // pushing the reporter at /issues/undefined.
+        setError('Report sent, but the studio did not send it back — check My reports before resending.')
+        return
+      }
+      // Replace so back-button goes to the list, not back to the form.
+      router.replace(`/issues/${r.data.id}`)
+    } catch (err) {
+      setError(`Could not send the report: ${err?.message || err}`)
+    } finally {
+      setSubmitting(false)
     }
-    // Replace so back-button goes to the list, not back to the form.
-    router.replace(`/issues/${r.data.id}`)
   }
 
   return (
