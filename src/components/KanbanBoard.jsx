@@ -33,7 +33,14 @@ function sortColumn(deals) {
 // FEAT-PIPELINE-LAZY.1 — the server ships only the first page per column plus a
 // per-stage total count; each column lazily fetches more via /api/pipeline/deals
 // so the client never receives all (≤10k) open deals at once.
-export default function KanbanBoard({ initialStages, initialDeals, stageCounts = {}, view = 'active', locationId }) {
+//
+// PIPELINES.6 — `manual` says this board is a pipelines.mode='manual' one,
+// whose deals move ONLY by hand: the classifier never reads or writes it, so
+// the FUNNEL.1 reason for having no drag-drop does not apply. Accepted and
+// deliberately unused here — PIPELINES.10 adds the drag-drop behind it, and
+// landing the prop now keeps that change to this file alone. Underscore-
+// prefixed so the repo's no-unused-vars escape hatch covers it.
+export default function KanbanBoard({ initialStages, initialDeals, stageCounts = {}, view = 'active', manual: _manual = false, locationId }) {
   // Accumulated deals per column, seeded from the server's first page.
   const [columnDeals, setColumnDeals] = useState(() => {
     const m = {}

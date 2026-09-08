@@ -511,25 +511,34 @@ describe('RETURNPIPE.1 — the returning journey, with its board parked', () => 
   })
 })
 
-describe('RETURNPIPE.1 — splitStagesByFunnel keeps three boards apart', () => {
-  const stages = [
-    { slug: 'new_lead', is_dormant: false, display_order: 301 },
-    { slug: 'dormant',  is_dormant: true,  display_order: 309 },
-    { slug: 'returning_booked',      is_dormant: false, display_order: 401, board: 'returning' },
-    { slug: 'returning_first_class', is_dormant: false, display_order: 402, board: 'returning' },
-  ]
-
-  it('returning stages never leak into the acquisition tabs', () => {
-    const { funnel, offFunnel, returning } = splitStagesByFunnel(stages)
-    expect(funnel.map((s) => s.slug)).toEqual(['new_lead'])
-    expect(offFunnel.map((s) => s.slug)).toEqual(['dormant'])
-    expect(returning.map((s) => s.slug)).toEqual(['returning_booked', 'returning_first_class'])
+describe('PIPELINES.6 — splitStagesByFunnel partitions ONE board', () => {
+  // RETURNPIPE.1 used to assert the opposite of this: that `board` was a third
+  // axis and returning stages never leaked into the acquisition tabs. Mig 594
+  // moved board identity onto `pipelines` and `pipeline_stages.pipeline_id`,
+  // so the CALLER now scopes its query to one board and this helper only ever
+  // sees one board's rows. The `board` column stays on disk until a later
+  // migration drops it, and is inert here.
+  it('is_dormant is the only axis — a legacy board value is inert', () => {
+    const stages = [
+      { slug: 'new_lead', is_dormant: false, display_order: 301, board: 'acquisition' },
+      { slug: 'dormant',  is_dormant: true,  display_order: 309, board: 'acquisition' },
+      { slug: 'returning_booked',      is_dormant: false, display_order: 401, board: 'returning' },
+      { slug: 'returning_first_class', is_dormant: false, display_order: 402, board: 'returning' },
+    ]
+    const out = splitStagesByFunnel(stages)
+    expect(Object.keys(out).sort()).toEqual(['funnel', 'offFunnel'])
+    expect(out.funnel.map((s) => s.slug))
+      .toEqual(['new_lead', 'returning_booked', 'returning_first_class'])
+    expect(out.offFunnel.map((s) => s.slug)).toEqual(['dormant'])
   })
 
-  it('a stage with no board column reads as acquisition — every pre-mig-558 row', () => {
-    const { funnel, returning } = splitStagesByFunnel([{ slug: 'new_lead', is_dormant: false }])
-    expect(funnel).toHaveLength(1)
-    expect(returning).toHaveLength(0)
+  it('a manual board comes back whole, in display_order, nothing off funnel', () => {
+    const { funnel, offFunnel } = splitStagesByFunnel([
+      { slug: 'waitlist_no_answer',   is_dormant: false, display_order: 502 },
+      { slug: 'waitlist_new_enquiry', is_dormant: false, display_order: 501 },
+    ])
+    expect(funnel.map((s) => s.slug)).toEqual(['waitlist_new_enquiry', 'waitlist_no_answer'])
+    expect(offFunnel).toHaveLength(0)
   })
 })
 

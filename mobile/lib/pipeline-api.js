@@ -23,16 +23,45 @@
 import { supabase } from './supabase'
 import { api } from './api'
 
-// FUNNEL-M.1 — mirrors the web board query (src/app/pipeline/page.js):
+// FUNNEL-M.1 — mirrors the web board query (src/app/(sales)/pipeline/page.js):
 // non-archived stages only, ordered by display_order, and ships
 // is_dormant so the screen can split Funnel vs Off-funnel views via
 // shared/pipeline-classifier's splitStagesByFunnel().
+//
+// PIPELINES.6 — that split used to partition on `pipeline_stages.board` as
+// well, which is what kept Stillorgan's five parked `returning_*` rows out of
+// this screen. The board axis moved to the `pipelines` table (mig 594), so the
+// CALLER now has to scope to one board or those five columns reappear in the
+// Funnel strip. Scope to the location's PRIMARY board — mig 594's partial
+// unique index guarantees at most one per location, and every location's
+// primary is its acquisition board, so this is exactly the set that rendered
+// before.
+//
+// Deliberately no `enabled` filter: CCF Autos / SourceIt / Test Studio hold a
+// DISABLED primary row (their stray stage rows needed a parent), and this
+// screen shows their stages today. Web now hides a disabled board; making
+// mobile match is a product decision for the mobile task, not this one.
+//
+// Fails OPEN — an unreadable `pipelines` row leaves the query unscoped, i.e.
+// exactly today's behaviour. A board with five extra columns beats a blank
+// pipeline tab.
 export async function listStages(locationId) {
+  let pipelineId = null
+  if (locationId) {
+    const { data: primary } = await supabase.from('pipelines')
+      .select('id')
+      .eq('location_id', locationId)
+      .eq('is_primary', true)
+      .limit(1)
+    pipelineId = Array.isArray(primary) && primary.length > 0 ? primary[0].id : null
+  }
+
   let q = supabase.from('pipeline_stages')
     .select('id, name, slug, color, display_order, is_dormant')
     .eq('archived', false)
     .order('display_order', { ascending: true })
   if (locationId) q = q.eq('location_id', locationId)
+  if (pipelineId) q = q.eq('pipeline_id', pipelineId)
   const { data, error } = await q
   return error ? { success: false, error: error.message } : { success: true, data }
 }

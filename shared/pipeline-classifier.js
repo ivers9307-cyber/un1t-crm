@@ -91,10 +91,29 @@ export const OFF_FUNNEL_STAGE_SLUGS = Object.freeze([
 ])
 
 /**
- * Split pipeline_stages rows into the Funnel vs Off-funnel views —
- * the exact split src/app/pipeline/page.js renders as its two tabs:
+ * Split ONE BOARD's pipeline_stages rows into the Funnel vs Off-funnel views —
+ * the exact split src/app/(sales)/pipeline/page.js renders as its two tabs:
  * archived rows dropped, then partitioned on is_dormant, ordered by
  * display_order (slug-taxonomy order as fallback for ties/missing).
+ *
+ * PIPELINES.6 — `board` is no longer an axis here. RETURNPIPE.1 (mig 558) had
+ * added a text `pipeline_stages.board` column and made this function partition
+ * on it as well, because a location's stage rows were one undifferentiated
+ * list and something had to keep two boards apart. PIPELINES.1 (mig 594) gave
+ * a board an identity of its own — a `pipelines` row with a key, a module and
+ * a mode — and `pipeline_stages.pipeline_id` now points at it, so the CALLER
+ * scopes its query to one board (`.eq('pipeline_id', …)`) and hands us that
+ * board's stages. The `board` column stays on disk, unread, until a later
+ * migration drops it (deprecated-columns-stay-on-disk convention).
+ *
+ * So `is_dormant` means exactly what it meant BEFORE mig 558 introduced the
+ * third axis: "parked, not moving through THIS board" — not "parked at this
+ * location". A row carrying a legacy `board` value is inert data.
+ *
+ * A manual board (pipelines.mode='manual') has nothing off-funnel — a human
+ * decides where each card sits — so its rows all carry is_dormant=false and
+ * come back in `funnel`, in display_order. Nothing special is needed here for
+ * that; the caller simply renders one view.
  *
  * @param {Array<{id:string, slug?:string, is_dormant?:boolean, archived?:boolean, display_order?:number}>} stages
  * @returns {{ funnel: object[], offFunnel: object[] }}
@@ -103,10 +122,11 @@ export function splitStagesByFunnel(stages) {
   const live = (Array.isArray(stages) ? stages : [])
     .filter((s) => s && s.archived !== true)
 
+  // Fallback ordering only — display_order wins whenever both rows have one.
+  // A board with slugs outside the acquisition taxonomy (any manual board)
+  // scores MAX_SAFE_INTEGER on every row, so ties fall back to input order.
   const slugOrder = (s) => {
-    const list = (s.board || 'acquisition') === 'returning'
-      ? RETURNING_STAGE_SLUGS
-      : (s.is_dormant ? OFF_FUNNEL_STAGE_SLUGS : FUNNEL_STAGE_SLUGS)
+    const list = s.is_dormant ? OFF_FUNNEL_STAGE_SLUGS : FUNNEL_STAGE_SLUGS
     const i = list.indexOf(s.slug)
     return i === -1 ? Number.MAX_SAFE_INTEGER : i
   }
@@ -119,17 +139,9 @@ export function splitStagesByFunnel(stages) {
     return slugOrder(a) - slugOrder(b)
   }
 
-  // RETURNPIPE.1 — `board` is the third axis. A stage with no board (every row
-  // predating mig 558, and anything a caller hands us without the column)
-  // reads as 'acquisition', so the two original groups are byte-identical to
-  // what they were and no existing caller changes behaviour.
-  const boardOf = (s) => s.board || 'acquisition'
-  const acquisition = live.filter((s) => boardOf(s) === 'acquisition')
-
   return {
-    funnel: acquisition.filter((s) => !s.is_dormant).sort(byOrder),
-    offFunnel: acquisition.filter((s) => Boolean(s.is_dormant)).sort(byOrder),
-    returning: live.filter((s) => boardOf(s) === 'returning').sort(byOrder),
+    funnel: live.filter((s) => !s.is_dormant).sort(byOrder),
+    offFunnel: live.filter((s) => Boolean(s.is_dormant)).sort(byOrder),
   }
 }
 
