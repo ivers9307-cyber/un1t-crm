@@ -570,6 +570,6 @@ Each is logged as a follow-up in the spec. Touching them widens the diff into su
 
 - **No `/money` badge.** `invoices_queue` is already an approvals provider, so a Money badge would count the same rows twice under a narrower definition (`received`/`extracted` vs the provider's four statuses) and a different permission (`invoices_inbox` vs `bookkeeper`).
 - **Do not "fix" the two invoices-queue definitions.** They disagree on `main` today; that is pre-existing and belongs in its own change.
-- **Do not delete `/api/home-queue/count`.** It still serves `/dashboard/today`. Only the sidebar stops consuming it.
+- **Do not delete `/api/home-queue/count`.** `/dashboard/today` calls `assembleHomeQueue()` directly and has never called this route — once the sidebar stops polling it, it has no caller left in the app at all. It stays published as a registered OpenAPI endpoint anyway.
 - **Do not give `getPendingApprovalsCount` a `{ count, degraded }` contract.** It would improve the silent-under-count limitation, but it also changes `home-queue.js`'s caller and belongs in its own change.
 - **No badge registry, no aggregate endpoint, no `poll-store` refactor.** With one source they are scaffolding; build them when a real second source can shape them.

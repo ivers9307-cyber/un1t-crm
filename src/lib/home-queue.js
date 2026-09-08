@@ -341,18 +341,21 @@ export async function assembleHomeQueue(db, user) {
 }
 
 /**
- * Cheap count-only variant for the sidebar/nav badge — sums each source's
- * TRUE count without materialising any rows (no approval item lists, no
- * conversation subjects, no conversation contact embeds).
+ * Cheap count-only variant backing GET /api/home-queue/count — sums each
+ * source's TRUE count without materialising any rows (no approval item
+ * lists, no conversation subjects, no conversation contact embeds). The
+ * sidebar no longer polls that route (NAV-BADGE.1 gave Approvals its own
+ * poller instead); it stays published as a registered OpenAPI endpoint
+ * with no caller left in the app.
  *
  * EMAIL-TICKET-CLEANUP.2 — this endpoint answers ONE number, with no room
  * for a per-source `degraded` flag the way assembleHomeQueue has, so a
  * failed mailbox-visibility lookup can't be folded into the sum as a
  * confident 0 the way a generic source failure is: it REJECTS instead,
  * mirroring /api/email/mail/count's own 500 on the identical failure.
- * The route this feeds is expected to answer 500 on that rejection so its
- * poller keeps its last good number rather than overwriting it with a
- * wrong "nothing to do" (see src/app/api/home-queue/count/route.js).
+ * The route this feeds is expected to answer 500 on that rejection rather
+ * than silently answering a lower, confidently-wrong number (see
+ * src/app/api/home-queue/count/route.js).
  *
  * @param {object} db
  * @param {object} user

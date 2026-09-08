@@ -178,19 +178,31 @@ describe('Approvals badge', () => {
     expect(badgeOnRow('Messages')).toBeUndefined()
   })
 
-  // The endpoint self-gates, so there is nothing to gate on here. A
-  // client-side hasPermission would also be checking the WRONG key: the nav
-  // row's key is approvals_inbox, while of the eleven registered providers
-  // eight gate on their own distinct approvals_* key and the remaining
-  // three (invoices_queue, issues, host_events) gate on bookkeeper /
-  // issues_inbox / reviewer roles instead — none of the eleven is actually
-  // approvals_inbox, so a client-side check here could hide a badge for
-  // real work either way.
-  it('polls unconditionally for a signed-in user', () => {
+  // The gate is `hasPerm('approvals_inbox')` — the SAME key the /approvals
+  // row itself gates on (src/lib/nav-items.js). That is what makes gating
+  // here safe rather than merely convenient: titleCount reduces over the
+  // permission-filtered `nav` list, so nothing can render a pill or feed
+  // the title without passing this exact check — the client gate and the
+  // row gate are the same question. The endpoint still self-gates
+  // independently underneath (its own eleven-provider isVisible/
+  // permissionKey scoping); this poller gate is an optimisation on top of
+  // that, not a replacement for it.
+  it('polls when the user holds approvals_inbox', () => {
     render(<Sidebar user={USER} />)
     const call = usePolledCount.mock.calls.map(([a]) => a).find(a => a?.url === '/api/approvals/count')
     expect(call).toBeTruthy()
     expect(call.enabled).toBe(true)
+  })
+
+  // A revert to `enabled: true` (the pre-review-fix behaviour) would pass
+  // every other test in this file silently — this is the one pinning the
+  // false direction.
+  it('does NOT poll when the user lacks approvals_inbox', () => {
+    hasPermission.mockImplementation((_u, key) => key !== 'approvals_inbox')
+    render(<Sidebar user={USER} />)
+    const call = usePolledCount.mock.calls.map(([a]) => a).find(a => a?.url === '/api/approvals/count')
+    expect(call).toBeTruthy()
+    expect(call.enabled).toBe(false)
   })
 
   it('no longer polls /api/home-queue/count — the title sums the visible pills now', () => {
@@ -224,17 +236,42 @@ describe('Approvals badge', () => {
     expect(document.title).toMatch(/^\(3\) /)
   })
 
-  it('labels the pill for screen readers — a bare number announces as nothing', () => {
+  // Review fix — the accessible text now lives in an sr-only sibling span,
+  // not an aria-label on the pill (a bare <span>'s implicit role is
+  // `generic`, which ARIA 1.2 prohibits naming). getByLabelText only
+  // matches label associations / aria-label / aria-labelledby, so it can
+  // no longer find this text — getByText does, since it's now literal
+  // text content.
+  it('carries the accessible text for screen readers — a bare number announces as nothing', () => {
     usePolledCount.mockImplementation(({ url }) =>
       url === '/api/approvals/count' ? 7 : 0)
     render(<Sidebar user={USER} />)
-    expect(screen.getByLabelText('7 items need your attention')).toBeTruthy()
+    expect(screen.getByText('7 items need your attention')).toBeTruthy()
   })
 
   it('says "item", singular, at one', () => {
     usePolledCount.mockImplementation(({ url }) =>
       url === '/api/approvals/count' ? 1 : 0)
     render(<Sidebar user={USER} />)
-    expect(screen.getByLabelText('1 item needs your attention')).toBeTruthy()
+    expect(screen.getByText('1 item needs your attention')).toBeTruthy()
+  })
+
+  it('caps the tab title at 99+', () => {
+    usePolledCount.mockImplementation(({ url }) =>
+      url === '/api/approvals/count' ? 150 : 0)
+    render(<Sidebar user={USER} />)
+    expect(document.title).toMatch(/^\(99\+\) /)
+  })
+
+  // The visible pill IS capped at 99+ (SidebarItem's `badge > 99 ? '99+' :
+  // badge`); the accessible text deliberately is NOT — "99+ items" is fine
+  // to hear, an exact count is more useful. Nothing else in this file pins
+  // that asymmetry, so a regression to a capped label would stay green.
+  it('caps the visible pill at 99+ but NOT the accessible text', () => {
+    usePolledCount.mockImplementation(({ url }) =>
+      url === '/api/approvals/count' ? 150 : 0)
+    render(<Sidebar user={USER} />)
+    expect(badgeOnRow('Approvals').textContent).toBe('99+')
+    expect(screen.getByText('150 items need your attention')).toBeTruthy()
   })
 })

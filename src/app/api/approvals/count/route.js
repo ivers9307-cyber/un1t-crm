@@ -6,11 +6,14 @@
 // number the /approvals page itself computes.
 //
 // It holds NO scoping logic. getPendingApprovalsCount fans out over the
-// eleven providers, gating each with isProviderVisible — permission key +
-// category-bundle (only three providers, invoices-queue/issues/host-events,
-// layer their own isVisible() on top) — then scoping to the caller's
-// CURRENT ACTIVE location for ten of the eleven (host_events is the one
-// org-wide exception). So a head coach counts time off, shift swaps and
+// eleven providers, gating each with isProviderVisible — an EITHER/OR:
+// eight of the eleven carry their own approvals_* permissionKey and gate
+// on hasPermission() plus the category-bundle check; the other three
+// (invoices-queue, issues, host-events) declare no permissionKey at all
+// and gate entirely on their own isVisible() instead — for them isVisible()
+// IS the whole grant check, not a layer on top of anything. Then it scopes
+// to the caller's CURRENT ACTIVE location for ten of the eleven (host_events
+// is the one org-wide exception). So a head coach counts time off, shift swaps and
 // hyrox sessions (plus agent requests, offer purchases); an owner
 // additionally counts contractor invoices, FTE expenses and rosters;
 // master counts everything — none of it restated here. Re-deriving the

@@ -46,7 +46,7 @@ Recorded because the first draft of this spec got it wrong twice, and the wrong 
 
 - **Head coaches do not approve rosters.** `shared/permissions.js:452` sets `approvals_rosters: false` for `head_coach` — "head coach approves schedule items only". Their set is time off, shift swaps, hyrox sessions (plus agent requests and offer purchases). Owner and master hold rosters.
 - **It is the ACTIVE location, not every location you hold a role at.** `registry.js`'s `APPROVALS-LOCATION-SCOPE` block says so explicitly, and marks `scheduleApproverLocationIds` (which does return every such location) as *kept for back-compat*. Ten of the eleven providers resolve `viewerActiveLocationId(user)` and filter `.eq('location_id', activeId)`. **`host_events` is the one org-wide provider.**
-- **The pre-query gate is `isProviderVisible`**, which is `hasPermission(user, p.permissionKey)` plus `bundlesDenyCategory` — not a per-provider `isVisible()` hook. Only three providers (`invoices-queue`, `issues`, `host-events`) define one of those.
+- **The pre-query gate is `isProviderVisible`, and it is an EITHER/OR.** Eight of the eleven providers carry their own `approvals_*` `permissionKey` and gate on `hasPermission(user, p.permissionKey)` plus the `bundlesDenyCategory` category-bundle check. The other three (`invoices-queue`, `issues`, `host-events`) declare no `permissionKey` at all and gate entirely on their own `isVisible()` hook instead.
 
 None of this is restated in the new endpoint. It is written down here so the next person does not have to rediscover it, and so a comment claiming otherwise gets caught in review.
 
@@ -60,7 +60,7 @@ The spec originally badged `/money` with the invoices queue. That was wrong, and
 |---|---|---|
 | statuses | `received`, `quality_approved`, `extracted`, `data_approved` | `received`, `extracted` |
 | permission | `bookkeeper` | `invoices_inbox` |
-| scope | master: all locations; owner: their locations | active location only |
+| scope | active location only | active location only |
 
 Two counters disagreeing about the same rows is exactly the failure this design set out to prevent. **Those two definitions already disagree with each other on `main` today** — that is a pre-existing inconsistency, left alone here rather than wired into the sidebar where it would become visible and load-bearing. Logged as a follow-up.
 
@@ -99,8 +99,16 @@ Restores the route `HOME.3` deleted. Delegates to `getPendingApprovalsCount(db, 
 export const GET = withAuth(
   { permission: null, location: false },
   async ({ user, db }) => {
-    const count = await getPendingApprovalsCount(db, user)
-    return NextResponse.json({ success: true, data: { count } })
+    try {
+      const count = await getPendingApprovalsCount(db, user)
+      return NextResponse.json({ success: true, data: { count } })
+    } catch (e) {
+      console.error('[approvals/count] failed:', e.message)
+      return NextResponse.json({
+        success: false,
+        error: 'Could not check the approvals count — try again.',
+      }, { status: 500 })
+    }
   }
 )
 ```
@@ -122,7 +130,7 @@ const approvalsBadge = usePolledCount({
 })
 ```
 
-**`enabled: !!user`, not a permission check.** A client-side `hasPermission` gate would be checking a *different* key than the eleven providers check (`approvals_inbox`, the nav row's key, versus each provider's own `approvals_*`), so it could hide a badge for work the caller really has. The endpoint self-gates and answers 0 cheaply — `isProviderVisible` runs before any query, so a staff session makes zero database calls.
+**`enabled: !!user`, not a permission check.** A client-side `hasPermission` gate would be checking a *different* key than the eleven providers check (`approvals_inbox`, the nav row's key, versus each provider's own `approvals_*`), so it could hide a badge for work the caller really has. The endpoint self-gates and answers 0 cheaply — `isProviderVisible` runs before any query, so a staff session makes zero *approvals* database calls (`withAuth` still resolves the session itself first — that part isn't free, just not an approvals query).
 
 The `homeQueueCount` poller is removed from `Sidebar.jsx` — the title no longer needs it.
 

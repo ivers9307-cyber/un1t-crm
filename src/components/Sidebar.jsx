@@ -80,21 +80,38 @@ export default function Sidebar({ user, isLinkedHost = false, mobileOpen = false
   // same ones. Net polled URLs are unchanged at three — this one replaces the
   // /api/home-queue/count poller rather than joining it.
   //
-  // `enabled: !!user`, NOT a permission check. A client-side hasPermission
-  // would check approvals_inbox (the nav row's key) — a different question
-  // from what any given provider actually gates on. Of the eleven registered
-  // providers (src/lib/approvals/registry.js), eight carry their own distinct
-  // approvals_* permissionKey; the other three (invoices_queue, issues,
-  // host_events) have none and gate via their own isVisible() on bookkeeper /
-  // issues_inbox / reviewer roles instead — none of the eleven is actually
-  // approvals_inbox, so the mismatch only gets WORSE, not better, and a
-  // client-side check here could still hide a badge for work the caller
-  // really has. The endpoint self-gates and answers 0 cheaply:
-  // isProviderVisible runs before any query, so a staff session makes zero
-  // APPROVALS database calls (withAuth still resolves the session itself
-  // first — that part isn't free, just not an approvals query).
+  // `enabled: !!user && hasPerm('approvals_inbox')` — the SAME key the
+  // /approvals row itself gates on (src/lib/nav-items.js). This used to be
+  // a bare `!!user`, reasoned as: a client-side hasPermission would check
+  // approvals_inbox (the nav row's key) — a different question from what
+  // any given provider actually gates on (of the eleven registered
+  // providers in src/lib/approvals/registry.js, eight carry their own
+  // distinct approvals_* permissionKey; the other three — invoices_queue,
+  // issues, host_events — have none and gate via their own isVisible()
+  // instead), so a client-side gate here could hide a badge for work the
+  // caller really has.
+  //
+  // That stopped being true once titleCount started reducing over `nav`
+  // (the permission-filtered list) instead of summing the raw poll counts:
+  // nothing can render a pill OR contribute to the title without the
+  // /approvals row surviving that filter, and the row's own gate is
+  // exactly hasPerm('approvals_inbox') — the SAME call this poller now
+  // makes. So the client gate and the row gate are the same question, not
+  // two different ones, and gating here cannot hide anything the row
+  // itself would show. This also stops a request every 60s for every
+  // staff/non-approver session, and it makes the file internally
+  // consistent — the WhatsApp poller a few lines below already gates on
+  // its own key.
+  //
+  // The endpoint still self-gates independently underneath and answers 0
+  // cheaply either way: isProviderVisible runs before any query, so a
+  // staff session makes zero APPROVALS database calls (withAuth still
+  // resolves the session itself first — that part isn't free, just not an
+  // approvals query). That makes this client gate an OPTIMISATION, not the
+  // security boundary — the boundary is, and remains, the endpoint's own
+  // gate.
   const approvalsBadge = usePolledCount({
-    enabled: !!user,
+    enabled: !!user && hasPerm('approvals_inbox'),
     url: '/api/approvals/count',
   })
 
@@ -527,6 +544,26 @@ function SidebarItem({ item, active, isChild = false, badge = 0 }) {
         <Icon size={isChild ? 14 : 18} />
         {label}
         <ExternalLink size={11} className="opacity-60 ml-1" />
+        {/* Review fix — this branch used to render with no `badge` at all.
+            Dead today (nav-items.js has no openInNewTab row with a badge
+            entry in navBadges), but titleCount reduces over `nav`
+            regardless of which branch renders a row, so a future badged
+            open-in-new-tab row would silently contribute to the title
+            while showing no pill here. Mirrors the Link branch below. */}
+        {badge > 0 && (
+          <>
+            <span
+              data-testid="nav-badge"
+              aria-hidden="true"
+              className="ml-auto rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-amber-700"
+            >
+              {badge > 99 ? '99+' : badge}
+            </span>
+            <span className="sr-only">
+              {`${badge} ${badge === 1 ? 'item needs' : 'items need'} your attention`}
+            </span>
+          </>
+        )}
       </a>
     )
   }
@@ -539,16 +576,31 @@ function SidebarItem({ item, active, isChild = false, badge = 0 }) {
           at zero; a failed poll keeps the last good number upstream, so
           this never renders a confident 0 off a blip. The number alone
           announces as "Approvals 7", which could be a count of anything —
-          the label says what it counts. It is NOT capped like the visible
-          text: "99+ items" is fine to hear. */}
+          the accessible text says what it counts. It is NOT capped like
+          the visible text: "99+ items" is fine to hear.
+
+          Review fix — `aria-label` used to sit directly on this span, but
+          a bare <span>'s implicit role is `generic`, and ARIA 1.2
+          prohibits naming a `generic` element: it only "worked" because
+          the parent <Link>'s accessible-name recursion happened to pick up
+          a descendant's aria-label anyway. Robust idiom instead:
+          `aria-hidden` the visible pill (so its capped digits don't also
+          get read literally) and carry the real, uncapped text in a
+          sibling sr-only span — that text is picked up by the Link's
+          name-from-content the same way any other visible text would be. */}
       {badge > 0 && (
-        <span
-          data-testid="nav-badge"
-          aria-label={`${badge} ${badge === 1 ? 'item needs' : 'items need'} your attention`}
-          className="ml-auto rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-amber-700"
-        >
-          {badge > 99 ? '99+' : badge}
-        </span>
+        <>
+          <span
+            data-testid="nav-badge"
+            aria-hidden="true"
+            className="ml-auto rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-amber-700"
+          >
+            {badge > 99 ? '99+' : badge}
+          </span>
+          <span className="sr-only">
+            {`${badge} ${badge === 1 ? 'item needs' : 'items need'} your attention`}
+          </span>
+        </>
       )}
     </Link>
   )
