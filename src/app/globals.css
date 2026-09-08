@@ -230,6 +230,15 @@ body {
 .lp-btn-invert:hover {
   box-shadow: 0 16px 40px -14px rgba(0, 0, 0, 0.6);
 }
+/* .lp-btn:focus-visible outlines in WHITE, which is invisible here —
+   this is the one .lp-btn that sits on a light surface. Same
+   specificity (0,2,0) as that rule, declared after it, so it wins on
+   source order. Without this a keyboard user gets no focus indicator
+   at all on the offer's primary conversion control. */
+.lp-btn-invert:focus-visible {
+  outline: 2px solid #000;
+  outline-offset: 3px;
+}
 
 /* ── Success check draw (lead form done state) ────────────────────── */
 .lp-check-path {
