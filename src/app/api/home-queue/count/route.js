@@ -24,8 +24,8 @@
 // a bare `count` here can't tell an operator "this excludes tickets,
 // which we couldn't check" from a genuine "nothing to do". Answering 500
 // mirrors /api/email/tickets/count's own posture on the identical
-// failure: the title-bar poller (usePolledCount) ignores a non-ok
-// response and keeps its last good number, so a blip reads as a slightly
+// failure: any usePolledCount reader ignores a non-ok response and
+// keeps its last good number, so a blip would read as a slightly
 // stale count instead of a confidently wrong "all clear".
 
 import { NextResponse } from 'next/server'

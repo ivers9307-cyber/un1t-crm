@@ -542,7 +542,7 @@ npm run build
 
 Expected: exit 0. This task adds a new route and new imports, and `next build` is the only check that catches import-resolution and Turbopack failures — vitest runs on mocked imports and will not.
 
-- [ ] **Step 4: Verify in the browser — jsdom cannot do this**
+- [x] **Step 4: Verify in the browser — jsdom cannot do this** — DONE 8 Sep, and again after the sr-only change
 
 🔴 This estate has already shipped a toggle that did nothing behind a green suite. jsdom judges the pill's *presence*, never its *layout*.
 
@@ -550,6 +550,20 @@ Start the preview, sign in, and confirm with a screenshot:
 1. The Approvals row shows a number matching `/approvals` (at the time of writing: 7 — five time-off, two contractor invoices).
 2. **Two pills render at once** without either overlapping its row label or pushing the label out of the row — Messages and Approvals side by side is the case jsdom cannot judge.
 3. The browser tab reads `(N) …` where N is the two pills added up.
+
+**How it was actually done, and why not on a Vercel preview.** A preview has a real
+database but the sidebar only renders for a signed-in session, and signing in is not
+something the agent does. So this used the estate's documented fallback for exactly
+this situation: render the real `Sidebar` under jsdom, dump `document.body.innerHTML`,
+compile Tailwind from the repo's *own* config against that markup, and open the result
+in a real browser. That is the technique that previously caught the severed tab badge
+and the WhatsApp width mismatch — a real engine doing real layout on the real
+component, rather than a mock-up that merely looks similar.
+
+Result: both pills render right-aligned inside their rows via `ml-auto`, vertically
+centred, clear of the label and icon, with identical amber treatment. Re-run after
+the `aria-hidden` + `sr-only` change and the layout is byte-for-byte unchanged —
+`sr-only` compiles to the 1px-clipped absolute rule, so it contributes no layout.
 
 - [ ] **Step 5: Add the changelog row and open the PR**
 
