@@ -223,4 +223,18 @@ describe('Approvals badge', () => {
     expect(screen.queryByRole('link', { name: /Approvals/ })).toBeNull()
     expect(document.title).toMatch(/^\(3\) /)
   })
+
+  it('labels the pill for screen readers — a bare number announces as nothing', () => {
+    usePolledCount.mockImplementation(({ url }) =>
+      url === '/api/approvals/count' ? 7 : 0)
+    render(<Sidebar user={USER} />)
+    expect(screen.getByLabelText('7 items need your attention')).toBeTruthy()
+  })
+
+  it('says "item", singular, at one', () => {
+    usePolledCount.mockImplementation(({ url }) =>
+      url === '/api/approvals/count' ? 1 : 0)
+    render(<Sidebar user={USER} />)
+    expect(screen.getByLabelText('1 item needs your attention')).toBeTruthy()
+  })
 })

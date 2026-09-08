@@ -537,10 +537,14 @@ function SidebarItem({ item, active, isChild = false, badge = 0 }) {
       {/* MAIL-BADGE.1 / NAV-BADGE.1 — outstanding items in this section
           (today: Messages, Approvals — see navBadges in Sidebar()). Hidden
           at zero; a failed poll keeps the last good number upstream, so
-          this never renders a confident 0 off a blip. */}
+          this never renders a confident 0 off a blip. The number alone
+          announces as "Approvals 7", which could be a count of anything —
+          the label says what it counts. It is NOT capped like the visible
+          text: "99+ items" is fine to hear. */}
       {badge > 0 && (
         <span
           data-testid="nav-badge"
+          aria-label={`${badge} ${badge === 1 ? 'item needs' : 'items need'} your attention`}
           className="ml-auto rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-amber-700"
         >
           {badge > 99 ? '99+' : badge}
