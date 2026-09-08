@@ -15,6 +15,7 @@ import { LeadSchema, normaliseLead, leadConfigFromBlocks, resolveCampaign } from
 import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
 import { writeContactTag } from '@/lib/contact-tags'
 import { logWarn } from '@/lib/log'
+import { findOpenDealForPipeline, findPrimaryPipeline, findEntryStageForPipeline } from '@/lib/deal-lookup'
 
 export const runtime = 'nodejs'
 
@@ -111,15 +112,38 @@ export async function POST(request) {
     alreadyOnList = !!r.alreadyPresent
   } catch (e) { logWarn('leads', 'tag write failed', { err: e }) }
 
-  // Open a new_lead deal so the lead shows in the pipeline. Direct +
-  // deterministic (a brand-new web lead is unambiguously new_lead);
-  // skip when the contact already has an open deal. Best-effort.
+  // Open a deal on this studio's primary board so the lead shows in the
+  // pipeline; skip when the contact already has one open THERE. Best-effort —
+  // losing the deal must never cost the lead capture.
+  //
+  // PIPELINES.5 rewrote all three lines of this:
+  //  • the open-deal check was `.maybeSingle()`, which ERRORS on a second row.
+  //    Nothing enforces one open deal per contact, so the first location to
+  //    run a second board turns the live website form into a 500.
+  //  • the stage was the hardcoded slug 'new_lead' scoped to the LOCATION.
+  //    A location running two boards has two stage sets; the board's own entry
+  //    column is the right answer and resolves to new_lead at Stillorgan.
+  //  • the insert wrote no pipeline_id, and the nightly orchestrator scopes its
+  //    deal read with `.in('pipeline_id', …)`, which never matches NULL — so
+  //    the cron could not see this deal and opened ANOTHER for the same
+  //    contact, every night, for every new lead.
   try {
-    const { data: openDeal } = await db.from('deals').select('id').eq('contact_id', contactId).eq('status', 'open').maybeSingle()
-    if (!openDeal) {
-      const { data: stage } = await db.from('pipeline_stages').select('id').eq('location_id', locationId).eq('slug', 'new_lead').maybeSingle()
-      if (stage) {
-        await db.from('deals').insert({ title: firstName || 'Website lead', contact_id: contactId, stage_id: stage.id, location_id: locationId, status: 'open' })
+    const primary = await findPrimaryPipeline(db, locationId)
+    if (primary) {
+      const openDeal = await findOpenDealForPipeline(db, contactId, primary.id)
+      if (!openDeal) {
+        const stage = await findEntryStageForPipeline(db, primary.id)
+        if (stage) {
+          const { error: dealErr } = await db.from('deals').insert({
+            title: firstName || 'Website lead',
+            contact_id: contactId,
+            stage_id: stage.id,
+            location_id: locationId,
+            pipeline_id: primary.id,
+            status: 'open',
+          })
+          if (dealErr) logWarn('leads', 'deal create failed', { err: dealErr.message, contactId })
+        }
       }
     }
   } catch (e) { logWarn('leads', 'deal create failed', { err: e }) }

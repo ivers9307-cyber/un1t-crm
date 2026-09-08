@@ -145,9 +145,17 @@ export async function reclassifyAllContacts(db, args) {
   const selectCols = selectColsFor(activePipelines.map((p) => p.mod))
 
   // 2. Build the slug → stage_id lookup ONCE for this location.
+  // PIPELINES.5 — pipeline_id comes back with the stage because the create
+  // path below MUST stamp it on the deal it inserts. This orchestrator scopes
+  // its own deal read with `.in('pipeline_id', …)` (step 4), and SQL IN never
+  // matches NULL: a deal created here without one is invisible to the NEXT
+  // run, which sees the contact as deal-less and creates another — nightly,
+  // unbounded, for every new lead. Taking it off the stage rather than off the
+  // iteration also keeps deals.pipeline_id and deals.stage_id in agreement by
+  // construction.
   const { data: stages, error: stagesErr } = await db
     .from('pipeline_stages')
-    .select('id, slug')
+    .select('id, slug, pipeline_id')
     .eq('location_id', locationId)
     .in('pipeline_id', activePipelineIds)
   if (stagesErr) {
@@ -156,6 +164,7 @@ export async function reclassifyAllContacts(db, args) {
   }
   const stageIdBySlug = new Map((stages || []).map((s) => [s.slug, s.id]))
   const stageSlugById = new Map((stages || []).map((s) => [s.id, s.slug]))
+  const stagePipelineById = new Map((stages || []).map((s) => [s.id, s.pipeline_id]))
 
   // 3. Pull every contact at the location with the classifier inputs.
   //
@@ -304,6 +313,7 @@ export async function reclassifyAllContacts(db, args) {
       createsToApply.push({
         contact_id: c.id,
         target_stage_id: targetStageId,
+        target_pipeline_id: stagePipelineById.get(targetStageId) || null,
         target_slug: targetSlug,
         contact_name: c.name || c.email || 'Glofox member',
       })
@@ -391,6 +401,7 @@ export async function reclassifyAllContacts(db, args) {
           title: c.contact_name,
           contact_id: c.contact_id,
           stage_id: c.target_stage_id,
+          pipeline_id: c.target_pipeline_id,
           location_id: locationId,
           status: 'open',
         })

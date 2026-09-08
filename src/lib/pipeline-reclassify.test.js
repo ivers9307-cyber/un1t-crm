@@ -27,16 +27,18 @@ const attendedBooking = (d) => ({
 })
 
 // Minimal stage set covering every classifier output (FUNNEL.1
-// acquisition-funnel taxonomy).
+// acquisition-funnel taxonomy). PIPELINES.5 — each stage carries the board it
+// belongs to (the DEFAULT_PIPELINES acquisition board below), because the
+// create path stamps deals.pipeline_id from the stage it places the deal in.
 const STAGES = [
-  { id: 'stage-new', slug: 'new_lead' },
-  { id: 'stage-first', slug: 'first_class' },
-  { id: 'stage-second', slug: 'second_class' },
-  { id: 'stage-trial-done', slug: 'trial_done' },
-  { id: 'stage-converted', slug: 'converted' },
-  { id: 'stage-member', slug: 'member' },
-  { id: 'stage-cp', slug: 'classpass' },
-  { id: 'stage-dormant', slug: 'dormant' },
+  { id: 'stage-new', slug: 'new_lead', pipeline_id: 'p-acq' },
+  { id: 'stage-first', slug: 'first_class', pipeline_id: 'p-acq' },
+  { id: 'stage-second', slug: 'second_class', pipeline_id: 'p-acq' },
+  { id: 'stage-trial-done', slug: 'trial_done', pipeline_id: 'p-acq' },
+  { id: 'stage-converted', slug: 'converted', pipeline_id: 'p-acq' },
+  { id: 'stage-member', slug: 'member', pipeline_id: 'p-acq' },
+  { id: 'stage-cp', slug: 'classpass', pipeline_id: 'p-acq' },
+  { id: 'stage-dormant', slug: 'dormant', pipeline_id: 'p-acq' },
 ]
 
 // PIPELINES.3 — the location's boards. The default is the single enabled
@@ -266,6 +268,12 @@ describe('reclassifyAllContacts', () => {
     expect(writes.dealInserts[0]).toMatchObject({
       contact_id: 'c1', location_id: 'loc-1', status: 'open',
       stage_id: 'stage-new',
+      // PIPELINES.5 — the create path is the DANGEROUS one. Step 4 above reads
+      // deals with `.in('pipeline_id', …)` and SQL IN never matches NULL, so a
+      // deal created here without a board is invisible to the next run, which
+      // sees this contact as deal-less and creates ANOTHER — every night, for
+      // every new lead.
+      pipeline_id: 'p-acq',
     })
   })
 

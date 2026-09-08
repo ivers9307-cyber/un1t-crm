@@ -4,6 +4,7 @@ import { createServerClient } from '@/lib/supabase'
 import { authenticateApiKey, orgLocationIds } from '@/lib/api-auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, dealStatusSchema } from '@/lib/schemas'
+import { findPrimaryPipeline } from '@/lib/deal-lookup'
 
 const DealCreateSchema = z.object({
   title: z.string().min(1).max(200),
@@ -61,17 +62,22 @@ export async function POST(request) {
   // scoped lookup, and an unresolvable stage is a 400 rather than a quiet skip.
   // maybeSingle, not single: slug is unique PER LOCATION (mig 150), so once the
   // location is pinned the answer is exactly 0 or 1 rows.
+  // The deal's location is the explicit one if given, else the contact's.
+  const dealLocationId = body.location_id || contact?.location_id
+
   let stageId = body.stage_id
+  // PIPELINES.5 — the deal's board. The stage already knows it, so a resolved
+  // stage answers the question outright: one extra column, no second query,
+  // and deal.pipeline_id can never disagree with deal.stage_id.
+  let pipelineId = null
   if (body.stage_id || body.stage_slug) {
-    // The deal's location is the explicit one if given, else the contact's.
-    const locationId = body.location_id || contact?.location_id
-    if (!locationId) {
+    if (!dealLocationId) {
       return NextResponse.json(
         { success: false, error: 'unknown_stage_for_location' },
         { status: 400 },
       )
     }
-    const scoped = db.from('pipeline_stages').select('id').eq('location_id', locationId)
+    const scoped = db.from('pipeline_stages').select('id, pipeline_id').eq('location_id', dealLocationId)
     const { data: stage } = body.stage_slug
       ? await scoped.eq('slug', body.stage_slug).maybeSingle()
       : await scoped.eq('id', body.stage_id).maybeSingle()
@@ -82,6 +88,18 @@ export async function POST(request) {
       )
     }
     stageId = stage.id
+    pipelineId = stage.pipeline_id || null
+  }
+
+  // A stageless create (n8n may send neither stage_id nor stage_slug) has no
+  // stage to read the board off, and must still not write a NULL pipeline_id:
+  // the nightly orchestrator scopes its deal read with `.in('pipeline_id', …)`
+  // and SQL IN never matches NULL, so such a deal is invisible to the cron,
+  // which opens another for the same contact every night. Falls back to the
+  // location's own primary board — never a hardcoded id.
+  if (!pipelineId && dealLocationId) {
+    const primary = await findPrimaryPipeline(db, dealLocationId)
+    pipelineId = primary?.id || null
   }
 
   const { data, error } = await db.from('deals').insert({
@@ -91,6 +109,7 @@ export async function POST(request) {
     status: body.status || 'open',
     value: body.value || 0,
     ...(body.location_id ? { location_id: body.location_id } : {}),
+    ...(pipelineId ? { pipeline_id: pipelineId } : {}),
   }).select().single()
 
   if (error) {
