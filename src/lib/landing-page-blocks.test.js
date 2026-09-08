@@ -8,6 +8,7 @@ import {
   BlocksArraySchema,
   setByPath,
   primaryCta,
+  pageCtas,
   offerOf,
 } from './landing-page-blocks.js'
 
@@ -400,5 +401,47 @@ describe('lead_form offer defaults (HATCH-OFFER.1)', () => {
     const kept = blocksOrDefault([{ id: 'l', type: 'lead_form', offer: 'broken' }])
     expect(kept).toHaveLength(1)
     expect(offerOf(kept[0])).toBeNull()
+  })
+})
+
+describe('pageCtas (HATCH-OFFER.1)', () => {
+  const leadForm = (offer) => ({ id: 'l', type: 'lead_form', button_label: 'Keep me posted', ...(offer ? { offer } : {}) })
+  const liveOffer = { enabled: true, cta_url: 'https://hatchstreet.un1t.online/#join', cta_label: 'Claim your rate' }
+
+  it('promotes the offer to primary and demotes the form to secondary', () => {
+    expect(pageCtas([leadForm(liveOffer)])).toEqual({
+      primary: { href: 'https://hatchstreet.un1t.online/#join', label: 'Claim your rate', external: true },
+      secondary: { href: '#waitlist', label: 'Keep me posted' },
+    })
+  })
+  it('falls back to the form as primary when the offer is off', () => {
+    expect(pageCtas([leadForm({ ...liveOffer, enabled: false })])).toEqual({
+      primary: { href: '#waitlist', label: 'Keep me posted' },
+      secondary: null,
+    })
+  })
+  it('falls back to the form as primary when the offer has no url', () => {
+    expect(pageCtas([leadForm({ ...liveOffer, cta_url: '   ' })])).toEqual({
+      primary: { href: '#waitlist', label: 'Keep me posted' },
+      secondary: null,
+    })
+  })
+  it('never returns a secondary when there is no lead form', () => {
+    expect(pageCtas([{ id: 'b', type: 'booking', slug: 'x' }]).secondary).toBeNull()
+    expect(pageCtas([]).secondary).toBeNull()
+  })
+  it('returns both null for a page with no funnel block', () => {
+    expect(pageCtas([{ id: 'h', type: 'hero' }])).toEqual({ primary: null, secondary: null })
+  })
+})
+
+describe('primaryCta wraps pageCtas (HATCH-OFFER.1)', () => {
+  it('returns the offer url when the offer is live', () => {
+    const blocks = [{ id: 'l', type: 'lead_form', button_label: 'Keep me posted', offer: { enabled: true, cta_url: 'https://x.test/#join', cta_label: 'Claim' } }]
+    expect(primaryCta(blocks).href).toBe('https://x.test/#join')
+  })
+  it('is identical to pageCtas().primary', () => {
+    const blocks = [{ id: 'b', type: 'booking', slug: 'x' }]
+    expect(primaryCta(blocks)).toEqual(pageCtas(blocks).primary)
   })
 })

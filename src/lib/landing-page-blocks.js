@@ -273,36 +273,61 @@ const BlockBaseSchema = z.object({
 
 export const BlocksArraySchema = z.array(BlockBaseSchema).max(40)
 
-// ─────────────────────────────────────────────────────────────
-// Primary conversion target — derived from a page's own blocks.
-// Priority: explicit lead capture > booking > event signup.
-// Returns { href, label } or null when the page has no funnel
-// block (the header/hero then render no CTA rather than a dead
-// anchor). Used by the public studio page + the dev preview.
-// ─────────────────────────────────────────────────────────────
-export function primaryCta(blocks) {
+// Conversion targets — derived from a page's own blocks.
+// Priority: a live foundation offer > explicit lead capture >
+// booking > event signup.
+//
+// `primary` is what the sticky header, hero and footer point at.
+// `secondary` exists only when a live offer has pushed the lead form
+// out of the primary slot, and only the hero renders it — the header
+// and footer are space-constrained and the second path is one scroll
+// away on the same page.
+//
+// Either may be null: a page with no funnel block renders no CTA
+// rather than a dead anchor.
+export function pageCtas(blocks) {
   const list = Array.isArray(blocks) ? blocks : []
   const leadForm = list.find((b) => b && b.type === 'lead_form')
-  if (leadForm) {
+  const offer = leadForm ? offerOf(leadForm) : null
+  const waitlist = leadForm
+    ? {
+        href: '#waitlist',
+        label: (leadForm.button_label && leadForm.button_label.trim()) || 'Join the waitlist',
+      }
+    : null
+
+  // A live offer with no URL is an operator half-edit, not a reason
+  // to ship <a href="">. Fall through to the form.
+  if (offer && offer.cta_url) {
     return {
-      href: '#waitlist',
-      label: (leadForm.button_label && leadForm.button_label.trim()) || 'Join the waitlist',
+      primary: { href: offer.cta_url, label: offer.cta_label, external: true },
+      secondary: waitlist,
     }
   }
+  if (waitlist) return { primary: waitlist, secondary: null }
   if (list.some((b) => b && b.type === 'class_funnel')) {
-    return { href: '#start', label: 'Claim 3 free classes' }
+    return { primary: { href: '#start', label: 'Claim 3 free classes' }, secondary: null }
   }
   if (list.some((b) => b && b.type === 'booking')) {
-    return { href: '#book', label: 'Book a free consult' }
+    return { primary: { href: '#book', label: 'Book a free consult' }, secondary: null }
   }
   const event = list.find((b) => b && b.type === 'event')
   if (event) {
     return {
-      href: `#event-${event.slug || 'signup'}`,
-      label: (event.title && event.title.trim()) || 'Sign up',
+      primary: {
+        href: `#event-${event.slug || 'signup'}`,
+        label: (event.title && event.title.trim()) || 'Sign up',
+      },
+      secondary: null,
     }
   }
-  return null
+  return { primary: null, secondary: null }
+}
+
+// Back-compat wrapper. Kept because two pages and a dozen tests call
+// it; it is exactly pageCtas().primary and must stay that way.
+export function primaryCta(blocks) {
+  return pageCtas(blocks).primary
 }
 
 // ─────────────────────────────────────────────────────────────
