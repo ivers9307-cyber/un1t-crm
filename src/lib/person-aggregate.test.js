@@ -355,7 +355,63 @@ describe('aggregatePerson', () => {
   it('counts dealsCount as total deals across all member contacts', async () => {
     const db = makeSeededDb()
     const result = await aggregatePerson(db, GROUP_ID)
-    // 2 deals seeded (d1 for PRIMARY, d2 for DORMANT)
+    // 2 deals seeded (d1 for PRIMARY, d2 for DORMANT), each on a different
+    // (absent) board, so this also covers the distinct-boards path below.
+    expect(result.dealsCount).toBe(2)
+  })
+
+  it('counts dealsCount as DISTINCT BOARDS, not deal rows (PIPELINES.6b)', async () => {
+    // Two open deals for the same person on the SAME board must read as one
+    // relationship, not two — the defect being fixed here.
+    const db = makeDb({
+      person_groups: personGroups,
+      person_group_members: personGroupMembers,
+      contacts,
+      glofox_invoices: glofoxInvoices,
+      deals: [
+        { id: 'd1', contact_id: PRIMARY_ID, pipeline_id: 'board-acquisition', status: 'open', title: 'Primary deal' },
+        { id: 'd2', contact_id: PRIMARY_ID, pipeline_id: 'board-acquisition', status: 'closed', title: 'Old primary deal, same board' },
+      ],
+      activities: [],
+      notes: [],
+    })
+    const result = await aggregatePerson(db, GROUP_ID)
+    expect(result.dealsCount).toBe(1)
+  })
+
+  it('counts dealsCount as 2 when a person holds deals on two DIFFERENT boards', async () => {
+    const db = makeDb({
+      person_groups: personGroups,
+      person_group_members: personGroupMembers,
+      contacts,
+      glofox_invoices: glofoxInvoices,
+      deals: [
+        { id: 'd1', contact_id: PRIMARY_ID, pipeline_id: 'board-acquisition', status: 'open', title: 'Acquisition deal' },
+        { id: 'd2', contact_id: PRIMARY_ID, pipeline_id: 'board-returning', status: 'open', title: 'Returning deal' },
+      ],
+      activities: [],
+      notes: [],
+    })
+    const result = await aggregatePerson(db, GROUP_ID)
+    expect(result.dealsCount).toBe(2)
+  })
+
+  it('falls back to the row id for a legacy null-board deal, so it still counts once', async () => {
+    // Pre-PIPELINES.1 rows carry no pipeline_id. Two such rows for different
+    // people must not collapse into one via a shared `null` grouping key.
+    const db = makeDb({
+      person_groups: personGroups,
+      person_group_members: personGroupMembers,
+      contacts,
+      glofox_invoices: glofoxInvoices,
+      deals: [
+        { id: 'd1', contact_id: PRIMARY_ID, pipeline_id: null, status: 'open', title: 'Legacy deal, primary' },
+        { id: 'd2', contact_id: DORMANT_ID, pipeline_id: null, status: 'closed', title: 'Legacy deal, dormant' },
+      ],
+      activities: [],
+      notes: [],
+    })
+    const result = await aggregatePerson(db, GROUP_ID)
     expect(result.dealsCount).toBe(2)
   })
 

@@ -53,18 +53,50 @@ describe('defaultPipelineStages', () => {
 })
 
 describe('seedLocationDefaults', () => {
-  // Routes by table name so both the pipeline_stages upsert and the
-  // BUNDLES.5 locations.features bundle-seed write can be exercised
-  // (and asserted on) independently.
-  function stubDb() {
+  // Routes by table name so the pipelines seed, the pipeline_stages upsert,
+  // and the BUNDLES.5 locations.features bundle-seed write can each be
+  // exercised (and asserted on) independently.
+  //
+  // pipelineConflict: when set, the pipelines insert reports a 23505 (the
+  // acquisition pipeline already exists) so the re-run path is exercised;
+  // pipelineExisting is what the fallback select then finds.
+  function stubDb({ pipelineConflict = false, pipelineExisting = { id: 'existing-pipeline' } } = {}) {
     const upsertCalls = []
     const updateCalls = []
+    const pipelineInsertCalls = []
     const upsert = vi.fn(async (rows, opts) => {
       upsertCalls.push({ rows, opts })
       return { error: null }
     })
     const from = vi.fn((table) => {
       if (table === 'pipeline_stages') return { upsert }
+      if (table === 'pipelines') {
+        return {
+          insert: vi.fn((row) => {
+            pipelineInsertCalls.push(row)
+            return {
+              select: vi.fn(() => ({
+                single: vi.fn(async () => (pipelineConflict
+                  ? {
+                    data: null,
+                    error: {
+                      code: '23505',
+                      message: 'duplicate key value violates unique constraint "pipelines_location_key_unique"',
+                    },
+                  }
+                  : { data: { id: 'pipeline-1' }, error: null })),
+              })),
+            }
+          }),
+          select: vi.fn(() => ({
+            eq: vi.fn(() => ({
+              eq: vi.fn(() => ({
+                maybeSingle: vi.fn(async () => ({ data: pipelineExisting, error: null })),
+              })),
+            })),
+          })),
+        }
+      }
       if (table === 'locations') {
         return {
           update: vi.fn((patch) => {
@@ -75,7 +107,16 @@ describe('seedLocationDefaults', () => {
       }
       throw new Error(`stubDb: unexpected table ${table}`)
     })
-    return { db: { from }, upsertCalls, updateCalls, upsert }
+    return { db: { from }, upsertCalls, updateCalls, upsert, pipelineInsertCalls }
+  }
+
+  // A minimal pipelines-table stub for the manual `db` objects below, which
+  // each exercise a different table's error path and don't need stubDb()'s
+  // full call recording.
+  function okPipelinesTable(id = 'pipeline-1') {
+    return {
+      insert: () => ({ select: () => ({ single: async () => ({ data: { id }, error: null }) }) }),
+    }
   }
 
   it('upserts every default stage stamped with the location id', async () => {
@@ -99,11 +140,90 @@ describe('seedLocationDefaults', () => {
     })
   })
 
+  // PIPELINES.6b — a stage row with no board is a break waiting on the
+  // migration that sets pipeline_stages.pipeline_id NOT NULL: the moment it
+  // lands, a fresh location's stage insert fails outright. Every stage must
+  // hang off a seeded pipeline.
+  it('seeds an acquisition pipeline before the stages', async () => {
+    const { db, pipelineInsertCalls } = stubDb()
+    await seedLocationDefaults(db, { id: 'loc-1' })
+    expect(db.from).toHaveBeenCalledWith('pipelines')
+    expect(pipelineInsertCalls).toHaveLength(1)
+    expect(pipelineInsertCalls[0]).toMatchObject({
+      location_id: 'loc-1',
+      key: 'acquisition',
+      name: 'Acquisition',
+      module: 'acquisition',
+      mode: 'derived',
+      is_primary: true,
+      display_order: 0,
+      enabled: true,
+    })
+  })
+
+  it('stamps every seeded stage with the resolved pipeline_id', async () => {
+    const { db, upsertCalls } = stubDb()
+    await seedLocationDefaults(db, { id: 'loc-1' })
+    const { rows } = upsertCalls[0]
+    expect(rows.length).toBeGreaterThan(0)
+    for (const row of rows) expect(row.pipeline_id).toBe('pipeline-1')
+  })
+
+  it('is re-runnable — reads the existing pipeline id back on a (location_id, key) conflict instead of throwing', async () => {
+    const { db, upsertCalls } = stubDb({ pipelineConflict: true, pipelineExisting: { id: 'existing-pipeline' } })
+    await seedLocationDefaults(db, { id: 'loc-1' })
+    const { rows } = upsertCalls[0]
+    for (const row of rows) expect(row.pipeline_id).toBe('existing-pipeline')
+  })
+
+  it('throws when the pipeline id cannot be resolved after a conflict (no row to fall back to)', async () => {
+    const db = {
+      from: (table) => {
+        if (table === 'pipelines') {
+          return {
+            insert: () => ({
+              select: () => ({
+                single: async () => ({
+                  data: null,
+                  error: {
+                    code: '23505',
+                    message: 'duplicate key value violates unique constraint "pipelines_location_key_unique"',
+                  },
+                }),
+              }),
+            }),
+            select: () => ({ eq: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) }) }),
+          }
+        }
+        throw new Error(`stubDb: unexpected table ${table}`)
+      },
+    }
+    await expect(seedLocationDefaults(db, { id: 'loc-1' })).rejects.toThrow(/pipeline/i)
+  })
+
+  it('throws when the pipelines insert fails for a reason other than a conflict', async () => {
+    const db = {
+      from: (table) => {
+        if (table === 'pipelines') {
+          return {
+            insert: () => ({
+              select: () => ({ single: async () => ({ data: null, error: { message: 'permission denied' } }) }),
+            }),
+          }
+        }
+        throw new Error(`stubDb: unexpected table ${table}`)
+      },
+    }
+    await expect(seedLocationDefaults(db, { id: 'loc-1' })).rejects.toThrow(/permission denied/)
+  })
+
   it('throws when the upsert reports an error (supabase-js resolves, never rejects)', async () => {
     const db = {
-      from: (table) => (table === 'pipeline_stages'
-        ? { upsert: async () => ({ error: { message: 'permission denied' } }) }
-        : { update: () => ({ eq: async () => ({ error: null }) }) }),
+      from: (table) => {
+        if (table === 'pipelines') return okPipelinesTable()
+        if (table === 'pipeline_stages') return { upsert: async () => ({ error: { message: 'permission denied' } }) }
+        return { update: () => ({ eq: async () => ({ error: null }) }) }
+      },
     }
     await expect(seedLocationDefaults(db, { id: 'loc-1' })).rejects.toThrow(/permission denied/)
   })
@@ -127,9 +247,11 @@ describe('seedLocationDefaults', () => {
 
   it('throws when the locations.features write reports an error', async () => {
     const db = {
-      from: (table) => (table === 'pipeline_stages'
-        ? { upsert: async () => ({ error: null }) }
-        : { update: () => ({ eq: async () => ({ error: { message: 'features write denied' } }) }) }),
+      from: (table) => {
+        if (table === 'pipelines') return okPipelinesTable()
+        if (table === 'pipeline_stages') return { upsert: async () => ({ error: null }) }
+        return { update: () => ({ eq: async () => ({ error: { message: 'features write denied' } }) }) }
+      },
     }
     await expect(seedLocationDefaults(db, { id: 'loc-1' })).rejects.toThrow(/features write denied/)
   })
