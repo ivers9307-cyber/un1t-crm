@@ -43,10 +43,11 @@ describe('GET /api/approvals/count', () => {
     expect(getPendingApprovalsCount).toHaveBeenCalledWith({ marker: 'db' }, headCoach)
   })
 
-  // The sidebar polls this for EVERY authenticated session (see Task 3 — a
-  // client-side permission gate cannot see other locations). A session with no
-  // approver authority must therefore get a cheap, quiet zero, never a 403.
-  it('answers a quiet 0 for a session with no approver authority', async () => {
+  // The registry is mocked to return 0 here, so the 0 itself proves nothing —
+  // what this test actually proves is that a `staff` role is NOT 403'd, i.e.
+  // that permission: null is in effect and the real gate lives entirely
+  // inside getPendingApprovalsCount, not in this route.
+  it('does not 403 a staff session — permission: null, so an ineligible caller gets a quiet 0', async () => {
     getCurrentUser.mockResolvedValue({ id: 'u2', role: 'staff', activeLocation: { id: 'loc1' } })
     getPendingApprovalsCount.mockResolvedValue(0)
     const res = await GET(req())
@@ -54,14 +55,32 @@ describe('GET /api/approvals/count', () => {
     expect(await res.json()).toEqual({ success: true, data: { count: 0 } })
   })
 
-  // location: false — approvals span locations (host_events is org-wide, an
-  // owner sees every location they own), so requiring an active location would
-  // hide real work behind a 400.
+  // location: false — avoids a 400 for a session with no active location.
+  // Such a session's count is host_events-only (the one org-scoped
+  // provider); every other provider needs the caller's active location to
+  // have anything to count.
   it('does not require an active location', async () => {
     getCurrentUser.mockResolvedValue({ id: 'u3', role: 'owner', activeLocation: null })
     getPendingApprovalsCount.mockResolvedValue(4)
     const res = await GET(req())
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ success: true, data: { count: 4 } })
+  })
+
+  // Fix 4 (TDD step 1) — the synchronous APPROVALS_PROVIDERS.filter(...)
+  // gate in getPendingApprovalsCount runs OUTSIDE the Promise.allSettled
+  // that swallows per-provider failures. If getPendingApprovalsCount
+  // rejects for any reason, the route must not throw an opaque 500 with
+  // no repo envelope — it must answer { success: false, error } like its
+  // sibling src/app/api/home-queue/count/route.js does.
+  it('answers a repo-envelope 500 when getPendingApprovalsCount rejects', async () => {
+    getCurrentUser.mockResolvedValue(headCoach)
+    getPendingApprovalsCount.mockRejectedValue(new Error('boom'))
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body.success).toBe(false)
+    expect(typeof body.error).toBe('string')
+    expect(body.error.length).toBeGreaterThan(0)
   })
 })
