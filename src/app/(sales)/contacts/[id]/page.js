@@ -12,6 +12,8 @@ import { classifyContact, scoreMember } from '@/lib/churn-radar'
 import { loadContactArrears } from '@/lib/churn-radar-data'
 import { loadContactJourney } from '@/lib/onboarding-journey-data'
 import { nextBookedClass } from '@/lib/pipeline-classifier'
+// WAITLIST.6 — PIPELINES.5's board resolver, reused: never hardcode a pipeline.
+import { findPrimaryPipeline } from '@/lib/deal-lookup'
 import ContactActions from '@/components/ContactActions'
 import ContactComposer from '@/components/ContactComposer'
 import ContactBookingCard from '@/components/ContactBookingCard'
@@ -79,7 +81,7 @@ export default async function ContactDetailPage(props) {
     if (pg?.group?.id) person = await aggregatePerson(db, pg.group.id)
   } catch { person = null }
 
-  const [dealsRes, notesRes, activitiesRes, bookingsRes, waConvRes, eventTypesRes, contactArrears, cancellationLink] = await Promise.all([
+  const [dealsRes, notesRes, activitiesRes, bookingsRes, waConvRes, eventTypesRes, contactArrears, cancellationLink, primaryPipeline] = await Promise.all([
     db.from('deals').select('*, pipeline_stages(name, color)').eq('contact_id', id).order('created_at', { ascending: false }),
     db.from('notes').select('*').eq('contact_id', id).order('created_at', { ascending: false }),
     db.from('activities').select('*').eq('contact_id', id).order('created_at', { ascending: false }),
@@ -95,6 +97,18 @@ export default async function ContactDetailPage(props) {
     loadContactArrears(db, id),
     // CANCEL-FORM.4 — latest issued cancellation-form link → header chip.
     latestLinkForContact(db, id),
+    // WAITLIST.6 — which board does this contact's studio run? The header
+    // band's Cold item only means anything on a DERIVED board (it stamps
+    // pipeline_dismissed_at, which only the classifier reads, and mig 594's
+    // `mode` fences the classifier out of a manual board). Resolved HERE, in
+    // the round trip the page already makes, rather than by the component:
+    // ContactHeaderBand is a server component with no fetching of its own, and
+    // giving it one would put a network call on every profile render.
+    //
+    // .catch → null on purpose. A board we cannot read must not blank a
+    // profile, and null falls through to `derived` below — the button stays,
+    // exactly as it does today.
+    findPrimaryPipeline(db, contact.location_id).catch(() => null),
   ])
 
   // GLOFOX-CATALOG — resolve the member's plan description (pricing +
@@ -351,6 +365,9 @@ export default async function ContactDetailPage(props) {
         nextClassAt={nextClassAt}
         canToggleExempt={MANAGER_ROLES.includes(user?.role)}
         cancellationLink={cancellationLink}
+        // WAITLIST.6 — a location with no readable primary board resolves null
+        // here, which is FALSE, which is today's behaviour (Cold shown).
+        manual={primaryPipeline?.mode === 'manual'}
         metrics={{
           ltvCents,
           arrearsCents: metricArrearsCents,

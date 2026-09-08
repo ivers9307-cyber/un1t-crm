@@ -255,6 +255,11 @@ export default function KanbanBoard({ initialStages, initialDeals, stageCounts =
             contactId={openContactId}
             columnContactIds={columnContactIds}
             locationId={locationId}
+            // WAITLIST.6 — the drawer's Cold item is derived-board-only, and
+            // the board it opened from is the honest answer to "which board?"
+            // (a card can only be dragged out of the board it is drawn on).
+            // Passing what we already have costs the drawer no lookup.
+            manual={manual}
             onNavigate={navigateContact}
             onClose={closeContact}
           />

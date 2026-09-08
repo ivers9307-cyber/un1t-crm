@@ -45,10 +45,12 @@ const statusColors = {
 // second, invisible way to say what column 4 ("Not interested") already says
 // by hand — and at worst it looks like a move and produces none.
 //
-// KNOWINGLY LEFT: ContactDrawer and ContactHeaderBand opt into 'cold' too, and
-// neither has any board context — hiding it there would cost each of them a
-// pipeline lookup on every render. On a Hatch contact the button in those two
-// places still writes a stamp nothing reads: inert, not wrong.
+// WAITLIST.6 closed the two call sites this note used to leave open.
+// ContactDrawer takes `manual` straight from KanbanBoard (which already knows
+// the board), and ContactHeaderBand takes it from its server page, which
+// resolves the contact's location's primary pipeline in a round trip it was
+// making anyway — so neither pays a per-render lookup after all. Both default
+// to `derived`, so a caller that cannot resolve a board still shows Cold.
 const CARD_ACTIONS = {
   derived: ['message', 'task', 'sequence', 'cold'],
   manual: ['message', 'task', 'sequence'],
