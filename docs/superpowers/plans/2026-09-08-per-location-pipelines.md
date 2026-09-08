@@ -626,6 +626,20 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 **Files:**
 - Create: `supabase/migrations/595_stage_slug_primary_pipeline.sql`
 
+> **Also fold into this migration (added 2026-09-08 during execution).** Mig 594 seeded Stillorgan's `returning` pipeline as `enabled = true` with `module = 'returning'`, but Task 2b parked that board and left its module deliberately unregistered. Left as-is it renders an empty tab in Task 6 and is reported as skipped on every cron run. Disable the row so the data matches the decision:
+>
+> ```sql
+> -- PIPELINES.2b parked this board: 0 deals, and it cannot fill (6.8% of
+> -- contacts have last_attended_at at all). Its module is deliberately
+> -- unregistered, so leaving the row enabled would render an empty tab and
+> -- log a skip every night. The stages stay for revival.
+> update public.pipelines
+>    set enabled = false
+>  where key = 'returning';
+> ```
+>
+> The `pipelines_module_matches_mode` check still holds — it is `derived` with a non-null module, just switched off.
+
 - [ ] **Step 1: Write the migration**
 
 ```sql
