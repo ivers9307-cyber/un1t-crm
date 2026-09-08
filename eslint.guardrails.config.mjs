@@ -261,6 +261,13 @@ const config = [
       // delete is a GDPR residue that reads as a clean run; born clean, armed
       // on arrival.
       'src/app/api/cron/purge-webhook-payloads/route.js',
+      // WAITLIST.4 — the public forms' board placement. Both of its writes are
+      // best-effort by contract (a lost deal must never cost the lead
+      // capture), so they are exactly the shape that reads as handled and is
+      // not: the callers' try/catch cannot fire for a supabase builder, which
+      // resolves with { data, error } instead of throwing. Born clean, armed
+      // on arrival.
+      'src/lib/waitlist-entry.js',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },
