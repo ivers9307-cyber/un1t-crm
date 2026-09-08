@@ -1065,6 +1065,14 @@ export const GLOFOX_ALREADY_BOOKED_CODE = 'YOU_HAVE_BOOKED_FOR_THIS_EVENT'
  *     no harvestable id we log the body keys once so the real success
  *     shape can be added to the harvest list.
  *
+ * MIA-BOOK.3 — that log answered it: prod printed `body keys: success,Booking`
+ * on every clean-2xx booking (2026-09-08). The id was never absent, it sat one
+ * level down under a PascalCase wrapper. Glofox spells the booking id `_id` on
+ * the /2.0/bookings GET item and `id` on the webhook payload (see
+ * src/lib/class-bookings.js), so the wrapper is read with both spellings. The
+ * diagnostic now prints one level down too — printing only top-level keys is
+ * why proving where the id lived took a second incident.
+ *
  * `alreadyBooked` flags Glofox's server-side member+event dedupe:
  * `booked` stays false (no new booking id comes back), but most callers
  * should treat it as success — the member IS in the class (e.g. a re-run
@@ -1075,15 +1083,34 @@ export const GLOFOX_ALREADY_BOOKED_CODE = 'YOU_HAVE_BOOKED_FOR_THIS_EVENT'
  */
 export function interpretBookingResult(result) {
   const body = result?.body
-  const bookingId = body?._id || body?.id || body?.booking_id || body?.data?._id || body?.data?.id || null
+  const bookingId = body?._id || body?.id || body?.booking_id
+    || body?.data?._id || body?.data?.id
+    || body?.Booking?._id || body?.Booking?.id
+    || null
   const messageCode = body?.message_code || body?.message || null
   const alreadyBooked = messageCode === GLOFOX_ALREADY_BOOKED_CODE
   const booked = !!result?.ok && (!messageCode || !!bookingId)
   if (booked && !bookingId) {
-    const keys = body && typeof body === 'object' ? Object.keys(body).join(',') : typeof body
-    console.warn(`[glofox] booking 2xx without a harvestable id — extend the harvest shapes. body keys: ${keys || 'empty'}`)
+    console.warn(`[glofox] booking 2xx without a harvestable id — extend the harvest shapes. ${describeBodyShape(body)}`)
   }
   return { booked, bookingId, messageCode, alreadyBooked }
+}
+
+/**
+ * One-line shape sketch of an unrecognised booking body: top-level keys plus
+ * the keys of each object-valued property, so an unknown wrapper is readable
+ * from the log line alone rather than needing another production incident.
+ * Pure; one level deep on purpose (a booking body is small, a log line is not
+ * a dump).
+ */
+function describeBodyShape(body) {
+  if (!body || typeof body !== 'object') return `body keys: ${typeof body}`
+  const keys = Object.keys(body)
+  if (!keys.length) return 'body keys: empty'
+  const nested = keys
+    .filter((k) => body[k] && typeof body[k] === 'object' && !Array.isArray(body[k]))
+    .map((k) => `${k} keys: ${Object.keys(body[k]).join(',') || 'empty'}`)
+  return [`body keys: ${keys.join(',')}`, ...nested].join('; ')
 }
 
 /**

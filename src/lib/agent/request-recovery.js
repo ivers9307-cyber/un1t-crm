@@ -84,18 +84,32 @@ export function isRetryableFailure(row) {
 // the UI when it carries no usable start time (kinds without starts_at).
 export const RETRY_OFFER_WINDOW_MS = 48 * 3_600_000
 
+// AGENT-RETRY.3 — `failed` is written by TWO different authors, and only one
+// of them means "an execution went wrong". booking-tools stamps
+// reason:'superseded_duplicate' (+ duplicate_of) when a second attempt hits the
+// same account-shaped rejection while an earlier request for the same event is
+// still PENDING: a tombstone, deliberately raising no second card and no second
+// manager push. It was never approved (`decided_at` stays null) and its outcome
+// belongs to the sibling row, so it is not a failure an operator can fix.
+// Offering it put a row under "these were APPROVED but Glofox rejected them"
+// that nobody had approved — live 2026-09-08, where the tombstone still sat in
+// the lane after the real request had been approved and actioned.
+const TOMBSTONE_REASONS = new Set(['superseded_duplicate'])
+
 /**
  * Should the UI surface a Fix-&-retry affordance for this row? Pure —
- * stricter than isRetryableFailure: retrying a class that has already
- * started helps nobody, so rows with a parseable details.starts_at are
- * only offered while the start is still in the future; rows without one
- * (event/class cancellations, older bookings) fall back to a decided-at
- * recency window so the section can't accumulate stale history forever.
- * The route deliberately stays permissive (isRetryableFailure) — an
- * operator retrying an edge case on purpose shouldn't be refused.
+ * stricter than isRetryableFailure: a tombstone (see above) is never offered;
+ * retrying a class that has already started helps nobody, so rows with a
+ * parseable details.starts_at are only offered while the start is still in the
+ * future; rows without one (event/class cancellations, older bookings) fall
+ * back to a decided-at recency window so the section can't accumulate stale
+ * history forever. The route deliberately stays permissive
+ * (isRetryableFailure) — an operator retrying an edge case on purpose
+ * shouldn't be refused.
  */
 export function retryOffered(row, nowMs = Date.now()) {
   if (!isRetryableFailure(row)) return false
+  if (TOMBSTONE_REASONS.has(row.details?.reason)) return false
   const starts = Date.parse(row.details?.starts_at || '')
   if (Number.isFinite(starts)) return starts > nowMs
   const decided = Date.parse(row.decided_at || '')
