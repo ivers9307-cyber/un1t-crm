@@ -803,16 +803,27 @@ function EventEdit({ block, onUpdate, availableEvents }) {
 }
 
 function LeadFormEdit({ block, onUpdate }) {
+  // The offer group is nested, and updateBlock() shallow-merges the
+  // patch into the block — so every offer edit must spread the whole
+  // current group or it would drop the other fields.
+  const offer = (block.offer && typeof block.offer === 'object' && !Array.isArray(block.offer)) ? block.offer : {}
+  const setOffer = (patch) => onUpdate({ offer: { ...offer, ...patch } })
+  const ticks = Array.isArray(offer.ticks) ? offer.ticks : []
+  const setTick = (i, v) => {
+    const next = [ticks[0] || '', ticks[1] || '', ticks[2] || '']
+    next[i] = v
+    setOffer({ ticks: next })
+  }
   return (
     <>
       <Field label="Heading">
-        <Input value={block.heading || ''} onChange={(v) => onUpdate({ heading: v })} maxLength={200} placeholder="Join the founding members" />
+        <Input value={block.heading || ''} onChange={(v) => onUpdate({ heading: v })} maxLength={200} placeholder="Keep me posted" />
       </Field>
       <Field label="Sub-copy" hint="Paragraph under the heading.">
         <Textarea value={block.subtext || ''} onChange={(v) => onUpdate({ subtext: v })} maxLength={600} rows={3} />
       </Field>
       <Field label="Button label">
-        <Input value={block.button_label || ''} onChange={(v) => onUpdate({ button_label: v })} maxLength={60} placeholder="Join the waitlist" />
+        <Input value={block.button_label || ''} onChange={(v) => onUpdate({ button_label: v })} maxLength={60} placeholder="Keep me posted" />
       </Field>
       <Field label="Success message" hint="Shown after a successful submit.">
         <Textarea value={block.success_message || ''} onChange={(v) => onUpdate({ success_message: v })} maxLength={300} rows={2} />
@@ -820,6 +831,65 @@ function LeadFormEdit({ block, onUpdate }) {
       <Field label="Consent checkbox text" hint="Shown beside the opt-in checkbox. Keep it explicit for GDPR — name the channels (email/SMS/WhatsApp).">
         <Textarea value={block.consent_label || ''} onChange={(v) => onUpdate({ consent_label: v })} maxLength={400} rows={3} />
       </Field>
+
+      <div className="pt-4 mt-2 border-t border-un1t-border">
+        <label className="flex items-start gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={offer.enabled === true}
+            onChange={(e) => setOffer({ enabled: e.target.checked })}
+            className="mt-0.5"
+          />
+          <span>
+            <span className="block text-sm text-un1t-text">Show a membership offer beside this form</span>
+            <span className="block text-[11px] text-un1t-muted mt-0.5">Adds a price panel to the left of the form and points the hero&apos;s main button at it. Untick when the offer closes and the section goes back to the form on its own.</span>
+          </span>
+        </label>
+      </div>
+
+      {offer.enabled === true && (
+        <>
+          <Field label="Section eyebrow">
+            <Input value={offer.section_eyebrow || ''} onChange={(v) => setOffer({ section_eyebrow: v })} maxLength={60} placeholder="Two ways in" />
+          </Field>
+          <Field label="Section heading" hint="Line breaks are kept exactly as you type them.">
+            <Textarea value={offer.section_heading || ''} onChange={(v) => setOffer({ section_heading: v })} maxLength={200} rows={2} placeholder={'Fix your rate\nbefore we open'} />
+          </Field>
+          <Field label="Offer label">
+            <Input value={offer.eyebrow || ''} onChange={(v) => setOffer({ eyebrow: v })} maxLength={60} placeholder="Foundation membership" />
+          </Field>
+          <Field label="Price">
+            <Input value={offer.price || ''} onChange={(v) => setOffer({ price: v })} maxLength={20} placeholder="€189" />
+          </Field>
+          <Field label="Struck-out price" hint="Shown with a red line through it, left of the price. Leave empty for no strike.">
+            <Input value={offer.was_price || ''} onChange={(v) => setOffer({ was_price: v })} maxLength={20} placeholder="€219" />
+          </Field>
+          <Field label="Struck-out price, spoken" hint="Screen readers only. A struck price on its own is heard as “it used to be €219”, so say which way it goes.">
+            <Input value={offer.was_price_note || ''} onChange={(v) => setOffer({ was_price_note: v })} maxLength={120} placeholder="a month from 19 September" />
+          </Field>
+          <Field label="Price caption" hint="Line breaks are kept exactly as you type them.">
+            <Textarea value={offer.unit || ''} onChange={(v) => setOffer({ unit: v })} maxLength={80} rows={2} placeholder={'per month\nfixed for life'} />
+          </Field>
+          <Field label="Deadline chip" hint="Small pill in the corner of the panel. Leave empty to hide it.">
+            <Input value={offer.deadline || ''} onChange={(v) => setOffer({ deadline: v })} maxLength={60} placeholder="Offer ends 19 September" />
+          </Field>
+          <Field label="What's included — line 1">
+            <Input value={ticks[0] || ''} onChange={(v) => setTick(0, v)} maxLength={120} placeholder="Unlimited classes, full access from day one" />
+          </Field>
+          <Field label="What's included — line 2">
+            <Input value={ticks[1] || ''} onChange={(v) => setTick(1, v)} maxLength={120} placeholder="Your rate never rises while your membership stays active" />
+          </Field>
+          <Field label="What's included — line 3">
+            <Input value={ticks[2] || ''} onChange={(v) => setTick(2, v)} maxLength={120} placeholder="Pay today, next payment October" />
+          </Field>
+          <Field label="Offer button label">
+            <Input value={offer.cta_label || ''} onChange={(v) => setOffer({ cta_label: v })} maxLength={60} placeholder="Claim your rate" />
+          </Field>
+          <Field label="Offer button link" hint="Where the button sends people to pay. Leave empty and the button is hidden rather than dead.">
+            <Input value={offer.cta_url || ''} onChange={(v) => setOffer({ cta_url: v })} maxLength={500} placeholder="https://hatchstreet.un1t.online/#join" />
+          </Field>
+        </>
+      )}
     </>
   )
 }
