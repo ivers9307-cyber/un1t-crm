@@ -102,6 +102,7 @@ offer: {
   eyebrow:      'Foundation membership',
   price:        '€189',
   was_price:    '€219',         // rendered with the red strike; '' ⇒ no strike
+  was_price_note: 'a month from 19 September',  // screen readers only
   unit:         'per month\nfixed for life',   // newlines preserved on render
   deadline:     'Offer ends 19 September',   // '' ⇒ chip hidden
   ticks: [
@@ -153,6 +154,13 @@ secondary path is one scroll away on the same page.
 
 ### 3. `src/components/landing-page/OfferPanel.jsx` — new file
 
+Alongside it, the `E` inline-edit wrapper moves out of `BlockRenderers.jsx` into
+`src/components/landing-page/EditableField.jsx`. `OfferPanel` needs it, and
+importing it back out of `BlockRenderers` — which will import `OfferPanel` —
+would be a cycle. Its seventeen call sites are unchanged; only the definition
+becomes an import.
+
+
 The white panel: eyebrow, deadline chip, struck price + live price + unit
 caption, tick list, CTA button. Pure server-rendered markup, no state.
 
@@ -176,8 +184,12 @@ direction explicitly:
 
 ```jsx
 <s className="lp-was-strike" aria-hidden="true">{offer.was_price}</s>
-<span className="sr-only">{offer.was_price} a month from 19 September.</span>
+<span className="sr-only">{offer.was_price} {offer.was_price_note}</span>
 ```
+
+The note is a field, not a literal, for the same reason the price is: on
+19 September the operator changes both from the editor. It is the one string on
+the panel no sighted visitor ever sees.
 
 ### 4. `LeadFormBlock` — `src/components/landing-page/BlockRenderers.jsx`
 
@@ -196,7 +208,7 @@ free.
 The section keeps `id="waitlist"` so the secondary CTA, the footer link and any
 existing external link into the page all still resolve.
 
-### 5. `.lp-was-strike` — `src/app/globals.css`
+### 5. `.lp-was-strike` + `.lp-btn-invert` — `src/app/globals.css`
 
 The red rule, as an `::after` on a relatively-positioned `<s>` (a border-based
 strike cannot be angled). Marketing CSS is `.lp-`-prefixed and segment-scoped;
@@ -205,6 +217,10 @@ tokens are the CRM's light-theme palette and this is the public site.
 
 `text-decoration: none` on the `<s>` — the pseudo-element is the strike, and the
 browser default would double it.
+
+`.lp-btn-invert` is the same white pill inverted for use on the white panel. It
+is declared *after* `.lp-btn` so it wins on source order — both are single-class
+selectors, so specificity alone would not settle it.
 
 ### 6. Editor — `src/components/LandingPageSettingsForm.jsx`
 
@@ -253,7 +269,7 @@ performing.
 - **`offer.enabled` true but `cta_url` empty** → the panel renders without a
   button and `pageCtas` falls through to today's `#waitlist` primary, rather
   than shipping a dead `<a href="">`.
-- **`was_price` empty** → no strike, no visually-hidden text; the price line
+- **`was_price` empty** → no strike, no visually-hidden note; the price line
   renders alone.
 - **`deadline` empty** → chip hidden.
 - **The destination being down or slow** is invisible to this page — it is a
@@ -270,7 +286,12 @@ Unit (`vitest`, no DB):
 - `primaryCta` — every existing case, unchanged, proving the wrapper.
 - `blocksOrDefault` — a lead_form carrying a malformed `offer` survives.
 - `OfferPanel` render — strike present with `was_price`, absent without it;
-  visually-hidden text present; no `<a>` when `cta_url` is empty.
+  visually-hidden note present; no `<a>` when `cta_url` is empty; deadline chip
+  hidden when `deadline` is empty; one `<li>` per tick.
+- `LeadFormBlock` — offer branch renders the panel and keeps the form; the
+  no-offer render is byte-identical to the disabled-offer render.
+- `HeroBlock` — both buttons with a secondary, one without; `rel="noopener"` on
+  an off-site primary only.
 
 Manual, before merge:
 
