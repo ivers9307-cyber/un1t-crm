@@ -399,10 +399,12 @@ with:
 Replace the title `useEffect` body's count expression: change every `homeQueueCount` reference to `titleCount`, and define it directly above the effect:
 
 ```js
-  // NAV-BADGE.1 — the title is the SUM OF THE VISIBLE PILLS, not a parallel
-  // derivation of them (that was /api/home-queue/count, which stays in place
-  // for /dashboard/today but no longer feeds this). Summing what is rendered
-  // is the only way the title and the pills cannot disagree.
+  // NAV-BADGE.1 — the title is the SUM OF THE VISIBLE PILLS. Amended after
+  // review: summing the two POLLED counts is not the same thing, because the
+  // endpoint's gate and the nav row's gate ask different questions — sum over
+  // the filtered `nav` list instead, and take /api/home-queue/count's retirement
+  // at face value (nothing else calls it; /dashboard/today uses assembleHomeQueue
+  // directly). See the committed Sidebar.jsx for the final text.
   const titleCount = approvalsBadge + messagesBadge
 ```
 

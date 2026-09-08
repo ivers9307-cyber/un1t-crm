@@ -76,7 +76,7 @@ Today `(N) Repset · …` is fed by `/api/home-queue/count` (approvals + mail ne
 
 This is a small semantic change: the inbox half moves from `home-queue`'s `countInboxNeedsAction` to the sidebar's existing `/api/whatsapp/unread-count`. That is the point — the title now sums what is rendered rather than a parallel derivation of it.
 
-`/api/home-queue/count` is **not** deleted; it keeps serving `/dashboard/today`. The sidebar simply stops being one of its consumers.
+`/api/home-queue/count` is **not** deleted, but be accurate about why: `/dashboard/today` is a server component calling `assembleHomeQueue(db, user)` directly and has never called that route. Once the sidebar stops polling it the route has **no callers in the app at all**. It stays because it is a published, OpenAPI-registered endpoint, not because something needs it — and that is worth writing down so nobody later "restores" a consumer it never had.
 
 ---
 
