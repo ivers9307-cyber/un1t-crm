@@ -363,6 +363,14 @@ describe('offerOf (HATCH-OFFER.1)', () => {
     expect(offerOf({ id: 'l', type: 'lead_form', offer: 'nope' })).toBeNull()
     expect(offerOf({ id: 'l', type: 'lead_form', offer: ['nope'] })).toBeNull()
   })
+  // A plain ['nope'] is already refused one line later by the
+  // enabled !== true check, so it cannot tell us whether the
+  // Array.isArray guard exists. An ENABLED array is the only shape
+  // that reaches it — without the guard this returns an object and
+  // the renderer then maps over a spread array.
+  it('returns null for an array that claims to be enabled', () => {
+    expect(offerOf({ id: 'l', type: 'lead_form', offer: Object.assign(['x'], { enabled: true }) })).toBeNull()
+  })
   it('returns null for a null block', () => {
     expect(offerOf(null)).toBeNull()
   })
