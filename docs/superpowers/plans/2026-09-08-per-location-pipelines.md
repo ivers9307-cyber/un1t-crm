@@ -751,6 +751,19 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 - Modify: `src/app/api/public/leads/route.js:118`
 - Modify: `src/app/api/public/class-booking/route.js:148`
 - Modify: `src/lib/glofox-sync.js:417`
+- Modify: `src/app/api/deals/route.js:87`
+- Modify: `src/lib/pipeline-reclassify.js:389`
+
+> **Scope correction (2026-09-08, found during Task 3).** There are **five** deal-insert sites, not three. This task originally named three; the two below were missed and are just as load-bearing:
+>
+> | Site | Why it matters |
+> |---|---|
+> | `src/app/api/deals/route.js:87` | The n8n integration's deal-create endpoint. |
+> | `src/lib/pipeline-reclassify.js:389` | **The cron's own create path.** The worst of the five: Task 3 scopes the cron's deal READ with `.in('pipeline_id', …)`, and SQL `IN` never matches `NULL`. A deal inserted with a null `pipeline_id` is therefore invisible to the next run, which creates *another* open deal for that contact — whose insert is also null, so it duplicates again every night, unbounded, for every new lead. |
+>
+> Every one of the five must set `pipeline_id` in the same commit. A partial fix is worse than none, because it hides the remaining sites behind a mostly-working cron.
+>
+> Production currently holds **0** null-`pipeline_id` deals (checked 2026-09-08 after mig 594), but the deployed `main` does not yet set the column, so rows will accumulate between mig 594 and this code deploying. Task 13's migration re-runs the backfill to sweep them — see its Step 1.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2209,6 +2222,19 @@ begin
     from public.pipelines p
    where p.id = ps.pipeline_id and p.enabled = false;
 end $$;
+
+-- Re-run the mig 594 backfill before tightening.
+--
+-- Between mig 594 (which added the column) and PR 1 deploying (which taught
+-- all five insert sites to populate it), the live code created deals with a
+-- null pipeline_id. They are invisible to the cron's `.in('pipeline_id', …)`
+-- read — SQL IN never matches NULL — so each one would be duplicated nightly
+-- until swept. Idempotent: a no-op if nothing accumulated.
+update public.deals d
+   set pipeline_id = ps.pipeline_id
+  from public.pipeline_stages ps
+ where ps.id = d.stage_id
+   and d.pipeline_id is null;
 
 -- Tighten only once nothing is orphaned.
 do $$
