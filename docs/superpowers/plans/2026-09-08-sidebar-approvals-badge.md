@@ -30,6 +30,16 @@ No new library, no migration, no `shared/` change → **no OTA**.
 
 ### Task 1: The count endpoint
 
+> **Amended after code review (see the fix commit on this branch).** The header
+> comment and the `location: false` justification below contained two factual
+> errors: head coaches do **not** approve rosters (`shared/permissions.js:452`
+> sets `approvals_rosters: false` for them), and scoping is the caller's
+> **active location**, not every location they hold a role at
+> (`registry.js`'s `APPROVALS-LOCATION-SCOPE` block; only `host_events` is
+> org-wide). The route's *logic* is unchanged and correct as written. Take the
+> committed files as the source of truth for the comment text.
+
+
 **Files:**
 - Create: `src/app/api/approvals/count/route.js`
 - Test: `src/app/api/approvals/count/route.test.js`
@@ -277,9 +287,10 @@ describe('Approvals badge', () => {
     expect(badgeOnRow('Messages')).toBeUndefined()
   })
 
-  // The endpoint self-gates. A client-side hasPermission reads the ACTIVE
-  // location only, while approvals span locations (host_events is org-wide,
-  // an owner sees every location they own), so gating here would hide work.
+  // The endpoint self-gates, so there is nothing to gate on here. A
+  // client-side hasPermission would also be checking the WRONG key: the nav
+  // row's key is approvals_inbox, while the eleven providers each gate on
+  // their own approvals_* key, so it could hide a badge for real work.
   it('polls unconditionally for a signed-in user', () => {
     render(<Sidebar user={USER} />)
     const call = usePolledCount.mock.calls.map(([a]) => a).find(a => a?.url === '/api/approvals/count')
@@ -346,11 +357,12 @@ In `src/components/Sidebar.jsx`, replace the `homeQueueCount` block (lines 74–
   // same ones. Net polled URLs are unchanged at three — this one replaces the
   // /api/home-queue/count poller rather than joining it.
   //
-  // `enabled: !!user`, NOT a permission check: hasPermission reads the ACTIVE
-  // location only, while approvals span locations (host_events is org-wide, an
-  // owner sees every location they own), so a client-side gate would hide real
-  // work. The endpoint self-gates and answers 0 cheaply — each provider's
-  // isVisible runs before its query.
+  // `enabled: !!user`, NOT a permission check. A client-side hasPermission
+  // would check approvals_inbox (the nav row's key) while the eleven providers
+  // each gate on their own approvals_* key — a different question, which could
+  // hide a badge for work the caller really has. The endpoint self-gates and
+  // answers 0 cheaply: isProviderVisible runs before any query, so a staff
+  // session makes zero database calls.
   const approvalsBadge = usePolledCount({
     enabled: !!user,
     url: '/api/approvals/count',

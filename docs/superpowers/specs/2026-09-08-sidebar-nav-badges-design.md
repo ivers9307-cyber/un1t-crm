@@ -17,7 +17,7 @@ Today `Sidebar.jsx:230` hardcodes `badge={item.href === '/communications' ? mess
 ## Goals
 
 1. The Approvals row shows a number when there is work **that viewer** can act on.
-2. The scoping is per-role and per-location without restating any role logic — a head coach sees rosters and shift swaps at their locations, an owner sees contractor invoices and FTE expenses, master sees everything.
+2. The scoping is per-role and per-location without restating any role logic — a head coach sees time off, shift swaps and hyrox sessions; an owner additionally sees contractor invoices, FTE expenses and rosters; master sees everything. All of it at the caller's **active location**, `host_events` excepted (see "What the scoping actually is").
 3. Request cost does not regress against `HOME.3`.
 
 ## Non-goals
@@ -39,6 +39,16 @@ A pending time-off request is reviewed on `/approvals` but belongs conceptually 
 `home-queue.js` names the failure this avoids: *"a badge that reads lower than the queue actually holding is the 'click it, find nothing behind it' trap this estate has hit before."* The inverse is the same trap — a badge on a row whose page does not surface the item.
 
 Consequence: all eleven approvals providers roll up into the single `/approvals` number.
+
+### What the scoping actually is
+
+Recorded because the first draft of this spec got it wrong twice, and the wrong version is intuitive enough to be written again:
+
+- **Head coaches do not approve rosters.** `shared/permissions.js:452` sets `approvals_rosters: false` for `head_coach` — "head coach approves schedule items only". Their set is time off, shift swaps, hyrox sessions (plus agent requests and offer purchases). Owner and master hold rosters.
+- **It is the ACTIVE location, not every location you hold a role at.** `registry.js`'s `APPROVALS-LOCATION-SCOPE` block says so explicitly, and marks `scheduleApproverLocationIds` (which does return every such location) as *kept for back-compat*. Ten of the eleven providers resolve `viewerActiveLocationId(user)` and filter `.eq('location_id', activeId)`. **`host_events` is the one org-wide provider.**
+- **The pre-query gate is `isProviderVisible`**, which is `hasPermission(user, p.permissionKey)` plus `bundlesDenyCategory` — not a per-provider `isVisible()` hook. Only three providers (`invoices-queue`, `issues`, `host-events`) define one of those.
+
+None of this is restated in the new endpoint. It is written down here so the next person does not have to rediscover it, and so a comment claiming otherwise gets caught in review.
 
 ### Why Money is out
 
@@ -112,7 +122,7 @@ const approvalsBadge = usePolledCount({
 })
 ```
 
-**`enabled: !!user`, not a permission check** — the same reasoning `MAIL-BADGE.1` documents for its mail poller: `hasPermission` reads the **active location only**, while approvals span locations (`host_events` is org-wide; an owner sees every location they own). A client-side gate would hide a badge for work the user really does have. The endpoint self-gates and answers 0 cheaply, so this is correct *and* cheap.
+**`enabled: !!user`, not a permission check.** A client-side `hasPermission` gate would be checking a *different* key than the eleven providers check (`approvals_inbox`, the nav row's key, versus each provider's own `approvals_*`), so it could hide a badge for work the caller really has. The endpoint self-gates and answers 0 cheaply — `isProviderVisible` runs before any query, so a staff session makes zero database calls.
 
 The `homeQueueCount` poller is removed from `Sidebar.jsx` — the title no longer needs it.
 
