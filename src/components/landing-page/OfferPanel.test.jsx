@@ -46,6 +46,11 @@ describe('OfferPanel (HATCH-OFFER.1)', () => {
   it('hides the deadline chip when the deadline is empty', () => {
     const html = renderToStaticMarkup(<OfferPanel offer={{ ...offer, deadline: '' }} />)
     expect(html).not.toContain('Offer ends')
+    // Assert the ELEMENT is gone, not just its text. On a public
+    // render E resolves to empty content, so a text-only assertion
+    // passes even with the guard removed — what leaks is an empty
+    // black pill, which only a class assertion can see.
+    expect(html).not.toContain('rounded-full bg-black')
   })
   it('renders one list item per tick and survives an empty list', () => {
     expect(renderToStaticMarkup(<OfferPanel offer={offer} />).match(/<li/g)).toHaveLength(2)
