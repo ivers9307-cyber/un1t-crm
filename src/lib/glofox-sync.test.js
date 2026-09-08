@@ -1504,7 +1504,15 @@ describe('mapGlofoxMember (real Glofox payload — Cathy, comp\'d Credit Member)
 //                                  preview reads this via
 //                                  getOpenDealWithStage (2 queries:
 //                                  deals + pipeline_stages-by-id)
-function fakeDb({ rowsByGlofoxId = [], rowsByEmail = [], openDeal = null } = {}) {
+//   pipelines                    — PIPELINES.5: the location's boards. The
+//                                  default is the single enabled derived
+//                                  primary board every live location runs, so
+//                                  every fixture below keeps its assertions;
+//                                  pass [] to model a location with no board.
+function fakeDb({
+  rowsByGlofoxId = [], rowsByEmail = [], openDeal = null,
+  pipelines = [{ id: 'p-acq', mode: 'derived' }],
+} = {}) {
   function chain(table) {
     let mode = null
     const c = {}
@@ -1517,9 +1525,11 @@ function fakeDb({ rowsByGlofoxId = [], rowsByEmail = [], openDeal = null } = {})
       return c
     }
     c.limit = () => c
+    c.order = () => c
     c.then = (resolve) => {
       let data
-      if (mode === 'glofox')           data = rowsByGlofoxId
+      if (table === 'pipelines')        data = pipelines
+      else if (mode === 'glofox')       data = rowsByGlofoxId
       else if (mode === 'email')        data = rowsByEmail
       else if (mode === 'open_deal')    data = openDeal ? [{ id: openDeal.id, stage_id: openDeal.stage_id }] : []
       else if (mode === 'stage_by_id')  data = openDeal ? [{ slug: openDeal.stage_slug }] : []

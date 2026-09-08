@@ -22,43 +22,19 @@
 
 import { classifyContact } from './pipeline-classifier.js'
 import { logWarn } from './log.js'
+import { getBoardModule, PIPELINE_MODES } from '../../shared/pipelines/index.js'
 
-// Fields the classifier needs from the contacts row.
-const SELECT_COLS = [
-  'id',
-  'name',
-  'email',
-  'glofox_membership_status',
-  'glofox_membership_state',
-  'glofox_membership_expiry',
-  'last_attended_at',
-  'total_attended_7d',
-  'total_attended_30d',
-  'last_payment_at',
-  'joined_at',
-  'created_at',
-  'trial_credits_remaining',
-  // FUNNEL.1 — the funnel classifier keys on attended counts
-  // (recent_bookings) and the Converted-column gate (converted_at).
-  // The nightly run MUST read the same signals as the webhook path
-  // (applyMemberSync) or it re-classifies with attended=0 /
-  // converted_at=null and drags every webhook-placed deal back
-  // overnight (PIPELINE-FLAP).
-  'recent_bookings',
-  'converted_at',
-  // FUNNEL.3 — the sticky Class Pack stamp; same parity rule applies.
-  'pack_customer_at',
-  // FUNNEL.4 — operator Cold dismissal; same parity rule (else the
-  // nightly cron flaps a cold lead back onto the board).
-  'pipeline_dismissed_at',
-  // GYMPASS.2 — parks Gympass users in the off-funnel gympass pile; the
-  // classifier reads it, so the cron must select it or it flaps them back.
-  'gympass_member_id',
-  // RETURNPIPE.3 — re-entering a public funnel form revokes a Cold dismissal.
-  // Same parity rule: without this the nightly run reads it as null, decides
-  // they are still cold, and drags them off the board overnight.
-  'last_lead_source_at',
-].join(', ')
+// PIPELINES.3 — the columns a run selects are the UNION of what its enabled
+// derived boards DECLARE, not a hand-maintained list. The list this replaced
+// carried five comments all warning of the same defect: omit a field, the cron
+// classifies on nulls, and every webhook-placed deal is dragged back overnight
+// (PIPELINE-FLAP). A board that adds a signal now declares it in its own
+// requiredFields and the orchestrator cannot forget it.
+function selectColsFor(modules) {
+  const cols = new Set(['id', 'name', 'email'])
+  for (const mod of modules) for (const f of mod.requiredFields) cols.add(f)
+  return [...cols].join(', ')
+}
 
 /**
  * Re-classify every contact at a location and move deals to match.
@@ -119,17 +95,76 @@ export async function reclassifyAllContacts(db, args) {
     runId = runRow?.id || null
   }
 
+  // 1b. Which boards run at this location.
+  //
+  // mode='manual' boards are NEVER read or written here. That fence is the
+  // whole reason a manual board can exist: FUNNEL.1 removed drag-drop because
+  // this pass overwrites manual moves, so a manual board the classifier can
+  // see is one whose every staff action is reverted overnight.
+  //
+  // A derived board whose module is not registered is SKIPPED and REPORTED,
+  // never fatal — Stillorgan has a 'returning' pipeline whose module is
+  // deliberately unregistered (0 deals, and it cannot fill).
+  const { data: pipelineRows, error: pipelinesErr } = await db
+    .from('pipelines')
+    .select('id, key, module, mode, enabled, is_primary')
+    .eq('location_id', locationId)
+    .eq('enabled', true)
+  if (pipelinesErr) {
+    await markRun(db, runId, { status: 'failed', error_message: `pipeline load: ${pipelinesErr.message}` }, startedAt)
+    return { ok: false, error: `pipeline load: ${pipelinesErr.message}`, run_id: runId }
+  }
+
+  const pipelinesSkipped = []
+  const activePipelines = []
+  for (const p of pipelineRows || []) {
+    if (p.mode === PIPELINE_MODES.MANUAL) { pipelinesSkipped.push(p.key); continue }
+    const mod = getBoardModule(p.module)
+    if (!mod) {
+      pipelinesSkipped.push(p.key)
+      logWarn('pipeline-reclassify', 'no board module registered', { key: p.key, module: p.module, locationId })
+      continue
+    }
+    activePipelines.push({ ...p, mod })
+  }
+
+  if (activePipelines.length === 0) {
+    await markRun(db, runId, {
+      status: 'success',
+      contacts_seen: 0, deals_moved: 0, deals_unchanged: 0, deals_created: 0, errors: 0,
+      movement_matrix: {}, samples: [],
+    }, startedAt)
+    return {
+      ok: true, run_id: runId, contacts_seen: 0, deals_moved: 0, deals_unchanged: 0,
+      deals_created: 0, errors: 0, movement_matrix: {}, samples: [],
+      pipelines_skipped: pipelinesSkipped,
+    }
+  }
+
+  const activePipelineIds = activePipelines.map((p) => p.id)
+  const selectCols = selectColsFor(activePipelines.map((p) => p.mod))
+
   // 2. Build the slug → stage_id lookup ONCE for this location.
+  // PIPELINES.5 — pipeline_id comes back with the stage because the create
+  // path below MUST stamp it on the deal it inserts. This orchestrator scopes
+  // its own deal read with `.in('pipeline_id', …)` (step 4), and SQL IN never
+  // matches NULL: a deal created here without one is invisible to the NEXT
+  // run, which sees the contact as deal-less and creates another — nightly,
+  // unbounded, for every new lead. Taking it off the stage rather than off the
+  // iteration also keeps deals.pipeline_id and deals.stage_id in agreement by
+  // construction.
   const { data: stages, error: stagesErr } = await db
     .from('pipeline_stages')
-    .select('id, slug')
+    .select('id, slug, pipeline_id')
     .eq('location_id', locationId)
+    .in('pipeline_id', activePipelineIds)
   if (stagesErr) {
     await markRun(db, runId, { status: 'failed', error_message: `stage load: ${stagesErr.message}` }, startedAt)
     return { ok: false, error: `stage load: ${stagesErr.message}`, run_id: runId }
   }
   const stageIdBySlug = new Map((stages || []).map((s) => [s.slug, s.id]))
   const stageSlugById = new Map((stages || []).map((s) => [s.id, s.slug]))
+  const stagePipelineById = new Map((stages || []).map((s) => [s.id, s.pipeline_id]))
 
   // 3. Pull every contact at the location with the classifier inputs.
   //
@@ -152,7 +187,7 @@ export async function reclassifyAllContacts(db, args) {
     const pageEnd = Math.min(pageStart + PAGE_SIZE - 1, HARD_LIMIT - 1)
     const { data: page, error } = await db
       .from('contacts')
-      .select(SELECT_COLS)
+      .select(selectCols)
       .eq('location_id', locationId)
       .order('id', { ascending: true })
       .range(pageStart, pageEnd)
@@ -174,7 +209,7 @@ export async function reclassifyAllContacts(db, args) {
       contacts_seen: 0, deals_moved: 0, deals_unchanged: 0, deals_created: 0, errors: 0,
       movement_matrix: {}, samples: [],
     }, startedAt)
-    return { ok: true, run_id: runId, contacts_seen: 0, deals_moved: 0, deals_unchanged: 0, deals_created: 0, errors: 0, movement_matrix: {}, samples: [] }
+    return { ok: true, run_id: runId, contacts_seen: 0, deals_moved: 0, deals_unchanged: 0, deals_created: 0, errors: 0, movement_matrix: {}, samples: [], pipelines_skipped: pipelinesSkipped }
   }
 
   // 4. Pull every open deal at the location in one query.
@@ -206,6 +241,7 @@ export async function reclassifyAllContacts(db, args) {
       .select('id, contact_id, stage_id')
       .eq('location_id', locationId)
       .eq('status', 'open')
+      .in('pipeline_id', activePipelineIds)
       .order('id', { ascending: true })
       .range(dealStart, dealEnd)
     if (error) { dealsErr = error; break }
@@ -277,6 +313,7 @@ export async function reclassifyAllContacts(db, args) {
       createsToApply.push({
         contact_id: c.id,
         target_stage_id: targetStageId,
+        target_pipeline_id: stagePipelineById.get(targetStageId) || null,
         target_slug: targetSlug,
         contact_name: c.name || c.email || 'Glofox member',
       })
@@ -364,6 +401,7 @@ export async function reclassifyAllContacts(db, args) {
           title: c.contact_name,
           contact_id: c.contact_id,
           stage_id: c.target_stage_id,
+          pipeline_id: c.target_pipeline_id,
           location_id: locationId,
           status: 'open',
         })
@@ -418,6 +456,7 @@ export async function reclassifyAllContacts(db, args) {
     errors,
     movement_matrix: movementMatrix,
     samples,
+    pipelines_skipped: pipelinesSkipped,
   }
 }
 

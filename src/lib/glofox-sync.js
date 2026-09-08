@@ -11,6 +11,8 @@ import { upsertClassBookings } from './class-bookings.js'
 import { logWarn } from './log.js'
 import { matchesPush } from './glofox-notes.js'
 import { normaliseGender } from './gender.js'
+import { findOpenDealForPipeline, findPrimaryPipeline } from './deal-lookup.js'
+import { PIPELINE_MODES } from '../../shared/pipelines/index.js'
 //
 // Source-of-truth contract:
 //   Glofox owns:  glofox_member_id, glofox_membership_status,
@@ -410,22 +412,19 @@ export function targetDealStageForSync(previousStatus, newStatus, currentStageSl
 }
 
 /**
- * Look up the current open deal for a contact + its stage slug.
- * Returns null when no open deal exists. Used by both preview
+ * Look up the contact's open deal ON A GIVEN BOARD + its stage slug.
+ * Returns null when no open deal exists there. Used by both preview
  * (to compute the proposed action) and apply (to execute it).
+ *
+ * PIPELINES.5 — the lookup was `.limit(1)` with no `.order()` and no board
+ * filter, so a contact with two open deals handed back an ARBITRARY one and
+ * this path moved whichever row the planner happened to return. The board
+ * filter is what makes "the" open deal a well-defined thing again; the shared
+ * helper owns the query so the two public forms cannot drift from it.
  */
-export async function getOpenDealWithStage(db, contactId) {
-  if (!db || !contactId) return null
-  // Two queries — deal first, then resolve the stage slug. Avoids
-  // Supabase relation-syntax quirks and keeps the test fake simple.
-  const { data: deals, error: dealErr } = await db
-    .from('deals')
-    .select('id, stage_id')
-    .eq('contact_id', contactId)
-    .eq('status', 'open')
-    .limit(1)
-  if (dealErr || !deals?.[0]) return null
-  const deal = deals[0]
+export async function getOpenDealWithStage(db, contactId, pipelineId) {
+  const deal = await findOpenDealForPipeline(db, contactId, pipelineId)
+  if (!deal) return null
   const { data: stages } = await db
     .from('pipeline_stages')
     .select('slug')
@@ -435,16 +434,22 @@ export async function getOpenDealWithStage(db, contactId) {
 }
 
 /**
- * Resolve a pipeline stage slug → stage id at a location. Returns
- * the id, or null if the stage doesn't exist (caller decides
+ * Resolve a pipeline stage slug → stage id ON A BOARD. Returns the
+ * id, or null if the stage doesn't exist there (caller decides
  * fallback). Cached-per-call by keeping it inline — sync runs are
  * low-volume; we don't need a Map cache.
+ *
+ * PIPELINES.5 — scoped by pipeline, not location: a location running two
+ * boards has two stage sets, and a location-wide slug lookup would place the
+ * deal on whichever board happened to answer first. Every caller is in this
+ * file (the create, the fallback and the move below).
  */
-export async function findStageIdBySlug(db, locationId, stageSlug) {
+export async function findStageIdBySlug(db, pipelineId, stageSlug) {
+  if (!db || !pipelineId || !stageSlug) return null
   const { data, error } = await db
     .from('pipeline_stages')
     .select('id')
-    .eq('location_id', locationId)
+    .eq('pipeline_id', pipelineId)
     .eq('slug', stageSlug)
     .limit(1)
   if (error || !data?.[0]) return null
@@ -492,17 +497,29 @@ export async function ensureDealForContact(db, locationId, contactId, contactSna
   // the nightly /api/cron/pipeline-classify, so the two converge.
   const targetSlug = classifyContact(contactSnapshot || {})
 
-  const existing = await getOpenDealWithStage(db, contactId)
+  // PIPELINES.5 — placement from this path is only ever about the location's
+  // PRIMARY board, and only when that board is derived. A manual board's deals
+  // move by hand and nothing else (mig 594): writing one from a webhook is the
+  // same defect FUNNEL.1 removed drag-drop to avoid, one layer up. No enabled
+  // primary board is the disabled-location case (CCF Autos, SourceIt) — leave
+  // it alone rather than invent a placement.
+  const primary = await findPrimaryPipeline(db, locationId)
+  if (!primary || primary.mode !== PIPELINE_MODES.DERIVED) {
+    return { action: 'leave', deal_id: null, stage_slug: null }
+  }
+  const pipelineId = primary.id
+
+  const existing = await getOpenDealWithStage(db, contactId, pipelineId)
 
   if (!existing) {
     // CREATE path — first time this contact has had a deal.
-    let stageId = await findStageIdBySlug(db, locationId, targetSlug)
+    let stageId = await findStageIdBySlug(db, pipelineId, targetSlug)
     let resolvedSlug = targetSlug
     if (!stageId) {
       // New-lead fallback so the contact still surfaces somewhere
       // visible. Mig 147 ensures every location has the standard
       // stage set, so this should be unreachable in practice.
-      const fallback = await findStageIdBySlug(db, locationId, 'new_lead')
+      const fallback = await findStageIdBySlug(db, pipelineId, 'new_lead')
       if (!fallback) return { action: 'error', error: `Pipeline stage '${targetSlug}' not found and no new_lead fallback` }
       stageId = fallback
       resolvedSlug = 'new_lead'
@@ -513,7 +530,7 @@ export async function ensureDealForContact(db, locationId, contactId, contactSna
     const title = (contactName && contactName.trim()) || 'Glofox member'
     const { data, error } = await db
       .from('deals')
-      .insert({ title, contact_id: contactId, stage_id: stageId, location_id: locationId, status: 'open' })
+      .insert({ title, contact_id: contactId, stage_id: stageId, location_id: locationId, status: 'open', pipeline_id: pipelineId })
       .select('id')
       .single()
     if (error) return { action: 'error', error: error.message }
@@ -526,7 +543,7 @@ export async function ensureDealForContact(db, locationId, contactId, contactSna
   if (existing.stage_slug === targetSlug) {
     return { action: 'leave', deal_id: existing.id, stage_slug: existing.stage_slug }
   }
-  const targetStageId = await findStageIdBySlug(db, locationId, targetSlug)
+  const targetStageId = await findStageIdBySlug(db, pipelineId, targetSlug)
   if (!targetStageId) {
     return { action: 'error', deal_id: existing.id, error: `Target stage '${targetSlug}' not found at location` }
   }
@@ -1827,9 +1844,18 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
   // input, so a no-op sync produces 'leave'.
   const previousStatus = existing.glofox_membership_status
   const newStatus = mapped.glofox_membership_status
-  const openDeal = await getOpenDealWithStage(db, existing.id)
+  // PIPELINES.5 — preview reads the same board apply will write, so the two
+  // agree. A location with no enabled primary board, or a manual one, resolves
+  // to null here and the deal lookup returns null with it; the apply path
+  // (ensureDealForContact) answers 'leave' for exactly that case, so this
+  // preview must not promise a create it will refuse to make.
+  const primary = await findPrimaryPipeline(db, locationId)
+  const pipelineId = primary && primary.mode === PIPELINE_MODES.DERIVED ? primary.id : null
+  const openDeal = await getOpenDealWithStage(db, existing.id, pipelineId)
   let dealAction
-  if (!openDeal) {
+  if (!pipelineId) {
+    dealAction = { action: 'leave', deal_id: null, stage_slug: null, reason: 'no enabled derived primary board at this location' }
+  } else if (!openDeal) {
     // No deal yet → backfill at the classifier's target.
     dealAction = { action: 'create', stage_slug: proposedStageSlug }
   } else if (openDeal.stage_slug !== proposedStageSlug) {

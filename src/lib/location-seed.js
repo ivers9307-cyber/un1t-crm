@@ -88,12 +88,70 @@ export function seedBundleFeatures(existingFeatures) {
   return features
 }
 
+// PIPELINES.6b — a board is now a row in `pipelines`, and pipeline_stages /
+// deals both carry a pipeline_id that a later migration sets NOT NULL. Every
+// stage a fresh location gets must hang off a pipeline from the moment it's
+// created, or that migration lands and the next new-location stage insert
+// fails outright — a break that only surfaces the next time someone adds a
+// location, exactly when nobody is watching for it.
+const ACQUISITION_PIPELINE = Object.freeze({
+  key: 'acquisition',
+  name: 'Acquisition',
+  module: 'acquisition',
+  mode: 'derived',
+  is_primary: true,
+  display_order: 0,
+  enabled: true,
+})
+
+/**
+ * Resolve the id of a location's acquisition pipeline, creating it if it
+ * doesn't exist yet. Re-runnable: a (location_id, key) conflict (mig 594's
+ * `pipelines_location_key_unique`) means a prior run already seeded it, so
+ * the existing row's id is read back rather than treating the re-run as a
+ * failure (same idempotent shape as the pipeline_stages upsert below).
+ *
+ * @param {object} db - service-role client
+ * @param {string} locationId
+ * @returns {Promise<string>} the pipeline id
+ */
+async function resolveAcquisitionPipelineId(db, locationId) {
+  const { data: inserted, error: insertError } = await db
+    .from('pipelines')
+    .insert({ ...ACQUISITION_PIPELINE, location_id: locationId })
+    .select('id')
+    .single()
+  if (!insertError) return inserted.id
+
+  // 23505 = unique_violation on (location_id, key) — someone already seeded
+  // this location's pipeline (wizard retry, resumed provisioning). Any other
+  // error is a real failure and must not proceed to an unparented stage insert.
+  if (insertError.code !== '23505') {
+    throw new Error(`seedLocationDefaults: pipelines insert failed: ${insertError.message}`)
+  }
+
+  const { data: existing, error: selectError } = await db
+    .from('pipelines')
+    .select('id')
+    .eq('location_id', locationId)
+    .eq('key', ACQUISITION_PIPELINE.key)
+    .maybeSingle()
+  if (selectError) throw new Error(`seedLocationDefaults: pipelines lookup failed: ${selectError.message}`)
+  if (!existing?.id) {
+    // A stage insert that silently proceeds without a pipeline is the exact
+    // break this function exists to prevent — throw rather than seed orphans.
+    throw new Error(`seedLocationDefaults: could not resolve an acquisition pipeline id for location ${locationId}`)
+  }
+  return existing.id
+}
+
 /**
  * Seed the per-location defaults a new location needs to function.
  * Idempotent: safe to re-run for a partially provisioned location
- * (upsert ignores duplicates on the mig 150 uq (location_id, slug);
- * the bundle-features write only ever ADDS missing keys, never
- * overwrites an existing one — see seedBundleFeatures above).
+ * (the pipelines insert falls back to reading back the existing row on a
+ * conflict; the pipeline_stages upsert ignores duplicates on the mig 150 uq
+ * (location_id, slug); the bundle-features write only ever ADDS missing
+ * keys, never overwrites an existing one — see seedBundleFeatures above).
  *
  * @param {object} db - service-role client (createServerClient())
  * @param {{ id: string, features?: object }} location - the freshly created locations row
@@ -101,9 +159,12 @@ export function seedBundleFeatures(existingFeatures) {
 export async function seedLocationDefaults(db, location) {
   if (!location?.id) throw new Error('seedLocationDefaults: location with id required')
 
+  const pipelineId = await resolveAcquisitionPipelineId(db, location.id)
+
   const rows = defaultPipelineStages().map((stage) => ({
     ...stage,
     location_id: location.id,
+    pipeline_id: pipelineId,
   }))
 
   const { error } = await db
