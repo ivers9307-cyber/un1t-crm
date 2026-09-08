@@ -154,6 +154,10 @@ All five are visible columns (`is_dormant = false`), in the order Richard specif
 | 4 | Not interested | `waitlist_not_interested` |
 | 5 | Converted | `waitlist_converted` |
 
+**Column semantics (Richard, 2026-09-08).** "No Answer" means *we called and got no answer* — it is the recorded outcome of an attempt, not a holding pen for people nobody has tried yet. So **New Enquiry means "not yet worked"**, and a card only leaves it once a human has actually attempted contact.
+
+Two consequences. The §5.7 backfill of all 99 existing contacts into New Enquiry is correct precisely because none of them have been worked. And the board's honest read is "New Enquiry is the to-do list" — column 1 growing is a staffing signal, not a marketing one.
+
 The `waitlist_` prefix is required: Hatch's archived gym stages still hold `new_lead` and `converted`, and `pipeline_stages_location_slug_unique` is per location. Same reason the returning board used `returning_`. Mig 559's lesson applies to the seed insert — conflict-target the slug explicitly so a collision on anything else raises rather than silently dropping a row.
 
 ### 5.3 Auto-entry
