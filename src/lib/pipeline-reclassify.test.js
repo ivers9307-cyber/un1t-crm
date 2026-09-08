@@ -39,20 +39,36 @@ const STAGES = [
   { id: 'stage-dormant', slug: 'dormant' },
 ]
 
+// PIPELINES.3 — the location's boards. The default is the single enabled
+// derived acquisition board every location in production runs today, so the
+// fixtures below (all of which predate the pipelines table) keep describing a
+// real location and their assertions are unchanged.
+const DEFAULT_PIPELINES = [
+  { id: 'p-acq', location_id: 'loc-1', key: 'acquisition', module: 'acquisition', mode: 'derived', enabled: true, is_primary: true },
+]
+
 /**
  * @param {object} args
  * @param {object[]} [args.contacts]
  * @param {object[]} [args.deals]
  * @param {object[]} [args.stages]
+ * @param {object[]} [args.pipelines]
  * @param {object} [args.runRow]   { id } returned for the audit insert
  * @returns {{ db, writes }}  writes captures every update / insert
  */
-function fakeDb({ contacts = [], deals = [], stages = STAGES, runRow = { id: 'run-1' } } = {}) {
+function fakeDb({
+  contacts = [], deals = [], stages = STAGES,
+  pipelines = DEFAULT_PIPELINES, runRow = { id: 'run-1' },
+} = {}) {
   const writes = {
     runInsert: null,
     runUpdates: [],
     dealUpdates: [],
     dealInserts: [],
+    // PIPELINES.3 — a flat { table, payload } log alongside the typed buckets,
+    // so a test can assert a table was never written AT ALL rather than that
+    // one shape of write didn't happen. That is the manual-board guarantee.
+    all: [],
   }
 
   function chain(table, op) {
@@ -60,21 +76,31 @@ function fakeDb({ contacts = [], deals = [], stages = STAGES, runRow = { id: 'ru
     let pendingInsert = null
     let inIds = null
     let updateFields = null
+    // Filters recorded for SELECTs. A filter on a column the fixture row does
+    // not carry is IGNORED — most fixtures here describe only the columns
+    // their own test is about (no location_id, no status, no pipeline_id) and
+    // filtering them out would break every one of them.
+    const filters = []
     c.select = () => c
     c.single = () => c
-    c.eq = () => c
+    c.eq = (col, val) => { filters.push({ op: 'eq', col, val }); return c }
     c.limit = () => c
     c.order = () => c
     // .range(start, end) — no-op for the shim; the .then below returns
     // the full fixture array regardless. Tests use < PAGE_SIZE rows so
     // the orchestrator's pagination loop breaks after one iteration.
     c.range = () => c
-    c.in = (_col, ids) => { inIds = ids; return c }
+    c.in = (col, ids) => { inIds = ids; filters.push({ op: 'in', col, vals: ids }); return c }
     c.update = (fields) => { updateFields = fields; op = 'update'; return c }
     c.insert = (row) => { pendingInsert = row; op = 'insert'; return c }
+    const applyFilters = (rows) => (rows || []).filter((row) => filters.every((f) => {
+      if (!row || !Object.prototype.hasOwnProperty.call(row, f.col)) return true
+      return f.op === 'in' ? (f.vals || []).includes(row[f.col]) : row[f.col] === f.val
+    }))
     c.then = (resolve) => {
       // INSERT branch
       if (op === 'insert') {
+        writes.all.push({ table, payload: pendingInsert })
         if (table === 'pipeline_classification_runs') {
           writes.runInsert = pendingInsert
           return resolve({ data: runRow, error: null })
@@ -86,6 +112,7 @@ function fakeDb({ contacts = [], deals = [], stages = STAGES, runRow = { id: 'ru
       }
       // UPDATE branch
       if (op === 'update') {
+        writes.all.push({ table, payload: updateFields })
         if (table === 'pipeline_classification_runs') {
           writes.runUpdates.push(updateFields)
           return resolve({ data: null, error: null })
@@ -96,9 +123,10 @@ function fakeDb({ contacts = [], deals = [], stages = STAGES, runRow = { id: 'ru
         }
       }
       // SELECT branch
-      if (table === 'pipeline_stages') return resolve({ data: stages, error: null })
-      if (table === 'contacts')        return resolve({ data: contacts, error: null })
-      if (table === 'deals')           return resolve({ data: deals, error: null })
+      if (table === 'pipelines')       return resolve({ data: applyFilters(pipelines), error: null })
+      if (table === 'pipeline_stages') return resolve({ data: applyFilters(stages), error: null })
+      if (table === 'contacts')        return resolve({ data: applyFilters(contacts), error: null })
+      if (table === 'deals')           return resolve({ data: applyFilters(deals), error: null })
       return resolve({ data: [], error: null })
     }
     return c
@@ -107,6 +135,14 @@ function fakeDb({ contacts = [], deals = [], stages = STAGES, runRow = { id: 'ru
     db: { from: (table) => chain(table, 'select') },
     writes,
   }
+}
+
+// PIPELINES.3 — the same fake, flattened: the db with its write log attached
+// as db.writes ([{ table, payload }]).
+function makeDb(fixtures = {}) {
+  const { db, writes } = fakeDb(fixtures)
+  db.writes = writes.all
+  return db
 }
 
 describe('reclassifyAllContacts', () => {
@@ -254,5 +290,60 @@ describe('reclassifyAllContacts', () => {
     expect(out.deals_unchanged).toBe(1)
     expect(out.deals_moved).toBe(0)
     expect(writes.dealUpdates).toHaveLength(0) // no UPDATE issued
+  })
+})
+
+describe('PIPELINES.3 — per-pipeline orchestration', () => {
+  // THE test of this whole change. A manual board the classifier can see is a
+  // board whose every staff move is reverted overnight — the exact failure
+  // FUNNEL.1 removed drag-drop to prevent.
+  it('never reads or writes a manual pipeline', async () => {
+    const db = makeDb({
+      pipelines: [
+        { id: 'p-manual', location_id: 'loc-1', key: 'waitlist', module: null, mode: 'manual', enabled: true, is_primary: true },
+      ],
+      stages: [{ id: 's-1', slug: 'waitlist_new_enquiry', pipeline_id: 'p-manual' }],
+      contacts: [{ id: 'c-1', name: 'Ada', glofox_membership_status: null }],
+      deals: [{ id: 'd-1', contact_id: 'c-1', stage_id: 's-1', pipeline_id: 'p-manual', status: 'open' }],
+    })
+
+    const res = await reclassifyAllContacts(db, { locationId: 'loc-1', dryRun: true })
+
+    expect(res.ok).toBe(true)
+    expect(res.deals_moved).toBe(0)
+    expect(res.pipelines_skipped).toContain('waitlist')
+    expect(db.writes.filter((w) => w.table === 'deals')).toHaveLength(0)
+  })
+
+  it('skips a derived pipeline whose module is not registered, and reports it', async () => {
+    const db = makeDb({
+      pipelines: [
+        { id: 'p-ret', location_id: 'loc-1', key: 'returning', module: 'returning', mode: 'derived', enabled: true, is_primary: false },
+      ],
+      stages: [{ id: 's-r', slug: 'returning_booked', pipeline_id: 'p-ret' }],
+      contacts: [{ id: 'c-1', name: 'Ada' }],
+      deals: [],
+    })
+
+    const res = await reclassifyAllContacts(db, { locationId: 'loc-1', dryRun: true })
+
+    expect(res.ok).toBe(true)
+    expect(res.pipelines_skipped).toContain('returning')
+  })
+
+  it('skips a disabled pipeline', async () => {
+    const db = makeDb({
+      pipelines: [
+        { id: 'p-off', location_id: 'loc-1', key: 'acquisition', module: 'acquisition', mode: 'derived', enabled: false, is_primary: true },
+      ],
+      stages: [{ id: 's-1', slug: 'new_lead', pipeline_id: 'p-off' }],
+      contacts: [{ id: 'c-1', name: 'Ada' }],
+      deals: [],
+    })
+
+    const res = await reclassifyAllContacts(db, { locationId: 'loc-1', dryRun: true })
+
+    expect(res.contacts_seen).toBe(0)
+    expect(res.deals_created).toBe(0)
   })
 })
