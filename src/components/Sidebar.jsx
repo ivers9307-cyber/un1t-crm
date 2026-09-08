@@ -30,8 +30,9 @@ const roleLabels = {
 // badge). Polls every 60s and refreshes on tab refocus. HOME.3 retired
 // the sidebar's own per-item red-circle badges (8 pollers, one per
 // nav item) — the needs-attention queue on /dashboard/today is the
-// per-source breakdown now. The one usePolledCount call left in this
-// component drives only the browser tab title prefix.
+// per-source breakdown now. MAIL-BADGE.1 and NAV-BADGE.1 since restored
+// exactly two of those rows (Messages, Approvals) on narrow terms — see
+// navBadges below. The tab title prefix sums whatever pills are visible.
 
 export default function Sidebar({ user, isLinkedHost = false, mobileOpen = false, onMobileClose }) {
   const pathname = usePathname()
@@ -71,24 +72,22 @@ export default function Sidebar({ user, isLinkedHost = false, mobileOpen = false
   // hides everything except Car Processing for non-master users).
   const hasPerm = (key) => hasPermission(user, key)
 
-  // HOME.3 — the per-item nav badge apparatus (8 separate usePolledCount
-  // pollers — invoices, approvals, churn/lead radar, issues, WhatsApp,
-  // email tickets, host events — each duplicating a count the
-  // needs-attention queue on /dashboard/today now computes anyway) is
-  // retired. One poller against the queue's own count endpoint replaces
-  // all eight: it's viewer-scoped (mirrors each source's own gate
-  // server-side, so it's quietly small — 0 or close to it — for a
-  // low-permission user, same as the retired per-source endpoints were)
-  // and it's the single number the title prefix below now surfaces.
-  // EMAIL-TICKET-CLEANUP.2 — the ONE exception to "always 200 with a
-  // number": a failed tickets mailbox-visibility lookup makes this
-  // endpoint 500 rather than silently answering a confidently-wrong
-  // lower count; usePolledCount ignores a non-ok response and keeps its
-  // last good number, so a blip here reads as a stale count, not a
-  // false "all clear".
-  const homeQueueCount = usePolledCount({
-    enabled: true,
-    url: '/api/home-queue/count',
+  // HOME.3 retired eight per-item nav badges (invoices, approvals, radar,
+  // issues, WhatsApp, email tickets, host events) because each was a separate
+  // poller duplicating a count /dashboard/today already computed. MAIL-BADGE.1
+  // restored Messages on narrow terms; NAV-BADGE.1 restores Approvals on the
+  // same ones. Net polled URLs are unchanged at three — this one replaces the
+  // /api/home-queue/count poller rather than joining it.
+  //
+  // `enabled: !!user`, NOT a permission check. A client-side hasPermission
+  // would check approvals_inbox (the nav row's key) while the eleven providers
+  // each gate on their own approvals_* key — a different question, which could
+  // hide a badge for work the caller really has. The endpoint self-gates and
+  // answers 0 cheaply: isProviderVisible runs before any query, so a staff
+  // session makes zero database calls.
+  const approvalsBadge = usePolledCount({
+    enabled: !!user,
+    url: '/api/approvals/count',
   })
 
   // MAIL-BADGE.1 (Richard, 2 Sep) — the Messages row gets its badge back,
@@ -111,6 +110,19 @@ export default function Sidebar({ user, isLinkedHost = false, mobileOpen = false
   })
   const messagesBadge = (waBadgeCount || 0) + (mailBadgeCount || 0)
 
+  // NAV-BADGE.1 — which rows carry a number. A row absent from this map gets
+  // no pill. Keep it a map, not a chain of ternaries at the render site.
+  const navBadges = {
+    '/communications': messagesBadge,
+    '/approvals': approvalsBadge,
+  }
+
+  // NAV-BADGE.1 — the title is the SUM OF THE VISIBLE PILLS, not a parallel
+  // derivation of them (that was /api/home-queue/count, which stays in place
+  // for /dashboard/today but no longer feeds this). Summing what is rendered
+  // is the only way the title and the pills cannot disagree.
+  const titleCount = approvalsBadge + messagesBadge
+
   // Browser tab title prefix — surfaces the pending count even when the
   // operator is on a different tab. Format: "(3) Repset · …". Restores
   // the original title on cleanup so a stale "(3)" doesn't survive a
@@ -118,15 +130,15 @@ export default function Sidebar({ user, isLinkedHost = false, mobileOpen = false
   useEffect(() => {
     if (typeof document === 'undefined') return
     const original = document.title.replace(/^\(\d+\+?\)\s+/, '')
-    document.title = homeQueueCount > 0
-      ? `(${homeQueueCount > 99 ? '99+' : homeQueueCount}) ${original}`
+    document.title = titleCount > 0
+      ? `(${titleCount > 99 ? '99+' : titleCount}) ${original}`
       : original
     return () => {
       if (typeof document !== 'undefined') {
         document.title = document.title.replace(/^\(\d+\+?\)\s+/, '')
       }
     }
-  }, [homeQueueCount])
+  }, [titleCount])
 
   // Match-permission predicate. Used both for top-level items and
   // for children of expandable sections.
@@ -227,7 +239,7 @@ export default function Sidebar({ user, isLinkedHost = false, mobileOpen = false
         key={item.href}
         item={item}
         active={active}
-        badge={item.href === '/communications' ? messagesBadge : 0}
+        badge={navBadges[item.href] ?? 0}
       />
     )
 
@@ -485,11 +497,12 @@ function SidebarItem({ item, active, isChild = false, badge = 0 }) {
   // its tint. The `!item.children` guard documents that invariant rather
   // than changing behaviour.
   const isAriaCurrent = isChild ? isActive : (isActive && !item.children)
-  // HOME.3 — the per-item notification-pill badge (INVOICES.2) is
-  // retired along with the badges map that fed it; the needs-attention
-  // queue on /dashboard/today is where per-source counts live now, and
-  // the sidebar's own homeQueueCount (Sidebar()) only ever drives the
-  // browser tab title, not a per-row pill. Nothing below renders a badge.
+  // HOME.3 retired the original per-item notification-pill badge
+  // (INVOICES.2) along with the badges map that fed it; the
+  // needs-attention queue on /dashboard/today is where per-source counts
+  // live now. MAIL-BADGE.1 and NAV-BADGE.1 since restored a pill for
+  // exactly two rows (Messages, Approvals) via the `badge` prop below —
+  // see navBadges in Sidebar().
   if (openInNewTab) {
     return (
       <a href={href} target="_blank" rel="noopener noreferrer" className={className}>
@@ -503,9 +516,10 @@ function SidebarItem({ item, active, isChild = false, badge = 0 }) {
     <Link href={href} className={className} aria-current={isAriaCurrent ? 'page' : undefined}>
       <Icon size={isChild ? 14 : 18} />
       {label}
-      {/* MAIL-BADGE.1 — outstanding items in this section (today: Messages
-          only). Hidden at zero; a failed poll keeps the last good number
-          upstream, so this never renders a confident 0 off a blip. */}
+      {/* MAIL-BADGE.1 / NAV-BADGE.1 — outstanding items in this section
+          (today: Messages, Approvals — see navBadges in Sidebar()). Hidden
+          at zero; a failed poll keeps the last good number upstream, so
+          this never renders a confident 0 off a blip. */}
       {badge > 0 && (
         <span
           data-testid="nav-badge"
