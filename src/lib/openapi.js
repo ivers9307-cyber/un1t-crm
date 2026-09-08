@@ -7924,11 +7924,24 @@ registry.registerPath({
   tags: ['Equipment Maintenance'],
   security: [{ CookieAuth: [] }],
   summary: 'Submit a completed inspection (equipment_inspect)',
-  description: 'Ordering is load-bearing server-side: the fault issue (with photos) is created FIRST, then the inspection is marked submitted and the asset rolled forward — a failed issue insert leaves the inspection in draft so the inspector can retry with ticks intact. An all-pass run raises no issue; a run with any fail raises exactly one issues row carrying equipment_id and — when takeOutOfService is set — takes the asset off the floor until that issue resolves. Photos upload only here, never on the draft, since the storage path is namespaced by the issue id.',
+  description: 'Ordering is load-bearing server-side: the fault issue (with photos) is created FIRST, then the inspection is marked submitted and the asset rolled forward — a failed issue insert leaves the inspection in draft so the inspector can retry with ticks intact. An all-pass run raises no issue; a run with any fail raises exactly one issues row carrying equipment_id and — when takeOutOfService is set — takes the asset off the floor until that issue resolves. TWO BODY SHAPES (MOBILE-UPLOAD.1): send `application/json` with `photos: [{ path, file_name, size, mime }]` after uploading each photo direct-to-storage against a slot from POST /api/issues/upload-sign — a path must be a slot minted for the caller\'s own location, unclaimed by another report and present in the bucket, and its size/type are read back off Storage rather than trusted from the body. The multipart shape (bytes inline) still works for clients that predate that, but a multipart file part has not reached this route from a phone since Expo SDK 57 and could never carry 3 x 10 MB past Vercel\'s ~4.5 MB body cap. Photos upload only here, never on the draft. An all-pass run drops any photo the device had already uploaded, since nothing will reference it.',
   request: {
     params: z.object({ id: uuidLike }),
     body: {
       content: {
+        'application/json': {
+          schema: z.object({
+            results:          z.record(z.any()).openapi({ description: '{ [itemId]: { state, note?, at, by } } — the full local results map, submitted alongside the individual PATCH ticks' }),
+            note:             z.string().optional().openapi({ description: 'Overall note, appended to the fault report if any check failed' }),
+            takeOutOfService: z.boolean().optional().openapi({ description: 'Ignored server-side unless at least one item failed' }),
+            photos: z.array(z.object({
+              path:      z.string().openapi({ description: 'Storage path from POST /api/issues/upload-sign — must be a slot minted for this location' }),
+              file_name: z.string().optional(),
+              size:      z.number().optional().openapi({ description: 'Advisory only — the stored object\'s real size is used' }),
+              mime:      z.string().optional().openapi({ description: 'Advisory only — the stored object\'s real type is used' }),
+            })).max(3).optional(),
+          }).openapi('EquipmentInspectionSubmitJsonBody'),
+        },
         'multipart/form-data': {
           schema: z.object({
             results:          z.string().openapi({ description: 'JSON-encoded { [itemId]: { state, note?, at, by } } — the full local results map, submitted alongside the individual PATCH ticks' }),
@@ -7944,7 +7957,7 @@ registry.registerPath({
   },
   responses: {
     200: { description: 'Submitted — the inspection row, the raised issueId (if any), nextDueOn, and whether the asset was taken out of service', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('EquipmentInspectionSubmitResponse') } } },
-    400: { description: 'Unmarked items (a `missing` array is included), malformed results JSON, a rejected photo, or an invalid inspection interval on the type', content: { 'application/json': { schema: ErrorResponse } } },
+    400: { description: 'Unmarked items (a `missing` array is included), malformed results, a rejected photo (`photo_bad_path`, `photo_already_used`, `photo_missing`, `photo_too_large`, `photo_bad_type`), or an invalid inspection interval on the type', content: { 'application/json': { schema: ErrorResponse } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Not found (missing, or at another location)', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'This inspection has already been submitted', content: { 'application/json': { schema: ErrorResponse } } },

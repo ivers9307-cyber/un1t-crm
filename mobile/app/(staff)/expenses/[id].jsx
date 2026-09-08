@@ -402,19 +402,27 @@ function AddItemForm({ claimId, busy, setBusy, onCancel, onSaved }) {
     setError(null)
     if (!form.amount || Number(form.amount) <= 0) { setError('Amount must be greater than zero.'); return }
     setBusy(true)
-    const r = await addExpenseItem({
-      claimId,
-      expenseDate: form.expense_date,
-      category: form.category,
-      amount: form.amount,
-      vatAmount: form.vat_amount || 0,
-      vendor: form.vendor || null,
-      description: form.description || null,
-      receipt: form.receipt,
-    })
-    setBusy(false)
-    if (r.success === false) { setError(r.error || 'Could not add item'); return }
-    onSaved()
+    // MOBILE-UPLOAD.1 — cleared in a `finally`, always. This used to await
+    // bare: a rejection left the button spinning with nothing on screen to
+    // say why, the same defect that hid the broken receipt upload for weeks.
+    try {
+      const r = await addExpenseItem({
+        claimId,
+        expenseDate: form.expense_date,
+        category: form.category,
+        amount: form.amount,
+        vatAmount: form.vat_amount || 0,
+        vendor: form.vendor || null,
+        description: form.description || null,
+        receipt: form.receipt,
+      })
+      if (!r || r.success === false) { setError(r?.error || 'Could not add item'); return }
+      onSaved()
+    } catch (err) {
+      setError(`Could not add item: ${err?.message || err}`)
+    } finally {
+      setBusy(false)
+    }
   }
 
   return (

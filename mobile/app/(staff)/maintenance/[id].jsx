@@ -253,6 +253,9 @@ export default function InspectionRunScreen() {
         note: overallNote.trim(),
         takeOutOfService,
         photos,
+        // The route 404s an inspection outside the caller's active
+        // location, so a multi-studio inspector must say which one.
+        locationId: activeLocation?.id,
       })
       if (r.success === false) {
         setSubmitError(r.error || 'Failed to submit the inspection.')

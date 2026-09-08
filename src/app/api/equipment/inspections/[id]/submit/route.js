@@ -6,9 +6,16 @@
 // advances, so the inspector retries with their ticks intact.
 // unique (equipment_id, due_on) stops a retry double-advancing.
 //
-// Photos upload only here, never on the draft: the bucket path is
-// {location_id}/{issue_id}/… so no valid path exists until the issue
-// does. That means no temp storage and no orphan-byte cleanup job.
+// Photos upload only here, never on the draft.
+//
+// MOBILE-UPLOAD.1 — the phone no longer POSTs the photo bytes to this
+// route. A multipart file part has not left the device since the Expo SDK
+// 57 upgrade, so an inspection with a fault photo could not be submitted
+// at all. The app now uploads each photo direct-to-storage against a slot
+// from /api/issues/upload-sign and sends the PATHS here as JSON; the
+// multipart branch stays for bundles that predate the OTA. The bucket
+// path is still {location_id}/{group}/… — the middle segment is the
+// upload draft rather than the issue id, which nothing reads back.
 
 import { NextResponse } from 'next/server'
 import { withAuth } from '@/lib/with-auth'
@@ -18,7 +25,7 @@ import {
 } from '@/lib/equipment'
 import {
   insertIssueWithAttachments, buildAttachmentPath, validateSubmission,
-  MAX_PHOTOS_PER_ISSUE,
+  verifyIssuePhotoPaths, isIssuePhotoPath, MAX_PHOTOS_PER_ISSUE,
 } from '@/lib/issues'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { logAuditEvent } from '@/lib/audit'
@@ -47,25 +54,63 @@ export const POST = withAuth(
       )
     }
 
-    let form
-    try { form = await request.formData() }
-    catch {
-      return NextResponse.json(
-        { success: false, error: 'Expected multipart/form-data.' },
-        { status: 400 }
-      )
-    }
+    // Two body shapes: JSON from the current app (photos already in the
+    // bucket, sent as paths) and multipart from bundles that predate the
+    // OTA (photo bytes inline). See the header.
+    const isJsonMode = (request.headers.get('content-type') || '').includes('application/json')
 
-    const takeOutOfService = String(form.get('takeOutOfService') || '') === 'true'
-    const extraNote = String(form.get('note') || '')
-
-    // Results come from the client as JSON so the whole run submits
-    // atomically even if individual ticks were lost to a flaky
-    // connection.
+    let takeOutOfService = false
+    let extraNote = ''
     let results
-    try { results = JSON.parse(String(form.get('results') || '{}')) }
-    catch {
-      return NextResponse.json({ success: false, error: 'Malformed results.' }, { status: 400 })
+    let photoFiles = []   // multipart mode: the inline File objects
+    let jsonPhotos = []   // JSON mode: { path, file_name, size, mime }
+
+    if (isJsonMode) {
+      let body
+      try { body = await request.json() }
+      catch {
+        return NextResponse.json({ success: false, error: 'Expected a JSON body.' }, { status: 400 })
+      }
+      takeOutOfService = body?.takeOutOfService === true || String(body?.takeOutOfService) === 'true'
+      extraNote = String(body?.note || '')
+      // Results arrive whole so the run submits atomically even if
+      // individual ticks were lost to a flaky connection.
+      results = body?.results && typeof body.results === 'object' ? body.results : null
+      if (!results) {
+        return NextResponse.json({ success: false, error: 'Malformed results.' }, { status: 400 })
+      }
+      // One past the cap, so a fourth photo is refused rather than
+      // quietly dropped.
+      jsonPhotos = (Array.isArray(body?.photos) ? body.photos : [])
+        .slice(0, MAX_PHOTOS_PER_ISSUE + 1)
+        .map((p) => ({
+          path: String(p?.path || ''),
+          name: String(p?.file_name || 'photo.jpg'),
+          size: Number(p?.size),
+          mime: String(p?.mime || '').toLowerCase(),
+        }))
+    } else {
+      let form
+      try { form = await request.formData() }
+      catch {
+        return NextResponse.json(
+          { success: false, error: 'Expected multipart/form-data.' },
+          { status: 400 }
+        )
+      }
+
+      takeOutOfService = String(form.get('takeOutOfService') || '') === 'true'
+      extraNote = String(form.get('note') || '')
+
+      try { results = JSON.parse(String(form.get('results') || '{}')) }
+      catch {
+        return NextResponse.json({ success: false, error: 'Malformed results.' }, { status: 400 })
+      }
+
+      for (let i = 0; i < MAX_PHOTOS_PER_ISSUE; i++) {
+        const f = form.get(`photo_${i}`)
+        if (f && typeof f === 'object' && 'size' in f && f.size > 0) photoFiles.push(f)
+      }
     }
 
     const check = validateResults({ items: inspection.items, results })
@@ -102,14 +147,19 @@ export const POST = withAuth(
     }
 
     // ---- faults: photos, then the issue --------------------------
+    // An all-pass run raises no issue, so nothing will reference photos the
+    // device already uploaded — drop them rather than strand the bytes.
+    // (The multipart path never had this problem: its bytes died with the
+    // request.) Best-effort, and only ever paths minted for THIS location.
+    if (check.failed.length === 0 && isJsonMode && jsonPhotos.length > 0) {
+      const orphans = jsonPhotos.filter((p) => isIssuePhotoPath(p.path, locationId)).map((p) => p.path)
+      if (orphans.length > 0) {
+        await db.storage.from(STORAGE_BUCKET).remove(orphans).then(() => {}, () => {})
+      }
+    }
+
     let issueId = null
     if (check.failed.length > 0) {
-      const photoFiles = []
-      for (let i = 0; i < MAX_PHOTOS_PER_ISSUE; i++) {
-        const f = form.get(`photo_${i}`)
-        if (f && typeof f === 'object' && 'size' in f && f.size > 0) photoFiles.push(f)
-      }
-
       const description = buildIssueDescription({
         equipmentName: asset?.name || 'Equipment',
         typeName: type?.name || 'Unknown type',
@@ -120,43 +170,59 @@ export const POST = withAuth(
 
       const v = validateSubmission({
         description,
-        photos: photoFiles.map((f) => ({
-          filename: f.name || 'photo', size: f.size, type: (f.type || '').toLowerCase(),
-        })),
+        photos: isJsonMode
+          ? jsonPhotos.map((p) => ({ filename: p.name, size: p.size, type: p.mime }))
+          : photoFiles.map((f) => ({
+              filename: f.name || 'photo', size: f.size, type: (f.type || '').toLowerCase(),
+            })),
       })
       if (!v.ok) {
         return NextResponse.json({ success: false, error: v.error, code: v.code }, { status: 400 })
       }
 
-      const newIssueId = crypto.randomUUID()
       const uploadedPaths = []
-      const attachments = []
-      for (let i = 0; i < photoFiles.length; i++) {
-        const file = photoFiles[i]
-        const path = buildAttachmentPath({
-          locationId,
-          issueId: newIssueId,
-          attachmentId: crypto.randomUUID(),
-          filename: file.name || `photo-${i}`,
-        })
-        const ab = await file.arrayBuffer()
-        const { error: upErr } = await db.storage
-          .from(STORAGE_BUCKET)
-          .upload(path, Buffer.from(ab), { contentType: file.type || 'image/jpeg', upsert: false })
-        if (upErr) {
-          for (const p of uploadedPaths) {
-            await db.storage.from(STORAGE_BUCKET).remove([p]).catch(() => {})
-          }
+      let attachments = []
+
+      if (isJsonMode) {
+        // The same gate POST /api/issues applies to a hand-written report.
+        const verified = await verifyIssuePhotoPaths(db, { locationId, photos: jsonPhotos })
+        if (!verified.ok) {
           return NextResponse.json(
-            { success: false, error: `Photo ${i + 1} upload failed.`, code: 'photo_upload_failed' },
-            { status: 500 }
+            { success: false, error: verified.error, ...(verified.code ? { code: verified.code } : {}) },
+            { status: verified.status }
           )
         }
-        uploadedPaths.push(path)
-        attachments.push({
-          storage_path: path, bucket: STORAGE_BUCKET,
-          size_bytes: file.size, mime_type: (file.type || 'image/jpeg').toLowerCase(),
-        })
+        attachments = verified.attachments
+        uploadedPaths.push(...attachments.map((a) => a.storage_path))
+      } else {
+        const newIssueId = crypto.randomUUID()
+        for (let i = 0; i < photoFiles.length; i++) {
+          const file = photoFiles[i]
+          const path = buildAttachmentPath({
+            locationId,
+            issueId: newIssueId,
+            attachmentId: crypto.randomUUID(),
+            filename: file.name || `photo-${i}`,
+          })
+          const ab = await file.arrayBuffer()
+          const { error: upErr } = await db.storage
+            .from(STORAGE_BUCKET)
+            .upload(path, Buffer.from(ab), { contentType: file.type || 'image/jpeg', upsert: false })
+          if (upErr) {
+            for (const p of uploadedPaths) {
+              await db.storage.from(STORAGE_BUCKET).remove([p]).catch(() => {})
+            }
+            return NextResponse.json(
+              { success: false, error: `Photo ${i + 1} upload failed.`, code: 'photo_upload_failed' },
+              { status: 500 }
+            )
+          }
+          uploadedPaths.push(path)
+          attachments.push({
+            storage_path: path, bucket: STORAGE_BUCKET,
+            size_bytes: file.size, mime_type: (file.type || 'image/jpeg').toLowerCase(),
+          })
+        }
       }
 
       const out = await insertIssueWithAttachments(db, {
