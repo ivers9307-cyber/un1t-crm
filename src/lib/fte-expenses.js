@@ -196,6 +196,26 @@ export function buildReceiptPath({ profileId, claimId, itemId, filename }) {
   return `${profileId}/${claimId}/${itemId}-${suffix}-${safe}`
 }
 
+// MOBILE-UPLOAD.1 — a receipt path the DEVICE uploaded to directly, against
+// a slot from POST /api/expenses/{id}/upload-sign. The finalise route pins
+// the first two segments to the caller's own profile and the claim being
+// added to, so a path from anyone else's claim is refused before a byte is
+// read; the third segment is unguessable and the bucket is private. The
+// middle "item" segment is the upload draft rather than the row id — the
+// row does not exist yet at upload time and nothing reads the id back out
+// of the path.
+const RECEIPT_PATH_TAIL_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[a-z0-9]{1,12}-[\w.-]{1,120}$/i
+
+export function isExpenseReceiptPath(path, profileId, claimId) {
+  if (typeof path !== 'string' || !profileId || !claimId) return false
+  const parts = path.split('/')
+  if (parts.length !== 3) return false
+  const [owner, claim, tail] = parts
+  if (owner.toLowerCase() !== String(profileId).toLowerCase()) return false
+  if (claim.toLowerCase() !== String(claimId).toLowerCase()) return false
+  return RECEIPT_PATH_TAIL_RE.test(tail)
+}
+
 /**
  * The MIME types we accept for a receipt upload. PDF for invoices,
  * common image types for phone-camera captures. WebP added because

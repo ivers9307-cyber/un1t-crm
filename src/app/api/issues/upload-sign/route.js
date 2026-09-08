@@ -51,7 +51,12 @@ export const POST = withAuth(
       )
     }
 
-    const photos = Array.isArray(body?.photos) ? body.photos : []
+    // `files` is the shared upload client's wire shape
+    // (mobile/lib/upload-slots.js); `photos` is the name this route shipped
+    // with and is still accepted.
+    const photos = Array.isArray(body?.files) ? body.files
+      : Array.isArray(body?.photos) ? body.photos
+      : []
     if (photos.length === 0) {
       return NextResponse.json(
         { success: false, error: 'No photos to upload.', code: 'no_photos' },

@@ -23,8 +23,7 @@ import {
   listMyIssues,
   buildAttachmentPath,
   validateSubmission,
-  validatePhotos,
-  isIssuePhotoPath,
+  verifyIssuePhotoPaths,
   MAX_PHOTOS_PER_ISSUE,
 } from '@/lib/issues'
 import { logAuditEvent } from '@/lib/audit'
@@ -135,93 +134,22 @@ export const POST = withAuth(
     // (multipart) or uploaded by the device against a slot we minted
     // (JSON). Either way they get removed if the row never lands.
     const uploadedPaths = []
-    const attachmentRows = []
+    let attachmentRows = []
 
     if (isJsonMode) {
-      // Every path must be one WE minted, for THIS location. The bucket is
-      // private and both id segments are random, so a path can't be
-      // guessed — but it could be replayed, hence the claim check below.
-      for (let i = 0; i < jsonPhotos.length; i++) {
-        if (!isIssuePhotoPath(jsonPhotos[i].path, locationId)) {
-          return NextResponse.json(
-            { success: false, error: `Photo ${i + 1} is not an upload slot for this studio.`, code: 'photo_bad_path' },
-            { status: 400 }
-          )
-        }
-      }
-
-      // One object, two attachment rows is not a submission we can make
-      // sense of — refuse it here rather than letting the insert decide.
-      if (new Set(jsonPhotos.map((p) => p.path)).size !== jsonPhotos.length) {
+      // One gate, shared with the equipment-inspection submit: paths must
+      // be slots minted for this location, unclaimed, unique within the
+      // submission and actually present, with size + mime taken from
+      // Storage rather than the client's claim.
+      const verified = await verifyIssuePhotoPaths(db, { locationId, photos: jsonPhotos })
+      if (!verified.ok) {
         return NextResponse.json(
-          { success: false, error: 'The same photo was attached twice.', code: 'photo_duplicate' },
-          { status: 400 }
+          { success: false, error: verified.error, ...(verified.code ? { code: verified.code } : {}) },
+          { status: verified.status }
         )
       }
-
-      if (jsonPhotos.length > 0) {
-        const { data: claimed, error: claimErr } = await db
-          .from('issue_attachments')
-          .select('id')
-          .in('storage_path', jsonPhotos.map((p) => p.path))
-          .limit(1)
-        if (claimErr) {
-          return NextResponse.json(
-            { success: false, error: `Could not verify the photos: ${claimErr.message}` },
-            { status: 500 }
-          )
-        }
-        if (claimed && claimed.length > 0) {
-          return NextResponse.json(
-            { success: false, error: 'Those photos already belong to a report — attach them again.', code: 'photo_already_used' },
-            { status: 400 }
-          )
-        }
-      }
-
-      for (let i = 0; i < jsonPhotos.length; i++) {
-        const photo = jsonPhotos[i]
-        const parts = photo.path.split('/')
-        const name = parts.pop()
-        const { data: listed, error: listErr } = await db.storage
-          .from(STORAGE_BUCKET)
-          .list(parts.join('/'), { search: name })
-        if (listErr) {
-          return NextResponse.json(
-            { success: false, error: `Could not verify photo ${i + 1}: ${listErr.message}` },
-            { status: 500 }
-          )
-        }
-        const hit = (listed || []).find((o) => o.name === name)
-        if (!hit) {
-          return NextResponse.json(
-            { success: false, error: `Photo ${i + 1} did not finish uploading — attach it again.`, code: 'photo_missing' },
-            { status: 400 }
-          )
-        }
-
-        // Size and type come from what Storage actually holds. The
-        // client's numbers were only ever a hint for the sign step —
-        // anyone can post any JSON they like at this route.
-        const storedSize = Number(hit.metadata?.size)
-        const storedMime = String(hit.metadata?.mimetype || photo.mime || '').toLowerCase()
-        const stored = validatePhotos([{ filename: name, size: storedSize, type: storedMime }])
-        if (!stored.ok) {
-          await db.storage.from(STORAGE_BUCKET).remove([photo.path]).then(() => {}, () => {})
-          return NextResponse.json(
-            { success: false, error: stored.error, code: stored.code },
-            { status: 400 }
-          )
-        }
-
-        uploadedPaths.push(photo.path)
-        attachmentRows.push({
-          storage_path: photo.path,
-          bucket:       STORAGE_BUCKET,
-          size_bytes:   storedSize,
-          mime_type:    storedMime,
-        })
-      }
+      attachmentRows = verified.attachments
+      uploadedPaths.push(...attachmentRows.map((a) => a.storage_path))
     } else {
       // Mint the issue id upfront so we can namespace the storage
       // path by issue_id without a round-trip. Same trick the FTE

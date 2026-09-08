@@ -65,6 +65,13 @@ describe('POST /api/issues/upload-sign', () => {
     expect(body.slots[0].path).not.toBe(body.slots[1].path)
   })
 
+  it('takes the list under `files` or the older `photos` key', async () => {
+    const viaFiles = await POST(req({ files: [jpeg()] }), {})
+    expect((await viaFiles.json()).slots).toHaveLength(1)
+    const viaPhotos = await POST(req({ photos: [jpeg()] }), {})
+    expect((await viaPhotos.json()).slots).toHaveLength(1)
+  })
+
   it('refuses when there is no active location', async () => {
     h.locationId = null
     const res = await POST(req({ photos: [jpeg()] }), {})

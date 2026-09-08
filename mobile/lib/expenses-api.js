@@ -8,8 +8,19 @@
 
 import Constants from 'expo-constants'
 import { authHeaders } from './api'
+import { mimeResolver, readPickedFiles, uploadToSlots, withTimeout } from './upload-slots'
 
 const API_BASE = Constants.expoConfig?.extra?.apiBaseUrl
+
+export const RECEIPT_BUCKET = 'fte-expense-receipts'
+
+// A receipt is a PDF or a phone-camera image. Mirrors
+// RECEIPT_ACCEPTED_MIMES on the server (mobile cannot import server
+// modules); the picker's own mimeType is trusted first.
+const resolveReceiptMime = mimeResolver({
+  pdf: 'application/pdf', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+  png: 'image/png', webp: 'image/webp', heic: 'image/heic', heif: 'image/heif',
+}, 'image/jpeg')
 
 // ────────────────────────────────────────────────────────────────
 // Claim CRUD
@@ -93,36 +104,54 @@ export async function declineExpenseClaim(id, reason) {
 // ────────────────────────────────────────────────────────────────
 
 /**
- * Add a line item to a draft claim. The receipt arg is { uri, name,
- * mimeType } from expo-image-picker (camera roll / camera) or
- * expo-document-picker (PDF). Pass null if no receipt this iteration.
+ * Add a line item to a draft claim. `receipt` is { uri, name, mimeType }
+ * from expo-image-picker (camera roll / camera) or expo-document-picker
+ * (PDF). Pass null if no receipt this iteration.
+ *
+ * MOBILE-UPLOAD.1 — the receipt goes device → Storage against a signed
+ * slot (lib/upload-slots.js) and this call sends its PATH as JSON, so the
+ * server inserts the row complete in one write. It used to ride as a
+ * multipart part, which has not left the device since the Expo SDK 57
+ * upgrade — nothing has landed in the receipts bucket since 15 Jul — and
+ * could not have carried a 10 MB receipt past Vercel's ~4.5 MB body cap
+ * anyway. Answers an envelope for every failure; it must never throw, or
+ * the screen keeps its spinner (REPORT-ISSUE.3).
  */
 export async function addExpenseItem({
   claimId, expenseDate, category, amount, vatAmount, vendor, description, receipt,
 }) {
-  const headers = await authHeaders()
-  const fd = new FormData()
-  fd.append('expense_date', expenseDate)
-  fd.append('category', category)
-  fd.append('amount', String(amount))
-  fd.append('vat_amount', String(vatAmount || 0))
-  if (vendor) fd.append('vendor', vendor)
-  if (description) fd.append('description', description)
-  if (receipt) {
-    fd.append('receipt', {
-      uri: receipt.uri,
-      name: receipt.name || 'receipt.jpg',
-      type: receipt.mimeType || 'image/jpeg',
+  try {
+    const read = await readPickedFiles(receipt ? [receipt] : [], {
+      resolveMime: resolveReceiptMime,
+      label: 'receipt',
     })
+    if (!read.ok) return { success: false, error: read.error }
+
+    const up = await uploadToSlots({
+      signUrl: `/api/expenses/${claimId}/upload-sign`,
+      bucket: RECEIPT_BUCKET,
+      files: read.files,
+    })
+    if (!up.ok) return { success: false, error: up.error }
+
+    const headers = await authHeaders({ json: true })
+    const res = await withTimeout(fetch(`${API_BASE}/api/expenses/${claimId}/items`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        expense_date: expenseDate,
+        category,
+        amount: Number(amount),
+        vat_amount: Number(vatAmount || 0),
+        vendor: vendor || null,
+        description: description || null,
+        receipt: up.uploaded[0] || null,
+      }),
+    }), 'Adding the item')
+    return res.json().catch(() => ({ success: false, error: `Bad response (${res.status})` }))
+  } catch (err) {
+    return { success: false, error: `Network error: ${err?.message || err}` }
   }
-  // NB: do NOT set Content-Type — RN's fetch sets the multipart
-  // boundary automatically. Setting it explicitly breaks the request.
-  const res = await fetch(`${API_BASE}/api/expenses/${claimId}/items`, {
-    method: 'POST',
-    headers,
-    body: fd,
-  })
-  return res.json().catch(() => ({ success: false, error: `Bad response (${res.status})` }))
 }
 
 export async function deleteExpenseItem(claimId, itemId) {

@@ -9,6 +9,10 @@
 // REPSET-P6.S2 — base comes from the shared extra.apiBaseUrl resolution in
 // lib/api.js (EXPO_PUBLIC_API_BASE_URL override, canonical repset default).
 import { authHeaders, API_BASE } from './api'
+import { readPickedFiles, resolvePhotoMime, uploadToSlots, withTimeout } from './upload-slots'
+// A fault photo IS an issue photo: the inspection raises an ordinary issues
+// row, so bucket, cap and sign route are the ones issues-api owns.
+import { ISSUE_PHOTO_BUCKET, MAX_ISSUE_PHOTOS } from './issues-api'
 
 /**
  * GET /api/equipment/due — what's due for inspection at the active
@@ -49,37 +53,54 @@ export async function tickInspectionItem(inspectionId, { itemId, state, note }) 
 }
 
 /**
- * POST /api/equipment/inspections/{id}/submit — multipart submit.
- * `results` is the full local results map (belt-and-braces alongside
- * the individual PATCH ticks). `photos` is an array of
- * { uri, name, mimeType } from expo-image-picker, max 3, only
- * meaningful when a check failed.
+ * POST /api/equipment/inspections/{id}/submit.
  *
- * NB: do NOT set Content-Type — RN's fetch sets the multipart
- * boundary automatically. Setting it explicitly breaks the request
- * (same gotcha as issues-api.js's submitIssue).
+ * `results` is the full local results map (belt-and-braces alongside the
+ * individual PATCH ticks). `photos` is an array of { uri, name, mimeType }
+ * from expo-image-picker, max 3, only meaningful when a check failed.
+ * `locationId` scopes the call — the route 404s an inspection that isn't
+ * at the caller's active location, so a multi-studio inspector needs it.
+ *
+ * MOBILE-UPLOAD.1 — the photos go device → Storage against a signed slot
+ * (lib/upload-slots.js) and this call sends their PATHS as JSON. It used
+ * to post the bytes as multipart, which has not left the device since the
+ * Expo SDK 57 upgrade: an inspection with a fault photo could not be
+ * submitted at all. Answers an envelope for every failure — it must never
+ * throw, or the screen keeps its spinner (REPORT-ISSUE.3).
  */
 export async function submitInspection(inspectionId, {
-  results, note = '', takeOutOfService = false, photos = [],
-}) {
-  const headers = await authHeaders()
-  const fd = new FormData()
-  fd.append('results', JSON.stringify(results || {}))
-  fd.append('note', note)
-  fd.append('takeOutOfService', String(Boolean(takeOutOfService)))
-  photos.slice(0, 3).forEach((p, i) => {
-    fd.append(`photo_${i}`, {
-      uri: p.uri,
-      name: p.name || `photo-${i + 1}.jpg`,
-      type: p.mimeType || 'image/jpeg',
+  results, note = '', takeOutOfService = false, photos = [], locationId,
+} = {}) {
+  try {
+    const picked = (Array.isArray(photos) ? photos : []).slice(0, MAX_ISSUE_PHOTOS)
+    const read = await readPickedFiles(picked, { resolveMime: resolvePhotoMime, label: 'photo' })
+    if (!read.ok) return { success: false, error: read.error }
+
+    // Fault photos live in the issue-photos bucket — the inspection raises
+    // an ordinary issue row — so they take the issues sign route.
+    const up = await uploadToSlots({
+      signUrl: '/api/issues/upload-sign',
+      bucket: ISSUE_PHOTO_BUCKET,
+      files: read.files,
+      locationId,
     })
-  })
-  const res = await fetch(`${API_BASE}/api/equipment/inspections/${inspectionId}/submit`, {
-    method: 'POST',
-    headers,
-    body: fd,
-  })
-  return res.json().catch(() => ({ success: false, error: `Bad response (${res.status})` }))
+    if (!up.ok) return { success: false, error: up.error }
+
+    const headers = await authHeaders({ locationId, json: true })
+    const res = await withTimeout(fetch(`${API_BASE}/api/equipment/inspections/${inspectionId}/submit`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        results: results || {},
+        note,
+        takeOutOfService: Boolean(takeOutOfService),
+        photos: up.uploaded,
+      }),
+    }), 'Submitting the inspection')
+    return res.json().catch(() => ({ success: false, error: `Bad response (${res.status})` }))
+  } catch (err) {
+    return { success: false, error: `Network error: ${err?.message || err}` }
+  }
 }
 
 // ────────────────────────────────────────────────────────────────

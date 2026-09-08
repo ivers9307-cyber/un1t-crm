@@ -134,7 +134,7 @@ describe('submitIssue — the happy paths', () => {
     const [signUrl, signInit] = global.fetch.mock.calls[0]
     expect(signUrl).toBe('https://crm.repset.ie/api/issues/upload-sign')
     expect(JSON.parse(signInit.body)).toEqual({
-      photos: [{ file_name: 'IMG_0001.jpg', size: 2048, mime: 'image/jpeg' }],
+      files: [{ file_name: 'IMG_0001.jpg', size: 2048, mime: 'image/jpeg' }],
     })
 
     // The bytes go to Storage, NOT through the API — a multipart body of
@@ -176,7 +176,7 @@ describe('submitIssue — the happy paths', () => {
         : jsonRes({ success: true, data: { id: 'issue-1' } }, 201)
     )
     await submitIssue({ description: 'x', photos: [PHOTO, PHOTO, PHOTO, PHOTO], locationId: LOC })
-    expect(JSON.parse(global.fetch.mock.calls[0][1].body).photos).toHaveLength(3)
+    expect(JSON.parse(global.fetch.mock.calls[0][1].body).files).toHaveLength(3)
   })
 
   it('refuses to send a photo when the server hands back fewer slots than photos', async () => {
