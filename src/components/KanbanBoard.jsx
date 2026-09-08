@@ -232,7 +232,7 @@ export default function KanbanBoard({ initialStages, initialDeals, stageCounts =
                     onDragEnd={manual ? () => { setDragDealId(null); setDropStageId(null) } : undefined}
                     className={manual ? 'cursor-grab active:cursor-grabbing' : undefined}
                   >
-                    <DealCard deal={deal} locationId={locationId} stageName={stage.name} onOpenContact={openContact} />
+                    <DealCard deal={deal} locationId={locationId} stageName={stage.name} onOpenContact={openContact} manual={manual} />
                   </div>
                 ))}
                 {hasMore && (

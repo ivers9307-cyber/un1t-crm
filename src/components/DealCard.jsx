@@ -38,11 +38,27 @@ const statusColors = {
   dormant:      'border-l-gray-500',
 }
 
+// WAITLIST.5 — the Cold button is a DERIVED-board affordance. All it does is
+// write contacts.pipeline_dismissed_at, and the only thing that reads that
+// stamp is the classifier (shared/pipeline-classifier.js), which never runs on
+// a manual board. So on Hatch Street's waitlist board the item is at best a
+// second, invisible way to say what column 4 ("Not interested") already says
+// by hand — and at worst it looks like a move and produces none.
+//
+// KNOWINGLY LEFT: ContactDrawer and ContactHeaderBand opt into 'cold' too, and
+// neither has any board context — hiding it there would cost each of them a
+// pipeline lookup on every render. On a Hatch contact the button in those two
+// places still writes a stamp nothing reads: inert, not wrong.
+const CARD_ACTIONS = {
+  derived: ['message', 'task', 'sequence', 'cold'],
+  manual: ['message', 'task', 'sequence'],
+}
+
 // Funnel columns 1–4 show the next-class badge; Converted and the
 // off-funnel stages don't (it'd be noise there).
 const BADGE_SLUGS = new Set(['new_lead', 'first_class', 'second_class', 'trial_done'])
 
-export default function DealCard({ deal, locationId, stageName, onOpenContact }) {
+export default function DealCard({ deal, locationId, stageName, onOpenContact, manual = false }) {
   const contact = deal.contacts || {}
   const borderColor = statusColors[contact.pipeline_stage_slug] || 'border-l-blue-500'
 
@@ -84,7 +100,7 @@ export default function DealCard({ deal, locationId, stageName, onOpenContact })
             <PersonActionBar
               contactId={contact.id}
               locationId={locationId}
-              actions={['message', 'task', 'sequence', 'cold']}
+              actions={CARD_ACTIONS[manual ? 'manual' : 'derived']}
               isCold={contact.pipeline_stage_slug === 'cold_lead'}
             />
           )}
