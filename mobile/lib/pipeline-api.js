@@ -23,6 +23,35 @@
 import { supabase } from './supabase'
 import { api } from './api'
 
+// WAITLIST.5 — the location's boards, for a phone that has to name them.
+// PIPELINES.6 moved the board axis onto the `pipelines` table (mig 594), and
+// the web board tabs read exactly this set; mobile could not see it at all, so
+// it had no way to say WHICH board the stages below belong to.
+//
+// `enabled = true` here, unlike listStages() directly below — and the
+// difference is deliberate, not an oversight. listStages() omits the filter
+// because CCF Autos / SourceIt / Test Studio hold a DISABLED primary row (their
+// stray stage rows needed a parent) and dropping it would blank their pipeline
+// tab. A LIST of boards has no such hostage: a disabled board is one the web
+// app already hides, so showing it here would offer a phone a tab the web board
+// does not have.
+//
+// READ-ONLY on purpose. Mobile does not drag cards on a manual board in this
+// PR: the web board is the working surface, and a second write path opened
+// before the first is proven doubles the surface for a move the classifier
+// could contest (which is the FUNNEL.1 failure that removed drag-drop in the
+// first place). The server-side fence is /api/deals/[id]/stage, and nothing
+// here calls it.
+export async function listPipelines(locationId) {
+  let q = supabase.from('pipelines')
+    .select('id, key, name, mode, display_order')
+    .eq('enabled', true)
+    .order('display_order', { ascending: true })
+  if (locationId) q = q.eq('location_id', locationId)
+  const { data, error } = await q
+  return error ? { success: false, error: error.message } : { success: true, data }
+}
+
 // FUNNEL-M.1 — mirrors the web board query (src/app/(sales)/pipeline/page.js):
 // non-archived stages only, ordered by display_order, and ships
 // is_dormant so the screen can split Funnel vs Off-funnel views via

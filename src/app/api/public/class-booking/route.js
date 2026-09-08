@@ -16,7 +16,7 @@ import { writeContactTag } from '@/lib/contact-tags'
 import { isValidMobileNumber } from '@/lib/phone-validate'
 import { publishQueuePush, CLASS_BOOKINGS_WORKER_PATH } from '@/lib/qstash'
 import { logWarn } from '@/lib/log'
-import { findOpenDealForPipeline, findPrimaryPipeline, findEntryStageForPipeline } from '@/lib/deal-lookup'
+import { placeWaitlistEntry } from '@/lib/waitlist-entry'
 import { resolveLandingPath, classFunnelConfigFromBlocks } from '@/lib/public-landing'
 import { createClassBookingPayment } from '@/lib/class-booking-payments'
 import { locationCanTakePayments } from '@/lib/location-payments'
@@ -145,34 +145,17 @@ export async function POST(request) {
     const { applyFormMarketingConsent } = await import('@/lib/marketing-consent')
     await applyFormMarketingConsent(db, { contactId, consent: true, source: 'start_class', ipAddress: ip, locationId })
   } catch (e) { logWarn('classbook', 'consent failed', { err: e }) }
-  // Open a deal on this studio's primary board; skip when the contact already
-  // has one open THERE. Best-effort — losing the deal must never cost the
-  // booking. PIPELINES.5, same three defects as the website lead form:
-  // `.maybeSingle()` 500s on a second open deal, a location-scoped 'new_lead'
-  // is ambiguous once a location runs two boards, and an insert with no
-  // pipeline_id is invisible to the nightly orchestrator (its deal read is
-  // `.in('pipeline_id', …)`, and SQL IN never matches NULL), which then opens
-  // another deal for the same contact every night.
+  // Open (or re-open) this lead's place on the studio's primary board.
+  // Best-effort — losing the deal must never cost the booking. Same helper as
+  // the website lead form, which is where the reasoning for each line of the
+  // placement and for the manual-board re-signup bump lives (WAITLIST.4).
   try {
-    const primary = await findPrimaryPipeline(db, locationId)
-    if (primary) {
-      const openDeal = await findOpenDealForPipeline(db, contactId, primary.id)
-      if (!openDeal) {
-        const stage = await findEntryStageForPipeline(db, primary.id)
-        if (stage) {
-          const { error: dealErr } = await db.from('deals').insert({
-            title: b.first_name || 'Class lead',
-            contact_id: contactId,
-            stage_id: stage.id,
-            location_id: locationId,
-            pipeline_id: primary.id,
-            status: 'open',
-          })
-          if (dealErr) logWarn('classbook', 'deal failed', { err: dealErr.message, contactId })
-        }
-      }
-    }
-  } catch (e) { logWarn('classbook', 'deal failed', { err: e }) }
+    await placeWaitlistEntry(db, {
+      contactId,
+      locationId,
+      title: b.first_name || 'Class lead',
+    })
+  } catch (e) { logWarn('classbook', 'deal placement failed', { err: e }) }
 
   // Dedupe: if this contact already has an active/booked request for this class
   // (double-submit, refresh, retry), don't create a second. Treat as success.
