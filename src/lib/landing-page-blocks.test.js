@@ -8,6 +8,9 @@ import {
   BlocksArraySchema,
   setByPath,
   primaryCta,
+  pageCtas,
+  offerOf,
+  OFFER_DEFAULT,
 } from './landing-page-blocks.js'
 
 describe('newBlockId', () => {
@@ -339,5 +342,146 @@ describe('class_funnel paid-intro defaults', () => {
     const b = newBlockOfType('class_funnel')
     expect(b.price_cents).toBe(0)
     expect(b.currency).toBe('EUR')
+  })
+})
+
+describe('offerOf (HATCH-OFFER.1)', () => {
+  const on = (extra = {}) => ({
+    id: 'l', type: 'lead_form',
+    offer: { enabled: true, price: '€189', cta_url: 'https://x.test/#join', cta_label: 'Claim your rate', ticks: ['a', 'b'], ...extra },
+  })
+
+  it('returns null when the block has no offer group', () => {
+    expect(offerOf({ id: 'l', type: 'lead_form' })).toBeNull()
+  })
+  it('returns null when the offer is present but disabled', () => {
+    expect(offerOf(on({ enabled: false }))).toBeNull()
+  })
+  it('returns null when enabled is anything but boolean true', () => {
+    expect(offerOf(on({ enabled: 'yes' }))).toBeNull()
+  })
+  it('returns null for a non-object or array offer', () => {
+    expect(offerOf({ id: 'l', type: 'lead_form', offer: 'nope' })).toBeNull()
+    expect(offerOf({ id: 'l', type: 'lead_form', offer: ['nope'] })).toBeNull()
+  })
+  // A plain ['nope'] is already refused one line later by the
+  // enabled !== true check, so it cannot tell us whether the
+  // Array.isArray guard exists. An ENABLED array is the only shape
+  // that reaches it — without the guard this returns an object and
+  // the renderer then maps over a spread array.
+  it('returns null for an array that claims to be enabled', () => {
+    expect(offerOf({ id: 'l', type: 'lead_form', offer: Object.assign(['x'], { enabled: true }) })).toBeNull()
+  })
+  it('returns null for a null block', () => {
+    expect(offerOf(null)).toBeNull()
+  })
+  it('coerces a missing or malformed ticks list to an empty array', () => {
+    expect(offerOf(on({ ticks: undefined })).ticks).toEqual([])
+    expect(offerOf(on({ ticks: 'a,b' })).ticks).toEqual([])
+  })
+  it('drops blank and non-string ticks', () => {
+    expect(offerOf(on({ ticks: ['a', '  ', 7, 'b'] })).ticks).toEqual(['a', 'b'])
+  })
+  it('trims cta_url and falls back on a blank cta_label', () => {
+    const o = offerOf(on({ cta_url: '  https://x.test/#join  ', cta_label: '   ' }))
+    expect(o.cta_url).toBe('https://x.test/#join')
+    expect(o.cta_label).toBe('Claim your rate')
+  })
+  it('treats a non-string cta_url as empty', () => {
+    expect(offerOf(on({ cta_url: 42 })).cta_url).toBe('')
+  })
+})
+
+describe('lead_form offer defaults (HATCH-OFFER.1)', () => {
+  it('ships an offer group that is off by default', () => {
+    const b = newBlockOfType('lead_form')
+    expect(b.offer.enabled).toBe(false)
+    expect(offerOf(b)).toBeNull()
+  })
+  it('says foundation, never founding, in the offer defaults', () => {
+    const json = JSON.stringify(newBlockOfType('lead_form').offer).toLowerCase()
+    expect(json).toContain('foundation')
+    expect(json).not.toContain('founding')
+  })
+  it('defaults the claim link to the booking platform signup anchor', () => {
+    expect(newBlockOfType('lead_form').offer.cta_url).toBe('https://hatchstreet.un1t.online/#join')
+  })
+  it('keeps a lead_form carrying a malformed offer renderable', () => {
+    const kept = blocksOrDefault([{ id: 'l', type: 'lead_form', offer: 'broken' }])
+    expect(kept).toHaveLength(1)
+    expect(offerOf(kept[0])).toBeNull()
+  })
+})
+
+describe('OFFER_DEFAULT seeding (HATCH-OFFER.1)', () => {
+  // Every lead_form row in production was saved before the offer
+  // group existed, so the editor seeds these on enable. If the shape
+  // drifts from what OfferPanel reads, the operator ticks the box and
+  // gets a panel with holes in it.
+  it('carries every field the panel renders', () => {
+    expect(Object.keys(OFFER_DEFAULT()).sort()).toEqual([
+      'cta_label', 'cta_url', 'deadline', 'enabled', 'eyebrow', 'price',
+      'section_eyebrow', 'section_heading', 'ticks', 'unit', 'was_price', 'was_price_note',
+    ])
+  })
+  it('ships three tick lines, none blank', () => {
+    const { ticks } = OFFER_DEFAULT()
+    expect(ticks).toHaveLength(3)
+    expect(ticks.every((t) => typeof t === 'string' && t.trim())).toBe(true)
+  })
+  it('survives offerOf once enabled, with nothing dropped', () => {
+    const seeded = { ...OFFER_DEFAULT(), enabled: true }
+    const o = offerOf({ id: 'l', type: 'lead_form', offer: seeded })
+    expect(o).not.toBeNull()
+    expect(o.price).toBe('€189')
+    expect(o.ticks).toHaveLength(3)
+    expect(o.cta_url).toBe('https://hatchstreet.un1t.online/#join')
+  })
+  it('is a factory, not a shared object — two calls must not alias', () => {
+    const a = OFFER_DEFAULT()
+    a.ticks.push('mutated')
+    expect(OFFER_DEFAULT().ticks).toHaveLength(3)
+  })
+})
+
+describe('pageCtas (HATCH-OFFER.1)', () => {
+  const leadForm = (offer) => ({ id: 'l', type: 'lead_form', button_label: 'Keep me posted', ...(offer ? { offer } : {}) })
+  const liveOffer = { enabled: true, cta_url: 'https://hatchstreet.un1t.online/#join', cta_label: 'Claim your rate' }
+
+  it('promotes the offer to primary and demotes the form to secondary', () => {
+    expect(pageCtas([leadForm(liveOffer)])).toEqual({
+      primary: { href: 'https://hatchstreet.un1t.online/#join', label: 'Claim your rate', external: true },
+      secondary: { href: '#waitlist', label: 'Keep me posted' },
+    })
+  })
+  it('falls back to the form as primary when the offer is off', () => {
+    expect(pageCtas([leadForm({ ...liveOffer, enabled: false })])).toEqual({
+      primary: { href: '#waitlist', label: 'Keep me posted' },
+      secondary: null,
+    })
+  })
+  it('falls back to the form as primary when the offer has no url', () => {
+    expect(pageCtas([leadForm({ ...liveOffer, cta_url: '   ' })])).toEqual({
+      primary: { href: '#waitlist', label: 'Keep me posted' },
+      secondary: null,
+    })
+  })
+  it('never returns a secondary when there is no lead form', () => {
+    expect(pageCtas([{ id: 'b', type: 'booking', slug: 'x' }]).secondary).toBeNull()
+    expect(pageCtas([]).secondary).toBeNull()
+  })
+  it('returns both null for a page with no funnel block', () => {
+    expect(pageCtas([{ id: 'h', type: 'hero' }])).toEqual({ primary: null, secondary: null })
+  })
+})
+
+describe('primaryCta wraps pageCtas (HATCH-OFFER.1)', () => {
+  it('returns the offer url when the offer is live', () => {
+    const blocks = [{ id: 'l', type: 'lead_form', button_label: 'Keep me posted', offer: { enabled: true, cta_url: 'https://x.test/#join', cta_label: 'Claim' } }]
+    expect(primaryCta(blocks).href).toBe('https://x.test/#join')
+  })
+  it('is identical to pageCtas().primary', () => {
+    const blocks = [{ id: 'b', type: 'booking', slug: 'x' }]
+    expect(primaryCta(blocks)).toEqual(pageCtas(blocks).primary)
   })
 })

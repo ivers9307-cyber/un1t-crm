@@ -87,6 +87,41 @@ const EVENT_DEFAULT = () => ({
   title: 'Sign up',
 })
 
+// Foundation-offer group on the lead-form block (HATCH-OFFER.1).
+// Off by default: with `enabled` false the lead-form section renders
+// exactly as it did before this group existed, so no other studio
+// page changes. Every visitor-facing string is a field — including
+// the prices and the deadline — so closing the offer on 19 September
+// is an edit at /settings/landing-page, not a deploy.
+//
+// Prices are STRINGS, not cents. Nothing here computes with them:
+// they are display copy pointing at a checkout this repo does not
+// own (hatchstreet.un1t.online). Deliberately unlike
+// class_funnel.price_cents, which actually charges.
+// Exported so the editor can SEED these into a block saved before
+// this group existed. Every live lead_form row predates it, so a bare
+// { enabled: true } would open an offer panel with a blank price —
+// the operator ticks the box and sees empty fields with nothing
+// telling them what belongs there.
+export const OFFER_DEFAULT = () => ({
+  enabled:         false,
+  section_eyebrow: 'Two ways in',
+  section_heading: 'Fix your rate\nbefore we open',
+  eyebrow:         'Foundation membership',
+  price:           '€189',
+  was_price:       '€219',
+  was_price_note:  'a month from 19 September',
+  unit:            'per month\nfixed for life',
+  deadline:        'Offer ends 19 September',
+  ticks: [
+    'Unlimited classes, full access from day one',
+    'Your rate never rises while your membership stays active',
+    'Pay today, next payment October',
+  ],
+  cta_label:       'Claim your rate',
+  cta_url:         'https://hatchstreet.un1t.online/#join',
+})
+
 const LEAD_FORM_DEFAULT = () => ({
   id:              newBlockId(),
   type:            'lead_form',
@@ -97,7 +132,28 @@ const LEAD_FORM_DEFAULT = () => ({
   consent_label:   'I’d like to hear from UN1T about the Hatch Street launch and offers by email, SMS and WhatsApp. I can opt out anytime.',
   tag:             'hatch-founding-member',
   lead_source:     'hatch_launch',
+  offer:           OFFER_DEFAULT(),
 })
+
+// Single reader for the offer group — every consumer (pageCtas, the
+// renderer) goes through this, so "is there an offer to show?" is
+// answered in exactly one place. Returns a normalised offer or null.
+// A corrupted group must degrade to the no-offer render rather than
+// throw: this is the public funnel and a bad JSONB blob must never
+// 500 it.
+export function offerOf(block) {
+  const o = block && typeof block === 'object' ? block.offer : null
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return null
+  if (o.enabled !== true) return null
+  return {
+    ...o,
+    ticks: Array.isArray(o.ticks)
+      ? o.ticks.filter((t) => typeof t === 'string' && t.trim())
+      : [],
+    cta_url: typeof o.cta_url === 'string' ? o.cta_url.trim() : '',
+    cta_label: (typeof o.cta_label === 'string' && o.cta_label.trim()) || 'Claim your rate',
+  }
+}
 
 const CLASS_FUNNEL_DEFAULT = () => ({
   id:                newBlockId(),
@@ -222,36 +278,61 @@ const BlockBaseSchema = z.object({
 
 export const BlocksArraySchema = z.array(BlockBaseSchema).max(40)
 
-// ─────────────────────────────────────────────────────────────
-// Primary conversion target — derived from a page's own blocks.
-// Priority: explicit lead capture > booking > event signup.
-// Returns { href, label } or null when the page has no funnel
-// block (the header/hero then render no CTA rather than a dead
-// anchor). Used by the public studio page + the dev preview.
-// ─────────────────────────────────────────────────────────────
-export function primaryCta(blocks) {
+// Conversion targets — derived from a page's own blocks.
+// Priority: a live foundation offer > explicit lead capture >
+// booking > event signup.
+//
+// `primary` is what the sticky header, hero and footer point at.
+// `secondary` exists only when a live offer has pushed the lead form
+// out of the primary slot, and only the hero renders it — the header
+// and footer are space-constrained and the second path is one scroll
+// away on the same page.
+//
+// Either may be null: a page with no funnel block renders no CTA
+// rather than a dead anchor.
+export function pageCtas(blocks) {
   const list = Array.isArray(blocks) ? blocks : []
   const leadForm = list.find((b) => b && b.type === 'lead_form')
-  if (leadForm) {
+  const offer = leadForm ? offerOf(leadForm) : null
+  const waitlist = leadForm
+    ? {
+        href: '#waitlist',
+        label: (leadForm.button_label && leadForm.button_label.trim()) || 'Join the waitlist',
+      }
+    : null
+
+  // A live offer with no URL is an operator half-edit, not a reason
+  // to ship <a href="">. Fall through to the form.
+  if (offer && offer.cta_url) {
     return {
-      href: '#waitlist',
-      label: (leadForm.button_label && leadForm.button_label.trim()) || 'Join the waitlist',
+      primary: { href: offer.cta_url, label: offer.cta_label, external: true },
+      secondary: waitlist,
     }
   }
+  if (waitlist) return { primary: waitlist, secondary: null }
   if (list.some((b) => b && b.type === 'class_funnel')) {
-    return { href: '#start', label: 'Claim 3 free classes' }
+    return { primary: { href: '#start', label: 'Claim 3 free classes' }, secondary: null }
   }
   if (list.some((b) => b && b.type === 'booking')) {
-    return { href: '#book', label: 'Book a free consult' }
+    return { primary: { href: '#book', label: 'Book a free consult' }, secondary: null }
   }
   const event = list.find((b) => b && b.type === 'event')
   if (event) {
     return {
-      href: `#event-${event.slug || 'signup'}`,
-      label: (event.title && event.title.trim()) || 'Sign up',
+      primary: {
+        href: `#event-${event.slug || 'signup'}`,
+        label: (event.title && event.title.trim()) || 'Sign up',
+      },
+      secondary: null,
     }
   }
-  return null
+  return { primary: null, secondary: null }
+}
+
+// Back-compat wrapper. Kept because two pages and a dozen tests call
+// it; it is exactly pageCtas().primary and must stay that way.
+export function primaryCta(blocks) {
+  return pageCtas(blocks).primary
 }
 
 // ─────────────────────────────────────────────────────────────

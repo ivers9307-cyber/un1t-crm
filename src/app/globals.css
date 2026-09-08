@@ -196,6 +196,41 @@ body {
     inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
+/* ── Was-price strike + inverted pill (offer panel) ───────────────
+   The strike is a pseudo-element rather than text-decoration so it
+   can be angled, and the <s> carries text-decoration:none so the
+   browser default doesn't draw a second, flat line through it.
+   Red is deliberate and lives here, not in the un1t-* token set:
+   those are the CRM's light-theme tokens and this is the public
+   marketing site. */
+.lp-was-strike {
+  position: relative;
+  display: inline-block;
+  text-decoration: none;
+}
+.lp-was-strike::after {
+  content: '';
+  position: absolute;
+  left: -5%;
+  right: -5%;
+  top: 52%;
+  height: 3px;
+  border-radius: 2px;
+  background: #e02424;
+  transform: rotate(-9deg);
+}
+
+/* The one white pill, inverted for use ON a white panel. Declared
+   after .lp-btn so it wins on source order — both are single-class
+   selectors, so specificity alone would not decide it. */
+.lp-btn-invert {
+  background: #000;
+  color: #fff;
+}
+.lp-btn-invert:hover {
+  box-shadow: 0 16px 40px -14px rgba(0, 0, 0, 0.6);
+}
+
 /* ── Success check draw (lead form done state) ────────────────────── */
 .lp-check-path {
   stroke-dasharray: 48;
