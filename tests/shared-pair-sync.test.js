@@ -265,6 +265,25 @@ const PAIRS = {
       'independently, in different files, with no import between them and nothing checking they agree — ' +
       'this is the check. Found by the cross-named sweep below, not by the filename sweep.',
   },
+  'returning-board taxonomy via the classifier shim': {
+    shared: 'shared/pipelines/returning.js',
+    web: 'src/lib/pipeline-classifier.js',
+    mode: 'shared-constant',
+    constants: ['RETURNING_STAGE_SLUGS'],
+    why:
+      'PIPELINES.2b — neither two copies nor a whole-module shim, but a PARTIAL re-export, which is ' +
+      'why it needs an explicit entry. RETURNING_STAGE_SLUGS and returnEpisode moved out of ' +
+      'shared/pipeline-classifier.js into the returning BOARD MODULE (shared/pipelines/returning.js) ' +
+      'when classifyContact stopped routing to that parked board; shared/pipeline-classifier.js ' +
+      're-exports both, and src/lib/pipeline-classifier.js re-exports it in turn, so ' +
+      'src/components/mail/ConversationThread.jsx keeps reading RETURNING_STAGE_SLUGS off ' +
+      '@/lib/pipeline-classifier unchanged. The collision the cross-named sweep found is therefore the ' +
+      'SAME object reached through two hops, not a duplicate — so COINCIDENTAL would be a false ' +
+      "statement. This mode's value equality is the floor; the identity guard at the bottom of this " +
+      'file is the real assertion, because a hand-copied literal would still be deep-equal. The board ' +
+      "module's other exports (stages, requiredFields, classify, returningStage) have no web path on " +
+      'purpose: the board is deliberately unregistered, so nothing consumes them on either surface yet.',
+  },
 
   // ── unrelated: same filename, different module ─────────────────────────────
   'permissions.js': {
@@ -763,6 +782,22 @@ describe('the dark-canvas zone palette means the same thing on both surfaces', (
     for (const id of [0, 1, 2, 3, 4, 5, 6, '3', 'x', null, undefined]) {
       expect(w.zoneColorDark(id), `zoneColorDark(${String(id)})`).toBe(s.zoneColorDark(id))
     }
+  })
+})
+
+describe('the returning-board taxonomy is ONE object, not a copy (PIPELINES.2b)', () => {
+  it('@/lib/pipeline-classifier re-exports the board module\'s bindings by identity', async () => {
+    const board = await import('../shared/pipelines/returning.js')
+    const web = await import('../src/lib/pipeline-classifier.js')
+    // Two hops: shared/pipelines/returning.js → shared/pipeline-classifier.js →
+    // src/lib/pipeline-classifier.js. If any hop were ever replaced by a
+    // hand-copied literal the slugs would still be deep-equal, so identity is
+    // the assertion that catches it — the same reason `reexport` pairs are
+    // proven with toBe rather than toEqual.
+    expect(web.RETURNING_STAGE_SLUGS).toBe(board.RETURNING_STAGE_SLUGS)
+    expect(web.returnEpisode).toBe(board.returnEpisode)
+    // Guard the guard: an empty list would make the comparison vacuous.
+    expect(board.RETURNING_STAGE_SLUGS).toHaveLength(5)
   })
 })
 

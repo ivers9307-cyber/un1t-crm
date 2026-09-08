@@ -41,9 +41,12 @@
 // src/lib) because the mobile pipeline screen needs the funnel taxonomy
 // and the stage-split helper, and shared/ is the only seam mobile can
 // import across (repo invariant: mobile cannot import src/lib). It is
-// 100% pure — no imports, no IO — so it runs identically under Metro
-// and Node. Web callers keep importing '@/lib/pipeline-classifier',
-// which re-exports everything from here (same pattern as race-control).
+// pure — no IO, and its one import is the equally pure sibling board module
+// shared/pipelines/returning.js — so it runs identically under Metro and
+// Node. Web callers keep importing '@/lib/pipeline-classifier', which
+// re-exports everything from here (same pattern as race-control).
+
+import { RETURNING_STAGE_SLUGS, returnEpisode } from './pipelines/returning.js'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -62,22 +65,18 @@ export const FUNNEL_STAGE_SLUGS = Object.freeze([
   'converted',
 ])
 
-// RETURNPIPE.1 — the RETURNING board, in journey order. A separate pipeline
-// because a returning customer follows a different flow from a new one
-// (Richard, 2026-08-21): they are not being sold the idea of the gym, they are
-// being re-sold a place they already know. Stage names are his.
+// PIPELINES.2b — RETURNING_STAGE_SLUGS and returnEpisode now LIVE in
+// shared/pipelines/returning.js (with the RETURNPIPE.1 war story that explains
+// them), and are re-exported from here so every existing import keeps working
+// unchanged: src/lib/pipeline-classifier.js re-exports both, and
+// src/components/mail/ConversationThread.jsx reads RETURNING_STAGE_SLUGS off
+// '@/lib/pipeline-classifier' to build its stage picker.
 //
-// 'returning_booked' is the entry column: they have a class in the diary but
-// have not turned up yet. Without it a booking is invisible until attendance,
-// which is the defect FUNNEL.5 fixed on the acquisition board — and
-// booked-but-never-showed would be an absence rather than a visible drop-off.
-export const RETURNING_STAGE_SLUGS = Object.freeze([
-  'returning_booked',
-  'returning_first_class',
-  'returning_second_class',
-  'returning_final_class',
-  'returning_converted',
-])
+// The taxonomy is still true and mig 558's stage rows are still in prod. What
+// changed is that classifyContact() no longer ROUTES anyone to them — see the
+// two PIPELINES.2b notes further down, and returning.js for the operator
+// decision and the coverage numbers behind it.
+export { RETURNING_STAGE_SLUGS, returnEpisode }
 
 // Off-funnel populations, display order. pack_member is a first-class
 // group (FUNNEL.3): buying a Class Pack IS a conversion, reported in
@@ -194,71 +193,13 @@ export function nextBookedClass(recentBookings, now = Date.now()) {
   return soonest === null ? null : new Date(soonest).toISOString()
 }
 
-/**
- * RETURNPIPE.1 — how far into THIS return the contact is, or null when they
- * are not on a return journey at all.
- *
- * A "return" is re-entry after the acquisition funnel had already given up:
- * the first attendance following a gap of >= RETURN_GAP_DAYS, or — for
- * someone who has trained before and has a class in the diary but has not
- * turned up yet — the booking itself.
- *
- * Counting is scoped to the episode, never lifetime. Someone who trained nine
- * times two years ago and has just come back once is on their FIRST class
- * back; reading their old total would drop them straight into "Final class"
- * and tell a coach the opposite of what is true.
- *
- * Derived entirely from data already on the contact — no episode table, no
- * per-contact stamp to backfill or keep in sync — so it works retroactively
- * on everyone already in the database.
- *
- * @returns {{attended: number, hasUpcoming: boolean}|null}
- */
-export function returnEpisode(contact, now = Date.now()) {
-  if (!contact || typeof contact !== 'object') return null
-
-  const gapMs = PIPELINE_THRESHOLDS.RETURN_GAP_DAYS * DAY_MS
-  const hasUpcoming = nextBookedClass(contact.recent_bookings, now) !== null
-
-  // Attendances we can see, oldest first. recent_bookings holds the last 10
-  // from the Glofox sync, so this is a window and not a full history — a gap
-  // inside the window is evidence of a return; the absence of one is not
-  // evidence there was never a break.
-  const attendedTimes = (Array.isArray(contact.recent_bookings) ? contact.recent_bookings : [])
-    .filter((b) => b && b.attended === true && Number.isFinite(Number(b.time_start)))
-    .map((b) => Number(b.time_start) * 1000)
-    .filter((ms) => ms <= now)
-    .sort((a, b) => a - b)
-
-  // Find the LAST gap in the window; everything after it is this episode.
-  let episodeStart = null
-  for (let i = 1; i < attendedTimes.length; i++) {
-    if (attendedTimes[i] - attendedTimes[i - 1] >= gapMs) episodeStart = attendedTimes[i]
-  }
-
-  if (episodeStart !== null) {
-    return { attended: attendedTimes.filter((t) => t >= episodeStart).length, hasUpcoming }
-  }
-
-  // No gap visible in the window. The other shape of a return: they trained
-  // long enough ago to have fallen out of the funnel, and have now booked.
-  // last_attended_at is advance-only and persists after recent_bookings has
-  // rolled past, so it is the reliable long-memory signal here.
-  const sinceAttended = daysSince(contact.last_attended_at, now)
-  const lapsed = sinceAttended !== null && sinceAttended >= PIPELINE_THRESHOLDS.RETURN_GAP_DAYS
-  if (lapsed && hasUpcoming) return { attended: 0, hasUpcoming: true }
-
-  return null
-}
-
-/** RETURNPIPE.1 — episode progress → the returning board's stage. */
-function returningStage(episode) {
-  if (!episode) return null
-  if (episode.attended <= 0) return episode.hasUpcoming ? 'returning_booked' : null
-  if (episode.attended === 1) return 'returning_first_class'
-  if (episode.attended === 2) return 'returning_second_class'
-  return 'returning_final_class'
-}
+// RETURNPIPE.1's returnEpisode() and returningStage() used to sit here, between
+// nextBookedClass() and classifyContact(). PIPELINES.2b moved them, whole and
+// comment-for-comment, to shared/pipelines/returning.js — the board module for
+// the pipeline they serve — because classifyContact() no longer calls either
+// one. returnEpisode is re-exported at the top of this file, so callers that
+// ask "is this person on a comeback?" are unaffected; it simply no longer
+// decides where the deal sits.
 
 export function classifyContact(contact, now = Date.now()) {
   if (!contact || typeof contact !== 'object') return 'dormant'
@@ -268,12 +209,27 @@ export function classifyContact(contact, now = Date.now()) {
   if (status === 'member' || status === 'credit_member') {
     const sinceConverted = daysSince(contact.converted_at, now)
     if (sinceConverted !== null && sinceConverted <= PIPELINE_THRESHOLDS.CONVERTED_WINDOW_DAYS) {
-      // RETURNPIPE.1 — a win belongs to the board that earned it. Someone who
-      // came back and re-joined is the returning pipeline's Converted column,
-      // not the acquisition funnel's. Bounded to the same CONVERTED_WINDOW as
-      // before, so a member outside it still falls through to 'member' exactly
-      // as today — this can only ever move someone already in Converted.
-      return returnEpisode(contact, now) ? 'returning_converted' : 'converted'
+      // PIPELINES.2b — the returning board is PARKED, so every win in this
+      // window is the acquisition funnel's. This line used to read
+      // `returnEpisode(contact, now) ? 'returning_converted' : 'converted'`, on
+      // the RETURNPIPE.1 principle that a win belongs to the board that earned
+      // it: a member who went quiet, came back and re-joined was the returning
+      // pipeline's Converted column, not this one's.
+      //
+      // The principle is not wrong. The board is not running. Richard,
+      // 2026-09-08: "no to returning for now" — measured against prod it holds
+      // 0 deals and cannot fill (only 6.8% of Stillorgan contacts have
+      // last_attended_at at all, and the count lapsed-with-a-future-booking is
+      // zero). Handing the orchestrator a slug whose board declares no column
+      // leaves the deal nowhere to go, so classifyContact() must not route to
+      // a board that is not running. Provably a no-op: deals sitting on
+      // returning_* stages = 0, across every deal status.
+      //
+      // classifyContact() is now the ACQUISITION board's rule set and nothing
+      // else. The returning journey survives intact — rules, thresholds and
+      // war stories — in shared/pipelines/returning.js, deliberately
+      // unregistered in shared/pipelines/index.js.
+      return 'converted'
     }
     return 'member'
   }
@@ -355,28 +311,45 @@ export function classifyContact(contact, now = Date.now()) {
       && Number.isFinite(reEnteredMs) && reEnteredMs > dismissedMs
 
     if (!trainedSinceDismissal && !reEnteredSinceDismissal) return 'cold_lead'
-    // Falling through routes them by history, which is exactly the split
-    // asked for: never trained -> new_lead on the acquisition board; trained
-    // before -> the returning board via returnEpisode below.
+    // Falling through routes them by history. RETURNPIPE.3 asked for a split
+    // — never trained -> new_lead on the acquisition board; trained before ->
+    // the returning board — and with that board parked (PIPELINES.2b) both
+    // halves now land here: a lapsed re-booker reaches 'new_lead' via FUNNEL.5
+    // below, and someone who has trained recently is placed by the attendance
+    // rules. The split itself is what re-enabling the board would restore.
   }
 
-  // ── RETURNING BOARD (RETURNPIPE.1) ─────────────────────────────
-  // Checked here, at the top of the funnel-candidate section, so it can only
-  // ever reroute someone who would otherwise land in the acquisition funnel or
-  // in dormant. Every pile above — member, gympass, classpass, ex_member,
-  // pack_member, cold_lead — is untouched, which is the whole 3,000+ contact
-  // majority of the board.
+  // ── The RETURNING BOARD was checked HERE (RETURNPIPE.1) ────────
+  // PIPELINES.2b took it out. It sat at the top of the funnel-candidate
+  // section precisely so it could only ever claim someone who would otherwise
+  // land in the acquisition funnel or in dormant — which is also why removing
+  // it is contained: every pile above (member, gympass, classpass, ex_member,
+  // pack_member, cold_lead) never passed through it, and those piles are the
+  // 3,000+ contact majority of the board.
   //
-  // cold_lead deliberately still wins: a dismissal is an explicit human
-  // judgement, and the existing rule only lets ATTENDING overturn it. 92 of
-  // the 112 dismissed contacts are in the live trial sequence, so if that
-  // decision should change it is a product call, not something to slip in
-  // behind a layout change.
-  const episode = returnEpisode(contact, now)
-  if (episode) {
-    const stage = returningStage(episode)
-    if (stage) return stage
-  }
+  // The board is PARKED, not deleted. Richard, 2026-09-08: "no to returning
+  // for now". Measured against prod the same day, it holds 0 deals and cannot
+  // fill, because the signal simply is not there: 581 of 8,594 Stillorgan
+  // contacts (6.8%) have last_attended_at at all, 602 have any recent_bookings,
+  // contacts lapsed 90-540 days number 15, and the entry column needs
+  // lapsed-PLUS-a-future-booking — which nobody satisfies. Meanwhile a
+  // classifier that routes to a board that is not running returns one of five
+  // slugs the acquisition board declares no column for, and the orchestrator
+  // has nowhere to put that deal. Provably a no-op to remove: deals sitting on
+  // returning_* stages = 0, across every deal status.
+  //
+  // So classifyContact() is the acquisition board's rule set, and only that.
+  // The rules this block ran — returnEpisode(), returningStage(), and the
+  // episode-scoping story that is the hard-won part (nine classes two years
+  // ago plus one today is a FIRST class back, not a finished trial) — live in
+  // shared/pipelines/returning.js, kept whole and deliberately unregistered,
+  // ready to switch on if attendance coverage ever improves.
+  //
+  // What the contacts this used to claim get instead is the rules below, and
+  // FUNNEL.5 catches the shape that matters: someone lapsed with a class in
+  // the diary is 'new_lead', not 'dormant'. What is lost is the DISTINCTION
+  // between a first-timer and a comeback, and the episode-scoped count — which
+  // is exactly what re-enabling the board would give back.
 
   // ── Funnel candidates: lead/cold/tour/no_sale_*/trial/null ─────
   // last_attended_at backstops the count: it's advance-only on the

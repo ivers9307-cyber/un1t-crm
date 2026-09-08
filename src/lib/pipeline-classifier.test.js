@@ -336,19 +336,26 @@ describe('FUNNEL.5 — an upcoming booked class overrides dormant', () => {
     expect(classifyContact({ ...base, recent_bookings: upcoming(48) }, NOW)).toBe('new_lead')
   })
 
-  it('an ex-trainer who aged out and has booked again → the RETURNING board (RETURNPIPE.1 supersedes)', () => {
-    // Yesterday this asserted 'new_lead'. RETURNPIPE.1 gave people who have
-    // trained before their own pipeline, and this contact is its entry column
-    // — booked, not yet back in the room. The person has not changed; where
-    // they belong has. The never-trained case above still lands in new_lead,
-    // which is the distinction the two changes exist to draw.
+  it('an ex-trainer who aged out and has booked again → new_lead, same as a first-timer', () => {
+    // This assertion has been round the houses, and the history is the point.
+    // Originally 'new_lead' (FUNNEL.5). RETURNPIPE.1 then gave people who have
+    // trained before their own pipeline and claimed this contact for its entry
+    // column — booked, not yet back in the room. PIPELINES.2b parked that
+    // board, so the reroute is gone and FUNNEL.5 answers again: attended is 1
+    // (last_attended_at backstops the count), 180 days is outside
+    // FUNNEL_ACTIVITY_DAYS so stillActive is false, and an upcoming booking
+    // makes that 'new_lead' rather than 'dormant'.
+    //
+    // What is genuinely lost is the DISTINCTION from the never-trained case
+    // above: both are 'new_lead' now. That distinction is what re-enabling
+    // shared/pipelines/returning.js would restore.
     const base = {
       glofox_membership_status: 'trial',
       joined_at: ago(300),
       last_attended_at: ago(180),
     }
     expect(classifyContact({ ...base, recent_bookings: [] }, NOW)).toBe('dormant')
-    expect(classifyContact({ ...base, recent_bookings: upcoming(72) }, NOW)).toBe('returning_booked')
+    expect(classifyContact({ ...base, recent_bookings: upcoming(72) }, NOW)).toBe('new_lead')
   })
 
   it('a booking they already MISSED is not re-engagement — still dormant', () => {
@@ -384,33 +391,58 @@ describe('FUNNEL.5 — an upcoming booked class overrides dormant', () => {
   })
 })
 
-// ── RETURNPIPE.1 — the returning board ─────────────────────────────
+// ── RETURNPIPE.1 — the returning board, PARKED by PIPELINES.2b ─────
 //
-// A returning customer follows a different flow from a new one, so they get
+// A returning customer follows a different flow from a new one, so they got
 // their own pipeline rather than a badge. The counting is what makes it work:
 // scoped to THIS return, never lifetime.
+//
+// The board is parked (Richard, 2026-09-08: "no to returning for now") — it
+// holds 0 deals and cannot fill on the current signal coverage, so
+// classifyContact() no longer routes anyone to it. These scenarios are all
+// still real people, so they are kept and re-pointed at the answer the
+// ACQUISITION board gives them. returnEpisode() is asserted directly wherever
+// the episode itself is the fact worth pinning: the helper still works, it
+// just no longer decides placement. Its rules live in
+// shared/pipelines/returning.js, unregistered.
 
-describe('RETURNPIPE.1 — returning customers get their own board', () => {
+describe('RETURNPIPE.1 — the returning journey, with its board parked', () => {
   const NOW = Date.parse('2026-08-21T09:00:00Z')
   const daysAgo = (d) => new Date(NOW - d * 86400000).toISOString()
   const att = (d) => ({ status: 'BOOKED', attended: true, time_start: Math.floor((NOW - d * 86400000) / 1000) })
   const soon = (h) => ({ status: 'BOOKED', time_start: Math.floor((NOW + h * 3600000) / 1000) })
   const lapsedTrial = { glofox_membership_status: 'trial', joined_at: daysAgo(400) }
 
-  it('booked back in, not yet returned', () => {
-    expect(classifyContact(
-      { ...lapsedTrial, last_attended_at: daysAgo(300), recent_bookings: [soon(48)] }, NOW,
-    )).toBe('returning_booked')
+  it('booked back in, not yet returned → new_lead, and the episode is still visible', () => {
+    // Was 'returning_booked', the entry column. With the board parked this is
+    // the FUNNEL.5 path: lapsed 300 days, so not stillActive, but a class in
+    // the diary means top of the funnel rather than 'dormant'.
+    const rebooked = { ...lapsedTrial, last_attended_at: daysAgo(300), recent_bookings: [soon(48)] }
+    expect(classifyContact(rebooked, NOW)).toBe('new_lead')
+    // The helper still sees exactly what it always saw — 0 classes into this
+    // return, with one booked — it simply no longer places the deal.
+    expect(returnEpisode(rebooked, NOW)).toEqual({ attended: 0, hasUpcoming: true })
   })
 
-  it('walks the board as they come back', () => {
+  it('walking back is now INVISIBLE on the acquisition board — all three read trial_done', () => {
+    // The returning board walked these three 1st → 2nd → Final class back.
+    // The acquisition board counts LIFETIME attendances (countAttendedBookings
+    // over the whole recent_bookings window, plus the last_attended_at
+    // backstop), so 3, 4 and 5 attended all clear TRIAL_DONE_MIN_ATTENDED and
+    // collapse into one column. That flattening is the cost of parking the
+    // board, and it is asserted rather than lost so re-enabling it has a
+    // before/after to point at.
     const old = [att(300), att(299)]
-    expect(classifyContact({ ...lapsedTrial, last_attended_at: daysAgo(1), recent_bookings: [...old, att(1)] }, NOW))
-      .toBe('returning_first_class')
-    expect(classifyContact({ ...lapsedTrial, last_attended_at: daysAgo(1), recent_bookings: [...old, att(4), att(1)] }, NOW))
-      .toBe('returning_second_class')
-    expect(classifyContact({ ...lapsedTrial, last_attended_at: daysAgo(1), recent_bookings: [...old, att(7), att(4), att(1)] }, NOW))
-      .toBe('returning_final_class')
+    const firstBack  = { ...lapsedTrial, last_attended_at: daysAgo(1), recent_bookings: [...old, att(1)] }
+    const secondBack = { ...lapsedTrial, last_attended_at: daysAgo(1), recent_bookings: [...old, att(4), att(1)] }
+    const finalBack  = { ...lapsedTrial, last_attended_at: daysAgo(1), recent_bookings: [...old, att(7), att(4), att(1)] }
+    expect(classifyContact(firstBack, NOW)).toBe('trial_done')
+    expect(classifyContact(secondBack, NOW)).toBe('trial_done')
+    expect(classifyContact(finalBack, NOW)).toBe('trial_done')
+    // The episode counts that WOULD separate them are still computed correctly.
+    expect(returnEpisode(firstBack, NOW).attended).toBe(1)
+    expect(returnEpisode(secondBack, NOW).attended).toBe(2)
+    expect(returnEpisode(finalBack, NOW).attended).toBe(3)
   })
 
   it('🔴 counts THIS return only — a long-ago regular starts at 1st class back', () => {
@@ -418,8 +450,13 @@ describe('RETURNPIPE.1 — returning customers get their own board', () => {
     // ago plus one today is a first class back, not a finished trial.
     const nineLongAgo = [400, 398, 396, 394, 392, 390, 388, 386, 384].map(att)
     const c = { ...lapsedTrial, last_attended_at: daysAgo(1), recent_bookings: [...nineLongAgo, att(1)] }
-    expect(classifyContact(c, NOW)).toBe('returning_first_class')
+    // The episode boundary — the hard-won part — still holds: ONE class back.
     expect(returnEpisode(c, NOW).attended).toBe(1)
+    // The acquisition board, which has no concept of an episode, reads all ten
+    // and files them as a finished trial. Exactly the misreading the returning
+    // board existed to prevent, and exactly why the module is parked rather
+    // than deleted.
+    expect(classifyContact(c, NOW)).toBe('trial_done')
   })
 
   it('someone training continuously is NOT returning — no gap, no episode', () => {
@@ -428,15 +465,36 @@ describe('RETURNPIPE.1 — returning customers get their own board', () => {
     expect(classifyContact(steady, NOW)).toBe('trial_done')
   })
 
-  it('a returner who re-joins counts as the RETURNING board win, not the acquisition funnel', () => {
+  it('a returner who re-joins is a plain Converted — every win is the acquisition funnel\'s now', () => {
     const rejoined = {
       glofox_membership_status: 'member', converted_at: daysAgo(3),
       last_attended_at: daysAgo(1), recent_bookings: [att(300), att(2), att(1)],
     }
-    expect(classifyContact(rejoined, NOW)).toBe('returning_converted')
+    // Was 'returning_converted'. The member branch is reached first, converted_at
+    // is 3 days old so inside CONVERTED_WINDOW_DAYS, and with the reroute gone
+    // that window's only answer is 'converted'.
+    expect(classifyContact(rejoined, NOW)).toBe('converted')
+    expect(returnEpisode(rejoined, NOW).attended).toBe(2)
     // A first-time member is untouched — no prior training, no episode.
     expect(classifyContact({ glofox_membership_status: 'member', converted_at: daysAgo(3), recent_bookings: [att(2)] }, NOW))
       .toBe('converted')
+  })
+
+  it('never returns a returning_* slug now the returning board is parked', () => {
+    // A contact who trained, went quiet for months, and has just booked back in
+    // — the exact shape that used to route to the returning board.
+    const rebooked = { ...lapsedTrial, last_attended_at: daysAgo(300), recent_bookings: [soon(48)] }
+    expect(classifyContact(rebooked, NOW).startsWith('returning_')).toBe(false)
+    // And the same shape one class further in, which used to be
+    // returning_first_class — the reroute had two entry points, not one.
+    const oneBack = { ...lapsedTrial, last_attended_at: daysAgo(1), recent_bookings: [att(300), att(1)] }
+    expect(classifyContact(oneBack, NOW).startsWith('returning_')).toBe(false)
+    // Plus the member branch, which had its own reroute to returning_converted.
+    const rejoined = {
+      glofox_membership_status: 'member', converted_at: daysAgo(3),
+      last_attended_at: daysAgo(1), recent_bookings: [att(300), att(1)],
+    }
+    expect(classifyContact(rejoined, NOW).startsWith('returning_')).toBe(false)
   })
 
   it('never-trained people never reach the returning board', () => {
@@ -499,11 +557,16 @@ describe('RETURNPIPE.3 — re-entering a funnel form un-dismisses a cold lead', 
     }, NOW)).toBe('new_lead')
   })
 
-  it('trained before + came in on the form → the RETURNING board', () => {
+  it('trained before + came in on the form → new_lead too, with the returning board parked', () => {
+    // RETURNPIPE.3's split was: never trained -> new_lead, trained before ->
+    // the returning board. PIPELINES.2b parked the second half, so both now
+    // land in new_lead via FUNNEL.5 (lapsed 250 days, class in the diary).
+    // The revocation itself — the thing this test exists to protect — is
+    // unchanged: they are out of cold_lead either way.
     expect(classifyContact({
       ...dismissed, last_attended_at: daysAgo(250),
       last_lead_source_at: daysAgo(1), recent_bookings: [soon(48)],
-    }, NOW)).toBe('returning_booked')
+    }, NOW)).toBe('new_lead')
   })
 
   it('still cold when the last form entry PREDATES the dismissal', () => {
@@ -520,10 +583,14 @@ describe('RETURNPIPE.3 — re-entering a funnel form un-dismisses a cold lead', 
   })
 
   it('attending after the dismissal still revokes it, as it always did', () => {
+    // Was 'returning_first_class'. Now the acquisition attendance rules place
+    // them: two attended bookings in the window, last one yesterday so
+    // stillActive, and attended === 2 is 'second_class'. The revocation — not
+    // the column — is what this test guards.
     expect(classifyContact({
       ...dismissed, last_attended_at: daysAgo(1),
       recent_bookings: [att(300), att(1)],
-    }, NOW)).toBe('returning_first_class')
+    }, NOW)).toBe('second_class')
   })
 
   it('the revocation is permanent — it does not lapse when the booking passes', () => {
