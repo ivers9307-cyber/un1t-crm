@@ -37,6 +37,7 @@ vi.mock('./use-polled-count', () => ({ usePolledCount: vi.fn(() => 0) }))
 
 import Sidebar from './Sidebar.jsx'
 import { usePolledCount } from './use-polled-count'
+import { hasPermission } from '@/lib/permissions'
 
 // owner (not master) — real enough to pass the masterOrOwnerOnly gate on
 // /portfolio without also rendering the master-only Platform link / the
@@ -48,6 +49,8 @@ const USER = { role: 'owner', full_name: 'Test Owner' }
 afterEach(() => {
   cleanup()
   usePolledCount.mockReturnValue(0)
+  usePolledCount.mockClear()
+  hasPermission.mockImplementation(() => true)
 })
 
 describe('Sidebar — HOME.3 badge retirement, as amended', () => {
@@ -177,8 +180,12 @@ describe('Approvals badge', () => {
 
   // The endpoint self-gates, so there is nothing to gate on here. A
   // client-side hasPermission would also be checking the WRONG key: the nav
-  // row's key is approvals_inbox, while the eleven providers each gate on
-  // their own approvals_* key, so it could hide a badge for real work.
+  // row's key is approvals_inbox, while of the eleven registered providers
+  // eight gate on their own distinct approvals_* key and the remaining
+  // three (invoices_queue, issues, host_events) gate on bookkeeper /
+  // issues_inbox / reviewer roles instead — none of the eleven is actually
+  // approvals_inbox, so a client-side check here could hide a badge for
+  // real work either way.
   it('polls unconditionally for a signed-in user', () => {
     render(<Sidebar user={USER} />)
     const call = usePolledCount.mock.calls.map(([a]) => a).find(a => a?.url === '/api/approvals/count')
@@ -200,5 +207,20 @@ describe('Approvals badge', () => {
     })
     render(<Sidebar user={USER} />)
     expect(document.title).toMatch(/^\(10\) /)
+  })
+
+  // The endpoint's gate and the nav row's gate are NOT the same question, so a
+  // caller can have a real count with no visible row (a bookkeeper without
+  // approvals_inbox). The title must follow the PILLS, not the pollers.
+  it('excludes a row the user cannot see from the title', () => {
+    hasPermission.mockImplementation((_u, key) => key !== 'approvals_inbox')
+    usePolledCount.mockImplementation(({ url }) => {
+      if (url === '/api/approvals/count') return 7
+      if (url === '/api/whatsapp/unread-count') return 3
+      return 0
+    })
+    render(<Sidebar user={USER} />)
+    expect(screen.queryByRole('link', { name: /Approvals/ })).toBeNull()
+    expect(document.title).toMatch(/^\(3\) /)
   })
 })

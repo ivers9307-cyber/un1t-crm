@@ -72,19 +72,27 @@ export default function Sidebar({ user, isLinkedHost = false, mobileOpen = false
   // hides everything except Car Processing for non-master users).
   const hasPerm = (key) => hasPermission(user, key)
 
-  // HOME.3 retired eight per-item nav badges (invoices, approvals, radar,
-  // issues, WhatsApp, email tickets, host events) because each was a separate
-  // poller duplicating a count /dashboard/today already computed. MAIL-BADGE.1
+  // HOME.3 retired eight per-item nav badges (invoices, approvals, churn
+  // radar, lead radar, issues, WhatsApp, email tickets, host events)
+  // because each was a separate poller duplicating a count
+  // /dashboard/today already computed. MAIL-BADGE.1
   // restored Messages on narrow terms; NAV-BADGE.1 restores Approvals on the
   // same ones. Net polled URLs are unchanged at three — this one replaces the
   // /api/home-queue/count poller rather than joining it.
   //
   // `enabled: !!user`, NOT a permission check. A client-side hasPermission
-  // would check approvals_inbox (the nav row's key) while the eleven providers
-  // each gate on their own approvals_* key — a different question, which could
-  // hide a badge for work the caller really has. The endpoint self-gates and
-  // answers 0 cheaply: isProviderVisible runs before any query, so a staff
-  // session makes zero database calls.
+  // would check approvals_inbox (the nav row's key) — a different question
+  // from what any given provider actually gates on. Of the eleven registered
+  // providers (src/lib/approvals/registry.js), eight carry their own distinct
+  // approvals_* permissionKey; the other three (invoices_queue, issues,
+  // host_events) have none and gate via their own isVisible() on bookkeeper /
+  // issues_inbox / reviewer roles instead — none of the eleven is actually
+  // approvals_inbox, so the mismatch only gets WORSE, not better, and a
+  // client-side check here could still hide a badge for work the caller
+  // really has. The endpoint self-gates and answers 0 cheaply:
+  // isProviderVisible runs before any query, so a staff session makes zero
+  // APPROVALS database calls (withAuth still resolves the session itself
+  // first — that part isn't free, just not an approvals query).
   const approvalsBadge = usePolledCount({
     enabled: !!user,
     url: '/api/approvals/count',
@@ -116,29 +124,6 @@ export default function Sidebar({ user, isLinkedHost = false, mobileOpen = false
     '/communications': messagesBadge,
     '/approvals': approvalsBadge,
   }
-
-  // NAV-BADGE.1 — the title is the SUM OF THE VISIBLE PILLS, not a parallel
-  // derivation of them (that was /api/home-queue/count, which stays in place
-  // for /dashboard/today but no longer feeds this). Summing what is rendered
-  // is the only way the title and the pills cannot disagree.
-  const titleCount = approvalsBadge + messagesBadge
-
-  // Browser tab title prefix — surfaces the pending count even when the
-  // operator is on a different tab. Format: "(3) Repset · …". Restores
-  // the original title on cleanup so a stale "(3)" doesn't survive a
-  // navigation that triggers a Sidebar unmount.
-  useEffect(() => {
-    if (typeof document === 'undefined') return
-    const original = document.title.replace(/^\(\d+\+?\)\s+/, '')
-    document.title = titleCount > 0
-      ? `(${titleCount > 99 ? '99+' : titleCount}) ${original}`
-      : original
-    return () => {
-      if (typeof document !== 'undefined') {
-        document.title = document.title.replace(/^\(\d+\+?\)\s+/, '')
-      }
-    }
-  }, [titleCount])
 
   // Match-permission predicate. Used both for top-level items and
   // for children of expandable sections.
@@ -179,6 +164,39 @@ export default function Sidebar({ user, isLinkedHost = false, mobileOpen = false
       if (item.children) return true  // already filtered above
       return matches(item)
     })
+
+  // NAV-BADGE.1 — the title sums the badges on the rows the user can
+  // actually see: it reduces over `nav`, the SAME permission-filtered list
+  // the render below walks, rather than re-deriving a parallel total from
+  // the raw poll counts. That is what makes "title = sum of the visible
+  // pills" an invariant rather than an aspiration — a row absent from `nav`
+  // (a bookkeeper without approvals_inbox, or any approver at a location
+  // where the Approvals feature card is off) contributes nothing to the
+  // title either, because navBadges is only ever read back through this
+  // same filtered list.
+  //
+  // /api/home-queue/count (the count route this replaced) has no callers
+  // left in the app: /dashboard/today calls assembleHomeQueue(db, user)
+  // directly (src/app/dashboard/today/page.js) and never fetches this
+  // route. It stays published anyway — it's a registered OpenAPI endpoint.
+  const titleCount = nav.reduce((sum, item) => sum + (navBadges[item.href] ?? 0), 0)
+
+  // Browser tab title prefix — surfaces the pending count even when the
+  // operator is on a different tab. Format: "(3) Repset · …". Restores
+  // the original title on cleanup so a stale "(3)" doesn't survive a
+  // navigation that triggers a Sidebar unmount.
+  useEffect(() => {
+    if (typeof document === 'undefined') return
+    const original = document.title.replace(/^\(\d+\+?\)\s+/, '')
+    document.title = titleCount > 0
+      ? `(${titleCount > 99 ? '99+' : titleCount}) ${original}`
+      : original
+    return () => {
+      if (typeof document !== 'undefined') {
+        document.title = document.title.replace(/^\(\d+\+?\)\s+/, '')
+      }
+    }
+  }, [titleCount])
 
   // HUBS.2e Task 4 — ONE winner, longest match (activeHrefFor in
   // nav-items.js), computed once per render against the FILTERED nav
