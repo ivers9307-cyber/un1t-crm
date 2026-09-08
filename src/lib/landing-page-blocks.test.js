@@ -8,6 +8,7 @@ import {
   BlocksArraySchema,
   setByPath,
   primaryCta,
+  offerOf,
 } from './landing-page-blocks.js'
 
 describe('newBlockId', () => {
@@ -339,5 +340,65 @@ describe('class_funnel paid-intro defaults', () => {
     const b = newBlockOfType('class_funnel')
     expect(b.price_cents).toBe(0)
     expect(b.currency).toBe('EUR')
+  })
+})
+
+describe('offerOf (HATCH-OFFER.1)', () => {
+  const on = (extra = {}) => ({
+    id: 'l', type: 'lead_form',
+    offer: { enabled: true, price: '€189', cta_url: 'https://x.test/#join', cta_label: 'Claim your rate', ticks: ['a', 'b'], ...extra },
+  })
+
+  it('returns null when the block has no offer group', () => {
+    expect(offerOf({ id: 'l', type: 'lead_form' })).toBeNull()
+  })
+  it('returns null when the offer is present but disabled', () => {
+    expect(offerOf(on({ enabled: false }))).toBeNull()
+  })
+  it('returns null when enabled is anything but boolean true', () => {
+    expect(offerOf(on({ enabled: 'yes' }))).toBeNull()
+  })
+  it('returns null for a non-object or array offer', () => {
+    expect(offerOf({ id: 'l', type: 'lead_form', offer: 'nope' })).toBeNull()
+    expect(offerOf({ id: 'l', type: 'lead_form', offer: ['nope'] })).toBeNull()
+  })
+  it('returns null for a null block', () => {
+    expect(offerOf(null)).toBeNull()
+  })
+  it('coerces a missing or malformed ticks list to an empty array', () => {
+    expect(offerOf(on({ ticks: undefined })).ticks).toEqual([])
+    expect(offerOf(on({ ticks: 'a,b' })).ticks).toEqual([])
+  })
+  it('drops blank and non-string ticks', () => {
+    expect(offerOf(on({ ticks: ['a', '  ', 7, 'b'] })).ticks).toEqual(['a', 'b'])
+  })
+  it('trims cta_url and falls back on a blank cta_label', () => {
+    const o = offerOf(on({ cta_url: '  https://x.test/#join  ', cta_label: '   ' }))
+    expect(o.cta_url).toBe('https://x.test/#join')
+    expect(o.cta_label).toBe('Claim your rate')
+  })
+  it('treats a non-string cta_url as empty', () => {
+    expect(offerOf(on({ cta_url: 42 })).cta_url).toBe('')
+  })
+})
+
+describe('lead_form offer defaults (HATCH-OFFER.1)', () => {
+  it('ships an offer group that is off by default', () => {
+    const b = newBlockOfType('lead_form')
+    expect(b.offer.enabled).toBe(false)
+    expect(offerOf(b)).toBeNull()
+  })
+  it('says foundation, never founding, in the offer defaults', () => {
+    const json = JSON.stringify(newBlockOfType('lead_form').offer).toLowerCase()
+    expect(json).toContain('foundation')
+    expect(json).not.toContain('founding')
+  })
+  it('defaults the claim link to the booking platform signup anchor', () => {
+    expect(newBlockOfType('lead_form').offer.cta_url).toBe('https://hatchstreet.un1t.online/#join')
+  })
+  it('keeps a lead_form carrying a malformed offer renderable', () => {
+    const kept = blocksOrDefault([{ id: 'l', type: 'lead_form', offer: 'broken' }])
+    expect(kept).toHaveLength(1)
+    expect(offerOf(kept[0])).toBeNull()
   })
 })

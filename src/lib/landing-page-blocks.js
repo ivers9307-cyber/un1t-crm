@@ -87,6 +87,36 @@ const EVENT_DEFAULT = () => ({
   title: 'Sign up',
 })
 
+// Foundation-offer group on the lead-form block (HATCH-OFFER.1).
+// Off by default: with `enabled` false the lead-form section renders
+// exactly as it did before this group existed, so no other studio
+// page changes. Every visitor-facing string is a field — including
+// the prices and the deadline — so closing the offer on 19 September
+// is an edit at /settings/landing-page, not a deploy.
+//
+// Prices are STRINGS, not cents. Nothing here computes with them:
+// they are display copy pointing at a checkout this repo does not
+// own (hatchstreet.un1t.online). Deliberately unlike
+// class_funnel.price_cents, which actually charges.
+const OFFER_DEFAULT = () => ({
+  enabled:         false,
+  section_eyebrow: 'Two ways in',
+  section_heading: 'Fix your rate\nbefore we open',
+  eyebrow:         'Foundation membership',
+  price:           '€189',
+  was_price:       '€219',
+  was_price_note:  'a month from 19 September',
+  unit:            'per month\nfixed for life',
+  deadline:        'Offer ends 19 September',
+  ticks: [
+    'Unlimited classes, full access from day one',
+    'Your rate never rises while your membership stays active',
+    'Pay today, next payment October',
+  ],
+  cta_label:       'Claim your rate',
+  cta_url:         'https://hatchstreet.un1t.online/#join',
+})
+
 const LEAD_FORM_DEFAULT = () => ({
   id:              newBlockId(),
   type:            'lead_form',
@@ -97,7 +127,28 @@ const LEAD_FORM_DEFAULT = () => ({
   consent_label:   'I’d like to hear from UN1T about the Hatch Street launch and offers by email, SMS and WhatsApp. I can opt out anytime.',
   tag:             'hatch-founding-member',
   lead_source:     'hatch_launch',
+  offer:           OFFER_DEFAULT(),
 })
+
+// Single reader for the offer group — every consumer (pageCtas, the
+// renderer) goes through this, so "is there an offer to show?" is
+// answered in exactly one place. Returns a normalised offer or null.
+// A corrupted group must degrade to the no-offer render rather than
+// throw: this is the public funnel and a bad JSONB blob must never
+// 500 it.
+export function offerOf(block) {
+  const o = block && typeof block === 'object' ? block.offer : null
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return null
+  if (o.enabled !== true) return null
+  return {
+    ...o,
+    ticks: Array.isArray(o.ticks)
+      ? o.ticks.filter((t) => typeof t === 'string' && t.trim())
+      : [],
+    cta_url: typeof o.cta_url === 'string' ? o.cta_url.trim() : '',
+    cta_label: (typeof o.cta_label === 'string' && o.cta_label.trim()) || 'Claim your rate',
+  }
+}
 
 const CLASS_FUNNEL_DEFAULT = () => ({
   id:                newBlockId(),
