@@ -10,6 +10,7 @@ import {
   primaryCta,
   pageCtas,
   offerOf,
+  OFFER_DEFAULT,
 } from './landing-page-blocks.js'
 
 describe('newBlockId', () => {
@@ -409,6 +410,37 @@ describe('lead_form offer defaults (HATCH-OFFER.1)', () => {
     const kept = blocksOrDefault([{ id: 'l', type: 'lead_form', offer: 'broken' }])
     expect(kept).toHaveLength(1)
     expect(offerOf(kept[0])).toBeNull()
+  })
+})
+
+describe('OFFER_DEFAULT seeding (HATCH-OFFER.1)', () => {
+  // Every lead_form row in production was saved before the offer
+  // group existed, so the editor seeds these on enable. If the shape
+  // drifts from what OfferPanel reads, the operator ticks the box and
+  // gets a panel with holes in it.
+  it('carries every field the panel renders', () => {
+    expect(Object.keys(OFFER_DEFAULT()).sort()).toEqual([
+      'cta_label', 'cta_url', 'deadline', 'enabled', 'eyebrow', 'price',
+      'section_eyebrow', 'section_heading', 'ticks', 'unit', 'was_price', 'was_price_note',
+    ])
+  })
+  it('ships three tick lines, none blank', () => {
+    const { ticks } = OFFER_DEFAULT()
+    expect(ticks).toHaveLength(3)
+    expect(ticks.every((t) => typeof t === 'string' && t.trim())).toBe(true)
+  })
+  it('survives offerOf once enabled, with nothing dropped', () => {
+    const seeded = { ...OFFER_DEFAULT(), enabled: true }
+    const o = offerOf({ id: 'l', type: 'lead_form', offer: seeded })
+    expect(o).not.toBeNull()
+    expect(o.price).toBe('€189')
+    expect(o.ticks).toHaveLength(3)
+    expect(o.cta_url).toBe('https://hatchstreet.un1t.online/#join')
+  })
+  it('is a factory, not a shared object — two calls must not alias', () => {
+    const a = OFFER_DEFAULT()
+    a.ticks.push('mutated')
+    expect(OFFER_DEFAULT().ticks).toHaveLength(3)
   })
 })
 

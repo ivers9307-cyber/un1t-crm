@@ -98,7 +98,12 @@ const EVENT_DEFAULT = () => ({
 // they are display copy pointing at a checkout this repo does not
 // own (hatchstreet.un1t.online). Deliberately unlike
 // class_funnel.price_cents, which actually charges.
-const OFFER_DEFAULT = () => ({
+// Exported so the editor can SEED these into a block saved before
+// this group existed. Every live lead_form row predates it, so a bare
+// { enabled: true } would open an offer panel with a blank price —
+// the operator ticks the box and sees empty fields with nothing
+// telling them what belongs there.
+export const OFFER_DEFAULT = () => ({
   enabled:         false,
   section_eyebrow: 'Two ways in',
   section_heading: 'Fix your rate\nbefore we open',

@@ -40,7 +40,7 @@ import {
   ChevronRight, Layers,
 } from 'lucide-react'
 import {
-  BLOCK_TYPES, blocksOrDefault, newBlockOfType, setByPath, newBlockId,
+  BLOCK_TYPES, blocksOrDefault, newBlockOfType, setByPath, newBlockId, OFFER_DEFAULT,
 } from '@/lib/landing-page-blocks'
 import { buildTrialOptions } from '@/lib/glofox-trial-options'
 import { centsToEuros, eurosToCents } from '@/lib/price-format'
@@ -837,7 +837,13 @@ function LeadFormEdit({ block, onUpdate }) {
           <input
             type="checkbox"
             checked={offer.enabled === true}
-            onChange={(e) => setOffer({ enabled: e.target.checked })}
+            onChange={(e) => setOffer(
+              // Seed the defaults on the way ON, so a block saved
+              // before this group existed doesn't open a blank panel.
+              // The operator's own values win over the defaults, and
+              // turning it OFF keeps their copy for next time.
+              e.target.checked ? { ...OFFER_DEFAULT(), ...offer, enabled: true } : { enabled: false }
+            )}
             className="mt-0.5"
           />
           <span>
