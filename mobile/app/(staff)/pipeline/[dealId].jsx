@@ -1,15 +1,30 @@
 // Deal detail screen. iOS-feeling sectioned layout:
 //   1. Contact card (avatar, name, lead status, contact actions)
-//   2. Stage (read-only) — FUNNEL.1: stage is classifier-derived;
-//      manual moves are reverted by the next sync, so the tap-to-move
-//      selector was removed.
+//   2. Stage — depends on the BOARD this card sits on (WAITLIST-M.1):
+//      · derived board → read-only, plus the FUNNEL.4 Cold toggle. The
+//        classifier (webhook + nightly cron) owns every column here, so
+//        a hand move is reverted by the next sync — FUNNEL.1 removed
+//        the old tap-to-move selector for exactly that reason.
+//      · manual board (pipelines.mode='manual', mig 594) → a picker of
+//        that board's live columns, current one ticked. Nothing derives
+//        these columns, so a hand move is the ONLY way a card moves,
+//        and it is the operator's decision to keep.
 //   3. Won / Lost actions
 //   4. Activity timeline (notes + activities, newest first)
 //   5. Quick add: log call / log note
 //
-// Actions hit Supabase directly via lib/pipeline-api.js — RLS at the
-// DB layer enforces multi-tenancy. The mobile JWT carries the user's
+// READS hit Supabase directly via lib/pipeline-api.js — RLS at the DB
+// layer enforces multi-tenancy. The mobile JWT carries the user's
 // auth.uid() so private.auth_is_in_location() works as it does on web.
+// The stage MOVE does not: it goes through POST /api/deals/[id]/stage,
+// which is the only path that checks the `pipeline` permission, guards
+// the location, validates the target stage against the deal's own
+// board, fires the sequence trigger and writes the audit row.
+//
+// Deliberately NOT drag-and-drop. Dragging a card between
+// horizontally-scrolling columns on a phone is a poor interaction; the
+// web board stays the working surface and this is the phone's answer to
+// "I'm standing at the desk and this person just said no".
 
 import { useEffect, useState, useCallback } from 'react'
 import {
@@ -38,6 +53,7 @@ function BackHeaderLeft({ router, label = 'Back' }) {
 import { useAuth } from '../../../lib/auth-context'
 import {
   getDeal, setDealStatus, setPipelineCold,
+  getPipeline, listStagesForPipeline, moveDealToStage,
   listActivitiesForContact, listNotesForContact,
   logActivity, createNote,
 } from '../../../lib/pipeline-api'
@@ -92,6 +108,11 @@ export default function DealDetail() {
   const [logKind, setLogKind] = useState('note')   // 'note' | 'call' | 'email' | 'meeting'
   const [submittingLog, setSubmittingLog] = useState(false)
   const [coldSaving, setColdSaving] = useState(false)
+  // WAITLIST-M.1 — the board this card sits on, and its live columns.
+  // null / [] is the read-only shape, which is what this screen was.
+  const [board, setBoard] = useState(null)
+  const [boardStages, setBoardStages] = useState([])
+  const [movingStageId, setMovingStageId] = useState(null)
 
   const refresh = useCallback(async () => {
     const dealRes = await getDeal(dealId)
@@ -104,6 +125,27 @@ export default function DealDetail() {
       ])
       setActivities(actRes.success ? actRes.data || [] : [])
       setNotes(noteRes.success ? noteRes.data || [] : [])
+    }
+
+    // WAITLIST-M.1 — resolve the board from the DEAL's own pipeline_id,
+    // never from the location's primary board: a location can run more
+    // than one, and this card belongs to exactly one of them.
+    //
+    // Fails CLOSED in both directions — an unreadable pipelines row, or
+    // a deal with no pipeline_id, leaves no board and no columns, so the
+    // picker is not drawn and the screen behaves exactly as it did
+    // before this change. The stage list is only fetched for a manual
+    // board, so a derived board (Stillorgan) pays one small select and
+    // renders identically.
+    const pipelineId = dealRes.success ? dealRes.data?.pipeline_id : null
+    const pipeRes = pipelineId ? await getPipeline(pipelineId) : null
+    const resolved = pipeRes?.success ? pipeRes.data : null
+    setBoard(resolved)
+    if (resolved?.mode === 'manual') {
+      const stageRes = await listStagesForPipeline(pipelineId)
+      setBoardStages(stageRes.success ? stageRes.data || [] : [])
+    } else {
+      setBoardStages([])
     }
     // activeLocation is deliberately NOT a dependency: unlike the other detail
     // screens (whatsapp/instagram/email), none of these three fetchers take a
@@ -134,6 +176,31 @@ export default function DealDetail() {
         },
       ]
     )
+  }
+
+  // WAITLIST-M.1 — move this card to another column on a manual board.
+  //
+  // Nothing is written locally before the server answers, and that is the
+  // point: on a refusal (the route says pipeline_is_derived, or the stage
+  // belongs to another board, or the phone dropped the call) the card is
+  // still drawn in the column it is actually in. A screen that paints the
+  // move first and rolls back on failure spends the interval asserting
+  // something untrue, which on a shared board is how two people end up
+  // disagreeing about where a lead is.
+  async function moveToStage(stage) {
+    if (movingStageId || !stage?.id) return
+    if (stage.id === deal?.stage_id) return   // already here; the route no-ops too
+    setMovingStageId(stage.id)
+    const res = await moveDealToStage(dealId, stage.id)
+    setMovingStageId(null)
+    if (!res.success) {
+      Alert.alert(
+        'Couldn’t move this card',
+        `${res.error || 'The move was not saved.'}\n\nThe card is still in ${deal?.pipeline_stages?.name || 'its column'}.`,
+      )
+      return
+    }
+    refresh()
   }
 
   // FUNNEL.4 Cold toggle (FUNNEL-M.1) — mirrors the web PersonActionBar
@@ -236,6 +303,9 @@ export default function DealDetail() {
   // classifier-maintained slug, not pipeline_dismissed_at (a stale
   // dismissal is auto-revoked once the lead trains again).
   const isCold = contact?.pipeline_stage_slug === 'cold_lead'
+  // WAITLIST-M.1 — a manual board only when we positively read one. Any
+  // failure to resolve leaves this false, i.e. today's read-only screen.
+  const manualBoard = board?.mode === 'manual' && boardStages.length > 0
 
   // Merge & sort activities + notes for the timeline.
   const timeline = [
@@ -294,54 +364,115 @@ export default function DealDetail() {
           />
         )}
 
-        {/* Stage — read-only. FUNNEL.1: stage is classifier-derived
-            (webhook + nightly cron); a manual move is silently
-            reverted by the next sync, so the tap-to-move selector
-            was removed. The ONE allowed stage action is the FUNNEL.4
-            Cold toggle below — it goes through the pipeline-status
-            route, which persists the dismissal and re-classifies. */}
-        <Section title="Stage">
-          {deal.pipeline_stages && (
-            <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 flex-row items-center">
-              <View
-                className="w-2 h-2 rounded-full mr-2"
-                style={{ backgroundColor: deal.pipeline_stages.color || '#94A3B8' }}
-              />
-              <Text className="text-sm font-semibold text-un1t-text">
-                {deal.pipeline_stages.name}
+        {/* Stage. Two shapes, decided by the board (WAITLIST-M.1):
+            · MANUAL (pipelines.mode='manual') — a picker of that board's
+              live columns. Nothing derives them, so a tap IS the move.
+            · DERIVED — read-only + the FUNNEL.4 Cold toggle, exactly as
+              before. FUNNEL.1 removed tap-to-move here because the
+              classifier (webhook + nightly cron) reverts a hand move on
+              its next pass, and that has not changed. */}
+        <Section
+          title="Stage"
+          action={manualBoard && board?.name ? (
+            <Text className="text-xs text-un1t-subtle">{board.name}</Text>
+          ) : null}
+        >
+          {manualBoard ? (
+            <>
+              <View className="bg-un1t-surface border border-un1t-border rounded-2xl overflow-hidden">
+                {boardStages.map((s, i) => {
+                  const current = s.id === deal.stage_id
+                  const busy = movingStageId === s.id
+                  return (
+                    <Pressable
+                      key={s.id}
+                      onPress={() => moveToStage(s)}
+                      disabled={current || !!movingStageId}
+                      className={`px-4 py-3 flex-row items-center active:opacity-70 ${
+                        i > 0 ? 'border-t border-un1t-border ' : ''
+                      }${current ? 'bg-un1t-border/30 ' : ''}${
+                        movingStageId && !busy ? 'opacity-50' : ''
+                      }`}
+                    >
+                      <View
+                        className="w-2 h-2 rounded-full mr-2.5"
+                        style={{ backgroundColor: s.color || '#94A3B8' }}
+                      />
+                      <Text className={`text-sm flex-1 ${
+                        current ? 'font-semibold text-un1t-text' : 'text-un1t-text'
+                      }`}>
+                        {s.name}
+                      </Text>
+                      {busy ? (
+                        <ActivityIndicator size="small" />
+                      ) : current ? (
+                        <Ionicons name="checkmark-circle" size={18} color="#111827" />
+                      ) : (
+                        <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
+                      )}
+                    </Pressable>
+                  )
+                })}
+              </View>
+              <Text className="text-xs text-un1t-subtle mt-2 px-1">
+                Tap a column to move this card. Staff move these by hand.
               </Text>
-              <Text className="text-xs text-un1t-subtle ml-auto">
-                Set automatically from activity
-              </Text>
-            </View>
+            </>
+          ) : (
+            /* Derived board — unchanged. The ONE allowed stage action is
+               the FUNNEL.4 Cold toggle: it goes through the
+               pipeline-status route, which persists the dismissal and
+               re-classifies. It sits inside this branch on purpose
+               (WAITLIST.6, same defect as the web menu item): Cold only
+               stamps contacts.pipeline_dismissed_at, and the classifier
+               is the only reader of that stamp — on a manual board it
+               would be a button that looks like a decision and changes
+               nothing an operator can see, right beside a picker that
+               really does move the card. */
+            <>
+              {deal.pipeline_stages && (
+                <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 flex-row items-center">
+                  <View
+                    className="w-2 h-2 rounded-full mr-2"
+                    style={{ backgroundColor: deal.pipeline_stages.color || '#94A3B8' }}
+                  />
+                  <Text className="text-sm font-semibold text-un1t-text">
+                    {deal.pipeline_stages.name}
+                  </Text>
+                  <Text className="text-xs text-un1t-subtle ml-auto">
+                    Set automatically from activity
+                  </Text>
+                </View>
+              )}
+              <Pressable
+                onPress={() => toggleCold(isCold)}
+                disabled={coldSaving}
+                className={`mt-2 py-3 rounded-xl border flex-row items-center justify-center active:opacity-70 ${
+                  coldSaving ? 'opacity-50 ' : ''
+                }${isCold
+                  ? 'bg-un1t-surface border-un1t-border'
+                  : 'bg-sky-500/10 border-sky-500/30'
+                }`}
+              >
+                {coldSaving ? (
+                  <ActivityIndicator size="small" />
+                ) : (
+                  <>
+                    <Ionicons
+                      name={isCold ? 'refresh-outline' : 'snow-outline'}
+                      size={15}
+                      color={isCold ? '#111827' : '#0369A1'}
+                    />
+                    <Text className={`text-sm font-semibold ml-1.5 ${
+                      isCold ? 'text-un1t-text' : 'text-sky-700'
+                    }`}>
+                      {isCold ? 'Return to pipeline' : 'Mark as Cold'}
+                    </Text>
+                  </>
+                )}
+              </Pressable>
+            </>
           )}
-          <Pressable
-            onPress={() => toggleCold(isCold)}
-            disabled={coldSaving}
-            className={`mt-2 py-3 rounded-xl border flex-row items-center justify-center active:opacity-70 ${
-              coldSaving ? 'opacity-50 ' : ''
-            }${isCold
-              ? 'bg-un1t-surface border-un1t-border'
-              : 'bg-sky-500/10 border-sky-500/30'
-            }`}
-          >
-            {coldSaving ? (
-              <ActivityIndicator size="small" />
-            ) : (
-              <>
-                <Ionicons
-                  name={isCold ? 'refresh-outline' : 'snow-outline'}
-                  size={15}
-                  color={isCold ? '#111827' : '#0369A1'}
-                />
-                <Text className={`text-sm font-semibold ml-1.5 ${
-                  isCold ? 'text-un1t-text' : 'text-sky-700'
-                }`}>
-                  {isCold ? 'Return to pipeline' : 'Mark as Cold'}
-                </Text>
-              </>
-            )}
-          </Pressable>
         </Section>
 
         {/* Close actions */}

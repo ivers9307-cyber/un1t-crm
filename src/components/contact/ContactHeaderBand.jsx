@@ -55,6 +55,19 @@ const ATTENTION_CHIP = {
 // DealCard BADGE_SLUGS set).
 const BADGE_SLUGS = new Set(['new_lead', 'first_class', 'second_class', 'trial_done'])
 
+// WAITLIST.6 — Cold is a DERIVED-board affordance. It stamps
+// contacts.pipeline_dismissed_at and nothing but the classifier reads that
+// stamp; mig 594's `pipelines.mode` keeps the classifier off a manual board, so
+// on a Hatch Street waitlist contact the item looked like a decision and
+// produced nothing. The board's own "Not interested" column is the decision.
+//
+// `manual` is resolved server-side by the page (the contact's location's
+// primary pipeline), so this component adds NO fetch of its own.
+const HEADER_ACTIONS = {
+  derived: ['message', 'task', 'sequence', 'cancel_form', 'cold'],
+  manual: ['message', 'task', 'sequence', 'cancel_form'],
+}
+
 function StatTile({ label, value, tone = 'default' }) {
   const valueCls = tone === 'danger' ? 'text-red-700' : 'text-un1t-text'
   return (
@@ -65,7 +78,10 @@ function StatTile({ label, value, tone = 'default' }) {
   )
 }
 
-export default function ContactHeaderBand({ contact, person, risk, journey, metrics, attention = [], nextClassAt = null, canToggleExempt = false, cancellationLink = null }) {
+// `manual` defaults FALSE — Cold shown — so a caller that cannot resolve the
+// contact's board keeps exactly today's behaviour. A failed lookup must never
+// remove an operator action; an inert button beats a missing one.
+export default function ContactHeaderBand({ contact, person, risk, journey, metrics, attention = [], nextClassAt = null, canToggleExempt = false, cancellationLink = null, manual = false }) {
   // CANCEL-FORM.4 — latest issued form link → one chip (sent / opened / submitted).
   const cancelChip = cancellationLinkChip(cancellationLink)
   const funnel = BADGE_SLUGS.has(contact.pipeline_stage_slug)
@@ -116,11 +132,12 @@ export default function ContactHeaderBand({ contact, person, risk, journey, metr
                 Paused{pauseResumeLabel ? ` · resumes ${pauseResumeLabel}` : ''}
               </span>
             )}
-            {/* FUNNEL.4 — Message / Task / Sequence + the Cold toggle. */}
+            {/* FUNNEL.4 — Message / Task / Sequence + the Cold toggle
+                (WAITLIST.6: Cold only on a derived board). */}
             <PersonActionBar
               contactId={contact.id}
               locationId={contact.location_id}
-              actions={['message', 'task', 'sequence', 'cancel_form', 'cold']}
+              actions={HEADER_ACTIONS[manual ? 'manual' : 'derived']}
               isCold={contact.pipeline_stage_slug === 'cold_lead'}
             />
           </PersonHeader>

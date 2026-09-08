@@ -29,6 +29,23 @@ const TONE_CHIP = {
   warn: 'bg-amber-500/10 text-amber-700',
 }
 
+// WAITLIST.6 — Cold is a DERIVED-board affordance (the same set DealCard
+// carries, minus Message: the drawer has the composer itself a few inches
+// below). All Cold does is stamp contacts.pipeline_dismissed_at, and the only
+// reader of that stamp is the classifier, which mig 594's `pipelines.mode`
+// keeps off a manual board entirely. On Hatch Street's waitlist board it was
+// therefore a second, invisible way to say what column 4 ("Not interested")
+// already says by hand — an item that looks like a move and produces none.
+//
+// `manual` comes down from KanbanBoard, which is the ONLY thing that renders
+// this drawer and already knows the board (the pipeline page resolved
+// pipelines.mode to draw the tabs). So the board context is free here: no
+// lookup, and no fetch on a panel that opens dozens of times a shift.
+const DRAWER_ACTIONS = {
+  derived: ['task', 'sequence', 'cancel_form', 'cold'],
+  manual: ['task', 'sequence', 'cancel_form'],
+}
+
 // Compact label/value row for the key-details card. Rows with no value
 // drop out rather than render a dash — the drawer is a summary.
 function DetailRow({ label, value, href = null }) {
@@ -45,7 +62,10 @@ function DetailRow({ label, value, href = null }) {
   )
 }
 
-export default function ContactDrawer({ contactId, columnContactIds = [], locationId, onNavigate, onClose }) {
+// `manual` defaults FALSE — i.e. Cold shown — so any future caller that cannot
+// resolve a board behaves exactly as today. Hiding an operator action because a
+// lookup came back empty is a worse failure than offering an inert one.
+export default function ContactDrawer({ contactId, columnContactIds = [], locationId, onNavigate, onClose, manual = false }) {
   const [bundle, setBundle] = useState(null)
   const [error, setError] = useState(null)
 
@@ -129,7 +149,7 @@ export default function ContactDrawer({ contactId, columnContactIds = [], locati
                   <PersonActionBar
                     contactId={contact.id}
                     locationId={locationId}
-                    actions={['task', 'sequence', 'cancel_form', 'cold']}
+                    actions={DRAWER_ACTIONS[manual ? 'manual' : 'derived']}
                     isCold={contact.pipeline_stage_slug === 'cold_lead'}
                   />
                 </PersonHeader>
