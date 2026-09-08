@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { LeadFormBlock } from './BlockRenderers.jsx'
+import { LeadFormBlock, HeroBlock } from './BlockRenderers.jsx'
 
 // Node environment, no jsdom — render to static markup. WaitlistWidget
 // is safe to render this way: it uses useState only, with no effects
@@ -56,5 +56,30 @@ describe('LeadFormBlock offer branch (HATCH-OFFER.1)', () => {
   it('does not throw on a corrupted offer group', () => {
     const html = renderToStaticMarkup(<LeadFormBlock block={{ ...base, offer: 'broken' }} publicPath="hatch-street" />)
     expect(html).toContain('Keep me posted')
+  })
+})
+
+describe('HeroBlock second CTA (HATCH-OFFER.1)', () => {
+  const hero = { id: 'h', type: 'hero', headline: 'UN1T OPENS 2ND STUDIO' }
+
+  it('renders both buttons when a secondary is supplied', () => {
+    const html = renderToStaticMarkup(
+      <HeroBlock block={hero} ctaHref="https://hatchstreet.un1t.online/#join" ctaLabel="Claim your rate" ctaSecondaryHref="#waitlist" ctaSecondaryLabel="Keep me posted" />
+    )
+    expect(html).toContain('Claim your rate')
+    expect(html).toContain('Keep me posted')
+    expect(html).toContain('lp-btn-ghost')
+  })
+  it('marks an off-site primary rel=noopener', () => {
+    const html = renderToStaticMarkup(<HeroBlock block={hero} ctaHref="https://hatchstreet.un1t.online/#join" ctaLabel="Claim your rate" />)
+    expect(html).toContain('rel="noopener"')
+  })
+  it('leaves an on-page anchor without rel', () => {
+    const html = renderToStaticMarkup(<HeroBlock block={hero} ctaHref="#waitlist" ctaLabel="Join the waitlist" />)
+    expect(html).not.toContain('rel="noopener"')
+  })
+  it('renders one button when there is no secondary', () => {
+    const html = renderToStaticMarkup(<HeroBlock block={hero} ctaHref="#waitlist" ctaLabel="Join the waitlist" />)
+    expect(html).not.toContain('lp-btn-ghost')
   })
 })

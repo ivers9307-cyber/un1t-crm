@@ -50,7 +50,7 @@ function Eyebrow({ children, dark = true }) {
   )
 }
 
-export default function BlockRenderer({ block, onEdit, locationId, publicPath, campaign, reviewsData, ctaHref, ctaLabel }) {
+export default function BlockRenderer({ block, onEdit, locationId, publicPath, campaign, reviewsData, ctaHref, ctaLabel, ctaSecondaryHref, ctaSecondaryLabel }) {
   // onEdit is bound to this block: caller hands us a generic
   // (blockId, path, value) function and we curry the blockId so
   // each child renderer thinks in local field paths.
@@ -62,7 +62,7 @@ export default function BlockRenderer({ block, onEdit, locationId, publicPath, c
   // the upload to the right tenant.
   const editProps = { onEdit: localOnEdit, locationId }
   switch (block.type) {
-    case 'hero':        return <HeroBlock        block={block} {...editProps} ctaHref={ctaHref} ctaLabel={ctaLabel} />
+    case 'hero':        return <HeroBlock        block={block} {...editProps} ctaHref={ctaHref} ctaLabel={ctaLabel} ctaSecondaryHref={ctaSecondaryHref} ctaSecondaryLabel={ctaSecondaryLabel} />
     case 'booking':     return <BookingBlock     block={block} />
     case 'pillars':     return <PillarsBlock     block={block} {...editProps} />
     case 'gallery':     return <GalleryBlock     block={block} {...editProps} />
@@ -115,9 +115,13 @@ function HeroMarquee() {
 // always carries. Content staggers in on load (CSS only). The primary
 // CTA is passed down from the page (computed from the page's own
 // funnel blocks) — the hero never invents a target.
-export function HeroBlock({ block, onEdit, locationId, ctaHref, ctaLabel }) {
+export function HeroBlock({ block, onEdit, locationId, ctaHref, ctaLabel, ctaSecondaryHref, ctaSecondaryLabel }) {
   const href = ctaHref || (onEdit ? '#book' : null)
   const label = ctaLabel || 'Book a free consult'
+  // An off-site primary (the foundation checkout) gets rel=noopener.
+  // Derived from the href rather than passed as a prop — the hero
+  // already receives the target and nothing else needs to know.
+  const external = /^https?:\/\//i.test(href || '')
   return (
     <section className="relative min-h-[92svh] flex flex-col overflow-hidden bg-black lp-grain">
       {block.video_url ? (
@@ -216,10 +220,16 @@ export function HeroBlock({ block, onEdit, locationId, ctaHref, ctaLabel }) {
           )}
           {href && (
             <div className="mt-10 flex flex-wrap items-center justify-center gap-4">
-              <a href={href} className="lp-btn">
+              <a href={href} className="lp-btn" {...(external ? { rel: 'noopener' } : {})}>
                 {label}
                 <span className="lp-btn-arrow" aria-hidden="true">→</span>
               </a>
+              {ctaSecondaryHref && (
+                <a href={ctaSecondaryHref} className="lp-btn-ghost">
+                  {ctaSecondaryLabel}
+                  <span className="lp-btn-arrow" aria-hidden="true">→</span>
+                </a>
+              )}
             </div>
           )}
           {/* Scroll cue — decorative, fades under reduced motion. */}

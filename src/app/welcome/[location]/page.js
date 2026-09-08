@@ -22,7 +22,7 @@
 
 import { notFound } from 'next/navigation'
 import { createServerClient } from '@/lib/supabase'
-import { blocksOrDefault, primaryCta } from '@/lib/landing-page-blocks'
+import { blocksOrDefault, pageCtas } from '@/lib/landing-page-blocks'
 import BlockRenderer, { SiteHeader, SiteFooter } from '@/components/landing-page/BlockRenderers'
 import EditModeOverlay from '@/components/landing-page/EditModeOverlay'
 import RevealManager from '@/components/landing-page/RevealManager'
@@ -125,7 +125,7 @@ export default async function StudioLandingPage(props) {
     )
   }
 
-  const cta = primaryCta(blocks)
+  const { primary: cta, secondary: cta2 } = pageCtas(blocks)
   const studioName = row.locations?.name || 'UN1T Dublin'
   const hero = blocks.find((b) => b.type === 'hero')
 
@@ -163,6 +163,8 @@ export default async function StudioLandingPage(props) {
           reviewsData={reviewsData}
           ctaHref={cta?.href || null}
           ctaLabel={cta?.label}
+          ctaSecondaryHref={cta2?.href || null}
+          ctaSecondaryLabel={cta2?.label}
         />
       ))}
       <SiteFooter ctaHref={cta?.href || '#book'} ctaLabel={cta?.label || 'Book a free consult'} />

@@ -15,7 +15,7 @@ import { notFound } from 'next/navigation'
 import BlockRenderer, { SiteHeader, SiteFooter } from '@/components/landing-page/BlockRenderers'
 import RevealManager from '@/components/landing-page/RevealManager'
 import { RevealArmScript } from '@/components/landing-page/reveal-arm'
-import { primaryCta } from '@/lib/landing-page-blocks'
+import { pageCtas } from '@/lib/landing-page-blocks'
 
 export const dynamic = 'force-dynamic'
 
@@ -68,7 +68,7 @@ export default async function LandingPreviewPage(props) {
   const searchParams = await props.searchParams
   const key = searchParams?.p === 'hatch-street' ? 'hatch-street' : 'stillorgan'
   const blocks = FIXTURES[key]
-  const cta = primaryCta(blocks)
+  const { primary: cta, secondary: cta2 } = pageCtas(blocks)
 
   return (
     <div className="min-h-screen bg-black text-white antialiased">
@@ -90,6 +90,8 @@ export default async function LandingPreviewPage(props) {
           reviewsData={null}
           ctaHref={cta?.href || null}
           ctaLabel={cta?.label}
+          ctaSecondaryHref={cta2?.href || null}
+          ctaSecondaryLabel={cta2?.label}
         />
       ))}
       <SiteFooter ctaHref={cta?.href || '#book'} ctaLabel={cta?.label || 'Book a free consult'} />
