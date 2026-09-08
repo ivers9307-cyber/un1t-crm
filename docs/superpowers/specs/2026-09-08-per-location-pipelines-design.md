@@ -134,6 +134,8 @@ Two properties this buys:
 
 No location has two boards at cutover. The engine supports N; nothing exercises N until a second board is wanted.
 
+**"No pipelines" is implemented as `enabled = false`, not as an absent row.** `pipeline_stages.pipeline_id` becomes `not null`, so the 33 stray gym stage rows at CCF Autos / SourceIt / Test Studio need *some* parent. Each such location keeps one disabled, non-primary `acquisition` pipeline holding its archived stages. Nothing renders — the page lists `enabled` pipelines only — and the foreign key stays satisfiable without deleting rows. Pride Training Club has no stages and so gets no row at all.
+
 ---
 
 ## 5. The Hatch waitlist board
@@ -176,9 +178,15 @@ This mirrors RETURNPIPE.3, where re-entering a public funnel form already revoke
 
 ### 5.5 Manual moves
 
-`PATCH /api/deals/[id]` already implements this: it validates the target stage is scoped to the caller's location, writes `stage_id`, and fires the STAGETRIG.1 stage-change trigger. **No API work needed.**
+**Correction to an earlier draft of this spec: the API does not already exist.** `PUT /api/deals/[id]` does resolve a stage scoped to the deal's location and fire the STAGETRIG.1 trigger — but it is gated by `authenticateApiKey()`, which requires a `Bearer` API key (`src/lib/api-auth.js:208`). It is the n8n integration path. **A browser cannot call it**, so it cannot back a drag-drop board.
 
-What is missing is the UI. `src/components/KanbanBoard.jsx` is 146 lines with the drag handlers removed and only a comment where they were. Drag-drop is rebuilt there, enabled **only when the board's pipeline is `mode='manual'`**. Derived boards stay read-only, for the original FUNNEL.1 reason.
+A new session-authed route is needed: `POST /api/deals/[id]/stage`, modelled directly on `POST /api/contacts/[id]/pipeline-status` (the Cold button) — `getCurrentUser()` → `hasPermission(user, 'pipeline')` → load the deal → `assertLocationAccessOr404` → resolve the target stage scoped to the deal's location → update. Service-role clients bypass RLS, so that guard chain *is* the access control (repo invariant).
+
+Two constraints on it:
+- **It must refuse to move a deal on a `derived` pipeline.** Otherwise it becomes a way to make a move the next classify pass silently reverts — the exact failure FUNNEL.1 removed drag-drop to prevent.
+- `stage_entered_at` needs no app code: mig 458's `trg_deal_stage_entered` BEFORE-UPDATE trigger stamps it on any `stage_id` change, from any writer.
+
+On the UI side, `src/components/KanbanBoard.jsx` is 146 lines with the drag handlers removed and only a comment where they were. Drag-drop is rebuilt there, enabled **only when the board's pipeline is `mode='manual'`**. Derived boards stay read-only.
 
 ### 5.6 Knock-ons
 
