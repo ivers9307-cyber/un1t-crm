@@ -43,6 +43,26 @@ comment on table public.pipelines is
   'move only by hand. Exactly one is_primary row per location owns '
   'contacts.pipeline_stage_slug.';
 
+alter table public.pipelines enable row level security;
+
+-- Browser reads only. Mobile lists a location's boards through the RLS-bound
+-- client (mobile/lib/pipeline-api.js); every write path is service-role, which
+-- bypasses RLS entirely.
+--
+-- NO write policies, on purpose: there is deliberately no board-builder UI
+-- (operator decision, 2026-09-08 — boards are code), so the browser must never
+-- be able to create, retitle or disable a board.
+--
+-- Per-command, never FOR ALL: a FOR ALL policy is the mig 483/485 defect class
+-- that kills SELECT and stops realtime firing. Both helpers live in `private`
+-- (mig 051); the `public.auth_is_in_location` of mig 014 was moved and no
+-- longer exists. location_id is NOT NULL here, so pipeline_stages' null branch
+-- is not needed.
+drop policy if exists pipelines_select on public.pipelines;
+create policy pipelines_select on public.pipelines
+  for select to authenticated
+  using (private.auth_is_admin_at(location_id) or private.auth_is_in_location(location_id));
+
 -- Exactly one primary board per location. Partial, so a location with no
 -- primary (a disabled-only location) is allowed.
 create unique index if not exists pipelines_one_primary_per_location
@@ -82,11 +102,36 @@ update public.pipeline_stages ps
    and p.key = ps.board
    and ps.pipeline_id is null;
 
+-- The backfill sets pipeline_id and nothing else, so neither trigger below has
+-- anything to react to — but both are FOR EACH ROW and would fire ~8,700 times.
+-- sync_contacts_pipeline_stage_slug re-derives a slug that provably cannot
+-- change (measured 2026-09-08: 0 drift) at the cost of a join and an update per
+-- deal, which risks a statement timeout. deals_updated_at would reset
+-- updated_at estate-wide, and mobile's board sorts on exactly that column
+-- (listDealsByStage, `.order('updated_at', desc)`) — so leaving it armed would
+-- make a migration that is meant to change NOTHING reshuffle every column on
+-- every phone.
+--
+-- The other two triggers on deals need no handling: deal_stage_change_trigger
+-- is guarded by `OLD.stage_id IS DISTINCT FROM NEW.stage_id` (it would
+-- otherwise have written ~8,700 fake "Pipeline: moved to…" activity rows), and
+-- trg_deal_stage_entered is BEFORE UPDATE **OF stage_id**, which this does not
+-- touch.
+--
+-- Re-enabled immediately below, and asserted at the end. A raised exception
+-- rolls the whole transaction back including these ALTERs, so a failure cannot
+-- leave production with a disabled trigger.
+alter table public.deals disable trigger sync_contacts_pipeline_stage_slug_trigger;
+alter table public.deals disable trigger deals_updated_at;
+
 update public.deals d
    set pipeline_id = ps.pipeline_id
   from public.pipeline_stages ps
  where ps.id = d.stage_id
    and d.pipeline_id is null;
+
+alter table public.deals enable trigger deals_updated_at;
+alter table public.deals enable trigger sync_contacts_pipeline_stage_slug_trigger;
 
 -- Count, don't trust. Mig 559's lesson: a seed insert that silently drops a row
 -- reports success and ships a board with a missing column.
@@ -109,5 +154,15 @@ begin
   end if;
   if primaries < 1 then
     raise exception 'PIPELINES.1: no primary pipeline was seeded';
+  end if;
+
+  -- Never leave production with a trigger the backfill switched off.
+  if exists (
+    select 1 from pg_trigger
+     where tgrelid = 'public.deals'::regclass
+       and tgname in ('sync_contacts_pipeline_stage_slug_trigger', 'deals_updated_at')
+       and tgenabled = 'D'
+  ) then
+    raise exception 'PIPELINES.1: a deals trigger was left disabled';
   end if;
 end $$;
