@@ -987,6 +987,98 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ---
 
+## Task 5b: The sixth insert site is a database trigger
+
+Found during Task 5, verified live 2026-09-08. Not in the original plan, and code review alone could never have found it.
+
+`booking_created_trigger` on `public.bookings` is **enabled** (`tgenabled = 'O'`) and runs `handle_new_booking()`, which:
+
+```sql
+  select id into v_deal_id from deals
+   where contact_id = v_contact_id and status = 'open' limit 1;   -- one-open-deal assumption
+
+  if v_deal_id is null then
+    select id into v_stage_id from pipeline_stages
+     where location_id = v_location_id and slug = 'new_lead' and archived = false … ;
+
+    insert into deals (contact_id, title, status, stage_id, location_id)   -- NO pipeline_id
+```
+
+Three defects, each of which bites at a different moment:
+
+1. **No `pipeline_id`** — every booking-created deal is invisible to the orchestrator's `.in('pipeline_id', …)` read, so the cron creates a duplicate for that contact, nightly, unbounded.
+2. **Hardcoded `slug = 'new_lead'`** — Hatch's waitlist board has no such slug. After Task 13 archives Hatch's gym stages, a Hatch booking would insert a deal with a **null `stage_id`**, which renders on no column at all.
+3. **The one-open-deal probe is unscoped** — it finds a deal on any board, so once a contact is on two boards the trigger decides they already have one and silently creates nothing.
+4. It will **hard-fail** once Task 13 sets `pipeline_id` `not null`.
+
+**Files:**
+- Create: `supabase/migrations/596_booking_trigger_pipeline_aware.sql` (renumber the waitlist board migration to 597 and the tighten migration to 598)
+
+- [ ] **Step 1: rewrite the function**
+
+`create or replace function public.handle_new_booking()` keeping every existing behaviour — the location resolution, the case-insensitive location-scoped contact match, the name splitting, the activities insert — and changing only the deal block:
+
+```sql
+  -- PIPELINES.5b — resolve the location's primary board, then work within it.
+  select id, mode into v_pipeline_id, v_pipeline_mode
+    from pipelines
+   where location_id = v_location_id and is_primary and enabled
+   limit 1;
+
+  if v_pipeline_id is not null then
+    -- Scoped to the board: an unscoped probe finds a deal on ANY board and
+    -- then silently creates nothing for the board we actually care about.
+    select id into v_deal_id
+      from deals
+     where contact_id = v_contact_id and status = 'open'
+       and pipeline_id = v_pipeline_id
+     limit 1;
+
+    if v_deal_id is null then
+      -- Entry column = lowest live display_order on THAT board, not a
+      -- hardcoded 'new_lead': a manual board (Hatch's waitlist) has no such
+      -- slug, and a hardcoded lookup would insert a null stage_id that
+      -- renders on no column at all. archived=false is load-bearing — mig 239
+      -- archived nine legacy stages still sitting at display_order 1-9.
+      select id into v_stage_id
+        from pipeline_stages
+       where pipeline_id = v_pipeline_id and archived = false
+       order by display_order
+       limit 1;
+
+      if v_stage_id is not null then
+        insert into deals (contact_id, title, status, stage_id, location_id, pipeline_id)
+        values (v_contact_id, 'Booked: ' || coalesce(v_event_name, 'Event'),
+                'open', v_stage_id, v_location_id, v_pipeline_id)
+        returning id into v_deal_id;
+      end if;
+    end if;
+  end if;
+```
+
+Declare `v_pipeline_id uuid` and `v_pipeline_mode text` alongside the existing declarations.
+
+**A booking may create a deal on a manual board, and that is correct.** The rule is that automatic *entry* into column 1 is allowed — it is exactly how the waitlist form works — while automatic *movement* is not. `v_pipeline_mode` is selected so a future reader can see the distinction was considered; it deliberately does not gate the insert.
+
+Note the whole block is now conditional: a location with no enabled primary board creates no deal and the booking still succeeds, with its contact and activity intact. Losing a bookkeeping deal is strictly better than failing a customer's booking.
+
+- [ ] **Step 2: apply and verify**
+
+Apply via MCP, then confirm the function no longer contains the literal `'new_lead'` and does insert `pipeline_id`:
+
+```sql
+select pg_get_functiondef('public.handle_new_booking'::regproc) ilike '%pipeline_id%' as sets_pipeline,
+       pg_get_functiondef('public.handle_new_booking'::regproc) ilike '%new_lead%'    as still_hardcodes;
+```
+
+Expected: `sets_pipeline = true`, `still_hardcodes = false`.
+
+- [ ] **Step 3: prove it end to end**
+
+Insert a booking for a brand-new email at Stillorgan, confirm exactly one deal is created carrying the acquisition board's `pipeline_id` and a non-null `stage_id`, then delete the test rows. A trigger this load-bearing should not ship on inspection alone.
+
+---
+
 ## Task 6: Board tabs come from pipelines
 
 **Files:**
