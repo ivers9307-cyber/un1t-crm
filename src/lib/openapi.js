@@ -6676,6 +6676,19 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'get',
+  path: '/api/approvals/count',
+  tags: ['Approvals'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Count of pending approvals visible to the caller (sidebar badge)',
+  description: 'NAV-BADGE.1 — the Approvals sidebar badge. Delegates to getPendingApprovalsCount, which fans out over every registered approvals provider applying each provider\'s own isVisible + role/location scoping, so the number is definitionally what GET /api/approvals/pending would render for the same caller. No permission gate and no active-location requirement: the sidebar polls this for every authenticated session (approvals span locations, so a client-side gate would hide real work), and a session with no approver authority gets a quiet 0 rather than a 403. Known limitation: a provider that throws is scored 0 by getPendingApprovalsCount, so one broken provider silently under-counts.',
+  responses: {
+    200: { description: '{ count }', content: { 'application/json': { schema: SuccessResponse(z.object({ count: z.number() })) } } },
+    401: { description: 'Unauthenticated', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
   path: '/api/home-queue/count',
   tags: ['Dashboard'],
   security: [{ CookieAuth: [] }],
