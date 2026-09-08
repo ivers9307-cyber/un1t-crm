@@ -19,7 +19,10 @@ export default function OfferPanel({ offer, onEdit }) {
   const href = offer.cta_url || ''
   return (
     <div className="lp-reveal lp-d1 rounded-2xl bg-white text-black p-8 md:p-10 flex flex-col">
-      <div className="flex items-start justify-between gap-4 mb-8">
+      {/* Wraps on narrow screens: the chip is shrink-0, so without
+          flex-wrap it overflowed the panel by ~64px at 376px and the
+          section's overflow-hidden clipped "19 SEPTEMBER" off the end. */}
+      <div className="flex flex-wrap items-start justify-between gap-3 mb-8">
         <div className="flex items-center gap-4">
           <span className="h-px w-10 bg-black/25" aria-hidden="true" />
           <span className="text-[11px] uppercase tracking-[0.35em] font-semibold text-black/45">
