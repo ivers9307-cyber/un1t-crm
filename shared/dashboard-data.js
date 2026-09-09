@@ -15,6 +15,14 @@
 import { upcomingWeeksBounds, summariseShifts } from './roster-month.js'
 import { pctDelta, sumCampaignRows, shapeFunnel, FUNNEL_SLUGS } from './dashboard-metrics.js'
 
+// ROSTER-FIX.1 — "this assignment still puts a coach on the block".
+// Inlined rather than imported: `shared/` is the mobile seam and cannot
+// import from `src/lib`. Keep in step with isLiveAssignment (src/lib/roster.js)
+// — only `cancelled` is dead; a missing status is a legacy live row.
+// Every assignment reader in this module goes through it so a dropped shift
+// cannot be counted by one fetcher and ignored by the next.
+const isLiveRow = (a) => a?.status !== 'cancelled'
+
 // ============================================================
 // Date helpers (shared across all three fetchers)
 // ============================================================
@@ -297,11 +305,7 @@ export async function fetchUnstaffedBlocksThisWeek(supabase, locationIds) {
 
   if (error) return { success: false, error: error.message }
 
-  // Inlined rather than imported: `shared/` is the mobile seam and cannot
-  // import from `src/lib`. Keep in step with isLiveAssignment (src/lib/roster.js)
-  // — only `cancelled` is dead; a missing status is a legacy live row.
-  const live = (a) => a?.status !== 'cancelled'
-  const empty = (data || []).filter(b => (b.shift_assignments || []).filter(live).length === 0)
+  const empty = (data || []).filter(b => (b.shift_assignments || []).filter(isLiveRow).length === 0)
   const byLocation = {}
   for (const b of empty) {
     byLocation[b.location_id] = (byLocation[b.location_id] || 0) + 1
@@ -698,8 +702,11 @@ export async function fetchTodayOps(supabase, locationId, now = new Date()) {
       .gte('starts_at', dayStart.toISOString())
       .lte('starts_at', dayEnd.toISOString())
       .is('cancelled_at', null),
+    // ROSTER-FIX.1 — `status` rides along so staffToday can drop cancelled
+    // rows. Without it an approved swap-drop still counted its coach as
+    // working today, so the Today strip reported a body that isn't in.
     supabase.from('shift_blocks')
-      .select('id, shift_assignments(profile_id)')
+      .select('id, shift_assignments(profile_id, status)')
       .eq('location_id', locationId).eq('block_date', todayIso)
       .limit(200),
     fetchDashboardShifts(supabase, {
@@ -712,7 +719,7 @@ export async function fetchTodayOps(supabase, locationId, now = new Date()) {
   if (e4) return { success: false, error: e4.message }
 
   const staffToday = new Set()
-  for (const b of blocks || []) for (const a of b.shift_assignments || []) if (a.profile_id) staffToday.add(a.profile_id)
+  for (const b of blocks || []) for (const a of (b.shift_assignments || []).filter(isLiveRow)) if (a.profile_id) staffToday.add(a.profile_id)
   let labourCents = 0
   let hours = 0
   for (const s of weekShifts || []) {

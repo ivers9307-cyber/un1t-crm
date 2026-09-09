@@ -6,7 +6,7 @@
 // in the phase 4 panel.
 
 import { describe, it, expect, vi } from 'vitest'
-import { fetchIncompletePayProfiles, fetchPendingRosterApprovalsCount, paginatedSumCents, fetchAdsSummary, fetchStudioDashboardData, fetchPersonalDashboardData, fetchUnstaffedBlocksThisWeek } from './dashboard-data'
+import { fetchIncompletePayProfiles, fetchPendingRosterApprovalsCount, paginatedSumCents, fetchAdsSummary, fetchStudioDashboardData, fetchPersonalDashboardData, fetchUnstaffedBlocksThisWeek, fetchTodayOps } from './dashboard-data'
 
 function mockSupabaseFor(rows) {
   return {
@@ -467,5 +467,42 @@ describe('fetchUnstaffedBlocksThisWeek — cancelled assignments', () => {
     const res = await fetchUnstaffedBlocksThisWeek(db, ['loc-1', 'loc-2'])
     expect(res.data.count).toBe(1)
     expect(res.data.byLocation).toEqual({ 'loc-2': 1 })
+  })
+})
+
+// ROSTER-FIX.1 — the Today strip's staffToday counted every assignment row on
+// today's blocks, cancelled ones included, so an approved swap-drop still
+// reported a coach as in today. Same `live` predicate as the unstaffed-blocks
+// alert above (isLiveRow), which is why both now share one definition.
+describe('fetchTodayOps — staffToday ignores cancelled assignments', () => {
+  function makeTodayDb(blocks) {
+    return {
+      from(table) {
+        const response = table === 'shift_blocks'
+          ? { data: blocks, error: null }
+          : table === 'shift_assignments'
+            ? { data: [], error: null }
+            : { count: 0, error: null }
+        return chainableBuilder(response)
+      },
+    }
+  }
+
+  it('counts only live assignees, and dedupes a coach on two blocks', async () => {
+    const db = makeTodayDb([
+      { id: 'b1', shift_assignments: [
+        { profile_id: 'coach-live', status: 'scheduled' },
+        { profile_id: 'coach-dropped', status: 'cancelled' },
+      ] },
+      // A swapped row is a real shift owned by the taker, and a statusless
+      // legacy row is live — both count. coach-live is on both blocks.
+      { id: 'b2', shift_assignments: [
+        { profile_id: 'coach-live', status: 'swapped' },
+        { profile_id: 'coach-legacy' },
+      ] },
+    ])
+    const res = await fetchTodayOps(db, 'loc-1')
+    expect(res.success).toBe(true)
+    expect(res.data.staffToday).toBe(2)
   })
 })
