@@ -24,6 +24,22 @@ describe('effShiftStart / effShiftEnd', () => {
     expect(effShiftStart({ ...base, start_time_override: '10:00:00' })).toBe('10:00:00')
     expect(effShiftEnd({ ...base, end_time_override: '12:30:00' })).toBe('12:30:00')
   })
+  // ROSTER-FIX.1 — the API row carries the block's own time; a block moved off
+  // its template's hours must read and sort at the time it is actually worked.
+  it('prefers the block time over the template default, and the override over both', () => {
+    const row = {
+      start_time_override: null,
+      end_time_override: null,
+      block_start_time: '09:30:00',
+      block_end_time: '13:30:00',
+      shift_templates: { start_time: '09:00:00', end_time: '13:00:00' },
+    }
+    expect(effShiftStart(row)).toBe('09:30:00')
+    expect(effShiftEnd(row)).toBe('13:30:00')
+    expect(effShiftStart({ ...row, start_time_override: '10:15:00' })).toBe('10:15:00')
+    expect(effShiftEnd({ ...row, end_time_override: '12:45:00' })).toBe('12:45:00')
+  })
+
   it('returns null when there is no time at all', () => {
     expect(effShiftStart({})).toBeNull()
     expect(effShiftEnd(null)).toBeNull()
