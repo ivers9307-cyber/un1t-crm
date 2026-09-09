@@ -10,6 +10,7 @@ import { sendPushOnce, sendPushToRolesAtLocationOnce } from '@/lib/push-dedup'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { APPROVAL_CATEGORY_PERMISSION } from '@shared/permissions'
+import { logRosterChange } from '@/lib/roster-change-log'
 
 const SwapReviewSchema = z.object({
   status: swapStatusSchema,
@@ -33,8 +34,12 @@ export async function PUT(request, props) {
   // Only profile_id is read off the embeds for the reciprocal-swap reassign;
   // the nested block embed carries block_date for the decision push (mobile
   // week-preselects the schedule tab on it).
+  // ROSTER-FIX.1 (D4) — the block embed also carries id / location_id and the
+  // roster status because an approved DROP has to write its roster_change_log
+  // row from THIS in-memory copy: the delete cascades the swap row away, so
+  // nothing can be re-read afterwards.
   const { data: swap } = await db.from('shift_swap_requests')
-    .select('*, requester_shift:shift_assignments!requester_shift_id(id, profile_id, block_id, block:shift_blocks!block_id(block_date)), target_shift:shift_assignments!target_shift_id(id, profile_id, block_id)')
+    .select('*, requester_shift:shift_assignments!requester_shift_id(id, profile_id, block_id, block:shift_blocks!block_id(id, location_id, block_date, rosters:roster_id(status))), target_shift:shift_assignments!target_shift_id(id, profile_id, block_id)')
     .eq('id', params.id)
     .single()
 
@@ -70,6 +75,30 @@ export async function PUT(request, props) {
 
   // Assignment writes are awaited so a failure surfaces.
   for (const op of decision.assignmentOps) {
+    // ROSTER-FIX.1 (D4) — audit the drop BEFORE the row goes. The delete
+    // cascades this swap row away (mig 237), so after it there is no swap and
+    // no embed left to describe what happened; the only trace of a coach
+    // losing a shift would be its absence.
+    if (op.delete) {
+      const block = swap.requester_shift?.block
+      // ROSTER-FIX.1 — isPublished is passed TRUE unconditionally, unlike
+      // every other logRosterChange caller. logRosterChange no-ops on a draft
+      // roster because a draft edit rides the first-publish notification, but
+      // a drop is a DELETE: on a draft there is no other record that the
+      // assignment ever existed. The real roster status rides in details so a
+      // reader can still tell the two apart (and re-publish notification
+      // stays correct — the coach is notified either way).
+      await logRosterChange(db, {
+        isPublished: true,
+        locationId: block?.location_id || swap.location_id,
+        blockId: block?.id || swap.requester_shift?.block_id || null,
+        blockDate: block?.block_date || null,
+        actorId: user.id,
+        coachId: swap.requester_shift?.profile_id || swap.requester_id,
+        action: 'unassigned',
+        details: { via: 'swap_drop', swap_id: swap.id, roster_status: block?.rosters?.status ?? null },
+      })
+    }
     const q = op.delete
       ? db.from('shift_assignments').delete().eq('id', op.id)
       : db.from('shift_assignments').update(op.set).eq('id', op.id)

@@ -1,0 +1,159 @@
+// ROSTER-FIX.1 (D4) — route-level contract test for
+// PUT /api/schedule/swaps/[id], the approved-DROP path.
+//
+// A drop DELETES the requester's shift_assignments row, and mig 237's
+// `requester_shift_id ... ON DELETE CASCADE` takes this swap row with it. So
+// the audit row and the swap-row stamp both have to happen BEFORE the delete
+// — after it there is nothing left to read. These tests lock that ordering
+// and the roster_change_log payload.
+//
+// Supabase + auth + push are mocked (the mock pattern is the one in
+// src/app/api/schedule/blocks/[id]/assignments/route.test.js); the swap
+// resolver itself is real, so the drop branch is exercised for real.
+
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
+vi.mock('@/lib/auth', () => ({
+  getCurrentUser: vi.fn(),
+  getUserLocationIds: vi.fn(() => ['loc-1']),
+}))
+vi.mock('@/lib/permissions', () => ({ hasPermissionForLocation: vi.fn(() => true) }))
+vi.mock('@/lib/push-dedup', () => ({
+  sendPushOnce: vi.fn().mockResolvedValue(undefined),
+  sendPushToRolesAtLocationOnce: vi.fn().mockResolvedValue(undefined),
+}))
+vi.mock('@/lib/roster-change-log', () => ({ logRosterChange: vi.fn().mockResolvedValue({ logged: true }) }))
+
+const { createServerClient } = await import('@/lib/supabase')
+const { getCurrentUser } = await import('@/lib/auth')
+const { logRosterChange } = await import('@/lib/roster-change-log')
+const { PUT } = await import('./route.js')
+
+const MANAGER = { id: 'mgr-1', role: 'manager', full_name: 'Manny Manager' }
+const REQUESTER = 'coach-1'
+const PROPS = { params: Promise.resolve({ id: 'swap-1' }) }
+
+function req(body) {
+  return { json: () => Promise.resolve(body), headers: { get: () => '' } }
+}
+
+// A drop swap: no target_shift_id and no target_id, so the resolver's
+// approve branch returns assignmentOps: [{ id, delete: true }].
+function dropSwap(rosterStatus = 'published') {
+  return {
+    id: 'swap-1',
+    status: 'pending',
+    location_id: 'loc-1',
+    requester_id: REQUESTER,
+    requester_shift_id: 'assign-1',
+    target_shift_id: null,
+    target_id: null,
+    requester_shift: {
+      id: 'assign-1',
+      profile_id: REQUESTER,
+      block_id: 'block-1',
+      block: {
+        id: 'block-1',
+        location_id: 'loc-1',
+        block_date: '2026-06-10',
+        rosters: rosterStatus ? { status: rosterStatus } : null,
+      },
+    },
+    target_shift: null,
+  }
+}
+
+// Records every write in `calls` so a test can assert the ordering the
+// CASCADE forces on us.
+function buildDb(swap, calls) {
+  return {
+    from: (table) => {
+      if (table === 'shift_swap_requests') {
+        return {
+          select: () => ({
+            eq: () => ({ single: () => Promise.resolve({ data: swap, error: null }) }),
+          }),
+          update: (patch) => ({
+            eq: () => ({
+              select: () => ({
+                single: () => {
+                  calls.push('swap_update')
+                  return Promise.resolve({ data: { ...swap, ...patch }, error: null })
+                },
+              }),
+            }),
+          }),
+        }
+      }
+      if (table === 'shift_assignments') {
+        return {
+          delete: () => ({
+            eq: (col, val) => {
+              calls.push(`assignment_delete:${col}=${val}`)
+              return Promise.resolve({ error: null })
+            },
+          }),
+        }
+      }
+      throw new Error(`unexpected table ${table}`)
+    },
+  }
+}
+
+beforeEach(() => {
+  createServerClient.mockReset()
+  getCurrentUser.mockReset()
+  logRosterChange.mockClear()
+  logRosterChange.mockResolvedValue({ logged: true })
+})
+
+describe('PUT /api/schedule/swaps/[id] — approved drop audit', () => {
+  it('writes one roster_change_log row for the dropped shift', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const calls = []
+    createServerClient.mockReturnValue(buildDb(dropSwap('published'), calls))
+
+    const res = await PUT(req({ status: 'approved' }), PROPS)
+    const json = await res.json()
+    expect(res.status).toBe(200)
+    expect(json.success).toBe(true)
+
+    expect(logRosterChange).toHaveBeenCalledTimes(1)
+    const [, change] = logRosterChange.mock.calls[0]
+    expect(change.action).toBe('unassigned')
+    expect(change.coachId).toBe(REQUESTER)
+    expect(change.actorId).toBe(MANAGER.id)
+    expect(change.locationId).toBe('loc-1')
+    expect(change.blockId).toBe('block-1')
+    expect(change.blockDate).toBe('2026-06-10')
+    expect(change.details.via).toBe('swap_drop')
+    expect(change.details.swap_id).toBe('swap-1')
+  })
+
+  it('stamps the swap row, then audits, then deletes the assignment', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const calls = []
+    createServerClient.mockReturnValue(buildDb(dropSwap('published'), calls))
+    logRosterChange.mockImplementation(async () => { calls.push('roster_change_log'); return { logged: true } })
+
+    await PUT(req({ status: 'approved' }), PROPS)
+
+    expect(calls).toEqual(['swap_update', 'roster_change_log', 'assignment_delete:id=assign-1'])
+  })
+
+  it('audits a drop on a DRAFT roster too, recording the real roster status', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const calls = []
+    createServerClient.mockReturnValue(buildDb(dropSwap('draft'), calls))
+
+    await PUT(req({ status: 'approved' }), PROPS)
+
+    expect(logRosterChange).toHaveBeenCalledTimes(1)
+    const [, change] = logRosterChange.mock.calls[0]
+    // isPublished is forced true: logRosterChange would otherwise no-op on a
+    // draft, and a DELETE leaves no other trace that the shift existed.
+    expect(change.isPublished).toBe(true)
+    expect(change.details.roster_status).toBe('draft')
+  })
+})
