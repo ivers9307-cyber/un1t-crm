@@ -16,6 +16,44 @@
 // override-free callers (assistant create_shift) this distinction is moot.
 
 import { findPublishedRosterFor } from './roster'
+import { logWarn } from './log'
+
+/**
+ * ROSTER-FIX.4 — the published rosters covering ANY date in [minDate, maxDate]
+ * at this location, most recently published first.
+ *
+ * The batch writer used to call findPublishedRosterFor() once per distinct
+ * date, which is a copy-month's worth of round trips (up to 31) to answer a
+ * question one range query answers. Same rule as the single-row helper, just
+ * resolved in JS: rows come back ordered so the FIRST match for a date wins.
+ *
+ * Fails SOFT, exactly as findPublishedRosterFor does — a lost probe leaves the
+ * new blocks unattached (visible to managers, not yet to staff), where failing
+ * the whole copy-week would lose the operator's work outright.
+ *
+ * @returns {Promise<Array<{id: string, period_start: string, period_end: string}>>}
+ */
+async function publishedRostersCovering(db, locationId, minDate, maxDate) {
+  const { data, error } = await db
+    .from('rosters')
+    .select('id, period_start, period_end')
+    .eq('location_id', locationId)
+    .eq('status', 'published')
+    // Overlap, not containment: a roster covers SOME date in the span iff it
+    // starts on or before the last one and ends on or after the first.
+    .lte('period_start', maxDate)
+    .gte('period_end', minDate)
+    // Most recently PUBLISHED wins — a re-publish or a widening month is the
+    // roster that now owns those days. published_at can be null on older rows,
+    // so they sort last and created_at breaks the tie.
+    .order('published_at', { ascending: false, nullsFirst: false })
+    .order('created_at', { ascending: false })
+  if (error) {
+    logWarn('roster-write', 'published roster lookup failed', { err: error.message, locationId, minDate, maxDate })
+    return []
+  }
+  return data || []
+}
 
 /**
  * Find-or-create the block for (location, template, date), then upsert the
@@ -192,18 +230,22 @@ export async function bulkUpsertShiftAssignments(db, { locationId, actorId = nul
   // 3. Create blocks for the slots that don't exist yet (template defaults).
   const neededKeys = new Set(rows.map((r) => `${r.shiftTemplateId}|${r.shiftDate}`))
   const toCreate = []
-  // ROSTER-FIX.4 — same rule as upsertShiftAssignment: a block created
-  // inside an already-published period joins that roster, or copy-week
-  // silently produces shifts no coach can see. Resolved once per distinct
-  // DATE (several templates share a day), not once per row.
-  const rosterIdByDate = new Map()
-  for (const key of neededKeys) {
-    if (blockIdByKey.has(key)) continue
+  // ROSTER-FIX.4 — same rule as upsertShiftAssignment: a block created inside
+  // an already-published period joins that roster, or copy-week silently
+  // produces shifts no coach can see. Resolved for the WHOLE span in one query
+  // (the block lookup above already reads that span) and matched per date in
+  // JS — a copy-month was otherwise firing up to 31 identical-shaped probes.
+  const missingKeys = [...neededKeys].filter((key) => !blockIdByKey.has(key))
+  const candidateRosters = missingKeys.length > 0
+    ? await publishedRostersCovering(db, locationId, minDate, maxDate)
+    : []
+  // Ordered most-recently-published first, so the first row covering the date
+  // is the roster that owns it.
+  const rosterIdFor = (date) => candidateRosters
+    .find((r) => r.period_start <= date && r.period_end >= date)?.id ?? null
+  for (const key of missingKeys) {
     const [templateId, blockDate] = key.split('|')
     const tpl = tplById.get(templateId)
-    if (!rosterIdByDate.has(blockDate)) {
-      rosterIdByDate.set(blockDate, await findPublishedRosterFor(db, locationId, blockDate))
-    }
     toCreate.push({
       location_id: locationId,
       template_id: templateId,
@@ -211,7 +253,7 @@ export async function bulkUpsertShiftAssignments(db, { locationId, actorId = nul
       start_time: tpl.start_time,
       end_time: tpl.end_time,
       max_coaches: tpl.max_coaches ?? 15,
-      roster_id: rosterIdByDate.get(blockDate),
+      roster_id: rosterIdFor(blockDate),
       created_by: actorId,
     })
   }
