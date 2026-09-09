@@ -24,21 +24,32 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { ChevronLeft, ChevronRight, Copy, Send, Plus, Users, User, Clock, X, ArrowLeftRight, CalendarOff, Palmtree, ThermometerSun, Ban, AlertTriangle, AlertCircle, CalendarDays, CalendarRange, Pencil, Check, Settings } from 'lucide-react'
 import Link from 'next/link'
 import { useRouter, usePathname, useSearchParams } from 'next/navigation'
-import { computeWeeklyCost } from '@/lib/payroll'
 import { indexByDate } from '@/lib/bank-holidays'
-import { MANAGER_ROLES, ADMIN_ROLES } from '@/lib/schemas'
-import { isBlockUnstaffedFuture as libUnstaffed, liveAssignments, getMonthStart, monthStartForWeek, weekStartForMonth, periodsOverlap, periodCovers } from '@/lib/roster'
+import { MANAGER_ROLES } from '@/lib/schemas'
+// ROSTER-FIX.6c — getMonday / addDays / formatDate were re-implemented here,
+// byte-for-byte, beside the lib copies this file already imported from. One
+// definition now: a change to the local-day rule cannot land on the server
+// and miss the calendar.
+import { addDays, formatDate, getMonday, isBlockUnstaffedFuture as libUnstaffed, liveAssignments, getMonthStart, monthStartForWeek, weekStartForMonth, periodsOverlap, periodCovers } from '@/lib/roster'
 // ROSTER-FIX.4 — the server refuses a publish that would leave two published
 // rosters over the same days. `overlapping_roster` is a code, not copy; the
 // sentence it becomes is shared with the approvals queue so one refusal reads
 // the same wherever the operator meets it.
 import { OVERLAP_ERROR, overlapMessage } from '@/lib/roster-overlap-message'
+// ROSTER-FIX.6c — this file had its own copy of this flattener
+// (flattenBlocksToShifts), which is now the exported lib one; see the note on
+// it for which of the two behaviours survived the merge.
+import { blocksToShiftRows } from '@/lib/roster-summary'
+// ROSTER-FIX.6c — the 12-hour shift label, previously a local copy here and
+// two more in the manager screens. NOT fmtTime: see the note beside it.
+import { coachConflictsForBlock, formatTime12h as formatTime } from '@/lib/schedule-overlap'
 import Modal from '@/components/ui/Modal'
 import RosterSummaryPanel from './RosterSummaryPanel'
 import ScheduleErrorBanner from './schedule/ScheduleErrorBanner'
 // ROSTER-FIX.6a — the six-endpoint fan-out, its error handling and its
 // request-ordering guard live in the hook now; see its header for why.
 import { useScheduleData } from './schedule/useScheduleData'
+import { useWeekCost } from './schedule/useWeekCost'
 
 const TIME_OFF_CONFIG = {
   holiday:     { label: 'Holiday',     color: '#22C55E', icon: Palmtree },
@@ -52,26 +63,6 @@ const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 const TOAST_TTL_MS = 6000
 const canManage = (role) => MANAGER_ROLES.includes(role)
 
-function getMonday(date) {
-  const d = new Date(date)
-  const day = d.getDay()
-  const diff = d.getDate() - day + (day === 0 ? -6 : 1)
-  d.setDate(diff)
-  d.setHours(0, 0, 0, 0)
-  return d
-}
-
-// Local calendar-day formatter. toISOString() would shift to UTC and
-// move Monday-at-local-midnight back to Sunday's date in any tz east
-// of UTC (Ireland BST = +1) — Monday column then keys off Sunday and
-// no blocks match. Mirror src/lib/roster.js#formatDate.
-function formatDate(date) {
-  const y = date.getFullYear()
-  const m = String(date.getMonth() + 1).padStart(2, '0')
-  const d = String(date.getDate()).padStart(2, '0')
-  return `${y}-${m}-${d}`
-}
-
 // Inverse of formatDate — parse a YYYY-MM-DD URL param into a local
 // Date at midnight. Critical for SCHEDULE-PERSIST.1: `new Date('2026-
 // 05-20')` parses as UTC midnight which becomes 01:00 Sunday in BST
@@ -82,12 +73,6 @@ function parseLocalDate(s) {
   const [y, m, d] = s.split('-').map(Number)
   const dt = new Date(y, m - 1, d)
   return Number.isNaN(dt.getTime()) ? null : dt
-}
-
-function addDays(date, days) {
-  const d = new Date(date)
-  d.setDate(d.getDate() + days)
-  return d
 }
 
 function addMonths(date, months) {
@@ -102,15 +87,6 @@ function getMonthGridRange(monthStart) {
   return { start, end }
 }
 
-function formatTime(time) {
-  if (!time) return ''
-  const [h, m] = time.split(':')
-  const hour = parseInt(h)
-  const suffix = hour >= 12 ? 'pm' : 'am'
-  const display = hour > 12 ? hour - 12 : hour === 0 ? 12 : hour
-  return m === '00' ? `${display}${suffix}` : `${display}:${m}${suffix}`
-}
-
 // Roster v2: a block is "unstaffed" when it has zero assignments
 // AND its date is today or later. Past blocks may legitimately
 // have empty assignments (coaches called out, never replaced) —
@@ -122,36 +98,6 @@ function formatTime(time) {
 // lib definition and count live rows only.
 function isBlockUnstaffedFuture(block, todayStr) {
   return libUnstaffed(block, liveAssignments(block.shift_assignments).length, todayStr)
-}
-
-// Adapter — flatten a list of blocks-with-assignments into the
-// legacy shift-row shape. Used by the payroll cost calculator
-// (which expects one row per coach-day) without rewriting it.
-function flattenBlocksToShifts(blocks) {
-  const rows = []
-  for (const block of blocks) {
-    const tpl = block.shift_templates || {}
-    // ROSTER-FIX.1 — cancelled rows are not shifts; the payroll cost
-    // calculator downstream must not bill them.
-    for (const a of liveAssignments(block.shift_assignments)) {
-      rows.push({
-        id: a.id,
-        block_id: block.id,
-        location_id: block.location_id,
-        profile_id: a.profile_id,
-        shift_template_id: block.template_id,
-        shift_date: block.block_date,
-        start_time_override: block.start_time !== tpl.start_time ? block.start_time : null,
-        end_time_override: block.end_time !== tpl.end_time ? block.end_time : null,
-        role_label: tpl.role_label || null,
-        notes: a.notes || block.notes || null,
-        status: a.status,
-        shift_templates: tpl,
-        profiles: a.profiles,
-      })
-    }
-  }
-  return rows
 }
 
 export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) {
@@ -345,12 +291,6 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
 
   const locationId = user.activeLocation?.id
   const isManager = canManage(user.role)
-  // SCHEDULE-SPEND-AGG.1 — admin roles see HR-sensitive pay data
-  // client-side; head_coach + manager-but-not-admin do not (the
-  // /api/staff slim payload). Drives the "pay data missing"
-  // warning in RosterSummaryPanel — silenced for non-admins where
-  // the warning would fire on every coach (uselessly).
-  const canSeePay = ADMIN_ROLES.includes(user.role)
   const todayStr = formatDate(new Date())
 
   const weekEnd = addDays(weekStart, 6)
@@ -408,6 +348,15 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
     endDate: rangeEnd,
     spendReferenceDate: formatDate(monthStart),
   })
+  // ROSTER-FIX.6c — its own hook, not a seventh slice of the fan-out above: a
+  // summary panel must not be able to take the roster down with it. See its
+  // header. Manager-gated on the client too, so a coach's calendar never fires
+  // a request the route would answer 403 anyway.
+  const { weekCost, refreshWeekCost } = useWeekCost({
+    locationId,
+    weekStart: formatDate(weekStart),
+    enabled: isManager,
+  })
   // Dismissed separately from the hook's own state so the operator can clear a
   // banner without it reappearing until the next failure.
   const [errorDismissed, setErrorDismissed] = useState(false)
@@ -424,6 +373,9 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
   // a redundant overview fetch.
   const refreshAfterMutation = useCallback(async (opts = {}) => {
     await fetchData()
+    // ROSTER-FIX.6c — the hours panel used to be derived from `blocks`, so it
+    // moved on its own. It is a separate fetch now and has to be told.
+    refreshWeekCost()
     onDataChange?.()
     // Every edit marks the VISIBLE period dirty so the exit guard fires until
     // the operator publishes that period. Publish opts out (markDirty: false)
@@ -431,7 +383,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
     if (opts.markDirty !== false) {
       setDirtyPeriods((prev) => new Set(prev).add(visiblePeriodKey))
     }
-  }, [fetchData, onDataChange, visiblePeriodKey])
+  }, [fetchData, refreshWeekCost, onDataChange, visiblePeriodKey])
 
   // ROSTER-FIX.6a — switching location swaps the whole roster out from under
   // the guard; the old location's unpublished edits are no longer reachable
@@ -486,11 +438,11 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
     return dayBlocks
   })
 
-  // Legacy-shape shifts for the payroll calculator + the swap-request
-  // modal. flatShifts[].id is the shift_assignment id, which is exactly
-  // what POST /api/schedule/swaps now wants as requester_shift_id
-  // (RETIRE-SHIFTS-MIRROR.5c).
-  const flatShifts = flattenBlocksToShifts(blocks)
+  // Legacy-shape shifts for the swap-request modal. flatShifts[].id is the
+  // shift_assignment id, which is exactly what POST /api/schedule/swaps wants
+  // as requester_shift_id (RETIRE-SHIFTS-MIRROR.5c). The payroll calculator was
+  // the other consumer until ROSTER-FIX.6c moved it to the server.
+  const flatShifts = blocksToShiftRows(blocks)
 
   // Unstaffed-block count for the publish toolbar — surfaces "you
   // still have empty slots" as a friction signal before publishing.
@@ -1008,20 +960,16 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
         </div>
       )}
 
-      {/* Overtime warning panel */}
+      {/* Overtime warning panel.
+          ROSTER-FIX.6c — the arithmetic ran HERE, over annual_salary /
+          hourly_rate / overtime_rate fetched from /api/staff, to render a panel
+          that prints no money at all. It comes off /api/schedule/week-cost now:
+          hours in the payload, rates never leaving the server. The endpoint is
+          scoped to one Mon-Sun week, which is what the caption underneath has
+          always claimed — the browser version summed whatever range was loaded,
+          so in month view it billed six weeks against a weekly contract. */}
       {!loading && canManage(user.role) && (() => {
-        const summaries = locationStaff
-          .filter(s => s.employment_type === 'fte' && (s.contracted_hours_per_week || 0) > 0)
-          .map(s => {
-            const own = flatShifts.filter(sh => sh.profile_id === s.id)
-            const cost = computeWeeklyCost({ shifts: own, profile: s })
-            return { staff: s, cost }
-          })
-          .filter(({ cost }) => cost.actual_hours > 0)
-
-        const overOrAt = summaries.filter(({ cost }) =>
-          cost.actual_hours >= cost.contracted_hours
-        )
+        const overOrAt = (weekCost?.coaches || []).filter((c) => c.status !== 'under')
         if (overOrAt.length === 0) return null
 
         return (
@@ -1030,22 +978,22 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
               <AlertTriangle size={16} /> Weekly hours notice
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
-              {overOrAt.map(({ staff: s, cost }) => {
-                const isOver = cost.over_threshold
+              {overOrAt.map((c) => {
+                const isOver = c.over_threshold
                 return (
                   <div
-                    key={s.id}
+                    key={c.profile_id}
                     className={`text-xs rounded-md px-2.5 py-1.5 border ${isOver
                       ? 'border-amber-500/40 bg-amber-500/10 text-amber-700'
                       : 'border-un1t-border bg-un1t-surface/40 text-un1t-subtle'
                     }`}
                   >
-                    <span className="font-medium text-un1t-text">{s.full_name}</span>
+                    <span className="font-medium text-un1t-text">{c.full_name}</span>
                     {' — '}
-                    <span>{cost.actual_hours.toFixed(1)}h / {cost.contracted_hours}h</span>
+                    <span>{c.allocated_hours.toFixed(1)}h / {c.contracted_hours}h</span>
                     {isOver && (
                       <span className="ml-1 font-semibold">
-                        +{cost.overtime_hours.toFixed(1)}h OT
+                        +{c.overtime_hours.toFixed(1)}h OT
                       </span>
                     )}
                   </div>
@@ -1440,6 +1388,8 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
       {/* SCHEDULE-SPEND-AGG.1: contractorSpend comes from a server-
           computed aggregate so head_coach sees real totals + over-
           budget signals without being granted hourly_rate visibility. */}
+      {/* ROSTER-FIX.6c: `staff` is the pay-free picker shape now, so no role
+          gets rates here and the canSeePay prop had nothing left to gate. */}
       {!loading && isManager && (
         <RosterSummaryPanel
           blocks={blocks}
@@ -1449,7 +1399,6 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
           location={user.activeLocation}
           timeOff={timeOff}
           contractorSpend={contractorSpend}
-          canSeePay={canSeePay}
         />
       )}
 
@@ -1458,6 +1407,8 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
         <AssignCoachModal
           block={assignTarget.block}
           staff={locationStaff}
+          blocks={blocks}
+          timeOff={timeOff}
           onAssign={(profileIds) => handleAssignCoaches(assignTarget.block.id, profileIds)}
           onClose={() => setAssignTarget(null)}
           // ROSTER-FIX.6b-7 — the Add-coach button that opened this lives in
@@ -1488,7 +1439,6 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
           block={blockDetail}
           user={user}
           isManager={isManager}
-          flatShifts={flatShifts}
           onClose={() => setBlockDetail(null)}
           onAddCoach={() => setAssignTarget({ block: blockDetail })}
           busy={rowBusy}
@@ -1648,7 +1598,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
 // /assignments POST whose response shape lists per-coach outcomes
 // so 'one of these is already assigned' becomes a footnote in the
 // confirmation rather than an interruption.
-function AssignCoachModal({ block, staff, onAssign, onClose, restoreFocusRef }) {
+function AssignCoachModal({ block, staff, blocks, timeOff, onAssign, onClose, restoreFocusRef }) {
   const [selectedIds, setSelectedIds] = useState(() => new Set())
   const [saving, setSaving] = useState(false)
   const tmpl = block.shift_templates || {}
@@ -1708,6 +1658,12 @@ function AssignCoachModal({ block, staff, onAssign, onClose, restoreFocusRef }) 
             <ul className="max-h-72 overflow-y-auto border border-un1t-border rounded-md divide-y divide-un1t-border/50">
               {available.map((s) => {
                 const checked = selectedIds.has(s.id)
+                // ROSTER-FIX.6c — advisory, never a block: the row stays
+                // tickable. A coach really does cover two adjacent slots
+                // sometimes, and the manager staffing the studio is the judge.
+                const { clash, onLeave } = coachConflictsForBlock({
+                  coachId: s.id, block, blocks, timeOff,
+                })
                 return (
                   <li key={s.id}>
                     <label className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-un1t-border/30">
@@ -1717,7 +1673,22 @@ function AssignCoachModal({ block, staff, onAssign, onClose, restoreFocusRef }) 
                         onChange={() => toggle(s.id)}
                         className="accent-un1t-text"
                       />
-                      <span className="text-sm text-un1t-text flex-1">{s.full_name}</span>
+                      <span className="text-sm text-un1t-text flex-1">
+                        {s.full_name}
+                        {onLeave && (
+                          <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded bg-red-500/15 text-red-700 whitespace-nowrap">
+                            on approved leave
+                          </span>
+                        )}
+                        {clash && (
+                          <span
+                            className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 whitespace-nowrap"
+                            title={`Already on ${clash.name}, ${clash.startTime}–${clash.endTime}`}
+                          >
+                            clashes with {clash.startTime} {clash.name}
+                          </span>
+                        )}
+                      </span>
                       <span className="text-[10px] text-un1t-subtle">{s.role}</span>
                     </label>
                   </li>
@@ -2051,7 +2022,7 @@ function SwapModal({ shift, onSubmit, onClose, restoreFocusRef }) {
 // useEffect keeps `block` here in sync with the latest data. So the
 // modal updates live as overrides are saved without a re-mount.
 function BlockDetailModal({
-  block, user, isManager, flatShifts: _flatShifts, busy,
+  block, user, isManager, busy,
   onClose, onAddCoach, onUnassign, onPartialSave, onDeleteBlock, onSwapRequest,
 }) {
   const tmpl = block.shift_templates || {}

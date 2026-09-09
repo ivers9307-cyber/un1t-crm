@@ -16,7 +16,14 @@ export const STAFF_PUBLIC_FIELDS =
 // does, so an admin caller's browser received `*` — hourly_rate,
 // annual_salary and the rest — to populate a dropdown. `?fields=picker`
 // pins this shape for EVERY role, master included.
-export const STAFF_PICKER_FIELDS = 'id, full_name, active, role, avatar_url'
+//
+// ROSTER-FIX.6c — `employment_type` and `contracted_hours_per_week` joined the
+// list when the calendar itself moved onto this shape. The FTE utilisation bars
+// under the roster read both (allocated vs contract), and neither is pay data:
+// they are already in STAFF_PUBLIC_FIELDS, so every role has always received
+// them. The rates — hourly_rate, annual_salary, overtime_rate — stay out.
+export const STAFF_PICKER_FIELDS =
+  'id, full_name, active, role, avatar_url, employment_type, contracted_hours_per_week'
 
 function selectClause(isAdmin, fields) {
   if (fields === 'picker') {
@@ -27,8 +34,17 @@ function selectClause(isAdmin, fields) {
     : `${STAFF_PUBLIC_FIELDS}, profile_locations(location_id, role, locations(id, name, slug))`
 }
 
-export async function listStaffForUser({ db, user, fields }) {
-  const userLocationIds = getUserLocationIds(user)
+// ROSTER-FIX.6c — `locationId` narrows the read to ONE of the caller's
+// locations. Absent (the default) the behaviour is exactly what it always was:
+// every location the caller holds. It is applied by INTERSECTING with the
+// caller's own set rather than replacing it, so this can only ever return less
+// than the unscoped call — a route that forgets `assertLocationAccess` gets an
+// empty list, never another tenant's staff.
+export async function listStaffForUser({ db, user, fields, locationId = null }) {
+  const callerLocationIds = getUserLocationIds(user)
+  const userLocationIds = locationId
+    ? callerLocationIds.filter(id => id === locationId)
+    : callerLocationIds
   if (userLocationIds.length === 0) return { ok: true, data: [] }
 
   const { data: links, error: linksError } = await db

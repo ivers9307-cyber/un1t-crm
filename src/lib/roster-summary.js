@@ -80,21 +80,59 @@ export function leaveHoursInWeek({ timeOff, profileId, weekStart, contractedHour
  * Flatten a list of blocks into one virtual "shift" per (block,
  * assignment). Mirrors the legacy shifts shape just enough that
  * the existing payroll helpers can consume it.
+ *
+ * ROSTER-FIX.6c — exported, and now the ONLY copy. ScheduleCalendar carried a
+ * second one (`flattenBlocksToShifts`) and the new /api/schedule/week-cost
+ * endpoint needs the same rows server-side. The two were not identical, so the
+ * merge had to pick a winner:
+ *
+ *   This one used to set `shift_templates: tpl` with no override, and
+ *   shiftHours() prefers `tpl.start_time` over the row's own `start_time` — so
+ *   it billed the TEMPLATE's window. The calendar's copy set a synthetic
+ *   override whenever the block's times differed from the template's, so it
+ *   billed the BLOCK's window.
+ *
+ *   The calendar's is correct and is what survives. A template edit never
+ *   touches PAST blocks (templates/[id]/route.js says so deliberately: hours
+ *   already worked are not rewritten), so a block whose times differ from its
+ *   template is the normal shape of history, and billing the template's new
+ *   window would restate a week that has already been paid. The only figures
+ *   that move are in exactly that case, and they move toward the roster the
+ *   operator is looking at.
+ *
+ * The extra ids (`id` = the shift_assignments id, `block_id`, `location_id`,
+ * `shift_date`) are what the calendar's swap flow reads off a row; nothing in
+ * this module looks at them.
  */
-function blocksToShiftRows(blocks) {
+export function blocksToShiftRows(blocks) {
   const rows = []
   for (const block of blocks || []) {
     const tpl = block.shift_templates || {}
     // ROSTER-FIX.1 — a cancelled assignment bills nobody's hours.
     for (const a of liveAssignments(block.shift_assignments)) {
       rows.push({
+        id: a.id,
+        block_id: block.id,
+        location_id: block.location_id,
+        profile_id: a.profile_id,
+        shift_template_id: block.template_id,
+        // Two spellings of the same day on purpose: the legacy shift shape the
+        // payroll + swap helpers read says `shift_date`, this module's own
+        // range filter says `block_date`.
+        shift_date: block.block_date,
+        block_date: block.block_date,
         // Either start_time/end_time on the row itself, OR via the
-        // shift_templates shape — both are accepted by shiftHours().
+        // shift_templates shape — both are accepted by shiftHours(), which
+        // reads the override FIRST.
         start_time: block.start_time,
         end_time: block.end_time,
+        start_time_override: block.start_time !== tpl.start_time ? block.start_time : null,
+        end_time_override: block.end_time !== tpl.end_time ? block.end_time : null,
+        role_label: tpl.role_label || null,
+        notes: a.notes || block.notes || null,
+        status: a.status,
         shift_templates: tpl,
-        profile_id: a.profile_id,
-        block_date: block.block_date,
+        profiles: a.profiles,
       })
     }
   }

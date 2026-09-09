@@ -1,13 +1,13 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { listStaffForUser } from '@/lib/staff'
 import { validateBody } from '@/lib/validate'
 import { getAppUrl } from '@/lib/app-url'
 import {
   employmentTypeSchema, money, hours, days, permissionsSchema,
-  assignmentSchema,
+  assignmentSchema, uuidLike,
   OWNER_ASSIGNABLE_ROLES, MASTER_ASSIGNABLE_ROLES,
 } from '@/lib/schemas'
 import { sparsifyAssignmentPermissions } from '@/lib/staff-write'
@@ -54,10 +54,29 @@ export async function GET(request) {
   // `request` may be absent when the handler is invoked directly (the
   // cross-tenant suite calls GET() with no argument) — treat that as the
   // default, full shape rather than throwing.
-  const fields = request?.url && new URL(request.url).searchParams.get('fields') === 'picker' ? 'picker' : null
+  const params = request?.url ? new URL(request.url).searchParams : null
+  const fields = params?.get('fields') === 'picker' ? 'picker' : null
+
+  // ROSTER-FIX.6c — `?location_id=` was ACCEPTED and ignored: callers had been
+  // sending it for months (the roster's colleague picker among them) while
+  // listStaffForUser scoped to every location the caller holds, so a manager at
+  // two studios was offered the other studio's coaches. Optional, so an absent
+  // param keeps the all-locations list every existing caller reads.
+  //
+  // 403 rather than the 404 a detail route would use: the id is the caller's
+  // own query, not a row this route reveals the existence of, so there is
+  // nothing to enumerate and assertLocationAccess's own convention applies.
+  const locationId = params?.get('location_id') || null
+  if (locationId) {
+    if (!uuidLike.safeParse(locationId).success) {
+      return NextResponse.json({ success: false, error: 'Invalid location_id' }, { status: 400 })
+    }
+    const guard = assertLocationAccess(user, locationId)
+    if (guard) return guard
+  }
 
   const db = createServerClient()
-  const result = await listStaffForUser({ db, user, fields })
+  const result = await listStaffForUser({ db, user, fields, locationId })
   if (!result.ok) return NextResponse.json({ success: false, error: result.error }, { status: 400 })
   return NextResponse.json({ success: true, data: result.data })
 }

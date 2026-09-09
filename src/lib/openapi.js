@@ -4322,6 +4322,23 @@ registry.registerPath({
   },
 })
 
+// ROSTER-FIX.6c — the FTE weekly-hours panel's arithmetic, moved off the
+// browser. The panel prints hours, never money, so the payload carries hours
+// and the rates stay on the server.
+registry.registerPath({
+  method: 'get',
+  path: '/api/schedule/week-cost',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'FTE hours against contract for one week (manager-only)',
+  description: "Per-coach allocated hours, contracted hours and overtime for the Mon-Sun week containing week_start, plus week totals. Manager-only (master, owner, manager, head_coach), and scoped by assertLocationAccess — a location outside the caller's assignments is a 403, since location_id is a caller-supplied query param rather than a path id. The response deliberately carries NO rate, salary or euro figure: the calendar used to compute this in the browser from /api/staff pay fields, which put the studio's pay data in every manager's tab to render a panel that only ever showed hours. week_start may be any day inside the target week; it is snapped to that week's Monday.",
+  responses: {
+    200: { description: 'Per-coach hours + week totals' },
+    400: { description: 'Missing or malformed location_id / week_start', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — needs a manager role at that location', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 registry.registerPath({
   method: 'post',
   path: '/api/schedule/time-off',

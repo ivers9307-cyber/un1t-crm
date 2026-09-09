@@ -31,6 +31,8 @@ import { pickLocationColor } from '@shared/location-colors'
 import Modal from '@/components/ui/Modal'
 import Button from '@/components/ui/Button'
 import RequestTimeOffModal from './RequestTimeOffModal'
+import { formatDate } from '@/lib/roster'
+import { shiftHours } from '@/lib/payroll'
 
 // ── Week-mode helpers (moved from today/page.js, byte-identical) ────────────
 
@@ -40,32 +42,21 @@ function shiftTime(shift) {
   return `${start} – ${end}`
 }
 
-function shiftHours(shift) {
-  const start = shift.start_time_override || shift.shift_templates?.start_time
-  const end = shift.end_time_override || shift.shift_templates?.end_time
-  if (!start || !end) return 0
-  const [sh, sm] = start.split(':').map(Number)
-  const [eh, em] = end.split(':').map(Number)
-  let mins = eh * 60 + em - (sh * 60 + sm)
-  if (mins < 0) mins += 24 * 60
-  return Math.round((mins / 60) * 10) / 10
-}
-
-function isoDate(d) {
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
-}
+// ROSTER-FIX.6c — shiftHours and isoDate were local re-implementations of
+// shiftHours (@/lib/payroll) and formatDate (@/lib/roster). payroll's returns
+// UNROUNDED hours where the local one rounded to 1dp, so the rounding moves to
+// the one place that prints it (roundHours below) and the number on screen is
+// unchanged.
+function roundHours(n) { return Math.round(n * 10) / 10 }
 
 function buildWeek(weekStartIso, shifts) {
   const start = new Date(weekStartIso + 'T00:00:00')
-  const todayIso = isoDate(new Date())
+  const todayIso = formatDate(new Date())
   const days = []
   for (let i = 0; i < 7; i++) {
     const d = new Date(start)
     d.setDate(start.getDate() + i)
-    const iso = isoDate(d)
+    const iso = formatDate(d)
     const daysShifts = shifts.filter(s => s.shift_date === iso)
     days.push({
       iso,
@@ -144,7 +135,17 @@ function ShiftActionMenu({ shift, shiftDate, onClose, onDone }) {
     if (colleagues !== null || loadingColleagues) return
     setLoadingColleagues(true)
     try {
-      const res = await fetch(`/api/staff?location_id=${encodeURIComponent(shift.location_id)}`)
+      // ROSTER-FIX.6c — two params, two different defects, one line.
+      // `fields=picker` is the pay-free shape: without it an admin caller's
+      // browser received `*` off `profiles` (hourly_rate, annual_salary,
+      // overtime_rate) to render a list of names, the same leak the calendar
+      // just closed. `location_id` is honoured by the route now: the read
+      // service scopes to ALL of the caller's locations, so a manager at two
+      // studios was offered the other studio's coaches as swap partners for a
+      // shift they cannot work.
+      const res = await fetch(
+        `/api/staff?location_id=${encodeURIComponent(shift.location_id)}&fields=picker`
+      )
       const data = await res.json()
       if (!res.ok || !data.success) {
         setError(data.error || 'Could not load colleagues. Please try again.')
@@ -395,7 +396,7 @@ function WeekPanel({ title, startIso, endIso, shifts, showLocation, onShiftClick
                         </div>
                       </div>
                       <div className={`text-xs flex items-center gap-1.5 flex-wrap ${day.isPast ? 'text-un1t-muted' : 'text-un1t-subtle'}`}>
-                        <span>{shiftTime(s)} · {shiftHours(s)}h</span>
+                        <span>{shiftTime(s)} · {roundHours(shiftHours(s))}h</span>
                         {showLocation && s.locations?.name && (() => {
                           const c = pickLocationColor(s.locations.id || s.location_id)
                           return (
