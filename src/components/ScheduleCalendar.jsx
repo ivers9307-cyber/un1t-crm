@@ -1685,9 +1685,9 @@ function PublishRosterModal({ locationId, isOwner, period, onSubmit, onClose, pu
             dry_run: true,
           }),
         })
-        const data = await res.json()
+        const data = await res.json().catch(() => ({}))
         if (cancelled) return
-        if (!data.success) {
+        if (!res.ok || !data.success) {
           setSubmitResult({
             error: data.error === OVERLAP_ERROR
               ? overlapMessage(data)
@@ -1696,8 +1696,10 @@ function PublishRosterModal({ locationId, isOwner, period, onSubmit, onClose, pu
         } else {
           setImpact(data.impact)
         }
-      } catch (e) {
-        if (!cancelled) setSubmitResult({ error: e.message })
+      } catch {
+        // ROSTER-FIX.6a — this used to print e.message, so a dropped
+        // connection reached the operator as "Failed to fetch".
+        if (!cancelled) setSubmitResult({ error: 'Network error, could not load the budget preview.' })
       } finally {
         if (!cancelled) setLoading(false)
       }
