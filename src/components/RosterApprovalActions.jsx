@@ -11,6 +11,19 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 
+// ROSTER-FIX.4 — approving now runs the publish overlap guard, so approve can
+// come back with `overlapping_roster`. That is a code, not copy: turn it into
+// the sentence the operator can act on rather than alerting a raw error key.
+function approveErrorMessage(data) {
+  if (data?.error !== 'overlapping_roster') return data?.error || 'Approval failed'
+  const ranges = (data.overlapping || [])
+    .map((r) => (r.period_start === r.period_end ? r.period_start : `${r.period_start} to ${r.period_end}`))
+    .join(', ')
+  return ranges
+    ? `Those days are already published as part of ${ranges}. Reject this draft and re-publish that range instead.`
+    : 'Those days are already published as part of another roster. Reject this draft and re-publish that range instead.'
+}
+
 export default function RosterApprovalActions({ rosterId, canApprove }) {
   const router = useRouter()
   const [busy, setBusy] = useState(false)
@@ -22,7 +35,7 @@ export default function RosterApprovalActions({ rosterId, canApprove }) {
       const res = await fetch(`/api/schedule/rosters/${rosterId}/approve`, { method: 'POST' })
       const data = await res.json()
       if (!data.success) {
-        alert(data.error || 'Approval failed')
+        alert(approveErrorMessage(data))
         return
       }
       router.refresh()

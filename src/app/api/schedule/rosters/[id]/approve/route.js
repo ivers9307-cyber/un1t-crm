@@ -4,11 +4,18 @@
 // non-owner over the location's monthly contractor budget.
 // Flips status='published', records the approval audit, tags
 // blocks with the roster_id, and notifies the rostered coaches.
+//
+// ROSTER-FIX.4 — approving IS publishing, so it runs the same overlap guard
+// POST /api/schedule/rosters runs. A draft can sit in the queue for days
+// while somebody else publishes a roster over the same dates; approving it
+// then would have created exactly the two-published-rosters-one-day state
+// the POST guard exists to prevent.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { notifyStaffOfPublish, publishNotifyRowsForBlocks } from '@/lib/roster-notify'
+import { findConflictingPublishedRosters } from '@/lib/roster-publish'
 import { logWarn } from '@/lib/log'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { APPROVAL_CATEGORY_PERMISSION } from '@shared/permissions'
@@ -31,6 +38,17 @@ export async function POST(_request, props) {
     return NextResponse.json({ success: false, error: 'Roster not found' }, { status: 404 })
   }
 
+  // APPROVALS-PERCAT.1 — permission is the only gate (roster.location_id
+  // resolved after the roster row loaded above).
+  //
+  // ROSTER-FIX.4 — checked BEFORE the status branch (reject already does).
+  // Below it, a caller with no rosters permission got a 409 naming the
+  // roster's status and a 403 otherwise, which turned the endpoint into an
+  // oracle for which ids are drafts awaiting approval.
+  if (!hasPermissionForLocation(user, roster.location_id, APPROVAL_CATEGORY_PERMISSION.rosters)) {
+    return NextResponse.json({ success: false, error: 'You do not have permission to approve rosters.' }, { status: 403 })
+  }
+
   if (roster.status !== 'draft') {
     return NextResponse.json({
       success: false,
@@ -38,10 +56,24 @@ export async function POST(_request, props) {
     }, { status: 409 })
   }
 
-  // APPROVALS-PERCAT.1 — permission is the only gate (roster.location_id
-  // resolved after the roster row loaded above).
-  if (!hasPermissionForLocation(user, roster.location_id, APPROVAL_CATEGORY_PERMISSION.rosters)) {
-    return NextResponse.json({ success: false, error: 'You do not have permission to approve rosters.' }, { status: 403 })
+  // ROSTER-FIX.4 — same guard, same 409 shape, as the publish route. Exclude
+  // this roster's own id: it is a draft today, but the exclusion keeps the
+  // check honest if a caller ever re-runs it against a published row.
+  const { conflicts, error: overlapErr } = await findConflictingPublishedRosters(db, {
+    locationId: roster.location_id,
+    periodStart: roster.period_start,
+    periodEnd: roster.period_end,
+    excludeRosterId: roster.id,
+  })
+  if (overlapErr) {
+    return NextResponse.json({ success: false, error: overlapErr.message }, { status: 400 })
+  }
+  if (conflicts.length > 0) {
+    return NextResponse.json({
+      success: false,
+      error: 'overlapping_roster',
+      overlapping: conflicts,
+    }, { status: 409 })
   }
 
   const nowIso = new Date().toISOString()

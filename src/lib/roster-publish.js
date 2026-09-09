@@ -9,6 +9,12 @@
 // publishRoster: creates a `rosters` row, tags blocks in the
 // period with the roster_id, sets shifts.published=true via
 // the legacy mirror so mobile/reports keep working.
+//
+// findConflictingPublishedRosters: the overlap guard. Lives here
+// rather than in the POST route because BOTH ways a roster becomes
+// published — POST /api/schedule/rosters and the approve endpoint
+// flipping a draft — have to run it, and a guard that only one of
+// them ran was no guard at all.
 
 import { shiftHours } from './payroll'
 import { liveAssignments } from './roster'
@@ -196,6 +202,58 @@ export async function projectPublishImpact(db, { locationId, periodStart, period
     overrunEur,
     blockCount,
   }
+}
+
+/**
+ * ROSTER-FIX.4 — the published rosters at `locationId` that (periodStart,
+ * periodEnd) would collide with.
+ *
+ * WHY: publishing rewrites `shift_blocks.roster_id` for every block in the
+ * period, so a second overlapping published roster silently STEALS the days
+ * it shares — the older row still claims those dates while owning none of
+ * their blocks, and "which roster published this day" (reports,
+ * findPublishedRosterFor, the approvals queue) stops having one answer.
+ *
+ * A published roster is NOT a conflict when the new period fully contains
+ * it, which covers both legitimate overlaps:
+ *   - the EXACT same period — how a re-publish re-notifies the coaches whose
+ *     shifts changed since last time;
+ *   - a period that CONTAINS the published one — the documented "publish the
+ *     week, then publish the whole month" flow, where the wider roster takes
+ *     over every block including the earlier week's.
+ * Everything else (a week inside an already-published month, a period that
+ * straddles the edge of one) is the same days published twice under two
+ * names. See the KNOWN GAP note at the POST call site for what a superset
+ * publish leaves behind.
+ *
+ * Both period bounds are inclusive, and dates are ISO YYYY-MM-DD strings, so
+ * string comparison IS date comparison.
+ *
+ * @param {import('@supabase/supabase-js').SupabaseClient} db service-role client
+ * @param {{ locationId: string, periodStart: string, periodEnd: string, excludeRosterId?: string|null }} opts
+ * @returns {Promise<{ conflicts: Array<{id: string, period_start: string, period_end: string}>, error: any }>}
+ */
+export async function findConflictingPublishedRosters(db, { locationId, periodStart, periodEnd, excludeRosterId = null } = {}) {
+  let query = db
+    .from('rosters')
+    .select('id, period_start, period_end')
+    .eq('location_id', locationId)
+    .eq('status', 'published')
+    // Inclusive-range overlap: starts on or before our end AND ends on or
+    // after our start.
+    .lte('period_start', periodEnd)
+    .gte('period_end', periodStart)
+  // The approve path re-checks a roster that already exists as a row; it must
+  // not count itself as the thing it collides with.
+  if (excludeRosterId) query = query.neq('id', excludeRosterId)
+
+  const { data, error } = await query
+  if (error) return { conflicts: [], error }
+
+  // Contained-in-the-new-period is inclusive on both ends, so an exact
+  // re-publish falls out as "contained" and is allowed too.
+  const conflicts = (data || []).filter((r) => !(r.period_start >= periodStart && r.period_end <= periodEnd))
+  return { conflicts, error: null }
 }
 
 function round2(n) { return Math.round(n * 100) / 100 }

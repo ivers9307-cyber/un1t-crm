@@ -30,7 +30,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess, getUserLocationIds } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, isoDate, MANAGER_ROLES } from '@/lib/schemas'
-import { projectPublishImpact } from '@/lib/roster-publish'
+import { projectPublishImpact, findConflictingPublishedRosters } from '@/lib/roster-publish'
 import { sendOverBudgetApprovalEmail } from '@/lib/roster-email'
 import { notifyStaffOfPublish, publishNotifyRowsForBlocks } from '@/lib/roster-notify'
 import { notifyUsers } from '@/lib/notify'
@@ -109,38 +109,18 @@ export async function POST(request) {
   const db = createServerClient()
 
   // ROSTER-FIX.4 — refuse a publish that would leave two published rosters
-  // covering the same day at this location.
-  //
-  // Publishing tags every block in the period with the new roster id, so an
-  // overlapping second roster silently STEALS the days it shares: the older
-  // roster row still claims those dates while owning none of their blocks,
-  // and "which roster published this day" stops having an answer (reports,
-  // findPublishedRosterFor and the approvals queue all ask it).
-  //
-  // Two overlaps are legitimate and stay allowed:
-  //   - the EXACT same period — that is how a re-publish re-notifies the
-  //     coaches whose shifts changed since last time;
-  //   - a period that STRICTLY CONTAINS the published one — the documented
-  //     "publish the week, then publish the whole month" flow. The wider
-  //     roster takes over every block, including the earlier week's.
-  // Anything else (a week inside an already-published month, a period that
-  // straddles the edge of one) is the operator publishing the same days
-  // twice under two names, and is refused.
-  const { data: publishedRosters, error: overlapErr } = await db
-    .from('rosters')
-    .select('id, period_start, period_end')
-    .eq('location_id', location_id)
-    .eq('status', 'published')
-    .lte('period_start', period_end)
-    .gte('period_end', period_start)
+  // covering the same day at this location. The rule (and why an exact or a
+  // containing period is still allowed) lives on the helper, which the
+  // approve endpoint runs too — a guard only one publish path ran was no
+  // guard at all.
+  const { conflicts, error: overlapErr } = await findConflictingPublishedRosters(db, {
+    locationId: location_id,
+    periodStart: period_start,
+    periodEnd: period_end,
+  })
   if (overlapErr) {
     return NextResponse.json({ success: false, error: overlapErr.message }, { status: 400 })
   }
-  const conflicts = (publishedRosters || []).filter((r) => {
-    const sameRange = r.period_start === period_start && r.period_end === period_end
-    const containedInNew = r.period_start >= period_start && r.period_end <= period_end
-    return !sameRange && !containedInNew
-  })
   if (conflicts.length > 0) {
     return NextResponse.json({
       success: false,

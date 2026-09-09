@@ -19,7 +19,13 @@ vi.mock('@/lib/auth', () => ({
   assertLocationAccess: vi.fn(() => null),
   getUserLocationIds: vi.fn(() => [LOC_1]),
 }))
-vi.mock('@/lib/roster-publish', () => ({ projectPublishImpact: vi.fn() }))
+// ROSTER-FIX.4 — only the budget projection is stubbed. The overlap guard
+// stays REAL (findConflictingPublishedRosters), so these cases exercise the
+// helper the approve endpoint shares rather than a mock of it.
+vi.mock('@/lib/roster-publish', async (importOriginal) => ({
+  ...(await importOriginal()),
+  projectPublishImpact: vi.fn(),
+}))
 vi.mock('@/lib/roster-email', () => ({ sendOverBudgetApprovalEmail: vi.fn(() => Promise.resolve()) }))
 vi.mock('@/lib/roster-notify', () => ({
   notifyStaffOfPublish: vi.fn(() => Promise.resolve()),
@@ -65,6 +71,7 @@ function buildDb({ publishedRosters = [] } = {}) {
           lte: () => chain,
           gte: () => chain,
           order: () => chain,
+          neq: () => chain,
           in: () => chain,
           then: (onF, onR) => Promise.resolve({ data: publishedRosters, error: null }).then(onF, onR),
           insert(payload) {

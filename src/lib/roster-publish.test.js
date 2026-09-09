@@ -10,7 +10,7 @@
 //      total (publish is the last shoe to drop, not the only one).
 
 import { describe, it, expect } from 'vitest'
-import { projectPublishImpact } from './roster-publish'
+import { projectPublishImpact, findConflictingPublishedRosters } from './roster-publish'
 
 function mockDb({ location, contractors = [], blocks = [], timeOff = [] }) {
   // Mock the chained Supabase queries the helper makes:
@@ -303,5 +303,104 @@ describe('projectPublishImpact — per-assignment overrides and approved leave',
     const r = await projectPublishImpact(db, { locationId: 'loc1', periodStart: '2026-05-04', periodEnd: '2026-05-10' })
     // Only the 7th is billable: 2h × 35.
     expect(r.periodProjectedEur).toBe(70)
+  })
+})
+
+
+// ROSTER-FIX.4 — the overlap guard. Two published rosters covering one day at
+// one location make "which roster published this day" unanswerable, because
+// publishing rewrites shift_blocks.roster_id across the whole period and the
+// older row keeps claiming dates it owns no blocks for. The helper is shared
+// by POST /api/schedule/rosters and the approve endpoint, which is the point:
+// a guard only one of the two publish paths ran was no guard at all.
+describe('findConflictingPublishedRosters', () => {
+  // Records the filters the helper builds and answers with `rows`, so the
+  // date-window query is pinned as well as the containment filtering.
+  function mockDb(rows, error = null) {
+    const calls = []
+    const chain = {
+      select(cols) { calls.push(['select', cols]); return chain },
+      eq(col, val) { calls.push(['eq', col, val]); return chain },
+      lte(col, val) { calls.push(['lte', col, val]); return chain },
+      gte(col, val) { calls.push(['gte', col, val]); return chain },
+      neq(col, val) { calls.push(['neq', col, val]); return chain },
+      then: (onF, onR) => Promise.resolve({ data: rows, error }).then(onF, onR),
+    }
+    return { db: { from: (t) => { calls.push(['from', t]); return chain } }, calls }
+  }
+
+  const WEEK = { locationId: 'loc1', periodStart: '2026-05-04', periodEnd: '2026-05-10' }
+
+  it('queries published rosters at the location over the inclusive date window', async () => {
+    const { db, calls } = mockDb([])
+    const res = await findConflictingPublishedRosters(db, WEEK)
+    expect(res).toEqual({ conflicts: [], error: null })
+    expect(calls).toContainEqual(['from', 'rosters'])
+    expect(calls).toContainEqual(['eq', 'location_id', 'loc1'])
+    expect(calls).toContainEqual(['eq', 'status', 'published'])
+    // Overlap = starts on or before our end AND ends on or after our start.
+    expect(calls).toContainEqual(['lte', 'period_start', '2026-05-10'])
+    expect(calls).toContainEqual(['gte', 'period_end', '2026-05-04'])
+    // No exclusion asked for → no neq narrowing the guard.
+    expect(calls.some((c) => c[0] === 'neq')).toBe(false)
+  })
+
+  it('an EXACT re-publish of the same period is not a conflict (that is the re-notify path)', async () => {
+    const { db } = mockDb([{ id: 'r-same', period_start: '2026-05-04', period_end: '2026-05-10' }])
+    const { conflicts, error } = await findConflictingPublishedRosters(db, WEEK)
+    expect(error).toBeNull()
+    expect(conflicts).toEqual([])
+  })
+
+  it('a period that CONTAINS the published one is not a conflict (week → month)', async () => {
+    const { db } = mockDb([{ id: 'r-week', period_start: '2026-05-04', period_end: '2026-05-10' }])
+    const { conflicts } = await findConflictingPublishedRosters(db, {
+      locationId: 'loc1', periodStart: '2026-05-01', periodEnd: '2026-05-31',
+    })
+    expect(conflicts).toEqual([])
+  })
+
+  it('a week INSIDE an already-published month is a conflict', async () => {
+    const month = { id: 'r-month', period_start: '2026-05-01', period_end: '2026-05-31' }
+    const { db } = mockDb([month])
+    const { conflicts } = await findConflictingPublishedRosters(db, WEEK)
+    expect(conflicts).toEqual([month])
+  })
+
+  it('a period straddling either EDGE of a published one is a conflict', async () => {
+    const before = { id: 'r-prev', period_start: '2026-04-27', period_end: '2026-05-05' }
+    const after = { id: 'r-next', period_start: '2026-05-09', period_end: '2026-05-17' }
+    const { db } = mockDb([before, after])
+    const { conflicts } = await findConflictingPublishedRosters(db, WEEK)
+    expect(conflicts).toEqual([before, after])
+  })
+
+  it('reports only the overlapping rows, keeping the contained ones out of the 409', async () => {
+    const month = { id: 'r-month', period_start: '2026-05-01', period_end: '2026-05-31' }
+    const inner = { id: 'r-inner', period_start: '2026-05-05', period_end: '2026-05-06' }
+    const { db } = mockDb([month, inner])
+    const { conflicts } = await findConflictingPublishedRosters(db, WEEK)
+    expect(conflicts).toEqual([month])
+  })
+
+  it('excludeRosterId keeps a roster from conflicting with itself (the approve path)', async () => {
+    const { db, calls } = mockDb([])
+    await findConflictingPublishedRosters(db, { ...WEEK, excludeRosterId: 'roster-1' })
+    expect(calls).toContainEqual(['neq', 'id', 'roster-1'])
+  })
+
+  it('surfaces a query error instead of reporting "no conflicts"', async () => {
+    const { db } = mockDb(null, { message: 'boom' })
+    const { conflicts, error } = await findConflictingPublishedRosters(db, WEEK)
+    // A failed probe must never read as a clean bill of health.
+    expect(conflicts).toEqual([])
+    expect(error).toEqual({ message: 'boom' })
+  })
+
+  it('treats a null data set as no conflicts', async () => {
+    const { db } = mockDb(null)
+    const { conflicts, error } = await findConflictingPublishedRosters(db, WEEK)
+    expect(conflicts).toEqual([])
+    expect(error).toBeNull()
   })
 })
