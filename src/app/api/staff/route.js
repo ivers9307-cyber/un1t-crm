@@ -51,7 +51,10 @@ export async function GET(request) {
 
   // ROSTER-FIX.2 — `?fields=picker` returns the pay-free name/avatar shape
   // for every role, so a coach dropdown never carries HR columns.
-  const fields = new URL(request.url).searchParams.get('fields') === 'picker' ? 'picker' : null
+  // `request` may be absent when the handler is invoked directly (the
+  // cross-tenant suite calls GET() with no argument) — treat that as the
+  // default, full shape rather than throwing.
+  const fields = request?.url && new URL(request.url).searchParams.get('fields') === 'picker' ? 'picker' : null
 
   const db = createServerClient()
   const result = await listStaffForUser({ db, user, fields })
