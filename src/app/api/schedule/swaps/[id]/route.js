@@ -129,8 +129,10 @@ export async function PUT(request, props) {
     }
   }
 
-  // Best-effort pushes — never block or fail the response.
-  dispatchSwapPushes(db, decision, swap, user).catch(err => console.error('[swaps] push failed', err))
+  // ROSTER-FIX.8f — best-effort notifications, never block or fail the response.
+  // Named for what it does since 8d: these are push WITH an email fallback, not
+  // pushes, and the old name read as "coaches without the app get nothing".
+  dispatchSwapNotifications(db, decision, swap, user).catch(err => console.error('[swaps] notify failed', err))
 
   return NextResponse.json({ success: true, data })
 }
@@ -152,7 +154,7 @@ export async function PUT(request, props) {
 // explicit emailSubject: the registry default ("Shift swap update") is
 // deliberately vague, and an inbox is a worse place than a lock screen to
 // guess what a notification was about.
-async function dispatchSwapPushes(db, decision, swap, user) {
+async function dispatchSwapNotifications(db, decision, swap, user) {
   const actor = user.full_name || 'A coach'
   for (const n of decision.notify) {
     switch (n.kind) {

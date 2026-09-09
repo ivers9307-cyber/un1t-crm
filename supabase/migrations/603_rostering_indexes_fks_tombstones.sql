@@ -122,10 +122,17 @@ CREATE INDEX IF NOT EXISTS time_off_requests_location_status_start_idx
 -- ON DELETE SET NULL, not CASCADE: the notification is a record that someone
 -- was told something. Losing the shift it referred to must not erase the fact
 -- that the message was sent.
-UPDATE public.schedule_notifications
+-- ROSTER-FIX.8f — NOT EXISTS, not NOT IN: a single NULL in the subquery makes
+-- `NOT IN` evaluate to NULL for every row, so the UPDATE would silently match
+-- nothing and the ADD CONSTRAINT below would then fail on the dangling ids this
+-- statement exists to clear. shift_assignments.id cannot be NULL today, but the
+-- anti-join is both correct by construction and the faster plan.
+UPDATE public.schedule_notifications n
    SET shift_id = NULL
- WHERE shift_id IS NOT NULL
-   AND shift_id NOT IN (SELECT id FROM public.shift_assignments);
+ WHERE n.shift_id IS NOT NULL
+   AND NOT EXISTS (
+     SELECT 1 FROM public.shift_assignments a WHERE a.id = n.shift_id
+   );
 
 ALTER TABLE public.schedule_notifications
   DROP CONSTRAINT IF EXISTS schedule_notifications_shift_id_fkey;

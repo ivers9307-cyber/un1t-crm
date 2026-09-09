@@ -21,9 +21,17 @@ vi.mock('@/lib/push-dedup', () => ({
   notifyUsersAtRolesOnce: vi.fn(() => Promise.resolve()),
 }))
 
+// ROSTER-FIX.8f — the open-pool fan-out now subtracts the managers who were
+// already told, resolving them with the same helper notifyUsersAtRolesOnce uses.
+vi.mock('@/lib/push', () => ({
+  resolveRoleRecipientIds: vi.fn(() => Promise.resolve([])),
+}))
+
 const { createServerClient } = await import('@/lib/supabase')
 const { getCurrentUser } = await import('@/lib/auth')
 const { notifyUsersOnce, notifyUsersAtRolesOnce } = await import('@/lib/push-dedup')
+const { resolveRoleRecipientIds } = await import('@/lib/push')
+const { MANAGER_ROLES } = await import('@/lib/schemas')
 const { POST } = await import('./route.js')
 
 // The notification fan-out is fire-and-forget (never blocks the response) and
@@ -126,6 +134,8 @@ beforeEach(() => {
   getCurrentUser.mockReset()
   notifyUsersOnce.mockClear()
   notifyUsersAtRolesOnce.mockClear()
+  resolveRoleRecipientIds.mockReset()
+  resolveRoleRecipientIds.mockResolvedValue([])
 })
 
 describe('POST /api/schedule/swaps — target validation', () => {
@@ -371,5 +381,95 @@ describe('POST /api/schedule/swaps — notifications', () => {
 
     expect(notifyUsersAtRolesOnce).not.toHaveBeenCalled()
     expect(notifyUsersOnce.mock.calls.filter(c => c[1].startsWith('swap_open_pool:'))).toHaveLength(0)
+  })
+})
+
+// ROSTER-FIX.8f — review fixes on the notification copy and the pool set.
+describe('POST /api/schedule/swaps — notification recipients and copy', () => {
+  const COACH_A = U('0a0a0a0a')
+  const HEAD_COACH = U('0d0d0d0d')
+  const onRoster = (status) => ({ rosters: { status } })
+
+  // full_name is nullable on profiles. Before this fix the coach's name was
+  // interpolated bare, so a blank one shipped the literal string "null" to a
+  // lock screen and an email subject line.
+  it('falls back to "A coach" when the requester has no full_name', async () => {
+    getCurrentUser.mockResolvedValue({ id: REQ, role: 'staff', full_name: null })
+    const { db } = buildDb({ assignmentsById: base })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(req({ requester_shift_id: A_REQ, target_id: TGT }))
+    expect(res.status).toBe(201)
+    await flush()
+
+    const [, , , payload] = notifyUsersOnce.mock.calls.find(c => c[1].startsWith('swap_inbound:'))
+    expect(payload.body).toBe('A coach wants to swap a shift with you. Tap to review.')
+    expect(payload.emailSubject).toBe('A coach wants to swap a shift with you')
+    expect(payload.body).not.toContain('null')
+  })
+
+  it('falls back to "A coach" for the manager and open-pool copy too', async () => {
+    getCurrentUser.mockResolvedValue({ id: REQ, role: 'staff', full_name: '' })
+    const { db } = buildDb({
+      assignmentsById: base,
+      poolRows: [{ profile_id: COACH_A, status: 'scheduled', shift_blocks: onRoster('published') }],
+    })
+    createServerClient.mockReturnValue(db)
+
+    await POST(req({ requester_shift_id: A_REQ }))
+    await flush()
+
+    const [, , , , managerPayload] = notifyUsersAtRolesOnce.mock.calls[0]
+    expect(managerPayload.body).toBe('A coach posted a shift for swap. Tap to review.')
+
+    const [, , , poolPayload] = notifyUsersOnce.mock.calls.find(c => c[1].startsWith('swap_open_pool:'))
+    expect(poolPayload.body).toBe('A coach posted a shift for swap on a day you are working. Tap to take it.')
+  })
+
+  // A manager rostered that day matched BOTH fan-outs, and the dedup ledger is
+  // keyed per event, so swap_open and swap_open_pool could not see each other:
+  // two notifications for one swap, the second inviting them to claim a shift
+  // they are there to approve.
+  it('excludes a head coach rostered that day — they already got swap_open', async () => {
+    getCurrentUser.mockResolvedValue({ id: REQ, role: 'staff', full_name: 'R' })
+    resolveRoleRecipientIds.mockResolvedValue([HEAD_COACH])
+    const { db } = buildDb({
+      assignmentsById: base,
+      poolRows: [
+        { profile_id: COACH_A, status: 'scheduled', shift_blocks: onRoster('published') },
+        { profile_id: HEAD_COACH, status: 'scheduled', shift_blocks: onRoster('published') },
+      ],
+    })
+    createServerClient.mockReturnValue(db)
+
+    await POST(req({ requester_shift_id: A_REQ }))
+    await flush()
+
+    // Resolved against the swap's location with the same role set the manager
+    // fan-out used, so the two recipient sets cannot drift apart.
+    expect(resolveRoleRecipientIds).toHaveBeenCalledWith(db, LOC, MANAGER_ROLES)
+
+    const [, , ids] = notifyUsersOnce.mock.calls.find(c => c[1].startsWith('swap_open_pool:'))
+    expect(ids).not.toContain(HEAD_COACH)
+    expect(ids).toEqual([COACH_A])
+    // and they are still told once, as a manager
+    expect(notifyUsersAtRolesOnce).toHaveBeenCalledTimes(1)
+  })
+
+  it('runs no open-pool notification when every eligible coach is a manager', async () => {
+    getCurrentUser.mockResolvedValue({ id: REQ, role: 'staff', full_name: 'R' })
+    resolveRoleRecipientIds.mockResolvedValue([HEAD_COACH])
+    const { db } = buildDb({
+      assignmentsById: base,
+      poolRows: [{ profile_id: HEAD_COACH, status: 'scheduled', shift_blocks: onRoster('published') }],
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(req({ requester_shift_id: A_REQ }))
+    expect(res.status).toBe(201)
+    await flush()
+
+    expect(notifyUsersOnce.mock.calls.filter(c => c[1].startsWith('swap_open_pool:'))).toHaveLength(0)
+    expect(notifyUsersAtRolesOnce).toHaveBeenCalledTimes(1)
   })
 })

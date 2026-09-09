@@ -104,13 +104,19 @@
 --     Expected: no row named shift_assignments_overlap_guard (mig 238 dropped
 --     the two legacy mirror triggers; this table should have none left).
 --
--- AFTER APPLYING: get_advisors (type=security). The function is SECURITY
--- INVOKER with a pinned search_path, so it should raise nothing.
+-- AFTER APPLYING: get_advisors (type=security). The function is explicitly
+-- SECURITY INVOKER with `SET search_path = ''`, so it should raise nothing.
 
+-- ROSTER-FIX.8f — SECURITY INVOKER is stated rather than left to the default,
+-- and search_path is pinned EMPTY (mig 021 §C convention) rather than to
+-- `public, pg_temp`: every table this body touches is already schema-qualified,
+-- so nothing resolves through the path, and an empty path is the only value a
+-- caller cannot shadow.
 CREATE OR REPLACE FUNCTION public.shift_assignments_warn_overlap()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SECURITY INVOKER
+SET search_path = ''
 AS $$
 DECLARE
   v_date  date;

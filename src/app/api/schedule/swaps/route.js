@@ -5,6 +5,7 @@ import { getCurrentUser, assertLocationAccess , getUserLocationIds} from '@/lib/
 import { validateBody } from '@/lib/validate'
 import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
 import { notifyUsersOnce, notifyUsersAtRolesOnce } from '@/lib/push-dedup'
+import { resolveRoleRecipientIds } from '@/lib/push'
 import { swapShiftShape } from '@/lib/roster-read'
 import { isLiveAssignment } from '@/lib/roster'
 import { dublinTodayStr } from '@/lib/dublin-time'
@@ -209,18 +210,24 @@ export async function POST(request) {
   // installed the app. `swap` is now fallbackEmail in the registry, so a
   // recipient with no device tokens gets the email instead (the shape
   // time-off has used since NOTIF.8).
+  //
+  // ROSTER-FIX.8f — full_name is nullable on profiles, so a coach who has never
+  // filled theirs in interpolated as the literal "null wants to swap a shift
+  // with you" into a push, a lock screen and an email subject line. Same
+  // fallback the decision notifications use ([id]/route.js).
+  const actor = user.full_name || 'A coach'
   if (body.target_id) {
     notifyUsersOnce(db, `swap_inbound:${data.id}`, [body.target_id], {
       title: 'New shift swap request',
-      body: `${user.full_name} wants to swap a shift with you. Tap to review.`,
+      body: `${actor} wants to swap a shift with you. Tap to review.`,
       category: 'swap',
-      emailSubject: `${user.full_name} wants to swap a shift with you`,
+      emailSubject: `${actor} wants to swap a shift with you`,
       data: { type: 'swap_inbound', swap_id: data.id },
     }).catch(err => console.error('[swaps] notify target failed', err))
   } else {
     notifyUsersAtRolesOnce(db, `swap_open:${data.id}`, swapLocationId, MANAGER_ROLES, {
       title: 'Open swap request',
-      body: `${user.full_name} posted a shift for swap. Tap to review.`,
+      body: `${actor} posted a shift for swap. Tap to review.`,
       category: 'swap',
       emailSubject: 'An open shift swap needs a decision',
       data: { type: 'swap_open', swap_id: data.id },
@@ -241,7 +248,8 @@ export async function POST(request) {
 // Fail-soft by construction. This runs after the swap row is committed and
 // the response has been decided, so an unreadable pool must never turn a
 // created swap into an error, and never costs the manager notification either
-// (it is a separate call). One query, no fan-out.
+// (it is a separate call). Two reads, no fan-out: the pool, and the manager set
+// it subtracts (ROSTER-FIX.8f).
 async function notifyOpenPool(db, swapId, locationId, blockDate, user) {
   if (!locationId || !blockDate) return
 
@@ -267,19 +275,30 @@ async function notifyOpenPool(db, swapId, locationId, blockDate, user) {
   // nested embed's column is not something PostgREST does reliably. The !inner
   // above still narrows the rows to this location and date, so the set arriving
   // here is one day at one studio and the filter is free.
+  // ROSTER-FIX.8f — every manager at this location was told about this swap a
+  // moment ago by the swap_open fan-out. A manager who is ALSO rostered that
+  // day matches the pool query too, and the dedup ledger is keyed per event, so
+  // swap_open and swap_open_pool cannot see each other: they got two
+  // notifications for one swap, one of them inviting them to claim a shift they
+  // are there to approve. Subtract them with the SAME resolver
+  // notifyUsersAtRolesOnce uses internally, so the two sets can never drift.
+  const managerIds = new Set(await resolveRoleRecipientIds(db, locationId, MANAGER_ROLES))
+
   const ids = [...new Set(
     (rows || [])
       .filter(r => r.profile_id
         && r.profile_id !== user.id
+        && !managerIds.has(r.profile_id)
         && isLiveAssignment(r)
         && r.shift_blocks?.rosters?.status === 'published')
       .map(r => r.profile_id),
   )]
   if (!ids.length) return
 
+  const actor = user.full_name || 'A coach'
   await notifyUsersOnce(db, `swap_open_pool:${swapId}`, ids, {
     title: 'A shift is up for swap',
-    body: `${user.full_name} posted a shift for swap on a day you are working. Tap to take it.`,
+    body: `${actor} posted a shift for swap on a day you are working. Tap to take it.`,
     category: 'swap',
     emailSubject: 'A shift is up for swap',
     data: { type: 'swap_open_pool', swap_id: swapId, block_date: blockDate },
