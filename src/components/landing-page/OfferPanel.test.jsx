@@ -56,4 +56,24 @@ describe('OfferPanel (HATCH-OFFER.1)', () => {
     expect(renderToStaticMarkup(<OfferPanel offer={offer} />).match(/<li/g)).toHaveLength(2)
     expect(renderToStaticMarkup(<OfferPanel offer={{ ...offer, ticks: [] }} />)).not.toContain('<li')
   })
+  it('skips blank ticks without renumbering the ones after them', () => {
+    // offerOf hands us a position-preserving array; a blank must not
+    // render, and must not shift the index the surviving ticks carry,
+    // because that index is the inline editor's write target.
+    const html = renderToStaticMarkup(<OfferPanel offer={{ ...offer, ticks: ['', 'alpha', 'beta'] }} />)
+    expect(html.match(/<li/g)).toHaveLength(2)
+    expect(html).toContain('alpha')
+    expect(html).toContain('beta')
+  })
+  it('hides the struck price from screen readers and keeps the note audible', () => {
+    // Both are load-bearing: without aria-hidden the price is read
+    // twice, and without sr-only the note becomes visible body text.
+    const html = renderToStaticMarkup(<OfferPanel offer={offer} />)
+    expect(html).toContain('aria-hidden="true"')
+    expect(html).toContain('sr-only')
+  })
+  it('renders the CTA as the inverted pill so it is legible on the white panel', () => {
+    const html = renderToStaticMarkup(<OfferPanel offer={offer} />)
+    expect(html).toContain('lp-btn-invert')
+  })
 })

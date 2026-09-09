@@ -5,8 +5,9 @@
 //
 // Pure presentation, no state. Every string arrives from the block's
 // operator-editable `offer` group, already normalised by offerOf()
-// in src/lib/landing-page-blocks.js — so this component may assume
-// `ticks` is an array of non-blank strings and `cta_url` is trimmed.
+// in src/lib/landing-page-blocks.js — so `cta_url` is trimmed and
+// `ticks` is a POSITION-PRESERVING array whose blanks are '' (they
+// are skipped here by index, never compacted; see offerOf).
 //
 // Its own file rather than another section inside BlockRenderers.jsx,
 // which already carries every block renderer plus SiteHeader and
@@ -62,12 +63,15 @@ export default function OfferPanel({ offer, onEdit }) {
       </div>
 
       <ul className="flex flex-col gap-3 mb-9">
-        {ticks.map((t, i) => (
+        {/* Skip blanks BY INDEX rather than filtering the list: `i` has
+            to stay the raw array position or inline edits land on the
+            wrong tick. */}
+        {ticks.map((t, i) => (t ? (
           <li key={i} className="flex gap-3 text-[15px] leading-relaxed text-black/70">
             <span className="opacity-55" aria-hidden="true">✓</span>
             <span><E value={t} onEdit={onEdit} path={['offer', 'ticks', i]} /></span>
           </li>
-        ))}
+        ) : null))}
       </ul>
 
       {href ? (

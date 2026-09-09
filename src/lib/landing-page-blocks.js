@@ -125,9 +125,9 @@ export const OFFER_DEFAULT = () => ({
 const LEAD_FORM_DEFAULT = () => ({
   id:              newBlockId(),
   type:            'lead_form',
-  heading:         'Join the founding members',
-  subtext:         'Be first through the doors at UN1T Hatch Street. Leave your details and we’ll be in touch with founding-member offers before we open.',
-  button_label:    'Join the waitlist',
+  heading:         'Keep me posted',
+  subtext:         'Not ready to join yet? Leave your details and we’ll keep you in the loop on the opening, classes and offers.',
+  button_label:    'Keep me posted',
   success_message: "You're on the list — we'll be in touch soon.",
   consent_label:   'I’d like to hear from UN1T about the Hatch Street launch and offers by email, SMS and WhatsApp. I can opt out anytime.',
   tag:             'hatch-founding-member',
@@ -147,11 +147,28 @@ export function offerOf(block) {
   if (o.enabled !== true) return null
   return {
     ...o,
+    // POSITION-PRESERVING on purpose. This used to filter blanks out,
+    // which silently broke inline editing: OfferPanel maps this list
+    // and emits setByPath(['offer','ticks', i]) against the RAW block,
+    // so one blank raw tick made every index after it point at the
+    // wrong slot — editing the first visible tick overwrote a
+    // different one and duplicated its neighbour on screen. The
+    // settings form always writes a fixed 3-slot array, so a blank in
+    // the middle is the normal shape, not an edge case. Blanks and
+    // non-strings normalise to '' and the renderer skips them by
+    // index instead.
     ticks: Array.isArray(o.ticks)
-      ? o.ticks.filter((t) => typeof t === 'string' && t.trim())
+      ? o.ticks.map((t) => (typeof t === 'string' && t.trim() ? t : ''))
       : [],
     cta_url: typeof o.cta_url === 'string' ? o.cta_url.trim() : '',
     cta_label: (typeof o.cta_label === 'string' && o.cta_label.trim()) || 'Claim your rate',
+    // The strike is aria-hidden, so this note is the ONLY thing that
+    // tells a screen reader which way the price moves. Emptied, the
+    // reading collapses to "EUR 219. EUR 189", which is the
+    // misleading was/now the note exists to prevent — so it falls
+    // back rather than rendering a bare price.
+    was_price_note: (typeof o.was_price_note === 'string' && o.was_price_note.trim())
+      || 'before the offer ends',
   }
 }
 
@@ -329,8 +346,10 @@ export function pageCtas(blocks) {
   return { primary: null, secondary: null }
 }
 
-// Back-compat wrapper. Kept because two pages and a dozen tests call
-// it; it is exactly pageCtas().primary and must stay that way.
+// Back-compat wrapper. Both pages now call pageCtas directly, so the
+// only remaining callers are the tests — which is the point: they are
+// the regression harness proving pageCtas().primary still answers
+// exactly what primaryCta always answered.
 export function primaryCta(blocks) {
   return pageCtas(blocks).primary
 }

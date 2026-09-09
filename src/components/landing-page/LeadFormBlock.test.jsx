@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { LeadFormBlock, HeroBlock } from './BlockRenderers.jsx'
 
 // Node environment, no jsdom — render to static markup. WaitlistWidget
@@ -48,10 +51,29 @@ describe('LeadFormBlock offer branch (HATCH-OFFER.1)', () => {
     expect(html).not.toContain('lp-was-strike')
     expect(html).toContain('Keep me posted')
   })
-  it('renders the pre-offer section unchanged for a block with no offer group', () => {
+  it('renders the disabled-offer section identically to a block with no offer group', () => {
     const withOut = renderToStaticMarkup(<LeadFormBlock block={base} publicPath="hatch-street" />)
     const disabled = renderToStaticMarkup(<LeadFormBlock block={{ ...base, offer: { ...offer, enabled: false } }} publicPath="hatch-street" />)
     expect(withOut).toBe(disabled)
+  })
+
+  // The test above compares two renders of the SAME code path, so it
+  // holds however that path changes — it proves absent === disabled and
+  // nothing more. The property that actually matters is that the
+  // no-offer markup never moves at all, because Stillorgan and every
+  // future studio page render through it. That needs an artefact from
+  // outside this file, so the expected HTML is committed as a fixture.
+  //
+  // Regenerate deliberately, never reflexively:  UPDATE_GOLDEN=1 npx vitest run src/components/landing-page/LeadFormBlock.test.jsx
+  // A diff here means the public marketing page changed for every studio.
+  it('matches the committed golden HTML for the no-offer render', () => {
+    const html = renderToStaticMarkup(<LeadFormBlock block={base} publicPath="hatch-street" />)
+    const goldenPath = new URL('./__fixtures__/lead-form-no-offer.html', import.meta.url)
+    if (process.env.UPDATE_GOLDEN) {
+      mkdirSync(dirname(fileURLToPath(goldenPath)), { recursive: true })
+      writeFileSync(goldenPath, html)
+    }
+    expect(html).toBe(readFileSync(goldenPath, 'utf8'))
   })
   it('does not throw on a corrupted offer group', () => {
     const html = renderToStaticMarkup(<LeadFormBlock block={{ ...base, offer: 'broken' }} publicPath="hatch-street" />)
