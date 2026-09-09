@@ -39,15 +39,34 @@ export default function ManageMode({ activeLocation, weekStart, weekEnd, selecte
     .filter((b) => b.block_date === selectedIso)
     .sort((a, b) => (effShiftStart(a) || a.start_time || '').localeCompare(effShiftStart(b) || b.start_time || ''))
 
+  // ROSTER-FIX.7 — the assignable-staff pool is fetched once and cached for
+  // the life of the mount, and it went stale two ways. (1) It is a PER-LOCATION
+  // list (`/api/staff?fields=picker` is scoped by x-active-location), but
+  // nothing cleared it on a location switch, so a manager who moved studios
+  // was offered the other studio's coaches until the tab remounted — and
+  // assigning one 404s at the block. (2) `active` and `profile_locations` can
+  // change under the operator, and the pool is what CoachPickerSheet filters,
+  // so a stale copy re-offers someone who has just been removed everywhere.
+  const loadStaff = useCallback(async () => {
+    if (!locationId) return
+    setStaffLoading(true)
+    const res = await getLocationStaff({ locationId })
+    setStaffLoading(false)
+    setStaff(res.success ? res.data || [] : [])
+    if (!res.success) Alert.alert('Could not load staff', res.error || 'Unknown error')
+  }, [locationId])
+
+  useEffect(() => { setStaff(null) }, [locationId])
+
+  // Refetch only when the pool was already loaded — a manager who never opened
+  // the picker should not pay for a staff call on every assign/remove.
+  const refreshStaffIfLoaded = useCallback(() => {
+    if (staff !== null) loadStaff()
+  }, [staff, loadStaff])
+
   async function openPicker(block) {
     setPickerBlock(block)
-    if (staff === null && !staffLoading) {
-      setStaffLoading(true)
-      const res = await getLocationStaff({ locationId })
-      setStaffLoading(false)
-      setStaff(res.success ? res.data || [] : [])
-      if (!res.success) Alert.alert('Could not load staff', res.error || 'Unknown error')
-    }
+    if (staff === null && !staffLoading) await loadStaff()
   }
 
   async function pickCoach(coach) {
@@ -65,7 +84,7 @@ export default function ManageMode({ activeLocation, weekStart, weekEnd, selecte
           const r2 = await assignCoachToBlock(block.id, { profileId: coach.id, allowOverCapacity: true, locationId })
           setBusyId(null)
           if (!r2.success) Alert.alert('Could not assign', r2.error || 'Unknown error')
-          else { if (r2.warnings?.length) Alert.alert('Assigned — note', r2.warnings.join('\n')); load() }
+          else { if (r2.warnings?.length) Alert.alert('Assigned — note', r2.warnings.join('\n')); load(); refreshStaffIfLoaded() }
         } },
       ])
       return
@@ -73,6 +92,7 @@ export default function ManageMode({ activeLocation, weekStart, weekEnd, selecte
     if (!res.success) { Alert.alert('Could not assign', res.error || 'Unknown error'); return }
     if (res.warnings?.length) Alert.alert('Assigned — note', res.warnings.join('\n'))
     load()
+    refreshStaffIfLoaded()
   }
 
   function onCoachPress(block, assignment) {
@@ -102,7 +122,8 @@ export default function ManageMode({ activeLocation, weekStart, weekEnd, selecte
         setBusyId(assignment.id)
         const res = await removeAssignment(assignment.id, { locationId })
         setBusyId(null)
-        if (!res.success) Alert.alert('Could not remove', res.error || 'Unknown error'); else load()
+        if (!res.success) Alert.alert('Could not remove', res.error || 'Unknown error')
+        else { load(); refreshStaffIfLoaded() }
       } },
     ])
   }
