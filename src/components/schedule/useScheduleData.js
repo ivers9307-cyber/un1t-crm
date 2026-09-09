@@ -110,7 +110,12 @@ export function useScheduleData({ locationId, startDate, endDate, spendReference
       const [blocksRes, templatesRes, staffRes, timeOffRes, holidaysRes, spendRes] = await Promise.all([
         readJson(`/api/schedule/blocks?location_id=${locationId}&start_date=${startDate}&end_date=${endDate}`),
         readJson(`/api/schedule/templates?location_id=${locationId}`),
-        readJson('/api/staff'),
+        // ROSTER-FIX.6c — `?fields=picker`. Without it an admin caller's browser
+        // received `*` (hourly_rate, annual_salary, overtime_rate) on every
+        // calendar load, to render a coach dropdown and an hours panel. The
+        // picker shape carries the names, the active flag, the role, the
+        // location links and the contract hours the bars compare against.
+        readJson('/api/staff?fields=picker'),
         readJson(`/api/schedule/time-off?location_id=${locationId}&start_date=${startDate}&end_date=${endDate}&status=approved`),
         readJson(`/api/locations/${locationId}/holidays?start=${startDate}&end=${endDate}`),
         readJson(`/api/schedule/contractor-spend?location_id=${locationId}&reference_date=${spendReferenceDate}`),

@@ -93,6 +93,21 @@ describe('listStaffForUser — picker shape', () => {
     expect(db.calls.profilesSelect).not.toContain('*')
     expect(db.calls.profilesSelect).not.toContain('hourly_rate')
     expect(db.calls.profilesSelect).not.toContain('annual_salary')
+    // ROSTER-FIX.6c — overtime_rate was the one pay column this pin missed.
+    expect(db.calls.profilesSelect).not.toContain('overtime_rate')
     expect(db.calls.profilesSelect).toContain('full_name')
+  })
+
+  // ROSTER-FIX.6c — the schedule calendar loads this shape now, so the picker
+  // has to carry everything the roster screen reads off a coach: the assign
+  // modal (name, role, active, location links) and the FTE utilisation bars
+  // (employment_type + contracted_hours_per_week, neither of which is a rate).
+  it('carries every column the roster screen reads off a coach', async () => {
+    const db = mockDb({ links: [{ profile_id: 'p1' }], profiles: [{ id: 'p1' }] })
+    await listStaffForUser({ db, user: { role: 'master', locations: [{ id: 'loc-1' }] }, fields: 'picker' })
+    for (const col of ['id', 'full_name', 'active', 'role', 'avatar_url', 'employment_type', 'contracted_hours_per_week']) {
+      expect(db.calls.profilesSelect).toContain(col)
+    }
+    expect(db.calls.profilesSelect).toContain('profile_locations(location_id')
   })
 })

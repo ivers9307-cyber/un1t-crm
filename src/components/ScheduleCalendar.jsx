@@ -25,7 +25,7 @@ import { ChevronLeft, ChevronRight, Copy, Send, Plus, Users, User, Clock, X, Arr
 import Link from 'next/link'
 import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 import { indexByDate } from '@/lib/bank-holidays'
-import { MANAGER_ROLES, ADMIN_ROLES } from '@/lib/schemas'
+import { MANAGER_ROLES } from '@/lib/schemas'
 // ROSTER-FIX.6c — getMonday / addDays / formatDate were re-implemented here,
 // byte-for-byte, beside the lib copies this file already imported from. One
 // definition now: a change to the local-day rule cannot land on the server
@@ -291,12 +291,6 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
 
   const locationId = user.activeLocation?.id
   const isManager = canManage(user.role)
-  // SCHEDULE-SPEND-AGG.1 — admin roles see HR-sensitive pay data
-  // client-side; head_coach + manager-but-not-admin do not (the
-  // /api/staff slim payload). Drives the "pay data missing"
-  // warning in RosterSummaryPanel — silenced for non-admins where
-  // the warning would fire on every coach (uselessly).
-  const canSeePay = ADMIN_ROLES.includes(user.role)
   const todayStr = formatDate(new Date())
 
   const weekEnd = addDays(weekStart, 6)
@@ -1394,6 +1388,8 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
       {/* SCHEDULE-SPEND-AGG.1: contractorSpend comes from a server-
           computed aggregate so head_coach sees real totals + over-
           budget signals without being granted hourly_rate visibility. */}
+      {/* ROSTER-FIX.6c: `staff` is the pay-free picker shape now, so no role
+          gets rates here and the canSeePay prop had nothing left to gate. */}
       {!loading && isManager && (
         <RosterSummaryPanel
           blocks={blocks}
@@ -1403,7 +1399,6 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
           location={user.activeLocation}
           timeOff={timeOff}
           contractorSpend={contractorSpend}
-          canSeePay={canSeePay}
         />
       )}
 

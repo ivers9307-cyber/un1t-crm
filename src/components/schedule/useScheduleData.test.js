@@ -56,6 +56,19 @@ describe('useScheduleData', () => {
     expect(result.current.contractorSpend).toEqual({ spend: 100 })
   })
 
+  // ROSTER-FIX.6c — the calendar's headline claim. Without the query param the
+  // route hands a master/owner/manager caller `*`, so hourly_rate,
+  // annual_salary and overtime_rate land in the tab on every roster load.
+  it('asks /api/staff for the pay-free picker shape', async () => {
+    const { result } = renderHook(() => useScheduleData(ARGS))
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    const staffUrls = global.fetch.mock.calls
+      .map(([url]) => url)
+      .filter(url => url.includes('/api/staff'))
+    expect(staffUrls).toHaveLength(1)
+    expect(staffUrls[0]).toContain('fields=picker')
+  })
+
   it('does not fetch without a location', async () => {
     const { result } = renderHook(() => useScheduleData({ ...ARGS, locationId: null }))
     await waitFor(() => expect(result.current.loading).toBe(false))

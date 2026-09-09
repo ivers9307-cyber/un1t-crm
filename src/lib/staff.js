@@ -16,7 +16,14 @@ export const STAFF_PUBLIC_FIELDS =
 // does, so an admin caller's browser received `*` — hourly_rate,
 // annual_salary and the rest — to populate a dropdown. `?fields=picker`
 // pins this shape for EVERY role, master included.
-export const STAFF_PICKER_FIELDS = 'id, full_name, active, role, avatar_url'
+//
+// ROSTER-FIX.6c — `employment_type` and `contracted_hours_per_week` joined the
+// list when the calendar itself moved onto this shape. The FTE utilisation bars
+// under the roster read both (allocated vs contract), and neither is pay data:
+// they are already in STAFF_PUBLIC_FIELDS, so every role has always received
+// them. The rates — hourly_rate, annual_salary, overtime_rate — stay out.
+export const STAFF_PICKER_FIELDS =
+  'id, full_name, active, role, avatar_url, employment_type, contracted_hours_per_week'
 
 function selectClause(isAdmin, fields) {
   if (fields === 'picker') {
