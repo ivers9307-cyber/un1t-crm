@@ -144,6 +144,13 @@ const PAIRS = {
     mode: 'reexport',
     why: 'MAIL-REPLY-QUOTE.1 — the quoted-text splitter serves the web thread and the mobile thread; src/lib re-exports shared.',
   },
+  'mail-entities.js': {
+    mode: 'reexport',
+    why:
+      '`export * from` shim; src/lib/mail-entities.js re-exports it so web call sites read as @/lib, '
+      + "and mobile imports 'shared/mail-entities' directly, so ingest and both render paths decode "
+      + 'character references with the very same function.',
+  },
   'sonos-playback.js': {
     mode: 'reexport',
     shared: 'shared/sonos-playback.js',
