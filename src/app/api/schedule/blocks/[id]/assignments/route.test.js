@@ -44,6 +44,8 @@ function buildDb({
   // ROSTER-FIX.1 — richer form of existingAssignedIds: full
   // { profile_id, status } rows, so a test can seed a cancelled tombstone.
   existingAssigned = null,
+  // ROSTER-FIX.1 — force the existing-assignees read to fail.
+  existingAssignsErr = null,
   timeOff = [],
   insertErrorFor = () => null, // (profileId) → error or null
 }) {
@@ -71,10 +73,12 @@ function buildDb({
               // Existing-assignees lookup (early in the route).
               if (sel === 'id, profile_id, status') {
                 return {
-                  eq: () => Promise.resolve({
-                    data: existingRows.map((r) => ({ id: r.id ?? `assign-${r.profile_id}`, profile_id: r.profile_id, status: r.status ?? 'scheduled' })),
-                    error: null,
-                  }),
+                  eq: () => Promise.resolve(existingAssignsErr
+                    ? { data: null, error: existingAssignsErr }
+                    : {
+                      data: existingRows.map((r) => ({ id: r.id ?? `assign-${r.profile_id}`, profile_id: r.profile_id, status: r.status ?? 'scheduled' })),
+                      error: null,
+                    }),
                 }
               }
               // The post-insert .select() — shouldn't be called this way.
@@ -304,5 +308,29 @@ describe('POST — cancelled tombstones', () => {
     const res = await POST(req({ profile_id: '11111111-1111-1111-1111-111111111111' }), PROPS)
     expect(res.status).toBe(201)
     expect(insertSpy).toHaveBeenCalledTimes(1)
+  })
+})
+
+// ROSTER-FIX.1 — the existing-assignees read used to discard its error, so a
+// failed read looked like an empty block: capacity unenforced, nobody
+// already-assigned, no tombstones. It must fail the request instead.
+describe('POST — existing-assignees query failure', () => {
+  it('400s and inserts nothing when the existing-assignees read errors', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const { db, insertSpy } = buildDb({
+      block: { id: 'block-1', location_id: 'loc-1', block_date: '2026-06-01', max_coaches: 1 },
+      existingAssignsErr: { message: 'boom' },
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(req({ profile_ids: [
+      'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+      'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+    ] }), PROPS)
+    const json = await res.json()
+    expect(res.status).toBe(400)
+    expect(json.success).toBe(false)
+    expect(json.error).toBe('boom')
+    expect(insertSpy).not.toHaveBeenCalled()
   })
 })

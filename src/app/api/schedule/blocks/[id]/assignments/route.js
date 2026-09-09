@@ -96,10 +96,21 @@ export async function POST(request, props) {
   // swap-drop tombstone, pre-D4) both consumed a slot and made the coach look
   // already-assigned — the block was full of people who weren't working it and
   // the dropped coach could never be put back on.
-  const { data: existingAssigns } = await db
+  //
+  // ROSTER-FIX.1 — the error is checked, not discarded. A failed read here
+  // resolves `data: null`, which reads as "the block is empty": every coach
+  // clears the capacity gate, nothing looks already-assigned, and the
+  // tombstone map is empty so a re-assign hits the unique key instead. Fail
+  // the request the way the block lookup above does.
+  const { data: existingAssigns, error: existingErr } = await db
     .from('shift_assignments')
     .select('id, profile_id, status')
     .eq('block_id', params.id)
+
+  if (existingErr) {
+    return NextResponse.json({ success: false, error: existingErr.message }, { status: 400 })
+  }
+
   const liveExisting = liveAssignments(existingAssigns)
   const alreadyAssignedIds = new Set(liveExisting.map((a) => a.profile_id))
   // Tombstone → its row id. Cleared just before the insert so the
@@ -242,7 +253,11 @@ export async function POST(request, props) {
       )
     }
     if (skip?.reason === 'at_capacity') {
-      const currentCount = liveExisting.length
+      // ROSTER-FIX.1 — report the count the gate actually refused on.
+      // liveExisting.length is the PRE-loop occupancy, so a request that
+      // filled the last seats would quote a number below max_coaches and read
+      // as a contradiction ("at capacity (3/5)").
+      const currentCount = runningCount
       return NextResponse.json(
         {
           success: false,
