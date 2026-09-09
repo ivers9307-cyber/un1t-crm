@@ -182,7 +182,11 @@ export async function executeTool(toolName, input, context) {
       const startDate = input.start_date
       const endDate = new Date(new Date(startDate + 'T00:00:00').getTime() + 6 * 86400000).toISOString().split('T')[0]
       // RETIRE-SHIFTS-MIRROR.3 — reads shift_assignments+shift_blocks now.
-      const data = await fetchScheduledShiftRows(db, { locationId, periodStart: startDate, periodEnd: endDate })
+      // ROSTER-FIX.5 — fetchScheduledShiftRows now returns { rows, error }; a
+      // failed read must reach the assistant as an error, not as an empty week
+      // it will happily narrate as "nobody is on shift".
+      const { rows: data, error: shiftsError } = await fetchScheduledShiftRows(db, { locationId, periodStart: startDate, periodEnd: endDate })
+      if (shiftsError) return { error: shiftsError }
       data.sort((a, b) => String(a.shift_date).localeCompare(String(b.shift_date)))
       return {
         shifts: (data || []).map(s => ({
@@ -307,7 +311,8 @@ export async function executeTool(toolName, input, context) {
 
       if (reportType === 'staff_hours') {
         // RETIRE-SHIFTS-MIRROR.3 — reads shift_assignments+shift_blocks now.
-        const shifts = await fetchScheduledShiftRows(db, { locationId, periodStart, periodEnd })
+        const { rows: shifts, error: shiftsError } = await fetchScheduledShiftRows(db, { locationId, periodStart, periodEnd })
+        if (shiftsError) return { error: shiftsError }
         const staffHours = {}
         for (const s of (shifts || [])) {
           const name = s.profiles?.full_name || 'Unknown'
@@ -343,7 +348,8 @@ export async function executeTool(toolName, input, context) {
           profiles = data || []
         }
         // RETIRE-SHIFTS-MIRROR.3 — reads shift_assignments+shift_blocks now.
-        const shifts = await fetchScheduledShiftRows(db, { locationId, periodStart, periodEnd })
+        const { rows: shifts, error: shiftsError } = await fetchScheduledShiftRows(db, { locationId, periodStart, periodEnd })
+        if (shiftsError) return { error: shiftsError }
         const rateMap = {}
         for (const p of profiles) {
           let rate = 0

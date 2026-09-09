@@ -42,18 +42,50 @@ export async function fetchLocationProfileIds(db, locationId) {
   return { profileIds: [...new Set((data || []).map(r => r.profile_id).filter(Boolean))], error: null }
 }
 
+// ROSTER-FIX.5 — returns { rows, error }, not a bare array. The error used to
+// be discarded, so a failed query and a genuinely empty period both produced
+// []: the report was SAVED reading "0 hours", with nothing anywhere saying the
+// query had failed. Every caller now fails the whole report on `error` rather
+// than persisting a zero that reads like a fact.
+//
+// ROSTER-FIX.5 — and it pages. PostgREST caps any single response at
+// db-max-rows (1000) whatever .limit() says, so one busy month at one busy
+// location silently truncated to its first 1000 assignments and under-reported
+// hours and cost with no error anywhere. Explicit .order('id') + .range(),
+// the pattern in src/lib/pipeline-reclassify.js — paging without a total order
+// can repeat or skip rows between pages.
+const SHIFT_PAGE_SIZE = 1000
+// A period is at most a month of one location's assignments; 20k is far above
+// anything the estate can produce. Crossing it means streaming per week, not
+// raising the number again.
+const SHIFT_HARD_LIMIT = 20_000
+
 export async function fetchScheduledShiftRows(db, { locationId, periodStart, periodEnd }) {
-  const { data: rows, error } = await db.from('shift_assignments')
-    .select(SHIFT_ROW_SELECT)
-    .eq('shift_blocks.location_id', locationId)
-    .gte('shift_blocks.block_date', periodStart)
-    .lte('shift_blocks.block_date', periodEnd)
-  // ROSTER-FIX.5 — the error used to be discarded, so a failed query and a
-  // genuinely empty period both produced []: the report was saved reading
-  // "0 hours" with nothing anywhere saying the query had failed. The shape
-  // stays an array (four callers depend on it) but the failure is now loud.
-  if (error) logWarn('report-generator', 'shift rows query failed', { locationId, periodStart, periodEnd, err: error })
-  return (rows || []).filter(isLiveAssignment).map((r) => ({
+  const raw = []
+  let pageStart = 0
+
+  while (true) {
+    const pageEnd = Math.min(pageStart + SHIFT_PAGE_SIZE - 1, SHIFT_HARD_LIMIT - 1)
+    const { data: page, error } = await db.from('shift_assignments')
+      .select(SHIFT_ROW_SELECT)
+      .eq('shift_blocks.location_id', locationId)
+      .gte('shift_blocks.block_date', periodStart)
+      .lte('shift_blocks.block_date', periodEnd)
+      .order('id')
+      .range(pageStart, pageEnd)
+
+    if (error) {
+      logWarn('report-generator', 'shift rows query failed', { locationId, periodStart, periodEnd, pageStart, err: error })
+      return { rows: [], error: `Failed to load scheduled shifts: ${error.message}` }
+    }
+    if (!Array.isArray(page) || page.length === 0) break
+    raw.push(...page)
+    if (page.length < SHIFT_PAGE_SIZE) break        // short page — that was the last one
+    if (raw.length >= SHIFT_HARD_LIMIT) break       // safety cap
+    pageStart += SHIFT_PAGE_SIZE
+  }
+
+  const rows = raw.filter(isLiveAssignment).map((r) => ({
     shift_date: r.shift_blocks?.block_date,
     profile_id: r.profile_id,
     start_time_override: r.start_time_override,
@@ -62,6 +94,7 @@ export async function fetchScheduledShiftRows(db, { locationId, periodStart, per
     profiles: r.profiles,
     shift_templates: r.shift_blocks?.shift_templates,
   }))
+  return { rows, error: null }
 }
 
 /**
@@ -90,7 +123,8 @@ export async function generateReport({ report_type, period_start, period_end, lo
   switch (report_type) {
     case 'staff_hours': {
       reportName = 'Staff Hours Worked'
-      const shifts = await fetchScheduledShiftRows(db, { locationId: locId, periodStart: period_start, periodEnd: period_end })
+      const { rows: shifts, error: shiftsError } = await fetchScheduledShiftRows(db, { locationId: locId, periodStart: period_start, periodEnd: period_end })
+      if (shiftsError) return { success: false, error: shiftsError }
 
       const staffHours = {}
       let totalHours = 0
@@ -129,7 +163,14 @@ export async function generateReport({ report_type, period_start, period_end, lo
       // so we honour the same hours the schedule UI shows.
       const { profileIds, error: scopeError } = await fetchLocationProfileIds(db, locId)
       if (scopeError) return { success: false, error: scopeError }
-      const [{ data: profiles, error: profilesError }, shifts] = await Promise.all([
+      // ROSTER-FIX.5 — an EMPTY profile_locations is not "nobody worked here",
+      // it is "we cannot say who works here": `.in('id', [])` matches no
+      // profile, every shift is then skipped for want of a matching profile,
+      // and the report is saved reading €0 across 0 staff, which is a number an
+      // operator will believe. Distinct from scopeError above so the two
+      // causes stay tellable apart.
+      if (profileIds.length === 0) return { success: false, error: 'No staff are assigned to this location' }
+      const [{ data: profiles, error: profilesError }, { rows: shifts, error: shiftsError }] = await Promise.all([
         db.from('profiles')
           .select('id, full_name, role, employment_type, annual_salary, hourly_rate, contracted_hours_per_week, overtime_rate')
           .eq('active', true)
@@ -137,6 +178,7 @@ export async function generateReport({ report_type, period_start, period_end, lo
         fetchScheduledShiftRows(db, { locationId: locId, periodStart: period_start, periodEnd: period_end }),
       ])
       if (profilesError) return { success: false, error: profilesError.message }
+      if (shiftsError) return { success: false, error: shiftsError }
 
       const profileMap = {}
       for (const p of (profiles || [])) profileMap[p.id] = p
@@ -256,7 +298,7 @@ export async function generateReport({ report_type, period_start, period_end, lo
     case 'roster_coverage': {
       reportName = 'Roster Coverage'
       // shifts and approved time-off are independent — fetch in parallel.
-      const [shifts, { data: timeOff }] = await Promise.all([
+      const [{ rows: shifts, error: shiftsError }, { data: timeOff }] = await Promise.all([
         fetchScheduledShiftRows(db, { locationId: locId, periodStart: period_start, periodEnd: period_end }),
         db.from('time_off_requests')
           .select('start_date, end_date, profile_id, type, profiles!profile_id(full_name)')
@@ -265,6 +307,7 @@ export async function generateReport({ report_type, period_start, period_end, lo
           .lte('start_date', period_end)
           .gte('end_date', period_start),
       ])
+      if (shiftsError) return { success: false, error: shiftsError }
 
       const days = {}
       const start = new Date(period_start + 'T00:00:00')
@@ -311,7 +354,12 @@ export async function generateReport({ report_type, period_start, period_end, lo
       // profiles + shifts are independent — fetch in parallel.
       const { profileIds, error: scopeError } = await fetchLocationProfileIds(db, locId)
       if (scopeError) return { success: false, error: scopeError }
-      const [{ data: profiles, error: profilesError }, shifts] = await Promise.all([
+      // ROSTER-FIX.5 — same fail-closed rule as staff_cost: no rows in
+      // profile_locations means the denominator is unknown, and utilisation
+      // with an unknown denominator saved as "0% across 0 staff" is worse than
+      // no report at all.
+      if (profileIds.length === 0) return { success: false, error: 'No staff are assigned to this location' }
+      const [{ data: profiles, error: profilesError }, { rows: shifts, error: shiftsError }] = await Promise.all([
         db.from('profiles')
           .select('id, full_name, role, employment_type, contracted_hours_per_week')
           .eq('active', true)
@@ -319,6 +367,7 @@ export async function generateReport({ report_type, period_start, period_end, lo
         fetchScheduledShiftRows(db, { locationId: locId, periodStart: period_start, periodEnd: period_end }),
       ])
       if (profilesError) return { success: false, error: profilesError.message }
+      if (shiftsError) return { success: false, error: shiftsError }
 
       const periodStartD = new Date(period_start + 'T00:00:00')
       const periodEndD = new Date(period_end + 'T00:00:00')

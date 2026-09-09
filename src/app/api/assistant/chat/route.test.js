@@ -69,7 +69,9 @@ function makeDb(fixtures = {}) {
   const colVal = (row, col) => col.split('.').reduce((o, k) => (o == null ? o : o[k]), row)
 
   function builder(table) {
-    const state = { table, op: 'select', payload: null, opts: null, filters: [] }
+    // ROSTER-FIX.5 — `range` is real here: fetchScheduledShiftRows pages, so a
+    // mock that ignored .range() would loop forever on a full page.
+    const state = { table, op: 'select', payload: null, opts: null, filters: [], range: null }
 
     function rowsAfterFilters() {
       let rows = (fixtures[table] || []).slice()
@@ -104,7 +106,8 @@ function makeDb(fixtures = {}) {
           error: single && affected.length === 0 ? { message: 'no rows' } : null,
         }
       }
-      const rows = rowsAfterFilters()
+      const all = rowsAfterFilters()
+      const rows = state.range ? all.slice(state.range[0], state.range[1] + 1) : all
       return { data: single ? (rows[0] ?? null) : rows, error: null }
     }
 
@@ -120,6 +123,7 @@ function makeDb(fixtures = {}) {
       or(arg) { state.filters.push({ type: 'or', val: arg }); return chain },
       limit() { return chain },
       order() { return chain },
+      range(from, to) { state.range = [from, to]; return chain },
       single() { return Promise.resolve(settle(true)) },
       maybeSingle() { return Promise.resolve(settle(true)) },
       then(onF, onR) { return Promise.resolve(settle(false)).then(onF, onR) },

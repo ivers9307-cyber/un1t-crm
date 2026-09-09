@@ -18,15 +18,34 @@ import {
 
 // Minimal thenable mock of the supabase query builder: every filter method
 // returns the builder; awaiting it resolves to { data }.
-function mockDb(rows) {
+//
+// ROSTER-FIX.5 — fetchScheduledShiftRows now pages with .order('id') +
+// .range(), so the mock records the ranges it was asked for and serves the
+// matching slice. `pages` is either a flat row array (one short page) or a
+// list of arrays, one per expected .range() call.
+function mockDb(rows, { error = null } = {}) {
+  const ranges = []
+  const pages = Array.isArray(rows) && Array.isArray(rows[0]) ? rows : null
   const builder = {
+    ranges,
     select: () => builder,
     eq: () => builder,
     gte: () => builder,
     lte: () => builder,
-    then: (onFulfilled, onRejected) => Promise.resolve({ data: rows }).then(onFulfilled, onRejected),
+    order: () => builder,
+    range: (from, to) => { ranges.push([from, to]); return builder },
+    then: (onFulfilled, onRejected) => {
+      const data = error ? null : (pages ? (pages[ranges.length - 1] ?? []) : rows)
+      return Promise.resolve({ data, error }).then(onFulfilled, onRejected)
+    },
   }
-  return { from: () => builder }
+  return { from: () => builder, builder }
+}
+
+// The rows a caller actually consumes.
+async function fetchRows(db, args) {
+  const { rows } = await fetchScheduledShiftRows(db, args)
+  return rows
 }
 
 describe('fetchScheduledShiftRows', () => {
@@ -43,7 +62,7 @@ describe('fetchScheduledShiftRows', () => {
         shift_templates: { name: 'AM', start_time: '09:30:00', end_time: '10:30:00' },
       },
     }]
-    const out = await fetchScheduledShiftRows(mockDb(rows), {
+    const out = await fetchRows(mockDb(rows), {
       locationId: 'loc1', periodStart: '2026-06-01', periodEnd: '2026-06-30',
     })
     expect(out).toEqual([{
@@ -63,14 +82,14 @@ describe('fetchScheduledShiftRows', () => {
       profiles: { full_name: 'Sam' },
       shift_blocks: { block_date: '2026-06-07', location_id: 'loc1', shift_templates: { name: 'PM', start_time: '17:00:00', end_time: '18:00:00' } },
     }]
-    const [row] = await fetchScheduledShiftRows(mockDb(rows), { locationId: 'loc1', periodStart: '2026-06-01', periodEnd: '2026-06-30' })
+    const [row] = await fetchRows(mockDb(rows), { locationId: 'loc1', periodStart: '2026-06-01', periodEnd: '2026-06-30' })
     expect(row.shift_date).toBe('2026-06-07')
     expect(row.shift_templates.start_time).toBe('17:00:00')
   })
 
   it('returns [] for empty / null data', async () => {
-    expect(await fetchScheduledShiftRows(mockDb([]), { locationId: 'x', periodStart: 'a', periodEnd: 'b' })).toEqual([])
-    expect(await fetchScheduledShiftRows(mockDb(null), { locationId: 'x', periodStart: 'a', periodEnd: 'b' })).toEqual([])
+    expect(await fetchRows(mockDb([]), { locationId: 'x', periodStart: 'a', periodEnd: 'b' })).toEqual([])
+    expect(await fetchRows(mockDb(null), { locationId: 'x', periodStart: 'a', periodEnd: 'b' })).toEqual([])
   })
 
   // ROSTER-FIX.1 — a cancelled assignment is a dropped shift: paying it in
@@ -88,13 +107,38 @@ describe('fetchScheduledShiftRows', () => {
         shift_blocks: { block_date: '2026-06-06', location_id: 'loc1', shift_templates: { name: 'AM' } },
       },
     ]
-    const out = await fetchScheduledShiftRows(mockDb(rows), { locationId: 'loc1', periodStart: '2026-06-01', periodEnd: '2026-06-30' })
+    const out = await fetchRows(mockDb(rows), { locationId: 'loc1', periodStart: '2026-06-01', periodEnd: '2026-06-30' })
     expect(out.map((r) => r.profile_id)).toEqual(['live'])
   })
 
   it('tolerates a row missing its block embed (no throw)', async () => {
-    const out = await fetchScheduledShiftRows(mockDb([{ profile_id: 'p3', profiles: { full_name: 'Lee' } }]), { locationId: 'x', periodStart: 'a', periodEnd: 'b' })
+    const out = await fetchRows(mockDb([{ profile_id: 'p3', profiles: { full_name: 'Lee' } }]), { locationId: 'x', periodStart: 'a', periodEnd: 'b' })
     expect(out[0]).toMatchObject({ profile_id: 'p3', shift_date: undefined, shift_templates: undefined })
+  })
+
+  // ROSTER-FIX.5 — the read used to be one unpaged .select(), which PostgREST
+  // caps at db-max-rows (1000) with no error: a busy month reported only its
+  // first 1000 assignments and nothing said so.
+  it('pages past the 1000-row cap and stops on the first short page', async () => {
+    const row = (i) => ({
+      profile_id: `p${i}`, status: 'scheduled', profiles: { full_name: `S${i}` },
+      shift_blocks: { block_date: '2026-06-06', location_id: 'loc1', shift_templates: { name: 'AM' } },
+    })
+    const full = Array.from({ length: 1000 }, (_, i) => row(i))
+    const tail = Array.from({ length: 3 }, (_, i) => row(1000 + i))
+    const db = mockDb([full, tail])
+
+    const { rows, error } = await fetchScheduledShiftRows(db, { locationId: 'loc1', periodStart: '2026-06-01', periodEnd: '2026-06-30' })
+    expect(error).toBeNull()
+    expect(rows).toHaveLength(1003)
+    expect(db.builder.ranges).toEqual([[0, 999], [1000, 1999]])
+  })
+
+  // ROSTER-FIX.5 — a failed read is not an empty period.
+  it('returns the error instead of an empty page', async () => {
+    const out = await fetchScheduledShiftRows(mockDb(null, { error: { message: 'boom' } }), { locationId: 'loc1', periodStart: 'a', periodEnd: 'b' })
+    expect(out.rows).toEqual([])
+    expect(out.error).toMatch(/boom/)
   })
 })
 
@@ -306,6 +350,7 @@ function makeReportDb(tables) {
       gte: () => b,
       lte: () => b,
       order: () => b,
+      range: () => b,
       in: (col, vals) => { captured[`${table}.in`] = { col, vals }; return b },
       insert: (rec) => { captured.inserted = rec; return b },
       single: () => Promise.resolve({ data: { id: 'gen-1', ...captured.inserted }, error: null }),
@@ -405,17 +450,16 @@ describe('generateReport — utilisation', () => {
     expect(captured.inserted.report_data.staff.map(s => s.name)).toEqual(['Coach Here'])
   })
 
-  it('no staff at the location → an empty report, not the whole estate', async () => {
-    const { db, captured } = makeReportDb({
-      profile_locations: [],
-      profiles: [],
-      shift_assignments: [],
-    })
+  // ROSTER-FIX.5 — this used to SAVE a report reading "0% across 0 staff".
+  // `.in('id', [])` matches nothing, so an unpopulated profile_locations and a
+  // location with genuinely no staff produced the same believable zero.
+  it('no rows in profile_locations → fails closed, no report saved', async () => {
+    const { db } = makeReportDb({ profile_locations: [], profiles: [], shift_assignments: [] })
     createServerClient.mockReturnValue(db)
 
-    await generateReport({ report_type: 'utilisation', ...PERIOD })
-    expect(captured['profiles.in']).toEqual({ col: 'id', vals: [] })
-    expect(captured.inserted.summary.staff_count).toBe(0)
+    const res = await generateReport({ report_type: 'utilisation', ...PERIOD })
+    expect(res).toEqual({ success: false, error: 'No staff are assigned to this location' })
+    expect(db.from).not.toHaveBeenCalledWith('generated_reports')
   })
 })
 
@@ -436,6 +480,67 @@ describe('generateReport — staff_cost', () => {
     // the generator already skips shifts with no matching profile.
     expect(captured.inserted.report_data.staff.map(s => s.name)).toEqual(['Coach Here'])
   })
+
+  it('no rows in profile_locations → fails closed, no report saved', async () => {
+    const { db } = makeReportDb({ profile_locations: [], profiles: [], shift_assignments: [] })
+    createServerClient.mockReturnValue(db)
+
+    const res = await generateReport({ report_type: 'staff_cost', ...PERIOD })
+    expect(res).toEqual({ success: false, error: 'No staff are assigned to this location' })
+    expect(db.from).not.toHaveBeenCalledWith('generated_reports')
+  })
+})
+
+// ─── ROSTER-FIX.5 — a failed shift read is not a 0-hour period ───────────────
+//
+// fetchScheduledShiftRows used to swallow its error and hand back []: the
+// report was SAVED reading "0 hours", which an operator has no way to tell
+// from a genuinely quiet week.
+
+describe('generateReport — a failed shift read fails the report', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+
+  // Everything resolves normally except shift_assignments, which errors.
+  function dbWithBrokenShifts(tables) {
+    const from = vi.fn((table) => {
+      const b = {
+        select: () => b, eq: () => b, gte: () => b, lte: () => b, in: () => b,
+        order: () => b, range: () => b, insert: () => b,
+        single: () => Promise.resolve({ data: { id: 'x' }, error: null }),
+        then: (ok, err) => Promise.resolve(
+          table === 'shift_assignments'
+            ? { data: null, error: { message: 'boom' } }
+            : { data: tables[table] ?? [], error: null }
+        ).then(ok, err),
+      }
+      return b
+    })
+    return { from }
+  }
+
+  for (const report_type of ['staff_hours', 'roster_coverage']) {
+    it(`${report_type} surfaces the error instead of persisting 0 hours`, async () => {
+      const db = dbWithBrokenShifts({})
+      createServerClient.mockReturnValue(db)
+
+      const res = await generateReport({ report_type, ...PERIOD })
+      expect(res.success).toBe(false)
+      expect(res.error).toMatch(/boom/)
+      expect(db.from).not.toHaveBeenCalledWith('generated_reports')
+    })
+  }
+
+  for (const report_type of ['staff_cost', 'utilisation']) {
+    it(`${report_type} surfaces the error instead of persisting 0 hours`, async () => {
+      const db = dbWithBrokenShifts({ profile_locations: PL_ROWS, profiles: [PROFILES[0]] })
+      createServerClient.mockReturnValue(db)
+
+      const res = await generateReport({ report_type, ...PERIOD })
+      expect(res.success).toBe(false)
+      expect(res.error).toMatch(/boom/)
+      expect(db.from).not.toHaveBeenCalledWith('generated_reports')
+    })
+  }
 })
 
 describe('generateReport — the staff-list query failing is not "no staff"', () => {
