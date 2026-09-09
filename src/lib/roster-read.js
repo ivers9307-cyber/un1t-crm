@@ -167,6 +167,12 @@ function toApiShiftRow(a) {
     profile_id: a.profile_id,
     shift_template_id: b.template_id,
     shift_date: b.block_date,
+    // ROSTER-FIX.1 — the BLOCK's own times ride along (the legacy shifts row
+    // had none). Mobile needs them to sort the day list on the effective
+    // start and to compare an override against the true block default rather
+    // than the template's, which silently discarded a block-level time change.
+    block_start_time: b.start_time ?? null,
+    block_end_time: b.end_time ?? null,
     start_time_override: effectiveOverride(a.start_time_override, b.start_time, tpl.start_time),
     end_time_override: effectiveOverride(a.end_time_override, b.end_time, tpl.end_time),
     role_label: tpl.role_label ?? null,

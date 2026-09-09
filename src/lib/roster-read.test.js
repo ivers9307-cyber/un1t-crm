@@ -207,6 +207,10 @@ describe('fetchApiShiftRows', () => {
     expect(rows[1].notes).toBe('blk')
     // no start_time / end_time columns (legacy shifts had none)
     expect(rows[0].start_time).toBeUndefined()
+    // ROSTER-FIX.1 — block times ride along so mobile can sort the day list
+    // and show the TRUE block default in AdjustSheet (not the template's).
+    expect(rows[0].block_start_time).toBe('09:00:00')
+    expect(rows[0].block_end_time).toBe('10:00:00')
     // ROSTER-FIX.1 — published derives from the block's roster, never hard-coded
     expect(rows[0].published).toBe(true)
     expect(rows[1].published).toBe(false)
