@@ -98,8 +98,6 @@ export default async function RosterApprovalsPage() {
           {drafts.map(d => {
             const impact = impactByRosterId[d.id]
             const isLive = impact != null
-            const projected = isLive ? impact.monthProjectedTotalEur : d.projected_contractor_eur
-            const budget = isLive ? impact.monthlyBudgetEur : d.budget_at_publish_eur
             const overrun = isLive ? impact.overrunEur : (d.projected_contractor_eur || 0) - (d.budget_at_publish_eur || 0)
             const requesterRoleAtLocation = d.created_by_profile?.full_name || 'Someone'
             const canApprove = isOwner && (user.role === 'master' || user.rolesByLocation?.[d.location_id] === 'owner')
@@ -114,11 +112,27 @@ export default async function RosterApprovalsPage() {
                     <div className="text-xs text-un1t-subtle mt-1">
                       Submitted by {requesterRoleAtLocation}
                       {' · '}
-                      Projected {formatEur(projected)} of {formatEur(budget)} budget
+                      {isLive ? (
+                        <>Projected {formatEur(impact.monthProjectedTotalEur)} of {formatEur(impact.monthlyBudgetEur)} monthly budget</>
+                      ) : (
+                        // ROSTER-FIX.4 — the two figures are not the same
+                        // quantity. Live, it is the whole MONTH's projected
+                        // total; the stored fallback `projected_contractor_eur`
+                        // is only THIS PERIOD (see the publish route's insert),
+                        // so rendering it under the month-total label understated
+                        // the month by every other period already published into
+                        // it — and read as if the overrun had shrunk.
+                        <>This period projected {formatEur(d.projected_contractor_eur)} against a {formatEur(d.budget_at_publish_eur)} monthly budget, as submitted</>
+                      )}
                       {overrun > 0 && <span className="text-red-700 font-medium"> ({formatEur(overrun)} over)</span>}
-                      {!isLive && <span className="text-un1t-subtle"> · figure as submitted</span>}
                     </div>
-                    {isLive && overrun <= 0 && (
+                    {/* ROSTER-FIX.4 — gated on a budget EXISTING. With no
+                        monthly budget set, projectPublishImpact reports
+                        overrunEur 0 by definition (there is nothing to be over),
+                        so an un-budgeted location claimed every draft was "now
+                        within budget" — a reassurance about a limit nobody
+                        has set. */}
+                    {isLive && impact.monthlyBudgetEur != null && overrun <= 0 && (
                       <div className="text-xs text-emerald-700 mt-1">
                         Now within budget — the month has moved since this was submitted.
                       </div>

@@ -13,7 +13,7 @@
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { notifyStaffOfPublish, publishNotifyRowsForBlocks } from '@/lib/roster-notify'
 import { findConflictingPublishedRosters } from '@/lib/roster-publish'
 import { logWarn } from '@/lib/log'
@@ -35,6 +35,17 @@ export async function POST(_request, props) {
     .eq('id', params.id)
     .single()
   if (fetchErr || !roster) {
+    return NextResponse.json({ success: false, error: 'Roster not found' }, { status: 404 })
+  }
+
+  // ROSTER-FIX.4 — cross-tenant posture BEFORE the permission check. This is
+  // a detail route on a service-role client (RLS bypassed), so a roster at a
+  // location the caller isn't assigned to must be indistinguishable from one
+  // that doesn't exist: 403 there would confirm the id is real and name a
+  // location the caller can't see. A caller AT the location who simply lacks
+  // the rosters permission still gets the 403 below — that answers "may you",
+  // not "does it exist".
+  if (user.role !== 'master' && !getUserLocationIds(user).includes(roster.location_id)) {
     return NextResponse.json({ success: false, error: 'Roster not found' }, { status: 404 })
   }
 
@@ -97,22 +108,43 @@ export async function POST(_request, props) {
   // RETIRE-SHIFTS-MIRROR.6 — capture the blocks NEWLY being published
   // (roster_id IS NULL) BEFORE tagging; their assignments are the notify
   // set (new-model replacement for the old shifts.published flip).
-  const { data: newBlocks } = await db
+  const { data: newBlocks, error: captureErr } = await db
     .from('shift_blocks')
     .select('id')
     .eq('location_id', roster.location_id)
     .gte('block_date', roster.period_start)
     .lte('block_date', roster.period_end)
     .is('roster_id', null)
+  if (captureErr) {
+    // ROSTER-FIX.4 — this read only decides WHO gets notified, so losing it
+    // must not undo an approval that already happened. It was discarded
+    // entirely before: the roster went live, `newBlocks` fell back to `[]`,
+    // and not one coach was told, with nothing in the log to say why.
+    logWarn('rosters/approve', 'newly-published block capture failed; no coach will be notified', {
+      err: captureErr.message,
+      roster_id: roster.id,
+    })
+  }
   const newBlockIds = (newBlocks || []).map((b) => b.id)
 
   // Tag blocks with the roster.
-  await db
+  const { error: tagErr } = await db
     .from('shift_blocks')
     .update({ roster_id: roster.id })
     .eq('location_id', roster.location_id)
     .gte('block_date', roster.period_start)
     .lte('block_date', roster.period_end)
+  if (tagErr) {
+    // ROSTER-FIX.4 — same partial-success shape POST /api/schedule/rosters
+    // returns. The roster row is already published, so rolling back isn't on
+    // offer; the operator needs to know the blocks didn't join it (untagged
+    // blocks read as belonging to no roster) rather than see a bare success.
+    return NextResponse.json({
+      success: true,
+      data: updated,
+      warning: `Roster approved but block tagging failed: ${tagErr.message}`,
+    })
+  }
 
   // Coaches on the newly-published blocks. Without this, an owner-approved
   // draft would publish silently to staff.

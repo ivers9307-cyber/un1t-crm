@@ -12,7 +12,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { notifyUsersOnce } from '@/lib/push-dedup'
 import { logWarn } from '@/lib/log'
@@ -51,8 +51,18 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: 'Roster not found' }, { status: 404 })
   }
 
-  // ROSTER-FIX.4 — permission BEFORE the status branch (approve checks it
-  // after). A caller with no rosters permission at this location gets the
+  // ROSTER-FIX.4 — cross-tenant posture BEFORE the permission check. Reject
+  // DELETES the row, and this runs the service-role client (RLS bypassed), so
+  // a roster at a location the caller isn't assigned to must look exactly
+  // like one that doesn't exist. 403 would confirm the id is real and name a
+  // location the caller can't see; the 403 below is for a caller who IS at
+  // the location and simply lacks the rosters permission.
+  if (user.role !== 'master' && !getUserLocationIds(user).includes(roster.location_id)) {
+    return NextResponse.json({ success: false, error: 'Roster not found' }, { status: 404 })
+  }
+
+  // ROSTER-FIX.4 — permission BEFORE the status branch (approve now does the
+  // same). A caller with no rosters permission at this location gets the
   // same 403 whatever state the roster is in, so the endpoint can't be used
   // to probe which ids exist as drafts.
   if (!hasPermissionForLocation(user, roster.location_id, APPROVAL_CATEGORY_PERMISSION.rosters)) {

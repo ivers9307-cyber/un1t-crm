@@ -10,19 +10,14 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { rosterErrorMessage } from '@/lib/roster-overlap-message'
 
-// ROSTER-FIX.4 — approving now runs the publish overlap guard, so approve can
-// come back with `overlapping_roster`. That is a code, not copy: turn it into
-// the sentence the operator can act on rather than alerting a raw error key.
-function approveErrorMessage(data) {
-  if (data?.error !== 'overlapping_roster') return data?.error || 'Approval failed'
-  const ranges = (data.overlapping || [])
-    .map((r) => (r.period_start === r.period_end ? r.period_start : `${r.period_start} to ${r.period_end}`))
-    .join(', ')
-  return ranges
-    ? `Those days are already published as part of ${ranges}. Reject this draft and re-publish that range instead.`
-    : 'Those days are already published as part of another roster. Reject this draft and re-publish that range instead.'
-}
+// ROSTER-FIX.4 — approving runs the publish overlap guard, so approve can come
+// back with `overlapping_roster`. That is a code, not copy: turn it into the
+// sentence the operator can act on rather than alerting a raw error key. The
+// wording is shared with the publish modal — only the closing instruction
+// differs, because from here the way out is to reject the draft.
+const APPROVE_NEXT_STEP = 'Reject this draft and re-publish that range instead.'
 
 export default function RosterApprovalActions({ rosterId, canApprove }) {
   const router = useRouter()
@@ -33,12 +28,18 @@ export default function RosterApprovalActions({ rosterId, canApprove }) {
     setBusy(true)
     try {
       const res = await fetch(`/api/schedule/rosters/${rosterId}/approve`, { method: 'POST' })
-      const data = await res.json()
-      if (!data.success) {
-        alert(approveErrorMessage(data))
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data.success) {
+        alert(rosterErrorMessage(data, { nextStep: APPROVE_NEXT_STEP, fallback: 'Approval failed' }))
         return
       }
       router.refresh()
+    } catch {
+      // ROSTER-FIX.4 — reject already had this; approve did not, so a dropped
+      // connection threw out of the handler and the operator saw only the
+      // button un-busy itself. On this screen that reads as "approved", and
+      // the roster is still sitting in the queue.
+      alert('Network error — the roster was not approved.')
     } finally {
       setBusy(false)
     }

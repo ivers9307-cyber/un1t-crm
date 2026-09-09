@@ -19,7 +19,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
-vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn() }))
+// getUserLocationIds is the real one-liner from @/lib/auth — mocking it away
+// would make the cross-tenant 404 untestable, which is the point of it.
+vi.mock('@/lib/auth', () => ({
+  getCurrentUser: vi.fn(),
+  getUserLocationIds: (user) => (user?.locations || []).map((l) => l.id),
+}))
 vi.mock('@/lib/permissions', () => ({ hasPermissionForLocation: vi.fn(() => true) }))
 vi.mock('@/lib/roster-notify', () => ({
   notifyStaffOfPublish: vi.fn(() => Promise.resolve()),
@@ -51,7 +56,7 @@ function draft(overrides = {}) {
 // (select('*') … .single()), the overlap probe (a narrow select that is
 // awaited), and the status flip. The probe's filters are recorded so the
 // self-exclusion can be asserted.
-function buildDb({ roster, publishedRosters = [], updateError = null }) {
+function buildDb({ roster, publishedRosters = [], updateError = null, captureError = null, tagError = null }) {
   const updates = []
   const probe = []
   const blockUpdates = []
@@ -95,14 +100,20 @@ function buildDb({ roster, publishedRosters = [], updateError = null }) {
         }
       }
       if (table === 'shift_blocks') {
+        // One builder serves both shift_blocks queries — the newly-published
+        // capture (a select) and the tagging (an update) — so the resolved
+        // error has to follow whichever one this chain turned into.
+        let isUpdate = false
         const chain = {
           select: () => chain,
-          update: (payload) => { blockUpdates.push(payload); return chain },
+          update: (payload) => { isUpdate = true; blockUpdates.push(payload); return chain },
           eq: () => chain,
           gte: () => chain,
           lte: () => chain,
           is: () => chain,
-          then: (onF, onR) => Promise.resolve({ data: [], error: null }).then(onF, onR),
+          then: (onF, onR) => Promise.resolve(
+            isUpdate ? { data: null, error: tagError } : { data: [], error: captureError },
+          ).then(onF, onR),
         }
         return chain
       }
@@ -118,7 +129,7 @@ beforeEach(() => {
   hasPermissionForLocation.mockReset()
   hasPermissionForLocation.mockReturnValue(true)
   notifyStaffOfPublish.mockClear()
-  getCurrentUser.mockResolvedValue({ id: 'owner-1', role: 'owner' })
+  getCurrentUser.mockResolvedValue({ id: 'owner-1', role: 'owner', locations: [{ id: 'loc-1' }] })
 })
 
 describe('POST /api/schedule/rosters/[id]/approve — overlap guard', () => {
@@ -182,7 +193,7 @@ describe('POST /api/schedule/rosters/[id]/approve — overlap guard', () => {
 
 describe('POST /api/schedule/rosters/[id]/approve — gate ordering', () => {
   it('checks permission BEFORE the draft/published branch: a published roster gives 403, not 409', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'mgr-2', role: 'manager' })
+    getCurrentUser.mockResolvedValue({ id: 'mgr-2', role: 'manager', locations: [{ id: 'loc-1' }] })
     hasPermissionForLocation.mockReturnValue(false)
     const { db, updates } = buildDb({ roster: draft({ status: 'published' }) })
     createServerClient.mockReturnValue(db)
@@ -240,6 +251,74 @@ describe('POST /api/schedule/rosters/[id]/approve — gate ordering', () => {
 
     const res = await POST({}, PROPS)
     expect(res.status).toBe(400)
+    expect(notifyStaffOfPublish).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /api/schedule/rosters/[id]/approve — cross-tenant posture', () => {
+  it('a caller at another location gets 404, not 403: the id must look missing', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'mgr-3', role: 'manager', locations: [{ id: 'loc-2' }] })
+    const { db, updates } = buildDb({ roster: draft() })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST({}, PROPS)
+    expect(res.status).toBe(404)
+    const body = await res.json()
+    expect(body.error).toBe('Roster not found')
+    expect(updates).toHaveLength(0)
+    // The location check runs FIRST — a permission answer would already be
+    // an answer about a roster the caller may not know exists.
+    expect(hasPermissionForLocation).not.toHaveBeenCalled()
+  })
+
+  it('master is not location-scoped and still approves', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'master-1', role: 'master', locations: [] })
+    const { db, updates } = buildDb({ roster: draft() })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST({}, PROPS)
+    expect(res.status).toBe(200)
+    expect(updates[0].status).toBe('published')
+  })
+
+  it('an at-location caller without the rosters permission still gets 403', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'mgr-2', role: 'manager', locations: [{ id: 'loc-1' }] })
+    hasPermissionForLocation.mockReturnValue(false)
+    const { db } = buildDb({ roster: draft() })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST({}, PROPS)
+    expect(res.status).toBe(403)
+  })
+})
+
+describe('POST /api/schedule/rosters/[id]/approve — block errors are not swallowed', () => {
+  it('a failed newly-published capture still approves and still tags, but is logged', async () => {
+    const { db, updates, blockUpdates } = buildDb({ roster: draft(), captureError: { message: 'read timeout' } })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST({}, PROPS)
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.success).toBe(true)
+    // The approval is done; only the notify set was lost.
+    expect(updates[0].status).toBe('published')
+    expect(blockUpdates).toHaveLength(1)
+  })
+
+  it('a failed tagging returns a partial success naming it, and notifies nobody', async () => {
+    const { db, updates } = buildDb({ roster: draft(), tagError: { message: 'deadlock detected' } })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST({}, PROPS)
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    // Same shape POST /api/schedule/rosters uses: the roster IS published,
+    // so this is a warning on a success, not a failure.
+    expect(body.success).toBe(true)
+    expect(body.data.status).toBe('published')
+    expect(body.warning).toMatch(/block tagging failed: deadlock detected/)
+    expect(updates).toHaveLength(1)
     expect(notifyStaffOfPublish).not.toHaveBeenCalled()
   })
 })
