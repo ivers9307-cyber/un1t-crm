@@ -1,9 +1,24 @@
 // MAIL-READER.M1 — the block extractor. It runs on the OUTPUT of
 // sanitizeEmailHtml, never on raw input, so every test here feeds it sanitised
 // markup and asserts shape only.
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { htmlToBlocks, emailBlocks, CAPS } from './email-blocks'
 import { sanitizeEmailHtml } from './email-html'
+
+// The one input the real sanitiser cannot be made to reject on demand is
+// "the parser itself blew up" — so, same as email-html.test.js, it is
+// injected. Everything else runs through the genuine sanitize-html.
+const EXPLODE = '__SANITISER_EXPLODES__'
+vi.mock('sanitize-html', async (importOriginal) => {
+  const actual = await importOriginal()
+  const real = actual.default || actual
+  const wrapped = (html, options) => {
+    if (typeof html === 'string' && html.includes(EXPLODE)) throw new Error('parser blew up')
+    return real(html, options)
+  }
+  wrapped.defaults = real.defaults
+  return { default: wrapped }
+})
 
 describe('htmlToBlocks — inline runs', () => {
   it('turns a paragraph into one para block with one run', () => {
@@ -764,6 +779,12 @@ describe('emailBlocks', () => {
       '<img src="/relative.gif">',
       '<table><tr><td background="https://evil.test/bg.png">cell</td></tr></table>',
       '<div style="background-image:url(https://evil.test/bg.png)">styled</div>',
+      // review finding 6: every case above is a LAYOUT table (no <th>), so
+      // none of them ever exercised cellsOf() / the data-table path — only
+      // handleImage() reached via the plain walk(). A <th> variant routes a
+      // hostile image through the OTHER code path that also calls
+      // handleImage, inside a nested Sink cellsOf() builds per cell.
+      '<table><tr><th>H</th></tr><tr><td><img src="https://evil.test/cell.gif"></td></tr></table>',
     ].join('')
     const { blocks } = emailBlocks(hostile)
     const urls = []
@@ -791,5 +812,127 @@ describe('emailBlocks', () => {
     expect(json).not.toContain('//evil.test/x.gif')
     expect(json).not.toContain('/relative.gif')
     expect(json).not.toContain('evil.test/bg.png')
+  })
+
+  it('reports failed: true, never the raw input, when sanitising throws (review finding 6)', () => {
+    // Before finding 2's fix, a real input (~8,000 nested <div>s ahead of a
+    // table's first <tr>) reached this same catch by throwing RangeError —
+    // proof it was reachable, but not a test OF it: that input no longer
+    // throws once depth-bounded, so this file's failed:true path had no
+    // coverage of its own left at all. Forced directly here the same way
+    // email-html.test.js does it, so the path stays covered independent of
+    // which internal helper might one day be the one that throws.
+    const result = emailBlocks(`<p>hi ${EXPLODE}</p>`)
+    expect(result).toEqual({
+      blocks: null, quotedBlocks: null, blockedImages: 0, truncated: false, failed: true,
+    })
+  })
+})
+
+describe('handleTable — structure costs budget too (review finding 1)', () => {
+  it('bounds a 15,000-row near-empty table instead of emitting it in full', () => {
+    // The review's own measurement: a table this shape (15,000 rows, one
+    // blank <td> each) sanitises to well under the 300 KB ingest cap but,
+    // before this fix, emitted 75,063 characters of JSON — 3.75x
+    // CAPS.charsPerMessage — with truncated: false. budget.chars never moved
+    // (there is no cell TEXT) and budget.blocks counted the whole table once,
+    // so neither existing cap ever saw this table coming.
+    const html = '<table><tr><th>H</th></tr>'
+      + '<tr><td></td></tr>'.repeat(15000)
+      + '</table>'
+    const { blocks, truncated } = htmlToBlocks(html)
+    expect(truncated).toBe(true)
+    expect(blocks.length).toBe(1)
+    expect(blocks[0].type).toBe('table')
+    // Bounded, not merely smaller than the pre-fix 75,063 — a real ceiling.
+    expect(JSON.stringify(blocks).length).toBeLessThan(CAPS.charsPerMessage * 2)
+    // And capped in row COUNT, independent of the char charge — a row cap
+    // is what stops a table with almost no per-cell text from sailing past
+    // a small structural charge one blank cell at a time.
+    expect(blocks[0].rows.length).toBeLessThan(1000)
+  })
+
+  it('names the row cap and the per-cell structural charge separately', () => {
+    // Finding 1's own ruling: a row cap alone does not close this — 400
+    // capped tables would still multiply. Both constants must exist, named,
+    // for the two halves of the fix to be checkable independently.
+    expect(CAPS.tableRows).toBeGreaterThan(0)
+    expect(CAPS.tableCellChars).toBeGreaterThan(0)
+  })
+})
+
+describe('table DOM walkers are depth-bounded (review finding 2)', () => {
+  it('does not throw when ~8,000 <div> wrappers sit between a table and its first <tr>', () => {
+    // Confirmed reachable against the real sanitiser (per the review):
+    // isDataTable(), rowsOf() and isHeaderRow() all walk raw DOM with no
+    // depth bound of their own, independent of CAPS.maxDepth, which only
+    // bounds walk() itself.
+    const depth = 8000
+    const html = '<table>' + '<div>'.repeat(depth)
+      + '<tr><th>H</th></tr><tr><td>x</td></tr>'
+      + '</div>'.repeat(depth) + '</table>'
+    let result
+    expect(() => { result = htmlToBlocks(html) }).not.toThrow()
+    expect(result.truncated).toBe(true)
+  })
+})
+
+describe('firstRuns recovers a nested table or image-only cell (review finding 3)', () => {
+  it("recovers a nested DATA table's first cell instead of leaving the outer cell empty", () => {
+    const { blocks } = htmlToBlocks(
+      '<table><tr><th>H</th></tr>'
+      + '<tr><td><table><tr><th>Inner</th></tr><tr><td>deep</td></tr></table></td></tr>'
+      + '</table>',
+    )
+    expect(blocks[0].type).toBe('table')
+    expect(blocks[0].rows).toEqual([[[{ text: 'Inner', bold: true }]]])
+  })
+
+  it("recovers an image-only cell's alt text instead of leaving it empty", () => {
+    const { blocks } = htmlToBlocks(
+      '<table><tr><th>H</th></tr>'
+      + '<tr><td><img data-original-src="https://cdn.test/x.png" alt="Logo"></td></tr>'
+      + '</table>',
+    )
+    expect(blocks[0].rows).toEqual([[[{ text: 'Logo' }]]])
+  })
+
+  it('reports truncated when a cell held a block but nothing recoverable came of it', () => {
+    // An image with no alt at all: genuinely nothing to show, but the cell
+    // DID hold a block (the image) — distinct from a cell with no children
+    // at all, which must stay untruncated. See the file's own closing
+    // "for the renderer's author" note on why [] alone is not enough to
+    // tell those two apart without this.
+    const { blocks, truncated } = htmlToBlocks(
+      '<table><tr><th>H</th></tr>'
+      + '<tr><td><img data-original-src="https://cdn.test/x.png"></td></tr>'
+      + '</table>',
+    )
+    expect(blocks[0].rows).toEqual([[[]]])
+    expect(truncated).toBe(true)
+  })
+
+  it('still reports an honestly empty cell as untruncated', () => {
+    const { blocks, truncated } = htmlToBlocks(
+      '<table><tr><th>H</th></tr><tr><td></td></tr></table>',
+    )
+    expect(blocks[0].rows).toEqual([[[]]])
+    expect(truncated).toBe(false)
+  })
+})
+
+describe('table cells may be fewer than head columns (review finding 4)', () => {
+  it('does not pad or reconcile a colspan row against the header width', () => {
+    // Ruling: behaviour is UNCHANGED — colspan/rowspan are simply dropped by
+    // the sanitiser's own allowlist reaching here, and flattening a span
+    // into repeated cells is out of scope. This pins that a realistic
+    // colspan row stays short, so a future change cannot silently start
+    // padding rows to match the header without a test noticing.
+    const { blocks } = htmlToBlocks(
+      '<table><tr><th>A</th><th>B</th><th>C</th><th>D</th></tr>'
+      + '<tr><td colspan="3">Subtotal</td><td>€10</td></tr></table>',
+    )
+    expect(blocks[0].head.length).toBe(4)
+    expect(blocks[0].rows[0].length).toBe(2)
   })
 })

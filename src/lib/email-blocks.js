@@ -80,6 +80,28 @@ import { sanitizeEmailHtml, splitQuotedHtml } from './email-html'
  *     text-wrapping used to silently change how many bullets a list shows.
  *     Hitting it does not stop the walk: the list built up so far is pushed
  *     and the walk reports `truncated`.
+ *   - `tableRows` caps how many `<tr>` ONE data table keeps — the same
+ *     pattern `listItems` uses for `<li>`, see that bullet. Hitting it does
+ *     not stop the walk: the rows kept so far are pushed as a table block,
+ *     and the walk reports `truncated`. On its own this bounds only ONE
+ *     table's row count — it does nothing to stop many `tableRows`-capped
+ *     tables from adding up to an enormous document, since a table costs the
+ *     shared `blocks` counter only ONCE (handleTable's own `pushAlways`),
+ *     however many rows it holds. `tableCellChars` below is the other half:
+ *     it is what actually bounds the total across every table in a message.
+ *   - `tableCellChars` is not a cap on a count, it is a CHARGE: every cell a
+ *     data table emits costs this many characters against `budget.chars`,
+ *     whether or not the cell holds any text. A table's structure — its rows
+ *     and cells — has a real JSON cost on the wire even when every cell is
+ *     empty, and before this charge existed that cost was free: a table of
+ *     15,000 near-empty rows (one blank `<td>` each) emitted 75,000+
+ *     characters of JSON with `truncated: false`, because `budget.chars`
+ *     only ever moved for actual cell TEXT and `budget.blocks` counted the
+ *     whole table once, no matter how many rows it held. This number is a
+ *     judgement call, not a measurement — it approximates one cell's
+ *     serialised JSON cost (the array brackets, the run object's own keys
+ *     and quoting), not any real text length, so table structure competes
+ *     for the same ceiling as text instead of being invisible to it.
  *   - `charsPerPre` is a `pre` block's own, larger cap — a pasted code block
  *     or stack trace wants more room than one inline run — charged and
  *     reported the same way `charsPerRun` is, separately from it.
@@ -107,6 +129,8 @@ export const CAPS = Object.freeze({
   blocks: 400,
   runsPerBlock: 64,
   listItems: 64,
+  tableRows: 200,
+  tableCellChars: 24,
   charsPerRun: 400,
   charsPerPre: 4_000,
   charsPerMessage: 20_000,
@@ -369,9 +393,35 @@ class Sink {
     this.budget.blocks += 1
     this.blocks.push({ type: 'pre', text: slice })
   }
+
+  /**
+   * Charge `budget.chars` for something that costs JSON space but is not
+   * itself text — a data table cell's own structure (CAPS.tableCellChars;
+   * see cellsOf()). No full() check here: the caller checks full() per cell
+   * before calling this, so this only ever runs with room already confirmed
+   * — the same division of labour push()'s own doc describes for its
+   * caller. Charges no block; a cell's block-shaped content still goes
+   * through push()/pushAlways() the ordinary way.
+   */
+  chargeStructure(chars) {
+    this.budget.chars += chars
+  }
 }
 
-/** The runs of the first block that has any — for an <li> built of blocks. */
+/**
+ * The runs of the first block that has any — for an <li> or a table cell
+ * built of blocks rather than left as open runs.
+ *
+ * Every caller (handleList, cellsOf) treats an empty return the same way:
+ * if the blocks it was handed are also empty, the source was genuinely
+ * empty — but if there WERE blocks and none of them yielded a run, that is
+ * content that did not reach the screen, and the caller must report
+ * `truncated`. Getting that distinction right is why this function must
+ * recurse into every block SHAPE that can hold content, not just the ones
+ * that happen to carry `runs` directly — a `table` or an `image` block used
+ * to fall through untouched, silently returning [] as though the cell had
+ * been empty all along (review finding 3).
+ */
 function firstRuns(blocks) {
   for (const block of blocks) {
     // A `link` block is special-cased the same way `quote` is just below: a
@@ -389,6 +439,31 @@ function firstRuns(blocks) {
       const inner = firstRuns(block.blocks)
       if (inner.length) return inner
     }
+    // A data table nested inside another data table's cell (or inside an
+    // <li>) does not stay a `table` block once it lands here for another
+    // reason to flatten — handleTable pushes it as-is, and a `table` block
+    // carries no `runs` of its own for the check above to find. Without this
+    // case the OUTER cell/item rendered as empty and `truncated` stayed
+    // false, even though a whole nested table's content never reached the
+    // screen. head first (a header row is the table's own summary), then
+    // rows in order, first non-empty cell wins — the same "first line
+    // stands in for the whole thing" rule this function already applies to
+    // a quote, one level down.
+    if (block.type === 'table') {
+      const rows = block.head ? [block.head, ...block.rows] : block.rows
+      for (const row of rows) {
+        for (const cellRuns of row) {
+          if (cellRuns.length) return cellRuns
+        }
+      }
+    }
+    // An image block carries no `runs` either — it is not text — so an <li>
+    // or cell whose only content is an image used to render as empty even
+    // when the sender gave it real alt text, the one piece of text an image
+    // block actually has. No alt means genuinely nothing to fall back to:
+    // the caller's own has-blocks-but-no-runs check is what reports that
+    // case as `truncated` rather than this function pretending otherwise.
+    if (block.type === 'image' && block.alt) return [{ text: block.alt }]
   }
   return []
 }
@@ -481,6 +556,12 @@ function handleList(node, sink, style, depth) {
     if (flat.length === 0) {
       inner.flush()
       flat = firstRuns(inner.blocks)
+      // firstRuns() found nothing even though the item held blocks — a
+      // nested data table with no recoverable cell, or an image with no alt
+      // text — means this item's content did not reach the screen. An item
+      // that held NO blocks at all (inner.blocks.length === 0) is not
+      // truncation, it is an honestly empty <li> (review finding 3).
+      if (flat.length === 0 && inner.blocks.length > 0) sink.truncated = true
     }
     if (flat.length) items.push(flat)
     if (items.length >= CAPS.listItems) { sink.truncated = true; break }
@@ -539,38 +620,61 @@ function handleBlockquote(node, sink, style, depth) {
  * table's own <th> is authored for THAT table, not for whatever 600px
  * centring wrapper happens to contain it. Without this boundary a layout
  * wrapper holding a data table in one of its cells would itself be
- * misclassified as data — and lose that cell's content entirely, since
- * firstRuns() (below) has no case for a `table` block, only for runs, a
- * `link` block and a `quote` block. That is a worse failure than the false
- * positive this heuristic exists to avoid.
+ * misclassified as data — firstRuns() (below) does recover a nested data
+ * table's first cell, but only inside a cell that IS a data table; the
+ * wrapper being misclassified as data itself would still be a worse,
+ * needless failure than the false positive this heuristic exists to avoid.
+ *
+ * Bounded at CAPS.maxDepth, the same cap walk() itself is bounded at (review
+ * finding 2): this recurses over RAW DOM, ahead of and independent of
+ * walk()'s own depth counter, so a table with thousands of nested wrapper
+ * elements before its first <th> used to blow the call stack with a
+ * RangeError instead of degrading like every other pathological shape in
+ * this file. Past the cap this returns false — "not data" — which is the
+ * SAFE direction to fail in: it is exactly the heuristic's own stated
+ * preference for a false negative (treat as layout) over a false positive
+ * (wrap a newsletter in a data grid), and the walk() call the layout branch
+ * makes right afterwards has its own depth cap to catch the rest.
  */
 function isDataTable(node) {
-  const search = (children) => {
+  const search = (children, depth) => {
+    if (depth > CAPS.maxDepth) return false
     for (const child of children || []) {
       if (child.type !== 'tag') continue
       if (child.name === 'table') continue
       if (child.name === 'th' || child.name === 'thead') return true
-      if (search(child.children)) return true
+      if (search(child.children, depth + 1)) return true
     }
     return false
   }
-  return search(node.children)
+  return search(node.children, 0)
 }
 
-/** Every <tr> under a table, in document order, skipping nested tables —
- * a nested table's own rows belong to IT, and are reached when walk()
- * dispatches to its own handleTable call, not folded into this table's. */
+/**
+ * Every <tr> under a table, in document order, skipping nested tables — a
+ * nested table's own rows belong to IT, and are reached when walk()
+ * dispatches to its own handleTable call, not folded into this table's.
+ *
+ * Bounded at CAPS.maxDepth for the same reason as isDataTable() just above
+ * (review finding 2) — this is a second, independent raw-DOM recursion over
+ * the same subtree, so it needed the identical guard, not a shared one: a
+ * table with thousands of nested wrappers before its first <tr> throws here
+ * exactly as it does in isDataTable(), on its own call stack. Past the cap
+ * this simply stops collecting further rows, the same "stop descending into
+ * THAT branch, keep going" posture walk() itself takes.
+ */
 function rowsOf(node) {
   const rows = []
-  const visit = (children) => {
+  const visit = (children, depth) => {
+    if (depth > CAPS.maxDepth) return
     for (const child of children || []) {
       if (child.type !== 'tag') continue
       if (child.name === 'table') continue
       if (child.name === 'tr') rows.push(child)
-      else visit(child.children)
+      else visit(child.children, depth + 1)
     }
   }
-  visit(node.children)
+  visit(node.children, 0)
   return rows
 }
 
@@ -583,14 +687,24 @@ function rowsOf(node) {
  * Walks the parent chain only up to the enclosing <table>, the same
  * nested-table boundary isDataTable() and rowsOf() respect above: a <thead>
  * belonging to a table nested inside THIS row's own cell must never make
- * this outer row look like a header.
+ * this outer row look like a header. The `findOne` call is inherently
+ * shallow — its `false` argument means "row.children only, do not descend"
+ * — so it was never at risk of the RangeError the other two helpers had
+ * (review finding 2); the parent walk below is pointer-chasing, not
+ * recursion, so it could not blow the call stack either. It still gets the
+ * same CAPS.maxDepth bound as its two neighbours, for the same reason
+ * isDataTable()'s SAFE-direction fallback matters: a chain long enough to
+ * be worth capping at all should fail the same way its neighbours do,
+ * rather than being the one silent exception to "these three are bounded".
  */
 function isHeaderRow(row) {
   if (DomUtils.findOne(el => el.type === 'tag' && el.name === 'th', row.children || [], false)) {
     return true
   }
-  for (let p = row.parent; p && p.type === 'tag' && p.name !== 'table'; p = p.parent) {
+  let depth = 0
+  for (let p = row.parent; p && p.type === 'tag' && p.name !== 'table' && depth <= CAPS.maxDepth; p = p.parent) {
     if (p.name === 'thead') return true
+    depth += 1
   }
   return false
 }
@@ -603,11 +717,23 @@ function isHeaderRow(row) {
  * which is the same failure class an unbudgeted <blockquote>/<ul> already
  * had: a data table with hundreds of rows would let every cell's content
  * escape the message-wide cap entirely.
+ *
+ * Also charges `budget.chars` a fixed `CAPS.tableCellChars` for every cell
+ * it emits, text or no text — see that constant's own doc in the CAPS block
+ * (review finding 1). Structure has a JSON cost even when a cell is empty,
+ * and before this charge existed that cost was invisible to every cap here:
+ * a table of 15,000 blank cells emitted 75,000+ characters with
+ * `truncated: false`.
  */
 function cellsOf(row, style, sink, depth) {
   const cells = []
   for (const cell of row.children || []) {
     if (cell.type !== 'tag' || (cell.name !== 'td' && cell.name !== 'th')) continue
+    // Checked per cell, not just per row (see handleTable's own row-level
+    // check) — a single pathologically wide row must not keep emitting
+    // cells once the shared budget this charge feeds is exhausted.
+    if (sink.full()) { sink.truncated = true; break }
+    sink.chargeStructure(CAPS.tableCellChars)
     const inner = new Sink(sink.budget)
     // depth + 1, not the default 0 — same reason as handleList's own
     // comment: a table nested inside a table cell nested inside a table...
@@ -623,9 +749,17 @@ function cellsOf(row, style, sink, depth) {
     // A cell holding block elements (a nested table that flattened, a div)
     // contributes its text through those blocks' runs; firstRuns() takes
     // the first line so the cell is never empty when there was something in
-    // it — see firstRuns()'s own doc for why a `link` block is special-cased.
+    // it — see firstRuns()'s own doc for why a `link`, `table` or `image`
+    // block is special-cased.
     inner.flush()
-    cells.push(firstRuns(inner.blocks))
+    const flat = firstRuns(inner.blocks)
+    // firstRuns() found nothing even though the cell held blocks — a nested
+    // data table with no recoverable cell, or an image with no alt text —
+    // means this cell's content did not reach the screen. A cell that held
+    // NO blocks at all (inner.blocks.length === 0) is not truncation, it is
+    // an honestly empty cell (review finding 3).
+    if (flat.length === 0 && inner.blocks.length > 0) sink.truncated = true
+    cells.push(flat)
   }
   return cells
 }
@@ -643,17 +777,38 @@ function handleTable(node, sink, style, depth) {
     sink.flush()
     return
   }
-  // Pair each row with its own cells before filtering empty ones out — a
-  // blank spacer <tr> (routine in older email templates) has no <td>/<th>
-  // children at all and must not shift which row gets checked for
-  // headedness once it is dropped, or a table whose real first row IS the
-  // header would silently report none.
-  const parsedRows = rowsOf(node)
-    .map(row => ({ row, cells: cellsOf(row, style, sink, depth) }))
-    .filter(({ cells }) => cells.length)
+  // Pair each row with its own cells, dropping a blank spacer <tr> (routine
+  // in older email templates, has no <td>/<th> children at all) as we go —
+  // it must not shift which row gets checked for headedness once it is
+  // dropped, or a table whose real first row IS the header would silently
+  // report none. CAPS.tableRows caps how many rows are KEPT this way — the
+  // same pattern handleList uses for CAPS.listItems (see that function's own
+  // comment) — so a spacer row costs nothing against it. On its own this
+  // only bounds ONE table's row count (review finding 1): nothing here stops
+  // many tableRows-capped tables from adding up to an enormous document,
+  // since a table costs the shared `blocks` counter only ONCE (`pushAlways`
+  // below), however many rows it holds — cellsOf()'s own per-cell charge
+  // against `budget.chars` is the other half, and the one that actually
+  // bounds the total across every table in a message.
+  const parsedRows = []
+  for (const row of rowsOf(node)) {
+    if (sink.full()) { sink.truncated = true; break }
+    const cells = cellsOf(row, style, sink, depth)
+    if (cells.length) parsedRows.push({ row, cells })
+    if (parsedRows.length >= CAPS.tableRows) { sink.truncated = true; break }
+  }
   if (parsedRows.length) {
     const headed = isHeaderRow(parsedRows[0].row)
     const cellRows = parsedRows.map(({ cells }) => cells)
+    // 🔴 A row's cell count is NOT guaranteed to equal head's. colspan and
+    // rowspan are both on the sanitiser's own attribute allowlist and are
+    // simply dropped here — deliberately (review finding 4): flattening a
+    // span into repeated cells is out of scope, and a phone column does not
+    // want them anyway. A realistic invoice "Subtotal" row with colspan="3"
+    // therefore lands as a 2-cell row under a 4-column head. A consumer must
+    // index each row's OWN cells; never zip row[i] against head[i] by
+    // position — see the "for the renderer's author" note at the end of
+    // this file.
     const block = headed
       ? { type: 'table', head: cellRows[0], rows: cellRows.slice(1) }
       : { type: 'table', head: null, rows: cellRows }
@@ -781,9 +936,21 @@ export function htmlToBlocks(html) {
 /**
  * The whole render decision for one message's HTML, as the route reports it.
  *
- * Mirrors emailHtmlDocuments() deliberately — same inputs, same failure
- * posture, same quote split — so the two body shapes the route can serve
- * cannot drift in what they consider a renderable message.
+ * Shares emailHtmlDocuments()'s inputs, its sanitise-then-a-throw-means-
+ * failed posture, and its quote split (splitQuotedHtml runs once, on the
+ * same sanitised HTML, for both) — but the two DELIBERATELY part ways on
+ * what counts as "nothing to render", and that difference is not a bug to
+ * reconcile. `<div><span></span></div>` sanitises to a non-empty HTML
+ * string — real markup, just no text anywhere in it — so
+ * emailHtmlDocuments() hands the iframe a `document`: an empty box, but a
+ * renderable one, the same as a browser would render it. This function walks
+ * that same markup all the way into blocks, finds none, and reports
+ * `blocks: null` instead so the caller falls back to text. That is the
+ * better choice HERE: a web iframe can absorb an empty box for free, but the
+ * phone has no iframe to hide it in, only a <View> the reader has to scroll
+ * past for nothing — and that is worse than the same message's plain text.
+ * (Verified against both functions' current code, not assumed — this file's
+ * comments have been wrong about this relationship before.)
  *
  * @param {string} raw  the stored html_body, hostile input
  * @returns {{
@@ -830,3 +997,49 @@ export function emailBlocks(raw) {
     return { ...empty, failed: true }
   }
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// FOR WHOEVER RENDERS THIS TREE ON THE PHONE
+//
+// The shape this file promises, as review found it needs saying explicitly.
+// Get one of these wrong and the symptom is almost never a thrown error —
+// it is a silent one: a blank row, a dead tap target, a crash on
+// `head[i]`/`row[i]` reached only by a real sender's mail, weeks later.
+//
+//   1. `table.head` is `null`, not `[]`, when the table has no header row.
+//      Check for null before rendering a header at all — an empty array
+//      would render a header row with zero columns instead of no header.
+//
+//   2. Cells per row are NOT guaranteed to equal head's column count.
+//      colspan/rowspan are on the sanitiser's own attribute allowlist and
+//      are simply dropped here — deliberately: flattening a span into
+//      repeated cells is out of scope, and a phone column does not want
+//      them anyway. A realistic invoice "Subtotal" row with colspan="3"
+//      lands as a 2-cell row under a 4-column head. Index each row's OWN
+//      cells; never zip row[i] against head[i] by position.
+//
+//   3. A `Run`'s `href` (an inline link inside running text, e.g. "see
+//      <a>this</a> now") and a `link` BLOCK's `href` (a lone anchor
+//      promoted to its own tappable row) are the same idea at two different
+//      levels — expect both shapes, and make both tappable.
+//
+//   4. `image.href` is present ONLY when the image sat inside an <a href>.
+//      Test the KEY's presence, not its truthiness — `'href' in block`, not
+//      `!!block.href` — and do not assume a missing key means "not linked"
+//      without checking for the key itself.
+//
+//   5. A `table` block can appear inside `quote.blocks` — a forwarded
+//      receipt in a reply chain is ordinary mail — but a `table` block can
+//      NEVER appear inside another table's cell. A data table nested in a
+//      cell is flattened by firstRuns() into that cell's plain runs before
+//      it ever reaches you, so a cell's content is always `Run[]`, never a
+//      nested `table` block.
+//
+//   6. An empty cell (`[]`) or an empty list item means the source was
+//      genuinely empty once sanitised — not that something was cut. Content
+//      that did not make it to the screen is always reported through the
+//      top-level `truncated` flag instead. (Before this review, a nested
+//      data table or an image with no alt text could render a cell as `[]`
+//      with `truncated: false` — indistinguishable from real emptiness.
+//      That ambiguity is fixed, so `[]` can now be trusted at face value.)
+// ═══════════════════════════════════════════════════════════════════════
