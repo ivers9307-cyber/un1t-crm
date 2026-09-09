@@ -48,7 +48,7 @@ VALUES (
   now(),
   86400,
   43200,
-  'ROSTER-FIX.5 — nightly (03:20 UTC) sweep that keeps 8 weeks of shift_blocks materialised ahead of this week Monday for every active shift_template. Idempotent (unique key on location_id,template_id,block_date): re-running inserts only what is missing. New blocks landing inside an already-published roster are tagged with its roster_id. Stamps only when the template sweep completed; a template that fails individually is logged and counted in last_outcome.failed without failing the tick. last_outcome carries { templates, inserted, skipped, failed }.'
+  'ROSTER-FIX.5 — nightly (03:20 UTC) sweep that keeps 8 weeks of shift_blocks materialised ahead of this week Monday for every active shift_template. Idempotent (unique key on location_id,template_id,block_date): re-running inserts only what is missing. New blocks landing inside an already-published roster are tagged with its roster_id. Stamps only when the sweep actually advanced the horizon: a template query that fails throws and stamps nothing, and a sweep in which EVERY template failed one by one is a 500 with no stamp (a green heartbeat over a horizon that had stopped moving is the exact failure this row exists to catch). A PARTIAL failure still stamps, since the horizon did advance for the rest of the estate; those templates are logged and counted in last_outcome.failed, which is where to look first. last_outcome carries { templates, inserted, skipped, failed }.'
 )
 ON CONFLICT (name) DO UPDATE
   SET last_ok_at = now(),

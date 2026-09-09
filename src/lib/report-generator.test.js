@@ -134,6 +134,24 @@ describe('fetchScheduledShiftRows', () => {
     expect(db.builder.ranges).toEqual([[0, 999], [1000, 1999]])
   })
 
+  // ROSTER-FIX.5e — the hard limit fails the read. Truncating at the cap
+  // would be the paged version of the bug this whole helper exists to fix:
+  // a short count saved as a report, with nothing saying the read stopped.
+  it('fails closed rather than truncating at the hard limit', async () => {
+    const full = Array.from({ length: 1000 }, (_, i) => ({
+      profile_id: `p${i}`, status: 'scheduled', profiles: { full_name: `S${i}` },
+      shift_blocks: { block_date: '2026-06-06', location_id: 'loc1', shift_templates: { name: 'AM' } },
+    }))
+    const db = mockDb(Array.from({ length: 20 }, () => full))
+
+    const { rows, error } = await fetchScheduledShiftRows(db, { locationId: 'loc1', periodStart: '2026-06-01', periodEnd: '2026-06-30' })
+    expect(rows).toEqual([])
+    expect(error).toMatch(/Too many scheduled shifts/i)
+    // Stopped at the cap: 20 pages of 1000, not a 21st request.
+    expect(db.builder.ranges).toHaveLength(20)
+    expect(db.builder.ranges[19]).toEqual([19000, 19999])
+  })
+
   // ROSTER-FIX.5 — a failed read is not an empty period.
   it('returns the error instead of an empty page', async () => {
     const out = await fetchScheduledShiftRows(mockDb(null, { error: { message: 'boom' } }), { locationId: 'loc1', periodStart: 'a', periodEnd: 'b' })

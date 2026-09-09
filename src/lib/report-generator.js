@@ -58,6 +58,13 @@ const SHIFT_PAGE_SIZE = 1000
 // A period is at most a month of one location's assignments; 20k is far above
 // anything the estate can produce. Crossing it means streaming per week, not
 // raising the number again.
+//
+// ROSTER-FIX.5e — reaching the cap FAILS the read rather than returning the
+// first 20k rows. Truncating here would rebuild the exact defect the paging
+// exists to kill: a short count, saved as a report, with nothing anywhere
+// saying the read stopped early. (A period holding exactly SHIFT_HARD_LIMIT
+// rows is indistinguishable from one holding more, so it errors too — at 30x
+// the estate's busiest month that trade is free.)
 const SHIFT_HARD_LIMIT = 20_000
 
 export async function fetchScheduledShiftRows(db, { locationId, periodStart, periodEnd }) {
@@ -81,7 +88,10 @@ export async function fetchScheduledShiftRows(db, { locationId, periodStart, per
     if (!Array.isArray(page) || page.length === 0) break
     raw.push(...page)
     if (page.length < SHIFT_PAGE_SIZE) break        // short page — that was the last one
-    if (raw.length >= SHIFT_HARD_LIMIT) break       // safety cap
+    if (raw.length >= SHIFT_HARD_LIMIT) {
+      logWarn('report-generator', 'shift rows hit the hard limit', { locationId, periodStart, periodEnd, limit: SHIFT_HARD_LIMIT })
+      return { rows: [], error: `Too many scheduled shifts to report on in one go (over ${SHIFT_HARD_LIMIT}). Run the report over a shorter period.` }
+    }
     pageStart += SHIFT_PAGE_SIZE
   }
 
