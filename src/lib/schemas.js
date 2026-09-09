@@ -213,8 +213,11 @@ export const timeOffStatusSchema = z.enum(['pending', 'approved', 'rejected', 'c
 export const swapStatusSchema = z.enum(['pending', 'awaiting_approval', 'approved', 'rejected', 'cancelled'])
 
 // Report frequency / type — match scheduled_reports.frequency and the
-// report-generator's switch statement.
-export const reportFrequencySchema = z.enum(['once', 'daily', 'weekly', 'monthly'])
+// report-generator's switch statement. ROSTER-FIX.5: 'fortnightly' has been
+// in the table's CHECK and the UI dropdown since day one but was missing
+// here, so every Fortnightly schedule the UI offered was 400'd; 'daily' was
+// the mirror image (accepted here, refused by the CHECK until mig 601).
+export const reportFrequencySchema = z.enum(['once', 'daily', 'weekly', 'fortnightly', 'monthly'])
 export const reportTypeSchema = z.enum([
   'staff_hours', 'staff_cost', 'time_off_summary', 'roster_coverage', 'utilisation',
 ])
