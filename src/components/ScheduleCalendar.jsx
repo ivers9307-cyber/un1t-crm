@@ -24,7 +24,6 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { ChevronLeft, ChevronRight, Copy, Send, Plus, Users, User, Clock, X, ArrowLeftRight, CalendarOff, Palmtree, ThermometerSun, Ban, AlertTriangle, AlertCircle, CalendarDays, CalendarRange, Pencil, Check, Settings } from 'lucide-react'
 import Link from 'next/link'
 import { useRouter, usePathname, useSearchParams } from 'next/navigation'
-import { computeWeeklyCost } from '@/lib/payroll'
 import { indexByDate } from '@/lib/bank-holidays'
 import { MANAGER_ROLES, ADMIN_ROLES } from '@/lib/schemas'
 // ROSTER-FIX.6c — getMonday / addDays / formatDate were re-implemented here,
@@ -37,6 +36,10 @@ import { addDays, formatDate, getMonday, isBlockUnstaffedFuture as libUnstaffed,
 // sentence it becomes is shared with the approvals queue so one refusal reads
 // the same wherever the operator meets it.
 import { OVERLAP_ERROR, overlapMessage } from '@/lib/roster-overlap-message'
+// ROSTER-FIX.6c — this file had its own copy of this flattener
+// (flattenBlocksToShifts), which is now the exported lib one; see the note on
+// it for which of the two behaviours survived the merge.
+import { blocksToShiftRows } from '@/lib/roster-summary'
 // ROSTER-FIX.6c — the 12-hour shift label, previously a local copy here and
 // two more in the manager screens. NOT fmtTime: see the note beside it.
 import { coachConflictsForBlock, formatTime12h as formatTime } from '@/lib/schedule-overlap'
@@ -46,6 +49,7 @@ import ScheduleErrorBanner from './schedule/ScheduleErrorBanner'
 // ROSTER-FIX.6a — the six-endpoint fan-out, its error handling and its
 // request-ordering guard live in the hook now; see its header for why.
 import { useScheduleData } from './schedule/useScheduleData'
+import { useWeekCost } from './schedule/useWeekCost'
 
 const TIME_OFF_CONFIG = {
   holiday:     { label: 'Holiday',     color: '#22C55E', icon: Palmtree },
@@ -94,36 +98,6 @@ function getMonthGridRange(monthStart) {
 // lib definition and count live rows only.
 function isBlockUnstaffedFuture(block, todayStr) {
   return libUnstaffed(block, liveAssignments(block.shift_assignments).length, todayStr)
-}
-
-// Adapter — flatten a list of blocks-with-assignments into the
-// legacy shift-row shape. Used by the payroll cost calculator
-// (which expects one row per coach-day) without rewriting it.
-function flattenBlocksToShifts(blocks) {
-  const rows = []
-  for (const block of blocks) {
-    const tpl = block.shift_templates || {}
-    // ROSTER-FIX.1 — cancelled rows are not shifts; the payroll cost
-    // calculator downstream must not bill them.
-    for (const a of liveAssignments(block.shift_assignments)) {
-      rows.push({
-        id: a.id,
-        block_id: block.id,
-        location_id: block.location_id,
-        profile_id: a.profile_id,
-        shift_template_id: block.template_id,
-        shift_date: block.block_date,
-        start_time_override: block.start_time !== tpl.start_time ? block.start_time : null,
-        end_time_override: block.end_time !== tpl.end_time ? block.end_time : null,
-        role_label: tpl.role_label || null,
-        notes: a.notes || block.notes || null,
-        status: a.status,
-        shift_templates: tpl,
-        profiles: a.profiles,
-      })
-    }
-  }
-  return rows
 }
 
 export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) {
@@ -380,6 +354,15 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
     endDate: rangeEnd,
     spendReferenceDate: formatDate(monthStart),
   })
+  // ROSTER-FIX.6c — its own hook, not a seventh slice of the fan-out above: a
+  // summary panel must not be able to take the roster down with it. See its
+  // header. Manager-gated on the client too, so a coach's calendar never fires
+  // a request the route would answer 403 anyway.
+  const { weekCost, refreshWeekCost } = useWeekCost({
+    locationId,
+    weekStart: formatDate(weekStart),
+    enabled: isManager,
+  })
   // Dismissed separately from the hook's own state so the operator can clear a
   // banner without it reappearing until the next failure.
   const [errorDismissed, setErrorDismissed] = useState(false)
@@ -396,6 +379,9 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
   // a redundant overview fetch.
   const refreshAfterMutation = useCallback(async (opts = {}) => {
     await fetchData()
+    // ROSTER-FIX.6c — the hours panel used to be derived from `blocks`, so it
+    // moved on its own. It is a separate fetch now and has to be told.
+    refreshWeekCost()
     onDataChange?.()
     // Every edit marks the VISIBLE period dirty so the exit guard fires until
     // the operator publishes that period. Publish opts out (markDirty: false)
@@ -403,7 +389,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
     if (opts.markDirty !== false) {
       setDirtyPeriods((prev) => new Set(prev).add(visiblePeriodKey))
     }
-  }, [fetchData, onDataChange, visiblePeriodKey])
+  }, [fetchData, refreshWeekCost, onDataChange, visiblePeriodKey])
 
   // ROSTER-FIX.6a — switching location swaps the whole roster out from under
   // the guard; the old location's unpublished edits are no longer reachable
@@ -458,11 +444,11 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
     return dayBlocks
   })
 
-  // Legacy-shape shifts for the payroll calculator + the swap-request
-  // modal. flatShifts[].id is the shift_assignment id, which is exactly
-  // what POST /api/schedule/swaps now wants as requester_shift_id
-  // (RETIRE-SHIFTS-MIRROR.5c).
-  const flatShifts = flattenBlocksToShifts(blocks)
+  // Legacy-shape shifts for the swap-request modal. flatShifts[].id is the
+  // shift_assignment id, which is exactly what POST /api/schedule/swaps wants
+  // as requester_shift_id (RETIRE-SHIFTS-MIRROR.5c). The payroll calculator was
+  // the other consumer until ROSTER-FIX.6c moved it to the server.
+  const flatShifts = blocksToShiftRows(blocks)
 
   // Unstaffed-block count for the publish toolbar — surfaces "you
   // still have empty slots" as a friction signal before publishing.
@@ -980,20 +966,16 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
         </div>
       )}
 
-      {/* Overtime warning panel */}
+      {/* Overtime warning panel.
+          ROSTER-FIX.6c — the arithmetic ran HERE, over annual_salary /
+          hourly_rate / overtime_rate fetched from /api/staff, to render a panel
+          that prints no money at all. It comes off /api/schedule/week-cost now:
+          hours in the payload, rates never leaving the server. The endpoint is
+          scoped to one Mon-Sun week, which is what the caption underneath has
+          always claimed — the browser version summed whatever range was loaded,
+          so in month view it billed six weeks against a weekly contract. */}
       {!loading && canManage(user.role) && (() => {
-        const summaries = locationStaff
-          .filter(s => s.employment_type === 'fte' && (s.contracted_hours_per_week || 0) > 0)
-          .map(s => {
-            const own = flatShifts.filter(sh => sh.profile_id === s.id)
-            const cost = computeWeeklyCost({ shifts: own, profile: s })
-            return { staff: s, cost }
-          })
-          .filter(({ cost }) => cost.actual_hours > 0)
-
-        const overOrAt = summaries.filter(({ cost }) =>
-          cost.actual_hours >= cost.contracted_hours
-        )
+        const overOrAt = (weekCost?.coaches || []).filter((c) => c.status !== 'under')
         if (overOrAt.length === 0) return null
 
         return (
@@ -1002,22 +984,22 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
               <AlertTriangle size={16} /> Weekly hours notice
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
-              {overOrAt.map(({ staff: s, cost }) => {
-                const isOver = cost.over_threshold
+              {overOrAt.map((c) => {
+                const isOver = c.over_threshold
                 return (
                   <div
-                    key={s.id}
+                    key={c.profile_id}
                     className={`text-xs rounded-md px-2.5 py-1.5 border ${isOver
                       ? 'border-amber-500/40 bg-amber-500/10 text-amber-700'
                       : 'border-un1t-border bg-un1t-surface/40 text-un1t-subtle'
                     }`}
                   >
-                    <span className="font-medium text-un1t-text">{s.full_name}</span>
+                    <span className="font-medium text-un1t-text">{c.full_name}</span>
                     {' — '}
-                    <span>{cost.actual_hours.toFixed(1)}h / {cost.contracted_hours}h</span>
+                    <span>{c.allocated_hours.toFixed(1)}h / {c.contracted_hours}h</span>
                     {isOver && (
                       <span className="ml-1 font-semibold">
-                        +{cost.overtime_hours.toFixed(1)}h OT
+                        +{c.overtime_hours.toFixed(1)}h OT
                       </span>
                     )}
                   </div>
@@ -1462,7 +1444,6 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
           block={blockDetail}
           user={user}
           isManager={isManager}
-          flatShifts={flatShifts}
           onClose={() => setBlockDetail(null)}
           onAddCoach={() => setAssignTarget({ block: blockDetail })}
           busy={rowBusy}
@@ -2046,7 +2027,7 @@ function SwapModal({ shift, onSubmit, onClose, restoreFocusRef }) {
 // useEffect keeps `block` here in sync with the latest data. So the
 // modal updates live as overrides are saved without a re-mount.
 function BlockDetailModal({
-  block, user, isManager, flatShifts: _flatShifts, busy,
+  block, user, isManager, busy,
   onClose, onAddCoach, onUnassign, onPartialSave, onDeleteBlock, onSwapRequest,
 }) {
   const tmpl = block.shift_templates || {}

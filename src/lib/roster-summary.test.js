@@ -1,7 +1,8 @@
 // Roster v2 phase 4 — summary helper tests.
 
 import { describe, it, expect } from 'vitest'
-import { summarizeWeek, summarizeMonth, leaveHoursInWeek } from './roster-summary'
+import { summarizeWeek, summarizeMonth, leaveHoursInWeek, blocksToShiftRows } from './roster-summary'
+import { shiftHours } from './payroll'
 import { formatDate } from './roster'
 
 // Local-TZ-safe ISO date for a day offset from `base`. Mirrors how
@@ -417,5 +418,62 @@ describe('summarizeMonth', () => {
     expect(r.fteImplicitCostEur).toBe(100)
     // FTE doesn't hit the contractor budget
     expect(r.contractorCostEur).toBe(0)
+  })
+})
+
+// ROSTER-FIX.6c — blocksToShiftRows is exported now: ScheduleCalendar carried
+// its own copy of it (flattenBlocksToShifts) and the new week-cost endpoint
+// needs the same rows server-side. The two copies were NOT identical and the
+// calendar's was the correct one, so that is the behaviour pinned here.
+describe('blocksToShiftRows', () => {
+  const b = {
+    id: 'b1', location_id: 'loc1', template_id: 't1', block_date: '2026-05-06',
+    start_time: '09:00:00', end_time: '11:00:00', max_coaches: 3, notes: 'block note',
+    shift_templates: { id: 't1', name: 'HIIT', start_time: '09:00:00', end_time: '11:00:00', role_label: 'Coach' },
+    shift_assignments: [
+      { id: 'a1', profile_id: 'p1', status: 'scheduled', notes: null, profiles: { full_name: 'One' } },
+      { id: 'a2', profile_id: 'p2', status: 'cancelled', profiles: { full_name: 'Two' } },
+    ],
+  }
+
+  it('emits one row per LIVE assignment, carrying the ids the swap flow needs', () => {
+    const rows = blocksToShiftRows([b])
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      id: 'a1',
+      block_id: 'b1',
+      location_id: 'loc1',
+      profile_id: 'p1',
+      shift_template_id: 't1',
+      shift_date: '2026-05-06',
+      block_date: '2026-05-06',
+      role_label: 'Coach',
+      notes: 'block note',
+      status: 'scheduled',
+    })
+  })
+
+  it('leaves the override null when the block still matches its template', () => {
+    const [row] = blocksToShiftRows([b])
+    expect(row.start_time_override).toBeNull()
+    expect(row.end_time_override).toBeNull()
+    expect(shiftHours(row)).toBe(2)
+  })
+
+  it('bills the BLOCK window, not the template, when a template edit left them apart', () => {
+    // Template edits never touch PAST blocks (templates/[id]/route.js), so a
+    // block that has already happened legitimately keeps the hours it was
+    // worked. Billing the template's new times would rewrite history.
+    const moved = { ...b, shift_templates: { ...b.shift_templates, start_time: '10:00:00', end_time: '11:00:00' } }
+    const [row] = blocksToShiftRows([moved])
+    expect(row.start_time_override).toBe('09:00:00')
+    expect(shiftHours(row)).toBe(2)
+  })
+
+  it('tolerates a block with no template join and no assignments', () => {
+    expect(blocksToShiftRows(null)).toEqual([])
+    expect(blocksToShiftRows([{ id: 'x', block_date: '2026-05-06', start_time: '08:00:00', end_time: '09:00:00' }])).toEqual([])
+    const adhoc = { id: 'x', block_date: '2026-05-06', start_time: '08:00:00', end_time: '09:00:00', shift_assignments: [{ id: 'a', profile_id: 'p1' }] }
+    expect(shiftHours(blocksToShiftRows([adhoc])[0])).toBe(1)
   })
 })
