@@ -726,6 +726,25 @@ describe('htmlToBlocks — caps', () => {
   })
 })
 
+describe('htmlToBlocks — a table row past maxDepth is reported, not swallowed', () => {
+  it('sets truncated when a <tr> sits deeper than maxDepth', () => {
+    // The <th> that classifies this table as data sits shallow, so the table
+    // IS emitted — but one of its rows is buried past the depth cap in another
+    // branch. Returning that row silently would be the exact silent-loss the
+    // cap design exists to prevent, so rowsOf() reports the clip and
+    // handleTable ORs it into the sink.
+    const deep = '<div>'.repeat(CAPS.maxDepth + 20)
+      + '<tr><td>buried</td></tr>'
+      + '</div>'.repeat(CAPS.maxDepth + 20)
+    const { blocks, truncated } = htmlToBlocks(
+      `<table><thead><tr><th>Item</th></tr></thead>${deep}</table>`,
+    )
+    expect(truncated).toBe(true)
+    expect(blocks[0].type).toBe('table')
+    expect(JSON.stringify(blocks)).not.toContain('buried')
+  })
+})
+
 describe('emailBlocks', () => {
   it('sanitises, walks and reports the blocked count', () => {
     const result = emailBlocks(

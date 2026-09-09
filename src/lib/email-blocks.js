@@ -665,8 +665,15 @@ function isDataTable(node) {
  */
 function rowsOf(node) {
   const rows = []
+  // 🔴 REPORTED, NOT SWALLOWED. A <tr> can sit deeper than maxDepth in one
+  // branch while the <th> that classified this table as data sits shallow in
+  // another — adversarial nesting, but the shape exists. Returning zero rows
+  // and saying nothing would render the table as an empty block and report
+  // truncated: false, which is the silent-loss this file's whole cap design
+  // exists to make impossible. The caller ORs this into the sink.
+  let clipped = false
   const visit = (children, depth) => {
-    if (depth > CAPS.maxDepth) return
+    if (depth > CAPS.maxDepth) { clipped = true; return }
     for (const child of children || []) {
       if (child.type !== 'tag') continue
       if (child.name === 'table') continue
@@ -675,7 +682,7 @@ function rowsOf(node) {
     }
   }
   visit(node.children, 0)
-  return rows
+  return { rows, clipped }
 }
 
 /**
@@ -791,7 +798,9 @@ function handleTable(node, sink, style, depth) {
   // against `budget.chars` is the other half, and the one that actually
   // bounds the total across every table in a message.
   const parsedRows = []
-  for (const row of rowsOf(node)) {
+  const { rows: tableRows, clipped } = rowsOf(node)
+  if (clipped) sink.truncated = true
+  for (const row of tableRows) {
     if (sink.full()) { sink.truncated = true; break }
     const cells = cellsOf(row, style, sink, depth)
     if (cells.length) parsedRows.push({ row, cells })
