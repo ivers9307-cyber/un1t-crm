@@ -39,7 +39,7 @@ import { addDays, formatDate, getMonday, isBlockUnstaffedFuture as libUnstaffed,
 import { OVERLAP_ERROR, overlapMessage } from '@/lib/roster-overlap-message'
 // ROSTER-FIX.6c — the 12-hour shift label, previously a local copy here and
 // two more in the manager screens. NOT fmtTime: see the note beside it.
-import { formatTime12h as formatTime } from '@/lib/schedule-overlap'
+import { coachConflictsForBlock, formatTime12h as formatTime } from '@/lib/schedule-overlap'
 import Modal from '@/components/ui/Modal'
 import RosterSummaryPanel from './RosterSummaryPanel'
 import ScheduleErrorBanner from './schedule/ScheduleErrorBanner'
@@ -1430,6 +1430,8 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
         <AssignCoachModal
           block={assignTarget.block}
           staff={locationStaff}
+          blocks={blocks}
+          timeOff={timeOff}
           onAssign={(profileIds) => handleAssignCoaches(assignTarget.block.id, profileIds)}
           onClose={() => setAssignTarget(null)}
           // ROSTER-FIX.6b-7 — the Add-coach button that opened this lives in
@@ -1620,7 +1622,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
 // /assignments POST whose response shape lists per-coach outcomes
 // so 'one of these is already assigned' becomes a footnote in the
 // confirmation rather than an interruption.
-function AssignCoachModal({ block, staff, onAssign, onClose, restoreFocusRef }) {
+function AssignCoachModal({ block, staff, blocks, timeOff, onAssign, onClose, restoreFocusRef }) {
   const [selectedIds, setSelectedIds] = useState(() => new Set())
   const [saving, setSaving] = useState(false)
   const tmpl = block.shift_templates || {}
@@ -1680,6 +1682,12 @@ function AssignCoachModal({ block, staff, onAssign, onClose, restoreFocusRef }) 
             <ul className="max-h-72 overflow-y-auto border border-un1t-border rounded-md divide-y divide-un1t-border/50">
               {available.map((s) => {
                 const checked = selectedIds.has(s.id)
+                // ROSTER-FIX.6c — advisory, never a block: the row stays
+                // tickable. A coach really does cover two adjacent slots
+                // sometimes, and the manager staffing the studio is the judge.
+                const { clash, onLeave } = coachConflictsForBlock({
+                  coachId: s.id, block, blocks, timeOff,
+                })
                 return (
                   <li key={s.id}>
                     <label className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-un1t-border/30">
@@ -1689,7 +1697,22 @@ function AssignCoachModal({ block, staff, onAssign, onClose, restoreFocusRef }) 
                         onChange={() => toggle(s.id)}
                         className="accent-un1t-text"
                       />
-                      <span className="text-sm text-un1t-text flex-1">{s.full_name}</span>
+                      <span className="text-sm text-un1t-text flex-1">
+                        {s.full_name}
+                        {onLeave && (
+                          <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded bg-red-500/15 text-red-700 whitespace-nowrap">
+                            on approved leave
+                          </span>
+                        )}
+                        {clash && (
+                          <span
+                            className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 whitespace-nowrap"
+                            title={`Already on ${clash.name}, ${clash.startTime}–${clash.endTime}`}
+                          >
+                            clashes with {clash.startTime} {clash.name}
+                          </span>
+                        )}
+                      </span>
                       <span className="text-[10px] text-un1t-subtle">{s.role}</span>
                     </label>
                   </li>

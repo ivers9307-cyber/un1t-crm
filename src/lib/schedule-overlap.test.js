@@ -1,6 +1,6 @@
 // SCHEDULE-DOUBLE-BOOKING.1 — unit tests for the overlap helpers.
 import { describe, it, expect } from 'vitest'
-import { fmtTime, formatTime12h, timeRangesOverlap } from './schedule-overlap'
+import { coachConflictsForBlock, fmtTime, formatTime12h, timeRangesOverlap } from './schedule-overlap'
 
 describe('fmtTime', () => {
   it('trims HH:MM:SS to HH:MM', () => {
@@ -70,5 +70,91 @@ describe('formatTime12h', () => {
     expect(formatTime12h(null)).toBe('')
     expect(formatTime12h('')).toBe('')
     expect(formatTime12h(undefined)).toBe('')
+  })
+})
+
+// ROSTER-FIX.6c — the assign picker's advisory. The overlap helpers above have
+// existed since SCHEDULE-DOUBLE-BOOKING.1 and were never imported by a client
+// component, so the one place an operator picks a coach said nothing about the
+// shift that coach is already on, or the leave they are already approved for.
+describe('coachConflictsForBlock', () => {
+  const BLOCK = {
+    id: 'b-target',
+    block_date: '2026-05-06',
+    start_time: '10:00:00',
+    end_time: '12:00:00',
+    shift_assignments: [],
+  }
+  const other = (over) => ({
+    id: 'b-other',
+    block_date: '2026-05-06',
+    start_time: '09:30:00',
+    end_time: '11:00:00',
+    shift_templates: { name: 'Morning HIIT' },
+    shift_assignments: [{ id: 'a1', profile_id: 'c1', status: 'scheduled', ...over }],
+  })
+
+  it('reports no conflict when the coach is on nothing that day', () => {
+    expect(coachConflictsForBlock({ coachId: 'c1', block: BLOCK, blocks: [BLOCK], timeOff: [] }))
+      .toEqual({ clash: null, onLeave: false })
+  })
+
+  it('names the shift the coach already has that overlaps', () => {
+    const res = coachConflictsForBlock({ coachId: 'c1', block: BLOCK, blocks: [BLOCK, other()], timeOff: [] })
+    expect(res.clash).toEqual({ blockId: 'b-other', name: 'Morning HIIT', startTime: '09:30', endTime: '11:00' })
+  })
+
+  it('ignores a shift on a different day', () => {
+    const elsewhere = { ...other(), block_date: '2026-05-07' }
+    expect(coachConflictsForBlock({ coachId: 'c1', block: BLOCK, blocks: [BLOCK, elsewhere], timeOff: [] }).clash).toBeNull()
+  })
+
+  it('ignores a shift that only touches endpoints', () => {
+    const touching = { ...other(), start_time: '08:00:00', end_time: '10:00:00' }
+    expect(coachConflictsForBlock({ coachId: 'c1', block: BLOCK, blocks: [BLOCK, touching], timeOff: [] }).clash).toBeNull()
+  })
+
+  it('ignores a cancelled assignment', () => {
+    const dropped = other({ status: 'cancelled' })
+    expect(coachConflictsForBlock({ coachId: 'c1', block: BLOCK, blocks: [BLOCK, dropped], timeOff: [] }).clash).toBeNull()
+  })
+
+  it('ignores the block being assigned, so an existing row on it is not its own clash', () => {
+    const self = { ...BLOCK, shift_assignments: [{ id: 'a0', profile_id: 'c1', status: 'scheduled' }] }
+    expect(coachConflictsForBlock({ coachId: 'c1', block: self, blocks: [self], timeOff: [] }).clash).toBeNull()
+  })
+
+  it('honours the other assignment own adjusted window', () => {
+    // The coach was moved off the overlap, so there is no clash any more.
+    const moved = other({ start_time_override: '07:00:00', end_time_override: '09:00:00' })
+    expect(coachConflictsForBlock({ coachId: 'c1', block: BLOCK, blocks: [BLOCK, moved], timeOff: [] }).clash).toBeNull()
+    // And the reverse: an adjustment that creates one is caught.
+    const stretched = { ...other({ start_time_override: '11:30:00', end_time_override: '13:00:00' }), start_time: '06:00:00', end_time: '07:00:00' }
+    expect(coachConflictsForBlock({ coachId: 'c1', block: BLOCK, blocks: [BLOCK, stretched], timeOff: [] }).clash).not.toBeNull()
+  })
+
+  it('falls back to Shift when the other block has no template name', () => {
+    const unnamed = { ...other(), shift_templates: null }
+    expect(coachConflictsForBlock({ coachId: 'c1', block: BLOCK, blocks: [BLOCK, unnamed], timeOff: [] }).clash.name).toBe('Shift')
+  })
+
+  it('flags approved leave covering the block date', () => {
+    const timeOff = [{ id: 't1', profile_id: 'c1', status: 'approved', start_date: '2026-05-04', end_date: '2026-05-08' }]
+    expect(coachConflictsForBlock({ coachId: 'c1', block: BLOCK, blocks: [BLOCK], timeOff }).onLeave).toBe(true)
+  })
+
+  it('ignores leave that is not approved, another coach leave, and leave outside the date', () => {
+    const rows = [
+      { id: 't1', profile_id: 'c1', status: 'pending', start_date: '2026-05-04', end_date: '2026-05-08' },
+      { id: 't2', profile_id: 'c2', status: 'approved', start_date: '2026-05-04', end_date: '2026-05-08' },
+      { id: 't3', profile_id: 'c1', status: 'approved', start_date: '2026-05-07', end_date: '2026-05-08' },
+    ]
+    expect(coachConflictsForBlock({ coachId: 'c1', block: BLOCK, blocks: [BLOCK], timeOff: rows }).onLeave).toBe(false)
+  })
+
+  it('tolerates missing inputs rather than throwing inside a render', () => {
+    expect(coachConflictsForBlock({ coachId: 'c1', block: BLOCK })).toEqual({ clash: null, onLeave: false })
+    expect(coachConflictsForBlock({ coachId: null, block: BLOCK, blocks: [other()], timeOff: [] })).toEqual({ clash: null, onLeave: false })
+    expect(coachConflictsForBlock({ coachId: 'c1', block: null, blocks: [other()], timeOff: [] })).toEqual({ clash: null, onLeave: false })
   })
 })
