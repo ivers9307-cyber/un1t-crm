@@ -249,16 +249,23 @@ describe('POST /api/schedule/swaps — target validation', () => {
 describe('POST /api/schedule/swaps — notifications', () => {
   const COACH_A = U('0a0a0a0a')
   const COACH_B = U('0b0b0b0b')
+  const COACH_DRAFT = U('0c0c0c0c')
+
+  // ROSTER-FIX.8e — the embed the route reads carries the roster status, so
+  // the fixture rows carry it too.
+  const onRoster = (status) => ({ rosters: { status } })
 
   // Every row the location/date query returns, in the shape the embed gives.
   const pool = [
-    { profile_id: COACH_A, status: 'scheduled' },
-    { profile_id: COACH_B, status: 'confirmed' },
+    { profile_id: COACH_A, status: 'scheduled', shift_blocks: onRoster('published') },
+    { profile_id: COACH_B, status: 'confirmed', shift_blocks: onRoster('published') },
     // the requester's own shift — the one that is up for swap
-    { profile_id: REQ, status: 'scheduled' },
+    { profile_id: REQ, status: 'scheduled', shift_blocks: onRoster('published') },
     // a tombstone and a duplicate: neither may reach a recipient list
-    { profile_id: TGT, status: 'cancelled' },
-    { profile_id: COACH_A, status: 'scheduled' },
+    { profile_id: TGT, status: 'cancelled', shift_blocks: onRoster('published') },
+    { profile_id: COACH_A, status: 'scheduled', shift_blocks: onRoster('published') },
+    // ROSTER-FIX.8e — D1: rostered, but on a roster nobody has published.
+    { profile_id: COACH_DRAFT, status: 'scheduled', shift_blocks: onRoster('draft') },
   ]
 
   it('notifies a named target with an email fallback, not a bare push', async () => {
@@ -322,6 +329,23 @@ describe('POST /api/schedule/swaps — notifications', () => {
     expect(ids).not.toContain(TGT)
     expect(payload.category).toBe('swap')
     expect(payload.emailSubject).toBeTruthy()
+  })
+
+  // ROSTER-FIX.8e — the open-pool push is the one surface that could tell a
+  // coach they are rostered before anyone published the roster. D1 says it
+  // must not, so a draft-rostered coach is not a recipient even though they
+  // are on the same location and date as the swap.
+  it('excludes a coach whose only shift that day is on a draft roster', async () => {
+    getCurrentUser.mockResolvedValue({ id: REQ, role: 'staff', full_name: 'R' })
+    const { db } = buildDb({ assignmentsById: base, poolRows: pool })
+    createServerClient.mockReturnValue(db)
+
+    await POST(req({ requester_shift_id: A_REQ }))
+    await flush()
+
+    const [, , ids] = notifyUsersOnce.mock.calls.find(c => c[1].startsWith('swap_open_pool:'))
+    expect(ids).not.toContain(COACH_DRAFT)
+    expect([...ids].sort()).toEqual([COACH_A, COACH_B].sort())
   })
 
   it('still answers 201 and still tells managers when the pool query fails', async () => {

@@ -53,12 +53,15 @@
 --
 -- KNOWN GAPS, on purpose
 -- ──────────────────────
---   * The trigger fires on INSERT and on UPDATE OF block_id, profile_id,
---     status. It does NOT fire when only start_time_override /
---     end_time_override change, which is exactly how a manager stretches one
---     shift over another (PUT /api/schedule/assignments/[id]). Widening the
---     column list is a one-word change; it is left out here to match the
---     agreed scope, and it costs nothing while the trigger only warns.
+--   * ROSTER-FIX.8e — CLOSED. The trigger fires on INSERT and on UPDATE OF
+--     block_id, profile_id, status, start_time_override, end_time_override.
+--     It used to omit the two override columns, which meant the one edit that
+--     most often creates an overlap — a manager stretching one shift over its
+--     neighbour via PUT /api/schedule/assignments/[id], which touches nothing
+--     but the overrides — never re-fired the guard. Both sides of the
+--     comparison read EFFECTIVE times (COALESCE(override, block time)), so an
+--     override on the row being written and an override on the row it clashes
+--     with are both honoured.
 --   * A change to shift_blocks.start_time / end_time can create an overlap
 --     without touching shift_assignments at all. Not covered.
 --   * Overnight shifts are not a case: shift_blocks_time_order (mig 067)
@@ -181,7 +184,8 @@ COMMENT ON FUNCTION public.shift_assignments_warn_overlap() IS
 
 DROP TRIGGER IF EXISTS shift_assignments_overlap_guard ON public.shift_assignments;
 CREATE TRIGGER shift_assignments_overlap_guard
-  BEFORE INSERT OR UPDATE OF block_id, profile_id, status
+  BEFORE INSERT OR UPDATE OF block_id, profile_id, status,
+                             start_time_override, end_time_override
   ON public.shift_assignments
   FOR EACH ROW
   EXECUTE FUNCTION public.shift_assignments_warn_overlap();

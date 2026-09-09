@@ -246,7 +246,7 @@ async function notifyOpenPool(db, swapId, locationId, blockDate, user) {
   if (!locationId || !blockDate) return
 
   const { data: rows, error } = await db.from('shift_assignments')
-    .select('profile_id, status, shift_blocks!inner(location_id, block_date)')
+    .select('profile_id, status, shift_blocks!inner(location_id, block_date, rosters:roster_id(status))')
     .eq('shift_blocks.location_id', locationId)
     .eq('shift_blocks.block_date', blockDate)
   if (error) {
@@ -256,9 +256,23 @@ async function notifyOpenPool(db, swapId, locationId, blockDate, user) {
     return
   }
 
+  // ROSTER-FIX.8e — D1: a coach must never learn they are rostered from a swap
+  // push. Without this, a coach whose only assignment that day sits on a DRAFT
+  // roster is told "a shift is up for swap on a day you are working" — which
+  // announces the unpublished roster the D1 gate exists to keep private, from
+  // the one surface nobody thought to gate.
+  //
+  // The published test is applied in JS, not as a PostgREST filter: the roster
+  // status lives two embeds deep (shift_blocks -> rosters) and filtering on a
+  // nested embed's column is not something PostgREST does reliably. The !inner
+  // above still narrows the rows to this location and date, so the set arriving
+  // here is one day at one studio and the filter is free.
   const ids = [...new Set(
     (rows || [])
-      .filter(r => r.profile_id && r.profile_id !== user.id && isLiveAssignment(r))
+      .filter(r => r.profile_id
+        && r.profile_id !== user.id
+        && isLiveAssignment(r)
+        && r.shift_blocks?.rosters?.status === 'published')
       .map(r => r.profile_id),
   )]
   if (!ids.length) return

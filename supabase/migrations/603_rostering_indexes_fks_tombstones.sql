@@ -58,13 +58,21 @@
 --
 --       SELECT s.id, s.status, s.location_id
 --         FROM public.shift_swap_requests s
---         JOIN public.shift_assignments a ON a.id = s.requester_shift_id
---        WHERE a.status = 'cancelled'
---          AND s.status IN ('pending', 'awaiting_approval');
+--        WHERE s.status IN ('pending', 'awaiting_approval')
+--          AND EXISTS (SELECT 1 FROM public.shift_assignments a
+--                       WHERE a.status = 'cancelled'
+--                         AND a.id IN (s.requester_shift_id, s.target_shift_id));
 --     🔴 Expected: ZERO rows. A row here is an OPEN swap on a shift that no
 --     longer exists — after this file it would be an open swap pointing at
 --     nothing, which the approve path cannot finalise. Cancel those swaps by
 --     hand (status = 'cancelled') BEFORE applying.
+--     ROSTER-FIX.8e — section 4 now RAISEs on exactly this condition, so a
+--     skipped check is refused rather than silently applied. Running it here
+--     first is still the point: it names the rows, the exception only counts
+--     them. Both sides are checked, requester_shift_id AND target_shift_id —
+--     target_shift_id was already ON DELETE SET NULL (mig 237) so it never
+--     cascaded, but an open swap pointing at a deleted TARGET is just as
+--     unfinalisable as one pointing at a deleted requester shift.
 --
 --       SELECT b.location_id, a.block_id, a.profile_id
 --         FROM public.shift_assignments a
@@ -168,4 +176,32 @@ COMMENT ON COLUMN public.shift_swap_requests.requester_shift_id IS
 -- takes every swap row that referenced a tombstone with it, silently deleting
 -- the history section 3 exists to preserve. After section 3 the same rows are
 -- simply detached (requester_shift_id → NULL).
+-- ROSTER-FIX.8e — the header's check (c) asks the operator to confirm no OPEN
+-- swap points at a tombstone, and then trusts them to have done it. It is the
+-- one pre-check whose answer is not "note the number" but "stop": section 3
+-- turned the CASCADE into SET NULL, so this DELETE now leaves an open swap
+-- alive with requester_shift_id NULL, and the approve path cannot finalise a
+-- swap whose shift does not exist. Enforce it here so a skipped read-only
+-- check cannot silently produce that row. The header check stays: it tells the
+-- operator the number BEFORE they run anything, this only refuses.
+DO $$
+DECLARE
+  v_open int;
+BEGIN
+  SELECT count(*) INTO v_open
+    FROM public.shift_swap_requests s
+   WHERE s.status IN ('pending', 'awaiting_approval')
+     AND EXISTS (
+       SELECT 1 FROM public.shift_assignments a
+        WHERE a.status = 'cancelled'
+          AND a.id IN (s.requester_shift_id, s.target_shift_id)
+     );
+
+  IF v_open > 0 THEN
+    RAISE EXCEPTION
+      'mig 603 aborted: % open swap request(s) reference a cancelled shift_assignment. Cancel those swaps (UPDATE public.shift_swap_requests SET status = ''cancelled'' WHERE ...) and re-run. See PRE-APPLY CHECK (c).',
+      v_open;
+  END IF;
+END $$;
+
 DELETE FROM public.shift_assignments WHERE status = 'cancelled';
