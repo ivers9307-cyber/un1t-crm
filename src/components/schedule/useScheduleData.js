@@ -24,8 +24,13 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 
-async function getJson(url) {
-  const res = await fetch(url)
+/**
+ * Read a JSON endpoint, THROWING on anything that is not a success. Shared
+ * with the schedule manager screens so "the request failed" is one shape
+ * everywhere and cannot be forgotten at a call site.
+ */
+export async function readJson(url, options) {
+  const res = await fetch(url, options)
   // A non-JSON body (an HTML 502 from the edge, say) must not throw a parse
   // error that reads like a bug - fall back to the status code.
   const data = await res.json().catch(() => null)
@@ -59,12 +64,12 @@ export function useScheduleData({ locationId, startDate, endDate, spendReference
     setError(null)
     try {
       const [blocksRes, templatesRes, staffRes, timeOffRes, holidaysRes, spendRes] = await Promise.all([
-        getJson(`/api/schedule/blocks?location_id=${locationId}&start_date=${startDate}&end_date=${endDate}`),
-        getJson(`/api/schedule/templates?location_id=${locationId}`),
-        getJson('/api/staff'),
-        getJson(`/api/schedule/time-off?location_id=${locationId}&start_date=${startDate}&end_date=${endDate}&status=approved`),
-        getJson(`/api/locations/${locationId}/holidays?start=${startDate}&end=${endDate}`),
-        getJson(`/api/schedule/contractor-spend?location_id=${locationId}&reference_date=${spendReferenceDate}`),
+        readJson(`/api/schedule/blocks?location_id=${locationId}&start_date=${startDate}&end_date=${endDate}`),
+        readJson(`/api/schedule/templates?location_id=${locationId}`),
+        readJson('/api/staff'),
+        readJson(`/api/schedule/time-off?location_id=${locationId}&start_date=${startDate}&end_date=${endDate}&status=approved`),
+        readJson(`/api/locations/${locationId}/holidays?start=${startDate}&end=${endDate}`),
+        readJson(`/api/schedule/contractor-spend?location_id=${locationId}&reference_date=${spendReferenceDate}`),
       ])
       if (gen !== generation.current) return
       setBlocks(blocksRes.data || [])

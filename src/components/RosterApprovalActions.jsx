@@ -42,7 +42,7 @@ export default function RosterApprovalActions({ rosterId, canApprove }) {
       // connection threw out of the handler and the operator saw only the
       // button un-busy itself. On this screen that reads as "approved", and
       // the roster is still sitting in the queue.
-      alert('Network error — the roster was not approved.')
+      alert('Network error, the roster was not approved.')
     } finally {
       setBusy(false)
     }
@@ -69,7 +69,7 @@ export default function RosterApprovalActions({ rosterId, canApprove }) {
       }
       router.refresh()
     } catch {
-      alert('Network error — the roster was not rejected.')
+      alert('Network error, the roster was not rejected.')
     } finally {
       setBusy(false)
     }

@@ -4,6 +4,11 @@ import { useState, useEffect, useCallback } from 'react'
 import { Clock, Euro, CalendarOff, Users, TrendingUp, Play, Calendar, Plus, FileText, Bell, Mail, Repeat } from 'lucide-react'
 import { EmptyState, Loading } from '@/components/ui'
 import { toJsDay, fromJsDay, DAY_NAMES_MONDAY_FIRST } from '@/lib/report-schedule-days'
+import { formatDate } from '@/lib/roster'
+// ROSTER-FIX.6a — one failure shape and one banner across the schedule
+// screens, so no call site can quietly forget to check the response.
+import ScheduleErrorBanner from './schedule/ScheduleErrorBanner'
+import { readJson } from './schedule/useScheduleData'
 
 const REPORT_TYPES = [
   { key: 'staff_hours',     label: 'Staff Hours Worked',    icon: Clock,       description: 'Total hours worked per staff member with daily breakdown' },
@@ -28,14 +33,16 @@ function formatCurrency(val) {
   return new Intl.NumberFormat('en-IE', { style: 'currency', currency: 'EUR' }).format(val)
 }
 
+// ROSTER-FIX.6a — toISOString() on a LOCAL Date shifts to UTC, so under
+// Dublin BST the default window opened and closed a day early: the operator's
+// "last 7 days" quietly excluded today and included the day before last week.
+// formatDate() reads the local calendar components, which is what the picker
+// and the API both mean by a date.
 function getDefaultDates() {
   const end = new Date()
   const start = new Date()
   start.setDate(start.getDate() - 6)
-  return {
-    start: start.toISOString().split('T')[0],
-    end: end.toISOString().split('T')[0],
-  }
+  return { start: formatDate(start), end: formatDate(end) }
 }
 
 export default function ScheduleReporting({ user }) {
@@ -49,50 +56,61 @@ export default function ScheduleReporting({ user }) {
   const [scheduledReports, setScheduledReports] = useState([])
   const [showScheduleModal, setShowScheduleModal] = useState(null) // report_type to schedule
   const [loadingHistory, setLoadingHistory] = useState(false)
+  // ROSTER-FIX.6a — both loads and both writes discarded every failure, so a
+  // refused read left the history and schedule lists silently empty (which
+  // reads as "no reports yet") and a refused save looked like nothing
+  // happened at all.
+  const [error, setError] = useState(null)
 
   const locationId = user.activeLocation?.id
 
-  const fetchHistory = useCallback(async () => {
+  const loadReports = useCallback(async () => {
     setLoadingHistory(true)
-    const res = await fetch(`/api/schedule/reports?location_id=${locationId}`).then(r => r.json())
-    setHistory(res.data || [])
-    setLoadingHistory(false)
+    setError(null)
+    try {
+      const [historyRes, scheduledRes] = await Promise.all([
+        readJson(`/api/schedule/reports?location_id=${locationId}`),
+        readJson(`/api/schedule/reports/scheduled?location_id=${locationId}`),
+      ])
+      setHistory(historyRes.data || [])
+      setScheduledReports(scheduledRes.data || [])
+    } catch (e) {
+      setError(e?.message || 'Could not load reports')
+    } finally {
+      setLoadingHistory(false)
+    }
   }, [locationId])
 
-  const fetchScheduled = useCallback(async () => {
-    const res = await fetch(`/api/schedule/reports/scheduled?location_id=${locationId}`).then(r => r.json())
-    setScheduledReports(res.data || [])
-  }, [locationId])
-
-  useEffect(() => {
-    fetchHistory()
-    fetchScheduled()
-  }, [fetchHistory, fetchScheduled])
+  useEffect(() => { loadReports() }, [loadReports])
 
   async function generateReport() {
     if (!selectedReport) return
     setGenerating(true)
     setReportResult(null)
-
-    const res = await fetch('/api/schedule/reports', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        report_type: selectedReport,
-        period_start: periodStart,
-        period_end: periodEnd,
-        location_id: locationId,
-      }),
-    })
-
-    const data = await res.json()
-    setGenerating(false)
-
-    if (data.success) {
+    setError(null)
+    try {
+      const res = await fetch('/api/schedule/reports', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          report_type: selectedReport,
+          period_start: periodStart,
+          period_end: periodEnd,
+          location_id: locationId,
+        }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data.success) {
+        setError(data.error || 'Failed to generate report')
+        return
+      }
       setReportResult(data.data)
-      fetchHistory()
-    } else {
-      alert(data.error || 'Failed to generate report')
+      loadReports()
+    } catch {
+      setError('Network error, please try again')
+    } finally {
+      // The button used to stay on "Generating…" whenever the fetch threw.
+      setGenerating(false)
     }
   }
 
@@ -113,6 +131,16 @@ export default function ScheduleReporting({ user }) {
           <p className="text-sm text-un1t-subtle mt-1">{user.activeLocation?.name} — Schedule & labour reports</p>
         </div>
       </div>
+
+      {error && (
+        <ScheduleErrorBanner
+          title="Something went wrong"
+          message={error}
+          onRetry={loadReports}
+          busy={loadingHistory}
+          onDismiss={() => setError(null)}
+        />
+      )}
 
       {/* Sub-tabs */}
       <div className="flex gap-1.5 mb-6 text-xs">
@@ -441,7 +469,7 @@ export default function ScheduleReporting({ user }) {
           reportType={showScheduleModal}
           locationId={locationId}
           onClose={() => setShowScheduleModal(null)}
-          onSave={() => { setShowScheduleModal(null); fetchScheduled() }}
+          onSave={() => { setShowScheduleModal(null); loadReports() }}
         />
       )}
     </div>
@@ -459,28 +487,40 @@ function ScheduleReportModal({ reportType, locationId, onClose, onSave }) {
   const [emailRecipients, setEmailRecipients] = useState('')
   const [deliverNotification, setDeliverNotification] = useState(true)
   const [saving, setSaving] = useState(false)
+  // ROSTER-FIX.6a — a failed save used to alert() and, if the fetch threw,
+  // leave the button on "Saving…" with the modal open and nothing said.
+  const [saveError, setSaveError] = useState(null)
 
   async function handleSave() {
     setSaving(true)
-    const res = await fetch('/api/schedule/reports/scheduled', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        report_type: reportType,
-        report_name: name,
-        frequency,
-        day_of_week: frequency === 'weekly' || frequency === 'fortnightly' ? dayOfWeek : null,
-        day_of_month: frequency === 'monthly' ? dayOfMonth : null,
-        deliver_email: deliverEmail,
-        email_recipients: deliverEmail ? emailRecipients.split(',').map(e => e.trim()).filter(Boolean) : [],
-        deliver_notification: deliverNotification,
-        location_id: locationId,
-      }),
-    })
-    const data = await res.json()
-    setSaving(false)
-    if (data.success) onSave()
-    else alert(data.error || 'Failed to schedule report')
+    setSaveError(null)
+    try {
+      const res = await fetch('/api/schedule/reports/scheduled', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          report_type: reportType,
+          report_name: name,
+          frequency,
+          day_of_week: frequency === 'weekly' || frequency === 'fortnightly' ? dayOfWeek : null,
+          day_of_month: frequency === 'monthly' ? dayOfMonth : null,
+          deliver_email: deliverEmail,
+          email_recipients: deliverEmail ? emailRecipients.split(',').map(e => e.trim()).filter(Boolean) : [],
+          deliver_notification: deliverNotification,
+          location_id: locationId,
+        }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data.success) {
+        setSaveError(data.error || 'Failed to schedule report')
+        return
+      }
+      onSave()
+    } catch {
+      setSaveError('Network error, please try again')
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -490,6 +530,12 @@ function ScheduleReportModal({ reportType, locationId, onClose, onSave }) {
           <h3 className="font-semibold">Schedule Recurring Report</h3>
           <button onClick={onClose} className="text-un1t-subtle hover:text-un1t-text"><Plus size={18} className="rotate-45" /></button>
         </div>
+
+        {saveError && (
+          <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-sm rounded-lg p-3 mb-4">
+            {saveError}
+          </div>
+        )}
 
         <div className="space-y-4">
           <div>
