@@ -34,17 +34,23 @@ const TemplateUpdateSchema = z.object({
 //   - days_of_week remove → future blocks for the removed days are
 //     DELETED (and any existing assignments under them go with them
 //     via the FK cascade on shift_assignments.shift_block_id) — EXCEPT
-//     (ROSTER-FIX.4) where such a block is on a PUBLISHED roster and
-//     still has live assignments: the whole PUT is refused with 409
+//     (ROSTER-FIX.4) where such a block still has LIVE assignments,
+//     published or not: the whole PUT is refused with 409
 //     `blocks_have_assignments` listing the dates, because deleting
-//     those blocks cancels a coach's published shift with no notice.
+//     those blocks cancels a coach's shift with no notice and no trace.
 //   - start_time / end_time change on a PUBLISHED block → a
 //     roster_change_log `time_changed` row per live coach, so the next
 //     publish of that period re-notifies them (ROSTER-FIX.4).
-//   - active:false → future blocks with NO live assignments are
-//     deleted and regeneration is SKIPPED (it used to re-create every
-//     block it had just removed). A block with a live coach on it is
-//     left alone — deactivating a template must not cancel a shift.
+//   - active:false → future blocks that are BOTH empty of live
+//     assignments AND not on a published roster are deleted, and
+//     regeneration is SKIPPED (it used to re-create every block it had
+//     just removed). A block with a live coach on it is left alone —
+//     deactivating a template must not cancel a shift — and so is an
+//     empty PUBLISHED block (ROSTER-FIX.4): it is on a roster staff
+//     have already been shown, and unlike the day-removal path there
+//     is no change-log entry saying it went, so the slot would vanish
+//     from a published week with nothing recording it. The count kept
+//     back comes out as `propagation.publishedEmptiesKept`.
 //
 // Today is computed in UTC because shift_blocks.block_date is a
 // calendar date with no TZ. Comparing block_date >= today_utc gives
@@ -110,19 +116,26 @@ export async function PUT(request, props) {
   const isPublishedBlock = (b) => b.rosters?.status === 'published'
   const blockDayCode = (b) => WEEKDAY_CODES[(new Date(b.block_date + 'T00:00:00Z').getUTCDay() + 6) % 7]
 
-  // ROSTER-FIX.4 — REFUSE, before any write, to remove a weekday whose
-  // published future blocks still have live coaches on them. The old code
-  // deleted those blocks and the FK cascaded their assignments away, so a
-  // coach with a published shift lost it with no notice and no trace: they
-  // turned up for a shift that no longer existed. The operator unassigns
-  // first; the dates are listed so they know where to look.
+  // ROSTER-FIX.4 — REFUSE, before any write, to remove a weekday whose future
+  // blocks still have live coaches on them. The old code deleted those blocks
+  // and the FK cascaded their assignments away, so a coach lost a shift with
+  // no notice and no trace: they turned up for a shift that no longer existed.
+  // The operator unassigns first; the dates are listed so they know where to
+  // look.
+  //
+  // The refusal covers DRAFT blocks too, not just published ones. A draft
+  // block with coaches on it is the more destructive case, if anything: the
+  // deactivate path already leaves a staffed draft block alone, so removing a
+  // weekday was the one route that still cascaded live assignments away —
+  // silently, and with the roster about to be published carrying a hole in it.
+  // Nothing here is a notice to staff either way; the only safe answer is to
+  // make the operator unassign deliberately.
   const removedDays = changingDays
     ? [...priorDays].filter((d) => !new Set(updates.days_of_week || []).has(d))
     : []
   if (removedDays.length > 0) {
     const blocked = futureBlocks.filter((b) => (
       removedDays.includes(blockDayCode(b))
-      && isPublishedBlock(b)
       && liveAssignments(b.shift_assignments).length > 0
     ))
     if (blocked.length > 0) {
@@ -131,7 +144,7 @@ export async function PUT(request, props) {
         success: false,
         error: 'blocks_have_assignments',
         dates,
-        message: `Unassign the coaches on ${dates.join(', ')} before removing that day — those shifts are published.`,
+        message: `Unassign the coaches on ${dates.join(', ')} before removing that day — those shifts still have someone on them.`,
       }, { status: 409 })
     }
   }
@@ -254,9 +267,20 @@ export async function PUT(request, props) {
   // Regeneration is skipped below; here the future blocks nobody is on are
   // cleared out. A block with a live coach is LEFT ALONE: deactivating a
   // template must not silently cancel somebody's shift (unassign first).
+  //
+  // ROSTER-FIX.4 — an empty block on a PUBLISHED roster is kept back too. It
+  // is part of a week staff have already been shown, and this path writes no
+  // roster_change_log row, so deleting it made a published slot disappear
+  // with nothing recording that it ever existed — an unstaffed shift the
+  // manager still has to fill is exactly the one they need to keep seeing.
+  // The count is reported so the operator learns why the calendar did not go
+  // empty; clearing those is the publish path's job, not a side effect here.
   let deactivatedBlocksDeleted = 0
+  let publishedEmptiesKept = 0
   if (deactivating) {
-    const empties = futureBlocks.filter((b) => liveAssignments(b.shift_assignments).length === 0)
+    const allEmpties = futureBlocks.filter((b) => liveAssignments(b.shift_assignments).length === 0)
+    const empties = allEmpties.filter((b) => !isPublishedBlock(b))
+    publishedEmptiesKept = allEmpties.length - empties.length
     if (empties.length > 0) {
       const { error: delErr } = await db
         .from('shift_blocks')
@@ -268,7 +292,7 @@ export async function PUT(request, props) {
           success: true,
           data: template,
           warning: `Template deactivated but clearing its empty future blocks failed: ${delErr.message}`,
-          propagation: { futureBlocksUpdated, futureBlocksDeleted, timeChangesLogged, deactivatedBlocksDeleted: 0 },
+          propagation: { futureBlocksUpdated, futureBlocksDeleted, timeChangesLogged, deactivatedBlocksDeleted: 0, publishedEmptiesKept },
         })
       }
       deactivatedBlocksDeleted = empties.length
@@ -288,7 +312,7 @@ export async function PUT(request, props) {
         success: true,
         data: template,
         warning: `Template + future fields saved, but new-day generation failed: ${e.message}`,
-        propagation: { futureBlocksUpdated, futureBlocksDeleted, timeChangesLogged, deactivatedBlocksDeleted },
+        propagation: { futureBlocksUpdated, futureBlocksDeleted, timeChangesLogged, deactivatedBlocksDeleted, publishedEmptiesKept },
       })
     }
   }
@@ -297,7 +321,7 @@ export async function PUT(request, props) {
     success: true,
     data: template,
     generated,
-    propagation: { futureBlocksUpdated, futureBlocksDeleted, timeChangesLogged, deactivatedBlocksDeleted },
+    propagation: { futureBlocksUpdated, futureBlocksDeleted, timeChangesLogged, deactivatedBlocksDeleted, publishedEmptiesKept },
   })
 }
 
