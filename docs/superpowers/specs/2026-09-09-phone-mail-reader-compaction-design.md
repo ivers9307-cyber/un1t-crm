@@ -110,18 +110,23 @@ Block = { type: 'heading', level: 1..6, runs: Run[] }
       | { type: 'para',    runs: Run[] }
       | { type: 'list',    ordered: boolean, items: Run[][] }
       | { type: 'quote',   blocks: Block[] }        // one level; deeper flattens into it
-      | { type: 'image',   src: string|null, blocked: string|null, alt: string }
+      | { type: 'image',   blocked: string, alt: string }
       | { type: 'link',    href: string, runs: Run[] }   // an <a> alone in its block
       | { type: 'rule' }
       | { type: 'table',   head: Run[][]|null, rows: Run[][][] }
 ```
 
-- **`image` carries the server's parking untouched.** An allowed image arrives
-  as `{ src }`; a blocked one as `{ blocked }` holding the value of
-  `data-original-src` — already proven to be an absolute http(s) URL by
-  `email-html.js` and already attribute-escaped. The phone never promotes
-  `blocked` to `src` except through Show images, and never constructs a URL of
-  its own.
+- **`image` is only ever a parked image, because that is the only kind that
+  exists.** `src` and `srcset` are not in the sanitiser's attribute allowlist
+  at all, so **no `<img>` in sanitised output ever carries a live URL**: a
+  remote http(s) image arrives parked under `data-original-src`, and anything
+  else — `cid:` for an inline attachment we have not re-hosted, a `data:` URI,
+  a relative path, a protocol-relative `//host` — arrives with no URL of any
+  kind and can never render. So the block carries `blocked` and nothing else,
+  an image with no parked URL is **dropped** rather than emitted as a
+  permanently empty placeholder, and the phone never constructs a URL of its
+  own. `alt` falls back to a generic label rather than printing the
+  sanitiser's own "Blocked image" as though the sender had written it.
 - **`link` is the call-to-action case.** A marketing email's button is an `<a>`
   filling a table cell. When an anchor is the only content of its block it
   becomes a `link` block (the phone draws a bordered, tappable row); an anchor
@@ -167,7 +172,8 @@ already in the `eas-update.yml` publish allowlist (`mobile/lib/**`,
 
 - `normaliseBlocks(blocks)` — drops unknown types rather than crashing on a
   block a future server invents, and drops empty blocks.
-- `imageState(block, showImages)` — `'shown' | 'blocked' | 'none'`.
+- `imageState(block, showImages)` — `'shown' | 'blocked'`. Two states, not
+  three: every emitted image block is a parked one.
 - `blockedImageCount(blocks)` — **the single reader** behind the Show images
   label, counted from the same tree `imageState` draws from. The route still
   sends `html_blocked_images` for the document path, and the phone does not
@@ -340,12 +346,13 @@ that did nothing behind a green suite.
 
 - `email-blocks.js`: real captured emails (the Docusign notification among
   them) → expected trees; a layout table flattens; a `<th>` table survives as
-  `table`; a blocked image arrives as `blocked` and never as `src`; an anchor
+  `table`; a remote image arrives as `blocked`, a `cid:`/`data:`/relative one
+  is dropped, and no block ever carries a live URL; an anchor
   alone in a cell becomes `link` and one in a sentence stays a run; each cap
   fires and sets `truncated`; a parser throw reports `failed` and returns no
-  blocks. **A test asserting no output block ever carries a live remote `src`
-  when the sanitiser blocked it** — that is the one property the phone's
-  security rests on.
+  blocks. **A test asserting no image block ever carries a URL the sanitiser
+  had not parked** — `blocked` is the only URL field an image block has, and
+  that is the one property the phone's security rests on.
 - Route: `?body=blocks` omits `html_document`; an absent or unknown value
   returns today's shape byte-for-byte; the block budget omits past its limit,
   newest-first.
