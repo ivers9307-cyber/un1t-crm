@@ -20,7 +20,7 @@
 // Swap requests POST the shift_assignment id as requester_shift_id
 // (RETIRE-SHIFTS-MIRROR.5c). The legacy public.shifts mirror is gone (mig 238).
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { ChevronLeft, ChevronRight, Copy, Send, Plus, Users, User, Clock, X, ArrowLeftRight, CalendarOff, Palmtree, ThermometerSun, Ban, AlertTriangle, AlertCircle, CalendarDays, CalendarRange, Pencil, Check, Settings } from 'lucide-react'
 import Link from 'next/link'
 import { useRouter, usePathname, useSearchParams } from 'next/navigation'
@@ -45,6 +45,9 @@ const TIME_OFF_CONFIG = {
 }
 
 const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+// ROSTER-FIX.6a-8 — how long a success/warning toast stays up. Errors never
+// expire; see the effect that consumes this.
+const TOAST_TTL_MS = 6000
 const canManage = (role) => MANAGER_ROLES.includes(role)
 
 function getMonday(date) {
@@ -249,14 +252,34 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
   // ROSTER-FIX.6a — this started life as the bulk-assign toast; it is now the
   // one place every mutation on this screen reports success or failure, so a
   // dropped request can no longer vanish into a discarded promise.
-  const [toast, setToast] = useState(null) // { kind, message }
+  const [toast, setToast] = useState(null) // { id, kind, message }
+  // ROSTER-FIX.6a-8 — a monotonic id per toast. Without it, two identical
+  // failures in a row wrote the same object shape into state: React saw no
+  // change worth remounting, so the second click looked like it had done
+  // nothing at all. The id keys the container, so every report is a fresh node
+  // even when the sentence is identical.
+  const toastSeq = useRef(0)
   // Single-flight guard for the destructive actions in the block detail modal
   // (remove coach, delete slot). Double-clicking either used to fire two
   // DELETEs, the second 404ing into an alert about a row that was already gone.
   const [rowBusy, setRowBusy] = useState(false)
   function showToast(message, kind = 'error') {
-    setToast({ kind, message })
+    setToast({ id: ++toastSeq.current, kind, message })
   }
+
+  // ROSTER-FIX.6a-8 — success and warning toasts expire on their own; an
+  // error stays until the operator dismisses it, because a failed mutation is
+  // something they still have to act on and a toast that vanishes is a
+  // discarded error with extra steps. Keying the effect on the toast id means
+  // a replacement toast cancels the outgoing one's timer, and unmount clears
+  // it, so a late timer can never blank a newer message.
+  useEffect(() => {
+    if (!toast || toast.kind === 'error') return undefined
+    const timer = setTimeout(() => {
+      setToast((current) => (current && current.id === toast.id ? null : current))
+    }, TOAST_TTL_MS)
+    return () => clearTimeout(timer)
+  }, [toast])
 
   function toggleBlockSelection(blockId) {
     setSelectedBlockIds((prev) => {
@@ -302,10 +325,11 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
         parts.push(`${j.skipped.length} skipped (${skippedSummary})`)
       }
       const message = parts.join(' · ')
-      setToast({
-        kind: j.warnings.length > 0 ? 'warning' : 'success',
-        message: j.warnings.length > 0 ? `${message}. ${j.warnings.join('. ')}` : message,
-      })
+      // Through showToast so this toast gets an id and an expiry like the rest.
+      showToast(
+        j.warnings.length > 0 ? `${message}. ${j.warnings.join('. ')}` : message,
+        j.warnings.length > 0 ? 'warning' : 'success'
+      )
       exitSelectMode()
       await refreshAfterMutation()
     } catch {
@@ -1480,7 +1504,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
             </button>
           </div>
           {toast && (
-            <div className={`max-w-7xl mx-auto px-4 pb-2 text-xs ${
+            <div key={toast.id} data-toast-id={toast.id} className={`max-w-7xl mx-auto px-4 pb-2 text-xs ${
               toast.kind === 'error' ? 'text-red-400' :
               toast.kind === 'warning' ? 'text-amber-300' :
               'text-emerald-400'
@@ -1493,7 +1517,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
       {/* Standalone toast — shows after a successful assign that
           closed select mode, so the operator sees what happened. */}
       {!selectMode && toast && (
-        <div className={`fixed bottom-4 right-4 z-40 max-w-md rounded-md border px-4 py-3 text-sm shadow-2xl ${
+        <div key={toast.id} data-toast-id={toast.id} className={`fixed bottom-4 right-4 z-40 max-w-md rounded-md border px-4 py-3 text-sm shadow-2xl ${
           toast.kind === 'error' ? 'border-red-500/50 bg-red-500/10 text-red-700' :
           toast.kind === 'warning' ? 'border-amber-500/50 bg-amber-500/10 text-amber-700' :
           'border-emerald-500/50 bg-emerald-500/10 text-emerald-700'

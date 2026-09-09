@@ -60,6 +60,12 @@ export default function ScheduleReporting({ user }) {
   // refused read left the history and schedule lists silently empty (which
   // reads as "no reports yet") and a refused save looked like nothing
   // happened at all.
+  //
+  // ROSTER-FIX.6a-8 — one state serves the load AND generateReport, so the
+  // banner's fixed "Something went wrong" title said nothing about which, and
+  // its Retry always re-ran the LOAD - which succeeds, clearing the banner
+  // while the report the operator asked for was never generated. Each failure
+  // now carries { title, message, retry }.
   const [error, setError] = useState(null)
 
   const locationId = user.activeLocation?.id
@@ -75,7 +81,7 @@ export default function ScheduleReporting({ user }) {
       setHistory(historyRes.data || [])
       setScheduledReports(scheduledRes.data || [])
     } catch (e) {
-      setError(e?.message || 'Could not load reports')
+      setError({ title: 'Could not load reports', message: e?.message || 'The request failed.', retry: true })
     } finally {
       setLoadingHistory(false)
     }
@@ -101,13 +107,13 @@ export default function ScheduleReporting({ user }) {
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok || !data.success) {
-        setError(data.error || 'Failed to generate report')
+        setError({ title: 'Could not generate the report', message: data.error || 'The report was not generated.', retry: false })
         return
       }
       setReportResult(data.data)
       loadReports()
     } catch {
-      setError('Network error, please try again')
+      setError({ title: 'Could not generate the report', message: 'Network error, please try again', retry: false })
     } finally {
       // The button used to stay on "Generating…" whenever the fetch threw.
       setGenerating(false)
@@ -134,9 +140,9 @@ export default function ScheduleReporting({ user }) {
 
       {error && (
         <ScheduleErrorBanner
-          title="Something went wrong"
-          message={error}
-          onRetry={loadReports}
+          title={error.title}
+          message={error.message}
+          onRetry={error.retry ? loadReports : undefined}
           busy={loadingHistory}
           onDismiss={() => setError(null)}
         />

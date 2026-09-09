@@ -51,6 +51,12 @@ export default function TimeOffManager({ user }) {
   // happy path only, so a dropped network or a 500 left this screen on
   // "Loading requests..." forever with nothing said. Every failure now names
   // itself and offers a retry (memory: discarded-error defect class).
+  //
+  // ROSTER-FIX.6a-8 — the same state carries load failures AND action
+  // failures, so a hard-coded "Could not load time off" title sat over a
+  // refused approve and its Retry re-ran the LOAD, which "succeeds" and hides
+  // the fact that the approval never happened. The failure now carries its own
+  // title and says whether retrying means anything: { title, message, retry }.
   const [error, setError] = useState(null)
   // Single-flight guard: approve/reject/cancel are one-shot decisions, and
   // double-clicking used to fire two PUTs.
@@ -84,7 +90,7 @@ export default function TimeOffManager({ user }) {
       setRequests(reqRes.data || [])
       setAllowance(allowRes.data || null)
     } catch (e) {
-      setError(e?.message || 'Could not load time off')
+      setError({ title: 'Could not load time off', message: e?.message || 'The request failed.', retry: true })
     } finally {
       setLoading(false)
     }
@@ -124,7 +130,11 @@ export default function TimeOffManager({ user }) {
   // `data.success` alone, so a 500 that returned an HTML error page threw a
   // JSON parse error into a discarded promise and the click did nothing
   // visible at all.
-  async function reviewRequest(id, body, failureCopy) {
+  // ROSTER-FIX.6a-8 — `title` names the ACTION that failed, not the screen, so
+  // a refused approve reads "Could not approve". retry:false because retrying
+  // a failed approve by re-running the load would report success while the
+  // request is still sitting there pending.
+  async function reviewRequest(id, body, title) {
     if (actingId) return
     setActingId(id)
     setError(null)
@@ -136,29 +146,29 @@ export default function TimeOffManager({ user }) {
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok || !data.success) {
-        setError(data.error || failureCopy)
+        setError({ title, message: data.error || 'The request was not updated.', retry: false })
         return
       }
       await fetchData()
     } catch {
-      setError('Network error, please try again')
+      setError({ title, message: 'Network error, please try again', retry: false })
     } finally {
       setActingId(null)
     }
   }
 
   async function handleApprove(id) {
-    await reviewRequest(id, { status: 'approved' }, 'Failed to approve')
+    await reviewRequest(id, { status: 'approved' }, 'Could not approve')
   }
 
   async function handleReject(id, note) {
     const reviewNote = note || prompt('Reason for rejection (optional):')
-    await reviewRequest(id, { status: 'rejected', review_note: reviewNote || null }, 'Failed to reject')
+    await reviewRequest(id, { status: 'rejected', review_note: reviewNote || null }, 'Could not reject')
   }
 
   async function handleCancel(id) {
     if (!confirm('Cancel this time-off request?')) return
-    await reviewRequest(id, { status: 'cancelled' }, 'Failed to cancel')
+    await reviewRequest(id, { status: 'cancelled' }, 'Could not cancel')
   }
 
   return (
@@ -233,7 +243,15 @@ export default function TimeOffManager({ user }) {
         </div>
       </div>
 
-      {error && <ScheduleErrorBanner title="Could not load time off" message={error} onRetry={fetchData} busy={loading} onDismiss={() => setError(null)} />}
+      {error && (
+        <ScheduleErrorBanner
+          title={error.title}
+          message={error.message}
+          onRetry={error.retry ? fetchData : undefined}
+          busy={loading}
+          onDismiss={() => setError(null)}
+        />
+      )}
 
       {/* Requests List */}
       {loading ? (

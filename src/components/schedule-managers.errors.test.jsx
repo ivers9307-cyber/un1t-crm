@@ -74,6 +74,17 @@ describe.each(SCREENS)('$name load failures', ({ Component, loadingText }) => {
     await waitFor(() => expect(screen.queryByText(loadingText)).toBeNull())
     expect(screen.queryByText('Retry')).toBeNull()
   })
+
+  // ROSTER-FIX.6a-8 (finding 7) — every other failure fixture here omits
+  // `success`, so the `!res.ok` half of `!res.ok || !data.success` could be
+  // deleted and this suite would stay green. This response is non-OK AND
+  // claims success, so only the status check can catch it.
+  it('fails a non-OK load even when the body claims success', async () => {
+    global.fetch = vi.fn(async () => ({ ok: false, status: 500, json: async () => ({ success: true }) }))
+    render(<Component user={user} />)
+    await waitFor(() => expect(screen.getByText('Retry')).toBeTruthy())
+    expect(screen.queryByText(loadingText)).toBeNull()
+  })
 })
 
 describe('ShiftTemplateManager discarded responses (ROSTER-FIX.6a)', () => {
@@ -149,5 +160,133 @@ describe('SwapRequestsManager review actions (ROSTER-FIX.6a)', () => {
     expect(first).toBe(false)
     fireEvent.click(screen.getByText('Approve'))
     await waitFor(() => expect(screen.getByText(/Network error/)).toBeTruthy())
+  })
+})
+
+// ROSTER-FIX.6a-8 — each of these screens ran load failures and ACTION
+// failures through one `error` state under a banner whose title was hard-coded
+// to the load ("Could not load time off"). So a refused approve announced
+// itself as a load problem, and its Retry re-ran the load - which succeeds,
+// clears the banner, and leaves the operator believing the approval landed
+// while the request is still sitting there pending. The title now names what
+// actually failed, and an action failure offers Dismiss rather than a Retry
+// that would re-run the wrong thing.
+describe('load vs action failures keep their own title (ROSTER-FIX.6a-8)', () => {
+  const timeOffRequest = {
+    id: 'r1', profile_id: 'u2', type: 'holiday', status: 'pending',
+    start_date: '2026-06-01', end_date: '2026-06-03', total_days: 3,
+    profiles: { full_name: 'Aoife' },
+  }
+  const swap = {
+    id: 's1', status: 'pending', requester_id: 'u2',
+    requester: { full_name: 'Aoife' },
+    requester_shift: { shift_date: '2026-06-01', shift_templates: { name: 'Morning', start_time: '06:00:00', end_time: '14:00:00' } },
+  }
+
+  describe('TimeOffManager', () => {
+    it('titles a load failure and offers a retry', async () => {
+      global.fetch = failWith('500')
+      render(<TimeOffManager user={user} />)
+      await waitFor(() => expect(screen.getByText('Could not load time off')).toBeTruthy())
+      expect(screen.getByText('Retry')).toBeTruthy()
+    })
+
+    it('titles a refused approve and offers no retry', async () => {
+      global.fetch = vi.fn(async (url, opts) => {
+        if (opts?.method === 'PUT') return { ok: false, status: 409, json: async () => ({ error: 'Allowance exhausted' }) }
+        return ok({ data: [timeOffRequest] })
+      })
+      render(<TimeOffManager user={user} />)
+      await waitFor(() => expect(screen.getByTitle('Approve')).toBeTruthy())
+      fireEvent.click(screen.getByTitle('Approve'))
+      await waitFor(() => expect(screen.getByText('Could not approve')).toBeTruthy())
+      expect(screen.getByText('Allowance exhausted')).toBeTruthy()
+      expect(screen.queryByText('Could not load time off')).toBeNull()
+      // Re-running the load would report success while the request is still
+      // pending, so the only way out is Dismiss.
+      expect(screen.queryByText('Retry')).toBeNull()
+      expect(screen.getByLabelText('Dismiss')).toBeTruthy()
+    })
+
+    it('pins the res.ok half of a refused approve that claims success', async () => {
+      global.fetch = vi.fn(async (url, opts) => {
+        if (opts?.method === 'PUT') return { ok: false, status: 500, json: async () => ({ success: true }) }
+        return ok({ data: [timeOffRequest] })
+      })
+      render(<TimeOffManager user={user} />)
+      await waitFor(() => expect(screen.getByTitle('Approve')).toBeTruthy())
+      fireEvent.click(screen.getByTitle('Approve'))
+      await waitFor(() => expect(screen.getByText('Could not approve')).toBeTruthy())
+    })
+  })
+
+  describe('SwapRequestsManager', () => {
+    it('titles a load failure and offers a retry', async () => {
+      global.fetch = failWith('500')
+      render(<SwapRequestsManager user={user} />)
+      await waitFor(() => expect(screen.getByText('Could not load swap requests')).toBeTruthy())
+      expect(screen.getByText('Retry')).toBeTruthy()
+    })
+
+    it('titles a refused approve and offers no retry', async () => {
+      global.fetch = vi.fn(async (url, opts) => {
+        if (opts?.method === 'PUT') return { ok: false, status: 409, json: async () => ({ error: 'That shift is already covered' }) }
+        return ok({ data: [swap] })
+      })
+      render(<SwapRequestsManager user={user} />)
+      await waitFor(() => expect(screen.getByText('Aoife')).toBeTruthy())
+      fireEvent.click(screen.getByText('Approve'))
+      await waitFor(() => expect(screen.getByText('Could not approve')).toBeTruthy())
+      expect(screen.getByText('That shift is already covered')).toBeTruthy()
+      expect(screen.queryByText('Could not load swap requests')).toBeNull()
+      expect(screen.queryByText('Retry')).toBeNull()
+    })
+
+    it('pins the res.ok half of a refused approve that claims success', async () => {
+      global.fetch = vi.fn(async (url, opts) => {
+        if (opts?.method === 'PUT') return { ok: false, status: 500, json: async () => ({ success: true }) }
+        return ok({ data: [swap] })
+      })
+      render(<SwapRequestsManager user={user} />)
+      await waitFor(() => expect(screen.getByText('Aoife')).toBeTruthy())
+      fireEvent.click(screen.getByText('Approve'))
+      await waitFor(() => expect(screen.getByText('Could not approve')).toBeTruthy())
+    })
+  })
+
+  describe('ScheduleReporting', () => {
+    it('titles a load failure and offers a retry', async () => {
+      global.fetch = failWith('500')
+      render(<ScheduleReporting user={user} />)
+      await waitFor(() => expect(screen.getByText('Could not load reports')).toBeTruthy())
+      expect(screen.getByText('Retry')).toBeTruthy()
+    })
+
+    it('titles a refused generate and offers no retry', async () => {
+      global.fetch = vi.fn(async (url, opts) => {
+        if (opts?.method === 'POST') return { ok: false, status: 422, json: async () => ({ error: 'No shifts in that period' }) }
+        return ok({ data: [] })
+      })
+      render(<ScheduleReporting user={user} />)
+      await waitFor(() => expect(screen.queryByText(/Loading report history/)).toBeNull())
+      fireEvent.click(screen.getByText('Staff Hours Worked'))
+      fireEvent.click(screen.getByText('Generate'))
+      await waitFor(() => expect(screen.getByText('Could not generate the report')).toBeTruthy())
+      expect(screen.getByText('No shifts in that period')).toBeTruthy()
+      expect(screen.queryByText('Could not load reports')).toBeNull()
+      expect(screen.queryByText('Retry')).toBeNull()
+    })
+
+    it('pins the res.ok half of a refused generate that claims success', async () => {
+      global.fetch = vi.fn(async (url, opts) => {
+        if (opts?.method === 'POST') return { ok: false, status: 500, json: async () => ({ success: true }) }
+        return ok({ data: [] })
+      })
+      render(<ScheduleReporting user={user} />)
+      await waitFor(() => expect(screen.queryByText(/Loading report history/)).toBeNull())
+      fireEvent.click(screen.getByText('Staff Hours Worked'))
+      fireEvent.click(screen.getByText('Generate'))
+      await waitFor(() => expect(screen.getByText('Could not generate the report')).toBeTruthy())
+    })
   })
 })

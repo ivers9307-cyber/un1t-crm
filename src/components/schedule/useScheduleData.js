@@ -24,6 +24,17 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 
+// ROSTER-FIX.6a-8 — a dead session is not a server fault, and every schedule
+// screen hits several endpoints at once, so an expired cookie showed up as a
+// wall of "Request failed (401)" - which reads as "the roster is broken" and
+// sends the operator to look for an outage. Say what actually happened.
+//
+// Deliberately NOT a redirect: the operator may have unpublished roster edits
+// on screen and a silent bounce to /login throws them away. We name the state
+// and let them choose when to reload.
+export const SESSION_ENDED_MESSAGE =
+  'You are signed out or no longer have access to this location. Reload to sign in again.'
+
 /**
  * Read a JSON endpoint, THROWING on anything that is not a success. Shared
  * with the schedule manager screens so "the request failed" is one shape
@@ -34,6 +45,9 @@ export async function readJson(url, options) {
   // A non-JSON body (an HTML 502 from the edge, say) must not throw a parse
   // error that reads like a bug - fall back to the status code.
   const data = await res.json().catch(() => null)
+  if (res.status === 401 || res.status === 403) {
+    throw new Error(SESSION_ENDED_MESSAGE)
+  }
   if (!res.ok || data?.success === false) {
     throw new Error(data?.error || `Request failed (${res.status})`)
   }

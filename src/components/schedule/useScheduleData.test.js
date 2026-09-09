@@ -12,7 +12,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, waitFor, act } from '@testing-library/react'
 
-import { useScheduleData } from './useScheduleData'
+import { useScheduleData, readJson, SESSION_ENDED_MESSAGE } from './useScheduleData'
 
 const ARGS = {
   locationId: 'loc1',
@@ -146,5 +146,47 @@ describe('useScheduleData', () => {
     await act(async () => { gate.failA(); await new Promise(r => setTimeout(r, 0)) })
     expect(result.current.error).toBeNull()
     expect(result.current.loading).toBe(false)
+  })
+})
+
+// ROSTER-FIX.6a-8 — an expired cookie answers 401/403 on every schedule
+// endpoint at once. As "Request failed (401)" that reads like an outage and
+// sends the operator hunting for a server problem, so the one thing they can
+// actually do about it is named instead. No redirect: unpublished roster edits
+// may be on screen.
+describe('readJson session handling (ROSTER-FIX.6a-8)', () => {
+  it('names a signed-out session on 401', async () => {
+    global.fetch = vi.fn(async () => ({ ok: false, status: 401, json: async () => ({ error: 'Unauthorized' }) }))
+    await expect(readJson('/api/schedule/blocks')).rejects.toThrow(SESSION_ENDED_MESSAGE)
+  })
+
+  it('names a lost location grant on 403', async () => {
+    global.fetch = vi.fn(async () => ({ ok: false, status: 403, json: async () => ({ error: 'Forbidden' }) }))
+    await expect(readJson('/api/schedule/blocks')).rejects.toThrow(SESSION_ENDED_MESSAGE)
+  })
+
+  it('says so even when the 401 body is not JSON', async () => {
+    global.fetch = vi.fn(async () => ({ ok: false, status: 401, json: async () => { throw new Error('not json') } }))
+    await expect(readJson('/api/schedule/blocks')).rejects.toThrow(SESSION_ENDED_MESSAGE)
+  })
+
+  it('leaves other statuses to the server\'s own words', async () => {
+    global.fetch = vi.fn(async () => ({ ok: false, status: 500, json: async () => ({ error: 'Database is unavailable' }) }))
+    await expect(readJson('/api/schedule/blocks')).rejects.toThrow('Database is unavailable')
+  })
+
+  it('surfaces the signed-out message through the hook', async () => {
+    global.fetch = vi.fn(async () => ({ ok: false, status: 401, json: async () => ({}) }))
+    const { result } = renderHook(() => useScheduleData(ARGS))
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    expect(result.current.error).toBe(SESSION_ENDED_MESSAGE)
+  })
+
+  // ROSTER-FIX.6a-8 (finding 7) — every other failure fixture omits
+  // `success`, so `!res.ok` could be deleted from the check and the suite
+  // would still pass. This one is non-OK AND claims success.
+  it('fails a non-OK response even when the body claims success', async () => {
+    global.fetch = vi.fn(async () => ({ ok: false, status: 500, json: async () => ({ success: true }) }))
+    await expect(readJson('/api/schedule/blocks')).rejects.toThrow(/500/)
   })
 })

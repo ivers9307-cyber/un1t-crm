@@ -59,9 +59,12 @@ describe('ScheduleCalendar load failures (ROSTER-FIX.6a)', () => {
   })
 
   it('names the server error and retries on demand', async () => {
+    // 500, not 403: since ROSTER-FIX.6a-8 a 401/403 is reported as a dead
+    // session rather than in the server's words (pinned in
+    // schedule/useScheduleData.test.js), and this case is about the words.
     global.fetch = vi.fn(async (url) =>
       url.includes('/schedule/blocks')
-        ? { ok: false, status: 403, json: async () => ({ error: 'Not your location' }) }
+        ? { ok: false, status: 500, json: async () => ({ error: 'Not your location' }) }
         : okResponse({ data: [] })
     )
     render(<ScheduleCalendar user={user} />)
@@ -162,12 +165,14 @@ describe('per-period unpublished-changes guard (ROSTER-FIX.6a)', () => {
       return okResponse({ data: [] })
     })
     fireEvent.click(screen.getByText('Publish'))
-    // The modal's confirm button carries the same label as the toolbar one,
-    // so wait for the budget preview and take the last match.
-    await waitFor(() => expect(screen.getAllByText('Publish').length).toBeGreaterThan(1))
+    // The modal runs its own dry-run budget preview first; its confirm button
+    // only renders once that lands, and carries the same label as the toolbar
+    // button that opened it, so wait for the preview and take the last match.
+    await screen.findByText('Publish roster', {}, { timeout: 5000 })
+    await waitFor(() => expect(screen.getByText('Blocks in period')).toBeTruthy(), { timeout: 5000 })
     const buttons = screen.getAllByText('Publish')
     fireEvent.click(buttons[buttons.length - 1])
-    await waitFor(() => expect(screen.queryByText('Publish roster')).toBeNull())
+    await waitFor(() => expect(screen.queryByText('Publish roster')).toBeNull(), { timeout: 5000 })
 
     window.confirm.mockClear()
     fireEvent.click(screen.getByText('Time Off').closest('a'))
@@ -183,5 +188,76 @@ describe('per-period unpublished-changes guard (ROSTER-FIX.6a)', () => {
     window.confirm.mockClear()
     fireEvent.click(screen.getByText('Time Off').closest('a'))
     expect(window.confirm).not.toHaveBeenCalled()
+  })
+})
+
+// ROSTER-FIX.6a-8 — the toast was a bare { kind, message }. Two identical
+// failures wrote an equal-looking object, so the second click produced no
+// visible change at all and read as "nothing happened"; and every toast,
+// success included, sat there until something replaced it.
+describe('toasts (ROSTER-FIX.6a-8)', () => {
+  function copyMonthFetch(answer) {
+    return vi.fn(async (url) => {
+      if (String(url).includes('/copy-month')) return answer()
+      if (String(url).includes('contractor-spend')) return okResponse({ success: true, data: {} })
+      return okResponse({ data: [] })
+    })
+  }
+
+  async function renderReady() {
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    render(<ScheduleCalendar user={user} />)
+    await waitFor(() => expect(screen.queryByText(/Loading roster/)).toBeNull())
+  }
+
+  it('gives two identical failures two distinct toast ids', async () => {
+    global.fetch = copyMonthFetch(() => ({ ok: false, status: 500, json: async () => ({ error: 'Copy failed' }) }))
+    await renderReady()
+
+    fireEvent.click(screen.getByText('Copy Last Month'))
+    await waitFor(() => expect(screen.getByText('Copy failed')).toBeTruthy())
+    const firstId = document.querySelector('[data-toast-id]').getAttribute('data-toast-id')
+
+    fireEvent.click(screen.getByText('Copy Last Month'))
+    await waitFor(() =>
+      expect(document.querySelector('[data-toast-id]').getAttribute('data-toast-id')).not.toBe(firstId)
+    )
+    expect(screen.getByText('Copy failed')).toBeTruthy()
+  })
+
+  it('expires a non-error toast on its own timer', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      // copy-month with skipped rows reports a warning toast, which is the
+      // shortest path to a self-expiring one.
+      global.fetch = copyMonthFetch(() => okResponse({ success: true, copied: 3, skipped: 1 }))
+      await renderReady()
+
+      fireEvent.click(screen.getByText('Copy Last Month'))
+      await waitFor(() => expect(screen.getByText(/1 skipped/)).toBeTruthy())
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(6001) })
+      expect(screen.queryByText(/1 skipped/)).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('leaves an error toast up until the operator dismisses it', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      global.fetch = copyMonthFetch(() => ({ ok: false, status: 500, json: async () => ({ error: 'Copy failed' }) }))
+      await renderReady()
+
+      fireEvent.click(screen.getByText('Copy Last Month'))
+      await waitFor(() => expect(screen.getByText('Copy failed')).toBeTruthy())
+
+      // A failed mutation is still the operator's to act on, so it must not
+      // time out - a toast that vanishes is a discarded error with extra steps.
+      await act(async () => { await vi.advanceTimersByTimeAsync(30000) })
+      expect(screen.getByText('Copy failed')).toBeTruthy()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
