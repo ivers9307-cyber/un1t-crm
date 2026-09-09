@@ -2,6 +2,10 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { Plus, Clock, Pencil, Trash2, X, AlertCircle, Users } from 'lucide-react'
+// ROSTER-FIX.6a — one failure shape and one banner across the schedule
+// screens, so no call site can quietly forget to check the response.
+import ScheduleErrorBanner from './schedule/ScheduleErrorBanner'
+import { readJson } from './schedule/useScheduleData'
 
 const PRESET_COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#06B6D4', '#F97316']
 const DAY_OPTIONS = [
@@ -36,15 +40,28 @@ export default function ShiftTemplateManager({ user }) {
   const [templates, setTemplates] = useState([])
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false) // false, 'new', or template object for editing
+  // ROSTER-FIX.6a — the load cleared `loading` on the happy path only, so a
+  // refused or dropped request left this screen on "Loading templates..."
+  // forever. `busyId` is the single-flight guard for deactivate/reactivate.
+  const [error, setError] = useState(null)
+  const [busyId, setBusyId] = useState(null)
   const locationId = user.activeLocation?.id
 
   const fetchTemplates = useCallback(async () => {
-    if (!locationId) return
+    if (!locationId) {
+      setLoading(false)
+      return
+    }
     setLoading(true)
-    const res = await fetch(`/api/schedule/templates?location_id=${locationId}`)
-    const data = await res.json()
-    setTemplates(data.data || [])
-    setLoading(false)
+    setError(null)
+    try {
+      const data = await readJson(`/api/schedule/templates?location_id=${locationId}`)
+      setTemplates(data.data || [])
+    } catch (e) {
+      setError(e?.message || 'Could not load shift templates')
+    } finally {
+      setLoading(false)
+    }
   }, [locationId])
 
   useEffect(() => { fetchTemplates() }, [fetchTemplates])
@@ -59,14 +76,18 @@ export default function ShiftTemplateManager({ user }) {
       location_id: locationId,
     }
 
-    const res = await fetch(url, {
-      method,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    })
-
-    const data = await res.json()
-    if (data.success) {
+    setError(null)
+    try {
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data.success) {
+        setError(data.error || 'Failed to save')
+        return
+      }
       setShowForm(false)
       fetchTemplates()
       // If the API generated blocks, surface the count so the
@@ -77,15 +98,39 @@ export default function ShiftTemplateManager({ user }) {
         // isn't wired across the codebase yet — keeping this simple.
         console.info(`Generated ${data.generated.inserted} blocks for the next 8 weeks.`)
       }
-    } else {
-      alert(data.error || 'Failed to save')
+    } catch {
+      setError('Network error, please try again')
+    }
+  }
+
+  // ROSTER-FIX.6a — both of these DISCARDED the response entirely: they
+  // awaited the fetch and refetched regardless, so a refused deactivate or
+  // reactivate looked exactly like a successful one and the row simply
+  // reappeared where it was.
+  async function setTemplateActive(id, active) {
+    if (busyId) return
+    setBusyId(id)
+    setError(null)
+    try {
+      const res = await fetch(`/api/schedule/templates/${id}`, active
+        ? { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ active: true }) }
+        : { method: 'DELETE' })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data.success === false) {
+        setError(data.error || (active ? 'Failed to reactivate' : 'Failed to deactivate'))
+        return
+      }
+      await fetchTemplates()
+    } catch {
+      setError('Network error, please try again')
+    } finally {
+      setBusyId(null)
     }
   }
 
   async function handleDeactivate(id) {
     if (!confirm('Deactivate this shift template? Existing shifts using it will remain.')) return
-    await fetch(`/api/schedule/templates/${id}`, { method: 'DELETE' })
-    fetchTemplates()
+    await setTemplateActive(id, false)
   }
 
   const activeTemplates = templates.filter(t => t.active)
@@ -119,6 +164,16 @@ export default function ShiftTemplateManager({ user }) {
             </div>
           </div>
         </div>
+      )}
+
+      {error && (
+        <ScheduleErrorBanner
+          title="Could not load shift templates"
+          message={error}
+          onRetry={fetchTemplates}
+          busy={loading}
+          onDismiss={() => setError(null)}
+        />
       )}
 
       {loading ? (
@@ -170,6 +225,7 @@ export default function ShiftTemplateManager({ user }) {
                   <button
                     onClick={() => handleDeactivate(t.id)}
                     className="p-2 rounded hover:bg-red-500/20 text-un1t-subtle hover:text-red-700 transition-colors"
+                    disabled={busyId === t.id}
                     title="Deactivate"
                   >
                     <Trash2 size={16} />
@@ -189,15 +245,10 @@ export default function ShiftTemplateManager({ user }) {
                     <span className="text-sm">{t.name} ({formatTime(t.start_time)}–{formatTime(t.end_time)})</span>
                   </div>
                   <button
-                    onClick={async () => {
-                      await fetch(`/api/schedule/templates/${t.id}`, {
-                        method: 'PUT',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ active: true }),
-                      })
-                      fetchTemplates()
-                    }}
-                    className="text-xs text-blue-400 hover:text-blue-300"
+                    type="button"
+                    onClick={() => setTemplateActive(t.id, true)}
+                    disabled={busyId === t.id}
+                    className="text-xs text-blue-400 hover:text-blue-300 disabled:opacity-50"
                   >
                     Reactivate
                   </button>

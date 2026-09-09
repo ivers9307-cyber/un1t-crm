@@ -6,6 +6,10 @@ import { CalendarOff, Plus, Check, X, Palmtree, ThermometerSun, Ban, Wallet, Cir
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { TIME_OFF_TYPES } from '@shared/time-off'
+// ROSTER-FIX.6a — one failure shape and one banner across the schedule
+// screens, so no call site can quietly forget to check the response.
+import ScheduleErrorBanner from './schedule/ScheduleErrorBanner'
+import { readJson } from './schedule/useScheduleData'
 
 // All five time-off types (mig 283). The manager screen renders every type
 // that can land in the table — including legacy/unknown values via the
@@ -43,6 +47,20 @@ export default function TimeOffManager({ user }) {
   const [requests, setRequests] = useState([])
   const [allowance, setAllowance] = useState(null)
   const [loading, setLoading] = useState(true)
+  // ROSTER-FIX.6a — fetchData had no try/catch and cleared `loading` on the
+  // happy path only, so a dropped network or a 500 left this screen on
+  // "Loading requests..." forever with nothing said. Every failure now names
+  // itself and offers a retry (memory: discarded-error defect class).
+  //
+  // ROSTER-FIX.6a-8 — the same state carries load failures AND action
+  // failures, so a hard-coded "Could not load time off" title sat over a
+  // refused approve and its Retry re-ran the LOAD, which "succeeds" and hides
+  // the fact that the approval never happened. The failure now carries its own
+  // title and says whether retrying means anything: { title, message, retry }.
+  const [error, setError] = useState(null)
+  // Single-flight guard: approve/reject/cancel are one-shot decisions, and
+  // double-clicking used to fire two PUTs.
+  const [actingId, setActingId] = useState(null)
   const [showForm, setShowForm] = useState(false)
   const [filter, setFilter] = useState(hasFocus ? 'pending' : 'all') // 'all', 'pending', 'approved'
   const [tab, setTab] = useState(hasFocus ? 'team' : 'my') // 'my' or 'team' (team only for managers)
@@ -58,19 +76,24 @@ export default function TimeOffManager({ user }) {
 
   const fetchData = useCallback(async () => {
     setLoading(true)
+    setError(null)
     const params = new URLSearchParams()
     if (locationId) params.set('location_id', locationId)
     if (filter !== 'all') params.set('status', filter)
     if (tab === 'my') params.set('profile_id', user.id)
 
-    const [reqRes, allowRes] = await Promise.all([
-      fetch(`/api/schedule/time-off?${params}`).then(r => r.json()),
-      fetch(`/api/schedule/allowances?profile_id=${user.id}&year=${new Date().getFullYear()}`).then(r => r.json()),
-    ])
-
-    setRequests(reqRes.data || [])
-    setAllowance(allowRes.data || null)
-    setLoading(false)
+    try {
+      const [reqRes, allowRes] = await Promise.all([
+        readJson(`/api/schedule/time-off?${params}`),
+        readJson(`/api/schedule/allowances?profile_id=${user.id}&year=${new Date().getFullYear()}`),
+      ])
+      setRequests(reqRes.data || [])
+      setAllowance(allowRes.data || null)
+    } catch (e) {
+      setError({ title: 'Could not load time off', message: e?.message || 'The request failed.', retry: true })
+    } finally {
+      setLoading(false)
+    }
   }, [locationId, filter, tab, user.id])
 
   useEffect(() => { fetchData() }, [fetchData])
@@ -103,39 +126,49 @@ export default function TimeOffManager({ user }) {
     }
   }, [focusId, loading, requests])
 
+  // One wrapped review action for all three decisions. Each used to check
+  // `data.success` alone, so a 500 that returned an HTML error page threw a
+  // JSON parse error into a discarded promise and the click did nothing
+  // visible at all.
+  // ROSTER-FIX.6a-8 — `title` names the ACTION that failed, not the screen, so
+  // a refused approve reads "Could not approve". retry:false because retrying
+  // a failed approve by re-running the load would report success while the
+  // request is still sitting there pending.
+  async function reviewRequest(id, body, title) {
+    if (actingId) return
+    setActingId(id)
+    setError(null)
+    try {
+      const res = await fetch(`/api/schedule/time-off/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data.success) {
+        setError({ title, message: data.error || 'The request was not updated.', retry: false })
+        return
+      }
+      await fetchData()
+    } catch {
+      setError({ title, message: 'Network error, please try again', retry: false })
+    } finally {
+      setActingId(null)
+    }
+  }
+
   async function handleApprove(id) {
-    const res = await fetch(`/api/schedule/time-off/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: 'approved' }),
-    })
-    const data = await res.json()
-    if (data.success) fetchData()
-    else alert(data.error || 'Failed to approve')
+    await reviewRequest(id, { status: 'approved' }, 'Could not approve')
   }
 
   async function handleReject(id, note) {
     const reviewNote = note || prompt('Reason for rejection (optional):')
-    const res = await fetch(`/api/schedule/time-off/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: 'rejected', review_note: reviewNote || null }),
-    })
-    const data = await res.json()
-    if (data.success) fetchData()
-    else alert(data.error || 'Failed to reject')
+    await reviewRequest(id, { status: 'rejected', review_note: reviewNote || null }, 'Could not reject')
   }
 
   async function handleCancel(id) {
     if (!confirm('Cancel this time-off request?')) return
-    const res = await fetch(`/api/schedule/time-off/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: 'cancelled' }),
-    })
-    const data = await res.json()
-    if (data.success) fetchData()
-    else alert(data.error || 'Failed to cancel')
+    await reviewRequest(id, { status: 'cancelled' }, 'Could not cancel')
   }
 
   return (
@@ -210,6 +243,16 @@ export default function TimeOffManager({ user }) {
         </div>
       </div>
 
+      {error && (
+        <ScheduleErrorBanner
+          title={error.title}
+          message={error.message}
+          onRetry={error.retry ? fetchData : undefined}
+          busy={loading}
+          onDismiss={() => setError(null)}
+        />
+      )}
+
       {/* Requests List */}
       {loading ? (
         <div className="text-center py-16 text-un1t-subtle">Loading requests...</div>
@@ -277,15 +320,19 @@ export default function TimeOffManager({ user }) {
                   {canApprove && (
                     <>
                       <button
+                        type="button"
                         onClick={() => handleApprove(req.id)}
-                        className="p-2 rounded-lg bg-green-500/20 hover:bg-green-500/30 text-green-700 transition-colors"
+                        disabled={!!actingId}
+                        className="p-2 rounded-lg bg-green-500/20 hover:bg-green-500/30 text-green-700 disabled:opacity-50 transition-colors"
                         title="Approve"
                       >
                         <Check size={16} />
                       </button>
                       <button
+                        type="button"
                         onClick={() => handleReject(req.id)}
-                        className="p-2 rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-700 transition-colors"
+                        disabled={!!actingId}
+                        className="p-2 rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-700 disabled:opacity-50 transition-colors"
                         title="Reject"
                       >
                         <X size={16} />
@@ -294,8 +341,10 @@ export default function TimeOffManager({ user }) {
                   )}
                   {canCancel && (
                     <button
+                      type="button"
                       onClick={() => handleCancel(req.id)}
-                      className="text-xs px-3 py-1.5 rounded-lg border border-un1t-border text-un1t-subtle hover:text-red-400 hover:border-red-400/30 transition-colors"
+                      disabled={!!actingId}
+                      className="text-xs px-3 py-1.5 rounded-lg border border-un1t-border text-un1t-subtle hover:text-red-400 hover:border-red-400/30 disabled:opacity-50 transition-colors"
                     >
                       Cancel
                     </button>
@@ -337,25 +386,30 @@ function TimeOffFormModal({ user, allowance, onClose, onSubmit }) {
     setError(null)
     setSaving(true)
 
-    const res = await fetch('/api/schedule/time-off', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        type,
-        start_date: startDate,
-        end_date: endDate,
-        reason: reason || null,
-        location_id: user.activeLocation?.id,
-      }),
-    })
-
-    const data = await res.json()
-    setSaving(false)
-
-    if (data.success) {
+    // ROSTER-FIX.6a — a thrown fetch used to leave the button on "Submitting…"
+    // with the modal open and nothing said.
+    try {
+      const res = await fetch('/api/schedule/time-off', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type,
+          start_date: startDate,
+          end_date: endDate,
+          reason: reason || null,
+          location_id: user.activeLocation?.id,
+        }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data.success) {
+        setError(data.error || 'Failed to submit request')
+        return
+      }
       onSubmit()
-    } else {
-      setError(data.error || 'Failed to submit request')
+    } catch {
+      setError('Network error, please try again')
+    } finally {
+      setSaving(false)
     }
   }
 

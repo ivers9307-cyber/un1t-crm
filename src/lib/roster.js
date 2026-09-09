@@ -76,6 +76,94 @@ export function formatDate(date) {
 }
 
 /**
+ * First day of a Date's calendar month, at local midnight.
+ */
+export function getMonthStart(date) {
+  const d = new Date(date)
+  d.setDate(1)
+  d.setHours(0, 0, 0, 0)
+  return d
+}
+
+// ROSTER-FIX.6a — one rule for the calendar's Month/Week toggle: a week
+// belongs to the month its MIDWEEK day (Thursday) falls in. Both directions
+// have to agree on it or the toggle loses a month.
+//
+// Before: Month took getMonthStart(weekStart), so the week 27 Jul - 2 Aug
+// jumped to July while the operator was looking at August; Week took
+// getMonday(monthStart), so August 2026 (a Saturday start) landed on 27 July
+// and the next Month click read July. Any month starting Fri/Sat/Sun did it.
+
+/**
+ * The month the visible week belongs to. Midweek decides, so a week that
+ * straddles a month boundary goes to whichever month holds most of it.
+ */
+export function monthStartForWeek(weekStart) {
+  return getMonthStart(addDays(weekStart, 3))
+}
+
+/**
+ * The week to show when leaving month view. Keeps the week already on screen
+ * when it belongs to this month (so Month then Week is a no-op), otherwise
+ * the month's first week - defined by the same midweek rule, which is what
+ * makes the reverse trip land back on the month we came from.
+ */
+export function weekStartForMonth(monthStart, currentWeekStart) {
+  const ms = getMonthStart(monthStart)
+  if (currentWeekStart && monthStartForWeek(currentWeekStart).getTime() === ms.getTime()) {
+    return getMonday(currentWeekStart)
+  }
+  return getMonday(addDays(ms, 3))
+}
+
+// ROSTER-FIX.6a — the calendar's unpublished-changes guard keys dirty periods
+// as 'YYYY-MM-DD..YYYY-MM-DD'. Two DIFFERENT questions are asked of those keys
+// and they must not share a predicate:
+//
+//   - "should I warn?"  -> ANY intersection. The operator edits the week
+//     4-10 May, switches to Month, and the visible period is now 1-31 May. The
+//     key is different but the unpublished edits are right there on screen, so
+//     exact-key equality silently dropped the warning (and did the same on the
+//     reverse trip). Overlap is the honest test: some of what you are looking
+//     at is unpublished.
+//   - "may I clear?"    -> STRICT containment. A publish only settles the days
+//     it actually covered. Publishing the month clears the weeks inside it;
+//     publishing one week must NOT clear a dirty month, because the other
+//     three weeks of that month are still unpublished.
+//
+// The asymmetry is deliberate: warn on any intersection, clear only what a
+// publish fully covered. Erring the other way loses a warning the operator
+// needed; erring this way at worst warns once too often.
+
+/** Split 'YYYY-MM-DD..YYYY-MM-DD' into [start, end]. */
+function splitPeriodKey(key) {
+  const [start, end] = String(key || '').split('..')
+  return [start, end]
+}
+
+/**
+ * Do two period keys share at least one day? ISO dates compare correctly as
+ * strings, so no Date objects are needed.
+ */
+export function periodsOverlap(keyA, keyB) {
+  const [aStart, aEnd] = splitPeriodKey(keyA)
+  const [bStart, bEnd] = splitPeriodKey(keyB)
+  if (!aStart || !aEnd || !bStart || !bEnd) return false
+  return aStart <= bEnd && aEnd >= bStart
+}
+
+/**
+ * Does `outerKey` FULLY contain `innerKey`? Used by the publish path, which
+ * may only clear a dirty period it covered end to end.
+ */
+export function periodCovers(outerKey, innerKey) {
+  const [outStart, outEnd] = splitPeriodKey(outerKey)
+  const [inStart, inEnd] = splitPeriodKey(innerKey)
+  if (!outStart || !outEnd || !inStart || !inEnd) return false
+  return inStart >= outStart && inEnd <= outEnd
+}
+
+/**
  * Generate the list of dates within [fromDate, toDate] (inclusive)
  * whose weekday code is in `dayCodes`. Used both by the block
  * generator and by tests asserting which weekdays a template hits.

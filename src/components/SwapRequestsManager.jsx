@@ -5,6 +5,10 @@ import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { ArrowLeft, ArrowLeftRight, Check, X, AlertCircle } from 'lucide-react'
 import { MANAGER_ROLES } from '@/lib/schemas'
+// ROSTER-FIX.6a — one failure shape and one banner across the schedule
+// screens, so no call site can quietly forget to check the response.
+import ScheduleErrorBanner from './schedule/ScheduleErrorBanner'
+import { readJson } from './schedule/useScheduleData'
 
 const canManage = (role) => MANAGER_ROLES.includes(role)
 
@@ -70,6 +74,16 @@ export default function SwapRequestsManager({ user }) {
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('review')
   const [actingId, setActingId] = useState(null)
+  // ROSTER-FIX.6a — the load cleared `loading` on the happy path only, so a
+  // refused or dropped request left this screen on "Loading requests..."
+  // forever with nothing said.
+  //
+  // ROSTER-FIX.6a-8 — one state serves load failures AND approve/reject
+  // failures, so the banner's hard-coded "Could not load swap requests" title
+  // sat over a refused approve and its Retry re-ran the LOAD, which succeeds
+  // and hides the fact the swap was never approved. Each failure now carries
+  // its own title and whether a retry means anything: { title, message, retry }.
+  const [error, setError] = useState(null)
   const searchParams = useSearchParams()
   const focusId = searchParams.get('focus')
   const locationId = user.activeLocation?.id
@@ -80,12 +94,20 @@ export default function SwapRequestsManager({ user }) {
   // ?status=pending filter silently hid awaiting_approval rows — the reason a
   // claimed swap drilled in from /approvals showed an empty list.
   const fetchRequests = useCallback(async () => {
-    if (!locationId) return
+    if (!locationId) {
+      setLoading(false)
+      return
+    }
     setLoading(true)
-    const res = await fetch(`/api/schedule/swaps?location_id=${locationId}`)
-    const data = await res.json()
-    setRequests(data.data || [])
-    setLoading(false)
+    setError(null)
+    try {
+      const data = await readJson(`/api/schedule/swaps?location_id=${locationId}`)
+      setRequests(data.data || [])
+    } catch (e) {
+      setError({ title: 'Could not load swap requests', message: e?.message || 'The request failed.', retry: true })
+    } finally {
+      setLoading(false)
+    }
   }, [locationId])
 
   useEffect(() => { fetchRequests() }, [fetchRequests])
@@ -99,19 +121,36 @@ export default function SwapRequestsManager({ user }) {
   }, [focusId, loading, filter])
 
   async function handleAction(id, status, note) {
+    if (actingId) return
     setActingId(id)
-    const res = await fetch(`/api/schedule/swaps/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status, review_note: note }),
-    })
-    const data = await res.json().catch(() => ({}))
-    setActingId(null)
-    if (!data.success) {
-      alert(`Could not ${status === 'approved' ? 'approve' : status === 'rejected' ? 'reject' : 'update'}: ${data.error || 'Unknown error'}`)
-      return
+    setError(null)
+    const verb = status === 'approved' ? 'approve' : status === 'rejected' ? 'reject' : 'update'
+    // retry:false — re-running the LOAD would report success while the swap
+    // sits exactly where it was.
+    const title = `Could not ${verb}`
+    try {
+      const res = await fetch(`/api/schedule/swaps/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status, review_note: note }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data.success) {
+        setError({ title, message: data.error || 'Unknown error', retry: false })
+        return
+      }
+      await fetchRequests()
+    } catch {
+      // ROSTER-FIX.6a — a thrown fetch used to reject into a discarded
+      // promise: the row un-busied and the swap looked handled.
+      setError({
+        title,
+        message: `Network error, the swap was not ${status === 'approved' ? 'approved' : status === 'rejected' ? 'rejected' : 'updated'}. Please try again.`,
+        retry: false,
+      })
+    } finally {
+      setActingId(null)
     }
-    fetchRequests()
   }
 
   const activeFilter = FILTERS.find(f => f.key === filter) || FILTERS[0]
@@ -140,6 +179,16 @@ export default function SwapRequestsManager({ user }) {
           ))}
         </div>
       </div>
+
+      {error && (
+        <ScheduleErrorBanner
+          title={error.title}
+          message={error.message}
+          onRetry={error.retry ? fetchRequests : undefined}
+          busy={loading}
+          onDismiss={() => setError(null)}
+        />
+      )}
 
       {loading ? (
         <div className="text-center py-12 text-un1t-subtle">Loading requests...</div>

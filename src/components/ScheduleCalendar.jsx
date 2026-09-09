@@ -20,20 +20,24 @@
 // Swap requests POST the shift_assignment id as requester_shift_id
 // (RETIRE-SHIFTS-MIRROR.5c). The legacy public.shifts mirror is gone (mig 238).
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { ChevronLeft, ChevronRight, Copy, Send, Plus, Users, User, Clock, X, ArrowLeftRight, CalendarOff, Palmtree, ThermometerSun, Ban, AlertTriangle, AlertCircle, CalendarDays, CalendarRange, Pencil, Check, Settings } from 'lucide-react'
 import Link from 'next/link'
 import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 import { computeWeeklyCost } from '@/lib/payroll'
 import { indexByDate } from '@/lib/bank-holidays'
 import { MANAGER_ROLES, ADMIN_ROLES } from '@/lib/schemas'
-import { isBlockUnstaffedFuture as libUnstaffed, liveAssignments } from '@/lib/roster'
+import { isBlockUnstaffedFuture as libUnstaffed, liveAssignments, getMonthStart, monthStartForWeek, weekStartForMonth, periodsOverlap, periodCovers } from '@/lib/roster'
 // ROSTER-FIX.4 — the server refuses a publish that would leave two published
 // rosters over the same days. `overlapping_roster` is a code, not copy; the
 // sentence it becomes is shared with the approvals queue so one refusal reads
 // the same wherever the operator meets it.
 import { OVERLAP_ERROR, overlapMessage } from '@/lib/roster-overlap-message'
 import RosterSummaryPanel from './RosterSummaryPanel'
+import ScheduleErrorBanner from './schedule/ScheduleErrorBanner'
+// ROSTER-FIX.6a — the six-endpoint fan-out, its error handling and its
+// request-ordering guard live in the hook now; see its header for why.
+import { useScheduleData } from './schedule/useScheduleData'
 
 const TIME_OFF_CONFIG = {
   holiday:     { label: 'Holiday',     color: '#22C55E', icon: Palmtree },
@@ -42,6 +46,9 @@ const TIME_OFF_CONFIG = {
 }
 
 const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+// ROSTER-FIX.6a-8 — how long a success/warning toast stays up. Errors never
+// expire; see the effect that consumes this.
+const TOAST_TTL_MS = 6000
 const canManage = (role) => MANAGER_ROLES.includes(role)
 
 function getMonday(date) {
@@ -79,13 +86,6 @@ function parseLocalDate(s) {
 function addDays(date, days) {
   const d = new Date(date)
   d.setDate(d.getDate() + days)
-  return d
-}
-
-function getMonthStart(date) {
-  const d = new Date(date)
-  d.setDate(1)
-  d.setHours(0, 0, 0, 0)
   return d
 }
 
@@ -212,10 +212,6 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
     })
   }, [weekStart, monthStart, viewType, onRangeChange])
 
-  const [blocks, setBlocks] = useState([])
-  const [templates, setTemplates] = useState([])
-  const [staff, setStaff] = useState([])
-  const [loading, setLoading] = useState(true)
   const [viewMode, setViewMode] = useState('all') // 'my' or 'all'
   const [assignTarget, setAssignTarget] = useState(null) // { block } when picking a coach
   const [createTarget, setCreateTarget] = useState(null) // { date } when adding an ad-hoc block
@@ -224,11 +220,16 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
   const [swapModal, setSwapModal] = useState(null) // legacy shift-shaped row to swap
   const [publishModal, setPublishModal] = useState(null) // { week, month: {start,end,label}, defaultScope }
   // SCHEDULE-PUBLISH-GUARD.1 — roster edits made since the last publish.
-  // Drives the "you have unpublished changes" exit guard below. Set by any
-  // edit (via refreshAfterMutation) and cleared on a successful publish.
-  const [hasUnpublishedChanges, setHasUnpublishedChanges] = useState(false)
-  const [timeOff, setTimeOff] = useState([])
-  const [holidays, setHolidays] = useState([])
+  // Drives the "you have unpublished changes" exit guard below.
+  //
+  // ROSTER-FIX.6a — this was one boolean for the whole screen, so editing
+  // next week and then publishing THIS week cleared it and the operator
+  // walked away from real unpublished changes with no warning; equally, a
+  // published week kept nagging because an unrelated month was dirty. It is
+  // now a set of 'YYYY-MM-DD..YYYY-MM-DD' period keys: an edit marks the
+  // visible period, a publish clears every period it fully covers, and the
+  // exit guard fires only when the period ON SCREEN is dirty.
+  const [dirtyPeriods, setDirtyPeriods] = useState(() => new Set())
   // Block detail modal — clicking on a block card opens a popout
   // listing every assignment with edit affordances (override times,
   // remove, etc.). Replaces the cramped inline pencil/X icons.
@@ -242,12 +243,37 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
   const [selectedBlockIds, setSelectedBlockIds] = useState(new Set())
   const [bulkAssignBusy, setBulkAssignBusy] = useState(false)
   const [bulkAssignProfile, setBulkAssignProfile] = useState('')
-  const [bulkToast, setBulkToast] = useState(null) // { kind, message }
-  // SCHEDULE-SPEND-AGG.1 — contractor spend totals for the focused
-  // month, fetched server-side so head_coach (who can't see
-  // hourly_rate client-side) still sees real numbers + over-budget
-  // signals on the summary panel.
-  const [contractorSpend, setContractorSpend] = useState(null)
+  // ROSTER-FIX.6a — this started life as the bulk-assign toast; it is now the
+  // one place every mutation on this screen reports success or failure, so a
+  // dropped request can no longer vanish into a discarded promise.
+  const [toast, setToast] = useState(null) // { id, kind, message }
+  // ROSTER-FIX.6a-8 — a monotonic id per toast. Without it, two identical
+  // failures in a row wrote the same object shape into state: React saw no
+  // change worth remounting, so the second click looked like it had done
+  // nothing at all. The id keys the container, so every report is a fresh node
+  // even when the sentence is identical.
+  const toastSeq = useRef(0)
+  // Single-flight guard for the destructive actions in the block detail modal
+  // (remove coach, delete slot). Double-clicking either used to fire two
+  // DELETEs, the second 404ing into an alert about a row that was already gone.
+  const [rowBusy, setRowBusy] = useState(false)
+  function showToast(message, kind = 'error') {
+    setToast({ id: ++toastSeq.current, kind, message })
+  }
+
+  // ROSTER-FIX.6a-8 — success and warning toasts expire on their own; an
+  // error stays until the operator dismisses it, because a failed mutation is
+  // something they still have to act on and a toast that vanishes is a
+  // discarded error with extra steps. Keying the effect on the toast id means
+  // a replacement toast cancels the outgoing one's timer, and unmount clears
+  // it, so a late timer can never blank a newer message.
+  useEffect(() => {
+    if (!toast || toast.kind === 'error') return undefined
+    const timer = setTimeout(() => {
+      setToast((current) => (current && current.id === toast.id ? null : current))
+    }, TOAST_TTL_MS)
+    return () => clearTimeout(timer)
+  }, [toast])
 
   function toggleBlockSelection(blockId) {
     setSelectedBlockIds((prev) => {
@@ -267,7 +293,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
   async function bulkAssign() {
     if (!bulkAssignProfile || selectedBlockIds.size === 0) return
     setBulkAssignBusy(true)
-    setBulkToast(null)
+    setToast(null)
     try {
       const res = await fetch('/api/schedule/blocks/bulk-assign', {
         method: 'POST',
@@ -277,9 +303,9 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
           profile_id: bulkAssignProfile,
         }),
       })
-      const j = await res.json()
-      if (!j.success) {
-        setBulkToast({ kind: 'error', message: j.error || 'Bulk assign failed' })
+      const j = await res.json().catch(() => ({}))
+      if (!res.ok || !j.success) {
+        showToast(j.error || 'Bulk assign failed')
         return
       }
       const parts = [`${j.assigned.length} assigned`]
@@ -293,14 +319,17 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
         parts.push(`${j.skipped.length} skipped (${skippedSummary})`)
       }
       const message = parts.join(' · ')
-      setBulkToast({
-        kind: j.warnings.length > 0 ? 'warning' : 'success',
-        message: j.warnings.length > 0 ? `${message}. ${j.warnings.join('. ')}` : message,
-      })
+      // Through showToast so this toast gets an id and an expiry like the rest.
+      showToast(
+        j.warnings.length > 0 ? `${message}. ${j.warnings.join('. ')}` : message,
+        j.warnings.length > 0 ? 'warning' : 'success'
+      )
       exitSelectMode()
       await refreshAfterMutation()
-    } catch (e) {
-      setBulkToast({ kind: 'error', message: e.message || 'Bulk assign failed' })
+    } catch {
+      // ROSTER-FIX.6a — a raw TypeError ("Failed to fetch") told the operator
+      // nothing actionable; say what happened and what to do.
+      showToast('Network error, please try again')
     } finally {
       setBulkAssignBusy(false)
     }
@@ -321,37 +350,60 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
   const monthGrid = getMonthGridRange(monthStart)
   const monthLabel = monthStart.toLocaleDateString('en-IE', { month: 'long', year: 'numeric' })
 
-  const fetchData = useCallback(async () => {
-    if (!locationId) return
-    setLoading(true)
+  // ROSTER-FIX.6a — the period the operator is looking at, in the same shape
+  // the publish modal submits (week bounds, or calendar-month bounds, NOT the
+  // month grid, which bleeds into the neighbouring months). One key format,
+  // 'YYYY-MM-DD..YYYY-MM-DD', so a publish can clear exactly what it covered.
+  const visibleMonthEnd = useMemo(
+    () => new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0),
+    [monthStart]
+  )
+  const visiblePeriodKey = useMemo(() => (
+    viewType === 'month'
+      ? `${formatDate(monthStart)}..${formatDate(visibleMonthEnd)}`
+      : `${formatDate(weekStart)}..${formatDate(addDays(weekStart, 6))}`
+  ), [viewType, weekStart, monthStart, visibleMonthEnd])
+  // ROSTER-FIX.6a — warn on any INTERSECTION, not on an exact key match. Edit
+  // in week view, switch to Month, and the visible key changes from the week
+  // to the month while the unpublished edits stay on screen; exact equality
+  // dropped the warning on that switch (and on the reverse), which was a
+  // regression against the old screen-wide boolean. The asymmetry with
+  // clearDirtyPeriodsCoveredBy below is deliberate and is spelled out beside
+  // the two predicates in @/lib/roster: you warn on any overlap, you only
+  // clear what a publish FULLY covered.
+  const isVisiblePeriodDirty = useMemo(
+    () => [...dirtyPeriods].some((key) => periodsOverlap(key, visiblePeriodKey)),
+    [dirtyPeriods, visiblePeriodKey]
+  )
 
-    const innerStart = viewType === 'month' ? getMonthGridRange(monthStart).start : weekStart
-    const innerEnd = viewType === 'month' ? getMonthGridRange(monthStart).end : addDays(weekStart, 6)
-    const start = formatDate(innerStart)
-    const end = formatDate(innerEnd)
+  // A publish clears every dirty period it FULLY covers. Publishing the month
+  // therefore clears the weeks inside it; publishing one week leaves a dirty
+  // month alone, because the rest of that month is still unpublished.
+  const clearDirtyPeriodsCoveredBy = useCallback((periodStart, periodEnd) => {
+    const publishedKey = `${periodStart}..${periodEnd}`
+    setDirtyPeriods((prev) => new Set([...prev].filter((key) => !periodCovers(publishedKey, key))))
+  }, [])
 
-    // SCHEDULE-SPEND-AGG.1 — refetch the month's contractor-spend
-    // aggregate alongside the other data. Scoped to monthStart so
-    // "Contractor spend — May 2026" tracks whichever month was last
-    // focused (same convention RosterSummaryPanel has always used).
-    const spendRefDate = formatDate(monthStart)
-    const [blocksRes, templatesRes, staffRes, timeOffRes, holidaysRes, spendRes] = await Promise.all([
-      fetch(`/api/schedule/blocks?location_id=${locationId}&start_date=${start}&end_date=${end}`).then(r => r.json()),
-      fetch(`/api/schedule/templates?location_id=${locationId}`).then(r => r.json()),
-      fetch('/api/staff').then(r => r.json()),
-      fetch(`/api/schedule/time-off?location_id=${locationId}&start_date=${start}&end_date=${end}&status=approved`).then(r => r.json()),
-      fetch(`/api/locations/${locationId}/holidays?start=${start}&end=${end}`).then(r => r.json()),
-      fetch(`/api/schedule/contractor-spend?location_id=${locationId}&reference_date=${spendRefDate}`).then(r => r.json()),
-    ])
-
-    setBlocks(blocksRes.data || [])
-    setTemplates((templatesRes.data || []).filter(t => t.active))
-    setStaff(staffRes.data || [])
-    setTimeOff(timeOffRes.data || [])
-    setHolidays(holidaysRes.data || [])
-    setContractorSpend(spendRes?.success ? spendRes.data : null)
-    setLoading(false)
-  }, [locationId, viewType, weekStart, monthStart])
+  // ROSTER-FIX.6a — the fan-out, its try/catch and its request-ordering
+  // guard now live in useScheduleData. Nothing else about the shapes changed.
+  // SCHEDULE-SPEND-AGG.1 — contractor spend stays scoped to monthStart so
+  // "Contractor spend, May 2026" tracks whichever month was last focused
+  // (the convention RosterSummaryPanel has always used).
+  const rangeStart = formatDate(viewType === 'month' ? monthGrid.start : weekStart)
+  const rangeEnd = formatDate(viewType === 'month' ? monthGrid.end : weekEnd)
+  const {
+    blocks, templates, staff, timeOff, holidays, contractorSpend,
+    loading, error, showingStaleData, refresh: fetchData,
+  } = useScheduleData({
+    locationId,
+    startDate: rangeStart,
+    endDate: rangeEnd,
+    spendReferenceDate: formatDate(monthStart),
+  })
+  // Dismissed separately from the hook's own state so the operator can clear a
+  // banner without it reappearing until the next failure.
+  const [errorDismissed, setErrorDismissed] = useState(false)
+  useEffect(() => { setErrorDismissed(false) }, [error])
 
   // OVERVIEW-REFRESH.1 — call this from mutation handlers (assign,
   // unassign, create, delete, bulk-assign, publish, copy-week, etc.)
@@ -365,19 +417,25 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
   const refreshAfterMutation = useCallback(async (opts = {}) => {
     await fetchData()
     onDataChange?.()
-    // Every edit marks the roster dirty so the exit guard fires until the
-    // operator publishes. Publish opts out (markDirty: false) and clears it.
-    if (opts.markDirty !== false) setHasUnpublishedChanges(true)
-  }, [fetchData, onDataChange])
+    // Every edit marks the VISIBLE period dirty so the exit guard fires until
+    // the operator publishes that period. Publish opts out (markDirty: false)
+    // and clears the periods it covered.
+    if (opts.markDirty !== false) {
+      setDirtyPeriods((prev) => new Set(prev).add(visiblePeriodKey))
+    }
+  }, [fetchData, onDataChange, visiblePeriodKey])
 
-  useEffect(() => { fetchData() }, [fetchData])
+  // ROSTER-FIX.6a — switching location swaps the whole roster out from under
+  // the guard; the old location's unpublished edits are no longer reachable
+  // from this screen, so keeping them dirty only produces a confusing prompt.
+  useEffect(() => { setDirtyPeriods(new Set()) }, [locationId])
 
   // SCHEDULE-PUBLISH-GUARD.1 — warn before leaving with unpublished roster
   // changes. beforeunload covers tab close / refresh / external navigation;
   // the capture-phase click handler covers in-app link clicks (App Router
   // has no built-in route-change block).
   useEffect(() => {
-    if (!hasUnpublishedChanges) return undefined
+    if (!isVisiblePeriodDirty) return undefined
     const onBeforeUnload = (e) => { e.preventDefault(); e.returnValue = '' }
     const onClickCapture = (e) => {
       if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
@@ -399,7 +457,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
       window.removeEventListener('beforeunload', onBeforeUnload)
       document.removeEventListener('click', onClickCapture, true)
     }
-  }, [hasUnpublishedChanges])
+  }, [isVisiblePeriodDirty])
 
   // Filter staff to those assigned to this location
   const locationStaff = staff.filter(s =>
@@ -437,35 +495,39 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
   // server returns per-coach outcomes; surface skipped reasons + any
   // time-off warnings in a single alert rather than burying them.
   async function handleAssignCoaches(blockId, profileIds) {
-    const res = await fetch(`/api/schedule/blocks/${blockId}/assignments`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ profile_ids: profileIds }),
-    })
-    const data = await res.json()
-    if (!data.success) {
-      alert(data.error || 'Failed to assign coaches')
-      return
-    }
-    const lines = []
-    if (data.warnings?.length > 0) lines.push(...data.warnings)
-    if (data.skipped?.length > 0) {
-      const REASONS = {
-        already_assigned: 'already on this block',
-        at_capacity: 'block is at capacity',
+    try {
+      const res = await fetch(`/api/schedule/blocks/${blockId}/assignments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ profile_ids: profileIds }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data.success) {
+        showToast(data.error || 'Failed to assign coaches')
+        return
       }
-      for (const s of data.skipped) {
-        const coach = staff.find((c) => c.id === s.profile_id)
-        const name = coach?.full_name || s.profile_id
-        lines.push(`${name}: skipped (${REASONS[s.reason] || s.reason})`)
+      const lines = []
+      if (data.warnings?.length > 0) lines.push(...data.warnings)
+      if (data.skipped?.length > 0) {
+        const REASONS = {
+          already_assigned: 'already on this block',
+          at_capacity: 'block is at capacity',
+        }
+        for (const s of data.skipped) {
+          const coach = staff.find((c) => c.id === s.profile_id)
+          const name = coach?.full_name || s.profile_id
+          lines.push(`${name}: skipped (${REASONS[s.reason] || s.reason})`)
+        }
       }
+      if (lines.length > 0) {
+        const n = data.assigned?.length ?? 0
+        showToast(`Assigned ${n} coach${n === 1 ? '' : 'es'}. ${lines.join('. ')}`, 'warning')
+      }
+      setAssignTarget(null)
+      refreshAfterMutation()
+    } catch {
+      showToast('Network error, please try again')
     }
-    if (lines.length > 0) {
-      const n = data.assigned?.length ?? 0
-      alert(`Assigned ${n} coach${n === 1 ? '' : 'es'}.\n\n${lines.join('\n')}`)
-    }
-    setAssignTarget(null)
-    refreshAfterMutation()
   }
 
   // (handleUnassign was dead code — assignment-removal logic now lives
@@ -476,17 +538,24 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
   // { start, end, reason } where null on any field clears the
   // override and returns to the block default.
   async function handlePartialSave(assignmentId, payload) {
-    const res = await fetch(`/api/schedule/assignments/${assignmentId}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        start_time_override: payload.start || null,
-        end_time_override: payload.end || null,
-        partial_reason: payload.reason || null,
-      }),
-    })
-    const data = await res.json()
-    if (data.success) {
+    let res
+    let data
+    try {
+      res = await fetch(`/api/schedule/assignments/${assignmentId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          start_time_override: payload.start || null,
+          end_time_override: payload.end || null,
+          partial_reason: payload.reason || null,
+        }),
+      })
+      data = await res.json().catch(() => ({}))
+    } catch {
+      // The row renders this string inline, so it must read as copy.
+      return { ok: false, error: 'Network error, please try again' }
+    }
+    if (res.ok && data.success) {
       await refreshAfterMutation()
       // Re-pull the latest block from the freshly-fetched list so
       // the modal shows the updated override values without the
@@ -516,21 +585,25 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
   // Removed during CODEQUAL.1.)
 
   async function handleCreateBlock(date, templateId) {
-    const res = await fetch('/api/schedule/blocks', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        location_id: locationId,
-        template_id: templateId,
-        block_date: date,
-      }),
-    })
-    const data = await res.json()
-    if (data.success) {
+    try {
+      const res = await fetch('/api/schedule/blocks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          location_id: locationId,
+          template_id: templateId,
+          block_date: date,
+        }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data.success) {
+        showToast(data.error || 'Failed to add slot')
+        return
+      }
       setCreateTarget(null)
       refreshAfterMutation()
-    } else {
-      alert(data.error || 'Failed to add slot')
+    } catch {
+      showToast('Network error, please try again')
     }
   }
 
@@ -543,7 +616,12 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
     // the month-grid (which bleeds into adjacent months). In week view the
     // "month" option targets the month the visible week falls in, mirroring
     // the copy-last-month button.
-    const effMonthStart = viewType === 'month' ? monthStart : getMonthStart(weekStart)
+    // ROSTER-FIX.6a-9 — monthStartForWeek, the SAME midweek rule the Month
+    // toggle uses. getMonthStart(weekStart) took the month of the week's
+    // MONDAY, so on the week of Mon 31 Aug 2026 the toggle said September
+    // while this modal offered to publish August: two different answers to
+    // "which month am I looking at" on one screen.
+    const effMonthStart = viewType === 'month' ? monthStart : monthStartForWeek(weekStart)
     const effMonthEnd = new Date(effMonthStart.getFullYear(), effMonthStart.getMonth() + 1, 0)
     setPublishModal({
       week: {
@@ -573,7 +651,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
           force_over_budget: !!forceOverBudget,
         }),
       })
-      const data = await res.json()
+      const data = await res.json().catch(() => ({}))
       // 409 with `over_budget_confirmation_required` is not a
       // real error — it's the modal's signal to show the
       // confirmation step. The modal will call us back with
@@ -582,12 +660,14 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
         return { confirmRequired: true, impact: data.impact }
       }
       if (!data.success && data.error === OVERLAP_ERROR) {
-        alert(overlapMessage(data))
-        return { error: data.error }
+        const message = overlapMessage(data)
+        showToast(message)
+        return { error: message }
       }
-      if (!data.success) {
-        alert(data.error || 'Publish failed')
-        return { error: data.error }
+      if (!res.ok || !data.success) {
+        const message = data.error || 'Publish failed'
+        showToast(message)
+        return { error: message }
       }
       // RETIRE-SHIFTS-MIRROR.6 — POST /rosters now notifies the rostered
       // coaches itself (it knows which blocks were newly published), so the
@@ -596,16 +676,22 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
       // ROSTER-FIX.4 — a partial success (roster row written, block tagging
       // failed) comes back as 201 + warning; surface it instead of refreshing
       // silently as if everything landed.
-      if (data.warning) alert(data.warning)
+      if (data.warning) showToast(data.warning, 'warning')
       setPublishModal(null)
       // Publish is the one mutation that should NOT re-arm the exit guard.
-      // A real publish clears it; a needs-approval draft stays dirty (it's
-      // still pending an owner's sign-off).
+      // A real publish clears the period it covered; a needs-approval draft
+      // stays dirty (it's still pending an owner's sign-off).
       refreshAfterMutation({ markDirty: false })
-      if (!data.needs_approval) setHasUnpublishedChanges(false)
+      if (!data.needs_approval) clearDirtyPeriodsCoveredBy(periodStart, periodEnd)
       return data.needs_approval
         ? { needsApproval: true }
         : { published: true, impact: data.impact }
+    } catch {
+      // ROSTER-FIX.6a — without this the modal's Publish button spun on
+      // `publishing` forever and the roster looked half-submitted.
+      const message = 'Network error, the roster was not published. Please try again.'
+      showToast(message)
+      return { error: message }
     } finally {
       setPublishing(false)
     }
@@ -617,19 +703,29 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
     setCopying(true)
     // copy-week writes shift_blocks + shift_assignments directly
     // (RETIRE-SHIFTS-MIRROR.5b); the legacy public.shifts table is gone.
-    const res = await fetch('/api/schedule/shifts/copy-week', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        location_id: locationId,
-        source_start: formatDate(prevWeekStart),
-        target_start: formatDate(weekStart),
-      }),
-    })
-    const data = await res.json()
-    setCopying(false)
-    if (data.success) refreshAfterMutation()
-    else alert(data.error || 'Failed to copy week')
+    try {
+      const res = await fetch('/api/schedule/shifts/copy-week', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          location_id: locationId,
+          source_start: formatDate(prevWeekStart),
+          target_start: formatDate(weekStart),
+        }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data.success) {
+        showToast(data.error || 'Failed to copy week')
+        return
+      }
+      refreshAfterMutation()
+    } catch {
+      showToast('Network error, please try again')
+    } finally {
+      // ROSTER-FIX.6a — setCopying(false) used to sit on the happy path, so a
+      // thrown fetch left both copy buttons disabled until a full reload.
+      setCopying(false)
+    }
   }
 
   async function handleCopyMonth() {
@@ -638,46 +734,58 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
     // working in. Without this, clicking "Copy Last Month" from
     // week view would target whatever monthStart was set to last
     // (possibly stale from an earlier month-view session).
-    const effectiveMonthStart = viewType === 'month' ? monthStart : getMonthStart(weekStart)
+    // ROSTER-FIX.6a-9 — same midweek rule as the toggle and the publish modal;
+    // see handlePublishClick. On the week of Mon 31 Aug 2026 this used to copy
+    // into August while the header said September.
+    const effectiveMonthStart = viewType === 'month' ? monthStart : monthStartForWeek(weekStart)
     const targetLabel = effectiveMonthStart.toLocaleDateString('en-IE', { month: 'long', year: 'numeric' })
     const prevMonthStart = addMonths(effectiveMonthStart, -1)
     const sourceLabel = prevMonthStart.toLocaleDateString('en-IE', { month: 'long', year: 'numeric' })
     if (!confirm(`Copy last month's roster (${sourceLabel}) to ${targetLabel}?`)) return
     setCopying(true)
-    const res = await fetch('/api/schedule/shifts/copy-month', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        location_id: locationId,
-        source_month_start: formatDate(prevMonthStart),
-        target_month_start: formatDate(effectiveMonthStart),
-      }),
-    })
-    const data = await res.json()
-    setCopying(false)
-    if (data.success) {
+    try {
+      const res = await fetch('/api/schedule/shifts/copy-month', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          location_id: locationId,
+          source_month_start: formatDate(prevMonthStart),
+          target_month_start: formatDate(effectiveMonthStart),
+        }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data.success) {
+        showToast(data.error || 'Failed to copy month')
+        return
+      }
       const skipped = data.skipped || 0
       if (skipped > 0) {
-        alert(`Copied ${data.copied} shifts. ${skipped} skipped (day-of-month doesn't exist in target — usually Jan 31 → Feb).`)
+        showToast(`Copied ${data.copied} shifts. ${skipped} skipped, that day of the month does not exist in the target (usually 31 Jan into Feb).`, 'warning')
       }
       refreshAfterMutation()
-    } else {
-      alert(data.error || 'Failed to copy month')
+    } catch {
+      showToast('Network error, please try again')
+    } finally {
+      setCopying(false)
     }
   }
 
   async function handleSwapRequest(shiftId, reason) {
-    const res = await fetch('/api/schedule/swaps', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ requester_shift_id: shiftId, reason }),
-    })
-    const data = await res.json()
-    if (data.success) {
+    try {
+      const res = await fetch('/api/schedule/swaps', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requester_shift_id: shiftId, reason }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data.success) {
+        showToast(data.error || 'Failed to submit swap request')
+        return
+      }
       setSwapModal(null)
-      alert('Swap request submitted — waiting for manager approval')
-    } else {
-      alert(data.error || 'Failed to submit swap request')
+      showToast('Swap request submitted, waiting for manager approval', 'success')
+    } catch {
+      showToast('Network error, please try again')
     }
   }
 
@@ -717,7 +825,10 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
           <div className="flex bg-un1t-surface border border-un1t-border rounded-lg overflow-hidden text-xs">
             <button
               onClick={() => {
-                if (viewType === 'month') setWeekStart(getMonday(monthStart))
+                // ROSTER-FIX.6a — see weekStartForMonth: getMonday(monthStart)
+                // used to land on the previous month whenever the 1st fell on
+                // a weekend, and the next Month click then kept that month.
+                if (viewType === 'month') setWeekStart(weekStartForMonth(monthStart, weekStart))
                 setViewType('week')
               }}
               className={`flex items-center gap-1.5 px-3 py-2 transition-colors ${viewType === 'week' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'}`}
@@ -726,7 +837,8 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
             </button>
             <button
               onClick={() => {
-                if (viewType === 'week') setMonthStart(getMonthStart(weekStart))
+                // Midweek decides which month a straddling week belongs to.
+                if (viewType === 'week') setMonthStart(monthStartForWeek(weekStart))
                 setViewType('month')
               }}
               className={`flex items-center gap-1.5 px-3 py-2 transition-colors ${viewType === 'month' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'}`}
@@ -841,6 +953,24 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
           <ChevronRight size={20} />
         </button>
       </div>
+
+      {/* ROSTER-FIX.6a — a failed load used to leave the screen on
+          "Loading roster..." forever with nothing said. The banner names the
+          failure, offers a retry, and can be dismissed.
+          ROSTER-FIX.6a-9 — this was a hand-inlined copy of ScheduleErrorBanner,
+          so the manager screens and this one could drift apart on the one thing
+          they exist to do the same way. And when the hook keeps the last good
+          data under the banner, SAY so: otherwise the grid quietly reads as
+          the current week's roster. */}
+      {error && !errorDismissed && (
+        <ScheduleErrorBanner
+          title="Could not load the roster"
+          message={showingStaleData ? `${error} Showing the last data that loaded.` : error}
+          onRetry={fetchData}
+          busy={loading}
+          onDismiss={() => setErrorDismissed(true)}
+        />
+      )}
 
       {/* Unstaffed-blocks summary — week view only, manager only */}
       {!loading && isManager && viewType === 'week' && unstaffedThisWeek > 0 && (
@@ -1251,20 +1381,44 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
           flatShifts={flatShifts}
           onClose={() => setBlockDetail(null)}
           onAddCoach={() => setAssignTarget({ block: blockDetail })}
+          busy={rowBusy}
           onUnassign={async (assignmentId) => {
+            if (rowBusy) return
             if (!confirm('Remove this coach from the shift?')) return
-            const res = await fetch(`/api/schedule/assignments/${assignmentId}`, { method: 'DELETE' })
-            const data = await res.json()
-            if (data.success) await refreshAfterMutation()
-            else alert(data.error || 'Failed to remove')
+            setRowBusy(true)
+            try {
+              const res = await fetch(`/api/schedule/assignments/${assignmentId}`, { method: 'DELETE' })
+              const data = await res.json().catch(() => ({}))
+              if (!res.ok || !data.success) {
+                showToast(data.error || 'Failed to remove')
+                return
+              }
+              await refreshAfterMutation()
+            } catch {
+              showToast('Network error, please try again')
+            } finally {
+              setRowBusy(false)
+            }
           }}
           onPartialSave={handlePartialSave}
           onDeleteBlock={async () => {
+            if (rowBusy) return
             if (!confirm('Delete this entire shift slot? Any assigned coaches are removed too.')) return
-            const res = await fetch(`/api/schedule/blocks/${blockDetail.id}`, { method: 'DELETE' })
-            const data = await res.json()
-            if (data.success) { setBlockDetail(null); refreshAfterMutation() }
-            else alert(data.error || 'Failed to delete')
+            setRowBusy(true)
+            try {
+              const res = await fetch(`/api/schedule/blocks/${blockDetail.id}`, { method: 'DELETE' })
+              const data = await res.json().catch(() => ({}))
+              if (!res.ok || !data.success) {
+                showToast(data.error || 'Failed to delete')
+                return
+              }
+              setBlockDetail(null)
+              refreshAfterMutation()
+            } catch {
+              showToast('Network error, please try again')
+            } finally {
+              setRowBusy(false)
+            }
           }}
           onSwapRequest={(myAssignmentId) => {
             const shiftShape = flatShifts.find((fs) => fs.id === myAssignmentId)
@@ -1344,28 +1498,28 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
               Cancel
             </button>
           </div>
-          {bulkToast && (
-            <div className={`max-w-7xl mx-auto px-4 pb-2 text-xs ${
-              bulkToast.kind === 'error' ? 'text-red-400' :
-              bulkToast.kind === 'warning' ? 'text-amber-300' :
+          {toast && (
+            <div key={toast.id} data-toast-id={toast.id} className={`max-w-7xl mx-auto px-4 pb-2 text-xs ${
+              toast.kind === 'error' ? 'text-red-400' :
+              toast.kind === 'warning' ? 'text-amber-300' :
               'text-emerald-400'
             }`}>
-              {bulkToast.message}
+              {toast.message}
             </div>
           )}
         </div>
       )}
       {/* Standalone toast — shows after a successful assign that
           closed select mode, so the operator sees what happened. */}
-      {!selectMode && bulkToast && (
-        <div className={`fixed bottom-4 right-4 z-40 max-w-md rounded-md border px-4 py-3 text-sm shadow-2xl ${
-          bulkToast.kind === 'error' ? 'border-red-500/50 bg-red-500/10 text-red-700' :
-          bulkToast.kind === 'warning' ? 'border-amber-500/50 bg-amber-500/10 text-amber-700' :
+      {!selectMode && toast && (
+        <div key={toast.id} data-toast-id={toast.id} className={`fixed bottom-4 right-4 z-40 max-w-md rounded-md border px-4 py-3 text-sm shadow-2xl ${
+          toast.kind === 'error' ? 'border-red-500/50 bg-red-500/10 text-red-700' :
+          toast.kind === 'warning' ? 'border-amber-500/50 bg-amber-500/10 text-amber-700' :
           'border-emerald-500/50 bg-emerald-500/10 text-emerald-700'
         }`}>
           <div className="flex items-start justify-between gap-3">
-            <span>{bulkToast.message}</span>
-            <button type="button" onClick={() => setBulkToast(null)} className="text-current opacity-70 hover:opacity-100">
+            <span>{toast.message}</span>
+            <button type="button" onClick={() => setToast(null)} className="text-current opacity-70 hover:opacity-100">
               <X size={14} />
             </button>
           </div>
@@ -1559,9 +1713,9 @@ function PublishRosterModal({ locationId, isOwner, period, onSubmit, onClose, pu
             dry_run: true,
           }),
         })
-        const data = await res.json()
+        const data = await res.json().catch(() => ({}))
         if (cancelled) return
-        if (!data.success) {
+        if (!res.ok || !data.success) {
           setSubmitResult({
             error: data.error === OVERLAP_ERROR
               ? overlapMessage(data)
@@ -1570,8 +1724,10 @@ function PublishRosterModal({ locationId, isOwner, period, onSubmit, onClose, pu
         } else {
           setImpact(data.impact)
         }
-      } catch (e) {
-        if (!cancelled) setSubmitResult({ error: e.message })
+      } catch {
+        // ROSTER-FIX.6a — this used to print e.message, so a dropped
+        // connection reached the operator as "Failed to fetch".
+        if (!cancelled) setSubmitResult({ error: 'Network error, could not load the budget preview.' })
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -1781,7 +1937,7 @@ function SwapModal({ shift, onSubmit, onClose }) {
 // useEffect keeps `block` here in sync with the latest data. So the
 // modal updates live as overrides are saved without a re-mount.
 function BlockDetailModal({
-  block, user, isManager, flatShifts: _flatShifts,
+  block, user, isManager, flatShifts: _flatShifts, busy,
   onClose, onAddCoach, onUnassign, onPartialSave, onDeleteBlock, onSwapRequest,
 }) {
   const tmpl = block.shift_templates || {}
@@ -1846,6 +2002,7 @@ function BlockDetailModal({
                 block={block}
                 isMe={a.profile_id === user.id}
                 canEdit={isManager}
+                busy={busy}
                 onUnassign={() => onUnassign(a.id)}
                 onSave={(payload) => onPartialSave(a.id, payload)}
                 onSwapRequest={
@@ -1870,11 +2027,13 @@ function BlockDetailModal({
           ) : <span />}
           {isManager && (
             <button
+              type="button"
               onClick={onDeleteBlock}
-              className="text-xs bg-red-500/15 text-red-700 border border-red-500/30 hover:bg-red-500/25 px-3 py-2 rounded-md font-medium inline-flex items-center gap-1.5"
+              disabled={busy}
+              className="text-xs bg-red-500/15 text-red-700 border border-red-500/30 hover:bg-red-500/25 disabled:opacity-50 px-3 py-2 rounded-md font-medium inline-flex items-center gap-1.5"
               title="Delete this entire shift slot"
             >
-              <X size={12} /> Delete this slot
+              <X size={12} /> {busy ? 'Working…' : 'Delete this slot'}
             </button>
           )}
         </div>
@@ -1886,7 +2045,7 @@ function BlockDetailModal({
 // One coach's row inside BlockDetailModal — shows their effective
 // times, lets a manager (or the coach themselves) override the
 // times for partial shifts, request a swap, or be removed.
-function AssignmentRow({ assignment, block, isMe, canEdit, onUnassign, onSave, onSwapRequest }) {
+function AssignmentRow({ assignment, block, isMe, canEdit, busy, onUnassign, onSave, onSwapRequest }) {
   const blockStart = (block.start_time || '').slice(0, 5)
   const blockEnd = (block.end_time || '').slice(0, 5)
   const overrideStart = (assignment.start_time_override || '').slice(0, 5)
@@ -1984,8 +2143,10 @@ function AssignmentRow({ assignment, block, isMe, canEdit, onUnassign, onSave, o
           )}
           {canEdit && !editing && (
             <button
+              type="button"
               onClick={onUnassign}
-              className="text-[11px] text-un1t-subtle hover:text-red-700 inline-flex items-center gap-1 px-2 py-1 rounded hover:bg-red-500/10"
+              disabled={busy}
+              className="text-[11px] text-un1t-subtle hover:text-red-700 disabled:opacity-50 inline-flex items-center gap-1 px-2 py-1 rounded hover:bg-red-500/10"
               title="Remove coach"
             >
               <X size={11} />
