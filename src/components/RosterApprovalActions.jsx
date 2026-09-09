@@ -54,7 +54,8 @@ export default function RosterApprovalActions({ rosterId, canApprove }) {
   // null), because the operator already confirmed the destructive part.
   async function handleReject() {
     if (!confirm('Reject this roster? The draft is deleted and the manager will be told to adjust and publish again.')) return
-    const note = prompt('Why? (optional — the manager sees this)')
+    // ROSTER-FIX.6a-9 — no em dashes in operator copy (house style).
+    const note = prompt('Why? Optional, and the manager sees this.')
     setBusy(true)
     try {
       const res = await fetch(`/api/schedule/rosters/${rosterId}/reject`, {

@@ -12,10 +12,14 @@ import React from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, waitFor, fireEvent, act } from '@testing-library/react'
 
+const DEFAULT_SEARCH = 'view=week&week=2026-05-04&month=2026-05-01'
+// Mutable so one test can start the calendar on a different week without a
+// second mock of next/navigation.
+const nav = vi.hoisted(() => ({ search: 'view=week&week=2026-05-04&month=2026-05-01' }))
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ replace: vi.fn() }),
   usePathname: () => '/schedule',
-  useSearchParams: () => new URLSearchParams('view=week&week=2026-05-04&month=2026-05-01'),
+  useSearchParams: () => new URLSearchParams(nav.search),
 }))
 // Not under test here and it renders its own money panels; keep the DOM small.
 vi.mock('./RosterSummaryPanel', () => ({ default: () => null }))
@@ -43,7 +47,7 @@ function happyFetch() {
   })
 }
 
-beforeEach(() => { global.fetch = happyFetch() })
+beforeEach(() => { global.fetch = happyFetch(); nav.search = DEFAULT_SEARCH })
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
 describe('ScheduleCalendar load failures (ROSTER-FIX.6a)', () => {
@@ -259,5 +263,82 @@ describe('toasts (ROSTER-FIX.6a-8)', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+// ROSTER-FIX.6a-9 (F3) — the Month/Week toggle moved to the midweek rule in
+// 6a-1, but the publish modal and Copy Last Month kept their own
+// getMonthStart(weekStart), which takes the month of the week's MONDAY. On the
+// week of Mon 31 Aug 2026 the header therefore said September while Publish
+// and Copy offered August: one screen, two answers to "which month is this".
+describe('one month rule across toggle, publish and copy (ROSTER-FIX.6a-9)', () => {
+  // Mon 31 Aug 2026 - Sun 6 Sep 2026. Only one day of it is in August.
+  const STRADDLING_WEEK = 'view=week&week=2026-08-31&month=2026-08-01'
+
+  async function renderStraddlingWeek() {
+    nav.search = STRADDLING_WEEK
+    vi.spyOn(window, 'confirm').mockReturnValue(false)
+    render(<ScheduleCalendar user={user} />)
+    await waitFor(() => expect(screen.queryByText(/Loading roster/)).toBeNull())
+  }
+
+  it('the publish modal offers the month the toggle would show', async () => {
+    await renderStraddlingWeek()
+    fireEvent.click(screen.getByText('Publish'))
+    await screen.findByText('Publish roster', {}, { timeout: 5000 })
+    fireEvent.click(screen.getByText('This month'))
+    await waitFor(() => expect(screen.getByText('September 2026')).toBeTruthy(), { timeout: 5000 })
+    expect(screen.queryByText('August 2026')).toBeNull()
+  })
+
+  it('Copy Last Month targets September and reads from August', async () => {
+    await renderStraddlingWeek()
+    fireEvent.click(screen.getByText('Copy Last Month'))
+    expect(window.confirm).toHaveBeenCalledWith(
+      "Copy last month's roster (August 2026) to September 2026?"
+    )
+  })
+
+  it('the Month toggle agrees with both', async () => {
+    await renderStraddlingWeek()
+    fireEvent.click(screen.getByText('Month'))
+    await waitFor(() => expect(screen.getByText('September 2026')).toBeTruthy())
+  })
+})
+
+// ROSTER-FIX.6a-9 (finding 4) — the banner must say whether the grid under it
+// is real. Silence there is how an empty grid gets read as "nobody is
+// rostered".
+describe('the banner says when it is covering stale data (ROSTER-FIX.6a-9)', () => {
+  const STALE_LINE = /Showing the last data that loaded/
+
+  it('says so when the last good week is still underneath', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    let blockReads = 0
+    global.fetch = vi.fn(async (url) => {
+      const u = String(url)
+      if (u.includes('/schedule/blocks')) {
+        blockReads += 1
+        if (blockReads > 1) throw new TypeError('Failed to fetch')
+        return okResponse({ data: [{ id: 'b1', block_date: '2026-05-04', shift_assignments: [] }] })
+      }
+      if (u.includes('contractor-spend')) return okResponse({ success: true, data: {} })
+      if (u.includes('/copy-week')) return okResponse({ success: true, copied: 3 })
+      return okResponse({ data: [] })
+    })
+    render(<ScheduleCalendar user={user} />)
+    await waitFor(() => expect(screen.queryByText(/Loading roster/)).toBeNull())
+
+    // A mutation refetches the SAME week; that refetch fails.
+    fireEvent.click(screen.getByText('Copy Last Week'))
+    await waitFor(() => expect(screen.getByText('Could not load the roster')).toBeTruthy())
+    expect(screen.getByText(STALE_LINE)).toBeTruthy()
+  })
+
+  it('stays quiet about stale data when there is none to show', async () => {
+    global.fetch = vi.fn(async () => { throw new TypeError('Failed to fetch') })
+    render(<ScheduleCalendar user={user} />)
+    await waitFor(() => expect(screen.getByText('Could not load the roster')).toBeTruthy())
+    expect(screen.queryByText(STALE_LINE)).toBeNull()
   })
 })

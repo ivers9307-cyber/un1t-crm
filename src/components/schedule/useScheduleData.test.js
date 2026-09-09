@@ -190,3 +190,58 @@ describe('readJson session handling (ROSTER-FIX.6a-8)', () => {
     await expect(readJson('/api/schedule/blocks')).rejects.toThrow(/500/)
   })
 })
+
+// ROSTER-FIX.6a-9 (finding 4) — keeping the last-good data under the banner is
+// right for a flaky refresh of the SAME week and wrong the moment the header
+// has moved on: the previous week's blocks then render under the new week's
+// dates, and a sparse week reads as "nobody is rostered" with nothing on
+// screen saying otherwise.
+describe('stale data on a failed load (ROSTER-FIX.6a-9)', () => {
+  it('keeps the week on screen when a refresh of THAT week fails, and flags it', async () => {
+    const { result } = renderHook(() => useScheduleData(ARGS))
+    await waitFor(() => expect(result.current.blocks).toHaveLength(1))
+
+    global.fetch = vi.fn(async () => { throw new TypeError('Failed to fetch') })
+    await act(async () => { await result.current.refresh() })
+
+    expect(result.current.error).toBeTruthy()
+    expect(result.current.blocks).toHaveLength(1)
+    expect(result.current.showingStaleData).toBe(true)
+  })
+
+  it('clears the range-scoped slices when the load for a DIFFERENT range fails', async () => {
+    const { result, rerender } = renderHook((props) => useScheduleData(props), { initialProps: ARGS })
+    await waitFor(() => expect(result.current.blocks).toHaveLength(1))
+    expect(result.current.contractorSpend).toEqual({ spend: 100 })
+
+    global.fetch = vi.fn(async () => { throw new TypeError('Failed to fetch') })
+    rerender({ ...ARGS, startDate: '2026-05-11', endDate: '2026-05-17' })
+
+    await waitFor(() => expect(result.current.error).toBeTruthy())
+    expect(result.current.blocks).toEqual([])
+    expect(result.current.contractorSpend).toBeNull()
+    // Nothing is being shown, so the banner must not claim otherwise.
+    expect(result.current.showingStaleData).toBe(false)
+  })
+
+  it('does not flag stale data when the very first load fails', async () => {
+    global.fetch = vi.fn(async () => { throw new TypeError('Failed to fetch') })
+    const { result } = renderHook(() => useScheduleData(ARGS))
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    expect(result.current.showingStaleData).toBe(false)
+    expect(result.current.blocks).toEqual([])
+  })
+
+  it('drops the stale flag once a load succeeds again', async () => {
+    const { result } = renderHook(() => useScheduleData(ARGS))
+    await waitFor(() => expect(result.current.blocks).toHaveLength(1))
+    global.fetch = vi.fn(async () => { throw new TypeError('Failed to fetch') })
+    await act(async () => { await result.current.refresh() })
+    expect(result.current.showingStaleData).toBe(true)
+
+    global.fetch = vi.fn(async (url) => okResponse(defaultBody(url)))
+    await act(async () => { await result.current.refresh() })
+    expect(result.current.showingStaleData).toBe(false)
+    expect(result.current.error).toBeNull()
+  })
+})

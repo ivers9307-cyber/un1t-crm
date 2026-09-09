@@ -27,13 +27,14 @@ import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 import { computeWeeklyCost } from '@/lib/payroll'
 import { indexByDate } from '@/lib/bank-holidays'
 import { MANAGER_ROLES, ADMIN_ROLES } from '@/lib/schemas'
-import { isBlockUnstaffedFuture as libUnstaffed, liveAssignments, monthStartForWeek, weekStartForMonth, periodsOverlap, periodCovers } from '@/lib/roster'
+import { isBlockUnstaffedFuture as libUnstaffed, liveAssignments, getMonthStart, monthStartForWeek, weekStartForMonth, periodsOverlap, periodCovers } from '@/lib/roster'
 // ROSTER-FIX.4 — the server refuses a publish that would leave two published
 // rosters over the same days. `overlapping_roster` is a code, not copy; the
 // sentence it becomes is shared with the approvals queue so one refusal reads
 // the same wherever the operator meets it.
 import { OVERLAP_ERROR, overlapMessage } from '@/lib/roster-overlap-message'
 import RosterSummaryPanel from './RosterSummaryPanel'
+import ScheduleErrorBanner from './schedule/ScheduleErrorBanner'
 // ROSTER-FIX.6a — the six-endpoint fan-out, its error handling and its
 // request-ordering guard live in the hook now; see its header for why.
 import { useScheduleData } from './schedule/useScheduleData'
@@ -85,13 +86,6 @@ function parseLocalDate(s) {
 function addDays(date, days) {
   const d = new Date(date)
   d.setDate(d.getDate() + days)
-  return d
-}
-
-function getMonthStart(date) {
-  const d = new Date(date)
-  d.setDate(1)
-  d.setHours(0, 0, 0, 0)
   return d
 }
 
@@ -360,10 +354,15 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
   // the publish modal submits (week bounds, or calendar-month bounds, NOT the
   // month grid, which bleeds into the neighbouring months). One key format,
   // 'YYYY-MM-DD..YYYY-MM-DD', so a publish can clear exactly what it covered.
-  const visibleMonthEnd = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0)
-  const visiblePeriodKey = viewType === 'month'
-    ? `${formatDate(monthStart)}..${formatDate(visibleMonthEnd)}`
-    : `${formatDate(weekStart)}..${formatDate(weekEnd)}`
+  const visibleMonthEnd = useMemo(
+    () => new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0),
+    [monthStart]
+  )
+  const visiblePeriodKey = useMemo(() => (
+    viewType === 'month'
+      ? `${formatDate(monthStart)}..${formatDate(visibleMonthEnd)}`
+      : `${formatDate(weekStart)}..${formatDate(addDays(weekStart, 6))}`
+  ), [viewType, weekStart, monthStart, visibleMonthEnd])
   // ROSTER-FIX.6a — warn on any INTERSECTION, not on an exact key match. Edit
   // in week view, switch to Month, and the visible key changes from the week
   // to the month while the unpublished edits stay on screen; exact equality
@@ -394,7 +393,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
   const rangeEnd = formatDate(viewType === 'month' ? monthGrid.end : weekEnd)
   const {
     blocks, templates, staff, timeOff, holidays, contractorSpend,
-    loading, error, refresh: fetchData,
+    loading, error, showingStaleData, refresh: fetchData,
   } = useScheduleData({
     locationId,
     startDate: rangeStart,
@@ -617,7 +616,12 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
     // the month-grid (which bleeds into adjacent months). In week view the
     // "month" option targets the month the visible week falls in, mirroring
     // the copy-last-month button.
-    const effMonthStart = viewType === 'month' ? monthStart : getMonthStart(weekStart)
+    // ROSTER-FIX.6a-9 — monthStartForWeek, the SAME midweek rule the Month
+    // toggle uses. getMonthStart(weekStart) took the month of the week's
+    // MONDAY, so on the week of Mon 31 Aug 2026 the toggle said September
+    // while this modal offered to publish August: two different answers to
+    // "which month am I looking at" on one screen.
+    const effMonthStart = viewType === 'month' ? monthStart : monthStartForWeek(weekStart)
     const effMonthEnd = new Date(effMonthStart.getFullYear(), effMonthStart.getMonth() + 1, 0)
     setPublishModal({
       week: {
@@ -730,7 +734,10 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
     // working in. Without this, clicking "Copy Last Month" from
     // week view would target whatever monthStart was set to last
     // (possibly stale from an earlier month-view session).
-    const effectiveMonthStart = viewType === 'month' ? monthStart : getMonthStart(weekStart)
+    // ROSTER-FIX.6a-9 — same midweek rule as the toggle and the publish modal;
+    // see handlePublishClick. On the week of Mon 31 Aug 2026 this used to copy
+    // into August while the header said September.
+    const effectiveMonthStart = viewType === 'month' ? monthStart : monthStartForWeek(weekStart)
     const targetLabel = effectiveMonthStart.toLocaleDateString('en-IE', { month: 'long', year: 'numeric' })
     const prevMonthStart = addMonths(effectiveMonthStart, -1)
     const sourceLabel = prevMonthStart.toLocaleDateString('en-IE', { month: 'long', year: 'numeric' })
@@ -949,32 +956,20 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
 
       {/* ROSTER-FIX.6a — a failed load used to leave the screen on
           "Loading roster..." forever with nothing said. The banner names the
-          failure, offers a retry, and can be dismissed; the last good week
-          stays on screen underneath it. */}
+          failure, offers a retry, and can be dismissed.
+          ROSTER-FIX.6a-9 — this was a hand-inlined copy of ScheduleErrorBanner,
+          so the manager screens and this one could drift apart on the one thing
+          they exist to do the same way. And when the hook keeps the last good
+          data under the banner, SAY so: otherwise the grid quietly reads as
+          the current week's roster. */}
       {error && !errorDismissed && (
-        <div className="mb-4 flex items-start gap-3 p-3 rounded-lg border border-red-500/40 bg-red-500/10 text-sm">
-          <AlertCircle size={16} className="text-red-600 mt-0.5 flex-shrink-0" />
-          <div className="flex-1">
-            <div className="font-medium text-red-700">Could not load the roster</div>
-            <div className="text-xs text-red-700/80 mt-0.5">{error}</div>
-          </div>
-          <button
-            type="button"
-            onClick={() => fetchData()}
-            disabled={loading}
-            className="text-xs font-medium px-2.5 py-1 rounded border border-red-500/40 text-red-700 hover:bg-red-500/15 disabled:opacity-50"
-          >
-            {loading ? 'Retrying…' : 'Retry'}
-          </button>
-          <button
-            type="button"
-            onClick={() => setErrorDismissed(true)}
-            aria-label="Dismiss"
-            className="text-red-700/70 hover:text-red-700"
-          >
-            <X size={14} />
-          </button>
-        </div>
+        <ScheduleErrorBanner
+          title="Could not load the roster"
+          message={showingStaleData ? `${error} Showing the last data that loaded.` : error}
+          onRetry={fetchData}
+          busy={loading}
+          onDismiss={() => setErrorDismissed(true)}
+        />
       )}
 
       {/* Unstaffed-blocks summary — week view only, manager only */}

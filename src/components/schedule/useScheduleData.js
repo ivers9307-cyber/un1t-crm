@@ -21,6 +21,17 @@
 // On failure the previously loaded week deliberately STAYS on screen (we only
 // stop writing new values), so a flaky refresh shows a banner over real data
 // rather than blanking a roster the operator was reading.
+//
+// ROSTER-FIX.6a-9 — but ONLY when it is still the same week. The header has
+// already advanced by the time the fetch for the new range fails, so keeping
+// the old blocks painted the PREVIOUS week's roster under the NEW week's
+// dates. Sparse weeks then read as "nobody is rostered next week" and a
+// manager acts on it. So: a failed refresh of the range on screen keeps its
+// data (and the caller says it is stale); a failed load of a DIFFERENT range
+// clears the range-scoped slices rather than mislabelling them.
+//
+// `showingStaleData` is what lets the banner say "showing the last data that
+// loaded" only when there is in fact data being shown.
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 
@@ -63,6 +74,11 @@ export function useScheduleData({ locationId, startDate, endDate, spendReference
   const [contractorSpend, setContractorSpend] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [showingStaleData, setShowingStaleData] = useState(false)
+
+  // The range the data currently in state was actually loaded for. Compared
+  // against the range that just failed to decide keep-vs-clear.
+  const loadedRange = useRef(null)
 
   // Monotonic request id. Bumped before each fan-out; a response whose stamp
   // is no longer the current one is a loser and writes nothing.
@@ -74,8 +90,10 @@ export function useScheduleData({ locationId, startDate, endDate, spendReference
       return
     }
     const gen = ++generation.current
+    const requestedRange = `${startDate}..${endDate}`
     setLoading(true)
     setError(null)
+    setShowingStaleData(false)
     try {
       const [blocksRes, templatesRes, staffRes, timeOffRes, holidaysRes, spendRes] = await Promise.all([
         readJson(`/api/schedule/blocks?location_id=${locationId}&start_date=${startDate}&end_date=${endDate}`),
@@ -92,9 +110,21 @@ export function useScheduleData({ locationId, startDate, endDate, spendReference
       setTimeOff(timeOffRes.data || [])
       setHolidays(holidaysRes.data || [])
       setContractorSpend(spendRes?.success ? spendRes.data : null)
+      loadedRange.current = requestedRange
     } catch (e) {
       if (gen !== generation.current) return
       setError(e?.message || 'Could not load the roster')
+      if (loadedRange.current === requestedRange) {
+        // Same week, flaky refresh: the roster underneath is still true.
+        setShowingStaleData(true)
+      } else {
+        // The dates on screen moved on. Whatever is held belongs to another
+        // range, so showing it under these dates would be a lie the operator
+        // has no way to spot.
+        setBlocks([])
+        setContractorSpend(null)
+        loadedRange.current = null
+      }
     } finally {
       if (gen === generation.current) setLoading(false)
     }
@@ -102,5 +132,5 @@ export function useScheduleData({ locationId, startDate, endDate, spendReference
 
   useEffect(() => { refresh() }, [refresh])
 
-  return { blocks, templates, staff, timeOff, holidays, contractorSpend, loading, error, refresh }
+  return { blocks, templates, staff, timeOff, holidays, contractorSpend, loading, error, showingStaleData, refresh }
 }
