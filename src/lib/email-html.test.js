@@ -783,6 +783,10 @@ describe('iframe sandbox — Layer 1', () => {
   // the note at the top of email-html.js), so until then it is enforced here,
   // over every client component that exists rather than the one that happens
   // to render the frame today.
+  //
+  // email-blocks.js (src/lib/email-blocks.js) is scanned alongside this
+  // module: it runs on this module's OUTPUT rather than importing it, but it
+  // exists to keep parsing off the client, so it gets the same guard.
   it('no client component anywhere in src/ imports this module', () => {
     const offenders = []
     const walk = (dir) => {
@@ -792,7 +796,7 @@ describe('iframe sandbox — Layer 1', () => {
         if (!/\.(js|jsx)$/.test(entry.name) || /\.test\./.test(entry.name)) continue
         const source = readFileSync(full, 'utf8')
         if (!/^\s*['"]use client['"]/.test(source)) continue
-        if (/from\s+['"](@\/lib\/email-html|sanitize-html)['"]/.test(source)) offenders.push(full)
+        if (/from\s+['"](@\/lib\/email-html|@\/lib\/email-blocks|sanitize-html)['"]/.test(source)) offenders.push(full)
       }
     }
     walk(path.join(process.cwd(), 'src'))

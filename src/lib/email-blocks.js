@@ -15,9 +15,13 @@
 // normalised. This module's whole job is SHAPE. Feeding it raw email would
 // hand the phone a stranger's markup and is the one mistake that matters.
 //
-// SERVER ONLY. It imports email-html.js, which no client component may import
-// (that module's own test scans every 'use client' file in src/ and this one
-// is added to the same scan).
+// SERVER ONLY. This module does not itself import email-html.js — it only
+// imports htmlparser2 and runs on email-html.js's OUTPUT (see above) — but
+// the whole point is that no HTML parsing happens on the client, so it gets
+// the same guard as email-html.js: that module's own test
+// (src/lib/email-html.test.js, "no client component anywhere in src/ imports
+// this module") scans every 'use client' file in src/, and this path is in
+// that scan's regex too.
 //
 // WHAT IT DELIBERATELY DOES NOT PRESERVE: colour, font, alignment, background
 // images, and the geometry of a 600px layout table. A phone column in source
@@ -26,22 +30,58 @@
 // hatch is a "View original" in the in-app browser, not more CSS in here.
 
 import { parseDocument, DomUtils } from 'htmlparser2'
+import { stripInvisibleChars } from './mail-entities'
 
 /**
- * Ceilings. One monster newsletter must not become a multi-megabyte JSON
- * payload on somebody's cellular connection, and a pathological tree must not
- * become an unbounded walk. Exceeding any of them stops the walk and reports
- * `truncated`, which the phone says out loud rather than silently showing a
- * clipped email.
+ * Ceilings. No single one of these bounds a monster newsletter on its own —
+ * what does is the combination, and they do not all fail the same way:
+ *
+ *   - `blocks` caps the block count. walk() checks it at the top of every
+ *     node, so it stops the whole walk — but a block already being
+ *     accumulated when the cap trips is still allowed to finish and push, so
+ *     the true ceiling is `blocks + 1`, not `blocks`. That is deliberate: the
+ *     alternative is discarding a block the walker already did the work for,
+ *     which is how a long forwarded thread used to render as an empty body.
+ *   - `runsPerBlock` x `charsPerRun` is the real ceiling on ONE block's text.
+ *     `charsPerRun` bounds a single run — one <Text> node — not the content
+ *     addText() is handed; once a run is full it opens a NEW run rather than
+ *     dropping the rest, up to `runsPerBlock` runs. Hitting either does NOT
+ *     stop the walk: it drops what no longer fits in THIS block and moves on
+ *     to the next one, reporting `truncated`.
+ *   - `charsPerPre` is a `pre` block's own, larger cap — a pasted code block
+ *     or stack trace wants more room than one inline run — charged and
+ *     reported the same way `charsPerRun` is, separately from it.
+ *   - `charsPerMessage` is the actual budget on total accumulated text (every
+ *     run plus every `pre`, summed) across the whole message. Hitting it DOES
+ *     stop the walk, the same way `blocks` does — this is what keeps one
+ *     newsletter off becoming a multi-megabyte JSON payload on somebody's
+ *     cellular connection.
+ *   - `maxDepth` bounds recursion, not text. walk() recurses once per nesting
+ *     level, and an empty `<div>` pushes no block and adds no character, so
+ *     nothing above this would ever trip on a tree that is merely deep. Past
+ *     the limit, walk() stops descending into THAT branch and reports
+ *     `truncated`, but keeps walking siblings at the shallower level — it is
+ *     the one cap that does not, by itself, imply lost content.
+ *
+ * `truncated` therefore means "some of this email did not make it to the
+ * screen", not "the walk stopped here": most of the caps above let the walk
+ * carry on into the next block once they trip, which is what keeps a
+ * pathological block from taking the rest of a normal email down with it.
  */
 export const CAPS = Object.freeze({
   blocks: 400,
   runsPerBlock: 64,
   charsPerRun: 400,
+  charsPerPre: 4_000,
   charsPerMessage: 20_000,
+  maxDepth: 200,
 })
 
 const HEADING_LEVEL = Object.freeze({ h1: 1, h2: 2, h3: 3, h4: 4, h5: 5, h6: 6 })
+// 'th' looks inert here because 'th' is also in BLOCK_LEVEL below, so nothing
+// in THIS file's walk() ever asks styleFor() to bold one. It is not dead:
+// Task 4's table handling calls styleFor(cell.name, style) directly for each
+// cell, and that is the path that reads it. Leave it.
 const BOLD = new Set(['b', 'strong', 'th'])
 const ITALIC = new Set(['i', 'em'])
 const STRIKE = new Set(['s', 'strike', 'del'])
@@ -67,7 +107,7 @@ const BLOCK_LEVEL = new Set([
 const STYLE_KEYS = ['bold', 'italic', 'strike', 'mono', 'href']
 
 function sameStyle(a, b) {
-  return STYLE_KEYS.every(k => (a[k] || undefined) === (b[k] || undefined))
+  return STYLE_KEYS.every(k => (a[k] ?? undefined) === (b[k] ?? undefined))
 }
 
 function styleFor(name, inherited) {
@@ -85,8 +125,18 @@ function styleFor(name, inherited) {
 // line-wrapped, not an authored break: the ONLY explicit line break this
 // module honours is <br>, and the walker injects that '\n' straight into the
 // sink (see the `name === 'br'` branch below), never through this function.
+//
+// stripInvisibleChars runs FIRST, before the whitespace fold. `\s` and
+// String.trim() both leave U+200B/200C/200D/034F alone, and marketing email
+// routinely pads a hidden preheader with exactly those characters
+// (`&zwnj;&nbsp;` repeated hundreds of times, to break inbox-preview
+// scraping). Left in, that padding survives as content: it fills the run cap
+// with invisible characters, so the real text after it gets cut and the
+// email reports truncated when nothing worth keeping was lost. Stripping
+// first means a zero-width character sitting between two spaces collapses
+// away with them instead of holding the fold apart.
 function collapse(text) {
-  return String(text).replace(/\s+/g, ' ')
+  return stripInvisibleChars(text).replace(/\s+/g, ' ')
 }
 
 /**
@@ -109,38 +159,72 @@ class Sink {
   addText(text, style) {
     if (!text) return
     if (this.full()) { this.truncated = true; return }
-    if (this.runs.length >= CAPS.runsPerBlock) { this.truncated = true; return }
-    let slice = text
-    if (slice.length > CAPS.charsPerRun) {
-      slice = slice.slice(0, CAPS.charsPerRun)
-      this.truncated = true
-    }
     const room = CAPS.charsPerMessage - this.chars
+    let slice = text
     if (slice.length > room) {
       slice = slice.slice(0, room)
       this.truncated = true
     }
     if (!slice) return
-    this.chars += slice.length
-    const prev = this.runs[this.runs.length - 1]
-    if (prev && sameStyle(prev, style)) {
-      prev.text += slice
-      return
+
+    // charsPerRun bounds one run (one <Text> node on the phone), not the
+    // total text this call is allowed to place. A run that is already at cap
+    // gets a NEW run alongside it, up to runsPerBlock, rather than the
+    // incoming text being silently dropped — merging must not be how content
+    // disappears. runsPerBlock x charsPerRun is what actually ceilings a
+    // block.
+    while (slice.length) {
+      const prev = this.runs[this.runs.length - 1]
+      const mergeRoom = prev && sameStyle(prev, style) ? CAPS.charsPerRun - prev.text.length : 0
+      if (mergeRoom > 0) {
+        const take = Math.min(mergeRoom, slice.length)
+        prev.text += slice.slice(0, take)
+        this.chars += take
+        slice = slice.slice(take)
+        continue
+      }
+      if (this.runs.length >= CAPS.runsPerBlock) { this.truncated = true; return }
+      const take = Math.min(CAPS.charsPerRun, slice.length)
+      const run = { text: slice.slice(0, take) }
+      for (const k of STYLE_KEYS) if (style[k]) run[k] = style[k]
+      this.runs.push(run)
+      this.chars += take
+      slice = slice.slice(take)
     }
-    const run = { text: slice }
-    for (const k of STYLE_KEYS) if (style[k]) run[k] = style[k]
-    this.runs.push(run)
   }
 
-  /** Take the open runs, trimmed at the edges; [] when there is nothing. */
+  /**
+   * Take the open runs, trimmed at the edges; [] when there is nothing.
+   *
+   * Filters BEFORE it trims. An all-whitespace run — an <i> or <b> that
+   * contains only a style-separating space — is dropped first; only then are
+   * the (new) first and last SURVIVING runs trimmed. Trimming fixed array
+   * positions first got this backwards: `<p><i> </i><b> bold</b></p>` trimmed
+   * runs[0] (the italic space, correctly, to '') and runs[last] (the bold
+   * run, which had no trailing whitespace to trim), then filtered the empty
+   * run away — leaving the bold run's own leading space untouched, so the
+   * block read ' bold' with a stray space its neighbour was supposed to have
+   * absorbed.
+   */
   takeRuns() {
     const runs = this.runs
     this.runs = []
     if (runs.length === 0) return []
-    runs[0].text = runs[0].text.replace(/^[ \n]+/, '')
-    runs[runs.length - 1].text = runs[runs.length - 1].text.replace(/[ \n]+$/, '')
-    const kept = runs.filter(r => r.text !== '')
-    return kept.length && kept.some(r => r.text.trim() !== '') ? kept : []
+
+    let start = 0
+    let end = runs.length - 1
+    while (start <= end && runs[start].text.trim() === '') start++
+    while (end >= start && runs[end].text.trim() === '') end--
+    if (start > end) return []
+
+    const kept = runs.slice(start, end + 1)
+    // A line the walker broke with <br> is an authored break; whitespace the
+    // source HTML happened to indent the next line with is not. Collapse it
+    // away wherever a '\n' left it, not just at the block's own edges.
+    for (const run of kept) run.text = run.text.replace(/\n +/g, '\n')
+    kept[0].text = kept[0].text.replace(/^[ \n]+/, '')
+    kept[kept.length - 1].text = kept[kept.length - 1].text.replace(/[ \n]+$/, '')
+    return kept
   }
 
   /**
@@ -152,18 +236,54 @@ class Sink {
   flush(type = 'para', extra = null) {
     const runs = this.takeRuns()
     if (runs.length === 0) return
-    if (this.full()) { this.truncated = true; return }
+    // Gated on the DEFAULT type, deliberately: flush() is called with a
+    // non-'para' type only for a heading today, and Task 3's list items and
+    // quotes go through push(), not flush(), once they land. That is what
+    // stops a list item or a quote from ever being promoted to a link block
+    // by accident.
     if (type === 'para' && runs.length === 1 && runs[0].href) {
-      this.blocks.push({ type: 'link', href: runs[0].href, runs: [{ text: runs[0].text }] })
+      // Carry every style flag across except href — that one is redundant
+      // once it is on the block itself, and bold/italic/strike/mono inside a
+      // promoted <a> (an email CTA is routinely <a><b><i>Book now</i></b></a>)
+      // must survive the promotion rather than being dropped with it.
+      const { href, ...run } = runs[0]
+      this.blocks.push({ type: 'link', href, runs: [run] })
       return
     }
     this.blocks.push(extra ? { type, ...extra, runs } : { type, runs })
   }
 
-  /** Push a finished block that owns no open runs (image, rule, pre, table). */
+  /**
+   * Push a finished block that owns no open runs and carries no text of its
+   * own to budget (image, rule, table). A block whose size scales with its
+   * content, like `pre`, must charge `this.chars` too — see pushPre.
+   */
   push(block) {
     if (this.full()) { this.truncated = true; return }
     this.blocks.push(block)
+  }
+
+  /**
+   * Push a `pre` block. Unlike push(), this charges `this.chars` — a <pre>
+   * with no cap of its own used to sail straight past the message budget,
+   * six times over on 300 pasted stack traces, always reporting untruncated.
+   * It gets its own, larger cap (a code block wants more room than one
+   * inline run) as well as the shared message ceiling.
+   */
+  pushPre(text) {
+    if (this.full()) { this.truncated = true; return }
+    let slice = text
+    if (slice.length > CAPS.charsPerPre) {
+      slice = slice.slice(0, CAPS.charsPerPre)
+      this.truncated = true
+    }
+    const room = CAPS.charsPerMessage - this.chars
+    if (slice.length > room) {
+      slice = slice.slice(0, room)
+      this.truncated = true
+    }
+    this.chars += slice.length
+    this.blocks.push({ type: 'pre', text: slice })
   }
 }
 
@@ -179,7 +299,16 @@ function firstRuns(blocks) {
   return []
 }
 
-function walk(nodes, sink, style) {
+// depth counts nesting levels of walk() itself, not markup elements — the
+// same thing for anything BLOCK_LEVEL or inline. Real email nests tens of
+// levels (a wrapper table, a few rows, a couple of styling spans); a few
+// hundred is generous headroom that still stops a pathological tree from
+// recursing until the stack blows. sanitizeEmailHtml is iterative and
+// survives that input; this walker is the weak link on markup written by an
+// unauthenticated stranger, since an empty <div> pushes no block and adds no
+// character, so none of the other caps trip on the way down.
+function walk(nodes, sink, style, depth = 0) {
+  if (depth > CAPS.maxDepth) { sink.truncated = true; return }
   for (const node of nodes) {
     if (sink.full()) { sink.truncated = true; return }
 
@@ -198,21 +327,21 @@ function walk(nodes, sink, style) {
     if (name === 'pre') {
       sink.flush()
       const text = DomUtils.textContent(node).replace(/^\n/, '')
-      if (text.trim()) sink.push({ type: 'pre', text: text.slice(0, CAPS.charsPerRun) })
+      if (text.trim()) sink.pushPre(text)
       continue
     }
 
     const heading = HEADING_LEVEL[name]
     if (heading) {
       sink.flush()
-      walk(node.children || [], sink, style)
+      walk(node.children || [], sink, style, depth + 1)
       sink.flush('heading', { level: heading })
       continue
     }
 
     if (BLOCK_LEVEL.has(name)) {
       sink.flush()
-      walk(node.children || [], sink, style)
+      walk(node.children || [], sink, style, depth + 1)
       sink.flush()
       continue
     }
@@ -222,7 +351,7 @@ function walk(nodes, sink, style) {
     const next = name === 'a'
       ? { ...style, ...(node.attribs?.href ? { href: node.attribs.href } : {}) }
       : styleFor(name, style)
-    walk(node.children || [], sink, next)
+    walk(node.children || [], sink, next, depth + 1)
   }
 }
 
