@@ -576,6 +576,10 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
       if (!data.success && data.error === 'over_budget_confirmation_required') {
         return { confirmRequired: true, impact: data.impact }
       }
+      if (!data.success && data.error === 'overlapping_roster') {
+        alert(publishOverlapMessage(data))
+        return { error: data.error }
+      }
       if (!data.success) {
         alert(data.error || 'Publish failed')
         return { error: data.error }
@@ -1500,6 +1504,19 @@ function CreateBlockModal({ date, templates, onCreate, onClose }) {
   )
 }
 
+// ROSTER-FIX.4 — the server refuses a publish that would leave two
+// published rosters over the same days. `overlapping_roster` is a code, not
+// copy, so turn it into the sentence the operator can act on: which range
+// already covers these days, and what to do instead.
+function publishOverlapMessage(data) {
+  const ranges = (data?.overlapping || [])
+    .map((r) => (r.period_start === r.period_end ? r.period_start : `${r.period_start} – ${r.period_end}`))
+    .join(', ')
+  return ranges
+    ? `These days are already published as part of ${ranges}. Re-publish that range instead.`
+    : 'These days are already published as part of another roster. Re-publish that range instead.'
+}
+
 // Roster v2 phase 5 — publish modal with budget impact preview
 // + owner-confirm-over-budget retry flow.
 //
@@ -1549,7 +1566,11 @@ function PublishRosterModal({ locationId, isOwner, period, onSubmit, onClose, pu
         const data = await res.json()
         if (cancelled) return
         if (!data.success) {
-          setSubmitResult({ error: data.error || 'Failed to load preview' })
+          setSubmitResult({
+            error: data.error === 'overlapping_roster'
+              ? publishOverlapMessage(data)
+              : (data.error || 'Failed to load preview'),
+          })
         } else {
           setImpact(data.impact)
         }
