@@ -298,6 +298,18 @@ describe('getOpenApiSpec', () => {
     expect(spec.webhooks['lead.created'].post.description).toMatch(/planned/i)
   })
 
+  // ROSTER-FIX.3 (D2, D3) — the assignment detail route is where a shift's
+  // PAID window is set, and Richard's call is that only a manager sets it.
+  // Documenting it manager-only is the only signal an integrator gets.
+  it('documents the assignment detail route as manager-only', () => {
+    const path = spec.paths['/api/schedule/assignments/{id}']
+    expect(path).toBeDefined()
+    expect(path.put.description).toMatch(/manager/i)
+    expect(path.delete.description).toMatch(/manager/i)
+    // A coach's route out of a shift is a swap, and the docs say so.
+    expect(path.delete.description).toMatch(/swap/i)
+  })
+
   it('declares webhook + bridge auth schemes', () => {
     const s = spec.components.securitySchemes
     expect(s).toHaveProperty('GlofoxHmac')

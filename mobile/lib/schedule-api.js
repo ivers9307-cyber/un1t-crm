@@ -109,6 +109,11 @@ export function getOpenSwaps({ locationId }) {
  * (mig 099/100). Pass null to any time field to clear that override
  * back to the block default. partial_reason is optional free text
  * (200 char cap server-side).
+ *
+ * ROSTER-FIX.3 (D3) — MANAGER-ONLY. The route 403s a coach, including one
+ * editing their own shift: a coach is paid for a window a manager set. Every
+ * caller of this must already be behind a manager gate (Manage mode, and the
+ * Schedule tab's canAdjustShiftTimes).
  */
 export function adjustShiftAssignment(assignmentId, { startTime, endTime, reason, locationId }) {
   return api(`/api/schedule/assignments/${assignmentId}`, {
@@ -149,7 +154,8 @@ export function assignCoachToBlock(blockId, { profileId, allowOverCapacity, loca
   })
 }
 
-// Remove a coach from a shift (delete the assignment).
+// Remove a coach from a shift (delete the assignment). ROSTER-FIX.3 (D2) —
+// MANAGER-ONLY: a coach who cannot work a shift posts a swap instead.
 export function removeAssignment(assignmentId, { locationId }) {
   return api(`/api/schedule/assignments/${assignmentId}`, { method: 'DELETE', locationId })
 }
