@@ -175,9 +175,12 @@ describe('htmlToBlocks — caps and truncation', () => {
   it('stops at the block cap and reports truncated', () => {
     const html = '<p>x</p>'.repeat(CAPS.blocks + 20)
     const { blocks, truncated } = htmlToBlocks(html)
-    // Not pinned to exactly CAPS.blocks: a block already being walked when
-    // the cap trips is allowed to finish (finding 1), so the true ceiling is
-    // CAPS.blocks + 1, not CAPS.blocks.
+    // Asserted as a BOUND, not an equality. A block already being walked when
+    // the cap trips is allowed to finish rather than being discarded (that
+    // discard is what rendered a long forwarded thread as an empty body), and
+    // that finishing push can only land while the count is still under the
+    // cap — so this reaches CAPS.blocks in practice. The looser bound is what
+    // the caller may rely on.
     expect(blocks.length).toBeGreaterThan(0)
     expect(blocks.length).toBeLessThanOrEqual(CAPS.blocks + 1)
     expect(truncated).toBe(true)

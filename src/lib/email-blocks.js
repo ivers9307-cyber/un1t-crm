@@ -15,8 +15,8 @@
 // normalised. This module's whole job is SHAPE. Feeding it raw email would
 // hand the phone a stranger's markup and is the one mistake that matters.
 //
-// SERVER ONLY. This module does not itself import email-html.js — it only
-// imports htmlparser2 and runs on email-html.js's OUTPUT (see above) — but
+// SERVER ONLY. This module does not itself import email-html.js — it parses
+// with htmlparser2 and runs on email-html.js's OUTPUT (see above) — but
 // the whole point is that no HTML parsing happens on the client, so it gets
 // the same guard as email-html.js: that module's own test
 // (src/lib/email-html.test.js, "no client component anywhere in src/ imports
@@ -38,10 +38,12 @@ import { stripInvisibleChars } from './mail-entities'
  *
  *   - `blocks` caps the block count. walk() checks it at the top of every
  *     node, so it stops the whole walk — but a block already being
- *     accumulated when the cap trips is still allowed to finish and push, so
- *     the true ceiling is `blocks + 1`, not `blocks`. That is deliberate: the
- *     alternative is discarding a block the walker already did the work for,
- *     which is how a long forwarded thread used to render as an empty body.
+ *     accumulated when the cap trips is still allowed to finish and push,
+ *     rather than being discarded — which is how a long forwarded thread used
+ *     to render as an EMPTY BODY, the defect this cap's own handling caused.
+ *     That finishing push can only fire while the count is still under the
+ *     cap, so the observed ceiling is `blocks` exactly; treat `blocks + 1` as
+ *     the bound you may rely on and `blocks` as what it actually reaches.
  *   - `runsPerBlock` x `charsPerRun` is the real ceiling on ONE block's text.
  *     `charsPerRun` bounds a single run — one <Text> node — not the content
  *     addText() is handed; once a run is full it opens a NEW run rather than
@@ -316,6 +318,13 @@ function walk(nodes, sink, style, depth = 0) {
       sink.addText(collapse(node.data), style)
       continue
     }
+    // 🔴 THIS LINE IS WHAT KEEPS CSS OFF THE PHONE, and it is not obvious.
+    // email-html.js deliberately KEEPS <style> (stripping it breaks most real
+    // marketing email inside the web iframe), so a <style> block is a normal
+    // shape of already-sanitised input arriving here. htmlparser2 types those
+    // nodes `style`/`script` rather than `tag`, so this one check skips their
+    // text content — without it, a stylesheet would render as a paragraph of
+    // garbage CSS in the reader. Nothing else in this file guards it.
     if (node.type !== 'tag') continue
 
     const name = node.name

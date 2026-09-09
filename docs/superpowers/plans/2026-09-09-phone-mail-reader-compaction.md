@@ -311,7 +311,7 @@ Extend that message body to say: htmlToPlainText handled seven references and no
 - Create: `src/lib/email-blocks.js`
 - Create: `src/lib/email-blocks.test.js`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `src/lib/email-blocks.test.js`:
 
@@ -410,12 +410,12 @@ describe('htmlToBlocks — inline runs', () => {
 })
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `npx vitest run src/lib/email-blocks.test.js`
 Expected: FAIL — cannot resolve `./email-blocks`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `src/lib/email-blocks.js`:
 
@@ -660,12 +660,12 @@ export function htmlToBlocks(html) {
 }
 ```
 
-- [ ] **Step 4: Run it to verify it passes**
+- [x] **Step 4: Run it to verify it passes**
 
 Run: `npx vitest run src/lib/email-blocks.test.js`
 Expected: PASS, 12 tests.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/lib/email-blocks.js src/lib/email-blocks.test.js
