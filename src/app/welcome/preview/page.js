@@ -42,7 +42,7 @@ const FIXTURES = {
   ],
   'hatch-street': [
     { id: 'fx-hero', type: 'hero', eyebrow: 'Hatch Street, Dublin', headline: 'UN1T OPENS 2nd STUDIO', subhead: 'STRENGTH AND CONDITIONING TRAINING IN HATCH STREET', subtext: 'Boutique gym in the heart of Dublin city, a stone’s throw from the Harcourt Street Luas stop.', image_url: `${STORAGE}/28c78d6b-f7b3-4edf-8c7c-840bd047b3f4/3c80aac2-7007-43c5-81f4-be44f180ef99.jpg`, video_url: null },
-    { id: 'fx-lead', type: 'lead_form', heading: 'Keep me posted', subtext: 'Not ready to join yet? Leave your details and we’ll keep you in the loop on the opening, classes and offers.', button_label: 'Keep me posted', success_message: "You're on the list — we'll be in touch soon.", consent_label: 'I’d like to hear from UN1T about the Hatch Street opening and offers by email, SMS and WhatsApp. I can opt out anytime.', tag: 'hatch-founding-member', lead_source: 'hatch_launch', offer: { enabled: true, section_eyebrow: 'Two ways in', section_heading: 'Fix your rate\nbefore we open', eyebrow: 'Foundation membership', price: '€189', was_price: '€219', was_price_note: 'a month from 19 September', unit: 'per month\nfixed for life', deadline: 'Offer ends 19 September', ticks: ['Unlimited classes, full access from day one', 'Your rate never rises while your membership stays active', 'Pay today, next payment October'], cta_label: 'Claim your rate', cta_url: 'https://hatchstreet.un1t.online/#join' } },
+    { id: 'fx-lead', type: 'lead_form', heading: 'Keep me posted', subtext: 'Not ready to join yet? Leave your details and we’ll keep you in the loop on the opening, classes and offers.', button_label: 'Keep me posted', success_message: "You're on the list — we'll be in touch soon.", consent_label: 'I’d like to hear from UN1T about the Hatch Street opening and offers by email, SMS and WhatsApp. I can opt out anytime.', tag: 'hatch-founding-member', lead_source: 'hatch_launch', offer: { enabled: true, section_eyebrow: 'Two ways in', section_heading: 'Fix your rate\nbefore we open', eyebrow: 'Foundation membership', price: '€189', was_price: '€219', was_price_note: 'a month from 19 September', unit: 'per month\nfixed for life', deadline: 'Offer ends 19 September', ticks: ['Unlimited classes, full access from day one', 'Your rate never rises while your membership stays active', 'Pay today, next payment October'], cta_label: 'Secure your Foundation Rate', cta_label_short: 'Foundation Offer', cta_url: 'https://hatchstreet.un1t.online/#join' } },
     { id: 'fx-videos', type: 'video_testimonials', title: 'Hear from our members', items: [
       { name: '', video_url: `${STORAGE}/28c78d6b-f7b3-4edf-8c7c-840bd047b3f4/bd3d8257-8be3-465b-9bf9-86ea5b12f60c.mp4`, poster_url: `${STORAGE}/28c78d6b-f7b3-4edf-8c7c-840bd047b3f4/26368e23-018a-443b-8409-8416054272e0.jpg` },
       { name: '', video_url: `${STORAGE}/28c78d6b-f7b3-4edf-8c7c-840bd047b3f4/388b4d1c-ed49-4d46-8d27-c4f8388122b7.mp4`, poster_url: `${STORAGE}/28c78d6b-f7b3-4edf-8c7c-840bd047b3f4/1a26306b-1a20-4099-9c6b-143700cad1ad.jpg` },
@@ -81,6 +81,7 @@ export default async function LandingPreviewPage(props) {
         sticky
         ctaHref={cta?.href || null}
         ctaLabel={cta?.label}
+        ctaLabelShort={cta?.labelShort || ''}
       />
       {blocks.map((block) => (
         <BlockRenderer

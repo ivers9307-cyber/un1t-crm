@@ -119,6 +119,10 @@ export const OFFER_DEFAULT = () => ({
     'Pay today, next payment October',
   ],
   cta_label:       'Claim your rate',
+  // The sticky header has ~167px beside the logo and Events on a
+  // 375px screen. A CTA long enough to read as an action in the hero
+  // is clipped there, so the header takes this shorter one instead.
+  cta_label_short: '',
   cta_url:         'https://hatchstreet.un1t.online/#join',
 })
 
@@ -322,7 +326,14 @@ export function pageCtas(blocks) {
   // to ship <a href="">. Fall through to the form.
   if (offer && offer.cta_url) {
     return {
-      primary: { href: offer.cta_url, label: offer.cta_label, external: true },
+      primary: {
+        href: offer.cta_url,
+        label: offer.cta_label,
+        // Header-only. Blank ⇒ the header just uses `label`, which is
+        // the pre-existing behaviour for every page without an offer.
+        labelShort: (typeof offer.cta_label_short === 'string' && offer.cta_label_short.trim()) || '',
+        external: true,
+      },
       secondary: waitlist,
     }
   }
