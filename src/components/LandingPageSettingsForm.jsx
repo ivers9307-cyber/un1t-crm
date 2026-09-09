@@ -891,6 +891,9 @@ function LeadFormEdit({ block, onUpdate }) {
           <Field label="Offer button label">
             <Input value={offer.cta_label || ''} onChange={(v) => setOffer({ cta_label: v })} maxLength={60} placeholder="Claim your rate" />
           </Field>
+          <Field label="Offer button label — short" hint="Used by the sticky header only, where a long label gets cut off on phones. Leave empty to reuse the full label.">
+            <Input value={offer.cta_label_short || ''} onChange={(v) => setOffer({ cta_label_short: v })} maxLength={30} placeholder="Foundation Offer" />
+          </Field>
           <Field label="Offer button link" hint="Where the button sends people to pay. Leave empty and the button is hidden rather than dead.">
             <Input value={offer.cta_url || ''} onChange={(v) => setOffer({ cta_url: v })} maxLength={500} placeholder="https://hatchstreet.un1t.online/#join" />
           </Field>

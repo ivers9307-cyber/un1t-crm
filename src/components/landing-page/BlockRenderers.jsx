@@ -835,8 +835,15 @@ export function SiteHeader({
   sticky = false,
   ctaHref = null,
   ctaLabel = 'Book a free consult',
+  ctaLabelShort = '',
   eventsHref = null,
 }) {
+  // The header is the tightest surface on the page — logo + Events +
+  // button in one row, ~167px left for the button at 375px. A long
+  // CTA overflows and gets clipped by the sticky bar, with no
+  // horizontal scroll to reveal it. Falls back to the full label, so
+  // every page without a short label renders exactly as before.
+  const headerCtaLabel = (ctaLabelShort && ctaLabelShort.trim()) || ctaLabel
   return (
     <header
       className={
@@ -871,7 +878,7 @@ export function SiteHeader({
           )}
           {sticky && ctaHref && (
             <a href={ctaHref} className="lp-btn !px-5 !py-2.5 !text-sm shrink-0">
-              {ctaLabel}
+              {headerCtaLabel}
               <span className="lp-btn-arrow hidden sm:inline" aria-hidden="true">→</span>
             </a>
           )}

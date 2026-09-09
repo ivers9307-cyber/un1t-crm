@@ -446,7 +446,7 @@ describe('OFFER_DEFAULT seeding (HATCH-OFFER.1)', () => {
   // gets a panel with holes in it.
   it('carries every field the panel renders', () => {
     expect(Object.keys(OFFER_DEFAULT()).sort()).toEqual([
-      'cta_label', 'cta_url', 'deadline', 'enabled', 'eyebrow', 'price',
+      'cta_label', 'cta_label_short', 'cta_url', 'deadline', 'enabled', 'eyebrow', 'price',
       'section_eyebrow', 'section_heading', 'ticks', 'unit', 'was_price', 'was_price_note',
     ])
   })
@@ -476,7 +476,7 @@ describe('pageCtas (HATCH-OFFER.1)', () => {
 
   it('promotes the offer to primary and demotes the form to secondary', () => {
     expect(pageCtas([leadForm(liveOffer)])).toEqual({
-      primary: { href: 'https://hatchstreet.un1t.online/#join', label: 'Claim your rate', external: true },
+      primary: { href: 'https://hatchstreet.un1t.online/#join', label: 'Claim your rate', labelShort: '', external: true },
       secondary: { href: '#waitlist', label: 'Keep me posted' },
     })
   })
@@ -498,6 +498,25 @@ describe('pageCtas (HATCH-OFFER.1)', () => {
   })
   it('returns both null for a page with no funnel block', () => {
     expect(pageCtas([{ id: 'h', type: 'hero' }])).toEqual({ primary: null, secondary: null })
+  })
+})
+
+describe('header short label (HATCH-OFFER.3)', () => {
+  const lf = (extra) => ({ id: 'l', type: 'lead_form', button_label: 'Keep me posted',
+    offer: { enabled: true, cta_url: 'https://x.test/#join', cta_label: 'Secure your Foundation Rate', ...extra } })
+
+  it('carries a short label for the header when one is set', () => {
+    expect(pageCtas([lf({ cta_label_short: 'Foundation Offer' })]).primary)
+      .toEqual({ href: 'https://x.test/#join', label: 'Secure your Foundation Rate', labelShort: 'Foundation Offer', external: true })
+  })
+  it('leaves labelShort empty when unset or blank, so the header reuses the full label', () => {
+    expect(pageCtas([lf({})]).primary.labelShort).toBe('')
+    expect(pageCtas([lf({ cta_label_short: '   ' })]).primary.labelShort).toBe('')
+    expect(pageCtas([lf({ cta_label_short: 7 })]).primary.labelShort).toBe('')
+  })
+  it('never puts labelShort on a non-offer CTA', () => {
+    expect(pageCtas([{ id: 'b', type: 'booking', slug: 'x' }]).primary.labelShort).toBeUndefined()
+    expect(pageCtas([{ id: 'l', type: 'lead_form', button_label: 'Join' }]).primary.labelShort).toBeUndefined()
   })
 })
 
