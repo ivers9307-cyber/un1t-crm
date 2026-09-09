@@ -5,7 +5,8 @@ import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { validateBody } from '@/lib/validate'
 import { timeOfDay, hexColor , MANAGER_ROLES} from '@/lib/schemas'
-import { WEEKDAY_CODES, generateBlocksForTemplate } from '@/lib/roster'
+import { WEEKDAY_CODES, generateBlocksForTemplate, liveAssignments } from '@/lib/roster'
+import { logRosterChange } from '@/lib/roster-change-log'
 
 const TemplateUpdateSchema = z.object({
   name: z.string().min(1).max(100).optional(),
@@ -32,7 +33,18 @@ const TemplateUpdateSchema = z.object({
 //     across the next 8 weeks via generateBlocksForTemplate (idempotent).
 //   - days_of_week remove → future blocks for the removed days are
 //     DELETED (and any existing assignments under them go with them
-//     via the FK cascade on shift_assignments.shift_block_id).
+//     via the FK cascade on shift_assignments.shift_block_id) — EXCEPT
+//     (ROSTER-FIX.4) where such a block is on a PUBLISHED roster and
+//     still has live assignments: the whole PUT is refused with 409
+//     `blocks_have_assignments` listing the dates, because deleting
+//     those blocks cancels a coach's published shift with no notice.
+//   - start_time / end_time change on a PUBLISHED block → a
+//     roster_change_log `time_changed` row per live coach, so the next
+//     publish of that period re-notifies them (ROSTER-FIX.4).
+//   - active:false → future blocks with NO live assignments are
+//     deleted and regeneration is SKIPPED (it used to re-create every
+//     block it had just removed). A block with a live coach on it is
+//     left alone — deactivating a template must not cancel a shift.
 //
 // Today is computed in UTC because shift_blocks.block_date is a
 // calendar date with no TZ. Comparing block_date >= today_utc gives
@@ -70,6 +82,60 @@ export async function PUT(request, props) {
   const locationId = priorTemplate.location_id
   const priorDays = new Set(priorTemplate.days_of_week || [])
 
+  const today = dublinTodayStr()
+  const changingTimes = Object.prototype.hasOwnProperty.call(updates, 'start_time')
+    || Object.prototype.hasOwnProperty.call(updates, 'end_time')
+  const changingDays = Object.prototype.hasOwnProperty.call(updates, 'days_of_week')
+  const deactivating = updates.active === false
+
+  // ROSTER-FIX.4 — a template edit is a BULK EDIT of everybody's shifts, and
+  // on a published roster those shifts are promises already made to coaches.
+  // Read the future blocks WITH their roster status and assignments once,
+  // before anything is written, so we can refuse the destructive case and
+  // change-log the rest.
+  let futureBlocks = []
+  if (changingTimes || changingDays || deactivating) {
+    const { data: fb, error: fbErr } = await db
+      .from('shift_blocks')
+      .select('id, block_date, start_time, end_time, roster_id, rosters:roster_id(status), shift_assignments(profile_id, status)')
+      .eq('template_id', params.id)
+      .eq('location_id', locationId)
+      .gte('block_date', today)
+    if (fbErr) {
+      return NextResponse.json({ success: false, error: fbErr.message }, { status: 400 })
+    }
+    futureBlocks = fb || []
+  }
+
+  const isPublishedBlock = (b) => b.rosters?.status === 'published'
+  const blockDayCode = (b) => WEEKDAY_CODES[(new Date(b.block_date + 'T00:00:00Z').getUTCDay() + 6) % 7]
+
+  // ROSTER-FIX.4 — REFUSE, before any write, to remove a weekday whose
+  // published future blocks still have live coaches on them. The old code
+  // deleted those blocks and the FK cascaded their assignments away, so a
+  // coach with a published shift lost it with no notice and no trace: they
+  // turned up for a shift that no longer existed. The operator unassigns
+  // first; the dates are listed so they know where to look.
+  const removedDays = changingDays
+    ? [...priorDays].filter((d) => !new Set(updates.days_of_week || []).has(d))
+    : []
+  if (removedDays.length > 0) {
+    const blocked = futureBlocks.filter((b) => (
+      removedDays.includes(blockDayCode(b))
+      && isPublishedBlock(b)
+      && liveAssignments(b.shift_assignments).length > 0
+    ))
+    if (blocked.length > 0) {
+      const dates = [...new Set(blocked.map((b) => b.block_date))].sort()
+      return NextResponse.json({
+        success: false,
+        error: 'blocks_have_assignments',
+        dates,
+        message: `Unassign the coaches on ${dates.join(', ')} before removing that day — those shifts are published.`,
+      }, { status: 409 })
+    }
+  }
+
   // Scope the UPDATE to the verified location too (not just id) so even
   // a racing re-point of the row can't cross tenants.
   const { data: template, error } = await db.from('shift_templates')
@@ -82,8 +148,6 @@ export async function PUT(request, props) {
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
 
   // ---------- Propagate to FUTURE blocks only ----------
-
-  const today = dublinTodayStr()
 
   // 1. If start_time / end_time / max_coaches changed, push the
   //    new values onto every future block under this template.
@@ -121,28 +185,51 @@ export async function PUT(request, props) {
     futureBlocksUpdated = updatedBlocks?.length || 0
   }
 
+  // ROSTER-FIX.4 — a published shift whose window just moved is a change the
+  // coach has to be told about. logRosterChange writes a roster_change_log
+  // row per live coach on a published block (it no-ops for draft blocks),
+  // which the next publish of that period picks up and re-notifies — the
+  // same path a manual re-time already uses. Only blocks whose times ACTUALLY
+  // moved are logged.
+  let timeChangesLogged = 0
+  if (changingTimes) {
+    for (const b of futureBlocks) {
+      if (!isPublishedBlock(b)) continue
+      const newStart = futureFieldUpdates.start_time ?? b.start_time
+      const newEnd = futureFieldUpdates.end_time ?? b.end_time
+      if (newStart === b.start_time && newEnd === b.end_time) continue
+      for (const a of liveAssignments(b.shift_assignments)) {
+        const { logged } = await logRosterChange(db, {
+          isPublished: true,
+          locationId,
+          action: 'time_changed',
+          coachId: a.profile_id,
+          actorId: user.id,
+          blockId: b.id,
+          blockDate: b.block_date,
+          details: {
+            source: 'template_edit',
+            template_id: params.id,
+            from: { start_time: b.start_time, end_time: b.end_time },
+            to: { start_time: newStart, end_time: newEnd },
+          },
+        })
+        if (logged) timeChangesLogged++
+      }
+    }
+  }
+
   // 2. If days_of_week REMOVED any day, delete future blocks on
   //    that day. The shift_assignments FK on block_id cascades, so
   //    any draft assignments at those blocks are removed too.
   let futureBlocksDeleted = 0
-  if (Object.prototype.hasOwnProperty.call(updates, 'days_of_week')) {
-    const newDays = new Set(template.days_of_week || [])
-    const removedDays = [...priorDays].filter((d) => !newDays.has(d))
-
+  if (changingDays) {
     if (removedDays.length > 0) {
-      // We can't filter by weekday in SQL directly without a
-      // date_part call, so pull the future blocks and filter in JS.
-      // The volume is small — at most 8 weeks × 7 days = 56 rows.
-      const { data: futureBlocks } = await db
-        .from('shift_blocks')
-        .select('id, block_date')
-        .eq('template_id', params.id)
-        .eq('location_id', locationId)
-        .gte('block_date', today)
-      const toDelete = (futureBlocks || []).filter((b) => {
-        const code = WEEKDAY_CODES[(new Date(b.block_date + 'T00:00:00Z').getUTCDay() + 6) % 7]
-        return removedDays.includes(code)
-      })
+      // We can't filter by weekday in SQL directly without a date_part call,
+      // so filter the future blocks we already read in JS. The volume is
+      // small — at most 8 weeks × 7 days = 56 rows. Anything still here
+      // passed the published-with-live-coaches refusal above.
+      const toDelete = futureBlocks.filter((b) => removedDays.includes(blockDayCode(b)))
       if (toDelete.length > 0) {
         const { error: delErr } = await db
           .from('shift_blocks')
@@ -161,12 +248,39 @@ export async function PUT(request, props) {
     }
   }
 
+  // ROSTER-FIX.4 — deactivating a template. The old code deactivated the
+  // row and then, one step later, REGENERATED its blocks for the next 8
+  // weeks — so "switch this shift off" left the calendar exactly as it was.
+  // Regeneration is skipped below; here the future blocks nobody is on are
+  // cleared out. A block with a live coach is LEFT ALONE: deactivating a
+  // template must not silently cancel somebody's shift (unassign first).
+  let deactivatedBlocksDeleted = 0
+  if (deactivating) {
+    const empties = futureBlocks.filter((b) => liveAssignments(b.shift_assignments).length === 0)
+    if (empties.length > 0) {
+      const { error: delErr } = await db
+        .from('shift_blocks')
+        .delete()
+        .in('id', empties.map((b) => b.id))
+        .eq('location_id', locationId)
+      if (delErr) {
+        return NextResponse.json({
+          success: true,
+          data: template,
+          warning: `Template deactivated but clearing its empty future blocks failed: ${delErr.message}`,
+          propagation: { futureBlocksUpdated, futureBlocksDeleted, timeChangesLogged, deactivatedBlocksDeleted: 0 },
+        })
+      }
+      deactivatedBlocksDeleted = empties.length
+    }
+  }
+
   // 3. Backfill any missing dates in the next 8 weeks (handles ADDED
   //    days, plus the rolling horizon). Idempotent — the unique key
   //    on (location, template, date) means existing blocks are
   //    untouched; only genuinely new dates get rows.
   let generated = { inserted: 0, skipped: 0 }
-  if ((template.days_of_week?.length || 0) > 0) {
+  if (!deactivating && (template.days_of_week?.length || 0) > 0) {
     try {
       generated = await generateBlocksForTemplate(db, template)
     } catch (e) {
@@ -174,7 +288,7 @@ export async function PUT(request, props) {
         success: true,
         data: template,
         warning: `Template + future fields saved, but new-day generation failed: ${e.message}`,
-        propagation: { futureBlocksUpdated, futureBlocksDeleted },
+        propagation: { futureBlocksUpdated, futureBlocksDeleted, timeChangesLogged, deactivatedBlocksDeleted },
       })
     }
   }
@@ -183,7 +297,7 @@ export async function PUT(request, props) {
     success: true,
     data: template,
     generated,
-    propagation: { futureBlocksUpdated, futureBlocksDeleted },
+    propagation: { futureBlocksUpdated, futureBlocksDeleted, timeChangesLogged, deactivatedBlocksDeleted },
   })
 }
 
