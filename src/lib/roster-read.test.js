@@ -90,6 +90,23 @@ describe('fetchSourceShiftRows', () => {
     expect(res.error?.message).toBe('boom')
     expect(res.rows).toEqual([])
   })
+
+  it('does not copy a cancelled assignment (dropped shift must not resurrect)', async () => {
+    const blk = {
+      location_id: 'loc1', template_id: 't1', block_date: '2026-06-01',
+      start_time: '09:00:00', end_time: '10:00:00',
+      shift_templates: { start_time: '09:00:00', end_time: '10:00:00' },
+    }
+    const db = makeDb({
+      data: [
+        { profile_id: 'p1', status: 'cancelled', notes: null, start_time_override: null, end_time_override: null, shift_blocks: blk },
+        { profile_id: 'p2', status: 'scheduled', notes: null, start_time_override: null, end_time_override: null, shift_blocks: blk },
+      ],
+      error: null,
+    })
+    const { rows } = await fetchSourceShiftRows(db, { locationId: 'loc1', startDate: '2026-06-01', endDate: '2026-06-07' })
+    expect(rows.map((r) => r.profileId)).toEqual(['p2'])
+  })
 })
 
 describe('swapShiftShape', () => {

@@ -95,6 +95,7 @@ export async function fetchSourceShiftRows(db, { locationId, startDate, endDate 
     .from('shift_assignments')
     .select(`
       profile_id,
+      status,
       notes,
       start_time_override,
       end_time_override,
@@ -117,6 +118,9 @@ export async function fetchSourceShiftRows(db, { locationId, startDate, endDate 
   for (const a of data || []) {
     const b = a.shift_blocks
     if (!b) continue
+    // ROSTER-FIX.1 — a cancelled assignment is a dropped shift. Copying it
+    // forward resurrected a coach onto a week they had already been let off.
+    if (!isLiveAssignment(a)) continue
     const tpl = b.shift_templates || {}
     rows.push({
       profileId: a.profile_id,
