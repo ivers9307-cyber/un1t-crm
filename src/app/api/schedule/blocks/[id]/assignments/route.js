@@ -253,10 +253,10 @@ export async function POST(request, props) {
       )
     }
     if (skip?.reason === 'at_capacity') {
-      // ROSTER-FIX.1 — report the count the gate actually refused on.
-      // liveExisting.length is the PRE-loop occupancy, so a request that
-      // filled the last seats would quote a number below max_coaches and read
-      // as a contradiction ("at capacity (3/5)").
+      // ROSTER-FIX.1 — report the live occupancy the gate refused on. In this
+      // legacy single-coach branch nothing was inserted, so runningCount equals
+      // liveExisting.length; the running value keeps the message right if the
+      // branch ever serves a batch.
       const currentCount = runningCount
       return NextResponse.json(
         {

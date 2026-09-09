@@ -39,6 +39,17 @@ describe('effShiftStart / effShiftEnd', () => {
     expect(effShiftStart({ ...row, start_time_override: '10:15:00' })).toBe('10:15:00')
     expect(effShiftEnd({ ...row, end_time_override: '12:45:00' })).toBe('12:45:00')
   })
+  // A raw /blocks row (ManageMode) carries the block time as top-level
+  // start_time / end_time — it must still beat the template default.
+  it('prefers a raw block row\'s top-level time over the template default', () => {
+    const blockRow = {
+      start_time: '09:30:00',
+      end_time: '13:30:00',
+      shift_templates: { start_time: '09:00:00', end_time: '13:00:00' },
+    }
+    expect(effShiftStart(blockRow)).toBe('09:30:00')
+    expect(effShiftEnd(blockRow)).toBe('13:30:00')
+  })
 
   it('returns null when there is no time at all', () => {
     expect(effShiftStart({})).toBeNull()
