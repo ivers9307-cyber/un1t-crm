@@ -94,16 +94,29 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'End date must be on or after start date' }, { status: 400 })
   }
 
+  // ROSTER-FIX.2 — splitAtYearEnd now peels one segment per calendar year,
+  // so a typo'd end date (2226 for 2026) would fan out into two hundred
+  // inserted rows. A year is already well past any real request.
+  const spanDays = Math.round((Date.parse(`${end_date}T00:00:00Z`) - Date.parse(`${start_date}T00:00:00Z`)) / 86400000) + 1
+  if (spanDays > 366) {
+    return NextResponse.json({ success: false, error: 'Time-off requests are limited to one year' }, { status: 400 })
+  }
+
   // ROSTER-FIX.2 — nothing stopped a coach filing the same week twice (or
   // ten times), which double-counted against the allowance and put two
-  // rows on the manager's inbox for one absence.
-  const { data: clashes } = await db.from('time_off_requests')
+  // rows on the manager's inbox for one absence. The error is checked
+  // because this is our own read, not a client mistake: an unreadable clash
+  // probe must never fall through to the insert as "no overlap".
+  const { data: clashes, error: clashesError } = await db.from('time_off_requests')
     .select('id, start_date, end_date, status, type')
     .eq('profile_id', user.id)
     .in('status', ['pending', 'approved'])
     .lte('start_date', end_date)
     .gte('end_date', start_date)
 
+  if (clashesError) {
+    return NextResponse.json({ success: false, error: clashesError.message }, { status: 500 })
+  }
   if ((clashes || []).length > 0) {
     const c = clashes[0]
     const range = c.start_date === c.end_date ? c.start_date : `${c.start_date} – ${c.end_date}`
@@ -129,16 +142,22 @@ export async function POST(request) {
       // K8 — `.maybeSingle()`: staff with no allowance row for the year skip the
       // remaining-days check entirely (`if (allowance)` below), so 0 rows is the
       // designed path, not an error. (profile_id, year) is uniquely indexed.
-      const { data: allowance } = await db.from('staff_allowances')
+      // ROSTER-FIX.2 — a discarded ERROR reads exactly like that same "no
+      // allowance row" and so skips the balance check outright. Fail closed.
+      const { data: allowance, error: allowanceError } = await db.from('staff_allowances')
         .select('*')
         .eq('profile_id', user.id)
         .eq('year', year)
         .maybeSingle()
 
+      if (allowanceError) {
+        return NextResponse.json({ success: false, error: allowanceError.message }, { status: 500 })
+      }
       if (!allowance) continue
       const remaining = allowance.total_days + allowance.carried_over - allowance.used_days
-      // Check pending requests too
-      const { data: pending } = await db.from('time_off_requests')
+      // Check pending requests too — same fail-closed rule (ROSTER-FIX.2):
+      // an unreadable pending list understates the days already claimed.
+      const { data: pending, error: pendingError } = await db.from('time_off_requests')
         .select('total_days')
         .eq('profile_id', user.id)
         .eq('type', 'holiday')
@@ -146,6 +165,9 @@ export async function POST(request) {
         .gte('start_date', `${year}-01-01`)
         .lte('start_date', `${year}-12-31`)
 
+      if (pendingError) {
+        return NextResponse.json({ success: false, error: pendingError.message }, { status: 500 })
+      }
       const pendingDays = (pending || []).reduce((sum, r) => sum + Number(r.total_days), 0)
       if (seg.days > remaining - pendingDays) {
         return NextResponse.json({
@@ -156,30 +178,34 @@ export async function POST(request) {
     }
   }
 
-  const rows = []
-  for (const seg of segments) {
-    if (seg.days < 1) continue
-    const { data: row, error } = await db.from('time_off_requests').insert({
-      profile_id: user.id,
-      location_id: location_id || user.activeLocation?.id,
-      type,
-      start_date: seg.s,
-      end_date: seg.e,
-      total_days: seg.days,
-      reason: reason || null,
-      status: 'pending',
-    }).select(`
-      *,
-      profiles!profile_id(id, full_name, avatar_url, role)
-    `).single()
+  // ROSTER-FIX.2 — ONE insert for every segment, not a round trip each: the
+  // per-segment loop wrote the earlier years' rows and then returned a 400
+  // on a later failure, so the caller's retry duplicated them.
+  const rows = segments.filter((seg) => seg.days >= 1).map((seg) => ({
+    profile_id: user.id,
+    location_id: location_id || user.activeLocation?.id,
+    type,
+    start_date: seg.s,
+    end_date: seg.e,
+    total_days: seg.days,
+    reason: reason || null,
+    status: 'pending',
+  }))
 
-    if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
-    rows.push(row)
-  }
+  const { data: inserted, error: insertError } = await db.from('time_off_requests').insert(rows).select(`
+    *,
+    profiles!profile_id(id, full_name, avatar_url, role)
+  `)
+
+  if (insertError) return NextResponse.json({ success: false, error: insertError.message }, { status: 400 })
 
   // `data` stays the first row so every existing client keeps working;
   // `data_all` carries the year-split siblings for anyone who wants them.
-  const data = rows[0]
+  const created = inserted || []
+  const data = created[0]
+  if (!data) {
+    return NextResponse.json({ success: false, error: 'Time-off request was not created' }, { status: 500 })
+  }
 
   // Notify owners + managers at the request's location that a new
   // time-off request needs review. Best-effort — never block the API
@@ -201,5 +227,5 @@ export async function POST(request) {
     }).catch(err => console.error('[time-off] notify failed', err))
   }
 
-  return NextResponse.json({ success: true, data, data_all: rows }, { status: 201 })
+  return NextResponse.json({ success: true, data, data_all: created }, { status: 201 })
 }

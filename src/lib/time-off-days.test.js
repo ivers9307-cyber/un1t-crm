@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { countLeaveDays, splitAtYearEnd, rangesOverlap } from './time-off-days'
+import { countLeaveDays, splitAtYearEnd } from './time-off-days'
 
 describe('countLeaveDays', () => {
   it('counts Mon-Fri only for holiday', () => {
@@ -20,10 +20,11 @@ describe('splitAtYearEnd', () => {
   it('splits a range straddling 31 Dec', () => {
     expect(splitAtYearEnd('2026-12-30', '2027-01-02')).toEqual([['2026-12-30', '2026-12-31'], ['2027-01-01', '2027-01-02']])
   })
-})
-describe('rangesOverlap', () => {
-  it('inclusive overlap', () => {
-    expect(rangesOverlap('2026-06-01', '2026-06-03', '2026-06-03', '2026-06-05')).toBe(true)
-    expect(rangesOverlap('2026-06-01', '2026-06-03', '2026-06-04', '2026-06-05')).toBe(false)
+  it('keeps splitting across more than one year end', () => {
+    expect(splitAtYearEnd('2026-12-30', '2028-01-02')).toEqual([
+      ['2026-12-30', '2026-12-31'],
+      ['2027-01-01', '2027-12-31'],
+      ['2028-01-01', '2028-01-02'],
+    ])
   })
 })

@@ -12,11 +12,19 @@ export function countLeaveDays(type, startIso, endIso) {
   }
   return n
 }
+// ROSTER-FIX.2 — a range can straddle more than one 31 December, and the
+// single-cut version returned a SECOND segment that still spanned years, so
+// every day after the first new year was charged to one allowance. Peel one
+// year at a time until what is left sits inside a single year. The `<`
+// comparison (not `!==`) also terminates on an inverted range.
 export function splitAtYearEnd(startIso, endIso) {
-  if (startIso.slice(0, 4) === endIso.slice(0, 4)) return [[startIso, endIso]]
-  const y = startIso.slice(0, 4)
-  return [[startIso, `${y}-12-31`], [`${Number(y) + 1}-01-01`, endIso]]
-}
-export function rangesOverlap(aStart, aEnd, bStart, bEnd) {
-  return aStart <= bEnd && bStart <= aEnd
+  const out = []
+  let cur = startIso
+  while (cur.slice(0, 4) < endIso.slice(0, 4)) {
+    const y = Number(cur.slice(0, 4))
+    out.push([cur, `${y}-12-31`])
+    cur = `${y + 1}-01-01`
+  }
+  out.push([cur, endIso])
+  return out
 }
