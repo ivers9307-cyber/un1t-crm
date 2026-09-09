@@ -348,6 +348,86 @@ function walk(nodes, sink, style, depth = 0) {
       continue
     }
 
+    if (name === 'hr') {
+      sink.flush()
+      sink.push({ type: 'rule' })
+      continue
+    }
+
+    if (name === 'img') {
+      sink.flush()
+      // 🔴 The ONLY URL an image block may carry is the one the sanitiser
+      // parked. `src` cannot reach here — it is not on email-html.js's img
+      // allowlist — so an image without `data-original-src` has no URL at all
+      // and is dropped rather than emitted as a box that can never fill.
+      const parked = node.attribs?.['data-original-src']
+      if (parked) {
+        const alt = node.attribs?.alt === SANITISER_ALT ? '' : (node.attribs?.alt || '')
+        sink.push({ type: 'image', blocked: parked, alt })
+      }
+      continue
+    }
+
+    if (name === 'ul' || name === 'ol') {
+      sink.flush()
+      const items = []
+      for (const child of node.children || []) {
+        if (child.type !== 'tag' || child.name !== 'li') continue
+        const inner = new Sink()
+        // depth + 1, not the default 0: an <li> starts a fresh Sink but NOT a
+        // fresh recursion budget — maxDepth bounds the walk()-calls-walk()
+        // JS call stack, which keeps growing through a list nested inside a
+        // list regardless of which Sink each level writes into. Passing the
+        // default here let a 5,000-deep <ul><li> chain throw
+        // RangeError: Maximum call stack size exceeded instead of tripping
+        // the cap and reporting truncated, same as any other nesting shape.
+        walk(child.children || [], inner, style, depth + 1)
+        // Try the open runs first — a plain-text or styled-run <li> leaves
+        // its content right there in inner.runs, and taking it via takeRuns()
+        // keeps it a plain run (an anchor-only <li> stays a styled run with
+        // its href, rather than being promoted to a link block by the flush()
+        // below and having firstRuns() hand back a run that lost its href).
+        const runs = inner.takeRuns()
+        if (inner.truncated) sink.truncated = true
+        // An <li> holding block elements (a nested table, a div) contributes
+        // its text through those blocks' runs; take the first line so the item
+        // is never empty when there was something in it. Only reached when
+        // takeRuns() found nothing, so this can never steal a plain-text
+        // item's runs out from under it.
+        let flat = runs
+        if (flat.length === 0) {
+          inner.flush()
+          flat = firstRuns(inner.blocks)
+        }
+        if (flat.length) items.push(flat)
+        if (items.length >= CAPS.runsPerBlock) { sink.truncated = true; break }
+      }
+      if (items.length) sink.push({ type: 'list', ordered: name === 'ol', items })
+      continue
+    }
+
+    if (name === 'blockquote') {
+      sink.flush()
+      const inner = new Sink()
+      // depth + 1 for the same reason as the list branch above: a
+      // <blockquote> nested inside a <blockquote> inside a <blockquote>...
+      // still grows the real JS call stack even though each level flattens
+      // into a fresh Sink, so the recursion budget must carry over rather
+      // than resetting at every quote boundary.
+      walk(node.children || [], inner, style, depth + 1)
+      inner.flush()
+      if (inner.truncated) sink.truncated = true
+      // One level of nesting: a deeper quote's blocks join this one's, in
+      // order, rather than indenting again on a 390pt screen.
+      const flattened = []
+      for (const block of inner.blocks) {
+        if (block.type === 'quote') flattened.push(...block.blocks)
+        else flattened.push(block)
+      }
+      if (flattened.length) sink.push({ type: 'quote', blocks: flattened })
+      continue
+    }
+
     if (BLOCK_LEVEL.has(name)) {
       sink.flush()
       walk(node.children || [], sink, style, depth + 1)

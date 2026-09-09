@@ -282,7 +282,140 @@ describe('htmlToBlocks — the actual contract: real sanitizeEmailHtml output', 
       + '<style>body{background:url(javascript:alert(1))}</style>'
     const { html } = sanitizeEmailHtml(raw)
     const { blocks, truncated } = htmlToBlocks(html)
-    expect(blocks).toEqual([{ type: 'para', runs: [{ text: 'Hi there' }] }])
+    // As of Task 3, the remote <img> the sanitiser parked under
+    // data-original-src is no longer dropped — it is a legitimate blocked
+    // image block, same as any other remote image a sender includes.
+    expect(blocks).toEqual([
+      { type: 'para', runs: [{ text: 'Hi there' }] },
+      { type: 'image', blocked: 'https://evil.test/x.png', alt: 'pixel' },
+    ])
     expect(truncated).toBe(false)
+  })
+})
+
+describe('htmlToBlocks — structure', () => {
+  it('reads an unordered list', () => {
+    const { blocks } = htmlToBlocks('<ul><li>one</li><li>two</li></ul>')
+    expect(blocks).toEqual([
+      { type: 'list', ordered: false, items: [[{ text: 'one' }], [{ text: 'two' }]] },
+    ])
+  })
+
+  it('marks an ordered list ordered', () => {
+    const { blocks } = htmlToBlocks('<ol><li>first</li></ol>')
+    expect(blocks[0]).toEqual({ type: 'list', ordered: true, items: [[{ text: 'first' }]] })
+  })
+
+  it('keeps styled runs inside list items', () => {
+    const { blocks } = htmlToBlocks('<ul><li><b>x</b> y</li></ul>')
+    expect(blocks[0].items).toEqual([[{ text: 'x', bold: true }, { text: ' y' }]])
+  })
+
+  it('reads a list item built from block elements via their first line', () => {
+    // An <li> holding block elements (a nested <div>, a table cell) produces
+    // BLOCKS, not open runs: walking it leaves inner.runs empty because each
+    // <div> flushed itself already, so inner.takeRuns() correctly returns []
+    // and firstRuns(inner.blocks) is the fallback that recovers the item's
+    // text — only the first div's line, since an item takes one line.
+    const { blocks } = htmlToBlocks('<ul><li><div>one</div><div>two</div></li></ul>')
+    expect(blocks).toEqual([
+      { type: 'list', ordered: false, items: [[{ text: 'one' }]] },
+    ])
+  })
+
+  it('drops an empty list', () => {
+    expect(htmlToBlocks('<ul><li> </li></ul>').blocks).toEqual([])
+  })
+
+  it('reads a blockquote as a quote holding blocks', () => {
+    const { blocks } = htmlToBlocks('<blockquote><p>said</p><p>this</p></blockquote>')
+    expect(blocks).toEqual([{
+      type: 'quote',
+      blocks: [
+        { type: 'para', runs: [{ text: 'said' }] },
+        { type: 'para', runs: [{ text: 'this' }] },
+      ],
+    }])
+  })
+
+  it('flattens a nested blockquote into the outer one', () => {
+    // One level of visual nesting is all a 390pt screen can carry.
+    const { blocks } = htmlToBlocks('<blockquote><p>a</p><blockquote><p>b</p></blockquote></blockquote>')
+    expect(blocks).toEqual([{
+      type: 'quote',
+      blocks: [
+        { type: 'para', runs: [{ text: 'a' }] },
+        { type: 'para', runs: [{ text: 'b' }] },
+      ],
+    }])
+  })
+
+  it('reads a horizontal rule', () => {
+    expect(htmlToBlocks('<p>a</p><hr><p>b</p>').blocks).toEqual([
+      { type: 'para', runs: [{ text: 'a' }] },
+      { type: 'rule' },
+      { type: 'para', runs: [{ text: 'b' }] },
+    ])
+  })
+
+  it('emits a parked remote image as a blocked image block', () => {
+    const { blocks } = htmlToBlocks(
+      '<img data-original-src="https://cdn.test/logo.png" alt="Acme">',
+    )
+    expect(blocks).toEqual([
+      { type: 'image', blocked: 'https://cdn.test/logo.png', alt: 'Acme' },
+    ])
+  })
+
+  it('drops an image with no parked URL, because it can never render', () => {
+    // The sanitiser allows no `src` on img at all, so a cid:/data:/relative
+    // image arrives with no URL of any kind. A placeholder for it would be a
+    // permanently empty box.
+    expect(htmlToBlocks('<img alt="inline">').blocks).toEqual([])
+    expect(htmlToBlocks('<img>').blocks).toEqual([])
+  })
+
+  it("does not repeat the sanitiser's own placeholder alt as sender text", () => {
+    // email-html.js sets alt="Blocked image" when the sender supplied none.
+    const { blocks } = htmlToBlocks(
+      '<img data-original-src="https://cdn.test/x.png" alt="Blocked image">',
+    )
+    expect(blocks).toEqual([{ type: 'image', blocked: 'https://cdn.test/x.png', alt: '' }])
+  })
+
+  it('turns an anchor alone in a table cell into a link block', () => {
+    const { blocks } = htmlToBlocks(
+      '<table><tr><td><a href="https://x.test/go">View document</a></td></tr></table>',
+    )
+    expect(blocks).toEqual([
+      { type: 'link', href: 'https://x.test/go', runs: [{ text: 'View document' }] },
+    ])
+  })
+
+  it('leaves an anchor with no href as plain text', () => {
+    const { blocks } = htmlToBlocks('<p><a>no destination</a></p>')
+    expect(blocks).toEqual([{ type: 'para', runs: [{ text: 'no destination' }] }])
+  })
+
+  it('bounds recursion depth through nested lists and quotes, not just plain divs', () => {
+    // The list and quote branches walk their content into a FRESH Sink, but
+    // that must not mean a fresh recursion budget too — the underlying
+    // walk()-calls-walk() JS call stack keeps growing through a list nested
+    // inside a list regardless of which Sink each level writes into. Passing
+    // the depth parameter's default (0) at these two branches let a 5,000
+    // deep <ul><li> or <blockquote> chain throw "Maximum call stack size
+    // exceeded" instead of tripping CAPS.maxDepth like every other nesting
+    // shape does (see the "nesting depth" describe block above, which only
+    // ever pins this for plain <div>s).
+    const depth = 5000
+    const list = '<ul><li>'.repeat(depth) + 'x' + '</li></ul>'.repeat(depth)
+    let listResult
+    expect(() => { listResult = htmlToBlocks(list) }).not.toThrow()
+    expect(listResult.truncated).toBe(true)
+
+    const quote = '<blockquote>'.repeat(depth) + 'x' + '</blockquote>'.repeat(depth)
+    let quoteResult
+    expect(() => { quoteResult = htmlToBlocks(quote) }).not.toThrow()
+    expect(quoteResult.truncated).toBe(true)
   })
 })
