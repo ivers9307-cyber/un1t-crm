@@ -1122,7 +1122,8 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                         {/* ROSTER-FIX.2 — unstaffed is a manager cue; coaches get a capacity-free feed and no red flags. */}
                         {isManager && unstaffedCount > 0 && (
                           <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-700" title={`${unstaffedCount} unstaffed`}>
-                            !{unstaffedCount}
+                            <span aria-hidden="true">!{unstaffedCount}</span>
+                            <span className="sr-only">{unstaffedCount} unstaffed</span>
                           </span>
                         )}
                         {totalAssignmentCount > 0 && (
@@ -1142,13 +1143,26 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                         const tmpl = b.shift_templates || {}
                         const count = liveAssignments(b.shift_assignments).length
                         const unstaffed = isBlockUnstaffedFuture(b, todayStr)
+                        // ROSTER-FIX.6b — unstaffed was a red hairline border and
+                        // nothing else. It survives neither greyscale nor the
+                        // ~8% of male operators with a red/green deficiency, and
+                        // there is no text for a screen reader to reach at all.
+                        // The warning glyph and the sr-only word carry it now;
+                        // the border stays as the at-a-glance cue for everyone else.
+                        const showUnstaffed = isManager && unstaffed
                         return (
                           <div
                             key={b.id}
-                            className={`text-[10px] truncate rounded px-1 py-0.5 ${isManager && unstaffed ? 'border border-red-500/40' : ''}`}
+                            className={`text-[10px] truncate rounded px-1 py-0.5 ${showUnstaffed ? 'border border-red-500/40' : ''}`}
                             style={{ backgroundColor: (tmpl.color || '#3B82F6') + '20', color: tmpl.color || '#3B82F6' }}
-                            title={`${tmpl.name || 'Shift'} · ${formatTime(b.start_time)}–${formatTime(b.end_time)}${isManager ? ` · ${count}/${b.max_coaches}` : ''}`}
+                            title={`${tmpl.name || 'Shift'} · ${formatTime(b.start_time)}–${formatTime(b.end_time)}${isManager ? ` · ${count}/${b.max_coaches}` : ''}${showUnstaffed ? ' · Unstaffed' : ''}`}
                           >
+                            {showUnstaffed && (
+                              <>
+                                <AlertTriangle size={9} className="inline-block mr-0.5 -mt-px text-red-700" aria-hidden="true" />
+                                <span className="sr-only">Unstaffed. </span>
+                              </>
+                            )}
                             {formatTime(b.start_time)}{isManager ? ` ${count}/${b.max_coaches}` : ''}
                           </div>
                         )
@@ -1275,6 +1289,16 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                         >
                           <div className="flex items-center justify-between gap-1">
                             <div className="font-semibold truncate" style={{ color: showUnstaffed ? '#FCA5A5' : 'inherit' }}>
+                              {/* ROSTER-FIX.6b — the card said "unstaffed" with a red
+                                  wash and a red left rule. Both vanish in greyscale
+                                  and neither is announced. The glyph plus the
+                                  visually-hidden word say it in text. */}
+                              {showUnstaffed && (
+                                <>
+                                  <AlertTriangle size={11} className="inline-block mr-1 -mt-0.5 text-red-700" aria-hidden="true" />
+                                  <span className="sr-only">Unstaffed. </span>
+                                </>
+                              )}
                               {tmpl.name || 'Shift'}
                             </div>
                             {/* ROSTER-FIX.2 — capacity is a manager fact. A coach
@@ -1316,6 +1340,13 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                                     <span className={`truncate ${isMe ? 'text-blue-300 font-medium' : 'text-un1t-text'}`}>
                                       {a.profiles?.full_name || 'Unknown'}
                                       {hasOverride && (
+                                        // ROSTER-FIX.6b — a bare bullet with a colour
+                                        // and a tooltip. Screen readers say "black
+                                        // circle" or nothing at all, and the amber is
+                                        // the only thing separating it from the name
+                                        // beside it. It gets a real name and its
+                                        // detail moves into a visually-hidden span so
+                                        // the tooltip is no longer the only copy.
                                         <span
                                           className="ml-1 text-amber-300"
                                           title={
@@ -1323,7 +1354,11 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                                             (a.partial_reason ? ` · ${a.partial_reason}` : '')
                                           }
                                         >
-                                          ●
+                                          <span aria-hidden="true">●</span>
+                                          <span className="sr-only">
+                                            {' '}Adjusted hours: {formatTime(a.start_time_override || block.start_time)} to {formatTime(a.end_time_override || block.end_time)}
+                                            {a.partial_reason ? `. ${a.partial_reason}` : ''}
+                                          </span>
                                         </span>
                                       )}
                                     </span>
