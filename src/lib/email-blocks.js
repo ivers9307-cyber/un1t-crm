@@ -34,30 +34,53 @@ import { stripInvisibleChars } from './mail-entities'
 
 /**
  * Ceilings. No single one of these bounds a monster newsletter on its own —
- * what does is the combination, and they do not all fail the same way:
+ * what does is the combination, and they do not all fail the same way. Every
+ * counter below is MESSAGE-WIDE: htmlToBlocks() creates one mutable budget
+ * object and every Sink — top-level and every nested one a <blockquote> or
+ * <ul>/<ol> creates — reads and increments the same counters. Content that a
+ * nested Sink flattens back into its parent (or discards, e.g. every <li>
+ * past the first line of a block-built list item) was still charged against
+ * this shared budget the moment it was walked, whether or not it survives
+ * into the final tree.
  *
  *   - `blocks` caps the block count. walk() checks it at the top of every
  *     node, so it stops the whole walk — but a block already being
  *     accumulated when the cap trips is still allowed to finish and push,
  *     rather than being discarded — which is how a long forwarded thread used
  *     to render as an EMPTY BODY, the defect this cap's own handling caused.
- *     That finishing push can only fire while the count is still under the
- *     cap, so the observed ceiling is `blocks` exactly; treat `blocks + 1` as
- *     the bound you may rely on and `blocks` as what it actually reaches.
+ *     A <blockquote>/<ul>/<ol> wrapper gets the same treatment for the same
+ *     reason: it closes over content that was already walked (and already
+ *     charged against this counter) by the time its own children finish, so
+ *     discarding the wrapper at that point would re-create the identical
+ *     empty-body failure one level up — a reply chain that quotes each
+ *     earlier message in its own nested <blockquote> is ordinary mail, not a
+ *     pathological shape. That means a chain of such wrappers still unwinding
+ *     when the cap trips can each still push one more block, so the safe
+ *     outer bound is `blocks + maxDepth`, not `blocks + 1` — ordinary mail
+ *     never nests a <blockquote>/<ul> deep enough for the difference to show.
  *   - `runsPerBlock` x `charsPerRun` is the real ceiling on ONE block's text.
  *     `charsPerRun` bounds a single run — one <Text> node — not the content
  *     addText() is handed; once a run is full it opens a NEW run rather than
  *     dropping the rest, up to `runsPerBlock` runs. Hitting either does NOT
  *     stop the walk: it drops what no longer fits in THIS block and moves on
  *     to the next one, reporting `truncated`.
+ *   - `listItems` caps how many `<li>` one `<ul>`/`<ol>` keeps. It is its own
+ *     cap, not `runsPerBlock` borrowed for a second job — `runsPerBlock`
+ *     means "runs in one block" everywhere else it appears, and tuning it for
+ *     text-wrapping used to silently change how many bullets a list shows.
+ *     Hitting it does not stop the walk: the list built up so far is pushed
+ *     and the walk reports `truncated`.
  *   - `charsPerPre` is a `pre` block's own, larger cap — a pasted code block
  *     or stack trace wants more room than one inline run — charged and
  *     reported the same way `charsPerRun` is, separately from it.
  *   - `charsPerMessage` is the actual budget on total accumulated text (every
- *     run plus every `pre`, summed) across the whole message. Hitting it DOES
+ *     run plus every `pre`, summed) across the whole message, no matter how
+ *     deep the `<blockquote>`/`<ul>` nesting that produced it. Hitting it DOES
  *     stop the walk, the same way `blocks` does — this is what keeps one
  *     newsletter off becoming a multi-megabyte JSON payload on somebody's
- *     cellular connection.
+ *     cellular connection. Unlike `blocks`, nothing pushes text past this cap
+ *     once it is reached: addText()/pushPre() slice to the exact room left,
+ *     so the character total is a hard ceiling, not `+ maxDepth`.
  *   - `maxDepth` bounds recursion, not text. walk() recurses once per nesting
  *     level, and an empty `<div>` pushes no block and adds no character, so
  *     nothing above this would ever trip on a tree that is merely deep. Past
@@ -73,6 +96,7 @@ import { stripInvisibleChars } from './mail-entities'
 export const CAPS = Object.freeze({
   blocks: 400,
   runsPerBlock: 64,
+  listItems: 64,
   charsPerRun: 400,
   charsPerPre: 4_000,
   charsPerMessage: 20_000,
@@ -145,23 +169,35 @@ function collapse(text) {
  * The accumulator. It owns every cap, so no walker branch can forget one, and
  * it owns run merging, so the tree the phone gets has one run per style change
  * rather than one per <span>.
+ *
+ * `budget` is a `{ chars, blocks }` object SHARED across every Sink for one
+ * call to htmlToBlocks() — the top-level one and every nested one a
+ * <blockquote> or <ul>/<ol> creates for its own children. Each Sink still
+ * owns its own `blocks` array and its own run-merging state (`runs`) — that
+ * is genuinely local, since it is what lets a nested Sink's content be
+ * flattened or discarded independently of whatever the caller decides to
+ * keep — but it no longer owns the COUNTERS that cap how much of it there
+ * can be. A Sink with its own isolated counters is exactly how 8 nested
+ * <blockquote>s each holding one 15,000-char paragraph used to emit 120,000
+ * characters with `truncated: false`: none of the 8 individual Sinks ever
+ * saw more than 15,000 characters of its own.
  */
 class Sink {
-  constructor() {
+  constructor(budget) {
+    this.budget = budget
     this.blocks = []
     this.runs = []
-    this.chars = 0
     this.truncated = false
   }
 
   full() {
-    return this.blocks.length >= CAPS.blocks || this.chars >= CAPS.charsPerMessage
+    return this.budget.blocks >= CAPS.blocks || this.budget.chars >= CAPS.charsPerMessage
   }
 
   addText(text, style) {
     if (!text) return
     if (this.full()) { this.truncated = true; return }
-    const room = CAPS.charsPerMessage - this.chars
+    const room = CAPS.charsPerMessage - this.budget.chars
     let slice = text
     if (slice.length > room) {
       slice = slice.slice(0, room)
@@ -181,7 +217,7 @@ class Sink {
       if (mergeRoom > 0) {
         const take = Math.min(mergeRoom, slice.length)
         prev.text += slice.slice(0, take)
-        this.chars += take
+        this.budget.chars += take
         slice = slice.slice(take)
         continue
       }
@@ -190,7 +226,7 @@ class Sink {
       const run = { text: slice.slice(0, take) }
       for (const k of STYLE_KEYS) if (style[k]) run[k] = style[k]
       this.runs.push(run)
-      this.chars += take
+      this.budget.chars += take
       slice = slice.slice(take)
     }
   }
@@ -234,15 +270,22 @@ class Sink {
    * `link` block instead of a paragraph: a marketing email's call to action is
    * an <a> painted to fill a table cell, and on a phone it wants to be a
    * tappable row rather than a line of blue text.
+   *
+   * Deliberately has NO full() check — see pushAlways() below, which exists
+   * for the same reason and carries the fuller explanation. takeRuns() has
+   * already emptied this Sink's buffer by the time we would check, so
+   * checking after the fact is what used to throw the block just walked away
+   * instead of emitting it.
    */
   flush(type = 'para', extra = null) {
     const runs = this.takeRuns()
     if (runs.length === 0) return
+    this.budget.blocks += 1
     // Gated on the DEFAULT type, deliberately: flush() is called with a
-    // non-'para' type only for a heading today, and Task 3's list items and
-    // quotes go through push(), not flush(), once they land. That is what
-    // stops a list item or a quote from ever being promoted to a link block
-    // by accident.
+    // non-'para' type only for a heading today, and list items and quotes
+    // go through push()/pushAlways(), not flush(), once they land. That is
+    // what stops a list item or a quote from ever being promoted to a link
+    // block by accident.
     if (type === 'para' && runs.length === 1 && runs[0].href) {
       // Carry every style flag across except href — that one is redundant
       // once it is on the block itself, and bold/italic/strike/mono inside a
@@ -257,16 +300,44 @@ class Sink {
 
   /**
    * Push a finished block that owns no open runs and carries no text of its
-   * own to budget (image, rule, table). A block whose size scales with its
-   * content, like `pre`, must charge `this.chars` too — see pushPre.
+   * own to budget (image, rule). A block whose size scales with its content,
+   * like `pre`, must charge `budget.chars` too — see pushPre. Gated on
+   * full(): unlike flush()/pushAlways(), nothing has been walked into a
+   * nested Sink and charged against the shared budget before this call, so
+   * there is nothing "already done" to lose by refusing it — the walk's own
+   * per-node full() check at the top of the loop would have skipped this
+   * node entirely on the next iteration anyway.
    */
   push(block) {
     if (this.full()) { this.truncated = true; return }
+    this.budget.blocks += 1
     this.blocks.push(block)
   }
 
   /**
-   * Push a `pre` block. Unlike push(), this charges `this.chars` — a <pre>
+   * Push a block that CLOSES OVER content already walked into a nested Sink
+   * — a <blockquote>'s `quote` wrapper or a <ul>/<ol>'s `list` wrapper. No
+   * full() check, on purpose, same reasoning as flush(): every run and block
+   * inside `block` was walked (and charged against the shared budget) before
+   * this call, while the shared budget still had room for this element's own
+   * top-of-loop check to pass. Gating this push on full() would mean an
+   * ordinary long reply chain — one big <blockquote> whose own content
+   * happens to exhaust the message budget — renders as a completely EMPTY
+   * body once the wrapper gets discarded at the last step, the identical
+   * failure class flush()'s missing full() check exists to prevent, one
+   * level up. The cost is a slightly looser bound: a chain of nested
+   * <blockquote>/<ul> wrappers still unwinding when the cap trips can each
+   * still push one more (empty-of-new-content) wrapper object, so `blocks`
+   * can overshoot by up to `maxDepth` in the pathological case rather than
+   * by 1 — see the CAPS doc block.
+   */
+  pushAlways(block) {
+    this.budget.blocks += 1
+    this.blocks.push(block)
+  }
+
+  /**
+   * Push a `pre` block. Unlike push(), this charges `budget.chars` — a <pre>
    * with no cap of its own used to sail straight past the message budget,
    * six times over on 300 pasted stack traces, always reporting untruncated.
    * It gets its own, larger cap (a code block wants more room than one
@@ -279,12 +350,13 @@ class Sink {
       slice = slice.slice(0, CAPS.charsPerPre)
       this.truncated = true
     }
-    const room = CAPS.charsPerMessage - this.chars
+    const room = CAPS.charsPerMessage - this.budget.chars
     if (slice.length > room) {
       slice = slice.slice(0, room)
       this.truncated = true
     }
-    this.chars += slice.length
+    this.budget.chars += slice.length
+    this.budget.blocks += 1
     this.blocks.push({ type: 'pre', text: slice })
   }
 }
@@ -292,6 +364,16 @@ class Sink {
 /** The runs of the first block that has any — for an <li> built of blocks. */
 function firstRuns(blocks) {
   for (const block of blocks) {
+    // A `link` block is special-cased the same way `quote` is just below: a
+    // <p>-wrapped or <div>-wrapped <a href> inside an <li> gets promoted to a
+    // link block by that wrapper's own flush(), which hoists `href` onto the
+    // BLOCK and drops it from the run (see flush()'s own comment on why).
+    // Reattaching it here is what keeps `<li><p><a href>Click</a></p></li>`
+    // — an ordinary marketing-email bulleted CTA — from losing its
+    // destination the moment the anchor picks up a wrapper.
+    if (block.type === 'link') {
+      return block.runs.map(run => ({ ...run, href: block.href }))
+    }
     if (Array.isArray(block.runs) && block.runs.length) return block.runs
     if (block.type === 'quote') {
       const inner = firstRuns(block.blocks)
@@ -300,6 +382,170 @@ function firstRuns(blocks) {
   }
   return []
 }
+
+// Tag handlers. Every one takes the same (node, sink, style, depth) signature
+// as walk() itself, whether or not a given handler needs all four — that
+// uniformity is what lets HANDLERS below be a plain name→function lookup
+// with one call shape, rather than each entry needing its own bespoke
+// invocation. Splitting these out of walk() is a MECHANICAL extraction: each
+// body is unchanged from the branch it came from, comments included: only
+// the `if (name === ...) { ...; continue }` wrapper is gone, replaced by the
+// lookup that walk() does once, below.
+
+function handleBreak(_node, sink, style, _depth) {
+  sink.addText('\n', style)
+}
+
+function handlePre(node, sink, _style, _depth) {
+  sink.flush()
+  const text = DomUtils.textContent(node).replace(/^\n/, '')
+  if (text.trim()) sink.pushPre(text)
+}
+
+function handleHeading(node, sink, style, depth) {
+  sink.flush()
+  walk(node.children || [], sink, style, depth + 1)
+  sink.flush('heading', { level: HEADING_LEVEL[node.name] })
+}
+
+function handleRule(_node, sink, _style, _depth) {
+  sink.flush()
+  sink.push({ type: 'rule' })
+}
+
+function handleImage(node, sink, style, _depth) {
+  sink.flush()
+  // 🔴 The ONLY URL an image block may carry is the one the sanitiser
+  // parked. `src` cannot reach here — it is not on email-html.js's img
+  // allowlist — so an image without `data-original-src` has no URL at all
+  // and is dropped rather than emitted as a box that can never fill.
+  const parked = node.attribs?.['data-original-src']
+  if (parked) {
+    const alt = node.attribs?.alt === SANITISER_ALT ? '' : (node.attribs?.alt || '')
+    const block = { type: 'image', blocked: parked, alt }
+    // style.href is inherited from an enclosing <a href> (see the inline
+    // default branch below) — the direct sibling of link.href, so an
+    // image block reads the same way a link block does. Without this, a
+    // hero image that IS the call to action — images are blocked by
+    // default on this surface — loses its destination entirely: no link
+    // block gets produced either, since the anchor's only content was
+    // the image and contributed no runs of its own.
+    if (style.href) block.href = style.href
+    sink.push(block)
+  }
+}
+
+function handleList(node, sink, style, depth) {
+  sink.flush()
+  const items = []
+  for (const child of node.children || []) {
+    if (child.type !== 'tag' || child.name !== 'li') continue
+    // Shares sink.budget, not a budget of its own — see the Sink class
+    // doc and the CAPS block. An <li>'s content must count against the
+    // same message-wide ceiling as everything else, even the lines that
+    // firstRuns() below ultimately throws away.
+    const inner = new Sink(sink.budget)
+    // depth + 1, not the default 0: an <li> starts a fresh Sink but NOT a
+    // fresh recursion budget — maxDepth bounds the walk()-calls-walk()
+    // JS call stack, which keeps growing through a list nested inside a
+    // list regardless of which Sink each level writes into. Passing the
+    // default here let a 5,000-deep <ul><li> chain throw
+    // RangeError: Maximum call stack size exceeded instead of tripping
+    // the cap and reporting truncated, same as any other nesting shape.
+    walk(child.children || [], inner, style, depth + 1)
+    // Try the open runs first — a plain-text or styled-run <li> leaves
+    // its content right there in inner.runs, and taking it via takeRuns()
+    // keeps it a plain run (an anchor-only <li> stays a styled run with
+    // its href, rather than being promoted to a link block by the flush()
+    // below and having firstRuns() hand back a run that lost its href).
+    const runs = inner.takeRuns()
+    if (inner.truncated) sink.truncated = true
+    // An <li> holding block elements (a nested table, a div) contributes
+    // its text through those blocks' runs; take the first line so the item
+    // is never empty when there was something in it. Only reached when
+    // takeRuns() found nothing, so this can never steal a plain-text
+    // item's runs out from under it. firstRuns() special-cases a `link`
+    // block (a <p>- or <div>-wrapped <a href>) so THAT wrapping doesn't
+    // cost the item its href the way a bare block would.
+    let flat = runs
+    if (flat.length === 0) {
+      inner.flush()
+      flat = firstRuns(inner.blocks)
+    }
+    if (flat.length) items.push(flat)
+    if (items.length >= CAPS.listItems) { sink.truncated = true; break }
+  }
+  // pushAlways(), not push(): every item above was already walked (and
+  // charged against the shared budget) before we get here — see
+  // pushAlways()'s own doc for why discarding the list at this last step
+  // would be the empty-body failure one level up.
+  if (items.length) sink.pushAlways({ type: 'list', ordered: node.name === 'ol', items })
+}
+
+function handleBlockquote(node, sink, style, depth) {
+  sink.flush()
+  // Shares sink.budget — see the Sink class doc. This is the fix for the
+  // finding that gives this doc block its teeth: 8 nested <blockquote>s
+  // each holding one 15,000-char paragraph used to emit 120,000
+  // characters with `truncated: false`, because each level's Sink here
+  // owned its own, isolated `chars` counter.
+  const inner = new Sink(sink.budget)
+  // depth + 1 for the same reason as the list handler above: a
+  // <blockquote> nested inside a <blockquote> inside a <blockquote>...
+  // still grows the real JS call stack even though each level flattens
+  // into a fresh Sink, so the recursion budget must carry over rather
+  // than resetting at every quote boundary.
+  walk(node.children || [], inner, style, depth + 1)
+  inner.flush()
+  if (inner.truncated) sink.truncated = true
+  // One level of nesting: a deeper quote's blocks join this one's, in
+  // order, rather than indenting again on a 390pt screen.
+  const flattened = []
+  for (const block of inner.blocks) {
+    if (block.type === 'quote') flattened.push(...block.blocks)
+    else flattened.push(block)
+  }
+  // pushAlways(), not push() — see its doc. inner's content is already
+  // walked and already charged; refusing the wrapper here once the
+  // shared budget is exhausted is what used to turn "one long quoted
+  // reply" into a blank body, same failure class as flush()'s.
+  if (flattened.length) sink.pushAlways({ type: 'quote', blocks: flattened })
+}
+
+// The plain BLOCK_LEVEL shape — <p>, <div>, a table cell, and everything
+// else in the BLOCK_LEVEL set with no bespoke handler above: close whatever
+// run was open, recurse into the children, close whatever THAT opened. Two
+// flush() calls, not one, is what makes `<p>before<hr>after</p>` split
+// cleanly into para/rule/para instead of losing "before" or "after" — the
+// first flush() closes anything accumulated before this element, the walk
+// into children may itself push blocks (the <hr> does), and the second
+// flush() closes whatever text followed.
+function handleBlockLevel(node, sink, style, depth) {
+  sink.flush()
+  walk(node.children || [], sink, style, depth + 1)
+  sink.flush()
+}
+
+// One handler per tag name. Seeded from BLOCK_LEVEL so every plain block tag
+// (p, div, table cells, and so on) gets the generic handler without hand
+// -listing them again here, then the specific handlers overwrite their own
+// entries — pre/hr/img/ul/ol/blockquote/h1-h6 are all themselves members of
+// BLOCK_LEVEL, so without the overwrite they would get the generic handler
+// too. `br` is added separately: it is deliberately NOT in BLOCK_LEVEL
+// (see that Set's own comment) since it breaks the line without ending the
+// block. Any tag not in this map — a <span>, an unknown element, or a
+// genuinely inline one like <b>/<i>/<a> — falls through to walk()'s own
+// inline-default branch below, exactly as before.
+const HANDLERS = {}
+for (const name of BLOCK_LEVEL) HANDLERS[name] = handleBlockLevel
+for (const name of Object.keys(HEADING_LEVEL)) HANDLERS[name] = handleHeading
+HANDLERS.pre = handlePre
+HANDLERS.hr = handleRule
+HANDLERS.img = handleImage
+HANDLERS.ul = handleList
+HANDLERS.ol = handleList
+HANDLERS.blockquote = handleBlockquote
+HANDLERS.br = handleBreak
 
 // depth counts nesting levels of walk() itself, not markup elements — the
 // same thing for anything BLOCK_LEVEL or inline. Real email nests tens of
@@ -328,110 +574,9 @@ function walk(nodes, sink, style, depth = 0) {
     if (node.type !== 'tag') continue
 
     const name = node.name
-
-    if (name === 'br') {
-      sink.addText('\n', style)
-      continue
-    }
-    if (name === 'pre') {
-      sink.flush()
-      const text = DomUtils.textContent(node).replace(/^\n/, '')
-      if (text.trim()) sink.pushPre(text)
-      continue
-    }
-
-    const heading = HEADING_LEVEL[name]
-    if (heading) {
-      sink.flush()
-      walk(node.children || [], sink, style, depth + 1)
-      sink.flush('heading', { level: heading })
-      continue
-    }
-
-    if (name === 'hr') {
-      sink.flush()
-      sink.push({ type: 'rule' })
-      continue
-    }
-
-    if (name === 'img') {
-      sink.flush()
-      // 🔴 The ONLY URL an image block may carry is the one the sanitiser
-      // parked. `src` cannot reach here — it is not on email-html.js's img
-      // allowlist — so an image without `data-original-src` has no URL at all
-      // and is dropped rather than emitted as a box that can never fill.
-      const parked = node.attribs?.['data-original-src']
-      if (parked) {
-        const alt = node.attribs?.alt === SANITISER_ALT ? '' : (node.attribs?.alt || '')
-        sink.push({ type: 'image', blocked: parked, alt })
-      }
-      continue
-    }
-
-    if (name === 'ul' || name === 'ol') {
-      sink.flush()
-      const items = []
-      for (const child of node.children || []) {
-        if (child.type !== 'tag' || child.name !== 'li') continue
-        const inner = new Sink()
-        // depth + 1, not the default 0: an <li> starts a fresh Sink but NOT a
-        // fresh recursion budget — maxDepth bounds the walk()-calls-walk()
-        // JS call stack, which keeps growing through a list nested inside a
-        // list regardless of which Sink each level writes into. Passing the
-        // default here let a 5,000-deep <ul><li> chain throw
-        // RangeError: Maximum call stack size exceeded instead of tripping
-        // the cap and reporting truncated, same as any other nesting shape.
-        walk(child.children || [], inner, style, depth + 1)
-        // Try the open runs first — a plain-text or styled-run <li> leaves
-        // its content right there in inner.runs, and taking it via takeRuns()
-        // keeps it a plain run (an anchor-only <li> stays a styled run with
-        // its href, rather than being promoted to a link block by the flush()
-        // below and having firstRuns() hand back a run that lost its href).
-        const runs = inner.takeRuns()
-        if (inner.truncated) sink.truncated = true
-        // An <li> holding block elements (a nested table, a div) contributes
-        // its text through those blocks' runs; take the first line so the item
-        // is never empty when there was something in it. Only reached when
-        // takeRuns() found nothing, so this can never steal a plain-text
-        // item's runs out from under it.
-        let flat = runs
-        if (flat.length === 0) {
-          inner.flush()
-          flat = firstRuns(inner.blocks)
-        }
-        if (flat.length) items.push(flat)
-        if (items.length >= CAPS.runsPerBlock) { sink.truncated = true; break }
-      }
-      if (items.length) sink.push({ type: 'list', ordered: name === 'ol', items })
-      continue
-    }
-
-    if (name === 'blockquote') {
-      sink.flush()
-      const inner = new Sink()
-      // depth + 1 for the same reason as the list branch above: a
-      // <blockquote> nested inside a <blockquote> inside a <blockquote>...
-      // still grows the real JS call stack even though each level flattens
-      // into a fresh Sink, so the recursion budget must carry over rather
-      // than resetting at every quote boundary.
-      walk(node.children || [], inner, style, depth + 1)
-      inner.flush()
-      if (inner.truncated) sink.truncated = true
-      // One level of nesting: a deeper quote's blocks join this one's, in
-      // order, rather than indenting again on a 390pt screen.
-      const flattened = []
-      for (const block of inner.blocks) {
-        if (block.type === 'quote') flattened.push(...block.blocks)
-        else flattened.push(block)
-      }
-      if (flattened.length) sink.push({ type: 'quote', blocks: flattened })
-      continue
-    }
-
-    if (BLOCK_LEVEL.has(name)) {
-      sink.flush()
-      walk(node.children || [], sink, style, depth + 1)
-      sink.flush()
+    const handler = HANDLERS[name]
+    if (handler) {
+      handler(node, sink, style, depth)
       continue
     }
 
@@ -454,7 +599,13 @@ export function htmlToBlocks(html) {
   const source = typeof html === 'string' ? html : ''
   if (!source.trim()) return { blocks: [], truncated: false }
   const dom = parseDocument(source)
-  const sink = new Sink()
+  // One mutable budget for the whole message. Every Sink created for this
+  // call — this one and every nested one a <blockquote> or <ul>/<ol> makes
+  // for its own children — shares it, so nothing walked anywhere in the tree
+  // can hide from the message-wide caps. See the Sink class doc and the
+  // CAPS block above.
+  const budget = { chars: 0, blocks: 0 }
+  const sink = new Sink(budget)
   walk(dom.children || [], sink, {})
   sink.flush()
   return { blocks: sink.blocks, truncated: sink.truncated }

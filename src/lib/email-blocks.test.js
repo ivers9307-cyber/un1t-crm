@@ -419,3 +419,186 @@ describe('htmlToBlocks — structure', () => {
     expect(quoteResult.truncated).toBe(true)
   })
 })
+
+describe('htmlToBlocks — a linked image keeps its destination (review finding 1)', () => {
+  it('carries href onto an image that is the only content of an anchor', () => {
+    const { blocks } = htmlToBlocks(
+      '<a href="https://x.test/go"><img data-original-src="https://cdn.test/hero.png" alt="Shop"></a>',
+    )
+    expect(blocks).toEqual([
+      { type: 'image', blocked: 'https://cdn.test/hero.png', alt: 'Shop', href: 'https://x.test/go' },
+    ])
+  })
+
+  it('carries no href key at all on an unlinked image', () => {
+    const { blocks } = htmlToBlocks(
+      '<img data-original-src="https://cdn.test/hero.png" alt="Shop">',
+    )
+    expect(blocks[0]).not.toHaveProperty('href')
+  })
+
+  it('carries href on both halves of a mixed text-and-image anchor', () => {
+    // <a href>Shop now <img></a> — the text half promotes to a link block
+    // the way any anchor-alone-in-its-block does; the image half now also
+    // carries the inherited href rather than dropping it.
+    const { blocks } = htmlToBlocks(
+      '<a href="https://x.test/go">Shop now <img data-original-src="https://cdn.test/hero.png" alt="Shop"></a>',
+    )
+    expect(blocks).toEqual([
+      { type: 'link', href: 'https://x.test/go', runs: [{ text: 'Shop now' }] },
+      { type: 'image', blocked: 'https://cdn.test/hero.png', alt: 'Shop', href: 'https://x.test/go' },
+    ])
+  })
+})
+
+describe('htmlToBlocks — nested content shares the message-wide budget (review finding 2)', () => {
+  it('bounds 8 nested blockquotes, each holding its own 15,000-char paragraph, to the shared char budget', () => {
+    // Before the fix each nested <blockquote> walked into a Sink with its
+    // OWN chars counter, so 8 x 15,000 = 120,000 characters sailed straight
+    // past the documented 20,000 whole-message ceiling with truncated:
+    // false — none of the 8 paragraphs was individually over any per-block
+    // cap, so nothing ever flagged it.
+    const P = `<p>${'x'.repeat(15000)}</p>`
+    let html = P
+    for (let i = 0; i < 7; i++) html = `${P}<blockquote>${html}</blockquote>`
+    html = `<blockquote>${html}</blockquote>`
+
+    const { blocks, truncated } = htmlToBlocks(html)
+
+    function totalChars(list) {
+      let n = 0
+      for (const b of list) {
+        if (Array.isArray(b.runs)) n += b.runs.reduce((s, r) => s + r.text.length, 0)
+        if (b.type === 'quote') n += totalChars(b.blocks)
+        if (b.type === 'pre') n += b.text.length
+      }
+      return n
+    }
+
+    expect(totalChars(blocks)).toBeLessThanOrEqual(CAPS.charsPerMessage)
+    expect(truncated).toBe(true)
+  })
+
+  it('bounds 3 nested blockquotes, each holding 300 of its own <p> blocks, to the shared block budget', () => {
+    // Before the fix each nested <blockquote> walked into a Sink with its
+    // OWN block count, so 900 leaf paragraphs across 3 nesting levels
+    // flattened into 901 blocks under a top-level blocks.length === 1, with
+    // truncated: false — six times the documented 400-block ceiling, hidden
+    // from the top-level count by the flattening itself.
+    const manyParas = Array(300).fill('<p>x</p>').join('')
+    let html = manyParas
+    for (let i = 0; i < 2; i++) html = `${manyParas}<blockquote>${html}</blockquote>`
+    html = `<blockquote>${html}</blockquote>`
+
+    const { blocks, truncated } = htmlToBlocks(html)
+
+    function countBlocks(list) {
+      let n = 0
+      for (const b of list) {
+        n += 1
+        if (b.type === 'quote') n += countBlocks(b.blocks)
+      }
+      return n
+    }
+
+    // Nesting depth here is only 3, so the loose "a wrapper may still close
+    // over already-walked content once the cap trips" allowance (see the
+    // CAPS doc block) adds at most a handful of extra wrapper objects, never
+    // anything close to the pre-fix 901.
+    expect(countBlocks(blocks)).toBeLessThan(CAPS.blocks + 10)
+    expect(truncated).toBe(true)
+  })
+
+  it('never renders a single large blockquote as an empty body', () => {
+    // A reply chain quoting one long message in a single <blockquote> is
+    // ordinary mail, not a pathological shape. Once the shared budget is
+    // exhausted while walking the quote's own content, the wrapper that
+    // closes over it must still be emitted — discarding it here would be
+    // the exact "long thread renders blank" failure ea0eb60f fixed for
+    // flush(), reappearing one level up for blockquote's own wrapping push.
+    const { blocks, truncated } = htmlToBlocks(`<blockquote><p>${'x'.repeat(30000)}</p></blockquote>`)
+    expect(blocks.length).toBeGreaterThan(0)
+    expect(blocks[0].type).toBe('quote')
+    expect(blocks[0].blocks.length).toBeGreaterThan(0)
+    expect(blocks[0].blocks[0].type).toBe('para')
+    expect(truncated).toBe(true)
+  })
+
+  it('never renders a single large list as empty', () => {
+    // Same failure mode, for <ul>/<ol>: many items whose combined text
+    // exhausts the shared budget must still leave the list block itself in
+    // the tree, not discard it at the last moment.
+    const items = Array.from({ length: 100 }, () => `<li>${'x'.repeat(500)}</li>`).join('')
+    const { blocks, truncated } = htmlToBlocks(`<ul>${items}</ul>`)
+    expect(blocks.length).toBeGreaterThan(0)
+    expect(blocks[0].type).toBe('list')
+    expect(truncated).toBe(true)
+  })
+})
+
+describe('htmlToBlocks — href survives a block-wrapped anchor inside an <li> (review finding 3)', () => {
+  it('keeps href for a direct-child anchor (already worked; pinned for symmetry with the two below)', () => {
+    const { blocks } = htmlToBlocks('<ul><li><a href="https://x.test/go">Click</a></li></ul>')
+    expect(blocks[0].items).toEqual([[{ text: 'Click', href: 'https://x.test/go' }]])
+  })
+
+  it('keeps href for a <p>-wrapped anchor', () => {
+    const { blocks } = htmlToBlocks('<ul><li><p><a href="https://x.test/go">Click</a></p></li></ul>')
+    expect(blocks[0].items).toEqual([[{ text: 'Click', href: 'https://x.test/go' }]])
+  })
+
+  it('keeps href for a <div>-wrapped anchor', () => {
+    const { blocks } = htmlToBlocks('<ul><li><div><a href="https://x.test/go">Click</a></div></li></ul>')
+    expect(blocks[0].items).toEqual([[{ text: 'Click', href: 'https://x.test/go' }]])
+  })
+})
+
+describe('htmlToBlocks — listItems has its own named cap (review finding 4)', () => {
+  it('stops at its own list-item cap, independent of runsPerBlock', () => {
+    const html = '<ul>' + '<li>x</li>'.repeat(CAPS.listItems + 20) + '</ul>'
+    const { blocks, truncated } = htmlToBlocks(html)
+    expect(blocks[0].items.length).toBe(CAPS.listItems)
+    expect(truncated).toBe(true)
+  })
+})
+
+describe('htmlToBlocks — degenerate shapes (review finding 5)', () => {
+  it('treats an <li> outside any list as a plain paragraph', () => {
+    expect(htmlToBlocks('<li>orphan</li>').blocks).toEqual([
+      { type: 'para', runs: [{ text: 'orphan' }] },
+    ])
+  })
+
+  it('drops a <ul> with no <li> at all', () => {
+    expect(htmlToBlocks('<ul></ul>').blocks).toEqual([])
+  })
+
+  it('reads a blockquote holding only an image', () => {
+    const { blocks } = htmlToBlocks(
+      '<blockquote><img data-original-src="https://cdn.test/x.png" alt="A"></blockquote>',
+    )
+    expect(blocks).toEqual([
+      { type: 'quote', blocks: [{ type: 'image', blocked: 'https://cdn.test/x.png', alt: 'A' }] },
+    ])
+  })
+
+  it('splits a paragraph cleanly around an <hr> nested inside it', () => {
+    const { blocks } = htmlToBlocks('<p>before<hr>after</p>')
+    expect(blocks).toEqual([
+      { type: 'para', runs: [{ text: 'before' }] },
+      { type: 'rule' },
+      { type: 'para', runs: [{ text: 'after' }] },
+    ])
+  })
+
+  it('splits a paragraph cleanly around an <img> between two text runs', () => {
+    const { blocks } = htmlToBlocks(
+      '<p>before<img data-original-src="https://cdn.test/x.png" alt="A">after</p>',
+    )
+    expect(blocks).toEqual([
+      { type: 'para', runs: [{ text: 'before' }] },
+      { type: 'image', blocked: 'https://cdn.test/x.png', alt: 'A' },
+      { type: 'para', runs: [{ text: 'after' }] },
+    ])
+  })
+})
