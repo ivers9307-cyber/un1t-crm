@@ -93,10 +93,16 @@ export async function notifyStaffOfPublish(db, shifts, { startDate, endDate, loc
     },
   }))
 
-  try {
-    await db.from('schedule_notifications').insert(notifications)
-  } catch (e) {
-    logWarn('roster-notify', `notification log insert failed`, { err: e })
+  // ROSTER-FIX.8f — a PostgREST failure RESOLVES with an `error` property, it
+  // does not throw, so this try/catch could never fire and a failed insert was
+  // silent. Mig 603 gives schedule_notifications.shift_id a real FK to
+  // shift_assignments, which makes a 23503 genuinely reachable here: the
+  // representative assignment can be deleted (D4's approved swap-drop) between
+  // the notify-list read and this insert. Still best-effort — the push below is
+  // the notification, this row is only the record that it was sent.
+  const { error: insertError } = await db.from('schedule_notifications').insert(notifications)
+  if (insertError) {
+    logWarn('roster-notify', 'notification log insert failed', { err: insertError.message })
   }
 
   const userIds = Object.keys(profileShifts)

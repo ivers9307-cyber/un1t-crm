@@ -6,7 +6,7 @@ import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { swapStatusSchema } from '@/lib/schemas'
 import { resolveSwapTransition } from '@/lib/swap-lifecycle'
-import { sendPushOnce, sendPushToRolesAtLocationOnce } from '@/lib/push-dedup'
+import { notifyUsersOnce, notifyUsersAtRolesOnce } from '@/lib/push-dedup'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { APPROVAL_CATEGORY_PERMISSION } from '@shared/permissions'
@@ -37,8 +37,9 @@ export async function PUT(request, props) {
   // week-preselects the schedule tab on it).
   // ROSTER-FIX.1 (D4) — the block embed also carries id / location_id and the
   // roster status because an approved DROP has to write its roster_change_log
-  // row from THIS in-memory copy: the delete cascades the swap row away, so
-  // nothing can be re-read afterwards.
+  // row from THIS in-memory copy: the assignment is deleted, so the embed
+  // cannot be re-read afterwards (and since mig 603 the swap row survives with
+  // requester_shift_id NULL, which is just as unreadable for these fields).
   const { data: swap } = await db.from('shift_swap_requests')
     .select('*, requester_shift:shift_assignments!requester_shift_id(id, profile_id, block_id, block:shift_blocks!block_id(id, location_id, block_date, rosters:roster_id(status))), target_shift:shift_assignments!target_shift_id(id, profile_id, block_id)')
     .eq('id', params.id)
@@ -59,14 +60,14 @@ export async function PUT(request, props) {
     return NextResponse.json({ success: false, error: decision.error }, { status: decision.status })
   }
 
-  // ROSTER-FIX.1 (D4) — ORDER MATTERS, and it is the reverse of what it was.
-  // `shift_swap_requests.requester_shift_id` FKs `shift_assignments(id) ON
-  // DELETE CASCADE` (mig 237), so an approved DROP now deletes the assignment
-  // and the cascade takes this swap row with it. Stamp the swap row FIRST and
-  // capture its data, then apply the assignment ops; for the drop case the
-  // swap row is gone afterwards and the captured row is what we return.
-  // (PR 8 replaces the CASCADE with ON DELETE SET NULL so the history
-  // survives; until then this ordering is the correct one.)
+  // ROSTER-FIX.8a — `shift_swap_requests.requester_shift_id` FKs
+  // `shift_assignments(id) ON DELETE SET NULL` as of mig 603 (it was ON DELETE
+  // CASCADE from mig 237), so an approved DROP no longer takes this swap row
+  // with it: the history survives the deletion with a null shift pointer, and
+  // EITHER ORDER is now safe. The order below is kept as it is — stamp the
+  // swap row first, then apply the assignment ops — because it is what the
+  // tests pin and because it still reads the captured `swap` for the audit
+  // row rather than depending on a re-read.
   //
   // ROSTER-FIX.1 — the cost of that ordering: if the assignment op fails after
   // the swap row is already `approved` and the change-log row is written, the
@@ -82,10 +83,11 @@ export async function PUT(request, props) {
 
   // Assignment writes are awaited so a failure surfaces.
   for (const op of decision.assignmentOps) {
-    // ROSTER-FIX.1 (D4) — audit the drop BEFORE the row goes. The delete
-    // cascades this swap row away (mig 237), so after it there is no swap and
-    // no embed left to describe what happened; the only trace of a coach
-    // losing a shift would be its absence.
+    // ROSTER-FIX.1 (D4) — audit the drop BEFORE the row goes. After the delete
+    // there is no assignment and no embed left to describe what happened
+    // (ROSTER-FIX.8a: the swap row itself now survives, with a null
+    // requester_shift_id); the only trace of a coach losing a shift would
+    // otherwise be its absence.
     if (op.delete) {
       const block = swap.requester_shift?.block
       // ROSTER-FIX.1 — isPublished is passed TRUE unconditionally, unlike
@@ -127,47 +129,59 @@ export async function PUT(request, props) {
     }
   }
 
-  // Best-effort pushes — never block or fail the response.
-  dispatchSwapPushes(db, decision, swap, user).catch(err => console.error('[swaps] push failed', err))
+  // ROSTER-FIX.8f — best-effort notifications, never block or fail the response.
+  // Named for what it does since 8d: these are push WITH an email fallback, not
+  // pushes, and the old name read as "coaches without the app get nothing".
+  dispatchSwapNotifications(db, decision, swap, user).catch(err => console.error('[swaps] notify failed', err))
 
   return NextResponse.json({ success: true, data })
 }
 
-// Map the resolver's notify intents to Expo pushes. Bodies live here because
-// they need user.full_name and human copy (the resolver stays pure).
+// Map the resolver's notify intents to notifications. Bodies live here
+// because they need user.full_name and human copy (the resolver stays pure).
 // PUSH.2 — deduped per transition. Keys include the acting user where the
 // same transition can legitimately recur with a different actor (a swap
-// re-opened by a withdrawal can be claimed again — by the SAME actor too,
+// re-opened by a withdrawal can be claimed again, by the SAME actor too,
 // which the key suppresses for 30 days; accepted as rare vs the
 // double-invoke double-push this closes). The decision key includes the
 // status so a decline followed by a re-review approval still notifies.
-async function dispatchSwapPushes(db, decision, swap, user) {
+//
+// ROSTER-FIX.8d — notifyUsers*, not sendPush*. Every one of these is somebody
+// being told the state of a request they are part of, often one they now have
+// to act on before a shift starts, and a push-only notification reaches nobody
+// who has not installed the app. `swap` is fallbackEmail in the registry, so a
+// recipient with no device tokens is emailed instead. Each call carries an
+// explicit emailSubject: the registry default ("Shift swap update") is
+// deliberately vague, and an inbox is a worse place than a lock screen to
+// guess what a notification was about.
+async function dispatchSwapNotifications(db, decision, swap, user) {
   const actor = user.full_name || 'A coach'
   for (const n of decision.notify) {
     switch (n.kind) {
       case 'claim_for_requester':
-        await sendPushOnce(db, `swap_claimed:${swap.id}:${user.id}`, n.to, { title: 'Shift claimed', body: `${actor} claimed your shift — awaiting manager approval.`, category: 'swap', data: { type: 'swap_claimed', swap_id: swap.id } })
+        await notifyUsersOnce(db, `swap_claimed:${swap.id}:${user.id}`, n.to, { title: 'Shift claimed', body: `${actor} claimed your shift. Awaiting manager approval.`, category: 'swap', emailSubject: `${actor} claimed your shift`, data: { type: 'swap_claimed', swap_id: swap.id } })
         break
       case 'accept_for_requester':
-        await sendPushOnce(db, `swap_accepted:${swap.id}:${user.id}`, n.to, { title: 'Swap accepted', body: `${actor} accepted your swap — awaiting manager approval.`, category: 'swap', data: { type: 'swap_accepted', swap_id: swap.id } })
+        await notifyUsersOnce(db, `swap_accepted:${swap.id}:${user.id}`, n.to, { title: 'Swap accepted', body: `${actor} accepted your swap. Awaiting manager approval.`, category: 'swap', emailSubject: `${actor} accepted your swap`, data: { type: 'swap_accepted', swap_id: swap.id } })
         break
       case 'claim_for_managers':
       case 'accept_for_managers':
-        await sendPushToRolesAtLocationOnce(db, `swap_awaiting:${swap.id}:${user.id}`, swap.location_id, MANAGER_ROLES, { title: 'Swap awaiting approval', body: `${actor} took a shift. Tap to approve.`, category: 'swap', data: { type: 'swap_awaiting', swap_id: swap.id } })
+        await notifyUsersAtRolesOnce(db, `swap_awaiting:${swap.id}:${user.id}`, swap.location_id, MANAGER_ROLES, { title: 'Swap awaiting approval', body: `${actor} took a shift. Tap to approve.`, category: 'swap', emailSubject: 'A shift swap is waiting for your approval', data: { type: 'swap_awaiting', swap_id: swap.id } })
         break
       case 'withdraw_for_requester':
-        await sendPushOnce(db, `swap_withdrawn:${swap.id}:${user.id}`, n.to, { title: 'Swap re-opened', body: `${actor} withdrew — your shift is open for swap again.`, category: 'swap', data: { type: 'swap_withdrawn', swap_id: swap.id } })
+        await notifyUsersOnce(db, `swap_withdrawn:${swap.id}:${user.id}`, n.to, { title: 'Swap re-opened', body: `${actor} withdrew. Your shift is open for swap again.`, category: 'swap', emailSubject: 'Your shift is open for swap again', data: { type: 'swap_withdrawn', swap_id: swap.id } })
         break
       case 'decline_for_requester':
-        await sendPushOnce(db, `swap_declined:${swap.id}:${user.id}`, n.to, { title: 'Swap declined', body: `${actor} declined your swap request.`, category: 'swap', data: { type: 'swap_declined', swap_id: swap.id } })
+        await notifyUsersOnce(db, `swap_declined:${swap.id}:${user.id}`, n.to, { title: 'Swap declined', body: `${actor} declined your swap request.`, category: 'swap', emailSubject: 'Your swap request was declined', data: { type: 'swap_declined', swap_id: swap.id } })
         break
       case 'decision_for_requester':
       case 'decision_for_taker': {
         const verb = decision.swapUpdates.status === 'approved' ? 'approved' : 'declined'
+        const note = decision.swapUpdates.review_note ? ` Note: ${decision.swapUpdates.review_note}` : ''
         // block_date = the requester's shift date (the shift the swap is
-        // about, and the one the taker now holds) — mobile week-preselects
+        // about, and the one the taker now holds). Mobile week-preselects
         // the schedule tab on it.
-        await sendPushOnce(db, `swap_decision:${swap.id}:${decision.swapUpdates.status}`, n.to, { title: `Swap ${verb}`, body: `Your shift swap was ${verb}${decision.swapUpdates.review_note ? ` — “${decision.swapUpdates.review_note}”` : ''}.`, category: 'swap', data: { type: 'swap_decision', swap_id: swap.id, status: decision.swapUpdates.status, block_date: swap.requester_shift?.block?.block_date ?? null } })
+        await notifyUsersOnce(db, `swap_decision:${swap.id}:${decision.swapUpdates.status}`, n.to, { title: `Swap ${verb}`, body: `Your shift swap was ${verb}.${note}`, category: 'swap', emailSubject: `Your shift swap was ${verb}`, data: { type: 'swap_decision', swap_id: swap.id, status: decision.swapUpdates.status, block_date: swap.requester_shift?.block?.block_date ?? null } })
         break
       }
       default:

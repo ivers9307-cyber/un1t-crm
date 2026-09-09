@@ -1,11 +1,13 @@
 // ROSTER-FIX.1 (D4) — route-level contract test for
 // PUT /api/schedule/swaps/[id], the approved-DROP path.
 //
-// A drop DELETES the requester's shift_assignments row, and mig 237's
-// `requester_shift_id ... ON DELETE CASCADE` takes this swap row with it. So
-// the audit row and the swap-row stamp both have to happen BEFORE the delete
-// — after it there is nothing left to read. These tests lock that ordering
-// and the roster_change_log payload.
+// A drop DELETES the requester's shift_assignments row. Under mig 237's
+// `requester_shift_id ... ON DELETE CASCADE` that took this swap row with it,
+// so the audit row and the swap-row stamp both had to happen BEFORE the
+// delete. ROSTER-FIX.8a's mig 603 makes the FK ON DELETE SET NULL, so the
+// swap row now survives either order — the ordering is kept (the embed still
+// has to be read before the assignment goes) and these tests still lock it,
+// along with the roster_change_log payload.
 //
 // Supabase + auth + push are mocked (the mock pattern is the one in
 // src/app/api/schedule/blocks/[id]/assignments/route.test.js); the swap
@@ -22,6 +24,8 @@ vi.mock('@/lib/permissions', () => ({ hasPermissionForLocation: vi.fn(() => true
 vi.mock('@/lib/push-dedup', () => ({
   sendPushOnce: vi.fn().mockResolvedValue(undefined),
   sendPushToRolesAtLocationOnce: vi.fn().mockResolvedValue(undefined),
+  notifyUsersOnce: vi.fn().mockResolvedValue(undefined),
+  notifyUsersAtRolesOnce: vi.fn().mockResolvedValue(undefined),
 }))
 vi.mock('@/lib/roster-change-log', () => ({ logRosterChange: vi.fn().mockResolvedValue({ logged: true }) }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
@@ -30,7 +34,12 @@ const { createServerClient } = await import('@/lib/supabase')
 const { getCurrentUser } = await import('@/lib/auth')
 const { logRosterChange } = await import('@/lib/roster-change-log')
 const { logWarn } = await import('@/lib/log')
+const { notifyUsersOnce, notifyUsersAtRolesOnce } = await import('@/lib/push-dedup')
 const { PUT } = await import('./route.js')
+
+// The notification fan-out is fire-and-forget, so let it settle before
+// asserting on the spies.
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
 
 const MANAGER = { id: 'mgr-1', role: 'manager', full_name: 'Manny Manager' }
 const REQUESTER = 'coach-1'
@@ -110,6 +119,8 @@ beforeEach(() => {
   logRosterChange.mockClear()
   logRosterChange.mockResolvedValue({ logged: true })
   logWarn.mockClear()
+  notifyUsersOnce.mockClear()
+  notifyUsersAtRolesOnce.mockClear()
 })
 
 describe('PUT /api/schedule/swaps/[id] — approved drop audit', () => {
@@ -192,5 +203,51 @@ describe('PUT /api/schedule/swaps/[id] — approved drop audit', () => {
 
     await PUT(req({ status: 'approved' }), PROPS)
     expect(logWarn).not.toHaveBeenCalled()
+  })
+})
+
+// ROSTER-FIX.8d — every swap notification here was a bare push, so a coach or
+// manager without the app installed was told nothing about a request that
+// needs their answer. These pin the switch to notifyUsersOnce /
+// notifyUsersAtRolesOnce (push + registry-gated email fallback).
+describe('PUT /api/schedule/swaps/[id] — notifications reach people without the app', () => {
+  const COACH = { id: 'coach-2', role: 'staff', full_name: 'Cora Coach' }
+
+  it('a claim notifies the requester and the managers through the fallback senders', async () => {
+    getCurrentUser.mockResolvedValue(COACH)
+    createServerClient.mockReturnValue(buildDb(dropSwap('published'), []))
+
+    const res = await PUT(req({ status: 'awaiting_approval' }), PROPS)
+    expect(res.status).toBe(200)
+    await flush()
+
+    const claim = notifyUsersOnce.mock.calls.find(c => c[1].startsWith('swap_claimed:'))
+    expect(claim).toBeTruthy()
+    expect(claim[2]).toEqual([REQUESTER])
+    expect(claim[3].category).toBe('swap')
+    expect(claim[3].emailSubject).toBeTruthy()
+
+    expect(notifyUsersAtRolesOnce).toHaveBeenCalledTimes(1)
+    const [, key, locationId, roles, payload] = notifyUsersAtRolesOnce.mock.calls[0]
+    expect(key).toBe(`swap_awaiting:swap-1:${COACH.id}`)
+    expect(locationId).toBe('loc-1')
+    expect(roles).toContain('manager')
+    expect(payload.category).toBe('swap')
+    expect(payload.emailSubject).toBeTruthy()
+  })
+
+  it('an approved drop tells the requester, with an email subject', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    createServerClient.mockReturnValue(buildDb(dropSwap('published'), []))
+
+    await PUT(req({ status: 'approved' }), PROPS)
+    await flush()
+
+    const decision = notifyUsersOnce.mock.calls.find(c => c[1].startsWith('swap_decision:'))
+    expect(decision).toBeTruthy()
+    expect(decision[1]).toBe('swap_decision:swap-1:approved')
+    expect(decision[2]).toEqual([REQUESTER])
+    expect(decision[3].category).toBe('swap')
+    expect(decision[3].emailSubject).toBeTruthy()
   })
 })

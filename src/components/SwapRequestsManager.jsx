@@ -55,6 +55,16 @@ function formatDate(dateStr) {
   })
 }
 
+// ROSTER-FIX.8e — created_at is a full timestamp, not the 'YYYY-MM-DD' string
+// formatDate() takes, so a detached swap needs its own formatter. Returns ''
+// rather than 'Invalid Date' so the caller can drop the clause entirely.
+function formatPostedOn(ts) {
+  if (!ts) return ''
+  const d = new Date(ts)
+  if (Number.isNaN(d.getTime())) return ''
+  return d.toLocaleDateString('en-IE', { day: 'numeric', month: 'short', year: 'numeric' })
+}
+
 export default function SwapRequestsManager({ user }) {
   const [requests, setRequests] = useState([])
   const [loading, setLoading] = useState(true)
@@ -151,6 +161,8 @@ export default function SwapRequestsManager({ user }) {
             const canReview = isManager && REVIEW_STATES.includes(req.status)
             const canCancelOwn = !isManager && req.requester_id === user.id && REVIEW_STATES.includes(req.status)
             const focused = focusId && req.id === focusId
+            // ROSTER-FIX.8e — the only date a detached swap still has.
+            const postedOn = formatPostedOn(req.created_at)
             const busy = actingId === req.id
 
             return (
@@ -173,17 +185,35 @@ export default function SwapRequestsManager({ user }) {
                     </div>
 
                     {/* Their shift */}
-                    <div className="text-sm">
-                      <span className="text-un1t-subtle">Wants to swap: </span>
-                      <span className="font-medium" style={{ color: reqTmpl.color }}>
-                        {reqTmpl.name}
-                      </span>
-                      {reqShift && (
+                    {/* ROSTER-FIX.8e — a swap row now OUTLIVES the assignment it
+                        was about: mig 603 made requester_shift_id ON DELETE SET
+                        NULL so an approved drop keeps its history instead of
+                        cascading it away. Every such row reaches this card with
+                        requester_shift null, and the old markup rendered
+                        "Wants to swap:" followed by nothing at all — a blank
+                        line where the shift used to be, with no hint that this
+                        is history rather than a broken card. Say what happened
+                        and date it from the request itself, which is the one
+                        fact that survives. */}
+                    {reqShift ? (
+                      <div className="text-sm">
+                        <span className="text-un1t-subtle">Wants to swap: </span>
+                        <span className="font-medium" style={{ color: reqTmpl.color }}>
+                          {reqTmpl.name}
+                        </span>
                         <span className="text-un1t-subtle">
                           {' '} on {formatDate(reqShift.shift_date)} ({formatTime(reqShift.start_time_override || reqTmpl.start_time)}–{formatTime(reqShift.end_time_override || reqTmpl.end_time)})
                         </span>
-                      )}
-                    </div>
+                      </div>
+                    ) : (
+                      <div className="text-sm text-un1t-subtle flex items-center gap-1">
+                        <AlertCircle size={12} />
+                        <span>
+                          Shift no longer on the roster
+                          {postedOn && <span> (requested {postedOn})</span>}
+                        </span>
+                      </div>
+                    )}
 
                     {/* Target shift if specified */}
                     {tgtShift && (
@@ -197,7 +227,29 @@ export default function SwapRequestsManager({ user }) {
                       </div>
                     )}
 
-                    {!tgtShift && (
+                    {/* ROSTER-FIX.8e — the other side of the same hole. The FK on
+                        target_shift_id has been ON DELETE SET NULL since mig 237,
+                        so a detached target usually nulls the id too and is
+                        indistinguishable from "no reciprocal shift was named".
+                        What IS detectable is an id that is still set while the
+                        embed resolved to nothing, and that used to render as
+                        silence. */}
+                    {req.target_shift_id && !tgtShift && (
+                      <div className="text-sm mt-1 text-un1t-subtle flex items-center gap-1">
+                        <AlertCircle size={12} />
+                        <span>
+                          Their shift is no longer on the roster
+                          {postedOn && <span> (requested {postedOn})</span>}
+                        </span>
+                      </div>
+                    )}
+
+                    {/* ROSTER-FIX.8e — only when no reciprocal shift was ever
+                        named. A row whose target_shift_id is still set but did
+                        not resolve is covered above, and calling that a drop
+                        request would be a plain misstatement of what the coach
+                        asked for. */}
+                    {!tgtShift && !req.target_shift_id && (
                       <div className="text-sm mt-1 text-un1t-subtle flex items-center gap-1">
                         <AlertCircle size={12} /> Requesting to drop this shift (no swap)
                       </div>
