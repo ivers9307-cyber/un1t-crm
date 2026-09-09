@@ -278,6 +278,47 @@ describe('calculateNextRun', () => {
     expect(out.getHours()).toBe(7)
   })
 
+  // ROSTER-FIX.5 — day_of_month is nullable and the UI does not force it, so
+  // this was the DEFAULT monthly schedule: it returned null, the cron read
+  // that as "nothing to advance to", left next_run_at alone, and the schedule
+  // ran exactly once.
+  it('monthly with no day_of_month → the 1st of next month, not null', () => {
+    const out = new Date(calculateNextRun('monthly', null, null))
+    expect(out.getMonth()).toBe(5) // June
+    expect(out.getDate()).toBe(1)
+    expect(out.getHours()).toBe(7)
+  })
+
+  it('monthly with day_of_month 0 is treated as unset', () => {
+    expect(new Date(calculateNextRun('monthly', null, 0)).getDate()).toBe(1)
+  })
+
+  // ROSTER-FIX.5 — `new Date(y, m, 31)` for a 30-day month rolls INTO the next
+  // one: a "31st" schedule fired from May used to land on 1 July, two months
+  // out, and drifted further every time it fired.
+  it('monthly on the 31st clamps to a 30-day month\'s last day', () => {
+    // now = 2026-05-06, so the target month is June (30 days).
+    const out = new Date(calculateNextRun('monthly', null, 31))
+    expect(out.getMonth()).toBe(5) // still June, not July
+    expect(out.getDate()).toBe(30)
+    expect(out.getHours()).toBe(7)
+  })
+
+  it('monthly on the 31st is untouched when the target month has 31 days', () => {
+    // Target month is a 31-day one (August, from July).
+    vi.setSystemTime(new Date('2026-07-06T09:00:00Z'))
+    const out = new Date(calculateNextRun('monthly', null, 31))
+    expect(out.getMonth()).toBe(7) // August
+    expect(out.getDate()).toBe(31)
+  })
+
+  it('monthly on the 30th clamps to February\'s last day', () => {
+    vi.setSystemTime(new Date('2027-01-06T09:00:00Z'))
+    const out = new Date(calculateNextRun('monthly', null, 30))
+    expect(out.getMonth()).toBe(1) // February
+    expect(out.getDate()).toBe(28)
+  })
+
   it('once → null (nothing to advance to)', () => {
     expect(calculateNextRun('once')).toBeNull()
   })

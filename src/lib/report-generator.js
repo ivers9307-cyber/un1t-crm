@@ -469,7 +469,9 @@ export function calculatePeriodForSchedule(frequency) {
 /**
  * Calculate the next run date after execution. Always 07:00 local on the
  * target day; null for 'once' (nothing to advance to) and for a
- * weekly/fortnightly schedule with no weekday set.
+ * weekly/fortnightly schedule with no weekday set. A monthly schedule always
+ * returns a date: no day_of_month means the 1st, and a day past the target
+ * month's end is clamped to its last day.
  *
  * `dayOfWeek` is a JS weekday (0=Sunday) — see src/lib/report-schedule-days.js
  * and mig 601. The UI converts; nothing else may.
@@ -499,8 +501,25 @@ export function calculateNextRun(frequency, dayOfWeek, dayOfMonth) {
     return target.toISOString()
   }
 
-  if (frequency === 'monthly' && dayOfMonth) {
-    const target = new Date(now.getFullYear(), now.getMonth() + 1, dayOfMonth, 7, 0, 0)
+  if (frequency === 'monthly') {
+    // ROSTER-FIX.5 — two ways a monthly schedule went wrong.
+    //
+    // A null day_of_month fell through to `return null`, which
+    // /api/cron/run-scheduled-reports reads as "nothing to advance to": it
+    // leaves next_run_at where it is, so the schedule ran once and then
+    // stalled forever. day_of_month is nullable and the UI does not force it,
+    // so this is the DEFAULT monthly schedule, not an edge case. The 1st is
+    // the sane default for "monthly".
+    //
+    // And 31 overflowed. `new Date(y, m, 31)` for a 30-day month rolls into
+    // the NEXT month, so a schedule set to the 31st landed on 1 July instead
+    // of 30 June — two months out, not one, and it drifts further every time
+    // it fires. Clamp to the target month's last day; `new Date(y, m + 2, 0)`
+    // is day zero of the month after the target, i.e. the target's last day.
+    const requested = Number(dayOfMonth) > 0 ? Math.floor(Number(dayOfMonth)) : 1
+    const lastDayOfTargetMonth = new Date(now.getFullYear(), now.getMonth() + 2, 0).getDate()
+    const day = Math.min(requested, lastDayOfTargetMonth)
+    const target = new Date(now.getFullYear(), now.getMonth() + 1, day, 7, 0, 0)
     return target.toISOString()
   }
 
