@@ -40,7 +40,7 @@ function req(body) {
 }
 
 // assignmentsById: id → { id, profile_id, status, block_date, location_id, roster_status? }
-function buildDb({ assignmentsById, openSwaps = [], insertErr = null }) {
+function buildDb({ assignmentsById, openSwaps = [], openSwapsError = null, insertErr = null }) {
   const insertSpy = vi.fn()
   const db = {
     from: (table) => {
@@ -79,7 +79,7 @@ function buildDb({ assignmentsById, openSwaps = [], insertErr = null }) {
       }
       if (table === 'shift_swap_requests') {
         return {
-          select: () => ({ eq: () => ({ in: () => Promise.resolve({ data: openSwaps, error: null }) }) }),
+          select: () => ({ eq: () => ({ in: () => Promise.resolve({ data: openSwapsError ? null : openSwaps, error: openSwapsError }) }) }),
           insert: (row) => {
             insertSpy(row)
             return {
@@ -164,6 +164,44 @@ describe('POST /api/schedule/swaps — target validation', () => {
     createServerClient.mockReturnValue(db)
     const res = await POST(req({ requester_shift_id: A_REQ }))
     expect(res.status).toBe(400)
+  })
+
+  it('400 when the target shift sits on a draft roster', async () => {
+    getCurrentUser.mockResolvedValue({ id: REQ, role: 'staff', full_name: 'R' })
+    const { db, insertSpy } = buildDb({ assignmentsById: { ...base, [A_TGT]: { ...base[A_TGT], roster_status: 'draft' } } })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(req({ requester_shift_id: A_REQ, target_shift_id: A_TGT, target_id: TGT }))
+    expect(res.status).toBe(400)
+    expect(await res.json()).toMatchObject({ error: 'Target shift is not published yet' })
+    expect(insertSpy).not.toHaveBeenCalled()
+  })
+
+  it('400 when the target shift is in the past', async () => {
+    getCurrentUser.mockResolvedValue({ id: REQ, role: 'staff', full_name: 'R' })
+    const { db, insertSpy } = buildDb({ assignmentsById: { ...base, [A_TGT]: { ...base[A_TGT], block_date: '2000-01-01' } } })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(req({ requester_shift_id: A_REQ, target_shift_id: A_TGT, target_id: TGT }))
+    expect(res.status).toBe(400)
+    expect(insertSpy).not.toHaveBeenCalled()
+  })
+
+  it('400 when the caller targets themselves', async () => {
+    getCurrentUser.mockResolvedValue({ id: REQ, role: 'staff', full_name: 'R' })
+    const { db, insertSpy } = buildDb({ assignmentsById: base })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(req({ requester_shift_id: A_REQ, target_id: REQ }))
+    expect(res.status).toBe(400)
+    expect(await res.json()).toMatchObject({ error: 'You cannot target yourself' })
+    expect(insertSpy).not.toHaveBeenCalled()
+  })
+
+  it('500 (no insert) when the open-swap guard query fails', async () => {
+    getCurrentUser.mockResolvedValue({ id: REQ, role: 'staff', full_name: 'R' })
+    const { db, insertSpy } = buildDb({ assignmentsById: base, openSwapsError: { message: 'boom' } })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(req({ requester_shift_id: A_REQ }))
+    expect(res.status).toBe(500)
+    expect(insertSpy).not.toHaveBeenCalled()
   })
 
   it('409 when the requester shift already has an open swap', async () => {
