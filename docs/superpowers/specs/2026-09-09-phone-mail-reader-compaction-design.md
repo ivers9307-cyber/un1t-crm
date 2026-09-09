@@ -367,14 +367,33 @@ that did nothing behind a green suite.
   missing: **mobile's `TICKET_VIEW_TABS` ids equal `shared.MAIL_VIEWS` ids, in
   the same order.** That is the test whose absence let the Spam view go
   missing.
-- Screen-level jsdom, for the DOM facts only: the signature box is gone from
-  all three composers; the header renders one chips row and `Details` reveals
-  the folded facts; the composer starts collapsed and a hydrated draft expands
-  it without focusing; note mode still renders its full sentence; the ⋮ carries
-  the spam action with the right label in both directions.
+🔴 **There is no test runner for mobile components, and this plan does not add
+one.** `vitest.config.js`'s `include` covers `mobile/lib/**/*.test.js` and
+nothing else under `mobile/` — no `mobile/app`, no `mobile/components` — the
+environment is `node` with no jsdom, and `mobile/package.json` has no test
+script. Rendering a React Native tree here would mean new devDependencies in
+the mobile tree and a second vitest project, which is a bigger change than this
+feature. So mobile screens are verified the way this repo already verifies
+them, in four layers:
 
-**What jsdom cannot answer, and who does:** the 40% cap and how the compact
-header actually feels are device checks. Richard, on the OTA, once it lands.
+1. **Every decision is a pure function in `mobile/lib/`**, where the existing
+   runner does reach it. This is a design constraint on the work, not a
+   testing afterthought — it is why the screen tasks add
+   `composerCap`, `audienceSummary`, `headerDetailLines`, `spamActionLabel`
+   and `shortMailboxLabel` rather than computing any of them inline in JSX.
+2. **Source-scan tests for the literals that must exist or must not**, the
+   idiom `src/components/mail/dock-width-literals.test.js` and
+   `tests/mail-vocabulary-agreement.test.js` already use: no
+   `resolveSignatureHint` import survives in any of the three composers; the
+   thread screen carries the spam action; the composer's cap comes from
+   `composerCap` and not from a hand-written fraction.
+3. **`npm run check:mobile-lint`** — the only linter that inspects
+   `mobile/**`, error-level, `--max-warnings 0`. It is what catches a
+   reference left behind by a deletion, which is exactly the class of bug
+   these edits risk (it found a live crash the first time it ran).
+4. **Richard, on the device.** The 40% cap, the fold's feel, and whether the
+   renderer's output is actually readable on real mail are device checks and
+   nothing here can stand in for them.
 
 ## Out of scope
 
