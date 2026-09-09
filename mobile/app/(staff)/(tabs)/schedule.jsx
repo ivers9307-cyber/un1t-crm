@@ -28,7 +28,9 @@ import {
   getMyShifts, getTeamShifts, getMyTimeOff, createSwapRequest, adjustShiftAssignment,
   cancelTimeOffRequest,
 } from '../../../lib/schedule-api'
-import { applyWeekResult, TRANSPORT_ERROR } from '../../../lib/schedule-refresh'
+import {
+  applyWeekResult, TRANSPORT_ERROR, weekKey, lastGoodFor, isStaleResponse,
+} from '../../../lib/schedule-refresh'
 import { canMobile } from '../../../lib/permissions'
 import { useIsTablet } from '../../../lib/use-is-tablet'
 import { effShiftStart, effShiftEnd, teamRosterForDay, initials } from '../../../lib/schedule-team'
@@ -325,17 +327,37 @@ export default function Schedule() {
   const start = useMemo(() => isoDate(anchor), [anchor])
   const end = useMemo(() => isoDate(addDays(anchor, 6)), [anchor])
 
-  // ROSTER-FIX.7 — the last-good rows live in refs as well as state so
+  // ROSTER-FIX.7 — the last-good rows live in a ref as well as state so
   // fetchWeek can read them WITHOUT listing `shifts`/`timeOff` in its
   // dependency array (which would re-create the callback on every load and
   // spin the useEffect below forever).
-  const shiftsRef = useRef([])
-  const timeOffRef = useRef([])
-  const commitShifts = useCallback((rows) => { shiftsRef.current = rows; setShifts(rows) }, [])
-  const commitTimeOff = useCallback((rows) => { timeOffRef.current = rows; setTimeOff(rows) }, [])
+  //
+  // ROSTER-FIX.7g — and the ref is KEYED, because "last good" is only good for
+  // the question it answered. A studio switch, a "View as user" profile swap, a
+  // week page or a Me/Team flip all make the rows in hand somebody else's, so a
+  // transport-level failure on the FIRST fetch in the new context must fall
+  // back to nothing rather than replay another studio's roster (or another
+  // user's week) under the new header. weekKey/lastGoodFor own that rule and
+  // are tested in mobile/lib/schedule-refresh.test.js; the screen only obeys it.
+  const lastGood = useRef({ key: null, shifts: [], timeOff: [] })
+  const key = useMemo(
+    () => weekKey({ locationId: activeLocation?.id, profileId: profile?.id, weekStartIso: start, view }),
+    [activeLocation?.id, profile?.id, start, view]
+  )
+  // ROSTER-FIX.7g — in-flight sequencing. The load effect, the focus effect and
+  // pull-to-refresh can all have a fetch in the air at once; without a stamp the
+  // response that resolves LAST wins the screen even when it answers the older
+  // question. See isStaleResponse.
+  const reqId = useRef(0)
+  const commit = useCallback((k, rows, off) => {
+    lastGood.current = { key: k, shifts: rows, timeOff: off }
+    setShifts(rows)
+    setTimeOff(off)
+  }, [])
 
   const fetchWeek = useCallback(async () => {
     if (!profile || !activeLocation) return
+    const mine = ++reqId.current
     setError(null)
     if (view === 'manage') {
       // ManageMode self-fetches the roster. ROSTER-FIX.7 — clear the Me/Team
@@ -343,8 +365,7 @@ export default function Schedule() {
       // in state, so the week strip under Manage still dotted the days of a
       // roster nobody was looking at, and switching back painted a stale week
       // before the refetch landed.
-      commitShifts([])
-      commitTimeOff([])
+      commit(key, [], [])
       return
     }
     if (view === 'team') {
@@ -355,9 +376,9 @@ export default function Schedule() {
         startDate: start,
         endDate: end,
       })
-      const applied = applyWeekResult(shiftsRef.current, shiftsRes, { fallbackError: 'Failed to load roster' })
-      commitShifts(applied.shifts)
-      commitTimeOff([])
+      if (isStaleResponse(reqId.current, mine)) return
+      const applied = applyWeekResult(lastGoodFor(lastGood.current, key), shiftsRes, { fallbackError: 'Failed to load roster' })
+      commit(key, applied.shifts, [])
       setError(applied.error)
       return
     }
@@ -373,15 +394,15 @@ export default function Schedule() {
         profileId: profile.id,
       }),
     ])
-    const appliedShifts = applyWeekResult(shiftsRef.current, shiftsRes, { fallbackError: 'Failed to load shifts' })
+    if (isStaleResponse(reqId.current, mine)) return
+    const appliedShifts = applyWeekResult(lastGoodFor(lastGood.current, key), shiftsRes, { fallbackError: 'Failed to load shifts' })
     // ROSTER-FIX.7 — a time-off failure used to be swallowed: the list simply
     // emptied and the coach read that as "no leave booked". It reports now,
     // and a transport blip keeps the leave rows the same way it keeps shifts.
-    const appliedTimeOff = applyWeekResult(timeOffRef.current, timeOffRes, { fallbackError: 'Failed to load time off' })
-    commitShifts(appliedShifts.shifts)
-    commitTimeOff(appliedTimeOff.shifts)
+    const appliedTimeOff = applyWeekResult(lastGoodFor(lastGood.current, key, 'timeOff'), timeOffRes, { fallbackError: 'Failed to load time off' })
+    commit(key, appliedShifts.shifts, appliedTimeOff.shifts)
     setError(appliedShifts.error || appliedTimeOff.error)
-  }, [profile, activeLocation, start, end, view, commitShifts, commitTimeOff])
+  }, [profile, activeLocation, start, end, view, key, commit])
 
   useEffect(() => {
     setLoading(true)
