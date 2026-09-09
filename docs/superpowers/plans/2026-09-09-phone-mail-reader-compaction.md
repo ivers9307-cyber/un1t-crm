@@ -901,7 +901,7 @@ Body: a parked remote image becomes `{ blocked, alt }`; an image with no parked 
 - Modify: `src/lib/email-blocks.test.js`
 - Modify: `src/lib/email-html.test.js` (the client-import scan)
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `src/lib/email-blocks.test.js`, and add `emailBlocks` and `CAPS` to the file's import:
 
@@ -1048,12 +1048,12 @@ describe('emailBlocks', () => {
 
 ⚠️ The last assertion is the strongest one in this plan and it may need a small adjustment once you see the sanitiser's real output: if `<img src="https://evil.test/track.gif">` is parked (it is a remote http URL, so it will be), `evil.test` legitimately appears in `blocked`. Change the final assertion to name only the URLs that must be absent — the `javascript:`, `cid:`, `data:`, protocol-relative, relative, `background` and `background-image` ones — and keep the `toMatch(/^https?:\/\//)` loop, which is the real guarantee. Do not weaken the loop.
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `npx vitest run src/lib/email-blocks.test.js`
 Expected: FAIL — `emailBlocks` is not exported; the `<th>` table flattens.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Extend the import at the top of `src/lib/email-blocks.js`:
 
@@ -1194,12 +1194,12 @@ export function emailBlocks(raw) {
 }
 ```
 
-- [ ] **Step 4: Run it to verify it passes**
+- [x] **Step 4: Run it to verify it passes**
 
 Run: `npx vitest run src/lib/email-blocks.test.js`
 Expected: PASS, all tests.
 
-- [ ] **Step 5: Add the module to the client-import scan**
+- [x] **Step 5: Add the module to the client-import scan**
 
 `src/lib/email-html.js` carries "NO CLIENT COMPONENT MAY IMPORT THIS MODULE", enforced by a test in `src/lib/email-html.test.js` that scans every `'use client'` file in `src/`. `email-blocks.js` imports it and inherits the rule.
 
@@ -1208,7 +1208,9 @@ Find that test (search `use client` in `src/lib/email-html.test.js`), read it, a
 Run: `npx vitest run src/lib/email-html.test.js`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+Already done: the scan's regex already covered `@/lib/email-blocks` before this task started (added alongside the null-prototype HANDLERS fix), so this step was a verification run only, no edit.
+
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/lib/email-blocks.js src/lib/email-blocks.test.js src/lib/email-html.test.js
