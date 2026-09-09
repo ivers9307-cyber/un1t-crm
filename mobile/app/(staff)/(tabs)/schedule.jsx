@@ -11,7 +11,7 @@
 // Performance: shifts are cheap (<= ~14 per week per user). No
 // virtualisation needed — the FlatList is overkill for this size.
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   View, Text, ScrollView, Pressable, RefreshControl,
   ActivityIndicator, Alert, Modal, TextInput, KeyboardAvoidingView,
@@ -27,6 +27,7 @@ import {
 import {
   getMyShifts, getTeamShifts, getMyTimeOff, createSwapRequest, adjustShiftAssignment,
 } from '../../../lib/schedule-api'
+import { applyWeekResult, TRANSPORT_ERROR } from '../../../lib/schedule-refresh'
 import { canMobile } from '../../../lib/permissions'
 import { useIsTablet } from '../../../lib/use-is-tablet'
 import { effShiftStart, effShiftEnd, teamRosterForDay, initials } from '../../../lib/schedule-team'
@@ -323,10 +324,28 @@ export default function Schedule() {
   const start = useMemo(() => isoDate(anchor), [anchor])
   const end = useMemo(() => isoDate(addDays(anchor, 6)), [anchor])
 
+  // ROSTER-FIX.7 — the last-good rows live in refs as well as state so
+  // fetchWeek can read them WITHOUT listing `shifts`/`timeOff` in its
+  // dependency array (which would re-create the callback on every load and
+  // spin the useEffect below forever).
+  const shiftsRef = useRef([])
+  const timeOffRef = useRef([])
+  const commitShifts = useCallback((rows) => { shiftsRef.current = rows; setShifts(rows) }, [])
+  const commitTimeOff = useCallback((rows) => { timeOffRef.current = rows; setTimeOff(rows) }, [])
+
   const fetchWeek = useCallback(async () => {
     if (!profile || !activeLocation) return
     setError(null)
-    if (view === 'manage') return // ManageMode self-fetches the roster + approvals
+    if (view === 'manage') {
+      // ManageMode self-fetches the roster. ROSTER-FIX.7 — clear the Me/Team
+      // rows EXPLICITLY: the old bare `return` left the previous view's week
+      // in state, so the week strip under Manage still dotted the days of a
+      // roster nobody was looking at, and switching back painted a stale week
+      // before the refetch landed.
+      commitShifts([])
+      commitTimeOff([])
+      return
+    }
     if (view === 'team') {
       // Team: the whole location's roster for the week (no profile_id). No
       // time-off in Team mode — it shows who's working, not who's off.
@@ -335,9 +354,10 @@ export default function Schedule() {
         startDate: start,
         endDate: end,
       })
-      if (!shiftsRes.success) setError(shiftsRes.error || 'Failed to load roster')
-      setShifts(shiftsRes.success ? shiftsRes.data || [] : [])
-      setTimeOff([])
+      const applied = applyWeekResult(shiftsRef.current, shiftsRes, { fallbackError: 'Failed to load roster' })
+      commitShifts(applied.shifts)
+      commitTimeOff([])
+      setError(applied.error)
       return
     }
     const [shiftsRes, timeOffRes] = await Promise.all([
@@ -352,10 +372,15 @@ export default function Schedule() {
         profileId: profile.id,
       }),
     ])
-    if (!shiftsRes.success) setError(shiftsRes.error || 'Failed to load shifts')
-    setShifts(shiftsRes.success ? shiftsRes.data || [] : [])
-    setTimeOff(timeOffRes.success ? timeOffRes.data || [] : [])
-  }, [profile, activeLocation, start, end, view])
+    const appliedShifts = applyWeekResult(shiftsRef.current, shiftsRes, { fallbackError: 'Failed to load shifts' })
+    // ROSTER-FIX.7 — a time-off failure used to be swallowed: the list simply
+    // emptied and the coach read that as "no leave booked". It reports now,
+    // and a transport blip keeps the leave rows the same way it keeps shifts.
+    const appliedTimeOff = applyWeekResult(timeOffRef.current, timeOffRes, { fallbackError: 'Failed to load time off' })
+    commitShifts(appliedShifts.shifts)
+    commitTimeOff(appliedTimeOff.shifts)
+    setError(appliedShifts.error || appliedTimeOff.error)
+  }, [profile, activeLocation, start, end, view, commitShifts, commitTimeOff])
 
   useEffect(() => {
     setLoading(true)
@@ -516,9 +541,14 @@ export default function Schedule() {
           </Text>
         )}
 
+        {/* ROSTER-FIX.7 — the stale-week notice is amber, not red: the rows
+            below it are real, just not freshly fetched. A red "failed" bar
+            over a correct roster reads as "none of this is trustworthy". */}
         {error ? (
-          <View className="bg-red-500/10 border border-red-500/30 rounded-xl p-3 mb-3">
-            <Text className="text-red-500 text-sm">{error}</Text>
+          <View className={error === TRANSPORT_ERROR
+            ? 'bg-amber-500/10 border border-amber-500/40 rounded-xl p-3 mb-3'
+            : 'bg-red-500/10 border border-red-500/30 rounded-xl p-3 mb-3'}>
+            <Text className={error === TRANSPORT_ERROR ? 'text-amber-700 text-sm' : 'text-red-500 text-sm'}>{error}</Text>
           </View>
         ) : null}
 
