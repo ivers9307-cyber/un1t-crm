@@ -1,6 +1,6 @@
 // SCHEDULE-DOUBLE-BOOKING.1 — unit tests for the overlap helpers.
 import { describe, it, expect } from 'vitest'
-import { fmtTime, timeRangesOverlap } from './schedule-overlap'
+import { fmtTime, formatTime12h, timeRangesOverlap } from './schedule-overlap'
 
 describe('fmtTime', () => {
   it('trims HH:MM:SS to HH:MM', () => {
@@ -46,5 +46,29 @@ describe('timeRangesOverlap', () => {
   it('returns false for zero-length or overnight ranges (out of scope)', () => {
     expect(timeRangesOverlap('10:00', '10:00', '09:00', '11:00')).toBe(false) // zero-length
     expect(timeRangesOverlap('22:00', '06:00', '23:00', '23:30')).toBe(false) // overnight a
+  })
+})
+
+// ROSTER-FIX.6c — the 12-hour label three schedule screens each had their own
+// copy of. Pinned here because it is now shared: a change to it moves the
+// calendar, the template manager and the swap list at once.
+describe('formatTime12h', () => {
+  it('drops :00 minutes', () => {
+    expect(formatTime12h('09:00:00')).toBe('9am')
+    expect(formatTime12h('17:00')).toBe('5pm')
+  })
+  it('keeps non-zero minutes', () => {
+    expect(formatTime12h('09:30:00')).toBe('9:30am')
+    expect(formatTime12h('18:45')).toBe('6:45pm')
+  })
+  it('midnight is 12am and noon is 12pm', () => {
+    expect(formatTime12h('00:00')).toBe('12am')
+    expect(formatTime12h('12:00')).toBe('12pm')
+    expect(formatTime12h('00:15')).toBe('12:15am')
+  })
+  it('returns empty for a missing time', () => {
+    expect(formatTime12h(null)).toBe('')
+    expect(formatTime12h('')).toBe('')
+    expect(formatTime12h(undefined)).toBe('')
   })
 })

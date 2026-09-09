@@ -7,6 +7,10 @@ import Modal from '@/components/ui/Modal'
 // screens, so no call site can quietly forget to check the response.
 import ScheduleErrorBanner from './schedule/ScheduleErrorBanner'
 import { readJson } from './schedule/useScheduleData'
+// ROSTER-FIX.6c — the 12-hour shift label was a byte-identical local copy in
+// three schedule screens. One definition now, in the lib that already owns
+// schedule time formatting.
+import { formatTime12h as formatTime } from '@/lib/schedule-overlap'
 
 const PRESET_COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#06B6D4', '#F97316']
 // ROSTER-FIX.6b — the swatches are eight empty buttons whose only content is
@@ -25,15 +29,6 @@ const DAY_OPTIONS = [
   { code: 'sat', label: 'Sat' },
   { code: 'sun', label: 'Sun' },
 ]
-
-function formatTime(time) {
-  if (!time) return ''
-  const [h, m] = time.split(':')
-  const hour = parseInt(h)
-  const suffix = hour >= 12 ? 'pm' : 'am'
-  const display = hour > 12 ? hour - 12 : hour === 0 ? 12 : hour
-  return m === '00' ? `${display}${suffix}` : `${display}:${m}${suffix}`
-}
 
 function formatDays(days) {
   if (!days || days.length === 0) return null

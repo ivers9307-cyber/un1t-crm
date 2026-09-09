@@ -27,12 +27,19 @@ import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 import { computeWeeklyCost } from '@/lib/payroll'
 import { indexByDate } from '@/lib/bank-holidays'
 import { MANAGER_ROLES, ADMIN_ROLES } from '@/lib/schemas'
-import { isBlockUnstaffedFuture as libUnstaffed, liveAssignments, getMonthStart, monthStartForWeek, weekStartForMonth, periodsOverlap, periodCovers } from '@/lib/roster'
+// ROSTER-FIX.6c — getMonday / addDays / formatDate were re-implemented here,
+// byte-for-byte, beside the lib copies this file already imported from. One
+// definition now: a change to the local-day rule cannot land on the server
+// and miss the calendar.
+import { addDays, formatDate, getMonday, isBlockUnstaffedFuture as libUnstaffed, liveAssignments, getMonthStart, monthStartForWeek, weekStartForMonth, periodsOverlap, periodCovers } from '@/lib/roster'
 // ROSTER-FIX.4 — the server refuses a publish that would leave two published
 // rosters over the same days. `overlapping_roster` is a code, not copy; the
 // sentence it becomes is shared with the approvals queue so one refusal reads
 // the same wherever the operator meets it.
 import { OVERLAP_ERROR, overlapMessage } from '@/lib/roster-overlap-message'
+// ROSTER-FIX.6c — the 12-hour shift label, previously a local copy here and
+// two more in the manager screens. NOT fmtTime: see the note beside it.
+import { formatTime12h as formatTime } from '@/lib/schedule-overlap'
 import Modal from '@/components/ui/Modal'
 import RosterSummaryPanel from './RosterSummaryPanel'
 import ScheduleErrorBanner from './schedule/ScheduleErrorBanner'
@@ -52,26 +59,6 @@ const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 const TOAST_TTL_MS = 6000
 const canManage = (role) => MANAGER_ROLES.includes(role)
 
-function getMonday(date) {
-  const d = new Date(date)
-  const day = d.getDay()
-  const diff = d.getDate() - day + (day === 0 ? -6 : 1)
-  d.setDate(diff)
-  d.setHours(0, 0, 0, 0)
-  return d
-}
-
-// Local calendar-day formatter. toISOString() would shift to UTC and
-// move Monday-at-local-midnight back to Sunday's date in any tz east
-// of UTC (Ireland BST = +1) — Monday column then keys off Sunday and
-// no blocks match. Mirror src/lib/roster.js#formatDate.
-function formatDate(date) {
-  const y = date.getFullYear()
-  const m = String(date.getMonth() + 1).padStart(2, '0')
-  const d = String(date.getDate()).padStart(2, '0')
-  return `${y}-${m}-${d}`
-}
-
 // Inverse of formatDate — parse a YYYY-MM-DD URL param into a local
 // Date at midnight. Critical for SCHEDULE-PERSIST.1: `new Date('2026-
 // 05-20')` parses as UTC midnight which becomes 01:00 Sunday in BST
@@ -84,12 +71,6 @@ function parseLocalDate(s) {
   return Number.isNaN(dt.getTime()) ? null : dt
 }
 
-function addDays(date, days) {
-  const d = new Date(date)
-  d.setDate(d.getDate() + days)
-  return d
-}
-
 function addMonths(date, months) {
   const d = new Date(date)
   d.setMonth(d.getMonth() + months)
@@ -100,15 +81,6 @@ function getMonthGridRange(monthStart) {
   const start = getMonday(monthStart)
   const end = addDays(start, 41)
   return { start, end }
-}
-
-function formatTime(time) {
-  if (!time) return ''
-  const [h, m] = time.split(':')
-  const hour = parseInt(h)
-  const suffix = hour >= 12 ? 'pm' : 'am'
-  const display = hour > 12 ? hour - 12 : hour === 0 ? 12 : hour
-  return m === '00' ? `${display}${suffix}` : `${display}:${m}${suffix}`
 }
 
 // Roster v2: a block is "unstaffed" when it has zero assignments
