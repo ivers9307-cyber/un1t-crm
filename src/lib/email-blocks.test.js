@@ -2,7 +2,7 @@
 // sanitizeEmailHtml, never on raw input, so every test here feeds it sanitised
 // markup and asserts shape only.
 import { describe, it, expect } from 'vitest'
-import { htmlToBlocks, CAPS } from './email-blocks'
+import { htmlToBlocks, emailBlocks, CAPS } from './email-blocks'
 import { sanitizeEmailHtml } from './email-html'
 
 describe('htmlToBlocks — inline runs', () => {
@@ -600,5 +600,196 @@ describe('htmlToBlocks — degenerate shapes (review finding 5)', () => {
       { type: 'image', blocked: 'https://cdn.test/x.png', alt: 'A' },
       { type: 'para', runs: [{ text: 'after' }] },
     ])
+  })
+})
+
+describe('htmlToBlocks — tables', () => {
+  it('flattens a layout table to its cells in source order', () => {
+    // A 600px marketing wrapper. No <th>, so it is layout, and layout wants to
+    // become a phone column.
+    const { blocks } = htmlToBlocks(
+      '<table><tr><td><h2>Title</h2></td></tr><tr><td><p>Body copy</p></td></tr></table>',
+    )
+    expect(blocks).toEqual([
+      { type: 'heading', level: 2, runs: [{ text: 'Title' }] },
+      { type: 'para', runs: [{ text: 'Body copy' }] },
+    ])
+  })
+
+  it('keeps a table with a <th> as a table', () => {
+    const { blocks } = htmlToBlocks(
+      '<table><tr><th>Item</th><th>Total</th></tr>'
+      + '<tr><td>Membership</td><td>€189.00</td></tr></table>',
+    )
+    expect(blocks).toEqual([{
+      type: 'table',
+      head: [[{ text: 'Item', bold: true }], [{ text: 'Total', bold: true }]],
+      rows: [[[{ text: 'Membership' }], [{ text: '€189.00' }]]],
+    }])
+  })
+
+  it('keeps a table with a <thead> as a table', () => {
+    const { blocks } = htmlToBlocks(
+      '<table><thead><tr><td>A</td></tr></thead><tbody><tr><td>1</td></tr></tbody></table>',
+    )
+    expect(blocks[0].type).toBe('table')
+    expect(blocks[0].head).toEqual([[{ text: 'A' }]])
+    expect(blocks[0].rows).toEqual([[[{ text: '1' }]]])
+  })
+
+  it('flattens a table nested inside a data table', () => {
+    const { blocks } = htmlToBlocks(
+      '<table><tr><th>H</th></tr><tr><td><table><tr><td>deep</td></tr></table></td></tr></table>',
+    )
+    expect(blocks[0].type).toBe('table')
+    expect(blocks[0].rows).toEqual([[[{ text: 'deep' }]]])
+  })
+
+  it('does not let a nested data table\'s <th> make its layout wrapper a data table too', () => {
+    // The signal is scoped to ONE table: a receipt table's <th> is authored
+    // for the receipt, not for the 600px centring wrapper around it. Without
+    // that scoping the wrapper would itself be read as data, and its cell
+    // containing the receipt would flatten to nothing (a table block carries
+    // no run text of its own for firstRuns() to recover) — a worse failure
+    // than the false positive this heuristic exists to avoid.
+    const { blocks } = htmlToBlocks(
+      '<table><tr><td><table><tr><th>Item</th></tr><tr><td>Membership</td></tr></table></td></tr></table>',
+    )
+    expect(blocks).toEqual([{
+      type: 'table', head: [[{ text: 'Item', bold: true }]], rows: [[[{ text: 'Membership' }]]],
+    }])
+  })
+
+  it('does not mistake a blank spacer row for the header once it is dropped', () => {
+    // A leading empty <tr> (a spacer, routine in older email templates) has
+    // no cells at all and is filtered out — the header check must follow
+    // that filter, not the raw row order, or the table below would report
+    // no head even though its real first row plainly has one.
+    const { blocks } = htmlToBlocks(
+      '<table><tr></tr><tr><th>Item</th></tr><tr><td>Membership</td></tr></table>',
+    )
+    expect(blocks[0]).toEqual({
+      type: 'table', head: [[{ text: 'Item', bold: true }]], rows: [[[{ text: 'Membership' }]]],
+    })
+  })
+})
+
+describe('htmlToBlocks — caps', () => {
+  it('stops at the block cap and reports truncated', () => {
+    const html = '<p>x</p>'.repeat(CAPS.blocks + 20)
+    const { blocks, truncated } = htmlToBlocks(html)
+    expect(blocks.length).toBe(CAPS.blocks)
+    expect(truncated).toBe(true)
+  })
+
+  it('stops at the per-message character cap', () => {
+    const html = `<p>${'a'.repeat(300)}</p>`.repeat(200)
+    const { blocks, truncated } = htmlToBlocks(html)
+    expect(truncated).toBe(true)
+    expect(JSON.stringify(blocks).length).toBeLessThan(CAPS.charsPerMessage * 2)
+  })
+
+  it('splits, rather than truncating, one text node longer than charsPerRun', () => {
+    // 🔧 Task file bug: the original assertion here was `truncated: true`.
+    // charsPerRun bounds ONE run (one <Text> node), not the content addText()
+    // is handed — see the CAPS doc block above Sink. A run already at cap
+    // gets a NEW run alongside it, up to runsPerBlock, rather than the
+    // excess being dropped; that is also pinned by the existing "bounds a
+    // merged run at charsPerRun instead of letting it grow unboundedly" and
+    // "renders identically whether a run of text arrives as one node or many
+    // same-styled spans" tests above. This input is 450 characters, well
+    // under runsPerBlock x charsPerRun and under charsPerMessage, so all of
+    // it survives as two runs — nothing is lost, so truncated is false.
+    const { blocks, truncated } = htmlToBlocks(`<p>${'b'.repeat(CAPS.charsPerRun + 50)}</p>`)
+    expect(blocks[0].runs[0].text.length).toBe(CAPS.charsPerRun)
+    expect(blocks[0].runs[1].text.length).toBe(50)
+    expect(truncated).toBe(false)
+  })
+
+  it('reports untruncated for ordinary mail', () => {
+    expect(htmlToBlocks('<p>short</p>').truncated).toBe(false)
+  })
+})
+
+describe('emailBlocks', () => {
+  it('sanitises, walks and reports the blocked count', () => {
+    const result = emailBlocks(
+      '<p onclick="steal()">Hi <script>bad()</script></p>'
+      + '<img src="https://cdn.test/pixel.gif">',
+    )
+    expect(result.failed).toBe(false)
+    expect(result.blocks).toEqual([
+      { type: 'para', runs: [{ text: 'Hi' }] },
+      { type: 'image', blocked: 'https://cdn.test/pixel.gif', alt: '' },
+    ])
+    expect(result.blockedImages).toBe(1)
+    expect(result.quotedBlocks).toBe(null)
+  })
+
+  it('splits the quoted chain out, like emailHtmlDocuments does', () => {
+    const result = emailBlocks(
+      '<p>My answer</p><blockquote type="cite"><p>Their question</p></blockquote>',
+    )
+    expect(result.blocks).toEqual([{ type: 'para', runs: [{ text: 'My answer' }] }])
+    expect(result.quotedBlocks).toEqual([{
+      type: 'quote',
+      blocks: [{ type: 'para', runs: [{ text: 'Their question' }] }],
+    }])
+  })
+
+  it('answers empty for falsy or blank input', () => {
+    for (const input of ['', '   ', null, undefined, 42]) {
+      expect(emailBlocks(input)).toEqual({
+        blocks: null, quotedBlocks: null, blockedImages: 0, truncated: false, failed: false,
+      })
+    }
+  })
+
+  it('returns no blocks for a body that sanitises to nothing', () => {
+    expect(emailBlocks('<script>only()</script>').blocks).toBe(null)
+  })
+
+  it('🔴 no image block ever carries a URL the sanitiser did not park', () => {
+    // THE property the phone's security rests on. Every shape that could smuggle
+    // a live URL into the tree: a real src, a srcset, a pre-set
+    // data-original-src, a non-http scheme, a protocol-relative host, a table
+    // cell background and a CSS background-image.
+    const hostile = [
+      '<img src="https://evil.test/track.gif">',
+      '<img srcset="https://evil.test/a.gif 1x">',
+      '<img data-original-src="javascript:alert(1)">',
+      '<img src="cid:inline-part">',
+      '<img src="data:image/gif;base64,R0lGOD">',
+      '<img src="//evil.test/x.gif">',
+      '<img src="/relative.gif">',
+      '<table><tr><td background="https://evil.test/bg.png">cell</td></tr></table>',
+      '<div style="background-image:url(https://evil.test/bg.png)">styled</div>',
+    ].join('')
+    const { blocks } = emailBlocks(hostile)
+    const urls = []
+    const collect = (list) => {
+      for (const b of list || []) {
+        if (b.type === 'image') urls.push(b.blocked)
+        if (b.type === 'quote') collect(b.blocks)
+      }
+    }
+    collect(blocks)
+    // The real guarantee, and the one that must never be weakened: every URL
+    // that DID reach an image block is the one shape the sanitiser is allowed
+    // to park — a remote http(s) URL. This alone rules out javascript:, cid:,
+    // data:, protocol-relative and relative URLs ever appearing as `blocked`.
+    for (const url of urls) expect(url).toMatch(/^https?:\/\//)
+    // https://evil.test/track.gif is a real remote http URL, so the sanitiser
+    // legitimately parks it and it legitimately appears in `blocked` — a
+    // blanket "blocks never mentions evil.test" assertion would be false by
+    // design, not a security gap. Name the specific hostile shapes instead:
+    // none of them may appear anywhere in the tree, parked or not.
+    const json = JSON.stringify(blocks)
+    expect(json).not.toContain('javascript:alert(1)')
+    expect(json).not.toContain('cid:inline-part')
+    expect(json).not.toContain('data:image/gif')
+    expect(json).not.toContain('//evil.test/x.gif')
+    expect(json).not.toContain('/relative.gif')
+    expect(json).not.toContain('evil.test/bg.png')
   })
 })

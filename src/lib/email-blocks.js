@@ -15,13 +15,14 @@
 // normalised. This module's whole job is SHAPE. Feeding it raw email would
 // hand the phone a stranger's markup and is the one mistake that matters.
 //
-// SERVER ONLY. This module does not itself import email-html.js — it parses
-// with htmlparser2 and runs on email-html.js's OUTPUT (see above) — but
-// the whole point is that no HTML parsing happens on the client, so it gets
-// the same guard as email-html.js: that module's own test
-// (src/lib/email-html.test.js, "no client component anywhere in src/ imports
-// this module") scans every 'use client' file in src/, and this path is in
-// that scan's regex too.
+// SERVER ONLY. htmlToBlocks() itself only shapes ALREADY-sanitised HTML (see
+// above) and never re-parses raw input — but emailBlocks() below composes it
+// with sanitizeEmailHtml() and splitQuotedHtml(), so this module DOES import
+// email-html.js. Either way the whole point is that no HTML parsing happens
+// on the client, so it gets the same guard as email-html.js: that module's
+// own test (src/lib/email-html.test.js, "no client component anywhere in
+// src/ imports this module") scans every 'use client' file in src/, and this
+// module's own specifier is in that scan's regex too.
 //
 // WHAT IT DELIBERATELY DOES NOT PRESERVE: colour, font, alignment, background
 // images, and the geometry of a 600px layout table. A phone column in source
@@ -31,6 +32,7 @@
 
 import { parseDocument, DomUtils } from 'htmlparser2'
 import { stripInvisibleChars } from './mail-entities'
+import { sanitizeEmailHtml, splitQuotedHtml } from './email-html'
 
 /**
  * Ceilings. No single one of these bounds a monster newsletter on its own —
@@ -48,19 +50,22 @@ import { stripInvisibleChars } from './mail-entities'
  *     accumulated when the cap trips is still allowed to finish and push,
  *     rather than being discarded — which is how a long forwarded thread used
  *     to render as an EMPTY BODY, the defect this cap's own handling caused.
- *     A <blockquote>/<ul>/<ol> wrapper gets the same treatment for the same
- *     reason: it closes over content that was already walked (and already
- *     charged against this counter) by the time its own children finish, so
- *     discarding the wrapper at that point would re-create the identical
- *     empty-body failure one level up — a reply chain that quotes each
- *     earlier message in its own nested <blockquote> is ordinary mail, not a
- *     pathological shape. In principle a chain of such wrappers still
+ *     A <blockquote>/<ul>/<ol>/<table> wrapper gets the same treatment for
+ *     the same reason: it closes over content that was already walked (and
+ *     already charged against this counter) by the time its own children
+ *     finish, so discarding the wrapper at that point would re-create the
+ *     identical empty-body failure one level up — a reply chain that quotes
+ *     each earlier message in its own nested <blockquote> is ordinary mail,
+ *     not a pathological shape. In principle a chain of such wrappers still
  *     unwinding when the cap trips could each push one more block, so
  *     `blocks + maxDepth` is the bound to RELY on. In practice nothing has
  *     been constructed that beats `blocks + 1` (`+2` for a <blockquote>
- *     directly wrapping a <ul>), because the flatten step below collapses a
- *     nested-quote chain into its outermost wrapper — so only that one
- *     survives as a node. Rely on the loose bound; expect the tight one.
+ *     directly wrapping a <ul>) for a blockquote/list chain, because the
+ *     flatten step below collapses a nested-quote chain into its outermost
+ *     wrapper — so only that one survives as a node. A <table> has no
+ *     equivalent flatten step, so a table sitting inside a quote (or a quote
+ *     inside a table cell) is untested against that tighter bound; rely on
+ *     `blocks + maxDepth` there instead.
  *     Either way `charsPerMessage` is unaffected and stays a HARD ceiling,
  *     which is the bound that actually protects a cellular connection.
  *   - `runsPerBlock` x `charsPerRun` is the real ceiling on ONE block's text.
@@ -517,6 +522,153 @@ function handleBlockquote(node, sink, style, depth) {
   if (flattened.length) sink.pushAlways({ type: 'quote', blocks: flattened })
 }
 
+/**
+ * Is this table DATA, or is it layout?
+ *
+ * Email is built out of tables, and almost all of them are layout: a 600px
+ * wrapper, a row per band, a cell per column. Flattening those to a phone
+ * column is exactly right. But a receipt's line items are a real table, and
+ * flattening THOSE reads as a jumble of numbers.
+ *
+ * The signal is `<th>` or `<thead>` — something a human authored
+ * deliberately. That is a near-zero-false-positive test, which matters far
+ * more here than catching every data table: mistaking a layout wrapper for
+ * data would put a horizontally scrolling grid around an entire newsletter.
+ *
+ * Stops at a nested `<table>` boundary, same as rowsOf() below: a receipt
+ * table's own <th> is authored for THAT table, not for whatever 600px
+ * centring wrapper happens to contain it. Without this boundary a layout
+ * wrapper holding a data table in one of its cells would itself be
+ * misclassified as data — and lose that cell's content entirely, since
+ * firstRuns() (below) has no case for a `table` block, only for runs, a
+ * `link` block and a `quote` block. That is a worse failure than the false
+ * positive this heuristic exists to avoid.
+ */
+function isDataTable(node) {
+  const search = (children) => {
+    for (const child of children || []) {
+      if (child.type !== 'tag') continue
+      if (child.name === 'table') continue
+      if (child.name === 'th' || child.name === 'thead') return true
+      if (search(child.children)) return true
+    }
+    return false
+  }
+  return search(node.children)
+}
+
+/** Every <tr> under a table, in document order, skipping nested tables —
+ * a nested table's own rows belong to IT, and are reached when walk()
+ * dispatches to its own handleTable call, not folded into this table's. */
+function rowsOf(node) {
+  const rows = []
+  const visit = (children) => {
+    for (const child of children || []) {
+      if (child.type !== 'tag') continue
+      if (child.name === 'table') continue
+      if (child.name === 'tr') rows.push(child)
+      else visit(child.children)
+    }
+  }
+  visit(node.children)
+  return rows
+}
+
+/**
+ * Is `row` the table's header — its own cells are <th>, or it sits inside a
+ * <thead>? A <thead> row is routinely written with plain <td>s in real mail
+ * (see the "keeps a table with a <thead>" test), so <th> alone is not a
+ * complete test.
+ *
+ * Walks the parent chain only up to the enclosing <table>, the same
+ * nested-table boundary isDataTable() and rowsOf() respect above: a <thead>
+ * belonging to a table nested inside THIS row's own cell must never make
+ * this outer row look like a header.
+ */
+function isHeaderRow(row) {
+  if (DomUtils.findOne(el => el.type === 'tag' && el.name === 'th', row.children || [], false)) {
+    return true
+  }
+  for (let p = row.parent; p && p.type === 'tag' && p.name !== 'table'; p = p.parent) {
+    if (p.name === 'thead') return true
+  }
+  return false
+}
+
+/**
+ * One row's cells as run arrays.
+ *
+ * Shares sink.budget for every nested Sink it creates — see the Sink class
+ * doc — rather than each cell's walk getting its own isolated counters,
+ * which is the same failure class an unbudgeted <blockquote>/<ul> already
+ * had: a data table with hundreds of rows would let every cell's content
+ * escape the message-wide cap entirely.
+ */
+function cellsOf(row, style, sink, depth) {
+  const cells = []
+  for (const cell of row.children || []) {
+    if (cell.type !== 'tag' || (cell.name !== 'td' && cell.name !== 'th')) continue
+    const inner = new Sink(sink.budget)
+    // depth + 1, not the default 0 — same reason as handleList's own
+    // comment: a table nested inside a table cell nested inside a table...
+    // still grows the real JS call stack even though each cell flattens
+    // into its own fresh Sink.
+    walk(cell.children || [], inner, styleFor(cell.name, style), depth + 1)
+    if (inner.truncated) sink.truncated = true
+    // Try the open runs first — a plain-text or styled-run cell leaves its
+    // content right there in inner.runs, same reasoning as handleList's own
+    // takeRuns()-first comment.
+    const runs = inner.takeRuns()
+    if (runs.length) { cells.push(runs); continue }
+    // A cell holding block elements (a nested table that flattened, a div)
+    // contributes its text through those blocks' runs; firstRuns() takes
+    // the first line so the cell is never empty when there was something in
+    // it — see firstRuns()'s own doc for why a `link` block is special-cased.
+    inner.flush()
+    cells.push(firstRuns(inner.blocks))
+  }
+  return cells
+}
+
+function handleTable(node, sink, style, depth) {
+  sink.flush()
+  if (!isDataTable(node)) {
+    // Layout. Walk straight through it, into the SAME sink — the cells' own
+    // blocks become the phone's column, in source order, exactly as if the
+    // <table>/<tr>/<td> wrapper were not there. depth + 1 for the reason
+    // every other recursive walk() call in this file threads it through: a
+    // table nested inside a table inside a table still grows the real JS
+    // call stack, even though nothing here builds a nested Sink for it.
+    walk(node.children || [], sink, style, depth + 1)
+    sink.flush()
+    return
+  }
+  // Pair each row with its own cells before filtering empty ones out — a
+  // blank spacer <tr> (routine in older email templates) has no <td>/<th>
+  // children at all and must not shift which row gets checked for
+  // headedness once it is dropped, or a table whose real first row IS the
+  // header would silently report none.
+  const parsedRows = rowsOf(node)
+    .map(row => ({ row, cells: cellsOf(row, style, sink, depth) }))
+    .filter(({ cells }) => cells.length)
+  if (parsedRows.length) {
+    const headed = isHeaderRow(parsedRows[0].row)
+    const cellRows = parsedRows.map(({ cells }) => cells)
+    const block = headed
+      ? { type: 'table', head: cellRows[0], rows: cellRows.slice(1) }
+      : { type: 'table', head: null, rows: cellRows }
+    // pushAlways(), not push(): every surviving row's cells were already
+    // walked into their own nested Sinks sharing sink.budget by the time we
+    // get here — the same shape as handleList's items and
+    // handleBlockquote's content, see pushAlways()'s own doc. Gating this on
+    // full() would mean a receipt table that happens to exhaust the message
+    // budget while walking its last couple of rows renders as NOTHING at
+    // all — the identical empty-body failure pushAlways() exists to prevent
+    // for lists and quotes, one level up.
+    sink.pushAlways(block)
+  }
+}
+
 // The plain BLOCK_LEVEL shape — <p>, <div>, a table cell, and everything
 // else in the BLOCK_LEVEL set with no bespoke handler above: close whatever
 // run was open, recurse into the children, close whatever THAT opened. Two
@@ -534,9 +686,10 @@ function handleBlockLevel(node, sink, style, depth) {
 // One handler per tag name. Seeded from BLOCK_LEVEL so every plain block tag
 // (p, div, table cells, and so on) gets the generic handler without hand
 // -listing them again here, then the specific handlers overwrite their own
-// entries — pre/hr/img/ul/ol/blockquote/h1-h6 are all themselves members of
-// BLOCK_LEVEL, so without the overwrite they would get the generic handler
-// too. `br` is added separately: it is deliberately NOT in BLOCK_LEVEL
+// entries — pre/hr/img/ul/ol/blockquote/table/h1-h6 are all themselves
+// members of BLOCK_LEVEL, so without the overwrite they would get the
+// generic handler too. `br` is added separately: it is deliberately NOT in
+// BLOCK_LEVEL
 // (see that Set's own comment) since it breaks the line without ending the
 // block. Any tag not in this map — a <span>, an unknown element, or a
 // genuinely inline one like <b>/<i>/<a> — falls through to walk()'s own
@@ -558,6 +711,7 @@ HANDLERS.img = handleImage
 HANDLERS.ul = handleList
 HANDLERS.ol = handleList
 HANDLERS.blockquote = handleBlockquote
+HANDLERS.table = handleTable
 HANDLERS.br = handleBreak
 
 // depth counts nesting levels of walk() itself, not markup elements — the
@@ -613,13 +767,66 @@ export function htmlToBlocks(html) {
   if (!source.trim()) return { blocks: [], truncated: false }
   const dom = parseDocument(source)
   // One mutable budget for the whole message. Every Sink created for this
-  // call — this one and every nested one a <blockquote> or <ul>/<ol> makes
-  // for its own children — shares it, so nothing walked anywhere in the tree
-  // can hide from the message-wide caps. See the Sink class doc and the
-  // CAPS block above.
+  // call — this one and every nested one a <blockquote>, <ul>/<ol> or a data
+  // <table>'s cells make for their own content — shares it, so nothing
+  // walked anywhere in the tree can hide from the message-wide caps. See the
+  // Sink class doc and the CAPS block above.
   const budget = { chars: 0, blocks: 0 }
   const sink = new Sink(budget)
   walk(dom.children || [], sink, {})
   sink.flush()
   return { blocks: sink.blocks, truncated: sink.truncated }
+}
+
+/**
+ * The whole render decision for one message's HTML, as the route reports it.
+ *
+ * Mirrors emailHtmlDocuments() deliberately — same inputs, same failure
+ * posture, same quote split — so the two body shapes the route can serve
+ * cannot drift in what they consider a renderable message.
+ *
+ * @param {string} raw  the stored html_body, hostile input
+ * @returns {{
+ *   blocks: object[]|null, quotedBlocks: object[]|null,
+ *   blockedImages: number, truncated: boolean, failed: boolean,
+ * }}
+ *   `blocks` null → the caller falls back to text_body.
+ *   `failed` true → sanitising or parsing threw. The caller shows the text
+ *   with a visible notice. It NEVER falls back to the raw input.
+ */
+export function emailBlocks(raw) {
+  const empty = {
+    blocks: null, quotedBlocks: null, blockedImages: 0, truncated: false, failed: false,
+  }
+  if (!raw || typeof raw !== 'string' || !raw.trim()) return empty
+  try {
+    const { html, blockedImages } = sanitizeEmailHtml(raw)
+    // A body that sanitises down to nothing (an image-only tracker, a bare
+    // <script>) is not worth an empty tree — fall through to the text, same
+    // as emailHtmlDocument()'s own early return.
+    if (!html.trim()) return empty
+    const { body, quoted } = splitQuotedHtml(html)
+    const main = htmlToBlocks(body)
+    // Skip the parse entirely when there is no quote chain — splitQuotedHtml
+    // already did the cheap marker pre-check, so most mail never pays for a
+    // second DOM build here, the same optimisation emailHtmlDocuments() makes
+    // for its own quotedDocument.
+    const chain = quoted ? htmlToBlocks(quoted) : { blocks: [], truncated: false }
+    // Both empty is a real "nothing renderable" case distinct from html.trim()
+    // above: e.g. a body that sanitised to visible markup with no actual
+    // content once walked (an empty table, a bare <div></div> chain).
+    if (main.blocks.length === 0 && chain.blocks.length === 0) return empty
+    return {
+      blocks: main.blocks.length ? main.blocks : null,
+      quotedBlocks: chain.blocks.length ? chain.blocks : null,
+      blockedImages,
+      truncated: main.truncated || chain.truncated,
+      failed: false,
+    }
+  } catch {
+    // Sanitising or parsing threw. NEVER fall back to raw — the caller shows
+    // the plain text with a visible notice instead, same posture as
+    // emailHtmlDocument()'s own catch.
+    return { ...empty, failed: true }
+  }
 }
