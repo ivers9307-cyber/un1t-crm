@@ -1,7 +1,8 @@
 // Shared report generation logic — used by both manual generate and cron scheduler
 import { createServerClient } from '@/lib/supabase'
-import { computeWeeklyCost, implicitHourlyRate, mondayOf } from '@/lib/payroll'
+import { computeWeeklyCost, implicitHourlyRate, mondayOf, shiftHours } from '@/lib/payroll'
 import { isLiveAssignment, formatDate } from '@/lib/roster'
+import { logWarn } from '@/lib/log'
 
 // RETIRE-SHIFTS-MIRROR.1 — reports now read the Roster v2 source of truth
 // (shift_assignments + shift_blocks) instead of the legacy public.shifts
@@ -20,12 +21,38 @@ const SHIFT_ROW_SELECT = `
   shift_blocks!inner ( block_date, location_id, shift_templates ( name, start_time, end_time ) )
 `
 
+// ROSTER-FIX.5 — a report is about ONE location, so its staff list has to be
+// too. utilisation and staff_cost used to select every active profile in the
+// estate: the utilisation average was diluted by staff who can never appear on
+// that location's roster (they show as 0% used), and the cost report
+// enumerated the whole company's payroll under one gym's heading. Roles are
+// per-location on profile_locations (mig 051), which is the join that says
+// who works where.
+export async function fetchLocationProfileIds(db, locationId) {
+  const { data, error } = await db
+    .from('profile_locations')
+    .select('profile_id')
+    .eq('location_id', locationId)
+  // Returned, not thrown: generateReport's contract is { success, error } and
+  // POST /api/schedule/reports does not wrap the call, so a throw here would
+  // surface as a bare 500 instead of a readable message. Failing closed IS
+  // right for this one — an unreadable staff list would silently produce a
+  // report scoped to nobody, which reads as "no staff worked here".
+  if (error) return { profileIds: [], error: `Failed to load location staff: ${error.message}` }
+  return { profileIds: [...new Set((data || []).map(r => r.profile_id).filter(Boolean))], error: null }
+}
+
 export async function fetchScheduledShiftRows(db, { locationId, periodStart, periodEnd }) {
-  const { data: rows } = await db.from('shift_assignments')
+  const { data: rows, error } = await db.from('shift_assignments')
     .select(SHIFT_ROW_SELECT)
     .eq('shift_blocks.location_id', locationId)
     .gte('shift_blocks.block_date', periodStart)
     .lte('shift_blocks.block_date', periodEnd)
+  // ROSTER-FIX.5 — the error used to be discarded, so a failed query and a
+  // genuinely empty period both produced []: the report was saved reading
+  // "0 hours" with nothing anywhere saying the query had failed. The shape
+  // stays an array (four callers depend on it) but the failure is now loud.
+  if (error) logWarn('report-generator', 'shift rows query failed', { locationId, periodStart, periodEnd, err: error })
   return (rows || []).filter(isLiveAssignment).map((r) => ({
     shift_date: r.shift_blocks?.block_date,
     profile_id: r.profile_id,
@@ -75,13 +102,13 @@ export async function generateReport({ report_type, period_start, period_end, lo
           staffHours[profileId] = { name, role: shift.profiles?.role, employment_type: shift.profiles?.employment_type, days: {}, total: 0 }
         }
 
-        const start = shift.shift_templates?.start_time
-        const end = shift.shift_templates?.end_time
-        if (start && end) {
-          const [sh, sm] = start.split(':').map(Number)
-          const [eh, em] = end.split(':').map(Number)
-          let hours = (eh + em / 60) - (sh + sm / 60)
-          if (hours < 0) hours += 24
+        // ROSTER-FIX.5 — shiftHours() honours start_time_override /
+        // end_time_override; the inline template math did not, so a shift a
+        // manager had shortened or extended was paid at its TEMPLATE length
+        // and this report disagreed with staff_cost (which already used it)
+        // for the very same shifts.
+        const hours = shiftHours(shift)
+        if (hours > 0) {
           staffHours[profileId].days[shift.shift_date] = (staffHours[profileId].days[shift.shift_date] || 0) + hours
           staffHours[profileId].total += hours
           totalHours += hours
@@ -100,12 +127,16 @@ export async function generateReport({ report_type, period_start, period_end, lo
       // Profiles include overtime_rate so OT hours can be costed at the
       // explicit rate when present. Shifts include start/end overrides
       // so we honour the same hours the schedule UI shows.
-      const [{ data: profiles }, shifts] = await Promise.all([
+      const { profileIds, error: scopeError } = await fetchLocationProfileIds(db, locId)
+      if (scopeError) return { success: false, error: scopeError }
+      const [{ data: profiles, error: profilesError }, shifts] = await Promise.all([
         db.from('profiles')
           .select('id, full_name, role, employment_type, annual_salary, hourly_rate, contracted_hours_per_week, overtime_rate')
-          .eq('active', true),
+          .eq('active', true)
+          .in('id', profileIds),
         fetchScheduledShiftRows(db, { locationId: locId, periodStart: period_start, periodEnd: period_end }),
       ])
+      if (profilesError) return { success: false, error: profilesError.message }
 
       const profileMap = {}
       for (const p of (profiles || [])) profileMap[p.id] = p
@@ -278,12 +309,16 @@ export async function generateReport({ report_type, period_start, period_end, lo
     case 'utilisation': {
       reportName = 'Staff Utilisation'
       // profiles + shifts are independent — fetch in parallel.
-      const [{ data: profiles }, shifts] = await Promise.all([
+      const { profileIds, error: scopeError } = await fetchLocationProfileIds(db, locId)
+      if (scopeError) return { success: false, error: scopeError }
+      const [{ data: profiles, error: profilesError }, shifts] = await Promise.all([
         db.from('profiles')
           .select('id, full_name, role, employment_type, contracted_hours_per_week')
-          .eq('active', true),
+          .eq('active', true)
+          .in('id', profileIds),
         fetchScheduledShiftRows(db, { locationId: locId, periodStart: period_start, periodEnd: period_end }),
       ])
+      if (profilesError) return { success: false, error: profilesError.message }
 
       const periodStartD = new Date(period_start + 'T00:00:00')
       const periodEndD = new Date(period_end + 'T00:00:00')
@@ -297,15 +332,8 @@ export async function generateReport({ report_type, period_start, period_end, lo
 
       for (const shift of (shifts || [])) {
         if (!staffUtil[shift.profile_id]) continue
-        const start = shift.shift_templates?.start_time
-        const end = shift.shift_templates?.end_time
-        if (start && end) {
-          const [sh, sm] = start.split(':').map(Number)
-          const [eh, em] = end.split(':').map(Number)
-          let hours = (eh + em / 60) - (sh + sm / 60)
-          if (hours < 0) hours += 24
-          staffUtil[shift.profile_id].actual_hours += hours
-        }
+        // ROSTER-FIX.5 — override-aware, same as staff_hours and staff_cost.
+        staffUtil[shift.profile_id].actual_hours += shiftHours(shift)
       }
 
       const utilData = Object.values(staffUtil)

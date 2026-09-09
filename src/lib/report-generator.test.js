@@ -1,6 +1,11 @@
 // RETIRE-SHIFTS-MIRROR.1 — tests for the new-model shift fetcher that the
 // report generators use in place of the legacy public.shifts mirror.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+
+vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
+vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logInfo: vi.fn(), logError: vi.fn() }))
+
+import { createServerClient } from '@/lib/supabase'
 import {
   fetchScheduledShiftRows,
   humanizeReportKey,
@@ -8,6 +13,7 @@ import {
   buildReportEmailHtml,
   calculateNextRun,
   calculatePeriodForSchedule,
+  generateReport,
 } from './report-generator'
 
 // Minimal thenable mock of the supabase query builder: every filter method
@@ -275,5 +281,182 @@ describe('calculatePeriodForSchedule', () => {
     expect(calculatePeriodForSchedule('quarterly')).toEqual({
       period_start: '2026-04-29', period_end: '2026-05-05',
     })
+  })
+})
+
+// ─── ROSTER-FIX.5 — generateReport: adjusted hours + location scope ──────────
+//
+// Two defects, both of which quietly overstate a report:
+//   • staff_hours and utilisation re-derived duration from the TEMPLATE's
+//     start/end and ignored start_time_override / end_time_override, so a
+//     shift a manager had shortened or extended was reported at its
+//     template length. staff_cost already went through shiftHours() and so
+//     disagreed with staff_hours for the same shifts.
+//   • utilisation and staff_cost listed EVERY active profile in the estate,
+//     not the ones who work at the report's location — so a location's
+//     utilisation average was diluted by staff who could never appear on its
+//     roster, and its cost report enumerated the whole company's payroll.
+
+function makeReportDb(tables) {
+  const captured = {}
+  const from = vi.fn((table) => {
+    const b = {
+      select: () => b,
+      eq: () => b,
+      gte: () => b,
+      lte: () => b,
+      order: () => b,
+      in: (col, vals) => { captured[`${table}.in`] = { col, vals }; return b },
+      insert: (rec) => { captured.inserted = rec; return b },
+      single: () => Promise.resolve({ data: { id: 'gen-1', ...captured.inserted }, error: null }),
+      then: (ok, err) => Promise.resolve({ data: tables[table] ?? [], error: null }).then(ok, err),
+    }
+    return b
+  })
+  return { db: { from }, captured }
+}
+
+// Two coaches: one at the report's location, one who is not.
+const PL_ROWS = [{ profile_id: 'p-here' }]
+const PROFILES = [
+  { id: 'p-here', full_name: 'Coach Here', role: 'staff', employment_type: 'fte', contracted_hours_per_week: 10, annual_salary: 26000, hourly_rate: null, overtime_rate: null },
+  { id: 'p-away', full_name: 'Coach Away', role: 'staff', employment_type: 'fte', contracted_hours_per_week: 10, annual_salary: 26000, hourly_rate: null, overtime_rate: null },
+]
+
+// A 09:00-12:00 template that a manager cut to 09:00-10:00 on the day.
+function assignmentRow(profileId, { startOverride = null, endOverride = null, date = '2026-05-04' } = {}) {
+  return {
+    profile_id: profileId,
+    start_time_override: startOverride,
+    end_time_override: endOverride,
+    status: 'scheduled',
+    profiles: { full_name: profileId, role: 'staff', employment_type: 'fte' },
+    shift_blocks: {
+      block_date: date,
+      location_id: 'loc1',
+      shift_templates: { name: 'AM', start_time: '09:00:00', end_time: '12:00:00' },
+    },
+  }
+}
+
+const PERIOD = { period_start: '2026-05-04', period_end: '2026-05-10', location_id: 'loc1' }
+
+describe('generateReport — staff_hours honours adjusted hours', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+
+  it('reports the override window, not the template window', async () => {
+    const { db, captured } = makeReportDb({
+      shift_assignments: [assignmentRow('p-here', { startOverride: '09:00:00', endOverride: '10:00:00' })],
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await generateReport({ report_type: 'staff_hours', ...PERIOD })
+    expect(res.success).toBe(true)
+    expect(captured.inserted.summary.total_hours).toBe(1)
+    expect(captured.inserted.report_data.staff[0].total).toBe(1)
+  })
+
+  it('falls back to the template when there is no override', async () => {
+    const { db, captured } = makeReportDb({ shift_assignments: [assignmentRow('p-here')] })
+    createServerClient.mockReturnValue(db)
+
+    await generateReport({ report_type: 'staff_hours', ...PERIOD })
+    expect(captured.inserted.summary.total_hours).toBe(3)
+  })
+
+  it('a half-open override still resolves — end override, template start', async () => {
+    const { db, captured } = makeReportDb({
+      shift_assignments: [assignmentRow('p-here', { endOverride: '13:30:00' })],
+    })
+    createServerClient.mockReturnValue(db)
+
+    await generateReport({ report_type: 'staff_hours', ...PERIOD })
+    expect(captured.inserted.summary.total_hours).toBe(4.5)
+  })
+})
+
+describe('generateReport — utilisation', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+
+  it('counts the override hours', async () => {
+    const { db, captured } = makeReportDb({
+      profile_locations: PL_ROWS,
+      profiles: [PROFILES[0]],
+      shift_assignments: [assignmentRow('p-here', { startOverride: '09:00:00', endOverride: '10:00:00' })],
+    })
+    createServerClient.mockReturnValue(db)
+
+    await generateReport({ report_type: 'utilisation', ...PERIOD })
+    expect(captured.inserted.report_data.staff[0].actual_hours).toBe(1)
+  })
+
+  it('restricts profiles to the location via profile_locations', async () => {
+    const { db, captured } = makeReportDb({
+      profile_locations: PL_ROWS,
+      profiles: [PROFILES[0]],
+      shift_assignments: [assignmentRow('p-here')],
+    })
+    createServerClient.mockReturnValue(db)
+
+    await generateReport({ report_type: 'utilisation', ...PERIOD })
+    expect(db.from).toHaveBeenCalledWith('profile_locations')
+    expect(captured['profiles.in']).toEqual({ col: 'id', vals: ['p-here'] })
+    // Only the location's staff are in the denominator of the average.
+    expect(captured.inserted.report_data.staff.map(s => s.name)).toEqual(['Coach Here'])
+  })
+
+  it('no staff at the location → an empty report, not the whole estate', async () => {
+    const { db, captured } = makeReportDb({
+      profile_locations: [],
+      profiles: [],
+      shift_assignments: [],
+    })
+    createServerClient.mockReturnValue(db)
+
+    await generateReport({ report_type: 'utilisation', ...PERIOD })
+    expect(captured['profiles.in']).toEqual({ col: 'id', vals: [] })
+    expect(captured.inserted.summary.staff_count).toBe(0)
+  })
+})
+
+describe('generateReport — staff_cost', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+
+  it('restricts profiles to the location via profile_locations', async () => {
+    const { db, captured } = makeReportDb({
+      profile_locations: PL_ROWS,
+      profiles: [PROFILES[0]],
+      shift_assignments: [assignmentRow('p-here'), assignmentRow('p-away')],
+    })
+    createServerClient.mockReturnValue(db)
+
+    await generateReport({ report_type: 'staff_cost', ...PERIOD })
+    expect(captured['profiles.in']).toEqual({ col: 'id', vals: ['p-here'] })
+    // A shift belonging to a profile outside the location is not costed —
+    // the generator already skips shifts with no matching profile.
+    expect(captured.inserted.report_data.staff.map(s => s.name)).toEqual(['Coach Here'])
+  })
+})
+
+describe('generateReport — the staff-list query failing is not "no staff"', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+
+  it('surfaces the error instead of saving an empty report', async () => {
+    const from = vi.fn((table) => {
+      const b = {
+        select: () => b, eq: () => b, gte: () => b, lte: () => b, in: () => b,
+        insert: () => b, single: () => Promise.resolve({ data: { id: 'x' }, error: null }),
+        then: (ok, err) => Promise.resolve(
+          table === 'profile_locations' ? { data: null, error: { message: 'boom' } } : { data: [] }
+        ).then(ok, err),
+      }
+      return b
+    })
+    createServerClient.mockReturnValue({ from })
+
+    const res = await generateReport({ report_type: 'utilisation', ...PERIOD })
+    expect(res).toMatchObject({ success: false })
+    expect(res.error).toMatch(/boom/)
+    expect(from).not.toHaveBeenCalledWith('generated_reports')
   })
 })
