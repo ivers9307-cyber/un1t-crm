@@ -45,12 +45,16 @@ const CreateStaffSchema = z.object({
 //   - head_coach/staff: slim public roster (no salary, etc.)
 // Read logic lives in src/lib/staff.js (shared with GET /api/staff/[id]
 // and consumed on mobile via the SDK).
-export async function GET() {
+export async function GET(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
+  // ROSTER-FIX.2 — `?fields=picker` returns the pay-free name/avatar shape
+  // for every role, so a coach dropdown never carries HR columns.
+  const fields = new URL(request.url).searchParams.get('fields') === 'picker' ? 'picker' : null
+
   const db = createServerClient()
-  const result = await listStaffForUser({ db, user })
+  const result = await listStaffForUser({ db, user, fields })
   if (!result.ok) return NextResponse.json({ success: false, error: result.error }, { status: 400 })
   return NextResponse.json({ success: true, data: result.data })
 }

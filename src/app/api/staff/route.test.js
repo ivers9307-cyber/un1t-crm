@@ -25,7 +25,7 @@ vi.mock('@/lib/staff-write', () => ({
   ),
 }))
 
-import { POST } from './route.js'
+import { POST, GET } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 
@@ -191,5 +191,29 @@ describe('POST /api/staff — unchecked write regressions', () => {
 
     expect(res.status).toBe(500)
     expect((await res.json()).error).toMatch(/deadlock detected/)
+  })
+})
+
+// ROSTER-FIX.2 — the roster coach picker asks for the pay-free shape; the
+// route must forward that choice rather than falling back to the admin
+// select. The shape itself is pinned in src/lib/staff.test.js.
+describe('GET /api/staff — ?fields=picker', () => {
+  it('forwards fields=picker to the read service for a master caller', async () => {
+    const { listStaffForUser } = await import('@/lib/staff')
+    listStaffForUser.mockResolvedValue({ ok: true, data: [] })
+    getCurrentUser.mockResolvedValue({ id: 'u', role: 'master', locations: [{ id: LOC }] })
+    createServerClient.mockReturnValue({})
+    const res = await GET({ url: 'http://x/api/staff?fields=picker', headers: { get: () => '' } })
+    expect(res.status).toBe(200)
+    expect(listStaffForUser).toHaveBeenCalledWith(expect.objectContaining({ fields: 'picker' }))
+  })
+
+  it('passes fields=null for a plain list', async () => {
+    const { listStaffForUser } = await import('@/lib/staff')
+    listStaffForUser.mockResolvedValue({ ok: true, data: [] })
+    getCurrentUser.mockResolvedValue({ id: 'u', role: 'master', locations: [{ id: LOC }] })
+    createServerClient.mockReturnValue({})
+    await GET({ url: 'http://x/api/staff', headers: { get: () => '' } })
+    expect(listStaffForUser).toHaveBeenCalledWith(expect.objectContaining({ fields: null }))
   })
 })

@@ -11,13 +11,23 @@ import { mergeTemplates } from '@shared/permissions'
 export const STAFF_PUBLIC_FIELDS =
   'id, full_name, email, role, avatar_url, active, employment_type, contracted_hours_per_week'
 
-function selectClause(isAdmin) {
+// ROSTER-FIX.2 — the roster coach picker only ever renders a name, an
+// avatar and the active flag, but it fetched the same list an HR screen
+// does, so an admin caller's browser received `*` — hourly_rate,
+// annual_salary and the rest — to populate a dropdown. `?fields=picker`
+// pins this shape for EVERY role, master included.
+export const STAFF_PICKER_FIELDS = 'id, full_name, active, role, avatar_url'
+
+function selectClause(isAdmin, fields) {
+  if (fields === 'picker') {
+    return `${STAFF_PICKER_FIELDS}, profile_locations(location_id, role, locations(id, name, slug))`
+  }
   return isAdmin
     ? '*, profile_locations(*, locations(*))'
     : `${STAFF_PUBLIC_FIELDS}, profile_locations(location_id, role, locations(id, name, slug))`
 }
 
-export async function listStaffForUser({ db, user }) {
+export async function listStaffForUser({ db, user, fields }) {
   const userLocationIds = getUserLocationIds(user)
   if (userLocationIds.length === 0) return { ok: true, data: [] }
 
@@ -33,7 +43,7 @@ export async function listStaffForUser({ db, user }) {
   const isAdmin = ADMIN_ROLES.includes(user.role)
   const { data, error } = await db
     .from('profiles')
-    .select(selectClause(isAdmin))
+    .select(selectClause(isAdmin, fields))
     .in('id', profileIds)
     .order('full_name', { ascending: true })
   if (error) return { ok: false, error: error.message }
@@ -55,7 +65,7 @@ export async function getStaffForUser({ db, user, id }) {
   const isAdmin = ADMIN_ROLES.includes(user.role)
   const { data, error } = await db
     .from('profiles')
-    .select(selectClause(isAdmin))
+    .select(selectClause(isAdmin, null))
     .eq('id', id)
     .single()
   // The cross-tenant guard above already 404s a missing / out-of-scope

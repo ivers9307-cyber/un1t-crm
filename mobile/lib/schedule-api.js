@@ -159,6 +159,8 @@ export function respondToTimeOff(id, status, reviewNote, locationId) {
 }
 
 // Assignable staff at the active location (id + full_name + active + locations).
+// ROSTER-FIX.2 — `fields=picker` pins the pay-free shape; the plain
+// /api/staff list hands an admin caller every HR column to build a dropdown.
 export function getLocationStaff({ locationId }) {
-  return api('/api/staff', { locationId })
+  return api('/api/staff?fields=picker', { locationId })
 }

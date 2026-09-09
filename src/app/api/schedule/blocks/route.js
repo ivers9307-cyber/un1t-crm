@@ -40,6 +40,14 @@ export async function GET(request) {
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
 
+  // ROSTER-FIX.2 — this feed is the manager's ManageMode view: every block
+  // at the location, its capacity, and every coach on it (name + email).
+  // mobile/lib/schedule-api.js has documented it as MANAGER_ROLES-gated
+  // since it was written; the gate itself was never here.
+  if (!MANAGER_ROLES.includes(user.role)) {
+    return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
+  }
+
   const startDate = searchParams.get('start_date')
   const endDate = searchParams.get('end_date')
   const db = createServerClient()
