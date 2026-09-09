@@ -14,7 +14,7 @@
 
 | # | Decision | Default taken in this plan | Affects |
 |---|---|---|---|
-| D1 | Should coaches see draft (unpublished) shifts on mobile at all? | **Yes, with a Draft badge**, matching web `MonthRoster`. The feed derives `published` truthfully; the badge already exists. Hiding drafts entirely is a one-line filter later. | PR 1 |
+| D1 | Should coaches see draft (unpublished) shifts at all? | **No — Richard's call (2026-09-09): coaches see published shifts only.** Non-manager callers of `GET /api/schedule/shifts` get published rows only; the personal Today dashboard (web + mobile, `fetchPersonalDashboardData`) returns published rows only for everyone (a manager who also coaches sees their own drafts on the Schedule calendar, not on Today); a coach cannot open a swap on an unpublished shift. Managers keep drafts in the calendar, ManageMode and the manager view of the shifts feed. | PR 1, PR 2 |
 | D2 | Can a coach delete their own assignment from a published roster? | **No.** Self-delete becomes a swap "drop" request (existing flow). Managers keep DELETE. | PR 3 |
 | D3 | Can a coach adjust their own shift times? | **Yes, but** every self-adjust is change-logged and pushes the location's managers. Payroll still reads the override. (Alternative: make it a request. Deferred.) | PR 3 |
 | D4 | `approved_drop` swap: tombstone (`status='cancelled'`) or delete the assignment? | **Delete** the assignment and write a `roster_change_log` row. A tombstone blocks re-adding the coach (unique key) and every reader had to learn to ignore it. | PR 1 |
@@ -211,24 +211,113 @@ In `toApiShiftRow`, replace `published: true,` with:
     published: b.rosters?.status === 'published',
 ```
 
-In `fetchApiShiftRows`, change the filter line to:
+In `fetchApiShiftRows`, add a `publishedOnly = false` option to the destructured opts and change the filter line to:
 ```js
   const rows = (data || [])
     .filter((a) => a.shift_blocks && isLiveAssignment(a))
+    .map(toApiShiftRow)
+    // D1 — coaches see published shifts only; managers pass publishedOnly:false.
+    .filter((r) => !publishedOnly || r.published)
 ```
+(Keep the existing `.sort(...)` after it.) Update the JSDoc with `@param {boolean} [opts.publishedOnly=false]`.
 
 Also update the header comment block above `API_SHIFT_SELECT` (`published = true (...)` bullet) to say `published derives from block → roster (ROSTER-FIX.1)`.
+
+Add one more test to the `fetchApiShiftRows` describe:
+
+```js
+  it('publishedOnly drops unpublished rows', async () => {
+    const mk = (id, status) => ({
+      id, profile_id: 'p1', status: 'scheduled',
+      shift_blocks: {
+        location_id: 'loc1', template_id: 't1', block_date: '2026-06-10', start_time: '09:00:00', end_time: '10:00:00',
+        roster_id: status ? 'r' : null, rosters: status ? { status } : null,
+        shift_templates: { id: 't1', name: 'AM', start_time: '09:00:00', end_time: '10:00:00' },
+      },
+      profiles: null,
+    })
+    const db = makeDb({ data: [mk('pub', 'published'), mk('draft', 'draft'), mk('none', null)], error: null })
+    const { rows } = await fetchApiShiftRows(db, { locationIds: ['loc1'], publishedOnly: true })
+    expect(rows.map((r) => r.id)).toEqual(['pub'])
+  })
+```
 
 - [ ] **Step 4: Run to verify pass**
 
 Run: `npx vitest run src/lib/roster-read.test.js`
 Expected: PASS (all).
 
+- [ ] **Step 5: Route — non-managers get published only**
+
+Create `src/app/api/schedule/shifts/route.test.js`:
+
+```js
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => ({})) }))
+vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn(), assertLocationAccess: vi.fn(() => null), getUserLocationIds: vi.fn(() => ['loc-1']) }))
+vi.mock('@/lib/roster-read', () => ({ fetchApiShiftRows: vi.fn(() => Promise.resolve({ rows: [], error: null })) }))
+const { getCurrentUser } = await import('@/lib/auth')
+const { fetchApiShiftRows } = await import('@/lib/roster-read')
+const { GET } = await import('./route.js')
+const req = (url = 'http://x/api/schedule/shifts?location_id=loc-1') => ({ url })
+beforeEach(() => { getCurrentUser.mockReset(); fetchApiShiftRows.mockClear() })
+
+describe('GET /api/schedule/shifts — draft visibility (D1)', () => {
+  it('a coach gets published shifts only', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'c', role: 'staff', locations: [{ id: 'loc-1' }] })
+    await GET(req())
+    expect(fetchApiShiftRows).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ publishedOnly: true }))
+  })
+  it('a manager sees drafts too', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'm', role: 'manager', locations: [{ id: 'loc-1' }] })
+    await GET(req())
+    expect(fetchApiShiftRows).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ publishedOnly: false }))
+  })
+})
+```
+
+Run it → FAIL. Then in `src/app/api/schedule/shifts/route.js` import `MANAGER_ROLES` from `@/lib/schemas` and pass `publishedOnly: !MANAGER_ROLES.includes(user.role)` into `fetchApiShiftRows`. Run → PASS.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/lib/roster-read.js src/lib/roster-read.test.js src/app/api/schedule/shifts/
+git commit -m "ROSTER-FIX.1b — GET /shifts: published derives from the roster; coaches get published rows only (D1)"
+```
+
+### Task 1.2b: personal Today dashboard shows published shifts only (D1)
+
+**Files:**
+- Modify: `shared/dashboard-data.js:86-121` (`fetchDashboardShifts`), `:155-159` (the two personal calls)
+- Modify: `src/components/dashboard/MonthRoster.jsx:532-536, 604-617` (remove the now-unreachable Draft pill/border)
+- Test: `shared/dashboard-data.test.js`
+
+Both web (`src/app/dashboard/today/page.js:169`) and mobile (`mobile/lib/dashboard-api.js:21`) call `fetchPersonalDashboardData(supabase, profileId, locationId)`; neither passes a role, and `shared/` is the seam, so the rule is applied inside the reader rather than plumbed from two callers.
+
+- [ ] **Step 1: Write the failing test**
+
+In `shared/dashboard-data.test.js`, find how the existing tests build the Supabase mock for `fetchPersonalDashboardData` (search `fetchPersonalDashboardData`). Add a case where the `shift_assignments` query resolves two rows, one with `shift_blocks.rosters = { status: 'published' }` and one with `{ status: 'draft' }`, and assert the returned `thisWeek`/`monthShifts` (whatever keys the existing test asserts on) contain only the published one.
+
+- [ ] **Step 2: Run → FAIL.**
+
+- [ ] **Step 3: Implement**
+
+`fetchDashboardShifts` gains `publishedOnly = false` in its opts and, after mapping, `return { data: publishedOnly ? rows.filter((r) => r.published) : rows, error: null }`. The two calls at `:155` and `:159` pass `publishedOnly: true` with a comment:
+```js
+      // D1 (ROSTER-FIX.1) — coaches see published shifts only. Personal =
+      // published for everyone; a manager's own drafts live on the calendar.
+```
+The business-dashboard call at `:692` stays unfiltered (manager cost planning wants drafts).
+
+`MonthRoster.jsx`: delete the `s.published === false` pill (`:532-536`) and the `isDraft` amber border (`:604-617`); nothing reaching it is unpublished any more.
+
+- [ ] **Step 4: Run → PASS.** Also `npx vitest run mobile/lib` (mobile PersonalDashboard consumes the same data).
+
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/lib/roster-read.js src/lib/roster-read.test.js
-git commit -m "ROSTER-FIX.1b — GET /shifts: published derives from the roster, cancelled rows dropped"
+git add shared/dashboard-data.js shared/dashboard-data.test.js src/components/dashboard/MonthRoster.jsx
+git commit -m "ROSTER-FIX.1b2 — personal Today dashboard returns published shifts only (D1)"
 ```
 
 ### Task 1.3: copy-week / copy-month source rows skip cancelled assignments
@@ -622,7 +711,7 @@ function buildDb({ assignmentsById, openSwaps = [], insertErr = null }) {
             chain.single = () => {
               const a = assignmentsById[chain._id]
               const ok = a && (!chain._profile || a.profile_id === chain._profile)
-              return Promise.resolve({ data: ok ? { id: a.id, profile_id: a.profile_id, status: a.status, shift_blocks: { location_id: a.location_id, block_date: a.block_date } } : null, error: ok ? null : { message: 'no' } })
+              return Promise.resolve({ data: ok ? { id: a.id, profile_id: a.profile_id, status: a.status, shift_blocks: { location_id: a.location_id, block_date: a.block_date, rosters: { status: a.roster_status ?? 'published' } } } : null, error: ok ? null : { message: 'no' } })
             }
             chain.maybeSingle = chain.single
             return chain
@@ -684,6 +773,14 @@ describe('POST /api/schedule/swaps — target validation', () => {
     expect(res.status).toBe(400)
   })
 
+  it('400 when the requester shift is not published (D1 — coaches cannot act on drafts)', async () => {
+    getCurrentUser.mockResolvedValue({ id: REQ, role: 'staff', full_name: 'R' })
+    const { db } = buildDb({ assignmentsById: { ...base, [A_REQ]: { ...base[A_REQ], roster_status: 'draft' } } })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(req({ requester_shift_id: A_REQ }))
+    expect(res.status).toBe(400)
+  })
+
   it('400 when the requester shift is in the past', async () => {
     getCurrentUser.mockResolvedValue({ id: REQ, role: 'staff', full_name: 'R' })
     const { db } = buildDb({ assignmentsById: { ...base, [A_REQ]: { ...base[A_REQ], block_date: '2000-01-01' } } })
@@ -709,14 +806,18 @@ Expected: the first test may pass; the four 400s and the 409 FAIL (route returns
 
 - [ ] **Step 3: Implement**
 
-In `swaps/route.js` POST, after the requester assignment lookup (extend its select to `'id, profile_id, status, shift_blocks!block_id(location_id, block_date)'`), insert:
+In `swaps/route.js` POST, after the requester assignment lookup (extend its select to `'id, profile_id, status, shift_blocks!block_id(location_id, block_date, rosters:roster_id(status))'`), insert:
 
 ```js
   import { dublinTodayStr } from '@/lib/dublin-time'   // add to the top imports
 
-  // ROSTER-FIX.2 — the requester's shift must be live and in the future.
+  // ROSTER-FIX.2 — the requester's shift must be live, published (D1: a
+  // coach never acts on a draft) and in the future.
   if (!isLiveAssignment(assignment)) {
     return NextResponse.json({ success: false, error: 'That shift is no longer active' }, { status: 400 })
+  }
+  if (assignment.shift_blocks?.rosters?.status !== 'published') {
+    return NextResponse.json({ success: false, error: 'That shift is not published yet' }, { status: 400 })
   }
   if ((assignment.shift_blocks?.block_date || '') < dublinTodayStr()) {
     return NextResponse.json({ success: false, error: 'You can only swap a future shift' }, { status: 400 })
@@ -1180,6 +1281,6 @@ Branch `roster-fix-8-schema`. Code-free except the swap route's 23505 handling.
 
 ## Self-review against the audit
 
-- T1-0 mobile publish gate → 1.2. T1-1 cancelled everywhere → 1.1, 1.3-1.7 (+ reports 1.5). T1-2 self-edit → PR 3. T1-3 swap target → 2.1, 2.2. T1-4 tenancy → 2.3, 2.4, 2.5, 2.6. T1-5 approvals → 4.1. T1-6 template edits → 4.4. T1-7 horizon → 5.1. T1-8 reports day/daily/scope/overrides → 5.2-5.4. Tier 2: publish overlap → 4.2; post-publish blocks → 4.3; budget overrides+leave → 4.5; time-off overlap/weekends/year-straddle → 2.4b (added on self-review). Swap CHECK → 2.2; notifications FK / indexes / replay / overlap guard → PR 8; swap email fallback + open-pool → 8.4. Tier 3 web → PR 6a/6b/6c. Mobile → 1.8, PR 7, 2.5 (pay leak). Not-changing list → untouched.
+- T1-0 mobile publish gate → 1.2 (feed + route, coaches published-only), 1.2b (personal Today dashboard, web + mobile), 2.1 (no swap on a draft). Manager surfaces that still show drafts: `ScheduleCalendar` (`/api/schedule/blocks`, manager-gated after 2.5), mobile ManageMode (same route), the manager view of `/shifts`, and the business dashboard cost panel. T1-1 cancelled everywhere → 1.1, 1.3-1.7 (+ reports 1.5). T1-2 self-edit → PR 3. T1-3 swap target → 2.1, 2.2. T1-4 tenancy → 2.3, 2.4, 2.5, 2.6. T1-5 approvals → 4.1. T1-6 template edits → 4.4. T1-7 horizon → 5.1. T1-8 reports day/daily/scope/overrides → 5.2-5.4. Tier 2: publish overlap → 4.2; post-publish blocks → 4.3; budget overrides+leave → 4.5; time-off overlap/weekends/year-straddle → 2.4b (added on self-review). Swap CHECK → 2.2; notifications FK / indexes / replay / overlap guard → PR 8; swap email fallback + open-pool → 8.4. Tier 3 web → PR 6a/6b/6c. Mobile → 1.8, PR 7, 2.5 (pay leak). Not-changing list → untouched.
 - Placeholder scan: PRs 3-8 are task-level by design (stated in the header); PR 1-2 steps carry code. Task 1.4's `roster-publish.test.js` assertion asks the engineer to compute the fixture number — acceptable because the fixture is copied from the neighbouring test.
 - Naming: `isLiveAssignment` / `liveAssignments` used consistently in 1.2-1.7, 2.1, 4.4; `block_start_time`/`block_end_time` in 1.8 only; `findPublishedRosterFor` in 4.3 and 5.1.
