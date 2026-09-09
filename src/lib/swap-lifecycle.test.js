@@ -223,9 +223,8 @@ describe('resolveSwapTransition — manager approve finalisation', () => {
     })
     expect(r.ok).toBe(true)
     expect(r.effect).toBe('approved_drop')
-    expect(r.assignmentOps).toEqual([
-      { id: 'asg-req', set: { status: 'cancelled' } },
-    ])
+    // ROSTER-FIX.1 (D4) — DELETE, not a `cancelled` tombstone.
+    expect(r.assignmentOps).toEqual([{ id: 'asg-req', delete: true }])
   })
 
   it('lets a manager reject without touching assignments', () => {
@@ -347,6 +346,8 @@ describe('resolveSwapTransition — assignment status stays DB-valid', () => {
     })
     expect(r.ok).toBe(true)
     for (const op of r.assignmentOps) {
+      // ROSTER-FIX.1 (D4) — a drop is a delete op; it carries no `set`.
+      if (op.delete) continue
       if (op.set.status !== undefined) {
         expect(VALID_ASSIGNMENT_STATUSES).toContain(op.set.status)
       }

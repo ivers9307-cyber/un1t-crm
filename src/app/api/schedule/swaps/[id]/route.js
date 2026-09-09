@@ -53,19 +53,29 @@ export async function PUT(request, props) {
     return NextResponse.json({ success: false, error: decision.error }, { status: decision.status })
   }
 
-  // Apply assignment effects first (reassign / reciprocal swap / drop), then
-  // the swap row. Assignment writes are awaited so a failure surfaces.
-  for (const op of decision.assignmentOps) {
-    const { error: opErr } = await db.from('shift_assignments').update(op.set).eq('id', op.id)
-    if (opErr) return NextResponse.json({ success: false, error: opErr.message }, { status: 400 })
-  }
-
+  // ROSTER-FIX.1 (D4) — ORDER MATTERS, and it is the reverse of what it was.
+  // `shift_swap_requests.requester_shift_id` FKs `shift_assignments(id) ON
+  // DELETE CASCADE` (mig 237), so an approved DROP now deletes the assignment
+  // and the cascade takes this swap row with it. Stamp the swap row FIRST and
+  // capture its data, then apply the assignment ops; for the drop case the
+  // swap row is gone afterwards and the captured row is what we return.
+  // (PR 8 replaces the CASCADE with ON DELETE SET NULL so the history
+  // survives; until then this ordering is the correct one.)
   const { data, error } = await db.from('shift_swap_requests')
     .update(decision.swapUpdates)
     .eq('id', params.id)
     .select()
     .single()
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+
+  // Assignment writes are awaited so a failure surfaces.
+  for (const op of decision.assignmentOps) {
+    const q = op.delete
+      ? db.from('shift_assignments').delete().eq('id', op.id)
+      : db.from('shift_assignments').update(op.set).eq('id', op.id)
+    const { error: opErr } = await q
+    if (opErr) return NextResponse.json({ success: false, error: opErr.message }, { status: 400 })
+  }
 
   // Best-effort pushes — never block or fail the response.
   dispatchSwapPushes(db, decision, swap, user).catch(err => console.error('[swaps] push failed', err))
