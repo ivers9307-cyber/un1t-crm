@@ -153,6 +153,7 @@ export default async function StudioLandingPage(props) {
         sticky
         ctaHref={cta?.href || null}
         ctaLabel={cta?.label}
+        ctaLabelShort={cta?.labelShort || ''}
         eventsHref={`/${row.public_path}/events`}
       />
       {blocks.map((block) => (

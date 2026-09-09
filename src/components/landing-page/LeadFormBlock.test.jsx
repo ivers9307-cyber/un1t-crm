@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { LeadFormBlock, HeroBlock } from './BlockRenderers.jsx'
+import { LeadFormBlock, HeroBlock, SiteHeader } from './BlockRenderers.jsx'
 
 // Node environment, no jsdom — render to static markup. WaitlistWidget
 // is safe to render this way: it uses useState only, with no effects
@@ -103,5 +103,27 @@ describe('HeroBlock second CTA (HATCH-OFFER.1)', () => {
   it('renders one button when there is no secondary', () => {
     const html = renderToStaticMarkup(<HeroBlock block={hero} ctaHref="#waitlist" ctaLabel="Join the waitlist" />)
     expect(html).not.toContain('lp-btn-ghost')
+  })
+})
+
+describe('SiteHeader short label (HATCH-OFFER.3)', () => {
+  it('prefers the short label so a long CTA is not clipped on phones', () => {
+    const html = renderToStaticMarkup(
+      <SiteHeader sticky ctaHref="https://x.test/#join" ctaLabel="Secure your Foundation Rate" ctaLabelShort="Foundation Offer" />
+    )
+    expect(html).toContain('Foundation Offer')
+    expect(html).not.toContain('Secure your Foundation Rate')
+  })
+  it('falls back to the full label when no short one is given', () => {
+    const html = renderToStaticMarkup(
+      <SiteHeader sticky ctaHref="https://x.test/#join" ctaLabel="Secure your Foundation Rate" />
+    )
+    expect(html).toContain('Secure your Foundation Rate')
+  })
+  it('ignores a blank short label rather than rendering an empty button', () => {
+    const html = renderToStaticMarkup(
+      <SiteHeader sticky ctaHref="#waitlist" ctaLabel="Join the waitlist" ctaLabelShort="   " />
+    )
+    expect(html).toContain('Join the waitlist')
   })
 })
