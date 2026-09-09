@@ -1,7 +1,8 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Plus, Clock, Pencil, Trash2, X, AlertCircle, Users } from 'lucide-react'
+import { Plus, Clock, Pencil, Trash2, AlertCircle, Users } from 'lucide-react'
+import Modal from '@/components/ui/Modal'
 // ROSTER-FIX.6a — one failure shape and one banner across the schedule
 // screens, so no call site can quietly forget to check the response.
 import ScheduleErrorBanner from './schedule/ScheduleErrorBanner'
@@ -303,14 +304,16 @@ function TemplateFormModal({ template, onSave, onClose }) {
   }
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-un1t-surface border border-un1t-border rounded-xl p-6 w-full max-w-lg" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold">{template ? 'Edit Shift Template' : 'New Shift Template'}</h3>
-          <button onClick={onClose} className="text-un1t-subtle hover:text-un1t-text"><X size={18} /></button>
-        </div>
-
-        <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
+    // ROSTER-FIX.6b — a template form always holds a name, times and days,
+    // so the backdrop never dismisses it. Escape and Close still do.
+    <Modal
+      open
+      onClose={onClose}
+      title={template ? 'Edit Shift Template' : 'New Shift Template'}
+      dismissOnBackdrop={false}
+    >
+      <div>
+        <div className="space-y-4 pr-1">
           <div>
             <label className="block text-xs text-un1t-subtle mb-1">Name *</label>
             <input
@@ -446,6 +449,7 @@ function TemplateFormModal({ template, onSave, onClose }) {
         </div>
 
         <button
+          type="button"
           onClick={() =>
             name &&
             startTime &&
@@ -467,6 +471,6 @@ function TemplateFormModal({ template, onSave, onClose }) {
           {template ? 'Save Changes' : 'Create Shift Template'}
         </button>
       </div>
-    </div>
+    </Modal>
   )
 }

@@ -6,6 +6,7 @@ import { CalendarOff, Plus, Check, X, Palmtree, ThermometerSun, Ban, Wallet, Cir
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { TIME_OFF_TYPES } from '@shared/time-off'
+import Modal from '@/components/ui/Modal'
 // ROSTER-FIX.6a — one failure shape and one banner across the schedule
 // screens, so no call site can quietly forget to check the response.
 import ScheduleErrorBanner from './schedule/ScheduleErrorBanner'
@@ -377,6 +378,8 @@ function TimeOffFormModal({ user, allowance, onClose, onSubmit }) {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
 
+  const dirty = !!(startDate || endDate || reason.trim())
+
   const totalDays = startDate && endDate
     ? Math.max(1, Math.round((new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24)) + 1)
     : 0
@@ -414,13 +417,10 @@ function TimeOffFormModal({ user, allowance, onClose, onSubmit }) {
   }
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-un1t-surface border border-un1t-border rounded-xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold">Request Time Off</h3>
-          <button onClick={onClose} className="text-un1t-subtle hover:text-un1t-text"><X size={18} /></button>
-        </div>
-
+    // ROSTER-FIX.6b — once any field is filled the backdrop stops dismissing:
+    // this form is long enough that losing it to a stray click is a real cost.
+    <Modal open onClose={onClose} title="Request Time Off" dismissOnBackdrop={!dirty}>
+      <div>
         {error && (
           <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-sm rounded-lg p-3 mb-4">
             {error}
@@ -523,6 +523,6 @@ function TimeOffFormModal({ user, allowance, onClose, onSubmit }) {
           </p>
         </form>
       </div>
-    </div>
+    </Modal>
   )
 }

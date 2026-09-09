@@ -33,6 +33,7 @@ import { isBlockUnstaffedFuture as libUnstaffed, liveAssignments, getMonthStart,
 // sentence it becomes is shared with the approvals queue so one refusal reads
 // the same wherever the operator meets it.
 import { OVERLAP_ERROR, overlapMessage } from '@/lib/roster-overlap-message'
+import Modal from '@/components/ui/Modal'
 import RosterSummaryPanel from './RosterSummaryPanel'
 import ScheduleErrorBanner from './schedule/ScheduleErrorBanner'
 // ROSTER-FIX.6a — the six-endpoint fan-out, its error handling and its
@@ -1569,12 +1570,10 @@ function AssignCoachModal({ block, staff, onAssign, onClose }) {
       : `Assign ${selectedIds.size} coach${selectedIds.size === 1 ? '' : 'es'}`
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-un1t-surface border border-un1t-border rounded-xl p-6 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold">Assign coaches</h3>
-          <button onClick={onClose} className="text-un1t-subtle hover:text-un1t-text"><X size={18} /></button>
-        </div>
+    // ROSTER-FIX.6b — dismissOnBackdrop goes false the moment a coach is
+    // ticked: the operator has made a selection they would have to redo.
+    <Modal open onClose={onClose} title="Assign coaches" dismissOnBackdrop={selectedIds.size === 0}>
+      <div>
         <div className="bg-black/30 rounded-lg p-3 mb-4 text-sm">
           <div className="font-medium">{tmpl.name || 'Shift'} — {dayLabel}</div>
           <div className="text-un1t-subtle text-xs mt-1">
@@ -1613,6 +1612,7 @@ function AssignCoachModal({ block, staff, onAssign, onClose }) {
           </p>
         )}
         <button
+          type="button"
           onClick={handleClick}
           disabled={selectedIds.size === 0 || saving || available.length === 0}
           className="w-full mt-4 bg-un1t-text text-un1t-bg font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
@@ -1620,7 +1620,7 @@ function AssignCoachModal({ block, staff, onAssign, onClose }) {
           {submitLabel}
         </button>
       </div>
-    </div>
+    </Modal>
   )
 }
 
@@ -1637,12 +1637,8 @@ function CreateBlockModal({ date, templates, onCreate, onClose }) {
   }
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-un1t-surface border border-un1t-border rounded-xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold">Add Shift Slot — {dayLabel}</h3>
-          <button onClick={onClose} className="text-un1t-subtle hover:text-un1t-text"><X size={18} /></button>
-        </div>
+    <Modal open onClose={onClose} title={`Add Shift Slot — ${dayLabel}`} dismissOnBackdrop={!templateId}>
+      <div>
         <p className="text-xs text-un1t-subtle mb-3">
           Adds a one-off block for this day. To make a slot recur, edit the template and add this weekday to its days_of_week.
         </p>
@@ -1656,6 +1652,7 @@ function CreateBlockModal({ date, templates, onCreate, onClose }) {
           </select>
         </div>
         <button
+          type="button"
           onClick={handleClick}
           disabled={!templateId || saving}
           className="w-full mt-4 bg-un1t-text text-un1t-bg font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
@@ -1663,7 +1660,7 @@ function CreateBlockModal({ date, templates, onCreate, onClose }) {
           {saving ? 'Adding...' : 'Add Slot'}
         </button>
       </div>
-    </div>
+    </Modal>
   )
 }
 
@@ -1753,13 +1750,10 @@ function PublishRosterModal({ locationId, isOwner, period, onSubmit, onClose, pu
     : new Intl.NumberFormat('en-IE', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(n)
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-un1t-surface border border-un1t-border rounded-xl p-6 w-full max-w-lg" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold">Publish roster</h3>
-          <button onClick={onClose} className="text-un1t-subtle hover:text-un1t-text"><X size={18} /></button>
-        </div>
-
+    // ROSTER-FIX.6b — no backdrop dismiss mid-publish: the click would close
+    // the modal over a request that is still going to land.
+    <Modal open onClose={onClose} title="Publish roster" dismissOnBackdrop={!publishing}>
+      <div>
         {/* Scope toggle — publish the visible week or the whole month. */}
         <div className="mb-3">
           <div className="text-un1t-subtle text-xs mb-1.5">Publish</div>
@@ -1851,12 +1845,14 @@ function PublishRosterModal({ locationId, isOwner, period, onSubmit, onClose, pu
 
             <div className="flex justify-end gap-2">
               <button
+                type="button"
                 onClick={onClose}
                 className="px-3 py-2 rounded-md text-sm border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30"
               >
                 Cancel
               </button>
               <button
+                type="button"
                 onClick={handleConfirm}
                 disabled={publishing}
                 className={`px-3 py-2 rounded-md text-sm font-medium text-white disabled:opacity-50 ${
@@ -1879,7 +1875,7 @@ function PublishRosterModal({ locationId, isOwner, period, onSubmit, onClose, pu
           </>
         )}
       </div>
-    </div>
+    </Modal>
   )
 }
 
@@ -1888,12 +1884,8 @@ function SwapModal({ shift, onSubmit, onClose }) {
   const tmpl = shift.shift_templates || {}
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-un1t-surface border border-un1t-border rounded-xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold">Request Shift Swap</h3>
-          <button onClick={onClose} className="text-un1t-subtle hover:text-un1t-text"><X size={18} /></button>
-        </div>
+    <Modal open onClose={onClose} title="Request Shift Swap" dismissOnBackdrop={!reason.trim()}>
+      <div>
         <div className="bg-black/30 rounded-lg p-3 mb-4 text-sm">
           <div className="font-medium">{tmpl.name} — {new Date(shift.shift_date + 'T00:00:00').toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'long' })}</div>
           <div className="text-un1t-subtle text-xs mt-1">
@@ -1912,13 +1904,14 @@ function SwapModal({ shift, onSubmit, onClose }) {
           />
         </div>
         <button
+          type="button"
           onClick={() => onSubmit(shift.id, reason)}
           className="w-full mt-4 bg-un1t-text text-un1t-bg font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors"
         >
           Submit Swap Request
         </button>
       </div>
-    </div>
+    </Modal>
   )
 }
 
@@ -1949,15 +1942,11 @@ function BlockDetailModal({
   })
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div
-        className="bg-un1t-surface border border-un1t-border rounded-lg p-5 max-w-lg w-full max-h-[90vh] overflow-y-auto"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-start justify-between gap-3 mb-4">
+    <Modal open onClose={onClose} title={tmpl.name || 'Shift'}>
+      <div>
+        {/* Sub-header — the template name is the dialog's accessible title. */}
+        <div className="mb-4">
           <div className="min-w-0">
-            <h3 className="font-semibold text-un1t-text">{tmpl.name || 'Shift'}</h3>
             <p className="text-xs text-un1t-subtle mt-0.5">{dateLabel}</p>
             <p className="text-xs text-un1t-muted mt-1 inline-flex items-center gap-1.5">
               <Clock size={11} />
@@ -1972,13 +1961,6 @@ function BlockDetailModal({
               )}
             </p>
           </div>
-          <button
-            onClick={onClose}
-            className="text-un1t-subtle hover:text-un1t-text shrink-0"
-            title="Close"
-          >
-            <X size={18} />
-          </button>
         </div>
 
         {/* Assigned coaches */}
@@ -2019,6 +2001,7 @@ function BlockDetailModal({
         <div className="border-t border-un1t-border pt-4 flex items-center justify-between gap-2">
           {isManager && !atCapacity ? (
             <button
+              type="button"
               onClick={onAddCoach}
               className="text-xs bg-blue-500/20 text-blue-700 border border-blue-500/40 hover:bg-blue-500/30 px-3 py-2 rounded-md font-medium inline-flex items-center gap-1.5"
             >
@@ -2033,12 +2016,12 @@ function BlockDetailModal({
               className="text-xs bg-red-500/15 text-red-700 border border-red-500/30 hover:bg-red-500/25 disabled:opacity-50 px-3 py-2 rounded-md font-medium inline-flex items-center gap-1.5"
               title="Delete this entire shift slot"
             >
-              <X size={12} /> {busy ? 'Working…' : 'Delete this slot'}
+              <X size={12} aria-hidden="true" /> {busy ? 'Working…' : 'Delete this slot'}
             </button>
           )}
         </div>
       </div>
-    </div>
+    </Modal>
   )
 }
 

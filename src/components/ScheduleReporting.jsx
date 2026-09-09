@@ -1,8 +1,8 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Clock, Euro, CalendarOff, Users, TrendingUp, Play, Calendar, Plus, FileText, Bell, Mail, Repeat } from 'lucide-react'
-import { EmptyState, Loading } from '@/components/ui'
+import { Clock, Euro, CalendarOff, Users, TrendingUp, Play, Calendar, FileText, Bell, Mail, Repeat } from 'lucide-react'
+import { EmptyState, Loading, Modal } from '@/components/ui'
 import { toJsDay, fromJsDay, DAY_NAMES_MONDAY_FIRST } from '@/lib/report-schedule-days'
 import { formatDate } from '@/lib/roster'
 // ROSTER-FIX.6a — one failure shape and one banner across the schedule
@@ -530,13 +530,13 @@ function ScheduleReportModal({ reportType, locationId, onClose, onSave }) {
   }
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-un1t-surface border border-un1t-border rounded-xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold">Schedule Recurring Report</h3>
-          <button onClick={onClose} className="text-un1t-subtle hover:text-un1t-text"><Plus size={18} className="rotate-45" /></button>
-        </div>
-
+    // ROSTER-FIX.6b — the close control used to be a Plus icon rotated 45°
+    // with no accessible name at all; the primitive's own labelled close
+    // button replaces it.
+    <Modal open onClose={onClose} title="Schedule Recurring Report" dismissOnBackdrop={false}>
+      <div>
+        {/* ROSTER-FIX.6a — a failed save used to alert(); it reports in place
+            now, inside the dialog that still holds the operator's form. */}
         {saveError && (
           <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-sm rounded-lg p-3 mb-4">
             {saveError}
@@ -618,6 +618,7 @@ function ScheduleReportModal({ reportType, locationId, onClose, onSave }) {
         </div>
 
         <button
+          type="button"
           onClick={handleSave}
           disabled={!name || saving}
           className="w-full mt-5 bg-un1t-text text-un1t-bg font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
@@ -625,6 +626,6 @@ function ScheduleReportModal({ reportType, locationId, onClose, onSave }) {
           {saving ? 'Saving...' : 'Create Schedule'}
         </button>
       </div>
-    </div>
+    </Modal>
   )
 }
