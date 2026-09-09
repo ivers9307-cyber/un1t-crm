@@ -14,7 +14,7 @@
 
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, cleanup, screen, fireEvent } from '@testing-library/react'
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { Modal } from '@/components/ui'
 
 afterEach(cleanup)
@@ -99,3 +99,86 @@ describe('Modal focus trap + restore (ROSTER-FIX.6b)', () => {
     expect(onClose).toHaveBeenCalledTimes(1)
   })
 })
+
+// ─── the trigger is gone by the time the dialog closes ────────────────
+//
+// ROSTER-FIX.6b-7. The restore above captures document.activeElement on open
+// and focuses it again on close. That silently does nothing when the control
+// has left the DOM in between — which is exactly what the schedule's two
+// stacked flows do (Add-coach is clicked inside the block-detail dialog, which
+// then hides; the swap icon closes that dialog outright). Focus stayed on
+// document.body: the same bug the restore was written to fix, one flow deeper.
+
+// A trigger that removes ITSELF when it opens the dialog.
+function VanishingTrigger({ withRef }) {
+  const [open, setOpen] = useState(false)
+  const container = useRef(null)
+  return (
+    <div>
+      <div ref={container} data-testid="container">
+        {!open && <button type="button" onClick={() => setOpen(true)}>Vanishing trigger</button>}
+      </div>
+      <Modal
+        open={open}
+        onClose={() => setOpen(false)}
+        title="Second dialog"
+        restoreFocusRef={withRef ? container : undefined}
+      >
+        <input aria-label="Only" />
+      </Modal>
+    </div>
+  )
+}
+
+describe('Modal focus restore when the trigger unmounts (ROSTER-FIX.6b-7)', () => {
+  it('lands on restoreFocusRef instead of document.body', () => {
+    render(<VanishingTrigger withRef />)
+    const trigger = screen.getByRole('button', { name: 'Vanishing trigger' })
+    trigger.focus()
+    fireEvent.click(trigger)
+    expect(trigger.isConnected).toBe(false)
+
+    fireEvent.keyDown(document, { key: 'Escape' })
+
+    const container = screen.getByTestId('container')
+    expect(document.activeElement).toBe(container)
+    expect(document.activeElement).not.toBe(document.body)
+    // The container is not a control: it takes the tabindex only for as long
+    // as it holds focus, so it never joins the page's Tab order.
+    expect(container.getAttribute('tabindex')).toBe('-1')
+    fireEvent.blur(container)
+    expect(container.getAttribute('tabindex')).toBeNull()
+  })
+
+  it('falls back to the page\u2019s main landmark when there is no ref either', () => {
+    const main = document.createElement('main')
+    document.body.appendChild(main)
+    try {
+      render(<VanishingTrigger />)
+      fireEvent.click(screen.getByRole('button', { name: 'Vanishing trigger' }))
+      fireEvent.keyDown(document, { key: 'Escape' })
+      expect(document.activeElement).toBe(main)
+    } finally {
+      main.remove()
+    }
+  })
+
+  it('still prefers the real trigger when it is still there', () => {
+    // The fallback must not fire ahead of a perfectly good trigger.
+    const main = document.createElement('main')
+    document.body.appendChild(main)
+    try {
+      const container = { current: document.createElement('div') }
+      document.body.appendChild(container.current)
+      render(<Harness />)
+      const trigger = screen.getByRole('button', { name: 'Open the thing' })
+      trigger.focus()
+      fireEvent.click(trigger)
+      fireEvent.keyDown(document, { key: 'Escape' })
+      expect(document.activeElement).toBe(trigger)
+    } finally {
+      main.remove()
+    }
+  })
+})
+

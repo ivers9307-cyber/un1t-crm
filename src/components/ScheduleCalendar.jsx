@@ -52,20 +52,6 @@ const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 const TOAST_TTL_MS = 6000
 const canManage = (role) => MANAGER_ROLES.includes(role)
 
-// ROSTER-FIX.6b — the week-view block card is a <div onClick>, and it has to
-// stay a div: it contains its own list of coaches and a capacity chip, and
-// nesting that inside a <button> is invalid markup. So it takes the ARIA
-// button contract by hand. Space must be preventDefault'ed or the page
-// scrolls under the operator as well as activating the card.
-function activateOnKey(handler) {
-  return (e) => {
-    if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return
-    if (e.target !== e.currentTarget) return
-    e.preventDefault()
-    handler()
-  }
-}
-
 function getMonday(date) {
   const d = new Date(date)
   const day = d.getDay()
@@ -249,6 +235,13 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
   // listing every assignment with edit affordances (override times,
   // remove, etc.). Replaces the cramped inline pencil/X icons.
   const [blockDetail, setBlockDetail] = useState(null) // shift_block row
+
+  // ROSTER-FIX.6b-7 — where focus goes when a dialog closes and the control
+  // that opened it no longer exists. Two flows do that: Add-coach is clicked
+  // INSIDE the block-detail dialog (which then hides), and the swap icon
+  // closes that dialog outright. Without somewhere real to land, the operator
+  // is dropped on document.body and has to Tab from the top of the page.
+  const calendarRef = useRef(null)
 
   // BULK-ASSIGN.1 — multi-select mode for staffing a week's worth
   // of recurring shifts in one go. Toggle button in the header
@@ -805,7 +798,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
   }
 
   return (
-    <div>
+    <div ref={calendarRef}>
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
@@ -1218,6 +1211,10 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
               const isToday = formatDate(new Date()) === dateStr
               const dayBlocks = blocksByDay[i]
               const holiday = holidayByDate.get(dateStr)
+              // ROSTER-FIX.6b-7 — "Monday 4 May", so a block card's button
+              // names its own day. In a controls list every card would
+              // otherwise read "Manage the 09:30 Morning shift", seven times.
+              const cardDayLabel = date.toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'long' })
 
               const headerCls = isToday
                 ? 'bg-blue-600 text-white'
@@ -1277,28 +1274,50 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                       const atCapacity = count >= max
 
                       const isSelected = selectedBlockIds.has(block.id)
+                      // ROSTER-FIX.6b-7 — the card's own short name, spoken by
+                      // the overlay button below. It is deliberately NOT the
+                      // card's contents: the coach list, the capacity chip and
+                      // the "Unstaffed."/"Adjusted hours…" text stay in the
+                      // card so a screen reader can browse them line by line.
+                      const cardLabel = `${formatTime(block.start_time)} ${tmpl.name || 'Shift'} shift, ${cardDayLabel}`
                       return (
                         <div
                           key={block.id}
-                          role="button"
-                          tabIndex={0}
-                          aria-pressed={selectMode ? isSelected : undefined}
-                          onClick={() => {
-                            // BULK-ASSIGN.1 — in select mode, clicks
-                            // toggle selection instead of opening
-                            // the detail modal. The action bar at
-                            // the bottom takes the bulk-assign call.
-                            if (selectMode) toggleBlockSelection(block.id)
-                            else setBlockDetail(block)
-                          }}
-                          onKeyDown={activateOnKey(() => {
-                            if (selectMode) toggleBlockSelection(block.id)
-                            else setBlockDetail(block)
-                          })}
-                          className={`rounded-md p-2 text-xs relative group cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-un1t-accent hover:ring-1 hover:ring-un1t-subtle/40 ${myAssignment ? 'ring-1 ring-blue-400/50' : ''} ${showUnstaffed ? 'border border-red-500/50' : ''} ${isSelected ? 'ring-2 ring-amber-400 ring-offset-1 ring-offset-un1t-bg' : ''}`}
+                          className={`rounded-md p-2 text-xs relative group hover:ring-1 hover:ring-un1t-subtle/40 ${myAssignment ? 'ring-1 ring-blue-400/50' : ''} ${showUnstaffed ? 'border border-red-500/50' : ''} ${isSelected ? 'ring-2 ring-amber-400 ring-offset-1 ring-offset-un1t-bg' : ''}`}
                           style={{ backgroundColor: showUnstaffed ? '#7F1D1D20' : blockColor + '20', borderLeft: `3px solid ${showUnstaffed ? '#EF4444' : blockColor}` }}
-                          title={selectMode ? 'Click to select / deselect' : 'Click to manage this shift'}
                         >
+                          {/* ROSTER-FIX.6b-7 — this card used to BE the button:
+                              role="button" + tabIndex on the wrapper. That is
+                              the a11y trap 6b walked into — an element with a
+                              button role has its whole subtree flattened into
+                              ONE accessible name, so the sr-only "Unstaffed."
+                              and "Adjusted hours: …" this PR added for exactly
+                              this card, plus every coach's name, were read as a
+                              single run-on string and nothing inside it could
+                              be reached on its own. The wrapper goes back to
+                              being a plain container and the click target
+                              becomes a real <button> stretched over it with a
+                              short label of its own. Enter and Space (with the
+                              scroll suppressed) come free with a real button —
+                              no hand-rolled key handler, and nothing to bubble
+                              up from a child. */}
+                          <button
+                            type="button"
+                            aria-pressed={selectMode ? isSelected : undefined}
+                            onClick={() => {
+                              // BULK-ASSIGN.1 — in select mode, clicks
+                              // toggle selection instead of opening
+                              // the detail modal. The action bar at
+                              // the bottom takes the bulk-assign call.
+                              if (selectMode) toggleBlockSelection(block.id)
+                              else setBlockDetail(block)
+                            }}
+                            className="absolute inset-0 z-10 w-full rounded-md cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-un1t-accent"
+                          >
+                            <span className="sr-only">
+                              {selectMode ? `Select ${cardLabel}` : `Manage ${cardLabel}`}
+                            </span>
+                          </button>
                           <div className="flex items-center justify-between gap-1">
                             <div className="font-semibold truncate" style={{ color: showUnstaffed ? '#FCA5A5' : 'inherit' }}>
                               {/* ROSTER-FIX.6b — the card said "unstaffed" with a red
@@ -1385,7 +1404,11 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                               edits, remove coach, delete block, swap) lives in
                               the modal that opens on click. */}
                           {(isManager || myAssignment) && (
-                            <div className="mt-1.5 text-[10px] text-un1t-muted italic text-right opacity-0 group-hover:opacity-100 transition-opacity">
+                            // ROSTER-FIX.6b-7 — aria-hidden: it says "Click",
+                            // it only appears on hover, and the button above
+                            // already says "Manage …". Left visible, taken out
+                            // of the accessibility tree.
+                            <div aria-hidden="true" className="mt-1.5 text-[10px] text-un1t-muted italic text-right opacity-0 group-hover:opacity-100 transition-opacity">
                               Click to manage
                             </div>
                           )}
@@ -1437,6 +1460,9 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
           staff={locationStaff}
           onAssign={(profileIds) => handleAssignCoaches(assignTarget.block.id, profileIds)}
           onClose={() => setAssignTarget(null)}
+          // ROSTER-FIX.6b-7 — the Add-coach button that opened this lives in
+          // the block-detail dialog, which is unmounted while this one is up.
+          restoreFocusRef={calendarRef}
         />
       )}
 
@@ -1520,6 +1546,9 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
           shift={swapModal}
           onSubmit={handleSwapRequest}
           onClose={() => setSwapModal(null)}
+          // ROSTER-FIX.6b-7 — same shape: onSwapRequest closes the block-detail
+          // dialog, so the swap icon is gone by the time this one closes.
+          restoreFocusRef={calendarRef}
         />
       )}
 
@@ -1619,7 +1648,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
 // /assignments POST whose response shape lists per-coach outcomes
 // so 'one of these is already assigned' becomes a footnote in the
 // confirmation rather than an interruption.
-function AssignCoachModal({ block, staff, onAssign, onClose }) {
+function AssignCoachModal({ block, staff, onAssign, onClose, restoreFocusRef }) {
   const [selectedIds, setSelectedIds] = useState(() => new Set())
   const [saving, setSaving] = useState(false)
   const tmpl = block.shift_templates || {}
@@ -1655,7 +1684,7 @@ function AssignCoachModal({ block, staff, onAssign, onClose }) {
   return (
     // ROSTER-FIX.6b — dismissOnBackdrop goes false the moment a coach is
     // ticked: the operator has made a selection they would have to redo.
-    <Modal open onClose={onClose} title="Assign coaches" dismissOnBackdrop={selectedIds.size === 0}>
+    <Modal open onClose={onClose} title="Assign coaches" dismissOnBackdrop={selectedIds.size === 0} restoreFocusRef={restoreFocusRef}>
       <div>
         <div className="bg-black/30 rounded-lg p-3 mb-4 text-sm">
           <div className="font-medium">{tmpl.name || 'Shift'} — {dayLabel}</div>
@@ -1962,12 +1991,12 @@ function PublishRosterModal({ locationId, isOwner, period, onSubmit, onClose, pu
   )
 }
 
-function SwapModal({ shift, onSubmit, onClose }) {
+function SwapModal({ shift, onSubmit, onClose, restoreFocusRef }) {
   const [reason, setReason] = useState('')
   const tmpl = shift.shift_templates || {}
 
   return (
-    <Modal open onClose={onClose} title="Request Shift Swap" dismissOnBackdrop={!reason.trim()}>
+    <Modal open onClose={onClose} title="Request Shift Swap" dismissOnBackdrop={!reason.trim()} restoreFocusRef={restoreFocusRef}>
       <div>
         <div className="bg-black/30 rounded-lg p-3 mb-4 text-sm">
           <div className="font-medium">{tmpl.name} — {new Date(shift.shift_date + 'T00:00:00').toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'long' })}</div>
@@ -2024,8 +2053,17 @@ function BlockDetailModal({
     weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
   })
 
+  // ROSTER-FIX.6b-7 — this was the ONE converted dialog left dismissing on a
+  // backdrop click while it could be holding a half-filled form. The inline
+  // times-and-reason editor lives one component down in AssignmentRow, so the
+  // flag is lifted here as the set of rows currently editing: a stray click
+  // outside must not throw away times a manager has just typed. Escape and the
+  // close button still work, which is why this is not `dismissable={false}`.
+  const [editingRowIds, setEditingRowIds] = useState(() => new Set())
+  const anyRowEditing = editingRowIds.size > 0
+
   return (
-    <Modal open onClose={onClose} title={tmpl.name || 'Shift'}>
+    <Modal open onClose={onClose} title={tmpl.name || 'Shift'} dismissOnBackdrop={!anyRowEditing}>
       <div>
         {/* Sub-header — the template name is the dialog's accessible title. */}
         <div className="mb-4">
@@ -2075,6 +2113,12 @@ function BlockDetailModal({
                     ? () => onSwapRequest(a.id)
                     : null
                 }
+                onEditingChange={(on) => setEditingRowIds((prev) => {
+                  const next = new Set(prev)
+                  if (on) next.add(a.id)
+                  else next.delete(a.id)
+                  return next
+                })}
               />
             ))
           )}
@@ -2111,7 +2155,7 @@ function BlockDetailModal({
 // One coach's row inside BlockDetailModal — shows their effective
 // times, lets a manager (or the coach themselves) override the
 // times for partial shifts, request a swap, or be removed.
-function AssignmentRow({ assignment, block, isMe, canEdit, busy, onUnassign, onSave, onSwapRequest }) {
+function AssignmentRow({ assignment, block, isMe, canEdit, busy, onUnassign, onSave, onSwapRequest, onEditingChange }) {
   const blockStart = (block.start_time || '').slice(0, 5)
   const blockEnd = (block.end_time || '').slice(0, 5)
   const coachName = assignment.profiles?.full_name || 'this coach'
@@ -2119,7 +2163,13 @@ function AssignmentRow({ assignment, block, isMe, canEdit, busy, onUnassign, onS
   const overrideEnd = (assignment.end_time_override || '').slice(0, 5)
   const hasOverride = !!(assignment.start_time_override || assignment.end_time_override)
 
-  const [editing, setEditing] = useState(false)
+  const [editing, setEditingState] = useState(false)
+  // ROSTER-FIX.6b-7 — every editing flip is reported upward so BlockDetailModal
+  // can turn backdrop dismissal off while this row holds unsaved times.
+  const setEditing = useCallback((next) => {
+    setEditingState(next)
+    onEditingChange?.(next)
+  }, [onEditingChange])
   const [start, setStart] = useState(overrideStart || blockStart)
   const [end, setEnd] = useState(overrideEnd || blockEnd)
   const [reason, setReason] = useState(assignment.partial_reason || '')

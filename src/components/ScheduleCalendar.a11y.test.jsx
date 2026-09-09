@@ -104,10 +104,17 @@ function mockFetch() {
   })
 }
 
+// ROSTER-FIX.6b-7 — the card's click target is now a real <button> stretched
+// over a plain container, not a role="button" on the container itself, so the
+// handle the tests grab is the button and the card is its parent.
+function cardButton(name) {
+  return screen.getByRole('button', { name: new RegExp(`^Manage .*${name} shift,`) })
+}
+
 async function renderCalendar(user = MANAGER) {
   global.fetch = mockFetch()
   await act(async () => { render(<ScheduleCalendar user={user} />) })
-  return screen.getByText('Morning').closest('[role="button"]')
+  return cardButton('Morning')
 }
 
 beforeEach(() => { vi.stubGlobal('confirm', () => true) })
@@ -115,32 +122,58 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
 // ─── the block card is a control, not decoration ──────────────────────
 describe('week-view block card (ROSTER-FIX.6b)', () => {
-  it('is reachable by keyboard and opens the detail dialog on Enter', async () => {
-    const card = await renderCalendar()
-    expect(card).toBeTruthy()
-    expect(card.getAttribute('tabindex')).toBe('0')
+  it('is a real button, reachable by keyboard, and opens the detail dialog', async () => {
+    const trigger = await renderCalendar()
+    expect(trigger).toBeTruthy()
+    // A native <button type="button"> is what gives Enter and Space — and the
+    // Space scroll suppression — for free. jsdom does not synthesise the
+    // click a browser fires for those keys, so the element TYPE is the
+    // guarantee being asserted, not a simulated keypress.
+    expect(trigger.tagName).toBe('BUTTON')
+    expect(trigger.getAttribute('type')).toBe('button')
 
-    card.focus()
-    expect(document.activeElement).toBe(card)
+    trigger.focus()
+    expect(document.activeElement).toBe(trigger)
 
-    fireEvent.keyDown(card, { key: 'Enter' })
+    fireEvent.click(trigger)
     expect(screen.getByRole('dialog')).toBeTruthy()
   })
 
-  it('opens on Space and stops the page scrolling with it', async () => {
-    const card = await renderCalendar()
-    card.focus()
-    const evt = fireEvent.keyDown(card, { key: ' ' })
-    // fireEvent returns false when a listener called preventDefault.
-    expect(evt).toBe(false)
-    expect(screen.getByRole('dialog')).toBeTruthy()
+  it('leaves the card itself a plain container, so its own text stays browsable', async () => {
+    const trigger = await renderCalendar()
+    const card = trigger.parentElement
+    // The regression this replaced: role="button" + tabIndex on the CARD
+    // flattened every child into one accessible name, swallowing the coach
+    // list and the sr-only "Unstaffed."/"Adjusted hours…" spans 6b added.
+    expect(card.getAttribute('role')).toBeNull()
+    expect(card.getAttribute('tabindex')).toBeNull()
+    // Its contents are separate nodes a screen reader can walk.
+    expect(card.textContent).toContain('Sarah Doyle')
+    expect(card.textContent).toContain('Adjusted hours')
+    // The mouse-only hover hint is out of the accessibility tree.
+    const hint = Array.from(card.querySelectorAll('div')).find(n => n.textContent.trim() === 'Click to manage')
+    expect(hint.getAttribute('aria-hidden')).toBe('true')
   })
 
-  it('ignores a key that bubbled up from a control inside it', async () => {
-    const card = await renderCalendar()
-    // Simulate the event originating on a descendant: target !== currentTarget.
-    fireEvent.keyDown(card.querySelector('.font-semibold'), { key: 'Enter' })
-    expect(screen.queryByRole('dialog')).toBeNull()
+  it('names the card by its own shift and day, not by everything inside it', async () => {
+    const trigger = await renderCalendar()
+    // Seven columns of "Manage this shift" would be indistinguishable in a
+    // controls list, and the whole card as a name is unreadable.
+    expect(trigger.textContent).toMatch(/^Manage 9am Morning shift, \w+day,? \d+ \w+$/)
+    expect(trigger.textContent).not.toContain('Sarah Doyle')
+  })
+
+  it('keeps aria-pressed on the button in select mode', async () => {
+    await renderCalendar()
+    // Outside select mode the card is not a toggle, so it carries no state.
+    expect(cardButton('Morning').getAttribute('aria-pressed')).toBeNull()
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Select multiple/ })) })
+    const selectMorning = () => screen.getByRole('button', { name: /^Select .*Morning shift,/ })
+    expect(selectMorning().getAttribute('aria-pressed')).toBe('false')
+
+    await act(async () => { fireEvent.click(selectMorning()) })
+    expect(selectMorning().getAttribute('aria-pressed')).toBe('true')
   })
 })
 
@@ -223,6 +256,32 @@ describe('the calendar overlays are dialogs (ROSTER-FIX.6b)', () => {
   })
 })
 
+// ─── a half-filled row survives a stray click ─────────────────────────
+describe('BlockDetailModal keeps an open row editor (ROSTER-FIX.6b-7)', () => {
+  it('does not close on a backdrop click while a coach row is being edited', async () => {
+    const card = await renderCalendar()
+    fireEvent.click(card)
+    const dialog = screen.getByRole('dialog')
+
+    // Closed rows: a stray click outside costs nothing, so the default holds.
+    fireEvent.mouseDown(dialog.parentElement)
+    expect(screen.queryByRole('dialog')).toBeNull()
+
+    // Re-open it and put Sarah's row into its inline times editor.
+    fireEvent.click(cardButton('Morning'))
+    fireEvent.click(screen.getByRole('button', { name: 'Edit adjusted times for Sarah Doyle' }))
+    // The inline editor is open and holds unsaved times.
+    expect(screen.getByRole('button', { name: /Save/ })).toBeTruthy()
+
+    fireEvent.mouseDown(screen.getByRole('dialog').parentElement)
+    expect(screen.getByRole('dialog')).toBeTruthy()
+    // Escape and the close button are still there — this is dismissOnBackdrop,
+    // not dismissable={false}, which would leave no exit at all.
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+})
+
 // ─── nothing is named "button" ────────────────────────────────────────
 describe('every icon-only control on the calendar has a name (ROSTER-FIX.6b)', () => {
   it('names the week arrows, and renames them in month view', async () => {
@@ -257,7 +316,7 @@ describe('every icon-only control on the calendar has a name (ROSTER-FIX.6b)', (
 describe('unstaffed and adjusted read as text (ROSTER-FIX.6b)', () => {
   it('says "Unstaffed" in text on the week card, not only in red', async () => {
     await renderCalendar()
-    const eveningCard = screen.getByText('Evening').closest('[role="button"]')
+    const eveningCard = cardButton('Evening').parentElement
     // Specifically the visually-hidden word beside the glyph — the red wash
     // and red left rule are the things that do not survive greyscale, and the
     // italic "Unstaffed - assign a coach" line only appears while the block

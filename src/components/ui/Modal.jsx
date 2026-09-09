@@ -21,6 +21,21 @@ import { modalPanelClasses } from './styles.js'
 const FOCUSABLE =
   'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])'
 
+// ROSTER-FIX.6b-7 — focus a container that is not normally focusable, then take
+// the tabindex back off once it loses focus so it never joins the Tab order
+// permanently. Used only for the close-time fallbacks below.
+function focusTransient(el) {
+  if (!el || !el.isConnected || typeof el.focus !== 'function') return false
+  if (el.hasAttribute('tabindex')) {
+    el.focus()
+    return true
+  }
+  el.setAttribute('tabindex', '-1')
+  el.addEventListener('blur', () => el.removeAttribute('tabindex'), { once: true })
+  el.focus()
+  return true
+}
+
 /**
  * @param {object} props
  * @param {boolean} props.open
@@ -37,8 +52,14 @@ const FOCUSABLE =
  *   ROSTER-FIX.6b: for modals holding a half-filled form. Deliberately NOT
  *   `dismissable={false}`, which would also take the close button and Esc
  *   away and leave the operator with no exit at all. Defaults to true.
+ * @param {React.RefObject<HTMLElement>} [props.restoreFocusRef]  where focus
+ *   should land on close when the control that OPENED the dialog is gone from
+ *   the DOM by then. ROSTER-FIX.6b-7: two schedule flows unmount their own
+ *   trigger (Add-coach closes the block-detail dialog it was clicked in; the
+ *   swap icon does the same), so the captured element is disconnected and
+ *   focusing it is a no-op that leaves the operator on document.body.
  */
-export default function Modal({ open, onClose, title, footer, size = 'md', dismissable = true, dismissOnBackdrop = true, className, children }) {
+export default function Modal({ open, onClose, title, footer, size = 'md', dismissable = true, dismissOnBackdrop = true, restoreFocusRef, className, children }) {
   const panelRef = useRef(null)
   const titleId = useId()
 
@@ -54,10 +75,10 @@ export default function Modal({ open, onClose, title, footer, size = 'md', dismi
   // Keeping the callbacks in a ref lets the Escape listener always invoke the
   // LATEST props without putting their identity in the deps. Regression-locked
   // in Modal.focus.test.jsx.
-  const handlers = useRef({ onClose, dismissable })
+  const handlers = useRef({ onClose, dismissable, restoreFocusRef })
   useEffect(() => {
-    handlers.current = { onClose, dismissable }
-  }, [onClose, dismissable])
+    handlers.current = { onClose, dismissable, restoreFocusRef }
+  }, [onClose, dismissable, restoreFocusRef])
 
   useEffect(() => {
     if (!open) return undefined
@@ -117,9 +138,25 @@ export default function Modal({ open, onClose, title, footer, size = 'md', dismi
       // dialog. If the close handler moved focus somewhere deliberate, leave it.
       const stillInside = !document.activeElement || document.activeElement === document.body
         || !!panelNode?.contains(document.activeElement)
-      if (stillInside && restoreTo && typeof restoreTo.focus === 'function' && restoreTo.isConnected) {
+      if (!stillInside) return
+      // `restoreTo === document.body` is NOT a trigger: it is what
+      // activeElement already reads as when the control that opened this
+      // dialog was removed in the very commit that opened it (the schedule's
+      // stacked flows do exactly that). Focusing body is the no-op the
+      // fallbacks below exist to replace.
+      const hasTrigger = restoreTo && restoreTo !== document.body
+        && typeof restoreTo.focus === 'function' && restoreTo.isConnected
+      if (hasTrigger) {
         restoreTo.focus()
+        return
       }
+      // ROSTER-FIX.6b-7 — the trigger is GONE (it lived in the dialog this one
+      // replaced). Falling through here used to leave focus on document.body,
+      // which is the exact bug the restore was added to fix, just one flow
+      // deeper. Land on the caller's container, or failing that on the page's
+      // main landmark, so the next Tab starts somewhere the operator recognises.
+      if (focusTransient(handlers.current.restoreFocusRef?.current)) return
+      focusTransient(document.querySelector('[role="main"], main'))
     }
   }, [open])
 
