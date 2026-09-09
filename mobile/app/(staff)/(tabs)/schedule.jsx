@@ -26,12 +26,13 @@ import {
 } from '../../../lib/dates'
 import {
   getMyShifts, getTeamShifts, getMyTimeOff, createSwapRequest, adjustShiftAssignment,
+  respondToTimeOff,
 } from '../../../lib/schedule-api'
 import { applyWeekResult, TRANSPORT_ERROR } from '../../../lib/schedule-refresh'
 import { canMobile } from '../../../lib/permissions'
 import { useIsTablet } from '../../../lib/use-is-tablet'
 import { effShiftStart, effShiftEnd, teamRosterForDay, initials } from '../../../lib/schedule-team'
-import { canAdjustShiftTimes, MANAGER_ROLES } from '../../../lib/schedule-manage'
+import { canAdjustShiftTimes, canCancelTimeOff, MANAGER_ROLES } from '../../../lib/schedule-manage'
 import ManageMode from '../../../components/schedule/ManageMode'
 
 // ROSTER-FIX.3 — MANAGER_ROLES comes from lib/schedule-manage, the module that
@@ -447,6 +448,29 @@ export default function Schedule() {
     return canAdjustShiftTimes(profile, shift)
   }
 
+  // ROSTER-FIX.7 — a coach could raise a time-off request from here but never
+  // withdraw one: the only route to a mistaken request was asking a manager to
+  // reject it. `PUT /api/schedule/time-off/[id]` has always accepted a
+  // self-cancel while the row is pending; canCancelTimeOff mirrors that gate.
+  function cancelLeaveRequest(row) {
+    Alert.alert(
+      'Cancel this request?',
+      'Your request will be withdrawn. You can raise a new one at any time.',
+      [
+        { text: 'Keep it', style: 'cancel' },
+        {
+          text: 'Cancel request',
+          style: 'destructive',
+          onPress: async () => {
+            const res = await respondToTimeOff(row.id, 'cancelled', null, activeLocation?.id)
+            if (res.success) fetchWeek()
+            else Alert.alert('Couldn’t cancel', res.error || 'Unknown error')
+          },
+        },
+      ]
+    )
+  }
+
   function requestSwapForShift(shift) {
     // RETIRE-SHIFTS-MIRROR.5c — swaps now key off the shift_assignment id
     // (stitched into the GET /shifts row), not the legacy shifts.id.
@@ -599,9 +623,18 @@ export default function Schedule() {
               <View key={t.id} className="bg-amber-500/10 border border-amber-500/40 rounded-2xl p-4 mb-2">
                 <Text className="text-sm font-semibold text-amber-700">
                   {t.type === 'holiday' ? 'Holiday' : t.type === 'sick' ? 'Sick leave' : 'Time off'}
-                  {t.status === 'pending' ? ' — pending' : ''}
+                  {t.status === 'pending' ? ' · pending' : ''}
                 </Text>
                 {t.reason && <Text className="text-xs text-amber-700/80 mt-1">{t.reason}</Text>}
+                {canCancelTimeOff(t, profile) && (
+                  <Pressable
+                    onPress={() => cancelLeaveRequest(t)}
+                    hitSlop={8}
+                    className="self-start mt-2.5 px-3 py-1.5 rounded-full bg-un1t-surface border border-amber-500/40 active:opacity-70"
+                  >
+                    <Text className="text-xs font-semibold text-amber-700">Cancel request</Text>
+                  </Pressable>
+                )}
               </View>
             ))}
 

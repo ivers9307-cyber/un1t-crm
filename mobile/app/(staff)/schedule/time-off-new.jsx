@@ -145,7 +145,8 @@ export default function TimeOffNew() {
         </View>
 
         <Text className="text-xs text-un1t-subtle px-2 mt-2">
-          Your manager will be notified. You can cancel a pending request from the schedule view.
+          Your manager will be notified. To withdraw it while it is still pending, open the
+          Schedule tab, tap the day it covers and use Cancel request on the amber leave card.
         </Text>
       </ScrollView>
     </KeyboardAvoidingView>

@@ -42,3 +42,15 @@ export function canAdjustShiftTimes(profile, shift) {
   if (!shift?.shift_assignment_id) return false
   return MANAGER_ROLES.includes(profile?.role)
 }
+
+// ROSTER-FIX.7 — may this person withdraw this leave request? Mirrors the self
+// branch of PUT /api/schedule/time-off/[id], which accepts a self-cancel only
+// while the row is still `pending`; keep the two in step or the UI offers a
+// button the route refuses. Deliberately id-matched rather than trusting the
+// caller's filter: the Schedule tab's Me view fetches only the user's own
+// rows today, but the Team view shares the same renderer.
+export function canCancelTimeOff(row, profile) {
+  if (row?.status !== 'pending') return false
+  if (!row?.profile_id || !profile?.id) return false
+  return row.profile_id === profile.id
+}

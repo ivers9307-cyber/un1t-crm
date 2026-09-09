@@ -1,8 +1,12 @@
-// Manager "Manage" mode body. Fetches the week's blocks + pending approvals
-// for the active location, renders a collapsible approvals section + the
-// selected day's editable blocks. Owns all mutations (assign/remove/approve)
-// and refetches on success. Time edits are delegated to the screen's existing
-// AdjustSheet via the onAdjust(shiftLike) callback.
+// Manager "Manage" mode body. Fetches the week's shift blocks for the active
+// location and renders the selected day's editable blocks. Owns the assign and
+// remove mutations and refetches on success. Time edits are delegated to the
+// screen's existing AdjustSheet via the onAdjust(shiftLike) callback.
+//
+// ROSTER-FIX.7 — this comment used to promise "pending approvals" and "a
+// collapsible approvals section". There is none and there never was: approvals
+// (time-off, swaps) live on the Approvals tab. Corrected rather than built,
+// because the approvals surface is not this screen's job.
 import { useState, useEffect, useCallback } from 'react'
 import { View, Text, ActivityIndicator, Alert } from 'react-native'
 import { useFocusEffect } from 'expo-router'
