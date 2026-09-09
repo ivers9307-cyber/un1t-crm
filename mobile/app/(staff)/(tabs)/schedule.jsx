@@ -30,15 +30,13 @@ import {
 import { canMobile } from '../../../lib/permissions'
 import { useIsTablet } from '../../../lib/use-is-tablet'
 import { effShiftStart, effShiftEnd, teamRosterForDay, initials } from '../../../lib/schedule-team'
+import { canAdjustShiftTimes, MANAGER_ROLES } from '../../../lib/schedule-manage'
 import ManageMode from '../../../components/schedule/ManageMode'
 
-// Manager roles, mirrored from src/lib/schemas.js MANAGER_ROLES. Defined
-// locally because the mobile bundle can't import that web-side module, and
-// shared/permissions.js does NOT export MANAGER_ROLES — importing it from
-// there resolved to `undefined`, so isManagerRole() threw "Cannot read
-// property 'includes' of undefined" on every Schedule render once the Manage
-// segment (PR #375) started calling it unconditionally. (HOTFIX.)
-const MANAGER_ROLES = ['master', 'owner', 'manager', 'head_coach']
+// ROSTER-FIX.3 — MANAGER_ROLES comes from lib/schedule-manage, the module that
+// already owns canAdjustShiftTimes. It was duplicated here (a HOTFIX for
+// shared/permissions.js not exporting the name), and two copies of a role list
+// that gates an edit the route will 403 is one copy too many.
 const isManagerRole = (role) => MANAGER_ROLES.includes(role)
 
 function WeekStrip({ anchor, selected, onSelect, byDate }) {
@@ -417,11 +415,11 @@ export default function Schedule() {
   // Adjust modal state — open via ShiftRow onPress.
   const [adjustingShift, setAdjustingShift] = useState(null)
 
-  // Self can adjust their own; managers can adjust anyone's.
+  // ROSTER-FIX.3 (D3) — managers only. A coach used to be able to adjust
+  // their own shift here; the paid window is a manager's to set, so the
+  // affordance is gone for coaches and the route 403s them anyway.
   function canAdjust(shift) {
-    if (!shift?.shift_assignment_id) return false
-    if (shift.profile_id === profile.id) return true
-    return isManagerRole(profile.role)
+    return canAdjustShiftTimes(profile, shift)
   }
 
   function requestSwapForShift(shift) {
@@ -594,7 +592,9 @@ export default function Schedule() {
             ))}
             {todays.length > 0 && (
               <Text className="text-[11px] text-un1t-muted text-center mt-1">
-                Tap to adjust times · long-press to request a swap.
+                {isManagerRole(profile?.role)
+                  ? 'Tap to adjust times · long-press to request a swap.'
+                  : 'Long-press to request a swap. Your hours are set by your manager — if you worked different hours, tell them.'}
               </Text>
             )}
           </>

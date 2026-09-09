@@ -4345,6 +4345,39 @@ registry.registerPath({
   responses: { 200: { description: 'Request updated' } },
 })
 
+// ROSTER-FIX.3 (D2, D3) — the assignment detail route sets a shift's PAID
+// window, and Richard's call (2026-09-09) is that a manager sets it: a coach
+// cannot adjust their own hours, and cannot drop themselves off a shift.
+registry.registerPath({
+  method: 'put',
+  path: '/api/schedule/assignments/{id}',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Adjust a shift assignment (manager-only)',
+  description: "Sets or clears the partial-shift start/end overrides, the reason, notes or status on one shift_assignments row. Manager-only (master, owner, manager, head_coach): the paid window is a manager's to set, so a coach editing their own assignment gets 403. A non-master manager is scoped to their own locations; an assignment at another location returns 404. A successful override change pushes the affected coach.",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Assignment updated' },
+    403: { description: 'Forbidden — only a manager can change shift hours', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Assignment not found, or at a location you do not own', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/schedule/assignments/{id}',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Remove a coach from a shift (manager-only)',
+  description: 'Deletes one shift_assignments row. Manager-only (master, owner, manager, head_coach): a coach cannot remove themselves from a shift — they post a swap request instead (POST /api/schedule/swaps), which a manager approves. A non-master manager is scoped to their own locations; an assignment at another location returns 404.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Assignment removed' },
+    403: { description: 'Forbidden — ask for a swap to drop this shift', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Assignment not found, or at a location you do not own', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 registry.registerPath({
   method: 'post',
   path: '/api/schedule/swaps',

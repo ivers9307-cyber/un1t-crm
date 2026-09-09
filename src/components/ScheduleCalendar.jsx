@@ -1817,12 +1817,18 @@ function BlockDetailModal({
             <p className="text-xs text-un1t-subtle italic">No coaches assigned yet.</p>
           ) : (
             assignments.map((a) => (
+              // ROSTER-FIX.3 (D2, D3) — canEdit is managers only. A coach could
+              // adjust their own times and remove themselves from the block here;
+              // both are manager-only on PUT/DELETE /api/schedule/assignments/[id]
+              // now, so the affordance goes with them. The swap button below is a
+              // coach's route out of a shift, and the amber "Adjusted" badge in
+              // AssignmentRow keeps a manager's change visible to them.
               <AssignmentRow
                 key={a.id}
                 assignment={a}
                 block={block}
                 isMe={a.profile_id === user.id}
-                canEdit={isManager || a.profile_id === user.id}
+                canEdit={isManager}
                 onUnassign={() => onUnassign(a.id)}
                 onSave={(payload) => onPartialSave(a.id, payload)}
                 onSwapRequest={
