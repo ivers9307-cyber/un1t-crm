@@ -33,6 +33,7 @@ import { isBlockUnstaffedFuture as libUnstaffed, liveAssignments, getMonthStart,
 // sentence it becomes is shared with the approvals queue so one refusal reads
 // the same wherever the operator meets it.
 import { OVERLAP_ERROR, overlapMessage } from '@/lib/roster-overlap-message'
+import Modal from '@/components/ui/Modal'
 import RosterSummaryPanel from './RosterSummaryPanel'
 import ScheduleErrorBanner from './schedule/ScheduleErrorBanner'
 // ROSTER-FIX.6a — the six-endpoint fan-out, its error handling and its
@@ -234,6 +235,13 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
   // listing every assignment with edit affordances (override times,
   // remove, etc.). Replaces the cramped inline pencil/X icons.
   const [blockDetail, setBlockDetail] = useState(null) // shift_block row
+
+  // ROSTER-FIX.6b-7 — where focus goes when a dialog closes and the control
+  // that opened it no longer exists. Two flows do that: Add-coach is clicked
+  // INSIDE the block-detail dialog (which then hides), and the swap icon
+  // closes that dialog outright. Without somewhere real to land, the operator
+  // is dropped on document.body and has to Tab from the top of the page.
+  const calendarRef = useRef(null)
 
   // BULK-ASSIGN.1 — multi-select mode for staffing a week's worth
   // of recurring shifts in one go. Toggle button in the header
@@ -790,7 +798,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
   }
 
   return (
-    <div>
+    <div ref={calendarRef}>
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
@@ -809,12 +817,14 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
 
           <div className="flex bg-un1t-surface border border-un1t-border rounded-lg overflow-hidden text-xs">
             <button
+              type="button"
               onClick={() => setViewMode('my')}
               className={`flex items-center gap-1.5 px-3 py-2 transition-colors ${viewMode === 'my' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'}`}
             >
               <User size={14} /> My Shifts
             </button>
             <button
+              type="button"
               onClick={() => setViewMode('all')}
               className={`flex items-center gap-1.5 px-3 py-2 transition-colors ${viewMode === 'all' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'}`}
             >
@@ -824,6 +834,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
 
           <div className="flex bg-un1t-surface border border-un1t-border rounded-lg overflow-hidden text-xs">
             <button
+              type="button"
               onClick={() => {
                 // ROSTER-FIX.6a — see weekStartForMonth: getMonday(monthStart)
                 // used to land on the previous month whenever the 1st fell on
@@ -836,6 +847,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
               <CalendarDays size={14} /> Week
             </button>
             <button
+              type="button"
               onClick={() => {
                 // Midweek decides which month a straddling week belongs to.
                 if (viewType === 'week') setMonthStart(monthStartForWeek(weekStart))
@@ -855,6 +867,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                   bottom of the page takes over until the operator
                   hits Cancel or Assign. */}
               <button
+                type="button"
                 onClick={() => {
                   if (selectMode) exitSelectMode()
                   else setSelectMode(true)
@@ -875,6 +888,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                   discovered it. handleCopyMonth derives the target
                   month from the effective view state. */}
               <button
+                type="button"
                 onClick={handleCopyWeek}
                 disabled={copying}
                 className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30 transition-colors disabled:opacity-50"
@@ -883,6 +897,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                 <Copy size={14} /> {copying ? 'Copying...' : 'Copy Last Week'}
               </button>
               <button
+                type="button"
                 onClick={handleCopyMonth}
                 disabled={copying}
                 className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30 transition-colors disabled:opacity-50"
@@ -907,6 +922,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
               </Link>
               {viewType === 'week' && (
                 <button
+                  type="button"
                   onClick={handlePublishClick}
                   disabled={publishing}
                   className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white transition-colors disabled:opacity-50"
@@ -922,35 +938,40 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
       {/* Range Navigation */}
       <div className="flex items-center justify-between mb-4">
         <button
+          type="button"
           onClick={() => {
             if (viewType === 'month') setMonthStart(addMonths(monthStart, -1))
             else setWeekStart(addDays(weekStart, -7))
           }}
+          aria-label={viewType === 'month' ? 'Previous month' : 'Previous week'}
           className="p-2 rounded-lg hover:bg-un1t-border/50 text-un1t-subtle hover:text-un1t-text transition-colors"
         >
-          <ChevronLeft size={20} />
+          <ChevronLeft size={20} aria-hidden="true" />
         </button>
         <div className="text-center">
           <span className="font-semibold">{viewType === 'month' ? monthLabel : weekLabel}</span>
           <button
+            type="button"
             onClick={() => {
               const now = new Date()
               if (viewType === 'month') setMonthStart(getMonthStart(now))
               else setWeekStart(getMonday(now))
             }}
-            className="ml-3 text-xs text-blue-400 hover:text-blue-300"
+            className="ml-3 text-xs text-blue-700 hover:text-blue-800"
           >
             Today
           </button>
         </div>
         <button
+          type="button"
           onClick={() => {
             if (viewType === 'month') setMonthStart(addMonths(monthStart, 1))
             else setWeekStart(addDays(weekStart, 7))
           }}
+          aria-label={viewType === 'month' ? 'Next month' : 'Next week'}
           className="p-2 rounded-lg hover:bg-un1t-border/50 text-un1t-subtle hover:text-un1t-text transition-colors"
         >
-          <ChevronRight size={20} />
+          <ChevronRight size={20} aria-hidden="true" />
         </button>
       </div>
 
@@ -1005,7 +1026,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
 
         return (
           <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
-            <div className="flex items-center gap-2 text-amber-400 font-medium text-sm mb-2">
+            <div className="flex items-center gap-2 text-amber-700 font-medium text-sm mb-2">
               <AlertTriangle size={16} /> Weekly hours notice
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
@@ -1047,7 +1068,14 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
         // assignments + count of unstaffed blocks. Clicking drills
         // into the week view. Roster v2: separately surfaces empty
         // blocks as a red badge.
-        <div>
+        // ROSTER-FIX.6b — seven columns with no breakpoint. On a 390px phone
+        // each day cell was ~50px wide and every block label inside it was an
+        // ellipsis. The grid keeps its seven columns and gets a floor instead;
+        // the page scrolls the calendar sideways rather than crushing it.
+        // Header row and cells share ONE scroller so the weekday labels stay
+        // over their own columns.
+        <div className="overflow-x-auto">
+          <div className="min-w-[840px]">
           <div className="grid grid-cols-7 gap-1.5 mb-1.5">
             {DAY_LABELS.map(label => (
               <div key={label} className="text-[11px] font-semibold text-un1t-subtle uppercase tracking-wider text-center py-1">
@@ -1087,14 +1115,15 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                     } ${isToday ? 'ring-1 ring-blue-400/50' : ''} ${holiday ? 'bg-amber-500/[0.06]' : ''}`}
                   >
                     <div className="flex items-center justify-between mb-1">
-                      <span className={`text-xs font-semibold ${isToday ? 'text-blue-400' : inFocusedMonth ? 'text-un1t-text' : 'text-un1t-muted'}`}>
+                      <span className={`text-xs font-semibold ${isToday ? 'text-blue-700' : inFocusedMonth ? 'text-un1t-text' : 'text-un1t-muted'}`}>
                         {date.getDate()}
                       </span>
                       <div className="flex items-center gap-1">
                         {/* ROSTER-FIX.2 — unstaffed is a manager cue; coaches get a capacity-free feed and no red flags. */}
                         {isManager && unstaffedCount > 0 && (
                           <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-700" title={`${unstaffedCount} unstaffed`}>
-                            !{unstaffedCount}
+                            <span aria-hidden="true">!{unstaffedCount}</span>
+                            <span className="sr-only">{unstaffedCount} unstaffed</span>
                           </span>
                         )}
                         {totalAssignmentCount > 0 && (
@@ -1105,7 +1134,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                       </div>
                     </div>
                     {holiday && (
-                      <div className="text-[9px] text-amber-500 mb-1 truncate" title={holiday.name}>
+                      <div className="text-[9px] text-amber-700 mb-1 truncate" title={holiday.name}>
                         {holiday.name}
                       </div>
                     )}
@@ -1114,13 +1143,26 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                         const tmpl = b.shift_templates || {}
                         const count = liveAssignments(b.shift_assignments).length
                         const unstaffed = isBlockUnstaffedFuture(b, todayStr)
+                        // ROSTER-FIX.6b — unstaffed was a red hairline border and
+                        // nothing else. It survives neither greyscale nor the
+                        // ~8% of male operators with a red/green deficiency, and
+                        // there is no text for a screen reader to reach at all.
+                        // The warning glyph and the sr-only word carry it now;
+                        // the border stays as the at-a-glance cue for everyone else.
+                        const showUnstaffed = isManager && unstaffed
                         return (
                           <div
                             key={b.id}
-                            className={`text-[10px] truncate rounded px-1 py-0.5 ${isManager && unstaffed ? 'border border-red-500/40' : ''}`}
+                            className={`text-[10px] truncate rounded px-1 py-0.5 ${showUnstaffed ? 'border border-red-500/40' : ''}`}
                             style={{ backgroundColor: (tmpl.color || '#3B82F6') + '20', color: tmpl.color || '#3B82F6' }}
-                            title={`${tmpl.name || 'Shift'} · ${formatTime(b.start_time)}–${formatTime(b.end_time)}${isManager ? ` · ${count}/${b.max_coaches}` : ''}`}
+                            title={`${tmpl.name || 'Shift'} · ${formatTime(b.start_time)}–${formatTime(b.end_time)}${isManager ? ` · ${count}/${b.max_coaches}` : ''}${showUnstaffed ? ' · Unstaffed' : ''}`}
                           >
+                            {showUnstaffed && (
+                              <>
+                                <AlertTriangle size={9} className="inline-block mr-0.5 -mt-px text-red-700" aria-hidden="true" />
+                                <span className="sr-only">Unstaffed. </span>
+                              </>
+                            )}
                             {formatTime(b.start_time)}{isManager ? ` ${count}/${b.max_coaches}` : ''}
                           </div>
                         )
@@ -1147,6 +1189,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
               return cells
             })()}
           </div>
+          </div>
         </div>
       ) : (
         // ── WEEK VIEW ──
@@ -1155,7 +1198,11 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
         // of assigned coaches (or an empty-state with a red flag
         // for future unstaffed demand windows). Click opens the
         // assign popover.
-        <div className="grid grid-cols-7 gap-2">
+        // ROSTER-FIX.6b — same floor as the month grid; a week card carries a
+        // template name, a time range and a coach list, none of which survive
+        // a 50px column.
+        <div className="overflow-x-auto">
+        <div className="grid grid-cols-7 gap-2 min-w-[840px]">
           {(() => {
             const holidayByDate = indexByDate(holidays)
             return DAY_LABELS.map((label, i) => {
@@ -1164,6 +1211,10 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
               const isToday = formatDate(new Date()) === dateStr
               const dayBlocks = blocksByDay[i]
               const holiday = holidayByDate.get(dateStr)
+              // ROSTER-FIX.6b-7 — "Monday 4 May", so a block card's button
+              // names its own day. In a controls list every card would
+              // otherwise read "Manage the 09:30 Morning shift", seven times.
+              const cardDayLabel = date.toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'long' })
 
               const headerCls = isToday
                 ? 'bg-blue-600 text-white'
@@ -1177,7 +1228,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                     <div>{label}</div>
                     <div className={`text-lg font-bold ${isToday ? 'text-white' : 'text-un1t-text'}`}>{date.getDate()}</div>
                     {holiday && (
-                      <div className={`mt-0.5 text-[10px] font-medium leading-tight px-1 truncate ${isToday ? 'text-white/80' : 'text-amber-300'}`}>
+                      <div className={`mt-0.5 text-[10px] font-medium leading-tight px-1 truncate ${isToday ? 'text-white/80' : 'text-amber-700'}`}>
                         {holiday.source === 'national' ? '🇮🇪 ' : '🏷 '}{holiday.name}
                       </div>
                     )}
@@ -1223,23 +1274,62 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                       const atCapacity = count >= max
 
                       const isSelected = selectedBlockIds.has(block.id)
+                      // ROSTER-FIX.6b-7 — the card's own short name, spoken by
+                      // the overlay button below. It is deliberately NOT the
+                      // card's contents: the coach list, the capacity chip and
+                      // the "Unstaffed."/"Adjusted hours…" text stay in the
+                      // card so a screen reader can browse them line by line.
+                      const cardLabel = `${formatTime(block.start_time)} ${tmpl.name || 'Shift'} shift, ${cardDayLabel}`
                       return (
                         <div
                           key={block.id}
-                          onClick={() => {
-                            // BULK-ASSIGN.1 — in select mode, clicks
-                            // toggle selection instead of opening
-                            // the detail modal. The action bar at
-                            // the bottom takes the bulk-assign call.
-                            if (selectMode) toggleBlockSelection(block.id)
-                            else setBlockDetail(block)
-                          }}
-                          className={`rounded-md p-2 text-xs relative group cursor-pointer hover:ring-1 hover:ring-un1t-subtle/40 ${myAssignment ? 'ring-1 ring-blue-400/50' : ''} ${showUnstaffed ? 'border border-red-500/50' : ''} ${isSelected ? 'ring-2 ring-amber-400 ring-offset-1 ring-offset-un1t-bg' : ''}`}
+                          className={`rounded-md p-2 text-xs relative group hover:ring-1 hover:ring-un1t-subtle/40 ${myAssignment ? 'ring-1 ring-blue-400/50' : ''} ${showUnstaffed ? 'border border-red-500/50' : ''} ${isSelected ? 'ring-2 ring-amber-400 ring-offset-1 ring-offset-un1t-bg' : ''}`}
                           style={{ backgroundColor: showUnstaffed ? '#7F1D1D20' : blockColor + '20', borderLeft: `3px solid ${showUnstaffed ? '#EF4444' : blockColor}` }}
-                          title={selectMode ? 'Click to select / deselect' : 'Click to manage this shift'}
                         >
+                          {/* ROSTER-FIX.6b-7 — this card used to BE the button:
+                              role="button" + tabIndex on the wrapper. That is
+                              the a11y trap 6b walked into — an element with a
+                              button role has its whole subtree flattened into
+                              ONE accessible name, so the sr-only "Unstaffed."
+                              and "Adjusted hours: …" this PR added for exactly
+                              this card, plus every coach's name, were read as a
+                              single run-on string and nothing inside it could
+                              be reached on its own. The wrapper goes back to
+                              being a plain container and the click target
+                              becomes a real <button> stretched over it with a
+                              short label of its own. Enter and Space (with the
+                              scroll suppressed) come free with a real button —
+                              no hand-rolled key handler, and nothing to bubble
+                              up from a child. */}
+                          <button
+                            type="button"
+                            aria-pressed={selectMode ? isSelected : undefined}
+                            onClick={() => {
+                              // BULK-ASSIGN.1 — in select mode, clicks
+                              // toggle selection instead of opening
+                              // the detail modal. The action bar at
+                              // the bottom takes the bulk-assign call.
+                              if (selectMode) toggleBlockSelection(block.id)
+                              else setBlockDetail(block)
+                            }}
+                            className="absolute inset-0 z-10 w-full rounded-md cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-un1t-accent"
+                          >
+                            <span className="sr-only">
+                              {selectMode ? `Select ${cardLabel}` : `Manage ${cardLabel}`}
+                            </span>
+                          </button>
                           <div className="flex items-center justify-between gap-1">
                             <div className="font-semibold truncate" style={{ color: showUnstaffed ? '#FCA5A5' : 'inherit' }}>
+                              {/* ROSTER-FIX.6b — the card said "unstaffed" with a red
+                                  wash and a red left rule. Both vanish in greyscale
+                                  and neither is announced. The glyph plus the
+                                  visually-hidden word say it in text. */}
+                              {showUnstaffed && (
+                                <>
+                                  <AlertTriangle size={11} className="inline-block mr-1 -mt-0.5 text-red-700" aria-hidden="true" />
+                                  <span className="sr-only">Unstaffed. </span>
+                                </>
+                              )}
                               {tmpl.name || 'Shift'}
                             </div>
                             {/* ROSTER-FIX.2 — capacity is a manager fact. A coach
@@ -1268,7 +1358,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
 
                           {/* Assigned coaches list */}
                           {count === 0 ? (
-                            <div className="mt-1.5 text-[11px] text-red-300 italic">
+                            <div className="mt-1.5 text-[11px] text-red-700 italic">
                               {!isManager ? 'No coach assigned' : unstaffed ? 'Unstaffed — assign a coach' : 'No coach (past)'}
                             </div>
                           ) : (
@@ -1278,17 +1368,28 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                                 const hasOverride = !!(a.start_time_override || a.end_time_override)
                                 return (
                                   <div key={a.id} className="flex items-center justify-between gap-1 text-[11px]">
-                                    <span className={`truncate ${isMe ? 'text-blue-300 font-medium' : 'text-un1t-text'}`}>
+                                    <span className={`truncate ${isMe ? 'text-blue-700 font-medium' : 'text-un1t-text'}`}>
                                       {a.profiles?.full_name || 'Unknown'}
                                       {hasOverride && (
+                                        // ROSTER-FIX.6b — a bare bullet with a colour
+                                        // and a tooltip. Screen readers say "black
+                                        // circle" or nothing at all, and the amber is
+                                        // the only thing separating it from the name
+                                        // beside it. It gets a real name and its
+                                        // detail moves into a visually-hidden span so
+                                        // the tooltip is no longer the only copy.
                                         <span
-                                          className="ml-1 text-amber-300"
+                                          className="ml-1 text-amber-700"
                                           title={
                                             `Adjusted: ${formatTime(a.start_time_override || block.start_time)}–${formatTime(a.end_time_override || block.end_time)}` +
                                             (a.partial_reason ? ` · ${a.partial_reason}` : '')
                                           }
                                         >
-                                          ●
+                                          <span aria-hidden="true">●</span>
+                                          <span className="sr-only">
+                                            {' '}Adjusted hours: {formatTime(a.start_time_override || block.start_time)} to {formatTime(a.end_time_override || block.end_time)}
+                                            {a.partial_reason ? `. ${a.partial_reason}` : ''}
+                                          </span>
                                         </span>
                                       )}
                                     </span>
@@ -1303,7 +1404,11 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                               edits, remove coach, delete block, swap) lives in
                               the modal that opens on click. */}
                           {(isManager || myAssignment) && (
-                            <div className="mt-1.5 text-[10px] text-un1t-muted italic text-right opacity-0 group-hover:opacity-100 transition-opacity">
+                            // ROSTER-FIX.6b-7 — aria-hidden: it says "Click",
+                            // it only appears on hover, and the button above
+                            // already says "Manage …". Left visible, taken out
+                            // of the accessibility tree.
+                            <div aria-hidden="true" className="mt-1.5 text-[10px] text-un1t-muted italic text-right opacity-0 group-hover:opacity-100 transition-opacity">
                               Click to manage
                             </div>
                           )}
@@ -1314,6 +1419,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                     {/* Add ad-hoc block button (manager only) */}
                     {isManager && (
                       <button
+                        type="button"
                         onClick={() => setCreateTarget({ date: dateStr })}
                         className="w-full py-2 rounded-md border border-dashed border-un1t-border text-un1t-muted hover:text-un1t-text hover:border-un1t-text/30 text-xs transition-colors flex items-center justify-center gap-1"
                       >
@@ -1325,6 +1431,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
               )
             })
           })()}
+        </div>
         </div>
       )}
 
@@ -1353,6 +1460,9 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
           staff={locationStaff}
           onAssign={(profileIds) => handleAssignCoaches(assignTarget.block.id, profileIds)}
           onClose={() => setAssignTarget(null)}
+          // ROSTER-FIX.6b-7 — the Add-coach button that opened this lives in
+          // the block-detail dialog, which is unmounted while this one is up.
+          restoreFocusRef={calendarRef}
         />
       )}
 
@@ -1436,6 +1546,9 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
           shift={swapModal}
           onSubmit={handleSwapRequest}
           onClose={() => setSwapModal(null)}
+          // ROSTER-FIX.6b-7 — same shape: onSwapRequest closes the block-detail
+          // dialog, so the swap icon is gone by the time this one closes.
+          restoreFocusRef={calendarRef}
         />
       )}
 
@@ -1461,7 +1574,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
         <div className="fixed bottom-0 left-0 right-0 z-40 bg-un1t-surface border-t border-amber-500/50 shadow-2xl shadow-amber-500/10">
           <div className="max-w-7xl mx-auto px-4 py-3 flex items-center gap-3 flex-wrap">
             <div className="flex items-center gap-2 text-sm">
-              <Check size={16} className="text-amber-400" />
+              <Check size={16} className="text-amber-700" />
               <span className="font-semibold text-un1t-text">
                 {selectedBlockIds.size === 0
                   ? 'Click shifts on the calendar to select'
@@ -1500,9 +1613,9 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
           </div>
           {toast && (
             <div key={toast.id} data-toast-id={toast.id} className={`max-w-7xl mx-auto px-4 pb-2 text-xs ${
-              toast.kind === 'error' ? 'text-red-400' :
-              toast.kind === 'warning' ? 'text-amber-300' :
-              'text-emerald-400'
+              toast.kind === 'error' ? 'text-red-700' :
+              toast.kind === 'warning' ? 'text-amber-700' :
+              'text-emerald-700'
             }`}>
               {toast.message}
             </div>
@@ -1519,8 +1632,8 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
         }`}>
           <div className="flex items-start justify-between gap-3">
             <span>{toast.message}</span>
-            <button type="button" onClick={() => setToast(null)} className="text-current opacity-70 hover:opacity-100">
-              <X size={14} />
+            <button type="button" onClick={() => setToast(null)} aria-label="Dismiss this message" className="text-current opacity-70 hover:opacity-100">
+              <X size={14} aria-hidden="true" />
             </button>
           </div>
         </div>
@@ -1535,7 +1648,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
 // /assignments POST whose response shape lists per-coach outcomes
 // so 'one of these is already assigned' becomes a footnote in the
 // confirmation rather than an interruption.
-function AssignCoachModal({ block, staff, onAssign, onClose }) {
+function AssignCoachModal({ block, staff, onAssign, onClose, restoreFocusRef }) {
   const [selectedIds, setSelectedIds] = useState(() => new Set())
   const [saving, setSaving] = useState(false)
   const tmpl = block.shift_templates || {}
@@ -1569,13 +1682,19 @@ function AssignCoachModal({ block, staff, onAssign, onClose }) {
       : `Assign ${selectedIds.size} coach${selectedIds.size === 1 ? '' : 'es'}`
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-un1t-surface border border-un1t-border rounded-xl p-6 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold">Assign coaches</h3>
-          <button onClick={onClose} className="text-un1t-subtle hover:text-un1t-text"><X size={18} /></button>
-        </div>
-        <div className="bg-black/30 rounded-lg p-3 mb-4 text-sm">
+    // ROSTER-FIX.6b — dismissOnBackdrop goes false the moment a coach is
+    // ticked: the operator has made a selection they would have to redo.
+    <Modal open onClose={onClose} title="Assign coaches" dismissOnBackdrop={selectedIds.size === 0} restoreFocusRef={restoreFocusRef}>
+      <div>
+        {/* ROSTER-FIX.6b-8 — this summary block was `bg-black/30`, which was a
+            legible dark inset while the overlay was a hand-rolled dark div.
+            Converting the overlay to the Modal primitive put it on a WHITE
+            panel, where a 30%-black wash over white is a mid grey that the
+            un1t-subtle sub-line underneath it no longer reads on. It becomes
+            the ordinary light card recipe: the surface token plus a hairline.
+            `bg-un1t-bg` would be invisible here (the panel is already white)
+            and `bg-un1t-muted` is dark enough to fail its own sub-line. */}
+        <div className="bg-un1t-surface border border-un1t-border rounded-lg p-3 mb-4 text-sm text-un1t-text">
           <div className="font-medium">{tmpl.name || 'Shift'} — {dayLabel}</div>
           <div className="text-un1t-subtle text-xs mt-1">
             {formatTime(block.start_time)}–{formatTime(block.end_time)} · {currentCount}/{block.max_coaches} assigned · {slotsLeft} slot{slotsLeft === 1 ? '' : 's'} open
@@ -1608,11 +1727,12 @@ function AssignCoachModal({ block, staff, onAssign, onClose }) {
           )}
         </div>
         {overCapacity && (
-          <p className="mt-2 text-[11px] text-amber-400">
+          <p className="mt-2 text-[11px] text-amber-700">
             {selectedIds.size} selected but only {slotsLeft} slot{slotsLeft === 1 ? '' : 's'} left — the extras will be skipped.
           </p>
         )}
         <button
+          type="button"
           onClick={handleClick}
           disabled={selectedIds.size === 0 || saving || available.length === 0}
           className="w-full mt-4 bg-un1t-text text-un1t-bg font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
@@ -1620,7 +1740,7 @@ function AssignCoachModal({ block, staff, onAssign, onClose }) {
           {submitLabel}
         </button>
       </div>
-    </div>
+    </Modal>
   )
 }
 
@@ -1637,12 +1757,8 @@ function CreateBlockModal({ date, templates, onCreate, onClose }) {
   }
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-un1t-surface border border-un1t-border rounded-xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold">Add Shift Slot — {dayLabel}</h3>
-          <button onClick={onClose} className="text-un1t-subtle hover:text-un1t-text"><X size={18} /></button>
-        </div>
+    <Modal open onClose={onClose} title={`Add Shift Slot — ${dayLabel}`} dismissOnBackdrop={!templateId}>
+      <div>
         <p className="text-xs text-un1t-subtle mb-3">
           Adds a one-off block for this day. To make a slot recur, edit the template and add this weekday to its days_of_week.
         </p>
@@ -1656,6 +1772,7 @@ function CreateBlockModal({ date, templates, onCreate, onClose }) {
           </select>
         </div>
         <button
+          type="button"
           onClick={handleClick}
           disabled={!templateId || saving}
           className="w-full mt-4 bg-un1t-text text-un1t-bg font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
@@ -1663,7 +1780,7 @@ function CreateBlockModal({ date, templates, onCreate, onClose }) {
           {saving ? 'Adding...' : 'Add Slot'}
         </button>
       </div>
-    </div>
+    </Modal>
   )
 }
 
@@ -1753,13 +1870,10 @@ function PublishRosterModal({ locationId, isOwner, period, onSubmit, onClose, pu
     : new Intl.NumberFormat('en-IE', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(n)
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-un1t-surface border border-un1t-border rounded-xl p-6 w-full max-w-lg" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold">Publish roster</h3>
-          <button onClick={onClose} className="text-un1t-subtle hover:text-un1t-text"><X size={18} /></button>
-        </div>
-
+    // ROSTER-FIX.6b — no backdrop dismiss mid-publish: the click would close
+    // the modal over a request that is still going to land.
+    <Modal open onClose={onClose} title="Publish roster" dismissOnBackdrop={!publishing}>
+      <div>
         {/* Scope toggle — publish the visible week or the whole month. */}
         <div className="mb-3">
           <div className="text-un1t-subtle text-xs mb-1.5">Publish</div>
@@ -1851,12 +1965,14 @@ function PublishRosterModal({ locationId, isOwner, period, onSubmit, onClose, pu
 
             <div className="flex justify-end gap-2">
               <button
+                type="button"
                 onClick={onClose}
                 className="px-3 py-2 rounded-md text-sm border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30"
               >
                 Cancel
               </button>
               <button
+                type="button"
                 onClick={handleConfirm}
                 disabled={publishing}
                 className={`px-3 py-2 rounded-md text-sm font-medium text-white disabled:opacity-50 ${
@@ -1879,22 +1995,19 @@ function PublishRosterModal({ locationId, isOwner, period, onSubmit, onClose, pu
           </>
         )}
       </div>
-    </div>
+    </Modal>
   )
 }
 
-function SwapModal({ shift, onSubmit, onClose }) {
+function SwapModal({ shift, onSubmit, onClose, restoreFocusRef }) {
   const [reason, setReason] = useState('')
   const tmpl = shift.shift_templates || {}
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-un1t-surface border border-un1t-border rounded-xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold">Request Shift Swap</h3>
-          <button onClick={onClose} className="text-un1t-subtle hover:text-un1t-text"><X size={18} /></button>
-        </div>
-        <div className="bg-black/30 rounded-lg p-3 mb-4 text-sm">
+    <Modal open onClose={onClose} title="Request Shift Swap" dismissOnBackdrop={!reason.trim()} restoreFocusRef={restoreFocusRef}>
+      <div>
+        {/* ROSTER-FIX.6b-8 — same `bg-black/30` inset, same white panel. */}
+        <div className="bg-un1t-surface border border-un1t-border rounded-lg p-3 mb-4 text-sm text-un1t-text">
           <div className="font-medium">{tmpl.name} — {new Date(shift.shift_date + 'T00:00:00').toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'long' })}</div>
           <div className="text-un1t-subtle text-xs mt-1">
             {formatTime(shift.start_time_override || tmpl.start_time)}–{formatTime(shift.end_time_override || tmpl.end_time)}
@@ -1912,13 +2025,14 @@ function SwapModal({ shift, onSubmit, onClose }) {
           />
         </div>
         <button
+          type="button"
           onClick={() => onSubmit(shift.id, reason)}
           className="w-full mt-4 bg-un1t-text text-un1t-bg font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors"
         >
           Submit Swap Request
         </button>
       </div>
-    </div>
+    </Modal>
   )
 }
 
@@ -1948,16 +2062,21 @@ function BlockDetailModal({
     weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
   })
 
+  // ROSTER-FIX.6b-7 — this was the ONE converted dialog left dismissing on a
+  // backdrop click while it could be holding a half-filled form. The inline
+  // times-and-reason editor lives one component down in AssignmentRow, so the
+  // flag is lifted here as the set of rows currently editing: a stray click
+  // outside must not throw away times a manager has just typed. Escape and the
+  // close button still work, which is why this is not `dismissable={false}`.
+  const [editingRowIds, setEditingRowIds] = useState(() => new Set())
+  const anyRowEditing = editingRowIds.size > 0
+
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div
-        className="bg-un1t-surface border border-un1t-border rounded-lg p-5 max-w-lg w-full max-h-[90vh] overflow-y-auto"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-start justify-between gap-3 mb-4">
+    <Modal open onClose={onClose} title={tmpl.name || 'Shift'} dismissOnBackdrop={!anyRowEditing}>
+      <div>
+        {/* Sub-header — the template name is the dialog's accessible title. */}
+        <div className="mb-4">
           <div className="min-w-0">
-            <h3 className="font-semibold text-un1t-text">{tmpl.name || 'Shift'}</h3>
             <p className="text-xs text-un1t-subtle mt-0.5">{dateLabel}</p>
             <p className="text-xs text-un1t-muted mt-1 inline-flex items-center gap-1.5">
               <Clock size={11} />
@@ -1972,13 +2091,6 @@ function BlockDetailModal({
               )}
             </p>
           </div>
-          <button
-            onClick={onClose}
-            className="text-un1t-subtle hover:text-un1t-text shrink-0"
-            title="Close"
-          >
-            <X size={18} />
-          </button>
         </div>
 
         {/* Assigned coaches */}
@@ -2010,6 +2122,12 @@ function BlockDetailModal({
                     ? () => onSwapRequest(a.id)
                     : null
                 }
+                onEditingChange={(on) => setEditingRowIds((prev) => {
+                  const next = new Set(prev)
+                  if (on) next.add(a.id)
+                  else next.delete(a.id)
+                  return next
+                })}
               />
             ))
           )}
@@ -2019,6 +2137,7 @@ function BlockDetailModal({
         <div className="border-t border-un1t-border pt-4 flex items-center justify-between gap-2">
           {isManager && !atCapacity ? (
             <button
+              type="button"
               onClick={onAddCoach}
               className="text-xs bg-blue-500/20 text-blue-700 border border-blue-500/40 hover:bg-blue-500/30 px-3 py-2 rounded-md font-medium inline-flex items-center gap-1.5"
             >
@@ -2033,26 +2152,33 @@ function BlockDetailModal({
               className="text-xs bg-red-500/15 text-red-700 border border-red-500/30 hover:bg-red-500/25 disabled:opacity-50 px-3 py-2 rounded-md font-medium inline-flex items-center gap-1.5"
               title="Delete this entire shift slot"
             >
-              <X size={12} /> {busy ? 'Working…' : 'Delete this slot'}
+              <X size={12} aria-hidden="true" /> {busy ? 'Working…' : 'Delete this slot'}
             </button>
           )}
         </div>
       </div>
-    </div>
+    </Modal>
   )
 }
 
 // One coach's row inside BlockDetailModal — shows their effective
 // times, lets a manager (or the coach themselves) override the
 // times for partial shifts, request a swap, or be removed.
-function AssignmentRow({ assignment, block, isMe, canEdit, busy, onUnassign, onSave, onSwapRequest }) {
+function AssignmentRow({ assignment, block, isMe, canEdit, busy, onUnassign, onSave, onSwapRequest, onEditingChange }) {
   const blockStart = (block.start_time || '').slice(0, 5)
   const blockEnd = (block.end_time || '').slice(0, 5)
+  const coachName = assignment.profiles?.full_name || 'this coach'
   const overrideStart = (assignment.start_time_override || '').slice(0, 5)
   const overrideEnd = (assignment.end_time_override || '').slice(0, 5)
   const hasOverride = !!(assignment.start_time_override || assignment.end_time_override)
 
-  const [editing, setEditing] = useState(false)
+  const [editing, setEditingState] = useState(false)
+  // ROSTER-FIX.6b-7 — every editing flip is reported upward so BlockDetailModal
+  // can turn backdrop dismissal off while this row holds unsaved times.
+  const setEditing = useCallback((next) => {
+    setEditingState(next)
+    onEditingChange?.(next)
+  }, [onEditingChange])
   const [start, setStart] = useState(overrideStart || blockStart)
   const [end, setEnd] = useState(overrideEnd || blockEnd)
   const [reason, setReason] = useState(assignment.partial_reason || '')
@@ -2100,7 +2226,7 @@ function AssignmentRow({ assignment, block, isMe, canEdit, busy, onUnassign, onS
     <div className="bg-un1t-bg/40 border border-un1t-border rounded-md p-3">
       <div className="flex items-center justify-between gap-2">
         <div className="min-w-0">
-          <div className={`text-sm font-medium ${isMe ? 'text-blue-300' : 'text-un1t-text'}`}>
+          <div className={`text-sm font-medium ${isMe ? 'text-blue-700' : 'text-un1t-text'}`}>
             {assignment.profiles?.full_name || 'Unknown'}
             {hasOverride && (
               <span className="ml-1.5 text-[10px] uppercase font-bold bg-amber-400 text-amber-950 px-1.5 py-0.5 rounded">
@@ -2124,20 +2250,24 @@ function AssignmentRow({ assignment, block, isMe, canEdit, busy, onUnassign, onS
         <div className="flex items-center gap-1.5 shrink-0">
           {onSwapRequest && !editing && (
             <button
+              type="button"
               onClick={onSwapRequest}
               className="text-[11px] text-un1t-subtle hover:text-un1t-text inline-flex items-center gap-1 px-2 py-1 rounded hover:bg-un1t-border/40"
+              aria-label={`Request a swap for ${coachName}`}
               title="Request swap"
             >
-              <ArrowLeftRight size={11} />
+              <ArrowLeftRight size={11} aria-hidden="true" />
             </button>
           )}
           {canEdit && !editing && (
             <button
+              type="button"
               onClick={() => setEditing(true)}
               className="text-[11px] font-semibold text-white inline-flex items-center gap-1 px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-700 border border-amber-700"
+              aria-label={`${hasOverride ? 'Edit adjusted times' : 'Adjust actual times'} for ${coachName}`}
               title={hasOverride ? 'Edit adjusted times' : 'Adjust this coach’s actual times'}
             >
-              <Pencil size={11} />
+              <Pencil size={11} aria-hidden="true" />
               {hasOverride ? 'Edit' : 'Adjust'}
             </button>
           )}
@@ -2147,9 +2277,10 @@ function AssignmentRow({ assignment, block, isMe, canEdit, busy, onUnassign, onS
               onClick={onUnassign}
               disabled={busy}
               className="text-[11px] text-un1t-subtle hover:text-red-700 disabled:opacity-50 inline-flex items-center gap-1 px-2 py-1 rounded hover:bg-red-500/10"
+              aria-label={`Remove ${coachName} from this shift`}
               title="Remove coach"
             >
-              <X size={11} />
+              <X size={11} aria-hidden="true" />
             </button>
           )}
         </div>
@@ -2189,20 +2320,27 @@ function AssignmentRow({ assignment, block, isMe, canEdit, busy, onUnassign, onS
             />
           </div>
           {error && (
-            <div className="text-xs text-red-400 inline-flex items-start gap-1.5">
+            <div className="text-xs text-red-700 inline-flex items-start gap-1.5">
               <AlertCircle size={11} className="mt-0.5 shrink-0" /> {error}
             </div>
           )}
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">
+              {/* ROSTER-FIX.6b-8 — `text-amber-200` is a dark-theme ramp; on
+                  the primitive's white panel this Save button read as pale
+                  cream on near-white. The light recipe is a -700 text ramp
+                  over a 10% tint, which is what its Add-coach and Delete
+                  siblings in BlockDetailModal already use. */}
               <button
+                type="button"
                 onClick={handleSave}
                 disabled={saving}
-                className="text-xs bg-amber-500/20 text-amber-200 border border-amber-500/40 hover:bg-amber-500/30 px-3 py-1.5 rounded-md font-medium inline-flex items-center gap-1.5 disabled:opacity-50"
+                className="text-xs bg-amber-500/10 text-amber-700 border border-amber-500/40 hover:bg-amber-500/20 px-3 py-1.5 rounded-md font-medium inline-flex items-center gap-1.5 disabled:opacity-50"
               >
                 <Check size={11} /> {saving ? 'Saving…' : 'Save'}
               </button>
               <button
+                type="button"
                 onClick={() => { setEditing(false); setError(null); setStart(overrideStart || blockStart); setEnd(overrideEnd || blockEnd); setReason(assignment.partial_reason || '') }}
                 disabled={saving}
                 className="text-xs text-un1t-subtle hover:text-un1t-text px-2 py-1.5"
@@ -2212,9 +2350,10 @@ function AssignmentRow({ assignment, block, isMe, canEdit, busy, onUnassign, onS
             </div>
             {hasOverride && (
               <button
+                type="button"
                 onClick={handleClear}
                 disabled={saving}
-                className="text-[11px] text-un1t-muted hover:text-red-300"
+                className="text-[11px] text-un1t-muted hover:text-red-700"
                 title="Remove the override and inherit the block default"
               >
                 Clear override

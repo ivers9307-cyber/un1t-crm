@@ -1,13 +1,21 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Plus, Clock, Pencil, Trash2, X, AlertCircle, Users } from 'lucide-react'
+import { Plus, Clock, Pencil, Trash2, AlertCircle, Users } from 'lucide-react'
+import Modal from '@/components/ui/Modal'
 // ROSTER-FIX.6a — one failure shape and one banner across the schedule
 // screens, so no call site can quietly forget to check the response.
 import ScheduleErrorBanner from './schedule/ScheduleErrorBanner'
 import { readJson } from './schedule/useScheduleData'
 
 const PRESET_COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#06B6D4', '#F97316']
+// ROSTER-FIX.6b — the swatches are eight empty buttons whose only content is
+// a background colour, so a screen reader read eight identical "button"s and
+// the picker was unusable without sight. A hex code is not a name either.
+const COLOR_NAMES = {
+  '#3B82F6': 'Blue', '#10B981': 'Green', '#F59E0B': 'Amber', '#EF4444': 'Red',
+  '#8B5CF6': 'Violet', '#EC4899': 'Pink', '#06B6D4': 'Cyan', '#F97316': 'Orange',
+}
 const DAY_OPTIONS = [
   { code: 'mon', label: 'Mon' },
   { code: 'tue', label: 'Tue' },
@@ -145,6 +153,7 @@ export default function ShiftTemplateManager({ user }) {
           <p className="text-sm text-un1t-subtle mt-1">{user.activeLocation?.name} — Define your demand windows (when the studio needs coaches)</p>
         </div>
         <button
+          type="button"
           onClick={() => setShowForm('new')}
           className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium px-4 py-2.5 rounded-lg transition-colors"
         >
@@ -184,6 +193,7 @@ export default function ShiftTemplateManager({ user }) {
           <h3 className="text-lg font-semibold mb-2">No shift templates yet</h3>
           <p className="text-sm text-un1t-subtle mb-4">Create your first shift to start building rosters</p>
           <button
+            type="button"
             onClick={() => setShowForm('new')}
             className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium px-4 py-2.5 rounded-lg transition-colors"
           >
@@ -216,19 +226,23 @@ export default function ShiftTemplateManager({ user }) {
                 </div>
                 <div className="flex items-center gap-2">
                   <button
+                    type="button"
                     onClick={() => setShowForm(t)}
                     className="p-2 rounded hover:bg-un1t-border/50 text-un1t-subtle hover:text-un1t-text transition-colors"
+                    aria-label={`Edit the ${t.name} template`}
                     title="Edit"
                   >
-                    <Pencil size={16} />
+                    <Pencil size={16} aria-hidden="true" />
                   </button>
                   <button
+                    type="button"
                     onClick={() => handleDeactivate(t.id)}
                     className="p-2 rounded hover:bg-red-500/20 text-un1t-subtle hover:text-red-700 transition-colors"
                     disabled={busyId === t.id}
+                    aria-label={`Deactivate the ${t.name} template`}
                     title="Deactivate"
                   >
-                    <Trash2 size={16} />
+                    <Trash2 size={16} aria-hidden="true" />
                   </button>
                 </div>
               </div>
@@ -246,9 +260,10 @@ export default function ShiftTemplateManager({ user }) {
                   </div>
                   <button
                     type="button"
+                    aria-label={`Reactivate the ${t.name} template`}
                     onClick={() => setTemplateActive(t.id, true)}
                     disabled={busyId === t.id}
-                    className="text-xs text-blue-400 hover:text-blue-300 disabled:opacity-50"
+                    className="text-xs text-blue-700 hover:text-blue-800 disabled:opacity-50"
                   >
                     Reactivate
                   </button>
@@ -303,14 +318,16 @@ function TemplateFormModal({ template, onSave, onClose }) {
   }
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-un1t-surface border border-un1t-border rounded-xl p-6 w-full max-w-lg" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold">{template ? 'Edit Shift Template' : 'New Shift Template'}</h3>
-          <button onClick={onClose} className="text-un1t-subtle hover:text-un1t-text"><X size={18} /></button>
-        </div>
-
-        <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
+    // ROSTER-FIX.6b — a template form always holds a name, times and days,
+    // so the backdrop never dismisses it. Escape and Close still do.
+    <Modal
+      open
+      onClose={onClose}
+      title={template ? 'Edit Shift Template' : 'New Shift Template'}
+      dismissOnBackdrop={false}
+    >
+      <div>
+        <div className="space-y-4 pr-1">
           <div>
             <label className="block text-xs text-un1t-subtle mb-1">Name *</label>
             <input
@@ -347,9 +364,9 @@ function TemplateFormModal({ template, onSave, onClose }) {
             <div className="flex items-center justify-between mb-1.5">
               <label className="text-xs text-un1t-subtle">Days this shift applies to *</label>
               <div className="flex items-center gap-2 text-[11px]">
-                <button type="button" onClick={selectAllWeek} className="text-blue-400 hover:text-blue-300">Mon–Fri</button>
+                <button type="button" onClick={selectAllWeek} className="text-blue-700 hover:text-blue-800">Mon–Fri</button>
                 <span className="text-un1t-muted">·</span>
-                <button type="button" onClick={selectAll} className="text-blue-400 hover:text-blue-300">All</button>
+                <button type="button" onClick={selectAll} className="text-blue-700 hover:text-blue-800">All</button>
                 <span className="text-un1t-muted">·</span>
                 <button type="button" onClick={clearAll} className="text-un1t-subtle hover:text-un1t-text">Clear</button>
               </div>
@@ -437,6 +454,9 @@ function TemplateFormModal({ template, onSave, onClose }) {
                   key={c}
                   type="button"
                   onClick={() => setColor(c)}
+                  aria-label={COLOR_NAMES[c] || c}
+                  aria-pressed={color === c}
+                  title={COLOR_NAMES[c] || c}
                   className={`w-8 h-8 rounded-full transition-transform ${color === c ? 'scale-110 ring-2 ring-white ring-offset-2 ring-offset-un1t-surface' : 'hover:scale-105'}`}
                   style={{ backgroundColor: c }}
                 />
@@ -446,6 +466,7 @@ function TemplateFormModal({ template, onSave, onClose }) {
         </div>
 
         <button
+          type="button"
           onClick={() =>
             name &&
             startTime &&
@@ -467,6 +488,6 @@ function TemplateFormModal({ template, onSave, onClose }) {
           {template ? 'Save Changes' : 'Create Shift Template'}
         </button>
       </div>
-    </div>
+    </Modal>
   )
 }
