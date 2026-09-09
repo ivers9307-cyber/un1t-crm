@@ -40,6 +40,8 @@ export async function GET(request) {
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
 
+  const isManager = MANAGER_ROLES.includes(user.role)
+
   const startDate = searchParams.get('start_date')
   const endDate = searchParams.get('end_date')
   const db = createServerClient()
@@ -48,6 +50,7 @@ export async function GET(request) {
     .from('shift_blocks')
     .select(`
       *,
+      rosters:roster_id ( status ),
       shift_templates(id, name, color, role_label, start_time, end_time, days_of_week, max_coaches),
       shift_assignments(
         id,
@@ -80,7 +83,72 @@ export async function GET(request) {
   if (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 400 })
   }
+
+  // ROSTER-FIX.2 — the calendar is a coach surface too (ScheduleRosterView
+  // renders ScheduleCalendar for every role), so this feed cannot be
+  // manager-only. It is instead narrowed twice for a non-manager caller:
+  //
+  //   D1 (Richard's call) — a coach never sees a DRAFT shift. A roster is
+  //   a working document until it is published; showing an unpublished
+  //   block invites a coach to plan around a shift that may still move or
+  //   disappear. Hence the embedded `rosters.status` and the published-only
+  //   filter (a block with no roster attached is not published either).
+  //
+  //   Capacity is a MANAGER fact — min_coaches/max_coaches say how many
+  //   bodies a shift is budgeted for, and block notes / assignment notes /
+  //   partial_reason are the manager's working notes about people. None of
+  //   that is a coach's business; a coach needs the time, the shift name
+  //   and who else is on it. Cancelled assignments are dropped for the same
+  //   reason — a coach reads the roster as it stands, not its history.
+  //
+  // Managers keep the full ManageMode shape, drafts included.
+  if (!isManager) {
+    const published = (data || []).filter((b) => b.rosters?.status === 'published')
+    return NextResponse.json({ success: true, data: published.map(slimBlockForCoach) })
+  }
+
   return NextResponse.json({ success: true, data })
+}
+
+// ROSTER-FIX.2 — the coach-facing projection of a block row. Allow-list,
+// not a delete-list: a column added to shift_blocks later is invisible to
+// coaches until someone puts it here on purpose.
+function slimBlockForCoach(block) {
+  const tpl = block.shift_templates
+  return {
+    id: block.id,
+    location_id: block.location_id,
+    template_id: block.template_id,
+    block_date: block.block_date,
+    start_time: block.start_time,
+    end_time: block.end_time,
+    roster_id: block.roster_id,
+    rosters: block.rosters,
+    // The template embed carries max_coaches as well — same capacity fact,
+    // one join further out. Dropped here so the slim shape has no back door.
+    shift_templates: tpl
+      ? {
+          id: tpl.id,
+          name: tpl.name,
+          color: tpl.color,
+          role_label: tpl.role_label,
+          start_time: tpl.start_time,
+          end_time: tpl.end_time,
+          days_of_week: tpl.days_of_week,
+        }
+      : tpl,
+    shift_assignments: (block.shift_assignments || [])
+      .filter((a) => a.status !== 'cancelled')
+      .map((a) => ({
+        id: a.id,
+        profile_id: a.profile_id,
+        status: a.status,
+        assigned_at: a.assigned_at,
+        start_time_override: a.start_time_override,
+        end_time_override: a.end_time_override,
+        profiles: a.profiles,
+      })),
+  }
 }
 
 // POST /api/schedule/blocks — manual block creation. Most blocks

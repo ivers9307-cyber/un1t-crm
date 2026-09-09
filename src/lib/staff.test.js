@@ -82,3 +82,17 @@ describe('getStaffForUser', () => {
     expect(db.calls.profilesSelect).toContain(STAFF_PUBLIC_FIELDS)
   })
 })
+
+// ROSTER-FIX.2 — the roster coach picker used to fetch /api/staff, which
+// hands an admin caller `*` — every pay column — to build a name dropdown.
+describe('listStaffForUser — picker shape', () => {
+  it('never selects pay columns, even for a master caller', async () => {
+    const db = mockDb({ links: [{ profile_id: 'p1' }], profiles: [{ id: 'p1' }] })
+    const res = await listStaffForUser({ db, user: { role: 'master', locations: [{ id: 'loc-1' }] }, fields: 'picker' })
+    expect(res.ok).toBe(true)
+    expect(db.calls.profilesSelect).not.toContain('*')
+    expect(db.calls.profilesSelect).not.toContain('hourly_rate')
+    expect(db.calls.profilesSelect).not.toContain('annual_salary')
+    expect(db.calls.profilesSelect).toContain('full_name')
+  })
+})

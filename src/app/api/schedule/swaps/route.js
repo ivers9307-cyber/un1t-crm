@@ -6,6 +6,8 @@ import { validateBody } from '@/lib/validate'
 import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
 import { sendPushOnce, sendPushToRolesAtLocationOnce } from '@/lib/push-dedup'
 import { swapShiftShape } from '@/lib/roster-read'
+import { isLiveAssignment } from '@/lib/roster'
+import { dublinTodayStr } from '@/lib/dublin-time'
 
 const SwapCreateSchema = z.object({
   requester_shift_id: uuidLike,
@@ -96,13 +98,21 @@ export async function POST(request) {
   const validation = await validateBody(request, SwapCreateSchema)
   if (!validation.ok) return validation.response
   const body = validation.data
+
+  // ROSTER-FIX.2 — a swap with yourself is not a swap: on approval the two
+  // sides resolve to the same person, so the request can only ever sit in
+  // someone's inbox as noise. Reject it before any read.
+  if (body.target_id && body.target_id === user.id) {
+    return NextResponse.json({ success: false, error: 'You cannot target yourself' }, { status: 400 })
+  }
+
   const db = createServerClient()
 
   // Verify the requester owns this assignment (requester_shift_id is now a
   // shift_assignments.id — RETIRE-SHIFTS-MIRROR.5c). Pull location_id off
   // the assignment's block.
   const { data: assignment } = await db.from('shift_assignments')
-    .select('id, profile_id, shift_blocks!block_id(location_id)')
+    .select('id, profile_id, status, shift_blocks!block_id(location_id, block_date, rosters:roster_id(status))')
     .eq('id', body.requester_shift_id)
     .eq('profile_id', user.id)
     .single()
@@ -115,6 +125,63 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'Shift has no location' }, { status: 400 })
   }
 
+  // ROSTER-FIX.2 — the requester's shift must be live, published (D1: a
+  // coach never acts on a draft) and in the future.
+  if (!isLiveAssignment(assignment)) {
+    return NextResponse.json({ success: false, error: 'That shift is no longer active' }, { status: 400 })
+  }
+  if (assignment.shift_blocks?.rosters?.status !== 'published') {
+    return NextResponse.json({ success: false, error: 'That shift is not published yet' }, { status: 400 })
+  }
+  if ((assignment.shift_blocks?.block_date || '') < dublinTodayStr()) {
+    return NextResponse.json({ success: false, error: 'You can only swap a future shift' }, { status: 400 })
+  }
+
+  // ROSTER-FIX.2 — a reciprocal swap must name BOTH the target coach and one
+  // of their own live shifts at this location. Previously target_shift_id
+  // was inserted unchecked, so any assignment in the database could be
+  // named and, on approval, reassigned to the requester.
+  if (body.target_shift_id && !body.target_id) {
+    return NextResponse.json({ success: false, error: 'target_id is required with target_shift_id' }, { status: 400 })
+  }
+  if (body.target_shift_id) {
+    const { data: targetShift } = await db.from('shift_assignments')
+      .select('id, profile_id, status, shift_blocks!block_id(location_id, block_date, rosters:roster_id(status))')
+      .eq('id', body.target_shift_id)
+      .eq('profile_id', body.target_id)
+      .maybeSingle()
+    if (!targetShift || !isLiveAssignment(targetShift)) {
+      return NextResponse.json({ success: false, error: 'Target shift not found or not theirs' }, { status: 400 })
+    }
+    // ROSTER-FIX.2 — the D1 draft gate has to cover the TARGET side too. The
+    // requester's own shift was checked for a published roster but the
+    // target's was not, so a coach could name a teammate's draft-roster
+    // shift and surface a roster nobody has published yet.
+    if (targetShift.shift_blocks?.rosters?.status !== 'published') {
+      return NextResponse.json({ success: false, error: 'Target shift is not published yet' }, { status: 400 })
+    }
+    if (targetShift.shift_blocks?.location_id !== swapLocationId) {
+      return NextResponse.json({ success: false, error: 'Target shift is at a different location' }, { status: 400 })
+    }
+    if ((targetShift.shift_blocks?.block_date || '') < dublinTodayStr()) {
+      return NextResponse.json({ success: false, error: 'Target shift is in the past' }, { status: 400 })
+    }
+  }
+
+  // ROSTER-FIX.2 — one open swap per shift (mig 599 also enforces this).
+  // ROSTER-FIX.2 — this is our own read, not a client mistake: an unreadable
+  // guard must not fall through to the insert as "no open swap".
+  const { data: openSwaps, error: openSwapsError } = await db.from('shift_swap_requests')
+    .select('id')
+    .eq('requester_shift_id', body.requester_shift_id)
+    .in('status', ['pending', 'awaiting_approval'])
+  if (openSwapsError) {
+    return NextResponse.json({ success: false, error: openSwapsError.message }, { status: 500 })
+  }
+  if ((openSwaps || []).length > 0) {
+    return NextResponse.json({ success: false, error: 'This shift already has an open swap request' }, { status: 409 })
+  }
+
   const { data, error } = await db.from('shift_swap_requests').insert({
     location_id: swapLocationId,
     requester_shift_id: body.requester_shift_id,
@@ -125,6 +192,11 @@ export async function POST(request) {
     status: 'pending',
   }).select().single()
 
+  // ROSTER-FIX.2 — mig 599's partial unique index is the race-proof half of
+  // the open-swap check above; surface it as the same 409, not a raw 400.
+  if (error?.code === '23505') {
+    return NextResponse.json({ success: false, error: 'This shift already has an open swap request' }, { status: 409 })
+  }
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
 
   // Notify the targeted teammate if one was specified, otherwise alert

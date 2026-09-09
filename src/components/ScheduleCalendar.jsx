@@ -948,7 +948,8 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                         {date.getDate()}
                       </span>
                       <div className="flex items-center gap-1">
-                        {unstaffedCount > 0 && (
+                        {/* ROSTER-FIX.2 — unstaffed is a manager cue; coaches get a capacity-free feed and no red flags. */}
+                        {isManager && unstaffedCount > 0 && (
                           <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-700" title={`${unstaffedCount} unstaffed`}>
                             !{unstaffedCount}
                           </span>
@@ -973,11 +974,11 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                         return (
                           <div
                             key={b.id}
-                            className={`text-[10px] truncate rounded px-1 py-0.5 ${unstaffed ? 'border border-red-500/40' : ''}`}
+                            className={`text-[10px] truncate rounded px-1 py-0.5 ${isManager && unstaffed ? 'border border-red-500/40' : ''}`}
                             style={{ backgroundColor: (tmpl.color || '#3B82F6') + '20', color: tmpl.color || '#3B82F6' }}
-                            title={`${tmpl.name || 'Shift'} · ${formatTime(b.start_time)}–${formatTime(b.end_time)} · ${count}/${b.max_coaches}`}
+                            title={`${tmpl.name || 'Shift'} · ${formatTime(b.start_time)}–${formatTime(b.end_time)}${isManager ? ` · ${count}/${b.max_coaches}` : ''}`}
                           >
-                            {formatTime(b.start_time)} {count}/{b.max_coaches}
+                            {formatTime(b.start_time)}{isManager ? ` ${count}/${b.max_coaches}` : ''}
                           </div>
                         )
                       })}
@@ -1072,6 +1073,8 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                       const count = assignments.length
                       const max = block.max_coaches || 15
                       const unstaffed = isBlockUnstaffedFuture(block, todayStr)
+                      // ROSTER-FIX.2 — same reason: the red unstaffed styling is manager-only, coaches see the neutral card.
+                      const showUnstaffed = isManager && unstaffed
                       const myAssignment = assignments.find(a => a.profile_id === user.id)
                       const blockColor = tmpl.color || '#3B82F6'
                       const atCapacity = count >= max
@@ -1088,26 +1091,32 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                             if (selectMode) toggleBlockSelection(block.id)
                             else setBlockDetail(block)
                           }}
-                          className={`rounded-md p-2 text-xs relative group cursor-pointer hover:ring-1 hover:ring-un1t-subtle/40 ${myAssignment ? 'ring-1 ring-blue-400/50' : ''} ${unstaffed ? 'border border-red-500/50' : ''} ${isSelected ? 'ring-2 ring-amber-400 ring-offset-1 ring-offset-un1t-bg' : ''}`}
-                          style={{ backgroundColor: unstaffed ? '#7F1D1D20' : blockColor + '20', borderLeft: `3px solid ${unstaffed ? '#EF4444' : blockColor}` }}
+                          className={`rounded-md p-2 text-xs relative group cursor-pointer hover:ring-1 hover:ring-un1t-subtle/40 ${myAssignment ? 'ring-1 ring-blue-400/50' : ''} ${showUnstaffed ? 'border border-red-500/50' : ''} ${isSelected ? 'ring-2 ring-amber-400 ring-offset-1 ring-offset-un1t-bg' : ''}`}
+                          style={{ backgroundColor: showUnstaffed ? '#7F1D1D20' : blockColor + '20', borderLeft: `3px solid ${showUnstaffed ? '#EF4444' : blockColor}` }}
                           title={selectMode ? 'Click to select / deselect' : 'Click to manage this shift'}
                         >
                           <div className="flex items-center justify-between gap-1">
-                            <div className="font-semibold truncate" style={{ color: unstaffed ? '#FCA5A5' : 'inherit' }}>
+                            <div className="font-semibold truncate" style={{ color: showUnstaffed ? '#FCA5A5' : 'inherit' }}>
                               {tmpl.name || 'Shift'}
                             </div>
-                            <span
-                              className={`text-[10px] px-1.5 py-0.5 rounded font-medium flex-shrink-0 ${
-                                unstaffed
-                                  ? 'bg-red-500/20 text-red-700'
-                                  : atCapacity
-                                    ? 'bg-un1t-border/60 text-un1t-text'
-                                    : ''
-                              }`}
-                              style={!unstaffed && !atCapacity ? { backgroundColor: blockColor + '30', color: blockColor } : undefined}
-                            >
-                              {count}/{max}
-                            </span>
+                            {/* ROSTER-FIX.2 — capacity is a manager fact. A coach
+                                sees the shift, its time and who is on it; how many
+                                bodies it is budgeted for is not their business, and
+                                the API no longer sends max_coaches to them anyway. */}
+                            {isManager && (
+                              <span
+                                className={`text-[10px] px-1.5 py-0.5 rounded font-medium flex-shrink-0 ${
+                                  unstaffed
+                                    ? 'bg-red-500/20 text-red-700'
+                                    : atCapacity
+                                      ? 'bg-un1t-border/60 text-un1t-text'
+                                      : ''
+                                }`}
+                                style={!unstaffed && !atCapacity ? { backgroundColor: blockColor + '30', color: blockColor } : undefined}
+                              >
+                                {count}/{max}
+                              </span>
+                            )}
                           </div>
                           <div className="text-un1t-subtle mt-0.5 flex items-center gap-1">
                             <Clock size={10} />
@@ -1117,7 +1126,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                           {/* Assigned coaches list */}
                           {count === 0 ? (
                             <div className="mt-1.5 text-[11px] text-red-300 italic">
-                              {unstaffed ? 'Unstaffed — assign a coach' : 'No coach (past)'}
+                              {!isManager ? 'No coach assigned' : unstaffed ? 'Unstaffed — assign a coach' : 'No coach (past)'}
                             </div>
                           ) : (
                             <div className="mt-1.5 space-y-0.5">
@@ -1780,8 +1789,14 @@ function BlockDetailModal({
             <p className="text-xs text-un1t-muted mt-1 inline-flex items-center gap-1.5">
               <Clock size={11} />
               {formatTime(block.start_time)}–{formatTime(block.end_time)}
-              <span className="mx-1">·</span>
-              {assignments.length}/{max} assigned
+              {/* ROSTER-FIX.2 — capacity stays manager-only here too; coaches
+                  reach this modal for their own shift. */}
+              {isManager && (
+                <>
+                  <span className="mx-1">·</span>
+                  {assignments.length}/{max} assigned
+                </>
+              )}
             </p>
           </div>
           <button
