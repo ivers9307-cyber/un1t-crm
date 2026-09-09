@@ -60,8 +60,13 @@ function req(body) {
 // Minimal Supabase-shaped mock. `rosters` selects resolve to
 // `publishedRosters` (the overlap probe); the insert resolves to a row;
 // shift_blocks reads resolve empty and writes are recorded.
-function buildDb({ publishedRosters = [] } = {}) {
+function buildDb({ publishedRosters = [], insertError = null, tagError = null, blockDates = {} } = {}) {
   const inserts = []
+  // ROSTER-SUPERSEDE.1 — rosters now also takes UPDATEs (the release before
+  // the insert, the superseded_by stamp after the re-tag, the restore on a
+  // failed insert). Each is recorded with the filters it was narrowed by, so
+  // ordering against the insert can be asserted.
+  const rosterUpdates = []
   const db = {
     from(table) {
       if (table === 'rosters') {
@@ -73,32 +78,66 @@ function buildDb({ publishedRosters = [] } = {}) {
           order: () => chain,
           neq: () => chain,
           in: () => chain,
+          is: () => chain,
           then: (onF, onR) => Promise.resolve({ data: publishedRosters, error: null }).then(onF, onR),
           insert(payload) {
             inserts.push(payload)
             return {
-              select: () => ({ single: () => Promise.resolve({ data: { id: 'roster-new', ...payload }, error: null }) }),
+              select: () => ({
+                single: () => Promise.resolve({
+                  data: insertError ? null : { id: 'roster-new', ...payload },
+                  error: insertError,
+                }),
+              }),
             }
+          },
+          update(payload) {
+            const rec = { payload, where: [], afterInsert: inserts.length > 0 }
+            rosterUpdates.push(rec)
+            const w = {
+              eq: (c, v) => { rec.where.push([c, v]); return w },
+              in: (c, v) => { rec.where.push([c, v]); return w },
+              is: (c, v) => { rec.where.push([c, v]); return w },
+              then: (onF, onR) => Promise.resolve({ data: null, error: null }).then(onF, onR),
+            }
+            return w
           },
         }
         return chain
       }
       if (table === 'shift_blocks') {
+        let isUpdate = false
+        let head = false
+        let rosterId = null
+        let asc = true
         const chain = {
-          select: () => chain,
-          update: () => chain,
-          eq: () => chain,
+          select: (_c, opts) => { head = !!opts?.head; return chain },
+          update: () => { isUpdate = true; return chain },
+          eq: (c, v) => { if (c === 'roster_id') rosterId = v; return chain },
           gte: () => chain,
           lte: () => chain,
           is: () => chain,
-          then: (onF, onR) => Promise.resolve({ data: [], error: null }).then(onF, onR),
+          order: (_c, o) => { asc = o?.ascending !== false; return chain },
+          limit: () => chain,
+          maybeSingle: () => {
+            const dates = [...(blockDates[rosterId] || [])].sort()
+            const pick = asc ? dates[0] : dates[dates.length - 1]
+            return Promise.resolve({ data: pick ? { block_date: pick } : null, error: null })
+          },
+          then: (onF, onR) => Promise.resolve(
+            isUpdate
+              ? { data: null, error: tagError }
+              : head
+                ? { data: null, count: (blockDates[rosterId] || []).length, error: null }
+                : { data: [], error: null },
+          ).then(onF, onR),
         }
         return chain
       }
       throw new Error('unexpected table: ' + table)
     },
   }
-  return { db, inserts }
+  return { db, inserts, rosterUpdates }
 }
 
 beforeEach(() => {
@@ -192,5 +231,102 @@ describe('POST /api/schedule/rosters — overlapping published rosters', () => {
     const res = await publish()
     expect(res.status).toBe(409)
     expect(inserts).toHaveLength(0)
+  })
+})
+
+
+// ROSTER-SUPERSEDE.1 — the publish now RESOLVES the overlaps it is allowed to
+// create instead of leaving a roster row claiming days it owns no blocks on.
+// Ordering is the whole trick: mig 602's exclusion constraint judges the
+// INSERT, which is necessarily before any block can carry the new roster's
+// id, so the swallowed rosters are stood down BEFORE the insert and stamped
+// with their successor AFTER the re-tag.
+describe('POST /api/schedule/rosters — supersede', () => {
+  it('stands the swallowed roster down BEFORE inserting, then stamps the successor', async () => {
+    const { db, inserts, rosterUpdates } = buildDb({
+      publishedRosters: [{ id: 'r-same', period_start: '2026-05-04', period_end: '2026-05-10' }],
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await publish()
+    expect(res.status).toBe(201)
+    expect(inserts).toHaveLength(1)
+
+    const release = rosterUpdates.find((u) => u.payload.status === 'superseded')
+    expect(release).toBeTruthy()
+    // 🔴 Before the insert, or the constraint rejects it with a raw 23P01.
+    expect(release.afterInsert).toBe(false)
+    // The successor does not exist yet at release time.
+    expect(release.payload.superseded_by).toBeNull()
+
+    const stamp = rosterUpdates.find((u) => u.payload.superseded_by === 'roster-new')
+    expect(stamp).toBeTruthy()
+    expect(stamp.afterInsert).toBe(true)
+  })
+
+  it('stands down a week the new MONTH swallows', async () => {
+    const { db, rosterUpdates } = buildDb({
+      publishedRosters: [{ id: 'r-week', period_start: '2026-05-04', period_end: '2026-05-10' }],
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(req({ location_id: LOC_1, period_start: '2026-05-01', period_end: '2026-05-31' }))
+    expect(res.status).toBe(201)
+    expect(rosterUpdates.some((u) => u.payload.status === 'superseded')).toBe(true)
+  })
+
+  it('an over-budget manager DRAFT supersedes nothing', async () => {
+    // A draft owns no blocks until it is approved, so standing a live roster
+    // down on its behalf would unpublish that period for a draft that may
+    // never be approved.
+    getCurrentUser.mockResolvedValue({ id: 'mgr-1', role: 'manager', locations: [{ id: LOC_1 }] })
+    projectPublishImpact.mockResolvedValue({ ...UNDER_BUDGET, overBudget: true, overrunEur: 50 })
+    const { db, inserts, rosterUpdates } = buildDb({ publishedRosters: [] })
+    createServerClient.mockReturnValue(db)
+
+    const res = await publish()
+    expect(res.status).toBe(202)
+    expect(inserts[0].status).toBe('draft')
+    expect(rosterUpdates).toHaveLength(0)
+  })
+
+  it('puts the released rosters back when the insert fails', async () => {
+    // Superseded with no successor, they still own their blocks — every one
+    // would read as UNPUBLISHED to its coach.
+    const { db, rosterUpdates } = buildDb({
+      publishedRosters: [{ id: 'r-same', period_start: '2026-05-04', period_end: '2026-05-10' }],
+      insertError: { message: 'duplicate key' },
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await publish()
+    expect(res.status).toBe(400)
+    expect(rosterUpdates.at(-1).payload).toEqual({ status: 'published', superseded_at: null, superseded_by: null })
+  })
+
+  it('says so when tagging fails after the swallowed rosters were stood down', async () => {
+    const { db } = buildDb({
+      publishedRosters: [{ id: 'r-same', period_start: '2026-05-04', period_end: '2026-05-10' }],
+      tagError: { message: 'deadlock detected' },
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await publish()
+    expect(res.status).toBe(201)
+    const body = await res.json()
+    expect(body.warning).toMatch(/deadlock detected/)
+    expect(body.warning).toMatch(/read as unpublished/)
+  })
+
+  it('a straddling overlap is still a 409 and stands nothing down', async () => {
+    const { db, inserts, rosterUpdates } = buildDb({
+      publishedRosters: [{ id: 'r-prev', period_start: '2026-04-27', period_end: '2026-05-05' }],
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await publish()
+    expect(res.status).toBe(409)
+    expect(inserts).toHaveLength(0)
+    expect(rosterUpdates).toHaveLength(0)
   })
 })

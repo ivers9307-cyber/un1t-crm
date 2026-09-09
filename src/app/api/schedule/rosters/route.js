@@ -30,7 +30,13 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess, getUserLocationIds } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, isoDate, MANAGER_ROLES } from '@/lib/schemas'
-import { projectPublishImpact, findConflictingPublishedRosters } from '@/lib/roster-publish'
+import {
+  projectPublishImpact,
+  findConflictingPublishedRosters,
+  releasePublishedRostersFor,
+  restorePublishedRosters,
+  supersedeSwallowedRosters,
+} from '@/lib/roster-publish'
 import { sendOverBudgetApprovalEmail } from '@/lib/roster-email'
 import { notifyStaffOfPublish, publishNotifyRowsForBlocks } from '@/lib/roster-notify'
 import { notifyUsers } from '@/lib/notify'
@@ -114,21 +120,20 @@ export async function POST(request) {
   // approve endpoint runs too — a guard only one publish path ran was no
   // guard at all.
   //
-  // KNOWN GAP — what a SUPERSET publish leaves behind, deliberately not
-  // fixed here:
-  //   1. The swallowed week's `rosters` row STAYS, now owning zero blocks,
-  //      because the wider publish rewrote roster_id across the whole range.
-  //      It lingers in retros as a roster that published nothing.
-  //   2. That week's coaches are NOT re-notified by the wider publish. Both
-  //      this route and approve only notify blocks that were
-  //      `roster_id IS NULL` before tagging, and the swallowed week's blocks
-  //      already carried the old roster's id — so a month publish tells the
-  //      coaches it just took over nothing at all.
-  // This is also why mig 602's exclusion constraint is on HOLD: it would
-  // reject the superset publish outright rather than let the wider roster
-  // win. All three wait on the "supersede swallowed rosters" decision
-  // (extend the existing row, or mark the contained rows superseded and
-  // re-notify their coaches) — Richard's call, it rewrites audit rows.
+  // ROSTER-SUPERSEDE.1 — this is now only the STRADDLE guard. An exact or a
+  // containing period is not just tolerated, it is resolved: the rosters this
+  // period swallows are superseded below (released before the insert, stamped
+  // with their successor after the re-tag), which is what lets mig 602's
+  // exclusion constraint be applied at all.
+  //
+  // KNOWN GAP, still open and deliberately not fixed here: the swallowed
+  // week's coaches are NOT re-notified by the wider publish. Both this route
+  // and approve only notify blocks that were `roster_id IS NULL` before
+  // tagging, and the swallowed week's blocks already carried the old roster's
+  // id, so a month publish tells the coaches it just took over nothing at
+  // all. The change-log path below covers the coaches whose shifts actually
+  // CHANGED, which is the case that matters most; a re-notify of the rest is
+  // a separate decision about how much noise a widening publish should make.
   const { conflicts, error: overlapErr } = await findConflictingPublishedRosters(db, {
     locationId: location_id,
     periodStart: period_start,
@@ -189,6 +194,33 @@ export async function POST(request) {
   const status = needsApproval ? 'draft' : 'published'
   const nowIso = new Date().toISOString()
 
+  // ROSTER-SUPERSEDE.1 — phase 1, and it MUST be before the insert: mig 602's
+  // exclusion constraint judges the INSERT, which happens before any block can
+  // carry the new roster's id, so an exact re-publish would meet a raw 23P01
+  // if we only superseded afterwards. Containment is exactly the set the guard
+  // above lets through, so after this nothing published overlaps.
+  //
+  // Only for a real publish. A DRAFT owns no blocks until it is approved, so
+  // superseding a live roster on its behalf would unpublish that period's
+  // shifts for a draft that may never be approved.
+  let released = []
+  if (status === 'published') {
+    const rel = await releasePublishedRostersFor(db, {
+      locationId: location_id,
+      periodStart: period_start,
+      periodEnd: period_end,
+    })
+    if (rel.error) {
+      // Nothing has changed yet, so refusing here is free — and it is far
+      // better than letting the insert fail on the constraint with a 23P01.
+      return NextResponse.json({
+        success: false,
+        error: `Could not stand down the rosters this publish replaces: ${rel.error.message}`,
+      }, { status: 400 })
+    }
+    released = rel.released
+  }
+
   // Insert the roster row. status='draft' for needs-approval,
   // 'published' otherwise. published_by + published_at populated
   // up-front for self-publishes; for drafts, populated when the
@@ -215,8 +247,23 @@ export async function POST(request) {
     .single()
 
   if (insertErr) {
+    // ROSTER-SUPERSEDE.1 — the publish never happened, so put the released
+    // rosters back. A roster left superseded with no successor still owns its
+    // blocks, and every one of them would read as UNPUBLISHED to its coach.
+    const { error: restoreErr } = await restorePublishedRosters(db, released)
+    if (restoreErr) {
+      logWarn('rosters', 'roster insert failed AND the superseded rosters could not be restored', {
+        err: restoreErr.message,
+        released: released.map((r) => r.id),
+      })
+    }
     return NextResponse.json({ success: false, error: insertErr.message }, { status: 400 })
   }
+
+  // ROSTER-SUPERSEDE.1 — surfaced on the response in the route's existing
+  // partial-success shape rather than swallowed: the publish DID happen, but
+  // an older roster may still be claiming days it owns no blocks on.
+  let supersedeWarning = null
 
   if (status === 'published') {
     // RETIRE-SHIFTS-MIRROR.6 — capture the blocks NEWLY being published
@@ -248,11 +295,36 @@ export async function POST(request) {
     if (tagErr) {
       // Roster row already in place — let the operator see it as
       // a partial success rather than rolling back the whole thing.
+      //
+      // ROSTER-SUPERSEDE.1 — say the second half out loud. The rosters this
+      // publish replaced are already superseded, and the blocks never moved
+      // to the new one, so those shifts read as unpublished until the period
+      // is published again. Restoring them is not on offer: the new roster is
+      // published over the same days and the exclusion constraint would
+      // refuse to put a second published roster back there.
+      const stranded = released.length > 0
+        ? ' The rosters it replaces have already been stood down, so those shifts read as unpublished until you publish this period again.'
+        : ''
       return NextResponse.json({
         success: true,
         data: roster,
-        warning: `Roster published but block tagging failed: ${tagErr.message}`,
+        warning: `Roster published but block tagging failed: ${tagErr.message}.${stranded}`,
       }, { status: 201 })
+    }
+
+    // ROSTER-SUPERSEDE.1 — phase 2, and it has to be AFTER the re-tag above:
+    // the recount inside reads the new roster as owning nothing until its
+    // blocks carry its id. The helper excludes roster.id explicitly too.
+    const swallow = await supersedeSwallowedRosters(db, {
+      locationId: location_id,
+      newRosterId: roster.id,
+      periodStart: period_start,
+      periodEnd: period_end,
+      releasedIds: released.map((r) => r.id),
+    })
+    if (swallow.warning) {
+      logWarn('rosters', 'supersede of swallowed rosters incomplete', { err: swallow.warning, roster_id: roster.id })
+      supersedeWarning = swallow.warning
     }
 
     // Coaches assigned to the newly-published blocks.
@@ -321,5 +393,6 @@ export async function POST(request) {
     data: roster,
     impact,
     needs_approval: status === 'draft',
+    ...(supersedeWarning ? { warning: `Roster published, but standing down the rosters it replaces did not fully complete: ${supersedeWarning}` } : {}),
   }, { status: status === 'draft' ? 202 : 201 })
 }
