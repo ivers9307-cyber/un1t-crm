@@ -1,11 +1,13 @@
 // ROSTER-FIX.1 (D4) — route-level contract test for
 // PUT /api/schedule/swaps/[id], the approved-DROP path.
 //
-// A drop DELETES the requester's shift_assignments row, and mig 237's
-// `requester_shift_id ... ON DELETE CASCADE` takes this swap row with it. So
-// the audit row and the swap-row stamp both have to happen BEFORE the delete
-// — after it there is nothing left to read. These tests lock that ordering
-// and the roster_change_log payload.
+// A drop DELETES the requester's shift_assignments row. Under mig 237's
+// `requester_shift_id ... ON DELETE CASCADE` that took this swap row with it,
+// so the audit row and the swap-row stamp both had to happen BEFORE the
+// delete. ROSTER-FIX.8a's mig 603 makes the FK ON DELETE SET NULL, so the
+// swap row now survives either order — the ordering is kept (the embed still
+// has to be read before the assignment goes) and these tests still lock it,
+// along with the roster_change_log payload.
 //
 // Supabase + auth + push are mocked (the mock pattern is the one in
 // src/app/api/schedule/blocks/[id]/assignments/route.test.js); the swap

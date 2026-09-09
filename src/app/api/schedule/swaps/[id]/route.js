@@ -37,8 +37,9 @@ export async function PUT(request, props) {
   // week-preselects the schedule tab on it).
   // ROSTER-FIX.1 (D4) — the block embed also carries id / location_id and the
   // roster status because an approved DROP has to write its roster_change_log
-  // row from THIS in-memory copy: the delete cascades the swap row away, so
-  // nothing can be re-read afterwards.
+  // row from THIS in-memory copy: the assignment is deleted, so the embed
+  // cannot be re-read afterwards (and since mig 603 the swap row survives with
+  // requester_shift_id NULL, which is just as unreadable for these fields).
   const { data: swap } = await db.from('shift_swap_requests')
     .select('*, requester_shift:shift_assignments!requester_shift_id(id, profile_id, block_id, block:shift_blocks!block_id(id, location_id, block_date, rosters:roster_id(status))), target_shift:shift_assignments!target_shift_id(id, profile_id, block_id)')
     .eq('id', params.id)
@@ -59,14 +60,14 @@ export async function PUT(request, props) {
     return NextResponse.json({ success: false, error: decision.error }, { status: decision.status })
   }
 
-  // ROSTER-FIX.1 (D4) — ORDER MATTERS, and it is the reverse of what it was.
-  // `shift_swap_requests.requester_shift_id` FKs `shift_assignments(id) ON
-  // DELETE CASCADE` (mig 237), so an approved DROP now deletes the assignment
-  // and the cascade takes this swap row with it. Stamp the swap row FIRST and
-  // capture its data, then apply the assignment ops; for the drop case the
-  // swap row is gone afterwards and the captured row is what we return.
-  // (PR 8 replaces the CASCADE with ON DELETE SET NULL so the history
-  // survives; until then this ordering is the correct one.)
+  // ROSTER-FIX.8a — `shift_swap_requests.requester_shift_id` FKs
+  // `shift_assignments(id) ON DELETE SET NULL` as of mig 603 (it was ON DELETE
+  // CASCADE from mig 237), so an approved DROP no longer takes this swap row
+  // with it: the history survives the deletion with a null shift pointer, and
+  // EITHER ORDER is now safe. The order below is kept as it is — stamp the
+  // swap row first, then apply the assignment ops — because it is what the
+  // tests pin and because it still reads the captured `swap` for the audit
+  // row rather than depending on a re-read.
   //
   // ROSTER-FIX.1 — the cost of that ordering: if the assignment op fails after
   // the swap row is already `approved` and the change-log row is written, the
@@ -82,10 +83,11 @@ export async function PUT(request, props) {
 
   // Assignment writes are awaited so a failure surfaces.
   for (const op of decision.assignmentOps) {
-    // ROSTER-FIX.1 (D4) — audit the drop BEFORE the row goes. The delete
-    // cascades this swap row away (mig 237), so after it there is no swap and
-    // no embed left to describe what happened; the only trace of a coach
-    // losing a shift would be its absence.
+    // ROSTER-FIX.1 (D4) — audit the drop BEFORE the row goes. After the delete
+    // there is no assignment and no embed left to describe what happened
+    // (ROSTER-FIX.8a: the swap row itself now survives, with a null
+    // requester_shift_id); the only trace of a coach losing a shift would
+    // otherwise be its absence.
     if (op.delete) {
       const block = swap.requester_shift?.block
       // ROSTER-FIX.1 — isPublished is passed TRUE unconditionally, unlike
