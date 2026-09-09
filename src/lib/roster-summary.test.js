@@ -127,6 +127,25 @@ describe('summarizeWeek', () => {
     expect(r.fte[0].status).toBe('on_target')
   })
 
+  // ROSTER-FIX.1 — a cancelled assignment is a dropped shift: it must not
+  // bill the coach's hours or make the block look staffed.
+  it('ignores cancelled assignments when summing hours and contractor euros', () => {
+    const blocks = [{
+      id: 'b1', location_id: 'l', block_date: '2026-06-01', start_time: '09:00:00', end_time: '11:00:00',
+      max_coaches: 15, shift_templates: { start_time: '09:00:00', end_time: '11:00:00' },
+      shift_assignments: [
+        { profile_id: 'c1', status: 'cancelled' },
+        { profile_id: 'c2', status: 'scheduled' },
+      ],
+    }]
+    const staff = [
+      { id: 'c1', full_name: 'A', active: true, employment_type: 'contractor', hourly_rate: 50 },
+      { id: 'c2', full_name: 'B', active: true, employment_type: 'contractor', hourly_rate: 50 },
+    ]
+    const out = summarizeWeek({ blocks, staff, weekStart: new Date('2026-06-01T00:00:00') })
+    expect(out.contractorWeekCostEur).toBe(100) // 2h × €50, c1 excluded
+  })
+
   it('costs contractor hours × rate, FTE excluded from the euro total', () => {
     const blocks = [
       block({ id: 'b1', date: '2026-05-04', start: '09:00', end: '11:00', coaches: ['dan', 'sarah'] }),

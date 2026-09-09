@@ -6,7 +6,7 @@
 // in the phase 4 panel.
 
 import { describe, it, expect, vi } from 'vitest'
-import { fetchIncompletePayProfiles, fetchPendingRosterApprovalsCount, paginatedSumCents, fetchAdsSummary, fetchStudioDashboardData } from './dashboard-data'
+import { fetchIncompletePayProfiles, fetchPendingRosterApprovalsCount, paginatedSumCents, fetchAdsSummary, fetchStudioDashboardData, fetchPersonalDashboardData, fetchUnstaffedBlocksThisWeek, fetchTodayOps } from './dashboard-data'
 
 function mockSupabaseFor(rows) {
   return {
@@ -363,5 +363,146 @@ describe('fetchStudioDashboardData', () => {
   it('refuses without a location', async () => {
     const res = await fetchStudioDashboardData({ from: vi.fn() }, null)
     expect(res).toEqual({ success: false, error: 'No location' })
+  })
+})
+
+// ROSTER-FIX.1 (D1) — the personal Today dashboard is published-only for
+// EVERYONE. A manager who also coaches sees their own drafts on the Schedule
+// calendar, never here, so the rule lives in the reader rather than being
+// plumbed from the two callers (web today page + mobile dashboard-api), which
+// pass no role.
+describe('fetchPersonalDashboardData — draft shifts (D1)', () => {
+  // Thenable builder mock: every filter returns `this`, awaiting yields the
+  // rows registered for that table (the repo's roster-read.test.js pattern).
+  function makePersonalDb(byTable) {
+    return {
+      from(table) {
+        const result = byTable[table] || { data: [], error: null }
+        const builder = {
+          select() { return this },
+          eq() { return this },
+          in() { return this },
+          gt() { return this },
+          gte() { return this },
+          lte() { return this },
+          order() { return this },
+          then(resolve) { return Promise.resolve(result).then(resolve) },
+        }
+        return builder
+      },
+    }
+  }
+
+  const block = (rosterStatus) => ({
+    block_date: '2026-06-10',
+    location_id: 'loc-1',
+    roster_id: rosterStatus ? 'r1' : null,
+    rosters: rosterStatus ? { status: rosterStatus } : null,
+    shift_templates: { name: 'AM', start_time: '09:00:00', end_time: '10:00:00' },
+    locations: { id: 'loc-1', name: 'Studio' },
+  })
+
+  it('returns published shifts only, dropping a draft-roster shift', async () => {
+    const db = makePersonalDb({
+      shift_assignments: {
+        data: [
+          { id: 'pub', profile_id: 'p1', start_time_override: null, end_time_override: null, status: 'scheduled', shift_blocks: block('published') },
+          { id: 'draft', profile_id: 'p1', start_time_override: null, end_time_override: null, status: 'scheduled', shift_blocks: block('draft') },
+        ],
+        error: null,
+      },
+    })
+    const res = await fetchPersonalDashboardData(db, 'p1')
+    expect(res.success).toBe(true)
+    expect(res.data.monthShifts.map((s) => s.id)).toEqual(['pub'])
+  })
+})
+
+// ROSTER-FIX.1 (D2) — the unstaffed-blocks alert used to select
+// `shift_assignments(count)`, and a PostgREST aggregate embed cannot be
+// status-filtered, so a block whose only assignment was a cancelled tombstone
+// looked staffed. That is precisely the block that needs a coach.
+describe('fetchUnstaffedBlocksThisWeek — cancelled assignments', () => {
+  // Thenable builder mock: every filter returns `this`, awaiting yields the
+  // rows registered for that table (same pattern as the D1 tests above).
+  function makeBlocksDb(rows) {
+    return {
+      from() {
+        const builder = {
+          select() { return this },
+          eq() { return this },
+          in() { return this },
+          gt() { return this },
+          gte() { return this },
+          lte() { return this },
+          order() { return this },
+          then(resolve) { return Promise.resolve({ data: rows, error: null }).then(resolve) },
+        }
+        return builder
+      },
+    }
+  }
+
+  // The mock ignores the date filters, so the fixture date is arbitrary —
+  // what is under test is the assignment-status filtering, nothing else.
+  const today = '2026-06-10'
+
+  it('reports a block whose only assignment is cancelled, and not one with a live assignment', async () => {
+    const db = makeBlocksDb([
+      { id: 'b-tombstoned', location_id: 'loc-1', block_date: today, shift_assignments: [{ profile_id: 'coach-1', status: 'cancelled' }] },
+      { id: 'b-staffed', location_id: 'loc-1', block_date: today, shift_assignments: [{ profile_id: 'coach-2', status: 'scheduled' }] },
+    ])
+    const res = await fetchUnstaffedBlocksThisWeek(db, ['loc-1'])
+    expect(res.success).toBe(true)
+    expect(res.data.count).toBe(1)
+    expect(res.data.byLocation).toEqual({ 'loc-1': 1 })
+  })
+
+  it('counts a swapped shift and a legacy statusless row as staffed, and an empty block as unstaffed', async () => {
+    const db = makeBlocksDb([
+      { id: 'b-swapped', location_id: 'loc-1', block_date: today, shift_assignments: [{ profile_id: 'coach-1', status: 'swapped' }] },
+      { id: 'b-legacy', location_id: 'loc-1', block_date: today, shift_assignments: [{ profile_id: 'coach-2' }] },
+      { id: 'b-empty', location_id: 'loc-2', block_date: today, shift_assignments: [] },
+    ])
+    const res = await fetchUnstaffedBlocksThisWeek(db, ['loc-1', 'loc-2'])
+    expect(res.data.count).toBe(1)
+    expect(res.data.byLocation).toEqual({ 'loc-2': 1 })
+  })
+})
+
+// ROSTER-FIX.1 — the Today strip's staffToday counted every assignment row on
+// today's blocks, cancelled ones included, so an approved swap-drop still
+// reported a coach as in today. Same `live` predicate as the unstaffed-blocks
+// alert above (isLiveRow), which is why both now share one definition.
+describe('fetchTodayOps — staffToday ignores cancelled assignments', () => {
+  function makeTodayDb(blocks) {
+    return {
+      from(table) {
+        const response = table === 'shift_blocks'
+          ? { data: blocks, error: null }
+          : table === 'shift_assignments'
+            ? { data: [], error: null }
+            : { count: 0, error: null }
+        return chainableBuilder(response)
+      },
+    }
+  }
+
+  it('counts only live assignees, and dedupes a coach on two blocks', async () => {
+    const db = makeTodayDb([
+      { id: 'b1', shift_assignments: [
+        { profile_id: 'coach-live', status: 'scheduled' },
+        { profile_id: 'coach-dropped', status: 'cancelled' },
+      ] },
+      // A swapped row is a real shift owned by the taker, and a statusless
+      // legacy row is live — both count. coach-live is on both blocks.
+      { id: 'b2', shift_assignments: [
+        { profile_id: 'coach-live', status: 'swapped' },
+        { profile_id: 'coach-legacy' },
+      ] },
+    ])
+    const res = await fetchTodayOps(db, 'loc-1')
+    expect(res.success).toBe(true)
+    expect(res.data.staffToday).toBe(2)
   })
 })

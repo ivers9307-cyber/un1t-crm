@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess, getUserLocationIds } from '@/lib/auth'
 import { fetchApiShiftRows } from '@/lib/roster-read'
+import { MANAGER_ROLES } from '@/lib/schemas'
 
 // RETIRE-SHIFTS-MIRROR.5d — GET reads the Roster v2 model (shift_blocks +
 // shift_assignments) directly via fetchApiShiftRows, normalised to the legacy
@@ -34,6 +35,9 @@ export async function GET(request) {
     startDate,
     endDate,
     profileId,
+    // ROSTER-FIX.1 (D1) — a coach never sees a draft shift. Managers keep
+    // drafts here because the calendar and ManageMode read the same feed.
+    publishedOnly: !MANAGER_ROLES.includes(user.role),
   })
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
 

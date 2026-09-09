@@ -15,6 +15,14 @@
 import { upcomingWeeksBounds, summariseShifts } from './roster-month.js'
 import { pctDelta, sumCampaignRows, shapeFunnel, FUNNEL_SLUGS } from './dashboard-metrics.js'
 
+// ROSTER-FIX.1 — "this assignment still puts a coach on the block".
+// Inlined rather than imported: `shared/` is the mobile seam and cannot
+// import from `src/lib`. Keep in step with isLiveAssignment (src/lib/roster.js)
+// — only `cancelled` is dead; a missing status is a legacy live row.
+// Every assignment reader in this module goes through it so a dropped shift
+// cannot be counted by one fetcher and ignored by the next.
+const isLiveRow = (a) => a?.status !== 'cancelled'
+
 // ============================================================
 // Date helpers (shared across all three fetchers)
 // ============================================================
@@ -83,7 +91,7 @@ export function hourlyRateFor(profile) {
 // the existing Promise.all destructuring unchanged. `id` is the assignment
 // id — used only as a display key here (the swap flow reads shift ids from
 // the schedule screen, not the dashboard).
-async function fetchDashboardShifts(supabase, { profileId, locationId, startDate, endDate, withProfiles = false }) {
+async function fetchDashboardShifts(supabase, { profileId, locationId, startDate, endDate, withProfiles = false, publishedOnly = false }) {
   const profileSelect = withProfiles
     ? ', profiles:profile_id ( annual_salary, hourly_rate, contracted_hours_per_week, employment_type )'
     : ''
@@ -114,7 +122,8 @@ async function fetchDashboardShifts(supabase, { profileId, locationId, startDate
       profiles: r.profiles,
     }
   })
-  return { data: rows, error: null }
+  // ROSTER-FIX.1 (D1) — callers that serve a coach ask for published rows only.
+  return { data: publishedOnly ? rows.filter((r) => r.published) : rows, error: null }
 }
 
 // ============================================================
@@ -152,11 +161,15 @@ export async function fetchPersonalDashboardData(supabase, profileId, locationId
       // row so users can tell which gym a shift belongs to.
       // RETIRE-SHIFTS-MIRROR.2 — reads shift_assignments+shift_blocks now;
       // shape (incl. derived `published`) is unchanged. Re-sorted below.
-      fetchDashboardShifts(supabase, { profileId, startDate: thisWeekStartIso, endDate: nextWeekEndIso }),
+      // D1 (ROSTER-FIX.1) — coaches see published shifts only. Personal =
+      // published for everyone; a manager's own drafts live on the calendar.
+      fetchDashboardShifts(supabase, { profileId, startDate: thisWeekStartIso, endDate: nextWeekEndIso, publishedOnly: true }),
 
       // Month shifts for the calendar/agenda view (personal data is small —
       // a second range call is fine; avoids coupling the 14-day window logic).
-      fetchDashboardShifts(supabase, { profileId, startDate: monthStartIso, endDate: monthEndIso }),
+      // D1 (ROSTER-FIX.1) — coaches see published shifts only. Personal =
+      // published for everyone; a manager's own drafts live on the calendar.
+      fetchDashboardShifts(supabase, { profileId, startDate: monthStartIso, endDate: monthEndIso, publishedOnly: true }),
 
       // Swaps targeted at this coach that still need their accept/decline.
       // CT-P3: the old embed referenced the dropped public.shifts table AND
@@ -279,16 +292,20 @@ export async function fetchUnstaffedBlocksThisWeek(supabase, locationIds) {
   // Pull blocks for the visible window, then filter to those with
   // zero assignments. Cheaper than aggregating in SQL given the
   // small row count (a typical week has ~50 blocks at one location).
+  // ROSTER-FIX.1 — the embed pulls the assignment ROWS, not `(count)`. A
+  // PostgREST aggregate embed cannot be status-filtered, so a block whose only
+  // assignment was cancelled counted as staffed and the alert stayed silent on
+  // exactly the blocks that need a coach.
   const { data, error } = await supabase
     .from('shift_blocks')
-    .select('id, location_id, block_date, shift_assignments(count)')
+    .select('id, location_id, block_date, shift_assignments(profile_id, status)')
     .in('location_id', locationIds)
     .gte('block_date', todayIso)
     .lte('block_date', endIso)
 
   if (error) return { success: false, error: error.message }
 
-  const empty = (data || []).filter(b => (b.shift_assignments?.[0]?.count ?? 0) === 0)
+  const empty = (data || []).filter(b => (b.shift_assignments || []).filter(isLiveRow).length === 0)
   const byLocation = {}
   for (const b of empty) {
     byLocation[b.location_id] = (byLocation[b.location_id] || 0) + 1
@@ -685,8 +702,11 @@ export async function fetchTodayOps(supabase, locationId, now = new Date()) {
       .gte('starts_at', dayStart.toISOString())
       .lte('starts_at', dayEnd.toISOString())
       .is('cancelled_at', null),
+    // ROSTER-FIX.1 — `status` rides along so staffToday can drop cancelled
+    // rows. Without it an approved swap-drop still counted its coach as
+    // working today, so the Today strip reported a body that isn't in.
     supabase.from('shift_blocks')
-      .select('id, shift_assignments(profile_id)')
+      .select('id, shift_assignments(profile_id, status)')
       .eq('location_id', locationId).eq('block_date', todayIso)
       .limit(200),
     fetchDashboardShifts(supabase, {
@@ -699,7 +719,7 @@ export async function fetchTodayOps(supabase, locationId, now = new Date()) {
   if (e4) return { success: false, error: e4.message }
 
   const staffToday = new Set()
-  for (const b of blocks || []) for (const a of b.shift_assignments || []) if (a.profile_id) staffToday.add(a.profile_id)
+  for (const b of blocks || []) for (const a of (b.shift_assignments || []).filter(isLiveRow)) if (a.profile_id) staffToday.add(a.profile_id)
   let labourCents = 0
   let hours = 0
   for (const s of weekShifts || []) {

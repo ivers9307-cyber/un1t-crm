@@ -21,7 +21,7 @@
 //     total is what the monthly budget is measured against.
 
 import { shiftHours, implicitHourlyRate } from './payroll'
-import { addDays, formatDate } from './roster'
+import { addDays, formatDate, liveAssignments } from './roster'
 
 // Roster v2 phase 6 — leave-aware availability.
 //
@@ -85,7 +85,8 @@ function blocksToShiftRows(blocks) {
   const rows = []
   for (const block of blocks || []) {
     const tpl = block.shift_templates || {}
-    for (const a of block.shift_assignments || []) {
+    // ROSTER-FIX.1 — a cancelled assignment bills nobody's hours.
+    for (const a of liveAssignments(block.shift_assignments)) {
       rows.push({
         // Either start_time/end_time on the row itself, OR via the
         // shift_templates shape — both are accepted by shiftHours().
@@ -229,7 +230,7 @@ export function summarizeWeek({ blocks, staff, weekStart, timeOff = [], today = 
 
   const blockCount = weekBlocks.length
   const unstaffedCount = weekBlocks.filter(
-    b => (b.shift_assignments?.length || 0) === 0 && b.block_date >= todayIso
+    b => liveAssignments(b.shift_assignments).length === 0 && b.block_date >= todayIso
   ).length
 
   return {

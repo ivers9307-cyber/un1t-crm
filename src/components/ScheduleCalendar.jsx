@@ -27,6 +27,7 @@ import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 import { computeWeeklyCost } from '@/lib/payroll'
 import { indexByDate } from '@/lib/bank-holidays'
 import { MANAGER_ROLES, ADMIN_ROLES } from '@/lib/schemas'
+import { isBlockUnstaffedFuture as libUnstaffed, liveAssignments } from '@/lib/roster'
 import RosterSummaryPanel from './RosterSummaryPanel'
 
 const TIME_OFF_CONFIG = {
@@ -108,9 +109,13 @@ function formatTime(time) {
 // AND its date is today or later. Past blocks may legitimately
 // have empty assignments (coaches called out, never replaced) —
 // flagging those is noise.
+//
+// ROSTER-FIX.1 — this was a local re-implementation that counted EVERY
+// assignment row, so a cancelled one (an approved swap-drop) made an empty
+// block look staffed and the red marker never appeared. Delegate to the one
+// lib definition and count live rows only.
 function isBlockUnstaffedFuture(block, todayStr) {
-  if ((block.shift_assignments?.length || 0) > 0) return false
-  return block.block_date >= todayStr
+  return libUnstaffed(block, liveAssignments(block.shift_assignments).length, todayStr)
 }
 
 // Adapter — flatten a list of blocks-with-assignments into the
@@ -120,7 +125,9 @@ function flattenBlocksToShifts(blocks) {
   const rows = []
   for (const block of blocks) {
     const tpl = block.shift_templates || {}
-    for (const a of block.shift_assignments || []) {
+    // ROSTER-FIX.1 — cancelled rows are not shifts; the payroll cost
+    // calculator downstream must not bill them.
+    for (const a of liveAssignments(block.shift_assignments)) {
       rows.push({
         id: a.id,
         block_id: block.id,
@@ -133,7 +140,6 @@ function flattenBlocksToShifts(blocks) {
         role_label: tpl.role_label || null,
         notes: a.notes || block.notes || null,
         status: a.status,
-        published: true, // assignments are always live in the new model
         shift_templates: tpl,
         profiles: a.profiles,
       })
@@ -403,7 +409,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
       .filter(b => b.block_date === date)
       .filter(b => {
         if (viewMode === 'all') return true
-        return (b.shift_assignments || []).some(a => a.profile_id === user.id)
+        return liveAssignments(b.shift_assignments).some(a => a.profile_id === user.id)
       })
       .sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''))
     return dayBlocks
@@ -917,12 +923,12 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                 const dayBlocks = blocks.filter(b => b.block_date === dateStr)
                 const visibleBlocks = viewMode === 'all'
                   ? dayBlocks
-                  : dayBlocks.filter(b => (b.shift_assignments || []).some(a => a.profile_id === user.id))
+                  : dayBlocks.filter(b => liveAssignments(b.shift_assignments).some(a => a.profile_id === user.id))
                 const dayTimeOff = timeOff.filter(t => t.start_date <= dateStr && t.end_date >= dateStr)
                 const inFocusedMonth = date.getMonth() === focusedMonth
                 const isToday = dateStr === todayStr
                 const holiday = holidayByDate.get(dateStr)
-                const totalAssignmentCount = visibleBlocks.reduce((sum, b) => sum + (b.shift_assignments?.length || 0), 0)
+                const totalAssignmentCount = visibleBlocks.reduce((sum, b) => sum + liveAssignments(b.shift_assignments).length, 0)
                 const unstaffedCount = visibleBlocks.filter(b => isBlockUnstaffedFuture(b, todayStr)).length
 
                 cells.push(
@@ -962,7 +968,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                     <div className="space-y-0.5">
                       {visibleBlocks.slice(0, 3).map(b => {
                         const tmpl = b.shift_templates || {}
-                        const count = b.shift_assignments?.length || 0
+                        const count = liveAssignments(b.shift_assignments).length
                         const unstaffed = isBlockUnstaffedFuture(b, todayStr)
                         return (
                           <div
@@ -1062,7 +1068,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
 
                     {dayBlocks.map(block => {
                       const tmpl = block.shift_templates || {}
-                      const assignments = block.shift_assignments || []
+                      const assignments = liveAssignments(block.shift_assignments)
                       const count = assignments.length
                       const max = block.max_coaches || 15
                       const unstaffed = isBlockUnstaffedFuture(block, todayStr)
@@ -1357,10 +1363,10 @@ function AssignCoachModal({ block, staff, onAssign, onClose }) {
   const [selectedIds, setSelectedIds] = useState(() => new Set())
   const [saving, setSaving] = useState(false)
   const tmpl = block.shift_templates || {}
-  const assignedIds = new Set((block.shift_assignments || []).map((a) => a.profile_id))
+  const assignedIds = new Set(liveAssignments(block.shift_assignments).map((a) => a.profile_id))
   const available = staff.filter((s) => !assignedIds.has(s.id))
   const dayLabel = new Date(block.block_date + 'T00:00:00').toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'long' })
-  const currentCount = block.shift_assignments?.length || 0
+  const currentCount = liveAssignments(block.shift_assignments).length
   const slotsLeft = Math.max(0, (block.max_coaches || 0) - currentCount)
 
   function toggle(id) {
@@ -1753,7 +1759,7 @@ function BlockDetailModal({
   onClose, onAddCoach, onUnassign, onPartialSave, onDeleteBlock, onSwapRequest,
 }) {
   const tmpl = block.shift_templates || {}
-  const assignments = block.shift_assignments || []
+  const assignments = liveAssignments(block.shift_assignments)
   const max = block.max_coaches || 15
   const atCapacity = assignments.length >= max
   const dateLabel = new Date(block.block_date + 'T00:00:00').toLocaleDateString('en-IE', {

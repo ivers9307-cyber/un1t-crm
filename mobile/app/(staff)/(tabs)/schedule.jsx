@@ -394,8 +394,11 @@ export default function Schedule() {
   }, [shifts])
 
   const selectedIso = isoDate(selected)
+  // ROSTER-FIX.1 — sort on the EFFECTIVE start. The API row has no top-level
+  // start_time (see src/lib/roster-read.js#toApiShiftRow), so this compared
+  // '' with '' and the day list came back in whatever order the API returned.
   const todays = (shiftsByDate[selectedIso] || []).slice().sort((a, b) =>
-    (a.start_time || '').localeCompare(b.start_time || '')
+    (effShiftStart(a) || '').localeCompare(effShiftStart(b) || '')
   )
 
   // Team mode: everyone rostered on the selected day (sorted + self-marked).
@@ -629,8 +632,12 @@ export default function Schedule() {
 // Server emits a push to the coach if a manager (not self) changed
 // the override.
 function AdjustSheet({ shift, onClose, onSaved, locationId }) {
-  const blockStart = (shift?.start_time || shift?.shift_templates?.start_time || '').slice(0, 5)
-  const blockEnd = (shift?.end_time || shift?.shift_templates?.end_time || '').slice(0, 5)
+  // ROSTER-FIX.1 — `block_start_time` is the block's OWN time; the template
+  // default is only a fallback. Comparing an edit against the template meant a
+  // block whose time a manager had moved silently saved `null` (= inherit the
+  // template) instead of the coach's actual window.
+  const blockStart = (shift?.block_start_time || shift?.shift_templates?.start_time || '').slice(0, 5)
+  const blockEnd = (shift?.block_end_time || shift?.shift_templates?.end_time || '').slice(0, 5)
   const initialStart = (shift?.start_time_override || '').slice(0, 5) || blockStart
   const initialEnd = (shift?.end_time_override || '').slice(0, 5) || blockEnd
 
@@ -643,8 +650,8 @@ function AdjustSheet({ shift, onClose, onSaved, locationId }) {
   // Reset fields whenever a new shift is opened.
   useEffect(() => {
     if (!shift) return
-    setStart((shift.start_time_override || '').slice(0, 5) || (shift.start_time || shift.shift_templates?.start_time || '').slice(0, 5))
-    setEnd((shift.end_time_override || '').slice(0, 5) || (shift.end_time || shift.shift_templates?.end_time || '').slice(0, 5))
+    setStart((shift.start_time_override || '').slice(0, 5) || (shift.block_start_time || shift.shift_templates?.start_time || '').slice(0, 5))
+    setEnd((shift.end_time_override || '').slice(0, 5) || (shift.block_end_time || shift.shift_templates?.end_time || '').slice(0, 5))
     setReason(shift.partial_reason || '')
     setError(null)
   }, [shift])

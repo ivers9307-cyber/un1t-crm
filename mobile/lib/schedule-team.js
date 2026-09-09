@@ -8,14 +8,21 @@
 // end_time, name, role_label }, shift_date, profile_id, and
 // profiles { id, full_name, avatar_url, role }.
 
-// Effective shift times. The API row has no top-level start_time/end_time —
-// only the collapsed override + the joined template default. Resolve
-// override → (legacy row) → template. Single definition shared by the Team
-// sort helper AND the Schedule screen (which imports these back).
+// Effective shift times. Resolve override → block → template. Single
+// definition shared by the Team sort helper AND the Schedule screen (which
+// imports these back).
+//
+// ROSTER-FIX.1 — the block's own time comes BEFORE the template default on
+// both row shapes this helper sees: the /shifts API row carries it as
+// `block_start_time` (roster-read.js #toApiShiftRow, no top-level start_time),
+// and a raw /blocks row (ManageMode) carries it as top-level `start_time`.
+// The template is the LAST resort — a block moved off its template's hours
+// must never sort or display at the template time, which is the one time
+// nobody works.
 export const effShiftStart = (s) =>
-  s?.start_time_override || s?.start_time || s?.shift_templates?.start_time || null
+  s?.start_time_override || s?.block_start_time || s?.start_time || s?.shift_templates?.start_time || null
 export const effShiftEnd = (s) =>
-  s?.end_time_override || s?.end_time || s?.shift_templates?.end_time || null
+  s?.end_time_override || s?.block_end_time || s?.end_time || s?.shift_templates?.end_time || null
 
 // Up-to-2-letter initials for an avatar fallback: first letter of the first
 // word + first letter of the last word, uppercased. Single word → one letter.

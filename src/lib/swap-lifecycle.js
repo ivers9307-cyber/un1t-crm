@@ -31,7 +31,8 @@ function deny(status, error) {
  * @param {boolean} [args.canApprove]  gates the "approved" transition (passed in by the route).
  *   Defaults to the manager check when omitted — see APPROVALS-PERCAT.1 below.
  * @returns {{ ok:boolean, status?:number, error?:string,
- *   swapUpdates:object|null, assignmentOps:Array<{id:string,set:object}>,
+ *   swapUpdates:object|null,
+ *   assignmentOps:Array<{id:string, set?:object, delete?:boolean}>,
  *   notify:Array<{kind:string,to?:string[]}>, effect:string }}
  */
 export function resolveSwapTransition({ swap, requestedStatus, user, userLocationIds, reviewNote = null, nowIso, canApprove }) {
@@ -139,8 +140,11 @@ export function resolveSwapTransition({ swap, requestedStatus, user, userLocatio
           { kind: 'decision_for_taker', to: [swap.target_id] },
         ] }
     }
+    // ROSTER-FIX.1 (D4) — a dropped shift is DELETED, not tombstoned. A
+    // `cancelled` row kept the block looking staffed, billed the coach's
+    // hours, and blocked re-adding them via the (block, profile) unique key.
     return { ok: true, status: 200, effect: 'approved_drop', swapUpdates,
-      assignmentOps: [{ id: swap.requester_shift_id, set: { status: 'cancelled' } }],
+      assignmentOps: [{ id: swap.requester_shift_id, delete: true }],
       notify: [{ kind: 'decision_for_requester', to: [swap.requester_id] }] }
   }
 

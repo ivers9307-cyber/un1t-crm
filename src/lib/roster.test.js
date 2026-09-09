@@ -11,6 +11,8 @@ import {
   expandDaysToDates,
   generateBlocksForTemplate,
   isBlockUnstaffedFuture,
+  isLiveAssignment,
+  liveAssignments,
 } from './roster'
 
 describe('dayCodeForDate', () => {
@@ -201,5 +203,24 @@ describe('isBlockUnstaffedFuture', () => {
     expect(
       isBlockUnstaffedFuture({ block_date: '2026-05-10' }, 1, now)
     ).toBe(false)
+  })
+})
+
+describe('isLiveAssignment', () => {
+  it('treats scheduled / confirmed / completed / swapped as live', () => {
+    for (const status of ['scheduled', 'confirmed', 'completed', 'swapped']) {
+      expect(isLiveAssignment({ status })).toBe(true)
+    }
+  })
+  it('treats cancelled as not live', () => {
+    expect(isLiveAssignment({ status: 'cancelled' })).toBe(false)
+  })
+  it('treats a missing status as live (legacy rows)', () => {
+    expect(isLiveAssignment({})).toBe(true)
+    expect(isLiveAssignment({ status: null })).toBe(true)
+  })
+  it('liveAssignments filters an array and tolerates null', () => {
+    expect(liveAssignments(null)).toEqual([])
+    expect(liveAssignments([{ status: 'cancelled' }, { status: 'scheduled', id: 'a' }])).toEqual([{ status: 'scheduled', id: 'a' }])
   })
 })

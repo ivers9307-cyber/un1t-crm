@@ -529,11 +529,6 @@ function WeekPanel({ title, startIso, endIso, shifts, showLocation, onShiftClick
                           {s.shift_templates?.name || 'Shift'}
                         </button>
                         <div className="flex items-center gap-1 shrink-0">
-                          {s.published === false && (
-                            <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-700 text-[10px] uppercase font-semibold whitespace-nowrap">
-                              Draft
-                            </span>
-                          )}
                           {s.status === 'swapped' && (
                             <span className="px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-700 text-[10px] uppercase font-semibold whitespace-nowrap">
                               Swapped
@@ -601,7 +596,9 @@ function ModeToggle({ mode, onChange }) {
 function ShiftChip({ shift, isPast, onShiftClick, cellDate }) {
   const time = (shift.start_time_override || shift.shift_templates?.start_time || '').slice(0, 5)
   const name = shift.shift_templates?.name || 'Shift'
-  const isDraft = shift.published === false
+  // ROSTER-FIX.1 (D1) — the amber "draft" treatment is gone: this component
+  // only ever renders the PERSONAL dashboard's shifts, and those are now
+  // published-only (shared/dashboard-data.js fetchPersonalDashboardData).
   const actionable = isActionable(shift, isPast)
 
   return (
@@ -610,11 +607,7 @@ function ShiftChip({ shift, isPast, onShiftClick, cellDate }) {
       disabled={!actionable}
       onClick={() => actionable && onShiftClick?.(shift, cellDate)}
       title={actionable ? `${name} — tap to manage` : undefined}
-      className={`w-full flex items-center gap-1 rounded px-1 py-0.5 text-[10px] leading-tight border-l-2 text-left ${
-        isDraft
-          ? 'border-amber-500 bg-amber-500/10 text-amber-700'
-          : 'border-blue-500 bg-blue-500/10 text-blue-700'
-      } ${isPast ? 'opacity-60' : ''} ${actionable ? 'cursor-pointer hover:opacity-80 transition-opacity' : 'cursor-default'}`}
+      className={`w-full flex items-center gap-1 rounded px-1 py-0.5 text-[10px] leading-tight border-l-2 text-left border-blue-500 bg-blue-500/10 text-blue-700 ${isPast ? 'opacity-60' : ''} ${actionable ? 'cursor-pointer hover:opacity-80 transition-opacity' : 'cursor-default'}`}
     >
       <span className="font-semibold whitespace-nowrap">{time}</span>
       <span className="truncate">{name}</span>

@@ -11,6 +11,7 @@
 // the legacy mirror so mobile/reports keep working.
 
 import { shiftHours } from './payroll'
+import { liveAssignments } from './roster'
 
 function isoFirstOfMonth(iso) {
   return `${iso.slice(0, 7)}-01`
@@ -63,7 +64,7 @@ async function loadBudgetContext(db, locationId, periodStart) {
     .from('shift_blocks')
     .select(`
       id, location_id, block_date, start_time, end_time, roster_id,
-      shift_assignments(profile_id),
+      shift_assignments(profile_id, status),
       rosters:roster_id(id, status)
     `)
     .eq('location_id', locationId)
@@ -87,7 +88,9 @@ function blockContractorCost(block, contractorRateById) {
     shift_templates: { start_time: block.start_time, end_time: block.end_time },
   })
   let cost = 0
-  for (const a of block.shift_assignments || []) {
+  // ROSTER-FIX.1 — a cancelled assignment costs nothing; counting it here
+  // pushed publishes over the contractor budget for shifts nobody works.
+  for (const a of liveAssignments(block.shift_assignments)) {
     const rate = contractorRateById[a.profile_id] || 0
     cost += hours * rate
   }
