@@ -629,13 +629,14 @@ export default function PersonalDashboard({ refreshKey }) {
     : null
 
   // Build the month matrix once (pure — fast enough to compute on render)
-  const todayIso = (() => {
-    const now = new Date()
-    const y = now.getFullYear()
-    const m = String(now.getMonth() + 1).padStart(2, '0')
-    const day = String(now.getDate()).padStart(2, '0')
-    return `${y}-${m}-${day}`
-  })()
+  // ROSTER-FIX.7i — the third device-day site in this file, and the one 7h
+  // missed. This hand-rolled formatter asked the HANDSET for today, and
+  // buildMonthMatrix turns it into both `isToday` and `isPast` — so a phone
+  // left on a US timezone rang the wrong cell of the month roster AND shaded
+  // the wrong days as gone. shift_date is Dublin wall-clock like everywhere
+  // else, so it goes through dublinTodayIso() with the hero ring and the
+  // "On with you today" query.
+  const todayIso = dublinTodayIso()
   const monthMatrix = (monthShifts && monthStartIso && monthEndIso)
     ? buildMonthMatrix(monthStartIso, monthEndIso, monthShifts, todayIso)
     : []
