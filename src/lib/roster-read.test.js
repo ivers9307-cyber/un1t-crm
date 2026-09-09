@@ -234,6 +234,29 @@ describe('fetchApiShiftRows', () => {
     expect(rows[0].published).toBe(false)
   })
 
+  // ROSTER-SUPERSEDE.1 — `published` derives from the block's roster status,
+  // so a superseded roster reads as UNPUBLISHED. That is correct and it is
+  // also unreachable: a roster is only superseded once it owns zero blocks,
+  // so no block can embed one. This pins the derivation anyway, because the
+  // day it becomes reachable is the day every coach's phone silently empties.
+  it('marks a shift on a SUPERSEDED roster as unpublished', async () => {
+    const db = makeDb({
+      data: [{
+        id: 'a4', profile_id: 'p1', status: 'scheduled',
+        shift_blocks: {
+          location_id: 'loc1', template_id: 't1', block_date: '2026-06-10',
+          start_time: '09:00:00', end_time: '10:00:00',
+          roster_id: 'r-old', rosters: { status: 'superseded' },
+          shift_templates: { id: 't1', name: 'AM', start_time: '09:00:00', end_time: '10:00:00' },
+        },
+        profiles: null,
+      }],
+      error: null,
+    })
+    const { rows } = await fetchApiShiftRows(db, { locationIds: ['loc1'] })
+    expect(rows[0].published).toBe(false)
+  })
+
   it('drops cancelled assignments (approved swap-drop tombstones)', async () => {
     const block = {
       location_id: 'loc1', template_id: 't1', block_date: '2026-06-10',
@@ -261,7 +284,10 @@ describe('fetchApiShiftRows', () => {
       },
       profiles: null,
     })
-    const db = makeDb({ data: [mk('pub', 'published'), mk('draft', 'draft'), mk('none', null)], error: null })
+    const db = makeDb({
+      data: [mk('pub', 'published'), mk('draft', 'draft'), mk('none', null), mk('gone', 'superseded')],
+      error: null,
+    })
     const { rows } = await fetchApiShiftRows(db, { locationIds: ['loc1'], publishedOnly: true })
     expect(rows.map((r) => r.id)).toEqual(['pub'])
   })

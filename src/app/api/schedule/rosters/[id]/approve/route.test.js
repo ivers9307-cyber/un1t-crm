@@ -56,7 +56,7 @@ function draft(overrides = {}) {
 // (select('*') … .single()), the overlap probe (a narrow select that is
 // awaited), and the status flip. The probe's filters are recorded so the
 // self-exclusion can be asserted.
-function buildDb({ roster, publishedRosters = [], updateError = null, captureError = null, tagError = null }) {
+function buildDb({ roster, publishedRosters = [], updateError = null, updateThrows = null, captureError = null, tagError = null }) {
   const updates = []
   const probe = []
   const blockUpdates = []
@@ -85,17 +85,34 @@ function buildDb({ roster, publishedRosters = [], updateError = null, captureErr
             return chain
           },
           update(payload) {
-            updates.push(payload)
-            return {
-              eq: () => ({
-                select: () => ({
-                  single: () => Promise.resolve({
+            // ROSTER-SUPERSEDE.1 — rosters now takes four shapes of UPDATE:
+            // the status flip (.eq().select().single()), the superseded_by
+            // stamp (.select('id') read back), and the release / restore
+            // writes, which are awaited directly.
+            const rec = { payload, where: [], afterFlip: updates.some((u) => u.payload.status === 'published') }
+            updates.push(rec)
+            const w = {
+              eq: (c, v) => { rec.where.push([c, v]); return w },
+              in: (c, v) => { rec.where.push([c, v]); return w },
+              is: (c, v) => { rec.where.push([c, v]); return w },
+              select: () => ({
+                // updateThrows is the failure an error object cannot describe:
+                // a PostgREST 5xx, a dropped fetch, a function timeout.
+                single: () => (updateThrows
+                  ? Promise.reject(new Error(updateThrows))
+                  : Promise.resolve({
                     data: updateError ? null : { ...roster, ...payload },
                     error: updateError,
-                  }),
-                }),
+                  })),
+                then: (onF, onR) => {
+                  const targeted = rec.where.find(([c]) => c === 'id')?.[1]
+                  const ids = Array.isArray(targeted) ? targeted : [targeted].filter(Boolean)
+                  return Promise.resolve({ data: ids.map((id) => ({ id })), error: null }).then(onF, onR)
+                },
               }),
+              then: (onF, onR) => Promise.resolve({ data: null, error: null }).then(onF, onR),
             }
+            return w
           },
         }
       }
@@ -172,8 +189,10 @@ describe('POST /api/schedule/rosters/[id]/approve — overlap guard', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.success).toBe(true)
-    expect(updates).toHaveLength(1)
-    expect(updates[0].status).toBe('published')
+    // ROSTER-SUPERSEDE.1 — the flip is no longer the only write: the week it
+    // swallows is stood down first, and stamped with its successor after.
+    expect(updates[0].payload.status).toBe('superseded')
+    expect(updates.some((u) => u.payload.status === 'published')).toBe(true)
   })
 
   it('approves normally when nothing overlaps, and excludes the draft from its own guard', async () => {
@@ -182,7 +201,7 @@ describe('POST /api/schedule/rosters/[id]/approve — overlap guard', () => {
 
     const res = await POST({}, PROPS)
     expect(res.status).toBe(200)
-    expect(updates[0]).toMatchObject({ status: 'published', over_budget_approval_by: 'owner-1' })
+    expect(updates[0].payload).toMatchObject({ status: 'published', over_budget_approval_by: 'owner-1' })
     // Without this the roster would collide with itself the moment the check
     // ever ran against a row that is already published.
     expect(probe).toContainEqual(['neq', 'id', 'roster-1'])
@@ -278,7 +297,7 @@ describe('POST /api/schedule/rosters/[id]/approve — cross-tenant posture', () 
 
     const res = await POST({}, PROPS)
     expect(res.status).toBe(200)
-    expect(updates[0].status).toBe('published')
+    expect(updates[0].payload.status).toBe('published')
   })
 
   it('an at-location caller without the rosters permission still gets 403', async () => {
@@ -302,7 +321,7 @@ describe('POST /api/schedule/rosters/[id]/approve — block errors are not swall
     const body = await res.json()
     expect(body.success).toBe(true)
     // The approval is done; only the notify set was lost.
-    expect(updates[0].status).toBe('published')
+    expect(updates[0].payload.status).toBe('published')
     expect(blockUpdates).toHaveLength(1)
   })
 
@@ -320,5 +339,89 @@ describe('POST /api/schedule/rosters/[id]/approve — block errors are not swall
     expect(body.warning).toMatch(/block tagging failed: deadlock detected/)
     expect(updates).toHaveLength(1)
     expect(notifyStaffOfPublish).not.toHaveBeenCalled()
+  })
+})
+
+
+// ROSTER-SUPERSEDE.1 — approving IS publishing, so it resolves the overlaps
+// it is allowed to create the same way POST does. Mig 602's exclusion
+// constraint judges the draft→published UPDATE exactly as it judges an
+// INSERT, so the swallowed rosters are stood down BEFORE the flip.
+describe('POST /api/schedule/rosters/[id]/approve — supersede', () => {
+  it('stands the swallowed roster down BEFORE the flip, then stamps the successor', async () => {
+    const { db, updates } = buildDb({
+      roster: draft(),
+      publishedRosters: [{ id: 'r-same', period_start: '2026-05-04', period_end: '2026-05-10' }],
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST({}, PROPS)
+    expect(res.status).toBe(200)
+
+    const release = updates.find((u) => u.payload.status === 'superseded')
+    expect(release).toBeTruthy()
+    expect(release.afterFlip).toBe(false)
+    expect(release.payload.superseded_by).toBeNull()
+
+    const stamp = updates.find((u) => u.payload.superseded_by === 'roster-1')
+    expect(stamp).toBeTruthy()
+    expect(stamp.afterFlip).toBe(true)
+  })
+
+  it('excludes the draft itself from its own release set', async () => {
+    const { db, probe } = buildDb({ roster: draft(), publishedRosters: [] })
+    createServerClient.mockReturnValue(db)
+    await POST({}, PROPS)
+    // Both the overlap guard and the release narrow by neq id.
+    expect(probe.filter((f) => f[0] === 'neq' && f[2] === 'roster-1').length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('puts the released rosters back when the flip fails', async () => {
+    const { db, updates } = buildDb({
+      roster: draft(),
+      publishedRosters: [{ id: 'r-same', period_start: '2026-05-04', period_end: '2026-05-10' }],
+      updateError: { message: 'constraint violation' },
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST({}, PROPS)
+    expect(res.status).toBe(400)
+    expect(updates.at(-1).payload).toEqual({ status: 'published', superseded_at: null, superseded_by: null })
+  })
+
+  it('puts them back when the status flip THROWS instead of returning an error', async () => {
+    // 🔴 The failure the error-object branch cannot see: a PostgREST 5xx, a
+    // dropped fetch, the function timing out. Unwrapped, the throw escaped the
+    // route with the swallowed rosters already stood down, and they stayed
+    // superseded FOREVER — a coach's published week gone on a transient blip.
+    const { db, updates } = buildDb({
+      roster: draft(),
+      publishedRosters: [{ id: 'r-same', period_start: '2026-05-04', period_end: '2026-05-10' }],
+      updateThrows: 'fetch failed',
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST({}, PROPS)
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body.success).toBe(false)
+    expect(body.error).toMatch(/fetch failed/)
+    expect(updates.at(-1).payload).toEqual({ status: 'published', superseded_at: null, superseded_by: null })
+    expect(updates.at(-1).where).toContainEqual(['id', ['r-same']])
+    expect(notifyStaffOfPublish).not.toHaveBeenCalled()
+  })
+
+  it('warns that the stood-down rosters are stranded when tagging fails', async () => {
+    const { db } = buildDb({
+      roster: draft(),
+      publishedRosters: [{ id: 'r-same', period_start: '2026-05-04', period_end: '2026-05-10' }],
+      tagError: { message: 'deadlock detected' },
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST({}, PROPS)
+    const body = await res.json()
+    expect(body.warning).toMatch(/deadlock detected/)
+    expect(body.warning).toMatch(/read as unpublished/)
   })
 })
