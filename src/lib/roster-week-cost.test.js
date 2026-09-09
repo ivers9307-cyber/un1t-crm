@@ -97,6 +97,14 @@ describe('computeWeeklyFteHours', () => {
     expect(res.totals).toEqual({ coaches: 1, allocated_hours: 14, overtime_hours: 4, over_threshold: 1 })
   })
 
+  // ROSTER-FIX.6c — the key set is the pin, not a grep for the fixture's
+  // numbers. Bare numeric substrings ('45', '30') were doing the real work of
+  // this test and could not keep doing it: they match any hours figure that
+  // happens to contain those digits, so a legitimate 4.5h week would have
+  // failed it, and any fixture edited to a different salary would have quietly
+  // stopped testing anything. Pinning the exact keys the helper returns is what
+  // actually forbids a rate: a new pay field cannot be added without failing
+  // here. Same pin the route test carries, one layer down.
   it('NEVER returns a rate, a salary or a euro figure', async () => {
     const res = await callWith({
       staff: [SARAH, CON],
@@ -104,10 +112,18 @@ describe('computeWeeklyFteHours', () => {
         block({ id: 'b1', date: '2026-05-04', start: '09:00:00', end: '20:00:00', coaches: ['sarah', 'con'] }),
       ],
     })
-    const wire = JSON.stringify(res)
-    for (const banned of ['rate', 'salary', 'cost', 'eur', '39000', '45', '30']) {
-      expect(wire.toLowerCase()).not.toContain(banned)
+    const wire = JSON.stringify(res).toLowerCase()
+    for (const banned of ['rate', 'salary', 'cost', 'eur', 'annual', 'hourly']) {
+      expect(wire).not.toContain(banned)
     }
+    expect(Object.keys(res).sort()).toEqual(['coaches', 'totals', 'weekEndIso', 'weekStartIso'])
+    expect(Object.keys(res.coaches[0]).sort()).toEqual([
+      'allocated_hours', 'contracted_hours', 'full_name', 'over_threshold',
+      'overtime_hours', 'profile_id', 'status',
+    ])
+    expect(Object.keys(res.totals).sort()).toEqual([
+      'allocated_hours', 'coaches', 'over_threshold', 'overtime_hours',
+    ])
   })
 
   it('is FTE-only: a contractor never appears, however many hours they work', async () => {

@@ -109,4 +109,34 @@ describe('useWeekCost', () => {
     expect(result.current.weekCost).toEqual(PAYLOAD)
     expect(result.current.weekCostError).toBeNull()
   })
+
+  // ROSTER-FIX.6c — the cancelling path used to clear the rows and return
+  // WITHOUT bumping the generation, so the request already in flight still
+  // carried the current stamp and wrote when it landed: a week's hours under a
+  // location the operator had already left.
+  it('a request cancelled by a falsy input cannot write when it finally lands', async () => {
+    const gate = {}
+    const held = new Promise((resolve) => { gate.resolve = resolve })
+    global.fetch = vi.fn(() => held)
+
+    const { result, rerender } = renderHook(
+      ({ locationId }) => useWeekCost({ ...ARGS, locationId }),
+      { initialProps: { locationId: 'loc1' } }
+    )
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(1))
+
+    // The location goes away while the answer is still in flight.
+    await act(async () => { rerender({ locationId: null }) })
+    expect(result.current.weekCost).toBeNull()
+
+    await act(async () => {
+      gate.resolve(okResponse({ success: true, data: PAYLOAD }))
+      await held
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(result.current.weekCost).toBeNull()
+    expect(result.current.weekCostError).toBeNull()
+  })
 })

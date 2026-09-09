@@ -66,6 +66,15 @@ describe('formatTime12h', () => {
     expect(formatTime12h('12:00')).toBe('12pm')
     expect(formatTime12h('00:15')).toBe('12:15am')
   })
+  // ROSTER-FIX.6c — an end-of-day '24:00' prints '12pm', not '12am'. Existing
+  // behaviour, not a change: all three deleted copies computed it the same way
+  // (hour >= 12 picks the suffix before hour > 12 wraps the display), so this
+  // pins what the calendar has always shown rather than proposing a fix. It is
+  // pinned because the three copies became one: whoever corrects it should have
+  // to say so here first.
+  it("prints an end-of-day '24:00' the way all three copies always did", () => {
+    expect(formatTime12h('24:00')).toBe('12pm')
+  })
   it('returns empty for a missing time', () => {
     expect(formatTime12h(null)).toBe('')
     expect(formatTime12h('')).toBe('')

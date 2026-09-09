@@ -23,11 +23,18 @@ export function useWeekCost({ locationId, weekStart, enabled = true }) {
   const generation = useRef(0)
 
   const refresh = useCallback(async () => {
+    // ROSTER-FIX.6c — the bump happens BEFORE the early return, not after it.
+    // Stamping only the requests that are made left the cancelling path
+    // unstamped: when locationId or weekStart went falsy (a location cleared,
+    // an unmount) this cleared the rows and returned, but an in-flight request
+    // still held the CURRENT generation, so it landed afterwards and wrote a
+    // week's hours under no week at all. Bumping first retires that request
+    // exactly the way a newer request does.
+    const gen = ++generation.current
     if (!enabled || !locationId || !weekStart) {
       setData(null)
       return
     }
-    const gen = ++generation.current
     try {
       const res = await fetch(
         `/api/schedule/week-cost?location_id=${locationId}&week_start=${weekStart}`
