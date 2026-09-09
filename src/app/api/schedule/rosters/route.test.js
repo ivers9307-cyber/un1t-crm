@@ -41,7 +41,7 @@ vi.mock('@/lib/roster-change-log', () => ({
 const { createServerClient } = await import('@/lib/supabase')
 const { getCurrentUser } = await import('@/lib/auth')
 const { projectPublishImpact } = await import('@/lib/roster-publish')
-const { POST } = await import('./route.js')
+const { POST, GET } = await import('./route.js')
 
 // location_id is validated as UUID-shaped, so the fixture has to be one.
 const LOC_1 = 'a0000000-0000-0000-0000-000000000001'
@@ -328,5 +328,49 @@ describe('POST /api/schedule/rosters — supersede', () => {
     expect(res.status).toBe(409)
     expect(inserts).toHaveLength(0)
     expect(rosterUpdates).toHaveLength(0)
+  })
+})
+
+
+// ROSTER-SUPERSEDE.1 — a superseded roster owns no blocks and published
+// nothing that is still live. In the default list it reads as a duplicate
+// publish over the same dates, which is the confusion superseding removes.
+// Hidden by default, never deleted, never unreachable.
+describe('GET /api/schedule/rosters — superseded rosters', () => {
+  function listDb() {
+    const filters = []
+    const chain = {
+      select: () => chain,
+      order: () => chain,
+      eq: (c, v) => { filters.push(['eq', c, v]); return chain },
+      neq: (c, v) => { filters.push(['neq', c, v]); return chain },
+      in: (c, v) => { filters.push(['in', c, v]); return chain },
+      then: (onF, onR) => Promise.resolve({ data: [], error: null }).then(onF, onR),
+    }
+    return { filters, db: { from: () => chain } }
+  }
+
+  it('excludes superseded rosters from the default list', async () => {
+    const { db, filters } = listDb()
+    createServerClient.mockReturnValue(db)
+    const res = await GET({ url: `https://x.test/api/schedule/rosters?location_id=${LOC_1}` })
+    expect(res.status).toBe(200)
+    expect(filters).toContainEqual(['neq', 'status', 'superseded'])
+  })
+
+  it('keeps them reachable with an explicit ?status=superseded', async () => {
+    const { db, filters } = listDb()
+    createServerClient.mockReturnValue(db)
+    await GET({ url: `https://x.test/api/schedule/rosters?location_id=${LOC_1}&status=superseded` })
+    expect(filters).toContainEqual(['eq', 'status', 'superseded'])
+    expect(filters.some((f) => f[0] === 'neq')).toBe(false)
+  })
+
+  it('an explicit ?status=draft is unaffected (the approvals queue)', async () => {
+    const { db, filters } = listDb()
+    createServerClient.mockReturnValue(db)
+    await GET({ url: `https://x.test/api/schedule/rosters?location_id=${LOC_1}&status=draft` })
+    expect(filters).toContainEqual(['eq', 'status', 'draft'])
+    expect(filters.some((f) => f[0] === 'neq')).toBe(false)
   })
 })

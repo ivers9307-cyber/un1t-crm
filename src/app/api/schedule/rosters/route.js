@@ -88,7 +88,15 @@ export async function GET(request) {
     if (userLocationIds.length === 0) return NextResponse.json({ success: true, data: [] })
     query = query.in('location_id', userLocationIds)
   }
+  // ROSTER-SUPERSEDE.1 — a superseded roster owns no blocks: it published
+  // nothing that is still live, and it is kept only as the audit trail of a
+  // publish event a later one took over. In the default list (the approvals
+  // queue and the retro views) it reads as a duplicate publish over the same
+  // dates, which is exactly the confusion superseding exists to remove. So it
+  // is excluded by default and stays reachable with an explicit
+  // ?status=superseded — hidden, never deleted, never unreachable.
   if (status) query = query.eq('status', status)
+  else query = query.neq('status', 'superseded')
 
   const { data, error } = await query
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
