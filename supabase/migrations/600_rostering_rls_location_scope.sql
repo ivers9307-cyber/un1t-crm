@@ -44,6 +44,19 @@
 --     Expected 0 — an allowance for a profile with no location link would be
 --     readable only by the profile themselves after this migration.
 --
+--   SELECT count(*) FROM public.time_off_requests t
+--    WHERE NOT EXISTS (SELECT 1 FROM public.profile_locations pl WHERE pl.profile_id = t.profile_id);
+--   -- expect 0; if not, link those profiles before applying
+--     Not cosmetic: `update_holiday_allowance` (mig 011, re-created in mig 021)
+--     is a plain SECURITY INVOKER trigger, so its
+--     `INSERT INTO public.staff_allowances … ON CONFLICT` runs as the person
+--     clicking Approve and is judged by `staff_allowances_ins` below — which
+--     requires a `profile_locations` row for the REQUESTER. A profile with no
+--     location link therefore fails that WITH CHECK, and because a trigger
+--     error aborts its statement the whole approval UPDATE rolls back on the
+--     BROWSER path. (The /api approval route is service-role and unaffected,
+--     which is exactly why this would only show up in an operator's face.)
+--
 -- AFTER APPLYING: `get_advisors` (type=security) — expect no NEW warning —
 -- then `npm run test:cross-tenant`.
 
