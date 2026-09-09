@@ -551,9 +551,12 @@ export default function PersonalDashboard({ refreshKey }) {
 
     options.push({ text: 'Cancel', style: 'cancel' })
 
+    // ROSTER-FIX.3 (D3) — say it, don't just withhold the affordance. Same
+    // sentence as the Schedule tab's shift-list footer, verbatim, so the two
+    // coach-facing surfaces agree on who owns the paid window.
     Alert.alert(
       shiftLabel,
-      `${shiftTime(shift)} · ${shiftDurationHours(shift)}h`,
+      `${shiftTime(shift)} · ${shiftDurationHours(shift)}h\n\nYour hours are set by your manager — if you worked different hours, tell them.`,
       options,
     )
   }

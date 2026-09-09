@@ -30,16 +30,13 @@ import {
 import { canMobile } from '../../../lib/permissions'
 import { useIsTablet } from '../../../lib/use-is-tablet'
 import { effShiftStart, effShiftEnd, teamRosterForDay, initials } from '../../../lib/schedule-team'
-import { canAdjustShiftTimes } from '../../../lib/schedule-manage'
+import { canAdjustShiftTimes, MANAGER_ROLES } from '../../../lib/schedule-manage'
 import ManageMode from '../../../components/schedule/ManageMode'
 
-// Manager roles, mirrored from src/lib/schemas.js MANAGER_ROLES. Defined
-// locally because the mobile bundle can't import that web-side module, and
-// shared/permissions.js does NOT export MANAGER_ROLES — importing it from
-// there resolved to `undefined`, so isManagerRole() threw "Cannot read
-// property 'includes' of undefined" on every Schedule render once the Manage
-// segment (PR #375) started calling it unconditionally. (HOTFIX.)
-const MANAGER_ROLES = ['master', 'owner', 'manager', 'head_coach']
+// ROSTER-FIX.3 — MANAGER_ROLES comes from lib/schedule-manage, the module that
+// already owns canAdjustShiftTimes. It was duplicated here (a HOTFIX for
+// shared/permissions.js not exporting the name), and two copies of a role list
+// that gates an edit the route will 403 is one copy too many.
 const isManagerRole = (role) => MANAGER_ROLES.includes(role)
 
 function WeekStrip({ anchor, selected, onSelect, byDate }) {
