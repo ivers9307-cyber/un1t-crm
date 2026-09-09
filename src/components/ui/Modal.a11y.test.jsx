@@ -182,3 +182,64 @@ describe('Modal focus restore when the trigger unmounts (ROSTER-FIX.6b-7)', () =
   })
 })
 
+// ─── nits: what the trap counts, and who owns Escape ──────────────────
+describe('Modal focus trap ignores what cannot be focused (ROSTER-FIX.6b-9)', () => {
+  it('skips a hidden input and a hidden control when wrapping', () => {
+    render(
+      <Modal open onClose={() => {}} title="t">
+        <input aria-label="Real" />
+        <input type="hidden" name="csrf" defaultValue="x" />
+        <button type="button" hidden>Collapsed</button>
+      </Modal>
+    )
+    // Both trailing nodes are unfocusable, so "Real" is the LAST rung of the
+    // ring and Tab wraps to the close button. Before the filter the ring ended
+    // on one of them and Tab simply lost the cursor.
+    //
+    // 🔴 The third exclusion — `offsetParent === null`, i.e. display:none on an
+    // ANCESTOR — is deliberately not asserted here. jsdom has no layout engine
+    // and reports a null offsetParent for every element on the page (memory
+    // `jsdom-cannot-see-layout`), so the guard is capability-gated on
+    // `checkVisibility` and is inert in this environment. A test for it would
+    // pass without the code.
+    screen.getByLabelText('Real').focus()
+    fireEvent.keyDown(document, { key: 'Tab' })
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Close' }))
+  })
+})
+
+describe('Escape belongs to a native picker first (ROSTER-FIX.6b-9)', () => {
+  it('does not close the dialog on the Escape a <select> handles itself', () => {
+    const onClose = vi.fn()
+    render(
+      <Modal open onClose={onClose} title="t">
+        <select aria-label="Template"><option value="">Pick</option></select>
+      </Modal>
+    )
+    const select = screen.getByLabelText('Template')
+    select.focus()
+    fireEvent.keyDown(select, { key: 'Escape' })
+    expect(onClose).not.toHaveBeenCalled()
+
+    // …but only the first one, so Escape can never become a dead key.
+    fireEvent.keyDown(select, { key: 'Escape' })
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('does the same for a native date input and not for a text input', () => {
+    const onClose = vi.fn()
+    render(
+      <Modal open onClose={onClose} title="t">
+        <input type="date" aria-label="From" />
+        <input type="text" aria-label="Reason" />
+      </Modal>
+    )
+    fireEvent.keyDown(screen.getByLabelText('From'), { key: 'Escape' })
+    expect(onClose).not.toHaveBeenCalled()
+
+    // A plain text field has no Escape behaviour of its own, so the dialog
+    // keeps it — taking it away would be a new way to trap the operator.
+    fireEvent.keyDown(screen.getByLabelText('Reason'), { key: 'Escape' })
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+})

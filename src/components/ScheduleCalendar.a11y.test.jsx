@@ -282,6 +282,70 @@ describe('BlockDetailModal keeps an open row editor (ROSTER-FIX.6b-7)', () => {
   })
 })
 
+// ─── every dialog that can hold work refuses the backdrop ─────────────
+//
+// ROSTER-FIX.6b-9. `dismissOnBackdrop` shipped with exactly one assertion
+// (BlockDetailModal's, above) and seven unproven call sites. The flag is a
+// one-word edit away from being dropped or inverted in a merge, and nothing
+// would go red — this is the file 6a is rewriting in parallel. One case each.
+describe('dismissOnBackdrop at the calendar call sites (ROSTER-FIX.6b-9)', () => {
+  async function openAssign() {
+    const card = await renderCalendar()
+    fireEvent.click(card)
+    fireEvent.click(screen.getByRole('button', { name: /Add coach/i }))
+  }
+
+  it('AssignCoachModal: dismisses while empty, refuses once a coach is ticked', async () => {
+    await openAssign()
+    fireEvent.mouseDown(screen.getByRole('dialog').parentElement)
+    // Back to the block detail, which is the pre-existing flow.
+    expect(dialogName(screen.getByRole('dialog'))).toBe('Morning')
+
+    fireEvent.click(screen.getByRole('button', { name: /Add coach/i }))
+    fireEvent.click(screen.getByLabelText(/Mike Byrne/i, { selector: 'input' }))
+    fireEvent.mouseDown(screen.getByRole('dialog').parentElement)
+    expect(dialogName(screen.getByRole('dialog'))).toBe('Assign coaches')
+  })
+
+  it('CreateBlockModal: dismisses while empty, refuses once a template is picked', async () => {
+    await renderCalendar()
+    fireEvent.click(screen.getAllByRole('button', { name: /Add Slot/i })[0])
+    fireEvent.mouseDown(screen.getByRole('dialog').parentElement)
+    expect(screen.queryByRole('dialog')).toBeNull()
+
+    fireEvent.click(screen.getAllByRole('button', { name: /Add Slot/i })[0])
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 't1' } })
+    fireEvent.mouseDown(screen.getByRole('dialog').parentElement)
+    expect(dialogName(screen.getByRole('dialog'))).toMatch(/^Add Shift Slot/)
+  })
+
+  it('PublishRosterModal: dismisses while idle', async () => {
+    // Its refusal is `!publishing`, a state that only exists between the
+    // click and the POST resolving — not reachable from here without stubbing
+    // a hanging fetch, which would prove the stub, not the flag. What IS
+    // provable is the other half: an idle publish dialog must not become
+    // undismissable, which is the mistake `dismissable={false}` would be.
+    await renderCalendar()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Publish$/ })) })
+    fireEvent.mouseDown(screen.getByRole('dialog').parentElement)
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('SwapModal: dismisses while empty, refuses once a reason is typed', async () => {
+    const card = await renderCalendar(COACH)
+    fireEvent.click(card)
+    fireEvent.click(screen.getByRole('button', { name: /Request a swap for Sarah Doyle/ }))
+    fireEvent.mouseDown(screen.getByRole('dialog').parentElement)
+    expect(screen.queryByRole('dialog')).toBeNull()
+
+    fireEvent.click(cardButton('Morning'))
+    fireEvent.click(screen.getByRole('button', { name: /Request a swap for Sarah Doyle/ }))
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Dentist' } })
+    fireEvent.mouseDown(screen.getByRole('dialog').parentElement)
+    expect(dialogName(screen.getByRole('dialog'))).toBe('Request Shift Swap')
+  })
+})
+
 // ─── nothing is named "button" ────────────────────────────────────────
 describe('every icon-only control on the calendar has a name (ROSTER-FIX.6b)', () => {
   it('names the week arrows, and renames them in month view', async () => {

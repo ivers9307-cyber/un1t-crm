@@ -41,6 +41,20 @@ describe('ScheduleReporting accessibility (ROSTER-FIX.6b)', () => {
     expect(document.activeElement).toBe(trigger)
   })
 
+  it('never dismisses the recurring-report form on a backdrop click (ROSTER-FIX.6b-9)', async () => {
+    await renderReporting()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Staff Hours Worked/ })) })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Schedule' })) })
+
+    // `dismissOnBackdrop={false}` unconditionally: this form is long enough
+    // that a stray click costs real work even before a field is touched.
+    fireEvent.mouseDown(screen.getByRole('dialog').parentElement)
+    expect(screen.getByRole('dialog')).toBeTruthy()
+
+    await act(async () => { fireEvent.keyDown(document, { key: 'Escape' }) })
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
   it('leaves no unnamed button on the page, dialog included', async () => {
     await renderReporting()
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Staff Hours Worked/ })) })

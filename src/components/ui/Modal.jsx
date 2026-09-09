@@ -19,7 +19,32 @@ import { modalPanelClasses } from './styles.js'
 // [tabindex="-1"])` catches the roving-tabindex widgets; the panel itself is
 // tabindex="-1" so it is never in the list.
 const FOCUSABLE =
-  'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])'
+  'a[href], button, input:not([type="hidden"]), select, textarea, [tabindex]:not([tabindex="-1"])'
+
+// ROSTER-FIX.6b-9 — a node the browser would never stop on has no business in
+// the trap's ring. `offsetParent` is null for anything with `display:none` on
+// it or on an ancestor, so a collapsed section's buttons used to sit at the end
+// of the list and Tab from the last VISIBLE control wrapped to one of them —
+// focus simply vanished, which looks exactly like the leak the trap exists to
+// stop.
+//
+// 🔴 The offsetParent reading is only usable where something LAYS OUT. jsdom
+// has no layout engine and reports `null` for every element on the page
+// (memory `jsdom-cannot-see-layout`), so trusting it blindly would empty the
+// list in every test and make the trap unprovable. `checkVisibility` is the
+// capability marker: browsers have it, jsdom does not. It also rescues a
+// `position:fixed` control, which is visible while reporting no offsetParent.
+// Native controls that consume Escape themselves (ROSTER-FIX.6b-9).
+const NATIVE_ESCAPE_INPUT_TYPES = new Set(['date', 'datetime-local', 'month', 'week', 'time'])
+
+function isReachable(el) {
+  if (el.hasAttribute('disabled')) return false
+  if (el.getAttribute('aria-hidden') === 'true') return false
+  if (el.hidden) return false
+  if (typeof el.checkVisibility !== 'function') return true
+  if (el.offsetParent !== null) return true
+  return el.checkVisibility()
+}
 
 // ROSTER-FIX.6b-7 — focus a container that is not normally focusable, then take
 // the tabindex back off once it loses focus so it never joins the Tab order
@@ -82,9 +107,33 @@ export default function Modal({ open, onClose, title, footer, size = 'md', dismi
 
   useEffect(() => {
     if (!open) return undefined
+    // See the Escape branch below — reset every time the dialog opens.
+    let swallowedEscapeFor = null
     const onKey = (e) => {
-      if (e.key === 'Escape' && handlers.current.dismissable) {
-        handlers.current.onClose?.()
+      if (e.key === 'Escape') {
+        // ROSTER-FIX.6b-9 — a native <select> and a native date/time input
+        // handle Escape THEMSELVES: it reverts the highlighted option or shuts
+        // the picker. Closing the dialog on that same keystroke means the
+        // operator who hit Escape to back out of a dropdown loses the whole
+        // half-filled form instead — the exact loss `dismissOnBackdrop` was
+        // added to prevent, arriving by another door.
+        //
+        // The control gets the FIRST Escape only. A second one on the same
+        // element closes the dialog as usual, so this can never become a
+        // dead-end where Escape stops working while a select holds focus.
+        const t = e.target
+        const tag = t?.tagName
+        const type = (t?.getAttribute?.('type') || '').toLowerCase()
+        const nativePicker = tag === 'SELECT'
+          || (tag === 'INPUT' && NATIVE_ESCAPE_INPUT_TYPES.has(type))
+        if (nativePicker && swallowedEscapeFor !== t) {
+          swallowedEscapeFor = t
+          return
+        }
+        swallowedEscapeFor = null
+        if (handlers.current.dismissable) {
+          handlers.current.onClose?.()
+        }
         return
       }
       // ROSTER-FIX.6b — focus trap. Without it Tab walks straight out of the
@@ -95,8 +144,7 @@ export default function Modal({ open, onClose, title, footer, size = 'md', dismi
       if (e.key !== 'Tab') return
       const panel = panelRef.current
       if (!panel) return
-      const list = Array.from(panel.querySelectorAll(FOCUSABLE))
-        .filter((el) => !el.hasAttribute('disabled') && el.getAttribute('aria-hidden') !== 'true')
+      const list = Array.from(panel.querySelectorAll(FOCUSABLE)).filter(isReachable)
       if (list.length === 0) {
         e.preventDefault()
         panel.focus()

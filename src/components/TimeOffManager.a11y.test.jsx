@@ -55,6 +55,28 @@ describe('TimeOffManager accessibility (ROSTER-FIX.6b)', () => {
     expect(document.activeElement).toBe(trigger)
   })
 
+  it('keeps a half-filled request through a backdrop click (ROSTER-FIX.6b-9)', async () => {
+    await renderManager()
+    fireEvent.click(screen.getByRole('button', { name: /Request Time Off/ }))
+    const backdrop = () => screen.getByRole('dialog').parentElement
+
+    // Empty, the backdrop is a harmless way out.
+    fireEvent.mouseDown(backdrop())
+    expect(screen.queryByRole('dialog')).toBeNull()
+
+    // One field in, it is not: `dismissOnBackdrop={!dirty}`.
+    fireEvent.click(screen.getByRole('button', { name: /Request Time Off/ }))
+    // The date inputs carry no programmatic label yet (a separate finding),
+    // so this reaches the first one by type rather than by name.
+    fireEvent.change(document.querySelector('input[type="date"]'), { target: { value: '2026-10-01' } })
+    fireEvent.mouseDown(backdrop())
+    expect(screen.getByRole('dialog')).toBeTruthy()
+
+    // Escape and Close are untouched — this is not dismissable={false}.
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
   it('names the approve and reject icons after the request they decide', async () => {
     await renderManager()
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Team Requests' })) })
