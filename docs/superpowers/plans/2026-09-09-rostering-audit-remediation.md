@@ -1142,7 +1142,7 @@ export function rangesOverlap(aStart, aEnd, bStart, bEnd) {
 - Modify: `src/app/api/schedule/blocks/route.js:36-40`
 - Modify: `mobile/lib/schedule-api.js:163` and `src/lib/staff.js` (see step)
 
-- [ ] **Step 1:** In `blocks/route.js` GET, after `assertLocationAccess`, add `if (!MANAGER_ROLES.includes(user.role)) return 403 'Manager+ required'` (the mobile comment at `schedule-api.js:128` already claims this gate). Add a route test file `blocks/route.test.js` with one 403-for-staff case and one 200-for-manager case (same mock pattern).
+- [ ] **Step 1 (revised after implementation — a 403 blanked the coach's read-only web calendar):** In `blocks/route.js` GET keep `assertLocationAccess` for everyone; embed `rosters:roster_id ( status )`; for non-`MANAGER_ROLES` callers return only blocks on a published roster (D1) in a slim shape with no `min_coaches` / `max_coaches` / block `notes`, no assignment `notes` / `partial_reason`, and no cancelled assignments. Managers get the full shape with drafts. `ScheduleCalendar.jsx` renders the `count / max` badge, the at-capacity state and the unstaffed marker only when `isManager`. Route test: staff → 200, published only, no capacity keys; manager → full.
 
 - [ ] **Step 2:** Coach picker: read `src/lib/staff.js:1-40` to find how `/api/staff` picks the slim vs full select. Add a query flag `?fields=picker` to `GET /api/staff` that always returns `id, full_name, active, role, avatar_url, locations` regardless of role; switch `getLocationStaff` in `schedule-api.js` to call `/api/staff?fields=picker`. Add a test in the existing `src/app/api/staff/route.test.js` (if present) asserting `fields=picker` never returns `hourly_rate`/`annual_salary` for a master caller.
 
