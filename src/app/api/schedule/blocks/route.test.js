@@ -144,7 +144,7 @@ describe('GET /api/schedule/blocks — manager view', () => {
 // a manager just created is invisible to every coach.
 describe('POST /api/schedule/blocks — post-publish blocks join the roster', () => {
   const LOC = 'a0000000-0000-0000-0000-000000000001'
-  const TPL = 'a0000000-0000-0000-0000-0000000000t1'.replace('t1', '00')
+  const TPL = 'a0000000-0000-0000-0000-000000000002'
 
   function postDb({ publishedRoster = null } = {}) {
     const captured = { insert: null }
