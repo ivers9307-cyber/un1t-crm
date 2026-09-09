@@ -1,6 +1,7 @@
 // Shared report generation logic — used by both manual generate and cron scheduler
 import { createServerClient } from '@/lib/supabase'
 import { computeWeeklyCost, implicitHourlyRate, mondayOf } from '@/lib/payroll'
+import { isLiveAssignment } from '@/lib/roster'
 
 // RETIRE-SHIFTS-MIRROR.1 — reports now read the Roster v2 source of truth
 // (shift_assignments + shift_blocks) instead of the legacy public.shifts
@@ -10,8 +11,9 @@ import { computeWeeklyCost, implicitHourlyRate, mondayOf } from '@/lib/payroll'
 //
 // Field mapping: shift_date ← shift_blocks.block_date; the time overrides
 // live on shift_assignments (mig 100); the template (name + default times)
-// comes through the block. No status filter — matches the old behaviour of
-// counting every shift in range (the mirror was 1:1 with assignments).
+// comes through the block. ROSTER-FIX.1 — cancelled assignments are dropped:
+// they used to be paid in staff_hours / staff_cost and counted as coverage,
+// which is what the mirror's 1:1-with-assignments behaviour inherited.
 const SHIFT_ROW_SELECT = `
   profile_id, start_time_override, end_time_override, status,
   profiles:profile_id ( full_name, role, employment_type ),
@@ -24,7 +26,7 @@ export async function fetchScheduledShiftRows(db, { locationId, periodStart, per
     .eq('shift_blocks.location_id', locationId)
     .gte('shift_blocks.block_date', periodStart)
     .lte('shift_blocks.block_date', periodEnd)
-  return (rows || []).map((r) => ({
+  return (rows || []).filter(isLiveAssignment).map((r) => ({
     shift_date: r.shift_blocks?.block_date,
     profile_id: r.profile_id,
     start_time_override: r.start_time_override,

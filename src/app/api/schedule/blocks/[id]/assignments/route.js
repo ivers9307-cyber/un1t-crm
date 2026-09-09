@@ -33,6 +33,7 @@ import { validateBody } from '@/lib/validate'
 import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
 import { timeRangesOverlap, fmtTime } from '@/lib/schedule-overlap'
 import { logRosterChange } from '@/lib/roster-change-log'
+import { isLiveAssignment, liveAssignments } from '@/lib/roster'
 
 const AssignSchema = z.object({
   profile_id: uuidLike.optional(),
@@ -66,7 +67,7 @@ export async function POST(request, props) {
   // Block lookup — also our location-ownership gate.
   const { data: block, error: blockErr } = await db
     .from('shift_blocks')
-    .select('id, location_id, block_date, max_coaches, start_time, end_time, roster_id, rosters:roster_id(status), shift_assignments(count)')
+    .select('id, location_id, block_date, max_coaches, start_time, end_time, roster_id, rosters:roster_id(status)')
     .eq('id', params.id)
     .single()
 
@@ -89,13 +90,25 @@ export async function POST(request, props) {
 
   // Who's already on this block? Skip them silently — same posture
   // as bulk-assign. Pulled once up-front to avoid an N+1.
+  //
+  // ROSTER-FIX.1 — this used to read profile_id only, and capacity came from
+  // a `shift_assignments(count)` embed, so a CANCELLED row (an approved
+  // swap-drop tombstone, pre-D4) both consumed a slot and made the coach look
+  // already-assigned — the block was full of people who weren't working it and
+  // the dropped coach could never be put back on.
   const { data: existingAssigns } = await db
     .from('shift_assignments')
-    .select('profile_id')
+    .select('id, profile_id, status')
     .eq('block_id', params.id)
-  const alreadyAssignedIds = new Set((existingAssigns || []).map((a) => a.profile_id))
+  const liveExisting = liveAssignments(existingAssigns)
+  const alreadyAssignedIds = new Set(liveExisting.map((a) => a.profile_id))
+  // Tombstone → its row id. Cleared just before the insert so the
+  // (block_id, profile_id) unique key doesn't fire on the re-assign.
+  const cancelledByProfile = new Map(
+    (existingAssigns || []).filter((a) => !isLiveAssignment(a)).map((a) => [a.profile_id, a.id]),
+  )
 
-  let runningCount = block.shift_assignments?.[0]?.count ?? 0
+  let runningCount = liveExisting.length
 
   const assigned = []
   const skipped = []
@@ -121,6 +134,20 @@ export async function POST(request, props) {
       .gte('end_date', block.block_date)
     for (const t of timeOff || []) {
       warnings.push(`${t.profiles?.full_name} has approved ${t.type} from ${t.start_date} to ${t.end_date}`)
+    }
+
+    // ROSTER-FIX.1 — clear this coach's tombstone first; the unique key is on
+    // (block_id, profile_id) and does not care that the old row is cancelled.
+    const tombstoneId = cancelledByProfile.get(profileId)
+    if (tombstoneId) {
+      const { error: delErr } = await db.from('shift_assignments').delete().eq('id', tombstoneId)
+      if (delErr) {
+        // Say so rather than let the insert fail as a misleading
+        // "already_assigned" — the operator needs to know the row is stuck.
+        skipped.push({ profile_id: profileId, reason: delErr.message || 'tombstone_clear_failed' })
+        continue
+      }
+      cancelledByProfile.delete(profileId)
     }
 
     const { data: ins, error: insErr } = await db
@@ -215,7 +242,7 @@ export async function POST(request, props) {
       )
     }
     if (skip?.reason === 'at_capacity') {
-      const currentCount = block.shift_assignments?.[0]?.count ?? 0
+      const currentCount = liveExisting.length
       return NextResponse.json(
         {
           success: false,

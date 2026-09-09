@@ -41,12 +41,19 @@ function buildDb({
   block,
   blockErr = null,
   existingAssignedIds = [],
+  // ROSTER-FIX.1 — richer form of existingAssignedIds: full
+  // { profile_id, status } rows, so a test can seed a cancelled tombstone.
+  existingAssigned = null,
   timeOff = [],
   insertErrorFor = () => null, // (profileId) → error or null
 }) {
   const insertSpy = vi.fn()
+  const deleteSpy = vi.fn()
+  const existingRows = existingAssigned
+    ?? existingAssignedIds.map((id) => ({ id: `assign-${id}`, profile_id: id, status: 'scheduled' }))
   return {
     insertSpy,
+    deleteSpy,
     db: {
       from: (table) => {
         if (table === 'shift_blocks') {
@@ -62,10 +69,10 @@ function buildDb({
           return {
             select: (sel) => {
               // Existing-assignees lookup (early in the route).
-              if (sel === 'profile_id') {
+              if (sel === 'id, profile_id, status') {
                 return {
                   eq: () => Promise.resolve({
-                    data: existingAssignedIds.map((id) => ({ profile_id: id })),
+                    data: existingRows.map((r) => ({ id: r.id ?? `assign-${r.profile_id}`, profile_id: r.profile_id, status: r.status ?? 'scheduled' })),
                     error: null,
                   }),
                 }
@@ -73,6 +80,10 @@ function buildDb({
               // The post-insert .select() — shouldn't be called this way.
               throw new Error(`unexpected shift_assignments.select(${sel})`)
             },
+            // ROSTER-FIX.1 — the tombstone clear before a re-assign.
+            delete: () => ({
+              eq: (col, val) => { deleteSpy(col, val); return Promise.resolve({ error: null }) },
+            }),
             insert: (row) => {
               insertSpy(row)
               const err = insertErrorFor(row.profile_id)
@@ -142,7 +153,7 @@ describe('POST — multi-coach (profile_ids)', () => {
   it('assigns every coach when there is capacity', async () => {
     getCurrentUser.mockResolvedValue(MASTER)
     const { db, insertSpy } = buildDb({
-      block: { id: 'block-1', location_id: 'loc-1', block_date: '2026-06-01', max_coaches: 5, shift_assignments: [{ count: 0 }] },
+      block: { id: 'block-1', location_id: 'loc-1', block_date: '2026-06-01', max_coaches: 5 },
     })
     createServerClient.mockReturnValue(db)
 
@@ -160,7 +171,11 @@ describe('POST — multi-coach (profile_ids)', () => {
     getCurrentUser.mockResolvedValue(MASTER)
     const { db } = buildDb({
       // max=3, currently 1 → 2 slots open.
-      block: { id: 'block-1', location_id: 'loc-1', block_date: '2026-06-01', max_coaches: 3, shift_assignments: [{ count: 1 }] },
+      // ROSTER-FIX.1 — capacity is now counted from the LIVE assignment rows,
+      // not a shift_assignments(count) embed, so an occupied seat is seeded as
+      // a real assignee rather than a phantom count.
+      block: { id: 'block-1', location_id: 'loc-1', block_date: '2026-06-01', max_coaches: 3 },
+      existingAssignedIds: ['99999999-9999-9999-9999-999999999999'],
     })
     createServerClient.mockReturnValue(db)
 
@@ -180,7 +195,11 @@ describe('POST — multi-coach (profile_ids)', () => {
   it('allow_over_capacity bypasses the cap', async () => {
     getCurrentUser.mockResolvedValue(MASTER)
     const { db } = buildDb({
-      block: { id: 'block-1', location_id: 'loc-1', block_date: '2026-06-01', max_coaches: 1, shift_assignments: [{ count: 1 }] },
+      // ROSTER-FIX.1 — capacity is now counted from the LIVE assignment rows,
+      // not a shift_assignments(count) embed, so an occupied seat is seeded as
+      // a real assignee rather than a phantom count.
+      block: { id: 'block-1', location_id: 'loc-1', block_date: '2026-06-01', max_coaches: 1 },
+      existingAssignedIds: ['99999999-9999-9999-9999-999999999999'],
     })
     createServerClient.mockReturnValue(db)
 
@@ -209,7 +228,7 @@ describe('POST — multi-coach (profile_ids)', () => {
   it('dedupes a duplicated id in the request payload', async () => {
     getCurrentUser.mockResolvedValue(MASTER)
     const { db, insertSpy } = buildDb({
-      block: { id: 'block-1', location_id: 'loc-1', block_date: '2026-06-01', max_coaches: 5, shift_assignments: [{ count: 0 }] },
+      block: { id: 'block-1', location_id: 'loc-1', block_date: '2026-06-01', max_coaches: 5 },
     })
     createServerClient.mockReturnValue(db)
 
@@ -225,7 +244,7 @@ describe('POST — legacy single-coach (profile_id) response shape', () => {
   it('returns { data } on success', async () => {
     getCurrentUser.mockResolvedValue(MASTER)
     const { db } = buildDb({
-      block: { id: 'block-1', location_id: 'loc-1', block_date: '2026-06-01', max_coaches: 5, shift_assignments: [{ count: 0 }] },
+      block: { id: 'block-1', location_id: 'loc-1', block_date: '2026-06-01', max_coaches: 5 },
     })
     createServerClient.mockReturnValue(db)
 
@@ -240,7 +259,11 @@ describe('POST — legacy single-coach (profile_id) response shape', () => {
   it('returns 409 with the legacy at-capacity message', async () => {
     getCurrentUser.mockResolvedValue(MASTER)
     const { db } = buildDb({
-      block: { id: 'block-1', location_id: 'loc-1', block_date: '2026-06-01', max_coaches: 1, shift_assignments: [{ count: 1 }] },
+      // ROSTER-FIX.1 — capacity is now counted from the LIVE assignment rows,
+      // not a shift_assignments(count) embed, so an occupied seat is seeded as
+      // a real assignee rather than a phantom count.
+      block: { id: 'block-1', location_id: 'loc-1', block_date: '2026-06-01', max_coaches: 1 },
+      existingAssignedIds: ['99999999-9999-9999-9999-999999999999'],
     })
     createServerClient.mockReturnValue(db)
 
@@ -264,5 +287,22 @@ describe('POST — legacy single-coach (profile_id) response shape', () => {
     const json = await res.json()
     expect(res.status).toBe(409)
     expect(json.error).toMatch(/already assigned/i)
+  })
+})
+
+// ROSTER-FIX.1 (D4) — an approved swap-drop used to leave a `status:
+// cancelled` row behind. It kept the block looking staffed (capacity) and the
+// (block, profile) unique key refused to re-add the same coach.
+describe('POST — cancelled tombstones', () => {
+  it('lets a coach whose earlier assignment was cancelled be assigned again, and does not count the tombstone toward capacity', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const { db, insertSpy } = buildDb({
+      block: { id: 'block-1', location_id: 'loc-1', block_date: '2026-06-01', max_coaches: 1, start_time: null, end_time: null, roster_id: null, rosters: null, shift_assignments: [{ count: 1 }] },
+      existingAssigned: [{ profile_id: '11111111-1111-1111-1111-111111111111', status: 'cancelled' }],
+    })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(req({ profile_id: '11111111-1111-1111-1111-111111111111' }), PROPS)
+    expect(res.status).toBe(201)
+    expect(insertSpy).toHaveBeenCalledTimes(1)
   })
 })

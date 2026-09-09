@@ -65,6 +65,25 @@ describe('fetchScheduledShiftRows', () => {
     expect(await fetchScheduledShiftRows(mockDb(null), { locationId: 'x', periodStart: 'a', periodEnd: 'b' })).toEqual([])
   })
 
+  // ROSTER-FIX.1 — a cancelled assignment is a dropped shift: paying it in
+  // staff_hours / staff_cost and counting it as coverage was a real defect.
+  it('drops cancelled assignments', async () => {
+    const rows = [
+      {
+        profile_id: 'live', start_time_override: null, end_time_override: null, status: 'scheduled',
+        profiles: { full_name: 'Live' },
+        shift_blocks: { block_date: '2026-06-06', location_id: 'loc1', shift_templates: { name: 'AM' } },
+      },
+      {
+        profile_id: 'dead', start_time_override: null, end_time_override: null, status: 'cancelled',
+        profiles: { full_name: 'Dead' },
+        shift_blocks: { block_date: '2026-06-06', location_id: 'loc1', shift_templates: { name: 'AM' } },
+      },
+    ]
+    const out = await fetchScheduledShiftRows(mockDb(rows), { locationId: 'loc1', periodStart: '2026-06-01', periodEnd: '2026-06-30' })
+    expect(out.map((r) => r.profile_id)).toEqual(['live'])
+  })
+
   it('tolerates a row missing its block embed (no throw)', async () => {
     const out = await fetchScheduledShiftRows(mockDb([{ profile_id: 'p3', profiles: { full_name: 'Lee' } }]), { locationId: 'x', periodStart: 'a', periodEnd: 'b' })
     expect(out[0]).toMatchObject({ profile_id: 'p3', shift_date: undefined, shift_templates: undefined })
