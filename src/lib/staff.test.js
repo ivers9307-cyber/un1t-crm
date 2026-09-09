@@ -2,14 +2,17 @@ import { describe, it, expect, vi } from 'vitest'
 import { listStaffForUser, getStaffForUser, STAFF_PUBLIC_FIELDS } from './staff.js'
 
 function mockDb({ links = [], profiles = [], detailLinks = null } = {}) {
-  const calls = { profilesSelect: null }
+  const calls = { profilesSelect: null, linkLocationIds: null }
   return {
     calls,
     from(table) {
       if (table === 'profile_locations') {
         return {
           select: () => ({
-            in: () => Promise.resolve({ data: links, error: null }),
+            in: (_col, ids) => {
+              calls.linkLocationIds = ids
+              return Promise.resolve({ data: links, error: null })
+            },
             eq: () => ({ in: () => ({ limit: () => Promise.resolve({ data: detailLinks ?? links, error: null }) }) }),
           }),
         }
@@ -109,5 +112,34 @@ describe('listStaffForUser — picker shape', () => {
       expect(db.calls.profilesSelect).toContain(col)
     }
     expect(db.calls.profilesSelect).toContain('profile_locations(location_id')
+  })
+})
+
+// ROSTER-FIX.6c — the caller can now ask for ONE of their locations. The
+// colleague picker on a Stillorgan shift must not offer Hatch Street's coaches
+// as swap partners, and the link query is where that is decided: narrow the set
+// of locations whose profiles are gathered, rather than gathering both and
+// trimming afterwards.
+describe('listStaffForUser — one location', () => {
+  const twoStudios = { role: 'manager', locations: [{ id: 'loc-1' }, { id: 'loc-2' }] }
+
+  it('gathers profiles from the asked-for location only', async () => {
+    const db = mockDb({ links: [{ profile_id: 'p1' }], profiles: [{ id: 'p1' }] })
+    const res = await listStaffForUser({ db, user: twoStudios, locationId: 'loc-2' })
+    expect(res.ok).toBe(true)
+    expect(db.calls.linkLocationIds).toEqual(['loc-2'])
+  })
+
+  it('is unchanged without the argument: every location the caller holds', async () => {
+    const db = mockDb({ links: [{ profile_id: 'p1' }], profiles: [{ id: 'p1' }] })
+    await listStaffForUser({ db, user: twoStudios })
+    expect(db.calls.linkLocationIds).toEqual(['loc-1', 'loc-2'])
+  })
+
+  it('returns nothing for a location the caller does not hold, without querying', async () => {
+    const db = mockDb({ links: [{ profile_id: 'p1' }], profiles: [{ id: 'p1' }] })
+    const res = await listStaffForUser({ db, user: twoStudios, locationId: 'loc-9' })
+    expect(res).toEqual({ ok: true, data: [] })
+    expect(db.calls.linkLocationIds).toBeNull()
   })
 })

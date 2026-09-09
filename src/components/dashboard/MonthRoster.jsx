@@ -135,7 +135,17 @@ function ShiftActionMenu({ shift, shiftDate, onClose, onDone }) {
     if (colleagues !== null || loadingColleagues) return
     setLoadingColleagues(true)
     try {
-      const res = await fetch(`/api/staff?location_id=${encodeURIComponent(shift.location_id)}`)
+      // ROSTER-FIX.6c — two params, two different defects, one line.
+      // `fields=picker` is the pay-free shape: without it an admin caller's
+      // browser received `*` off `profiles` (hourly_rate, annual_salary,
+      // overtime_rate) to render a list of names, the same leak the calendar
+      // just closed. `location_id` is honoured by the route now: the read
+      // service scopes to ALL of the caller's locations, so a manager at two
+      // studios was offered the other studio's coaches as swap partners for a
+      // shift they cannot work.
+      const res = await fetch(
+        `/api/staff?location_id=${encodeURIComponent(shift.location_id)}&fields=picker`
+      )
       const data = await res.json()
       if (!res.ok || !data.success) {
         setError(data.error || 'Could not load colleagues. Please try again.')
