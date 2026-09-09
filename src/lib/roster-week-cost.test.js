@@ -170,22 +170,17 @@ describe('computeWeeklyFteHours', () => {
     expect(res.coaches[0].allocated_hours).toBe(3)
   })
 
-  // KNOWN GAP, pinned deliberately rather than fixed here. blocksToShiftRows
-  // bills the BLOCK's window and has never consulted an assignment's own
-  // start_time_override / end_time_override — true of BOTH copies this PR
-  // merged, so the panel has always read this way and a dedupe PR is the wrong
-  // place to change a number. ROSTER-FIX.4 already settled the direction for
-  // the budget projection (assignment overrides count), so the fix is the same
-  // shape; it needs its own PR because the same flattener feeds the contractor
-  // SPEND totals, and those gate the over-budget publish confirmation.
-  it('does NOT yet honour an assignment-level adjusted window (see the note above)', async () => {
+  // ROSTER-HOURS.1 — the panel credits the window on the coach's OWN
+  // assignment, so a coach cut back to part of a block is not shown a full
+  // day. Same precedence as roster-publish.js and payroll's shiftHours.
+  it('honours an assignment-level adjusted window', async () => {
     const res = await callWith({
       staff: [SARAH],
       blocks: [
         block({ id: 'b2', date: '2026-05-05', start: '09:00:00', end: '17:00:00', coaches: [{ profile_id: 'sarah', start_time_override: '09:00:00', end_time_override: '12:00:00' }] }),
       ],
     })
-    expect(res.coaches[0].allocated_hours).toBe(8)
+    expect(res.coaches[0].allocated_hours).toBe(3)
   })
 
   it('sorts the coaches over their contract first', async () => {

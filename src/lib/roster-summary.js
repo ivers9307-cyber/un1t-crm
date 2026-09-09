@@ -22,6 +22,7 @@
 
 import { shiftHours, implicitHourlyRate } from './payroll'
 import { addDays, formatDate, liveAssignments } from './roster'
+import { effectiveOverride } from './roster-read'
 
 // Roster v2 phase 6 — leave-aware availability.
 //
@@ -100,6 +101,17 @@ export function leaveHoursInWeek({ timeOff, profileId, weekStart, contractedHour
  *   that move are in exactly that case, and they move toward the roster the
  *   operator is looking at.
  *
+ * ROSTER-HOURS.1 layers the missing rung on top of that. Neither copy ever
+ * consulted the ASSIGNMENT's own start_time_override / end_time_override, so a
+ * coach put on part of a block billed the whole of it — in the summary panel,
+ * the week-cost panel, and the contractor SPEND total that gates the
+ * over-budget confirmation on POST /api/schedule/rosters. The precedence is now
+ * the one roster-publish.js settled in ROSTER-FIX.4 and payroll's shiftHours
+ * has always read: **the assignment's own window, then the block's, then the
+ * template's** — which is exactly `effectiveOverride` (roster-read.js), already
+ * the collapse used by the swaps, copy-week and /api/schedule/shifts reads.
+ * Reusing it keeps one definition of "effective override" in the repo.
+ *
  * The extra ids (`id` = the shift_assignments id, `block_id`, `location_id`,
  * `shift_date`) are what the calendar's swap flow reads off a row; nothing in
  * this module looks at them.
@@ -126,8 +138,8 @@ export function blocksToShiftRows(blocks) {
         // reads the override FIRST.
         start_time: block.start_time,
         end_time: block.end_time,
-        start_time_override: block.start_time !== tpl.start_time ? block.start_time : null,
-        end_time_override: block.end_time !== tpl.end_time ? block.end_time : null,
+        start_time_override: effectiveOverride(a.start_time_override, block.start_time, tpl.start_time),
+        end_time_override: effectiveOverride(a.end_time_override, block.end_time, tpl.end_time),
         role_label: tpl.role_label || null,
         notes: a.notes || block.notes || null,
         status: a.status,
