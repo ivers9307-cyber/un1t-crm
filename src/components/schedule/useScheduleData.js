@@ -1,0 +1,87 @@
+'use client'
+
+// ROSTER-FIX.6a — the schedule calendar's data layer, lifted out of
+// ScheduleCalendar.jsx so the two defects it carried can be fixed and tested
+// in one place.
+//
+// 1. NO ERROR HANDLING. fetchData awaited a bare Promise.all and then called
+//    setLoading(false). Any rejection - the network dropping, a 500, an HTML
+//    error page where JSON was expected - skipped that line, so the screen sat
+//    on "Loading roster..." forever and the operator was told nothing. That is
+//    the discarded-error defect class: the failure was real, it just never
+//    reached a human. Now every failure lands in `error` for the caller to
+//    render, and `loading` is cleared in a finally.
+//
+// 2. NO REQUEST ORDERING. Clicking the week arrow twice fires two fan-outs; if
+//    the first answers last it repaints the week the operator has already left,
+//    with no clue the dates on screen no longer match the data. A `generation`
+//    counter now stamps each fan-out and only the newest one is allowed to
+//    write state - a late loser is dropped whether it resolved or rejected.
+//
+// On failure the previously loaded week deliberately STAYS on screen (we only
+// stop writing new values), so a flaky refresh shows a banner over real data
+// rather than blanking a roster the operator was reading.
+
+import { useState, useEffect, useCallback, useRef } from 'react'
+
+async function getJson(url) {
+  const res = await fetch(url)
+  // A non-JSON body (an HTML 502 from the edge, say) must not throw a parse
+  // error that reads like a bug - fall back to the status code.
+  const data = await res.json().catch(() => null)
+  if (!res.ok || data?.success === false) {
+    throw new Error(data?.error || `Request failed (${res.status})`)
+  }
+  return data || {}
+}
+
+export function useScheduleData({ locationId, startDate, endDate, spendReferenceDate }) {
+  const [blocks, setBlocks] = useState([])
+  const [templates, setTemplates] = useState([])
+  const [staff, setStaff] = useState([])
+  const [timeOff, setTimeOff] = useState([])
+  const [holidays, setHolidays] = useState([])
+  const [contractorSpend, setContractorSpend] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
+
+  // Monotonic request id. Bumped before each fan-out; a response whose stamp
+  // is no longer the current one is a loser and writes nothing.
+  const generation = useRef(0)
+
+  const refresh = useCallback(async () => {
+    if (!locationId) {
+      setLoading(false)
+      return
+    }
+    const gen = ++generation.current
+    setLoading(true)
+    setError(null)
+    try {
+      const [blocksRes, templatesRes, staffRes, timeOffRes, holidaysRes, spendRes] = await Promise.all([
+        getJson(`/api/schedule/blocks?location_id=${locationId}&start_date=${startDate}&end_date=${endDate}`),
+        getJson(`/api/schedule/templates?location_id=${locationId}`),
+        getJson('/api/staff'),
+        getJson(`/api/schedule/time-off?location_id=${locationId}&start_date=${startDate}&end_date=${endDate}&status=approved`),
+        getJson(`/api/locations/${locationId}/holidays?start=${startDate}&end=${endDate}`),
+        getJson(`/api/schedule/contractor-spend?location_id=${locationId}&reference_date=${spendReferenceDate}`),
+      ])
+      if (gen !== generation.current) return
+      setBlocks(blocksRes.data || [])
+      setTemplates((templatesRes.data || []).filter(t => t.active))
+      setStaff(staffRes.data || [])
+      setTimeOff(timeOffRes.data || [])
+      setHolidays(holidaysRes.data || [])
+      setContractorSpend(spendRes?.success ? spendRes.data : null)
+    } catch (e) {
+      if (gen !== generation.current) return
+      setError(e?.message || 'Could not load the roster')
+    } finally {
+      if (gen === generation.current) setLoading(false)
+    }
+  }, [locationId, startDate, endDate, spendReferenceDate])
+
+  useEffect(() => { refresh() }, [refresh])
+
+  return { blocks, templates, staff, timeOff, holidays, contractorSpend, loading, error, refresh }
+}
