@@ -15,6 +15,8 @@
 // per-coach location. Blocks keep the template's default times. For the
 // override-free callers (assistant create_shift) this distinction is moot.
 
+import { findPublishedRosterFor } from './roster'
+
 /**
  * Find-or-create the block for (location, template, date), then upsert the
  * coach's assignment on it. Returns { blockId, assignment, template, error }.
@@ -83,6 +85,14 @@ export async function upsertShiftAssignment(db, input) {
 
   let blockId = existing?.id
   if (!blockId) {
+    // ROSTER-FIX.4 — a block created for a date INSIDE an already-published
+    // period joins that roster. Publishing tags the blocks that exist at
+    // that moment; one created afterwards stayed roster_id NULL, which every
+    // reader treats as "not published" — so the coach we are assigning right
+    // here never saw the shift, and later edits to it were never
+    // change-logged. Null when nothing covers the date, exactly as before.
+    const rosterId = await findPublishedRosterFor(db, locationId, shiftDate)
+
     // Create it with the template's default times + capacity (min_coaches
     // defaults at the DB level, matching the reverse trigger).
     const { data: created, error: cErr } = await db
@@ -94,6 +104,7 @@ export async function upsertShiftAssignment(db, input) {
         start_time: template.start_time,
         end_time: template.end_time,
         max_coaches: template.max_coaches ?? 15,
+        roster_id: rosterId,
         notes,
         created_by: actorId,
       })
@@ -181,10 +192,18 @@ export async function bulkUpsertShiftAssignments(db, { locationId, actorId = nul
   // 3. Create blocks for the slots that don't exist yet (template defaults).
   const neededKeys = new Set(rows.map((r) => `${r.shiftTemplateId}|${r.shiftDate}`))
   const toCreate = []
+  // ROSTER-FIX.4 — same rule as upsertShiftAssignment: a block created
+  // inside an already-published period joins that roster, or copy-week
+  // silently produces shifts no coach can see. Resolved once per distinct
+  // DATE (several templates share a day), not once per row.
+  const rosterIdByDate = new Map()
   for (const key of neededKeys) {
     if (blockIdByKey.has(key)) continue
     const [templateId, blockDate] = key.split('|')
     const tpl = tplById.get(templateId)
+    if (!rosterIdByDate.has(blockDate)) {
+      rosterIdByDate.set(blockDate, await findPublishedRosterFor(db, locationId, blockDate))
+    }
     toCreate.push({
       location_id: locationId,
       template_id: templateId,
@@ -192,6 +211,7 @@ export async function bulkUpsertShiftAssignments(db, { locationId, actorId = nul
       start_time: tpl.start_time,
       end_time: tpl.end_time,
       max_coaches: tpl.max_coaches ?? 15,
+      roster_id: rosterIdByDate.get(blockDate),
       created_by: actorId,
     })
   }

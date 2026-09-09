@@ -138,3 +138,65 @@ describe('GET /api/schedule/blocks — manager view', () => {
     expect(body.data[0].shift_assignments[0].partial_reason).toBe('left early for physio')
   })
 })
+
+// ROSTER-FIX.4 — a manually-added block for a date inside an
+// already-published period must join that roster, or the extra Saturday slot
+// a manager just created is invisible to every coach.
+describe('POST /api/schedule/blocks — post-publish blocks join the roster', () => {
+  const LOC = 'a0000000-0000-0000-0000-000000000001'
+  const TPL = 'a0000000-0000-0000-0000-0000000000t1'.replace('t1', '00')
+
+  function postDb({ publishedRoster = null } = {}) {
+    const captured = { insert: null }
+    const db = {
+      captured,
+      from(table) {
+        if (table === 'rosters') {
+          const chain = {
+            select: () => chain, eq: () => chain, lte: () => chain, gte: () => chain, limit: () => chain,
+            maybeSingle: () => Promise.resolve({ data: publishedRoster, error: null }),
+          }
+          return chain
+        }
+        if (table === 'shift_templates') {
+          return { select: () => ({ eq: () => ({ single: () => Promise.resolve({ data: { start_time: '09:00', end_time: '10:00', max_coaches: 5, min_coaches: 1 }, error: null }) }) }) }
+        }
+        if (table === 'shift_blocks') {
+          return {
+            insert: (row) => { captured.insert = row; return { select: () => ({ single: () => Promise.resolve({ data: { id: 'blk-new', ...row }, error: null }) }) } },
+          }
+        }
+        throw new Error('unexpected table: ' + table)
+      },
+    }
+    return db
+  }
+
+  function postReq(body) {
+    return { json: () => Promise.resolve(body), headers: { get: () => '' } }
+  }
+
+  beforeEach(() => { createServerClient.mockReset(); getCurrentUser.mockReset() })
+
+  it('stamps roster_id when a published roster covers the date', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'm', role: 'manager', locations: [{ id: LOC }] })
+    const db = postDb({ publishedRoster: { id: 'r-live' } })
+    createServerClient.mockReturnValue(db)
+    const { POST } = await import('./route.js')
+
+    const res = await POST(postReq({ location_id: LOC, template_id: TPL, block_date: '2026-06-06' }))
+    expect(res.status).toBe(201)
+    expect(db.captured.insert.roster_id).toBe('r-live')
+  })
+
+  it('leaves roster_id null when the date is not inside a published period', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'm', role: 'manager', locations: [{ id: LOC }] })
+    const db = postDb({ publishedRoster: null })
+    createServerClient.mockReturnValue(db)
+    const { POST } = await import('./route.js')
+
+    const res = await POST(postReq({ location_id: LOC, template_id: TPL, block_date: '2026-06-06' }))
+    expect(res.status).toBe(201)
+    expect(db.captured.insert.roster_id).toBeNull()
+  })
+})

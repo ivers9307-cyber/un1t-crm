@@ -20,6 +20,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess, getUserLocationIds } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, isoDate, timeOfDay, MANAGER_ROLES } from '@/lib/schemas'
+import { findPublishedRosterFor } from '@/lib/roster'
 
 const BlockCreateSchema = z.object({
   location_id: uuidLike,
@@ -196,6 +197,13 @@ export async function POST(request) {
     min = min ?? (tpl.min_coaches ?? 1)
   }
 
+  // ROSTER-FIX.4 — if this date already sits inside a PUBLISHED period, the
+  // new block joins that roster. Publishing tags the blocks that exist at
+  // that moment; a block added afterwards stayed roster_id NULL, which every
+  // reader treats as unpublished — so the extra slot a manager just created
+  // for a published week was invisible to every coach.
+  const rosterId = await findPublishedRosterFor(db, body.location_id, body.block_date)
+
   const { data, error } = await db
     .from('shift_blocks')
     .insert({
@@ -206,6 +214,7 @@ export async function POST(request) {
       end_time: end,
       max_coaches: max,
       min_coaches: min,
+      roster_id: rosterId,
       notes: body.notes || null,
       created_by: user.id,
     })

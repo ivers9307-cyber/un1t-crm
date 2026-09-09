@@ -9,11 +9,19 @@ import { upsertShiftAssignment, bulkUpsertShiftAssignments } from './roster-writ
 // location-scoped lookups matching nothing (SAAS-1) — the route-level
 // harness in assistant/chat/route.test.js is what actually applies the
 // filters against a two-location fixture.
-function makeDb({ template, existingBlock, newBlockId = 'blk-new', assignment = { id: 'a1' }, profileLink = { profile_id: 'p1' } }) {
+function makeDb({ template, existingBlock, newBlockId = 'blk-new', assignment = { id: 'a1' }, profileLink = { profile_id: 'p1' }, publishedRoster = null }) {
   const captured = { blockInsert: null, assignmentUpsert: null }
   const db = {
     captured,
     from(table) {
+      // ROSTER-FIX.4 — findPublishedRosterFor's probe.
+      if (table === 'rosters') {
+        const chain = {
+          select: () => chain, eq: () => chain, lte: () => chain, gte: () => chain, limit: () => chain,
+          maybeSingle: () => Promise.resolve({ data: publishedRoster, error: null }),
+        }
+        return chain
+      }
       if (table === 'shift_templates') {
         const chain = { eq: () => chain, maybeSingle: () => Promise.resolve({ data: template, error: null }) }
         return { select: () => chain }
@@ -96,6 +104,21 @@ describe('upsertShiftAssignment', () => {
     expect(db.captured.assignmentUpsert).toBeNull()
   })
 
+  // ROSTER-FIX.4 — a block created for a date inside an already-published
+  // period must JOIN that roster. Left untagged it reads as unpublished to
+  // every reader, so the coach just assigned to it never sees the shift.
+  it('stamps roster_id on a block created inside an already-published period', async () => {
+    const db = makeDb({ template, existingBlock: null, publishedRoster: { id: 'r-live' } })
+    await upsertShiftAssignment(db, base)
+    expect(db.captured.blockInsert.roster_id).toBe('r-live')
+  })
+
+  it('leaves roster_id null when no published roster covers the date', async () => {
+    const db = makeDb({ template, existingBlock: null, publishedRoster: null })
+    await upsertShiftAssignment(db, base)
+    expect(db.captured.blockInsert.roster_id).toBeNull()
+  })
+
   it('returns the validated template row so callers can reuse its name', async () => {
     const db = makeDb({ template: { ...template, name: 'AM Shift' }, existingBlock: { id: 'blk-existing' } })
     const res = await upsertShiftAssignment(db, base)
@@ -107,11 +130,25 @@ describe('upsertShiftAssignment', () => {
 // Per-table mock for the batch writer. shift_blocks is queried twice —
 // a select-chain (existing-block lookup) and an insert-chain (create) —
 // so the builder supports both.
-function makeBulkDb({ templates = [], existingBlocks = [], createdBlocks = [] } = {}) {
-  const captured = { blockInsert: null, assignmentUpsert: null }
+function makeBulkDb({ templates = [], existingBlocks = [], createdBlocks = [], publishedRosterByDate = {} } = {}) {
+  const captured = { blockInsert: null, assignmentUpsert: null, rosterProbeDates: [] }
   const db = {
     captured,
     from(table) {
+      // ROSTER-FIX.4 — findPublishedRosterFor's probe. The date under test
+      // arrives as .lte('period_start', <date>), so answer per date.
+      if (table === 'rosters') {
+        let probed = null
+        const chain = {
+          select: () => chain,
+          eq: () => chain,
+          lte: (col, val) => { if (col === 'period_start') { probed = val; captured.rosterProbeDates.push(val) } return chain },
+          gte: () => chain,
+          limit: () => chain,
+          maybeSingle: () => Promise.resolve({ data: publishedRosterByDate[probed] || null, error: null }),
+        }
+        return chain
+      }
       if (table === 'shift_templates') {
         return { select: () => ({ in: () => Promise.resolve({ data: templates, error: null }) }) }
       }
@@ -192,6 +229,37 @@ describe('bulkUpsertShiftAssignments', () => {
     })
     await bulkUpsertShiftAssignments(db, { locationId: 'loc1', rows: [{ profileId: 'p1', shiftTemplateId: 't1', shiftDate: '2026-06-08' }] })
     expect(db.captured.blockInsert[0].max_coaches).toBe(15)
+  })
+
+  // ROSTER-FIX.4 — same rule for the copy-week / copy-month batch writer,
+  // resolved once per distinct date rather than once per row.
+  it('stamps roster_id per date on blocks created inside published periods', async () => {
+    const db = makeBulkDb({
+      templates: [tpl1], existingBlocks: [],
+      createdBlocks: [
+        { id: 'blk-a', template_id: 't1', block_date: '2026-06-08' },
+        { id: 'blk-b', template_id: 't1', block_date: '2026-06-15' },
+      ],
+      publishedRosterByDate: { '2026-06-08': { id: 'r-live' } },
+    })
+    await bulkUpsertShiftAssignments(db, {
+      locationId: 'loc1',
+      rows: [
+        { profileId: 'p1', shiftTemplateId: 't1', shiftDate: '2026-06-08' },
+        { profileId: 'p1', shiftTemplateId: 't1', shiftDate: '2026-06-15' },
+      ],
+    })
+    const byDate = Object.fromEntries(db.captured.blockInsert.map((b) => [b.block_date, b.roster_id]))
+    expect(byDate['2026-06-08']).toBe('r-live')
+    expect(byDate['2026-06-15']).toBeNull()
+    // One probe per distinct date, not one per row.
+    expect(db.captured.rosterProbeDates).toHaveLength(2)
+  })
+
+  it('does not probe for a roster when every block already exists', async () => {
+    const db = makeBulkDb({ templates: [tpl1], existingBlocks: [{ id: 'blk-x', template_id: 't1', block_date: '2026-06-08' }] })
+    await bulkUpsertShiftAssignments(db, { locationId: 'loc1', rows: [{ profileId: 'p1', shiftTemplateId: 't1', shiftDate: '2026-06-08' }] })
+    expect(db.captured.rosterProbeDates).toHaveLength(0)
   })
 
   it('errors when a referenced template is missing', async () => {
