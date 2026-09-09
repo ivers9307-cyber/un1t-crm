@@ -1,11 +1,13 @@
 // RETIRE-SHIFTS-MIRROR.1 — tests for the new-model shift fetcher that the
 // report generators use in place of the legacy public.shifts mirror.
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   fetchScheduledShiftRows,
   humanizeReportKey,
   formatReportValue,
   buildReportEmailHtml,
+  calculateNextRun,
+  calculatePeriodForSchedule,
 } from './report-generator'
 
 // Minimal thenable mock of the supabase query builder: every filter method
@@ -163,5 +165,115 @@ describe('buildReportEmailHtml', () => {
   it('shows an empty-state row when there is no summary data', () => {
     const html = buildReportEmailHtml({ report_name: 'Empty', period_start: '2026-05-01', period_end: '2026-05-01', summary: {} }, {})
     expect(html).toContain('No data for this period.')
+  })
+})
+
+// ─── ROSTER-FIX.5 — scheduling arithmetic ────────────────────────────────────
+//
+// Both helpers are called once per due schedule by
+// /api/cron/run-scheduled-reports. `daily` was reachable in the POST schema
+// but understood by neither: calculateNextRun returned null (so a daily
+// schedule ran once and never again) and calculatePeriodForSchedule fell
+// through to the 7-day default (so a "daily" report covered a week).
+
+// Local-clock expectation: these helpers do their arithmetic with local Date
+// components, so build the expectation the same way rather than hard-coding a
+// UTC string that only passes in one timezone.
+function expectedRun(daysAhead, from) {
+  const d = new Date(from)
+  d.setDate(d.getDate() + daysAhead)
+  d.setHours(7, 0, 0, 0)
+  return d.toISOString()
+}
+
+describe('calculateNextRun', () => {
+  // 2026-05-06 is a Wednesday (JS getDay() === 3).
+  const NOW = new Date('2026-05-06T09:00:00Z')
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(NOW)
+  })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('daily → tomorrow at 07:00 local', () => {
+    expect(calculateNextRun('daily')).toBe(expectedRun(1, NOW))
+  })
+
+  it('daily ignores day_of_week / day_of_month', () => {
+    expect(calculateNextRun('daily', 5, 12)).toBe(expectedRun(1, NOW))
+  })
+
+  it('weekly → the next occurrence of that weekday', () => {
+    // Friday (5) is 2 days after Wednesday.
+    expect(calculateNextRun('weekly', 5)).toBe(expectedRun(2, NOW))
+  })
+
+  it('weekly on TODAY\'s weekday → a full week out, never today', () => {
+    expect(calculateNextRun('weekly', 3)).toBe(expectedRun(7, NOW))
+  })
+
+  it('fortnightly → the next occurrence plus a week', () => {
+    expect(calculateNextRun('fortnightly', 5)).toBe(expectedRun(2 + 7, NOW))
+  })
+
+  it('fortnightly on TODAY\'s weekday → 14 days, not 7', () => {
+    expect(calculateNextRun('fortnightly', 3)).toBe(expectedRun(7 + 7, NOW))
+  })
+
+  it('monthly → the given day of next month at 07:00', () => {
+    const out = new Date(calculateNextRun('monthly', null, 12))
+    expect(out.getMonth()).toBe(5) // June
+    expect(out.getDate()).toBe(12)
+    expect(out.getHours()).toBe(7)
+  })
+
+  it('once → null (nothing to advance to)', () => {
+    expect(calculateNextRun('once')).toBeNull()
+  })
+
+  it('weekly/fortnightly without a weekday → null rather than a wrong date', () => {
+    expect(calculateNextRun('weekly', null)).toBeNull()
+    expect(calculateNextRun('fortnightly', null)).toBeNull()
+  })
+})
+
+describe('calculatePeriodForSchedule', () => {
+  // Run the clock at the cron's own hour so the UTC date arithmetic in the
+  // helper matches what an operator would call "yesterday".
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-05-06T07:00:00Z'))
+  })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('daily → yesterday only, not a week', () => {
+    expect(calculatePeriodForSchedule('daily')).toEqual({
+      period_start: '2026-05-05', period_end: '2026-05-05',
+    })
+  })
+
+  it('weekly → the 7 days ending yesterday', () => {
+    expect(calculatePeriodForSchedule('weekly')).toEqual({
+      period_start: '2026-04-29', period_end: '2026-05-05',
+    })
+  })
+
+  it('fortnightly → the 14 days ending yesterday', () => {
+    expect(calculatePeriodForSchedule('fortnightly')).toEqual({
+      period_start: '2026-04-22', period_end: '2026-05-05',
+    })
+  })
+
+  it('monthly → the previous full calendar month', () => {
+    expect(calculatePeriodForSchedule('monthly')).toEqual({
+      period_start: '2026-04-01', period_end: '2026-04-30',
+    })
+  })
+
+  it('an unknown frequency falls back to the last 7 days', () => {
+    expect(calculatePeriodForSchedule('quarterly')).toEqual({
+      period_start: '2026-04-29', period_end: '2026-05-05',
+    })
   })
 })

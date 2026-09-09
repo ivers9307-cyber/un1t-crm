@@ -1,7 +1,7 @@
 // Shared report generation logic — used by both manual generate and cron scheduler
 import { createServerClient } from '@/lib/supabase'
 import { computeWeeklyCost, implicitHourlyRate, mondayOf } from '@/lib/payroll'
-import { isLiveAssignment } from '@/lib/roster'
+import { isLiveAssignment, formatDate } from '@/lib/roster'
 
 // RETIRE-SHIFTS-MIRROR.1 — reports now read the Roster v2 source of truth
 // (shift_assignments + shift_blocks) instead of the legacy public.shifts
@@ -348,67 +348,76 @@ export async function generateReport({ report_type, period_start, period_end, lo
 
 /**
  * Calculate the period dates for a scheduled report based on frequency.
- * Weekly = last 7 days, fortnightly = last 14 days, monthly = last calendar month.
+ * Daily = yesterday, weekly = last 7 days, fortnightly = last 14 days,
+ * monthly = last calendar month. All boundaries inclusive.
  *
- * Period boundaries are computed in UTC via toISOString().split('T')[0].
- * For the default cron at 07:00 UTC (08:00 Dublin in winter / 08:00 BST in
- * summer), this aligns with the local "yesterday" at the time of run.
- * If the cron schedule is ever moved earlier than 01:00 UTC, the date
- * arithmetic could roll back a day in the operator's perception — the
- * cron schedule should stay at 07:00 UTC unless this function is updated
- * to use Intl.DateTimeFormat with a configured timezone.
+ * ROSTER-FIX.5 — boundaries are now formatted from LOCAL calendar components
+ * (formatDate), not toISOString(). The old UTC formatting was the classic
+ * CLAUDE.md trap: `new Date(y, m - 1, 1)` is LOCAL midnight, so under any
+ * offset east of UTC (Dublin BST = +1) toISOString() rolled it back a day and
+ * every monthly report covered 31 Mar - 29 Apr instead of 1 - 30 Apr. It also
+ * removes the old "don't move the cron earlier than 01:00 UTC" caveat: local
+ * components mean the period is the operator's yesterday at any run hour.
  */
 export function calculatePeriodForSchedule(frequency) {
   const now = new Date()
-  let period_start, period_end
 
-  // period_end is always yesterday (UTC date)
+  // period_end is always yesterday, local.
   const yesterday = new Date(now)
   yesterday.setDate(yesterday.getDate() - 1)
-  period_end = yesterday.toISOString().split('T')[0]
 
-  if (frequency === 'weekly') {
-    const start = new Date(yesterday)
-    start.setDate(start.getDate() - 6) // 7-day window
-    period_start = start.toISOString().split('T')[0]
-  } else if (frequency === 'fortnightly') {
-    const start = new Date(yesterday)
-    start.setDate(start.getDate() - 13) // 14-day window
-    period_start = start.toISOString().split('T')[0]
-  } else if (frequency === 'monthly') {
-    // Previous full calendar month
-    const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1)
-    period_start = lastMonth.toISOString().split('T')[0]
-    const lastDayPrevMonth = new Date(now.getFullYear(), now.getMonth(), 0)
-    period_end = lastDayPrevMonth.toISOString().split('T')[0]
-  } else {
-    // Default: last 7 days
-    const start = new Date(yesterday)
-    start.setDate(start.getDate() - 6)
-    period_start = start.toISOString().split('T')[0]
+  // A daily report covers ONE day. It used to fall through to the 7-day
+  // default, so a schedule labelled "daily" re-reported the same week every
+  // morning.
+  if (frequency === 'daily') {
+    const day = formatDate(yesterday)
+    return { period_start: day, period_end: day }
   }
 
-  return { period_start, period_end }
+  if (frequency === 'monthly') {
+    // Previous full calendar month.
+    const first = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+    const last = new Date(now.getFullYear(), now.getMonth(), 0)
+    return { period_start: formatDate(first), period_end: formatDate(last) }
+  }
+
+  // weekly (and the fallback) = 7 days, fortnightly = 14 — both ending
+  // yesterday, inclusive.
+  const span = frequency === 'fortnightly' ? 13 : 6
+  const start = new Date(yesterday)
+  start.setDate(start.getDate() - span)
+  return { period_start: formatDate(start), period_end: formatDate(yesterday) }
 }
 
 /**
- * Calculate the next run date after execution.
+ * Calculate the next run date after execution. Always 07:00 local on the
+ * target day; null for 'once' (nothing to advance to) and for a
+ * weekly/fortnightly schedule with no weekday set.
+ *
+ * `dayOfWeek` is a JS weekday (0=Sunday) — see src/lib/report-schedule-days.js
+ * and mig 601. The UI converts; nothing else may.
  */
 export function calculateNextRun(frequency, dayOfWeek, dayOfMonth) {
   const now = new Date()
 
-  if (frequency === 'weekly' && dayOfWeek != null) {
+  // ROSTER-FIX.5 — 'daily' returned null, so /api/cron/run-scheduled-reports
+  // left next_run_at where it was: a daily schedule ran once and then either
+  // stalled or re-fired every tick.
+  if (frequency === 'daily') {
     const target = new Date(now)
-    const diff = (dayOfWeek - target.getDay() + 7) % 7 || 7
-    target.setDate(target.getDate() + diff)
+    target.setDate(target.getDate() + 1)
     target.setHours(7, 0, 0, 0)
     return target.toISOString()
   }
 
-  if (frequency === 'fortnightly' && dayOfWeek != null) {
+  if ((frequency === 'weekly' || frequency === 'fortnightly') && dayOfWeek != null) {
     const target = new Date(now)
-    const diff = (dayOfWeek - target.getDay() + 7) % 7 || 7
-    target.setDate(target.getDate() + diff + 7) // +7 extra for fortnightly
+    const diff = (dayOfWeek - target.getDay() + 7) % 7
+    // diff === 0 means today IS the target weekday, and the run that just
+    // happened is why we are here — so the next one is a whole week out, never
+    // today. Fortnightly is then that occurrence plus another week.
+    const next = diff === 0 ? 7 : diff
+    target.setDate(target.getDate() + next + (frequency === 'fortnightly' ? 7 : 0))
     target.setHours(7, 0, 0, 0)
     return target.toISOString()
   }
