@@ -350,12 +350,40 @@ export async function releasePublishedRostersFor(db, { locationId, periodStart, 
       .eq('id', r.id)
       .eq('status', 'published')
     if (updErr) {
-      await restorePublishedRosters(db, released)
+      // ROSTER-SUPERSEDE.1 — the restore is itself a write and can itself
+      // fail: legitimately with a 23P01 when another publish has taken this
+      // range in the meantime, or from whatever broke the write above.
+      // Discarding that error (repo rule: no discarded write errors) would
+      // leave rosters stood down with nobody told, so it is folded into the
+      // error the caller reports, and it NAMES the stranded ids because
+      // putting those rows back is then a human job.
+      const { error: restoreErr } = await restorePublishedRosters(db, released)
+      if (restoreErr) {
+        return { released: [], error: withRestoreFailure(updErr, restoreErr, released.map((x) => x.id)) }
+      }
       return { released: [], error: updErr }
     }
     released.push(r)
   }
   return { released, error: null }
+}
+
+/**
+ * ROSTER-SUPERSEDE.1 — fold a failed restore into the error the caller will
+ * report, keeping any PostgREST code/details the original carried (a
+ * PostgrestError extends Error, so a bare spread would drop them).
+ */
+function withRestoreFailure(err, restoreErr, strandedIds) {
+  const ids = strandedIds.length > 0 ? strandedIds.join(', ') : 'none recorded'
+  const message = `${err?.message || err}; the rosters already stood down could not be restored (${restoreErr.message}). Still superseded, and only a human can put them back: ${ids}`
+  if (err instanceof Error) {
+    const merged = new Error(message)
+    if (err.code) merged.code = err.code
+    if (err.details) merged.details = err.details
+    if (err.hint) merged.hint = err.hint
+    return merged
+  }
+  return { ...err, message }
 }
 
 /**
@@ -441,14 +469,28 @@ export async function supersedeSwallowedRosters(db, { locationId, newRosterId, p
     //    keeps an earlier publish's attribution rather than overwriting it.
     const pending = (releasedIds || []).filter((id) => id && id !== newRosterId)
     if (pending.length > 0) {
-      const { error: stampErr } = await db
+      // ROSTER-SUPERSEDE.1 — report the rows the write actually TOUCHED, not
+      // the rows it was aimed at. All three filters can legitimately miss (a
+      // racing publish flipping the row back, or stamping its own successor
+      // first), and reporting a stamp that never landed as a success hides
+      // exactly the attribution gap this call exists to close.
+      const { data: stamped, error: stampErr } = await db
         .from('rosters')
         .update({ superseded_by: newRosterId })
         .in('id', pending)
         .eq('status', 'superseded')
         .is('superseded_by', null)
-      if (stampErr) warnings.push(`superseded_by stamp failed: ${stampErr.message}`)
-      else superseded.push(...pending)
+        .select('id')
+      if (stampErr) {
+        warnings.push(`superseded_by stamp failed: ${stampErr.message}`)
+      } else {
+        const stampedIds = (stamped || []).map((row) => row?.id).filter(Boolean)
+        superseded.push(...stampedIds)
+        const missed = pending.filter((id) => !stampedIds.includes(id))
+        if (missed.length > 0) {
+          warnings.push(`superseded_by stamp matched no row for: ${missed.join(', ')}`)
+        }
+      }
     }
 
     // 2. Sweep anything still published that overlaps. On a box with mig 602

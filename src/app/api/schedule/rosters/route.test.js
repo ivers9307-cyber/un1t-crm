@@ -60,7 +60,7 @@ function req(body) {
 // Minimal Supabase-shaped mock. `rosters` selects resolve to
 // `publishedRosters` (the overlap probe); the insert resolves to a row;
 // shift_blocks reads resolve empty and writes are recorded.
-function buildDb({ publishedRosters = [], insertError = null, tagError = null, blockDates = {} } = {}) {
+function buildDb({ publishedRosters = [], insertError = null, insertThrows = null, tagError = null, blockDates = {} } = {}) {
   const inserts = []
   // ROSTER-SUPERSEDE.1 — rosters now also takes UPDATEs (the release before
   // the insert, the superseded_by stamp after the re-tag, the restore on a
@@ -84,10 +84,15 @@ function buildDb({ publishedRosters = [], insertError = null, tagError = null, b
             inserts.push(payload)
             return {
               select: () => ({
-                single: () => Promise.resolve({
-                  data: insertError ? null : { id: 'roster-new', ...payload },
-                  error: insertError,
-                }),
+                // ROSTER-SUPERSEDE.1 — insertThrows is the failure mode the
+                // error object cannot describe: a PostgREST 5xx, a dropped
+                // fetch, the function timing out. It REJECTS.
+                single: () => (insertThrows
+                  ? Promise.reject(new Error(insertThrows))
+                  : Promise.resolve({
+                    data: insertError ? null : { id: 'roster-new', ...payload },
+                    error: insertError,
+                  })),
               }),
             }
           },
@@ -98,6 +103,14 @@ function buildDb({ publishedRosters = [], insertError = null, tagError = null, b
               eq: (c, v) => { rec.where.push([c, v]); return w },
               in: (c, v) => { rec.where.push([c, v]); return w },
               is: (c, v) => { rec.where.push([c, v]); return w },
+              // The superseded_by stamp reads back the rows it touched.
+              select: () => ({
+                then: (onF, onR) => {
+                  const targeted = rec.where.find(([c]) => c === 'id')?.[1]
+                  const ids = Array.isArray(targeted) ? targeted : [targeted].filter(Boolean)
+                  return Promise.resolve({ data: ids.map((id) => ({ id })), error: null }).then(onF, onR)
+                },
+              }),
               then: (onF, onR) => Promise.resolve({ data: null, error: null }).then(onF, onR),
             }
             return w
@@ -304,6 +317,35 @@ describe('POST /api/schedule/rosters — supersede', () => {
     expect(rosterUpdates.at(-1).payload).toEqual({ status: 'published', superseded_at: null, superseded_by: null })
   })
 
+  it('puts them back when the insert THROWS instead of returning an error', async () => {
+    // 🔴 The failure the error-object branch cannot see: a PostgREST 5xx, a
+    // dropped fetch, the function timing out. Unwrapped, the throw escaped the
+    // route and the released rosters stayed superseded FOREVER, so one
+    // transient blip silently unpublished a coach's whole week.
+    const { db, rosterUpdates } = buildDb({
+      publishedRosters: [{ id: 'r-same', period_start: '2026-05-04', period_end: '2026-05-10' }],
+      insertThrows: 'fetch failed',
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await publish()
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body.success).toBe(false)
+    expect(body.error).toMatch(/fetch failed/)
+    expect(rosterUpdates.at(-1).payload).toEqual({ status: 'published', superseded_at: null, superseded_by: null })
+    expect(rosterUpdates.at(-1).where).toContainEqual(['id', ['r-same']])
+  })
+
+  it('a throw with nothing stood down still answers, and writes no restore', async () => {
+    const { db, rosterUpdates } = buildDb({ publishedRosters: [], insertThrows: 'statement timeout' })
+    createServerClient.mockReturnValue(db)
+
+    const res = await publish()
+    expect(res.status).toBe(500)
+    expect(rosterUpdates).toHaveLength(0)
+  })
+
   it('says so when tagging fails after the swallowed rosters were stood down', async () => {
     const { db } = buildDb({
       publishedRosters: [{ id: 'r-same', period_start: '2026-05-04', period_end: '2026-05-10' }],
@@ -328,6 +370,40 @@ describe('POST /api/schedule/rosters — supersede', () => {
     expect(res.status).toBe(409)
     expect(inserts).toHaveLength(0)
     expect(rosterUpdates).toHaveLength(0)
+  })
+})
+
+
+// ROSTER-SUPERSEDE.1 — period_start/period_end get SHRUNK to the days a
+// roster really owns, by mig 602's backfill and by every later publish that
+// swallows part of it. requested_period_* is the operator's original ask and
+// nothing but the insert can ever write it: left NULL here, the first shrink
+// destroyed the only record of what was actually clicked.
+describe('POST /api/schedule/rosters — the requested range is preserved', () => {
+  it('a published roster carries the range the operator asked for', async () => {
+    const { db, inserts } = buildDb({ publishedRosters: [] })
+    createServerClient.mockReturnValue(db)
+
+    const res = await publish()
+    expect(res.status).toBe(201)
+    expect(inserts[0].requested_period_start).toBe('2026-05-04')
+    expect(inserts[0].requested_period_end).toBe('2026-05-10')
+    // At insert time they are the same thing; the shrink is what parts them.
+    expect(inserts[0].period_start).toBe('2026-05-04')
+    expect(inserts[0].period_end).toBe('2026-05-10')
+  })
+
+  it('a draft carries it too — approving flips the status, it never re-asks', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'mgr-1', role: 'manager', locations: [{ id: LOC_1 }] })
+    projectPublishImpact.mockResolvedValue({ ...UNDER_BUDGET, overBudget: true, overrunEur: 50 })
+    const { db, inserts } = buildDb({ publishedRosters: [] })
+    createServerClient.mockReturnValue(db)
+
+    const res = await publish()
+    expect(res.status).toBe(202)
+    expect(inserts[0].status).toBe('draft')
+    expect(inserts[0].requested_period_start).toBe('2026-05-04')
+    expect(inserts[0].requested_period_end).toBe('2026-05-10')
   })
 })
 

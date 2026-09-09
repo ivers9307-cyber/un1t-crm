@@ -126,7 +126,11 @@ decision (2026-09-09): a publish **supersedes** the rosters it swallows.
   actually clicked. `period_start`/`period_end` are shrunk to the days a roster
   really owns (that is what the constraint judges); the audit answer to "what
   did this person ask to publish?" must not be silently rewritten to satisfy a
-  constraint.
+  constraint. Mig 602 backfills them for every row that already existed, and
+  **`POST /api/schedule/rosters` writes them on the insert** — the only moment
+  anything can. Approve flips a status rather than creating a row, so the
+  draft's own values stand. Left NULL, the first shrink would destroy the only
+  record of the original ask, which is what these columns exist to prevent.
 - Nothing is deleted. A superseded roster is the audit trail of a real publish
   event.
 
@@ -143,7 +147,14 @@ meet a raw 23P01 first. Both publish paths therefore run two phases, in
    published overlaps and the write satisfies the constraint. All-or-nothing,
    and `restorePublishedRosters()` puts them back if the write then fails: a
    roster superseded with no successor still owns its blocks, and every one of
-   them would read as UNPUBLISHED to its coach.
+   them would read as UNPUBLISHED to its coach. 🔴 Both routes wrap the whole
+   release→write span in `try/catch` and restore on the way out, because a
+   THROW (a PostgREST 5xx, a dropped fetch, the function timing out) never
+   produces an error object to branch on, and an escaping throw left those
+   rosters superseded **forever**. When the restore itself fails — it can, with
+   a legitimate 23P01 if another publish took the range meanwhile — the failure
+   is folded into the reported error and it **names the stranded roster ids**,
+   because putting them back is then a human job.
 2. `supersedeSwallowedRosters()` — **after** the re-tag. Stamps `superseded_by`,
    then sweeps any other still-published overlapping roster: zero blocks left →
    supersede, blocks left → shrink `period_*` to the min/max `block_date` it

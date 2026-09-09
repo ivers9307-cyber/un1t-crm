@@ -212,60 +212,93 @@ export async function POST(request) {
   // superseding a live roster on its behalf would unpublish that period's
   // shifts for a draft that may never be approved.
   let released = []
-  if (status === 'published') {
-    const rel = await releasePublishedRostersFor(db, {
-      locationId: location_id,
-      periodStart: period_start,
-      periodEnd: period_end,
-    })
-    if (rel.error) {
-      // Nothing has changed yet, so refusing here is free — and it is far
-      // better than letting the insert fail on the constraint with a 23P01.
-      return NextResponse.json({
-        success: false,
-        error: `Could not stand down the rosters this publish replaces: ${rel.error.message}`,
-      }, { status: 400 })
-    }
-    released = rel.released
-  }
+  let roster = null
 
-  // Insert the roster row. status='draft' for needs-approval,
-  // 'published' otherwise. published_by + published_at populated
-  // up-front for self-publishes; for drafts, populated when the
-  // owner approves.
-  const insertPayload = {
-    location_id,
-    period_start,
-    period_end,
-    status,
-    published_by: status === 'published' ? user.id : null,
-    published_at: status === 'published' ? nowIso : null,
-    over_budget_approval_by: status === 'published' && impact.overBudget ? user.id : null,
-    over_budget_approval_at: status === 'published' && impact.overBudget ? nowIso : null,
-    projected_contractor_eur: impact.periodProjectedEur,
-    budget_at_publish_eur: impact.monthlyBudgetEur,
-    notes: notes || null,
-    created_by: user.id,
-  }
-
-  const { data: roster, error: insertErr } = await db
-    .from('rosters')
-    .insert(insertPayload)
-    .select()
-    .single()
-
-  if (insertErr) {
-    // ROSTER-SUPERSEDE.1 — the publish never happened, so put the released
-    // rosters back. A roster left superseded with no successor still owns its
-    // blocks, and every one of them would read as UNPUBLISHED to its coach.
+  // ROSTER-SUPERSEDE.1 — ONE restore path for every way the write below can
+  // fail, because a roster left superseded with no successor still owns its
+  // blocks and every one of them reads as UNPUBLISHED to its coach until
+  // somebody publishes the period again.
+  async function restoreReleased(what) {
+    if (released.length === 0) return
     const { error: restoreErr } = await restorePublishedRosters(db, released)
     if (restoreErr) {
-      logWarn('rosters', 'roster insert failed AND the superseded rosters could not be restored', {
+      logWarn('rosters', `${what} AND the superseded rosters could not be restored`, {
         err: restoreErr.message,
-        released: released.map((r) => r.id),
+        location_id,
+        period_start,
+        period_end,
+        stranded: released.map((r) => r.id),
       })
     }
-    return NextResponse.json({ success: false, error: insertErr.message }, { status: 400 })
+  }
+
+  // ROSTER-SUPERSEDE.1 — the release→insert span is wrapped because a THROWN
+  // error (a PostgREST 5xx, a fetch failure, the function timing out) never
+  // produces an error object, so the `insertErr` branch never runs and the
+  // rosters stood down a moment ago would stay superseded FOREVER. A transient
+  // blip silently unpublishing a coach's whole week is exactly the window this
+  // work exists to close, so it is closed on both exits, not just the tidy one.
+  try {
+    if (status === 'published') {
+      const rel = await releasePublishedRostersFor(db, {
+        locationId: location_id,
+        periodStart: period_start,
+        periodEnd: period_end,
+      })
+      if (rel.error) {
+        // Nothing has changed yet, so refusing here is free — and it is far
+        // better than letting the insert fail on the constraint with a 23P01.
+        return NextResponse.json({
+          success: false,
+          error: `Could not stand down the rosters this publish replaces: ${rel.error.message}`,
+        }, { status: 400 })
+      }
+      released = rel.released
+    }
+
+    // Insert the roster row. status='draft' for needs-approval,
+    // 'published' otherwise. published_by + published_at populated
+    // up-front for self-publishes; for drafts, populated when the
+    // owner approves.
+    const insertPayload = {
+      location_id,
+      period_start,
+      period_end,
+      // ROSTER-SUPERSEDE.1 — the range the operator actually asked for, written
+      // at insert time because nothing else ever can. period_* is shrunk to the
+      // days this roster really owns (by mig 602's backfill and by
+      // supersedeSwallowedRosters on every later publish); leaving these NULL
+      // meant the first shrink rewrote the only record of the original ask,
+      // which is the audit loss the columns were added to prevent.
+      requested_period_start: period_start,
+      requested_period_end: period_end,
+      status,
+      published_by: status === 'published' ? user.id : null,
+      published_at: status === 'published' ? nowIso : null,
+      over_budget_approval_by: status === 'published' && impact.overBudget ? user.id : null,
+      over_budget_approval_at: status === 'published' && impact.overBudget ? nowIso : null,
+      projected_contractor_eur: impact.periodProjectedEur,
+      budget_at_publish_eur: impact.monthlyBudgetEur,
+      notes: notes || null,
+      created_by: user.id,
+    }
+
+    const { data: inserted, error: insertErr } = await db
+      .from('rosters')
+      .insert(insertPayload)
+      .select()
+      .single()
+
+    if (insertErr) {
+      // ROSTER-SUPERSEDE.1 — the publish never happened, so put the released
+      // rosters back.
+      await restoreReleased('roster insert failed')
+      return NextResponse.json({ success: false, error: insertErr.message }, { status: 400 })
+    }
+    roster = inserted
+  } catch (e) {
+    await restoreReleased('roster insert threw')
+    return NextResponse.json({ success: false, error: e?.message || String(e) }, { status: 500 })
   }
 
   // ROSTER-SUPERSEDE.1 — surfaced on the response in the route's existing
@@ -313,6 +346,20 @@ export async function POST(request) {
       const stranded = released.length > 0
         ? ' The rosters it replaces have already been stood down, so those shifts read as unpublished until you publish this period again.'
         : ''
+      // ROSTER-SUPERSEDE.1 — the HTTP response reaches whoever clicked
+      // publish, and only them. Nobody watching the logs learns that a
+      // location has a period reading as unpublished, so say it here too,
+      // naming the rows a human has to re-publish.
+      if (released.length > 0) {
+        logWarn('rosters', 'block tagging failed after the replaced rosters were stood down; that period now reads as unpublished', {
+          err: tagErr.message,
+          location_id,
+          period_start,
+          period_end,
+          roster_id: roster.id,
+          stranded: released.map((r) => r.id),
+        })
+      }
       return NextResponse.json({
         success: true,
         data: roster,

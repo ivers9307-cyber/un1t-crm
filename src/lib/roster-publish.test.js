@@ -427,6 +427,12 @@ describe('releasePublishedRostersFor', () => {
   function db({ contained = [], selectError = null, updateError = null, failUpdateAt = null } = {}) {
     const updates = []
     const filters = []
+    // ROSTER-SUPERSEDE.1 — failUpdateAt is an index (that write fails with
+    // 'write failed') or an { index: message } map, which is what lets a test
+    // fail the release write AND the restore that answers it.
+    const failures = failUpdateAt === null
+      ? {}
+      : (typeof failUpdateAt === 'number' ? { [failUpdateAt]: 'write failed' } : failUpdateAt)
     return {
       updates,
       filters,
@@ -445,7 +451,7 @@ describe('releasePublishedRostersFor', () => {
             update(payload) {
               const idx = updates.length
               updates.push(payload)
-              const err = failUpdateAt === idx ? { message: 'write failed' } : updateError
+              const err = failures[idx] ? { message: failures[idx] } : updateError
               const w = {
                 eq: () => w,
                 in: () => w,
@@ -512,9 +518,35 @@ describe('releasePublishedRostersFor', () => {
     const res = await releasePublishedRostersFor(m.client, WEEK)
     expect(res.error).toEqual({ message: 'write failed' })
     expect(res.released).toEqual([])
+    // A restore that WORKED adds nothing to the error the caller reports.
+    expect(res.error.message).not.toMatch(/could not be restored/)
     // r-a was released, r-b's write failed; the last write is r-a going back.
     expect(m.updates).toHaveLength(3)
     expect(m.updates.at(-1)).toEqual({ status: 'published', superseded_at: null, superseded_by: null })
+  })
+
+  it('folds a FAILED restore into the error and NAMES the stranded rosters', async () => {
+    // The restore is itself a write: it can lose to the same blip, or hit a
+    // legitimate 23P01 because another publish took the range meanwhile.
+    // Discarding that left rosters stood down with nobody told.
+    const m = db({
+      contained: [
+        { id: 'r-a', period_start: '2026-05-04', period_end: '2026-05-06' },
+        { id: 'r-b', period_start: '2026-05-07', period_end: '2026-05-10' },
+      ],
+      failUpdateAt: {
+        1: 'write failed',
+        2: '23P01 conflicting key value violates exclusion constraint "rosters_no_overlapping_published"',
+      },
+    })
+    const res = await releasePublishedRostersFor(m.client, WEEK)
+    expect(res.released).toEqual([])
+    expect(res.error.message).toMatch(/write failed/)
+    expect(res.error.message).toMatch(/23P01/)
+    expect(res.error.message).toMatch(/could not be restored/)
+    // r-a is still superseded and nothing else will put it back, so the
+    // message has to name it.
+    expect(res.error.message).toMatch(/r-a/)
   })
 })
 
@@ -565,7 +597,7 @@ describe('restorePublishedRosters', () => {
 describe('supersedeSwallowedRosters', () => {
   // rosters: the overlap scan (lte period_start / gte period_end) + updates.
   // shift_blocks: a head count per roster, then min/max block_date.
-  function db({ overlapping = [], blocks = {}, scanError = null, countError = null, updateError = null } = {}) {
+  function db({ overlapping = [], blocks = {}, scanError = null, countError = null, updateError = null, stampedIds = null } = {}) {
     const updates = []
     const filters = []
     const client = {
@@ -587,6 +619,20 @@ describe('supersedeSwallowedRosters', () => {
                 eq: (c, v) => { rec.where.push([c, v]); return w },
                 in: (c, v) => { rec.where.push([c, v]); return w },
                 is: (c, v) => { rec.where.push([c, v]); return w },
+                // ROSTER-SUPERSEDE.1 — the superseded_by stamp reads back the
+                // rows it TOUCHED. By default every targeted id matched;
+                // `stampedIds` is how a test makes the write miss.
+                select: () => ({
+                  then: (onF, onR) => {
+                    const targeted = rec.where.find(([c]) => c === 'id')?.[1]
+                    const all = Array.isArray(targeted) ? targeted : [targeted].filter(Boolean)
+                    const ids = stampedIds === null ? all : stampedIds
+                    return Promise.resolve({
+                      data: updateError ? null : ids.map((id) => ({ id })),
+                      error: updateError,
+                    }).then(onF, onR)
+                  },
+                }),
                 then: (onF, onR) => Promise.resolve({ data: null, error: updateError }).then(onF, onR),
               }
               return w
@@ -639,6 +685,23 @@ describe('supersedeSwallowedRosters', () => {
     expect(stamp).toBeTruthy()
     // Only rows that do not already name a successor.
     expect(stamp.where).toContainEqual(['superseded_by', null])
+  })
+
+  it('reports only the rows the stamp actually TOUCHED, not the rows it aimed at', async () => {
+    // A racing publish can flip a released row back or stamp its own successor
+    // first, and all three of the stamp's filters then miss. Reporting the
+    // aimed-at ids as superseded hid exactly the attribution gap this closes.
+    const m = db({ overlapping: [], stampedIds: ['r-a'] })
+    const res = await supersedeSwallowedRosters(m.client, { ...ARGS, releasedIds: ['r-a', 'r-b'] })
+    expect(res.superseded).toEqual(['r-a'])
+    expect(res.warning).toMatch(/r-b/)
+  })
+
+  it('warns rather than claiming success when the stamp matches nothing at all', async () => {
+    const m = db({ overlapping: [], stampedIds: [] })
+    const res = await supersedeSwallowedRosters(m.client, { ...ARGS, releasedIds: ['r-old'] })
+    expect(res.superseded).toEqual([])
+    expect(res.warning).toMatch(/superseded_by stamp matched no row for: r-old/)
   })
 
   it('supersedes an overlapping published roster that now owns ZERO blocks', async () => {

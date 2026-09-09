@@ -56,7 +56,7 @@ function draft(overrides = {}) {
 // (select('*') … .single()), the overlap probe (a narrow select that is
 // awaited), and the status flip. The probe's filters are recorded so the
 // self-exclusion can be asserted.
-function buildDb({ roster, publishedRosters = [], updateError = null, captureError = null, tagError = null }) {
+function buildDb({ roster, publishedRosters = [], updateError = null, updateThrows = null, captureError = null, tagError = null }) {
   const updates = []
   const probe = []
   const blockUpdates = []
@@ -85,25 +85,31 @@ function buildDb({ roster, publishedRosters = [], updateError = null, captureErr
             return chain
           },
           update(payload) {
-            // ROSTER-SUPERSEDE.1 — rosters now takes three shapes of UPDATE:
-            // the status flip (.eq().select().single()), and the release /
-            // stamp / restore writes, which are awaited directly.
+            // ROSTER-SUPERSEDE.1 — rosters now takes four shapes of UPDATE:
+            // the status flip (.eq().select().single()), the superseded_by
+            // stamp (.select('id') read back), and the release / restore
+            // writes, which are awaited directly.
             const rec = { payload, where: [], afterFlip: updates.some((u) => u.payload.status === 'published') }
             updates.push(rec)
             const w = {
-              eq: (c, v) => {
-                rec.where.push([c, v])
-                return Object.assign(w, {
-                  select: () => ({
-                    single: () => Promise.resolve({
-                      data: updateError ? null : { ...roster, ...payload },
-                      error: updateError,
-                    }),
-                  }),
-                })
-              },
+              eq: (c, v) => { rec.where.push([c, v]); return w },
               in: (c, v) => { rec.where.push([c, v]); return w },
               is: (c, v) => { rec.where.push([c, v]); return w },
+              select: () => ({
+                // updateThrows is the failure an error object cannot describe:
+                // a PostgREST 5xx, a dropped fetch, a function timeout.
+                single: () => (updateThrows
+                  ? Promise.reject(new Error(updateThrows))
+                  : Promise.resolve({
+                    data: updateError ? null : { ...roster, ...payload },
+                    error: updateError,
+                  })),
+                then: (onF, onR) => {
+                  const targeted = rec.where.find(([c]) => c === 'id')?.[1]
+                  const ids = Array.isArray(targeted) ? targeted : [targeted].filter(Boolean)
+                  return Promise.resolve({ data: ids.map((id) => ({ id })), error: null }).then(onF, onR)
+                },
+              }),
               then: (onF, onR) => Promise.resolve({ data: null, error: null }).then(onF, onR),
             }
             return w
@@ -381,6 +387,28 @@ describe('POST /api/schedule/rosters/[id]/approve — supersede', () => {
     const res = await POST({}, PROPS)
     expect(res.status).toBe(400)
     expect(updates.at(-1).payload).toEqual({ status: 'published', superseded_at: null, superseded_by: null })
+  })
+
+  it('puts them back when the status flip THROWS instead of returning an error', async () => {
+    // 🔴 The failure the error-object branch cannot see: a PostgREST 5xx, a
+    // dropped fetch, the function timing out. Unwrapped, the throw escaped the
+    // route with the swallowed rosters already stood down, and they stayed
+    // superseded FOREVER — a coach's published week gone on a transient blip.
+    const { db, updates } = buildDb({
+      roster: draft(),
+      publishedRosters: [{ id: 'r-same', period_start: '2026-05-04', period_end: '2026-05-10' }],
+      updateThrows: 'fetch failed',
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST({}, PROPS)
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body.success).toBe(false)
+    expect(body.error).toMatch(/fetch failed/)
+    expect(updates.at(-1).payload).toEqual({ status: 'published', superseded_at: null, superseded_by: null })
+    expect(updates.at(-1).where).toContainEqual(['id', ['r-same']])
+    expect(notifyStaffOfPublish).not.toHaveBeenCalled()
   })
 
   it('warns that the stood-down rosters are stranded when tagging fails', async () => {
