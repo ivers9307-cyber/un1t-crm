@@ -3,13 +3,17 @@
 // Used by:
 //   - /api/schedule/templates POST/PUT (to materialise blocks when
 //     a template's days_of_week changes)
-//   - /api/schedule/blocks GET (to lazy-extend the visible horizon
-//     when an operator scrolls forward past 8 weeks)
+//   - /api/cron/extend-roster-horizon (the nightly sweep in
+//     roster-horizon.js — ROSTER-FIX.5 replaced the old lazy
+//     extend, which only ran when someone scrolled the web
+//     calendar past 8 weeks and so never ran at all on mobile)
 //   - block-related lib tests
 //
 // We deliberately keep this module pure on its inputs (the supabase
 // client is passed in) so it can be unit-tested with the same mock
 // pattern used elsewhere in src/lib/.
+
+import { logWarn } from '@/lib/log'
 
 // Canonical weekday codes — match the CHECK on
 // shift_templates.days_of_week (mig 067). Indexed Monday-first
@@ -122,6 +126,14 @@ export async function generateBlocksForTemplate(db, template, fromDate = null, w
   const dates = expandDaysToDates(days, start, end)
   if (dates.length === 0) return { inserted: 0, skipped: 0 }
 
+  // ROSTER-FIX.5 — a block created after its week was published belongs to
+  // that roster. Untagged blocks were invisible to every roster-scoped
+  // reader (change log, "which roster is this shift on?"), which is how a
+  // late template edit could add a shift nobody could trace. ONE query for
+  // the whole window, matched in JS — an N-date generator must not fire N
+  // lookups.
+  const rosterByDate = await findPublishedRosterIdsByDate(db, template.location_id, dates)
+
   const records = dates.map(date => ({
     location_id: template.location_id,
     template_id: template.id,
@@ -129,6 +141,7 @@ export async function generateBlocksForTemplate(db, template, fromDate = null, w
     start_time: template.start_time,
     end_time: template.end_time,
     max_coaches: template.max_coaches || 15,
+    roster_id: rosterByDate.get(date) || null,
   }))
 
   // Use upsert with ignoreDuplicates so we don't fail when a block
@@ -178,4 +191,75 @@ export function isLiveAssignment(a) {
 /** Filter helper — tolerates null/undefined. */
 export function liveAssignments(list) {
   return (list || []).filter(isLiveAssignment)
+}
+
+/**
+ * ROSTER-FIX.5 — which published roster covers `dateIso` at this location?
+ *
+ * Returns the rosters.id, or null when nothing is published for that day.
+ * Never throws: a failed lookup must not take a block insert down with it,
+ * so an error is logged and treated as "no roster" (the block is created
+ * untagged, which is exactly the pre-fix behaviour).
+ *
+ * @param {SupabaseClient} db  server-role client
+ * @param {string} locationId
+ * @param {string} dateIso     YYYY-MM-DD
+ * @returns {Promise<string|null>}
+ */
+export async function findPublishedRosterFor(db, locationId, dateIso) {
+  if (!locationId || !dateIso) return null
+  const { data, error } = await db
+    .from('rosters')
+    .select('id')
+    .eq('location_id', locationId)
+    .eq('status', 'published')
+    .lte('period_start', dateIso)
+    .gte('period_end', dateIso)
+    .limit(1)
+    .maybeSingle()
+
+  if (error) {
+    logWarn('roster', 'findPublishedRosterFor failed', { locationId, dateIso, err: error })
+    return null
+  }
+  return data?.id || null
+}
+
+/**
+ * ROSTER-FIX.5 — the batch form of findPublishedRosterFor. One query
+ * spanning min(dates)..max(dates), matched in JS, so generating eight weeks
+ * of blocks costs a single round trip instead of one per date.
+ *
+ * @returns {Promise<Map<string, string>>} date (YYYY-MM-DD) → rosters.id.
+ *          Dates with no published roster are simply absent.
+ */
+export async function findPublishedRosterIdsByDate(db, locationId, dates) {
+  const out = new Map()
+  const list = (dates || []).filter(Boolean)
+  if (!locationId || list.length === 0) return out
+
+  // Don't assume the caller sorted them.
+  const sorted = [...list].sort()
+  const minDate = sorted[0]
+  const maxDate = sorted[sorted.length - 1]
+
+  const { data, error } = await db
+    .from('rosters')
+    .select('id, period_start, period_end')
+    .eq('location_id', locationId)
+    .eq('status', 'published')
+    .lte('period_start', maxDate)
+    .gte('period_end', minDate)
+
+  if (error) {
+    logWarn('roster', 'findPublishedRosterIdsByDate failed', { locationId, minDate, maxDate, err: error })
+    return out
+  }
+
+  // ISO dates compare correctly as strings, so no Date objects needed.
+  for (const date of list) {
+    const hit = (data || []).find(r => r.period_start <= date && r.period_end >= date)
+    if (hit) out.set(date, hit.id)
+  }
+  return out
 }
