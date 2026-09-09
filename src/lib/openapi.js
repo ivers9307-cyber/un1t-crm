@@ -6676,11 +6676,24 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'get',
+  path: '/api/approvals/count',
+  tags: ['Approvals'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Count of pending approvals visible to the caller (sidebar badge)',
+  description: 'NAV-BADGE.1 — the Approvals sidebar badge. Delegates to getPendingApprovalsCount, which fans out over every registered approvals provider applying each provider\'s own isVisible + role/location scoping, so the number is definitionally what GET /api/approvals/pending would render for the same caller. No permission gate and no active-location requirement: the sidebar polls this for every authenticated session (approvals span locations, so a client-side gate would hide real work), and a session with no approver authority gets a quiet 0 rather than a 403. Known limitation: a provider that throws is scored 0 by getPendingApprovalsCount, so one broken provider silently under-counts.',
+  responses: {
+    200: { description: '{ count }', content: { 'application/json': { schema: SuccessResponse(z.object({ count: z.number() })) } } },
+    401: { description: 'Unauthenticated', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
   path: '/api/home-queue/count',
   tags: ['Dashboard'],
   security: [{ CookieAuth: [] }],
   summary: 'Count of needs-attention items across approvals + tickets + inbox (nav badge)',
-  description: 'Cheap sum of the same three TRUE counts GET /api/home-queue reports — no approval items, ticket subjects or conversation contacts are ever fetched. Every per-source gate mirrors the equivalent count route exactly; a session ineligible for a source contributes 0 for it, the same posture as /api/whatsapp/unread-count. HOME.3\'s sidebar retirement task made this the ONE count endpoint Sidebar.jsx polls (the per-source badge routes it used to poll — /api/approvals/count, /api/issues/count, /api/churn-radar/count, /api/lead-radar/count, /api/hosts/pending-events/count — are deleted). EMAIL-TICKET-CLEANUP.2 is the one exception to "always 200 with a number": a FAILED tickets mailbox-visibility lookup 500s rather than silently answering a lower, confidently-wrong number — the same posture /api/email/mail/count takes on the identical failure, so the badge poller keeps its last good number instead of overwriting it with a wrong "nothing to do".',
+  description: 'Cheap sum of the same three TRUE counts GET /api/home-queue reports — no approval items, ticket subjects or conversation contacts are ever fetched. Every per-source gate mirrors the equivalent count route exactly; a session ineligible for a source contributes 0 for it, the same posture as /api/whatsapp/unread-count. HOME.3\'s sidebar retirement task made this the ONE count endpoint Sidebar.jsx polled at the time. NAV-BADGE.1 later restored /api/approvals/count as Approvals\' own poller, and the sidebar no longer polls THIS endpoint at all — the other four per-source badge routes it used to poll (/api/issues/count, /api/churn-radar/count, /api/lead-radar/count, /api/hosts/pending-events/count) are still deleted. It has no caller left in the app; it stays published as a registered OpenAPI endpoint. EMAIL-TICKET-CLEANUP.2 is the one exception to "always 200 with a number": a FAILED tickets mailbox-visibility lookup 500s rather than silently answering a lower, confidently-wrong number — the same posture /api/email/mail/count takes on the identical failure.',
   responses: {
     200: { description: '{ count }', content: { 'application/json': { schema: SuccessResponse(z.object({ count: z.number() })) } } },
     401: { description: 'Unauthenticated', content: { 'application/json': { schema: ErrorResponse } } },

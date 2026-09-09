@@ -8,11 +8,14 @@
 // (see src/lib/home-queue.js's header); a session ineligible for a source
 // answers 0 for it, same posture as /api/whatsapp/unread-count, so a 60s
 // poll is harmless for any user. HOME.3's sidebar retirement task made
-// this the ONE poller Sidebar.jsx calls now — the per-source badge routes
-// it used to poll separately (/api/approvals/count, /api/issues/count,
-// /api/churn-radar/count, /api/lead-radar/count, /api/hosts/pending-
-// events/count) are deleted; this endpoint's count is what the sidebar
-// and the /dashboard/today queue header agree on.
+// this the ONE poller Sidebar.jsx called at the time. NAV-BADGE.1 later
+// restored /api/approvals/count as Approvals' own poller, and the sidebar
+// no longer polls THIS endpoint at all — the other four per-source badge
+// routes it used to poll separately (/api/issues/count,
+// /api/churn-radar/count, /api/lead-radar/count,
+// /api/hosts/pending-events/count) are still deleted. This route has no
+// caller left in the app; it stays published as a registered OpenAPI
+// endpoint.
 //
 // EMAIL-TICKET-CLEANUP.2 — the ONE exception to "always 200 with a number":
 // getHomeQueueCount REJECTS rather than resolving when the tickets
@@ -21,8 +24,8 @@
 // a bare `count` here can't tell an operator "this excludes tickets,
 // which we couldn't check" from a genuine "nothing to do". Answering 500
 // mirrors /api/email/tickets/count's own posture on the identical
-// failure: the title-bar poller (usePolledCount) ignores a non-ok
-// response and keeps its last good number, so a blip reads as a slightly
+// failure: any usePolledCount reader ignores a non-ok response and
+// keeps its last good number, so a blip would read as a slightly
 // stale count instead of a confidently wrong "all clear".
 
 import { NextResponse } from 'next/server'
