@@ -12,7 +12,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, waitFor, act } from '@testing-library/react'
 
-import { useScheduleData, readJson, SESSION_ENDED_MESSAGE } from './useScheduleData'
+import { useScheduleData, readJson, SESSION_ENDED_MESSAGE, NO_ACCESS_MESSAGE } from './useScheduleData'
 
 const ARGS = {
   locationId: 'loc1',
@@ -149,20 +149,28 @@ describe('useScheduleData', () => {
   })
 })
 
-// ROSTER-FIX.6a-8 — an expired cookie answers 401/403 on every schedule
-// endpoint at once. As "Request failed (401)" that reads like an outage and
-// sends the operator hunting for a server problem, so the one thing they can
-// actually do about it is named instead. No redirect: unpublished roster edits
-// may be on screen.
+// ROSTER-FIX.6a-8 — an expired cookie answers 401 on every schedule endpoint
+// at once. As "Request failed (401)" that reads like an outage and sends the
+// operator hunting for a server problem, so the one thing they can actually do
+// about it is named instead. No redirect: unpublished roster edits may be on
+// screen. A 403 is a DIFFERENT state (a live session that may not read this
+// location) and must not tell them to sign in again.
 describe('readJson session handling (ROSTER-FIX.6a-8)', () => {
   it('names a signed-out session on 401', async () => {
     global.fetch = vi.fn(async () => ({ ok: false, status: 401, json: async () => ({ error: 'Unauthorized' }) }))
     await expect(readJson('/api/schedule/blocks')).rejects.toThrow(SESSION_ENDED_MESSAGE)
   })
 
-  it('names a lost location grant on 403', async () => {
-    global.fetch = vi.fn(async () => ({ ok: false, status: 403, json: async () => ({ error: 'Forbidden' }) }))
-    await expect(readJson('/api/schedule/blocks')).rejects.toThrow(SESSION_ENDED_MESSAGE)
+  it('keeps the server\'s own words on a 403, and never says signed out', async () => {
+    global.fetch = vi.fn(async () => ({ ok: false, status: 403, json: async () => ({ error: 'Forbidden - location not in your assignments' }) }))
+    await expect(readJson('/api/schedule/blocks')).rejects.toThrow('Forbidden - location not in your assignments')
+    global.fetch = vi.fn(async () => ({ ok: false, status: 403, json: async () => ({ error: 'Forbidden - location not in your assignments' }) }))
+    await expect(readJson('/api/schedule/blocks')).rejects.not.toThrow(SESSION_ENDED_MESSAGE)
+  })
+
+  it('falls back to a permission sentence when a 403 carries no message', async () => {
+    global.fetch = vi.fn(async () => ({ ok: false, status: 403, json: async () => ({}) }))
+    await expect(readJson('/api/schedule/blocks')).rejects.toThrow(NO_ACCESS_MESSAGE)
   })
 
   it('says so even when the 401 body is not JSON', async () => {

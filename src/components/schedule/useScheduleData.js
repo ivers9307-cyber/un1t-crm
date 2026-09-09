@@ -44,7 +44,16 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 // on screen and a silent bounce to /login throws them away. We name the state
 // and let them choose when to reload.
 export const SESSION_ENDED_MESSAGE =
-  'You are signed out or no longer have access to this location. Reload to sign in again.'
+  'You are signed out. Reload to sign in again.'
+
+// ROSTER-FIX.6a-8 — 401 and 403 are NOT the same thing here. Every schedule
+// route answers 403 through assertLocationAccess for a live session that may
+// not read this location ("Forbidden - location not in your assignments"),
+// and hasPermission returns its own 403 copy for a disabled feature. Folding
+// those into the signed-out sentence sends an operator to re-authenticate over
+// a permission they will still not have. Prefer the server's own words.
+export const NO_ACCESS_MESSAGE =
+  'You do not have access to this location. Switch location, or ask an owner for access.'
 
 /**
  * Read a JSON endpoint, THROWING on anything that is not a success. Shared
@@ -56,8 +65,11 @@ export async function readJson(url, options) {
   // A non-JSON body (an HTML 502 from the edge, say) must not throw a parse
   // error that reads like a bug - fall back to the status code.
   const data = await res.json().catch(() => null)
-  if (res.status === 401 || res.status === 403) {
+  if (res.status === 401) {
     throw new Error(SESSION_ENDED_MESSAGE)
+  }
+  if (res.status === 403) {
+    throw new Error(data?.error || NO_ACCESS_MESSAGE)
   }
   if (!res.ok || data?.success === false) {
     throw new Error(data?.error || `Request failed (${res.status})`)
