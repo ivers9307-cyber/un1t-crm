@@ -204,10 +204,13 @@ export async function bulkUpsertShiftAssignments(db, { locationId, actorId = nul
 
   // 1. Template defaults for every distinct template referenced.
   const templateIds = [...new Set(rows.map((r) => r.shiftTemplateId))]
+  // ROSTER-FIX.4 (SAAS-1) — scoped to the location like the single-row path:
+  // without it a copied row could seed a block from another tenant's template.
   const { data: templates, error: tErr } = await db
     .from('shift_templates')
     .select('id, start_time, end_time, max_coaches')
     .in('id', templateIds)
+    .eq('location_id', locationId)
   if (tErr) return { count: 0, error: tErr }
   const tplById = new Map((templates || []).map((t) => [t.id, t]))
   const missing = templateIds.filter((id) => !tplById.has(id))

@@ -593,6 +593,10 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
       // coaches itself (it knows which blocks were newly published), so the
       // old follow-up call to /api/schedule/shifts/publish is gone. That
       // endpoint was a redundant second flip + notify; it has been removed.
+      // ROSTER-FIX.4 — a partial success (roster row written, block tagging
+      // failed) comes back as 201 + warning; surface it instead of refreshing
+      // silently as if everything landed.
+      if (data.warning) alert(data.warning)
       setPublishModal(null)
       // Publish is the one mutation that should NOT re-arm the exit guard.
       // A real publish clears it; a needs-approval draft stays dirty (it's

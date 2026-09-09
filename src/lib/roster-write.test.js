@@ -213,7 +213,8 @@ function makeBulkDb({ templates = [], existingBlocks = [], createdBlocks = [], p
         return chain
       }
       if (table === 'shift_templates') {
-        return { select: () => ({ in: () => Promise.resolve({ data: templates, error: null }) }) }
+        // ROSTER-FIX.4 — the bulk path scopes templates to the location too.
+        return { select: () => ({ in: () => ({ eq: (col, val) => { captured.templateScope = { col, val }; return Promise.resolve({ data: templates, error: null }) } }) }) }
       }
       if (table === 'shift_blocks') {
         return {

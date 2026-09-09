@@ -33,6 +33,9 @@ export default function RosterApprovalActions({ rosterId, canApprove }) {
         alert(rosterErrorMessage(data, { nextStep: APPROVE_NEXT_STEP, fallback: 'Approval failed' }))
         return
       }
+      // ROSTER-FIX.4 — a partial success (roster approved, block tagging
+      // failed) is a 200 with a warning; show it rather than a silent refresh.
+      if (data.warning) alert(data.warning)
       router.refresh()
     } catch {
       // ROSTER-FIX.4 — reject already had this; approve did not, so a dropped

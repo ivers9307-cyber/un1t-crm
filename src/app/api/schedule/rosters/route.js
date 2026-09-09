@@ -225,13 +225,17 @@ export async function POST(request) {
     // the old `shifts.published false→true` capture. Blocks already
     // attached to an earlier roster are re-publishes, handled by the
     // change-log path below.
-    const { data: newBlocks } = await db
+    // ROSTER-FIX.4 — a failed capture must not read as "nothing new": log it
+    // and notify nobody from this set rather than pretend the publish had no
+    // first-time blocks (the approve route does the same).
+    const { data: newBlocks, error: captureErr } = await db
       .from('shift_blocks')
       .select('id')
       .eq('location_id', location_id)
       .gte('block_date', period_start)
       .lte('block_date', period_end)
       .is('roster_id', null)
+    if (captureErr) logWarn('rosters', 'newly-published block capture failed', { err: captureErr.message })
     const newBlockIds = (newBlocks || []).map((b) => b.id)
 
     // Tag the blocks in the period with this roster.
