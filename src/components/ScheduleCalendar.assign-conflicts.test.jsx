@@ -76,8 +76,13 @@ afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
 async function openAssignPicker() {
   render(<ScheduleCalendar user={user} />)
-  await waitFor(() => expect(screen.getByText('Midday Strength')).toBeTruthy())
-  fireEvent.click(screen.getByText('Midday Strength'))
+  // ROSTER-FIX.6b landed first: the week card is a plain container now and the
+  // click target is a real <button> stretched over it, named from the block
+  // ("Manage 10am Midday Strength shift, Wednesday 6 May"). Clicking the
+  // template name inside the card no longer opens anything, so drive the
+  // button the operator actually reaches.
+  const openCard = await screen.findByRole('button', { name: /^Manage 10am Midday Strength shift/ })
+  fireEvent.click(openCard)
   await waitFor(() => expect(screen.getByText('Add coach')).toBeTruthy())
   fireEvent.click(screen.getByText('Add coach'))
   // 'Assign coaches' is both the dialog heading and the idle submit label, so
