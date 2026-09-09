@@ -54,10 +54,15 @@ import { stripInvisibleChars } from './mail-entities'
  *     discarding the wrapper at that point would re-create the identical
  *     empty-body failure one level up — a reply chain that quotes each
  *     earlier message in its own nested <blockquote> is ordinary mail, not a
- *     pathological shape. That means a chain of such wrappers still unwinding
- *     when the cap trips can each still push one more block, so the safe
- *     outer bound is `blocks + maxDepth`, not `blocks + 1` — ordinary mail
- *     never nests a <blockquote>/<ul> deep enough for the difference to show.
+ *     pathological shape. In principle a chain of such wrappers still
+ *     unwinding when the cap trips could each push one more block, so
+ *     `blocks + maxDepth` is the bound to RELY on. In practice nothing has
+ *     been constructed that beats `blocks + 1` (`+2` for a <blockquote>
+ *     directly wrapping a <ul>), because the flatten step below collapses a
+ *     nested-quote chain into its outermost wrapper — so only that one
+ *     survives as a node. Rely on the loose bound; expect the tight one.
+ *     Either way `charsPerMessage` is unaffected and stays a HARD ceiling,
+ *     which is the bound that actually protects a cellular connection.
  *   - `runsPerBlock` x `charsPerRun` is the real ceiling on ONE block's text.
  *     `charsPerRun` bounds a single run — one <Text> node — not the content
  *     addText() is handed; once a run is full it opens a NEW run rather than
@@ -536,7 +541,15 @@ function handleBlockLevel(node, sink, style, depth) {
 // block. Any tag not in this map — a <span>, an unknown element, or a
 // genuinely inline one like <b>/<i>/<a> — falls through to walk()'s own
 // inline-default branch below, exactly as before.
-const HANDLERS = {}
+// 🔴 A NULL-PROTOTYPE MAP, not `{}`. This is looked up as HANDLERS[tagName]
+// with a tag name taken from a stranger's markup, and a plain object inherits
+// Object.prototype — so a tag literally named `constructor` would resolve to a
+// truthy inherited function, get invoked, and silently swallow that node's
+// content instead of falling through to the inline default. Not reachable
+// today (email-html.js's ALLOWED_TAGS contains no Object.prototype member
+// name), but the if-ladder this table replaced had no such class of bug at
+// all, and inheriting one for free is not a trade worth making.
+const HANDLERS = Object.create(null)
 for (const name of BLOCK_LEVEL) HANDLERS[name] = handleBlockLevel
 for (const name of Object.keys(HEADING_LEVEL)) HANDLERS[name] = handleHeading
 HANDLERS.pre = handlePre

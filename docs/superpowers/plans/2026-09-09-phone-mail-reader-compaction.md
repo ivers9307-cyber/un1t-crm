@@ -682,7 +682,7 @@ Body: walks SANITISED email HTML into a small block tree the phone can render wi
 - Modify: `src/lib/email-blocks.js`
 - Modify: `src/lib/email-blocks.test.js`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `src/lib/email-blocks.test.js`:
 
@@ -781,12 +781,12 @@ describe('htmlToBlocks — structure', () => {
 })
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `npx vitest run src/lib/email-blocks.test.js`
 Expected: FAIL — the list, quote, rule and image cases; lists currently flush as separate paras.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 In `src/lib/email-blocks.js`'s `walk`, insert these branches **before** the `if (BLOCK_LEVEL.has(name))` branch:
 
@@ -851,12 +851,12 @@ In `src/lib/email-blocks.js`'s `walk`, insert these branches **before** the `if 
 
 Note: an `<li>` built of block elements needs `inner.flush()` before `firstRuns` sees anything. Call `inner.flush()` after the `walk` in the list branch, before `takeRuns` — read the two together and order them so a list item of plain text still produces runs and one of `<div>`s still produces a first line.
 
-- [ ] **Step 4: Run it to verify it passes**
+- [x] **Step 4: Run it to verify it passes**
 
 Run: `npx vitest run src/lib/email-blocks.test.js`
 Expected: PASS, 24 tests.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/lib/email-blocks.js src/lib/email-blocks.test.js
@@ -868,6 +868,33 @@ Body: a parked remote image becomes `{ blocked, alt }`; an image with no parked 
 ---
 
 ## Task 4: The extractor — tables, and the `emailBlocks` entry point
+
+> **Amendment (2026-09-09, after Task 3's review).** Two things this task's code
+> below predates, both of which you must adapt to. Read `src/lib/email-blocks.js`
+> as it actually stands before writing anything.
+>
+> 1. **`walk()` is no longer an if-ladder.** Its tag branches were extracted into
+>    named handlers with the signature `(node, sink, style, depth)`, dispatched
+>    through a `HANDLERS` map. So the table branch below is **not** inserted into
+>    `walk()` — write it as `handleTable(node, sink, style, depth)` and register
+>    it (`HANDLERS.table = handleTable`) alongside the others. Read `handleList`
+>    first and match its shape.
+> 2. **`Sink` takes a shared budget.** `new Sink()` now requires the mutable
+>    `{ chars, blocks }` object threaded from `htmlToBlocks()`, because child
+>    sinks with their own budgets let nested content emit six times the message
+>    ceiling with `truncated: false`. Every `new Sink(...)` in `cellsOf` must
+>    pass the budget it was given, exactly as `handleList` and `handleBlockquote`
+>    do — take it as a parameter rather than reaching for a global.
+>    Note also `pushAlways()`, which exists so a wrapper whose own children
+>    exhausted the budget is still emitted; a table is the same shape, so decide
+>    deliberately which of `push` / `pushAlways` the table block should use and
+>    say why in a comment.
+>
+> The block contract also gained one field since this task was written: an
+> `image` block may now carry an optional `href`, when the image was wrapped in
+> an anchor. Nothing in this task produces images, but the `emailBlocks` tests
+> below should not assert an image shape that omits it.
+
 
 **Files:**
 - Modify: `src/lib/email-blocks.js`
@@ -1398,6 +1425,7 @@ describe('normaliseBlocks', () => {
       { type: 'list', ordered: false, items: [[{ text: 'i' }]] },
       { type: 'quote', blocks: [{ type: 'para', runs: [{ text: 'q' }] }] },
       { type: 'image', blocked: 'https://x.test/a.png', alt: '' },
+      { type: 'image', blocked: 'https://x.test/b.png', alt: 'Hero', href: 'https://x.test/go' },
       { type: 'link', href: 'https://x.test/go', runs: [{ text: 'Go' }] },
       { type: 'rule' },
       { type: 'pre', text: 'code' },
@@ -1626,12 +1654,18 @@ export function normaliseBlocks(blocks) {
         if (inner.length) out.push({ type: 'quote', blocks: inner })
         break
       }
-      case 'image':
-        // No `blocked`, no image: there is no other URL field, by design.
-        if (block.blocked) {
-          out.push({ type: 'image', blocked: block.blocked, alt: block.alt || '' })
-        }
+      case 'image': {
+        // No `blocked`, no image: `blocked` is the only URL the server parks.
+        if (!block.blocked) break
+        // `href` is present when the image was wrapped in an anchor — a hero
+        // image that IS the call to action, which is most of marketing email.
+        // Dropping it here would leave a blocked-by-default placeholder with
+        // no way to reach what it linked to.
+        const image = { type: 'image', blocked: block.blocked, alt: block.alt || '' }
+        if (block.href) image.href = block.href
+        out.push(image)
         break
+      }
       case 'rule':
         out.push({ type: 'rule' })
         break
@@ -2396,8 +2430,9 @@ function Block({ block, showImages }) {
         </Pressable>
       )
     }
-    case 'image':
-      return imageState(block, showImages) === 'shown'
+    case 'image': {
+      const shown = imageState(block, showImages) === 'shown'
+      const art = shown
         ? (
           <Image
             source={{ uri: block.blocked }}
@@ -2407,6 +2442,24 @@ function Block({ block, showImages }) {
           />
         )
         : <BlockedImage block={block} />
+      // 🔴 A LINKED IMAGE STAYS TAPPABLE IN BOTH STATES. Marketing email is
+      // routinely one hero image that IS the call to action, and images are
+      // blocked by default here — so if only the shown state were tappable,
+      // the operator's default view would be a dead placeholder with no way
+      // to reach what it linked to.
+      if (!block.href) return art
+      return (
+        <Pressable
+          onPress={() => openHref(block.href)}
+          onLongPress={() => Alert.alert('Link', block.href)}
+          accessibilityRole="link"
+          accessibilityLabel={block.alt ? `${block.alt} — opens a link` : 'Image link'}
+          className="active:opacity-70"
+        >
+          {art}
+        </Pressable>
+      )
+    }
     case 'rule':
       return <View className="h-px bg-un1t-border my-2.5" />
     case 'pre':
