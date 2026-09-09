@@ -32,7 +32,7 @@ Every task ends green. Run the single-file command shown in each step; run the f
 
 | Path | Responsibility |
 | --- | --- |
-| `shared/mail-entities.js` | `decodeCharRefs` — decimal, hex and named character references. Both platforms, ingest and render. |
+| `shared/mail-entities.js` | `decodeCharRefs` (decimal, hex and named references) and `stripInvisibleChars` (the zero-width set that breaks Postgres FTS tokens). Both platforms, ingest and render. |
 | `shared/mail-entities.test.js` | Its tests. |
 | `src/lib/mail-entities.js` | `export * from '../../shared/mail-entities.js'` — the web-side re-export the pair-sync test expects. |
 | `src/lib/email-blocks.js` | The block extractor. Runs on sanitised output only. Server-only. |
@@ -71,7 +71,7 @@ Every task ends green. Run the single-file command shown in each step; run the f
 - Modify: `src/lib/email-content.js:66-74`
 - Modify: `tests/shared-pair-sync.test.js` (the `PAIRS` object, from line 115)
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `shared/mail-entities.test.js`:
 
@@ -130,12 +130,12 @@ describe('decodeCharRefs', () => {
 })
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `npx vitest run shared/mail-entities.test.js`
 Expected: FAIL — `Failed to resolve import "./mail-entities.js"`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `shared/mail-entities.js`:
 
@@ -215,12 +215,12 @@ export function decodeCharRefs(text) {
 }
 ```
 
-- [ ] **Step 4: Run it to verify it passes**
+- [x] **Step 4: Run it to verify it passes**
 
 Run: `npx vitest run shared/mail-entities.test.js`
 Expected: PASS, 8 tests.
 
-- [ ] **Step 5: Add the web re-export**
+- [x] **Step 5: Add the web re-export**
 
 Create `src/lib/mail-entities.js`:
 
@@ -231,7 +231,7 @@ Create `src/lib/mail-entities.js`:
 export * from '../../shared/mail-entities.js'
 ```
 
-- [ ] **Step 6: Point `htmlToPlainText` at it**
+- [x] **Step 6: Point `htmlToPlainText` at it**
 
 In `src/lib/email-content.js`, add to the imports at the top of the file:
 
@@ -266,12 +266,12 @@ with:
   s = decodeCharRefs(s)
 ```
 
-- [ ] **Step 7: Run the existing email-content tests**
+- [x] **Step 7: Run the existing email-content tests**
 
 Run: `npx vitest run src/lib/email-content.test.js`
 Expected: PASS. If a test asserted a literal `&#8204;` survived, the correct fix is the expectation: that character is now decoded and then collapsed away. Verify by reading the assertion — do not regex-patch test files, this repo has been burned twice doing that; edit by exact string.
 
-- [ ] **Step 8: Register the pair**
+- [x] **Step 8: Register the pair**
 
 In `tests/shared-pair-sync.test.js`, inside the `PAIRS` object (starting line 115), add alongside the existing `'mail-quote.js'` entry:
 
@@ -286,7 +286,7 @@ In `tests/shared-pair-sync.test.js`, inside the `PAIRS` object (starting line 11
   },
 ```
 
-- [ ] **Step 9: Run the pair-sync and full suite**
+- [x] **Step 9: Run the pair-sync and full suite**
 
 Run: `npx vitest run tests/shared-pair-sync.test.js`
 Expected: PASS.
@@ -294,7 +294,7 @@ Expected: PASS.
 Run: `npm test`
 Expected: PASS, whole suite.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add shared/mail-entities.js shared/mail-entities.test.js src/lib/mail-entities.js src/lib/email-content.js tests/shared-pair-sync.test.js
@@ -2502,7 +2502,7 @@ In `mobile/app/(staff)/email/[conversationId].jsx`, add to the imports:
 ```js
 import EmailBody from '../../../components/mail/EmailBody'
 import { splitTextLinks, linkLabel } from '../../../lib/mail-blocks'
-import { decodeCharRefs } from 'shared/mail-entities'
+import { decodeCharRefs, stripInvisibleChars } from 'shared/mail-entities'
 ```
 
 In `FlatMessage` (line 410), beside the existing `const split = …`, add:
@@ -2535,7 +2535,7 @@ with:
         // a 180-character tracking URL was three lines of screen and not even
         // tappable.
         <Text className="text-base text-un1t-text">
-          {splitTextLinks(decodeCharRefs(shown)).map((seg, i) => (
+          {splitTextLinks(stripInvisibleChars(decodeCharRefs(shown))).map((seg, i) => (
             seg.href ? (
               <Text
                 key={i}
@@ -2624,7 +2624,7 @@ Run: `npm run check:mobile-lint`
 Expected: PASS. This is the step that catches a stale reference — read every error, each is real.
 
 Run: `npm run check:mobile-imports`
-Expected: PASS. If it flags `shared/mail-entities`, `decodeCharRefs` is not exported from that module — fix the export, not the import.
+Expected: PASS. If it flags `shared/mail-entities`, `decodeCharRefs` or `stripInvisibleChars` is not exported from that module — fix the export, not the import.
 
 - [ ] **Step 5: Commit**
 
@@ -3216,4 +3216,4 @@ Expected: **Test & lint** and **Next build** green. Both are required; the branc
 
 **Ordering dependencies.** Task 5 needs Tasks 2–4. Task 9 needs Tasks 5, 6 and 8. Task 10's Step 1 (`nudge.chip`) must precede its Step 2, which uses it. Task 11 needs Task 7's `composerCap` and `audienceSummary`. Task 7 is otherwise independent and can run alongside Tasks 2–5.
 
-**Type consistency.** `emailBlocks` → `{ blocks, quotedBlocks, blockedImages, truncated, failed }` (Task 4) → route fields `html_blocks`, `html_quoted_blocks`, `html_blocked_images`, `html_truncated`, `html_unsafe`, `html_omitted` (Task 5) → read under those names in Tasks 8 and 9. `htmlToBlocks` → `{ blocks, truncated }`, used only inside `email-blocks.js` and its tests. `normaliseBlocks` / `imageState` / `blockedImageCount` / `linkLabel` / `splitTextLinks` defined in Task 6, called in Task 9. `spamActionLabel` / `shortMailboxLabel` / `headerDetailLines` / `audienceSummary` / `composerCap` / `NO_MAILBOX_LINE` defined in Task 7, called in Tasks 10 and 11. `decodeCharRefs` defined in Task 1, called in Tasks 1 and 9. `nudge.chip` added in Task 10 Step 1, used in Step 2.
+**Type consistency.** `emailBlocks` → `{ blocks, quotedBlocks, blockedImages, truncated, failed }` (Task 4) → route fields `html_blocks`, `html_quoted_blocks`, `html_blocked_images`, `html_truncated`, `html_unsafe`, `html_omitted` (Task 5) → read under those names in Tasks 8 and 9. `htmlToBlocks` → `{ blocks, truncated }`, used only inside `email-blocks.js` and its tests. `normaliseBlocks` / `imageState` / `blockedImageCount` / `linkLabel` / `splitTextLinks` defined in Task 6, called in Task 9. `spamActionLabel` / `shortMailboxLabel` / `headerDetailLines` / `audienceSummary` / `composerCap` / `NO_MAILBOX_LINE` defined in Task 7, called in Tasks 10 and 11. `decodeCharRefs` and `stripInvisibleChars` defined in Task 1, composed in that order at both call sites (Tasks 1 and 9). `nudge.chip` added in Task 10 Step 1, used in Step 2.

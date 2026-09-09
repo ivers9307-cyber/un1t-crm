@@ -70,6 +70,12 @@ describe('htmlToPlainText', () => {
     // become permanently unsearchable — the tsvector is GENERATED from the
     // stored row, so this never self-heals.
     expect(htmlToPlainText('<p>cli&#8204;ck here</p>')).toBe('click here')
+    // &#847; (COMBINING GRAPHEME JOINER, U+034F) is the OTHER reference the
+    // pre-MAIL-READER.M1 chain deleted by hand, and it behaves the same way
+    // in the parser. Pinned separately because the two are only covered by
+    // one character class: a narrowing edit to INVISIBLE that kept U+200C
+    // and dropped U+034F would otherwise pass every assertion here.
+    expect(htmlToPlainText('<p>cli&#847;ck here</p>')).toBe('click here')
   })
 
   it('decodes the named and numeric forms of the same character identically', () => {
