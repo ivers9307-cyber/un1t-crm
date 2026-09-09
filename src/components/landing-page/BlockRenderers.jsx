@@ -872,13 +872,27 @@ export function SiteHeader({
         ) : (
           <div className="font-display font-extrabold text-2xl tracking-widest text-white">UN1T</div>
         )}
-        <div className="flex items-center gap-4">
+        {/* HEADER-FIT.1 — this row is the tightest surface on the site.
+            At 375px the logo leaves it ~185px, and with Events present
+            the button had only ~122px against real labels needing
+            155-186px: "Claim 3 free classes" ran 82px off-screen on
+            Stillorgan and "Join the waitlist" 55px on Hatch, both
+            since launch. It failed SILENTLY — the sticky bar clips the
+            overflow and the page never scrolls sideways, so a
+            half-eaten button just looks like a button.
+
+            Three changes, smallest first: Events steps aside below
+            420px (it is one tap away in the footer, the CTA is not),
+            the button loses some padding there, and it may now SHRINK
+            and ellipsize rather than run off the edge — so an
+            over-long label degrades visibly instead of disappearing. */}
+        <div className="flex items-center gap-4 min-w-0">
           {eventsHref && (
-            <Link href={eventsHref} className="text-white/80 hover:text-white transition-colors text-sm font-medium shrink-0">Events</Link>
+            <Link href={eventsHref} className="hidden min-[420px]:inline-block text-white/80 hover:text-white transition-colors text-sm font-medium shrink-0">Events</Link>
           )}
           {sticky && ctaHref && (
-            <a href={ctaHref} className="lp-btn !px-5 !py-2.5 !text-sm shrink-0">
-              {headerCtaLabel}
+            <a href={ctaHref} className="lp-btn !px-3.5 min-[420px]:!px-5 !py-2.5 !text-sm min-w-0 max-w-full">
+              <span className="truncate">{headerCtaLabel}</span>
               <span className="lp-btn-arrow hidden sm:inline" aria-hidden="true">→</span>
             </a>
           )}

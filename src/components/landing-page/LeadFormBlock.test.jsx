@@ -127,3 +127,33 @@ describe('SiteHeader short label (HATCH-OFFER.3)', () => {
     expect(html).toContain('Join the waitlist')
   })
 })
+
+describe('SiteHeader mobile fit (HEADER-FIT.1)', () => {
+  // These assert CLASSES, not text. The failure this guards against is
+  // a button running off a 375px screen, and vitest runs under node
+  // with no jsdom — nothing here can measure a box. Classes are the
+  // only part of that contract a unit test can hold; the widths
+  // themselves were measured in a real browser.
+  const header = (extra = {}) => renderToStaticMarkup(
+    <SiteHeader sticky ctaHref="#waitlist" ctaLabel="Claim 3 free classes" eventsHref="/stillorgan/events" {...extra} />
+  )
+
+  it('steps Events aside below 420px so the CTA has room', () => {
+    expect(header()).toContain('hidden min-[420px]:inline-block')
+  })
+  it('slims the button padding below 420px and restores it above', () => {
+    expect(header()).toContain('!px-3.5 min-[420px]:!px-5')
+  })
+  it('lets the button shrink and ellipsize instead of running off-screen', () => {
+    const html = header()
+    expect(html).toContain('min-w-0')
+    expect(html).toContain('truncate')
+    // shrink-0 would pin the width and re-create the clip.
+    expect(html).not.toContain('!text-sm shrink-0')
+  })
+  it('still renders the label and the events link', () => {
+    const html = header()
+    expect(html).toContain('Claim 3 free classes')
+    expect(html).toContain('/stillorgan/events')
+  })
+})
