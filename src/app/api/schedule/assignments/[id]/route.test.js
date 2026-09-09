@@ -43,11 +43,21 @@ function req(body) {
 // The assignment the route reads before authorising. `locationId` is the
 // parent block's location — the per-location gate compares it to
 // getUserLocationIds(user).
-function assignmentRow({ locationId = 'loc-1', rosterStatus = 'published' } = {}) {
+function assignmentRow({
+  locationId = 'loc-1',
+  rosterStatus = 'published',
+  profileId = COACH.id,
+  startOverride = null,
+  endOverride = null,
+  partialReason = null,
+} = {}) {
   return {
     id: 'assign-1',
-    profile_id: COACH.id,
+    profile_id: profileId,
     block_id: 'block-1',
+    start_time_override: startOverride,
+    end_time_override: endOverride,
+    partial_reason: partialReason,
     shift_blocks: {
       location_id: locationId,
       start_time: '09:00:00',
@@ -85,7 +95,7 @@ function buildDb({ assignment = assignmentRow(), fetchErr = null, updateErr = nu
                     data: updateErr ? null : {
                       id: 'assign-1',
                       block_id: 'block-1',
-                      profile_id: COACH.id,
+                      profile_id: assignment?.profile_id ?? COACH.id,
                       status: 'scheduled',
                       start_time_override: patch.start_time_override ?? null,
                       end_time_override: patch.end_time_override ?? null,
@@ -187,6 +197,73 @@ describe('PUT /api/schedule/assignments/[id] — hours are manager-set (D3)', ()
     expect(updateSpy).toHaveBeenCalledTimes(1)
   })
 
+  // ROSTER-FIX.3a2 — the edit form posts every override field back on save,
+  // so "the key is in the body" is not "the value moved". A re-save of the
+  // same times must not push the coach and must not write a `time_changed`
+  // row, which is what makes the next re-publish re-notify them.
+  it('does not push or log when a manager re-saves identical override times', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const { db, updateSpy } = buildDb({
+      assignment: assignmentRow({ startOverride: '10:00:00', endOverride: '12:00:00' }),
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await PUT(req({
+      start_time_override: '10:00:00',
+      end_time_override: '12:00:00',
+      partial_reason: null,
+    }), PROPS)
+    expect(res.status).toBe(200)
+    expect(updateSpy).toHaveBeenCalledTimes(1)
+    expect(notifyUsersOnce).not.toHaveBeenCalled()
+    expect(logRosterChange).not.toHaveBeenCalled()
+  })
+
+  it('pushes and logs when one override value really changes', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const { db } = buildDb({
+      assignment: assignmentRow({ startOverride: '10:00:00', endOverride: '12:00:00' }),
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await PUT(req({
+      start_time_override: '10:00:00',
+      end_time_override: '13:00:00',
+    }), PROPS)
+    expect(res.status).toBe(200)
+    expect(notifyUsersOnce).toHaveBeenCalledTimes(1)
+    expect(logRosterChange).toHaveBeenCalledTimes(1)
+    expect(logRosterChange.mock.calls[0][1]).toMatchObject({ action: 'time_changed' })
+  })
+
+  // A manager who works the shift they are editing notifies themselves. That
+  // is accepted: the alternative is an isSelf branch, and ROSTER-FIX.3 deleted
+  // those because they were how a coach edited their own paid hours. Pinned so
+  // nobody "fixes" it back into a special case.
+  it('still pushes when a manager edits their OWN assignment', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const { db } = buildDb({ assignment: assignmentRow({ profileId: MANAGER.id }) })
+    createServerClient.mockReturnValue(db)
+
+    const res = await PUT(req({ end_time_override: '12:00:00' }), PROPS)
+    expect(res.status).toBe(200)
+    expect(notifyUsersOnce).toHaveBeenCalledTimes(1)
+    expect(notifyUsersOnce.mock.calls[0][2]).toEqual([MANAGER.id])
+  })
+
+  // ROSTER-FIX.3a2 — the gate used to be `if (blockLocation && !owned)`, which
+  // fell OPEN on a block with no location_id: unscopeable is not the same as
+  // permitted.
+  it('404s a non-master manager on a block with no location_id', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const { db, updateSpy } = buildDb({ assignment: assignmentRow({ locationId: null }) })
+    createServerClient.mockReturnValue(db)
+
+    const res = await PUT(req({ start_time_override: '10:00:00' }), PROPS)
+    expect(res.status).toBe(404)
+    expect(updateSpy).not.toHaveBeenCalled()
+  })
+
   it('still logs the change on a published roster', async () => {
     getCurrentUser.mockResolvedValue(MANAGER)
     const { db } = buildDb()
@@ -233,6 +310,17 @@ describe('DELETE /api/schedule/assignments/[id] — a coach cannot drop themselv
     getCurrentUser.mockResolvedValue(MANAGER)
     getUserLocationIds.mockReturnValue(['loc-2'])
     const { db, deleteSpy } = buildDb()
+    createServerClient.mockReturnValue(db)
+
+    const res = await DELETE({}, PROPS)
+    expect(res.status).toBe(404)
+    expect(deleteSpy).not.toHaveBeenCalled()
+  })
+
+  // ROSTER-FIX.3a2 — same fail-open gate as the PUT side.
+  it('404s a non-master manager on a block with no location_id', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const { db, deleteSpy } = buildDb({ assignment: assignmentRow({ locationId: null }) })
     createServerClient.mockReturnValue(db)
 
     const res = await DELETE({}, PROPS)

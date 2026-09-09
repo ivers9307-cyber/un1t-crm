@@ -36,6 +36,10 @@ const UpdateAssignmentSchema = z.object({
   status: z.enum(['scheduled', 'confirmed', 'declined', 'completed']).optional(),
 })
 
+// The fields whose VALUE decides whether this PUT is an override change —
+// i.e. whether the coach is pushed and a `time_changed` row is logged.
+const OVERRIDE_FIELDS = ['start_time_override', 'end_time_override', 'partial_reason']
+
 export async function PUT(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
@@ -63,7 +67,7 @@ export async function PUT(request, props) {
 
   const { data: assignment, error: fetchErr } = await db
     .from('shift_assignments')
-    .select('id, profile_id, block_id, shift_blocks!block_id(location_id, start_time, end_time, block_date, roster_id, rosters:roster_id(status))')
+    .select('id, profile_id, block_id, start_time_override, end_time_override, partial_reason, shift_blocks!block_id(location_id, start_time, end_time, block_date, roster_id, rosters:roster_id(status))')
     .eq('id', params.id)
     .single()
   if (fetchErr || !assignment) {
@@ -73,10 +77,12 @@ export async function PUT(request, props) {
   // Per-location ownership for non-master managers. A shift at a location
   // the caller does not own is invisible, not forbidden — 404, matching the
   // rest of the detail routes, so the response never confirms it exists.
+  // ROSTER-FIX.3 — a block with no location_id 404s too: an unscopeable row
+  // cannot be proved to belong to this manager, so it is not theirs to edit.
   if (user.role !== 'master') {
     const userLocationIds = getUserLocationIds(user)
     const blockLocation = assignment.shift_blocks?.location_id
-    if (blockLocation && !userLocationIds.includes(blockLocation)) {
+    if (!blockLocation || !userLocationIds.includes(blockLocation)) {
       return NextResponse.json({ success: false, error: 'Assignment not found' }, { status: 404 })
     }
   }
@@ -120,14 +126,20 @@ export async function PUT(request, props) {
     return NextResponse.json({ success: false, error: error.message }, { status: 400 })
   }
 
-  // Push the affected coach whenever the override times actually
-  // changed. ROSTER-FIX.3 — every caller here is a manager, so there is
-  // no longer a self-edit to suppress: any override change is news to the
-  // coach whose hours moved.
-  const overrideChanged =
-    Object.prototype.hasOwnProperty.call(updates, 'start_time_override') ||
-    Object.prototype.hasOwnProperty.call(updates, 'end_time_override') ||
-    Object.prototype.hasOwnProperty.call(updates, 'partial_reason')
+  // Push the affected coach, and log the change, only when an override
+  // VALUE actually moved — key presence is not a change. ROSTER-FIX.3: the
+  // edit form posts all three fields back on every save, so presence alone
+  // meant a manager re-saving unchanged times wrote a `time_changed` row
+  // (which makes the next re-publish re-notify the coach) and pushed the
+  // coach about a non-change. `?? null` folds an absent/`undefined` value
+  // onto the cleared value, so "no override" compares equal either way.
+  // ROSTER-FIX.3 — every caller here is a manager, so there is no longer a
+  // self-edit to suppress: a manager editing their own shift notifies
+  // themselves, which is noise, not a wrong hours record.
+  const overrideChanged = OVERRIDE_FIELDS.some((field) => (
+    Object.prototype.hasOwnProperty.call(updates, field) &&
+    (updates[field] ?? null) !== (assignment[field] ?? null)
+  ))
   if (overrideChanged) {
     try {
       const block = data.shift_blocks
@@ -220,11 +232,12 @@ export async function DELETE(_request, props) {
   }
 
   // Per-location ownership check for non-master managers — 404 (not 403) on
-  // a foreign location, matching the rest of the detail routes.
+  // a foreign location, matching the rest of the detail routes. ROSTER-FIX.3
+  // — a block with no location_id 404s too rather than falling through.
   if (user.role !== 'master') {
     const userLocationIds = getUserLocationIds(user)
     const blockLocation = assignment.shift_blocks?.location_id
-    if (blockLocation && !userLocationIds.includes(blockLocation)) {
+    if (!blockLocation || !userLocationIds.includes(blockLocation)) {
       return NextResponse.json({ success: false, error: 'Assignment not found' }, { status: 404 })
     }
   }
