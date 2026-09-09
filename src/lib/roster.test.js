@@ -15,6 +15,9 @@ import {
   liveAssignments,
   findPublishedRosterFor,
   findPublishedRosterIdsByDate,
+  getMonthStart,
+  monthStartForWeek,
+  weekStartForMonth,
 } from './roster'
 
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logInfo: vi.fn(), logError: vi.fn() }))
@@ -528,5 +531,57 @@ describe('generateBlocksForTemplate → roster_id', () => {
     const result = await generateBlocksForTemplate(db, tpl, '2026-05-04', 1)
     expect(result.inserted).toBe(1)
     expect(upsertMock.mock.calls[0][0][0].roster_id).toBeNull()
+  })
+})
+
+// ROSTER-FIX.6a — the calendar's Month/Week toggle used to throw a month
+// away. Month took getMonthStart(weekStart), so the week 27 Jul – 2 Aug
+// (whose Monday is in July) landed on July when the operator was clearly
+// looking at August; Week took getMonday(monthStart), so August 2026 (which
+// starts on a Saturday) landed on 27 July and the very next Month click read
+// July. Both directions now agree on one rule — the week belongs to the month
+// its MIDWEEK day falls in — which is what makes the toggle round-trip.
+describe('monthStartForWeek / weekStartForMonth (ROSTER-FIX.6a)', () => {
+  const local = (s) => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d) }
+
+  it('picks the month holding the midweek day, not the Monday', () => {
+    // 27 Jul – 2 Aug 2026: Monday is July, midweek (Thu 30 Jul) is July.
+    expect(formatDate(monthStartForWeek(local('2026-07-27')))).toBe('2026-07-01')
+    // 3 – 9 Aug 2026: midweek Thu 6 Aug.
+    expect(formatDate(monthStartForWeek(local('2026-08-03')))).toBe('2026-08-01')
+    // 31 Aug – 6 Sep 2026: Monday is August, midweek (Thu 3 Sep) is September.
+    expect(formatDate(monthStartForWeek(local('2026-08-31')))).toBe('2026-09-01')
+  })
+
+  it('keeps the visible week when it already belongs to the month', () => {
+    expect(formatDate(weekStartForMonth(local('2026-07-01'), local('2026-07-27')))).toBe('2026-07-27')
+  })
+
+  it('lands on the first week of the month when the visible week is elsewhere', () => {
+    expect(formatDate(weekStartForMonth(local('2026-06-01'), local('2026-09-14')))).toBe('2026-06-01')
+  })
+
+  it('round-trips a month that starts on a weekend (Aug 2026, a Saturday)', () => {
+    // The bug: Week gave 27 Jul, whose midweek is July, so Month read July.
+    const week = weekStartForMonth(local('2026-08-01'), local('2026-12-07'))
+    expect(formatDate(week)).toBe('2026-08-03')
+    expect(formatDate(monthStartForWeek(week))).toBe('2026-08-01')
+  })
+
+  it('round-trips a month that starts on a Sunday (Nov 2026)', () => {
+    const week = weekStartForMonth(local('2026-11-01'), null)
+    expect(formatDate(monthStartForWeek(week))).toBe('2026-11-01')
+  })
+
+  it('round-trips every month start of 2026 in both directions', () => {
+    for (let m = 0; m < 12; m++) {
+      const ms = new Date(2026, m, 1)
+      const week = weekStartForMonth(ms, null)
+      expect(formatDate(monthStartForWeek(week))).toBe(formatDate(ms))
+    }
+  })
+
+  it('normalises a mid-month date to the first of its month', () => {
+    expect(formatDate(getMonthStart(local('2026-08-19')))).toBe('2026-08-01')
   })
 })

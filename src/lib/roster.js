@@ -76,6 +76,47 @@ export function formatDate(date) {
 }
 
 /**
+ * First day of a Date's calendar month, at local midnight.
+ */
+export function getMonthStart(date) {
+  const d = new Date(date)
+  d.setDate(1)
+  d.setHours(0, 0, 0, 0)
+  return d
+}
+
+// ROSTER-FIX.6a — one rule for the calendar's Month/Week toggle: a week
+// belongs to the month its MIDWEEK day (Thursday) falls in. Both directions
+// have to agree on it or the toggle loses a month.
+//
+// Before: Month took getMonthStart(weekStart), so the week 27 Jul - 2 Aug
+// jumped to July while the operator was looking at August; Week took
+// getMonday(monthStart), so August 2026 (a Saturday start) landed on 27 July
+// and the next Month click read July. Any month starting Fri/Sat/Sun did it.
+
+/**
+ * The month the visible week belongs to. Midweek decides, so a week that
+ * straddles a month boundary goes to whichever month holds most of it.
+ */
+export function monthStartForWeek(weekStart) {
+  return getMonthStart(addDays(weekStart, 3))
+}
+
+/**
+ * The week to show when leaving month view. Keeps the week already on screen
+ * when it belongs to this month (so Month then Week is a no-op), otherwise
+ * the month's first week - defined by the same midweek rule, which is what
+ * makes the reverse trip land back on the month we came from.
+ */
+export function weekStartForMonth(monthStart, currentWeekStart) {
+  const ms = getMonthStart(monthStart)
+  if (currentWeekStart && monthStartForWeek(currentWeekStart).getTime() === ms.getTime()) {
+    return getMonday(currentWeekStart)
+  }
+  return getMonday(addDays(ms, 3))
+}
+
+/**
  * Generate the list of dates within [fromDate, toDate] (inclusive)
  * whose weekday code is in `dayCodes`. Used both by the block
  * generator and by tests asserting which weekdays a template hits.
