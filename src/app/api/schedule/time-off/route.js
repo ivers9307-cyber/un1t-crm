@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds, assertLocationAccess } from '@/lib/auth'
 import { validateBody, uuidLike } from '@/lib/validate'
-import { timeOffTypeSchema } from '@/lib/schemas'
+import { timeOffTypeSchema, MANAGER_ROLES } from '@/lib/schemas'
 import { notifyUsersAtRolesOnce } from '@/lib/push-dedup'
 
 const ISO_DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD')
@@ -57,8 +57,10 @@ export async function GET(request) {
   if (startDate) query = query.lte('start_date', endDate || startDate)
   if (endDate) query = query.gte('end_date', startDate || endDate)
 
-  // Staff can only see their own unless they're a manager/owner/head_coach
-  if (['staff'].includes(user.role)) {
+  // ROSTER-FIX.2 — anyone who is not a manager sees only their own requests.
+  // The old `['staff']` list let `reception` (and any future non-manager
+  // role) read the whole studio's leave.
+  if (!MANAGER_ROLES.includes(user.role)) {
     query = query.eq('profile_id', user.id)
   } else if (profileId) {
     query = query.eq('profile_id', profileId)
