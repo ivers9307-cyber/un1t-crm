@@ -304,14 +304,16 @@ describe('findPublishedRosterFor', () => {
     // The filters ARE the contract: same location, published only, and the
     // date inside the inclusive period.
     expect(builder.calls).toEqual([
-      ['select', 'id'],
+      ['select', 'id, published_at, created_at'],
       ['eq', 'location_id', 'loc1'],
       ['eq', 'status', 'published'],
       ['lte', 'period_start', '2026-05-06'],
       ['gte', 'period_end', '2026-05-06'],
       // ROSTER-FIX.5 — an unordered .limit(1) over two overlapping published
-      // rosters returns whichever row Postgres reached first.
-      ['order', 'period_start', { ascending: false }],
+      // rosters returns whichever row Postgres reached first. The most
+      // recently PUBLISHED one wins; period_start would pick the week a
+      // later month publish has already superseded.
+      ['order', 'published_at', { ascending: false, nullsFirst: false }],
       ['order', 'created_at', { ascending: false }],
       ['limit', 1],
     ])
@@ -350,12 +352,12 @@ describe('findPublishedRosterIdsByDate', () => {
 
     expect(db.from).toHaveBeenCalledTimes(1)
     expect(builder.calls).toEqual([
-      ['select', 'id, period_start, period_end, created_at'],
+      ['select', 'id, period_start, period_end, published_at, created_at'],
       ['eq', 'location_id', 'loc1'],
       ['eq', 'status', 'published'],
       ['lte', 'period_start', '2026-05-25'],
       ['gte', 'period_end', '2026-05-04'],
-      ['order', 'period_start', { ascending: false }],
+      ['order', 'published_at', { ascending: false, nullsFirst: false }],
       ['order', 'created_at', { ascending: false }],
     ])
     expect(map.get('2026-05-04')).toBe('rA')
@@ -388,46 +390,90 @@ describe('findPublishedRosterIdsByDate', () => {
 
 // ─── ROSTER-FIX.5 — overlapping published rosters resolve deterministically ──
 //
-// Nothing in the schema stops two published rosters covering the same day (a
-// re-cut week published beside the one it replaces). Before this, the single
-// -date helper took an unordered .limit(1) and the batch matcher took the
-// first row that happened to match — so the SAME block could be tagged to
-// different rosters depending on which path created it, or on nothing at all.
+// Nothing in the schema stops two published rosters covering the same day: a
+// re-cut week published beside the one it replaces, and — the case that broke
+// the first cut of this — a WIDER period published over ones it contains.
+// The rule is that the most recently PUBLISHED roster wins. Not the latest
+// period_start, and not the most recently created row.
 
 describe('two published rosters covering one date', () => {
   const DATE = '2026-05-06'
-  // Both cover 2026-05-06. `rNew` starts later, so it wins outright.
-  const OVERLAP = [
-    { id: 'r-old', period_start: '2026-05-01', period_end: '2026-05-10', created_at: '2026-04-01T00:00:00Z' },
-    { id: 'r-new', period_start: '2026-05-04', period_end: '2026-05-10', created_at: '2026-04-02T00:00:00Z' },
-  ]
-  // Same period_start — the created_at tie-break decides.
-  const SAME_START = [
-    { id: 'r-first', period_start: '2026-05-04', period_end: '2026-05-10', created_at: '2026-04-01T00:00:00Z' },
-    { id: 'r-recut', period_start: '2026-05-04', period_end: '2026-05-10', created_at: '2026-04-09T00:00:00Z' },
+
+  // The real case. The week 05-04..05-10 was published, then the whole month
+  // 05-01..05-31 was published over it — and that month publish re-tagged
+  // every block inside it. So a block created afterwards for 05-06 belongs to
+  // the MONTH, even though the WEEK has BOTH the later period_start and the
+  // later created_at. Only published_at gets this right.
+  const WEEK_THEN_MONTH = [
+    { id: 'r-week', period_start: '2026-05-04', period_end: '2026-05-10', published_at: '2026-05-01T10:00:00Z', created_at: '2026-04-25T00:00:00Z' },
+    { id: 'r-month', period_start: '2026-05-01', period_end: '2026-05-31', published_at: '2026-05-02T10:00:00Z', created_at: '2026-04-01T00:00:00Z' },
   ]
 
-  it('both helpers pick the same roster — latest period_start', async () => {
-    const single = await findPublishedRosterFor(rostersFixtureDb(OVERLAP), 'loc1', DATE)
-    const batched = await findPublishedRosterIdsByDate(rostersFixtureDb(OVERLAP), 'loc1', [DATE])
-    expect(single).toBe('r-new')
-    expect(batched.get(DATE)).toBe('r-new')
-    expect(batched.get(DATE)).toBe(single)
-  })
+  // The reverse: the month went out first, then one week inside it was re-cut
+  // and published over the top. Now the WEEK is the live roster for 05-06 —
+  // even though the month is the more recently CREATED row.
+  const MONTH_THEN_WEEK = [
+    { id: 'r-month', period_start: '2026-05-01', period_end: '2026-05-31', published_at: '2026-05-01T10:00:00Z', created_at: '2026-04-30T00:00:00Z' },
+    { id: 'r-week', period_start: '2026-05-04', period_end: '2026-05-10', published_at: '2026-05-02T10:00:00Z', created_at: '2026-04-20T00:00:00Z' },
+  ]
 
-  it('both helpers break a period_start tie on the latest created_at', async () => {
-    const single = await findPublishedRosterFor(rostersFixtureDb(SAME_START), 'loc1', DATE)
-    const batched = await findPublishedRosterIdsByDate(rostersFixtureDb(SAME_START), 'loc1', [DATE])
-    expect(single).toBe('r-recut')
-    expect(batched.get(DATE)).toBe(single)
-  })
+  // Row order out of the DB must not change the answer, so every case runs
+  // both ways round.
+  const BOTH_ORDERS = rows => [['as listed', rows], ['reversed', [...rows].reverse()]]
+
+  for (const [order, rows] of BOTH_ORDERS(WEEK_THEN_MONTH)) {
+    it(`the month published over the week wins — rows ${order}`, async () => {
+      const single = await findPublishedRosterFor(rostersFixtureDb(rows), 'loc1', DATE)
+      const batched = await findPublishedRosterIdsByDate(rostersFixtureDb(rows), 'loc1', [DATE])
+      expect(single).toBe('r-month')
+      expect(batched.get(DATE)).toBe('r-month')
+      expect(batched.get(DATE)).toBe(single)
+    })
+  }
+
+  for (const [order, rows] of BOTH_ORDERS(MONTH_THEN_WEEK)) {
+    it(`the week re-cut after the month wins — rows ${order}`, async () => {
+      const single = await findPublishedRosterFor(rostersFixtureDb(rows), 'loc1', DATE)
+      const batched = await findPublishedRosterIdsByDate(rostersFixtureDb(rows), 'loc1', [DATE])
+      expect(single).toBe('r-week')
+      expect(batched.get(DATE)).toBe('r-week')
+      expect(batched.get(DATE)).toBe(single)
+    })
+  }
 
   it('the batched matcher does not lean on the row order it was handed', async () => {
     // A DB that ignores the ORDER BY entirely: the JS tie-break is all there
     // is, and it still has to land on the same roster.
-    const db = rostersFixtureDb([...OVERLAP].reverse(), { honourOrder: false })
+    const db = rostersFixtureDb([...WEEK_THEN_MONTH].reverse(), { honourOrder: false })
     const map = await findPublishedRosterIdsByDate(db, 'loc1', [DATE])
-    expect(map.get(DATE)).toBe('r-new')
+    expect(map.get(DATE)).toBe('r-month')
+  })
+
+  // published_at is nullable (mig 072) — a roster flipped to published before
+  // that column existed carries none. Such a row is ranked on its created_at
+  // rather than dropping out of the comparison.
+  it('a roster with no published_at is ranked on its created_at', async () => {
+    const rows = [
+      { id: 'r-unstamped', period_start: '2026-05-04', period_end: '2026-05-10', published_at: null, created_at: '2026-05-01T00:00:00Z' },
+      { id: 'r-month', period_start: '2026-05-01', period_end: '2026-05-31', published_at: '2026-05-02T10:00:00Z', created_at: '2026-04-01T00:00:00Z' },
+    ]
+    const single = await findPublishedRosterFor(rostersFixtureDb(rows), 'loc1', DATE)
+    const batched = await findPublishedRosterIdsByDate(rostersFixtureDb(rows), 'loc1', [DATE])
+    // 05-01 (the unstamped row's created_at) loses to the 05-02 publish.
+    expect(single).toBe('r-month')
+    expect(batched.get(DATE)).toBe('r-month')
+  })
+
+  it('an unstamped roster still wins on a later created_at', async () => {
+    // The ORDER BY sorts nulls LAST, so the query alone would hand back the
+    // stamped row first; the matcher's published_at ?? created_at coalesce is
+    // what keeps the newer roster.
+    const rows = [
+      { id: 'r-unstamped', period_start: '2026-05-04', period_end: '2026-05-10', published_at: null, created_at: '2026-05-09T00:00:00Z' },
+      { id: 'r-month', period_start: '2026-05-01', period_end: '2026-05-31', published_at: '2026-05-02T10:00:00Z', created_at: '2026-04-01T00:00:00Z' },
+    ]
+    const batched = await findPublishedRosterIdsByDate(rostersFixtureDb(rows), 'loc1', [DATE])
+    expect(batched.get(DATE)).toBe('r-unstamped')
   })
 })
 

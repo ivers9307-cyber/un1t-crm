@@ -198,11 +198,24 @@ export function liveAssignments(list) {
  * date; the batch is for the N-date generator.
  *
  * Returns the rosters.id, or null when nothing is published for that day.
- * Nothing stops two published rosters overlapping a date (a re-cut week is
- * published beside the one it replaces), and an unordered .limit(1) then
- * returns whichever row Postgres happened to reach first — so the same block
- * could be tagged to a different roster on two runs. Newest wins: latest
- * period_start, ties broken by latest created_at, matching the batch matcher.
+ * Nothing stops two published rosters overlapping a date — a re-cut week is
+ * published beside the one it replaces, and a WIDER period may be published
+ * over ones it already contains. An unordered .limit(1) then returns whichever
+ * row Postgres happened to reach first, so the same block could be tagged to a
+ * different roster on two runs.
+ *
+ * THE RULE: the most recently PUBLISHED roster wins — published_at desc (nulls
+ * last), then created_at desc. Ordering by period_start is wrong. Publish the
+ * week 2026-05-04..05-10, then publish the month 2026-05-01..05-31 over it:
+ * that month publish re-tags every block inside it, so a block created
+ * afterwards for 2026-05-06 belongs to the MONTH — but the later period_start
+ * is the WEEK's, and period_start ordering would hand the block back to a
+ * roster the operator has already superseded.
+ *
+ * published_at is nullable (mig 072), so a row without one falls back to its
+ * created_at; the batch matcher below does that coalesce in JS, and here the
+ * nulls-last ORDER BY keeps an unstamped row behind a stamped one.
+ *
  * Never throws: a failed lookup must not take a block insert down with it,
  * so an error is logged and treated as "no roster" (the block is created
  * untagged, which is exactly the pre-fix behaviour).
@@ -216,12 +229,12 @@ export async function findPublishedRosterFor(db, locationId, dateIso) {
   if (!locationId || !dateIso) return null
   const { data, error } = await db
     .from('rosters')
-    .select('id')
+    .select('id, published_at, created_at')
     .eq('location_id', locationId)
     .eq('status', 'published')
     .lte('period_start', dateIso)
     .gte('period_end', dateIso)
-    .order('period_start', { ascending: false })
+    .order('published_at', { ascending: false, nullsFirst: false })
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle()
@@ -239,22 +252,33 @@ export async function findPublishedRosterFor(db, locationId, dateIso) {
  * of blocks costs a single round trip instead of one per date.
  *
  * Overlapping published rosters resolve the same way as the single-date form:
- * latest period_start wins, ties broken by latest created_at. The ORDER BY is
- * on the query AND the tie-break is redone in JS — the ordering is what the
- * database is asked for, the JS is what makes the answer independent of the
- * order the rows actually arrive in.
+ * the most recently PUBLISHED roster wins — published_at desc (nulls last),
+ * then created_at desc. The ORDER BY is on the query AND the tie-break is
+ * redone in JS — the ordering is what the database is asked for, the JS is
+ * what makes the answer independent of the order the rows actually arrive in.
  *
  * @returns {Promise<Map<string, string>>} date (YYYY-MM-DD) → rosters.id.
  *          Dates with no published roster are simply absent.
  */
-// ROSTER-FIX.5 — "newest wins" for two published rosters covering the same
-// day: later period_start first, then later created_at. A missing created_at
-// (an old row, or a mock that doesn't carry it) sorts oldest rather than
-// throwing the comparison off.
+// ROSTER-FIX.5 — "the most recently published roster wins" for two published
+// rosters covering the same day. NOT period_start: publish the week
+// 2026-05-04..05-10, then publish the month 2026-05-01..05-31 over it, and a
+// block created afterwards for 2026-05-06 must join the MONTH — the month is
+// what re-tagged every block in that range — even though the WEEK has the
+// later period_start.
+//
+// Key: published_at, falling back to created_at when a row was never stamped
+// (published_at is nullable, mig 072), then created_at as the tie-break. A
+// missing value (an old row, or a mock that doesn't carry it) sorts oldest
+// rather than throwing the comparison off.
+function publishedOrder(r) {
+  return String(r.published_at || r.created_at || '')
+}
+
 function isNewerRoster(candidate, incumbent) {
-  if (candidate.period_start !== incumbent.period_start) {
-    return candidate.period_start > incumbent.period_start
-  }
+  const a = publishedOrder(candidate)
+  const b = publishedOrder(incumbent)
+  if (a !== b) return a > b
   return String(candidate.created_at || '') > String(incumbent.created_at || '')
 }
 
@@ -270,12 +294,12 @@ export async function findPublishedRosterIdsByDate(db, locationId, dates) {
 
   const { data, error } = await db
     .from('rosters')
-    .select('id, period_start, period_end, created_at')
+    .select('id, period_start, period_end, published_at, created_at')
     .eq('location_id', locationId)
     .eq('status', 'published')
     .lte('period_start', maxDate)
     .gte('period_end', minDate)
-    .order('period_start', { ascending: false })
+    .order('published_at', { ascending: false, nullsFirst: false })
     .order('created_at', { ascending: false })
 
   if (error) {
