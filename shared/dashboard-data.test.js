@@ -6,7 +6,7 @@
 // in the phase 4 panel.
 
 import { describe, it, expect, vi } from 'vitest'
-import { fetchIncompletePayProfiles, fetchPendingRosterApprovalsCount, paginatedSumCents, fetchAdsSummary, fetchStudioDashboardData } from './dashboard-data'
+import { fetchIncompletePayProfiles, fetchPendingRosterApprovalsCount, paginatedSumCents, fetchAdsSummary, fetchStudioDashboardData, fetchPersonalDashboardData } from './dashboard-data'
 
 function mockSupabaseFor(rows) {
   return {
@@ -363,5 +363,57 @@ describe('fetchStudioDashboardData', () => {
   it('refuses without a location', async () => {
     const res = await fetchStudioDashboardData({ from: vi.fn() }, null)
     expect(res).toEqual({ success: false, error: 'No location' })
+  })
+})
+
+// ROSTER-FIX.1 (D1) — the personal Today dashboard is published-only for
+// EVERYONE. A manager who also coaches sees their own drafts on the Schedule
+// calendar, never here, so the rule lives in the reader rather than being
+// plumbed from the two callers (web today page + mobile dashboard-api), which
+// pass no role.
+describe('fetchPersonalDashboardData — draft shifts (D1)', () => {
+  // Thenable builder mock: every filter returns `this`, awaiting yields the
+  // rows registered for that table (the repo's roster-read.test.js pattern).
+  function makePersonalDb(byTable) {
+    return {
+      from(table) {
+        const result = byTable[table] || { data: [], error: null }
+        const builder = {
+          select() { return this },
+          eq() { return this },
+          in() { return this },
+          gt() { return this },
+          gte() { return this },
+          lte() { return this },
+          order() { return this },
+          then(resolve) { return Promise.resolve(result).then(resolve) },
+        }
+        return builder
+      },
+    }
+  }
+
+  const block = (rosterStatus) => ({
+    block_date: '2026-06-10',
+    location_id: 'loc-1',
+    roster_id: rosterStatus ? 'r1' : null,
+    rosters: rosterStatus ? { status: rosterStatus } : null,
+    shift_templates: { name: 'AM', start_time: '09:00:00', end_time: '10:00:00' },
+    locations: { id: 'loc-1', name: 'Studio' },
+  })
+
+  it('returns published shifts only, dropping a draft-roster shift', async () => {
+    const db = makePersonalDb({
+      shift_assignments: {
+        data: [
+          { id: 'pub', profile_id: 'p1', start_time_override: null, end_time_override: null, status: 'scheduled', shift_blocks: block('published') },
+          { id: 'draft', profile_id: 'p1', start_time_override: null, end_time_override: null, status: 'scheduled', shift_blocks: block('draft') },
+        ],
+        error: null,
+      },
+    })
+    const res = await fetchPersonalDashboardData(db, 'p1')
+    expect(res.success).toBe(true)
+    expect(res.data.monthShifts.map((s) => s.id)).toEqual(['pub'])
   })
 })

@@ -83,7 +83,7 @@ export function hourlyRateFor(profile) {
 // the existing Promise.all destructuring unchanged. `id` is the assignment
 // id — used only as a display key here (the swap flow reads shift ids from
 // the schedule screen, not the dashboard).
-async function fetchDashboardShifts(supabase, { profileId, locationId, startDate, endDate, withProfiles = false }) {
+async function fetchDashboardShifts(supabase, { profileId, locationId, startDate, endDate, withProfiles = false, publishedOnly = false }) {
   const profileSelect = withProfiles
     ? ', profiles:profile_id ( annual_salary, hourly_rate, contracted_hours_per_week, employment_type )'
     : ''
@@ -114,7 +114,8 @@ async function fetchDashboardShifts(supabase, { profileId, locationId, startDate
       profiles: r.profiles,
     }
   })
-  return { data: rows, error: null }
+  // ROSTER-FIX.1 (D1) — callers that serve a coach ask for published rows only.
+  return { data: publishedOnly ? rows.filter((r) => r.published) : rows, error: null }
 }
 
 // ============================================================
@@ -152,11 +153,15 @@ export async function fetchPersonalDashboardData(supabase, profileId, locationId
       // row so users can tell which gym a shift belongs to.
       // RETIRE-SHIFTS-MIRROR.2 — reads shift_assignments+shift_blocks now;
       // shape (incl. derived `published`) is unchanged. Re-sorted below.
-      fetchDashboardShifts(supabase, { profileId, startDate: thisWeekStartIso, endDate: nextWeekEndIso }),
+      // D1 (ROSTER-FIX.1) — coaches see published shifts only. Personal =
+      // published for everyone; a manager's own drafts live on the calendar.
+      fetchDashboardShifts(supabase, { profileId, startDate: thisWeekStartIso, endDate: nextWeekEndIso, publishedOnly: true }),
 
       // Month shifts for the calendar/agenda view (personal data is small —
       // a second range call is fine; avoids coupling the 14-day window logic).
-      fetchDashboardShifts(supabase, { profileId, startDate: monthStartIso, endDate: monthEndIso }),
+      // D1 (ROSTER-FIX.1) — coaches see published shifts only. Personal =
+      // published for everyone; a manager's own drafts live on the calendar.
+      fetchDashboardShifts(supabase, { profileId, startDate: monthStartIso, endDate: monthEndIso, publishedOnly: true }),
 
       // Swaps targeted at this coach that still need their accept/decline.
       // CT-P3: the old embed referenced the dropped public.shifts table AND
