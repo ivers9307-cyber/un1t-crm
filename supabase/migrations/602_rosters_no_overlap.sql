@@ -10,7 +10,7 @@
 -- (reports, findPublishedRosterFor, the approvals queue) stops having one
 -- answer.
 --
--- ⚠️ NOT APPLIED. Two things must be settled first:
+-- ⚠️ NOT APPLIED. Three things must be settled first:
 --
 -- 1. PRE-APPLY DATA CHECK — run read-only. It must return ZERO rows; every
 --    row it returns is a pair of published rosters that already overlap and
@@ -39,6 +39,22 @@
 --    existing row's period, or delete the now-empty contained rows — both
 --    lose or rewrite audit rows, so it is Richard's call). Until then the
 --    app-level 409 is the only guard, and it is the narrower one on purpose.
+--
+-- 3. 🔴 SO DOES THE PLAIN RE-PUBLISH, WHICH IS THE COMMONER FLOW OF THE TWO.
+--    Publishing does not UPDATE a roster row, it INSERTs one every time
+--    (src/app/api/schedule/rosters/route.js), and the app guard deliberately
+--    allows an EXACT re-publish of a period already published — that is the
+--    documented way to push changed shifts and re-notify the coaches whose
+--    shifts moved. So re-publishing the same week leaves a SECOND published
+--    row over the identical range, which this constraint rejects at INSERT
+--    time. Applying it as written would not merely block the week→month
+--    widening: it would break "publish the week again after editing it", the
+--    primary re-notify path, and the operator would meet it as a raw
+--    23P01 exclusion violation. The same decision therefore has to cover
+--    both shapes — what a re-publish DOES to the row it supersedes (extend,
+--    supersede-and-mark, or delete once empty) — before any of this can be
+--    applied. The pre-apply check in 1 will already be returning these pairs
+--    on prod today for exactly this reason.
 
 CREATE EXTENSION IF NOT EXISTS btree_gist;
 
