@@ -125,7 +125,12 @@ export function adjustShiftAssignment(assignmentId, { startTime, endTime, reason
 // --- Manager "Manage" mode (MOBILE-SCHED-EDIT) ---------------------------
 
 // All shift blocks for the location/week, incl. empty ones, with capacity +
-// assigned coaches (names via the service-role route). MANAGER_ROLES-gated.
+// assigned coaches (names via the service-role route).
+// ROSTER-FIX.2 — this comment used to claim the route was MANAGER_ROLES-gated;
+// it never was, and it is not now. The route is open to any authenticated user
+// at the location, but a non-manager gets PUBLISHED blocks only (D1) in a slim
+// shape with no capacity, no notes and no cancelled assignments. Manage mode
+// is a manager surface, so this caller still sees the full shape.
 export function getScheduleBlocks({ locationId, startDate, endDate }) {
   const qs = new URLSearchParams()
   if (locationId) qs.set('location_id', locationId)
