@@ -2,17 +2,33 @@
 //
 // TZ is pinned per FILE: process.env.TZ is set before the module under test is
 // loaded (hence the dynamic import — a static one is hoisted above this line),
-// and vitest isolates each test file in its own worker, so this does not leak
-// into dates.tz-dublin.test.js or anything else.
+// and each test file gets its own module registry, so dates.js is evaluated
+// fresh under this pin rather than reused from dates.tz-dublin.test.js.
+//
+// ROSTER-FIX.7h — process.env is per PROCESS, though, and vitest reuses a
+// worker across files. The previous value is captured before the pin and put
+// back in afterAll so the pin cannot outlive this file.
 
+const PREV_TZ = process.env.TZ
 process.env.TZ = 'America/New_York'
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest'
 
 const { dublinTodayIso, isoDate } = await import('./dates')
 
 beforeEach(() => { vi.useFakeTimers() })
 afterEach(() => { vi.useRealTimers() })
+
+afterAll(() => {
+  // ROSTER-FIX.7h — put the worker's TZ back. vitest gives each test FILE its
+  // own module registry, but a worker process is reused across files, so the
+  // pin above outlives this file and hands whatever runs next in the same
+  // worker a timezone it never asked for. Restored to what was there, and
+  // deleted outright if the variable was unset (setting it to 'undefined'
+  // would be a pin to a garbage zone, not an absence).
+  if (PREV_TZ === undefined) delete process.env.TZ
+  else process.env.TZ = PREV_TZ
+})
 
 describe('dublinTodayIso under TZ=America/New_York', () => {
   it('confirms the harness really pinned the device timezone', () => {

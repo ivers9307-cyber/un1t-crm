@@ -487,8 +487,14 @@ export default function Schedule() {
           style: 'destructive',
           onPress: async () => {
             const res = await cancelTimeOffRequest(row.id, activeLocation?.id)
-            if (res.success) fetchWeek()
-            else Alert.alert('Couldn’t cancel', res.error || 'Unknown error')
+            if (!res.success) Alert.alert('Couldn’t cancel', res.error || 'Unknown error')
+            // ROSTER-FIX.7h — refetch EITHER WAY, not only on success. The
+            // common failure here is "no longer pending": a manager approved or
+            // rejected the request while the card sat on screen, so the row the
+            // coach just tried to withdraw is stale and the alert alone leaves
+            // it there, inviting the same tap again. The refetch replaces it
+            // with the decision that actually happened.
+            fetchWeek()
           },
         },
       ]

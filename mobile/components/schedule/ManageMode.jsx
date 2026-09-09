@@ -36,8 +36,19 @@ export default function ManageMode({ activeLocation, weekStart, weekEnd, selecte
     setBlocks(b.success ? b.data || [] : [])
   }, [locationId, weekStart, weekEnd])
 
-  useEffect(() => { setLoading(true); load().finally(() => setLoading(false)) }, [load, refreshKey])
-  useFocusEffect(useCallback(() => { load() }, [load]))
+  // ROSTER-FIX.7h — ONE fetch, not two. A plain useEffect on [load] and a
+  // useFocusEffect on [load] both fire while the screen is focused, so every
+  // mount, every week page and every location switch cost two identical
+  // getScheduleBlocks calls, racing each other into the same setState.
+  // useFocusEffect already runs on mount when the tab is focused (and again on
+  // every refocus), so it is the one that stays.
+  useFocusEffect(useCallback(() => {
+    // refreshKey is a bump from the screen after an adjust saves; nothing reads
+    // its value, being in this dependency list IS its job.
+    void refreshKey
+    setLoading(true)
+    load().finally(() => setLoading(false))
+  }, [load, refreshKey]))
 
   const dayBlocks = blocks
     .filter((b) => b.block_date === selectedIso)
@@ -60,7 +71,11 @@ export default function ManageMode({ activeLocation, weekStart, weekEnd, selecte
     if (!res.success) Alert.alert('Could not load staff', res.error || 'Unknown error')
   }, [locationId])
 
-  useEffect(() => { setStaff(null) }, [locationId])
+  // ROSTER-FIX.7h — close the picker with the pool. Dropping the staff list on
+  // a location switch while the sheet stayed open left it mid-flight over the
+  // new studio: an empty list, then a reload of coaches for a block that
+  // belongs to the studio the manager just left.
+  useEffect(() => { setStaff(null); setPickerBlock(null) }, [locationId])
 
   // Refetch only when the pool was already loaded — a manager who never opened
   // the picker should not pay for a staff call on every assign/remove.

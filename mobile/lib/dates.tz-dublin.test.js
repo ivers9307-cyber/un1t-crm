@@ -4,16 +4,28 @@
 // works when the device happens to agree is not a fix.
 //
 // TZ is pinned per FILE — see the header of dates.tz.test.js for why the
-// import is dynamic.
+// import is dynamic and why the previous value is restored afterwards.
 
+const PREV_TZ = process.env.TZ
 process.env.TZ = 'Europe/Dublin'
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest'
 
 const { dublinTodayIso, isoDate } = await import('./dates')
 
 beforeEach(() => { vi.useFakeTimers() })
 afterEach(() => { vi.useRealTimers() })
+
+afterAll(() => {
+  // ROSTER-FIX.7h — put the worker's TZ back. vitest gives each test FILE its
+  // own module registry, but a worker process is reused across files, so the
+  // pin above outlives this file and hands whatever runs next in the same
+  // worker a timezone it never asked for. Restored to what was there, and
+  // deleted outright if the variable was unset (setting it to 'undefined'
+  // would be a pin to a garbage zone, not an absence).
+  if (PREV_TZ === undefined) delete process.env.TZ
+  else process.env.TZ = PREV_TZ
+})
 
 describe('dublinTodayIso under TZ=Europe/Dublin', () => {
   it('confirms the harness really pinned the device timezone', () => {
