@@ -52,6 +52,20 @@ const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 const TOAST_TTL_MS = 6000
 const canManage = (role) => MANAGER_ROLES.includes(role)
 
+// ROSTER-FIX.6b — the week-view block card is a <div onClick>, and it has to
+// stay a div: it contains its own list of coaches and a capacity chip, and
+// nesting that inside a <button> is invalid markup. So it takes the ARIA
+// button contract by hand. Space must be preventDefault'ed or the page
+// scrolls under the operator as well as activating the card.
+function activateOnKey(handler) {
+  return (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return
+    if (e.target !== e.currentTarget) return
+    e.preventDefault()
+    handler()
+  }
+}
+
 function getMonday(date) {
   const d = new Date(date)
   const day = d.getDay()
@@ -810,12 +824,14 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
 
           <div className="flex bg-un1t-surface border border-un1t-border rounded-lg overflow-hidden text-xs">
             <button
+              type="button"
               onClick={() => setViewMode('my')}
               className={`flex items-center gap-1.5 px-3 py-2 transition-colors ${viewMode === 'my' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'}`}
             >
               <User size={14} /> My Shifts
             </button>
             <button
+              type="button"
               onClick={() => setViewMode('all')}
               className={`flex items-center gap-1.5 px-3 py-2 transition-colors ${viewMode === 'all' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'}`}
             >
@@ -825,6 +841,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
 
           <div className="flex bg-un1t-surface border border-un1t-border rounded-lg overflow-hidden text-xs">
             <button
+              type="button"
               onClick={() => {
                 // ROSTER-FIX.6a — see weekStartForMonth: getMonday(monthStart)
                 // used to land on the previous month whenever the 1st fell on
@@ -837,6 +854,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
               <CalendarDays size={14} /> Week
             </button>
             <button
+              type="button"
               onClick={() => {
                 // Midweek decides which month a straddling week belongs to.
                 if (viewType === 'week') setMonthStart(monthStartForWeek(weekStart))
@@ -856,6 +874,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                   bottom of the page takes over until the operator
                   hits Cancel or Assign. */}
               <button
+                type="button"
                 onClick={() => {
                   if (selectMode) exitSelectMode()
                   else setSelectMode(true)
@@ -876,6 +895,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                   discovered it. handleCopyMonth derives the target
                   month from the effective view state. */}
               <button
+                type="button"
                 onClick={handleCopyWeek}
                 disabled={copying}
                 className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30 transition-colors disabled:opacity-50"
@@ -884,6 +904,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                 <Copy size={14} /> {copying ? 'Copying...' : 'Copy Last Week'}
               </button>
               <button
+                type="button"
                 onClick={handleCopyMonth}
                 disabled={copying}
                 className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30 transition-colors disabled:opacity-50"
@@ -908,6 +929,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
               </Link>
               {viewType === 'week' && (
                 <button
+                  type="button"
                   onClick={handlePublishClick}
                   disabled={publishing}
                   className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white transition-colors disabled:opacity-50"
@@ -923,17 +945,20 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
       {/* Range Navigation */}
       <div className="flex items-center justify-between mb-4">
         <button
+          type="button"
           onClick={() => {
             if (viewType === 'month') setMonthStart(addMonths(monthStart, -1))
             else setWeekStart(addDays(weekStart, -7))
           }}
+          aria-label={viewType === 'month' ? 'Previous month' : 'Previous week'}
           className="p-2 rounded-lg hover:bg-un1t-border/50 text-un1t-subtle hover:text-un1t-text transition-colors"
         >
-          <ChevronLeft size={20} />
+          <ChevronLeft size={20} aria-hidden="true" />
         </button>
         <div className="text-center">
           <span className="font-semibold">{viewType === 'month' ? monthLabel : weekLabel}</span>
           <button
+            type="button"
             onClick={() => {
               const now = new Date()
               if (viewType === 'month') setMonthStart(getMonthStart(now))
@@ -945,13 +970,15 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
           </button>
         </div>
         <button
+          type="button"
           onClick={() => {
             if (viewType === 'month') setMonthStart(addMonths(monthStart, 1))
             else setWeekStart(addDays(weekStart, 7))
           }}
+          aria-label={viewType === 'month' ? 'Next month' : 'Next week'}
           className="p-2 rounded-lg hover:bg-un1t-border/50 text-un1t-subtle hover:text-un1t-text transition-colors"
         >
-          <ChevronRight size={20} />
+          <ChevronRight size={20} aria-hidden="true" />
         </button>
       </div>
 
@@ -1227,6 +1254,9 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                       return (
                         <div
                           key={block.id}
+                          role="button"
+                          tabIndex={0}
+                          aria-pressed={selectMode ? isSelected : undefined}
                           onClick={() => {
                             // BULK-ASSIGN.1 — in select mode, clicks
                             // toggle selection instead of opening
@@ -1235,7 +1265,11 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                             if (selectMode) toggleBlockSelection(block.id)
                             else setBlockDetail(block)
                           }}
-                          className={`rounded-md p-2 text-xs relative group cursor-pointer hover:ring-1 hover:ring-un1t-subtle/40 ${myAssignment ? 'ring-1 ring-blue-400/50' : ''} ${showUnstaffed ? 'border border-red-500/50' : ''} ${isSelected ? 'ring-2 ring-amber-400 ring-offset-1 ring-offset-un1t-bg' : ''}`}
+                          onKeyDown={activateOnKey(() => {
+                            if (selectMode) toggleBlockSelection(block.id)
+                            else setBlockDetail(block)
+                          })}
+                          className={`rounded-md p-2 text-xs relative group cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-un1t-accent hover:ring-1 hover:ring-un1t-subtle/40 ${myAssignment ? 'ring-1 ring-blue-400/50' : ''} ${showUnstaffed ? 'border border-red-500/50' : ''} ${isSelected ? 'ring-2 ring-amber-400 ring-offset-1 ring-offset-un1t-bg' : ''}`}
                           style={{ backgroundColor: showUnstaffed ? '#7F1D1D20' : blockColor + '20', borderLeft: `3px solid ${showUnstaffed ? '#EF4444' : blockColor}` }}
                           title={selectMode ? 'Click to select / deselect' : 'Click to manage this shift'}
                         >
@@ -1315,6 +1349,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                     {/* Add ad-hoc block button (manager only) */}
                     {isManager && (
                       <button
+                        type="button"
                         onClick={() => setCreateTarget({ date: dateStr })}
                         className="w-full py-2 rounded-md border border-dashed border-un1t-border text-un1t-muted hover:text-un1t-text hover:border-un1t-text/30 text-xs transition-colors flex items-center justify-center gap-1"
                       >
@@ -1520,8 +1555,8 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
         }`}>
           <div className="flex items-start justify-between gap-3">
             <span>{toast.message}</span>
-            <button type="button" onClick={() => setToast(null)} className="text-current opacity-70 hover:opacity-100">
-              <X size={14} />
+            <button type="button" onClick={() => setToast(null)} aria-label="Dismiss this message" className="text-current opacity-70 hover:opacity-100">
+              <X size={14} aria-hidden="true" />
             </button>
           </div>
         </div>
@@ -2031,6 +2066,7 @@ function BlockDetailModal({
 function AssignmentRow({ assignment, block, isMe, canEdit, busy, onUnassign, onSave, onSwapRequest }) {
   const blockStart = (block.start_time || '').slice(0, 5)
   const blockEnd = (block.end_time || '').slice(0, 5)
+  const coachName = assignment.profiles?.full_name || 'this coach'
   const overrideStart = (assignment.start_time_override || '').slice(0, 5)
   const overrideEnd = (assignment.end_time_override || '').slice(0, 5)
   const hasOverride = !!(assignment.start_time_override || assignment.end_time_override)
@@ -2107,20 +2143,24 @@ function AssignmentRow({ assignment, block, isMe, canEdit, busy, onUnassign, onS
         <div className="flex items-center gap-1.5 shrink-0">
           {onSwapRequest && !editing && (
             <button
+              type="button"
               onClick={onSwapRequest}
               className="text-[11px] text-un1t-subtle hover:text-un1t-text inline-flex items-center gap-1 px-2 py-1 rounded hover:bg-un1t-border/40"
+              aria-label={`Request a swap for ${coachName}`}
               title="Request swap"
             >
-              <ArrowLeftRight size={11} />
+              <ArrowLeftRight size={11} aria-hidden="true" />
             </button>
           )}
           {canEdit && !editing && (
             <button
+              type="button"
               onClick={() => setEditing(true)}
               className="text-[11px] font-semibold text-white inline-flex items-center gap-1 px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-700 border border-amber-700"
+              aria-label={`${hasOverride ? 'Edit adjusted times' : 'Adjust actual times'} for ${coachName}`}
               title={hasOverride ? 'Edit adjusted times' : 'Adjust this coach’s actual times'}
             >
-              <Pencil size={11} />
+              <Pencil size={11} aria-hidden="true" />
               {hasOverride ? 'Edit' : 'Adjust'}
             </button>
           )}
@@ -2130,9 +2170,10 @@ function AssignmentRow({ assignment, block, isMe, canEdit, busy, onUnassign, onS
               onClick={onUnassign}
               disabled={busy}
               className="text-[11px] text-un1t-subtle hover:text-red-700 disabled:opacity-50 inline-flex items-center gap-1 px-2 py-1 rounded hover:bg-red-500/10"
+              aria-label={`Remove ${coachName} from this shift`}
               title="Remove coach"
             >
-              <X size={11} />
+              <X size={11} aria-hidden="true" />
             </button>
           )}
         </div>
@@ -2179,6 +2220,7 @@ function AssignmentRow({ assignment, block, isMe, canEdit, busy, onUnassign, onS
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <button
+                type="button"
                 onClick={handleSave}
                 disabled={saving}
                 className="text-xs bg-amber-500/20 text-amber-200 border border-amber-500/40 hover:bg-amber-500/30 px-3 py-1.5 rounded-md font-medium inline-flex items-center gap-1.5 disabled:opacity-50"
@@ -2186,6 +2228,7 @@ function AssignmentRow({ assignment, block, isMe, canEdit, busy, onUnassign, onS
                 <Check size={11} /> {saving ? 'Saving…' : 'Save'}
               </button>
               <button
+                type="button"
                 onClick={() => { setEditing(false); setError(null); setStart(overrideStart || blockStart); setEnd(overrideEnd || blockEnd); setReason(assignment.partial_reason || '') }}
                 disabled={saving}
                 className="text-xs text-un1t-subtle hover:text-un1t-text px-2 py-1.5"
@@ -2195,6 +2238,7 @@ function AssignmentRow({ assignment, block, isMe, canEdit, busy, onUnassign, onS
             </div>
             {hasOverride && (
               <button
+                type="button"
                 onClick={handleClear}
                 disabled={saving}
                 className="text-[11px] text-un1t-muted hover:text-red-300"

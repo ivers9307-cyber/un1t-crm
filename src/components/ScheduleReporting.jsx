@@ -157,6 +157,7 @@ export default function ScheduleReporting({ user }) {
         ].map(t => (
           <button
             key={t.key}
+            type="button"
             onClick={() => setView(t.key)}
             className={`flex items-center gap-1.5 px-3 py-2 rounded-lg transition-colors ${
               view === t.key ? 'bg-un1t-text text-un1t-bg' : 'bg-un1t-surface border border-un1t-border text-un1t-subtle hover:text-un1t-text'
@@ -177,6 +178,7 @@ export default function ScheduleReporting({ user }) {
               return (
                 <button
                   key={rt.key}
+                  type="button"
                   onClick={() => { setSelectedReport(rt.key); setReportResult(null) }}
                   className={`flex flex-col items-center gap-2 p-4 rounded-lg border text-xs transition-colors ${
                     selectedReport === rt.key
@@ -218,6 +220,7 @@ export default function ScheduleReporting({ user }) {
                   />
                 </div>
                 <button
+                  type="button"
                   onClick={generateReport}
                   disabled={generating}
                   className="flex items-center gap-1.5 px-4 py-2 bg-un1t-text text-un1t-bg text-sm font-medium rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
@@ -225,6 +228,7 @@ export default function ScheduleReporting({ user }) {
                   <Play size={14} /> {generating ? 'Generating...' : 'Generate'}
                 </button>
                 <button
+                  type="button"
                   onClick={() => setShowScheduleModal(selectedReport)}
                   className="flex items-center gap-1.5 px-4 py-2 border border-un1t-border text-sm text-un1t-subtle hover:text-un1t-text rounded-md transition-colors"
                 >
@@ -392,6 +396,7 @@ export default function ScheduleReporting({ user }) {
                 return (
                   <button
                     key={r.id}
+                    type="button"
                     onClick={() => viewHistoricReport(r)}
                     className="w-full bg-un1t-surface border border-un1t-border rounded-lg p-4 flex items-center gap-4 text-left hover:border-white/20 transition-colors"
                   >

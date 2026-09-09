@@ -146,6 +146,7 @@ export default function ShiftTemplateManager({ user }) {
           <p className="text-sm text-un1t-subtle mt-1">{user.activeLocation?.name} — Define your demand windows (when the studio needs coaches)</p>
         </div>
         <button
+          type="button"
           onClick={() => setShowForm('new')}
           className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium px-4 py-2.5 rounded-lg transition-colors"
         >
@@ -185,6 +186,7 @@ export default function ShiftTemplateManager({ user }) {
           <h3 className="text-lg font-semibold mb-2">No shift templates yet</h3>
           <p className="text-sm text-un1t-subtle mb-4">Create your first shift to start building rosters</p>
           <button
+            type="button"
             onClick={() => setShowForm('new')}
             className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium px-4 py-2.5 rounded-lg transition-colors"
           >
@@ -217,19 +219,23 @@ export default function ShiftTemplateManager({ user }) {
                 </div>
                 <div className="flex items-center gap-2">
                   <button
+                    type="button"
                     onClick={() => setShowForm(t)}
                     className="p-2 rounded hover:bg-un1t-border/50 text-un1t-subtle hover:text-un1t-text transition-colors"
+                    aria-label={`Edit the ${t.name} template`}
                     title="Edit"
                   >
-                    <Pencil size={16} />
+                    <Pencil size={16} aria-hidden="true" />
                   </button>
                   <button
+                    type="button"
                     onClick={() => handleDeactivate(t.id)}
                     className="p-2 rounded hover:bg-red-500/20 text-un1t-subtle hover:text-red-700 transition-colors"
                     disabled={busyId === t.id}
+                    aria-label={`Deactivate the ${t.name} template`}
                     title="Deactivate"
                   >
-                    <Trash2 size={16} />
+                    <Trash2 size={16} aria-hidden="true" />
                   </button>
                 </div>
               </div>
@@ -247,6 +253,7 @@ export default function ShiftTemplateManager({ user }) {
                   </div>
                   <button
                     type="button"
+                    aria-label={`Reactivate the ${t.name} template`}
                     onClick={() => setTemplateActive(t.id, true)}
                     disabled={busyId === t.id}
                     className="text-xs text-blue-400 hover:text-blue-300 disabled:opacity-50"
