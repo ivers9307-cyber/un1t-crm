@@ -72,11 +72,32 @@ function block({ id, date, start, end, coaches = [], roster = null }) {
     end_time: end,
     roster_id: roster?.id || null,
     rosters: roster,
-    shift_assignments: coaches.map(c => ({ profile_id: c })),
+    // A coach entry is either a profile id (live) or a full { profile_id, status } row.
+    shift_assignments: coaches.map(c => (typeof c === 'string' ? { profile_id: c, status: 'scheduled' } : c)),
   }
 }
 
 describe('projectPublishImpact', () => {
+  // ROSTER-FIX.1 — a cancelled assignment costs nothing, so it must never
+  // push a publish over the contractor budget.
+  it('excludes cancelled assignments from the projected spend', async () => {
+    const db = mockDb({
+      location: { id: 'loc1', monthly_contractor_budget_eur: 500 },
+      contractors: [dan, eve],
+      blocks: [block({
+        id: 'b1', date: '2026-05-04', start: '09:00', end: '11:00',
+        coaches: ['dan', { profile_id: 'eve', status: 'cancelled' }],
+      })],
+    })
+    const impact = await projectPublishImpact(db, {
+      locationId: 'loc1',
+      periodStart: '2026-05-04',
+      periodEnd: '2026-05-10',
+    })
+    // dan 2h × 35 = 70; eve's cancelled 2h × 40 must not be added.
+    expect(impact.periodProjectedEur).toBe(70)
+  })
+
   it('returns null budget + remaining when location has no budget set', async () => {
     const db = mockDb({
       location: { id: 'loc1', monthly_contractor_budget_eur: null },

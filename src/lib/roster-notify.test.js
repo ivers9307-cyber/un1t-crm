@@ -36,6 +36,20 @@ describe('publishNotifyRowsForBlocks', () => {
     ])
   })
 
+  // ROSTER-FIX.1 — a coach whose assignment was cancelled is not on the
+  // roster any more, so publishing it must not notify them.
+  it('publishNotifyRowsForBlocks skips cancelled assignments', async () => {
+    const db = makeDb({
+      data: [
+        { id: 'a1', profile_id: 'p1', status: 'scheduled', shift_blocks: { location_id: 'l', block_date: '2026-06-01' } },
+        { id: 'a2', profile_id: 'p2', status: 'cancelled', shift_blocks: { location_id: 'l', block_date: '2026-06-01' } },
+      ],
+      error: null,
+    })
+    const rows = await publishNotifyRowsForBlocks(db, ['b1'])
+    expect(rows.map((r) => r.profile_id)).toEqual(['p1'])
+  })
+
   it('skips assignments with no joined block and swallows query errors', async () => {
     const partial = makeDb({ data: [{ id: 'a1', profile_id: 'p1', shift_blocks: null }], error: null })
     expect(await publishNotifyRowsForBlocks(partial, ['b1'])).toEqual([])

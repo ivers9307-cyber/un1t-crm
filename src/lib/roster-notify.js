@@ -16,6 +16,7 @@
 
 import { sendPush } from './push'
 import { logWarn } from './log'
+import { isLiveAssignment } from './roster'
 
 /**
  * RETIRE-SHIFTS-MIRROR.6 — build the notify-list for a publish from the
@@ -39,14 +40,16 @@ export async function publishNotifyRowsForBlocks(db, blockIds) {
   if (!blockIds || blockIds.length === 0) return []
   const { data, error } = await db
     .from('shift_assignments')
-    .select('id, profile_id, shift_blocks!block_id(location_id, block_date)')
+    .select('id, profile_id, status, shift_blocks!block_id(location_id, block_date)')
     .in('block_id', blockIds)
   if (error) {
     logWarn('roster-notify', 'publishNotifyRowsForBlocks query failed', { err: error })
     return []
   }
   return (data || [])
-    .filter((a) => a.shift_blocks)
+    // ROSTER-FIX.1 — a coach whose assignment was cancelled is off the
+    // roster; publishing it must not tell them they are working.
+    .filter((a) => a.shift_blocks && isLiveAssignment(a))
     .map((a) => ({
       id: a.id,
       profile_id: a.profile_id,
