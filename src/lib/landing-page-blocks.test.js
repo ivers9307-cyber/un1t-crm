@@ -379,8 +379,24 @@ describe('offerOf (HATCH-OFFER.1)', () => {
     expect(offerOf(on({ ticks: undefined })).ticks).toEqual([])
     expect(offerOf(on({ ticks: 'a,b' })).ticks).toEqual([])
   })
-  it('drops blank and non-string ticks', () => {
-    expect(offerOf(on({ ticks: ['a', '  ', 7, 'b'] })).ticks).toEqual(['a', 'b'])
+  it('normalises blank and non-string ticks to empty WITHOUT compacting', () => {
+    // Position must survive: OfferPanel emits setByPath(['offer','ticks', i])
+    // against the RAW block, so compacting here would aim inline edits at
+    // the wrong slot.
+    expect(offerOf(on({ ticks: ['a', '  ', 7, 'b'] })).ticks).toEqual(['a', '', '', 'b'])
+  })
+  it('keeps a blank leading tick in place so later indices stay true', () => {
+    expect(offerOf(on({ ticks: ['', 'alpha', 'beta'] })).ticks).toEqual(['', 'alpha', 'beta'])
+  })
+  it('falls back was_price_note rather than leaving the strike unexplained', () => {
+    // The <s> is aria-hidden, so this note is the only thing telling a
+    // screen reader which direction the price moves. Blank it and the
+    // reading becomes a bare "219, 189" — the exact was/now confusion
+    // the note exists to prevent.
+    expect(offerOf(on({ was_price_note: '   ' })).was_price_note).toBe('before the offer ends')
+    expect(offerOf(on({ was_price_note: 42 })).was_price_note).toBe('before the offer ends')
+    expect(offerOf(on({ was_price_note: 'a month from 19 September' })).was_price_note)
+      .toBe('a month from 19 September')
   })
   it('trims cta_url and falls back on a blank cta_label', () => {
     const o = offerOf(on({ cta_url: '  https://x.test/#join  ', cta_label: '   ' }))
@@ -398,10 +414,20 @@ describe('lead_form offer defaults (HATCH-OFFER.1)', () => {
     expect(b.offer.enabled).toBe(false)
     expect(offerOf(b)).toBeNull()
   })
-  it('says foundation, never founding, in the offer defaults', () => {
-    const json = JSON.stringify(newBlockOfType('lead_form').offer).toLowerCase()
-    expect(json).toContain('foundation')
-    expect(json).not.toContain('founding')
+  it('says foundation, never founding — across the WHOLE lead_form block', () => {
+    // Scanning only .offer missed that the block's own defaults still
+    // read "Join the founding members" and "founding-member offers"
+    // long after the rebrand. Richard corrected this wording
+    // explicitly; scan the whole block so it cannot creep back.
+    const block = newBlockOfType('lead_form')
+    // `tag` and `lead_source` are machine identifiers wired into live
+    // sequences and audiences — `hatch-founding-member` stays exactly
+    // as it is and is deliberately out of scope here. Everything a
+    // visitor can READ is in scope.
+    const { tag, lead_source: _leadSource, ...visible } = block
+    expect(tag).toBe('hatch-founding-member')
+    expect(JSON.stringify(block.offer).toLowerCase()).toContain('foundation')
+    expect(JSON.stringify(visible).toLowerCase()).not.toContain('founding')
   })
   it('defaults the claim link to the booking platform signup anchor', () => {
     expect(newBlockOfType('lead_form').offer.cta_url).toBe('https://hatchstreet.un1t.online/#join')
