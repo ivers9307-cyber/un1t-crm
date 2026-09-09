@@ -153,3 +153,50 @@ its own.
 605 covers nothing on the other ~50 tables 320 touches. If you are standing
 up a full environment, the `pg_policies` diff above against the live box is
 the check that matters.
+
+---
+
+### 3. `602_rosters_no_overlap.sql` — a backfill that must run before its own constraint
+
+**Not a replay hazard so much as a shape worth knowing about**, because 602 is
+the one migration in the directory that will deliberately **abort itself**.
+
+602 was written under ROSTER-FIX.4, never applied anywhere (production reached
+605 with 602 still a deliberate gap), and **rewritten in place on 2026-09-09**
+under ROSTER-SUPERSEDE.1. That rewrite is not a breach of forward-only:
+forward-only fences migrations that *have* been applied, because the directory
+is the record of the live box, and a file that has never touched a database is
+not part of that record. Once 602 has been applied, the usual rule resumes —
+change it in a new migration.
+
+Its shape, in order:
+
+1. `btree_gist`, then `superseded_by` / `superseded_at` /
+   `requested_period_start` / `requested_period_end` (all `IF NOT EXISTS`).
+2. The status CHECK widened to include `'superseded'`. Mig 072 wrote that check
+   **inline and unnamed**, so it is dropped **by definition** — any CHECK on
+   `rosters` whose definition mentions `status` — rather than by a guessed
+   auto-generated name. A wrong guess would leave the old constraint armed and
+   every supersede rejected. `rosters_period_check` does not mention `status`
+   and survives.
+3. A three-step backfill: preserve `requested_period_*`, supersede the
+   published rosters owning zero blocks, shrink the rest to the days they own.
+4. 🔴 **A `DO $$ … RAISE EXCEPTION $$` guard** that counts overlapping
+   published pairs *after* the backfill and aborts the file if any remain. It
+   is there so the file refuses rather than half-applying: without it the
+   `ADD CONSTRAINT` in step 5 fails with a bare `23P01` naming two ids, after
+   the columns, the widened CHECK and the backfill have already landed.
+5. The exclusion constraint, `WHERE (status = 'published')`.
+6. `idx_rosters_superseded_by`.
+
+**If it aborts**, that is the guard firing and it means two rosters genuinely
+own the same day at one location. Run pre-apply check (d) in the file's own
+header to see the pairs, decide which roster wins, and re-run — steps 1-3 are
+all idempotent (`IF NOT EXISTS`, `COALESCE`-guarded, and predicated on the
+current status), so a re-run after the fix is safe.
+
+The file's header carries the read-only **pre-apply checks with their expected
+values on production** (58 zero-block rosters, 16 owners, 0 non-contiguous
+owners, 0 overlaps after the shrink). Re-verify them before applying: they are
+what makes the constraint applicable at all.
+

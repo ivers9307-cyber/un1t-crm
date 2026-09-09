@@ -103,3 +103,80 @@ The original plan (Conventions above) was to point every `shifts` reader at the 
 
 **Key unblock:** `shifts.published` / `published_at` have no equivalent on the new tables, but publishing is a roster concept — a shift's published state derives from `shift_blocks.roster_id → rosters.status === 'published'`. So **no new column and no architectural decision** are needed for any phase.
 
+
+## Roster ownership and supersede (ROSTER-SUPERSEDE.1, 2026-09-09)
+
+**Ownership is per BLOCK, not per period.** Publishing INSERTs a `rosters` row
+and then re-tags `shift_blocks.roster_id` for every block in the period. So
+`period_start`/`period_end` is *the range the operator requested*, not a claim
+on those days: a later publish over the same range takes the blocks and leaves
+the older row claiming dates it owns nothing on. Prod on 2026-09-09 had 74
+published rosters, **58 of which owned zero blocks** — every one of them the
+residue of a re-publish or a week-then-month widening.
+
+That residue is what made "which roster published this day" unanswerable, and
+it is why mig 602's exclusion constraint could not be applied. Richard's
+decision (2026-09-09): a publish **supersedes** the rosters it swallows.
+
+- `status` gains **`superseded`**. `superseded_at` records when the row stopped
+  owning blocks; `superseded_by` names the roster that took them, and is
+  **nullable on purpose** — a period whose successor was itself later emptied
+  has no identifiable heir, and "superseded, successor unknown" is truthful.
+- `requested_period_start` / `requested_period_end` keep the range the operator
+  actually clicked. `period_start`/`period_end` are shrunk to the days a roster
+  really owns (that is what the constraint judges); the audit answer to "what
+  did this person ask to publish?" must not be silently rewritten to satisfy a
+  constraint.
+- Nothing is deleted. A superseded roster is the audit trail of a real publish
+  event.
+
+**The ordering, which is the whole trick.** The exclusion constraint judges the
+INSERT (and the draft→published UPDATE), which necessarily happens *before* any
+block can carry the new roster's id. So superseding only after the re-tag
+cannot work on its own: an exact re-publish, the commonest flow there is, would
+meet a raw 23P01 first. Both publish paths therefore run two phases, in
+`src/lib/roster-publish.js`:
+
+1. `releasePublishedRostersFor()` — **before** the write. Stands down every
+   published roster the new period fully **contains**. That is exactly the set
+   `findConflictingPublishedRosters()` lets through, so afterwards nothing
+   published overlaps and the write satisfies the constraint. All-or-nothing,
+   and `restorePublishedRosters()` puts them back if the write then fails: a
+   roster superseded with no successor still owns its blocks, and every one of
+   them would read as UNPUBLISHED to its coach.
+2. `supersedeSwallowedRosters()` — **after** the re-tag. Stamps `superseded_by`,
+   then sweeps any other still-published overlapping roster: zero blocks left →
+   supersede, blocks left → shrink `period_*` to the min/max `block_date` it
+   owns (`requested_period_*` untouched). Best-effort: failures surface in the
+   route's existing partial-success `warning`, never roll back a publish, never
+   throw. It excludes the new roster explicitly — without that it would read
+   the new roster as owning nothing and supersede *itself*.
+
+**A DRAFT supersedes nothing.** It owns no blocks until approved, so standing a
+live roster down on its behalf would unpublish that period for a draft that may
+never be approved. `rosters/[id]/approve` does the release at approval time.
+
+**A STRADDLE still 409s.** Two independently sufficient reasons: mig 602 would
+reject it anyway (the un-swallowed half of the older roster keeps overlapping
+whatever we do to it), and resolving it would mean shrinking a roster the
+operator never asked to change. The 409 names the ranges so they can re-publish
+the right one.
+
+**Read paths.** `shift_blocks.roster_id → rosters.status === 'published'` stays
+the one derivation of "is this block published" (`src/lib/roster-read.js`,
+`shared/dashboard-data.js`). A superseded roster reads as unpublished, which is
+correct *and* unreachable — a roster is only superseded once it owns zero
+blocks, so no block can embed one. Both derivations are pinned by a test
+anyway, because the day it becomes reachable is the day a coach's phone
+silently empties. `findPublishedRosterFor` / `findPublishedRosterIdsByDate` /
+`publishedRostersCovering` already filter `status='published'`, so superseding
+correctly removes a roster from consideration for new blocks.
+`GET /api/schedule/rosters` excludes superseded from the default list and keeps
+it reachable with `?status=superseded`.
+
+**Still open:** a widening publish does not re-notify the coaches of the week it
+swallowed. Both publish paths only notify blocks that were `roster_id IS NULL`
+before tagging, and a swallowed week's blocks already carried the old roster's
+id. The change-log path covers the coaches whose shifts actually *changed*,
+which is the case that matters most; re-notifying the rest is a separate
+decision about how much noise a widening publish should make.
