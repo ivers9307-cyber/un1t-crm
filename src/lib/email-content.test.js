@@ -55,6 +55,30 @@ describe('htmlToPlainText', () => {
       .toBe(`Fish & chips <3 "deal" 'now'`)
   })
 
+  it('decodes a numeric character reference (the reported bug: &#38; printed literally)', () => {
+    expect(htmlToPlainText('<p>a &#38; b</p>')).toBe('a & b')
+  })
+
+  it('does not let a decoded zero-width character glue a word together in storage', () => {
+    // Regression pin for the Issue 1 defect: decodeCharRefs turns &#8204;
+    // into U+200C (ZERO WIDTH NON-JOINER) rather than deleting it, and
+    // htmlToPlainText must strip that invisible character back out before
+    // the result reaches text_body. Postgres's to_tsvector('english', …)
+    // treats U+200C as an ordinary letter and glues it into the surrounding
+    // word, so a sender's "cli&#8204;ck here" (a real preheader-hiding /
+    // spam-filter-evasion pattern) would store as "cli‌ck here" and
+    // become permanently unsearchable — the tsvector is GENERATED from the
+    // stored row, so this never self-heals.
+    expect(htmlToPlainText('<p>cli&#8204;ck here</p>')).toBe('click here')
+  })
+
+  it('decodes the named and numeric forms of the same character identically', () => {
+    // &shy; (SOFT HYPHEN) and &#173; are the same character two ways; both
+    // must vanish from the stored text the same way.
+    expect(htmlToPlainText('<p>soft&shy;hyphen</p>')).toBe('softhyphen')
+    expect(htmlToPlainText('<p>soft&#173;hyphen</p>')).toBe('softhyphen')
+  })
+
   it('renders list items with a dash', () => {
     const out = htmlToPlainText('<ul><li>One</li><li>Two</li></ul>')
     expect(out).toBe('- One\n- Two')
