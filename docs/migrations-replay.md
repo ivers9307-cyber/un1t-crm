@@ -174,11 +174,16 @@ Its shape, in order:
 1. `btree_gist`, then `superseded_by` / `superseded_at` /
    `requested_period_start` / `requested_period_end` (all `IF NOT EXISTS`).
 2. The status CHECK widened to include `'superseded'`. Mig 072 wrote that check
-   **inline and unnamed**, so it is dropped **by definition** — any CHECK on
-   `rosters` whose definition mentions `status` — rather than by a guessed
-   auto-generated name. A wrong guess would leave the old constraint armed and
-   every supersede rejected. `rosters_period_check` does not mention `status`
-   and survives.
+   **inline and unnamed**, so Postgres auto-named it — and prod was read on
+   2026-09-09 to find out what it picked rather than guessing: `public.rosters`
+   carries exactly two CHECK constraints, `rosters_status_check` and
+   `rosters_period_check`. So it is dropped **by name**,
+   `DROP CONSTRAINT IF EXISTS rosters_status_check`. An earlier draft dropped
+   by *definition* (any CHECK whose definition mentioned `status`) to survive a
+   name it did not know; with the name known that is strictly worse, because a
+   compound check merely mentioning `status` would be collateral-dropped and
+   the `ADD` re-adds only the status enum. `rosters_period_check` is untouched
+   on purpose — the shrink in step 3 keeps `period_start <= period_end`.
 3. A three-step backfill: preserve `requested_period_*`, supersede the
    published rosters owning zero blocks, shrink the rest to the days they own.
 4. 🔴 **A `DO $$ … RAISE EXCEPTION $$` guard** that counts overlapping

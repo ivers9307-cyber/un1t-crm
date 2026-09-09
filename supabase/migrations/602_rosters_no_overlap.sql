@@ -65,6 +65,27 @@
 --       ) x;
 --     Expected: 0.
 --
+-- (c2) Owners whose owned days fall OUTSIDE the period they claim. Step 3c
+--     shrinks period_* to min/max of the owned blocks, which is only ever a
+--     shrink if every owned day is already inside the period. If one is not,
+--     that UPDATE WIDENS the roster instead, which can manufacture an overlap
+--     out of two rows that did not overlap before and turn (d) into a lie:
+--
+--       WITH owned AS (
+--         SELECT b.roster_id, min(b.block_date) AS s, max(b.block_date) AS e
+--           FROM public.shift_blocks b
+--          WHERE b.roster_id IS NOT NULL
+--          GROUP BY b.roster_id
+--       )
+--       SELECT count(*)
+--         FROM public.rosters r
+--         JOIN owned o ON o.roster_id = r.id
+--        WHERE r.status = 'published'
+--          AND (o.s < r.period_start OR o.e > r.period_end);
+--     Expected: 0. If it is NOT 0, this file must not run: decide what a
+--     roster owning days outside its own period means before shrinking
+--     anything.
+--
 -- (d) 🔴 THE ONE THAT DECIDES WHETHER THIS FILE CAN APPLY. Overlapping pairs
 --     AFTER the shrink in step 3 — i.e. what the exclusion constraint will
 --     actually judge:
@@ -149,26 +170,24 @@ COMMENT ON COLUMN public.rosters.requested_period_end IS
 -- 2. Widen the status CHECK to include 'superseded'
 -- ============================================================
 -- Mig 072 wrote the check INLINE and unnamed (`check (status in ('draft',
--- 'published'))`), so Postgres auto-named it — `rosters_status_check` on a
--- normal box, but the name is an implementation detail and dropping the wrong
--- guess would leave the old constraint armed and every supersede rejected.
--- Drop by DEFINITION instead: any CHECK on this table whose definition
--- mentions `status`. `rosters_period_check` (period_end >= period_start)
--- does not, so it survives untouched.
-DO $$
-DECLARE c record;
-BEGIN
-  FOR c IN
-    SELECT conname
-      FROM pg_constraint
-     WHERE conrelid = 'public.rosters'::regclass
-       AND contype = 'c'
-       AND pg_get_constraintdef(oid) LIKE '%status%'
-  LOOP
-    RAISE NOTICE 'mig 602: dropping status CHECK %', c.conname;
-    EXECUTE format('ALTER TABLE public.rosters DROP CONSTRAINT %I', c.conname);
-  END LOOP;
-END $$;
+-- 'published'))`), so Postgres auto-named it — and VERIFIED AGAINST PRODUCTION
+-- 2026-09-09, it named it exactly what the convention says: `public.rosters`
+-- has precisely two CHECK constraints, `rosters_status_check`
+-- (status = ANY (ARRAY['draft','published'])) and `rosters_period_check`
+-- (period_end >= period_start). So drop it BY NAME.
+--
+-- An earlier draft of this file dropped by DEFINITION instead — every CHECK
+-- whose definition matched '%status%' — to survive a name it did not know.
+-- That is strictly more dangerous now the name IS known: a compound check that
+-- merely MENTIONS status would be collateral-dropped, and the ADD below
+-- re-adds only the status enum, so whatever else that check enforced would be
+-- silently gone.
+--
+-- `rosters_period_check` is deliberately left alone: the shrink in step 3c
+-- moves period_start/period_end to min/max of the owned blocks, which keeps
+-- start <= end, so it never had anything to fear from this file.
+ALTER TABLE public.rosters
+  DROP CONSTRAINT IF EXISTS rosters_status_check;
 
 ALTER TABLE public.rosters
   ADD CONSTRAINT rosters_status_check
