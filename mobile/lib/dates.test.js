@@ -6,7 +6,7 @@
 // runs under whatever TZ the machine happens to be on; the pair
 // dates.tz.test.js / dates.tz-dublin.test.js pin the two that matter.
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { parseIsoDate, isoDate, weekStart, dublinTodayIso } from './dates'
 
 describe('parseIsoDate', () => {
@@ -109,5 +109,37 @@ describe('dublinTodayIso', () => {
 
   it('defaults to now', () => {
     expect(dublinTodayIso()).toBe(dublinTodayIso(new Date()))
+  })
+
+  // ROSTER-FIX.7f — a Hermes build without full ICU throws on a timeZone'd
+  // Intl.DateTimeFormat. The formatter used to be built at MODULE scope, so
+  // that throw took out dates.js itself and every screen importing it; now it
+  // degrades to the device date. The module is re-imported under the spy
+  // because the real formatter is memoised on first success.
+  it('falls back to the device date when Intl.DateTimeFormat throws', async () => {
+    // A `function`, not an arrow: vitest warns on an arrow-bodied constructor
+    // mock, and that warning lands in the same console.warn spy we assert on.
+    const intlSpy = vi.spyOn(Intl, 'DateTimeFormat').mockImplementation(function () {
+      throw new Error('no icu')
+    })
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      vi.resetModules()
+      const fresh = await import('./dates')
+      const now = new Date(2026, 6, 5, 23, 30)
+      expect(fresh.dublinTodayIso(now)).toBe(fresh.isoDate(now))
+      expect(fresh.dublinTodayIso(now)).toBe('2026-07-05')
+      // Still no throw on a second call, and the warning is once per session.
+      expect(fresh.dublinTodayIso(now)).toBe('2026-07-05')
+      const ours = warnSpy.mock.calls.filter(c => String(c[0]).startsWith('dublinTodayIso:'))
+      expect(ours).toHaveLength(1)
+    } finally {
+      warnSpy.mockRestore()
+      intlSpy.mockRestore()
+    }
+  })
+
+  it('still works after the failing-Intl test restored the spy', () => {
+    expect(dublinTodayIso(new Date('2026-06-15T10:00:00Z'))).toBe('2026-06-15')
   })
 })

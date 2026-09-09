@@ -88,13 +88,13 @@ export default function ManageMode({ activeLocation, weekStart, weekEnd, selecte
           const r2 = await assignCoachToBlock(block.id, { profileId: coach.id, allowOverCapacity: true, locationId })
           setBusyId(null)
           if (!r2.success) Alert.alert('Could not assign', r2.error || 'Unknown error')
-          else { if (r2.warnings?.length) Alert.alert('Assigned — note', r2.warnings.join('\n')); load(); refreshStaffIfLoaded() }
+          else { if (r2.warnings?.length) Alert.alert('Assigned: note', r2.warnings.join('\n')); load(); refreshStaffIfLoaded() }
         } },
       ])
       return
     }
     if (!res.success) { Alert.alert('Could not assign', res.error || 'Unknown error'); return }
-    if (res.warnings?.length) Alert.alert('Assigned — note', res.warnings.join('\n'))
+    if (res.warnings?.length) Alert.alert('Assigned: note', res.warnings.join('\n'))
     load()
     refreshStaffIfLoaded()
   }

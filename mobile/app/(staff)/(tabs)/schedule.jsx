@@ -26,7 +26,7 @@ import {
 } from '../../../lib/dates'
 import {
   getMyShifts, getTeamShifts, getMyTimeOff, createSwapRequest, adjustShiftAssignment,
-  respondToTimeOff,
+  cancelTimeOffRequest,
 } from '../../../lib/schedule-api'
 import { applyWeekResult, TRANSPORT_ERROR } from '../../../lib/schedule-refresh'
 import { canMobile } from '../../../lib/permissions'
@@ -452,6 +452,9 @@ export default function Schedule() {
   // withdraw one: the only route to a mistaken request was asking a manager to
   // reject it. `PUT /api/schedule/time-off/[id]` has always accepted a
   // self-cancel while the row is pending; canCancelTimeOff mirrors that gate.
+  // ROSTER-FIX.7f — through cancelTimeOffRequest, not respondToTimeOff: the
+  // wire call is the same PUT, but "respond" reads as a manager's decision on
+  // someone else's request, and this is the coach withdrawing their own.
   function cancelLeaveRequest(row) {
     Alert.alert(
       'Cancel this request?',
@@ -462,7 +465,7 @@ export default function Schedule() {
           text: 'Cancel request',
           style: 'destructive',
           onPress: async () => {
-            const res = await respondToTimeOff(row.id, 'cancelled', null, activeLocation?.id)
+            const res = await cancelTimeOffRequest(row.id, activeLocation?.id)
             if (res.success) fetchWeek()
             else Alert.alert('Couldn’t cancel', res.error || 'Unknown error')
           },

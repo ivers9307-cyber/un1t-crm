@@ -121,7 +121,12 @@ describe('time off', () => {
     }])
   })
 
-  it('respondToTimeOff is also the coach-side self-cancel (ROSTER-FIX.7)', () => {
+  // ROSTER-FIX.7f — the coach-side self-cancel goes through
+  // cancelTimeOffRequest (above); respondToTimeOff is the MANAGER decision
+  // helper and keeps its own contract because approvals.jsx still calls it.
+  // Both hit the same PUT, so pin that a manager-issued 'cancelled' still
+  // carries the review_note field the approvals screen relies on.
+  it('respondToTimeOff can also carry a cancelled decision', () => {
     schedule.respondToTimeOff('t1', 'cancelled', null, LOC)
     expect(lastCall()[1].body).toEqual({ status: 'cancelled', review_note: null })
   })

@@ -81,15 +81,40 @@ export function hoursBetween(start, end) {
 //
 // formatToParts, not format(): en-IE renders dd/mm/yyyy, so the pieces are
 // reassembled by NAME rather than sliced out of a locale-shaped string.
-const DUBLIN_DAY_FMT = new Intl.DateTimeFormat('en-IE', {
-  timeZone: 'Europe/Dublin',
-  year: 'numeric',
-  month: '2-digit',
-  day: '2-digit',
-})
+//
+// ROSTER-FIX.7f — built LAZILY, not at module scope. A Hermes build without
+// full ICU throws on `new Intl.DateTimeFormat(…, { timeZone })`, and a throw at
+// module scope fails evaluation of dates.js itself, so every screen that
+// imports a date helper white-screens rather than just losing the Dublin
+// pin. Same shape as carMoney() in mobile/lib/cars-api.js: try the Intl path,
+// fall back to the device date. Memoised on first success so the formatter is
+// still built once, not once per render.
+let dublinDayFmt = null
+let dublinFmtWarned = false
+
+function getDublinDayFmt() {
+  if (dublinDayFmt) return dublinDayFmt
+  dublinDayFmt = new Intl.DateTimeFormat('en-IE', {
+    timeZone: 'Europe/Dublin',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  })
+  return dublinDayFmt
+}
 
 export function dublinTodayIso(now = new Date()) {
-  const parts = {}
-  for (const p of DUBLIN_DAY_FMT.formatToParts(now)) parts[p.type] = p.value
-  return `${parts.year}-${parts.month}-${parts.day}`
+  try {
+    const parts = {}
+    for (const p of getDublinDayFmt().formatToParts(now)) parts[p.type] = p.value
+    return `${parts.year}-${parts.month}-${parts.day}`
+  } catch (err) {
+    // Once per session: a phone on Dublin time (almost all of them) is
+    // unaffected, so this is a degradation to log, not an error to shout.
+    if (!dublinFmtWarned) {
+      dublinFmtWarned = true
+      console.warn('dublinTodayIso: Intl unavailable, falling back to the device date', err)
+    }
+    return isoDate(now)
+  }
 }

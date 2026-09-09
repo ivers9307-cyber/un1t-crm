@@ -7,9 +7,11 @@
 //
 //   success        take the new rows, clear the banner.
 //   transport      KEEP the last-good rows and show a non-destructive banner.
-//                  api() mints `transport: true` when it never got a server
-//                  answer at all (a dropped fetch, or a session refresh that
-//                  threw on a bad link) — the week already on screen is still
+//                  api() mints `transport: true` when it never got a usable
+//                  API answer (a dropped fetch, a failed session refresh, or a
+//                  non-JSON page — an HTML 5xx or 404 from the edge counts, so
+//                  this is not only "the request never left the phone"). The
+//                  week already on screen is still
 //                  the truth, so blanking it told a coach on a 5G handover
 //                  that they had no shifts. See mobile/lib/api.js.
 //   API failure    the server DID answer and said no. Empty the list and show
