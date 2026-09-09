@@ -6,7 +6,7 @@
 // in the phase 4 panel.
 
 import { describe, it, expect, vi } from 'vitest'
-import { fetchIncompletePayProfiles, fetchPendingRosterApprovalsCount, paginatedSumCents, fetchAdsSummary, fetchStudioDashboardData, fetchPersonalDashboardData } from './dashboard-data'
+import { fetchIncompletePayProfiles, fetchPendingRosterApprovalsCount, paginatedSumCents, fetchAdsSummary, fetchStudioDashboardData, fetchPersonalDashboardData, fetchUnstaffedBlocksThisWeek } from './dashboard-data'
 
 function mockSupabaseFor(rows) {
   return {
@@ -415,5 +415,57 @@ describe('fetchPersonalDashboardData — draft shifts (D1)', () => {
     const res = await fetchPersonalDashboardData(db, 'p1')
     expect(res.success).toBe(true)
     expect(res.data.monthShifts.map((s) => s.id)).toEqual(['pub'])
+  })
+})
+
+// ROSTER-FIX.1 (D2) — the unstaffed-blocks alert used to select
+// `shift_assignments(count)`, and a PostgREST aggregate embed cannot be
+// status-filtered, so a block whose only assignment was a cancelled tombstone
+// looked staffed. That is precisely the block that needs a coach.
+describe('fetchUnstaffedBlocksThisWeek — cancelled assignments', () => {
+  // Thenable builder mock: every filter returns `this`, awaiting yields the
+  // rows registered for that table (same pattern as the D1 tests above).
+  function makeBlocksDb(rows) {
+    return {
+      from() {
+        const builder = {
+          select() { return this },
+          eq() { return this },
+          in() { return this },
+          gt() { return this },
+          gte() { return this },
+          lte() { return this },
+          order() { return this },
+          then(resolve) { return Promise.resolve({ data: rows, error: null }).then(resolve) },
+        }
+        return builder
+      },
+    }
+  }
+
+  // The mock ignores the date filters, so the fixture date is arbitrary —
+  // what is under test is the assignment-status filtering, nothing else.
+  const today = '2026-06-10'
+
+  it('reports a block whose only assignment is cancelled, and not one with a live assignment', async () => {
+    const db = makeBlocksDb([
+      { id: 'b-tombstoned', location_id: 'loc-1', block_date: today, shift_assignments: [{ profile_id: 'coach-1', status: 'cancelled' }] },
+      { id: 'b-staffed', location_id: 'loc-1', block_date: today, shift_assignments: [{ profile_id: 'coach-2', status: 'scheduled' }] },
+    ])
+    const res = await fetchUnstaffedBlocksThisWeek(db, ['loc-1'])
+    expect(res.success).toBe(true)
+    expect(res.data.count).toBe(1)
+    expect(res.data.byLocation).toEqual({ 'loc-1': 1 })
+  })
+
+  it('counts a swapped shift and a legacy statusless row as staffed, and an empty block as unstaffed', async () => {
+    const db = makeBlocksDb([
+      { id: 'b-swapped', location_id: 'loc-1', block_date: today, shift_assignments: [{ profile_id: 'coach-1', status: 'swapped' }] },
+      { id: 'b-legacy', location_id: 'loc-1', block_date: today, shift_assignments: [{ profile_id: 'coach-2' }] },
+      { id: 'b-empty', location_id: 'loc-2', block_date: today, shift_assignments: [] },
+    ])
+    const res = await fetchUnstaffedBlocksThisWeek(db, ['loc-1', 'loc-2'])
+    expect(res.data.count).toBe(1)
+    expect(res.data.byLocation).toEqual({ 'loc-2': 1 })
   })
 })

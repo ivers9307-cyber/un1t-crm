@@ -297,7 +297,7 @@ describe('POST — cancelled tombstones', () => {
   it('lets a coach whose earlier assignment was cancelled be assigned again, and does not count the tombstone toward capacity', async () => {
     getCurrentUser.mockResolvedValue(MASTER)
     const { db, insertSpy } = buildDb({
-      block: { id: 'block-1', location_id: 'loc-1', block_date: '2026-06-01', max_coaches: 1, start_time: null, end_time: null, roster_id: null, rosters: null, shift_assignments: [{ count: 1 }] },
+      block: { id: 'block-1', location_id: 'loc-1', block_date: '2026-06-01', max_coaches: 1, start_time: null, end_time: null, roster_id: null, rosters: null },
       existingAssigned: [{ profile_id: '11111111-1111-1111-1111-111111111111', status: 'cancelled' }],
     })
     createServerClient.mockReturnValue(db)
