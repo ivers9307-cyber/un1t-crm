@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { blockFillState, filterAssignableCoaches, canAdjustShiftTimes } from './schedule-manage'
+import { blockFillState, filterAssignableCoaches, canAdjustShiftTimes, canCancelTimeOff } from './schedule-manage'
 
 const block = (assignedCount, min, max) => ({
   min_coaches: min, max_coaches: max,
@@ -72,5 +72,35 @@ describe('canAdjustShiftTimes', () => {
     expect(canAdjustShiftTimes({ id: 'm1', role: 'manager' }, { profile_id: 'm1' })).toBe(false)
     expect(canAdjustShiftTimes(null, shift)).toBe(false)
     expect(canAdjustShiftTimes({ role: 'manager' }, null)).toBe(false)
+  })
+})
+
+// ROSTER-FIX.7 — the coach-side "Cancel request" affordance on their own
+// pending leave. Mirrors the self branch of PUT /api/schedule/time-off/[id],
+// which accepts a self-cancel only from `pending`.
+describe('canCancelTimeOff', () => {
+  const me = { id: 'p1', role: 'staff' }
+  const mine = { id: 't1', profile_id: 'p1', status: 'pending' }
+
+  it('allows a coach to cancel their OWN pending request', () => {
+    expect(canCancelTimeOff(mine, me)).toBe(true)
+  })
+
+  it('refuses once the request has been decided', () => {
+    for (const status of ['approved', 'rejected', 'cancelled']) {
+      expect(canCancelTimeOff({ ...mine, status }, me)).toBe(false)
+    }
+  })
+
+  it('refuses someone else’s request, manager role or not', () => {
+    expect(canCancelTimeOff({ ...mine, profile_id: 'p2' }, me)).toBe(false)
+    expect(canCancelTimeOff({ ...mine, profile_id: 'p2' }, { id: 'p1', role: 'manager' })).toBe(false)
+  })
+
+  it('refuses when either side is missing rather than guessing', () => {
+    expect(canCancelTimeOff(null, me)).toBe(false)
+    expect(canCancelTimeOff(mine, null)).toBe(false)
+    expect(canCancelTimeOff({ id: 't1', status: 'pending' }, me)).toBe(false)
+    expect(canCancelTimeOff(mine, { role: 'staff' })).toBe(false)
   })
 })

@@ -11,7 +11,7 @@
 // Performance: shifts are cheap (<= ~14 per week per user). No
 // virtualisation needed — the FlatList is overkill for this size.
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   View, Text, ScrollView, Pressable, RefreshControl,
   ActivityIndicator, Alert, Modal, TextInput, KeyboardAvoidingView,
@@ -22,15 +22,19 @@ import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../../lib/auth-context'
 import {
   weekStart, addDays, daysOfWeek, isoDate, parseIsoDate, DAY_LABELS,
-  shortDate, timeRange, hoursBetween,
+  shortDate, timeRange, hoursBetween, dublinTodayIso,
 } from '../../../lib/dates'
 import {
   getMyShifts, getTeamShifts, getMyTimeOff, createSwapRequest, adjustShiftAssignment,
+  cancelTimeOffRequest,
 } from '../../../lib/schedule-api'
+import {
+  applyWeekResult, TRANSPORT_ERROR, weekKey, lastGoodFor, isStaleResponse,
+} from '../../../lib/schedule-refresh'
 import { canMobile } from '../../../lib/permissions'
 import { useIsTablet } from '../../../lib/use-is-tablet'
 import { effShiftStart, effShiftEnd, teamRosterForDay, initials } from '../../../lib/schedule-team'
-import { canAdjustShiftTimes, MANAGER_ROLES } from '../../../lib/schedule-manage'
+import { canAdjustShiftTimes, canCancelTimeOff, MANAGER_ROLES } from '../../../lib/schedule-manage'
 import ManageMode from '../../../components/schedule/ManageMode'
 
 // ROSTER-FIX.3 — MANAGER_ROLES comes from lib/schedule-manage, the module that
@@ -323,10 +327,47 @@ export default function Schedule() {
   const start = useMemo(() => isoDate(anchor), [anchor])
   const end = useMemo(() => isoDate(addDays(anchor, 6)), [anchor])
 
+  // ROSTER-FIX.7 — the last-good rows live in a ref as well as state so
+  // fetchWeek can read them WITHOUT listing `shifts`/`timeOff` in its
+  // dependency array (which would re-create the callback on every load and
+  // spin the useEffect below forever).
+  //
+  // ROSTER-FIX.7g — and the ref is KEYED, because "last good" is only good for
+  // the question it answered. A studio switch, a "View as user" profile swap, a
+  // week page or a Me/Team flip all make the rows in hand somebody else's, so a
+  // transport-level failure on the FIRST fetch in the new context must fall
+  // back to nothing rather than replay another studio's roster (or another
+  // user's week) under the new header. weekKey/lastGoodFor own that rule and
+  // are tested in mobile/lib/schedule-refresh.test.js; the screen only obeys it.
+  const lastGood = useRef({ key: null, shifts: [], timeOff: [] })
+  const key = useMemo(
+    () => weekKey({ locationId: activeLocation?.id, profileId: profile?.id, weekStartIso: start, view }),
+    [activeLocation?.id, profile?.id, start, view]
+  )
+  // ROSTER-FIX.7g — in-flight sequencing. The load effect, the focus effect and
+  // pull-to-refresh can all have a fetch in the air at once; without a stamp the
+  // response that resolves LAST wins the screen even when it answers the older
+  // question. See isStaleResponse.
+  const reqId = useRef(0)
+  const commit = useCallback((k, rows, off) => {
+    lastGood.current = { key: k, shifts: rows, timeOff: off }
+    setShifts(rows)
+    setTimeOff(off)
+  }, [])
+
   const fetchWeek = useCallback(async () => {
     if (!profile || !activeLocation) return
+    const mine = ++reqId.current
     setError(null)
-    if (view === 'manage') return // ManageMode self-fetches the roster + approvals
+    if (view === 'manage') {
+      // ManageMode self-fetches the roster. ROSTER-FIX.7 — clear the Me/Team
+      // rows EXPLICITLY: the old bare `return` left the previous view's week
+      // in state, so the week strip under Manage still dotted the days of a
+      // roster nobody was looking at, and switching back painted a stale week
+      // before the refetch landed.
+      commit(key, [], [])
+      return
+    }
     if (view === 'team') {
       // Team: the whole location's roster for the week (no profile_id). No
       // time-off in Team mode — it shows who's working, not who's off.
@@ -335,9 +376,10 @@ export default function Schedule() {
         startDate: start,
         endDate: end,
       })
-      if (!shiftsRes.success) setError(shiftsRes.error || 'Failed to load roster')
-      setShifts(shiftsRes.success ? shiftsRes.data || [] : [])
-      setTimeOff([])
+      if (isStaleResponse(reqId.current, mine)) return
+      const applied = applyWeekResult(lastGoodFor(lastGood.current, key), shiftsRes, { fallbackError: 'Failed to load roster' })
+      commit(key, applied.shifts, [])
+      setError(applied.error)
       return
     }
     const [shiftsRes, timeOffRes] = await Promise.all([
@@ -352,10 +394,15 @@ export default function Schedule() {
         profileId: profile.id,
       }),
     ])
-    if (!shiftsRes.success) setError(shiftsRes.error || 'Failed to load shifts')
-    setShifts(shiftsRes.success ? shiftsRes.data || [] : [])
-    setTimeOff(timeOffRes.success ? timeOffRes.data || [] : [])
-  }, [profile, activeLocation, start, end, view])
+    if (isStaleResponse(reqId.current, mine)) return
+    const appliedShifts = applyWeekResult(lastGoodFor(lastGood.current, key), shiftsRes, { fallbackError: 'Failed to load shifts' })
+    // ROSTER-FIX.7 — a time-off failure used to be swallowed: the list simply
+    // emptied and the coach read that as "no leave booked". It reports now,
+    // and a transport blip keeps the leave rows the same way it keeps shifts.
+    const appliedTimeOff = applyWeekResult(lastGoodFor(lastGood.current, key, 'timeOff'), timeOffRes, { fallbackError: 'Failed to load time off' })
+    commit(key, appliedShifts.shifts, appliedTimeOff.shifts)
+    setError(appliedShifts.error || appliedTimeOff.error)
+  }, [profile, activeLocation, start, end, view, key, commit])
 
   useEffect(() => {
     setLoading(true)
@@ -420,6 +467,38 @@ export default function Schedule() {
   // affordance is gone for coaches and the route 403s them anyway.
   function canAdjust(shift) {
     return canAdjustShiftTimes(profile, shift)
+  }
+
+  // ROSTER-FIX.7 — a coach could raise a time-off request from here but never
+  // withdraw one: the only route to a mistaken request was asking a manager to
+  // reject it. `PUT /api/schedule/time-off/[id]` has always accepted a
+  // self-cancel while the row is pending; canCancelTimeOff mirrors that gate.
+  // ROSTER-FIX.7f — through cancelTimeOffRequest, not respondToTimeOff: the
+  // wire call is the same PUT, but "respond" reads as a manager's decision on
+  // someone else's request, and this is the coach withdrawing their own.
+  function cancelLeaveRequest(row) {
+    Alert.alert(
+      'Cancel this request?',
+      'Your request will be withdrawn. You can raise a new one at any time.',
+      [
+        { text: 'Keep it', style: 'cancel' },
+        {
+          text: 'Cancel request',
+          style: 'destructive',
+          onPress: async () => {
+            const res = await cancelTimeOffRequest(row.id, activeLocation?.id)
+            if (!res.success) Alert.alert('Couldn’t cancel', res.error || 'Unknown error')
+            // ROSTER-FIX.7h — refetch EITHER WAY, not only on success. The
+            // common failure here is "no longer pending": a manager approved or
+            // rejected the request while the card sat on screen, so the row the
+            // coach just tried to withdraw is stale and the alert alone leaves
+            // it there, inviting the same tap again. The refetch replaces it
+            // with the decision that actually happened.
+            fetchWeek()
+          },
+        },
+      ]
+    )
   }
 
   function requestSwapForShift(shift) {
@@ -516,9 +595,14 @@ export default function Schedule() {
           </Text>
         )}
 
+        {/* ROSTER-FIX.7 — the stale-week notice is amber, not red: the rows
+            below it are real, just not freshly fetched. A red "failed" bar
+            over a correct roster reads as "none of this is trustworthy". */}
         {error ? (
-          <View className="bg-red-500/10 border border-red-500/30 rounded-xl p-3 mb-3">
-            <Text className="text-red-500 text-sm">{error}</Text>
+          <View className={error === TRANSPORT_ERROR
+            ? 'bg-amber-500/10 border border-amber-500/40 rounded-xl p-3 mb-3'
+            : 'bg-red-500/10 border border-red-500/30 rounded-xl p-3 mb-3'}>
+            <Text className={error === TRANSPORT_ERROR ? 'text-amber-700 text-sm' : 'text-red-500 text-sm'}>{error}</Text>
           </View>
         ) : null}
 
@@ -542,7 +626,7 @@ export default function Schedule() {
               anchor={anchor}
               shiftsByDate={shiftsByDate}
               timeOff={view === 'team' ? [] : timeOff}
-              todayIso={isoDate(new Date())}
+              todayIso={dublinTodayIso()}
               canAdjust={canAdjust}
               openAdjust={setAdjustingShift}
               requestSwap={requestSwapForShift}
@@ -569,9 +653,18 @@ export default function Schedule() {
               <View key={t.id} className="bg-amber-500/10 border border-amber-500/40 rounded-2xl p-4 mb-2">
                 <Text className="text-sm font-semibold text-amber-700">
                   {t.type === 'holiday' ? 'Holiday' : t.type === 'sick' ? 'Sick leave' : 'Time off'}
-                  {t.status === 'pending' ? ' — pending' : ''}
+                  {t.status === 'pending' ? ' · pending' : ''}
                 </Text>
                 {t.reason && <Text className="text-xs text-amber-700/80 mt-1">{t.reason}</Text>}
+                {canCancelTimeOff(t, profile) && (
+                  <Pressable
+                    onPress={() => cancelLeaveRequest(t)}
+                    hitSlop={8}
+                    className="self-start mt-2.5 px-3 py-1.5 rounded-full bg-un1t-surface border border-amber-500/40 active:opacity-70"
+                  >
+                    <Text className="text-xs font-semibold text-amber-700">Cancel request</Text>
+                  </Pressable>
+                )}
               </View>
             ))}
 

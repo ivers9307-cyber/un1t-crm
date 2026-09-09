@@ -18,7 +18,7 @@ import {
 import { useHeaderHeight } from 'expo-router/react-navigation'
 import { useAuth } from '../../../lib/auth-context'
 import { createTimeOffRequest } from '../../../lib/schedule-api'
-import { isoDate } from '../../../lib/dates'
+import { dublinTodayIso } from '../../../lib/dates'
 import { timeOffTypesFor, defaultTimeOffTypeFor } from 'shared/time-off'
 import MonthCalendar from '../../../components/MonthCalendar'
 
@@ -26,7 +26,10 @@ export default function TimeOffNew() {
   const { activeLocation, profile } = useAuth()
   const router = useRouter()
   const headerHeight = useHeaderHeight()
-  const today = isoDate(new Date())
+  // ROSTER-FIX.7 — the studio's day, not the phone's. This is both the
+  // calendar's minDate and the default range, so a device an hour behind
+  // Dublin used to refuse to book leave for a day that had not started yet.
+  const today = dublinTodayIso()
   // Type menu is gated by employment type — contractors + casual staff
   // only get "Unavailable"; everyone else gets the four leave types.
   const types = timeOffTypesFor(profile?.employment_type)
@@ -142,7 +145,8 @@ export default function TimeOffNew() {
         </View>
 
         <Text className="text-xs text-un1t-subtle px-2 mt-2">
-          Your manager will be notified. You can cancel a pending request from the schedule view.
+          Your manager will be notified. To withdraw it while it is still pending, open the
+          Schedule tab, tap the day it covers and use Cancel request on the amber leave card.
         </Text>
       </ScrollView>
     </KeyboardAvoidingView>
