@@ -247,6 +247,8 @@ describe('bulkUpsertShiftAssignments', () => {
     })
     expect(res).toEqual({ count: 1, error: null })
     expect(db.captured.blockInsert).toBeNull()
+    // ROSTER-FIX.4 (SAAS-1) — templates are read at the caller's location only
+    expect(db.captured.templateScope).toEqual({ col: 'location_id', val: 'loc1' })
     expect(db.captured.assignmentUpsert.rows[0]).toMatchObject({
       block_id: 'blk-x', profile_id: 'p1', status: 'scheduled',
       start_time_override: '08:00:00', end_time_override: null, notes: 'n', assigned_by: 'mgr1',
