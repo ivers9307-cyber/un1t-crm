@@ -15,6 +15,12 @@ import { useEffect, useId, useRef } from 'react'
 import { X } from 'lucide-react'
 import { modalPanelClasses } from './styles.js'
 
+// Everything the browser would normally stop on with Tab. `[tabindex]:not(
+// [tabindex="-1"])` catches the roving-tabindex widgets; the panel itself is
+// tabindex="-1" so it is never in the list.
+const FOCUSABLE =
+  'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])'
+
 /**
  * @param {object} props
  * @param {boolean} props.open
@@ -26,8 +32,13 @@ import { modalPanelClasses } from './styles.js'
  *   close-button are disabled — for flows that require an explicit
  *   acknowledgement before closing (e.g. a one-time secret reveal).
  *   Defaults to true.
+ * @param {boolean} [props.dismissOnBackdrop]  when false, only Esc and the
+ *   close button dismiss — a stray click on the backdrop does nothing.
+ *   ROSTER-FIX.6b: for modals holding a half-filled form. Deliberately NOT
+ *   `dismissable={false}`, which would also take the close button and Esc
+ *   away and leave the operator with no exit at all. Defaults to true.
  */
-export default function Modal({ open, onClose, title, footer, size = 'md', dismissable = true, className, children }) {
+export default function Modal({ open, onClose, title, footer, size = 'md', dismissable = true, dismissOnBackdrop = true, className, children }) {
   const panelRef = useRef(null)
   const titleId = useId()
 
@@ -51,17 +62,64 @@ export default function Modal({ open, onClose, title, footer, size = 'md', dismi
   useEffect(() => {
     if (!open) return undefined
     const onKey = (e) => {
-      if (e.key === 'Escape' && handlers.current.dismissable) handlers.current.onClose?.()
+      if (e.key === 'Escape' && handlers.current.dismissable) {
+        handlers.current.onClose?.()
+        return
+      }
+      // ROSTER-FIX.6b — focus trap. Without it Tab walks straight out of the
+      // dialog into the page behind it, which is still fully interactive: a
+      // keyboard operator ends up editing the calendar underneath an open
+      // modal with no visible cursor. aria-modal alone tells assistive tech
+      // the background is inert; it does not make Tab obey.
+      if (e.key !== 'Tab') return
+      const panel = panelRef.current
+      if (!panel) return
+      const list = Array.from(panel.querySelectorAll(FOCUSABLE))
+        .filter((el) => !el.hasAttribute('disabled') && el.getAttribute('aria-hidden') !== 'true')
+      if (list.length === 0) {
+        e.preventDefault()
+        panel.focus()
+        return
+      }
+      const first = list[0]
+      const last = list[list.length - 1]
+      const active = document.activeElement
+      const outside = !panel.contains(active) || active === panel
+      if (e.shiftKey) {
+        if (active === first || outside) {
+          e.preventDefault()
+          last.focus()
+        }
+      } else if (active === last || outside) {
+        e.preventDefault()
+        first.focus()
+      }
     }
     document.addEventListener('keydown', onKey)
     const prevOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
+    // ROSTER-FIX.6b — remember where focus came from so it can go back there
+    // on close. A keyboard operator who closed a modal was dumped on
+    // document.body and had to Tab from the top of the page to get back to
+    // the button they had just used.
+    const restoreTo = document.activeElement
+    // Captured here, not read from the ref in the cleanup: React detaches
+    // refs before passive-effect cleanup runs, so panelRef.current is already
+    // null by then (react-hooks/exhaustive-deps flags exactly this).
+    const panelNode = panelRef.current
     // Move focus into the dialog for keyboard + screen-reader users. This runs
     // on OPEN only — re-running it on every render is the focus-steal bug.
-    panelRef.current?.focus()
+    panelNode?.focus()
     return () => {
       document.removeEventListener('keydown', onKey)
       document.body.style.overflow = prevOverflow
+      // Only reclaim focus if it is still parked inside the (now unmounting)
+      // dialog. If the close handler moved focus somewhere deliberate, leave it.
+      const stillInside = !document.activeElement || document.activeElement === document.body
+        || !!panelNode?.contains(document.activeElement)
+      if (stillInside && restoreTo && typeof restoreTo.focus === 'function' && restoreTo.isConnected) {
+        restoreTo.focus()
+      }
     }
   }, [open])
 
@@ -70,7 +128,7 @@ export default function Modal({ open, onClose, title, footer, size = 'md', dismi
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-      onMouseDown={(e) => { if (dismissable && e.target === e.currentTarget) onClose?.() }}
+      onMouseDown={(e) => { if (dismissable && dismissOnBackdrop && e.target === e.currentTarget) onClose?.() }}
     >
       <div
         ref={panelRef}
