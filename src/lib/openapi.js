@@ -4380,6 +4380,25 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'post',
+  path: '/api/schedule/rosters/{id}/reject',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Reject a draft roster',
+  description: "Turns down a draft roster that was published over the location's monthly contractor budget. Same permission gate as approve. The draft row is DELETED (blocks are only tagged with a roster on publish, so nothing references it) and the manager who submitted it is notified with the optional note.",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ note: z.string().max(2000).nullable().optional() }).openapi('RosterReject') } } },
+  },
+  responses: {
+    200: { description: 'Draft rejected and deleted' },
+    403: { description: 'Forbidden — needs the rosters approval permission at this location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Roster not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Roster is not a draft', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
   path: '/api/schedule/swaps',
   tags: ['Schedule'],
   security: [{ CookieAuth: [] }],
