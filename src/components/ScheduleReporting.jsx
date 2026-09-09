@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Clock, Euro, CalendarOff, Users, TrendingUp, Play, Calendar, Plus, FileText, Bell, Mail, Repeat } from 'lucide-react'
 import { EmptyState, Loading } from '@/components/ui'
+import { toJsDay, fromJsDay, DAY_NAMES_MONDAY_FIRST } from '@/lib/report-schedule-days'
 
 const REPORT_TYPES = [
   { key: 'staff_hours',     label: 'Staff Hours Worked',    icon: Clock,       description: 'Total hours worked per staff member with daily breakdown' },
@@ -12,13 +13,16 @@ const REPORT_TYPES = [
   { key: 'utilisation',     label: 'Staff Utilisation',     icon: TrendingUp,  description: 'Actual vs contracted hours — who is over/under utilised' },
 ]
 
+// ROSTER-FIX.5 — 'daily' and 'fortnightly' were each supported by two of the
+// three layers (table CHECK, POST schema, this list) and missing from the
+// third, so Fortnightly was offered here and rejected by the API. Mig 601
+// settles all three on this set.
 const FREQ_OPTIONS = [
+  { value: 'daily', label: 'Daily' },
   { value: 'weekly', label: 'Weekly' },
   { value: 'fortnightly', label: 'Fortnightly' },
   { value: 'monthly', label: 'Monthly' },
 ]
-
-const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 
 function formatCurrency(val) {
   return new Intl.NumberFormat('en-IE', { style: 'currency', currency: 'EUR' }).format(val)
@@ -412,7 +416,7 @@ export default function ScheduleReporting({ user }) {
                       <div className="font-medium text-sm">{sr.report_name}</div>
                       <div className="text-xs text-un1t-subtle mt-0.5 flex items-center gap-2">
                         <span className="capitalize">{sr.frequency}</span>
-                        {sr.day_of_week != null && <span>· {DAY_NAMES[sr.day_of_week]}</span>}
+                        {sr.day_of_week != null && <span>· {DAY_NAMES_MONDAY_FIRST[fromJsDay(sr.day_of_week)]}</span>}
                         {sr.day_of_month && <span>· Day {sr.day_of_month}</span>}
                         {sr.deliver_email && <span className="flex items-center gap-0.5"><Mail size={10} /> Email</span>}
                         {sr.deliver_notification && <span className="flex items-center gap-0.5"><Bell size={10} /> Notification</span>}
@@ -448,7 +452,8 @@ function ScheduleReportModal({ reportType, locationId, onClose, onSave }) {
   const typeInfo = REPORT_TYPES.find(r => r.key === reportType)
   const [name, setName] = useState(typeInfo ? `Weekly ${typeInfo.label}` : '')
   const [frequency, setFrequency] = useState('weekly')
-  const [dayOfWeek, setDayOfWeek] = useState(0) // Monday
+  // ROSTER-FIX.5 — this is the STORED value, a JS weekday. 1 = Monday.
+  const [dayOfWeek, setDayOfWeek] = useState(1)
   const [dayOfMonth, setDayOfMonth] = useState(1)
   const [deliverEmail, setDeliverEmail] = useState(false)
   const [emailRecipients, setEmailRecipients] = useState('')
@@ -516,7 +521,7 @@ function ScheduleReportModal({ reportType, locationId, onClose, onSave }) {
                 onChange={e => setDayOfWeek(Number(e.target.value))}
                 className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
               >
-                {DAY_NAMES.map((d, i) => <option key={i} value={i}>{d}</option>)}
+                {DAY_NAMES_MONDAY_FIRST.map((d, i) => <option key={i} value={toJsDay(i)}>{d}</option>)}
               </select>
             </div>
           )}

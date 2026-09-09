@@ -3,13 +3,15 @@
 // Used by:
 //   - /api/schedule/templates POST/PUT (to materialise blocks when
 //     a template's days_of_week changes)
-//   - /api/schedule/blocks GET (to lazy-extend the visible horizon
-//     when an operator scrolls forward past 8 weeks)
+//   - /api/cron/extend-roster-horizon (the nightly sweep — why it
+//     replaced the old lazy extend is in src/lib/roster-horizon.js)
 //   - block-related lib tests
 //
 // We deliberately keep this module pure on its inputs (the supabase
 // client is passed in) so it can be unit-tested with the same mock
 // pattern used elsewhere in src/lib/.
+
+import { logWarn } from '@/lib/log'
 
 // Canonical weekday codes — match the CHECK on
 // shift_templates.days_of_week (mig 067). Indexed Monday-first
@@ -122,6 +124,14 @@ export async function generateBlocksForTemplate(db, template, fromDate = null, w
   const dates = expandDaysToDates(days, start, end)
   if (dates.length === 0) return { inserted: 0, skipped: 0 }
 
+  // ROSTER-FIX.5 — a block created after its week was published belongs to
+  // that roster. Untagged blocks were invisible to every roster-scoped
+  // reader (change log, "which roster is this shift on?"), which is how a
+  // late template edit could add a shift nobody could trace. ONE query for
+  // the whole window, matched in JS — an N-date generator must not fire N
+  // lookups.
+  const rosterByDate = await findPublishedRosterIdsByDate(db, template.location_id, dates)
+
   const records = dates.map(date => ({
     location_id: template.location_id,
     template_id: template.id,
@@ -129,6 +139,7 @@ export async function generateBlocksForTemplate(db, template, fromDate = null, w
     start_time: template.start_time,
     end_time: template.end_time,
     max_coaches: template.max_coaches || 15,
+    roster_id: rosterByDate.get(date) || null,
   }))
 
   // Use upsert with ignoreDuplicates so we don't fail when a block
@@ -178,4 +189,133 @@ export function isLiveAssignment(a) {
 /** Filter helper — tolerates null/undefined. */
 export function liveAssignments(list) {
   return (list || []).filter(isLiveAssignment)
+}
+
+/**
+ * ROSTER-FIX.5 — which published roster covers `dateIso` at this location?
+ *
+ * Kept alongside the batched form below because PR 4 calls it for a single
+ * date; the batch is for the N-date generator.
+ *
+ * Returns the rosters.id, or null when nothing is published for that day.
+ * Nothing stops two published rosters overlapping a date — a re-cut week is
+ * published beside the one it replaces, and a WIDER period may be published
+ * over ones it already contains. An unordered .limit(1) then returns whichever
+ * row Postgres happened to reach first, so the same block could be tagged to a
+ * different roster on two runs.
+ *
+ * THE RULE: the most recently PUBLISHED roster wins — published_at desc (nulls
+ * last), then created_at desc. Ordering by period_start is wrong. Publish the
+ * week 2026-05-04..05-10, then publish the month 2026-05-01..05-31 over it:
+ * that month publish re-tags every block inside it, so a block created
+ * afterwards for 2026-05-06 belongs to the MONTH — but the later period_start
+ * is the WEEK's, and period_start ordering would hand the block back to a
+ * roster the operator has already superseded.
+ *
+ * published_at is nullable (mig 072), so a row without one falls back to its
+ * created_at; the batch matcher below does that coalesce in JS, and here the
+ * nulls-last ORDER BY keeps an unstamped row behind a stamped one.
+ *
+ * Never throws: a failed lookup must not take a block insert down with it,
+ * so an error is logged and treated as "no roster" (the block is created
+ * untagged, which is exactly the pre-fix behaviour).
+ *
+ * @param {SupabaseClient} db  server-role client
+ * @param {string} locationId
+ * @param {string} dateIso     YYYY-MM-DD
+ * @returns {Promise<string|null>}
+ */
+export async function findPublishedRosterFor(db, locationId, dateIso) {
+  if (!locationId || !dateIso) return null
+  const { data, error } = await db
+    .from('rosters')
+    .select('id, published_at, created_at')
+    .eq('location_id', locationId)
+    .eq('status', 'published')
+    .lte('period_start', dateIso)
+    .gte('period_end', dateIso)
+    .order('published_at', { ascending: false, nullsFirst: false })
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (error) {
+    logWarn('roster', 'findPublishedRosterFor failed', { locationId, dateIso, err: error })
+    return null
+  }
+  return data?.id || null
+}
+
+/**
+ * ROSTER-FIX.5 — the batch form of findPublishedRosterFor. One query
+ * spanning min(dates)..max(dates), matched in JS, so generating eight weeks
+ * of blocks costs a single round trip instead of one per date.
+ *
+ * Overlapping published rosters resolve the same way as the single-date form:
+ * the most recently PUBLISHED roster wins — published_at desc (nulls last),
+ * then created_at desc. The ORDER BY is on the query AND the tie-break is
+ * redone in JS — the ordering is what the database is asked for, the JS is
+ * what makes the answer independent of the order the rows actually arrive in.
+ *
+ * @returns {Promise<Map<string, string>>} date (YYYY-MM-DD) → rosters.id.
+ *          Dates with no published roster are simply absent.
+ */
+// ROSTER-FIX.5 — "the most recently published roster wins" for two published
+// rosters covering the same day. NOT period_start: publish the week
+// 2026-05-04..05-10, then publish the month 2026-05-01..05-31 over it, and a
+// block created afterwards for 2026-05-06 must join the MONTH — the month is
+// what re-tagged every block in that range — even though the WEEK has the
+// later period_start.
+//
+// Key: published_at, falling back to created_at when a row was never stamped
+// (published_at is nullable, mig 072), then created_at as the tie-break. A
+// missing value (an old row, or a mock that doesn't carry it) sorts oldest
+// rather than throwing the comparison off.
+function publishedOrder(r) {
+  return String(r.published_at || r.created_at || '')
+}
+
+function isNewerRoster(candidate, incumbent) {
+  const a = publishedOrder(candidate)
+  const b = publishedOrder(incumbent)
+  if (a !== b) return a > b
+  return String(candidate.created_at || '') > String(incumbent.created_at || '')
+}
+
+export async function findPublishedRosterIdsByDate(db, locationId, dates) {
+  const out = new Map()
+  const list = (dates || []).filter(Boolean)
+  if (!locationId || list.length === 0) return out
+
+  // Don't assume the caller sorted them.
+  const sorted = [...list].sort()
+  const minDate = sorted[0]
+  const maxDate = sorted[sorted.length - 1]
+
+  const { data, error } = await db
+    .from('rosters')
+    .select('id, period_start, period_end, published_at, created_at')
+    .eq('location_id', locationId)
+    .eq('status', 'published')
+    .lte('period_start', maxDate)
+    .gte('period_end', minDate)
+    .order('published_at', { ascending: false, nullsFirst: false })
+    .order('created_at', { ascending: false })
+
+  if (error) {
+    logWarn('roster', 'findPublishedRosterIdsByDate failed', { locationId, minDate, maxDate, err: error })
+    return out
+  }
+
+  // ISO dates compare correctly as strings, so no Date objects needed.
+  for (const date of list) {
+    let hit = null
+    for (const r of (data || [])) {
+      if (!(r.period_start <= date && r.period_end >= date)) continue
+      if (hit && !isNewerRoster(r, hit)) continue
+      hit = r
+    }
+    if (hit) out.set(date, hit.id)
+  }
+  return out
 }

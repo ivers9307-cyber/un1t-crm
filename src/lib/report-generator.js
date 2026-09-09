@@ -1,7 +1,8 @@
 // Shared report generation logic — used by both manual generate and cron scheduler
 import { createServerClient } from '@/lib/supabase'
-import { computeWeeklyCost, implicitHourlyRate, mondayOf } from '@/lib/payroll'
-import { isLiveAssignment } from '@/lib/roster'
+import { computeWeeklyCost, implicitHourlyRate, mondayOf, shiftHours } from '@/lib/payroll'
+import { isLiveAssignment, formatDate } from '@/lib/roster'
+import { logWarn } from '@/lib/log'
 
 // RETIRE-SHIFTS-MIRROR.1 — reports now read the Roster v2 source of truth
 // (shift_assignments + shift_blocks) instead of the legacy public.shifts
@@ -20,13 +21,81 @@ const SHIFT_ROW_SELECT = `
   shift_blocks!inner ( block_date, location_id, shift_templates ( name, start_time, end_time ) )
 `
 
+// ROSTER-FIX.5 — a report is about ONE location, so its staff list has to be
+// too. utilisation and staff_cost used to select every active profile in the
+// estate: the utilisation average was diluted by staff who can never appear on
+// that location's roster (they show as 0% used), and the cost report
+// enumerated the whole company's payroll under one gym's heading. Roles are
+// per-location on profile_locations (mig 051), which is the join that says
+// who works where.
+export async function fetchLocationProfileIds(db, locationId) {
+  const { data, error } = await db
+    .from('profile_locations')
+    .select('profile_id')
+    .eq('location_id', locationId)
+  // Returned, not thrown: generateReport's contract is { success, error } and
+  // POST /api/schedule/reports does not wrap the call, so a throw here would
+  // surface as a bare 500 instead of a readable message. Failing closed IS
+  // right for this one — an unreadable staff list would silently produce a
+  // report scoped to nobody, which reads as "no staff worked here".
+  if (error) return { profileIds: [], error: `Failed to load location staff: ${error.message}` }
+  return { profileIds: [...new Set((data || []).map(r => r.profile_id).filter(Boolean))], error: null }
+}
+
+// ROSTER-FIX.5 — returns { rows, error }, not a bare array. The error used to
+// be discarded, so a failed query and a genuinely empty period both produced
+// []: the report was SAVED reading "0 hours", with nothing anywhere saying the
+// query had failed. Every caller now fails the whole report on `error` rather
+// than persisting a zero that reads like a fact.
+//
+// ROSTER-FIX.5 — and it pages. PostgREST caps any single response at
+// db-max-rows (1000) whatever .limit() says, so one busy month at one busy
+// location silently truncated to its first 1000 assignments and under-reported
+// hours and cost with no error anywhere. Explicit .order('id') + .range(),
+// the pattern in src/lib/pipeline-reclassify.js — paging without a total order
+// can repeat or skip rows between pages.
+const SHIFT_PAGE_SIZE = 1000
+// A period is at most a month of one location's assignments; 20k is far above
+// anything the estate can produce. Crossing it means streaming per week, not
+// raising the number again.
+//
+// ROSTER-FIX.5e — reaching the cap FAILS the read rather than returning the
+// first 20k rows. Truncating here would rebuild the exact defect the paging
+// exists to kill: a short count, saved as a report, with nothing anywhere
+// saying the read stopped early. (A period holding exactly SHIFT_HARD_LIMIT
+// rows is indistinguishable from one holding more, so it errors too — at 30x
+// the estate's busiest month that trade is free.)
+const SHIFT_HARD_LIMIT = 20_000
+
 export async function fetchScheduledShiftRows(db, { locationId, periodStart, periodEnd }) {
-  const { data: rows } = await db.from('shift_assignments')
-    .select(SHIFT_ROW_SELECT)
-    .eq('shift_blocks.location_id', locationId)
-    .gte('shift_blocks.block_date', periodStart)
-    .lte('shift_blocks.block_date', periodEnd)
-  return (rows || []).filter(isLiveAssignment).map((r) => ({
+  const raw = []
+  let pageStart = 0
+
+  while (true) {
+    const pageEnd = Math.min(pageStart + SHIFT_PAGE_SIZE - 1, SHIFT_HARD_LIMIT - 1)
+    const { data: page, error } = await db.from('shift_assignments')
+      .select(SHIFT_ROW_SELECT)
+      .eq('shift_blocks.location_id', locationId)
+      .gte('shift_blocks.block_date', periodStart)
+      .lte('shift_blocks.block_date', periodEnd)
+      .order('id')
+      .range(pageStart, pageEnd)
+
+    if (error) {
+      logWarn('report-generator', 'shift rows query failed', { locationId, periodStart, periodEnd, pageStart, err: error })
+      return { rows: [], error: `Failed to load scheduled shifts: ${error.message}` }
+    }
+    if (!Array.isArray(page) || page.length === 0) break
+    raw.push(...page)
+    if (page.length < SHIFT_PAGE_SIZE) break        // short page — that was the last one
+    if (raw.length >= SHIFT_HARD_LIMIT) {
+      logWarn('report-generator', 'shift rows hit the hard limit', { locationId, periodStart, periodEnd, limit: SHIFT_HARD_LIMIT })
+      return { rows: [], error: `Too many scheduled shifts to report on in one go (over ${SHIFT_HARD_LIMIT}). Run the report over a shorter period.` }
+    }
+    pageStart += SHIFT_PAGE_SIZE
+  }
+
+  const rows = raw.filter(isLiveAssignment).map((r) => ({
     shift_date: r.shift_blocks?.block_date,
     profile_id: r.profile_id,
     start_time_override: r.start_time_override,
@@ -35,6 +104,7 @@ export async function fetchScheduledShiftRows(db, { locationId, periodStart, per
     profiles: r.profiles,
     shift_templates: r.shift_blocks?.shift_templates,
   }))
+  return { rows, error: null }
 }
 
 /**
@@ -63,7 +133,8 @@ export async function generateReport({ report_type, period_start, period_end, lo
   switch (report_type) {
     case 'staff_hours': {
       reportName = 'Staff Hours Worked'
-      const shifts = await fetchScheduledShiftRows(db, { locationId: locId, periodStart: period_start, periodEnd: period_end })
+      const { rows: shifts, error: shiftsError } = await fetchScheduledShiftRows(db, { locationId: locId, periodStart: period_start, periodEnd: period_end })
+      if (shiftsError) return { success: false, error: shiftsError }
 
       const staffHours = {}
       let totalHours = 0
@@ -75,13 +146,13 @@ export async function generateReport({ report_type, period_start, period_end, lo
           staffHours[profileId] = { name, role: shift.profiles?.role, employment_type: shift.profiles?.employment_type, days: {}, total: 0 }
         }
 
-        const start = shift.shift_templates?.start_time
-        const end = shift.shift_templates?.end_time
-        if (start && end) {
-          const [sh, sm] = start.split(':').map(Number)
-          const [eh, em] = end.split(':').map(Number)
-          let hours = (eh + em / 60) - (sh + sm / 60)
-          if (hours < 0) hours += 24
+        // ROSTER-FIX.5 — shiftHours() honours start_time_override /
+        // end_time_override; the inline template math did not, so a shift a
+        // manager had shortened or extended was paid at its TEMPLATE length
+        // and this report disagreed with staff_cost (which already used it)
+        // for the very same shifts.
+        const hours = shiftHours(shift)
+        if (hours > 0) {
           staffHours[profileId].days[shift.shift_date] = (staffHours[profileId].days[shift.shift_date] || 0) + hours
           staffHours[profileId].total += hours
           totalHours += hours
@@ -100,12 +171,24 @@ export async function generateReport({ report_type, period_start, period_end, lo
       // Profiles include overtime_rate so OT hours can be costed at the
       // explicit rate when present. Shifts include start/end overrides
       // so we honour the same hours the schedule UI shows.
-      const [{ data: profiles }, shifts] = await Promise.all([
+      const { profileIds, error: scopeError } = await fetchLocationProfileIds(db, locId)
+      if (scopeError) return { success: false, error: scopeError }
+      // ROSTER-FIX.5 — an EMPTY profile_locations is not "nobody worked here",
+      // it is "we cannot say who works here": `.in('id', [])` matches no
+      // profile, every shift is then skipped for want of a matching profile,
+      // and the report is saved reading €0 across 0 staff, which is a number an
+      // operator will believe. Distinct from scopeError above so the two
+      // causes stay tellable apart.
+      if (profileIds.length === 0) return { success: false, error: 'No staff are assigned to this location' }
+      const [{ data: profiles, error: profilesError }, { rows: shifts, error: shiftsError }] = await Promise.all([
         db.from('profiles')
           .select('id, full_name, role, employment_type, annual_salary, hourly_rate, contracted_hours_per_week, overtime_rate')
-          .eq('active', true),
+          .eq('active', true)
+          .in('id', profileIds),
         fetchScheduledShiftRows(db, { locationId: locId, periodStart: period_start, periodEnd: period_end }),
       ])
+      if (profilesError) return { success: false, error: profilesError.message }
+      if (shiftsError) return { success: false, error: shiftsError }
 
       const profileMap = {}
       for (const p of (profiles || [])) profileMap[p.id] = p
@@ -225,7 +308,7 @@ export async function generateReport({ report_type, period_start, period_end, lo
     case 'roster_coverage': {
       reportName = 'Roster Coverage'
       // shifts and approved time-off are independent — fetch in parallel.
-      const [shifts, { data: timeOff }] = await Promise.all([
+      const [{ rows: shifts, error: shiftsError }, { data: timeOff }] = await Promise.all([
         fetchScheduledShiftRows(db, { locationId: locId, periodStart: period_start, periodEnd: period_end }),
         db.from('time_off_requests')
           .select('start_date, end_date, profile_id, type, profiles!profile_id(full_name)')
@@ -234,6 +317,7 @@ export async function generateReport({ report_type, period_start, period_end, lo
           .lte('start_date', period_end)
           .gte('end_date', period_start),
       ])
+      if (shiftsError) return { success: false, error: shiftsError }
 
       const days = {}
       const start = new Date(period_start + 'T00:00:00')
@@ -278,12 +362,22 @@ export async function generateReport({ report_type, period_start, period_end, lo
     case 'utilisation': {
       reportName = 'Staff Utilisation'
       // profiles + shifts are independent — fetch in parallel.
-      const [{ data: profiles }, shifts] = await Promise.all([
+      const { profileIds, error: scopeError } = await fetchLocationProfileIds(db, locId)
+      if (scopeError) return { success: false, error: scopeError }
+      // ROSTER-FIX.5 — same fail-closed rule as staff_cost: no rows in
+      // profile_locations means the denominator is unknown, and utilisation
+      // with an unknown denominator saved as "0% across 0 staff" is worse than
+      // no report at all.
+      if (profileIds.length === 0) return { success: false, error: 'No staff are assigned to this location' }
+      const [{ data: profiles, error: profilesError }, { rows: shifts, error: shiftsError }] = await Promise.all([
         db.from('profiles')
           .select('id, full_name, role, employment_type, contracted_hours_per_week')
-          .eq('active', true),
+          .eq('active', true)
+          .in('id', profileIds),
         fetchScheduledShiftRows(db, { locationId: locId, periodStart: period_start, periodEnd: period_end }),
       ])
+      if (profilesError) return { success: false, error: profilesError.message }
+      if (shiftsError) return { success: false, error: shiftsError }
 
       const periodStartD = new Date(period_start + 'T00:00:00')
       const periodEndD = new Date(period_end + 'T00:00:00')
@@ -297,15 +391,8 @@ export async function generateReport({ report_type, period_start, period_end, lo
 
       for (const shift of (shifts || [])) {
         if (!staffUtil[shift.profile_id]) continue
-        const start = shift.shift_templates?.start_time
-        const end = shift.shift_templates?.end_time
-        if (start && end) {
-          const [sh, sm] = start.split(':').map(Number)
-          const [eh, em] = end.split(':').map(Number)
-          let hours = (eh + em / 60) - (sh + sm / 60)
-          if (hours < 0) hours += 24
-          staffUtil[shift.profile_id].actual_hours += hours
-        }
+        // ROSTER-FIX.5 — override-aware, same as staff_hours and staff_cost.
+        staffUtil[shift.profile_id].actual_hours += shiftHours(shift)
       }
 
       const utilData = Object.values(staffUtil)
@@ -348,73 +435,101 @@ export async function generateReport({ report_type, period_start, period_end, lo
 
 /**
  * Calculate the period dates for a scheduled report based on frequency.
- * Weekly = last 7 days, fortnightly = last 14 days, monthly = last calendar month.
+ * Daily = yesterday, weekly = last 7 days, fortnightly = last 14 days,
+ * monthly = last calendar month. All boundaries inclusive.
  *
- * Period boundaries are computed in UTC via toISOString().split('T')[0].
- * For the default cron at 07:00 UTC (08:00 Dublin in winter / 08:00 BST in
- * summer), this aligns with the local "yesterday" at the time of run.
- * If the cron schedule is ever moved earlier than 01:00 UTC, the date
- * arithmetic could roll back a day in the operator's perception — the
- * cron schedule should stay at 07:00 UTC unless this function is updated
- * to use Intl.DateTimeFormat with a configured timezone.
+ * ROSTER-FIX.5 — boundaries are now formatted from LOCAL calendar components
+ * (formatDate), not toISOString(). The old UTC formatting was the classic
+ * CLAUDE.md trap: `new Date(y, m - 1, 1)` is LOCAL midnight, so under any
+ * offset east of UTC (Dublin BST = +1) toISOString() rolled it back a day and
+ * every monthly report covered 31 Mar - 29 Apr instead of 1 - 30 Apr. It also
+ * removes the old "don't move the cron earlier than 01:00 UTC" caveat: local
+ * components mean the period is the operator's yesterday at any run hour.
  */
 export function calculatePeriodForSchedule(frequency) {
   const now = new Date()
-  let period_start, period_end
 
-  // period_end is always yesterday (UTC date)
+  // period_end is always yesterday, local.
   const yesterday = new Date(now)
   yesterday.setDate(yesterday.getDate() - 1)
-  period_end = yesterday.toISOString().split('T')[0]
 
-  if (frequency === 'weekly') {
-    const start = new Date(yesterday)
-    start.setDate(start.getDate() - 6) // 7-day window
-    period_start = start.toISOString().split('T')[0]
-  } else if (frequency === 'fortnightly') {
-    const start = new Date(yesterday)
-    start.setDate(start.getDate() - 13) // 14-day window
-    period_start = start.toISOString().split('T')[0]
-  } else if (frequency === 'monthly') {
-    // Previous full calendar month
-    const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1)
-    period_start = lastMonth.toISOString().split('T')[0]
-    const lastDayPrevMonth = new Date(now.getFullYear(), now.getMonth(), 0)
-    period_end = lastDayPrevMonth.toISOString().split('T')[0]
-  } else {
-    // Default: last 7 days
-    const start = new Date(yesterday)
-    start.setDate(start.getDate() - 6)
-    period_start = start.toISOString().split('T')[0]
+  // A daily report covers ONE day. It used to fall through to the 7-day
+  // default, so a schedule labelled "daily" re-reported the same week every
+  // morning.
+  if (frequency === 'daily') {
+    const day = formatDate(yesterday)
+    return { period_start: day, period_end: day }
   }
 
-  return { period_start, period_end }
+  if (frequency === 'monthly') {
+    // Previous full calendar month.
+    const first = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+    const last = new Date(now.getFullYear(), now.getMonth(), 0)
+    return { period_start: formatDate(first), period_end: formatDate(last) }
+  }
+
+  // weekly (and the fallback) = 7 days, fortnightly = 14 — both ending
+  // yesterday, inclusive.
+  const span = frequency === 'fortnightly' ? 13 : 6
+  const start = new Date(yesterday)
+  start.setDate(start.getDate() - span)
+  return { period_start: formatDate(start), period_end: formatDate(yesterday) }
 }
 
 /**
- * Calculate the next run date after execution.
+ * Calculate the next run date after execution. Always 07:00 local on the
+ * target day; null for 'once' (nothing to advance to) and for a
+ * weekly/fortnightly schedule with no weekday set. A monthly schedule always
+ * returns a date: no day_of_month means the 1st, and a day past the target
+ * month's end is clamped to its last day.
+ *
+ * `dayOfWeek` is a JS weekday (0=Sunday) — see src/lib/report-schedule-days.js
+ * and mig 601. The UI converts; nothing else may.
  */
 export function calculateNextRun(frequency, dayOfWeek, dayOfMonth) {
   const now = new Date()
 
-  if (frequency === 'weekly' && dayOfWeek != null) {
+  // ROSTER-FIX.5 — 'daily' returned null, so /api/cron/run-scheduled-reports
+  // left next_run_at where it was: a daily schedule ran once and then either
+  // stalled or re-fired every tick.
+  if (frequency === 'daily') {
     const target = new Date(now)
-    const diff = (dayOfWeek - target.getDay() + 7) % 7 || 7
-    target.setDate(target.getDate() + diff)
+    target.setDate(target.getDate() + 1)
     target.setHours(7, 0, 0, 0)
     return target.toISOString()
   }
 
-  if (frequency === 'fortnightly' && dayOfWeek != null) {
+  if ((frequency === 'weekly' || frequency === 'fortnightly') && dayOfWeek != null) {
     const target = new Date(now)
-    const diff = (dayOfWeek - target.getDay() + 7) % 7 || 7
-    target.setDate(target.getDate() + diff + 7) // +7 extra for fortnightly
+    const diff = (dayOfWeek - target.getDay() + 7) % 7
+    // diff === 0 means today IS the target weekday, and the run that just
+    // happened is why we are here — so the next one is a whole week out, never
+    // today. Fortnightly is then that occurrence plus another week.
+    const next = diff === 0 ? 7 : diff
+    target.setDate(target.getDate() + next + (frequency === 'fortnightly' ? 7 : 0))
     target.setHours(7, 0, 0, 0)
     return target.toISOString()
   }
 
-  if (frequency === 'monthly' && dayOfMonth) {
-    const target = new Date(now.getFullYear(), now.getMonth() + 1, dayOfMonth, 7, 0, 0)
+  if (frequency === 'monthly') {
+    // ROSTER-FIX.5 — two ways a monthly schedule went wrong.
+    //
+    // A null day_of_month fell through to `return null`, which
+    // /api/cron/run-scheduled-reports reads as "nothing to advance to": it
+    // leaves next_run_at where it is, so the schedule ran once and then
+    // stalled forever. day_of_month is nullable and the UI does not force it,
+    // so this is the DEFAULT monthly schedule, not an edge case. The 1st is
+    // the sane default for "monthly".
+    //
+    // And 31 overflowed. `new Date(y, m, 31)` for a 30-day month rolls into
+    // the NEXT month, so a schedule set to the 31st landed on 1 July instead
+    // of 30 June — two months out, not one, and it drifts further every time
+    // it fires. Clamp to the target month's last day; `new Date(y, m + 2, 0)`
+    // is day zero of the month after the target, i.e. the target's last day.
+    const requested = Number(dayOfMonth) > 0 ? Math.floor(Number(dayOfMonth)) : 1
+    const lastDayOfTargetMonth = new Date(now.getFullYear(), now.getMonth() + 2, 0).getDate()
+    const day = Math.min(requested, lastDayOfTargetMonth)
+    const target = new Date(now.getFullYear(), now.getMonth() + 1, day, 7, 0, 0)
     return target.toISOString()
   }
 

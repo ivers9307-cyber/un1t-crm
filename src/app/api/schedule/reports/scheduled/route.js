@@ -4,13 +4,15 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { calculateNextRun } from '@/lib/report-generator'
 import { validateBody, uuidLike } from '@/lib/validate'
-import { MANAGER_ROLES } from '@/lib/schemas'
+import { MANAGER_ROLES, reportFrequencySchema } from '@/lib/schemas'
 
 const ScheduledReportSchema = z.object({
   location_id: uuidLike.optional(),
   report_type: z.enum(['staff_hours', 'staff_cost', 'time_off_summary', 'roster_coverage', 'utilisation']),
   report_name: z.string().min(1).max(200),
-  frequency: z.enum(['once', 'daily', 'weekly', 'monthly']),
+  // ROSTER-FIX.5 — one definition, shared with the OpenAPI spec, so this
+  // enum cannot drift from the table's CHECK again.
+  frequency: reportFrequencySchema,
   day_of_week: z.number().int().min(0).max(6).nullable().optional(),
   day_of_month: z.number().int().min(1).max(31).nullable().optional(),
   deliver_email: z.boolean().optional(),

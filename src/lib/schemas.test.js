@@ -84,10 +84,14 @@ describe('enum schemas', () => {
     expect(dealStatusSchema.safeParse('pending').success).toBe(false)
   })
 
-  it('reportFrequencySchema covers cron frequencies', () => {
-    for (const f of ['once', 'daily', 'weekly', 'monthly']) {
+  // ROSTER-FIX.5 — this enum, scheduled_reports' CHECK (mig 601) and the UI's
+  // FREQ_OPTIONS must name the SAME set. 'fortnightly' was in the table and
+  // the dropdown but not here, so the UI offered a value the API 400'd.
+  it('reportFrequencySchema covers every cron frequency', () => {
+    for (const f of ['once', 'daily', 'weekly', 'fortnightly', 'monthly']) {
       expect(reportFrequencySchema.safeParse(f).success).toBe(true)
     }
+    expect(reportFrequencySchema.safeParse('hourly').success).toBe(false)
   })
 })
 
