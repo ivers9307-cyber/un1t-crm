@@ -60,11 +60,13 @@ async function loadBudgetContext(db, locationId, periodStart) {
   // their assignments and roster join. We consider the union of
   // (already-published blocks in the month outside the period)
   // PLUS (all blocks in the period — published or not).
+  // ROSTER-FIX.4 — the per-coach overrides ride along: a coach whose window
+  // a manager adjusted is paid for THAT window, not the block's.
   const { data: monthBlocks, error: blocksErr } = await db
     .from('shift_blocks')
     .select(`
       id, location_id, block_date, start_time, end_time, roster_id,
-      shift_assignments(profile_id, status),
+      shift_assignments(profile_id, status, start_time_override, end_time_override),
       rosters:roster_id(id, status)
     `)
     .eq('location_id', locationId)
@@ -72,26 +74,62 @@ async function loadBudgetContext(db, locationId, periodStart) {
     .lte('block_date', monthEnd)
   if (blocksErr) throw new Error(`Block lookup failed: ${blocksErr.message}`)
 
+  // ROSTER-FIX.4 — approved leave for the month, in ONE query. A coach on
+  // approved leave is not working the shift they are still rostered on, so
+  // billing it inflated the projection and could refuse a publish that was
+  // actually within budget.
+  const { data: leave, error: leaveErr } = await db
+    .from('time_off_requests')
+    .select('profile_id, start_date, end_date')
+    .eq('location_id', locationId)
+    .eq('status', 'approved')
+    .lte('start_date', monthEnd)
+    .gte('end_date', monthStart)
+  if (leaveErr) throw new Error(`Leave lookup failed: ${leaveErr.message}`)
+
+  const leaveByProfile = new Map()
+  for (const row of leave || []) {
+    if (!leaveByProfile.has(row.profile_id)) leaveByProfile.set(row.profile_id, [])
+    leaveByProfile.get(row.profile_id).push(row)
+  }
+
   return {
     location: loc,
     monthStart,
     monthEnd,
     contractorRateById,
+    leaveByProfile,
     monthBlocks: monthBlocks || [],
   }
 }
 
-function blockContractorCost(block, contractorRateById) {
-  const hours = shiftHours({
-    start_time: block.start_time,
-    end_time: block.end_time,
-    shift_templates: { start_time: block.start_time, end_time: block.end_time },
-  })
+/**
+ * Is this coach on approved leave on this date? Both ends inclusive —
+ * time_off_requests.end_date is documented inclusive (mig 011). Dates are
+ * ISO YYYY-MM-DD strings, so string comparison IS date comparison.
+ */
+function isOnLeave(leaveByProfile, profileId, dateIso) {
+  const rows = leaveByProfile?.get(profileId)
+  if (!rows) return false
+  return rows.some((r) => r.start_date <= dateIso && r.end_date >= dateIso)
+}
+
+function blockContractorCost(block, contractorRateById, leaveByProfile) {
   let cost = 0
   // ROSTER-FIX.1 — a cancelled assignment costs nothing; counting it here
   // pushed publishes over the contractor budget for shifts nobody works.
   for (const a of liveAssignments(block.shift_assignments)) {
     const rate = contractorRateById[a.profile_id] || 0
+    if (rate === 0) continue
+    // ROSTER-FIX.4 — a coach on approved leave isn't working this shift.
+    if (isOnLeave(leaveByProfile, a.profile_id, block.block_date)) continue
+    // ROSTER-FIX.4 — hours are PER ASSIGNMENT: shiftHours prefers the
+    // coach's override window and falls back to the block's.
+    const hours = shiftHours({
+      start_time_override: a.start_time_override,
+      end_time_override: a.end_time_override,
+      shift_templates: { start_time: block.start_time, end_time: block.end_time },
+    })
     cost += hours * rate
   }
   return cost
@@ -115,14 +153,14 @@ function blockContractorCost(block, contractorRateById) {
  */
 export async function projectPublishImpact(db, { locationId, periodStart, periodEnd }) {
   const ctx = await loadBudgetContext(db, locationId, periodStart)
-  const { location, monthStart, monthEnd, contractorRateById, monthBlocks } = ctx
+  const { location, monthStart, monthEnd, contractorRateById, leaveByProfile, monthBlocks } = ctx
 
   let alreadyPublishedEur = 0
   let periodProjectedEur = 0
   let blockCount = 0
 
   for (const b of monthBlocks) {
-    const cost = blockContractorCost(b, contractorRateById)
+    const cost = blockContractorCost(b, contractorRateById, leaveByProfile)
     if (cost === 0) continue
     const inPeriod = b.block_date >= periodStart && b.block_date <= periodEnd
     if (inPeriod) {

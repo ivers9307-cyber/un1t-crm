@@ -12,7 +12,7 @@
 import { describe, it, expect } from 'vitest'
 import { projectPublishImpact } from './roster-publish'
 
-function mockDb({ location, contractors = [], blocks = [] }) {
+function mockDb({ location, contractors = [], blocks = [], timeOff = [] }) {
   // Mock the chained Supabase queries the helper makes:
   //   from('locations').select(...).eq(...).single() → location
   //   from('profile_locations').select(...).eq(...) → contractor links
@@ -42,6 +42,18 @@ function mockDb({ location, contractors = [], blocks = [] }) {
             }),
           }),
         }
+      }
+      // ROSTER-FIX.4 — approved leave for the month, one query.
+      if (table === 'time_off_requests') {
+        const chain = {
+          select: () => chain,
+          eq: () => chain,
+          lte: () => chain,
+          gte: (col) => (col === 'end_date'
+            ? Promise.resolve({ data: timeOff, error: null })
+            : chain),
+        }
+        return chain
       }
       if (table === 'shift_blocks') {
         return {
@@ -214,5 +226,82 @@ describe('projectPublishImpact', () => {
     })
     expect(r.periodProjectedEur).toBe(70)
     expect(r.blockCount).toBe(1)  // FTE-only block doesn't count (cost=0)
+  })
+})
+
+// ROSTER-FIX.4 — the budget gate priced every assignment at the BLOCK's
+// window and ignored approved leave, so the number the owner signed off on
+// was not the number that would be paid.
+describe('projectPublishImpact — per-assignment overrides and approved leave', () => {
+  it('prices an assignment by its OVERRIDE window, not the block default', async () => {
+    const db = mockDb({
+      location: { id: 'loc1', monthly_contractor_budget_eur: 500 },
+      contractors: [dan],
+      blocks: [block({
+        id: 'b1', date: '2026-05-04', start: '09:00', end: '13:00',   // block says 4h
+        coaches: [{ profile_id: 'dan', status: 'scheduled', start_time_override: '09:00', end_time_override: '10:00' }],
+      })],
+    })
+    const r = await projectPublishImpact(db, { locationId: 'loc1', periodStart: '2026-05-04', periodEnd: '2026-05-10' })
+    // 1h × 35, not the block's 4h × 35.
+    expect(r.periodProjectedEur).toBe(35)
+  })
+
+  it('prices coaches on the same block independently', async () => {
+    const db = mockDb({
+      location: { id: 'loc1', monthly_contractor_budget_eur: 500 },
+      contractors: [dan, eve],
+      blocks: [block({
+        id: 'b1', date: '2026-05-04', start: '09:00', end: '11:00',
+        coaches: [
+          { profile_id: 'dan', status: 'scheduled' },                                             // 2h × 35 = 70
+          { profile_id: 'eve', status: 'scheduled', start_time_override: '09:00', end_time_override: '12:00' }, // 3h × 40 = 120
+        ],
+      })],
+    })
+    const r = await projectPublishImpact(db, { locationId: 'loc1', periodStart: '2026-05-04', periodEnd: '2026-05-10' })
+    expect(r.periodProjectedEur).toBe(190)
+  })
+
+  it('costs nothing for an assignment inside the coach\u2019s APPROVED leave', async () => {
+    const db = mockDb({
+      location: { id: 'loc1', monthly_contractor_budget_eur: 500 },
+      contractors: [dan, eve],
+      blocks: [block({
+        id: 'b1', date: '2026-05-06', start: '09:00', end: '11:00',
+        coaches: ['dan', 'eve'],
+      })],
+      timeOff: [{ profile_id: 'dan', start_date: '2026-05-04', end_date: '2026-05-08' }],
+    })
+    const r = await projectPublishImpact(db, { locationId: 'loc1', periodStart: '2026-05-04', periodEnd: '2026-05-10' })
+    // dan is on leave that day; only eve's 2h × 40 is projected.
+    expect(r.periodProjectedEur).toBe(80)
+  })
+
+  it('leave on OTHER dates leaves the projection alone', async () => {
+    const db = mockDb({
+      location: { id: 'loc1', monthly_contractor_budget_eur: 500 },
+      contractors: [dan],
+      blocks: [block({ id: 'b1', date: '2026-05-06', start: '09:00', end: '11:00', coaches: ['dan'] })],
+      timeOff: [{ profile_id: 'dan', start_date: '2026-05-20', end_date: '2026-05-22' }],
+    })
+    const r = await projectPublishImpact(db, { locationId: 'loc1', periodStart: '2026-05-04', periodEnd: '2026-05-10' })
+    expect(r.periodProjectedEur).toBe(70)
+  })
+
+  it('leave is inclusive of both its first and last day', async () => {
+    const db = mockDb({
+      location: { id: 'loc1', monthly_contractor_budget_eur: 500 },
+      contractors: [dan],
+      blocks: [
+        block({ id: 'b-first', date: '2026-05-04', start: '09:00', end: '11:00', coaches: ['dan'] }),
+        block({ id: 'b-last', date: '2026-05-06', start: '09:00', end: '11:00', coaches: ['dan'] }),
+        block({ id: 'b-after', date: '2026-05-07', start: '09:00', end: '11:00', coaches: ['dan'] }),
+      ],
+      timeOff: [{ profile_id: 'dan', start_date: '2026-05-04', end_date: '2026-05-06' }],
+    })
+    const r = await projectPublishImpact(db, { locationId: 'loc1', periodStart: '2026-05-04', periodEnd: '2026-05-10' })
+    // Only the 7th is billable: 2h × 35.
+    expect(r.periodProjectedEur).toBe(70)
   })
 })
