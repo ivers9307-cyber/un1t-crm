@@ -9,6 +9,13 @@ import ScheduleErrorBanner from './schedule/ScheduleErrorBanner'
 import { readJson } from './schedule/useScheduleData'
 
 const PRESET_COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#06B6D4', '#F97316']
+// ROSTER-FIX.6b — the swatches are eight empty buttons whose only content is
+// a background colour, so a screen reader read eight identical "button"s and
+// the picker was unusable without sight. A hex code is not a name either.
+const COLOR_NAMES = {
+  '#3B82F6': 'Blue', '#10B981': 'Green', '#F59E0B': 'Amber', '#EF4444': 'Red',
+  '#8B5CF6': 'Violet', '#EC4899': 'Pink', '#06B6D4': 'Cyan', '#F97316': 'Orange',
+}
 const DAY_OPTIONS = [
   { code: 'mon', label: 'Mon' },
   { code: 'tue', label: 'Tue' },
@@ -447,6 +454,9 @@ function TemplateFormModal({ template, onSave, onClose }) {
                   key={c}
                   type="button"
                   onClick={() => setColor(c)}
+                  aria-label={COLOR_NAMES[c] || c}
+                  aria-pressed={color === c}
+                  title={COLOR_NAMES[c] || c}
                   className={`w-8 h-8 rounded-full transition-transform ${color === c ? 'scale-110 ring-2 ring-white ring-offset-2 ring-offset-un1t-surface' : 'hover:scale-105'}`}
                   style={{ backgroundColor: c }}
                 />
