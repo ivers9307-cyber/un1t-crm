@@ -29,6 +29,22 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: err?.message || 'Horizon sweep failed' }, { status: 500 })
   }
 
+  // ROSTER-FIX.5 — extendRosterHorizon returns normally when every template
+  // failed individually, so a sweep that generated NOTHING used to stamp a
+  // healthy heartbeat: Sentinel saw a green cron while the horizon stopped
+  // moving, which is the exact failure the heartbeat exists to catch. A total
+  // failure is a failed run — 500, no stamp.
+  //
+  // A PARTIAL failure still stamps, deliberately: the horizon did advance for
+  // the rest of the estate, and the per-template failures ride along in
+  // last_outcome.failed, where the heartbeat's own notes say to look for them.
+  // Withholding the stamp there would page the on-call for one malformed
+  // template while everything else worked.
+  if (stats.failed > 0 && stats.failed === stats.templates) {
+    logWarn('roster-horizon', 'every template failed — heartbeat not stamped', { stats })
+    return NextResponse.json({ success: false, error: 'Every template failed to generate', stats }, { status: 500 })
+  }
+
   await stampHeartbeat('extend-roster-horizon', stats)
   return NextResponse.json({ success: true, stats })
 }

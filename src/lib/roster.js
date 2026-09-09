@@ -3,10 +3,8 @@
 // Used by:
 //   - /api/schedule/templates POST/PUT (to materialise blocks when
 //     a template's days_of_week changes)
-//   - /api/cron/extend-roster-horizon (the nightly sweep in
-//     roster-horizon.js — ROSTER-FIX.5 replaced the old lazy
-//     extend, which only ran when someone scrolled the web
-//     calendar past 8 weeks and so never ran at all on mobile)
+//   - /api/cron/extend-roster-horizon (the nightly sweep — why it
+//     replaced the old lazy extend is in src/lib/roster-horizon.js)
 //   - block-related lib tests
 //
 // We deliberately keep this module pure on its inputs (the supabase
@@ -196,7 +194,15 @@ export function liveAssignments(list) {
 /**
  * ROSTER-FIX.5 — which published roster covers `dateIso` at this location?
  *
+ * Kept alongside the batched form below because PR 4 calls it for a single
+ * date; the batch is for the N-date generator.
+ *
  * Returns the rosters.id, or null when nothing is published for that day.
+ * Nothing stops two published rosters overlapping a date (a re-cut week is
+ * published beside the one it replaces), and an unordered .limit(1) then
+ * returns whichever row Postgres happened to reach first — so the same block
+ * could be tagged to a different roster on two runs. Newest wins: latest
+ * period_start, ties broken by latest created_at, matching the batch matcher.
  * Never throws: a failed lookup must not take a block insert down with it,
  * so an error is logged and treated as "no roster" (the block is created
  * untagged, which is exactly the pre-fix behaviour).
@@ -215,6 +221,8 @@ export async function findPublishedRosterFor(db, locationId, dateIso) {
     .eq('status', 'published')
     .lte('period_start', dateIso)
     .gte('period_end', dateIso)
+    .order('period_start', { ascending: false })
+    .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle()
 
@@ -230,9 +238,26 @@ export async function findPublishedRosterFor(db, locationId, dateIso) {
  * spanning min(dates)..max(dates), matched in JS, so generating eight weeks
  * of blocks costs a single round trip instead of one per date.
  *
+ * Overlapping published rosters resolve the same way as the single-date form:
+ * latest period_start wins, ties broken by latest created_at. The ORDER BY is
+ * on the query AND the tie-break is redone in JS — the ordering is what the
+ * database is asked for, the JS is what makes the answer independent of the
+ * order the rows actually arrive in.
+ *
  * @returns {Promise<Map<string, string>>} date (YYYY-MM-DD) → rosters.id.
  *          Dates with no published roster are simply absent.
  */
+// ROSTER-FIX.5 — "newest wins" for two published rosters covering the same
+// day: later period_start first, then later created_at. A missing created_at
+// (an old row, or a mock that doesn't carry it) sorts oldest rather than
+// throwing the comparison off.
+function isNewerRoster(candidate, incumbent) {
+  if (candidate.period_start !== incumbent.period_start) {
+    return candidate.period_start > incumbent.period_start
+  }
+  return String(candidate.created_at || '') > String(incumbent.created_at || '')
+}
+
 export async function findPublishedRosterIdsByDate(db, locationId, dates) {
   const out = new Map()
   const list = (dates || []).filter(Boolean)
@@ -245,11 +270,13 @@ export async function findPublishedRosterIdsByDate(db, locationId, dates) {
 
   const { data, error } = await db
     .from('rosters')
-    .select('id, period_start, period_end')
+    .select('id, period_start, period_end, created_at')
     .eq('location_id', locationId)
     .eq('status', 'published')
     .lte('period_start', maxDate)
     .gte('period_end', minDate)
+    .order('period_start', { ascending: false })
+    .order('created_at', { ascending: false })
 
   if (error) {
     logWarn('roster', 'findPublishedRosterIdsByDate failed', { locationId, minDate, maxDate, err: error })
@@ -258,7 +285,12 @@ export async function findPublishedRosterIdsByDate(db, locationId, dates) {
 
   // ISO dates compare correctly as strings, so no Date objects needed.
   for (const date of list) {
-    const hit = (data || []).find(r => r.period_start <= date && r.period_end >= date)
+    let hit = null
+    for (const r of (data || [])) {
+      if (!(r.period_start <= date && r.period_end >= date)) continue
+      if (hit && !isNewerRoster(r, hit)) continue
+      hit = r
+    }
     if (hit) out.set(date, hit.id)
   }
   return out

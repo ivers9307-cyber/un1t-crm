@@ -30,11 +30,48 @@ function rostersBuilder(result) {
     eq: (...a) => { b.calls.push(['eq', ...a]); return b },
     lte: (...a) => { b.calls.push(['lte', ...a]); return b },
     gte: (...a) => { b.calls.push(['gte', ...a]); return b },
+    order: (...a) => { b.calls.push(['order', ...a]); return b },
     limit: (...a) => { b.calls.push(['limit', ...a]); return b },
     maybeSingle: () => Promise.resolve(result),
     then: (ok, err) => Promise.resolve(result).then(ok, err),
   }
   return b
+}
+
+// ROSTER-FIX.5 — a rosters mock that actually filters, orders and limits a
+// fixture, so the overlap tests exercise the real ordering instead of a
+// hand-picked row. `honourOrder: false` hands the rows back untouched, which
+// is how we prove the batched matcher's own tie-break does the work.
+function rostersFixtureDb(rows, { honourOrder = true } = {}) {
+  function build() {
+    const state = { rows: rows.slice(), orders: [], limit: null }
+    const b = {
+      select: () => b,
+      eq: () => b,
+      lte: (col, val) => { state.rows = state.rows.filter(r => r[col] <= val); return b },
+      gte: (col, val) => { state.rows = state.rows.filter(r => r[col] >= val); return b },
+      order: (col, opts = {}) => { state.orders.push([col, opts.ascending !== false]); return b },
+      limit: (n) => { state.limit = n; return b },
+      _settle: () => {
+        const sorted = state.rows.slice()
+        if (honourOrder) {
+          sorted.sort((x, y) => {
+            for (const [col, asc] of state.orders) {
+              const a = String(x[col] ?? '')
+              const c = String(y[col] ?? '')
+              if (a !== c) return (a < c ? -1 : 1) * (asc ? 1 : -1)
+            }
+            return 0
+          })
+        }
+        return state.limit != null ? sorted.slice(0, state.limit) : sorted
+      },
+      maybeSingle: () => Promise.resolve({ data: b._settle()[0] ?? null, error: null }),
+      then: (ok, err) => Promise.resolve({ data: b._settle(), error: null }).then(ok, err),
+    }
+    return b
+  }
+  return { from: vi.fn(() => build()) }
 }
 
 describe('dayCodeForDate', () => {
@@ -272,6 +309,10 @@ describe('findPublishedRosterFor', () => {
       ['eq', 'status', 'published'],
       ['lte', 'period_start', '2026-05-06'],
       ['gte', 'period_end', '2026-05-06'],
+      // ROSTER-FIX.5 — an unordered .limit(1) over two overlapping published
+      // rosters returns whichever row Postgres reached first.
+      ['order', 'period_start', { ascending: false }],
+      ['order', 'created_at', { ascending: false }],
       ['limit', 1],
     ])
   })
@@ -309,11 +350,13 @@ describe('findPublishedRosterIdsByDate', () => {
 
     expect(db.from).toHaveBeenCalledTimes(1)
     expect(builder.calls).toEqual([
-      ['select', 'id, period_start, period_end'],
+      ['select', 'id, period_start, period_end, created_at'],
       ['eq', 'location_id', 'loc1'],
       ['eq', 'status', 'published'],
       ['lte', 'period_start', '2026-05-25'],
       ['gte', 'period_end', '2026-05-04'],
+      ['order', 'period_start', { ascending: false }],
+      ['order', 'created_at', { ascending: false }],
     ])
     expect(map.get('2026-05-04')).toBe('rA')
     expect(map.get('2026-05-13')).toBe('rB')
@@ -340,6 +383,51 @@ describe('findPublishedRosterIdsByDate', () => {
     const db = { from: vi.fn() }
     expect((await findPublishedRosterIdsByDate(db, 'loc1', [])).size).toBe(0)
     expect(db.from).not.toHaveBeenCalled()
+  })
+})
+
+// ─── ROSTER-FIX.5 — overlapping published rosters resolve deterministically ──
+//
+// Nothing in the schema stops two published rosters covering the same day (a
+// re-cut week published beside the one it replaces). Before this, the single
+// -date helper took an unordered .limit(1) and the batch matcher took the
+// first row that happened to match — so the SAME block could be tagged to
+// different rosters depending on which path created it, or on nothing at all.
+
+describe('two published rosters covering one date', () => {
+  const DATE = '2026-05-06'
+  // Both cover 2026-05-06. `rNew` starts later, so it wins outright.
+  const OVERLAP = [
+    { id: 'r-old', period_start: '2026-05-01', period_end: '2026-05-10', created_at: '2026-04-01T00:00:00Z' },
+    { id: 'r-new', period_start: '2026-05-04', period_end: '2026-05-10', created_at: '2026-04-02T00:00:00Z' },
+  ]
+  // Same period_start — the created_at tie-break decides.
+  const SAME_START = [
+    { id: 'r-first', period_start: '2026-05-04', period_end: '2026-05-10', created_at: '2026-04-01T00:00:00Z' },
+    { id: 'r-recut', period_start: '2026-05-04', period_end: '2026-05-10', created_at: '2026-04-09T00:00:00Z' },
+  ]
+
+  it('both helpers pick the same roster — latest period_start', async () => {
+    const single = await findPublishedRosterFor(rostersFixtureDb(OVERLAP), 'loc1', DATE)
+    const batched = await findPublishedRosterIdsByDate(rostersFixtureDb(OVERLAP), 'loc1', [DATE])
+    expect(single).toBe('r-new')
+    expect(batched.get(DATE)).toBe('r-new')
+    expect(batched.get(DATE)).toBe(single)
+  })
+
+  it('both helpers break a period_start tie on the latest created_at', async () => {
+    const single = await findPublishedRosterFor(rostersFixtureDb(SAME_START), 'loc1', DATE)
+    const batched = await findPublishedRosterIdsByDate(rostersFixtureDb(SAME_START), 'loc1', [DATE])
+    expect(single).toBe('r-recut')
+    expect(batched.get(DATE)).toBe(single)
+  })
+
+  it('the batched matcher does not lean on the row order it was handed', async () => {
+    // A DB that ignores the ORDER BY entirely: the JS tie-break is all there
+    // is, and it still has to land on the same roster.
+    const db = rostersFixtureDb([...OVERLAP].reverse(), { honourOrder: false })
+    const map = await findPublishedRosterIdsByDate(db, 'loc1', [DATE])
+    expect(map.get(DATE)).toBe('r-new')
   })
 })
 

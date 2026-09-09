@@ -59,4 +59,35 @@ describe('run', () => {
     expect(await res.json()).toMatchObject({ success: false })
     expect(stampHeartbeat).not.toHaveBeenCalled()
   })
+
+  // ROSTER-FIX.5 — extendRosterHorizon returns NORMALLY when every template
+  // failed one by one, so this run used to stamp a healthy heartbeat while
+  // generating nothing at all: a green cron over a horizon that had stopped
+  // moving, which is precisely what the heartbeat exists to catch.
+  it('500s and does NOT stamp when every template failed', async () => {
+    extendRosterHorizon.mockResolvedValue({ templates: 3, inserted: 0, skipped: 0, failed: 3 })
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    expect(await res.json()).toMatchObject({ success: false, stats: { failed: 3 } })
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+
+  // A partial failure DOES stamp: the horizon advanced for the rest of the
+  // estate, and `failed` rides along in last_outcome for whoever reads it.
+  it('still stamps on a PARTIAL failure, carrying the failed count', async () => {
+    extendRosterHorizon.mockResolvedValue({ templates: 3, inserted: 9, skipped: 2, failed: 1 })
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ success: true, stats: { failed: 1 } })
+    expect(stampHeartbeat).toHaveBeenCalledWith('extend-roster-horizon', expect.objectContaining({ failed: 1, inserted: 9 }))
+  })
+
+  // Zero templates is a quiet night, not a failure — `failed === templates`
+  // must not fire on 0 === 0.
+  it('stamps on a sweep with no templates at all', async () => {
+    extendRosterHorizon.mockResolvedValue({ templates: 0, inserted: 0, skipped: 0, failed: 0 })
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    expect(stampHeartbeat).toHaveBeenCalled()
+  })
 })

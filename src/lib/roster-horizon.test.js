@@ -1,10 +1,5 @@
-// ROSTER-FIX.5 — the nightly horizon sweep.
-//
-// The horizon used to be extended lazily, only when an operator scrolled the
-// calendar past 8 weeks. Nothing scrolls on a coach's phone, so a week that
-// nobody had browsed to simply had no blocks in it — invisible until someone
-// noticed the roster was empty. This sweep keeps N weeks materialised for
-// every active template whether or not anyone looks.
+// ROSTER-FIX.5 — the nightly horizon sweep. Why it replaced the old lazy
+// extend is in src/lib/roster-horizon.js.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
