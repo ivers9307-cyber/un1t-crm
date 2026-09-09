@@ -1075,7 +1075,14 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
         // assignments + count of unstaffed blocks. Clicking drills
         // into the week view. Roster v2: separately surfaces empty
         // blocks as a red badge.
-        <div>
+        // ROSTER-FIX.6b — seven columns with no breakpoint. On a 390px phone
+        // each day cell was ~50px wide and every block label inside it was an
+        // ellipsis. The grid keeps its seven columns and gets a floor instead;
+        // the page scrolls the calendar sideways rather than crushing it.
+        // Header row and cells share ONE scroller so the weekday labels stay
+        // over their own columns.
+        <div className="overflow-x-auto">
+          <div className="min-w-[840px]">
           <div className="grid grid-cols-7 gap-1.5 mb-1.5">
             {DAY_LABELS.map(label => (
               <div key={label} className="text-[11px] font-semibold text-un1t-subtle uppercase tracking-wider text-center py-1">
@@ -1189,6 +1196,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
               return cells
             })()}
           </div>
+          </div>
         </div>
       ) : (
         // ── WEEK VIEW ──
@@ -1197,7 +1205,11 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
         // of assigned coaches (or an empty-state with a red flag
         // for future unstaffed demand windows). Click opens the
         // assign popover.
-        <div className="grid grid-cols-7 gap-2">
+        // ROSTER-FIX.6b — same floor as the month grid; a week card carries a
+        // template name, a time range and a coach list, none of which survive
+        // a 50px column.
+        <div className="overflow-x-auto">
+        <div className="grid grid-cols-7 gap-2 min-w-[840px]">
           {(() => {
             const holidayByDate = indexByDate(holidays)
             return DAY_LABELS.map((label, i) => {
@@ -1396,6 +1408,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
               )
             })
           })()}
+        </div>
         </div>
       )}
 

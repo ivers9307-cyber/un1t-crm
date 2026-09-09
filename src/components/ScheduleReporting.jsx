@@ -172,7 +172,9 @@ export default function ScheduleReporting({ user }) {
       {view === 'generate' && (
         <div className="space-y-6">
           {/* Report type selector */}
-          <div className="grid grid-cols-5 gap-2">
+          {/* ROSTER-FIX.6b — five report tiles, each with an icon over a
+              two-line label, will not fit a phone in one row. */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
             {REPORT_TYPES.map(rt => {
               const Icon = rt.icon
               return (
@@ -243,7 +245,7 @@ export default function ScheduleReporting({ user }) {
             <div className="space-y-4">
               {/* Summary cards */}
               {reportResult.summary && (
-                <div className="grid grid-cols-4 gap-3">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                   {Object.entries(reportResult.summary).map(([key, val]) => (
                     <div key={key} className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
                       <div className="text-xs text-un1t-subtle uppercase tracking-wider">{key.replace(/_/g, ' ')}</div>

@@ -193,7 +193,9 @@ export default function TimeOffManager({ user }) {
 
       {/* Allowance Card */}
       {allowance && (
-        <div className="grid grid-cols-4 gap-3 mb-6">
+        // ROSTER-FIX.6b — four allowance cards side by side put a 2xl number
+        // in a ~85px column on a phone. Two up, four from md.
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
           <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
             <div className="text-xs text-un1t-subtle uppercase tracking-wider">Total Allowance</div>
             <div className="text-2xl font-bold mt-1">{allowance.total_days} <span className="text-sm text-un1t-subtle">days</span></div>
