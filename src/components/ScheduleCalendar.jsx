@@ -140,7 +140,6 @@ function flattenBlocksToShifts(blocks) {
         role_label: tpl.role_label || null,
         notes: a.notes || block.notes || null,
         status: a.status,
-        published: true, // assignments are always live in the new model
         shift_templates: tpl,
         profiles: a.profiles,
       })

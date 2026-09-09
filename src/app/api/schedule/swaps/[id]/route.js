@@ -11,6 +11,7 @@ import { MANAGER_ROLES } from '@/lib/schemas'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { APPROVAL_CATEGORY_PERMISSION } from '@shared/permissions'
 import { logRosterChange } from '@/lib/roster-change-log'
+import { logWarn } from '@/lib/log'
 
 const SwapReviewSchema = z.object({
   status: swapStatusSchema,
@@ -66,6 +67,12 @@ export async function PUT(request, props) {
   // swap row is gone afterwards and the captured row is what we return.
   // (PR 8 replaces the CASCADE with ON DELETE SET NULL so the history
   // survives; until then this ordering is the correct one.)
+  //
+  // ROSTER-FIX.1 — the cost of that ordering: if the assignment op fails after
+  // the swap row is already `approved` and the change-log row is written, the
+  // audit trail says a shift was dropped that the coach is in fact still on.
+  // The caller gets a 400, so nothing claims success, but the partial state
+  // outlives the request and only a log says so — see the logWarn below.
   const { data, error } = await db.from('shift_swap_requests')
     .update(decision.swapUpdates)
     .eq('id', params.id)
@@ -103,7 +110,21 @@ export async function PUT(request, props) {
       ? db.from('shift_assignments').delete().eq('id', op.id)
       : db.from('shift_assignments').update(op.set).eq('id', op.id)
     const { error: opErr } = await q
-    if (opErr) return NextResponse.json({ success: false, error: opErr.message }, { status: 400 })
+    if (opErr) {
+      // ROSTER-FIX.1 — a failed DELETE here leaves the swap `approved` and a
+      // roster_change_log row claiming the coach was unassigned, while the
+      // assignment is still there. Nothing retries, and the audit row is the
+      // thing a manager trusts, so say so structurally rather than let the
+      // 400 be the only trace.
+      if (op.delete) {
+        logWarn('swaps', 'approved drop: assignment delete failed after swap approved + change logged', {
+          swapId: swap.id,
+          assignmentId: op.id,
+          err: opErr.message,
+        })
+      }
+      return NextResponse.json({ success: false, error: opErr.message }, { status: 400 })
+    }
   }
 
   // Best-effort pushes — never block or fail the response.

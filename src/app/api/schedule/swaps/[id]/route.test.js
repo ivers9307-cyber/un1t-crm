@@ -24,10 +24,12 @@ vi.mock('@/lib/push-dedup', () => ({
   sendPushToRolesAtLocationOnce: vi.fn().mockResolvedValue(undefined),
 }))
 vi.mock('@/lib/roster-change-log', () => ({ logRosterChange: vi.fn().mockResolvedValue({ logged: true }) }))
+vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
 
 const { createServerClient } = await import('@/lib/supabase')
 const { getCurrentUser } = await import('@/lib/auth')
 const { logRosterChange } = await import('@/lib/roster-change-log')
+const { logWarn } = await import('@/lib/log')
 const { PUT } = await import('./route.js')
 
 const MANAGER = { id: 'mgr-1', role: 'manager', full_name: 'Manny Manager' }
@@ -65,8 +67,9 @@ function dropSwap(rosterStatus = 'published') {
 }
 
 // Records every write in `calls` so a test can assert the ordering the
-// CASCADE forces on us.
-function buildDb(swap, calls) {
+// CASCADE forces on us. `deleteErr` fails the assignment delete, which is the
+// partial state the ordering makes possible.
+function buildDb(swap, calls, deleteErr = null) {
   return {
     from: (table) => {
       if (table === 'shift_swap_requests') {
@@ -91,7 +94,7 @@ function buildDb(swap, calls) {
           delete: () => ({
             eq: (col, val) => {
               calls.push(`assignment_delete:${col}=${val}`)
-              return Promise.resolve({ error: null })
+              return Promise.resolve({ error: deleteErr })
             },
           }),
         }
@@ -106,6 +109,7 @@ beforeEach(() => {
   getCurrentUser.mockReset()
   logRosterChange.mockClear()
   logRosterChange.mockResolvedValue({ logged: true })
+  logWarn.mockClear()
 })
 
 describe('PUT /api/schedule/swaps/[id] — approved drop audit', () => {
@@ -155,5 +159,38 @@ describe('PUT /api/schedule/swaps/[id] — approved drop audit', () => {
     // draft, and a DELETE leaves no other trace that the shift existed.
     expect(change.isPublished).toBe(true)
     expect(change.details.roster_status).toBe('draft')
+  })
+
+  // ROSTER-FIX.1 — the ordering the CASCADE forces makes this partial state
+  // reachable: swap approved, change-log row written, assignment still there.
+  // Nothing retries it, so the audit row is wrong until someone looks.
+  it('logs a warning when the delete fails after the swap is approved and the change logged', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const calls = []
+    createServerClient.mockReturnValue(buildDb(dropSwap('published'), calls, { message: 'delete blew up' }))
+
+    const res = await PUT(req({ status: 'approved' }), PROPS)
+    const json = await res.json()
+    expect(res.status).toBe(400)
+    expect(json.error).toBe('delete blew up')
+
+    // The swap row was already stamped and the drop already audited — that is
+    // exactly why the warning has to exist.
+    expect(calls).toContain('swap_update')
+    expect(logRosterChange).toHaveBeenCalledTimes(1)
+
+    expect(logWarn).toHaveBeenCalledTimes(1)
+    const [module, message, meta] = logWarn.mock.calls[0]
+    expect(module).toBe('swaps')
+    expect(message).toMatch(/assignment delete failed after swap approved/)
+    expect(meta).toEqual({ swapId: 'swap-1', assignmentId: 'assign-1', err: 'delete blew up' })
+  })
+
+  it('does not warn when the delete succeeds', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    createServerClient.mockReturnValue(buildDb(dropSwap('published'), []))
+
+    await PUT(req({ status: 'approved' }), PROPS)
+    expect(logWarn).not.toHaveBeenCalled()
   })
 })
