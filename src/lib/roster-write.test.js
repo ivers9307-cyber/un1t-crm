@@ -9,15 +9,42 @@ import { upsertShiftAssignment, bulkUpsertShiftAssignments } from './roster-writ
 // location-scoped lookups matching nothing (SAAS-1) — the route-level
 // harness in assistant/chat/route.test.js is what actually applies the
 // filters against a two-location fixture.
-function makeDb({ template, existingBlock, newBlockId = 'blk-new', assignment = { id: 'a1' }, profileLink = { profile_id: 'p1' }, publishedRoster = null }) {
+function makeDb({ template, existingBlock, newBlockId = 'blk-new', assignment = { id: 'a1' }, profileLink = { profile_id: 'p1' }, publishedRoster = null, publishedRosters = null }) {
   const captured = { blockInsert: null, assignmentUpsert: null }
   const db = {
     captured,
     from(table) {
-      // ROSTER-FIX.4 — findPublishedRosterFor's probe.
+      // ROSTER-FIX.4 — findPublishedRosterFor's probe. `publishedRoster` is
+      // the one-row shorthand; `publishedRosters` hands the probe a real set
+      // and RUNS its date filters, ordering and limit(1), which is the only
+      // way to test which roster wins when two of them cover the date.
       if (table === 'rosters') {
+        if (publishedRosters) {
+          let rows = publishedRosters
+          const orders = []
+          let cap = rows.length
+          const chain = {
+            select: () => chain,
+            eq: () => chain,
+            lte: (col, val) => { rows = rows.filter((r) => r[col] <= val); return chain },
+            gte: (col, val) => { rows = rows.filter((r) => r[col] >= val); return chain },
+            order: (col, opts) => { orders.push([col, opts?.ascending !== false ? 1 : -1]); return chain },
+            limit: (n) => { cap = n; return chain },
+            maybeSingle: () => {
+              const sorted = [...rows].sort((a, b) => {
+                for (const [col, dir] of orders) {
+                  if (a[col] < b[col]) return -1 * dir
+                  if (a[col] > b[col]) return 1 * dir
+                }
+                return 0
+              })
+              return Promise.resolve({ data: sorted.slice(0, cap)[0] || null, error: null })
+            },
+          }
+          return chain
+        }
         const chain = {
-          select: () => chain, eq: () => chain, lte: () => chain, gte: () => chain, limit: () => chain,
+          select: () => chain, eq: () => chain, lte: () => chain, gte: () => chain, order: () => chain, limit: () => chain,
           maybeSingle: () => Promise.resolve({ data: publishedRoster, error: null }),
         }
         return chain
@@ -119,6 +146,25 @@ describe('upsertShiftAssignment', () => {
     expect(db.captured.blockInsert.roster_id).toBeNull()
   })
 
+  // ROSTER-FIX.4 — after a week→month superset publish BOTH rosters still
+  // cover the date (the publish guard allows a containing period, and the
+  // swallowed week's row stays). The month is the one that owns the day's
+  // blocks, so a block created afterwards must join the MONTH — and must do
+  // so every time, not per whatever order the rows come back in.
+  it('joins the MONTH, not the swallowed week, after a superset publish', async () => {
+    const rosters = [
+      { id: 'r-week', period_start: '2026-06-01', period_end: '2026-06-07', created_at: '2026-05-20T09:00:00Z' },
+      { id: 'r-month', period_start: '2026-06-01', period_end: '2026-06-30', created_at: '2026-05-28T09:00:00Z' },
+    ]
+    const db = makeDb({ template, existingBlock: null, publishedRosters: rosters })
+    await upsertShiftAssignment(db, base)
+    expect(db.captured.blockInsert.roster_id).toBe('r-month')
+
+    const flipped = makeDb({ template, existingBlock: null, publishedRosters: [...rosters].reverse() })
+    await upsertShiftAssignment(flipped, base)
+    expect(flipped.captured.blockInsert.roster_id).toBe('r-month')
+  })
+
   it('returns the validated template row so callers can reuse its name', async () => {
     const db = makeDb({ template: { ...template, name: 'AM Shift' }, existingBlock: { id: 'blk-existing' } })
     const res = await upsertShiftAssignment(db, base)
@@ -144,6 +190,7 @@ function makeBulkDb({ templates = [], existingBlocks = [], createdBlocks = [], p
           eq: () => chain,
           lte: (col, val) => { if (col === 'period_start') { probed = val; captured.rosterProbeDates.push(val) } return chain },
           gte: () => chain,
+          order: () => chain,
           limit: () => chain,
           maybeSingle: () => Promise.resolve({ data: publishedRosterByDate[probed] || null, error: null }),
         }

@@ -153,7 +153,7 @@ describe('POST /api/schedule/blocks — post-publish blocks join the roster', ()
       from(table) {
         if (table === 'rosters') {
           const chain = {
-            select: () => chain, eq: () => chain, lte: () => chain, gte: () => chain, limit: () => chain,
+            select: () => chain, eq: () => chain, lte: () => chain, gte: () => chain, order: () => chain, limit: () => chain,
             maybeSingle: () => Promise.resolve({ data: publishedRoster, error: null }),
           }
           return chain

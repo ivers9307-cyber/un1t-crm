@@ -83,7 +83,9 @@ export async function POST(request, props) {
     try {
       await notifyUsersOnce(db, `roster_rejected:${roster.id}`, [roster.created_by], {
         title: 'Roster not approved',
-        body: `Your roster for ${range} was not approved${note ? ` — “${note}”` : ''}. Adjust it and publish again.`,
+        // ROSTER-FIX.4 — a colon, not an em dash: house style keeps em dashes out
+        // of customer- and staff-facing messages.
+        body: `Your roster for ${range} was not approved${note ? `: “${note}”` : ''}. Adjust it and publish again.`,
         category: 'schedule',
         emailSubject: 'Roster not approved',
         data: {

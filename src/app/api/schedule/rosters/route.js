@@ -113,6 +113,22 @@ export async function POST(request) {
   // containing period is still allowed) lives on the helper, which the
   // approve endpoint runs too — a guard only one publish path ran was no
   // guard at all.
+  //
+  // KNOWN GAP — what a SUPERSET publish leaves behind, deliberately not
+  // fixed here:
+  //   1. The swallowed week's `rosters` row STAYS, now owning zero blocks,
+  //      because the wider publish rewrote roster_id across the whole range.
+  //      It lingers in retros as a roster that published nothing.
+  //   2. That week's coaches are NOT re-notified by the wider publish. Both
+  //      this route and approve only notify blocks that were
+  //      `roster_id IS NULL` before tagging, and the swallowed week's blocks
+  //      already carried the old roster's id — so a month publish tells the
+  //      coaches it just took over nothing at all.
+  // This is also why mig 602's exclusion constraint is on HOLD: it would
+  // reject the superset publish outright rather than let the wider roster
+  // win. All three wait on the "supersede swallowed rosters" decision
+  // (extend the existing row, or mark the contained rows superseded and
+  // re-notify their coaches) — Richard's call, it rewrites audit rows.
   const { conflicts, error: overlapErr } = await findConflictingPublishedRosters(db, {
     locationId: location_id,
     periodStart: period_start,
