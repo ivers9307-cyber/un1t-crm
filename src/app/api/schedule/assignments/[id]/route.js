@@ -9,8 +9,11 @@
 // DELETE — removes a coach from a shift_block (deletes the
 //       shift_assignment row).
 //
-// Coaches can edit/remove themselves on assignments they own.
-// Managers can edit/remove anyone at a location they own.
+// ROSTER-FIX.3 (D2, D3) — BOTH handlers are manager-only. A coach is paid
+// for a window a manager set, so only a manager moves it; and a coach who
+// cannot work a shift raises a swap rather than deleting themselves off a
+// published roster. Managers act on locations they own (a foreign location
+// 404s, the detail-route rule); master acts anywhere.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -40,6 +43,15 @@ export async function PUT(request, props) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   }
 
+  // ROSTER-FIX.3 (D3) — refuse before touching the body or the database:
+  // a non-manager has nothing to say about a paid window.
+  if (!MANAGER_ROLES.includes(user.role)) {
+    return NextResponse.json(
+      { success: false, error: 'Only a manager can change shift hours' },
+      { status: 403 }
+    )
+  }
+
   const validation = await validateBody(request, UpdateAssignmentSchema)
   if (!validation.ok) return validation.response
   const updates = { ...validation.data }
@@ -58,16 +70,14 @@ export async function PUT(request, props) {
     return NextResponse.json({ success: false, error: 'Assignment not found' }, { status: 404 })
   }
 
-  const isSelf = assignment.profile_id === user.id
-  const isManager = MANAGER_ROLES.includes(user.role)
-  if (!isSelf && !isManager) {
-    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
-  }
-  if (isManager && user.role !== 'master') {
+  // Per-location ownership for non-master managers. A shift at a location
+  // the caller does not own is invisible, not forbidden — 404, matching the
+  // rest of the detail routes, so the response never confirms it exists.
+  if (user.role !== 'master') {
     const userLocationIds = getUserLocationIds(user)
     const blockLocation = assignment.shift_blocks?.location_id
     if (blockLocation && !userLocationIds.includes(blockLocation)) {
-      return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+      return NextResponse.json({ success: false, error: 'Assignment not found' }, { status: 404 })
     }
   }
 
@@ -110,15 +120,15 @@ export async function PUT(request, props) {
     return NextResponse.json({ success: false, error: error.message }, { status: 400 })
   }
 
-  // Push the affected coach when a manager (not self) actually
-  // changed the override times. Same-fields-as-before doesn't
-  // count — we compare to assignment we read pre-update.
-  const wasManagerEdit = assignment.profile_id !== user.id
+  // Push the affected coach whenever the override times actually
+  // changed. ROSTER-FIX.3 — every caller here is a manager, so there is
+  // no longer a self-edit to suppress: any override change is news to the
+  // coach whose hours moved.
   const overrideChanged =
     Object.prototype.hasOwnProperty.call(updates, 'start_time_override') ||
     Object.prototype.hasOwnProperty.call(updates, 'end_time_override') ||
     Object.prototype.hasOwnProperty.call(updates, 'partial_reason')
-  if (wasManagerEdit && overrideChanged) {
+  if (overrideChanged) {
     try {
       const block = data.shift_blocks
       const tplName = block?.shift_templates?.name || 'Shift'
@@ -187,6 +197,15 @@ export async function DELETE(_request, props) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   }
 
+  // ROSTER-FIX.3 (D2) — a coach cannot delete themselves off a shift; the
+  // way out of a shift you cannot work is a swap "drop" request.
+  if (!MANAGER_ROLES.includes(user.role)) {
+    return NextResponse.json(
+      { success: false, error: 'Ask for a swap to drop this shift' },
+      { status: 403 }
+    )
+  }
+
   const db = createServerClient()
 
   // Pull the assignment + parent block so we can authorise.
@@ -200,19 +219,13 @@ export async function DELETE(_request, props) {
     return NextResponse.json({ success: false, error: 'Assignment not found' }, { status: 404 })
   }
 
-  const isSelf = assignment.profile_id === user.id
-  const isManager = MANAGER_ROLES.includes(user.role)
-
-  if (!isSelf && !isManager) {
-    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
-  }
-
-  // Per-location ownership check for non-master managers.
-  if (isManager && user.role !== 'master') {
+  // Per-location ownership check for non-master managers — 404 (not 403) on
+  // a foreign location, matching the rest of the detail routes.
+  if (user.role !== 'master') {
     const userLocationIds = getUserLocationIds(user)
     const blockLocation = assignment.shift_blocks?.location_id
     if (blockLocation && !userLocationIds.includes(blockLocation)) {
-      return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+      return NextResponse.json({ success: false, error: 'Assignment not found' }, { status: 404 })
     }
   }
 
@@ -222,9 +235,9 @@ export async function DELETE(_request, props) {
   }
 
   // SCHEDULE-CHANGE-LOG.1 — record a manager removing a coach from a
-  // published roster (skip self-removal — the coach already knows) so the
-  // next re-publish re-notifies them. Best-effort.
-  if (!isSelf && assignment.shift_blocks?.rosters?.status === 'published') {
+  // published roster so the next re-publish re-notifies them. Best-effort.
+  // ROSTER-FIX.3 — the self-removal skip is gone with the self-delete path.
+  if (assignment.shift_blocks?.rosters?.status === 'published') {
     await logRosterChange(db, {
       isPublished: true,
       locationId: assignment.shift_blocks?.location_id,
