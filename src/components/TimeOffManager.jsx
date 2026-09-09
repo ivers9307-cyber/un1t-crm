@@ -202,15 +202,15 @@ export default function TimeOffManager({ user }) {
           </div>
           <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
             <div className="text-xs text-un1t-subtle uppercase tracking-wider">Used</div>
-            <div className="text-2xl font-bold mt-1 text-red-400">{allowance.used_days} <span className="text-sm text-un1t-subtle">days</span></div>
+            <div className="text-2xl font-bold mt-1 text-red-700">{allowance.used_days} <span className="text-sm text-un1t-subtle">days</span></div>
           </div>
           <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
             <div className="text-xs text-un1t-subtle uppercase tracking-wider">Carried Over</div>
-            <div className="text-2xl font-bold mt-1 text-blue-400">{allowance.carried_over} <span className="text-sm text-un1t-subtle">days</span></div>
+            <div className="text-2xl font-bold mt-1 text-blue-700">{allowance.carried_over} <span className="text-sm text-un1t-subtle">days</span></div>
           </div>
           <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
             <div className="text-xs text-un1t-subtle uppercase tracking-wider">Remaining</div>
-            <div className="text-2xl font-bold mt-1 text-green-400">{allowance.remaining} <span className="text-sm text-un1t-subtle">days</span></div>
+            <div className="text-2xl font-bold mt-1 text-green-700">{allowance.remaining} <span className="text-sm text-un1t-subtle">days</span></div>
           </div>
         </div>
       )}
@@ -358,7 +358,7 @@ export default function TimeOffManager({ user }) {
                       onClick={() => handleCancel(req.id)}
                       aria-label={`Cancel ${requestLabel}`}
                       disabled={!!actingId}
-                      className="text-xs px-3 py-1.5 rounded-lg border border-un1t-border text-un1t-subtle hover:text-red-400 hover:border-red-400/30 disabled:opacity-50 transition-colors"
+                      className="text-xs px-3 py-1.5 rounded-lg border border-un1t-border text-un1t-subtle hover:text-red-700 hover:border-red-500/30 disabled:opacity-50 transition-colors"
                     >
                       Cancel
                     </button>
@@ -505,7 +505,7 @@ function TimeOffFormModal({ user, allowance, onClose, onSubmit }) {
                 <span className="ml-2">
                   · {allowance.remaining} remaining
                   {totalDays > allowance.remaining && (
-                    <span className="text-red-400 ml-1">(exceeds balance)</span>
+                    <span className="text-red-700 ml-1">(exceeds balance)</span>
                   )}
                 </span>
               )}

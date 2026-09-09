@@ -957,7 +957,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
               if (viewType === 'month') setMonthStart(getMonthStart(now))
               else setWeekStart(getMonday(now))
             }}
-            className="ml-3 text-xs text-blue-400 hover:text-blue-300"
+            className="ml-3 text-xs text-blue-700 hover:text-blue-800"
           >
             Today
           </button>
@@ -1026,7 +1026,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
 
         return (
           <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
-            <div className="flex items-center gap-2 text-amber-400 font-medium text-sm mb-2">
+            <div className="flex items-center gap-2 text-amber-700 font-medium text-sm mb-2">
               <AlertTriangle size={16} /> Weekly hours notice
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
@@ -1115,7 +1115,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                     } ${isToday ? 'ring-1 ring-blue-400/50' : ''} ${holiday ? 'bg-amber-500/[0.06]' : ''}`}
                   >
                     <div className="flex items-center justify-between mb-1">
-                      <span className={`text-xs font-semibold ${isToday ? 'text-blue-400' : inFocusedMonth ? 'text-un1t-text' : 'text-un1t-muted'}`}>
+                      <span className={`text-xs font-semibold ${isToday ? 'text-blue-700' : inFocusedMonth ? 'text-un1t-text' : 'text-un1t-muted'}`}>
                         {date.getDate()}
                       </span>
                       <div className="flex items-center gap-1">
@@ -1134,7 +1134,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                       </div>
                     </div>
                     {holiday && (
-                      <div className="text-[9px] text-amber-500 mb-1 truncate" title={holiday.name}>
+                      <div className="text-[9px] text-amber-700 mb-1 truncate" title={holiday.name}>
                         {holiday.name}
                       </div>
                     )}
@@ -1228,7 +1228,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                     <div>{label}</div>
                     <div className={`text-lg font-bold ${isToday ? 'text-white' : 'text-un1t-text'}`}>{date.getDate()}</div>
                     {holiday && (
-                      <div className={`mt-0.5 text-[10px] font-medium leading-tight px-1 truncate ${isToday ? 'text-white/80' : 'text-amber-300'}`}>
+                      <div className={`mt-0.5 text-[10px] font-medium leading-tight px-1 truncate ${isToday ? 'text-white/80' : 'text-amber-700'}`}>
                         {holiday.source === 'national' ? '🇮🇪 ' : '🏷 '}{holiday.name}
                       </div>
                     )}
@@ -1358,7 +1358,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
 
                           {/* Assigned coaches list */}
                           {count === 0 ? (
-                            <div className="mt-1.5 text-[11px] text-red-300 italic">
+                            <div className="mt-1.5 text-[11px] text-red-700 italic">
                               {!isManager ? 'No coach assigned' : unstaffed ? 'Unstaffed — assign a coach' : 'No coach (past)'}
                             </div>
                           ) : (
@@ -1368,7 +1368,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                                 const hasOverride = !!(a.start_time_override || a.end_time_override)
                                 return (
                                   <div key={a.id} className="flex items-center justify-between gap-1 text-[11px]">
-                                    <span className={`truncate ${isMe ? 'text-blue-300 font-medium' : 'text-un1t-text'}`}>
+                                    <span className={`truncate ${isMe ? 'text-blue-700 font-medium' : 'text-un1t-text'}`}>
                                       {a.profiles?.full_name || 'Unknown'}
                                       {hasOverride && (
                                         // ROSTER-FIX.6b — a bare bullet with a colour
@@ -1379,7 +1379,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                                         // detail moves into a visually-hidden span so
                                         // the tooltip is no longer the only copy.
                                         <span
-                                          className="ml-1 text-amber-300"
+                                          className="ml-1 text-amber-700"
                                           title={
                                             `Adjusted: ${formatTime(a.start_time_override || block.start_time)}–${formatTime(a.end_time_override || block.end_time)}` +
                                             (a.partial_reason ? ` · ${a.partial_reason}` : '')
@@ -1574,7 +1574,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
         <div className="fixed bottom-0 left-0 right-0 z-40 bg-un1t-surface border-t border-amber-500/50 shadow-2xl shadow-amber-500/10">
           <div className="max-w-7xl mx-auto px-4 py-3 flex items-center gap-3 flex-wrap">
             <div className="flex items-center gap-2 text-sm">
-              <Check size={16} className="text-amber-400" />
+              <Check size={16} className="text-amber-700" />
               <span className="font-semibold text-un1t-text">
                 {selectedBlockIds.size === 0
                   ? 'Click shifts on the calendar to select'
@@ -1613,9 +1613,9 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
           </div>
           {toast && (
             <div key={toast.id} data-toast-id={toast.id} className={`max-w-7xl mx-auto px-4 pb-2 text-xs ${
-              toast.kind === 'error' ? 'text-red-400' :
-              toast.kind === 'warning' ? 'text-amber-300' :
-              'text-emerald-400'
+              toast.kind === 'error' ? 'text-red-700' :
+              toast.kind === 'warning' ? 'text-amber-700' :
+              'text-emerald-700'
             }`}>
               {toast.message}
             </div>
@@ -1686,7 +1686,15 @@ function AssignCoachModal({ block, staff, onAssign, onClose, restoreFocusRef }) 
     // ticked: the operator has made a selection they would have to redo.
     <Modal open onClose={onClose} title="Assign coaches" dismissOnBackdrop={selectedIds.size === 0} restoreFocusRef={restoreFocusRef}>
       <div>
-        <div className="bg-black/30 rounded-lg p-3 mb-4 text-sm">
+        {/* ROSTER-FIX.6b-8 — this summary block was `bg-black/30`, which was a
+            legible dark inset while the overlay was a hand-rolled dark div.
+            Converting the overlay to the Modal primitive put it on a WHITE
+            panel, where a 30%-black wash over white is a mid grey that the
+            un1t-subtle sub-line underneath it no longer reads on. It becomes
+            the ordinary light card recipe: the surface token plus a hairline.
+            `bg-un1t-bg` would be invisible here (the panel is already white)
+            and `bg-un1t-muted` is dark enough to fail its own sub-line. */}
+        <div className="bg-un1t-surface border border-un1t-border rounded-lg p-3 mb-4 text-sm text-un1t-text">
           <div className="font-medium">{tmpl.name || 'Shift'} — {dayLabel}</div>
           <div className="text-un1t-subtle text-xs mt-1">
             {formatTime(block.start_time)}–{formatTime(block.end_time)} · {currentCount}/{block.max_coaches} assigned · {slotsLeft} slot{slotsLeft === 1 ? '' : 's'} open
@@ -1719,7 +1727,7 @@ function AssignCoachModal({ block, staff, onAssign, onClose, restoreFocusRef }) 
           )}
         </div>
         {overCapacity && (
-          <p className="mt-2 text-[11px] text-amber-400">
+          <p className="mt-2 text-[11px] text-amber-700">
             {selectedIds.size} selected but only {slotsLeft} slot{slotsLeft === 1 ? '' : 's'} left — the extras will be skipped.
           </p>
         )}
@@ -1998,7 +2006,8 @@ function SwapModal({ shift, onSubmit, onClose, restoreFocusRef }) {
   return (
     <Modal open onClose={onClose} title="Request Shift Swap" dismissOnBackdrop={!reason.trim()} restoreFocusRef={restoreFocusRef}>
       <div>
-        <div className="bg-black/30 rounded-lg p-3 mb-4 text-sm">
+        {/* ROSTER-FIX.6b-8 — same `bg-black/30` inset, same white panel. */}
+        <div className="bg-un1t-surface border border-un1t-border rounded-lg p-3 mb-4 text-sm text-un1t-text">
           <div className="font-medium">{tmpl.name} — {new Date(shift.shift_date + 'T00:00:00').toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'long' })}</div>
           <div className="text-un1t-subtle text-xs mt-1">
             {formatTime(shift.start_time_override || tmpl.start_time)}–{formatTime(shift.end_time_override || tmpl.end_time)}
@@ -2217,7 +2226,7 @@ function AssignmentRow({ assignment, block, isMe, canEdit, busy, onUnassign, onS
     <div className="bg-un1t-bg/40 border border-un1t-border rounded-md p-3">
       <div className="flex items-center justify-between gap-2">
         <div className="min-w-0">
-          <div className={`text-sm font-medium ${isMe ? 'text-blue-300' : 'text-un1t-text'}`}>
+          <div className={`text-sm font-medium ${isMe ? 'text-blue-700' : 'text-un1t-text'}`}>
             {assignment.profiles?.full_name || 'Unknown'}
             {hasOverride && (
               <span className="ml-1.5 text-[10px] uppercase font-bold bg-amber-400 text-amber-950 px-1.5 py-0.5 rounded">
@@ -2311,17 +2320,22 @@ function AssignmentRow({ assignment, block, isMe, canEdit, busy, onUnassign, onS
             />
           </div>
           {error && (
-            <div className="text-xs text-red-400 inline-flex items-start gap-1.5">
+            <div className="text-xs text-red-700 inline-flex items-start gap-1.5">
               <AlertCircle size={11} className="mt-0.5 shrink-0" /> {error}
             </div>
           )}
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">
+              {/* ROSTER-FIX.6b-8 — `text-amber-200` is a dark-theme ramp; on
+                  the primitive's white panel this Save button read as pale
+                  cream on near-white. The light recipe is a -700 text ramp
+                  over a 10% tint, which is what its Add-coach and Delete
+                  siblings in BlockDetailModal already use. */}
               <button
                 type="button"
                 onClick={handleSave}
                 disabled={saving}
-                className="text-xs bg-amber-500/20 text-amber-200 border border-amber-500/40 hover:bg-amber-500/30 px-3 py-1.5 rounded-md font-medium inline-flex items-center gap-1.5 disabled:opacity-50"
+                className="text-xs bg-amber-500/10 text-amber-700 border border-amber-500/40 hover:bg-amber-500/20 px-3 py-1.5 rounded-md font-medium inline-flex items-center gap-1.5 disabled:opacity-50"
               >
                 <Check size={11} /> {saving ? 'Saving…' : 'Save'}
               </button>
@@ -2339,7 +2353,7 @@ function AssignmentRow({ assignment, block, isMe, canEdit, busy, onUnassign, onS
                 type="button"
                 onClick={handleClear}
                 disabled={saving}
-                className="text-[11px] text-un1t-muted hover:text-red-300"
+                className="text-[11px] text-un1t-muted hover:text-red-700"
                 title="Remove the override and inherit the block default"
               >
                 Clear override

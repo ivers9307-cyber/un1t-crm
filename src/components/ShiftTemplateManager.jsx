@@ -263,7 +263,7 @@ export default function ShiftTemplateManager({ user }) {
                     aria-label={`Reactivate the ${t.name} template`}
                     onClick={() => setTemplateActive(t.id, true)}
                     disabled={busyId === t.id}
-                    className="text-xs text-blue-400 hover:text-blue-300 disabled:opacity-50"
+                    className="text-xs text-blue-700 hover:text-blue-800 disabled:opacity-50"
                   >
                     Reactivate
                   </button>
@@ -364,9 +364,9 @@ function TemplateFormModal({ template, onSave, onClose }) {
             <div className="flex items-center justify-between mb-1.5">
               <label className="text-xs text-un1t-subtle">Days this shift applies to *</label>
               <div className="flex items-center gap-2 text-[11px]">
-                <button type="button" onClick={selectAllWeek} className="text-blue-400 hover:text-blue-300">Mon–Fri</button>
+                <button type="button" onClick={selectAllWeek} className="text-blue-700 hover:text-blue-800">Mon–Fri</button>
                 <span className="text-un1t-muted">·</span>
-                <button type="button" onClick={selectAll} className="text-blue-400 hover:text-blue-300">All</button>
+                <button type="button" onClick={selectAll} className="text-blue-700 hover:text-blue-800">All</button>
                 <span className="text-un1t-muted">·</span>
                 <button type="button" onClick={clearAll} className="text-un1t-subtle hover:text-un1t-text">Clear</button>
               </div>

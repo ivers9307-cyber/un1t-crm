@@ -105,6 +105,19 @@ const config = [
       'src/components/WABroadcastEditor.jsx',
       'src/components/WATemplateEditor.jsx',
       'src/components/WhatsappTemplatesList.jsx',
+      // ROSTER-FIX.6b-8 — the staff schedule. Not a Communications screen, but
+      // the same surface: every one of these renders on the white app shell,
+      // and their five overlays now render on the Modal primitive's white
+      // panel, where the dark-theme -300/-400/-500 ramps they were written in
+      // read as washed-out grey. Driven to zero by the sweep in this commit
+      // (measure it the same way the gate does: `npm run check:guardrails`),
+      // so the list is what stops it coming back — the one-line ratchet the
+      // block comment above describes. The colour-blind and greyscale work in
+      // 6b is worth nothing if the text carrying it cannot be read at all.
+      'src/components/ScheduleCalendar.jsx',
+      'src/components/ScheduleReporting.jsx',
+      'src/components/ShiftTemplateManager.jsx',
+      'src/components/TimeOffManager.jsx',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },

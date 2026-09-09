@@ -306,7 +306,7 @@ export default function ScheduleReporting({ user }) {
                           )}
                           {selectedReport === 'utilisation' && (
                             <td className="px-4 py-3 text-right">
-                              <span className={`font-medium ${s.utilisation_pct > 100 ? 'text-red-400' : s.utilisation_pct >= 80 ? 'text-green-400' : 'text-amber-400'}`}>
+                              <span className={`font-medium ${s.utilisation_pct > 100 ? 'text-red-700' : s.utilisation_pct >= 80 ? 'text-green-700' : 'text-amber-700'}`}>
                                 {s.utilisation_pct}%
                               </span>
                             </td>
@@ -335,9 +335,9 @@ export default function ScheduleReporting({ user }) {
                       {Object.entries(reportResult.report_data.by_staff).map(([name, data]) => (
                         <tr key={name} className="border-b border-un1t-border/50 hover:bg-un1t-border/30">
                           <td className="px-4 py-3 font-medium">{name}</td>
-                          <td className="px-4 py-3 text-right text-green-400">{data.holiday || 0}</td>
-                          <td className="px-4 py-3 text-right text-red-400">{data.sick || 0}</td>
-                          <td className="px-4 py-3 text-right text-amber-400">{data.unavailable || 0}</td>
+                          <td className="px-4 py-3 text-right text-green-700">{data.holiday || 0}</td>
+                          <td className="px-4 py-3 text-right text-red-700">{data.sick || 0}</td>
+                          <td className="px-4 py-3 text-right text-amber-700">{data.unavailable || 0}</td>
                           <td className="px-4 py-3 text-right font-medium">{data.total}</td>
                         </tr>
                       ))}
@@ -403,7 +403,7 @@ export default function ScheduleReporting({ user }) {
                     className="w-full bg-un1t-surface border border-un1t-border rounded-lg p-4 flex items-center gap-4 text-left hover:border-white/20 transition-colors"
                   >
                     <div className="w-10 h-10 rounded-lg bg-blue-500/20 flex items-center justify-center shrink-0">
-                      <Icon size={20} className="text-blue-400" />
+                      <Icon size={20} className="text-blue-700" />
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="font-medium text-sm">{r.report_name}</div>
@@ -451,7 +451,7 @@ export default function ScheduleReporting({ user }) {
                     className={`bg-un1t-surface border border-un1t-border rounded-lg p-4 flex items-center gap-4 ${!sr.active ? 'opacity-50' : ''}`}
                   >
                     <div className="w-10 h-10 rounded-lg bg-purple-500/20 flex items-center justify-center shrink-0">
-                      <Icon size={20} className="text-purple-400" />
+                      <Icon size={20} className="text-purple-700" />
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="font-medium text-sm">{sr.report_name}</div>
