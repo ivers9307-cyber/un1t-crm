@@ -163,3 +163,19 @@ export function isBlockUnstaffedFuture(block, assignmentCount, now = new Date())
   const today = formatDate(now instanceof Date ? now : new Date(now))
   return block.block_date >= today
 }
+
+/**
+ * ROSTER-FIX.1 — the one definition of "this assignment still puts a coach
+ * on the block". Every reader (capacity, budget, notify, reports, copy)
+ * goes through this so a dropped shift can't be counted somewhere by
+ * accident. Only `cancelled` is dead; `swapped` is a real shift owned by
+ * the taker; a missing status is a legacy row and counts as live.
+ */
+export function isLiveAssignment(a) {
+  return a?.status !== 'cancelled'
+}
+
+/** Filter helper — tolerates null/undefined. */
+export function liveAssignments(list) {
+  return (list || []).filter(isLiveAssignment)
+}
