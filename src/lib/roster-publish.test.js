@@ -10,7 +10,13 @@
 //      total (publish is the last shoe to drop, not the only one).
 
 import { describe, it, expect } from 'vitest'
-import { projectPublishImpact, findConflictingPublishedRosters } from './roster-publish'
+import {
+  projectPublishImpact,
+  findConflictingPublishedRosters,
+  releasePublishedRostersFor,
+  restorePublishedRosters,
+  supersedeSwallowedRosters,
+} from './roster-publish'
 
 function mockDb({ location, contractors = [], blocks = [], timeOff = [] }) {
   // Mock the chained Supabase queries the helper makes:
@@ -402,5 +408,338 @@ describe('findConflictingPublishedRosters', () => {
     const { conflicts, error } = await findConflictingPublishedRosters(db, WEEK)
     expect(conflicts).toEqual([])
     expect(error).toBeNull()
+  })
+})
+
+
+// ROSTER-SUPERSEDE.1 — a publish supersedes the rosters it swallows.
+//
+// The model, verified against prod: publishing INSERTs a rosters row and
+// re-tags every shift_blocks.roster_id in the period, so ownership is PER
+// BLOCK and a roster's period is the request that produced it, not a claim.
+// Mig 602 turns that into a rule (no two published rosters over one day at
+// one location), which means the app has to resolve the swallowing itself
+// instead of leaving a row claiming days it owns nothing on.
+describe('releasePublishedRostersFor', () => {
+  // The rosters table serves two different selects here, told apart by the
+  // filters: release asks for CONTAINED rows (gte period_start / lte
+  // period_end), the post-retag scan asks for OVERLAPPING ones.
+  function db({ contained = [], selectError = null, updateError = null, failUpdateAt = null } = {}) {
+    const updates = []
+    const filters = []
+    return {
+      updates,
+      filters,
+      client: {
+        from(table) {
+          if (table !== 'rosters') throw new Error('unexpected table: ' + table)
+          const chain = {
+            select: (c) => { filters.push(['select', c]); return chain },
+            eq: (c, v) => { filters.push(['eq', c, v]); return chain },
+            gte: (c, v) => { filters.push(['gte', c, v]); return chain },
+            lte: (c, v) => { filters.push(['lte', c, v]); return chain },
+            neq: (c, v) => { filters.push(['neq', c, v]); return chain },
+            in: (c, v) => { filters.push(['in', c, v]); return chain },
+            is: (c, v) => { filters.push(['is', c, v]); return chain },
+            then: (onF, onR) => Promise.resolve({ data: contained, error: selectError }).then(onF, onR),
+            update(payload) {
+              const idx = updates.length
+              updates.push(payload)
+              const err = failUpdateAt === idx ? { message: 'write failed' } : updateError
+              const w = {
+                eq: () => w,
+                in: () => w,
+                is: () => w,
+                then: (onF, onR) => Promise.resolve({ data: null, error: err }).then(onF, onR),
+              }
+              return w
+            },
+          }
+          return chain
+        },
+      },
+    }
+  }
+
+  const WEEK = { locationId: 'loc1', periodStart: '2026-05-04', periodEnd: '2026-05-10' }
+
+  it('releases the published rosters this period fully contains, BEFORE the insert', async () => {
+    const m = db({ contained: [{ id: 'r-old', period_start: '2026-05-04', period_end: '2026-05-10' }] })
+    const res = await releasePublishedRostersFor(m.client, WEEK)
+    expect(res.error).toBeNull()
+    expect(res.released).toEqual([{ id: 'r-old', period_start: '2026-05-04', period_end: '2026-05-10' }])
+    // Containment, not overlap: only a roster the new period swallows whole.
+    expect(m.filters).toContainEqual(['eq', 'status', 'published'])
+    expect(m.filters).toContainEqual(['gte', 'period_start', '2026-05-04'])
+    expect(m.filters).toContainEqual(['lte', 'period_end', '2026-05-10'])
+    expect(m.updates[0].status).toBe('superseded')
+    // superseded_by cannot be stamped yet — the successor does not exist.
+    expect(m.updates[0].superseded_by).toBeNull()
+  })
+
+  it('is a no-op when nothing is contained', async () => {
+    const m = db({ contained: [] })
+    const res = await releasePublishedRostersFor(m.client, WEEK)
+    expect(res.released).toEqual([])
+    expect(m.updates).toHaveLength(0)
+  })
+
+  it('excludes the roster being published (the approve path re-checks itself)', async () => {
+    const m = db({ contained: [] })
+    await releasePublishedRostersFor(m.client, { ...WEEK, excludeRosterId: 'roster-1' })
+    expect(m.filters).toContainEqual(['neq', 'id', 'roster-1'])
+  })
+
+  it('surfaces a failed probe instead of reporting nothing to release', async () => {
+    const m = db({ contained: null, selectError: { message: 'boom' } })
+    const res = await releasePublishedRostersFor(m.client, WEEK)
+    expect(res.released).toEqual([])
+    expect(res.error).toEqual({ message: 'boom' })
+    expect(m.updates).toHaveLength(0)
+  })
+
+  it('restores what it already released when a release write fails', async () => {
+    // A half-released set is worse than none: the insert would still trip the
+    // exclusion constraint AND the half-superseded rosters' blocks would read
+    // as unpublished.
+    const m = db({
+      contained: [
+        { id: 'r-a', period_start: '2026-05-04', period_end: '2026-05-06' },
+        { id: 'r-b', period_start: '2026-05-07', period_end: '2026-05-10' },
+      ],
+      failUpdateAt: 1,
+    })
+    const res = await releasePublishedRostersFor(m.client, WEEK)
+    expect(res.error).toEqual({ message: 'write failed' })
+    expect(res.released).toEqual([])
+    // r-a was released, r-b's write failed; the last write is r-a going back.
+    expect(m.updates).toHaveLength(3)
+    expect(m.updates.at(-1)).toEqual({ status: 'published', superseded_at: null, superseded_by: null })
+  })
+})
+
+describe('restorePublishedRosters', () => {
+  function db({ updateError = null } = {}) {
+    const updates = []
+    return {
+      updates,
+      client: {
+        from() {
+          return {
+            update(payload) {
+              updates.push(payload)
+              const w = {
+                in: () => w,
+                eq: () => w,
+                then: (onF, onR) => Promise.resolve({ data: null, error: updateError }).then(onF, onR),
+              }
+              return w
+            },
+          }
+        },
+      },
+    }
+  }
+
+  it('puts released rosters back to published when the publish never happened', async () => {
+    const m = db()
+    const { error } = await restorePublishedRosters(m.client, [{ id: 'r-a' }, { id: 'r-b' }])
+    expect(error).toBeNull()
+    expect(m.updates).toEqual([{ status: 'published', superseded_at: null, superseded_by: null }])
+  })
+
+  it('does nothing, and does not error, on an empty list', async () => {
+    const m = db()
+    const { error } = await restorePublishedRosters(m.client, [])
+    expect(error).toBeNull()
+    expect(m.updates).toHaveLength(0)
+  })
+
+  it('reports a failed restore rather than swallowing it', async () => {
+    const m = db({ updateError: { message: 'nope' } })
+    const { error } = await restorePublishedRosters(m.client, [{ id: 'r-a' }])
+    expect(error).toEqual({ message: 'nope' })
+  })
+})
+
+describe('supersedeSwallowedRosters', () => {
+  // rosters: the overlap scan (lte period_start / gte period_end) + updates.
+  // shift_blocks: a head count per roster, then min/max block_date.
+  function db({ overlapping = [], blocks = {}, scanError = null, countError = null, updateError = null } = {}) {
+    const updates = []
+    const filters = []
+    const client = {
+      from(table) {
+        if (table === 'rosters') {
+          const chain = {
+            select: (c) => { filters.push(['select', c]); return chain },
+            eq: (c, v) => { filters.push(['eq', c, v]); return chain },
+            gte: (c, v) => { filters.push(['gte', c, v]); return chain },
+            lte: (c, v) => { filters.push(['lte', c, v]); return chain },
+            neq: (c, v) => { filters.push(['neq', c, v]); return chain },
+            in: (c, v) => { filters.push(['in', c, v]); return chain },
+            is: (c, v) => { filters.push(['is', c, v]); return chain },
+            then: (onF, onR) => Promise.resolve({ data: overlapping, error: scanError }).then(onF, onR),
+            update(payload) {
+              const rec = { payload, where: [] }
+              updates.push(rec)
+              const w = {
+                eq: (c, v) => { rec.where.push([c, v]); return w },
+                in: (c, v) => { rec.where.push([c, v]); return w },
+                is: (c, v) => { rec.where.push([c, v]); return w },
+                then: (onF, onR) => Promise.resolve({ data: null, error: updateError }).then(onF, onR),
+              }
+              return w
+            },
+          }
+          return chain
+        }
+        if (table === 'shift_blocks') {
+          let rosterId = null
+          let asc = true
+          let head = false
+          const chain = {
+            select: (_c, opts) => { head = !!opts?.head; return chain },
+            eq: (c, v) => { if (c === 'roster_id') rosterId = v; return chain },
+            order: (_c, o) => { asc = o?.ascending !== false; return chain },
+            limit: () => chain,
+            maybeSingle: () => {
+              const dates = blocks[rosterId] || []
+              const sorted = [...dates].sort()
+              const pick = asc ? sorted[0] : sorted[sorted.length - 1]
+              return Promise.resolve({ data: pick ? { block_date: pick } : null, error: countError })
+            },
+            then: (onF, onR) => Promise.resolve(
+              head
+                ? { data: null, count: (blocks[rosterId] || []).length, error: countError }
+                : { data: (blocks[rosterId] || []).map((d) => ({ block_date: d })), error: countError },
+            ).then(onF, onR),
+          }
+          return chain
+        }
+        throw new Error('unexpected table: ' + table)
+      },
+    }
+    return { client, updates, filters }
+  }
+
+  const ARGS = {
+    locationId: 'loc1',
+    newRosterId: 'r-new',
+    periodStart: '2026-05-04',
+    periodEnd: '2026-05-10',
+  }
+
+  it('stamps superseded_by on the rosters released before the insert', async () => {
+    const m = db({ overlapping: [] })
+    const res = await supersedeSwallowedRosters(m.client, { ...ARGS, releasedIds: ['r-old'] })
+    expect(res.warning).toBeNull()
+    expect(res.superseded).toEqual(['r-old'])
+    const stamp = m.updates.find((u) => u.payload.superseded_by === 'r-new')
+    expect(stamp).toBeTruthy()
+    // Only rows that do not already name a successor.
+    expect(stamp.where).toContainEqual(['superseded_by', null])
+  })
+
+  it('supersedes an overlapping published roster that now owns ZERO blocks', async () => {
+    const m = db({
+      overlapping: [{ id: 'r-old', period_start: '2026-05-04', period_end: '2026-05-10' }],
+      blocks: { 'r-old': [] },
+    })
+    const res = await supersedeSwallowedRosters(m.client, ARGS)
+    expect(res.superseded).toEqual(['r-old'])
+    const u = m.updates.find((x) => x.where.some(([c, v]) => c === 'id' && v === 'r-old'))
+    expect(u.payload.status).toBe('superseded')
+    expect(u.payload.superseded_by).toBe('r-new')
+    expect(u.payload.superseded_at).toBeTruthy()
+  })
+
+  it('shrinks a roster that still owns blocks instead of superseding it', async () => {
+    const m = db({
+      overlapping: [{ id: 'r-old', period_start: '2026-05-01', period_end: '2026-05-31' }],
+      blocks: { 'r-old': ['2026-05-20', '2026-05-25'] },
+    })
+    const res = await supersedeSwallowedRosters(m.client, ARGS)
+    expect(res.superseded).toEqual([])
+    expect(res.shrunk).toEqual([{ id: 'r-old', period_start: '2026-05-20', period_end: '2026-05-25' }])
+    const u = m.updates.find((x) => x.where.some(([c, v]) => c === 'id' && v === 'r-old'))
+    expect(u.payload).toEqual({ period_start: '2026-05-20', period_end: '2026-05-25' })
+    // requested_period_* is the operator's original ask and is never rewritten.
+    expect(u.payload).not.toHaveProperty('requested_period_start')
+    expect(u.payload).not.toHaveProperty('requested_period_end')
+  })
+
+  it('leaves a roster alone when its owned range already matches its period', async () => {
+    const m = db({
+      overlapping: [{ id: 'r-old', period_start: '2026-05-20', period_end: '2026-05-25' }],
+      blocks: { 'r-old': ['2026-05-20', '2026-05-25'] },
+    })
+    const res = await supersedeSwallowedRosters(m.client, ARGS)
+    expect(res.shrunk).toEqual([])
+    expect(m.updates).toHaveLength(0)
+  })
+
+  it('NEVER touches the roster that was just published', async () => {
+    // Ordering trap: the new roster overlaps its own period by definition, so
+    // without the exclusion it would supersede itself the moment the re-tag
+    // had not yet been read back.
+    const m = db({
+      overlapping: [{ id: 'r-new', period_start: '2026-05-04', period_end: '2026-05-10' }],
+      blocks: { 'r-new': [] },
+    })
+    const res = await supersedeSwallowedRosters(m.client, ARGS)
+    expect(res.superseded).toEqual([])
+    expect(m.updates).toHaveLength(0)
+    expect(m.filters).toContainEqual(['neq', 'id', 'r-new'])
+  })
+
+  it('refuses to run at all without a new roster id', async () => {
+    const m = db({ overlapping: [{ id: 'r-old', period_start: '2026-05-04', period_end: '2026-05-10' }] })
+    const res = await supersedeSwallowedRosters(m.client, { ...ARGS, newRosterId: null })
+    expect(res.warning).toMatch(/newRosterId/)
+    expect(m.updates).toHaveLength(0)
+  })
+
+  it('reports a failed scan as a warning rather than a clean sweep', async () => {
+    const m = db({ overlapping: null, scanError: { message: 'boom' } })
+    const res = await supersedeSwallowedRosters(m.client, ARGS)
+    expect(res.warning).toMatch(/boom/)
+    expect(res.superseded).toEqual([])
+  })
+
+  it('reports a failed block recount without superseding on a guess', async () => {
+    const m = db({
+      overlapping: [{ id: 'r-old', period_start: '2026-05-04', period_end: '2026-05-10' }],
+      blocks: { 'r-old': [] },
+      countError: { message: 'count boom' },
+    })
+    const res = await supersedeSwallowedRosters(m.client, ARGS)
+    expect(res.warning).toMatch(/count boom/)
+    // A roster whose ownership could not be read is left published — reading a
+    // failed count as "owns nothing" would unpublish its blocks.
+    expect(res.superseded).toEqual([])
+    expect(m.updates).toHaveLength(0)
+  })
+
+  it('reports a failed write and keeps going through the rest', async () => {
+    const m = db({
+      overlapping: [
+        { id: 'r-a', period_start: '2026-05-04', period_end: '2026-05-06' },
+        { id: 'r-b', period_start: '2026-05-07', period_end: '2026-05-10' },
+      ],
+      blocks: { 'r-a': [], 'r-b': [] },
+      updateError: { message: 'write boom' },
+    })
+    const res = await supersedeSwallowedRosters(m.client, ARGS)
+    expect(res.warning).toMatch(/write boom/)
+    // Both were attempted — a failure on the first must not skip the second.
+    expect(m.updates).toHaveLength(2)
+    expect(res.superseded).toEqual([])
+  })
+
+  it('never throws, whatever the client does', async () => {
+    const exploding = { from() { throw new Error('client is gone') } }
+    const res = await supersedeSwallowedRosters(exploding, ARGS)
+    expect(res.warning).toMatch(/client is gone/)
   })
 })
