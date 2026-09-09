@@ -28,6 +28,11 @@ import { computeWeeklyCost } from '@/lib/payroll'
 import { indexByDate } from '@/lib/bank-holidays'
 import { MANAGER_ROLES, ADMIN_ROLES } from '@/lib/schemas'
 import { isBlockUnstaffedFuture as libUnstaffed, liveAssignments } from '@/lib/roster'
+// ROSTER-FIX.4 — the server refuses a publish that would leave two published
+// rosters over the same days. `overlapping_roster` is a code, not copy; the
+// sentence it becomes is shared with the approvals queue so one refusal reads
+// the same wherever the operator meets it.
+import { OVERLAP_ERROR, overlapMessage } from '@/lib/roster-overlap-message'
 import RosterSummaryPanel from './RosterSummaryPanel'
 
 const TIME_OFF_CONFIG = {
@@ -576,6 +581,10 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
       if (!data.success && data.error === 'over_budget_confirmation_required') {
         return { confirmRequired: true, impact: data.impact }
       }
+      if (!data.success && data.error === OVERLAP_ERROR) {
+        alert(overlapMessage(data))
+        return { error: data.error }
+      }
       if (!data.success) {
         alert(data.error || 'Publish failed')
         return { error: data.error }
@@ -584,6 +593,10 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
       // coaches itself (it knows which blocks were newly published), so the
       // old follow-up call to /api/schedule/shifts/publish is gone. That
       // endpoint was a redundant second flip + notify; it has been removed.
+      // ROSTER-FIX.4 — a partial success (roster row written, block tagging
+      // failed) comes back as 201 + warning; surface it instead of refreshing
+      // silently as if everything landed.
+      if (data.warning) alert(data.warning)
       setPublishModal(null)
       // Publish is the one mutation that should NOT re-arm the exit guard.
       // A real publish clears it; a needs-approval draft stays dirty (it's
@@ -1549,7 +1562,11 @@ function PublishRosterModal({ locationId, isOwner, period, onSubmit, onClose, pu
         const data = await res.json()
         if (cancelled) return
         if (!data.success) {
-          setSubmitResult({ error: data.error || 'Failed to load preview' })
+          setSubmitResult({
+            error: data.error === OVERLAP_ERROR
+              ? overlapMessage(data)
+              : (data.error || 'Failed to load preview'),
+          })
         } else {
           setImpact(data.impact)
         }

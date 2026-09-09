@@ -299,3 +299,275 @@ describe('DELETE /api/schedule/templates/[id] — location scoping', () => {
     expect(body.data.active).toBe(false)
   })
 })
+
+// ─── ROSTER-FIX.4 — template edits vs an already-published roster ────
+//
+// A template edit is a bulk edit of everybody's published shifts. It
+// propagated silently: coaches were never told their start time moved, and
+// removing a weekday DELETED published blocks (assignments cascading with
+// them), so a coach turned up for a shift that no longer existed.
+
+const PUBLISHED = { status: 'published' }
+const DRAFT = { status: 'draft' }
+
+function futureCode() {
+  return WEEKDAY_CODES[(new Date(FUTURE + 'T00:00:00Z').getUTCDay() + 6) % 7]
+}
+
+describe('PUT /api/schedule/templates/[id] — published-roster safety', () => {
+  it('change-logs time_changed per LIVE coach on a published block', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    const db = useDb({
+      shift_templates: templates(),
+      shift_blocks: [
+        {
+          id: 'blk-pub', location_id: 'loc-a', template_id: 'tmpl-a', block_date: FUTURE,
+          start_time: '09:00', end_time: '10:00', max_coaches: 10,
+          roster_id: 'r-pub', rosters: PUBLISHED,
+          shift_assignments: [
+            { profile_id: 'coach-1', status: 'scheduled' },
+            { profile_id: 'coach-2', status: 'cancelled' },
+          ],
+        },
+      ],
+      roster_change_log: [],
+    })
+
+    const res = await PUT(req({ start_time: '08:30' }), { params: { id: 'tmpl-a' } })
+    expect(res.status ?? 200).toBe(200)
+
+    const logs = db._writes.filter((w) => w.table === 'roster_change_log' && w.op === 'insert')
+    expect(logs).toHaveLength(1)
+    expect(logs[0].payload).toMatchObject({
+      location_id: 'loc-a', block_id: 'blk-pub', block_date: FUTURE,
+      coach_id: 'coach-1', action: 'time_changed',
+    })
+  })
+
+  it('does NOT change-log a block on a draft roster (nobody has been told about it yet)', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    const db = useDb({
+      shift_templates: templates(),
+      shift_blocks: [
+        {
+          id: 'blk-draft', location_id: 'loc-a', template_id: 'tmpl-a', block_date: FUTURE,
+          start_time: '09:00', end_time: '10:00', max_coaches: 10,
+          roster_id: 'r-draft', rosters: DRAFT,
+          shift_assignments: [{ profile_id: 'coach-1', status: 'scheduled' }],
+        },
+      ],
+      roster_change_log: [],
+    })
+
+    await PUT(req({ start_time: '08:30' }), { params: { id: 'tmpl-a' } })
+    expect(db._writes.filter((w) => w.table === 'roster_change_log')).toHaveLength(0)
+  })
+
+  it('REFUSES to remove a weekday whose published future blocks still have live coaches', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    const code = futureCode()
+    const keep = WEEKDAY_CODES.find((c) => c !== code)
+    const tmpls = templates()
+    tmpls.find((t) => t.id === 'tmpl-a').days_of_week = [code, keep]
+
+    const db = useDb({
+      shift_templates: tmpls,
+      shift_blocks: [
+        {
+          id: 'blk-pub', location_id: 'loc-a', template_id: 'tmpl-a', block_date: FUTURE,
+          start_time: '09:00', end_time: '10:00', max_coaches: 10,
+          roster_id: 'r-pub', rosters: PUBLISHED,
+          shift_assignments: [{ profile_id: 'coach-1', status: 'scheduled' }],
+        },
+      ],
+    })
+
+    const res = await PUT(req({ days_of_week: [keep] }), { params: { id: 'tmpl-a' } })
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error).toBe('blocks_have_assignments')
+    expect(body.dates).toEqual([FUTURE])
+    // Nothing was written at all — not even the template rename half of it.
+    expect(db._writes).toHaveLength(0)
+    expect(db._fixtures.shift_blocks).toHaveLength(1)
+  })
+
+  it('still removes the weekday when the published blocks have only CANCELLED assignments', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    const code = futureCode()
+    const keep = WEEKDAY_CODES.find((c) => c !== code)
+    const tmpls = templates()
+    tmpls.find((t) => t.id === 'tmpl-a').days_of_week = [code, keep]
+
+    useDb({
+      shift_templates: tmpls,
+      shift_blocks: [
+        {
+          id: 'blk-pub', location_id: 'loc-a', template_id: 'tmpl-a', block_date: FUTURE,
+          start_time: '09:00', end_time: '10:00', max_coaches: 10,
+          roster_id: 'r-pub', rosters: PUBLISHED,
+          shift_assignments: [{ profile_id: 'coach-1', status: 'cancelled' }],
+        },
+      ],
+    })
+
+    const res = await PUT(req({ days_of_week: [keep] }), { params: { id: 'tmpl-a' } })
+    const body = await res.json()
+    expect(body.success).toBe(true)
+    expect(body.propagation.futureBlocksDeleted).toBe(1)
+  })
+
+  // ROSTER-FIX.4 — the refusal covers DRAFT blocks too. A staffed draft block
+  // is the MORE destructive case: deactivating a template already leaves it
+  // alone, so weekday removal was the one path still cascading live
+  // assignments away, silently, with no change-log row and no notice.
+  it('REFUSES to remove a weekday when a DRAFT block still has a live coach', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    const code = futureCode()
+    const keep = WEEKDAY_CODES.find((c) => c !== code)
+    const tmpls = templates()
+    tmpls.find((t) => t.id === 'tmpl-a').days_of_week = [code, keep]
+
+    const db = useDb({
+      shift_templates: tmpls,
+      shift_blocks: [
+        {
+          id: 'blk-draft', location_id: 'loc-a', template_id: 'tmpl-a', block_date: FUTURE,
+          start_time: '09:00', end_time: '10:00', max_coaches: 10,
+          roster_id: 'r-draft', rosters: DRAFT,
+          shift_assignments: [{ profile_id: 'coach-1', status: 'scheduled' }],
+        },
+      ],
+    })
+
+    const res = await PUT(req({ days_of_week: [keep] }), { params: { id: 'tmpl-a' } })
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error).toBe('blocks_have_assignments')
+    expect(body.dates).toEqual([FUTURE])
+    // The message can no longer claim the shifts are published — this one
+    // is not, and the operator is told what is actually true of it.
+    expect(body.message).not.toMatch(/published/)
+    expect(db._writes).toHaveLength(0)
+    expect(db._fixtures.shift_blocks).toHaveLength(1)
+  })
+
+  it('still removes the weekday when a block with NO roster at all is empty', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    const code = futureCode()
+    const keep = WEEKDAY_CODES.find((c) => c !== code)
+    const tmpls = templates()
+    tmpls.find((t) => t.id === 'tmpl-a').days_of_week = [code, keep]
+
+    useDb({
+      shift_templates: tmpls,
+      shift_blocks: [
+        {
+          id: 'blk-loose', location_id: 'loc-a', template_id: 'tmpl-a', block_date: FUTURE,
+          start_time: '09:00', end_time: '10:00', max_coaches: 10, shift_assignments: [],
+        },
+      ],
+    })
+
+    const res = await PUT(req({ days_of_week: [keep] }), { params: { id: 'tmpl-a' } })
+    const body = await res.json()
+    expect(body.success).toBe(true)
+    expect(body.propagation.futureBlocksDeleted).toBe(1)
+  })
+
+  it('active:false skips regeneration and deletes only the empty UNPUBLISHED future blocks', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    const db = useDb({
+      shift_templates: templates(),
+      shift_blocks: [
+        {
+          id: 'blk-empty', location_id: 'loc-a', template_id: 'tmpl-a', block_date: FUTURE,
+          start_time: '09:00', end_time: '10:00', max_coaches: 10, shift_assignments: [],
+        },
+        {
+          id: 'blk-staffed', location_id: 'loc-a', template_id: 'tmpl-a', block_date: FUTURE,
+          start_time: '09:00', end_time: '10:00', max_coaches: 10,
+          roster_id: 'r-pub', rosters: PUBLISHED,
+          shift_assignments: [{ profile_id: 'coach-1', status: 'scheduled' }],
+        },
+        {
+          id: 'blk-past', location_id: 'loc-a', template_id: 'tmpl-a', block_date: PAST,
+          start_time: '09:00', end_time: '10:00', max_coaches: 10, shift_assignments: [],
+        },
+      ],
+    })
+
+    const res = await PUT(req({ active: false }), { params: { id: 'tmpl-a' } })
+    const body = await res.json()
+    expect(body.success).toBe(true)
+    // No regeneration — a deactivated template must not re-materialise the
+    // blocks we just removed.
+    expect(db._writes.some((w) => w.table === 'shift_blocks' && w.op === 'upsert')).toBe(false)
+    expect(body.generated).toEqual({ inserted: 0, skipped: 0 })
+    // The empty future block is gone; the staffed one and the past one stay.
+    const ids = db._fixtures.shift_blocks.map((b) => b.id)
+    expect(ids).toContain('blk-staffed')
+    expect(ids).toContain('blk-past')
+    expect(ids).not.toContain('blk-empty')
+    expect(body.propagation.deactivatedBlocksDeleted).toBe(1)
+    expect(body.propagation.publishedEmptiesKept).toBe(0)
+  })
+
+  // ROSTER-FIX.4 — an EMPTY block on a published roster survives deactivate.
+  // It is part of a week staff have already been shown, and this path writes
+  // no roster_change_log row, so deleting it removed a published slot with
+  // nothing recording that it had ever existed — and an unstaffed published
+  // shift is precisely the one the manager still has to fill.
+  it('active:false KEEPS an empty block that is on a published roster, and says so', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    const db = useDb({
+      shift_templates: templates(),
+      shift_blocks: [
+        {
+          id: 'blk-pub-empty', location_id: 'loc-a', template_id: 'tmpl-a', block_date: FUTURE,
+          start_time: '09:00', end_time: '10:00', max_coaches: 10,
+          roster_id: 'r-pub', rosters: PUBLISHED, shift_assignments: [],
+        },
+        {
+          id: 'blk-draft-empty', location_id: 'loc-a', template_id: 'tmpl-a', block_date: FUTURE,
+          start_time: '09:00', end_time: '10:00', max_coaches: 10,
+          roster_id: 'r-draft', rosters: DRAFT, shift_assignments: [],
+        },
+      ],
+    })
+
+    const res = await PUT(req({ active: false }), { params: { id: 'tmpl-a' } })
+    const body = await res.json()
+    expect(body.success).toBe(true)
+    const ids = db._fixtures.shift_blocks.map((b) => b.id)
+    expect(ids).toContain('blk-pub-empty')
+    expect(ids).not.toContain('blk-draft-empty')
+    expect(body.propagation.deactivatedBlocksDeleted).toBe(1)
+    expect(body.propagation.publishedEmptiesKept).toBe(1)
+    // The delete that DID run never named the published block.
+    const del = db._writes.find((w) => w.table === 'shift_blocks' && w.op === 'delete')
+    const inFilter = del.filters.find((f) => f.type === 'in')
+    expect(inFilter.val).toEqual(['blk-draft-empty'])
+  })
+
+  it('active:false with nothing but published empties deletes nothing at all', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    const db = useDb({
+      shift_templates: templates(),
+      shift_blocks: [
+        {
+          id: 'blk-pub-empty', location_id: 'loc-a', template_id: 'tmpl-a', block_date: FUTURE,
+          start_time: '09:00', end_time: '10:00', max_coaches: 10,
+          roster_id: 'r-pub', rosters: PUBLISHED, shift_assignments: [],
+        },
+      ],
+    })
+
+    const res = await PUT(req({ active: false }), { params: { id: 'tmpl-a' } })
+    const body = await res.json()
+    expect(body.success).toBe(true)
+    expect(body.propagation.deactivatedBlocksDeleted).toBe(0)
+    expect(body.propagation.publishedEmptiesKept).toBe(1)
+    expect(db._writes.some((w) => w.table === 'shift_blocks' && w.op === 'delete')).toBe(false)
+  })
+})

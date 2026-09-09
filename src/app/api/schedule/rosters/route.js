@@ -30,7 +30,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess, getUserLocationIds } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, isoDate, MANAGER_ROLES } from '@/lib/schemas'
-import { projectPublishImpact } from '@/lib/roster-publish'
+import { projectPublishImpact, findConflictingPublishedRosters } from '@/lib/roster-publish'
 import { sendOverBudgetApprovalEmail } from '@/lib/roster-email'
 import { notifyStaffOfPublish, publishNotifyRowsForBlocks } from '@/lib/roster-notify'
 import { notifyUsers } from '@/lib/notify'
@@ -107,6 +107,45 @@ export async function POST(request) {
   }
 
   const db = createServerClient()
+
+  // ROSTER-FIX.4 — refuse a publish that would leave two published rosters
+  // covering the same day at this location. The rule (and why an exact or a
+  // containing period is still allowed) lives on the helper, which the
+  // approve endpoint runs too — a guard only one publish path ran was no
+  // guard at all.
+  //
+  // KNOWN GAP — what a SUPERSET publish leaves behind, deliberately not
+  // fixed here:
+  //   1. The swallowed week's `rosters` row STAYS, now owning zero blocks,
+  //      because the wider publish rewrote roster_id across the whole range.
+  //      It lingers in retros as a roster that published nothing.
+  //   2. That week's coaches are NOT re-notified by the wider publish. Both
+  //      this route and approve only notify blocks that were
+  //      `roster_id IS NULL` before tagging, and the swallowed week's blocks
+  //      already carried the old roster's id — so a month publish tells the
+  //      coaches it just took over nothing at all.
+  // This is also why mig 602's exclusion constraint is on HOLD: it would
+  // reject the superset publish outright rather than let the wider roster
+  // win. All three wait on the "supersede swallowed rosters" decision
+  // (extend the existing row, or mark the contained rows superseded and
+  // re-notify their coaches) — Richard's call, it rewrites audit rows.
+  const { conflicts, error: overlapErr } = await findConflictingPublishedRosters(db, {
+    locationId: location_id,
+    periodStart: period_start,
+    periodEnd: period_end,
+  })
+  if (overlapErr) {
+    return NextResponse.json({ success: false, error: overlapErr.message }, { status: 400 })
+  }
+  if (conflicts.length > 0) {
+    return NextResponse.json({
+      success: false,
+      error: 'overlapping_roster',
+      // The modal renders these ranges: "already published as part of
+      // <range> — re-publish that range instead".
+      overlapping: conflicts,
+    }, { status: 409 })
+  }
 
   // Compute the budget projection. This is also what the modal
   // shows the operator before they commit.
@@ -186,13 +225,17 @@ export async function POST(request) {
     // the old `shifts.published false→true` capture. Blocks already
     // attached to an earlier roster are re-publishes, handled by the
     // change-log path below.
-    const { data: newBlocks } = await db
+    // ROSTER-FIX.4 — a failed capture must not read as "nothing new": log it
+    // and notify nobody from this set rather than pretend the publish had no
+    // first-time blocks (the approve route does the same).
+    const { data: newBlocks, error: captureErr } = await db
       .from('shift_blocks')
       .select('id')
       .eq('location_id', location_id)
       .gte('block_date', period_start)
       .lte('block_date', period_end)
       .is('roster_id', null)
+    if (captureErr) logWarn('rosters', 'newly-published block capture failed', { err: captureErr.message })
     const newBlockIds = (newBlocks || []).map((b) => b.id)
 
     // Tag the blocks in the period with this roster.

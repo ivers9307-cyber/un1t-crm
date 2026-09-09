@@ -9,6 +9,12 @@
 // publishRoster: creates a `rosters` row, tags blocks in the
 // period with the roster_id, sets shifts.published=true via
 // the legacy mirror so mobile/reports keep working.
+//
+// findConflictingPublishedRosters: the overlap guard. Lives here
+// rather than in the POST route because BOTH ways a roster becomes
+// published — POST /api/schedule/rosters and the approve endpoint
+// flipping a draft — have to run it, and a guard that only one of
+// them ran was no guard at all.
 
 import { shiftHours } from './payroll'
 import { liveAssignments } from './roster'
@@ -60,11 +66,13 @@ async function loadBudgetContext(db, locationId, periodStart) {
   // their assignments and roster join. We consider the union of
   // (already-published blocks in the month outside the period)
   // PLUS (all blocks in the period — published or not).
+  // ROSTER-FIX.4 — the per-coach overrides ride along: a coach whose window
+  // a manager adjusted is paid for THAT window, not the block's.
   const { data: monthBlocks, error: blocksErr } = await db
     .from('shift_blocks')
     .select(`
       id, location_id, block_date, start_time, end_time, roster_id,
-      shift_assignments(profile_id, status),
+      shift_assignments(profile_id, status, start_time_override, end_time_override),
       rosters:roster_id(id, status)
     `)
     .eq('location_id', locationId)
@@ -72,26 +80,62 @@ async function loadBudgetContext(db, locationId, periodStart) {
     .lte('block_date', monthEnd)
   if (blocksErr) throw new Error(`Block lookup failed: ${blocksErr.message}`)
 
+  // ROSTER-FIX.4 — approved leave for the month, in ONE query. A coach on
+  // approved leave is not working the shift they are still rostered on, so
+  // billing it inflated the projection and could refuse a publish that was
+  // actually within budget.
+  const { data: leave, error: leaveErr } = await db
+    .from('time_off_requests')
+    .select('profile_id, start_date, end_date')
+    .eq('location_id', locationId)
+    .eq('status', 'approved')
+    .lte('start_date', monthEnd)
+    .gte('end_date', monthStart)
+  if (leaveErr) throw new Error(`Leave lookup failed: ${leaveErr.message}`)
+
+  const leaveByProfile = new Map()
+  for (const row of leave || []) {
+    if (!leaveByProfile.has(row.profile_id)) leaveByProfile.set(row.profile_id, [])
+    leaveByProfile.get(row.profile_id).push(row)
+  }
+
   return {
     location: loc,
     monthStart,
     monthEnd,
     contractorRateById,
+    leaveByProfile,
     monthBlocks: monthBlocks || [],
   }
 }
 
-function blockContractorCost(block, contractorRateById) {
-  const hours = shiftHours({
-    start_time: block.start_time,
-    end_time: block.end_time,
-    shift_templates: { start_time: block.start_time, end_time: block.end_time },
-  })
+/**
+ * Is this coach on approved leave on this date? Both ends inclusive —
+ * time_off_requests.end_date is documented inclusive (mig 011). Dates are
+ * ISO YYYY-MM-DD strings, so string comparison IS date comparison.
+ */
+function isOnLeave(leaveByProfile, profileId, dateIso) {
+  const rows = leaveByProfile?.get(profileId)
+  if (!rows) return false
+  return rows.some((r) => r.start_date <= dateIso && r.end_date >= dateIso)
+}
+
+function blockContractorCost(block, contractorRateById, leaveByProfile) {
   let cost = 0
   // ROSTER-FIX.1 — a cancelled assignment costs nothing; counting it here
   // pushed publishes over the contractor budget for shifts nobody works.
   for (const a of liveAssignments(block.shift_assignments)) {
     const rate = contractorRateById[a.profile_id] || 0
+    if (rate === 0) continue
+    // ROSTER-FIX.4 — a coach on approved leave isn't working this shift.
+    if (isOnLeave(leaveByProfile, a.profile_id, block.block_date)) continue
+    // ROSTER-FIX.4 — hours are PER ASSIGNMENT: shiftHours prefers the
+    // coach's override window and falls back to the block's.
+    const hours = shiftHours({
+      start_time_override: a.start_time_override,
+      end_time_override: a.end_time_override,
+      shift_templates: { start_time: block.start_time, end_time: block.end_time },
+    })
     cost += hours * rate
   }
   return cost
@@ -115,14 +159,14 @@ function blockContractorCost(block, contractorRateById) {
  */
 export async function projectPublishImpact(db, { locationId, periodStart, periodEnd }) {
   const ctx = await loadBudgetContext(db, locationId, periodStart)
-  const { location, monthStart, monthEnd, contractorRateById, monthBlocks } = ctx
+  const { location, monthStart, monthEnd, contractorRateById, leaveByProfile, monthBlocks } = ctx
 
   let alreadyPublishedEur = 0
   let periodProjectedEur = 0
   let blockCount = 0
 
   for (const b of monthBlocks) {
-    const cost = blockContractorCost(b, contractorRateById)
+    const cost = blockContractorCost(b, contractorRateById, leaveByProfile)
     if (cost === 0) continue
     const inPeriod = b.block_date >= periodStart && b.block_date <= periodEnd
     if (inPeriod) {
@@ -158,6 +202,58 @@ export async function projectPublishImpact(db, { locationId, periodStart, period
     overrunEur,
     blockCount,
   }
+}
+
+/**
+ * ROSTER-FIX.4 — the published rosters at `locationId` that (periodStart,
+ * periodEnd) would collide with.
+ *
+ * WHY: publishing rewrites `shift_blocks.roster_id` for every block in the
+ * period, so a second overlapping published roster silently STEALS the days
+ * it shares — the older row still claims those dates while owning none of
+ * their blocks, and "which roster published this day" (reports,
+ * findPublishedRosterFor, the approvals queue) stops having one answer.
+ *
+ * A published roster is NOT a conflict when the new period fully contains
+ * it, which covers both legitimate overlaps:
+ *   - the EXACT same period — how a re-publish re-notifies the coaches whose
+ *     shifts changed since last time;
+ *   - a period that CONTAINS the published one — the documented "publish the
+ *     week, then publish the whole month" flow, where the wider roster takes
+ *     over every block including the earlier week's.
+ * Everything else (a week inside an already-published month, a period that
+ * straddles the edge of one) is the same days published twice under two
+ * names. See the KNOWN GAP note at the POST call site for what a superset
+ * publish leaves behind.
+ *
+ * Both period bounds are inclusive, and dates are ISO YYYY-MM-DD strings, so
+ * string comparison IS date comparison.
+ *
+ * @param {import('@supabase/supabase-js').SupabaseClient} db service-role client
+ * @param {{ locationId: string, periodStart: string, periodEnd: string, excludeRosterId?: string|null }} opts
+ * @returns {Promise<{ conflicts: Array<{id: string, period_start: string, period_end: string}>, error: any }>}
+ */
+export async function findConflictingPublishedRosters(db, { locationId, periodStart, periodEnd, excludeRosterId = null } = {}) {
+  let query = db
+    .from('rosters')
+    .select('id, period_start, period_end')
+    .eq('location_id', locationId)
+    .eq('status', 'published')
+    // Inclusive-range overlap: starts on or before our end AND ends on or
+    // after our start.
+    .lte('period_start', periodEnd)
+    .gte('period_end', periodStart)
+  // The approve path re-checks a roster that already exists as a row; it must
+  // not count itself as the thing it collides with.
+  if (excludeRosterId) query = query.neq('id', excludeRosterId)
+
+  const { data, error } = await query
+  if (error) return { conflicts: [], error }
+
+  // Contained-in-the-new-period is inclusive on both ends, so an exact
+  // re-publish falls out as "contained" and is allowed too.
+  const conflicts = (data || []).filter((r) => !(r.period_start >= periodStart && r.period_end <= periodEnd))
+  return { conflicts, error: null }
 }
 
 function round2(n) { return Math.round(n * 100) / 100 }
