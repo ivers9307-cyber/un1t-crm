@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { blockFillState, filterAssignableCoaches } from './schedule-manage'
+import { blockFillState, filterAssignableCoaches, canAdjustShiftTimes } from './schedule-manage'
 
 const block = (assignedCount, min, max) => ({
   min_coaches: min, max_coaches: max,
@@ -44,5 +44,33 @@ describe('filterAssignableCoaches', () => {
   it('tolerates non-arrays', () => {
     expect(filterAssignableCoaches(null, blk, 'loc1')).toEqual([])
     expect(filterAssignableCoaches(staff, null, 'loc1').map(c => c.id).sort()).toEqual(['a', 'b'])
+  })
+})
+
+// ROSTER-FIX.3 (D3) — Richard's call (2026-09-09): a coach is paid for a
+// window a manager set, and only a manager changes it. The Schedule tab used
+// to let a coach adjust their own shift ("if it's mine, I can move it"); the
+// route now 403s that, so the affordance has to agree with the route.
+describe('canAdjustShiftTimes', () => {
+  const shift = { shift_assignment_id: 'assign-1', profile_id: 'coach-1' }
+
+  it('is false for a coach looking at their OWN shift', () => {
+    expect(canAdjustShiftTimes({ id: 'coach-1', role: 'staff' }, shift)).toBe(false)
+  })
+  it('is false for reception', () => {
+    expect(canAdjustShiftTimes({ id: 'r1', role: 'reception' }, shift)).toBe(false)
+  })
+  it('is true for every manager role', () => {
+    for (const role of ['master', 'owner', 'manager', 'head_coach']) {
+      expect(canAdjustShiftTimes({ id: 'm1', role }, shift)).toBe(true)
+    }
+  })
+  it('is true for a manager looking at their own shift too', () => {
+    expect(canAdjustShiftTimes({ id: 'm1', role: 'manager' }, { ...shift, profile_id: 'm1' })).toBe(true)
+  })
+  it('is false without an assignment id, and tolerates a missing profile', () => {
+    expect(canAdjustShiftTimes({ id: 'm1', role: 'manager' }, { profile_id: 'm1' })).toBe(false)
+    expect(canAdjustShiftTimes(null, shift)).toBe(false)
+    expect(canAdjustShiftTimes({ role: 'manager' }, null)).toBe(false)
   })
 })

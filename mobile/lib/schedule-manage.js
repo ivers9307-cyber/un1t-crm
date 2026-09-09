@@ -27,3 +27,18 @@ export function filterAssignableCoaches(staff, block, locationId) {
     })
     .sort((a, b) => (a.full_name || '').localeCompare(b.full_name || ''))
 }
+
+// Manager roles, mirrored from src/lib/schemas.js MANAGER_ROLES. Defined here
+// rather than imported because the mobile bundle can't reach that web-side
+// module and shared/permissions.js does not export it.
+export const MANAGER_ROLES = ['master', 'owner', 'manager', 'head_coach']
+
+// ROSTER-FIX.3 (D3) — who may move a shift's paid window. Richard's call
+// (2026-09-09): a coach is paid for a window a manager set, so owning the
+// shift buys you nothing here — only a manager role does. This mirrors the
+// gate on PUT /api/schedule/assignments/[id]; keep the two in step, or the
+// UI offers an edit the route will 403.
+export function canAdjustShiftTimes(profile, shift) {
+  if (!shift?.shift_assignment_id) return false
+  return MANAGER_ROLES.includes(profile?.role)
+}

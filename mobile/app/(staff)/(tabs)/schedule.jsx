@@ -30,6 +30,7 @@ import {
 import { canMobile } from '../../../lib/permissions'
 import { useIsTablet } from '../../../lib/use-is-tablet'
 import { effShiftStart, effShiftEnd, teamRosterForDay, initials } from '../../../lib/schedule-team'
+import { canAdjustShiftTimes } from '../../../lib/schedule-manage'
 import ManageMode from '../../../components/schedule/ManageMode'
 
 // Manager roles, mirrored from src/lib/schemas.js MANAGER_ROLES. Defined
@@ -417,11 +418,11 @@ export default function Schedule() {
   // Adjust modal state — open via ShiftRow onPress.
   const [adjustingShift, setAdjustingShift] = useState(null)
 
-  // Self can adjust their own; managers can adjust anyone's.
+  // ROSTER-FIX.3 (D3) — managers only. A coach used to be able to adjust
+  // their own shift here; the paid window is a manager's to set, so the
+  // affordance is gone for coaches and the route 403s them anyway.
   function canAdjust(shift) {
-    if (!shift?.shift_assignment_id) return false
-    if (shift.profile_id === profile.id) return true
-    return isManagerRole(profile.role)
+    return canAdjustShiftTimes(profile, shift)
   }
 
   function requestSwapForShift(shift) {
@@ -594,7 +595,9 @@ export default function Schedule() {
             ))}
             {todays.length > 0 && (
               <Text className="text-[11px] text-un1t-muted text-center mt-1">
-                Tap to adjust times · long-press to request a swap.
+                {isManagerRole(profile?.role)
+                  ? 'Tap to adjust times · long-press to request a swap.'
+                  : 'Long-press to request a swap. Your hours are set by your manager — if you worked different hours, tell them.'}
               </Text>
             )}
           </>

@@ -7,8 +7,7 @@
 //   Week mode — the original two-week (This week / Next week) panels.
 
 import {
-  View, Text, ActivityIndicator, Pressable,
-  Alert, Modal, TextInput, KeyboardAvoidingView, Platform,
+  View, Text, ActivityIndicator, Pressable, Alert,
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useState, useEffect, useCallback } from 'react'
@@ -22,7 +21,7 @@ import {
   KpiCard, KpiRow, SectionHeader, ListCard,
 } from './cards'
 import {
-  createSwapRequest, adjustShiftAssignment,
+  createSwapRequest,
   cancelSwapRequest, cancelTimeOffRequest,
   getSwapsForMe, getOpenSwaps, getTeamShifts, respondToSwap,
   getLocationStaff,
@@ -145,6 +144,14 @@ function WeekPanel({ title, startIso, endIso, shifts, showLocation, onShiftPress
                         {s.published === false && (
                           <View className="ml-2 px-1.5 py-0.5 rounded bg-amber-500/20">
                             <Text className="text-[9px] uppercase text-amber-700 font-semibold">Draft</Text>
+                          </View>
+                        )}
+                        {/* ROSTER-FIX.3 (D3) — a coach can no longer adjust their own
+                            hours, so they must still be able to SEE that a manager
+                            adjusted them. */}
+                        {(s.start_time_override || s.end_time_override) && (
+                          <View className="ml-2 px-1.5 py-0.5 rounded bg-amber-400">
+                            <Text className="text-[9px] uppercase text-amber-950 font-semibold">Adjusted</Text>
                           </View>
                         )}
                         {s.status === 'swapped' && (
@@ -304,6 +311,12 @@ function MonthAgenda({ matrix, showLocation, onShiftPress }) {
                                 <Text className="text-[9px] uppercase text-amber-700 font-semibold">Draft</Text>
                               </View>
                             )}
+                            {/* ROSTER-FIX.3 (D3) — manager-set hours stay visible to the coach. */}
+                            {(s.start_time_override || s.end_time_override) && (
+                              <View className="ml-2 px-1.5 py-0.5 rounded bg-amber-400">
+                                <Text className="text-[9px] uppercase text-amber-950 font-semibold">Adjusted</Text>
+                              </View>
+                            )}
                             {s.status === 'swapped' && (
                               <View className="ml-2 px-1.5 py-0.5 rounded bg-blue-500/20">
                                 <Text className="text-[9px] uppercase text-blue-700 font-semibold">Swapped</Text>
@@ -379,8 +392,6 @@ export default function PersonalDashboard({ refreshKey }) {
   // Show per-shift location chip only when the user is assigned to
   // 2+ locations — otherwise it's redundant.
   const showLocation = (locations || []).length > 1
-  // AdjustSheet state — opened by tapping a shift then choosing "Adjust time".
-  const [adjustingShift, setAdjustingShift] = useState(null)
 
   // CT-P3b — actionable swap surfaces fed by the service-role route (names
   // ride along). offered = targeted-at/claimed-by me; openPool = claimable
@@ -534,11 +545,9 @@ export default function PersonalDashboard({ refreshKey }) {
       onPress: () => openSwapPicker(shift),
     })
 
-    // Adjust time
-    options.push({
-      text: 'Adjust time',
-      onPress: () => setAdjustingShift(shift),
-    })
+    // ROSTER-FIX.3 (D3) — no "Adjust time" here. This is the coach's own
+    // Today surface, and the paid window is a manager's to set: a coach who
+    // worked different hours tells their manager, who adjusts it.
 
     options.push({ text: 'Cancel', style: 'cancel' })
 
@@ -971,14 +980,6 @@ export default function PersonalDashboard({ refreshKey }) {
         </View>
       )}
 
-      {/* Adjust-shift modal — opened from the shift-tap action sheet */}
-      <AgendaAdjustSheet
-        shift={adjustingShift}
-        onClose={() => setAdjustingShift(null)}
-        onSaved={() => { setAdjustingShift(null); load() }}
-        locationId={activeLocation?.id}
-      />
-
       {/* CT-P3b — targeted-swap colleague picker (reused from Manage mode).
           The synthesised block excludes the current user and titles the sheet
           with the shift template. */}
@@ -992,152 +993,5 @@ export default function PersonalDashboard({ refreshKey }) {
         onClose={() => setSwapPickerShift(null)}
       />
     </View>
-  )
-}
-
-// AgendaAdjustSheet — a slim port of the AdjustSheet from schedule.jsx,
-// adapted for use inside PersonalDashboard. Opens as a slide-up Modal over
-// the Today surface; uses adjustShiftAssignment (already imported above).
-// Only the shift's id (the shift_assignments row id) is used to PUT the assignments route.
-function AgendaAdjustSheet({ shift, onClose, onSaved, locationId }) {
-  const blockStart = (shift?.start_time || shift?.shift_templates?.start_time || '').slice(0, 5)
-  const blockEnd = (shift?.end_time || shift?.shift_templates?.end_time || '').slice(0, 5)
-
-  const [start, setStart] = useState('')
-  const [end, setEnd] = useState('')
-  const [reason, setReason] = useState('')
-  const [saving, setSaving] = useState(false)
-  const [err, setErr] = useState(null)
-
-  // Reset fields whenever a new shift is opened.
-  useEffect(() => {
-    if (!shift) return
-    setStart((shift.start_time_override || '').slice(0, 5) || blockStart)
-    setEnd((shift.end_time_override || '').slice(0, 5) || blockEnd)
-    setReason(shift.partial_reason || '')
-    setErr(null)
-  }, [shift]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  if (!shift) return null
-  const hasOverride = !!(shift.start_time_override || shift.end_time_override)
-
-  async function save() {
-    setErr(null)
-    if (start === end) { setErr('Start and end cannot be identical.'); return }
-    if (!/^\d{2}:\d{2}$/.test(start) || !/^\d{2}:\d{2}$/.test(end)) {
-      setErr('Use HH:MM format (24-hour).'); return
-    }
-    setSaving(true)
-    const r = await adjustShiftAssignment(shift.id, {
-      startTime: start === blockStart ? null : start,
-      endTime: end === blockEnd ? null : end,
-      reason: reason.trim() || null,
-      locationId,
-    })
-    setSaving(false)
-    if (r.success) onSaved?.()
-    else setErr(r.error || 'Save failed')
-  }
-
-  async function clearOverride() {
-    setErr(null); setSaving(true)
-    const r = await adjustShiftAssignment(shift.id, {
-      startTime: null, endTime: null, reason: null, locationId,
-    })
-    setSaving(false)
-    if (r.success) onSaved?.()
-    else setErr(r.error || 'Clear failed')
-  }
-
-  return (
-    <Modal visible animationType="slide" transparent onRequestClose={onClose}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        className="flex-1 justify-end bg-black/50"
-      >
-        <Pressable className="flex-1" onPress={onClose} />
-        <View className="bg-un1t-bg border-t border-un1t-border rounded-t-3xl p-5">
-          <View className="flex-row items-center justify-between mb-4">
-            <Text className="text-lg font-bold text-un1t-text">Adjust shift times</Text>
-            <Pressable onPress={onClose} hitSlop={10}>
-              <Ionicons name="close" size={22} color="#94A3B8" />
-            </Pressable>
-          </View>
-
-          <Text className="text-xs text-un1t-subtle mb-4">
-            {shift.shift_templates?.name || 'Shift'} · {shift.shift_date}{'\n'}
-            Block default: <Text className="font-mono text-un1t-text">{blockStart}–{blockEnd}</Text>.
-            {' '}Leave equal to inherit.
-          </Text>
-
-          <View className="flex-row gap-3 mb-4">
-            <View className="flex-1">
-              <Text className="text-xs uppercase font-semibold text-un1t-subtle mb-1.5">Start (HH:MM)</Text>
-              <TextInput
-                value={start}
-                onChangeText={setStart}
-                placeholder={blockStart}
-                placeholderTextColor="#64748B"
-                keyboardType="numbers-and-punctuation"
-                maxLength={5}
-                className="bg-un1t-surface border border-un1t-border rounded-xl px-3 py-3 text-base text-un1t-text font-mono"
-              />
-            </View>
-            <View className="flex-1">
-              <Text className="text-xs uppercase font-semibold text-un1t-subtle mb-1.5">End (HH:MM)</Text>
-              <TextInput
-                value={end}
-                onChangeText={setEnd}
-                placeholder={blockEnd}
-                placeholderTextColor="#64748B"
-                keyboardType="numbers-and-punctuation"
-                maxLength={5}
-                className="bg-un1t-surface border border-un1t-border rounded-xl px-3 py-3 text-base text-un1t-text font-mono"
-              />
-            </View>
-          </View>
-
-          <Text className="text-xs uppercase font-semibold text-un1t-subtle mb-1.5">Reason (optional)</Text>
-          <TextInput
-            value={reason}
-            onChangeText={setReason}
-            placeholder="e.g. left early — sick, covered until 1pm"
-            placeholderTextColor="#64748B"
-            maxLength={200}
-            className="bg-un1t-surface border border-un1t-border rounded-xl px-3 py-3 text-base text-un1t-text mb-4"
-          />
-
-          {err && (
-            <View className="bg-red-500/10 border border-red-500/30 rounded-xl p-3 mb-3 flex-row items-start">
-              <Ionicons name="alert-circle" size={16} color="#DC2626" />
-              <Text className="text-sm text-red-700 ml-2 flex-1">{err}</Text>
-            </View>
-          )}
-
-          <Pressable
-            onPress={save}
-            disabled={saving}
-            className="bg-amber-600 active:opacity-80 disabled:opacity-50 px-4 py-3.5 rounded-xl items-center flex-row justify-center"
-          >
-            {saving
-              ? <ActivityIndicator color="#FFFFFF" />
-              : <Ionicons name="checkmark" size={18} color="#FFFFFF" />}
-            <Text className="text-base font-semibold text-white ml-2">
-              {saving ? 'Saving…' : 'Save adjustment'}
-            </Text>
-          </Pressable>
-
-          {hasOverride && (
-            <Pressable
-              onPress={clearOverride}
-              disabled={saving}
-              className="mt-2 active:opacity-70 px-4 py-3 rounded-xl items-center"
-            >
-              <Text className="text-sm font-medium text-un1t-subtle">Clear override (use block default)</Text>
-            </Pressable>
-          )}
-        </View>
-      </KeyboardAvoidingView>
-    </Modal>
   )
 }

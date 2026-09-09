@@ -14,9 +14,15 @@
 //   showLocation — boolean; show per-shift location chip when true
 //
 // Task 2 additions (Phase 2):
-//   • Each shift chip / row is clickable → ShiftActionMenu (post for swap
-//     or adjust time). Hidden for past shifts and swapped shifts.
+//   • Each shift chip / row is clickable → ShiftActionMenu. Hidden for past
+//     shifts and swapped shifts.
 //   • "Request time off" button in the header → RequestTimeOffModal.
+//
+// ROSTER-FIX.3 (D3) — this is a COACH surface, so the menu offers swaps
+// only. A coach is paid for a window a manager set; the "Adjust time" panel
+// that used to live here PUT /api/schedule/assignments/[id], which is now
+// manager-only and would 403. The "(adjusted)" marker stays so a coach can
+// still see when a manager moved their hours.
 
 import { useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
@@ -89,30 +95,17 @@ function isActionable(shift, isPast) {
   return true
 }
 
-// Convert HH:MM:SS or HH:MM to HH:MM for <input type="time">
-function toTimeInput(raw) {
-  if (!raw) return ''
-  return raw.slice(0, 5)
-}
-
-// ── ShiftActionMenu — modal that provides post-for-swap + adjust-time ────────
+// ── ShiftActionMenu — modal that provides the coach's two swap routes ───────
 
 function ShiftActionMenu({ shift, shiftDate, onClose, onDone }) {
   const name = shift.shift_templates?.name || 'Shift'
-  const effectiveStart = shift.start_time_override || shift.shift_templates?.start_time || ''
-  const effectiveEnd   = shift.end_time_override   || shift.shift_templates?.end_time   || ''
   const hasOverride    = !!(shift.start_time_override || shift.end_time_override)
 
-  // Which sub-panel is open: null | 'swap' | 'adjust' | 'target'
+  // Which sub-panel is open: null | 'swap' | 'target'
   const [panel, setPanel]       = useState(null)
   const [saving, setSaving]     = useState(false)
   const [error, setError]       = useState(null)
   const [success, setSuccess]   = useState(null)
-
-  // Adjust-time form state
-  const [adjStart, setAdjStart] = useState(toTimeInput(effectiveStart))
-  const [adjEnd, setAdjEnd]     = useState(toTimeInput(effectiveEnd))
-  const [adjReason, setAdjReason] = useState('')
 
   // Targeted-swap colleague picker state
   const [colleagues, setColleagues] = useState(null)   // null = not loaded yet
@@ -194,70 +187,6 @@ function ShiftActionMenu({ shift, shiftDate, onClose, onDone }) {
     }
   }
 
-  // ── Adjust time ────────────────────────────────────────────────────────────
-  async function handleAdjust(e) {
-    e.preventDefault()
-    if (!adjStart || !adjEnd) {
-      setError('Please enter both start and end times.')
-      return
-    }
-    if (adjStart === adjEnd) {
-      setError('Start and end times cannot be identical.')
-      return
-    }
-    setSaving(true)
-    setError(null)
-    const body = {
-      start_time_override: adjStart + ':00',
-      end_time_override:   adjEnd   + ':00',
-    }
-    if (adjReason.trim()) body.partial_reason = adjReason.trim()
-    try {
-      const res = await fetch(`/api/schedule/assignments/${shift.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      })
-      const data = await res.json()
-      if (!res.ok || !data.success) {
-        setError(data.error || 'Could not save time adjustment. Please try again.')
-        setSaving(false)
-        return
-      }
-      setSuccess('Shift time updated.')
-      setSaving(false)
-      onDone?.()
-    } catch {
-      setError('Network error. Please try again.')
-      setSaving(false)
-    }
-  }
-
-  // ── Clear override ─────────────────────────────────────────────────────────
-  async function handleClearOverride() {
-    setSaving(true)
-    setError(null)
-    try {
-      const res = await fetch(`/api/schedule/assignments/${shift.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ start_time_override: null, end_time_override: null, partial_reason: null }),
-      })
-      const data = await res.json()
-      if (!res.ok || !data.success) {
-        setError(data.error || 'Could not clear override. Please try again.')
-        setSaving(false)
-        return
-      }
-      setSuccess('Override cleared — shift is back to default time.')
-      setSaving(false)
-      onDone?.()
-    } catch {
-      setError('Network error. Please try again.')
-      setSaving(false)
-    }
-  }
-
   // ── Shift label ────────────────────────────────────────────────────────────
   const dateLabel = shiftDate
     ? new Date(shiftDate + 'T00:00:00').toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short' })
@@ -305,16 +234,11 @@ function ShiftActionMenu({ shift, shiftDate, onClose, onDone }) {
               <span className="font-medium">Swap with a specific coach…</span>
               <span className="block text-xs text-un1t-subtle mt-0.5">Send the request straight to one colleague</span>
             </button>
-            <button
-              type="button"
-              onClick={() => setPanel('adjust')}
-              className="w-full text-left px-3 py-2.5 rounded-lg border border-un1t-border bg-un1t-surface hover:bg-un1t-border text-sm text-un1t-text transition-colors"
-            >
-              <span className="font-medium">Adjust time</span>
-              <span className="block text-xs text-un1t-subtle mt-0.5">
-                {hasOverride ? 'Change or clear the time override' : 'Override start or end time'}
-              </span>
-            </button>
+            {/* ROSTER-FIX.3 (D3) — say who owns the hours, now that the coach
+                cannot change them here. */}
+            <p className="text-xs text-un1t-muted pt-1">
+              Your hours are set by your manager. If you worked different hours, tell them and they will adjust the shift.
+            </p>
           </div>
         )}
 
@@ -385,77 +309,6 @@ function ShiftActionMenu({ shift, shiftDate, onClose, onDone }) {
               </Button>
             </div>
           </div>
-        )}
-
-        {/* Adjust time panel */}
-        {panel === 'adjust' && !success && (
-          <form onSubmit={handleAdjust} className="space-y-3">
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-medium text-un1t-subtle mb-1" htmlFor="adj-start">
-                  Start
-                </label>
-                <input
-                  id="adj-start"
-                  type="time"
-                  value={adjStart}
-                  onChange={(e) => setAdjStart(e.target.value)}
-                  required
-                  disabled={saving}
-                  className="w-full rounded-lg border border-un1t-border bg-un1t-surface text-un1t-text text-sm px-3 py-2 focus:outline-none focus:ring-2 focus:ring-un1t-accent"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-un1t-subtle mb-1" htmlFor="adj-end">
-                  End
-                </label>
-                <input
-                  id="adj-end"
-                  type="time"
-                  value={adjEnd}
-                  onChange={(e) => setAdjEnd(e.target.value)}
-                  required
-                  disabled={saving}
-                  className="w-full rounded-lg border border-un1t-border bg-un1t-surface text-un1t-text text-sm px-3 py-2 focus:outline-none focus:ring-2 focus:ring-un1t-accent"
-                />
-              </div>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-un1t-subtle mb-1" htmlFor="adj-reason">
-                Reason <span className="text-un1t-muted font-normal">(optional)</span>
-              </label>
-              <input
-                id="adj-reason"
-                type="text"
-                value={adjReason}
-                onChange={(e) => setAdjReason(e.target.value)}
-                maxLength={200}
-                disabled={saving}
-                placeholder="e.g. leaving early for appointment"
-                className="w-full rounded-lg border border-un1t-border bg-un1t-surface text-un1t-text text-sm px-3 py-2 focus:outline-none focus:ring-2 focus:ring-un1t-accent placeholder:text-un1t-muted"
-              />
-            </div>
-            <div className="flex gap-2 justify-between items-center">
-              {hasOverride ? (
-                <button
-                  type="button"
-                  onClick={handleClearOverride}
-                  disabled={saving}
-                  className="text-xs text-red-700 hover:text-red-800 underline underline-offset-2 disabled:opacity-50"
-                >
-                  Clear override
-                </button>
-              ) : <span />}
-              <div className="flex gap-2">
-                <Button type="button" variant="secondary" onClick={() => { setPanel(null); setError(null) }} disabled={saving}>
-                  Back
-                </Button>
-                <Button type="submit" variant="primary" loading={saving}>
-                  Save
-                </Button>
-              </div>
-            </div>
-          </form>
         )}
 
         {/* Close button when success is shown */}
