@@ -17,6 +17,8 @@
 // — payroll math (src/lib/payroll.js) reads these overrides, so this has
 // to match the legacy behaviour byte-for-byte.
 
+import { isLiveAssignment } from './roster'
+
 /**
  * Collapse a block-level time + a per-assignment override into the single
  * "effective override vs the template" value the legacy shifts mirror
@@ -137,14 +139,16 @@ export async function fetchSourceShiftRows(db, { locationId, startDate, endDate 
 //   - id = the assignment id (was shifts.id — only used as a React key + the
 //     swap requester id, both already on shift_assignment_id since 5c)
 //   - start/end_time_override = the collapsed effective override
-//   - published = true (the forward trigger + web flattenBlocksToShifts both
-//     hard-set this; roster-derived publish state is out of scope here)
+//   - published derives from block → roster (ROSTER-FIX.1) — it was hard-coded
+//     true here (and by the mig 100 forward trigger), which showed draft and
+//     copied shifts to every coach's phone as if they were live
 //   - notes = assignment.notes ?? block.notes (matches the trigger's coalesce)
 const API_SHIFT_SELECT = `
   id, profile_id, status, notes, partial_reason,
   start_time_override, end_time_override, assigned_by, assigned_at, updated_at,
   shift_blocks!inner (
-    location_id, template_id, block_date, start_time, end_time, notes,
+    location_id, template_id, block_date, start_time, end_time, notes, roster_id,
+    rosters:roster_id ( status ),
     shift_templates (*)
   ),
   profiles!profile_id ( id, full_name, email, avatar_url, role )
@@ -164,7 +168,11 @@ function toApiShiftRow(a) {
     role_label: tpl.role_label ?? null,
     notes: a.notes ?? b.notes ?? null,
     status: a.status,
-    published: true,
+    // ROSTER-FIX.1 — publishing is a roster concept: a shift is published
+    // iff its block belongs to a published roster (same derivation as
+    // shared/dashboard-data.js fetchDashboardShifts). Was hard-coded true,
+    // which showed draft + copied shifts to every coach's phone as live.
+    published: b.rosters?.status === 'published',
     created_by: a.assigned_by ?? null,
     updated_at: a.updated_at ?? null,
     shift_templates: tpl,
@@ -185,9 +193,10 @@ function toApiShiftRow(a) {
  * @param {string} [opts.startDate]
  * @param {string} [opts.endDate]
  * @param {string} [opts.profileId]
+ * @param {boolean} [opts.publishedOnly=false] drop rows whose roster is not published
  * @returns {Promise<{ rows: Array<object>, error: object|null }>}
  */
-export async function fetchApiShiftRows(db, { locationIds, startDate, endDate, profileId }) {
+export async function fetchApiShiftRows(db, { locationIds, startDate, endDate, profileId, publishedOnly = false }) {
   if (!Array.isArray(locationIds) || locationIds.length === 0) return { rows: [], error: null }
 
   let q = db.from('shift_assignments')
@@ -201,8 +210,10 @@ export async function fetchApiShiftRows(db, { locationIds, startDate, endDate, p
   if (error) return { rows: [], error }
 
   const rows = (data || [])
-    .filter((a) => a.shift_blocks)
+    .filter((a) => a.shift_blocks && isLiveAssignment(a))
     .map(toApiShiftRow)
+    // D1 — coaches see published shifts only; managers pass publishedOnly:false.
+    .filter((r) => !publishedOnly || r.published)
     .sort((x, y) => (x.shift_date < y.shift_date ? -1 : x.shift_date > y.shift_date ? 1 : 0))
   return { rows, error: null }
 }

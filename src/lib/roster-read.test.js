@@ -156,6 +156,7 @@ describe('fetchApiShiftRows', () => {
           start_time_override: null, end_time_override: null, assigned_by: 'mgr', updated_at: 't2',
           shift_blocks: {
             location_id: 'loc1', template_id: 't1', block_date: '2026-06-09', start_time: '09:00:00', end_time: '10:00:00', notes: 'blk',
+            roster_id: null, rosters: null,
             shift_templates: { id: 't1', name: 'AM', start_time: '09:00:00', end_time: '10:00:00', role_label: 'Coach' },
           },
           profiles: { id: 'p1', full_name: 'Dana' },
@@ -165,6 +166,7 @@ describe('fetchApiShiftRows', () => {
           start_time_override: '08:00:00', end_time_override: null, assigned_by: 'mgr', updated_at: 't1',
           shift_blocks: {
             location_id: 'loc1', template_id: 't1', block_date: '2026-06-08', start_time: '09:00:00', end_time: '10:00:00', notes: 'blk',
+            roster_id: 'r1', rosters: { status: 'published' },
             shift_templates: { id: 't1', name: 'AM', start_time: '09:00:00', end_time: '10:00:00', role_label: 'Coach' },
           },
           profiles: { id: 'p1', full_name: 'Dana' },
@@ -188,6 +190,59 @@ describe('fetchApiShiftRows', () => {
     expect(rows[1].notes).toBe('blk')
     // no start_time / end_time columns (legacy shifts had none)
     expect(rows[0].start_time).toBeUndefined()
+    // ROSTER-FIX.1 — published derives from the block's roster, never hard-coded
+    expect(rows[0].published).toBe(true)
+    expect(rows[1].published).toBe(false)
+  })
+
+  it('marks a shift on a draft roster as unpublished', async () => {
+    const db = makeDb({
+      data: [{
+        id: 'a3', profile_id: 'p1', status: 'scheduled',
+        shift_blocks: {
+          location_id: 'loc1', template_id: 't1', block_date: '2026-06-10',
+          start_time: '09:00:00', end_time: '10:00:00',
+          roster_id: 'r-draft', rosters: { status: 'draft' },
+          shift_templates: { id: 't1', name: 'AM', start_time: '09:00:00', end_time: '10:00:00' },
+        },
+        profiles: null,
+      }],
+      error: null,
+    })
+    const { rows } = await fetchApiShiftRows(db, { locationIds: ['loc1'] })
+    expect(rows[0].published).toBe(false)
+  })
+
+  it('drops cancelled assignments (approved swap-drop tombstones)', async () => {
+    const block = {
+      location_id: 'loc1', template_id: 't1', block_date: '2026-06-10',
+      start_time: '09:00:00', end_time: '10:00:00', roster_id: null, rosters: null,
+      shift_templates: { id: 't1', name: 'AM', start_time: '09:00:00', end_time: '10:00:00' },
+    }
+    const db = makeDb({
+      data: [
+        { id: 'live', profile_id: 'p1', status: 'scheduled', shift_blocks: block, profiles: null },
+        { id: 'dead', profile_id: 'p1', status: 'cancelled', shift_blocks: block, profiles: null },
+      ],
+      error: null,
+    })
+    const { rows } = await fetchApiShiftRows(db, { locationIds: ['loc1'] })
+    expect(rows.map((r) => r.id)).toEqual(['live'])
+  })
+
+  it('publishedOnly drops unpublished rows', async () => {
+    const mk = (id, status) => ({
+      id, profile_id: 'p1', status: 'scheduled',
+      shift_blocks: {
+        location_id: 'loc1', template_id: 't1', block_date: '2026-06-10', start_time: '09:00:00', end_time: '10:00:00',
+        roster_id: status ? 'r' : null, rosters: status ? { status } : null,
+        shift_templates: { id: 't1', name: 'AM', start_time: '09:00:00', end_time: '10:00:00' },
+      },
+      profiles: null,
+    })
+    const db = makeDb({ data: [mk('pub', 'published'), mk('draft', 'draft'), mk('none', null)], error: null })
+    const { rows } = await fetchApiShiftRows(db, { locationIds: ['loc1'], publishedOnly: true })
+    expect(rows.map((r) => r.id)).toEqual(['pub'])
   })
 
   it('passes query errors through', async () => {
