@@ -116,6 +116,53 @@ export function weekStartForMonth(monthStart, currentWeekStart) {
   return getMonday(addDays(ms, 3))
 }
 
+// ROSTER-FIX.6a — the calendar's unpublished-changes guard keys dirty periods
+// as 'YYYY-MM-DD..YYYY-MM-DD'. Two DIFFERENT questions are asked of those keys
+// and they must not share a predicate:
+//
+//   - "should I warn?"  -> ANY intersection. The operator edits the week
+//     4-10 May, switches to Month, and the visible period is now 1-31 May. The
+//     key is different but the unpublished edits are right there on screen, so
+//     exact-key equality silently dropped the warning (and did the same on the
+//     reverse trip). Overlap is the honest test: some of what you are looking
+//     at is unpublished.
+//   - "may I clear?"    -> STRICT containment. A publish only settles the days
+//     it actually covered. Publishing the month clears the weeks inside it;
+//     publishing one week must NOT clear a dirty month, because the other
+//     three weeks of that month are still unpublished.
+//
+// The asymmetry is deliberate: warn on any intersection, clear only what a
+// publish fully covered. Erring the other way loses a warning the operator
+// needed; erring this way at worst warns once too often.
+
+/** Split 'YYYY-MM-DD..YYYY-MM-DD' into [start, end]. */
+function splitPeriodKey(key) {
+  const [start, end] = String(key || '').split('..')
+  return [start, end]
+}
+
+/**
+ * Do two period keys share at least one day? ISO dates compare correctly as
+ * strings, so no Date objects are needed.
+ */
+export function periodsOverlap(keyA, keyB) {
+  const [aStart, aEnd] = splitPeriodKey(keyA)
+  const [bStart, bEnd] = splitPeriodKey(keyB)
+  if (!aStart || !aEnd || !bStart || !bEnd) return false
+  return aStart <= bEnd && aEnd >= bStart
+}
+
+/**
+ * Does `outerKey` FULLY contain `innerKey`? Used by the publish path, which
+ * may only clear a dirty period it covered end to end.
+ */
+export function periodCovers(outerKey, innerKey) {
+  const [outStart, outEnd] = splitPeriodKey(outerKey)
+  const [inStart, inEnd] = splitPeriodKey(innerKey)
+  if (!outStart || !outEnd || !inStart || !inEnd) return false
+  return inStart >= outStart && inEnd <= outEnd
+}
+
 /**
  * Generate the list of dates within [fromDate, toDate] (inclusive)
  * whose weekday code is in `dayCodes`. Used both by the block

@@ -20,14 +20,14 @@
 // Swap requests POST the shift_assignment id as requester_shift_id
 // (RETIRE-SHIFTS-MIRROR.5c). The legacy public.shifts mirror is gone (mig 238).
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { ChevronLeft, ChevronRight, Copy, Send, Plus, Users, User, Clock, X, ArrowLeftRight, CalendarOff, Palmtree, ThermometerSun, Ban, AlertTriangle, AlertCircle, CalendarDays, CalendarRange, Pencil, Check, Settings } from 'lucide-react'
 import Link from 'next/link'
 import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 import { computeWeeklyCost } from '@/lib/payroll'
 import { indexByDate } from '@/lib/bank-holidays'
 import { MANAGER_ROLES, ADMIN_ROLES } from '@/lib/schemas'
-import { isBlockUnstaffedFuture as libUnstaffed, liveAssignments, monthStartForWeek, weekStartForMonth } from '@/lib/roster'
+import { isBlockUnstaffedFuture as libUnstaffed, liveAssignments, monthStartForWeek, weekStartForMonth, periodsOverlap, periodCovers } from '@/lib/roster'
 // ROSTER-FIX.4 — the server refuses a publish that would leave two published
 // rosters over the same days. `overlapping_roster` is a code, not copy; the
 // sentence it becomes is shared with the approvals queue so one refusal reads
@@ -340,16 +340,25 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
   const visiblePeriodKey = viewType === 'month'
     ? `${formatDate(monthStart)}..${formatDate(visibleMonthEnd)}`
     : `${formatDate(weekStart)}..${formatDate(weekEnd)}`
-  const isVisiblePeriodDirty = dirtyPeriods.has(visiblePeriodKey)
+  // ROSTER-FIX.6a — warn on any INTERSECTION, not on an exact key match. Edit
+  // in week view, switch to Month, and the visible key changes from the week
+  // to the month while the unpublished edits stay on screen; exact equality
+  // dropped the warning on that switch (and on the reverse), which was a
+  // regression against the old screen-wide boolean. The asymmetry with
+  // clearDirtyPeriodsCoveredBy below is deliberate and is spelled out beside
+  // the two predicates in @/lib/roster: you warn on any overlap, you only
+  // clear what a publish FULLY covered.
+  const isVisiblePeriodDirty = useMemo(
+    () => [...dirtyPeriods].some((key) => periodsOverlap(key, visiblePeriodKey)),
+    [dirtyPeriods, visiblePeriodKey]
+  )
 
   // A publish clears every dirty period it FULLY covers. Publishing the month
   // therefore clears the weeks inside it; publishing one week leaves a dirty
   // month alone, because the rest of that month is still unpublished.
   const clearDirtyPeriodsCoveredBy = useCallback((periodStart, periodEnd) => {
-    setDirtyPeriods((prev) => new Set([...prev].filter((key) => {
-      const [start, end] = key.split('..')
-      return !(start >= periodStart && end <= periodEnd)
-    })))
+    const publishedKey = `${periodStart}..${periodEnd}`
+    setDirtyPeriods((prev) => new Set([...prev].filter((key) => !periodCovers(publishedKey, key))))
   }, [])
 
   // ROSTER-FIX.6a — the fan-out, its try/catch and its request-ordering

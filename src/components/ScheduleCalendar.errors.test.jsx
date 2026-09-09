@@ -84,9 +84,10 @@ describe('per-period unpublished-changes guard (ROSTER-FIX.6a)', () => {
   // The guard used to be one boolean for the whole screen. Editing week A and
   // then paging to week B carried A's warning onto B, and publishing B cleared
   // the warning A still deserved. It is now keyed by the visible period.
+  let rerender
   async function renderWithDirtyWeek() {
     vi.spyOn(window, 'confirm').mockReturnValue(true)
-    render(<ScheduleCalendar user={user} />)
+    ;({ rerender } = render(<ScheduleCalendar user={user} />))
     await waitFor(() => expect(screen.queryByText(/Loading roster/)).toBeNull())
     // Copy last week is a real mutation, so it marks the visible week dirty.
     fireEvent.click(screen.getByText('Copy Last Week'))
@@ -112,6 +113,72 @@ describe('per-period unpublished-changes guard (ROSTER-FIX.6a)', () => {
     // 2026-05-04, deliberately not the current one) and has a stable label;
     // the arrows get their aria-labels in 6b.
     fireEvent.click(screen.getByText('Today'))
+    await waitFor(() => expect(screen.queryByText(/Loading roster/)).toBeNull())
+    window.confirm.mockClear()
+    fireEvent.click(screen.getByText('Time Off').closest('a'))
+    expect(window.confirm).not.toHaveBeenCalled()
+  })
+
+  // ROSTER-FIX.6a-7 — the per-period rewrite matched keys EXACTLY, so this
+  // switch (week 4-10 May -> month 1-31 May, same unpublished edits still on
+  // screen) silently lost the warning the old screen-wide boolean gave. The
+  // guard now warns on any OVERLAP.
+  it('still warns after switching the dirty week into Month view', async () => {
+    await renderWithDirtyWeek()
+    fireEvent.click(screen.getByText('Month'))
+    await waitFor(() => expect(screen.queryByText(/Loading roster/)).toBeNull())
+    window.confirm.mockClear()
+    fireEvent.click(screen.getByText('Time Off').closest('a'))
+    await waitFor(() => expect(window.confirm).toHaveBeenCalledWith(
+      expect.stringContaining('unpublished roster changes')
+    ))
+  })
+
+  it('still warns after switching back from Month to Week', async () => {
+    await renderWithDirtyWeek()
+    fireEvent.click(screen.getByText('Month'))
+    await waitFor(() => expect(screen.queryByText(/Loading roster/)).toBeNull())
+    fireEvent.click(screen.getByText('Week'))
+    await waitFor(() => expect(screen.queryByText(/Loading roster/)).toBeNull())
+    window.confirm.mockClear()
+    fireEvent.click(screen.getByText('Time Off').closest('a'))
+    await waitFor(() => expect(window.confirm).toHaveBeenCalledWith(
+      expect.stringContaining('unpublished roster changes')
+    ))
+  })
+
+  // A publish clears only what it FULLY covered (clearDirtyPeriodsCoveredBy);
+  // the predicate itself is pinned in src/lib/roster.test.js, this is the
+  // wiring.
+  it('goes quiet once the dirty week is published', async () => {
+    await renderWithDirtyWeek()
+    global.fetch = vi.fn(async (url, opts) => {
+      if (String(url).includes('/schedule/rosters')) {
+        const body = JSON.parse(opts?.body || '{}')
+        return body.dry_run
+          ? okResponse({ success: true, impact: { blockCount: 1, periodProjectedEur: 0, monthProjectedTotalEur: 0, monthlyBudgetEur: 100 } })
+          : okResponse({ success: true, impact: {} })
+      }
+      return okResponse({ data: [] })
+    })
+    fireEvent.click(screen.getByText('Publish'))
+    // The modal's confirm button carries the same label as the toolbar one,
+    // so wait for the budget preview and take the last match.
+    await waitFor(() => expect(screen.getAllByText('Publish').length).toBeGreaterThan(1))
+    const buttons = screen.getAllByText('Publish')
+    fireEvent.click(buttons[buttons.length - 1])
+    await waitFor(() => expect(screen.queryByText('Publish roster')).toBeNull())
+
+    window.confirm.mockClear()
+    fireEvent.click(screen.getByText('Time Off').closest('a'))
+    expect(window.confirm).not.toHaveBeenCalled()
+  })
+
+  // Switching location swaps the roster out from under the guard, so the old
+  // location's dirty periods are no longer reachable from this screen.
+  it('drops every dirty period when the active location changes', async () => {
+    await renderWithDirtyWeek()
+    rerender(<ScheduleCalendar user={{ ...user, activeLocation: { id: 'loc2', name: 'Hatch Street' } }} />)
     await waitFor(() => expect(screen.queryByText(/Loading roster/)).toBeNull())
     window.confirm.mockClear()
     fireEvent.click(screen.getByText('Time Off').closest('a'))

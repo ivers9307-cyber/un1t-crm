@@ -18,6 +18,8 @@ import {
   getMonthStart,
   monthStartForWeek,
   weekStartForMonth,
+  periodsOverlap,
+  periodCovers,
 } from './roster'
 
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logInfo: vi.fn(), logError: vi.fn() }))
@@ -583,5 +585,75 @@ describe('monthStartForWeek / weekStartForMonth (ROSTER-FIX.6a)', () => {
 
   it('normalises a mid-month date to the first of its month', () => {
     expect(formatDate(getMonthStart(local('2026-08-19')))).toBe('2026-08-01')
+  })
+})
+
+// ROSTER-FIX.6a — the two predicates behind the calendar's unpublished-changes
+// guard. They answer DIFFERENT questions and the asymmetry is the point: the
+// warning fires on any intersection, a publish only clears what it fully
+// covered. Pinned here because a component test can only observe the combined
+// behaviour, and it was exact-key equality (no overlap at all) that silently
+// dropped the warning on a week-to-month switch.
+describe('periodsOverlap (ROSTER-FIX.6a)', () => {
+  const WEEK = '2026-05-04..2026-05-10'
+  const MONTH = '2026-05-01..2026-05-31'
+
+  it('sees a week inside the month it belongs to, in both directions', () => {
+    expect(periodsOverlap(WEEK, MONTH)).toBe(true)
+    expect(periodsOverlap(MONTH, WEEK)).toBe(true)
+  })
+
+  it('is true for a period compared with itself', () => {
+    expect(periodsOverlap(WEEK, WEEK)).toBe(true)
+  })
+
+  it('is false for two adjacent, non-touching weeks', () => {
+    expect(periodsOverlap(WEEK, '2026-05-11..2026-05-17')).toBe(false)
+    expect(periodsOverlap(WEEK, '2026-04-27..2026-05-03')).toBe(false)
+  })
+
+  it('is true when only a single day is shared', () => {
+    expect(periodsOverlap(WEEK, '2026-05-10..2026-05-16')).toBe(true)
+    expect(periodsOverlap(WEEK, '2026-04-28..2026-05-04')).toBe(true)
+  })
+
+  it('sees a week that straddles a month boundary from both months', () => {
+    const straddle = '2026-08-31..2026-09-06'
+    expect(periodsOverlap(straddle, '2026-08-01..2026-08-31')).toBe(true)
+    expect(periodsOverlap(straddle, '2026-09-01..2026-09-30')).toBe(true)
+  })
+
+  it('is false rather than throwing on a malformed key', () => {
+    expect(periodsOverlap(null, WEEK)).toBe(false)
+    expect(periodsOverlap('2026-05-04', WEEK)).toBe(false)
+    expect(periodsOverlap(undefined, undefined)).toBe(false)
+  })
+})
+
+describe('periodCovers (ROSTER-FIX.6a)', () => {
+  const WEEK = '2026-05-04..2026-05-10'
+  const MONTH = '2026-05-01..2026-05-31'
+
+  it('a publish covering the week clears it', () => {
+    expect(periodCovers(WEEK, WEEK)).toBe(true)
+    expect(periodCovers(MONTH, WEEK)).toBe(true)
+  })
+
+  it('a publish covering only part of a period does NOT clear it', () => {
+    // Publishing one week must leave a dirty month dirty: the other three
+    // weeks of that month are still unpublished.
+    expect(periodCovers(WEEK, MONTH)).toBe(false)
+    // A week straddling the month boundary is not fully inside the month.
+    expect(periodCovers(MONTH, '2026-08-31..2026-09-06')).toBe(false)
+    expect(periodCovers('2026-09-01..2026-09-30', '2026-08-31..2026-09-06')).toBe(false)
+  })
+
+  it('does not clear a period it merely touches', () => {
+    expect(periodCovers(WEEK, '2026-05-10..2026-05-16')).toBe(false)
+  })
+
+  it('is false rather than throwing on a malformed key', () => {
+    expect(periodCovers(null, WEEK)).toBe(false)
+    expect(periodCovers(MONTH, 'nonsense')).toBe(false)
   })
 })
