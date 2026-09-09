@@ -17,11 +17,19 @@ vi.mock('@/lib/auth', () => ({
 vi.mock('@/lib/push-dedup', () => ({
   sendPushOnce: vi.fn(() => Promise.resolve()),
   sendPushToRolesAtLocationOnce: vi.fn(() => Promise.resolve()),
+  notifyUsersOnce: vi.fn(() => Promise.resolve()),
+  notifyUsersAtRolesOnce: vi.fn(() => Promise.resolve()),
 }))
 
 const { createServerClient } = await import('@/lib/supabase')
 const { getCurrentUser } = await import('@/lib/auth')
+const { notifyUsersOnce, notifyUsersAtRolesOnce } = await import('@/lib/push-dedup')
 const { POST } = await import('./route.js')
+
+// The notification fan-out is fire-and-forget (never blocks the response) and
+// the open-pool leg awaits a query first, so a test has to let the
+// microtask queue drain before asserting on the spies.
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
 
 // UUID-shaped ids. `uuidLike` is hex-only (src/lib/uuid-shape.js), so the
 // mnemonic prefix has to be hex too or Zod rejects the body before the
@@ -40,8 +48,11 @@ function req(body) {
 }
 
 // assignmentsById: id → { id, profile_id, status, block_date, location_id, roster_status? }
-function buildDb({ assignmentsById, openSwaps = [], openSwapsError = null, insertErr = null }) {
+// poolRows / poolError back the ROSTER-FIX.8d open-pool recipient query
+// (every live assignment at the location on that date).
+function buildDb({ assignmentsById, openSwaps = [], openSwapsError = null, insertErr = null, poolRows = [], poolError = null }) {
   const insertSpy = vi.fn()
+  const poolFilters = []
   const db = {
     from: (table) => {
       if (table === 'shift_assignments') {
@@ -51,8 +62,13 @@ function buildDb({ assignmentsById, openSwaps = [], openSwapsError = null, inser
             chain.eq = (col, val) => {
               if (col === 'id') chain._id = val
               if (col === 'profile_id') chain._profile = val
+              if (col.startsWith('shift_blocks.')) poolFilters.push([col, val])
               return chain
             }
+            // Awaiting the chain itself (no .single()) is the open-pool read.
+            chain.then = (onFulfilled, onRejected) => Promise.resolve(
+              poolError ? { data: null, error: poolError } : { data: poolRows, error: null },
+            ).then(onFulfilled, onRejected)
             chain.single = () => {
               const a = assignmentsById[chain._id]
               const ok = a && (!chain._profile || a.profile_id === chain._profile)
@@ -96,7 +112,7 @@ function buildDb({ assignmentsById, openSwaps = [], openSwapsError = null, inser
       throw new Error(`unexpected table ${table}`)
     },
   }
-  return { db, insertSpy }
+  return { db, insertSpy, poolFilters }
 }
 
 const future = '2099-01-01'
@@ -105,7 +121,12 @@ const base = {
   [A_TGT]: { id: A_TGT, profile_id: TGT, status: 'scheduled', location_id: LOC, block_date: future },
 }
 
-beforeEach(() => { createServerClient.mockReset(); getCurrentUser.mockReset() })
+beforeEach(() => {
+  createServerClient.mockReset()
+  getCurrentUser.mockReset()
+  notifyUsersOnce.mockClear()
+  notifyUsersAtRolesOnce.mockClear()
+})
 
 describe('POST /api/schedule/swaps — target validation', () => {
   it('201 for a valid reciprocal swap', async () => {
@@ -218,5 +239,113 @@ describe('POST /api/schedule/swaps — target validation', () => {
     createServerClient.mockReturnValue(db)
     const res = await POST(req({ requester_shift_id: A_REQ }))
     expect(res.status).toBe(409)
+  })
+})
+
+// ROSTER-FIX.8d — a swap notification that only ever went out as a push
+// reached nobody without the app installed. These pin the switch to
+// notifyUsersOnce / notifyUsersAtRolesOnce (push + registry-gated email
+// fallback, the shape time-off already uses) and the open-pool fan-out.
+describe('POST /api/schedule/swaps — notifications', () => {
+  const COACH_A = U('0a0a0a0a')
+  const COACH_B = U('0b0b0b0b')
+
+  // Every row the location/date query returns, in the shape the embed gives.
+  const pool = [
+    { profile_id: COACH_A, status: 'scheduled' },
+    { profile_id: COACH_B, status: 'confirmed' },
+    // the requester's own shift — the one that is up for swap
+    { profile_id: REQ, status: 'scheduled' },
+    // a tombstone and a duplicate: neither may reach a recipient list
+    { profile_id: TGT, status: 'cancelled' },
+    { profile_id: COACH_A, status: 'scheduled' },
+  ]
+
+  it('notifies a named target with an email fallback, not a bare push', async () => {
+    getCurrentUser.mockResolvedValue({ id: REQ, role: 'staff', full_name: 'R' })
+    const { db } = buildDb({ assignmentsById: base })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(req({ requester_shift_id: A_REQ, target_id: TGT }))
+    expect(res.status).toBe(201)
+    await flush()
+
+    expect(notifyUsersOnce).toHaveBeenCalled()
+    const [, key, ids, payload] = notifyUsersOnce.mock.calls.find(c => c[1].startsWith('swap_inbound:'))
+    expect(key).toBe('swap_inbound:swap-1')
+    expect(ids).toEqual([TGT])
+    expect(payload.category).toBe('swap')
+    expect(payload.emailSubject).toBeTruthy()
+  })
+
+  it('notifies managers of an open swap through the email-fallback sender', async () => {
+    getCurrentUser.mockResolvedValue({ id: REQ, role: 'staff', full_name: 'R' })
+    const { db } = buildDb({ assignmentsById: base, poolRows: pool })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(req({ requester_shift_id: A_REQ }))
+    expect(res.status).toBe(201)
+    await flush()
+
+    expect(notifyUsersAtRolesOnce).toHaveBeenCalledTimes(1)
+    const [, key, locationId, roles, payload] = notifyUsersAtRolesOnce.mock.calls[0]
+    expect(key).toBe('swap_open:swap-1')
+    expect(locationId).toBe(LOC)
+    expect(roles).toContain('manager')
+    expect(payload.category).toBe('swap')
+    expect(payload.emailSubject).toBeTruthy()
+  })
+
+  it('notifies the eligible coaches on that date, never the requester', async () => {
+    getCurrentUser.mockResolvedValue({ id: REQ, role: 'staff', full_name: 'R' })
+    const { db, poolFilters } = buildDb({ assignmentsById: base, poolRows: pool })
+    createServerClient.mockReturnValue(db)
+
+    await POST(req({ requester_shift_id: A_REQ }))
+    await flush()
+
+    // scoped to the swap's own location and date
+    expect(poolFilters).toEqual(
+      expect.arrayContaining([
+        ['shift_blocks.location_id', LOC],
+        ['shift_blocks.block_date', future],
+      ]),
+    )
+
+    const call = notifyUsersOnce.mock.calls.find(c => c[1].startsWith('swap_open_pool:'))
+    expect(call).toBeTruthy()
+    const [, key, ids, payload] = call
+    expect(key).toBe('swap_open_pool:swap-1')
+    // deduped, tombstone dropped, requester excluded
+    expect([...ids].sort()).toEqual([COACH_A, COACH_B].sort())
+    expect(ids).not.toContain(REQ)
+    expect(ids).not.toContain(TGT)
+    expect(payload.category).toBe('swap')
+    expect(payload.emailSubject).toBeTruthy()
+  })
+
+  it('still answers 201 and still tells managers when the pool query fails', async () => {
+    getCurrentUser.mockResolvedValue({ id: REQ, role: 'staff', full_name: 'R' })
+    const { db } = buildDb({ assignmentsById: base, poolError: { message: 'boom' } })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(req({ requester_shift_id: A_REQ }))
+    expect(res.status).toBe(201)
+    await flush()
+
+    expect(notifyUsersAtRolesOnce).toHaveBeenCalledTimes(1)
+    expect(notifyUsersOnce.mock.calls.filter(c => c[1].startsWith('swap_open_pool:'))).toHaveLength(0)
+  })
+
+  it('does not run the open-pool fan-out for a targeted swap', async () => {
+    getCurrentUser.mockResolvedValue({ id: REQ, role: 'staff', full_name: 'R' })
+    const { db } = buildDb({ assignmentsById: base, poolRows: pool })
+    createServerClient.mockReturnValue(db)
+
+    await POST(req({ requester_shift_id: A_REQ, target_id: TGT }))
+    await flush()
+
+    expect(notifyUsersAtRolesOnce).not.toHaveBeenCalled()
+    expect(notifyUsersOnce.mock.calls.filter(c => c[1].startsWith('swap_open_pool:'))).toHaveLength(0)
   })
 })

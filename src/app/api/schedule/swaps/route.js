@@ -4,10 +4,11 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess , getUserLocationIds} from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
-import { sendPushOnce, sendPushToRolesAtLocationOnce } from '@/lib/push-dedup'
+import { notifyUsersOnce, notifyUsersAtRolesOnce } from '@/lib/push-dedup'
 import { swapShiftShape } from '@/lib/roster-read'
 import { isLiveAssignment } from '@/lib/roster'
 import { dublinTodayStr } from '@/lib/dublin-time'
+import { logWarn } from '@/lib/log'
 
 const SwapCreateSchema = z.object({
   requester_shift_id: uuidLike,
@@ -200,23 +201,73 @@ export async function POST(request) {
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
 
   // Notify the targeted teammate if one was specified, otherwise alert
-  // managers at the location that an open swap is up for grabs. Either
-  // way, push delivery is best-effort.
+  // managers at the location that an open swap is up for grabs, and the
+  // coaches who could actually take it. Either way delivery is best-effort.
+  //
+  // ROSTER-FIX.8d — notifyUsers*, not sendPush*: a swap is a request someone
+  // has to answer, and a push-only notification reaches nobody who has not
+  // installed the app. `swap` is now fallbackEmail in the registry, so a
+  // recipient with no device tokens gets the email instead (the shape
+  // time-off has used since NOTIF.8).
   if (body.target_id) {
-    sendPushOnce(db, `swap_inbound:${data.id}`, [body.target_id], {
+    notifyUsersOnce(db, `swap_inbound:${data.id}`, [body.target_id], {
       title: 'New shift swap request',
       body: `${user.full_name} wants to swap a shift with you. Tap to review.`,
       category: 'swap',
+      emailSubject: `${user.full_name} wants to swap a shift with you`,
       data: { type: 'swap_inbound', swap_id: data.id },
-    }).catch(err => console.error('[swaps] push to target failed', err))
+    }).catch(err => console.error('[swaps] notify target failed', err))
   } else {
-    sendPushToRolesAtLocationOnce(db, `swap_open:${data.id}`, swapLocationId, MANAGER_ROLES, {
+    notifyUsersAtRolesOnce(db, `swap_open:${data.id}`, swapLocationId, MANAGER_ROLES, {
       title: 'Open swap request',
       body: `${user.full_name} posted a shift for swap. Tap to review.`,
       category: 'swap',
+      emailSubject: 'An open shift swap needs a decision',
       data: { type: 'swap_open', swap_id: data.id },
-    }).catch(err => console.error('[swaps] push to managers failed', err))
+    }).catch(err => console.error('[swaps] notify managers failed', err))
+
+    notifyOpenPool(db, data.id, swapLocationId, assignment.shift_blocks?.block_date, user)
+      .catch(err => console.error('[swaps] notify open pool failed', err))
   }
 
   return NextResponse.json({ success: true, data }, { status: 201 })
+}
+
+// ROSTER-FIX.8d — an open swap used to be visible only to managers, so the
+// coaches who could actually claim it found out by opening the app and
+// looking. Notify the people already working that day at that location: they
+// are on site, so picking up a neighbouring shift is a real option for them.
+//
+// Fail-soft by construction. This runs after the swap row is committed and
+// the response has been decided, so an unreadable pool must never turn a
+// created swap into an error, and never costs the manager notification either
+// (it is a separate call). One query, no fan-out.
+async function notifyOpenPool(db, swapId, locationId, blockDate, user) {
+  if (!locationId || !blockDate) return
+
+  const { data: rows, error } = await db.from('shift_assignments')
+    .select('profile_id, status, shift_blocks!inner(location_id, block_date)')
+    .eq('shift_blocks.location_id', locationId)
+    .eq('shift_blocks.block_date', blockDate)
+  if (error) {
+    logWarn('swaps', 'open-pool recipient query failed; managers were still notified', {
+      swapId, err: error.message,
+    })
+    return
+  }
+
+  const ids = [...new Set(
+    (rows || [])
+      .filter(r => r.profile_id && r.profile_id !== user.id && isLiveAssignment(r))
+      .map(r => r.profile_id),
+  )]
+  if (!ids.length) return
+
+  await notifyUsersOnce(db, `swap_open_pool:${swapId}`, ids, {
+    title: 'A shift is up for swap',
+    body: `${user.full_name} posted a shift for swap on a day you are working. Tap to take it.`,
+    category: 'swap',
+    emailSubject: 'A shift is up for swap',
+    data: { type: 'swap_open_pool', swap_id: swapId, block_date: blockDate },
+  })
 }

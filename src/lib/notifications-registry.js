@@ -86,11 +86,18 @@ export const NOTIFICATION_REGISTRY = Object.freeze([
   {
     category: 'swap',
     label: 'Swap requests',
-    description: 'Inbound swap requests for managers, and swap-request response for the requester.',
+    description: 'Inbound swap requests for managers, the open pool for coaches working that day, and the swap-request response for the requester.',
     trigger: { kind: 'event', source: 'POST/PUT /api/schedule/swaps' },
-    recipients: { kind: 'individual_or_creator', detail: 'Managers (new request) or requester (decision)' },
+    recipients: { kind: 'individual_or_creator', detail: 'Managers (new request), coaches rostered that day (open pool), or the requester / taker (decision)' },
     configurable: { leadTimes: false, roles: false },
-    fallbackEmail: false,
+    // ROSTER-FIX.8d — was false, so every swap notification was push-only and
+    // reached nobody without the app installed. A swap is a request somebody
+    // has to answer before a shift starts, and the person who has to answer it
+    // is often the one least likely to have the app: same argument as time_off,
+    // which has had the fallback since NOTIF.8. Volume is low (one per swap
+    // transition), so this is not the noise case bookings/leads are.
+    fallbackEmail: true,
+    emailSubject: 'Shift swap update',
   },
   {
     category: 'lead',
