@@ -206,6 +206,28 @@ export default ({ config }) => ({
       // question in App Store Connect for each version.
       ITSAppUsesNonExemptEncryption: false,
     },
+    // WIDGET.1 — the App Group the app and its widget extension share.
+    //
+    // 🔴 The id is env-switched IN LOCKSTEP with the bundle identifier, and
+    // that is deliberate. Using ONE group for both bundle ids would be wrong:
+    // during the migration window the legacy unlisted app
+    // (com.un1tdublin.crm) and the public app (ie.repset.app) can both sit on
+    // the same staff phone — that window is precisely why an in-app migration
+    // nudge exists. Sharing one group would put both installs' widget tokens
+    // on the same key, so whichever launched last would overwrite the other,
+    // and revoking "that phone's widget" would revoke a credential the other
+    // install then silently re-minted. Two installs are two devices' worth of
+    // credentials; give them two containers.
+    //
+    // The widget's own expo-target.config.js does not repeat this:
+    // @bacons/apple-targets mirrors an app-level App Group onto every target.
+    entitlements: {
+      'com.apple.security.application-groups': [
+        process.env.LEGACY_APP === '1'
+          ? 'group.com.un1tdublin.crm.widgets'
+          : 'group.ie.repset.widgets',
+      ],
+    },
   },
   android: {
     // BUNDLE-ID-RESET kept this in lockstep with iOS; REPSET-PUB
@@ -328,6 +350,10 @@ export default ({ config }) => ({
         },
       },
     ],
+    // WIDGET.1 — generates the WidgetKit extension Xcode target from
+    // mobile/targets/widgets/ at prebuild. NATIVE (a whole extra Xcode target
+    // plus an App Group entitlement) → new EAS Build, never an OTA.
+    '@bacons/apple-targets',
   ],
   experiments: {
     typedRoutes: true,
