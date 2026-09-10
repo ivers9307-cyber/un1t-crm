@@ -68,13 +68,19 @@ struct StudioControlsEntry: TimelineEntry {
     /// this alone, and per Task 11's brief both get the same defined
     /// look (see `StudioControlsWidgetView`).
     let credentialPresent: Bool
+    /// `rawId`s of non-door devices we currently BELIEVE are on/playing —
+    /// `ToggleState.isOn` (StudioControlsIntents.swift) read AS OF `date`,
+    /// same "local read, no network" shape as `credentialPresent` above.
+    /// This is the last state THIS WIDGET sent, not a live read of the
+    /// device — see `ToggleState`'s header for why that can drift.
+    let toggledOnIds: Set<String>
 }
 
 // MARK: - Provider
 
 struct StudioControlsProvider: AppIntentTimelineProvider {
     func placeholder(in context: Context) -> StudioControlsEntry {
-        StudioControlsEntry(date: Date(), studioId: "", studioName: "", devices: [], armedDoorIds: [], credentialPresent: false)
+        StudioControlsEntry(date: Date(), studioId: "", studioName: "", devices: [], armedDoorIds: [], credentialPresent: false, toggledOnIds: [])
     }
 
     func snapshot(for configuration: StudioControlsConfigurationIntent, in context: Context) async -> StudioControlsEntry {
@@ -121,13 +127,24 @@ struct StudioControlsProvider: AppIntentTimelineProvider {
         armedDoorIds: Set<String> = []
     ) -> StudioControlsEntry {
         let studioId = configuration.studio.id
+        // Local UserDefaults read, same as `armedDoorIds`/`credentialPresent`
+        // above — NOT a network call, so this doesn't violate this file's
+        // own "no network call in this provider" rule. `ToggleState` never
+        // holds an entry for a door, so the `kind != "door"` filter is
+        // belt-and-braces, not load-bearing.
+        let toggledOnIds = Set(
+            configuration.devicesInOrder
+                .filter { $0.kind != "door" && ToggleState.isOn($0.rawId) }
+                .map(\.rawId)
+        )
         return StudioControlsEntry(
             date: date,
             studioId: studioId,
             studioName: configuration.studio.name,
             devices: configuration.devicesInOrder,
             armedDoorIds: armedDoorIds,
-            credentialPresent: WidgetAPI.token(forLocation: studioId) != nil
+            credentialPresent: WidgetAPI.token(forLocation: studioId) != nil,
+            toggledOnIds: toggledOnIds
         )
     }
 }
@@ -142,6 +159,12 @@ private struct StudioControlsButton: View {
     let device: DeviceEntity
     let locationId: String
     let armed: Bool
+    /// Whether we BELIEVE this device is currently on/playing — from
+    /// `entry.toggledOnIds`, itself `ToggleState.isOn` (StudioControlsIntents.swift):
+    /// the last state THIS WIDGET sent, not a live read of the device.
+    /// Meaningless (and unused) for "door", which has its own armed/
+    /// disarmed look below.
+    let isOn: Bool
 
     private var symbolName: String {
         switch device.kind {
@@ -150,9 +173,13 @@ private struct StudioControlsButton: View {
         // Not "poweroutlet.type.b.fill" (Type B is a US/Japan socket) —
         // this app is Dublin-only (BS 1363 / "Type G"), and a generic plug
         // glyph reads correctly everywhere rather than showing the wrong
-        // country's outlet shape.
-        case "plug": return "powerplug.fill"
-        case "speaker": return "hifispeaker.fill"
+        // country's outlet shape. Filled when we believe it's on, outline
+        // when off — both are real, standard SF Symbols (iOS 16+).
+        case "plug": return isOn ? "powerplug.fill" : "powerplug"
+        // ⏸/▶ per the signed-off mockup — filled play/pause, no separate
+        // "off" glyph the way plug/AC have, since a speaker only has two
+        // states to begin with.
+        case "speaker": return isOn ? "pause.fill" : "play.fill"
         default: return "questionmark.circle"
         }
     }
@@ -164,12 +191,24 @@ private struct StudioControlsButton: View {
         (device.kind == "door" && armed) ? "Tap to confirm" : device.label
     }
 
+    /// Non-door devices dim their glyph/label when we believe they're off,
+    /// so the belief this button will act on is visible at a glance —
+    /// deliberately NOT `WidgetPalette.volt`, which is reserved for the
+    /// door's genuinely-armed state (see that palette's own header on why
+    /// nothing else should reach for it). AC has no distinct on/off glyph
+    /// (no reliable SF Symbol pair for it), so this dimming is the ONLY
+    /// visual cue its toggle state gets.
+    private var glyphColor: Color {
+        guard device.kind != "door" else { return WidgetPalette.text }
+        return isOn ? WidgetPalette.text : WidgetPalette.muted
+    }
+
     @ViewBuilder
     private var badge: some View {
         VStack(spacing: 6) {
             Image(systemName: symbolName)
                 .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(armed ? WidgetPalette.ink : WidgetPalette.text)
+                .foregroundStyle(armed ? WidgetPalette.ink : glyphColor)
                 .frame(width: 40, height: 40)
                 .background(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -177,7 +216,7 @@ private struct StudioControlsButton: View {
                 )
             Text(displayLabel)
                 .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(armed ? WidgetPalette.volt : WidgetPalette.text)
+                .foregroundStyle(armed ? WidgetPalette.volt : glyphColor)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
         }
@@ -190,22 +229,23 @@ private struct StudioControlsButton: View {
             Button(intent: UnlockDoorIntent(locationId: locationId, doorId: device.rawId, doorName: device.label)) { badge }
                 .buttonStyle(.plain)
         case "ac":
-            Button(intent: ToggleAcIntent(locationId: locationId, deviceId: device.rawId, turningOn: true)) { badge }
+            // Fires ToggleAcIntent with no direction of its own — the
+            // intent reads ToggleState (StudioControlsIntents.swift) and
+            // sends the opposite of what THIS WIDGET last sent, not a
+            // hard-coded "on". `isOn` above is this same belief, read
+            // separately here purely to render the badge.
+            Button(intent: ToggleAcIntent(locationId: locationId, deviceId: device.rawId)) { badge }
                 .buttonStyle(.plain)
         case "plug":
-            Button(intent: TogglePlugIntent(locationId: locationId, deviceId: device.rawId, turningOn: true)) { badge }
+            // Same shape as "ac" above.
+            Button(intent: TogglePlugIntent(locationId: locationId, deviceId: device.rawId)) { badge }
                 .buttonStyle(.plain)
         case "speaker":
-            // WIDGET.1 — inherited gap, not one this task introduces: the
-            // action intent's own doc comment (StudioControlsIntents.swift)
-            // says this button should toggle by its last-KNOWN state, but
-            // GET /api/widget/devices (Phase 1) reports no on/off state for
-            // any device kind — there is nothing to remember a "last
-            // known" value FROM. Sending a fixed "play" every tap is the
-            // literal, honest behaviour available with today's API surface;
-            // fixing it for real needs a state field added to that route,
-            // which is out of this task's scope.
-            Button(intent: ToggleSpeakerIntent(locationId: locationId, playerId: device.rawId, action: "play")) { badge }
+            // Same shape as "ac"/"plug" above — the approved mockup's ⏯
+            // behaviour. See ToggleState's header (StudioControlsIntents.swift)
+            // for why this is an optimistic belief, not a live read of
+            // what Sonos is actually doing.
+            Button(intent: ToggleSpeakerIntent(locationId: locationId, playerId: device.rawId)) { badge }
                 .buttonStyle(.plain)
         default:
             // An unrecognised kind (a future device type the server started
@@ -268,7 +308,8 @@ struct StudioControlsWidgetView: View {
                     StudioControlsButton(
                         device: device,
                         locationId: entry.studioId,
-                        armed: entry.armedDoorIds.contains(device.rawId)
+                        armed: entry.armedDoorIds.contains(device.rawId),
+                        isOn: entry.toggledOnIds.contains(device.rawId)
                     )
                 }
             }

@@ -181,26 +181,85 @@ struct UnlockDoorIntent: AppIntent {
     }
 }
 
+/// Last-known on/off (or playing/paused) state THIS WIDGET last SENT for a
+/// device — one bool per device id, in the SAME App Group container and
+/// the SAME per-device-id keying scheme as `ArmState` above, for the same
+/// reason: `perform()` runs in a fresh process per tap, so the only thing
+/// durable enough to carry a belief from one tap to the next (and out to
+/// whichever process redraws the tile afterwards) is `UserDefaults(suiteName:
+/// APP_GROUP)`.
+///
+/// 🔴 THIS IS OPTIMISTIC LOCAL STATE, NOT DEVICE TRUTH — say so here rather
+/// than let a comment imply otherwise. Nothing in this file ever asks the
+/// Sonos player, the Shelly plug, or the AC unit what it is actually doing;
+/// Studio Controls' timeline is built to make ZERO network calls
+/// (StudioControlsWidget.swift's header), and none of the three action
+/// routes below is a stateless toggle the SERVER could resolve instead —
+/// `POST /api/shelly/devices/{id}/toggle` takes an explicit `state` from
+/// the caller despite its name, `POST /api/sonos/control` has no
+/// `playpause` action, and AC is two separate `turn-on`/`turn-off` routes.
+/// So the moment someone flips a device from the wall switch, the Sonos
+/// app, or the CRM panel, this store goes stale: the widget still believes
+/// whatever IT last sent, the next tap sends what IT believes is the
+/// opposite, and that can land as a no-op against the device's REAL
+/// state — which reads to the operator as "I tapped Play/Pause and
+/// nothing happened," i.e. a broken button, when really the belief is
+/// just out of date. Two real fixes if that proves to bite often enough:
+///   1. A genuine stateless toggle server-side (a `playpause`/`toggle`
+///      action) — the server talks to the device directly and always
+///      knows, so the widget never has to guess.
+///   2. State added to `GET /api/widget/devices` plus turning Studio
+///      Controls' timeline into one that actually fetches on refresh —
+///      a bigger change, since that route and this timeline are both
+///      deliberately state-free/network-free today.
+/// Until one of those lands, "the last thing we sent" is the best
+/// available approximation — chosen over "the last thing we RENDERED"
+/// specifically so a failed send (see `isOn`'s caller below) never moves
+/// the belief.
+enum ToggleState {
+    private static func key(_ deviceId: String) -> String { "toggle_on_\(deviceId)" }
+
+    /// Defaults to `false` (off/paused) when nothing has been sent yet, so
+    /// a never-tapped button's first tap always turns ON — per Task 10's
+    /// instructions, the overwhelmingly common gym-floor action.
+    static func isOn(_ deviceId: String) -> Bool {
+        UserDefaults(suiteName: APP_GROUP)?.bool(forKey: key(deviceId)) ?? false
+    }
+
+    static func setOn(_ deviceId: String, _ on: Bool) {
+        UserDefaults(suiteName: APP_GROUP)?.set(on, forKey: key(deviceId))
+    }
+}
+
 struct ToggleAcIntent: AppIntent {
     static var title: LocalizedStringResource = "Toggle AC"
     static var isDiscoverable: Bool = false
 
     @Parameter(title: "Studio") var locationId: String
     @Parameter(title: "Device ID") var deviceId: String
-    @Parameter(title: "Turning On") var turningOn: Bool
 
     init() {}
-    init(locationId: String, deviceId: String, turningOn: Bool) {
+    init(locationId: String, deviceId: String) {
         self.locationId = locationId
         self.deviceId = deviceId
-        self.turningOn = turningOn
     }
 
     func perform() async throws -> some IntentResult {
+        // Toggle by OUR OWN last-SENT state (`ToggleState` above) — read
+        // fresh here, at perform() time, not trusted from a value the view
+        // captured when the button was drawn.
+        let turningOn = !ToggleState.isOn(deviceId)
         let path = turningOn
             ? "/api/studio-management/ac/devices/\(deviceId)/turn-on"
             : "/api/studio-management/ac/devices/\(deviceId)/turn-off"
-        _ = try? await WidgetAPI.call(path: path, locationId: locationId, method: "POST")
+        if (try? await WidgetAPI.call(path: path, locationId: locationId, method: "POST")) != nil {
+            // Write the new belief ONLY on success — a thrown/failed call
+            // (offline, timeout, non-2xx) must leave the stored value
+            // exactly as it was, or one network blip permanently inverts
+            // this button: every future tap would keep sending the same
+            // action instead of alternating.
+            ToggleState.setOn(deviceId, turningOn)
+        }
         WidgetCenter.shared.reloadAllTimelines()
         return .result()
     }
@@ -212,22 +271,24 @@ struct TogglePlugIntent: AppIntent {
 
     @Parameter(title: "Studio") var locationId: String
     @Parameter(title: "Device ID") var deviceId: String
-    @Parameter(title: "Turning On") var turningOn: Bool
 
     init() {}
-    init(locationId: String, deviceId: String, turningOn: Bool) {
+    init(locationId: String, deviceId: String) {
         self.locationId = locationId
         self.deviceId = deviceId
-        self.turningOn = turningOn
     }
 
     func perform() async throws -> some IntentResult {
-        _ = try? await WidgetAPI.call(
+        let turningOn = !ToggleState.isOn(deviceId)
+        if (try? await WidgetAPI.call(
             path: "/api/shelly/devices/\(deviceId)/toggle",
             locationId: locationId,
             method: "POST",
             body: ["state": turningOn ? "on" : "off"]
-        )
+        )) != nil {
+            // Success only — see ToggleAcIntent's identical comment above.
+            ToggleState.setOn(deviceId, turningOn)
+        }
         WidgetCenter.shared.reloadAllTimelines()
         return .result()
     }
@@ -239,33 +300,38 @@ struct ToggleSpeakerIntent: AppIntent {
 
     @Parameter(title: "Studio") var locationId: String
     @Parameter(title: "Player ID") var playerId: String
-    // "play" | "pause" — the widget button toggles by its OWN last-known
-    // state (what Task 11's timeline last rendered), not a live query
-    // issued from inside this intent.
-    @Parameter(title: "Action") var action: String
 
     init() {}
-    init(locationId: String, playerId: String, action: String) {
+    init(locationId: String, playerId: String) {
         self.locationId = locationId
         self.playerId = playerId
-        self.action = action
     }
 
     func perform() async throws -> some IntentResult {
+        // The widget button toggles by its OWN last-SENT state
+        // (`ToggleState` above, read fresh at perform() time) — NOT a live
+        // query issued from inside this intent to ask Sonos what it is
+        // actually doing right now, and NOT the value the view happened
+        // to render when the button was drawn. See ToggleState's header
+        // for why this is an approximation, not device truth.
+        let willPlay = !ToggleState.isOn(playerId)
         // An unknown player_id answers 404 `not_found`; a stale group_id
         // answers 409 `regrouped`. WidgetAPIError.server(status:message:code:)
         // carries both `code` and the server's own `message` distinctly —
         // deliberately not conflated here or anywhere downstream. `try?`
         // still discards the outcome for this direct-fire button (matching
-        // the other three intents in this file); Task 11's timeline is
+        // the other two intents in this file); Task 11's timeline is
         // where a surfaced error, if ever added, would need to read that
         // `code` back out rather than pattern-matching `message` text.
-        _ = try? await WidgetAPI.call(
+        if (try? await WidgetAPI.call(
             path: "/api/sonos/control",
             locationId: locationId,
             method: "POST",
-            body: ["player_id": playerId, "action": action]
-        )
+            body: ["player_id": playerId, "action": willPlay ? "play" : "pause"]
+        )) != nil {
+            // Success only — see ToggleAcIntent's identical comment above.
+            ToggleState.setOn(playerId, willPlay)
+        }
         WidgetCenter.shared.reloadAllTimelines()
         return .result()
     }
