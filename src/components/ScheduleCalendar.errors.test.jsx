@@ -89,19 +89,75 @@ describe('ScheduleCalendar load failures (ROSTER-FIX.6a)', () => {
       expect(screen.queryByText(/Loading roster/)).toBeNull()
     })
 
-    // 🔴 SETTLE EVERY LOAD BEFORE DISMISSING. The screen fires several
-    // requests (blocks, staff, contractor spend) and this mock rejects all of
-    // them, each one raising the banner. Dismissing while one is still in
-    // flight is therefore a race the test loses at random: the click clears
-    // the banner, a later rejection raises it again, and the assertion reads
-    // "Dismiss is broken" when nothing is broken at all.
-    //
-    // (Whether a NEW failure should re-raise a banner the operator just
-    // dismissed is a real product question, and a different one from this
-    // test — which is about the button working.)
-    await act(async () => {})
+    // No settling step before this click, deliberately. It used to need one,
+    // and that was the tell: the dismissal was keyed on `error`'s identity,
+    // which refresh() churns null -> message on every cycle, so a background
+    // refresh re-raised the identical banner and the test had to out-wait it.
+    // A test waiting for a product bug to stop happening is not a passing
+    // test. ROSTER-FIX.6a-13 keyed the dismissal on the MESSAGE instead, so
+    // dismissing now sticks through repeats of the same failure and this
+    // asserts the behaviour rather than a quiet moment.
     fireEvent.click(screen.getByLabelText('Dismiss'))
     await waitFor(() => expect(screen.queryByText('Could not load the roster')).toBeNull())
+  })
+
+  it('a dismissed banner stays dismissed through repeats of the SAME failure', async () => {
+    // ROSTER-FIX.6a-13. The comment on errorDismissed has always promised the
+    // operator can "clear a banner without it reappearing until the next
+    // failure". It did not: the reset was keyed on `error`'s identity, and
+    // refresh() churns it null -> message every cycle, so a background refresh
+    // nobody asked for re-raised the identical banner. Dismiss was, in effect,
+    // a button that worked until the next tick.
+    global.fetch = vi.fn(async () => { throw new TypeError('Failed to fetch') })
+    render(<ScheduleCalendar user={user} />)
+    await waitFor(() => expect(screen.getByText('Could not load the roster')).toBeTruthy())
+    fireEvent.click(screen.getByLabelText('Dismiss'))
+    await waitFor(() => expect(screen.queryByText('Could not load the roster')).toBeNull())
+
+    // Drive another failing load — the same failure, unasked for. The banner
+    // must stay gone: a repeat carries no information the operator has not
+    // already read and dismissed.
+    fireEvent.click(screen.getByText('Today'))
+    await act(async () => {})
+    expect(screen.queryByText('Could not load the roster')).toBeNull()
+  })
+
+  it('a DIFFERENT failure re-raises it, because that is new information', async () => {
+    global.fetch = vi.fn(async () => { throw new TypeError('Failed to fetch') })
+    render(<ScheduleCalendar user={user} />)
+    await waitFor(() => expect(screen.getByText('Could not load the roster')).toBeTruthy())
+    fireEvent.click(screen.getByLabelText('Dismiss'))
+    await waitFor(() => expect(screen.queryByText('Could not load the roster')).toBeNull())
+
+    global.fetch = vi.fn(async (url) =>
+      String(url).includes('/schedule/blocks')
+        ? { ok: false, status: 500, json: async () => ({ error: 'Not your location' }) }
+        : okResponse({ data: [] })
+    )
+    fireEvent.click(screen.getByText('Today'))
+    await waitFor(() => expect(screen.getByText(/Not your location/)).toBeTruthy())
+  })
+
+  it('the SAME failure after a load that worked re-raises it', async () => {
+    // The half a message-only check would miss. A failure dismissed this
+    // morning must not silence an identical failure this afternoon: everything
+    // worked in between, so the second one is news. This is why the dismissal
+    // remembers the hook's success count and not just the words.
+    global.fetch = vi.fn(async () => { throw new TypeError('Failed to fetch') })
+    render(<ScheduleCalendar user={user} />)
+    await waitFor(() => expect(screen.getByText('Could not load the roster')).toBeTruthy())
+    fireEvent.click(screen.getByLabelText('Dismiss'))
+    await waitFor(() => expect(screen.queryByText('Could not load the roster')).toBeNull())
+
+    // A load that works.
+    global.fetch = happyFetch()
+    fireEvent.click(screen.getByText('Today'))
+    await waitFor(() => expect(screen.queryByText(/Loading roster/)).toBeNull())
+
+    // Then the same failure again — it must speak up.
+    global.fetch = vi.fn(async () => { throw new TypeError('Failed to fetch') })
+    fireEvent.click(screen.getByText('Month'))
+    await waitFor(() => expect(screen.getByText('Could not load the roster')).toBeTruthy())
   })
 
   it('names the server error and retries on demand', async () => {

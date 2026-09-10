@@ -87,6 +87,12 @@ export function useScheduleData({ locationId, startDate, endDate, spendReference
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [showingStaleData, setShowingStaleData] = useState(false)
+  // ROSTER-FIX.6a-13 — a monotonic count of loads that actually succeeded.
+  // The calendar needs it to tell a REPEAT of a failure from a NEW one: an
+  // identical message after a success is fresh information, and an identical
+  // message after nothing is not. Only this hook knows which happened, so it
+  // says, rather than leaving the component to infer it from `loading` edges.
+  const [successCount, setSuccessCount] = useState(0)
 
   // The range the data currently in state was actually loaded for. Compared
   // against the range that just failed to decide keep-vs-clear.
@@ -128,6 +134,7 @@ export function useScheduleData({ locationId, startDate, endDate, spendReference
       setHolidays(holidaysRes.data || [])
       setContractorSpend(spendRes?.success ? spendRes.data : null)
       loadedRange.current = requestedRange
+      setSuccessCount(n => n + 1)
     } catch (e) {
       if (gen !== generation.current) return
       setError(e?.message || 'Could not load the roster')
@@ -149,5 +156,5 @@ export function useScheduleData({ locationId, startDate, endDate, spendReference
 
   useEffect(() => { refresh() }, [refresh])
 
-  return { blocks, templates, staff, timeOff, holidays, contractorSpend, loading, error, showingStaleData, refresh }
+  return { blocks, templates, staff, timeOff, holidays, contractorSpend, loading, error, showingStaleData, successCount, refresh }
 }
