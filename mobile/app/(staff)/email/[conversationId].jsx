@@ -46,11 +46,19 @@
 // the selected segment, the colour of the card, and the sentence naming
 // exactly who receives what.
 //
-// PLAIN TEXT ONLY. Messages render `text_body`. `html_body` never leaves the
-// server, and the sanitised `html_document` the web thread renders is
-// deliberately ignored here: that path depends on a sandboxed iframe, which
-// React Native has no equivalent of. Raw email HTML is hostile input from an
-// unauthenticated stranger — on mobile it simply is not rendered.
+// HTML IS RENDERED, WITHOUT AN HTML ENGINE (MAIL-READER.M1). The route serves
+// `html_blocks` under ?body=blocks — a block tree src/lib/email-blocks.js walks
+// out of the ALREADY SANITISED document, server-side. components/mail/EmailBody
+// draws it with Text/View. `html_body` still never leaves the server, nothing
+// is parsed on this device, and react-native-webview is still not a dependency:
+// Layer 1 here is the ABSENCE of an HTML engine rather than a sandboxed iframe,
+// which is why no script can run even in principle.
+//
+// The text path remains, and is not a legacy: an internal note (plain text by
+// construction), a message with no HTML, one past the block budget, one whose
+// HTML would not sanitise, and a server that sent no blocks at all — a rollback
+// behind a shipped OTA — all render `text_body`. Absence of blocks is the text
+// path, never an error.
 //
 // OUTBOUND ATTACHMENTS (MOBILE-MAIL-THREAD.1) ride the repo's standard
 // three-step direct-to-storage flow via lib/email-api.js's helpers: sign
@@ -119,6 +127,9 @@ import {
 } from '../../../lib/mail-relate'
 import { canForwardMessage, newestForwardableMessage } from '../../../lib/mail-forward'
 import BackHeaderLeft from '../../../components/BackHeaderLeft'
+import EmailBody from '../../../components/mail/EmailBody'
+import { splitTextLinks, linkLabel } from '../../../lib/mail-blocks'
+import { decodeCharRefs, stripInvisibleChars } from 'shared/mail-entities'
 
 function formatTime(iso) {
   if (!iso) return ''
@@ -416,6 +427,20 @@ function FlatMessage({ msg, conversationId, locationId, fallbackName, onViewImag
   const shown = split.body || body
   const [quoteOpen, setQuoteOpen] = useState(false)
 
+  // MAIL-READER.M1 — the HTML path, when the server sent a tree. It falls back
+  // to the text for a note (plain text by construction), a message with no
+  // HTML, one past the block budget, one whose HTML would not sanitise, and a
+  // server that sent no blocks at all.
+  //
+  // 🔴 Amendment (Task 5's review) — `|| null`, never `=== null`. A `null`
+  // html_blocks means the server ran blocks mode and genuinely found nothing
+  // renderable; `undefined` means ?body= failed open and this response is the
+  // OTHER shape (html_document), because URLSearchParams.get returns only the
+  // FIRST occurrence of a repeated param. Both must fall back to text_body —
+  // tightening this to `=== null` would throw on `undefined` instead.
+  const blocks = msg.html_blocks || null
+  const quotedBlocks = msg.html_quoted_blocks || null
+
   // ── Internal note: staff only, nothing was sent ───────────────────
   // Keeps its amber styling as a flat block — full width, hairline, and the
   // STAFF-ONLY label — so it cannot be skim-read as correspondence.
@@ -505,8 +530,77 @@ function FlatMessage({ msg, conversationId, locationId, fallbackName, onViewImag
         <RecipientLines msg={msg} toShownInHeader={kind === 'outbound'} />
       </View>
 
-      <Text className="text-base text-un1t-text">{shown}</Text>
-      {split.quoted ? (
+      {blocks ? (
+        <EmailBody blocks={blocks} />
+      ) : (
+        // 🔴 decodeCharRefs at RENDER, not only at ingest: every row stored
+        // before MAIL-READER.M1 still holds `&#38;` in its text_body, and
+        // fixing htmlToPlainText only helps new mail. splitTextLinks is the
+        // other half of the URL wall — this used to be one unbroken <Text>, so
+        // a 180-character tracking URL was three lines of screen and not even
+        // tappable.
+        <Text className="text-base text-un1t-text">
+          {splitTextLinks(stripInvisibleChars(decodeCharRefs(shown))).map((seg, i) => (
+            seg.href ? (
+              <Text
+                key={i}
+                className="text-blue-700 underline"
+                accessibilityRole="link"
+                onPress={() => Linking.openURL(seg.href).catch(() => {})}
+                onLongPress={() => Alert.alert('Link', seg.href)}
+              >
+                {linkLabel(seg.href, seg.text)}
+              </Text>
+            ) : <Text key={i}>{seg.text}</Text>
+          ))}
+        </Text>
+      )}
+
+      {/* The notices the phone never had. Desktop shows the unsafe/omitted
+          pair; this screen showed neither, so an email whose HTML would not
+          sanitise looked exactly like an email that simply had none.
+          html_truncated joins them here rather than living inside EmailBody
+          (Amendment, Task 5's review): all three flags are meaningful even
+          when html_blocks is null — a message can lose everything to a cap
+          and still owe the reader a notice — but EmailBody returns null
+          outright whenever its blocks prop is empty, which is exactly that
+          case. Reading the flag here, off `msg` directly, means the notice
+          shows regardless of which branch above actually drew the body. */}
+      {msg.html_truncated ? (
+        <Text className="text-[11px] text-un1t-muted mt-1.5">
+          This email is very long — the rest of it is not shown here.
+        </Text>
+      ) : null}
+      {msg.html_unsafe ? (
+        <Text className="text-[11px] text-amber-700 mt-1.5">
+          This email’s formatting could not be displayed safely, so the plain text is shown instead.
+        </Text>
+      ) : null}
+      {msg.html_omitted ? (
+        <Text className="text-[11px] text-un1t-muted mt-1.5">
+          Formatting is not shown for older messages in a long conversation.
+        </Text>
+      ) : null}
+
+      {quotedBlocks ? (
+        <View className="mt-2">
+          <Pressable
+            onPress={() => setQuoteOpen(v => !v)}
+            accessibilityRole="button"
+            accessibilityLabel={quoteOpen ? 'Hide quoted text' : 'Show quoted text'}
+            className="self-start rounded-full border border-un1t-border bg-un1t-surface px-2 py-0.5"
+          >
+            <Text className="text-[11px] text-un1t-subtle">
+              {quoteOpen ? 'Hide quoted text' : '··· Show quoted text'}
+            </Text>
+          </Pressable>
+          {quoteOpen ? (
+            <View className="mt-2 border-l-2 border-un1t-border pl-3">
+              <EmailBody blocks={quotedBlocks} />
+            </View>
+          ) : null}
+        </View>
+      ) : split.quoted ? (
         <View className="mt-2">
           <Pressable
             onPress={() => setQuoteOpen(v => !v)}
