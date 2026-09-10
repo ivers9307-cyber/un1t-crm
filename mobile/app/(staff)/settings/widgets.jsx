@@ -142,7 +142,12 @@ export default function WidgetsScreen() {
       // Best-effort: the token this device could not keep is unusable to
       // it, so don't leave it live server-side as a phantom credential
       // nobody can present. A failure here changes nothing the user sees.
-      revokeWidgetToken(id).catch(() => {})
+      revokeWidgetToken(id).catch((e) => {
+        // Log, never swallow: the flow must not fail, but an orphaned live
+        // credential that nobody knows about is worse than a noisy one. It
+        // stays visible and revocable on the CRM staff card either way.
+        console.warn('[widgets] could not revoke the unstorable token', id, e?.message)
+      })
       Alert.alert(
         'Could not save this credential',
         'The widget credential was created but this device could not store it. It cannot be recovered — try minting again.',
@@ -154,7 +159,9 @@ export default function WidgetsScreen() {
     // already replaced its App Group entry) — revoke it too, best-effort,
     // so it doesn't linger as an orphaned live credential.
     if (existing && existing.tokenId !== id) {
-      revokeWidgetToken(existing.tokenId).catch(() => {})
+      revokeWidgetToken(existing.tokenId).catch((e) => {
+        console.warn('[widgets] could not revoke the superseded token', existing.tokenId, e?.message)
+      })
     }
     reloadWidgets()
     setMinting(false)
