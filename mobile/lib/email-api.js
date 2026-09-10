@@ -43,11 +43,6 @@ import { conversationsToInboxRows } from './mail-conversations'
 // precedence: requester_name → requester_email.
 export { requesterLabel as emailDisplayName } from './mail-conversations'
 
-// The three views the mail route whitelists. Anything else is a 400, and
-// omitting the param entirely is the inbox (live conversations). The screen's
-// chips map their id onto these via conversationViewWire() in ./mail-conversations.
-export const MAIL_VIEWS = Object.freeze(['inbox', 'needs_reply', 'archived'])
-
 /**
  * The studio's mail, shaped into rows for the Mail tab's list.
  *
