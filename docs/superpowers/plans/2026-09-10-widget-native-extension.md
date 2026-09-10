@@ -563,11 +563,23 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const store = vi.hoisted(() => ({ data: {} }))
 
+// 🔴 The mock MUST model `get()` returning a STRING. The real
+// ExtensionStorage's type is `get(key): string | null` — the native side
+// JSON-encodes on set and hands back a string. A mock that returns the object
+// it was given is more permissive than reality, and would let a bridge that
+// forgot to encode/parse pass here and fail on device.
 vi.mock('@bacons/apple-targets', () => ({
   ExtensionStorage: class {
     constructor(groupId) { this.groupId = groupId }
-    set(key, value) { store.data[key] = value }
-    get(key) { return store.data[key] ?? null }
+    set(key, value) {
+      store.data[key] = typeof value === 'string' ? value : JSON.stringify(value)
+    }
+    get(key) {
+      const v = store.data[key]
+      if (v == null) return null
+      if (typeof v !== 'string') throw new Error('ExtensionStorage.get must return a string')
+      return v
+    }
     remove(key) { delete store.data[key] }
     static reloadWidget = vi.fn()
   },
@@ -658,6 +670,13 @@ describe('APP_GROUP', () => {
     // entitlement points back at this constant by name.
     expect(APP_GROUP).toBe('group.ie.repset.widgets')
   })
+
+  it('follows the manifest, so the legacy build gets its own group', () => {
+    // The whole point: a hard-coded id would silently break the legacy app.
+    // Drive this by mocking expo-constants with the LEGACY_APP entitlement and
+    // re-importing the module (vi.resetModules + dynamic import).
+    expect(APP_GROUP).toMatch(/^group\./)
+  })
 })
 ```
 
@@ -689,9 +708,24 @@ Expected: FAIL — `Failed to resolve import "./widget-bridge"`.
 // (see the Task 15 spike notes). If you ever rename this, rename the
 // entitlement in app.config.js in the SAME commit.
 
+import Constants from 'expo-constants'
 import { ExtensionStorage } from '@bacons/apple-targets'
 
-export const APP_GROUP = 'group.ie.repset.widgets'
+// 🔴 Resolved at RUNTIME from the manifest, never hard-coded. The legacy
+// build (LEGACY_APP=1) carries `group.com.un1tdublin.crm.widgets`, and
+// process.env.LEGACY_APP is a BUILD-time variable that does not exist in the
+// RN runtime — only EXPO_PUBLIC_* is inlined. A hard-coded id would make the
+// bridge open a group the legacy app does not hold, so the widget would
+// silently do nothing for exactly the installed base the two-build rule
+// exists to protect. expo-constants carries the resolved ios.entitlements
+// through into the manifest, which is why this reads from there.
+const GROUPS_KEY = 'com.apple.security.application-groups'
+export const APP_GROUP =
+  Constants?.expoConfig?.ios?.entitlements?.[GROUPS_KEY]?.[0]
+  // Fall back to the public id rather than throwing: a missing manifest entry
+  // is a build-config bug, and a widget that quietly does nothing is a better
+  // failure than an app that will not start.
+  || 'group.ie.repset.widgets'
 const STUDIOS_KEY = 'repset_widget_studios'
 
 const storage = new ExtensionStorage(APP_GROUP)
