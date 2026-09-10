@@ -66,6 +66,7 @@
     "@babel/core": "^7.25.2"
   },
   "overrides": {
-    "linkify-it": "^5.0.2"
+    "linkify-it": "^5.0.2",
+    "@xmldom/xmldom": "^0.8.15"
   }
 }

@@ -157,6 +157,12 @@ export default ({ config }) => ({
     // at 2048×2732 (12.9") and/or 2064×2752 (13" iPad Pro M4). Until
     // those are uploaded, new submissions can defer iPad-specific
     // metadata via the "use iPhone screenshots" toggle.
+    // WIDGET.1 — @bacons/apple-targets needs the team id at config-evaluation
+    // time to sign the extension target; it warns on every evaluation without
+    // it and iOS builds fail. Same team the eas.json submit profiles already
+    // carry — hoisted here because the plugin reads the Expo config, not
+    // eas.json.
+    appleTeamId: '535XMCT5PY',
     supportsTablet: true,
     // requireFullScreen: false (the Expo default) lets the iPad run
     // the app in Split View / Stage Manager. Verified the existing
