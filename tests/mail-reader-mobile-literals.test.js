@@ -74,10 +74,23 @@ describe('an attachment opens IN the app, not by handing it to the OS', () => {
   it('opens with the in-app browser, keeping Linking only as the fallback', () => {
     const source = read(THREAD)
     expect(source).toContain('WebBrowser.openBrowserAsync')
-    // openInApp owns the order: WebBrowser first, Linking only if it throws.
-    // A second bare Linking.openURL on the attachment path would silently
-    // restore the app-switch this fixed.
     expect(source).toContain('async function openInApp')
+    // 🔴 The ORDER, not just the presence of both. A scan that only checked
+    // both strings existed would pass a file that had quietly gone back to
+    // reaching for Linking first — the exact regression this fixed.
+    //
+    // Comment lines are stripped before counting: this file explains the
+    // Linking fallback in prose twice, and a scan that counted those would be
+    // measuring the documentation rather than the code.
+    const code = source.split('\n')
+      .filter(line => !/^\s*(\/\/|\*|\/\*)/.test(line))
+      .join('\n')
+    const webBrowserAt = code.indexOf('WebBrowser.openBrowserAsync')
+    const linkingCalls = [...code.matchAll(/Linking\.openURL/g)].map(m => m.index)
+    // Exactly one: openInApp's fallback. The message-body link path lives in
+    // EmailBody.jsx and reaches Linking through openHref, not from here.
+    expect(linkingCalls).toHaveLength(1)
+    expect(linkingCalls[0]).toBeGreaterThan(webBrowserAt)
   })
 
   it('adds no native module to do it', () => {

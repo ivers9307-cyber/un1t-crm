@@ -209,6 +209,11 @@ function RecipientLines({ msg, toShownInHeader = false }) {
  *      for the browser. WebBrowser.openBrowserAsync keeps it in-app —
  *      SFSafariViewController on iOS, Chrome Custom Tabs on Android — so Done
  *      returns to the thread instead of the operator app-switching back.
+ *      (The two platforms differ in when the AWAIT resolves, which matters if
+ *      you ever hang work off it: iOS blocks until the sheet is dismissed,
+ *      Android resolves as soon as the tab opens. Nothing here depends on
+ *      that — `busy` clearing early on Android is invisible, because the tab
+ *      is covering the chip either way.)
  *
  * NO WEBVIEW IS ADDED. expo-web-browser drives a SYSTEM browser component that
  * holds none of this app's state; react-native-webview would be a native
