@@ -1969,12 +1969,12 @@ describe('composerCap', () => {
 })
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `npx vitest run mobile/lib/mail-conversations.test.js`
 Expected: FAIL — the new names are not exported and the view list has four entries.
 
-- [ ] **Step 3: Add the Spam view**
+- [x] **Step 3: Add the Spam view**
 
 In `mobile/lib/mail-conversations.js`, add a fifth entry to `TICKET_VIEW_TABS` after `archived`:
 
@@ -1991,7 +1991,7 @@ In `mobile/lib/mail-conversations.js`, add a fifth entry to `TICKET_VIEW_TABS` a
   },
 ```
 
-- [ ] **Step 4: Add the five helpers**
+- [x] **Step 4: Add the five helpers**
 
 Append to `mobile/lib/mail-conversations.js`:
 
@@ -2121,12 +2121,12 @@ export function composerCap(availableHeight) {
 }
 ```
 
-- [ ] **Step 5: Run it to verify it passes**
+- [x] **Step 5: Run it to verify it passes**
 
 Run: `npx vitest run mobile/lib/mail-conversations.test.js`
 Expected: PASS.
 
-- [ ] **Step 6: Pin the view lists against each other**
+- [x] **Step 6: Pin the view lists against each other**
 
 In `tests/mail-vocabulary-agreement.test.js`, beside the existing test at line 265, add:
 
