@@ -1037,12 +1037,12 @@ git commit -m "WIDGET.1 — withAuth: allowWidgetToken opt-in, default-deny"
 - Modify: `src/lib/home-queue.js:445-461`
 - Test: `src/lib/home-queue.test.js`
 
-- [ ] **Step 1: Read how the existing count tests build their db double**
+- [ ] **Step 1: Confirm the db-double idiom**
 
 Run: `grep -n "getHomeQueueCount" -B 30 src/lib/home-queue.test.js`
-Use that file's own db-double helper in the tests below — replace every
-`dbReturning({...})` call with it. Do not introduce a second style into a file
-that already has one.
+The tests below use that file's own `makeDb({ email_tickets: {...},
+whatsapp_conversations: {...} })` helper and its `userAt()` helper. Confirm
+both exist before writing; do not introduce a second db-double style.
 
 - [ ] **Step 2: Write the failing test**
 
@@ -1055,9 +1055,13 @@ describe('getHomeQueueCounts', () => {
     getPendingApprovalsCount.mockResolvedValue(3)
     hasPermission.mockReturnValue(true)
     hasPermissionForLocation.mockReturnValue(true)
-    loadVisibleMailboxes.mockResolvedValue({ elevated: true, mailboxes: [{ id: 'm1' }] })
+    loadVisibleMailboxes.mockResolvedValue({ elevated: true, mailboxes: [{ id: 'mb1' }] })
+    const db = makeDb({
+      email_tickets: { rows: [], count: 2 },
+      whatsapp_conversations: { rows: [] },
+    })
 
-    const out = await getHomeQueueCounts(dbReturning({ mail: 2, inbox: 0 }), userAt())
+    const out = await getHomeQueueCounts(db, userAt())
 
     expect(out.bySource).toEqual({ approvals: 3, mail: 2, inbox: 0 })
     expect(out.count).toBe(5)
@@ -1068,9 +1072,18 @@ describe('getHomeQueueCounts', () => {
     getPendingApprovalsCount.mockRejectedValue(new Error('approvals down'))
     hasPermission.mockReturnValue(true)
     hasPermissionForLocation.mockReturnValue(true)
-    loadVisibleMailboxes.mockResolvedValue({ elevated: true, mailboxes: [{ id: 'm1' }] })
+    loadVisibleMailboxes.mockResolvedValue({ elevated: true, mailboxes: [{ id: 'mb1' }] })
+    const db = makeDb({
+      email_tickets: { rows: [], count: 2 },
+      whatsapp_conversations: {
+        rows: [{
+          id: 'w1', resolved_at: null, last_message_at: '2026-08-10T08:00:00Z',
+          last_message_direction: 'inbound', agent_handed_off_at: null,
+        }],
+      },
+    })
 
-    const out = await getHomeQueueCounts(dbReturning({ mail: 2, inbox: 1 }), userAt())
+    const out = await getHomeQueueCounts(db, userAt())
 
     expect(out.bySource.approvals).toBe(0)
     expect(out.degraded).toContain('approvals')
@@ -1078,19 +1091,19 @@ describe('getHomeQueueCounts', () => {
   })
 
   it('returns zeroes with no active location, not a throw', async () => {
-    const out = await getHomeQueueCounts(dbReturning({}), userAt({ activeLocation: null }))
+    const out = await getHomeQueueCounts(makeDb(), { id: 'u1', activeLocation: null })
     expect(out).toEqual({ count: 0, bySource: { approvals: 0, mail: 0, inbox: 0 }, degraded: [] })
   })
 
   it('still THROWS when mailbox visibility itself is unavailable', async () => {
     // EMAIL-TICKET-CLEANUP.2: "0" here would read as "nothing to do" rather
     // than "we could not check", so this one case must stay a rejection.
-    getPendingApprovalsCount.mockResolvedValue(0)
     hasPermission.mockReturnValue(true)
     hasPermissionForLocation.mockReturnValue(true)
-    loadVisibleMailboxes.mockResolvedValue({ response: { status: 500 } })
+    loadVisibleMailboxes.mockResolvedValue({ response: 'mailboxes-unavailable' })
+    getPendingApprovalsCount.mockResolvedValue(0)
 
-    await expect(getHomeQueueCounts(dbReturning({}), userAt())).rejects.toThrow()
+    await expect(getHomeQueueCounts(makeDb(), userAt())).rejects.toThrow()
   })
 })
 
@@ -1099,8 +1112,12 @@ describe('getHomeQueueCount (unchanged contract)', () => {
     getPendingApprovalsCount.mockResolvedValue(3)
     hasPermission.mockReturnValue(true)
     hasPermissionForLocation.mockReturnValue(true)
-    loadVisibleMailboxes.mockResolvedValue({ elevated: true, mailboxes: [{ id: 'm1' }] })
-    expect(await getHomeQueueCount(dbReturning({ mail: 2, inbox: 0 }), userAt())).toBe(5)
+    loadVisibleMailboxes.mockResolvedValue({ elevated: true, mailboxes: [{ id: 'mb1' }] })
+    const db = makeDb({
+      email_tickets: { rows: [], count: 2 },
+      whatsapp_conversations: { rows: [] },
+    })
+    expect(await getHomeQueueCount(db, userAt())).toBe(5)
   })
 })
 ```
