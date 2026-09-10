@@ -2148,7 +2148,7 @@ In `tests/mail-vocabulary-agreement.test.js`, beside the existing test at line 2
   })
 ```
 
-- [ ] **Step 7: Run the agreement test and the suite**
+- [x] **Step 7: Run the agreement test and the suite**
 
 Run: `npx vitest run tests/mail-vocabulary-agreement.test.js`
 Expected: PASS.
@@ -2156,7 +2156,7 @@ Expected: PASS.
 Run: `npm test`
 Expected: PASS.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add mobile/lib/mail-conversations.js mobile/lib/mail-conversations.test.js tests/mail-vocabulary-agreement.test.js
@@ -2173,7 +2173,7 @@ Body: adds the fifth view the phone never had, and the assertion whose absence l
 - Modify: `mobile/lib/email-api.js` (`getConversation` at line 189; new `setConversationSpam`)
 - Modify: `mobile/lib/email-api.test.js`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Read the file's existing `api` mock first and reuse it, then append:
 
@@ -2229,12 +2229,12 @@ describe('setConversationSpam', () => {
 })
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `npx vitest run mobile/lib/email-api.test.js`
 Expected: FAIL — the path has no `?body=blocks`; `setConversationSpam` is not exported.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 In `mobile/lib/email-api.js`, change the first line of `getConversation` (line 190):
 
@@ -2280,12 +2280,12 @@ export function setConversationSpam(conversationId, spam, locationId) {
 }
 ```
 
-- [ ] **Step 4: Run it to verify it passes**
+- [x] **Step 4: Run it to verify it passes**
 
 Run: `npx vitest run mobile/lib/email-api.test.js`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add mobile/lib/email-api.js mobile/lib/email-api.test.js
@@ -2322,7 +2322,7 @@ Body: `getConversation` requests `?body=blocks`, which also drops the `html_docu
 - Create: `mobile/components/mail/EmailBody.jsx`
 - Modify: `mobile/app/(staff)/email/[conversationId].jsx` (`FlatMessage` at line 410; the file header at lines 49–55)
 
-- [ ] **Step 1: Write the component**
+- [x] **Step 1: Write the component**
 
 No runner reaches this file, so it is written to hold no decisions — every branch reads a function from Task 6.
 
@@ -2570,7 +2570,7 @@ export default function EmailBody({ blocks, truncated = false }) {
 }
 ```
 
-- [ ] **Step 2: Wire it into the message body**
+- [x] **Step 2: Wire it into the message body**
 
 In `mobile/app/(staff)/email/[conversationId].jsx`, add to the imports:
 
@@ -2673,7 +2673,7 @@ Make it:
 
 and leave the existing text-quote JSX as that ternary's middle arm, unchanged, with its existing `) : null}` closing the chain.
 
-- [ ] **Step 3: Rewrite the file header's PLAIN TEXT ONLY paragraph**
+- [x] **Step 3: Rewrite the file header's PLAIN TEXT ONLY paragraph**
 
 Lines 49–55 now state the opposite of what the file does. Replace that paragraph with:
 
@@ -2693,7 +2693,7 @@ Lines 49–55 now state the opposite of what the file does. Replace that paragra
 // path, never an error.
 ```
 
-- [ ] **Step 4: Lint**
+- [x] **Step 4: Lint**
 
 Run: `npm run check:mobile-lint`
 Expected: PASS. This is the step that catches a stale reference — read every error, each is real.
@@ -2701,7 +2701,7 @@ Expected: PASS. This is the step that catches a stale reference — read every e
 Run: `npm run check:mobile-imports`
 Expected: PASS. If it flags `shared/mail-entities`, `decodeCharRefs` or `stripInvisibleChars` is not exported from that module — fix the export, not the import.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add mobile/components/mail/EmailBody.jsx "mobile/app/(staff)/email/[conversationId].jsx"
@@ -2719,7 +2719,7 @@ Body: `EmailBody` draws the server's block tree with Text/View and holds NO deci
 - Modify: `mobile/lib/mail-relate.js`
 - Modify: `mobile/lib/mail-relate.test.js`
 
-- [ ] **Step 1: Give `relatedNudge` its chip string**
+- [x] **Step 1: Give `relatedNudge` its chip string**
 
 `nudge.chip` does not exist yet, and Step 2 uses it. Do this first.
 
@@ -2744,13 +2744,12 @@ Append to `mobile/lib/mail-relate.test.js`:
 Run: `npx vitest run mobile/lib/mail-relate.test.js`
 Expected: PASS.
 
-- [ ] **Step 2: Replace the four bands with one**
+- [x] **Step 2: Replace the four bands with one**
 
 Add to the screen's `mail-conversations` import:
 
 ```js
-  shortMailboxLabel, headerDetailLines, spamActionLabel, audienceSummary, composerCap,
-  NO_MAILBOX_LINE,
+  accountChipLabel, headerDetailLines, spamActionLabel, audienceSummary, composerCap,
 ```
 
 Add state beside the screen's other `useState` calls:
@@ -2790,9 +2789,7 @@ Replace the header band (lines 1218–1246, the `<View className="border-b borde
                   orphans its correspondence rather than hiding it. */}
               <View className="px-1.5 py-0.5 rounded bg-slate-500/10 mr-1.5">
                 <Text className="text-[10px] font-semibold text-slate-700" numberOfLines={1}>
-                  {shortMailboxLabel(conversation?.mailbox)
-                    ? `@ ${shortMailboxLabel(conversation.mailbox)}`
-                    : NO_MAILBOX_LINE}
+                  {accountChipLabel(conversation?.mailbox)}
                 </Text>
               </View>
               {/* The nudge, as a chip rather than a full-width banner. Its two
@@ -2895,12 +2892,16 @@ Add the handler beside `toggleArchive` (line 988):
 ```js
   async function toggleSpam() {
     if (savingAction) return
-    const { label, next } = spamActionLabel(conversation)
+    // 🔴 The failure sentence comes from the lib, finished. Deriving it here as
+    // `Couldn't ${label.toLowerCase()}` reads "Couldn't not spam" in the release
+    // direction — a double negative shipped to an operator. toggleArchive above
+    // branches on direction for the same reason.
+    const { next, failure } = spamActionLabel(conversation)
     setSavingAction(true)
     const res = await setConversationSpam(conversationId, next, activeLocation?.id)
     setSavingAction(false)
     if (!res.success) {
-      Alert.alert(`Couldn’t ${label.toLowerCase()}`, res.error || 'Unknown error')
+      Alert.alert(failure, res.error || 'Unknown error')
       return
     }
     // 🔴 The flag is ORTHOGONAL to the lifecycle — the route touches only the
