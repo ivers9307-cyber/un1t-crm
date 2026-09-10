@@ -111,7 +111,15 @@ export default ({ config }) => ({
   // FCM push registration works. Build-config only: no new native module,
   // no JS↔native change, so runtimeVersion STAYS 2.3.0 (the 1.3.2 /
   // ANDROID-R8 precedent) and every existing install keeps receiving OTAs.
-  version: '2.3.1',
+  // 2.4.0 (WIDGET.1) — adds the iOS home-screen widget extension: a
+  // WidgetKit target (@bacons/apple-targets) with two widget kinds,
+  // Studio Controls and What Needs Me, plus an App Group shared with the
+  // app. A whole extra Xcode target and a new entitlement → new EAS
+  // Build and store release, NEVER an OTA; runtimeVersion moves to 2.4.0
+  // in lockstep (see the runtimeVersion log below). 🔴 The two-build rule
+  // applies: build AND submit both `production` and `production-legacy`,
+  // or the legacy record's installed base silently stops receiving OTAs.
+  version: '2.4.0',
   // We ship iOS + Android only. Without this, Expo defaults to
   // ['ios','android','web'] and `eas update` exports for web too —
   // which crashes the publish because react-native-web isn't installed.
@@ -435,7 +443,18 @@ export default ({ config }) => ({
   // "Configure expo-updates" Xcode build phase (the phase recomputes the
   // fingerprint in a restricted build sandbox and errors, failing the
   // production build — EAS build e02f3944).
-  runtimeVersion: '2.3.0',
+  // 2.4.0 — WIDGET.1 adds a WidgetKit extension target
+  // (@bacons/apple-targets) and an App Group entitlement. Native, so the
+  // lane must move: widget Swift cannot reach a device over OTA at all.
+  //
+  // 🔴 WHAT THIS COSTS THE MOMENT IT MERGES: mobile/app.config.js is in
+  // eas-update.yml's trigger allowlist, so every publish after this lands
+  // targets the 2.4.0 lane — which no device is on yet. Installs on 2.3.x
+  // FREEZE (they do not crash): they keep running their current bundle and
+  // receive nothing, hotfixes included, until users install the 2.4.0
+  // binary. Land this only when both binaries are built and ready to
+  // submit, and keep the window short.
+  runtimeVersion: '2.4.0',
   extra: {
     // Supabase URL + anon key are PUBLIC by design — the anon key is
     // protected by Row-Level Security on the database, not by secrecy
