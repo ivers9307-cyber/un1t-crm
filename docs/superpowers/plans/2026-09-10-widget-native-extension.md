@@ -1480,6 +1480,33 @@ git commit -m "WIDGET.1 — DeviceEntity: the live device picker (GET /api/widge
 
 ---
 
+## Task 10 — a hard requirement inherited from Task 9
+
+🔴 **`StudioControlsConfigurationIntent` MUST declare `@Parameter var studio: StudioEntity`,
+and its `device` parameters MUST use an options provider carrying
+`@IntentParameterDependency<StudioControlsConfigurationIntent>(\.$studio)`.**
+
+This is not a style preference. `DeviceEntity`'s own `DeviceQuery` cannot be
+studio-scoped: `IntentParameterDependency`'s keypath must name a stored
+`@Parameter` on a **concrete** `WidgetConfigurationIntent`, and no protocol
+promises an arbitrary `Intent` has a `studio` parameter — so a generic provider
+cannot stand in. Task 9 therefore ships a context-free `suggestedEntities()`
+that falls back to **the first stored studio**.
+
+If Task 10 does not wire the dependency, that fallback becomes the shipped
+behaviour: a staff member configuring a Hatch Street widget would be offered
+**Stillorgan's** devices, silently and plausibly. Nothing would error.
+
+`DeviceQuery.buildResult(locationId:)` exists as the shared fetch/decode/
+`degraded`-surfacing helper — Task 10's provider must call it rather than
+re-deriving the parse, so both paths report a degraded source identically.
+
+Verified against `iPhoneOS26.5.sdk`: `@IntentParameterDependency` and the
+`@Parameter(optionsProvider:)` initializer for a plain `AppEntity` both exist at
+the shape above.
+
+---
+
 ## Task 10: The two configuration intents and the four action intents
 
 **Files:**
