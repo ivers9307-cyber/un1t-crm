@@ -717,6 +717,23 @@ describe('GET ?body=blocks', () => {
     expect(message.html_truncated).toBe(false)
   })
 
+  it('carries html_truncated: true to the wire for an over-cap message', async () => {
+    // The only assertion on this flag was `false`. Nothing proved the TRUE
+    // case ever reached a client — and the emptied-verdict bug it guards
+    // against (emailBlocks returning the literal `empty` and discarding a
+    // computed truncated) was live on this exact path until it was found in
+    // review. One message, well under the 300KB route budget, but past the
+    // walker's own per-message cap.
+    const res = await getConversation({
+      html_body: `<p>${'x'.repeat(400)}</p>`.repeat(600),
+      body: 'blocks',
+    })
+    const message = res.data.messages[0]
+    expect(message.html_truncated).toBe(true)
+    expect(message.html_omitted).toBe(false)
+    expect(Array.isArray(message.html_blocks)).toBe(true)
+  })
+
   it('serves the document when no body parameter is given', async () => {
     const res = await getConversation({ html_body: '<p>Hi</p>' })
     const message = res.data.messages[0]

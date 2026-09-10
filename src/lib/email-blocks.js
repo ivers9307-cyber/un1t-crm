@@ -1037,7 +1037,20 @@ export function emailBlocks(raw) {
     // Both empty is a real "nothing renderable" case distinct from html.trim()
     // above: e.g. a body that sanitised to visible markup with no actual
     // content once walked (an empty table, a bare <div></div> chain).
-    if (main.blocks.length === 0 && chain.blocks.length === 0) return empty
+    // 🔴 IT RETURNS THE VERDICT, NOT THE LITERAL `empty`. Returning `empty`
+    // here threw away `truncated` and `blockedImages` that had actually been
+    // computed: 5,000 nested empty <div>s wrapping a remote <img> blows
+    // maxDepth and parks one image, yet reported truncated:false and
+    // blockedImages:0 — so a phone rendered an adversarial message as
+    // ordinary, complete and image-free, with no notice. Zero blocks means
+    // "render the text instead", never "nothing happened".
+    if (main.blocks.length === 0 && chain.blocks.length === 0) {
+      return {
+        ...empty,
+        blockedImages,
+        truncated: main.truncated || chain.truncated,
+      }
+    }
     return {
       blocks: main.blocks.length ? main.blocks : null,
       quotedBlocks: chain.blocks.length ? chain.blocks : null,

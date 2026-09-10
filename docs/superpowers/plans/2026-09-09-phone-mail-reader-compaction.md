@@ -1406,7 +1406,7 @@ Every decision the body renderer makes, as pure functions — because `mobile/li
 - Create: `mobile/lib/mail-blocks.js`
 - Create: `mobile/lib/mail-blocks.test.js`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `mobile/lib/mail-blocks.test.js`:
 
@@ -1578,12 +1578,12 @@ describe('splitTextLinks', () => {
 })
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `npx vitest run mobile/lib/mail-blocks.test.js`
 Expected: FAIL — cannot resolve `./mail-blocks.js`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `mobile/lib/mail-blocks.js`:
 
@@ -1791,12 +1791,12 @@ export function splitTextLinks(text) {
 }
 ```
 
-- [ ] **Step 4: Run it to verify it passes**
+- [x] **Step 4: Run it to verify it passes**
 
 Run: `npx vitest run mobile/lib/mail-blocks.test.js`
 Expected: PASS, all tests.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add mobile/lib/mail-blocks.js mobile/lib/mail-blocks.test.js
@@ -1814,7 +1814,7 @@ Body: vitest reaches `mobile/lib` and nothing else under `mobile/`, so every dec
 - Modify: `mobile/lib/mail-conversations.test.js`
 - Modify: `tests/mail-vocabulary-agreement.test.js` (the view-id test at line 265)
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `mobile/lib/mail-conversations.test.js`, adding the new names to the file's existing import:
 
@@ -2297,6 +2297,26 @@ Body: `getConversation` requests `?body=blocks`, which also drops the `html_docu
 ---
 
 ## Task 9: The body renderer, on screen
+
+> **Amendment (2026-09-10, from Task 5's review).** The response contract, as it
+> actually ships, for whoever writes this screen:
+>
+> - **`html_blocks === null`** means the server ran blocks mode and found nothing
+>   renderable — render `text_body`. **`html_blocks === undefined`** means you got
+>   the *document* shape instead: `?body=` fails open, and `URLSearchParams.get`
+>   returns the FIRST occurrence, so a repeated or mangled parameter anywhere
+>   upstream silently serves a shape this screen cannot use. Both fall back to
+>   text, and the code below does that correctly with `msg.html_blocks || null` —
+>   just do not tighten it to `=== null` and do not let it throw on `undefined`.
+> - **`html_quoted_blocks` is budgeted independently of `html_blocks`.** A folded
+>   quote can be as large as the visible body and is paid for on the wire whether
+>   or not anyone taps "Show quoted text". There is no cheaper "a quote exists"
+>   boolean, so do not defer-fetch it.
+> - **`html_truncated`, `html_unsafe` and `html_omitted` are all meaningful even
+>   when `html_blocks` is null** — a message can lose everything to a cap and
+>   still owe the reader a notice. Render the notices off the flags, not off the
+>   presence of blocks.
+
 
 **Files:**
 - Create: `mobile/components/mail/EmailBody.jsx`

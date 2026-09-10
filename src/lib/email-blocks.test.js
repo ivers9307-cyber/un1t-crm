@@ -791,6 +791,22 @@ describe('htmlToBlocks — an href is payload and costs budget', () => {
 })
 
 describe('emailBlocks', () => {
+  it('reports truncated and blocked images even when nothing renderable survives', () => {
+    // The verdict is not the same thing as the content. 5,000 nested empty
+    // <div>s blow maxDepth and a remote <img> parks one blocked image, yet the
+    // walk yields no renderable block — and this used to answer the literal
+    // `empty`, so a phone rendered an adversarial message as ordinary,
+    // complete and image-free. Zero blocks means "render the text instead".
+    const deep = '<div>'.repeat(5_000)
+      + '<img src="https://cdn.test/pixel.gif">'
+      + '</div>'.repeat(5_000)
+    const result = emailBlocks(deep)
+    expect(result.blocks).toBe(null)
+    expect(result.truncated).toBe(true)
+    expect(result.blockedImages).toBe(1)
+    expect(result.failed).toBe(false)
+  })
+
   it('sanitises, walks and reports the blocked count', () => {
     const result = emailBlocks(
       '<p onclick="steal()">Hi <script>bad()</script></p>'

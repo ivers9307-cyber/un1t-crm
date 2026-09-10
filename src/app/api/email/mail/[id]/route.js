@@ -365,7 +365,8 @@ async function shapeMessages(db, rows, wantsBlocks = false) {
     // hostile input from an unauthenticated stranger; the browser gets the
     // sanitised document (or block tree) or it gets the text.
     const { html_body: raw, ...rest } = row
-    // The two shapes differ in exactly one thing: what carries the HTML. Every
+    // The two shapes differ only in what carries the HTML — plus
+    // `html_truncated`, which blocks mode alone can report. Every
     // flag the thread reads to decide which NOTICE to show is identical, so a
     // screen written against one shape reads the other's flags correctly.
     const base = {
