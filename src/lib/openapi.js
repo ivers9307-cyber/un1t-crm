@@ -5285,7 +5285,8 @@ registry.registerPath({
   method: 'post',
   path: '/api/sonos/control',
   tags: ['Automations'],
-  security: [{ CookieAuth: [] }],
+  // WIDGET.1 — also accepts an iOS widget device token (BearerAuth).
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
   summary: 'Immediate live control of a schedule\'s or group\'s speakers — volume, transport, favourite (device_control)',
   description:
     'SONOSGRP.2: the body addresses exactly one of schedule_id (uuid, resolved to groups via the '
