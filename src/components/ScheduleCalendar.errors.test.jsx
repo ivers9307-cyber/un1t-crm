@@ -160,6 +160,26 @@ describe('ScheduleCalendar load failures (ROSTER-FIX.6a)', () => {
     await waitFor(() => expect(screen.getByText('Could not load the roster')).toBeTruthy())
   })
 
+  it('shows Retrying… on the banner while a retry is in flight', () => {
+    // ScheduleErrorBanner renders 'Retrying…' and disables its own button when
+    // `busy`, and the calendar passes it `loading`. Whether an operator ever
+    // SEES that is a different question: refresh() clears `error` before it
+    // starts, and the banner only renders `error && !errorDismissed`.
+    return (async () => {
+      let release
+      global.fetch = vi.fn(async () => { throw new TypeError('Failed to fetch') })
+      render(<ScheduleCalendar user={user} />)
+      await waitFor(() => expect(screen.getByText('Could not load the roster')).toBeTruthy())
+
+      // A retry that does not resolve, so the in-flight state is observable.
+      global.fetch = vi.fn(() => new Promise((resolve) => { release = resolve }))
+      fireEvent.click(screen.getByText('Retry'))
+      await act(async () => {})
+      expect(screen.queryByText('Retrying…')).toBeTruthy()
+      release?.({ ok: true, status: 200, json: async () => ({ data: [] }) })
+    })()
+  })
+
   it('names the server error and retries on demand', async () => {
     // 500, not 403: since ROSTER-FIX.6a-8 a 401/403 is reported as a dead
     // session rather than in the server's words (pinned in

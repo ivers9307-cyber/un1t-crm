@@ -110,7 +110,17 @@ export function useScheduleData({ locationId, startDate, endDate, spendReference
     const gen = ++generation.current
     const requestedRange = `${startDate}..${endDate}`
     setLoading(true)
-    setError(null)
+    // 🔴 THE ERROR IS NOT CLEARED HERE, and that is deliberate. It used to be,
+    // and clearing it before the attempt is what made a persistent outage
+    // BLINK: the banner unmounted at the start of every background refresh and
+    // came back when the refresh failed. It also made ScheduleErrorBanner's
+    // `busy` state dead UI — the banner renders 'Retrying…' and disables its
+    // own button, and no operator could ever see it, because pressing Retry
+    // unmounted the banner before the request left.
+    //
+    // A failed attempt stays true until a later one succeeds, so the error is
+    // cleared on SUCCESS, below. The banner carries `busy={loading}` and says
+    // what it is doing instead of vanishing.
     setShowingStaleData(false)
     try {
       const [blocksRes, templatesRes, staffRes, timeOffRes, holidaysRes, spendRes] = await Promise.all([
@@ -134,6 +144,7 @@ export function useScheduleData({ locationId, startDate, endDate, spendReference
       setHolidays(holidaysRes.data || [])
       setContractorSpend(spendRes?.success ? spendRes.data : null)
       loadedRange.current = requestedRange
+      setError(null)
       setSuccessCount(n => n + 1)
     } catch (e) {
       if (gen !== generation.current) return
