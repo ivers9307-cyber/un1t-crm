@@ -316,10 +316,32 @@ function parseBuild(value) {
  *                    old app's last build, not the new app's first.
  *   - `'new-app'`  — build > N.
  *
- * N IS NOT WIRED ANYWHERE YET. It is read off EAS/ASC at Phase 2 and
- * threaded in at Phase 4, when the migration report is built; until then
- * this export exists so the report has one definition to share and the
- * health page can just display the raw number.
+ * N IS NOT WIRED ANYWHERE YET. It is threaded in at Phase 4, when the
+ * migration report is built; until then this export exists so the report has
+ * one definition to share and the health page can just display the raw number.
+ *
+ * 🔴 WHEN YOU WIRE IT, N IS 99 — NOT 24. The prose above says N is "the old
+ * app's FINAL build number", and that framing died with the two-build rule:
+ * every native change must rebuild AND resubmit the legacy record, so the old
+ * app has no final build until sunset. It was 24 on 2026-08-18; the WIDGET.1
+ * 2.4.0 release made it **25**, and it will keep climbing.
+ *
+ * What actually separates the two is the COUNTERS, not a last build. EAS build
+ * numbers are per BUNDLE ID: the legacy record (com.un1tdublin.crm) climbs from
+ * 24, and the public record (ie.repset.app) was deliberately started at 100
+ * (`eas build:version:set`) to leave the 25-99 band empty. So:
+ *
+ *   legacy:  24, 25, 26, …   →  old-app
+ *   public:  100, 101, 102, … →  new-app
+ *
+ * N = 99 splits them and stays correct as every future release bumps the legacy
+ * counter. N = 24 would classify every legacy user from the 2.4.0 release
+ * onward as 'new-app' — precisely backwards for a report whose whole job is
+ * deciding when the old app can safely be sunset.
+ *
+ * The 75 builds of headroom between 25 and 100 is the real budget here. If the
+ * legacy counter ever approaches 100, this needs a different mechanism (an
+ * explicit per-bundle-id marker), not a bigger number.
  *
  * @param {string|null|undefined} platform      the row's `platform`
  * @param {string|number|null|undefined} nativeBuild  the row's `native_build`
