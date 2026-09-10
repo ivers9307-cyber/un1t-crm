@@ -21,14 +21,28 @@ const KNOWN = new Set(['heading', 'para', 'list', 'quote', 'image', 'link', 'rul
 
 // Mirrors src/lib/email-blocks.js's CAPS.maxDepth (200) — the server's own
 // "a few hundred is generous headroom for real mail" ceiling. Duplicated,
-// not imported: this module has no imports at all (verified by
-// `npm run check:mobile-imports`), because pulling in src/lib/email-blocks.js
-// would drag htmlparser2 and Node APIs into a React Native bundle. So a
-// change to the server's cap does not automatically reach this one. This
-// module's whole reason to exist is that the fleet runs BEHIND the server
-// for a while after each release, which is exactly the case where relying
-// on the server having already bounded depth would fail: an un-updated
-// bundle can still be handed a tree built by a newer server.
+// not imported: this module has NO IMPORTS AT ALL, because pulling in
+// src/lib/email-blocks.js would drag htmlparser2 and Node APIs into a React
+// Native bundle. So a change to the server's cap does not automatically
+// reach this one. This module's whole reason to exist is that the fleet
+// runs BEHIND the server for a while after each release, which is exactly
+// the case where relying on the server having already bounded depth would
+// fail: an un-updated bundle can still be handed a tree built by a newer
+// server.
+//
+// 🔴 `npm run check:mobile-imports` does NOT enforce the zero-imports
+// property above — it is discipline, not a gate. That check (see
+// eslint.mobile-imports.config.mjs) only runs eslint-plugin-import's
+// import/named & co, which verify that an imported NAME exists in its
+// target module. A file that adds `import { htmlToBlocks } from
+// '../../src/lib/email-blocks.js'` passes it identically to a file with no
+// imports at all, because the name it imports genuinely exists there — CI
+// is silent about the property this whole module is built on. Nothing
+// currently enforces it; it has to be kept by hand on every change here.
+// (A reference to the global `URL` constructor — see `safeHostname` below —
+// is not an import and does not touch this invariant: it is a runtime
+// global this file expects to exist, exactly like it already expects
+// `Array`, `Set`, or `JSON.parse`, not a module this file pulls code from.)
 const MAX_DEPTH = 200
 
 /**
@@ -50,6 +64,19 @@ function hasText(run) {
  * this module has no imports at all, so it cannot import the server's
  * STYLE_KEYS to know the closed set of style fields to preserve — passing
  * the object through is what lets an unrecognised style key survive too).
+ *
+ * 🔴 Undisclosed contract divergence from the server: src/lib/email-blocks.js
+ * (see firstRuns's own comment there) promises that an empty `[]` table cell
+ * means the SOURCE cell was genuinely empty — a cell that had content but
+ * lost it is supposed to report `truncated` instead, never a silent `[]`.
+ * This function breaks that promise on this side. A cell holding only
+ * malformed runs (`null`, `{ bogus: true }`, a `.text` that is not a
+ * string) filters down to `[]` here exactly like a cell that was empty to
+ * begin with, and this module has no `truncated` signal of its own to tell
+ * the two apart (same trade as MAX_DEPTH's silent drop, documented on
+ * `normaliseBlocks`). So downstream of this function, on THIS side, `[]`
+ * is not a guarantee that nothing was ever there — only that nothing
+ * VALID survived.
  *
  * @param {unknown} runs
  * @returns {object[]}
@@ -150,7 +177,9 @@ export function normaliseBlocks(blocks, depth = 0) {
           .filter((row) => Array.isArray(row) && row.length)
           // Each cell is validated in place, not dropped out of position —
           // dropping a malformed cell would shift every cell after it out
-          // from under its header.
+          // from under its header. 🔴 A `[]` cell coming out of this map is
+          // NOT the server's "genuinely empty" guarantee — see validRuns's
+          // own doc on that divergence.
           .map((row) => row.map((cell) => validRuns(cell)))
         const head = Array.isArray(block.head) && block.head.length
           ? block.head.map((cell) => validRuns(cell))
@@ -217,9 +246,58 @@ const URL_LABEL_MAX = 48
 // RETURNED label is bounded regardless of where the length came from — a
 // long path (the shape every fixture above already covers) or a long host
 // (which used to come back whole: a 159-char host-only URL measured a
-// 153-char "shortened" label, because URL_LABEL_MAX gated only whether to
+// 166-char "shortened" label, because URL_LABEL_MAX gated only whether to
 // shorten, never what was handed back).
 const HOST_LABEL_MAX = URL_LABEL_MAX - 2
+
+/**
+ * The hostname a browser would actually connect to for an http(s) URL, or
+ * `null` when that cannot be established with confidence.
+ *
+ * This parses with the real WHATWG `URL` global rather than a regex,
+ * because a regex approximating "the authority" cannot reproduce the
+ * parser's own rules for where the authority ENDS — two real gaps found by
+ * review, both checked against `URL` as ground truth:
+ *   - Split-on-`@` finds the FIRST `@`-terminated run; WHATWG (and every
+ *     browser) splits userinfo from host on the LAST `@` in the authority,
+ *     so `user@fake.bank.com@evil.test` regex-parses to `fake.bank.com`
+ *     while every browser connects to `evil.test`.
+ *   - A regex character class has no notion of `\` ending the authority.
+ *     Browsers normalise a backslash to `/` inside an http(s) authority —
+ *     so does this parser — meaning `evil.test\@trusted.com` is host
+ *     `evil.test` with `@trusted.com` as PATH, not the reverse.
+ * `URL` gets both right for free because it IS the browser's own algorithm,
+ * not a description of it.
+ *
+ * `typeof URL === 'function'` guards a global this module does not import
+ * (this file imports nothing at all — see the header) but still expects to
+ * exist at runtime: Node, where vitest runs this file, and React Native,
+ * where mobile/lib/supabase.js:21 imports `react-native-url-polyfill/auto`
+ * at app start, both provide a WHATWG-compliant `URL`. A future runtime (or
+ * a call before that polyfill has loaded) without it must fall back to "do
+ * not shorten", never throw or guess.
+ *
+ * The try/catch is not defensive theatre: `new URL()` throws on a string
+ * its own algorithm cannot place a host in — that throw is read here as the
+ * "cannot be established with confidence" signal, not routed around.
+ *
+ * Only http/https are considered — a `mailto:`, `tel:`, or anything else
+ * does not even have "host" as its meaningful part, and is left alone.
+ *
+ * @param {string} url
+ * @returns {string|null}
+ */
+function safeHostname(url) {
+  if (typeof URL !== 'function') return null
+  let parsed
+  try {
+    parsed = new URL(url)
+  } catch {
+    return null
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null
+  return parsed.hostname.replace(/^www\./i, '')
+}
 
 /**
  * What a link should SAY.
@@ -229,16 +307,24 @@ const HOST_LABEL_MAX = URL_LABEL_MAX - 2
  * had 180 characters of `utm_` through the middle of it — is shortened to its
  * host. The full address stays on the block for a long-press.
  *
- * The host is captured AFTER a leading `userinfo@`, if any, so
- * `https://trusted-bank.com@evil.test/x` reads as `evil.test/…` — the host a
- * browser or the phone would actually connect to — rather than putting the
- * attacker-chosen `trusted-bank.com` text first, ahead of the truncation a
- * 390pt `<Text>` applies. That is the one thing this function defends
- * against. It does NOT detect a look-alike domain past the `@` (a
- * dot-heavy subdomain built to look like a trusted host, an IDN homograph,
- * a redirect chain) — a shortened label is a courtesy for reading a link
- * before tapping it, not a verdict on where it goes; the full href is still
- * what opens, unchanged, on a long-press.
+ * The host comes from `safeHostname`, i.e. the same WHATWG parsing algorithm
+ * a browser applies before it ever opens a connection — not a regex
+ * approximating it. 🔴 Shortening is a PRIVILEGE granted only by a
+ * successful parse of an http(s) URL: when `safeHostname` returns `null`
+ * (the `URL` global is missing, the string does not parse, or the scheme
+ * is not http/https), this function does NOT shorten — it returns the full
+ * href, unchanged. A long ugly URL is honest; a short wrong one actively
+ * helps an attacker, so "unsure" always means "show everything," never
+ * "guess."
+ *
+ * What this still does NOT do, even with a correct parse: it does not
+ * detect a look-alike or homograph domain — `secure-login.mybank.com
+ * .verify.evil-phisher.test` is a CORRECTLY identified host that merely
+ * reads like a different one, and no parser can tell "looks like a bank"
+ * from "is a bank". It cannot know where a redirect chain the href points
+ * at eventually lands — only the URL in front of it, right now. And it
+ * never alters the href itself: what is shown here is only ever a label;
+ * what opens on tap or long-press is the original, unmodified href.
  *
  * @param {string} href
  * @param {string} label
@@ -250,9 +336,8 @@ export function linkLabel(href, label) {
   const bare = text === '' || text === url
   if (!bare) return text
   if (url.length <= URL_LABEL_MAX) return url
-  const match = /^https?:\/\/(?:[^/?#@]*@)?([^/?#]+)/i.exec(url)
-  if (!match) return url
-  const host = match[1].replace(/^www\./i, '')
+  const host = safeHostname(url)
+  if (!host) return url
   const shortHost = host.length > HOST_LABEL_MAX ? host.slice(0, HOST_LABEL_MAX) : host
   return `${shortHost}/…`
 }

@@ -147,6 +147,23 @@ describe('blockedImageCount — cannot throw on a hostile or malformed tree', ()
     expect(() => blockedImageCount([null, 7, 'x', { type: 'image' }, { blocked: true }]))
       .not.toThrow()
   })
+
+  it('survives 500 levels of nested quote without throwing, dropped past this file\'s own depth cap', () => {
+    // Mirrors normaliseBlocks's identical fixture and identical reasoning
+    // (see that test's own comment): 500 is the realistic-if-extreme depth
+    // of a real forwarded thread, and this function shares normaliseBlocks's
+    // exact recursion shape and exact MAX_DEPTH — a coverage gap here was
+    // never a difference in behaviour, only an untested path.
+    let tree = [{ type: 'image', blocked: 'https://x.test/a.png' }]
+    for (let i = 0; i < 500; i += 1) {
+      tree = [{ type: 'quote', blocks: tree }]
+    }
+    expect(() => blockedImageCount(tree)).not.toThrow()
+    // The one real image sits past MAX_DEPTH (200) once wrapped 500 levels
+    // deep, so it is silently excluded from the count — same trade
+    // normaliseBlocks makes when it drops the equivalent subtree whole.
+    expect(blockedImageCount(tree)).toBe(0)
+  })
 })
 
 describe('imageState', () => {
@@ -207,7 +224,7 @@ describe('linkLabel', () => {
     // URL_LABEL_MAX gated whether to shorten but not what came back: every
     // existing fixture above builds its long URL as a short host + a long
     // PATH, which is exactly why a long host slipped through unbounded. A
-    // 159-char host-only URL measured a 153-char "shortened" label.
+    // 159-char host-only URL measured a 166-char "shortened" label.
     const url = `https://${'a'.repeat(159)}.test/`
     const result = linkLabel(url, url)
     expect(result.length).toBeLessThanOrEqual(48)
@@ -221,6 +238,74 @@ describe('linkLabel', () => {
     // host trailing where a 390pt <Text> truncates it away.
     const url = 'https://secure-login.mybank.com.verify-account@evil-phisher.test/x'
     expect(linkLabel(url, url)).toBe('evil-phisher.test/…')
+  })
+
+  it('finds the TRUE host past multiple @, not the first @-terminated segment', () => {
+    // The regex-based fix stripped only the FIRST `@`-terminated run; WHATWG
+    // (and every real browser) splits userinfo from host on the LAST `@` in
+    // the authority. True host, per Node's URL as ground truth, is
+    // 'evil-phisher.test' — the regex version never even surfaced it: its
+    // capture was truncated by URL_LABEL_MAX before reaching the real host.
+    const url = 'https://ignored@secure-login.mybank.com.account.verify.identity.session'
+      + '@evil-phisher.test/path'
+    expect(new URL(url).hostname).toBe('evil-phisher.test') // ground truth
+    expect(linkLabel(url, url)).toBe('evil-phisher.test/…')
+  })
+
+  it('treats a backslash as an authority terminator, the way a browser does', () => {
+    // Browsers normalise '\' to '/' inside an http(s) authority, so
+    // everything after it is PATH, not host — the true host ends at
+    // 'evil-phisher.test'. The regex's character class never excluded '\',
+    // so it read straight through to the next real '@' and fabricated a
+    // host out of attacker-chosen path text that was never part of the
+    // authority at all.
+    const url = 'https://evil-phisher.test\\@trusted-bank.com/verify/account/session'
+    expect(new URL(url).hostname).toBe('evil-phisher.test') // ground truth
+    expect(linkLabel(url, url)).toBe('evil-phisher.test/…')
+  })
+
+  it('does not treat an encoded %40 in userinfo as an authority terminator', () => {
+    // '%40' is three literal characters, never decoded before the authority
+    // is split — only an actual '@' byte terminates userinfo.
+    const url = 'https://user%40company.test@x.test/verify/account/session/detail'
+    expect(new URL(url).hostname).toBe('x.test') // ground truth
+    expect(linkLabel(url, url)).toBe('x.test/…')
+  })
+
+  it('does not treat an @ in the path as an authority terminator', () => {
+    const url = 'https://x.test/account@verify/session/detail/more/path/here'
+    expect(new URL(url).hostname).toBe('x.test') // ground truth
+    expect(linkLabel(url, url)).toBe('x.test/…')
+  })
+
+  it('keeps a bracketed IPv6 host intact, without its port', () => {
+    const url = 'https://[2001:db8::1]:8443/verify/account/session/detail/more'
+    expect(new URL(url).hostname).toBe('[2001:db8::1]') // ground truth
+    expect(linkLabel(url, url)).toBe('[2001:db8::1]/…')
+  })
+
+  it('handles an empty userinfo the same as no userinfo at all', () => {
+    const url = 'https://@x.test/verify/account/session/detail/more/path'
+    expect(new URL(url).hostname).toBe('x.test') // ground truth
+    expect(linkLabel(url, url)).toBe('x.test/…')
+  })
+
+  it('drops the port, matching what a browser would actually connect to', () => {
+    const url = 'https://x.test:8443/verify/account/session/detail/more/path'
+    expect(new URL(url).hostname).toBe('x.test') // ground truth
+    expect(linkLabel(url, url)).toBe('x.test/…')
+  })
+
+  it('returns the full URL, never a fabricated label, when the host cannot be parsed', () => {
+    // A host that is itself the string '@' (percent-encoded, so still just
+    // three literal characters at this point) is not a valid WHATWG host —
+    // new URL() throws. The regex version did not: its character class
+    // matched '%40' as if it were a real, if odd-looking, host and printed
+    // it with confidence. An unshortened, honest URL beats a short,
+    // fabricated one.
+    const url = 'https://user@%40/verify/account/session/more/path/here'
+    expect(() => new URL(url)).toThrow()
+    expect(linkLabel(url, url)).toBe(url)
   })
 })
 
