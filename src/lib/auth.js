@@ -537,19 +537,12 @@ export const getCurrentUser = cache(async function getCurrentUser() {
     ? assignmentsByLocation[activeLocation.id] || null
     : null
 
-  // PERM-AUDIT.2 (mig 364) — operator-edited role permission
-  // templates, resolved by the shared resolver between the per-user
-  // override and the code role default. One small query for the
-  // user's locations; keyed per location by the role THE USER holds
-  // there (a template row for a different role at that location is
-  // irrelevant to this user). Master skips the fetch entirely —
-  // the resolver short-circuits master past tiers 2/2.5/3, so a
-  // template can never change what a master sees.
-  // RECEPTION.2 (mig 367): templates can carry employment-type
-  // variants — an 'all' row applies to every user of the role, and
-  // an 'fte' / 'contractor' / 'casual' row layers on top for users
-  // whose profiles.employment_type matches. We merge here so every
-  // consumer downstream still sees ONE template blob per location.
+  // PERM-AUDIT.2 (mig 364) / RECEPTION.2 (mig 367) — operator-edited role
+  // permission templates, resolved by the shared resolver between the
+  // per-user override and the code role default. The mechanics (per-location
+  // keying by the role THE USER holds, the master short-circuit, and the
+  // employment-type variant merge) now live in ./role-templates.js, which the
+  // widget-token auth path calls too so the two can never drift.
   const { roleTemplatesByLocation, acDeviceTemplatesByLocation } =
     await loadRoleTemplatesForLocations(db, {
       isMaster,
