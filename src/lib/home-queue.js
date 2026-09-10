@@ -442,9 +442,20 @@ export function groupQueueRows(rows, counts = {}) {
   }))
 }
 
-export async function getHomeQueueCount(db, user) {
+/**
+ * WIDGET.1 — the same three TRUE counts, reported per source.
+ *
+ * The sum was always computed from three separate numbers; this exposes them
+ * instead of discarding them, at no extra query cost. `degraded` names the
+ * sources that could not be checked, so a caller can say "3 approvals, mail
+ * unavailable" rather than a confident total that quietly excludes a source.
+ *
+ * @returns {Promise<{count:number, bySource:{approvals:number,mail:number,inbox:number}, degraded:string[]}>}
+ */
+export async function getHomeQueueCounts(db, user) {
+  const empty = { count: 0, bySource: { approvals: 0, mail: 0, inbox: 0 }, degraded: [] }
   const locationId = user?.activeLocation?.id || null
-  if (!locationId) return 0
+  if (!locationId) return empty
 
   const settled = await Promise.allSettled([
     getPendingApprovalsCount(db, user),
@@ -457,5 +468,26 @@ export async function getHomeQueueCount(db, user) {
     throw conversationsSettled.reason
   }
 
-  return settled.reduce((sum, s) => sum + (s.status === 'fulfilled' ? (s.value || 0) : 0), 0)
+  const SOURCES = ['approvals', 'mail', 'inbox']
+  const bySource = { approvals: 0, mail: 0, inbox: 0 }
+  const degraded = []
+  settled.forEach((s, i) => {
+    if (s.status === 'fulfilled') bySource[SOURCES[i]] = s.value || 0
+    else degraded.push(SOURCES[i])
+  })
+
+  return {
+    count: SOURCES.reduce((sum, k) => sum + bySource[k], 0),
+    bySource,
+    degraded,
+  }
+}
+
+/**
+ * Unchanged contract: a bare number. Kept because the sidebar poller and
+ * /dashboard/today both consume it as one, and this is not their change.
+ */
+export async function getHomeQueueCount(db, user) {
+  const { count } = await getHomeQueueCounts(db, user)
+  return count
 }
