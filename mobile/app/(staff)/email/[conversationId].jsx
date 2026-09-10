@@ -102,9 +102,7 @@ import {
   previewConversationAttachment, downloadConversationAttachment,
   signOutboundAttachment, uploadSignedAttachment,
   fetchRelatedConversations, mergeConversation, unmergeConversation,
-  fetchSignatureContexts,
 } from '../../../lib/email-api'
-import { resolveSignatureHint } from '../../../lib/signature-hint'
 import {
   conversationMessageKind, mailStatusChip, conversationDeliveryMeta,
   conversationMessageRecipients, sentToLabel,
@@ -113,6 +111,7 @@ import {
   conversationThreadAudienceLines, conversationSendOriginMeta,
   flatThreadPlan, flatMessageMeta, mergedInDividers,
   accountChipLabel, headerDetailLines, spamActionLabel,
+  composerCap, audienceSummary,
 } from '../../../lib/mail-conversations'
 // MAIL-ARCH.3 — the thread route stamps `archived` now; read the stamp, never
 // `status` (legacy `solved` is LIVE on the wire). MAIL-ARCH.4 — the one
@@ -672,6 +671,14 @@ export default function EmailConversation() {
   const [error, setError] = useState(null)
   const [text, setText] = useState('')
   const [isNote, setIsNote] = useState(false)
+  // MAIL-READER.1's pill, on the phone. 🔴 A TYPED DRAFT IS SACRED: collapsing
+  // keeps every character (MAIL-DOCK.2's lesson — the pin types a draft,
+  // collapses the tree, finds the words intact). Only ✕ with a confirm may
+  // discard, and this screen has no ✕.
+  const [composerOpen, setComposerOpen] = useState(false)
+  // The height above the keyboard, measured. KeyboardAvoidingView's own layout
+  // already excludes the keyboard, so this is the number composerCap wants.
+  const [availableHeight, setAvailableHeight] = useState(0)
   const [sending, setSending] = useState(false)
   const [savingAction, setSavingAction] = useState(false)
   // Per-message fold overrides: id → true (expanded) / false (collapsed).
@@ -725,13 +732,6 @@ export default function EmailConversation() {
   const [replyRecipients, setReplyRecipients] = useState(null)
   // EMAIL-ATTACH-PREVIEW.1 — the one image being looked at, if any.
   const [viewingImage, setViewingImage] = useState(null)
-  // MOBILE-SIGHINT.1 — the viewer's per-studio signature contexts, already
-  // rendered server-side. FETCHED PER MOUNT and held in screen state: there
-  // is deliberately no module-level cache (web built one and removed it on
-  // review — a memo is per PROCESS, not per viewer, so on a shared front-desk
-  // phone the next operator would compose under the previous one's sign-off).
-  // [] until it lands, which resolves to no hint rather than a wrong one.
-  const [signatureContexts, setSignatureContexts] = useState([])
   const scrollRef = useRef(null)
   const readMarked = useRef(false)
   const hydrationStarted = useRef(false)
@@ -842,6 +842,9 @@ export default function EmailConversation() {
         setText(decision.text)
         setIsNote(decision.mode === 'note')
         setDraftSaved(true)
+        // Desktop's rule, and it matters more here: taking focus would raise the
+        // keyboard nobody asked for. The words are there; the cursor is not.
+        if (decision.text) setComposerOpen(true)
       } else if (decision.action === 'keep-live') {
         writeReplyDraft(scope, {
           text: liveRef.current.text,
@@ -903,18 +906,6 @@ export default function EmailConversation() {
     }
   }, [messages.length])
 
-  // MOBILE-SIGHINT.1 — one read per mount, and none of it is polled: the
-  // signature belongs to the VIEWER, not the thread, and it changes about as
-  // often as a job title. A failure answers [] (email-api.js) and the hint
-  // simply does not appear — the route appends the signature server-side
-  // either way, so this whole feature is cosmetic and must never cost the
-  // screen anything.
-  useEffect(() => {
-    let cancelled = false
-    fetchSignatureContexts().then(rows => { if (!cancelled) setSignatureContexts(rows) })
-    return () => { cancelled = true }
-  }, [])
-
   const canReply = !!conversation?.requester_email
   // EMAIL-PARTICIPANTS.9 — the audience sentence and whether a reply is even
   // possible. `audience.disabled` covers "no requester", "everyone removed"
@@ -926,19 +917,20 @@ export default function EmailConversation() {
   const threadLines = conversationThreadAudienceLines(conversation, replyRecipients)
   const replyPlaceholder = conversationReplyPlaceholder(conversation, replyRecipients)
 
+  // MAIL-READER.1 decision 3, reply half only — whether the ⓘ tap has been
+  // used to expand the compacted "To X & N others" sentence to the full one.
+  // Reset is unnecessary: a disabled audience always shows full regardless
+  // (audienceSummary's own rule), and note mode reads neither this state nor
+  // audienceSummaryValue at all.
+  const [audienceOpen, setAudienceOpen] = useState(false)
+  const audienceSummaryValue = audienceSummary(conversation, replyRecipients)
+
   // THE send gate — one lib answer read by the button AND the submit guard,
   // so they cannot disagree (lib/mail-drafts.js).
   const sendState = composerSendState({
     text, isNote, files, audienceDisabled: audience.disabled, sending,
   })
 
-  // MOBILE-SIGHINT.1 — what THIS reply will be signed with. The sending
-  // context is the TICKET's location (the reply route resolves the studio
-  // off the conversation, not off the phone's active location — a coach reading a
-  // Hatch thread while switched to Stillorgan still sends as Hatch), so that
-  // is what the hint resolves by. All the branching lives in the lib; null
-  // means the hint hides.
-  const signatureHint = resolveSignatureHint(signatureContexts, conversation?.location_id || null)
   const budget = attachmentBudget(files)
 
   function patchFile(key, patch) {
@@ -1280,6 +1272,7 @@ export default function EmailConversation() {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       keyboardVerticalOffset={Platform.OS === 'ios' ? headerHeight : 0}
       className="flex-1 bg-un1t-bg"
+      onLayout={e => setAvailableHeight(e.nativeEvent.layout.height)}
     >
       <Stack.Screen
         options={{
@@ -1489,12 +1482,33 @@ export default function EmailConversation() {
               Audit A1 — a MERGED-AWAY thread is read-only: its messages live
               on the target now, so offering a composer here invites typing a
               reply the server will 409 (conversationMergedAway). The pointer banner
-              above is the way forward. */}
-          {tombstone ? null : (
+              above is the way forward.
+              MAIL-READER.M1 — collapsed to a pill until tapped (below), and
+              bounded at composerCap(availableHeight) when expanded: it and the
+              signature box (now gone, decision 2) were 43% of an 844pt screen. */}
+          {tombstone ? null : composerOpen ? (
           <View
             className="border-t border-un1t-border bg-un1t-bg px-3 pt-2.5"
             style={{ paddingBottom: Math.max(insets.bottom, 8) }}
           >
+            {/* Everything below scrolls INSIDE the cap. Before this task only
+                the TextInput was bounded (max-h-32) — the segmented toggle,
+                the attachment chips, the budget line and the gate sentences
+                were not, so a three-file reply could push Send off the
+                screen entirely.
+                🔴 THE CAP GOES ON THE SCROLLVIEW ITSELF, not its wrapping
+                View: a maxHeight on a plain View bounds its OWN layout box
+                but (Views default to overflow: visible) does not force an
+                unconstrained child to size within it, so a ScrollView with
+                no height of its own just grows to fit its content and never
+                starts scrolling — this exact file's merge-picker sheet below
+                (`<ScrollView style={{ maxHeight: 320 }}>`) is the working
+                precedent this follows. */}
+            <ScrollView
+              style={{ maxHeight: composerCap(availableHeight) }}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
             {/* Reply / Internal note — a full-width segmented toggle. */}
             <View className="flex-row rounded-xl border border-un1t-border bg-un1t-bg p-0.5 mb-2">
               <Pressable
@@ -1530,17 +1544,44 @@ export default function EmailConversation() {
                 isNote ? 'border-amber-600 bg-amber-500/10' : 'border-un1t-text bg-un1t-surface'
               }`}
             >
-              {/* The audience, named BEFORE a word is typed — and "Draft
-                  saved" stated, not hoped (true only after the write landed). */}
+              {/* 🔴 NOTE MODE KEEPS ITS SENTENCE, IN FULL, ALWAYS. The composer
+                  states its mode three ways — the selected segment, the colour
+                  of the card, and the sentence naming exactly who receives
+                  what — and this is the third. Only the REPLY half compacts
+                  (MAIL-READER.1 decision 3); on the phone there is no tooltip
+                  to move it to, so it goes behind an ⓘ that expands in place.
+                  A DISABLED reply audience does not compact either: a refusal
+                  the operator has to read must not hide behind a tap. */}
               <View className="flex-row items-center mb-1">
-                <Text
-                  className={`text-[11px] flex-1 ${isNote ? 'text-amber-700' : 'text-un1t-subtle'}`}
-                  numberOfLines={2}
-                >
-                  {isNote
-                    ? `Staff only — written to the conversation and NOT sent to ${conversation?.requester_email || 'the member'}.`
-                    : audience.text}
-                </Text>
+                {isNote ? (
+                  <Text className="text-[11px] text-amber-700 flex-1" numberOfLines={2}>
+                    Staff only — written to the conversation and NOT sent to{' '}
+                    {conversation?.requester_email || 'the member'}.
+                  </Text>
+                ) : (
+                  <Pressable
+                    onPress={() => setAudienceOpen(v => !v)}
+                    disabled={audienceSummaryValue.disabled}
+                    hitSlop={6}
+                    accessibilityRole="button"
+                    accessibilityLabel={audienceSummaryValue.full}
+                    className="flex-1 flex-row items-center"
+                  >
+                    <Text className="text-[11px] text-un1t-subtle flex-1" numberOfLines={2}>
+                      {audienceOpen || audienceSummaryValue.disabled
+                        ? audienceSummaryValue.full
+                        : audienceSummaryValue.short}
+                    </Text>
+                    {!audienceSummaryValue.disabled ? (
+                      <Ionicons
+                        name="information-circle-outline"
+                        size={13}
+                        color="#94A3B8"
+                        style={{ marginLeft: 4 }}
+                      />
+                    ) : null}
+                  </Pressable>
+                )}
                 {draftSaved && text.trim() ? (
                   <Text className="text-[11px] text-un1t-muted ml-2">Draft saved</Text>
                 ) : null}
@@ -1692,35 +1733,39 @@ export default function EmailConversation() {
                 This conversation is archived — replying brings it back to the inbox.
               </Text>
             )}
-
-            {/* MOBILE-SIGHINT.1 — what the server is about to append, shown
-                BEFORE the send rather than discovered in the sent thread.
-                Reply mode only: an internal note is sent to nobody and the
-                route appends no signature to one (web's ConversationReplyBox gates
-                the same way), so a sign-off here would be a third claim
-                contradicting the two the note card already makes.
-                No "Edit signature" affordance, unlike web: the editor lives
-                on the web /account page and the phone has no screen for it,
-                and a link to nowhere is worse than no link. */}
-            {!isNote && signatureHint ? (
-              <View className="mt-2 rounded-lg border border-dashed border-un1t-border bg-un1t-surface px-3 py-2">
-                <View className="flex-row items-center">
-                  <Ionicons name="create-outline" size={11} color="#64748B" style={{ marginRight: 5 }} />
-                  <Text className="text-[10px] font-bold uppercase tracking-wider text-un1t-muted">
-                    Added automatically
-                  </Text>
-                </View>
-                {/* No text part (a photo-only rich signature) → no separator:
-                    the send appends none either. The lib decides. */}
-                {signatureHint.body ? (
-                  <Text className="mt-1 text-xs text-un1t-subtle">{signatureHint.body}</Text>
-                ) : null}
-                {signatureHint.suffix ? (
-                  <Text className="mt-1 text-[10px] text-un1t-muted">{signatureHint.suffix}</Text>
-                ) : null}
-              </View>
-            ) : null}
+            </ScrollView>
           </View>
+          ) : (
+          <Pressable
+            onPress={() => setComposerOpen(true)}
+            accessibilityRole="button"
+            accessibilityLabel={text.trim() ? 'Continue your draft reply' : replyPlaceholder}
+            className="flex-row items-center border-t border-un1t-border bg-un1t-bg px-4 py-2.5"
+            style={{ paddingBottom: Math.max(insets.bottom, 10) }}
+          >
+            <View className="flex-1 flex-row items-center rounded-full border-[1.5px] border-un1t-border px-3.5 py-2">
+              <Text
+                className={`flex-1 text-[14px] ${text.trim() ? 'text-un1t-text' : 'text-un1t-muted'}`}
+                numberOfLines={1}
+              >
+                {text.trim() || replyPlaceholder}
+              </Text>
+              {text.trim() && draftSaved ? (
+                <Text className="text-[10px] text-un1t-muted ml-2">Draft saved</Text>
+              ) : null}
+            </View>
+            {/* The lock is a second entry point straight to note mode, so
+                switching modes never requires opening the composer first
+                only to then tap the segmented toggle. */}
+            <Pressable
+              onPress={() => { setIsNote(true); setComposerOpen(true) }}
+              hitSlop={8}
+              accessibilityLabel="Add an internal note"
+              className="ml-3"
+            >
+              <Ionicons name="lock-closed-outline" size={18} color="#64748B" />
+            </Pressable>
+          </Pressable>
           )}
         </>
       )}
