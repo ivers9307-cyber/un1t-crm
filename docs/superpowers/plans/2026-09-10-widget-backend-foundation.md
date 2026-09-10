@@ -407,6 +407,22 @@ describe('loadRoleTemplatesForLocations', () => {
     expect(out.acDeviceTemplatesByLocation[LOC]).toEqual(['b'])
   })
 
+  it('DEEP-merges the mobile sub-object rather than clobbering it', async () => {
+    // The bug this guards: a flat spread drops whatsapp:false, so a permission
+    // the operator explicitly removed silently returns as a code default.
+    const db = dbWith([
+      { location_id: LOC, role: 'staff', employment_type: 'all', permissions: { pipeline: false, mobile: { whatsapp: false, schedule: true } }, ac_device_ids: null },
+      { location_id: LOC, role: 'staff', employment_type: 'fte', permissions: { mobile: { tv_displays: true } }, ac_device_ids: null },
+    ])
+    const out = await loadRoleTemplatesForLocations(db, {
+      isMaster: false, rolesByLocation: { [LOC]: 'staff' }, employmentType: 'fte',
+    })
+    expect(out.roleTemplatesByLocation[LOC]).toEqual({
+      pipeline: false,
+      mobile: { whatsapp: false, schedule: true, tv_displays: true },
+    })
+  })
+
   it('degrades to empty maps when the fetch throws, rather than failing the request', async () => {
     const db = dbWith(null, { throws: true })
     const out = await loadRoleTemplatesForLocations(db, {
@@ -441,11 +457,13 @@ behaviour change.
 // 'all' row applies to every user of the role, and an 'fte'/'contractor'/
 // 'casual' row layers on top. Merged here so consumers see ONE blob.
 
-/** Shallow-merge a variant template over the 'all' template. */
-export function mergeTemplates(allBlob, variantBlob) {
-  if (!allBlob && !variantBlob) return null
-  return { ...(allBlob || {}), ...(variantBlob || {}) }
-}
+// mergeTemplates is NOT redefined here. It lives in shared/permissions.js and
+// is the canonical merge for eight call sites; it strips `mobile`, spreads the
+// rest, then DEEP-merges the mobile sub-objects. A flat spread would let a
+// variant's mobile blob clobber the base's, so a permission an operator
+// explicitly removed would come back as a code default — the exact permissive
+// drift this extraction exists to prevent.
+import { mergeTemplates } from '@shared/permissions'
 
 /**
  * @param {object} db  service-role supabase client
@@ -495,9 +513,10 @@ export async function loadRoleTemplatesForLocations(db, { isMaster, rolesByLocat
       if (acList !== null) acDeviceTemplatesByLocation[locId] = acList
     }
   } catch {
-    // Defensive, preserved from auth.js: a failed template fetch degrades to
-    // code defaults rather than failing the request.
-    return { roleTemplatesByLocation: {}, acDeviceTemplatesByLocation: {} }
+    // Defensive, preserved from auth.js VERBATIM: the original catch is empty
+    // and falls through, returning whatever accumulated before the throw.
+    // Returning fresh empty maps here would discard partial accumulation —
+    // a behaviour change, however unreachable.
   }
 
   return { roleTemplatesByLocation, acDeviceTemplatesByLocation }
@@ -507,7 +526,7 @@ export async function loadRoleTemplatesForLocations(db, { isMaster, rolesByLocat
 - [ ] **Step 5: Run the new tests**
 
 Run: `npx vitest run src/lib/role-templates.test.js`
-Expected: PASS, 6 tests.
+Expected: PASS, 7 tests.
 
 - [ ] **Step 6: Rewire `auth.js` to call it**
 
@@ -529,8 +548,9 @@ Add the import at the top of `auth.js`:
 import { loadRoleTemplatesForLocations } from './role-templates.js'
 ```
 
-Delete the now-unused `mergeTemplates` definition from `auth.js`. If anything
-else in `auth.js` still calls it, import it from `./role-templates.js` instead.
+Remove the now-unused `mergeTemplates` import at `auth.js:6` — line 568 was its
+only use, and lint will flag it otherwise. Do NOT delete it from
+`shared/permissions.js`: seven other call sites import it from there.
 
 - [ ] **Step 7: Prove nothing changed for the existing auth path**
 
@@ -1774,7 +1794,7 @@ export const GET = withAuth(
 - [ ] **Step 5: Run the tests**
 
 Run: `npx vitest run src/app/api/widget/devices/route.test.js`
-Expected: PASS, 6 tests.
+Expected: PASS, 7 tests.
 
 - [ ] **Step 6: Verify location scoping**
 
