@@ -1719,7 +1719,15 @@ defensive padding — it is the normal case.
 | `door` | `listAllowedDoors()` from Task 11a — UniFi live, allowlist-intersected | `studio_management` |
 | `ac` | `ac_devices` table, `.eq('location_id', locationId)` | `studio_management` |
 | `plug` | `shelly_devices` table, `.eq('location_id', locationId)` | `device_control` |
-| `speaker` | Sonos groups — `getSonosConfig` → `withFreshToken` → `sonosGetGroups` → `mapGroups` | `device_control` |
+| `speaker` | Sonos **players** — `getSonosConfig` → `withFreshToken` → `sonosGetGroups` → `mapGroups().players` | `device_control` |
+
+🔴 **Offer players, never groups.** `src/lib/sonos/groups.js:28` states it plainly:
+"Player ids are permanent; group ids are ephemeral." A widget stores its
+configured device id permanently, so a button bound to a group id would break
+the moment anyone regroups the speakers — silently, and only for whoever had
+that widget. The control action resolves group ids from player ids at press
+time via `resolveGroupIds()`, which is exactly what the Sonos schedules
+already do.
 
 - [ ] **Step 1: Read the two live-source routes** so you reuse their helpers
 rather than re-deriving them: `src/app/api/studio-management/doors/route.js`
