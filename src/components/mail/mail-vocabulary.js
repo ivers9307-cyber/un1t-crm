@@ -19,6 +19,7 @@
 export * from '@/lib/mail-vocabulary'
 import { DEFAULT_MAIL_VIEW } from '@/lib/mail-vocabulary'
 import { splitQuotedText } from '@shared/mail-quote'
+import { readableText } from '@/lib/mail-entities'
 
 /**
  * The list URL.
@@ -155,7 +156,9 @@ const SNIPPET_MAX = 140
  * back and the list stops distinguishing anything. Preview what was written.
  */
 export function messageSnippet(message) {
-  const text = typeof message?.text_body === 'string' ? message.text_body : ''
+  // readableText first: a row whose snippet reads `100% &#38; rising` in the
+  // list and `100% & rising` once opened is one message wearing two faces.
+  const text = readableText(typeof message?.text_body === 'string' ? message.text_body : '')
   return splitQuotedText(text).body.replace(/\s+/g, ' ').trim().slice(0, SNIPPET_MAX)
 }
 

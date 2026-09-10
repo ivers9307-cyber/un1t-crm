@@ -129,7 +129,7 @@ import { canForwardMessage, newestForwardableMessage } from '../../../lib/mail-f
 import BackHeaderLeft from '../../../components/BackHeaderLeft'
 import EmailBody, { openHref } from '../../../components/mail/EmailBody'
 import { splitTextLinks, linkLabel } from '../../../lib/mail-blocks'
-import { decodeCharRefs, stripInvisibleChars } from 'shared/mail-entities'
+import { readableText } from 'shared/mail-entities'
 
 function formatTime(iso) {
   if (!iso) return ''
@@ -540,7 +540,7 @@ function FlatMessage({ msg, conversationId, locationId, fallbackName, onViewImag
         // a 180-character tracking URL was three lines of screen and not even
         // tappable.
         <Text className="text-base text-un1t-text">
-          {splitTextLinks(stripInvisibleChars(decodeCharRefs(shown))).map((seg, i) => (
+          {splitTextLinks(readableText(shown)).map((seg, i) => (
             seg.href ? (
               <Text
                 key={i}

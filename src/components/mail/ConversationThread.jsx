@@ -95,6 +95,7 @@ import {
 } from '@/components/mail/mail-preferences'
 import { joinPointsByMessage } from '@/lib/mail/conversation'
 import { splitQuotedText } from '@/lib/mail-quote'
+import { readableText } from '@/lib/mail-entities'
 // EMAIL-CONTACT-CHIP.1 — the house funnel/off-funnel taxonomy (FUNNEL.1),
 // reused ONLY for the chip's colour/intent grouping. There is no single
 // canonical slug→label lib in this codebase for the TEXT (three independent
@@ -1377,10 +1378,27 @@ function MessageAvatar({ me, label }) {
 function ThreadMessage({ message, conversation, conversationId, expanded, onToggle, onOpenAttachment, onForward, messagesById, frameSize }) {
   const kind = messageKind(message)
   const stamp = messageTimestamp(message.sent_at || message.created_at)
-  const body = message.text_body || '(no text content)'
+  // MAIL-READER.M2 — decoded HERE, once, before anything reads it.
+  //
+  // htmlToPlainText runs at INGEST (the Postmark inbound webhook and
+  // sent-lane.js both store `TextBody || htmlToPlainText(HtmlBody)`), and
+  // until MAIL-READER.M1 it decoded a handful of NAMED entities and no
+  // numeric ones — so `&#38;` is sitting in text_body on every row that
+  // arrived before that fix, estate-wide. Fixing the ingest path only helps
+  // mail that arrives from now on, which is why the phone also decodes at
+  // render; this is the desk's half of the same fix, and without it the two
+  // surfaces disagreed about the same row.
+  //
+  // stripInvisibleChars rides along for the reason it does at ingest: a
+  // zero-width character decoded out of `&#8204;` is invisible but present.
+  //
+  // At the derivation and not at the two render sites below, so the QUOTED
+  // half gets it too — splitQuotedText runs on this same string.
+  const plain = useMemo(() => readableText(message.text_body), [message.text_body])
+  const body = plain || '(no text content)'
   // MAIL-REPLY-QUOTE.1 — what the person WROTE, and the chain under it. The
   // note branch below keeps `body` whole: a note is never a reply to mail.
-  const split = useMemo(() => splitQuotedText(message.text_body || ''), [message.text_body])
+  const split = useMemo(() => splitQuotedText(plain), [plain])
   const textBody = split.body || body
   // Notes never take the HTML path, whatever the payload contains: the route
   // does not emit a document for them, and this guard says so twice.

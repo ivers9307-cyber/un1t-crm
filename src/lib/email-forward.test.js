@@ -194,6 +194,42 @@ describe('the quoted header block NEVER contains a bcc', () => {
   })
 })
 
+describe('forwardedBody — what an external recipient actually receives', () => {
+  it('decodes character references before they leave the estate', () => {
+    // 🔴 THE ONE SITE THAT IS NOT A SCREEN. Every other reader of text_body
+    // shows it to an operator who can squint past a stray `&#38;`; this text
+    // is sent, to somebody outside this estate, in their own mail client,
+    // where the reference is simply wrong and unattributable to anyone.
+    //
+    // The rows are already stored this way: htmlToPlainText decoded no
+    // numeric references until MAIL-READER.M1, so every message that arrived
+    // before then carries them.
+    const out = forwardedBody({
+      ...INBOUND,
+      text_body: 'Basic-Signing?language=en_US&#38;utm_campaign=GBL&#38;utm_medium=product',
+    })
+    expect(out.text).toBe('Basic-Signing?language=en_US&utm_campaign=GBL&utm_medium=product')
+    expect(out.text).not.toContain('&#38;')
+  })
+
+  it('strips a zero-width character rather than forwarding it invisibly', () => {
+    const out = forwardedBody({ ...INBOUND, text_body: 'cli&#8204;ck to confirm' })
+    expect(out.text).toBe('click to confirm')
+  })
+
+  it('measures the cap against the DECODED text, not the raw column', () => {
+    // The reference is six characters stored and one character read. Capping
+    // the raw string would cut the quote in a place the recipient cannot
+    // account for, and would report `truncated` for a body that fits.
+    const decoded = 'x'.repeat(50) + ' & ' + 'y'.repeat(50)
+    const raw = 'x'.repeat(50) + ' &#38; ' + 'y'.repeat(50)
+    expect(forwardedBody({ ...INBOUND, text_body: raw })).toEqual({
+      text: decoded,
+      truncated: false,
+    })
+  })
+})
+
 describe('forwardedBody', () => {
   it('is the stored plain text, normalised', () => {
     expect(forwardedBody(INBOUND)).toEqual({

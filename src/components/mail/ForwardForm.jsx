@@ -56,6 +56,7 @@ import {
   forwardSizeError,
 } from '@/lib/email-forward'
 import RecipientEditor, { EMPTY_RECIPIENTS } from './RecipientEditor'
+import { readableText } from '@/lib/mail-entities'
 
 // The submit button lives in the Modal's footer, a SIBLING of the form, so it
 // is wired by id. Only one forward modal exists at a time.
@@ -117,7 +118,9 @@ export default function ForwardForm({ conversation, message, onClose, onSent }) 
     }
   }
 
-  const quoted = message?.text_body || '(no text content)'
+  // The same reading the forward route will send (email-forward.js's
+  // forwardedBody), so the preview cannot promise different words.
+  const quoted = readableText(message?.text_body) || '(no text content)'
 
   return (
     <Modal

@@ -38,6 +38,7 @@
 // as archived — the swipe then sent `{archived:false}`, reopening nothing.
 import { isArchived, needsReply, isSpam } from 'shared/mail-vocabulary'
 import { splitQuotedText } from 'shared/mail-quote'
+import { readableText } from 'shared/mail-entities'
 
 // ── Status ───────────────────────────────────────────────────────────
 //
@@ -1135,7 +1136,9 @@ function avatarInitials(nameOrEmail) {
  */
 export function flatMessageMeta(message, { fallbackName = '', now = new Date() } = {}) {
   const m = message || {}
-  const snippet = splitQuotedText(String(m.text_body || '')).body.replace(/\s+/g, ' ').trim()
+  // readableText first — a folded row and the message it opens to must not
+  // disagree about the same words (web's messageSnippet does the same).
+  const snippet = splitQuotedText(readableText(m.text_body)).body.replace(/\s+/g, ' ').trim()
   const when = mailRowTime(m.sent_at || m.created_at, now)
   if (m.is_internal_note) {
     const who = m.author_name || 'Staff'
