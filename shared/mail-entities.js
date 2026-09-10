@@ -125,3 +125,32 @@ export function stripInvisibleChars(text) {
   if (text === null || text === undefined || text === '') return ''
   return String(text).replace(INVISIBLE, '')
 }
+
+/**
+ * `text_body` as a human should read it.
+ *
+ * The composition every presentation site wants, given a name so there is one
+ * rule rather than a habit. Decode the references, then drop the invisible
+ * characters decoding produced.
+ *
+ * 🔴 WHY THIS EXISTS AS A NAME. MAIL-READER.M1 fixed the ingest path and then
+ * wired the render half into the phone's thread screen ONLY. Four other
+ * places read `text_body` — the web thread, both snippet builders, and the
+ * FORWARD quote, which carries the text to an external recipient — and every
+ * one of them still showed `&#38;`. A composition spelled out inline at one
+ * call site is a composition the next site will not know to copy; a named
+ * export is greppable, and `tests/mail-readable-text-sites.test.js`
+ * enumerates who must call it.
+ *
+ * It does NOT touch the stored row. `text_body` is evidence of what arrived
+ * — for mail that came with a real plain-text part it is the sender's own
+ * words — so this is a reading of it, never a rewrite of it. That is also
+ * why there is no backfill migration: decoding in place would alter what a
+ * sender literally typed in the rare case they meant the characters.
+ *
+ * @param {string} text
+ * @returns {string} '' for falsy input
+ */
+export function readableText(text) {
+  return stripInvisibleChars(decodeCharRefs(text))
+}

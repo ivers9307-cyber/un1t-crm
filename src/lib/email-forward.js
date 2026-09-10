@@ -65,6 +65,7 @@
 // formatting was dropped. The full original stays on the conversation.
 
 import { formatBytes } from './email-attachment-quota'
+import { readableText } from './mail-entities'
 import {
   MAX_OUTBOUND_ATTACHMENT_TOTAL_BYTES,
   exceedsOutboundTotal,
@@ -203,7 +204,11 @@ export function forwardedHeaderLines(message) {
  * @returns {{ text: string, truncated: boolean }}
  */
 export function forwardedBody(message) {
-  const raw = String(message?.text_body || '').replace(/\r\n/g, '\n').trim()
+  // 🔴 readableText BEFORE the cap, because this quote is SENT — to somebody
+  // outside this estate, in their own mail client, where `&#38;` is simply
+  // wrong and unattributable. Every other site that reads text_body is a
+  // screen an operator can squint past; this one is not.
+  const raw = readableText(message?.text_body).replace(/\r\n/g, '\n').trim()
   if (raw.length <= FORWARD_QUOTE_MAX_CHARS) return { text: raw, truncated: false }
   return { text: raw.slice(0, FORWARD_QUOTE_MAX_CHARS).trimEnd(), truncated: true }
 }

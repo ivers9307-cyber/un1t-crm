@@ -129,14 +129,42 @@ describe('htmlToBlocks — inline runs', () => {
   })
 })
 
+describe('charsPerMessage is sized to the mail this estate actually receives', () => {
+  it('covers the longest real body, with headroom', () => {
+    // MAIL-READER.M2 measured every stored html_body in the estate (72 with
+    // HTML). At the shipped 20,000 the cap truncated SEVEN of them — 10% of
+    // the mail an operator opens, each ending on "the rest of it is not shown
+    // here" with no way to read the rest on a phone. The longest real body
+    // holds 42,149 characters of visible text.
+    //
+    // That measurement is the argument that closed "build a View original
+    // escape hatch": a new public route, four allowlists, and a bug class this
+    // repo has hit five times, to solve a 10% that a constant solves.
+    //
+    // Pinned as a test rather than left in a commit message, because the next
+    // person to tune this needs the number, not the archaeology. Re-measure
+    // with scripts/audit-block-renderer.mjs before moving it.
+    const LONGEST_REAL_BODY_CHARS = 42_149
+    expect(CAPS.charsPerMessage).toBeGreaterThan(LONGEST_REAL_BODY_CHARS)
+  })
+})
+
 describe('htmlToBlocks — caps and truncation', () => {
   it('never drops a block it already walked when the message budget runs out mid-block', () => {
     // A forwarded thread is written as ONE <div> with <br> separators — br
     // does not flush, so this is a single block. Past the char budget it must
     // still render truncated, never empty: an empty body is the exact
     // failure this feature exists to fix.
+    //
+    // Sized FROM the cap rather than to a fixed length: this pinned 25,000
+    // characters against a 20,000 budget, so raising the budget to 50,000
+    // (MAIL-READER.M2, measured against the real corpus) quietly stopped it
+    // truncating and it began asserting nothing. A fixture tuned to a
+    // constant has to move whenever the constant does, and the version that
+    // does not move is the dangerous one.
     const line = 'x'.repeat(500)
-    const html = '<div>' + Array(50).fill(line).join('<br>') + '</div>'
+    const lines = Math.ceil((CAPS.charsPerMessage * 1.25) / line.length)
+    const html = '<div>' + Array(lines).fill(line).join('<br>') + '</div>'
     const { blocks, truncated } = htmlToBlocks(html)
     expect(truncated).toBe(true)
     expect(blocks.length).toBeGreaterThan(0)

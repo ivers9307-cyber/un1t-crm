@@ -120,6 +120,15 @@ import { sanitizeEmailHtml, splitQuotedHtml } from './email-html'
  *     is bounded (blocks and runs are both capped, and tableCellChars charges
  *     a table's own structure), so the multiplier is bounded too — but do not
  *     quote this constant as a byte ceiling, because it is not one.
+ *     🔴 50,000 IS A MEASURED NUMBER, NOT A ROUND ONE. It shipped at 20,000,
+ *     which truncated 7 of the 72 real HTML bodies in this estate — 10% of the
+ *     mail an operator actually opens, ending on "the rest of it is not shown
+ *     here" with no way to read the rest on a phone. The longest real body
+ *     holds 42,149 characters of text, so 50,000 covers the whole corpus with
+ *     headroom. It was raised INSTEAD of building a "view the original in a
+ *     browser" escape hatch, which would have needed a new public route and
+ *     all four of its allowlists to solve the same 10%. Re-measure with
+ *     scripts/audit-block-renderer.mjs before moving it again.
 
  *   - `maxDepth` bounds recursion, not text. walk() recurses once per nesting
  *     level, and an empty `<div>` pushes no block and adds no character, so
@@ -142,7 +151,7 @@ export const CAPS = Object.freeze({
   hrefChars: 2_000,
   charsPerRun: 400,
   charsPerPre: 4_000,
-  charsPerMessage: 20_000,
+  charsPerMessage: 50_000,
   maxDepth: 200,
 })
 

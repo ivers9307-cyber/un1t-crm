@@ -12,6 +12,29 @@ import React from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, waitFor, fireEvent, act } from '@testing-library/react'
 
+// 🔴 THE TEST BUDGET MUST EXCEED THE WAITS THIS FILE DECLARES.
+//
+// vitest's default per-test timeout is 5000ms and nothing in vitest.config.js
+// raises it, so a `waitFor(..., { timeout: 5000 })` inside a test is a budget
+// that can never be reached: the TEST aborts first, with "Test timed out in
+// 5000ms" — which reads as a broken assertion rather than a starved one.
+//
+// On an idle machine every wait here resolves in about a tenth of a second, so
+// this passed locally and in isolation forever. Under a full-suite run, with
+// many jsdom environments competing for the box, the cumulative time crosses
+// 5s and the test dies — the intermittent red that could never be reproduced.
+// Proven by construction: an inner 5000ms wait under a 1000ms test budget
+// fails at 1000ms, not 5000.
+//
+// So the file's budget is set above the sum of the waits its own tests declare.
+//
+// THIS ESTATE HAS BEEN HERE BEFORE. AudienceCount.test.jsx carries the same
+// vi.setConfig and a comment recording that it "went flaky roughly 1 run in 8
+// before these were widened". That fix never became a rule, so the next file
+// to declare a generous inner wait — this one — inherited the same latent
+// flake. tests/test-timeout-budgets.test.js is the rule.
+vi.setConfig({ testTimeout: 20000 })
+
 const DEFAULT_SEARCH = 'view=week&week=2026-05-04&month=2026-05-01'
 // Mutable so one test can start the calendar on a different week without a
 // second mock of next/navigation.
