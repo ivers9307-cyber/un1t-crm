@@ -2030,7 +2030,7 @@ export const DELETE = withAuth(
       return NextResponse.json({ success: false, error: 'Not found.' }, { status: 404 })
     }
 
-    return NextResponse.json({ success: true, data: { id, revoked: true } })
+    return NextResponse.json({ success: true })
   }
 )
 ```

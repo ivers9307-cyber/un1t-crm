@@ -40,7 +40,10 @@ export const DELETE = withAuth(
       .eq('id', id)
       .maybeSingle()
     if (selectError) {
-      return NextResponse.json({ success: false, error: selectError.message }, { status: 500 })
+      // Never hand a raw Postgres message to the client — log it, answer in
+      // the operator's language, same as the sibling list/mint route.
+      console.error('[widget/tokens/:id] lookup failed:', selectError.message)
+      return NextResponse.json({ success: false, error: 'Could not revoke that widget.' }, { status: 500 })
     }
     if (!row) return notFound()
 
@@ -63,7 +66,8 @@ export const DELETE = withAuth(
       .eq('id', id)
       .select('id')
     if (updateError) {
-      return NextResponse.json({ success: false, error: updateError.message }, { status: 500 })
+      console.error('[widget/tokens/:id] revoke failed:', updateError.message)
+      return NextResponse.json({ success: false, error: 'Could not revoke that widget.' }, { status: 500 })
     }
     if (!updated || updated.length === 0) return notFound()
 
