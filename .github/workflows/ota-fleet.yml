@@ -1,0 +1,68 @@
+# OTA-VISIBLE.1 — tell the person about to merge that the fleet is behind.
+#
+# On 2026-09-10 an EAS Update publish failed. Every change in PR #1668 — one of
+# them a fix that stops mangled text going out to external recipients — sat on
+# `main` and on nobody's phone for hours. The PR was green, the merge was
+# clean, and nothing anyone looked at said otherwise.
+#
+# eas-update.yml already had two fallbacks for exactly this, and both are inert
+# for the same reason:
+#   * a red run on `main` — which that workflow's own comment calls "the signal
+#     that was already proven not to reach anyone", because a push to main has
+#     no PR to hang an X on;
+#   * an auto-opened tracking issue — which worked perfectly (#1669 was filed
+#     the same minute the run failed) and was still not read. This repo had two
+#     open issues at the time, the older untouched since 10 August.
+#
+# So this adds no new alarm on a surface nobody watches. It puts the fact in
+# the checks list of the pull request someone is about to merge, which is the
+# one surface this estate demonstrably reads, at the moment it changes what
+# they would do.
+#
+# 🔴 ADVISORY. Do NOT add "OTA fleet" to branch protection. The fleet being
+# behind is not a reason to refuse an unrelated PR — its author cannot fix it
+# from there — and a check that blocks work it cannot help with is a check
+# people route around, which is how a signal dies. Red and unmissable, never
+# blocking.
+#
+# Deliberately unfiltered by path: a mobile change is not the only thing this
+# matters for. Anyone merging anything should know the fleet is not receiving.
+#
+# Injection safety: the only event value used anywhere is
+# `pull_request.number`, an integer, and it is used in a concurrency key rather
+# than in a shell command. Nothing author-controlled reaches `run:`.
+name: OTA fleet
+
+on:
+  pull_request:
+
+# Read-only. It reports a fact; it never re-runs a publish, ramps a rollout or
+# touches an issue — those are operator actions (mobile/docs/ota-rollout.md).
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ota-fleet-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  fleet:
+    name: OTA fleet
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      # No `npm ci`: the script imports nothing but node builtins and its own
+      # pure verdict module, so the check stays seconds rather than minutes.
+      # That matters — a slow advisory check is one people stop waiting for.
+      - name: Is the fleet behind main?
+        run: node scripts/check-ota-fleet.mjs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
