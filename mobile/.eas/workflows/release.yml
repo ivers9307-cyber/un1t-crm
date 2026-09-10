@@ -1,7 +1,9 @@
 # EAS Workflow — manually-triggered native release.
 #
-# iOS gets the full pipeline (build + auto-submit to App Store
-# Connect Custom App distribution). Android gets BUILD ONLY because
+# iOS gets the full pipeline TWICE — once per bundle identifier. The
+# two-build rule (see build_ios_legacy below) is not optional: shipping a
+# native change to only one of the two records strands the other's
+# installed base off the shared OTA lane. Android gets BUILD ONLY because
 # UN1T's Google Workspace organisation policy
 # `iam.disableServiceAccountKeyCreation` blocks creating the
 # service-account JSON that `eas submit --platform android` needs.
@@ -9,8 +11,8 @@
 # you just download it from the EAS build page and drag it into
 # Play Console -> Internal testing -> Create new release.
 #
-# Both build jobs run concurrently on EAS workers — total wall-clock
-# time is roughly the slower of the two (~25 min). The iOS submit
+# All three build jobs run concurrently on EAS workers — total wall-clock
+# time is roughly the slowest of them (~25 min). The iOS submit
 # depends only on the iOS build, so a future Android-submit failure
 # (when we re-enable it) won't block iOS shipping.
 #
@@ -73,3 +75,38 @@ jobs:
       platform: ios
       profile: production
       build_id: ${{ needs.build_ios.outputs.build_id }}
+
+  # WIDGET.1 — the second half of the two-build rule. Apple's unlisted
+  # distribution is one-way, so the legacy record (com.un1tdublin.crm,
+  # ascAppId 6770890839) can never become publicly listed — but it still
+  # takes binary updates through review, and its installed base shares the
+  # SAME OTA channel and runtimeVersion as the public app. So a native
+  # change shipped to only one of the two silently strands the other's
+  # users off the OTA lane: they keep the old binary, and the new runtime
+  # lane has no update they can see.
+  #
+  # Running this through the workflow rather than locally also sidesteps
+  # the capability-sync trap that reverted a HealthKit capability twice
+  # during the one-app merge: sync reads the app config of the working
+  # directory, and here each build job gets its own checkout evaluating
+  # its own env (LEGACY_APP=1 comes from the production-legacy profile),
+  # so the two configs cannot contaminate each other.
+  #
+  # Android has NO legacy variant on purpose — the Android package was
+  # deliberately not renamed, because a Play package change mints a whole
+  # new Play app. One Android build serves both.
+  build_ios_legacy:
+    name: Build iOS (legacy app)
+    type: build
+    params:
+      platform: ios
+      profile: production-legacy
+
+  submit_ios_legacy:
+    name: Submit legacy app to App Store Connect
+    needs: [build_ios_legacy]
+    type: submit
+    params:
+      platform: ios
+      profile: production-legacy
+      build_id: ${{ needs.build_ios_legacy.outputs.build_id }}
