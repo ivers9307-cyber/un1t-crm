@@ -213,7 +213,8 @@ export async function getConversation(conversationId, locationId) {
   // ahead of the OTA and could be rolled back behind it; a build that treated a
   // missing html_blocks as a failure would blank the thread instead of falling
   // back to text_body, which is what this screen did for its whole life.
-  const res = await api(`/api/email/mail/${conversationId}?body=blocks`, { locationId })
+  const params = new URLSearchParams({ body: 'blocks' })
+  const res = await api(`/api/email/mail/${conversationId}?${params.toString()}`, { locationId })
   if (!res.success) return { success: false, error: res.error || 'Failed to load conversation' }
   return {
     success: true,

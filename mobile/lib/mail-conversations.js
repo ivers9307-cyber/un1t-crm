@@ -36,7 +36,7 @@
 // conversation-era status back into a decision the server's `archived` stamp had
 // already made, and a legacy `solved` row the server calls live was presented
 // as archived — the swipe then sent `{archived:false}`, reopening nothing.
-import { isArchived, needsReply } from 'shared/mail-vocabulary'
+import { isArchived, needsReply, isSpam } from 'shared/mail-vocabulary'
 import { splitQuotedText } from 'shared/mail-quote'
 
 // ── Status ───────────────────────────────────────────────────────────
@@ -1217,19 +1217,31 @@ export function mergedInDividers(messages, mergedSources) {
 // or mobile/app is reachable by any test runner in this project.
 
 /**
- * Which spam verb this conversation offers, and what it would set.
+ * Which spam verb this conversation offers, what it would set, and the
+ * sentence to show if setting it fails.
  *
- * A missing flag reads as LIVE, the same way every other reader of `is_spam`
- * treats it — a conversation is not quarantined until something says so.
+ * Reads `is_spam` through shared's isSpam() — the STRICT `=== true` reading,
+ * not truthiness. A hand-rolled `!!conversation?.is_spam` would read a
+ * string `'true'` or a bare `1` as spam, which is exactly the kind of
+ * hand-mirrored predicate MAIL-ARCH.2 exists to rule out (archiveToggleMeta's
+ * OR-ing bug, this file's header). A missing or malformed flag reads as
+ * LIVE, because that is what isSpam() itself answers for one — not a second
+ * interpretation of it.
+ *
+ * `failure` is a FINISHED sentence, not a template the caller derives one
+ * from: `Couldn't ${label.toLowerCase()}` composes to "Couldn't not spam" on
+ * the release direction — a double negative shipped to an operator.
+ * toggleArchive (mobile/app/(staff)/email/[conversationId].jsx) already
+ * solves the same shape by branching on direction; this does the same.
  *
  * @param {{is_spam?: boolean}|null} conversation
- * @returns {{label: string, next: boolean, icon: string}}
+ * @returns {{label: string, next: boolean, icon: string, failure: string}}
  */
 export function spamActionLabel(conversation) {
-  const spam = !!conversation?.is_spam
+  const spam = isSpam(conversation)
   return spam
-    ? { label: 'Not spam', next: false, icon: 'shield-checkmark-outline' }
-    : { label: 'Mark as spam', next: true, icon: 'alert-circle-outline' }
+    ? { label: 'Not spam', next: false, icon: 'shield-checkmark-outline', failure: 'Couldn’t release it' }
+    : { label: 'Mark as spam', next: true, icon: 'alert-circle-outline', failure: 'Couldn’t mark it as spam' }
 }
 
 /** The sentence for a conversation whose mailbox row is gone. */
@@ -1260,6 +1272,23 @@ export function shortMailboxLabel(mailbox) {
   const full = mailboxLabel(mailbox)
   const head = String(full).split(/\s+[-–—]\s+/)[0].trim()
   return head || full
+}
+
+/**
+ * The account chip's FINISHED text — the '@ ' prefix and the no-mailbox
+ * fallback decided here, not left half-decided in a screen's JSX ternary.
+ *
+ * 🔴 NEVER a chip shortened to nothing. `mailbox_id` is ON DELETE SET NULL,
+ * so a deleted address orphans its correspondence rather than hiding it, and
+ * the no-mailbox case stays a SENTENCE IN WORDS — the same NO_MAILBOX_LINE
+ * Details already shows — never a chip.
+ *
+ * @param {{label?: string, address?: string}|null} mailbox
+ * @returns {string}
+ */
+export function accountChipLabel(mailbox) {
+  const short = shortMailboxLabel(mailbox)
+  return short ? `@ ${short}` : NO_MAILBOX_LINE
 }
 
 /**
@@ -1320,8 +1349,18 @@ export function audienceSummary(conversation, replyRecipients) {
 // desktop card's composer at the same fraction). The FLOOR matters as much as
 // the fraction: a short window or a tall keyboard must not shrink the composer
 // to a slot nothing fits in.
+//
+// The CEILING matters on a device desktop never had to think about. iPad
+// (mobile/app.config.js: supportsTablet: true) runs the same composer, and
+// its hydrated-draft flow deliberately expands WITHOUT taking focus — no
+// keyboard is raised, so availableHeight is roughly the whole screen, and
+// 40% of that is a lot of screen for a text box. Desktop's identical 40%
+// never needed a ceiling because it resolves against a card already bounded
+// at 78vh (ReplyBox.jsx) — a bound that does not carry over to a raw screen
+// height, so this file needs its own.
 const COMPOSER_FRACTION = 0.4
 const COMPOSER_FLOOR = 168
+const COMPOSER_CEILING = 400
 
 /**
  * How tall the expanded composer may be.
@@ -1330,11 +1369,22 @@ const COMPOSER_FLOOR = 168
  * budget line and the send-gate sentences below it are not, so a three-file
  * reply can push Send off the screen.
  *
+ * CLAMP ORDER, and which wins on a conflict: the fraction is bounded between
+ * the floor and the ceiling first (an ordinary phone gets 40%, a cramped one
+ * gets the floor, a tall keyboard-less screen gets the ceiling) — but
+ * `availableHeight` itself is applied LAST and beats everything before it,
+ * including the floor. A `maxHeight` bigger than the space `onLayout`
+ * actually measured is never sane: on a small phone in landscape with the
+ * keyboard up, availableHeight can fall to 80-100pt, well under the 168
+ * floor, and the floor exists to keep the composer USABLE — not to promise a
+ * height the screen does not have.
+ *
  * @param {number} availableHeight  the measured height ABOVE the keyboard
  * @returns {number} pixels
  */
 export function composerCap(availableHeight) {
   const h = Number(availableHeight)
   if (!Number.isFinite(h) || h <= 0) return COMPOSER_FLOOR
-  return Math.max(COMPOSER_FLOOR, Math.round(h * COMPOSER_FRACTION))
+  const fraction = Math.min(Math.max(Math.round(h * COMPOSER_FRACTION), COMPOSER_FLOOR), COMPOSER_CEILING)
+  return Math.min(fraction, h)
 }

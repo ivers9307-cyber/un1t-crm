@@ -30,6 +30,8 @@ import {
   flatMessageMeta,
   spamActionLabel,
   shortMailboxLabel,
+  accountChipLabel,
+  NO_MAILBOX_LINE,
   headerDetailLines,
   audienceSummary,
   composerCap,
@@ -1380,18 +1382,42 @@ describe('spamActionLabel', () => {
   it('offers to quarantine a live conversation', () => {
     expect(spamActionLabel({ is_spam: false })).toEqual({
       label: 'Mark as spam', next: true, icon: 'alert-circle-outline',
+      failure: 'Couldn’t mark it as spam',
     })
   })
 
   it('offers to release a quarantined one', () => {
     expect(spamActionLabel({ is_spam: true })).toEqual({
       label: 'Not spam', next: false, icon: 'shield-checkmark-outline',
+      failure: 'Couldn’t release it',
     })
   })
 
   it('treats a missing flag as live, like every other reader of it', () => {
     expect(spamActionLabel({}).next).toBe(true)
     expect(spamActionLabel(null).next).toBe(true)
+  })
+
+  // shared/mail-vocabulary's isSpam is deliberately STRICT (`=== true`), and
+  // its own tests pin that against isUnread's deliberate tolerance. A
+  // hand-rolled `!!conversation?.is_spam` reads a string 'true' or a bare 1 as
+  // spam — this is the drift MAIL-ARCH.2 already fixed once for isArchived,
+  // via archiveToggleMeta's OR-ing bug, and the same seam exists here to keep
+  // it from happening a second time on a second flag.
+  it('reads is_spam through the strict shared predicate, not a hand-rolled truthy check', () => {
+    expect(spamActionLabel({ is_spam: 'true' }).next).toBe(true)
+    expect(spamActionLabel({ is_spam: 1 }).next).toBe(true)
+    expect(spamActionLabel({ is_spam: true }).next).toBe(false)
+  })
+
+  // The release direction of `Couldn't ${label.toLowerCase()}` composes to
+  // "Couldn't not spam" — a double negative an operator would actually read.
+  // toggleArchive (mobile/app/(staff)/email/[conversationId].jsx) already
+  // solves this by branching on direction; spamActionLabel must own the same
+  // finished sentence rather than leave the screen to derive one.
+  it('returns a direction-aware failure phrase, so the screen never derives "Couldn\'t not spam"', () => {
+    expect(spamActionLabel({ is_spam: false }).failure).toBe('Couldn’t mark it as spam')
+    expect(spamActionLabel({ is_spam: true }).failure).toBe('Couldn’t release it')
   })
 })
 
@@ -1415,6 +1441,20 @@ describe('shortMailboxLabel', () => {
     // shortened to nothing.
     expect(shortMailboxLabel(null)).toBe(null)
     expect(shortMailboxLabel({})).toBe(null)
+  })
+})
+
+describe('accountChipLabel', () => {
+  it('prefixes the short label with "@ "', () => {
+    expect(accountChipLabel({ label: 'Accounts - Hatch Street' })).toBe('@ Accounts')
+  })
+
+  it('falls back to the no-mailbox SENTENCE, never a chip shortened to nothing', () => {
+    // 🔴 mailbox_id is ON DELETE SET NULL: a deleted address orphans its
+    // correspondence rather than hiding it. The no-mailbox case must stay a
+    // sentence in words, the same NO_MAILBOX_LINE Details already shows.
+    expect(accountChipLabel(null)).toBe(NO_MAILBOX_LINE)
+    expect(accountChipLabel({})).toBe(NO_MAILBOX_LINE)
   })
 })
 
@@ -1491,16 +1531,53 @@ describe('audienceSummary', () => {
     expect(summary.short).toBe(summary.full)
     expect(summary.full).toMatch(/nobody to reply to/)
   })
+
+  // Three gaps no test previously went through THIS wrapper for — covered
+  // for conversationReplyAudienceMeta directly, but a regression in
+  // audienceSummary's own delegation (checking over_cap directly instead of
+  // meta.disabled, say) would not have been caught by those.
+  it('over_cap disables the summary and shows the cap sentence, not a compacted count', () => {
+    const wide = Array.from({ length: 30 }, (_, i) => `p${i}@x.com`)
+    const summary = audienceSummary(
+      { requester_email: 'a@x.test', mailbox },
+      { to: wide, mode: 'reply_all', over_cap: true, empty: false },
+    )
+    expect(summary.disabled).toBe(true)
+    expect(summary.short).toBe(summary.full)
+    expect(summary.full).toBe(
+      'This thread has 30 recipients — too many for one reply. Remove some on the web before replying.',
+    )
+  })
+
+  it('falls back to the requester address when replyRecipients is null — not an invented refusal', () => {
+    const summary = audienceSummary({ requester_email: 'a@x.test', mailbox }, null)
+    expect(summary.disabled).toBe(false)
+    expect(summary.short).toBe('To a@x.test')
+    expect(summary.full).toBe(
+      'Sends an email to a@x.test · replies come back to accounts@hatchstreetfitness.com',
+    )
+  })
+
+  it('a conversation with no requester is disabled, whatever replyRecipients says', () => {
+    const summary = audienceSummary({ requester_email: null, mailbox }, { to: ['a@x.test'] })
+    expect(summary.disabled).toBe(true)
+    expect(summary.short).toBe(summary.full)
+    expect(summary.full).toBe(
+      'This conversation has no requester address, so it cannot be replied to. You can still add an internal note.',
+    )
+  })
 })
 
 describe('composerCap', () => {
-  it('is 40% of the space above the keyboard', () => {
+  it('is 40% of the space above the keyboard, for an ordinary phone', () => {
     expect(composerCap(800)).toBe(320)
   })
 
-  it('never goes below a usable floor', () => {
+  it('never goes below a usable floor when the fraction alone would still fit', () => {
     // A short landscape window or a big keyboard must not shrink the composer
-    // to a slot nothing fits in.
+    // to a slot nothing fits in — as long as the floor itself still fits in
+    // the space actually measured (see the landscape case below for when it
+    // does not).
     expect(composerCap(300)).toBe(168)
     expect(composerCap(0)).toBe(168)
   })
@@ -1509,5 +1586,32 @@ describe('composerCap', () => {
     for (const input of [null, undefined, NaN, -10, 'tall']) {
       expect(composerCap(input)).toBe(168)
     }
+  })
+
+  // Small phone, landscape, keyboard up: availableHeight can fall well under
+  // the 168 floor (roughly 80-100pt here). The floor exists to keep the
+  // composer USABLE, not to promise a height the screen does not have — a
+  // maxHeight bigger than what onLayout actually measured is never sane, so
+  // availableHeight itself must win the clamp, even over the floor.
+  it('never returns more than availableHeight itself, even when that is under the floor', () => {
+    expect(composerCap(90)).toBe(90)
+    expect(composerCap(100)).toBe(100)
+    expect(composerCap(150)).toBe(150)
+  })
+
+  // iPad (mobile/app.config.js: supportsTablet: true). The hydrated-draft
+  // flow expands the composer WITHOUT taking focus, so no keyboard is raised
+  // and availableHeight is roughly the whole screen — 40% of THAT is
+  // uncapped unless a ceiling exists. Desktop's identical 40% never needed
+  // one because it resolves against a card already bounded at 78vh, a bound
+  // that does not carry over to a raw screen height.
+  it('never grows past a named ceiling on a tall, keyboard-less screen', () => {
+    const capped = composerCap(1200)
+    expect(capped).toBeLessThan(1200 * 0.4)
+    expect(capped).toBe(composerCap(2000)) // same ceiling regardless of how tall the screen gets
+  })
+
+  it('the ceiling never binds on an ordinary phone, where 40% already sits well under it', () => {
+    expect(composerCap(800)).toBe(320)
   })
 })
