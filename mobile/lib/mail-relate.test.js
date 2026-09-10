@@ -117,8 +117,17 @@ describe('relatedNudge', () => {
     // MAIL-READER.M1 — the banner became a chip, and a chip has no room for the
     // sentence. Same verdict, two lengths, ONE derivation: a count this
     // function would not assert in words is not asserted in a chip either.
-    expect(relatedNudge({ related: [{ id: 'a' }], open_count: 2 }).chip).toBe('1 other')
-    expect(relatedNudge({ related: [{ id: 'a' }, { id: 'b' }], open_count: 3 }).chip).toBe('2 others')
+    expect(relatedNudge({ related: [{ id: 'a' }], open_count: 1 }).chip).toBe('1 other')
+    expect(relatedNudge({ related: [{ id: 'a' }, { id: 'b' }], open_count: 2 }).chip).toBe('2 others')
+  })
+
+  it('the chip and the sentence never disagree about the count', () => {
+    // The bug the shared count exists to prevent: `related` is a capped,
+    // archived-inclusive window, so a chip counting IT could read "1 other"
+    // above a sheet whose sentence says "has 3 other open conversations".
+    const nudge = relatedNudge({ related: [{ id: 'a' }], open_count: 3 })
+    expect(nudge.chip).toBe('3 others')
+    expect(nudge.text).toContain('3 other open conversations')
   })
 
   it('has no chip when it has no nudge', () => {

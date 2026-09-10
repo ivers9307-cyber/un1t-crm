@@ -2941,7 +2941,7 @@ Body: four bands become one — subject, a meta row carrying the status chip, th
 - Modify: `mobile/app/(staff)/email/forward.jsx:61,163,448`
 - Create: `tests/mail-reader-mobile-literals.test.js`
 
-- [ ] **Step 1: Write the failing source-scan test**
+- [x] **Step 1: Write the failing source-scan test**
 
 Create `tests/mail-reader-mobile-literals.test.js`. It goes under `tests/` rather than beside the screens because `vitest.config.js` covers `tests/**` and nothing under `mobile/app`.
 
@@ -3009,12 +3009,12 @@ describe('the header and the verbs read the lib', () => {
 })
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `npx vitest run tests/mail-reader-mobile-literals.test.js`
 Expected: FAIL — `resolveSignatureHint` is still imported by all three composers.
 
-- [ ] **Step 3: Delete the signature box from the thread composer**
+- [x] **Step 3: Delete the signature box from the thread composer**
 
 In `mobile/app/(staff)/email/[conversationId].jsx`:
 - Remove `import { resolveSignatureHint } from '../../../lib/signature-hint'` (line 99).
@@ -3022,13 +3022,13 @@ In `mobile/app/(staff)/email/[conversationId].jsx`:
 - Remove the `signatureContexts` state, the effect that fetches it, and `const signatureHint = …` (line 847).
 - Remove the whole `{!isNote && signatureHint ? (…) : null}` block (lines 1578–1596), including its `MOBILE-SIGHINT.1` comment.
 
-- [ ] **Step 4: Delete it from the other two composers**
+- [x] **Step 4: Delete it from the other two composers**
 
 `compose.jsx`: remove the import (line 69), `const signatureHint = …` (lines 481–483), the `fetchSignatureContexts` call and its state, and the `{signatureHint ? (…) : null}` block (lines 672–690).
 
 `forward.jsx`: the same at lines 61, 163, and 448–466.
 
-- [ ] **Step 5: Collapse and bound the thread composer**
+- [x] **Step 5: Collapse and bound the thread composer**
 
 Add state beside the other composer state:
 
@@ -3105,7 +3105,7 @@ Then wrap the composer region. Keep the existing tombstone and empty-state guard
           )}
 ```
 
-- [ ] **Step 6: Compact the reply audience only**
+- [x] **Step 6: Compact the reply audience only**
 
 Add beside the other derivations:
 
@@ -3163,7 +3163,7 @@ Replace the audience line inside the card (lines 1405–1421) with:
 
 If the old `audience` binding is now unread, remove it; if something else reads it, leave it — `audienceSummary` calls the same derivation, so the two cannot disagree.
 
-- [ ] **Step 7: Run the literal scan and the linters**
+- [x] **Step 7: Run the literal scan and the linters**
 
 Run: `npx vitest run tests/mail-reader-mobile-literals.test.js`
 Expected: PASS.
