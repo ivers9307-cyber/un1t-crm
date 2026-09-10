@@ -2,6 +2,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { redirect, notFound } from 'next/navigation'
 import StaffForm from '@/components/StaffForm'
+import WidgetTokensCard from '@/components/WidgetTokensCard'
 import { canEditStaffMember, mapProfileLocationToAssignment } from '@/lib/staff-access'
 
 export const dynamic = 'force-dynamic'
@@ -157,6 +158,9 @@ export default async function EditStaffPage(props) {
         organizations={orgsRes?.data || []}
         orgAdminOrgIds={(orgGrantsRes?.data || []).map(g => g.organization_id)}
       />
+      <div className="mt-8">
+        <WidgetTokensCard profileId={staff.id} />
+      </div>
     </div>
   )
 }
