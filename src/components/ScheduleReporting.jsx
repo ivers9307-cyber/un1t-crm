@@ -1,8 +1,8 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Clock, Euro, CalendarOff, Users, TrendingUp, Play, Calendar, Plus, FileText, Bell, Mail, Repeat } from 'lucide-react'
-import { EmptyState, Loading } from '@/components/ui'
+import { Clock, Euro, CalendarOff, Users, TrendingUp, Play, Calendar, FileText, Bell, Mail, Repeat } from 'lucide-react'
+import { EmptyState, Loading, Modal } from '@/components/ui'
 import { toJsDay, fromJsDay, DAY_NAMES_MONDAY_FIRST } from '@/lib/report-schedule-days'
 import { formatDate } from '@/lib/roster'
 // ROSTER-FIX.6a — one failure shape and one banner across the schedule
@@ -157,6 +157,7 @@ export default function ScheduleReporting({ user }) {
         ].map(t => (
           <button
             key={t.key}
+            type="button"
             onClick={() => setView(t.key)}
             className={`flex items-center gap-1.5 px-3 py-2 rounded-lg transition-colors ${
               view === t.key ? 'bg-un1t-text text-un1t-bg' : 'bg-un1t-surface border border-un1t-border text-un1t-subtle hover:text-un1t-text'
@@ -171,12 +172,15 @@ export default function ScheduleReporting({ user }) {
       {view === 'generate' && (
         <div className="space-y-6">
           {/* Report type selector */}
-          <div className="grid grid-cols-5 gap-2">
+          {/* ROSTER-FIX.6b — five report tiles, each with an icon over a
+              two-line label, will not fit a phone in one row. */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
             {REPORT_TYPES.map(rt => {
               const Icon = rt.icon
               return (
                 <button
                   key={rt.key}
+                  type="button"
                   onClick={() => { setSelectedReport(rt.key); setReportResult(null) }}
                   className={`flex flex-col items-center gap-2 p-4 rounded-lg border text-xs transition-colors ${
                     selectedReport === rt.key
@@ -218,6 +222,7 @@ export default function ScheduleReporting({ user }) {
                   />
                 </div>
                 <button
+                  type="button"
                   onClick={generateReport}
                   disabled={generating}
                   className="flex items-center gap-1.5 px-4 py-2 bg-un1t-text text-un1t-bg text-sm font-medium rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
@@ -225,6 +230,7 @@ export default function ScheduleReporting({ user }) {
                   <Play size={14} /> {generating ? 'Generating...' : 'Generate'}
                 </button>
                 <button
+                  type="button"
                   onClick={() => setShowScheduleModal(selectedReport)}
                   className="flex items-center gap-1.5 px-4 py-2 border border-un1t-border text-sm text-un1t-subtle hover:text-un1t-text rounded-md transition-colors"
                 >
@@ -239,7 +245,7 @@ export default function ScheduleReporting({ user }) {
             <div className="space-y-4">
               {/* Summary cards */}
               {reportResult.summary && (
-                <div className="grid grid-cols-4 gap-3">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                   {Object.entries(reportResult.summary).map(([key, val]) => (
                     <div key={key} className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
                       <div className="text-xs text-un1t-subtle uppercase tracking-wider">{key.replace(/_/g, ' ')}</div>
@@ -300,7 +306,7 @@ export default function ScheduleReporting({ user }) {
                           )}
                           {selectedReport === 'utilisation' && (
                             <td className="px-4 py-3 text-right">
-                              <span className={`font-medium ${s.utilisation_pct > 100 ? 'text-red-400' : s.utilisation_pct >= 80 ? 'text-green-400' : 'text-amber-400'}`}>
+                              <span className={`font-medium ${s.utilisation_pct > 100 ? 'text-red-700' : s.utilisation_pct >= 80 ? 'text-green-700' : 'text-amber-700'}`}>
                                 {s.utilisation_pct}%
                               </span>
                             </td>
@@ -329,9 +335,9 @@ export default function ScheduleReporting({ user }) {
                       {Object.entries(reportResult.report_data.by_staff).map(([name, data]) => (
                         <tr key={name} className="border-b border-un1t-border/50 hover:bg-un1t-border/30">
                           <td className="px-4 py-3 font-medium">{name}</td>
-                          <td className="px-4 py-3 text-right text-green-400">{data.holiday || 0}</td>
-                          <td className="px-4 py-3 text-right text-red-400">{data.sick || 0}</td>
-                          <td className="px-4 py-3 text-right text-amber-400">{data.unavailable || 0}</td>
+                          <td className="px-4 py-3 text-right text-green-700">{data.holiday || 0}</td>
+                          <td className="px-4 py-3 text-right text-red-700">{data.sick || 0}</td>
+                          <td className="px-4 py-3 text-right text-amber-700">{data.unavailable || 0}</td>
                           <td className="px-4 py-3 text-right font-medium">{data.total}</td>
                         </tr>
                       ))}
@@ -392,11 +398,12 @@ export default function ScheduleReporting({ user }) {
                 return (
                   <button
                     key={r.id}
+                    type="button"
                     onClick={() => viewHistoricReport(r)}
                     className="w-full bg-un1t-surface border border-un1t-border rounded-lg p-4 flex items-center gap-4 text-left hover:border-white/20 transition-colors"
                   >
                     <div className="w-10 h-10 rounded-lg bg-blue-500/20 flex items-center justify-center shrink-0">
-                      <Icon size={20} className="text-blue-400" />
+                      <Icon size={20} className="text-blue-700" />
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="font-medium text-sm">{r.report_name}</div>
@@ -444,7 +451,7 @@ export default function ScheduleReporting({ user }) {
                     className={`bg-un1t-surface border border-un1t-border rounded-lg p-4 flex items-center gap-4 ${!sr.active ? 'opacity-50' : ''}`}
                   >
                     <div className="w-10 h-10 rounded-lg bg-purple-500/20 flex items-center justify-center shrink-0">
-                      <Icon size={20} className="text-purple-400" />
+                      <Icon size={20} className="text-purple-700" />
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="font-medium text-sm">{sr.report_name}</div>
@@ -530,13 +537,13 @@ function ScheduleReportModal({ reportType, locationId, onClose, onSave }) {
   }
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-un1t-surface border border-un1t-border rounded-xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold">Schedule Recurring Report</h3>
-          <button onClick={onClose} className="text-un1t-subtle hover:text-un1t-text"><Plus size={18} className="rotate-45" /></button>
-        </div>
-
+    // ROSTER-FIX.6b — the close control used to be a Plus icon rotated 45°
+    // with no accessible name at all; the primitive's own labelled close
+    // button replaces it.
+    <Modal open onClose={onClose} title="Schedule Recurring Report" dismissOnBackdrop={false}>
+      <div>
+        {/* ROSTER-FIX.6a — a failed save used to alert(); it reports in place
+            now, inside the dialog that still holds the operator's form. */}
         {saveError && (
           <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-sm rounded-lg p-3 mb-4">
             {saveError}
@@ -618,6 +625,7 @@ function ScheduleReportModal({ reportType, locationId, onClose, onSave }) {
         </div>
 
         <button
+          type="button"
           onClick={handleSave}
           disabled={!name || saving}
           className="w-full mt-5 bg-un1t-text text-un1t-bg font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
@@ -625,6 +633,6 @@ function ScheduleReportModal({ reportType, locationId, onClose, onSave }) {
           {saving ? 'Saving...' : 'Create Schedule'}
         </button>
       </div>
-    </div>
+    </Modal>
   )
 }

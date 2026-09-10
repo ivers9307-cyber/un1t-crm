@@ -15,6 +15,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('@/lib/auth', () => ({
   getCurrentUser: vi.fn(),
   getUserLocationIds: (u) => (u?.locations || []).map((l) => l.id),
+  // ROSTER-FIX.6c — a spy, not a re-implementation: what matters here is that
+  // the route CONSULTS the shared guard for a caller-supplied location and
+  // returns its refusal untouched. The guard's own rules are pinned in
+  // src/lib/auth.test.js.
+  assertLocationAccess: vi.fn(() => null),
 }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/staff', () => ({ listStaffForUser: vi.fn() }))
@@ -26,7 +31,7 @@ vi.mock('@/lib/staff-write', () => ({
 }))
 
 import { POST, GET } from './route.js'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 
 const LOC = 'a0000000-0000-0000-0000-000000000001'
@@ -215,5 +220,71 @@ describe('GET /api/staff — ?fields=picker', () => {
     createServerClient.mockReturnValue({})
     await GET({ url: 'http://x/api/staff', headers: { get: () => '' } })
     expect(listStaffForUser).toHaveBeenCalledWith(expect.objectContaining({ fields: null }))
+  })
+})
+
+// ROSTER-FIX.6c — `?location_id=` was accepted and IGNORED. listStaffForUser
+// scopes to every location the caller holds, so a manager at two studios asking
+// for one studio's coaches was handed both studios' — and the roster's
+// colleague picker had been sending the param all along. The narrowing itself
+// (only that location's staff come back) is pinned against the real link query
+// in src/lib/staff.test.js; what belongs here is that the route validates the
+// param, guards it, and hands it on.
+describe('GET /api/staff — ?location_id=', () => {
+  const OTHER = 'a0000000-0000-0000-0000-000000000002'
+
+  beforeEach(() => {
+    getCurrentUser.mockResolvedValue({ id: 'u', role: 'manager', locations: [{ id: LOC }, { id: OTHER }] })
+    createServerClient.mockReturnValue({})
+  })
+
+  it('scopes the read to the requested location', async () => {
+    const { listStaffForUser } = await import('@/lib/staff')
+    listStaffForUser.mockResolvedValue({ ok: true, data: [] })
+    const res = await GET({ url: `http://x/api/staff?location_id=${LOC}`, headers: { get: () => '' } })
+    expect(res.status).toBe(200)
+    expect(listStaffForUser).toHaveBeenCalledWith(expect.objectContaining({ locationId: LOC }))
+    expect(assertLocationAccess).toHaveBeenCalledWith(expect.anything(), LOC)
+  })
+
+  it('carries the picker shape and the location together, the way the picker asks', async () => {
+    const { listStaffForUser } = await import('@/lib/staff')
+    listStaffForUser.mockResolvedValue({ ok: true, data: [] })
+    await GET({ url: `http://x/api/staff?location_id=${LOC}&fields=picker`, headers: { get: () => '' } })
+    expect(listStaffForUser).toHaveBeenCalledWith(
+      expect.objectContaining({ locationId: LOC, fields: 'picker' })
+    )
+  })
+
+  it('is unchanged when the param is absent: every location, no guard call', async () => {
+    const { listStaffForUser } = await import('@/lib/staff')
+    listStaffForUser.mockResolvedValue({ ok: true, data: [] })
+    const res = await GET({ url: 'http://x/api/staff', headers: { get: () => '' } })
+    expect(res.status).toBe(200)
+    expect(listStaffForUser).toHaveBeenCalledWith(expect.objectContaining({ locationId: null }))
+    expect(assertLocationAccess).not.toHaveBeenCalled()
+  })
+
+  it('403s a location the caller cannot access, before any read', async () => {
+    const { listStaffForUser } = await import('@/lib/staff')
+    listStaffForUser.mockResolvedValue({ ok: true, data: [] })
+    assertLocationAccess.mockReturnValueOnce(
+      new Response(JSON.stringify({ success: false, error: 'Forbidden' }), { status: 403 })
+    )
+    const res = await GET({
+      url: 'http://x/api/staff?location_id=b0000000-0000-0000-0000-000000000009',
+      headers: { get: () => '' },
+    })
+    expect(res.status).toBe(403)
+    expect(listStaffForUser).not.toHaveBeenCalled()
+  })
+
+  it('400s a malformed location_id without asking the guard', async () => {
+    const { listStaffForUser } = await import('@/lib/staff')
+    listStaffForUser.mockResolvedValue({ ok: true, data: [] })
+    const res = await GET({ url: 'http://x/api/staff?location_id=not-a-uuid', headers: { get: () => '' } })
+    expect(res.status).toBe(400)
+    expect(assertLocationAccess).not.toHaveBeenCalled()
+    expect(listStaffForUser).not.toHaveBeenCalled()
   })
 })

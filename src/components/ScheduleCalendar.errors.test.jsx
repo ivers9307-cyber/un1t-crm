@@ -55,11 +55,19 @@ describe('ScheduleCalendar load failures (ROSTER-FIX.6a)', () => {
     global.fetch = vi.fn(async () => { throw new TypeError('Failed to fetch') })
     render(<ScheduleCalendar user={user} />)
 
-    await waitFor(() => expect(screen.getByText('Could not load the roster')).toBeTruthy())
-    expect(screen.queryByText(/Loading roster/)).toBeNull()
+    // ROSTER-FIX.6a-11 — assert the WHOLE contract inside one waitFor. The
+    // banner and the cleared loading flag are two setState calls (catch then
+    // finally), so a poll that lands between them saw the banner with
+    // "Loading roster..." still on screen and failed on a machine under load.
+    // Both conditions together still fail if loading never clears, which is
+    // the hang this test exists to catch.
+    await waitFor(() => {
+      expect(screen.getByText('Could not load the roster')).toBeTruthy()
+      expect(screen.queryByText(/Loading roster/)).toBeNull()
+    })
 
     fireEvent.click(screen.getByLabelText('Dismiss'))
-    expect(screen.queryByText('Could not load the roster')).toBeNull()
+    await waitFor(() => expect(screen.queryByText('Could not load the roster')).toBeNull())
   })
 
   it('names the server error and retries on demand', async () => {

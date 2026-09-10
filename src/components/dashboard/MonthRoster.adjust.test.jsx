@@ -10,7 +10,7 @@
 // the "(adjusted)" marker, so a coach can still SEE a manager moved them.
 
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, fireEvent, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react'
 import MonthRoster from './MonthRoster'
 
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }))
@@ -62,5 +62,23 @@ describe('MonthRoster shift action menu — a coach cannot adjust their own hour
   it('tells the coach who sets the hours', () => {
     openTheShiftMenu()
     expect(screen.getByText(/set by your manager/i)).toBeTruthy()
+  })
+})
+
+// ROSTER-FIX.6c — the colleague picker's request, which carried two defects on
+// one line: it asked for the default shape (an admin caller's browser got `*`
+// off profiles, pay columns included, to render a list of names) and it asked
+// across every location the caller holds, so a manager at two studios was
+// offered coaches who cannot work this shift.
+describe('MonthRoster colleague picker — what it asks the server for', () => {
+  it('asks for the pay-free shape, for this shift\'s location only', async () => {
+    global.fetch = vi.fn(async () => ({ ok: true, json: async () => ({ success: true, data: [] }) }))
+    openTheShiftMenu()
+    fireEvent.click(screen.getByText(/swap with a specific coach/i))
+
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(1))
+    const url = global.fetch.mock.calls[0][0]
+    expect(url).toContain('location_id=loc-1')
+    expect(url).toContain('fields=picker')
   })
 })

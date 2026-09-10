@@ -416,6 +416,24 @@ describe('fetchPersonalDashboardData — draft shifts (D1)', () => {
     expect(res.success).toBe(true)
     expect(res.data.monthShifts.map((s) => s.id)).toEqual(['pub'])
   })
+
+  // ROSTER-SUPERSEDE.1 — same derivation as src/lib/roster-read.js: a block
+  // on a superseded roster reads as unpublished. Unreachable by construction
+  // (a roster is superseded only once it owns zero blocks) and pinned anyway,
+  // because this is the query behind every coach's Today screen.
+  it('drops a shift whose roster was SUPERSEDED', async () => {
+    const db = makePersonalDb({
+      shift_assignments: {
+        data: [
+          { id: 'pub', profile_id: 'p1', start_time_override: null, end_time_override: null, status: 'scheduled', shift_blocks: block('published') },
+          { id: 'gone', profile_id: 'p1', start_time_override: null, end_time_override: null, status: 'scheduled', shift_blocks: block('superseded') },
+        ],
+        error: null,
+      },
+    })
+    const res = await fetchPersonalDashboardData(db, 'p1')
+    expect(res.data.monthShifts.map((s) => s.id)).toEqual(['pub'])
+  })
 })
 
 // ROSTER-FIX.1 (D2) — the unstaffed-blocks alert used to select

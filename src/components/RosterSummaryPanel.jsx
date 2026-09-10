@@ -5,6 +5,13 @@
 // rosters from going live.
 //
 // Visible to managers + master only (caller controls render).
+//
+// ROSTER-FIX.6c — the "pay data missing for X" footnote is gone with the
+// `canSeePay` prop that gated it. It read hourly_rate / annual_salary off the
+// staff list, and the calendar now loads that list as the pay-free picker
+// shape, so the check would have flagged every single coach. The budget it
+// warned about is computed on the server (contractorSpend) either way.
+//
 // Two halves:
 //   - Per-coach FTE utilisation bars (allocated / contracted)
 //   - Contractor euro spend for the focused month vs the
@@ -17,7 +24,7 @@
 // Component, so this gets implicit-client-bundled with the same
 // end result. Drops one explicit boundary directive.
 
-import { TrendingUp, TrendingDown, AlertTriangle, Wallet } from 'lucide-react'
+import { TrendingUp, TrendingDown, Wallet } from 'lucide-react'
 import { summarizeWeek } from '@/lib/roster-summary'
 
 // Text colours use the -700 ramp so they read clearly against
@@ -59,12 +66,6 @@ export default function RosterSummaryPanel({
   // eslint-disable-next-line no-unused-vars
   monthStart, location,
   contractorSpend,
-  // Head_coach + manager-but-not-admin can't see hourly_rate
-  // client-side, so the per-coach "pay data missing" warning would
-  // fire on every coach uselessly. Caller passes `canSeePay=false`
-  // to suppress it for those roles. Defaults true for backwards
-  // compat.
-  canSeePay = true,
 }) {
   const week = summarizeWeek({
     blocks,
@@ -139,17 +140,6 @@ export default function RosterSummaryPanel({
                 </div>
               )
             })}
-          </div>
-        )}
-
-        {canSeePay && week.incompleteProfileNames.length > 0 && (
-          <div className="mt-3 pt-3 border-t border-un1t-border flex items-start gap-2 text-[11px] text-amber-700">
-            <AlertTriangle size={12} className="mt-0.5 flex-shrink-0 text-amber-600" />
-            <span>
-              Pay data missing for {week.incompleteProfileNames.slice(0, 3).join(', ')}
-              {week.incompleteProfileNames.length > 3 && ` and ${week.incompleteProfileNames.length - 3} more`}
-              {' — those shifts cost €0 in the budget calc.'}
-            </span>
           </div>
         )}
       </div>

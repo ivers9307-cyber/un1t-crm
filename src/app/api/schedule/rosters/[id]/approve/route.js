@@ -15,7 +15,12 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { notifyStaffOfPublish, publishNotifyRowsForBlocks } from '@/lib/roster-notify'
-import { findConflictingPublishedRosters } from '@/lib/roster-publish'
+import {
+  findConflictingPublishedRosters,
+  releasePublishedRostersFor,
+  restorePublishedRosters,
+  supersedeSwallowedRosters,
+} from '@/lib/roster-publish'
 import { logWarn } from '@/lib/log'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { APPROVAL_CATEGORY_PERMISSION } from '@shared/permissions'
@@ -89,20 +94,78 @@ export async function POST(_request, props) {
 
   const nowIso = new Date().toISOString()
 
-  const { data: updated, error: updErr } = await db
-    .from('rosters')
-    .update({
-      status: 'published',
-      published_by: roster.published_by || roster.created_by,
-      published_at: nowIso,
-      over_budget_approval_by: user.id,
-      over_budget_approval_at: nowIso,
+  // ROSTER-SUPERSEDE.1 — phase 1, before the flip. Approving is a publish, and
+  // mig 602's exclusion constraint judges the draft→published UPDATE exactly
+  // as it judges an INSERT, so the rosters this period swallows have to be
+  // stood down first. excludeRosterId keeps this draft out of its own release
+  // set (it is not published, so it would not be selected anyway — the
+  // exclusion says so rather than relying on that).
+  let released = []
+  let updated = null
+
+  // ROSTER-SUPERSEDE.1 — ONE restore path for every way the flip can fail:
+  // superseded with no successor, the released rosters still own their blocks
+  // and every one would read as UNPUBLISHED to its coach.
+  async function restoreReleased(what) {
+    if (released.length === 0) return
+    const { error: restoreErr } = await restorePublishedRosters(db, released)
+    if (restoreErr) {
+      logWarn('rosters/approve', `${what} AND the superseded rosters could not be restored`, {
+        err: restoreErr.message,
+        location_id: roster.location_id,
+        period_start: roster.period_start,
+        period_end: roster.period_end,
+        stranded: released.map((r) => r.id),
+      })
+    }
+  }
+
+  // ROSTER-SUPERSEDE.1 — the release→flip span is wrapped because a THROWN
+  // error (a PostgREST 5xx, a fetch failure, the function timing out) never
+  // produces an error object, so the `updErr` branch never runs and the
+  // rosters stood down a moment ago would stay superseded FOREVER: a transient
+  // blip would silently unpublish a coach's whole week.
+  try {
+    const rel = await releasePublishedRostersFor(db, {
+      locationId: roster.location_id,
+      periodStart: roster.period_start,
+      periodEnd: roster.period_end,
+      excludeRosterId: roster.id,
     })
-    .eq('id', params.id)
-    .select()
-    .single()
-  if (updErr) {
-    return NextResponse.json({ success: false, error: updErr.message }, { status: 400 })
+    if (rel.error) {
+      // Nothing has changed yet; refusing beats a raw 23P01 on the flip below.
+      return NextResponse.json({
+        success: false,
+        error: `Could not stand down the rosters this approval replaces: ${rel.error.message}`,
+      }, { status: 400 })
+    }
+    released = rel.released
+
+    // ROSTER-SUPERSEDE.1 — a flip, not an insert: this row already carries the
+    // requested_period_* the publish route wrote when the draft was created,
+    // and approving does not change what was asked for, so there is nothing to
+    // preserve here.
+    const { data: flipped, error: updErr } = await db
+      .from('rosters')
+      .update({
+        status: 'published',
+        published_by: roster.published_by || roster.created_by,
+        published_at: nowIso,
+        over_budget_approval_by: user.id,
+        over_budget_approval_at: nowIso,
+      })
+      .eq('id', params.id)
+      .select()
+      .single()
+    if (updErr) {
+      // The approval never happened, so put the released rosters back.
+      await restoreReleased('approval failed')
+      return NextResponse.json({ success: false, error: updErr.message }, { status: 400 })
+    }
+    updated = flipped
+  } catch (e) {
+    await restoreReleased('approval threw')
+    return NextResponse.json({ success: false, error: e?.message || String(e) }, { status: 500 })
   }
 
   // RETIRE-SHIFTS-MIRROR.6 — capture the blocks NEWLY being published
@@ -139,11 +202,47 @@ export async function POST(_request, props) {
     // returns. The roster row is already published, so rolling back isn't on
     // offer; the operator needs to know the blocks didn't join it (untagged
     // blocks read as belonging to no roster) rather than see a bare success.
+    //
+    // ROSTER-SUPERSEDE.1 — and the rosters this approval replaced are already
+    // stood down, so their shifts read as unpublished until the period is
+    // published again. Restoring them is not on offer either: this roster is
+    // published over the same days and the constraint would refuse a second.
+    const stranded = released.length > 0
+      ? ' The rosters it replaces have already been stood down, so those shifts read as unpublished until you publish this period again.'
+      : ''
+    // ROSTER-SUPERSEDE.1 — the HTTP response reaches whoever clicked approve,
+    // and only them. Nobody watching the logs learns that a location has a
+    // period reading as unpublished, so say it here too, naming the rows a
+    // human has to re-publish.
+    if (released.length > 0) {
+      logWarn('rosters/approve', 'block tagging failed after the replaced rosters were stood down; that period now reads as unpublished', {
+        err: tagErr.message,
+        location_id: roster.location_id,
+        period_start: roster.period_start,
+        period_end: roster.period_end,
+        roster_id: roster.id,
+        stranded: released.map((r) => r.id),
+      })
+    }
     return NextResponse.json({
       success: true,
       data: updated,
-      warning: `Roster approved but block tagging failed: ${tagErr.message}`,
+      warning: `Roster approved but block tagging failed: ${tagErr.message}.${stranded}`,
     })
+  }
+
+  // ROSTER-SUPERSEDE.1 — phase 2, AFTER the re-tag: the recount inside reads
+  // this roster as owning nothing until its blocks carry its id, and it would
+  // otherwise supersede itself. The helper excludes it explicitly too.
+  const swallow = await supersedeSwallowedRosters(db, {
+    locationId: roster.location_id,
+    newRosterId: roster.id,
+    periodStart: roster.period_start,
+    periodEnd: roster.period_end,
+    releasedIds: released.map((r) => r.id),
+  })
+  if (swallow.warning) {
+    logWarn('rosters/approve', 'supersede of swallowed rosters incomplete', { err: swallow.warning, roster_id: roster.id })
   }
 
   // Coaches on the newly-published blocks. Without this, an owner-approved
@@ -162,5 +261,11 @@ export async function POST(_request, props) {
     logWarn('rosters/approve', `staff notify failed`, { err: e })
   }
 
-  return NextResponse.json({ success: true, data: updated })
+  return NextResponse.json({
+    success: true,
+    data: updated,
+    // ROSTER-SUPERSEDE.1 — surfaced, not swallowed: the approval DID happen,
+    // but an older roster may still be claiming days it owns no blocks on.
+    ...(swallow.warning ? { warning: `Roster approved, but standing down the rosters it replaces did not fully complete: ${swallow.warning}` } : {}),
+  })
 }

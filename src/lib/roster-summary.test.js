@@ -1,7 +1,8 @@
 // Roster v2 phase 4 — summary helper tests.
 
 import { describe, it, expect } from 'vitest'
-import { summarizeWeek, summarizeMonth, leaveHoursInWeek } from './roster-summary'
+import { summarizeWeek, summarizeMonth, leaveHoursInWeek, blocksToShiftRows } from './roster-summary'
+import { shiftHours } from './payroll'
 import { formatDate } from './roster'
 
 // Local-TZ-safe ISO date for a day offset from `base`. Mirrors how
@@ -17,7 +18,10 @@ function isoDay(base, offset = 0) {
   return formatDate(d)
 }
 
-// Helper: build a block with N assigned coaches.
+// Helper: build a block with N assigned coaches. A coach entry is either a
+// profile id, or an object carrying whatever the test needs on the assignment
+// row itself ({ profile_id, status, start_time_override, end_time_override }) —
+// ROSTER-HOURS.1 needs the per-assignment window.
 function block({ id, date, start, end, max = 15, coaches = [] }) {
   return {
     id,
@@ -27,11 +31,14 @@ function block({ id, date, start, end, max = 15, coaches = [] }) {
     end_time: end,
     max_coaches: max,
     shift_templates: { start_time: start, end_time: end },
-    shift_assignments: coaches.map((profile_id, i) => ({
-      id: `a-${id}-${i}`,
-      profile_id,
-      profiles: { id: profile_id, full_name: profile_id },
-    })),
+    shift_assignments: coaches.map((coach, i) => {
+      const a = typeof coach === 'string' ? { profile_id: coach } : coach
+      return {
+        id: `a-${id}-${i}`,
+        ...a,
+        profiles: { id: a.profile_id, full_name: a.profile_id },
+      }
+    }),
   }
 }
 
@@ -125,6 +132,35 @@ describe('summarizeWeek', () => {
     const r = summarizeWeek({ blocks, staff: [fteSarah], weekStart })
     expect(r.fte[0].allocated_hours).toBe(29)
     expect(r.fte[0].status).toBe('on_target')
+  })
+
+  // ROSTER-HOURS.1 — a coach cut back to part of a block is credited the
+  // window on their OWN assignment, not the block's. Before this the panel
+  // showed a full-time week for a coach who worked half of it.
+  it("counts an FTE coach's per-assignment window, not the whole block", () => {
+    const blocks = [
+      // 8h block, but Sarah is only on it 09:00-13:00.
+      block({
+        id: 'b1', date: '2026-05-04', start: '09:00', end: '17:00',
+        coaches: [{ profile_id: 'sarah', start_time_override: '09:00', end_time_override: '13:00' }],
+      }),
+    ]
+    const r = summarizeWeek({ blocks, staff: [fteSarah], weekStart })
+    expect(r.fte[0].allocated_hours).toBe(4)
+    expect(r.fte[0].utilisation_pct).toBe(13) // 4/30
+  })
+
+  // The other half of the same precedence: an assignment that overrides only
+  // one end of the window keeps the BLOCK's time on the other end.
+  it('falls back to the block window on the side the assignment leaves alone', () => {
+    const blocks = [
+      block({
+        id: 'b1', date: '2026-05-04', start: '09:00', end: '17:00',
+        coaches: [{ profile_id: 'sarah', end_time_override: '12:00' }],
+      }),
+    ]
+    const r = summarizeWeek({ blocks, staff: [fteSarah], weekStart })
+    expect(r.fte[0].allocated_hours).toBe(3)
   })
 
   // ROSTER-FIX.1 — a cancelled assignment is a dropped shift: it must not
@@ -408,6 +444,24 @@ describe('summarizeMonth', () => {
     expect(r.utilisationPct).toBeNull()
   })
 
+  // ROSTER-HOURS.1 — contractor euros follow the per-assignment window too.
+  // This figure gates the over-budget confirmation on POST /api/schedule/rosters,
+  // so billing the whole block for a coach who worked half of it asked an owner
+  // to approve an overrun that was never real.
+  it("bills a contractor's per-assignment window, not the whole block", () => {
+    const blocks = [
+      // 8h block; Dan is on it 09:00-12:00 → 3h x EUR 35 = EUR 105, not 8h x 35 = EUR 280.
+      block({
+        id: 'b1', date: '2026-05-04', start: '09:00', end: '17:00',
+        coaches: [{ profile_id: 'dan', start_time_override: '09:00', end_time_override: '12:00' }],
+      }),
+    ]
+    const r = summarizeMonth({ blocks, staff: [contractorDan], referenceDate: refMay, monthlyBudgetEur: 200 })
+    expect(r.contractorCostEur).toBe(105)
+    expect(r.overBudget).toBe(false)
+    expect(r.remainingEur).toBe(95)
+  })
+
   it('exposes FTE implicit cost separately (context, not budget input)', () => {
     const blocks = [
       block({ id: 'b1', date: '2026-05-04', start: '09:00', end: '13:00', coaches: ['sarah'] }),
@@ -417,5 +471,102 @@ describe('summarizeMonth', () => {
     expect(r.fteImplicitCostEur).toBe(100)
     // FTE doesn't hit the contractor budget
     expect(r.contractorCostEur).toBe(0)
+  })
+})
+
+// ROSTER-FIX.6c — blocksToShiftRows is exported now: ScheduleCalendar carried
+// its own copy of it (flattenBlocksToShifts) and the new week-cost endpoint
+// needs the same rows server-side. The two copies were NOT identical and the
+// calendar's was the correct one, so that is the behaviour pinned here.
+describe('blocksToShiftRows', () => {
+  const b = {
+    id: 'b1', location_id: 'loc1', template_id: 't1', block_date: '2026-05-06',
+    start_time: '09:00:00', end_time: '11:00:00', max_coaches: 3, notes: 'block note',
+    shift_templates: { id: 't1', name: 'HIIT', start_time: '09:00:00', end_time: '11:00:00', role_label: 'Coach' },
+    shift_assignments: [
+      { id: 'a1', profile_id: 'p1', status: 'scheduled', notes: null, profiles: { full_name: 'One' } },
+      { id: 'a2', profile_id: 'p2', status: 'cancelled', profiles: { full_name: 'Two' } },
+    ],
+  }
+
+  it('emits one row per LIVE assignment, carrying the ids the swap flow needs', () => {
+    const rows = blocksToShiftRows([b])
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      id: 'a1',
+      block_id: 'b1',
+      location_id: 'loc1',
+      profile_id: 'p1',
+      shift_template_id: 't1',
+      shift_date: '2026-05-06',
+      block_date: '2026-05-06',
+      role_label: 'Coach',
+      notes: 'block note',
+      status: 'scheduled',
+    })
+  })
+
+  it('leaves the override null when the block still matches its template', () => {
+    const [row] = blocksToShiftRows([b])
+    expect(row.start_time_override).toBeNull()
+    expect(row.end_time_override).toBeNull()
+    expect(shiftHours(row)).toBe(2)
+  })
+
+  it('bills the BLOCK window, not the template, when a template edit left them apart', () => {
+    // Template edits never touch PAST blocks (templates/[id]/route.js), so a
+    // block that has already happened legitimately keeps the hours it was
+    // worked. Billing the template's new times would rewrite history.
+    const moved = { ...b, shift_templates: { ...b.shift_templates, start_time: '10:00:00', end_time: '11:00:00' } }
+    const [row] = blocksToShiftRows([moved])
+    expect(row.start_time_override).toBe('09:00:00')
+    expect(shiftHours(row)).toBe(2)
+  })
+
+  // ROSTER-HOURS.1 — the assignment's OWN window is the top of the precedence
+  // ladder, matching roster-publish.js (ROSTER-FIX.4 task 4.5) and payroll's
+  // shiftHours: assignment override -> block window -> template.
+  it("prefers the ASSIGNMENT's own window over the block's", () => {
+    const partial = {
+      ...b,
+      shift_assignments: [
+        {
+          id: 'a1', profile_id: 'p1', status: 'scheduled',
+          start_time_override: '09:30:00', end_time_override: '10:00:00',
+          profiles: { full_name: 'One' },
+        },
+      ],
+    }
+    const [row] = blocksToShiftRows([partial])
+    expect(row.start_time_override).toBe('09:30:00')
+    expect(row.end_time_override).toBe('10:00:00')
+    expect(shiftHours(row)).toBe(0.5)
+  })
+
+  it('keeps the block-vs-template synthetic on the side the assignment leaves null', () => {
+    // Block 08:00-11:00 against a 09:00-11:00 template (a template edit that
+    // never rewrote this block), and the coach leaves at 10:00.
+    const mixed = {
+      ...b,
+      start_time: '08:00:00',
+      shift_assignments: [
+        {
+          id: 'a1', profile_id: 'p1', status: 'scheduled',
+          start_time_override: null, end_time_override: '10:00:00',
+          profiles: { full_name: 'One' },
+        },
+      ],
+    }
+    const [row] = blocksToShiftRows([mixed])
+    expect(row.start_time_override).toBe('08:00:00')
+    expect(row.end_time_override).toBe('10:00:00')
+    expect(shiftHours(row)).toBe(2)
+  })
+
+  it('tolerates a block with no template join and no assignments', () => {
+    expect(blocksToShiftRows(null)).toEqual([])
+    expect(blocksToShiftRows([{ id: 'x', block_date: '2026-05-06', start_time: '08:00:00', end_time: '09:00:00' }])).toEqual([])
+    const adhoc = { id: 'x', block_date: '2026-05-06', start_time: '08:00:00', end_time: '09:00:00', shift_assignments: [{ id: 'a', profile_id: 'p1' }] }
+    expect(shiftHours(blocksToShiftRows([adhoc])[0])).toBe(1)
   })
 })

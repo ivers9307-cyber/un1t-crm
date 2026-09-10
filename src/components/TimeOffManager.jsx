@@ -6,6 +6,7 @@ import { CalendarOff, Plus, Check, X, Palmtree, ThermometerSun, Ban, Wallet, Cir
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { TIME_OFF_TYPES } from '@shared/time-off'
+import Modal from '@/components/ui/Modal'
 // ROSTER-FIX.6a — one failure shape and one banner across the schedule
 // screens, so no call site can quietly forget to check the response.
 import ScheduleErrorBanner from './schedule/ScheduleErrorBanner'
@@ -182,6 +183,7 @@ export default function TimeOffManager({ user }) {
           </p>
         </div>
         <button
+          type="button"
           onClick={() => setShowForm(true)}
           className="flex items-center gap-1.5 text-sm px-4 py-2 rounded-lg bg-un1t-text text-un1t-bg font-medium hover:bg-un1t-accent transition-colors"
         >
@@ -191,22 +193,24 @@ export default function TimeOffManager({ user }) {
 
       {/* Allowance Card */}
       {allowance && (
-        <div className="grid grid-cols-4 gap-3 mb-6">
+        // ROSTER-FIX.6b — four allowance cards side by side put a 2xl number
+        // in a ~85px column on a phone. Two up, four from md.
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
           <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
             <div className="text-xs text-un1t-subtle uppercase tracking-wider">Total Allowance</div>
             <div className="text-2xl font-bold mt-1">{allowance.total_days} <span className="text-sm text-un1t-subtle">days</span></div>
           </div>
           <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
             <div className="text-xs text-un1t-subtle uppercase tracking-wider">Used</div>
-            <div className="text-2xl font-bold mt-1 text-red-400">{allowance.used_days} <span className="text-sm text-un1t-subtle">days</span></div>
+            <div className="text-2xl font-bold mt-1 text-red-700">{allowance.used_days} <span className="text-sm text-un1t-subtle">days</span></div>
           </div>
           <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
             <div className="text-xs text-un1t-subtle uppercase tracking-wider">Carried Over</div>
-            <div className="text-2xl font-bold mt-1 text-blue-400">{allowance.carried_over} <span className="text-sm text-un1t-subtle">days</span></div>
+            <div className="text-2xl font-bold mt-1 text-blue-700">{allowance.carried_over} <span className="text-sm text-un1t-subtle">days</span></div>
           </div>
           <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
             <div className="text-xs text-un1t-subtle uppercase tracking-wider">Remaining</div>
-            <div className="text-2xl font-bold mt-1 text-green-400">{allowance.remaining} <span className="text-sm text-un1t-subtle">days</span></div>
+            <div className="text-2xl font-bold mt-1 text-green-700">{allowance.remaining} <span className="text-sm text-un1t-subtle">days</span></div>
           </div>
         </div>
       )}
@@ -215,6 +219,7 @@ export default function TimeOffManager({ user }) {
       <div className="flex items-center justify-between mb-4">
         <div className="flex bg-un1t-surface border border-un1t-border rounded-lg overflow-hidden text-xs">
           <button
+            type="button"
             onClick={() => setTab('my')}
             className={`px-3 py-2 transition-colors ${tab === 'my' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'}`}
           >
@@ -222,6 +227,7 @@ export default function TimeOffManager({ user }) {
           </button>
           {isManager && (
             <button
+              type="button"
               onClick={() => setTab('team')}
               className={`px-3 py-2 transition-colors ${tab === 'team' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'}`}
             >
@@ -234,6 +240,7 @@ export default function TimeOffManager({ user }) {
           {['all', 'pending', 'approved', 'rejected'].map(f => (
             <button
               key={f}
+              type="button"
               onClick={() => setFilter(f)}
               className={`px-3 py-1.5 rounded-full transition-colors capitalize ${filter === f ? 'bg-un1t-text text-un1t-bg' : 'bg-un1t-surface border border-un1t-border text-un1t-subtle hover:text-un1t-text'}`}
             >
@@ -269,6 +276,10 @@ export default function TimeOffManager({ user }) {
             const isOwn = req.profile_id === user.id
             const canApprove = isManager && req.status === 'pending' && !isOwn
             const canCancel = isOwn && req.status === 'pending'
+            // ROSTER-FIX.6b — the approve/reject/cancel controls are icon-only
+            // and repeat down the list, so "Approve" alone would read as the
+            // same control fifteen times. Name the row they act on.
+            const requestLabel = `${typeConf.label} request${req.profiles?.full_name ? ` from ${req.profiles.full_name}` : ''}`
 
             const isFocused = req.id === focusId
             return (
@@ -324,18 +335,20 @@ export default function TimeOffManager({ user }) {
                         onClick={() => handleApprove(req.id)}
                         disabled={!!actingId}
                         className="p-2 rounded-lg bg-green-500/20 hover:bg-green-500/30 text-green-700 disabled:opacity-50 transition-colors"
+                        aria-label={`Approve ${requestLabel}`}
                         title="Approve"
                       >
-                        <Check size={16} />
+                        <Check size={16} aria-hidden="true" />
                       </button>
                       <button
                         type="button"
                         onClick={() => handleReject(req.id)}
                         disabled={!!actingId}
                         className="p-2 rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-700 disabled:opacity-50 transition-colors"
+                        aria-label={`Reject ${requestLabel}`}
                         title="Reject"
                       >
-                        <X size={16} />
+                        <X size={16} aria-hidden="true" />
                       </button>
                     </>
                   )}
@@ -343,8 +356,9 @@ export default function TimeOffManager({ user }) {
                     <button
                       type="button"
                       onClick={() => handleCancel(req.id)}
+                      aria-label={`Cancel ${requestLabel}`}
                       disabled={!!actingId}
-                      className="text-xs px-3 py-1.5 rounded-lg border border-un1t-border text-un1t-subtle hover:text-red-400 hover:border-red-400/30 disabled:opacity-50 transition-colors"
+                      className="text-xs px-3 py-1.5 rounded-lg border border-un1t-border text-un1t-subtle hover:text-red-700 hover:border-red-500/30 disabled:opacity-50 transition-colors"
                     >
                       Cancel
                     </button>
@@ -376,6 +390,8 @@ function TimeOffFormModal({ user, allowance, onClose, onSubmit }) {
   const [reason, setReason] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
+
+  const dirty = !!(startDate || endDate || reason.trim())
 
   const totalDays = startDate && endDate
     ? Math.max(1, Math.round((new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24)) + 1)
@@ -414,13 +430,10 @@ function TimeOffFormModal({ user, allowance, onClose, onSubmit }) {
   }
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-un1t-surface border border-un1t-border rounded-xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold">Request Time Off</h3>
-          <button onClick={onClose} className="text-un1t-subtle hover:text-un1t-text"><X size={18} /></button>
-        </div>
-
+    // ROSTER-FIX.6b — once any field is filled the backdrop stops dismissing:
+    // this form is long enough that losing it to a stray click is a real cost.
+    <Modal open onClose={onClose} title="Request Time Off" dismissOnBackdrop={!dirty}>
+      <div>
         {error && (
           <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-sm rounded-lg p-3 mb-4">
             {error}
@@ -492,7 +505,7 @@ function TimeOffFormModal({ user, allowance, onClose, onSubmit }) {
                 <span className="ml-2">
                   · {allowance.remaining} remaining
                   {totalDays > allowance.remaining && (
-                    <span className="text-red-400 ml-1">(exceeds balance)</span>
+                    <span className="text-red-700 ml-1">(exceeds balance)</span>
                   )}
                 </span>
               )}
@@ -523,6 +536,6 @@ function TimeOffFormModal({ user, allowance, onClose, onSubmit }) {
           </p>
         </form>
       </div>
-    </div>
+    </Modal>
   )
 }
