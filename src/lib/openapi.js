@@ -6760,13 +6760,119 @@ registry.registerPath({
   method: 'get',
   path: '/api/home-queue/count',
   tags: ['Dashboard'],
-  security: [{ CookieAuth: [] }],
-  summary: 'Count of needs-attention items across approvals + tickets + inbox (nav badge)',
-  description: 'Cheap sum of the same three TRUE counts GET /api/home-queue reports — no approval items, ticket subjects or conversation contacts are ever fetched. Every per-source gate mirrors the equivalent count route exactly; a session ineligible for a source contributes 0 for it, the same posture as /api/whatsapp/unread-count. HOME.3\'s sidebar retirement task made this the ONE count endpoint Sidebar.jsx polled at the time. NAV-BADGE.1 later restored /api/approvals/count as Approvals\' own poller, and the sidebar no longer polls THIS endpoint at all — the other four per-source badge routes it used to poll (/api/issues/count, /api/churn-radar/count, /api/lead-radar/count, /api/hosts/pending-events/count) are still deleted. It has no caller left in the app; it stays published as a registered OpenAPI endpoint. EMAIL-TICKET-CLEANUP.2 is the one exception to "always 200 with a number": a FAILED tickets mailbox-visibility lookup 500s rather than silently answering a lower, confidently-wrong number — the same posture /api/email/mail/count takes on the identical failure.',
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Count of needs-attention items across approvals + mail + inbox, by source (nav badge + widget)',
+  description: 'Cheap sum of the same three TRUE counts GET /api/home-queue reports — no approval items, ticket subjects or conversation contacts are ever fetched. Every per-source gate mirrors the equivalent count route exactly; a session ineligible for a source contributes 0 for it, the same posture as /api/whatsapp/unread-count. HOME.3\'s sidebar retirement task made this the ONE count endpoint Sidebar.jsx polled at the time. NAV-BADGE.1 later restored /api/approvals/count as Approvals\' own poller, and the sidebar no longer polls THIS endpoint at all — the other four per-source badge routes it used to poll (/api/issues/count, /api/churn-radar/count, /api/lead-radar/count, /api/hosts/pending-events/count) are still deleted. WIDGET.1: the iOS "What Needs Me" home-screen widget is now its only caller, which is why the response carries `bySource` (approvals/mail/inbox individually) rather than just the bare sum the sidebar used to poll, and why the route accepts a third credential — a studio-scoped widget device token (Bearer; minted by POST /api/widget/tokens, verified in src/lib/widget-auth.js) — alongside the session cookie and a mobile Supabase JWT; a token carries exactly one location, so the widget for Hatch cannot read Stillorgan\'s numbers. EMAIL-TICKET-CLEANUP.2 is the one exception to "always 200 with a number": a FAILED mail (tickets) mailbox-visibility lookup 500s rather than silently answering a lower, confidently-wrong number — the same posture /api/email/mail/count takes on the identical failure.',
   responses: {
-    200: { description: '{ count }', content: { 'application/json': { schema: SuccessResponse(z.object({ count: z.number() })) } } },
+    200: {
+      description: '{ count, bySource: { approvals, mail, inbox }, degraded }',
+      content: {
+        'application/json': {
+          schema: SuccessResponse(z.object({
+            count: z.number(),
+            bySource: z.object({
+              approvals: z.number(),
+              mail: z.number(),
+              inbox: z.number(),
+            }),
+            degraded: z.array(z.enum(['approvals', 'mail', 'inbox'])),
+          })).openapi('HomeQueueCountResponse'),
+        },
+      },
+    },
     401: { description: 'Unauthenticated', content: { 'application/json': { schema: ErrorResponse } } },
-    500: { description: 'Tickets mailbox-visibility lookup failed — NOT a zero', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Mail (tickets) mailbox-visibility lookup failed — NOT a zero', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// ============================================================================
+// WIDGET.1 — the iOS home-screen widget: its configuration picker and the
+// per-device credentials it authenticates with. See src/lib/widget-auth.js
+// and src/lib/widget-token.js for the mechanism; GET /api/home-queue/count
+// just above is the fourth route a widget token can call.
+// ============================================================================
+
+const WidgetDevice = z.object({
+  kind: z.enum(['door', 'ac', 'plug', 'speaker']),
+  id: z.string(),
+  label: z.string(),
+}).openapi('WidgetDevice')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/widget/devices',
+  tags: ['Widget'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "Devices the caller may control at their active location, for the widget's config picker",
+  description: 'Composes four sources, each gated EXACTLY as its own control route already gates it — never a fresh decision — so the picker can never offer a button the control action would go on to refuse: doors (studio_management, filtered through the UNIFI-DOORS-SCOPE per-user allowlist via listAllowedDoors, never a raw device list), AC units (studio_management, filtered through the AC-ROLE.1 allowlist), Shelly plugs and Sonos speakers (both device_control). Speakers are Sonos PLAYERS, never groups — player ids are permanent, group ids are ephemeral, and a widget stores its configured device id permanently. `degraded` lists kinds whose live call (UniFi, Sonos) failed; a studio that has simply never linked UniFi or Sonos reports an empty list for that kind instead, since that is a configuration state, not a failure. Accepts the same three credentials as GET /api/home-queue/count, including a studio-scoped widget device token.',
+  responses: {
+    200: {
+      description: '{ devices: [{ kind, id, label }], degraded }',
+      content: {
+        'application/json': {
+          schema: SuccessResponse(z.object({
+            devices: z.array(WidgetDevice),
+            degraded: z.array(z.enum(['door', 'ac', 'plug', 'speaker'])),
+          })).openapi('WidgetDevicesResponse'),
+        },
+      },
+    },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+const WidgetToken = z.object({
+  id: uuidLike,
+  device_label: z.string().nullable(),
+  created_at: z.string(),
+  last_used_at: z.string().nullable(),
+}).openapi('WidgetToken')
+
+const WidgetTokenMintBody = z.object({
+  device_label: z.string().trim().min(1).max(60).optional(),
+}).openapi('WidgetTokenMintBody')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/widget/tokens',
+  tags: ['Widget'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "A profile's live widget device tokens",
+  description: 'Live (unrevoked) widget credentials for one profile — id, device_label, created_at, last_used_at only; token_hash never leaves the DB, so the lookup key for a live credential can never be reconstructed from a response. Defaults to the caller\'s own profile_id. Listing someone else\'s requires staff_management; without it this answers an empty list rather than a 403 or an error — the same "don\'t confirm what you can\'t see" posture as this repo\'s 404-not-403 detail routes. Session-only, deliberately: no widget token may call this route (or the sibling mint/revoke routes below) — a credential that could enumerate or renew itself would survive the revocation it exists to be subject to.',
+  request: { query: z.object({ profile_id: uuidLike.optional().openapi({ description: "Defaults to the caller's own profile; another profile's tokens require staff_management" }) }) },
+  responses: {
+    200: { description: '{ tokens: [...] }', content: { 'application/json': { schema: SuccessResponse(z.object({ tokens: z.array(WidgetToken) })).openapi('WidgetTokensResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/widget/tokens',
+  tags: ['Widget'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Mint a new per-device widget token',
+  description: 'Scoped to the caller and their active location. Returns the plaintext token exactly once, here, at mint time — only its sha256 (token_hash) is ever stored (mig 607) — so a client that loses it before writing it into the widget\'s App Group cannot recover it; minting a replacement is the only way back. Session-only, same posture as GET above.',
+  request: { body: { content: { 'application/json': { schema: WidgetTokenMintBody } } } },
+  responses: {
+    200: { description: '{ id, token } — token is shown exactly once and never again', content: { 'application/json': { schema: SuccessResponse(z.object({ id: uuidLike, token: z.string() })).openapi('WidgetTokenMintResponse') } } },
+    400: { description: 'Validation failed', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/widget/tokens/{id}',
+  tags: ['Widget'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Revoke one widget device token',
+  description: 'Stamps revoked_at rather than deleting — the row is the audit trail for every door, AC unit, plug and speaker that token could once reach. Own token: always allowed. Someone else\'s: staff_management only. 404, never 403, when the id does not exist OR belongs to another profile and the caller lacks staff_management — a distinct 403 would confirm the id is real, the same enumeration this repo\'s 404-not-403 detail routes avoid throughout (see /api/equipment/{id}). Session-only, same posture as the sibling list/mint route above.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Revoked', content: { 'application/json': { schema: z.object({ success: z.literal(true) }).openapi('WidgetTokenRevokeResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (missing, or another profile\'s token without staff_management)', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
