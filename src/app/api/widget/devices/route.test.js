@@ -60,6 +60,12 @@ const SONOS_CFG = { clientId: 'id', clientSecret: 'secret', redirectUri: 'https:
 
 const DOOR_ROWS = [{ id: 'door-1', name: 'Front Door' }]
 const AC_ROWS = [{ id: 'ac-1', label: 'Studio A' }]
+// Two devices so an allowlist test can prove ONE is hidden, not merely that
+// the (only) row passed through.
+const AC_ROWS_TWO = [
+  { id: 'ac-1', label: 'Studio A' },
+  { id: 'ac-2', label: 'Studio B' },
+]
 const SHELLY_ROWS = [{ id: 'plug-1', name: 'Fan Plug' }]
 
 // Groups response with a group id that differs from BOTH player ids — the
@@ -84,7 +90,8 @@ function req() {
 }
 
 // Configurable fake DB. Tables the route touches: locations (door source's
-// location-row lookup), ac_devices, shelly_devices.
+// location-row lookup), ac_devices, shelly_devices, profile_locations
+// (AC-ROLE.1's per-user/role allowlist — same table the AC route reads).
 function mockDb({
   location = LOCATION_ROW,
   locationError = null,
@@ -92,6 +99,13 @@ function mockDb({
   acError = null,
   shellyRows = [],
   shellyError = null,
+  // Default: no profile_locations row (maybeSingle → null). That drives
+  // resolveAcAllowlist down to the tier-3 code default for whatever role is
+  // passed — which is 'all' for 'manager', the default h.user role, so the
+  // existing non-allowlist-focused tests keep seeing every AC row
+  // unfiltered without having to know this table exists.
+  profileLocationRow = null,
+  profileLocationError = null,
 } = {}) {
   return {
     from: (table) => {
@@ -106,6 +120,10 @@ function mockDb({
       if (table === 'shelly_devices') {
         return { select: () => ({ eq: () =>
           Promise.resolve({ data: shellyRows, error: shellyError }) }) }
+      }
+      if (table === 'profile_locations') {
+        return { select: () => ({ eq: () => ({ eq: () => ({ maybeSingle: () =>
+          Promise.resolve({ data: profileLocationRow, error: profileLocationError }) }) }) }) }
       }
       throw new Error(`unexpected table ${table}`)
     },
@@ -124,6 +142,9 @@ function gate({ studio_management = false, device_control = false } = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // Reset per test so an AC-ROLE.1 test's role override never leaks into
+  // the next test.
+  h.user = { id: 'u1', role: 'manager', activeLocation: { id: 'loc-1' } }
   h.db = mockDb({ acRows: AC_ROWS, shellyRows: SHELLY_ROWS })
   listAllowedDoors.mockResolvedValue({ ok: true, doors: DOOR_ROWS, scope: 'allowlist' })
   getSonosConfig.mockReturnValue(SONOS_CFG)
@@ -245,5 +266,86 @@ describe('GET /api/widget/devices', () => {
     expect(speakerIds.sort()).toEqual(['player-1', 'player-2'])
     // The group id must never leak out as a device id.
     expect(speakerIds).not.toContain('grp-XYZ')
+  })
+
+  // AC-ROLE.1 — the widget picker must apply the SAME per-user AC
+  // allowlist as /api/studio-management/ac/devices (resolveAcAllowlist +
+  // filterAcDevices from @shared/permissions), or it can offer a unit the
+  // control action will go on to refuse — the door-allowlist defect class
+  // (UNIFI-DOORS-SCOPE, migration 182), one kind over.
+  describe('AC-ROLE.1: per-user AC allowlist', () => {
+    it('a staff user whose profile_locations.ac_device_ids names only device A sees only A, not B', async () => {
+      gate({ studio_management: true, device_control: false })
+      h.user = { id: 'u2', role: 'staff', profileRole: 'staff', activeLocation: { id: 'loc-1' } }
+      h.db = mockDb({
+        acRows: AC_ROWS_TWO,
+        profileLocationRow: { role: 'staff', ac_device_ids: ['ac-1'] },
+      })
+
+      const res = await GET(req())
+      const body = await res.json()
+
+      const acIds = body.data.devices.filter((d) => d.kind === 'ac').map((d) => d.id)
+      expect(acIds).toEqual(['ac-1'])
+      expect(acIds).not.toContain('ac-2')
+    })
+
+    it('a master skips the filter and sees every device', async () => {
+      gate({ studio_management: true, device_control: false })
+      h.user = { id: 'u3', role: 'master', activeLocation: { id: 'loc-1' } }
+      h.db = mockDb({
+        acRows: AC_ROWS_TWO,
+        // A stray per-user row that WOULD restrict a non-master — master
+        // must bypass the lookup entirely, exactly like the AC route's
+        // `if (user.role !== 'master')` guard.
+        profileLocationRow: { role: 'master', ac_device_ids: ['ac-1'] },
+      })
+
+      const res = await GET(req())
+      const body = await res.json()
+
+      const acIds = body.data.devices.filter((d) => d.kind === 'ac').map((d) => d.id).sort()
+      expect(acIds).toEqual(['ac-1', 'ac-2'])
+    })
+
+    it('a role-template ac_device_ids list applies when the per-user list is null', async () => {
+      gate({ studio_management: true, device_control: false })
+      h.user = {
+        id: 'u4',
+        role: 'head_coach',
+        profileRole: 'head_coach',
+        activeLocation: { id: 'loc-1' },
+        // head_coach's code default is 'none' (DEFAULT_AC_ACCESS_BY_ROLE) —
+        // this only passes if the role-template tier is actually consulted
+        // before falling to that default.
+        acDeviceTemplatesByLocation: { 'loc-1': ['ac-2'] },
+      }
+      h.db = mockDb({
+        acRows: AC_ROWS_TWO,
+        profileLocationRow: { role: 'head_coach', ac_device_ids: null },
+      })
+
+      const res = await GET(req())
+      const body = await res.json()
+
+      const acIds = body.data.devices.filter((d) => d.kind === 'ac').map((d) => d.id)
+      expect(acIds).toEqual(['ac-2'])
+    })
+
+    it('never lets the raw unfiltered ac_devices rows reach the response', async () => {
+      gate({ studio_management: true, device_control: false })
+      h.user = { id: 'u5', role: 'staff', profileRole: 'staff', activeLocation: { id: 'loc-1' } }
+      h.db = mockDb({
+        acRows: AC_ROWS_TWO,
+        // Empty per-user allowlist — neither raw row may leak through.
+        profileLocationRow: { role: 'staff', ac_device_ids: [] },
+      })
+
+      const res = await GET(req())
+      const body = await res.json()
+
+      const acIds = body.data.devices.filter((d) => d.kind === 'ac').map((d) => d.id)
+      expect(acIds).toEqual([])
+    })
   })
 })

@@ -49,6 +49,7 @@ import { hasPermissionForLocation } from '@/lib/permissions'
 import { listAllowedDoors } from '@/lib/studio-doors'
 import { getSonosConfig, withFreshToken, sonosGetGroups } from '@/lib/sonos/client'
 import { mapGroups } from '@/lib/sonos/groups'
+import { resolveAcAllowlist, filterAcDevices } from '@shared/permissions'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -80,7 +81,7 @@ async function fetchDoorSource(db, user, locationId) {
 
 // ── ac ───────────────────────────────────────────────────────────────────
 
-async function fetchAcSource(db, locationId) {
+async function fetchAcSource(db, user, locationId) {
   const { data, error } = await db
     .from('ac_devices')
     .select('id, label')
@@ -91,7 +92,31 @@ async function fetchAcSource(db, locationId) {
     // "button the server will refuse" this route exists to avoid.
     .eq('enabled', true)
   if (error) throw new Error(`ac: ${error.message}`)
-  return (data || []).map((d) => ({ kind: 'ac', id: d.id, label: d.label }))
+
+  // AC-ROLE.1 — the SAME per-user allowlist /api/studio-management/ac/devices
+  // applies, driven identically (including the master skip and the role
+  // fallback chain): a picker that offered a device the control action would
+  // go on to refuse is the same defect class as the door allowlist
+  // (UNIFI-DOORS-SCOPE, migration 182). Filter BEFORE mapping to the
+  // { kind, id, label } shape — filterAcDevices needs the raw rows.
+  let visible = data || []
+  if (user.role !== 'master') {
+    const { data: pl } = await db
+      .from('profile_locations')
+      .select('role, ac_device_ids')
+      .eq('profile_id', user.id)
+      .eq('location_id', locationId)
+      .maybeSingle()
+    const role = pl?.role || user.profileRole || user.role
+    const resolved = resolveAcAllowlist({
+      role,
+      userList: pl?.ac_device_ids ?? null,
+      templateList: user?.acDeviceTemplatesByLocation?.[locationId] ?? null,
+    })
+    visible = filterAcDevices(resolved, visible)
+  }
+
+  return visible.map((d) => ({ kind: 'ac', id: d.id, label: d.label }))
 }
 
 // ── plug ─────────────────────────────────────────────────────────────────
@@ -129,7 +154,7 @@ export const GET = withAuth(
     const sources = []
     if (hasPermissionForLocation(user, locationId, 'studio_management')) {
       sources.push(['door', fetchDoorSource(db, user, locationId)])
-      sources.push(['ac', fetchAcSource(db, locationId)])
+      sources.push(['ac', fetchAcSource(db, user, locationId)])
     }
     if (hasPermissionForLocation(user, locationId, 'device_control')) {
       sources.push(['plug', fetchPlugSource(db, locationId)])
