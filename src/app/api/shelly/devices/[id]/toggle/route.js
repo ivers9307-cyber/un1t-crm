@@ -145,7 +145,8 @@ function optimisticState(prev, channel, on, nowIso) {
 }
 
 export const POST = withAuth(
-  { permission: 'device_control', schema: ShellyToggleBody },
+  // WIDGET.1 — the Studio Controls widget's plug button lands here.
+  { permission: 'device_control', location: true, schema: ShellyToggleBody, allowWidgetToken: true },
   async ({ user, db, locationId, input, params }) => {
     const loaded = await loadDevice(db, locationId, params?.id)
     if (!loaded.ok) {
