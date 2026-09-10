@@ -15,9 +15,7 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
-import { createServerClient } from '@/lib/supabase'
+import { withAuth } from '@/lib/with-auth'
 import { uuidLike } from '@/lib/schemas'
 import { ACTIONS } from '@/lib/sonos/actions'
 import { runLiveAction } from '@/lib/sonos/live'
@@ -50,38 +48,35 @@ const OUTCOME = {
   failed:         [502, 'That did not work'],
 }
 
-export async function POST(request) {
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!hasPermission(user, 'device_control')) {
-    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
-  }
-  const locationId = user.activeLocation?.id
-  if (!locationId) return NextResponse.json({ success: false, error: 'No active location' }, { status: 400 })
+export const POST = withAuth(
+  // WIDGET.1 — the Studio Controls widget's speaker button lands here. The
+  // permission key and location gate are unchanged from the hand-rolled
+  // preamble this replaced.
+  { permission: 'device_control', location: true, allowWidgetToken: true },
+  async ({ db, locationId, request }) => {
+    const parsed = Body.safeParse(await request.json().catch(() => ({})))
+    if (!parsed.success) {
+      return NextResponse.json({ success: false, error: 'Invalid request' }, { status: 400 })
+    }
+    const { schedule_id: scheduleId, group_id: groupId, action, value } = parsed.data
+    // Only schedule ids are uuids — group ids are opaque Sonos strings
+    // (RINCON_…:N), bounded by the schema above.
+    if (scheduleId && !uuidLike.safeParse(scheduleId).success) {
+      return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+    }
 
-  const parsed = Body.safeParse(await request.json().catch(() => ({})))
-  if (!parsed.success) {
-    return NextResponse.json({ success: false, error: 'Invalid request' }, { status: 400 })
-  }
-  const { schedule_id: scheduleId, group_id: groupId, action, value } = parsed.data
-  // Only schedule ids are uuids — group ids are opaque Sonos strings
-  // (RINCON_…:N), bounded by the schema above.
-  if (scheduleId && !uuidLike.safeParse(scheduleId).success) {
-    return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
-  }
+    const out = await runLiveAction(db, locationId, scheduleId ? { scheduleId } : { groupId }, action, value)
+    if (out.ok) return NextResponse.json({ success: true, groups: out.groups })
 
-  const db = createServerClient()
-  const out = await runLiveAction(db, locationId, scheduleId ? { scheduleId } : { groupId }, action, value)
-  if (out.ok) return NextResponse.json({ success: true, groups: out.groups })
-
-  const [status, message] = OUTCOME[out.code] || [502, 'That did not work']
-  // volume_up/volume_down are relative, not idempotent: on a multi-group
-  // schedule where one group's call succeeded before another failed, a
-  // caller that blindly retries the whole action on a bare failure would
-  // re-apply the step to the group already in `applied`. Pass both through
-  // so the UI can retry only what's in `failedGroups`.
-  const body = { success: false, error: message, code: out.code }
-  if (out.applied) body.applied = out.applied
-  if (out.failedGroups) body.failedGroups = out.failedGroups
-  return NextResponse.json(body, { status })
-}
+    const [status, message] = OUTCOME[out.code] || [502, 'That did not work']
+    // volume_up/volume_down are relative, not idempotent: on a multi-group
+    // schedule where one group's call succeeded before another failed, a
+    // caller that blindly retries the whole action on a bare failure would
+    // re-apply the step to the group already in `applied`. Pass both through
+    // so the UI can retry only what's in `failedGroups`.
+    const body = { success: false, error: message, code: out.code }
+    if (out.applied) body.applied = out.applied
+    if (out.failedGroups) body.failedGroups = out.failedGroups
+    return NextResponse.json(body, { status })
+  }
+)

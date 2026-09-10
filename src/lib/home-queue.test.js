@@ -32,7 +32,7 @@ vi.mock('@/app/api/email/mail/_conversation', () => ({
 }))
 
 import {
-  assembleHomeQueue, getHomeQueueCount, SOURCE_PRE_CAP, GLOBAL_CAP,
+  assembleHomeQueue, getHomeQueueCount, getHomeQueueCounts, SOURCE_PRE_CAP, GLOBAL_CAP,
   queueCountLabel, queueRowGroup, groupQueueRows,
 } from './home-queue'
 import { getPendingApprovals, getPendingApprovalsCount } from '@/lib/approvals/registry'
@@ -612,5 +612,75 @@ describe('assembleHomeQueue — every email row is a Mail row', () => {
     const mail = groups.find(g => g.key === 'mail')
     expect(mail.label).toBe('Mail')
     expect(mail.href).toBe('/communications/mail')
+  })
+})
+describe('getHomeQueueCounts', () => {
+  it('returns a per-source breakdown that sums to count', async () => {
+    getPendingApprovalsCount.mockResolvedValue(3)
+    hasPermission.mockReturnValue(true)
+    hasPermissionForLocation.mockReturnValue(true)
+    loadVisibleMailboxes.mockResolvedValue({ elevated: true, mailboxes: [{ id: 'mb1' }] })
+    const db = makeDb({
+      email_tickets: { rows: [], count: 2 },
+      whatsapp_conversations: { rows: [] },
+    })
+
+    const out = await getHomeQueueCounts(db, userAt())
+
+    expect(out.bySource).toEqual({ approvals: 3, mail: 2, inbox: 0 })
+    expect(out.count).toBe(5)
+    expect(out.degraded).toEqual([])
+  })
+
+  it('reports a failed source in degraded and excludes it from the sum', async () => {
+    getPendingApprovalsCount.mockRejectedValue(new Error('approvals down'))
+    hasPermission.mockReturnValue(true)
+    hasPermissionForLocation.mockReturnValue(true)
+    loadVisibleMailboxes.mockResolvedValue({ elevated: true, mailboxes: [{ id: 'mb1' }] })
+    const db = makeDb({
+      email_tickets: { rows: [], count: 2 },
+      whatsapp_conversations: {
+        rows: [{
+          id: 'w1', resolved_at: null, last_message_at: '2026-08-10T08:00:00Z',
+          last_message_direction: 'inbound', agent_handed_off_at: null,
+        }],
+      },
+    })
+
+    const out = await getHomeQueueCounts(db, userAt())
+
+    expect(out.bySource.approvals).toBe(0)
+    expect(out.degraded).toContain('approvals')
+    expect(out.count).toBe(3)
+  })
+
+  it('returns zeroes with no active location, not a throw', async () => {
+    const out = await getHomeQueueCounts(makeDb(), { id: 'u1', activeLocation: null })
+    expect(out).toEqual({ count: 0, bySource: { approvals: 0, mail: 0, inbox: 0 }, degraded: [] })
+  })
+
+  it('still THROWS when mailbox visibility itself is unavailable', async () => {
+    // EMAIL-TICKET-CLEANUP.2: "0" here would read as "nothing to do" rather
+    // than "we could not check", so this one case must stay a rejection.
+    hasPermission.mockReturnValue(true)
+    hasPermissionForLocation.mockReturnValue(true)
+    loadVisibleMailboxes.mockResolvedValue({ response: 'mailboxes-unavailable' })
+    getPendingApprovalsCount.mockResolvedValue(0)
+
+    await expect(getHomeQueueCounts(makeDb(), userAt())).rejects.toThrow()
+  })
+})
+
+describe('getHomeQueueCount (unchanged contract)', () => {
+  it('still returns a bare number', async () => {
+    getPendingApprovalsCount.mockResolvedValue(3)
+    hasPermission.mockReturnValue(true)
+    hasPermissionForLocation.mockReturnValue(true)
+    loadVisibleMailboxes.mockResolvedValue({ elevated: true, mailboxes: [{ id: 'mb1' }] })
+    const db = makeDb({
+      email_tickets: { rows: [], count: 2 },
+      whatsapp_conversations: { rows: [] },
+    })
+    expect(await getHomeQueueCount(db, userAt())).toBe(5)
   })
 })

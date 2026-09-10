@@ -9,16 +9,18 @@
 // from the UniFi controller unfiltered, which exposed the door
 // inventory to any staff user with studio_management permission.
 // Migration 182 added profile_locations.unifi_door_ids as a per-user
-// per-location allowlist. The route now:
-//   • Reads the user's allowlist for the active location
-//   • Fetches the controller's door list
-//   • Returns the INTERSECTION
+// per-location allowlist. The allowlist-intersection logic (read the
+// allowlist, fetch the controller's door list, return the
+// INTERSECTION, normalise door shape) now lives in
+// listAllowedDoors() (src/lib/studio-doors.js) — extracted so the
+// Studio Controls widget's door picker (a second consumer of the
+// door list) reuses the same barrier instead of re-deriving it.
 // NULL allowlist (legacy fallback for manager+ roles) keeps the
 // previous "show everything" behaviour. Empty array → no doors.
 
 import { NextResponse } from 'next/server'
 import { withAuth } from '@/lib/with-auth'
-import { getUnifiConfig, listDoors, UnifiError } from '@/lib/unifi-access'
+import { listAllowedDoors } from '@/lib/studio-doors'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -35,57 +37,29 @@ export const GET = withAuth(
       return NextResponse.json({ success: false, error: 'Location not found.' }, { status: 404 })
     }
 
-    // INTEG-A2 dual-read: registry row first, legacy settings.unifi otherwise.
-    const cfg = await getUnifiConfig(db, location)
-    if (!cfg.configured) {
+    const result = await listAllowedDoors(db, { user, location, locationId })
+
+    if (!result.ok) {
+      if (result.reason === 'not_configured') {
+        return NextResponse.json({
+          success: false,
+          error: 'UniFi Access is not fully configured for this location. Ask a master to fill in the controller settings under Settings → Locations.',
+          code: 'unifi_not_configured',
+        }, { status: 412 })
+      }
       return NextResponse.json({
         success: false,
-        error: 'UniFi Access is not fully configured for this location. Ask a master to fill in the controller settings under Settings → Locations.',
-        code: 'unifi_not_configured',
-      }, { status: 412 })
+        error: result.message,
+      }, { status: result.status })
     }
 
-    // Read the caller's door allowlist for THIS location. The
-    // profile_locations row's unifi_door_ids is a text[] of door
-    // identifiers from the UniFi controller, set via the staff edit
-    // UI. NULL = legacy fallback (show all doors — applies to
-    // manager+ roles after the mig 182 backfill).
-    const { data: assignment } = await db
-      .from('profile_locations')
-      .select('unifi_door_ids')
-      .eq('profile_id', user.id)
-      .eq('location_id', locationId)
-      .maybeSingle()
-    const allowlist = assignment?.unifi_door_ids
-    const isUnrestricted = allowlist === null || allowlist === undefined
-
-    try {
-      const doors = await listDoors(cfg)
-      // Normalise UniFi's camelCase / snake_case door shape. Some
-      // firmwares ship one, some the other; tolerate both.
-      const normalised = doors.map((d) => ({
-        id: d.id || d.unique_id || d.door_id,
-        name: d.name || d.display_name || d.title || 'Unnamed door',
-      })).filter(d => d.id)
-
-      const filtered = isUnrestricted
-        ? normalised
-        : normalised.filter(d => allowlist.includes(d.id))
-
-      return NextResponse.json({
-        success: true,
-        data: filtered,
-        // Surface the allowlist mode to the UI so it can render an
-        // appropriate empty-state message ("ask an admin to enable
-        // doors for you" vs "this location has no doors registered").
-        scope: isUnrestricted ? 'unrestricted' : 'allowlist',
-      })
-    } catch (e) {
-      const status = e instanceof UnifiError && e.status ? e.status : 502
-      return NextResponse.json({
-        success: false,
-        error: e instanceof UnifiError ? e.message : `UniFi request failed: ${e.message || e}`,
-      }, { status })
-    }
+    return NextResponse.json({
+      success: true,
+      data: result.doors,
+      // Surface the allowlist mode to the UI so it can render an
+      // appropriate empty-state message ("ask an admin to enable
+      // doors for you" vs "this location has no doors registered").
+      scope: result.scope,
+    })
   }
 )

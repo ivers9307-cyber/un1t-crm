@@ -3,9 +3,9 @@ import { createClient } from '@supabase/supabase-js'
 import { createServerClient as createSSRClient } from '@supabase/ssr'
 import { cookies, headers } from 'next/headers'
 import { NextResponse } from 'next/server'
-import { mergeTemplates } from '@shared/permissions'
 import { isApiKeyToken } from './api-keys'
 import { hasPermission } from './permissions'
+import { loadRoleTemplatesForLocations } from './role-templates.js'
 import { SUPPORT_COOKIE, verifySupportCookie } from './support-session-edge'
 
 // React 18's `cache()` is only exported from the server build of react.
@@ -537,55 +537,18 @@ export const getCurrentUser = cache(async function getCurrentUser() {
     ? assignmentsByLocation[activeLocation.id] || null
     : null
 
-  // PERM-AUDIT.2 (mig 364) — operator-edited role permission
-  // templates, resolved by the shared resolver between the per-user
-  // override and the code role default. One small query for the
-  // user's locations; keyed per location by the role THE USER holds
-  // there (a template row for a different role at that location is
-  // irrelevant to this user). Master skips the fetch entirely —
-  // the resolver short-circuits master past tiers 2/2.5/3, so a
-  // template can never change what a master sees.
-  // RECEPTION.2 (mig 367): templates can carry employment-type
-  // variants — an 'all' row applies to every user of the role, and
-  // an 'fte' / 'contractor' / 'casual' row layers on top for users
-  // whose profiles.employment_type matches. We merge here so every
-  // consumer downstream still sees ONE template blob per location.
-  const roleTemplatesByLocation = {}
-  const acDeviceTemplatesByLocation = {}
-  if (!isMaster) {
-    const templateLocationIds = Object.keys(rolesByLocation)
-    if (templateLocationIds.length > 0) {
-      try {
-        const { data: templateRows } = await db
-          .from('location_role_permissions')
-          .select('location_id, role, employment_type, permissions, ac_device_ids')
-          .in('location_id', templateLocationIds)
-        const findRow = (locId, emp) => (templateRows || []).find(r =>
-          r.location_id === locId && r.role === rolesByLocation[locId] && r.employment_type === emp
-        ) || null
-        const rowFor = (locId, emp) => findRow(locId, emp)?.permissions || null
-        for (const locId of templateLocationIds) {
-          const merged = mergeTemplates(
-            rowFor(locId, 'all'),
-            profile.employment_type ? rowFor(locId, profile.employment_type) : null
-          )
-          if (merged) roleTemplatesByLocation[locId] = merged
-          // AC-ROLE.1 — resolve the role-template AC device list:
-          // employment-type variant wins if set (non-null), else the
-          // 'all' row, else inherit (null). Stored ABSOLUTE, not diffed.
-          const allRow = findRow(locId, 'all')
-          const varRow = profile.employment_type ? findRow(locId, profile.employment_type) : null
-          const acList = Array.isArray(varRow?.ac_device_ids)
-            ? varRow.ac_device_ids
-            : (Array.isArray(allRow?.ac_device_ids) ? allRow.ac_device_ids : null)
-          if (acList !== null) acDeviceTemplatesByLocation[locId] = acList
-        }
-      } catch {
-        // Defensive: a failed template fetch degrades to code
-        // defaults (empty maps) rather than failing the request.
-      }
-    }
-  }
+  // PERM-AUDIT.2 (mig 364) / RECEPTION.2 (mig 367) — operator-edited role
+  // permission templates, resolved by the shared resolver between the
+  // per-user override and the code role default. The mechanics (per-location
+  // keying by the role THE USER holds, the master short-circuit, and the
+  // employment-type variant merge) now live in ./role-templates.js, which the
+  // widget-token auth path calls too so the two can never drift.
+  const { roleTemplatesByLocation, acDeviceTemplatesByLocation } =
+    await loadRoleTemplatesForLocations(db, {
+      isMaster,
+      rolesByLocation,
+      employmentType: profile.employment_type || null,
+    })
   const activeRoleTemplate = activeLocation?.id
     ? roleTemplatesByLocation[activeLocation.id] || null
     : null

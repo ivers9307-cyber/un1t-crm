@@ -14,7 +14,8 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 export const POST = withAuth(
-  { permission: 'studio_management' },
+  // WIDGET.1 — the Studio Controls widget's AC button lands here.
+  { permission: 'studio_management', location: true, allowWidgetToken: true },
   async ({ user, db, params, request }) => {
     const out = await turnOn(params?.id, { user, db, request })
     if (!out.ok) {
