@@ -42,7 +42,18 @@ const HEADING_SIZE = {
   4: 'text-[15px]', 5: 'text-[14px]', 6: 'text-[13px]',
 }
 
-function openHref(href) {
+/**
+ * Open a link, and SAY SO when it cannot be opened.
+ *
+ * Exported because the thread screen's plain-text path linkifies bare URLs
+ * too, and the two shipped in the same change with different failure
+ * behaviour — this one alerting, that one swallowing the rejection. Identical
+ * failure, two outcomes, on one screen. The wider app's convention is the
+ * silent catch, but that convention was built for the app's OWN links; these
+ * come from a stranger and are far likelier to carry a scheme the OS has no
+ * handler for, and a tap that does nothing at all reads as a broken app.
+ */
+export function openHref(href) {
   Linking.openURL(href).catch(() => Alert.alert('Could not open that link', href))
 }
 
@@ -72,14 +83,66 @@ function Runs({ runs }) {
   return <>{runs.map((run, i) => <Run key={i} run={run} />)}</>
 }
 
-function BlockedImage({ block }) {
+function BlockedImage({ block, failed = false }) {
+  const label = failed
+    ? (block.alt ? `Image did not load: ${block.alt}` : 'Image did not load')
+    : (block.alt ? `Image not loaded: ${block.alt}` : 'Image not loaded')
   return (
-    <View className="flex-row items-center rounded-lg border border-dashed border-un1t-border bg-un1t-surface px-2.5 py-2 mb-2">
+    <View
+      accessible
+      accessibilityRole="image"
+      accessibilityLabel={label}
+      className="flex-row items-center rounded-lg border border-dashed border-un1t-border bg-un1t-surface px-2.5 py-2 mb-2"
+    >
       <Ionicons name="image-outline" size={13} color="#94A3B8" style={{ marginRight: 6 }} />
       <Text className="text-[11px] text-un1t-muted flex-1" numberOfLines={1}>
-        {block.alt || 'Image not loaded'}
+        {failed ? (block.alt ? `${block.alt} — did not load` : 'This image did not load') : (block.alt || 'Image not loaded')}
       </Text>
     </View>
+  )
+}
+
+/**
+ * One image, with its own failed-load state.
+ *
+ * Its own component rather than a `case` inside Block because it needs
+ * useState, and a hook inside a switch arm is a hook called conditionally.
+ */
+function EmailImage({ block, showImages }) {
+  const [failed, setFailed] = useState(false)
+  const shown = imageState(block, showImages) === 'shown'
+  // A failed load is likelier here than anywhere else in this app: every other
+  // <Image> points at our own storage, and this one points wherever a
+  // stranger's marketing email said. Without onError a 404 renders as a silent
+  // blank box AFTER the operator explicitly asked to see it, which reads as the
+  // feature being broken rather than the image being gone.
+  const art = shown && !failed
+    ? (
+      <Image
+        source={{ uri: block.blocked }}
+        accessibilityLabel={block.alt || 'Image from this email'}
+        resizeMode="contain"
+        onError={() => setFailed(true)}
+        className="w-full h-40 mb-2.5"
+      />
+    )
+    : <BlockedImage block={block} failed={shown && failed} />
+  // 🔴 A LINKED IMAGE STAYS TAPPABLE IN BOTH STATES. Marketing email is
+  // routinely one hero image that IS the call to action, and images are
+  // blocked by default here — so if only the shown state were tappable, the
+  // operator's default view would be a dead placeholder with no way to reach
+  // what it linked to.
+  if (!block.href) return art
+  return (
+    <Pressable
+      onPress={() => openHref(block.href)}
+      onLongPress={() => Alert.alert('Link', block.href)}
+      accessibilityRole="link"
+      accessibilityLabel={block.alt ? `${block.alt} — opens a link` : 'Image link'}
+      className="active:opacity-70"
+    >
+      {art}
+    </Pressable>
   )
 }
 
@@ -131,36 +194,8 @@ function Block({ block, showImages }) {
         </Pressable>
       )
     }
-    case 'image': {
-      const shown = imageState(block, showImages) === 'shown'
-      const art = shown
-        ? (
-          <Image
-            source={{ uri: block.blocked }}
-            accessibilityLabel={block.alt || 'Image from this email'}
-            resizeMode="contain"
-            className="w-full h-40 mb-2.5"
-          />
-        )
-        : <BlockedImage block={block} />
-      // 🔴 A LINKED IMAGE STAYS TAPPABLE IN BOTH STATES. Marketing email is
-      // routinely one hero image that IS the call to action, and images are
-      // blocked by default here — so if only the shown state were tappable,
-      // the operator's default view would be a dead placeholder with no way
-      // to reach what it linked to.
-      if (!block.href) return art
-      return (
-        <Pressable
-          onPress={() => openHref(block.href)}
-          onLongPress={() => Alert.alert('Link', block.href)}
-          accessibilityRole="link"
-          accessibilityLabel={block.alt ? `${block.alt} — opens a link` : 'Image link'}
-          className="active:opacity-70"
-        >
-          {art}
-        </Pressable>
-      )
-    }
+    case 'image':
+      return <EmailImage block={block} showImages={showImages} />
     case 'rule':
       return <View className="h-px bg-un1t-border my-2.5" />
     case 'pre':

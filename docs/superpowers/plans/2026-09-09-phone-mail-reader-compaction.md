@@ -2832,11 +2832,11 @@ Replace the header band (lines 1218–1246, the `<View className="border-b borde
           </View>
 ```
 
-- [ ] **Step 3: Delete the nudge banner**
+- [x] **Step 3: Delete the nudge banner**
 
 Remove the whole `{nudge && !conversation?.merged_into_id ? (…) : null}` banner block (lines 1268–1297). The tombstone pointer band immediately above it stays exactly as it is — a tombstone is read-only everywhere.
 
-- [ ] **Step 4: Add the nudge sheet**
+- [x] **Step 4: Add the nudge sheet**
 
 Beside the merge-picker `Modal` at the end of the screen, add:
 
@@ -2885,7 +2885,7 @@ Beside the merge-picker `Modal` at the end of the screen, add:
       </Modal>
 ```
 
-- [ ] **Step 5: Add the spam action to the overflow**
+- [x] **Step 5: Add the spam action to the overflow**
 
 Add the handler beside `toggleArchive` (line 988):
 
@@ -2917,12 +2917,12 @@ Add the handler beside `toggleArchive` (line 988):
 
 Add `setConversationSpam` to the `email-api` import. Then find `openOverflow` — whose one action is currently Forward — and add a second row using `spamActionLabel(conversation).label` as the title and `.icon` as the icon, disabled under `savingAction || tombstone` exactly as the Forward row is. The screen stays put on success, the posture `toggleArchive` already takes.
 
-- [ ] **Step 6: Lint**
+- [x] **Step 6: Lint**
 
 Run: `npm run check:mobile-lint`
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add "mobile/app/(staff)/email/[conversationId].jsx" mobile/lib/mail-relate.js mobile/lib/mail-relate.test.js

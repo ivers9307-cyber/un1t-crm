@@ -127,7 +127,7 @@ import {
 } from '../../../lib/mail-relate'
 import { canForwardMessage, newestForwardableMessage } from '../../../lib/mail-forward'
 import BackHeaderLeft from '../../../components/BackHeaderLeft'
-import EmailBody from '../../../components/mail/EmailBody'
+import EmailBody, { openHref } from '../../../components/mail/EmailBody'
 import { splitTextLinks, linkLabel } from '../../../lib/mail-blocks'
 import { decodeCharRefs, stripInvisibleChars } from 'shared/mail-entities'
 
@@ -546,7 +546,7 @@ function FlatMessage({ msg, conversationId, locationId, fallbackName, onViewImag
                 key={i}
                 className="text-blue-700 underline"
                 accessibilityRole="link"
-                onPress={() => Linking.openURL(seg.href).catch(() => {})}
+                onPress={() => openHref(seg.href)}
                 onLongPress={() => Alert.alert('Link', seg.href)}
               >
                 {linkLabel(seg.href, seg.text)}
@@ -573,16 +573,21 @@ function FlatMessage({ msg, conversationId, locationId, fallbackName, onViewImag
       ) : null}
       {msg.html_unsafe ? (
         <Text className="text-[11px] text-amber-700 mt-1.5">
-          This email’s formatting could not be displayed safely, so the plain text is shown instead.
+          HTML could not be displayed safely — showing the plain-text version.
         </Text>
       ) : null}
       {msg.html_omitted ? (
         <Text className="text-[11px] text-un1t-muted mt-1.5">
-          Formatting is not shown for older messages in a long conversation.
+          Formatted version not loaded — this thread is unusually long.
         </Text>
       ) : null}
 
-      {quotedBlocks ? (
+      {/* ONE toggle, two possible bodies. The HTML quote and the text quote
+          shipped as two complete copies of this Pressable — same classes, same
+          copy, same label — differing only in what they expanded to, which is
+          two places for a future copy change to land and only one of them to
+          get it. */}
+      {quotedBlocks || split.quoted ? (
         <View className="mt-2">
           <Pressable
             onPress={() => setQuoteOpen(v => !v)}
@@ -595,23 +600,13 @@ function FlatMessage({ msg, conversationId, locationId, fallbackName, onViewImag
             </Text>
           </Pressable>
           {quoteOpen ? (
-            <View className="mt-2 border-l-2 border-un1t-border pl-3">
-              <EmailBody blocks={quotedBlocks} />
-            </View>
-          ) : null}
-        </View>
-      ) : split.quoted ? (
-        <View className="mt-2">
-          <Pressable
-            onPress={() => setQuoteOpen(v => !v)}
-            accessibilityRole="button"
-            accessibilityLabel={quoteOpen ? 'Hide quoted text' : 'Show quoted text'}
-            className="self-start rounded-full border border-un1t-border bg-un1t-surface px-2 py-0.5"
-          >
-            <Text className="text-[11px] text-un1t-subtle">{quoteOpen ? 'Hide quoted text' : '··· Show quoted text'}</Text>
-          </Pressable>
-          {quoteOpen ? (
-            <Text className="mt-2 border-l-2 border-un1t-border pl-3 text-sm text-un1t-subtle">{split.quoted}</Text>
+            quotedBlocks ? (
+              <View className="mt-2 border-l-2 border-un1t-border pl-3">
+                <EmailBody blocks={quotedBlocks} />
+              </View>
+            ) : (
+              <Text className="mt-2 border-l-2 border-un1t-border pl-3 text-sm text-un1t-subtle">{split.quoted}</Text>
+            )
           ) : null}
         </View>
       ) : null}
