@@ -26,10 +26,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import ContactComposer from './ContactComposer'
 import { sendContactSms, sendContactEmail } from '../lib/messaging-api'
-import { listMail, composeEmail, fetchSignatureContexts } from '../lib/email-api'
-import { defaultMailboxId, mailboxDisplay, mailboxLocationId } from '../lib/mail-compose'
+import { listMail, composeEmail } from '../lib/email-api'
+import { defaultMailboxId, mailboxDisplay } from '../lib/mail-compose'
 import { resolveContactEmailSend, contactEmailFooter, mailboxesFromListResult, MAILBOXES_UNAVAILABLE } from '../lib/mail-sender'
-import { resolveSignatureHint } from '../lib/signature-hint'
 
 const TITLES = { sms: 'Text', whatsapp: 'WhatsApp', email: 'Email' }
 
@@ -167,7 +166,6 @@ function EmailForm({ contactId, contactName, contactLocationId, contactEmail, on
   const [mailboxes, setMailboxes] = useState(null)
   const [mailboxId, setMailboxId] = useState(null)
   const [pickerOpen, setPickerOpen] = useState(false)
-  const [signatureContexts, setSignatureContexts] = useState([])
   useEffect(() => {
     if (!contactLocationId || !contactEmail) return
     let alive = true
@@ -177,10 +175,6 @@ function EmailForm({ contactId, contactName, contactLocationId, contactEmail, on
       setMailboxes(boxes)
       setMailboxId(Array.isArray(boxes) ? defaultMailboxId(boxes) : null)
     }).catch(() => { if (alive) setMailboxes(MAILBOXES_UNAVAILABLE) })
-    // Cosmetic preview of the sign-off the compose route appends; [] on any
-    // failure (fetchSignatureContexts' own posture), which simply hides it.
-    // api() cannot reject today; the catch is symmetry with the call above.
-    fetchSignatureContexts().then(rows => { if (alive) setSignatureContexts(rows) }).catch(() => {})
     return () => { alive = false }
   }, [contactLocationId, contactEmail])
 
@@ -190,12 +184,6 @@ function EmailForm({ contactId, contactName, contactLocationId, contactEmail, on
   // The list is in flight: no send may leave until it answers, because the
   // path it takes is not yet known. Never true when there is nothing to await.
   const awaitingAccounts = route.path === 'awaiting'
-  // Only on the Mail path: the company-sender fallback appends nothing, and
-  // absence is the truth there (web MAILFIX-SIGTRUTH.1).
-  const signatureHint = route.path === 'mail'
-    ? resolveSignatureHint(signatureContexts, mailboxLocationId(mailboxes, mailboxId) || contactLocationId)
-    : null
-
   async function send() {
     if (!ready || sending) return
     // The path is re-resolved at tap time from the same inputs the footer
@@ -242,19 +230,6 @@ function EmailForm({ contactId, contactName, contactLocationId, contactEmail, on
         className="text-base text-un1t-text min-h-[120px] mt-3"
         textAlignVertical="top"
       />
-      {signatureHint ? (
-        <View className="mt-2 rounded-lg border border-dashed border-un1t-border px-3 py-2">
-          <Text className="text-[10px] font-bold uppercase tracking-wider text-un1t-muted">
-            Added automatically
-          </Text>
-          {signatureHint.body ? (
-            <Text className="mt-1 text-xs text-un1t-subtle">{signatureHint.body}</Text>
-          ) : null}
-          {signatureHint.suffix ? (
-            <Text className="mt-1 text-[10px] text-un1t-muted">{signatureHint.suffix}</Text>
-          ) : null}
-        </View>
-      ) : null}
       {/* From — the address the member hears from, or the company wording.
           Tappable only when there is a choice to make. */}
       <Pressable

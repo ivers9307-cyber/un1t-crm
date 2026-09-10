@@ -1056,6 +1056,13 @@ export default function EmailConversation() {
     // DEFINITELY done, and saying so must not depend on a timer firing.
     clearReplyDraft(draftScope)
     setDraftSaved(false)
+    // Back to the pill. This is the ONE place that may collapse the composer,
+    // and only because the draft is provably gone: setText('') above emptied
+    // it and clearReplyDraft removed the stored copy. Everywhere else a
+    // collapse would risk hiding words somebody typed, which is why nothing
+    // else in this screen sets this false. An expanded, empty composer after
+    // a send is 40% of the screen spent on nothing.
+    setComposerOpen(false)
     refresh()
   }
 

@@ -15,7 +15,13 @@ const read = (rel) => readFileSync(fileURLToPath(new URL(`../${rel}`, import.met
 const THREAD = 'mobile/app/(staff)/email/[conversationId].jsx'
 const COMPOSE = 'mobile/app/(staff)/email/compose.jsx'
 const FORWARD = 'mobile/app/(staff)/email/forward.jsx'
-const COMPOSERS = [THREAD, COMPOSE, FORWARD]
+// MOBILE-CONTACT-SEND.1's composer on the contact card. Not in Task 11's own
+// file list, but it carried the identical box for the identical reason, and
+// desktop's decision 2 was "no signature preview in ANY composer" — leaving
+// one behind would show an operator the sign-off in one place and not the
+// other, which is the inconsistency this branch exists to close.
+const CONTACT_MODAL = 'mobile/components/ContactComposeModal.jsx'
+const COMPOSERS = [THREAD, COMPOSE, FORWARD, CONTACT_MODAL]
 
 describe('the signature preview box is gone from every composer', () => {
   // MAIL-READER.1 decision 2, and the reason it costs nothing here: the box was
