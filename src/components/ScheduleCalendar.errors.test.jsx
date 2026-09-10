@@ -89,8 +89,95 @@ describe('ScheduleCalendar load failures (ROSTER-FIX.6a)', () => {
       expect(screen.queryByText(/Loading roster/)).toBeNull()
     })
 
+    // No settling step before this click, deliberately. It used to need one,
+    // and that was the tell: the dismissal was keyed on `error`'s identity,
+    // which refresh() churns null -> message on every cycle, so a background
+    // refresh re-raised the identical banner and the test had to out-wait it.
+    // A test waiting for a product bug to stop happening is not a passing
+    // test. ROSTER-FIX.6a-13 keyed the dismissal on the MESSAGE instead, so
+    // dismissing now sticks through repeats of the same failure and this
+    // asserts the behaviour rather than a quiet moment.
     fireEvent.click(screen.getByLabelText('Dismiss'))
     await waitFor(() => expect(screen.queryByText('Could not load the roster')).toBeNull())
+  })
+
+  it('a dismissed banner stays dismissed through repeats of the SAME failure', async () => {
+    // ROSTER-FIX.6a-13. The comment on errorDismissed has always promised the
+    // operator can "clear a banner without it reappearing until the next
+    // failure". It did not: the reset was keyed on `error`'s identity, and
+    // refresh() churns it null -> message every cycle, so a background refresh
+    // nobody asked for re-raised the identical banner. Dismiss was, in effect,
+    // a button that worked until the next tick.
+    global.fetch = vi.fn(async () => { throw new TypeError('Failed to fetch') })
+    render(<ScheduleCalendar user={user} />)
+    await waitFor(() => expect(screen.getByText('Could not load the roster')).toBeTruthy())
+    fireEvent.click(screen.getByLabelText('Dismiss'))
+    await waitFor(() => expect(screen.queryByText('Could not load the roster')).toBeNull())
+
+    // Drive another failing load — the same failure, unasked for. The banner
+    // must stay gone: a repeat carries no information the operator has not
+    // already read and dismissed.
+    fireEvent.click(screen.getByText('Today'))
+    await act(async () => {})
+    expect(screen.queryByText('Could not load the roster')).toBeNull()
+  })
+
+  it('a DIFFERENT failure re-raises it, because that is new information', async () => {
+    global.fetch = vi.fn(async () => { throw new TypeError('Failed to fetch') })
+    render(<ScheduleCalendar user={user} />)
+    await waitFor(() => expect(screen.getByText('Could not load the roster')).toBeTruthy())
+    fireEvent.click(screen.getByLabelText('Dismiss'))
+    await waitFor(() => expect(screen.queryByText('Could not load the roster')).toBeNull())
+
+    global.fetch = vi.fn(async (url) =>
+      String(url).includes('/schedule/blocks')
+        ? { ok: false, status: 500, json: async () => ({ error: 'Not your location' }) }
+        : okResponse({ data: [] })
+    )
+    fireEvent.click(screen.getByText('Today'))
+    await waitFor(() => expect(screen.getByText(/Not your location/)).toBeTruthy())
+  })
+
+  it('the SAME failure after a load that worked re-raises it', async () => {
+    // The half a message-only check would miss. A failure dismissed this
+    // morning must not silence an identical failure this afternoon: everything
+    // worked in between, so the second one is news. This is why the dismissal
+    // remembers the hook's success count and not just the words.
+    global.fetch = vi.fn(async () => { throw new TypeError('Failed to fetch') })
+    render(<ScheduleCalendar user={user} />)
+    await waitFor(() => expect(screen.getByText('Could not load the roster')).toBeTruthy())
+    fireEvent.click(screen.getByLabelText('Dismiss'))
+    await waitFor(() => expect(screen.queryByText('Could not load the roster')).toBeNull())
+
+    // A load that works.
+    global.fetch = happyFetch()
+    fireEvent.click(screen.getByText('Today'))
+    await waitFor(() => expect(screen.queryByText(/Loading roster/)).toBeNull())
+
+    // Then the same failure again — it must speak up.
+    global.fetch = vi.fn(async () => { throw new TypeError('Failed to fetch') })
+    fireEvent.click(screen.getByText('Month'))
+    await waitFor(() => expect(screen.getByText('Could not load the roster')).toBeTruthy())
+  })
+
+  it('shows Retrying… on the banner while a retry is in flight', () => {
+    // ScheduleErrorBanner renders 'Retrying…' and disables its own button when
+    // `busy`, and the calendar passes it `loading`. Whether an operator ever
+    // SEES that is a different question: refresh() clears `error` before it
+    // starts, and the banner only renders `error && !errorDismissed`.
+    return (async () => {
+      let release
+      global.fetch = vi.fn(async () => { throw new TypeError('Failed to fetch') })
+      render(<ScheduleCalendar user={user} />)
+      await waitFor(() => expect(screen.getByText('Could not load the roster')).toBeTruthy())
+
+      // A retry that does not resolve, so the in-flight state is observable.
+      global.fetch = vi.fn(() => new Promise((resolve) => { release = resolve }))
+      fireEvent.click(screen.getByText('Retry'))
+      await act(async () => {})
+      expect(screen.queryByText('Retrying…')).toBeTruthy()
+      release?.({ ok: true, status: 200, json: async () => ({ data: [] }) })
+    })()
   })
 
   it('names the server error and retries on demand', async () => {
@@ -206,8 +293,26 @@ describe('per-period unpublished-changes guard (ROSTER-FIX.6a)', () => {
     await screen.findByText('Publish roster', {}, { timeout: 5000 })
     await waitFor(() => expect(screen.getByText('Blocks in period')).toBeTruthy(), { timeout: 5000 })
     const buttons = screen.getAllByText('Publish')
+    const blockLoads = () => global.fetch.mock.calls
+      .filter(([url]) => String(url).includes('/schedule/blocks')).length
+    const loadsBeforePublish = blockLoads()
     fireEvent.click(buttons[buttons.length - 1])
     await waitFor(() => expect(screen.queryByText('Publish roster')).toBeNull(), { timeout: 5000 })
+
+    // 🔴 THE MODAL CLOSING IS NOT PROOF THE PUBLISH FINISHED, and treating it
+    // as proof is what made this test fail in CI while passing locally. The
+    // handler does three things in a row — setPublishModal(null), then
+    // refreshAfterMutation(), then clearDirtyPeriodsCoveredBy() — and the wait
+    // above observes only the FIRST. Under load the click below could land
+    // between them, with the guard still armed, and the failure read as "the
+    // guard is broken" rather than "the test asked too early".
+    //
+    // refreshAfterMutation() is the statement immediately before the dirty
+    // clear and is not awaited, so once its blocks fetch has been ISSUED the
+    // clear has necessarily already run. Waiting on that is a direct
+    // observation of the thing under test, not a sleep.
+    await waitFor(() => expect(blockLoads()).toBeGreaterThan(loadsBeforePublish), { timeout: 5000 })
+    await act(async () => {})
 
     window.confirm.mockClear()
     fireEvent.click(screen.getByText('Time Off').closest('a'))

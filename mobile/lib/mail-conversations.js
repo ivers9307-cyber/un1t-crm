@@ -800,6 +800,37 @@ export function conversationAttachmentSkippedLabel(reason) {
  * safeMimeType caps a subtype at 60 characters and that one is 61). Cosmetic:
  * the filename never influences anything that touches bytes.
  */
+/**
+ * How a tapped attachment should be opened.
+ *
+ * 🔴 THE BUG THIS FIXES, because the shape of it is easy to reintroduce.
+ * Tapping a PDF used to open Chrome and download the file rather than display
+ * it, and there were two causes. This function owns the first: the screen
+ * asked the server for a preview URL only when `preview_kind === 'image'`, so
+ * a PDF fell through to the DOWNLOAD url — and that response carries
+ * `Content-Disposition: attachment`, which means no viewer anywhere can render
+ * it inline, however capable it is. The server has served `'pdf'` inline since
+ * EMAIL-ATTACH-PREVIEW.1 (its route differs from the download route by exactly
+ * one Storage option); the phone simply never asked for it.
+ *
+ * `preview: true` means "ask for the inline URL"; a preview request can still
+ * 404, which is NORMAL — the caller falls back to the download URL, which is
+ * the path that works for every type.
+ *
+ * An UNKNOWN `preview_kind` is treated as not previewable rather than guessed
+ * at. The server owns that allow-list and may grow it; a build that has never
+ * heard of a kind must not claim it can draw one.
+ *
+ * @param {{stored?: boolean, preview_kind?: string}|null} attachment
+ * @returns {{action: 'image'|'browser'|'none', preview?: boolean}}
+ */
+export function attachmentOpenPlan(attachment) {
+  if (!attachment?.stored) return { action: 'none' }
+  if (attachment.preview_kind === 'image') return { action: 'image', preview: true }
+  if (attachment.preview_kind === 'pdf') return { action: 'browser', preview: true }
+  return { action: 'browser', preview: false }
+}
+
 export function conversationAttachmentIcon(mimeType, filename) {
   const mime = String(mimeType || '').toLowerCase()
   const parts = String(filename || '').toLowerCase().split('.')

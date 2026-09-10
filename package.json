@@ -21,6 +21,7 @@
     "check:rls-restrictive": "node scripts/check-rls-restrictive.mjs",
     "check:bundle-sql": "node scripts/check-bundle-sql.mjs",
     "check:ota-paths": "node scripts/check-ota-trigger-paths.mjs",
+    "check:ota-fleet": "node scripts/check-ota-fleet.mjs",
     "check:dependency-audit": "npm audit --omit=dev --audit-level=high --json | node scripts/check-dependency-audit.mjs .audit-allowlist.json 'web runtime deps'",
     "check:dependency-audit:mobile": "cd mobile && npm audit --audit-level=high --package-lock-only --json | node ../scripts/check-dependency-audit.mjs .audit-allowlist.json 'mobile deps (whole tree)'",
     "check:guardrails": "eslint --config eslint.guardrails.config.mjs 'src/**/*.{js,jsx}' 'shared/**/*.js' 'tests/**/*.js'",
@@ -75,7 +76,7 @@
     "postcss": "^8.5.28",
     "tailwindcss": "^3.4.0",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.10"
+    "vitest": "^5.0.0"
   },
   "overrides": {
     "sharp": "$sharp",

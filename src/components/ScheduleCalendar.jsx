@@ -341,7 +341,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
   const rangeEnd = formatDate(viewType === 'month' ? monthGrid.end : weekEnd)
   const {
     blocks, templates, staff, timeOff, holidays, contractorSpend,
-    loading, error, showingStaleData, refresh: fetchData,
+    loading, error, showingStaleData, successCount, refresh: fetchData,
   } = useScheduleData({
     locationId,
     startDate: rangeStart,
@@ -359,8 +359,47 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
   })
   // Dismissed separately from the hook's own state so the operator can clear a
   // banner without it reappearing until the next failure.
+  //
+  // 🔴 KEYED ON THE MESSAGE, NOT ON `error`'s IDENTITY, and the difference is
+  // the whole feature. refresh() sets error to null and then back again on
+  // EVERY cycle, so `[error]` re-armed the dismissal twice per refresh — the
+  // operator cleared the banner, a background refresh they never asked for ran,
+  // and the identical banner returned carrying no new information. The comment
+  // above has always described the intent; the dependency did not deliver it.
+  // Found because a test had to wait for the refreshes to settle before
+  // dismissing, which is the shape of a test working around a product bug.
+  //
+  // A DIFFERENT failure still re-raises, because that is new information. So
+  // does an explicit Retry: the operator asked, and they are owed the outcome
+  // even when it is the same words. A successful load clears `error` outright,
+  // so the banner goes on its own and there is nothing to re-arm.
   const [errorDismissed, setErrorDismissed] = useState(false)
-  useEffect(() => { setErrorDismissed(false) }, [error])
+  // What was on screen when they dismissed. Both halves are needed: the
+  // message, so a DIFFERENT failure still speaks up, and the success count, so
+  // the same message after a load that WORKED counts as new rather than as the
+  // same old thing. Without the count, a failure dismissed this morning would
+  // silence an identical failure this afternoon.
+  const dismissedAt = useRef({ message: null, successCount: -1 })
+  useEffect(() => {
+    // A null between refreshes is not a new failure — it is refresh() clearing
+    // the slot on its way to setting it again, and treating it as one is what
+    // re-armed the dismissal twice per cycle.
+    if (!error) return
+    const seen = dismissedAt.current
+    if (error === seen.message && successCount === seen.successCount) return
+    setErrorDismissed(false)
+  }, [error, successCount])
+  const dismissError = useCallback(() => {
+    dismissedAt.current = { message: error, successCount }
+    setErrorDismissed(true)
+  }, [error, successCount])
+  const retryLoad = useCallback(() => {
+    // The operator asked for this one, so its outcome is owed to them even if
+    // the words come back identical.
+    dismissedAt.current = { message: null, successCount: -1 }
+    setErrorDismissed(false)
+    fetchData()
+  }, [fetchData])
 
   // OVERVIEW-REFRESH.1 — call this from mutation handlers (assign,
   // unassign, create, delete, bulk-assign, publish, copy-week, etc.)
@@ -939,9 +978,9 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
         <ScheduleErrorBanner
           title="Could not load the roster"
           message={showingStaleData ? `${error} Showing the last data that loaded.` : error}
-          onRetry={fetchData}
+          onRetry={retryLoad}
           busy={loading}
-          onDismiss={() => setErrorDismissed(true)}
+          onDismiss={dismissError}
         />
       )}
 

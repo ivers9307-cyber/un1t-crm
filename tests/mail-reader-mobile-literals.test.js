@@ -59,6 +59,53 @@ describe('the note composer still states its mode in words', () => {
   })
 })
 
+describe('an attachment opens IN the app, not by handing it to the OS', () => {
+  // MAIL-ATTACH.M1. Tapping a PDF used to open Chrome and download the file.
+  // Two causes: only 'image' asked for an inline url (so a PDF took the
+  // download one, whose Content-Disposition: attachment defeats every viewer),
+  // and Linking.openURL handed the url to whatever app claimed it.
+  it('routes the tap through attachmentOpenPlan rather than testing preview_kind inline', () => {
+    const source = read(THREAD)
+    expect(source).toContain('attachmentOpenPlan(')
+    // The inline test is what sent PDFs down the download path.
+    expect(source).not.toContain("att.preview_kind === 'image'")
+  })
+
+  it('opens with the in-app browser, keeping Linking only as the fallback', () => {
+    const source = read(THREAD)
+    expect(source).toContain('WebBrowser.openBrowserAsync')
+    expect(source).toContain('async function openInApp')
+    // 🔴 The ORDER, not just the presence of both. A scan that only checked
+    // both strings existed would pass a file that had quietly gone back to
+    // reaching for Linking first — the exact regression this fixed.
+    //
+    // Comment lines are stripped before counting: this file explains the
+    // Linking fallback in prose twice, and a scan that counted those would be
+    // measuring the documentation rather than the code.
+    const code = source.split('\n')
+      .filter(line => !/^\s*(\/\/|\*|\/\*)/.test(line))
+      .join('\n')
+    const webBrowserAt = code.indexOf('WebBrowser.openBrowserAsync')
+    const linkingCalls = [...code.matchAll(/Linking\.openURL/g)].map(m => m.index)
+    // Exactly one: openInApp's fallback. The message-body link path lives in
+    // EmailBody.jsx and reaches Linking through openHref, not from here.
+    expect(linkingCalls).toHaveLength(1)
+    expect(linkingCalls[0]).toBeGreaterThan(webBrowserAt)
+  })
+
+  it('adds no native module to do it', () => {
+    // 🔴 The whole surface was built to stay OTA-shippable. expo-web-browser
+    // drives a SYSTEM browser component and is already in the shipped binary
+    // (a dependency, and registered in app.config.js's plugins);
+    // react-native-webview would be a native module — new binary, App Review.
+    const pkg = JSON.parse(read('mobile/package.json'))
+    const deps = { ...pkg.dependencies, ...pkg.devDependencies }
+    expect(deps['expo-web-browser']).toBeTruthy()
+    expect(deps['react-native-webview']).toBeUndefined()
+    expect(read('mobile/app.config.js')).toContain('expo-web-browser')
+  })
+})
+
 describe('the header and the verbs read the lib', () => {
   // NOTE ON 'accountChipLabel(' vs the task file's 'shortMailboxLabel(': the
   // header chip has always called accountChipLabel (it wraps shortMailboxLabel
