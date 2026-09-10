@@ -41,8 +41,18 @@ import { mailRowTime } from './mail-conversations'
  * list is capped, so the open rows may not all be on it. The screen hides
  * the View link then and keeps Merge.
  *
+ * `chip` (MAIL-READER.M1) is the same verdict in a header chip's width, not
+ * the banner's sentence: "Jordan Sample has 2 other open conversations"
+ * does not fit next to a status chip. Its count is the number of OPEN rows
+ * actually IN `related` — the same `r?.id && !isArchived(r)` filter this
+ * function already applies to find `newestOpen` — not the server's raw
+ * `open_count`. `related` is capped at 10 and can hold archived rows too
+ * (mergePickerRows lists both kinds); `open_count` can therefore run ahead
+ * of what a tap on the chip actually opens. The chip counts what it can
+ * back up.
+ *
  * @param {{related?: object[], open_count?: number}|null} data
- * @returns {null|{ name: string, count: number, text: string, viewId: string|null }}
+ * @returns {null|{ name: string, count: number, text: string, chip: string, viewId: string|null }}
  */
 export function relatedNudge(data) {
   if (!data) return null
@@ -50,11 +60,13 @@ export function relatedNudge(data) {
   if (!Number.isFinite(count) || data.open_count == null || count < 1) return null
   const related = Array.isArray(data.related) ? data.related : []
   const name = related[0]?.requester_name || 'This sender'
-  const newestOpen = related.find(r => r?.id && !isArchived(r))
+  const openRelated = related.filter(r => r?.id && !isArchived(r))
+  const newestOpen = openRelated[0]
   return {
     name,
     count,
     text: `${name} has ${count} other open conversation${count === 1 ? '' : 's'}`,
+    chip: `${openRelated.length} other${openRelated.length === 1 ? '' : 's'}`,
     viewId: newestOpen?.id || null,
   }
 }

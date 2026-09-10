@@ -98,7 +98,7 @@ import * as DocumentPicker from 'expo-document-picker'
 import * as ImagePicker from 'expo-image-picker'
 import { useAuth } from '../../../lib/auth-context'
 import {
-  getConversation, replyToConversation, archiveConversation, setConversationSeen, emailDisplayName,
+  getConversation, replyToConversation, archiveConversation, setConversationSpam, setConversationSeen, emailDisplayName,
   previewConversationAttachment, downloadConversationAttachment,
   signOutboundAttachment, uploadSignedAttachment,
   fetchRelatedConversations, mergeConversation, unmergeConversation,
@@ -106,12 +106,13 @@ import {
 } from '../../../lib/email-api'
 import { resolveSignatureHint } from '../../../lib/signature-hint'
 import {
-  conversationMessageKind, mailStatusChip, mailboxLabel, conversationDeliveryMeta,
+  conversationMessageKind, mailStatusChip, conversationDeliveryMeta,
   conversationMessageRecipients, sentToLabel,
   formatAttachmentSize, conversationAttachmentSkippedLabel, conversationAttachmentIcon,
   threadRefreshMs, conversationReplyAudienceMeta, conversationReplyPlaceholder,
   conversationThreadAudienceLines, conversationSendOriginMeta,
   flatThreadPlan, flatMessageMeta, mergedInDividers,
+  accountChipLabel, headerDetailLines, spamActionLabel,
 } from '../../../lib/mail-conversations'
 // MAIL-ARCH.3 — the thread route stamps `archived` now; read the stamp, never
 // `status` (legacy `solved` is LIVE on the wire). MAIL-ARCH.4 — the one
@@ -686,6 +687,10 @@ export default function EmailConversation() {
   const [mergeOpen, setMergeOpen] = useState(false)
   const [mergeSelected, setMergeSelected] = useState(() => new Set())
   const [merging, setMerging] = useState(false)
+  // Option A, compact at rest: Details is the operator's tap, and it stays
+  // where they put it for as long as they are on this conversation.
+  const [detailsOpen, setDetailsOpen] = useState(false)
+  const [nudgeSheetOpen, setNudgeSheetOpen] = useState(false)
   // Audit F6 — expanding a folded message grows the content, and the
   // auto-scroll-to-end below would immediately yank the viewport AWAY from
   // the message the operator just opened, down to the composer. One-shot
@@ -1100,6 +1105,32 @@ export default function EmailConversation() {
     }
   }
 
+  // Mark as spam / release (MAIL-SPAM.1) — the phone's first sight of the
+  // quarantine.
+  async function toggleSpam() {
+    if (savingAction) return
+    // 🔴 The failure sentence comes from the lib, finished. Deriving it here as
+    // `Couldn't ${label.toLowerCase()}` reads "Couldn't not spam" in the release
+    // direction — a double negative shipped to an operator. toggleArchive above
+    // branches on direction for the same reason.
+    const { next, failure } = spamActionLabel(conversation)
+    setSavingAction(true)
+    const res = await setConversationSpam(conversationId, next, activeLocation?.id)
+    setSavingAction(false)
+    if (!res.success) {
+      Alert.alert(failure, res.error || 'Unknown error')
+      return
+    }
+    // 🔴 The flag is ORTHOGONAL to the lifecycle — the route touches only the
+    // spam columns. Take the row the route returns and infer nothing else from
+    // it; in particular, never derive a status change from a quarantine.
+    if (res.data?.conversation) {
+      setConversation(prev => (prev ? { ...prev, ...res.data.conversation } : prev))
+    } else {
+      refresh({ quiet: true })
+    }
+  }
+
   // Mark as unread — the mail-app gesture for "deal with this later". The
   // screen's own open-marking already ran, so this flips it back and the row
   // regains its weight when the list refreshes on focus.
@@ -1183,22 +1214,30 @@ export default function EmailConversation() {
     router.push({ pathname: '/email/forward', params: { conversationId: conversationId, messageId } })
   }
 
-  // The ⋮ overflow — one action, acting on the NEWEST forwardable message
-  // (lib rule: trailing internal notes are skipped; "forward" from the menu
-  // means the correspondence on top, not the staff commentary about it).
+  // The ⋮ overflow — Forward, acting on the NEWEST forwardable message (lib
+  // rule: trailing internal notes are skipped; "forward" from the menu means
+  // the correspondence on top, not the staff commentary about it), and now
+  // Mark as spam / Not spam (MAIL-SPAM.1 — the phone's first sight of the
+  // quarantine). Forward drops out of the menu with nothing to forward; spam
+  // never does; the flag is orthogonal to what is or isn't forwardable.
+  //
+  // Both rows are already gated by the trigger Pressable's own
+  // `disabled={savingAction || !conversation || tombstone}` — openOverflow
+  // cannot run at all while any of those hold, so neither row needs a second
+  // disablement here.
+  //
+  // React Native's Alert has no icon slot for its buttons — only `text` and
+  // `style` reach the OS action sheet — so spamActionLabel's `.icon` has no
+  // home on this menu; only `.label` renders, the same plain text the
+  // Forward row already uses.
   function openOverflow() {
     const target = newestForwardableMessage(messages)
-    if (!target) {
-      Alert.alert(
-        'Forward',
-        'There’s nothing on this conversation that can be forwarded — internal notes are staff-only.',
-      )
-      return
-    }
-    Alert.alert('More actions', null, [
-      { text: 'Forward…', onPress: () => pushForward(target.id) },
-      { text: 'Cancel', style: 'cancel' },
-    ])
+    const spam = spamActionLabel(conversation)
+    const buttons = []
+    if (target) buttons.push({ text: 'Forward…', onPress: () => pushForward(target.id) })
+    buttons.push({ text: spam.label, onPress: toggleSpam })
+    buttons.push({ text: 'Cancel', style: 'cancel' })
+    Alert.alert('More actions', null, buttons)
   }
 
   // 'Email' rather than the display helper's "Unknown sender" fallback while
@@ -1296,18 +1335,17 @@ export default function EmailConversation() {
         </View>
       ) : (
         <>
-          {/* Header strip (mockup §04): the SUBJECT leads, then the status +
-              account chips, then the server's own audience derivation.
-              EMAIL-PARTICIPANTS.12 — the audience line is the LIVE set off
-              the server, with the requester demoted to "Opened by" only when
-              the two have actually diverged. */}
-          <View className="border-b border-un1t-border bg-un1t-surface px-4 pt-2.5 pb-3">
+          {/* ONE band (MAIL-READER.M1, option A). Subject, then one meta row,
+              then Details on demand. It was four bands — subject, chips, the
+              audience line and the opener — which with the nudge banner below
+              spent 21% of an 844pt screen before a word of email. */}
+          <View className="border-b border-un1t-border bg-un1t-surface px-4 pt-2.5 pb-2.5">
             {conversation?.subject ? (
-              <Text className="text-[17px] font-extrabold text-un1t-text leading-snug" numberOfLines={2}>
+              <Text className="text-[16px] font-extrabold text-un1t-text leading-snug" numberOfLines={2}>
                 {conversation.subject}
               </Text>
             ) : (
-              <Text className="text-[17px] font-extrabold text-un1t-subtle leading-snug">
+              <Text className="text-[16px] font-extrabold text-un1t-subtle leading-snug">
                 (no subject)
               </Text>
             )}
@@ -1317,22 +1355,50 @@ export default function EmailConversation() {
                   <Text className={`text-[10px] font-semibold ${chip.text}`}>{chip.label}</Text>
                 </View>
               ) : null}
-              {/* Which account it arrived at. mailbox_id is ON DELETE SET
-                  NULL, so a deleted address orphans its correspondence rather
-                  than hiding it — the no-mailbox case is said in words. */}
-              <View className="px-1.5 py-0.5 rounded bg-slate-500/10">
+              {/* 🔴 The no-mailbox case is said in WORDS, never shortened to a
+                  chip: mailbox_id is ON DELETE SET NULL, so a deleted address
+                  orphans its correspondence rather than hiding it. */}
+              <View className="px-1.5 py-0.5 rounded bg-slate-500/10 mr-1.5">
                 <Text className="text-[10px] font-semibold text-slate-700" numberOfLines={1}>
-                  {conversation?.mailbox ? `@ ${mailboxLabel(conversation.mailbox)}` : 'No mailbox on this conversation'}
+                  {accountChipLabel(conversation?.mailbox)}
                 </Text>
               </View>
+              {/* The nudge, as a chip rather than a full-width banner. Its two
+                  actions live in the sheet it opens. */}
+              {nudge && !conversation?.merged_into_id ? (
+                <Pressable
+                  onPress={() => setNudgeSheetOpen(true)}
+                  hitSlop={6}
+                  accessibilityRole="button"
+                  accessibilityLabel={nudge.text}
+                  className="flex-row items-center px-1.5 py-0.5 rounded bg-blue-500/10 mr-1.5"
+                >
+                  <Ionicons name="link-outline" size={10} color="#1D4ED8" style={{ marginRight: 3 }} />
+                  <Text className="text-[10px] font-semibold text-blue-700">{nudge.chip}</Text>
+                </Pressable>
+              ) : null}
+              <View className="flex-1" />
+              <Pressable
+                onPress={() => setDetailsOpen(v => !v)}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityState={{ expanded: detailsOpen }}
+                accessibilityLabel={detailsOpen ? 'Hide conversation details' : 'Show conversation details'}
+                className="flex-row items-center"
+              >
+                <Text className="text-[11px] text-un1t-subtle mr-1">Details</Text>
+                <Ionicons name={detailsOpen ? 'chevron-up' : 'chevron-down'} size={12} color="#64748B" />
+              </Pressable>
             </View>
-            <Text className="text-[11px] text-un1t-subtle mt-1.5" numberOfLines={1}>
-              {threadLines.primary}
-            </Text>
-            {threadLines.opener ? (
-              <Text className="text-[11px] text-un1t-muted mt-0.5" numberOfLines={1}>
-                {threadLines.opener}
-              </Text>
+            {detailsOpen ? (
+              <View className="mt-2 pt-2 border-t border-un1t-border">
+                {headerDetailLines(conversation, threadLines).map(line => (
+                  <Text key={line.key} className="text-[11px] text-un1t-subtle mb-0.5">
+                    {line.label ? <Text className="text-un1t-muted">{line.label}: </Text> : null}
+                    {line.value}
+                  </Text>
+                ))}
+              </View>
             ) : null}
           </View>
 
@@ -1351,34 +1417,6 @@ export default function EmailConversation() {
               </Text>
               <Text className="text-[12px] font-bold text-un1t-text ml-2">Open</Text>
             </Pressable>
-          ) : null}
-
-          {/* §03 A — the nudge: the same requester has other OPEN
-              conversations here. Shown off the related endpoint's verdict
-              only (relatedNudge — an unknown count shows nothing). */}
-          {nudge && !conversation?.merged_into_id ? (
-            <View className="flex-row items-center border-b border-blue-500/20 bg-blue-500/10 px-4 py-2">
-              <Ionicons name="link-outline" size={13} color="#1D4ED8" style={{ marginRight: 6 }} />
-              <Text className="text-[12px] text-blue-700 flex-1" numberOfLines={2}>
-                {nudge.text}
-              </Text>
-              {nudge.viewId ? (
-                <Pressable
-                  onPress={() => router.push(`/email/${nudge.viewId}`)}
-                  hitSlop={6}
-                  accessibilityLabel="View the newest related conversation"
-                >
-                  <Text className="text-[12px] font-bold text-blue-700 underline ml-2">View</Text>
-                </Pressable>
-              ) : null}
-              <Pressable
-                onPress={() => setMergeOpen(true)}
-                hitSlop={6}
-                accessibilityLabel="Merge related conversations into this one"
-              >
-                <Text className="text-[12px] font-bold text-blue-700 underline ml-3">Merge</Text>
-              </Pressable>
-            </View>
           ) : null}
 
           <ScrollView
@@ -1768,6 +1806,49 @@ export default function EmailConversation() {
                 )}
               </Pressable>
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* The nudge chip's two actions — the banner's View and Merge, now that
+          the banner is a chip. 🔴 The chip only exists when relatedNudge said
+          so: an unknown count renders NOTHING, never 0, and a failed related
+          read is null rather than []. */}
+      <Modal
+        visible={nudgeSheetOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setNudgeSheetOpen(false)}
+      >
+        <View className="flex-1 justify-end bg-black/40">
+          <Pressable
+            className="flex-1"
+            accessibilityLabel="Close related conversations"
+            onPress={() => setNudgeSheetOpen(false)}
+          />
+          <View
+            className="bg-un1t-bg rounded-t-2xl px-4 pt-4"
+            style={{ paddingBottom: Math.max(insets.bottom, 16) }}
+          >
+            <Text className="text-[13px] text-un1t-subtle mb-3">{nudge?.text}</Text>
+            {nudge?.viewId ? (
+              <Pressable
+                onPress={() => { setNudgeSheetOpen(false); router.push(`/email/${nudge.viewId}`) }}
+                accessibilityRole="button"
+                className="flex-row items-center border-t border-un1t-border py-3"
+              >
+                <Ionicons name="open-outline" size={16} color="#111827" style={{ marginRight: 10 }} />
+                <Text className="text-[14px] text-un1t-text">Open the newest related conversation</Text>
+              </Pressable>
+            ) : null}
+            <Pressable
+              onPress={() => { setNudgeSheetOpen(false); setMergeOpen(true) }}
+              accessibilityRole="button"
+              className="flex-row items-center border-t border-un1t-border py-3"
+            >
+              <Ionicons name="git-merge-outline" size={16} color="#111827" style={{ marginRight: 10 }} />
+              <Text className="text-[14px] text-un1t-text">Merge related conversations…</Text>
+            </Pressable>
           </View>
         </View>
       </Modal>

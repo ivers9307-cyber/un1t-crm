@@ -112,6 +112,18 @@ describe('relatedNudge', () => {
     })
     expect(n.viewId).toBe('R-live')
   })
+
+  it('carries a chip string for the compact header', () => {
+    // MAIL-READER.M1 — the banner became a chip, and a chip has no room for the
+    // sentence. Same verdict, two lengths, ONE derivation: a count this
+    // function would not assert in words is not asserted in a chip either.
+    expect(relatedNudge({ related: [{ id: 'a' }], open_count: 2 }).chip).toBe('1 other')
+    expect(relatedNudge({ related: [{ id: 'a' }, { id: 'b' }], open_count: 3 }).chip).toBe('2 others')
+  })
+
+  it('has no chip when it has no nudge', () => {
+    expect(relatedNudge(null)).toBe(null)
+  })
 })
 
 describe('mergePickerRows', () => {
