@@ -1,66 +1,50 @@
-// HOME.3 — GET /api/home-queue/count. Cheap sidebar/nav badge: delegates to
-// getHomeQueueCount (src/lib/home-queue.js), never assembles rows.
+// src/app/api/home-queue/count/route.test.js
+// WIDGET.1 — the What Needs Me widget reads this route.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/auth', async () => {
-  const actual = await vi.importActual('@/lib/auth')
-  return { ...actual, getCurrentUser: vi.fn() }
-})
-vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
-vi.mock('@/lib/home-queue', () => ({ getHomeQueueCount: vi.fn() }))
+const h = vi.hoisted(() => ({ user: { id: 'u1' }, locationId: 'loc-1' }))
 
-import { GET } from './route'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
-import { getHomeQueueCount } from '@/lib/home-queue'
+vi.mock('@/lib/with-auth', () => ({
+  withAuth: (opts, handler) => Object.assign(
+    async (request, ctx) => handler({
+      user: h.user, db: {}, locationId: h.locationId, request,
+      params: ctx?.params ? await ctx.params : undefined,
+    }),
+    { _opts: opts }
+  ),
+}))
+vi.mock('@/lib/home-queue', () => ({ getHomeQueueCounts: vi.fn() }))
 
-const req = () => new Request('http://x/api/home-queue/count')
-const staff = { id: 'u1', role: 'staff', activeLocation: { id: 'loc1' } }
+import { GET } from './route.js'
+import { getHomeQueueCounts } from '@/lib/home-queue'
 
-beforeEach(() => {
-  vi.clearAllMocks()
-  createServerClient.mockReturnValue({ marker: 'db' })
-})
+beforeEach(() => { vi.clearAllMocks() })
 
 describe('GET /api/home-queue/count', () => {
-  it('401s when unauthenticated', async () => {
-    getCurrentUser.mockResolvedValue(null)
-    const res = await GET(req())
-    expect(res.status).toBe(401)
-    expect(getHomeQueueCount).not.toHaveBeenCalled()
+  it('opts into widget tokens and is location-scoped', () => {
+    expect(GET._opts.allowWidgetToken).toBe(true)
+    expect(GET._opts.location).toBe(true)
   })
 
-  it('returns { success, data: { count } } from getHomeQueueCount', async () => {
-    getCurrentUser.mockResolvedValue(staff)
-    getHomeQueueCount.mockResolvedValue(7)
-    const res = await GET(req())
-    const body = await res.json()
+  it('returns count, bySource and degraded', async () => {
+    getHomeQueueCounts.mockResolvedValue({
+      count: 5, bySource: { approvals: 3, mail: 2, inbox: 0 }, degraded: [],
+    })
+    const res = await GET(new Request('https://x.test/api/home-queue/count'))
     expect(res.status).toBe(200)
-    expect(body).toEqual({ success: true, data: { count: 7 } })
-    expect(getHomeQueueCount).toHaveBeenCalledWith({ marker: 'db' }, staff)
+    expect(await res.json()).toEqual({
+      success: true,
+      data: { count: 5, bySource: { approvals: 3, mail: 2, inbox: 0 }, degraded: [] },
+    })
   })
 
-  it('answers 0 rather than erroring for a session with no active location', async () => {
-    getCurrentUser.mockResolvedValue({ ...staff, activeLocation: null })
-    getHomeQueueCount.mockResolvedValue(0)
-    const res = await GET(req())
-    const body = await res.json()
-    expect(res.status).toBe(200)
-    expect(body.data.count).toBe(0)
-  })
-
-  // EMAIL-TICKET-CLEANUP.2 — a failed mailbox-visibility lookup must not
-  // read as a confident 0. getHomeQueueCount rejects for exactly this case
-  // (src/lib/home-queue.js); the route mirrors /api/email/tickets/count's
-  // own 500 posture so the title-bar poller keeps its last good number
-  // rather than overwriting it with a wrong "nothing to do".
-  it('500s (not a confident 0) when getHomeQueueCount rejects on a tickets visibility failure', async () => {
-    getCurrentUser.mockResolvedValue(staff)
-    getHomeQueueCount.mockRejectedValue(new Error('tickets: mailbox visibility lookup failed'))
-    const res = await GET(req())
-    const body = await res.json()
+  it('still answers 500 when mailbox visibility is unavailable', async () => {
+    // EMAIL-TICKET-CLEANUP.2 — a bare 0 here would read as "nothing to do"
+    // rather than "we could not check". The 500 posture must survive.
+    getHomeQueueCounts.mockRejectedValue(new Error('visibility down'))
+    const res = await GET(new Request('https://x.test/api/home-queue/count'))
     expect(res.status).toBe(500)
-    expect(body.success).toBe(false)
+    expect((await res.json()).success).toBe(false)
   })
 })
