@@ -28,6 +28,11 @@ import {
   mailRowDisplay,
   flatThreadPlan,
   flatMessageMeta,
+  spamActionLabel,
+  shortMailboxLabel,
+  headerDetailLines,
+  audienceSummary,
+  composerCap,
 } from './mail-conversations'
 
 describe('conversationMessageKind', () => {
@@ -163,7 +168,7 @@ describe('mail status (RETIRE-TICKETS.1 — the lifecycle chips left with the qu
 describe('views', () => {
   // The mail route 400s on anything outside this set, and an absent param is
   // the inbox — so the default view MUST send no param at all.
-  const WIRE_WHITELIST = ['inbox', 'needs_reply', 'archived', 'sent']
+  const WIRE_WHITELIST = ['inbox', 'needs_reply', 'archived', 'sent', 'spam']
 
   it('only ever puts a route-whitelisted value on the wire', () => {
     for (const v of TICKET_VIEW_TABS) {
@@ -1350,5 +1355,159 @@ describe('flatMessageMeta — snippet excludes quoted text (MAIL-REPLY-QUOTE.1)'
   it('previews only the words above the quote', () => {
     const meta = flatMessageMetaForQuote({ direction: 'outbound', text_body: 'Yes.\n\nOn Mon 7 Sep 2026 at 13:34, A <a@b.c> wrote:\n> old', created_at: '2026-09-07T12:40:00Z' })
     expect(meta.snippet).toBe('Yes.')
+  })
+})
+
+// ── MAIL-READER.M1 — the compact reader's screen decisions ───────────────
+describe('TICKET_VIEW_TABS — the Spam view', () => {
+  it('carries all five views in the shared order', () => {
+    expect(TICKET_VIEW_TABS.map(v => v.id))
+      .toEqual(['inbox', 'needs_reply', 'sent', 'archived', 'spam'])
+  })
+
+  it('sends spam as its own ?view= value', () => {
+    expect(ticketViewWire('spam')).toBe('spam')
+  })
+
+  it('gives the spam view its own empty copy', () => {
+    const spam = ticketViewTab('spam')
+    expect(spam.emptyTitle).toBe('No spam')
+    expect(spam.emptyBody).toMatch(/30 days/)
+  })
+})
+
+describe('spamActionLabel', () => {
+  it('offers to quarantine a live conversation', () => {
+    expect(spamActionLabel({ is_spam: false })).toEqual({
+      label: 'Mark as spam', next: true, icon: 'alert-circle-outline',
+    })
+  })
+
+  it('offers to release a quarantined one', () => {
+    expect(spamActionLabel({ is_spam: true })).toEqual({
+      label: 'Not spam', next: false, icon: 'shield-checkmark-outline',
+    })
+  })
+
+  it('treats a missing flag as live, like every other reader of it', () => {
+    expect(spamActionLabel({}).next).toBe(true)
+    expect(spamActionLabel(null).next).toBe(true)
+  })
+})
+
+describe('shortMailboxLabel', () => {
+  it('takes the leading segment of the full label', () => {
+    // 🔴 `label`, not `name` — MAILBOX_COLUMNS
+    // (src/app/api/email/mail/_conversation.js) is 'id, location_id, address,
+    // label, is_default, active, egress'; email_mailboxes has no `name`
+    // column, and mailboxLabel() (this file, below) already reads `.label`.
+    expect(shortMailboxLabel({ label: 'Accounts - Hatch Street' })).toBe('Accounts')
+  })
+
+  it('leaves a label with no separator alone', () => {
+    expect(shortMailboxLabel({ label: 'Accounts' })).toBe('Accounts')
+  })
+
+  it('is null when there is no mailbox, so the caller says it in words', () => {
+    // 🔴 mailbox_id is ON DELETE SET NULL: a deleted address ORPHANS its
+    // correspondence rather than hiding it, and "No mailbox on this
+    // conversation" is the sentence that keeps that visible. Never a chip
+    // shortened to nothing.
+    expect(shortMailboxLabel(null)).toBe(null)
+    expect(shortMailboxLabel({})).toBe(null)
+  })
+})
+
+describe('headerDetailLines', () => {
+  it('names the mailbox in full, the live audience and the opener', () => {
+    const lines = headerDetailLines(
+      { mailbox: { label: 'Accounts - Hatch Street', address: 'accounts@hatchstreetfitness.com' } },
+      { primary: 'On this thread: Sean Mulcahy <dse@docusign.net>', opener: 'Opened by Sean Mulcahy' },
+    )
+    expect(lines).toEqual([
+      { key: 'mailbox', label: 'Account', value: 'Accounts - Hatch Street' },
+      { key: 'thread', label: null, value: 'On this thread: Sean Mulcahy <dse@docusign.net>' },
+      { key: 'opener', label: null, value: 'Opened by Sean Mulcahy' },
+    ])
+  })
+
+  it('omits the opener when the server did not diverge them', () => {
+    const lines = headerDetailLines({ mailbox: { label: 'A' } }, { primary: 'On this thread: x' })
+    expect(lines.map(l => l.key)).toEqual(['mailbox', 'thread'])
+  })
+
+  it('says the no-mailbox case in words', () => {
+    const lines = headerDetailLines({}, { primary: 'On this thread: x' })
+    expect(lines[0]).toEqual({
+      key: 'mailbox', label: 'Account', value: 'No mailbox on this conversation',
+    })
+  })
+})
+
+describe('audienceSummary', () => {
+  const mailbox = { address: 'accounts@hatchstreetfitness.com' }
+
+  it('is short on the face and full behind the info tap', () => {
+    const summary = audienceSummary(
+      { requester_email: 'dse@docusign.net', mailbox },
+      { to: ['dse@docusign.net', 'sean@x.test'] },
+    )
+    expect(summary.short).toBe('To dse@docusign.net & 1 other')
+    expect(summary.full).toBe(
+      'Sends an email to dse@docusign.net and 1 other · replies come back to accounts@hatchstreetfitness.com',
+    )
+    expect(summary.disabled).toBe(false)
+  })
+
+  it('names one recipient without a count', () => {
+    const summary = audienceSummary({ requester_email: 'a@x.test', mailbox }, { to: ['a@x.test'] })
+    expect(summary.short).toBe('To a@x.test')
+  })
+
+  it('pluralises past two', () => {
+    const summary = audienceSummary(
+      { requester_email: 'a@x.test', mailbox },
+      { to: ['a@x.test', 'b@x.test', 'c@x.test'] },
+    )
+    expect(summary.short).toBe('To a@x.test & 2 others')
+  })
+
+  it('short and full come from ONE derivation, so they cannot disagree', () => {
+    // The bug this shape exists to prevent (EMAIL-PARTICIPANTS.12): the
+    // placeholder naming one person and the footer naming another, on the
+    // screen where a wrong name is most expensive. Both read
+    // conversationReplyAudience.
+    const conversation = { requester_email: 'requester@x.test', mailbox }
+    const summary = audienceSummary(conversation, { to: ['live@x.test'] })
+    expect(summary.short).toContain('live@x.test')
+    expect(summary.full).toContain('live@x.test')
+    expect(summary.short).not.toContain('requester@x.test')
+  })
+
+  it('a disabled audience shows the reason on the face, never a summary', () => {
+    // There is no ⓘ to hide a refusal behind: the operator needs the sentence.
+    const summary = audienceSummary({ requester_email: 'a@x.test', mailbox }, { empty: true })
+    expect(summary.disabled).toBe(true)
+    expect(summary.short).toBe(summary.full)
+    expect(summary.full).toMatch(/nobody to reply to/)
+  })
+})
+
+describe('composerCap', () => {
+  it('is 40% of the space above the keyboard', () => {
+    expect(composerCap(800)).toBe(320)
+  })
+
+  it('never goes below a usable floor', () => {
+    // A short landscape window or a big keyboard must not shrink the composer
+    // to a slot nothing fits in.
+    expect(composerCap(300)).toBe(168)
+    expect(composerCap(0)).toBe(168)
+  })
+
+  it('answers the floor for a height it cannot read', () => {
+    for (const input of [null, undefined, NaN, -10, 'tall']) {
+      expect(composerCap(input)).toBe(168)
+    }
   })
 })

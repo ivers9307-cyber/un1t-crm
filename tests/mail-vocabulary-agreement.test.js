@@ -265,4 +265,20 @@ describe('the server and the shared vocabulary mean the same thing', () => {
   it('the view ids are the same list on the wire and on screen, in the same order', () => {
     expect(shared.MAIL_VIEWS.map(v => v.id)).toEqual([...SERVER_MAIL_VIEWS])
   })
+
+  it('the view ids are the same list on the phone as on the wire, in the same order', () => {
+    // THE MISSING ASSERTION. The test above pins shared against the SERVER's
+    // list; nothing pinned MOBILE's, and that is exactly how the Spam view came
+    // to be absent from the phone from MAIL-SPAM.1 until MAIL-READER.M1 — five
+    // views on the wire, four on the tab bar, and no test that could tell.
+    expect(mobile.TICKET_VIEW_TABS.map(v => v.id)).toEqual(shared.MAIL_VIEWS.map(v => v.id))
+  })
+
+  it('every mobile view sends a wire value the server whitelists', () => {
+    for (const tab of mobile.TICKET_VIEW_TABS) {
+      // `wire: null` means "send no param", which the route reads as the inbox.
+      if (tab.wire === null) expect(tab.id).toBe('inbox')
+      else expect([...SERVER_MAIL_VIEWS]).toContain(tab.wire)
+    }
+  })
 })
