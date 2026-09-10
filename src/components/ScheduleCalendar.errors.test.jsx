@@ -89,6 +89,17 @@ describe('ScheduleCalendar load failures (ROSTER-FIX.6a)', () => {
       expect(screen.queryByText(/Loading roster/)).toBeNull()
     })
 
+    // 🔴 SETTLE EVERY LOAD BEFORE DISMISSING. The screen fires several
+    // requests (blocks, staff, contractor spend) and this mock rejects all of
+    // them, each one raising the banner. Dismissing while one is still in
+    // flight is therefore a race the test loses at random: the click clears
+    // the banner, a later rejection raises it again, and the assertion reads
+    // "Dismiss is broken" when nothing is broken at all.
+    //
+    // (Whether a NEW failure should re-raise a banner the operator just
+    // dismissed is a real product question, and a different one from this
+    // test — which is about the button working.)
+    await act(async () => {})
     fireEvent.click(screen.getByLabelText('Dismiss'))
     await waitFor(() => expect(screen.queryByText('Could not load the roster')).toBeNull())
   })
@@ -206,8 +217,26 @@ describe('per-period unpublished-changes guard (ROSTER-FIX.6a)', () => {
     await screen.findByText('Publish roster', {}, { timeout: 5000 })
     await waitFor(() => expect(screen.getByText('Blocks in period')).toBeTruthy(), { timeout: 5000 })
     const buttons = screen.getAllByText('Publish')
+    const blockLoads = () => global.fetch.mock.calls
+      .filter(([url]) => String(url).includes('/schedule/blocks')).length
+    const loadsBeforePublish = blockLoads()
     fireEvent.click(buttons[buttons.length - 1])
     await waitFor(() => expect(screen.queryByText('Publish roster')).toBeNull(), { timeout: 5000 })
+
+    // 🔴 THE MODAL CLOSING IS NOT PROOF THE PUBLISH FINISHED, and treating it
+    // as proof is what made this test fail in CI while passing locally. The
+    // handler does three things in a row — setPublishModal(null), then
+    // refreshAfterMutation(), then clearDirtyPeriodsCoveredBy() — and the wait
+    // above observes only the FIRST. Under load the click below could land
+    // between them, with the guard still armed, and the failure read as "the
+    // guard is broken" rather than "the test asked too early".
+    //
+    // refreshAfterMutation() is the statement immediately before the dirty
+    // clear and is not awaited, so once its blocks fetch has been ISSUED the
+    // clear has necessarily already run. Waiting on that is a direct
+    // observation of the thing under test, not a sleep.
+    await waitFor(() => expect(blockLoads()).toBeGreaterThan(loadsBeforePublish), { timeout: 5000 })
+    await act(async () => {})
 
     window.confirm.mockClear()
     fireEvent.click(screen.getByText('Time Off').closest('a'))
