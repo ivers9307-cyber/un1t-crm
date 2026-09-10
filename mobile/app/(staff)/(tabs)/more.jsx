@@ -18,6 +18,7 @@ import { useAuth } from '../../../lib/auth-context'
 import { resolveLayoutForUser } from '../../../lib/mobile-layout'
 import { getOutstandingPolicyCount } from '../../../lib/policies-api'
 import { canMobile } from '../../../lib/permissions'
+import { canManageWidgets } from '../../../lib/widget-tokens'
 import { getPendingApprovals } from '../../../lib/approvals-api'
 import { approvalsBadgeCount } from '../../../lib/approvals'
 import { listInboxIssues } from '../../../lib/issues-api'
@@ -246,6 +247,12 @@ export default function More() {
   // W1 — per-location feature toggles (master only; matches the web
   // canEditLocationFeatures gate). Flip which features this studio shows.
   if (profile?.isMaster || profile?.role === 'master') tiles.push({ key: 'features', icon: 'options-outline', label: 'Location features', onPress: () => router.push('/location-features') })
+  // WIDGET.1 (Phase 2, Task 5) — mint/revoke the iOS home-screen widget's
+  // per-device credential. Gated on canManageWidgets: a widget can show
+  // doors + AC (studio_management) or Sonos + Shelly (device_control), same
+  // composite the Studio hub itself gates on, so this never offers a mint
+  // screen for a studio the widget would then have nothing to show.
+  if (canManageWidgets(profile, activeLocation)) tiles.push({ key: 'widgets', icon: 'apps-outline', label: 'Widgets', onPress: () => router.push('/settings/widgets') })
   if (allowed.length > 0)      tiles.push({ key: 'customise', icon: 'grid-outline', label: 'Customise bar', onPress: () => router.push('/customise-bar') })
   if (canImpersonate)          tiles.push({ key: 'impersonate', icon: 'eye-outline', label: 'View as user', badge: impersonatingFrom ? '•' : null, onPress: () => router.push('/impersonate') })
 
