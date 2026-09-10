@@ -1646,194 +1646,103 @@ git commit -m "WIDGET.1 — opt in shelly toggle + AC on/off; pin the opt-in set
 
 ---
 
-## Task 11: `GET /api/widget/devices`
+## Task 11a: Extract the door allowlist out of the doors route
+
+**Discovered during execution:** only two of the four "device" sources are
+database tables. `ac_devices` and `shelly_devices` are; **doors are a live
+UniFi Access call** (`listDoors(cfg)` from `src/lib/unifi-access.js`) and
+**Sonos groups are a live Sonos Control API call**. The original plan for
+Task 11 queried four tables uniformly, which would have returned an empty
+picker for doors and speakers.
+
+Worse, it would have skipped the door allowlist. `GET /api/studio-management/doors`
+intersects the controller's door list with `profile_locations.unifi_door_ids`
+— the per-user, per-location allowlist migration 182 added precisely because
+the route "previously returned every door from the UniFi controller
+unfiltered, which exposed the door inventory to any staff user with
+studio_management permission" (UNIFI-DOORS-SCOPE). A widget picker that
+re-derived its own door list would reintroduce that exposure.
+
+So the allowlist intersection gets extracted and shared, for the same reason
+role-template loading did in Task 3: a second copy would drift, silently and
+permissively.
+
+**Files:**
+- Create: `src/lib/studio-doors.js` — `listAllowedDoors(db, { user, location, locationId })`
+- Test: `src/lib/studio-doors.test.js`
+- Modify: `src/app/api/studio-management/doors/route.js` to call it
+
+- [ ] **Step 1: Read the route you are extracting from**
+
+Run: `sed -n 1,120p src/app/api/studio-management/doors/route.js`
+
+Note the four behaviours that must survive verbatim: the `getUnifiConfig`
+dual-read, the door-shape normalisation (UniFi firmwares ship camelCase *or*
+snake_case — `id || unique_id || door_id`, `name || display_name || title`),
+the NULL-allowlist legacy fallback (`null`/`undefined` = unrestricted,
+`[]` = no doors), and the `scope` field the UI uses to choose its empty state.
+
+- [ ] **Step 2: Write the failing test**
+
+Cover: unrestricted (null allowlist) returns everything; `[]` returns nothing;
+a populated allowlist returns only the intersection; both door-shape spellings
+normalise; a door with no id in any spelling is dropped; a `UnifiError`
+propagates its status; unconfigured UniFi is reported as such rather than as
+an empty list.
+
+- [ ] **Step 3: Run it, confirm it fails, then implement and confirm it passes**
+
+- [ ] **Step 4: Rewire the doors route to call the helper**
+
+Its observable output — `data`, `scope`, and every status code including the
+404, the 412 `unifi_not_configured` and the `UnifiError` passthrough — must not
+change. `src/app/api/studio-management/unlock/route.test.js` (Task 9) already
+pins the allowlist semantics on the unlock side; run it too.
+
+- [ ] **Step 5: Full suite, lint, build, commit**
+
+---
+
+## Task 11b: `GET /api/widget/devices`
 
 The configuration picker's data source: what can this person actually control
-at this studio?
+at this studio? It composes **four heterogeneous sources**, two of them live
+third-party calls, so `Promise.allSettled` plus a `degraded` list is not
+defensive padding — it is the normal case.
 
 **Files:**
 - Create: `src/app/api/widget/devices/route.js`
 - Test: `src/app/api/widget/devices/route.test.js`
 
-- [ ] **Step 1: Read the four list routes you are composing**
+| kind | source | gate |
+| --- | --- | --- |
+| `door` | `listAllowedDoors()` from Task 11a — UniFi live, allowlist-intersected | `studio_management` |
+| `ac` | `ac_devices` table, `.eq('location_id', locationId)` | `studio_management` |
+| `plug` | `shelly_devices` table, `.eq('location_id', locationId)` | `device_control` |
+| `speaker` | Sonos groups — `getSonosConfig` → `withFreshToken` → `sonosGetGroups` → `mapGroups` | `device_control` |
 
-```bash
-sed -n 1,60p src/app/api/studio-management/doors/route.js
-sed -n 1,60p src/app/api/studio-management/ac/devices/route.js
-sed -n 1,60p src/app/api/shelly/devices/route.js
-sed -n 1,60p src/app/api/sonos/household/route.js
-```
+- [ ] **Step 1: Read the two live-source routes** so you reuse their helpers
+rather than re-deriving them: `src/app/api/studio-management/doors/route.js`
+(post-11a) and `src/app/api/sonos/household/route.js`.
 
-Write down the **real table name and label column** each one reads. The names
-used below are placeholders until you replace them — a guessed table name here
-produces an empty picker that reads to the operator as a permission bug.
+- [ ] **Step 2: Write the failing test.** Cover: all four kinds when both
+permissions are held; doors and AC omitted without `studio_management`; plugs
+and speakers omitted without `device_control`; an empty list (200, not an
+error) when neither is held; one failing source degrades without failing the
+list; **Sonos not connected is a normal empty result, not a degraded source**;
+and — the security case — **the door list is the allowlist-intersected one,
+never the raw controller inventory**.
 
-- [ ] **Step 2: Write the failing test**
+- [ ] **Step 3: Implement**, shaping every entry as `{ kind, id, label }` and
+returning `{ success: true, data: { devices, degraded } }`.
 
-```js
-// src/app/api/widget/devices/route.test.js
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+- [ ] **Step 4:** `npm run check:location-scoping`, `check:route-guards`, lint,
+full suite, commit.
 
-vi.mock('@/lib/with-auth', () => ({
-  withAuth: (opts, handler) => Object.assign(
-    (req, ctx) => handler({ user: globalThis.__user, db: globalThis.__db, locationId: 'loc-1', request: req, params: ctx?.params }),
-    { _opts: opts }
-  ),
-}))
-vi.mock('@/lib/permissions', () => ({ hasPermissionForLocation: vi.fn() }))
-
-import { GET } from './route'
-import { hasPermissionForLocation } from '@/lib/permissions'
-
-// Replace these four keys with the REAL table names from Step 1.
-const rows = {
-  unifi_doors: [{ id: 'd1', name: 'Front door' }],
-  ac_devices: [{ id: 'a1', name: 'Gym floor' }],
-  shelly_devices: [{ id: 's1', name: 'Sauna' }],
-  sonos_groups: [{ id: 'g1', name: 'Speakers' }],
-}
-
-beforeEach(() => {
-  vi.clearAllMocks()
-  globalThis.__user = { id: 'u1', role: 'manager' }
-  globalThis.__db = {
-    from: vi.fn((t) => ({
-      select: vi.fn(() => ({ eq: vi.fn(async () => ({ data: rows[t] || [], error: null })) })),
-    })),
-  }
-})
-
-const call = () => GET(new Request('https://x.test/api/widget/devices'))
-
-describe('GET /api/widget/devices', () => {
-  it('opts into widget tokens', () => {
-    expect(GET._opts.allowWidgetToken).toBe(true)
-  })
-
-  it('returns every kind when the caller holds both permissions', async () => {
-    hasPermissionForLocation.mockReturnValue(true)
-    const { data } = await (await call()).json()
-    expect(data.devices).toEqual(expect.arrayContaining([
-      { kind: 'door',    id: 'd1', label: 'Front door' },
-      { kind: 'ac',      id: 'a1', label: 'Gym floor' },
-      { kind: 'plug',    id: 's1', label: 'Sauna' },
-      { kind: 'speaker', id: 'g1', label: 'Speakers' },
-    ]))
-  })
-
-  it('omits doors and AC without studio_management', async () => {
-    hasPermissionForLocation.mockImplementation((_u, _l, key) => key === 'device_control')
-    const { data } = await (await call()).json()
-    expect(data.devices.map(d => d.kind).sort()).toEqual(['plug', 'speaker'])
-  })
-
-  it('omits plugs and speakers without device_control', async () => {
-    hasPermissionForLocation.mockImplementation((_u, _l, key) => key === 'studio_management')
-    const { data } = await (await call()).json()
-    expect(data.devices.map(d => d.kind).sort()).toEqual(['ac', 'door'])
-  })
-
-  it('returns an empty list, not an error, when the caller holds neither', async () => {
-    hasPermissionForLocation.mockReturnValue(false)
-    const res = await call()
-    expect(res.status).toBe(200)
-    expect((await res.json()).data.devices).toEqual([])
-  })
-
-  it('degrades one failing source without failing the whole list', async () => {
-    hasPermissionForLocation.mockReturnValue(true)
-    globalThis.__db.from = vi.fn((t) => ({
-      select: vi.fn(() => ({ eq: vi.fn(async () => (
-        t === 'shelly_devices' ? { data: null, error: { message: 'down' } } : { data: rows[t] || [], error: null }
-      )) })),
-    }))
-    const { data } = await (await call()).json()
-    expect(data.devices.some(d => d.kind === 'plug')).toBe(false)
-    expect(data.degraded).toEqual(['plug'])
-  })
-})
-```
-
-- [ ] **Step 3: Run it to verify it fails**
-
-Run: `npx vitest run src/app/api/widget/devices/route.test.js`
-Expected: FAIL — the module does not exist.
-
-- [ ] **Step 4: Implement**
-
-```js
-// src/app/api/widget/devices/route.js
-// WIDGET.1 — what the Studio Controls widget offers in its configuration
-// sheet: the devices this person may actually control at this studio.
-//
-// It composes the SAME per-surface permission gates the individual list
-// routes use — doors and AC on studio_management, plugs and speakers on
-// device_control. It does not invent a gate of its own, because a picker
-// that offers a button the server will refuse is a bug the operator
-// experiences as "the widget is broken".
-//
-// One failing source degrades rather than failing the list: a Shelly cloud
-// blip should not stop someone configuring a door button.
-
-import { NextResponse } from 'next/server'
-import { withAuth } from '@/lib/with-auth'
-import { hasPermissionForLocation } from '@/lib/permissions'
-
-export const runtime = 'nodejs'
-export const dynamic = 'force-dynamic'
-
-export const GET = withAuth(
-  { permission: null, location: true, allowWidgetToken: true },
-  async ({ user, db, locationId }) => {
-    const mayStudio = hasPermissionForLocation(user, locationId, 'studio_management')
-    const mayDevice = hasPermissionForLocation(user, locationId, 'device_control')
-
-    // [kind, table, permission-held, id column, label column]
-    // Table + column names come from the four list routes — see Step 1.
-    const SOURCES = [
-      ['door',    'unifi_doors',    mayStudio, 'id', 'name'],
-      ['ac',      'ac_devices',     mayStudio, 'id', 'name'],
-      ['plug',    'shelly_devices', mayDevice, 'id', 'name'],
-      ['speaker', 'sonos_groups',   mayDevice, 'id', 'name'],
-    ].filter(([, , allowed]) => allowed)
-
-    const settled = await Promise.allSettled(SOURCES.map(async ([kind, table, , idCol, labelCol]) => {
-      const { data, error } = await db.from(table).select(`${idCol}, ${labelCol}`).eq('location_id', locationId)
-      if (error) throw new Error(`${kind}: ${error.message}`)
-      return (data || []).map((r) => ({ kind, id: r[idCol], label: r[labelCol] }))
-    }))
-
-    const devices = []
-    const degraded = []
-    settled.forEach((s, i) => {
-      if (s.status === 'fulfilled') devices.push(...s.value)
-      else degraded.push(SOURCES[i][0])
-    })
-
-    return NextResponse.json({ success: true, data: { devices, degraded } })
-  }
-)
-```
-
-- [ ] **Step 5: Run the tests**
-
-Run: `npx vitest run src/app/api/widget/devices/route.test.js`
-Expected: PASS, 7 tests.
-
-- [ ] **Step 6: Verify location scoping**
-
-Run: `npm run check:location-scoping`
-Expected: exits 0. Every query above filters on `location_id`; if the checker
-disagrees, it has found a real gap — fix the query, do not add an exemption.
-
-- [ ] **Step 7: Commit**
-
-```bash
-git add src/app/api/widget/devices/route.js src/app/api/widget/devices/route.test.js
-git commit -m "WIDGET.1 — GET /api/widget/devices for the config picker"
-```
-
----
+**Latency note for Phase 2:** this endpoint makes two third-party round trips
+(UniFi, Sonos). It is only hit while configuring a widget, never on a timeline
+refresh, so that is acceptable — but the config intent must not block its UI on
+it without a spinner.
 
 ## Task 12: Mint, list and revoke routes
 
