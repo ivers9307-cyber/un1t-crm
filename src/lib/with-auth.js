@@ -58,6 +58,7 @@ import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { WEB_PERMISSION_KEYS } from '@shared/permissions'
 import { validateBody } from '@/lib/validate'
+import { getWidgetUser } from './widget-auth.js'
 
 const VALID_PERMISSION_KEYS = new Set(WEB_PERMISSION_KEYS)
 
@@ -94,6 +95,10 @@ function humanise(key) {
  * @param {import('zod').ZodType} [options.schema]  optional Zod schema; when set,
  *   the request body is validated and the parsed result is passed to the handler
  *   as ctx.input (400 with issues on failure)
+ * @param {boolean} [options.allowWidgetToken]  default false. When true, a
+ *   request with no session may authenticate with a widget token (WIDGET.1).
+ *   Requires location: true. Every route that omits this rejects widget
+ *   tokens, which is why the default is denial.
  * @param {(ctx: object) => Promise<Response>} handler
  *   handler receives { user, db, locationId, request, params } where
  *   `params` is the second arg passed to a Next.js dynamic-route handler.
@@ -107,7 +112,13 @@ export function withAuth(options, handler) {
   if (typeof handler !== 'function') {
     throw new TypeError('withAuth(options, handler): handler must be a function')
   }
-  const { permission, location: requireLocation = true, roles = null, schema = null } = options
+  const {
+    permission,
+    location: requireLocation = true,
+    roles = null,
+    schema = null,
+    allowWidgetToken = false,
+  } = options
   // Fail-fast at module load: a typo in the permission key here
   // means nobody could ever pass the gate. Better to error loudly
   // at import time than to silently 403 every request. Accepts
@@ -122,9 +133,21 @@ export function withAuth(options, handler) {
   if (roles != null && (!Array.isArray(roles) || roles.length === 0)) {
     throw new TypeError('withAuth: roles must be a non-empty array if provided')
   }
+  // A widget token carries exactly one location. A route that does not
+  // require a location is estate-wide by definition, so pairing the two
+  // would silently widen what a lost phone can reach.
+  if (allowWidgetToken && !requireLocation) {
+    throw new Error('withAuth: allowWidgetToken requires location: true')
+  }
 
   return async function authedHandler(request, ctx) {
-    const user = await getCurrentUser()
+    // A real session always wins. The widget path is consulted only when
+    // there is no session AND the route explicitly opted in — which is what
+    // makes denial the default for every route that did not.
+    let user = await getCurrentUser()
+    if (!user && allowWidgetToken) {
+      user = await getWidgetUser(createServerClient(), request)
+    }
     if (!user) return AUTH_ERRORS.unauthorized()
 
     if (permission != null && !hasPermission(user, permission)) {
