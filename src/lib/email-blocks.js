@@ -113,6 +113,14 @@ import { sanitizeEmailHtml, splitQuotedHtml } from './email-html'
  *     cellular connection. Unlike `blocks`, nothing pushes text past this cap
  *     once it is reached: addText()/pushPre() slice to the exact room left,
  *     so the character total is a hard ceiling, not `+ maxDepth`.
+ *     🔴 IT BOUNDS ACCUMULATED TEXT AND HREFS, NOT SERIALISED BYTES. The JSON
+ *     also carries per-block and per-run key overhead — {"type":"para",
+ *     "runs":[{"text":…}]} — that nothing charges, so a message of many short
+ *     linked paragraphs serialises to roughly 1.3x this number. That overhead
+ *     is bounded (blocks and runs are both capped, and tableCellChars charges
+ *     a table's own structure), so the multiplier is bounded too — but do not
+ *     quote this constant as a byte ceiling, because it is not one.
+
  *   - `maxDepth` bounds recursion, not text. walk() recurses once per nesting
  *     level, and an empty `<div>` pushes no block and adds no character, so
  *     nothing above this would ever trip on a tree that is merely deep. Past
@@ -130,7 +138,8 @@ export const CAPS = Object.freeze({
   runsPerBlock: 64,
   listItems: 64,
   tableRows: 200,
-  tableCellChars: 24,
+  tableCellChars: 40,
+  hrefChars: 2_000,
   charsPerRun: 400,
   charsPerPre: 4_000,
   charsPerMessage: 20_000,
@@ -259,6 +268,16 @@ class Sink {
       const take = Math.min(CAPS.charsPerRun, slice.length)
       const run = { text: slice.slice(0, take) }
       for (const k of STYLE_KEYS) if (style[k]) run[k] = style[k]
+      // An href is PAYLOAD, and until MAIL-READER.M1's fourth review round it
+      // was the one kind that crossed the wire free: one anchor with a
+      // 100,000-character tracking URL and four characters of visible text
+      // serialised to 100KB reporting truncated:false — five times this cap,
+      // on somebody's cellular connection.
+      if (run.href) {
+        const href = this.chargeHref(run.href)
+        if (href) run.href = href
+        else delete run.href
+      }
       this.runs.push(run)
       this.budget.chars += take
       slice = slice.slice(take)
@@ -406,6 +425,30 @@ class Sink {
   chargeStructure(chars) {
     this.budget.chars += chars
   }
+
+  /**
+   * Charge one href against the shared budget, or refuse it.
+   *
+   * Returns the href when it fits and `undefined` when it does not, setting
+   * `truncated` in the refusing case. It is never SLICED: half a URL is a
+   * broken link that still costs its bytes, whereas dropping it leaves plain
+   * readable text and one honest truncation flag.
+   *
+   * `hrefChars` refuses a single absurd URL outright even on an otherwise
+   * empty budget. Nothing legitimate needs two thousand characters, and a
+   * redirect chain that long is precisely what this is here to stop.
+   */
+  chargeHref(href) {
+    const url = String(href || '')
+    if (!url) return undefined
+    const room = CAPS.charsPerMessage - this.budget.chars
+    if (url.length > CAPS.hrefChars || url.length > room) {
+      this.truncated = true
+      return undefined
+    }
+    this.budget.chars += url.length
+    return url
+  }
 }
 
 /**
@@ -515,7 +558,10 @@ function handleImage(node, sink, style, _depth) {
     // default on this surface — loses its destination entirely: no link
     // block gets produced either, since the anchor's only content was
     // the image and contributed no runs of its own.
-    if (style.href) block.href = style.href
+    if (style.href) {
+      const href = sink.chargeHref(style.href)
+      if (href) block.href = href
+    }
     sink.push(block)
   }
 }

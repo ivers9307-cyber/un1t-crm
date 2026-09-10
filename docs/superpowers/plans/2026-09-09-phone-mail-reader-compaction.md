@@ -1227,7 +1227,7 @@ Body: a table flattens to a phone column unless it carries a `<th>` or `<thead>`
 - Modify: `src/app/api/email/mail/[id]/route.js` (imports; `GET` at line 93; `shapeMessages` at line 317; the budget at line 342)
 - Modify: `src/app/api/email/mail/[id]/route.test.js`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Read the existing file's fixture and request helpers first and reuse them — do not build a second harness. Then append:
 
@@ -1278,12 +1278,12 @@ describe('GET ?body=blocks', () => {
 })
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `npx vitest run "src/app/api/email/mail/[id]/route.test.js"`
 Expected: FAIL — `html_blocks` is undefined; `html_document` is present.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Extend the import on line 4:
 
@@ -1377,17 +1377,17 @@ Replace the budget line (342):
     // …the existing document branch, unchanged…
 ```
 
-- [ ] **Step 4: Run it to verify it passes**
+- [x] **Step 4: Run it to verify it passes**
 
 Run: `npx vitest run "src/app/api/email/mail/[id]/route.test.js"`
 Expected: PASS, including the pre-existing document tests unchanged.
 
-- [ ] **Step 5: Run the whole mail API surface**
+- [x] **Step 5: Run the whole mail API surface**
 
 Run: `npx vitest run src/app/api/email src/lib/email-blocks.test.js src/lib/email-html.test.js`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add "src/app/api/email/mail/[id]/route.js" "src/app/api/email/mail/[id]/route.test.js"

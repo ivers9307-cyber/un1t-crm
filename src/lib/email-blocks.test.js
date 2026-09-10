@@ -745,6 +745,51 @@ describe('htmlToBlocks — a table row past maxDepth is reported, not swallowed'
   })
 })
 
+describe('htmlToBlocks — an href is payload and costs budget', () => {
+  it('refuses a single absurd URL and says so', () => {
+    // Until the fourth review round this was the one kind of payload that
+    // crossed the wire free: one anchor with a 100,000-character tracking URL
+    // and four characters of visible text serialised to 100KB reporting
+    // truncated:false — five times charsPerMessage, on cellular.
+    const url = `https://x.test/${'a'.repeat(100_000)}`
+    const { blocks, truncated } = htmlToBlocks(`<p>see <a href="${url}">here</a></p>`)
+    expect(truncated).toBe(true)
+    expect(JSON.stringify(blocks).length).toBeLessThan(CAPS.charsPerMessage)
+    // The words survive; only the destination is dropped. Half a URL would be
+    // a broken link that still cost its bytes.
+    expect(JSON.stringify(blocks)).toContain('here')
+    expect(JSON.stringify(blocks)).not.toContain('aaaa')
+  })
+
+  it('keeps an ordinary link, and charges it', () => {
+    const { blocks, truncated } = htmlToBlocks('<p>see <a href="https://x.test/a">here</a></p>')
+    expect(truncated).toBe(false)
+    expect(blocks[0].runs[1]).toEqual({ text: 'here', href: 'https://x.test/a' })
+  })
+
+  it('refuses an absurd URL on an image too, keeping the image', () => {
+    const url = `https://x.test/${'b'.repeat(100_000)}`
+    const { blocks, truncated } = htmlToBlocks(
+      `<a href="${url}"><img data-original-src="https://cdn.test/h.png" alt="Hero"></a>`,
+    )
+    expect(truncated).toBe(true)
+    expect(blocks[0]).toEqual({ type: 'image', blocked: 'https://cdn.test/h.png', alt: 'Hero' })
+  })
+
+  it('bounds a message that is nothing but many long links', () => {
+    const one = `<p><a href="https://x.test/${'c'.repeat(1_500)}">go</a></p>`
+    const { truncated, blocks } = htmlToBlocks(one.repeat(200))
+    expect(truncated).toBe(true)
+    // 1.5x, not 1.0x, and the gap is honest rather than sloppy: charsPerMessage
+    // bounds accumulated TEXT and HREFS, while the serialised JSON also carries
+    // per-block and per-run key overhead ({"type":"para","runs":[{"text":…}]})
+    // that nothing charges. That overhead is itself bounded — blocks and runs
+    // are both capped — so the multiplier is bounded too. The CAPS doc says
+    // this in words rather than claiming a ceiling the code does not hold.
+    expect(JSON.stringify(blocks).length).toBeLessThanOrEqual(CAPS.charsPerMessage * 1.5)
+  })
+})
+
 describe('emailBlocks', () => {
   it('sanitises, walks and reports the blocked count', () => {
     const result = emailBlocks(
