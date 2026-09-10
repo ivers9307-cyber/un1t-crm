@@ -877,11 +877,27 @@ open it first (`sed -n 1,40p src/lib/with-auth.test.js`) and reuse its
 
 ```js
 describe('allowWidgetToken', () => {
+  // NOTE: this file deliberately uses the REAL hasPermission — permission
+  // outcomes are driven by the user object, not by a mock. `schedule` passes
+  // because widgetUser() carries it; `studio_management` denies. Do not add a
+  // permissions mock here; the existing tests depend on the real resolver.
+  function widgetUser(overrides = {}) {
+    return {
+      id: 'u1',
+      role: 'staff',
+      authSource: 'widget',
+      widgetTokenId: 'tok-1',
+      activeLocation: { id: 'loc-1', features: {} },
+      activeAssignment: { permissions: { schedule: true } },
+      ...overrides,
+    }
+  }
+
   it('does not call getWidgetUser when the route did not opt in', async () => {
     getCurrentUser.mockResolvedValue(null)
     const handler = vi.fn()
-    const route = withAuth({ permission: 'studio_management' }, handler)
-    const res = await route(new Request('https://x.test/api/thing'))
+    const wrapped = withAuth({ permission: 'schedule' }, handler)
+    const res = await wrapped(new Request('https://x.test/api/thing'))
     expect(res.status).toBe(401)
     expect(getWidgetUser).not.toHaveBeenCalled()
     expect(handler).not.toHaveBeenCalled()
@@ -889,50 +905,39 @@ describe('allowWidgetToken', () => {
 
   it('falls back to a widget token when the route opted in', async () => {
     getCurrentUser.mockResolvedValue(null)
-    getWidgetUser.mockResolvedValue({
-      id: 'p1', role: 'manager', authSource: 'widget',
-      activeLocation: { id: 'loc-1' }, activeAssignment: { permissions: {} },
-    })
-    hasPermission.mockReturnValue(true)
+    getWidgetUser.mockResolvedValue(widgetUser())
     const handler = vi.fn(async () => new Response('ok'))
-    const route = withAuth({ permission: 'studio_management', allowWidgetToken: true }, handler)
-    const res = await route(new Request('https://x.test/api/thing'))
+    const wrapped = withAuth({ permission: 'schedule', allowWidgetToken: true }, handler)
+    const res = await wrapped(new Request('https://x.test/api/thing'))
     expect(res.status).toBe(200)
     expect(handler).toHaveBeenCalledWith(expect.objectContaining({ locationId: 'loc-1' }))
   })
 
   it('prefers a real session over a widget token when both are present', async () => {
-    getCurrentUser.mockResolvedValue({
-      id: 'p1', role: 'owner', activeLocation: { id: 'loc-9' }, activeAssignment: { permissions: {} },
-    })
-    getWidgetUser.mockResolvedValue({ id: 'other', authSource: 'widget', activeLocation: { id: 'loc-1' } })
-    hasPermission.mockReturnValue(true)
+    getCurrentUser.mockResolvedValue(user({ activeLocation: { id: 'loc-9', features: {} } }))
+    getWidgetUser.mockResolvedValue(widgetUser())
     const handler = vi.fn(async () => new Response('ok'))
-    const route = withAuth({ permission: 'studio_management', allowWidgetToken: true }, handler)
-    await route(new Request('https://x.test/api/thing'))
+    const wrapped = withAuth({ permission: 'schedule', allowWidgetToken: true }, handler)
+    await wrapped(new Request('https://x.test/api/thing'))
     expect(getWidgetUser).not.toHaveBeenCalled()
     expect(handler).toHaveBeenCalledWith(expect.objectContaining({ locationId: 'loc-9' }))
   })
 
   it('still applies the permission gate to a widget user', async () => {
     getCurrentUser.mockResolvedValue(null)
-    getWidgetUser.mockResolvedValue({
-      id: 'p1', role: 'staff', authSource: 'widget',
-      activeLocation: { id: 'loc-1' }, activeAssignment: { permissions: {} },
-    })
-    hasPermission.mockReturnValue(false)
+    getWidgetUser.mockResolvedValue(widgetUser())
     const handler = vi.fn()
-    const route = withAuth({ permission: 'studio_management', allowWidgetToken: true }, handler)
-    const res = await route(new Request('https://x.test/api/thing'))
+    const wrapped = withAuth({ permission: 'studio_management', allowWidgetToken: true }, handler)
+    const res = await wrapped(new Request('https://x.test/api/thing'))
     expect(res.status).toBe(403)
     expect(handler).not.toHaveBeenCalled()
   })
 
-  it('rejects a widget token on a route that requires no location', async () => {
+  it('rejects a widget token on a route that requires no location', () => {
     // A widget token IS a location; a location-free route is by definition
     // estate-wide and must never accept one.
     expect(() => withAuth(
-      { permission: 'settings', location: false, allowWidgetToken: true },
+      { permission: null, roles: ['master'], location: false, allowWidgetToken: true },
       async () => new Response('ok')
     )).toThrow(/allowWidgetToken requires location/)
   })
@@ -945,11 +950,13 @@ Add to the file's mocks at the top:
 vi.mock('@/lib/widget-auth', () => ({ getWidgetUser: vi.fn() }))
 ```
 
-and to its imports:
+and to its top-level imports, matching the file's existing `await import` style:
 
 ```js
-import { getWidgetUser } from '@/lib/widget-auth'
+const { getWidgetUser } = await import('@/lib/widget-auth')
 ```
+
+and add `getWidgetUser.mockReset()` to the file's existing `beforeEach`.
 
 - [ ] **Step 2: Run it to verify it fails**
 
