@@ -1178,6 +1178,34 @@ git commit -m "WIDGET.1 — sonos/control: accept a bare player_id (widget speak
 
 ---
 
+## Swift verification — established during execution
+
+The plan repeatedly says "no Swift test runner exists here", and that is true —
+but it is not the same as *unverifiable*. Every Swift file in Tasks 7–13 can and
+must be **typechecked against the real iOS SDK** before commit:
+
+```bash
+xcrun -sdk iphoneos swiftc -typecheck -target arm64-apple-ios17.0 \
+  mobile/targets/widgets/*.swift
+```
+
+Verified working on this machine against `iPhoneOS26.5.sdk` with `WidgetKit`,
+`SwiftUI` and `AppIntents` imports — **no CocoaPods and no full build needed**
+(CocoaPods is not installed here; EAS Build has it in the cloud).
+
+This directly closes the spike's one named-unverified risk — that the
+`AppEntity` / `EntityQuery` / `WidgetConfigurationIntent` /
+`AppIntentTimelineProvider` signatures in this plan were written against the
+well-established shape rather than re-checked against the shipping SDK. A
+typecheck failure IS that check. Pass every Swift file in the target together
+(not one at a time) so cross-file references resolve.
+
+It is not a substitute for the device checks in Task 16 — it proves the code
+compiles and its API use is real, not that a widget renders correctly or that a
+button actuates the right hardware.
+
+---
+
 ## Task 7: `WidgetAPI.swift` — the extension's one network surface
 
 Every AppIntent and timeline provider in this plan calls through this one
