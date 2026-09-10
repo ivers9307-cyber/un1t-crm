@@ -459,9 +459,20 @@ module.exports = (config) => ({
   // to "match the default", the default is a moving target across package
   // versions and this repo's floor is a deliberate choice, not an accident.
   deploymentTarget: '17.0',
-  // No entitlements key here: @bacons/apple-targets mirrors the app-level
-  // App Group (mobile/app.config.js ios.entitlements) onto every target
-  // automatically. Do not duplicate it here — see the Task 15 spike notes.
+  // 🔴 An EMPTY entitlements object — NOT an absent key. The spike read the
+  // package README's "App Groups automatically mirror from main config" and
+  // took it literally; the source says otherwise. In
+  // @bacons/apple-targets@5.0.0 the whole app-group sync lives inside
+  // `if (entitlementsJson)` (build/with-widget.js:51, sync at :108-117), so
+  // omitting the key skips it entirely: no generated.entitlements, no
+  // CODE_SIGN_ENTITLEMENTS on the target, and a widget that ships with ZERO
+  // App Group access — which fails silently on device, not at build time.
+  // Leave it `{}` and the plugin fills it from mobile/app.config.js's
+  // ios.entitlements. Verified by prebuild both ways.
+  //
+  // This applies to EVERY future @bacons/apple-targets target in this repo,
+  // not just this one.
+  entitlements: {},
   frameworks: ['SwiftUI', 'WidgetKit', 'AppIntents'],
 })
 ```
@@ -490,6 +501,14 @@ Run: `npm run check:ota-paths`
 Expected: `OTA trigger paths: clean` — `targets` now exists under `mobile/`
 and is classified in `NON_BUNDLE` (Task 1), so it reports as one of the
 non-bundle entries, not as unclassified.
+
+> 🔴 **Two things `expo prebuild` does that the plan did not anticipate.**
+> (1) CocoaPods is not installed on the dev machine, so run it with
+> `--no-install` — EAS Build has CocoaPods in the cloud, so its local absence
+> blocks nothing. (2) On a CNG repo's first prebuild the CLI **silently
+> rewrites tracked `mobile/package.json`**, migrating the `ios`/`android`
+> scripts from `expo start --ios` to `expo run:ios`. Check `git status` before
+> staging and revert it unless you actually want that migration.
 
 - [ ] **Step 4: Prebuild and inspect the generated project**
 
