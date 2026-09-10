@@ -8,6 +8,14 @@
 // — NOT a uuid, so no uuid check). Group ids are ephemeral by design: a
 // stale one answers `regrouped`, and the caller refetches the household.
 //
+// WIDGET.1 — a third addressing mode, player_id: the bare Sonos player id
+// (RINCON_XXXXXXXX, from GET /api/widget/devices) a widget stores at
+// configuration time. Player ids are permanent (sonos/groups.js:28), unlike
+// group ids, so there is no schedule row to look up and no uuid shape
+// either — validated the same way group_id is, as a non-empty bounded
+// string. Reuses runLiveAction's player-id branch, which resolves it to a
+// group via resolveGroupIds() exactly like the schedule path does.
+//
 // Thin by design: runLiveAction (src/lib/sonos/live.js) is the tested body,
 // including the assertion that it writes nothing to sonos_schedules. This
 // file only authorises, validates the request, and maps result codes to
@@ -26,10 +34,13 @@ export const dynamic = 'force-dynamic'
 const Body = z.object({
   schedule_id: z.string().optional(),
   group_id: z.string().min(1).max(128).optional(),
+  // Sonos player ids (RINCON_XXXXXXXX) are not uuid-shaped — same bound as
+  // group_id, not uuidLike.
+  player_id: z.string().min(1).max(128).optional(),
   action: z.enum(ACTIONS),
   value: z.union([z.number(), z.string()]).optional(),
-}).refine((b) => Boolean(b.schedule_id) !== Boolean(b.group_id), {
-  message: 'Exactly one of schedule_id or group_id',
+}).refine((b) => [b.schedule_id, b.group_id, b.player_id].filter(Boolean).length === 1, {
+  message: 'Exactly one of schedule_id, group_id or player_id',
 })
 
 // Result code → HTTP status + what the operator reads.
@@ -58,14 +69,15 @@ export const POST = withAuth(
     if (!parsed.success) {
       return NextResponse.json({ success: false, error: 'Invalid request' }, { status: 400 })
     }
-    const { schedule_id: scheduleId, group_id: groupId, action, value } = parsed.data
-    // Only schedule ids are uuids — group ids are opaque Sonos strings
-    // (RINCON_…:N), bounded by the schema above.
+    const { schedule_id: scheduleId, group_id: groupId, player_id: playerId, action, value } = parsed.data
+    // Only schedule ids are uuids — group ids and player ids are opaque
+    // Sonos strings, bounded by the schema above.
     if (scheduleId && !uuidLike.safeParse(scheduleId).success) {
       return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
     }
 
-    const out = await runLiveAction(db, locationId, scheduleId ? { scheduleId } : { groupId }, action, value)
+    const target = scheduleId ? { scheduleId } : groupId ? { groupId } : { playerId }
+    const out = await runLiveAction(db, locationId, target, action, value)
     if (out.ok) return NextResponse.json({ success: true, groups: out.groups })
 
     const [status, message] = OUTCOME[out.code] || [502, 'That did not work']

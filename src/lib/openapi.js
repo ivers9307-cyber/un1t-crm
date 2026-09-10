@@ -5039,15 +5039,24 @@ const SonosFavorite = z.object({
 const SonosControlBody = z.object({
   schedule_id: z.string().optional(),
   group_id: z.string().min(1).max(128).optional(),
+  // WIDGET.1 — a bare Sonos player id (RINCON_XXXXXXXX) from GET
+  // /api/widget/devices. Not a uuid, so bounded like group_id rather than
+  // uuid-checked. Player ids are permanent (sonos/groups.js:28), unlike
+  // group ids, so this is what a widget stores at configuration time.
+  player_id: z.string().min(1).max(128).optional(),
   action: z.enum([
     'volume_up', 'volume_down', 'set_volume',
     'play', 'pause', 'skip_next', 'skip_previous', 'load_favorite',
   ]),
   value: z.union([z.number(), z.string()]).optional(),
 }).openapi('SonosControlBody', {
-  description: 'Exactly one of schedule_id or group_id (neither or both is a 400). schedule_id is a uuid; '
-    + 'group_id is an opaque Sonos group id (RINCON_…:N, ≤128 chars — NOT a uuid) from GET /api/sonos/household, '
-    + 'and group ids are ephemeral — a stale one answers code: regrouped, so refetch the household and retry. '
+  description: 'Exactly one of schedule_id, group_id or player_id (none, or more than one, is a 400). '
+    + 'schedule_id is a uuid; group_id is an opaque Sonos group id (RINCON_…:N, ≤128 chars — NOT a uuid) from '
+    + 'GET /api/sonos/household, and group ids are ephemeral — a stale one answers code: regrouped, so refetch '
+    + 'the household and retry. player_id is a bare Sonos player id (RINCON_XXXXXXXX, ≤128 chars — also NOT a '
+    + 'uuid) from GET /api/widget/devices; player ids are permanent, so an id absent from the current household '
+    + 'answers code: not_found rather than regrouped — this is the addressing mode a widget button uses, since '
+    + 'it has no schedule row and stores one player id at configuration time. '
     + 'value is read per action: volume_up/volume_down take an optional step size (default 5, '
     + 'range 1-100, sign ignored — direction lives in the action name); set_volume takes a required integer '
     + '0-100; load_favorite takes a required non-empty favorite id. play/pause/skip_next/skip_previous '
@@ -5287,12 +5296,18 @@ registry.registerPath({
   tags: ['Automations'],
   // WIDGET.1 — also accepts an iOS widget device token (BearerAuth).
   security: [{ CookieAuth: [] }, { BearerAuth: [] }],
-  summary: 'Immediate live control of a schedule\'s or group\'s speakers — volume, transport, favourite (device_control)',
+  summary: 'Immediate live control of a schedule\'s, group\'s or player\'s speakers — volume, transport, favourite (device_control)',
   description:
     'SONOSGRP.2: the body addresses exactly one of schedule_id (uuid, resolved to groups via the '
     + 'location-scoped schedule row) or group_id (an opaque Sonos group id from GET /api/sonos/household — '
     + 'no DB row is read). Group ids are ephemeral: a stale one answers code: regrouped, so refetch the '
     + 'household and retry. '
+    + 'WIDGET.1: or player_id, a bare permanent Sonos player id (RINCON_XXXXXXXX) from GET '
+    + '/api/widget/devices — also no DB row is read, and it is resolved to its current group with the same '
+    + 'resolveGroupIds() helper the schedule path uses. Unlike group_id, an id absent from the household '
+    + 'answers code: not_found (404), not regrouped, because player ids do not go stale the way group ids do. '
+    + 'This is the addressing mode a widget button uses: it has no schedule and stores one player id at '
+    + 'configuration time, so a single request can act without first resolving the household. '
     + 'SONOSLIVE.3/4: writes nothing to sonos_schedules, deliberately — the schedule only acts at window '
     + 'boundaries, so a live change simply persists until the next one; there is no suppression or '
     + 'reconciliation to invent here. Works even while the schedule is disabled or overridden, on purpose: '
@@ -5308,10 +5323,10 @@ registry.registerPath({
       description: 'Applied to every resolved group',
       content: { 'application/json': { schema: z.object({ success: z.literal(true), groups: z.array(z.string()) }).openapi('SonosControlResponse') } },
     },
-    400: { description: 'Two distinct shapes. An unknown action or an unusable value for a known action comes back from dispatch and carries code: invalid. A malformed body (including neither or both of schedule_id/group_id) or a caller with no active location is rejected by the guards that run BEFORE dispatch and carries no code at all — which is why code is optional on this schema.', content: { 'application/json': { schema: SonosControlErrorResponse } } },
+    400: { description: 'Two distinct shapes. An unknown action or an unusable value for a known action comes back from dispatch and carries code: invalid. A malformed body (including zero, or more than one, of schedule_id/group_id/player_id) or a caller with no active location is rejected by the guards that run BEFORE dispatch and carries no code at all — which is why code is optional on this schema.', content: { 'application/json': { schema: SonosControlErrorResponse } } },
     401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ErrorResponse } } },
-    404: { description: 'schedule_id only: malformed (no code), not found, or not at your active location (code: not_found). group_id never 404s — a stale one is a 409 code: regrouped', content: { 'application/json': { schema: SonosControlErrorResponse } } },
+    404: { description: 'schedule_id: malformed (no code), not found, or not at your active location (code: not_found). player_id: also code: not_found, when the id is absent from the current household. group_id never 404s — a stale one is a 409 code: regrouped', content: { 'application/json': { schema: SonosControlErrorResponse } } },
     409: {
       description: 'The current state blocks this action — code distinguishes which: not_connected (Sonos '
         + 'is not connected), no_group (none of this schedule\'s speakers are online), fixed_volume (these '
