@@ -88,7 +88,7 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import {
   View, Text, ScrollView, Pressable, TextInput, ActivityIndicator,
-  Alert, KeyboardAvoidingView, Platform, Modal, Image, Linking,
+  Alert, KeyboardAvoidingView, Platform, Modal, Image, Linking, StyleSheet,
 } from 'react-native'
 import { router, useLocalSearchParams, Stack } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
@@ -676,8 +676,9 @@ export default function EmailConversation() {
   // collapses the tree, finds the words intact). Only ✕ with a confirm may
   // discard, and this screen has no ✕.
   const [composerOpen, setComposerOpen] = useState(false)
-  // The height above the keyboard, measured. KeyboardAvoidingView's own layout
-  // already excludes the keyboard, so this is the number composerCap wants.
+  // The height above the keyboard, measured off an INNER view — see the
+  // onLayout site below for why it cannot be measured off the
+  // KeyboardAvoidingView itself on iOS.
   const [availableHeight, setAvailableHeight] = useState(0)
   const [sending, setSending] = useState(false)
   const [savingAction, setSavingAction] = useState(false)
@@ -1279,8 +1280,28 @@ export default function EmailConversation() {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       keyboardVerticalOffset={Platform.OS === 'ios' ? headerHeight : 0}
       className="flex-1 bg-un1t-bg"
-      onLayout={e => setAvailableHeight(e.nativeEvent.layout.height)}
     >
+      {/* 🔴 THE COMPOSER'S CAP IS MEASURED HERE, NOT ON THE
+          KeyboardAvoidingView ITSELF. It was, and on iOS that silently never
+          updated: behavior="padding" reacts to the keyboard by adding
+          paddingBottom to its own style, and padding changes the INTERIOR
+          content box, not the outer frame Yoga reports to onLayout — so the
+          callback never refired and availableHeight stayed at the pre-keyboard
+          screen height. composerCap then took 40% of a screen that was no
+          longer there, exactly while somebody was typing, which is the one
+          state this cap exists for. (Android takes behavior="height", which
+          does shrink the style height and does refire — so it was iOS-only,
+          the harder kind to notice.)
+
+          An absolutely-filled child is positioned against the parent's PADDING
+          box, so its own frame shrinks as that padding grows and its onLayout
+          fires each time. pointerEvents="none" so it can never take a touch,
+          and it draws nothing — it exists only to be measured. */}
+      <View
+        pointerEvents="none"
+        style={StyleSheet.absoluteFill}
+        onLayout={e => setAvailableHeight(e.nativeEvent.layout.height)}
+      />
       <Stack.Screen
         options={{
           title: name,
@@ -1743,23 +1764,25 @@ export default function EmailConversation() {
             </ScrollView>
           </View>
           ) : (
+          // COLLAPSED MEANS EMPTY, and that is an invariant rather than a
+          // coincidence: the composer opens whenever a stored draft hydrates
+          // with text, and the only thing that ever closes it is a successful
+          // send, which has already emptied the text and cleared the stored
+          // copy. So the pill has no draft-preview state — that would be
+          // unreachable code standing in for a situation this screen refuses
+          // to create. Add a way to collapse a DIRTY composer and this pill
+          // needs one; nothing else does.
           <Pressable
             onPress={() => setComposerOpen(true)}
             accessibilityRole="button"
-            accessibilityLabel={text.trim() ? 'Continue your draft reply' : replyPlaceholder}
+            accessibilityLabel={replyPlaceholder}
             className="flex-row items-center border-t border-un1t-border bg-un1t-bg px-4 py-2.5"
             style={{ paddingBottom: Math.max(insets.bottom, 10) }}
           >
             <View className="flex-1 flex-row items-center rounded-full border-[1.5px] border-un1t-border px-3.5 py-2">
-              <Text
-                className={`flex-1 text-[14px] ${text.trim() ? 'text-un1t-text' : 'text-un1t-muted'}`}
-                numberOfLines={1}
-              >
-                {text.trim() || replyPlaceholder}
+              <Text className="flex-1 text-[14px] text-un1t-muted" numberOfLines={1}>
+                {replyPlaceholder}
               </Text>
-              {text.trim() && draftSaved ? (
-                <Text className="text-[10px] text-un1t-muted ml-2">Draft saved</Text>
-              ) : null}
             </View>
             {/* The lock is a second entry point straight to note mode, so
                 switching modes never requires opening the composer first
@@ -1767,6 +1790,7 @@ export default function EmailConversation() {
             <Pressable
               onPress={() => { setIsNote(true); setComposerOpen(true) }}
               hitSlop={8}
+              accessibilityRole="button"
               accessibilityLabel="Add an internal note"
               className="ml-3"
             >

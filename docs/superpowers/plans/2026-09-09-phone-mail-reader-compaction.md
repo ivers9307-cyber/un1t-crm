@@ -3174,7 +3174,7 @@ Expected: PASS. Expect real errors here from Steps 3–4 — an unused import, a
 Run: `npm run check:mobile-imports`
 Expected: PASS.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add "mobile/app/(staff)/email/[conversationId].jsx" "mobile/app/(staff)/email/compose.jsx" "mobile/app/(staff)/email/forward.jsx" tests/mail-reader-mobile-literals.test.js
@@ -3191,7 +3191,7 @@ Body: the signature preview box goes from all three composers (MAIL-READER.1 dec
 - Modify: `docs/CHANGELOG.md`
 - Create: `.git/pr-body.md` (scratch, not committed)
 
-- [ ] **Step 1: Run the full local CI mirror**
+- [x] **Step 1: Run the full local CI mirror**
 
 ```bash
 npm test && npm run lint && npm run check:mobile-parity && npm run check:mobile-imports && npm run check:mobile-lint && npm run check:route-guards && npm run check:location-scoping && npm run check:rls-restrictive && npm run check:guardrails && npm run check:bundle-sql && npm run check:ota-paths
@@ -3199,7 +3199,7 @@ npm test && npm run lint && npm run check:mobile-parity && npm run check:mobile-
 
 Expected: every one green. `check:ota-paths` must pass with no edits — `mobile/lib/**` and `mobile/components/**` are already in the publish allowlist, so the new files publish and no classification is missing.
 
-- [ ] **Step 2: Run the build**
+- [x] **Step 2: Run the build**
 
 ```bash
 npm run build
@@ -3207,13 +3207,13 @@ npm run build
 
 Expected: PASS. This is the gate for the new imports (`@/lib/email-blocks`, `@/lib/mail-entities`) — vitest runs on mocked imports, so a missing or renamed export sails straight through it.
 
-- [ ] **Step 3: Add ONE changelog row**
+- [x] **Step 3: Add ONE changelog row**
 
 🔴 Append a **new** row. **Never edit an existing one** — `docs/CHANGELOG.md` is `merge=union`, and editing a pushed row duplicates it.
 
 Read the highest row number in the file and use the next. The row should cover: four header bands to one; the block renderer and why there is no WebView; the composer pill and cap; the signature box removal from three composers; the phone's first spam quarantine and the missing agreement assertion; the character-reference fix at ingest and at render; and the URL wall.
 
-- [ ] **Step 4: Write the PR body to a file**
+- [x] **Step 4: Write the PR body to a file**
 
 ```bash
 cat > .git/pr-body.md <<'PRBODY'
@@ -3265,7 +3265,7 @@ and jsdom cannot see layout.
 PRBODY
 ```
 
-- [ ] **Step 5: Commit, push, open the PR**
+- [x] **Step 5: Commit, push, open the PR**
 
 ```bash
 git add docs/CHANGELOG.md
@@ -3274,7 +3274,7 @@ git push -u origin HEAD
 gh pr create --title "MAIL-READER.M1 — the phone Mail reader shows the email, not the chrome" --body-file .git/pr-body.md
 ```
 
-- [ ] **Step 6: Watch CI**
+- [x] **Step 6: Watch CI**
 
 ```bash
 gh pr checks --watch
