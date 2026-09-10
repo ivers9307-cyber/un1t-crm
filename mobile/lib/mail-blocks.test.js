@@ -68,16 +68,24 @@ describe('normaliseBlocks', () => {
 // stack, and a block whose nested field is present but the wrong JS type
 // (not just missing) at every level normaliseBlocks recurses through.
 describe('normaliseBlocks — cannot throw on a hostile or malformed tree', () => {
-  it('survives 500 levels of nested quote without throwing', () => {
+  it('survives 500 levels of nested quote without throwing, dropped past this file\'s own depth cap', () => {
     // 500, not 5: src/lib/email-blocks.js's own CAPS.maxDepth comment calls
     // "a few hundred" generous headroom for real mail, so this is the
     // shape a legitimate (if extreme) forwarded thread can actually take,
     // not a synthetic worst case.
+    //
+    // This file bounds its OWN recursion at MAX_DEPTH (200) rather than
+    // trusting the server to have already applied its matching cap — the
+    // whole point of this module is guarding a fleet that can be running
+    // behind the server. So a 500-deep chain is no longer preserved intact:
+    // this only proves it does not throw, with the content past the cap
+    // silently dropped (see normaliseBlocks's own doc on that trade).
     let tree = [{ type: 'para', runs: [{ text: 'bottom' }] }]
     for (let i = 0; i < 500; i += 1) {
       tree = [{ type: 'quote', blocks: tree }]
     }
     expect(() => normaliseBlocks(tree)).not.toThrow()
+    expect(normaliseBlocks(tree)).toEqual([])
   })
 
   it('drops a quote whose blocks field is not an array, rather than crashing', () => {
@@ -99,6 +107,33 @@ describe('normaliseBlocks — cannot throw on a hostile or malformed tree', () =
       { type: 'link', href: 'https://x.test/a', runs: null },
     ]
     expect(() => normaliseBlocks(hostile)).not.toThrow()
+  })
+})
+
+describe('normaliseBlocks — validates runs, list items and table cells, not just the block', () => {
+  it('filters a runs array instead of passing malformed entries through raw', () => {
+    // Validation used to stop at "does SOMETHING in this block look real",
+    // then pass the raw array through unfiltered — a null run here crashes
+    // a renderer that destructures it.
+    expect(normaliseBlocks([
+      { type: 'para', runs: [{ text: 'hi' }, { text: 42 }, null, { bogus: true }] },
+    ])).toEqual([{ type: 'para', runs: [{ text: 'hi' }] }])
+  })
+
+  it('filters a malformed cell out of a table row instead of keeping it intact', () => {
+    expect(normaliseBlocks([
+      { type: 'table', head: null, rows: [[{ not: 'a cell array' }, [{ text: 'ok' }]]] },
+    ])).toEqual([{ type: 'table', head: null, rows: [[[], [{ text: 'ok' }]]] }])
+  })
+
+  it('treats the identical run shape the same in a list item as in a paragraph', () => {
+    // The list-item filter tested `r?.text` (truthy — 42 counts) while
+    // hasRuns tested `typeof r.text === 'string'` (42 does not), so the
+    // identical { text: 42 } shape counted as content in a list item and was
+    // dropped in a paragraph. One hasText predicate now backs both.
+    expect(normaliseBlocks([{ type: 'list', ordered: false, items: [[{ text: 42 }]] }]))
+      .toEqual([])
+    expect(normaliseBlocks([{ type: 'para', runs: [{ text: 42 }] }])).toEqual([])
   })
 })
 
@@ -166,6 +201,26 @@ describe('linkLabel', () => {
   it('falls back to the raw href when it cannot be parsed', () => {
     const long = 'mailto:' + 'a'.repeat(60) + '@x.test'
     expect(linkLabel(long, long)).toBe(long)
+  })
+
+  it('caps a long HOST, not just a long path', () => {
+    // URL_LABEL_MAX gated whether to shorten but not what came back: every
+    // existing fixture above builds its long URL as a short host + a long
+    // PATH, which is exactly why a long host slipped through unbounded. A
+    // 159-char host-only URL measured a 153-char "shortened" label.
+    const url = `https://${'a'.repeat(159)}.test/`
+    const result = linkLabel(url, url)
+    expect(result.length).toBeLessThanOrEqual(48)
+    expect(result.endsWith('/…')).toBe(true)
+  })
+
+  it('does not show a userinfo@ prefix as if it were the real host', () => {
+    // The host regex did not exclude '@', so everything before the real
+    // host — attacker-chosen text designed to read as a trusted domain —
+    // was captured as part of the "host" and shown first, with the actual
+    // host trailing where a 390pt <Text> truncates it away.
+    const url = 'https://secure-login.mybank.com.verify-account@evil-phisher.test/x'
+    expect(linkLabel(url, url)).toBe('evil-phisher.test/…')
   })
 })
 
@@ -240,5 +295,34 @@ describe('splitTextLinks', () => {
   it('answers one empty segment for empty input', () => {
     expect(splitTextLinks('')).toEqual([{ text: '' }])
     expect(splitTextLinks(null)).toEqual([{ text: '' }])
+  })
+
+  it('trims a hostile run of trailing brackets without quadratic blowup', () => {
+    // trimTrailingPunctuation used to rescan the whole remaining string with
+    // .split(char) to recount brackets on EVERY iteration — O(n) work per
+    // trailing character, O(n^2) overall. Measured under Node: a bare URL
+    // followed by 5,000 stray ')' cost 118ms; 20,000 cost 1.9s; 50,000 cost
+    // 12.2s — long enough to hang the single JS thread on real mail. This
+    // budget is loose on purpose: it guards against quadratic blow-up, not a
+    // performance target, and must not flake on slow CI.
+    const url = 'https://x.test/a' + ')'.repeat(50000)
+    const start = Date.now()
+    const [seg] = splitTextLinks(url)
+    const elapsed = Date.now() - start
+    expect(elapsed).toBeLessThan(3000)
+    expect(seg).toEqual({ text: 'https://x.test/a', href: 'https://x.test/a' })
+  })
+
+  it('composes with linkLabel: this only makes a URL tappable, never shortens it', () => {
+    // This function's own docstring says it closes the "neither tappable nor
+    // shortened" problem, but only the tappable half — `text` on a link
+    // segment is always the full, raw URL. Shortening is linkLabel's job,
+    // and the renderer is specified to call linkLabel(seg.href, seg.text) on
+    // every segment; this pins that composition rather than assuming it.
+    const url = 'https://support.docusign.com/s/articles/How-do-I-sign-a-DocuSign-document'
+      + '-Basic-Signing?language=en_US&utm_campaign=GBL_XX_DBU_UPS_2211'
+    const [seg] = splitTextLinks(url)
+    expect(seg).toEqual({ text: url, href: url })
+    expect(linkLabel(seg.href, seg.text)).toBe('support.docusign.com/…')
   })
 })
