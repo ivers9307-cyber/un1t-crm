@@ -23,6 +23,23 @@ const twoGroupsBody = {
 }
 const twoGroupSchedule = { id: 's1', player_ids: ['RINCON_1', 'RINCON_2'] }
 
+// One group holding FOUR speakers. resolveGroupIds's own header comment
+// (src/lib/sonos/groups.js:28) is explicit about why this must still
+// collapse to one group id: firing the call once per speaker in the same
+// group repeats the action four times against the same target.
+const fourSpeakerGroupBody = {
+  groups: [{
+    id: 'GRP_A', name: 'Studio', playbackState: 'PLAYBACK_STATE_PLAYING',
+    playerIds: ['RINCON_1', 'RINCON_2', 'RINCON_3', 'RINCON_4'],
+  }],
+  players: [
+    { id: 'RINCON_1', name: 'Floor 1' },
+    { id: 'RINCON_2', name: 'Floor 2' },
+    { id: 'RINCON_3', name: 'Floor 3' },
+    { id: 'RINCON_4', name: 'Floor 4' },
+  ],
+}
+
 // Records every table touched so a test can prove no write happened.
 function makeDb(row, touched = []) {
   return {
@@ -234,5 +251,40 @@ describe('group-target live actions (SONOSGRP.1)', () => {
     const out = await runLiveAction(makeDb(schedule), 'loc-1', 's1', 'play', undefined, d)
     expect(out).toMatchObject({ ok: false, code: 'invalid' })
     expect(d.call).not.toHaveBeenCalled()
+  })
+})
+
+describe('player-target live actions (WIDGET.1)', () => {
+  it('resolves a bare player id to the group it is currently in and dispatches there', async () => {
+    // A widget button stores exactly one permanent player id (sonos/groups.js:28)
+    // and has no schedule row — this is the addressing mode that stands in
+    // for one.
+    const d = deps()
+    const out = await runLiveAction(makeDb(null), 'loc-1', { playerId: 'RINCON_1' }, 'pause', undefined, d)
+    expect(out).toMatchObject({ ok: true, groups: ['GRP_A'] })
+    expect(d.call).toHaveBeenCalledWith('pause', 'tok', 'GRP_A')
+  })
+
+  it('answers not_found (not regrouped) for a player id absent from the current household', async () => {
+    // Unlike a group id, a player id is never "stale" by design — an
+    // unresolvable one means we don't recognise this speaker at all, which
+    // is the same shape the schedule branch uses for an unknown target, not
+    // the group branch's "it regrouped, refetch and retry".
+    const d = deps()
+    const out = await runLiveAction(makeDb(null), 'loc-1', { playerId: 'RINCON_GONE' }, 'pause', undefined, d)
+    expect(out).toMatchObject({ ok: false, code: 'not_found' })
+    expect(d.call).not.toHaveBeenCalled()
+  })
+
+  it('produces exactly ONE group id for a player in a four-speaker group (the resolveGroupIds dedupe class)', async () => {
+    // groups.js:28 — four speakers in one group must yield ONE group id,
+    // or the action fires four times at the same group. A single player id
+    // can only ever surface one group through resolveGroupIds, but this
+    // pins it: if a future change ever routes a player id through a path
+    // that expands to every player sharing its group, this test fails.
+    const d = deps({ getGroups: async () => ({ ok: true, statusCode: 200, body: fourSpeakerGroupBody }) })
+    const out = await runLiveAction(makeDb(null), 'loc-1', { playerId: 'RINCON_2' }, 'load_favorite', 'fav1', d)
+    expect(out).toMatchObject({ ok: true, groups: ['GRP_A'] })
+    expect(d.call).toHaveBeenCalledTimes(1)
   })
 })

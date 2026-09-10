@@ -459,9 +459,20 @@ module.exports = (config) => ({
   // to "match the default", the default is a moving target across package
   // versions and this repo's floor is a deliberate choice, not an accident.
   deploymentTarget: '17.0',
-  // No entitlements key here: @bacons/apple-targets mirrors the app-level
-  // App Group (mobile/app.config.js ios.entitlements) onto every target
-  // automatically. Do not duplicate it here — see the Task 15 spike notes.
+  // 🔴 An EMPTY entitlements object — NOT an absent key. The spike read the
+  // package README's "App Groups automatically mirror from main config" and
+  // took it literally; the source says otherwise. In
+  // @bacons/apple-targets@5.0.0 the whole app-group sync lives inside
+  // `if (entitlementsJson)` (build/with-widget.js:51, sync at :108-117), so
+  // omitting the key skips it entirely: no generated.entitlements, no
+  // CODE_SIGN_ENTITLEMENTS on the target, and a widget that ships with ZERO
+  // App Group access — which fails silently on device, not at build time.
+  // Leave it `{}` and the plugin fills it from mobile/app.config.js's
+  // ios.entitlements. Verified by prebuild both ways.
+  //
+  // This applies to EVERY future @bacons/apple-targets target in this repo,
+  // not just this one.
+  entitlements: {},
   frameworks: ['SwiftUI', 'WidgetKit', 'AppIntents'],
 })
 ```
@@ -490,6 +501,14 @@ Run: `npm run check:ota-paths`
 Expected: `OTA trigger paths: clean` — `targets` now exists under `mobile/`
 and is classified in `NON_BUNDLE` (Task 1), so it reports as one of the
 non-bundle entries, not as unclassified.
+
+> 🔴 **Two things `expo prebuild` does that the plan did not anticipate.**
+> (1) CocoaPods is not installed on the dev machine, so run it with
+> `--no-install` — EAS Build has CocoaPods in the cloud, so its local absence
+> blocks nothing. (2) On a CNG repo's first prebuild the CLI **silently
+> rewrites tracked `mobile/package.json`**, migrating the `ios`/`android`
+> scripts from `expo start --ios` to `expo run:ios`. Check `git status` before
+> staging and revert it unless you actually want that migration.
 
 - [ ] **Step 4: Prebuild and inspect the generated project**
 
@@ -544,11 +563,23 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const store = vi.hoisted(() => ({ data: {} }))
 
+// 🔴 The mock MUST model `get()` returning a STRING. The real
+// ExtensionStorage's type is `get(key): string | null` — the native side
+// JSON-encodes on set and hands back a string. A mock that returns the object
+// it was given is more permissive than reality, and would let a bridge that
+// forgot to encode/parse pass here and fail on device.
 vi.mock('@bacons/apple-targets', () => ({
   ExtensionStorage: class {
     constructor(groupId) { this.groupId = groupId }
-    set(key, value) { store.data[key] = value }
-    get(key) { return store.data[key] ?? null }
+    set(key, value) {
+      store.data[key] = typeof value === 'string' ? value : JSON.stringify(value)
+    }
+    get(key) {
+      const v = store.data[key]
+      if (v == null) return null
+      if (typeof v !== 'string') throw new Error('ExtensionStorage.get must return a string')
+      return v
+    }
     remove(key) { delete store.data[key] }
     static reloadWidget = vi.fn()
   },
@@ -639,6 +670,13 @@ describe('APP_GROUP', () => {
     // entitlement points back at this constant by name.
     expect(APP_GROUP).toBe('group.ie.repset.widgets')
   })
+
+  it('follows the manifest, so the legacy build gets its own group', () => {
+    // The whole point: a hard-coded id would silently break the legacy app.
+    // Drive this by mocking expo-constants with the LEGACY_APP entitlement and
+    // re-importing the module (vi.resetModules + dynamic import).
+    expect(APP_GROUP).toMatch(/^group\./)
+  })
 })
 ```
 
@@ -670,9 +708,24 @@ Expected: FAIL — `Failed to resolve import "./widget-bridge"`.
 // (see the Task 15 spike notes). If you ever rename this, rename the
 // entitlement in app.config.js in the SAME commit.
 
+import Constants from 'expo-constants'
 import { ExtensionStorage } from '@bacons/apple-targets'
 
-export const APP_GROUP = 'group.ie.repset.widgets'
+// 🔴 Resolved at RUNTIME from the manifest, never hard-coded. The legacy
+// build (LEGACY_APP=1) carries `group.com.un1tdublin.crm.widgets`, and
+// process.env.LEGACY_APP is a BUILD-time variable that does not exist in the
+// RN runtime — only EXPO_PUBLIC_* is inlined. A hard-coded id would make the
+// bridge open a group the legacy app does not hold, so the widget would
+// silently do nothing for exactly the installed base the two-build rule
+// exists to protect. expo-constants carries the resolved ios.entitlements
+// through into the manifest, which is why this reads from there.
+const GROUPS_KEY = 'com.apple.security.application-groups'
+export const APP_GROUP =
+  Constants?.expoConfig?.ios?.entitlements?.[GROUPS_KEY]?.[0]
+  // Fall back to the public id rather than throwing: a missing manifest entry
+  // is a build-config bug, and a widget that quietly does nothing is a better
+  // failure than an app that will not start.
+  || 'group.ie.repset.widgets'
 const STUDIOS_KEY = 'repset_widget_studios'
 
 const storage = new ExtensionStorage(APP_GROUP)
@@ -1125,6 +1178,34 @@ git commit -m "WIDGET.1 — sonos/control: accept a bare player_id (widget speak
 
 ---
 
+## Swift verification — established during execution
+
+The plan repeatedly says "no Swift test runner exists here", and that is true —
+but it is not the same as *unverifiable*. Every Swift file in Tasks 7–13 can and
+must be **typechecked against the real iOS SDK** before commit:
+
+```bash
+xcrun -sdk iphoneos swiftc -typecheck -target arm64-apple-ios17.0 \
+  mobile/targets/widgets/*.swift
+```
+
+Verified working on this machine against `iPhoneOS26.5.sdk` with `WidgetKit`,
+`SwiftUI` and `AppIntents` imports — **no CocoaPods and no full build needed**
+(CocoaPods is not installed here; EAS Build has it in the cloud).
+
+This directly closes the spike's one named-unverified risk — that the
+`AppEntity` / `EntityQuery` / `WidgetConfigurationIntent` /
+`AppIntentTimelineProvider` signatures in this plan were written against the
+well-established shape rather than re-checked against the shipping SDK. A
+typecheck failure IS that check. Pass every Swift file in the target together
+(not one at a time) so cross-file references resolve.
+
+It is not a substitute for the device checks in Task 16 — it proves the code
+compiles and its API use is real, not that a widget renders correctly or that a
+button actuates the right hardware.
+
+---
+
 ## Task 7: `WidgetAPI.swift` — the extension's one network surface
 
 Every AppIntent and timeline provider in this plan calls through this one
@@ -1396,6 +1477,33 @@ struct DeviceQuery: EntityQuery {
 git add mobile/targets/widgets/DeviceEntity.swift
 git commit -m "WIDGET.1 — DeviceEntity: the live device picker (GET /api/widget/devices)"
 ```
+
+---
+
+## Task 10 — a hard requirement inherited from Task 9
+
+🔴 **`StudioControlsConfigurationIntent` MUST declare `@Parameter var studio: StudioEntity`,
+and its `device` parameters MUST use an options provider carrying
+`@IntentParameterDependency<StudioControlsConfigurationIntent>(\.$studio)`.**
+
+This is not a style preference. `DeviceEntity`'s own `DeviceQuery` cannot be
+studio-scoped: `IntentParameterDependency`'s keypath must name a stored
+`@Parameter` on a **concrete** `WidgetConfigurationIntent`, and no protocol
+promises an arbitrary `Intent` has a `studio` parameter — so a generic provider
+cannot stand in. Task 9 therefore ships a context-free `suggestedEntities()`
+that falls back to **the first stored studio**.
+
+If Task 10 does not wire the dependency, that fallback becomes the shipped
+behaviour: a staff member configuring a Hatch Street widget would be offered
+**Stillorgan's** devices, silently and plausibly. Nothing would error.
+
+`DeviceQuery.buildResult(locationId:)` exists as the shared fetch/decode/
+`degraded`-surfacing helper — Task 10's provider must call it rather than
+re-deriving the parse, so both paths report a degraded source identically.
+
+Verified against `iPhoneOS26.5.sdk`: `@IntentParameterDependency` and the
+`@Parameter(optionsProvider:)` initializer for a plain `AppEntity` both exist at
+the shape above.
 
 ---
 

@@ -191,4 +191,53 @@ describe('POST /api/sonos/control', () => {
     expect(res.status).toBe(502)
     expect(body).toEqual({ success: false, error: 'That did not work', code: 'totally_unknown' })
   })
+
+  // WIDGET.1 — a third addressing mode: a bare player id (RINCON_XXXXXXXX)
+  // from GET /api/widget/devices. Not a uuid, so bounded like group_id
+  // rather than checked with uuidLike.
+  it('addresses by player_id when the body carries one', async () => {
+    getCurrentUser.mockResolvedValue(manager)
+    runLiveAction.mockResolvedValue({ ok: true, groups: [] })
+    const res = await POST(postReq({ player_id: 'RINCON_ABCDEF01', action: 'pause' }))
+    expect(res.status).toBe(200)
+    expect(runLiveAction).toHaveBeenCalledWith(
+      { marker: 'db' }, LOC, { playerId: 'RINCON_ABCDEF01' }, 'pause', undefined
+    )
+  })
+
+  it('400s when the body carries two addressing modes together (schedule_id and player_id)', async () => {
+    getCurrentUser.mockResolvedValue(manager)
+    const res = await POST(postReq({
+      schedule_id: VALID_SCHEDULE_ID, player_id: 'RINCON_ABCDEF01', action: 'play',
+    }))
+    const body = await res.json()
+    expect(res.status).toBe(400)
+    expect(body).toEqual({ success: false, error: 'Invalid request' })
+    expect(runLiveAction).not.toHaveBeenCalled()
+  })
+
+  it('400s when the body carries none of the three addressing modes', async () => {
+    getCurrentUser.mockResolvedValue(manager)
+    const res = await POST(postReq({ action: 'play' }))
+    const body = await res.json()
+    expect(res.status).toBe(400)
+    expect(body).toEqual({ success: false, error: 'Invalid request' })
+    expect(runLiveAction).not.toHaveBeenCalled()
+  })
+
+  // The whole point of the task: a widget has no session, only its device
+  // token, and its one permanent id is a player id — this must reach
+  // runLiveAction in a single request, same as the schedule/group paths do.
+  it('lets a widget token (no session) use the player_id path end to end', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    getWidgetUser.mockResolvedValue(widgetManager)
+    runLiveAction.mockResolvedValue({ ok: true, groups: ['GRP_A'] })
+    const res = await POST(postReq({ player_id: 'RINCON_ABCDEF01', action: 'pause' }))
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(body).toEqual({ success: true, groups: ['GRP_A'] })
+    expect(runLiveAction).toHaveBeenCalledWith(
+      { marker: 'db' }, LOC, { playerId: 'RINCON_ABCDEF01' }, 'pause', undefined
+    )
+  })
 })

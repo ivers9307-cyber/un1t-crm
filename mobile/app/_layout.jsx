@@ -43,6 +43,8 @@ import { syncGeofences } from '../lib/geofence'
 import { resolveNotificationTap, presentationForNotification } from '../lib/notification-side'
 import { writeLastSide } from '../lib/last-side'
 import { ForegroundOtaUpdater } from '../lib/foreground-ota'
+import { reloadWidgets } from '../lib/widget-bridge'
+import { shouldReloadWidgetsForPush } from '../lib/widget-push-reload'
 import { BiometricLockProvider } from '../lib/biometric-lock'
 import { StudioPinProvider } from '../lib/studio-pin'
 import LocationGate from '../components/LocationGate'
@@ -141,6 +143,38 @@ function NotificationRouter() {
   return null
 }
 
+// WIDGET.1 Task 13 — nudge WidgetKit when a push lands that can move one of
+// the What Needs Me counts. Deliberately a RECEIVED listener, not the
+// response listener NotificationRouter uses above — that one fires only on
+// a TAP, and a push should reload the tile whether or not it's ever opened,
+// foregrounded or not (UIBackgroundModes already includes
+// 'remote-notification' — app.config.js — so a background push can run this).
+//
+// The decision itself lives in lib/widget-push-reload.js (pure, tested —
+// there's no RN component test runner here); this component is just the
+// wiring. reloadWidgets() already swallows its own throw (widget-bridge.js,
+// including the documented no-native-module case pre-2.4.0), but a bare
+// listener callback that threw for some OTHER reason would still be an
+// unhandled rejection inside expo-notifications' own dispatch — wrapping it
+// here means a widget-reload problem can never take the push-received path
+// down with it. Not a bare swallow either: a genuinely unexpected throw is
+// logged via console.error so it surfaces instead of vanishing twice over.
+function WidgetReloadOnPush() {
+  useEffect(() => {
+    const sub = Notifications.addNotificationReceivedListener((notification) => {
+      const data = notification?.request?.content?.data
+      if (!shouldReloadWidgetsForPush(data)) return
+      try {
+        reloadWidgets()
+      } catch (err) {
+        console.error('[widget-reload] reloadWidgets threw on push receipt', err)
+      }
+    })
+    return () => sub.remove()
+  }, [])
+  return null
+}
+
 // GEO-ATT — registers/refreshes geofence regions once auth is ready.
 // Side-effect only; must NOT live in the component that renders <Stack>
 // (see the header comment — reading useAuth() there races the
@@ -199,6 +233,7 @@ export default function RootLayout() {
             <StatusBar style="dark" />
             <SplashGate fontsReady={fontsReady} />
             <NotificationRouter />
+            <WidgetReloadOnPush />
             <GeofenceSync />
             <ForegroundOtaUpdater />
             {/* PHASE2 (one-app merge) — two route groups: (staff) carries the
