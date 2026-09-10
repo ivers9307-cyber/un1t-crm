@@ -284,6 +284,26 @@ git commit -m "WIDGET.1 — classify mobile/targets/ as non-bundle (with the dir
 
 ## Task 2: Install and wire `@bacons/apple-targets`
 
+🔴 **Corrected during execution — the version bump is NOT part of this task.**
+It moved to **Task 2b**, which lands immediately before the build and merges
+only with the store release.
+
+**Why:** `mobile/app.config.js` is in `eas-update.yml`'s trigger allowlist, so
+the moment a `runtimeVersion: '2.4.0'` bump merges to `main`, every subsequent
+publish targets the 2.4.0 lane — which **no device is on**. The live fleet sits
+on 2.3.0 and simply stops receiving OTAs, hotfixes included, until the 2.4.0
+binary clears App Review and users install it. Bundling the bump into the first
+task of Phase 2 would either freeze the fleet for the length of Phase 2, or
+force every later task to sit unmerged on a long-lived branch.
+
+Everything else in Phase 2 is safe to merge incrementally: Swift under
+`mobile/targets/` is classified non-bundle (Task 1), and a config-plugin
+registration changes nothing at runtime for an existing install.
+
+**This task therefore covers only:** installing the package, registering the
+plugin, and adding the App Group entitlement. Steps 4's version/runtimeVersion
+edits belong to Task 2b.
+
 **Files:**
 - Modify: `mobile/package.json`
 - Modify: `mobile/app.config.js`
@@ -1902,6 +1922,30 @@ it is a normal bundle-entering edit.
 git add "mobile/app/_layout.jsx"
 git commit -m "WIDGET.1 — reload widget timelines on push receipt"
 ```
+
+---
+
+## Task 2b: Bump `version` and `runtimeVersion` to 2.4.0 — LATE
+
+🔴 **Do not merge this until the 2.4.0 build is ready to submit.** Merging it
+freezes OTA delivery for every device on 2.3.0 (see Task 2's note). Land it, cut
+the build immediately, and keep the window between merge and a shipped binary as
+short as possible.
+
+**Files:** `mobile/app.config.js`
+
+- [ ] **Step 1:** `version: '2.3.1'` → `'2.4.0'`, with a dated comment in the
+  version log recording that this adds the WidgetKit extension and is a native
+  release, not an OTA.
+- [ ] **Step 2:** `runtimeVersion: '2.3.0'` → `'2.4.0'`, with a comment in the
+  runtimeVersion log recording that 2.3.x installs **freeze (they do not crash)**
+  until users install the 2.4.0 binary, and that the two-build rule applies.
+- [ ] **Step 3:** `npm run check:ota-paths` → clean (regression check only;
+  `mobile/app.config.js` has always been a trigger path).
+- [ ] **Step 4:** Confirm no un-ramped rollout is in progress on the 2.3.0 lane
+  before merging — an un-ramped partial BLOCKS the next publish, and you want the
+  2.3.0 lane in a clean state at the moment you leave it behind.
+- [ ] **Step 5:** Commit, merge, and **immediately** proceed to Task 14/15.
 
 ---
 
