@@ -48,7 +48,40 @@ import Foundation
 // App Group into this target's Info.plist from `_config`, then read it
 // here via Bundle.main) — out of scope for this file; flagged for
 // whoever wires the legacy build's widget rather than fixed here.
-let APP_GROUP = "group.ie.repset.widgets"
+/// The App Group this build is actually entitled to.
+///
+/// The Swift source is byte-identical across both builds, but the App Group is
+/// NOT: the plugin mirrors an env-switched id into each flavour's generated
+/// entitlements (`group.ie.repset.widgets` for ie.repset.app,
+/// `group.com.un1tdublin.crm.widgets` for com.un1tdublin.crm). A hard-coded
+/// literal is therefore correct for exactly one of the two, and the legacy
+/// widget would silently read an empty container — the same defect the JS side
+/// avoids by resolving from the manifest.
+///
+/// `containerURL(forSecurityApplicationGroupIdentifier:)` returns nil for a
+/// group the process is not entitled to, so asking the filesystem which one we
+/// hold is a public-API way to get the right answer in both builds. (The
+/// entitlement can also be read directly via SecTaskCopyValueForEntitlement,
+/// but that symbol ships with no public iOS header — declaring it by hand is
+/// private-API use and an App Store rejection risk. Not worth it for this.)
+///
+/// Ordered most-likely-first; the list is short and both entries are real.
+let APP_GROUP: String = {
+    let candidates = [
+        "group.ie.repset.widgets",
+        "group.com.un1tdublin.crm.widgets",
+    ]
+    let fm = FileManager.default
+    for id in candidates
+    where fm.containerURL(forSecurityApplicationGroupIdentifier: id) != nil {
+        return id
+    }
+    // Nothing resolved: the entitlement is missing or misconfigured. Return the
+    // public id so behaviour is defined — UserDefaults(suiteName:) will hand
+    // back nil and the widget renders its "not set up" state, which is the
+    // right failure for a container we cannot open.
+    return candidates[0]
+}()
 
 // REPSET-P6.S2 mirror — mobile/app.config.js's `extra.apiBaseUrl` resolves
 // EXPO_PUBLIC_API_BASE_URL first and falls back to this same literal. The
