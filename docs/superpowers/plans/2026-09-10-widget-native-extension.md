@@ -330,20 +330,35 @@ In `mobile/app.config.js`, inside the `ios: { … }` block (after
 `infoPlist`), add:
 
 ```js
-    // WIDGET.1 — the App Group both the app and the widget extension read
-    // and write through. ONE group id for both bundle identifiers: the
-    // group is a shared-container namespace per Apple Developer Team, not
-    // per app, and the two bundle ids (ie.repset.app / com.un1tdublin.crm)
-    // never run side-by-side on the same device (LEGACY_APP is a build-time
-    // switch, not a coexistence mode) — a device only ever has one of the
-    // two installed, so there is nothing for the two to leak into each
-    // other. The widget's own expo-target.config.js (mobile/targets/widgets/)
-    // does not repeat this: @bacons/apple-targets mirrors an app-level App
-    // Group onto every target automatically.
+    // WIDGET.1 — the App Group the app and its widget extension share.
+    //
+    // 🔴 The id is env-switched IN LOCKSTEP with the bundle identifier, and
+    // that is deliberate. The first draft used ONE group for both bundle ids,
+    // reasoning that a device only ever has one of the two installed. That is
+    // false during the migration window: the legacy unlisted app
+    // (com.un1tdublin.crm) and the public app (ie.repset.app) can both sit on
+    // the same staff phone — that window is precisely why an in-app migration
+    // nudge exists. Sharing one group would put both installs' widget tokens
+    // on the same key, so whichever launched last would overwrite the other,
+    // and revoking "that phone's widget" would revoke a credential the other
+    // install then silently re-minted. Two installs are two devices' worth of
+    // credentials; give them two containers.
+    //
+    // The widget's own expo-target.config.js does not repeat this:
+    // @bacons/apple-targets mirrors an app-level App Group onto every target.
     entitlements: {
-      'com.apple.security.application-groups': ['group.ie.repset.widgets'],
+      'com.apple.security.application-groups': [
+        process.env.LEGACY_APP === '1'
+          ? 'group.com.un1tdublin.crm.widgets'
+          : 'group.ie.repset.widgets',
+      ],
     },
 ```
+
+**Both group ids must be registered on their respective App IDs in the Apple
+Developer portal** before either build — an entitlement naming a group the App
+ID does not carry fails at signing, not at runtime. Task 15's checklist covers
+the portal verification for both.
 
 - [ ] **Step 3: Register the plugin**
 
