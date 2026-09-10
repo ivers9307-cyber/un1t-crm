@@ -1,50 +1,95 @@
 // src/app/api/home-queue/count/route.test.js
-// WIDGET.1 — the What Needs Me widget reads this route.
+// WIDGET.1 — GET /api/home-queue/count runs the REAL withAuth gate, so this
+// file proves the gate actually fires (session and widget-token paths) on a
+// route that has just been made to accept a second credential type.
+// Delegates to getHomeQueueCounts (src/lib/home-queue.js); never assembles
+// approval items, ticket subjects or conversation rows itself.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const h = vi.hoisted(() => ({ user: { id: 'u1' }, locationId: 'loc-1' }))
-
-vi.mock('@/lib/with-auth', () => ({
-  withAuth: (opts, handler) => Object.assign(
-    async (request, ctx) => handler({
-      user: h.user, db: {}, locationId: h.locationId, request,
-      params: ctx?.params ? await ctx.params : undefined,
-    }),
-    { _opts: opts }
-  ),
-}))
+vi.mock('@/lib/auth', async () => {
+  const actual = await vi.importActual('@/lib/auth')
+  return { ...actual, getCurrentUser: vi.fn() }
+})
+vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
+vi.mock('@/lib/widget-auth', () => ({ getWidgetUser: vi.fn() }))
 vi.mock('@/lib/home-queue', () => ({ getHomeQueueCounts: vi.fn() }))
 
 import { GET } from './route.js'
+import { getCurrentUser } from '@/lib/auth'
+import { createServerClient } from '@/lib/supabase'
+import { getWidgetUser } from '@/lib/widget-auth'
 import { getHomeQueueCounts } from '@/lib/home-queue'
 
-beforeEach(() => { vi.clearAllMocks() })
+const req = () => new Request('http://x/api/home-queue/count')
+const staff = { id: 'u1', role: 'staff', activeLocation: { id: 'loc1' } }
+const widgetUser = {
+  id: 'u2', role: 'staff', authSource: 'widget', activeLocation: { id: 'loc1' },
+}
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  createServerClient.mockReturnValue({ marker: 'db' })
+})
 
 describe('GET /api/home-queue/count', () => {
-  it('opts into widget tokens and is location-scoped', () => {
-    expect(GET._opts.allowWidgetToken).toBe(true)
-    expect(GET._opts.location).toBe(true)
+  it('401s when unauthenticated (no session, no widget token)', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    getWidgetUser.mockResolvedValue(null)
+    const res = await GET(req())
+    expect(res.status).toBe(401)
+    expect(getHomeQueueCounts).not.toHaveBeenCalled()
   })
 
-  it('returns count, bySource and degraded', async () => {
+  it('returns count, bySource and degraded for a session, passing db and user through', async () => {
+    getCurrentUser.mockResolvedValue(staff)
     getHomeQueueCounts.mockResolvedValue({
       count: 5, bySource: { approvals: 3, mail: 2, inbox: 0 }, degraded: [],
     })
-    const res = await GET(new Request('https://x.test/api/home-queue/count'))
+    const res = await GET(req())
+    const body = await res.json()
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({
+    expect(body).toEqual({
       success: true,
       data: { count: 5, bySource: { approvals: 3, mail: 2, inbox: 0 }, degraded: [] },
     })
+    expect(getHomeQueueCounts).toHaveBeenCalledWith({ marker: 'db' }, staff)
   })
 
-  it('still answers 500 when mailbox visibility is unavailable', async () => {
-    // EMAIL-TICKET-CLEANUP.2 — a bare 0 here would read as "nothing to do"
-    // rather than "we could not check". The 500 posture must survive.
-    getHomeQueueCounts.mockRejectedValue(new Error('visibility down'))
-    const res = await GET(new Request('https://x.test/api/home-queue/count'))
+  // EMAIL-TICKET-CLEANUP.2 — a failed mailbox-visibility lookup must not
+  // read as a confident 0. getHomeQueueCounts rejects for exactly this case
+  // (src/lib/home-queue.js); the route mirrors /api/email/tickets/count's
+  // own 500 posture so a poller keeps its last good number rather than
+  // overwriting it with a confidently wrong "nothing to do".
+  it('500s (not a confident 0) when getHomeQueueCounts rejects on a tickets visibility failure', async () => {
+    getCurrentUser.mockResolvedValue(staff)
+    getHomeQueueCounts.mockRejectedValue(new Error('tickets: mailbox visibility lookup failed'))
+    const res = await GET(req())
+    const body = await res.json()
     expect(res.status).toBe(500)
-    expect((await res.json()).success).toBe(false)
+    expect(body.success).toBe(false)
+  })
+
+  it('200s for a valid widget token with no session', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    getWidgetUser.mockResolvedValue(widgetUser)
+    getHomeQueueCounts.mockResolvedValue({
+      count: 2, bySource: { approvals: 1, mail: 1, inbox: 0 }, degraded: [],
+    })
+    const res = await GET(req())
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(body.data.count).toBe(2)
+    expect(getHomeQueueCounts).toHaveBeenCalledWith({ marker: 'db' }, widgetUser)
+  })
+
+  it('does not consult a widget token when a session exists', async () => {
+    getCurrentUser.mockResolvedValue(staff)
+    getHomeQueueCounts.mockResolvedValue({
+      count: 0, bySource: { approvals: 0, mail: 0, inbox: 0 }, degraded: [],
+    })
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    expect(getWidgetUser).not.toHaveBeenCalled()
   })
 })
