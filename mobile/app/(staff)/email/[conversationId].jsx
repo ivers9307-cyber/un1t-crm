@@ -46,11 +46,19 @@
 // the selected segment, the colour of the card, and the sentence naming
 // exactly who receives what.
 //
-// PLAIN TEXT ONLY. Messages render `text_body`. `html_body` never leaves the
-// server, and the sanitised `html_document` the web thread renders is
-// deliberately ignored here: that path depends on a sandboxed iframe, which
-// React Native has no equivalent of. Raw email HTML is hostile input from an
-// unauthenticated stranger — on mobile it simply is not rendered.
+// HTML IS RENDERED, WITHOUT AN HTML ENGINE (MAIL-READER.M1). The route serves
+// `html_blocks` under ?body=blocks — a block tree src/lib/email-blocks.js walks
+// out of the ALREADY SANITISED document, server-side. components/mail/EmailBody
+// draws it with Text/View. `html_body` still never leaves the server, nothing
+// is parsed on this device, and react-native-webview is still not a dependency:
+// Layer 1 here is the ABSENCE of an HTML engine rather than a sandboxed iframe,
+// which is why no script can run even in principle.
+//
+// The text path remains, and is not a legacy: an internal note (plain text by
+// construction), a message with no HTML, one past the block budget, one whose
+// HTML would not sanitise, and a server that sent no blocks at all — a rollback
+// behind a shipped OTA — all render `text_body`. Absence of blocks is the text
+// path, never an error.
 //
 // OUTBOUND ATTACHMENTS (MOBILE-MAIL-THREAD.1) ride the repo's standard
 // three-step direct-to-storage flow via lib/email-api.js's helpers: sign
@@ -80,7 +88,7 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import {
   View, Text, ScrollView, Pressable, TextInput, ActivityIndicator,
-  Alert, KeyboardAvoidingView, Platform, Modal, Image, Linking,
+  Alert, KeyboardAvoidingView, Platform, Modal, Image, Linking, StyleSheet,
 } from 'react-native'
 import { router, useLocalSearchParams, Stack } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
@@ -90,20 +98,20 @@ import * as DocumentPicker from 'expo-document-picker'
 import * as ImagePicker from 'expo-image-picker'
 import { useAuth } from '../../../lib/auth-context'
 import {
-  getConversation, replyToConversation, archiveConversation, setConversationSeen, emailDisplayName,
+  getConversation, replyToConversation, archiveConversation, setConversationSpam, setConversationSeen, emailDisplayName,
   previewConversationAttachment, downloadConversationAttachment,
   signOutboundAttachment, uploadSignedAttachment,
   fetchRelatedConversations, mergeConversation, unmergeConversation,
-  fetchSignatureContexts,
 } from '../../../lib/email-api'
-import { resolveSignatureHint } from '../../../lib/signature-hint'
 import {
-  conversationMessageKind, mailStatusChip, mailboxLabel, conversationDeliveryMeta,
+  conversationMessageKind, mailStatusChip, conversationDeliveryMeta,
   conversationMessageRecipients, sentToLabel,
   formatAttachmentSize, conversationAttachmentSkippedLabel, conversationAttachmentIcon,
   threadRefreshMs, conversationReplyAudienceMeta, conversationReplyPlaceholder,
   conversationThreadAudienceLines, conversationSendOriginMeta,
   flatThreadPlan, flatMessageMeta, mergedInDividers,
+  accountChipLabel, headerDetailLines, spamActionLabel,
+  composerCap, audienceSummary,
 } from '../../../lib/mail-conversations'
 // MAIL-ARCH.3 — the thread route stamps `archived` now; read the stamp, never
 // `status` (legacy `solved` is LIVE on the wire). MAIL-ARCH.4 — the one
@@ -119,6 +127,9 @@ import {
 } from '../../../lib/mail-relate'
 import { canForwardMessage, newestForwardableMessage } from '../../../lib/mail-forward'
 import BackHeaderLeft from '../../../components/BackHeaderLeft'
+import EmailBody, { openHref } from '../../../components/mail/EmailBody'
+import { splitTextLinks, linkLabel } from '../../../lib/mail-blocks'
+import { decodeCharRefs, stripInvisibleChars } from 'shared/mail-entities'
 
 function formatTime(iso) {
   if (!iso) return ''
@@ -416,6 +427,20 @@ function FlatMessage({ msg, conversationId, locationId, fallbackName, onViewImag
   const shown = split.body || body
   const [quoteOpen, setQuoteOpen] = useState(false)
 
+  // MAIL-READER.M1 — the HTML path, when the server sent a tree. It falls back
+  // to the text for a note (plain text by construction), a message with no
+  // HTML, one past the block budget, one whose HTML would not sanitise, and a
+  // server that sent no blocks at all.
+  //
+  // 🔴 Amendment (Task 5's review) — `|| null`, never `=== null`. A `null`
+  // html_blocks means the server ran blocks mode and genuinely found nothing
+  // renderable; `undefined` means ?body= failed open and this response is the
+  // OTHER shape (html_document), because URLSearchParams.get returns only the
+  // FIRST occurrence of a repeated param. Both must fall back to text_body —
+  // tightening this to `=== null` would throw on `undefined` instead.
+  const blocks = msg.html_blocks || null
+  const quotedBlocks = msg.html_quoted_blocks || null
+
   // ── Internal note: staff only, nothing was sent ───────────────────
   // Keeps its amber styling as a flat block — full width, hairline, and the
   // STAFF-ONLY label — so it cannot be skim-read as correspondence.
@@ -505,8 +530,64 @@ function FlatMessage({ msg, conversationId, locationId, fallbackName, onViewImag
         <RecipientLines msg={msg} toShownInHeader={kind === 'outbound'} />
       </View>
 
-      <Text className="text-base text-un1t-text">{shown}</Text>
-      {split.quoted ? (
+      {blocks ? (
+        <EmailBody blocks={blocks} />
+      ) : (
+        // 🔴 decodeCharRefs at RENDER, not only at ingest: every row stored
+        // before MAIL-READER.M1 still holds `&#38;` in its text_body, and
+        // fixing htmlToPlainText only helps new mail. splitTextLinks is the
+        // other half of the URL wall — this used to be one unbroken <Text>, so
+        // a 180-character tracking URL was three lines of screen and not even
+        // tappable.
+        <Text className="text-base text-un1t-text">
+          {splitTextLinks(stripInvisibleChars(decodeCharRefs(shown))).map((seg, i) => (
+            seg.href ? (
+              <Text
+                key={i}
+                className="text-blue-700 underline"
+                accessibilityRole="link"
+                onPress={() => openHref(seg.href)}
+                onLongPress={() => Alert.alert('Link', seg.href)}
+              >
+                {linkLabel(seg.href, seg.text)}
+              </Text>
+            ) : <Text key={i}>{seg.text}</Text>
+          ))}
+        </Text>
+      )}
+
+      {/* The notices the phone never had. Desktop shows the unsafe/omitted
+          pair; this screen showed neither, so an email whose HTML would not
+          sanitise looked exactly like an email that simply had none.
+          html_truncated joins them here rather than living inside EmailBody
+          (Amendment, Task 5's review): all three flags are meaningful even
+          when html_blocks is null — a message can lose everything to a cap
+          and still owe the reader a notice — but EmailBody returns null
+          outright whenever its blocks prop is empty, which is exactly that
+          case. Reading the flag here, off `msg` directly, means the notice
+          shows regardless of which branch above actually drew the body. */}
+      {msg.html_truncated ? (
+        <Text className="text-[11px] text-un1t-muted mt-1.5">
+          This email is very long — the rest of it is not shown here.
+        </Text>
+      ) : null}
+      {msg.html_unsafe ? (
+        <Text className="text-[11px] text-amber-700 mt-1.5">
+          HTML could not be displayed safely — showing the plain-text version.
+        </Text>
+      ) : null}
+      {msg.html_omitted ? (
+        <Text className="text-[11px] text-un1t-muted mt-1.5">
+          Formatted version not loaded — this thread is unusually long.
+        </Text>
+      ) : null}
+
+      {/* ONE toggle, two possible bodies. The HTML quote and the text quote
+          shipped as two complete copies of this Pressable — same classes, same
+          copy, same label — differing only in what they expanded to, which is
+          two places for a future copy change to land and only one of them to
+          get it. */}
+      {quotedBlocks || split.quoted ? (
         <View className="mt-2">
           <Pressable
             onPress={() => setQuoteOpen(v => !v)}
@@ -514,10 +595,18 @@ function FlatMessage({ msg, conversationId, locationId, fallbackName, onViewImag
             accessibilityLabel={quoteOpen ? 'Hide quoted text' : 'Show quoted text'}
             className="self-start rounded-full border border-un1t-border bg-un1t-surface px-2 py-0.5"
           >
-            <Text className="text-[11px] text-un1t-subtle">{quoteOpen ? 'Hide quoted text' : '··· Show quoted text'}</Text>
+            <Text className="text-[11px] text-un1t-subtle">
+              {quoteOpen ? 'Hide quoted text' : '··· Show quoted text'}
+            </Text>
           </Pressable>
           {quoteOpen ? (
-            <Text className="mt-2 border-l-2 border-un1t-border pl-3 text-sm text-un1t-subtle">{split.quoted}</Text>
+            quotedBlocks ? (
+              <View className="mt-2 border-l-2 border-un1t-border pl-3">
+                <EmailBody blocks={quotedBlocks} />
+              </View>
+            ) : (
+              <Text className="mt-2 border-l-2 border-un1t-border pl-3 text-sm text-un1t-subtle">{split.quoted}</Text>
+            )
           ) : null}
         </View>
       ) : null}
@@ -582,6 +671,15 @@ export default function EmailConversation() {
   const [error, setError] = useState(null)
   const [text, setText] = useState('')
   const [isNote, setIsNote] = useState(false)
+  // MAIL-READER.1's pill, on the phone. 🔴 A TYPED DRAFT IS SACRED: collapsing
+  // keeps every character (MAIL-DOCK.2's lesson — the pin types a draft,
+  // collapses the tree, finds the words intact). Only ✕ with a confirm may
+  // discard, and this screen has no ✕.
+  const [composerOpen, setComposerOpen] = useState(false)
+  // The height above the keyboard, measured off an INNER view — see the
+  // onLayout site below for why it cannot be measured off the
+  // KeyboardAvoidingView itself on iOS.
+  const [availableHeight, setAvailableHeight] = useState(0)
   const [sending, setSending] = useState(false)
   const [savingAction, setSavingAction] = useState(false)
   // Per-message fold overrides: id → true (expanded) / false (collapsed).
@@ -597,6 +695,10 @@ export default function EmailConversation() {
   const [mergeOpen, setMergeOpen] = useState(false)
   const [mergeSelected, setMergeSelected] = useState(() => new Set())
   const [merging, setMerging] = useState(false)
+  // Option A, compact at rest: Details is the operator's tap, and it stays
+  // where they put it for as long as they are on this conversation.
+  const [detailsOpen, setDetailsOpen] = useState(false)
+  const [nudgeSheetOpen, setNudgeSheetOpen] = useState(false)
   // Audit F6 — expanding a folded message grows the content, and the
   // auto-scroll-to-end below would immediately yank the viewport AWAY from
   // the message the operator just opened, down to the composer. One-shot
@@ -631,13 +733,6 @@ export default function EmailConversation() {
   const [replyRecipients, setReplyRecipients] = useState(null)
   // EMAIL-ATTACH-PREVIEW.1 — the one image being looked at, if any.
   const [viewingImage, setViewingImage] = useState(null)
-  // MOBILE-SIGHINT.1 — the viewer's per-studio signature contexts, already
-  // rendered server-side. FETCHED PER MOUNT and held in screen state: there
-  // is deliberately no module-level cache (web built one and removed it on
-  // review — a memo is per PROCESS, not per viewer, so on a shared front-desk
-  // phone the next operator would compose under the previous one's sign-off).
-  // [] until it lands, which resolves to no hint rather than a wrong one.
-  const [signatureContexts, setSignatureContexts] = useState([])
   const scrollRef = useRef(null)
   const readMarked = useRef(false)
   const hydrationStarted = useRef(false)
@@ -748,6 +843,9 @@ export default function EmailConversation() {
         setText(decision.text)
         setIsNote(decision.mode === 'note')
         setDraftSaved(true)
+        // Desktop's rule, and it matters more here: taking focus would raise the
+        // keyboard nobody asked for. The words are there; the cursor is not.
+        if (decision.text) setComposerOpen(true)
       } else if (decision.action === 'keep-live') {
         writeReplyDraft(scope, {
           text: liveRef.current.text,
@@ -809,18 +907,6 @@ export default function EmailConversation() {
     }
   }, [messages.length])
 
-  // MOBILE-SIGHINT.1 — one read per mount, and none of it is polled: the
-  // signature belongs to the VIEWER, not the thread, and it changes about as
-  // often as a job title. A failure answers [] (email-api.js) and the hint
-  // simply does not appear — the route appends the signature server-side
-  // either way, so this whole feature is cosmetic and must never cost the
-  // screen anything.
-  useEffect(() => {
-    let cancelled = false
-    fetchSignatureContexts().then(rows => { if (!cancelled) setSignatureContexts(rows) })
-    return () => { cancelled = true }
-  }, [])
-
   const canReply = !!conversation?.requester_email
   // EMAIL-PARTICIPANTS.9 — the audience sentence and whether a reply is even
   // possible. `audience.disabled` covers "no requester", "everyone removed"
@@ -832,19 +918,20 @@ export default function EmailConversation() {
   const threadLines = conversationThreadAudienceLines(conversation, replyRecipients)
   const replyPlaceholder = conversationReplyPlaceholder(conversation, replyRecipients)
 
+  // MAIL-READER.1 decision 3, reply half only — whether the ⓘ tap has been
+  // used to expand the compacted "To X & N others" sentence to the full one.
+  // Reset is unnecessary: a disabled audience always shows full regardless
+  // (audienceSummary's own rule), and note mode reads neither this state nor
+  // audienceSummaryValue at all.
+  const [audienceOpen, setAudienceOpen] = useState(false)
+  const audienceSummaryValue = audienceSummary(conversation, replyRecipients)
+
   // THE send gate — one lib answer read by the button AND the submit guard,
   // so they cannot disagree (lib/mail-drafts.js).
   const sendState = composerSendState({
     text, isNote, files, audienceDisabled: audience.disabled, sending,
   })
 
-  // MOBILE-SIGHINT.1 — what THIS reply will be signed with. The sending
-  // context is the TICKET's location (the reply route resolves the studio
-  // off the conversation, not off the phone's active location — a coach reading a
-  // Hatch thread while switched to Stillorgan still sends as Hatch), so that
-  // is what the hint resolves by. All the branching lives in the lib; null
-  // means the hint hides.
-  const signatureHint = resolveSignatureHint(signatureContexts, conversation?.location_id || null)
   const budget = attachmentBudget(files)
 
   function patchFile(key, patch) {
@@ -970,6 +1057,13 @@ export default function EmailConversation() {
     // DEFINITELY done, and saying so must not depend on a timer firing.
     clearReplyDraft(draftScope)
     setDraftSaved(false)
+    // Back to the pill. This is the ONE place that may collapse the composer,
+    // and only because the draft is provably gone: setText('') above emptied
+    // it and clearReplyDraft removed the stored copy. Everywhere else a
+    // collapse would risk hiding words somebody typed, which is why nothing
+    // else in this screen sets this false. An expanded, empty composer after
+    // a send is 40% of the screen spent on nothing.
+    setComposerOpen(false)
     refresh()
   }
 
@@ -1008,6 +1102,32 @@ export default function EmailConversation() {
     // reconciles archive state after the fact.
     if (res.data?.writeback_notice) {
       Alert.alert('Archived here', res.data.writeback_notice)
+    }
+  }
+
+  // Mark as spam / release (MAIL-SPAM.1) — the phone's first sight of the
+  // quarantine.
+  async function toggleSpam() {
+    if (savingAction) return
+    // 🔴 The failure sentence comes from the lib, finished. Deriving it here as
+    // `Couldn't ${label.toLowerCase()}` reads "Couldn't not spam" in the release
+    // direction — a double negative shipped to an operator. toggleArchive above
+    // branches on direction for the same reason.
+    const { next, failure } = spamActionLabel(conversation)
+    setSavingAction(true)
+    const res = await setConversationSpam(conversationId, next, activeLocation?.id)
+    setSavingAction(false)
+    if (!res.success) {
+      Alert.alert(failure, res.error || 'Unknown error')
+      return
+    }
+    // 🔴 The flag is ORTHOGONAL to the lifecycle — the route touches only the
+    // spam columns. Take the row the route returns and infer nothing else from
+    // it; in particular, never derive a status change from a quarantine.
+    if (res.data?.conversation) {
+      setConversation(prev => (prev ? { ...prev, ...res.data.conversation } : prev))
+    } else {
+      refresh({ quiet: true })
     }
   }
 
@@ -1094,22 +1214,30 @@ export default function EmailConversation() {
     router.push({ pathname: '/email/forward', params: { conversationId: conversationId, messageId } })
   }
 
-  // The ⋮ overflow — one action, acting on the NEWEST forwardable message
-  // (lib rule: trailing internal notes are skipped; "forward" from the menu
-  // means the correspondence on top, not the staff commentary about it).
+  // The ⋮ overflow — Forward, acting on the NEWEST forwardable message (lib
+  // rule: trailing internal notes are skipped; "forward" from the menu means
+  // the correspondence on top, not the staff commentary about it), and now
+  // Mark as spam / Not spam (MAIL-SPAM.1 — the phone's first sight of the
+  // quarantine). Forward drops out of the menu with nothing to forward; spam
+  // never does; the flag is orthogonal to what is or isn't forwardable.
+  //
+  // Both rows are already gated by the trigger Pressable's own
+  // `disabled={savingAction || !conversation || tombstone}` — openOverflow
+  // cannot run at all while any of those hold, so neither row needs a second
+  // disablement here.
+  //
+  // React Native's Alert has no icon slot for its buttons — only `text` and
+  // `style` reach the OS action sheet — so spamActionLabel's `.icon` has no
+  // home on this menu; only `.label` renders, the same plain text the
+  // Forward row already uses.
   function openOverflow() {
     const target = newestForwardableMessage(messages)
-    if (!target) {
-      Alert.alert(
-        'Forward',
-        'There’s nothing on this conversation that can be forwarded — internal notes are staff-only.',
-      )
-      return
-    }
-    Alert.alert('More actions', null, [
-      { text: 'Forward…', onPress: () => pushForward(target.id) },
-      { text: 'Cancel', style: 'cancel' },
-    ])
+    const spam = spamActionLabel(conversation)
+    const buttons = []
+    if (target) buttons.push({ text: 'Forward…', onPress: () => pushForward(target.id) })
+    buttons.push({ text: spam.label, onPress: toggleSpam })
+    buttons.push({ text: 'Cancel', style: 'cancel' })
+    Alert.alert('More actions', null, buttons)
   }
 
   // 'Email' rather than the display helper's "Unknown sender" fallback while
@@ -1153,6 +1281,27 @@ export default function EmailConversation() {
       keyboardVerticalOffset={Platform.OS === 'ios' ? headerHeight : 0}
       className="flex-1 bg-un1t-bg"
     >
+      {/* 🔴 THE COMPOSER'S CAP IS MEASURED HERE, NOT ON THE
+          KeyboardAvoidingView ITSELF. It was, and on iOS that silently never
+          updated: behavior="padding" reacts to the keyboard by adding
+          paddingBottom to its own style, and padding changes the INTERIOR
+          content box, not the outer frame Yoga reports to onLayout — so the
+          callback never refired and availableHeight stayed at the pre-keyboard
+          screen height. composerCap then took 40% of a screen that was no
+          longer there, exactly while somebody was typing, which is the one
+          state this cap exists for. (Android takes behavior="height", which
+          does shrink the style height and does refire — so it was iOS-only,
+          the harder kind to notice.)
+
+          An absolutely-filled child is positioned against the parent's PADDING
+          box, so its own frame shrinks as that padding grows and its onLayout
+          fires each time. pointerEvents="none" so it can never take a touch,
+          and it draws nothing — it exists only to be measured. */}
+      <View
+        pointerEvents="none"
+        style={StyleSheet.absoluteFill}
+        onLayout={e => setAvailableHeight(e.nativeEvent.layout.height)}
+      />
       <Stack.Screen
         options={{
           title: name,
@@ -1207,18 +1356,17 @@ export default function EmailConversation() {
         </View>
       ) : (
         <>
-          {/* Header strip (mockup §04): the SUBJECT leads, then the status +
-              account chips, then the server's own audience derivation.
-              EMAIL-PARTICIPANTS.12 — the audience line is the LIVE set off
-              the server, with the requester demoted to "Opened by" only when
-              the two have actually diverged. */}
-          <View className="border-b border-un1t-border bg-un1t-surface px-4 pt-2.5 pb-3">
+          {/* ONE band (MAIL-READER.M1, option A). Subject, then one meta row,
+              then Details on demand. It was four bands — subject, chips, the
+              audience line and the opener — which with the nudge banner below
+              spent 21% of an 844pt screen before a word of email. */}
+          <View className="border-b border-un1t-border bg-un1t-surface px-4 pt-2.5 pb-2.5">
             {conversation?.subject ? (
-              <Text className="text-[17px] font-extrabold text-un1t-text leading-snug" numberOfLines={2}>
+              <Text className="text-[16px] font-extrabold text-un1t-text leading-snug" numberOfLines={2}>
                 {conversation.subject}
               </Text>
             ) : (
-              <Text className="text-[17px] font-extrabold text-un1t-subtle leading-snug">
+              <Text className="text-[16px] font-extrabold text-un1t-subtle leading-snug">
                 (no subject)
               </Text>
             )}
@@ -1228,22 +1376,50 @@ export default function EmailConversation() {
                   <Text className={`text-[10px] font-semibold ${chip.text}`}>{chip.label}</Text>
                 </View>
               ) : null}
-              {/* Which account it arrived at. mailbox_id is ON DELETE SET
-                  NULL, so a deleted address orphans its correspondence rather
-                  than hiding it — the no-mailbox case is said in words. */}
-              <View className="px-1.5 py-0.5 rounded bg-slate-500/10">
+              {/* 🔴 The no-mailbox case is said in WORDS, never shortened to a
+                  chip: mailbox_id is ON DELETE SET NULL, so a deleted address
+                  orphans its correspondence rather than hiding it. */}
+              <View className="px-1.5 py-0.5 rounded bg-slate-500/10 mr-1.5">
                 <Text className="text-[10px] font-semibold text-slate-700" numberOfLines={1}>
-                  {conversation?.mailbox ? `@ ${mailboxLabel(conversation.mailbox)}` : 'No mailbox on this conversation'}
+                  {accountChipLabel(conversation?.mailbox)}
                 </Text>
               </View>
+              {/* The nudge, as a chip rather than a full-width banner. Its two
+                  actions live in the sheet it opens. */}
+              {nudge && !conversation?.merged_into_id ? (
+                <Pressable
+                  onPress={() => setNudgeSheetOpen(true)}
+                  hitSlop={6}
+                  accessibilityRole="button"
+                  accessibilityLabel={nudge.text}
+                  className="flex-row items-center px-1.5 py-0.5 rounded bg-blue-500/10 mr-1.5"
+                >
+                  <Ionicons name="link-outline" size={10} color="#1D4ED8" style={{ marginRight: 3 }} />
+                  <Text className="text-[10px] font-semibold text-blue-700">{nudge.chip}</Text>
+                </Pressable>
+              ) : null}
+              <View className="flex-1" />
+              <Pressable
+                onPress={() => setDetailsOpen(v => !v)}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityState={{ expanded: detailsOpen }}
+                accessibilityLabel={detailsOpen ? 'Hide conversation details' : 'Show conversation details'}
+                className="flex-row items-center"
+              >
+                <Text className="text-[11px] text-un1t-subtle mr-1">Details</Text>
+                <Ionicons name={detailsOpen ? 'chevron-up' : 'chevron-down'} size={12} color="#64748B" />
+              </Pressable>
             </View>
-            <Text className="text-[11px] text-un1t-subtle mt-1.5" numberOfLines={1}>
-              {threadLines.primary}
-            </Text>
-            {threadLines.opener ? (
-              <Text className="text-[11px] text-un1t-muted mt-0.5" numberOfLines={1}>
-                {threadLines.opener}
-              </Text>
+            {detailsOpen ? (
+              <View className="mt-2 pt-2 border-t border-un1t-border">
+                {headerDetailLines(conversation, threadLines).map(line => (
+                  <Text key={line.key} className="text-[11px] text-un1t-subtle mb-0.5">
+                    {line.label ? <Text className="text-un1t-muted">{line.label}: </Text> : null}
+                    {line.value}
+                  </Text>
+                ))}
+              </View>
             ) : null}
           </View>
 
@@ -1262,34 +1438,6 @@ export default function EmailConversation() {
               </Text>
               <Text className="text-[12px] font-bold text-un1t-text ml-2">Open</Text>
             </Pressable>
-          ) : null}
-
-          {/* §03 A — the nudge: the same requester has other OPEN
-              conversations here. Shown off the related endpoint's verdict
-              only (relatedNudge — an unknown count shows nothing). */}
-          {nudge && !conversation?.merged_into_id ? (
-            <View className="flex-row items-center border-b border-blue-500/20 bg-blue-500/10 px-4 py-2">
-              <Ionicons name="link-outline" size={13} color="#1D4ED8" style={{ marginRight: 6 }} />
-              <Text className="text-[12px] text-blue-700 flex-1" numberOfLines={2}>
-                {nudge.text}
-              </Text>
-              {nudge.viewId ? (
-                <Pressable
-                  onPress={() => router.push(`/email/${nudge.viewId}`)}
-                  hitSlop={6}
-                  accessibilityLabel="View the newest related conversation"
-                >
-                  <Text className="text-[12px] font-bold text-blue-700 underline ml-2">View</Text>
-                </Pressable>
-              ) : null}
-              <Pressable
-                onPress={() => setMergeOpen(true)}
-                hitSlop={6}
-                accessibilityLabel="Merge related conversations into this one"
-              >
-                <Text className="text-[12px] font-bold text-blue-700 underline ml-3">Merge</Text>
-              </Pressable>
-            </View>
           ) : null}
 
           <ScrollView
@@ -1362,12 +1510,33 @@ export default function EmailConversation() {
               Audit A1 — a MERGED-AWAY thread is read-only: its messages live
               on the target now, so offering a composer here invites typing a
               reply the server will 409 (conversationMergedAway). The pointer banner
-              above is the way forward. */}
-          {tombstone ? null : (
+              above is the way forward.
+              MAIL-READER.M1 — collapsed to a pill until tapped (below), and
+              bounded at composerCap(availableHeight) when expanded: it and the
+              signature box (now gone, decision 2) were 43% of an 844pt screen. */}
+          {tombstone ? null : composerOpen ? (
           <View
             className="border-t border-un1t-border bg-un1t-bg px-3 pt-2.5"
             style={{ paddingBottom: Math.max(insets.bottom, 8) }}
           >
+            {/* Everything below scrolls INSIDE the cap. Before this task only
+                the TextInput was bounded (max-h-32) — the segmented toggle,
+                the attachment chips, the budget line and the gate sentences
+                were not, so a three-file reply could push Send off the
+                screen entirely.
+                🔴 THE CAP GOES ON THE SCROLLVIEW ITSELF, not its wrapping
+                View: a maxHeight on a plain View bounds its OWN layout box
+                but (Views default to overflow: visible) does not force an
+                unconstrained child to size within it, so a ScrollView with
+                no height of its own just grows to fit its content and never
+                starts scrolling — this exact file's merge-picker sheet below
+                (`<ScrollView style={{ maxHeight: 320 }}>`) is the working
+                precedent this follows. */}
+            <ScrollView
+              style={{ maxHeight: composerCap(availableHeight) }}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
             {/* Reply / Internal note — a full-width segmented toggle. */}
             <View className="flex-row rounded-xl border border-un1t-border bg-un1t-bg p-0.5 mb-2">
               <Pressable
@@ -1403,17 +1572,44 @@ export default function EmailConversation() {
                 isNote ? 'border-amber-600 bg-amber-500/10' : 'border-un1t-text bg-un1t-surface'
               }`}
             >
-              {/* The audience, named BEFORE a word is typed — and "Draft
-                  saved" stated, not hoped (true only after the write landed). */}
+              {/* 🔴 NOTE MODE KEEPS ITS SENTENCE, IN FULL, ALWAYS. The composer
+                  states its mode three ways — the selected segment, the colour
+                  of the card, and the sentence naming exactly who receives
+                  what — and this is the third. Only the REPLY half compacts
+                  (MAIL-READER.1 decision 3); on the phone there is no tooltip
+                  to move it to, so it goes behind an ⓘ that expands in place.
+                  A DISABLED reply audience does not compact either: a refusal
+                  the operator has to read must not hide behind a tap. */}
               <View className="flex-row items-center mb-1">
-                <Text
-                  className={`text-[11px] flex-1 ${isNote ? 'text-amber-700' : 'text-un1t-subtle'}`}
-                  numberOfLines={2}
-                >
-                  {isNote
-                    ? `Staff only — written to the conversation and NOT sent to ${conversation?.requester_email || 'the member'}.`
-                    : audience.text}
-                </Text>
+                {isNote ? (
+                  <Text className="text-[11px] text-amber-700 flex-1" numberOfLines={2}>
+                    Staff only — written to the conversation and NOT sent to{' '}
+                    {conversation?.requester_email || 'the member'}.
+                  </Text>
+                ) : (
+                  <Pressable
+                    onPress={() => setAudienceOpen(v => !v)}
+                    disabled={audienceSummaryValue.disabled}
+                    hitSlop={6}
+                    accessibilityRole="button"
+                    accessibilityLabel={audienceSummaryValue.full}
+                    className="flex-1 flex-row items-center"
+                  >
+                    <Text className="text-[11px] text-un1t-subtle flex-1" numberOfLines={2}>
+                      {audienceOpen || audienceSummaryValue.disabled
+                        ? audienceSummaryValue.full
+                        : audienceSummaryValue.short}
+                    </Text>
+                    {!audienceSummaryValue.disabled ? (
+                      <Ionicons
+                        name="information-circle-outline"
+                        size={13}
+                        color="#94A3B8"
+                        style={{ marginLeft: 4 }}
+                      />
+                    ) : null}
+                  </Pressable>
+                )}
                 {draftSaved && text.trim() ? (
                   <Text className="text-[11px] text-un1t-muted ml-2">Draft saved</Text>
                 ) : null}
@@ -1565,35 +1761,42 @@ export default function EmailConversation() {
                 This conversation is archived — replying brings it back to the inbox.
               </Text>
             )}
-
-            {/* MOBILE-SIGHINT.1 — what the server is about to append, shown
-                BEFORE the send rather than discovered in the sent thread.
-                Reply mode only: an internal note is sent to nobody and the
-                route appends no signature to one (web's ConversationReplyBox gates
-                the same way), so a sign-off here would be a third claim
-                contradicting the two the note card already makes.
-                No "Edit signature" affordance, unlike web: the editor lives
-                on the web /account page and the phone has no screen for it,
-                and a link to nowhere is worse than no link. */}
-            {!isNote && signatureHint ? (
-              <View className="mt-2 rounded-lg border border-dashed border-un1t-border bg-un1t-surface px-3 py-2">
-                <View className="flex-row items-center">
-                  <Ionicons name="create-outline" size={11} color="#64748B" style={{ marginRight: 5 }} />
-                  <Text className="text-[10px] font-bold uppercase tracking-wider text-un1t-muted">
-                    Added automatically
-                  </Text>
-                </View>
-                {/* No text part (a photo-only rich signature) → no separator:
-                    the send appends none either. The lib decides. */}
-                {signatureHint.body ? (
-                  <Text className="mt-1 text-xs text-un1t-subtle">{signatureHint.body}</Text>
-                ) : null}
-                {signatureHint.suffix ? (
-                  <Text className="mt-1 text-[10px] text-un1t-muted">{signatureHint.suffix}</Text>
-                ) : null}
-              </View>
-            ) : null}
+            </ScrollView>
           </View>
+          ) : (
+          // COLLAPSED MEANS EMPTY, and that is an invariant rather than a
+          // coincidence: the composer opens whenever a stored draft hydrates
+          // with text, and the only thing that ever closes it is a successful
+          // send, which has already emptied the text and cleared the stored
+          // copy. So the pill has no draft-preview state — that would be
+          // unreachable code standing in for a situation this screen refuses
+          // to create. Add a way to collapse a DIRTY composer and this pill
+          // needs one; nothing else does.
+          <Pressable
+            onPress={() => setComposerOpen(true)}
+            accessibilityRole="button"
+            accessibilityLabel={replyPlaceholder}
+            className="flex-row items-center border-t border-un1t-border bg-un1t-bg px-4 py-2.5"
+            style={{ paddingBottom: Math.max(insets.bottom, 10) }}
+          >
+            <View className="flex-1 flex-row items-center rounded-full border-[1.5px] border-un1t-border px-3.5 py-2">
+              <Text className="flex-1 text-[14px] text-un1t-muted" numberOfLines={1}>
+                {replyPlaceholder}
+              </Text>
+            </View>
+            {/* The lock is a second entry point straight to note mode, so
+                switching modes never requires opening the composer first
+                only to then tap the segmented toggle. */}
+            <Pressable
+              onPress={() => { setIsNote(true); setComposerOpen(true) }}
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel="Add an internal note"
+              className="ml-3"
+            >
+              <Ionicons name="lock-closed-outline" size={18} color="#64748B" />
+            </Pressable>
+          </Pressable>
           )}
         </>
       )}
@@ -1679,6 +1882,49 @@ export default function EmailConversation() {
                 )}
               </Pressable>
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* The nudge chip's two actions — the banner's View and Merge, now that
+          the banner is a chip. 🔴 The chip only exists when relatedNudge said
+          so: an unknown count renders NOTHING, never 0, and a failed related
+          read is null rather than []. */}
+      <Modal
+        visible={nudgeSheetOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setNudgeSheetOpen(false)}
+      >
+        <View className="flex-1 justify-end bg-black/40">
+          <Pressable
+            className="flex-1"
+            accessibilityLabel="Close related conversations"
+            onPress={() => setNudgeSheetOpen(false)}
+          />
+          <View
+            className="bg-un1t-bg rounded-t-2xl px-4 pt-4"
+            style={{ paddingBottom: Math.max(insets.bottom, 16) }}
+          >
+            <Text className="text-[13px] text-un1t-subtle mb-3">{nudge?.text}</Text>
+            {nudge?.viewId ? (
+              <Pressable
+                onPress={() => { setNudgeSheetOpen(false); router.push(`/email/${nudge.viewId}`) }}
+                accessibilityRole="button"
+                className="flex-row items-center border-t border-un1t-border py-3"
+              >
+                <Ionicons name="open-outline" size={16} color="#111827" style={{ marginRight: 10 }} />
+                <Text className="text-[14px] text-un1t-text">Open the newest related conversation</Text>
+              </Pressable>
+            ) : null}
+            <Pressable
+              onPress={() => { setNudgeSheetOpen(false); setMergeOpen(true) }}
+              accessibilityRole="button"
+              className="flex-row items-center border-t border-un1t-border py-3"
+            >
+              <Ionicons name="git-merge-outline" size={16} color="#111827" style={{ marginRight: 10 }} />
+              <Text className="text-[14px] text-un1t-text">Merge related conversations…</Text>
+            </Pressable>
           </View>
         </View>
       </Modal>

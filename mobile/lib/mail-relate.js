@@ -41,8 +41,24 @@ import { mailRowTime } from './mail-conversations'
  * list is capped, so the open rows may not all be on it. The screen hides
  * the View link then and keeps Merge.
  *
+ * `chip` (MAIL-READER.M1) is the same verdict in a header chip's width, not
+ * the banner's sentence: "Jordan Sample has 2 other open conversations"
+ * does not fit next to a status chip.
+ *
+ * 🔴 IT COUNTS `open_count`, THE SAME NUMBER `text` COUNTS. It was written
+ * counting the open rows in `related` instead, on the reasoning that
+ * `related` is capped at 10 and can hold archived rows, so the chip should
+ * only promise what a tap can back up. That reasoning is wrong here, and the
+ * fix is worth recording: the chip and the sentence are the SAME verdict at
+ * two widths, and the sheet the chip opens shows the sentence. Counting them
+ * separately let a chip read "1 other" directly above a sheet saying "has 3
+ * other open conversations" — two counters for one fact, the shape this
+ * estate has already been bitten by. The cap is real, and it is why `viewId`
+ * can be null while the chip still shows a count; that is handled by hiding
+ * the View link, not by disagreeing about the number.
+ *
  * @param {{related?: object[], open_count?: number}|null} data
- * @returns {null|{ name: string, count: number, text: string, viewId: string|null }}
+ * @returns {null|{ name: string, count: number, text: string, chip: string, viewId: string|null }}
  */
 export function relatedNudge(data) {
   if (!data) return null
@@ -50,11 +66,19 @@ export function relatedNudge(data) {
   if (!Number.isFinite(count) || data.open_count == null || count < 1) return null
   const related = Array.isArray(data.related) ? data.related : []
   const name = related[0]?.requester_name || 'This sender'
-  const newestOpen = related.find(r => r?.id && !isArchived(r))
+  const openRelated = related.filter(r => r?.id && !isArchived(r))
+  const newestOpen = openRelated[0]
   return {
     name,
     count,
     text: `${name} has ${count} other open conversation${count === 1 ? '' : 's'}`,
+    // 🔴 THE SAME `count` THE SENTENCE USES, never openRelated.length. The
+    // chip is a shorter way to say the sentence, not a second measurement:
+    // `related` is a capped, archived-inclusive window, so counting it here
+    // would let the chip read "1 other" above a sheet saying "has 3 other
+    // open conversations" — two counters for one fact, which is how a badge
+    // ends up pointing at a list that does not match it.
+    chip: `${count} other${count === 1 ? '' : 's'}`,
     viewId: newestOpen?.id || null,
   }
 }

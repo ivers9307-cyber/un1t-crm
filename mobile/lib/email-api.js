@@ -43,11 +43,6 @@ import { conversationsToInboxRows } from './mail-conversations'
 // precedence: requester_name → requester_email.
 export { requesterLabel as emailDisplayName } from './mail-conversations'
 
-// The three views the mail route whitelists. Anything else is a 400, and
-// omitting the param entirely is the inbox (live conversations). The screen's
-// chips map their id onto these via conversationViewWire() in ./mail-conversations.
-export const MAIL_VIEWS = Object.freeze(['inbox', 'needs_reply', 'archived'])
-
 /**
  * The studio's mail, shaped into rows for the Mail tab's list.
  *
@@ -166,6 +161,27 @@ export function archiveConversation(conversationId, archived, locationId) {
 }
 
 /**
+ * Quarantine a conversation, or release it (MAIL-SPAM.1).
+ *
+ * `true` quarantines, `false` releases — two states, like archive, and the flag
+ * is ORTHOGONAL TO THE LIFECYCLE: the route touches only the spam columns, so
+ * no caller may infer a status change from a quarantine.
+ *
+ * Releasing fires what ingest suppressed (the unread mirror and the staff
+ * push). That is the route's job, not this caller's.
+ *
+ * This is the phone's first sight of the quarantine: the endpoint has existed
+ * since MAIL-SPAM.1 and mobile had no wrapper, no action and no Spam view.
+ */
+export function setConversationSpam(conversationId, spam, locationId) {
+  return api(`/api/email/mail/${conversationId}/spam`, {
+    method: 'POST',
+    body: { spam: !!spam },
+    locationId,
+  })
+}
+
+/**
  * Read state, both directions. seen=true stamps every unread inbound message
  * (fire on open — replaces the conversation-era /read call, and unlike it also
  * mirrors \Seen into a connected real mailbox); seen=false is Mark as
@@ -187,7 +203,18 @@ export function setConversationSeen(conversationId, seen, locationId) {
  * probed; surface it as a plain "not found" rather than a permission story.
  */
 export async function getConversation(conversationId, locationId) {
-  const res = await api(`/api/email/mail/${conversationId}`, { locationId })
+  // MAIL-READER.M1 — ?body=blocks asks for a pre-parsed block tree instead of
+  // `html_document`, the iframe-ready document this screen has never been able
+  // to render and was downloading anyway (a 1.5MB budget per thread, discarded
+  // on arrival). Blocks mode omits the document, so this makes the phone's
+  // payload SMALLER as it gains the feature.
+  //
+  // 🔴 ABSENCE OF BLOCKS IS THE TEXT PATH, NOT AN ERROR. The server deploys
+  // ahead of the OTA and could be rolled back behind it; a build that treated a
+  // missing html_blocks as a failure would blank the thread instead of falling
+  // back to text_body, which is what this screen did for its whole life.
+  const params = new URLSearchParams({ body: 'blocks' })
+  const res = await api(`/api/email/mail/${conversationId}?${params.toString()}`, { locationId })
   if (!res.success) return { success: false, error: res.error || 'Failed to load conversation' }
   return {
     success: true,

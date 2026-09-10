@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { emailHtmlDocuments } from '@/lib/email-html'
+import { emailBlocks } from '@/lib/email-blocks'
 import { attachmentPreviewKind } from '@/lib/email-attachment-preview'
 import {
   loadConversationForUser, loadOwnAddresses, isElevatedAtLocation,
@@ -90,8 +91,23 @@ const ATTACHMENT_LIMIT = 500
 // support queue must still open.
 const HTML_BUDGET_BYTES = 1_500_000
 
+// MAIL-READER.M1 — blocks mode has its own, much smaller budget. 1.5 MB is a
+// sane document budget for a desk browser on a LAN; the phone is on cellular,
+// and a block tree is far denser per rendered pixel than a document is. Spent
+// newest-first, exactly like the document budget: the most recent
+// correspondence is the part anyone reads.
+const BLOCK_BUDGET_BYTES = 300_000
+
+// The one value of ?body= that changes anything. Any other value — a typo, or a
+// value a FUTURE bundle invents — falls through to the document, deliberately
+// unlike ?view=, which 400s an unknown value. A display preference is not worth
+// refusing a thread over, and it is what lets an older shipped bundle keep
+// working unchanged.
+const BODY_BLOCKS = 'blocks'
+
 export async function GET(request, props) {
   const params = await props.params
+  const wantsBlocks = new URL(request.url).searchParams.get('body') === BODY_BLOCKS
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
@@ -132,7 +148,7 @@ export async function GET(request, props) {
     return NextResponse.json({ success: false, error: contactErr.message }, { status: 500 })
   }
 
-  const { messages, attachmentsUnavailable } = await shapeMessages(db, messagesDesc || [])
+  const { messages, attachmentsUnavailable } = await shapeMessages(db, messagesDesc || [], wantsBlocks)
 
   // ── Who a reply would reach (EMAIL-CC.1, EMAIL-PARTICIPANTS.4) ─────
   // Computed HERE so the composer never re-derives it from the message list: a
@@ -311,10 +327,13 @@ async function loadAttachments(db, messageIds) {
  * @param {object} db  service-role client
  * @param {object[]} rows  messages, NEWEST FIRST — the HTML budget spends
  *   itself on the most recent correspondence, which is the part anyone reads.
+ * @param {boolean} wantsBlocks  MAIL-READER.M1 — ?body=blocks: serve the
+ *   block tree src/lib/email-blocks.js builds instead of the iframe document,
+ *   on its own smaller budget.
  * @returns {Promise<{messages: object[], attachmentsUnavailable: boolean}>}
  *   messages oldest first
  */
-async function shapeMessages(db, rows) {
+async function shapeMessages(db, rows, wantsBlocks = false) {
   const { byMessage: attachmentsByMessage, unavailable: attachmentsUnavailable } =
     await loadAttachments(db, rows.map(m => m.id).filter(Boolean))
 
@@ -339,21 +358,29 @@ async function shapeMessages(db, rows) {
     authorNames = new Map((profiles || []).map(p => [p.id, p.full_name]))
   }
 
-  let budget = HTML_BUDGET_BYTES
+  let budget = wantsBlocks ? BLOCK_BUDGET_BYTES : HTML_BUDGET_BYTES
 
   const shaped = rows.map(row => {
     // html_body is destructured out and never spread into the response. It is
     // hostile input from an unauthenticated stranger; the browser gets the
-    // sanitised document or it gets the text.
+    // sanitised document (or block tree) or it gets the text.
     const { html_body: raw, ...rest } = row
+    // The two shapes differ only in what carries the HTML — plus
+    // `html_truncated`, which blocks mode alone can report. Every
+    // flag the thread reads to decide which NOTICE to show is identical, so a
+    // screen written against one shape reads the other's flags correctly.
     const base = {
       ...rest,
       author_name: authorNames.get(row.author_profile_id) || null,
       attachments: attachmentsByMessage.get(row.id) || [],
-      html_document: null,
-      // MAIL-REPLY-QUOTE.1 — the quoted chain as its own srcdoc, folded
-      // behind "Show quoted text" in the thread. null when nothing is quoted.
-      html_quoted_document: null,
+      ...(wantsBlocks
+        ? { html_blocks: null, html_quoted_blocks: null, html_truncated: false }
+        : {
+          html_document: null,
+          // MAIL-REPLY-QUOTE.1 — the quoted chain as its own srcdoc, folded
+          // behind "Show quoted text" in the thread. null when nothing is quoted.
+          html_quoted_document: null,
+        }),
       html_blocked_images: 0,
       html_unsafe: false,
       html_omitted: false,
@@ -361,10 +388,30 @@ async function shapeMessages(db, rows) {
 
     // An internal note is plain text by construction (mig 493: the signature
     // is plain text precisely so no un-sanitised HTML path exists on the
-    // staff side). It never goes near the HTML path.
+    // staff side). It never goes near the HTML path — in EITHER shape.
     if (row.is_internal_note || !raw) return base
 
     if (budget <= 0) return { ...base, html_omitted: true }
+
+    if (wantsBlocks) {
+      // emailBlocks() swallows its own throw and reports `failed`; there is no
+      // branch anywhere that returns `raw`.
+      const { blocks, quotedBlocks, blockedImages, truncated, failed } = emailBlocks(raw)
+      // Measured on the SERIALISED tree, because that is what crosses the wire.
+      // BOTH halves are charged, same as the document budget just below: the
+      // quote is the part that makes a thread enormous, and billing only the
+      // main blocks would let a folded cascade spend the response unmetered.
+      budget -= (blocks ? JSON.stringify(blocks).length : 0)
+        + (quotedBlocks ? JSON.stringify(quotedBlocks).length : 0)
+      return {
+        ...base,
+        html_blocks: blocks,
+        html_quoted_blocks: quotedBlocks,
+        html_blocked_images: blockedImages,
+        html_truncated: truncated,
+        html_unsafe: failed,
+      }
+    }
 
     // emailHtmlDocuments() swallows its own throw and reports `failed`; there
     // is no branch anywhere that returns `raw`.

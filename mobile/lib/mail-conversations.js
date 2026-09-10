@@ -36,7 +36,7 @@
 // conversation-era status back into a decision the server's `archived` stamp had
 // already made, and a legacy `solved` row the server calls live was presented
 // as archived — the swipe then sent `{archived:false}`, reopening nothing.
-import { isArchived, needsReply } from 'shared/mail-vocabulary'
+import { isArchived, needsReply, isSpam } from 'shared/mail-vocabulary'
 import { splitQuotedText } from 'shared/mail-quote'
 
 // ── Status ───────────────────────────────────────────────────────────
@@ -105,6 +105,16 @@ export const TICKET_VIEW_TABS = Object.freeze([
     id: 'archived', label: 'Archived', wire: 'archived',
     emptyTitle: 'Nothing archived yet',
     emptyBody: 'Archive a conversation when it is dealt with — a new reply from the member brings it back.',
+  },
+  {
+    // MAIL-SPAM.1 — the quarantine, and the phone's first sight of it. Rows
+    // flagged at ingest (Postmark's SpamScore at or above the studio's
+    // threshold) or by an operator. The ONLY view that shows them, and nothing
+    // here counts towards the badge.
+    id: 'spam', label: 'Spam', wire: 'spam',
+    emptyTitle: 'No spam',
+    emptyBody: 'Mail the filter catches waits here for 30 days in case it was real, then it is '
+      + 'deleted. Nothing here counts towards the badge or pings anyone.',
   },
 ])
 
@@ -1192,4 +1202,189 @@ export function mergedInDividers(messages, mergedSources) {
     out.set(firstId, { subject: subjects.get(from) ?? null, count: counts.get(from) })
   }
   return out
+}
+
+// ── The compact reader (MAIL-READER.M1) ──────────────────────────────
+//
+// Option A, "compact at rest": the header is ONE meta line and `Details`
+// reveals the rest, all the time. Desktop chose a reading mode that folds only
+// while the operator writes (MAIL-READER.1 decision 5) because a 78vh card can
+// afford to be generous at rest and mean while writing. A 390pt screen never
+// has that surplus, so the compact form is simply the right form — a deliberate
+// divergence, Richard 2026-09-09.
+//
+// These are functions rather than JSX because nothing under mobile/components
+// or mobile/app is reachable by any test runner in this project.
+
+/**
+ * Which spam verb this conversation offers, what it would set, and the
+ * sentence to show if setting it fails.
+ *
+ * Reads `is_spam` through shared's isSpam() — the STRICT `=== true` reading,
+ * not truthiness. A hand-rolled `!!conversation?.is_spam` would read a
+ * string `'true'` or a bare `1` as spam, which is exactly the kind of
+ * hand-mirrored predicate MAIL-ARCH.2 exists to rule out (archiveToggleMeta's
+ * OR-ing bug, this file's header). A missing or malformed flag reads as
+ * LIVE, because that is what isSpam() itself answers for one — not a second
+ * interpretation of it.
+ *
+ * `failure` is a FINISHED sentence, not a template the caller derives one
+ * from: `Couldn't ${label.toLowerCase()}` composes to "Couldn't not spam" on
+ * the release direction — a double negative shipped to an operator.
+ * toggleArchive (mobile/app/(staff)/email/[conversationId].jsx) already
+ * solves the same shape by branching on direction; this does the same.
+ *
+ * @param {{is_spam?: boolean}|null} conversation
+ * @returns {{label: string, next: boolean, icon: string, failure: string}}
+ */
+export function spamActionLabel(conversation) {
+  const spam = isSpam(conversation)
+  return spam
+    ? { label: 'Not spam', next: false, icon: 'shield-checkmark-outline', failure: 'Couldn’t release it' }
+    : { label: 'Mark as spam', next: true, icon: 'alert-circle-outline', failure: 'Couldn’t mark it as spam' }
+}
+
+/** The sentence for a conversation whose mailbox row is gone. */
+export const NO_MAILBOX_LINE = 'No mailbox on this conversation'
+
+// mailboxLabel() (above) always returns a NON-EMPTY string — 'No mailbox' for
+// a falsy mailbox, 'Mailbox' for one carrying neither field — so neither
+// caller below can tell "no real mailbox" apart from a real one by testing
+// its return value for falsiness. Both callers need that distinction (a null
+// short chip; the words "No mailbox on this conversation" in Details), so
+// both check the source fields directly, once, here.
+function hasMailboxIdentity(mailbox) {
+  return !!(mailbox?.label || mailbox?.address)
+}
+
+/**
+ * The account chip's short form — the leading segment of the full label.
+ *
+ * 🔴 NULL when there is no mailbox, so the caller says it in WORDS. `mailbox_id`
+ * is ON DELETE SET NULL: a deleted address orphans its correspondence rather
+ * than hiding it, and a chip shortened to nothing would hide exactly that.
+ *
+ * @param {{label?: string, address?: string}|null} mailbox
+ * @returns {string|null}
+ */
+export function shortMailboxLabel(mailbox) {
+  if (!hasMailboxIdentity(mailbox)) return null
+  const full = mailboxLabel(mailbox)
+  const head = String(full).split(/\s+[-–—]\s+/)[0].trim()
+  return head || full
+}
+
+/**
+ * The account chip's FINISHED text — the '@ ' prefix and the no-mailbox
+ * fallback decided here, not left half-decided in a screen's JSX ternary.
+ *
+ * 🔴 NEVER a chip shortened to nothing. `mailbox_id` is ON DELETE SET NULL,
+ * so a deleted address orphans its correspondence rather than hiding it, and
+ * the no-mailbox case stays a SENTENCE IN WORDS — the same NO_MAILBOX_LINE
+ * Details already shows — never a chip.
+ *
+ * @param {{label?: string, address?: string}|null} mailbox
+ * @returns {string}
+ */
+export function accountChipLabel(mailbox) {
+  const short = shortMailboxLabel(mailbox)
+  return short ? `@ ${short}` : NO_MAILBOX_LINE
+}
+
+/**
+ * What `Details ⌄` reveals — the facts the four header bands used to spend a
+ * line each on, in the order they were read in.
+ *
+ * @param {object|null} conversation
+ * @param {{primary?: string, opener?: string}|null} threadLines
+ * @returns {{key: string, label: string|null, value: string}[]}
+ */
+export function headerDetailLines(conversation, threadLines) {
+  const mailbox = conversation?.mailbox
+  const lines = [{
+    key: 'mailbox',
+    label: 'Account',
+    value: hasMailboxIdentity(mailbox) ? mailboxLabel(mailbox) : NO_MAILBOX_LINE,
+  }]
+  if (threadLines?.primary) {
+    lines.push({ key: 'thread', label: null, value: threadLines.primary })
+  }
+  if (threadLines?.opener) {
+    lines.push({ key: 'opener', label: null, value: threadLines.opener })
+  }
+  return lines
+}
+
+/**
+ * The audience, twice: short enough for the composer's face, and in full behind
+ * the ⓘ.
+ *
+ * 🔴 BOTH STRINGS READ conversationReplyAudience. That is the whole point of
+ * the shape: the placeholder naming one person while the footer named another
+ * is a bug this screen has actually shipped (EMAIL-PARTICIPANTS.12), on the
+ * screen where a wrong name is most expensive.
+ *
+ * A DISABLED audience returns the same sentence for both, because there is
+ * nothing to compact — a refusal the operator has to read must not hide behind
+ * a tap.
+ *
+ * @param {object|null} conversation
+ * @param {{to?: string[], empty?: boolean, over_cap?: boolean}|null} replyRecipients
+ * @returns {{short: string, full: string, disabled: boolean}}
+ */
+export function audienceSummary(conversation, replyRecipients) {
+  const meta = conversationReplyAudienceMeta(conversation, replyRecipients)
+  if (meta.disabled) return { short: meta.text, full: meta.text, disabled: true }
+  const to = conversationReplyAudience(conversation, replyRecipients)
+  // Names only the first, then a count — the idiom the footer and the
+  // placeholder already use, off the same array.
+  const extra = to.length - 1
+  const short = extra <= 0
+    ? `To ${to[0]}`
+    : `To ${to[0]} & ${extra} ${extra === 1 ? 'other' : 'others'}`
+  return { short, full: meta.text, disabled: false }
+}
+
+// 40% of the space above the keyboard (MAIL-READER.1 decision 1 capped the
+// desktop card's composer at the same fraction). The FLOOR matters as much as
+// the fraction: a short window or a tall keyboard must not shrink the composer
+// to a slot nothing fits in.
+//
+// The CEILING matters on a device desktop never had to think about. iPad
+// (mobile/app.config.js: supportsTablet: true) runs the same composer, and
+// its hydrated-draft flow deliberately expands WITHOUT taking focus — no
+// keyboard is raised, so availableHeight is roughly the whole screen, and
+// 40% of that is a lot of screen for a text box. Desktop's identical 40%
+// never needed a ceiling because it resolves against a card already bounded
+// at 78vh (ReplyBox.jsx) — a bound that does not carry over to a raw screen
+// height, so this file needs its own.
+const COMPOSER_FRACTION = 0.4
+const COMPOSER_FLOOR = 168
+const COMPOSER_CEILING = 400
+
+/**
+ * How tall the expanded composer may be.
+ *
+ * Today only the TextInput is capped (`max-h-32`); the attachment chips, the
+ * budget line and the send-gate sentences below it are not, so a three-file
+ * reply can push Send off the screen.
+ *
+ * CLAMP ORDER, and which wins on a conflict: the fraction is bounded between
+ * the floor and the ceiling first (an ordinary phone gets 40%, a cramped one
+ * gets the floor, a tall keyboard-less screen gets the ceiling) — but
+ * `availableHeight` itself is applied LAST and beats everything before it,
+ * including the floor. A `maxHeight` bigger than the space `onLayout`
+ * actually measured is never sane: on a small phone in landscape with the
+ * keyboard up, availableHeight can fall to 80-100pt, well under the 168
+ * floor, and the floor exists to keep the composer USABLE — not to promise a
+ * height the screen does not have.
+ *
+ * @param {number} availableHeight  the measured height ABOVE the keyboard
+ * @returns {number} pixels
+ */
+export function composerCap(availableHeight) {
+  const h = Number(availableHeight)
+  if (!Number.isFinite(h) || h <= 0) return COMPOSER_FLOOR
+  const fraction = Math.min(Math.max(Math.round(h * COMPOSER_FRACTION), COMPOSER_FLOOR), COMPOSER_CEILING)
+  return Math.min(fraction, h)
 }

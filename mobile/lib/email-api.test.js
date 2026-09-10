@@ -24,7 +24,7 @@ import { supabase } from './supabase'
 import { readFileAsArrayBuffer } from './upload-bytes'
 import {
   getConversation, getEstateMailCount, listMail, fetchMailDigest,
-  archiveConversation, setConversationSeen,
+  archiveConversation, setConversationSeen, setConversationSpam,
   replyToConversation, composeEmail, forwardMessage, draftUuid,
   signOutboundAttachment, uploadSignedAttachment,
   fetchRelatedConversations, mergeConversation, unmergeConversation,
@@ -804,5 +804,72 @@ describe('getConversation merged_sources passthrough', () => {
     expect(res.mergedSources).toEqual([{ id: 's1', subject: 'RE: x' }])
     api.mockResolvedValueOnce({ success: true, data: { ticket: { id: 't1' }, messages: [] } })
     expect((await getConversation('t1', 'loc-1')).mergedSources).toEqual([])
+  })
+})
+
+// MAIL-READER.M1 — the phone asks for the block tree, and can quarantine.
+// This file's harness has no `mockOk`/`lastCall` helpers (task spec assumed
+// some); reused the api.mockResolvedValue / toHaveBeenCalledWith idiom every
+// other describe block here already uses, rather than adding a second mock.
+describe('getConversation — blocks mode', () => {
+  it('asks for the block tree', async () => {
+    api.mockResolvedValue({ success: true, data: { ticket: { id: 'c-1' }, messages: [] } })
+    await getConversation('c-1', 'loc-1')
+    expect(api).toHaveBeenCalledWith('/api/email/mail/c-1?body=blocks', { locationId: 'loc-1' })
+  })
+
+  it('passes the block fields through', async () => {
+    api.mockResolvedValue({
+      success: true,
+      data: {
+        ticket: { id: 'c-1' },
+        messages: [{
+          id: 'm-1',
+          html_blocks: [{ type: 'para', runs: [{ text: 'hi' }] }],
+          html_quoted_blocks: null,
+          html_truncated: false,
+        }],
+      },
+    })
+    const res = await getConversation('c-1', 'loc-1')
+    expect(res.messages[0].html_blocks).toEqual([{ type: 'para', runs: [{ text: 'hi' }] }])
+  })
+
+  it('survives a server that sends no block fields at all', async () => {
+    // A server rollback after the OTA shipped. Absence of blocks is the TEXT
+    // path, never an error state.
+    api.mockResolvedValue({
+      success: true,
+      data: { ticket: { id: 'c-1' }, messages: [{ id: 'm-1', text_body: 'plain' }] },
+    })
+    const res = await getConversation('c-1', 'loc-1')
+    expect(res.success).toBe(true)
+    expect(res.messages[0].html_blocks).toBeUndefined()
+  })
+})
+
+describe('setConversationSpam', () => {
+  it('posts the flag', async () => {
+    api.mockResolvedValue({ success: true, data: {} })
+    await setConversationSpam('c-1', true, 'loc-1')
+    expect(api).toHaveBeenCalledWith('/api/email/mail/c-1/spam', {
+      method: 'POST', body: { spam: true }, locationId: 'loc-1',
+    })
+  })
+
+  it('posts a release', async () => {
+    api.mockResolvedValue({ success: true, data: {} })
+    await setConversationSpam('c-1', false, 'loc-1')
+    expect(api).toHaveBeenCalledWith('/api/email/mail/c-1/spam', {
+      method: 'POST', body: { spam: false }, locationId: 'loc-1',
+    })
+  })
+
+  it('coerces the flag, so a truthy value cannot post a non-boolean', async () => {
+    api.mockResolvedValue({ success: true, data: {} })
+    await setConversationSpam('c-1', 1, 'loc-1')
+    expect(api).toHaveBeenCalledWith('/api/email/mail/c-1/spam', {
+      method: 'POST', body: { spam: true }, locationId: 'loc-1',
+    })
   })
 })

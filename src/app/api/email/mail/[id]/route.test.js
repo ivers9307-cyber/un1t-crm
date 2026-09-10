@@ -684,3 +684,115 @@ describe('GET …/[id] — html_quoted_document (MAIL-REPLY-QUOTE.1)', () => {
     expect(older.html_quoted_document).toBeNull()
   })
 })
+
+// MAIL-READER.M1 — the phone has no iframe, so ?body=blocks swaps
+// html_document for the block tree src/lib/email-blocks.js builds. Reuses the
+// same db/get plumbing as every other describe block above; the only wrinkle
+// is a query string and a variable message count, neither of which the
+// top-level get() supports, so a small local helper builds on setupDb() /
+// baseState() rather than duplicating the fixture machinery.
+describe('GET ?body=blocks', () => {
+  function getConversation({ html_body, body, is_internal_note = false, messages = 1 } = {}) {
+    const rows = Array.from({ length: messages }, (_, i) => ({
+      id: `m-blk-${i}`, ticket_id: T_STUDIO.id, location_id: T_STUDIO.location_id,
+      direction: 'inbound', text_body: 'text fallback', is_internal_note,
+      created_at: `2026-08-06T09:${String(i).padStart(2, '0')}:00Z`,
+      html_body,
+    }))
+    setupDb(baseState({ grants: [GRANT_STUDIO], messages: rows }))
+    const qs = body ? `?body=${body}` : ''
+    return GET(
+      new Request(`http://x/api/email/conversations/${T_STUDIO.id}${qs}`),
+      { params: Promise.resolve({ id: T_STUDIO.id }) },
+    ).then(async res => ({ status: res.status, data: (await res.json()).data }))
+  }
+
+  it('serves blocks and omits html_document', async () => {
+    const res = await getConversation({ html_body: '<p>Hello <b>there</b></p>', body: 'blocks' })
+    const message = res.data.messages[0]
+    expect(message.html_blocks).toEqual([
+      { type: 'para', runs: [{ text: 'Hello ' }, { text: 'there', bold: true }] },
+    ])
+    expect(message.html_document).toBeUndefined()
+    expect(message.html_truncated).toBe(false)
+  })
+
+  it('carries html_truncated: true to the wire for an over-cap message', async () => {
+    // The only assertion on this flag was `false`. Nothing proved the TRUE
+    // case ever reached a client — and the emptied-verdict bug it guards
+    // against (emailBlocks returning the literal `empty` and discarding a
+    // computed truncated) was live on this exact path until it was found in
+    // review. One message, well under the 300KB route budget, but past the
+    // walker's own per-message cap.
+    const res = await getConversation({
+      html_body: `<p>${'x'.repeat(400)}</p>`.repeat(600),
+      body: 'blocks',
+    })
+    const message = res.data.messages[0]
+    expect(message.html_truncated).toBe(true)
+    expect(message.html_omitted).toBe(false)
+    expect(Array.isArray(message.html_blocks)).toBe(true)
+  })
+
+  it('serves the document when no body parameter is given', async () => {
+    const res = await getConversation({ html_body: '<p>Hi</p>' })
+    const message = res.data.messages[0]
+    expect(typeof message.html_document).toBe('string')
+    expect(message.html_blocks).toBeUndefined()
+  })
+
+  it('fails OPEN to the document on an unknown body value', async () => {
+    // Deliberately unlike ?view=, which 400s an unknown value: a display
+    // preference is not worth refusing a thread over, and an older shipped
+    // mobile bundle must keep working when the server moves ahead of it.
+    const res = await getConversation({ html_body: '<p>Hi</p>', body: 'nonsense' })
+    expect(res.status).toBe(200)
+    expect(typeof res.data.messages[0].html_document).toBe('string')
+  })
+
+  it('never sends html_blocks for an internal note', async () => {
+    const res = await getConversation({
+      is_internal_note: true, html_body: '<p>staff</p>', body: 'blocks',
+    })
+    expect(res.data.messages[0].html_blocks).toBe(null)
+  })
+
+  it('omits messages past the block budget, newest first', async () => {
+    const big = `<p>${'x'.repeat(9000)}</p>`
+    const res = await getConversation({ messages: 60, html_body: big, body: 'blocks' })
+    const shaped = res.data.messages
+    // Messages are returned OLDEST first; the budget is spent NEWEST first, so
+    // the oldest are the ones omitted.
+    expect(shaped[shaped.length - 1].html_omitted).toBe(false)
+    expect(shaped[0].html_omitted).toBe(true)
+    expect(shaped[0].html_blocks).toBe(null)
+  })
+
+  // The task snippet for this route charged only `blocks` to the budget. The
+  // document branch right below it charges BOTH halves, with its own
+  // why-comment explaining that billing only the body lets a folded quote
+  // cascade spend the response unmetered — the same trap, reopened for blocks
+  // if only the main tree were counted. A folded quote never renders by
+  // default, but it still crosses the wire, so it has to be paid for.
+  it('charges the quoted half too, like the document budget already does', async () => {
+    const hugeQuote = `<blockquote type="cite"><p>${'x'.repeat(25000)}</p></blockquote>`
+    const rows = Array.from({ length: 30 }, (_, i) => ({
+      id: `m-qb-${i}`, ticket_id: T_STUDIO.id, location_id: T_STUDIO.location_id,
+      direction: 'inbound', text_body: 'text fallback', is_internal_note: false,
+      created_at: `2026-08-06T09:${String(i).padStart(2, '0')}:00Z`,
+      html_body: `<p>hi</p>${hugeQuote}`,
+    }))
+    setupDb(baseState({ grants: [GRANT_STUDIO], messages: rows }))
+    const res = await GET(
+      new Request(`http://x/api/email/conversations/${T_STUDIO.id}?body=blocks`),
+      { params: Promise.resolve({ id: T_STUDIO.id }) },
+    )
+    const { data } = await res.json()
+    const shaped = data.messages
+    // If only `blocks` were charged, every message's own body is a couple of
+    // bytes and the budget would never run out — the oldest would stay
+    // un-omitted right alongside the newest.
+    expect(shaped[shaped.length - 1].html_omitted).toBe(false)
+    expect(shaped[0].html_omitted).toBe(true)
+  })
+})
