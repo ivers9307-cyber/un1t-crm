@@ -35,6 +35,7 @@ import {
   headerDetailLines,
   audienceSummary,
   composerCap,
+  attachmentOpenPlan,
 } from './mail-conversations'
 
 describe('conversationMessageKind', () => {
@@ -799,6 +800,47 @@ describe('conversationAttachmentSkippedLabel', () => {
   it('still says SOMETHING for an unknown reason — never an empty chip', () => {
     expect(conversationAttachmentSkippedLabel('invented')).toBe('Not stored')
     expect(conversationAttachmentSkippedLabel(null)).toBe('Not stored')
+  })
+})
+
+describe('attachmentOpenPlan', () => {
+  // The bug Richard hit: tapping a PDF opened Chrome, and the file downloaded
+  // rather than displaying. Two causes, and this function owns the first —
+  // the screen asked for a preview URL only when preview_kind was 'image', so
+  // a PDF took the DOWNLOAD url, whose Content-Disposition: attachment means
+  // no viewer anywhere can render it inline. The server has served 'pdf'
+  // inline since EMAIL-ATTACH-PREVIEW.1; the phone never asked.
+  it('views an image in the app', () => {
+    expect(attachmentOpenPlan({ stored: true, preview_kind: 'image' }))
+      .toEqual({ action: 'image', preview: true })
+  })
+
+  it('opens a PDF inline, in the in-app browser', () => {
+    expect(attachmentOpenPlan({ stored: true, preview_kind: 'pdf' }))
+      .toEqual({ action: 'browser', preview: true })
+  })
+
+  it('downloads anything the server will not preview', () => {
+    // A Word document, a HEIC photo, an SVG. No browser renders these, so the
+    // download URL and the OS are genuinely the right answer.
+    expect(attachmentOpenPlan({ stored: true, preview_kind: null }))
+      .toEqual({ action: 'browser', preview: false })
+    expect(attachmentOpenPlan({ stored: true }))
+      .toEqual({ action: 'browser', preview: false })
+  })
+
+  it('treats a preview_kind it does not know as not previewable', () => {
+    // The server owns this allow-list and may grow it. A kind this build has
+    // never heard of must fall to the path that works for everything, not to
+    // an inline render it cannot draw.
+    expect(attachmentOpenPlan({ stored: true, preview_kind: 'video' }))
+      .toEqual({ action: 'browser', preview: false })
+  })
+
+  it('refuses an attachment with no bytes', () => {
+    // Not stored: there is nothing to open, and the chip is not tappable.
+    expect(attachmentOpenPlan({ stored: false, preview_kind: 'pdf' })).toEqual({ action: 'none' })
+    expect(attachmentOpenPlan(null)).toEqual({ action: 'none' })
   })
 })
 

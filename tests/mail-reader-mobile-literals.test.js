@@ -59,6 +59,40 @@ describe('the note composer still states its mode in words', () => {
   })
 })
 
+describe('an attachment opens IN the app, not by handing it to the OS', () => {
+  // MAIL-ATTACH.M1. Tapping a PDF used to open Chrome and download the file.
+  // Two causes: only 'image' asked for an inline url (so a PDF took the
+  // download one, whose Content-Disposition: attachment defeats every viewer),
+  // and Linking.openURL handed the url to whatever app claimed it.
+  it('routes the tap through attachmentOpenPlan rather than testing preview_kind inline', () => {
+    const source = read(THREAD)
+    expect(source).toContain('attachmentOpenPlan(')
+    // The inline test is what sent PDFs down the download path.
+    expect(source).not.toContain("att.preview_kind === 'image'")
+  })
+
+  it('opens with the in-app browser, keeping Linking only as the fallback', () => {
+    const source = read(THREAD)
+    expect(source).toContain('WebBrowser.openBrowserAsync')
+    // openInApp owns the order: WebBrowser first, Linking only if it throws.
+    // A second bare Linking.openURL on the attachment path would silently
+    // restore the app-switch this fixed.
+    expect(source).toContain('async function openInApp')
+  })
+
+  it('adds no native module to do it', () => {
+    // 🔴 The whole surface was built to stay OTA-shippable. expo-web-browser
+    // drives a SYSTEM browser component and is already in the shipped binary
+    // (a dependency, and registered in app.config.js's plugins);
+    // react-native-webview would be a native module — new binary, App Review.
+    const pkg = JSON.parse(read('mobile/package.json'))
+    const deps = { ...pkg.dependencies, ...pkg.devDependencies }
+    expect(deps['expo-web-browser']).toBeTruthy()
+    expect(deps['react-native-webview']).toBeUndefined()
+    expect(read('mobile/app.config.js')).toContain('expo-web-browser')
+  })
+})
+
 describe('the header and the verbs read the lib', () => {
   // NOTE ON 'accountChipLabel(' vs the task file's 'shortMailboxLabel(': the
   // header chip has always called accountChipLabel (it wraps shortMailboxLabel

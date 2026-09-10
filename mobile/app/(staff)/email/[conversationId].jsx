@@ -96,6 +96,7 @@ import { useHeaderHeight } from 'expo-router/react-navigation'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import * as DocumentPicker from 'expo-document-picker'
 import * as ImagePicker from 'expo-image-picker'
+import * as WebBrowser from 'expo-web-browser'
 import { useAuth } from '../../../lib/auth-context'
 import {
   getConversation, replyToConversation, archiveConversation, setConversationSpam, setConversationSeen, emailDisplayName,
@@ -107,6 +108,7 @@ import {
   conversationMessageKind, mailStatusChip, conversationDeliveryMeta,
   conversationMessageRecipients, sentToLabel,
   formatAttachmentSize, conversationAttachmentSkippedLabel, conversationAttachmentIcon,
+  attachmentOpenPlan,
   threadRefreshMs, conversationReplyAudienceMeta, conversationReplyPlaceholder,
   conversationThreadAudienceLines, conversationSendOriginMeta,
   flatThreadPlan, flatMessageMeta, mergedInDividers,
@@ -190,48 +192,97 @@ function RecipientLines({ msg, toShownInHeader = false }) {
 }
 
 /**
- * A message's files, as chips (EMAIL-ATTACH-PREVIEW.1).
+ * A message's files, as chips (EMAIL-ATTACH-PREVIEW.1; MAIL-ATTACH.M1).
  *
- * Tapping a chip asks the server for a preview URL. `preview_kind: 'image'`
- * opens the viewer below; ANYTHING ELSE — a PDF, a Word document, a HEIC photo,
- * an SVG — is handed to the OS via Linking with a DOWNLOAD url, which on a
- * phone is the better answer anyway: iOS and Android both have real viewers for
- * those, and an in-app frame for a stranger's document would need a WebView
- * this app deliberately does not carry. Which types may be previewed is the
- * SERVER's decision (`preview_kind` on the row) — one allow-list, no drift.
+ * WHERE A TAP GOES is attachmentOpenPlan's decision, in lib — an image to the
+ * in-app viewer below, a PDF to its INLINE url, anything else to the download
+ * url. Which types may be previewed stays the SERVER's decision
+ * (`preview_kind` on the row) — one allow-list, no drift.
+ *
+ * 🔴 WHAT WAS WRONG, reported off a real thread: tapping a PDF opened Chrome
+ * and downloaded the file instead of showing it. Two causes, both here.
+ *   1. Only `'image'` asked for a preview url, so a PDF took the DOWNLOAD one
+ *      — and that response carries Content-Disposition: attachment, so no
+ *      viewer anywhere can render it inline however capable it is. The server
+ *      has served 'pdf' inline all along; the phone never asked.
+ *   2. Linking.openURL hands the url to the OS, which means leaving the app
+ *      for the browser. WebBrowser.openBrowserAsync keeps it in-app —
+ *      SFSafariViewController on iOS, Chrome Custom Tabs on Android — so Done
+ *      returns to the thread instead of the operator app-switching back.
+ *
+ * NO WEBVIEW IS ADDED. expo-web-browser drives a SYSTEM browser component that
+ * holds none of this app's state; react-native-webview would be a native
+ * module, and a new binary and App Review, which the rest of this surface was
+ * built to avoid. Layer 1 for a stranger's document is that separation: web's
+ * equivalent is AttachmentPreview's cross-origin check on the same url, a
+ * page-origin concern that does not exist here because there is no page.
+ *
+ * Office documents still reach the OS, and that is right rather than a gap: no
+ * browser renders .docx, and Files/Drive/Word do.
  *
  * A not-stored attachment shows its reason and is not tappable. There are no
  * bytes, and a spinner that ended in an error would bury the one sentence staff
  * act on.
  */
+/**
+ * Open a url without leaving the app.
+ *
+ * WebBrowser is a SYSTEM browser component — SFSafariViewController on iOS,
+ * Chrome Custom Tabs on Android. It shares no state with this app and adds no
+ * native module (expo-web-browser is already a dependency, already used by the
+ * card-receipt and car screens).
+ *
+ * Linking.openURL is the FALLBACK, not the default, and the order matters: it
+ * hands the url to whatever app claims it, which is how a tapped PDF ended up
+ * in Chrome with the operator app-switching back. Kept only for the case where
+ * no in-app browser is available at all, because a file that opens somewhere
+ * beats a file that does not open.
+ */
+async function openInApp(url) {
+  try {
+    await WebBrowser.openBrowserAsync(url)
+    return
+  } catch {
+    // fall through
+  }
+  const opened = await Linking.canOpenURL(url).catch(() => false)
+  if (!opened) {
+    Alert.alert('Couldn’t open file', 'This device could not open that link.')
+    return
+  }
+  await Linking.openURL(url)
+}
+
 function Attachments({ conversationId, locationId, attachments, onViewImage }) {
   const [busy, setBusy] = useState(null)
   if (!attachments || attachments.length === 0) return null
 
   async function open(att) {
     if (busy) return
+    const plan = attachmentOpenPlan(att)
+    if (plan.action === 'none') return
     setBusy(att.id)
     try {
-      if (att.preview_kind === 'image') {
+      if (plan.preview) {
         const res = await previewConversationAttachment(conversationId, att.id, locationId)
         if (res.success) {
-          onViewImage({ url: res.url, filename: att.filename })
+          if (plan.action === 'image') {
+            onViewImage({ url: res.url, filename: att.filename })
+          } else {
+            await openInApp(res.url)
+          }
           return
         }
-        // Fall through to the download path rather than dead-ending: the file
-        // is still reachable, which is the guarantee that holds for every type.
+        // Fall through to the download path rather than dead-ending: a 404 here
+        // is the server saying "no preview for this type", and the file is
+        // still reachable — the guarantee that holds for every type.
       }
       const dl = await downloadConversationAttachment(conversationId, att.id, locationId)
       if (!dl.success) {
         Alert.alert('Couldn’t open file', dl.error)
         return
       }
-      const opened = await Linking.canOpenURL(dl.url).catch(() => false)
-      if (!opened) {
-        Alert.alert('Couldn’t open file', 'This device could not open that link.')
-        return
-      }
-      await Linking.openURL(dl.url)
+      await openInApp(dl.url)
     } catch {
       Alert.alert('Couldn’t open file', 'Something went wrong opening that file.')
     } finally {
