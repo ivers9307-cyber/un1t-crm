@@ -197,67 +197,88 @@ by this plan.
 
 ---
 
-## Task 1: Register `mobile/targets/` as non-bundle
+## Task 1: Classify `mobile/targets/` as non-bundle — with the directory
 
 **This must land before any Swift file does.** `check:ota-paths` classifies
-every top-level entry under `mobile/`; an unclassified one fails both the
-local gate and the inline check in `eas-update.yml` that aborts an OTA
-publish. Landing this first means the directory exists and is classified
-before Task 3 puts a file in it.
+every top-level entry under `mobile/`; an unclassified one fails both the local
+gate and the inline check in `eas-update.yml` that **aborts an OTA publish**.
+
+🔴 **Corrected during execution — this cannot be forward-declared.** The first
+draft of this task said to add the `NON_BUNDLE` entry alone, leaving the
+directory for Task 3. That fails: the same checker also reports a `NON_BUNDLE`
+key with **no matching directory** as **STALE** and errors on it
+(`scripts/check-ota-trigger-paths.mjs:261` — `stale` is every key not in
+`trackedMobileEntries()`). Entry-without-directory and directory-without-entry
+are both errors, so the classification and a tracked file under
+`mobile/targets/` have to land in the **same commit**. A `README.md` is the
+right tracked file: it makes the directory real, and it records this constraint
+for whoever hits it next.
 
 **Files:**
+- Create: `mobile/targets/README.md`
 - Modify: `scripts/check-ota-trigger-paths.mjs`
 - Modify: `tests/ota-trigger-paths.test.js`
 
-- [ ] **Step 1: Add the `NON_BUNDLE` entry**
+- [ ] **Step 1: Prove the gap is real before fixing it**
 
-In `scripts/check-ota-trigger-paths.mjs`, inside the `NON_BUNDLE` object
-(starts at line 85), add — alphabetical-by-convenience is not enforced by the
-file, but keep it near the other structural entries:
+The classification is inert until the directory exists, so there is no normal
+red test here. Prove it directly:
+
+```bash
+mkdir -p mobile/targets && touch mobile/targets/.gitkeep
+npm run check:ota-paths
+```
+Expected: **FAIL**, naming `mobile/targets` as UNCLASSIFIED.
+
+- [ ] **Step 2: Add the `NON_BUNDLE` entry**
+
+In the `NON_BUNDLE` object in `scripts/check-ota-trigger-paths.mjs`:
 
 ```js
   targets: 'WIDGET.1 — Swift sources for the iOS widget extension (@bacons/apple-targets), generated into the Xcode project at prebuild. The extension is a SEPARATE binary target from the RN app and never runs the Metro bundle, so a Swift-only change must publish no OTA — it cannot take effect without a new native build regardless.',
 ```
 
-- [ ] **Step 2: Add the failing test**
+- [ ] **Step 3: Replace the placeholder with the real README**
 
-In `tests/ota-trigger-paths.test.js`, add a case to the `DOES_NOT_FIRE` table
-(alongside `'mobile runbooks (the #1455 case, still true)'`):
+Delete `mobile/targets/.gitkeep` and write `mobile/targets/README.md`
+explaining: what lives in the directory, that nothing in it enters the Metro
+bundle, and that the README itself keeps the directory tracked because the
+checker treats an entry with no directory as stale.
+
+Run: `npm run check:ota-paths` → **clean**.
+
+- [ ] **Step 4: Add the trigger-table case**
+
+In `tests/ota-trigger-paths.test.js`, add to the `DOES_NOT_FIRE` table:
 
 ```js
     'the widget extension Swift sources (native-only, cannot OTA regardless)': [
       'mobile/targets/widgets/StudioControlsWidget.swift',
       'mobile/targets/widgets/expo-target.config.js',
+      'mobile/targets/README.md',
     ],
 ```
 
-- [ ] **Step 3: Run it to verify it currently fails**
+This asserts the workflow's `paths:` filter does not fire for those files — a
+different property from the classification, worth pinning separately.
 
-Run: `npx vitest run tests/ota-trigger-paths.test.js`
-Expected: at this point `targets` is not yet in `NON_BUNDLE` in a checkout
-that has this test but not Step 1's change — if you did Step 1 first (as
-written above), skip to Step 4; this ordering note exists only for someone
-executing the steps out of order.
+- [ ] **Step 5: Prove the new case can fail**
 
-- [ ] **Step 4: Run the real gate against the real (not yet existing) directory**
+Temporarily add a genuine bundle path (`'mobile/lib/foo.js'`) to that array and
+confirm the test FAILS, then remove it. A table entry that passes regardless of
+its contents is not a test.
 
-Run: `npm run check:ota-paths`
-Expected: `OTA trigger paths: clean` — `mobile/targets/` does not exist in
-the tree yet, so there is nothing to classify yet; the `NON_BUNDLE` entry is
-inert until Task 3 creates the directory, at which point this same command
-being green is what proves the classification landed in time.
-
-Run: `npx vitest run tests/ota-trigger-paths.test.js`
-Expected: PASS, including the new case (the matcher is exercised against a
-hypothetical file list, not the real tree, so it passes regardless of
-whether `mobile/targets/` exists yet).
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Verify and commit**
 
 ```bash
-git add scripts/check-ota-trigger-paths.mjs tests/ota-trigger-paths.test.js
-git commit -m "WIDGET.1 — register mobile/targets/ as non-bundle, ahead of any Swift file"
+npm run check:ota-paths
+npx vitest run tests/ota-trigger-paths.test.js
+npx eslint scripts/check-ota-trigger-paths.mjs tests/ota-trigger-paths.test.js
+git add scripts/check-ota-trigger-paths.mjs tests/ota-trigger-paths.test.js mobile/targets/README.md
+git commit -m "WIDGET.1 — classify mobile/targets/ as non-bundle (with the directory)"
 ```
+
+**Status: DONE** — landed as `21121b81` on `widget-phase2-ota-paths`.
 
 ---
 
