@@ -147,21 +147,35 @@ enum WidgetAPI {
     // Neither system time budget this file's callers run under is
     // published by Apple: an interactive widget button's
     // `AppIntent.perform()` and a `TimelineProvider`'s timeline refresh are
-    // both time-boxed, and the plan this file implements says so plainly
-    // (Task 16's real-device measurement against deployed Phase 1 is
-    // still owed). Inheriting URLSession's 60s default would let a single
-    // slow request outlive whichever budget is tighter, and when that
-    // budget expires the OS does not just cancel the request — it kills
-    // the whole extension process, which is a worse failure than this
-    // call returning a timeout error the caller can render. 8 seconds is
-    // chosen as a conservative middle point: short enough to almost
-    // certainly return (or safely fail) before either budget is spent
-    // end-to-end even on a gym's ordinary WiFi, long enough that a normal
-    // request in flight is not routinely cut off. Revisit this number,
-    // not the mechanism, once Task 16's measurement lands — it may need
-    // to be shorter specifically for the door-unlock path (see `call`'s
-    // doc comment below).
-    private static let requestTimeout: TimeInterval = 8
+    // both time-boxed, and Apple publishes neither budget.
+    //
+    // 🔴 MEASURED 2026-09-10, on a real device against deployed Phase 1:
+    // POST /api/studio-management/unlock round-trips in about **3 seconds**
+    // (the route fans out to UniFi Access synchronously). That is the typical
+    // case, not the tail — a gym basement on cellular is where it grows.
+    //
+    // Two things follow, and the second is the reason this number moved.
+    //
+    // 1. A timeout only helps if it fires BEFORE the system kills the
+    //    extension. When a budget expires the OS does not cancel the request,
+    //    it terminates the whole process — and a killed process renders
+    //    nothing, while a timeout error renders "that didn't work". So the
+    //    timeout must sit UNDER the budget, not near it.
+    // 2. The previous value, 8 seconds, was chosen before the measurement and
+    //    is at or above every plausible estimate of that budget. It could
+    //    therefore never have fired first: it bought nothing.
+    //
+    // 6 seconds is twice the measured typical — comfortable headroom for a
+    // normal unlock — while staying below the budget estimates 8 exceeded.
+    //
+    // 🔴 If the device pass shows the extension being KILLED mid-unlock rather
+    // than returning a timeout, this number is not the fix. The fix is
+    // server-side: have the unlock route answer as soon as UniFi ACKs the
+    // command instead of awaiting full confirmation, which cuts the round trip
+    // rather than racing it. Do not simply shave this value further — below
+    // ~4s a normal unlock starts failing, and a door button that times out on
+    // a working door is worse than one that is slow.
+    private static let requestTimeout: TimeInterval = 6
 
     /// GET or POST `path` against the studio's own widget credential.
     /// `body` is JSON-encoded when present; nil for a GET.

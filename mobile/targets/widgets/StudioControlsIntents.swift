@@ -156,28 +156,35 @@ struct UnlockDoorIntent: AppIntent {
         )
         WidgetCenter.shared.reloadAllTimelines()
         return .result()
-        // 🔴 LEFT OPEN, DELIBERATELY (per Task 10's instructions — do not
-        // silently resolve this): whether `perform()` should return as soon
-        // as WidgetAPI.call's request is ACCEPTED, or keep blocking until
-        // UniFi confirms the door actually opened, is a real fork with
-        // different code on each branch — and it turns on a round-trip
-        // latency measurement against deployed Phase 1 that has not been
-        // taken yet (WidgetAPI.swift's own `call` doc comment flags the
-        // same gap). What's built above is the plain, uncontroversial
-        // middle: it sends the request and awaits the ONE response the
-        // route returns, no fire-and-forget, no separate polling loop.
-        //   - If the measured latency is short, this shape is very likely
-        //     already the right answer and nothing needs to change.
-        //   - If it is not, the fix is NOT to stop awaiting — `try?`
-        //     already swallows a slow-but-eventually-successful call's
-        //     error path with no user feedback either way — the fix is to
-        //     make the FIRST tap's response ("armed") return immediately
-        //     (already true above) and have the SECOND tap fire the
-        //     request without blocking the button's visual return, reading
-        //     the actual outcome back on the widget's next timeline tick
-        //     instead of from this function's return value. That rewrite
-        //     touches this function and Task 11's timeline provider
-        //     together and is out of scope here.
+        // RESOLVED 2026-09-10 by measurement: keep awaiting the response.
+        //
+        // POST /api/studio-management/unlock round-trips in about **3 seconds**
+        // on a real device against deployed Phase 1 (the route fans out to
+        // UniFi Access synchronously). Awaiting is the right shape, for a
+        // reason that is easy to get backwards:
+        //
+        // Fire-and-forget from an extension is NOT the safer option. When the
+        // system reclaims an extension process it cancels that process's
+        // in-flight URLSession requests — so a "fire and return immediately"
+        // unlock can simply never reach the server, silently, while the button
+        // reports success. A slow unlock that works beats a fast one that
+        // sometimes does nothing, especially when someone is at a door.
+        //
+        // Server-side accept-and-queue would genuinely cut the round trip, but
+        // it moves the failure somewhere nobody is looking: a queued unlock
+        // that fails afterwards leaves the same person at the same door with a
+        // button that already said yes.
+        //
+        // So: await, with WidgetAPI's timeout set BELOW the system budget (6s,
+        // twice the measured typical) so a slow call fails visibly instead of
+        // taking the whole process down with it.
+        //
+        // 🔴 The one observation that reopens this: if the device pass shows
+        // the extension being KILLED mid-unlock rather than returning a
+        // timeout, the answer is NOT a shorter timeout here — below ~4s a
+        // normal unlock starts failing. It is to make the unlock route answer
+        // on UniFi's ACK rather than on full confirmation, cutting the round
+        // trip instead of racing it.
     }
 }
 
