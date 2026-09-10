@@ -5,7 +5,11 @@
 // between ie.repset.app and com.un1tdublin.crm; this target's id follows
 // without any new env var).
 /** @type {import('@bacons/apple-targets/app.plugin').ConfigFunction} */
-module.exports = (config) => ({
+// `_config` (underscore) because the resolved Expo config is not read here —
+// the bundle id is derived by the plugin from the main config, and the App
+// Group is mirrored from it. The repo lint rule allows an unused arg only
+// with the ^_ prefix.
+module.exports = (_config) => ({
   type: 'widget',
   name: 'widgets',
   displayName: 'Repset Widgets',
