@@ -43,8 +43,25 @@ struct StudioControlsConfigurationIntent: WidgetConfigurationIntent {
     static var title: LocalizedStringResource = "Studio Controls"
     static var description = IntentDescription("Choose a studio and up to four devices.")
 
+    // 🔴 OPTIONAL BECAUSE APPLE REQUIRES IT, not because nil is expected:
+    // a `WidgetConfigurationIntent` must declare EVERY parameter optional.
+    // The App Intents metadata processor says so outright — "Encountered a
+    // non-optional type for parameter: … Conformance to the following
+    // AppIntent protocols requires all parameter types to be optional:
+    // AppIntents.WidgetConfigurationIntent".
+    //
+    // WIDGET.2 — this shipped NON-optional in 2.4.0 and made both widget
+    // kinds unusable for everyone. A freshly placed widget has no studio, so
+    // the system could not form a valid configuration at all: the Edit-Widget
+    // picker dismissed itself mid-load and the tile fell back to its
+    // placeholder, which reads as an empty box. It produces NO crash log, so
+    // "no crash reports" is not evidence against it. Confirmed by reading the
+    // shipped build's own metadata —
+    // widgets.appex/Metadata.appintents/extract.actionsdata carried
+    // `"name":"studio","isOptional":false` on BOTH configuration intents
+    // while device1…4 correctly carried `true`.
     @Parameter(title: "Studio")
-    var studio: StudioEntity
+    var studio: StudioEntity?
 
     @Parameter(title: "Button 1", optionsProvider: DeviceOptionsProvider())
     var device1: DeviceEntity?
