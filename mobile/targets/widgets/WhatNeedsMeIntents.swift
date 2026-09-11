@@ -15,6 +15,11 @@ struct WhatNeedsMeConfigurationIntent: WidgetConfigurationIntent {
     static var title: LocalizedStringResource = "What Needs Me"
     static var description = IntentDescription("Pick a studio to see what needs attention.")
 
+    // Optional for the same non-negotiable reason as Studio Controls' own
+    // `studio` — see StudioControlsIntents.swift for the full note: Apple
+    // requires every `WidgetConfigurationIntent` parameter to be optional,
+    // and shipping this one non-optional in 2.4.0 is what left both widgets
+    // stuck showing an empty tile (WIDGET.2).
     @Parameter(title: "Studio")
-    var studio: StudioEntity
+    var studio: StudioEntity?
 }

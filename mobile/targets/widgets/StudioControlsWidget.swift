@@ -68,6 +68,14 @@ struct StudioControlsEntry: TimelineEntry {
     /// this alone, and per Task 11's brief both get the same defined
     /// look (see `StudioControlsWidgetView`).
     let credentialPresent: Bool
+    /// Whether this DEVICE holds any widget credential at all — a local
+    /// `WidgetAPI.storedStudios()` read, no network. Separates "Repset's
+    /// widgets have never been set up on this phone" from "this tile just
+    /// has no studio picked yet", which need different instructions:
+    /// Edit Widget's studio list is `WidgetAPI.storedStudios()` and nothing
+    /// else, so sending someone there before they have minted a credential
+    /// points them at a list that cannot contain anything (WIDGET.2).
+    let anyCredentialStored: Bool
     /// `rawId`s of non-door devices we currently BELIEVE are on/playing —
     /// `ToggleState.isOn` (StudioControlsIntents.swift) read AS OF `date`,
     /// same "local read, no network" shape as `credentialPresent` above.
@@ -80,7 +88,7 @@ struct StudioControlsEntry: TimelineEntry {
 
 struct StudioControlsProvider: AppIntentTimelineProvider {
     func placeholder(in context: Context) -> StudioControlsEntry {
-        StudioControlsEntry(date: Date(), studioId: "", studioName: "", devices: [], armedDoorIds: [], credentialPresent: false, toggledOnIds: [])
+        StudioControlsEntry(date: Date(), studioId: "", studioName: "", devices: [], armedDoorIds: [], credentialPresent: false, anyCredentialStored: false, toggledOnIds: [])
     }
 
     func snapshot(for configuration: StudioControlsConfigurationIntent, in context: Context) async -> StudioControlsEntry {
@@ -126,7 +134,11 @@ struct StudioControlsProvider: AppIntentTimelineProvider {
         configuration: StudioControlsConfigurationIntent,
         armedDoorIds: Set<String> = []
     ) -> StudioControlsEntry {
-        let studioId = configuration.studio.id
+        // WIDGET.2 — `studio` is Optional (Apple requires it on a
+        // WidgetConfigurationIntent; StudioControlsIntents.swift). An unpicked
+        // studio is the ORDINARY state of a freshly placed widget, and "" is
+        // exactly what the view's not-configured branch already keys off.
+        let studioId = configuration.studio?.id ?? ""
         // Local UserDefaults read, same as `armedDoorIds`/`credentialPresent`
         // above — NOT a network call, so this doesn't violate this file's
         // own "no network call in this provider" rule. `ToggleState` never
@@ -140,10 +152,11 @@ struct StudioControlsProvider: AppIntentTimelineProvider {
         return StudioControlsEntry(
             date: date,
             studioId: studioId,
-            studioName: configuration.studio.name,
+            studioName: configuration.studio?.name ?? "",
             devices: configuration.devicesInOrder,
             armedDoorIds: armedDoorIds,
             credentialPresent: WidgetAPI.token(forLocation: studioId) != nil,
+            anyCredentialStored: !WidgetAPI.storedStudios().isEmpty,
             toggledOnIds: toggledOnIds
         )
     }
@@ -293,11 +306,19 @@ struct StudioControlsWidgetView: View {
     @ViewBuilder
     private var content: some View {
         if entry.studioId.isEmpty {
-            // Placeholder/gallery preview, or (defensively) a genuinely
-            // unconfigured intent — see this file's header on why a
-            // required `@Parameter` with no stored studios can still reach
-            // here. Same wording as What Needs Me's equivalent state.
-            WidgetStatusMessage(text: "Add this widget's studio in Edit Widget.")
+            // Placeholder/gallery preview, or an ordinary unconfigured tile
+            // (`studio` is Optional — StudioControlsIntents.swift).
+            //
+            // WIDGET.2 — those two reasons need DIFFERENT instructions, and
+            // getting this wrong wasted a real evening: Edit Widget can only
+            // offer studios this device has already minted a credential for
+            // (StudioEntity.swift's `StudioQuery`), so "add the studio in Edit
+            // Widget" sends a phone with no credential to a list that is
+            // necessarily empty. The setup step lives in the app, not on the
+            // home screen. Same split in What Needs Me.
+            WidgetStatusMessage(text: entry.anyCredentialStored
+                ? "Add this widget's studio in Edit Widget."
+                : "Open Repset → More → Widgets to set this up.")
         } else if !entry.credentialPresent {
             WidgetStatusMessage(text: "This studio's access was removed. Reopen Repset to reconnect.")
         } else if entry.devices.isEmpty {

@@ -48,10 +48,9 @@ import SwiftUI
 /// "nothing to do, it'll retry itself".
 private enum FetchStatus: Equatable {
     case ok
-    /// No studio configured at all (placeholder, or — defensively — a
-    /// required `@Parameter` that somehow reached here with no value; see
-    /// StudioControlsWidget.swift's header for why that's handled
-    /// defensively rather than assumed impossible).
+    /// No studio configured — the ORDINARY state of a freshly placed
+    /// widget, since `studio` is Optional (Apple requires every
+    /// `WidgetConfigurationIntent` parameter to be; WhatNeedsMeIntents.swift).
     case notConfigured
     /// `WidgetAPIError.noCredential` — this studio's widget credential is
     /// no longer stored on this device (the app removed it, or it was
@@ -78,6 +77,10 @@ struct WhatNeedsMeEntry: TimelineEntry {
     /// this round — see this file's header. Each name's own count above is
     /// the server's substituted 0, not a real measurement.
     let degradedSources: Set<String>
+    /// Whether this DEVICE holds any widget credential at all — see the
+    /// identical field on `StudioControlsEntry` for why the not-configured
+    /// copy has to tell "never set up" and "no studio picked" apart.
+    let anyCredentialStored: Bool
     fileprivate let status: FetchStatus
 
     var total: Int { approvals + mail + inbox }
@@ -87,7 +90,7 @@ struct WhatNeedsMeEntry: TimelineEntry {
 
 struct WhatNeedsMeProvider: AppIntentTimelineProvider {
     func placeholder(in context: Context) -> WhatNeedsMeEntry {
-        WhatNeedsMeEntry(date: Date(), studioId: "", studioName: "", approvals: 0, mail: 0, inbox: 0, degradedSources: [], status: .notConfigured)
+        WhatNeedsMeEntry(date: Date(), studioId: "", studioName: "", approvals: 0, mail: 0, inbox: 0, degradedSources: [], anyCredentialStored: false, status: .notConfigured)
     }
 
     func snapshot(for configuration: WhatNeedsMeConfigurationIntent, in context: Context) async -> WhatNeedsMeEntry {
@@ -101,11 +104,16 @@ struct WhatNeedsMeProvider: AppIntentTimelineProvider {
     }
 
     private func fetch(configuration: WhatNeedsMeConfigurationIntent) async -> WhatNeedsMeEntry {
-        let studioId = configuration.studio.id
-        let studioName = configuration.studio.name
+        // WIDGET.2 — `studio` is Optional per Apple's WidgetConfigurationIntent
+        // rule (WhatNeedsMeIntents.swift); "" is precisely the not-configured
+        // state the `guard` below already keys off, so nil needs no new branch.
+        let studioId = configuration.studio?.id ?? ""
+        let studioName = configuration.studio?.name ?? ""
+        // Local UserDefaults read, no network — same shape as Studio Controls'.
+        let anyCredentialStored = !WidgetAPI.storedStudios().isEmpty
 
         func entry(approvals: Int = 0, mail: Int = 0, inbox: Int = 0, degraded: Set<String> = [], status: FetchStatus) -> WhatNeedsMeEntry {
-            WhatNeedsMeEntry(date: Date(), studioId: studioId, studioName: studioName, approvals: approvals, mail: mail, inbox: inbox, degradedSources: degraded, status: status)
+            WhatNeedsMeEntry(date: Date(), studioId: studioId, studioName: studioName, approvals: approvals, mail: mail, inbox: inbox, degradedSources: degraded, anyCredentialStored: anyCredentialStored, status: status)
         }
 
         guard !studioId.isEmpty else { return entry(status: .notConfigured) }
@@ -173,7 +181,13 @@ struct WhatNeedsMeWidgetView: View {
     private var content: some View {
         switch entry.status {
         case .notConfigured:
-            WidgetStatusMessage(text: "Add this widget's studio in Edit Widget.")
+            // Same split as Studio Controls (see that file for the full
+            // reason): Edit Widget can only offer studios already minted on
+            // this device, so a phone with no credential has to be sent to
+            // the app instead of to an empty picker.
+            WidgetStatusMessage(text: entry.anyCredentialStored
+                ? "Add this widget's studio in Edit Widget."
+                : "Open Repset → More → Widgets to set this up.")
         case .credentialMissing:
             WidgetStatusMessage(text: "This studio's access was removed. Reopen Repset to reconnect.")
         case .credentialRevoked:
