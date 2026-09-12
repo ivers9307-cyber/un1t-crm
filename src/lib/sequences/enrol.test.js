@@ -550,3 +550,34 @@ describe('allowReenrol — re-activate a terminal enrolment (DUNNING.2)', () => 
     expect(m.rpcCalls).toHaveLength(0)
   })
 })
+
+describe('PAYLINK.3 — enrolContacts({ metadata }) rides the row', () => {
+  it('writes metadata on a fresh insert and leaves it absent when not given', async () => {
+    const m = mockDb({})
+    createServerClient.mockReturnValue(m.db)
+    await enrolContacts({ sequenceId: 's1', contactIds: ['c1'], sourceType: 'invoice_past_due', sourceRef: 'inv-1', metadata: { payment: { invoice_id: 'inv-1', link: 'https://pay.test/x' } } })
+    expect(m.inserts[0][0]).toMatchObject({ contact_id: 'c1', source_ref: 'inv-1', metadata: { payment: { invoice_id: 'inv-1', link: 'https://pay.test/x' } } })
+
+    const m2 = mockDb({})
+    createServerClient.mockReturnValue(m2.db)
+    await enrolContacts({ sequenceId: 's1', contactIds: ['c1'] })
+    expect(m2.inserts[0][0]).not.toHaveProperty('metadata')
+  })
+
+  it('a DUNNING.2 re-activation merges metadata OVER the old run but keeps previous_runs', async () => {
+    // A completed earlier run outside cooldown, different source_ref → reactivate.
+    const m = mockDb({
+      history: [{ id: 'e1', contact_id: 'c1', status: 'completed', source_type: 'invoice_past_due', source_ref: 'inv-OLD',
+        enrolled_at: '2026-01-01T00:00:00Z', completed_at: '2026-01-08T00:00:00Z', exited_at: null, exit_reason: null, last_processed_at: null, created_at: '2026-01-01T00:00:00Z',
+        metadata: { payment: { invoice_id: 'inv-OLD', link: 'https://pay.test/old' }, previous_runs: [] } }],
+      cooldownDays: 14,
+    })
+    createServerClient.mockReturnValue(m.db)
+    const out = await enrolContacts({ sequenceId: 's1', contactIds: ['c1'], sourceType: 'invoice_past_due', sourceRef: 'inv-NEW', allowReenrol: true, metadata: { payment: { invoice_id: 'inv-NEW', link: 'https://pay.test/new' } } })
+    expect(out.reactivated).toBe(1)
+    const upd = m.updates[0]
+    expect(upd.payload.metadata.payment).toEqual({ invoice_id: 'inv-NEW', link: 'https://pay.test/new' })
+    expect(upd.payload.metadata.previous_runs).toHaveLength(1)
+    expect(upd.payload.metadata.previous_runs[0]).toMatchObject({ source_ref: 'inv-OLD' })
+  })
+})

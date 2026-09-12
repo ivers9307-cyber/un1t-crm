@@ -51,10 +51,17 @@ const MANUAL_LIKE_SOURCE_TYPES = new Set(['manual', 'churn_radar'])
  *   (ENROLDEDUP.1), and a member whose card fails again months later must be
  *   reminded again. Every other caller keeps the one-enrolment semantics —
  *   this is deliberately not a cohort-wide re-entry.
+ * @param {object} [args.metadata=null]  PAYLINK.3 — per-run metadata written
+ *   onto the enrolment row (e.g. the overdue reminder's `payment` object:
+ *   `{ invoice_id, link, link_suffix, amount, ... }`). Written on a fresh
+ *   insert only when given (no `metadata` key on the row otherwise); on a
+ *   DUNNING.2 re-activation it is merged OVER the old run's metadata, and
+ *   `previous_runs` is always kept regardless.
  * @returns {Promise<{ enrolled: number, skipped: number, reactivated: number }>}
  */
 export async function enrolContacts({
   sequenceId, contactIds, sourceType = 'manual', sourceRef = null, allowReenrol = false,
+  metadata = null,
 }) {
   if (!Array.isArray(contactIds) || contactIds.length === 0) {
     return { enrolled: 0, skipped: 0, reactivated: 0 }
@@ -173,6 +180,10 @@ export async function enrolContacts({
     }
   }
 
+  // PAYLINK.3 — a plain object (not array/null) rides the row; anything
+  // else (omitted, null, a non-object) leaves the column untouched.
+  const runMeta = metadata && typeof metadata === 'object' && !Array.isArray(metadata) ? metadata : null
+
   const toInsert = candidateIds
     .map(contactId => ({
       sequence_id: sequenceId,
@@ -182,6 +193,7 @@ export async function enrolContacts({
       next_step_at: new Date().toISOString(), // fire on next cron tick
       source_type: sourceType,
       source_ref: sourceRef,
+      ...(runMeta ? { metadata: runMeta } : {}),
     }))
 
   // DUNNING.2 — re-activate in place. One UPDATE per contact (dunning is
@@ -214,6 +226,7 @@ export async function enrolContacts({
           source_ref: sourceRef,
           metadata: {
             ...prevMeta,
+            ...(runMeta || {}),
             previous_runs: [
               ...previousRuns,
               {
