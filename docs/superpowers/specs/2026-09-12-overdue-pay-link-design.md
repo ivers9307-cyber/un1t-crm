@@ -50,6 +50,8 @@ Pure helpers plus one IO function, kept out of `dunning.js` so the manual remind
 
 `enrolContacts` dedups an already-active enrolment, and a re-activation with the same `source_ref` as the previous run is refused. In both cases the new `payment` would otherwise be dropped and the live run would keep chasing an older invoice. Both entry points therefore call `refreshActiveRunPayment(db, { sequenceId, contactId, payment })` (in `dunning-payment.js`) when `enrolContacts` enrolled or reactivated nothing: it writes the fresh `payment` onto the contact's active enrolment for that sequence (read-merge-write, guarded on `status = 'active'`), never throws, and is a no-op when there is no active run.
 
+Two consequences, both handled: (i) `exitDunningForContact` is scoped to the invoice that was paid or forgiven. A run whose `metadata.payment.invoice_id` names a different, newer invoice is left running; a run with no payment metadata exits as before. (ii) A refresh never downgrades: if the new capture produced no link and the live run already holds a link for the same invoice id, the run keeps what it has. The Glofox pay-link fetch is timeboxed (8 seconds) because it sits on the webhook request path and behind an operator's button.
+
 ### 4. Both entry points capture the payment
 
 - **Webhook (automatic):** `maybeEnrolDunning(db, locationId, contactId, { invoiceId, isMembership, glofoxUserId })` calls `capturePaymentForRun` after every existing gate passes and just before `enrolContacts`, and passes `metadata: { payment }`. The webhook route passes `glofoxUserId: ltvResult.glofox_user_id ?? null` (falls back to the contact's linked id inside the capture). A failed capture never blocks the enrolment.
