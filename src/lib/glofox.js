@@ -779,38 +779,91 @@ export async function searchGlofoxMember(creds, { email, phone } = {}) {
   if (!creds?.branchId || (!lc && !e164)) {
     return { found: false, member: null, error: 'missing args' }
   }
-  const filter = {}
-  if (lc) filter.email = lc
-  if (e164) filter.phone = e164
+  // Response shapes vary by endpoint — accept the common ones.
+  const rowsOf = (body) => Array.isArray(body?.data) ? body.data
+    : Array.isArray(body?.members) ? body.members
+    : Array.isArray(body) ? body
+    : (body && typeof body === 'object' && body._id ? [body] : [])
+  // Match the exact identity we asked for: email case-insensitive, phone by
+  // NORMALISED value (v3 returns E.164; the 2.x lists return the raw string
+  // the member typed, e.g. "0830622786"). The searches are documented as
+  // exact; this defends against a fuzzy upstream match ever passing as a
+  // person match. Rows are given `_id` (v3 spells it `id`) so every caller
+  // can link on `member._id` whichever endpoint answered.
+  const matches = (rows) => rows
+    .filter(c => (!lc || (typeof c?.email === 'string' && c.email.toLowerCase() === lc))
+      && (!e164 || (typeof c?.phone === 'string' && toMobileE164(c.phone) === e164)))
+    .map(c => (c._id || !c.id) ? c : { ...c, _id: String(c.id) })
+  const verdict = (exact) => {
+    if (exact.length === 1) return { found: true, member: exact[0], error: null }
+    if (exact.length > 1) {
+      // Multiple Glofox accounts for one identity — operator review.
+      return { found: true, member: exact[0], error: 'multiple_glofox_matches', allMatches: exact }
+    }
+    return { found: false, member: null, error: null }
+  }
+  const httpErr = (r) => ({ found: false, member: null, error: `Glofox HTTP ${r.status}` })
+
   try {
+    const filter = {}
+    if (lc) filter.email = lc
+    if (e164) filter.phone = e164
     const r = await glofoxFetch(creds, '/v3.0/namespaces/members/retrieve', {
       method: 'POST',
       body: JSON.stringify(filter),
     })
-    if (r.ok) {
-      const body = await r.json()
-      // Response shape varies — try the common shapes.
-      const candidates = Array.isArray(body?.data) ? body.data
-                       : Array.isArray(body?.members) ? body.members
-                       : Array.isArray(body) ? body
-                       : (body && typeof body === 'object' && body._id ? [body] : [])
-      // Filter to the exact identity we asked for (email case-insensitive,
-      // phone byte-exact). The search is documented as exact; this defends
-      // against a fuzzy upstream match ever passing as a person match.
-      const exact = candidates.filter(c =>
-        (!lc || (typeof c?.email === 'string' && c.email.toLowerCase() === lc))
-        && (!e164 || c?.phone === e164)
-      )
-      if (exact.length === 1) return { found: true, member: exact[0], error: null }
-      if (exact.length > 1) {
-        // Multiple Glofox accounts for one identity — operator review.
-        return { found: true, member: exact[0], error: 'multiple_glofox_matches', allMatches: exact }
-      }
+    if (r.ok) return verdict(matches(rowsOf(await r.json())))
+    if (r.status !== 401 && r.status !== 403) return httpErr(r)
+
+    // Live probe 2026-09-12: the namespace search answers 401 for our
+    // integrator in EVERY shape (email-only included) while every other v3
+    // endpoint we use still works; the last prod call that succeeded was
+    // 7 Sep, the spec re-drop landed 12 Sep. Glofox has been asked. Until
+    // it is re-enabled, fall back to the endpoints we ARE authorised for,
+    // both verified live against Julie Mullins' account:
+    //   email → the documented `GET /2.1/branches/{id}/users?filters[email]=`
+    //           (exact, one row);
+    //   phone → `GET /2.0/members?phone=`, which matches the RAW stored
+    //           string — so try the national spelling first ("0830622786"
+    //           is what Glofox held), then the E.164 forms. Stop at the
+    //           first hit. `filters[phone]` on 2.1 is ignored (returns all).
+    const b = encodeURIComponent(creds.branchId)
+    if (lc) {
+      const r2 = await glofoxFetch(creds, `/2.1/branches/${b}/users?${encodeURIComponent('filters[email]')}=${encodeURIComponent(lc)}`)
+      if (!r2.ok) return httpErr(r2)
+      return verdict(matches(rowsOf(await r2.json())))
     }
-    return { found: false, member: null, error: r.ok ? null : `Glofox HTTP ${r.status}` }
+    for (const spelling of phoneSpellingsForGlofox(e164)) {
+      const r2 = await glofoxFetch(creds, `/2.0/members?phone=${encodeURIComponent(spelling)}&limit=20`)
+      if (!r2.ok) return httpErr(r2)
+      const exact = matches(rowsOf(await r2.json()))
+      if (exact.length > 0) return verdict(exact)
+    }
+    return { found: false, member: null, error: null }
   } catch (e) {
     return { found: false, member: null, error: e?.message || 'search failed' }
   }
+}
+
+/**
+ * The spellings a Glofox member record may hold for one E.164 mobile, in
+ * the order worth asking `/2.0/members?phone=` (raw-string match): the
+ * national trunk form first (what Glofox held for the live probe), then
+ * the +CC and bare-CC forms, then the trunkless national digits.
+ * Pure — exported for tests.
+ */
+export function phoneSpellingsForGlofox(e164) {
+  if (typeof e164 !== 'string' || !e164.startsWith('+')) return []
+  const digits = e164.slice(1)
+  const out = []
+  for (const cc of ['353', '44']) {
+    if (digits.startsWith(cc)) {
+      const national = digits.slice(cc.length)
+      out.push(`0${national}`, e164, digits, national)
+      return out
+    }
+  }
+  return [e164, digits]
 }
 
 /**
