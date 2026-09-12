@@ -430,11 +430,21 @@ describe('DUNNING.6 — overdue membership payment → card update reminders', (
     expect(tpl.steps.map((s) => s.step_type)).toEqual(['wait', 'whatsapp', 'email', 'email', 'whatsapp', 'email'])
     expect(tpl.steps.map((s) => [s.delay_days ?? 0, s.delay_hours ?? 0])).toEqual([[0, 0], [0, 1], [0, 0], [3, 0], [4, 0], [0, 0]])
   })
-  it('both WhatsApp steps use the approved utility template by NAME with the first name as {{1}}', () => {
+  it('PAYLINK.8 — both WhatsApp steps use the pay-link template by NAME: first name, amount, and the invoice id on the URL button', () => {
     for (const s of tpl.steps.filter((s) => s.step_type === 'whatsapp')) {
-      expect(s.whatsapp_template_name).toBe('outstanding_payment_')
-      expect(s.whatsapp_variables).toEqual({ '1': 'first_name' })
+      expect(s.whatsapp_template_name).toBe('outstanding_payment_link_')
+      expect(s.whatsapp_variables).toEqual({ '1': 'first_name', '2': 'pay_amount', url_button: 'pay_link_suffix' })
     }
+  })
+  it('PAYLINK.8 — every email uses the amount phrase and the CTA fragment, and never a raw pay link', () => {
+    for (const s of tpl.steps.filter((s) => s.step_type === 'email')) {
+      expect(s.html_content).toContain('{{pay_amount_phrase}}')
+      expect(s.html_content).toContain('{{payment_cta}}')
+      expect(s.html_content).not.toContain('pay.glofox.com')
+    }
+  })
+  it('PAYLINK.8 — the description tells the operator which WhatsApp template must be approved first', () => {
+    expect(tpl.description).toContain('outstanding_payment_link_')
   })
   it('email copy is low-key: no em-dashes, no emoji, mentions updating the card', () => {
     for (const s of tpl.steps.filter((s) => s.step_type === 'email')) {

@@ -715,23 +715,28 @@ export const SEQUENCE_TEMPLATES = [
     ],
   },
 
-  // DUNNING.6 — the ready-made automation behind the churn radar's Overdue
-  // tab: a member's MEMBERSHIP payment fails → WhatsApp + email asking them
-  // to update their card, three touches over a week. Manual trigger: the
-  // radar's auto-enrol (locations.dunning_auto_enroll) and the one-click
-  // "Send payment reminder" enrol directly; fees, class packs and custom
-  // charges never do. The run exits the moment the membership invoice is
-  // paid / written off or the membership pauses. Enrolments from those
-  // paths are TRANSACTIONAL (steps.js): they reach members who opted out of
-  // marketing, and still respect every hard block. The WhatsApp copy is the
-  // approved Meta template's (outstanding_payment_) and can't change without
-  // re-approval; the emails are editable in /automations. The first wait
+  // DUNNING.6 / PAYLINK.8 — the ready-made automation behind the churn
+  // radar's Overdue tab: a member's MEMBERSHIP payment fails → WhatsApp +
+  // email carrying a Pay now link for that exact invoice, three touches
+  // over a week. Manual trigger: the radar's auto-enrol
+  // (locations.dunning_auto_enroll) and the one-click "Send payment
+  // reminder" enrol directly; fees, class packs and custom charges never
+  // do. The run exits the moment the membership invoice is paid / written
+  // off or the membership pauses. Enrolments from those paths are
+  // TRANSACTIONAL (steps.js): they reach members who opted out of
+  // marketing, and still respect every hard block. The WhatsApp copy is
+  // the approved Meta template's (outstanding_payment_link_ — a Pay now
+  // URL button whose suffix is the run's invoice id, {{2}} the amount) and
+  // can't change without re-approval; the emails carry the same link via
+  // {{payment_cta}} and are editable in /automations. The install route
+  // refuses to install this template until outstanding_payment_link_ is
+  // APPROVED at the target location (template-install.js). The first wait
   // gives Glofox's own quick retry an hour to succeed first.
   {
     id: 'overdue_payment_dunning',
     category: 'Recovery',
     name: 'Overdue membership payment → card update reminders',
-    description: 'When a membership payment fails, reminds the member to update their card: a WhatsApp and an email about an hour after the failure, an email on day 3, and a WhatsApp plus a final email on day 7. Stops as soon as the payment goes through. Install, review the copy, activate, then pick it under Churn radar → Payment reminders and turn on automatic starts. Fees and class packs never trigger it.',
+    description: 'When a membership payment fails, reminds the member with a Pay now link for that exact invoice: a WhatsApp and an email about an hour after the failure, an email on day 3, and a WhatsApp plus a final email on day 7. Stops as soon as the payment goes through. Needs the approved WhatsApp template outstanding_payment_link_ at this location. Install, review the copy, publish, then pick it under Churn radar → Payment reminders and turn on automatic starts. Fees and class packs never trigger it.',
     trigger_type: 'manual',
     trigger_config: {},
     goal_config: null,
@@ -743,8 +748,8 @@ export const SEQUENCE_TEMPLATES = [
         step_type: 'whatsapp',
         delay_days: 0,
         delay_hours: 1,
-        whatsapp_template_name: 'outstanding_payment_',
-        whatsapp_variables: { '1': 'first_name' },
+        whatsapp_template_name: 'outstanding_payment_link_',
+        whatsapp_variables: { '1': 'first_name', '2': 'pay_amount', url_button: 'pay_link_suffix' },
       },
       {
         step_type: 'email',
@@ -752,8 +757,8 @@ export const SEQUENCE_TEMPLATES = [
         delay_hours: 0,
         subject: 'A quick heads-up about your payment, {{first_name}}',
         html_content: `<p>Hi {{first_name}},</p>
-<p>We tried to take your membership payment and it didn't go through. It happens, usually a card that has expired or been replaced.</p>
-<p>Your membership is still active. To keep it that way, update your card in the Glofox app, or reply to this email and we'll sort it with you.</p>
+<p>We tried to take your membership payment{{pay_amount_phrase}} and it didn't go through. It happens, usually a card that has expired or been replaced.</p>
+<p>Your membership is still active. To keep it that way, {{payment_cta}}, or reply to this email and we'll sort the card with you.</p>
 <p>UN1T {{location_name}}</p>`,
       },
       {
@@ -762,16 +767,16 @@ export const SEQUENCE_TEMPLATES = [
         delay_hours: 0,
         subject: 'Still no luck with your membership payment',
         html_content: `<p>Hi {{first_name}},</p>
-<p>Your membership payment is still outstanding. Updating your card in the Glofox app takes about a minute, and we'll take the payment from there.</p>
-<p>If something else is going on, reply here and we'll figure it out together.</p>
+<p>Your membership payment{{pay_amount_phrase}} is still outstanding. You can {{payment_cta}}, and we'll take it from there.</p>
+<p>If something else is going on with the card or anything else, reply here and we'll figure it out together.</p>
 <p>UN1T {{location_name}}</p>`,
       },
       {
         step_type: 'whatsapp',
         delay_days: 4,
         delay_hours: 0,
-        whatsapp_template_name: 'outstanding_payment_',
-        whatsapp_variables: { '1': 'first_name' },
+        whatsapp_template_name: 'outstanding_payment_link_',
+        whatsapp_variables: { '1': 'first_name', '2': 'pay_amount', url_button: 'pay_link_suffix' },
       },
       {
         step_type: 'email',
@@ -779,8 +784,8 @@ export const SEQUENCE_TEMPLATES = [
         delay_hours: 0,
         subject: 'Action needed to keep your UN1T membership',
         html_content: `<p>Hi {{first_name}},</p>
-<p>Your membership payment is now a week overdue and we don't want you to lose your spot.</p>
-<p>Two minutes fixes it: update your card in the Glofox app, or reply to this email and we'll take it from there. No awkwardness, we just want to keep you training.</p>
+<p>Your membership payment{{pay_amount_phrase}} is now a week overdue and we don't want you to lose your spot.</p>
+<p>Two minutes fixes it: {{payment_cta}}, or reply to this email and we'll sort the card together. No awkwardness, we just want to keep you training.</p>
 <p>UN1T {{location_name}}</p>`,
       },
     ],
