@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('./glofox.js', () => ({
   glofoxCredentialsForLocation: vi.fn(),
   searchGlofoxByEmail: vi.fn(),
+  searchGlofoxMember: vi.fn(),
   registerGlofoxMember: vi.fn(),
   purchaseGlofoxMembership: vi.fn(),
   generateGlofoxPasscode: vi.fn(() => 'TEST-1234'),
@@ -27,6 +28,7 @@ import { findOrCreateGlofoxMember } from './glofox-push.js'
 import {
   glofoxCredentialsForLocation,
   searchGlofoxByEmail,
+  searchGlofoxMember,
   registerGlofoxMember,
   purchaseGlofoxMembership,
   glofoxFetch,
@@ -331,6 +333,81 @@ describe('findOrCreateGlofoxMember — create-and-trial (createIfMissing=true)',
 // this file is fire-and-forget, which the repo defines as best-effort-but-LOGGED
 // (see reportRpc in postmark-webhook-processor) — "never fail the caller" is not
 // "never tell anyone". The push itself must still succeed either way.
+// GLOFOX-SPEC-2026-09 — the namespace search can now match on PHONE. A
+// returner who types a NEW email is invisible to the email search, so before
+// the mint we ask Glofox whether any account already holds this mobile. A hit
+// is evidence a person exists, which blocks the mint — but it is NEVER a link:
+// couples share numbers (PERSON-ACCT.9), so a phone-only match books person
+// B's class on person A's account if trusted. Staff decide.
+describe('findOrCreateGlofoxMember — phone dup-check before a mint', () => {
+  const returner = { id: 'c1', email: 'new-address@b.com', phone: '087 123 4567', first_name: 'Alice', last_name: 'Smith' }
+
+  beforeEach(() => {
+    searchGlofoxByEmail.mockResolvedValue({ found: false })
+  })
+
+  it('refuses to mint when a Glofox account already holds the mobile, and routes to review WITHOUT linking', async () => {
+    searchGlofoxMember.mockResolvedValueOnce({ found: true, member: { _id: 'gx-phone', email: 'old-address@b.com' }, error: null })
+    const db = makeFakeDb()
+    const out = await findOrCreateGlofoxMember({
+      db, locationId: 'loc1', source: 'booking_form', contact: returner,
+      createIfMissing: true, attachTrial: true,
+    })
+    expect(searchGlofoxMember).toHaveBeenCalledWith(VALID_CREDS, { phone: '087 123 4567' })
+    expect(out.status).toBe('needs_review')
+    expect(out.error).toBe('phone_match_no_link')
+    expect(out.glofox_member_id).toBeUndefined()
+    expect(registerGlofoxMember).not.toHaveBeenCalled()
+    expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
+  })
+
+  it('mints as before when no Glofox account holds the mobile', async () => {
+    searchGlofoxMember.mockResolvedValueOnce({ found: false, member: null, error: null })
+    registerGlofoxMember.mockResolvedValueOnce({ ok: true, member: { _id: 'gx-new' } })
+    const db = makeFakeDb()
+    const out = await findOrCreateGlofoxMember({
+      db, locationId: 'loc1', source: 'booking_form', contact: returner,
+      createIfMissing: true, attachTrial: false,
+    })
+    expect(out.status).toBe('created')
+    expect(out.glofox_member_id).toBe('gx-new')
+  })
+
+  it('skips the phone search when the contact has no phone', async () => {
+    registerGlofoxMember.mockResolvedValueOnce({ ok: true, member: { _id: 'gx-new' } })
+    const db = makeFakeDb()
+    const out = await findOrCreateGlofoxMember({
+      db, locationId: 'loc1', source: 'booking_form',
+      contact: { ...returner, phone: null },
+      createIfMissing: true, attachTrial: false,
+    })
+    expect(searchGlofoxMember).not.toHaveBeenCalled()
+    expect(out.status).toBe('created')
+  })
+
+  it('halts on a phone-search error exactly like an email-search error (no create-on-failure)', async () => {
+    searchGlofoxMember.mockResolvedValueOnce({ found: false, member: null, error: 'Glofox HTTP 503' })
+    const db = makeFakeDb()
+    const out = await findOrCreateGlofoxMember({
+      db, locationId: 'loc1', source: 'booking_form', contact: returner,
+      createIfMissing: true, attachTrial: false,
+    })
+    expect(out.status).toBe('failed')
+    expect(out.error).toMatch(/Glofox HTTP 503/)
+    expect(registerGlofoxMember).not.toHaveBeenCalled()
+  })
+
+  it('does not phone-search in dup-check-only mode (createIfMissing=false is unchanged)', async () => {
+    const db = makeFakeDb()
+    const out = await findOrCreateGlofoxMember({
+      db, locationId: 'loc1', source: 'dup_check', contact: returner,
+      createIfMissing: false,
+    })
+    expect(searchGlofoxMember).not.toHaveBeenCalled()
+    expect(out.status).toBe('skipped')
+  })
+})
+
 describe('findOrCreateGlofoxMember — a failed audit insert is logged, never silent', () => {
   it('logs the insert error and still returns the push result', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})

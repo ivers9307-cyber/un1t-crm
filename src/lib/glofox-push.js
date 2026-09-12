@@ -26,6 +26,7 @@
 import {
   glofoxCredentialsForLocation,
   searchGlofoxByEmail,
+  searchGlofoxMember,
   registerGlofoxMember,
   purchaseGlofoxMembership,
   generateGlofoxPasscode,
@@ -35,6 +36,7 @@ import { glofoxFetch } from './glofox.js'
 import { writeContactTag } from './contact-tags.js'
 import { getGlofoxConfig } from './connection-registry.js'
 import { logWarn } from './log.js'
+import { toMobileE164 } from './phone-validate.js'
 
 // Per-location trial config — what membership + plan to attach
 // to a freshly-created Glofox account. Operator picks via the
@@ -140,6 +142,37 @@ export async function findOrCreateGlofoxMember({
       status: 'skipped', error_message: 'No email match in Glofox; create-if-missing was off',
     })
     return { status: 'skipped', push_event_id: ev?.id }
+  }
+
+  // Step 2.5 — GLOFOX-SPEC-2026-09: phone dup-check before the mint. A
+  // returner who fills the public form with a NEW email is invisible to
+  // the email search above, and this is the exact spot where their second
+  // Glofox account (and second free trial) was born. The namespace search
+  // can now match on the member's normalised mobile, so ask. A hit is
+  // evidence a person already exists, which blocks the mint — but it is
+  // NEVER a link: couples share numbers (PERSON-ACCT.9), so trusting a
+  // phone-only match books person B's class on person A's account. Staff
+  // decide from the Review tab. A search failure halts like the email
+  // search's does: never create-on-failure.
+  if (toMobileE164(contact.phone || '')) {
+    const byPhone = await searchGlofoxMember(creds, { phone: contact.phone })
+    if (byPhone.error && !byPhone.found) {
+      const ev = await audit(db, {
+        contact_id: contact.id, location_id: locationId, source,
+        status: 'failed', error_message: `Phone search failed: ${byPhone.error}`,
+      })
+      return { status: 'failed', error: byPhone.error, push_event_id: ev?.id }
+    }
+    if (byPhone.found) {
+      const matches = byPhone.allMatches?.length || 1
+      const ev = await audit(db, {
+        contact_id: contact.id, location_id: locationId, source,
+        status: 'needs_review',
+        glofox_response: { phone_matches: matches, glofox_member_ids: (byPhone.allMatches || [byPhone.member]).map((m) => String(m?._id || m?.id || '')) },
+        error_message: `No Glofox account matches this email, but ${matches === 1 ? 'an account already holds' : `${matches} accounts already hold`} this mobile number — not created and not linked (a shared number may be a partner). Link or create from the Review tab.`,
+      })
+      return { status: 'needs_review', error: 'phone_match_no_link', push_event_id: ev?.id }
+    }
   }
 
   // Step 3 — create a fresh Glofox account. Generate a passcode
