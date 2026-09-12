@@ -18,6 +18,7 @@
 
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { getGlofoxConfig, findGlofoxConfigByBranchId } from '@/lib/connection-registry'
+import { toMobileE164 } from '@/lib/phone-validate'
 
 // ─────────────────────────────────────────────────────────────
 // Signature verification (HMAC-SHA256 hex)
@@ -484,6 +485,21 @@ export async function glofoxFetch(creds, pathOrUrl, options = {}) {
     }
     break
   }
+  // GLOFOX-SPEC-2026-09 — Glofox's own guidance: "Older endpoints sometimes
+  // return a 200 status code with a success field set to false. That
+  // indicates a bad request." Each caller judges that per endpoint
+  // (interpretBookingResult and friends); the wrapper only NAMES it, so a
+  // caller that never looks shows up in the logs as a warning instead of as
+  // a silent no-op. Peek at a clone so the caller's own body read is
+  // untouched; a non-JSON or unreadable body has nothing to say.
+  if (res.status === 200 && typeof res.clone === 'function') {
+    try {
+      const peek = await res.clone().json()
+      if (peek && typeof peek === 'object' && peek.success === false) {
+        console.warn(`[glofox] 200 with success:false on ${String(pathOrUrl).split('?')[0]} — Glofox says treat it as a 400 (message_code: ${peek.message_code || 'none'})`)
+      }
+    } catch { /* not JSON, or the clone was unreadable — nothing to report */ }
+  }
   return res
 }
 
@@ -741,24 +757,35 @@ export async function fetchPaymentsReport(creds, opts = {}) {
 // as the trial).
 
 /**
- * Search Glofox for a member by email.
- * Uses the v3 namespace search per the spec; falls back to a
- * /2.0/members scan if the v3 endpoint isn't available (defensive
- * for older firmwares).
+ * Search Glofox for a member by email and/or phone via the v3 namespace
+ * search (`POST /v3.0/namespaces/members/retrieve`).
  *
- * Returns { found, member, error }. found=true with a member
- * object means we should LINK rather than create.
+ * GLOFOX-SPEC-2026-09 — the September 2026 spec added `phone` (E.164,
+ * exact match against the member's normalised number) beside `email`.
+ * Send one or both; Glofox ANDs them. Phone searches return `MEMBER` rows
+ * only (leads and cancelled included, staff excluded) and never a member
+ * whose stored phone could not be normalised. The phone is normalised
+ * here with toMobileE164 (the public funnels' own gate), so a landline or
+ * placeholder is "no usable phone", not a query.
+ *
+ * Returns { found, member, error }. found=true with a member object means
+ * a Glofox account for this identity already exists. What that entitles
+ * the caller to do is the CALLER's rule: an email match may be linked; a
+ * phone-only match must not be (couples share numbers — PERSON-ACCT.9).
  */
-export async function searchGlofoxByEmail(creds, email) {
-  if (!creds?.branchId || typeof email !== 'string' || !email.trim()) {
+export async function searchGlofoxMember(creds, { email, phone } = {}) {
+  const lc = typeof email === 'string' && email.trim() ? email.trim().toLowerCase() : null
+  const e164 = typeof phone === 'string' ? toMobileE164(phone) : null
+  if (!creds?.branchId || (!lc && !e164)) {
     return { found: false, member: null, error: 'missing args' }
   }
-  const lc = email.trim().toLowerCase()
+  const filter = {}
+  if (lc) filter.email = lc
+  if (e164) filter.phone = e164
   try {
-    // v3 namespace search — POST body { email } per the spec.
     const r = await glofoxFetch(creds, '/v3.0/namespaces/members/retrieve', {
       method: 'POST',
-      body: JSON.stringify({ email: lc }),
+      body: JSON.stringify(filter),
     })
     if (r.ok) {
       const body = await r.json()
@@ -767,14 +794,16 @@ export async function searchGlofoxByEmail(creds, email) {
                        : Array.isArray(body?.members) ? body.members
                        : Array.isArray(body) ? body
                        : (body && typeof body === 'object' && body._id ? [body] : [])
-      // Filter to exact email match (case-insensitive). The search
-      // is theoretically exact but defending against fuzzy matches.
+      // Filter to the exact identity we asked for (email case-insensitive,
+      // phone byte-exact). The search is documented as exact; this defends
+      // against a fuzzy upstream match ever passing as a person match.
       const exact = candidates.filter(c =>
-        typeof c?.email === 'string' && c.email.toLowerCase() === lc
+        (!lc || (typeof c?.email === 'string' && c.email.toLowerCase() === lc))
+        && (!e164 || c?.phone === e164)
       )
       if (exact.length === 1) return { found: true, member: exact[0], error: null }
       if (exact.length > 1) {
-        // Multiple Glofox accounts for one email — operator review.
+        // Multiple Glofox accounts for one identity — operator review.
         return { found: true, member: exact[0], error: 'multiple_glofox_matches', allMatches: exact }
       }
     }
@@ -782,6 +811,19 @@ export async function searchGlofoxByEmail(creds, email) {
   } catch (e) {
     return { found: false, member: null, error: e?.message || 'search failed' }
   }
+}
+
+/**
+ * Search Glofox for a member by email — the email-only face of
+ * searchGlofoxMember, kept so every existing caller (and their mocks)
+ * is untouched. Returns { found, member, error }; found=true means LINK
+ * rather than create.
+ */
+export async function searchGlofoxByEmail(creds, email) {
+  if (typeof email !== 'string' || !email.trim()) {
+    return { found: false, member: null, error: 'missing args' }
+  }
+  return searchGlofoxMember(creds, { email })
 }
 
 /**
@@ -1126,6 +1168,11 @@ function describeBodyShape(body) {
  * active, private, booking_status, program_obj, …
  * (/2.0/calendar does NOT exist on this tier — WRONG_URL.)
  *
+ * GLOFOX-SPEC-2026-09 — reads the branch-scoped
+ * `GET /2.0/branches/{branchId}/events`; the bare `/2.0/events` is
+ * deprecated in the spec ("use the branch path with the same query
+ * parameters; this path remains supported").
+ *
  * Returns { ok, status, body, events } — events is body.data or [].
  */
 export async function fetchUpcomingEvents(creds, { start, end, limit = 100 } = {}) {
@@ -1137,7 +1184,7 @@ export async function fetchUpcomingEvents(creds, { start, end, limit = 100 } = {
     limit: String(limit),
   })
   try {
-    const r = await glofoxFetch(creds, `/2.0/events?${qs.toString()}`)
+    const r = await glofoxFetch(creds, `/2.0/branches/${encodeURIComponent(creds.branchId)}/events?${qs.toString()}`)
     let body
     try { body = await r.json() } catch { body = null }
     const events = Array.isArray(body?.data) ? body.data : []
