@@ -122,6 +122,15 @@ export async function refreshActiveRunPayment(db, { sequenceId, contactId, payme
       .maybeSingle()
     if (error || !row) return { refreshed: 0 }
     const prev = row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata) ? row.metadata : {}
+    // PAYLINK.4b — never downgrade a live link: if the newly-captured
+    // payment has no link but the run is already holding one FOR THE SAME
+    // INVOICE, keep the existing one rather than blanking it (a transient
+    // Glofox failure on the refresh call must not cost a member their pay
+    // link). A genuinely newer invoice always overwrites, link or not.
+    const prevPayment = prev.payment && typeof prev.payment === 'object' ? prev.payment : null
+    if (!payment.link && prevPayment?.invoice_id === payment.invoice_id && prevPayment?.link) {
+      return { refreshed: 0, reason: 'kept_existing_link' }
+    }
     const { data: updated, error: updErr } = await db
       .from('sequence_enrollments')
       .update({ metadata: { ...prev, payment } })

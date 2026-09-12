@@ -49,11 +49,21 @@ describe('getGlofoxInvoicePaymentLink', () => {
     expect(init.headers['x-glofox-api-token']).toBe('t')
     expect(init.headers['Content-Type']).toBe('application/json')
     expect(init.headers['x-glofox-branch-id']).toBe('b')
+    // PAYLINK.4b — this call sits on the webhook request path and on an
+    // operator's button, so it must not inherit glofoxFetch's unbounded wait.
+    expect(init.signal).toBeInstanceOf(AbortSignal)
     expect(r).toEqual({
       ok: true, status: 200, retriable: true, invoiceId: INVOICE,
       link: `https://pay.glofox.com/payment-collector/v2/#/i/${INVOICE}`,
       amountCents: 20900, currency: 'EUR', summary: 'Month to Month Membership (7983610)', error: null,
     })
+  })
+
+  it('PAYLINK.4b — a timed-out fetch reports error:"timeout", not the raw AbortError message', async () => {
+    const { getGlofoxInvoicePaymentLink } = await import('./glofox.js')
+    global.fetch.mockRejectedValueOnce(Object.assign(new Error('The operation was aborted'), { name: 'AbortError' }))
+    const r = await getGlofoxInvoicePaymentLink(creds, { memberId: MEMBER, invoiceId: INVOICE })
+    expect(r).toMatchObject({ ok: false, status: 0, error: 'timeout' })
   })
 
   it('a non-retriable invoice is ok:true with no link (a fee, or Glofox mid-retry)', async () => {

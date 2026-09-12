@@ -134,7 +134,8 @@ export async function maybeEnrolDunning(db, locationId, contactId, { invoiceId, 
     if (!(res?.enrolled > 0) && !(res?.reactivated > 0)) {
       // An earlier run is still live (or the same source was refused a re-run):
       // give it the newest invoice's link rather than letting it chase a stale one.
-      await refreshActiveRunPayment(db, { sequenceId: seqId, contactId, payment })
+      const { refreshed } = await refreshActiveRunPayment(db, { sequenceId: seqId, contactId, payment })
+      return { enrolled: res?.enrolled || 0, kind, sequence_id: seqId, refreshed }
     }
     return { enrolled: res?.enrolled || 0, kind, sequence_id: seqId }
   } catch (e) {
@@ -147,8 +148,19 @@ export async function maybeEnrolDunning(db, locationId, contactId, { invoiceId, 
  * Exit any in-flight dunning enrolments for a contact — used when the
  * invoice is paid/forgiven or the membership pauses. Idempotent: a
  * no-op when nothing is active. Best-effort, never throws.
+ *
+ * PAYLINK.4b — pass `invoiceId` (the invoice this PAID/FORGIVEN webhook is
+ * about) to scope the exit: a run whose metadata.payment.invoice_id has
+ * since been refreshed onto a NEWER failed invoice (refreshActiveRunPayment)
+ * is left alone — an old invoice settling must not cancel reminders that are
+ * now chasing a different, still-unpaid one. An enrolment with no payment
+ * invoice id recorded (or one matching) exits as before.
+ *
+ * @param {object} [opts]
+ * @param {string} [opts.invoiceId]  the settled invoice's id; omit to exit
+ *                                   every active enrolment regardless
  */
-export async function exitDunningForContact(db, locationId, contactId, reason) {
+export async function exitDunningForContact(db, locationId, contactId, reason, { invoiceId } = {}) {
   try {
     if (!contactId) return { exited: 0 }
     const { data: loc } = await db
@@ -160,13 +172,20 @@ export async function exitDunningForContact(db, locationId, contactId, reason) {
     if (!seqId) return { exited: 0 }
     const { data: active } = await db
       .from('sequence_enrollments')
-      .select('id')
+      .select('id, metadata')
       .eq('sequence_id', seqId)
       .eq('contact_id', contactId)
       .eq('status', 'active')
     if (!active || active.length === 0) return { exited: 0 }
+    const toExit = invoiceId
+      ? active.filter((row) => {
+        const rowInvoiceId = row?.metadata?.payment?.invoice_id
+        return !(typeof rowInvoiceId === 'string' && rowInvoiceId && rowInvoiceId !== invoiceId)
+      })
+      : active
+    if (toExit.length === 0) return { exited: 0 }
     let exited = 0
-    for (const row of active) {
+    for (const row of toExit) {
       try {
         await setEnrollmentStatus({ enrollmentId: row.id, status: 'exited', reason })
         exited++

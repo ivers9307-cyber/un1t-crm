@@ -149,16 +149,21 @@ describe('refreshActiveRunPayment (IO, never throws)', () => {
 
   function dbForRefresh({ row = null, readError = null, updateData = [{ id: 'e1' }], updateError = null, readThrows = false } = {}) {
     const updateCalls = []
+    const readFilters = []
     return {
       updateCalls,
+      readFilters,
       from(table) {
         if (table !== 'sequence_enrollments') throw new Error(`unexpected table ${table}`)
         return {
           select(cols) {
             if (cols !== 'id, metadata') throw new Error(`unexpected select ${cols}`)
-            return { eq(_col1, _val1) {
-              return { eq(_col2, _val2) {
-                return { eq(_col3, _val3) {
+            return { eq(col1, val1) {
+              readFilters.push([col1, val1])
+              return { eq(col2, val2) {
+                readFilters.push([col2, val2])
+                return { eq(col3, val3) {
+                  readFilters.push([col3, val3])
                   return { order() {
                     return { limit() {
                       return { maybeSingle: async () => {
@@ -188,9 +193,27 @@ describe('refreshActiveRunPayment (IO, never throws)', () => {
     const db = dbForRefresh({ row: { id: 'e1', metadata: { previous_runs: [1], payment: { invoice_id: 'OLD' } } } })
     const out = await refreshActiveRunPayment(db, { sequenceId: 'seq1', contactId: 'c1', payment: NEW_PAYMENT })
     expect(out).toEqual({ refreshed: 1 })
+    expect(db.readFilters).toEqual([['sequence_id', 'seq1'], ['contact_id', 'c1'], ['status', 'active']])
     expect(db.updateCalls).toHaveLength(1)
     expect(db.updateCalls[0].values).toEqual({ metadata: { previous_runs: [1], payment: NEW_PAYMENT } })
     expect(db.updateCalls[0].filters).toEqual({ id: 'e1', status: 'active' })
+  })
+
+  it('PAYLINK.4b — does not downgrade a live link: same invoice, new link falsy → kept, no update', async () => {
+    const db = dbForRefresh({ row: { id: 'e1', metadata: { payment: { invoice_id: 'SAME', link: 'https://pay.test/SAME' } } } })
+    const noLinkPayment = { invoice_id: 'SAME', link: null, link_suffix: null, amount: '', error: 'not_retriable' }
+    const out = await refreshActiveRunPayment(db, { sequenceId: 'seq1', contactId: 'c1', payment: noLinkPayment })
+    expect(out).toEqual({ refreshed: 0, reason: 'kept_existing_link' })
+    expect(db.updateCalls).toHaveLength(0)
+  })
+
+  it('PAYLINK.4b — still overwrites when the invoice id differs, even with a falsy new link', async () => {
+    const db = dbForRefresh({ row: { id: 'e1', metadata: { payment: { invoice_id: 'OLD', link: 'https://pay.test/OLD' } } } })
+    const noLinkPayment = { invoice_id: 'NEW2', link: null, link_suffix: null, amount: '', error: 'not_retriable' }
+    const out = await refreshActiveRunPayment(db, { sequenceId: 'seq1', contactId: 'c1', payment: noLinkPayment })
+    expect(out).toEqual({ refreshed: 1 })
+    expect(db.updateCalls).toHaveLength(1)
+    expect(db.updateCalls[0].values).toEqual({ metadata: { payment: noLinkPayment } })
   })
 
   it('no active row → { refreshed: 0 }, no update call', async () => {

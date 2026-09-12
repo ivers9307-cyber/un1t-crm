@@ -1576,6 +1576,13 @@ export async function fetchMemberResult(creds, memberId) {
 // token 401, impersonation 200. `is_retriable:false` means the invoice
 // cannot be paid by link right now (a custom fee, or Glofox mid-retry).
 
+// PAYLINK.4b — this call sits on the webhook request path (INVOICE_UPDATED →
+// maybeEnrolDunning → capturePaymentForRun) and on an operator's "Send
+// payment reminder" button, so it must NOT inherit glofoxFetch's unbounded
+// wait (glofoxFetch itself only bounds retries between attempts, not a
+// single attempt's own hang).
+const GLOFOX_PAYMENT_LINK_TIMEOUT_MS = 8000
+
 /**
  * @param {{branchId, apiKey, apiToken}} creds
  * @param {{ memberId: string, invoiceId: string }} [args]
@@ -1597,6 +1604,7 @@ export async function getGlofoxInvoicePaymentLink(creds, args = {}) {
   try {
     const r = await glofoxFetch(creds, `/v3.0/payment-links/invoices/${encodeURIComponent(inv)}`, {
       method: 'POST',
+      signal: AbortSignal.timeout(GLOFOX_PAYMENT_LINK_TIMEOUT_MS),
       headers: { 'Content-Type': 'application/json', 'x-glofox-impersonated-member-id': memberId },
       body: '{}',
     })
@@ -1626,6 +1634,7 @@ export async function getGlofoxInvoicePaymentLink(creds, args = {}) {
       error: null,
     }
   } catch (e) {
+    if (e?.name === 'AbortError' || e?.name === 'TimeoutError') return empty(0, 'timeout')
     return empty(0, e?.message || 'network error')
   }
 }

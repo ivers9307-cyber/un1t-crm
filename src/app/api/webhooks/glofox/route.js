@@ -329,7 +329,9 @@ export async function POST(request) {
             glofoxUserId: ltvResult.glofox_user_id || null,
           })
         } else if (action === 'exit') {
-          dunningResult = await exitDunningForContact(db, creds.locationId, contact.id, `invoice_${invStatus.toLowerCase()}`)
+          // PAYLINK.4b — scope the exit to THIS invoice: a run refreshed onto
+          // a newer failed invoice must not be cancelled by an older one settling.
+          dunningResult = await exitDunningForContact(db, creds.locationId, contact.id, `invoice_${invStatus.toLowerCase()}`, { invoiceId: ltvResult.invoice_id })
         }
       } catch (e) {
         logWarn('glofox-webhook', 'reactive dunning threw', { err: e?.message, contact_id: contact.id })

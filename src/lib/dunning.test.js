@@ -156,10 +156,19 @@ describe('maybeEnrolDunning', () => {
     enrolContacts.mockResolvedValue({ enrolled: 0, skipped: 1, reactivated: 0 })
     const payment = { invoice_id: 'inv-2', link: 'https://pay.test/inv-2', link_suffix: 'inv-2', amount: '€209', error: null }
     capturePaymentForRun.mockResolvedValueOnce({ payment })
+    refreshActiveRunPayment.mockResolvedValueOnce({ refreshed: 1 })
     const db = fakeDb({ location: { dunning_sequence_id: 'seq1', dunning_auto_enroll: true }, sequence: ACTIVE_SEQ, contact: { glofox_membership_state: 'active' } })
     const out = await maybeEnrolDunning(db, 'loc', 'c1', { invoiceId: 'inv-2', isMembership: true })
-    expect(out).toMatchObject({ enrolled: 0 })
+    expect(out).toMatchObject({ enrolled: 0, refreshed: 1 })
     expect(refreshActiveRunPayment).toHaveBeenCalledWith(db, { sequenceId: 'seq1', contactId: 'c1', payment })
+  })
+
+  it('PAYLINK.4b — omits `refreshed` when the refresh branch never ran (something was enrolled)', async () => {
+    paymentTroubleKind.mockReturnValue('overdue')
+    enrolContacts.mockResolvedValue({ enrolled: 1 })
+    const db = fakeDb({ location: { dunning_sequence_id: 'seq1', dunning_auto_enroll: true }, sequence: ACTIVE_SEQ, contact: { glofox_membership_state: 'active' } })
+    const out = await maybeEnrolDunning(db, 'loc', 'c1', { invoiceId: 'inv-3', isMembership: true })
+    expect(out).not.toHaveProperty('refreshed')
   })
 })
 
@@ -181,6 +190,39 @@ describe('exitDunningForContact', () => {
     expect(await exitDunningForContact(db, 'loc', 'c1', 'invoice_paid')).toEqual({ exited: 2 })
     expect(setEnrollmentStatus).toHaveBeenCalledWith({ enrollmentId: 'e1', status: 'exited', reason: 'invoice_paid' })
     expect(setEnrollmentStatus).toHaveBeenCalledWith({ enrollmentId: 'e2', status: 'exited', reason: 'invoice_paid' })
+  })
+
+  it('PAYLINK.4b — with invoiceId given, exits an enrolment chasing that same invoice AND one with no payment metadata', async () => {
+    vi.mocked(setEnrollmentStatus).mockResolvedValue(undefined)
+    const db = fakeDb({
+      location: { dunning_sequence_id: 'seq1' },
+      enrollments: [
+        { id: 'e1', metadata: { payment: { invoice_id: 'inv-A' } } },
+        { id: 'e2', metadata: null },
+      ],
+    })
+    expect(await exitDunningForContact(db, 'loc', 'c1', 'invoice_paid', { invoiceId: 'inv-A' })).toEqual({ exited: 2 })
+    expect(setEnrollmentStatus).toHaveBeenCalledWith({ enrollmentId: 'e1', status: 'exited', reason: 'invoice_paid' })
+    expect(setEnrollmentStatus).toHaveBeenCalledWith({ enrollmentId: 'e2', status: 'exited', reason: 'invoice_paid' })
+  })
+
+  it('PAYLINK.4b — with invoiceId given, a run refreshed onto a NEWER invoice is NOT exited by an OLD invoice\'s paid webhook', async () => {
+    const db = fakeDb({
+      location: { dunning_sequence_id: 'seq1' },
+      enrollments: [{ id: 'e1', metadata: { payment: { invoice_id: 'inv-B' } } }],
+    })
+    expect(await exitDunningForContact(db, 'loc', 'c1', 'invoice_paid', { invoiceId: 'inv-A' })).toEqual({ exited: 0 })
+    expect(setEnrollmentStatus).not.toHaveBeenCalled()
+  })
+
+  it('PAYLINK.4b — called without invoiceId exits regardless (today\'s behaviour)', async () => {
+    vi.mocked(setEnrollmentStatus).mockResolvedValue(undefined)
+    const db = fakeDb({
+      location: { dunning_sequence_id: 'seq1' },
+      enrollments: [{ id: 'e1', metadata: { payment: { invoice_id: 'inv-B' } } }],
+    })
+    expect(await exitDunningForContact(db, 'loc', 'c1', 'invoice_paid')).toEqual({ exited: 1 })
+    expect(setEnrollmentStatus).toHaveBeenCalledWith({ enrollmentId: 'e1', status: 'exited', reason: 'invoice_paid' })
   })
 })
 
