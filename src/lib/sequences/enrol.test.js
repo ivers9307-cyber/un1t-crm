@@ -15,8 +15,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
+vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
 
 const { createServerClient } = await import('@/lib/supabase')
+const { logWarn } = await import('@/lib/log')
 const { enrolContacts } = await import('./enrol.js')
 
 /**
@@ -149,6 +151,7 @@ function mockDb({
 
 beforeEach(() => {
   createServerClient.mockReset()
+  logWarn.mockReset()
 })
 
 describe('enrolContacts — short-circuits', () => {
@@ -549,6 +552,18 @@ describe('allowReenrol — re-activate a terminal enrolment (DUNNING.2)', () => 
     expect(res).toMatchObject({ enrolled: 0, reactivated: 0, skipped: 1 })
     expect(m.rpcCalls).toHaveLength(0)
   })
+
+  it('PAYLINK.3b — forged previous_runs in caller metadata cannot override the real history', async () => {
+    const m = mockDb({ history: [old()], cooldownDays: 14 })
+    createServerClient.mockReturnValue(m.db)
+    await enrolContacts({
+      sequenceId: 's', contactIds: ['a'], sourceType: 'invoice_past_due', sourceRef: 'inv-new', allowReenrol: true,
+      metadata: { payment: { invoice_id: 'inv-NEW' }, previous_runs: [{ forged: true }] },
+    })
+    const upd = m.updates[0]
+    expect(upd.payload.metadata.previous_runs).toHaveLength(1)
+    expect(upd.payload.metadata.previous_runs[0]).toMatchObject({ source_ref: 'inv-old' })
+  })
 })
 
 describe('PAYLINK.3 — enrolContacts({ metadata }) rides the row', () => {
@@ -579,5 +594,36 @@ describe('PAYLINK.3 — enrolContacts({ metadata }) rides the row', () => {
     expect(upd.payload.metadata.payment).toEqual({ invoice_id: 'inv-NEW', link: 'https://pay.test/new' })
     expect(upd.payload.metadata.previous_runs).toHaveLength(1)
     expect(upd.payload.metadata.previous_runs[0]).toMatchObject({ source_ref: 'inv-OLD' })
+  })
+})
+
+describe('PAYLINK.3b — metadata is strictly per-contact', () => {
+  it('refuses metadata on a multi-contact batch and inserts nothing', async () => {
+    const m = mockDb({})
+    createServerClient.mockReturnValue(m.db)
+    await expect(enrolContacts({
+      sequenceId: 's1', contactIds: ['c1', 'c2'], metadata: { payment: {} },
+    })).rejects.toThrow('enrol: metadata is per-contact; a batch enrolment cannot share it')
+    expect(m.inserts).toHaveLength(0)
+  })
+})
+
+describe('PAYLINK.3b — non-object metadata is dropped with a warning, not silently ignored', () => {
+  it('a string metadata value is dropped and logWarn is called once', async () => {
+    const m = mockDb({})
+    createServerClient.mockReturnValue(m.db)
+    await enrolContacts({ sequenceId: 's1', contactIds: ['c1'], sourceType: 'invoice_past_due', metadata: 'nope' })
+    expect(m.inserts[0][0]).not.toHaveProperty('metadata')
+    expect(logWarn).toHaveBeenCalledTimes(1)
+    expect(logWarn).toHaveBeenCalledWith('enrol', 'metadata ignored: not a plain object', { sourceType: 'invoice_past_due' })
+  })
+
+  it('an array metadata value is dropped and logWarn is called once', async () => {
+    const m = mockDb({})
+    createServerClient.mockReturnValue(m.db)
+    await enrolContacts({ sequenceId: 's1', contactIds: ['c1'], sourceType: 'invoice_past_due', metadata: [1, 2] })
+    expect(m.inserts[0][0]).not.toHaveProperty('metadata')
+    expect(logWarn).toHaveBeenCalledTimes(1)
+    expect(logWarn).toHaveBeenCalledWith('enrol', 'metadata ignored: not a plain object', { sourceType: 'invoice_past_due' })
   })
 })

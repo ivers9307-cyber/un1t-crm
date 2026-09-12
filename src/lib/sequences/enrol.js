@@ -25,6 +25,7 @@
 
 import { createServerClient } from '@/lib/supabase'
 import { selectAllByKeys } from '@/lib/select-all'
+import { logWarn } from '@/lib/log'
 import { findBlockedByCooldown, planReenrolments } from './cooldown.js'
 
 // Operator-initiated sourceTypes that bypass the automations_exempt gate.
@@ -56,7 +57,15 @@ const MANUAL_LIKE_SOURCE_TYPES = new Set(['manual', 'churn_radar'])
  *   `{ invoice_id, link, link_suffix, amount, ... }`). Written on a fresh
  *   insert only when given (no `metadata` key on the row otherwise); on a
  *   DUNNING.2 re-activation it is merged OVER the old run's metadata, and
- *   `previous_runs` is always kept regardless.
+ *   `previous_runs` is always kept regardless (the caller cannot forge it —
+ *   the real history always wins that key). PAYLINK.3b — `metadata` is
+ *   per-contact (it exists to carry ONE member's payment link): passing it
+ *   with more than one `contactIds` entry THROWS rather than fan it out
+ *   across a batch. A non-plain-object value (string/number/array) is not
+ *   silently dropped — it is logged via `logWarn` and then ignored, same as
+ *   no metadata was given. `metadata` must be JSON-serialisable (it lands on
+ *   a jsonb column): an `undefined` value is dropped and a `Date` is stored
+ *   as its `toISOString()` string, exactly as `JSON.stringify` would.
  * @returns {Promise<{ enrolled: number, skipped: number, reactivated: number }>}
  */
 export async function enrolContacts({
@@ -181,8 +190,24 @@ export async function enrolContacts({
   }
 
   // PAYLINK.3 — a plain object (not array/null) rides the row; anything
-  // else (omitted, null, a non-object) leaves the column untouched.
-  const runMeta = metadata && typeof metadata === 'object' && !Array.isArray(metadata) ? metadata : null
+  // else (omitted, null) leaves the column untouched. PAYLINK.3b — a given
+  // but non-object value (string/number/array) is a caller mistake, not a
+  // silent no-op: warn so it surfaces, then treat it the same as omitted.
+  let runMeta = null
+  if (metadata != null) {
+    if (typeof metadata === 'object' && !Array.isArray(metadata)) {
+      runMeta = metadata
+    } else {
+      logWarn('enrol', 'metadata ignored: not a plain object', { sourceType })
+    }
+  }
+
+  // PAYLINK.3b — metadata exists to carry ONE member's payment link; a
+  // batch write sharing one object across N rows is never correct, so
+  // refuse it outright rather than fan it out silently.
+  if (runMeta && contactIds.length > 1) {
+    throw new Error('enrol: metadata is per-contact; a batch enrolment cannot share it')
+  }
 
   const toInsert = candidateIds
     .map(contactId => ({
