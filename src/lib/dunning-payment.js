@@ -94,7 +94,7 @@ function escapeHtml(s) {
 export function paymentCtaHtml(payment) {
   const link = payment?.link
   if (typeof link !== 'string' || !link.startsWith('https://')) return CARD_UPDATE_WORDING
-  return `<a href="${escapeHtml(link)}">pay it now here</a>, it takes a few seconds, or ${CARD_UPDATE_WORDING}`
+  return `<a href="${escapeHtml(link)}">pay it now</a>, it takes a few seconds, or ${CARD_UPDATE_WORDING}`
 }
 
 /** Pure: the `{{pay_amount_phrase}}` fragment — ' of €209' or ''. */

@@ -1175,7 +1175,7 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
     )
     const sent = pm.sendMarketingEmail.mock.calls[0][0]
     expect(sent.htmlBody).toContain('payment of €209 failed')
-    expect(sent.htmlBody).toContain('<a href="https://pay.test/inv-1">pay it now here</a>, it takes a few seconds, or update your card in the Glofox app')
+    expect(sent.htmlBody).toContain('<a href="https://pay.test/inv-1">pay it now</a>, it takes a few seconds, or update your card in the Glofox app')
   })
 
   it('PAYLINK.7 — no payment on the run → the card-update wording, no empty link', async () => {

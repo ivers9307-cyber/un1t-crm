@@ -131,7 +131,7 @@ describe('paymentFromEnrollment / email fragments (pure)', () => {
     expect(paymentFromEnrollment({ metadata: { payment: 'junk' } })).toBeNull()
   })
   it('the CTA fragment carries an escaped link when there is one, else the card-update wording', () => {
-    expect(paymentCtaHtml(payment)).toBe(`<a href="${LINK}">pay it now here</a>, it takes a few seconds, or update your card in the Glofox app`)
+    expect(paymentCtaHtml(payment)).toBe(`<a href="${LINK}">pay it now</a>, it takes a few seconds, or update your card in the Glofox app`)
     expect(paymentCtaHtml({ ...payment, link: 'https://x.test/?a=1&b="2"' })).toContain('href="https://x.test/?a=1&amp;b=&quot;2&quot;"')
     expect(paymentCtaHtml({ ...payment, link: null })).toBe('update your card in the Glofox app')
     expect(paymentCtaHtml({ ...payment, link: 'javascript:alert(1)' })).toBe('update your card in the Glofox app')

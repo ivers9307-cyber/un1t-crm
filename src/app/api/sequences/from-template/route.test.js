@@ -1,4 +1,4 @@
-// PAYLINK.8 — POST /api/sequences/from-template, template
+// PAYLINK.8 / PAYLINK.8b — POST /api/sequences/from-template, template
 // 'overdue_payment_dunning'.
 //
 // Coverage:
@@ -7,7 +7,10 @@
 //       insert at all — the refusal happens before the first write).
 //   (b) it IS approved → the sequence + its steps are inserted, and both
 //       WhatsApp step rows carry that row's id plus the full
-//       whatsapp_variables mapping (including url_button).
+//       whatsapp_variables mapping (including url_button); the
+//       whatsapp_templates select is scoped to THIS location.
+//   (c) the whatsapp_templates read itself errors → 500 (consistent with
+//       every other Supabase error in this route), and nothing is written.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -31,13 +34,22 @@ function req(body) {
   })
 }
 
-function mockDb({ waRows, seq = { id: 'seq-new', name: 'Overdue membership payment → card update reminders' } }) {
+function mockDb({ waRows, waError = null, seq = { id: 'seq-new', name: 'Overdue membership payment → card update reminders' } }) {
   const inserts = { email_sequences: [], sequence_steps: [] }
+  const calls = { whatsappTemplatesEq: [] }
   const db = {
     inserts,
+    calls,
     from(table) {
       if (table === 'whatsapp_templates') {
-        return { select: () => ({ eq: () => Promise.resolve({ data: waRows, error: null }) }) }
+        return {
+          select: () => ({
+            eq: (...args) => {
+              calls.whatsappTemplatesEq.push(args)
+              return Promise.resolve({ data: waError ? null : waRows, error: waError })
+            },
+          }),
+        }
       }
       if (table === 'email_sequences') {
         return {
@@ -84,7 +96,7 @@ describe('POST /api/sequences/from-template — overdue_payment_dunning refuses 
     expect(db.inserts.sequence_steps).toHaveLength(0)
   })
 
-  it('(b) approved: inserts the sequence + steps, both WhatsApp rows carry the resolved id and full whatsapp_variables', async () => {
+  it('(b) approved: inserts the sequence + steps, both WhatsApp rows carry the resolved id and full whatsapp_variables, scoped to this location', async () => {
     const db = mockDb({
       waRows: [{ id: 'w-9', name: 'outstanding_payment_link_', status: 'APPROVED' }],
     })
@@ -97,11 +109,30 @@ describe('POST /api/sequences/from-template — overdue_payment_dunning refuses 
     expect(json.success).toBe(true)
     expect(db.inserts.email_sequences).toHaveLength(1)
 
+    expect(db.calls.whatsappTemplatesEq).toContainEqual(['location_id', LOC])
+
     const waStepRows = db.inserts.sequence_steps.filter((s) => s.step_type === 'whatsapp')
     expect(waStepRows).toHaveLength(2)
     for (const row of waStepRows) {
       expect(row.whatsapp_template_id).toBe('w-9')
       expect(row.whatsapp_variables).toEqual({ '1': 'first_name', '2': 'pay_amount', url_button: 'pay_link_suffix' })
     }
+  })
+
+  it('(c) the whatsapp_templates read itself errors → 500, nothing written', async () => {
+    const db = mockDb({
+      waRows: null,
+      waError: { message: 'connection reset' },
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(req({ template_id: 'overdue_payment_dunning', location_id: LOC }))
+    const json = await res.json()
+
+    expect(res.status).toBe(500)
+    expect(json.success).toBe(false)
+    expect(json.error).toContain('connection reset')
+    expect(db.inserts.email_sequences).toHaveLength(0)
+    expect(db.inserts.sequence_steps).toHaveLength(0)
   })
 })

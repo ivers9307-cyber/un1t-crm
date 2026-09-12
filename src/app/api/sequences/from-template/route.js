@@ -64,7 +64,7 @@ export async function POST(request) {
       .select('id, name, status')
       .eq('location_id', locationId)
     if (waErr) {
-      return NextResponse.json({ success: false, error: `Could not read this location's WhatsApp templates: ${waErr.message}` }, { status: 502 })
+      return NextResponse.json({ success: false, error: `Could not read this location's WhatsApp templates: ${waErr.message}` }, { status: 500 })
     }
     const missing = missingWhatsappTemplateNames(steps, waRows || [])
     if (missing.length > 0) {

@@ -7,6 +7,8 @@
 
 import { describe, it, expect } from 'vitest'
 import { SEQUENCE_TEMPLATES, getTemplate, TEMPLATE_CATEGORIES } from './sequence-templates.js'
+import { applyMergeTags } from '@/lib/postmark'
+import { paymentCtaHtml, payAmountPhrase } from '@/lib/dunning-payment'
 
 describe('SEQUENCE_TEMPLATES catalog', () => {
   it('every template has a stable id, category, name, trigger, and at least one step', () => {
@@ -452,6 +454,48 @@ describe('DUNNING.6 — overdue membership payment → card update reminders', (
       expect(s.html_content).not.toMatch(/\u2014/)
       expect(s.html_content).not.toMatch(/[\u{1F300}-\u{1FAFF}]/u)
       expect(s.html_content.toLowerCase()).toMatch(/card/)
+    }
+  })
+})
+
+// PAYLINK.8b \u2014 {{payment_cta}} expands to a full clause ("<a>pay it now</a>,
+// it takes a few seconds, or update your card in the Glofox app", or just
+// the card-update clause with no link). Each email body must read cleanly
+// in BOTH cases: no sentence ends up with two "or"s stitched together (the
+// bug the earlier copy had \u2014 CTA already ends "...or update your card...",
+// so a trailing ", or reply..." on the SAME sentence produced a double
+// "or"), no doubled punctuation from a fragment butting against the
+// template's own trailing comma/period.
+describe('PAYLINK.8b \u2014 payment_cta email copy reads cleanly with and without a pay link', () => {
+  const tpl = getTemplate('overdue_payment_dunning')
+  const contact = { first_name: 'Emma' }
+  const withLink = { link: 'https://pay.test/inv-42', amount: '\u20ac209' }
+  const noLink = { link: null, amount: '\u20ac209' }
+
+  function render(html, payment) {
+    return applyMergeTags(html, contact, {
+      location_name: 'Stillorgan',
+      pay_amount_phrase: payAmountPhrase(payment),
+      payment_cta: paymentCtaHtml(payment),
+    })
+  }
+
+  it('every email renders cleanly in both the with-link and no-link variant', () => {
+    for (const s of tpl.steps.filter((s) => s.step_type === 'email')) {
+      const linked = render(s.html_content, withLink)
+      const unlinked = render(s.html_content, noLink)
+
+      for (const rendered of [linked, unlinked]) {
+        for (const sentence of rendered.split(/(?<=[.!?])\s+/)) {
+          const orCount = (sentence.match(/\bor\b/gi) || []).length
+          expect(orCount, `"${sentence}" reads with a doubled "or"`).toBeLessThanOrEqual(1)
+        }
+        expect(rendered, `${s.subject}: doubled comma`).not.toMatch(/,\s*,/)
+        expect(rendered, `${s.subject}: doubled period`).not.toMatch(/\.\./)
+      }
+
+      expect(linked, `${s.subject}: with-link variant has no <a href=`).toContain('<a href=')
+      expect(unlinked, `${s.subject}: no-link variant leaked an <a> anyway`).not.toContain('<a href=')
     }
   })
 })

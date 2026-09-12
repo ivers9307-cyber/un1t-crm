@@ -736,7 +736,7 @@ export const SEQUENCE_TEMPLATES = [
     id: 'overdue_payment_dunning',
     category: 'Recovery',
     name: 'Overdue membership payment → card update reminders',
-    description: 'When a membership payment fails, reminds the member with a Pay now link for that exact invoice: a WhatsApp and an email about an hour after the failure, an email on day 3, and a WhatsApp plus a final email on day 7. Stops as soon as the payment goes through. Needs the approved WhatsApp template outstanding_payment_link_ at this location. Install, review the copy, publish, then pick it under Churn radar → Payment reminders and turn on automatic starts. Fees and class packs never trigger it.',
+    description: 'When a membership payment fails, reminds the member with a Pay now link for that exact invoice: a WhatsApp and an email about an hour after the failure, an email on day 3, and a WhatsApp plus a final email on day 7. Stops as soon as the payment goes through. Install is refused until the WhatsApp template outstanding_payment_link_ is approved at this location. Install, review the copy, publish, then pick it under Churn radar → Payment reminders and turn on automatic starts. Fees and class packs never trigger it. If you installed the earlier card-update version, pause it after re-picking this one under Churn radar → Payment reminders, so only one sends.',
     trigger_type: 'manual',
     trigger_config: {},
     goal_config: null,
@@ -758,7 +758,7 @@ export const SEQUENCE_TEMPLATES = [
         subject: 'A quick heads-up about your payment, {{first_name}}',
         html_content: `<p>Hi {{first_name}},</p>
 <p>We tried to take your membership payment{{pay_amount_phrase}} and it didn't go through. It happens, usually a card that has expired or been replaced.</p>
-<p>Your membership is still active. To keep it that way, {{payment_cta}}, or reply to this email and we'll sort the card with you.</p>
+<p>Your membership is still active. To keep it that way, {{payment_cta}}. If you'd rather we sorted the card with you, just reply to this email.</p>
 <p>UN1T {{location_name}}</p>`,
       },
       {
@@ -767,8 +767,8 @@ export const SEQUENCE_TEMPLATES = [
         delay_hours: 0,
         subject: 'Still no luck with your membership payment',
         html_content: `<p>Hi {{first_name}},</p>
-<p>Your membership payment{{pay_amount_phrase}} is still outstanding. You can {{payment_cta}}, and we'll take it from there.</p>
-<p>If something else is going on with the card or anything else, reply here and we'll figure it out together.</p>
+<p>Your membership payment{{pay_amount_phrase}} is still outstanding, usually a card that needs updating. You can {{payment_cta}}.</p>
+<p>If something else is going on, reply here and we'll figure it out together.</p>
 <p>UN1T {{location_name}}</p>`,
       },
       {
@@ -785,7 +785,7 @@ export const SEQUENCE_TEMPLATES = [
         subject: 'Action needed to keep your UN1T membership',
         html_content: `<p>Hi {{first_name}},</p>
 <p>Your membership payment{{pay_amount_phrase}} is now a week overdue and we don't want you to lose your spot.</p>
-<p>Two minutes fixes it: {{payment_cta}}, or reply to this email and we'll sort the card together. No awkwardness, we just want to keep you training.</p>
+<p>You can {{payment_cta}}. Or reply to this email and we'll sort the card together. No awkwardness, we just want to keep you training.</p>
 <p>UN1T {{location_name}}</p>`,
       },
     ],
