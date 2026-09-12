@@ -9,6 +9,11 @@
 // `link` is null unless Glofox said the invoice is payable by link; the
 // senders then fall back to the card-update wording (email) or a recorded
 // skip (WhatsApp, whose approved template needs the button suffix).
+//
+// PAYLINK.4 — refreshActiveRunPayment() writes a fresh `payment` onto an
+// already-ACTIVE run's enrolment when a new failed invoice arrives while an
+// earlier reminder run is still live, so the remaining steps chase the
+// newest invoice, not a stale one.
 
 import { glofoxCredentialsForLocation, getGlofoxInvoicePaymentLink } from '@/lib/glofox'
 import { formatMoneyMinor } from '@/lib/money-format'
@@ -96,4 +101,36 @@ export function paymentCtaHtml(payment) {
 export function payAmountPhrase(payment) {
   const amount = payment?.amount
   return amount ? ` of ${amount}` : ''
+}
+
+/**
+ * PAYLINK.4 — write a fresh `payment` onto the contact's ACTIVE enrolment on
+ * this sequence (read-merge-write; guarded on status='active'). Used when a
+ * new failed invoice arrives while an earlier reminder run is still live, so
+ * the remaining steps chase the newest invoice, not a stale one. Returns
+ * { refreshed: 0|1 }. Never throws.
+ */
+export async function refreshActiveRunPayment(db, { sequenceId, contactId, payment } = {}) {
+  try {
+    if (!sequenceId || !contactId || !payment) return { refreshed: 0 }
+    const { data: row, error } = await db
+      .from('sequence_enrollments')
+      .select('id, metadata')
+      .eq('sequence_id', sequenceId).eq('contact_id', contactId).eq('status', 'active')
+      .order('enrolled_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (error || !row) return { refreshed: 0 }
+    const prev = row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata) ? row.metadata : {}
+    const { data: updated, error: updErr } = await db
+      .from('sequence_enrollments')
+      .update({ metadata: { ...prev, payment } })
+      .eq('id', row.id).eq('status', 'active')
+      .select('id')
+    if (updErr) { logWarn('dunning-payment', 'refreshActiveRunPayment update failed', { contactId, err: updErr.message }); return { refreshed: 0 } }
+    return { refreshed: (updated || []).length }
+  } catch (e) {
+    logWarn('dunning-payment', 'refreshActiveRunPayment threw', { contactId, err: e?.message })
+    return { refreshed: 0 }
+  }
 }

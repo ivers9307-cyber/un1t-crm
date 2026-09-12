@@ -25,6 +25,7 @@
 import { enrolContacts } from '@/lib/sequences'
 import { setEnrollmentStatus } from '@/lib/sequences/scheduler'
 import { paymentTroubleKind } from '@/lib/churn-radar'
+import { capturePaymentForRun, refreshActiveRunPayment } from '@/lib/dunning-payment'
 import { logWarn } from '@/lib/log'
 
 // Columns paymentTroubleKind() needs to confirm a member is genuinely
@@ -83,8 +84,11 @@ async function resolveActiveDunningSequence(db, locationId) {
  * @param {string} [opts.invoiceId]     the PAST_DUE invoice id (sourceRef)
  * @param {boolean} [opts.isMembership] DUNNING.1 — applyInvoiceWebhook().is_membership;
  *                                      anything but `true` never enrols
+ * @param {string} [opts.glofoxUserId]  the invoice's Glofox user id;
+ *                                      capturePaymentForRun falls back to
+ *                                      contacts.glofox_member_id
  */
-export async function maybeEnrolDunning(db, locationId, contactId, { invoiceId, isMembership } = {}) {
+export async function maybeEnrolDunning(db, locationId, contactId, { invoiceId, isMembership, glofoxUserId } = {}) {
   try {
     if (!contactId) return { enrolled: 0, reason: 'no_contact' }
     // DUNNING.1 — fail closed: only a MEMBERSHIP invoice (the Overdue
@@ -112,6 +116,10 @@ export async function maybeEnrolDunning(db, locationId, contactId, { invoiceId, 
     const pastDueIds = new Set([contactId])
     const kind = paymentTroubleKind({ ...(full || {}), id: contactId }, Date.now(), { pastDueIds })
     if (!kind) return { enrolled: 0, reason: 'not_behind' }
+    // PAYLINK.4 — fetch the invoice's hosted pay link ONCE, here, and ride it
+    // on the run. A failed fetch never blocks the reminder: the steps fall
+    // back to the card-update wording (email) or a recorded skip (WhatsApp).
+    const { payment } = await capturePaymentForRun(db, { locationId, contactId, invoiceId: invoiceId || null, glofoxUserId: glofoxUserId || null })
     const res = await enrolContacts({
       sequenceId: seqId,
       contactIds: [contactId],
@@ -121,7 +129,13 @@ export async function maybeEnrolDunning(db, locationId, contactId, { invoiceId, 
       // reminded again; the full unique index would otherwise block them
       // forever. Dunning is the only automatic caller allowed to re-run.
       allowReenrol: true,
+      metadata: { payment },
     })
+    if (!(res?.enrolled > 0) && !(res?.reactivated > 0)) {
+      // An earlier run is still live (or the same source was refused a re-run):
+      // give it the newest invoice's link rather than letting it chase a stale one.
+      await refreshActiveRunPayment(db, { sequenceId: seqId, contactId, payment })
+    }
     return { enrolled: res?.enrolled || 0, kind, sequence_id: seqId }
   } catch (e) {
     logWarn('dunning', 'maybeEnrolDunning threw', { err: e?.message, contact_id: contactId })

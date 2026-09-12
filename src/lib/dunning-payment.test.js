@@ -10,6 +10,7 @@ const { glofoxCredentialsForLocation, getGlofoxInvoicePaymentLink } = await impo
 const { logWarn } = await import('@/lib/log')
 const {
   paymentRunMetadata, capturePaymentForRun, paymentFromEnrollment, paymentCtaHtml, payAmountPhrase,
+  refreshActiveRunPayment,
 } = await import('./dunning-payment.js')
 
 const INVOICE = '0f187762-acc8-42d2-860c-43cbe1477df0'
@@ -140,5 +141,83 @@ describe('paymentFromEnrollment / email fragments (pure)', () => {
     expect(payAmountPhrase(payment)).toBe(' of €209')
     expect(payAmountPhrase({ ...payment, amount: '' })).toBe('')
     expect(payAmountPhrase(null)).toBe('')
+  })
+})
+
+describe('refreshActiveRunPayment (IO, never throws)', () => {
+  const NEW_PAYMENT = { invoice_id: 'NEW', link: 'https://pay.test/NEW', link_suffix: 'NEW', amount: '€209', currency: 'EUR', retriable: true, fetched_at: 'x', error: null }
+
+  function dbForRefresh({ row = null, readError = null, updateData = [{ id: 'e1' }], updateError = null, readThrows = false } = {}) {
+    const updateCalls = []
+    return {
+      updateCalls,
+      from(table) {
+        if (table !== 'sequence_enrollments') throw new Error(`unexpected table ${table}`)
+        return {
+          select(cols) {
+            if (cols !== 'id, metadata') throw new Error(`unexpected select ${cols}`)
+            return { eq(_col1, _val1) {
+              return { eq(_col2, _val2) {
+                return { eq(_col3, _val3) {
+                  return { order() {
+                    return { limit() {
+                      return { maybeSingle: async () => {
+                        if (readThrows) throw new Error('read boom')
+                        return { data: row, error: readError }
+                      } }
+                    } }
+                  } }
+                } }
+              } }
+            } }
+          },
+          update(values) {
+            return { eq(idCol, idVal) {
+              return { eq(statusCol, statusVal) {
+                updateCalls.push({ values, filters: { [idCol]: idVal, [statusCol]: statusVal } })
+                return { select: async () => ({ data: updateError ? null : updateData, error: updateError }) }
+              } }
+            } }
+          },
+        }
+      },
+    }
+  }
+
+  it('writes payment onto the active row, filtered on id + status, preserving other metadata', async () => {
+    const db = dbForRefresh({ row: { id: 'e1', metadata: { previous_runs: [1], payment: { invoice_id: 'OLD' } } } })
+    const out = await refreshActiveRunPayment(db, { sequenceId: 'seq1', contactId: 'c1', payment: NEW_PAYMENT })
+    expect(out).toEqual({ refreshed: 1 })
+    expect(db.updateCalls).toHaveLength(1)
+    expect(db.updateCalls[0].values).toEqual({ metadata: { previous_runs: [1], payment: NEW_PAYMENT } })
+    expect(db.updateCalls[0].filters).toEqual({ id: 'e1', status: 'active' })
+  })
+
+  it('no active row → { refreshed: 0 }, no update call', async () => {
+    const db = dbForRefresh({ row: null })
+    const out = await refreshActiveRunPayment(db, { sequenceId: 'seq1', contactId: 'c1', payment: NEW_PAYMENT })
+    expect(out).toEqual({ refreshed: 0 })
+    expect(db.updateCalls).toHaveLength(0)
+  })
+
+  it('update error → { refreshed: 0 }, logWarn called once', async () => {
+    const db = dbForRefresh({ row: { id: 'e1', metadata: {} }, updateError: { message: 'db boom' } })
+    const out = await refreshActiveRunPayment(db, { sequenceId: 'seq1', contactId: 'c1', payment: NEW_PAYMENT })
+    expect(out).toEqual({ refreshed: 0 })
+    expect(logWarn).toHaveBeenCalledTimes(1)
+  })
+
+  it('missing args → { refreshed: 0 }, db.from never called', async () => {
+    const db = dbForRefresh()
+    const fromSpy = vi.spyOn(db, 'from')
+    expect(await refreshActiveRunPayment(db, {})).toEqual({ refreshed: 0 })
+    expect(fromSpy).not.toHaveBeenCalled()
+  })
+
+  it('a read that throws → { refreshed: 0 }, logWarn called', async () => {
+    const db = dbForRefresh({ readThrows: true })
+    const out = await refreshActiveRunPayment(db, { sequenceId: 'seq1', contactId: 'c1', payment: NEW_PAYMENT })
+    expect(out).toEqual({ refreshed: 0 })
+    expect(logWarn).toHaveBeenCalled()
   })
 })

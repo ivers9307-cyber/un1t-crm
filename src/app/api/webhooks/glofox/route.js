@@ -322,7 +322,12 @@ export async function POST(request) {
       const action = dunningActionFor(invStatus, ltvResult.is_membership)
       try {
         if (action === 'enrol') {
-          dunningResult = await maybeEnrolDunning(db, creds.locationId, contact.id, { invoiceId: ltvResult.invoice_id, isMembership: true })
+          dunningResult = await maybeEnrolDunning(db, creds.locationId, contact.id, {
+            invoiceId: ltvResult.invoice_id, isMembership: true,
+            // PAYLINK.4 — the invoice's own user id when the parser carried it;
+            // capturePaymentForRun falls back to the contact's linked id.
+            glofoxUserId: ltvResult.glofox_user_id || null,
+          })
         } else if (action === 'exit') {
           dunningResult = await exitDunningForContact(db, creds.locationId, contact.id, `invoice_${invStatus.toLowerCase()}`)
         }
