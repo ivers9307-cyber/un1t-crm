@@ -301,7 +301,7 @@ describe('paymentFromEnrollment / email fragments (pure)', () => {
     expect(paymentFromEnrollment({ metadata: { payment: 'junk' } })).toBeNull()
   })
   it('the CTA fragment carries an escaped link when there is one, else the card-update wording', () => {
-    expect(paymentCtaHtml(payment)).toBe(`<a href="${LINK}">pay it now here</a>, it takes a few seconds, or update your card in the Glofox app`)
+    expect(paymentCtaHtml(payment)).toBe(`<a href="${LINK}">pay it now</a>, it takes a few seconds, or update your card in the Glofox app`)
     expect(paymentCtaHtml({ ...payment, link: 'https://x.test/?a=1&b="2"' })).toContain('href="https://x.test/?a=1&amp;b=&quot;2&quot;"')
     expect(paymentCtaHtml({ ...payment, link: null })).toBe('update your card in the Glofox app')
     expect(paymentCtaHtml(null)).toBe('update your card in the Glofox app')
@@ -394,7 +394,7 @@ function escapeHtml(s) {
 export function paymentCtaHtml(payment) {
   const link = payment?.link
   if (!link) return CARD_UPDATE_WORDING
-  return `<a href="${escapeHtml(link)}">pay it now here</a>, it takes a few seconds, or ${CARD_UPDATE_WORDING}`
+  return `<a href="${escapeHtml(link)}">pay it now</a>, it takes a few seconds, or ${CARD_UPDATE_WORDING}`
 }
 
 /** Pure: the `{{pay_amount_phrase}}` fragment — ' of €209' or ''. */
@@ -928,8 +928,8 @@ In the `applyMergeTags` test file:
 describe('PAYLINK.7 — payment merge tags', () => {
   it('renders {{pay_amount_phrase}} and {{payment_cta}} from extras, empty when absent', () => {
     const html = '<p>payment{{pay_amount_phrase}} failed. To keep it, {{payment_cta}}.</p>'
-    expect(applyMergeTags(html, { first_name: 'A' }, { pay_amount_phrase: ' of €209', payment_cta: '<a href="https://pay.test/x">pay it now here</a>' }))
-      .toBe('<p>payment of €209 failed. To keep it, <a href="https://pay.test/x">pay it now here</a>.</p>')
+    expect(applyMergeTags(html, { first_name: 'A' }, { pay_amount_phrase: ' of €209', payment_cta: '<a href="https://pay.test/x">pay it now</a>' }))
+      .toBe('<p>payment of €209 failed. To keep it, <a href="https://pay.test/x">pay it now</a>.</p>')
     expect(applyMergeTags(html, { first_name: 'A' }, {})).toBe('<p>payment failed. To keep it, .</p>')
   })
 })
@@ -947,7 +947,7 @@ In `steps.test.js`, inside the `sendEmailStep` describe (reuse its db factory an
     })
     const sent = postmark.sendMarketingEmail.mock.calls[0][0]
     expect(sent.html).toContain('payment of €209 failed')
-    expect(sent.html).toContain('<a href="https://pay.test/inv-1">pay it now here</a>, it takes a few seconds, or update your card in the Glofox app')
+    expect(sent.html).toContain('<a href="https://pay.test/inv-1">pay it now</a>, it takes a few seconds, or update your card in the Glofox app')
   })
 
   it('PAYLINK.7 — no payment on the run → the card-update wording, no empty link', async () => {

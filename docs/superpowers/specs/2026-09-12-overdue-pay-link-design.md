@@ -26,7 +26,7 @@ The overdue-payment reminder automation (gallery template `overdue_payment_dunni
 - `POST /v3.0/payment-links/invoices/{invoiceId}` via `glofoxFetch` with `Content-Type: application/json` and `x-glofox-impersonated-member-id: memberId`, empty JSON body.
 - 2xx with `is_retriable: true` → `ok: true, retriable: true, link, amountCents, currency, summary`.
 - 2xx with `is_retriable: false` → `ok: true, retriable: false, link: null` (the invoice cannot be paid by link right now; Glofox's own retry may be mid-flight).
-- Non-2xx → `ok: false, status, error: 'Glofox HTTP <n>'`. A thrown fetch → `ok: false, status: 0, error: <message>`. Never throws.
+- Non-2xx → `ok: false, status, error: 'Glofox HTTP <n>'`, with Glofox's `message_code` or `code` appended in parentheses when the body carries one. A 200 whose body says `success: false` is a failure too (`error` = its `message_code`). A thrown fetch → `ok: false, status: 0, error: <message>`; an abort → `error: 'timeout'`. Never throws.
 
 ### 2. Run payment metadata — new `src/lib/dunning-payment.js`
 
@@ -35,7 +35,7 @@ Pure helpers plus one IO function, kept out of `dunning.js` so the manual remind
 - `paymentRunMetadata(linkResult, { invoiceId, now })` (pure) → `{ invoice_id, link, link_suffix, amount, currency, retriable, fetched_at, error }`. `amount` is display text from `formatMoneyMinor(amountCents, currency)` (`€209`, `€29.50`), `''` when unknown. `link` is `null` unless `ok && retriable` and Glofox returned an `https://` link. `link_suffix` is the text after the last `/` of that link (the part Meta appends to the approved button base), `null` without a link; when it differs from `invoice_id` the capture logs a warning, because the WhatsApp button is built from the suffix so it always matches the link Glofox vouched for. `retriable` is Glofox's own flag. `error`: `null` when payable, `no_payment_link` when retriable but no usable link, `not_retriable` when Glofox says so, else the helper's error.
 - `capturePaymentForRun(db, { locationId, contactId, invoiceId, glofoxUserId })` (IO) → `{ payment }` where `payment` is the object above. Resolves credentials with `glofoxCredentialsForLocation`; the member id is `glofoxUserId` when given, else `contacts.glofox_member_id`. Missing creds, missing member id, or a helper failure all produce a `payment` with `link: null` and `error` set. Never throws; logs a warning on failure.
 - `paymentFromEnrollment(enrollment)` (pure) → the `payment` object from `enrollment.metadata.payment`, or `null`.
-- `paymentCtaHtml(payment)` (pure) → the sentence fragment the emails splice in. With a link: `<a href="LINK">pay it now here</a>, it takes a few seconds, or update your card in the Glofox app`. Without: `update your card in the Glofox app`. The link is HTML-escaped.
+- `paymentCtaHtml(payment)` (pure) → the sentence fragment the emails splice in. With a link: `<a href="LINK">pay it now</a>, it takes a few seconds, or update your card in the Glofox app`. Without: `update your card in the Glofox app`. The link is HTML-escaped.
 - `payAmountPhrase(payment)` (pure) → `' of €209'` (leading space) or `''`.
 
 ### 3. Enrolment carries run metadata — `src/lib/sequences/enrol.js`
@@ -61,7 +61,7 @@ Two consequences, both handled: (i) `exitDunningForContact` is scoped to the inv
 
 - `resolveContactField` (whatsapp.js) gains two reserved names resolved from `opts.payment`, never from the contact: `pay_amount` → `payment.amount`, `pay_link_suffix` → `payment.link_suffix`. Both are `''` when there is no payment. Existing names and the literal fallback are unchanged.
 - `sendWhatsappStep` derives `payment = paymentFromEnrollment(enrollment)` and passes `{ payment }` in the opts to both `buildTemplateComponents` and `renderTemplateBody`.
-- **Skip rule:** if the step's `whatsapp_variables[url_button] === 'pay_link_suffix'` and the run has no `payment.link_suffix` OR no `payment.amount`, the step is a recorded skip (`recordStepSkip`, reason `no payment link for this invoice` or `no payment amount for this invoice`) and returns `null`. Meta would reject a dynamic-URL template sent without its suffix, a button that opens an unpayable invoice is worse than no message, and the approved body reads "payment of {{2}}", so an empty amount would ship a hole. The run continues to its email steps, which cope with a missing amount.
+- **Skip rules (three, in this order, all recorded skips that return `null` and let the run continue to its email steps):** (1) the step maps the URL button to `pay_link_suffix` and the run has no `payment.link_suffix` → `no payment link for this invoice`; (2) the mapping uses `pay_amount` anywhere and the run has no `payment.amount` → `no payment amount for this invoice` (the approved body reads "payment of {{2}}", so an empty amount would ship a hole); (3) after components are built, ANY template with a dynamic URL button whose components carry no url-button entry → `no value for the template's link button`, plus a `logWarn` because that is an operator configuration fault, not a per-contact one. Meta would reject a dynamic-URL template sent without its suffix, and a throw there would feed `error_count` and pause the whole enrolment, killing the emails too. Templates that do not use a dynamic URL button are unaffected.
 
 ### 6. Email steps — `src/lib/postmark.js`, `src/lib/sequences/steps.js`
 
@@ -78,6 +78,10 @@ Two consequences, both handled: (i) `exitDunningForContact` is scoped to the inv
 ### 8. Install guard — `src/lib/sequences/template-install.js`, `src/app/api/sequences/from-template/route.js`
 
 New pure `missingWhatsappTemplateNames(steps, rows)` returns the distinct names a gallery template asks for that are not APPROVED at the location. The install route calls it after loading the location's templates and, when non-empty, deletes nothing (nothing has been inserted yet) and returns **409** with `WhatsApp template "outstanding_payment_link_" is not approved at this location yet. Create it under WhatsApp → Templates, wait for Meta's approval, then install.` This replaces the previous behaviour of installing with a null template id.
+
+### 8a. Error surfacing and timeouts
+
+The manual reminder route returns 502 when the member's invoices cannot be read (previously the error was discarded and read as "no debt"). The install route returns 500 when the location's WhatsApp templates cannot be read. Both routes that await the Glofox pay-link fetch inline (the Glofox webhook and the churn-radar action) declare `maxDuration = 30`. The updated gallery template is named "Overdue membership payment → Pay now reminders" so it can be told apart from the earlier "card update reminders" install in the churn-radar picker.
 
 ### 9. Rollout
 
