@@ -43,7 +43,7 @@ import { getLocationBranding } from '@/lib/location-branding'
 import { isFrequencyCapped, frequencyCapDeferUntil, FrequencyCapDeferral, stampMarketingTouch } from '@/lib/frequency-cap'
 import { overlayConnections } from '@/lib/connection-registry'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
-import { paymentFromEnrollment, paymentCtaHtml, payAmountPhrase } from '@/lib/dunning-payment'
+import { paymentFromEnrollment, paymentCtaHtml, payAmountPhrase, dunningPresendGate } from '@/lib/dunning-payment'
 import { URL_BUTTON_MAPPING_KEY, dynamicUrlButtonIndex } from '@/lib/whatsapp-template-buttons'
 
 // ── DUNNING.3 — transactional lane ───────────────────────────────
@@ -242,6 +242,20 @@ export async function sendEmailStep(db, { enrollment, step, sequence, contact, f
   // Throws FrequencyCapDeferral (deferred, not skipped — see module header).
   // DUNNING.3 — a marketing-pressure cap; a service message is never deferred by it.
   if (!transactional) assertNotFrequencyCapped(contact, frequencyCap)
+
+  // PRESEND.1 — belt and braces on the dunning exit. The invoice webhook
+  // (PAID / FORGIVEN -> exitDunningForContact) is the only thing that stops a
+  // reminder run today; if it is late or down, someone who has already paid
+  // gets chased anyway. Re-ask Glofox whether this run's invoice is still
+  // overdue, immediately before the send. No-ops (and costs nothing) for every
+  // non-dunning enrolment, and fails open on any Glofox trouble.
+  {
+    const presend = await dunningPresendGate(db, { enrollment, contact, sequence })
+    if (!presend.proceed) {
+      await recordStepSkip(db, { contact, sequence, step, channel: 'email', reason: presend.reason })
+      return null
+    }
+  }
 
   // Resolve content: inline OR via template_id reference.
   let subject = step.subject
@@ -461,6 +475,20 @@ export async function sendWhatsappStep(db, { enrollment, step, sequence, contact
   // DUNNING.3 — a marketing-pressure cap; a service message is never deferred by it.
   if (!transactional) assertNotFrequencyCapped(contact, frequencyCap)
 
+  // PRESEND.1 — belt and braces on the dunning exit. The invoice webhook
+  // (PAID / FORGIVEN -> exitDunningForContact) is the only thing that stops a
+  // reminder run today; if it is late or down, someone who has already paid
+  // gets chased anyway. Re-ask Glofox whether this run's invoice is still
+  // overdue, immediately before the send. No-ops (and costs nothing) for every
+  // non-dunning enrolment, and fails open on any Glofox trouble.
+  {
+    const presend = await dunningPresendGate(db, { enrollment, contact, sequence })
+    if (!presend.proceed) {
+      await recordStepSkip(db, { contact, sequence, step, channel: 'WhatsApp', reason: presend.reason })
+      return null
+    }
+  }
+
   // Resolve the template; must be APPROVED to send.
   if (!template) template = await resolveApprovedWhatsappTemplate(db, step, sequence)
 
@@ -589,7 +617,7 @@ export async function sendWhatsappStep(db, { enrollment, step, sequence, contact
 
 // ── sms (mig 062) ───────────────────────────────────────────────
 
-export async function sendSmsStep(db, { step, sequence, contact }) {
+export async function sendSmsStep(db, { enrollment, step, sequence, contact }) {
   if (!step.sms_body) {
     throw new Error('SMS step has no sms_body.')
   }
@@ -645,6 +673,20 @@ export async function sendSmsStep(db, { step, sequence, contact }) {
   if (contact.sms_status && contact.sms_status !== 'active') {
     await recordStepSkip(db, { contact, sequence, step, channel: 'SMS', reason: `sms_status is '${contact.sms_status}'` })
     return null
+  }
+
+  // PRESEND.1 — belt and braces on the dunning exit. The invoice webhook
+  // (PAID / FORGIVEN -> exitDunningForContact) is the only thing that stops a
+  // reminder run today; if it is late or down, someone who has already paid
+  // gets chased anyway. Re-ask Glofox whether this run's invoice is still
+  // overdue, immediately before the send. No-ops (and costs nothing) for every
+  // non-dunning enrolment, and fails open on any Glofox trouble.
+  {
+    const presend = await dunningPresendGate(db, { enrollment, contact, sequence })
+    if (!presend.proceed) {
+      await recordStepSkip(db, { contact, sequence, step, channel: 'SMS', reason: presend.reason })
+      return null
+    }
   }
 
   // INTEG-A2 dual-read: registry twilio_sender row first. Reuses the

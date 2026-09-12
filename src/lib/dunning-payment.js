@@ -15,7 +15,9 @@
 // earlier reminder run is still live, so the remaining steps chase the
 // newest invoice, not a stale one.
 
-import { glofoxCredentialsForLocation, getGlofoxInvoicePaymentLink } from '@/lib/glofox'
+import { glofoxCredentialsForLocation, getGlofoxInvoicePaymentLink, getGlofoxOverdueInvoices } from '@/lib/glofox'
+import { isTransactionalEnrolment } from '@/lib/sequences/steps'
+import { setEnrollmentStatus } from '@/lib/sequences/scheduler'
 import { formatMoneyMinor } from '@/lib/money-format'
 import { logWarn } from '@/lib/log'
 
@@ -148,5 +150,83 @@ export async function refreshActiveRunPayment(db, { sequenceId, contactId, payme
   } catch (e) {
     logWarn('dunning-payment', 'refreshActiveRunPayment threw', { contactId, err: e?.message })
     return { refreshed: 0 }
+  }
+}
+
+
+// ── PRESEND.1 — do not chase an invoice that is already settled ──────
+//
+// An overdue-payment run is exited today by exactly one thing: the Glofox
+// INVOICE_UPDATED webhook (PAID / FORGIVEN -> exitDunningForContact, scoped
+// to the invoice). That is a single point of failure with a member-visible
+// blast radius. If the webhook is delayed, dropped, or the receiver is down,
+// somebody who paid on day 2 still gets the day-3 email and the day-7
+// WhatsApp chasing money they no longer owe.
+//
+// So immediately before each dunning send we re-ask Glofox whether THIS
+// invoice is still on the member's overdue list. Two rules hold it in place:
+//
+//   1. It only ever ADDS a stop. Every "we cannot tell" — not a dunning run,
+//      no invoice on the run, no Glofox member id on the contact, no
+//      credentials at the location — proceeds. The gate never blocks a run
+//      for missing data.
+//   2. It FAILS OPEN. A timeout, a 403, a 500, an unreadable body: proceed
+//      and log. Silencing a legitimate reminder because Glofox blipped is a
+//      worse failure than the one we are fixing, and the webhook remains the
+//      primary exit either way.
+//
+// Note the asymmetry with the helper it calls: getGlofoxOverdueInvoices
+// treats a 200-with-success:false as a FAILURE rather than an empty list,
+// precisely because "empty list" here means "exit this run".
+export const PRESEND_EXIT_REASON = 'invoice_settled_presend'
+
+const PROCEED = Object.freeze({ proceed: true })
+
+/**
+ * @param db supabase client (reads the location's Glofox credentials)
+ * @param {{ enrollment, contact, sequence }} ctx
+ * @returns {Promise<{proceed:true}|{proceed:false, reason:string}>}  never throws
+ */
+export async function dunningPresendGate(db, { enrollment, contact, sequence } = {}) {
+  try {
+    const invoiceId = (() => {
+      const v = paymentFromEnrollment(enrollment)?.invoice_id
+      return typeof v === 'string' ? v.trim() : ''
+    })()
+    if (!invoiceId) return PROCEED
+    const memberId = contact?.glofox_member_id
+    if (!memberId) return PROCEED
+    if (!isTransactionalEnrolment(enrollment)) return PROCEED
+
+    const creds = await glofoxCredentialsForLocation(db, sequence?.location_id || contact?.location_id)
+    if (!creds?.branchId || !creds?.apiKey || !creds?.apiToken) return PROCEED
+
+    const res = await getGlofoxOverdueInvoices(creds, { memberId })
+    if (!res.ok) {
+      logWarn('dunning-payment', 'pre-send overdue check failed, sending anyway', {
+        contactId: contact?.id, invoiceId, status: res.status, error: res.error,
+      })
+      return PROCEED
+    }
+    if (res.invoiceIds.includes(invoiceId)) return PROCEED
+
+    // Settled (or no longer chaseable). Exit the run through the same helper
+    // the webhook path uses, so an operator sees one exit reason either way.
+    try {
+      await setEnrollmentStatus({ enrollmentId: enrollment.id, status: 'exited', reason: PRESEND_EXIT_REASON })
+    } catch (e) {
+      // The write failed, so the run is still live and the next tick will
+      // reach this step again. Do NOT report a stop we could not record —
+      // claiming one would skip this send and then send the next step
+      // anyway, which is the worst of both.
+      logWarn('dunning-payment', 'pre-send exit failed, sending anyway', {
+        contactId: contact?.id, invoiceId, err: e?.message,
+      })
+      return PROCEED
+    }
+    return { proceed: false, reason: 'invoice no longer overdue' }
+  } catch (e) {
+    logWarn('dunning-payment', 'dunningPresendGate threw', { contactId: contact?.id, err: e?.message })
+    return PROCEED
   }
 }

@@ -657,6 +657,16 @@ export async function runSequences({ now = new Date() } = {}) {
       // it implements the jump. A terminal step (followingOrder null)
       // parks the cursor on the step just executed — never past it, so
       // a stray reactivation can't land on another arm's row.
+      // PRESEND.1 — the advance is a CAS on status='active', not a blind
+      // update by id. A step handler may END the run while it is executing
+      // (the dunning pre-send gate exits the enrolment the moment it learns
+      // the invoice was paid, then resolves null like any recorded skip).
+      // Without the predicate this update would match that just-exited row
+      // and write `status: 'active'` straight back onto it, so the next
+      // reminder would go out anyway — invisibly, because nothing errors.
+      // The row was claimed with status='active', so the only way to miss
+      // here is a deliberate mid-step exit; a 0-row match is not an error
+      // and leaves the throw-on-advance-failure discipline untouched.
       const { error: advanceErr } = await db.from('sequence_enrollments').update({
         current_step_order: followingOrder != null ? followingOrder - 1 : step.step_order,
         next_step_at: nextFireAt,
@@ -665,7 +675,7 @@ export async function runSequences({ now = new Date() } = {}) {
         last_step_send_id: sendId,
         last_error: null,
         error_count: 0,
-      }).eq('id', enrollment.id)
+      }).eq('id', enrollment.id).eq('status', 'active')
       // A rejected advance is the WORST failure mode: the step may already
       // have SENT, and swallowing the error leaves the cursor behind — the
       // claim lease expires and the send repeats every ~10 minutes, forever,
