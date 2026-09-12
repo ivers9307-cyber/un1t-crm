@@ -48,6 +48,7 @@ import { createServerClient } from '@/lib/supabase'
 import { sendTextMessage } from '@/lib/whatsapp'
 import { sendRadarOutreach } from '@/lib/radar-outreach'
 import { enrolContacts } from '@/lib/sequences'
+import { capturePaymentForRun, refreshActiveRunPayment } from '@/lib/dunning-payment'
 import { isMembershipInvoice } from '@/lib/glofox-arrears'
 import { paymentTroubleKind } from '@/lib/churn-radar'
 import { invalidateRadar } from '@/lib/radar-cache'
@@ -216,11 +217,17 @@ export async function POST(request) {
     // "membership payment". Same classifier as fetchPastDue.
     const { data: pastDueInv } = await db
       .from('glofox_invoices')
-      .select('id, line_item_subtypes, glofox_event:raw_payload->candidate->>glofoxEvent')
+      .select('id, line_item_subtypes, invoice_date, glofox_user_id, glofox_event:raw_payload->candidate->>glofoxEvent')
       .eq('contact_id', contactId)
       .eq('status', 'PAST_DUE')
+      .order('invoice_date', { ascending: false })
       .limit(50)
-    const hasMembershipDebt = (pastDueInv || []).some(isMembershipInvoice)
+    const membershipDebts = (pastDueInv || []).filter(isMembershipInvoice)
+    const hasMembershipDebt = membershipDebts.length > 0
+    // PAYLINK.5 — the newest PAST_DUE membership invoice is the one the pay
+    // link is minted for; source_ref stays payment_<kind> (DUNNING.2 re-run
+    // semantics), the invoice id rides on metadata.payment.
+    const newestDebt = membershipDebts[0] || null
     const pastDueIds = hasMembershipDebt ? new Set([contactId]) : new Set()
     const kind = paymentTroubleKind({ ...(full || {}), id: contactId }, Date.now(), { pastDueIds })
     if (!kind) {
@@ -250,6 +257,10 @@ export async function POST(request) {
       }, { status: 400 })
     }
 
+    const { payment } = await capturePaymentForRun(db, {
+      locationId, contactId, invoiceId: newestDebt?.id || null, glofoxUserId: newestDebt?.glofox_user_id || null,
+    })
+
     let enrolled
     try {
       const res = await enrolContacts({
@@ -260,6 +271,7 @@ export async function POST(request) {
         // DUNNING.2 — an operator re-sending to a member who completed an
         // earlier run (outside the cooldown) re-activates it.
         allowReenrol: true,
+        metadata: { payment },
       })
       enrolled = res?.enrolled || 0
     } catch (e) {
@@ -272,8 +284,12 @@ export async function POST(request) {
 
     // Already mid-sequence — idempotent no-op, no new audit row.
     if (enrolled === 0) {
+      // PAYLINK.5 — the member is already mid-run (or the same source was
+      // refused a re-run): point that run at the newest invoice's link rather
+      // than letting it chase a stale one.
+      const { refreshed } = await refreshActiveRunPayment(db, { sequenceId: seqId, contactId, payment })
       invalidateRadar('churn', locationId)
-      return NextResponse.json({ success: true, data: { action, already_enrolled: true } })
+      return NextResponse.json({ success: true, data: { action, already_enrolled: true, refreshed } })
     }
     logRow.note = note || `Dunning (${kind}) → ${seq.name}`
   }
