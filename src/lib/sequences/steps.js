@@ -43,6 +43,8 @@ import { getLocationBranding } from '@/lib/location-branding'
 import { isFrequencyCapped, frequencyCapDeferUntil, FrequencyCapDeferral, stampMarketingTouch } from '@/lib/frequency-cap'
 import { overlayConnections } from '@/lib/connection-registry'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
+import { paymentFromEnrollment } from '@/lib/dunning-payment'
+import { URL_BUTTON_MAPPING_KEY } from '@/lib/whatsapp-template-buttons'
 
 // ── DUNNING.3 — transactional lane ───────────────────────────────
 // A dunning enrolment is a SERVICE message about the member's own account
@@ -461,13 +463,31 @@ export async function sendWhatsappStep(db, { enrollment, step, sequence, contact
   // Nudge, whose WhatsApp step failed while broadcasts sent the same
   // template fine (they always passed locationId).
   const variableMapping = step.whatsapp_variables || {}
+  // PAYLINK.6 — the overdue-payment reminder's pay link rides on the run. A
+  // template whose URL button wants the invoice id cannot be sent without one
+  // (Meta rejects a dynamic-URL send with no suffix, and a button to an
+  // unpayable invoice is worse than silence), and the approved body reads
+  // "payment of {{2}}", so an empty amount would ship a hole → recorded skip
+  // either way; the run's email steps still go out with the card-update
+  // wording. Templates that do not use the pay-link button are unaffected.
+  const payment = paymentFromEnrollment(enrollment)
+  if (variableMapping[URL_BUTTON_MAPPING_KEY] === 'pay_link_suffix') {
+    if (!payment?.link_suffix) {
+      await recordStepSkip(db, { contact, sequence, step, channel: 'WhatsApp', reason: 'no payment link for this invoice' })
+      return null
+    }
+    if (!payment?.amount) {
+      await recordStepSkip(db, { contact, sequence, step, channel: 'WhatsApp', reason: 'no payment amount for this invoice' })
+      return null
+    }
+  }
   const branding = await getLocationBranding(db, sequence.location_id)
   const components = buildTemplateComponents(
     template,
     contact,
     variableMapping,
     step.whatsapp_header_media_url || null,
-    { companyName: branding.companyName, locationId: sequence.location_id },
+    { companyName: branding.companyName, locationId: sequence.location_id, payment },
   )
 
   // COMMS-AUDIT 2026-07-10: route from the sequence location's
@@ -507,7 +527,7 @@ export async function sendWhatsappStep(db, { enrollment, step, sequence, contact
       message_type: 'template',
       template_name: template.name,
       template_variables: variableMapping,
-      body: renderTemplateBody(template, contact, variableMapping, { companyName: branding.companyName }),
+      body: renderTemplateBody(template, contact, variableMapping, { companyName: branding.companyName, payment }),
       status: 'sent',
       sent_at: new Date().toISOString(),
     }).select('id').single()

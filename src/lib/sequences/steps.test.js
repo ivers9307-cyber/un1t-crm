@@ -666,8 +666,13 @@ describe('sendWhatsappStep — send-time consent gate + graceful skips (COMMS-AU
     wa = await import('@/lib/whatsapp')
     wa.sendTemplateMessage.mockReset()
     wa.sendTemplateMessage.mockResolvedValue({ messageId: 'wamid.X==' })
+    wa.buildTemplateComponents.mockReset()
     wa.buildTemplateComponents.mockReturnValue([])
     wa.getOrCreateConversation.mockResolvedValue('conv-1')
+    // PAYLINK.6 — buildTemplateComponents/renderTemplateBody's call args are
+    // asserted below; without a reset each test's call index would include
+    // every prior test's calls (mockReturnValue alone doesn't clear history).
+    wa.renderTemplateBody.mockClear()
   })
 
   it('missing wa_phone → recorded skip (resolves null, nothing sent, no throw)', async () => {
@@ -758,6 +763,52 @@ describe('sendWhatsappStep — send-time consent gate + graceful skips (COMMS-AU
     }
     await expect(steps.sendWhatsappStep(db, { step, sequence, contact: consentedContact }))
       .rejects.toThrow(/template not found/)
+  })
+
+  it('PAYLINK.6 — a pay-link template with no link on the run is a recorded skip, not a send', async () => {
+    const db = consentDb()
+    const payStep = { ...step, whatsapp_variables: { '1': 'first_name', '2': 'pay_amount', url_button: 'pay_link_suffix' } }
+    const out = await steps.sendWhatsappStep(db, {
+      step: payStep, sequence, contact: consentedContact,
+      enrollment: { id: 'e1', source_type: 'invoice_past_due', metadata: { payment: { invoice_id: 'inv-1', link: null, link_suffix: null, amount: '', error: 'not_retriable' } } },
+    })
+    expect(out).toBeNull()
+    expect(wa.sendTemplateMessage).not.toHaveBeenCalled()
+    expect(`${db.activityInserts[0].subject} ${db.activityInserts[0].note}`).toMatch(/no payment link/i)
+  })
+
+  it('PAYLINK.6 — a link with no amount is also a recorded skip (the approved body reads "payment of {{2}}")', async () => {
+    const db = consentDb()
+    const payStep = { ...step, whatsapp_variables: { '1': 'first_name', '2': 'pay_amount', url_button: 'pay_link_suffix' } }
+    const out = await steps.sendWhatsappStep(db, {
+      step: payStep, sequence, contact: consentedContact,
+      enrollment: { id: 'e1', source_type: 'invoice_past_due', metadata: { payment: { invoice_id: 'inv-1', link: 'https://pay.test/inv-1', link_suffix: 'inv-1', amount: '', error: null } } },
+    })
+    expect(out).toBeNull()
+    expect(wa.sendTemplateMessage).not.toHaveBeenCalled()
+    expect(`${db.activityInserts[0].subject} ${db.activityInserts[0].note}`).toMatch(/no payment amount/i)
+  })
+
+  it('PAYLINK.6 — with a link on the run the payment rides into buildTemplateComponents and renderTemplateBody opts', async () => {
+    const db = consentDb()
+    const payStep = { ...step, whatsapp_variables: { '1': 'first_name', '2': 'pay_amount', url_button: 'pay_link_suffix' } }
+    const payment = { invoice_id: 'inv-1', link: 'https://pay.test/inv-1', link_suffix: 'inv-1', amount: '€209', retriable: true }
+    await steps.sendWhatsappStep(db, {
+      step: payStep, sequence, contact: consentedContact,
+      enrollment: { id: 'e1', source_type: 'invoice_past_due', metadata: { payment } },
+    })
+    expect(wa.sendTemplateMessage).toHaveBeenCalledTimes(1)
+    expect(wa.buildTemplateComponents.mock.calls[0][4]).toMatchObject({ payment })
+    expect(wa.renderTemplateBody.mock.calls[0][3]).toMatchObject({ payment })
+  })
+
+  it('PAYLINK.6 — a template that does not use the pay-link button ignores the run entirely (no skip)', async () => {
+    const db = consentDb()
+    await steps.sendWhatsappStep(db, {
+      step, sequence, contact: consentedContact,
+      enrollment: { id: 'e1', source_type: 'invoice_past_due', metadata: { payment: { invoice_id: 'inv-1', link: null, link_suffix: null, amount: '' } } },
+    })
+    expect(wa.sendTemplateMessage).toHaveBeenCalledTimes(1)
   })
 })
 

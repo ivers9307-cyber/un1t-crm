@@ -1924,6 +1924,11 @@ function resolveContactField(fieldName, contact, opts = {}) {
   if (fieldName === 'email') return contact.email || ''
   if (fieldName === 'phone') return contact.phone || contact.wa_phone || ''
   if (fieldName === 'location_name') return opts.companyName || 'UN1T'
+  // PAYLINK.6 — reserved names for the overdue-payment reminder, resolved
+  // from the RUN (opts.payment, off sequence_enrollments.metadata) and never
+  // from the contact, so a contact column of the same name can't leak in.
+  if (fieldName === 'pay_amount') return opts.payment?.amount || ''
+  if (fieldName === 'pay_link_suffix') return opts.payment?.link_suffix || ''
   return contact[fieldName] || fieldName // literal fallback, as today
 }
 
