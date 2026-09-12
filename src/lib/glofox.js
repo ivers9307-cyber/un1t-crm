@@ -1578,18 +1578,20 @@ export async function fetchMemberResult(creds, memberId) {
 
 /**
  * @param {{branchId, apiKey, apiToken}} creds
- * @param {{ memberId: string, invoiceId: string }} args
+ * @param {{ memberId: string, invoiceId: string }} [args]
  * @returns {Promise<{ ok:boolean, status:number, retriable:boolean, link:string|null,
  *   amountCents:number|null, currency:string|null, summary:string|null,
  *   invoiceId:string|null, error:string|null }>}  never throws
  */
-export async function getGlofoxInvoicePaymentLink(creds, { memberId, invoiceId } = {}) {
+export async function getGlofoxInvoicePaymentLink(creds, args = {}) {
+  const { memberId, invoiceId } = args || {}
+  const inv = typeof invoiceId === 'string' ? invoiceId.trim() : ''
   const empty = (status, error) => ({
     ok: false, status, retriable: false, link: null, amountCents: null, currency: null,
-    summary: null, invoiceId: invoiceId || null, error,
+    summary: null, invoiceId: inv || null, error,
   })
-  const inv = typeof invoiceId === 'string' ? invoiceId.trim() : ''
-  if (!creds?.branchId || !GLOFOX_OBJECT_ID_RE.test(String(memberId || '')) || !inv || inv.length > 200) {
+  if (!creds?.branchId || !creds?.apiKey || !creds?.apiToken
+    || !GLOFOX_OBJECT_ID_RE.test(String(memberId || '')) || !inv || inv.length > 200) {
     return empty(400, 'INVALID_ARGS')
   }
   try {
@@ -1598,15 +1600,26 @@ export async function getGlofoxInvoicePaymentLink(creds, { memberId, invoiceId }
       headers: { 'Content-Type': 'application/json', 'x-glofox-impersonated-member-id': memberId },
       body: '{}',
     })
-    if (!r.ok) return empty(r.status, `Glofox HTTP ${r.status}`)
     let body
     try { body = await r.json() } catch { body = null }
+    if (!r.ok) {
+      const code = typeof body?.message_code === 'string' ? body.message_code : (typeof body?.code === 'string' ? body.code : null)
+      return empty(r.status, code ? `Glofox HTTP ${r.status} (${code})` : `Glofox HTTP ${r.status}`)
+    }
+    // GLOFOX-SPEC-2026-09 — a 200 can still carry success:false; that's a
+    // failure (bad invoice id, etc.), never "not retriable".
+    if (body?.success === false) {
+      return empty(r.status, body.message_code || 'GLOFOX_SUCCESS_FALSE')
+    }
     const retriable = body?.is_retriable === true
     const amount = Number(body?.invoice_amount)
+    const link = retriable && typeof body?.invoice_payment_link === 'string' && body.invoice_payment_link.startsWith('https://')
+      ? body.invoice_payment_link
+      : null
     return {
       ok: true, status: r.status, retriable,
-      link: retriable && typeof body?.invoice_payment_link === 'string' ? body.invoice_payment_link : null,
-      amountCents: retriable && Number.isFinite(amount) ? amount : null,
+      link,
+      amountCents: retriable && Number.isFinite(amount) && amount > 0 ? amount : null,
       currency: retriable && typeof body?.invoice_currency === 'string' ? body.invoice_currency : null,
       summary: retriable && typeof body?.invoice_summary === 'string' ? body.invoice_summary : null,
       invoiceId: typeof body?.invoice_id === 'string' ? body.invoice_id : inv,

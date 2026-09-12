@@ -2,6 +2,14 @@
 // three integration headers + x-glofox-impersonated-member-id (verified live
 // 2026-09-12 on a €209 overdue renewal). The spec's "Bearer member JWT" is
 // wrong for integrators: headers alone 403, a Bearer of the api token 401.
+//
+// PAYLINK.1b (code-quality follow-up): a 200 can still be
+// `success:false` (Glofox's own "treat it as a 400" convention — see
+// GLOFOX-SPEC-2026-09 in glofoxFetch); a non-2xx keeps Glofox's own
+// message_code/code when the body carries one; amountCents and link are
+// sanity-checked before being trusted; args are defaulted so a missing
+// second argument can't throw; a misconfigured location (missing apiKey/
+// apiToken) reads as INVALID_ARGS rather than reaching the network.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 const creds = { branchId: 'b', apiKey: 'k', apiToken: 't' }
@@ -11,6 +19,14 @@ const INVOICE = '0f187762-acc8-42d2-860c-43cbe1477df0'
 const res = (status, body) => ({
   ok: status >= 200 && status < 300, status, headers: { get: () => null },
   json: async () => body, clone() { return this },
+})
+
+// A response whose body isn't JSON at all (e.g. an HTML error page from a
+// proxy in front of Glofox) — json() rejects, same as the real fetch API.
+const resBadJson = (status) => ({
+  ok: status >= 200 && status < 300, status, headers: { get: () => null },
+  json: async () => { throw new SyntaxError('Unexpected token < in JSON') },
+  clone() { return this },
 })
 
 describe('getGlofoxInvoicePaymentLink', () => {
@@ -31,6 +47,8 @@ describe('getGlofoxInvoicePaymentLink', () => {
     expect(init.method).toBe('POST')
     expect(init.headers['x-glofox-impersonated-member-id']).toBe(MEMBER)
     expect(init.headers['x-glofox-api-token']).toBe('t')
+    expect(init.headers['Content-Type']).toBe('application/json')
+    expect(init.headers['x-glofox-branch-id']).toBe('b')
     expect(r).toEqual({
       ok: true, status: 200, retriable: true, invoiceId: INVOICE,
       link: `https://pay.glofox.com/payment-collector/v2/#/i/${INVOICE}`,
@@ -45,11 +63,45 @@ describe('getGlofoxInvoicePaymentLink', () => {
     expect(r).toMatchObject({ ok: true, retriable: false, link: null, amountCents: null, currency: null, error: null })
   })
 
-  it('a non-2xx is reported, never read as "no link"', async () => {
+  it('a 200 with success:false is a failure, not "not retriable" (GLOFOX-SPEC-2026-09)', async () => {
+    const { getGlofoxInvoicePaymentLink } = await import('./glofox.js')
+    global.fetch.mockResolvedValueOnce(res(200, { success: false, message_code: 'INVOICE_NOT_FOUND' }))
+    const r = await getGlofoxInvoicePaymentLink(creds, { memberId: MEMBER, invoiceId: INVOICE })
+    expect(r).toMatchObject({ ok: false, status: 200, retriable: false, link: null, error: 'INVOICE_NOT_FOUND' })
+  })
+
+  it('a non-2xx keeps Glofox\'s own message_code/code in the error', async () => {
     const { getGlofoxInvoicePaymentLink } = await import('./glofox.js')
     global.fetch.mockResolvedValueOnce(res(403, { code: 'NOT_AUTHORIZED' }))
     expect(await getGlofoxInvoicePaymentLink(creds, { memberId: MEMBER, invoiceId: INVOICE }))
+      .toMatchObject({ ok: false, status: 403, link: null, error: 'Glofox HTTP 403 (NOT_AUTHORIZED)' })
+  })
+
+  it('a non-2xx with a non-JSON body falls back to the bare status', async () => {
+    const { getGlofoxInvoicePaymentLink } = await import('./glofox.js')
+    global.fetch.mockResolvedValueOnce(resBadJson(403))
+    expect(await getGlofoxInvoicePaymentLink(creds, { memberId: MEMBER, invoiceId: INVOICE }))
       .toMatchObject({ ok: false, status: 403, link: null, error: 'Glofox HTTP 403' })
+  })
+
+  it('amountCents is null unless invoice_amount is a finite number greater than 0', async () => {
+    const { getGlofoxInvoicePaymentLink } = await import('./glofox.js')
+    global.fetch.mockResolvedValueOnce(res(200, { invoice_id: INVOICE, is_retriable: true, invoice_amount: null }))
+    expect(await getGlofoxInvoicePaymentLink(creds, { memberId: MEMBER, invoiceId: INVOICE }))
+      .toMatchObject({ ok: true, retriable: true, amountCents: null })
+
+    global.fetch.mockResolvedValueOnce(res(200, { invoice_id: INVOICE, is_retriable: true, invoice_amount: 0 }))
+    expect(await getGlofoxInvoicePaymentLink(creds, { memberId: MEMBER, invoiceId: INVOICE }))
+      .toMatchObject({ ok: true, retriable: true, amountCents: null })
+  })
+
+  it('link is accepted only when it is a string starting with https://', async () => {
+    const { getGlofoxInvoicePaymentLink } = await import('./glofox.js')
+    global.fetch.mockResolvedValueOnce(res(200, {
+      invoice_id: INVOICE, is_retriable: true, invoice_payment_link: 'javascript:alert(1)',
+    }))
+    expect(await getGlofoxInvoicePaymentLink(creds, { memberId: MEMBER, invoiceId: INVOICE }))
+      .toMatchObject({ ok: true, retriable: true, link: null })
   })
 
   it('refuses bad ids locally without calling Glofox', async () => {
@@ -57,6 +109,28 @@ describe('getGlofoxInvoicePaymentLink', () => {
     expect(await getGlofoxInvoicePaymentLink(creds, { memberId: 'nope', invoiceId: INVOICE })).toMatchObject({ ok: false, status: 400, error: 'INVALID_ARGS' })
     expect(await getGlofoxInvoicePaymentLink(creds, { memberId: MEMBER, invoiceId: '' })).toMatchObject({ ok: false, status: 400, error: 'INVALID_ARGS' })
     expect(await getGlofoxInvoicePaymentLink(null, { memberId: MEMBER, invoiceId: INVOICE })).toMatchObject({ ok: false, status: 400, error: 'INVALID_ARGS' })
+    expect(global.fetch).not.toHaveBeenCalled()
+  })
+
+  it('a local-validation failure reports the trimmed invoiceId, not the raw argument', async () => {
+    const { getGlofoxInvoicePaymentLink } = await import('./glofox.js')
+    const r = await getGlofoxInvoicePaymentLink(creds, { memberId: 'nope', invoiceId: `  ${INVOICE}  ` })
+    expect(r).toMatchObject({ ok: false, status: 400, error: 'INVALID_ARGS', invoiceId: INVOICE })
+  })
+
+  it('a missing or null args object is INVALID_ARGS, never a throw', async () => {
+    const { getGlofoxInvoicePaymentLink } = await import('./glofox.js')
+    expect(await getGlofoxInvoicePaymentLink(creds, null)).toMatchObject({ ok: false, status: 400, error: 'INVALID_ARGS' })
+    expect(await getGlofoxInvoicePaymentLink(creds)).toMatchObject({ ok: false, status: 400, error: 'INVALID_ARGS' })
+    expect(global.fetch).not.toHaveBeenCalled()
+  })
+
+  it('a misconfigured location (missing apiKey or apiToken) is INVALID_ARGS, not a network call', async () => {
+    const { getGlofoxInvoicePaymentLink } = await import('./glofox.js')
+    expect(await getGlofoxInvoicePaymentLink({ branchId: 'b', apiToken: 't' }, { memberId: MEMBER, invoiceId: INVOICE }))
+      .toMatchObject({ ok: false, status: 400, error: 'INVALID_ARGS' })
+    expect(await getGlofoxInvoicePaymentLink({ branchId: 'b', apiKey: 'k' }, { memberId: MEMBER, invoiceId: INVOICE }))
+      .toMatchObject({ ok: false, status: 400, error: 'INVALID_ARGS' })
     expect(global.fetch).not.toHaveBeenCalled()
   })
 
