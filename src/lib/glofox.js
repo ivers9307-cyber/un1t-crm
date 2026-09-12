@@ -1564,3 +1564,55 @@ export async function fetchMemberResult(creds, memberId) {
     return { ok: false, member: null }
   }
 }
+
+// ─────────────────────────────────────────────────────────────
+// Invoice payment link (PAYLINK.1)
+// ─────────────────────────────────────────────────────────────
+//
+// Live probe 2026-09-12: POST /v3.0/payment-links/invoices/{invoiceID}
+// answers with the three integration headers + x-glofox-impersonated-
+// member-id (the member's Glofox _id). The spec says "Bearer member JWT";
+// for an integrator that is wrong — headers alone 403, a Bearer of the api
+// token 401, impersonation 200. `is_retriable:false` means the invoice
+// cannot be paid by link right now (a custom fee, or Glofox mid-retry).
+
+/**
+ * @param {{branchId, apiKey, apiToken}} creds
+ * @param {{ memberId: string, invoiceId: string }} args
+ * @returns {Promise<{ ok:boolean, status:number, retriable:boolean, link:string|null,
+ *   amountCents:number|null, currency:string|null, summary:string|null,
+ *   invoiceId:string|null, error:string|null }>}  never throws
+ */
+export async function getGlofoxInvoicePaymentLink(creds, { memberId, invoiceId } = {}) {
+  const empty = (status, error) => ({
+    ok: false, status, retriable: false, link: null, amountCents: null, currency: null,
+    summary: null, invoiceId: invoiceId || null, error,
+  })
+  const inv = typeof invoiceId === 'string' ? invoiceId.trim() : ''
+  if (!creds?.branchId || !GLOFOX_OBJECT_ID_RE.test(String(memberId || '')) || !inv || inv.length > 200) {
+    return empty(400, 'INVALID_ARGS')
+  }
+  try {
+    const r = await glofoxFetch(creds, `/v3.0/payment-links/invoices/${encodeURIComponent(inv)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-glofox-impersonated-member-id': memberId },
+      body: '{}',
+    })
+    if (!r.ok) return empty(r.status, `Glofox HTTP ${r.status}`)
+    let body
+    try { body = await r.json() } catch { body = null }
+    const retriable = body?.is_retriable === true
+    const amount = Number(body?.invoice_amount)
+    return {
+      ok: true, status: r.status, retriable,
+      link: retriable && typeof body?.invoice_payment_link === 'string' ? body.invoice_payment_link : null,
+      amountCents: retriable && Number.isFinite(amount) ? amount : null,
+      currency: retriable && typeof body?.invoice_currency === 'string' ? body.invoice_currency : null,
+      summary: retriable && typeof body?.invoice_summary === 'string' ? body.invoice_summary : null,
+      invoiceId: typeof body?.invoice_id === 'string' ? body.invoice_id : inv,
+      error: null,
+    }
+  } catch (e) {
+    return empty(0, e?.message || 'network error')
+  }
+}
