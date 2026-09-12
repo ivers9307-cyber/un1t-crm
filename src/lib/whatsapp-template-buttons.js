@@ -171,6 +171,23 @@ export function urlButtonSendBlock(template, variableMapping) {
 }
 
 /**
+ * SEQ-URLBUTTON.1 — the same block, worded for a sequence STEP.
+ *
+ * Identical detection, different register: a broadcast is SENT (now, to a list),
+ * a step is PUBLISHED (and fires weeks later, one contact at a time). Telling an
+ * operator in the flow builder to fix something "on this send before sending"
+ * points at a thing that isn't in front of them. Deliberately a second function
+ * rather than a parameter on urlButtonSendBlock: the send path's sentence is
+ * quoted in its own tests and in the broadcast UI, and must not drift.
+ */
+export function urlButtonStepBlock(template, variableMapping) {
+  if (!urlButtonSendBlock(template, variableMapping)) return null
+  const idx = dynamicUrlButtonIndex(template.components)
+  const label = buttonsOf(template.components)[idx]?.text || `button ${idx + 1}`
+  return `The "${label}" button's link ends in a variable with no value set. Set the link value on this step before publishing — Meta rejects every message without it.`
+}
+
+/**
  * Same check against a full Meta components array — the shape the API routes
  * receive, so a direct API caller hits the same wall as the editor.
  */

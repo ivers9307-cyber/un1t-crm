@@ -17,9 +17,10 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, cleanup, fireEvent } from '@testing-library/react'
 import {
-  NodeConfig, variablesAfterTemplateChange, STEP_RESERVED_VARIABLES,
+  NodeConfig, variablesAfterTemplateChange, STEP_RESERVED_VARIABLES, STEP_CONTACT_FIELDS,
 } from './nodeEditing.jsx'
 import { URL_BUTTON_MAPPING_KEY } from '@/lib/whatsapp-template-buttons'
+import { WA_VARIABLE_FIELDS } from '@/lib/communications/compose'
 
 afterEach(cleanup)
 
@@ -60,8 +61,14 @@ function renderConfig(config, onPatch = vi.fn()) {
 }
 
 const templateSelect = (container) => container.querySelector('select')
-const urlButtonInput = (container) =>
-  Array.from(container.querySelectorAll('input')).find(i => i.getAttribute('data-field') === URL_BUTTON_MAPPING_KEY)
+// Found the way the operator finds it — by its label. `Labeled` wraps its
+// control in the <label>, so testing-library's implicit association resolves it
+// with no test-only attribute on the input.
+const URL_BUTTON_LABEL = /Link value for the .*Pay now.* button/
+const urlButtonInput = (q) => q.queryByLabelText(URL_BUTTON_LABEL)
+const datalistFor = (container, input) =>
+  container.querySelector(`datalist#${input.getAttribute('list')}`)
+const optionsOf = (list) => Array.from(list.querySelectorAll('option'))
 
 // --- the pure rule ---------------------------------------------------------
 
@@ -128,25 +135,23 @@ describe('WhatsApp step editor — template selection', () => {
 
 describe('WhatsApp step editor — dynamic URL button field', () => {
   it('renders the field only when the selected template has a dynamic URL button', () => {
-    const { container } = renderConfig({ template_id: 'tpl-dyn', variables: {} })
-    expect(urlButtonInput(container)).toBeTruthy()
+    expect(urlButtonInput(renderConfig({ template_id: 'tpl-dyn', variables: {} }))).toBeTruthy()
     cleanup()
-    const plain = renderConfig({ template_id: 'tpl-plain', variables: {} })
-    expect(urlButtonInput(plain.container)).toBeFalsy()
+    expect(urlButtonInput(renderConfig({ template_id: 'tpl-plain', variables: {} }))).toBeFalsy()
     cleanup()
-    const none = renderConfig({ template_id: '', variables: {} })
-    expect(urlButtonInput(none.container)).toBeFalsy()
+    expect(urlButtonInput(renderConfig({ template_id: '', variables: {} }))).toBeFalsy()
   })
 
   it('names the button it fills in', () => {
-    const { getByText } = renderConfig({ template_id: 'tpl-dyn', variables: {} })
-    expect(getByText(/Link value for the .*Pay now.* button/)).toBeTruthy()
+    const q = renderConfig({ template_id: 'tpl-dyn', variables: {} })
+    expect(q.getByLabelText(URL_BUTTON_LABEL)).toBeTruthy()
   })
 
   it('reads variables.url_button and writes it back on the same key', () => {
     const variables = { 1: 'first_name', [URL_BUTTON_MAPPING_KEY]: 'pay_link_suffix' }
-    const { container, onPatch } = renderConfig({ template_id: 'tpl-dyn', variables })
-    const input = urlButtonInput(container)
+    const q = renderConfig({ template_id: 'tpl-dyn', variables })
+    const { onPatch } = q
+    const input = urlButtonInput(q)
     expect(input.value).toBe('pay_link_suffix')
     fireEvent.change(input, { target: { value: 'summer2026' } })
     expect(onPatch).toHaveBeenCalledWith({
@@ -154,39 +159,51 @@ describe('WhatsApp step editor — dynamic URL button field', () => {
     })
   })
 
-  it('shows the pre-publish send block while the value is missing, and not once it is set', () => {
+  // The message is the SEQUENCE-STEP register (urlButtonStepBlock), not the
+  // broadcast one: a step is published, not sent.
+  it('shows the step-register block while the value is missing, and not once it is set', () => {
     const { container } = renderConfig({ template_id: 'tpl-dyn', variables: {} })
+    expect(container.textContent).toContain('Set the link value on this step before publishing')
     expect(container.textContent).toContain('Meta rejects every message without it')
+    expect(container.textContent).not.toContain('before sending')
     cleanup()
     const filled = renderConfig({ template_id: 'tpl-dyn', variables: { [URL_BUTTON_MAPPING_KEY]: 'pay_link_suffix' } })
-    expect(filled.container.textContent).not.toContain('Meta rejects every message without it')
+    expect(filled.container.textContent).not.toContain('Set the link value on this step')
   })
 
   it('offers the contact fields and the two run-resolved reserved names, with descriptions', () => {
-    const { container } = renderConfig({ template_id: 'tpl-dyn', variables: {} })
-    const list = container.querySelector(`datalist#${urlButtonInput(container).getAttribute('list')}`)
-    const values = Array.from(list.querySelectorAll('option')).map(o => o.value)
-    expect(values).toContain('first_name')
+    const q = renderConfig({ template_id: 'tpl-dyn', variables: {} })
+    const options = optionsOf(datalistFor(q.container, urlButtonInput(q)))
+    const values = options.map(o => o.value)
+    for (const f of WA_VARIABLE_FIELDS) expect(values).toContain(f)
     expect(values).toContain('pay_amount')
     expect(values).toContain('pay_link_suffix')
-    const byValue = Object.fromEntries(
-      Array.from(list.querySelectorAll('option')).map(o => [o.value, o.textContent]),
-    )
+    const byValue = Object.fromEntries(options.map(o => [o.value, o.textContent]))
     expect(byValue.pay_amount).toMatch(/amount owed/i)
     expect(byValue.pay_link_suffix).toMatch(/link suffix/i)
   })
 
   it('offers the same reserved names on the body-variable pickers', () => {
-    const { container } = renderConfig({ template_id: 'tpl-dyn', variables: {} })
-    const bodyInput = Array.from(container.querySelectorAll('input')).find(i => i.getAttribute('data-field') === '2')
-    expect(bodyInput).toBeTruthy()
-    const list = container.querySelector(`datalist#${bodyInput.getAttribute('list')}`)
-    const values = Array.from(list.querySelectorAll('option')).map(o => o.value)
+    const q = renderConfig({ template_id: 'tpl-dyn', variables: {} })
+    const bodyInput = q.getByLabelText('Variable {{2}}')
+    const values = optionsOf(datalistFor(q.container, bodyInput)).map(o => o.value)
     expect(values).toEqual(expect.arrayContaining(['first_name', 'pay_amount', 'pay_link_suffix']))
+  })
+
+  it('names the contact fields and the reserved names in the mapping hint', () => {
+    const { container } = renderConfig({ template_id: 'tpl-dyn', variables: {} })
+    expect(container.textContent).toContain('location_name')
+    expect(container.textContent).toContain('pay_amount')
+    expect(container.textContent).toContain('pay_link_suffix')
   })
 
   it('exports the reserved names with the descriptions the operator reads', () => {
     expect(STEP_RESERVED_VARIABLES.map(r => r.value)).toEqual(['pay_amount', 'pay_link_suffix'])
     for (const r of STEP_RESERVED_VARIABLES) expect(r.description.length).toBeGreaterThan(0)
+  })
+
+  // One list, not two — the step editor and the unified composer must not drift.
+  it('takes its contact fields from the composer list rather than a local copy', () => {
+    expect(STEP_CONTACT_FIELDS).toBe(WA_VARIABLE_FIELDS)
   })
 })

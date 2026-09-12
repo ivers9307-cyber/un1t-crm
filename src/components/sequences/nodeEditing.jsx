@@ -10,8 +10,9 @@ import { isPhantomTag } from '@/lib/sequences/tag-vocabulary'
 import { styleForType } from './nodeStyles'
 import { groupWaTemplates, UNGROUPED_LABEL } from '@shared/wa-template-groups'
 import {
-  dynamicUrlButtonIndex, urlButtonSendBlock, URL_BUTTON_MAPPING_KEY,
+  dynamicUrlButtonIndex, urlButtonStepBlock, URL_BUTTON_MAPPING_KEY,
 } from '@/lib/whatsapp-template-buttons'
+import { WA_VARIABLE_FIELDS } from '@/lib/communications/compose'
 
 export function IconBtn({ children, label, onClick, disabled, danger }) {
   return (
@@ -74,15 +75,26 @@ export function whatsappBodyVariables(template) {
   return [...set].sort((a, b) => Number(a) - Number(b))
 }
 
-// Contact fields a variable can be mapped to. Same list the unified composer
-// offers (WA_VARIABLE_FIELDS) — kept literal here so the step editor doesn't
-// drag the composer's module in.
-export const STEP_CONTACT_FIELDS = ['first_name', 'name', 'email', 'phone', 'location_name']
+// Contact fields a variable can be mapped to — the same list the unified
+// composer offers, so the two surfaces cannot drift. WA_VARIABLE_FIELDS is a
+// bare array in a dependency-free module (compose.js imports nothing).
+export const STEP_CONTACT_FIELDS = WA_VARIABLE_FIELDS
 
-// Reserved mapping names that resolve from the RUN, not the contact row. They
-// are ordinary mapping strings — nothing here imports them; the step sender
-// recognises them at send time. Offered with a description because "pay_amount"
-// on its own reads like a contact field, and it isn't.
+// Reserved mapping names that resolve from the RUN's metadata rather than the
+// contact row. They are ordinary mapping strings — nothing here imports or
+// interprets them; the STEP SENDER resolves them, in `resolveContactField`
+// (`src/lib/whatsapp.js`) on the PAYLINK branch.
+//
+// 🔴 ORDERING: that branch is a separate PR and this one must land AFTER it.
+// It also updates the gallery installer to write
+// { '1': 'first_name', '2': 'pay_amount', url_button: 'pay_link_suffix' } and
+// makes sendWhatsappStep record a SKIP for a dynamic-URL template with no
+// button value. Merged the other way round, these two names are offered here
+// and reach the sender as literal text.
+//
+// Each carries a description because "pay_amount" reads like a contact field
+// and isn't — mapping it on a template that is not the overdue reminder gets
+// an empty string, not an error.
 export const STEP_RESERVED_VARIABLES = [
   { value: 'pay_amount', description: 'Overdue payment: amount owed' },
   { value: 'pay_link_suffix', description: 'Overdue payment: link suffix' },
@@ -141,7 +153,7 @@ export function NodeConfig({ node, onPatch, templates, tagVocabulary }) {
       // value or Meta rejects EVERY message with 132012, so the step must be
       // able to author it here (the broadcast editor always could).
       const urlBtn = dynamicUrlButton(selected)
-      const urlBlock = selected ? urlButtonSendBlock(selected, curVars) : null
+      const urlBlock = selected ? urlButtonStepBlock(selected, curVars) : null
       const listId = `wa-vars-${node.id}`
       const setVar = (key, v) => onPatch({ variables: { ...curVars, [key]: v } })
       return (
@@ -166,10 +178,14 @@ export function NodeConfig({ node, onPatch, templates, tagVocabulary }) {
           </Labeled>
           {selected && vars.length > 0 && (
             <div className="space-y-2">
-              <p className="text-[11px] text-un1t-subtle">Map each variable to a contact field (first_name / name / email / phone) or a literal value.</p>
+              <p className="text-[11px] text-un1t-subtle">
+                Map each variable to a contact field ({STEP_CONTACT_FIELDS.join(' / ')}), one of the
+                reserved names ({STEP_RESERVED_VARIABLES.map(r => r.value).join(' / ')}, filled in from
+                the run), or a literal value.
+              </p>
               {vars.map(n => (
                 <Labeled key={n} label={`Variable {{${n}}}`}>
-                  <Text value={curVars[n]} onChange={v => setVar(n, v)} placeholder="first_name or literal text" list={listId} field={n} />
+                  <Text value={curVars[n]} onChange={v => setVar(n, v)} placeholder="first_name or literal text" list={listId} />
                 </Labeled>
               ))}
             </div>
@@ -180,7 +196,7 @@ export function NodeConfig({ node, onPatch, templates, tagVocabulary }) {
               <Labeled label={`Link value for the “${urlBtn.text}” button`}>
                 <Text value={curVars[URL_BUTTON_MAPPING_KEY]} onChange={v => setVar(URL_BUTTON_MAPPING_KEY, v)}
                   placeholder="pay_link_suffix, a contact field, or literal text"
-                  list={listId} field={URL_BUTTON_MAPPING_KEY} />
+                  list={listId} />
               </Labeled>
               <p className="text-[11px] text-un1t-subtle/80">Goes on the end of {urlBtn.url}.</p>
               {urlBlock && (
@@ -313,12 +329,11 @@ export function Labeled({ label, hint, children }) {
     </label>
   )
 }
-// `list` wires an optional <datalist> of suggestions (free text still allowed —
-// a mapping value can be a literal). `field` is a test/debug hook naming the
-// mapping key the input writes.
-export function Text({ value, onChange, placeholder, list, field }) {
+// `list` wires an optional <datalist> of suggestions — free text is still
+// allowed, because a mapping value can be a literal.
+export function Text({ value, onChange, placeholder, list }) {
   return <input type="text" className={fieldCls} value={value ?? ''} placeholder={placeholder}
-    list={list} data-field={field} onChange={e => onChange(e.target.value)} />
+    list={list} onChange={e => onChange(e.target.value)} />
 }
 export function Area({ value, onChange, placeholder, rows = 3 }) {
   return <textarea className={`${fieldCls} resize-y`} rows={rows} value={value ?? ''} placeholder={placeholder} onChange={e => onChange(e.target.value)} />
