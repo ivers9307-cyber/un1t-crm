@@ -2,6 +2,7 @@
 // builder (inline red flags), the agent (self-correct loop), and publish
 // (the gate). Pure. Returns { ok, errors: [{ code, nodeId?, message }] }.
 import { parseGraphShape, TRIGGER_SOURCE_ID } from './schema.js'
+import { urlButtonStepBlock } from '../../whatsapp-template-buttons.js'
 
 function requiredConfigError(node) {
   const c = node.config || {}
@@ -34,7 +35,43 @@ function requiredConfigError(node) {
   }
 }
 
-export function validateGraph(graph) {
+/**
+ * SEQ-URLBUTTON.1 — the URL-button rule needs the TEMPLATE, and the graph stores
+ * only an id, so the caller supplies the location's rows and this stays pure.
+ *
+ * Fail-open on an id that isn't in the supplied list — for two different
+ * reasons, and both matter:
+ *   - In the BUILDER the list arrives from a fetch, so on first render it is
+ *     empty. Judging then would red-flag every WhatsApp step for as long as
+ *     that request takes, and an error that appears and then clears on its own
+ *     trains operators to ignore errors.
+ *   - On the SERVER an id that resolves to no row is a template that was
+ *     deleted or belongs to another location. That is the send path's problem,
+ *     and it already refuses per step (resolveApprovedWhatsappTemplate) with a
+ *     better message than a publish-time guess could give.
+ * Either way the answer is the same: say nothing about what you cannot see.
+ *
+ * `stepNumber` is the node's 1-based position in `nodes`, which is how the
+ * operator counts steps — a nodeId like "n7" means nothing in a flow that has
+ * been reordered.
+ */
+function urlButtonErrors(nodes, whatsappTemplates) {
+  const list = Array.isArray(whatsappTemplates) ? whatsappTemplates : []
+  if (list.length === 0) return []
+  const byId = new Map(list.map(t => [t.id, t]))
+  const out = []
+  nodes.forEach((n, i) => {
+    if (n.type !== 'whatsapp') return
+    const c = n.config || {}
+    const template = byId.get(c.template_id ?? c.whatsapp_template_id)
+    if (!template) return
+    const block = urlButtonStepBlock(template, c.variables ?? c.whatsapp_variables ?? {})
+    if (block) out.push({ code: 'url_button_value_missing', nodeId: n.id, message: `Step ${i + 1} (${template.name || 'WhatsApp'}): ${block}` })
+  })
+  return out
+}
+
+export function validateGraph(graph, { whatsappTemplates } = {}) {
   const shape = parseGraphShape(graph)
   if (!shape.ok) {
     return { ok: false, errors: [{ code: 'shape', message: shape.error.message }] }
@@ -110,6 +147,8 @@ export function validateGraph(graph) {
   }
   for (const n of g.nodes) if (colour.get(n.id) === WHITE) dfs(n.id)
   if (cyclic) push('cycle', 'the flow contains a loop — steps must always move forward')
+
+  errors.push(...urlButtonErrors(g.nodes, whatsappTemplates))
 
   return { ok: errors.length === 0, errors }
 }

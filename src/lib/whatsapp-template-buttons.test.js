@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   templateButtonsError, componentsButtonsError,
-  dynamicUrlButtonIndex, urlButtonSendBlock, URL_BUTTON_MAPPING_KEY, normalizeButtonsForMeta,
+  dynamicUrlButtonIndex, urlButtonSendBlock, urlButtonStepBlock, URL_BUTTON_MAPPING_KEY, normalizeButtonsForMeta,
 } from './whatsapp-template-buttons.js'
 
 const quickReply = (text) => ({ type: 'QUICK_REPLY', text })
@@ -201,5 +201,45 @@ describe('normalizeButtonsForMeta', () => {
 
   it('leaves an unknown type alone for the validator to name', () => {
     expect(normalizeButtonsForMeta([{ type: 'MAGIC', text: 'Hi' }])).toEqual([{ type: 'MAGIC', text: 'Hi' }])
+  })
+})
+
+// SEQ-URLBUTTON.1 — the same detection, worded for a sequence STEP. A step is
+// published, not sent: "before sending" is meaningless next to a step that
+// fires weeks from now, one contact at a time.
+describe('urlButtonStepBlock — the sequence-step register', () => {
+  const dynamic = { components: [{ type: 'BUTTONS', buttons: [{ type: 'URL', text: 'Pay now', url: 'https://pay.repset.ie/{{1}}', example: ['x'] }] }] }
+
+  it('blocks on exactly the same condition as the broadcast helper', () => {
+    expect(!!urlButtonStepBlock(dynamic, {})).toBe(!!urlButtonSendBlock(dynamic, {}))
+    expect(!!urlButtonStepBlock(dynamic, { [URL_BUTTON_MAPPING_KEY]: 'x' }))
+      .toBe(!!urlButtonSendBlock(dynamic, { [URL_BUTTON_MAPPING_KEY]: 'x' }))
+    expect(urlButtonStepBlock({ components: [] }, {})).toBeNull()
+    expect(urlButtonStepBlock(null, null)).toBeNull()
+  })
+
+  it('names the button and talks about publishing a step, not sending a blast', () => {
+    const msg = urlButtonStepBlock(dynamic, {})
+    expect(msg).toContain('Pay now')
+    expect(msg).toContain('on this step before publishing')
+    expect(msg).not.toContain('before sending')
+  })
+
+  it('leaves the broadcast wording alone', () => {
+    expect(urlButtonSendBlock(dynamic, {})).toContain('before sending')
+  })
+
+  // The two sentences are built from one template so a copy edit to the
+  // diagnosis or the consequence cannot land on only one of them.
+  it('shares everything but the call to action with the broadcast message', () => {
+    const send = urlButtonSendBlock(dynamic, {})
+    const step = urlButtonStepBlock(dynamic, {})
+    const diagnosis = 'The "Pay now" button\'s link ends in a variable with no value set.'
+    const consequence = '— Meta rejects every message without it.'
+    for (const msg of [send, step]) {
+      expect(msg.startsWith(diagnosis)).toBe(true)
+      expect(msg.endsWith(consequence)).toBe(true)
+    }
+    expect(send).not.toBe(step)
   })
 })

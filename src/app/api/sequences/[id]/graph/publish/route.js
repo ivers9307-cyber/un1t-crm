@@ -5,6 +5,7 @@ import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { compileForPublish } from '@/lib/sequences/graph/persist'
 import { parseGraphShape } from '@/lib/sequences/graph/schema'
 import { validateBody } from '@/lib/validate'
+import { logWarn } from '@/lib/log'
 
 // Permissive — graph is a free-form object validated by compileForPublish.
 const PublishSchema = z.object({
@@ -47,7 +48,36 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: 'Nothing to publish — no graph or draft on this sequence' }, { status: 400 })
   }
 
-  const result = compileForPublish(graph)
+  // SEQ-URLBUTTON.1 — the URL-button rule needs the TEMPLATE, and the graph
+  // carries only an id. Load this location's rows (scoped to the sequence's own
+  // location, so another tenant's template can never satisfy the check) and only
+  // when a WhatsApp step actually names one — most flows have none.
+  const waTemplateIds = [...new Set(
+    (parseGraphShape(graph).data?.nodes || [])
+      .filter(n => n?.type === 'whatsapp')
+      .map(n => n.config?.template_id ?? n.config?.whatsapp_template_id)
+      .filter(Boolean),
+  )]
+  let whatsappTemplates = []
+  if (waTemplateIds.length) {
+    // A sequence with no location_id reads nothing and the gate is simply off —
+    // such a sequence cannot send a WhatsApp step in the first place
+    // (resolveApprovedWhatsappTemplate refuses a template from another
+    // location), so there is nothing here to protect.
+    const { data, error } = await db.from('whatsapp_templates')
+      .select('id, name, components')
+      .eq('location_id', existing.location_id)
+      .in('id', waTemplateIds)
+    // Fail open — a template read that fell over must not block a publish that
+    // is otherwise fine. But say so: silently skipping the gate is how it would
+    // come to look like the gate never worked.
+    if (error) {
+      logWarn('sequences', 'publish: whatsapp_templates read failed, URL-button gate skipped', { sequenceId: params.id, err: error.message })
+    }
+    whatsappTemplates = data || []
+  }
+
+  const result = compileForPublish(graph, { whatsappTemplates })
   if (!result.ok) {
     return NextResponse.json(
       { success: false, error: 'Flow has problems that must be fixed before publishing', issues: result.errors },
