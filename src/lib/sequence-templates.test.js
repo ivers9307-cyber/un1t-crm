@@ -421,7 +421,7 @@ describe('RADAR-DUNNING.1 overdue dunning template', () => {
   })
 })
 
-describe('DUNNING.6 — overdue membership payment → card update reminders', () => {
+describe('DUNNING.6 — overdue membership payment → Pay now reminders', () => {
   const tpl = getTemplate('overdue_payment_dunning')
   it('is a manual-trigger automation (the dunning picker + auto-enrol enrol directly), 14-day cooldown, daytime window', () => {
     expect(tpl.trigger_type).toBe('manual')

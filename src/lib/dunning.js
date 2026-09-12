@@ -131,7 +131,8 @@ export async function maybeEnrolDunning(db, locationId, contactId, { invoiceId, 
       allowReenrol: true,
       metadata: { payment },
     })
-    if (!(res?.enrolled > 0) && !(res?.reactivated > 0)) {
+    // enrolContacts folds reactivated into enrolled (enrol.js), so one check covers both.
+    if (!(res?.enrolled > 0)) {
       // An earlier run is still live (or the same source was refused a re-run):
       // give it the newest invoice's link rather than letting it chase a stale one.
       const { refreshed } = await refreshActiveRunPayment(db, { sequenceId: seqId, contactId, payment })

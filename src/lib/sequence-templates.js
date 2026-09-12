@@ -735,7 +735,7 @@ export const SEQUENCE_TEMPLATES = [
   {
     id: 'overdue_payment_dunning',
     category: 'Recovery',
-    name: 'Overdue membership payment → card update reminders',
+    name: 'Overdue membership payment → Pay now reminders',
     description: 'When a membership payment fails, reminds the member with a Pay now link for that exact invoice: a WhatsApp and an email about an hour after the failure, an email on day 3, and a WhatsApp plus a final email on day 7. Stops as soon as the payment goes through. Install is refused until the WhatsApp template outstanding_payment_link_ is approved at this location. Install, review the copy, publish, then pick it under Churn radar → Payment reminders and turn on automatic starts. Fees and class packs never trigger it. If you installed the earlier card-update version, pause it after re-picking this one under Churn radar → Payment reminders, so only one sends.',
     trigger_type: 'manual',
     trigger_config: {},

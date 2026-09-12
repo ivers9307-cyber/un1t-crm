@@ -75,6 +75,28 @@ export async function enrolContacts({
   if (!Array.isArray(contactIds) || contactIds.length === 0) {
     return { enrolled: 0, skipped: 0, reactivated: 0 }
   }
+
+  // PAYLINK.3 — a plain object (not array/null) rides the row; anything
+  // else (omitted, null) leaves the column untouched. PAYLINK.3b — a given
+  // but non-object value (string/number/array) is a caller mistake, not a
+  // silent no-op: warn so it surfaces, then treat it the same as omitted.
+  let runMeta = null
+  if (metadata != null) {
+    if (typeof metadata === 'object' && !Array.isArray(metadata)) {
+      runMeta = metadata
+    } else {
+      logWarn('enrol', 'metadata ignored: not a plain object', { sourceType })
+    }
+  }
+
+  // PAYLINK.3b — metadata exists to carry ONE member's payment link; a
+  // batch write sharing one object across N rows is never correct, so
+  // refuse it outright rather than fan it out silently. Checked up front,
+  // next to the contactIds guard, so a misuse fails before any DB read.
+  if (runMeta && contactIds.length > 1) {
+    throw new Error('enrol: metadata is per-contact; a batch enrolment cannot share it')
+  }
+
   const db = createServerClient()
 
   // Tier 1 dedup — active enrolments.
@@ -187,26 +209,6 @@ export async function enrolContacts({
       exemptSkipped = exempt.size
       candidateIds = candidateIds.filter(id => !exempt.has(id))
     }
-  }
-
-  // PAYLINK.3 — a plain object (not array/null) rides the row; anything
-  // else (omitted, null) leaves the column untouched. PAYLINK.3b — a given
-  // but non-object value (string/number/array) is a caller mistake, not a
-  // silent no-op: warn so it surfaces, then treat it the same as omitted.
-  let runMeta = null
-  if (metadata != null) {
-    if (typeof metadata === 'object' && !Array.isArray(metadata)) {
-      runMeta = metadata
-    } else {
-      logWarn('enrol', 'metadata ignored: not a plain object', { sourceType })
-    }
-  }
-
-  // PAYLINK.3b — metadata exists to carry ONE member's payment link; a
-  // batch write sharing one object across N rows is never correct, so
-  // refuse it outright rather than fan it out silently.
-  if (runMeta && contactIds.length > 1) {
-    throw new Error('enrol: metadata is per-contact; a batch enrolment cannot share it')
   }
 
   const toInsert = candidateIds

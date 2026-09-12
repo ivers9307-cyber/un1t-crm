@@ -53,6 +53,8 @@ import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+// PAYLINK — this route awaits a Glofox pay-link fetch (8s abortable budget) inline; the platform default would cut a slow PAST_DUE event off mid-enrolment.
+export const maxDuration = 30
 
 const SIGNATURE_HEADER_CANDIDATES = [
   'signature',
