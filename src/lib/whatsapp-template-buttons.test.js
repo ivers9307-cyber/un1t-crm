@@ -228,4 +228,18 @@ describe('urlButtonStepBlock — the sequence-step register', () => {
   it('leaves the broadcast wording alone', () => {
     expect(urlButtonSendBlock(dynamic, {})).toContain('before sending')
   })
+
+  // The two sentences are built from one template so a copy edit to the
+  // diagnosis or the consequence cannot land on only one of them.
+  it('shares everything but the call to action with the broadcast message', () => {
+    const send = urlButtonSendBlock(dynamic, {})
+    const step = urlButtonStepBlock(dynamic, {})
+    const diagnosis = 'The "Pay now" button\'s link ends in a variable with no value set.'
+    const consequence = '— Meta rejects every message without it.'
+    for (const msg of [send, step]) {
+      expect(msg.startsWith(diagnosis)).toBe(true)
+      expect(msg.endsWith(consequence)).toBe(true)
+    }
+    expect(send).not.toBe(step)
+  })
 })

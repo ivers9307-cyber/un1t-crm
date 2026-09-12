@@ -39,10 +39,17 @@ function requiredConfigError(node) {
  * SEQ-URLBUTTON.1 — the URL-button rule needs the TEMPLATE, and the graph stores
  * only an id, so the caller supplies the location's rows and this stays pure.
  *
- * Fail-open on an id that isn't in the list: the builder loads its templates
- * asynchronously, so red-flagging a step while the list is still empty would
- * accuse every WhatsApp step for the first few hundred milliseconds. An
- * unreadable template is the send path's problem (it already refuses per step).
+ * Fail-open on an id that isn't in the supplied list — for two different
+ * reasons, and both matter:
+ *   - In the BUILDER the list arrives from a fetch, so on first render it is
+ *     empty. Judging then would red-flag every WhatsApp step for as long as
+ *     that request takes, and an error that appears and then clears on its own
+ *     trains operators to ignore errors.
+ *   - On the SERVER an id that resolves to no row is a template that was
+ *     deleted or belongs to another location. That is the send path's problem,
+ *     and it already refuses per step (resolveApprovedWhatsappTemplate) with a
+ *     better message than a publish-time guess could give.
+ * Either way the answer is the same: say nothing about what you cannot see.
  *
  * `stepNumber` is the node's 1-based position in `nodes`, which is how the
  * operator counts steps — a nodeId like "n7" means nothing in a flow that has

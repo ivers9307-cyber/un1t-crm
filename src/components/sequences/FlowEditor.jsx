@@ -56,7 +56,12 @@ export default function FlowEditor({ initialGraph, sequence }) {
   }, [sequence?.location_id])
 
   const graph = useMemo(() => treeToGraph(trigger, tree), [trigger, tree])
-  const validation = useMemo(() => validateGraph(graph), [graph])
+  // SEQ-URLBUTTON.1 — the templates fetched above for the step picker are also
+  // what the URL-button rule needs, so hand them over: the operator sees the
+  // missing link value as a red flag on the card, instead of pressing Publish
+  // and collecting a 422 that reads like a broken button. Empty until the fetch
+  // lands, and the rule says nothing about an id it cannot resolve.
+  const validation = useMemo(() => validateGraph(graph, { whatsappTemplates: templates }), [graph, templates])
   // SEQ-GLOFOX.2 — platform tags + tags this graph itself applies, for the
   // branch editor's phantom-tag warning (recomputes as apply_tag nodes change).
   const tagVocabulary = useMemo(() => knownTagVocabulary(graph), [graph])

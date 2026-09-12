@@ -23,10 +23,12 @@ vi.mock('@/lib/auth', () => ({
   },
 }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
+vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
 
 import { POST } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { logWarn } from '@/lib/log'
 
 const SEQ_ID = 'a0000000-0000-0000-0000-000000000001'
 const LOC_ID = 'c0000000-0000-0000-0000-000000000003'
@@ -55,10 +57,10 @@ const smsGraph = () => ({
 })
 
 // email_sequences row load → whatsapp_templates lookup → steps replace → update.
-function mockDb({ templates = [] } = {}) {
+function mockDb({ templates = [], templateError = null } = {}) {
   const insertSpy = vi.fn(() => Promise.resolve({ error: null }))
   const templateSelect = vi.fn(() => ({
-    eq: vi.fn(() => ({ in: vi.fn(() => Promise.resolve({ data: templates, error: null })) })),
+    eq: vi.fn(() => ({ in: vi.fn(() => Promise.resolve({ data: templateError ? null : templates, error: templateError })) })),
   }))
   const db = {
     from: vi.fn((table) => {
@@ -151,6 +153,30 @@ describe('publish gate — dynamic URL button value', () => {
 
     expect(res.status).toBe(200)
     expect(db.from).not.toHaveBeenCalledWith('whatsapp_templates')
+  })
+
+  // Failing open is right — a template read that fell over must not block an
+  // otherwise-fine publish — but a gate that silently stops running is a gate
+  // that will later look like it never worked.
+  it('logs a warning when the template read fails, and still publishes', async () => {
+    const { db } = mockDb({ templateError: { message: 'connection reset' } })
+    createServerClient.mockReturnValue(db)
+
+    const res = await publish(waGraph({}))
+
+    expect(res.status).toBe(200)
+    expect(logWarn).toHaveBeenCalledWith(
+      'sequences',
+      expect.stringContaining('URL-button gate skipped'),
+      expect.objectContaining({ sequenceId: SEQ_ID, err: 'connection reset' }),
+    )
+  })
+
+  it('does not warn on a clean read', async () => {
+    const { db } = mockDb({ templates: [DYNAMIC_TPL] })
+    createServerClient.mockReturnValue(db)
+    await publish(waGraph({ url_button: 'x' }))
+    expect(logWarn).not.toHaveBeenCalled()
   })
 
   it('publishes when the template row cannot be read — it must not block on an unknown template', async () => {

@@ -5,6 +5,7 @@ import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { compileForPublish } from '@/lib/sequences/graph/persist'
 import { parseGraphShape } from '@/lib/sequences/graph/schema'
 import { validateBody } from '@/lib/validate'
+import { logWarn } from '@/lib/log'
 
 // Permissive — graph is a free-form object validated by compileForPublish.
 const PublishSchema = z.object({
@@ -59,10 +60,20 @@ export async function POST(request, props) {
   )]
   let whatsappTemplates = []
   if (waTemplateIds.length) {
-    const { data } = await db.from('whatsapp_templates')
+    // A sequence with no location_id reads nothing and the gate is simply off —
+    // such a sequence cannot send a WhatsApp step in the first place
+    // (resolveApprovedWhatsappTemplate refuses a template from another
+    // location), so there is nothing here to protect.
+    const { data, error } = await db.from('whatsapp_templates')
       .select('id, name, components')
       .eq('location_id', existing.location_id)
       .in('id', waTemplateIds)
+    // Fail open — a template read that fell over must not block a publish that
+    // is otherwise fine. But say so: silently skipping the gate is how it would
+    // come to look like the gate never worked.
+    if (error) {
+      logWarn('sequences', 'publish: whatsapp_templates read failed, URL-button gate skipped', { sequenceId: params.id, err: error.message })
+    }
     whatsappTemplates = data || []
   }
 
