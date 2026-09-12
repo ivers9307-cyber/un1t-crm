@@ -53,6 +53,8 @@ import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+// PAYLINK — this route awaits a Glofox pay-link fetch (8s abortable budget) inline; the platform default would cut a slow PAST_DUE event off mid-enrolment.
+export const maxDuration = 30
 
 const SIGNATURE_HEADER_CANDIDATES = [
   'signature',
@@ -322,9 +324,16 @@ export async function POST(request) {
       const action = dunningActionFor(invStatus, ltvResult.is_membership)
       try {
         if (action === 'enrol') {
-          dunningResult = await maybeEnrolDunning(db, creds.locationId, contact.id, { invoiceId: ltvResult.invoice_id, isMembership: true })
+          dunningResult = await maybeEnrolDunning(db, creds.locationId, contact.id, {
+            invoiceId: ltvResult.invoice_id, isMembership: true,
+            // PAYLINK.4 — the invoice's own user id when the parser carried it;
+            // capturePaymentForRun falls back to the contact's linked id.
+            glofoxUserId: ltvResult.glofox_user_id || null,
+          })
         } else if (action === 'exit') {
-          dunningResult = await exitDunningForContact(db, creds.locationId, contact.id, `invoice_${invStatus.toLowerCase()}`)
+          // PAYLINK.4b — scope the exit to THIS invoice: a run refreshed onto
+          // a newer failed invoice must not be cancelled by an older one settling.
+          dunningResult = await exitDunningForContact(db, creds.locationId, contact.id, `invoice_${invStatus.toLowerCase()}`, { invoiceId: ltvResult.invoice_id })
         }
       } catch (e) {
         logWarn('glofox-webhook', 'reactive dunning threw', { err: e?.message, contact_id: contact.id })

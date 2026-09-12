@@ -25,6 +25,7 @@
 
 import { createServerClient } from '@/lib/supabase'
 import { selectAllByKeys } from '@/lib/select-all'
+import { logWarn } from '@/lib/log'
 import { findBlockedByCooldown, planReenrolments } from './cooldown.js'
 
 // Operator-initiated sourceTypes that bypass the automations_exempt gate.
@@ -51,14 +52,51 @@ const MANUAL_LIKE_SOURCE_TYPES = new Set(['manual', 'churn_radar'])
  *   (ENROLDEDUP.1), and a member whose card fails again months later must be
  *   reminded again. Every other caller keeps the one-enrolment semantics —
  *   this is deliberately not a cohort-wide re-entry.
+ * @param {object} [args.metadata=null]  PAYLINK.3 — per-run metadata written
+ *   onto the enrolment row (e.g. the overdue reminder's `payment` object:
+ *   `{ invoice_id, link, link_suffix, amount, ... }`). Written on a fresh
+ *   insert only when given (no `metadata` key on the row otherwise); on a
+ *   DUNNING.2 re-activation it is merged OVER the old run's metadata, and
+ *   `previous_runs` is always kept regardless (the caller cannot forge it —
+ *   the real history always wins that key). PAYLINK.3b — `metadata` is
+ *   per-contact (it exists to carry ONE member's payment link): passing it
+ *   with more than one `contactIds` entry THROWS rather than fan it out
+ *   across a batch. A non-plain-object value (string/number/array) is not
+ *   silently dropped — it is logged via `logWarn` and then ignored, same as
+ *   no metadata was given. `metadata` must be JSON-serialisable (it lands on
+ *   a jsonb column): an `undefined` value is dropped and a `Date` is stored
+ *   as its `toISOString()` string, exactly as `JSON.stringify` would.
  * @returns {Promise<{ enrolled: number, skipped: number, reactivated: number }>}
  */
 export async function enrolContacts({
   sequenceId, contactIds, sourceType = 'manual', sourceRef = null, allowReenrol = false,
+  metadata = null,
 }) {
   if (!Array.isArray(contactIds) || contactIds.length === 0) {
     return { enrolled: 0, skipped: 0, reactivated: 0 }
   }
+
+  // PAYLINK.3 — a plain object (not array/null) rides the row; anything
+  // else (omitted, null) leaves the column untouched. PAYLINK.3b — a given
+  // but non-object value (string/number/array) is a caller mistake, not a
+  // silent no-op: warn so it surfaces, then treat it the same as omitted.
+  let runMeta = null
+  if (metadata != null) {
+    if (typeof metadata === 'object' && !Array.isArray(metadata)) {
+      runMeta = metadata
+    } else {
+      logWarn('enrol', 'metadata ignored: not a plain object', { sourceType })
+    }
+  }
+
+  // PAYLINK.3b — metadata exists to carry ONE member's payment link; a
+  // batch write sharing one object across N rows is never correct, so
+  // refuse it outright rather than fan it out silently. Checked up front,
+  // next to the contactIds guard, so a misuse fails before any DB read.
+  if (runMeta && contactIds.length > 1) {
+    throw new Error('enrol: metadata is per-contact; a batch enrolment cannot share it')
+  }
+
   const db = createServerClient()
 
   // Tier 1 dedup — active enrolments.
@@ -182,6 +220,7 @@ export async function enrolContacts({
       next_step_at: new Date().toISOString(), // fire on next cron tick
       source_type: sourceType,
       source_ref: sourceRef,
+      ...(runMeta ? { metadata: runMeta } : {}),
     }))
 
   // DUNNING.2 — re-activate in place. One UPDATE per contact (dunning is
@@ -214,6 +253,7 @@ export async function enrolContacts({
           source_ref: sourceRef,
           metadata: {
             ...prevMeta,
+            ...(runMeta || {}),
             previous_runs: [
               ...previousRuns,
               {

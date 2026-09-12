@@ -43,6 +43,8 @@ import { getLocationBranding } from '@/lib/location-branding'
 import { isFrequencyCapped, frequencyCapDeferUntil, FrequencyCapDeferral, stampMarketingTouch } from '@/lib/frequency-cap'
 import { overlayConnections } from '@/lib/connection-registry'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
+import { paymentFromEnrollment, paymentCtaHtml, payAmountPhrase } from '@/lib/dunning-payment'
+import { URL_BUTTON_MAPPING_KEY, dynamicUrlButtonIndex } from '@/lib/whatsapp-template-buttons'
 
 // ── DUNNING.3 — transactional lane ───────────────────────────────
 // A dunning enrolment is a SERVICE message about the member's own account
@@ -304,7 +306,14 @@ export async function sendEmailStep(db, { enrollment, step, sequence, contact, f
     logWarn('sequences', `booking token not minted for ${contact.id}: ${e.message || e}`, { contactId: contact.id })
   }
 
-  const mergedSubject = applyMergeTags(subject, contact, { location_name: locationName })
+  // PAYLINK.7 — the run's payment (if any) resolves the two payment merge
+  // tags; both fragments are empty for every non-dunning email, so a body
+  // that never uses them is unaffected. payAmountPhrase(payment) is computed
+  // once and shared by both calls — the subject and body must never disagree
+  // on which run's amount they're quoting.
+  const payment = paymentFromEnrollment(enrollment)
+  const payPhrase = payAmountPhrase(payment)
+  const mergedSubject = applyMergeTags(subject, contact, { location_name: locationName, pay_amount_phrase: payPhrase })
   const merged = applyMergeTags(html, contact, {
     location_name: locationName,
     booking_token: bookingToken,
@@ -312,6 +321,8 @@ export async function sendEmailStep(db, { enrollment, step, sequence, contact, f
     // Derived from the unsubscribe URL because both endpoints resolve the same
     // token column. Safe to split now that the null case returned above.
     preference_url: `${baseUrl}/preferences/${unsubscribeUrl.split('/unsubscribe/')[1]}`,
+    pay_amount_phrase: payPhrase,
+    payment_cta: paymentCtaHtml(payment),
   })
   const mergedHtml = appendUnsubscribeFooter(merged, unsubscribeUrl)
 
@@ -461,14 +472,56 @@ export async function sendWhatsappStep(db, { enrollment, step, sequence, contact
   // Nudge, whose WhatsApp step failed while broadcasts sent the same
   // template fine (they always passed locationId).
   const variableMapping = step.whatsapp_variables || {}
+  // PAYLINK.6 — the overdue-payment reminder's pay link rides on the run. A
+  // template whose URL button wants the invoice id cannot be sent without one
+  // (Meta rejects a dynamic-URL send with no suffix, and a button to an
+  // unpayable invoice is worse than silence), and the approved body reads
+  // "payment of {{2}}", so an empty amount would ship a hole → recorded skip
+  // either way; the run's email steps still go out with the card-update
+  // wording. Templates that do not use the pay-link button are unaffected.
+  const payment = paymentFromEnrollment(enrollment)
+  if (variableMapping[URL_BUTTON_MAPPING_KEY] === 'pay_link_suffix' && !payment?.link_suffix) {
+    await recordStepSkip(db, { contact, sequence, step, channel: 'WhatsApp', reason: 'no payment link for this invoice' })
+    return null
+  }
+  // PAYLINK.6b — keyed on the MAPPING (does this step actually place
+  // pay_amount somewhere in the body?), not on the url_button mapping — a
+  // pay-link step that maps the button but not {{2}} to pay_amount has no
+  // "payment of {{2}}" wording to protect, so an empty amount must not
+  // block its send.
+  if (Object.values(variableMapping).includes('pay_amount') && !payment?.amount) {
+    await recordStepSkip(db, { contact, sequence, step, channel: 'WhatsApp', reason: 'no payment amount for this invoice' })
+    return null
+  }
   const branding = await getLocationBranding(db, sequence.location_id)
   const components = buildTemplateComponents(
     template,
     contact,
     variableMapping,
     step.whatsapp_header_media_url || null,
-    { companyName: branding.companyName, locationId: sequence.location_id },
+    { companyName: branding.companyName, locationId: sequence.location_id, payment },
   )
+  // PAYLINK.6b — the general case the two checks above cover only for the
+  // pay-link feature specifically: ANY template whose approved link ends in
+  // a variable must ship a url-button component or Meta rejects the whole
+  // send (132012), which throws, feeds error_count, and can auto-pause the
+  // enrolment — killing its email steps too. An unmapped field, a wiped
+  // `variables` blob from the node editor, or a whitespace typo all resolve
+  // to nothing here just as surely as a missing payment link does, so treat
+  // it the same way: a recorded skip, never a throw.
+  if (dynamicUrlButtonIndex(template.components) >= 0
+    && !components.some((c) => c.type === 'button' && c.sub_type === 'url')) {
+    // PAYLINK.7 — this is an operator config fault (an unmapped field, a
+    // wiped `variables` blob, a whitespace typo), not a per-contact one — it
+    // will keep happening to every contact on the step until someone fixes
+    // the mapping. A recordStepSkip alone only reaches THIS contact's
+    // timeline; log it too so it surfaces to whoever watches the logs.
+    logWarn('sequences', 'WhatsApp step skipped: dynamic URL button has no value', {
+      sequenceId: sequence.id, stepId: step.id, contactId: contact.id,
+    })
+    await recordStepSkip(db, { contact, sequence, step, channel: 'WhatsApp', reason: "no value for the template's link button" })
+    return null
+  }
 
   // COMMS-AUDIT 2026-07-10: route from the sequence location's
   // whatsapp_numbers row. Without { locationId } config resolution
@@ -507,7 +560,7 @@ export async function sendWhatsappStep(db, { enrollment, step, sequence, contact
       message_type: 'template',
       template_name: template.name,
       template_variables: variableMapping,
-      body: renderTemplateBody(template, contact, variableMapping, { companyName: branding.companyName }),
+      body: renderTemplateBody(template, contact, variableMapping, { companyName: branding.companyName, payment }),
       status: 'sent',
       sent_at: new Date().toISOString(),
     }).select('id').single()

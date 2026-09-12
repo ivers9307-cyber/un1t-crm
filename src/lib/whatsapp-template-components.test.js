@@ -3,7 +3,7 @@
 // ship a matching header parameter, falling back to the URL persisted
 // on the template row when the caller has no per-send override.
 import { describe, it, expect } from 'vitest'
-import { buildTemplateComponents, resolveTemplateVariableValues } from './whatsapp.js'
+import { buildTemplateComponents, resolveTemplateVariableValues, renderTemplateBody } from './whatsapp.js'
 
 const VIDEO_TEMPLATE = {
   name: 'consultation_booking',
@@ -64,7 +64,7 @@ describe('buildTemplateComponents — media headers', () => {
   })
 })
 
-import { renderTemplateBody, substituteTemplateBody, parseConsentKeyword } from './whatsapp.js'
+import { substituteTemplateBody, parseConsentKeyword } from './whatsapp.js'
 
 describe('renderTemplateBody / substituteTemplateBody', () => {
   it('renders the body text a contact actually receives', () => {
@@ -147,5 +147,34 @@ describe('headerComponentFor', () => {
     expect(headerComponentFor([{ type: 'HEADER', format: 'TEXT', text: 'Hello' }], 'https://x.test/v.mp4')).toBe(null)
     expect(headerComponentFor([{ type: 'BODY', text: 'Hi' }], 'https://x.test/v.mp4')).toBe(null)
     expect(headerComponentFor(null, 'https://x.test/v.mp4')).toBe(null)
+  })
+})
+
+describe('PAYLINK.6 — reserved payment names resolve from opts.payment, never the contact', () => {
+  const PAY_TEMPLATE = {
+    name: 'outstanding_payment_link_',
+    components: [
+      { type: 'BODY', text: 'Hi {{1}}, your membership payment of {{2}} did not go through.' },
+      { type: 'BUTTONS', buttons: [{ type: 'URL', text: 'Pay now', url: 'https://pay.glofox.com/payment-collector/v2/#/i/{{1}}', example: ['abc'] }] },
+    ],
+  }
+  const mapping = { '1': 'first_name', '2': 'pay_amount', url_button: 'pay_link_suffix' }
+  const payment = { invoice_id: '0f187762-acc8-42d2-860c-43cbe1477df0', link: 'https://pay.glofox.com/payment-collector/v2/#/i/0f187762-acc8-42d2-860c-43cbe1477df0', link_suffix: '0f187762-acc8-42d2-860c-43cbe1477df0', amount: '€209' }
+
+  it('fills {{2}} with the amount and the URL button with the link suffix (never the contact, never invoice_id)', () => {
+    const c = buildTemplateComponents(PAY_TEMPLATE, { ...contact, pay_amount: 'SHOULD-NOT-LEAK', pay_link_suffix: 'NOPE' }, mapping, null, { payment: { ...payment, invoice_id: 'DIFFERENT' } })
+    expect(c.find((x) => x.type === 'body').parameters.map((p) => p.text)).toEqual(['Richard', '€209'])
+    expect(c.find((x) => x.type === 'button')).toEqual({ type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: '0f187762-acc8-42d2-860c-43cbe1477df0' }] })
+  })
+
+  it('with no payment both resolve empty: the amount becomes the blank placeholder and the button is omitted', () => {
+    const c = buildTemplateComponents(PAY_TEMPLATE, contact, mapping, null, {})
+    expect(c.find((x) => x.type === 'body').parameters.map((p) => p.text)).toEqual(['Richard', ' '])
+    expect(c.find((x) => x.type === 'button')).toBeUndefined()
+    expect(resolveTemplateVariableValues(PAY_TEMPLATE, contact, mapping, {})).toEqual(['Richard', ''])
+  })
+
+  it('renderTemplateBody persists the amount, so the inbox thread shows what was sent', () => {
+    expect(renderTemplateBody(PAY_TEMPLATE, contact, mapping, { payment })).toBe('Hi Richard, your membership payment of €209 did not go through.')
   })
 })

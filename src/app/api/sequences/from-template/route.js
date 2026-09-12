@@ -10,7 +10,7 @@
 // the operator's active location.
 
 import { NextResponse } from 'next/server'
-import { resolveWhatsappTemplateIds } from '@/lib/sequences/template-install'
+import { resolveWhatsappTemplateIds, missingWhatsappTemplateNames } from '@/lib/sequences/template-install'
 import { randomBytes } from 'node:crypto'
 import { z } from 'zod'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
@@ -54,6 +54,28 @@ export async function POST(request) {
   }
 
   const db = createServerClient()
+  // DUNNING.6 / PAYLINK.8 — resolve WhatsApp steps named by template against
+  // this location's approved templates BEFORE writing anything: a name with
+  // no approved template here is a clear refusal, not a half-installed run.
+  let steps = tpl.steps || []
+  if (steps.some((st) => st?.step_type === 'whatsapp' && st.whatsapp_template_name)) {
+    const { data: waRows, error: waErr } = await db
+      .from('whatsapp_templates')
+      .select('id, name, status')
+      .eq('location_id', locationId)
+    if (waErr) {
+      return NextResponse.json({ success: false, error: `Could not read this location's WhatsApp templates: ${waErr.message}` }, { status: 500 })
+    }
+    const missing = missingWhatsappTemplateNames(steps, waRows || [])
+    if (missing.length > 0) {
+      return NextResponse.json({
+        success: false,
+        error: `WhatsApp template "${missing[0]}" is not approved at this location yet. Create it under WhatsApp → Templates, wait for Meta's approval, then install.`,
+      }, { status: 409 })
+    }
+    steps = resolveWhatsappTemplateIds(steps, waRows || [])
+  }
+
   // FLOW2 — auto-generate webhook_token when the template uses
   // the webhook trigger so the operator gets a working URL the
   // moment they install (no need to save once first to mint one).
@@ -81,17 +103,7 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: seqErr.message }, { status: 500 })
   }
 
-  // 2. Insert each step in order.
-  // DUNNING.6 — resolve WhatsApp steps named by template (gallery templates
-  // can't carry a location's uuid) against this location's approved templates.
-  let steps = tpl.steps || []
-  if (steps.some((st) => st?.step_type === 'whatsapp' && st.whatsapp_template_name)) {
-    const { data: waRows } = await db
-      .from('whatsapp_templates')
-      .select('id, name, status')
-      .eq('location_id', locationId)
-    steps = resolveWhatsappTemplateIds(steps, waRows || [])
-  }
+  // 2. Insert each step in order (WhatsApp steps already resolved above).
   const stepRows = steps.map((s, i) => ({
     sequence_id: seq.id,
     step_order: i + 1,
