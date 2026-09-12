@@ -216,6 +216,14 @@ describe('refreshActiveRunPayment (IO, never throws)', () => {
     expect(db.updateCalls[0].values).toEqual({ metadata: { payment: noLinkPayment } })
   })
 
+  it('PAYLINK.5b — a no-invoice payment (e.g. a slipping click with nothing PAST_DUE) never downgrades a live run\'s link', async () => {
+    const db = dbForRefresh({ row: { id: 'e1', metadata: { payment: { invoice_id: 'inv-A', link: 'https://pay.test/inv-A' } } } })
+    const noInvoicePayment = { invoice_id: null, link: null, link_suffix: null, amount: '', error: 'no_invoice_id' }
+    const out = await refreshActiveRunPayment(db, { sequenceId: 'seq1', contactId: 'c1', payment: noInvoicePayment })
+    expect(out).toEqual({ refreshed: 0, reason: 'kept_existing_link' })
+    expect(db.updateCalls).toHaveLength(0)
+  })
+
   it('no active row → { refreshed: 0 }, no update call', async () => {
     const db = dbForRefresh({ row: null })
     const out = await refreshActiveRunPayment(db, { sequenceId: 'seq1', contactId: 'c1', payment: NEW_PAYMENT })

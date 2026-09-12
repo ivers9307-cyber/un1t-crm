@@ -127,8 +127,15 @@ export async function refreshActiveRunPayment(db, { sequenceId, contactId, payme
     // INVOICE, keep the existing one rather than blanking it (a transient
     // Glofox failure on the refresh call must not cost a member their pay
     // link). A genuinely newer invoice always overwrites, link or not.
+    // PAYLINK.5b — a payment with NO invoice id at all (e.g. a manual
+    // "Send payment reminder" click on a payment-slipping member with no
+    // PAST_DUE invoice) is not "a different invoice" either — it is "we
+    // have nothing to point this run at" — so it must keep the existing
+    // link too, not just the same-invoice case. Widen the comparison: keep
+    // whenever the new payment carries no invoice id, OR the invoice ids
+    // match.
     const prevPayment = prev.payment && typeof prev.payment === 'object' ? prev.payment : null
-    if (!payment.link && prevPayment?.invoice_id === payment.invoice_id && prevPayment?.link) {
+    if (!payment.link && prevPayment?.link && (!payment.invoice_id || prevPayment?.invoice_id === payment.invoice_id)) {
       return { refreshed: 0, reason: 'kept_existing_link' }
     }
     const { data: updated, error: updErr } = await db

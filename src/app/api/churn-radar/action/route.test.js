@@ -97,8 +97,8 @@ describe('POST /api/churn-radar/action — payment_reminder pay-link capture', (
     expect(json).toMatchObject({ success: true, data: { action: 'payment_reminder' } })
     expect(json.data.already_enrolled).toBeUndefined()
 
-    // Ordered newest-first.
-    expect(calls).toContainEqual({ table: 'glofox_invoices', method: 'order', args: ['invoice_date', { ascending: false }] })
+    // Ordered newest-first, nulls last (a null invoice_date can never win).
+    expect(calls).toContainEqual({ table: 'glofox_invoices', method: 'order', args: ['invoice_date', { ascending: false, nullsFirst: false }] })
 
     // capturePaymentForRun got the NEWEST invoice's id + glofox_user_id.
     expect(capturePaymentForRun).toHaveBeenCalledWith(db, {
@@ -134,5 +134,83 @@ describe('POST /api/churn-radar/action — payment_reminder pay-link capture', (
 
     // Idempotent no-op — no audit row written.
     expect(calls.some((c) => c.table === 'churn_radar_actions' && c.method === 'insert')).toBe(false)
+  })
+
+  it('(c) PAYLINK.5b — a slipping click with no PAST_DUE invoice never refreshes a live run: refreshed stays 0, refreshActiveRunPayment is not called', async () => {
+    db = mockDb({
+      contacts: { data: CONTACT, error: null },
+      locations: { data: { dunning_sequence_id: 'seq-1' }, error: null },
+      glofox_invoices: { data: [], error: null }, // nothing PAST_DUE — a "slipping" member
+      email_sequences: { data: SEQ, error: null },
+    })
+    capturePaymentForRun.mockResolvedValue({ payment: { invoice_id: null, link: null, error: 'no_invoice_id' } })
+    enrolContacts.mockResolvedValue({ enrolled: 0 })
+
+    const res = await POST(req({ contact_id: 'c1', action: 'payment_reminder' }))
+    const json = await res.json()
+
+    expect(res.status).toBe(200)
+    // capturePaymentForRun still runs (with no invoice), but nothing calls
+    // the library refresh — there's nothing to point the live run at.
+    expect(refreshActiveRunPayment).not.toHaveBeenCalled()
+    expect(json).toMatchObject({
+      success: true,
+      data: { action: 'payment_reminder', already_enrolled: true, refreshed: 0 },
+    })
+    expect(json.data.reason).toBeUndefined()
+  })
+
+  it('(d) PAYLINK.5b — an invoice read error surfaces as 502, before any Glofox call or enrol', async () => {
+    db = mockDb({
+      contacts: { data: CONTACT, error: null },
+      locations: { data: { dunning_sequence_id: 'seq-1' }, error: null },
+      glofox_invoices: { data: null, error: { message: 'boom' } },
+      email_sequences: { data: SEQ, error: null },
+    })
+
+    const res = await POST(req({ contact_id: 'c1', action: 'payment_reminder' }))
+    const json = await res.json()
+
+    expect(res.status).toBe(502)
+    expect(json.success).toBe(false)
+    expect(json.error).toMatch(/boom/)
+    expect(capturePaymentForRun).not.toHaveBeenCalled()
+    expect(enrolContacts).not.toHaveBeenCalled()
+  })
+
+  it('(e) PAYLINK.5b — a newer non-membership fee never outranks the newest membership invoice', async () => {
+    db = mockDb({
+      contacts: { data: CONTACT, error: null },
+      locations: { data: { dunning_sequence_id: 'seq-1' }, error: null },
+      glofox_invoices: {
+        data: [
+          // A CUSTOM_CHARGE fee dated AFTER the membership invoice — not a
+          // membership debt, so it must never become newestDebt.
+          { id: 'inv-fee', line_item_subtypes: 'CUSTOM_CHARGE', invoice_date: '2026-09-11T00:00:00Z', glofox_user_id: 'gfx-1' },
+          ...INVOICES,
+        ],
+        error: null,
+      },
+      email_sequences: { data: SEQ, error: null },
+    })
+    capturePaymentForRun.mockResolvedValue({ payment: PAYMENT })
+    enrolContacts.mockResolvedValue({ enrolled: 1 })
+
+    await POST(req({ contact_id: 'c1', action: 'payment_reminder' }))
+
+    expect(capturePaymentForRun).toHaveBeenCalledWith(db, {
+      locationId: 'loc-1', contactId: 'c1', invoiceId: 'inv-new', glofoxUserId: 'gfx-1',
+    })
+  })
+
+  it('(f) PAYLINK.5b — the refresh reason is passed through onto the response', async () => {
+    capturePaymentForRun.mockResolvedValue({ payment: PAYMENT })
+    enrolContacts.mockResolvedValue({ enrolled: 0 })
+    refreshActiveRunPayment.mockResolvedValue({ refreshed: 0, reason: 'kept_existing_link' })
+
+    const res = await POST(req({ contact_id: 'c1', action: 'payment_reminder' }))
+    const json = await res.json()
+
+    expect(json.data).toMatchObject({ already_enrolled: true, refreshed: 0, reason: 'kept_existing_link' })
   })
 })

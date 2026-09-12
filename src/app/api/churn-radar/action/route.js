@@ -215,13 +215,19 @@ export async function POST(request) {
     // MEMBERSHIP invoice (the radar's Overdue category), not any past-due
     // row: a failed €5 fee is an unpaid charge, and the reminder copy says
     // "membership payment". Same classifier as fetchPastDue.
-    const { data: pastDueInv } = await db
+    const { data: pastDueInv, error: invErr } = await db
       .from('glofox_invoices')
       .select('id, line_item_subtypes, invoice_date, glofox_user_id, glofox_event:raw_payload->candidate->>glofoxEvent')
       .eq('contact_id', contactId)
       .eq('status', 'PAST_DUE')
-      .order('invoice_date', { ascending: false })
+      .order('invoice_date', { ascending: false, nullsFirst: false })
       .limit(50)
+    if (invErr) {
+      return NextResponse.json({
+        success: false,
+        error: `Could not read the member's invoices: ${invErr.message}`,
+      }, { status: 502 })
+    }
     const membershipDebts = (pastDueInv || []).filter(isMembershipInvoice)
     const hasMembershipDebt = membershipDebts.length > 0
     // PAYLINK.5 — the newest PAST_DUE membership invoice is the one the pay
@@ -287,9 +293,20 @@ export async function POST(request) {
       // PAYLINK.5 — the member is already mid-run (or the same source was
       // refused a re-run): point that run at the newest invoice's link rather
       // than letting it chase a stale one.
-      const { refreshed } = await refreshActiveRunPayment(db, { sequenceId: seqId, contactId, payment })
+      // PAYLINK.5b — a slipping click with no PAST_DUE membership invoice
+      // (newestDebt null) has nothing to point the run at, so skip the
+      // library call entirely rather than pushing a no-invoice payment at
+      // it (refreshActiveRunPayment's own downgrade guard covers the same
+      // case for every other caller, but there is simply no refresh to do
+      // here).
+      const { refreshed, reason } = newestDebt
+        ? await refreshActiveRunPayment(db, { sequenceId: seqId, contactId, payment })
+        : { refreshed: 0 }
       invalidateRadar('churn', locationId)
-      return NextResponse.json({ success: true, data: { action, already_enrolled: true, refreshed } })
+      return NextResponse.json({
+        success: true,
+        data: { action, already_enrolled: true, refreshed, ...(reason ? { reason } : {}) },
+      })
     }
     logRow.note = note || `Dunning (${kind}) → ${seq.name}`
   }

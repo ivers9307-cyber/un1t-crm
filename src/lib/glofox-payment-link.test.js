@@ -151,3 +151,27 @@ describe('getGlofoxInvoicePaymentLink', () => {
       .toMatchObject({ ok: false, status: 0, link: null, error: 'socket hang up' })
   })
 })
+
+// PAYLINK.5b — the 8s payment-link timebox (GLOFOX_PAYMENT_LINK_TIMEOUT_MS)
+// is only real if it also bounds glofoxFetch's own retry-backoff sleeps; an
+// aborted signal that only stopped the fetch itself would still leave the
+// caller waiting out up to 3 full backoff sleeps (~8s) after the abort.
+describe('glofoxFetch — abortable retry backoff (PAYLINK.5b)', () => {
+  beforeEach(() => vi.stubGlobal('fetch', vi.fn()))
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
+
+  it('an already-aborted signal stops the retry loop after exactly one attempt, returning the last response', async () => {
+    const { glofoxFetch } = await import('./glofox.js')
+    global.fetch.mockResolvedValue(res(500, {}))
+    const r = await glofoxFetch(creds, '/2.0/members', { signal: AbortSignal.abort() })
+    expect(global.fetch).toHaveBeenCalledTimes(1)
+    expect(r.status).toBe(500)
+  })
+
+  it('_glofoxSleep resolves promptly on an already-aborted signal, never waiting out the full delay', async () => {
+    const { _glofoxSleep } = await import('./glofox.js')
+    const start = Date.now()
+    await _glofoxSleep(10_000, AbortSignal.abort())
+    expect(Date.now() - start).toBeLessThan(1000)
+  })
+})

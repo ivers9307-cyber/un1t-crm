@@ -459,7 +459,22 @@ export function computeGlofoxBackoffMs(attempt, retryAfterSeconds = null) {
   return base + Math.floor(Math.random() * 250)
 }
 
-const _glofoxSleep = (ms) => new Promise((r) => setTimeout(r, ms))
+// PAYLINK.5b — abortable: a caller (getGlofoxInvoicePaymentLink) that bounds
+// the whole call with AbortSignal.timeout() must have that signal bound the
+// backoff sleeps too, not just the underlying fetch — otherwise an abort
+// mid-retry still leaves the caller waiting out the remaining sleep(s).
+// Races the delay against the signal's 'abort' event; never rejects.
+export function _glofoxSleep(ms, signal) {
+  return new Promise((resolve) => {
+    if (signal?.aborted) { resolve(); return }
+    const onAbort = () => { clearTimeout(timer); resolve() }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
+}
 
 export async function glofoxFetch(creds, pathOrUrl, options = {}) {
   if (!creds || !creds.branchId || !creds.apiKey || !creds.apiToken) {
@@ -479,8 +494,13 @@ export async function glofoxFetch(creds, pathOrUrl, options = {}) {
     res = await fetch(url, { ...options, headers })
     // Retry only transient statuses, and only while we have budget.
     if ((res.status === 429 || res.status >= 500) && attempt < GLOFOX_MAX_RETRIES) {
+      // PAYLINK.5b — an aborted caller (timed out, or otherwise cancelled)
+      // stops retrying immediately and returns the last response as-is,
+      // rather than sleeping out a full backoff first.
+      if (options.signal?.aborted) break
       const retryAfter = Number(res.headers?.get?.('retry-after'))
-      await _glofoxSleep(computeGlofoxBackoffMs(attempt, Number.isFinite(retryAfter) ? retryAfter : null))
+      await _glofoxSleep(computeGlofoxBackoffMs(attempt, Number.isFinite(retryAfter) ? retryAfter : null), options.signal)
+      if (options.signal?.aborted) break
       continue
     }
     break
@@ -1579,8 +1599,11 @@ export async function fetchMemberResult(creds, memberId) {
 // PAYLINK.4b — this call sits on the webhook request path (INVOICE_UPDATED →
 // maybeEnrolDunning → capturePaymentForRun) and on an operator's "Send
 // payment reminder" button, so it must NOT inherit glofoxFetch's unbounded
-// wait (glofoxFetch itself only bounds retries between attempts, not a
-// single attempt's own hang).
+// wait. PAYLINK.5b — the signal genuinely bounds the WHOLE call now: every
+// fetch attempt AND every retry-backoff sleep in between (glofoxFetch checks
+// `signal.aborted` before and after each sleep and passes the signal into
+// _glofoxSleep, so an abort mid-backoff returns immediately instead of
+// waiting out the remaining sleep(s)) — not just a single attempt's hang.
 const GLOFOX_PAYMENT_LINK_TIMEOUT_MS = 8000
 
 /**
