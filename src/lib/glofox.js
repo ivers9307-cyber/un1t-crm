@@ -459,7 +459,22 @@ export function computeGlofoxBackoffMs(attempt, retryAfterSeconds = null) {
   return base + Math.floor(Math.random() * 250)
 }
 
-const _glofoxSleep = (ms) => new Promise((r) => setTimeout(r, ms))
+// PAYLINK.5b — abortable: a caller (getGlofoxInvoicePaymentLink) that bounds
+// the whole call with AbortSignal.timeout() must have that signal bound the
+// backoff sleeps too, not just the underlying fetch — otherwise an abort
+// mid-retry still leaves the caller waiting out the remaining sleep(s).
+// Races the delay against the signal's 'abort' event; never rejects.
+export function _glofoxSleep(ms, signal) {
+  return new Promise((resolve) => {
+    if (signal?.aborted) { resolve(); return }
+    const onAbort = () => { clearTimeout(timer); resolve() }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
+}
 
 export async function glofoxFetch(creds, pathOrUrl, options = {}) {
   if (!creds || !creds.branchId || !creds.apiKey || !creds.apiToken) {
@@ -479,8 +494,13 @@ export async function glofoxFetch(creds, pathOrUrl, options = {}) {
     res = await fetch(url, { ...options, headers })
     // Retry only transient statuses, and only while we have budget.
     if ((res.status === 429 || res.status >= 500) && attempt < GLOFOX_MAX_RETRIES) {
+      // PAYLINK.5b — an aborted caller (timed out, or otherwise cancelled)
+      // stops retrying immediately and returns the last response as-is,
+      // rather than sleeping out a full backoff first.
+      if (options.signal?.aborted) break
       const retryAfter = Number(res.headers?.get?.('retry-after'))
-      await _glofoxSleep(computeGlofoxBackoffMs(attempt, Number.isFinite(retryAfter) ? retryAfter : null))
+      await _glofoxSleep(computeGlofoxBackoffMs(attempt, Number.isFinite(retryAfter) ? retryAfter : null), options.signal)
+      if (options.signal?.aborted) break
       continue
     }
     break
@@ -1562,5 +1582,82 @@ export async function fetchMemberResult(creds, memberId) {
     return { ok: true, member: (member && typeof member === 'object') ? member : null }
   } catch {
     return { ok: false, member: null }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Invoice payment link (PAYLINK.1)
+// ─────────────────────────────────────────────────────────────
+//
+// Live probe 2026-09-12: POST /v3.0/payment-links/invoices/{invoiceID}
+// answers with the three integration headers + x-glofox-impersonated-
+// member-id (the member's Glofox _id). The spec says "Bearer member JWT";
+// for an integrator that is wrong — headers alone 403, a Bearer of the api
+// token 401, impersonation 200. `is_retriable:false` means the invoice
+// cannot be paid by link right now (a custom fee, or Glofox mid-retry).
+
+// PAYLINK.4b — this call sits on the webhook request path (INVOICE_UPDATED →
+// maybeEnrolDunning → capturePaymentForRun) and on an operator's "Send
+// payment reminder" button, so it must NOT inherit glofoxFetch's unbounded
+// wait. PAYLINK.5b — the signal genuinely bounds the WHOLE call now: every
+// fetch attempt AND every retry-backoff sleep in between (glofoxFetch checks
+// `signal.aborted` before and after each sleep and passes the signal into
+// _glofoxSleep, so an abort mid-backoff returns immediately instead of
+// waiting out the remaining sleep(s)) — not just a single attempt's hang.
+const GLOFOX_PAYMENT_LINK_TIMEOUT_MS = 8000
+
+/**
+ * @param {{branchId, apiKey, apiToken}} creds
+ * @param {{ memberId: string, invoiceId: string }} [args]
+ * @returns {Promise<{ ok:boolean, status:number, retriable:boolean, link:string|null,
+ *   amountCents:number|null, currency:string|null, summary:string|null,
+ *   invoiceId:string|null, error:string|null }>}  never throws
+ */
+export async function getGlofoxInvoicePaymentLink(creds, args = {}) {
+  const { memberId, invoiceId } = args || {}
+  const inv = typeof invoiceId === 'string' ? invoiceId.trim() : ''
+  const empty = (status, error) => ({
+    ok: false, status, retriable: false, link: null, amountCents: null, currency: null,
+    summary: null, invoiceId: inv || null, error,
+  })
+  if (!creds?.branchId || !creds?.apiKey || !creds?.apiToken
+    || !GLOFOX_OBJECT_ID_RE.test(String(memberId || '')) || !inv || inv.length > 200) {
+    return empty(400, 'INVALID_ARGS')
+  }
+  try {
+    const r = await glofoxFetch(creds, `/v3.0/payment-links/invoices/${encodeURIComponent(inv)}`, {
+      method: 'POST',
+      signal: AbortSignal.timeout(GLOFOX_PAYMENT_LINK_TIMEOUT_MS),
+      headers: { 'Content-Type': 'application/json', 'x-glofox-impersonated-member-id': memberId },
+      body: '{}',
+    })
+    let body
+    try { body = await r.json() } catch { body = null }
+    if (!r.ok) {
+      const code = typeof body?.message_code === 'string' ? body.message_code : (typeof body?.code === 'string' ? body.code : null)
+      return empty(r.status, code ? `Glofox HTTP ${r.status} (${code})` : `Glofox HTTP ${r.status}`)
+    }
+    // GLOFOX-SPEC-2026-09 — a 200 can still carry success:false; that's a
+    // failure (bad invoice id, etc.), never "not retriable".
+    if (body?.success === false) {
+      return empty(r.status, body.message_code || 'GLOFOX_SUCCESS_FALSE')
+    }
+    const retriable = body?.is_retriable === true
+    const amount = Number(body?.invoice_amount)
+    const link = retriable && typeof body?.invoice_payment_link === 'string' && body.invoice_payment_link.startsWith('https://')
+      ? body.invoice_payment_link
+      : null
+    return {
+      ok: true, status: r.status, retriable,
+      link,
+      amountCents: retriable && Number.isFinite(amount) && amount > 0 ? amount : null,
+      currency: retriable && typeof body?.invoice_currency === 'string' ? body.invoice_currency : null,
+      summary: retriable && typeof body?.invoice_summary === 'string' ? body.invoice_summary : null,
+      invoiceId: typeof body?.invoice_id === 'string' ? body.invoice_id : inv,
+      error: null,
+    }
+  } catch (e) {
+    if (e?.name === 'AbortError' || e?.name === 'TimeoutError') return empty(0, 'timeout')
+    return empty(0, e?.message || 'network error')
   }
 }

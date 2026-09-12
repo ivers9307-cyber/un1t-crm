@@ -16,7 +16,7 @@
 // Tests focus on those validation surfaces. Send-step send
 // mechanics are out of scope for this slice.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { glofoxProvisionStep } from './steps.js'
 
 vi.mock('@/lib/postmark', () => ({
@@ -47,6 +47,7 @@ vi.mock('./triggers.js', () => ({ triggerSequencesForPipelineStageChange: vi.fn(
 
 const steps = await import('./steps.js')
 const { triggerSequencesForPipelineStageChange } = await import('./triggers.js')
+const { logWarn } = await import('@/lib/log')
 
 beforeEach(() => {
   triggerSequencesForPipelineStageChange.mockReset()
@@ -666,8 +667,16 @@ describe('sendWhatsappStep — send-time consent gate + graceful skips (COMMS-AU
     wa = await import('@/lib/whatsapp')
     wa.sendTemplateMessage.mockReset()
     wa.sendTemplateMessage.mockResolvedValue({ messageId: 'wamid.X==' })
+    wa.buildTemplateComponents.mockReset()
     wa.buildTemplateComponents.mockReturnValue([])
     wa.getOrCreateConversation.mockResolvedValue('conv-1')
+    // PAYLINK.6 — buildTemplateComponents/renderTemplateBody's call args are
+    // asserted below; without a reset each test's call index would include
+    // every prior test's calls (mockReturnValue alone doesn't clear history).
+    wa.renderTemplateBody.mockClear()
+    // PAYLINK.7 — logWarn is asserted below; clear so a prior test's calls
+    // don't leak into the assertion.
+    logWarn.mockClear()
   })
 
   it('missing wa_phone → recorded skip (resolves null, nothing sent, no throw)', async () => {
@@ -759,6 +768,146 @@ describe('sendWhatsappStep — send-time consent gate + graceful skips (COMMS-AU
     await expect(steps.sendWhatsappStep(db, { step, sequence, contact: consentedContact }))
       .rejects.toThrow(/template not found/)
   })
+
+  it('PAYLINK.6 — a pay-link template with no link on the run is a recorded skip, not a send', async () => {
+    const db = consentDb()
+    const payStep = { ...step, whatsapp_variables: { '1': 'first_name', '2': 'pay_amount', url_button: 'pay_link_suffix' } }
+    const out = await steps.sendWhatsappStep(db, {
+      step: payStep, sequence, contact: consentedContact,
+      enrollment: { id: 'e1', source_type: 'invoice_past_due', metadata: { payment: { invoice_id: 'inv-1', link: null, link_suffix: null, amount: '', error: 'not_retriable' } } },
+    })
+    expect(out).toBeNull()
+    expect(wa.sendTemplateMessage).not.toHaveBeenCalled()
+    expect(`${db.activityInserts[0].subject} ${db.activityInserts[0].note}`).toMatch(/no payment link/i)
+  })
+
+  it('PAYLINK.6 — a link with no amount is also a recorded skip (the approved body reads "payment of {{2}}")', async () => {
+    const db = consentDb()
+    const payStep = { ...step, whatsapp_variables: { '1': 'first_name', '2': 'pay_amount', url_button: 'pay_link_suffix' } }
+    const out = await steps.sendWhatsappStep(db, {
+      step: payStep, sequence, contact: consentedContact,
+      enrollment: { id: 'e1', source_type: 'invoice_past_due', metadata: { payment: { invoice_id: 'inv-1', link: 'https://pay.test/inv-1', link_suffix: 'inv-1', amount: '', error: null } } },
+    })
+    expect(out).toBeNull()
+    expect(wa.sendTemplateMessage).not.toHaveBeenCalled()
+    expect(`${db.activityInserts[0].subject} ${db.activityInserts[0].note}`).toMatch(/no payment amount/i)
+  })
+
+  it('PAYLINK.6 — with a link on the run the payment rides into buildTemplateComponents and renderTemplateBody opts', async () => {
+    const db = consentDb()
+    const payStep = { ...step, whatsapp_variables: { '1': 'first_name', '2': 'pay_amount', url_button: 'pay_link_suffix' } }
+    const payment = { invoice_id: 'inv-1', link: 'https://pay.test/inv-1', link_suffix: 'inv-1', amount: '€209', retriable: true }
+    await steps.sendWhatsappStep(db, {
+      step: payStep, sequence, contact: consentedContact,
+      enrollment: { id: 'e1', source_type: 'invoice_past_due', metadata: { payment } },
+    })
+    expect(wa.sendTemplateMessage).toHaveBeenCalledTimes(1)
+    expect(wa.buildTemplateComponents.mock.calls[0][4]).toMatchObject({ payment })
+    expect(wa.renderTemplateBody.mock.calls[0][3]).toMatchObject({ payment })
+  })
+
+  it('PAYLINK.6 — a template that does not use the pay-link button ignores the run entirely (no skip)', async () => {
+    const db = consentDb()
+    await steps.sendWhatsappStep(db, {
+      step, sequence, contact: consentedContact,
+      enrollment: { id: 'e1', source_type: 'invoice_past_due', metadata: { payment: { invoice_id: 'inv-1', link: null, link_suffix: null, amount: '' } } },
+    })
+    expect(wa.sendTemplateMessage).toHaveBeenCalledTimes(1)
+  })
+
+  it('PAYLINK.6b — a dunning enrolment with no metadata at all still skips the pay-link step (every in-flight run on deploy day)', async () => {
+    const db = consentDb()
+    const payStep = { ...step, whatsapp_variables: { '1': 'first_name', '2': 'pay_amount', url_button: 'pay_link_suffix' } }
+    const out = await steps.sendWhatsappStep(db, {
+      step: payStep, sequence, contact: consentedContact,
+      enrollment: { id: 'e1', source_type: 'invoice_past_due' },
+    })
+    expect(out).toBeNull()
+    expect(wa.sendTemplateMessage).not.toHaveBeenCalled()
+    expect(`${db.activityInserts[0].subject} ${db.activityInserts[0].note}`).toMatch(/no payment link/i)
+  })
+
+  it('PAYLINK.6b — a pay-link step with no pay_amount in its mapping sends even with an empty amount on the run', async () => {
+    const db = consentDb()
+    const payStep = { ...step, whatsapp_variables: { '1': 'first_name', url_button: 'pay_link_suffix' } }
+    const out = await steps.sendWhatsappStep(db, {
+      step: payStep, sequence, contact: consentedContact,
+      enrollment: { id: 'e1', source_type: 'invoice_past_due', metadata: { payment: { invoice_id: 'inv-1', link: 'https://pay.test/inv-1', link_suffix: 'inv-1', amount: '' } } },
+    })
+    expect(out).not.toBeNull()
+    expect(wa.sendTemplateMessage).toHaveBeenCalledTimes(1)
+  })
+
+  it('PAYLINK.6b — any dynamic-URL-button template whose resolved components carry no url button is a skip, never a throw', async () => {
+    // A template unrelated to the pay-link feature that still ends its URL
+    // button link in a variable — the node editor wiped `variables`, or a
+    // whitespace typo means `campaign_code` never resolves. buildTemplateComponents
+    // is mocked in this describe, so the omission (what the REAL function does
+    // when a mapped field is empty) is simulated directly on the mock's return.
+    const dynUrlTemplate = {
+      id: 't1', status: 'APPROVED', location_id: 'loc-1', name: 'promo_link', language: 'en',
+      components: [
+        { type: 'BODY', text: 'Hi {{1}}' },
+        { type: 'BUTTONS', buttons: [{ type: 'URL', text: 'View', url: 'https://example.com/{{1}}', example: ['x'] }] },
+      ],
+    }
+    const db = {
+      activityInserts: [],
+      from(table) {
+        if (table === 'activities') {
+          return { insert: (row) => { db.activityInserts.push(row); return Promise.resolve({ error: null }) } }
+        }
+        if (table === 'whatsapp_templates') return { select: () => ({ eq: () => ({ single: async () => ({ data: dynUrlTemplate }) }) }) }
+        if (table === 'locations') return { select: () => ({ eq: () => ({ single: async () => ({ data: { id: 'loc-1', features: {} } }) }) }) }
+        throw new Error(`unexpected table ${table}`)
+      },
+      rpc: async () => ({ data: null, error: null }),
+    }
+    // No 'button' entry in the mock's return — mirrors what the real
+    // buildTemplateComponents does when the mapped field resolves empty.
+    wa.buildTemplateComponents.mockReturnValue([{ type: 'body', parameters: [{ type: 'text', text: 'Richard' }] }])
+    const dynStep = { ...step, whatsapp_template_id: 't1', whatsapp_variables: { '1': 'first_name', url_button: 'campaign_code' } }
+    const out = await steps.sendWhatsappStep(db, { step: dynStep, sequence, contact: consentedContact })
+    expect(out).toBeNull()
+    expect(wa.sendTemplateMessage).not.toHaveBeenCalled()
+    expect(`${db.activityInserts[0].subject} ${db.activityInserts[0].note}`).toMatch(/no value for the template's link button/i)
+    expect(logWarn).toHaveBeenCalledWith(
+      'sequences', 'WhatsApp step skipped: dynamic URL button has no value',
+      { sequenceId: sequence.id, stepId: dynStep.id, contactId: consentedContact.id },
+    )
+  })
+
+  it('PAYLINK.7 — positive control: a resolved url button on a dynamic-URL template SENDS (pins the other half of the gate)', async () => {
+    // Same dynamic-URL template fixture as the skip test above, but this
+    // time buildTemplateComponents DOES resolve a url button — the send
+    // must go through, never a skip.
+    const dynUrlTemplate = {
+      id: 't1', status: 'APPROVED', location_id: 'loc-1', name: 'promo_link', language: 'en',
+      components: [
+        { type: 'BODY', text: 'Hi {{1}}' },
+        { type: 'BUTTONS', buttons: [{ type: 'URL', text: 'View', url: 'https://example.com/{{1}}', example: ['x'] }] },
+      ],
+    }
+    const db = {
+      activityInserts: [],
+      from(table) {
+        if (table === 'activities') {
+          return { insert: (row) => { db.activityInserts.push(row); return Promise.resolve({ error: null }) } }
+        }
+        if (table === 'whatsapp_templates') return { select: () => ({ eq: () => ({ single: async () => ({ data: dynUrlTemplate }) }) }) }
+        if (table === 'whatsapp_messages') return { insert: () => ({ select: () => ({ single: async () => ({ data: { id: 'aaaaaaaa-0000-0000-0000-000000000002' } }) }) }) }
+        if (table === 'locations') return { select: () => ({ eq: () => ({ single: async () => ({ data: { id: 'loc-1', features: {} } }) }) }) }
+        throw new Error(`unexpected table ${table}`)
+      },
+      rpc: async () => ({ data: null, error: null }),
+    }
+    wa.buildTemplateComponents.mockReturnValue([{ type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: 'abc' }] }])
+    const dynStep = { ...step, whatsapp_template_id: 't1', whatsapp_variables: { '1': 'first_name', url_button: 'campaign_code' } }
+    const out = await steps.sendWhatsappStep(db, { step: dynStep, sequence, contact: consentedContact })
+    expect(out).not.toBeNull()
+    expect(wa.sendTemplateMessage).toHaveBeenCalledTimes(1)
+    expect(db.activityInserts).toHaveLength(0)
+  })
 })
 
 // ── COMMS-AUDIT 2026-07-10 (SEQ batch) — email step: broadcast stream
@@ -803,7 +952,13 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
     pm = await import('@/lib/postmark')
     pm.sendMarketingEmail.mockReset()
     pm.sendTransactionalEmail.mockReset()
-    pm.applyMergeTags.mockClear()
+    // PAYLINK.7b — mockReset (not mockClear) so a PAYLINK.7 test's real-
+    // implementation override from the previous run can never survive into
+    // this one; re-arm the identity stub every test dep on it (all of them
+    // except the two PAYLINK.7 tests, which swap it back to the real
+    // implementation for themselves only).
+    pm.applyMergeTags.mockReset()
+    pm.applyMergeTags.mockImplementation((s) => s)
     pm.sendMarketingEmail.mockResolvedValue({ messageId: 'cccccccc-0000-0000-0000-000000000003' })
   })
 
@@ -996,6 +1151,68 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
     await expect(steps.sendEmailStep(emailDb(), {
       enrollment: { id: 'e9' }, step, sequence, contact: consentedContact,
     })).resolves.toBeNull()
+  })
+
+  it('PAYLINK.7 — the run\'s payment renders into the email as amount phrase + CTA link', async () => {
+    // applyMergeTags is mocked as an identity function in this describe
+    // (see the top-of-file vi.mock, re-armed every test in the beforeEach
+    // above) — swap in the real implementation for just this test so the
+    // rendering asserted below is real, not a stub echo.
+    const { applyMergeTags: realApplyMergeTags } = await vi.importActual('@/lib/postmark')
+    pm.applyMergeTags.mockImplementation(realApplyMergeTags)
+    const db = emailDb()
+    const payStep = { ...step, html_content: '<p>Your membership payment{{pay_amount_phrase}} failed. To keep it, {{payment_cta}}.</p>' }
+    await steps.sendEmailStep(db, {
+      step: payStep, sequence, contact: consentedContact,
+      enrollment: { id: 'e1', source_type: 'invoice_past_due', metadata: { payment: { invoice_id: 'inv-1', link: 'https://pay.test/inv-1', link_suffix: 'inv-1', amount: '€209', retriable: true } } },
+    })
+    // PAYLINK.7b — pins the SUBJECT half: sendEmailStep's first applyMergeTags
+    // call is the subject, and it must carry pay_amount_phrase too (the body
+    // assertions below only prove the BODY call received it).
+    expect(pm.applyMergeTags).toHaveBeenNthCalledWith(
+      1, payStep.subject, consentedContact,
+      expect.objectContaining({ pay_amount_phrase: ' of €209' }),
+    )
+    const sent = pm.sendMarketingEmail.mock.calls[0][0]
+    expect(sent.htmlBody).toContain('payment of €209 failed')
+    expect(sent.htmlBody).toContain('<a href="https://pay.test/inv-1">pay it now</a>, it takes a few seconds, or update your card in the Glofox app')
+  })
+
+  it('PAYLINK.7 — no payment on the run → the card-update wording, no empty link', async () => {
+    const { applyMergeTags: realApplyMergeTags } = await vi.importActual('@/lib/postmark')
+    pm.applyMergeTags.mockImplementation(realApplyMergeTags)
+    const db = emailDb()
+    const payStep = { ...step, html_content: '<p>Your membership payment{{pay_amount_phrase}} failed. To keep it, {{payment_cta}}.</p>' }
+    await steps.sendEmailStep(db, { step: payStep, sequence, contact: consentedContact, enrollment: { id: 'e1', source_type: 'invoice_past_due', metadata: {} } })
+    const sent = pm.sendMarketingEmail.mock.calls[0][0]
+    expect(sent.htmlBody).toContain('Your membership payment failed. To keep it, update your card in the Glofox app.')
+    expect(sent.htmlBody).not.toContain('href=""')
+  })
+
+  it('PAYLINK.7b — the subject never renders {{payment_cta}} as HTML, even with a link on the run', async () => {
+    // The subject line is plain text (an inbox header, not a rendered body) —
+    // sendEmailStep deliberately feeds payment_cta only to the BODY merge,
+    // never the subject's. A subject carrying {{payment_cta}} must render the
+    // tag as empty, not leak an <a> tag into an email client's subject line.
+    const { applyMergeTags: realApplyMergeTags } = await vi.importActual('@/lib/postmark')
+    pm.applyMergeTags.mockImplementation(realApplyMergeTags)
+    const db = emailDb()
+    const payStep = { ...step, subject: 'Payment failed{{pay_amount_phrase}} — {{payment_cta}}' }
+    await steps.sendEmailStep(db, {
+      step: payStep, sequence, contact: consentedContact,
+      enrollment: { id: 'e1', source_type: 'invoice_past_due', metadata: { payment: { invoice_id: 'inv-1', link: 'https://pay.test/inv-1', link_suffix: 'inv-1', amount: '€209', retriable: true } } },
+    })
+    const sent = pm.sendMarketingEmail.mock.calls[0][0]
+    expect(sent.subject).not.toContain('<a')
+    expect(sent.subject).toBe('Payment failed of €209 — ')
+  })
+
+  // PAYLINK.7c — the two tests above swap in the REAL applyMergeTags for
+  // themselves only; without this, that real implementation leaks past
+  // this describe's last test into sendSmsStep below (which expects the
+  // identity stub).
+  afterEach(() => {
+    pm.applyMergeTags.mockImplementation((s) => s)
   })
 })
 

@@ -7,6 +7,8 @@
 
 import { describe, it, expect } from 'vitest'
 import { SEQUENCE_TEMPLATES, getTemplate, TEMPLATE_CATEGORIES } from './sequence-templates.js'
+import { applyMergeTags } from '@/lib/postmark'
+import { paymentCtaHtml, payAmountPhrase } from '@/lib/dunning-payment'
 
 describe('SEQUENCE_TEMPLATES catalog', () => {
   it('every template has a stable id, category, name, trigger, and at least one step', () => {
@@ -419,7 +421,7 @@ describe('RADAR-DUNNING.1 overdue dunning template', () => {
   })
 })
 
-describe('DUNNING.6 — overdue membership payment → card update reminders', () => {
+describe('DUNNING.6 — overdue membership payment → Pay now reminders', () => {
   const tpl = getTemplate('overdue_payment_dunning')
   it('is a manual-trigger automation (the dunning picker + auto-enrol enrol directly), 14-day cooldown, daytime window', () => {
     expect(tpl.trigger_type).toBe('manual')
@@ -430,11 +432,21 @@ describe('DUNNING.6 — overdue membership payment → card update reminders', (
     expect(tpl.steps.map((s) => s.step_type)).toEqual(['wait', 'whatsapp', 'email', 'email', 'whatsapp', 'email'])
     expect(tpl.steps.map((s) => [s.delay_days ?? 0, s.delay_hours ?? 0])).toEqual([[0, 0], [0, 1], [0, 0], [3, 0], [4, 0], [0, 0]])
   })
-  it('both WhatsApp steps use the approved utility template by NAME with the first name as {{1}}', () => {
+  it('PAYLINK.8 — both WhatsApp steps use the pay-link template by NAME: first name, amount, and the invoice id on the URL button', () => {
     for (const s of tpl.steps.filter((s) => s.step_type === 'whatsapp')) {
-      expect(s.whatsapp_template_name).toBe('outstanding_payment_')
-      expect(s.whatsapp_variables).toEqual({ '1': 'first_name' })
+      expect(s.whatsapp_template_name).toBe('outstanding_payment_link_')
+      expect(s.whatsapp_variables).toEqual({ '1': 'first_name', '2': 'pay_amount', url_button: 'pay_link_suffix' })
     }
+  })
+  it('PAYLINK.8 — every email uses the amount phrase and the CTA fragment, and never a raw pay link', () => {
+    for (const s of tpl.steps.filter((s) => s.step_type === 'email')) {
+      expect(s.html_content).toContain('{{pay_amount_phrase}}')
+      expect(s.html_content).toContain('{{payment_cta}}')
+      expect(s.html_content).not.toContain('pay.glofox.com')
+    }
+  })
+  it('PAYLINK.8 — the description tells the operator which WhatsApp template must be approved first', () => {
+    expect(tpl.description).toContain('outstanding_payment_link_')
   })
   it('email copy is low-key: no em-dashes, no emoji, mentions updating the card', () => {
     for (const s of tpl.steps.filter((s) => s.step_type === 'email')) {
@@ -442,6 +454,48 @@ describe('DUNNING.6 — overdue membership payment → card update reminders', (
       expect(s.html_content).not.toMatch(/\u2014/)
       expect(s.html_content).not.toMatch(/[\u{1F300}-\u{1FAFF}]/u)
       expect(s.html_content.toLowerCase()).toMatch(/card/)
+    }
+  })
+})
+
+// PAYLINK.8b \u2014 {{payment_cta}} expands to a full clause ("<a>pay it now</a>,
+// it takes a few seconds, or update your card in the Glofox app", or just
+// the card-update clause with no link). Each email body must read cleanly
+// in BOTH cases: no sentence ends up with two "or"s stitched together (the
+// bug the earlier copy had \u2014 CTA already ends "...or update your card...",
+// so a trailing ", or reply..." on the SAME sentence produced a double
+// "or"), no doubled punctuation from a fragment butting against the
+// template's own trailing comma/period.
+describe('PAYLINK.8b \u2014 payment_cta email copy reads cleanly with and without a pay link', () => {
+  const tpl = getTemplate('overdue_payment_dunning')
+  const contact = { first_name: 'Emma' }
+  const withLink = { link: 'https://pay.test/inv-42', amount: '\u20ac209' }
+  const noLink = { link: null, amount: '\u20ac209' }
+
+  function render(html, payment) {
+    return applyMergeTags(html, contact, {
+      location_name: 'Stillorgan',
+      pay_amount_phrase: payAmountPhrase(payment),
+      payment_cta: paymentCtaHtml(payment),
+    })
+  }
+
+  it('every email renders cleanly in both the with-link and no-link variant', () => {
+    for (const s of tpl.steps.filter((s) => s.step_type === 'email')) {
+      const linked = render(s.html_content, withLink)
+      const unlinked = render(s.html_content, noLink)
+
+      for (const rendered of [linked, unlinked]) {
+        for (const sentence of rendered.split(/(?<=[.!?])\s+/)) {
+          const orCount = (sentence.match(/\bor\b/gi) || []).length
+          expect(orCount, `"${sentence}" reads with a doubled "or"`).toBeLessThanOrEqual(1)
+        }
+        expect(rendered, `${s.subject}: doubled comma`).not.toMatch(/,\s*,/)
+        expect(rendered, `${s.subject}: doubled period`).not.toMatch(/\.\./)
+      }
+
+      expect(linked, `${s.subject}: with-link variant has no <a href=`).toContain('<a href=')
+      expect(unlinked, `${s.subject}: no-link variant leaked an <a> anyway`).not.toContain('<a href=')
     }
   })
 })

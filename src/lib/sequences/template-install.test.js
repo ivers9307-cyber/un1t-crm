@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { resolveWhatsappTemplateIds } from './template-install.js'
+import { resolveWhatsappTemplateIds, missingWhatsappTemplateNames } from './template-install.js'
 
 describe('resolveWhatsappTemplateIds (DUNNING.6)', () => {
   const rows = [
@@ -31,5 +31,26 @@ describe('resolveWhatsappTemplateIds (DUNNING.6)', () => {
     expect(resolveWhatsappTemplateIds([], rows)).toEqual([])
     expect(resolveWhatsappTemplateIds(null, rows)).toEqual([])
     expect(resolveWhatsappTemplateIds([{ step_type: 'whatsapp', whatsapp_template_name: 'x' }], null)[0].whatsapp_template_id).toBeNull()
+  })
+})
+
+describe('PAYLINK.8 — missingWhatsappTemplateNames', () => {
+  const rows = [{ id: 'a', name: 'outstanding_payment_', status: 'APPROVED' }, { id: 'b', name: 'outstanding_payment_link_', status: 'PENDING' }]
+  it('names the gallery templates that are not APPROVED here, once each', () => {
+    const steps = [
+      { step_type: 'whatsapp', whatsapp_template_name: 'outstanding_payment_link_' },
+      { step_type: 'email' },
+      { step_type: 'whatsapp', whatsapp_template_name: 'outstanding_payment_link_' },
+      { step_type: 'whatsapp', whatsapp_template_name: 'outstanding_payment_' },
+    ]
+    expect(missingWhatsappTemplateNames(steps, rows)).toEqual(['outstanding_payment_link_'])
+  })
+  it('is empty when every named template is approved, or nothing is named', () => {
+    expect(missingWhatsappTemplateNames([{ step_type: 'whatsapp', whatsapp_template_name: 'outstanding_payment_' }], rows)).toEqual([])
+    expect(missingWhatsappTemplateNames([{ step_type: 'email' }], rows)).toEqual([])
+    expect(missingWhatsappTemplateNames([], null)).toEqual([])
+  })
+  it('a step that already carries a whatsapp_template_id is not missing even if its name is unknown here', () => {
+    expect(missingWhatsappTemplateNames([{ step_type: 'whatsapp', whatsapp_template_name: 'zzz', whatsapp_template_id: 'x' }], rows)).toEqual([])
   })
 })

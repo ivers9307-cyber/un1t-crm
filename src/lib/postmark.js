@@ -502,6 +502,11 @@ export function applyMergeTags(html, contact, extras = {}) {
     '{{booking_token}}': extras.booking_token || '',
     '{{current_year}}': new Date().getFullYear().toString(),
     '{{glofox_passcode}}': contact.glofox_passcode || '',
+    // PAYLINK.7 — the overdue-payment reminder's pay link, resolved by the
+    // sequence email step from the run's metadata (dunning-payment.js). Both
+    // empty for any other email, so a body that uses them still renders.
+    '{{pay_amount_phrase}}': extras.pay_amount_phrase || '',
+    '{{payment_cta}}': extras.payment_cta || '',
   }
 
   let result = html
