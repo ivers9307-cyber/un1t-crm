@@ -1,11 +1,11 @@
-// PAYLINK.1 — the `payment` object an overdue-payment reminder run carries on
+// PAYLINK.2 — the `payment` object an overdue-payment reminder run carries on
 // sequence_enrollments.metadata. Fetched ONCE when the run starts (both the
 // invoice webhook's auto-enrol and the manual "Send payment reminder" go
 // through capturePaymentForRun) and read back by the WhatsApp and email step
 // senders, which never call Glofox themselves. One Glofox call per run.
 //
 // Shape (jsonb, snake_case like the rest of metadata):
-//   { invoice_id, link, amount, currency, retriable, fetched_at, error }
+//   { invoice_id, link, link_suffix, amount, currency, retriable, fetched_at, error }
 // `link` is null unless Glofox said the invoice is payable by link; the
 // senders then fall back to the card-update wording (email) or a recorded
 // skip (WhatsApp, whose approved template needs the button suffix).
@@ -16,17 +16,29 @@ import { logWarn } from '@/lib/log'
 
 const CARD_UPDATE_WORDING = 'update your card in the Glofox app'
 
+function lastPathSegment(url) {
+  const idx = url.lastIndexOf('/')
+  return idx === -1 ? url : url.slice(idx + 1)
+}
+
 /** Pure: helper result → the metadata object. */
 export function paymentRunMetadata(result, { invoiceId, now = new Date() } = {}) {
   const payable = Boolean(result?.ok && result?.retriable && result?.link)
+  const retriable = result?.retriable === true
+  let error
+  if (payable) error = null
+  else if (result?.ok && retriable) error = 'no_payment_link'
+  else if (result?.ok && !retriable) error = 'not_retriable'
+  else error = result?.error || 'unknown'
   return {
     invoice_id: invoiceId || result?.invoiceId || null,
     link: payable ? result.link : null,
+    link_suffix: payable ? lastPathSegment(result.link) : null,
     amount: payable ? formatMoneyMinor(result.amountCents, result.currency || 'EUR') : '',
     currency: payable ? (result.currency || null) : null,
-    retriable: payable,
+    retriable,
     fetched_at: now.toISOString(),
-    error: result?.ok ? (payable ? null : 'not_retriable') : (result?.error || 'unknown'),
+    error,
   }
 }
 
@@ -42,13 +54,21 @@ export async function capturePaymentForRun(db, { locationId, contactId, invoiceI
     if (!creds?.branchId || !creds?.apiKey || !creds?.apiToken) return failed('no_glofox_credentials')
     let memberId = glofoxUserId || null
     if (!memberId && contactId) {
-      const { data } = await db.from('contacts').select('glofox_member_id').eq('id', contactId).maybeSingle()
+      const { data, error } = await db.from('contacts').select('glofox_member_id').eq('id', contactId).maybeSingle()
+      if (error) {
+        logWarn('dunning-payment', 'contact lookup failed', { contactId, invoiceId, err: error?.message })
+        return failed('contact_lookup_failed')
+      }
       memberId = data?.glofox_member_id || null
     }
     if (!memberId) return failed('no_glofox_member_id')
     const result = await getGlofoxInvoicePaymentLink(creds, { memberId, invoiceId })
     if (!result.ok) logWarn('dunning-payment', 'payment link not fetched', { contactId, invoiceId, error: result.error })
-    return { payment: paymentRunMetadata(result, { invoiceId }) }
+    const payment = paymentRunMetadata(result, { invoiceId })
+    if (payment.link_suffix && payment.link_suffix !== payment.invoice_id) {
+      logWarn('dunning-payment', 'pay link suffix differs from invoice id', { invoiceId, suffix: payment.link_suffix })
+    }
+    return { payment }
   } catch (e) {
     logWarn('dunning-payment', 'capturePaymentForRun threw', { contactId, invoiceId, err: e?.message })
     return failed(e?.message || 'threw')
@@ -68,7 +88,7 @@ function escapeHtml(s) {
 /** Pure: the `{{payment_cta}}` fragment. */
 export function paymentCtaHtml(payment) {
   const link = payment?.link
-  if (!link) return CARD_UPDATE_WORDING
+  if (typeof link !== 'string' || !link.startsWith('https://')) return CARD_UPDATE_WORDING
   return `<a href="${escapeHtml(link)}">pay it now here</a>, it takes a few seconds, or ${CARD_UPDATE_WORDING}`
 }
 
