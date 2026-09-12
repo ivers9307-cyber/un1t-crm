@@ -9,6 +9,9 @@ import { describeNode } from '@/lib/sequences/graph'
 import { isPhantomTag } from '@/lib/sequences/tag-vocabulary'
 import { styleForType } from './nodeStyles'
 import { groupWaTemplates, UNGROUPED_LABEL } from '@shared/wa-template-groups'
+import {
+  dynamicUrlButtonIndex, urlButtonSendBlock, URL_BUTTON_MAPPING_KEY,
+} from '@/lib/whatsapp-template-buttons'
 
 export function IconBtn({ children, label, onClick, disabled, danger }) {
   return (
@@ -71,6 +74,52 @@ export function whatsappBodyVariables(template) {
   return [...set].sort((a, b) => Number(a) - Number(b))
 }
 
+// Contact fields a variable can be mapped to. Same list the unified composer
+// offers (WA_VARIABLE_FIELDS) — kept literal here so the step editor doesn't
+// drag the composer's module in.
+export const STEP_CONTACT_FIELDS = ['first_name', 'name', 'email', 'phone', 'location_name']
+
+// Reserved mapping names that resolve from the RUN, not the contact row. They
+// are ordinary mapping strings — nothing here imports them; the step sender
+// recognises them at send time. Offered with a description because "pay_amount"
+// on its own reads like a contact field, and it isn't.
+export const STEP_RESERVED_VARIABLES = [
+  { value: 'pay_amount', description: 'Overdue payment: amount owed' },
+  { value: 'pay_link_suffix', description: 'Overdue payment: link suffix' },
+]
+
+// The BUTTONS component's dynamic URL button, or null.
+function dynamicUrlButton(template) {
+  const idx = dynamicUrlButtonIndex(template?.components)
+  if (idx < 0) return null
+  const comp = (template.components || []).find(c => String(c?.type || '').toUpperCase() === 'BUTTONS')
+  return comp?.buttons?.[idx] || null
+}
+
+/**
+ * SEQ-URLBUTTON.1 — what `config.variables` becomes when the template select
+ * fires. The old code reset to {} unconditionally, so merely re-opening a step
+ * and re-picking the SAME template destroyed a mapping the gallery installer
+ * had written (e.g. { '2': 'pay_amount', url_button: 'pay_link_suffix' }).
+ *
+ * Same template id → keep the mapping untouched. A real change still clears the
+ * body variables (their numbers mean different things in a different template)
+ * but carries `url_button` across when the NEW template also ends its link in a
+ * variable — that value is about the link, not about {{1}}, and re-typing it is
+ * the step that gets forgotten.
+ */
+export function variablesAfterTemplateChange(currentVariables, prevTemplateId, nextTemplate) {
+  const cur = currentVariables || {}
+  const prev = String(prevTemplateId ?? '')
+  const next = String(nextTemplate?.id ?? '')
+  if (prev === next) return cur
+  const carried = {}
+  if (dynamicUrlButton(nextTemplate) && Object.hasOwn(cur, URL_BUTTON_MAPPING_KEY)) {
+    carried[URL_BUTTON_MAPPING_KEY] = cur[URL_BUTTON_MAPPING_KEY]
+  }
+  return carried
+}
+
 export function NodeConfig({ node, onPatch, templates, tagVocabulary }) {
   const c = node.config || {}
   switch (node.type) {
@@ -88,10 +137,21 @@ export function NodeConfig({ node, onPatch, templates, tagVocabulary }) {
       const selected = list.find(t => t.id === c.template_id)
       const vars = whatsappBodyVariables(selected)
       const curVars = c.variables || {}
+      // SEQ-URLBUTTON.1 — a template whose link ends in {{1}} needs a per-send
+      // value or Meta rejects EVERY message with 132012, so the step must be
+      // able to author it here (the broadcast editor always could).
+      const urlBtn = dynamicUrlButton(selected)
+      const urlBlock = selected ? urlButtonSendBlock(selected, curVars) : null
+      const listId = `wa-vars-${node.id}`
+      const setVar = (key, v) => onPatch({ variables: { ...curVars, [key]: v } })
       return (
         <>
           <Labeled label="Template" hint={list.length ? 'Approved WhatsApp templates at this location.' : 'No approved WhatsApp templates at this location yet.'}>
-            <select className={fieldCls} value={c.template_id || ''} onChange={e => onPatch({ template_id: e.target.value || null, variables: {} })}>
+            <select className={fieldCls} value={c.template_id || ''} onChange={e => {
+              const nextId = e.target.value || null
+              const nextTpl = list.find(t => t.id === nextId) || null
+              onPatch({ template_id: nextId, variables: variablesAfterTemplateChange(curVars, c.template_id ?? null, nextTpl) })
+            }}>
               <option value="">Choose a template…</option>
               {/* WA-TPL-GROUPS — optgroups by operator-set display_group
                   (mig 450); a lone Ungrouped bucket renders flat. */}
@@ -109,12 +169,34 @@ export function NodeConfig({ node, onPatch, templates, tagVocabulary }) {
               <p className="text-[11px] text-un1t-subtle">Map each variable to a contact field (first_name / name / email / phone) or a literal value.</p>
               {vars.map(n => (
                 <Labeled key={n} label={`Variable {{${n}}}`}>
-                  <Text value={curVars[n]} onChange={v => onPatch({ variables: { ...curVars, [n]: v } })} placeholder="first_name or literal text" />
+                  <Text value={curVars[n]} onChange={v => setVar(n, v)} placeholder="first_name or literal text" list={listId} field={n} />
                 </Labeled>
               ))}
             </div>
           )}
-          {selected && vars.length === 0 && <p className="text-[11px] text-un1t-subtle">This template has no variables.</p>}
+          {selected && vars.length === 0 && !urlBtn && <p className="text-[11px] text-un1t-subtle">This template has no variables.</p>}
+          {urlBtn && (
+            <div className="space-y-1">
+              <Labeled label={`Link value for the “${urlBtn.text}” button`}>
+                <Text value={curVars[URL_BUTTON_MAPPING_KEY]} onChange={v => setVar(URL_BUTTON_MAPPING_KEY, v)}
+                  placeholder="pay_link_suffix, a contact field, or literal text"
+                  list={listId} field={URL_BUTTON_MAPPING_KEY} />
+              </Labeled>
+              <p className="text-[11px] text-un1t-subtle/80">Goes on the end of {urlBtn.url}.</p>
+              {urlBlock && (
+                <p className="flex items-start gap-1.5 text-[11px] text-rose-700 leading-relaxed">
+                  <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+                  <span>{urlBlock}</span>
+                </p>
+              )}
+            </div>
+          )}
+          {selected && (vars.length > 0 || urlBtn) && (
+            <datalist id={listId}>
+              {STEP_CONTACT_FIELDS.map(f => <option key={f} value={f} />)}
+              {STEP_RESERVED_VARIABLES.map(r => <option key={r.value} value={r.value}>{r.description}</option>)}
+            </datalist>
+          )}
         </>
       )
     }
@@ -231,8 +313,12 @@ export function Labeled({ label, hint, children }) {
     </label>
   )
 }
-export function Text({ value, onChange, placeholder }) {
-  return <input type="text" className={fieldCls} value={value ?? ''} placeholder={placeholder} onChange={e => onChange(e.target.value)} />
+// `list` wires an optional <datalist> of suggestions (free text still allowed —
+// a mapping value can be a literal). `field` is a test/debug hook naming the
+// mapping key the input writes.
+export function Text({ value, onChange, placeholder, list, field }) {
+  return <input type="text" className={fieldCls} value={value ?? ''} placeholder={placeholder}
+    list={list} data-field={field} onChange={e => onChange(e.target.value)} />
 }
 export function Area({ value, onChange, placeholder, rows = 3 }) {
   return <textarea className={`${fieldCls} resize-y`} rows={rows} value={value ?? ''} placeholder={placeholder} onChange={e => onChange(e.target.value)} />
