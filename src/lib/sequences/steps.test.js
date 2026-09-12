@@ -810,6 +810,64 @@ describe('sendWhatsappStep — send-time consent gate + graceful skips (COMMS-AU
     })
     expect(wa.sendTemplateMessage).toHaveBeenCalledTimes(1)
   })
+
+  it('PAYLINK.6b — a dunning enrolment with no metadata at all still skips the pay-link step (every in-flight run on deploy day)', async () => {
+    const db = consentDb()
+    const payStep = { ...step, whatsapp_variables: { '1': 'first_name', '2': 'pay_amount', url_button: 'pay_link_suffix' } }
+    const out = await steps.sendWhatsappStep(db, {
+      step: payStep, sequence, contact: consentedContact,
+      enrollment: { id: 'e1', source_type: 'invoice_past_due' },
+    })
+    expect(out).toBeNull()
+    expect(wa.sendTemplateMessage).not.toHaveBeenCalled()
+    expect(`${db.activityInserts[0].subject} ${db.activityInserts[0].note}`).toMatch(/no payment link/i)
+  })
+
+  it('PAYLINK.6b — a pay-link step with no pay_amount in its mapping sends even with an empty amount on the run', async () => {
+    const db = consentDb()
+    const payStep = { ...step, whatsapp_variables: { '1': 'first_name', url_button: 'pay_link_suffix' } }
+    const out = await steps.sendWhatsappStep(db, {
+      step: payStep, sequence, contact: consentedContact,
+      enrollment: { id: 'e1', source_type: 'invoice_past_due', metadata: { payment: { invoice_id: 'inv-1', link: 'https://pay.test/inv-1', link_suffix: 'inv-1', amount: '' } } },
+    })
+    expect(out).not.toBeNull()
+    expect(wa.sendTemplateMessage).toHaveBeenCalledTimes(1)
+  })
+
+  it('PAYLINK.6b — any dynamic-URL-button template whose resolved components carry no url button is a skip, never a throw', async () => {
+    // A template unrelated to the pay-link feature that still ends its URL
+    // button link in a variable — the node editor wiped `variables`, or a
+    // whitespace typo means `campaign_code` never resolves. buildTemplateComponents
+    // is mocked in this describe, so the omission (what the REAL function does
+    // when a mapped field is empty) is simulated directly on the mock's return.
+    const dynUrlTemplate = {
+      id: 't1', status: 'APPROVED', location_id: 'loc-1', name: 'promo_link', language: 'en',
+      components: [
+        { type: 'BODY', text: 'Hi {{1}}' },
+        { type: 'BUTTONS', buttons: [{ type: 'URL', text: 'View', url: 'https://example.com/{{1}}', example: ['x'] }] },
+      ],
+    }
+    const db = {
+      activityInserts: [],
+      from(table) {
+        if (table === 'activities') {
+          return { insert: (row) => { db.activityInserts.push(row); return Promise.resolve({ error: null }) } }
+        }
+        if (table === 'whatsapp_templates') return { select: () => ({ eq: () => ({ single: async () => ({ data: dynUrlTemplate }) }) }) }
+        if (table === 'locations') return { select: () => ({ eq: () => ({ single: async () => ({ data: { id: 'loc-1', features: {} } }) }) }) }
+        throw new Error(`unexpected table ${table}`)
+      },
+      rpc: async () => ({ data: null, error: null }),
+    }
+    // No 'button' entry in the mock's return — mirrors what the real
+    // buildTemplateComponents does when the mapped field resolves empty.
+    wa.buildTemplateComponents.mockReturnValue([{ type: 'body', parameters: [{ type: 'text', text: 'Richard' }] }])
+    const dynStep = { ...step, whatsapp_template_id: 't1', whatsapp_variables: { '1': 'first_name', url_button: 'campaign_code' } }
+    const out = await steps.sendWhatsappStep(db, { step: dynStep, sequence, contact: consentedContact })
+    expect(out).toBeNull()
+    expect(wa.sendTemplateMessage).not.toHaveBeenCalled()
+    expect(`${db.activityInserts[0].subject} ${db.activityInserts[0].note}`).toMatch(/no value for the template's link button/i)
+  })
 })
 
 // ── COMMS-AUDIT 2026-07-10 (SEQ batch) — email step: broadcast stream

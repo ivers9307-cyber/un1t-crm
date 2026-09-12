@@ -182,7 +182,10 @@ describe('glofoxFetch — abortable retry backoff (PAYLINK.5b)', () => {
   it('_glofoxSleep resolves promptly when the signal aborts mid-sleep (the abort-event path)', async () => {
     const { _glofoxSleep } = await import('./glofox.js')
     const start = Date.now()
-    await _glofoxSleep(5000, AbortSignal.timeout(20))
-    expect(Date.now() - start).toBeLessThan(1000)
+    // PAYLINK.6b — a shorter delay + tighter bound: a regression that fell
+    // back to waiting out the full timer would fail THIS assertion instead
+    // of just tripping vitest's 5s test timeout.
+    await _glofoxSleep(1500, AbortSignal.timeout(20))
+    expect(Date.now() - start).toBeLessThan(500)
   })
 })

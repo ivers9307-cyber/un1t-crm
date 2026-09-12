@@ -44,7 +44,7 @@ import { isFrequencyCapped, frequencyCapDeferUntil, FrequencyCapDeferral, stampM
 import { overlayConnections } from '@/lib/connection-registry'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
 import { paymentFromEnrollment } from '@/lib/dunning-payment'
-import { URL_BUTTON_MAPPING_KEY } from '@/lib/whatsapp-template-buttons'
+import { URL_BUTTON_MAPPING_KEY, dynamicUrlButtonIndex } from '@/lib/whatsapp-template-buttons'
 
 // ── DUNNING.3 — transactional lane ───────────────────────────────
 // A dunning enrolment is a SERVICE message about the member's own account
@@ -471,15 +471,18 @@ export async function sendWhatsappStep(db, { enrollment, step, sequence, contact
   // either way; the run's email steps still go out with the card-update
   // wording. Templates that do not use the pay-link button are unaffected.
   const payment = paymentFromEnrollment(enrollment)
-  if (variableMapping[URL_BUTTON_MAPPING_KEY] === 'pay_link_suffix') {
-    if (!payment?.link_suffix) {
-      await recordStepSkip(db, { contact, sequence, step, channel: 'WhatsApp', reason: 'no payment link for this invoice' })
-      return null
-    }
-    if (!payment?.amount) {
-      await recordStepSkip(db, { contact, sequence, step, channel: 'WhatsApp', reason: 'no payment amount for this invoice' })
-      return null
-    }
+  if (variableMapping[URL_BUTTON_MAPPING_KEY] === 'pay_link_suffix' && !payment?.link_suffix) {
+    await recordStepSkip(db, { contact, sequence, step, channel: 'WhatsApp', reason: 'no payment link for this invoice' })
+    return null
+  }
+  // PAYLINK.6b — keyed on the MAPPING (does this step actually place
+  // pay_amount somewhere in the body?), not on the url_button mapping — a
+  // pay-link step that maps the button but not {{2}} to pay_amount has no
+  // "payment of {{2}}" wording to protect, so an empty amount must not
+  // block its send.
+  if (Object.values(variableMapping).includes('pay_amount') && !payment?.amount) {
+    await recordStepSkip(db, { contact, sequence, step, channel: 'WhatsApp', reason: 'no payment amount for this invoice' })
+    return null
   }
   const branding = await getLocationBranding(db, sequence.location_id)
   const components = buildTemplateComponents(
@@ -489,6 +492,19 @@ export async function sendWhatsappStep(db, { enrollment, step, sequence, contact
     step.whatsapp_header_media_url || null,
     { companyName: branding.companyName, locationId: sequence.location_id, payment },
   )
+  // PAYLINK.6b — the general case the two checks above cover only for the
+  // pay-link feature specifically: ANY template whose approved link ends in
+  // a variable must ship a url-button component or Meta rejects the whole
+  // send (132012), which throws, feeds error_count, and can auto-pause the
+  // enrolment — killing its email steps too. An unmapped field, a wiped
+  // `variables` blob from the node editor, or a whitespace typo all resolve
+  // to nothing here just as surely as a missing payment link does, so treat
+  // it the same way: a recorded skip, never a throw.
+  if (dynamicUrlButtonIndex(template.components) >= 0
+    && !components.some((c) => c.type === 'button' && c.sub_type === 'url')) {
+    await recordStepSkip(db, { contact, sequence, step, channel: 'WhatsApp', reason: "no value for the template's link button" })
+    return null
+  }
 
   // COMMS-AUDIT 2026-07-10: route from the sequence location's
   // whatsapp_numbers row. Without { locationId } config resolution
