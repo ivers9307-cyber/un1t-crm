@@ -529,9 +529,60 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ### Task 4: Capture on the automatic path (webhook → `maybeEnrolDunning`)
 
 **Files:**
+- Modify: `src/lib/dunning-payment.js` (add `refreshActiveRunPayment`), `src/lib/dunning-payment.test.js`
 - Modify: `src/lib/dunning.js:25-28` (imports), `:87` (signature), `:115-124` (enrol call)
 - Modify: `src/lib/dunning.test.js`
 - Modify: `src/app/api/webhooks/glofox/route.js:325`
+
+**Design note from the Task 3 review (must be handled here):** `enrolContacts` dedups an already-ACTIVE enrolment before inserting, and `planReenrolments` refuses a re-activation whose `sourceRef` equals the previous run's. In both cases `enrolContacts` returns `enrolled: 0` and the freshly captured `payment` would be dropped, leaving a live run sending the OLD invoice's link (possibly one already paid). So: when `enrolContacts` reports `enrolled: 0` and `reactivated: 0`, refresh the active enrolment's `metadata.payment` in place. That is a new IO helper in `dunning-payment.js`:
+
+```js
+/**
+ * PAYLINK.4 — write a fresh `payment` onto the contact's ACTIVE enrolment on
+ * this sequence (read-merge-write; guarded on status='active'). Used when a
+ * new failed invoice arrives while an earlier reminder run is still live, so
+ * the remaining steps chase the newest invoice, not a stale one. Returns
+ * { refreshed: 0|1 }. Never throws.
+ */
+export async function refreshActiveRunPayment(db, { sequenceId, contactId, payment }) {
+  try {
+    if (!sequenceId || !contactId || !payment) return { refreshed: 0 }
+    const { data: row, error } = await db
+      .from('sequence_enrollments')
+      .select('id, metadata')
+      .eq('sequence_id', sequenceId).eq('contact_id', contactId).eq('status', 'active')
+      .order('enrolled_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (error || !row) return { refreshed: 0 }
+    const prev = row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata) ? row.metadata : {}
+    const { data: updated, error: updErr } = await db
+      .from('sequence_enrollments')
+      .update({ metadata: { ...prev, payment } })
+      .eq('id', row.id).eq('status', 'active')
+      .select('id')
+    if (updErr) { logWarn('dunning-payment', 'refreshActiveRunPayment update failed', { contactId, err: updErr.message }); return { refreshed: 0 } }
+    return { refreshed: (updated || []).length }
+  } catch (e) {
+    logWarn('dunning-payment', 'refreshActiveRunPayment threw', { contactId, err: e?.message })
+    return { refreshed: 0 }
+  }
+}
+```
+
+Tests for it (append to `dunning-payment.test.js`, with a fake db whose `sequence_enrollments` builder records the update payload and filters): active row found → update payload is `{ metadata: { ...prev, payment } }` filtered on `id` + `status='active'`, `refreshed: 1`; no active row → `refreshed: 0`, no update; update error → `refreshed: 0` and `logWarn`; missing args → `refreshed: 0`, no reads.
+
+`maybeEnrolDunning` then does, after `enrolContacts`:
+
+```js
+    if (!(res?.enrolled > 0) && !(res?.reactivated > 0)) {
+      // An earlier run is still live (or the same source was refused a re-run):
+      // give it the newest invoice's link rather than letting it chase a stale one.
+      await refreshActiveRunPayment(db, { sequenceId: seqId, contactId, payment })
+    }
+```
+
+with a test in `dunning.test.js` (mock `refreshActiveRunPayment` alongside `capturePaymentForRun`): `enrolContacts` resolving `{ enrolled: 0, reactivated: 0 }` → `refreshActiveRunPayment` called with the sequence id, contact id and the captured payment; resolving `{ enrolled: 1 }` → not called. Task 5's manual route does the same after its `enrolContacts` call (the `enrolled === 0` branch already exists there).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -680,7 +731,7 @@ Before `enrolContacts`:
     })
 ```
 
-and add `metadata: { payment },` to the `enrolContacts({...})` call.
+and add `metadata: { payment },` to the `enrolContacts({...})` call. In the existing `if (enrolled === 0)` branch ("Already mid-sequence — idempotent no-op"), before the `invalidateRadar` call, add `await refreshActiveRunPayment(db, { sequenceId: seqId, contactId, payment })` (import it from `@/lib/dunning-payment`) so an operator's second click on a member who is already mid-run still points that run at the newest invoice.
 
 - [ ] **Step 2: Lint and the route's neighbours**
 

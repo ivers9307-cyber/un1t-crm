@@ -42,6 +42,14 @@ Pure helpers plus one IO function, kept out of `dunning.js` so the manual remind
 
 `enrolContacts` gains an optional `metadata` object. On insert it is written as the row's `metadata`. On DUNNING.2 re-activation it is merged as `{ ...prevMeta, ...metadata, previous_runs }`, so `previous_runs` is always preserved and a stale `payment` from an earlier run is replaced. No change when omitted.
 
+### 3a. Metadata is per-contact
+
+`enrolContacts` refuses (throws) when `metadata` is given with more than one contact: the payload is one member's payment link and must never be fanned out across a batch. A non-object `metadata` is ignored with a warning.
+
+### 3b. A live run is refreshed, not abandoned
+
+`enrolContacts` dedups an already-active enrolment, and a re-activation with the same `source_ref` as the previous run is refused. In both cases the new `payment` would otherwise be dropped and the live run would keep chasing an older invoice. Both entry points therefore call `refreshActiveRunPayment(db, { sequenceId, contactId, payment })` (in `dunning-payment.js`) when `enrolContacts` enrolled or reactivated nothing: it writes the fresh `payment` onto the contact's active enrolment for that sequence (read-merge-write, guarded on `status = 'active'`), never throws, and is a no-op when there is no active run.
+
 ### 4. Both entry points capture the payment
 
 - **Webhook (automatic):** `maybeEnrolDunning(db, locationId, contactId, { invoiceId, isMembership, glofoxUserId })` calls `capturePaymentForRun` after every existing gate passes and just before `enrolContacts`, and passes `metadata: { payment }`. The webhook route passes `glofoxUserId: ltvResult.glofox_user_id ?? null` (falls back to the contact's linked id inside the capture). A failed capture never blocks the enrolment.
