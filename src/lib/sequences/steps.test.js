@@ -16,7 +16,7 @@
 // Tests focus on those validation surfaces. Send-step send
 // mechanics are out of scope for this slice.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { glofoxProvisionStep } from './steps.js'
 
 vi.mock('@/lib/postmark', () => ({
@@ -1205,6 +1205,14 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
     const sent = pm.sendMarketingEmail.mock.calls[0][0]
     expect(sent.subject).not.toContain('<a')
     expect(sent.subject).toBe('Payment failed of €209 — ')
+  })
+
+  // PAYLINK.7c — the two tests above swap in the REAL applyMergeTags for
+  // themselves only; without this, that real implementation leaks past
+  // this describe's last test into sendSmsStep below (which expects the
+  // identity stub).
+  afterEach(() => {
+    pm.applyMergeTags.mockImplementation((s) => s)
   })
 })
 
