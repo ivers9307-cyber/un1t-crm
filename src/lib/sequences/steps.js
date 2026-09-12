@@ -308,9 +308,12 @@ export async function sendEmailStep(db, { enrollment, step, sequence, contact, f
 
   // PAYLINK.7 — the run's payment (if any) resolves the two payment merge
   // tags; both fragments are empty for every non-dunning email, so a body
-  // that never uses them is unaffected.
+  // that never uses them is unaffected. payAmountPhrase(payment) is computed
+  // once and shared by both calls — the subject and body must never disagree
+  // on which run's amount they're quoting.
   const payment = paymentFromEnrollment(enrollment)
-  const mergedSubject = applyMergeTags(subject, contact, { location_name: locationName, pay_amount_phrase: payAmountPhrase(payment) })
+  const payPhrase = payAmountPhrase(payment)
+  const mergedSubject = applyMergeTags(subject, contact, { location_name: locationName, pay_amount_phrase: payPhrase })
   const merged = applyMergeTags(html, contact, {
     location_name: locationName,
     booking_token: bookingToken,
@@ -318,7 +321,7 @@ export async function sendEmailStep(db, { enrollment, step, sequence, contact, f
     // Derived from the unsubscribe URL because both endpoints resolve the same
     // token column. Safe to split now that the null case returned above.
     preference_url: `${baseUrl}/preferences/${unsubscribeUrl.split('/unsubscribe/')[1]}`,
-    pay_amount_phrase: payAmountPhrase(payment),
+    pay_amount_phrase: payPhrase,
     payment_cta: paymentCtaHtml(payment),
   })
   const mergedHtml = appendUnsubscribeFooter(merged, unsubscribeUrl)

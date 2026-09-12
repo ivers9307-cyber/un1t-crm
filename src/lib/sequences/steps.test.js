@@ -952,7 +952,13 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
     pm = await import('@/lib/postmark')
     pm.sendMarketingEmail.mockReset()
     pm.sendTransactionalEmail.mockReset()
-    pm.applyMergeTags.mockClear()
+    // PAYLINK.7b — mockReset (not mockClear) so a PAYLINK.7 test's real-
+    // implementation override from the previous run can never survive into
+    // this one; re-arm the identity stub every test dep on it (all of them
+    // except the two PAYLINK.7 tests, which swap it back to the real
+    // implementation for themselves only).
+    pm.applyMergeTags.mockReset()
+    pm.applyMergeTags.mockImplementation((s) => s)
     pm.sendMarketingEmail.mockResolvedValue({ messageId: 'cccccccc-0000-0000-0000-000000000003' })
   })
 
@@ -1149,17 +1155,24 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
 
   it('PAYLINK.7 — the run\'s payment renders into the email as amount phrase + CTA link', async () => {
     // applyMergeTags is mocked as an identity function in this describe
-    // (see the top-of-file vi.mock) — delegate to the real implementation
-    // for just these two calls so the rendering asserted below is real,
-    // not a stub echo.
+    // (see the top-of-file vi.mock, re-armed every test in the beforeEach
+    // above) — swap in the real implementation for just this test so the
+    // rendering asserted below is real, not a stub echo.
     const { applyMergeTags: realApplyMergeTags } = await vi.importActual('@/lib/postmark')
-    pm.applyMergeTags.mockImplementationOnce(realApplyMergeTags).mockImplementationOnce(realApplyMergeTags)
+    pm.applyMergeTags.mockImplementation(realApplyMergeTags)
     const db = emailDb()
     const payStep = { ...step, html_content: '<p>Your membership payment{{pay_amount_phrase}} failed. To keep it, {{payment_cta}}.</p>' }
     await steps.sendEmailStep(db, {
       step: payStep, sequence, contact: consentedContact,
       enrollment: { id: 'e1', source_type: 'invoice_past_due', metadata: { payment: { invoice_id: 'inv-1', link: 'https://pay.test/inv-1', link_suffix: 'inv-1', amount: '€209', retriable: true } } },
     })
+    // PAYLINK.7b — pins the SUBJECT half: sendEmailStep's first applyMergeTags
+    // call is the subject, and it must carry pay_amount_phrase too (the body
+    // assertions below only prove the BODY call received it).
+    expect(pm.applyMergeTags).toHaveBeenNthCalledWith(
+      1, payStep.subject, consentedContact,
+      expect.objectContaining({ pay_amount_phrase: ' of €209' }),
+    )
     const sent = pm.sendMarketingEmail.mock.calls[0][0]
     expect(sent.htmlBody).toContain('payment of €209 failed')
     expect(sent.htmlBody).toContain('<a href="https://pay.test/inv-1">pay it now here</a>, it takes a few seconds, or update your card in the Glofox app')
@@ -1167,13 +1180,31 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
 
   it('PAYLINK.7 — no payment on the run → the card-update wording, no empty link', async () => {
     const { applyMergeTags: realApplyMergeTags } = await vi.importActual('@/lib/postmark')
-    pm.applyMergeTags.mockImplementationOnce(realApplyMergeTags).mockImplementationOnce(realApplyMergeTags)
+    pm.applyMergeTags.mockImplementation(realApplyMergeTags)
     const db = emailDb()
     const payStep = { ...step, html_content: '<p>Your membership payment{{pay_amount_phrase}} failed. To keep it, {{payment_cta}}.</p>' }
     await steps.sendEmailStep(db, { step: payStep, sequence, contact: consentedContact, enrollment: { id: 'e1', source_type: 'invoice_past_due', metadata: {} } })
     const sent = pm.sendMarketingEmail.mock.calls[0][0]
     expect(sent.htmlBody).toContain('Your membership payment failed. To keep it, update your card in the Glofox app.')
     expect(sent.htmlBody).not.toContain('href=""')
+  })
+
+  it('PAYLINK.7b — the subject never renders {{payment_cta}} as HTML, even with a link on the run', async () => {
+    // The subject line is plain text (an inbox header, not a rendered body) —
+    // sendEmailStep deliberately feeds payment_cta only to the BODY merge,
+    // never the subject's. A subject carrying {{payment_cta}} must render the
+    // tag as empty, not leak an <a> tag into an email client's subject line.
+    const { applyMergeTags: realApplyMergeTags } = await vi.importActual('@/lib/postmark')
+    pm.applyMergeTags.mockImplementation(realApplyMergeTags)
+    const db = emailDb()
+    const payStep = { ...step, subject: 'Payment failed{{pay_amount_phrase}} — {{payment_cta}}' }
+    await steps.sendEmailStep(db, {
+      step: payStep, sequence, contact: consentedContact,
+      enrollment: { id: 'e1', source_type: 'invoice_past_due', metadata: { payment: { invoice_id: 'inv-1', link: 'https://pay.test/inv-1', link_suffix: 'inv-1', amount: '€209', retriable: true } } },
+    })
+    const sent = pm.sendMarketingEmail.mock.calls[0][0]
+    expect(sent.subject).not.toContain('<a')
+    expect(sent.subject).toBe('Payment failed of €209 — ')
   })
 })
 
