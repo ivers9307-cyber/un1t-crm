@@ -499,3 +499,74 @@ describe('PAYLINK.8b \u2014 payment_cta email copy reads cleanly with and withou
     }
   })
 })
+
+// FLOW-DELAY.1 — the gallery is the reason this matters. 19 of the 25
+// templates carry their delays on ACTION steps (whatsapp/email/sms), not on
+// `wait` rows, because the legacy runner honours the three delay columns on
+// every step_type. /api/sequences/from-template copies those delays onto
+// sequence_steps verbatim — and then the very first Publish out of the flow
+// builder used to rewrite every one of them to zero, because the graph
+// decompiler only read delays off `wait` steps and the compiler stamped
+// 0/0/0 on everything else. Seen live on the overdue-payment reminders
+// install: a drip designed to run over seven days became a burst of sends
+// inside the hour.
+//
+// This is the guard in both directions: install a template, open it in the
+// builder, publish it — the member gets the messages at the same moments.
+describe('FLOW-DELAY.1 — every gallery template survives a builder round trip unchanged in timing', () => {
+  // The runner's rule (src/lib/sequences/scheduler.js): an enrolment starts
+  // with next_step_at = now, so step 1's own delay is never applied; after
+  // finishing step N the runner schedules the step it advances into at
+  // now + nextStepDelayMs(that step). A `wait` row sends nothing, it only
+  // moves the clock.
+  function sendTimeline(steps) {
+    const ms = (s) => (((s.delay_days || 0) * 24 * 60) + ((s.delay_hours || 0) * 60) + (s.delay_minutes || 0)) * 60_000
+    let t = 0
+    const out = []
+    steps.forEach((s, i) => {
+      if (i > 0) t += ms(s)
+      if (s.step_type !== 'wait') out.push({ step_type: s.step_type, at: t })
+    })
+    return out
+  }
+
+  // What /api/sequences/from-template writes into sequence_steps.
+  function installedSteps(tpl) {
+    return tpl.steps.map((s, i) => ({ ...s, step_order: i + 1 }))
+  }
+
+  it('the catalog really does lean on action-step delays (sanity — if this drops to 0 the guard below is vacuous)', () => {
+    const withActionDelays = SEQUENCE_TEMPLATES.filter((t) => t.steps.some(
+      (s) => s.step_type !== 'wait' && ((s.delay_days || 0) || (s.delay_hours || 0) || (s.delay_minutes || 0)),
+    ))
+    expect(withActionDelays.length).toBeGreaterThanOrEqual(19)
+  })
+
+  it('compile(decompile(steps)) sends every template at exactly the original times', async () => {
+    const { decompileStepsToGraph } = await import('./sequences/graph/decompile.js')
+    const { compileGraphToSteps } = await import('./sequences/graph/compile.js')
+    for (const tpl of SEQUENCE_TEMPLATES) {
+      const steps = installedSteps(tpl)
+      const graph = decompileStepsToGraph(steps, { type: tpl.trigger_type, config: tpl.trigger_config || {} })
+      const recompiled = compileGraphToSteps(graph)
+      expect(sendTimeline(recompiled), `${tpl.id} publishes a different schedule than it installs`)
+        .toEqual(sendTimeline(steps))
+    }
+  })
+
+  it('no template loses its total elapsed span in the round trip', async () => {
+    const { decompileStepsToGraph } = await import('./sequences/graph/decompile.js')
+    const { compileGraphToSteps } = await import('./sequences/graph/compile.js')
+    const span = (steps) => {
+      const t = sendTimeline(steps)
+      return t.length ? t[t.length - 1].at : 0
+    }
+    for (const tpl of SEQUENCE_TEMPLATES) {
+      const steps = installedSteps(tpl)
+      const recompiled = compileGraphToSteps(
+        decompileStepsToGraph(steps, { type: tpl.trigger_type, config: tpl.trigger_config || {} }),
+      )
+      expect(span(recompiled), `${tpl.id} collapsed from ${span(steps)}ms to ${span(recompiled)}ms`).toBe(span(steps))
+    }
+  })
+})
