@@ -72,6 +72,25 @@ export const MERGE_TAGS = Object.freeze([
     // renders empty for almost everyone, which reads as a broken email.
     why: 'only populated right after CRM creates a Glofox account — welcome sequence only, empty in a broadcast',
   },
+  {
+    tag: '{{pay_amount_phrase}}',
+    name: 'Payment amount',
+    description: 'Overdue payment reminders: " of €209", or empty',
+    offered: false,
+    // PAYLINK.7 — only non-empty on an overdue-payment reminder run
+    // (sendEmailStep resolves it from sequence_enrollments.metadata.payment).
+    // Empty for every other email, so offering it in a general campaign
+    // would read as a broken sentence fragment for almost everyone.
+    why: 'only populated on an overdue-payment reminder run — empty in a broadcast',
+  },
+  {
+    tag: '{{payment_cta}}',
+    name: 'Payment call to action',
+    description: 'Overdue payment reminders: a Pay now link, or the card-update wording',
+    offered: false,
+    // PAYLINK.7 — same run-scoped source as {{pay_amount_phrase}} above.
+    why: 'only populated on an overdue-payment reminder run — empty in a broadcast',
+  },
 ])
 
 /** The tags an operator is offered, in display order. */

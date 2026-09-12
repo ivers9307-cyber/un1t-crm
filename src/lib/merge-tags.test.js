@@ -56,6 +56,9 @@ describe('the registry and applyMergeTags() agree', () => {
       unsubscribe_url: 'https://example.com/unsubscribe/tok',
       preference_url: 'https://example.com/preferences/tok',
       booking_token: 'cGF5bG9hZA.c2ln',
+      // PAYLINK.7 — only non-empty on an overdue-payment reminder run.
+      pay_amount_phrase: ' of €209',
+      payment_cta: '<a href="https://pay.test/x">pay it now here</a>',
     }
     for (const { tag } of MERGE_TAGS) {
       const out = applyMergeTags(`<p>${tag}</p>`, contact, extras)
@@ -77,11 +80,11 @@ describe('the registry is well formed', () => {
     }
   })
 
-  it('withholds exactly the deprecated alias and the welcome-sequence tag', () => {
+  it('withholds exactly the deprecated alias, the welcome-sequence tag, and the payment-reminder tags', () => {
     // Pinned so widening the withheld set is a deliberate edit to this test,
     // not a quiet way to stop advertising something that works.
     expect(MERGE_TAGS.filter((t) => !t.offered).map((t) => t.tag).sort())
-      .toEqual(['{{glofox_passcode}}', '{{lead_status}}'])
+      .toEqual(['{{glofox_passcode}}', '{{lead_status}}', '{{pay_amount_phrase}}', '{{payment_cta}}'])
   })
 
   it('derives the editor shapes from the offered set', () => {

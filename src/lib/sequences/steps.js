@@ -43,7 +43,7 @@ import { getLocationBranding } from '@/lib/location-branding'
 import { isFrequencyCapped, frequencyCapDeferUntil, FrequencyCapDeferral, stampMarketingTouch } from '@/lib/frequency-cap'
 import { overlayConnections } from '@/lib/connection-registry'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
-import { paymentFromEnrollment } from '@/lib/dunning-payment'
+import { paymentFromEnrollment, paymentCtaHtml, payAmountPhrase } from '@/lib/dunning-payment'
 import { URL_BUTTON_MAPPING_KEY, dynamicUrlButtonIndex } from '@/lib/whatsapp-template-buttons'
 
 // ── DUNNING.3 — transactional lane ───────────────────────────────
@@ -306,7 +306,11 @@ export async function sendEmailStep(db, { enrollment, step, sequence, contact, f
     logWarn('sequences', `booking token not minted for ${contact.id}: ${e.message || e}`, { contactId: contact.id })
   }
 
-  const mergedSubject = applyMergeTags(subject, contact, { location_name: locationName })
+  // PAYLINK.7 — the run's payment (if any) resolves the two payment merge
+  // tags; both fragments are empty for every non-dunning email, so a body
+  // that never uses them is unaffected.
+  const payment = paymentFromEnrollment(enrollment)
+  const mergedSubject = applyMergeTags(subject, contact, { location_name: locationName, pay_amount_phrase: payAmountPhrase(payment) })
   const merged = applyMergeTags(html, contact, {
     location_name: locationName,
     booking_token: bookingToken,
@@ -314,6 +318,8 @@ export async function sendEmailStep(db, { enrollment, step, sequence, contact, f
     // Derived from the unsubscribe URL because both endpoints resolve the same
     // token column. Safe to split now that the null case returned above.
     preference_url: `${baseUrl}/preferences/${unsubscribeUrl.split('/unsubscribe/')[1]}`,
+    pay_amount_phrase: payAmountPhrase(payment),
+    payment_cta: paymentCtaHtml(payment),
   })
   const mergedHtml = appendUnsubscribeFooter(merged, unsubscribeUrl)
 
@@ -502,6 +508,14 @@ export async function sendWhatsappStep(db, { enrollment, step, sequence, contact
   // it the same way: a recorded skip, never a throw.
   if (dynamicUrlButtonIndex(template.components) >= 0
     && !components.some((c) => c.type === 'button' && c.sub_type === 'url')) {
+    // PAYLINK.7 — this is an operator config fault (an unmapped field, a
+    // wiped `variables` blob, a whitespace typo), not a per-contact one — it
+    // will keep happening to every contact on the step until someone fixes
+    // the mapping. A recordStepSkip alone only reaches THIS contact's
+    // timeline; log it too so it surfaces to whoever watches the logs.
+    logWarn('sequences', 'WhatsApp step skipped: dynamic URL button has no value', {
+      sequenceId: sequence.id, stepId: step.id, contactId: contact.id,
+    })
     await recordStepSkip(db, { contact, sequence, step, channel: 'WhatsApp', reason: "no value for the template's link button" })
     return null
   }
