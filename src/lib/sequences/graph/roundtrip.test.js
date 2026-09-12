@@ -16,6 +16,14 @@ const fixtures = {
     { step_order: 3, step_type: 'email', subject: 'How was it?', html_content: null, template_id: 't9' },
     { step_order: 4, step_type: 'sms', sms_body: 'come back this week' },
   ],
+  // SEQ-URLBUTTON.1 — `url_button` is a RESERVED key inside whatsapp_variables,
+  // not a numbered body variable. Nothing in compile/decompile enumerates the
+  // keys, so it survives by accident rather than by design — pin it, because a
+  // mapping that silently loses this key publishes a step Meta rejects with
+  // 132012 on every single send.
+  whatsapp_url_button: [
+    { step_order: 1, step_type: 'whatsapp', whatsapp_template_id: 'wt-dyn', whatsapp_variables: { 1: 'first_name', url_button: 'abc' }, whatsapp_header_media_url: null },
+  ],
   // SEQ-TERMINAL — graph-compiled shape: terminal yes-arm ends ('end'
   // marker) instead of falling through into the no-arm.
   terminal_arms: [
@@ -37,6 +45,9 @@ function normalise(steps) {
     for (const k of ['subject', 'html_content', 'template_id', 'sms_body', 'whatsapp_template_id']) {
       if (s[k] != null) o[k] = s[k]
     }
+    // The variable mapping is part of the row the runner reads — compare it
+    // whenever there is one, so a key silently dropped in transit fails here.
+    if (s.whatsapp_variables && Object.keys(s.whatsapp_variables).length) o.whatsapp_variables = s.whatsapp_variables
     // next_step_order is derived from the edges (SEQ-TERMINAL), so legacy
     // fixtures without it recompile with the marker added — for a legacy
     // markerless row 'next row' and the stamped successor are the same
@@ -57,4 +68,14 @@ describe('graph round-trip — decompile then recompile equals the input', () =>
       expect(normalise(recompiled)).toEqual(normalise(steps))
     })
   }
+})
+
+describe('whatsapp_variables reserved keys survive the round trip (SEQ-URLBUTTON.1)', () => {
+  it('keeps url_button alongside the numbered body variables', () => {
+    const steps = fixtures.whatsapp_url_button
+    const graph = decompileStepsToGraph(steps, { type: 'manual', config: {} })
+    expect(graph.nodes[0].config.variables).toEqual({ 1: 'first_name', url_button: 'abc' })
+    const [row] = compileGraphToSteps(graph)
+    expect(row.whatsapp_variables).toEqual({ 1: 'first_name', url_button: 'abc' })
+  })
 })

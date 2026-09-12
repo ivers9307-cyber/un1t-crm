@@ -156,6 +156,27 @@ export function dynamicUrlButtonIndex(components) {
   )
 }
 
+// The two block messages differ by ONE clause — what the operator is about to
+// do, and where they do it. Everything either side of that is shared, so it is
+// written once: a copy edit to the diagnosis or to the consequence would
+// otherwise have to be made twice, and the second one is the one that gets
+// missed. `action` is the only variable part.
+const blockSentence = (label, action) =>
+  `The "${label}" button's link ends in a variable with no value set. ${action} — Meta rejects every message without it.`
+
+/** The button's label, or a positional fallback. */
+function urlButtonLabel(components, idx) {
+  return buttonsOf(components)[idx]?.text || `button ${idx + 1}`
+}
+
+/** Shared gate: the index of a dynamic URL button with nothing mapped, or -1. */
+function unmappedUrlButtonIndex(template, variableMapping) {
+  const idx = dynamicUrlButtonIndex(template?.components)
+  if (idx < 0) return -1
+  if (String(variableMapping?.[URL_BUTTON_MAPPING_KEY] ?? '').trim()) return -1
+  return idx
+}
+
 /**
  * Why this template must not be sent yet, or null. A dynamic URL button needs a
  * per-send value: without it Meta rejects every single message with 132012, so
@@ -163,11 +184,25 @@ export function dynamicUrlButtonIndex(components) {
  * on 2026-06-11). Refuse the whole send instead, naming the button.
  */
 export function urlButtonSendBlock(template, variableMapping) {
-  const idx = dynamicUrlButtonIndex(template?.components)
+  const idx = unmappedUrlButtonIndex(template, variableMapping)
   if (idx < 0) return null
-  if (String(variableMapping?.[URL_BUTTON_MAPPING_KEY] ?? '').trim()) return null
-  const label = buttonsOf(template.components)[idx]?.text || `button ${idx + 1}`
-  return `The "${label}" button's link ends in a variable with no value set. Set the link value on this send before sending — Meta rejects every message without it.`
+  return blockSentence(urlButtonLabel(template.components, idx), 'Set the link value on this send before sending')
+}
+
+/**
+ * SEQ-URLBUTTON.1 — the same block, worded for a sequence STEP.
+ *
+ * Identical detection, different register: a broadcast is SENT (now, to a list),
+ * a step is PUBLISHED (and fires weeks later, one contact at a time). Telling an
+ * operator in the flow builder to fix something "on this send before sending"
+ * points at a thing that isn't in front of them. Deliberately a second function
+ * rather than a parameter on urlButtonSendBlock: the send path's sentence is
+ * quoted in its own tests and in the broadcast UI, and must not drift.
+ */
+export function urlButtonStepBlock(template, variableMapping) {
+  const idx = unmappedUrlButtonIndex(template, variableMapping)
+  if (idx < 0) return null
+  return blockSentence(urlButtonLabel(template.components, idx), 'Set the link value on this step before publishing')
 }
 
 /**
