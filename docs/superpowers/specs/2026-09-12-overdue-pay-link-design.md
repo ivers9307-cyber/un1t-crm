@@ -32,7 +32,7 @@ The overdue-payment reminder automation (gallery template `overdue_payment_dunni
 
 Pure helpers plus one IO function, kept out of `dunning.js` so the manual reminder route and the webhook path share one implementation.
 
-- `paymentRunMetadata(linkResult, { invoiceId, now })` (pure) → `{ invoice_id, link, amount, currency, retriable, fetched_at, error }`. `amount` is display text from `formatMoneyMinor(amountCents, currency)` (`€209`, `€29.50`), `''` when unknown. `link` is `null` unless `ok && retriable`.
+- `paymentRunMetadata(linkResult, { invoiceId, now })` (pure) → `{ invoice_id, link, link_suffix, amount, currency, retriable, fetched_at, error }`. `amount` is display text from `formatMoneyMinor(amountCents, currency)` (`€209`, `€29.50`), `''` when unknown. `link` is `null` unless `ok && retriable` and Glofox returned an `https://` link. `link_suffix` is the text after the last `/` of that link (the part Meta appends to the approved button base), `null` without a link; when it differs from `invoice_id` the capture logs a warning, because the WhatsApp button is built from the suffix so it always matches the link Glofox vouched for. `retriable` is Glofox's own flag. `error`: `null` when payable, `no_payment_link` when retriable but no usable link, `not_retriable` when Glofox says so, else the helper's error.
 - `capturePaymentForRun(db, { locationId, contactId, invoiceId, glofoxUserId })` (IO) → `{ payment }` where `payment` is the object above. Resolves credentials with `glofoxCredentialsForLocation`; the member id is `glofoxUserId` when given, else `contacts.glofox_member_id`. Missing creds, missing member id, or a helper failure all produce a `payment` with `link: null` and `error` set. Never throws; logs a warning on failure.
 - `paymentFromEnrollment(enrollment)` (pure) → the `payment` object from `enrollment.metadata.payment`, or `null`.
 - `paymentCtaHtml(payment)` (pure) → the sentence fragment the emails splice in. With a link: `<a href="LINK">pay it now here</a>, it takes a few seconds, or update your card in the Glofox app`. Without: `update your card in the Glofox app`. The link is HTML-escaped.
@@ -49,9 +49,9 @@ Pure helpers plus one IO function, kept out of `dunning.js` so the manual remind
 
 ### 5. WhatsApp step — `src/lib/whatsapp.js`, `src/lib/sequences/steps.js`
 
-- `resolveContactField` (whatsapp.js) gains two reserved names resolved from `opts.payment`, never from the contact: `pay_amount` → `payment.amount`, `pay_link_suffix` → `payment.invoice_id`. Both are `''` when there is no payment. Existing names and the literal fallback are unchanged.
+- `resolveContactField` (whatsapp.js) gains two reserved names resolved from `opts.payment`, never from the contact: `pay_amount` → `payment.amount`, `pay_link_suffix` → `payment.link_suffix`. Both are `''` when there is no payment. Existing names and the literal fallback are unchanged.
 - `sendWhatsappStep` derives `payment = paymentFromEnrollment(enrollment)` and passes `{ payment }` in the opts to both `buildTemplateComponents` and `renderTemplateBody`.
-- **Skip rule:** if the step's `whatsapp_variables[url_button] === 'pay_link_suffix'` and `payment?.link` is empty, the step is a recorded skip (`recordStepSkip`, reason `no payment link for this invoice`) and returns `null`. Meta would reject a dynamic-URL template sent without its suffix, and a button that opens an unpayable invoice is worse than no message. The run continues to its email steps.
+- **Skip rule:** if the step's `whatsapp_variables[url_button] === 'pay_link_suffix'` and the run has no `payment.link_suffix` OR no `payment.amount`, the step is a recorded skip (`recordStepSkip`, reason `no payment link for this invoice` or `no payment amount for this invoice`) and returns `null`. Meta would reject a dynamic-URL template sent without its suffix, a button that opens an unpayable invoice is worse than no message, and the approved body reads "payment of {{2}}", so an empty amount would ship a hole. The run continues to its email steps, which cope with a missing amount.
 
 ### 6. Email steps — `src/lib/postmark.js`, `src/lib/sequences/steps.js`
 

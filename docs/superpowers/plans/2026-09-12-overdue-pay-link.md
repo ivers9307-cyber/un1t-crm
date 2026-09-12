@@ -720,10 +720,10 @@ describe('PAYLINK.6 — reserved payment names resolve from opts.payment, never 
     ],
   }
   const mapping = { '1': 'first_name', '2': 'pay_amount', url_button: 'pay_link_suffix' }
-  const payment = { invoice_id: '0f187762-acc8-42d2-860c-43cbe1477df0', link: 'https://pay.glofox.com/x', amount: '€209' }
+  const payment = { invoice_id: '0f187762-acc8-42d2-860c-43cbe1477df0', link: 'https://pay.glofox.com/payment-collector/v2/#/i/0f187762-acc8-42d2-860c-43cbe1477df0', link_suffix: '0f187762-acc8-42d2-860c-43cbe1477df0', amount: '€209' }
 
-  it('fills {{2}} with the amount and the URL button with the invoice id', () => {
-    const c = buildTemplateComponents(PAY_TEMPLATE, { ...contact, pay_amount: 'SHOULD-NOT-LEAK' }, mapping, null, { payment })
+  it('fills {{2}} with the amount and the URL button with the link suffix (never the contact, never invoice_id)', () => {
+    const c = buildTemplateComponents(PAY_TEMPLATE, { ...contact, pay_amount: 'SHOULD-NOT-LEAK', pay_link_suffix: 'NOPE' }, mapping, null, { payment: { ...payment, invoice_id: 'DIFFERENT' } })
     expect(c.find((x) => x.type === 'body').parameters.map((p) => p.text)).toEqual(['Richard', '€209'])
     expect(c.find((x) => x.type === 'button')).toEqual({ type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: '0f187762-acc8-42d2-860c-43cbe1477df0' }] })
   })
@@ -745,17 +745,29 @@ Append inside the `sendWhatsappStep — send-time consent gate + graceful skips`
     const payStep = { ...step, whatsapp_variables: { '1': 'first_name', '2': 'pay_amount', url_button: 'pay_link_suffix' } }
     const out = await steps.sendWhatsappStep(db, {
       step: payStep, sequence, contact: consentedContact,
-      enrollment: { id: 'e1', source_type: 'invoice_past_due', metadata: { payment: { invoice_id: 'inv-1', link: null, amount: '', error: 'not_retriable' } } },
+      enrollment: { id: 'e1', source_type: 'invoice_past_due', metadata: { payment: { invoice_id: 'inv-1', link: null, link_suffix: null, amount: '', error: 'not_retriable' } } },
     })
     expect(out).toBeNull()
     expect(wa.sendTemplateMessage).not.toHaveBeenCalled()
     expect(`${db.activityInserts[0].subject} ${db.activityInserts[0].note}`).toMatch(/no payment link/i)
   })
 
+  it('PAYLINK.6 — a link with no amount is also a recorded skip (the approved body reads "payment of {{2}}")', async () => {
+    const db = consentDb()
+    const payStep = { ...step, whatsapp_variables: { '1': 'first_name', '2': 'pay_amount', url_button: 'pay_link_suffix' } }
+    const out = await steps.sendWhatsappStep(db, {
+      step: payStep, sequence, contact: consentedContact,
+      enrollment: { id: 'e1', source_type: 'invoice_past_due', metadata: { payment: { invoice_id: 'inv-1', link: 'https://pay.test/inv-1', link_suffix: 'inv-1', amount: '', error: null } } },
+    })
+    expect(out).toBeNull()
+    expect(wa.sendTemplateMessage).not.toHaveBeenCalled()
+    expect(`${db.activityInserts[0].subject} ${db.activityInserts[0].note}`).toMatch(/no payment amount/i)
+  })
+
   it('PAYLINK.6 — with a link on the run the payment rides into buildTemplateComponents opts', async () => {
     const db = consentDb()
     const payStep = { ...step, whatsapp_variables: { '1': 'first_name', '2': 'pay_amount', url_button: 'pay_link_suffix' } }
-    const payment = { invoice_id: 'inv-1', link: 'https://pay.test/inv-1', amount: '€209', retriable: true }
+    const payment = { invoice_id: 'inv-1', link: 'https://pay.test/inv-1', link_suffix: 'inv-1', amount: '€209', retriable: true }
     await steps.sendWhatsappStep(db, {
       step: payStep, sequence, contact: consentedContact,
       enrollment: { id: 'e1', source_type: 'invoice_past_due', metadata: { payment } },
@@ -786,7 +798,7 @@ function resolveContactField(fieldName, contact, opts = {}) {
   // from the RUN (opts.payment, off sequence_enrollments.metadata) and never
   // from the contact, so a contact column of the same name can't leak in.
   if (fieldName === 'pay_amount') return opts.payment?.amount || ''
-  if (fieldName === 'pay_link_suffix') return opts.payment?.invoice_id || ''
+  if (fieldName === 'pay_link_suffix') return opts.payment?.link_suffix || ''
   return contact[fieldName] || fieldName // literal fallback, as today
 }
 ```
@@ -808,9 +820,16 @@ In `sendWhatsappStep`, replace the `variableMapping` / `components` block:
   // unpayable invoice is worse than silence) → recorded skip; the run's email
   // steps still go out with the card-update wording.
   const payment = paymentFromEnrollment(enrollment)
-  if (variableMapping[URL_BUTTON_MAPPING_KEY] === 'pay_link_suffix' && !payment?.link) {
-    await recordStepSkip(db, { contact, sequence, step, channel: 'WhatsApp', reason: 'no payment link for this invoice' })
-    return null
+  if (variableMapping[URL_BUTTON_MAPPING_KEY] === 'pay_link_suffix') {
+    if (!payment?.link_suffix) {
+      await recordStepSkip(db, { contact, sequence, step, channel: 'WhatsApp', reason: 'no payment link for this invoice' })
+      return null
+    }
+    // The approved body reads "payment of {{2}}" — an empty amount ships a hole.
+    if (!payment?.amount) {
+      await recordStepSkip(db, { contact, sequence, step, channel: 'WhatsApp', reason: 'no payment amount for this invoice' })
+      return null
+    }
   }
   const branding = await getLocationBranding(db, sequence.location_id)
   const components = buildTemplateComponents(
