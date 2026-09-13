@@ -4,15 +4,16 @@ vi.mock('@/lib/glofox', () => ({
   glofoxCredentialsForLocation: vi.fn(),
   getGlofoxInvoicePaymentLink: vi.fn(),
   getGlofoxOverdueInvoices: vi.fn(),
+  GLOFOX_OVERDUE_INVOICES_PAGE_CAP: 20,
 }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
 // PRESEND.1 — the gate exits a settled run through the same helper
 // exitDunningForContact uses. Mocked so the branch is observable and no
 // service client is opened.
-vi.mock('@/lib/sequences/scheduler', () => ({ setEnrollmentStatus: vi.fn() }))
+vi.mock('@/lib/sequences/enrollment-status', () => ({ setEnrollmentStatus: vi.fn() }))
 
 const { glofoxCredentialsForLocation, getGlofoxInvoicePaymentLink, getGlofoxOverdueInvoices } = await import('@/lib/glofox')
-const { setEnrollmentStatus } = await import('@/lib/sequences/scheduler')
+const { setEnrollmentStatus } = await import('@/lib/sequences/enrollment-status')
 const { logWarn } = await import('@/lib/log')
 const {
   paymentRunMetadata, capturePaymentForRun, paymentFromEnrollment, paymentCtaHtml, payAmountPhrase,
@@ -357,5 +358,36 @@ describe('PRESEND.1 — dunningPresendGate', () => {
     expect(await dunningPresendGate(db, { enrollment: OVERDUE, contact, sequence })).toEqual({ proceed: true })
     expect(await dunningPresendGate(db, {})).toEqual({ proceed: true })
     expect(await dunningPresendGate(db)).toEqual({ proceed: true })
+  })
+})
+
+// PRESEND.1 (review) — the exit is an INFERENCE from an absence, and the
+// endpoint caps its answer at 20 rows newest-first. A member with more than 20
+// overdue invoices would come back with a truncated list, and "not in the
+// list" would then mean "possibly just off the end of page one" rather than
+// "settled" — exiting a live chase on a debt that is still owed.
+describe('PRESEND.1 — a possibly-truncated overdue list is inconclusive, never an exit', () => {
+  const OVERDUE = { id: 'e1', source_type: 'invoice_past_due', metadata: { payment: { invoice_id: INVOICE } } }
+  const contact = { id: 'c1', glofox_member_id: '679bfd4c2f6535e4f200078e' }
+  const sequence = { id: 'seq-1', location_id: 'loc-1' }
+
+  const listOf = (n) => Array.from({ length: n }, (_, i) => `inv-${i}`)
+
+  it('proceeds without exiting when the list is at the page cap', async () => {
+    vi.mocked(getGlofoxOverdueInvoices).mockResolvedValue({ ok: true, status: 200, invoiceIds: listOf(20), error: null })
+    const r = await dunningPresendGate({}, { enrollment: OVERDUE, contact, sequence })
+    expect(r).toEqual({ proceed: true })
+    expect(setEnrollmentStatus).not.toHaveBeenCalled()
+    expect(logWarn).toHaveBeenCalled()
+  })
+
+  it('still exits on a short list, which cannot have been truncated', async () => {
+    vi.mocked(getGlofoxOverdueInvoices).mockResolvedValue({ ok: true, status: 200, invoiceIds: listOf(19), error: null })
+    expect((await dunningPresendGate({}, { enrollment: OVERDUE, contact, sequence })).proceed).toBe(false)
+  })
+
+  it('a full page that DOES contain the invoice proceeds without fuss', async () => {
+    vi.mocked(getGlofoxOverdueInvoices).mockResolvedValue({ ok: true, status: 200, invoiceIds: [...listOf(19), INVOICE], error: null })
+    expect(await dunningPresendGate({}, { enrollment: OVERDUE, contact, sequence })).toEqual({ proceed: true })
   })
 })

@@ -15,9 +15,9 @@
 // earlier reminder run is still live, so the remaining steps chase the
 // newest invoice, not a stale one.
 
-import { glofoxCredentialsForLocation, getGlofoxInvoicePaymentLink, getGlofoxOverdueInvoices } from '@/lib/glofox'
+import { glofoxCredentialsForLocation, getGlofoxInvoicePaymentLink, getGlofoxOverdueInvoices, GLOFOX_OVERDUE_INVOICES_PAGE_CAP } from '@/lib/glofox'
 import { isTransactionalEnrolment } from '@/lib/sequences/steps'
-import { setEnrollmentStatus } from '@/lib/sequences/scheduler'
+import { setEnrollmentStatus } from '@/lib/sequences/enrollment-status'
 import { formatMoneyMinor } from '@/lib/money-format'
 import { logWarn } from '@/lib/log'
 
@@ -209,6 +209,20 @@ export async function dunningPresendGate(db, { enrollment, contact, sequence } =
       return PROCEED
     }
     if (res.invoiceIds.includes(invoiceId)) return PROCEED
+    // The stop is an INFERENCE FROM AN ABSENCE, and the endpoint answers at
+    // most GLOFOX_OVERDUE_INVOICES_PAGE_CAP rows newest-first. A full page may
+    // have been truncated, so "not in the list" stops meaning "settled" and
+    // starts meaning "possibly just off the end of page one". Exiting there
+    // would abandon a live chase on a debt that is still owed, so a full page
+    // is inconclusive and we send. Nobody sane has 20 overdue invoices, which
+    // is exactly why this branch must not be reasoned about from the common
+    // case: it is the one where the inference is wrong.
+    if (res.invoiceIds.length >= GLOFOX_OVERDUE_INVOICES_PAGE_CAP) {
+      logWarn('dunning-payment', 'overdue list at the page cap, cannot infer settlement', {
+        contactId: contact?.id, invoiceId, count: res.invoiceIds.length,
+      })
+      return PROCEED
+    }
 
     // Settled (or no longer chaseable). Exit the run through the same helper
     // the webhook path uses, so an operator sees one exit reason either way.

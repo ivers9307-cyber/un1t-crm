@@ -570,3 +570,28 @@ describe('FLOW-DELAY.1 — every gallery template survives a builder round trip 
     }
   })
 })
+
+// FLOW-DELAY.1 (review) — two things the timing guard above assumes, made
+// explicit so a future gallery addition cannot quietly invalidate it.
+//
+//   1. sendTimeline walks the step list LINEARLY. That is only a faithful
+//      model while the gallery is branch-free — a `branch` step routes by
+//      then/else pointers, and a linear walk would then be comparing two
+//      schedules neither run takes.
+//   2. It models zero execution time. In the real runner a lifted wait costs
+//      up to one extra scheduler tick (the wait row executes, THEN its
+//      successor is scheduled at +0 and fires on the following pass), so the
+//      equivalence the guard asserts is of the DELAYS, not of wall-clock to
+//      the second. That is the right bar: a tick is ~10 minutes at most and
+//      applies equally to every wait node the builder has ever produced,
+//      whereas the defect being guarded collapsed days into nothing.
+describe('FLOW-DELAY.1 — the timing guard walk is valid for this catalog', () => {
+  it('no gallery template ships a branch step, so the linear walk is faithful', () => {
+    for (const tpl of SEQUENCE_TEMPLATES) {
+      expect(
+        tpl.steps.find((s) => s.step_type === 'branch'),
+        `${tpl.id} ships a branch step — the linear sendTimeline model no longer describes it`,
+      ).toBeUndefined()
+    }
+  })
+})

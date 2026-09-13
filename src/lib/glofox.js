@@ -1677,6 +1677,18 @@ export async function getGlofoxInvoicePaymentLink(creds, args = {}) {
 // Never throws. The one caller (dunningPresendGate) FAILS OPEN, and it can
 // only do that if every failure comes back as ok:false rather than an
 // exception — a Glofox blip must never silence a legitimate reminder.
+// The endpoint's page size. A response holding exactly this many rows may have
+// been truncated, so a caller inferring anything from an ABSENCE (the pre-send
+// gate: "this invoice is not listed, so it is settled") must treat a full page
+// as inconclusive rather than as proof.
+export const GLOFOX_OVERDUE_INVOICES_PAGE_CAP = 20
+
+// ID NAMESPACE, verified live rather than assumed: the invoice ids this returns
+// are the SAME ids the INVOICE_UPDATED webhook writes to `glofox_invoices.id`
+// and that capturePaymentForRun stores as `metadata.payment.invoice_id` —
+// 0f187762-acc8-42d2-860c-43cbe1477df0 was read back from both on 2026-09-13.
+// Without that, comparing the two would be a category error that silently never
+// matches, and a gate keyed on "not in the list" would exit every live run.
 /**
  * @param {{branchId, apiKey, apiToken}} creds
  * @param {{ memberId: string }} [args]

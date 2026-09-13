@@ -34,15 +34,16 @@ vi.mock('@/lib/glofox', () => ({
   glofoxCredentialsForLocation: vi.fn(),
   getGlofoxInvoicePaymentLink: vi.fn(),
   getGlofoxOverdueInvoices: vi.fn(),
+  GLOFOX_OVERDUE_INVOICES_PAGE_CAP: 20,
 }))
-vi.mock('@/lib/sequences/scheduler', () => ({ setEnrollmentStatus: vi.fn() }))
+vi.mock('@/lib/sequences/enrollment-status', () => ({ setEnrollmentStatus: vi.fn() }))
 
 import { sendEmailStep, sendWhatsappStep, sendSmsStep } from './steps.js'
 import { sendMarketingEmail } from '@/lib/postmark'
 import { sendTemplateMessage } from '@/lib/whatsapp'
 import { sendLocationSms } from '@/lib/twilio'
 import { glofoxCredentialsForLocation, getGlofoxOverdueInvoices } from '@/lib/glofox'
-import { setEnrollmentStatus } from '@/lib/sequences/scheduler'
+import { setEnrollmentStatus } from '@/lib/sequences/enrollment-status'
 
 const INVOICE = '0f187762-acc8-42d2-860c-43cbe1477df0'
 const MEMBER = '679bfd4c2f6535e4f200078e'

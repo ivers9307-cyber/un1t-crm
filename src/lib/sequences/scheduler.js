@@ -17,7 +17,7 @@
 // broken contact (e.g. invalid email) can't fill the cron logs forever.
 
 import { createServerClient } from '@/lib/supabase'
-import { logWarn } from '@/lib/log'
+import { logWarn, logInfo } from '@/lib/log'
 import { getLocationFrequencyCap, FrequencyCapDeferral } from '@/lib/frequency-cap'
 import { nextAcceptableSend, QUIET_HOURS_COLUMNS } from '@/lib/send-quiet-hours'
 import { evaluateSequenceAudience } from './audience.js'
@@ -45,17 +45,11 @@ export const CLAIM_LEASE_MS = 10 * 60_000
 
 // ── Public: pause / resume / exit ────────────────────────────────
 
-/**
- * Update the status of a single enrolment. Used by /api/sequences/...
- * pause / resume / exit endpoints.
- */
-export async function setEnrollmentStatus({ enrollmentId, status, reason }) {
-  const db = createServerClient()
-  const updates = { status }
-  if (reason) updates.last_error = reason
-  const { error } = await db.from('sequence_enrollments').update(updates).eq('id', enrollmentId)
-  if (error) throw error
-}
+// PRESEND.1 — moved to ./enrollment-status.js (a leaf), because the dunning
+// pre-send gate needs to end a run and importing it from HERE closed a cycle
+// back through steps.js. Re-exported so every existing caller — the pause /
+// resume / exit routes, dunning.js — keeps its import path.
+export { setEnrollmentStatus } from './enrollment-status.js'
 
 // ── Internal: pick the next step for an enrolment ────────────────
 
@@ -378,7 +372,18 @@ export async function runSequences({ now = new Date() } = {}) {
   // we update current_step_order before returning.
   const { data: due, error: dueErr } = await db
     .from('sequence_enrollments')
-    .select('id, sequence_id, contact_id, current_step_order, error_count, status, metadata')
+    // PRESEND.1 — this column list IS the handlers' view of the enrolment: the
+    // row is handed to sendEmailStep / sendWhatsappStep / sendSmsStep verbatim
+    // as `enrollment`. Three columns were missing and each failure was silent.
+    // `source_type` is what isTransactionalEnrolment reads, so without it the
+    // predicate was ALWAYS false here: DUNNING.3's transactional lane (the
+    // marketing-consent and frequency-cap bypass a payment reminder depends on)
+    // had never applied on the runner path, and PRESEND.1's pre-send gate would
+    // have proceeded on every send. `enrolled_at` feeds isGoalMet's
+    // 'booked_since_enrolment' goal, which fails CLOSED without it — that goal
+    // could never exit anybody. Adding a column here is cheap; leaving one out
+    // is invisible, so prefer the wider select.
+    .select('id, sequence_id, contact_id, current_step_order, error_count, status, metadata, source_type, source_ref, enrolled_at')
     .eq('status', 'active')
     .lte('next_step_at', now.toISOString())
     .order('next_step_at', { ascending: true })
@@ -667,7 +672,7 @@ export async function runSequences({ now = new Date() } = {}) {
       // The row was claimed with status='active', so the only way to miss
       // here is a deliberate mid-step exit; a 0-row match is not an error
       // and leaves the throw-on-advance-failure discipline untouched.
-      const { error: advanceErr } = await db.from('sequence_enrollments').update({
+      const { data: advanced, error: advanceErr } = await db.from('sequence_enrollments').update({
         current_step_order: followingOrder != null ? followingOrder - 1 : step.step_order,
         next_step_at: nextFireAt,
         status: newStatus,
@@ -675,7 +680,29 @@ export async function runSequences({ now = new Date() } = {}) {
         last_step_send_id: sendId,
         last_error: null,
         error_count: 0,
-      }).eq('id', enrollment.id).eq('status', 'active')
+      }).eq('id', enrollment.id).eq('status', 'active').select('id')
+      // PRESEND.1 (review) — a CAS that can match nothing must SAY so. There
+      // are exactly two ways to land here and they read very differently:
+      //   - the run was exited mid-step (the dunning pre-send gate). Expected.
+      //   - the row is anything else. The realistic one is an operator pausing
+      //     the enrolment while this step was in flight — and that carries a
+      //     known DUPLICATE-SEND window: buildResumePatch (resume.js) does not
+      //     touch current_step_order, so the resumed run re-sends step N, which
+      //     has already gone out. Fixing resume is a separate change; the log
+      //     is what makes it diagnosable instead of invisible.
+      if (!advanceErr && (advanced || []).length === 0) {
+        const { data: nowRow } = await db.from('sequence_enrollments')
+          .select('id, status').eq('id', enrollment.id).maybeSingle()
+        const meta = {
+          enrollmentId: enrollment.id, stepOrder: step.step_order,
+          stepType: step.step_type, sendId, status: nowRow?.status ?? null,
+        }
+        if (nowRow?.status === 'exited') {
+          logInfo('sequences', 'advance skipped — enrolment was exited mid-step', meta)
+        } else {
+          logWarn('sequences', 'advance matched no active row', meta)
+        }
+      }
       // A rejected advance is the WORST failure mode: the step may already
       // have SENT, and swallowing the error leaves the cursor behind — the
       // claim lease expires and the send repeats every ~10 minutes, forever,
