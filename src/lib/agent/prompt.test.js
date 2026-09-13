@@ -440,3 +440,39 @@ describe('buildCachedSystem (Anthropic system blocks)', () => {
     expect(concatenated).toBe(buildCustomerSystemPrompt(opts))
   })
 })
+
+// MIA-DUNNING.1 — Mia knows the overdue-payment reminder exists (the Pay now
+// WhatsApp + emails, #1683) and checks the run before answering; billing in
+// general still hands off, and card details never enter the chat.
+describe('overdue payment reminders section', () => {
+  const out = buildCustomerSystemPrompt({})
+  it('has the section and routes reminder questions through get_my_payment_reminder first', () => {
+    expect(out).toMatch(/## Overdue payment reminders/)
+    expect(out).toMatch(/call get_my_payment_reminder BEFORE answering/i)
+    expect(out).toMatch(/Pay now/)
+  })
+  it('places it after the account section and before pauses/cancellations', () => {
+    const acct = out.indexOf('## Answering a member\'s own account questions')
+    const dun = out.indexOf('## Overdue payment reminders')
+    const pause = out.indexOf('## Pauses and cancellations')
+    expect(acct).toBeGreaterThan(-1)
+    expect(dun).toBeGreaterThan(acct)
+    expect(pause).toBeGreaterThan(dun)
+  })
+  it('pins the outcome rules: no record, settled, still owed after "I paid", unknown', () => {
+    expect(out).toMatch(/has_reminder is false[^\n]*hand off/i)
+    expect(out).toMatch(/still_overdue is false[^\n]*stop automatically/i)
+    expect(out).toMatch(/still_overdue is true[^\n]*they(’|')ve paid[^\n]*Do NOT contradict/i)
+    expect(out).toMatch(/still_overdue is 'unknown'[^\n]*never guess/i)
+  })
+  it('bans card details in chat and says where they go instead', () => {
+    expect(out).toMatch(/NEVER ask for or accept card numbers, expiry dates, CVV or bank details in chat/)
+    expect(out).toMatch(/do not repeat them back/i)
+    expect(out).toMatch(/sent card details in chat/i)
+  })
+  it('amends the billing line to carve out the reminder tool, everything else still hands off', () => {
+    expect(out).not.toMatch(/You do NOT have their price, payment or billing standing\. If they ask/)
+    expect(out).toMatch(/billing standing beyond what get_my_payment_reminder returns/i)
+    expect(out).toMatch(/anything else about billing\/invoices, hand off/i)
+  })
+})
