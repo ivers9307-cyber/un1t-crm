@@ -462,7 +462,7 @@ describe('overdue payment reminders section', () => {
   it('pins the outcome rules: no record, settled, still owed after "I paid", unknown', () => {
     expect(out).toMatch(/has_reminder is false[^\n]*hand off/i)
     expect(out).toMatch(/still_overdue is false[^\n]*stop automatically/i)
-    expect(out).toMatch(/still_overdue is true[^\n]*(I've|I have) paid[^\n]*(do NOT|never) contradict/i)
+    expect(out).toMatch(/still_overdue is true[^\n]*they(’|')ve paid[^\n]*Do NOT contradict/i)
     expect(out).toMatch(/still_overdue is 'unknown'[^\n]*never guess/i)
   })
   it('bans card details in chat and says where they go instead', () => {
