@@ -3,14 +3,21 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('@/lib/glofox', () => ({
   glofoxCredentialsForLocation: vi.fn(),
   getGlofoxInvoicePaymentLink: vi.fn(),
+  getGlofoxOverdueInvoices: vi.fn(),
+  GLOFOX_OVERDUE_INVOICES_PAGE_CAP: 20,
 }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
+// PRESEND.1 — the gate exits a settled run through the same helper
+// exitDunningForContact uses. Mocked so the branch is observable and no
+// service client is opened.
+vi.mock('@/lib/sequences/enrollment-status', () => ({ setEnrollmentStatus: vi.fn() }))
 
-const { glofoxCredentialsForLocation, getGlofoxInvoicePaymentLink } = await import('@/lib/glofox')
+const { glofoxCredentialsForLocation, getGlofoxInvoicePaymentLink, getGlofoxOverdueInvoices } = await import('@/lib/glofox')
+const { setEnrollmentStatus } = await import('@/lib/sequences/enrollment-status')
 const { logWarn } = await import('@/lib/log')
 const {
   paymentRunMetadata, capturePaymentForRun, paymentFromEnrollment, paymentCtaHtml, payAmountPhrase,
-  refreshActiveRunPayment,
+  refreshActiveRunPayment, dunningPresendGate, PRESEND_EXIT_REASON,
 } = await import('./dunning-payment.js')
 
 const INVOICE = '0f187762-acc8-42d2-860c-43cbe1477df0'
@@ -34,6 +41,8 @@ function dbWith(contact, { contactId = 'c1', error = null } = {}) {
 beforeEach(() => {
   vi.mocked(glofoxCredentialsForLocation).mockReset().mockResolvedValue(CREDS)
   vi.mocked(getGlofoxInvoicePaymentLink).mockReset()
+  vi.mocked(getGlofoxOverdueInvoices).mockReset()
+  vi.mocked(setEnrollmentStatus).mockReset().mockResolvedValue(undefined)
   vi.mocked(logWarn).mockReset()
 })
 
@@ -250,5 +259,135 @@ describe('refreshActiveRunPayment (IO, never throws)', () => {
     const out = await refreshActiveRunPayment(db, { sequenceId: 'seq1', contactId: 'c1', payment: NEW_PAYMENT })
     expect(out).toEqual({ refreshed: 0 })
     expect(logWarn).toHaveBeenCalled()
+  })
+})
+
+// PRESEND.1 — belt and braces: stop chasing an invoice that is already paid.
+//
+// Today an overdue-payment run is exited only by the Glofox invoice webhook
+// (PAID / FORGIVEN -> exitDunningForContact, scoped to the invoice). If that
+// webhook is late or down, a member who has just paid still gets the next
+// WhatsApp and the day-7 email. This gate re-asks Glofox immediately before
+// each dunning send.
+//
+// Two rules it must never break:
+//   1. it only ever ADDS a stop. Missing data of any kind (not a dunning run,
+//      no invoice on the run, no Glofox member id, no credentials) proceeds.
+//   2. it FAILS OPEN. A Glofox blip must never silence a legitimate reminder;
+//      the webhook stays the primary exit.
+describe('PRESEND.1 — dunningPresendGate', () => {
+  const OVERDUE = { id: 'e1', source_type: 'invoice_past_due', metadata: { payment: { invoice_id: INVOICE } } }
+  const contact = { id: 'c1', glofox_member_id: '679bfd4c2f6535e4f200078e' }
+  const sequence = { id: 'seq-1', location_id: 'loc-1' }
+  const db = {}
+
+  it('proceeds without asking Glofox when the enrolment is not a dunning run', async () => {
+    const r = await dunningPresendGate(db, {
+      enrollment: { id: 'e1', source_type: 'audience_match', metadata: { payment: { invoice_id: INVOICE } } },
+      contact, sequence,
+    })
+    expect(r).toEqual({ proceed: true })
+    expect(getGlofoxOverdueInvoices).not.toHaveBeenCalled()
+    expect(setEnrollmentStatus).not.toHaveBeenCalled()
+  })
+
+  it('proceeds without asking Glofox when the run carries no invoice id', async () => {
+    const r = await dunningPresendGate(db, {
+      enrollment: { id: 'e1', source_type: 'churn_radar', metadata: { payment: { invoice_id: null } } },
+      contact, sequence,
+    })
+    expect(r).toEqual({ proceed: true })
+    expect(getGlofoxOverdueInvoices).not.toHaveBeenCalled()
+  })
+
+  it('proceeds without asking Glofox when the contact has no glofox_member_id', async () => {
+    const r = await dunningPresendGate(db, { enrollment: OVERDUE, contact: { id: 'c1' }, sequence })
+    expect(r).toEqual({ proceed: true })
+    expect(getGlofoxOverdueInvoices).not.toHaveBeenCalled()
+  })
+
+  it('proceeds when the location has no Glofox credentials', async () => {
+    vi.mocked(glofoxCredentialsForLocation).mockResolvedValue({ branchId: 'b' })
+    const r = await dunningPresendGate(db, { enrollment: OVERDUE, contact, sequence })
+    expect(r).toEqual({ proceed: true })
+    expect(getGlofoxOverdueInvoices).not.toHaveBeenCalled()
+  })
+
+  it('proceeds when the invoice is still on the member overdue list', async () => {
+    vi.mocked(getGlofoxOverdueInvoices).mockResolvedValue({ ok: true, status: 200, invoiceIds: ['other', INVOICE], error: null })
+    const r = await dunningPresendGate(db, { enrollment: OVERDUE, contact, sequence })
+    expect(r).toEqual({ proceed: true })
+    expect(getGlofoxOverdueInvoices).toHaveBeenCalledWith(CREDS, { memberId: contact.glofox_member_id })
+    expect(setEnrollmentStatus).not.toHaveBeenCalled()
+  })
+
+  it('stops the send AND exits the run when the invoice is no longer overdue', async () => {
+    vi.mocked(getGlofoxOverdueInvoices).mockResolvedValue({ ok: true, status: 200, invoiceIds: ['some-other-invoice'], error: null })
+    const r = await dunningPresendGate(db, { enrollment: OVERDUE, contact, sequence })
+    expect(r.proceed).toBe(false)
+    expect(r.reason).toBe('invoice no longer overdue')
+    expect(setEnrollmentStatus).toHaveBeenCalledWith({
+      enrollmentId: 'e1', status: 'exited', reason: PRESEND_EXIT_REASON,
+    })
+    expect(PRESEND_EXIT_REASON).toBe('invoice_settled_presend')
+  })
+
+  it('stops the send when the member has nothing overdue at all', async () => {
+    vi.mocked(getGlofoxOverdueInvoices).mockResolvedValue({ ok: true, status: 200, invoiceIds: [], error: null })
+    expect((await dunningPresendGate(db, { enrollment: OVERDUE, contact, sequence })).proceed).toBe(false)
+  })
+
+  it('FAILS OPEN when Glofox cannot answer — the webhook stays the primary exit', async () => {
+    vi.mocked(getGlofoxOverdueInvoices).mockResolvedValue({ ok: false, status: 0, invoiceIds: [], error: 'timeout' })
+    const r = await dunningPresendGate(db, { enrollment: OVERDUE, contact, sequence })
+    expect(r).toEqual({ proceed: true })
+    expect(setEnrollmentStatus).not.toHaveBeenCalled()
+    expect(logWarn).toHaveBeenCalled()
+  })
+
+  it('proceeds rather than claiming a stop it could not record when the exit write fails', async () => {
+    vi.mocked(getGlofoxOverdueInvoices).mockResolvedValue({ ok: true, status: 200, invoiceIds: [], error: null })
+    vi.mocked(setEnrollmentStatus).mockRejectedValue(new Error('pg down'))
+    const r = await dunningPresendGate(db, { enrollment: OVERDUE, contact, sequence })
+    expect(r).toEqual({ proceed: true })
+    expect(logWarn).toHaveBeenCalled()
+  })
+
+  it('never throws, whatever it is handed', async () => {
+    vi.mocked(glofoxCredentialsForLocation).mockRejectedValue(new Error('boom'))
+    expect(await dunningPresendGate(db, { enrollment: OVERDUE, contact, sequence })).toEqual({ proceed: true })
+    expect(await dunningPresendGate(db, {})).toEqual({ proceed: true })
+    expect(await dunningPresendGate(db)).toEqual({ proceed: true })
+  })
+})
+
+// PRESEND.1 (review) — the exit is an INFERENCE from an absence, and the
+// endpoint caps its answer at 20 rows newest-first. A member with more than 20
+// overdue invoices would come back with a truncated list, and "not in the
+// list" would then mean "possibly just off the end of page one" rather than
+// "settled" — exiting a live chase on a debt that is still owed.
+describe('PRESEND.1 — a possibly-truncated overdue list is inconclusive, never an exit', () => {
+  const OVERDUE = { id: 'e1', source_type: 'invoice_past_due', metadata: { payment: { invoice_id: INVOICE } } }
+  const contact = { id: 'c1', glofox_member_id: '679bfd4c2f6535e4f200078e' }
+  const sequence = { id: 'seq-1', location_id: 'loc-1' }
+
+  const listOf = (n) => Array.from({ length: n }, (_, i) => `inv-${i}`)
+
+  it('proceeds without exiting when the list is at the page cap', async () => {
+    vi.mocked(getGlofoxOverdueInvoices).mockResolvedValue({ ok: true, status: 200, invoiceIds: listOf(20), error: null })
+    const r = await dunningPresendGate({}, { enrollment: OVERDUE, contact, sequence })
+    expect(r).toEqual({ proceed: true })
+    expect(setEnrollmentStatus).not.toHaveBeenCalled()
+    expect(logWarn).toHaveBeenCalled()
+  })
+
+  it('still exits on a short list, which cannot have been truncated', async () => {
+    vi.mocked(getGlofoxOverdueInvoices).mockResolvedValue({ ok: true, status: 200, invoiceIds: listOf(19), error: null })
+    expect((await dunningPresendGate({}, { enrollment: OVERDUE, contact, sequence })).proceed).toBe(false)
+  })
+
+  it('a full page that DOES contain the invoice proceeds without fuss', async () => {
+    vi.mocked(getGlofoxOverdueInvoices).mockResolvedValue({ ok: true, status: 200, invoiceIds: [...listOf(19), INVOICE], error: null })
+    expect(await dunningPresendGate({}, { enrollment: OVERDUE, contact, sequence })).toEqual({ proceed: true })
   })
 })
