@@ -114,7 +114,9 @@ async function countWeek(db, weekStartMs, weekEndMs) {
   const attributedRows = (sessions || []).filter((s) => s.contact_id != null)
   const { count: samples } = await db
     .from('hr_samples')
-    .select('id', { count: 'exact', head: true })
+    // SELECTCOLS.1 — hr_samples has no `id`: its PK is (session_id, recorded_at)
+    // (mig 110). A head-count needs no column list at all.
+    .select('*', { count: 'exact', head: true })
     .gte('recorded_at', startIso)
     .lt('recorded_at', endIso)
 

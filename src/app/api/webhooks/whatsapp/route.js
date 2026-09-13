@@ -552,12 +552,16 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId) {
   if (!agentEngaged) {
     try {
       const { data: conv } = await db.from('whatsapp_conversations')
-        .select('assigned_to, location_id, contacts!contact_id(name, first_name, wa_profile_name)')
+        // SELECTCOLS.1 — wa_profile_name is a column on whatsapp_conversations,
+        // NOT on contacts; naming it inside the contacts embed 400'd the whole
+        // select, so `conv` was always null and every manager push fell back to
+        // the webhook's own senderName.
+        .select('assigned_to, location_id, wa_profile_name, contacts!contact_id(name, first_name)')
         .eq('id', conversationId)
         .single()
       const senderLabel = conv?.contacts?.name
         || conv?.contacts?.first_name
-        || conv?.contacts?.wa_profile_name
+        || conv?.wa_profile_name
         || senderName
         || 'a contact'
       const preview = body?.substring(0, 140) || `[${messageType}]`

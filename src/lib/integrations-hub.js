@@ -579,7 +579,8 @@ async function fetchAiMessageCounts(db, locationIds, monthStart) {
       .eq('location_id', locationId)
       .eq('meter', 'anthropic_tokens')
       .neq('source', 'assistant_chat')
-      .gte('created_at', monthStart)
+      // SELECTCOLS.1 — usage_events stamps `occurred_at`; it has no created_at.
+      .gte('occurred_at', monthStart)
     return [locationId, count || 0]
   }))
   return Object.fromEntries(entries)

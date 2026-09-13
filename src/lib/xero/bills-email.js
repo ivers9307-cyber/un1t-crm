@@ -91,7 +91,7 @@ export async function sendCarDocumentBillEmail(documentId) {
   const { data: doc, error: loadErr } = await db
     .from('car_documents')
     .select(`
-      id, car_id, doc_type, file_name, mime_type, storage_path,
+      id, car_id, doc_type, filename, mime_type, storage_path,
       cars!inner ( id, location_id, uk_reg, irish_reg, vin, make, model )
     `)
     .eq('id', documentId)
@@ -121,7 +121,7 @@ export async function sendCarDocumentBillEmail(documentId) {
     .from(STORAGE_BUCKET)
     .download(doc.storage_path)
   if (dlErr || !blob) {
-    throw new XeroError(`Could not download "${doc.file_name}" from storage: ${dlErr?.message || 'unknown error'}`)
+    throw new XeroError(`Could not download "${doc.filename}" from storage: ${dlErr?.message || 'unknown error'}`)
   }
   const ab = await blob.arrayBuffer()
   const base64 = Buffer.from(ab).toString('base64')
@@ -131,13 +131,13 @@ export async function sendCarDocumentBillEmail(documentId) {
   const reg = car.uk_reg || car.irish_reg || car.vin || car.id
   const safeReg = String(reg).replace(/[^A-Za-z0-9_-]/g, '_')
   const docLabel = DOC_TYPE_LABELS[doc.doc_type] || doc.doc_type
-  const filename = `${doc.doc_type}-${safeReg}-${doc.file_name || 'file'}`
+  const filename = `${doc.doc_type}-${safeReg}-${doc.filename || 'file'}`
 
   const subject = `${docLabel} — ${reg}`
   const htmlBody = `
     <p>Forwarded from UN1T CRM for car <strong>${reg}</strong> (${[car.make, car.model].filter(Boolean).join(' ') || 'vehicle'}).</p>
     <p>Document type: <strong>${docLabel}</strong></p>
-    <p>Original filename: ${doc.file_name || 'n/a'}</p>
+    <p>Original filename: ${doc.filename || 'n/a'}</p>
     <p>Xero will OCR this attachment and create a draft bill in Bills to pay → Draft.</p>
   `.trim()
 

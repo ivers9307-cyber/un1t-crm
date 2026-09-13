@@ -123,7 +123,7 @@ export async function aggregatePerson(db, groupId) {
     // shows note content + provenance (GLOFOX-NOTES-FIX).
     db
       .from('activities')
-      .select('id, contact_id, type, title, note, source, created_at')
+      .select('id, contact_id, type, subject, note, source, created_at')
       .in('contact_id', memberIds)
       .order('created_at', { ascending: false })
       .limit(50),
@@ -236,7 +236,7 @@ export async function aggregatePerson(db, groupId) {
 
   // ── Step 10: Timeline — merge activities + notes, newest-first, capped at 50,
   //    each tagged with sourceContactId. `body` carries the display text: an
-  //    activity's title (or its note body for Glofox-synced notes/calls/emails),
+  //    activity's subject (or its note body for Glofox-synced notes/calls/emails),
   //    or a CRM note's content. `source` flags 'glofox' for the provenance chip.
   const rawActivities = timelineRes?.data || []
   const rawNotes = notesRes?.data || []
@@ -244,8 +244,8 @@ export async function aggregatePerson(db, groupId) {
     ...rawActivities.map(e => ({
       sourceContactId: e.contact_id,
       type: e.type || null,
-      title: e.title || null,
-      body: e.title || e.note || null,
+      title: e.subject || null,
+      body: e.subject || e.note || null,
       source: e.source || null,
       createdAt: e.created_at,
     })),
