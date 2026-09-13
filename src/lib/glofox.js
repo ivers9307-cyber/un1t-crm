@@ -1661,3 +1661,71 @@ export async function getGlofoxInvoicePaymentLink(creds, args = {}) {
     return empty(0, e?.message || 'network error')
   }
 }
+
+// ─────────────────────────────────────────────────────────────
+// Member overdue invoices (PRESEND.1)
+// ─────────────────────────────────────────────────────────────
+//
+// Live probe 2026-09-13: GET /v3.0/users/{memberId}/overdue-invoices with the
+// three integration headers + x-glofox-impersonated-member-id answers
+// { data: [{ invoice_id, due_date_utc }] } — the member's overdue SUBSCRIPTION
+// invoices, newest first, capped at 20. Same auth shape as the payment-link
+// call above, and the same 8s abortable budget: this read sits immediately
+// before a dunning send on the runner's tick, so it must never inherit
+// glofoxFetch's unbounded wait.
+//
+// Never throws. The one caller (dunningPresendGate) FAILS OPEN, and it can
+// only do that if every failure comes back as ok:false rather than an
+// exception — a Glofox blip must never silence a legitimate reminder.
+// The endpoint's page size. A response holding exactly this many rows may have
+// been truncated, so a caller inferring anything from an ABSENCE (the pre-send
+// gate: "this invoice is not listed, so it is settled") must treat a full page
+// as inconclusive rather than as proof.
+export const GLOFOX_OVERDUE_INVOICES_PAGE_CAP = 20
+
+// ID NAMESPACE, verified live rather than assumed: the invoice ids this returns
+// are the SAME ids the INVOICE_UPDATED webhook writes to `glofox_invoices.id`
+// and that capturePaymentForRun stores as `metadata.payment.invoice_id` —
+// 0f187762-acc8-42d2-860c-43cbe1477df0 was read back from both on 2026-09-13.
+// Without that, comparing the two would be a category error that silently never
+// matches, and a gate keyed on "not in the list" would exit every live run.
+/**
+ * @param {{branchId, apiKey, apiToken}} creds
+ * @param {{ memberId: string }} [args]
+ * @returns {Promise<{ ok:boolean, status:number, invoiceIds:string[], error:string|null }>}
+ */
+export async function getGlofoxOverdueInvoices(creds, args = {}) {
+  const { memberId } = args || {}
+  const empty = (status, error) => ({ ok: false, status, invoiceIds: [], error })
+  if (!creds?.branchId || !creds?.apiKey || !creds?.apiToken
+    || !GLOFOX_OBJECT_ID_RE.test(String(memberId || ''))) {
+    return empty(400, 'INVALID_ARGS')
+  }
+  try {
+    const r = await glofoxFetch(creds, `/v3.0/users/${encodeURIComponent(memberId)}/overdue-invoices`, {
+      method: 'GET',
+      signal: AbortSignal.timeout(GLOFOX_PAYMENT_LINK_TIMEOUT_MS),
+      headers: { 'x-glofox-impersonated-member-id': memberId },
+    })
+    let body
+    try { body = await r.json() } catch { body = null }
+    if (!r.ok) {
+      const code = typeof body?.message_code === 'string' ? body.message_code : (typeof body?.code === 'string' ? body.code : null)
+      return empty(r.status, code ? `Glofox HTTP ${r.status} (${code})` : `Glofox HTTP ${r.status}`)
+    }
+    // GLOFOX-SPEC-2026-09 — a 200 can still carry success:false. Treating that
+    // as "nothing overdue" would exit every live dunning run at once, so it is
+    // a failure and the gate proceeds.
+    if (body?.success === false) {
+      return empty(r.status, body.message_code || 'GLOFOX_SUCCESS_FALSE')
+    }
+    const rows = Array.isArray(body?.data) ? body.data : []
+    const invoiceIds = rows
+      .map((row) => (typeof row?.invoice_id === 'string' ? row.invoice_id.trim() : ''))
+      .filter(Boolean)
+    return { ok: true, status: r.status, invoiceIds, error: null }
+  } catch (e) {
+    if (e?.name === 'AbortError' || e?.name === 'TimeoutError') return empty(0, 'timeout')
+    return empty(0, e?.message || 'network error')
+  }
+}
