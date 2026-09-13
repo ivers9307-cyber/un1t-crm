@@ -1,0 +1,32 @@
+{
+  "_readme": [
+    "Accepted phantom-column findings for `npm run check:select-columns` (SELECTCOLS.1).",
+    "An entry means: the checker cannot see that this column is real, we have VERIFIED it against the live schema, and here is when we will re-check.",
+    "Empty is the healthy state. Correct the column name, or add the column in a forward-only migration, before reaching for this file.",
+    "",
+    "Entry shape (all five fields required):",
+    "  file     repo-relative path exactly as the checker prints it, e.g. \"src/lib/sequences/enrol.js\"",
+    "  table    the table named in .from()",
+    "  column   the column the checker could not find",
+    "  reason   HOW you know it exists. Name the migration or say you read information_schema.columns on the live project. 'looks fine' is not a reason.",
+    "  expires  YYYY-MM-DD. Past this date the gate FAILS until someone re-decides. Keep it short \u2014 a quarter at most.",
+    "",
+    "Entries cannot rot: an expired entry fails exactly like an unlisted column."
+  ],
+  "entries": [
+    {
+      "file": "src/app/api/public/leads/route.js",
+      "table": "contacts",
+      "column": "source",
+      "reason": "VERIFIED PRESENT on the live project (iyvtbjjxdggiadzwwvdj) via information_schema.columns on 2026-09-13, but NO migration in supabase/migrations ever adds it \u2014 a pre-migration-era column created by hand. The select works in prod; the checker is right that the repo cannot prove it. Richard's call: backfill a no-op `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS source text` migration so the files match the database, or drop the column from this select (it already carries lead_source, which is what glofox-lead-provisioning actually reads).",
+      "expires": "2026-10-13"
+    },
+    {
+      "file": "src/lib/agent/followups.js",
+      "table": "whatsapp_messages",
+      "column": "source",
+      "reason": "Same class as contacts.source: VERIFIED PRESENT on the live project via information_schema.columns on 2026-09-13, with no migration adding it. Richard's call \u2014 backfill an IF NOT EXISTS migration or drop it from the select.",
+      "expires": "2026-10-13"
+    }
+  ]
+}

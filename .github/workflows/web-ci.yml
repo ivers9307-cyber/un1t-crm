@@ -419,6 +419,18 @@ jobs:
       - name: Supabase guardrails
         run: npm run check:guardrails
 
+      # Catches the ENROLFIX.1 class (#1685) — a `.select()` naming a column
+      # that does not exist. PostgREST 400s it, and a discarded error turns
+      # that into a feature that silently never works: `sequence_enrollments`
+      # has no `created_at`, so EVERY sequence enrolment in the estate failed
+      # for 24 days while four months of green tests said nothing (the mocked
+      # .select() accepts any column string). The schema is replayed from
+      # supabase/migrations; genuine false positives go in
+      # .select-columns-allowlist.json with a reason and an expiry. See
+      # scripts/check-select-columns.mjs.
+      - name: Select column existence
+        run: npm run check:select-columns
+
       # Phase 0b of the Repset merge — the staff + member mobile apps are
       # merging into ONE binary, after which staff-app JS ships to every
       # member phone. Nothing secret-shaped may live in mobile/** or
