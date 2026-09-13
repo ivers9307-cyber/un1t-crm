@@ -51,6 +51,9 @@ function mockDb({
   // as one unbounded URL. `db.from()` returns a fresh builder per call, so
   // this has to be collected from inside the mock.
   const activeInKeys = []
+  // ENROLFIX.1 — the column list each tier-2 history read asked for, so a
+  // test can pin it against the real schema (the table has no created_at).
+  const historySelects = []
 
   function chain(rows, error = null, recordIn = null) {
     const builder = {
@@ -82,8 +85,9 @@ function mockDb({
         return {
           select: vi.fn((cols) => {
             // active dedup: select('contact_id') ... .eq('status', 'active')
-            // history dedup: select('contact_id, status, last_processed_at, created_at') ... .in('status', ['completed', 'exited'])
+            // history dedup: select('contact_id, status, last_processed_at, enrolled_at, …') ... .in('status', ['completed', 'exited'])
             if (cols.includes('last_processed_at')) {
+              historySelects.push(cols)
               return chain(history)
             }
             return chain(activeContactIds.map(id => ({ contact_id: id })), activeReadError, activeInKeys)
@@ -146,7 +150,7 @@ function mockDb({
       return { data: null, error: null }
     }),
   }
-  return { db, inserts, upsertOpts, updates, rpcCalls, contactsQueries, activeInKeys }
+  return { db, inserts, upsertOpts, updates, rpcCalls, contactsQueries, activeInKeys, historySelects }
 }
 
 beforeEach(() => {
@@ -625,5 +629,24 @@ describe('PAYLINK.3b — non-object metadata is dropped with a warning, not sile
     expect(m.inserts[0][0]).not.toHaveProperty('metadata')
     expect(logWarn).toHaveBeenCalledTimes(1)
     expect(logWarn).toHaveBeenCalledWith('enrol', 'metadata ignored: not a plain object', { sourceType: 'invoice_past_due' })
+  })
+})
+
+// ENROLFIX.1 (2026-09-13) — `sequence_enrollments` has NO `created_at` column
+// (mig 005: the row's timestamp is `enrolled_at`). The tier-2 history read
+// had selected `created_at` since the 2026-05-08 split; PostgREST 400s that,
+// and until ENROLDEDUP.1 (#1480, 20 Aug) the error was DISCARDED so every
+// enrolment sailed through with no cooldown. ENROLDEDUP.1 made the read
+// throw, and from 21 Aug every enrolment in the estate failed: 40 nudge
+// enrolments in the first 19 days of August, zero after. This pins the
+// column list against the real schema.
+describe('ENROLFIX.1 — the history read names only columns the table has', () => {
+  it('selects enrolled_at, never created_at', async () => {
+    const m = mockDb({})
+    createServerClient.mockReturnValue(m.db)
+    await enrolContacts({ sequenceId: 's1', contactIds: ['c1'] })
+    expect(m.historySelects).toHaveLength(1)
+    expect(m.historySelects[0]).toMatch(/\benrolled_at\b/)
+    expect(m.historySelects[0]).not.toMatch(/\bcreated_at\b/)
   })
 })

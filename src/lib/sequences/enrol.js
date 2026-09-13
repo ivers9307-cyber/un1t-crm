@@ -162,7 +162,12 @@ export async function enrolContacts({
       candidatesNotActive,
       (keys, from, to) => db
         .from('sequence_enrollments')
-        .select('id, contact_id, status, last_processed_at, created_at, source_type, source_ref, enrolled_at, completed_at, exited_at, exit_reason, metadata')
+        // ENROLFIX.1 — `sequence_enrollments` has no `created_at` (mig 005:
+        // the row's timestamp is `enrolled_at`). Selecting it here was a
+        // PostgREST 400 on EVERY enrolment; before ENROLDEDUP.1 that error
+        // was discarded (no cooldown, but the insert went ahead), and from
+        // 20 Aug it threw — zero enrolments estate-wide until 13 Sep.
+        .select('id, contact_id, status, last_processed_at, source_type, source_ref, enrolled_at, completed_at, exited_at, exit_reason, metadata')
         .eq('sequence_id', sequenceId)
         .in('contact_id', keys)
         .in('status', ['completed', 'exited'])
