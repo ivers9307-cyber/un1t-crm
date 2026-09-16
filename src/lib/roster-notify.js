@@ -17,6 +17,9 @@
 import { sendPush } from './push'
 import { logWarn } from './log'
 import { isLiveAssignment } from './roster'
+import { notifyUsers } from './notify'
+import { collectUnnotifiedChanges, distinctCoachIds, markChangesNotified } from './roster-change-log'
+import { dublinTodayStr } from './dublin-time'
 
 /**
  * RETIRE-SHIFTS-MIRROR.6 — build the notify-list for a publish from the
@@ -122,4 +125,53 @@ export async function notifyStaffOfPublish(db, shifts, { startDate, endDate, loc
   }
 
   return { notified: userIds.length }
+}
+
+/**
+ * SCHEDULE-CHANGE-LOG.1 / NOTIFY.1 — the re-publish safety net. Changes made
+ * to a published roster are now sent at the moment of change
+ * (roster-change-notify.js); this picks up whatever that could not deliver
+ * (no token and no email, a failed send, or rows from before NOTIFY.1).
+ * Called by BOTH publish paths: POST /api/schedule/rosters and
+ * POST /api/schedule/rosters/[id]/approve, which never had it, so every
+ * over-budget re-publish used to tell nobody. Best-effort; never throws.
+ *
+ * A collected change row's block_date can be in the past by the time this
+ * runs (an old, never-notified row, or a re-publish of a period that has
+ * partly elapsed) — a coach must never get a "your shift changed" push for
+ * something that already happened. So only coaches with at least one
+ * collected change dated today or later get pushed, but EVERY collected row
+ * is still stamped notified: a past row needs no message, but leaving it
+ * unstamped would just re-surface it (and keep blocking on it) forever.
+ *
+ * @param {import('@supabase/supabase-js').SupabaseClient} db
+ * @param {object} range
+ * @param {string} range.locationId
+ * @param {string} range.periodStart
+ * @param {string} range.periodEnd
+ * @param {string} [range.todayStr]  Dublin 'YYYY-MM-DD' to treat as "today";
+ *                                   defaults to dublinTodayStr(). Tests pass
+ *                                   this to pin the past/future boundary.
+ */
+export async function renotifyChangedCoaches(db, { locationId, periodStart, periodEnd, todayStr }) {
+  try {
+    const today = todayStr || dublinTodayStr()
+    const changes = await collectUnnotifiedChanges(db, { locationId, periodStart, periodEnd })
+    const futureChanges = changes.filter((c) => c.block_date >= today)
+    const coachIds = distinctCoachIds(futureChanges)
+    if (coachIds.length > 0) {
+      const rangeLabel = periodStart === periodEnd ? periodStart : `${periodStart} – ${periodEnd}`
+      await notifyUsers(coachIds, {
+        title: 'Roster updated',
+        body: `Your shifts for ${rangeLabel} have been updated.`,
+        category: 'schedule',
+        data: { type: 'schedule_updated', start_date: periodStart, end_date: periodEnd, location_id: locationId },
+      })
+    }
+    await markChangesNotified(db, changes.map((c) => c.id))
+    return { notified: coachIds.length }
+  } catch (e) {
+    logWarn('roster-notify', 'republish change-notify failed', { locationId, err: e?.message })
+    return { notified: 0 }
+  }
 }

@@ -29,12 +29,13 @@ vi.mock('@/lib/permissions', () => ({ hasPermissionForLocation: vi.fn(() => true
 vi.mock('@/lib/roster-notify', () => ({
   notifyStaffOfPublish: vi.fn(() => Promise.resolve()),
   publishNotifyRowsForBlocks: vi.fn(() => Promise.resolve([])),
+  renotifyChangedCoaches: vi.fn(() => Promise.resolve({ notified: 0 })),
 }))
 
 const { createServerClient } = await import('@/lib/supabase')
 const { getCurrentUser } = await import('@/lib/auth')
 const { hasPermissionForLocation } = await import('@/lib/permissions')
-const { notifyStaffOfPublish } = await import('@/lib/roster-notify')
+const { notifyStaffOfPublish, renotifyChangedCoaches } = await import('@/lib/roster-notify')
 const { POST } = await import('./route.js')
 
 const PROPS = { params: Promise.resolve({ id: 'roster-1' }) }
@@ -146,6 +147,7 @@ beforeEach(() => {
   hasPermissionForLocation.mockReset()
   hasPermissionForLocation.mockReturnValue(true)
   notifyStaffOfPublish.mockClear()
+  renotifyChangedCoaches.mockClear()
   getCurrentUser.mockResolvedValue({ id: 'owner-1', role: 'owner', locations: [{ id: 'loc-1' }] })
 })
 
@@ -207,6 +209,15 @@ describe('POST /api/schedule/rosters/[id]/approve — overlap guard', () => {
     expect(probe).toContainEqual(['neq', 'id', 'roster-1'])
     expect(probe).toContainEqual(['eq', 'status', 'published'])
     expect(probe).toContainEqual(['eq', 'location_id', 'loc-1'])
+  })
+
+  it('re-notifies coaches whose published shifts changed, as a plain publish does (NOTIFY.1)', async () => {
+    const { db } = buildDb({ roster: draft(), publishedRosters: [] })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST({}, PROPS)
+    expect(res.status).toBe(200)
+    expect(renotifyChangedCoaches).toHaveBeenCalledWith(db, { locationId: 'loc-1', periodStart: '2026-05-04', periodEnd: '2026-05-10' })
   })
 })
 
@@ -271,6 +282,7 @@ describe('POST /api/schedule/rosters/[id]/approve — gate ordering', () => {
     const res = await POST({}, PROPS)
     expect(res.status).toBe(400)
     expect(notifyStaffOfPublish).not.toHaveBeenCalled()
+    expect(renotifyChangedCoaches).not.toHaveBeenCalled()
   })
 })
 

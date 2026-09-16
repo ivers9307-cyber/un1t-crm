@@ -30,12 +30,7 @@ vi.mock('@/lib/roster-email', () => ({ sendOverBudgetApprovalEmail: vi.fn(() => 
 vi.mock('@/lib/roster-notify', () => ({
   notifyStaffOfPublish: vi.fn(() => Promise.resolve()),
   publishNotifyRowsForBlocks: vi.fn(() => Promise.resolve([])),
-}))
-vi.mock('@/lib/notify', () => ({ notifyUsers: vi.fn(() => Promise.resolve()) }))
-vi.mock('@/lib/roster-change-log', () => ({
-  collectUnnotifiedChanges: vi.fn(() => Promise.resolve([])),
-  markChangesNotified: vi.fn(() => Promise.resolve()),
-  distinctCoachIds: vi.fn(() => []),
+  renotifyChangedCoaches: vi.fn(() => Promise.resolve({ notified: 0 })),
 }))
 
 const { createServerClient } = await import('@/lib/supabase')
@@ -200,6 +195,9 @@ describe('POST /api/schedule/rosters — overlapping published rosters', () => {
     const res = await publish()
     expect(res.status).toBe(201)
     expect(inserts).toHaveLength(1)
+
+    const { renotifyChangedCoaches } = await import('@/lib/roster-notify')
+    expect(renotifyChangedCoaches).toHaveBeenCalledWith(db, expect.objectContaining({ locationId: expect.any(String) }))
   })
 
   it('allows a WIDER period that fully contains the published one', async () => {

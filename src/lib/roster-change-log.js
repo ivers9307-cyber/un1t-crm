@@ -61,7 +61,7 @@ export async function collectUnnotifiedChanges(db, { locationId, periodStart, pe
   try {
     const { data } = await db
       .from('roster_change_log')
-      .select('id, coach_id, action')
+      .select('id, coach_id, action, block_date')
       .eq('location_id', locationId)
       .gte('block_date', periodStart)
       .lte('block_date', periodEnd)

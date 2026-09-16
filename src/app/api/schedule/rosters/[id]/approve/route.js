@@ -14,7 +14,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
-import { notifyStaffOfPublish, publishNotifyRowsForBlocks } from '@/lib/roster-notify'
+import { notifyStaffOfPublish, publishNotifyRowsForBlocks, renotifyChangedCoaches } from '@/lib/roster-notify'
 import {
   findConflictingPublishedRosters,
   releasePublishedRostersFor,
@@ -260,6 +260,14 @@ export async function POST(_request, props) {
   } catch (e) {
     logWarn('rosters/approve', `staff notify failed`, { err: e })
   }
+
+  // NOTIFY.1 — approving a draft that re-publishes a live week used to skip
+  // this entirely: 37 changes covered only by approved drafts were never sent.
+  await renotifyChangedCoaches(db, {
+    locationId: roster.location_id,
+    periodStart: roster.period_start,
+    periodEnd: roster.period_end,
+  })
 
   return NextResponse.json({
     success: true,

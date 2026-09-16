@@ -38,9 +38,7 @@ import {
   supersedeSwallowedRosters,
 } from '@/lib/roster-publish'
 import { sendOverBudgetApprovalEmail } from '@/lib/roster-email'
-import { notifyStaffOfPublish, publishNotifyRowsForBlocks } from '@/lib/roster-notify'
-import { notifyUsers } from '@/lib/notify'
-import { collectUnnotifiedChanges, markChangesNotified, distinctCoachIds } from '@/lib/roster-change-log'
+import { notifyStaffOfPublish, publishNotifyRowsForBlocks, renotifyChangedCoaches } from '@/lib/roster-notify'
 import { logWarn } from '@/lib/log'
 
 const PublishSchema = z.object({
@@ -399,31 +397,9 @@ export async function POST(request) {
       logWarn('rosters', 'publish notify failed', { err: e })
     }
 
-    // SCHEDULE-CHANGE-LOG.1 — on a RE-publish the shifts are already
-    // published (so flippedShifts is empty and notifyStaffOfPublish above
-    // notifies nobody). Re-notify only the coaches whose shifts changed
-    // since the last publish, then stamp those change rows so they aren't
-    // re-pinged next time. First publish has no change rows → no-op here.
-    try {
-      const changes = await collectUnnotifiedChanges(db, {
-        locationId: location_id,
-        periodStart: period_start,
-        periodEnd: period_end,
-      })
-      const coachIds = distinctCoachIds(changes)
-      if (coachIds.length > 0) {
-        const rangeLabel = period_start === period_end ? period_start : `${period_start} – ${period_end}`
-        await notifyUsers(coachIds, {
-          title: 'Roster updated',
-          body: `Your shifts for ${rangeLabel} have been updated.`,
-          category: 'schedule',
-          data: { type: 'schedule_updated', start_date: period_start, end_date: period_end, location_id },
-        })
-      }
-      await markChangesNotified(db, changes.map((c) => c.id))
-    } catch (e) {
-      logWarn('rosters', 'republish change-notify failed', { err: e })
-    }
+    // SCHEDULE-CHANGE-LOG.1 / NOTIFY.1 — re-notify coaches whose published
+    // shifts changed and were not already told at the moment of change.
+    await renotifyChangedCoaches(db, { locationId: location_id, periodStart: period_start, periodEnd: period_end })
   } else {
     // status === 'draft' — manager publish over budget. Email
     // owners so they can approve. Best-effort; don't fail the
