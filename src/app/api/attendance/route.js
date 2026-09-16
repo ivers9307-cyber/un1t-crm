@@ -22,6 +22,8 @@ import {
   resolveScheduledAt,
   bucketLateness,
   minutesLate,
+  arrivalToTimeOnly,
+  inferContinuousArrivals,
 } from '@/lib/staff-attendance'
 
 export const runtime = 'nodejs'
@@ -62,7 +64,7 @@ export const GET = withAuth(
       // "more than one relationship was found". `!profile_id` tells
       // it to follow the assigned-coach FK, not the audit one.
       .select(`
-        id, profile_id, status, start_time_override,
+        id, profile_id, status, arrived_at, arrival_source, start_time_override,
         block:shift_blocks!inner ( id, location_id, block_date, start_time, end_time ),
         profile:profiles!profile_id ( id, full_name, email, role )
       `)
@@ -100,34 +102,54 @@ export const GET = withAuth(
     }
 
     const nowMs = Date.now()
-    const rows = (assignments || [])
+    // ARRIVAL.1 — arrival comes from arrived_at. start_time_override is the
+    // manager-set paid window and is returned separately, never read as an
+    // arrival.
+    const base = (assignments || [])
       .filter((a) => a.block) // defensive — should always be present given !inner above
-      .map((a) => {
-        const scheduledAt    = resolveScheduledAt(a.block.block_date, a.block.start_time, tz)
-        const scheduledEndAt = resolveScheduledAt(a.block.block_date, a.block.end_time, tz)
-        const arrivalAt      = a.start_time_override
-          ? resolveScheduledAt(a.block.block_date, a.start_time_override, tz)
-          : null
-        const status = bucketLateness(scheduledAt, arrivalAt, { scheduledEndAt, nowMs })
-        const sourceSet = sourcesByAssignment.get(a.id) || new Set()
-        return {
-          assignment_id: a.id,
-          profile_id: a.profile_id,
-          profile_name: a.profile?.full_name || a.profile?.email || '—',
-          profile_role: a.profile?.role || null,
-          block_date: a.block.block_date,
-          scheduled_start: a.block.start_time,
-          scheduled_end:   a.block.end_time,
-          scheduled_at:    scheduledAt?.toISOString() || null,
-          arrival_at:      arrivalAt?.toISOString() || null,
-          actual_start:    a.start_time_override || null,
-          status,
-          minutes_late:    minutesLate(scheduledAt, arrivalAt),
-          // P2.6 — sources that contributed to the stamp. Empty array
-          // when never auto-stamped (manual entry / pending / no-show).
-          sources: Array.from(sourceSet).sort(),
-        }
-      })
+      .map((a) => ({
+        a,
+        id: a.id,
+        profileId: a.profile_id,
+        blockDate: a.block.block_date,
+        scheduledAt: resolveScheduledAt(a.block.block_date, a.block.start_time, tz),
+        scheduledEndAt: resolveScheduledAt(a.block.block_date, a.block.end_time, tz),
+        arrivalAt: a.arrived_at ? new Date(a.arrived_at) : null,
+      }))
+
+    const rows = inferContinuousArrivals(base).map((r) => {
+      const a = r.a
+      const status = bucketLateness(r.scheduledAt, r.arrivalAt, { scheduledEndAt: r.scheduledEndAt, nowMs })
+      // P2.6 events give the source(s) that MATCHED this assignment, but a
+      // stamp recorded straight onto arrived_at also carries its own source
+      // (arrival_source, mig 609) — union it in so a stamped shift always
+      // shows a source even when no matching event row exists.
+      const sourceSet = new Set(sourcesByAssignment.get(a.id) || [])
+      if (a.arrival_source) sourceSet.add(a.arrival_source)
+      return {
+        assignment_id: a.id,
+        profile_id: a.profile_id,
+        profile_name: a.profile?.full_name || a.profile?.email || '—',
+        profile_role: a.profile?.role || null,
+        block_date: a.block.block_date,
+        scheduled_start: a.block.start_time,
+        scheduled_end:   a.block.end_time,
+        scheduled_at:    r.scheduledAt?.toISOString() || null,
+        arrival_at:      r.arrivalAt ? new Date(r.arrivalAt).toISOString() : null,
+        actual_start:    r.arrivalAt ? arrivalToTimeOnly(r.arrivalAt, tz) : null,
+        // True when the coach was already on site from a back-to-back shift.
+        arrival_inferred: r.arrivalInferred,
+        // The manager-set paid start, if any. Not an arrival.
+        paid_start_override: a.start_time_override || null,
+        status,
+        // A carried-over arrival (back-to-back shift) is not a lateness
+        // measure for THIS shift — the coach didn't walk in at that instant.
+        minutes_late:    r.arrivalInferred ? null : minutesLate(r.scheduledAt, r.arrivalAt),
+        // P2.6 — sources that contributed to the stamp. Empty array
+        // when never auto-stamped (manual entry / pending / no-show).
+        sources: Array.from(sourceSet).sort(),
+      }
+    })
 
     // Summary at the top of the report.
     const summary = rows.reduce((acc, r) => {

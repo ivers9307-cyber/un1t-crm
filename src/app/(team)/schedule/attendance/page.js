@@ -28,11 +28,12 @@ export default async function AttendanceReportPage() {
       <ScheduleTabs user={user} />
       <h2 className="text-2xl font-bold mb-1">Attendance</h2>
       <p className="text-sm text-un1t-subtle mb-8 max-w-3xl">
-        Auto-stamped from UniFi Access door unlocks. On-time means the
-        first card-tap was within 60 seconds of the scheduled start;
-        anything later is late. Pending means the shift is still in
-        progress and we haven&apos;t seen an arrival yet. No-show means
-        the shift ended with no arrival recorded.
+        Arrivals come from the staff app: the first time a coach&apos;s phone
+        enters the studio area before a shift. On time means that arrival was
+        within 60 seconds of the scheduled start. &ldquo;On site&rdquo; means
+        the coach was already in from a back-to-back shift. Pending means the
+        shift is still in progress with no arrival yet. No-show means the shift
+        ended with no arrival recorded. Arrivals never change paid hours.
       </p>
       <AttendanceReportClient activeLocationName={user.activeLocation?.name || ''} />
     </div>

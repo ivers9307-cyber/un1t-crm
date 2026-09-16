@@ -65,7 +65,7 @@ export default function AttendanceReportClient({ activeLocationName }) {
   }, [data, statusFilter, profileFilter])
 
   function downloadCsv() {
-    const header = ['Date', 'Staff', 'Role', 'Scheduled start', 'Actual start', 'Status', 'Minutes late']
+    const header = ['Date', 'Staff', 'Role', 'Scheduled start', 'Actual start', 'On site (inferred)', 'Status', 'Minutes late']
     const lines = [header.join(',')]
     for (const r of filtered) {
       lines.push([
@@ -74,6 +74,7 @@ export default function AttendanceReportClient({ activeLocationName }) {
         r.profile_role || '',
         r.scheduled_start,
         r.actual_start || '',
+        r.arrival_inferred ? 'yes' : '',
         r.status,
         r.minutes_late ?? '',
       ].join(','))
@@ -172,7 +173,12 @@ export default function AttendanceReportClient({ activeLocationName }) {
                   {r.profile_role && <span className="ml-2 text-xs text-un1t-subtle">{r.profile_role}</span>}
                 </td>
                 <td className="px-3 py-2 font-mono text-xs">{(r.scheduled_start || '').slice(0, 5)}</td>
-                <td className="px-3 py-2 font-mono text-xs">{r.actual_start ? r.actual_start.slice(0, 5) : '—'}</td>
+                <td className="px-3 py-2 font-mono text-xs">
+                  {r.actual_start ? r.actual_start.slice(0, 5) : '—'}
+                  {r.arrival_inferred && (
+                    <span className="ml-1 font-sans text-un1t-subtle" title="Already on site from an earlier shift">on site</span>
+                  )}
+                </td>
                 <td className="px-3 py-2">
                   <span className={`inline-block rounded-full border px-2 py-0.5 text-xs font-medium ${STATUS_META[r.status]?.cls || ''}`}>
                     {STATUS_META[r.status]?.label || r.status}
