@@ -22,11 +22,16 @@ vi.mock('@/lib/auth', () => ({
 vi.mock('@/lib/push-dedup', () => ({ notifyUsersOnce: vi.fn().mockResolvedValue(undefined) }))
 vi.mock('@/lib/roster-change-log', () => ({ logRosterChange: vi.fn().mockResolvedValue({ logged: true }) }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
+vi.mock('@/lib/roster-change-notify', () => ({
+  notifyRosterChanges: vi.fn(() => Promise.resolve({ notified: 0 })),
+  markRosterChangesNotified: vi.fn(() => Promise.resolve()),
+}))
 
 const { createServerClient } = await import('@/lib/supabase')
 const { getCurrentUser, getUserLocationIds } = await import('@/lib/auth')
 const { notifyUsersOnce } = await import('@/lib/push-dedup')
 const { logRosterChange } = await import('@/lib/roster-change-log')
+const { notifyRosterChanges, markRosterChangesNotified } = await import('@/lib/roster-change-notify')
 const { PUT, DELETE } = await import('./route.js')
 
 const COACH = { id: 'coach-1', role: 'staff' }
@@ -128,7 +133,10 @@ beforeEach(() => {
   getUserLocationIds.mockReset()
   getUserLocationIds.mockReturnValue(['loc-1'])
   notifyUsersOnce.mockClear()
+  notifyUsersOnce.mockResolvedValue(undefined)
   logRosterChange.mockClear()
+  notifyRosterChanges.mockClear()
+  markRosterChangesNotified.mockClear()
 })
 
 describe('PUT /api/schedule/assignments/[id] — hours are manager-set (D3)', () => {
@@ -273,6 +281,48 @@ describe('PUT /api/schedule/assignments/[id] — hours are manager-set (D3)', ()
     expect(logRosterChange).toHaveBeenCalledTimes(1)
     expect(logRosterChange.mock.calls[0][1]).toMatchObject({ action: 'time_changed', coachId: COACH.id })
   })
+
+  // NOTIFY.1 review — a delivered push already told the coach; the
+  // `time_changed` row it just wrote must be stamped so a later
+  // re-publish/approve doesn't send them a second message about it.
+  it('stamps the time_changed row when notifyUsersOnce reports delivery', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    notifyUsersOnce.mockResolvedValue({ sent: 1, emailed: 0 })
+    const { db } = buildDb()
+    createServerClient.mockReturnValue(db)
+
+    await PUT(req({ start_time_override: '10:00:00' }), PROPS)
+    expect(markRosterChangesNotified).toHaveBeenCalledWith(db, {
+      locationId: 'loc-1',
+      coachId: COACH.id,
+      blockIds: ['block-1'],
+      action: 'time_changed',
+    })
+  })
+
+  it('does not stamp when notifyUsersOnce delivers nothing', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    notifyUsersOnce.mockResolvedValue({ sent: 0, emailed: 0 })
+    const { db } = buildDb()
+    createServerClient.mockReturnValue(db)
+
+    await PUT(req({ start_time_override: '10:00:00' }), PROPS)
+    expect(markRosterChangesNotified).not.toHaveBeenCalled()
+  })
+
+  // NOTIFY.1 review — a dedup hit means notifyUsersOnce found an existing
+  // claim for this SAME key (identical override values), not that THIS
+  // change was delivered — e.g. an A→B→A round trip lands back on a key it
+  // already claimed, or the claim itself is a quiet no-op. It must not stamp.
+  it('does not stamp on a dedup hit alone', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    notifyUsersOnce.mockResolvedValue({ sent: 0, emailed: 0, deduped: 1 })
+    const { db } = buildDb()
+    createServerClient.mockReturnValue(db)
+
+    await PUT(req({ start_time_override: '10:00:00' }), PROPS)
+    expect(markRosterChangesNotified).not.toHaveBeenCalled()
+  })
 })
 
 describe('DELETE /api/schedule/assignments/[id] — a coach cannot drop themselves (D2)', () => {
@@ -336,5 +386,38 @@ describe('DELETE /api/schedule/assignments/[id] — a coach cannot drop themselv
     const res = await DELETE({}, PROPS)
     expect(res.status).toBe(404)
     expect(deleteSpy).not.toHaveBeenCalled()
+  })
+
+  it('tells the removed coach immediately when the roster is published (NOTIFY.1)', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const { db } = buildDb()
+    createServerClient.mockReturnValue(db)
+
+    const res = await DELETE({}, PROPS)
+    expect(res.status).toBe(200)
+    expect(notifyRosterChanges).toHaveBeenCalledTimes(1)
+    expect(notifyRosterChanges.mock.calls[0][1]).toEqual({
+      locationId: 'loc-1',
+      actorId: MANAGER.id,
+      changes: [{ coachId: COACH.id, blockId: 'block-1', blockDate: '2026-06-10', action: 'unassigned' }],
+    })
+  })
+
+  it('does not notify when the roster is a draft', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const { db } = buildDb({ assignment: assignmentRow({ rosterStatus: 'draft' }) })
+    createServerClient.mockReturnValue(db)
+
+    await DELETE({}, PROPS)
+    expect(notifyRosterChanges).not.toHaveBeenCalled()
+  })
+
+  it('PUT time changes do not go through notifyRosterChanges (they push shift_adjusted themselves)', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const { db } = buildDb()
+    createServerClient.mockReturnValue(db)
+
+    await PUT(req({ start_time_override: '10:00:00' }), PROPS)
+    expect(notifyRosterChanges).not.toHaveBeenCalled()
   })
 })

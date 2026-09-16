@@ -5,10 +5,18 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('./push', () => ({ sendPush: vi.fn(() => Promise.resolve({ sent: 1 })) }))
 vi.mock('./log', () => ({ logWarn: vi.fn() }))
+vi.mock('./notify', () => ({ notifyUsers: vi.fn(() => Promise.resolve({ sent: 1 })) }))
+vi.mock('./roster-change-log', () => ({
+  collectUnnotifiedChanges: vi.fn(),
+  distinctCoachIds: (rows) => [...new Set((rows || []).map((r) => r.coach_id))],
+  markChangesNotified: vi.fn(() => Promise.resolve()),
+}))
 
 import { sendPush } from './push'
 import { logWarn } from './log'
-import { publishNotifyRowsForBlocks, notifyStaffOfPublish } from './roster-notify'
+import { notifyUsers } from './notify'
+import { collectUnnotifiedChanges, markChangesNotified } from './roster-change-log'
+import { publishNotifyRowsForBlocks, notifyStaffOfPublish, renotifyChangedCoaches } from './roster-notify'
 
 function makeDb(result) {
   const builder = {
@@ -106,5 +114,102 @@ describe('notifyStaffOfPublish — notification-log insert', () => {
     expect(res).toEqual({ notified: 1 })
     expect(logWarn).not.toHaveBeenCalled()
     expect(sendPush).toHaveBeenCalledTimes(1)
+  })
+})
+
+// NOTIFY.1 — the re-publish safety net. Extracted from the publish route's
+// inline block so both POST /api/schedule/rosters and the approve route can
+// call it. ADDITION from review: it must not send a late notice about a
+// shift that has already happened — only coaches with at least one FUTURE
+// (block_date >= today) collected change get pushed, but every collected
+// row is still stamped (a past row needs no message, but must stop being
+// "unnotified" or it would be re-read forever).
+describe('renotifyChangedCoaches (NOTIFY.1 safety net)', () => {
+  const range = { locationId: 'loc-1', periodStart: '2026-09-21', periodEnd: '2026-09-27', todayStr: '2026-09-16' }
+
+  beforeEach(() => { vi.clearAllMocks() })
+
+  it('pushes each coach with an unsent FUTURE change once and stamps every collected row', async () => {
+    collectUnnotifiedChanges.mockResolvedValue([
+      { id: 'ch1', coach_id: 'c1', block_date: '2026-09-21' },
+      { id: 'ch2', coach_id: 'c1', block_date: '2026-09-22' },
+      { id: 'ch3', coach_id: 'c2', block_date: '2026-09-23' },
+    ])
+    const res = await renotifyChangedCoaches({}, range)
+    expect(notifyUsers).toHaveBeenCalledWith(['c1', 'c2'], expect.objectContaining({
+      title: 'Roster updated',
+      // NOTIFY.1 review — formatShiftDate, not the raw ISO range.
+      body: 'Your shifts between Mon 21 Sep and Sun 27 Sep have been updated.',
+      category: 'schedule',
+      data: { type: 'schedule_updated', start_date: '2026-09-21', end_date: '2026-09-27', location_id: 'loc-1' },
+    }))
+    expect(markChangesNotified).toHaveBeenCalledWith({}, ['ch1', 'ch2', 'ch3'])
+    expect(res).toEqual({ notified: 2 })
+  })
+
+  it('a single-day range reads as one date, not a range', async () => {
+    collectUnnotifiedChanges.mockResolvedValue([
+      { id: 'ch1', coach_id: 'c1', block_date: '2026-09-18' },
+    ])
+    await renotifyChangedCoaches({}, { locationId: 'loc-1', periodStart: '2026-09-18', periodEnd: '2026-09-18', todayStr: '2026-09-16' })
+    expect(notifyUsers).toHaveBeenCalledWith(['c1'], expect.objectContaining({
+      body: 'Your shifts for Fri 18 Sep have been updated.',
+    }))
+  })
+
+  it('sends nothing when there is nothing to tell', async () => {
+    collectUnnotifiedChanges.mockResolvedValue([])
+    expect(await renotifyChangedCoaches({}, range)).toEqual({ notified: 0 })
+    expect(notifyUsers).not.toHaveBeenCalled()
+    expect(markChangesNotified).toHaveBeenCalledWith({}, [])
+  })
+
+  it('never throws', async () => {
+    collectUnnotifiedChanges.mockRejectedValue(new Error('db down'))
+    expect(await renotifyChangedCoaches({}, range)).toEqual({ notified: 0 })
+    expect(logWarn).toHaveBeenCalled()
+  })
+
+  it('a coach with only past-dated changes is not notified, but their rows are still stamped', async () => {
+    collectUnnotifiedChanges.mockResolvedValue([
+      { id: 'ch1', coach_id: 'c1', block_date: '2026-09-10' }, // past — c1 only has this one
+      { id: 'ch2', coach_id: 'c2', block_date: '2026-09-21' }, // future
+    ])
+    const res = await renotifyChangedCoaches({}, range)
+    expect(notifyUsers).toHaveBeenCalledWith(['c2'], expect.anything())
+    expect(markChangesNotified).toHaveBeenCalledWith({}, ['ch1', 'ch2'])
+    expect(res).toEqual({ notified: 1 })
+  })
+
+  it('sends nothing when every collected change is in the past, but still stamps them', async () => {
+    collectUnnotifiedChanges.mockResolvedValue([
+      { id: 'ch1', coach_id: 'c1', block_date: '2026-09-01' },
+      { id: 'ch2', coach_id: 'c2', block_date: '2026-09-10' },
+    ])
+    const res = await renotifyChangedCoaches({}, range)
+    expect(notifyUsers).not.toHaveBeenCalled()
+    expect(markChangesNotified).toHaveBeenCalledWith({}, ['ch1', 'ch2'])
+    expect(res).toEqual({ notified: 0 })
+  })
+
+  it('a change dated exactly today counts as future — the coach is notified', async () => {
+    collectUnnotifiedChanges.mockResolvedValue([
+      { id: 'ch1', coach_id: 'c1', block_date: '2026-09-16' }, // todayStr in `range`
+    ])
+    const res = await renotifyChangedCoaches({}, range)
+    expect(notifyUsers).toHaveBeenCalledWith(['c1'], expect.anything())
+    expect(markChangesNotified).toHaveBeenCalledWith({}, ['ch1'])
+    expect(res).toEqual({ notified: 1 })
+  })
+
+  it('when notifyUsers rejects, markChangesNotified is NOT called and it resolves { notified: 0 }', async () => {
+    collectUnnotifiedChanges.mockResolvedValue([
+      { id: 'ch1', coach_id: 'c1', block_date: '2026-09-21' },
+    ])
+    notifyUsers.mockRejectedValueOnce(new Error('push down'))
+    const res = await renotifyChangedCoaches({}, range)
+    expect(markChangesNotified).not.toHaveBeenCalled()
+    expect(res).toEqual({ notified: 0 })
+    expect(logWarn).toHaveBeenCalled()
   })
 })

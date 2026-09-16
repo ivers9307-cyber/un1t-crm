@@ -42,6 +42,7 @@ import { validateBody } from '@/lib/validate'
 import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
 import { timeRangesOverlap, fmtTime } from '@/lib/schedule-overlap'
 import { logRosterChange } from '@/lib/roster-change-log'
+import { notifyRosterChanges } from '@/lib/roster-change-notify'
 
 const BulkAssignSchema = z.object({
   block_ids: z.array(uuidLike).min(1, 'At least one block_id is required').max(200, 'Max 200 blocks per request'),
@@ -208,22 +209,28 @@ export async function POST(request) {
     }
   }
 
-  // SCHEDULE-CHANGE-LOG.1 — record assignments to blocks that belong to a
-  // published roster as post-publish changes, so the next re-publish
-  // re-notifies this coach. Best-effort.
+  // SCHEDULE-CHANGE-LOG.1 — record assignments to blocks on a published roster.
+  // NOTIFY.1 — and tell the coach now, one message per location.
+  const publishedByLocation = new Map()
   for (const a of assigned) {
     const block = blocksById.get(a.block_id)
-    if (block?.rosters?.status === 'published') {
-      await logRosterChange(db, {
-        isPublished: true,
-        locationId: block.location_id,
-        blockId: block.id,
-        blockDate: block.block_date,
-        actorId: user.id,
-        coachId: body.profile_id,
-        action: 'assigned',
-      })
-    }
+    if (block?.rosters?.status !== 'published') continue
+    await logRosterChange(db, {
+      isPublished: true,
+      locationId: block.location_id,
+      blockId: block.id,
+      blockDate: block.block_date,
+      actorId: user.id,
+      coachId: body.profile_id,
+      action: 'assigned',
+    })
+    if (!publishedByLocation.has(block.location_id)) publishedByLocation.set(block.location_id, [])
+    publishedByLocation.get(block.location_id).push({
+      coachId: body.profile_id, blockId: block.id, blockDate: block.block_date, action: 'assigned',
+    })
+  }
+  for (const [locationId, changes] of publishedByLocation) {
+    await notifyRosterChanges(db, { locationId, actorId: user.id, changes })
   }
 
   return NextResponse.json({

@@ -30,7 +30,7 @@
 // re-running over an already-copied month updates rather than
 // duplicates. Manager re-runs after edits land cleanly.
 
-import { NextResponse } from 'next/server'
+import { NextResponse, after } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
@@ -38,6 +38,7 @@ import { validateBody } from '@/lib/validate'
 import { uuidLike, isoDate, MANAGER_ROLES } from '@/lib/schemas'
 import { bulkUpsertShiftAssignments } from '@/lib/roster-write'
 import { fetchSourceShiftRows } from '@/lib/roster-read'
+import { readAssignmentKeysInRange, logAndNotifyCopiedShifts } from '@/lib/roster-change-notify'
 
 export const runtime = 'nodejs'
 
@@ -155,8 +156,12 @@ export async function POST(request) {
     })
   }
 
-  // Find-or-create blocks + upsert assignments (new model). New blocks
-  // carry no roster_id → copied shifts read unpublished until publish.
+  // NOTIFY.1 — see copy-week.
+  const targetEnd = `${target_month_start.slice(0, 7)}-${String(daysInMonth(target_month_start)).padStart(2, '0')}`
+  const before = await readAssignmentKeysInRange(db, { locationId: location_id, startDate: target_month_start, endDate: targetEnd })
+
+  // Find-or-create blocks + upsert assignments (new model). A block created
+  // inside an already-published period joins that roster (ROSTER-FIX.4).
   const { count, error } = await bulkUpsertShiftAssignments(db, {
     locationId: location_id,
     actorId: user.id,
@@ -164,6 +169,21 @@ export async function POST(request) {
   })
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+
+  // NOTIFY.1 review — see copy-week: the AFTER snapshot is read synchronously
+  // here, right after the upsert commits, so it can't race a second copy onto
+  // the same period. Only the log+notify step is deferred via `after`.
+  const afterSnap = await readAssignmentKeysInRange(db, { locationId: location_id, startDate: target_month_start, endDate: targetEnd })
+
+  after(() => logAndNotifyCopiedShifts(db, {
+    locationId: location_id,
+    actorId: user.id,
+    startDate: target_month_start,
+    endDate: targetEnd,
+    before,
+    after: afterSnap,
+    via: 'copy_month',
+  }))
 
   return NextResponse.json({
     success: true,

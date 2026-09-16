@@ -30,12 +30,7 @@ vi.mock('@/lib/roster-email', () => ({ sendOverBudgetApprovalEmail: vi.fn(() => 
 vi.mock('@/lib/roster-notify', () => ({
   notifyStaffOfPublish: vi.fn(() => Promise.resolve()),
   publishNotifyRowsForBlocks: vi.fn(() => Promise.resolve([])),
-}))
-vi.mock('@/lib/notify', () => ({ notifyUsers: vi.fn(() => Promise.resolve()) }))
-vi.mock('@/lib/roster-change-log', () => ({
-  collectUnnotifiedChanges: vi.fn(() => Promise.resolve([])),
-  markChangesNotified: vi.fn(() => Promise.resolve()),
-  distinctCoachIds: vi.fn(() => []),
+  renotifyChangedCoaches: vi.fn(() => Promise.resolve({ notified: 0 })),
 }))
 
 const { createServerClient } = await import('@/lib/supabase')
@@ -153,12 +148,14 @@ function buildDb({ publishedRosters = [], insertError = null, insertThrows = nul
   return { db, inserts, rosterUpdates }
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   createServerClient.mockReset()
   getCurrentUser.mockReset()
   projectPublishImpact.mockReset()
   projectPublishImpact.mockResolvedValue(UNDER_BUDGET)
   getCurrentUser.mockResolvedValue({ id: 'owner-1', role: 'owner', locations: [{ id: LOC_1 }] })
+  const { renotifyChangedCoaches } = await import('@/lib/roster-notify')
+  renotifyChangedCoaches.mockClear()
 })
 
 function publish(body) {
@@ -200,6 +197,13 @@ describe('POST /api/schedule/rosters — overlapping published rosters', () => {
     const res = await publish()
     expect(res.status).toBe(201)
     expect(inserts).toHaveLength(1)
+
+    const { renotifyChangedCoaches } = await import('@/lib/roster-notify')
+    expect(renotifyChangedCoaches).toHaveBeenCalledWith(db, {
+      locationId: LOC_1,
+      periodStart: '2026-05-04',
+      periodEnd: '2026-05-10',
+    })
   })
 
   it('allows a WIDER period that fully contains the published one', async () => {
@@ -301,6 +305,10 @@ describe('POST /api/schedule/rosters — supersede', () => {
     expect(res.status).toBe(202)
     expect(inserts[0].status).toBe('draft')
     expect(rosterUpdates).toHaveLength(0)
+
+    // A draft is not a publish — nothing to re-notify about until it's approved.
+    const { renotifyChangedCoaches } = await import('@/lib/roster-notify')
+    expect(renotifyChangedCoaches).not.toHaveBeenCalled()
   })
 
   it('puts the released rosters back when the insert fails', async () => {

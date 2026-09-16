@@ -17,6 +17,13 @@
 import { sendPush } from './push'
 import { logWarn } from './log'
 import { isLiveAssignment } from './roster'
+import { notifyUsers } from './notify'
+import { collectUnnotifiedChanges, distinctCoachIds, markChangesNotified } from './roster-change-log'
+import { dublinTodayStr } from './dublin-time'
+// NOTIFY.1 review — shares the 'Fri 18 Sep' date formatting with the
+// moment-of-change messages. One-way import: roster-change-notify.js does
+// NOT import this module, so there is no cycle.
+import { formatShiftDate } from './roster-change-notify'
 
 /**
  * RETIRE-SHIFTS-MIRROR.6 — build the notify-list for a publish from the
@@ -122,4 +129,65 @@ export async function notifyStaffOfPublish(db, shifts, { startDate, endDate, loc
   }
 
   return { notified: userIds.length }
+}
+
+/**
+ * SCHEDULE-CHANGE-LOG.1 / NOTIFY.1 — the re-publish safety net. Changes made
+ * to a published roster are now sent at the moment of change
+ * (roster-change-notify.js); this picks up whatever that could not deliver
+ * (no token and no email, a failed send, or rows from before NOTIFY.1).
+ * Called by BOTH publish paths: POST /api/schedule/rosters and
+ * POST /api/schedule/rosters/[id]/approve, which never had it, so every
+ * over-budget re-publish used to tell nobody. Best-effort; never throws.
+ *
+ * This is the FINAL attempt for whatever it collects — it sends via
+ * `notifyUsers` under the `schedule` category, which (unlike
+ * `shift_adjusted`) has no email fallback, so a coach with no push token
+ * gets nothing here. Every collected row is stamped notified regardless of
+ * delivery, so there is no later retry beyond this call.
+ *
+ * A collected change row's block_date can be in the past by the time this
+ * runs (an old, never-notified row, or a re-publish of a period that has
+ * partly elapsed) — a coach must never get a "your shift changed" push for
+ * something that already happened. So only coaches with at least one
+ * collected change dated today or later get pushed, but EVERY collected row
+ * is still stamped notified: a past row needs no message, but leaving it
+ * unstamped would just re-surface it (and keep blocking on it) forever.
+ *
+ * The returned `notified` count is coaches TARGETED (pushed to), not
+ * deliveries confirmed — `notifyUsers` is fire-and-forget push, so a token
+ * that is stale or unregistered still counts here.
+ *
+ * @param {import('@supabase/supabase-js').SupabaseClient} db
+ * @param {object} range
+ * @param {string} range.locationId
+ * @param {string} range.periodStart
+ * @param {string} range.periodEnd
+ * @param {string} [range.todayStr]  Dublin 'YYYY-MM-DD' to treat as "today";
+ *                                   defaults to dublinTodayStr(). Tests pass
+ *                                   this to pin the past/future boundary.
+ */
+export async function renotifyChangedCoaches(db, { locationId, periodStart, periodEnd, todayStr }) {
+  try {
+    const today = todayStr || dublinTodayStr()
+    const changes = await collectUnnotifiedChanges(db, { locationId, periodStart, periodEnd })
+    const futureChanges = changes.filter((c) => c.block_date >= today)
+    const coachIds = distinctCoachIds(futureChanges)
+    if (coachIds.length > 0) {
+      const body = periodStart === periodEnd
+        ? `Your shifts for ${formatShiftDate(periodStart)} have been updated.`
+        : `Your shifts between ${formatShiftDate(periodStart)} and ${formatShiftDate(periodEnd)} have been updated.`
+      await notifyUsers(coachIds, {
+        title: 'Roster updated',
+        body,
+        category: 'schedule',
+        data: { type: 'schedule_updated', start_date: periodStart, end_date: periodEnd, location_id: locationId },
+      })
+    }
+    await markChangesNotified(db, changes.map((c) => c.id))
+    return { notified: coachIds.length }
+  } catch (e) {
+    logWarn('roster-notify', 'republish change-notify failed', { locationId, err: e?.message })
+    return { notified: 0 }
+  }
 }

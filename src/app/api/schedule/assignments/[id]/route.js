@@ -23,6 +23,7 @@ import { validateBody } from '@/lib/validate'
 import { MANAGER_ROLES, timeOfDay } from '@/lib/schemas'
 import { notifyUsersOnce } from '@/lib/push-dedup'
 import { logRosterChange } from '@/lib/roster-change-log'
+import { notifyRosterChanges, markRosterChangesNotified } from '@/lib/roster-change-notify'
 import { logWarn } from '@/lib/log'
 
 // All fields optional. To CLEAR an override, send null explicitly
@@ -141,6 +142,12 @@ export async function PUT(request, props) {
     (updates[field] ?? null) !== (assignment[field] ?? null)
   ))
   if (overrideChanged) {
+    // NOTIFY.1 review — the result decides whether the `time_changed` row
+    // below gets stamped: a re-publish must not send a second "your shift
+    // changed" message for something this PUT already delivered. `undefined`
+    // (the catch below fired, or notifyUsersOnce itself never ran) means
+    // delivery can't be judged, so the row is deliberately left unstamped.
+    let deliveryResult
     try {
       const block = data.shift_blocks
       const tplName = block?.shift_templates?.name || 'Shift'
@@ -165,7 +172,7 @@ export async function PUT(request, props) {
       // PUSH.2 — keyed on the adjustment CONTENT, not just the assignment:
       // the same shift can legitimately be adjusted twice (each should
       // notify); only an identical re-submit of the same times dedupes.
-      await notifyUsersOnce(db, `shift_adjusted:${data.id}:${date}:${cleared ? 'cleared' : `${newStart}-${newEnd}`}`, [data.profile_id], {
+      deliveryResult = await notifyUsersOnce(db, `shift_adjusted:${data.id}:${date}:${cleared ? 'cleared' : `${newStart}-${newEnd}`}`, [data.profile_id], {
         title: 'Shift adjusted',
         body,
         category: 'shift_adjusted',
@@ -196,6 +203,24 @@ export async function PUT(request, props) {
           end_time_override: data.end_time_override || null,
         },
       })
+
+      // NOTIFY.1 review — this PUT already pushed/emailed the coach above;
+      // stamp the row it just wrote so renotifyChangedCoaches doesn't send a
+      // second "your shift changed" message at the next re-publish/approve.
+      // `deduped` deliberately does NOT count as delivery: a dedup hit means
+      // notifyUsersOnce found an existing claim for the SAME key (identical
+      // override values — e.g. an A→B→A round trip lands back on a key it
+      // already claimed), which says nothing about whether THIS change was
+      // delivered, only that some earlier identical-content send claimed it.
+      const delivered = deliveryResult && (deliveryResult.sent || 0) + (deliveryResult.emailed || 0) > 0
+      if (delivered) {
+        await markRosterChangesNotified(db, {
+          locationId: assignment.shift_blocks?.location_id,
+          coachId: data.profile_id,
+          blockIds: [assignment.block_id],
+          action: 'time_changed',
+        })
+      }
     }
   }
 
@@ -259,6 +284,18 @@ export async function DELETE(_request, props) {
       actorId: user.id,
       coachId: assignment.profile_id,
       action: 'unassigned',
+    })
+
+    // NOTIFY.1 — tell the coach now, not at the next re-publish.
+    await notifyRosterChanges(db, {
+      locationId: assignment.shift_blocks?.location_id,
+      actorId: user.id,
+      changes: [{
+        coachId: assignment.profile_id,
+        blockId: assignment.block_id,
+        blockDate: assignment.shift_blocks?.block_date,
+        action: 'unassigned',
+      }],
     })
   }
 

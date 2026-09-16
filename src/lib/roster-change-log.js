@@ -59,13 +59,17 @@ export function distinctCoachIds(rows) {
 export async function collectUnnotifiedChanges(db, { locationId, periodStart, periodEnd } = {}) {
   if (!locationId || !periodStart || !periodEnd) return []
   try {
-    const { data } = await db
+    const { data, error } = await db
       .from('roster_change_log')
-      .select('id, coach_id, action')
+      .select('id, coach_id, action, block_date')
       .eq('location_id', locationId)
       .gte('block_date', periodStart)
       .lte('block_date', periodEnd)
       .is('notified_at', null)
+    if (error) {
+      logWarn('roster-change-log', 'collect failed', { err: error.message })
+      return []
+    }
     return data || []
   } catch (e) {
     logWarn('roster-change-log', 'collect failed', { err: e?.message })
@@ -77,10 +81,13 @@ export async function collectUnnotifiedChanges(db, { locationId, periodStart, pe
 export async function markChangesNotified(db, rowIds) {
   if (!rowIds || rowIds.length === 0) return
   try {
-    await db
+    const { error } = await db
       .from('roster_change_log')
       .update({ notified_at: new Date().toISOString() })
       .in('id', rowIds)
+    if (error) {
+      logWarn('roster-change-log', 'mark notified failed', { err: error.message })
+    }
   } catch (e) {
     logWarn('roster-change-log', 'mark notified failed', { err: e?.message })
   }

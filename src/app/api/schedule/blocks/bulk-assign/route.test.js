@@ -17,15 +17,18 @@ vi.mock('@/lib/auth', () => ({
   getCurrentUser: vi.fn(),
   getUserLocationIds: vi.fn(),
 }))
+vi.mock('@/lib/roster-change-notify', () => ({ notifyRosterChanges: vi.fn(() => Promise.resolve({ notified: 0 })) }))
 
 const { createServerClient } = await import('@/lib/supabase')
 const { getCurrentUser, getUserLocationIds } = await import('@/lib/auth')
 const { POST } = await import('./route.js')
+const { notifyRosterChanges } = await import('@/lib/roster-change-notify')
 
 beforeEach(() => {
   createServerClient.mockReset()
   getCurrentUser.mockReset()
   getUserLocationIds.mockReset()
+  notifyRosterChanges.mockClear()
 })
 
 function buildRequest(body) {
@@ -283,6 +286,62 @@ describe('POST /api/schedule/blocks/bulk-assign', () => {
       expect(j.skipped).toHaveLength(2)
       const reasons = j.skipped.map((s) => s.reason).sort()
       expect(reasons).toEqual(['already_assigned', 'at_capacity'])
+    })
+  })
+})
+
+describe('POST /api/schedule/blocks/bulk-assign — NOTIFY.1', () => {
+  it('notifies the coach once, covering only the blocks on a published roster', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'mgr-1', role: 'master' })
+    createServerClient.mockReturnValue(buildDb({
+      blocks: [
+        { id: VALID_UUID_A, location_id: 'loc-1', block_date: '2026-05-18', max_coaches: 5, rosters: { status: 'published' }, shift_assignments: [] },
+        { id: VALID_UUID_B, location_id: 'loc-1', block_date: '2026-05-19', max_coaches: 5, rosters: { status: 'draft' }, shift_assignments: [] },
+      ],
+    }))
+    const res = await POST(buildRequest({ block_ids: [VALID_UUID_A, VALID_UUID_B], profile_id: PROFILE_A }))
+    expect((await res.json()).success).toBe(true)
+    expect(notifyRosterChanges).toHaveBeenCalledTimes(1)
+    expect(notifyRosterChanges.mock.calls[0][1]).toMatchObject({ locationId: 'loc-1', actorId: 'mgr-1' })
+    expect(notifyRosterChanges.mock.calls[0][1].changes).toEqual([
+      { coachId: PROFILE_A, blockId: VALID_UUID_A, blockDate: '2026-05-18', action: 'assigned' },
+    ])
+  })
+
+  it('does not notify when every assigned block is on a draft roster', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'mgr-1', role: 'master' })
+    createServerClient.mockReturnValue(buildDb({
+      blocks: [
+        { id: VALID_UUID_A, location_id: 'loc-1', block_date: '2026-05-18', max_coaches: 5, rosters: { status: 'draft' }, shift_assignments: [] },
+        { id: VALID_UUID_B, location_id: 'loc-1', block_date: '2026-05-19', max_coaches: 5, rosters: { status: 'draft' }, shift_assignments: [] },
+      ],
+    }))
+    const res = await POST(buildRequest({ block_ids: [VALID_UUID_A, VALID_UUID_B], profile_id: PROFILE_A }))
+    expect((await res.json()).success).toBe(true)
+    expect(notifyRosterChanges).not.toHaveBeenCalled()
+  })
+
+  it('notifies once per location when published blocks span two locations', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'mgr-1', role: 'master' })
+    createServerClient.mockReturnValue(buildDb({
+      blocks: [
+        { id: VALID_UUID_A, location_id: 'loc-1', block_date: '2026-05-18', max_coaches: 5, rosters: { status: 'published' }, shift_assignments: [] },
+        { id: VALID_UUID_B, location_id: 'loc-2', block_date: '2026-05-19', max_coaches: 5, rosters: { status: 'published' }, shift_assignments: [] },
+      ],
+    }))
+    const res = await POST(buildRequest({ block_ids: [VALID_UUID_A, VALID_UUID_B], profile_id: PROFILE_A }))
+    expect((await res.json()).success).toBe(true)
+    expect(notifyRosterChanges).toHaveBeenCalledTimes(2)
+    const callsByLocation = new Map(notifyRosterChanges.mock.calls.map(([, opts]) => [opts.locationId, opts]))
+    expect(callsByLocation.get('loc-1')).toMatchObject({
+      locationId: 'loc-1',
+      actorId: 'mgr-1',
+      changes: [{ coachId: PROFILE_A, blockId: VALID_UUID_A, blockDate: '2026-05-18', action: 'assigned' }],
+    })
+    expect(callsByLocation.get('loc-2')).toMatchObject({
+      locationId: 'loc-2',
+      actorId: 'mgr-1',
+      changes: [{ coachId: PROFILE_A, blockId: VALID_UUID_B, blockDate: '2026-05-19', action: 'assigned' }],
     })
   })
 })

@@ -212,13 +212,13 @@ export const NOTIFICATION_REGISTRY = Object.freeze([
   },
   {
     category: 'shift_adjusted',
-    label: 'Shift adjusted',
-    description: 'A manager changed the times on one of your shifts (partial-shift override).',
-    trigger: { kind: 'event', source: 'PUT /api/schedule/shift-assignments/[id]' },
+    label: 'Shift changes',
+    description: 'A manager added you to, removed you from, or changed the times on one of your shifts.',
+    trigger: { kind: 'event', source: 'PUT/DELETE /api/schedule/assignments/[id] + POST /api/schedule/blocks/[id]/assignments + bulk-assign + copy-week/copy-month' },
     recipients: { kind: 'assignee', detail: 'Coach whose shift was edited' },
     configurable: { leadTimes: false, roles: false },
     fallbackEmail: true,
-    emailSubject: 'A shift has been adjusted',
+    emailSubject: 'Your shifts have changed',
   },
   {
     category: 'contract_issued',
