@@ -22,13 +22,16 @@ vi.mock('@/lib/auth', () => ({
 vi.mock('@/lib/push-dedup', () => ({ notifyUsersOnce: vi.fn().mockResolvedValue(undefined) }))
 vi.mock('@/lib/roster-change-log', () => ({ logRosterChange: vi.fn().mockResolvedValue({ logged: true }) }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
-vi.mock('@/lib/roster-change-notify', () => ({ notifyRosterChanges: vi.fn(() => Promise.resolve({ notified: 0 })) }))
+vi.mock('@/lib/roster-change-notify', () => ({
+  notifyRosterChanges: vi.fn(() => Promise.resolve({ notified: 0 })),
+  markRosterChangesNotified: vi.fn(() => Promise.resolve()),
+}))
 
 const { createServerClient } = await import('@/lib/supabase')
 const { getCurrentUser, getUserLocationIds } = await import('@/lib/auth')
 const { notifyUsersOnce } = await import('@/lib/push-dedup')
 const { logRosterChange } = await import('@/lib/roster-change-log')
-const { notifyRosterChanges } = await import('@/lib/roster-change-notify')
+const { notifyRosterChanges, markRosterChangesNotified } = await import('@/lib/roster-change-notify')
 const { PUT, DELETE } = await import('./route.js')
 
 const COACH = { id: 'coach-1', role: 'staff' }
@@ -130,8 +133,10 @@ beforeEach(() => {
   getUserLocationIds.mockReset()
   getUserLocationIds.mockReturnValue(['loc-1'])
   notifyUsersOnce.mockClear()
+  notifyUsersOnce.mockResolvedValue(undefined)
   logRosterChange.mockClear()
   notifyRosterChanges.mockClear()
+  markRosterChangesNotified.mockClear()
 })
 
 describe('PUT /api/schedule/assignments/[id] — hours are manager-set (D3)', () => {
@@ -275,6 +280,34 @@ describe('PUT /api/schedule/assignments/[id] — hours are manager-set (D3)', ()
     await PUT(req({ start_time_override: '10:00:00' }), PROPS)
     expect(logRosterChange).toHaveBeenCalledTimes(1)
     expect(logRosterChange.mock.calls[0][1]).toMatchObject({ action: 'time_changed', coachId: COACH.id })
+  })
+
+  // NOTIFY.1 review — a delivered push already told the coach; the
+  // `time_changed` row it just wrote must be stamped so a later
+  // re-publish/approve doesn't send them a second message about it.
+  it('stamps the time_changed row when notifyUsersOnce reports delivery', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    notifyUsersOnce.mockResolvedValue({ sent: 1, emailed: 0 })
+    const { db } = buildDb()
+    createServerClient.mockReturnValue(db)
+
+    await PUT(req({ start_time_override: '10:00:00' }), PROPS)
+    expect(markRosterChangesNotified).toHaveBeenCalledWith(db, {
+      locationId: 'loc-1',
+      coachId: COACH.id,
+      blockIds: ['block-1'],
+      action: 'time_changed',
+    })
+  })
+
+  it('does not stamp when notifyUsersOnce delivers nothing', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    notifyUsersOnce.mockResolvedValue({ sent: 0, emailed: 0 })
+    const { db } = buildDb()
+    createServerClient.mockReturnValue(db)
+
+    await PUT(req({ start_time_override: '10:00:00' }), PROPS)
+    expect(markRosterChangesNotified).not.toHaveBeenCalled()
   })
 })
 

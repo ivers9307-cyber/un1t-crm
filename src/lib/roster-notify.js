@@ -20,6 +20,10 @@ import { isLiveAssignment } from './roster'
 import { notifyUsers } from './notify'
 import { collectUnnotifiedChanges, distinctCoachIds, markChangesNotified } from './roster-change-log'
 import { dublinTodayStr } from './dublin-time'
+// NOTIFY.1 review — shares the 'Fri 18 Sep' date formatting with the
+// moment-of-change messages. One-way import: roster-change-notify.js does
+// NOT import this module, so there is no cycle.
+import { formatShiftDate } from './roster-change-notify'
 
 /**
  * RETIRE-SHIFTS-MIRROR.6 — build the notify-list for a publish from the
@@ -170,10 +174,12 @@ export async function renotifyChangedCoaches(db, { locationId, periodStart, peri
     const futureChanges = changes.filter((c) => c.block_date >= today)
     const coachIds = distinctCoachIds(futureChanges)
     if (coachIds.length > 0) {
-      const rangeLabel = periodStart === periodEnd ? periodStart : `${periodStart} – ${periodEnd}`
+      const body = periodStart === periodEnd
+        ? `Your shifts for ${formatShiftDate(periodStart)} have been updated.`
+        : `Your shifts between ${formatShiftDate(periodStart)} and ${formatShiftDate(periodEnd)} have been updated.`
       await notifyUsers(coachIds, {
         title: 'Roster updated',
-        body: `Your shifts for ${rangeLabel} have been updated.`,
+        body,
         category: 'schedule',
         data: { type: 'schedule_updated', start_date: periodStart, end_date: periodEnd, location_id: locationId },
       })

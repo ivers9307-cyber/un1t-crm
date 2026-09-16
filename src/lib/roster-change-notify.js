@@ -56,16 +56,37 @@ export function buildRosterChangeMessage(changes) {
   return { title: 'Roster updated', body: `You were ${parts.join(' and ')} ${span}.` }
 }
 
-async function markNotified(db, { locationId, coachId, blockIds }) {
-  if (!locationId || blockIds.length === 0) return
-  const { error } = await db
+/**
+ * Stamp `notified_at` on this coach's roster_change_log rows for the given
+ * blocks, optionally narrowed to one `action`. Best-effort; never throws.
+ * Shared by the moment-of-change path (markNotified below, unfiltered) and
+ * the assignment PUT route, which stamps only the `time_changed` row it
+ * just delivered a push for — so a re-publish never sends a second message
+ * for the same time change.
+ *
+ * @param {object} db
+ * @param {object} opts
+ * @param {string} opts.locationId
+ * @param {string} opts.coachId
+ * @param {string[]} opts.blockIds
+ * @param {string} [opts.action]  one of ROSTER_CHANGE_ACTIONS; omit to match any
+ */
+export async function markRosterChangesNotified(db, { locationId, coachId, blockIds, action } = {}) {
+  if (!locationId || !blockIds || blockIds.length === 0) return
+  let query = db
     .from('roster_change_log')
     .update({ notified_at: new Date().toISOString() })
     .eq('location_id', locationId)
     .eq('coach_id', coachId)
     .in('block_id', blockIds)
     .is('notified_at', null)
+  if (action) query = query.eq('action', action)
+  const { error } = await query
   if (error) logWarn('roster-change-notify', 'mark notified failed', { coachId, err: error.message })
+}
+
+async function markNotified(db, { locationId, coachId, blockIds }) {
+  return markRosterChangesNotified(db, { locationId, coachId, blockIds })
 }
 
 /**
@@ -77,6 +98,12 @@ async function markNotified(db, { locationId, coachId, blockIds }) {
  * "Roster updated" for something already over. A coach with a MIX of past
  * and future changes is messaged about the future ones only, and — on
  * delivery — every one of their block ids (past and future) is stamped.
+ *
+ * A coach who opted OUT of shift_adjusted (result.optedOut) is the one
+ * exception to "stamp on anything that isn't a hard failure": their rows
+ * are left UNSTAMPED, on purpose, so the re-publish/approve safety net
+ * (renotifyChangedCoaches, category `schedule`) can still reach them if
+ * they left that broader category on.
  *
  * @param {object} db service-role client
  * @param {object} opts
@@ -132,10 +159,15 @@ export async function notifyRosterChanges(db, { locationId, actorId, changes, to
           result.notified++
           await markNotified(db, { locationId, coachId, blockIds: allBlockIds })
         } else if (!failed && (totals?.skipped || 0) > 0) {
-          // The coach turned this category off — the re-publish path would
-          // otherwise message them on a different category behind their back.
+          // The coach turned shift_adjusted off, but may still have the
+          // broader `schedule` category on — two live staff did exactly
+          // this once the label read like a narrow "times changed" toggle.
+          // Leave their rows UNSTAMPED so renotifyChangedCoaches (the
+          // re-publish/approve safety net, category `schedule`) can still
+          // reach them; only genuinely undelivered rows below are left for
+          // that same reason, so opting out of one category must not look
+          // like delivery and go silent forever.
           result.optedOut++
-          await markNotified(db, { locationId, coachId, blockIds: allBlockIds })
         } else {
           // No token, no email, and no explicit opt-out: leave the rows for
           // the re-publish safety net.
@@ -177,17 +209,21 @@ export function publishedAdditions(beforeRows, afterRows) {
 
 /**
  * Copy-week / copy-month: log and notify coaches the copy put on blocks that
- * are already published. `before` is readAssignmentKeysInRange taken before
- * the copy. Fails open (logs and skips) so a copy never fails on notification.
+ * are already published. `before` and `after` are both
+ * readAssignmentKeysInRange results (same shape: { rows, error, truncated }),
+ * `before` taken before the copy and `after` taken by the route right after
+ * the upsert commits, synchronously, before it returns — deferred (`after()`
+ * from next/server) is only the log+notify step below, so the after-copy
+ * snapshot itself can't race a second request against the same period. Fails
+ * open (logs and skips) so a copy never fails on notification.
  */
-export async function logAndNotifyCopiedShifts(db, { locationId, actorId, startDate, endDate, before, via, todayStr }) {
+export async function logAndNotifyCopiedShifts(db, { locationId, actorId, startDate, endDate, before, after, via, todayStr }) {
   try {
     if (!before || before.error || before.truncated) {
       logWarn('roster-change-notify', 'copy notify skipped: target range unreadable before the copy', { locationId, startDate, endDate, via })
       return { logged: 0, notify: null }
     }
-    const after = await readAssignmentKeysInRange(db, { locationId, startDate, endDate })
-    if (after.error || after.truncated) {
+    if (!after || after.error || after.truncated) {
       logWarn('roster-change-notify', 'copy notify skipped: target range unreadable after the copy', { locationId, startDate, endDate, via })
       return { logged: 0, notify: null }
     }

@@ -118,16 +118,22 @@ export async function POST(request) {
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
 
-  // NOTIFY.1 — run after the response, not awaited. A copy onto a published
-  // period does N change-log inserts plus a push/email per coach; awaiting
-  // it here risked a function timeout AFTER the upsert had already
-  // committed, and a retry of a timed-out request would then log nothing.
+  // NOTIFY.1 review — the AFTER snapshot is read synchronously, here, right
+  // after the upsert commits — not inside the deferred callback below, so it
+  // can never race a second copy onto the same period. Only the log+notify
+  // step (N change-log inserts plus a push/email per coach) is deferred via
+  // next/server's `after`; awaiting that here risked a function timeout
+  // AFTER the upsert had already committed, and a retry of a timed-out
+  // request would then log nothing.
+  const afterSnap = await readAssignmentKeysInRange(db, { locationId: location_id, startDate: target_start, endDate: targetEnd })
+
   after(() => logAndNotifyCopiedShifts(db, {
     locationId: location_id,
     actorId: user.id,
     startDate: target_start,
     endDate: targetEnd,
     before,
+    after: afterSnap,
     via: 'copy_week',
   }))
 

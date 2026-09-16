@@ -59,9 +59,11 @@ beforeEach(() => {
 })
 
 describe('POST /api/schedule/shifts/copy-week — NOTIFY.1', () => {
-  it('snapshots the target week before the upsert, then schedules log-and-notify via after()', async () => {
+  it('snapshots the target week before AND after the upsert (synchronously, before returning), then schedules log-and-notify via after()', async () => {
     fetchSourceShiftRows.mockResolvedValue({ rows: [SOURCE_ROW], error: null })
-    readAssignmentKeysInRange.mockResolvedValue({ rows: [], error: null, truncated: false })
+    const beforeSnap = { rows: [], error: null, truncated: false }
+    const afterSnap = { rows: [{ block_id: 'b1', profile_id: 'coach-1' }], error: null, truncated: false }
+    readAssignmentKeysInRange.mockResolvedValueOnce(beforeSnap).mockResolvedValueOnce(afterSnap)
     bulkUpsertShiftAssignments.mockResolvedValue({ count: 1, error: null })
 
     const res = await POST(req({ location_id: LOC, source_start: '2026-06-01', target_start: '2026-06-08' }))
@@ -70,12 +72,19 @@ describe('POST /api/schedule/shifts/copy-week — NOTIFY.1', () => {
     expect(res.status).toBe(201)
     expect(json).toEqual({ success: true, copied: 1 })
 
-    expect(readAssignmentKeysInRange).toHaveBeenCalledWith(expect.anything(), {
+    expect(readAssignmentKeysInRange).toHaveBeenCalledTimes(2)
+    expect(readAssignmentKeysInRange).toHaveBeenNthCalledWith(1, expect.anything(), {
       locationId: LOC, startDate: '2026-06-08', endDate: '2026-06-14',
     })
-    // Snapshot happens before the upsert commits.
+    expect(readAssignmentKeysInRange).toHaveBeenNthCalledWith(2, expect.anything(), {
+      locationId: LOC, startDate: '2026-06-08', endDate: '2026-06-14',
+    })
+    // Before-snapshot happens before the upsert commits; the after-snapshot
+    // is read synchronously right after it, still ahead of the response.
     expect(readAssignmentKeysInRange.mock.invocationCallOrder[0])
       .toBeLessThan(bulkUpsertShiftAssignments.mock.invocationCallOrder[0])
+    expect(readAssignmentKeysInRange.mock.invocationCallOrder[1])
+      .toBeGreaterThan(bulkUpsertShiftAssignments.mock.invocationCallOrder[0])
 
     expect(after).toHaveBeenCalledTimes(1)
     expect(logAndNotifyCopiedShifts).toHaveBeenCalledWith(expect.anything(), {
@@ -83,7 +92,8 @@ describe('POST /api/schedule/shifts/copy-week — NOTIFY.1', () => {
       actorId: 'mgr-1',
       startDate: '2026-06-08',
       endDate: '2026-06-14',
-      before: { rows: [], error: null, truncated: false },
+      before: beforeSnap,
+      after: afterSnap,
       via: 'copy_week',
     })
   })

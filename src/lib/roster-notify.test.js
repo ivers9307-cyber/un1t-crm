@@ -138,11 +138,23 @@ describe('renotifyChangedCoaches (NOTIFY.1 safety net)', () => {
     const res = await renotifyChangedCoaches({}, range)
     expect(notifyUsers).toHaveBeenCalledWith(['c1', 'c2'], expect.objectContaining({
       title: 'Roster updated',
+      // NOTIFY.1 review — formatShiftDate, not the raw ISO range.
+      body: 'Your shifts between Mon 21 Sep and Sun 27 Sep have been updated.',
       category: 'schedule',
       data: { type: 'schedule_updated', start_date: '2026-09-21', end_date: '2026-09-27', location_id: 'loc-1' },
     }))
     expect(markChangesNotified).toHaveBeenCalledWith({}, ['ch1', 'ch2', 'ch3'])
     expect(res).toEqual({ notified: 2 })
+  })
+
+  it('a single-day range reads as one date, not a range', async () => {
+    collectUnnotifiedChanges.mockResolvedValue([
+      { id: 'ch1', coach_id: 'c1', block_date: '2026-09-18' },
+    ])
+    await renotifyChangedCoaches({}, { locationId: 'loc-1', periodStart: '2026-09-18', periodEnd: '2026-09-18', todayStr: '2026-09-16' })
+    expect(notifyUsers).toHaveBeenCalledWith(['c1'], expect.objectContaining({
+      body: 'Your shifts for Fri 18 Sep have been updated.',
+    }))
   })
 
   it('sends nothing when there is nothing to tell', async () => {

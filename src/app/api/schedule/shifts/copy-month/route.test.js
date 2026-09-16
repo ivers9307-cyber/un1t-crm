@@ -59,9 +59,11 @@ beforeEach(() => {
 })
 
 describe('POST /api/schedule/shifts/copy-month — NOTIFY.1', () => {
-  it('snapshots the target month before the upsert, then schedules log-and-notify via after()', async () => {
+  it('snapshots the target month before AND after the upsert (synchronously, before returning), then schedules log-and-notify via after()', async () => {
     fetchSourceShiftRows.mockResolvedValue({ rows: [SOURCE_ROW], error: null })
-    readAssignmentKeysInRange.mockResolvedValue({ rows: [], error: null, truncated: false })
+    const beforeSnap = { rows: [], error: null, truncated: false }
+    const afterSnap = { rows: [{ block_id: 'b1', profile_id: 'coach-1' }], error: null, truncated: false }
+    readAssignmentKeysInRange.mockResolvedValueOnce(beforeSnap).mockResolvedValueOnce(afterSnap)
     bulkUpsertShiftAssignments.mockResolvedValue({ count: 1, error: null })
 
     const res = await POST(req({ location_id: LOC, source_month_start: '2026-06-01', target_month_start: '2026-07-01' }))
@@ -71,12 +73,19 @@ describe('POST /api/schedule/shifts/copy-month — NOTIFY.1', () => {
     expect(json).toEqual({ success: true, copied: 1, skipped: 0 })
 
     // July has 31 days.
-    expect(readAssignmentKeysInRange).toHaveBeenCalledWith(expect.anything(), {
+    expect(readAssignmentKeysInRange).toHaveBeenCalledTimes(2)
+    expect(readAssignmentKeysInRange).toHaveBeenNthCalledWith(1, expect.anything(), {
       locationId: LOC, startDate: '2026-07-01', endDate: '2026-07-31',
     })
-    // Snapshot happens before the upsert commits.
+    expect(readAssignmentKeysInRange).toHaveBeenNthCalledWith(2, expect.anything(), {
+      locationId: LOC, startDate: '2026-07-01', endDate: '2026-07-31',
+    })
+    // Before-snapshot happens before the upsert commits; the after-snapshot
+    // is read synchronously right after it, still ahead of the response.
     expect(readAssignmentKeysInRange.mock.invocationCallOrder[0])
       .toBeLessThan(bulkUpsertShiftAssignments.mock.invocationCallOrder[0])
+    expect(readAssignmentKeysInRange.mock.invocationCallOrder[1])
+      .toBeGreaterThan(bulkUpsertShiftAssignments.mock.invocationCallOrder[0])
 
     expect(after).toHaveBeenCalledTimes(1)
     expect(logAndNotifyCopiedShifts).toHaveBeenCalledWith(expect.anything(), {
@@ -84,7 +93,8 @@ describe('POST /api/schedule/shifts/copy-month — NOTIFY.1', () => {
       actorId: 'mgr-1',
       startDate: '2026-07-01',
       endDate: '2026-07-31',
-      before: { rows: [], error: null, truncated: false },
+      before: beforeSnap,
+      after: afterSnap,
       via: 'copy_month',
     })
   })

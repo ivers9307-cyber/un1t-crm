@@ -13,12 +13,12 @@ import {
   notifyRosterChanges,
   publishedAdditions,
   logAndNotifyCopiedShifts,
+  markRosterChangesNotified,
 } from './roster-change-notify'
 
-function makeDb({ rangeResults = [], insertError = null } = {}) {
+function makeDb({ insertError = null } = {}) {
   const updates = []
   const inserts = []
-  let rangeCall = 0
   return {
     updates,
     inserts,
@@ -35,18 +35,6 @@ function makeDb({ rangeResults = [], insertError = null } = {}) {
             return { then(onF, onR) { return Promise.resolve({ error: insertError }).then(onF, onR) } }
           },
           then(onF, onR) { return Promise.resolve({ error: null }).then(onF, onR) },
-        }
-        return chain
-      }
-      if (table === 'shift_assignments') {
-        const result = rangeResults[rangeCall++] ?? { data: [], error: null }
-        const chain = {
-          select() { return chain },
-          eq() { return chain },
-          gte() { return chain },
-          lte() { return chain },
-          order() { return chain },
-          then(onF, onR) { return Promise.resolve(result).then(onF, onR) },
         }
         return chain
       }
@@ -177,11 +165,11 @@ describe('notifyRosterChanges', () => {
     expect(res.notified).toBe(1)
   })
 
-  it('stamps and counts optedOut when the coach turned the category off', async () => {
+  it('counts optedOut when the coach turned the category off, but leaves their rows UNSTAMPED so the re-publish safety net (schedule category) can still reach them', async () => {
     notifyUsers.mockResolvedValue({ sent: 0, emailed: 0, skipped: 1 })
     const db = makeDb()
     const res = await notifyRosterChanges(db, opts([change('c1', '2026-09-18')]))
-    expect(db.updates).toHaveLength(1)
+    expect(db.updates).toHaveLength(0)
     expect(res.optedOut).toBe(1)
     expect(res.notified).toBe(0)
   })
@@ -222,6 +210,37 @@ describe('notifyRosterChanges', () => {
   })
 })
 
+describe('markRosterChangesNotified', () => {
+  it('adds an action filter when one is given', async () => {
+    const db = makeDb()
+    await markRosterChangesNotified(db, { locationId: 'loc-1', coachId: 'c1', blockIds: ['blk-1'], action: 'time_changed' })
+    expect(db.updates[0].filters).toEqual([
+      ['eq', 'location_id', 'loc-1'],
+      ['eq', 'coach_id', 'c1'],
+      ['in', 'block_id', ['blk-1']],
+      ['is', 'notified_at', null],
+      ['eq', 'action', 'time_changed'],
+    ])
+  })
+
+  it('omits the action filter when none is given (matches on any action)', async () => {
+    const db = makeDb()
+    await markRosterChangesNotified(db, { locationId: 'loc-1', coachId: 'c1', blockIds: ['blk-1'] })
+    expect(db.updates[0].filters).toEqual([
+      ['eq', 'location_id', 'loc-1'],
+      ['eq', 'coach_id', 'c1'],
+      ['in', 'block_id', ['blk-1']],
+      ['is', 'notified_at', null],
+    ])
+  })
+
+  it('no-ops with no blockIds', async () => {
+    const db = makeDb()
+    await markRosterChangesNotified(db, { locationId: 'loc-1', coachId: 'c1', blockIds: [] })
+    expect(db.updates).toHaveLength(0)
+  })
+})
+
 describe('publishedAdditions', () => {
   const row = (block_id, profile_id, block_date, status) => ({ block_id, profile_id, shift_blocks: { block_date, rosters: status ? { status } : null } })
 
@@ -239,12 +258,15 @@ describe('publishedAdditions', () => {
 })
 
 describe('logAndNotifyCopiedShifts', () => {
+  // NOTIFY.1 review — the route now reads the after-snapshot itself
+  // (synchronously, before the deferred log+notify step) and hands it in as
+  // `after`, same shape as `before`, instead of this helper reading it.
   it('logs and notifies coaches copied onto published blocks', async () => {
-    const after = { data: [{ block_id: 'b1', profile_id: 'c2', shift_blocks: { block_date: '2026-09-21', rosters: { status: 'published' } } }], error: null }
-    const db = makeDb({ rangeResults: [after] })
+    const after = { rows: [{ block_id: 'b1', profile_id: 'c2', shift_blocks: { block_date: '2026-09-21', rosters: { status: 'published' } } }], error: null, truncated: false }
+    const db = makeDb()
     const res = await logAndNotifyCopiedShifts(db, {
       locationId: 'loc-1', actorId: 'mgr-1', startDate: '2026-09-21', endDate: '2026-09-27',
-      before: { rows: [], error: null, truncated: false }, via: 'copy_week', todayStr: '2026-09-16',
+      before: { rows: [], error: null, truncated: false }, after, via: 'copy_week', todayStr: '2026-09-16',
     })
     expect(db.inserts).toEqual([[{
       location_id: 'loc-1', block_id: 'b1', block_date: '2026-09-21', actor_id: 'mgr-1',
@@ -255,11 +277,11 @@ describe('logAndNotifyCopiedShifts', () => {
   })
 
   it('still notifies and returns logged: 0 when the change-log insert fails', async () => {
-    const after = { data: [{ block_id: 'b1', profile_id: 'c2', shift_blocks: { block_date: '2026-09-21', rosters: { status: 'published' } } }], error: null }
-    const db = makeDb({ rangeResults: [after], insertError: { message: 'insert boom' } })
+    const after = { rows: [{ block_id: 'b1', profile_id: 'c2', shift_blocks: { block_date: '2026-09-21', rosters: { status: 'published' } } }], error: null, truncated: false }
+    const db = makeDb({ insertError: { message: 'insert boom' } })
     const res = await logAndNotifyCopiedShifts(db, {
       locationId: 'loc-1', actorId: 'mgr-1', startDate: '2026-09-21', endDate: '2026-09-27',
-      before: { rows: [], error: null, truncated: false }, via: 'copy_week', todayStr: '2026-09-16',
+      before: { rows: [], error: null, truncated: false }, after, via: 'copy_week', todayStr: '2026-09-16',
     })
     expect(db.inserts).toHaveLength(1)
     expect(notifyUsers).toHaveBeenCalledTimes(1)
@@ -272,6 +294,32 @@ describe('logAndNotifyCopiedShifts', () => {
     const res = await logAndNotifyCopiedShifts(db, {
       locationId: 'loc-1', actorId: 'mgr-1', startDate: '2026-09-21', endDate: '2026-09-27',
       before: { rows: null, error: { message: 'boom' } }, via: 'copy_week',
+    })
+    expect(res).toEqual({ logged: 0, notify: null })
+    expect(db.inserts).toHaveLength(0)
+    expect(logWarn).toHaveBeenCalled()
+  })
+
+  it('skips when the after-snapshot could not be read', async () => {
+    const db = makeDb()
+    const res = await logAndNotifyCopiedShifts(db, {
+      locationId: 'loc-1', actorId: 'mgr-1', startDate: '2026-09-21', endDate: '2026-09-27',
+      before: { rows: [], error: null, truncated: false },
+      after: { rows: null, error: { message: 'boom' } },
+      via: 'copy_week',
+    })
+    expect(res).toEqual({ logged: 0, notify: null })
+    expect(db.inserts).toHaveLength(0)
+    expect(logWarn).toHaveBeenCalled()
+  })
+
+  it('skips when the after-snapshot was truncated', async () => {
+    const db = makeDb()
+    const res = await logAndNotifyCopiedShifts(db, {
+      locationId: 'loc-1', actorId: 'mgr-1', startDate: '2026-09-21', endDate: '2026-09-27',
+      before: { rows: [], error: null, truncated: false },
+      after: { rows: [], error: null, truncated: true },
+      via: 'copy_week',
     })
     expect(res).toEqual({ logged: 0, notify: null })
     expect(db.inserts).toHaveLength(0)

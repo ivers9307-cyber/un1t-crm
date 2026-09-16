@@ -170,16 +170,18 @@ export async function POST(request) {
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
 
-  // NOTIFY.1 — run after the response, not awaited. A copy onto a published
-  // period does N change-log inserts plus a push/email per coach; awaiting
-  // it here risked a function timeout AFTER the upsert had already
-  // committed, and a retry of a timed-out request would then log nothing.
+  // NOTIFY.1 review — see copy-week: the AFTER snapshot is read synchronously
+  // here, right after the upsert commits, so it can't race a second copy onto
+  // the same period. Only the log+notify step is deferred via `after`.
+  const afterSnap = await readAssignmentKeysInRange(db, { locationId: location_id, startDate: target_month_start, endDate: targetEnd })
+
   after(() => logAndNotifyCopiedShifts(db, {
     locationId: location_id,
     actorId: user.id,
     startDate: target_month_start,
     endDate: targetEnd,
     before,
+    after: afterSnap,
     via: 'copy_month',
   }))
 
