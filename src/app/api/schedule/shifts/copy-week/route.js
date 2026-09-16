@@ -7,6 +7,7 @@ import { uuidLike, isoDate , MANAGER_ROLES} from '@/lib/schemas'
 import { bulkUpsertShiftAssignments } from '@/lib/roster-write'
 import { fetchSourceShiftRows } from '@/lib/roster-read'
 import { formatDate } from '@/lib/roster'
+import { readAssignmentKeysInRange, logAndNotifyCopiedShifts } from '@/lib/roster-change-notify'
 
 const CopyWeekSchema = z.object({
   location_id: uuidLike,
@@ -101,9 +102,14 @@ export async function POST(request) {
     status: 'scheduled',
   }))
 
-  // Find-or-create blocks + upsert assignments (new model). Newly-created
-  // blocks carry no roster_id, so the copied shifts read as unpublished
-  // until the manager publishes — same as the legacy published:false.
+  // NOTIFY.1 — snapshot the target week so coaches copied onto an already
+  // PUBLISHED week can be logged and told. A copy onto an unpublished week
+  // changes nothing here: the first publish notifies them.
+  const targetEnd = sourceWeekEnd(target_start)
+  const before = await readAssignmentKeysInRange(db, { locationId: location_id, startDate: target_start, endDate: targetEnd })
+
+  // Find-or-create blocks + upsert assignments (new model). A block created
+  // inside an already-published period joins that roster (ROSTER-FIX.4).
   const { count, error } = await bulkUpsertShiftAssignments(db, {
     locationId: location_id,
     actorId: user.id,
@@ -111,5 +117,15 @@ export async function POST(request) {
   })
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+
+  await logAndNotifyCopiedShifts(db, {
+    locationId: location_id,
+    actorId: user.id,
+    startDate: target_start,
+    endDate: targetEnd,
+    before,
+    via: 'copy_week',
+  })
+
   return NextResponse.json({ success: true, copied: count }, { status: 201 })
 }
