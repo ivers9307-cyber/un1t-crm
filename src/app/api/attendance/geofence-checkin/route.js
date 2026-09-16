@@ -13,6 +13,15 @@
 //   matched | already_stamped | no_shift_in_window   → audit row written
 //   duplicate (10-min flap dedup) | geofence_exempt
 //     | impersonation_ignored                        → NO audit row
+//
+// A re-entry ping (the coach is still on/near a shift they already arrived
+// for) is audited as already_stamped with payload.reentry=true and stamps
+// nothing — the attendance report infers that earlier arrival onto the next
+// shift. A ping that lands inside the dedup window of a recent claim whose
+// stamp never landed (process killed, the response lost, or the
+// release-on-error delete below itself failing) completes that claimed
+// assignment's stamp on this retry instead of answering 'duplicate' forever
+// and losing the arrival behind the dedup window.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -81,7 +90,7 @@ export async function POST(request) {
     .eq('profile_id', user.id)
     .eq('location_id', location.id)
     .maybeSingle()
-  if (linkErr) return NextResponse.json({ success: false, error: linkErr.message }, { status: 400 })
+  if (linkErr) return NextResponse.json({ success: false, error: linkErr.message, transient: true }, { status: 503 })
   if (!link) return NextResponse.json({ success: false, error: 'Location not found' }, { status: 404 })
   if (link.geofence_exempt) {
     return NextResponse.json({ success: true, data: { match_outcome: 'geofence_exempt' } })
@@ -98,14 +107,29 @@ export async function POST(request) {
   const sinceIso = new Date(eventAt.getTime() - DEDUP_WINDOW_MS).toISOString()
   const { data: recent, error: dupErr } = await db
     .from('staff_attendance_events')
-    .select('id')
+    .select('id, match_outcome, matched_assignment_id, event_at')
     .eq('profile_id', user.id)
     .eq('location_id', location.id)
     .eq('source', 'geofence')
     .gte('event_at', sinceIso)
     .limit(1)
-  if (dupErr) return NextResponse.json({ success: false, error: dupErr.message }, { status: 400 })
+  if (dupErr) return NextResponse.json({ success: false, error: dupErr.message, transient: true }, { status: 503 })
   if (recent && recent.length > 0) {
+    const [priorEvent] = recent
+    // Lost-arrival recovery: the earlier request already decided AND claimed,
+    // but its stamp never landed. Retry it here against the CLAIMED
+    // assignment, using the earlier event's timestamp — this is the only
+    // remaining chance for that arrival to land, since every later ping in
+    // this window would otherwise just repeat 'duplicate'.
+    if (priorEvent.match_outcome === 'matched' && priorEvent.matched_assignment_id) {
+      const { error: recErr } = await db
+        .from('shift_assignments')
+        .update({ arrived_at: priorEvent.event_at, arrival_source: 'geofence' })
+        .eq('id', priorEvent.matched_assignment_id)
+        .is('arrived_at', null)
+        .select('id')
+      if (recErr) return NextResponse.json({ success: false, error: recErr.message, transient: true }, { status: 503 })
+    }
     return NextResponse.json({ success: true, data: { match_outcome: 'duplicate' } })
   }
 

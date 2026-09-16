@@ -16,6 +16,7 @@ vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
 import { POST } from './route'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { logWarn } from '@/lib/log'
 
 // 12:00 Dublin summer time. Shift rows below are written in that wall clock.
 beforeEach(() => {
@@ -46,9 +47,10 @@ function builder(label, result, calls) {
 }
 
 function mockDb({
-  geo = GEO, exempt = false, recentGeofenceEvent = null,
+  geo = GEO, exempt = false, recentGeofenceEvent = null, dedupSelectError = null,
   shiftRows = [], shiftSelectError = null,
   claimError = null, stampError = null, stampRowsTouched = 1,
+  releaseError = null, relabelError = null,
 } = {}) {
   const calls = []
   const inserted = []
@@ -64,14 +66,17 @@ function mockDb({
       }
       if (table === 'staff_attendance_events') {
         return {
-          select: (...a) => builder('events.select', { data: recentGeofenceEvent ? [recentGeofenceEvent] : [], error: null }, calls).select(...a),
+          select: (...a) => builder('events.select', {
+            data: dedupSelectError ? null : (recentGeofenceEvent ? [recentGeofenceEvent] : []),
+            error: dedupSelectError,
+          }, calls).select(...a),
           insert: (row) => {
             inserted.push(row)
             calls.push(['events.insert'])
             return builder('events.insert', { data: claimError ? null : { id: 'ev-new' }, error: claimError }, calls)
           },
-          update: (patch) => { updates.push({ table, patch }); return builder('events.update', { error: null }, calls) },
-          delete: () => { deletes.push(table); return builder('events.delete', { error: null }, calls) },
+          update: (patch) => { updates.push({ table, patch }); return builder('events.update', { error: relabelError }, calls) },
+          delete: () => { deletes.push(table); return builder('events.delete', { error: releaseError }, calls) },
         }
       }
       if (table === 'shift_assignments') {
@@ -147,6 +152,49 @@ describe('POST /api/attendance/geofence-checkin', () => {
     expect(shiftUpdates(db)).toHaveLength(0)
   })
 
+  it('the dedup lookup erroring → 503 transient', async () => {
+    getCurrentUser.mockResolvedValue(staff)
+    mockDb({ dedupSelectError: { message: 'db down' } })
+    const res = await POST(postReq(validBody()))
+    expect(res.status).toBe(503)
+    expect((await res.json()).transient).toBe(true)
+  })
+
+  it('a recent matched-but-unstamped claim is completed on retry (lost-arrival recovery)', async () => {
+    getCurrentUser.mockResolvedValue(staff)
+    const db = mockDb({
+      recentGeofenceEvent: { id: 'ev-1', match_outcome: 'matched', matched_assignment_id: 'assign-1', event_at: '2026-07-15T10:58:00Z' },
+    })
+    const body = await (await POST(postReq(validBody()))).json()
+    expect(body.data.match_outcome).toBe('duplicate')
+    expect(db.inserted).toHaveLength(0)
+    expect(shiftUpdates(db)).toEqual([{ table: 'shift_assignments', patch: { arrived_at: '2026-07-15T10:58:00Z', arrival_source: 'geofence' } }])
+    expect(db.calls).toContainEqual(['assignments.update', 'is', 'arrived_at', null])
+  })
+
+  it('a recent no_shift_in_window claim stays a plain duplicate, no writes', async () => {
+    getCurrentUser.mockResolvedValue(staff)
+    const db = mockDb({
+      recentGeofenceEvent: { id: 'ev-1', match_outcome: 'no_shift_in_window', matched_assignment_id: null, event_at: '2026-07-15T10:58:00Z' },
+    })
+    const body = await (await POST(postReq(validBody()))).json()
+    expect(body.data.match_outcome).toBe('duplicate')
+    expect(db.inserted).toHaveLength(0)
+    expect(shiftUpdates(db)).toHaveLength(0)
+  })
+
+  it('a lost-arrival recovery stamp error → 503 transient', async () => {
+    getCurrentUser.mockResolvedValue(staff)
+    const db = mockDb({
+      recentGeofenceEvent: { id: 'ev-1', match_outcome: 'matched', matched_assignment_id: 'assign-1', event_at: '2026-07-15T10:58:00Z' },
+      stampError: { message: 'write failed' },
+    })
+    const res = await POST(postReq(validBody()))
+    expect(res.status).toBe(503)
+    expect((await res.json()).transient).toBe(true)
+    expect(db.inserted).toHaveLength(0)
+  })
+
   it('records the arrival on arrived_at, NEVER on start_time_override', async () => {
     getCurrentUser.mockResolvedValue(staff)
     const db = mockDb({ shiftRows: [shiftRow()] })
@@ -166,6 +214,12 @@ describe('POST /api/attendance/geofence-checkin', () => {
     expect(stampAt).toBeGreaterThan(claimAt)
     expect(db.calls).toContainEqual(['assignments.update', 'is', 'arrived_at', null])
     expect(db.inserted[0]).toMatchObject({ source: 'geofence', match_outcome: 'matched', matched_assignment_id: 'assign-1' })
+    // A dropped `.select('id')`/`.single()` on the claim, or `.select('id')` on
+    // the stamp, would leave the generic mock returning data regardless — these
+    // pin the actual chain so that regression stays caught.
+    expect(db.calls).toContainEqual(['events.insert', 'select', 'id'])
+    expect(db.calls).toContainEqual(['events.insert', 'single'])
+    expect(db.calls).toContainEqual(['assignments.update', 'select', 'id'])
   })
 
   it('a claim that hits the mig 465 unique index is a terminal duplicate and stamps nothing', async () => {
@@ -203,6 +257,21 @@ describe('POST /api/attendance/geofence-checkin', () => {
     expect(res.status).toBe(503)
     expect((await res.json()).transient).toBe(true)
     expect(db.deletes).toEqual(['staff_attendance_events'])
+    expect(db.calls).toContainEqual(['events.delete', 'eq', 'id', 'ev-new'])
+  })
+
+  it('a failed stamp whose release ALSO errors still returns 503 transient and logs a warning', async () => {
+    getCurrentUser.mockResolvedValue(staff)
+    const db = mockDb({
+      shiftRows: [shiftRow()],
+      stampError: { message: 'write failed' },
+      releaseError: { message: 'delete failed' },
+    })
+    const res = await POST(postReq(validBody()))
+    expect(res.status).toBe(503)
+    expect((await res.json()).transient).toBe(true)
+    expect(db.deletes).toEqual(['staff_attendance_events'])
+    expect(logWarn).toHaveBeenCalled()
   })
 
   it('a stamp that touched zero rows (lost race) → already_stamped and the audit row says so', async () => {
@@ -211,6 +280,16 @@ describe('POST /api/attendance/geofence-checkin', () => {
     const body = await (await POST(postReq(validBody()))).json()
     expect(body.data.match_outcome).toBe('already_stamped')
     expect(db.updates).toContainEqual({ table: 'staff_attendance_events', patch: { match_outcome: 'already_stamped' } })
+    expect(db.calls).toContainEqual(['events.update', 'eq', 'id', 'ev-new'])
+  })
+
+  it('a zero-row stamp whose relabel ALSO errors still returns already_stamped and logs a warning', async () => {
+    getCurrentUser.mockResolvedValue(staff)
+    const db = mockDb({ shiftRows: [shiftRow()], stampRowsTouched: 0, relabelError: { message: 'relabel failed' } })
+    const body = await (await POST(postReq(validBody()))).json()
+    expect(body.data.match_outcome).toBe('already_stamped')
+    expect(db.updates).toContainEqual({ table: 'staff_attendance_events', patch: { match_outcome: 'already_stamped' } })
+    expect(logWarn).toHaveBeenCalled()
   })
 
   it('a re-entry is audited (already_stamped, payload.reentry) and stamps nothing', async () => {
