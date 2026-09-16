@@ -4,11 +4,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('./notify', () => ({ notifyUsers: vi.fn() }))
 vi.mock('./log', () => ({ logWarn: vi.fn() }))
-vi.mock('./roster-change-log', () => ({ logRosterChange: vi.fn(() => Promise.resolve({ logged: true })) }))
 
 import { notifyUsers } from './notify'
 import { logWarn } from './log'
-import { logRosterChange } from './roster-change-log'
 import {
   formatShiftDate,
   buildRosterChangeMessage,
@@ -17,11 +15,13 @@ import {
   logAndNotifyCopiedShifts,
 } from './roster-change-notify'
 
-function makeDb({ rangeResults = [] } = {}) {
+function makeDb({ rangeResults = [], insertError = null } = {}) {
   const updates = []
+  const inserts = []
   let rangeCall = 0
   return {
     updates,
+    inserts,
     from(table) {
       if (table === 'roster_change_log') {
         const u = { table, filters: [] }
@@ -30,6 +30,10 @@ function makeDb({ rangeResults = [] } = {}) {
           eq(c, v) { u.filters.push(['eq', c, v]); return chain },
           in(c, v) { u.filters.push(['in', c, v]); return chain },
           is(c, v) { u.filters.push(['is', c, v]); return chain },
+          insert(rows) {
+            inserts.push(rows)
+            return { then(onF, onR) { return Promise.resolve({ error: insertError }).then(onF, onR) } }
+          },
           then(onF, onR) { return Promise.resolve({ error: null }).then(onF, onR) },
         }
         return chain
@@ -242,18 +246,35 @@ describe('logAndNotifyCopiedShifts', () => {
       locationId: 'loc-1', actorId: 'mgr-1', startDate: '2026-09-21', endDate: '2026-09-27',
       before: { rows: [], error: null, truncated: false }, via: 'copy_week', todayStr: '2026-09-16',
     })
-    expect(logRosterChange).toHaveBeenCalledWith(db, expect.objectContaining({ coachId: 'c2', blockId: 'b1', action: 'assigned', details: { via: 'copy_week' } }))
+    expect(db.inserts).toEqual([[{
+      location_id: 'loc-1', block_id: 'b1', block_date: '2026-09-21', actor_id: 'mgr-1',
+      coach_id: 'c2', action: 'assigned', details: { via: 'copy_week' },
+    }]])
     expect(notifyUsers).toHaveBeenCalledTimes(1)
     expect(res.logged).toBe(1)
   })
 
+  it('still notifies and returns logged: 0 when the change-log insert fails', async () => {
+    const after = { data: [{ block_id: 'b1', profile_id: 'c2', shift_blocks: { block_date: '2026-09-21', rosters: { status: 'published' } } }], error: null }
+    const db = makeDb({ rangeResults: [after], insertError: { message: 'insert boom' } })
+    const res = await logAndNotifyCopiedShifts(db, {
+      locationId: 'loc-1', actorId: 'mgr-1', startDate: '2026-09-21', endDate: '2026-09-27',
+      before: { rows: [], error: null, truncated: false }, via: 'copy_week', todayStr: '2026-09-16',
+    })
+    expect(db.inserts).toHaveLength(1)
+    expect(notifyUsers).toHaveBeenCalledTimes(1)
+    expect(logWarn).toHaveBeenCalled()
+    expect(res.logged).toBe(0)
+  })
+
   it('skips when the before-snapshot could not be read', async () => {
-    const res = await logAndNotifyCopiedShifts(makeDb(), {
+    const db = makeDb()
+    const res = await logAndNotifyCopiedShifts(db, {
       locationId: 'loc-1', actorId: 'mgr-1', startDate: '2026-09-21', endDate: '2026-09-27',
       before: { rows: null, error: { message: 'boom' } }, via: 'copy_week',
     })
     expect(res).toEqual({ logged: 0, notify: null })
-    expect(logRosterChange).not.toHaveBeenCalled()
+    expect(db.inserts).toHaveLength(0)
     expect(logWarn).toHaveBeenCalled()
   })
 })

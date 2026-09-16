@@ -307,4 +307,41 @@ describe('POST /api/schedule/blocks/bulk-assign — NOTIFY.1', () => {
       { coachId: PROFILE_A, blockId: VALID_UUID_A, blockDate: '2026-05-18', action: 'assigned' },
     ])
   })
+
+  it('does not notify when every assigned block is on a draft roster', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'mgr-1', role: 'master' })
+    createServerClient.mockReturnValue(buildDb({
+      blocks: [
+        { id: VALID_UUID_A, location_id: 'loc-1', block_date: '2026-05-18', max_coaches: 5, rosters: { status: 'draft' }, shift_assignments: [] },
+        { id: VALID_UUID_B, location_id: 'loc-1', block_date: '2026-05-19', max_coaches: 5, rosters: { status: 'draft' }, shift_assignments: [] },
+      ],
+    }))
+    const res = await POST(buildRequest({ block_ids: [VALID_UUID_A, VALID_UUID_B], profile_id: PROFILE_A }))
+    expect((await res.json()).success).toBe(true)
+    expect(notifyRosterChanges).not.toHaveBeenCalled()
+  })
+
+  it('notifies once per location when published blocks span two locations', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'mgr-1', role: 'master' })
+    createServerClient.mockReturnValue(buildDb({
+      blocks: [
+        { id: VALID_UUID_A, location_id: 'loc-1', block_date: '2026-05-18', max_coaches: 5, rosters: { status: 'published' }, shift_assignments: [] },
+        { id: VALID_UUID_B, location_id: 'loc-2', block_date: '2026-05-19', max_coaches: 5, rosters: { status: 'published' }, shift_assignments: [] },
+      ],
+    }))
+    const res = await POST(buildRequest({ block_ids: [VALID_UUID_A, VALID_UUID_B], profile_id: PROFILE_A }))
+    expect((await res.json()).success).toBe(true)
+    expect(notifyRosterChanges).toHaveBeenCalledTimes(2)
+    const callsByLocation = new Map(notifyRosterChanges.mock.calls.map(([, opts]) => [opts.locationId, opts]))
+    expect(callsByLocation.get('loc-1')).toMatchObject({
+      locationId: 'loc-1',
+      actorId: 'mgr-1',
+      changes: [{ coachId: PROFILE_A, blockId: VALID_UUID_A, blockDate: '2026-05-18', action: 'assigned' }],
+    })
+    expect(callsByLocation.get('loc-2')).toMatchObject({
+      locationId: 'loc-2',
+      actorId: 'mgr-1',
+      changes: [{ coachId: PROFILE_A, blockId: VALID_UUID_B, blockDate: '2026-05-19', action: 'assigned' }],
+    })
+  })
 })

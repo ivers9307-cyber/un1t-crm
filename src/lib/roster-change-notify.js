@@ -16,7 +16,6 @@
 import { notifyUsers } from './notify'
 import { logWarn } from './log'
 import { dublinTodayStr } from './dublin-time'
-import { logRosterChange } from './roster-change-log'
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -194,18 +193,25 @@ export async function logAndNotifyCopiedShifts(db, { locationId, actorId, startD
     }
     const adds = publishedAdditions(before.rows, after.rows)
     let logged = 0
-    for (const add of adds) {
-      const r = await logRosterChange(db, {
-        isPublished: true,
-        locationId,
-        blockId: add.blockId,
-        blockDate: add.blockDate,
-        actorId,
-        coachId: add.coachId,
+    if (adds.length > 0) {
+      const rows = adds.map((add) => ({
+        location_id: locationId,
+        block_id: add.blockId,
+        block_date: add.blockDate,
+        actor_id: actorId,
+        coach_id: add.coachId,
         action: 'assigned',
         details: { via },
-      })
-      if (r?.logged) logged++
+      }))
+      const { error: insertError } = await db.from('roster_change_log').insert(rows)
+      if (insertError) {
+        // The re-publish safety net relies on these rows existing, but
+        // losing the message entirely is worse than losing the audit
+        // trail — still notify below.
+        logWarn('roster-change-notify', 'copy change-log insert failed', { locationId, via, err: insertError.message })
+      } else {
+        logged = rows.length
+      }
     }
     const notify = await notifyRosterChanges(db, { locationId, actorId, changes: adds, ...(todayStr ? { todayStr } : {}) })
     return { logged, notify }

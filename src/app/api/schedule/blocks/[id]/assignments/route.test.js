@@ -364,4 +364,24 @@ describe('POST — tells coaches added to a PUBLISHED shift (NOTIFY.1)', () => {
     await POST(req({ profile_ids: ids }), PROPS)
     expect(notifyRosterChanges).not.toHaveBeenCalled()
   })
+
+  it('omits an already-assigned coach from the notified changes, but still notifies the newly assigned one', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const [alreadyId, newId] = ids
+    const { db } = buildDb({
+      block: { id: 'block-1', location_id: 'loc-1', block_date: '2026-06-01', max_coaches: 5, rosters: { status: 'published' } },
+      existingAssignedIds: [alreadyId],
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(req({ profile_ids: ids }), PROPS)
+    const json = await res.json()
+
+    expect(res.status).toBe(201)
+    expect(json.assigned).toHaveLength(1)
+    expect(json.skipped).toEqual([{ profile_id: alreadyId, reason: 'already_assigned' }])
+    expect(notifyRosterChanges).toHaveBeenCalledTimes(1)
+    const [, opts] = notifyRosterChanges.mock.calls[0]
+    expect(opts.changes).toEqual([{ coachId: newId, blockId: 'block-1', blockDate: '2026-06-01', action: 'assigned' }])
+  })
 })

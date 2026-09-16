@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server'
+import { NextResponse, after } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
@@ -118,14 +118,18 @@ export async function POST(request) {
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
 
-  await logAndNotifyCopiedShifts(db, {
+  // NOTIFY.1 — run after the response, not awaited. A copy onto a published
+  // period does N change-log inserts plus a push/email per coach; awaiting
+  // it here risked a function timeout AFTER the upsert had already
+  // committed, and a retry of a timed-out request would then log nothing.
+  after(() => logAndNotifyCopiedShifts(db, {
     locationId: location_id,
     actorId: user.id,
     startDate: target_start,
     endDate: targetEnd,
     before,
     via: 'copy_week',
-  })
+  }))
 
   return NextResponse.json({ success: true, copied: count }, { status: 201 })
 }
