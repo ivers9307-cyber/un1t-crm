@@ -148,12 +148,14 @@ function buildDb({ publishedRosters = [], insertError = null, insertThrows = nul
   return { db, inserts, rosterUpdates }
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   createServerClient.mockReset()
   getCurrentUser.mockReset()
   projectPublishImpact.mockReset()
   projectPublishImpact.mockResolvedValue(UNDER_BUDGET)
   getCurrentUser.mockResolvedValue({ id: 'owner-1', role: 'owner', locations: [{ id: LOC_1 }] })
+  const { renotifyChangedCoaches } = await import('@/lib/roster-notify')
+  renotifyChangedCoaches.mockClear()
 })
 
 function publish(body) {
@@ -197,7 +199,11 @@ describe('POST /api/schedule/rosters — overlapping published rosters', () => {
     expect(inserts).toHaveLength(1)
 
     const { renotifyChangedCoaches } = await import('@/lib/roster-notify')
-    expect(renotifyChangedCoaches).toHaveBeenCalledWith(db, expect.objectContaining({ locationId: expect.any(String) }))
+    expect(renotifyChangedCoaches).toHaveBeenCalledWith(db, {
+      locationId: LOC_1,
+      periodStart: '2026-05-04',
+      periodEnd: '2026-05-10',
+    })
   })
 
   it('allows a WIDER period that fully contains the published one', async () => {
@@ -299,6 +305,10 @@ describe('POST /api/schedule/rosters — supersede', () => {
     expect(res.status).toBe(202)
     expect(inserts[0].status).toBe('draft')
     expect(rosterUpdates).toHaveLength(0)
+
+    // A draft is not a publish — nothing to re-notify about until it's approved.
+    const { renotifyChangedCoaches } = await import('@/lib/roster-notify')
+    expect(renotifyChangedCoaches).not.toHaveBeenCalled()
   })
 
   it('puts the released rosters back when the insert fails', async () => {

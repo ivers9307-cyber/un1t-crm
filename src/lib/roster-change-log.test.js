@@ -1,6 +1,16 @@
 // SCHEDULE-CHANGE-LOG.1 — unit tests for the audit/re-notify helpers.
-import { describe, it, expect } from 'vitest'
-import { logRosterChange, distinctCoachIds, ROSTER_CHANGE_ACTIONS } from './roster-change-log'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+vi.mock('./log', () => ({ logWarn: vi.fn() }))
+
+import { logWarn } from './log'
+import {
+  logRosterChange,
+  distinctCoachIds,
+  ROSTER_CHANGE_ACTIONS,
+  collectUnnotifiedChanges,
+  markChangesNotified,
+} from './roster-change-log'
 
 function mockDb(captured) {
   return {
@@ -14,6 +24,10 @@ function mockDb(captured) {
     },
   }
 }
+
+beforeEach(() => {
+  logWarn.mockClear()
+})
 
 describe('distinctCoachIds', () => {
   it('dedupes and drops falsy ids', () => {
@@ -69,5 +83,49 @@ describe('logRosterChange', () => {
     const throwingDb = { from() { return { insert() { throw new Error('boom') } } } }
     const r = await logRosterChange(throwingDb, base)
     expect(r).toEqual({ logged: false, reason: 'error' })
+  })
+})
+
+// NOTIFY.1 review follow-up — collectUnnotifiedChanges/markChangesNotified used
+// to discard a RESOLVED { error } (PostgREST resolves, it doesn't throw), so a
+// failed select/update looked identical to "no rows" and left no trace. Both
+// must now log and behave exactly as the empty/no-op case.
+describe('collectUnnotifiedChanges — resolved error', () => {
+  const range = { locationId: 'loc1', periodStart: '2026-06-01', periodEnd: '2026-06-07' }
+
+  function queryDb(result) {
+    const chain = {
+      select: () => chain,
+      eq: () => chain,
+      gte: () => chain,
+      lte: () => chain,
+      is: () => Promise.resolve(result),
+    }
+    return { from: () => chain }
+  }
+
+  it('logs and returns [] on a resolved { error }', async () => {
+    const db = queryDb({ data: null, error: { message: 'connection reset' } })
+    const rows = await collectUnnotifiedChanges(db, range)
+    expect(rows).toEqual([])
+    expect(logWarn).toHaveBeenCalledWith('roster-change-log', 'collect failed', { err: 'connection reset' })
+  })
+})
+
+describe('markChangesNotified — resolved error', () => {
+  function updateDb(result) {
+    return {
+      from: () => ({
+        update: () => ({
+          in: () => Promise.resolve(result),
+        }),
+      }),
+    }
+  }
+
+  it('logs on a resolved { error } and never throws', async () => {
+    const db = updateDb({ data: null, error: { message: 'deadlock detected' } })
+    await expect(markChangesNotified(db, ['ch1'])).resolves.toBeUndefined()
+    expect(logWarn).toHaveBeenCalledWith('roster-change-log', 'mark notified failed', { err: 'deadlock detected' })
   })
 })

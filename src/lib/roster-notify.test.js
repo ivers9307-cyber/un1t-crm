@@ -179,4 +179,25 @@ describe('renotifyChangedCoaches (NOTIFY.1 safety net)', () => {
     expect(markChangesNotified).toHaveBeenCalledWith({}, ['ch1', 'ch2'])
     expect(res).toEqual({ notified: 0 })
   })
+
+  it('a change dated exactly today counts as future — the coach is notified', async () => {
+    collectUnnotifiedChanges.mockResolvedValue([
+      { id: 'ch1', coach_id: 'c1', block_date: '2026-09-16' }, // todayStr in `range`
+    ])
+    const res = await renotifyChangedCoaches({}, range)
+    expect(notifyUsers).toHaveBeenCalledWith(['c1'], expect.anything())
+    expect(markChangesNotified).toHaveBeenCalledWith({}, ['ch1'])
+    expect(res).toEqual({ notified: 1 })
+  })
+
+  it('when notifyUsers rejects, markChangesNotified is NOT called and it resolves { notified: 0 }', async () => {
+    collectUnnotifiedChanges.mockResolvedValue([
+      { id: 'ch1', coach_id: 'c1', block_date: '2026-09-21' },
+    ])
+    notifyUsers.mockRejectedValueOnce(new Error('push down'))
+    const res = await renotifyChangedCoaches({}, range)
+    expect(markChangesNotified).not.toHaveBeenCalled()
+    expect(res).toEqual({ notified: 0 })
+    expect(logWarn).toHaveBeenCalled()
+  })
 })

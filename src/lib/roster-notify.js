@@ -136,6 +136,12 @@ export async function notifyStaffOfPublish(db, shifts, { startDate, endDate, loc
  * POST /api/schedule/rosters/[id]/approve, which never had it, so every
  * over-budget re-publish used to tell nobody. Best-effort; never throws.
  *
+ * This is the FINAL attempt for whatever it collects — it sends via
+ * `notifyUsers` under the `schedule` category, which (unlike
+ * `shift_adjusted`) has no email fallback, so a coach with no push token
+ * gets nothing here. Every collected row is stamped notified regardless of
+ * delivery, so there is no later retry beyond this call.
+ *
  * A collected change row's block_date can be in the past by the time this
  * runs (an old, never-notified row, or a re-publish of a period that has
  * partly elapsed) — a coach must never get a "your shift changed" push for
@@ -143,6 +149,10 @@ export async function notifyStaffOfPublish(db, shifts, { startDate, endDate, loc
  * collected change dated today or later get pushed, but EVERY collected row
  * is still stamped notified: a past row needs no message, but leaving it
  * unstamped would just re-surface it (and keep blocking on it) forever.
+ *
+ * The returned `notified` count is coaches TARGETED (pushed to), not
+ * deliveries confirmed — `notifyUsers` is fire-and-forget push, so a token
+ * that is stale or unregistered still counts here.
  *
  * @param {import('@supabase/supabase-js').SupabaseClient} db
  * @param {object} range
