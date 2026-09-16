@@ -30,6 +30,7 @@ vi.mock('./api', () => ({ api: vi.fn() }))
 vi.mock('./impersonate', () => ({ readImpersonate: vi.fn(async () => null) }))
 vi.mock('./geofence-permission', () => ({ resolveGeofencePermission: vi.fn() }))
 
+import * as SecureStore from 'expo-secure-store'
 import { api } from './api'
 import { enqueueCheckin, flushQueue } from './geofence'
 
@@ -181,6 +182,21 @@ describe('flushQueue is single-flight (ARRIVAL.2)', () => {
     expect(api.mock.calls[1][1].body.location_id).toBe('loc-2')
     expect(queued()).toHaveLength(0)
   })
+
+  it('a flush requested after the drain\'s final write still posts the late check-in', async () => {
+    api.mockResolvedValue({ success: true, data: {} })
+    let openGate; const gate = new Promise((r) => { openGate = r })
+    SecureStore.setItemAsync.mockImplementationOnce(async (k, v) => { store.set(k, v); await gate })
+    const first = flushQueue()
+    await vi.waitFor(() => expect(queued()).toHaveLength(0))
+    await enqueueCheckin('loc-2')
+    const second = flushQueue()
+    openGate()
+    await Promise.all([first, second])
+    expect(api).toHaveBeenCalledTimes(2)
+    expect(api.mock.calls[1][1].body.location_id).toBe('loc-2')
+    expect(queued()).toHaveLength(0)
+  })
 })
 
 describe('flushQueue has a per-drain time budget (ARRIVAL.2 review)', () => {
@@ -190,5 +206,23 @@ describe('flushQueue has a per-drain time budget (ARRIVAL.2 review)', () => {
     expect(api).toHaveBeenCalledTimes(1)
     await flushQueue({ budgetMs: 50 })
     expect(api).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('an abandoned drain does not write stale state (ARRIVAL.2 review round 2)', () => {
+  it('a drain that lost the race to the budget timer does not write once its hung request eventually resolves', async () => {
+    let releaseFirst
+    api
+      .mockImplementationOnce(() => new Promise((resolve) => { releaseFirst = () => resolve({ success: true }) }))
+      .mockResolvedValue({ success: true })
+    await flushQueue({ budgetMs: 50 }) // timer wins; the first api call is still pending
+    expect(api).toHaveBeenCalledTimes(1)
+    await enqueueCheckin('loc-2')
+    await flushQueue({ budgetMs: 50 }) // a fresh drain posts both loc-1 and loc-2
+    expect(api).toHaveBeenCalledTimes(3)
+    expect(queued()).toHaveLength(0)
+    releaseFirst()
+    for (let i = 0; i < 10; i++) await Promise.resolve() // flush microtasks
+    expect(queued()).toHaveLength(0)
   })
 })

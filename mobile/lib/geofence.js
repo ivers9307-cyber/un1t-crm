@@ -86,10 +86,19 @@ async function shouldKeep(item) {
   }
 }
 
-async function drainQueue() {
+let drainGeneration = 0
+
+async function drainQueue(generation) {
   // ARRIVAL.2 — a second pass picks up check-ins enqueued while the first was
   // posting. Three passes bound the loop if the phone keeps re-entering.
   for (let pass = 0; pass < 3; pass++) {
+    // ARRIVAL.2 review round 2 — a drain that lost the race to the budget
+    // timer (see runDrainWithBudget) keeps running in the background; its
+    // caller has already moved on and possibly started a NEWER drain. This
+    // stale drain must never write — worst case an item it already posted
+    // stays queued and gets re-posted next pass, a duplicate the server
+    // dedups, which beats it clobbering state a newer drain just wrote.
+    if (generation !== drainGeneration) return
     const q = await readQueue()
     if (q.length === 0) return
     const taken = new Set(q.map(itemKey))
@@ -97,6 +106,7 @@ async function drainQueue() {
     for (const item of q) {
       if (await shouldKeep(item)) remaining.push(item)
     }
+    if (generation !== drainGeneration) return
     // Re-read before writing: the old code wrote `remaining` over the queue
     // and silently dropped anything the background task added meanwhile.
     const latest = await readQueue()
@@ -119,17 +129,27 @@ let rerunRequested = false
 
 async function runDrainWithBudget(budgetMs) {
   for (;;) {
+    // A fresh generation per drain attempt — including a rerun pass, which
+    // must NOT reuse the generation it's replacing (it is the current
+    // legitimate drain, not the stale one the budget timer walked away
+    // from).
+    const generation = ++drainGeneration
     let timer
     const budget = new Promise((resolve) => { timer = setTimeout(resolve, budgetMs) })
-    // api() has no timeout of its own, so a stuck POST (the OS suspending
-    // the app mid-fetch is the real case) would otherwise wedge drainQueue()
-    // forever — and every caller shares this one promise, so a hang here
-    // would stall syncGeofences (which awaits the flush before region sync)
-    // and LocationGate right along with it. Racing a budget means the
-    // abandoned drain's eventual write can still land after we've moved on;
-    // that's an accepted rare duplicate post, and the server dedups it.
-    await Promise.race([drainQueue(), budget])
-    clearTimeout(timer)
+    try {
+      // api() has no timeout of its own, so a stuck POST (the OS suspending
+      // the app mid-fetch is the real case) would otherwise wedge
+      // drainQueue() forever — and every caller shares this one promise, so
+      // a hang here would stall syncGeofences (which awaits the flush
+      // before region sync) and LocationGate right along with it. Racing a
+      // budget means the abandoned drain's eventual write can still land
+      // after we've moved on; that's an accepted rare duplicate post, and
+      // the server dedups it — the generation check above just keeps it
+      // from overwriting whatever a newer drain wrote in the meantime.
+      await Promise.race([drainQueue(generation), budget])
+    } finally {
+      clearTimeout(timer)
+    }
     if (!rerunRequested) return
     rerunRequested = false
   }
