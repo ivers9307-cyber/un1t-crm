@@ -172,7 +172,12 @@ export default function AttendanceReportClient({ activeLocationName }) {
                   {r.profile_role && <span className="ml-2 text-xs text-un1t-subtle">{r.profile_role}</span>}
                 </td>
                 <td className="px-3 py-2 font-mono text-xs">{(r.scheduled_start || '').slice(0, 5)}</td>
-                <td className="px-3 py-2 font-mono text-xs">{r.actual_start ? r.actual_start.slice(0, 5) : '—'}</td>
+                <td className="px-3 py-2 font-mono text-xs">
+                  {r.actual_start ? r.actual_start.slice(0, 5) : '—'}
+                  {r.arrival_inferred && (
+                    <span className="ml-1 font-sans text-un1t-subtle" title="Already on site from an earlier shift">on site</span>
+                  )}
+                </td>
                 <td className="px-3 py-2">
                   <span className={`inline-block rounded-full border px-2 py-0.5 text-xs font-medium ${STATUS_META[r.status]?.cls || ''}`}>
                     {STATUS_META[r.status]?.label || r.status}
