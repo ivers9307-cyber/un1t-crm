@@ -4257,7 +4257,7 @@ registry.registerPath({
   tags: ['Attendance'],
   security: [{ CookieAuth: [] }],
   summary: 'Mobile geofence-entry check-in (stamps own shift)',
-  description: 'Called by the mobile background geofence task on region ENTER. Stamps the caller\'s nearest unstamped shift at the location (±4h window, race-guarded) and writes a staff_attendance_events row with source=geofence (mig 463). Outcomes: matched | already_stamped | no_shift_in_window | duplicate | geofence_exempt | impersonation_ignored.',
+  description: 'Called by the mobile background geofence task on region ENTER. Records the caller\'s arrival on shift_assignments.arrived_at (mig 609) — never on start_time_override, the manager-set paid window (mig 099). Matches a shift up to 45 minutes before its scheduled start, or any time while it is running; a ping within 60 minutes of a shift the coach already arrived for is treated as a re-entry and stamps nothing. Dedups region flaps to one geofence event per profile+location per 10 minutes, and writes a staff_attendance_events row with source=geofence (mig 463). Outcomes: matched | already_stamped | no_shift_in_window | duplicate | geofence_exempt | impersonation_ignored.',
   request: {
     body: { content: { 'application/json': { schema: z.object({
       location_id: uuidLike,
