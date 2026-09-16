@@ -33,6 +33,7 @@ import { validateBody } from '@/lib/validate'
 import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
 import { timeRangesOverlap, fmtTime } from '@/lib/schedule-overlap'
 import { logRosterChange } from '@/lib/roster-change-log'
+import { notifyRosterChanges } from '@/lib/roster-change-notify'
 import { isLiveAssignment, liveAssignments } from '@/lib/roster'
 
 const AssignSchema = z.object({
@@ -217,11 +218,9 @@ export async function POST(request, props) {
     }
   }
 
-  // SCHEDULE-CHANGE-LOG.1 — if this block belongs to a published roster,
-  // record each new assignment as a post-publish change so the next
-  // re-publish re-notifies the affected coach. Best-effort (logRosterChange
-  // no-ops on a draft roster and never throws).
-  if (block.rosters?.status === 'published') {
+  // SCHEDULE-CHANGE-LOG.1 — record each new assignment on a published roster
+  // (audit, and the re-publish safety net). NOTIFY.1 — and tell the coach now.
+  if (block.rosters?.status === 'published' && assignedIds.length > 0) {
     for (const coachId of assignedIds) {
       await logRosterChange(db, {
         isPublished: true,
@@ -233,6 +232,11 @@ export async function POST(request, props) {
         action: 'assigned',
       })
     }
+    await notifyRosterChanges(db, {
+      locationId: block.location_id,
+      actorId: user.id,
+      changes: assignedIds.map((coachId) => ({ coachId, blockId: block.id, blockDate: block.block_date, action: 'assigned' })),
+    })
   }
 
   // Legacy single-coach response shape — preserve byte-for-byte so

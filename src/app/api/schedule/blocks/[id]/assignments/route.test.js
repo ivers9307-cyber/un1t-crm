@@ -13,15 +13,18 @@ vi.mock('@/lib/auth', () => ({
   getCurrentUser: vi.fn(),
   getUserLocationIds: vi.fn(),
 }))
+vi.mock('@/lib/roster-change-notify', () => ({ notifyRosterChanges: vi.fn(() => Promise.resolve({ notified: 0 })) }))
 
 const { createServerClient } = await import('@/lib/supabase')
 const { getCurrentUser, getUserLocationIds } = await import('@/lib/auth')
 const { POST } = await import('./route.js')
+const { notifyRosterChanges } = await import('@/lib/roster-change-notify')
 
 beforeEach(() => {
   createServerClient.mockReset()
   getCurrentUser.mockReset()
   getUserLocationIds.mockReset()
+  notifyRosterChanges.mockClear()
 })
 
 function req(body) {
@@ -332,5 +335,33 @@ describe('POST — existing-assignees query failure', () => {
     expect(json.success).toBe(false)
     expect(json.error).toBe('boom')
     expect(insertSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST — tells coaches added to a PUBLISHED shift (NOTIFY.1)', () => {
+  const ids = ['aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb']
+
+  it('notifies every newly assigned coach when the block is on a published roster', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const { db } = buildDb({
+      block: { id: 'block-1', location_id: 'loc-1', block_date: '2026-06-01', max_coaches: 5, rosters: { status: 'published' } },
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(req({ profile_ids: ids }), PROPS)
+    expect(res.status).toBe(201)
+    expect(notifyRosterChanges).toHaveBeenCalledTimes(1)
+    const [, opts] = notifyRosterChanges.mock.calls[0]
+    expect(opts).toMatchObject({ locationId: 'loc-1', actorId: 'u1' })
+    expect(opts.changes).toEqual(ids.map((coachId) => ({ coachId, blockId: 'block-1', blockDate: '2026-06-01', action: 'assigned' })))
+  })
+
+  it('does not notify when the block is not on a published roster', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const { db } = buildDb({ block: { id: 'block-1', location_id: 'loc-1', block_date: '2026-06-01', max_coaches: 5 } })
+    createServerClient.mockReturnValue(db)
+
+    await POST(req({ profile_ids: ids }), PROPS)
+    expect(notifyRosterChanges).not.toHaveBeenCalled()
   })
 })
