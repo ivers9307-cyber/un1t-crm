@@ -74,7 +74,13 @@ export async function POST(request) {
     .select('id, timezone, settings')
     .eq('id', body.location_id)
     .single()
-  if (locErr || !location) {
+  // .single() reports PGRST116 for "no row matched" — that's the ordinary
+  // not-found case. Any other error is a DB failure, not proof the location
+  // doesn't exist, so it must not be answered as a terminal 404.
+  if (locErr && locErr.code !== 'PGRST116') {
+    return NextResponse.json({ success: false, error: locErr.message, transient: true }, { status: 503 })
+  }
+  if (!location) {
     return NextResponse.json({ success: false, error: 'Location not found' }, { status: 404 })
   }
   const geo = geofenceFromLocationSettings(location.settings)
@@ -104,6 +110,12 @@ export async function POST(request) {
   const eventAt = clamped ? new Date(nowMs) : new Date(clientMs)
 
   // Region-flap dedup: one geofence event per profile+location per window.
+  // A recent 'matched' row whose stamp never landed (process killed, the
+  // response lost in transit, or the release-on-error delete below itself
+  // failing) is recovered here rather than answered 'duplicate' forever —
+  // that WAS a silent arrival loss. Look across the last few rows (not just
+  // the newest) for the claim to complete, since a later re-entry/
+  // already_stamped ping can land in the window ahead of it.
   const sinceIso = new Date(eventAt.getTime() - DEDUP_WINDOW_MS).toISOString()
   const { data: recent, error: dupErr } = await db
     .from('staff_attendance_events')
@@ -112,23 +124,35 @@ export async function POST(request) {
     .eq('location_id', location.id)
     .eq('source', 'geofence')
     .gte('event_at', sinceIso)
-    .limit(1)
+    .order('event_at', { ascending: false })
+    .limit(5)
   if (dupErr) return NextResponse.json({ success: false, error: dupErr.message, transient: true }, { status: 503 })
   if (recent && recent.length > 0) {
-    const [priorEvent] = recent
-    // Lost-arrival recovery: the earlier request already decided AND claimed,
+    const claimToComplete = recent.find((r) => r.match_outcome === 'matched' && r.matched_assignment_id)
+    // Lost-arrival recovery: an earlier request already decided AND claimed,
     // but its stamp never landed. Retry it here against the CLAIMED
     // assignment, using the earlier event's timestamp — this is the only
     // remaining chance for that arrival to land, since every later ping in
-    // this window would otherwise just repeat 'duplicate'.
-    if (priorEvent.match_outcome === 'matched' && priorEvent.matched_assignment_id) {
-      const { error: recErr } = await db
+    // this window would otherwise just repeat 'duplicate'. Re-check
+    // profile_id and status here: an approved shift SWAP rewrites profile_id
+    // on the same assignment row, so without that guard a retry could stamp
+    // THIS coach's arrival onto another coach's shift, or onto a cancelled
+    // one.
+    if (claimToComplete) {
+      const { data: recovered, error: recErr } = await db
         .from('shift_assignments')
-        .update({ arrived_at: priorEvent.event_at, arrival_source: 'geofence' })
-        .eq('id', priorEvent.matched_assignment_id)
+        .update({ arrived_at: claimToComplete.event_at, arrival_source: 'geofence' })
+        .eq('id', claimToComplete.matched_assignment_id)
+        .eq('profile_id', user.id)
+        .neq('status', 'cancelled')
         .is('arrived_at', null)
         .select('id')
       if (recErr) return NextResponse.json({ success: false, error: recErr.message, transient: true }, { status: 503 })
+      if (recovered && recovered.length > 0) {
+        logWarn('geofence-checkin', 'completed a lost arrival stamp from an earlier claim', {
+          eventId: claimToComplete.id, assignmentId: claimToComplete.matched_assignment_id,
+        })
+      }
     }
     return NextResponse.json({ success: true, data: { match_outcome: 'duplicate' } })
   }

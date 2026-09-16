@@ -40,7 +40,7 @@ const validBody = () => ({ location_id: LOC, entered_at: new Date().toISOString(
 // builder; awaiting it resolves to `result`.
 function builder(label, result, calls) {
   const b = { then: (onF, onR) => Promise.resolve(result).then(onF, onR) }
-  for (const m of ['select', 'eq', 'neq', 'is', 'gte', 'lte', 'in', 'limit', 'single', 'maybeSingle']) {
+  for (const m of ['select', 'eq', 'neq', 'is', 'gte', 'lte', 'in', 'order', 'limit', 'single', 'maybeSingle']) {
     b[m] = (...args) => { calls.push([label, m, ...args]); return b }
   }
   return b
@@ -48,6 +48,7 @@ function builder(label, result, calls) {
 
 function mockDb({
   geo = GEO, exempt = false, recentGeofenceEvent = null, dedupSelectError = null,
+  locationSelectError = null,
   shiftRows = [], shiftSelectError = null,
   claimError = null, stampError = null, stampRowsTouched = 1,
   releaseError = null, relabelError = null,
@@ -56,10 +57,18 @@ function mockDb({
   const inserted = []
   const updates = []
   const deletes = []
+  // Accepts either a single row or a list (newest-first, as the route's
+  // .order('event_at', { ascending: false }) would return).
+  const recentRows = Array.isArray(recentGeofenceEvent)
+    ? recentGeofenceEvent
+    : (recentGeofenceEvent ? [recentGeofenceEvent] : [])
   createServerClient.mockReturnValue({
     from: (table) => {
       if (table === 'locations') {
-        return builder('locations', { data: { id: LOC, timezone: 'Europe/Dublin', settings: { geofence: geo } }, error: null }, calls)
+        return builder('locations', {
+          data: locationSelectError ? null : { id: LOC, timezone: 'Europe/Dublin', settings: { geofence: geo } },
+          error: locationSelectError,
+        }, calls)
       }
       if (table === 'profile_locations') {
         return builder('profile_locations', { data: { geofence_exempt: exempt }, error: null }, calls)
@@ -67,7 +76,7 @@ function mockDb({
       if (table === 'staff_attendance_events') {
         return {
           select: (...a) => builder('events.select', {
-            data: dedupSelectError ? null : (recentGeofenceEvent ? [recentGeofenceEvent] : []),
+            data: dedupSelectError ? null : recentRows,
             error: dedupSelectError,
           }, calls).select(...a),
           insert: (row) => {
@@ -127,6 +136,14 @@ describe('POST /api/attendance/geofence-checkin', () => {
     expect((await POST(postReq(validBody()))).status).toBe(404)
   })
 
+  it('the location lookup erroring (not just missing) → 503 transient', async () => {
+    getCurrentUser.mockResolvedValue(staff)
+    mockDb({ locationSelectError: { message: 'db down' } })
+    const res = await POST(postReq(validBody()))
+    expect(res.status).toBe(503)
+    expect((await res.json()).transient).toBe(true)
+  })
+
   it('exempt staff → geofence_exempt, no audit row', async () => {
     getCurrentUser.mockResolvedValue(staff)
     const db = mockDb({ exempt: true })
@@ -162,14 +179,50 @@ describe('POST /api/attendance/geofence-checkin', () => {
 
   it('a recent matched-but-unstamped claim is completed on retry (lost-arrival recovery)', async () => {
     getCurrentUser.mockResolvedValue(staff)
+    // Newest-first list: an already_stamped row ahead of the matched claim we
+    // actually need to complete — the route must pick the matched one, not
+    // just the first row in the list.
     const db = mockDb({
-      recentGeofenceEvent: { id: 'ev-1', match_outcome: 'matched', matched_assignment_id: 'assign-1', event_at: '2026-07-15T10:58:00Z' },
+      recentGeofenceEvent: [
+        { id: 'ev-0', match_outcome: 'already_stamped', matched_assignment_id: null, event_at: '2026-07-15T10:59:00Z' },
+        { id: 'ev-1', match_outcome: 'matched', matched_assignment_id: 'assign-1', event_at: '2026-07-15T10:58:00Z' },
+      ],
     })
     const body = await (await POST(postReq(validBody()))).json()
     expect(body.data.match_outcome).toBe('duplicate')
     expect(db.inserted).toHaveLength(0)
     expect(shiftUpdates(db)).toEqual([{ table: 'shift_assignments', patch: { arrived_at: '2026-07-15T10:58:00Z', arrival_source: 'geofence' } }])
     expect(db.calls).toContainEqual(['assignments.update', 'is', 'arrived_at', null])
+    // Without a profile_id/status guard here, an approved shift SWAP (which
+    // rewrites profile_id on the same assignment row) would let this retry
+    // stamp arrival onto another coach's shift, or onto a cancelled one.
+    expect(db.calls).toContainEqual(['assignments.update', 'eq', 'profile_id', 'prof-1'])
+    expect(db.calls).toContainEqual(['assignments.update', 'neq', 'status', 'cancelled'])
+    expect(db.calls).toContainEqual(['events.select', 'order', 'event_at', { ascending: false }])
+    expect(db.calls).toContainEqual(['events.select', 'limit', 5])
+  })
+
+  it('a lost-arrival recovery that stamps a row logs a warning so recoveries can be counted', async () => {
+    getCurrentUser.mockResolvedValue(staff)
+    mockDb({
+      recentGeofenceEvent: { id: 'ev-1', match_outcome: 'matched', matched_assignment_id: 'assign-1', event_at: '2026-07-15T10:58:00Z' },
+    })
+    await POST(postReq(validBody()))
+    expect(logWarn).toHaveBeenCalledWith(
+      'geofence-checkin',
+      'completed a lost arrival stamp from an earlier claim',
+      expect.objectContaining({ eventId: 'ev-1', assignmentId: 'assign-1' }),
+    )
+  })
+
+  it('a lost-arrival recovery that touches zero rows does not log (nothing was recovered)', async () => {
+    getCurrentUser.mockResolvedValue(staff)
+    mockDb({
+      recentGeofenceEvent: { id: 'ev-1', match_outcome: 'matched', matched_assignment_id: 'assign-1', event_at: '2026-07-15T10:58:00Z' },
+      stampRowsTouched: 0,
+    })
+    await POST(postReq(validBody()))
+    expect(logWarn).not.toHaveBeenCalled()
   })
 
   it('a recent no_shift_in_window claim stays a plain duplicate, no writes', async () => {
