@@ -110,3 +110,39 @@ describe('flushQueue drops a check-in on a terminal answer', () => {
     expect(queued()).toHaveLength(0)
   })
 })
+
+describe('flushQueue is single-flight (ARRIVAL.2)', () => {
+  it('two concurrent flushes post a queued check-in once', async () => {
+    let release
+    api.mockImplementation(() => new Promise((resolve) => {
+      release = () => resolve({ success: true, data: { match_outcome: 'matched' } })
+    }))
+    const first = flushQueue()
+    const second = flushQueue()
+    await vi.waitFor(() => expect(api).toHaveBeenCalledTimes(1))
+    release()
+    await Promise.all([first, second])
+    expect(api).toHaveBeenCalledTimes(1)
+    expect(queued()).toHaveLength(0)
+  })
+
+  it('a check-in enqueued during a flush is kept and posted, not overwritten', async () => {
+    let release
+    api
+      .mockImplementationOnce(() => new Promise((resolve) => { release = () => resolve({ success: true, data: {} }) }))
+      .mockResolvedValue({ success: true, data: {} })
+    const flushing = flushQueue()
+    await vi.waitFor(() => expect(api).toHaveBeenCalledTimes(1))
+    await enqueueCheckin('loc-2')
+    release()
+    await flushing
+    expect(api).toHaveBeenCalledTimes(2)
+    expect(api.mock.calls[1][1].body.location_id).toBe('loc-2')
+    expect(queued()).toHaveLength(0)
+  })
+
+  it('every queued check-in carries an id', () => {
+    expect(typeof queued()[0].id).toBe('string')
+    expect(queued()[0].id.length).toBeGreaterThan(0)
+  })
+})
