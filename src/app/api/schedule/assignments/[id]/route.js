@@ -23,6 +23,7 @@ import { validateBody } from '@/lib/validate'
 import { MANAGER_ROLES, timeOfDay } from '@/lib/schemas'
 import { notifyUsersOnce } from '@/lib/push-dedup'
 import { logRosterChange } from '@/lib/roster-change-log'
+import { notifyRosterChanges } from '@/lib/roster-change-notify'
 import { logWarn } from '@/lib/log'
 
 // All fields optional. To CLEAR an override, send null explicitly
@@ -259,6 +260,18 @@ export async function DELETE(_request, props) {
       actorId: user.id,
       coachId: assignment.profile_id,
       action: 'unassigned',
+    })
+
+    // NOTIFY.1 — tell the coach now, not at the next re-publish.
+    await notifyRosterChanges(db, {
+      locationId: assignment.shift_blocks?.location_id,
+      actorId: user.id,
+      changes: [{
+        coachId: assignment.profile_id,
+        blockId: assignment.block_id,
+        blockDate: assignment.shift_blocks?.block_date,
+        action: 'unassigned',
+      }],
     })
   }
 

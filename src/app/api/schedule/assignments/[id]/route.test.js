@@ -22,11 +22,13 @@ vi.mock('@/lib/auth', () => ({
 vi.mock('@/lib/push-dedup', () => ({ notifyUsersOnce: vi.fn().mockResolvedValue(undefined) }))
 vi.mock('@/lib/roster-change-log', () => ({ logRosterChange: vi.fn().mockResolvedValue({ logged: true }) }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
+vi.mock('@/lib/roster-change-notify', () => ({ notifyRosterChanges: vi.fn(() => Promise.resolve({ notified: 0 })) }))
 
 const { createServerClient } = await import('@/lib/supabase')
 const { getCurrentUser, getUserLocationIds } = await import('@/lib/auth')
 const { notifyUsersOnce } = await import('@/lib/push-dedup')
 const { logRosterChange } = await import('@/lib/roster-change-log')
+const { notifyRosterChanges } = await import('@/lib/roster-change-notify')
 const { PUT, DELETE } = await import('./route.js')
 
 const COACH = { id: 'coach-1', role: 'staff' }
@@ -129,6 +131,7 @@ beforeEach(() => {
   getUserLocationIds.mockReturnValue(['loc-1'])
   notifyUsersOnce.mockClear()
   logRosterChange.mockClear()
+  notifyRosterChanges.mockClear()
 })
 
 describe('PUT /api/schedule/assignments/[id] — hours are manager-set (D3)', () => {
@@ -336,5 +339,38 @@ describe('DELETE /api/schedule/assignments/[id] — a coach cannot drop themselv
     const res = await DELETE({}, PROPS)
     expect(res.status).toBe(404)
     expect(deleteSpy).not.toHaveBeenCalled()
+  })
+
+  it('tells the removed coach immediately when the roster is published (NOTIFY.1)', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const { db } = buildDb()
+    createServerClient.mockReturnValue(db)
+
+    const res = await DELETE({}, PROPS)
+    expect(res.status).toBe(200)
+    expect(notifyRosterChanges).toHaveBeenCalledTimes(1)
+    expect(notifyRosterChanges.mock.calls[0][1]).toEqual({
+      locationId: 'loc-1',
+      actorId: MANAGER.id,
+      changes: [{ coachId: COACH.id, blockId: 'block-1', blockDate: '2026-06-10', action: 'unassigned' }],
+    })
+  })
+
+  it('does not notify when the roster is a draft', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const { db } = buildDb({ assignment: assignmentRow({ rosterStatus: 'draft' }) })
+    createServerClient.mockReturnValue(db)
+
+    await DELETE({}, PROPS)
+    expect(notifyRosterChanges).not.toHaveBeenCalled()
+  })
+
+  it('PUT time changes do not go through notifyRosterChanges (they push shift_adjusted themselves)', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const { db } = buildDb()
+    createServerClient.mockReturnValue(db)
+
+    await PUT(req({ start_time_override: '10:00:00' }), PROPS)
+    expect(notifyRosterChanges).not.toHaveBeenCalled()
   })
 })
