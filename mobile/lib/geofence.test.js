@@ -113,14 +113,18 @@ describe('flushQueue drops a check-in on a terminal answer', () => {
 
 describe('flushQueue is single-flight (ARRIVAL.2)', () => {
   it('two concurrent flushes post a queued check-in once', async () => {
-    let release
+    // Collect every resolver instead of overwriting one `release` var: if a
+    // regression makes api() get called twice, releasing only the LAST
+    // promise would leave the first stuck forever and hang the test instead
+    // of failing the call-count assertion below.
+    const releases = []
     api.mockImplementation(() => new Promise((resolve) => {
-      release = () => resolve({ success: true, data: { match_outcome: 'matched' } })
+      releases.push(() => resolve({ success: true, data: { match_outcome: 'matched' } }))
     }))
     const first = flushQueue()
     const second = flushQueue()
     await vi.waitFor(() => expect(api).toHaveBeenCalledTimes(1))
-    release()
+    releases.forEach((release) => release())
     await Promise.all([first, second])
     expect(api).toHaveBeenCalledTimes(1)
     expect(queued()).toHaveLength(0)
@@ -144,5 +148,47 @@ describe('flushQueue is single-flight (ARRIVAL.2)', () => {
   it('every queued check-in carries an id', () => {
     expect(typeof queued()[0].id).toBe('string')
     expect(queued()[0].id.length).toBeGreaterThan(0)
+  })
+
+  it('a transient-failure item is kept alongside an item added during the flush, in order remaining then added', async () => {
+    let release
+    api.mockImplementationOnce(() => new Promise((resolve) => {
+      release = () => resolve({ success: false, transient: true, error: 'connection reset by peer' })
+    }))
+    api.mockResolvedValue({ success: false, transient: true, error: 'connection reset by peer' })
+    const flushing = flushQueue()
+    await vi.waitFor(() => expect(api).toHaveBeenCalledTimes(1))
+    await enqueueCheckin('loc-2')
+    release()
+    await flushing
+    expect(queued()).toHaveLength(2)
+    expect(queued()[0].location_id).toBe('loc-1')
+    expect(queued()[1].location_id).toBe('loc-2')
+  })
+
+  it('flushQueue called again while a drain is in flight forces one more pass, posting a check-in enqueued just before that call, and shares one promise with the first caller', async () => {
+    let release
+    api.mockImplementationOnce(() => new Promise((resolve) => { release = () => resolve({ success: true, data: {} }) }))
+    api.mockResolvedValue({ success: true, data: {} })
+    const first = flushQueue()
+    await vi.waitFor(() => expect(api).toHaveBeenCalledTimes(1))
+    await enqueueCheckin('loc-2')
+    const second = flushQueue()
+    expect(second).toBe(first)
+    release()
+    await Promise.all([first, second])
+    expect(api).toHaveBeenCalledTimes(2)
+    expect(api.mock.calls[1][1].body.location_id).toBe('loc-2')
+    expect(queued()).toHaveLength(0)
+  })
+})
+
+describe('flushQueue has a per-drain time budget (ARRIVAL.2 review)', () => {
+  it('a hung request does not block the promise past the budget, and the next flush starts a fresh drain', async () => {
+    api.mockImplementation(() => new Promise(() => {})) // never resolves
+    await flushQueue({ budgetMs: 50 })
+    expect(api).toHaveBeenCalledTimes(1)
+    await flushQueue({ budgetMs: 50 })
+    expect(api).toHaveBeenCalledTimes(2)
   })
 })

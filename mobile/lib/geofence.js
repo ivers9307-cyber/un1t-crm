@@ -106,7 +106,34 @@ async function drainQueue() {
   }
 }
 
+const FLUSH_BUDGET_MS = 25_000
+
 let inFlight = null
+// A flushQueue() call that arrives while a drain is already running sets
+// this instead of starting a second one; the running drain checks it once
+// it finishes and, if set, runs exactly one more pass before resolving —
+// so a caller that enqueued late still gets its item posted in THIS call,
+// not stranded until the next unrelated flush. One flag, not a counter:
+// any number of calls arriving mid-drain coalesce into a single follow-up.
+let rerunRequested = false
+
+async function runDrainWithBudget(budgetMs) {
+  for (;;) {
+    let timer
+    const budget = new Promise((resolve) => { timer = setTimeout(resolve, budgetMs) })
+    // api() has no timeout of its own, so a stuck POST (the OS suspending
+    // the app mid-fetch is the real case) would otherwise wedge drainQueue()
+    // forever — and every caller shares this one promise, so a hang here
+    // would stall syncGeofences (which awaits the flush before region sync)
+    // and LocationGate right along with it. Racing a budget means the
+    // abandoned drain's eventual write can still land after we've moved on;
+    // that's an accepted rare duplicate post, and the server dedups it.
+    await Promise.race([drainQueue(), budget])
+    clearTimeout(timer)
+    if (!rerunRequested) return
+    rerunRequested = false
+  }
+}
 
 /**
  * POST every queued check-in; keep whatever still fails.
@@ -114,11 +141,17 @@ let inFlight = null
  * task, syncGeofences, the app layout and LocationGate); running them in
  * parallel posted the same arrival twice, 100 ms apart, which is how one
  * arrival stamped two shifts on 16 Sep. Every caller now awaits one drain.
+ * This only coalesces callers inside THIS JS runtime — an Android headless
+ * task runs in a separate JS context from the foreground app, so duplicates
+ * across the two are not deduped here; that's the server's job (PR #1694).
+ * `budgetMs` is for tests only; real callers never pass it.
  */
-export function flushQueue() {
-  if (!inFlight) {
-    inFlight = drainQueue().finally(() => { inFlight = null })
+export function flushQueue({ budgetMs = FLUSH_BUDGET_MS } = {}) {
+  if (inFlight) {
+    rerunRequested = true
+    return inFlight
   }
+  inFlight = runDrainWithBudget(budgetMs).finally(() => { inFlight = null })
   return inFlight
 }
 
