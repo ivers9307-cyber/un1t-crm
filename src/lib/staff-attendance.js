@@ -140,12 +140,22 @@ export const GEOFENCE_LATE_WINDOW_MS = 4 * 3600_000
 export const GEOFENCE_REENTRY_GAP_MS = 60 * MS_PER_MIN
 
 const toMs = (v) => (v == null ? NaN : new Date(v).getTime())
+// An invalid date sorts LAST within its (profileId, blockDate) group rather
+// than corrupting a comparator with NaN.
+const sortMs = (v) => { const ms = toMs(v); return Number.isFinite(ms) ? ms : Infinity }
 
 /**
  * Decide what one geofence ping does. Pure: the caller loads every live
  * shift for the coach at the location (±1 day) INCLUDING ones that already
  * have an arrival, because excluding them is what let a duplicate ping move
  * on to the coach's next shift (16 Sep review: 10 double-stamped pairs).
+ *
+ * Re-entry requires `scheduledEndAt` on the already-arrived shift — a shift
+ * missing it can never register as on-site, only ever a fresh stamp/already.
+ * Known limitation (D-E): with no exit events, a coach who genuinely leaves
+ * and comes back within the re-entry gap — including someone who goes home
+ * after a shift and returns before their next one starts — reads as still
+ * on site, not as a new arrival.
  *
  * @param {Date|string} eventAt
  * @param {Array<{id: string, scheduledAt: Date, scheduledEndAt: Date, arrivedAt: Date|null}>} shifts
@@ -162,26 +172,42 @@ export function decideGeofenceStamp(eventAt, shifts, opts = {}) {
   if (!Number.isFinite(t) || !Array.isArray(shifts)) return { kind: 'none', shift: null }
   const valid = shifts.filter((s) => Number.isFinite(toMs(s?.scheduledAt)))
 
-  const onSite = valid.find((s) => (
-    s.arrivedAt
-    && toMs(s.arrivedAt) <= t
-    && Number.isFinite(toMs(s.scheduledEndAt))
-    && t <= toMs(s.scheduledEndAt) + reentryGapMs
-  ))
+  // Re-entry: among every shift the coach is still within the gap of, the
+  // one they arrived at MOST RECENTLY is the one they're re-entering.
+  let onSite = null
+  for (const s of valid) {
+    if (
+      s.arrivedAt
+      && toMs(s.arrivedAt) <= t
+      && Number.isFinite(toMs(s.scheduledEndAt))
+      && t <= toMs(s.scheduledEndAt) + reentryGapMs
+      && (!onSite || toMs(s.arrivedAt) > toMs(onSite.arrivedAt))
+    ) {
+      onSite = s
+    }
+  }
   if (onSite) return { kind: 'reentry', shift: onSite }
 
-  let best = null
+  // Among the eligible candidates, a shift already RUNNING (start <= t) beats
+  // one that hasn't started — "nearest start" alone picks a future shift
+  // over the one the coach is visibly late for. Prefer the running shift
+  // whose start is latest (most recently due); among not-yet-started
+  // candidates prefer the earliest (nearest) start.
+  let bestRunning = null
+  let bestFuture = null
   for (const s of valid) {
     const start = toMs(s.scheduledAt)
     const end = toMs(s.scheduledEndAt)
     if (t < start - earlyMs) continue
     if (t > start + lateMs) continue
     if (Number.isFinite(end) && t > end) continue
-    const delta = Math.abs(t - start)
-    if (!best || delta < best.delta || (delta === best.delta && start < toMs(best.shift.scheduledAt))) {
-      best = { shift: s, delta }
+    if (start <= t) {
+      if (!bestRunning || start > bestRunning.start) bestRunning = { shift: s, start }
+    } else if (!bestFuture || start < bestFuture.start) {
+      bestFuture = { shift: s, start }
     }
   }
+  const best = bestRunning || bestFuture
   if (!best) return { kind: 'none', shift: null }
   return best.shift.arrivedAt ? { kind: 'already', shift: best.shift } : { kind: 'stamp', shift: best.shift }
 }
@@ -201,11 +227,13 @@ export function inferContinuousArrivals(rows, opts = {}) {
   const ordered = [...out].sort((a, b) => (
     String(a.profileId).localeCompare(String(b.profileId))
     || String(a.blockDate).localeCompare(String(b.blockDate))
-    || toMs(a.scheduledAt) - toMs(b.scheduledAt)
+    || sortMs(a.scheduledAt) - sortMs(b.scheduledAt)
   ))
   let prev = null
   for (const r of ordered) {
-    const sameRun = prev && prev.profileId === r.profileId && prev.blockDate === r.blockDate
+    const sameRun = prev
+      && prev.profileId != null && r.profileId != null && prev.profileId === r.profileId
+      && prev.blockDate != null && r.blockDate != null && prev.blockDate === r.blockDate
     if (
       !r.arrivalAt
       && sameRun
@@ -224,7 +252,7 @@ export function inferContinuousArrivals(rows, opts = {}) {
 /**
  * Convert a stamped arrival into a Postgres `time` literal — the
  * attendance report shows arrival as a wall-clock time, so we render
- * the wall-clock time in the location's timezone and persist that.
+ * the wall-clock time in the location's timezone.
  */
 export function arrivalToTimeOnly(arrivalAt, tz = 'UTC') {
   if (!arrivalAt) return null

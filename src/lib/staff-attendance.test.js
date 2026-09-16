@@ -165,6 +165,32 @@ describe('decideGeofenceStamp', () => {
     expect(decideGeofenceStamp('nope', [shift('a', '08:00', '09:00')])).toEqual({ kind: 'none', shift: null })
     expect(decideGeofenceStamp(at('08:00'), null)).toEqual({ kind: 'none', shift: null })
   })
+
+  it('prefers a shift that is already running over one that has not started yet', () => {
+    const d = decideGeofenceStamp(at('08:40'), [shift('a', '08:00', '09:00'), shift('b', '09:00', '10:00')])
+    expect(d).toMatchObject({ kind: 'stamp', shift: { id: 'a' } })
+  })
+
+  it('prefers a running shift over a not-yet-started one even when the running shift started long ago', () => {
+    const d = decideGeofenceStamp(at('09:40'), [shift('a', '08:00', '10:00'), shift('b', '10:15', '11:00')])
+    expect(d).toMatchObject({ kind: 'stamp', shift: { id: 'a' } })
+  })
+
+  it('stamps exactly at the 45-minute early boundary', () => {
+    const d = decideGeofenceStamp(at('07:15'), [shift('a', '08:00', '09:00')])
+    expect(d).toMatchObject({ kind: 'stamp', shift: { id: 'a' } })
+  })
+
+  it('prefers a running shift over a future one whose start is closer to the ping', () => {
+    const d = decideGeofenceStamp(at('09:50'), [shift('a', '08:00', '10:00'), shift('b', '09:55', '11:00')])
+    expect(d).toMatchObject({ kind: 'stamp', shift: { id: 'a' } })
+  })
+
+  it('re-entry picks the on-site shift with the latest recorded arrival, not array order', () => {
+    const shifts = [shift('a', '08:00', '09:00', '07:39'), shift('b', '09:15', '10:30', '09:10')]
+    const d = decideGeofenceStamp(at('09:30'), shifts)
+    expect(d).toMatchObject({ kind: 'reentry', shift: { id: 'b' } })
+  })
 })
 
 describe('inferContinuousArrivals', () => {
@@ -206,6 +232,26 @@ describe('inferContinuousArrivals', () => {
 
   it('tolerates null input', () => {
     expect(inferContinuousArrivals(null)).toEqual([])
+  })
+
+  it('does not chain rows that share no profileId (both null)', () => {
+    const input = [
+      { id: 'a', profileId: null, blockDate: '2026-09-16', scheduledAt: at('08:00'), scheduledEndAt: at('09:00'), arrivalAt: at('07:39') },
+      { id: 'b', profileId: null, blockDate: '2026-09-16', scheduledAt: at('09:15'), scheduledEndAt: at('10:30'), arrivalAt: null },
+    ]
+    const out = inferContinuousArrivals(input)
+    const byId = Object.fromEntries(out.map((r) => [r.id, r]))
+    expect(byId.b).toMatchObject({ arrivalAt: null, arrivalInferred: false })
+  })
+
+  it('a row with an invalid scheduledAt keeps arrivalAt null and does not throw', () => {
+    const input = [
+      row('a', 'p1', '08:00', '09:00', '07:39'),
+      { id: 'b', profileId: 'p1', blockDate: '2026-09-16', scheduledAt: new Date('not-a-date'), scheduledEndAt: at('10:30'), arrivalAt: null },
+    ]
+    expect(() => inferContinuousArrivals(input)).not.toThrow()
+    const byId = Object.fromEntries(inferContinuousArrivals(input).map((r) => [r.id, r]))
+    expect(byId.b).toMatchObject({ arrivalAt: null, arrivalInferred: false })
   })
 })
 
