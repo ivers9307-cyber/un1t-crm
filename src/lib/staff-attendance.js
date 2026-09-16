@@ -12,10 +12,15 @@
 //     → 'on_time' | 'late' | 'no_show', honouring a configurable
 //       grace window (default 60s — Stillorgan's policy).
 //
-//   matchArrivalToShift(arrivalAt, shifts, opts)
-//     → given a list of un-stamped shifts already loaded by the
-//       caller, picks the one whose scheduled start is closest to
-//       the arrival within ±4h.
+//   decideGeofenceStamp(eventAt, shifts, opts)
+//     → what one geofence ping should do: stamp a shift's arrival,
+//       report it already arrived, treat it as a re-entry, or nothing.
+//       ARRIVAL.1 — the result lands on shift_assignments.arrived_at,
+//       never on the paid window.
+//
+//   inferContinuousArrivals(rows, opts)
+//     → report-time: carries an arrival onto back-to-back shifts the
+//       coach was already on site for (a re-entry stamps nothing).
 //
 // What does NOT live here:
 //   - Any DB query. The webhook receiver loads the candidate shifts
@@ -25,11 +30,10 @@
 //   - Any arrival > scheduled_start + 60s = late
 //   - 60s grace covers card-tap-on-the-second wobble
 //   - No-show classification is done at REPORT time (when the
-//     shift end is in the past and start_time_override is still NULL)
+//     shift end is in the past and no arrival is recorded)
 
 const MS_PER_MIN = 60 * 1000
 const DEFAULT_GRACE_MS = 60 * 1000          // 1 min
-const DEFAULT_MATCH_WINDOW_MS = 4 * 3600_000 // 4 h either side of scheduled
 
 // ── Timezone-aware date math ──────────────────────────────────
 
@@ -123,64 +127,153 @@ export function minutesLate(scheduledAt, arrivalAt) {
   return Math.round(diffMs / MS_PER_MIN)
 }
 
-// ── Match arrival event to a scheduled shift ──────────────────
+// ── Decide what a geofence ping does ───────────────────────────
+
+// ARRIVAL.1 (D-D) — an arrival may match a shift at most 45 minutes before it
+// starts. The old symmetric ±4 h window let a 13:46 ping become the paid start
+// of a 17:45 shift.
+export const GEOFENCE_EARLY_WINDOW_MS = 45 * MS_PER_MIN
+// Late matches are bounded by the shift's own end; this is the outer cap.
+export const GEOFENCE_LATE_WINDOW_MS = 4 * 3600_000
+// ARRIVAL.1 (D-E) — a ping while the coach is on a shift they already arrived
+// for, or within this long after it ended, is a re-entry, not a new arrival.
+export const GEOFENCE_REENTRY_GAP_MS = 60 * MS_PER_MIN
+
+const toMs = (v) => (v == null ? NaN : new Date(v).getTime())
+// An invalid date sorts LAST within its (profileId, blockDate) group rather
+// than corrupting a comparator with NaN.
+const sortMs = (v) => { const ms = toMs(v); return Number.isFinite(ms) ? ms : Infinity }
 
 /**
- * From a list of candidate shifts (the caller pre-loads them — this
- * function does no IO), pick the one most likely to be the shift
- * the arriving staff member is here for.
+ * Decide what one geofence ping does. Pure: the caller loads every live
+ * shift for the coach at the location (±1 day) INCLUDING ones that already
+ * have an arrival, because excluding them is what let a duplicate ping move
+ * on to the coach's next shift (16 Sep review: 10 double-stamped pairs).
  *
- * "Most likely" = the shift whose scheduledAt is closest to the
- * arrival, within the match window. Ties broken by earliest
- * scheduledAt (mostly defensive — true ties are rare).
+ * Re-entry requires `scheduledEndAt` on the already-arrived shift — a shift
+ * missing it can never register as on-site, only ever a fresh stamp/already.
+ * Known limitation (D-E): with no exit events, a coach who genuinely leaves
+ * and comes back within the re-entry gap — including someone who goes home
+ * after a shift and returns before their next one starts — reads as still
+ * on site, not as a new arrival. Exception: if an eligible, unstamped shift
+ * (inside its own early/late/end windows) starts more than `reentryGapMs`
+ * after the on-site shift's scheduled end, the ping is NOT read as a
+ * re-entry — it falls through to the normal stamp selection below, which
+ * picks that later shift. Otherwise a ping this far from the coach's next
+ * shift would read as "still on site" for the shift they finished and the
+ * later shift would show no_show on the report.
  *
- * Caller is responsible for pre-filtering to:
- *   - the right profile_id
- *   - the right location_id
- *   - shifts where start_time_override IS NULL (don't overwrite)
- *   - shifts within a sensible date band (today ± 1 day usually)
- *
- * @param {Date|string} arrivalAt
- * @param {Array<{id: string, scheduledAt: Date|string, scheduledEndAt?: Date|string}>} shifts
- * @param {object}  [opts]
- * @param {number}  [opts.windowMs=4h] How far either side of scheduled
- *                                      we accept the arrival. Bigger
- *                                      window = more permissive
- *                                      matching but more risk of
- *                                      attributing a 9am unlock to
- *                                      a 6am shift.
- * @returns {{shift: object, deltaMs: number} | null}
+ * @param {Date|string} eventAt
+ * @param {Array<{id: string, scheduledAt: Date, scheduledEndAt: Date, arrivedAt: Date|null}>} shifts
+ * @param {object} [opts]
+ * @returns {{kind: 'stamp'|'already'|'reentry'|'none', shift: object|null}}
  */
-export function matchArrivalToShift(arrivalAt, shifts, opts = {}) {
-  const { windowMs = DEFAULT_MATCH_WINDOW_MS } = opts
-  const arrivalMs = new Date(arrivalAt).getTime()
-  if (!Number.isFinite(arrivalMs) || !Array.isArray(shifts) || shifts.length === 0) return null
+export function decideGeofenceStamp(eventAt, shifts, opts = {}) {
+  const {
+    earlyMs = GEOFENCE_EARLY_WINDOW_MS,
+    lateMs = GEOFENCE_LATE_WINDOW_MS,
+    reentryGapMs = GEOFENCE_REENTRY_GAP_MS,
+  } = opts
+  const t = toMs(eventAt)
+  if (!Number.isFinite(t) || !Array.isArray(shifts)) return { kind: 'none', shift: null }
+  const valid = shifts.filter((s) => Number.isFinite(toMs(s?.scheduledAt)))
 
-  let best = null
-  for (const s of shifts) {
-    const schedMs = new Date(s.scheduledAt).getTime()
-    if (!Number.isFinite(schedMs)) continue
-    const deltaMs = Math.abs(arrivalMs - schedMs)
-    if (deltaMs > windowMs) continue
-    // Also skip if arrival is AFTER scheduled end — they're not
-    // "arriving for" a shift that's already over.
-    if (s.scheduledEndAt) {
-      const endMs = new Date(s.scheduledEndAt).getTime()
-      if (Number.isFinite(endMs) && arrivalMs > endMs) continue
-    }
-    if (!best || deltaMs < best.deltaMs ||
-        (deltaMs === best.deltaMs && schedMs < new Date(best.shift.scheduledAt).getTime())) {
-      best = { shift: s, deltaMs }
+  // Re-entry: among every shift the coach is still within the gap of, the
+  // one they arrived at MOST RECENTLY is the one they're re-entering.
+  let onSite = null
+  for (const s of valid) {
+    if (
+      s.arrivedAt
+      && toMs(s.arrivedAt) <= t
+      && Number.isFinite(toMs(s.scheduledEndAt))
+      && t <= toMs(s.scheduledEndAt) + reentryGapMs
+      && (!onSite || toMs(s.arrivedAt) > toMs(onSite.arrivedAt))
+    ) {
+      onSite = s
     }
   }
-  return best
+  if (onSite) {
+    const onSiteEndMs = toMs(onSite.scheduledEndAt)
+    // A ping this far past the on-site shift's end, with a later eligible
+    // shift still unstamped, is that later shift's arrival — not a re-entry
+    // of the one the coach already left.
+    const hasLaterEligible = Number.isFinite(onSiteEndMs) && valid.some((s) => {
+      if (s.arrivedAt) return false
+      const start = toMs(s.scheduledAt)
+      const end = toMs(s.scheduledEndAt)
+      if (t < start - earlyMs) return false
+      if (t > start + lateMs) return false
+      if (Number.isFinite(end) && t > end) return false
+      return start > onSiteEndMs + reentryGapMs
+    })
+    if (!hasLaterEligible) return { kind: 'reentry', shift: onSite }
+  }
+
+  // Among the eligible candidates, a shift already RUNNING (start <= t) beats
+  // one that hasn't started — "nearest start" alone picks a future shift
+  // over the one the coach is visibly late for. Prefer the running shift
+  // whose start is latest (most recently due); among not-yet-started
+  // candidates prefer the earliest (nearest) start.
+  let bestRunning = null
+  let bestFuture = null
+  for (const s of valid) {
+    const start = toMs(s.scheduledAt)
+    const end = toMs(s.scheduledEndAt)
+    if (t < start - earlyMs) continue
+    if (t > start + lateMs) continue
+    if (Number.isFinite(end) && t > end) continue
+    if (start <= t) {
+      if (!bestRunning || start > bestRunning.start) bestRunning = { shift: s, start }
+    } else if (!bestFuture || start < bestFuture.start) {
+      bestFuture = { shift: s, start }
+    }
+  }
+  const best = bestRunning || bestFuture
+  if (!best) return { kind: 'none', shift: null }
+  return best.shift.arrivedAt ? { kind: 'already', shift: best.shift } : { kind: 'stamp', shift: best.shift }
+}
+
+/**
+ * Report-time: a shift with no recorded arrival inherits the arrival of the
+ * same coach's previous shift that day when the gap between them is at most
+ * `maxGapMs` (the coach was already on site; the re-entry stamped nothing).
+ * Returns new objects in INPUT order, each with `arrivalInferred`.
+ *
+ * @param {Array<{profileId: string, blockDate: string, scheduledAt: Date, scheduledEndAt: Date, arrivalAt: Date|null}>} rows
+ * @param {object} [opts]
+ */
+export function inferContinuousArrivals(rows, opts = {}) {
+  const { maxGapMs = GEOFENCE_REENTRY_GAP_MS } = opts
+  const out = (rows || []).map((r) => ({ ...r, arrivalInferred: false }))
+  const ordered = [...out].sort((a, b) => (
+    String(a.profileId).localeCompare(String(b.profileId))
+    || String(a.blockDate).localeCompare(String(b.blockDate))
+    || sortMs(a.scheduledAt) - sortMs(b.scheduledAt)
+  ))
+  let prev = null
+  for (const r of ordered) {
+    const sameRun = prev
+      && prev.profileId != null && r.profileId != null && prev.profileId === r.profileId
+      && prev.blockDate != null && r.blockDate != null && prev.blockDate === r.blockDate
+    if (
+      !r.arrivalAt
+      && sameRun
+      && prev.arrivalAt
+      && Number.isFinite(toMs(prev.scheduledEndAt))
+      && toMs(r.scheduledAt) - toMs(prev.scheduledEndAt) <= maxGapMs
+    ) {
+      r.arrivalAt = prev.arrivalAt
+      r.arrivalInferred = true
+    }
+    prev = r
+  }
+  return out
 }
 
 /**
  * Convert a stamped arrival into a Postgres `time` literal — the
- * column type on shift_assignments.start_time_override is `time
- * without time zone`, so we render the wall-clock time in the
- * location's timezone and persist that.
+ * attendance report shows arrival as a wall-clock time, so we render
+ * the wall-clock time in the location's timezone.
  */
 export function arrivalToTimeOnly(arrivalAt, tz = 'UTC') {
   if (!arrivalAt) return null
