@@ -65,7 +65,7 @@ export default function AttendanceReportClient({ activeLocationName }) {
   }, [data, statusFilter, profileFilter])
 
   function downloadCsv() {
-    const header = ['Date', 'Staff', 'Role', 'Scheduled start', 'Actual start', 'Status', 'Minutes late']
+    const header = ['Date', 'Staff', 'Role', 'Scheduled start', 'Actual start', 'On site (inferred)', 'Status', 'Minutes late']
     const lines = [header.join(',')]
     for (const r of filtered) {
       lines.push([
@@ -74,6 +74,7 @@ export default function AttendanceReportClient({ activeLocationName }) {
         r.profile_role || '',
         r.scheduled_start,
         r.actual_start || '',
+        r.arrival_inferred ? 'yes' : '',
         r.status,
         r.minutes_late ?? '',
       ].join(','))

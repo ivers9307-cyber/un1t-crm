@@ -155,7 +155,13 @@ const sortMs = (v) => { const ms = toMs(v); return Number.isFinite(ms) ? ms : In
  * Known limitation (D-E): with no exit events, a coach who genuinely leaves
  * and comes back within the re-entry gap — including someone who goes home
  * after a shift and returns before their next one starts — reads as still
- * on site, not as a new arrival.
+ * on site, not as a new arrival. Exception: if an eligible, unstamped shift
+ * (inside its own early/late/end windows) starts more than `reentryGapMs`
+ * after the on-site shift's scheduled end, the ping is NOT read as a
+ * re-entry — it falls through to the normal stamp selection below, which
+ * picks that later shift. Otherwise a ping this far from the coach's next
+ * shift would read as "still on site" for the shift they finished and the
+ * later shift would show no_show on the report.
  *
  * @param {Date|string} eventAt
  * @param {Array<{id: string, scheduledAt: Date, scheduledEndAt: Date, arrivedAt: Date|null}>} shifts
@@ -186,7 +192,22 @@ export function decideGeofenceStamp(eventAt, shifts, opts = {}) {
       onSite = s
     }
   }
-  if (onSite) return { kind: 'reentry', shift: onSite }
+  if (onSite) {
+    const onSiteEndMs = toMs(onSite.scheduledEndAt)
+    // A ping this far past the on-site shift's end, with a later eligible
+    // shift still unstamped, is that later shift's arrival — not a re-entry
+    // of the one the coach already left.
+    const hasLaterEligible = Number.isFinite(onSiteEndMs) && valid.some((s) => {
+      if (s.arrivedAt) return false
+      const start = toMs(s.scheduledAt)
+      const end = toMs(s.scheduledEndAt)
+      if (t < start - earlyMs) return false
+      if (t > start + lateMs) return false
+      if (Number.isFinite(end) && t > end) return false
+      return start > onSiteEndMs + reentryGapMs
+    })
+    if (!hasLaterEligible) return { kind: 'reentry', shift: onSite }
+  }
 
   // Among the eligible candidates, a shift already RUNNING (start <= t) beats
   // one that hasn't started — "nearest start" alone picks a future shift

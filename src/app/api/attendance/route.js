@@ -120,7 +120,12 @@ export const GET = withAuth(
     const rows = inferContinuousArrivals(base).map((r) => {
       const a = r.a
       const status = bucketLateness(r.scheduledAt, r.arrivalAt, { scheduledEndAt: r.scheduledEndAt, nowMs })
-      const sourceSet = sourcesByAssignment.get(a.id) || new Set()
+      // P2.6 events give the source(s) that MATCHED this assignment, but a
+      // stamp recorded straight onto arrived_at also carries its own source
+      // (arrival_source, mig 609) — union it in so a stamped shift always
+      // shows a source even when no matching event row exists.
+      const sourceSet = new Set(sourcesByAssignment.get(a.id) || [])
+      if (a.arrival_source) sourceSet.add(a.arrival_source)
       return {
         assignment_id: a.id,
         profile_id: a.profile_id,
@@ -137,7 +142,9 @@ export const GET = withAuth(
         // The manager-set paid start, if any. Not an arrival.
         paid_start_override: a.start_time_override || null,
         status,
-        minutes_late:    minutesLate(r.scheduledAt, r.arrivalAt),
+        // A carried-over arrival (back-to-back shift) is not a lateness
+        // measure for THIS shift — the coach didn't walk in at that instant.
+        minutes_late:    r.arrivalInferred ? null : minutesLate(r.scheduledAt, r.arrivalAt),
         // P2.6 — sources that contributed to the stamp. Empty array
         // when never auto-stamped (manual entry / pending / no-show).
         sources: Array.from(sourceSet).sort(),

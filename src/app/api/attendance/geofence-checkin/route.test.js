@@ -371,6 +371,29 @@ describe('POST /api/attendance/geofence-checkin', () => {
     expect(db.inserted[0].matched_assignment_id).toBe('assign-a')
   })
 
+  it('a re-entry-window ping stamps a later shift instead of hiding it when the gap exceeds the re-entry window', async () => {
+    // Mirrors the staff-attendance.test.js case (10:50 ping / A 09:00-10:00
+    // arrived 08:55 / B 11:30-12:30), shifted +70 minutes so the ping lands
+    // on this file's fixed "now" (2026-07-15T11:00:00Z = 12:00 Dublin summer
+    // time): A 10:10-11:10 arrived 10:05, B 12:40-13:40. The 90-minute gap
+    // between A ending and B starting is past the 60-minute re-entry window,
+    // so the ping must stamp B rather than read as A's re-entry.
+    getCurrentUser.mockResolvedValue(staff)
+    const shiftA = shiftRow({
+      id: 'assign-a', arrived_at: '2026-07-15T09:05:00Z', // 10:05 IST
+      block: { id: 'blk-a', location_id: LOC, block_date: '2026-07-15', start_time: '10:10:00', end_time: '11:10:00' },
+    })
+    const shiftB = shiftRow({
+      id: 'assign-b',
+      block: { id: 'blk-b', location_id: LOC, block_date: '2026-07-15', start_time: '12:40:00', end_time: '13:40:00' },
+    })
+    const db = mockDb({ shiftRows: [shiftA, shiftB] })
+    const body = await (await POST(postReq(validBody()))).json()
+    expect(body.data.match_outcome).toBe('matched')
+    expect(shiftUpdates(db)).toEqual([{ table: 'shift_assignments', patch: { arrived_at: '2026-07-15T11:00:00.000Z', arrival_source: 'geofence' } }])
+    expect(db.inserted[0].matched_assignment_id).toBe('assign-b')
+  })
+
   it('no shift in window → no_shift_in_window, audit row written, no stamp', async () => {
     getCurrentUser.mockResolvedValue(staff)
     const db = mockDb({ shiftRows: [] })

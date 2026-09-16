@@ -191,6 +191,25 @@ describe('decideGeofenceStamp', () => {
     const d = decideGeofenceStamp(at('09:30'), shifts)
     expect(d).toMatchObject({ kind: 'reentry', shift: { id: 'b' } })
   })
+
+  it('a re-entry-window ping does not hide a later shift the coach has not started yet (gap > reentry gap)', () => {
+    // A 09:00-10:00 arrived 08:55; ping at 10:50 is within A's re-entry
+    // window (end 10:00 + 60 min = 11:00), but B starts at 11:30 — 90
+    // minutes after A ended, well past the 60-minute re-entry gap. B is
+    // eligible (10:50 is inside its 45-minute early window) and unstamped,
+    // so the ping must stamp B, not read as a re-entry of A.
+    const shifts = [shift('a', '09:00', '10:00', '08:55'), shift('b', '11:30', '12:30')]
+    const d = decideGeofenceStamp(at('10:50'), shifts)
+    expect(d).toMatchObject({ kind: 'stamp', shift: { id: 'b' } })
+  })
+
+  it('a re-entry-window ping still reads as a re-entry when the next shift is inside the gap', () => {
+    // Same as above but B starts at 10:45 — only 45 minutes after A ends,
+    // inside the 60-minute re-entry gap. Still a re-entry of A.
+    const shifts = [shift('a', '09:00', '10:00', '08:55'), shift('b', '10:45', '11:30')]
+    const d = decideGeofenceStamp(at('10:30'), shifts)
+    expect(d).toMatchObject({ kind: 'reentry', shift: { id: 'a' } })
+  })
 })
 
 describe('inferContinuousArrivals', () => {
