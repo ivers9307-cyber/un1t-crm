@@ -309,6 +309,20 @@ describe('PUT /api/schedule/assignments/[id] — hours are manager-set (D3)', ()
     await PUT(req({ start_time_override: '10:00:00' }), PROPS)
     expect(markRosterChangesNotified).not.toHaveBeenCalled()
   })
+
+  // NOTIFY.1 review — a dedup hit means notifyUsersOnce found an existing
+  // claim for this SAME key (identical override values), not that THIS
+  // change was delivered — e.g. an A→B→A round trip lands back on a key it
+  // already claimed, or the claim itself is a quiet no-op. It must not stamp.
+  it('does not stamp on a dedup hit alone', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    notifyUsersOnce.mockResolvedValue({ sent: 0, emailed: 0, deduped: 1 })
+    const { db } = buildDb()
+    createServerClient.mockReturnValue(db)
+
+    await PUT(req({ start_time_override: '10:00:00' }), PROPS)
+    expect(markRosterChangesNotified).not.toHaveBeenCalled()
+  })
 })
 
 describe('DELETE /api/schedule/assignments/[id] — a coach cannot drop themselves (D2)', () => {

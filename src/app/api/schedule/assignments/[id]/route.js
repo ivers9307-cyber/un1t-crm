@@ -207,10 +207,12 @@ export async function PUT(request, props) {
       // NOTIFY.1 review — this PUT already pushed/emailed the coach above;
       // stamp the row it just wrote so renotifyChangedCoaches doesn't send a
       // second "your shift changed" message at the next re-publish/approve.
-      const delivered = deliveryResult && (
-        (deliveryResult.sent || 0) + (deliveryResult.emailed || 0) > 0 ||
-        (deliveryResult.deduped || 0) > 0
-      )
+      // `deduped` deliberately does NOT count as delivery: a dedup hit means
+      // notifyUsersOnce found an existing claim for the SAME key (identical
+      // override values — e.g. an A→B→A round trip lands back on a key it
+      // already claimed), which says nothing about whether THIS change was
+      // delivered, only that some earlier identical-content send claimed it.
+      const delivered = deliveryResult && (deliveryResult.sent || 0) + (deliveryResult.emailed || 0) > 0
       if (delivered) {
         await markRosterChangesNotified(db, {
           locationId: assignment.shift_blocks?.location_id,
