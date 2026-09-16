@@ -41,6 +41,7 @@ function makeDb({ rangeResults = [] } = {}) {
           eq() { return chain },
           gte() { return chain },
           lte() { return chain },
+          order() { return chain },
           then(onF, onR) { return Promise.resolve(result).then(onF, onR) },
         }
         return chain
@@ -68,7 +69,7 @@ describe('buildRosterChangeMessage', () => {
   it('one addition', () => {
     expect(buildRosterChangeMessage([change('c1', '2026-09-18')])).toEqual({
       title: 'Added to a shift',
-      body: "You're now on the roster for Fri 18 Sep. Tap to see your shifts.",
+      body: "You're now on the roster for Fri 18 Sep.",
     })
   })
 
@@ -87,13 +88,13 @@ describe('buildRosterChangeMessage', () => {
     ])
     expect(msg).toEqual({
       title: 'Roster updated',
-      body: 'You were added to 2 shifts and removed from 1 shift between Fri 18 Sep and Tue 22 Sep. Tap to see your shifts.',
+      body: 'You were added to 2 shifts and removed from 1 shift between Fri 18 Sep and Tue 22 Sep.',
     })
   })
 
   it('several changes on one day', () => {
     const msg = buildRosterChangeMessage([change('c1', '2026-09-18', 'assigned', 'b1'), change('c1', '2026-09-18', 'assigned', 'b2')])
-    expect(msg.body).toBe('You were added to 2 shifts on Fri 18 Sep. Tap to see your shifts.')
+    expect(msg.body).toBe('You were added to 2 shifts on Fri 18 Sep.')
   })
 })
 
@@ -123,12 +124,37 @@ describe('notifyRosterChanges', () => {
     ])
   })
 
-  it('skips changes to shifts already in the past, and leaves them unstamped', async () => {
+  it('stamps changes to shifts already in the past, without sending', async () => {
     const db = makeDb()
     const res = await notifyRosterChanges(db, opts([change('c1', '2026-09-15')]))
     expect(notifyUsers).not.toHaveBeenCalled()
-    expect(db.updates).toHaveLength(0)
+    expect(db.updates).toHaveLength(1)
+    expect(db.updates[0].filters).toEqual([
+      ['eq', 'location_id', 'loc-1'],
+      ['eq', 'coach_id', 'c1'],
+      ['in', 'block_id', ['blk-2026-09-15']],
+      ['is', 'notified_at', null],
+    ])
     expect(res.skippedPast).toBe(1)
+  })
+
+  it('for a coach with mixed past and future changes, messages only the future ones but stamps all their block ids', async () => {
+    const db = makeDb()
+    const res = await notifyRosterChanges(db, opts([
+      change('c1', '2026-09-15'),
+      change('c1', '2026-09-20'),
+    ]))
+    expect(notifyUsers).toHaveBeenCalledTimes(1)
+    const [, payload] = notifyUsers.mock.calls[0]
+    expect(payload.body).toBe("You're now on the roster for Sun 20 Sep.")
+    expect(res.skippedPast).toBe(1)
+    expect(res.notified).toBe(1)
+    expect(db.updates[0].filters).toEqual([
+      ['eq', 'location_id', 'loc-1'],
+      ['eq', 'coach_id', 'c1'],
+      ['in', 'block_id', ['blk-2026-09-15', 'blk-2026-09-20']],
+      ['is', 'notified_at', null],
+    ])
   })
 
   it('does not message a manager about their own change, but stamps it', async () => {
@@ -139,8 +165,25 @@ describe('notifyRosterChanges', () => {
     expect(res.skippedSelf).toBe(1)
   })
 
-  it('leaves rows unstamped when nothing was delivered, so re-publish tries again', async () => {
+  it('stamps when only the fallback email delivered', async () => {
+    notifyUsers.mockResolvedValue({ sent: 0, emailed: 1 })
+    const db = makeDb()
+    const res = await notifyRosterChanges(db, opts([change('c1', '2026-09-18')]))
+    expect(db.updates).toHaveLength(1)
+    expect(res.notified).toBe(1)
+  })
+
+  it('stamps and counts optedOut when the coach turned the category off', async () => {
     notifyUsers.mockResolvedValue({ sent: 0, emailed: 0, skipped: 1 })
+    const db = makeDb()
+    const res = await notifyRosterChanges(db, opts([change('c1', '2026-09-18')]))
+    expect(db.updates).toHaveLength(1)
+    expect(res.optedOut).toBe(1)
+    expect(res.notified).toBe(0)
+  })
+
+  it('leaves rows unstamped when nothing was delivered, so re-publish tries again', async () => {
+    notifyUsers.mockResolvedValue({ sent: 0, emailed: 0, failed: 1 })
     const db = makeDb()
     const res = await notifyRosterChanges(db, opts([change('c1', '2026-09-18')]))
     expect(db.updates).toHaveLength(0)
@@ -156,6 +199,22 @@ describe('notifyRosterChanges', () => {
     notifyUsers.mockRejectedValue(new Error('push down'))
     await expect(notifyRosterChanges(makeDb(), opts([change('c1', '2026-09-18')]))).resolves.toMatchObject({ notified: 0 })
     expect(logWarn).toHaveBeenCalled()
+  })
+
+  it("does not let one coach's failure stop the others", async () => {
+    notifyUsers.mockImplementation(async (ids) => {
+      if (ids[0] === 'c1') throw new Error('push down')
+      return { sent: 1, emailed: 0 }
+    })
+    const db = makeDb()
+    const res = await notifyRosterChanges(db, opts([
+      change('c1', '2026-09-18'),
+      change('c2', '2026-09-19'),
+    ]))
+    expect(res.notified).toBe(1)
+    expect(logWarn).toHaveBeenCalled()
+    const c2Update = db.updates.find((u) => u.filters.some((f) => f[1] === 'coach_id' && f[2] === 'c2'))
+    expect(c2Update).toBeTruthy()
   })
 })
 

@@ -44,7 +44,7 @@ export function buildRosterChangeMessage(changes) {
   if (changes.length === 1) {
     const day = formatShiftDate(first)
     return added === 1
-      ? { title: 'Added to a shift', body: `You're now on the roster for ${day}. Tap to see your shifts.` }
+      ? { title: 'Added to a shift', body: `You're now on the roster for ${day}.` }
       : { title: 'Removed from a shift', body: `You're no longer on the roster for ${day}.` }
   }
 
@@ -54,7 +54,7 @@ export function buildRosterChangeMessage(changes) {
   const span = first === last
     ? `on ${formatShiftDate(first)}`
     : `between ${formatShiftDate(first)} and ${formatShiftDate(last)}`
-  return { title: 'Roster updated', body: `You were ${parts.join(' and ')} ${span}. Tap to see your shifts.` }
+  return { title: 'Roster updated', body: `You were ${parts.join(' and ')} ${span}.` }
 }
 
 async function markNotified(db, { locationId, coachId, blockIds }) {
@@ -72,6 +72,13 @@ async function markNotified(db, { locationId, coachId, blockIds }) {
 /**
  * Notify each affected coach once. Best-effort; never throws.
  *
+ * A coach whose changes are ALL in the past gets no message (nobody needs
+ * telling about a shift that already happened) but their rows ARE stamped —
+ * leaving them unstamped would make the re-publish safety net send a late
+ * "Roster updated" for something already over. A coach with a MIX of past
+ * and future changes is messaged about the future ones only, and — on
+ * delivery — every one of their block ids (past and future) is stamped.
+ *
  * @param {object} db service-role client
  * @param {object} opts
  * @param {string} opts.locationId
@@ -79,40 +86,65 @@ async function markNotified(db, { locationId, coachId, blockIds }) {
  * @param {Array<{coachId: string, blockId: string, blockDate: string, action: string}>} opts.changes
  * @param {string} [opts.todayStr]   YYYY-MM-DD (Dublin); injectable for tests
  */
-export async function notifyRosterChanges(db, { locationId, actorId, changes, todayStr = dublinTodayStr() } = {}) {
-  const result = { notified: 0, skippedSelf: 0, skippedPast: 0, undelivered: 0 }
+export async function notifyRosterChanges(db, { locationId, actorId, changes, todayStr } = {}) {
+  const today = todayStr || dublinTodayStr()
+  const result = { notified: 0, skippedSelf: 0, skippedPast: 0, undelivered: 0, optedOut: 0 }
   try {
     const byCoach = new Map()
     for (const c of changes || []) {
       if (!c?.coachId || !c?.blockDate || !NOTIFIABLE.has(c.action)) continue
-      if (c.blockDate < todayStr) { result.skippedPast++; continue }
       if (!byCoach.has(c.coachId)) byCoach.set(c.coachId, [])
       byCoach.get(c.coachId).push(c)
     }
 
     for (const [coachId, list] of byCoach) {
-      const blockIds = [...new Set(list.map((c) => c.blockId).filter(Boolean))]
-      if (coachId === actorId) {
-        // They made the change themselves; there is nobody to tell.
-        result.skippedSelf++
-        await markNotified(db, { locationId, coachId, blockIds })
-        continue
-      }
-      const { title, body } = buildRosterChangeMessage(list)
-      const firstDate = list.map((c) => c.blockDate).sort()[0]
-      const totals = await notifyUsers([coachId], {
-        title,
-        body,
-        category: 'shift_adjusted',
-        emailSubject: title,
-        data: { type: 'shift_adjusted', block_date: firstDate, location_id: locationId },
-      })
-      if ((totals?.sent || 0) + (totals?.emailed || 0) > 0) {
-        result.notified++
-        await markNotified(db, { locationId, coachId, blockIds })
-      } else {
-        // No token and no email: leave the rows for the re-publish safety net.
-        result.undelivered++
+      try {
+        const future = list.filter((c) => c.blockDate >= today)
+        const past = list.filter((c) => c.blockDate < today)
+        result.skippedPast += past.length
+        const allBlockIds = [...new Set(list.map((c) => c.blockId).filter(Boolean))]
+
+        if (future.length === 0) {
+          // Nothing left to tell them about, but stamp so the re-publish
+          // safety net doesn't message them about a shift already over.
+          await markNotified(db, { locationId, coachId, blockIds: allBlockIds })
+          continue
+        }
+
+        if (coachId === actorId) {
+          // They made the change themselves; there is nobody to tell.
+          result.skippedSelf++
+          await markNotified(db, { locationId, coachId, blockIds: allBlockIds })
+          continue
+        }
+
+        const { title, body } = buildRosterChangeMessage(future)
+        const firstDate = future.map((c) => c.blockDate).sort()[0]
+        const totals = await notifyUsers([coachId], {
+          title,
+          body,
+          category: 'shift_adjusted',
+          emailSubject: title,
+          data: { type: 'shift_adjusted', block_date: firstDate, location_id: locationId },
+        })
+        const delivered = (totals?.sent || 0) + (totals?.emailed || 0) > 0
+        const failed = (totals?.failed || 0) > 0
+        if (delivered) {
+          result.notified++
+          await markNotified(db, { locationId, coachId, blockIds: allBlockIds })
+        } else if (!failed && (totals?.skipped || 0) > 0) {
+          // The coach turned this category off — the re-publish path would
+          // otherwise message them on a different category behind their back.
+          result.optedOut++
+          await markNotified(db, { locationId, coachId, blockIds: allBlockIds })
+        } else {
+          // No token, no email, and no explicit opt-out: leave the rows for
+          // the re-publish safety net.
+          result.undelivered++
+        }
+      } catch (e) {
+        // One coach's failure must not stop the rest of the batch.
+        logWarn('roster-change-notify', 'notify failed for coach', { locationId, coachId, err: e?.message })
       }
     }
   } catch (e) {
@@ -129,6 +161,7 @@ export async function readAssignmentKeysInRange(db, { locationId, startDate, end
     .eq('shift_blocks.location_id', locationId)
     .gte('shift_blocks.block_date', startDate)
     .lte('shift_blocks.block_date', endDate)
+    .order('block_id')
   if (error) return { rows: null, error, truncated: false }
   const rows = data || []
   return { rows, error: null, truncated: rows.length >= RANGE_CAP }
