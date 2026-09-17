@@ -73,66 +73,11 @@ export function swapShiftShape(a) {
   }
 }
 
-/**
- * Fetch the per-coach scheduled rows in [startDate, endDate] for a
- * location from the Roster v2 model, normalised to the shape the copy
- * routes need. Each row is one coach assigned to one block:
- *
- *   { profileId, shiftTemplateId, shiftDate,
- *     startTimeOverride, endTimeOverride, notes }
- *
- * Overrides are the collapsed effective values (see effectiveOverride).
- *
- * @param {import('@supabase/supabase-js').SupabaseClient} db service-role client
- * @param {object} opts
- * @param {string} opts.locationId
- * @param {string} opts.startDate  YYYY-MM-DD inclusive
- * @param {string} opts.endDate    YYYY-MM-DD inclusive
- * @returns {Promise<{ rows: Array<object>, error: object|null }>}
- */
-export async function fetchSourceShiftRows(db, { locationId, startDate, endDate }) {
-  const { data, error } = await db
-    .from('shift_assignments')
-    .select(`
-      profile_id,
-      status,
-      notes,
-      start_time_override,
-      end_time_override,
-      shift_blocks!inner (
-        location_id,
-        template_id,
-        block_date,
-        start_time,
-        end_time,
-        shift_templates ( start_time, end_time )
-      )
-    `)
-    .eq('shift_blocks.location_id', locationId)
-    .gte('shift_blocks.block_date', startDate)
-    .lte('shift_blocks.block_date', endDate)
-
-  if (error) return { rows: [], error }
-
-  const rows = []
-  for (const a of data || []) {
-    const b = a.shift_blocks
-    if (!b) continue
-    // ROSTER-FIX.1 — a cancelled assignment is a dropped shift. Copying it
-    // forward resurrected a coach onto a week they had already been let off.
-    if (!isLiveAssignment(a)) continue
-    const tpl = b.shift_templates || {}
-    rows.push({
-      profileId: a.profile_id,
-      shiftTemplateId: b.template_id,
-      shiftDate: b.block_date,
-      startTimeOverride: effectiveOverride(a.start_time_override, b.start_time, tpl.start_time),
-      endTimeOverride: effectiveOverride(a.end_time_override, b.end_time, tpl.end_time),
-      notes: a.notes ?? null,
-    })
-  }
-  return { rows, error: null }
-}
+// COPYMODES.1 — the copy routes' source reader (fetchSourceShiftRows) moved to
+// src/lib/roster-copy.js as fetchSourceBlocks: it reads BLOCKS (so empty ones
+// can be carried), pages past the 1,000-row cap, and returns raw times so each
+// copy mode can decide what to keep. effectiveOverride stays here for the swap
+// and API shapes below.
 
 // RETIRE-SHIFTS-MIRROR.5d — the legacy-shaped row GET /api/schedule/shifts
 // returns, built from the Roster v2 model. Mobile is the only consumer; the

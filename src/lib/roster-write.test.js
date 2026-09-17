@@ -1,7 +1,7 @@
 // RETIRE-SHIFTS-MIRROR.4 — tests for upsertShiftAssignment (find-or-create
 // block + upsert assignment), the writer-side new-model entry point.
 import { describe, it, expect } from 'vitest'
-import { upsertShiftAssignment, bulkUpsertShiftAssignments } from './roster-write'
+import { upsertShiftAssignment, bulkUpsertShiftAssignments, timesDiffer, overrideAgainstBlock } from './roster-write'
 
 // Per-table mock of the supabase builder. `existingBlock` null → the helper
 // must create one; captured.blockInsert / captured.assignmentUpsert record
@@ -176,8 +176,8 @@ describe('upsertShiftAssignment', () => {
 // Per-table mock for the batch writer. shift_blocks is queried twice —
 // a select-chain (existing-block lookup) and an insert-chain (create) —
 // so the builder supports both.
-function makeBulkDb({ templates = [], existingBlocks = [], createdBlocks = [], publishedRosters = [], rosterError = null, insertedAssignments = null, assignmentError = null } = {}) {
-  const captured = { blockInsert: null, assignmentUpsert: null, rosterQueries: [] }
+function makeBulkDb({ templates = [], existingBlocks = [], createdBlocks = null, publishedRosters = [], rosterError = null, insertedAssignments = null, assignmentError = null } = {}) {
+  const captured = { blockInsert: null, blockInsertBatches: [], blockPages: [], assignmentUpsert: null, assignmentUpsertBatches: [], rosterQueries: [] }
   const db = {
     captured,
     from(table) {
@@ -217,9 +217,25 @@ function makeBulkDb({ templates = [], existingBlocks = [], createdBlocks = [], p
         return { select: () => ({ in: () => ({ eq: (col, val) => { captured.templateScope = { col, val }; return Promise.resolve({ data: templates, error: null }) } }) }) }
       }
       if (table === 'shift_blocks') {
+        // COPYMODES.1 — the existing-block lookup pages (.order().range())
+        // past the 1,000-row cap, and inserts are chunked; the mock pages
+        // `existingBlocks` and records every insert batch.
+        const chain = {
+          eq: () => chain, in: () => chain, gte: () => chain, lte: () => chain, order: () => chain,
+          range: (from, to) => {
+            captured.blockPages.push([from, to])
+            return Promise.resolve({ data: existingBlocks.slice(from, to + 1), error: null })
+          },
+        }
         return {
-          select: () => ({ eq: () => ({ in: () => ({ gte: () => ({ lte: () => Promise.resolve({ data: existingBlocks, error: null }) }) }) }) }),
-          insert: (rows) => { captured.blockInsert = rows; return { select: () => Promise.resolve({ data: createdBlocks, error: null }) } },
+          select: () => chain,
+          insert: (rows) => {
+            captured.blockInsertBatches.push(rows)
+            captured.blockInsert = captured.blockInsertBatches.flat()
+            // Default: echo the inserted rows back with ids, as PostgREST does.
+            const echo = createdBlocks ?? rows.map((r, i) => ({ id: `blk-new-${captured.blockInsertBatches.length}-${i}`, ...r }))
+            return { select: () => Promise.resolve({ data: echo, error: null }) }
+          },
         }
       }
       if (table === 'shift_assignments') {
@@ -232,7 +248,8 @@ function makeBulkDb({ templates = [], existingBlocks = [], createdBlocks = [], p
         // count == payload-length behaviour.
         return {
           upsert: (rows, opts) => {
-            captured.assignmentUpsert = { rows, opts }
+            captured.assignmentUpsertBatches.push(rows)
+            captured.assignmentUpsert = { rows: captured.assignmentUpsertBatches.flat(), opts }
             return {
               select: () => Promise.resolve(
                 assignmentError
@@ -454,5 +471,111 @@ describe('bulkUpsertShiftAssignments', () => {
       rows: [{ profileId: 'p1', shiftTemplateId: 't1', shiftDate: '2026-06-08' }],
     })
     expect(res).toEqual({ count: 0, error: { message: 'upsert boom' } })
+  })
+})
+
+// COPYMODES.1 — exact vs template copies share this writer.
+describe('bulkUpsertShiftAssignments — COPYMODES.1', () => {
+  const tplMin = { id: 't1', start_time: '09:00:00', end_time: '10:00:00', min_coaches: 2, max_coaches: 12 }
+
+  it('writes the template min_coaches on a block it creates (it used to fall to the DB default)', async () => {
+    const db = makeBulkDb({ templates: [tplMin] })
+    await bulkUpsertShiftAssignments(db, { locationId: 'loc1', rows: [{ profileId: 'p1', shiftTemplateId: 't1', shiftDate: '2026-06-08' }] })
+    expect(db.captured.blockInsert[0]).toMatchObject({ min_coaches: 2, max_coaches: 12, start_time: '09:00:00', end_time: '10:00:00' })
+  })
+
+  it('defaults min_coaches to 1 and clamps it to max_coaches (mig 177 CHECK)', async () => {
+    const db = makeBulkDb({ templates: [{ ...tplMin, min_coaches: null, max_coaches: null }] })
+    await bulkUpsertShiftAssignments(db, {
+      locationId: 'loc1',
+      rows: [{ profileId: 'p1', shiftTemplateId: 't1', shiftDate: '2026-06-08' }],
+      blocks: [{ shiftTemplateId: 't1', shiftDate: '2026-06-09', minCoaches: 9, maxCoaches: 4 }],
+    })
+    const byDate = Object.fromEntries(db.captured.blockInsert.map((b) => [b.block_date, b]))
+    expect(byDate['2026-06-08']).toMatchObject({ min_coaches: 1, max_coaches: 15 })
+    expect(byDate['2026-06-09']).toMatchObject({ min_coaches: 4, max_coaches: 4 })
+  })
+
+  it('ensures a listed block with nobody on it, seeded from the spec not the template', async () => {
+    const db = makeBulkDb({ templates: [tplMin] })
+    const res = await bulkUpsertShiftAssignments(db, {
+      locationId: 'loc1', actorId: 'mgr1', rows: [],
+      blocks: [{ shiftTemplateId: 't1', shiftDate: '2026-06-08', startTime: '06:30:00', endTime: '08:00:00', minCoaches: 1, maxCoaches: 3 }],
+    })
+    expect(res).toEqual({ count: 0, error: null })
+    expect(db.captured.blockInsert).toEqual([expect.objectContaining({
+      template_id: 't1', block_date: '2026-06-08', start_time: '06:30:00', end_time: '08:00:00', min_coaches: 1, max_coaches: 3, created_by: 'mgr1',
+    })])
+    expect(db.captured.assignmentUpsert).toBeNull()
+  })
+
+  it('never touches a block that already exists, even when a spec lists different times', async () => {
+    const db = makeBulkDb({ templates: [tplMin], existingBlocks: [{ id: 'blk-x', template_id: 't1', block_date: '2026-06-08', start_time: '09:00:00', end_time: '10:00:00' }] })
+    await bulkUpsertShiftAssignments(db, {
+      locationId: 'loc1', rows: [],
+      blocks: [{ shiftTemplateId: 't1', shiftDate: '2026-06-08', startTime: '06:30:00', endTime: '08:00:00' }],
+    })
+    expect(db.captured.blockInsert).toBeNull()
+  })
+
+  it('exact: absolute times on a block created at the source times carry NO redundant override', async () => {
+    const db = makeBulkDb({ templates: [tplMin] })
+    await bulkUpsertShiftAssignments(db, {
+      locationId: 'loc1',
+      blocks: [{ shiftTemplateId: 't1', shiftDate: '2026-06-08', startTime: '09:30:00', endTime: '10:00:00' }],
+      rows: [
+        { profileId: 'p1', shiftTemplateId: 't1', shiftDate: '2026-06-08', startTime: '09:30:00', endTime: '10:00:00' },
+        { profileId: 'p2', shiftTemplateId: 't1', shiftDate: '2026-06-08', startTime: '09:30:00', endTime: '09:45:00', partialReason: 'dentist', notes: 'n' },
+      ],
+    })
+    expect(db.captured.blockInsert[0]).toMatchObject({ start_time: '09:30:00', end_time: '10:00:00' })
+    expect(db.captured.assignmentUpsert.rows).toEqual([
+      expect.objectContaining({ profile_id: 'p1', start_time_override: null, end_time_override: null, partial_reason: null }),
+      expect.objectContaining({ profile_id: 'p2', start_time_override: null, end_time_override: '09:45:00', partial_reason: 'dentist', notes: 'n' }),
+    ])
+  })
+
+  it('exact: on a pre-existing block at template times the override carries the difference', async () => {
+    const db = makeBulkDb({ templates: [tplMin], existingBlocks: [{ id: 'blk-x', template_id: 't1', block_date: '2026-06-08', start_time: '09:00:00', end_time: '10:00:00' }] })
+    await bulkUpsertShiftAssignments(db, {
+      locationId: 'loc1',
+      blocks: [{ shiftTemplateId: 't1', shiftDate: '2026-06-08', startTime: '09:30:00', endTime: '10:00:00' }],
+      rows: [{ profileId: 'p1', shiftTemplateId: 't1', shiftDate: '2026-06-08', startTime: '09:30:00', endTime: '10:00:00' }],
+    })
+    expect(db.captured.blockInsert).toBeNull()
+    expect(db.captured.assignmentUpsert.rows[0]).toMatchObject({ block_id: 'blk-x', start_time_override: '09:30:00', end_time_override: null })
+  })
+
+  it('template: explicit null overrides stay null whatever the block says', async () => {
+    const db = makeBulkDb({ templates: [tplMin], existingBlocks: [{ id: 'blk-x', template_id: 't1', block_date: '2026-06-08', start_time: '11:00:00', end_time: '12:00:00' }] })
+    await bulkUpsertShiftAssignments(db, {
+      locationId: 'loc1',
+      rows: [{ profileId: 'p1', shiftTemplateId: 't1', shiftDate: '2026-06-08', startTimeOverride: null, endTimeOverride: null, partialReason: null, notes: null }],
+    })
+    expect(db.captured.assignmentUpsert.rows[0]).toMatchObject({ start_time_override: null, end_time_override: null, partial_reason: null, notes: null })
+  })
+
+  it('pages the existing-block lookup and chunks the writes under the 1,000-row cap', async () => {
+    // 1,200 existing blocks: one per day index, so the lookup needs two pages.
+    const existing = Array.from({ length: 1200 }, (_, i) => ({ id: `blk-${i}`, template_id: 't1', block_date: `d${String(i).padStart(4, '0')}`, start_time: '09:00:00', end_time: '10:00:00' }))
+    const db = makeBulkDb({ templates: [tplMin], existingBlocks: existing })
+    const rows = existing.map((b) => ({ profileId: 'p1', shiftTemplateId: 't1', shiftDate: b.block_date }))
+    const res = await bulkUpsertShiftAssignments(db, { locationId: 'loc1', rows })
+    expect(db.captured.blockPages).toEqual([[0, 999], [1000, 1999]])
+    expect(db.captured.blockInsert).toBeNull() // every block was found, none re-inserted
+    expect(db.captured.assignmentUpsertBatches.map((b) => b.length)).toEqual([500, 500, 200])
+    expect(res).toEqual({ count: 1200, error: null })
+  })
+})
+
+describe('timesDiffer / overrideAgainstBlock', () => {
+  it('treats HH:MM and HH:MM:SS as the same time', () => {
+    expect(timesDiffer('09:30', '09:30:00')).toBe(false)
+    expect(timesDiffer('09:30:00', '09:45:00')).toBe(true)
+  })
+  it('only returns an override when the time differs from the block', () => {
+    expect(overrideAgainstBlock('09:30:00', '09:30:00')).toBeNull()
+    expect(overrideAgainstBlock('09:15:00', '09:30:00')).toBe('09:15:00')
+    expect(overrideAgainstBlock(null, '09:30:00')).toBeNull()
   })
 })
