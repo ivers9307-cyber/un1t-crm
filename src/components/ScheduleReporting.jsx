@@ -5,6 +5,10 @@ import { Clock, Euro, CalendarOff, Users, TrendingUp, Play, Calendar, FileText, 
 import { EmptyState, Loading, Modal } from '@/components/ui'
 import { toJsDay, fromJsDay, DAY_NAMES_MONDAY_FIRST } from '@/lib/report-schedule-days'
 import { formatDate } from '@/lib/roster'
+import { canViewReportType } from '@/lib/report-access'
+import {
+  EMPTY_CELL, formatEuroCell, formatHoursCell, readStaffCostRow, readStaffHoursTotal, staffCostHasSplit,
+} from '@/lib/report-staff-table'
 // ROSTER-FIX.6a — one failure shape and one banner across the schedule
 // screens, so no call site can quietly forget to check the response.
 import ScheduleErrorBanner from './schedule/ScheduleErrorBanner'
@@ -30,7 +34,7 @@ const FREQ_OPTIONS = [
 ]
 
 function formatCurrency(val) {
-  return new Intl.NumberFormat('en-IE', { style: 'currency', currency: 'EUR' }).format(val)
+  return formatEuroCell(val)
 }
 
 // ROSTER-FIX.6a — toISOString() on a LOCAL Date shifts to UTC, so under
@@ -69,6 +73,10 @@ export default function ScheduleReporting({ user }) {
   const [error, setError] = useState(null)
 
   const locationId = user.activeLocation?.id
+  // STAFFCOST.1 — Staff Cost shows pay rates, so its tile is hidden from head
+  // coaches. Display only: the API refuses to generate, list or schedule it.
+  const reportTypes = REPORT_TYPES.filter(rt => canViewReportType(user, locationId, rt.key))
+  const resultType = reportResult?.report_type || selectedReport
 
   const loadReports = useCallback(async () => {
     setLoadingHistory(true)
@@ -174,8 +182,8 @@ export default function ScheduleReporting({ user }) {
           {/* Report type selector */}
           {/* ROSTER-FIX.6b — five report tiles, each with an icon over a
               two-line label, will not fit a phone in one row. */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
-            {REPORT_TYPES.map(rt => {
+          <div className={`grid grid-cols-2 sm:grid-cols-3 ${reportTypes.length >= 5 ? 'md:grid-cols-5' : 'md:grid-cols-4'} gap-2`}>
+            {reportTypes.map(rt => {
               const Icon = rt.icon
               return (
                 <button
@@ -198,7 +206,7 @@ export default function ScheduleReporting({ user }) {
           {selectedReport && (
             <>
               <div className="text-sm text-un1t-subtle">
-                {REPORT_TYPES.find(r => r.key === selectedReport)?.description}
+                {reportTypes.find(r => r.key === selectedReport)?.description}
               </div>
 
               {/* Date range + generate */}
@@ -250,7 +258,7 @@ export default function ScheduleReporting({ user }) {
                     <div key={key} className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
                       <div className="text-xs text-un1t-subtle uppercase tracking-wider">{key.replace(/_/g, ' ')}</div>
                       <div className="text-xl font-bold mt-1">
-                        {key.includes('cost') || key === 'currency' ? (typeof val === 'number' ? formatCurrency(val) : val) : val}
+                        {key.includes('cost') ? formatCurrency(val) : (typeof val === 'number' && !Number.isFinite(val) ? EMPTY_CELL : val)}
                         {key.includes('hours') && <span className="text-sm text-un1t-subtle ml-1">hrs</span>}
                         {key.includes('utilisation') && <span className="text-sm text-un1t-subtle ml-1">%</span>}
                       </div>
@@ -265,7 +273,15 @@ export default function ScheduleReporting({ user }) {
               </div>
 
               {/* Staff data table */}
-              {reportResult.report_data?.staff && (
+              {/* STAFFCOST.1 — staff_cost has its own table: it read hourly_rate
+                  and total_hours, which the generator stopped writing on 30 Apr,
+                  so every rate cell was €NaN and every hours cell 0. The
+                  helpers read the current fields and fall back field by field
+                  for reports stored before then. */}
+              {reportResult.report_data?.staff && resultType === 'staff_cost' && (
+                <StaffCostTable rows={reportResult.report_data.staff} />
+              )}
+              {reportResult.report_data?.staff && resultType !== 'staff_cost' && (
                 <div className="bg-un1t-surface border border-un1t-border rounded-lg overflow-x-auto">
                   <table className="w-full text-sm min-w-[600px]">
                     <thead>
@@ -273,13 +289,11 @@ export default function ScheduleReporting({ user }) {
                         <th className="text-left px-4 py-3">Staff Member</th>
                         <th className="text-left px-4 py-3">Role</th>
                         <th className="text-left px-4 py-3">Type</th>
-                        {selectedReport === 'staff_cost' && <th className="text-right px-4 py-3">Rate (€/hr)</th>}
                         <th className="text-right px-4 py-3">
-                          {selectedReport === 'utilisation' ? 'Contracted' : 'Total Hours'}
+                          {resultType === 'utilisation' ? 'Contracted' : 'Total Hours'}
                         </th>
-                        {selectedReport === 'utilisation' && <th className="text-right px-4 py-3">Actual</th>}
-                        {selectedReport === 'staff_cost' && <th className="text-right px-4 py-3">Total Cost</th>}
-                        {selectedReport === 'utilisation' && <th className="text-right px-4 py-3">Utilisation</th>}
+                        {resultType === 'utilisation' && <th className="text-right px-4 py-3">Actual</th>}
+                        {resultType === 'utilisation' && <th className="text-right px-4 py-3">Utilisation</th>}
                       </tr>
                     </thead>
                     <tbody>
@@ -287,27 +301,19 @@ export default function ScheduleReporting({ user }) {
                         <tr key={i} className="border-b border-un1t-border/50 hover:bg-un1t-border/30">
                           <td className="px-4 py-3 font-medium">{s.name}</td>
                           <td className="px-4 py-3 text-un1t-subtle capitalize">{s.role}</td>
-                          <td className="px-4 py-3">
-                            <span className={`text-xs px-2 py-0.5 rounded-full ${s.employment_type === 'contractor' ? 'bg-amber-500/20 text-amber-700' : 'bg-blue-500/20 text-blue-700'}`}>
-                              {s.employment_type === 'contractor' ? 'Contractor' : 'FTE'}
-                            </span>
-                          </td>
-                          {selectedReport === 'staff_cost' && (
-                            <td className="px-4 py-3 text-right">{formatCurrency(s.hourly_rate)}</td>
-                          )}
+                          <td className="px-4 py-3"><EmploymentChip type={s.employment_type} /></td>
                           <td className="px-4 py-3 text-right">
-                            {selectedReport === 'utilisation' ? s.contracted_hours : (s.total_hours || s.total || 0)}
+                            {resultType === 'utilisation'
+                              ? formatHoursCell(s.contracted_hours)
+                              : formatHoursCell(readStaffHoursTotal(s))}
                           </td>
-                          {selectedReport === 'utilisation' && (
-                            <td className="px-4 py-3 text-right">{s.actual_hours}</td>
+                          {resultType === 'utilisation' && (
+                            <td className="px-4 py-3 text-right">{formatHoursCell(s.actual_hours)}</td>
                           )}
-                          {selectedReport === 'staff_cost' && (
-                            <td className="px-4 py-3 text-right font-medium">{formatCurrency(s.total_cost)}</td>
-                          )}
-                          {selectedReport === 'utilisation' && (
+                          {resultType === 'utilisation' && (
                             <td className="px-4 py-3 text-right">
                               <span className={`font-medium ${s.utilisation_pct > 100 ? 'text-red-700' : s.utilisation_pct >= 80 ? 'text-green-700' : 'text-amber-700'}`}>
-                                {s.utilisation_pct}%
+                                {Number.isFinite(Number(s.utilisation_pct)) ? `${s.utilisation_pct}%` : EMPTY_CELL}
                               </span>
                             </td>
                           )}
@@ -485,6 +491,58 @@ export default function ScheduleReporting({ user }) {
           onSave={() => { setShowScheduleModal(null); loadReports() }}
         />
       )}
+    </div>
+  )
+}
+
+function EmploymentChip({ type }) {
+  return (
+    <span className={`text-xs px-2 py-0.5 rounded-full ${type === 'contractor' ? 'bg-amber-500/10 text-amber-700' : 'bg-blue-500/10 text-blue-700'}`}>
+      {type === 'contractor' ? 'Contractor' : 'FTE'}
+    </span>
+  )
+}
+
+// STAFFCOST.1 — regular and overtime columns appear when the stored report
+// has them (every report since 30 Apr); an older report shows one Total Hours
+// column, as it was generated.
+export function StaffCostTable({ rows }) {
+  const split = staffCostHasSplit(rows)
+  return (
+    <div className="bg-un1t-surface border border-un1t-border rounded-lg overflow-x-auto">
+      <table className="w-full text-sm min-w-[600px]">
+        <thead>
+          <tr className="border-b border-un1t-border text-xs text-un1t-subtle uppercase">
+            <th className="text-left px-4 py-3">Staff Member</th>
+            <th className="text-left px-4 py-3">Role</th>
+            <th className="text-left px-4 py-3">Type</th>
+            <th className="text-right px-4 py-3">Rate (€/hr)</th>
+            {split && <th className="text-right px-4 py-3">OT Rate (€/hr)</th>}
+            {split && <th className="text-right px-4 py-3">Regular Hours</th>}
+            {split && <th className="text-right px-4 py-3">Overtime Hours</th>}
+            <th className="text-right px-4 py-3">Total Hours</th>
+            <th className="text-right px-4 py-3">Total Cost</th>
+          </tr>
+        </thead>
+        <tbody>
+          {(rows || []).map((s, i) => {
+            const r = readStaffCostRow(s)
+            return (
+              <tr key={i} className="border-b border-un1t-border/50 hover:bg-un1t-border/30">
+                <td className="px-4 py-3 font-medium">{s.name}</td>
+                <td className="px-4 py-3 text-un1t-subtle capitalize">{s.role}</td>
+                <td className="px-4 py-3"><EmploymentChip type={s.employment_type} /></td>
+                <td className="px-4 py-3 text-right">{formatEuroCell(r.rate)}</td>
+                {split && <td className="px-4 py-3 text-right">{formatEuroCell(r.overtimeRate)}</td>}
+                {split && <td className="px-4 py-3 text-right">{formatHoursCell(r.regularHours)}</td>}
+                {split && <td className="px-4 py-3 text-right">{formatHoursCell(r.overtimeHours)}</td>}
+                <td className="px-4 py-3 text-right">{formatHoursCell(r.totalHours)}</td>
+                <td className="px-4 py-3 text-right font-medium">{formatEuroCell(r.totalCost)}</td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
     </div>
   )
 }
