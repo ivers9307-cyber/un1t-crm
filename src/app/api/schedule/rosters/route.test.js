@@ -18,6 +18,14 @@ vi.mock('@/lib/auth', () => ({
   getCurrentUser: vi.fn(),
   assertLocationAccess: vi.fn(() => null),
   getUserLocationIds: vi.fn(() => [LOC_1]),
+  // Same contract as the real helper (src/lib/auth.js): master via
+  // profileRole, otherwise the role held AT that location.
+  hasRoleAtLocation: (user, loc, roles) => {
+    if (!user || !loc) return false
+    if (user.profileRole === 'master') return true
+    const role = user.rolesByLocation?.[loc]
+    return !!role && roles.includes(role)
+  },
 }))
 // ROSTER-FIX.4 — only the budget projection is stubbed. The overlap guard
 // stays REAL (findConflictingPublishedRosters), so these cases exercise the
@@ -456,5 +464,77 @@ describe('GET /api/schedule/rosters — superseded rosters', () => {
     await GET({ url: `https://x.test/api/schedule/rosters?location_id=${LOC_1}&status=draft` })
     expect(filters).toContainEqual(['eq', 'status', 'draft'])
     expect(filters.some((f) => f[0] === 'neq')).toBe(false)
+  })
+})
+
+// COACHSCOPE.1 — the list is open to anyone at the location, so what a coach
+// gets back is judged per row against their role AT that roster's location.
+describe('GET /api/schedule/rosters — coach vs manager shape', () => {
+  const LOC_2 = 'a0000000-0000-0000-0000-000000000002'
+  const ROWS = [
+    {
+      id: 'r-pub', location_id: LOC_1, period_start: '2026-09-01', period_end: '2026-09-30',
+      requested_period_start: '2026-09-01', requested_period_end: '2026-09-30',
+      status: 'published', published_at: '2026-08-25T10:00:00Z', published_by: 'mgr-1',
+      over_budget_approval_by: 'owner-1', over_budget_approval_at: '2026-08-25T09:00:00Z',
+      projected_contractor_eur: 4200, budget_at_publish_eur: 5000, notes: 'tight month, cut Sunday cover',
+      created_by: 'mgr-1', created_at: '2026-08-20T10:00:00Z', updated_at: '2026-08-25T10:00:00Z',
+      superseded_by: null, superseded_at: null,
+      published_by_profile: { id: 'mgr-1', full_name: 'Mona Manager', email: 'mona@x.ie' },
+      over_budget_approval_by_profile: { id: 'owner-1', full_name: 'Owen Owner' },
+    },
+    {
+      id: 'r-draft', location_id: LOC_1, period_start: '2026-10-01', period_end: '2026-10-31',
+      status: 'draft', projected_contractor_eur: 6100, budget_at_publish_eur: null, notes: null,
+    },
+  ]
+  function rowsDb(rows) {
+    const chain = {
+      select: () => chain, order: () => chain, eq: () => chain, neq: () => chain, in: () => chain,
+      then: (onF, onR) => Promise.resolve({ data: rows, error: null }).then(onF, onR),
+    }
+    return { from: () => chain }
+  }
+  const get = () => GET({ url: `https://x.test/api/schedule/rosters?location_id=${LOC_1}` })
+
+  it('a coach gets published rows only, with no budget, cost, approver, notes or emails', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'c-1', role: 'staff', profileRole: 'staff', rolesByLocation: { [LOC_1]: 'staff' }, locations: [{ id: LOC_1 }] })
+    createServerClient.mockReturnValue(rowsDb(ROWS))
+    const body = await (await get()).json()
+    expect(body.data.map((r) => r.id)).toEqual(['r-pub'])
+    const r = body.data[0]
+    for (const key of ['projected_contractor_eur', 'budget_at_publish_eur', 'over_budget_approval_by',
+      'over_budget_approval_at', 'over_budget_approval_by_profile', 'notes', 'created_by', 'published_by']) {
+      expect(key in r, key).toBe(false)
+    }
+    expect(r.published_by_profile).toEqual({ id: 'mgr-1', full_name: 'Mona Manager' })
+    expect(r.period_start).toBe('2026-09-01')
+    expect(r.status).toBe('published')
+  })
+
+  it('a head coach at the location keeps the full rows, drafts included', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'hc-1', role: 'head_coach', profileRole: 'head_coach', rolesByLocation: { [LOC_1]: 'head_coach' }, locations: [{ id: LOC_1 }] })
+    createServerClient.mockReturnValue(rowsDb(ROWS))
+    const body = await (await get()).json()
+    expect(body.data).toEqual(ROWS)
+  })
+
+  it('judges the role at the ROSTER\'s location: head coach elsewhere, staff here, is a coach here', async () => {
+    getCurrentUser.mockResolvedValue({
+      id: 'mx-1', role: 'head_coach', profileRole: 'head_coach',
+      rolesByLocation: { [LOC_1]: 'staff', [LOC_2]: 'head_coach' },
+      locations: [{ id: LOC_1 }, { id: LOC_2 }],
+    })
+    createServerClient.mockReturnValue(rowsDb(ROWS))
+    const body = await (await get()).json()
+    expect(body.data.map((r) => r.id)).toEqual(['r-pub'])
+    expect('budget_at_publish_eur' in body.data[0]).toBe(false)
+  })
+
+  it('a master keeps the full rows', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'ms-1', role: 'master', profileRole: 'master', rolesByLocation: {}, locations: [{ id: LOC_1 }] })
+    createServerClient.mockReturnValue(rowsDb(ROWS))
+    const body = await (await get()).json()
+    expect(body.data).toHaveLength(2)
   })
 })

@@ -17,7 +17,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess, getUserLocationIds, hasRoleAtLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, isoDate, timeOfDay, MANAGER_ROLES } from '@/lib/schemas'
 import { findPublishedRosterFor } from '@/lib/roster'
@@ -40,8 +40,6 @@ export async function GET(request) {
   const locationId = searchParams.get('location_id')
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
-
-  const isManager = MANAGER_ROLES.includes(user.role)
 
   const startDate = searchParams.get('start_date')
   const endDate = searchParams.get('end_date')
@@ -103,12 +101,16 @@ export async function GET(request) {
   //   reason — a coach reads the roster as it stands, not its history.
   //
   // Managers keep the full ManageMode shape, drafts included.
-  if (!isManager) {
-    const published = (data || []).filter((b) => b.rosters?.status === 'published')
-    return NextResponse.json({ success: true, data: published.map(slimBlockForCoach) })
-  }
-
-  return NextResponse.json({ success: true, data })
+  //
+  // COACHSCOPE.1 — "manager" is judged per block against the caller's role at
+  // THAT block's location, not `user.role` (the ACTIVE location's role): a head
+  // coach at one studio who is plain staff at another passed the old check
+  // while reading the other studio's drafts via ?location_id=.
+  const shaped = (data || []).flatMap((b) => {
+    if (hasRoleAtLocation(user, b.location_id, MANAGER_ROLES)) return [b]
+    return b.rosters?.status === 'published' ? [slimBlockForCoach(b)] : []
+  })
+  return NextResponse.json({ success: true, data: shaped })
 }
 
 // ROSTER-FIX.2 — the coach-facing projection of a block row. Allow-list,
@@ -147,7 +149,10 @@ function slimBlockForCoach(block) {
         assigned_at: a.assigned_at,
         start_time_override: a.start_time_override,
         end_time_override: a.end_time_override,
-        profiles: a.profiles,
+        // COACHSCOPE.1 — who is on it, not how to email them.
+        profiles: a.profiles
+          ? { id: a.profiles.id, full_name: a.profiles.full_name, avatar_url: a.profiles.avatar_url, role: a.profiles.role }
+          : a.profiles,
       })),
   }
 }
