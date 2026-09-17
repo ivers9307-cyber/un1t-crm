@@ -144,17 +144,11 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'No shifts found in the source month' }, { status: 404 })
   }
 
+  // Every source coach was skipped and there is no block to ensure: nothing
+  // to write. Same 201 shape as a copy that wrote (and as copy-week), so the
+  // client reads copied/skipped the one way.
   if (plan.rows.length === 0 && plan.blocks.length === 0) {
-    return NextResponse.json({
-      success: true,
-      data: [],
-      copied: 0,
-      skipped: plan.skipped,
-      mode,
-      message: mode === 'template'
-        ? 'Every source shift was on a template that is inactive, no longer runs that weekday, or has no matching weekday in the target month.'
-        : `Every source shift fell on a day-of-month that doesn't exist in the target (likely Feb).`,
-    })
+    return NextResponse.json({ success: true, copied: 0, skipped: plan.skipped, mode }, { status: 201 })
   }
 
   // NOTIFY.1 — see copy-week.
@@ -170,8 +164,6 @@ export async function POST(request) {
     blocks: plan.blocks,
   })
 
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
-
   // NOTIFY.1 review — see copy-week: the AFTER snapshot is read synchronously
   // here, right after the upsert commits, so it can't race a second copy onto
   // the same period. Only the log+notify step is deferred via `after`.
@@ -186,6 +178,13 @@ export async function POST(request) {
     after: afterSnap,
     via: 'copy_month',
   }))
+
+  // Review fix — the writer batches its inserts, so an error can arrive AFTER
+  // earlier batches committed. Those coaches are real and must still be logged
+  // and told: the snapshot + after() above run first, and the before/after
+  // diff only ever names what actually landed. A retry cannot catch them up,
+  // because its own before-snapshot already contains them.
+  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
 
   return NextResponse.json({
     success: true,

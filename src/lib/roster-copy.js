@@ -3,12 +3,13 @@
 //   exact    ("Copy week", a carbon copy): every live source assignment lands
 //            on the mapped day with the times it ACTUALLY had (block-level
 //            edits and per-coach overrides both), its partial_reason and its
-//            notes. Every source block is ensured on the target, including
-//            ones nobody was on. A target block that has to be created takes
+//            notes. Every staffed source block is ensured on the target, and
+//            an empty one too where its template runs on the target weekday. A target block that has to be created takes
 //            the SOURCE block's times and capacity, not the template's.
 //   template ("Copy from template"): the same coaches go onto the same
-//            template slot (template_id + weekday) at whatever the slot
-//            defines. No overrides, no partial_reason, no notes. A source
+//            template slot (template_id + weekday) at the template's defined
+//            times (an override only where the target block was hand-edited
+//            away from them). No partial_reason, no notes. A source
 //            assignment whose template is inactive, or no longer runs on
 //            that weekday, is skipped and counted.
 //
@@ -144,7 +145,13 @@ export function buildCopyPlan(sourceBlocks, { mode, mapDate }) {
     }
 
     if (mode === 'exact') {
-      blocks.push({
+      // An EMPTY block is only carried where its template actually runs on the
+      // target weekday. Day-of-month month mapping shifts the weekday, and the
+      // source month is full of cron-made empty blocks for every slot, so
+      // without this a Saturday-only template's empty blocks landed on Tuesdays
+      // (reading as understaffed, and joining a published roster). A staffed
+      // block is a carbon copy and is carried wherever it lands.
+      if (live.length > 0 || templateRunsOn(b.shift_templates, weekdayCodeOf(targetDate))) blocks.push({
         shiftTemplateId: b.template_id,
         shiftDate: targetDate,
         startTime: b.start_time ?? null,
@@ -177,13 +184,17 @@ export function buildCopyPlan(sourceBlocks, { mode, mapDate }) {
       skipped += live.length
       continue
     }
+    // The template's DEFINED times, as absolute times: the writer turns them
+    // into an override only where the target block was edited away from the
+    // template, so a coach lands at the template's times either way and a
+    // block at template times (the normal case) carries no override at all.
     for (const a of live) {
       rows.push({
         profileId: a.profile_id,
         shiftTemplateId: b.template_id,
         shiftDate: targetDate,
-        startTimeOverride: null,
-        endTimeOverride: null,
+        startTime: tpl.start_time ?? null,
+        endTime: tpl.end_time ?? null,
         partialReason: null,
         notes: null,
         status: 'scheduled',

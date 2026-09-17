@@ -118,8 +118,6 @@ export async function POST(request) {
     blocks: plan.blocks,
   })
 
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
-
   // NOTIFY.1 review — the AFTER snapshot is read synchronously, here, right
   // after the upsert commits — not inside the deferred callback below, so it
   // can never race a second copy onto the same period. Only the log+notify
@@ -138,6 +136,13 @@ export async function POST(request) {
     after: afterSnap,
     via: 'copy_week',
   }))
+
+  // Review fix — the writer batches its inserts, so an error can arrive AFTER
+  // earlier batches committed. Those coaches are real and must still be logged
+  // and told: the snapshot + after() above run first, and the before/after
+  // diff only ever names what actually landed. A retry cannot catch them up,
+  // because its own before-snapshot already contains them.
+  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
 
   return NextResponse.json({ success: true, copied: count, skipped: plan.skipped, mode }, { status: 201 })
 }

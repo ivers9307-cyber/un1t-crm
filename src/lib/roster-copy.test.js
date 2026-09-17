@@ -75,6 +75,40 @@ describe('buildCopyPlan — exact', () => {
     ])
   })
 
+  // Review fix — day-of-month mapping moves the weekday, and the source month
+  // is full of cron-made EMPTY blocks for every slot. Carrying those blindly
+  // put a Saturday-only template's empty blocks onto Tuesdays.
+  it('does not carry an EMPTY block onto a weekday its template does not run (Sat-only, Aug -> Sep 2026)', () => {
+    const satOnly = tpl({ days_of_week: ['sat'] })
+    const augSaturdays = ['2026-08-01', '2026-08-08', '2026-08-15', '2026-08-22', '2026-08-29']
+    const sourceBlocks = augSaturdays.map((d, i) => block({ id: `sat${i}`, block_date: d, shift_templates: satOnly }))
+    // Day-of-month into September: 1, 8, 15, 22, 29 Sep 2026 are all Tuesdays.
+    const plan = buildCopyPlan(sourceBlocks, { mode: 'exact', mapDate: (d) => `2026-09-${d.slice(8)}` })
+    expect(augSaturdays.map((d) => weekdayCodeOf(`2026-09-${d.slice(8)}`))).toEqual(['tue', 'tue', 'tue', 'tue', 'tue'])
+    expect(plan.blocks).toEqual([])
+    expect(plan.rows).toEqual([])
+  })
+
+  it('still carries an empty block that lands on a weekday its template runs', () => {
+    const plan = buildCopyPlan([
+      block({ block_date: '2026-08-05', shift_templates: tpl({ days_of_week: ['sat'] }) }), // Wed 5 Aug -> Sat 5 Sep
+    ], { mode: 'exact', mapDate: () => '2026-09-05' })
+    expect(plan.blocks.map((b) => b.shiftDate)).toEqual(['2026-09-05'])
+  })
+
+  it('carries a STAFFED block wherever it lands, even off its template days (carbon copy)', () => {
+    const plan = buildCopyPlan([
+      block({ block_date: '2026-08-01', shift_templates: tpl({ days_of_week: ['sat'] }), shift_assignments: [{ profile_id: 'p1' }] }),
+    ], { mode: 'exact', mapDate: () => '2026-09-01' })
+    expect(plan.blocks.map((b) => b.shiftDate)).toEqual(['2026-09-01'])
+    expect(plan.rows).toHaveLength(1)
+  })
+
+  it('never ensures a block in template mode (empty source blocks included)', () => {
+    const plan = buildCopyPlan([block({ shift_templates: tpl({ days_of_week: ['tue'] }) })], { mode: 'template', mapDate: () => '2026-09-01' })
+    expect(plan.blocks).toEqual([])
+  })
+
   it('does not check the template: an inactive template is still carbon-copied', () => {
     const plan = buildCopyPlan([
       block({
@@ -95,7 +129,7 @@ describe('buildCopyPlan — exact', () => {
 })
 
 describe('buildCopyPlan — template', () => {
-  it('puts the same coaches on the same slot with no overrides, partial_reason or notes', () => {
+  it('puts the same coaches on the same slot at the TEMPLATE times, with no partial_reason or notes', () => {
     const plan = buildCopyPlan([
       block({
         start_time: '09:30:00',
@@ -110,11 +144,12 @@ describe('buildCopyPlan — template', () => {
     expect(plan.blocks).toEqual([])
     expect(plan.skipped).toBe(0)
     expect(plan.rows).toEqual([
-      { profileId: 'p1', shiftTemplateId: 't1', shiftDate: '2026-07-06', startTimeOverride: null, endTimeOverride: null, partialReason: null, notes: null, status: 'scheduled' },
-      { profileId: 'p2', shiftTemplateId: 't1', shiftDate: '2026-07-06', startTimeOverride: null, endTimeOverride: null, partialReason: null, notes: null, status: 'scheduled' },
+      // The template says 09:00-10:00; the source block's 09:30 edit and p1's
+      // own overrides are NOT carried. The writer derives an override only if
+      // the target block was hand-edited away from these times.
+      { profileId: 'p1', shiftTemplateId: 't1', shiftDate: '2026-07-06', startTime: '09:00:00', endTime: '10:00:00', partialReason: null, notes: null, status: 'scheduled' },
+      { profileId: 'p2', shiftTemplateId: 't1', shiftDate: '2026-07-06', startTime: '09:00:00', endTime: '10:00:00', partialReason: null, notes: null, status: 'scheduled' },
     ])
-    // The rows carry no absolute times, so the writer never derives an override.
-    expect('startTime' in plan.rows[0]).toBe(false)
   })
 
   it('skips coaches on a template that is now inactive', () => {

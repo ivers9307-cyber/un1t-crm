@@ -546,13 +546,32 @@ describe('bulkUpsertShiftAssignments — COPYMODES.1', () => {
     expect(db.captured.assignmentUpsert.rows[0]).toMatchObject({ block_id: 'blk-x', start_time_override: '09:30:00', end_time_override: null })
   })
 
-  it('template: explicit null overrides stay null whatever the block says', async () => {
+  // Review fix — template mode sends the TEMPLATE's times as absolute times,
+  // so a coach copied onto a hand-edited target block still works the template
+  // slot's defined hours; on an unedited block no override is written.
+  it('template: onto a hand-edited target block the coach lands at the template times via an override', async () => {
     const db = makeBulkDb({ templates: [tplMin], existingBlocks: [{ id: 'blk-x', template_id: 't1', block_date: '2026-06-08', start_time: '11:00:00', end_time: '12:00:00' }] })
     await bulkUpsertShiftAssignments(db, {
       locationId: 'loc1',
-      rows: [{ profileId: 'p1', shiftTemplateId: 't1', shiftDate: '2026-06-08', startTimeOverride: null, endTimeOverride: null, partialReason: null, notes: null }],
+      rows: [{ profileId: 'p1', shiftTemplateId: 't1', shiftDate: '2026-06-08', startTime: '09:00:00', endTime: '10:00:00', partialReason: null, notes: null }],
     })
-    expect(db.captured.assignmentUpsert.rows[0]).toMatchObject({ start_time_override: null, end_time_override: null, partial_reason: null, notes: null })
+    expect(db.captured.blockInsert).toBeNull()
+    expect(db.captured.assignmentUpsert.rows[0]).toMatchObject({ block_id: 'blk-x', start_time_override: '09:00:00', end_time_override: '10:00:00', partial_reason: null, notes: null })
+  })
+
+  it('template: onto a block at the template times (or one it creates) no override is written', async () => {
+    const db = makeBulkDb({ templates: [tplMin], existingBlocks: [{ id: 'blk-x', template_id: 't1', block_date: '2026-06-08', start_time: '09:00:00', end_time: '10:00:00' }] })
+    await bulkUpsertShiftAssignments(db, {
+      locationId: 'loc1',
+      rows: [
+        { profileId: 'p1', shiftTemplateId: 't1', shiftDate: '2026-06-08', startTime: '09:00:00', endTime: '10:00:00' },
+        { profileId: 'p1', shiftTemplateId: 't1', shiftDate: '2026-06-09', startTime: '09:00:00', endTime: '10:00:00' },
+      ],
+    })
+    expect(db.captured.blockInsert).toEqual([expect.objectContaining({ block_date: '2026-06-09', start_time: '09:00:00', end_time: '10:00:00' })])
+    for (const r of db.captured.assignmentUpsert.rows) {
+      expect(r).toMatchObject({ start_time_override: null, end_time_override: null })
+    }
   })
 
   it('pages the existing-block lookup and chunks the writes under the 1,000-row cap', async () => {

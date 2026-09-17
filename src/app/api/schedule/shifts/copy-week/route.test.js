@@ -117,16 +117,27 @@ describe('POST /api/schedule/shifts/copy-week — NOTIFY.1', () => {
     expect(after).not.toHaveBeenCalled()
   })
 
-  it('400s on an upsert error and never schedules log-and-notify', async () => {
-    fetchSourceBlocks.mockResolvedValue({ blocks: [sourceBlock(['coach-1'])], error: null })
-    readAssignmentKeysInRange.mockResolvedValue({ rows: [], error: null, truncated: false })
-    bulkUpsertShiftAssignments.mockResolvedValue({ count: 0, error: { message: 'upsert boom' } })
+  // Review fix — the writer batches, so an error can follow committed batches.
+  // Those coaches must still be logged and notified; the before/after diff
+  // names only what landed, so nothing that failed is announced.
+  it('400s on a writer error but still snapshots after and schedules log-and-notify for what landed', async () => {
+    fetchSourceBlocks.mockResolvedValue({ blocks: [sourceBlock(['coach-1', 'coach-2'])], error: null })
+    const beforeSnap = { rows: [], error: null, truncated: false }
+    const afterSnap = { rows: [{ block_id: 'b1', profile_id: 'coach-1' }], error: null, truncated: false }
+    readAssignmentKeysInRange.mockResolvedValueOnce(beforeSnap).mockResolvedValueOnce(afterSnap)
+    bulkUpsertShiftAssignments.mockResolvedValue({ count: 1, error: { message: 'upsert boom' } })
 
     const res = await POST(req({ location_id: LOC, source_start: '2026-06-01', target_start: '2026-06-08' }))
 
     expect(res.status).toBe(400)
-    expect(logAndNotifyCopiedShifts).not.toHaveBeenCalled()
-    expect(after).not.toHaveBeenCalled()
+    expect((await res.json()).error).toBe('upsert boom')
+    expect(readAssignmentKeysInRange).toHaveBeenCalledTimes(2)
+    expect(readAssignmentKeysInRange.mock.invocationCallOrder[1])
+      .toBeGreaterThan(bulkUpsertShiftAssignments.mock.invocationCallOrder[0])
+    expect(after).toHaveBeenCalledTimes(1)
+    expect(logAndNotifyCopiedShifts).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      before: beforeSnap, after: afterSnap, via: 'copy_week',
+    }))
   })
 
   // COPYFIX.1 — bulkUpsertShiftAssignments now reports the rows it actually
@@ -163,8 +174,11 @@ describe('POST /api/schedule/shifts/copy-week — COPYMODES.1', () => {
           start_time: '09:30:00',
           shift_assignments: [{ profile_id: 'coach-1', status: 'swapped', notes: 'keys', partial_reason: 'dentist', start_time_override: null, end_time_override: '09:45:00' }],
         }),
-        // Sunday block nobody is on.
-        sourceBlock([], { id: 'blk-sun', block_date: '2026-06-07', start_time: '07:00:00', end_time: '08:00:00' }),
+        // Sunday block nobody is on, on a template that runs Sundays.
+        sourceBlock([], {
+          id: 'blk-sun', template_id: 'tpl-sun', block_date: '2026-06-07', start_time: '07:00:00', end_time: '08:00:00',
+          shift_templates: { id: 'tpl-sun', active: true, days_of_week: ['sun'], start_time: '07:00:00', end_time: '08:00:00' },
+        }),
       ],
       error: null,
     })
@@ -182,7 +196,7 @@ describe('POST /api/schedule/shifts/copy-week — COPYMODES.1', () => {
     expect(blocks.map((b) => [b.shiftDate, b.startTime])).toEqual([['2026-06-08', '09:30:00'], ['2026-06-14', '07:00:00']])
   })
 
-  it('template mode: no overrides/notes/partial_reason, skips an inactive template, reports skipped', async () => {
+  it('template mode: template times, no notes/partial_reason, skips an inactive template, reports skipped', async () => {
     fetchSourceBlocks.mockResolvedValue({
       blocks: [
         sourceBlock(['coach-1'], { start_time: '09:30:00' }),
@@ -200,7 +214,7 @@ describe('POST /api/schedule/shifts/copy-week — COPYMODES.1', () => {
     expect(blocks).toEqual([])
     expect(rows).toEqual([{
       profileId: 'coach-1', shiftTemplateId: 'tpl-1', shiftDate: '2026-06-08',
-      startTimeOverride: null, endTimeOverride: null, partialReason: null, notes: null, status: 'scheduled',
+      startTime: '09:00:00', endTime: '10:00:00', partialReason: null, notes: null, status: 'scheduled',
     }])
     expect(after).toHaveBeenCalledTimes(1)
   })

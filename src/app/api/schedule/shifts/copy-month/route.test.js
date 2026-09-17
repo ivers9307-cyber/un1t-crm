@@ -118,16 +118,22 @@ describe('POST /api/schedule/shifts/copy-month — NOTIFY.1', () => {
     expect(after).not.toHaveBeenCalled()
   })
 
-  it('400s on an upsert error and never schedules log-and-notify', async () => {
+  // Review fix — see copy-week: a writer error can follow committed batches.
+  it('400s on a writer error but still snapshots after and schedules log-and-notify for what landed', async () => {
     fetchSourceBlocks.mockResolvedValue({ blocks: [sourceBlock(['coach-1'])], error: null })
-    readAssignmentKeysInRange.mockResolvedValue({ rows: [], error: null, truncated: false })
-    bulkUpsertShiftAssignments.mockResolvedValue({ count: 0, error: { message: 'upsert boom' } })
+    const beforeSnap = { rows: [], error: null, truncated: false }
+    const afterSnap = { rows: [{ block_id: 'b1', profile_id: 'coach-1' }], error: null, truncated: false }
+    readAssignmentKeysInRange.mockResolvedValueOnce(beforeSnap).mockResolvedValueOnce(afterSnap)
+    bulkUpsertShiftAssignments.mockResolvedValue({ count: 1, error: { message: 'upsert boom' } })
 
     const res = await POST(req({ location_id: LOC, source_month_start: '2026-06-01', target_month_start: '2026-07-01' }))
 
     expect(res.status).toBe(400)
-    expect(logAndNotifyCopiedShifts).not.toHaveBeenCalled()
-    expect(after).not.toHaveBeenCalled()
+    expect(readAssignmentKeysInRange).toHaveBeenCalledTimes(2)
+    expect(after).toHaveBeenCalledTimes(1)
+    expect(logAndNotifyCopiedShifts).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      before: beforeSnap, after: afterSnap, via: 'copy_month',
+    }))
   })
 
   // COPYFIX.1 — bulkUpsertShiftAssignments now reports the rows it actually
@@ -182,15 +188,40 @@ describe('POST /api/schedule/shifts/copy-month — COPYMODES.1', () => {
     const json = await (await POST(req({ ...BODY, mode: 'template' }))).json()
     expect(json).toMatchObject({ success: true, skipped: 1, mode: 'template' })
     const { rows } = bulkUpsertShiftAssignments.mock.calls[0][1]
-    expect(rows.map((r) => [r.profileId, r.shiftDate, r.startTimeOverride])).toEqual([['coach-1', '2026-09-07', null]])
+    expect(rows.map((r) => [r.profileId, r.shiftDate, r.startTime, r.endTime])).toEqual([['coach-1', '2026-09-07', '09:00:00', '10:00:00']])
   })
 
-  it('answers copied 0 without writing when every source coach is skipped', async () => {
+  it('answers 201 copied 0 (same shape as copy-week) without writing when every source coach is skipped', async () => {
     fetchSourceBlocks.mockResolvedValue({ blocks: [sourceBlock(['coach-1'], { block_date: '2026-08-31' })], error: null })
     const res = await POST(req({ ...BODY, mode: 'template' }))
     const json = await res.json()
-    expect(json).toMatchObject({ success: true, copied: 0, skipped: 1, mode: 'template' })
+    expect(res.status).toBe(201)
+    expect(json).toEqual({ success: true, copied: 0, skipped: 1, mode: 'template' })
     expect(bulkUpsertShiftAssignments).not.toHaveBeenCalled()
     expect(after).not.toHaveBeenCalled()
+  })
+})
+
+// Review fix — exact month copy maps by day-of-month, which moves the weekday.
+// The cron fills the source month with EMPTY blocks for every slot; carrying
+// them put a Saturday-only template's empty blocks onto Tuesdays.
+describe('POST /api/schedule/shifts/copy-month — empty blocks off their template days', () => {
+  it('Saturday-only template, Aug -> Sep 2026: the staffed Saturday is copied, the empty ones do not land on Tuesdays', async () => {
+    readAssignmentKeysInRange.mockResolvedValue({ rows: [], error: null, truncated: false })
+    bulkUpsertShiftAssignments.mockResolvedValue({ count: 1, error: null })
+    const satOnly = { id: 'tpl-sat', active: true, days_of_week: ['sat'], start_time: '08:00:00', end_time: '12:00:00', min_coaches: 1, max_coaches: 4 }
+    const sat = (date, coaches) => sourceBlock(coaches, { id: `blk-${date}`, template_id: 'tpl-sat', block_date: date, start_time: '08:00:00', end_time: '12:00:00', shift_templates: satOnly })
+    fetchSourceBlocks.mockResolvedValue({
+      blocks: [sat('2026-08-01', ['coach-1']), sat('2026-08-08', []), sat('2026-08-15', []), sat('2026-08-22', []), sat('2026-08-29', [])],
+      error: null,
+    })
+
+    const res = await POST(req({ location_id: LOC, source_month_start: '2026-08-01', target_month_start: '2026-09-01', mode: 'exact' }))
+
+    expect(res.status).toBe(201)
+    const { rows, blocks } = bulkUpsertShiftAssignments.mock.calls[0][1]
+    // Only the staffed block (carbon copy) — Tue 1 Sep. No empty Tuesdays.
+    expect(blocks.map((b) => b.shiftDate)).toEqual(['2026-09-01'])
+    expect(rows.map((r) => [r.profileId, r.shiftDate])).toEqual([['coach-1', '2026-09-01']])
   })
 })
