@@ -49,6 +49,15 @@ describe('extendRosterHorizon', () => {
     expect(out).toMatchObject({ templates: 2, inserted: 6, failed: 0 })
   })
 
+  // HORIZONMIN.1 — the generator reads template.min_coaches; a select that
+  // leaves it off hands the generator undefined and every block falls to 1.
+  it('selects min_coaches alongside max_coaches for the generator', async () => {
+    const db = dbWith({ data: [TPL_A], error: null })
+    await extendRosterHorizon(db)
+    const sel = builder.calls.find((c) => c[0] === 'select')[1]
+    expect(sel.split(',').map((c) => c.trim())).toEqual(expect.arrayContaining(['min_coaches', 'max_coaches']))
+  })
+
   it('starts at this week\'s Monday and projects the requested weeks', async () => {
     const db = dbWith({ data: [TPL_A], error: null })
     await extendRosterHorizon(db, { weeks: 12 })

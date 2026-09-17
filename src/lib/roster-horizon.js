@@ -31,7 +31,7 @@ import { logWarn } from '@/lib/log'
 export async function extendRosterHorizon(db, { weeks = 8 } = {}) {
   const { data, error } = await db
     .from('shift_templates')
-    .select('id, location_id, start_time, end_time, days_of_week, max_coaches')
+    .select('id, location_id, start_time, end_time, days_of_week, min_coaches, max_coaches')
     .eq('active', true)
 
   if (error) throw new Error(`Failed to load shift templates: ${error.message}`)
