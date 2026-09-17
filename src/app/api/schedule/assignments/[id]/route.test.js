@@ -196,6 +196,31 @@ describe('PUT /api/schedule/assignments/[id] — hours are manager-set (D3)', ()
     expect(notifyUsersOnce.mock.calls[0][2]).toEqual([COACH.id])
   })
 
+  // SCHEDSTATUS.1 — the PUT used to accept 'declined', which
+  // shift_assignments_status_check (mig 067/337) rejects: the write reached
+  // Postgres and came back as a 400 naming a constraint.
+  it('400s a status the database would refuse, before touching the DB', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const { db, updateSpy } = buildDb()
+    createServerClient.mockReturnValue(db)
+
+    const res = await PUT(req({ status: 'declined' }), PROPS)
+    const json = await res.json()
+    expect(res.status).toBe(400)
+    expect(json.success).toBe(false)
+    expect(updateSpy).not.toHaveBeenCalled()
+  })
+
+  it('accepts a status the database allows', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const { db, updateSpy } = buildDb()
+    createServerClient.mockReturnValue(db)
+
+    const res = await PUT(req({ status: 'confirmed' }), PROPS)
+    expect(res.status).toBe(200)
+    expect(updateSpy).toHaveBeenCalledWith({ status: 'confirmed' })
+  })
+
   it('404s a manager whose locations do not include the shift’s location', async () => {
     getCurrentUser.mockResolvedValue(MANAGER)
     getUserLocationIds.mockReturnValue(['loc-2'])

@@ -212,6 +212,28 @@ export const timeOffStatusSchema = z.enum(['pending', 'approved', 'rejected', 'c
 // DB (no CHECK constraint) — this enum is the only gate.
 export const swapStatusSchema = z.enum(['pending', 'awaiting_approval', 'approved', 'rejected', 'cancelled'])
 
+// SCHEDSTATUS.1 — shift_assignments.status.
+//
+// The DB set is the CHECK constraint `shift_assignments_status_check`
+// (mig 067, widened by mig 337) — anything outside it is rejected by Postgres,
+// and the route hands the caller the raw constraint message as a 400. The PUT
+// schema on /api/schedule/assignments/[id] used to accept 'declined', which is
+// NOT in that set: every such request failed at the database with a message
+// naming a constraint, not a field. `tests/shift-assignment-status.test.js`
+// pins this list against the migration so the two cannot drift again.
+export const SHIFT_ASSIGNMENT_DB_STATUSES = Object.freeze([
+  'scheduled', 'confirmed', 'completed', 'cancelled', 'swapped',
+])
+
+// What THIS route may set. A strict subset of the DB set, and deliberately so:
+//   - 'swapped' is written only by mig 615's approve_* functions, inside the
+//     transaction that moves the assignment;
+//   - 'cancelled' is the tombstone ROSTER-FIX.1 (D4) removed and mig 603
+//     deleted from disk — the roster DELETEs an assignment instead, and a
+//     tombstone would make the block look staffed and keep billing the coach.
+// Anything a manager legitimately sets by hand is here.
+export const assignmentStatusSchema = z.enum(['scheduled', 'confirmed', 'completed'])
+
 // Report frequency / type — match scheduled_reports.frequency and the
 // report-generator's switch statement. ROSTER-FIX.5: 'fortnightly' has been
 // in the table's CHECK and the UI dropdown since day one but was missing
