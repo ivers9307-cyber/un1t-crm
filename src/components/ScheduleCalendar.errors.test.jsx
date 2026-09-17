@@ -299,15 +299,20 @@ describe('per-period unpublished-changes guard (ROSTER-FIX.6a)', () => {
       .filter(([url]) => String(url).includes('/schedule/blocks')).length
     const loadsBeforePublish = blockLoads()
     fireEvent.click(buttons[buttons.length - 1])
+    // PUBLISH-CONFIRM.1 — the modal no longer closes itself on success: it
+    // renders the outcome and waits for Done. The success panel is what the
+    // operator sees, so it is what this waits on.
+    await screen.findByTestId('publish-success', {}, { timeout: 5000 })
+    fireEvent.click(screen.getByText('Done'))
     await waitFor(() => expect(screen.queryByText('Publish roster')).toBeNull(), { timeout: 5000 })
 
-    // 🔴 THE MODAL CLOSING IS NOT PROOF THE PUBLISH FINISHED, and treating it
-    // as proof is what made this test fail in CI while passing locally. The
-    // handler does three things in a row — setPublishModal(null), then
-    // refreshAfterMutation(), then clearDirtyPeriodsCoveredBy() — and the wait
-    // above observes only the FIRST. Under load the click below could land
-    // between them, with the guard still armed, and the failure read as "the
-    // guard is broken" rather than "the test asked too early".
+    // 🔴 THE PANEL APPEARING IS NOT PROOF THE PUBLISH FINISHED, and treating
+    // it as proof is what made this test fail in CI while passing locally.
+    // The handler does three things in a row — render the outcome, then
+    // refreshAfterMutation(), then clearDirtyPeriodsCoveredBy() — and the
+    // wait above observes only the FIRST. Under load the click below could
+    // land between them, with the guard still armed, and the failure read as
+    // "the guard is broken" rather than "the test asked too early".
     //
     // refreshAfterMutation() is the statement immediately before the dirty
     // clear and is not awaited, so once its blocks fetch has been ISSUED the

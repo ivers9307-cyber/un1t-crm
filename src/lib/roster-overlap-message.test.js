@@ -4,7 +4,7 @@
 // is that one input produces one wording, whichever surface asks.
 
 import { describe, it, expect } from 'vitest'
-import { OVERLAP_ERROR, overlapRanges, overlapMessage, rosterErrorMessage } from './roster-overlap-message'
+import { OVERLAP_ERROR, overlapRanges, overlapMessage, rosterErrorMessage, suggestedPeriodLabel, publishNextStep, approveNextStep } from './roster-overlap-message'
 
 const CONFLICT = {
   error: OVERLAP_ERROR,
@@ -63,5 +63,46 @@ describe('rosterErrorMessage', () => {
   it('never alerts a raw error key or an empty string', () => {
     expect(rosterErrorMessage({}, { fallback: 'Approval failed' })).toBe('Approval failed')
     expect(rosterErrorMessage(undefined, { fallback: 'Approval failed' })).toBe('Approval failed')
+  })
+})
+
+
+// ROSTER-TRIM.1 — the refusal that remains has to name a publish that works.
+// "Re-publish that range instead" named the range that had ALREADY been
+// published, so following it literally reproduced the refusal.
+describe('suggestedPeriodLabel', () => {
+  it('reads the server suggestion, collapsing a single day', () => {
+    expect(suggestedPeriodLabel({ suggested_period: { start: '2026-05-01', end: '2026-05-31' } }))
+      .toBe('2026-05-01 to 2026-05-31')
+    expect(suggestedPeriodLabel({ suggested_period: { start: '2026-05-04', end: '2026-05-04' } }))
+      .toBe('2026-05-04')
+  })
+  it('is null when an older server sent none', () => {
+    expect(suggestedPeriodLabel(CONFLICT)).toBeNull()
+    expect(suggestedPeriodLabel(null)).toBeNull()
+  })
+})
+
+describe('publishNextStep / approveNextStep', () => {
+  const WITH_SUGGESTION = { ...CONFLICT, suggested_period: { start: '2026-05-01', end: '2026-05-31' } }
+
+  it('names the covering period from the publish modal', () => {
+    expect(publishNextStep(WITH_SUGGESTION))
+      .toBe('Publish 2026-05-01 to 2026-05-31 instead, so one roster covers the whole span.')
+  })
+
+  it('names it from the approvals queue, where the way out is a reject first', () => {
+    expect(approveNextStep(WITH_SUGGESTION))
+      .toBe('Reject this draft, then publish 2026-05-01 to 2026-05-31 so one roster covers the whole span.')
+  })
+
+  it('falls back to the old wording when the server sent no suggestion', () => {
+    expect(publishNextStep(CONFLICT)).toBe('Re-publish that range instead.')
+    expect(approveNextStep(CONFLICT)).toBe('Reject this draft and re-publish that range instead.')
+  })
+
+  it('overlapMessage uses the suggestion by default', () => {
+    expect(overlapMessage(WITH_SUGGESTION))
+      .toBe('Those days are already published as part of 2026-05-01 to 2026-05-31. Publish 2026-05-01 to 2026-05-31 instead, so one roster covers the whole span.')
   })
 })

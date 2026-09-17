@@ -33,6 +33,9 @@ import {
   releasePublishedRostersFor,
   restorePublishedRosters,
   supersedeSwallowedRosters,
+  suggestedCoveringPeriod,
+  trimPublishedRosters,
+  restoreRosterPeriods,
 } from '@/lib/roster-publish'
 import { logWarn } from '@/lib/log'
 import { hasPermissionForLocation } from '@/lib/permissions'
@@ -88,7 +91,11 @@ export async function POST(_request, props) {
   // ROSTER-FIX.4 — same guard, same 409 shape, as the publish route. Exclude
   // this roster's own id: it is a draft today, but the exclusion keeps the
   // check honest if a caller ever re-runs it against a published row.
-  const { conflicts, error: overlapErr } = await findConflictingPublishedRosters(db, {
+  //
+  // ROSTER-TRIM.1 — a one-sided straddle is trimmed rather than refused here
+  // too: approving IS publishing, and a guard only one of the two paths ran
+  // was never a guard.
+  const { conflicts, trimmable, error: overlapErr } = await findConflictingPublishedRosters(db, {
     locationId: roster.location_id,
     periodStart: roster.period_start,
     periodEnd: roster.period_end,
@@ -102,6 +109,7 @@ export async function POST(_request, props) {
       success: false,
       error: 'overlapping_roster',
       overlapping: conflicts,
+      suggested_period: suggestedCoveringPeriod(conflicts, roster.period_start, roster.period_end),
     }, { status: 409 })
   }
 
@@ -143,22 +151,39 @@ export async function POST(_request, props) {
   // set (it is not published, so it would not be selected anyway — the
   // exclusion says so rather than relying on that).
   let released = []
+  let trimmed = []
   let updated = null
 
   // ROSTER-SUPERSEDE.1 — ONE restore path for every way the flip can fail:
   // superseded with no successor, the released rosters still own their blocks
   // and every one would read as UNPUBLISHED to its coach.
   async function restoreReleased(what) {
-    if (released.length === 0) return
-    const { error: restoreErr } = await restorePublishedRosters(db, released)
-    if (restoreErr) {
-      logWarn('rosters/approve', `${what} AND the superseded rosters could not be restored`, {
-        err: restoreErr.message,
-        location_id: roster.location_id,
-        period_start: roster.period_start,
-        period_end: roster.period_end,
-        stranded: released.map((r) => r.id),
-      })
+    if (released.length > 0) {
+      const { error: restoreErr } = await restorePublishedRosters(db, released)
+      if (restoreErr) {
+        logWarn('rosters/approve', `${what} AND the superseded rosters could not be restored`, {
+          err: restoreErr.message,
+          location_id: roster.location_id,
+          period_start: roster.period_start,
+          period_end: roster.period_end,
+          stranded: released.map((r) => r.id),
+        })
+      }
+    }
+    // ROSTER-TRIM.1 — a trimmed roster gave days away to an approval that
+    // never happened; put its period back or those blocks belong to no live
+    // roster.
+    if (trimmed.length > 0) {
+      const { error: periodErr } = await restoreRosterPeriods(db, trimmed)
+      if (periodErr) {
+        logWarn('rosters/approve', `${what} AND the trimmed rosters could not be put back`, {
+          err: periodErr.message,
+          location_id: roster.location_id,
+          period_start: roster.period_start,
+          period_end: roster.period_end,
+          stranded: trimmed.map((r) => r.id),
+        })
+      }
     }
   }
 
@@ -168,6 +193,18 @@ export async function POST(_request, props) {
   // rosters stood down a moment ago would stay superseded FOREVER: a transient
   // blip would silently unpublish a coach's whole week.
   try {
+    // ROSTER-TRIM.1 — trim before the flip, for the same reason the release
+    // runs before it: mig 602's exclusion constraint judges the
+    // draft to published UPDATE exactly as it judges an INSERT.
+    const trim = await trimPublishedRosters(db, trimmable)
+    if (trim.error) {
+      return NextResponse.json({
+        success: false,
+        error: `Could not trim the rosters this approval overlaps: ${trim.error.message}`,
+      }, { status: 400 })
+    }
+    trimmed = trim.trimmed
+
     const rel = await releasePublishedRostersFor(db, {
       locationId: roster.location_id,
       periodStart: roster.period_start,
@@ -259,21 +296,24 @@ export async function POST(_request, props) {
     // stood down, so their shifts read as unpublished until the period is
     // published again. Restoring them is not on offer either: this roster is
     // published over the same days and the constraint would refuse a second.
-    const stranded = released.length > 0
-      ? ' The rosters it replaces have already been stood down, so those shifts read as unpublished until you publish this period again.'
+    // ROSTER-TRIM.1 — a TRIMMED roster is the same shape of damage: it gave
+    // up its shared days to this publish, and the blocks on them never
+    // moved, so they read as unpublished too.
+    const stranded = (released.length + trimmed.length) > 0
+      ? ' The rosters it replaces have already been stood down or trimmed back, so those shifts read as unpublished until you publish this period again.'
       : ''
     // ROSTER-SUPERSEDE.1 — the HTTP response reaches whoever clicked approve,
     // and only them. Nobody watching the logs learns that a location has a
     // period reading as unpublished, so say it here too, naming the rows a
     // human has to re-publish.
-    if (released.length > 0) {
+    if (released.length + trimmed.length > 0) {
       logWarn('rosters/approve', 'block tagging failed after the replaced rosters were stood down; that period now reads as unpublished', {
         err: tagErr.message,
         location_id: roster.location_id,
         period_start: roster.period_start,
         period_end: roster.period_end,
         roster_id: roster.id,
-        stranded: released.map((r) => r.id),
+        stranded: [...released, ...trimmed].map((r) => r.id),
       })
     }
     return NextResponse.json({

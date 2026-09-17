@@ -97,7 +97,8 @@ function makeDb(fixtures = {}) {
         return { data: single ? (affected[0] ?? null) : affected, error: null }
       }
       const rows = rowsAfterFilters()
-      return { data: single ? (rows[0] ?? null) : rows, error: null }
+      // `count` so a head:true count select answers something real.
+      return { data: single ? (rows[0] ?? null) : rows, count: rows.length, error: null }
     }
 
     const chain = {
@@ -640,5 +641,223 @@ describe('PUT /api/schedule/templates/[id] — deleted slots stay deleted', () =
     expect(dates).not.toContain(removedDate)
     expect(dates).toContain(keptDate)
     expect(body.generated.removed).toBe(1)
+  })
+})
+
+
+// ─────────────────────────────────────────────────────────────────────
+// SHIFTTPL.1 / SHIFTMIN-CLAMP.1
+// ─────────────────────────────────────────────────────────────────────
+
+// A DELETE carries the hard flag on the query string, so these need a url.
+function delReq(url = 'https://crm.test/api/schedule/templates/tmpl-a') {
+  return { url, json: () => Promise.resolve({}) }
+}
+
+// THE FINDING: the web Deactivate button calls DELETE, which only flipped
+// `active:false`. PUT's `active:false` path ALSO clears the future blocks
+// nobody is on — so the same operator action produced two different
+// calendars depending on which surface was used.
+describe('DELETE /api/schedule/templates/[id] — deactivate clears empty future slots', () => {
+  it('deletes the empty, unpublished future blocks, exactly as PUT active:false does', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    const db = useDb({
+      shift_templates: templates(),
+      rosters: [],
+      shift_blocks: [
+        { id: 'blk-empty', location_id: 'loc-a', template_id: 'tmpl-a', block_date: FUTURE, roster_id: null, shift_assignments: [] },
+        { id: 'blk-past', location_id: 'loc-a', template_id: 'tmpl-a', block_date: PAST, roster_id: null, shift_assignments: [] },
+      ],
+    })
+
+    const res = await DELETE(delReq(), { params: { id: 'tmpl-a' } })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.propagation.deactivatedBlocksDeleted).toBe(1)
+    // The past block is the record of what ran; it is never touched.
+    expect(db._fixtures.shift_blocks.map((b) => b.id)).toEqual(['blk-past'])
+  })
+
+  it('leaves a staffed future block alone: deactivating must not cancel a shift', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    const db = useDb({
+      shift_templates: templates(),
+      rosters: [],
+      shift_blocks: [
+        { id: 'blk-staffed', location_id: 'loc-a', template_id: 'tmpl-a', block_date: FUTURE, roster_id: null, shift_assignments: [{ profile_id: 'p1', status: 'scheduled' }] },
+      ],
+    })
+
+    const res = await DELETE(delReq(), { params: { id: 'tmpl-a' } })
+    const body = await res.json()
+    expect(body.propagation.deactivatedBlocksDeleted).toBe(0)
+    expect(db._fixtures.shift_blocks).toHaveLength(1)
+  })
+
+  it('keeps an empty PUBLISHED block and reports it, so the calendar not emptying is explained', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    useDb({
+      shift_templates: templates(),
+      rosters: [{ id: 'r-1', status: 'published' }],
+      shift_blocks: [
+        { id: 'blk-pub', location_id: 'loc-a', template_id: 'tmpl-a', block_date: FUTURE, roster_id: 'r-1', rosters: { status: 'published' }, shift_assignments: [] },
+      ],
+    })
+
+    const res = await DELETE(delReq(), { params: { id: 'tmpl-a' } })
+    const body = await res.json()
+    expect(body.propagation.deactivatedBlocksDeleted).toBe(0)
+    expect(body.propagation.publishedEmptiesKept).toBe(1)
+  })
+})
+
+describe('DELETE /api/schedule/templates/[id]?hard=true', () => {
+  const HARD = 'https://crm.test/api/schedule/templates/tmpl-a?hard=true'
+
+  it('removes a template that has no blocks and no assignments ever', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    const db = useDb({ shift_templates: templates(), shift_blocks: [], shift_assignments: [] })
+
+    const res = await DELETE(delReq(HARD), { params: { id: 'tmpl-a' } })
+    expect(res.status).toBe(200)
+    expect((await res.json()).deleted).toBe(true)
+    expect(db._fixtures.shift_templates.map((t) => t.id)).toEqual(['tmpl-b'])
+    // Scoped to the verified location, not by bare id.
+    const del = db._writes.find((w) => w.table === 'shift_templates' && w.op === 'delete')
+    expect(del.filters).toContainEqual({ type: 'eq', col: 'location_id', val: 'loc-a' })
+  })
+
+  it('refuses when the template has shifts, naming the coaches on them, and keeps the row', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    const db = useDb({
+      shift_templates: templates(),
+      shift_blocks: [{ id: 'blk-1', location_id: 'loc-a', template_id: 'tmpl-a', block_date: PAST }],
+      shift_assignments: [{ id: 'a-1', block_id: 'blk-1', profile_id: 'p1', status: 'completed' }],
+    })
+
+    const res = await DELETE(delReq(HARD), { params: { id: 'tmpl-a' } })
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error).toBe('template_in_use')
+    expect(body.blocks).toBe(1)
+    expect(body.assignments).toBe(1)
+    expect(body.message).toMatch(/Deactivate it instead/)
+    expect(db._fixtures.shift_templates).toHaveLength(2)
+    expect(db._writes.some((w) => w.op === 'delete')).toBe(false)
+  })
+
+  // A CANCELLED assignment is retained on purpose (mig 067) — it is still
+  // history, so "no assignments ever" has to count it.
+  it('counts a cancelled assignment as history', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    useDb({
+      shift_templates: templates(),
+      shift_blocks: [{ id: 'blk-1', location_id: 'loc-a', template_id: 'tmpl-a', block_date: PAST }],
+      shift_assignments: [{ id: 'a-1', block_id: 'blk-1', profile_id: 'p1', status: 'cancelled' }],
+    })
+    const body = await (await DELETE(delReq(HARD), { params: { id: 'tmpl-a' } })).json()
+    expect(body.assignments).toBe(1)
+  })
+
+  it('still refuses a cross-tenant hard delete with a 404', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    const db = useDb({ shift_templates: templates(), shift_blocks: [], shift_assignments: [] })
+    const res = await DELETE(delReq('https://crm.test/x?hard=true'), { params: { id: 'tmpl-b' } })
+    expect(res.status).toBe(404)
+    expect(db._fixtures.shift_templates).toHaveLength(2)
+  })
+
+  it('an unreadable url means DEACTIVATE, never delete', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    const db = useDb({ shift_templates: templates(), rosters: [], shift_blocks: [] })
+    const res = await DELETE({ json: async () => ({}) }, { params: { id: 'tmpl-a' } })
+    expect(res.status).toBe(200)
+    expect(db._fixtures.shift_templates).toHaveLength(2)
+    const write = db._writes.find((w) => w.table === 'shift_templates')
+    expect(write.op).toBe('update')
+    expect(write.payload).toEqual({ active: false })
+  })
+})
+
+// THE FINDING: saving a template's minimum pushed the one number onto every
+// future block in a single UPDATE. `shift_blocks_min_coaches_check` (mig 177)
+// forbids min > max per row, so a single block whose max had been cut below
+// the new minimum failed the statement for ALL of them — the template saved,
+// the propagation landed on nothing, and the route returned a warning the
+// operator could do nothing with.
+describe('PUT /api/schedule/templates/[id] — the minimum is clamped per block', () => {
+  it('writes LEAST(min, block.max) rather than one number for every block', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    const db = useDb({
+      shift_templates: templates(),
+      rosters: [],
+      shift_blocks: [
+        { id: 'blk-roomy', location_id: 'loc-a', template_id: 'tmpl-a', block_date: FUTURE, min_coaches: 1, max_coaches: 10, shift_assignments: [] },
+        { id: 'blk-tight', location_id: 'loc-a', template_id: 'tmpl-a', block_date: FUTURE, min_coaches: 1, max_coaches: 2, shift_assignments: [] },
+        { id: 'blk-past', location_id: 'loc-a', template_id: 'tmpl-a', block_date: PAST, min_coaches: 1, max_coaches: 2, shift_assignments: [] },
+      ],
+    })
+
+    const res = await PUT(req({ min_coaches: 3 }), { params: { id: 'tmpl-a' } })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.warning).toBeUndefined()
+
+    const blockWrites = db._writes.filter((w) => w.table === 'shift_blocks' && w.op === 'update')
+    const byMin = Object.fromEntries(blockWrites.map((w) => [w.payload.min_coaches, w.filters.find((f) => f.type === 'in')?.val]))
+    expect(byMin[3]).toEqual(['blk-roomy'])
+    // Clamped to its own ceiling instead of failing the whole statement.
+    expect(byMin[2]).toEqual(['blk-tight'])
+    // Past blocks keep their snapshotted minimum (mig 177's rule).
+    expect(blockWrites.flatMap((w) => w.filters.find((f) => f.type === 'in')?.val || [])).not.toContain('blk-past')
+  })
+
+  it('lowering the maximum drags a block sitting above it down in the SAME statement', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    const db = useDb({
+      shift_templates: templates(),
+      rosters: [],
+      shift_blocks: [
+        { id: 'blk-1', location_id: 'loc-a', template_id: 'tmpl-a', block_date: FUTURE, min_coaches: 3, max_coaches: 10, shift_assignments: [] },
+      ],
+    })
+
+    await PUT(req({ max_coaches: 2 }), { params: { id: 'tmpl-a' } })
+    const write = db._writes.find((w) => w.table === 'shift_blocks' && w.op === 'update')
+    // Both values in one patch, or the CHECK sees min 3 against max 2.
+    expect(write.payload).toEqual({ max_coaches: 2, min_coaches: 2 })
+  })
+
+  it('writes nothing when the clamped values already match', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    const db = useDb({
+      shift_templates: templates(),
+      rosters: [],
+      shift_blocks: [
+        { id: 'blk-1', location_id: 'loc-a', template_id: 'tmpl-a', block_date: FUTURE, min_coaches: 2, max_coaches: 2, shift_assignments: [] },
+      ],
+    })
+
+    await PUT(req({ min_coaches: 5 }), { params: { id: 'tmpl-a' } })
+    expect(db._writes.filter((w) => w.table === 'shift_blocks' && w.op === 'update')).toHaveLength(0)
+  })
+})
+
+describe('PUT /api/schedule/templates/[id] — a reorder is just a reorder', () => {
+  it('skips the 8-week generator for a display_order-only edit', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    const db = useDb({ shift_templates: templates(), rosters: [], shift_blocks: [], shift_block_removals: [] })
+
+    const res = await PUT(req({ display_order: 2 }), { params: { id: 'tmpl-a' } })
+    expect(res.status).toBe(200)
+    expect(db._writes.some((w) => w.table === 'shift_blocks' && w.op === 'upsert')).toBe(false)
+  })
+
+  it('still regenerates when anything structural rides along', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    const db = useDb({ shift_templates: templates(), rosters: [], shift_blocks: [], shift_block_removals: [] })
+
+    await PUT(req({ display_order: 2, days_of_week: ['mon', 'tue', 'wed'] }), { params: { id: 'tmpl-a' } })
+    expect(db._writes.some((w) => w.table === 'shift_blocks' && w.op === 'upsert')).toBe(true)
   })
 })

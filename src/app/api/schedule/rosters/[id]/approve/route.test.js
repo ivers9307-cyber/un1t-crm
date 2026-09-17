@@ -184,7 +184,10 @@ describe('POST /api/schedule/rosters/[id]/approve — overlap guard', () => {
     expect(notifyStaffOfPublish).not.toHaveBeenCalled()
   })
 
-  it('refuses a draft that only straddles the edge of a published period', async () => {
+  // ROSTER-TRIM.1 — approving IS publishing, so it resolves a one-sided
+  // straddle the same way the publish route does: trim the older roster back
+  // to the days it keeps, before the draft to published flip.
+  it('trims a published roster that straddles the edge, and approves', async () => {
     const { db, updates } = buildDb({
       roster: draft(),
       publishedRosters: [{ id: 'r-prev', period_start: '2026-04-27', period_end: '2026-05-05' }],
@@ -192,8 +195,23 @@ describe('POST /api/schedule/rosters/[id]/approve — overlap guard', () => {
     createServerClient.mockReturnValue(db)
 
     const res = await POST({}, PROPS)
+    expect(res.status).toBe(200)
+    const trim = updates.find((u) => u.payload.period_end === '2026-05-03')
+    expect(trim.payload).toEqual({ period_start: '2026-04-27', period_end: '2026-05-03' })
+    expect(trim.where).toContainEqual(['id', 'r-prev'])
+  })
+
+  it('names the period that would work when a published roster engulfs the draft', async () => {
+    const { db } = buildDb({
+      roster: draft(),
+      publishedRosters: [{ id: 'r-month', period_start: '2026-05-01', period_end: '2026-05-31' }],
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST({}, PROPS)
     expect(res.status).toBe(409)
-    expect(updates).toHaveLength(0)
+    const body = await res.json()
+    expect(body.suggested_period).toEqual({ start: '2026-05-01', end: '2026-05-31' })
   })
 
   it('approves a draft that CONTAINS the published roster — the wider one takes over', async () => {
