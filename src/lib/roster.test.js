@@ -10,6 +10,7 @@ import {
   formatDate,
   expandDaysToDates,
   generateBlocksForTemplate,
+  clampMinCoaches,
   isBlockUnstaffedFuture,
   isLiveAssignment,
   liveAssignments,
@@ -227,6 +228,49 @@ describe('generateBlocksForTemplate', () => {
     )
     const records = upsertMock.mock.calls[0][0]
     expect(records[0].max_coaches).toBe(15)
+  })
+
+  // HORIZONMIN.1 — the generator used to leave min_coaches off, so every block
+  // it made (nightly horizon, template create/update) fell to the DB default
+  // of 1 and a 2-coach template never flagged understaffed at 1 coach.
+  it('writes the template min_coaches on every block it generates', async () => {
+    await generateBlocksForTemplate(
+      db,
+      { id: 't1', location_id: 'l1', start_time: '06:00', end_time: '07:00', days_of_week: ['mon', 'tue'], min_coaches: 2, max_coaches: 4 },
+      '2026-05-04',
+      1
+    )
+    const records = upsertMock.mock.calls[0][0]
+    expect(records).toHaveLength(2)
+    for (const r of records) expect(r).toMatchObject({ min_coaches: 2, max_coaches: 4 })
+  })
+
+  it('keeps a legitimate min_coaches of 0 (no minimum)', async () => {
+    await generateBlocksForTemplate(
+      db,
+      { id: 't1', location_id: 'l1', start_time: '06:00', end_time: '07:00', days_of_week: ['mon'], min_coaches: 0, max_coaches: 4 },
+      '2026-05-04',
+      1
+    )
+    expect(upsertMock.mock.calls[0][0][0].min_coaches).toBe(0)
+  })
+
+  it('defaults min_coaches to 1 and clamps it to max_coaches (mig 177 CHECK)', async () => {
+    await generateBlocksForTemplate(
+      db,
+      { id: 't1', location_id: 'l1', start_time: '06:00', end_time: '07:00', days_of_week: ['mon'], max_coaches: 4 },
+      '2026-05-04',
+      1
+    )
+    expect(upsertMock.mock.calls[0][0][0].min_coaches).toBe(1)
+
+    await generateBlocksForTemplate(
+      db,
+      { id: 't1', location_id: 'l1', start_time: '06:00', end_time: '07:00', days_of_week: ['mon'], min_coaches: 9, max_coaches: 3 },
+      '2026-05-04',
+      1
+    )
+    expect(upsertMock.mock.calls[1][0][0]).toMatchObject({ min_coaches: 3, max_coaches: 3 })
   })
 
   it('throws when supabase reports an error', async () => {
@@ -655,5 +699,20 @@ describe('periodCovers (ROSTER-FIX.6a)', () => {
   it('is false rather than throwing on a malformed key', () => {
     expect(periodCovers(null, WEEK)).toBe(false)
     expect(periodCovers(MONTH, 'nonsense')).toBe(false)
+  })
+})
+
+describe('clampMinCoaches (HORIZONMIN.1)', () => {
+  it('passes a value inside 0..max through', () => {
+    expect(clampMinCoaches(2, 4)).toBe(2)
+    expect(clampMinCoaches(0, 4)).toBe(0)
+  })
+  it('defaults a missing min to 1', () => {
+    expect(clampMinCoaches(null, 4)).toBe(1)
+    expect(clampMinCoaches(undefined, 4)).toBe(1)
+  })
+  it('clamps to max and never below 0', () => {
+    expect(clampMinCoaches(9, 3)).toBe(3)
+    expect(clampMinCoaches(-2, 3)).toBe(0)
   })
 })
