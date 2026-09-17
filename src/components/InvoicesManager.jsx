@@ -20,6 +20,7 @@ import {
   RefreshCw, Loader2, Eye, ExternalLink, Undo2, History,
 } from 'lucide-react'
 import { recentMonthOptions, defaultMonthKey, periodLabel } from '@/lib/contractor-invoices'
+import { contractorInvoiceLifecycle } from '@shared/contractor-invoice-review'
 import { hasPermission } from '@/lib/permissions'
 
 // Approver = master/owner by default, OR anyone explicitly granted the
@@ -80,9 +81,9 @@ export default function InvoicesManager({ user }) {
         <h1 className="text-2xl font-bold text-un1t-text">Contractor invoices</h1>
         <p className="text-sm text-un1t-subtle mt-1">
           {reviewerMode
-            ? 'Review submitted invoices against scheduled hours, then approve to forward to Xero or decline with a reason.'
+            ? 'Review submitted invoices against scheduled hours, then approve to queue them for the accountant or decline with a reason.'
             : canSubmit
-              ? 'Submit your monthly invoice as a PDF. Approved invoices are forwarded to accounts; declined ones come back with notes for adjustment.'
+              ? 'Submit your monthly invoice as a PDF. Approved invoices are queued for our accountant and then paid; declined ones come back with notes for adjustment.'
               : 'This area is for contractor invoice submissions and approvals.'}
         </p>
       </header>
@@ -358,7 +359,7 @@ function InvoiceListRow({ invoice, reviewerMode, onOpen }) {
         onClick={onOpen}
         className="w-full text-left px-4 py-3 hover:bg-un1t-border/20 transition-colors flex items-center gap-4"
       >
-        <StatusIcon status={invoice.status} />
+        <StatusIcon status={invoice.status} lifecycle={invoice.lifecycle} />
         <div className="flex-1 min-w-0">
           <div className="flex items-baseline gap-3">
             <h3 className="text-sm font-semibold text-un1t-text truncate">
@@ -375,15 +376,9 @@ function InvoiceListRow({ invoice, reviewerMode, onOpen }) {
                 <span className="mx-2">·</span>
               </>
             )}
-            <StatusLabel status={invoice.status} />
+            <StatusLabel status={invoice.status} lifecycle={invoice.lifecycle} />
             <span className="mx-2">·</span>
             Submitted {timeAgo(invoice.submitted_at)}
-            {invoice.status === 'approved' && invoice.xero_synced_at && (
-              <>
-                <span className="mx-2">·</span>
-                <span className="text-green-300">Synced to Xero</span>
-              </>
-            )}
           </p>
         </div>
         <Eye size={14} className="text-un1t-muted shrink-0" />
@@ -392,23 +387,31 @@ function InvoiceListRow({ invoice, reviewerMode, onOpen }) {
   )
 }
 
-function StatusIcon({ status }) {
-  // INVOICES-QUEUE.1 — awaiting_accountant_review uses the same
-  // green tick as approved (both happy-path post-owner-approval).
-  if (status === 'approved' || status === 'awaiting_accountant_review') return <CheckCircle2 size={18} className="text-green-400 shrink-0" />
-  if (status === 'declined') return <XCircle size={18} className="text-red-400 shrink-0" />
-  if (status === 'revoked') return <Undo2 size={18} className="text-un1t-subtle shrink-0" />
-  return <Clock size={18} className="text-amber-400 shrink-0" />
+// INVOICEREVIEW.2 — the label comes from the server-computed lifecycle
+// (shared/contractor-invoice-review.js), which reads the invoices_queue
+// row: "Approved, queued for accountant" → "Sent to Xero" → "Paid".
+// The old flat "With accountant" never moved, because
+// contractor_invoices.status itself never moves past
+// awaiting_accountant_review. A row without a lifecycle (stale client
+// payload) falls back to the invoice-only derivation.
+function resolveLifecycle(status, lifecycle) {
+  return lifecycle || contractorInvoiceLifecycle({ status })
 }
-function StatusLabel({ status }) {
-  if (status === 'approved') return <span className="text-green-300 font-medium">Approved</span>
-  // Different short label so the contractor can see WHERE their
-  // invoice sits even though it's already been signed off by the
-  // owner.
-  if (status === 'awaiting_accountant_review') return <span className="text-green-300 font-medium">With accountant</span>
-  if (status === 'declined') return <span className="text-red-300 font-medium">Declined</span>
-  if (status === 'revoked') return <span className="text-un1t-subtle font-medium">Revoked by contractor</span>
-  return <span className="text-amber-300 font-medium">Awaiting review</span>
+function StatusIcon({ status, lifecycle }) {
+  const { tone } = resolveLifecycle(status, lifecycle)
+  if (tone === 'green') return <CheckCircle2 size={18} className="text-green-600 shrink-0" />
+  if (tone === 'red') return <XCircle size={18} className="text-red-600 shrink-0" />
+  if (tone === 'slate') return <Undo2 size={18} className="text-un1t-subtle shrink-0" />
+  return <Clock size={18} className="text-amber-600 shrink-0" />
+}
+function StatusLabel({ status, lifecycle }) {
+  const { label, tone } = resolveLifecycle(status, lifecycle)
+  const cls =
+    tone === 'green' ? 'text-green-700' :
+    tone === 'red' ? 'text-red-700' :
+    tone === 'amber' ? 'text-amber-700' :
+    'text-un1t-subtle'
+  return <span className={`${cls} font-medium`}>{label}</span>
 }
 
 // ── Detail modal ──────────────────────────────────────────────────
@@ -562,39 +565,11 @@ function InvoiceDetailModal({ invoiceId, reviewerMode, onClose, onChanged }) {
                     commercially sensitive and not for the
                     contractor's eyes. The API also strips this
                     block for self-views as a defence-in-depth. */}
-                {reviewerMode && data.computed_scheduled && (
-                  <div>
-                    <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-2">
-                      Schedule vs invoice
-                    </h4>
-                    <div className="bg-un1t-bg/60 border border-un1t-border rounded-lg p-4 space-y-2 text-sm">
-                      <Row label="Scheduled hours" value={`${data.computed_scheduled.scheduled_hours} h`} sub={`${data.computed_scheduled.shift_count} shifts`} />
-                      <Row
-                        label="Hourly rate"
-                        value={data.computed_scheduled.hourly_rate
-                          ? `€${data.computed_scheduled.hourly_rate.toFixed(2)}/h`
-                          : <span className="text-amber-300">Not set on profile</span>}
-                      />
-                      <Row
-                        label="Estimated cost"
-                        value={data.computed_scheduled.estimated_cost != null
-                          ? `€${data.computed_scheduled.estimated_cost.toFixed(2)}`
-                          : '—'}
-                        emphasize
-                      />
-                      <div className="pt-2 mt-2 border-t border-un1t-border">
-                        <Row
-                          label="Invoiced amount"
-                          value={`€${Number(data.invoice_amount).toFixed(2)}`}
-                          emphasize
-                        />
-                        <DiffRow
-                          invoiced={Number(data.invoice_amount)}
-                          estimated={data.computed_scheduled.estimated_cost}
-                        />
-                      </div>
-                    </div>
-                  </div>
+                {reviewerMode && data.review_comparison && (
+                  <ReviewComparison
+                    comparison={data.review_comparison}
+                    invoiced={Number(data.invoice_amount)}
+                  />
                 )}
 
                 {/* Status block */}
@@ -602,8 +577,8 @@ function InvoiceDetailModal({ invoiceId, reviewerMode, onClose, onChanged }) {
                   <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-2">Status</h4>
                   <div className="bg-un1t-bg/60 border border-un1t-border rounded-lg p-4 text-sm">
                     <p className="inline-flex items-center gap-2">
-                      <StatusIcon status={data.status} />
-                      <StatusLabel status={data.status} />
+                      <StatusIcon status={data.status} lifecycle={data.lifecycle} />
+                      <StatusLabel status={data.status} lifecycle={data.lifecycle} />
                     </p>
                     {data.status === 'approved' && (
                       <p className="text-xs text-un1t-subtle mt-2">
@@ -763,28 +738,87 @@ function Row({ label, value, sub, emphasize = false }) {
     </div>
   )
 }
-function DiffRow({ invoiced, estimated }) {
-  if (estimated == null || !Number.isFinite(estimated)) return null
-  const diff = invoiced - estimated
-  const pct = estimated > 0 ? (diff / estimated) * 100 : 0
+// INVOICEREVIEW.2 — Schedule vs invoice. `comparison` is the server's
+// selectReviewComparison(): before approval the live roster; after
+// approval the SNAPSHOT saved at approval ("as approved on <date>"),
+// plus the live roster as a secondary line only when it has drifted.
+function ReviewComparison({ comparison, invoiced }) {
+  const { primary, current, snapshot_missing: snapshotMissing } = comparison
+  const heading = primary.source === 'snapshot'
+    ? `Schedule vs invoice, as approved on ${formatDay(primary.as_of)}`
+    : 'Schedule vs invoice'
+  return (
+    <div>
+      <h4 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-2">
+        {heading}
+      </h4>
+      <div className="bg-un1t-bg/60 border border-un1t-border rounded-lg p-4 space-y-2 text-sm">
+        <FiguresRows figures={primary} />
+        <div className="pt-2 mt-2 border-t border-un1t-border">
+          <Row label="Invoiced amount" value={`€${invoiced.toFixed(2)}`} emphasize />
+          <DiffRow comparison={primary.comparison} />
+        </div>
+        {snapshotMissing && (
+          <p className="text-xs text-un1t-subtle pt-1">
+            Approved before snapshots were saved, so this is the current roster, not the roster at approval.
+          </p>
+        )}
+      </div>
+      {current && (
+        <div className="mt-2 bg-un1t-bg/60 border border-dashed border-un1t-border rounded-lg p-3 space-y-1.5 text-sm">
+          <div className="text-xs font-semibold text-un1t-subtle">Current roster (changed since approval)</div>
+          <FiguresRows figures={current} />
+          <div className="text-xs text-un1t-subtle">{current.summary}</div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function FiguresRows({ figures }) {
+  return (
+    <>
+      <Row
+        label="Scheduled hours"
+        value={figures.scheduled_hours != null ? `${figures.scheduled_hours} h` : '—'}
+        sub={figures.shift_count != null ? `${figures.shift_count} shifts` : null}
+      />
+      <Row
+        label="Hourly rate"
+        value={figures.hourly_rate != null
+          ? `€${figures.hourly_rate.toFixed(2)}/h`
+          : <span className="text-amber-700">Not set on profile</span>}
+      />
+      <Row
+        label="Estimated cost"
+        value={figures.estimated_cost != null ? `€${figures.estimated_cost.toFixed(2)}` : '—'}
+        emphasize
+      />
+    </>
+  )
+}
+
+// Verdict from shared rosterComparison(): a delta under €1 or under 1%
+// reads as a match, so a rate-rounding artefact (profile €19.98 vs
+// invoices at €20) is not flagged as a mismatch.
+function DiffRow({ comparison }) {
+  if (!comparison || comparison.verdict === 'unknown') return null
 
   // Match: solid green pill, white text — works on any theme.
-  if (Math.abs(diff) < 0.005) {
+  if (comparison.verdict === 'matches') {
     return (
       <div className="mt-3 rounded-md bg-green-600 text-white px-4 py-3 flex items-center gap-2.5 shadow">
         <CheckCircle2 size={18} className="shrink-0" />
-        <span className="text-base font-semibold">Invoiced amount matches estimate</span>
+        <span className="text-base font-semibold">Invoiced amount matches roster</span>
       </div>
     )
   }
 
   // Mismatch: solid orange (>5% off) or neutral (small drift) box,
-  // white text. We use solid background colors instead of low-alpha
-  // tints so the callout stays high-contrast regardless of light or
-  // dark page theme — the previous amber-on-amber washed out on
-  // light backgrounds.
-  const isBig = Math.abs(pct) > 5
-  const bgClass = isBig
+  // white text. Solid backgrounds keep the callout high-contrast on
+  // either theme.
+  const over = comparison.verdict === 'over'
+  const bgClass = comparison.significant
     ? 'bg-orange-600 text-white'
     : 'bg-slate-700 text-white'
   return (
@@ -792,14 +826,21 @@ function DiffRow({ invoiced, estimated }) {
       <AlertCircle size={20} className="shrink-0 mt-0.5" />
       <div className="leading-snug">
         <div className="text-base font-bold">
-          Invoiced €{Math.abs(diff).toFixed(2)} {diff > 0 ? 'over' : 'under'} estimate
+          Invoiced €{Math.abs(comparison.diff).toFixed(2)} {over ? 'over' : 'under'} roster
         </div>
-        <div className="text-sm font-medium opacity-90 mt-0.5">
-          {diff > 0 ? '+' : '−'}{Math.abs(pct).toFixed(1)}% vs scheduled hours × hourly rate
-        </div>
+        {comparison.pct != null && (
+          <div className="text-sm font-medium opacity-90 mt-0.5">
+            {over ? '+' : '−'}{Math.abs(comparison.pct).toFixed(1)}% vs scheduled hours × hourly rate
+          </div>
+        )}
       </div>
     </div>
   )
+}
+
+function formatDay(iso) {
+  if (!iso) return 'an unknown date'
+  return new Date(iso).toLocaleDateString('en-IE', { dateStyle: 'medium', timeZone: 'Europe/Dublin' })
 }
 
 function timeAgo(iso) {
@@ -847,7 +888,7 @@ function AuditTimeline({ data }) {
       tone: 'red',
     })
   }
-  if (data.reviewed_at && data.status === 'approved') {
+  if (data.reviewed_at && (data.status === 'approved' || data.status === 'awaiting_accountant_review')) {
     events.push({
       ts: data.reviewed_at,
       label: 'Approved',

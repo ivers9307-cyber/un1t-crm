@@ -12,7 +12,9 @@ function formatAmount(amount, currency) {
 
 // `highlight` — amber ring marking the card a push tap was about
 // (?focus= deep link from lib/notification-nav.js). Display-only.
-export default function ApprovalCard({ item, busy, onApprove, onDecline, highlight }) {
+// `children` — optional category-specific detail rendered above the buttons
+// (INVOICEREVIEW.2: the contractor-invoice roster check).
+export default function ApprovalCard({ item, busy, onApprove, onDecline, highlight, children }) {
   const amount = formatAmount(item.amount, item.currency)
   return (
     <View className={`bg-un1t-surface border rounded-2xl p-3.5 mb-2 ${highlight ? 'border-amber-400' : 'border-un1t-border'}`}>
@@ -27,6 +29,7 @@ export default function ApprovalCard({ item, busy, onApprove, onDecline, highlig
           <Text className="text-[11px] text-un1t-subtle ml-1" numberOfLines={1}>{item.meta}</Text>
         </View>
       ) : null}
+      {children}
       <View className="flex-row gap-2 mt-2.5">
         <Pressable onPress={onApprove} disabled={busy}
           className="flex-1 flex-row items-center justify-center py-2 rounded-xl bg-emerald-600 active:opacity-80 disabled:opacity-50">
