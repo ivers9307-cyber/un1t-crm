@@ -3,7 +3,8 @@
 // projectPublishImpact: server-side function that given a
 // location + publish period returns what the month-total
 // contractor spend WILL be if this period is published, plus
-// the budget delta. Drives the publish modal's "you'll be €X
+// the budget delta — per calendar month the period touches
+// (BUDGETAPPROVE.1). Drives the publish modal's "you'll be €X
 // over budget" preview AND the API's hard gate for managers.
 //
 // publishRoster: creates a `rosters` row, tags blocks in the
@@ -31,13 +32,42 @@ function isoLastOfMonth(iso) {
 }
 
 /**
- * Return the (location, contractor staff lookup, blocks-in-month
+ * BUDGETAPPROVE.1 — every calendar month [periodStart, periodEnd] touches, as
+ * `{ monthStart, monthEnd }` in order. Pure string arithmetic on ISO dates, so
+ * it cannot drift with the process timezone (a `new Date('2026-09-01')` parsed
+ * in Dublin and formatted in UTC is how month keys go wrong).
+ */
+export function monthsTouched(periodStart, periodEnd) {
+  const months = []
+  let [y, m] = periodStart.slice(0, 7).split('-').map(Number)
+  const [endY, endM] = periodEnd.slice(0, 7).split('-').map(Number)
+  while (y < endY || (y === endY && m <= endM)) {
+    const monthStart = `${y}-${String(m).padStart(2, '0')}-01`
+    months.push({ monthStart, monthEnd: isoLastOfMonth(monthStart) })
+    m += 1
+    if (m > 12) { m = 1; y += 1 }
+  }
+  return months
+}
+
+// PostgREST caps every select at 1000 rows whatever .limit() says. One month
+// of blocks fits, but a period spanning months loads every month it touches,
+// so the block read pages rather than trusting it to fit.
+const BLOCK_PAGE_SIZE = 1000
+
+/**
+ * Return the (location, contractor staff lookup, blocks-in-months
  * with roster join, current monthly_contractor_budget_eur) needed
  * to evaluate a publish.
+ *
+ * BUDGETAPPROVE.1 — loads EVERY calendar month the period touches, not just
+ * the month periodStart falls in. Loading only that month silently dropped
+ * the days a week carried into the next month: the 31 Aug–6 Sep draft was
+ * stored at €99.96 (Monday alone) against a real €689.95.
  */
-async function loadBudgetContext(db, locationId, periodStart) {
+async function loadBudgetContext(db, locationId, periodStart, periodEnd = periodStart) {
   const monthStart = isoFirstOfMonth(periodStart)
-  const monthEnd = isoLastOfMonth(periodStart)
+  const monthEnd = isoLastOfMonth(periodEnd > periodStart ? periodEnd : periodStart)
 
   // Location budget snapshot.
   const { data: loc, error: locErr } = await db
@@ -62,25 +92,33 @@ async function loadBudgetContext(db, locationId, periodStart) {
     contractorRateById[p.id] = Number(p.hourly_rate) || 0
   }
 
-  // All blocks in the calendar month containing periodStart, with
+  // All blocks in the calendar months the period touches, with
   // their assignments and roster join. We consider the union of
-  // (already-published blocks in the month outside the period)
+  // (already-published blocks in those months outside the period)
   // PLUS (all blocks in the period — published or not).
   // ROSTER-FIX.4 — the per-coach overrides ride along: a coach whose window
   // a manager adjusted is paid for THAT window, not the block's.
-  const { data: monthBlocks, error: blocksErr } = await db
-    .from('shift_blocks')
-    .select(`
-      id, location_id, block_date, start_time, end_time, roster_id,
-      shift_assignments(profile_id, status, start_time_override, end_time_override),
-      rosters:roster_id(id, status)
-    `)
-    .eq('location_id', locationId)
-    .gte('block_date', monthStart)
-    .lte('block_date', monthEnd)
-  if (blocksErr) throw new Error(`Block lookup failed: ${blocksErr.message}`)
+  const monthBlocks = []
+  for (let from = 0; ; from += BLOCK_PAGE_SIZE) {
+    const { data: page, error: blocksErr } = await db
+      .from('shift_blocks')
+      .select(`
+        id, location_id, block_date, start_time, end_time, roster_id,
+        shift_assignments(profile_id, status, start_time_override, end_time_override),
+        rosters:roster_id(id, status)
+      `)
+      .eq('location_id', locationId)
+      .gte('block_date', monthStart)
+      .lte('block_date', monthEnd)
+      .order('block_date', { ascending: true })
+      .order('id', { ascending: true })
+      .range(from, from + BLOCK_PAGE_SIZE - 1)
+    if (blocksErr) throw new Error(`Block lookup failed: ${blocksErr.message}`)
+    monthBlocks.push(...(page || []))
+    if (!page || page.length < BLOCK_PAGE_SIZE) break
+  }
 
-  // ROSTER-FIX.4 — approved leave for the month, in ONE query. A coach on
+  // ROSTER-FIX.4 — approved leave for the months, in ONE query. A coach on
   // approved leave is not working the shift they are still rostered on, so
   // billing it inflated the projection and could refuse a publish that was
   // actually within budget.
@@ -105,7 +143,7 @@ async function loadBudgetContext(db, locationId, periodStart) {
     monthEnd,
     contractorRateById,
     leaveByProfile,
-    monthBlocks: monthBlocks || [],
+    monthBlocks,
   }
 }
 
@@ -145,6 +183,23 @@ function blockContractorCost(block, contractorRateById, leaveByProfile) {
  * Project what the month-total contractor cost will be after
  * publishing (period_start, period_end). Does NOT mutate state.
  *
+ * BUDGETAPPROVE.1 — the budget is MONTHLY, so a period that crosses a month
+ * boundary is judged per month: each month's total is (that month's published
+ * spend outside the period + this period's days in that month) against that
+ * month's budget. `months` carries the breakdown. The top-level fields keep
+ * their old names for every existing caller:
+ *   - periodProjectedEur / alreadyPublishedEur / blockCount are summed over
+ *     the months (the whole period's cost, which is what the stored
+ *     `projected_contractor_eur` snapshot means);
+ *   - overBudget is true when ANY month is over, and overrunEur is the sum of
+ *     each month's overrun (a month under budget cannot absorb another's
+ *     overspend);
+ *   - monthStart / monthEnd / monthProjectedTotalEur / remainingEur describe
+ *     the BINDING month — the most over (or least remaining) — so a single
+ *     "month total of budget" line still quotes a real month, never a sum of
+ *     two months against one month's budget.
+ * For a period inside one month all of these are exactly what they were.
+ *
  * @returns {{
  *   monthStart, monthEnd,
  *   monthlyBudgetEur: number | null,
@@ -155,53 +210,100 @@ function blockContractorCost(block, contractorRateById, leaveByProfile) {
  *   overBudget: boolean,
  *   overrunEur: number,              // 0 if under, positive if over
  *   blockCount: number,
+ *   months: Array<{
+ *     monthStart, monthEnd, monthlyBudgetEur, alreadyPublishedEur,
+ *     periodProjectedEur, monthProjectedTotalEur, remainingEur,
+ *     overBudget, overrunEur, blockCount,
+ *   }>,
  * }}
  */
 export async function projectPublishImpact(db, { locationId, periodStart, periodEnd }) {
-  const ctx = await loadBudgetContext(db, locationId, periodStart)
-  const { location, monthStart, monthEnd, contractorRateById, leaveByProfile, monthBlocks } = ctx
-
-  let alreadyPublishedEur = 0
-  let periodProjectedEur = 0
-  let blockCount = 0
-
-  for (const b of monthBlocks) {
-    const cost = blockContractorCost(b, contractorRateById, leaveByProfile)
-    if (cost === 0) continue
-    const inPeriod = b.block_date >= periodStart && b.block_date <= periodEnd
-    if (inPeriod) {
-      periodProjectedEur += cost
-      blockCount++
-    } else {
-      // Only count if currently on a PUBLISHED roster — drafts
-      // don't consume budget until they're published.
-      if (b.rosters?.status === 'published') {
-        alreadyPublishedEur += cost
-      }
-    }
-  }
+  const ctx = await loadBudgetContext(db, locationId, periodStart, periodEnd)
+  const { location, contractorRateById, leaveByProfile, monthBlocks } = ctx
 
   const budget = location?.monthly_contractor_budget_eur != null
     ? Number(location.monthly_contractor_budget_eur)
     : null
 
-  const monthProjectedTotalEur = round2(alreadyPublishedEur + periodProjectedEur)
-  const remainingEur = budget != null ? round2(budget - monthProjectedTotalEur) : null
-  const overBudget = budget != null && monthProjectedTotalEur > budget
-  const overrunEur = overBudget ? round2(monthProjectedTotalEur - budget) : 0
+  const months = monthsTouched(periodStart, periodEnd).map((m) => ({
+    ...m, alreadyPublishedEur: 0, periodProjectedEur: 0, blockCount: 0,
+  }))
+  const monthByKey = new Map(months.map((m) => [m.monthStart.slice(0, 7), m]))
+
+  for (const b of monthBlocks) {
+    const month = monthByKey.get(String(b.block_date).slice(0, 7))
+    if (!month) continue
+    const cost = blockContractorCost(b, contractorRateById, leaveByProfile)
+    if (cost === 0) continue
+    const inPeriod = b.block_date >= periodStart && b.block_date <= periodEnd
+    if (inPeriod) {
+      month.periodProjectedEur += cost
+      month.blockCount++
+    } else {
+      // Only count if currently on a PUBLISHED roster — drafts
+      // don't consume budget until they're published.
+      if (b.rosters?.status === 'published') {
+        month.alreadyPublishedEur += cost
+      }
+    }
+  }
+
+  const perMonth = months.map((m) => {
+    const monthProjectedTotalEur = round2(m.alreadyPublishedEur + m.periodProjectedEur)
+    const remainingEur = budget != null ? round2(budget - monthProjectedTotalEur) : null
+    const overBudget = budget != null && monthProjectedTotalEur > budget
+    return {
+      monthStart: m.monthStart,
+      monthEnd: m.monthEnd,
+      monthlyBudgetEur: budget,
+      alreadyPublishedEur: round2(m.alreadyPublishedEur),
+      periodProjectedEur: round2(m.periodProjectedEur),
+      monthProjectedTotalEur,
+      remainingEur,
+      overBudget,
+      overrunEur: overBudget ? round2(monthProjectedTotalEur - budget) : 0,
+      blockCount: m.blockCount,
+    }
+  })
+
+  // The binding month: largest overrun, then largest total (one budget
+  // figure serves every month, so that is also least remaining, and it still
+  // picks a real month when no budget is set). Ties keep the earlier month.
+  const binding = perMonth.reduce((best, m) => {
+    if (m.overrunEur !== best.overrunEur) return m.overrunEur > best.overrunEur ? m : best
+    if (m.monthProjectedTotalEur !== best.monthProjectedTotalEur) {
+      return m.monthProjectedTotalEur > best.monthProjectedTotalEur ? m : best
+    }
+    return best
+  })
 
   return {
-    monthStart,
-    monthEnd,
+    monthStart: binding.monthStart,
+    monthEnd: binding.monthEnd,
     monthlyBudgetEur: budget,
-    alreadyPublishedEur: round2(alreadyPublishedEur),
-    periodProjectedEur: round2(periodProjectedEur),
-    monthProjectedTotalEur,
-    remainingEur,
-    overBudget,
-    overrunEur,
-    blockCount,
+    alreadyPublishedEur: round2(perMonth.reduce((s, m) => s + m.alreadyPublishedEur, 0)),
+    periodProjectedEur: round2(perMonth.reduce((s, m) => s + m.periodProjectedEur, 0)),
+    monthProjectedTotalEur: binding.monthProjectedTotalEur,
+    remainingEur: binding.remainingEur,
+    overBudget: perMonth.some((m) => m.overBudget),
+    overrunEur: round2(perMonth.reduce((s, m) => s + m.overrunEur, 0)),
+    blockCount: perMonth.reduce((s, m) => s + m.blockCount, 0),
+    months: perMonth,
   }
+}
+
+/**
+ * BUDGETAPPROVE.1 — has the projection moved since a roster row snapshotted
+ * it? Compares the two figures the row stores (`projected_contractor_eur`,
+ * the whole period's cost; `budget_at_publish_eur`, the monthly budget) to
+ * the cent, treating null as its own value — a budget set or cleared since
+ * the draft was submitted is a change the approver should hear about.
+ */
+export function projectionChanged(roster, impact) {
+  if (!roster || !impact) return false
+  const cents = (v) => (v == null || v === '' ? null : Math.round(Number(v) * 100))
+  return cents(roster.projected_contractor_eur) !== cents(impact.periodProjectedEur)
+    || cents(roster.budget_at_publish_eur) !== cents(impact.monthlyBudgetEur)
 }
 
 /**
