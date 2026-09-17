@@ -35,6 +35,17 @@ function isoLastOfMonth(iso) {
 }
 
 /**
+ * ROSTER-TRIM.1 — the ISO date `days` either side of `iso`, in UTC so it
+ * cannot drift with the process timezone. Used to compute the day before a
+ * publish period starts (and the day after it ends), which is where a
+ * straddling roster gets trimmed back to.
+ */
+export function isoShiftDays(iso, days) {
+  const [y, m, d] = iso.split('-').map(Number)
+  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10)
+}
+
+/**
  * BUDGETAPPROVE.1 — every calendar month [periodStart, periodEnd] touches, as
  * `{ monthStart, monthEnd }` in order. Pure string arithmetic on ISO dates, so
  * it cannot drift with the process timezone (a `new Date('2026-09-01')` parsed
@@ -358,19 +369,37 @@ export function projectionChanged(roster, impact) {
  * blocks on and mig 602's exclusion constraint is satisfied. The old row is
  * kept, not deleted — it is the audit trail of a real publish event.
  *
- * A STRADDLE still 409s, and deliberately so. Two reasons, either sufficient:
- * mig 602 would reject the insert outright (the un-swallowed half of the
- * older roster keeps overlapping whatever we do to it), and resolving it
- * would mean SHRINKING a roster the operator did not ask to change — moving
- * somebody else's published dates silently is not a thing to do on their
- * behalf. The 409 names the ranges so they can re-publish the right one.
+ * ROSTER-TRIM.1 — a ONE-SIDED STRADDLE is now resolved too, by TRIMMING.
+ * "Publish the boundary week, then publish the month" used to 409: the week
+ * of Mon 31 Aug runs into September, so publishing September met a roster
+ * starting one day before the period and was refused — and the refusal said
+ * "re-publish that range instead", which publishes the WEEK, never the month
+ * the operator asked for. There was no sequence of clicks that got them there.
+ *
+ * Trimming is the containment case one notch gentler: the straddler keeps the
+ * days OUTSIDE the new period (and every block on them) and gives up exactly
+ * the days the new roster is taking over — which is what supersedeSwallowed-
+ * Rosters' phase-2 sweep already does to any roster left owning fewer days
+ * than it claims. `requested_period_*` is never rewritten, so the original ask
+ * survives.
+ *
+ * A TWO-SIDED straddle — a published roster that runs past BOTH ends of the
+ * new period — still 409s. Trimming it would have to SPLIT it into two ranges,
+ * which the row cannot express, and mig 602 would reject the insert anyway.
+ * The refusal now carries `suggested_period`: the smallest period that covers
+ * both, which is a publish that genuinely resolves it.
  *
  * Both period bounds are inclusive, and dates are ISO YYYY-MM-DD strings, so
  * string comparison IS date comparison.
  *
  * @param {import('@supabase/supabase-js').SupabaseClient} db service-role client
  * @param {{ locationId: string, periodStart: string, periodEnd: string, excludeRosterId?: string|null }} opts
- * @returns {Promise<{ conflicts: Array<{id: string, period_start: string, period_end: string}>, error: any }>}
+ * @returns {Promise<{
+ *   conflicts: Array<{id: string, period_start: string, period_end: string}>,
+ *   trimmable: Array<{id: string, period_start: string, period_end: string, trim_to: {period_start: string, period_end: string}}>,
+ *   overlapping: Array<{id: string, period_start: string, period_end: string}>,
+ *   error: any,
+ * }>}
  */
 export async function findConflictingPublishedRosters(db, { locationId, periodStart, periodEnd, excludeRosterId = null } = {}) {
   let query = db
@@ -387,12 +416,242 @@ export async function findConflictingPublishedRosters(db, { locationId, periodSt
   if (excludeRosterId) query = query.neq('id', excludeRosterId)
 
   const { data, error } = await query
-  if (error) return { conflicts: [], error }
+  if (error) return { conflicts: [], trimmable: [], overlapping: [], error }
 
-  // Contained-in-the-new-period is inclusive on both ends, so an exact
-  // re-publish falls out as "contained" and is allowed too.
-  const conflicts = (data || []).filter((r) => !(r.period_start >= periodStart && r.period_end <= periodEnd))
-  return { conflicts, error: null }
+  const overlapping = data || []
+  const conflicts = []
+  const trimmable = []
+  for (const r of overlapping) {
+    const verdict = classifyPublishedOverlap(r, periodStart, periodEnd)
+    if (verdict.kind === 'contained') continue
+    if (verdict.kind === 'trim') {
+      trimmable.push({ ...r, trim_to: verdict.trim_to })
+      continue
+    }
+    conflicts.push(r)
+  }
+  return { conflicts, trimmable, overlapping, error: null }
+}
+
+/**
+ * ROSTER-TRIM.1 — how a single published roster relates to a publish period.
+ *
+ *   'contained'  — fully inside it (an exact re-publish falls out here too).
+ *                  Resolved by superseding; never a conflict.
+ *   'trim'       — runs past ONE end of it. Resolved by shrinking the roster
+ *                  back to the days outside the period; `trim_to` is the
+ *                  period it keeps.
+ *   'engulfing'  — runs past BOTH ends. A trim would have to split the row in
+ *                  two, so this is the one shape that still refuses.
+ *
+ * Pure and string-only, so it is safe in a client bundle and cannot drift
+ * with the process timezone.
+ *
+ * @param {{period_start: string, period_end: string}} roster
+ * @param {string} periodStart
+ * @param {string} periodEnd
+ * @returns {{kind: 'contained'} | {kind: 'engulfing'} | {kind: 'trim', trim_to: {period_start: string, period_end: string}}}
+ */
+export function classifyPublishedOverlap(roster, periodStart, periodEnd) {
+  const s = roster.period_start
+  const e = roster.period_end
+  if (s >= periodStart && e <= periodEnd) return { kind: 'contained' }
+  if (s < periodStart && e > periodEnd) return { kind: 'engulfing' }
+  if (s < periodStart) {
+    return { kind: 'trim', trim_to: { period_start: s, period_end: isoShiftDays(periodStart, -1) } }
+  }
+  return { kind: 'trim', trim_to: { period_start: isoShiftDays(periodEnd, 1), period_end: e } }
+}
+
+/**
+ * ROSTER-TRIM.1 — the smallest period that covers the publish the operator
+ * asked for AND every roster that refused it. Publishing THAT is the one
+ * action that actually resolves an engulfing overlap, so the 409 names it
+ * instead of telling the operator to publish something narrower than what
+ * they wanted.
+ *
+ * @returns {{start: string, end: string}}
+ */
+export function suggestedCoveringPeriod(conflicts, periodStart, periodEnd) {
+  let start = periodStart
+  let end = periodEnd
+  for (const r of conflicts || []) {
+    if (r?.period_start && r.period_start < start) start = r.period_start
+    if (r?.period_end && r.period_end > end) end = r.period_end
+  }
+  return { start, end }
+}
+
+/**
+ * ROSTER-TRIM.1 — do these (inclusive) ranges between them cover every day of
+ * [periodStart, periodEnd]? Used to decide whether a period is ALREADY live to
+ * staff, which is what the over-budget approval email's wording turns on.
+ *
+ * @param {Array<{period_start: string, period_end: string}>} ranges
+ */
+export function coversPeriod(ranges, periodStart, periodEnd) {
+  const sorted = (ranges || [])
+    .filter((r) => r?.period_start && r?.period_end && r.period_end >= periodStart && r.period_start <= periodEnd)
+    .sort((a, b) => (a.period_start < b.period_start ? -1 : a.period_start > b.period_start ? 1 : 0))
+  let reached = periodStart
+  for (const r of sorted) {
+    if (r.period_start > reached) return false
+    if (r.period_end >= reached) reached = isoShiftDays(r.period_end, 1)
+    if (reached > periodEnd) return true
+  }
+  return reached > periodEnd
+}
+
+/**
+ * ROSTER-TRIM.1 — shrink each straddling published roster back to the days it
+ * keeps, BEFORE the new roster is inserted. Mig 602's exclusion constraint
+ * judges the INSERT, so this has to run first for exactly the reason
+ * releasePublishedRostersFor does.
+ *
+ * All-or-nothing, same as the release: a half-applied set still trips the
+ * constraint, so a failure part-way puts back what it already moved and
+ * reports the failure rather than leaving the caller to insert into it.
+ *
+ * `requested_period_*` is deliberately untouched — it is the record of what
+ * the operator originally asked to publish, and a later trim is not a change
+ * to that ask.
+ *
+ * KNOWN RESIDUE, accepted: a trimmed remnant that ends up owning NO blocks
+ * (every block it had was inside the period this publish took) stays published
+ * over dates it owns nothing on, and supersedeSwallowedRosters' phase-2 sweep
+ * will not clean it up — after the trim it no longer overlaps the new period,
+ * so the sweep never sees it. It is harmless as data (it overlaps no other
+ * published roster, so mig 602 is satisfied, and no coach sees anything
+ * wrong); it is only a tidiness cost in the roster list. Superseding it here
+ * instead is NOT obviously right: the sweep's own rule for "owns nothing" is a
+ * live recount, and doing that per trim would add a query per straddler to
+ * every publish to remove a row that is the audit trail of a real publish
+ * event.
+ *
+ * @param {Array<{id: string, period_start: string, period_end: string, trim_to: {period_start: string, period_end: string}}>} trims
+ * @returns {Promise<{ trimmed: Array<{id: string, period_start: string, period_end: string, trim_to: object}>, error: any }>}
+ */
+export async function trimPublishedRosters(db, trims) {
+  const targets = (trims || []).filter((t) => t?.id && t?.trim_to?.period_start && t?.trim_to?.period_end)
+  if (targets.length === 0) return { trimmed: [], error: null }
+
+  const trimmed = []
+
+  // ONE way out of this function for every failure, so no path can forget the
+  // restore. The restore is itself a write and can itself fail — or throw —
+  // and a roster left trimmed for a publish that never happens owns blocks
+  // outside its own period, so the ids are NAMED when that happens: putting
+  // them back is then a human job.
+  async function abort(err) {
+    let restoreErr = null
+    try {
+      ;({ error: restoreErr } = await restoreRosterPeriods(db, trimmed))
+    } catch (e) {
+      restoreErr = e instanceof Error ? e : new Error(String(e))
+    }
+    if (restoreErr) {
+      return { trimmed: [], error: withRestoreFailure(err, restoreErr, trimmed.map((x) => x.id)) }
+    }
+    return { trimmed: [], error: err }
+  }
+
+  // 🔴 THE LOOP IS WRAPPED because a THROWN error never produces an error
+  // object: a PostgREST 5xx, a dropped fetch or the function timing out skips
+  // every `updErr` branch below, and the caller's own catch sees the EMPTY
+  // `trimmed` it was handed before the call — so the rosters already trimmed
+  // would stay trimmed forever. It is reachable on the headline case, a month
+  // whose boundary weeks are BOTH published: the first trim lands, the second
+  // throws.
+  try {
+    for (const t of targets) {
+      // COMPARE-AND-SWAP. The classification was made from a read taken before
+      // the budget projection, so another publish can have moved this row in
+      // between. Pinning the period we read means a raced row is simply not
+      // written — and because a zero-row UPDATE is NOT an error in PostgREST
+      // (CLAUDE.md), the rows touched are judged explicitly: proceeding on a
+      // silent no-op would walk straight into mig 602's 23P01 on the insert.
+      const { data: touched, error: updErr } = await db
+        .from('rosters')
+        .update({ period_start: t.trim_to.period_start, period_end: t.trim_to.period_end })
+        .eq('id', t.id)
+        .eq('status', 'published')
+        .eq('period_start', t.period_start)
+        .eq('period_end', t.period_end)
+        .select('id')
+      if (updErr) return await abort(updErr)
+      if ((touched || []).length === 0) {
+        return await abort(new Error(`roster ${t.id} changed since it was read, so it was not trimmed`))
+      }
+      trimmed.push(t)
+    }
+  } catch (e) {
+    return await abort(e instanceof Error ? e : new Error(String(e)))
+  }
+  return { trimmed, error: null }
+}
+
+/**
+ * ROSTER-TRIM.1 — what to tell the operator when a publish wrote its roster
+ * row but the block re-tag then failed.
+ *
+ * The two aftermaths are NOT the same thing and the first cut described them
+ * with one sentence, which made it false for half of them:
+ *
+ *   - a STOOD-DOWN (superseded) roster is no longer published, so every block
+ *     still hanging off it reads as UNPUBLISHED to its coach. That is the
+ *     urgent one.
+ *   - a TRIMMED roster is still published and its blocks still read published,
+ *     so nobody has lost sight of a shift. What is wrong is narrower: its
+ *     period no longer covers the days it still owns blocks on, which is the
+ *     state mig 602's pre-apply check (c2) requires to be empty, and phase 2's
+ *     min/max shrink would later widen that period back over the days this
+ *     publish was taking. Re-publishing the period settles it.
+ *
+ * Returns a LEADING-SPACE string to append to an existing sentence, or '' when
+ * there is nothing to say.
+ *
+ * @param {{ releasedCount?: number, trimmedCount?: number }} counts
+ * @returns {string}
+ */
+export function publishAftermathNote({ releasedCount = 0, trimmedCount = 0 } = {}) {
+  const parts = []
+  if (releasedCount > 0) {
+    const noun = releasedCount === 1 ? 'roster it replaces has' : 'rosters it replaces have'
+    parts.push(`The ${noun} already been stood down, so those shifts read as unpublished until you publish this period again.`)
+  }
+  if (trimmedCount > 0) {
+    const subject = trimmedCount === 1
+      ? 'One overlapping roster was trimmed back'
+      : `${trimmedCount} overlapping rosters were trimmed back`
+    parts.push(`${subject} to the days outside this period. Those shifts are still published, but that roster's dates no longer match the shifts it owns, so publish this period again to settle it.`)
+  }
+  return parts.length > 0 ? ` ${parts.join(' ')}` : ''
+}
+
+/**
+ * Undo trimPublishedRosters() when the publish it cleared the way for never
+ * happened. Safe on an empty list.
+ *
+ * @returns {Promise<{ error: any }>}
+ */
+export async function restoreRosterPeriods(db, trims) {
+  const targets = (trims || []).filter((t) => t?.id && t?.period_start && t?.period_end)
+  if (targets.length === 0) return { error: null }
+  for (const t of targets) {
+    const { data: touched, error } = await db
+      .from('rosters')
+      .update({ period_start: t.period_start, period_end: t.period_end })
+      .eq('id', t.id)
+      .eq('status', 'published')
+      .select('id')
+    if (error) return { error }
+    // A zero-row restore is a roster left holding days it does not own, and
+    // silence there is exactly what the caller needs to log by name.
+    if ((touched || []).length === 0) {
+      return { error: new Error(`roster ${t.id} could not be put back to ${t.period_start}..${t.period_end}`) }
+    }
+  }
+  return { error: null }
 }
 
 function round2(n) { return Math.round(n * 100) / 100 }

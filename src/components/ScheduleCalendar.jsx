@@ -47,6 +47,11 @@ import {
 // sentence it becomes is shared with the approvals queue so one refusal reads
 // the same wherever the operator meets it.
 import { OVERLAP_ERROR, overlapMessage } from '@/lib/roster-overlap-message'
+import { publishedSummaryLine } from '@/lib/publish-summary'
+// ROSTERROLE.1 — the role at the ROSTER's studio, the same answer the route
+// reaches for with hasRoleAtLocation. `@/lib/auth` cannot enter a client
+// bundle, so the two checks share this pure module instead of a second copy.
+import { hasRoleAtLocation } from '@/lib/role-at-location'
 // ROSTER-FIX.6c — this file had its own copy of this flattener
 // (flattenBlocksToShifts), which is now the exported lib one; see the note on
 // it for which of the two behaviours survived the merge.
@@ -125,6 +130,10 @@ function getMonthGridRange(monthStart) {
 function blockStaffingStatus(block, todayStr) {
   return futureBlockStaffing(block, todayStr)?.status || null
 }
+
+// ROSTERROLE.1 — publishing over budget without an approval is an OWNER
+// decision, judged at the roster's studio (the route uses the same set).
+const OWNER_ROLES = ['owner']
 
 // ROSTERVIS.1 — the header chip's look per publication status. Text + icon
 // carry the meaning; colour is the at-a-glance cue (house chip rule: -500/10
@@ -699,7 +708,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
     })
   }
 
-  async function submitPublish({ periodStart, periodEnd, forceOverBudget }) {
+  async function submitPublish({ periodStart, periodEnd, periodLabel, forceOverBudget }) {
     setPublishing(true)
     try {
       const res = await fetch('/api/schedule/rosters', {
@@ -738,15 +747,23 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
       // failed) comes back as 201 + warning; surface it instead of refreshing
       // silently as if everything landed.
       if (data.warning) showToast(data.warning, 'warning')
-      setPublishModal(null)
+      // PUBLISH-CONFIRM.1 — the modal used to be closed HERE, which is why a
+      // successful publish showed nothing and the modal's own "approval
+      // requested" panel could never appear: the close beat it to the screen.
+      // The modal now renders the outcome and closes itself when the operator
+      // is done with it. A toast goes out too, so the confirmation survives
+      // dismissing the modal.
       // Publish is the one mutation that should NOT re-arm the exit guard.
       // A real publish clears the period it covered; a needs-approval draft
       // stays dirty (it's still pending an owner's sign-off).
       refreshAfterMutation({ markDirty: false })
       if (!data.needs_approval) clearDirtyPeriodsCoveredBy(periodStart, periodEnd)
-      return data.needs_approval
-        ? { needsApproval: true }
-        : { published: true, impact: data.impact }
+      if (data.needs_approval) {
+        showToast('Approval requested. The roster is held in draft and the owners have been emailed.', 'success')
+        return { needsApproval: true }
+      }
+      showToast(publishedSummaryLine(data.published_summary, periodLabel), 'success')
+      return { published: true, impact: data.impact, summary: data.published_summary }
     } catch {
       // ROSTER-FIX.6a — without this the modal's Publish button spun on
       // `publishing` forever and the roster looked half-submitted.
@@ -1688,7 +1705,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
       {publishModal && (
         <PublishRosterModal
           locationId={locationId}
-          isOwner={user.role === 'master' || user.role === 'owner'}
+          isOwner={hasRoleAtLocation(user, locationId, OWNER_ROLES)}
           period={publishModal}
           onSubmit={submitPublish}
           onClose={() => setPublishModal(null)}
@@ -2047,14 +2064,24 @@ function PublishRosterModal({ locationId, isOwner, period, onSubmit, onClose, pu
     return () => { cancelled = true }
   }, [locationId, active.start, active.end])
 
+  // PUBLISH-CONFIRM.1 — every outcome lands in `submitResult`, including the
+  // happy one. Before this only `needsApproval` was recorded, and the parent
+  // closed the modal on success anyway, so neither panel could ever be seen.
   async function handleConfirm() {
     const result = await onSubmit({
       periodStart: active.start,
       periodEnd: active.end,
+      periodLabel: active.label,
       forceOverBudget: true,
     })
     if (result?.needsApproval) {
       setSubmitResult({ needsApproval: true })
+    } else if (result?.published) {
+      setSubmitResult({ published: true, summary: result.summary })
+    } else if (result?.error) {
+      // The parent toasts it too; the banner keeps it in front of the
+      // operator who is still looking at the modal.
+      setSubmitResult({ error: result.error })
     }
   }
 
@@ -2103,12 +2130,45 @@ function PublishRosterModal({ locationId, isOwner, period, onSubmit, onClose, pu
           <div className="text-center py-6 text-sm text-un1t-subtle">Calculating budget impact…</div>
         )}
 
+        {!loading && submitResult?.published && (
+          <div
+            className="rounded-lg border border-green-500/40 bg-green-500/10 p-4 text-sm"
+            data-testid="publish-success"
+            role="status"
+          >
+            <div className="font-medium text-green-700 mb-1 flex items-center gap-1.5">
+              <Check size={14} aria-hidden="true" /> Roster published
+            </div>
+            <p className="text-green-700/90 text-xs">
+              {publishedSummaryLine(submitResult.summary, active.label)}
+            </p>
+          </div>
+        )}
+
         {!loading && submitResult?.needsApproval && (
-          <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 text-sm">
+          <div
+            className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 text-sm"
+            data-testid="publish-approval-requested"
+            role="status"
+          >
             <div className="font-medium text-amber-800 mb-1">Approval requested</div>
             <p className="text-amber-700/90 text-xs">
               The roster is held in draft. Owners at this location have been emailed and can approve it from <span className="font-medium">Schedule → Approvals</span>. Staff won&apos;t see their shifts until an owner signs off.
             </p>
+          </div>
+        )}
+
+        {/* PUBLISH-CONFIRM.1 — the modal no longer closes itself, so it needs
+            a way out. One button under whichever outcome panel is showing. */}
+        {!loading && (submitResult?.published || submitResult?.needsApproval) && (
+          <div className="flex justify-end mt-4">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-3 py-2 rounded-md text-sm font-medium bg-blue-600 hover:bg-blue-500 text-white"
+            >
+              Done
+            </button>
           </div>
         )}
 

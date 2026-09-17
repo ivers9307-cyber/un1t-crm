@@ -36,6 +36,11 @@ import {
   releasePublishedRostersFor,
   restorePublishedRosters,
   supersedeSwallowedRosters,
+  suggestedCoveringPeriod,
+  trimPublishedRosters,
+  restoreRosterPeriods,
+  publishAftermathNote,
+  coversPeriod,
 } from '@/lib/roster-publish'
 import { sendOverBudgetApprovalEmail } from '@/lib/roster-email'
 import { notifyStaffOfPublish, publishNotifyRowsForBlocks, renotifyChangedCoaches } from '@/lib/roster-notify'
@@ -188,7 +193,14 @@ export async function POST(request) {
   // all. The change-log path below covers the coaches whose shifts actually
   // CHANGED, which is the case that matters most; a re-notify of the rest is
   // a separate decision about how much noise a widening publish should make.
-  const { conflicts, error: overlapErr } = await findConflictingPublishedRosters(db, {
+  //
+  // ROSTER-TRIM.1 — and it is now only the TWO-SIDED straddle guard. A roster
+  // that runs past ONE end of this period is trimmed back to the days it
+  // keeps (below, before the insert) instead of refusing: that is how
+  // "publish the boundary week, then publish the month" became possible at
+  // all. The refusal that remains carries `suggested_period`, the smallest
+  // period covering both, so the message can name a publish that works.
+  const { conflicts, trimmable, overlapping, error: overlapErr } = await findConflictingPublishedRosters(db, {
     locationId: location_id,
     periodStart: period_start,
     periodEnd: period_end,
@@ -201,8 +213,9 @@ export async function POST(request) {
       success: false,
       error: 'overlapping_roster',
       // The modal renders these ranges: "already published as part of
-      // <range> — re-publish that range instead".
+      // <range>", then the next step built from suggested_period.
       overlapping: conflicts,
+      suggested_period: suggestedCoveringPeriod(conflicts, period_start, period_end),
     }, { status: 409 })
   }
 
@@ -258,6 +271,7 @@ export async function POST(request) {
   // superseding a live roster on its behalf would unpublish that period's
   // shifts for a draft that may never be approved.
   let released = []
+  let trimmed = []
   let roster = null
 
   // ROSTER-SUPERSEDE.1 — ONE restore path for every way the write below can
@@ -265,16 +279,32 @@ export async function POST(request) {
   // blocks and every one of them reads as UNPUBLISHED to its coach until
   // somebody publishes the period again.
   async function restoreReleased(what) {
-    if (released.length === 0) return
-    const { error: restoreErr } = await restorePublishedRosters(db, released)
-    if (restoreErr) {
-      logWarn('rosters', `${what} AND the superseded rosters could not be restored`, {
-        err: restoreErr.message,
-        location_id,
-        period_start,
-        period_end,
-        stranded: released.map((r) => r.id),
-      })
+    if (released.length > 0) {
+      const { error: restoreErr } = await restorePublishedRosters(db, released)
+      if (restoreErr) {
+        logWarn('rosters', `${what} AND the superseded rosters could not be restored`, {
+          err: restoreErr.message,
+          location_id,
+          period_start,
+          period_end,
+          stranded: released.map((r) => r.id),
+        })
+      }
+    }
+    // ROSTER-TRIM.1 — a trimmed roster is the same class of damage one notch
+    // smaller: it has given up days to a publish that never happened, and
+    // every block on those days now reads as belonging to no live roster.
+    if (trimmed.length > 0) {
+      const { error: periodErr } = await restoreRosterPeriods(db, trimmed)
+      if (periodErr) {
+        logWarn('rosters', `${what} AND the trimmed rosters could not be put back`, {
+          err: periodErr.message,
+          location_id,
+          period_start,
+          period_end,
+          stranded: trimmed.map((r) => r.id),
+        })
+      }
     }
   }
 
@@ -286,14 +316,34 @@ export async function POST(request) {
   // work exists to close, so it is closed on both exits, not just the tidy one.
   try {
     if (status === 'published') {
+      // ROSTER-TRIM.1 — trim the one-sided straddlers FIRST, for the same
+      // reason the release runs before the insert: mig 602's exclusion
+      // constraint judges the INSERT, and a roster still claiming a day
+      // inside this period would meet it as a raw 23P01.
+      const trim = await trimPublishedRosters(db, trimmable)
+      if (trim.error) {
+        return NextResponse.json({
+          success: false,
+          error: `Could not trim the rosters this publish overlaps: ${trim.error.message}`,
+        }, { status: 400 })
+      }
+      trimmed = trim.trimmed
+
       const rel = await releasePublishedRostersFor(db, {
         locationId: location_id,
         periodStart: period_start,
         periodEnd: period_end,
       })
       if (rel.error) {
-        // Nothing has changed yet, so refusing here is free — and it is far
-        // better than letting the insert fail on the constraint with a 23P01.
+        // ROSTER-TRIM.1 — "nothing has changed yet" USED to be true here and
+        // is not any more: the trim above has already written to disk. A
+        // trimmed roster left behind by a publish that never happened owns
+        // blocks OUTSIDE its own period — exactly the state mig 602's
+        // pre-apply check (c2) requires to be empty — and phase 2's min/max
+        // shrink would later widen its period back over another roster's
+        // days. Put the trims (and anything already released) back before
+        // refusing.
+        await restoreReleased('standing down the rosters this publish replaces failed')
         return NextResponse.json({
           success: false,
           error: `Could not stand down the rosters this publish replaces: ${rel.error.message}`,
@@ -352,6 +402,11 @@ export async function POST(request) {
   // partial-success shape rather than swallowed: the publish DID happen, but
   // an older roster may still be claiming days it owns no blocks on.
   let supersedeWarning = null
+  // PUBLISH-CONFIRM.1 — what to tell the operator it actually did. The modal
+  // used to close on success and show nothing at all, so a publish and a
+  // no-op looked identical. Counts, not adjectives: shifts in the period, and
+  // the coaches who were messaged about it.
+  let coachesNotified = 0
 
   if (status === 'published') {
     // RETIRE-SHIFTS-MIRROR.6 — capture the blocks NEWLY being published
@@ -390,21 +445,29 @@ export async function POST(request) {
       // is published again. Restoring them is not on offer: the new roster is
       // published over the same days and the exclusion constraint would
       // refuse to put a second published roster back there.
-      const stranded = released.length > 0
-        ? ' The rosters it replaces have already been stood down, so those shifts read as unpublished until you publish this period again.'
-        : ''
+      // ROSTER-TRIM.1 — stood-down and trimmed are DIFFERENT aftermaths and
+      // one sentence for both was false for the trimmed half: a trimmed
+      // roster is still published and its shifts still read published.
+      // publishAftermathNote says each one only of the rosters it is true of.
+      const stranded = publishAftermathNote({ releasedCount: released.length, trimmedCount: trimmed.length })
       // ROSTER-SUPERSEDE.1 — the HTTP response reaches whoever clicked
       // publish, and only them. Nobody watching the logs learns that a
       // location has a period reading as unpublished, so say it here too,
       // naming the rows a human has to re-publish.
-      if (released.length > 0) {
-        logWarn('rosters', 'block tagging failed after the replaced rosters were stood down; that period now reads as unpublished', {
+      if (released.length + trimmed.length > 0) {
+        // Two lists, never one: `stoodDown` is the set whose blocks now read
+        // UNPUBLISHED (a human has to re-publish the period), `trimmedBack`
+        // is the set still published whose period no longer matches the
+        // blocks it owns. Merging them told whoever reads this log that live
+        // shifts had vanished when they had not.
+        logWarn('rosters', 'block tagging failed after the replaced rosters were settled', {
           err: tagErr.message,
           location_id,
           period_start,
           period_end,
           roster_id: roster.id,
-          stranded: released.map((r) => r.id),
+          stoodDown: released.map((r) => r.id),
+          trimmedBack: trimmed.map((r) => r.id),
         })
       }
       return NextResponse.json({
@@ -437,23 +500,32 @@ export async function POST(request) {
     // the same notifyStaffOfPublish() the approval path also uses.
     // Best-effort; never fails the publish.
     try {
-      await notifyStaffOfPublish(db, flippedShifts || [], {
+      const notified = await notifyStaffOfPublish(db, flippedShifts || [], {
         startDate: period_start,
         endDate: period_end,
         locationId: location_id,
       })
+      coachesNotified += notified?.notified || 0
     } catch (e) {
       logWarn('rosters', 'publish notify failed', { err: e })
     }
 
     // SCHEDULE-CHANGE-LOG.1 / NOTIFY.1 — re-notify coaches whose published
     // shifts changed and were not already told at the moment of change.
-    await renotifyChangedCoaches(db, { locationId: location_id, periodStart: period_start, periodEnd: period_end })
+    const renotified = await renotifyChangedCoaches(db, { locationId: location_id, periodStart: period_start, periodEnd: period_end })
+    coachesNotified += renotified?.notified || 0
   } else {
     // status === 'draft' — manager publish over budget. Email
     // owners so they can approve. Best-effort; don't fail the
     // request if the email send chokes.
     try {
+      // OVERBUDGET-COPY.1 — the email used to state flatly that staff cannot
+      // see their shifts until an owner approves. That is only true of a
+      // period nobody has published yet. Re-publishing a week that is already
+      // live leaves every shift on it exactly as visible as it was, and the
+      // draft holds back the CHANGES, not the roster. `overlapping` is the
+      // set of published rosters this period already touches (the guard above
+      // read it), so the wording can tell the truth in all three shapes.
       await sendOverBudgetApprovalEmail(db, {
         rosterId: roster.id,
         locationId: location_id,
@@ -462,6 +534,9 @@ export async function POST(request) {
         periodEnd: period_end,
         overrunEur: impact.overrunEur,
         budgetEur: impact.monthlyBudgetEur,
+        months: impact.months,
+        alreadyPublished: overlapping.length > 0,
+        fullyPublished: coversPeriod(overlapping, period_start, period_end),
       })
     } catch (e) {
       logWarn('rosters', `approval email failed`, { err: e })
@@ -473,6 +548,13 @@ export async function POST(request) {
     data: roster,
     impact,
     needs_approval: status === 'draft',
+    // PUBLISH-CONFIRM.1 — the success state the modal renders. `blockCount`
+    // is every shift in the period (projectPublishImpact counts them all, not
+    // only the ones carrying contractor cost); `coaches_notified` is coaches
+    // TARGETED, first-publish plus change re-notify, never a delivery proof.
+    ...(status === 'published'
+      ? { published_summary: { shift_count: impact.blockCount, coaches_notified: coachesNotified } }
+      : {}),
     ...(supersedeWarning ? { warning: `Roster published, but standing down the rosters it replaces did not fully complete: ${supersedeWarning}` } : {}),
   }, { status: status === 'draft' ? 202 : 201 })
 }

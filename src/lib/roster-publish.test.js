@@ -14,6 +14,13 @@ import {
   projectPublishImpact,
   projectionChanged,
   monthsTouched,
+  isoShiftDays,
+  classifyPublishedOverlap,
+  suggestedCoveringPeriod,
+  coversPeriod,
+  trimPublishedRosters,
+  restoreRosterPeriods,
+  publishAftermathNote,
   findConflictingPublishedRosters,
   releasePublishedRostersFor,
   restorePublishedRosters,
@@ -528,7 +535,7 @@ describe('findConflictingPublishedRosters', () => {
   it('queries published rosters at the location over the inclusive date window', async () => {
     const { db, calls } = mockDb([])
     const res = await findConflictingPublishedRosters(db, WEEK)
-    expect(res).toEqual({ conflicts: [], error: null })
+    expect(res).toEqual({ conflicts: [], trimmable: [], overlapping: [], error: null })
     expect(calls).toContainEqual(['from', 'rosters'])
     expect(calls).toContainEqual(['eq', 'location_id', 'loc1'])
     expect(calls).toContainEqual(['eq', 'status', 'published'])
@@ -561,12 +568,26 @@ describe('findConflictingPublishedRosters', () => {
     expect(conflicts).toEqual([month])
   })
 
-  it('a period straddling either EDGE of a published one is a conflict', async () => {
+  // ROSTER-TRIM.1 — a one-sided straddle is no longer a refusal. It comes back
+  // as TRIMMABLE, carrying the period the older roster keeps.
+  it('a period straddling either EDGE of a published one is trimmable, not a conflict', async () => {
     const before = { id: 'r-prev', period_start: '2026-04-27', period_end: '2026-05-05' }
     const after = { id: 'r-next', period_start: '2026-05-09', period_end: '2026-05-17' }
     const { db } = mockDb([before, after])
-    const { conflicts } = await findConflictingPublishedRosters(db, WEEK)
-    expect(conflicts).toEqual([before, after])
+    const { conflicts, trimmable } = await findConflictingPublishedRosters(db, WEEK)
+    expect(conflicts).toEqual([])
+    expect(trimmable).toEqual([
+      { ...before, trim_to: { period_start: '2026-04-27', period_end: '2026-05-03' } },
+      { ...after, trim_to: { period_start: '2026-05-11', period_end: '2026-05-17' } },
+    ])
+  })
+
+  it('reports every overlapping row, whatever its verdict, for the callers that need the set', async () => {
+    const month = { id: 'r-month', period_start: '2026-05-01', period_end: '2026-05-31' }
+    const inner = { id: 'r-inner', period_start: '2026-05-05', period_end: '2026-05-06' }
+    const { db } = mockDb([month, inner])
+    const { overlapping } = await findConflictingPublishedRosters(db, WEEK)
+    expect(overlapping).toEqual([month, inner])
   })
 
   it('reports only the overlapping rows, keeping the contained ones out of the 409', async () => {
@@ -992,5 +1013,271 @@ describe('supersedeSwallowedRosters', () => {
     const exploding = { from() { throw new Error('client is gone') } }
     const res = await supersedeSwallowedRosters(exploding, ARGS)
     expect(res.warning).toMatch(/client is gone/)
+  })
+})
+
+
+// ─────────────────────────────────────────────────────────────────────────
+// ROSTER-TRIM.1 — publishing the month after the boundary week was published.
+// ─────────────────────────────────────────────────────────────────────────
+
+describe('isoShiftDays', () => {
+  it('walks a month boundary in UTC, so no TZ can move it', () => {
+    expect(isoShiftDays('2026-09-01', -1)).toBe('2026-08-31')
+    expect(isoShiftDays('2026-09-30', 1)).toBe('2026-10-01')
+    expect(isoShiftDays('2026-03-01', -1)).toBe('2026-02-28')
+  })
+})
+
+describe('classifyPublishedOverlap', () => {
+  const PERIOD = ['2026-09-01', '2026-09-30']
+  const at = (period_start, period_end) => classifyPublishedOverlap({ period_start, period_end }, ...PERIOD)
+
+  it('an exact re-publish and anything inside it are CONTAINED', () => {
+    expect(at('2026-09-01', '2026-09-30').kind).toBe('contained')
+    expect(at('2026-09-07', '2026-09-13').kind).toBe('contained')
+  })
+
+  it('a week running INTO the period is trimmed back to the day before it starts', () => {
+    expect(at('2026-08-31', '2026-09-06')).toEqual({
+      kind: 'trim', trim_to: { period_start: '2026-08-31', period_end: '2026-08-31' },
+    })
+  })
+
+  it('a week running OUT of the period is trimmed forward to the day after it ends', () => {
+    expect(at('2026-09-28', '2026-10-04')).toEqual({
+      kind: 'trim', trim_to: { period_start: '2026-10-01', period_end: '2026-10-04' },
+    })
+  })
+
+  it('a roster past BOTH ends is engulfing: a trim would have to split the row', () => {
+    expect(at('2026-08-31', '2026-10-04').kind).toBe('engulfing')
+  })
+})
+
+describe('suggestedCoveringPeriod', () => {
+  it('is the smallest period covering the ask and everything that refused it', () => {
+    expect(suggestedCoveringPeriod(
+      [{ period_start: '2026-04-27', period_end: '2026-05-31' }],
+      '2026-05-04', '2026-05-10',
+    )).toEqual({ start: '2026-04-27', end: '2026-05-31' })
+  })
+  it('is the period itself when nothing refused it', () => {
+    expect(suggestedCoveringPeriod([], '2026-05-04', '2026-05-10'))
+      .toEqual({ start: '2026-05-04', end: '2026-05-10' })
+  })
+})
+
+describe('coversPeriod', () => {
+  it('is true when one range covers the whole period', () => {
+    expect(coversPeriod([{ period_start: '2026-05-01', period_end: '2026-05-31' }], '2026-05-04', '2026-05-10')).toBe(true)
+  })
+  it('is true when adjacent ranges cover it between them (no gap, inclusive ends)', () => {
+    expect(coversPeriod([
+      { period_start: '2026-05-04', period_end: '2026-05-06' },
+      { period_start: '2026-05-07', period_end: '2026-05-10' },
+    ], '2026-05-04', '2026-05-10')).toBe(true)
+  })
+  it('is false on a gap, and false on partial cover', () => {
+    expect(coversPeriod([
+      { period_start: '2026-05-04', period_end: '2026-05-05' },
+      { period_start: '2026-05-07', period_end: '2026-05-10' },
+    ], '2026-05-04', '2026-05-10')).toBe(false)
+    expect(coversPeriod([{ period_start: '2026-05-04', period_end: '2026-05-06' }], '2026-05-04', '2026-05-10')).toBe(false)
+    expect(coversPeriod([], '2026-05-04', '2026-05-10')).toBe(false)
+  })
+})
+
+describe('trimPublishedRosters / restoreRosterPeriods', () => {
+  // Every write reads back the rows it touched (`.select('id')`), because a
+  // zero-row UPDATE is not an error in PostgREST. `missAt` makes one write
+  // match nothing, which is the raced-row case.
+  function mockDb({ errorAt = null, missAt = null } = {}) {
+    const updates = []
+    let n = 0
+    const db = {
+      from() {
+        return {
+          update(payload) {
+            const rec = { payload, where: [], index: n }
+            updates.push(rec)
+            const err = errorAt != null && n === errorAt ? { message: 'boom' } : null
+            const rows = missAt != null && n === missAt ? [] : [{ id: 'row' }]
+            n++
+            const w = {
+              eq: (c, v) => { rec.where.push([c, v]); return w },
+              select: () => w,
+              then: (onF, onR) => Promise.resolve({ data: err ? null : rows, error: err }).then(onF, onR),
+            }
+            return w
+          },
+        }
+      },
+    }
+    return { db, updates }
+  }
+
+  const TRIMS = [
+    { id: 'r-1', period_start: '2026-08-31', period_end: '2026-09-06', trim_to: { period_start: '2026-08-31', period_end: '2026-08-31' } },
+    { id: 'r-2', period_start: '2026-09-28', period_end: '2026-10-04', trim_to: { period_start: '2026-10-01', period_end: '2026-10-04' } },
+  ]
+
+  it('writes each new period, scoped to the row and to status=published', async () => {
+    const { db, updates } = mockDb()
+    const { trimmed, error } = await trimPublishedRosters(db, TRIMS)
+    expect(error).toBeNull()
+    expect(trimmed).toHaveLength(2)
+    expect(updates[0].payload).toEqual({ period_start: '2026-08-31', period_end: '2026-08-31' })
+    expect(updates[0].where).toContainEqual(['id', 'r-1'])
+    expect(updates[0].where).toContainEqual(['status', 'published'])
+  })
+
+  it('pins the period it read, so a raced row cannot be silently overwritten', async () => {
+    const { db, updates } = mockDb()
+    await trimPublishedRosters(db, TRIMS)
+    expect(updates[0].where).toContainEqual(['period_start', '2026-08-31'])
+    expect(updates[0].where).toContainEqual(['period_end', '2026-09-06'])
+  })
+
+  // A zero-row UPDATE is not an error in PostgREST, so proceeding on one
+  // would walk straight into mig 602's 23P01 on the insert.
+  it('treats a zero-row trim as a failure and restores what it already moved', async () => {
+    const { db, updates } = mockDb({ missAt: 1 })
+    const { trimmed, error } = await trimPublishedRosters(db, TRIMS)
+    expect(trimmed).toEqual([])
+    expect(error.message).toMatch(/changed since it was read/)
+    expect(updates[2].payload).toEqual({ period_start: '2026-08-31', period_end: '2026-09-06' })
+  })
+
+  it('reports a restore that matched no row, rather than reporting success', async () => {
+    const { db } = mockDb({ missAt: 0 })
+    const { error } = await restoreRosterPeriods(db, TRIMS)
+    expect(error.message).toMatch(/could not be put back/)
+  })
+
+  it('is all-or-nothing: a failure part-way puts back what it already moved', async () => {
+    const { db, updates } = mockDb({ errorAt: 1 })
+    const { trimmed, error } = await trimPublishedRosters(db, TRIMS)
+    expect(trimmed).toEqual([])
+    expect(error).toEqual({ message: 'boom' })
+    // third write is the restore of r-1 to its original period
+    expect(updates[2].payload).toEqual({ period_start: '2026-08-31', period_end: '2026-09-06' })
+    expect(updates[2].where).toContainEqual(['id', 'r-1'])
+  })
+
+  // 🔴 A THROWN error never produces an error object, so none of the `updErr`
+  // branches run and the caller's own catch sees the empty `trimmed` it was
+  // handed before the call. Reachable on the headline case: a month whose
+  // boundary weeks are BOTH published, where the first trim lands and the
+  // second throws.
+  it('restores earlier trims when a later write THROWS, not just when it errors', async () => {
+    const updates = []
+    let n = 0
+    const db = {
+      from() {
+        return {
+          update(payload) {
+            const rec = { payload, where: [] }
+            updates.push(rec)
+            const throwNow = n === 1
+            n++
+            const w = {
+              eq: (c, v) => { rec.where.push([c, v]); return w },
+              select: () => w,
+              then: (onF, onR) => (throwNow
+                ? Promise.reject(new Error('fetch failed')).then(onF, onR)
+                : Promise.resolve({ data: [{ id: 'row' }], error: null }).then(onF, onR)),
+            }
+            return w
+          },
+        }
+      },
+    }
+
+    const { trimmed, error } = await trimPublishedRosters(db, TRIMS)
+    expect(trimmed).toEqual([])
+    expect(error.message).toMatch(/fetch failed/)
+    // The first roster is back at the period it started from.
+    expect(updates.at(-1).payload).toEqual({ period_start: '2026-08-31', period_end: '2026-09-06' })
+    expect(updates.at(-1).where).toContainEqual(['id', 'r-1'])
+  })
+
+  it('names the rosters a human must put back when the restore ALSO throws', async () => {
+    const db = {
+      from() {
+        const w = {
+          update: () => w,
+          eq: () => w,
+          select: () => w,
+          then: (onF, onR) => Promise.reject(new Error('connection reset')).then(onF, onR),
+        }
+        return w
+      },
+    }
+    const { trimmed, error } = await trimPublishedRosters(db, TRIMS)
+    expect(trimmed).toEqual([])
+    // Nothing landed, so there is nothing stranded to name, and it still
+    // answers rather than throwing out of the helper.
+    expect(error.message).toMatch(/connection reset/)
+  })
+
+  it('is a no-op on an empty list, both ways', async () => {
+    const { db, updates } = mockDb()
+    expect(await trimPublishedRosters(db, [])).toEqual({ trimmed: [], error: null })
+    expect(await restoreRosterPeriods(db, [])).toEqual({ error: null })
+    expect(updates).toHaveLength(0)
+  })
+
+  it('restore writes the ORIGINAL period back, never the trimmed one', async () => {
+    const { db, updates } = mockDb()
+    const { error } = await restoreRosterPeriods(db, TRIMS)
+    expect(error).toBeNull()
+    expect(updates.map((u) => u.payload)).toEqual([
+      { period_start: '2026-08-31', period_end: '2026-09-06' },
+      { period_start: '2026-09-28', period_end: '2026-10-04' },
+    ])
+  })
+})
+
+
+// ROSTER-TRIM.1 — the block-tagging-failed sentence. Stood-down and trimmed
+// are different aftermaths and one sentence for both was FALSE for the
+// trimmed half. These assert the CLAIM, not the phrasing.
+describe('publishAftermathNote', () => {
+  const says = (note, re) => re.test(note)
+
+  it('says nothing when nothing was stood down or trimmed', () => {
+    expect(publishAftermathNote()).toBe('')
+    expect(publishAftermathNote({ releasedCount: 0, trimmedCount: 0 })).toBe('')
+  })
+
+  it('a stood-down roster IS described as reading unpublished', () => {
+    const note = publishAftermathNote({ releasedCount: 1 })
+    expect(says(note, /stood down/i)).toBe(true)
+    expect(says(note, /unpublished/i)).toBe(true)
+  })
+
+  // The claim under test: a trimmed roster stays PUBLISHED, its blocks still
+  // carry its id, and its coaches have lost sight of nothing.
+  it('a trimmed roster is NEVER described as unpublished', () => {
+    const note = publishAftermathNote({ trimmedCount: 1 })
+    expect(says(note, /unpublished/i)).toBe(false)
+    expect(says(note, /still published/i)).toBe(true)
+    expect(says(note, /trimmed back/i)).toBe(true)
+  })
+
+  it('describes each aftermath separately when both happened', () => {
+    const note = publishAftermathNote({ releasedCount: 2, trimmedCount: 1 })
+    expect(says(note, /stood down/i)).toBe(true)
+    expect(says(note, /still published/i)).toBe(true)
+    // The "unpublished" claim is attached to the stood-down sentence only.
+    expect(note.indexOf('unpublished')).toBeLessThan(note.indexOf('still published'))
+  })
+
+  it('agrees in number with what it is describing', () => {
+    expect(publishAftermathNote({ releasedCount: 1 })).toMatch(/roster it replaces has/)
+    expect(publishAftermathNote({ releasedCount: 2 })).toMatch(/rosters it replaces have/)
+    expect(publishAftermathNote({ trimmedCount: 1 })).toMatch(/One overlapping roster was/)
+    expect(publishAftermathNote({ trimmedCount: 3 })).toMatch(/3 overlapping rosters were/)
   })
 })

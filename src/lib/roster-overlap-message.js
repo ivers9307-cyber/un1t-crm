@@ -23,14 +23,50 @@ export function overlapRanges(data) {
     .join(', ')
 }
 
+// ROSTER-TRIM.1 — the period the server says WOULD work, as a label.
+// `suggested_period` is the smallest range covering both the publish that was
+// refused and the roster(s) that refused it, so publishing it is the one
+// action that actually resolves the overlap. Absent on an older server, and
+// on any refusal where the server could not compute one.
+export function suggestedPeriodLabel(data) {
+  const p = data?.suggested_period
+  if (!p?.start || !p?.end) return null
+  return p.start === p.end ? p.start : `${p.start} to ${p.end}`
+}
+
+// ROSTER-TRIM.1 — what to do about it, from the PUBLISH modal.
+//
+// The old fixed sentence was "Re-publish that range instead", which on the
+// refusal operators actually met (publish the month, having already published
+// the week that runs into it) named a range that publishes the WEEK. It told
+// them to do the thing they had already done. Name the period that covers
+// both instead; fall back to the old wording only when the server sent no
+// suggestion, where it is still better than nothing.
+export function publishNextStep(data) {
+  const span = suggestedPeriodLabel(data)
+  return span
+    ? `Publish ${span} instead, so one roster covers the whole span.`
+    : 'Re-publish that range instead.'
+}
+
+// Same, from the APPROVALS queue: a draft cannot widen its own period, so the
+// way out is to reject it and publish the covering range.
+export function approveNextStep(data) {
+  const span = suggestedPeriodLabel(data)
+  return span
+    ? `Reject this draft, then publish ${span} so one roster covers the whole span.`
+    : 'Reject this draft and re-publish that range instead.'
+}
+
 // The whole sentence. `nextStep` is what THIS surface wants done about it.
 // The ranges can legitimately be empty (the server sends the code before it
 // sends rows), so the message still has to stand up without them.
-export function overlapMessage(data, nextStep = 'Re-publish that range instead.') {
+export function overlapMessage(data, nextStep) {
   const ranges = overlapRanges(data)
+  const step = nextStep || publishNextStep(data)
   return ranges
-    ? `Those days are already published as part of ${ranges}. ${nextStep}`
-    : `Those days are already published as part of another roster. ${nextStep}`
+    ? `Those days are already published as part of ${ranges}. ${step}`
+    : `Those days are already published as part of another roster. ${step}`
 }
 
 // For a call site holding a whole `{ success:false, error }` body: turn the

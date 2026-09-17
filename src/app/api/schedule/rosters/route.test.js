@@ -9,7 +9,11 @@
 //   exact same period      → allowed (this is how a re-notify works)
 //   strictly wider period  → allowed (the documented "publish the month
 //                            after publishing a week" flow)
-//   contained / straddling → 409 overlapping_roster, nothing inserted
+//   one-sided straddle     → ROSTER-TRIM.1: allowed, and the straddler is
+//                            TRIMMED back to the days outside the period
+//                            BEFORE the insert (mig 602 judges the insert)
+//   engulfs both ends      → 409 overlapping_roster, nothing inserted, and
+//                            the body names the period that would work
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -58,7 +62,7 @@ function req(body) {
 // Minimal Supabase-shaped mock. `rosters` selects resolve to
 // `publishedRosters` (the overlap probe); the insert resolves to a row;
 // shift_blocks reads resolve empty and writes are recorded.
-function buildDb({ publishedRosters = [], insertError = null, insertThrows = null, tagError = null, blockDates = {} } = {}) {
+function buildDb({ publishedRosters = [], insertError = null, insertThrows = null, tagError = null, blockDates = {}, rosterUpdateError = null } = {}) {
   const inserts = []
   // ROSTER-SUPERSEDE.1 — rosters now also takes UPDATEs (the release before
   // the insert, the superseded_by stamp after the re-tag, the restore on a
@@ -68,16 +72,35 @@ function buildDb({ publishedRosters = [], insertError = null, insertThrows = nul
   const db = {
     from(table) {
       if (table === 'rosters') {
+        // ROSTER-TRIM.1 — the rosters SELECT now honours the DATE and ID
+        // filters. It used to answer `publishedRosters` whatever it was
+        // asked, which made the OVERLAP probe and the CONTAINMENT probe
+        // (releasePublishedRostersFor) indistinguishable: a straddling
+        // roster the release would never have selected came back from it
+        // anyway, and a test asserting what the release did to a trim-only
+        // fixture was reading a mock artefact. status/location_id are
+        // deliberately NOT filtered — the fixtures do not carry them, and
+        // those filters are asserted by name elsewhere.
+        const filters = []
+        const DATE_OR_ID = new Set(['period_start', 'period_end', 'id'])
+        const matches = (r) => filters.every(([op, col, val]) => {
+          if (!DATE_OR_ID.has(col)) return true
+          if (op === 'eq') return r[col] === val
+          if (op === 'neq') return r[col] !== val
+          if (op === 'lte') return r[col] <= val
+          if (op === 'gte') return r[col] >= val
+          return true
+        })
         const chain = {
           select: () => chain,
-          eq: () => chain,
-          lte: () => chain,
-          gte: () => chain,
+          eq: (c, v) => { filters.push(['eq', c, v]); return chain },
+          lte: (c, v) => { filters.push(['lte', c, v]); return chain },
+          gte: (c, v) => { filters.push(['gte', c, v]); return chain },
           order: () => chain,
-          neq: () => chain,
+          neq: (c, v) => { filters.push(['neq', c, v]); return chain },
           in: () => chain,
           is: () => chain,
-          then: (onF, onR) => Promise.resolve({ data: publishedRosters, error: null }).then(onF, onR),
+          then: (onF, onR) => Promise.resolve({ data: publishedRosters.filter(matches), error: null }).then(onF, onR),
           insert(payload) {
             inserts.push(payload)
             return {
@@ -97,6 +120,9 @@ function buildDb({ publishedRosters = [], insertError = null, insertThrows = nul
           update(payload) {
             const rec = { payload, where: [], afterInsert: inserts.length > 0 }
             rosterUpdates.push(rec)
+            // ROSTER-TRIM.1 — a per-payload failure hook, so a test can break
+            // the RELEASE (status: 'superseded') while letting the trim land.
+            const err = rosterUpdateError ? rosterUpdateError(payload) : null
             const w = {
               eq: (c, v) => { rec.where.push([c, v]); return w },
               in: (c, v) => { rec.where.push([c, v]); return w },
@@ -106,10 +132,10 @@ function buildDb({ publishedRosters = [], insertError = null, insertThrows = nul
                 then: (onF, onR) => {
                   const targeted = rec.where.find(([c]) => c === 'id')?.[1]
                   const ids = Array.isArray(targeted) ? targeted : [targeted].filter(Boolean)
-                  return Promise.resolve({ data: ids.map((id) => ({ id })), error: null }).then(onF, onR)
+                  return Promise.resolve({ data: err ? null : ids.map((id) => ({ id })), error: err }).then(onF, onR)
                 },
               }),
-              then: (onF, onR) => Promise.resolve({ data: null, error: null }).then(onF, onR),
+              then: (onF, onR) => Promise.resolve({ data: null, error: err }).then(onF, onR),
             }
             return w
           },
@@ -180,14 +206,71 @@ describe('POST /api/schedule/rosters — overlapping published rosters', () => {
     expect(inserts).toHaveLength(0)
   })
 
-  it('refuses a period that only partly straddles a published one', async () => {
-    const { db, inserts } = buildDb({
+  // ROSTER-TRIM.1 — the boundary-week case. The week of Mon 27 Apr runs into
+  // the week being published, and refusing it was the refusal that had no way
+  // out: "re-publish that range" publishes the OLD week, never this one.
+  it('trims a published roster that straddles the START, and publishes', async () => {
+    const { db, inserts, rosterUpdates } = buildDb({
       publishedRosters: [{ id: 'r-prev', period_start: '2026-04-27', period_end: '2026-05-05' }],
     })
     createServerClient.mockReturnValue(db)
 
     const res = await publish()
+    expect(res.status).toBe(201)
+    expect(inserts).toHaveLength(1)
+    // Trimmed to the days it keeps (up to the day before this period), and
+    // BEFORE the insert: mig 602's exclusion constraint judges the insert.
+    const trim = rosterUpdates.find((u) => u.payload.period_end === '2026-05-03')
+    expect(trim).toBeDefined()
+    expect(trim.payload).toEqual({ period_start: '2026-04-27', period_end: '2026-05-03' })
+    expect(trim.where).toContainEqual(['id', 'r-prev'])
+    expect(trim.where).toContainEqual(['status', 'published'])
+    expect(trim.afterInsert).toBe(false)
+  })
+
+  it('trims a published roster that straddles the END, and publishes', async () => {
+    const { db, inserts, rosterUpdates } = buildDb({
+      publishedRosters: [{ id: 'r-next', period_start: '2026-05-09', period_end: '2026-05-17' }],
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await publish()
+    expect(res.status).toBe(201)
+    expect(inserts).toHaveLength(1)
+    const trim = rosterUpdates.find((u) => u.payload.period_start === '2026-05-11')
+    expect(trim.payload).toEqual({ period_start: '2026-05-11', period_end: '2026-05-17' })
+    expect(trim.where).toContainEqual(['id', 'r-next'])
+    expect(trim.afterInsert).toBe(false)
+  })
+
+  // The month case the finding was written about: publish the week of Mon 31
+  // Aug on its own, then publish September.
+  it('a month publish takes over the boundary week that ran into it', async () => {
+    const { db, inserts, rosterUpdates } = buildDb({
+      publishedRosters: [{ id: 'r-week', period_start: '2026-08-31', period_end: '2026-09-06' }],
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(req({ location_id: LOC_1, period_start: '2026-09-01', period_end: '2026-09-30' }))
+    expect(res.status).toBe(201)
+    expect(inserts).toHaveLength(1)
+    const trim = rosterUpdates.find((u) => u.payload.period_end === '2026-08-31')
+    expect(trim.payload).toEqual({ period_start: '2026-08-31', period_end: '2026-08-31' })
+  })
+
+  // A roster running past BOTH ends cannot be trimmed without splitting the
+  // row in two, so it still refuses - but it now says what DOES work.
+  it('refuses a roster that engulfs the period, naming the period that works', async () => {
+    const { db, inserts } = buildDb({
+      publishedRosters: [{ id: 'r-wide', period_start: '2026-05-01', period_end: '2026-05-31' }],
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await publish()
     expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error).toBe('overlapping_roster')
+    expect(body.suggested_period).toEqual({ start: '2026-05-01', end: '2026-05-31' })
     expect(inserts).toHaveLength(0)
   })
 
@@ -371,9 +454,9 @@ describe('POST /api/schedule/rosters — supersede', () => {
     expect(body.warning).toMatch(/read as unpublished/)
   })
 
-  it('a straddling overlap is still a 409 and stands nothing down', async () => {
+  it('an engulfing overlap is still a 409 and stands nothing down', async () => {
     const { db, inserts, rosterUpdates } = buildDb({
-      publishedRosters: [{ id: 'r-prev', period_start: '2026-04-27', period_end: '2026-05-05' }],
+      publishedRosters: [{ id: 'r-wide', period_start: '2026-05-01', period_end: '2026-05-31' }],
     })
     createServerClient.mockReturnValue(db)
 
@@ -381,6 +464,81 @@ describe('POST /api/schedule/rosters — supersede', () => {
     expect(res.status).toBe(409)
     expect(inserts).toHaveLength(0)
     expect(rosterUpdates).toHaveLength(0)
+  })
+
+  // ROSTER-TRIM.1 — a trim gives days away to a publish; if that publish then
+  // never happens, every block on those days belongs to no live roster. The
+  // period has to go back exactly as the release does.
+  // A TRIMMED roster stays published and its blocks still carry its id, so
+  // its coaches have lost sight of nothing. Saying "those shifts read as
+  // unpublished" about it is the opposite of the truth.
+  it('does not claim a trimmed roster is unpublished when block tagging fails', async () => {
+    const { db } = buildDb({
+      publishedRosters: [{ id: 'r-prev', period_start: '2026-04-27', period_end: '2026-05-05' }],
+      tagError: { message: 'deadlock detected' },
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await publish()
+    expect(res.status).toBe(201)
+    const body = await res.json()
+    expect(body.warning).toMatch(/deadlock detected/)
+    expect(body.warning).toMatch(/trimmed back/)
+    expect(body.warning).toMatch(/still published/)
+    expect(body.warning).not.toMatch(/unpublished/)
+  })
+
+  // The stood-down half IS lost to its coaches, and still has to say so.
+  it('still says a stood-down roster reads as unpublished when block tagging fails', async () => {
+    const { db } = buildDb({
+      publishedRosters: [{ id: 'r-same', period_start: '2026-05-04', period_end: '2026-05-10' }],
+      tagError: { message: 'deadlock detected' },
+    })
+    createServerClient.mockReturnValue(db)
+
+    const body = await (await publish()).json()
+    expect(body.warning).toMatch(/stood down/)
+    expect(body.warning).toMatch(/read as unpublished/)
+  })
+
+  // 🔴 THE RELEASE RUNS AFTER THE TRIM, so its refusal is no longer free.
+  // A trimmed roster left behind by a publish that never happened owns blocks
+  // OUTSIDE its own period — the state mig 602's pre-apply check (c2)
+  // requires to be empty — and phase 2's shrink would later widen its period
+  // back over the days this publish was taking.
+  it('puts a trimmed roster back when standing down the replaced rosters fails', async () => {
+    const { db, inserts, rosterUpdates } = buildDb({
+      // One roster to trim (straddles the start) and one to release (inside).
+      publishedRosters: [
+        { id: 'r-prev', period_start: '2026-04-27', period_end: '2026-05-05' },
+        { id: 'r-inner', period_start: '2026-05-06', period_end: '2026-05-08' },
+      ],
+      rosterUpdateError: (payload) => (payload.status === 'superseded' ? { message: 'lock timeout' } : null),
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await publish()
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error).toMatch(/lock timeout/)
+    expect(inserts).toHaveLength(0)
+    // The trim was undone: the LAST write puts r-prev back where it started.
+    const restore = rosterUpdates.at(-1)
+    expect(restore.payload).toEqual({ period_start: '2026-04-27', period_end: '2026-05-05' })
+    expect(restore.where).toContainEqual(['id', 'r-prev'])
+  })
+
+  it('puts a trimmed roster back when the insert fails', async () => {
+    const { db, rosterUpdates } = buildDb({
+      publishedRosters: [{ id: 'r-prev', period_start: '2026-04-27', period_end: '2026-05-05' }],
+      insertError: { message: 'exclusion violation' },
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await publish()
+    expect(res.status).toBe(400)
+    expect(rosterUpdates.at(-1).payload).toEqual({ period_start: '2026-04-27', period_end: '2026-05-05' })
+    expect(rosterUpdates.at(-1).where).toContainEqual(['id', 'r-prev'])
   })
 })
 

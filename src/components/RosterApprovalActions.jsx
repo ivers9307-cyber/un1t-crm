@@ -10,14 +10,17 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { rosterErrorMessage } from '@/lib/roster-overlap-message'
+import { rosterErrorMessage, approveNextStep } from '@/lib/roster-overlap-message'
 
 // ROSTER-FIX.4 — approving runs the publish overlap guard, so approve can come
 // back with `overlapping_roster`. That is a code, not copy: turn it into the
 // sentence the operator can act on rather than alerting a raw error key. The
 // wording is shared with the publish modal — only the closing instruction
 // differs, because from here the way out is to reject the draft.
-const APPROVE_NEXT_STEP = 'Reject this draft and re-publish that range instead.'
+//
+// ROSTER-TRIM.1 — the instruction now names the period that would actually
+// work (`approveNextStep` reads the server's `suggested_period`), because
+// "re-publish that range" named the range that had already been published.
 
 function eur(n) {
   if (n == null) return 'no budget'
@@ -52,7 +55,7 @@ export default function RosterApprovalActions({ rosterId, canApprove }) {
       const res = await fetch(`/api/schedule/rosters/${rosterId}/approve`, { method: 'POST' })
       const data = await res.json().catch(() => ({}))
       if (!res.ok || !data.success) {
-        alert(rosterErrorMessage(data, { nextStep: APPROVE_NEXT_STEP, fallback: 'Approval failed' }))
+        alert(rosterErrorMessage(data, { nextStep: approveNextStep(data), fallback: 'Approval failed' }))
         return
       }
       // BUDGETAPPROVE.1 — approval re-projects the budget. If the numbers

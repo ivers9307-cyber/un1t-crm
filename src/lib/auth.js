@@ -7,6 +7,7 @@ import { isApiKeyToken } from './api-keys'
 import { hasPermission } from './permissions'
 import { loadRoleTemplatesForLocations } from './role-templates.js'
 import { SUPPORT_COOKIE, verifySupportCookie } from './support-session-edge'
+import { hasRoleAtLocation, hasRoleAtAnyLocation } from './role-at-location'
 
 // React 18's `cache()` is only exported from the server build of react.
 // In the Vitest (Node) environment we get the client build which omits
@@ -1025,35 +1026,13 @@ export function guardMasterOrOwner(user, locationId) {
  * @param {readonly string[]} allowedRoles
  * @returns {boolean}
  */
-export function hasRoleAtLocation(user, locationId, allowedRoles) {
-  if (!user || !locationId) return false
-  if (user.profileRole === 'master') return true
-  const role = user.rolesByLocation?.[locationId]
-  if (!role) return false
-  return (allowedRoles || []).includes(role)
-}
-
-/**
- * Does the caller hold one of `allowedRoles` at ANY location?
- *
- * SCHEDROLES.1 — a COARSE pre-check only, never the authority decision. A
- * route whose target location is not known until it has parsed the body or
- * fetched a row keeps its cheap "a plain coach has nothing to say here"
- * refusal with this, then judges the real target with hasRoleAtLocation.
- * It replaces `MANAGER_ROLES.includes(user.role)` as that pre-check: the old
- * one read the ACTIVE studio's role, so it both over-blocked (a manager whose
- * active studio is one where they are staff) and, followed only by a
- * membership check, under-blocked (a head coach at A acting on B where they
- * are staff).
- *
- * Master bypass on profileRole, as hasRoleAtLocation.
- *
- * @param {{ profileRole?: string, rolesByLocation?: Record<string,string> } | null} user
- * @param {readonly string[]} allowedRoles
- * @returns {boolean}
- */
-export function hasRoleAtAnyLocation(user, allowedRoles) {
-  if (!user) return false
-  if (user.profileRole === 'master') return true
-  return Object.values(user.rolesByLocation || {}).some((r) => (allowedRoles || []).includes(r))
-}
+// ROSTERROLE.1 — the two implementations moved to `./role-at-location`, a
+// pure client-safe module, because a CLIENT component needs the same answer:
+// ScheduleCalendar's publish modal was deciding "is this person an owner
+// here" from `user.role` (the ACTIVE studio's role) while the route decided
+// it with hasRoleAtLocation, so the two disagreed for anyone whose active
+// studio is not the one they are publishing. Importing `@/lib/auth` into a
+// client bundle is not on offer (it reaches next/headers and the service-role
+// client), and a second copy of a permission rule is how permission rules
+// drift. Re-exported here so every existing server import is untouched.
+export { hasRoleAtLocation, hasRoleAtAnyLocation }
