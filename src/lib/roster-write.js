@@ -183,6 +183,15 @@ export async function upsertShiftAssignment(db, input) {
  * per-location). Overrides ride on the assignment (mig 100); new blocks
  * are created at template default times.
  *
+ * COPYFIX.1 — the assignment upsert is `ON CONFLICT DO NOTHING`
+ * (`ignoreDuplicates: true`), so a coach already on the target block is
+ * NEVER touched by a copy: their override, notes, status and
+ * `assigned_by` are left exactly as they were. Only a missing (block,
+ * profile) pair gets a new row. `count` comes from `.select('id')` on
+ * the upsert, so it reflects rows actually inserted, not the size of the
+ * payload sent — a re-run over an already-copied period reports 0, not
+ * the number it silently re-wrote.
+ *
  * @param {import('@supabase/supabase-js').SupabaseClient} db service-role client
  * @param {object} opts
  * @param {string} opts.locationId
@@ -288,10 +297,16 @@ export async function bulkUpsertShiftAssignments(db, { locationId, actorId = nul
   const assignmentRows = [...assignmentByKey.values()]
   if (assignmentRows.length === 0) return { count: 0, error: null }
 
-  const { error: aErr } = await db
+  // COPYFIX.1 — ON CONFLICT DO NOTHING: an existing (block, profile) row is
+  // never modified, so a copy can't clear a manager-set override, reset a
+  // status, or overwrite assigned_by. `.select('id')` reports only the rows
+  // actually inserted, so `count` is accurate even when some rows were
+  // skipped as duplicates.
+  const { data: inserted, error: aErr } = await db
     .from('shift_assignments')
-    .upsert(assignmentRows, { onConflict: 'block_id,profile_id' })
+    .upsert(assignmentRows, { onConflict: 'block_id,profile_id', ignoreDuplicates: true })
+    .select('id')
   if (aErr) return { count: 0, error: aErr }
 
-  return { count: assignmentRows.length, error: null }
+  return { count: (inserted || []).length, error: null }
 }

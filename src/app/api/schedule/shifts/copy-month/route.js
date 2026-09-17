@@ -23,12 +23,15 @@
 // end-of-month) would silently bunch multiple source shifts onto
 // Feb 28, which is rarely what an operator wants.
 //
-// Idempotency
-// -----------
+// Idempotency (COPYFIX.1)
+// -----------------------
 // Same upsert pattern as copy-week — the unique key
-// (location_id, profile_id, shift_template_id, shift_date) means
-// re-running over an already-copied month updates rather than
-// duplicates. Manager re-runs after edits land cleanly.
+// (block_id, profile_id), upserted with ON CONFLICT DO NOTHING. A
+// re-run over an already-copied month adds only the coaches still
+// missing from the target; a coach already assigned there is left
+// exactly as they were — their override, notes, status and
+// assigned_by are never touched. `copied` in the response counts
+// only the rows actually inserted, so a full re-run reports 0.
 
 import { NextResponse, after } from 'next/server'
 import { z } from 'zod'

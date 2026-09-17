@@ -255,6 +255,17 @@ describe('publishedAdditions', () => {
       { coachId: 'c2', blockId: 'b1', blockDate: '2026-09-21', action: 'assigned' },
     ])
   })
+
+  // COPYFIX.1 regression — a copy that ignores an existing (block, profile)
+  // row (ON CONFLICT DO NOTHING) writes nothing for a pair already present
+  // on the target block. The before/after key-set diff must still see that
+  // pair as unchanged, not as a fresh addition, so a copy that touches
+  // nothing on an already-assigned coach never logs or notifies them.
+  it('a pair present both before and after the copy produces no change', () => {
+    const before = [row('b1', 'c1', '2026-09-21', 'published')]
+    const after = [row('b1', 'c1', '2026-09-21', 'published')]
+    expect(publishedAdditions(before, after)).toEqual([])
+  })
 })
 
 describe('logAndNotifyCopiedShifts', () => {
