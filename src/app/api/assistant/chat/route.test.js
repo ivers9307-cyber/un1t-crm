@@ -283,8 +283,27 @@ describe('executeTool create_shift — template + profile location validation', 
     expect(res.shift).toEqual({ date: '2026-07-06', staff: 'Anna Coach', template: 'Morning' })
     const block = db._writes.find(w => w.table === 'shift_blocks' && w.op === 'insert')
     expect(block.payload.location_id).toBe('loc-a')
-    const assign = db._writes.find(w => w.table === 'shift_assignments' && w.op === 'upsert')
+    const assign = db._writes.find(w => w.table === 'shift_assignments' && w.op === 'insert')
     expect(assign.payload.profile_id).toBe('p-a1')
+  })
+
+  // AGENTROSTER.1 — create_shift on a coach who is ALREADY on the shift used
+  // to blind-upsert every field back to null, wiping the manager-set paid
+  // window (mig 099/100) that every hours and cost reader bills.
+  it('leaves an existing assignment — and its adjusted hours — untouched', async () => {
+    const db = useDb({
+      shift_templates, profile_locations, profiles,
+      shift_blocks: [{ id: 'blk-1', location_id: 'loc-a', template_id: 't-a1', block_date: '2026-07-06' }],
+      shift_assignments: [{
+        id: 'a-1', block_id: 'blk-1', profile_id: 'p-a1', status: 'confirmed',
+        start_time_override: '10:00:00', end_time_override: '14:00:00',
+      }],
+    })
+    const res = await executeTool('create_shift', { profile_id: 'p-a1', shift_template_id: 't-a1', shift_date: '2026-07-06' }, MANAGER)
+    expect(res.success).toBe(true)
+    // No block created (it exists) and NOTHING written to the assignment.
+    expect(db._writes.filter(w => w.table === 'shift_assignments')).toHaveLength(0)
+    expect(db._writes.filter(w => w.table === 'shift_blocks')).toHaveLength(0)
   })
 
   it('rejects a cross-tenant shift_template_id and writes nothing', async () => {
@@ -414,6 +433,55 @@ describe('executeTool generate_report staff_cost — profiles read is location-s
     const res = await executeTool('generate_report', { report_type: 'staff_hours', period_start: '2026-07-01', period_end: '2026-07-07' }, { ...MANAGER, role: 'head_coach' })
     expect(res.error).toBeUndefined()
     expect(res.report).toBe('Staff Hours Worked')
+  })
+
+})
+
+// ── generate_report hours honour adjustments (AGENTROSTER.1) ─────────
+// The assistant computed hours straight off the TEMPLATE's times, so a
+// manager-set partial shift billed at its template length and the assistant
+// disagreed with /schedule's Reporting tab and the calendar (229h vs 257h for
+// 1-16 Sep at Stillorgan). Hours now resolve override → the BLOCK's own time
+// → the template, via shiftHours() — the same resolution src/lib/payroll.js
+// and src/lib/report-generator.js use.
+describe('executeTool generate_report — effective hours, not template hours', () => {
+  const profile_locations = [{ profile_id: 'p-a1', location_id: 'loc-a' }]
+  const profiles = [
+    { id: 'p-a1', full_name: 'Anna Coach', employment_type: 'contractor', hourly_rate: 10, annual_salary: null, contracted_hours_per_week: null, active: true },
+  ]
+  // One 8h template slot. The block was moved to 6h, and the coach's own
+  // override shortened it again to 4h. Only the 4h is real.
+  const adjusted = [{
+    profile_id: 'p-a1', status: 'scheduled',
+    start_time_override: '10:00:00', end_time_override: '14:00:00',
+    profiles: { full_name: 'Anna Coach' },
+    shift_blocks: {
+      location_id: 'loc-a', block_date: '2026-07-02',
+      start_time: '09:00:00', end_time: '15:00:00',
+      shift_templates: { name: 'AM', start_time: '09:00:00', end_time: '17:00:00' },
+    },
+  }]
+
+  it('staff_hours reports the coach\'s overridden window, not the template\'s', async () => {
+    useDb({ profile_locations, profiles, shift_assignments: adjusted })
+    const res = await executeTool('generate_report', { report_type: 'staff_hours', period_start: '2026-07-01', period_end: '2026-07-07' }, MANAGER)
+    expect(res.staff).toEqual([{ name: 'Anna Coach', hours: 4 }])
+    expect(res.total_hours).toBe(4)
+  })
+
+  it("falls back to the BLOCK's times when there is no override", async () => {
+    const noOverride = [{ ...adjusted[0], start_time_override: null, end_time_override: null }]
+    useDb({ profile_locations, profiles, shift_assignments: noOverride })
+    const res = await executeTool('generate_report', { report_type: 'staff_hours', period_start: '2026-07-01', period_end: '2026-07-07' }, MANAGER)
+    // 09:00-15:00 on the block, NOT 09:00-17:00 on the template.
+    expect(res.staff).toEqual([{ name: 'Anna Coach', hours: 6 }])
+  })
+
+  it('staff_cost moves with the same hours, so one reply cannot disagree with itself', async () => {
+    useDb({ profile_locations, profiles, shift_assignments: adjusted })
+    const res = await executeTool('generate_report', { report_type: 'staff_cost', period_start: '2026-07-01', period_end: '2026-07-07' }, MANAGER)
+    expect(res.staff).toEqual([{ name: 'Anna Coach', hours: 4, cost: '€40.00', hourly_rate: '€10.00' }])
+    expect(res.total_cost).toBe('€40.00')
   })
 })
 

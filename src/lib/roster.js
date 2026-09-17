@@ -19,16 +19,61 @@ import { logWarn } from '@/lib/log'
 export const WEEKDAY_CODES = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
 
 /**
+ * ROSTERTZ.1 — the calendar components of a date, read LOCALLY.
+ *
+ * shift_blocks.block_date is a timezoneless calendar date: 'YYYY-MM-DD' means
+ * the day the operator meant, never an instant. The old code did
+ * `new Date('2026-05-04')`, which the spec parses as UTC MIDNIGHT, and then
+ * read `.getDay()`, which is the LOCAL weekday — so west of UTC every bare
+ * date string resolved to the day BEFORE (LA: 4 May 00:00Z is 3 May 17:00
+ * local, i.e. 'sun' for a Monday). roster-copy.js noticed and refused to use
+ * this module for exactly that reason. Reading the string's own components
+ * removes the round trip through an instant entirely; a real Date is read
+ * with local getters, which is the calendar day its holder means (and what
+ * formatDate above already renders).
+ *
+ * Returns null for anything unparseable.
+ */
+function calendarParts(input) {
+  if (input instanceof Date) {
+    if (Number.isNaN(input.getTime())) return null
+    return { y: input.getFullYear(), m: input.getMonth() + 1, d: input.getDate() }
+  }
+  // The lookahead keeps a malformed '2026-05-010' OUT of the fast path —
+  // truncating it to 1 May would be a silently wrong day, where the fallback
+  // parse below at least answers the same way it always has. A timestamp
+  // ('2026-05-04T09:00:00Z') still takes the fast path: 'T' is not a digit.
+  const match = /^(\d{4})-(\d{2})-(\d{2})(?![0-9])/.exec(String(input ?? ''))
+  if (match) return { y: Number(match[1]), m: Number(match[2]), d: Number(match[3]) }
+  const parsed = new Date(input)
+  if (Number.isNaN(parsed.getTime())) return null
+  return { y: parsed.getFullYear(), m: parsed.getMonth() + 1, d: parsed.getDate() }
+}
+
+/**
+ * 'mon'..'sun' for calendar components, computed without a TZ. Date.UTC is a
+ * pure calendar calculation here — no local offset ever enters it.
+ */
+function dayCodeOfParts({ y, m, d }) {
+  // JS getUTCDay(): Sun=0, Mon=1, ..., Sat=6. Roll into Mon-first.
+  const jsDay = new Date(Date.UTC(y, m - 1, d)).getUTCDay()
+  return WEEKDAY_CODES[jsDay === 0 ? 6 : jsDay - 1]
+}
+
+/** Render calendar components as 'YYYY-MM-DD'. */
+function partsToIso({ y, m, d }) {
+  return `${String(y).padStart(4, '0')}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+}
+
+/**
  * Convert a JS Date (or ISO date string) to its canonical weekday
- * code ('mon'..'sun'). UTC-day-of-week is what we want — the date
- * stored in shift_blocks.block_date is a calendar date with no TZ.
+ * code ('mon'..'sun'). ROSTERTZ.1 — computed from the date's own calendar
+ * components, so the answer is the same in Dublin and in Los Angeles.
  */
 export function dayCodeForDate(input) {
-  const d = input instanceof Date ? input : new Date(input)
-  // JS getDay(): Sun=0, Mon=1, ..., Sat=6. Roll into Mon-first.
-  const jsDay = d.getDay()
-  const monFirst = jsDay === 0 ? 6 : jsDay - 1
-  return WEEKDAY_CODES[monFirst]
+  const parts = calendarParts(input)
+  if (!parts) return undefined
+  return dayCodeOfParts(parts)
 }
 
 /**
@@ -196,17 +241,23 @@ export function periodCovers(outerKey, innerKey) {
  * generator and by tests asserting which weekdays a template hits.
  */
 export function expandDaysToDates(dayCodes, fromDate, toDate) {
-  const from = fromDate instanceof Date ? fromDate : new Date(fromDate)
-  const to = toDate instanceof Date ? toDate : new Date(toDate)
+  // ROSTERTZ.1 — walk CALENDAR days, not instants. The old loop built a
+  // local-midnight cursor out of a UTC-midnight parse and compared it against
+  // an un-normalised end instant, so west of UTC both ends slid a day and a
+  // one-day window matched nothing at all. Both ends are now read as calendar
+  // components (calendarParts) and the walk runs on a UTC epoch, where every
+  // step is exactly 24h and no DST transition can skip or repeat a day.
+  const from = calendarParts(fromDate)
+  const to = calendarParts(toDate)
+  if (!from || !to) return []
   const set = new Set(dayCodes)
   const out = []
-  let cursor = new Date(from)
-  cursor.setHours(0, 0, 0, 0)
-  while (cursor <= to) {
-    if (set.has(dayCodeForDate(cursor))) {
-      out.push(formatDate(cursor))
-    }
-    cursor = addDays(cursor, 1)
+  const end = Date.UTC(to.y, to.m - 1, to.d)
+  const DAY_MS = 24 * 60 * 60 * 1000
+  for (let t = Date.UTC(from.y, from.m - 1, from.d); t <= end; t += DAY_MS) {
+    const cursor = new Date(t)
+    const parts = { y: cursor.getUTCFullYear(), m: cursor.getUTCMonth() + 1, d: cursor.getUTCDate() }
+    if (set.has(dayCodeOfParts(parts))) out.push(partsToIso(parts))
   }
   return out
 }

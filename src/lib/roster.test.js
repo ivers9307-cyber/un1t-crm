@@ -93,9 +93,12 @@ describe('dayCodeForDate', () => {
     expect(dayCodeForDate('2026-05-03')).toBe('sun')
   })
   it('handles all 7 weekdays in order', () => {
+    // ROSTERTZ.1 — this used to build `2026-05-0${i}`, which is '2026-05-010'
+    // on the last pass: a malformed date only V8's lenient fallback parser
+    // read as 10 May. Pad it so all seven really are ISO calendar dates.
     const codes = []
     for (let i = 4; i <= 10; i++) {
-      codes.push(dayCodeForDate(`2026-05-0${i}`))
+      codes.push(dayCodeForDate(`2026-05-${String(i).padStart(2, '0')}`))
     }
     expect(codes).toEqual(WEEKDAY_CODES)
   })
@@ -144,6 +147,49 @@ describe('expandDaysToDates', () => {
   it('inclusive on both ends — 1-day window matching', () => {
     expect(expandDaysToDates(['mon'], '2026-05-04', '2026-05-04'))
       .toEqual(['2026-05-04'])
+  })
+})
+
+// ROSTERTZ.1 — the whole point of the rewrite: these two helpers describe
+// CALENDAR dates, so their answers must not move with the host timezone.
+// The suite is run under TZ=Europe/Dublin and a US timezone in CI-mirror
+// terms; these cases are the ones that were a day early west of UTC.
+describe('dayCodeForDate / expandDaysToDates are timezone-independent', () => {
+  it('reads a bare date string by its own components, not as a UTC instant', () => {
+    // 2026-05-04 is a Monday. Under the old UTC-parse-then-local-getDay it
+    // read 'sun' anywhere west of UTC.
+    expect(dayCodeForDate('2026-05-04')).toBe('mon')
+    expect(dayCodeForDate('2026-01-04')).toBe('sun')   // winter, UTC+0 in Dublin
+    expect(dayCodeForDate('2026-07-04')).toBe('sat')   // summer, UTC+1 in Dublin
+  })
+
+  it('reads a Date by its LOCAL calendar components', () => {
+    // A Date built from local components is the day its holder means.
+    expect(dayCodeForDate(new Date(2026, 4, 4))).toBe('mon')
+    expect(dayCodeForDate(new Date(2026, 4, 10))).toBe('sun')
+  })
+
+  it('takes a timestamp string through the same fast path', () => {
+    expect(dayCodeForDate('2026-05-04T23:30:00Z')).toBe('mon')
+    expect(dayCodeForDate('2026-05-04T00:30:00+01:00')).toBe('mon')
+  })
+
+  it('a one-day window still matches west of UTC', () => {
+    expect(expandDaysToDates(['mon'], '2026-05-04', '2026-05-04')).toEqual(['2026-05-04'])
+    expect(expandDaysToDates(['sun'], '2026-05-10', '2026-05-10')).toEqual(['2026-05-10'])
+  })
+
+  it('does not slide the window across a DST transition', () => {
+    // Europe/Dublin springs forward 29 Mar 2026; America/Los_Angeles on 8 Mar.
+    // Every Sunday in the span must be listed exactly once either way.
+    expect(expandDaysToDates(['sun'], '2026-03-01', '2026-03-31')).toEqual([
+      '2026-03-01', '2026-03-08', '2026-03-15', '2026-03-22', '2026-03-29',
+    ])
+  })
+
+  it('returns [] for an unparseable bound rather than looping', () => {
+    expect(expandDaysToDates(['mon'], 'not-a-date', '2026-05-10')).toEqual([])
+    expect(expandDaysToDates(['mon'], '2026-05-04', 'not-a-date')).toEqual([])
   })
 })
 

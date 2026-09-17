@@ -26,7 +26,7 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { MANAGER_ROLES, timeOfDay } from '@/lib/schemas'
+import { MANAGER_ROLES, timeOfDay, assignmentStatusSchema } from '@/lib/schemas'
 import { notifyUsersOnce } from '@/lib/push-dedup'
 import { logRosterChange } from '@/lib/roster-change-log'
 import { markRosterChangesNotified } from '@/lib/roster-change-notify'
@@ -57,7 +57,12 @@ const UpdateAssignmentSchema = z.object({
   end_time_override: timeOfDay.nullable().optional(),
   partial_reason: z.string().max(200).nullable().optional(),
   notes: z.string().max(2000).nullable().optional(),
-  status: z.enum(['scheduled', 'confirmed', 'declined', 'completed']).optional(),
+  // SCHEDSTATUS.1 — validated against what the DATABASE accepts. This used to
+  // read z.enum([… 'declined' …]), and 'declined' is not in
+  // shift_assignments_status_check (mig 067/337), so the route passed the body
+  // and Postgres refused the write: the caller got a 400 quoting a constraint
+  // name. assignmentStatusSchema is the subset of the DB set this route owns.
+  status: assignmentStatusSchema.optional(),
 })
 
 // The fields whose VALUE decides whether this PUT is an override change —

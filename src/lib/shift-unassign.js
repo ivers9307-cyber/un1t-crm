@@ -37,7 +37,43 @@ export async function unassignShiftAssignments(db, { actorId, assignments }) {
     removed.push(a)
   }
 
-  const published = removed.filter((a) => a.roster_status === 'published')
+  await logAndNotifyUnassignments(db, { actorId, assignments: removed })
+
+  return { removed, failed }
+}
+
+/**
+ * SLOTNOTIFY.1 — the audit + notification half of an unassignment, for callers
+ * whose DELETE is not one row at a time.
+ *
+ * Split out of unassignShiftAssignments so DELETE /api/schedule/blocks/[id] can
+ * reuse it verbatim: deleting a staffed slot takes the assignments with it
+ * through the FK cascade (mig 067), so there is no per-row delete to hang the
+ * log and the notification off, and both were simply missing — the coaches lost
+ * a published shift and nobody told them, with no change-log row for the
+ * re-publish safety net to find either.
+ *
+ * Every rule stays where it was: only a PUBLISHED roster's removals are logged
+ * (a draft edit rides the first-publish notice, and logRosterChange no-ops on
+ * it anyway) and notifyRosterChanges owns the rest — grouping a coach's
+ * removals into one message, skipping the actor and anything already in the
+ * past, and stamping notified_at only on the rows it could deliver, leaving an
+ * opted-out coach's rows for the re-publish safety net.
+ *
+ * Best-effort, like every notification path here: never throws, never blocks
+ * the delete that already succeeded.
+ *
+ * @param {object} db   service-role client
+ * @param {object} args
+ * @param {string} args.actorId
+ * @param {Array<{ profile_id: string, block_id: string, block_date: string,
+ *   location_id: string, roster_status?: string|null }>} args.assignments
+ *   assignments that are ALREADY gone from the database.
+ */
+export async function logAndNotifyUnassignments(db, { actorId, assignments }) {
+  const published = (assignments || []).filter((a) => a.roster_status === 'published')
+  if (published.length === 0) return { logged: 0, notified: 0 }
+
   for (const a of published) {
     await logRosterChange(db, {
       isPublished: true,
@@ -47,6 +83,7 @@ export async function unassignShiftAssignments(db, { actorId, assignments }) {
       actorId,
       coachId: a.profile_id,
       action: 'unassigned',
+      ...(a.details ? { details: a.details } : {}),
     })
   }
 
@@ -61,9 +98,11 @@ export async function unassignShiftAssignments(db, { actorId, assignments }) {
       action: 'unassigned',
     })
   }
+  let notified = 0
   for (const [locationId, changes] of byLocation) {
-    await notifyRosterChanges(db, { locationId, actorId, changes })
+    const res = await notifyRosterChanges(db, { locationId, actorId, changes })
+    notified += res?.notified || 0
   }
 
-  return { removed, failed }
+  return { logged: published.length, notified }
 }

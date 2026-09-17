@@ -73,6 +73,23 @@ export function resolveSwapTransition({ swap, requestedStatus, user, userLocatio
   const isRequester = swap.requester_id === user.id
   const isTarget = !!swap.target_id && swap.target_id === user.id
 
+  // SCHEDROLES.2 — the detail-route rule (CLAUDE.md): a swap at a studio the
+  // caller has nothing to do with is INVISIBLE, not forbidden, so it answers
+  // exactly like an id that does not exist. Every branch below used to refuse
+  // a stranger with a 403 whose wording ('Only the requester or a manager can
+  // cancel', 'Not at this location', 'Only the taker can withdraw') confirmed
+  // the id was real and named the state it was sitting in — an id oracle, and
+  // a shape of one the house rule exists to close. Note the test is membership,
+  // not authority: a member of the swap's studio who simply isn't allowed to
+  // act still gets the honest 403 below, the same split
+  // /api/schedule/assignments/[id] and /blocks/[id] use. isManager covers
+  // master (hasRoleAtLocation short-circuits for it), and the requester or
+  // target can always see their own swap even if they have since left the
+  // studio.
+  if (!atLocation && !isManager && !isRequester && !isTarget) {
+    return deny(404, 'Swap request not found')
+  }
+
   // Terminal states accept no further transitions.
   if (TERMINAL_SWAP_STATES.includes(swap.status)) {
     return deny(409, `Swap already ${swap.status}`)

@@ -6,6 +6,7 @@ import { recordUsage } from '@/lib/usage'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { fetchScheduledShiftRows } from '@/lib/report-generator'
 import { RATE_REPORT_VIEWER_ROLES } from '@/lib/report-access'
+import { shiftHours } from '@/lib/payroll'
 import { upsertShiftAssignment } from '@/lib/roster-write'
 import { SYSTEM_PROMPT, TOOLS } from '@/lib/assistant-prompt'
 import { getCurrentUser } from '@/lib/auth'
@@ -314,19 +315,21 @@ export async function executeTool(toolName, input, context) {
         // RETIRE-SHIFTS-MIRROR.3 — reads shift_assignments+shift_blocks now.
         const { rows: shifts, error: shiftsError } = await fetchScheduledShiftRows(db, { locationId, periodStart, periodEnd })
         if (shiftsError) return { error: shiftsError }
+        // AGENTROSTER.1 — hours come from shiftHours(), which resolves
+        // override → the BLOCK's own time → the template
+        // (shared/roster-month.js, REPORTS.2). This used to do its own
+        // arithmetic straight off the TEMPLATE's times, so every manager-set
+        // partial shift was billed at its template length and the assistant
+        // answered a different number from /schedule's Reporting tab and from
+        // the calendar — 229h against 257h for 1-16 Sep at Stillorgan. Same
+        // fix ROSTER-FIX.5 made in src/lib/report-generator.js; the rows
+        // fetchScheduledShiftRows returns already carry the overrides and the
+        // block times, they were simply not being read.
         const staffHours = {}
         for (const s of (shifts || [])) {
           const name = s.profiles?.full_name || 'Unknown'
           if (!staffHours[name]) staffHours[name] = 0
-          const st = s.shift_templates?.start_time
-          const en = s.shift_templates?.end_time
-          if (st && en) {
-            const [sh, sm] = st.split(':').map(Number)
-            const [eh, em] = en.split(':').map(Number)
-            let hrs = (eh + em / 60) - (sh + sm / 60)
-            if (hrs < 0) hrs += 24
-            staffHours[name] += hrs
-          }
+          staffHours[name] += shiftHours(s)
         }
         const result = Object.entries(staffHours).map(([name, hours]) => ({ name, hours: Math.round(hours * 10) / 10 })).sort((a, b) => b.hours - a.hours)
         return { report: 'Staff Hours Worked', period: `${periodStart} to ${periodEnd}`, staff: result, total_hours: Math.round(result.reduce((s, r) => s + r.hours, 0) * 10) / 10 }
@@ -370,16 +373,11 @@ export async function executeTool(toolName, input, context) {
           const p = rateMap[s.profile_id]
           if (!p) continue
           if (!costs[p.name]) costs[p.name] = { hours: 0, cost: 0, rate: p.rate }
-          const st = s.shift_templates?.start_time
-          const en = s.shift_templates?.end_time
-          if (st && en) {
-            const [sh, sm] = st.split(':').map(Number)
-            const [eh, em] = en.split(':').map(Number)
-            let hrs = (eh + em / 60) - (sh + sm / 60)
-            if (hrs < 0) hrs += 24
-            costs[p.name].hours += hrs
-            costs[p.name].cost += hrs * p.rate
-          }
+          // AGENTROSTER.1 — effective hours, as above. Cost has to move with
+          // hours or the two answers in the same reply disagree.
+          const hrs = shiftHours(s)
+          costs[p.name].hours += hrs
+          costs[p.name].cost += hrs * p.rate
         }
         const result = Object.entries(costs).map(([name, d]) => ({ name, hours: Math.round(d.hours * 10) / 10, cost: `€${(Math.round(d.cost * 100) / 100).toFixed(2)}`, hourly_rate: `€${d.rate.toFixed(2)}` })).sort((a, b) => parseFloat(b.cost.slice(1)) - parseFloat(a.cost.slice(1)))
         const totalCost = Object.values(costs).reduce((s, d) => s + d.cost, 0)

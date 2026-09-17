@@ -3,7 +3,6 @@
 // the newly-published blocks) instead of the dropped public.shifts flip.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('./push', () => ({ sendPush: vi.fn(() => Promise.resolve({ sent: 1 })) }))
 vi.mock('./log', () => ({ logWarn: vi.fn() }))
 vi.mock('./notify', () => ({ notifyUsers: vi.fn(() => Promise.resolve({ sent: 1 })) }))
 vi.mock('./roster-change-log', () => ({
@@ -12,7 +11,6 @@ vi.mock('./roster-change-log', () => ({
   markChangesNotified: vi.fn(() => Promise.resolve()),
 }))
 
-import { sendPush } from './push'
 import { logWarn } from './log'
 import { notifyUsers } from './notify'
 import { collectUnnotifiedChanges, markChangesNotified } from './roster-change-log'
@@ -83,27 +81,32 @@ describe('notifyStaffOfPublish — notification-log insert', () => {
   const range = { startDate: '2026-06-08', endDate: '2026-06-08', locationId: 'l1' }
 
   function makeInsertDb(result) {
-    return { from: () => ({ insert: () => Promise.resolve(result) }) }
+    const rows = []
+    return {
+      rows,
+      from: () => ({ insert: (payload) => { rows.push(...payload); return Promise.resolve(result) } }),
+    }
   }
 
   beforeEach(() => {
-    sendPush.mockClear()
+    notifyUsers.mockClear()
+    notifyUsers.mockResolvedValue({ sent: 1 })
     logWarn.mockClear()
   })
 
-  it('logs a failed insert and still sends the push', async () => {
+  it('logs a failed insert and still sends the notification', async () => {
     const db = makeInsertDb({ data: null, error: { code: '23503', message: 'fk violation' } })
 
     const res = await notifyStaffOfPublish(db, shifts, range)
 
-    expect(res).toEqual({ notified: 1 })
+    expect(res).toEqual({ notified: 1, delivered: 1 })
     expect(logWarn).toHaveBeenCalledWith(
       'roster-notify', 'notification log insert failed', { err: 'fk violation' },
     )
-    // The push is the notification; the row is only the record of it, so a lost
-    // record must never cost the coach the message.
-    expect(sendPush).toHaveBeenCalledTimes(1)
-    expect(sendPush.mock.calls[0][0]).toEqual(['p1'])
+    // The message is the notification; the row is only the record of it, so a
+    // lost record must never cost the coach the message.
+    expect(notifyUsers).toHaveBeenCalledTimes(1)
+    expect(notifyUsers.mock.calls[0][0]).toEqual(['p1'])
   })
 
   it('logs nothing when the insert succeeds', async () => {
@@ -111,9 +114,125 @@ describe('notifyStaffOfPublish — notification-log insert', () => {
 
     const res = await notifyStaffOfPublish(db, shifts, range)
 
-    expect(res).toEqual({ notified: 1 })
+    expect(res).toEqual({ notified: 1, delivered: 1 })
     expect(logWarn).not.toHaveBeenCalled()
-    expect(sendPush).toHaveBeenCalledTimes(1)
+    expect(notifyUsers).toHaveBeenCalledTimes(1)
+  })
+})
+
+// PUBNOTIFY.1 — the first-publish notice used to be a bare sendPush whose
+// record claimed channel 'email' and never set `delivered`, so a coach without
+// the app heard nothing and the table said otherwise.
+describe('notifyStaffOfPublish — real channels, real delivery', () => {
+  const range = { startDate: '2026-06-08', endDate: '2026-06-14', locationId: 'l1' }
+
+  function makeInsertDb() {
+    const rows = []
+    return {
+      rows,
+      from: () => ({ insert: (payload) => { rows.push(...payload); return Promise.resolve({ data: payload, error: null }) } }),
+    }
+  }
+
+  beforeEach(() => {
+    notifyUsers.mockClear()
+    logWarn.mockClear()
+  })
+
+  it('sends push WITH email fallback under the schedule category', async () => {
+    notifyUsers.mockResolvedValue({ sent: 0, emailed: 1 })
+    const db = makeInsertDb()
+
+    await notifyStaffOfPublish(db, [{ id: 'a1', profile_id: 'p1' }], range)
+
+    const payload = notifyUsers.mock.calls[0][1]
+    expect(payload.category).toBe('schedule')
+    expect(payload.emailSubject).toBeTruthy()
+    expect(payload.data).toMatchObject({ type: 'schedule_published', start_date: '2026-06-08', end_date: '2026-06-14' })
+  })
+
+  it("records 'email' + delivered when only the fallback landed", async () => {
+    notifyUsers.mockResolvedValue({ sent: 0, emailed: 1 })
+    const db = makeInsertDb()
+
+    const res = await notifyStaffOfPublish(db, [{ id: 'a1', profile_id: 'p1' }], range)
+
+    expect(res).toEqual({ notified: 1, delivered: 1 })
+    expect(db.rows[0]).toMatchObject({ profile_id: 'p1', channel: 'email', delivered: true })
+    expect(db.rows[0].metadata).toMatchObject({ push_sent: 0, emails_sent: 1, opted_out: false })
+  })
+
+  it("records 'push' when the push landed", async () => {
+    notifyUsers.mockResolvedValue({ sent: 1, emailed: 0 })
+    const db = makeInsertDb()
+
+    await notifyStaffOfPublish(db, [{ id: 'a1', profile_id: 'p1' }], range)
+
+    expect(db.rows[0]).toMatchObject({ channel: 'push', delivered: true })
+  })
+
+  it("records 'none' + delivered:false for a coach nothing reached", async () => {
+    notifyUsers.mockResolvedValue({ sent: 0, emailed: 0, skipped: 0 })
+    const db = makeInsertDb()
+
+    const res = await notifyStaffOfPublish(db, [{ id: 'a1', profile_id: 'p1' }], range)
+
+    expect(res).toEqual({ notified: 1, delivered: 0 })
+    expect(db.rows[0]).toMatchObject({ channel: 'none', delivered: false })
+    expect(db.rows[0].metadata.opted_out).toBe(false)
+  })
+
+  it('flags an opted-out coach rather than emailing around them', async () => {
+    // push.js counts the master switch / notify_schedule opt-out as `skipped`,
+    // and notifyUsers applies the same gate before the email fallback — so the
+    // coach is deliberately left to the re-publish safety net.
+    notifyUsers.mockResolvedValue({ sent: 0, emailed: 0, skipped: 1 })
+    const db = makeInsertDb()
+
+    const res = await notifyStaffOfPublish(db, [{ id: 'a1', profile_id: 'p1' }], range)
+
+    expect(res).toEqual({ notified: 1, delivered: 0 })
+    expect(db.rows[0]).toMatchObject({ channel: 'none', delivered: false })
+    expect(db.rows[0].metadata.opted_out).toBe(true)
+  })
+
+  it('judges each coach on their own and never stops on one failure', async () => {
+    notifyUsers
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValueOnce({ sent: 1 })
+    const db = makeInsertDb()
+
+    const res = await notifyStaffOfPublish(db, [
+      { id: 'a1', profile_id: 'p1' },
+      { id: 'a2', profile_id: 'p2' },
+    ], range)
+
+    expect(res).toEqual({ notified: 2, delivered: 1 })
+    expect(db.rows.map((r) => [r.profile_id, r.channel, r.delivered])).toEqual([
+      ['p1', 'none', false],
+      ['p2', 'push', true],
+    ])
+  })
+
+  it('groups a coach\'s shifts into one message and counts them', async () => {
+    notifyUsers.mockResolvedValue({ sent: 1 })
+    const db = makeInsertDb()
+
+    await notifyStaffOfPublish(db, [
+      { id: 'a1', profile_id: 'p1' },
+      { id: 'a2', profile_id: 'p1' },
+      { id: 'a3', profile_id: 'p2' },
+    ], range)
+
+    expect(notifyUsers).toHaveBeenCalledTimes(2)
+    expect(db.rows.find((r) => r.profile_id === 'p1').metadata.shift_count).toBe(2)
+    expect(db.rows.find((r) => r.profile_id === 'p1').shift_id).toBe('a1')
+  })
+
+  it('does nothing for an empty shift list', async () => {
+    const res = await notifyStaffOfPublish({ from: () => { throw new Error('should not query') } }, [], range)
+    expect(res).toEqual({ notified: 0, delivered: 0 })
+    expect(notifyUsers).not.toHaveBeenCalled()
   })
 })
 

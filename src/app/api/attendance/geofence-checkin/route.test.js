@@ -403,12 +403,91 @@ describe('POST /api/attendance/geofence-checkin', () => {
     expect(shiftUpdates(db)).toHaveLength(0)
   })
 
-  it('clamps a client entered_at more than 5 min in the past to server now', async () => {
-    getCurrentUser.mockResolvedValue(staff)
-    const db = mockDb({ shiftRows: [] })
-    await POST(postReq({ ...validBody(), entered_at: new Date(Date.now() - 60 * 60000).toISOString() }))
-    const ev = db.inserted[0]
-    expect(Math.abs(new Date(ev.event_at).getTime() - Date.now())).toBeLessThan(10_000)
-    expect(ev.payload.clamped).toBe(true)
+  // QUEUEDARRIVAL.1 — an arrival posted from the phone's offline queue is
+  // recorded at the time the coach ARRIVED, not the time the queue drained.
+  // The phone stamps entered_at at the moment the OS delivers the region
+  // ENTER, so an older-than-skew timestamp IS a queued upload and needs no
+  // extra flag from the client.
+  describe('queued (offline) arrivals', () => {
+    const agoIso = (ms) => new Date(Date.now() - ms).toISOString()
+
+    it('trusts an entered_at inside the ±5 min skew window, unqueued', async () => {
+      getCurrentUser.mockResolvedValue(staff)
+      const db = mockDb({ shiftRows: [] })
+      const entered = agoIso(60_000)
+      await POST(postReq({ ...validBody(), entered_at: entered }))
+      const ev = db.inserted[0]
+      expect(ev.event_at).toBe(entered)
+      expect(ev.payload.clamped).toBe(false)
+      expect(ev.payload.queued).toBe(false)
+    })
+
+    it('trusts an hour-old queued entered_at and marks it queued', async () => {
+      getCurrentUser.mockResolvedValue(staff)
+      const db = mockDb({ shiftRows: [] })
+      const entered = agoIso(60 * 60_000)
+      await POST(postReq({ ...validBody(), entered_at: entered }))
+      const ev = db.inserted[0]
+      expect(ev.event_at).toBe(entered)
+      expect(ev.payload.clamped).toBe(false)
+      expect(ev.payload.queued).toBe(true)
+      expect(ev.payload.client_age_ms).toBe(60 * 60_000)
+    })
+
+    it('trusts an entered_at just inside 24h and clamps one just outside', async () => {
+      getCurrentUser.mockResolvedValue(staff)
+      const inside = agoIso(23 * 3600_000)
+      const db1 = mockDb({ shiftRows: [] })
+      await POST(postReq({ ...validBody(), entered_at: inside }))
+      expect(db1.inserted[0].event_at).toBe(inside)
+      expect(db1.inserted[0].payload.queued).toBe(true)
+
+      const db2 = mockDb({ shiftRows: [] })
+      await POST(postReq({ ...validBody(), entered_at: agoIso(25 * 3600_000) }))
+      const ev = db2.inserted[0]
+      expect(new Date(ev.event_at).getTime()).toBe(Date.now())
+      expect(ev.payload.clamped).toBe(true)
+      expect(ev.payload.queued).toBe(false)
+    })
+
+    it('still clamps a phone clock running AHEAD of the server', async () => {
+      getCurrentUser.mockResolvedValue(staff)
+      const db = mockDb({ shiftRows: [] })
+      await POST(postReq({ ...validBody(), entered_at: new Date(Date.now() + 30 * 60_000).toISOString() }))
+      const ev = db.inserted[0]
+      expect(new Date(ev.event_at).getTime()).toBe(Date.now())
+      expect(ev.payload.clamped).toBe(true)
+      expect(ev.payload.queued).toBe(false)
+    })
+
+    // The point of the whole change: the windows decideGeofenceStamp works on
+    // are measured from the REAL arrival, so a queued ping matches the shift
+    // the coach actually turned up for and stamps the time they turned up.
+    it('matches and stamps the shift the queued arrival really belongs to', async () => {
+      getCurrentUser.mockResolvedValue(staff)
+      // 11:00Z "now"; the coach arrived at 09:55Z for a 10:00Z shift and the
+      // ping only uploaded an hour later.
+      const db = mockDb({
+        shiftRows: [shiftRow({
+          block: { id: 'blk-1', location_id: LOC, block_date: '2026-07-15', start_time: '11:00:00', end_time: '12:00:00' },
+        })],
+      })
+      const entered = '2026-07-15T09:55:00.000Z'
+      const body = await (await POST(postReq({ ...validBody(), entered_at: entered }))).json()
+      expect(body.data.match_outcome).toBe('matched')
+      expect(shiftUpdates(db)).toEqual([{
+        table: 'shift_assignments',
+        patch: { arrived_at: entered, arrival_source: 'geofence' },
+      }])
+      expect(db.inserted[0].event_at).toBe(entered)
+      expect(db.inserted[0].payload.queued).toBe(true)
+    })
+
+    it('records client_age_ms even when the timestamp was rejected', async () => {
+      getCurrentUser.mockResolvedValue(staff)
+      const db = mockDb({ shiftRows: [] })
+      await POST(postReq({ ...validBody(), entered_at: agoIso(48 * 3600_000) }))
+      expect(db.inserted[0].payload.client_age_ms).toBe(48 * 3600_000)
+    })
   })
 })
