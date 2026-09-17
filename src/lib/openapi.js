@@ -4847,8 +4847,12 @@ registry.registerPath({
   tags: ['Schedule', 'Reports'],
   security: [{ CookieAuth: [] }],
   summary: 'Schedule a recurring report (manager+)',
+  description: 'STAFFCOST.1 — staff_cost carries pay rates and cost, so it is owner/manager/master only at the schedule\'s location (a head coach gets 403). When the cron emails a staff_cost report, any recipient address belonging to a staff profile without that role at the location is withheld.',
   request: { body: { content: { 'application/json': { schema: ScheduledReport } } } },
-  responses: { 201: { description: 'Schedule created' } },
+  responses: {
+    201: { description: 'Schedule created' },
+    403: { description: 'Not a manager at the location, or a head coach scheduling staff_cost', content: { 'application/json': { schema: ErrorResponse } } },
+  },
 })
 
 // Automations

@@ -5,6 +5,7 @@ import { anthropicMessages } from '@/lib/anthropic'
 import { recordUsage } from '@/lib/usage'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { fetchScheduledShiftRows } from '@/lib/report-generator'
+import { RATE_REPORT_VIEWER_ROLES } from '@/lib/report-access'
 import { upsertShiftAssignment } from '@/lib/roster-write'
 import { SYSTEM_PROMPT, TOOLS } from '@/lib/assistant-prompt'
 import { getCurrentUser } from '@/lib/auth'
@@ -332,6 +333,13 @@ export async function executeTool(toolName, input, context) {
       }
 
       if (reportType === 'staff_cost') {
+        // STAFFCOST.1 — pay rates and staff cost are owner/manager/master only
+        // (src/lib/report-access.js). The tool itself stays open to head
+        // coaches for staff_hours, so the gate is per type, here. `role` is the
+        // caller's role at `locationId` (both come from the session).
+        if (!RATE_REPORT_VIEWER_ROLES.includes(role)) {
+          return { error: 'Permission denied: staff cost reports show pay rates, which only owners and managers can see. Please ask a manager or owner.' }
+        }
         // Rate data only for staff linked to the active location (mirror
         // list_staff) — an unscoped profiles read would expose every
         // tenant's salary data (SAAS-1).

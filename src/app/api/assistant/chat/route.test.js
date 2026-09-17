@@ -399,6 +399,22 @@ describe('executeTool generate_report staff_cost — profiles read is location-s
     const res = await executeTool('generate_report', { report_type: 'staff_cost', period_start: '2026-07-01', period_end: '2026-07-07' }, { ...MANAGER, locationId: null })
     expect(res.error).toMatch(/active location/i)
   })
+
+  // STAFFCOST.1 — pay rates and staff cost are owner/manager/master only.
+  it('refuses a head coach, and reads no pay data', async () => {
+    useDb({ profile_locations, profiles, shift_assignments })
+    const res = await executeTool('generate_report', { report_type: 'staff_cost', period_start: '2026-07-01', period_end: '2026-07-07' }, { ...MANAGER, role: 'head_coach' })
+    expect(res.error).toMatch(/owners and managers/i)
+    expect(res.staff).toBeUndefined()
+    expect(JSON.stringify(res)).not.toContain('20')
+  })
+
+  it('still lets a head coach run staff_hours', async () => {
+    useDb({ profile_locations, profiles, shift_assignments })
+    const res = await executeTool('generate_report', { report_type: 'staff_hours', period_start: '2026-07-01', period_end: '2026-07-07' }, { ...MANAGER, role: 'head_coach' })
+    expect(res.error).toBeUndefined()
+    expect(res.report).toBe('Staff Hours Worked')
+  })
 })
 
 // ── null-locationId guards ───────────────────────────────────────────

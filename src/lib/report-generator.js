@@ -560,6 +560,8 @@ function withThousands(intStr) {
 export function formatReportValue(key, value, currency) {
   if (value == null) return '—'
   if (typeof value !== 'number') return String(value)
+  // STAFFCOST.1 — never print "NaN" / "Infinity" into an emailed report.
+  if (!Number.isFinite(value)) return '—'
   const isMoney = /cost|salary|pay\b/i.test(key)
   if (isMoney) {
     const sym = REPORT_CURRENCY_SYMBOLS[currency] || ''
