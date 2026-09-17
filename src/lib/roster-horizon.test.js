@@ -97,6 +97,15 @@ describe('extendRosterHorizon', () => {
     await expect(extendRosterHorizon(db)).rejects.toThrow(/boom/)
   })
 
+  // SLOTREMOVAL.1 — dates skipped for a deleted slot are totalled separately.
+  it('totals the dates each template skipped for a deleted slot', async () => {
+    generateBlocksForTemplate
+      .mockResolvedValueOnce({ inserted: 2, skipped: 0, removed: 1 })
+      .mockResolvedValueOnce({ inserted: 1, skipped: 0 })
+    const db = dbWith({ data: [TPL_A, TPL_B], error: null })
+    expect(await extendRosterHorizon(db)).toMatchObject({ inserted: 3, removed: 1, failed: 0 })
+  })
+
   it('is a no-op when there are no active templates', async () => {
     const db = dbWith({ data: [], error: null })
     expect(await extendRosterHorizon(db)).toMatchObject({ templates: 0, inserted: 0, failed: 0 })

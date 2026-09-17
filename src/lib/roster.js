@@ -199,6 +199,55 @@ export function clampMinCoaches(minCoaches, maxCoaches) {
   return Math.max(0, Math.min(minCoaches ?? 1, maxCoaches))
 }
 
+/** SLOTREMOVAL.1 — the key a slot removal is matched on. */
+export function slotKey(templateId, blockDate) {
+  return `${templateId}|${String(blockDate).slice(0, 10)}`
+}
+
+const REMOVAL_PAGE = 1000
+
+/**
+ * SLOTREMOVAL.1 — every deleted slot (shift_block_removals, mig 613) at a
+ * location in [startDate, endDate], as a Set of slotKey(template_id, date).
+ *
+ * Paged over a total order so it is never cut at the 1,000-row select cap. A
+ * single template's 8-week window can hold at most 56 rows, so the generator's
+ * call is always ONE query; the copy routes read a whole week or month across
+ * every template, which in practice is also one page.
+ *
+ * @param {SupabaseClient} db  server-role client
+ * @param {object} opts
+ * @param {string} opts.locationId
+ * @param {string[]} [opts.templateIds]  narrow to these templates
+ * @param {string} opts.startDate  YYYY-MM-DD inclusive
+ * @param {string} opts.endDate    YYYY-MM-DD inclusive
+ * @returns {Promise<Set<string>>}
+ * @throws when the read fails — callers must not treat "couldn't read" as
+ *         "nothing removed", or they re-create the slots this table exists
+ *         to keep deleted.
+ */
+export async function fetchSlotRemovalKeys(db, { locationId, templateIds = null, startDate, endDate }) {
+  const keys = new Set()
+  if (Array.isArray(templateIds) && templateIds.length === 0) return keys
+  for (let from = 0; ; from += REMOVAL_PAGE) {
+    let query = db
+      .from('shift_block_removals')
+      .select('id, template_id, block_date')
+      .eq('location_id', locationId)
+      .gte('block_date', startDate)
+      .lte('block_date', endDate)
+    if (Array.isArray(templateIds)) query = query.in('template_id', templateIds)
+    const { data, error } = await query
+      .order('id', { ascending: true })
+      .range(from, from + REMOVAL_PAGE - 1)
+    if (error) throw new Error(`Failed to load slot removals: ${error.message}`)
+    const page = data || []
+    for (const r of page) keys.add(slotKey(r.template_id, r.block_date))
+    if (page.length < REMOVAL_PAGE) break
+  }
+  return keys
+}
+
 /**
  * Materialise shift_blocks for a template across a date window.
  *
@@ -215,7 +264,9 @@ export function clampMinCoaches(minCoaches, maxCoaches) {
  *                               start of current week)
  * @param {number} weeks         how many weeks to project forward
  *                               from fromDate (default 8)
- * @returns {Promise<{ inserted: number, skipped: number }>}
+ * @returns {Promise<{ inserted: number, skipped: number, removed?: number }>}
+ *   `removed` counts dates skipped because a manager deleted that slot
+ *   (SLOTREMOVAL.1); they are in neither `inserted` nor `skipped`.
  */
 export async function generateBlocksForTemplate(db, template, fromDate = null, weeks = 8) {
   const days = template.days_of_week || []
@@ -225,8 +276,24 @@ export async function generateBlocksForTemplate(db, template, fromDate = null, w
   start.setHours(0, 0, 0, 0)
   const end = addDays(start, weeks * 7 - 1)
 
-  const dates = expandDaysToDates(days, start, end)
-  if (dates.length === 0) return { inserted: 0, skipped: 0 }
+  const allDates = expandDaysToDates(days, start, end)
+  if (allDates.length === 0) return { inserted: 0, skipped: 0 }
+
+  // SLOTREMOVAL.1 — a slot a manager deleted stays deleted. Without this the
+  // upsert below reads the missing row as "not generated yet" and the slot is
+  // back the next night. Throws on a failed read: generating blind would
+  // re-create exactly the slots someone removed, where skipping this template
+  // for one run only delays the far end of the horizon (both callers already
+  // treat a throw as per-template / warning).
+  const removed = await fetchSlotRemovalKeys(db, {
+    locationId: template.location_id,
+    templateIds: [template.id],
+    startDate: allDates[0],
+    endDate: allDates[allDates.length - 1],
+  })
+  const dates = allDates.filter(date => !removed.has(slotKey(template.id, date)))
+  const removedCount = allDates.length - dates.length
+  if (dates.length === 0) return { inserted: 0, skipped: 0, removed: removedCount }
 
   // ROSTER-FIX.5 — a block created after its week was published belongs to
   // that roster. Untagged blocks were invisible to every roster-scoped
@@ -267,7 +334,7 @@ export async function generateBlocksForTemplate(db, template, fromDate = null, w
   if (error) throw new Error(`Failed to generate blocks: ${error.message}`)
 
   const inserted = (data || []).length
-  return { inserted, skipped: dates.length - inserted }
+  return { inserted, skipped: dates.length - inserted, removed: removedCount }
 }
 
 /**

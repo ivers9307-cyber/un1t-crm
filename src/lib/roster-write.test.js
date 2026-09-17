@@ -286,7 +286,7 @@ const tpl1 = { id: 't1', start_time: '09:00:00', end_time: '10:00:00', max_coach
 describe('bulkUpsertShiftAssignments', () => {
   it('returns 0 with no error for an empty row set', async () => {
     const res = await bulkUpsertShiftAssignments(makeBulkDb(), { locationId: 'loc1', rows: [] })
-    expect(res).toEqual({ count: 0, error: null })
+    expect(res).toEqual({ count: 0, skippedRemoved: 0, error: null })
   })
 
   it('reuses existing blocks (no insert) and upserts assignments', async () => {
@@ -295,7 +295,7 @@ describe('bulkUpsertShiftAssignments', () => {
       locationId: 'loc1', actorId: 'mgr1',
       rows: [{ profileId: 'p1', shiftTemplateId: 't1', shiftDate: '2026-06-08', startTimeOverride: '08:00:00', endTimeOverride: null, notes: 'n' }],
     })
-    expect(res).toEqual({ count: 1, error: null })
+    expect(res).toEqual({ count: 1, skippedRemoved: 0, error: null })
     expect(db.captured.blockInsert).toBeNull()
     // ROSTER-FIX.4 (SAAS-1) — templates are read at the caller's location only
     expect(db.captured.templateScope).toEqual({ col: 'location_id', val: 'loc1' })
@@ -435,7 +435,7 @@ describe('bulkUpsertShiftAssignments', () => {
     })
     // Fails soft, exactly as findPublishedRosterFor does: the operator's
     // copy-week survives, the blocks just aren't on a roster yet.
-    expect(res).toEqual({ count: 1, error: null })
+    expect(res).toEqual({ count: 1, skippedRemoved: 0, error: null })
     expect(db.captured.blockInsert[0].roster_id).toBeNull()
   })
 
@@ -470,7 +470,7 @@ describe('bulkUpsertShiftAssignments', () => {
         { profileId: 'p2', shiftTemplateId: 't1', shiftDate: '2026-06-08' },
       ],
     })
-    expect(res).toEqual({ count: 1, error: null })
+    expect(res).toEqual({ count: 1, skippedRemoved: 0, error: null })
     expect(db.captured.assignmentUpsert.rows).toHaveLength(2)
     expect(db.captured.assignmentUpsert.opts).toEqual({ onConflict: 'block_id,profile_id', ignoreDuplicates: true })
   })
@@ -485,7 +485,7 @@ describe('bulkUpsertShiftAssignments', () => {
       locationId: 'loc1',
       rows: [{ profileId: 'p1', shiftTemplateId: 't1', shiftDate: '2026-06-08' }],
     })
-    expect(res).toEqual({ count: 0, error: { message: 'upsert boom' } })
+    expect(res).toEqual({ count: 0, skippedRemoved: 0, error: { message: 'upsert boom' } })
   })
 })
 
@@ -517,7 +517,7 @@ describe('bulkUpsertShiftAssignments — COPYMODES.1', () => {
       locationId: 'loc1', actorId: 'mgr1', rows: [],
       blocks: [{ shiftTemplateId: 't1', shiftDate: '2026-06-08', startTime: '06:30:00', endTime: '08:00:00', minCoaches: 1, maxCoaches: 3 }],
     })
-    expect(res).toEqual({ count: 0, error: null })
+    expect(res).toEqual({ count: 0, skippedRemoved: 0, error: null })
     expect(db.captured.blockInsert).toEqual([expect.objectContaining({
       template_id: 't1', block_date: '2026-06-08', start_time: '06:30:00', end_time: '08:00:00', min_coaches: 1, max_coaches: 3, created_by: 'mgr1',
     })])
@@ -598,7 +598,7 @@ describe('bulkUpsertShiftAssignments — COPYMODES.1', () => {
     expect(db.captured.blockPages).toEqual([[0, 999], [1000, 1999]])
     expect(db.captured.blockInsert).toBeNull() // every block was found, none re-inserted
     expect(db.captured.assignmentUpsertBatches.map((b) => b.length)).toEqual([500, 500, 200])
-    expect(res).toEqual({ count: 1200, error: null })
+    expect(res).toEqual({ count: 1200, skippedRemoved: 0, error: null })
   })
 })
 
@@ -611,5 +611,54 @@ describe('timesDiffer / overrideAgainstBlock', () => {
     expect(overrideAgainstBlock('09:30:00', '09:30:00')).toBeNull()
     expect(overrideAgainstBlock('09:15:00', '09:30:00')).toBe('09:15:00')
     expect(overrideAgainstBlock(null, '09:30:00')).toBeNull()
+  })
+})
+
+// SLOTREMOVAL.1 — a slot a manager deleted is not re-created by a copy.
+describe('bulkUpsertShiftAssignments — removed slots', () => {
+  const REMOVED = new Set(['t1|2026-06-09'])
+
+  it('neither creates a removed slot nor places its coaches, and counts them as skippedRemoved', async () => {
+    const db = makeBulkDb({ templates: [tpl1] })
+    const res = await bulkUpsertShiftAssignments(db, {
+      locationId: 'loc1',
+      removedSlots: REMOVED,
+      rows: [
+        { profileId: 'p1', shiftTemplateId: 't1', shiftDate: '2026-06-08' },
+        { profileId: 'p2', shiftTemplateId: 't1', shiftDate: '2026-06-09' },
+        { profileId: 'p3', shiftTemplateId: 't1', shiftDate: '2026-06-09' },
+      ],
+      blocks: [{ shiftTemplateId: 't1', shiftDate: '2026-06-09' }, { shiftTemplateId: 't1', shiftDate: '2026-06-10' }],
+    })
+    expect(res).toEqual({ count: 1, skippedRemoved: 2, error: null })
+    expect(db.captured.blockInsert.map((b) => b.block_date).sort()).toEqual(['2026-06-08', '2026-06-10'])
+    expect(db.captured.assignmentUpsert.rows.map((r) => r.profile_id)).toEqual(['p1'])
+  })
+
+  it('writes to a removed slot whose block exists again (restored by hand) as normal', async () => {
+    const db = makeBulkDb({
+      templates: [tpl1],
+      existingBlocks: [{ id: 'blk-back', template_id: 't1', block_date: '2026-06-09', start_time: '09:00:00', end_time: '10:00:00' }],
+    })
+    const res = await bulkUpsertShiftAssignments(db, {
+      locationId: 'loc1',
+      removedSlots: REMOVED,
+      rows: [{ profileId: 'p2', shiftTemplateId: 't1', shiftDate: '2026-06-09' }],
+    })
+    expect(res).toEqual({ count: 1, skippedRemoved: 0, error: null })
+    expect(db.captured.assignmentUpsert.rows[0].block_id).toBe('blk-back')
+  })
+
+  it('writes nothing when every slot was removed', async () => {
+    const db = makeBulkDb({ templates: [tpl1] })
+    const res = await bulkUpsertShiftAssignments(db, {
+      locationId: 'loc1',
+      removedSlots: REMOVED,
+      rows: [{ profileId: 'p2', shiftTemplateId: 't1', shiftDate: '2026-06-09' }],
+      blocks: [{ shiftTemplateId: 't1', shiftDate: '2026-06-09' }],
+    })
+    expect(res).toEqual({ count: 0, skippedRemoved: 1, error: null })
+    expect(db.captured.blockInsertBatches).toHaveLength(0)
+    expect(db.captured.assignmentUpsert).toBeNull()
   })
 })

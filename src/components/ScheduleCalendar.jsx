@@ -799,7 +799,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
         showToast(data.error || (isWeek ? 'Failed to copy week' : 'Failed to copy month'))
         return
       }
-      const result = copyResultToast({ period: job.period, mode, copied: data.copied, skipped: data.skipped })
+      const result = copyResultToast({ period: job.period, mode, copied: data.copied, skipped: data.skipped, skippedRemoved: data.skipped_removed })
       showToast(result.message, result.kind)
       refreshAfterMutation()
     } catch {
@@ -1619,7 +1619,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
           onPartialSave={handlePartialSave}
           onDeleteBlock={async () => {
             if (rowBusy) return
-            if (!confirm('Delete this entire shift slot? Any assigned coaches are removed too.')) return
+            if (!confirm(DELETE_SLOT_CONFIRM)) return
             setRowBusy(true)
             try {
               const res = await fetch(`/api/schedule/blocks/${blockDetail.id}`, { method: 'DELETE' })
@@ -1628,6 +1628,9 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                 showToast(data.error || 'Failed to delete')
                 return
               }
+              // SLOTREMOVAL.1 — the slot is gone either way; a warning means
+              // it may come back overnight, which the manager needs to know.
+              if (data.warning) showToast(data.warning, 'warning')
               setBlockDetail(null)
               refreshAfterMutation()
             } catch {
@@ -2267,6 +2270,15 @@ function SwapModal({ shift, onSubmit, onClose, restoreFocusRef }) {
 
 // BlockDetailModal — opens when an operator clicks a block card.
 //
+// SLOTREMOVAL.1 — a deleted slot is remembered (shift_block_removals), so the
+// nightly schedule and roster copies no longer bring it back. Say so, say how
+// to undo it, and point a "never on this day" intent at the template.
+const DELETE_SLOT_CONFIRM =
+  'Delete this shift slot? Any assigned coaches are removed too.\n\n' +
+  "The nightly schedule won't recreate this slot, and copying a roster won't add it back. " +
+  'To restore it, use Add Slot on this day and pick the same template.\n\n' +
+  'If this shift should stop running every week, deactivate its template in Manage templates instead.'
+
 // Replaces the old inline pencil + cramped buttons on the block
 // card. One pop-out, plenty of room, all the relevant actions:
 //   - Add a coach (manager + below capacity)

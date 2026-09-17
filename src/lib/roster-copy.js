@@ -230,15 +230,23 @@ export const COPY_MODE_OPTIONS = [
  * @param {'week'|'month'} r.period
  * @param {'exact'|'template'} r.mode
  * @param {number} [r.copied]
- * @param {number} [r.skipped]
+ * @param {number} [r.skipped]          includes skippedRemoved
+ * @param {number} [r.skippedRemoved]   SLOTREMOVAL.1 — skipped because the
+ *   target slot was deleted by a manager
  */
-export function copyResultToast({ period, mode, copied = 0, skipped = 0 }) {
+export function copyResultToast({ period, mode, copied = 0, skipped = 0, skippedRemoved = 0 }) {
   const n = Number(copied) || 0
-  const s = Number(skipped) || 0
+  const total = Number(skipped) || 0
+  const removed = Math.min(Number(skippedRemoved) || 0, total)
   const copiedText = `Copied ${n} ${n === 1 ? 'shift' : 'shifts'}.`
-  if (s === 0) {
+  if (total === 0) {
     return { kind: 'success', message: n === 0 ? `${copiedText} Everyone was already on the target ${period}.` : copiedText }
   }
+  const removedText = removed > 0
+    ? `${removed} skipped because that slot was deleted in the target ${period}.`
+    : ''
+  const s = total - removed
+  if (s === 0) return { kind: 'warning', message: `${copiedText} ${removedText}` }
   let why
   if (mode === 'template') {
     why = period === 'month'
@@ -247,5 +255,6 @@ export function copyResultToast({ period, mode, copied = 0, skipped = 0 }) {
   } else {
     why = 'that day of the month does not exist in the target (usually 31 Jan into Feb).'
   }
-  return { kind: 'warning', message: `${copiedText} ${s} skipped, ${why}` }
+  const otherText = `${s} skipped, ${why}`
+  return { kind: 'warning', message: removedText ? `${copiedText} ${removedText} ${otherText}` : `${copiedText} ${otherText}` }
 }

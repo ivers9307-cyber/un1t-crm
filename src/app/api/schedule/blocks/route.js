@@ -21,6 +21,7 @@ import { getCurrentUser, assertLocationAccess, getUserLocationIds, hasRoleAtLoca
 import { validateBody } from '@/lib/validate'
 import { uuidLike, isoDate, timeOfDay, MANAGER_ROLES } from '@/lib/schemas'
 import { findPublishedRosterFor } from '@/lib/roster'
+import { logWarn } from '@/lib/log'
 
 const BlockCreateSchema = z.object({
   location_id: uuidLike,
@@ -243,5 +244,28 @@ export async function POST(request) {
     }
     return NextResponse.json({ success: false, error: error.message }, { status: 400 })
   }
+
+  // SLOTREMOVAL.1 — adding a slot back by hand is the undo for "Delete this
+  // slot": clear its removal row so the nightly generator and roster copies
+  // treat it as a normal slot again. The block exists either way; if this
+  // fails, the stale row only matters once the block is deleted again, so it
+  // is a warning, not a failure.
+  const { error: restoreErr } = await db
+    .from('shift_block_removals')
+    .delete()
+    .eq('location_id', body.location_id)
+    .eq('template_id', body.template_id)
+    .eq('block_date', body.block_date)
+  if (restoreErr) {
+    logWarn('schedule-blocks', 'clearing slot removal failed', {
+      locationId: body.location_id, templateId: body.template_id, blockDate: body.block_date, err: restoreErr,
+    })
+    return NextResponse.json({
+      success: true,
+      data,
+      warning: 'Slot added, but its earlier removal could not be cleared.',
+    }, { status: 201 })
+  }
+
   return NextResponse.json({ success: true, data }, { status: 201 })
 }
