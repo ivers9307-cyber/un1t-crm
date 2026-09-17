@@ -431,7 +431,7 @@ describe('one month rule across toggle, publish and copy (ROSTER-FIX.6a-9)', () 
     await renderStraddlingWeek()
     fireEvent.click(screen.getByText('Copy Last Month'))
     expect(window.confirm).toHaveBeenCalledWith(
-      "Copy last month's roster (August 2026) to September 2026?"
+      "Copy last month's roster (August 2026) to September 2026? Coaches already on September 2026 keep their times."
     )
   })
 

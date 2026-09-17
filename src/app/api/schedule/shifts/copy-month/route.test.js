@@ -122,4 +122,22 @@ describe('POST /api/schedule/shifts/copy-month — NOTIFY.1', () => {
     expect(logAndNotifyCopiedShifts).not.toHaveBeenCalled()
     expect(after).not.toHaveBeenCalled()
   })
+
+  // COPYFIX.1 — bulkUpsertShiftAssignments now reports the rows it actually
+  // inserted (ON CONFLICT DO NOTHING can insert fewer than the payload it
+  // was sent), so `copied` must come straight from the writer's count, not
+  // be re-derived from the row list the route built.
+  it('copied comes from the writer\'s count, not the number of rows sent to it', async () => {
+    fetchSourceShiftRows.mockResolvedValue({ rows: [SOURCE_ROW, { ...SOURCE_ROW, profileId: 'coach-2' }], error: null })
+    readAssignmentKeysInRange.mockResolvedValue({ rows: [], error: null, truncated: false })
+    // Two rows offered to the writer, but only one was actually inserted
+    // (the other already existed on the target month).
+    bulkUpsertShiftAssignments.mockResolvedValue({ count: 1, error: null })
+
+    const res = await POST(req({ location_id: LOC, source_month_start: '2026-06-01', target_month_start: '2026-07-01' }))
+    const json = await res.json()
+
+    expect(json.copied).toBe(1)
+    expect(json.skipped).toBe(0)
+  })
 })
