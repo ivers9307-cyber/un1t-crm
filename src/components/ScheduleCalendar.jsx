@@ -698,7 +698,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
 
   async function handleCopyWeek() {
     const prevWeekStart = addDays(weekStart, -7)
-    if (!confirm(`Copy last week's roster (${formatDate(prevWeekStart)}) to this week?`)) return
+    if (!confirm(`Copy last week's roster (${formatDate(prevWeekStart)}) to this week? Coaches already on this week keep their times.`)) return
     setCopying(true)
     // copy-week writes shift_blocks + shift_assignments directly
     // (RETIRE-SHIFTS-MIRROR.5b); the legacy public.shifts table is gone.
@@ -740,7 +740,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
     const targetLabel = effectiveMonthStart.toLocaleDateString('en-IE', { month: 'long', year: 'numeric' })
     const prevMonthStart = addMonths(effectiveMonthStart, -1)
     const sourceLabel = prevMonthStart.toLocaleDateString('en-IE', { month: 'long', year: 'numeric' })
-    if (!confirm(`Copy last month's roster (${sourceLabel}) to ${targetLabel}?`)) return
+    if (!confirm(`Copy last month's roster (${sourceLabel}) to ${targetLabel}? Coaches already on ${targetLabel} keep their times.`)) return
     setCopying(true)
     try {
       const res = await fetch('/api/schedule/shifts/copy-month', {
