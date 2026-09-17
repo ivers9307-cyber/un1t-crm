@@ -100,8 +100,11 @@ export default function ScheduleTabs({ user }) {
   // emails) with no other in-repo link — never change it.
   const showAttendance = hasPermission(user, 'attendance_reports')
 
+  // STAFFCOST.1 — Reporting stays visible to head coaches: only Staff Cost
+  // (pay rates) is withheld from them, and staff hours, time off, roster
+  // coverage and utilisation remain theirs (src/lib/report-access.js).
   const tabs = [
-    { key: 'schedule',   label: 'Schedule',   icon: CalendarClock,  href: ROOT_HREF,                    show: true },
+    { key: 'schedule',  label: 'Schedule',   icon: CalendarClock,  href: ROOT_HREF,                    show: true },
     { key: 'reporting',  label: 'Reporting',  icon: BarChart3,      href: `${ROOT_HREF}?view=reporting`, show: isManager },
     { key: 'time-off',   label: 'Time Off',   icon: CalendarOff,    href: '/schedule/time-off',          show: isManager },
     { key: 'swaps',      label: 'Swaps',      icon: ArrowLeftRight, href: '/schedule/swaps',             show: isManager },

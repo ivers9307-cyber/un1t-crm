@@ -21,8 +21,8 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { getCurrentUser, assertLocationAccess, hasRoleAtLocation } from '@/lib/auth'
+import { hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES, uuidLike } from '@/lib/schemas'
 import {
@@ -82,12 +82,6 @@ export async function GET(request) {
 async function handleGet(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!MANAGER_ROLES.includes(user.role)) {
-    return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
-  }
-  if (!hasPermission(user, 'schedule')) {
-    return NextResponse.json({ success: false, error: 'Schedule feature is disabled at this location' }, { status: 403 })
-  }
 
   const url = new URL(request.url)
   const parsed = QuerySchema.safeParse({
@@ -108,6 +102,17 @@ async function handleGet(request) {
 
   const guard = assertLocationAccess(user, location_id)
   if (guard) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+
+  // STAFFCOST.1 — role and feature are judged at the REQUESTED studio. This
+  // used to read user.role / hasPermission(user, …), the ACTIVE studio's, so a
+  // manager at Hatch who is staff at Stillorgan read Stillorgan's overview by
+  // passing its location_id.
+  if (!hasRoleAtLocation(user, location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
+  }
+  if (!hasPermissionForLocation(user, location_id, 'schedule')) {
+    return NextResponse.json({ success: false, error: 'Schedule feature is disabled at this location' }, { status: 403 })
+  }
 
   // Reject ranges over the cap (one round-trip would otherwise pull
   // a year of events at once). Explicit destructure rather than spread
