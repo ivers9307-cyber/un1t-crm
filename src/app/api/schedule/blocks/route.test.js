@@ -13,6 +13,13 @@ vi.mock('@/lib/auth', () => ({
   getCurrentUser: vi.fn(),
   assertLocationAccess: vi.fn(() => null),
   getUserLocationIds: vi.fn(() => ['loc-1']),
+  // Same contract as the real helper (src/lib/auth.js).
+  hasRoleAtLocation: (user, loc, roles) => {
+    if (!user || !loc) return false
+    if (user.profileRole === 'master') return true
+    const role = user.rolesByLocation?.[loc]
+    return !!role && roles.includes(role)
+  },
 }))
 
 const { createServerClient } = await import('@/lib/supabase')
@@ -84,7 +91,7 @@ beforeEach(() => { createServerClient.mockReset(); getCurrentUser.mockReset() })
 
 describe('GET /api/schedule/blocks — coach view', () => {
   it('200, published blocks only, in a capacity-free shape', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'c', role: 'staff' })
+    getCurrentUser.mockResolvedValue({ id: 'c', role: 'staff', profileRole: 'staff', rolesByLocation: { 'loc-1': 'staff' } })
     createServerClient.mockReturnValue(buildDb([PUBLISHED_BLOCK, DRAFT_BLOCK]))
 
     const res = await GET(req())
@@ -111,10 +118,24 @@ describe('GET /api/schedule/blocks — coach view', () => {
     expect(block.start_time).toBe('06:00:00')
     expect(block.shift_templates.name).toBe('Morning')
     expect(assignment.profiles.full_name).toBe('Ada')
+    // COACHSCOPE.1 — a colleague's name, not their email.
+    expect(assignment.profiles).toEqual({ id: 'p-1', full_name: 'Ada', avatar_url: null, role: 'staff' })
+  })
+
+  it('COACHSCOPE.1 — judges the role at the BLOCK\'s location, not the active one', async () => {
+    // Active-location role says head_coach (Hatch); at loc-1 they are staff.
+    getCurrentUser.mockResolvedValue({
+      id: 'x', role: 'head_coach', profileRole: 'head_coach',
+      rolesByLocation: { 'loc-1': 'staff', 'loc-hatch': 'head_coach' },
+    })
+    createServerClient.mockReturnValue(buildDb([PUBLISHED_BLOCK, DRAFT_BLOCK]))
+    const body = await (await GET(req())).json()
+    expect(body.data.map((b) => b.id)).toEqual(['b-pub'])
+    expect('max_coaches' in body.data[0]).toBe(false)
   })
 
   it('drops a block whose roster is missing entirely', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'c', role: 'staff' })
+    getCurrentUser.mockResolvedValue({ id: 'c', role: 'staff', profileRole: 'staff', rolesByLocation: { 'loc-1': 'staff' } })
     createServerClient.mockReturnValue(buildDb([{ ...PUBLISHED_BLOCK, roster_id: null, rosters: null }]))
     const res = await GET(req())
     const body = await res.json()
@@ -124,7 +145,7 @@ describe('GET /api/schedule/blocks — coach view', () => {
 
 describe('GET /api/schedule/blocks — manager view', () => {
   it('200 with drafts and the full capacity shape, untouched', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'm', role: 'manager' })
+    getCurrentUser.mockResolvedValue({ id: 'm', role: 'manager', profileRole: 'manager', rolesByLocation: { 'loc-1': 'manager' } })
     createServerClient.mockReturnValue(buildDb([PUBLISHED_BLOCK, DRAFT_BLOCK]))
 
     const res = await GET(req())

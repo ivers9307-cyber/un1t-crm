@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess, getUserLocationIds, hasRoleAtLocation } from '@/lib/auth'
 import { fetchApiShiftRows } from '@/lib/roster-read'
 import { MANAGER_ROLES } from '@/lib/schemas'
 
@@ -37,7 +37,18 @@ export async function GET(request) {
     profileId,
     // ROSTER-FIX.1 (D1) — a coach never sees a draft shift. Managers keep
     // drafts here because the calendar and ManageMode read the same feed.
-    publishedOnly: !MANAGER_ROLES.includes(user.role),
+    //
+    // COACHSCOPE.1 — judged PER ROW against the caller's role at that row's
+    // location, not `user.role`. `user.role` is the ACTIVE location's role, so
+    // a head coach at Hatch reading `?location_id=<Stillorgan>` (where they are
+    // plain staff) got Stillorgan's drafts, and with no location_id every
+    // studio's rows took the active one's verdict. A non-manager row is also
+    // slimmed: no colleague email / notes / partial_reason
+    // (slimShiftRowForCoach).
+    viewer: {
+      id: user.id,
+      isManagerAt: (locId) => hasRoleAtLocation(user, locId, MANAGER_ROLES),
+    },
   })
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
 

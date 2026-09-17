@@ -138,6 +138,38 @@ function toApiShiftRow(a) {
 }
 
 /**
+ * COACHSCOPE.1 — the non-manager projection of one API shift row.
+ *
+ * The feed is a coach surface (mobile Me + Team views, web Today's "On with
+ * you today"), and it used to hand every coach each colleague's EMAIL and
+ * NOTES. What a coach needs about a colleague is who they are and when they
+ * are on: id, name, avatar, role label. Their own row keeps its notes and
+ * partial_reason (the Me view renders both); a colleague's row loses them,
+ * because assignment notes / partial_reason are a manager's working notes
+ * about that person. Email is dropped from every row, own included — the app
+ * already knows the caller's own address and no coach screen renders one.
+ *
+ * Allow-list on the profile embed, not a delete-list: a column added to the
+ * embed later stays manager-only until someone lists it here on purpose.
+ *
+ * @param {object} row     a toApiShiftRow() result
+ * @param {string} viewerId the caller's profile id
+ * @returns {object}
+ */
+export function slimShiftRowForCoach(row, viewerId) {
+  const own = !!viewerId && row.profile_id === viewerId
+  const p = row.profiles
+  return {
+    ...row,
+    notes: own ? row.notes : null,
+    partial_reason: own ? row.partial_reason : null,
+    profiles: p
+      ? { id: p.id, full_name: p.full_name, avatar_url: p.avatar_url, role: p.role }
+      : p,
+  }
+}
+
+/**
  * Read shifts for GET /api/schedule/shifts from the Roster v2 model,
  * normalised to the legacy shift shape (see toApiShiftRow). Filters by a set
  * of location ids, optional date range, optional profile. Sorted by date.
@@ -149,9 +181,14 @@ function toApiShiftRow(a) {
  * @param {string} [opts.endDate]
  * @param {string} [opts.profileId]
  * @param {boolean} [opts.publishedOnly=false] drop rows whose roster is not published
+ * @param {{ id: string, isManagerAt: (locationId: string) => boolean }} [opts.viewer]
+ *   COACHSCOPE.1 — judge each row by the caller's role AT THAT ROW'S LOCATION.
+ *   Where the caller is not a manager: draft rows are dropped (D1) and the row
+ *   is slimmed (slimShiftRowForCoach). Where they are, the row is untouched.
+ *   A multi-location caller can be both in one response.
  * @returns {Promise<{ rows: Array<object>, error: object|null }>}
  */
-export async function fetchApiShiftRows(db, { locationIds, startDate, endDate, profileId, publishedOnly = false }) {
+export async function fetchApiShiftRows(db, { locationIds, startDate, endDate, profileId, publishedOnly = false, viewer = null }) {
   if (!Array.isArray(locationIds) || locationIds.length === 0) return { rows: [], error: null }
 
   let q = db.from('shift_assignments')
@@ -169,6 +206,10 @@ export async function fetchApiShiftRows(db, { locationIds, startDate, endDate, p
     .map(toApiShiftRow)
     // D1 — coaches see published shifts only; managers pass publishedOnly:false.
     .filter((r) => !publishedOnly || r.published)
+    // COACHSCOPE.1 — per-location: a non-manager at this row's studio gets
+    // published rows only, slimmed.
+    .filter((r) => !viewer || r.published || viewer.isManagerAt(r.location_id))
+    .map((r) => (!viewer || viewer.isManagerAt(r.location_id) ? r : slimShiftRowForCoach(r, viewer.id)))
     .sort((x, y) => (x.shift_date < y.shift_date ? -1 : x.shift_date > y.shift_date ? 1 : 0))
   return { rows, error: null }
 }
