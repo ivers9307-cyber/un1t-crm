@@ -19,7 +19,7 @@ const { GET } = await import('./route.js')
 const { createServerClient } = await import('@/lib/supabase')
 const { sendTransactionalEmail } = await import('@/lib/postmark')
 const { generateReport } = await import('@/lib/report-generator')
-const { filterRateReportRecipients } = await import('@/lib/report-recipients')
+const { filterRateReportRecipients, checkRateReportRecipientsForSave } = await import('@/lib/report-recipients')
 const { logWarn } = await import('@/lib/log')
 
 const LOC = 'a0000000-0000-0000-0000-000000000001'
@@ -173,5 +173,90 @@ describe('filterRateReportRecipients', () => {
     const { allowed, dropped } = await filterRateReportRecipients({ db, locationId: LOC, recipients: ['owner@example.com'] })
     expect(allowed).toEqual([])
     expect(dropped).toEqual([{ email: 'owner@example.com', reason: 'lookup_failed' }])
+  })
+})
+
+// REPORTS.2 — pause, and external addresses confirmed per schedule.
+describe('run-scheduled-reports — REPORTS.2', () => {
+  it('skips a paused schedule', async () => {
+    const db = makeDb({ ...PEOPLE, scheduled_reports: [{ ...schedule('staff_hours', ['coach@example.com']), paused: true }] })
+    createServerClient.mockReturnValue(db)
+    const body = await (await GET(cronReq())).json()
+    expect(generateReport).not.toHaveBeenCalled()
+    expect(sendTransactionalEmail).not.toHaveBeenCalled()
+    expect(body.processed).toBe(0)
+  })
+
+  it('withholds a staff_cost email from an external address that was never confirmed', async () => {
+    const db = makeDb({ ...PEOPLE, scheduled_reports: [{
+      ...schedule('staff_cost', ['owner@example.com', 'personal.coach@gmail.test']),
+      confirmed_external_recipients: [],
+    }] })
+    createServerClient.mockReturnValue(db)
+    const body = await (await GET(cronReq())).json()
+    expect(sendTransactionalEmail.mock.calls[0][0].to).toBe('owner@example.com')
+    expect(body.results[0].recipients_withheld).toBe(1)
+  })
+
+  it('sends to an external address the owner confirmed (case-insensitive)', async () => {
+    const db = makeDb({ ...PEOPLE, scheduled_reports: [{
+      ...schedule('staff_cost', ['Accounts@Firm.ie']),
+      confirmed_external_recipients: ['accounts@firm.ie'],
+    }] })
+    createServerClient.mockReturnValue(db)
+    await GET(cronReq())
+    expect(sendTransactionalEmail.mock.calls[0][0].to).toBe('Accounts@Firm.ie')
+  })
+
+  it('a confirmation does not let a head coach\'s staff address through', async () => {
+    const db = makeDb({ ...PEOPLE, scheduled_reports: [{
+      ...schedule('staff_cost', ['coach@example.com']),
+      confirmed_external_recipients: ['coach@example.com'],
+    }] })
+    createServerClient.mockReturnValue(db)
+    await GET(cronReq())
+    expect(sendTransactionalEmail).not.toHaveBeenCalled()
+  })
+
+  it('a row without the column (pre-mig-617 deploy) keeps the old rule for external addresses', async () => {
+    const { allowed } = await filterRateReportRecipients({ db: makeDb(PEOPLE), locationId: LOC, recipients: ['accountant@firm.ie'] })
+    expect(allowed).toEqual(['accountant@firm.ie'])
+  })
+})
+
+describe('checkRateReportRecipientsForSave', () => {
+  it('sorts rate viewers, refused staff, and external addresses needing confirmation', async () => {
+    const out = await checkRateReportRecipientsForSave({
+      db: makeDb(PEOPLE), locationId: LOC,
+      recipients: ['owner@example.com', 'coach@example.com', 'gone@example.com', 'Accountant@Firm.ie'],
+    })
+    expect(out).toEqual({
+      refused: ['coach@example.com', 'gone@example.com'],
+      needsConfirmation: ['Accountant@Firm.ie'],
+      confirmedExternal: [],
+      lookupFailed: false,
+    })
+  })
+
+  it('confirm_external confirms every external address, lower-cased', async () => {
+    const out = await checkRateReportRecipientsForSave({
+      db: makeDb(PEOPLE), locationId: LOC, recipients: ['Accountant@Firm.ie', 'owner@example.com'], confirmExternal: true,
+    })
+    expect(out.needsConfirmation).toEqual([])
+    expect(out.confirmedExternal).toEqual(['accountant@firm.ie'])
+  })
+
+  it('an address confirmed before stays confirmed; a removed one drops out', async () => {
+    const out = await checkRateReportRecipientsForSave({
+      db: makeDb(PEOPLE), locationId: LOC, recipients: ['accountant@firm.ie', 'new@firm.ie'],
+      previouslyConfirmed: ['ACCOUNTANT@firm.ie', 'removed@firm.ie'],
+    })
+    expect(out.confirmedExternal).toEqual(['accountant@firm.ie'])
+    expect(out.needsConfirmation).toEqual(['new@firm.ie'])
+  })
+
+  it('reports a failed lookup instead of guessing', async () => {
+    const out = await checkRateReportRecipientsForSave({ db: makeDb(PEOPLE, { failTable: 'profiles' }), locationId: LOC, recipients: ['owner@example.com'] })
+    expect(out.lookupFailed).toBe(true)
   })
 })

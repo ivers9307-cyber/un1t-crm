@@ -213,8 +213,9 @@ const ScheduledReport = z.object({
   day_of_month: z.number().int().min(1).max(31).nullable().optional(),
   deliver_email: z.boolean().optional(),
   email_recipients: z.array(email).optional(),
-  deliver_notification: z.boolean().optional(),
+  deliver_notification: z.boolean().optional().describe('REPORTS.2 — no longer offered: true is refused with 400. Omit it.'),
   parameters: z.record(z.string(), z.unknown()).optional(),
+  confirm_external: z.boolean().optional().describe('REPORTS.2 — staff_cost only: confirms that recipient addresses matching no staff profile are intended external recipients.'),
 }).openapi('ScheduledReport')
 
 // ============================================================================
@@ -4900,7 +4901,39 @@ registry.registerPath({
   request: { body: { content: { 'application/json': { schema: ScheduledReport } } } },
   responses: {
     201: { description: 'Schedule created' },
+    400: { description: 'deliver_notification true, or a staff_cost recipient who is staff without an owner/manager role at the location', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Not a manager at the location, or a head coach scheduling staff_cost', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'staff_cost: recipient addresses outside the team need confirm_external: true (listed in external_recipients)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'patch',
+  path: '/api/schedule/reports/scheduled',
+  tags: ['Schedule', 'Reports'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Pause, resume or edit a scheduled report (manager+)',
+  description: 'REPORTS.2 — gated like create, at the schedule\'s location: a schedule the caller may not see (or a deleted one) is 404; changing report_type to staff_cost without an owner/manager role there is 403. Resuming, or changing frequency/day, recomputes next_run_at. Changing report_type, deliver_email or email_recipients re-runs the staff_cost recipient rule (400 / 409 as on create); addresses confirmed on an earlier save stay confirmed.',
+  request: {
+    query: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      paused: z.boolean().optional(),
+      report_type: reportTypeSchema.optional(),
+      report_name: z.string().min(1).max(200).optional(),
+      frequency: reportFrequencySchema.optional(),
+      day_of_week: z.number().int().min(0).max(6).nullable().optional(),
+      day_of_month: z.number().int().min(1).max(31).nullable().optional(),
+      deliver_email: z.boolean().optional(),
+      email_recipients: z.array(email).optional(),
+      confirm_external: z.boolean().optional(),
+    }).openapi('ScheduledReportPatch') } } },
+  },
+  responses: {
+    200: { description: 'Schedule updated' },
+    400: { description: 'Nothing to change, deliver_notification true, or a refused staff recipient', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Changing to a report type the caller may not schedule', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such schedule, deleted, or not visible to the caller', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'External recipients need confirm_external: true', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

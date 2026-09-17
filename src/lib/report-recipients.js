@@ -14,11 +14,17 @@
 //     getCurrentUser's expandOrgAdminAccess applies — an explicit row wins).
 //     A head coach, a staff member, someone with no role at the location, or
 //     a DEACTIVATED profile (even with a role row left behind) is dropped.
-//   - matches no profile → sent. Those are addresses the owner/manager who
-//     set the schedule chose on purpose (an accountant, a shared finance
-//     inbox), and since STAFFCOST.1 only an owner/manager can create a
-//     staff_cost schedule. Known limit: a head coach's PERSONAL address that
-//     is not on their profile cannot be recognised.
+//   - matches no profile → sent ONLY if the address is on the schedule's
+//     confirmed_external_recipients (REPORTS.2, mig 617). Those are addresses
+//     the owner/manager who saved the schedule explicitly confirmed as
+//     external (an accountant, a shared finance inbox). Before REPORTS.2 every
+//     unmatched address was sent, so a head coach's PERSONAL address — which
+//     no profile carries — went through. The save routes now refuse an
+//     unconfirmed external address (checkRateReportRecipientsForSave), and
+//     the sender checks the record again. When the schedule row carries no
+//     such field at all (the column is not there yet: code deployed ahead of
+//     mig 617) the pre-617 rule applies, so a deploy-order slip cannot stop a
+//     report an owner set up.
 //   - the lookup itself fails → that recipient is dropped and the failure is
 //     logged. Fail closed is right here: the harm is pay data in the wrong
 //     inbox, while a missed internal summary is recoverable from Schedule →
@@ -30,16 +36,15 @@ import { escapeLikePattern } from '@/lib/like-escape'
 import { logError } from '@/lib/log'
 import { RATE_REPORT_VIEWER_ROLES } from '@/lib/report-access'
 
+export const normaliseRecipient = (email) => String(email || '').trim().toLowerCase()
+
 /**
- * @param {object} args
- * @param {object} args.db             service-role client
- * @param {string} args.locationId     the schedule's location
- * @param {string[]} args.recipients   raw addresses from the schedule
- * @returns {Promise<{ allowed: string[], dropped: Array<{ email: string, reason: string }> }>}
+ * Sort each address into what the rule needs to know about it.
+ *
+ * @returns {Promise<Array<{ email: string, kind: 'rate_viewer' | 'not_rate_viewer' | 'no_profile' | 'lookup_failed' }>>}
  */
-export async function filterRateReportRecipients({ db, locationId, recipients }) {
-  const allowed = []
-  const dropped = []
+export async function classifyRateReportRecipients({ db, locationId, recipients }) {
+  const out = []
   let orgIdCache // undefined = not looked up yet
 
   async function locationOrgId() {
@@ -64,7 +69,7 @@ export async function filterRateReportRecipients({ db, locationId, recipients })
         .ilike('email', escapeLikePattern(email))
       if (profileError) throw new Error(`profile lookup failed: ${profileError.message}`)
       if (!profiles || profiles.length === 0) {
-        allowed.push(email)
+        out.push({ email, kind: 'no_profile' })
         continue
       }
 
@@ -98,15 +103,80 @@ export async function filterRateReportRecipients({ db, locationId, recipients })
         if (!orgGrant || orgGrant.length === 0) { ok = false; break }
       }
 
-      if (ok) allowed.push(email)
-      else dropped.push({ email, reason: 'not_rate_viewer' })
+      out.push({ email, kind: ok ? 'rate_viewer' : 'not_rate_viewer' })
     } catch (e) {
-      logError('report-recipients', 'recipient check failed, not sending the rate report to this address', {
+      logError('report-recipients', 'recipient check failed, treating this address as not allowed', {
         locationId, err: e?.message || String(e),
       })
-      dropped.push({ email, reason: 'lookup_failed' })
+      out.push({ email, kind: 'lookup_failed' })
     }
   }
 
+  return out
+}
+
+/**
+ * Who the cron may email a rate-bearing report to.
+ *
+ * @param {object} args
+ * @param {object} args.db             service-role client
+ * @param {string} args.locationId     the schedule's location
+ * @param {string[]} args.recipients   raw addresses from the schedule
+ * @param {string[]|null|undefined} [args.confirmedExternal]
+ *   the schedule's confirmed_external_recipients. undefined/null = the row
+ *   has no such column (pre-mig-617): unmatched addresses are sent as before.
+ * @returns {Promise<{ allowed: string[], dropped: Array<{ email: string, reason: string }> }>}
+ */
+export async function filterRateReportRecipients({ db, locationId, recipients, confirmedExternal }) {
+  const allowed = []
+  const dropped = []
+  const legacy = !Array.isArray(confirmedExternal)
+  const confirmed = new Set((confirmedExternal || []).map(normaliseRecipient))
+  for (const { email, kind } of await classifyRateReportRecipients({ db, locationId, recipients })) {
+    if (kind === 'rate_viewer') allowed.push(email)
+    else if (kind === 'no_profile') {
+      if (legacy || confirmed.has(normaliseRecipient(email))) allowed.push(email)
+      else dropped.push({ email, reason: 'unconfirmed_external' })
+    } else dropped.push({ email, reason: kind })
+  }
   return { allowed, dropped }
+}
+
+/**
+ * REPORTS.2 — the SAVE-time rule for a rate-bearing schedule's recipients.
+ *
+ *   - a staff profile that may see rates at the location → fine.
+ *   - a staff profile that may NOT (a head coach, a deactivated manager,
+ *     someone from another studio) → refused outright; no confirmation can
+ *     override it.
+ *   - no profile → an external address. Allowed only when it was already
+ *     confirmed on this schedule, or the caller confirms it now
+ *     (`confirmExternal: true`). Otherwise it is returned in
+ *     `needsConfirmation` so the UI can ask.
+ *   - lookup failed → `lookupFailed`; the route answers 503 and saves nothing.
+ *
+ * `confirmedExternal` is what to store: every external address on the list
+ * that is confirmed after this save (lower-cased). An address removed from
+ * the recipients drops out of it.
+ */
+export async function checkRateReportRecipientsForSave({
+  db, locationId, recipients, previouslyConfirmed = [], confirmExternal = false,
+}) {
+  const prior = new Set((previouslyConfirmed || []).map(normaliseRecipient))
+  const refused = []
+  const needsConfirmation = []
+  const confirmedExternal = []
+  let lookupFailed = false
+  for (const { email, kind } of await classifyRateReportRecipients({ db, locationId, recipients })) {
+    if (kind === 'rate_viewer') continue
+    if (kind === 'lookup_failed') { lookupFailed = true; continue }
+    if (kind === 'not_rate_viewer') { refused.push(email); continue }
+    const key = normaliseRecipient(email)
+    if (prior.has(key) || confirmExternal) {
+      if (!confirmedExternal.includes(key)) confirmedExternal.push(key)
+    } else {
+      needsConfirmation.push(email)
+    }
+  }
+  return { refused, needsConfirmation, confirmedExternal, lookupFailed }
 }

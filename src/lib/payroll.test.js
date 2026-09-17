@@ -40,6 +40,15 @@ describe('shiftHours', () => {
     expect(shiftHours(s)).toBe(10.5)
   })
 
+  // REPORTS.2 — override → block → template (shared/roster-month.js). The
+  // template used to win over the row's own (block) times.
+  it('prefers the block\'s own times over the template', () => {
+    const tpl = { start_time: '06:00', end_time: '07:00' }
+    expect(shiftHours({ start_time: '06:00', end_time: '09:00', shift_templates: tpl })).toBe(3)
+    expect(shiftHours({ block_start_time: '06:00', block_end_time: '08:30', shift_templates: tpl })).toBe(2.5)
+    expect(shiftHours({ start_time_override: '07:00', start_time: '06:00', end_time: '09:00', shift_templates: tpl })).toBe(2)
+  })
+
   it('treats end < start as crossing midnight', () => {
     const s = { shift_templates: { start_time: '22:00', end_time: '06:00' } }
     expect(shiftHours(s)).toBe(8)
