@@ -21,6 +21,7 @@ import { shiftHours } from './payroll'
 import { liveAssignments } from './roster'
 import { staffingGaps } from './roster-staffing'
 import { dublinTodayStr } from './dublin-time'
+import { leaveScopeOrFilter } from './time-off-leave'
 
 function isoFirstOfMonth(iso) {
   return `${iso.slice(0, 7)}-01`
@@ -125,10 +126,12 @@ async function loadBudgetContext(db, locationId, periodStart, periodEnd = period
   // approved leave is not working the shift they are still rostered on, so
   // billing it inflated the projection and could refuse a publish that was
   // actually within budget.
+  // LEAVE.2 — leave covers the person: a coach here who filed leave from
+  // another studio is still not working this studio's shifts.
   const { data: leave, error: leaveErr } = await db
     .from('time_off_requests')
     .select('profile_id, start_date, end_date')
-    .eq('location_id', locationId)
+    .or(leaveScopeOrFilter([locationId], (links || []).map((l) => l.profile_id)))
     .eq('status', 'approved')
     .lte('start_date', monthEnd)
     .gte('end_date', monthStart)

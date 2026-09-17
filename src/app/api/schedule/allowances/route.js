@@ -4,6 +4,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, days , MANAGER_ROLES} from '@/lib/schemas'
+import { getEmploymentType, getLeaveEntitlement } from '@/lib/time-off-leave'
 
 // ROSTER-FIX.2 — a profile is in scope when it shares a location with the
 // caller (master = everywhere). Detail-style 404 on miss so a cross-tenant
@@ -74,17 +75,32 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: error.message }, { status: 400 })
   }
 
-  // If no allowance record exists, return defaults
+  // LEAVE.4 — with no row yet, the balance is the person's contract
+  // entitlement (profile_compensation, mig 152), not a flat 20. LEAVE.3 —
+  // contractors have no holiday allowance at all; say so rather than showing
+  // them twenty days they cannot take. A stray row (one exists from before the
+  // contractor gate) is still reported as not applicable.
+  const { employmentType, error: employmentError } = await getEmploymentType(db, profileId)
+  if (employmentError) {
+    return NextResponse.json({ success: false, error: employmentError.message }, { status: 500 })
+  }
+  const notApplicable = employmentType === 'contractor'
+
   if (!data) {
+    const { days, error: entError } = await getLeaveEntitlement(db, profileId)
+    if (entError) {
+      return NextResponse.json({ success: false, error: entError.message }, { status: 500 })
+    }
     return NextResponse.json({
       success: true,
       data: {
         profile_id: profileId,
         year: Number(year),
-        total_days: 20,
+        total_days: days,
         used_days: 0,
         carried_over: 0,
-        remaining: 20,
+        remaining: days,
+        not_applicable: notApplicable,
       }
     })
   }
@@ -94,6 +110,7 @@ export async function GET(request) {
     data: {
       ...data,
       remaining: data.total_days + data.carried_over - data.used_days,
+      not_applicable: notApplicable,
     }
   })
 }

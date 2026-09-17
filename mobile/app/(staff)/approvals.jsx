@@ -20,7 +20,8 @@ import {
   mobileApprovalSections, customerQueue, failedQueue, teamNavTiles,
   customerBadgeCount, teamBadgeCount,
 } from '../../lib/approvals'
-import { respondToTimeOff, respondToSwap } from '../../lib/schedule-api'
+import { respondToTimeOff, respondToSwap, unassignLeaveClashes } from '../../lib/schedule-api'
+import { leaveClashPrompt } from 'shared/time-off'
 import { approveExpenseClaim, declineExpenseClaim } from '../../lib/expenses-api'
 import { approveInvoice, declineInvoice } from '../../lib/invoices-api'
 import { decideApproval } from '../../lib/inbox-approvals-api'
@@ -106,8 +107,32 @@ export default function ApprovalsInbox() {
     const res = await approveFn(key, item.id)
     setBusyId(null)
     if (!res.success) { Alert.alert('Could not approve', res.error || 'Unknown error'); return }
+    // LEAVE.1 — approved leave the person is still rostered over. Ask; never
+    // unassign on the approver's behalf.
+    const clash = key === 'time_off' ? leaveClashPrompt(res.clashes) : null
+    if (clash) {
+      Alert.alert(clash.title, clash.message, [
+        { text: 'Keep them', style: 'cancel' },
+        { text: 'Unassign them', style: 'destructive', onPress: () => unassignClashes(item.id, clash.assignmentIds) },
+      ])
+      load()
+      return
+    }
     const warn = res.warning || (Array.isArray(res.warnings) && res.warnings.length ? res.warnings.join('\n') : null)
     if (warn) Alert.alert('Approved — note', warn)
+    load()
+  }
+
+  async function unassignClashes(id, assignmentIds) {
+    setBusyId(id)
+    const res = await unassignLeaveClashes(id, { assignmentIds, locationId })
+    setBusyId(null)
+    const skipped = res.data?.skipped?.length || 0
+    if (!res.success) {
+      Alert.alert('Could not unassign', res.error || 'Unknown error')
+    } else if (skipped > 0) {
+      Alert.alert('Partly done', `${skipped} shift${skipped === 1 ? ' is' : 's are'} at a studio you don't manage, so ${skipped === 1 ? 'it was' : 'they were'} left on the roster.`)
+    }
     load()
   }
 

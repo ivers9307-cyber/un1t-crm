@@ -14,6 +14,7 @@
 
 import { upcomingWeeksBounds, summariseShifts, effectiveShiftStart, effectiveShiftEnd } from './roster-month.js'
 import { pctDelta, sumCampaignRows, shapeFunnel, FUNNEL_SLUGS } from './dashboard-metrics.js'
+import { dublinDateKey } from './dublin-time.js'
 
 // ROSTER-FIX.1 — "this assignment still puts a coach on the block".
 // Inlined rather than imported: `shared/` is the mobile seam and cannot
@@ -435,6 +436,10 @@ export async function fetchStudioDashboardData(supabase, locationId) {
       .select('id, profile_id, type, start_date, end_date, total_days, created_at, profiles!profile_id(full_name)')
       .eq('location_id', locationId)
       .eq('status', 'pending')
+      // LEAVE.2 — a pending request past its end_date has EXPIRED (derived,
+      // see isExpiredPendingRequest in ./time-off.js) and is no longer an
+      // approval to action.
+      .gte('end_date', dublinDateKey(Date.now()))
       .order('start_date', { ascending: true }),
 
     supabase

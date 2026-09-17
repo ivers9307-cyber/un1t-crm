@@ -25,6 +25,7 @@ import { getCurrentUser, assertLocationAccess, hasRoleAtLocation } from '@/lib/a
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES, uuidLike } from '@/lib/schemas'
+import { getLocationMemberIds, leaveScopeOrFilter } from '@/lib/time-off-leave'
 import {
   eventTypeHasWindowForDate,
   sumStaffRequired,
@@ -144,6 +145,14 @@ async function handleGet(request) {
 
   const db = createServerClient()
 
+  // LEAVE.2 — leave covers the person, not the studio it was filed at, so the
+  // supply side subtracts leave taken by anyone who belongs here. Fail closed:
+  // guessing "filed here only" is the undercount this replaced.
+  const { ids: memberIds, error: membersErr } = await getLocationMemberIds(db, [location_id])
+  if (membersErr) {
+    return NextResponse.json({ success: false, error: membersErr.message }, { status: 500 })
+  }
+
   // ── Pull all four data sources in parallel ──────────────────
   const [eventsRes, eventTypesRes, blocksRes, timeOffRes] = await Promise.all([
     // Multi-kind events (race / workshop / etc.) on or between [from, to].
@@ -182,7 +191,7 @@ async function handleGet(request) {
     // membership in JS below.
     db.from('time_off_requests')
       .select('profile_id, start_date, end_date, profiles:profile_id ( full_name )')
-      .eq('location_id', location_id)
+      .or(leaveScopeOrFilter([location_id], memberIds))
       .eq('status', 'approved')
       .lte('start_date', to)
       .gte('end_date', from),

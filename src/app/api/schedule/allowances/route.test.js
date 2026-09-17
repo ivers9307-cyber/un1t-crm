@@ -38,10 +38,16 @@ function req(body, url = 'http://x/api/schedule/allowances') {
 }
 
 // links: which locations PID belongs to. existing: current allowance row or null.
-function buildDb({ links = ['loc-1'], existing = null, existingError = null }) {
+function buildDb({ links = ['loc-1'], existing = null, existingError = null, employmentType = 'fte', entitlement = null }) {
   const upsertSpy = vi.fn()
+  const one = (data) => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data, error: null }) }) })
   const db = {
     from: (t) => {
+      // LEAVE.2 — employment type + contract entitlement for the defaults.
+      if (t === 'profiles') return { select: () => one({ employment_type: employmentType }) }
+      if (t === 'profile_compensation') {
+        return { select: () => one(entitlement === undefined ? null : { annual_leave_entitlement: entitlement }) }
+      }
       if (t === 'profile_locations') {
         return { select: () => ({ eq: () => Promise.resolve({ data: links.map((l) => ({ location_id: l })), error: null }) }) }
       }
@@ -147,5 +153,40 @@ describe('allowances tenancy', () => {
       createServerClient.mockReturnValue(buildDb({}).db)
       expect((await GET(req(null, 'http://x/api/schedule/allowances?year=2026'))).status).toBe(200)
     })
+  })
+})
+
+// LEAVE.4 / LEAVE.3 — the no-row default is the contract entitlement, and a
+// contractor's allowance is flagged not applicable.
+describe('allowance defaults', () => {
+  const ME = { id: PID, ...at('staff') }
+  const url = `http://x/api/schedule/allowances?profile_id=${PID}&year=2026`
+
+  it('seeds the default from profile_compensation.annual_leave_entitlement', async () => {
+    getCurrentUser.mockResolvedValue(ME)
+    createServerClient.mockReturnValue(buildDb({ entitlement: 15 }).db)
+    const json = await (await GET(req(null, url))).json()
+    expect(json.data).toMatchObject({ total_days: 15, remaining: 15, used_days: 0, not_applicable: false })
+  })
+
+  it('falls back to 20 only when the entitlement is null', async () => {
+    getCurrentUser.mockResolvedValue(ME)
+    createServerClient.mockReturnValue(buildDb({ entitlement: null }).db)
+    const json = await (await GET(req(null, url))).json()
+    expect(json.data).toMatchObject({ total_days: 20, remaining: 20 })
+  })
+
+  it('an existing row is returned as stored, not re-seeded', async () => {
+    getCurrentUser.mockResolvedValue(ME)
+    createServerClient.mockReturnValue(buildDb({ entitlement: 15, existing: { total_days: 20, used_days: 2, carried_over: 0 } }).db)
+    const json = await (await GET(req(null, url))).json()
+    expect(json.data).toMatchObject({ total_days: 20, remaining: 18 })
+  })
+
+  it('flags a contractor as not applicable', async () => {
+    getCurrentUser.mockResolvedValue(ME)
+    createServerClient.mockReturnValue(buildDb({ employmentType: 'contractor', existing: { total_days: 20, used_days: 1, carried_over: 0 } }).db)
+    const json = await (await GET(req(null, url))).json()
+    expect(json.data.not_applicable).toBe(true)
   })
 })

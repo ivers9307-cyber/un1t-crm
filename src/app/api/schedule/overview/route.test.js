@@ -25,7 +25,7 @@ function emptyDb() {
     from(t) {
       tables.push(t)
       const b = {
-        select: () => b, eq: () => b, gte: () => b, lte: () => b,
+        select: () => b, eq: () => b, gte: () => b, lte: () => b, in: () => b, or: () => b,
         then: (resolve) => resolve({ data: [], error: null }),
       }
       return b

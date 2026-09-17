@@ -199,6 +199,10 @@ function ProviderList({ provider, loading, onItemDecided }) {
                 )}
               </div>
               <div className="text-xs text-un1t-subtle truncate mt-1">{it.subtitle}</div>
+              {/* LEAVE.1 — e.g. "Clashes with 2 rostered shifts" on time off. */}
+              {it.warning && (
+                <div className="text-xs text-amber-700 mt-1">{it.warning}</div>
+              )}
               <div className="text-xs text-un1t-subtle mt-1">
                 Submitted {formatDateTime(it.submittedAt)}
               </div>
