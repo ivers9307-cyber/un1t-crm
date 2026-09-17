@@ -17,7 +17,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess, getUserLocationIds, hasRoleAtLocation } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess, getUserLocationIds, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, isoDate, timeOfDay, MANAGER_ROLES } from '@/lib/schemas'
 import { findPublishedRosterFor } from '@/lib/roster'
@@ -162,9 +162,13 @@ function slimBlockForCoach(block) {
 // come from the auto-generator when a template is saved; this
 // endpoint exists for one-off "I need an extra slot on this Saturday"
 // cases.
+//
+// SCHEDROLES.1 — the caller must be a manager AT body.location_id, not at
+// their active studio (`user.role`). Membership first (its 403 names the
+// location problem), then the role there.
 export async function POST(request) {
   const user = await getCurrentUser()
-  if (!user || !MANAGER_ROLES.includes(user.role)) {
+  if (!user || !hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -174,6 +178,9 @@ export async function POST(request) {
 
   const guard = assertLocationAccess(user, body.location_id)
   if (guard) return guard
+  if (!hasRoleAtLocation(user, body.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+  }
 
   const db = createServerClient()
 
@@ -181,27 +188,33 @@ export async function POST(request) {
   // template. SHIFTMIN.1 — min_coaches uses `??` (not `||`) on the
   // body value because `0` is a legitimate explicit choice and
   // shouldn't fall through to the template default.
+  //
+  // SCHEDROLES.1 — the template is ALWAYS read, scoped to body.location_id,
+  // even when every snapshot field was supplied: a block must never hang off
+  // another studio's template. A template elsewhere reads as not found (404).
   let start = body.start_time
   let end = body.end_time
   let max = body.max_coaches
   let min = body.min_coaches
-  if (!start || !end || !max || min === undefined) {
-    const { data: tpl, error: tplErr } = await db
-      .from('shift_templates')
-      .select('start_time, end_time, max_coaches, min_coaches')
-      .eq('id', body.template_id)
-      .single()
-    if (tplErr || !tpl) {
-      return NextResponse.json(
-        { success: false, error: 'Template not found' },
-        { status: 400 }
-      )
-    }
-    start = start || tpl.start_time
-    end = end || tpl.end_time
-    max = max || tpl.max_coaches || 15
-    min = min ?? (tpl.min_coaches ?? 1)
+  const { data: tpl, error: tplErr } = await db
+    .from('shift_templates')
+    .select('start_time, end_time, max_coaches, min_coaches')
+    .eq('id', body.template_id)
+    .eq('location_id', body.location_id)
+    .maybeSingle()
+  if (tplErr) {
+    return NextResponse.json({ success: false, error: tplErr.message }, { status: 500 })
   }
+  if (!tpl) {
+    return NextResponse.json(
+      { success: false, error: 'Template not found' },
+      { status: 404 }
+    )
+  }
+  start = start || tpl.start_time
+  end = end || tpl.end_time
+  max = max || tpl.max_coaches || 15
+  min = min ?? (tpl.min_coaches ?? 1)
 
   // ROSTER-FIX.4 — if this date already sits inside a PUBLISHED period, the
   // new block joins that roster. Publishing tags the blocks that exist at

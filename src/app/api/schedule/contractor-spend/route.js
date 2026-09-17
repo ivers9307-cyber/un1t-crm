@@ -7,6 +7,9 @@
 // granted visibility of individual hourly_rate / salary figures —
 // the per-coach figures never leave the server.
 //
+// SCHEDROLES.1 — the role is judged AT location_id (hasRoleAtLocation),
+// never from `user.role` (the ACTIVE studio's role).
+//
 // Query params:
 //   location_id     uuid (required)
 //   reference_date  YYYY-MM-DD inside the target month (required)
@@ -21,7 +24,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser, getUserLocationIds, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { uuidLike, isoDate, MANAGER_ROLES } from '@/lib/schemas'
 import { computeMonthlyContractorSpend } from '@/lib/roster-summary-server'
 
@@ -35,7 +38,7 @@ const QuerySchema = z.object({
 
 export async function GET(request) {
   const user = await getCurrentUser()
-  if (!user || !MANAGER_ROLES.includes(user.role)) {
+  if (!user || !hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -52,12 +55,15 @@ export async function GET(request) {
   }
   const { location_id, reference_date } = parsed.data
 
-  // Location-membership gate (master bypasses).
+  // Location-membership gate, then the role THERE (master bypasses both).
   if (user.role !== 'master') {
     const userLocationIds = getUserLocationIds(user)
     if (!userLocationIds.includes(location_id)) {
       return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
     }
+  }
+  if (!hasRoleAtLocation(user, location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
   try {

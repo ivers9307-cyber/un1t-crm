@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getUserLocationIds, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, getUserLocationIds, assertLocationAccess, hasRoleAtLocation } from '@/lib/auth'
 import { validateBody, uuidLike } from '@/lib/validate'
 import { timeOffTypeSchema, MANAGER_ROLES } from '@/lib/schemas'
 import { notifyUsersAtRolesOnce } from '@/lib/push-dedup'
@@ -45,27 +45,43 @@ export async function GET(request) {
     `)
     .order('start_date', { ascending: true })
 
+  // ROSTER-FIX.2 — anyone who is not a manager sees only their own requests.
+  // The old `['staff']` list let `reception` (and any future non-manager
+  // role) read the whole studio's leave.
+  //
+  // SCHEDROLES.1 — "manager" is judged PER STUDIO (hasRoleAtLocation), not
+  // from `user.role` (the ACTIVE studio's role). A head coach at Hatch who is
+  // staff at Stillorgan read all of Stillorgan's leave; a manager whose active
+  // studio is one where they are staff saw only their own at the studio they
+  // run. Without a location_id the list is: every request at the studios
+  // they manage, plus their own anywhere else they belong.
+  const userLocationIds = getUserLocationIds(user)
   if (locationId) {
     query = query.eq('location_id', locationId)
+    if (!hasRoleAtLocation(user, locationId, MANAGER_ROLES)) {
+      query = query.eq('profile_id', user.id)
+    } else if (profileId) {
+      query = query.eq('profile_id', profileId)
+    }
   } else {
-    const userLocationIds = getUserLocationIds(user)
     if (userLocationIds.length === 0) return NextResponse.json({ success: true, data: [] })
     query = query.in('location_id', userLocationIds)
+    const managedIds = userLocationIds.filter((id) => hasRoleAtLocation(user, id, MANAGER_ROLES))
+    if (managedIds.length === 0) {
+      query = query.eq('profile_id', user.id)
+    } else {
+      if (managedIds.length < userLocationIds.length) {
+        // uuids from the caller's own assignments — safe to inline.
+        query = query.or(`location_id.in.(${managedIds.join(',')}),profile_id.eq.${user.id}`)
+      }
+      if (profileId) query = query.eq('profile_id', profileId)
+    }
   }
   if (status) query = query.eq('status', status)
 
   // Date range filter — show requests that overlap with the given range
   if (startDate) query = query.lte('start_date', endDate || startDate)
   if (endDate) query = query.gte('end_date', startDate || endDate)
-
-  // ROSTER-FIX.2 — anyone who is not a manager sees only their own requests.
-  // The old `['staff']` list let `reception` (and any future non-manager
-  // role) read the whole studio's leave.
-  if (!MANAGER_ROLES.includes(user.role)) {
-    query = query.eq('profile_id', user.id)
-  } else if (profileId) {
-    query = query.eq('profile_id', profileId)
-  }
 
   const { data, error } = await query
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })

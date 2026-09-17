@@ -12,6 +12,7 @@ import {
   getOwnerOrganizationIds,
   requireInboxPermission,
   hasRoleAtLocation,
+  hasRoleAtAnyLocation,
 } from './auth.js'
 
 // Per-location roles landed in mig 051. The IO-heavy getCurrentUser()
@@ -761,5 +762,28 @@ describe('hasRoleAtLocation', () => {
   it('fails CLOSED on a missing or empty allowedRoles list', () => {
     expect(hasRoleAtLocation(managerAStaffB, A, undefined)).toBe(false)
     expect(hasRoleAtLocation(managerAStaffB, A, [])).toBe(false)
+  })
+})
+
+// SCHEDROLES.1 — the coarse pre-check for routes that learn their target
+// location only after parsing the body or fetching a row. Never the
+// authority decision: that stays hasRoleAtLocation on the target.
+describe('hasRoleAtAnyLocation', () => {
+  const MANAGER_ROLES = ['master', 'owner', 'manager', 'head_coach']
+
+  it('passes a manager whose ACTIVE studio is one where they are only staff', () => {
+    const u = { role: 'staff', profileRole: 'staff', rolesByLocation: { a: 'staff', b: 'head_coach' } }
+    expect(hasRoleAtAnyLocation(u, MANAGER_ROLES)).toBe(true)
+  })
+
+  it('refuses a caller who is staff everywhere, whatever user.role says', () => {
+    const u = { role: 'manager', profileRole: 'staff', rolesByLocation: { a: 'staff', b: 'staff' } }
+    expect(hasRoleAtAnyLocation(u, MANAGER_ROLES)).toBe(false)
+  })
+
+  it('master passes on profileRole with no rows; null user and empty lists fail closed', () => {
+    expect(hasRoleAtAnyLocation({ profileRole: 'master', rolesByLocation: {} }, MANAGER_ROLES)).toBe(true)
+    expect(hasRoleAtAnyLocation(null, MANAGER_ROLES)).toBe(false)
+    expect(hasRoleAtAnyLocation({ profileRole: 'manager', rolesByLocation: { a: 'manager' } }, [])).toBe(false)
   })
 })

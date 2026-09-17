@@ -1032,3 +1032,28 @@ export function hasRoleAtLocation(user, locationId, allowedRoles) {
   if (!role) return false
   return (allowedRoles || []).includes(role)
 }
+
+/**
+ * Does the caller hold one of `allowedRoles` at ANY location?
+ *
+ * SCHEDROLES.1 — a COARSE pre-check only, never the authority decision. A
+ * route whose target location is not known until it has parsed the body or
+ * fetched a row keeps its cheap "a plain coach has nothing to say here"
+ * refusal with this, then judges the real target with hasRoleAtLocation.
+ * It replaces `MANAGER_ROLES.includes(user.role)` as that pre-check: the old
+ * one read the ACTIVE studio's role, so it both over-blocked (a manager whose
+ * active studio is one where they are staff) and, followed only by a
+ * membership check, under-blocked (a head coach at A acting on B where they
+ * are staff).
+ *
+ * Master bypass on profileRole, as hasRoleAtLocation.
+ *
+ * @param {{ profileRole?: string, rolesByLocation?: Record<string,string> } | null} user
+ * @param {readonly string[]} allowedRoles
+ * @returns {boolean}
+ */
+export function hasRoleAtAnyLocation(user, allowedRoles) {
+  if (!user) return false
+  if (user.profileRole === 'master') return true
+  return Object.values(user.rolesByLocation || {}).some((r) => (allowedRoles || []).includes(r))
+}
