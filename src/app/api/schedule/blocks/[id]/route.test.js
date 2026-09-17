@@ -13,7 +13,9 @@ vi.mock('@/lib/auth', async (importOriginal) => {
   return {
     getCurrentUser: vi.fn(),
     getUserLocationIds: vi.fn((user) => (user.locations || []).map((l) => l.id)),
-    // SCHEDROLES.1 — REAL: the role at the block's studio is under test.
+    // SCHEDROLES.1 — REAL: membership (404) and the role at the block's
+    // studio (403) are both under test.
+    assertLocationAccessOr404: real.assertLocationAccessOr404,
     hasRoleAtLocation: real.hasRoleAtLocation,
     hasRoleAtAnyLocation: real.hasRoleAtAnyLocation,
   }
@@ -105,7 +107,7 @@ describe('DELETE /api/schedule/blocks/[id] — SLOTREMOVAL.1', () => {
     expect(db.captured.removal).toBeNull()
   })
 
-  it('404s an unknown block and 403s another location\'s block, writing nothing', async () => {
+  it('404s an unknown block and a block at a studio the caller is not at, writing nothing', async () => {
     let db = makeDb({ block: null })
     createServerClient.mockReturnValue(db)
     expect((await DELETE({}, params)).status).toBe(404)
@@ -113,7 +115,7 @@ describe('DELETE /api/schedule/blocks/[id] — SLOTREMOVAL.1', () => {
 
     db = makeDb({ block: { ...BLOCK, location_id: 'other-loc' } })
     createServerClient.mockReturnValue(db)
-    expect((await DELETE({}, params)).status).toBe(403)
+    expect((await DELETE({}, params)).status).toBe(404)
     expect(db.captured.order).toEqual([])
   })
 
@@ -159,8 +161,9 @@ describe('DELETE /api/schedule/blocks/[id] — role at the BLOCK\'s studio (SCHE
     expect((await DELETE({}, params)).status).toBe(200)
   })
 
+  // getCurrentUser gives master every active location in `locations`.
   it('master is allowed at a studio with no membership row', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'boss', role: 'master', profileRole: 'master', locations: [], rolesByLocation: {} })
+    getCurrentUser.mockResolvedValue({ id: 'boss', role: 'master', profileRole: 'master', locations: [{ id: LOC }, { id: LOC_B }], rolesByLocation: {} })
     const db = makeDb({ block: { ...BLOCK, location_id: LOC_B } })
     createServerClient.mockReturnValue(db)
     expect((await DELETE({}, params)).status).toBe(200)

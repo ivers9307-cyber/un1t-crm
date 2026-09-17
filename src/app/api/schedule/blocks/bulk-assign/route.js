@@ -16,7 +16,7 @@
 // Returns:
 //   { success: true,
 //     assigned: [{ block_id, assignment_id }],
-//     skipped:  [{ block_id, reason }],   // 'at_capacity' | 'already_assigned' | 'not_found' | 'cross_location'
+//     skipped:  [{ block_id, reason }],   // 'at_capacity' | 'already_assigned' | 'not_found' | 'cross_location' | 'not_at_location'
 //     warnings: string[]                  // aggregated time-off advisories
 //   }
 //
@@ -88,6 +88,20 @@ export async function POST(request) {
   }
 
 
+  // SCHEDROLES.1 — the coach must belong to each block's studio, master
+  // included. Read once, before any leave read or insert; a block at a studio
+  // the coach is not on is skipped as `not_at_location`, so nothing about a
+  // foreign profile (name, leave, other shifts) reaches the warnings. Fail
+  // closed on a read error.
+  const { data: coachLinks, error: coachLinksErr } = await db
+    .from('profile_locations')
+    .select('location_id')
+    .eq('profile_id', body.profile_id)
+  if (coachLinksErr) {
+    return NextResponse.json({ success: false, error: coachLinksErr.message }, { status: 500 })
+  }
+  const coachLocationIds = new Set((coachLinks || []).map((l) => l.location_id))
+
   const blocksById = new Map((blocks || []).map((b) => [b.id, b]))
   const skipped = []
   const insertRows = []
@@ -101,6 +115,10 @@ export async function POST(request) {
     }
     if (!hasRoleAtLocation(user, block.location_id, MANAGER_ROLES)) {
       skipped.push({ block_id: requestedId, reason: 'cross_location' })
+      continue
+    }
+    if (!coachLocationIds.has(block.location_id)) {
+      skipped.push({ block_id: requestedId, reason: 'not_at_location' })
       continue
     }
     const activeAssignments = (block.shift_assignments || []).filter((a) => a.status !== 'cancelled')

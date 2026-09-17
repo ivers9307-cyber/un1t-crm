@@ -47,9 +47,25 @@ function buildRequest(body) {
 // Mock supabase client backed by a fixture of blocks. Each insert
 // returns one row per requested row (id synthesised) — that's what
 // the production route does via .select() on the insert.
-function buildDb({ blocks, insertError = null, timeOff = [] }) {
+// `coachLocations`: the coach's profile_locations. Defaults to every block's
+// studio so the older cases below are about their own disposition only.
+function buildDb({ blocks, insertError = null, timeOff = [], coachLocations = null, coachLinksError = null }) {
+  const links = coachLocations ?? [...new Set((blocks || []).map((b) => b.location_id))]
+  const insertSpy = vi.fn()
+  const timeOffSpy = vi.fn()
   return {
+    insertSpy,
+    timeOffSpy,
     from: vi.fn((table) => {
+      if (table === 'profile_locations') {
+        return {
+          select: () => ({
+            eq: () => Promise.resolve(coachLinksError
+              ? { data: null, error: coachLinksError }
+              : { data: links.map((location_id) => ({ location_id })), error: null }),
+          }),
+        }
+      }
       if (table === 'shift_blocks') {
         return {
           select: vi.fn().mockReturnThis(),
@@ -58,7 +74,7 @@ function buildDb({ blocks, insertError = null, timeOff = [] }) {
       }
       if (table === 'shift_assignments') {
         return {
-          insert: (rows) => ({
+          insert: (rows) => (insertSpy(rows), {
             select: () => Promise.resolve({
               data: insertError ? null : rows.map((r, i) => ({ id: `new-${i}`, block_id: r.block_id })),
               error: insertError,
@@ -67,6 +83,7 @@ function buildDb({ blocks, insertError = null, timeOff = [] }) {
         }
       }
       if (table === 'time_off_requests') {
+        timeOffSpy()
         return {
           select: vi.fn().mockReturnThis(),
           eq: vi.fn().mockReturnThis(),
@@ -383,5 +400,47 @@ describe('POST /api/schedule/blocks/bulk-assign — role at each block\'s studio
     const j = await res.json()
     expect(j.assigned.map((a) => a.block_id)).toEqual([VALID_UUID_A])
     expect(j.skipped).toEqual([{ block_id: VALID_UUID_B, reason: 'cross_location' }])
+  })
+})
+
+// SCHEDROLES.1 — the coach must belong to each block's studio (master
+// included), checked before any leave read or insert.
+describe('POST /api/schedule/blocks/bulk-assign — coach must be at the block\'s studio (SCHEDROLES.1)', () => {
+  const MASTER = { id: 'boss', role: 'master', profileRole: 'master', rolesByLocation: {} }
+  const blocks = [
+    { id: VALID_UUID_A, location_id: 'loc-1', block_date: '2026-05-18', max_coaches: 5, shift_assignments: [] },
+    { id: VALID_UUID_B, location_id: 'loc-2', block_date: '2026-05-19', max_coaches: 5, shift_assignments: [] },
+  ]
+
+  it('skips a block at a studio the coach is not on as not_at_location, even for master', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const db = buildDb({ blocks, coachLocations: ['loc-1'], timeOff: [{ type: 'holiday', start_date: '2026-05-19', end_date: '2026-05-19', profiles: { full_name: 'Someone Else' } }] })
+    createServerClient.mockReturnValue(db)
+    const j = await (await POST(buildRequest({ block_ids: [VALID_UUID_A, VALID_UUID_B], profile_id: PROFILE_A }))).json()
+    expect(j.assigned.map((a) => a.block_id)).toEqual([VALID_UUID_A])
+    expect(j.skipped).toEqual([{ block_id: VALID_UUID_B, reason: 'not_at_location' }])
+    expect(db.insertSpy).toHaveBeenCalledTimes(1)
+    expect(db.insertSpy.mock.calls[0][0].map((r) => r.block_id)).toEqual([VALID_UUID_A])
+  })
+
+  it('a coach at no studio of any requested block: nothing inserted and no leave read', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const db = buildDb({ blocks, coachLocations: ['loc-9'] })
+    createServerClient.mockReturnValue(db)
+    const j = await (await POST(buildRequest({ block_ids: [VALID_UUID_A, VALID_UUID_B], profile_id: PROFILE_A }))).json()
+    expect(j.assigned).toEqual([])
+    expect(j.skipped.every((x) => x.reason === 'not_at_location')).toBe(true)
+    expect(j.warnings ?? []).toEqual([])
+    expect(db.insertSpy).not.toHaveBeenCalled()
+    expect(db.timeOffSpy).not.toHaveBeenCalled()
+  })
+
+  it('fails closed (500, nothing inserted) when the membership read errors', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const db = buildDb({ blocks, coachLinksError: { message: 'boom' } })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(buildRequest({ block_ids: [VALID_UUID_A], profile_id: PROFILE_A }))
+    expect(res.status).toBe(500)
+    expect(db.insertSpy).not.toHaveBeenCalled()
   })
 })

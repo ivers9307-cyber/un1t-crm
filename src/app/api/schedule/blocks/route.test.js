@@ -167,7 +167,8 @@ describe('POST /api/schedule/blocks — post-publish blocks join the roster', ()
   const LOC = 'a0000000-0000-0000-0000-000000000001'
   const TPL = 'a0000000-0000-0000-0000-000000000002'
 
-  function postDb({ publishedRoster = null, restoreError = null, insertError = null } = {}) {
+  // templateAt: the studio TPL belongs to (null = whichever is asked).
+  function postDb({ publishedRoster = null, restoreError = null, insertError = null, templateAt = null } = {}) {
     const captured = { insert: null, restore: null }
     const db = {
       captured,
@@ -193,7 +194,19 @@ describe('POST /api/schedule/blocks — post-publish blocks join the roster', ()
           return chain
         }
         if (table === 'shift_templates') {
-          return { select: () => ({ eq: () => ({ single: () => Promise.resolve({ data: { start_time: '09:00', end_time: '10:00', max_coaches: 5, min_coaches: 1 }, error: null }) }) }) }
+          // SCHEDROLES.1 — the template read is scoped to its studio; a row
+          // only comes back when (id, location_id) match `templateAt`.
+          const f = {}
+          const chain = {
+            eq: (col, val) => { f[col] = val; return chain },
+            maybeSingle: () => Promise.resolve({
+              data: f.id === TPL && f.location_id === (templateAt ?? f.location_id)
+                ? { start_time: '09:00', end_time: '10:00', max_coaches: 5, min_coaches: 1 }
+                : null,
+              error: null,
+            }),
+          }
+          return { select: () => chain }
         }
         if (table === 'shift_blocks') {
           return {
@@ -313,6 +326,19 @@ describe('POST /api/schedule/blocks — post-publish blocks join the roster', ()
       createServerClient.mockReturnValue(postDb())
       const { POST } = await import('./route.js')
       expect((await POST(postReq({ location_id: LOC, template_id: TPL, block_date: '2026-06-06' }))).status).toBe(201)
+    })
+
+    it('404s a template that belongs to another studio, even with every snapshot field supplied', async () => {
+      getCurrentUser.mockResolvedValue(mixed(LOC))
+      const db = postDb({ templateAt: LOC_B })
+      createServerClient.mockReturnValue(db)
+      const { POST } = await import('./route.js')
+      const res = await POST(postReq({
+        location_id: LOC, template_id: TPL, block_date: '2026-06-06',
+        start_time: '09:00', end_time: '10:00', max_coaches: 4, min_coaches: 1,
+      }))
+      expect(res.status).toBe(404)
+      expect(db.captured.insert).toBeNull()
     })
 
     it('master is allowed', async () => {

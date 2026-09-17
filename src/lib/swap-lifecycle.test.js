@@ -179,6 +179,7 @@ describe('resolveSwapTransition — manager approve finalisation', () => {
       swap: makeSwap({ status: 'awaiting_approval', target_id: 'coach-2' }),
       requestedStatus: 'approved',
       user: manager,
+      isManagerHere: true,
       userLocationIds: ['loc-1'],
       reviewNote: 'ok',
     })
@@ -202,6 +203,7 @@ describe('resolveSwapTransition — manager approve finalisation', () => {
       }),
       requestedStatus: 'approved',
       user: manager,
+      isManagerHere: true,
       userLocationIds: ['loc-1'],
     })
     expect(r.ok).toBe(true)
@@ -228,6 +230,7 @@ describe('resolveSwapTransition — manager approve finalisation', () => {
       swap: makeSwap(),
       requestedStatus: 'approved',
       user: manager,
+      isManagerHere: true,
       userLocationIds: ['loc-1'],
     })
     expect(r.ok).toBe(true)
@@ -241,6 +244,7 @@ describe('resolveSwapTransition — manager approve finalisation', () => {
       swap: makeSwap({ status: 'awaiting_approval', target_id: 'coach-2' }),
       requestedStatus: 'rejected',
       user: manager,
+      isManagerHere: true,
       userLocationIds: ['loc-1'],
     })
     expect(r.ok).toBe(true)
@@ -267,6 +271,7 @@ describe('resolveSwapTransition — terminal-state + bad-input guards', () => {
       swap: makeSwap({ status: st }),
       requestedStatus: 'awaiting_approval',
       user: manager,
+      isManagerHere: true,
       userLocationIds: ['loc-1'],
     })
     expect(r.ok).toBe(false)
@@ -278,6 +283,7 @@ describe('resolveSwapTransition — terminal-state + bad-input guards', () => {
       swap: makeSwap(),
       requestedStatus: 'banana',
       user: manager,
+      isManagerHere: true,
       userLocationIds: ['loc-1'],
     })
     expect(r.ok).toBe(false)
@@ -291,14 +297,14 @@ describe('resolveSwapTransition — terminal-state + bad-input guards', () => {
 
 // APPROVALS-PERCAT.1 — the "approve" transition is gated by the
 // approvals_shift_swaps permission, passed in as `canApprove` by the route.
-// canApprove defaults to the old isManager check when omitted, so every
-// existing caller/test above (which never passes it) keeps working.
+// canApprove defaults to the isManagerHere answer when omitted.
 describe('resolveSwapTransition canApprove override', () => {
   it('denies a manager approval when canApprove is explicitly false', () => {
     const r = resolveSwapTransition({
       swap: makeSwap({ status: 'awaiting_approval', target_id: 'coach-2' }),
       requestedStatus: 'approved',
       user: manager,
+      isManagerHere: true,
       userLocationIds: ['loc-1'],
       canApprove: false,
     })
@@ -318,15 +324,26 @@ describe('resolveSwapTransition canApprove override', () => {
     expect(r.effect).toBe('approved_reassign')
   })
 
-  it('falls back to the manager check when canApprove is omitted (back-compat)', () => {
+  it('falls back to isManagerHere when canApprove is omitted', () => {
+    const r = resolveSwapTransition({
+      swap: makeSwap({ status: 'awaiting_approval', target_id: 'coach-2' }),
+      requestedStatus: 'approved',
+      user: manager,
+      isManagerHere: true,
+      userLocationIds: ['loc-1'],
+    })
+    expect(r.ok).toBe(true)
+    expect(r.effect).toBe('approved_reassign')
+  })
+
+  it('SCHEDROLES.1 — with neither canApprove nor isManagerHere, even a manager is refused (fail closed)', () => {
     const r = resolveSwapTransition({
       swap: makeSwap({ status: 'awaiting_approval', target_id: 'coach-2' }),
       requestedStatus: 'approved',
       user: manager,
       userLocationIds: ['loc-1'],
     })
-    expect(r.ok).toBe(true)
-    expect(r.effect).toBe('approved_reassign')
+    expect(r.status).toBe(403)
   })
 })
 
@@ -351,7 +368,7 @@ describe('resolveSwapTransition — assignment status stays DB-valid', () => {
 
   it.each(approveCases)('%s → only DB-valid assignment statuses', (_label, swap) => {
     const r = resolveSwapTransition({
-      swap, requestedStatus: 'approved', user: manager, userLocationIds: ['loc-1'],
+      swap, requestedStatus: 'approved', user: manager, userLocationIds: ['loc-1'], isManagerHere: true,
     })
     expect(r.ok).toBe(true)
     for (const op of r.assignmentOps) {
@@ -427,8 +444,8 @@ describe('reciprocalSwapError (SWAPATOMIC.1)', () => {
 })
 
 // SCHEDROLES.1 — the manager cancel / reject branches are judged at the
-// swap's studio. The route passes `isManagerHere`; without it the fallback
-// still demands membership of the swap's studio.
+// swap's studio. The route passes `isManagerHere`; omitted means not a
+// manager.
 describe('resolveSwapTransition — manager branches are per studio (SCHEDROLES.1)', () => {
   it('isManagerHere=false refuses a manager-at-another-studio cancel and reject', () => {
     for (const requestedStatus of ['cancelled', 'rejected']) {
@@ -448,11 +465,13 @@ describe('resolveSwapTransition — manager branches are per studio (SCHEDROLES.
     expect(r.effect).toBe('rejected')
   })
 
-  it('without isManagerHere, an active-studio manager who is not at the swap\'s studio is refused', () => {
-    const r = resolveSwapTransition({
-      swap: makeSwap(), requestedStatus: 'cancelled', user: manager, userLocationIds: ['loc-other'],
-    })
-    expect(r.status).toBe(403)
+  it('without isManagerHere, even an active-studio manager AT the swap\'s studio is refused (fail closed)', () => {
+    for (const requestedStatus of ['cancelled', 'rejected']) {
+      const r = resolveSwapTransition({
+        swap: makeSwap(), requestedStatus, user: manager, userLocationIds: ['loc-1'],
+      })
+      expect(r.status).toBe(403)
+    }
   })
 
   it('the requester still cancels their own swap with isManagerHere=false', () => {

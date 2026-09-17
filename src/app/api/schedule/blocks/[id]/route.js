@@ -26,7 +26,7 @@
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { logWarn } from '@/lib/log'
 
@@ -50,9 +50,10 @@ export async function DELETE(_request, props) {
     return NextResponse.json({ success: false, error: 'Block not found' }, { status: 404 })
   }
 
-  // Master bypass lives inside hasRoleAtLocation (profileRole). Not a member,
-  // or a member without a manager role there — the same 403 this route has
-  // always given a foreign block.
+  // An outsider to the block's studio gets 404 (detail route: the id is not
+  // confirmed); a member without a manager role there gets 403.
+  const notHere = assertLocationAccessOr404(user, block.location_id)
+  if (notHere) return notHere
   if (!hasRoleAtLocation(user, block.location_id, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }

@@ -9,8 +9,6 @@
 // Lifecycle: pending -> awaiting_approval -> (approved | rejected); plus
 // cancelled. See docs/superpowers/plans/2026-06-17-coach-today-roster-phase3.md.
 
-import { MANAGER_ROLES } from './schemas'
-
 export const TERMINAL_SWAP_STATES = ['approved', 'rejected', 'cancelled']
 
 // Statuses a client may request on PUT /api/schedule/swaps/[id].
@@ -31,10 +29,10 @@ function deny(status, error) {
  * @param {boolean} [args.canApprove]  gates the "approved" transition (passed in by the route).
  *   Defaults to the manager check when omitted — see APPROVALS-PERCAT.1 below.
  * @param {boolean} [args.isManagerHere]  SCHEDROLES.1 — is the caller a manager AT
- *   swap.location_id? Gates the manager cancel / manager reject branches. When
- *   omitted it falls back to the active-studio role AND membership of the
- *   swap's studio — never the bare active-studio role, which let a manager at
- *   one studio cancel or reject any swap id at another.
+ *   swap.location_id? Gates the manager cancel / manager reject branches, and
+ *   the approve default when canApprove is omitted. Omitted = NOT a manager
+ *   (fail closed); the bare active-studio role let a manager at one studio
+ *   cancel or reject any swap id at another.
  * @returns {{ ok:boolean, status?:number, error?:string,
  *   swapUpdates:object|null,
  *   assignmentOps:Array<{id:string, set?:object, delete?:boolean}>,
@@ -46,12 +44,10 @@ export function resolveSwapTransition({ swap, requestedStatus, user, userLocatio
   if (!REQUESTABLE.includes(requestedStatus)) return deny(400, 'Invalid status')
 
   const atLocation = Array.isArray(userLocationIds) && userLocationIds.includes(swap.location_id)
-  // SCHEDROLES.1 — manager AT THE SWAP's studio. The route passes the
-  // per-location answer; the fallback still demands membership of the swap's
-  // studio, so the active-studio role alone never reaches a foreign swap.
-  const isManager = typeof isManagerHere === 'boolean'
-    ? isManagerHere
-    : MANAGER_ROLES.includes(user.role) && (user.role === 'master' || atLocation)
+  // SCHEDROLES.1 — manager AT THE SWAP's studio, answered by the caller
+  // (hasRoleAtLocation in the route). Omitted means NOT a manager: fail
+  // closed rather than fall back to the active studio's role.
+  const isManager = isManagerHere === true
   // APPROVALS-PERCAT.1 — the "approve" transition is gated by the
   // approvals_shift_swaps permission (passed in by the route). Claim /
   // accept / reject-by-target keep using isManager. Default preserves the

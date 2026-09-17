@@ -14,7 +14,9 @@ vi.mock('@/lib/auth', async (importOriginal) => {
   return {
     getCurrentUser: vi.fn(),
     getUserLocationIds: vi.fn(),
-    // SCHEDROLES.1 — REAL: the role at the block's studio is under test.
+    // SCHEDROLES.1 — REAL: membership (404) and the role at the block's
+    // studio (403) are both under test.
+    assertLocationAccessOr404: real.assertLocationAccessOr404,
     hasRoleAtLocation: real.hasRoleAtLocation,
     hasRoleAtAnyLocation: real.hasRoleAtAnyLocation,
   }
@@ -57,16 +59,35 @@ function buildDb({
   existingAssignsErr = null,
   timeOff = [],
   insertErrorFor = () => null, // (profileId) → error or null
+  // SCHEDROLES.1 — profile ids on the block's studio; null = every one asked.
+  membersHere = null,
+  membersErr = null,
 }) {
   const insertSpy = vi.fn()
   const deleteSpy = vi.fn()
+  const timeOffSpy = vi.fn()
   const existingRows = existingAssigned
     ?? existingAssignedIds.map((id) => ({ id: `assign-${id}`, profile_id: id, status: 'scheduled' }))
   return {
     insertSpy,
     deleteSpy,
+    timeOffSpy,
     db: {
       from: (table) => {
+        if (table === 'profile_locations') {
+          return {
+            select: () => ({
+              eq: (col, loc) => ({
+                in: (_c, ids) => Promise.resolve(membersErr
+                  ? { data: null, error: membersErr }
+                  : {
+                    data: ids.filter((id) => !membersHere || membersHere.includes(id)).map((profile_id) => ({ profile_id, location_id: loc })),
+                    error: null,
+                  }),
+              }),
+            }),
+          }
+        }
         if (table === 'shift_blocks') {
           return {
             select: () => ({
@@ -112,6 +133,7 @@ function buildDb({
           }
         }
         if (table === 'time_off_requests') {
+          timeOffSpy()
           return {
             select: () => ({
               eq: () => ({
@@ -130,8 +152,9 @@ function buildDb({
   }
 }
 
-const MASTER = { id: 'u1', role: 'master', profileRole: 'master', rolesByLocation: {} }
-const STAFF = { id: 'u2', role: 'staff', profileRole: 'staff', rolesByLocation: { 'loc-1': 'staff' } }
+// getCurrentUser gives master every active location in `locations`.
+const MASTER = { id: 'u1', role: 'master', profileRole: 'master', locations: [{ id: 'loc-1' }, { id: 'loc-2' }], rolesByLocation: {} }
+const STAFF = { id: 'u2', role: 'staff', profileRole: 'staff', locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': 'staff' } }
 
 describe('POST /api/schedule/blocks/[id]/assignments — auth + validation', () => {
   it('403 when no user', async () => {
@@ -428,11 +451,53 @@ describe('POST — role at the BLOCK\'s studio (SCHEDROLES.1)', () => {
     expect((await POST(req({ profile_ids: IDS }), PROPS)).status).toBe(201)
   })
 
-  it('a head coach who is not at the block\'s studio at all is refused', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'hc', role: 'head_coach', profileRole: 'staff', rolesByLocation: { 'loc-1': 'head_coach' } })
+  it('a head coach who is not at the block\'s studio at all gets 404', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'hc', role: 'head_coach', profileRole: 'staff', locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': 'head_coach' } })
     const { db, insertSpy } = buildDb({ block: block('loc-9') })
     createServerClient.mockReturnValue(db)
-    expect((await POST(req({ profile_ids: IDS }), PROPS)).status).toBe(403)
+    expect((await POST(req({ profile_ids: IDS }), PROPS)).status).toBe(404)
+    expect(insertSpy).not.toHaveBeenCalled()
+  })
+})
+
+// SCHEDROLES.1 — only a coach on the block's studio can be put on it, master
+// included, checked before any leave or double-booking read and the insert.
+describe('POST — coach must be at the block\'s studio (SCHEDROLES.1)', () => {
+  const HERE = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+  const AWAY = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'
+  const blk = { id: 'block-1', location_id: 'loc-1', block_date: '2026-06-01', max_coaches: 5 }
+  const awayLeave = [{ type: 'holiday', start_date: '2026-06-01', end_date: '2026-06-01', profiles: { full_name: 'Away Person' } }]
+
+  it('single assign of a coach from another studio: 400, no leave read, no insert (master too)', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const { db, insertSpy, timeOffSpy } = buildDb({ block: blk, membersHere: [HERE], timeOff: awayLeave })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(req({ profile_id: AWAY }), PROPS)
+    expect(res.status).toBe(400)
+    const json = await res.json()
+    expect(json.error).toMatch(/not on the staff of this studio/)
+    expect(JSON.stringify(json)).not.toContain('Away Person')
+    expect(insertSpy).not.toHaveBeenCalled()
+    expect(timeOffSpy).not.toHaveBeenCalled()
+  })
+
+  it('multi assign skips the foreign coach as not_at_location and assigns the one who is here', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const { db, insertSpy } = buildDb({ block: blk, membersHere: [HERE] })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(req({ profile_ids: [HERE, AWAY] }), PROPS)
+    expect(res.status).toBe(201)
+    const json = await res.json()
+    expect(json.assigned.map((a) => a.profile_id)).toEqual([HERE])
+    expect(json.skipped).toEqual([{ profile_id: AWAY, reason: 'not_at_location' }])
+    expect(insertSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('fails closed (500, nothing inserted) when the membership read errors', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const { db, insertSpy } = buildDb({ block: blk, membersErr: { message: 'boom' } })
+    createServerClient.mockReturnValue(db)
+    expect((await POST(req({ profile_ids: [HERE] }), PROPS)).status).toBe(500)
     expect(insertSpy).not.toHaveBeenCalled()
   })
 })

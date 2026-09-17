@@ -560,6 +560,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
         const REASONS = {
           already_assigned: 'already on this block',
           at_capacity: 'block is at capacity',
+          not_at_location: 'not on the staff of this studio',
         }
         for (const s of data.skipped) {
           const coach = staff.find((c) => c.id === s.profile_id)

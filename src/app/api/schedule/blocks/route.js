@@ -188,27 +188,33 @@ export async function POST(request) {
   // template. SHIFTMIN.1 — min_coaches uses `??` (not `||`) on the
   // body value because `0` is a legitimate explicit choice and
   // shouldn't fall through to the template default.
+  //
+  // SCHEDROLES.1 — the template is ALWAYS read, scoped to body.location_id,
+  // even when every snapshot field was supplied: a block must never hang off
+  // another studio's template. A template elsewhere reads as not found (404).
   let start = body.start_time
   let end = body.end_time
   let max = body.max_coaches
   let min = body.min_coaches
-  if (!start || !end || !max || min === undefined) {
-    const { data: tpl, error: tplErr } = await db
-      .from('shift_templates')
-      .select('start_time, end_time, max_coaches, min_coaches')
-      .eq('id', body.template_id)
-      .single()
-    if (tplErr || !tpl) {
-      return NextResponse.json(
-        { success: false, error: 'Template not found' },
-        { status: 400 }
-      )
-    }
-    start = start || tpl.start_time
-    end = end || tpl.end_time
-    max = max || tpl.max_coaches || 15
-    min = min ?? (tpl.min_coaches ?? 1)
+  const { data: tpl, error: tplErr } = await db
+    .from('shift_templates')
+    .select('start_time, end_time, max_coaches, min_coaches')
+    .eq('id', body.template_id)
+    .eq('location_id', body.location_id)
+    .maybeSingle()
+  if (tplErr) {
+    return NextResponse.json({ success: false, error: tplErr.message }, { status: 500 })
   }
+  if (!tpl) {
+    return NextResponse.json(
+      { success: false, error: 'Template not found' },
+      { status: 404 }
+    )
+  }
+  start = start || tpl.start_time
+  end = end || tpl.end_time
+  max = max || tpl.max_coaches || 15
+  min = min ?? (tpl.min_coaches ?? 1)
 
   // ROSTER-FIX.4 — if this date already sits inside a PUBLISHED period, the
   // new block joins that roster. Publishing tags the blocks that exist at
