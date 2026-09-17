@@ -15,7 +15,7 @@
 // per-coach location. Blocks keep the template's default times. For the
 // override-free callers (assistant create_shift) this distinction is moot.
 
-import { findPublishedRosterFor } from './roster'
+import { findPublishedRosterFor, clampMinCoaches } from './roster'
 import { logWarn } from './log'
 
 /**
@@ -93,7 +93,7 @@ export async function upsertShiftAssignment(db, input) {
   // selected so callers can render it without a second, unscoped lookup.
   const { data: template, error: tErr } = await db
     .from('shift_templates')
-    .select('name, start_time, end_time, max_coaches')
+    .select('name, start_time, end_time, min_coaches, max_coaches')
     .eq('id', shiftTemplateId)
     .eq('location_id', locationId)
     .maybeSingle()
@@ -131,8 +131,10 @@ export async function upsertShiftAssignment(db, input) {
     // change-logged. Null when nothing covers the date, exactly as before.
     const rosterId = await findPublishedRosterFor(db, locationId, shiftDate)
 
-    // Create it with the template's default times + capacity (min_coaches
-    // defaults at the DB level, matching the reverse trigger).
+    // Create it with the template's default times + capacity. HORIZONMIN.1 —
+    // min_coaches is written from the template (it used to fall to the DB
+    // default of 1 whatever the template said).
+    const maxCoaches = template.max_coaches ?? 15
     const { data: created, error: cErr } = await db
       .from('shift_blocks')
       .insert({
@@ -141,7 +143,8 @@ export async function upsertShiftAssignment(db, input) {
         block_date: shiftDate,
         start_time: template.start_time,
         end_time: template.end_time,
-        max_coaches: template.max_coaches ?? 15,
+        min_coaches: clampMinCoaches(template.min_coaches, maxCoaches),
+        max_coaches: maxCoaches,
         roster_id: rosterId,
         notes,
         created_by: actorId,
@@ -336,7 +339,7 @@ export async function bulkUpsertShiftAssignments(db, { locationId, actorId = nul
     const spec = specByKey.get(key) || {}
     const maxCoaches = spec.maxCoaches ?? tpl.max_coaches ?? 15
     // shift_blocks_min_coaches_check (mig 177): 0 <= min <= max.
-    const minCoaches = Math.max(0, Math.min(spec.minCoaches ?? tpl.min_coaches ?? 1, maxCoaches))
+    const minCoaches = clampMinCoaches(spec.minCoaches ?? tpl.min_coaches, maxCoaches)
     toCreate.push({
       location_id: locationId,
       template_id: templateId,

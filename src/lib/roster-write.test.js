@@ -104,6 +104,21 @@ describe('upsertShiftAssignment', () => {
     expect(db.captured.blockInsert.max_coaches).toBe(15)
   })
 
+  // HORIZONMIN.1 — the single-row path had the same omission as the generator.
+  it('writes the template min_coaches on a block it creates, clamped to max', async () => {
+    const db = makeDb({ template: { ...template, min_coaches: 2 }, existingBlock: null })
+    await upsertShiftAssignment(db, base)
+    expect(db.captured.blockInsert).toMatchObject({ min_coaches: 2, max_coaches: 12 })
+
+    const db2 = makeDb({ template: { ...template, min_coaches: 20, max_coaches: 3 }, existingBlock: null })
+    await upsertShiftAssignment(db2, base)
+    expect(db2.captured.blockInsert).toMatchObject({ min_coaches: 3, max_coaches: 3 })
+
+    const db3 = makeDb({ template: { ...template, min_coaches: undefined }, existingBlock: null })
+    await upsertShiftAssignment(db3, base)
+    expect(db3.captured.blockInsert.min_coaches).toBe(1)
+  })
+
   it('puts time overrides on the assignment, not the block', async () => {
     const db = makeDb({ template, existingBlock: null })
     await upsertShiftAssignment(db, { ...base, startTimeOverride: '08:00:00', endTimeOverride: '09:00:00' })

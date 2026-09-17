@@ -185,6 +185,21 @@ export function expandDaysToDates(dayCodes, fromDate, toDate) {
 }
 
 /**
+ * HORIZONMIN.1 — the min_coaches a block may carry. shift_blocks has a CHECK
+ * (mig 177) of 0 <= min_coaches <= max_coaches, so a template min above the
+ * block's max would fail the whole write. A missing min falls to 1 (the DB
+ * default); 0 is a legitimate "no minimum" and is kept. Every writer that
+ * creates a block from a template goes through this.
+ *
+ * @param {number|null|undefined} minCoaches  requested minimum
+ * @param {number} maxCoaches                  the block's resolved max
+ * @returns {number}
+ */
+export function clampMinCoaches(minCoaches, maxCoaches) {
+  return Math.max(0, Math.min(minCoaches ?? 1, maxCoaches))
+}
+
+/**
  * Materialise shift_blocks for a template across a date window.
  *
  * Idempotent — relies on the (location_id, template_id, block_date)
@@ -194,7 +209,8 @@ export function expandDaysToDates(dayCodes, fromDate, toDate) {
  * @param {SupabaseClient} db    server-role client
  * @param {object} template      shift_templates row (must include id,
  *                               location_id, start_time, end_time,
- *                               days_of_week, max_coaches)
+ *                               days_of_week, min_coaches,
+ *                               max_coaches)
  * @param {Date|string} fromDate  inclusive lower bound (defaults to
  *                               start of current week)
  * @param {number} weeks         how many weeks to project forward
@@ -220,13 +236,19 @@ export async function generateBlocksForTemplate(db, template, fromDate = null, w
   // lookups.
   const rosterByDate = await findPublishedRosterIdsByDate(db, template.location_id, dates)
 
+  // HORIZONMIN.1 — min_coaches is written explicitly. It used to be left off,
+  // so every generated block fell to the DB default of 1 and a 2-coach
+  // template's blocks never flagged understaffed with one coach on.
+  const maxCoaches = template.max_coaches || 15
+  const minCoaches = clampMinCoaches(template.min_coaches, maxCoaches)
   const records = dates.map(date => ({
     location_id: template.location_id,
     template_id: template.id,
     block_date: date,
     start_time: template.start_time,
     end_time: template.end_time,
-    max_coaches: template.max_coaches || 15,
+    min_coaches: minCoaches,
+    max_coaches: maxCoaches,
     roster_id: rosterByDate.get(date) || null,
   }))
 
