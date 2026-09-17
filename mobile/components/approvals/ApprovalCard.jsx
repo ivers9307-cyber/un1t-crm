@@ -21,6 +21,13 @@ export default function ApprovalCard({ item, busy, onApprove, onDecline, highlig
         {amount ? <Text className="text-sm font-semibold text-un1t-text">{amount}</Text> : null}
       </View>
       {item.subtitle ? <Text className="text-[12px] text-un1t-subtle mt-0.5" numberOfLines={2}>{item.subtitle}</Text> : null}
+      {/* LEAVE.1 — server-provided advisory, e.g. "Clashes with 2 rostered shifts". */}
+      {item.warning ? (
+        <View className="flex-row items-center mt-1">
+          <Ionicons name="warning-outline" size={11} color="#B45309" />
+          <Text className="text-[11px] text-amber-700 ml-1" numberOfLines={1}>{item.warning}</Text>
+        </View>
+      ) : null}
       {item.meta ? (
         <View className="flex-row items-center mt-1">
           <Ionicons name="location-outline" size={11} color="#94A3B8" />

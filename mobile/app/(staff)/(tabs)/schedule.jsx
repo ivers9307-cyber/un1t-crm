@@ -36,6 +36,8 @@ import { useIsTablet } from '../../../lib/use-is-tablet'
 import { effShiftStart, effShiftEnd, blockStart as blockDefaultStart, blockEnd as blockDefaultEnd, teamRosterForDay, initials } from '../../../lib/schedule-team'
 import { canAdjustShiftTimes, canCancelTimeOff, MANAGER_ROLES } from '../../../lib/schedule-manage'
 import ManageMode from '../../../components/schedule/ManageMode'
+// LEAVE.2 — one label per leave type (unpaid/other used to read "Time off").
+import { timeOffLeaveLabel } from 'shared/time-off'
 
 // ROSTER-FIX.3 — MANAGER_ROLES comes from lib/schedule-manage, the module that
 // already owns canAdjustShiftTimes. It was duplicated here (a HOTFIX for
@@ -164,10 +166,10 @@ function WeekGridView({ anchor, shiftsByDate, timeOff, todayIso, canAdjust, open
             {dayLeave.map(t => (
               <View key={t.id} className="bg-amber-500/10 border border-amber-500/40 rounded-xl p-2 mb-2">
                 <Text className="text-[11px] font-semibold text-amber-700" numberOfLines={1}>
-                  {t.type === 'holiday' ? 'Holiday' : t.type === 'sick' ? 'Sick' : 'Time off'}
+                  {timeOffLeaveLabel(t.type)}
                 </Text>
                 {t.status === 'pending' && (
-                  <Text className="text-[10px] text-amber-700/80 mt-0.5">Pending</Text>
+                  <Text className="text-[10px] text-amber-700/80 mt-0.5">{t.expired ? 'Expired' : 'Pending'}</Text>
                 )}
               </View>
             ))}
@@ -655,8 +657,8 @@ export default function Schedule() {
             {todaysLeave.map(t => (
               <View key={t.id} className="bg-amber-500/10 border border-amber-500/40 rounded-2xl p-4 mb-2">
                 <Text className="text-sm font-semibold text-amber-700">
-                  {t.type === 'holiday' ? 'Holiday' : t.type === 'sick' ? 'Sick leave' : 'Time off'}
-                  {t.status === 'pending' ? ' · pending' : ''}
+                  {timeOffLeaveLabel(t.type)}
+                  {t.expired ? ' · expired' : t.status === 'pending' ? ' · pending' : ''}
                 </Text>
                 {t.reason && <Text className="text-xs text-amber-700/80 mt-1">{t.reason}</Text>}
                 {canCancelTimeOff(t, profile) && (

@@ -4,8 +4,17 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds, assertLocationAccess, hasRoleAtLocation } from '@/lib/auth'
 import { validateBody, uuidLike } from '@/lib/validate'
 import { timeOffTypeSchema, MANAGER_ROLES } from '@/lib/schemas'
-import { notifyUsersAtRolesOnce } from '@/lib/push-dedup'
+import { notifyUsersOnce } from '@/lib/push-dedup'
 import { countLeaveDays, splitAtYearEnd } from '@/lib/time-off-days'
+import { dublinTodayStr } from '@/lib/dublin-time'
+import {
+  getLocationMemberIds, getProfileLocationIds, leaveScopeOrFilter, canDecideTimeOff,
+  resolveTimeOffApproverIds, getEmploymentType, getHolidayAllowance, ensureHolidayAllowanceRow,
+  countLeaveClashes, findLeaveClashes,
+} from '@/lib/time-off-leave'
+import {
+  isTimeOffTypeAllowedFor, RESTRICTED_TYPE_ERROR, isExpiredPendingRequest, effectiveTimeOffStatus,
+} from '@shared/time-off'
 
 const ISO_DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD')
 
@@ -19,6 +28,9 @@ const TimeOffRequestSchema = z.object({
   end_date: ISO_DATE,
   reason: z.string().max(2000).nullable().optional(),
   location_id: uuidLike.optional(),
+  // LEAVE.2 — an approver recording leave for someone else (a coach who
+  // phoned in sick). Omitted = the caller's own request.
+  profile_id: uuidLike.optional(),
 })
 
 // GET /api/schedule/time-off?location_id=xxx&start_date=xxx&end_date=xxx&status=xxx&profile_id=xxx
@@ -46,38 +58,43 @@ export async function GET(request) {
     .order('start_date', { ascending: true })
 
   // ROSTER-FIX.2 — anyone who is not a manager sees only their own requests.
-  // The old `['staff']` list let `reception` (and any future non-manager
-  // role) read the whole studio's leave.
+  // SCHEDROLES.1 — "manager" is judged PER STUDIO (hasRoleAtLocation), never
+  // from `user.role` (the ACTIVE studio's role).
   //
-  // SCHEDROLES.1 — "manager" is judged PER STUDIO (hasRoleAtLocation), not
-  // from `user.role` (the ACTIVE studio's role). A head coach at Hatch who is
-  // staff at Stillorgan read all of Stillorgan's leave; a manager whose active
-  // studio is one where they are staff saw only their own at the studio they
-  // run. Without a location_id the list is: every request at the studios
-  // they manage, plus their own anywhere else they belong.
-  const userLocationIds = getUserLocationIds(user)
-  if (locationId) {
-    query = query.eq('location_id', locationId)
-    if (!hasRoleAtLocation(user, locationId, MANAGER_ROLES)) {
-      query = query.eq('profile_id', user.id)
-    } else if (profileId) {
-      query = query.eq('profile_id', profileId)
-    }
+  // LEAVE.2 — leave covers the PERSON, not the studio it was filed at. So:
+  //   • your own requests show wherever you look (a coach at both studios
+  //     who filed from Hatch still sees it on Stillorgan's schedule);
+  //   • a manager of a studio sees leave filed there AND leave taken by anyone
+  //     who belongs there, wherever it was filed — otherwise Stillorgan never
+  //     learns its coach is off because the request went in from Hatch.
+  // Without a location_id the managed set is every studio the caller manages.
+  const scopeIds = locationId ? [locationId] : getUserLocationIds(user)
+  if (scopeIds.length === 0) return NextResponse.json({ success: true, data: [] })
+  const managedIds = scopeIds.filter((id) => hasRoleAtLocation(user, id, MANAGER_ROLES))
+  if (managedIds.length === 0) {
+    query = query.eq('profile_id', user.id)
   } else {
-    if (userLocationIds.length === 0) return NextResponse.json({ success: true, data: [] })
-    query = query.in('location_id', userLocationIds)
-    const managedIds = userLocationIds.filter((id) => hasRoleAtLocation(user, id, MANAGER_ROLES))
-    if (managedIds.length === 0) {
-      query = query.eq('profile_id', user.id)
-    } else {
-      if (managedIds.length < userLocationIds.length) {
-        // uuids from the caller's own assignments — safe to inline.
-        query = query.or(`location_id.in.(${managedIds.join(',')}),profile_id.eq.${user.id}`)
-      }
-      if (profileId) query = query.eq('profile_id', profileId)
+    // Fail closed: an unreadable member list must not silently narrow a
+    // manager's view to "filed here" (that is the bug this fixes).
+    const { ids: memberIds, error: membersError } = await getLocationMemberIds(db, managedIds)
+    if (membersError) {
+      return NextResponse.json({ success: false, error: membersError.message }, { status: 500 })
     }
+    query = query.or(`${leaveScopeOrFilter(managedIds, memberIds)},profile_id.eq.${user.id}`)
+    if (profileId) query = query.eq('profile_id', profileId)
   }
-  if (status) query = query.eq('status', status)
+
+  // LEAVE.2 — a pending request whose last day has passed is EXPIRED
+  // (derived, not stored — see isExpiredPendingRequest). `pending` therefore
+  // means "still decidable" and drops them; `expired` asks for exactly them.
+  const today = dublinTodayStr()
+  if (status === 'expired') {
+    query = query.eq('status', 'pending').lt('end_date', today)
+  } else if (status === 'pending') {
+    query = query.eq('status', 'pending').gte('end_date', today)
+  } else if (status) {
+    query = query.eq('status', status)
+  }
 
   // Date range filter — show requests that overlap with the given range
   if (startDate) query = query.lte('start_date', endDate || startDate)
@@ -85,17 +102,42 @@ export async function GET(request) {
 
   const { data, error } = await query
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
-  return NextResponse.json({ success: true, data })
+
+  let rows = (data || []).map((r) => ({
+    ...r,
+    effective_status: effectiveTimeOffStatus(r, today),
+    expired: isExpiredPendingRequest(r, today),
+  }))
+
+  // LEAVE.2 — `with_clashes=1` (the Time Off page) adds how many live shifts
+  // each open request collides with. Advisory: a failed count degrades to no
+  // count rather than hiding the requests.
+  if (searchParams.get('with_clashes') === '1') {
+    const { counts, error: clashError } = await countLeaveClashes(db, rows.filter((r) => !r.expired), today)
+    if (clashError) {
+      console.error('[time-off] clash count failed', clashError.message)
+    } else {
+      rows = rows.map((r) => (r.id in counts ? { ...r, clash_count: counts[r.id] } : r))
+    }
+  }
+
+  return NextResponse.json({ success: true, data: rows })
 }
 
 // POST /api/schedule/time-off — Create a time-off request
+//
+// LEAVE.2 — with `profile_id` (someone else) the caller is RECORDING leave on
+// that person's behalf: they must be able to approve time off at the target
+// studio, the person must belong to it, and the request is created already
+// approved with `created_by` set (mig 616). Every other rule — overlap,
+// contractor types, holiday balance — is judged for the PERSON, not the caller.
 export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
   const validation = await validateBody(request, TimeOffRequestSchema)
   if (!validation.ok) return validation.response
-  const { type, start_date, end_date, reason, location_id } = validation.data
+  const { type, start_date, end_date, reason, location_id, profile_id } = validation.data
 
   // If location_id is explicitly passed, it must be one the caller belongs to.
   // Otherwise fall through to user.activeLocation below.
@@ -105,6 +147,9 @@ export async function POST(request) {
   }
 
   const db = createServerClient()
+  const subjectId = profile_id || user.id
+  const onBehalf = subjectId !== user.id
+  const targetLocation = location_id || user.activeLocation?.id
 
   if (end_date < start_date) {
     return NextResponse.json({ success: false, error: 'End date must be on or after start date' }, { status: 400 })
@@ -118,6 +163,33 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'Time-off requests are limited to one year' }, { status: 400 })
   }
 
+  // LEAVE.2 — recording for someone else: approver at the target studio, and
+  // the person is on that studio's staff. A non-member is a 404 so the id is
+  // not confirmed.
+  if (onBehalf) {
+    if (!targetLocation || !canDecideTimeOff(user, targetLocation)) {
+      return NextResponse.json({ success: false, error: 'Only someone who approves time off at this studio can record leave for a colleague' }, { status: 403 })
+    }
+    const { ids: subjectLocations, error: memberError } = await getProfileLocationIds(db, subjectId)
+    if (memberError) {
+      return NextResponse.json({ success: false, error: memberError.message }, { status: 500 })
+    }
+    if (!subjectLocations.includes(targetLocation)) {
+      return NextResponse.json({ success: false, error: 'Staff member not found' }, { status: 404 })
+    }
+  }
+
+  // LEAVE.3 — contractors may only mark themselves unavailable; the forms
+  // hide the other types, this is the server's half. Fail closed: an
+  // unreadable employment type must not let a holiday through.
+  const { employmentType, error: employmentError } = await getEmploymentType(db, subjectId)
+  if (employmentError) {
+    return NextResponse.json({ success: false, error: employmentError.message }, { status: 500 })
+  }
+  if (!isTimeOffTypeAllowedFor(employmentType, type)) {
+    return NextResponse.json({ success: false, error: RESTRICTED_TYPE_ERROR }, { status: 400 })
+  }
+
   // ROSTER-FIX.2 — nothing stopped a coach filing the same week twice (or
   // ten times), which double-counted against the allowance and put two
   // rows on the manager's inbox for one absence. The error is checked
@@ -125,7 +197,7 @@ export async function POST(request) {
   // probe must never fall through to the insert as "no overlap".
   const { data: clashes, error: clashesError } = await db.from('time_off_requests')
     .select('id, start_date, end_date, status, type')
-    .eq('profile_id', user.id)
+    .eq('profile_id', subjectId)
     .in('status', ['pending', 'approved'])
     .lte('start_date', end_date)
     .gte('end_date', start_date)
@@ -136,7 +208,8 @@ export async function POST(request) {
   if ((clashes || []).length > 0) {
     const c = clashes[0]
     const range = c.start_date === c.end_date ? c.start_date : `${c.start_date} – ${c.end_date}`
-    return NextResponse.json({ success: false, error: `Overlaps your existing request for ${range}` }, { status: 409 })
+    const whose = onBehalf ? 'an existing request' : 'your existing request'
+    return NextResponse.json({ success: false, error: `Overlaps ${whose} for ${range}` }, { status: 409 })
   }
 
   // ROSTER-FIX.2 — a range that straddles 31 December becomes one row per
@@ -151,31 +224,23 @@ export async function POST(request) {
 
   // If it's a holiday, check remaining allowance — per segment year, since
   // each year has its own allowance row.
+  // LEAVE.4 — this used to `continue` when no allowance row existed, and the
+  // row only appears on the first APPROVED holiday, so nobody's first request
+  // of a year was ever checked. With no row the balance is the person's
+  // contract entitlement (getHolidayAllowance). Every read fails closed
+  // (ROSTER-FIX.2): an unreadable balance is not an unlimited one.
   if (type === 'holiday') {
     for (const seg of segments) {
       if (seg.days < 1) continue
       const year = Number(seg.s.slice(0, 4))
-      // K8 — `.maybeSingle()`: staff with no allowance row for the year skip the
-      // remaining-days check entirely (`if (allowance)` below), so 0 rows is the
-      // designed path, not an error. (profile_id, year) is uniquely indexed.
-      // ROSTER-FIX.2 — a discarded ERROR reads exactly like that same "no
-      // allowance row" and so skips the balance check outright. Fail closed.
-      const { data: allowance, error: allowanceError } = await db.from('staff_allowances')
-        .select('*')
-        .eq('profile_id', user.id)
-        .eq('year', year)
-        .maybeSingle()
-
+      const { allowance, error: allowanceError } = await getHolidayAllowance(db, subjectId, year)
       if (allowanceError) {
         return NextResponse.json({ success: false, error: allowanceError.message }, { status: 500 })
       }
-      if (!allowance) continue
       const remaining = allowance.total_days + allowance.carried_over - allowance.used_days
-      // Check pending requests too — same fail-closed rule (ROSTER-FIX.2):
-      // an unreadable pending list understates the days already claimed.
       const { data: pending, error: pendingError } = await db.from('time_off_requests')
         .select('total_days')
-        .eq('profile_id', user.id)
+        .eq('profile_id', subjectId)
         .eq('type', 'holiday')
         .eq('status', 'pending')
         .gte('start_date', `${year}-01-01`)
@@ -186,9 +251,10 @@ export async function POST(request) {
       }
       const pendingDays = (pending || []).reduce((sum, r) => sum + Number(r.total_days), 0)
       if (seg.days > remaining - pendingDays) {
+        const who = onBehalf ? 'They have' : 'You have'
         return NextResponse.json({
           success: false,
-          error: `Insufficient holiday balance. You have ${remaining - pendingDays} days remaining (including pending requests).`
+          error: `Insufficient holiday balance. ${who} ${remaining - pendingDays} days remaining (including pending requests).`
         }, { status: 400 })
       }
     }
@@ -197,15 +263,21 @@ export async function POST(request) {
   // ROSTER-FIX.2 — ONE insert for every segment, not a round trip each: the
   // per-segment loop wrote the earlier years' rows and then returned a 400
   // on a later failure, so the caller's retry duplicated them.
+  //
+  // LEAVE.5 — an on-behalf request is inserted PENDING and approved by the
+  // update below, never inserted as approved: the allowance trigger (mig 011)
+  // is AFTER UPDATE only, so an approved INSERT would never charge the
+  // holiday to the balance.
   const rows = segments.filter((seg) => seg.days >= 1).map((seg) => ({
-    profile_id: user.id,
-    location_id: location_id || user.activeLocation?.id,
+    profile_id: subjectId,
+    location_id: targetLocation,
     type,
     start_date: seg.s,
     end_date: seg.e,
     total_days: seg.days,
     reason: reason || null,
     status: 'pending',
+    ...(onBehalf ? { created_by: user.id } : {}),
   }))
 
   const { data: inserted, error: insertError } = await db.from('time_off_requests').insert(rows).select(`
@@ -218,30 +290,101 @@ export async function POST(request) {
   // `data` stays the first row so every existing client keeps working;
   // `data_all` carries the year-split siblings for anyone who wants them.
   const created = inserted || []
-  const data = created[0]
-  if (!data) {
+  if (!created[0]) {
     return NextResponse.json({ success: false, error: 'Time-off request was not created' }, { status: 500 })
   }
 
-  // Notify owners + managers at the request's location that a new
-  // time-off request needs review. Best-effort — never block the API
-  // response on push delivery.
-  const targetLocation = data.location_id || user.activeLocation?.id
-  if (targetLocation) {
-    const range = data.start_date === data.end_date
-      ? data.start_date
-      : `${data.start_date} – ${data.end_date}`
-    // NOTIF.9 — migrated to notifyUsersAtRoles. Owners/managers
-    // who don't have the mobile app get the request by email so
-    // they can still review and decide within reasonable hours.
-    notifyUsersAtRolesOnce(db, `time_off_inbound:${data.id}`, targetLocation, ['owner', 'manager'], {
-      title: 'New time-off request',
-      body: `${user.full_name} requested ${data.type} for ${range}.`,
-      category: 'time_off',
-      emailSubject: `Time-off request from ${user.full_name}`,
-      data: { type: 'time_off_inbound', request_id: data.id },
-    }).catch(err => console.error('[time-off] notify failed', err))
+  if (onBehalf) {
+    return approveRecordedLeave(db, user, created, { type, employmentType })
+  }
+
+  const data = created[0]
+
+  // LEAVE.2 — tell everyone who can APPROVE it: the per-location time-off
+  // approval permission, at the studio it was filed at and every other studio
+  // the requester belongs to (leave covers the person). This used to be
+  // owner + manager only, and head coaches — who make most approvals — never
+  // heard. The requester is never told about their own request.
+  const { ids: requesterLocations } = await getProfileLocationIds(db, user.id)
+  const approverLocations = [...new Set([data.location_id, ...requesterLocations].filter(Boolean))]
+  const range = data.start_date === data.end_date
+    ? data.start_date
+    : `${data.start_date} – ${data.end_date}`
+  try {
+    const { ids: approverIds, error: approverError } = await resolveTimeOffApproverIds(db, approverLocations)
+    if (approverError) throw new Error(approverError.message)
+    const recipients = approverIds.filter((id) => id !== user.id)
+    if (recipients.length > 0) {
+      // NOTIF.9 — push, email fallback for approvers without the app.
+      notifyUsersOnce(db, `time_off_inbound:${data.id}`, recipients, {
+        title: 'New time-off request',
+        body: `${user.full_name} requested ${data.type} for ${range}.`,
+        category: 'time_off',
+        emailSubject: `Time-off request from ${user.full_name}`,
+        data: { type: 'time_off_inbound', request_id: data.id },
+      }).catch(err => console.error('[time-off] notify failed', err))
+    }
+  } catch (err) {
+    // Best-effort — never block the API response on push delivery.
+    console.error('[time-off] approver lookup failed', err?.message)
   }
 
   return NextResponse.json({ success: true, data, data_all: created }, { status: 201 })
+}
+
+// LEAVE.5 — the second half of recording leave for someone: approve what was
+// just inserted, through the same update the approval route makes (so the
+// allowance trigger charges a holiday), and hand back the shift clashes the
+// same way an approval does.
+async function approveRecordedLeave(db, user, created, { type, employmentType }) {
+  const ids = created.map((r) => r.id)
+  if (type === 'holiday' && employmentType !== 'contractor') {
+    for (const year of new Set(created.map((r) => Number(r.start_date.slice(0, 4))))) {
+      const { error } = await ensureHolidayAllowanceRow(db, created[0].profile_id, year)
+      if (error) {
+        return NextResponse.json({
+          success: false,
+          error: `Recorded as pending, but the allowance could not be prepared: ${error.message}`,
+          data: created[0],
+        }, { status: 500 })
+      }
+    }
+  }
+  const now = new Date().toISOString()
+  const { data: approved, error } = await db.from('time_off_requests')
+    .update({ status: 'approved', reviewed_by: user.id, reviewed_at: now, updated_at: now })
+    .in('id', ids)
+    .select(`
+      *,
+      profiles!profile_id(id, full_name, avatar_url, role)
+    `)
+  if (error || !approved || approved.length !== ids.length) {
+    // The rows exist as PENDING — visible and decidable — so say exactly that
+    // rather than reporting a clean failure the caller would retry into a 409.
+    return NextResponse.json({
+      success: false,
+      error: `Recorded as pending, but approving it failed${error ? `: ${error.message}` : ''}. Approve it from the list.`,
+      data: created[0],
+    }, { status: 500 })
+  }
+
+  const today = dublinTodayStr()
+  const clashes = []
+  for (const row of approved) {
+    const { clashes: found, error: clashError } = await findLeaveClashes(db, row, today)
+    if (clashError) console.error('[time-off] clash lookup failed', clashError.message)
+    clashes.push(...(found || []))
+  }
+
+  const data = approved.find((r) => r.id === created[0].id) || approved[0]
+  const range = data.start_date === data.end_date ? data.start_date : `${data.start_date} – ${data.end_date}`
+  notifyUsersOnce(db, `time_off_recorded:${data.id}`, [data.profile_id], {
+    title: 'Time off recorded',
+    body: `${user.full_name} recorded ${data.type} for you for ${range}.`,
+    category: 'time_off',
+    emailSubject: 'Time off recorded for you',
+    data: { type: 'time_off_decision', request_id: data.id, status: 'approved', start_date: data.start_date },
+  }).catch(err => console.error('[time-off] notify failed', err))
+
+  return NextResponse.json({ success: true, data, data_all: approved, clashes }, { status: 201 })
 }

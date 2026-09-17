@@ -152,6 +152,8 @@ const TimeOffRequest = z.object({
   end_date: isoDate,
   reason: z.string().max(2000).nullable().optional(),
   location_id: uuidLike.optional(),
+  // LEAVE.5 — record leave for a colleague (approvers only; created approved).
+  profile_id: uuidLike.optional(),
 }).openapi('TimeOffRequest')
 
 const TimeOffReview = z.object({
@@ -4451,9 +4453,16 @@ registry.registerPath({
   path: '/api/schedule/time-off',
   tags: ['Schedule'],
   security: [{ CookieAuth: [] }],
-  summary: 'Submit a time-off request',
+  summary: 'Submit a time-off request, or record one for a colleague',
+  description: "Without profile_id: the caller's own request, created pending; everyone holding the time-off approval permission at the studio it is filed at and at every studio the caller belongs to is notified. With profile_id (someone else): the caller must hold that permission at the target studio and the person must belong to it; the request is created approved with created_by set and the response carries `clashes` (live shifts the person is still rostered on). Contractors may only file `unavailable` (400 otherwise). Holiday is checked against the balance on every request: the allowance row, or the contract entitlement when none exists yet.",
   request: { body: { content: { 'application/json': { schema: TimeOffRequest } } } },
-  responses: { 201: { description: 'Request submitted' } },
+  responses: {
+    201: { description: 'Request submitted (or recorded and approved)' },
+    400: { description: 'Invalid dates, no working days, contractor leave type, or insufficient holiday balance', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Recording for a colleague without time-off approval at that studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'The colleague is not on that studio’s staff', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Overlaps an existing pending or approved request', content: { 'application/json': { schema: ErrorResponse } } },
+  },
 })
 
 registry.registerPath({
@@ -4462,11 +4471,30 @@ registry.registerPath({
   tags: ['Schedule'],
   security: [{ CookieAuth: [] }],
   summary: 'Approve, reject, or cancel a time-off request',
+  description: 'Deciding needs the time-off approval permission at the studio the request was filed at or at any studio the requester belongs to. Approving refuses a pending request whose end_date has passed (409, expired), and a contractor leave type other than unavailable (400). An approval response carries `clashes`: live shifts, from today, that the person is still rostered on at any studio. Nothing is unassigned; see POST /api/schedule/time-off/{id}/unassign-clashes.',
   request: {
     params: z.object({ id: uuidLike }),
     body: { content: { 'application/json': { schema: TimeOffReview } } },
   },
   responses: { 200: { description: 'Request updated' } },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/schedule/time-off/{id}/unassign-clashes',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Take a person on approved leave off the shifts it clashes with',
+  description: 'The explicit follow-up to an approval. The caller must be able to decide the request (404 otherwise) and it must be approved (409). Each clashing shift is removed only where the caller is a manager at that shift’s studio (others are returned as skipped), through the same path as DELETE /api/schedule/assignments/{id}: change log on a published roster and a notification to the coach. assignment_ids limits removal to the shifts the approver was shown.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ assignment_ids: z.array(uuidLike).optional() }) } } },
+  },
+  responses: {
+    200: { description: '{ removed, skipped, failed }' },
+    404: { description: 'Not found, or not decidable by the caller', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'The leave is not approved', content: { 'application/json': { schema: ErrorResponse } } },
+  },
 })
 
 // ROSTER-FIX.3 (D2, D3) — the assignment detail route sets a shift's PAID

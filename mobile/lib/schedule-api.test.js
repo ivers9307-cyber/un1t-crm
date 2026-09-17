@@ -55,6 +55,7 @@ describe('schedule-api — every helper is exercised', () => {
       'removeAssignment',
       'respondToSwap',
       'respondToTimeOff',
+      'unassignLeaveClashes',
     ])
   })
 })
@@ -111,6 +112,13 @@ describe('time off', () => {
     schedule.cancelTimeOffRequest('t1', LOC)
     expect(lastCall()).toEqual(['/api/schedule/time-off/t1', {
       method: 'PUT', locationId: LOC, body: { status: 'cancelled' },
+    }])
+  })
+
+  it('unassignLeaveClashes POSTs only the shifts the approver was shown', () => {
+    schedule.unassignLeaveClashes('t1', { assignmentIds: ['a1', 'a2'], locationId: LOC })
+    expect(lastCall()).toEqual(['/api/schedule/time-off/t1/unassign-clashes', {
+      method: 'POST', locationId: LOC, body: { assignment_ids: ['a1', 'a2'] },
     }])
   })
 

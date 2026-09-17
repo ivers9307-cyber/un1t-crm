@@ -206,7 +206,9 @@ async function countOpenApprovals(db, locationId) {
     db.from('time_off_requests')
       .select('id', { count: 'exact', head: true })
       .eq('location_id', locationId)
-      .eq('status', 'pending'),
+      .eq('status', 'pending')
+      // LEAVE.2 — a pending request past its end_date has expired (derived).
+      .gte('end_date', dublinDayStr()),
     db.from('invoices_queue')
       .select('id', { count: 'exact', head: true })
       .eq('location_id', locationId)

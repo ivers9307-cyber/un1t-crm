@@ -29,8 +29,9 @@ import { validateBody } from '@/lib/validate'
 import { MANAGER_ROLES, timeOfDay } from '@/lib/schemas'
 import { notifyUsersOnce } from '@/lib/push-dedup'
 import { logRosterChange } from '@/lib/roster-change-log'
-import { notifyRosterChanges, markRosterChangesNotified } from '@/lib/roster-change-notify'
+import { markRosterChangesNotified } from '@/lib/roster-change-notify'
 import { logWarn } from '@/lib/log'
+import { unassignShiftAssignments } from '@/lib/shift-unassign'
 
 // Shared by PUT and DELETE: the assignment's block location decides.
 // Returns a response to send, or null to carry on.
@@ -279,36 +280,22 @@ export async function DELETE(_request, props) {
   const deleteGate = gateOnShiftLocation(user, assignment, 'Ask for a swap to drop this shift')
   if (deleteGate) return deleteGate
 
-  const { error } = await db.from('shift_assignments').delete().eq('id', params.id)
-  if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 400 })
-  }
-
-  // SCHEDULE-CHANGE-LOG.1 — record a manager removing a coach from a
-  // published roster so the next re-publish re-notifies them. Best-effort.
-  // ROSTER-FIX.3 — the self-removal skip is gone with the self-delete path.
-  if (assignment.shift_blocks?.rosters?.status === 'published') {
-    await logRosterChange(db, {
-      isPublished: true,
-      locationId: assignment.shift_blocks?.location_id,
-      blockId: assignment.block_id,
-      blockDate: assignment.shift_blocks?.block_date,
-      actorId: user.id,
-      coachId: assignment.profile_id,
-      action: 'unassigned',
-    })
-
-    // NOTIFY.1 — tell the coach now, not at the next re-publish.
-    await notifyRosterChanges(db, {
-      locationId: assignment.shift_blocks?.location_id,
-      actorId: user.id,
-      changes: [{
-        coachId: assignment.profile_id,
-        blockId: assignment.block_id,
-        blockDate: assignment.shift_blocks?.block_date,
-        action: 'unassigned',
-      }],
-    })
+  // LEAVE.2 — the delete, the change-log row and the coach notification live
+  // in unassignShiftAssignments, so the leave-clash "Unassign them" action
+  // takes coaches off shifts exactly the way this route does.
+  const { failed } = await unassignShiftAssignments(db, {
+    actorId: user.id,
+    assignments: [{
+      id: assignment.id,
+      profile_id: assignment.profile_id,
+      block_id: assignment.block_id,
+      block_date: assignment.shift_blocks?.block_date,
+      location_id: assignment.shift_blocks?.location_id,
+      roster_status: assignment.shift_blocks?.rosters?.status || null,
+    }],
+  })
+  if (failed.length > 0) {
+    return NextResponse.json({ success: false, error: failed[0].error }, { status: 400 })
   }
 
   return NextResponse.json({ success: true })

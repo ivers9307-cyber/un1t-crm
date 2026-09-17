@@ -169,6 +169,18 @@ export function respondToTimeOff(id, status, reviewNote, locationId) {
   })
 }
 
+// LEAVE.1 — after approving leave that left the person rostered: take them off
+// exactly the shifts the approver was shown (the approve response's
+// `clashes`). Same server path as a manager removing a coach by hand, so the
+// coach is notified and the change is logged.
+export function unassignLeaveClashes(id, { assignmentIds, locationId }) {
+  return api(`/api/schedule/time-off/${id}/unassign-clashes`, {
+    method: 'POST',
+    locationId,
+    body: { assignment_ids: assignmentIds },
+  })
+}
+
 // Assignable staff at the active location (id + full_name + active + locations).
 // ROSTER-FIX.2 — `fields=picker` pins the pay-free shape; the plain
 // /api/staff list hands an admin caller every HR column to build a dropdown.

@@ -58,6 +58,8 @@ function mockDb({ location, contractors = [], blocks = [], timeOff = [] }) {
         const chain = {
           select: () => chain,
           eq: () => chain,
+          // LEAVE.2 — scoped by the person (filed here OR a member here).
+          or: () => chain,
           lte: () => chain,
           gte: (col) => (col === 'end_date'
             ? Promise.resolve({ data: timeOff, error: null })

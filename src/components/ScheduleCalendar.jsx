@@ -22,7 +22,7 @@
 // (RETIRE-SHIFTS-MIRROR.5c). The legacy public.shifts mirror is gone (mig 238).
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import { ChevronLeft, ChevronRight, Copy, Send, Plus, Users, User, Clock, X, ArrowLeftRight, CalendarOff, Palmtree, ThermometerSun, Ban, AlertTriangle, AlertCircle, CalendarDays, CalendarRange, Pencil, Check, Settings } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Copy, Send, Plus, Users, User, Clock, X, ArrowLeftRight, CalendarOff, Palmtree, ThermometerSun, Ban, Wallet, CircleEllipsis, AlertTriangle, AlertCircle, CalendarDays, CalendarRange, Pencil, Check, Settings } from 'lucide-react'
 import Link from 'next/link'
 import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 import { indexByDate } from '@/lib/bank-holidays'
@@ -58,17 +58,27 @@ import Modal from '@/components/ui/Modal'
 import { COPY_MODE_OPTIONS, copyResultToast } from '@/lib/roster-copy'
 import RosterSummaryPanel from './RosterSummaryPanel'
 import ScheduleErrorBanner from './schedule/ScheduleErrorBanner'
+import { timeOffLeaveLabel } from '@shared/time-off'
 // ROSTER-FIX.6a — the six-endpoint fan-out, its error handling and its
 // request-ordering guard live in the hook now; see its header for why.
 import { useScheduleData } from './schedule/useScheduleData'
 import { useWeekCost } from './schedule/useWeekCost'
 import { useDraftRosters } from './schedule/useDraftRosters'
 
+// LEAVE.2 — every leave type gets its own label (timeOffLeaveLabel) and
+// colour. Unpaid and "other" were missing, so approved unpaid/other leave
+// fell back to the `unavailable` entry and read "Unavailable". Colours match
+// TimeOffManager.
 const TIME_OFF_CONFIG = {
-  holiday:     { label: 'Holiday',     color: '#22C55E', icon: Palmtree },
-  sick:        { label: 'Sick',        color: '#EF4444', icon: ThermometerSun },
-  unavailable: { label: 'Unavailable', color: '#F59E0B', icon: Ban },
+  holiday:     { label: timeOffLeaveLabel('holiday'),     color: '#22C55E', icon: Palmtree },
+  sick:        { label: timeOffLeaveLabel('sick'),        color: '#EF4444', icon: ThermometerSun },
+  unpaid:      { label: timeOffLeaveLabel('unpaid'),      color: '#6366F1', icon: Wallet },
+  other:       { label: timeOffLeaveLabel('other'),       color: '#64748B', icon: CircleEllipsis },
+  unavailable: { label: timeOffLeaveLabel('unavailable'), color: '#F59E0B', icon: Ban },
 }
+// Unknown legacy type: neutral, and labelled "Time off" rather than claiming
+// to be any particular kind of leave.
+const TIME_OFF_FALLBACK = { label: timeOffLeaveLabel(null), color: '#64748B', icon: CalendarOff }
 
 const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 // ROSTER-FIX.6a-8 — how long a success/warning toast stays up. Errors never
@@ -1258,7 +1268,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                         <div className="text-[10px] text-un1t-muted">+{visibleBlocks.length - 3} more</div>
                       )}
                       {dayTimeOff.slice(0, 1).map(t => {
-                        const conf = TIME_OFF_CONFIG[t.type] || TIME_OFF_CONFIG.unavailable
+                        const conf = TIME_OFF_CONFIG[t.type] || TIME_OFF_FALLBACK
                         return (
                           <div
                             key={`to-${t.id}`}
@@ -1327,7 +1337,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                       .filter(t => t.start_date <= dateStr && t.end_date >= dateStr)
                       .filter(t => viewMode === 'all' || t.profile_id === user.id)
                       .map(t => {
-                        const conf = TIME_OFF_CONFIG[t.type] || TIME_OFF_CONFIG.unavailable
+                        const conf = TIME_OFF_CONFIG[t.type] || TIME_OFF_FALLBACK
                         const Icon = conf.icon
                         return (
                           <div
