@@ -81,7 +81,16 @@ export const NOTIFICATION_REGISTRY = Object.freeze([
     trigger: { kind: 'event', source: 'POST /api/schedule/publish' },
     recipients: { kind: 'roles_at_location', detail: 'All staff with shifts in the published week' },
     configurable: { leadTimes: false, roles: false },
-    fallbackEmail: false,  // weekly, not time-critical, would be noisy
+    // PUBNOTIFY.1 — was false ("weekly, not time-critical, would be noisy"),
+    // which made the FIRST publish push-only: a coach without the app was
+    // never told their week exists at all, and this is the one notice that
+    // says so. Same argument ROSTER-FIX.8d used to flip `swap`: volume is one
+    // message per published period, not per event, so this is not the noise
+    // case bookings/leads are. The per-user notify_schedule toggle still gates
+    // the email (notifyUsers → resolvePushAllowedIds), so an opt-out is not
+    // routed around.
+    fallbackEmail: true,
+    emailSubject: 'Your schedule has been published',
   },
   {
     category: 'swap',

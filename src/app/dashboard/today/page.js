@@ -35,6 +35,7 @@ import { MANAGER_ROLES } from '@/lib/schemas'
 import { fetchStaffingGapsThisWeek, staffingGapsHeadline, staffingGapsBreakdown } from '@/lib/roster-staffing'
 import { fetchTodayFeed } from '@/lib/today-feed-data'
 import { assembleHomeQueue, queueCountLabel, groupQueueRows } from '@/lib/home-queue'
+import { dublinTodayStr } from '@/lib/dublin-time'
 import { relativeTime } from '@/lib/mail/conversation-display'
 import {
   KpiCard, KpiRow, SectionHeader, ListCard, PendingRow,
@@ -140,12 +141,13 @@ function QueueRows({ rows }) {
 
 export const dynamic = 'force-dynamic'
 
-function isoDate(d) {
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
-}
+// TODAYTZ.1 — "today" is a DUBLIN calendar day, never the server's.
+// This page used to build it from a local `isoDate` helper over the current
+// instant, and Vercel runs in UTC: between midnight and 01:00 Dublin during
+// BST the server is still on yesterday's date, so the month grid highlighted
+// the wrong cell and SwapActions' "on with you today" listed yesterday's
+// shifts. dublinTodayStr() is the house helper for a business today
+// (CLAUDE.md).
 
 export default async function PersonalDashboardPage() {
   const user = await getCurrentUser()
@@ -153,6 +155,8 @@ export default async function PersonalDashboardPage() {
 
   // Permission gate — toggle is honoured for every role including owner.
   if (!hasPermission(user, 'dashboard_personal')) redirect('/dashboard')
+
+  const todayIso = dublinTodayStr()
 
   const db = createServerClient()
   // TODAY-FEED.1 / HOME.3 — the triage feed and the item-level queue
@@ -319,7 +323,7 @@ export default async function PersonalDashboardPage() {
           by the Week | Month control inside MonthRoster. */}
       <div className="mb-4 max-w-5xl">
         <MonthRoster
-          weeks={buildMonthMatrix(monthStartIso, monthEndIso, monthShifts, isoDate(new Date()))}
+          weeks={buildMonthMatrix(monthStartIso, monthEndIso, monthShifts, todayIso)}
           monthLabel={`${new Date(monthStartIso + 'T00:00:00').toLocaleDateString('en-IE', { day: 'numeric', month: 'short' })} – ${new Date(monthEndIso + 'T00:00:00').toLocaleDateString('en-IE', { day: 'numeric', month: 'short' })}`}
           monthSummary={`${shiftsThisMonth} shift${shiftsThisMonth === 1 ? '' : 's'} · ${hoursThisMonth}h`}
           weekPanels={[
@@ -426,7 +430,7 @@ export default async function PersonalDashboardPage() {
           Renders nothing when all three lists are empty. */}
       <SwapActions
         locationId={user.activeLocation?.id}
-        todayIso={isoDate(new Date())}
+        todayIso={todayIso}
         currentProfileId={user.id}
       />
 
