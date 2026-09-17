@@ -1,6 +1,14 @@
 // POST /api/attendance/geofence-checkin
 //
 // GEO-ATT.4 — the mobile app's geofence ENTER handler calls this.
+// QUEUEDARRIVAL.1 — an arrival that sat in the phone's offline queue is
+// recorded at the time the coach ARRIVED, not the time the queue drained: a
+// client entered_at up to 24h in the past is trusted (and audited as
+// payload.queued), while a timestamp ahead of the server by more than the skew
+// window, or older than 24h, still becomes "now" (payload.clamped). Every
+// window below — the shift search, decideGeofenceStamp, the flap dedup — keys
+// off that resolved arrival time.
+//
 // ARRIVAL.1 — records ARRIVAL on shift_assignments.arrived_at. It never
 // writes start_time_override: that column is the manager-set paid window
 // (mig 099, D3) and every hours/cost reader bills it. Order is decide →
@@ -36,7 +44,15 @@ import { logWarn } from '@/lib/log'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-const CLOCK_SKEW_MS = 5 * 60_000   // trust client entered_at within ±5 min
+const CLOCK_SKEW_MS = 5 * 60_000   // trust a client entered_at within ±5 min
+// QUEUEDARRIVAL.1 — how far into the PAST a client entered_at may reach. The
+// phone stamps entered_at at the moment the OS delivers the region ENTER
+// (mobile/lib/geofence.js enqueueCheckin) and only then queues it, so an
+// entered_at older than the skew window IS a queued upload — the phone needs to
+// send no extra flag to say so, which is why this is a server-only change (no
+// OTA). 24h is the same span the shift lookup below covers, so a timestamp
+// older than this could not match a shift on its own merits anyway.
+const MAX_QUEUE_AGE_MS = 24 * 3600_000
 const DEDUP_WINDOW_MS = 10 * 60_000 // one geofence event per profile+location per 10 min
 
 const GeofenceCheckinSchema = z.object({
@@ -102,11 +118,33 @@ export async function POST(request) {
     return NextResponse.json({ success: true, data: { match_outcome: 'geofence_exempt' } })
   }
 
-  // Clamp the client timestamp — phone clocks and queued retries are
-  // untrusted; anything outside ±5 min becomes "now".
+  // Resolve the arrival instant.
+  //
+  // QUEUEDARRIVAL.1 — this used to clamp to "now" whenever the client
+  // timestamp differed from now by more than ±5 min, in both directions. The
+  // future half of that is right (a phone clock running ahead must not book an
+  // arrival that hasn't happened), but the PAST half threw away the one fact
+  // the phone knows better than the server: when the coach actually arrived. A
+  // ping that sat in the offline queue — the whole reason that queue exists —
+  // was recorded at UPLOAD time, so a 07:58 arrival flushed at 09:20 was
+  // stamped 09:20 and read as late, or matched the wrong shift entirely.
+  //
+  //   future beyond the skew  → "now" (untrusted clock)
+  //   within ±5 min           → trusted as-is (the live case)
+  //   past, up to 24h         → trusted as-is, recorded as a QUEUED upload
+  //   past beyond 24h         → "now" (unchanged: too stale to reason about,
+  //                             and outside the shift window below anyway)
+  //
+  // `clamped` keeps its original meaning — the client timestamp was REJECTED —
+  // so an audit reader can still tell the two apart, and `queued` names the new
+  // case explicitly rather than leaving it to be inferred from a time delta.
   const nowMs = Date.now()
   const clientMs = new Date(body.entered_at).getTime()
-  const clamped = !Number.isFinite(clientMs) || Math.abs(nowMs - clientMs) > CLOCK_SKEW_MS
+  const ageMs = Number.isFinite(clientMs) ? nowMs - clientMs : null
+  const clamped = ageMs === null
+    || ageMs < -CLOCK_SKEW_MS      // ahead of us by more than the skew
+    || ageMs > MAX_QUEUE_AGE_MS    // older than we are willing to believe
+  const queued = !clamped && ageMs > CLOCK_SKEW_MS
   const eventAt = clamped ? new Date(nowMs) : new Date(clientMs)
 
   // Region-flap dedup: one geofence event per profile+location per window.
@@ -210,6 +248,12 @@ export async function POST(request) {
         device_name: body.device_name || null,
         client_entered_at: body.entered_at,
         clamped,
+        // QUEUEDARRIVAL.1 — true when the arrival was accepted from the phone's
+        // offline queue rather than posted live. client_age_ms is recorded
+        // whatever the outcome, so a clamped-because-stale ping is tellable
+        // from a clamped-because-the-clock-is-ahead one.
+        queued,
+        client_age_ms: ageMs,
         ...(decision.kind === 'reentry' ? { reentry: true } : {}),
       },
     })
