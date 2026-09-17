@@ -145,7 +145,7 @@ const PUBLICATION_CHIP = {
   unpublished: { cls: 'bg-slate-500/10 text-slate-700 border-slate-500/30', Icon: CalendarOff },
 }
 
-export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) {
+export default function ScheduleCalendar({ user, onRangeChange, onDataChange, focusShift }) {
   // SCHEDULE-PERSIST.1 — week / month / view persisted in the URL so
   // refresh keeps the operator's position. Before this, the state
   // initialised from `new Date()` on every mount, so a page refresh
@@ -639,6 +639,71 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
     return { ok: false, error: data.error || 'Failed to save partial shift' }
   }
 
+  // CAL-UI-LOW.2 — "open the shift the Studio Overview just named".
+  //
+  // Two steps, because the block may not be loaded yet: navigate the
+  // calendar to the period holding that date, then open the block-detail
+  // dialog once the rows for that period are in hand.
+  //
+  // 🔴 The request is STATE, not a ref, and that is load-bearing. As a ref
+  // it worked only when the target sat in a week the calendar was not
+  // already showing — the resolver below would not re-run for a request
+  // that changed nothing it depended on, and the overview strip's days are
+  // BY CONSTRUCTION the days the calendar is showing, so the common case
+  // (the shift is right there in this week) silently did nothing. The
+  // integration test passed anyway, because its fixture day was two weeks
+  // out. A green test is not proof.
+  //
+  // Both updates are made in the same effect, so they land in one render:
+  // the resolver never sees the request against the OLD range.
+  //
+  // The view type is left alone on purpose: an operator working in Month
+  // view asked for a shift, not for a different calendar.
+  const [pendingShift, setPendingShift] = useState(null)
+  const lastFocusSeq = useRef(0)
+  useEffect(() => {
+    const seq = focusShift?.seq
+    if (!seq || seq === lastFocusSeq.current) return
+    lastFocusSeq.current = seq
+    const target = parseLocalDate(focusShift.date)
+    if (!target || !focusShift.blockId) return
+    if (viewType === 'month') setMonthStart(getMonthStart(target))
+    else setWeekStart(getMonday(target))
+    // `since` is the load count at the moment of asking — see below.
+    setPendingShift({ blockId: focusShift.blockId, date: focusShift.date, since: successCount })
+  }, [focusShift, viewType, successCount])
+
+  useEffect(() => {
+    if (!pendingShift) return
+    // The operator navigated somewhere else before the data landed — their
+    // last action wins, and a dialog arriving late over a different week
+    // would be worse than nothing.
+    if (pendingShift.date < rangeStart || pendingShift.date > rangeEnd) {
+      setPendingShift(null)
+      return
+    }
+    const block = blocks.find((b) => b.id === pendingShift.blockId)
+    if (block) {
+      setPendingShift(null)
+      // Multi-select turns block clicks into selection toggles; a request
+      // to OPEN one is unambiguous, so leave that mode rather than open a
+      // dialog the operator cannot act in.
+      if (selectMode) exitSelectMode()
+      setBlockDetail(block)
+      return
+    }
+    // Not loaded yet, or gone. Only call it missing once a load has
+    // SUCCEEDED since the request — resolving against `blocks` alone would
+    // read the PREVIOUS range's rows, which are still in state for the
+    // render between the date change and the fetch. A FAILED load leaves
+    // the request standing for the next one, and the roster's own error
+    // banner is already saying why.
+    if (successCount > pendingShift.since) {
+      setPendingShift(null)
+      showToast('That shift is no longer on the roster — it may have been deleted or moved.')
+    }
+  }, [pendingShift, blocks, successCount, rangeStart, rangeEnd, selectMode])
+
   // Refresh the modal's view when blocks state changes (after a
   // save fired fetchData).
   useEffect(() => {
@@ -863,39 +928,54 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
   return (
     <div ref={calendarRef}>
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div>
+      {/* CAL-UI-LOW.1 — the header row is a WRAPPING row.
+          It used to be a single `flex items-center justify-between`
+          with a non-wrapping action group, so every control past the
+          available width was pushed off the right edge of the page —
+          at phone width that is Publish, the one action the week view
+          exists for, with no horizontal scroll to reach it (the page
+          is `p-8`, so a 360px phone leaves 296px of content). Wrapping
+          here changes nothing on a desktop row that already fits; it
+          only decides where the overflow goes when it does not.
+          `items-center` is kept from the original so the desktop row is
+          pixel-identical (measured: `items-start` lifted the whole action
+          group 11px). Titles get `min-w-0` so a long studio name shrinks
+          instead of pushing the actions out, and each pill carries
+          `whitespace-nowrap` so the wrap happens BETWEEN controls
+          rather than inside a label. */}
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 mb-6">
+        <div className="min-w-0">
           <h2 className="text-2xl font-bold">Schedule</h2>
           <p className="text-sm text-un1t-subtle mt-1">
             {user.activeLocation?.name} — Staff roster
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div data-testid="schedule-toolbar" className="flex flex-wrap items-center gap-2">
           <Link
             href="/schedule/time-off"
-            className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30 transition-colors"
+            className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30 transition-colors whitespace-nowrap"
           >
             <CalendarOff size={14} /> Time Off
           </Link>
 
-          <div className="flex bg-un1t-surface border border-un1t-border rounded-lg overflow-hidden text-xs">
+          <div className="flex shrink-0 bg-un1t-surface border border-un1t-border rounded-lg overflow-hidden text-xs">
             <button
               type="button"
               onClick={() => setViewMode('my')}
-              className={`flex items-center gap-1.5 px-3 py-2 transition-colors ${viewMode === 'my' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'}`}
+              className={`flex items-center gap-1.5 px-3 py-2 whitespace-nowrap transition-colors ${viewMode === 'my' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'}`}
             >
               <User size={14} /> My Shifts
             </button>
             <button
               type="button"
               onClick={() => setViewMode('all')}
-              className={`flex items-center gap-1.5 px-3 py-2 transition-colors ${viewMode === 'all' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'}`}
+              className={`flex items-center gap-1.5 px-3 py-2 whitespace-nowrap transition-colors ${viewMode === 'all' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'}`}
             >
               <Users size={14} /> All Staff
             </button>
           </div>
 
-          <div className="flex bg-un1t-surface border border-un1t-border rounded-lg overflow-hidden text-xs">
+          <div className="flex shrink-0 bg-un1t-surface border border-un1t-border rounded-lg overflow-hidden text-xs">
             <button
               type="button"
               onClick={() => {
@@ -905,7 +985,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                 if (viewType === 'month') setWeekStart(weekStartForMonth(monthStart, weekStart))
                 setViewType('week')
               }}
-              className={`flex items-center gap-1.5 px-3 py-2 transition-colors ${viewType === 'week' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'}`}
+              className={`flex items-center gap-1.5 px-3 py-2 whitespace-nowrap transition-colors ${viewType === 'week' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'}`}
             >
               <CalendarDays size={14} /> Week
             </button>
@@ -916,7 +996,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                 if (viewType === 'week') setMonthStart(monthStartForWeek(weekStart))
                 setViewType('month')
               }}
-              className={`flex items-center gap-1.5 px-3 py-2 transition-colors ${viewType === 'month' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'}`}
+              className={`flex items-center gap-1.5 px-3 py-2 whitespace-nowrap transition-colors ${viewType === 'month' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'}`}
             >
               <CalendarRange size={14} /> Month
             </button>
@@ -935,7 +1015,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                   if (selectMode) exitSelectMode()
                   else setSelectMode(true)
                 }}
-                className={`flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border transition-colors ${
+                className={`flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border whitespace-nowrap transition-colors ${
                   selectMode
                     ? 'bg-amber-500/20 border-amber-500/50 text-amber-700'
                     : 'border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30'
@@ -954,7 +1034,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                 type="button"
                 onClick={handleCopyWeek}
                 disabled={copying}
-                className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30 transition-colors disabled:opacity-50"
+                className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30 transition-colors disabled:opacity-50 whitespace-nowrap"
                 title="Duplicate last week's shifts into this week"
               >
                 <Copy size={14} /> {copying ? 'Copying...' : 'Copy Last Week'}
@@ -963,7 +1043,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                 type="button"
                 onClick={handleCopyMonth}
                 disabled={copying}
-                className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30 transition-colors disabled:opacity-50"
+                className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30 transition-colors disabled:opacity-50 whitespace-nowrap"
                 title="Duplicate last month's shifts into this month"
               >
                 <Copy size={14} /> {copying ? 'Copying...' : 'Copy Last Month'}
@@ -978,7 +1058,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                   from the view where they think about templates. */}
               <Link
                 href="/settings/shifts"
-                className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30 transition-colors"
+                className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30 transition-colors whitespace-nowrap"
                 title="Add, edit, or retire the shift templates that build this roster"
               >
                 <Settings size={14} /> Manage templates
@@ -988,7 +1068,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                   type="button"
                   onClick={handlePublishClick}
                   disabled={publishing}
-                  className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white transition-colors disabled:opacity-50"
+                  className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white transition-colors disabled:opacity-50 whitespace-nowrap"
                 >
                   <Send size={14} /> {publishing ? 'Publishing...' : 'Publish'}
                 </button>

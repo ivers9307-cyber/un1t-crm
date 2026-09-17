@@ -7,14 +7,17 @@
 // changes its date range (parent ScheduleTabs holds the range state
 // and pipes it in via the `range` prop).
 //
-// Each day-card shows a compact summary; clicking opens a modal with
+// Each day-card shows a compact summary; clicking opens a dialog with
 // the full breakdown (event names + times, booking-type windows, who's
-// on leave, etc.). Read-only — modal is informational, all editing
-// happens in the source views (/events/[id]/edit, /bookings/event-
-// types/[id]/edit, /schedule).
+// on leave, etc.). Almost all of it is informational and editing happens
+// in the source views (/events/[id]/edit, /bookings/event-types/[id]/
+// edit). The ONE exception is the undermanned-shift rows: since
+// CAL-UI-LOW.2 each opens that shift in the calendar below, via the
+// `onOpenShift` prop — see the note on it.
 
 import { useState, useEffect } from 'react'
-import { Calendar, AlertCircle, Loader2, Flag, Palmtree, Users, X as XIcon, Clock, UserX } from 'lucide-react'
+import { Calendar, AlertCircle, Loader2, Flag, Palmtree, Users, Clock, UserX } from 'lucide-react'
+import { Modal } from '@/components/ui'
 
 const STATUS_STYLES = {
   red:   { border: 'border-red-500/60',    bg: 'bg-red-500/5',    label: 'Uncovered' },
@@ -43,7 +46,14 @@ function fmtTime(t) {
 // causes this strip to re-fetch in lockstep with the calendar, so
 // operators no longer need to hard-refresh to see updated coverage
 // numbers or under-min flags.
-export default function StudioOverviewStrip({ range, locationId, dataVersion = 0 }) {
+// CAL-UI-LOW.2 — `onOpenShift(date, blockId)` is how a row in the day
+// dialog reaches the shift it names. The strip itself owns no roster
+// state, so it hands the request to its parent (ScheduleRosterView),
+// which routes it to the calendar below: the calendar navigates to the
+// date and opens the SAME block-detail dialog a click on the card
+// opens. Before this the dialog named an undermanned shift and left
+// the operator to find it by eye.
+export default function StudioOverviewStrip({ range, locationId, dataVersion = 0, onOpenShift }) {
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -70,14 +80,6 @@ export default function StudioOverviewStrip({ range, locationId, dataVersion = 0
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [range?.from, range?.to, locationId, dataVersion])
-
-  // ESC closes modal — common modal UX, free win.
-  useEffect(() => {
-    if (!openDate) return
-    const onKey = (e) => { if (e.key === 'Escape') setOpenDate(null) }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [openDate])
 
   if (!range?.from || !range?.to) return null
   if (error) {
@@ -121,7 +123,19 @@ export default function StudioOverviewStrip({ range, locationId, dataVersion = 0
         </div>
       </div>
 
-      {openDay && <DayDetailModal day={openDay} onClose={() => setOpenDate(null)} />}
+      {openDay && (
+        <DayDetailModal
+          day={openDay}
+          onClose={() => setOpenDate(null)}
+          onOpenShift={onOpenShift && ((blockId) => {
+            // Close the summary first: the operator asked for the shift,
+            // and leaving this dialog stacked over the calendar's own
+            // block dialog would bury the thing they came for.
+            setOpenDate(null)
+            onOpenShift(openDay.date, blockId)
+          })}
+        />
+      )}
     </section>
   )
 }
@@ -194,11 +208,16 @@ function DayCard({ day, onClick }) {
   )
 }
 
-// Day-detail modal. Read-only summary; click-out + ESC + X all close.
-// Renders three sections: events (with start times), Calendly booking
-// types (with bookable windows for the day), and staffing (scheduled
-// count + who's on leave).
-function DayDetailModal({ day, onClose }) {
+// Day-detail dialog. Summary of the day; the undermanned-shift rows are
+// the one actionable part — each opens that shift in the calendar below.
+// Everything else is read-only (edit events at /events, booking types at
+// /bookings/event-types).
+//
+// CAL-UI-LOW.2 — built on the Modal primitive rather than a bespoke
+// fixed overlay, so it inherits the dialog contract: focus moves into
+// the panel on open, Tab is trapped inside it, Escape and the backdrop
+// close it, and focus returns to the day card that opened it.
+function DayDetailModal({ day, onClose, onOpenShift }) {
   const dt = new Date(day.date + 'T00:00:00')
   const longDate = dt.toLocaleDateString('en-IE', {
     weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
@@ -207,29 +226,10 @@ function DayDetailModal({ day, onClose }) {
   const supply = Math.max(0, day.staff_scheduled - day.staff_on_leave)
 
   return (
-    <div
-      className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4"
-      onClick={onClose}
-      role="dialog"
-      aria-modal="true"
-    >
-      <div
-        className="bg-un1t-surface border border-un1t-border rounded-lg max-w-md w-full max-h-[85vh] overflow-y-auto"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3 border-b border-un1t-border">
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-un1t-subtle">Studio overview</div>
-            <div className="text-base font-semibold text-un1t-text">{longDate}</div>
-          </div>
-          <button onClick={onClose} className="text-un1t-subtle hover:text-un1t-text p-1" title="Close (Esc)">
-            <XIcon size={18} />
-          </button>
-        </div>
-
+    <Modal open onClose={onClose} title={longDate} size="md">
+      <div>
         {/* Demand-vs-supply summary headline */}
-        <div className={`mx-5 mt-4 px-3 py-2 rounded-md border ${status.border} ${status.bg}`}>
+        <div className={`px-3 py-2 rounded-md border ${status.border} ${status.bg}`}>
           <div className="flex items-center justify-between text-xs">
             <span className={`uppercase tracking-wider font-semibold ${
               day.classification === 'red' ? 'text-red-700' :
@@ -252,18 +252,8 @@ function DayDetailModal({ day, onClose }) {
           <DetailSection icon={UserX} title="Undermanned shifts">
             <ul className="space-y-1.5">
               {day.under_min_blocks.map((b) => (
-                <li key={b.id} className="flex items-baseline justify-between gap-3 text-sm">
-                  <div className="min-w-0">
-                    <div className="text-un1t-text truncate">{b.label}</div>
-                    <div className="text-[10px] text-un1t-muted">
-                      <span className="inline-flex items-center gap-1">
-                        <Clock size={9} /> {b.time}
-                      </span>
-                    </div>
-                  </div>
-                  <span className="text-xs text-amber-700 tabular-nums shrink-0">
-                    {b.assigned} of {b.min} assigned
-                  </span>
+                <li key={b.id}>
+                  <UnderMinRow block={b} onOpen={onOpenShift && (() => onOpenShift(b.id))} />
                 </li>
               ))}
             </ul>
@@ -353,17 +343,53 @@ function DayDetailModal({ day, onClose }) {
           )}
         </DetailSection>
 
-        <div className="px-5 py-3 border-t border-un1t-border text-[11px] text-un1t-muted">
+        <div className="mt-4 pt-3 border-t border-un1t-border text-[11px] text-un1t-muted">
           Edit events at <code>/events</code>, booking types at <code>/bookings/event-types</code>, shifts inside the calendar below.
         </div>
       </div>
-    </div>
+    </Modal>
+  )
+}
+
+// One undermanned shift. A row is a real <button> when the strip has been
+// given somewhere to send the request (the calendar below), and plain text
+// when it has not — a control that looks clickable and does nothing is worse
+// than one that never offered.
+function UnderMinRow({ block, onOpen }) {
+  const body = (
+    <>
+      <div className="min-w-0">
+        <div className="text-un1t-text truncate">{block.label}</div>
+        <div className="text-[10px] text-un1t-muted">
+          <span className="inline-flex items-center gap-1">
+            <Clock size={9} aria-hidden="true" /> {block.time}
+          </span>
+        </div>
+      </div>
+      <span className="text-xs text-amber-700 tabular-nums shrink-0">
+        {block.assigned} of {block.min} assigned
+      </span>
+    </>
+  )
+  if (!onOpen) {
+    return <div className="flex items-baseline justify-between gap-3 text-sm">{body}</div>
+  }
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      data-testid="under-min-shift"
+      className="w-[calc(100%+1rem)] -mx-2 px-2 py-1 rounded-md flex items-baseline justify-between gap-3 text-sm text-left hover:bg-un1t-border/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-un1t-accent"
+    >
+      <span className="sr-only">Open shift: </span>
+      {body}
+    </button>
   )
 }
 
 function DetailSection({ icon: Icon, title, children }) {
   return (
-    <section className="px-5 py-4 border-t border-un1t-border first:border-t-0">
+    <section className="py-4 border-t border-un1t-border first:border-t-0">
       <h4 className="text-[10px] uppercase tracking-wider text-un1t-subtle font-semibold mb-2 inline-flex items-center gap-1.5">
         <Icon size={11} /> {title}
       </h4>
