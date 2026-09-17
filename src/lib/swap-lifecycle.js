@@ -123,12 +123,19 @@ export function resolveSwapTransition({ swap, requestedStatus, user, userLocatio
     if (swap.target_shift_id) {
       const reqProfile = swap.requester_shift?.profile_id
       const tgtProfile = swap.target_shift?.profile_id
+      // SWAPNOTIFY.1 — a reciprocal swap moves BOTH coaches' shifts, so both
+      // have to be told. Before this only the requester (decision_for_requester)
+      // was notified; the target (swap.target_id) heard nothing even though
+      // their own shift just changed hands too.
       return { ok: true, status: 200, effect: 'approved_swap', swapUpdates,
         assignmentOps: [
           { id: swap.requester_shift_id, set: { profile_id: tgtProfile, status: 'swapped' } },
           { id: swap.target_shift_id, set: { profile_id: reqProfile, status: 'swapped' } },
         ],
-        notify: [{ kind: 'decision_for_requester', to: [swap.requester_id] }] }
+        notify: [
+          { kind: 'decision_for_requester', to: [swap.requester_id] },
+          { kind: 'decision_for_taker', to: [swap.target_id] },
+        ] }
     }
     if (swap.target_id) {
       return { ok: true, status: 200, effect: 'approved_reassign', swapUpdates,

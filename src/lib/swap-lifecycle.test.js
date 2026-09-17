@@ -212,6 +212,15 @@ describe('resolveSwapTransition — manager approve finalisation', () => {
         { id: 'asg-tgt', set: { profile_id: 'req-1', status: 'swapped' } },
       ])
     )
+    // SWAPNOTIFY.1 — a reciprocal swap changes BOTH coaches' shifts; before
+    // this the target (swap.target_id) was never told their shift changed.
+    expect(r.notify).toEqual(
+      expect.arrayContaining([
+        { kind: 'decision_for_requester', to: ['req-1'] },
+        { kind: 'decision_for_taker', to: ['coach-2'] },
+      ])
+    )
+    expect(r.notify).toHaveLength(2)
   })
 
   it('drops the shift when approving an untargeted swap', () => {
