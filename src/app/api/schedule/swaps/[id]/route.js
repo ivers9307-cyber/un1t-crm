@@ -5,7 +5,8 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds, hasRoleAtLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { swapStatusSchema } from '@/lib/schemas'
-import { resolveSwapTransition, swapChangeLogEntries, reciprocalSwapError } from '@/lib/swap-lifecycle'
+import { resolveSwapTransition, swapChangeLogEntries, swapApprovalRpc, swapApprovalError, swapIncomingMoves, SWAP_CONFLICTS_CODE } from '@/lib/swap-lifecycle'
+import { findSwapConflicts } from '@/lib/swap-conflicts'
 import { notifyUsersOnce, notifyUsersAtRolesOnce } from '@/lib/push-dedup'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { hasPermissionForLocation } from '@/lib/permissions'
@@ -17,6 +18,9 @@ import { logWarn } from '@/lib/log'
 const SwapReviewSchema = z.object({
   status: swapStatusSchema,
   review_note: z.string().max(2000).nullable().optional(),
+  // SWAPS.2 — the manager has seen the leave / same-day clash warnings for
+  // this approval and wants it anyway. Ignored on every other transition.
+  confirm_conflicts: z.boolean().optional(),
 })
 
 // PUT /api/schedule/swaps/:id — drive a swap through its lifecycle.
@@ -44,8 +48,11 @@ export async function PUT(request, props) {
   // SWAPAUDIT.1 — the target_shift embed carries the same block fields: a
   // reciprocal swap audits BOTH blocks and needs each one's date + roster
   // status to decide whether its rows are stamped straight away.
+  // SWAPS.2 — both block embeds also carry the block's times: the leave /
+  // clash check compares them with the incoming coach's other shifts that day
+  // (a moved shift loses its overrides, so the block's times are the window).
   const { data: swap } = await db.from('shift_swap_requests')
-    .select('*, requester_shift:shift_assignments!requester_shift_id(id, profile_id, block_id, block:shift_blocks!block_id(id, location_id, block_date, rosters:roster_id(status))), target_shift:shift_assignments!target_shift_id(id, profile_id, block_id, block:shift_blocks!block_id(id, location_id, block_date, rosters:roster_id(status)))')
+    .select('*, requester_shift:shift_assignments!requester_shift_id(id, profile_id, block_id, block:shift_blocks!block_id(id, location_id, block_date, start_time, end_time, rosters:roster_id(status))), target_shift:shift_assignments!target_shift_id(id, profile_id, block_id, block:shift_blocks!block_id(id, location_id, block_date, start_time, end_time, rosters:roster_id(status)))')
     .eq('id', params.id)
     .single()
 
@@ -68,40 +75,44 @@ export async function PUT(request, props) {
     return NextResponse.json({ success: false, error: decision.error }, { status: decision.status })
   }
 
-  // ROSTER-FIX.8a — `shift_swap_requests.requester_shift_id` FKs
-  // `shift_assignments(id) ON DELETE SET NULL` as of mig 603 (it was ON DELETE
-  // CASCADE from mig 237), so an approved DROP no longer takes this swap row
-  // with it: the history survives the deletion with a null shift pointer, and
-  // EITHER ORDER is now safe. The order below is kept as it is — stamp the
-  // swap row first, then apply the assignment ops — because it is what the
-  // tests pin and because it still reads the captured `swap` for the audit
-  // row rather than depending on a re-read.
-  //
-  // ROSTER-FIX.1 — the cost of that ordering: if the assignment op fails after
-  // the swap row is already `approved` and the change-log row is written, the
-  // audit trail says a shift was dropped that the coach is in fact still on.
-  // The caller gets a 400, so nothing claims success, but the partial state
-  // outlives the request and only a log says so — see the logWarn below.
-  //
-  // SWAPATOMIC.1 — none of that applies to a RECIPROCAL swap any more. It used
-  // to be the swap-row update below plus two separate assignment UPDATEs, so a
-  // failure on the second left one coach moved, the other not, the swap
-  // approved and no audit row. Mig 612's approve_reciprocal_shift_swap does
-  // the approval and both moves in one transaction (locks, stale/same-block/
-  // conflict checks, overlap guard judged on the final state), so the route
-  // skips its own swap-row update and assignment loop for that effect.
+  // SWAPS.2 — an approval that puts a coach onto a shift re-checks that coach
+  // (both coaches, for a reciprocal swap) for approved leave covering the date
+  // and for another live shift overlapping it that day, at any studio. A
+  // conflict refuses with 409 and the sentences, unless the manager has
+  // confirmed (confirm_conflicts) — a coach legitimately covering while on a
+  // half-day, or floating across adjacent slots, is the manager's call, so
+  // this is a confirm step and not a hard stop. A drop moves nobody onto
+  // anything and is never checked. A check that could not read counts as a
+  // conflict here (check_failed): a manager is asked, never silently waved
+  // through on an unread check.
+  if ((decision.effect === 'approved_reassign' || decision.effect === 'approved_swap') && body.confirm_conflicts !== true) {
+    const conflicts = await findSwapConflicts(db, swapIncomingMoves(swap), { viewerId: user.id })
+    if (conflicts.length > 0) {
+      return NextResponse.json({
+        success: false,
+        code: SWAP_CONFLICTS_CODE,
+        error: conflicts.map((c) => c.message).join(' '),
+        conflicts,
+      }, { status: 409 })
+    }
+  }
+
+  // SWAPATOMIC.1 (mig 612) / SWAPS.2 (mig 615) — every approved effect is
+  // ONE RPC: the swap-row approval and the assignment write (reciprocal move,
+  // reassign move, or drop delete) happen in one transaction, after the
+  // function has locked the rows and re-checked them against what this
+  // request read (open, stale, conflict). Before SWAPS.2 a reassign or drop
+  // stamped the swap `approved` and THEN wrote the assignment as a separate
+  // call, so a failed write left a terminal approved swap with nobody moved.
+  // The moves also clear the previous coach's paid-window overrides and
+  // arrival stamp (SWAP_MOVE_CLEARS). Every other transition is a plain
+  // swap-row update.
   let data
-  if (decision.effect === 'approved_swap') {
-    const { data: approved, error: rpcErr } = await db.rpc('approve_reciprocal_shift_swap', {
-      p_swap_id: params.id,
-      p_reviewed_by: decision.swapUpdates.reviewed_by,
-      p_reviewed_at: decision.swapUpdates.reviewed_at,
-      p_review_note: decision.swapUpdates.review_note,
-      p_requester_profile: swap.requester_shift?.profile_id ?? null,
-      p_target_profile: swap.target_shift?.profile_id ?? null,
-    })
+  const rpc = swapApprovalRpc(decision.effect, params.id, swap, decision.swapUpdates)
+  if (rpc) {
+    const { data: approved, error: rpcErr } = await db.rpc(rpc.fn, rpc.args)
     if (rpcErr) {
-      const { status, error: msg } = reciprocalSwapError(rpcErr)
+      const { status, error: msg } = swapApprovalError(rpcErr)
       return NextResponse.json({ success: false, error: msg }, { status })
     }
     data = approved
@@ -121,59 +132,36 @@ export async function PUT(request, props) {
   // re-publish/approve covering that date picks it up via
   // collectUnnotifiedChanges and sends a SECOND "Roster updated" for the
   // same drop. dropLog/dropStamped carry the row's id (and whether it has
-  // already been stamped) out of this loop and into dispatch.
+  // already been stamped) into dispatch.
   let dropLog = null
   let dropStamped = false
 
-  // Assignment writes are awaited so a failure surfaces. A reciprocal swap's
-  // moves already happened inside the RPC above (SWAPATOMIC.1).
-  const ops = decision.effect === 'approved_swap' ? [] : decision.assignmentOps
-  for (const op of ops) {
-    // ROSTER-FIX.1 (D4) — audit the drop BEFORE the row goes. After the delete
-    // there is no assignment and no embed left to describe what happened
-    // (ROSTER-FIX.8a: the swap row itself now survives, with a null
-    // requester_shift_id); the only trace of a coach losing a shift would
-    // otherwise be its absence.
-    let block = null
-    if (op.delete) {
-      block = swap.requester_shift?.block
-      // ROSTER-FIX.1 — isPublished is passed TRUE unconditionally, unlike
-      // every other logRosterChange caller. logRosterChange no-ops on a draft
-      // roster because a draft edit rides the first-publish notification, but
-      // a drop is a DELETE: on a draft there is no other record that the
-      // assignment ever existed. The real roster status rides in details so a
-      // reader can still tell the two apart (and re-publish notification
-      // stays correct — the coach is notified either way).
-      dropLog = await logRosterChange(db, {
-        isPublished: true,
-        locationId: block?.location_id || swap.location_id,
-        blockId: block?.id || swap.requester_shift?.block_id || null,
-        blockDate: block?.block_date || null,
-        actorId: user.id,
-        coachId: swap.requester_shift?.profile_id || swap.requester_id,
-        action: 'unassigned',
-        details: { via: 'swap_drop', swap_id: swap.id, roster_status: block?.rosters?.status ?? null },
-      })
-    }
-    const q = op.delete
-      ? db.from('shift_assignments').delete().eq('id', op.id)
-      : db.from('shift_assignments').update(op.set).eq('id', op.id)
-    const { error: opErr } = await q
-    if (opErr) {
-      // ROSTER-FIX.1 — a failed DELETE here leaves the swap `approved` and a
-      // roster_change_log row claiming the coach was unassigned, while the
-      // assignment is still there. Nothing retries, and the audit row is the
-      // thing a manager trusts, so say so structurally rather than let the
-      // 400 be the only trace.
-      if (op.delete) {
-        logWarn('swaps', 'approved drop: assignment delete failed after swap approved + change logged', {
-          swapId: swap.id,
-          assignmentId: op.id,
-          err: opErr.message,
-        })
-      }
-      return NextResponse.json({ success: false, error: opErr.message }, { status: 400 })
-    }
+  if (decision.effect === 'approved_drop') {
+    // ROSTER-FIX.1 (D4) — the only trace of a coach losing a shift, since the
+    // assignment is gone. SWAPS.2 — written AFTER the atomic RPC succeeded
+    // (it used to be written before a separate DELETE, so a failed delete
+    // left an audit row claiming an unassignment that never happened), from
+    // the swap + block embed read at the top of this request: that copy
+    // outlives the deleted row, which is all the old "before" ordering was
+    // for.
+    const block = swap.requester_shift?.block
+    // ROSTER-FIX.1 — isPublished is passed TRUE unconditionally, unlike
+    // every other logRosterChange caller. logRosterChange no-ops on a draft
+    // roster because a draft edit rides the first-publish notification, but
+    // a drop is a DELETE: on a draft there is no other record that the
+    // assignment ever existed. The real roster status rides in details so a
+    // reader can still tell the two apart (and re-publish notification
+    // stays correct — the coach is notified either way).
+    dropLog = await logRosterChange(db, {
+      isPublished: true,
+      locationId: block?.location_id || swap.location_id,
+      blockId: block?.id || swap.requester_shift?.block_id || null,
+      blockDate: block?.block_date || null,
+      actorId: user.id,
+      coachId: swap.requester_shift?.profile_id || swap.requester_id,
+      action: 'unassigned',
+      details: { via: 'swap_drop', swap_id: swap.id, roster_status: block?.rosters?.status ?? null },
+    })
     // SWAPNOTIFY.1 — the coach must never get "Roster updated" for a shift
     // they never saw published (a draft) or one that has already happened
     // (a past block_date). Decide that UNCONDITIONALLY here, right after the
@@ -181,7 +169,7 @@ export async function PUT(request, props) {
     // "Swap approved" push below manages to deliver. A draft/past drop is
     // stamped either way; a published, future one is left for dispatch to
     // stamp only once delivery is confirmed.
-    if (op.delete && dropLog?.logged && dropLog.id) {
+    if (dropLog?.logged && dropLog.id) {
       // A missing block/roster embed reads as "not published" here (isDraft
       // defaults true), same as every other logRosterChange caller treats an
       // unreadable roster status — fail toward "stamp it", never toward
@@ -197,13 +185,24 @@ export async function PUT(request, props) {
 
   // SWAPAUDIT.1 — an approved reassign / reciprocal swap moves coaches
   // between shifts, and on a published roster that move has to be in the
-  // audit trail like any other edit. Written only now, after every
-  // assignment op has succeeded (a failed op returned 400 above), so the log
-  // never claims a move that did not happen. Best-effort: nothing here can
-  // fail the approval.
+  // audit trail like any other edit. Written only now, after the RPC
+  // succeeded (a refused one returned above), so the log never claims a move
+  // that did not happen. Best-effort: nothing here can fail the approval.
   let moveLogs = null
   if (decision.effect === 'approved_reassign' || decision.effect === 'approved_swap') {
     moveLogs = await logSwapMoves(db, decision.effect, swap, user)
+  }
+
+  // SWAPS.2 — a coach claiming or accepting a shift is told if they are on
+  // approved leave that day or already on an overlapping shift (any studio).
+  // Advisory only: the claim has already been saved above and stands; the
+  // manager's approval is where it is enforced. Only the claiming coach's own
+  // conflicts — never a colleague's leave — and an unreadable check is left
+  // out rather than shown to a coach as a warning.
+  let warnings = null
+  if (decision.effect === 'claimed' || decision.effect === 'accepted') {
+    const conflicts = await findSwapConflicts(db, swapIncomingMoves(swap, { takerId: user.id, takerOnly: true }), { viewerId: user.id })
+    warnings = conflicts.filter((c) => c.kind !== 'check_failed').map((c) => c.message)
   }
 
   // ROSTER-FIX.8f — best-effort notifications, never block or fail the response.
@@ -215,7 +214,7 @@ export async function PUT(request, props) {
   after(() => dispatchSwapNotifications(db, decision, swap, user, { dropLog, dropStamped, moveLogs })
     .catch(err => console.error('[swaps] notify failed', err)))
 
-  return NextResponse.json({ success: true, data })
+  return NextResponse.json(warnings ? { success: true, data, warnings } : { success: true, data })
 }
 
 // SWAPAUDIT.1 — write the roster_change_log rows for an approved reassign
