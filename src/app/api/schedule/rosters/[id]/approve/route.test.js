@@ -26,6 +26,12 @@ vi.mock('@/lib/auth', () => ({
   getUserLocationIds: (user) => (user?.locations || []).map((l) => l.id),
 }))
 vi.mock('@/lib/permissions', () => ({ hasPermissionForLocation: vi.fn(() => true) }))
+// BUDGETAPPROVE.1 — only the projection is stubbed; the overlap / supersede
+// helpers stay REAL, as before. projectionChanged stays real too.
+vi.mock('@/lib/roster-publish', async (importOriginal) => ({
+  ...(await importOriginal()),
+  projectPublishImpact: vi.fn(),
+}))
 vi.mock('@/lib/roster-notify', () => ({
   notifyStaffOfPublish: vi.fn(() => Promise.resolve()),
   publishNotifyRowsForBlocks: vi.fn(() => Promise.resolve([])),
@@ -36,7 +42,15 @@ const { createServerClient } = await import('@/lib/supabase')
 const { getCurrentUser } = await import('@/lib/auth')
 const { hasPermissionForLocation } = await import('@/lib/permissions')
 const { notifyStaffOfPublish, renotifyChangedCoaches } = await import('@/lib/roster-notify')
+const { projectPublishImpact } = await import('@/lib/roster-publish')
 const { POST } = await import('./route.js')
+
+const FRESH = {
+  monthStart: '2026-05-01', monthEnd: '2026-05-31', monthlyBudgetEur: 5000,
+  alreadyPublishedEur: 4400, periodProjectedEur: 689.95, monthProjectedTotalEur: 5089.95,
+  remainingEur: -89.95, overBudget: true, overrunEur: 89.95, blockCount: 7,
+  months: [],
+}
 
 const PROPS = { params: Promise.resolve({ id: 'roster-1' }) }
 
@@ -146,6 +160,8 @@ beforeEach(() => {
   getCurrentUser.mockReset()
   hasPermissionForLocation.mockReset()
   hasPermissionForLocation.mockReturnValue(true)
+  projectPublishImpact.mockReset()
+  projectPublishImpact.mockResolvedValue(FRESH)
   notifyStaffOfPublish.mockClear()
   renotifyChangedCoaches.mockClear()
   getCurrentUser.mockResolvedValue({ id: 'owner-1', role: 'owner', locations: [{ id: 'loc-1' }] })
@@ -435,5 +451,117 @@ describe('POST /api/schedule/rosters/[id]/approve — supersede', () => {
     const body = await res.json()
     expect(body.warning).toMatch(/deadlock detected/)
     expect(body.warning).toMatch(/read as unpublished/)
+  })
+})
+
+// BUDGETAPPROVE.1 — approval re-runs the projection. The stored figures are a
+// snapshot from when the manager hit publish (drafts have waited 218 hours),
+// so the sign-off has to be recorded against the numbers as they stand now.
+describe('POST /api/schedule/rosters/[id]/approve — re-projection', () => {
+  it('re-projects the roster\'s own location and period, and stores the fresh figures on the flip', async () => {
+    const { db, updates } = buildDb({ roster: draft({ projected_contractor_eur: 689.95, budget_at_publish_eur: 5000 }) })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST({}, PROPS)
+    expect(res.status).toBe(200)
+    expect(projectPublishImpact).toHaveBeenCalledWith(db, { locationId: 'loc-1', periodStart: '2026-05-04', periodEnd: '2026-05-10' })
+    const flip = updates.find((u) => u.payload.status === 'published')
+    expect(flip.payload).toMatchObject({ projected_contractor_eur: 689.95, budget_at_publish_eur: 5000 })
+
+    const body = await res.json()
+    expect(body.impact).toEqual(FRESH)
+    expect(body.projection_changed).toBe(false)
+    expect(body.previous_projection).toBeUndefined()
+  })
+
+  it('a stale snapshot is flagged with BOTH figures, and the approval still goes through', async () => {
+    // Numeric columns come back from PostgREST as strings.
+    const { db, updates } = buildDb({ roster: draft({ projected_contractor_eur: '99.96', budget_at_publish_eur: '5000' }) })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST({}, PROPS)
+    // The approver is the budget authority: a moved number never refuses.
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.success).toBe(true)
+    expect(body.projection_changed).toBe(true)
+    expect(body.previous_projection).toEqual({ projected_contractor_eur: 99.96, budget_at_publish_eur: 5000 })
+    expect(body.current_projection).toEqual({ projected_contractor_eur: 689.95, budget_at_publish_eur: 5000 })
+    expect(updates.find((u) => u.payload.status === 'published').payload.projected_contractor_eur).toBe(689.95)
+  })
+
+  it('re-projects AFTER the gates: a refused caller never costs a projection', async () => {
+    hasPermissionForLocation.mockReturnValue(false)
+    const { db } = buildDb({ roster: draft() })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST({}, PROPS)
+    expect(res.status).toBe(403)
+    expect(projectPublishImpact).not.toHaveBeenCalled()
+  })
+
+  it('a projection that throws does not block the approval and leaves the stored figures alone', async () => {
+    projectPublishImpact.mockRejectedValue(new Error('Block lookup failed: timeout'))
+    const { db, updates } = buildDb({ roster: draft({ projected_contractor_eur: 99.96, budget_at_publish_eur: 5000 }) })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST({}, PROPS)
+    expect(res.status).toBe(200)
+    const flip = updates.find((u) => u.payload.status === 'published')
+    expect(flip.payload).not.toHaveProperty('projected_contractor_eur')
+    const body = await res.json()
+    expect(body.projection_changed).toBe(false)
+    expect(body.projection_error).toMatch(/timeout/)
+  })
+})
+
+// BUDGETAPPROVE.1 — approver authority resolves at the ROSTER's location. Run
+// the REAL permission resolver here: the mocked one answers whatever it is
+// told, which is how a wrong-studio lookup would sail through.
+describe('POST /api/schedule/rosters/[id]/approve — approver role at the roster\'s studio', () => {
+  async function realPermission() {
+    const actual = await vi.importActual('@/lib/permissions')
+    hasPermissionForLocation.mockImplementation(actual.hasPermissionForLocation)
+  }
+
+  it('an owner at another studio who is head coach at the roster\'s studio is refused', async () => {
+    await realPermission()
+    // Active studio is loc-2, where they own it, so user.role reads 'owner'.
+    getCurrentUser.mockResolvedValue({
+      id: 'split-1', role: 'owner', profileRole: 'head_coach',
+      locations: [{ id: 'loc-1', role: 'head_coach' }, { id: 'loc-2', role: 'owner' }],
+      rolesByLocation: { 'loc-1': 'head_coach', 'loc-2': 'owner' },
+      assignmentsByLocation: {
+        'loc-1': { role: 'head_coach', permissions: {} },
+        'loc-2': { role: 'owner', permissions: {} },
+      },
+      roleTemplatesByLocation: {},
+    })
+    const { db, updates } = buildDb({ roster: draft() })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST({}, PROPS)
+    expect(res.status).toBe(403)
+    expect(updates).toHaveLength(0)
+  })
+
+  it('the same person approves at the studio they own, whatever studio is active', async () => {
+    await realPermission()
+    getCurrentUser.mockResolvedValue({
+      id: 'split-2', role: 'head_coach', profileRole: 'head_coach',
+      locations: [{ id: 'loc-1', role: 'owner' }, { id: 'loc-2', role: 'head_coach' }],
+      rolesByLocation: { 'loc-1': 'owner', 'loc-2': 'head_coach' },
+      assignmentsByLocation: {
+        'loc-1': { role: 'owner', permissions: {} },
+        'loc-2': { role: 'head_coach', permissions: {} },
+      },
+      roleTemplatesByLocation: {},
+    })
+    const { db, updates } = buildDb({ roster: draft() })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST({}, PROPS)
+    expect(res.status).toBe(200)
+    expect(updates.find((u) => u.payload.status === 'published').payload.over_budget_approval_by).toBe('split-2')
   })
 })
