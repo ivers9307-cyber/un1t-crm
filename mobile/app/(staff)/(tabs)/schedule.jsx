@@ -33,7 +33,7 @@ import {
 } from '../../../lib/schedule-refresh'
 import { canMobile } from '../../../lib/permissions'
 import { useIsTablet } from '../../../lib/use-is-tablet'
-import { effShiftStart, effShiftEnd, teamRosterForDay, initials } from '../../../lib/schedule-team'
+import { effShiftStart, effShiftEnd, blockStart as blockDefaultStart, blockEnd as blockDefaultEnd, teamRosterForDay, initials } from '../../../lib/schedule-team'
 import { canAdjustShiftTimes, canCancelTimeOff, MANAGER_ROLES } from '../../../lib/schedule-manage'
 import ManageMode from '../../../components/schedule/ManageMode'
 
@@ -280,8 +280,11 @@ function ShiftRow({ shift, onPress, onLongPress }) {
         </Text>
       </View>
       {adjusted && (
+        // MOBILESCHED.2 — the /shifts row carries the block's time as
+        // block_start_time (no top-level start_time), so this read the
+        // template's hours and labelled them the block default.
         <Text className="text-[11px] text-un1t-subtle mt-0.5 italic">
-          Block default {timeRange(shift.start_time || tpl?.start_time, shift.end_time || tpl?.end_time)}
+          Block default {timeRange(blockDefaultStart(shift), blockDefaultEnd(shift))}
           {shift.partial_reason ? ` · ${shift.partial_reason}` : ''}
         </Text>
       )}
@@ -729,8 +732,8 @@ function AdjustSheet({ shift, onClose, onSaved, locationId }) {
   // default is only a fallback. Comparing an edit against the template meant a
   // block whose time a manager had moved silently saved `null` (= inherit the
   // template) instead of the coach's actual window.
-  const blockStart = (shift?.block_start_time || shift?.shift_templates?.start_time || '').slice(0, 5)
-  const blockEnd = (shift?.block_end_time || shift?.shift_templates?.end_time || '').slice(0, 5)
+  const blockStart = (blockDefaultStart(shift) || '').slice(0, 5)
+  const blockEnd = (blockDefaultEnd(shift) || '').slice(0, 5)
   const initialStart = (shift?.start_time_override || '').slice(0, 5) || blockStart
   const initialEnd = (shift?.end_time_override || '').slice(0, 5) || blockEnd
 
@@ -743,8 +746,8 @@ function AdjustSheet({ shift, onClose, onSaved, locationId }) {
   // Reset fields whenever a new shift is opened.
   useEffect(() => {
     if (!shift) return
-    setStart((shift.start_time_override || '').slice(0, 5) || (shift.block_start_time || shift.shift_templates?.start_time || '').slice(0, 5))
-    setEnd((shift.end_time_override || '').slice(0, 5) || (shift.block_end_time || shift.shift_templates?.end_time || '').slice(0, 5))
+    setStart((shift.start_time_override || '').slice(0, 5) || (blockDefaultStart(shift) || '').slice(0, 5))
+    setEnd((shift.end_time_override || '').slice(0, 5) || (blockDefaultEnd(shift) || '').slice(0, 5))
     setReason(shift.partial_reason || '')
     setError(null)
   }, [shift])

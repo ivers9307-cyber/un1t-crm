@@ -434,6 +434,45 @@ describe('fetchPersonalDashboardData — draft shifts (D1)', () => {
     const res = await fetchPersonalDashboardData(db, 'p1')
     expect(res.data.monthShifts.map((s) => s.id)).toEqual(['pub'])
   })
+
+  // MOBILESCHED.2 — the block's own times ride along, and display/sort/total
+  // at them rather than at the template's.
+  it('carries the block times and totals hours at them, not the template', async () => {
+    const moved = { ...block('published'), start_time: '07:00:00', end_time: '12:00:00', shift_templates: { name: 'AM', start_time: '06:00:00', end_time: '14:00:00' } }
+    const db = makePersonalDb({
+      shift_assignments: {
+        data: [{ id: 'm', profile_id: 'p1', start_time_override: null, end_time_override: null, status: 'scheduled', shift_blocks: moved }],
+        error: null,
+      },
+    })
+    const res = await fetchPersonalDashboardData(db, 'p1')
+    expect(res.data.monthShifts[0]).toMatchObject({ block_start_time: '07:00:00', block_end_time: '12:00:00' })
+    expect(res.data.hoursThisMonth).toBe(5)
+  })
+
+  // MOBILESCHED.2 — the swaps-targeting-me read fed a key (pendingSwapsForMe)
+  // no surface rendered; the mobile Today card gets that list from
+  // /api/schedule/swaps?for_me=1. It must stay gone, not come back on a merge.
+  it('reads posted swaps only, and returns no pendingSwapsForMe', async () => {
+    const tables = []
+    const selects = []
+    const base = makePersonalDb({})
+    const db = {
+      from(table) {
+        tables.push(table)
+        const b = base.from(table)
+        const sel = b.select
+        b.select = function (cols) { selects.push([table, cols]); return sel.call(this) }
+        return b
+      },
+    }
+    const res = await fetchPersonalDashboardData(db, 'p1')
+    expect(res.success).toBe(true)
+    expect(tables.filter((t) => t === 'shift_swap_requests')).toHaveLength(1)
+    expect(selects.find(([t]) => t === 'shift_swap_requests')[1]).not.toMatch(/requester_id,/)
+    expect(res.data).not.toHaveProperty('pendingSwapsForMe')
+    expect(res.data).toHaveProperty('myPostedSwaps')
+  })
 })
 
 // ROSTER-FIX.1 (D2) — the unstaffed-blocks alert used to select

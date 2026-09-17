@@ -234,7 +234,7 @@ export function freshVerdict(verdict, nowMs) {
 
 /**
  * The shift row reduced to the fields Home renders — shiftTimeLabel's
- * override → template resolution, the template name, and the location chip.
+ * override → block → template resolution, the template name, and the location chip.
  * `profiles`, `notes`, the full `shift_templates (*)` row and the rest are
  * dropped: SecureStore's per-value limit is ~2 KB and a week of raw rows
  * blows it (a failed write is silent, so smaller is the whole game).
@@ -249,6 +249,11 @@ export function slimShiftsForCache(shifts) {
     const row = { id: s.id, shift_date: s.shift_date }
     if (s.start_time_override) row.start_time_override = s.start_time_override
     if (s.end_time_override) row.end_time_override = s.end_time_override
+    // MOBILESCHED.2 — the block's own times, which shiftTimeLabel reads before
+    // the template's; without them a cached paint showed template hours for a
+    // block edited away from its template until the fetch landed.
+    if (s.block_start_time) row.block_start_time = s.block_start_time
+    if (s.block_end_time) row.block_end_time = s.block_end_time
     if (s.location_id) row.location_id = s.location_id
     if (isPlainObject(s.locations)) row.locations = { id: s.locations.id, name: s.locations.name }
     if (isPlainObject(s.shift_templates)) {
