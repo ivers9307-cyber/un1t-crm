@@ -9,10 +9,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => ({})) }))
-vi.mock('@/lib/auth', () => ({
-  getCurrentUser: vi.fn(),
-  getUserLocationIds: vi.fn(),
-}))
+vi.mock('@/lib/auth', async (importOriginal) => {
+  const real = await importOriginal()
+  return {
+    getCurrentUser: vi.fn(),
+    getUserLocationIds: vi.fn(),
+    // SCHEDROLES.1 — REAL: the role at location_id is under test.
+    hasRoleAtLocation: real.hasRoleAtLocation,
+    hasRoleAtAnyLocation: real.hasRoleAtAnyLocation,
+  }
+})
 vi.mock('@/lib/roster-summary-server', () => ({
   computeMonthlyContractorSpend: vi.fn(),
 }))
@@ -46,13 +52,13 @@ describe('GET /api/schedule/contractor-spend — auth', () => {
   })
 
   it('403 when caller is not in MANAGER_ROLES (staff)', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'staff' })
+    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'staff', profileRole: 'staff', rolesByLocation: { [LOC]: 'staff' } })
     const res = await GET(buildReq(okParams))
     expect(res.status).toBe(403)
   })
 
   it('403 when caller is a manager but not a member of the requested location', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'head_coach' })
+    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'head_coach', profileRole: 'staff', rolesByLocation: { 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb': 'head_coach' } })
     getUserLocationIds.mockReturnValue(['bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'])
     const res = await GET(buildReq(okParams))
     expect(res.status).toBe(403)
@@ -60,7 +66,7 @@ describe('GET /api/schedule/contractor-spend — auth', () => {
   })
 
   it('lets a master through without a membership check', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'master' })
+    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'master', profileRole: 'master', rolesByLocation: {} })
     computeMonthlyContractorSpend.mockResolvedValue({
       monthStartIso: '2026-05-01', monthEndIso: '2026-05-31',
       contractorCostEur: 0, fteImplicitCostEur: 0, monthlyBudgetEur: null,
@@ -72,7 +78,7 @@ describe('GET /api/schedule/contractor-spend — auth', () => {
   })
 
   it('lets a head_coach who is a member of the location through', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'head_coach' })
+    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'head_coach', profileRole: 'staff', rolesByLocation: { [LOC]: 'head_coach' } })
     getUserLocationIds.mockReturnValue([LOC])
     computeMonthlyContractorSpend.mockResolvedValue({
       monthStartIso: '2026-05-01', monthEndIso: '2026-05-31',
@@ -85,9 +91,41 @@ describe('GET /api/schedule/contractor-spend — auth', () => {
   })
 })
 
+// SCHEDROLES.1 — head coach at LOC, plain staff at LOC_B. The route read
+// `user.role` (the ACTIVE studio's) and then checked only membership.
+describe('GET /api/schedule/contractor-spend — role at location_id (SCHEDROLES.1)', () => {
+  const LOC_B = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'
+  const mixed = (active) => ({
+    id: 'mix', role: active === LOC ? 'head_coach' : 'staff', profileRole: 'staff',
+    activeLocation: { id: active },
+    rolesByLocation: { [LOC]: 'head_coach', [LOC_B]: 'staff' },
+  })
+  beforeEach(() => {
+    getUserLocationIds.mockReturnValue([LOC, LOC_B])
+    computeMonthlyContractorSpend.mockResolvedValue({ contractorCostEur: 1 })
+  })
+
+  it('refuses the studio where the caller is staff, and computes nothing', async () => {
+    getCurrentUser.mockResolvedValue(mixed(LOC))
+    const res = await GET(buildReq({ location_id: LOC_B, reference_date: '2026-05-01' }))
+    expect(res.status).toBe(403)
+    expect(computeMonthlyContractorSpend).not.toHaveBeenCalled()
+  })
+
+  it('allows the studio the caller manages', async () => {
+    getCurrentUser.mockResolvedValue(mixed(LOC))
+    expect((await GET(buildReq(okParams))).status).toBe(200)
+  })
+
+  it('still allows it with the ACTIVE studio set to the one where the caller is staff', async () => {
+    getCurrentUser.mockResolvedValue(mixed(LOC_B))
+    expect((await GET(buildReq(okParams))).status).toBe(200)
+  })
+})
+
 describe('GET — query validation', () => {
   beforeEach(() => {
-    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'master' })
+    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'master', profileRole: 'master', rolesByLocation: {} })
   })
 
   it('400 when location_id is missing', async () => {
@@ -113,7 +151,7 @@ describe('GET — query validation', () => {
 
 describe('GET — success + error envelopes', () => {
   beforeEach(() => {
-    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'master' })
+    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'master', profileRole: 'master', rolesByLocation: {} })
   })
 
   it('returns the aggregate from computeMonthlyContractorSpend', async () => {

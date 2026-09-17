@@ -8,10 +8,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logInfo: vi.fn(), logError: vi.fn() }))
-vi.mock('@/lib/auth', () => ({
-  getCurrentUser: vi.fn(),
-  getUserLocationIds: vi.fn((user) => (user.locations || []).map((l) => l.id)),
-}))
+vi.mock('@/lib/auth', async (importOriginal) => {
+  const real = await importOriginal()
+  return {
+    getCurrentUser: vi.fn(),
+    getUserLocationIds: vi.fn((user) => (user.locations || []).map((l) => l.id)),
+    // SCHEDROLES.1 — REAL: the role at the block's studio is under test.
+    hasRoleAtLocation: real.hasRoleAtLocation,
+    hasRoleAtAnyLocation: real.hasRoleAtAnyLocation,
+  }
+})
 
 const { createServerClient } = await import('@/lib/supabase')
 const { getCurrentUser } = await import('@/lib/auth')
@@ -58,7 +64,7 @@ const params = { params: Promise.resolve({ id: 'blk-1' }) }
 
 beforeEach(() => {
   vi.clearAllMocks()
-  getCurrentUser.mockResolvedValue({ id: 'mgr-1', role: 'manager', locations: [{ id: LOC }] })
+  getCurrentUser.mockResolvedValue({ id: 'mgr-1', role: 'manager', profileRole: 'manager', locations: [{ id: LOC }], rolesByLocation: { [LOC]: 'manager' } })
 })
 
 describe('DELETE /api/schedule/blocks/[id] — SLOTREMOVAL.1', () => {
@@ -112,8 +118,51 @@ describe('DELETE /api/schedule/blocks/[id] — SLOTREMOVAL.1', () => {
   })
 
   it('403s a non-manager', async () => {
-    getCurrentUser.mockResolvedValue({ id: 's', role: 'staff', locations: [{ id: LOC }] })
+    getCurrentUser.mockResolvedValue({ id: 's', role: 'staff', profileRole: 'staff', locations: [{ id: LOC }], rolesByLocation: { [LOC]: 'staff' } })
     createServerClient.mockReturnValue(makeDb())
     expect((await DELETE({}, params)).status).toBe(403)
+  })
+})
+
+// SCHEDROLES.1 — head coach at LOC, plain staff at LOC_B. The route used to
+// read `user.role` (the ACTIVE studio's) and then check only membership, so
+// this caller could delete LOC_B's slots from a LOC session.
+describe('DELETE /api/schedule/blocks/[id] — role at the BLOCK\'s studio (SCHEDROLES.1)', () => {
+  const LOC_B = 'b0000000-0000-0000-0000-000000000002'
+  const mixed = (active) => ({
+    id: 'mix', role: active === LOC ? 'head_coach' : 'staff', profileRole: 'staff',
+    activeLocation: { id: active },
+    locations: [{ id: LOC }, { id: LOC_B }],
+    rolesByLocation: { [LOC]: 'head_coach', [LOC_B]: 'staff' },
+  })
+
+  it('refuses a block at the studio where the caller is staff, and deletes nothing', async () => {
+    getCurrentUser.mockResolvedValue(mixed(LOC))
+    const db = makeDb({ block: { ...BLOCK, location_id: LOC_B } })
+    createServerClient.mockReturnValue(db)
+    expect((await DELETE({}, params)).status).toBe(403)
+    expect(db.captured.order).toEqual([])
+  })
+
+  it('allows a block at the studio the caller manages', async () => {
+    getCurrentUser.mockResolvedValue(mixed(LOC))
+    const db = makeDb()
+    createServerClient.mockReturnValue(db)
+    expect((await DELETE({}, params)).status).toBe(200)
+    expect(db.captured.order).toEqual(['delete', 'removal'])
+  })
+
+  it('still allows it with the ACTIVE studio set to the one where the caller is staff', async () => {
+    getCurrentUser.mockResolvedValue(mixed(LOC_B))
+    const db = makeDb()
+    createServerClient.mockReturnValue(db)
+    expect((await DELETE({}, params)).status).toBe(200)
+  })
+
+  it('master is allowed at a studio with no membership row', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'boss', role: 'master', profileRole: 'master', locations: [], rolesByLocation: {} })
+    const db = makeDb({ block: { ...BLOCK, location_id: LOC_B } })
+    createServerClient.mockReturnValue(db)
+    expect((await DELETE({}, params)).status).toBe(200)
   })
 })

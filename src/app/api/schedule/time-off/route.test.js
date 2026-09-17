@@ -7,16 +7,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
-vi.mock('@/lib/auth', () => ({
-  getCurrentUser: vi.fn(),
-  getUserLocationIds: vi.fn(() => ['loc-1']),
-  assertLocationAccess: vi.fn(() => null),
-}))
+vi.mock('@/lib/auth', async (importOriginal) => {
+  const real = await importOriginal()
+  return {
+    getCurrentUser: vi.fn(),
+    getUserLocationIds: vi.fn((u) => (u?.locations ? u.locations.map((l) => l.id) : ['loc-1'])),
+    assertLocationAccess: vi.fn(() => null),
+    // SCHEDROLES.1 — REAL: GET scopes by the role at each studio.
+    hasRoleAtLocation: real.hasRoleAtLocation,
+  }
+})
 vi.mock('@/lib/push-dedup', () => ({ notifyUsersAtRolesOnce: vi.fn(() => Promise.resolve()) }))
 
 const { createServerClient } = await import('@/lib/supabase')
 const { getCurrentUser } = await import('@/lib/auth')
-const { POST } = await import('./route.js')
+const { GET, POST } = await import('./route.js')
 
 function req(body) {
   return { url: 'http://x/api/schedule/time-off', json: () => Promise.resolve(body), headers: { get: () => '' } }
@@ -160,5 +165,81 @@ describe('POST /api/schedule/time-off — request integrity', () => {
     expect(res.status).toBe(400)
     expect((await res.json()).error).toMatch(/Insufficient holiday balance/)
     expect(insertSpy).not.toHaveBeenCalled()
+  })
+})
+
+// SCHEDROLES.1 — what GET lists is decided by the role at each studio, not by
+// `user.role` (the ACTIVE studio's). Head coach at loc-1, plain staff at loc-2.
+describe('GET /api/schedule/time-off — role per studio (SCHEDROLES.1)', () => {
+  // Records every filter the route puts on the query.
+  function listDb() {
+    const calls = []
+    const q = {}
+    for (const op of ['eq', 'in', 'or', 'lte', 'gte', 'order']) {
+      q[op] = (...args) => { calls.push([op, ...args]); return q }
+    }
+    q.then = (res, rej) => Promise.resolve({ data: [], error: null }).then(res, rej)
+    return { calls, db: { from: () => ({ select: () => q }) } }
+  }
+  const getReq = (qs = '') => ({ url: `http://x/api/schedule/time-off${qs}`, headers: { get: () => '' } })
+  const mixed = (active) => ({
+    id: 'mix', role: active === 'loc-1' ? 'head_coach' : 'staff', profileRole: 'staff',
+    activeLocation: { id: active },
+    locations: [{ id: 'loc-1' }, { id: 'loc-2' }],
+    rolesByLocation: { 'loc-1': 'head_coach', 'loc-2': 'staff' },
+  })
+
+  it('at the studio where the caller is staff, lists only their own requests', async () => {
+    getCurrentUser.mockResolvedValue(mixed('loc-1'))
+    const { db, calls } = listDb()
+    createServerClient.mockReturnValue(db)
+    expect((await GET(getReq('?location_id=loc-2'))).status).toBe(200)
+    expect(calls).toContainEqual(['eq', 'location_id', 'loc-2'])
+    expect(calls).toContainEqual(['eq', 'profile_id', 'mix'])
+  })
+
+  it('at the studio the caller manages, lists everyone (and honours profile_id)', async () => {
+    getCurrentUser.mockResolvedValue(mixed('loc-1'))
+    let { db, calls } = listDb()
+    createServerClient.mockReturnValue(db)
+    await GET(getReq('?location_id=loc-1'))
+    expect(calls.some((c) => c[0] === 'eq' && c[1] === 'profile_id')).toBe(false)
+
+    ;({ db, calls } = listDb())
+    createServerClient.mockReturnValue(db)
+    await GET(getReq('?location_id=loc-1&profile_id=someone'))
+    expect(calls).toContainEqual(['eq', 'profile_id', 'someone'])
+  })
+
+  it('still lists everyone at the managed studio with the ACTIVE studio set to the staff one', async () => {
+    getCurrentUser.mockResolvedValue(mixed('loc-2'))
+    const { db, calls } = listDb()
+    createServerClient.mockReturnValue(db)
+    await GET(getReq('?location_id=loc-1'))
+    expect(calls.some((c) => c[0] === 'eq' && c[1] === 'profile_id')).toBe(false)
+  })
+
+  it('with no location_id: everyone at managed studios, only their own elsewhere', async () => {
+    getCurrentUser.mockResolvedValue(mixed('loc-2'))
+    const { db, calls } = listDb()
+    createServerClient.mockReturnValue(db)
+    await GET(getReq())
+    expect(calls).toContainEqual(['in', 'location_id', ['loc-1', 'loc-2']])
+    expect(calls).toContainEqual(['or', 'location_id.in.(loc-1),profile_id.eq.mix'])
+    expect(calls.some((c) => c[0] === 'eq' && c[1] === 'profile_id')).toBe(false)
+  })
+
+  it('a plain coach sees only their own; master sees everyone', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'c', role: 'staff', profileRole: 'staff', locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': 'staff' } })
+    let { db, calls } = listDb()
+    createServerClient.mockReturnValue(db)
+    await GET(getReq())
+    expect(calls).toContainEqual(['eq', 'profile_id', 'c'])
+
+    getCurrentUser.mockResolvedValue({ id: 'boss', role: 'master', profileRole: 'master', locations: [{ id: 'loc-1' }, { id: 'loc-2' }], rolesByLocation: {} })
+    ;({ db, calls } = listDb())
+    createServerClient.mockReturnValue(db)
+    await GET(getReq())
+    expect(calls.some((c) => c[0] === 'or' || (c[0] === 'eq' && c[1] === 'profile_id'))).toBe(false)
   })
 })

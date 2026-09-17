@@ -4,6 +4,13 @@
 // on delete. (The old public.shifts mirror that the mig 068 trigger
 // kept in sync was dropped in mig 238.)
 //
+// SCHEDROLES.1 — authority is the caller's role at the BLOCK's location
+// (hasRoleAtLocation), not `user.role` (the ACTIVE studio's role). A head
+// coach at Hatch who is staff at Stillorgan could delete Stillorgan slots
+// from a Hatch session; and a manager whose active studio is one where they
+// are staff was refused at their own. The pre-check is only "manages
+// somewhere".
+//
 // Only used for one-off "this slot doesn't apply this week"
 // removals. The default lifecycle is template days_of_week →
 // auto-generated blocks; deleting a block here doesn't change the
@@ -19,21 +26,20 @@
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { logWarn } from '@/lib/log'
 
 export async function DELETE(_request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
-  if (!user || !MANAGER_ROLES.includes(user.role)) {
+  if (!user || !hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
   const db = createServerClient()
 
-  // Fetch the block first so we can enforce per-location
-  // ownership for non-master callers.
+  // Fetch the block first: its location decides the caller's authority.
   const { data: block, error: fetchErr } = await db
     .from('shift_blocks')
     .select('id, location_id, template_id, block_date')
@@ -44,11 +50,11 @@ export async function DELETE(_request, props) {
     return NextResponse.json({ success: false, error: 'Block not found' }, { status: 404 })
   }
 
-  if (user.role !== 'master') {
-    const userLocationIds = getUserLocationIds(user)
-    if (!userLocationIds.includes(block.location_id)) {
-      return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
-    }
+  // Master bypass lives inside hasRoleAtLocation (profileRole). Not a member,
+  // or a member without a manager role there — the same 403 this route has
+  // always given a foreign block.
+  if (!hasRoleAtLocation(user, block.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
   const { error } = await db.from('shift_blocks').delete().eq('id', params.id)

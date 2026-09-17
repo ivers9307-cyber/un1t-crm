@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser, getUserLocationIds, hasRoleAtLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { timeOffStatusSchema , MANAGER_ROLES} from '@/lib/schemas'
 import { notifyUsersOnce } from '@/lib/push-dedup'
@@ -37,8 +37,13 @@ export async function PUT(request, props) {
   const { status, review_note } = body
 
   const isSelf = user.id === existing.profile_id
-  const isManager = MANAGER_ROLES.includes(user.role)
-  const atLocation = user.role === 'master' || getUserLocationIds(user).includes(existing.location_id)
+  const isMaster = user.profileRole === 'master'
+  // SCHEDROLES.1 — manager AT THE REQUEST's studio (hasRoleAtLocation), not
+  // `user.role` (the ACTIVE studio's role): a head coach at Hatch who is staff
+  // at Stillorgan could cancel Stillorgan coaches' leave from a Hatch session.
+  // The own-request branch below is unchanged.
+  const isManager = isMaster || hasRoleAtLocation(user, existing.location_id, MANAGER_ROLES)
+  const atLocation = isMaster || getUserLocationIds(user).includes(existing.location_id)
 
   // ROSTER-FIX.2 — a manager acts only on their own locations (404 so a
   // cross-tenant id looks missing); a requester acts only on their own

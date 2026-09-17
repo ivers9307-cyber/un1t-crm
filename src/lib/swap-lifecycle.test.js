@@ -425,3 +425,40 @@ describe('reciprocalSwapError (SWAPATOMIC.1)', () => {
     expect(reciprocalSwapError(null)).toEqual({ status: 400, error: 'Swap failed' })
   })
 })
+
+// SCHEDROLES.1 — the manager cancel / reject branches are judged at the
+// swap's studio. The route passes `isManagerHere`; without it the fallback
+// still demands membership of the swap's studio.
+describe('resolveSwapTransition — manager branches are per studio (SCHEDROLES.1)', () => {
+  it('isManagerHere=false refuses a manager-at-another-studio cancel and reject', () => {
+    for (const requestedStatus of ['cancelled', 'rejected']) {
+      const r = resolveSwapTransition({
+        swap: makeSwap(), requestedStatus, user: manager, userLocationIds: ['loc-1'], isManagerHere: false,
+      })
+      expect(r.ok).toBe(false)
+      expect(r.status).toBe(403)
+    }
+  })
+
+  it('isManagerHere=true allows them, whatever the active-studio role says', () => {
+    const r = resolveSwapTransition({
+      swap: makeSwap(), requestedStatus: 'rejected', user: coach('mix'), userLocationIds: ['loc-1'], isManagerHere: true,
+    })
+    expect(r.ok).toBe(true)
+    expect(r.effect).toBe('rejected')
+  })
+
+  it('without isManagerHere, an active-studio manager who is not at the swap\'s studio is refused', () => {
+    const r = resolveSwapTransition({
+      swap: makeSwap(), requestedStatus: 'cancelled', user: manager, userLocationIds: ['loc-other'],
+    })
+    expect(r.status).toBe(403)
+  })
+
+  it('the requester still cancels their own swap with isManagerHere=false', () => {
+    const r = resolveSwapTransition({
+      swap: makeSwap(), requestedStatus: 'cancelled', user: coach('req-1'), userLocationIds: ['loc-1'], isManagerHere: false,
+    })
+    expect(r.ok).toBe(true)
+  })
+})

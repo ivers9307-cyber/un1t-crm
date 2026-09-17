@@ -10,18 +10,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logInfo: vi.fn(), logError: vi.fn() }))
-vi.mock('@/lib/auth', () => ({
-  getCurrentUser: vi.fn(),
-  assertLocationAccess: vi.fn(() => null),
-  getUserLocationIds: vi.fn(() => ['loc-1']),
-  // Same contract as the real helper (src/lib/auth.js).
-  hasRoleAtLocation: (user, loc, roles) => {
-    if (!user || !loc) return false
-    if (user.profileRole === 'master') return true
-    const role = user.rolesByLocation?.[loc]
-    return !!role && roles.includes(role)
-  },
-}))
+vi.mock('@/lib/auth', async (importOriginal) => {
+  const real = await importOriginal()
+  return {
+    getCurrentUser: vi.fn(),
+    assertLocationAccess: vi.fn(() => null),
+    getUserLocationIds: vi.fn(() => ['loc-1']),
+    // SCHEDROLES.1 — the REAL helpers (they were a hand copy of the contract).
+    hasRoleAtLocation: real.hasRoleAtLocation,
+    hasRoleAtAnyLocation: real.hasRoleAtAnyLocation,
+  }
+})
 
 const { createServerClient } = await import('@/lib/supabase')
 const { getCurrentUser } = await import('@/lib/auth')
@@ -217,7 +216,7 @@ describe('POST /api/schedule/blocks — post-publish blocks join the roster', ()
   beforeEach(() => { createServerClient.mockReset(); getCurrentUser.mockReset() })
 
   it('stamps roster_id when a published roster covers the date', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'm', role: 'manager', locations: [{ id: LOC }] })
+    getCurrentUser.mockResolvedValue({ id: 'm', role: 'manager', profileRole: 'manager', locations: [{ id: LOC }], rolesByLocation: { [LOC]: 'manager' } })
     const db = postDb({ publishedRoster: { id: 'r-live' } })
     createServerClient.mockReturnValue(db)
     const { POST } = await import('./route.js')
@@ -228,7 +227,7 @@ describe('POST /api/schedule/blocks — post-publish blocks join the roster', ()
   })
 
   it('leaves roster_id null when the date is not inside a published period', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'm', role: 'manager', locations: [{ id: LOC }] })
+    getCurrentUser.mockResolvedValue({ id: 'm', role: 'manager', profileRole: 'manager', locations: [{ id: LOC }], rolesByLocation: { [LOC]: 'manager' } })
     const db = postDb({ publishedRoster: null })
     createServerClient.mockReturnValue(db)
     const { POST } = await import('./route.js')
@@ -241,7 +240,7 @@ describe('POST /api/schedule/blocks — post-publish blocks join the roster', ()
   // SLOTREMOVAL.1 — adding a deleted slot back by hand restores it, so the
   // nightly generator and roster copies treat it as a normal slot again.
   it('clears the removal row for exactly that location, template and date', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'm', role: 'manager', locations: [{ id: LOC }] })
+    getCurrentUser.mockResolvedValue({ id: 'm', role: 'manager', profileRole: 'manager', locations: [{ id: LOC }], rolesByLocation: { [LOC]: 'manager' } })
     const db = postDb()
     createServerClient.mockReturnValue(db)
     const { POST } = await import('./route.js')
@@ -255,7 +254,7 @@ describe('POST /api/schedule/blocks — post-publish blocks join the roster', ()
   })
 
   it('keeps the created block and returns a warning when clearing the removal fails', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'm', role: 'manager', locations: [{ id: LOC }] })
+    getCurrentUser.mockResolvedValue({ id: 'm', role: 'manager', profileRole: 'manager', locations: [{ id: LOC }], rolesByLocation: { [LOC]: 'manager' } })
     const db = postDb({ restoreError: { message: 'delete boom' } })
     createServerClient.mockReturnValue(db)
     const { POST } = await import('./route.js')
@@ -271,7 +270,7 @@ describe('POST /api/schedule/blocks — post-publish blocks join the roster', ()
   })
 
   it('does not touch the removal when the create fails', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'm', role: 'manager', locations: [{ id: LOC }] })
+    getCurrentUser.mockResolvedValue({ id: 'm', role: 'manager', profileRole: 'manager', locations: [{ id: LOC }], rolesByLocation: { [LOC]: 'manager' } })
     const db = postDb({ insertError: { code: '23505', message: 'dup' } })
     createServerClient.mockReturnValue(db)
     const { POST } = await import('./route.js')
@@ -279,5 +278,48 @@ describe('POST /api/schedule/blocks — post-publish blocks join the roster', ()
     const res = await POST(postReq({ location_id: LOC, template_id: TPL, block_date: '2026-06-06' }))
     expect(res.status).toBe(409)
     expect(db.captured.restore).toBeNull()
+  })
+
+  // SCHEDROLES.1 — manager at LOC (their ACTIVE studio), staff at LOC_B. The
+  // route used to read `user.role` and check only membership of the target.
+  describe('role at body.location_id (SCHEDROLES.1)', () => {
+    const LOC_B = 'b0000000-0000-4000-8000-000000000002'
+    const mixed = (active) => ({
+      id: 'mix', role: active === LOC ? 'manager' : 'staff', profileRole: 'staff',
+      activeLocation: { id: active },
+      locations: [{ id: LOC }, { id: LOC_B }],
+      rolesByLocation: { [LOC]: 'manager', [LOC_B]: 'staff' },
+    })
+
+    it('refuses a slot at the studio where the caller is staff, and inserts nothing', async () => {
+      getCurrentUser.mockResolvedValue(mixed(LOC))
+      const db = postDb()
+      createServerClient.mockReturnValue(db)
+      const { POST } = await import('./route.js')
+      const res = await POST(postReq({ location_id: LOC_B, template_id: TPL, block_date: '2026-06-06' }))
+      expect(res.status).toBe(403)
+      expect(db.captured.insert).toBeNull()
+    })
+
+    it('allows a slot at the studio the caller manages', async () => {
+      getCurrentUser.mockResolvedValue(mixed(LOC))
+      createServerClient.mockReturnValue(postDb())
+      const { POST } = await import('./route.js')
+      expect((await POST(postReq({ location_id: LOC, template_id: TPL, block_date: '2026-06-06' }))).status).toBe(201)
+    })
+
+    it('still allows it with the ACTIVE studio set to the one where the caller is staff', async () => {
+      getCurrentUser.mockResolvedValue(mixed(LOC_B))
+      createServerClient.mockReturnValue(postDb())
+      const { POST } = await import('./route.js')
+      expect((await POST(postReq({ location_id: LOC, template_id: TPL, block_date: '2026-06-06' }))).status).toBe(201)
+    })
+
+    it('master is allowed', async () => {
+      getCurrentUser.mockResolvedValue({ id: 'boss', role: 'master', profileRole: 'master', locations: [], rolesByLocation: {} })
+      createServerClient.mockReturnValue(postDb())
+      const { POST } = await import('./route.js')
+      expect((await POST(postReq({ location_id: LOC_B, template_id: TPL, block_date: '2026-06-06' }))).status).toBe(201)
+    })
   })
 })

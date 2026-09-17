@@ -148,6 +148,12 @@ const SCOPING_HELPERS = [
   // src/lib/permissions.js — permission check evaluated AT a specific
   // location (the fetch-row-then-check-its-location approvals pattern).
   'hasPermissionForLocation(',
+  // src/lib/auth.js — role check AT a specific location (SCHEDROLES.1's
+  // fetch-row-then-judge pattern). Verified: fails closed unless the caller
+  // holds a rolesByLocation entry at THAT location (so is a member there), or
+  // is master on profileRole — the same tenant fence as
+  // hasPermissionForLocation above, with a role list instead of a key.
+  'hasRoleAtLocation(',
   // src/lib/auth.js — org ids the caller OWNS; used for
   // row.organization_id membership compares (contracts revoke/detail).
   'getOwnerOrganizationIds(',

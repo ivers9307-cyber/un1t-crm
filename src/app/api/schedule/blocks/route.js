@@ -17,7 +17,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess, getUserLocationIds, hasRoleAtLocation } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess, getUserLocationIds, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, isoDate, timeOfDay, MANAGER_ROLES } from '@/lib/schemas'
 import { findPublishedRosterFor } from '@/lib/roster'
@@ -162,9 +162,13 @@ function slimBlockForCoach(block) {
 // come from the auto-generator when a template is saved; this
 // endpoint exists for one-off "I need an extra slot on this Saturday"
 // cases.
+//
+// SCHEDROLES.1 — the caller must be a manager AT body.location_id, not at
+// their active studio (`user.role`). Membership first (its 403 names the
+// location problem), then the role there.
 export async function POST(request) {
   const user = await getCurrentUser()
-  if (!user || !MANAGER_ROLES.includes(user.role)) {
+  if (!user || !hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -174,6 +178,9 @@ export async function POST(request) {
 
   const guard = assertLocationAccess(user, body.location_id)
   if (guard) return guard
+  if (!hasRoleAtLocation(user, body.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+  }
 
   const db = createServerClient()
 

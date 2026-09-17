@@ -42,7 +42,7 @@
 import { NextResponse, after } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, isoDate, MANAGER_ROLES } from '@/lib/schemas'
 import { bulkUpsertShiftAssignments } from '@/lib/roster-write'
@@ -95,7 +95,9 @@ export function mapDayOfMonth(sourceIso, targetMonthStartIso) {
 
 export async function POST(request) {
   const user = await getCurrentUser()
-  if (!user || !MANAGER_ROLES.includes(user.role)) {
+  // SCHEDROLES.1 — coarse pre-check; the decision is the role AT
+  // body.location_id below, never `user.role` (the ACTIVE studio's).
+  if (!user || !hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -105,6 +107,9 @@ export async function POST(request) {
 
   const guard = assertLocationAccess(user, location_id)
   if (guard) return guard
+  if (!hasRoleAtLocation(user, location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+  }
 
   // Validate inputs are first-of-month — clearer error than a silent
   // off-by-one if a manager passes a mid-month date.

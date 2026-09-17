@@ -9,10 +9,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
-vi.mock('@/lib/auth', () => ({
-  getCurrentUser: vi.fn(),
-  getUserLocationIds: vi.fn(),
-}))
+vi.mock('@/lib/auth', async (importOriginal) => {
+  const real = await importOriginal()
+  return {
+    getCurrentUser: vi.fn(),
+    getUserLocationIds: vi.fn(),
+    // SCHEDROLES.1 — REAL: the role at the block's studio is under test.
+    hasRoleAtLocation: real.hasRoleAtLocation,
+    hasRoleAtAnyLocation: real.hasRoleAtAnyLocation,
+  }
+})
 vi.mock('@/lib/roster-change-notify', () => ({ notifyRosterChanges: vi.fn(() => Promise.resolve({ notified: 0 })) }))
 
 const { createServerClient } = await import('@/lib/supabase')
@@ -124,8 +130,8 @@ function buildDb({
   }
 }
 
-const MASTER = { id: 'u1', role: 'master' }
-const STAFF = { id: 'u2', role: 'staff' }
+const MASTER = { id: 'u1', role: 'master', profileRole: 'master', rolesByLocation: {} }
+const STAFF = { id: 'u2', role: 'staff', profileRole: 'staff', rolesByLocation: { 'loc-1': 'staff' } }
 
 describe('POST /api/schedule/blocks/[id]/assignments — auth + validation', () => {
   it('403 when no user', async () => {
@@ -383,5 +389,50 @@ describe('POST — tells coaches added to a PUBLISHED shift (NOTIFY.1)', () => {
     expect(notifyRosterChanges).toHaveBeenCalledTimes(1)
     const [, opts] = notifyRosterChanges.mock.calls[0]
     expect(opts.changes).toEqual([{ coachId: newId, blockId: 'block-1', blockDate: '2026-06-01', action: 'assigned' }])
+  })
+})
+
+// SCHEDROLES.1 — head coach at loc-1, plain staff at loc-2. The route used to
+// read `user.role` (the ACTIVE studio's) and then check only membership.
+describe('POST — role at the BLOCK\'s studio (SCHEDROLES.1)', () => {
+  const mixed = (active) => ({
+    id: 'mix', role: active === 'loc-1' ? 'head_coach' : 'staff', profileRole: 'staff',
+    activeLocation: { id: active },
+    locations: [{ id: 'loc-1' }, { id: 'loc-2' }],
+    rolesByLocation: { 'loc-1': 'head_coach', 'loc-2': 'staff' },
+  })
+  const block = (loc) => ({ id: 'block-1', location_id: loc, block_date: '2026-06-01', max_coaches: 5 })
+  const IDS = ['aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa']
+
+  it('refuses a block at the studio where the caller is staff, and inserts nothing', async () => {
+    getCurrentUser.mockResolvedValue(mixed('loc-1'))
+    const { db, insertSpy } = buildDb({ block: block('loc-2') })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(req({ profile_ids: IDS }), PROPS)
+    expect(res.status).toBe(403)
+    expect(insertSpy).not.toHaveBeenCalled()
+  })
+
+  it('allows a block at the studio the caller manages', async () => {
+    getCurrentUser.mockResolvedValue(mixed('loc-1'))
+    const { db, insertSpy } = buildDb({ block: block('loc-1') })
+    createServerClient.mockReturnValue(db)
+    expect((await POST(req({ profile_ids: IDS }), PROPS)).status).toBe(201)
+    expect(insertSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('still allows it with the ACTIVE studio set to the one where the caller is staff', async () => {
+    getCurrentUser.mockResolvedValue(mixed('loc-2'))
+    const { db } = buildDb({ block: block('loc-1') })
+    createServerClient.mockReturnValue(db)
+    expect((await POST(req({ profile_ids: IDS }), PROPS)).status).toBe(201)
+  })
+
+  it('a head coach who is not at the block\'s studio at all is refused', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'hc', role: 'head_coach', profileRole: 'staff', rolesByLocation: { 'loc-1': 'head_coach' } })
+    const { db, insertSpy } = buildDb({ block: block('loc-9') })
+    createServerClient.mockReturnValue(db)
+    expect((await POST(req({ profile_ids: IDS }), PROPS)).status).toBe(403)
+    expect(insertSpy).not.toHaveBeenCalled()
   })
 })

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { validateBody } from '@/lib/validate'
 import { timeOfDay, hexColor , MANAGER_ROLES} from '@/lib/schemas'
@@ -59,7 +59,9 @@ const TemplateUpdateSchema = z.object({
 export async function PUT(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
-  if (!user || !MANAGER_ROLES.includes(user.role)) {
+  // SCHEDROLES.1 — coarse pre-check only; the authority decision is the
+  // role at the TEMPLATE's location, once the row is loaded below.
+  if (!user || !hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -85,6 +87,11 @@ export async function PUT(request, props) {
   }
   const guard = assertLocationAccessOr404(user, priorTemplate.location_id)
   if (guard) return guard
+  // SCHEDROLES.1 — a member of the template's studio who is not a manager
+  // THERE (e.g. head coach at their active studio, staff at this one).
+  if (!hasRoleAtLocation(user, priorTemplate.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+  }
   const locationId = priorTemplate.location_id
   const priorDays = new Set(priorTemplate.days_of_week || [])
 
@@ -329,7 +336,9 @@ export async function PUT(request, props) {
 export async function DELETE(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
-  if (!user || !MANAGER_ROLES.includes(user.role)) {
+  // SCHEDROLES.1 — coarse pre-check only; the authority decision is the
+  // role at the TEMPLATE's location, once the row is loaded below.
+  if (!user || !hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -350,6 +359,10 @@ export async function DELETE(request, props) {
   }
   const guard = assertLocationAccessOr404(user, template.location_id)
   if (guard) return guard
+  // SCHEDROLES.1 — manager AT the template's studio, not the active one.
+  if (!hasRoleAtLocation(user, template.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+  }
 
   // Soft-delete by deactivating (can't delete if shifts reference it).
   // Scope the write to the verified location too, so even a racing

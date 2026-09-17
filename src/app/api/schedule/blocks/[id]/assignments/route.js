@@ -22,13 +22,17 @@
 // so an admin override ("we really do need a 16th coach today") stays
 // possible by passing { allow_over_capacity: true }.
 //
+// SCHEDROLES.1 — authority is the caller's role at the BLOCK's location, not
+// `user.role` (the ACTIVE studio's). The pre-check is only "manages
+// somewhere"; the real decision runs once the block is loaded.
+//
 // Time-off conflicts are surfaced as warnings (advisory; mirrors the
 // legacy /api/schedule/shifts POST), not a hard block.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
 import { timeRangesOverlap, fmtTime } from '@/lib/schedule-overlap'
@@ -54,7 +58,7 @@ const ASSIGNMENT_SELECT = `
 export async function POST(request, props) {
   const params = await props.params
   const user = await getCurrentUser()
-  if (!user || !MANAGER_ROLES.includes(user.role)) {
+  if (!user || !hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -76,11 +80,9 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: 'Block not found' }, { status: 404 })
   }
 
-  if (user.role !== 'master') {
-    const userLocationIds = getUserLocationIds(user)
-    if (!userLocationIds.includes(block.location_id)) {
-      return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
-    }
+  // SCHEDROLES.1 — manager AT the block's location (master bypass inside).
+  if (!hasRoleAtLocation(user, block.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
   // Normalise to an array; dedupe so a doubled-up client send doesn't

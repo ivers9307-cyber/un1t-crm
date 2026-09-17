@@ -13,10 +13,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
-vi.mock('@/lib/auth', () => ({
-  getCurrentUser: vi.fn(),
-  getUserLocationIds: vi.fn(),
-}))
+vi.mock('@/lib/auth', async (importOriginal) => {
+  const real = await importOriginal()
+  return {
+    getCurrentUser: vi.fn(),
+    getUserLocationIds: vi.fn(),
+    // SCHEDROLES.1 — REAL: each block is judged by the role at its studio.
+    hasRoleAtLocation: real.hasRoleAtLocation,
+    hasRoleAtAnyLocation: real.hasRoleAtAnyLocation,
+  }
+})
 vi.mock('@/lib/roster-change-notify', () => ({ notifyRosterChanges: vi.fn(() => Promise.resolve({ notified: 0 })) }))
 
 const { createServerClient } = await import('@/lib/supabase')
@@ -88,7 +94,7 @@ describe('POST /api/schedule/blocks/bulk-assign', () => {
     })
 
     it('403s for non-manager roles', async () => {
-      getCurrentUser.mockResolvedValue({ id: 'u1', role: 'staff' })
+      getCurrentUser.mockResolvedValue({ id: 'u1', role: 'staff', profileRole: 'staff', rolesByLocation: { 'loc-1': 'staff' } })
       const res = await POST(buildRequest({ block_ids: [VALID_UUID_A], profile_id: PROFILE_A }))
       expect(res.status).toBe(403)
     })
@@ -96,7 +102,7 @@ describe('POST /api/schedule/blocks/bulk-assign', () => {
 
   describe('validation', () => {
     beforeEach(() => {
-      getCurrentUser.mockResolvedValue({ id: 'u1', role: 'master' })
+      getCurrentUser.mockResolvedValue({ id: 'u1', role: 'master', profileRole: 'master', rolesByLocation: {} })
     })
 
     it('400s on empty block_ids array', async () => {
@@ -118,7 +124,7 @@ describe('POST /api/schedule/blocks/bulk-assign', () => {
 
   describe('skip-with-reason dispositions', () => {
     beforeEach(() => {
-      getCurrentUser.mockResolvedValue({ id: 'u-master', role: 'master' })
+      getCurrentUser.mockResolvedValue({ id: 'u-master', role: 'master', profileRole: 'master', rolesByLocation: {} })
       getUserLocationIds.mockReturnValue(['loc-1'])
     })
 
@@ -138,7 +144,7 @@ describe('POST /api/schedule/blocks/bulk-assign', () => {
     })
 
     it('reports cross_location when non-master user lacks location access', async () => {
-      getCurrentUser.mockResolvedValue({ id: 'u-mgr', role: 'manager' })
+      getCurrentUser.mockResolvedValue({ id: 'u-mgr', role: 'manager', profileRole: 'manager', rolesByLocation: { 'loc-allowed': 'manager' } })
       getUserLocationIds.mockReturnValue(['loc-allowed'])
       createServerClient.mockReturnValue(buildDb({
         blocks: [
@@ -239,7 +245,7 @@ describe('POST /api/schedule/blocks/bulk-assign', () => {
 
   describe('happy path', () => {
     beforeEach(() => {
-      getCurrentUser.mockResolvedValue({ id: 'u-master', role: 'master' })
+      getCurrentUser.mockResolvedValue({ id: 'u-master', role: 'master', profileRole: 'master', rolesByLocation: {} })
       getUserLocationIds.mockReturnValue([])
     })
 
@@ -292,7 +298,7 @@ describe('POST /api/schedule/blocks/bulk-assign', () => {
 
 describe('POST /api/schedule/blocks/bulk-assign — NOTIFY.1', () => {
   it('notifies the coach once, covering only the blocks on a published roster', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'mgr-1', role: 'master' })
+    getCurrentUser.mockResolvedValue({ id: 'mgr-1', role: 'master', profileRole: 'master', rolesByLocation: {} })
     createServerClient.mockReturnValue(buildDb({
       blocks: [
         { id: VALID_UUID_A, location_id: 'loc-1', block_date: '2026-05-18', max_coaches: 5, rosters: { status: 'published' }, shift_assignments: [] },
@@ -309,7 +315,7 @@ describe('POST /api/schedule/blocks/bulk-assign — NOTIFY.1', () => {
   })
 
   it('does not notify when every assigned block is on a draft roster', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'mgr-1', role: 'master' })
+    getCurrentUser.mockResolvedValue({ id: 'mgr-1', role: 'master', profileRole: 'master', rolesByLocation: {} })
     createServerClient.mockReturnValue(buildDb({
       blocks: [
         { id: VALID_UUID_A, location_id: 'loc-1', block_date: '2026-05-18', max_coaches: 5, rosters: { status: 'draft' }, shift_assignments: [] },
@@ -322,7 +328,7 @@ describe('POST /api/schedule/blocks/bulk-assign — NOTIFY.1', () => {
   })
 
   it('notifies once per location when published blocks span two locations', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'mgr-1', role: 'master' })
+    getCurrentUser.mockResolvedValue({ id: 'mgr-1', role: 'master', profileRole: 'master', rolesByLocation: {} })
     createServerClient.mockReturnValue(buildDb({
       blocks: [
         { id: VALID_UUID_A, location_id: 'loc-1', block_date: '2026-05-18', max_coaches: 5, rosters: { status: 'published' }, shift_assignments: [] },
@@ -343,5 +349,39 @@ describe('POST /api/schedule/blocks/bulk-assign — NOTIFY.1', () => {
       actorId: 'mgr-1',
       changes: [{ coachId: PROFILE_A, blockId: VALID_UUID_B, blockDate: '2026-05-19', action: 'assigned' }],
     })
+  })
+})
+
+// SCHEDROLES.1 — head coach at loc-1, plain staff at loc-2. Each block used to
+// be judged by `user.role` (the ACTIVE studio's) plus membership only.
+describe('POST /api/schedule/blocks/bulk-assign — role at each block\'s studio (SCHEDROLES.1)', () => {
+  const mixed = (active) => ({
+    id: 'mix', role: active === 'loc-1' ? 'head_coach' : 'staff', profileRole: 'staff',
+    activeLocation: { id: active },
+    rolesByLocation: { 'loc-1': 'head_coach', 'loc-2': 'staff' },
+  })
+  const blocks = [
+    { id: VALID_UUID_A, location_id: 'loc-1', block_date: '2026-05-18', max_coaches: 5, shift_assignments: [] },
+    { id: VALID_UUID_B, location_id: 'loc-2', block_date: '2026-05-19', max_coaches: 5, shift_assignments: [] },
+  ]
+
+  it('assigns the block at the managed studio and skips the one where the caller is staff', async () => {
+    getCurrentUser.mockResolvedValue(mixed('loc-1'))
+    getUserLocationIds.mockReturnValue(['loc-1', 'loc-2'])
+    createServerClient.mockReturnValue(buildDb({ blocks }))
+    const j = await (await POST(buildRequest({ block_ids: [VALID_UUID_A, VALID_UUID_B], profile_id: PROFILE_A }))).json()
+    expect(j.assigned.map((a) => a.block_id)).toEqual([VALID_UUID_A])
+    expect(j.skipped).toEqual([{ block_id: VALID_UUID_B, reason: 'cross_location' }])
+  })
+
+  it('gives the same answer with the ACTIVE studio set to the one where the caller is staff', async () => {
+    getCurrentUser.mockResolvedValue(mixed('loc-2'))
+    getUserLocationIds.mockReturnValue(['loc-1', 'loc-2'])
+    createServerClient.mockReturnValue(buildDb({ blocks }))
+    const res = await POST(buildRequest({ block_ids: [VALID_UUID_A, VALID_UUID_B], profile_id: PROFILE_A }))
+    expect(res.status).toBe(200)
+    const j = await res.json()
+    expect(j.assigned.map((a) => a.block_id)).toEqual([VALID_UUID_A])
+    expect(j.skipped).toEqual([{ block_id: VALID_UUID_B, reason: 'cross_location' }])
   })
 })
