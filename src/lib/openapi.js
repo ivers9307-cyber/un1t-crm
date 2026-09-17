@@ -169,6 +169,7 @@ const SwapCreate = z.object({
 const SwapReview = z.object({
   status: swapStatusSchema,
   review_note: z.string().max(2000).nullable().optional(),
+  confirm_conflicts: z.boolean().optional().openapi({ description: 'Approve even though the incoming coach is on approved leave or already on an overlapping shift that day (SWAPS.2). Only read on status=approved.' }),
 }).openapi('SwapReview')
 
 const CampaignCreate = z.object({
@@ -4558,7 +4559,10 @@ registry.registerPath({
     params: z.object({ id: uuidLike }),
     body: { content: { 'application/json': { schema: SwapReview } } },
   },
-  responses: { 200: { description: 'Swap updated' } },
+  responses: {
+    200: { description: 'Swap updated. A claim / accept also carries `warnings` (the claiming coach\'s leave or same-day clashes; advisory).' },
+    409: { description: 'Refused: the swap changed, a coach is already on that shift, or (code `swap_conflicts`) an approval has leave / clash conflicts; resend with confirm_conflicts to approve anyway.' },
+  },
 })
 
 // Marketing

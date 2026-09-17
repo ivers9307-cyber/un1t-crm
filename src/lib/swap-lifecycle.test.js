@@ -1,6 +1,9 @@
 // src/lib/swap-lifecycle.test.js
 import { describe, it, expect } from 'vitest'
-import { resolveSwapTransition, TERMINAL_SWAP_STATES, swapChangeLogEntries, reciprocalSwapError } from './swap-lifecycle'
+import {
+  resolveSwapTransition, TERMINAL_SWAP_STATES, swapChangeLogEntries, swapApprovalError, swapApprovalRpc,
+  swapIncomingMoves, evaluateSwapMoveConflicts, swapConflictMessage, SWAP_MOVE_CLEARS,
+} from './swap-lifecycle'
 
 // Minimal swap factory. requester_shift / target_shift mirror the embed the
 // route fetches (only profile_id is read by the resolver).
@@ -188,7 +191,7 @@ describe('resolveSwapTransition — manager approve finalisation', () => {
     expect(r.swapUpdates).toMatchObject({ status: 'approved', reviewed_by: 'mgr-1', review_note: 'ok' })
     expect(r.swapUpdates.reviewed_at).toBeTruthy()
     expect(r.assignmentOps).toEqual([
-      { id: 'asg-req', set: { profile_id: 'coach-2', status: 'swapped' } },
+      { id: 'asg-req', set: { profile_id: 'coach-2', status: 'swapped', ...SWAP_MOVE_CLEARS } },
     ])
   })
 
@@ -210,8 +213,8 @@ describe('resolveSwapTransition — manager approve finalisation', () => {
     expect(r.effect).toBe('approved_swap')
     expect(r.assignmentOps).toEqual(
       expect.arrayContaining([
-        { id: 'asg-req', set: { profile_id: 'coach-2', status: 'swapped' } },
-        { id: 'asg-tgt', set: { profile_id: 'req-1', status: 'swapped' } },
+        { id: 'asg-req', set: { profile_id: 'coach-2', status: 'swapped', ...SWAP_MOVE_CLEARS } },
+        { id: 'asg-tgt', set: { profile_id: 'req-1', status: 'swapped', ...SWAP_MOVE_CLEARS } },
       ])
     )
     // SWAPNOTIFY.1 — a reciprocal swap changes BOTH coaches' shifts; before
@@ -422,24 +425,190 @@ describe('swapChangeLogEntries (SWAPAUDIT.1)', () => {
   })
 })
 
-describe('reciprocalSwapError (SWAPATOMIC.1)', () => {
+describe('swapApprovalError (SWAPATOMIC.1 / SWAPS.2)', () => {
   it('maps each swap_* refusal to a 409 with a human message', () => {
     for (const prefix of ['swap_not_open', 'swap_shift_missing', 'swap_stale', 'swap_same_block', 'swap_conflict']) {
-      const r = reciprocalSwapError({ code: 'P0001', message: `${prefix}: detail` })
+      const r = swapApprovalError({ code: 'P0001', message: `${prefix}: detail` })
       expect(r.status).toBe(409)
       expect(r.error).not.toMatch(/^swap_/)
     }
   })
   it('maps swap_not_found to 404', () => {
-    expect(reciprocalSwapError({ code: 'P0001', message: 'swap_not_found: x' })).toEqual({ status: 404, error: 'Swap request not found' })
+    expect(swapApprovalError({ code: 'P0001', message: 'swap_not_found: x' })).toEqual({ status: 404, error: 'Swap request not found' })
   })
   it('maps a unique violation to a 409 conflict', () => {
-    expect(reciprocalSwapError({ code: '23505', message: 'duplicate key' }).status).toBe(409)
+    expect(swapApprovalError({ code: '23505', message: 'duplicate key' }).status).toBe(409)
   })
   it('leaves an unrecognised P0001 or any other error as a 400 with the raw message', () => {
-    expect(reciprocalSwapError({ code: 'P0001', message: 'something else' })).toEqual({ status: 400, error: 'something else' })
-    expect(reciprocalSwapError({ code: '08006', message: 'connection lost' })).toEqual({ status: 400, error: 'connection lost' })
-    expect(reciprocalSwapError(null)).toEqual({ status: 400, error: 'Swap failed' })
+    expect(swapApprovalError({ code: 'P0001', message: 'something else' })).toEqual({ status: 400, error: 'something else' })
+    expect(swapApprovalError({ code: '08006', message: 'connection lost' })).toEqual({ status: 400, error: 'connection lost' })
+    expect(swapApprovalError(null)).toEqual({ status: 400, error: 'Swap failed' })
+  })
+})
+
+describe('SWAP_MOVE_CLEARS (SWAPS.2)', () => {
+  it('clears the previous coach\'s overrides, reason and arrival stamp, nothing else', () => {
+    expect(SWAP_MOVE_CLEARS).toEqual({
+      start_time_override: null, end_time_override: null, partial_reason: null, arrived_at: null, arrival_source: null,
+    })
+    expect(Object.isFrozen(SWAP_MOVE_CLEARS)).toBe(true)
+  })
+})
+
+describe('swapApprovalRpc (SWAPS.2)', () => {
+  const updates = { status: 'approved', reviewed_by: 'mgr-1', reviewed_at: '2026-09-17T10:00:00Z', review_note: 'ok' }
+  const review = { p_swap_id: 'swap-1', p_reviewed_by: 'mgr-1', p_reviewed_at: '2026-09-17T10:00:00Z', p_review_note: 'ok' }
+
+  it('reciprocal -> approve_reciprocal_shift_swap with both coaches read off the embeds', () => {
+    const swap = makeSwap({ target_id: 'coach-2', target_shift_id: 'asg-tgt', target_shift: { id: 'asg-tgt', profile_id: 'coach-2' } })
+    expect(swapApprovalRpc('approved_swap', 'swap-1', swap, updates)).toEqual({
+      fn: 'approve_reciprocal_shift_swap', args: { ...review, p_requester_profile: 'req-1', p_target_profile: 'coach-2' },
+    })
+  })
+
+  it('reassign -> approve_reassign_shift_swap with the taker from swap.target_id', () => {
+    const swap = makeSwap({ status: 'awaiting_approval', target_id: 'coach-2' })
+    expect(swapApprovalRpc('approved_reassign', 'swap-1', swap, updates)).toEqual({
+      fn: 'approve_reassign_shift_swap', args: { ...review, p_requester_profile: 'req-1', p_target_profile: 'coach-2' },
+    })
+  })
+
+  it('drop -> approve_drop_shift_swap with the requester only', () => {
+    expect(swapApprovalRpc('approved_drop', 'swap-1', makeSwap(), updates)).toEqual({
+      fn: 'approve_drop_shift_swap', args: { ...review, p_requester_profile: 'req-1' },
+    })
+  })
+
+  it('passes null profiles when the embed is missing (the function answers swap_stale)', () => {
+    const swap = makeSwap({ requester_shift: null })
+    expect(swapApprovalRpc('approved_drop', 'swap-1', swap, updates).args.p_requester_profile).toBeNull()
+  })
+
+  it('returns null for every non-approval effect', () => {
+    for (const effect of ['claimed', 'accepted', 'withdrawn', 'declined', 'rejected', 'cancelled', 'denied']) {
+      expect(swapApprovalRpc(effect, 'swap-1', makeSwap(), updates)).toBeNull()
+    }
+    expect(swapApprovalRpc('approved_drop', 'swap-1', null, updates)).toBeNull()
+  })
+})
+
+describe('swapIncomingMoves (SWAPS.2)', () => {
+  const reqBlock = { id: 'blk-req', block_date: '2099-01-01', start_time: '06:00:00', end_time: '10:00:00' }
+  const tgtBlock = { id: 'blk-tgt', block_date: '2099-01-02', start_time: '17:00:00', end_time: '20:00:00' }
+  const reciprocalSwap = () => makeSwap({
+    target_id: 'coach-2', target_shift_id: 'asg-tgt',
+    requester_shift: { id: 'asg-req', profile_id: 'req-1', block: reqBlock },
+    target_shift: { id: 'asg-tgt', profile_id: 'coach-2', block: tgtBlock },
+  })
+
+  it('reassign: the taker lands on the requester block, leaving nothing', () => {
+    const swap = makeSwap({ target_id: 'coach-2', requester_shift: { id: 'asg-req', profile_id: 'req-1', block: reqBlock } })
+    expect(swapIncomingMoves(swap)).toEqual([
+      { role: 'taker', coachId: 'coach-2', block: reqBlock, leavingAssignmentId: null },
+    ])
+  })
+
+  it('open claim: the claimant is the taker', () => {
+    const swap = makeSwap({ requester_shift: { id: 'asg-req', profile_id: 'req-1', block: reqBlock } })
+    expect(swapIncomingMoves(swap, { takerId: 'coach-9', takerOnly: true })).toEqual([
+      { role: 'taker', coachId: 'coach-9', block: reqBlock, leavingAssignmentId: null },
+    ])
+  })
+
+  it('reciprocal: both coaches land on the other block, each leaving their own shift', () => {
+    expect(swapIncomingMoves(reciprocalSwap())).toEqual([
+      { role: 'taker', coachId: 'coach-2', block: reqBlock, leavingAssignmentId: 'asg-tgt' },
+      { role: 'requester', coachId: 'req-1', block: tgtBlock, leavingAssignmentId: 'asg-req' },
+    ])
+  })
+
+  it('takerOnly keeps a colleague\'s move (and leave) out of a claim', () => {
+    expect(swapIncomingMoves(reciprocalSwap(), { takerId: 'coach-2', takerOnly: true }).map((m) => m.role)).toEqual(['taker'])
+  })
+
+  it('drop, missing swap or missing block embed: no moves', () => {
+    expect(swapIncomingMoves(makeSwap({ requester_shift: { id: 'asg-req', profile_id: 'req-1', block: reqBlock } }))).toEqual([])
+    expect(swapIncomingMoves(null)).toEqual([])
+    expect(swapIncomingMoves(makeSwap({ target_id: 'coach-2' }))).toEqual([])
+  })
+})
+
+describe('evaluateSwapMoveConflicts (SWAPS.2)', () => {
+  const block = { id: 'blk-1', block_date: '2099-01-01', start_time: '06:00:00', end_time: '10:00:00' }
+  const move = { role: 'taker', coachId: 'coach-2', block, leavingAssignmentId: 'asg-own' }
+  const other = (over = {}) => ({
+    id: 'asg-x', profile_id: 'coach-2', block_id: 'blk-x', status: 'scheduled',
+    shift_blocks: { id: 'blk-x', block_date: '2099-01-01', start_time: '09:00:00', end_time: '12:00:00', shift_templates: { name: 'Midday' }, locations: { name: 'Hatch' } },
+    ...over,
+  })
+  const leave = (over = {}) => ({ id: 't1', profile_id: 'coach-2', type: 'holiday', status: 'approved', start_date: '2098-12-31', end_date: '2099-01-02', ...over })
+
+  it('approved leave covering the date is a conflict', () => {
+    expect(evaluateSwapMoveConflicts(move, { timeOff: [leave()] })).toEqual([
+      { kind: 'leave', role: 'taker', coachId: 'coach-2', date: '2099-01-01', type: 'holiday', startDate: '2098-12-31', endDate: '2099-01-02' },
+    ])
+  })
+
+  it('pending leave, leave not covering the date, or someone else\'s leave is not', () => {
+    expect(evaluateSwapMoveConflicts(move, { timeOff: [
+      leave({ status: 'pending' }),
+      leave({ start_date: '2099-01-02', end_date: '2099-01-03' }),
+      leave({ profile_id: 'coach-3' }),
+    ] })).toEqual([])
+  })
+
+  it('an overlapping live shift that day is a conflict, with its effective window', () => {
+    expect(evaluateSwapMoveConflicts(move, { assignments: [other()] })).toEqual([{
+      kind: 'overlap', role: 'taker', coachId: 'coach-2', date: '2099-01-01',
+      shiftName: 'Midday', locationName: 'Hatch', startTime: '09:00', endTime: '12:00', blockStart: '06:00', blockEnd: '10:00',
+    }])
+  })
+
+  it('uses the other shift\'s own override: trimmed clear of the block, no conflict', () => {
+    expect(evaluateSwapMoveConflicts(move, { assignments: [other({ start_time_override: '10:00:00' })] })).toEqual([])
+  })
+
+  it('ignores touching shifts, cancelled rows, the leaving shift, the destination block and other days', () => {
+    const touching = other({ shift_blocks: { ...other().shift_blocks, start_time: '10:00:00' } })
+    expect(evaluateSwapMoveConflicts(move, { assignments: [
+      touching,
+      other({ status: 'cancelled' }),
+      other({ id: 'asg-own' }),
+      other({ block_id: 'blk-1', shift_blocks: { ...other().shift_blocks, id: 'blk-1' } }),
+      other({ shift_blocks: { ...other().shift_blocks, block_date: '2099-01-02' } }),
+      other({ profile_id: 'coach-3' }),
+    ] })).toEqual([])
+  })
+
+  it('no coach or no date: nothing', () => {
+    expect(evaluateSwapMoveConflicts({ ...move, coachId: null }, { timeOff: [leave()] })).toEqual([])
+    expect(evaluateSwapMoveConflicts(null)).toEqual([])
+  })
+})
+
+describe('swapConflictMessage (SWAPS.2)', () => {
+  const leave = { kind: 'leave', coachId: 'c', date: '2099-01-01', type: 'holiday', startDate: '2099-01-01', endDate: '2099-01-03' }
+  const overlap = { kind: 'overlap', coachId: 'c', date: '2099-01-01', shiftName: 'Midday', locationName: 'Hatch', startTime: '09:00', endTime: '12:00', blockStart: '06:00', blockEnd: '10:00' }
+
+  it('names a colleague for a manager', () => {
+    expect(swapConflictMessage(leave, { name: 'Bea' })).toBe('Bea has approved holiday from 2099-01-01 to 2099-01-03, which covers the shift on 2099-01-01.')
+    expect(swapConflictMessage(overlap, { name: 'Bea' })).toBe('Bea is already on Midday 09:00 to 12:00 at Hatch on 2099-01-01, which overlaps the shift (06:00 to 10:00).')
+  })
+
+  it('speaks to the coach as "You"', () => {
+    expect(swapConflictMessage({ ...leave, endDate: '2099-01-01', type: 'sick' }, { isViewer: true })).toBe('You have approved sick leave on 2099-01-01, which covers the shift on 2099-01-01.')
+    expect(swapConflictMessage(overlap, { isViewer: true })).toMatch(/^You are already on Midday/)
+  })
+
+  it('falls back when names or details are missing', () => {
+    expect(swapConflictMessage({ ...overlap, shiftName: null, locationName: null })).toMatch(/^This coach is already on another shift 09:00 to 12:00 on/)
+    expect(swapConflictMessage({ kind: 'check_failed', date: '2099-01-01' }, { name: 'Bea' })).toBe('Could not check Bea\'s leave and other shifts for 2099-01-01.')
+  })
+
+  it('never uses an em dash', () => {
+    for (const c of [leave, overlap, { kind: 'check_failed' }]) {
+      expect(swapConflictMessage(c, { name: 'Bea' })).not.toMatch(/—/)
+    }
   })
 })
 
