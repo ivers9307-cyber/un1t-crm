@@ -1,6 +1,6 @@
 // src/lib/swap-lifecycle.test.js
 import { describe, it, expect } from 'vitest'
-import { resolveSwapTransition, TERMINAL_SWAP_STATES } from './swap-lifecycle'
+import { resolveSwapTransition, TERMINAL_SWAP_STATES, swapChangeLogEntries } from './swap-lifecycle'
 
 // Minimal swap factory. requester_shift / target_shift mirror the embed the
 // route fetches (only profile_id is read by the resolver).
@@ -361,5 +361,46 @@ describe('resolveSwapTransition — assignment status stays DB-valid', () => {
         expect(VALID_ASSIGNMENT_STATUSES).toContain(op.set.status)
       }
     }
+  })
+})
+
+describe('swapChangeLogEntries (SWAPAUDIT.1)', () => {
+  const reqBlock = { id: 'blk-req', location_id: 'loc-1', block_date: '2099-01-01', rosters: { status: 'published' } }
+  const tgtBlock = { id: 'blk-tgt', location_id: 'loc-1', block_date: '2099-01-02', rosters: { status: 'draft' } }
+
+  it('reassign: requester leaves, taker takes, both on the requester block', () => {
+    const swap = makeSwap({ target_id: 'coach-2', requester_shift: { id: 'asg-req', profile_id: 'req-1', block_id: 'blk-req', block: reqBlock } })
+    expect(swapChangeLogEntries('approved_reassign', swap)).toEqual([
+      { role: 'requester', coachId: 'req-1', action: 'unassigned', block: reqBlock, blockId: 'blk-req' },
+      { role: 'taker', coachId: 'coach-2', action: 'assigned', block: reqBlock, blockId: 'blk-req' },
+    ])
+  })
+
+  it('reciprocal: four rows, each block gets a leave and a take', () => {
+    const swap = makeSwap({
+      target_id: 'coach-2',
+      target_shift_id: 'asg-tgt',
+      requester_shift: { id: 'asg-req', profile_id: 'req-1', block_id: 'blk-req', block: reqBlock },
+      target_shift: { id: 'asg-tgt', profile_id: 'coach-2', block_id: 'blk-tgt', block: tgtBlock },
+    })
+    expect(swapChangeLogEntries('approved_swap', swap)).toEqual([
+      { role: 'requester', coachId: 'req-1', action: 'unassigned', block: reqBlock, blockId: 'blk-req' },
+      { role: 'taker', coachId: 'coach-2', action: 'assigned', block: reqBlock, blockId: 'blk-req' },
+      { role: 'taker', coachId: 'coach-2', action: 'unassigned', block: tgtBlock, blockId: 'blk-tgt' },
+      { role: 'requester', coachId: 'req-1', action: 'assigned', block: tgtBlock, blockId: 'blk-tgt' },
+    ])
+  })
+
+  it('falls back to the embed block_id when the block embed is missing', () => {
+    const swap = makeSwap({ target_id: 'coach-2', requester_shift: { id: 'asg-req', profile_id: 'req-1', block_id: 'blk-req' } })
+    const entries = swapChangeLogEntries('approved_reassign', swap)
+    expect(entries.map((e) => [e.block, e.blockId])).toEqual([[null, 'blk-req'], [null, 'blk-req']])
+  })
+
+  it('returns nothing for any other effect', () => {
+    for (const effect of ['approved_drop', 'rejected', 'claimed', 'cancelled', 'denied']) {
+      expect(swapChangeLogEntries(effect, makeSwap({ target_id: 'coach-2' }))).toEqual([])
+    }
+    expect(swapChangeLogEntries('approved_swap', null)).toEqual([])
   })
 })

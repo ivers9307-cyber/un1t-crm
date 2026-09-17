@@ -405,3 +405,271 @@ describe('PUT /api/schedule/swaps/[id] — approved drop does not double-notify 
     expect(after.mock.calls[0][0]).toBeInstanceOf(Function)
   })
 })
+
+// SWAPAUDIT.1 — an approved reassign / reciprocal swap moved coaches between
+// shifts and wrote NO roster_change_log rows, so a published roster's audit
+// trail could not show who moved where. These pin: the rows written (2 for a
+// reassign, 4 for a reciprocal swap), that they are only written once the
+// assignment ops succeeded, and the SWAPNOTIFY.1 stamping rule applied PER
+// COACH — draft/past rows stamped at write time, otherwise a coach's rows are
+// stamped only when THAT coach's decision message delivered.
+describe('PUT /api/schedule/swaps/[id] — approved reassign/swap audit (SWAPAUDIT.1)', () => {
+  const FUTURE = '2099-01-01'
+  const PAST = '2000-01-01'
+  const TAKER = 'coach-2'
+
+  function block(id, date, rosterStatus = 'published') {
+    return { id, location_id: 'loc-1', block_date: date, rosters: rosterStatus ? { status: rosterStatus } : null }
+  }
+
+  function reassignSwap({ date = FUTURE, rosterStatus = 'published' } = {}) {
+    return {
+      id: 'swap-1',
+      status: 'awaiting_approval',
+      location_id: 'loc-1',
+      requester_id: REQUESTER,
+      requester_shift_id: 'assign-1',
+      target_shift_id: null,
+      target_id: TAKER,
+      requester_shift: { id: 'assign-1', profile_id: REQUESTER, block_id: 'block-1', block: block('block-1', date, rosterStatus) },
+      target_shift: null,
+    }
+  }
+
+  function reciprocalSwap({ reqDate = FUTURE, tgtDate = FUTURE, reqStatus = 'published', tgtStatus = 'published' } = {}) {
+    return {
+      ...reassignSwap({ date: reqDate, rosterStatus: reqStatus }),
+      target_shift_id: 'assign-2',
+      target_shift: { id: 'assign-2', profile_id: TAKER, block_id: 'block-2', block: block('block-2', tgtDate, tgtStatus) },
+    }
+  }
+
+  // shift_assignments supports update() here (the move ops), recording each
+  // write in `calls` so ordering against the change log can be asserted.
+  function buildMoveDb(swap, calls, updateErr = null) {
+    const base = buildDb(swap, calls)
+    return {
+      from: (table) => {
+        if (table === 'shift_assignments') {
+          return {
+            update: () => ({
+              eq: (col, val) => {
+                calls.push(`assignment_update:${val}`)
+                return Promise.resolve({ error: updateErr })
+              },
+            }),
+          }
+        }
+        return base.from(table)
+      },
+    }
+  }
+
+  // logRosterChange hands out a distinct id per row so stamps can be checked
+  // by id: log-<coach>-<action>-<block>.
+  function idPerRow(calls) {
+    logRosterChange.mockImplementation(async (_db, c) => {
+      calls?.push('roster_change_log')
+      return { logged: true, id: `log-${c.coachId}-${c.action}-${c.blockId}` }
+    })
+  }
+
+  // Deliver per recipient: map userId -> result.
+  function deliver(byUser) {
+    notifyUsersOnce.mockImplementation(async (_db, _key, to) => byUser[to[0]])
+  }
+
+  const SENT = { sent: 1, emailed: 0, skipped: 0, failed: 0, deduped: 0 }
+  const EMAILED = { sent: 0, emailed: 1, skipped: 0, failed: 0, deduped: 0 }
+  const SKIPPED = { sent: 0, emailed: 0, skipped: 1, failed: 0, deduped: 0 }
+  const FAILED = { sent: 0, emailed: 0, skipped: 0, failed: 1, deduped: 0 }
+  const DEDUPED = { sent: 0, emailed: 0, skipped: 0, failed: 0, deduped: 1 }
+
+  const stampedIds = () => markChangesNotified.mock.calls.flatMap((c) => c[1]).sort()
+
+  it('a reassign logs unassigned for the requester and assigned for the taker, after the update', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const calls = []
+    createServerClient.mockReturnValue(buildMoveDb(reassignSwap(), calls))
+    idPerRow(calls)
+
+    const res = await PUT(req({ status: 'approved' }), PROPS)
+    expect(res.status).toBe(200)
+    expect((await res.json()).success).toBe(true)
+
+    expect(calls).toEqual(['swap_update', 'assignment_update:assign-1', 'roster_change_log', 'roster_change_log'])
+    const changes = logRosterChange.mock.calls.map((c) => c[1])
+    expect(changes).toEqual([
+      { isPublished: true, locationId: 'loc-1', blockId: 'block-1', blockDate: FUTURE, actorId: MANAGER.id, coachId: REQUESTER, action: 'unassigned', details: { via: 'swap', swap_id: 'swap-1', effect: 'approved_reassign' } },
+      { isPublished: true, locationId: 'loc-1', blockId: 'block-1', blockDate: FUTURE, actorId: MANAGER.id, coachId: TAKER, action: 'assigned', details: { via: 'swap', swap_id: 'swap-1', effect: 'approved_reassign' } },
+    ])
+  })
+
+  it('a reciprocal swap logs four rows, one leave + one take per block', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const calls = []
+    createServerClient.mockReturnValue(buildMoveDb(reciprocalSwap({ tgtDate: '2099-02-02' }), calls))
+    idPerRow(calls)
+
+    const res = await PUT(req({ status: 'approved' }), PROPS)
+    expect(res.status).toBe(200)
+
+    expect(calls).toEqual(['swap_update', 'assignment_update:assign-1', 'assignment_update:assign-2',
+      'roster_change_log', 'roster_change_log', 'roster_change_log', 'roster_change_log'])
+    const rows = logRosterChange.mock.calls.map(([, c]) => [c.blockId, c.blockDate, c.coachId, c.action])
+    expect(rows).toEqual([
+      ['block-1', FUTURE, REQUESTER, 'unassigned'],
+      ['block-1', FUTURE, TAKER, 'assigned'],
+      ['block-2', '2099-02-02', TAKER, 'unassigned'],
+      ['block-2', '2099-02-02', REQUESTER, 'assigned'],
+    ])
+    for (const [, c] of logRosterChange.mock.calls) {
+      expect(c.actorId).toBe(MANAGER.id)
+      expect(c.details).toEqual({ via: 'swap', swap_id: 'swap-1', effect: 'approved_swap' })
+    }
+  })
+
+  it('stamps each coach\'s rows once that coach\'s decision message delivered (published, future)', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    createServerClient.mockReturnValue(buildMoveDb(reciprocalSwap(), []))
+    idPerRow()
+    deliver({ [REQUESTER]: SENT, [TAKER]: EMAILED })
+
+    await PUT(req({ status: 'approved' }), PROPS)
+    await flush()
+
+    // Two separate stamps: one per coach, each only their own rows.
+    expect(markChangesNotified).toHaveBeenCalledTimes(2)
+    expect(markChangesNotified.mock.calls[0][1].sort()).toEqual([
+      `log-${REQUESTER}-assigned-block-2`, `log-${REQUESTER}-unassigned-block-1`,
+    ])
+    expect(markChangesNotified.mock.calls[1][1].sort()).toEqual([
+      `log-${TAKER}-assigned-block-1`, `log-${TAKER}-unassigned-block-2`,
+    ])
+  })
+
+  it('leaves an undelivered coach unstamped while stamping the delivered one', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    createServerClient.mockReturnValue(buildMoveDb(reassignSwap(), []))
+    idPerRow()
+    deliver({ [REQUESTER]: SENT, [TAKER]: SKIPPED })
+
+    await PUT(req({ status: 'approved' }), PROPS)
+    await flush()
+
+    expect(stampedIds()).toEqual([`log-${REQUESTER}-unassigned-block-1`])
+  })
+
+  it.each([['opted out', SKIPPED], ['failed', FAILED], ['deduped only', DEDUPED], ['no result', undefined]])(
+    'does NOT stamp either coach when delivery is %s', async (_label, result) => {
+      getCurrentUser.mockResolvedValue(MANAGER)
+      createServerClient.mockReturnValue(buildMoveDb(reciprocalSwap(), []))
+      idPerRow()
+      deliver({ [REQUESTER]: result, [TAKER]: result })
+
+      await PUT(req({ status: 'approved' }), PROPS)
+      await flush()
+
+      expect(markChangesNotified).not.toHaveBeenCalled()
+    })
+
+  it('stamps DRAFT roster rows at write time, even with nothing delivered, and never twice', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    createServerClient.mockReturnValue(buildMoveDb(reassignSwap({ rosterStatus: 'draft' }), []))
+    idPerRow()
+    deliver({ [REQUESTER]: SENT, [TAKER]: SENT })
+
+    const res = await PUT(req({ status: 'approved' }), PROPS)
+    expect(res.status).toBe(200)
+    // The real roster status is passed through — logRosterChange itself
+    // no-ops a draft; the mock logs anyway to prove the stamp is defensive.
+    expect(logRosterChange.mock.calls.every(([, c]) => c.isPublished === false)).toBe(true)
+    await flush()
+
+    expect(markChangesNotified).toHaveBeenCalledTimes(1)
+    expect(stampedIds()).toEqual([`log-${TAKER}-assigned-block-1`, `log-${REQUESTER}-unassigned-block-1`].sort())
+  })
+
+  it('stamps rows with no block embed at write time', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const swap = reassignSwap()
+    swap.requester_shift.block = null
+    createServerClient.mockReturnValue(buildMoveDb(swap, []))
+    idPerRow()
+    deliver({ [REQUESTER]: SKIPPED, [TAKER]: SKIPPED })
+
+    await PUT(req({ status: 'approved' }), PROPS)
+    await flush()
+
+    expect(logRosterChange.mock.calls[0][1].blockId).toBe('block-1')
+    expect(stampedIds()).toEqual([`log-${TAKER}-assigned-block-1`, `log-${REQUESTER}-unassigned-block-1`].sort())
+  })
+
+  it('stamps PAST block rows at write time; the future block waits on delivery', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    createServerClient.mockReturnValue(buildMoveDb(reciprocalSwap({ reqDate: PAST, tgtDate: FUTURE }), []))
+    idPerRow()
+    deliver({ [REQUESTER]: SKIPPED, [TAKER]: SKIPPED })
+
+    await PUT(req({ status: 'approved' }), PROPS)
+    await flush()
+
+    // Only block-1 (past) — block-2's rows stay for the safety net.
+    expect(markChangesNotified).toHaveBeenCalledTimes(1)
+    expect(stampedIds()).toEqual([`log-${TAKER}-assigned-block-1`, `log-${REQUESTER}-unassigned-block-1`].sort())
+  })
+
+  it('writes no change log and stamps nothing when an assignment update fails', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    createServerClient.mockReturnValue(buildMoveDb(reciprocalSwap(), [], { message: 'update blew up' }))
+    idPerRow()
+
+    const res = await PUT(req({ status: 'approved' }), PROPS)
+    expect(res.status).toBe(400)
+    await flush()
+
+    expect(logRosterChange).not.toHaveBeenCalled()
+    expect(markChangesNotified).not.toHaveBeenCalled()
+    expect(notifyUsersOnce).not.toHaveBeenCalled()
+  })
+
+  it('a change-log failure never fails the approval', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    createServerClient.mockReturnValue(buildMoveDb(reassignSwap(), []))
+    logRosterChange.mockRejectedValue(new Error('log exploded'))
+    deliver({ [REQUESTER]: SENT, [TAKER]: SENT })
+
+    const res = await PUT(req({ status: 'approved' }), PROPS)
+    expect(res.status).toBe(200)
+    expect((await res.json()).success).toBe(true)
+    await flush()
+
+    expect(logWarn).toHaveBeenCalledWith('swaps', 'approved swap: change log failed', expect.objectContaining({ swapId: 'swap-1', err: 'log exploded' }))
+    expect(markChangesNotified).not.toHaveBeenCalled()
+    // Both coaches are still told.
+    expect(notifyUsersOnce).toHaveBeenCalledTimes(2)
+  })
+
+  it('a row logRosterChange skipped (not logged) is never stamped', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    createServerClient.mockReturnValue(buildMoveDb(reassignSwap({ date: PAST }), []))
+    logRosterChange.mockResolvedValue({ logged: false, reason: 'not_published' })
+
+    await PUT(req({ status: 'approved' }), PROPS)
+    await flush()
+
+    expect(markChangesNotified).not.toHaveBeenCalled()
+  })
+
+  it('a rejection writes no change log', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    createServerClient.mockReturnValue(buildMoveDb(reassignSwap(), []))
+
+    const res = await PUT(req({ status: 'rejected' }), PROPS)
+    expect(res.status).toBe(200)
+    await flush()
+
+    expect(logRosterChange).not.toHaveBeenCalled()
+    expect(markChangesNotified).not.toHaveBeenCalled()
+  })
+})
