@@ -176,7 +176,7 @@ describe('upsertShiftAssignment', () => {
 // Per-table mock for the batch writer. shift_blocks is queried twice —
 // a select-chain (existing-block lookup) and an insert-chain (create) —
 // so the builder supports both.
-function makeBulkDb({ templates = [], existingBlocks = [], createdBlocks = [], publishedRosters = [], rosterError = null } = {}) {
+function makeBulkDb({ templates = [], existingBlocks = [], createdBlocks = [], publishedRosters = [], rosterError = null, insertedAssignments = null, assignmentError = null } = {}) {
   const captured = { blockInsert: null, assignmentUpsert: null, rosterQueries: [] }
   const db = {
     captured,
@@ -223,7 +223,25 @@ function makeBulkDb({ templates = [], existingBlocks = [], createdBlocks = [], p
         }
       }
       if (table === 'shift_assignments') {
-        return { upsert: (rows, opts) => { captured.assignmentUpsert = { rows, opts }; return Promise.resolve({ error: null }) } }
+        // COPYFIX.1 — the writer now chains `.select('id')` off the upsert
+        // and derives `count` from the rows that call reports, not from the
+        // payload it sent (ON CONFLICT DO NOTHING can insert fewer rows than
+        // were offered). `insertedAssignments` lets a test say "the upsert
+        // only actually inserted THESE"; the default mirrors every row back
+        // so existing tests (written before ignoreDuplicates) keep their
+        // count == payload-length behaviour.
+        return {
+          upsert: (rows, opts) => {
+            captured.assignmentUpsert = { rows, opts }
+            return {
+              select: () => Promise.resolve(
+                assignmentError
+                  ? { data: null, error: assignmentError }
+                  : { data: insertedAssignments ?? rows.map((_, i) => ({ id: `ins-${i}` })), error: null },
+              ),
+            }
+          },
+        }
       }
       throw new Error(`unexpected table ${table}`)
     },
@@ -253,7 +271,7 @@ describe('bulkUpsertShiftAssignments', () => {
       block_id: 'blk-x', profile_id: 'p1', status: 'scheduled',
       start_time_override: '08:00:00', end_time_override: null, notes: 'n', assigned_by: 'mgr1',
     })
-    expect(db.captured.assignmentUpsert.opts).toEqual({ onConflict: 'block_id,profile_id' })
+    expect(db.captured.assignmentUpsert.opts).toEqual({ onConflict: 'block_id,profile_id', ignoreDuplicates: true })
   })
 
   it('creates missing blocks from template defaults then references them', async () => {
@@ -400,5 +418,41 @@ describe('bulkUpsertShiftAssignments', () => {
     const res = await bulkUpsertShiftAssignments(db, { locationId: 'loc1', rows: [{ profileId: 'p1', shiftTemplateId: 't1', shiftDate: '2026-06-08' }] })
     expect(res.error?.message).toMatch(/shift_template not found/)
     expect(res.count).toBe(0)
+  })
+
+  // COPYFIX.1 — ON CONFLICT DO NOTHING can insert fewer rows than the
+  // payload offered (an existing target row is skipped, not overwritten).
+  // `count` must reflect what the upsert actually inserted.
+  it('counts the rows the upsert actually inserted, not the payload length', async () => {
+    const db = makeBulkDb({
+      templates: [tpl1],
+      existingBlocks: [{ id: 'blk-x', template_id: 't1', block_date: '2026-06-08' }],
+      // Two rows offered, only one comes back — the other hit an existing
+      // (block, profile) row and was skipped by ignoreDuplicates.
+      insertedAssignments: [{ id: 'ins-1' }],
+    })
+    const res = await bulkUpsertShiftAssignments(db, {
+      locationId: 'loc1',
+      rows: [
+        { profileId: 'p1', shiftTemplateId: 't1', shiftDate: '2026-06-08' },
+        { profileId: 'p2', shiftTemplateId: 't1', shiftDate: '2026-06-08' },
+      ],
+    })
+    expect(res).toEqual({ count: 1, error: null })
+    expect(db.captured.assignmentUpsert.rows).toHaveLength(2)
+    expect(db.captured.assignmentUpsert.opts).toEqual({ onConflict: 'block_id,profile_id', ignoreDuplicates: true })
+  })
+
+  it('returns { count: 0, error } when the assignment upsert errors', async () => {
+    const db = makeBulkDb({
+      templates: [tpl1],
+      existingBlocks: [{ id: 'blk-x', template_id: 't1', block_date: '2026-06-08' }],
+      assignmentError: { message: 'upsert boom' },
+    })
+    const res = await bulkUpsertShiftAssignments(db, {
+      locationId: 'loc1',
+      rows: [{ profileId: 'p1', shiftTemplateId: 't1', shiftDate: '2026-06-08' }],
+    })
+    expect(res).toEqual({ count: 0, error: { message: 'upsert boom' } })
   })
 })
