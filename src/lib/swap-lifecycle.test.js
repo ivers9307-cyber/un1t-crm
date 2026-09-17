@@ -1,6 +1,6 @@
 // src/lib/swap-lifecycle.test.js
 import { describe, it, expect } from 'vitest'
-import { resolveSwapTransition, TERMINAL_SWAP_STATES, swapChangeLogEntries } from './swap-lifecycle'
+import { resolveSwapTransition, TERMINAL_SWAP_STATES, swapChangeLogEntries, reciprocalSwapError } from './swap-lifecycle'
 
 // Minimal swap factory. requester_shift / target_shift mirror the embed the
 // route fetches (only profile_id is read by the resolver).
@@ -402,5 +402,26 @@ describe('swapChangeLogEntries (SWAPAUDIT.1)', () => {
       expect(swapChangeLogEntries(effect, makeSwap({ target_id: 'coach-2' }))).toEqual([])
     }
     expect(swapChangeLogEntries('approved_swap', null)).toEqual([])
+  })
+})
+
+describe('reciprocalSwapError (SWAPATOMIC.1)', () => {
+  it('maps each swap_* refusal to a 409 with a human message', () => {
+    for (const prefix of ['swap_not_open', 'swap_shift_missing', 'swap_stale', 'swap_same_block', 'swap_conflict']) {
+      const r = reciprocalSwapError({ code: 'P0001', message: `${prefix}: detail` })
+      expect(r.status).toBe(409)
+      expect(r.error).not.toMatch(/^swap_/)
+    }
+  })
+  it('maps swap_not_found to 404', () => {
+    expect(reciprocalSwapError({ code: 'P0001', message: 'swap_not_found: x' })).toEqual({ status: 404, error: 'Swap request not found' })
+  })
+  it('maps a unique violation to a 409 conflict', () => {
+    expect(reciprocalSwapError({ code: '23505', message: 'duplicate key' }).status).toBe(409)
+  })
+  it('leaves an unrecognised P0001 or any other error as a 400 with the raw message', () => {
+    expect(reciprocalSwapError({ code: 'P0001', message: 'something else' })).toEqual({ status: 400, error: 'something else' })
+    expect(reciprocalSwapError({ code: '08006', message: 'connection lost' })).toEqual({ status: 400, error: 'connection lost' })
+    expect(reciprocalSwapError(null)).toEqual({ status: 400, error: 'Swap failed' })
   })
 })
