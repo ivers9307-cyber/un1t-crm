@@ -710,8 +710,10 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   { key: 'notify_expense_declined',  label: '… Expense declined',   hint: 'Notify when an expense claim you submitted needs adjustment',   mobileOnly: true, isNotify: true },
   // Partial-shift overrides (mig 099/100). Coach gets a push when a
   // manager adjusts their times — the schedule effectively shifted
-  // out from under them, so a heads-up is high-value.
-  { key: 'notify_shift_adjusted',   label: '… Shift adjusted',     hint: 'Notify when a manager changes the times on one of your shifts', mobileOnly: true, isNotify: true },
+  // out from under them, so a heads-up is high-value. NOTIFY.1 widened
+  // the category to post-publish adds/removes too; the key stays
+  // `notify_shift_adjusted` so existing opt-outs keep applying.
+  { key: 'notify_shift_adjusted',   label: '… Shift changes',      hint: 'Notify when a manager adds you to a shift, removes you from one, or changes its times', mobileOnly: true, isNotify: true },
   // Digital contracts (mig 106). Recipient gets a push when a
   // master/owner issues them a contract for signature. Default-on
   // for every role because the prompt-to-sign flow depends on it.
