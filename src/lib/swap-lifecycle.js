@@ -210,3 +210,30 @@ export function swapChangeLogEntries(effect, swap) {
 
   return []
 }
+
+// SWAPATOMIC.1 — map an approve_reciprocal_shift_swap error to a response.
+// The function raises P0001 with a `swap_*:` message prefix for every state
+// it refuses on purpose; those are conflicts with the current data (409) and
+// carry a human sentence after the prefix. A unique-key violation (23505) is
+// the same kind of conflict. Anything else is an unexpected failure (400, as
+// the route has always answered) — and in every case NOTHING was written.
+const SWAP_RPC_MESSAGES = {
+  swap_not_found: 'Swap request not found',
+  swap_not_open: 'This swap has already been decided',
+  swap_shift_missing: 'One of the shifts in this swap no longer exists',
+  swap_stale: 'One of these shifts has changed hands since the swap was requested',
+  swap_same_block: 'Both shifts are on the same block, so the swap would change nothing',
+  swap_conflict: 'One of the coaches is already on the other shift',
+}
+
+export function reciprocalSwapError(err) {
+  const message = err?.message || 'Swap failed'
+  const prefix = message.split(':')[0]
+  if (err?.code === 'P0001' && SWAP_RPC_MESSAGES[prefix]) {
+    return { status: prefix === 'swap_not_found' ? 404 : 409, error: SWAP_RPC_MESSAGES[prefix] }
+  }
+  if (err?.code === '23505') {
+    return { status: 409, error: SWAP_RPC_MESSAGES.swap_conflict }
+  }
+  return { status: 400, error: message }
+}

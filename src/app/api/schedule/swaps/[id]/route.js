@@ -5,7 +5,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { swapStatusSchema } from '@/lib/schemas'
-import { resolveSwapTransition, swapChangeLogEntries } from '@/lib/swap-lifecycle'
+import { resolveSwapTransition, swapChangeLogEntries, reciprocalSwapError } from '@/lib/swap-lifecycle'
 import { notifyUsersOnce, notifyUsersAtRolesOnce } from '@/lib/push-dedup'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { hasPermissionForLocation } from '@/lib/permissions'
@@ -78,12 +78,38 @@ export async function PUT(request, props) {
   // audit trail says a shift was dropped that the coach is in fact still on.
   // The caller gets a 400, so nothing claims success, but the partial state
   // outlives the request and only a log says so — see the logWarn below.
-  const { data, error } = await db.from('shift_swap_requests')
-    .update(decision.swapUpdates)
-    .eq('id', params.id)
-    .select()
-    .single()
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+  //
+  // SWAPATOMIC.1 — none of that applies to a RECIPROCAL swap any more. It used
+  // to be the swap-row update below plus two separate assignment UPDATEs, so a
+  // failure on the second left one coach moved, the other not, the swap
+  // approved and no audit row. Mig 612's approve_reciprocal_shift_swap does
+  // the approval and both moves in one transaction (locks, stale/same-block/
+  // conflict checks, overlap guard judged on the final state), so the route
+  // skips its own swap-row update and assignment loop for that effect.
+  let data
+  if (decision.effect === 'approved_swap') {
+    const { data: approved, error: rpcErr } = await db.rpc('approve_reciprocal_shift_swap', {
+      p_swap_id: params.id,
+      p_reviewed_by: decision.swapUpdates.reviewed_by,
+      p_reviewed_at: decision.swapUpdates.reviewed_at,
+      p_review_note: decision.swapUpdates.review_note,
+      p_requester_profile: swap.requester_shift?.profile_id ?? null,
+      p_target_profile: swap.target_shift?.profile_id ?? null,
+    })
+    if (rpcErr) {
+      const { status, error: msg } = reciprocalSwapError(rpcErr)
+      return NextResponse.json({ success: false, error: msg }, { status })
+    }
+    data = approved
+  } else {
+    const { data: updated, error } = await db.from('shift_swap_requests')
+      .update(decision.swapUpdates)
+      .eq('id', params.id)
+      .select()
+      .single()
+    if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+    data = updated
+  }
 
   // SWAPNOTIFY.1 — the drop's roster_change_log row (dropLog below) can end
   // up double-notifying the coach: dispatchSwapNotifications already sends
@@ -95,8 +121,10 @@ export async function PUT(request, props) {
   let dropLog = null
   let dropStamped = false
 
-  // Assignment writes are awaited so a failure surfaces.
-  for (const op of decision.assignmentOps) {
+  // Assignment writes are awaited so a failure surfaces. A reciprocal swap's
+  // moves already happened inside the RPC above (SWAPATOMIC.1).
+  const ops = decision.effect === 'approved_swap' ? [] : decision.assignmentOps
+  for (const op of ops) {
     // ROSTER-FIX.1 (D4) — audit the drop BEFORE the row goes. After the delete
     // there is no assignment and no embed left to describe what happened
     // (ROSTER-FIX.8a: the swap row itself now survives, with a null
