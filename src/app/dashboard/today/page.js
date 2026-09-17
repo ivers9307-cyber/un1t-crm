@@ -27,12 +27,12 @@ import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import {
   fetchPersonalDashboardData,
-  fetchUnstaffedBlocksThisWeek,
   fetchIncompletePayProfiles,
   fetchPendingRosterApprovalsCount,
 } from '@shared/dashboard-data'
 import { buildMonthMatrix } from '@shared/roster-month'
 import { MANAGER_ROLES } from '@/lib/schemas'
+import { fetchStaffingGapsThisWeek, staffingGapsHeadline, staffingGapsBreakdown } from '@/lib/roster-staffing'
 import { fetchTodayFeed } from '@/lib/today-feed-data'
 import { assembleHomeQueue, queueCountLabel, groupQueueRows } from '@/lib/home-queue'
 import { relativeTime } from '@/lib/mail/conversation-display'
@@ -214,19 +214,21 @@ export default async function PersonalDashboardPage() {
         .map(([id]) => id)
   const isOwnerSomewhere = ownerLocationIds.length > 0
 
-  let unstaffedCount = 0
+  // ROSTERVIS.1 — empty AND below-minimum shifts. This chip used to count only
+  // shifts with zero coaches, so a shift at 1 of 2 never raised it.
+  let staffingGaps = { empty: 0, short: 0, total: 0 }
   let incompletePay = { count: 0, sample: [] }
   let pendingApprovals = 0
   if (isManager || isOwnerSomewhere) {
     const locIds = user.role === 'master'
       ? (user.locations || []).map(l => l.id)
       : getUserLocationIds(user)
-    const [unstaffedRes, payRes, approvalsRes] = await Promise.all([
-      fetchUnstaffedBlocksThisWeek(db, locIds),
+    const [staffingGapsRes, payRes, approvalsRes] = await Promise.all([
+      fetchStaffingGapsThisWeek(db, locIds),
       fetchIncompletePayProfiles(db, locIds),
       isOwnerSomewhere ? fetchPendingRosterApprovalsCount(db, ownerLocationIds) : Promise.resolve({ success: true, data: { count: 0 } }),
     ])
-    if (unstaffedRes.success) unstaffedCount = unstaffedRes.data.count
+    if (staffingGapsRes.success) staffingGaps = staffingGapsRes.data
     if (payRes.success) incompletePay = payRes.data
     if (approvalsRes.success) pendingApprovals = approvalsRes.data.count
   }
@@ -367,19 +369,25 @@ export default async function PersonalDashboardPage() {
           Empty future shift_blocks across the user's locations;
           customers will be in the studio either way, so loud surfacing
           here matches the "demand window" model. */}
-      {isManager && unstaffedCount > 0 && (
+      {/* ROSTERVIS.1 — red while any shift has no coach at all, amber when
+          every gap is a below-minimum one. */}
+      {isManager && staffingGaps.total > 0 && (
         <Link
           href="/schedule"
-          className="block mt-3 p-3 rounded-lg border border-red-500/40 bg-red-500/10 hover:bg-red-500/15 transition-colors"
+          className={`block mt-3 p-3 rounded-lg border transition-colors ${
+            staffingGaps.empty > 0
+              ? 'border-red-500/40 bg-red-500/10 hover:bg-red-500/15'
+              : 'border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/15'
+          }`}
         >
           <div className="flex items-start gap-3">
-            <AlertCircle size={16} className="text-red-600 mt-0.5 flex-shrink-0" />
+            <AlertCircle size={16} className={`${staffingGaps.empty > 0 ? 'text-red-600' : 'text-amber-600'} mt-0.5 flex-shrink-0`} />
             <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-red-700">
-                {unstaffedCount} unstaffed block{unstaffedCount === 1 ? '' : 's'} this week
+              <div className={`text-sm font-medium ${staffingGaps.empty > 0 ? 'text-red-700' : 'text-amber-700'}`}>
+                {staffingGapsHeadline(staffingGaps)}
               </div>
-              <div className="text-xs text-red-700/80 mt-0.5">
-                Demand windows with no coach assigned. Click to open the schedule.
+              <div className={`text-xs mt-0.5 ${staffingGaps.empty > 0 ? 'text-red-700/80' : 'text-amber-700/90'}`}>
+                {staffingGapsBreakdown(staffingGaps)}. Click to open the schedule.
               </div>
             </div>
           </div>
