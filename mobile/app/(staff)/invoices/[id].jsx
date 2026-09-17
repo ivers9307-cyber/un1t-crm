@@ -13,16 +13,8 @@ import { Ionicons } from '@expo/vector-icons'
 import * as WebBrowser from 'expo-web-browser'
 import { getInvoice, getInvoicePdfUrl, revokeInvoice, approveInvoice, declineInvoice, periodLabel } from '../../../lib/invoices-api'
 import BackHeaderLeft from '../../../components/BackHeaderLeft'
-
-const STATUS_STYLE = {
-  submitted: { label: 'Awaiting review', tint: '#D97706', bg: 'bg-amber-500/20', text: 'text-amber-700', icon: 'time-outline' },
-  // Owner-approved → awaiting the bookkeeper's Xero sign-off (web). From
-  // the owner/contractor view it reads as "Approved".
-  awaiting_accountant_review: { label: 'Approved', tint: '#059669', bg: 'bg-green-500/20', text: 'text-green-700', icon: 'checkmark-circle-outline' },
-  approved:  { label: 'Approved',        tint: '#059669', bg: 'bg-green-500/20', text: 'text-green-700', icon: 'checkmark-circle-outline' },
-  declined:  { label: 'Declined',        tint: '#DC2626', bg: 'bg-red-500/20',   text: 'text-red-700',   icon: 'close-circle-outline' },
-  revoked:   { label: 'Revoked',         tint: '#64748B', bg: 'bg-slate-500/20', text: 'text-slate-700', icon: 'arrow-undo-outline' },
-}
+import { RosterComparison } from '../../../components/invoices/RosterComparison'
+import { invoiceStatusBadge, reviewComparisonView } from '../../../lib/invoice-review'
 
 export default function InvoiceDetailScreen() {
   const { id } = useLocalSearchParams()
@@ -131,7 +123,10 @@ export default function InvoiceDetailScreen() {
     )
   }
 
-  const status = STATUS_STYLE[data.status] || STATUS_STYLE.submitted
+  // INVOICEREVIEW.2 — honest lifecycle label (queued / sent to Xero / paid)
+  // and the roster comparison, both computed server-side.
+  const status = invoiceStatusBadge(data)
+  const comparison = reviewComparisonView(data)
 
   return (
     <>
@@ -205,6 +200,10 @@ export default function InvoiceDetailScreen() {
           </View>
           <Ionicons name="open-outline" size={18} color="#64748B" />
         </Pressable>
+
+        {/* Roster vs invoice — reviewer only (the API sends it only to
+            owner/master). Snapshot as approved once approved. */}
+        <RosterComparison view={comparison} />
 
         {/* Approver actions — owner/master reviewing a submitted invoice.
             The approve/decline routes enforce owner-at-location / master. */}
@@ -293,7 +292,8 @@ function Timeline({ data }) {
   if (data.reviewed_at && (data.status === 'approved' || data.status === 'awaiting_accountant_review')) {
     events.push({ ts: data.reviewed_at, label: 'Approved', sub: data.reviewer?.full_name ? `by ${data.reviewer.full_name}` : null, tone: 'green' })
   }
-  if (data.xero_synced_at) events.push({ ts: data.xero_synced_at, label: 'Forwarded to accounts', tone: 'green' })
+  // Legacy direct-to-Xero forward (pre invoices_queue).
+  if (data.xero_synced_at) events.push({ ts: data.xero_synced_at, label: 'Sent to Xero', tone: 'green' })
   events.sort((a, b) => new Date(a.ts) - new Date(b.ts))
 
   return (

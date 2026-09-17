@@ -5,7 +5,8 @@
 //   1. Check status = 'submitted'
 //   2. Snapshot the at-review hours/cost into the row (audit truth)
 //   3. Stamp status='approved', reviewed_*, approved_at
-//   4. Forward PDF to Xero via email-to-bills (best-effort)
+//   4. Enqueue into invoices_queue for the accountant (best-effort) —
+//      the bookkeeper forwards to Xero from /invoices, not this route
 //   5. Send approval email to contractor (best-effort)
 //
 // Steps 4 + 5 are wrapped in try/catch so a Xero or Postmark blip
@@ -123,7 +124,7 @@ export async function POST(_request, props) {
   try {
     await notifyUsersOnce(db, `invoice_approved:${approved.id}:${approved.reviewed_at || ''}`, [approved.contractor_id], {
       title: 'Invoice approved',
-      body: `€${Number(approved.invoice_amount).toFixed(2)} for ${periodLabel(approved.period_start)} has been approved and forwarded to accounts.`,
+      body: `€${Number(approved.invoice_amount).toFixed(2)} for ${periodLabel(approved.period_start)} has been approved and queued for payment processing.`,
       category: 'invoice_approved',
       emailSubject: `Your invoice has been approved — €${Number(approved.invoice_amount).toFixed(2)}`,
       data: {

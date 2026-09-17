@@ -105,7 +105,7 @@ export async function sendInvoiceApprovedEmail(invoiceId) {
       <p>Hi ${escapeHtml(inv.contractor.full_name || 'there')},</p>
       <p>Your invoice for <strong>${period}</strong> has been approved${
         inv.reviewer?.full_name ? ` by ${escapeHtml(inv.reviewer.full_name)}` : ''
-      } and forwarded to our accounts package for payment processing.</p>
+      } and queued for payment processing. Our accountant reviews it next, and it is paid from there.</p>
       <table style="border-collapse:collapse;margin:16px 0">
         <tr><td style="padding:4px 12px 4px 0;color:#666">Period</td><td style="padding:4px 0">${period}</td></tr>
         <tr><td style="padding:4px 12px 4px 0;color:#666">Amount</td><td style="padding:4px 0">€${Number(inv.invoice_amount).toFixed(2)}</td></tr>
@@ -119,7 +119,7 @@ export async function sendInvoiceApprovedEmail(invoiceId) {
   `.trim()
   const textBody =
     `Hi ${inv.contractor.full_name || 'there'},\n\n` +
-    `Your invoice for ${period} has been approved and forwarded for payment.\n\n` +
+    `Your invoice for ${period} has been approved and queued for payment processing. Our accountant reviews it next, and it is paid from there.\n\n` +
     `Amount: €${Number(inv.invoice_amount).toFixed(2)}\n` +
     `Approved at: ${formatFullDateTimeInTZ(inv.approved_at)}\n\n` +
     `Review your submission history: ${getAppUrl()}/schedule/invoices\n`
