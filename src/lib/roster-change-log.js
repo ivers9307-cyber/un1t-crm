@@ -24,14 +24,14 @@ export const ROSTER_CHANGE_ACTIONS = ['assigned', 'unassigned', 'time_changed']
  * @param {string}  [change.blockId]
  * @param {string}  [change.blockDate]  YYYY-MM-DD
  * @param {object}  [change.details]
- * @returns {Promise<{logged: boolean, reason?: string}>}
+ * @returns {Promise<{logged: boolean, id?: string, reason?: string}>}
  */
 export async function logRosterChange(db, change = {}) {
   try {
     if (!change.isPublished) return { logged: false, reason: 'not_published' }
     if (!ROSTER_CHANGE_ACTIONS.includes(change.action)) return { logged: false, reason: 'bad_action' }
     if (!change.locationId || !change.coachId) return { logged: false, reason: 'missing' }
-    await db.from('roster_change_log').insert({
+    const { data, error } = await db.from('roster_change_log').insert({
       location_id: change.locationId,
       block_id: change.blockId || null,
       block_date: change.blockDate || null,
@@ -39,8 +39,12 @@ export async function logRosterChange(db, change = {}) {
       coach_id: change.coachId,
       action: change.action,
       details: change.details || {},
-    })
-    return { logged: true }
+    }).select('id').single()
+    if (error) {
+      logWarn('roster-change-log', 'insert failed', { err: error.message })
+      return { logged: false, reason: 'error' }
+    }
+    return { logged: true, id: data.id }
   } catch (e) {
     logWarn('roster-change-log', 'insert failed', { err: e?.message })
     return { logged: false, reason: 'error' }

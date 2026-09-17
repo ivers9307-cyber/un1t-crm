@@ -12,13 +12,21 @@ import {
   markChangesNotified,
 } from './roster-change-log'
 
-function mockDb(captured) {
+function mockDb(captured, { insertResult = { data: { id: 'log-1' }, error: null } } = {}) {
   return {
     from() {
       return {
         insert(row) {
           captured.push(row)
-          return Promise.resolve({ error: null })
+          return {
+            select() {
+              return {
+                single() {
+                  return Promise.resolve(insertResult)
+                },
+              }
+            },
+          }
         },
       }
     },
@@ -49,12 +57,20 @@ describe('ROSTER_CHANGE_ACTIONS', () => {
 describe('logRosterChange', () => {
   const base = { isPublished: true, locationId: 'loc1', coachId: 'coach1', action: 'assigned', actorId: 'mgr1', blockId: 'blk1', blockDate: '2026-06-06' }
 
-  it('logs a post-publish edit', async () => {
+  it('logs a post-publish edit and returns the inserted id', async () => {
     const captured = []
     const r = await logRosterChange(mockDb(captured), base)
-    expect(r).toEqual({ logged: true })
+    expect(r).toEqual({ logged: true, id: 'log-1' })
     expect(captured).toHaveLength(1)
     expect(captured[0]).toMatchObject({ location_id: 'loc1', coach_id: 'coach1', action: 'assigned', actor_id: 'mgr1', block_id: 'blk1', block_date: '2026-06-06' })
+  })
+
+  it('an insert error returns logged:false and logs a warning (does not throw)', async () => {
+    const captured = []
+    const db = mockDb(captured, { insertResult: { data: null, error: { message: 'insert blew up' } } })
+    const r = await logRosterChange(db, base)
+    expect(r).toEqual({ logged: false, reason: 'error' })
+    expect(logWarn).toHaveBeenCalledWith('roster-change-log', 'insert failed', { err: 'insert blew up' })
   })
 
   it('does NOT log a draft edit (block roster not published)', async () => {
