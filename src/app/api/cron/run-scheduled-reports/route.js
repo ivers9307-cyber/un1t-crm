@@ -40,14 +40,20 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: fetchError.message }, { status: 500 })
   }
 
-  if (!dueReports || dueReports.length === 0) {
+  // REPORTS.2 — a paused schedule is skipped. Filtered here rather than with
+  // .eq('paused', false) on purpose: `select('*')` still works if this code
+  // deploys before mig 617 adds the column, where a filter on it would 400
+  // and stop EVERY schedule. A row without the field is not paused.
+  const runnable = (dueReports || []).filter(r => r.paused !== true)
+
+  if (runnable.length === 0) {
     await stampHeartbeat('run-scheduled-reports')
     return NextResponse.json({ success: true, message: 'No reports due', processed: 0 })
   }
 
   const results = []
 
-  for (const schedule of dueReports) {
+  for (const schedule of runnable) {
     try {
       // Calculate the reporting period based on frequency
       const { period_start, period_end } = calculatePeriodForSchedule(schedule.frequency)
@@ -103,8 +109,11 @@ export async function GET(request) {
         // list is dropped. See src/lib/report-recipients.js for the rule.
         let recipients = schedule.deliver_email ? (schedule.email_recipients || []) : []
         if (recipients.length > 0 && isRateReportType(schedule.report_type)) {
+          // REPORTS.2 — an address matching no staff profile is sent only if
+          // the owner confirmed it as external when saving the schedule.
           const { allowed, dropped } = await filterRateReportRecipients({
             db, locationId: schedule.location_id, recipients,
+            confirmedExternal: schedule.confirmed_external_recipients,
           })
           recipients = allowed
           // Counts only — the addresses are staff PII and this body is logged.
@@ -152,14 +161,11 @@ export async function GET(request) {
           })
         }
 
-        // If notification delivery is enabled, create an in-app notification
-        if (schedule.deliver_notification) {
-          await db.from('generated_reports')
-            .update({ notification_sent: true })
-            .eq('id', result.data.id)
-          // The UI already shows generated reports in the Report History tab,
-          // so "notification" = the report appearing in the list
-        }
+        // REPORTS.2 — the "in-app notification" delivery option is gone. It
+        // only ever stamped generated_reports.notification_sent = true; no
+        // notification was created, and the report appears in Report History
+        // whatever the flag says. No schedule in prod had it on (17 Sep), and
+        // the save routes now refuse it.
       } else {
         results.push({
           id: schedule.id,

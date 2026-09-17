@@ -50,6 +50,11 @@ function formatEur(amount) {
   }).format(amount || 0)
 }
 
+function monthName(iso) {
+  const [y, m] = iso.split('-').map(Number)
+  return new Date(y, m - 1, 1).toLocaleDateString('en-IE', { month: 'long' })
+}
+
 function monthLabel(iso) {
   const [y, m] = iso.split('-').map(Number)
   return new Date(y, m - 1, 1).toLocaleDateString('en-IE', { month: 'long', year: 'numeric' })
@@ -66,6 +71,9 @@ export default function RosterSummaryPanel({
   // eslint-disable-next-line no-unused-vars
   monthStart, location,
   contractorSpend,
+  // REPORTS.2 — set (YYYY-MM-01) when the visible week straddles two months:
+  // the panel reports the month holding most of the week and names the other.
+  spendOtherMonthStart = null,
 }) {
   const week = summarizeWeek({
     blocks,
@@ -202,6 +210,12 @@ export default function RosterSummaryPanel({
                   <span className="text-un1t-muted">FTE labour (sunk cost): {formatEur(month.fteImplicitCostEur)}</span>
                 </div>
               </>
+            )}
+
+            {spendOtherMonthStart && (
+              <p className="text-[11px] text-un1t-subtle mt-2">
+                This week runs into {monthName(spendOtherMonthStart)}. Showing {monthName(month.monthStartIso)}, which has most of its days.
+              </p>
             )}
 
             {month.monthlyBudgetEur == null && (

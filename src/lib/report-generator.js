@@ -18,7 +18,7 @@ import { logWarn } from '@/lib/log'
 const SHIFT_ROW_SELECT = `
   profile_id, start_time_override, end_time_override, status,
   profiles:profile_id ( full_name, role, employment_type ),
-  shift_blocks!inner ( block_date, location_id, shift_templates ( name, start_time, end_time ) )
+  shift_blocks!inner ( block_date, start_time, end_time, location_id, shift_templates ( name, start_time, end_time ) )
 `
 
 // ROSTER-FIX.5 — a report is about ONE location, so its staff list has to be
@@ -100,6 +100,14 @@ export async function fetchScheduledShiftRows(db, { locationId, periodStart, per
     profile_id: r.profile_id,
     start_time_override: r.start_time_override,
     end_time_override: r.end_time_override,
+    // REPORTS.2 — the block's own times ride along, so hours resolve
+    // override → block → template (shared/roster-month.js effectiveShiftStart /
+    // effectiveShiftEnd, read by payroll.shiftHours) — the same hours the
+    // calendar shows. Reports used to read the template's CURRENT times, so a
+    // block moved off its template, or a template edited after the fact, gave
+    // a report that disagreed with the roster.
+    block_start_time: r.shift_blocks?.start_time ?? null,
+    block_end_time: r.shift_blocks?.end_time ?? null,
     status: r.status,
     profiles: r.profiles,
     shift_templates: r.shift_blocks?.shift_templates,

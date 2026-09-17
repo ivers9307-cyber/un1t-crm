@@ -16,6 +16,8 @@
 //   (HH:MM[:SS]). Optional override fields take precedence:
 //   start_time_override / end_time_override.
 
+import { effectiveShiftStart, effectiveShiftEnd } from '@shared/roster-month'
+
 /**
  * Convert a HH:MM[:SS] string to fractional hours since midnight.
  * Returns null if the input is missing or malformed.
@@ -41,9 +43,15 @@ export function timeToHours(t) {
  */
 export function shiftHours(shift) {
   if (!shift) return 0
-  const tpl = shift.shift_templates || shift.shift_template || {}
-  const start = shift.start_time_override || tpl.start_time || shift.start_time
-  const end   = shift.end_time_override   || tpl.end_time   || shift.end_time
+  // REPORTS.2 — override → the BLOCK's own time → the template, the one
+  // resolution in shared/roster-month.js (MOBILESCHED.2). This used to read
+  // the TEMPLATE before the row's own start_time, so any caller that handed
+  // over a block's times beside its template (contractor-invoices, the report
+  // generator) billed the template's hours for a block that had been moved
+  // off them — and templates are edited without touching past blocks, so the
+  // reports and the calendar disagreed.
+  const start = effectiveShiftStart(shift)
+  const end   = effectiveShiftEnd(shift)
   const s = timeToHours(start)
   const e = timeToHours(end)
   if (s == null || e == null) return 0

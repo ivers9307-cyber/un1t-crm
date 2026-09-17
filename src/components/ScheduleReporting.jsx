@@ -1,11 +1,11 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Clock, Euro, CalendarOff, Users, TrendingUp, Play, Calendar, FileText, Bell, Mail, Repeat } from 'lucide-react'
+import { Clock, Euro, CalendarOff, Users, TrendingUp, Play, Calendar, FileText, Mail, Repeat, Pause, Pencil, Trash2 } from 'lucide-react'
 import { EmptyState, Loading, Modal } from '@/components/ui'
 import { toJsDay, fromJsDay, DAY_NAMES_MONDAY_FIRST } from '@/lib/report-schedule-days'
 import { formatDate } from '@/lib/roster'
-import { canViewReportType } from '@/lib/report-access'
+import { canViewReportType, isRateReportType } from '@/lib/report-access'
 import {
   EMPTY_CELL, formatEuroCell, formatHoursCell, readStaffCostRow, readStaffHoursTotal, staffCostHasSplit,
 } from '@/lib/report-staff-table'
@@ -58,7 +58,12 @@ export default function ScheduleReporting({ user }) {
   const [reportResult, setReportResult] = useState(null)
   const [history, setHistory] = useState([])
   const [scheduledReports, setScheduledReports] = useState([])
-  const [showScheduleModal, setShowScheduleModal] = useState(null) // report_type to schedule
+  // { reportType } to create, { schedule } to edit (REPORTS.2).
+  const [showScheduleModal, setShowScheduleModal] = useState(null)
+  // REPORTS.2 — the schedule id awaiting a delete confirmation, and the id
+  // whose pause/resume/delete request is in flight.
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null)
+  const [busyScheduleId, setBusyScheduleId] = useState(null)
   const [loadingHistory, setLoadingHistory] = useState(false)
   // ROSTER-FIX.6a — both loads and both writes discarded every failure, so a
   // refused read left the history and schedule lists silently empty (which
@@ -128,6 +133,32 @@ export default function ScheduleReporting({ user }) {
     }
   }
 
+  // REPORTS.2 — pause/resume (PATCH) and delete (DELETE deactivates).
+  async function changeSchedule(sr, action) {
+    setBusyScheduleId(sr.id)
+    setError(null)
+    try {
+      const url = `/api/schedule/reports/scheduled?id=${encodeURIComponent(sr.id)}`
+      if (action === 'delete') {
+        await readJson(url, { method: 'DELETE' })
+      } else {
+        await readJson(url, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ paused: action === 'pause' }),
+        })
+      }
+      setConfirmDeleteId(null)
+      await loadReports()
+    } catch (e) {
+      const title = action === 'delete' ? 'Could not delete the schedule'
+        : action === 'pause' ? 'Could not pause the schedule' : 'Could not resume the schedule'
+      setError({ title, message: e?.message || 'The request failed.', retry: false })
+    } finally {
+      setBusyScheduleId(null)
+    }
+  }
+
   function viewHistoricReport(report) {
     setReportResult(report)
     setSelectedReport(report.report_type)
@@ -161,7 +192,7 @@ export default function ScheduleReporting({ user }) {
         {[
           { key: 'generate', label: 'Generate Report', icon: Play },
           { key: 'history', label: `Report History (${history.length})`, icon: FileText },
-          { key: 'scheduled', label: `Scheduled (${scheduledReports.filter(s => s.active).length})`, icon: Repeat },
+          { key: 'scheduled', label: `Scheduled (${scheduledReports.length})`, icon: Repeat },
         ].map(t => (
           <button
             key={t.key}
@@ -239,7 +270,7 @@ export default function ScheduleReporting({ user }) {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setShowScheduleModal(selectedReport)}
+                  onClick={() => setShowScheduleModal({ reportType: selectedReport })}
                   className="flex items-center gap-1.5 px-4 py-2 border border-un1t-border text-sm text-un1t-subtle hover:text-un1t-text rounded-md transition-colors"
                 >
                   <Calendar size={14} /> Schedule
@@ -451,29 +482,91 @@ export default function ScheduleReporting({ user }) {
               {scheduledReports.map(sr => {
                 const typeInfo = REPORT_TYPES.find(rt => rt.key === sr.report_type) || { label: sr.report_type, icon: FileText }
                 const Icon = typeInfo.icon
+                const busy = busyScheduleId === sr.id
+                const recipientCount = (sr.email_recipients || []).length
                 return (
                   <div
                     key={sr.id}
-                    className={`bg-un1t-surface border border-un1t-border rounded-lg p-4 flex items-center gap-4 ${!sr.active ? 'opacity-50' : ''}`}
+                    className="bg-un1t-surface border border-un1t-border rounded-lg p-4 flex flex-wrap items-center gap-4"
                   >
-                    <div className="w-10 h-10 rounded-lg bg-purple-500/20 flex items-center justify-center shrink-0">
+                    <div className={`w-10 h-10 rounded-lg bg-purple-500/20 flex items-center justify-center shrink-0 ${sr.paused ? 'opacity-50' : ''}`}>
                       <Icon size={20} className="text-purple-700" />
                     </div>
                     <div className="flex-1 min-w-0">
-                      <div className="font-medium text-sm">{sr.report_name}</div>
-                      <div className="text-xs text-un1t-subtle mt-0.5 flex items-center gap-2">
+                      <div className="font-medium text-sm flex items-center gap-2">
+                        <span className="truncate">{sr.report_name}</span>
+                        {sr.paused && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full border bg-amber-500/10 text-amber-700 border-amber-500/30">Paused</span>
+                        )}
+                      </div>
+                      <div className="text-xs text-un1t-subtle mt-0.5 flex flex-wrap items-center gap-2">
                         <span className="capitalize">{sr.frequency}</span>
                         {sr.day_of_week != null && <span>· {DAY_NAMES_MONDAY_FIRST[fromJsDay(sr.day_of_week)]}</span>}
                         {sr.day_of_month && <span>· Day {sr.day_of_month}</span>}
-                        {sr.deliver_email && <span className="flex items-center gap-0.5"><Mail size={10} /> Email</span>}
-                        {sr.deliver_notification && <span className="flex items-center gap-0.5"><Bell size={10} /> Notification</span>}
+                        {sr.deliver_email && recipientCount > 0 && (
+                          <span className="flex items-center gap-0.5">
+                            <Mail size={10} /> Email summary to {recipientCount} {recipientCount === 1 ? 'recipient' : 'recipients'}
+                          </span>
+                        )}
+                        {!sr.deliver_email && <span>· Report History only</span>}
                       </div>
                     </div>
-                    {sr.next_run_at && (
+                    {sr.next_run_at && !sr.paused && (
                       <div className="text-xs text-un1t-subtle text-right shrink-0">
                         Next: {new Date(sr.next_run_at).toLocaleDateString('en-IE', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
                       </div>
                     )}
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {confirmDeleteId === sr.id ? (
+                        <>
+                          <span className="text-xs text-un1t-subtle">Delete this schedule?</span>
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => changeSchedule(sr, 'delete')}
+                            className="px-2.5 py-1.5 text-xs rounded-md bg-red-500/10 text-red-700 border border-red-500/30 disabled:opacity-50"
+                          >
+                            {busy ? 'Deleting…' : 'Delete'}
+                          </button>
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => setConfirmDeleteId(null)}
+                            className="px-2.5 py-1.5 text-xs rounded-md border border-un1t-border text-un1t-subtle hover:text-un1t-text"
+                          >
+                            Cancel
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => changeSchedule(sr, sr.paused ? 'resume' : 'pause')}
+                            className="flex items-center gap-1 px-2.5 py-1.5 text-xs rounded-md border border-un1t-border text-un1t-subtle hover:text-un1t-text disabled:opacity-50"
+                          >
+                            {sr.paused ? <><Play size={12} /> Resume</> : <><Pause size={12} /> Pause</>}
+                          </button>
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => setShowScheduleModal({ schedule: sr })}
+                            className="flex items-center gap-1 px-2.5 py-1.5 text-xs rounded-md border border-un1t-border text-un1t-subtle hover:text-un1t-text disabled:opacity-50"
+                          >
+                            <Pencil size={12} /> Edit
+                          </button>
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => setConfirmDeleteId(sr.id)}
+                            aria-label={`Delete ${sr.report_name}`}
+                            className="flex items-center gap-1 px-2.5 py-1.5 text-xs rounded-md border border-un1t-border text-un1t-subtle hover:text-red-700 disabled:opacity-50"
+                          >
+                            <Trash2 size={12} /> Delete
+                          </button>
+                        </>
+                      )}
+                    </div>
                   </div>
                 )
               })}
@@ -485,7 +578,9 @@ export default function ScheduleReporting({ user }) {
       {/* Schedule Modal */}
       {showScheduleModal && (
         <ScheduleReportModal
-          reportType={showScheduleModal}
+          reportType={showScheduleModal.reportType}
+          schedule={showScheduleModal.schedule}
+          allowedReportTypes={reportTypes}
           locationId={locationId}
           onClose={() => setShowScheduleModal(null)}
           onSave={() => { setShowScheduleModal(null); loadReports() }}
@@ -547,43 +642,62 @@ export function StaffCostTable({ rows }) {
   )
 }
 
-function ScheduleReportModal({ reportType, locationId, onClose, onSave }) {
+function ScheduleReportModal({ reportType: initialReportType, schedule, allowedReportTypes, locationId, onClose, onSave }) {
+  // REPORTS.2 — one form for create (POST) and edit (PATCH). Editing may change
+  // the report type, but only among the types this caller may see here; the
+  // API enforces the same rule at the schedule's location.
+  const editing = !!schedule
+  const [reportType, setReportType] = useState(schedule?.report_type || initialReportType)
   const typeInfo = REPORT_TYPES.find(r => r.key === reportType)
-  const [name, setName] = useState(typeInfo ? `Weekly ${typeInfo.label}` : '')
-  const [frequency, setFrequency] = useState('weekly')
+  const [name, setName] = useState(schedule?.report_name ?? (typeInfo ? `Weekly ${typeInfo.label}` : ''))
+  const [frequency, setFrequency] = useState(schedule?.frequency || 'weekly')
   // ROSTER-FIX.5 — this is the STORED value, a JS weekday. 1 = Monday.
-  const [dayOfWeek, setDayOfWeek] = useState(1)
-  const [dayOfMonth, setDayOfMonth] = useState(1)
-  const [deliverEmail, setDeliverEmail] = useState(false)
-  const [emailRecipients, setEmailRecipients] = useState('')
-  const [deliverNotification, setDeliverNotification] = useState(true)
+  const [dayOfWeek, setDayOfWeek] = useState(schedule?.day_of_week ?? 1)
+  const [dayOfMonth, setDayOfMonth] = useState(schedule?.day_of_month ?? 1)
+  const [deliverEmail, setDeliverEmail] = useState(schedule?.deliver_email === true)
+  const [emailRecipients, setEmailRecipients] = useState((schedule?.email_recipients || []).join(', '))
   const [saving, setSaving] = useState(false)
   // ROSTER-FIX.6a — a failed save used to alert() and, if the fetch threw,
   // leave the button on "Saving…" with the modal open and nothing said.
   const [saveError, setSaveError] = useState(null)
+  // REPORTS.2 — addresses the API wants confirmed as external before a staff
+  // cost schedule may email them. Cleared whenever the recipients change, so
+  // a confirmation always names the list being saved.
+  const [externalToConfirm, setExternalToConfirm] = useState(null)
+  const rateReport = isRateReportType(reportType)
 
-  async function handleSave() {
+  async function handleSave({ confirmExternal = false } = {}) {
     setSaving(true)
     setSaveError(null)
     try {
-      const res = await fetch('/api/schedule/reports/scheduled', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          report_type: reportType,
-          report_name: name,
-          frequency,
-          day_of_week: frequency === 'weekly' || frequency === 'fortnightly' ? dayOfWeek : null,
-          day_of_month: frequency === 'monthly' ? dayOfMonth : null,
-          deliver_email: deliverEmail,
-          email_recipients: deliverEmail ? emailRecipients.split(',').map(e => e.trim()).filter(Boolean) : [],
-          deliver_notification: deliverNotification,
-          location_id: locationId,
-        }),
-      })
+      const payload = {
+        report_type: reportType,
+        report_name: name,
+        frequency,
+        day_of_week: frequency === 'weekly' || frequency === 'fortnightly' ? dayOfWeek : null,
+        day_of_month: frequency === 'monthly' ? dayOfMonth : null,
+        deliver_email: deliverEmail,
+        email_recipients: deliverEmail ? emailRecipients.split(',').map(e => e.trim()).filter(Boolean) : [],
+        ...(confirmExternal ? { confirm_external: true } : {}),
+      }
+      const res = editing
+        ? await fetch(`/api/schedule/reports/scheduled?id=${encodeURIComponent(schedule.id)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        })
+        : await fetch('/api/schedule/reports/scheduled', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...payload, location_id: locationId }),
+        })
       const data = await res.json().catch(() => ({}))
+      if (res.status === 409 && data.code === 'confirm_external_recipients') {
+        setExternalToConfirm(data.external_recipients || [])
+        return
+      }
       if (!res.ok || !data.success) {
-        setSaveError(data.error || 'Failed to schedule report')
+        setSaveError(data.error || (editing ? 'Failed to save changes' : 'Failed to schedule report'))
         return
       }
       onSave()
@@ -598,7 +712,7 @@ function ScheduleReportModal({ reportType, locationId, onClose, onSave }) {
     // ROSTER-FIX.6b — the close control used to be a Plus icon rotated 45°
     // with no accessible name at all; the primitive's own labelled close
     // button replaces it.
-    <Modal open onClose={onClose} title="Schedule Recurring Report" dismissOnBackdrop={false}>
+    <Modal open onClose={onClose} title={editing ? 'Edit Scheduled Report' : 'Schedule Recurring Report'} dismissOnBackdrop={false}>
       <div>
         {/* ROSTER-FIX.6a — a failed save used to alert(); it reports in place
             now, inside the dialog that still holds the operator's form. */}
@@ -609,6 +723,20 @@ function ScheduleReportModal({ reportType, locationId, onClose, onSave }) {
         )}
 
         <div className="space-y-4">
+          {editing && (
+            <div>
+              <label htmlFor="schedule-report-type" className="block text-xs text-un1t-subtle mb-1">Report</label>
+              <select
+                id="schedule-report-type"
+                value={reportType}
+                onChange={e => { setReportType(e.target.value); setExternalToConfirm(null) }}
+                className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+              >
+                {(allowedReportTypes || REPORT_TYPES).map(rt => <option key={rt.key} value={rt.key}>{rt.label}</option>)}
+              </select>
+            </div>
+          )}
+
           <div>
             <label className="block text-xs text-un1t-subtle mb-1">Report Name</label>
             <input
@@ -659,13 +787,19 @@ function ScheduleReportModal({ reportType, locationId, onClose, onSave }) {
 
           <div className="space-y-3">
             <label className="block text-xs text-un1t-subtle">Delivery</label>
+            <p className="text-xs text-un1t-subtle">Every run is saved to Report History.</p>
+            {/* REPORTS.2 — this was "Email (PDF)", but the email is an HTML
+                summary of the report's totals; no PDF is attached. The
+                "In-app notification" option beside it never notified anyone
+                and is gone. */}
             <label className="flex items-center gap-3 cursor-pointer">
-              <input type="checkbox" checked={deliverNotification} onChange={e => setDeliverNotification(e.target.checked)} className="rounded" />
-              <span className="text-sm flex items-center gap-1.5"><Bell size={14} /> In-app notification</span>
-            </label>
-            <label className="flex items-center gap-3 cursor-pointer">
-              <input type="checkbox" checked={deliverEmail} onChange={e => setDeliverEmail(e.target.checked)} className="rounded" />
-              <span className="text-sm flex items-center gap-1.5"><Mail size={14} /> Email (PDF)</span>
+              <input
+                type="checkbox"
+                checked={deliverEmail}
+                onChange={e => { setDeliverEmail(e.target.checked); setExternalToConfirm(null) }}
+                className="rounded"
+              />
+              <span className="text-sm flex items-center gap-1.5"><Mail size={14} /> Email summary</span>
             </label>
             {deliverEmail && (
               <div>
@@ -673,23 +807,58 @@ function ScheduleReportModal({ reportType, locationId, onClose, onSave }) {
                 <input
                   type="text"
                   value={emailRecipients}
-                  onChange={e => setEmailRecipients(e.target.value)}
+                  onChange={e => { setEmailRecipients(e.target.value); setExternalToConfirm(null) }}
                   placeholder="manager@un1t.ie, owner@un1t.ie"
                   className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
                 />
+                {rateReport && (
+                  <p className="text-xs text-un1t-subtle mt-1">
+                    Staff cost figures go only to owners and managers at this studio, or to outside addresses you confirm.
+                  </p>
+                )}
               </div>
             )}
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={handleSave}
-          disabled={!name || saving}
-          className="w-full mt-5 bg-un1t-text text-un1t-bg font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
-        >
-          {saving ? 'Saving...' : 'Create Schedule'}
-        </button>
+        {externalToConfirm && externalToConfirm.length > 0 ? (
+          <div role="alertdialog" aria-label="Confirm external recipients" className="mt-5 bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 text-sm">
+            <p className="text-amber-700 font-medium">These addresses are not staff at this studio:</p>
+            <ul className="mt-1 text-un1t-text list-disc pl-5">
+              {externalToConfirm.map(e => <li key={e}>{e}</li>)}
+            </ul>
+            <p className="mt-2 text-un1t-subtle text-xs">
+              They will receive this studio&apos;s staff cost figures every time the report runs. Only confirm addresses outside the team, like your accountant.
+            </p>
+            <div className="mt-3 flex gap-2">
+              <button
+                type="button"
+                onClick={() => handleSave({ confirmExternal: true })}
+                disabled={saving}
+                className="flex-1 bg-un1t-text text-un1t-bg font-medium text-sm py-2 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
+              >
+                {saving ? 'Saving...' : 'Confirm and save'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setExternalToConfirm(null)}
+                disabled={saving}
+                className="px-3 py-2 text-sm rounded-md border border-un1t-border text-un1t-subtle hover:text-un1t-text"
+              >
+                Go back
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => handleSave()}
+            disabled={!name || saving}
+            className="w-full mt-5 bg-un1t-text text-un1t-bg font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
+          >
+            {saving ? 'Saving...' : editing ? 'Save Changes' : 'Create Schedule'}
+          </button>
+        )}
       </div>
     </Modal>
   )
