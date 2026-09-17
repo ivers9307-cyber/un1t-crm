@@ -157,3 +157,56 @@ export function resolveSwapTransition({ swap, requestedStatus, user, userLocatio
 
   return deny(400, 'Unsupported transition')
 }
+
+/**
+ * SWAPAUDIT.1 — the roster_change_log rows an approved reassign / reciprocal
+ * swap has to write. Pure: the route turns each entry into a logRosterChange
+ * call. Returns [] for every other effect (an approved DROP writes its own
+ * row before the delete, because nothing is left to describe afterwards).
+ *
+ * `role` is which decision notification covers the entry's coach —
+ * 'requester' (decision_for_requester) or 'taker' (decision_for_taker) — so
+ * the route can stamp a coach's rows only once THAT coach's message
+ * delivered. It is keyed by role, not coach id, because the notification goes
+ * to swap.requester_id / swap.target_id while the rows carry the assignment's
+ * profile_id; the two normally agree but nothing enforces it.
+ *
+ * `block` is the embedded shift_blocks row (id, location_id, block_date,
+ * rosters.status) or null when the embed is missing.
+ *
+ * @param {string} effect  resolveSwapTransition(...).effect
+ * @param {object} swap    swap row with requester_shift / target_shift embeds
+ * @returns {Array<{role:'requester'|'taker', coachId:string|null, action:'assigned'|'unassigned', block:object|null, blockId:string|null}>}
+ */
+export function swapChangeLogEntries(effect, swap) {
+  if (!swap) return []
+  const reqShift = swap.requester_shift || null
+  const reqBlock = reqShift?.block || null
+  const reqBlockId = reqBlock?.id || reqShift?.block_id || null
+  const requesterCoach = reqShift?.profile_id || swap.requester_id || null
+
+  if (effect === 'approved_reassign') {
+    const taker = swap.target_id || null
+    return [
+      { role: 'requester', coachId: requesterCoach, action: 'unassigned', block: reqBlock, blockId: reqBlockId },
+      { role: 'taker', coachId: taker, action: 'assigned', block: reqBlock, blockId: reqBlockId },
+    ]
+  }
+
+  if (effect === 'approved_swap') {
+    const tgtShift = swap.target_shift || null
+    const tgtBlock = tgtShift?.block || null
+    const tgtBlockId = tgtBlock?.id || tgtShift?.block_id || null
+    const takerCoach = tgtShift?.profile_id || swap.target_id || null
+    return [
+      // The requester's block: the requester left it, the taker took it.
+      { role: 'requester', coachId: requesterCoach, action: 'unassigned', block: reqBlock, blockId: reqBlockId },
+      { role: 'taker', coachId: takerCoach, action: 'assigned', block: reqBlock, blockId: reqBlockId },
+      // The taker's block: the taker left it, the requester took it.
+      { role: 'taker', coachId: takerCoach, action: 'unassigned', block: tgtBlock, blockId: tgtBlockId },
+      { role: 'requester', coachId: requesterCoach, action: 'assigned', block: tgtBlock, blockId: tgtBlockId },
+    ]
+  }
+
+  return []
+}

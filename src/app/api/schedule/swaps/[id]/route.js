@@ -5,7 +5,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { swapStatusSchema } from '@/lib/schemas'
-import { resolveSwapTransition } from '@/lib/swap-lifecycle'
+import { resolveSwapTransition, swapChangeLogEntries } from '@/lib/swap-lifecycle'
 import { notifyUsersOnce, notifyUsersAtRolesOnce } from '@/lib/push-dedup'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { hasPermissionForLocation } from '@/lib/permissions'
@@ -41,8 +41,11 @@ export async function PUT(request, props) {
   // row from THIS in-memory copy: the assignment is deleted, so the embed
   // cannot be re-read afterwards (and since mig 603 the swap row survives with
   // requester_shift_id NULL, which is just as unreadable for these fields).
+  // SWAPAUDIT.1 — the target_shift embed carries the same block fields: a
+  // reciprocal swap audits BOTH blocks and needs each one's date + roster
+  // status to decide whether its rows are stamped straight away.
   const { data: swap } = await db.from('shift_swap_requests')
-    .select('*, requester_shift:shift_assignments!requester_shift_id(id, profile_id, block_id, block:shift_blocks!block_id(id, location_id, block_date, rosters:roster_id(status))), target_shift:shift_assignments!target_shift_id(id, profile_id, block_id)')
+    .select('*, requester_shift:shift_assignments!requester_shift_id(id, profile_id, block_id, block:shift_blocks!block_id(id, location_id, block_date, rosters:roster_id(status))), target_shift:shift_assignments!target_shift_id(id, profile_id, block_id, block:shift_blocks!block_id(id, location_id, block_date, rosters:roster_id(status)))')
     .eq('id', params.id)
     .single()
 
@@ -160,16 +163,86 @@ export async function PUT(request, props) {
     }
   }
 
+  // SWAPAUDIT.1 — an approved reassign / reciprocal swap moves coaches
+  // between shifts, and on a published roster that move has to be in the
+  // audit trail like any other edit. Written only now, after every
+  // assignment op has succeeded (a failed op returned 400 above), so the log
+  // never claims a move that did not happen. Best-effort: nothing here can
+  // fail the approval.
+  let moveLogs = null
+  if (decision.effect === 'approved_reassign' || decision.effect === 'approved_swap') {
+    moveLogs = await logSwapMoves(db, decision.effect, swap, user)
+  }
+
   // ROSTER-FIX.8f — best-effort notifications, never block or fail the response.
   // Named for what it does since 8d: these are push WITH an email fallback, not
   // pushes, and the old name read as "coaches without the app get nothing".
   // SWAPNOTIFY.1 — moved into after() (next/server): an un-awaited promise
   // left hanging past the response is the exact shape Vercel can freeze
   // mid-flight, and any stamp inside it would be lost with it.
-  after(() => dispatchSwapNotifications(db, decision, swap, user, { dropLog, dropStamped })
+  after(() => dispatchSwapNotifications(db, decision, swap, user, { dropLog, dropStamped, moveLogs })
     .catch(err => console.error('[swaps] notify failed', err)))
 
   return NextResponse.json({ success: true, data })
+}
+
+// SWAPAUDIT.1 — write the roster_change_log rows for an approved reassign
+// (2 rows) or reciprocal swap (4 rows) and settle which of them are already
+// "notified".
+//
+// Both coaches get a "Swap approved" decision message from
+// dispatchSwapNotifications, so the re-publish safety net
+// (collectUnnotifiedChanges -> renotifyChangedCoaches) must not reach them a
+// second time with "Roster updated". Same rule SWAPNOTIFY.1 applies to a drop:
+//   - a row on a draft roster, with no block embed, or on a past block_date is
+//     stamped HERE, unconditionally — the coach must never be told about a
+//     shift they never saw published or one that has already happened;
+//   - every other row is returned, grouped by which decision message covers
+//     its coach, and dispatch stamps a group only once THAT message actually
+//     delivered. An opted-out, failed or deduped-only coach keeps unstamped
+//     rows so the safety net still reaches them.
+//
+// Unlike the drop, isPublished is the real roster status: the assignment
+// still exists after a move, so a draft move leaves its own trace and rides
+// the first-publish notification (logRosterChange no-ops on it).
+//
+// Never throws. Returns { requester: [ids], taker: [ids] } of rows awaiting
+// delivery, or null if logging blew up.
+async function logSwapMoves(db, effect, swap, user) {
+  try {
+    const entries = swapChangeLogEntries(effect, swap)
+    const today = dublinTodayStr()
+    const results = await Promise.all(entries.map((e) => logRosterChange(db, {
+      isPublished: e.block?.rosters?.status === 'published',
+      locationId: e.block?.location_id || swap.location_id,
+      blockId: e.blockId,
+      blockDate: e.block?.block_date || null,
+      actorId: user.id,
+      coachId: e.coachId,
+      action: e.action,
+      details: { via: 'swap', swap_id: swap.id, effect },
+    })))
+
+    const immediate = []
+    const pending = { requester: [], taker: [] }
+    entries.forEach((e, i) => {
+      const r = results[i]
+      if (!r?.logged || !r.id) return
+      // A missing block/roster embed reads as a draft, as in the drop path:
+      // fail toward "stamp it", never toward a surprise re-publish ping.
+      const isDraft = e.block?.rosters?.status !== 'published'
+      const isPast = !!e.block?.block_date && e.block.block_date < today
+      if (isDraft || isPast) immediate.push(r.id)
+      else pending[e.role].push(r.id)
+    })
+    // markChangesNotified checks its own {error} and logs it (logWarn); it
+    // never throws.
+    if (immediate.length) await markChangesNotified(db, immediate)
+    return pending
+  } catch (e) {
+    logWarn('swaps', 'approved swap: change log failed', { swapId: swap?.id, effect, err: e?.message })
+    return null
+  }
 }
 
 // Map the resolver's notify intents to notifications. Bodies live here
@@ -189,7 +262,7 @@ export async function PUT(request, props) {
 // explicit emailSubject: the registry default ("Shift swap update") is
 // deliberately vague, and an inbox is a worse place than a lock screen to
 // guess what a notification was about.
-async function dispatchSwapNotifications(db, decision, swap, user, { dropLog, dropStamped } = {}) {
+async function dispatchSwapNotifications(db, decision, swap, user, { dropLog, dropStamped, moveLogs } = {}) {
   const actor = user.full_name || 'A coach'
   for (const n of decision.notify) {
     switch (n.kind) {
@@ -242,6 +315,22 @@ async function dispatchSwapNotifications(db, decision, swap, user, { dropLog, dr
             // whole function is already best-effort and unobserved by the
             // caller.
             logWarn('swaps', 'post-delivery drop stamp failed', { swapId: swap.id, dropLogId: dropLog.id, err: e?.message })
+          }
+        }
+        // SWAPAUDIT.1 — the same rule for an approved reassign / reciprocal
+        // swap, per coach: this message covers only the rows logSwapMoves
+        // grouped under its recipient (requester or taker), so the other
+        // coach's rows wait on their own delivery. A draft/past row never
+        // reaches here (logSwapMoves stamped it already).
+        const moveIds = moveLogs?.[n.kind === 'decision_for_requester' ? 'requester' : 'taker']
+        if (moveIds?.length) {
+          try {
+            const delivered = ((result?.sent || 0) + (result?.emailed || 0)) > 0
+            if (delivered) {
+              await markChangesNotified(db, moveIds)
+            }
+          } catch (e) {
+            logWarn('swaps', 'post-delivery swap move stamp failed', { swapId: swap.id, kind: n.kind, err: e?.message })
           }
         }
         break
