@@ -20,6 +20,7 @@ const { createServerClient } = await import('@/lib/supabase')
 const { sendTransactionalEmail } = await import('@/lib/postmark')
 const { generateReport } = await import('@/lib/report-generator')
 const { filterRateReportRecipients } = await import('@/lib/report-recipients')
+const { logWarn } = await import('@/lib/log')
 
 const LOC = 'a0000000-0000-0000-0000-000000000001'
 const ORG = 'o0000000-0000-0000-0000-000000000001'
@@ -69,11 +70,14 @@ const PEOPLE = {
     { id: 'p-master', email: 'root@example.com', role: 'master' },
     { id: 'p-orgadmin', email: 'org@example.com', role: 'staff' },
     { id: 'p-elsewhere', email: 'far@example.com', role: 'manager' },
+    { id: 'p-gone', email: 'gone@example.com', role: 'manager', active: false },
   ],
   profile_locations: [
     { profile_id: 'p-owner', location_id: LOC, role: 'owner' },
     { profile_id: 'p-hc', location_id: LOC, role: 'head_coach' },
     { profile_id: 'p-elsewhere', location_id: 'other-loc', role: 'manager' },
+    // Role row left behind after deactivation.
+    { profile_id: 'p-gone', location_id: LOC, role: 'manager' },
   ],
   locations: [{ id: LOC, organization_id: ORG }],
   profile_organizations: [{ profile_id: 'p-orgadmin', organization_id: ORG, role: 'org_admin' }],
@@ -121,6 +125,8 @@ describe('run-scheduled-reports — rate-bearing recipients', () => {
     const body = await (await GET(cronReq())).json()
     expect(sendTransactionalEmail).not.toHaveBeenCalled()
     expect(body.results[0].email).toBe('withheld')
+    expect(logWarn).toHaveBeenCalledWith('run-scheduled-reports', expect.any(String), expect.objectContaining({ scheduleId: 'sched-staff_cost', withheld: 1 }))
+    expect(JSON.stringify(logWarn.mock.calls)).not.toContain('coach@example.com')
   })
 
   it('does not filter a non-rate report: a head coach still gets staff_hours', async () => {
@@ -145,6 +151,13 @@ describe('filterRateReportRecipients', () => {
       // A manager somewhere else has no business seeing THIS location's pay.
       { email: 'far@example.com', reason: 'not_rate_viewer' },
     ])
+  })
+
+  it('withholds a deactivated profile even though its manager role row remains', async () => {
+    const db = makeDb(PEOPLE)
+    const { allowed, dropped } = await filterRateReportRecipients({ db, locationId: LOC, recipients: ['gone@example.com', 'owner@example.com'] })
+    expect(allowed).toEqual(['owner@example.com'])
+    expect(dropped).toEqual([{ email: 'gone@example.com', reason: 'not_rate_viewer' }])
   })
 
   it('treats _ and % in an address literally', async () => {

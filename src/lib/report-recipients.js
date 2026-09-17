@@ -12,8 +12,8 @@
 //     explicit owner/manager row there, or an org admin of the location's
 //     organisation with no explicit row there (the same resolution
 //     getCurrentUser's expandOrgAdminAccess applies — an explicit row wins).
-//     A head coach, a staff member, or someone with no role at the location
-//     is dropped.
+//     A head coach, a staff member, someone with no role at the location, or
+//     a DEACTIVATED profile (even with a role row left behind) is dropped.
 //   - matches no profile → sent. Those are addresses the owner/manager who
 //     set the schedule chose on purpose (an accountant, a shared finance
 //     inbox), and since STAFFCOST.1 only an owner/manager can create a
@@ -60,7 +60,7 @@ export async function filterRateReportRecipients({ db, locationId, recipients })
       // Literal, case-insensitive equality: profile emails are stored as
       // typed, and a bare ilike would treat `_`/`%` as wildcards.
       const { data: profiles, error: profileError } = await db.from('profiles')
-        .select('id, role')
+        .select('id, role, active')
         .ilike('email', escapeLikePattern(email))
       if (profileError) throw new Error(`profile lookup failed: ${profileError.message}`)
       if (!profiles || profiles.length === 0) {
@@ -72,6 +72,9 @@ export async function filterRateReportRecipients({ db, locationId, recipients })
       // to two profiles, the stricter answer wins.
       let ok = true
       for (const profile of profiles) {
+        // A deactivated staff profile is withheld whatever role rows it still
+        // has: leaving the business does not end with a pay summary.
+        if (profile.active === false) { ok = false; break }
         if (profile.role === 'master') continue
         const { data: link, error: linkError } = await db.from('profile_locations')
           .select('role')

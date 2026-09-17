@@ -152,6 +152,13 @@ describe('GET /api/schedule/reports — list', () => {
     expect(db.calls).toContainEqual(['or', `location_id.in.(${LOC_A}),report_type.not.in.(staff_cost)`])
   })
 
+  it('unscoped list for an owner at A and manager at B: every row, no report_type filter, no or()', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'om', role: 'owner', profileRole: 'owner', locations: locs(LOC_A, LOC_B), rolesByLocation: { [LOC_A]: 'owner', [LOC_B]: 'manager' }, activeLocation: { id: LOC_A } })
+    const body = await (await GET(listReq(null))).json()
+    expect(body.data.map(r => r.id)).toEqual(['r1', 'r2', 'r3', 'r4'])
+    expect(db.calls).toEqual([['in', 'location_id', [LOC_A, LOC_B]]])
+  })
+
   it('unscoped list for a head coach everywhere excludes every rate row', async () => {
     getCurrentUser.mockResolvedValue({ ...HEAD_COACH_A, locations: locs(LOC_A, LOC_B), rolesByLocation: { [LOC_A]: 'head_coach', [LOC_B]: 'head_coach' } })
     const body = await (await GET(listReq(null))).json()

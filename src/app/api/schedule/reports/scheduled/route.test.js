@@ -26,8 +26,10 @@ const SCHEDULES = [
 
 function fakeDb(rows) {
   const writes = []
+  const calls = []
   return {
     writes,
+    calls,
     from(table) {
       expect(table).toBe('scheduled_reports')
       const preds = []
@@ -38,6 +40,7 @@ function fakeDb(rows) {
         order() { return b },
         eq(col, v) { preds.push(r => r[col] === v); return b },
         not(col, operator, list) {
+          calls.push(['not', col, operator, list])
           const vals = list.replace(/^\(|\)$/g, '').split(',')
           preds.push(r => !vals.includes(r[col]))
           return b
@@ -86,12 +89,15 @@ describe('GET scheduled', () => {
     getCurrentUser.mockResolvedValue(HEAD_COACH)
     const body = await (await GET(getReq(LOC_A))).json()
     expect(body.data.map(r => r.id)).toEqual(['s-hours'])
+    // The QUERY excludes it, not only the defence-in-depth filter after it.
+    expect(db.calls).toContainEqual(['not', 'report_type', 'in', '(staff_cost)'])
   })
 
-  it('a manager sees both', async () => {
+  it('a manager sees both, with no report_type filter on the query', async () => {
     getCurrentUser.mockResolvedValue(MANAGER)
     const body = await (await GET(getReq(LOC_A))).json()
     expect(body.data.map(r => r.id)).toEqual(['s-cost', 's-hours'])
+    expect(db.calls).toEqual([])
   })
 
   it('uses the role at the requested location, not the active one', async () => {

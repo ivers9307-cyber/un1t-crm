@@ -71,6 +71,19 @@ describe('GET /api/schedule/overview — role at the requested studio', () => {
     })
   }
 
+  it('403, not 400, for a non-manager sending a malformed query', async () => {
+    getCurrentUser.mockResolvedValue({ ...MGR_A_STAFF_B(LOC_B), profileRole: 'staff', rolesByLocation: { [LOC_A]: 'staff', [LOC_B]: 'staff' } })
+    const res = await GET({ url: 'http://test/api/schedule/overview?from=bad' })
+    expect(res.status).toBe(403)
+    expect(db.tables).toEqual([])
+  })
+
+  it('a manager with a malformed query still gets the 400', async () => {
+    getCurrentUser.mockResolvedValue(MGR_A_STAFF_B(LOC_A))
+    const res = await GET({ url: 'http://test/api/schedule/overview?from=bad' })
+    expect(res.status).toBe(400)
+  })
+
   it('401 with no session', async () => {
     getCurrentUser.mockResolvedValue(null)
     expect((await GET(req(LOC_A))).status).toBe(401)

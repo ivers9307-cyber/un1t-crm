@@ -83,6 +83,15 @@ async function handleGet(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
 
+  // A caller who manages NO studio is refused before the query is parsed, so a
+  // non-manager gets 403 rather than a 400 describing the query shape. The
+  // role at the REQUESTED studio is still checked after parsing, below.
+  const managesSomewhere = user.profileRole === 'master'
+    || Object.values(user.rolesByLocation || {}).some(r => MANAGER_ROLES.includes(r))
+  if (!managesSomewhere) {
+    return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
+  }
+
   const url = new URL(request.url)
   const parsed = QuerySchema.safeParse({
     from:        url.searchParams.get('from'),

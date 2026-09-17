@@ -4,6 +4,7 @@ import { generateReport, calculatePeriodForSchedule, calculateNextRun, buildRepo
 import { sendTransactionalEmail } from '@/lib/postmark'
 import { getAppUrl } from '@/lib/app-url'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { logWarn } from '@/lib/log'
 import { isRateReportType } from '@/lib/report-access'
 import { filterRateReportRecipients } from '@/lib/report-recipients'
 
@@ -145,6 +146,10 @@ export async function GET(request) {
         } else if (resultEntry.recipients_withheld) {
           // Every address was withheld — say so rather than reading as "email off".
           resultEntry.email = 'withheld'
+          // Schedule id and count only, never the addresses.
+          logWarn('run-scheduled-reports', 'rate report email withheld from every recipient', {
+            scheduleId: schedule.id, reportType: schedule.report_type, withheld: resultEntry.recipients_withheld,
+          })
         }
 
         // If notification delivery is enabled, create an in-app notification
