@@ -7,19 +7,24 @@
 // Pure + shared by web (SwapActions) + mobile (PersonalDashboard) so the
 // grouping can't drift.
 
-// Effective start/end for a shift row: the per-coach override wins, else the
-// template default. Trimmed to HH:MM for display + comparison (lexicographic
-// compare is correct for zero-padded 24h times).
+import { effectiveShiftStart, effectiveShiftEnd } from './roster-month.js'
+
+// Effective start/end for a shift row: the per-coach override wins, then the
+// block's own time, then the template default (MOBILESCHED.2 — was override →
+// template, so a block moved off its template's hours showed the template's).
+// Trimmed to HH:MM for display + comparison (lexicographic compare is correct
+// for zero-padded 24h times).
 function effStart(s) {
-  return (s?.start_time_override || s?.shift_templates?.start_time || '').slice(0, 5)
+  return (effectiveShiftStart(s) || '').slice(0, 5)
 }
 function effEnd(s) {
-  return (s?.end_time_override || s?.shift_templates?.end_time || '').slice(0, 5)
+  return (effectiveShiftEnd(s) || '').slice(0, 5)
 }
 
 /**
  * @param {Array<object>} shifts  rows from /api/schedule/shifts (need profile_id,
- *   profiles.full_name, start_time_override/end_time_override, shift_templates)
+ *   profiles.full_name, start_time_override/end_time_override, block_start_time/
+ *   block_end_time, shift_templates)
  * @returns {Array<{ profileId: string, name: string, firstStart: string|null,
  *   lastEnd: string|null, count: number }>}  one entry per coach, sorted by
  *   earliest start then name.
