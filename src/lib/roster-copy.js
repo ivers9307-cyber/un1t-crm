@@ -79,8 +79,10 @@ function formatLocal(date) {
 
 /**
  * 'mon'..'sun' for a YYYY-MM-DD calendar date, independent of the host TZ.
- * (roster.dayCodeForDate UTC-parses a bare date string and then reads the
- * LOCAL weekday, which is a day early west of UTC, so it is not used here.)
+ * (roster.dayCodeForDate used to UTC-parse a bare date string and then read
+ * the LOCAL weekday, which was a day early west of UTC — ROSTERTZ.1 fixed it,
+ * so the two now agree. This one stays because everything else in this module
+ * is already built on localDate/formatLocal.)
  */
 export function weekdayCodeOf(iso) {
   const jsDay = localDate(iso).getDay()
