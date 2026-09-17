@@ -15,6 +15,7 @@ import {
   calculatePeriodForSchedule,
   generateReport,
 } from './report-generator'
+import { shiftHours } from './payroll'
 
 // Minimal thenable mock of the supabase query builder: every filter method
 // returns the builder; awaiting it resolves to { data }.
@@ -70,10 +71,47 @@ describe('fetchScheduledShiftRows', () => {
       profile_id: 'p1',
       start_time_override: '09:00:00',
       end_time_override: null,
+      block_start_time: null,
+      block_end_time: null,
       status: 'scheduled',
       profiles: { full_name: 'Jane', role: 'staff', employment_type: 'fte' },
       shift_templates: { name: 'AM', start_time: '09:30:00', end_time: '10:30:00' },
     }])
+  })
+
+  // REPORTS.2 — hours come from override → BLOCK → template, the calendar's
+  // resolution. A block moved off its template (or a template edited after the
+  // block was made) used to report at the template's current times.
+  it('carries the block\'s own times so hours follow the block, not the template', async () => {
+    const rows = [
+      {
+        profile_id: 'moved', start_time_override: null, end_time_override: null, status: 'scheduled',
+        profiles: { full_name: 'Moved' },
+        shift_blocks: {
+          block_date: '2026-05-04', start_time: '06:00:00', end_time: '09:00:00', location_id: 'loc1',
+          shift_templates: { name: 'AM', start_time: '06:00:00', end_time: '07:00:00' },
+        },
+      },
+      {
+        profile_id: 'partial', start_time_override: '07:00:00', end_time_override: null, status: 'scheduled',
+        profiles: { full_name: 'Partial' },
+        shift_blocks: {
+          block_date: '2026-05-04', start_time: '06:00:00', end_time: '09:00:00', location_id: 'loc1',
+          shift_templates: { name: 'AM', start_time: '06:00:00', end_time: '07:00:00' },
+        },
+      },
+      {
+        profile_id: 'untouched', start_time_override: null, end_time_override: null, status: 'scheduled',
+        profiles: { full_name: 'Untouched' },
+        shift_blocks: {
+          block_date: '2026-05-05', start_time: null, end_time: null, location_id: 'loc1',
+          shift_templates: { name: 'PM', start_time: '17:00:00', end_time: '18:30:00' },
+        },
+      },
+    ]
+    const out = await fetchRows(mockDb(rows), { locationId: 'loc1', periodStart: '2026-05-01', periodEnd: '2026-05-31' })
+    expect(out[0].block_start_time).toBe('06:00:00')
+    expect(out.map(shiftHours)).toEqual([3, 2, 1.5])
   })
 
   it('maps block_date → shift_date and surfaces template through the block', async () => {

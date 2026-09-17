@@ -18,6 +18,7 @@ import {
   findPublishedRosterIdsByDate,
   getMonthStart,
   monthStartForWeek,
+  spendMonthForView,
   weekStartForMonth,
   periodsOverlap,
   periodCovers,
@@ -778,5 +779,38 @@ describe('clampMinCoaches (HORIZONMIN.1)', () => {
   it('clamps to max and never below 0', () => {
     expect(clampMinCoaches(9, 3)).toBe(3)
     expect(clampMinCoaches(-2, 3)).toBe(0)
+  })
+})
+
+// REPORTS.2 — the contractor-spend panel follows the period in view.
+describe('spendMonthForView (REPORTS.2)', () => {
+  const d = (iso) => { const [y, m, day] = iso.split('-').map(Number); return new Date(y, m - 1, day) }
+  const view = (viewType, week, month) => {
+    const r = spendMonthForView({ viewType, weekStart: d(week), monthStart: d(month) })
+    return { month: formatDate(r.monthStart), straddles: r.straddles, other: r.otherMonthStart ? formatDate(r.otherMonthStart) : null }
+  }
+
+  it('week view follows the week, not the last month viewed', () => {
+    // Paged from August into a mid-September week; monthStart still says August.
+    expect(view('week', '2026-09-14', '2026-08-01')).toEqual({ month: '2026-09-01', straddles: false, other: null })
+  })
+
+  it('a straddling week reports the month with most of its days and names the other', () => {
+    // Mon 31 Aug - Sun 6 Sep: six days in September.
+    expect(view('week', '2026-08-31', '2026-08-01')).toEqual({ month: '2026-09-01', straddles: true, other: '2026-08-01' })
+    // Mon 28 Sep - Sun 4 Oct: three in September, four in October.
+    expect(view('week', '2026-09-28', '2026-09-01')).toEqual({ month: '2026-10-01', straddles: true, other: '2026-09-01' })
+    // Mon 27 Jul - Sun 2 Aug: five days in July.
+    expect(view('week', '2026-07-27', '2026-09-01')).toEqual({ month: '2026-07-01', straddles: true, other: '2026-08-01' })
+  })
+
+  it('agrees with the Month toggle and publish modal (monthStartForWeek)', () => {
+    for (const week of ['2026-08-31', '2026-09-28', '2026-06-29', '2026-03-30']) {
+      expect(view('week', week, '2020-01-01').month).toBe(formatDate(monthStartForWeek(d(week))))
+    }
+  })
+
+  it('month view keeps its own month', () => {
+    expect(view('month', '2026-08-31', '2026-10-01')).toEqual({ month: '2026-10-01', straddles: false, other: null })
   })
 })

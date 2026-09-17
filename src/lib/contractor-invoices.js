@@ -14,6 +14,8 @@
 // downstream.
 
 import { shiftHours } from './payroll.js'
+import { logWarn } from './log.js'
+import { latestQueueRowByInvoice } from '@shared/contractor-invoice-review'
 
 /**
  * Compute the calendar-month period [start, end] for a given month
@@ -149,6 +151,56 @@ export async function computeScheduledForPeriod(db, args) {
     shift_count: (rows || []).length,
     hourly_rate: validRate ? hourlyRate : null,
     estimated_cost: estimated,
+  }
+}
+
+/**
+ * INVOICEREVIEW.2 — load the invoices_queue row(s) enqueued for a set of
+ * contractor invoices, for the honest lifecycle label
+ * (shared/contractor-invoice-review.js → contractorInvoiceLifecycle).
+ *
+ * Only rows in 'awaiting_accountant_review' have a queue row to find;
+ * every other status is labelled from the invoice alone, so they are
+ * not looked up.
+ *
+ * Returns a lookup `(invoiceId) => row | null | undefined`:
+ *   row       → the newest queue row for that invoice
+ *   null      → looked up, no queue row exists (enqueue failed)
+ *   undefined → not looked up, or the lookup FAILED — the caller must
+ *               not claim "not queued" off a read error.
+ *
+ * Scoped by location_id as well as the source FK: service-role reads
+ * get no RLS, and every queue row carries its invoice's location.
+ */
+export async function loadQueueRowsForInvoices(db, invoices) {
+  const awaiting = (Array.isArray(invoices) ? invoices : [])
+    .filter((i) => i && i.id && i.status === 'awaiting_accountant_review')
+  if (awaiting.length === 0) return () => undefined
+
+  const ids = awaiting.map((i) => i.id)
+  const locationIds = [...new Set(awaiting.map((i) => i.location_id).filter(Boolean))]
+  const looked = new Set(ids)
+  const found = []
+  // Chunk the IN list so a 500-row page never builds an oversized URL.
+  const CHUNK = 100
+  for (let i = 0; i < ids.length; i += CHUNK) {
+    const slice = ids.slice(i, i + CHUNK)
+    const { data, error } = await db
+      .from('invoices_queue')
+      .select('id, source_contractor_invoice_id, status, forwarded_at, xero_bill_id, xero_synced_at, xero_bill_status, xero_bill_paid_at, created_at')
+      .in('location_id', locationIds)
+      .in('source_contractor_invoice_id', slice)
+    if (error) {
+      logWarn('contractor-invoices', 'queue lookup failed', { err: error, count: slice.length })
+      for (const id of slice) looked.delete(id)
+      continue
+    }
+    found.push(...(data || []))
+  }
+  const byInvoice = latestQueueRowByInvoice(found)
+  return (invoiceId) => {
+    if (!looked.has(invoiceId)) return undefined
+    return byInvoice.get(invoiceId) || null
   }
 }
 

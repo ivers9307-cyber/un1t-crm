@@ -19,8 +19,9 @@ import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import {
   periodForMonth, buildPdfPath, isContractorPdfPath,
-  RECEIPT_MIME_TYPES, sniffReceiptMime,
+  RECEIPT_MIME_TYPES, sniffReceiptMime, loadQueueRowsForInvoices,
 } from '@/lib/contractor-invoices'
+import { contractorInvoiceLifecycle } from '@shared/contractor-invoice-review'
 
 // JSON submit mode (INVOICE-UPLOAD.1): the PDF is already in storage via
 // /api/invoices/upload-sign + a signed direct upload; the body carries a
@@ -279,7 +280,7 @@ export async function GET(request) {
   let query = db
     .from('contractor_invoices')
     .select(`
-      id, status, period_start, period_end, invoice_amount, invoice_number,
+      id, status, location_id, period_start, period_end, invoice_amount, invoice_number,
       submitted_at, reviewed_at, approved_at, decline_reason,
       xero_synced_at,
       contractor:contractor_id ( id, full_name, email, hourly_rate ),
@@ -315,5 +316,12 @@ export async function GET(request) {
 
   const { data, error } = await query
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
-  return NextResponse.json({ success: true, data })
+  // INVOICEREVIEW.2 — honest per-row lifecycle label (queued / sent to
+  // Xero / paid) from the invoices_queue row each approval enqueued.
+  const queueFor = await loadQueueRowsForInvoices(db, data)
+  const rows = (data || []).map((inv) => ({
+    ...inv,
+    lifecycle: contractorInvoiceLifecycle(inv, queueFor(inv.id)),
+  }))
+  return NextResponse.json({ success: true, data: rows })
 }

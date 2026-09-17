@@ -103,6 +103,33 @@ export function monthStartForWeek(weekStart) {
 }
 
 /**
+ * REPORTS.2 — which month the contractor-spend panel reports on.
+ *
+ * It used to be the calendar's `monthStart` state, which only moves in Month
+ * view, so paging Week view from August into September kept saying "Contractor
+ * spend — August". Month view keeps its month; Week view follows the visible
+ * week by the SAME midweek rule as the Month toggle and the publish modal, so
+ * a week straddling two months reports the month holding most of its days
+ * (four of seven). `otherMonthStart` names the minority month so the panel can
+ * say which month it chose and why.
+ *
+ * @returns {{ monthStart: Date, straddles: boolean, otherMonthStart: Date|null }}
+ */
+export function spendMonthForView({ viewType, weekStart, monthStart }) {
+  if (viewType === 'month') {
+    return { monthStart: getMonthStart(monthStart), straddles: false, otherMonthStart: null }
+  }
+  const chosen = monthStartForWeek(weekStart)
+  const firstDayMonth = getMonthStart(weekStart)
+  const lastDayMonth = getMonthStart(addDays(weekStart, 6))
+  if (firstDayMonth.getTime() === lastDayMonth.getTime()) {
+    return { monthStart: chosen, straddles: false, otherMonthStart: null }
+  }
+  const other = firstDayMonth.getTime() === chosen.getTime() ? lastDayMonth : firstDayMonth
+  return { monthStart: chosen, straddles: true, otherMonthStart: other }
+}
+
+/**
  * The week to show when leaving month view. Keeps the week already on screen
  * when it belongs to this month (so Month then Week is a no-op), otherwise
  * the month's first week - defined by the same midweek rule, which is what

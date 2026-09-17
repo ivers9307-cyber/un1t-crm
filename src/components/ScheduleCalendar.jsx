@@ -31,7 +31,7 @@ import { MANAGER_ROLES } from '@/lib/schemas'
 // byte-for-byte, beside the lib copies this file already imported from. One
 // definition now: a change to the local-day rule cannot land on the server
 // and miss the calendar.
-import { addDays, formatDate, getMonday, liveAssignments, getMonthStart, monthStartForWeek, weekStartForMonth, periodsOverlap, periodCovers } from '@/lib/roster'
+import { addDays, formatDate, getMonday, liveAssignments, getMonthStart, monthStartForWeek, spendMonthForView, weekStartForMonth, periodsOverlap, periodCovers } from '@/lib/roster'
 // ROSTERVIS.1 — one staffing answer (empty / short / ok) and one publication
 // answer for every surface; see the module header.
 import {
@@ -373,9 +373,11 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
 
   // ROSTER-FIX.6a — the fan-out, its try/catch and its request-ordering
   // guard now live in useScheduleData. Nothing else about the shapes changed.
-  // SCHEDULE-SPEND-AGG.1 — contractor spend stays scoped to monthStart so
-  // "Contractor spend, May 2026" tracks whichever month was last focused
-  // (the convention RosterSummaryPanel has always used).
+  // REPORTS.2 — contractor spend follows the period in view: Month view's
+  // month, or in Week view the month holding most of the visible week. It
+  // used to stay on `monthStart`, which Week view never moves, so paging
+  // weeks into the next month kept showing the last month you had viewed.
+  const spendMonth = spendMonthForView({ viewType, weekStart, monthStart })
   const rangeStart = formatDate(viewType === 'month' ? monthGrid.start : weekStart)
   const rangeEnd = formatDate(viewType === 'month' ? monthGrid.end : weekEnd)
   const {
@@ -385,7 +387,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
     locationId,
     startDate: rangeStart,
     endDate: rangeEnd,
-    spendReferenceDate: formatDate(monthStart),
+    spendReferenceDate: formatDate(spendMonth.monthStart),
   })
   // ROSTER-FIX.6c — its own hook, not a seventh slice of the fan-out above: a
   // summary panel must not be able to take the roster down with it. See its
@@ -1566,6 +1568,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
           location={user.activeLocation}
           timeOff={timeOff}
           contractorSpend={contractorSpend}
+          spendOtherMonthStart={spendMonth.straddles ? formatDate(spendMonth.otherMonthStart) : null}
         />
       )}
 
