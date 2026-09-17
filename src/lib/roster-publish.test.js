@@ -20,6 +20,7 @@ import {
   coversPeriod,
   trimPublishedRosters,
   restoreRosterPeriods,
+  publishAftermathNote,
   findConflictingPublishedRosters,
   releasePublishedRostersFor,
   restorePublishedRosters,
@@ -1164,6 +1165,62 @@ describe('trimPublishedRosters / restoreRosterPeriods', () => {
     expect(updates[2].where).toContainEqual(['id', 'r-1'])
   })
 
+  // 🔴 A THROWN error never produces an error object, so none of the `updErr`
+  // branches run and the caller's own catch sees the empty `trimmed` it was
+  // handed before the call. Reachable on the headline case: a month whose
+  // boundary weeks are BOTH published, where the first trim lands and the
+  // second throws.
+  it('restores earlier trims when a later write THROWS, not just when it errors', async () => {
+    const updates = []
+    let n = 0
+    const db = {
+      from() {
+        return {
+          update(payload) {
+            const rec = { payload, where: [] }
+            updates.push(rec)
+            const throwNow = n === 1
+            n++
+            const w = {
+              eq: (c, v) => { rec.where.push([c, v]); return w },
+              select: () => w,
+              then: (onF, onR) => (throwNow
+                ? Promise.reject(new Error('fetch failed')).then(onF, onR)
+                : Promise.resolve({ data: [{ id: 'row' }], error: null }).then(onF, onR)),
+            }
+            return w
+          },
+        }
+      },
+    }
+
+    const { trimmed, error } = await trimPublishedRosters(db, TRIMS)
+    expect(trimmed).toEqual([])
+    expect(error.message).toMatch(/fetch failed/)
+    // The first roster is back at the period it started from.
+    expect(updates.at(-1).payload).toEqual({ period_start: '2026-08-31', period_end: '2026-09-06' })
+    expect(updates.at(-1).where).toContainEqual(['id', 'r-1'])
+  })
+
+  it('names the rosters a human must put back when the restore ALSO throws', async () => {
+    const db = {
+      from() {
+        const w = {
+          update: () => w,
+          eq: () => w,
+          select: () => w,
+          then: (onF, onR) => Promise.reject(new Error('connection reset')).then(onF, onR),
+        }
+        return w
+      },
+    }
+    const { trimmed, error } = await trimPublishedRosters(db, TRIMS)
+    expect(trimmed).toEqual([])
+    // Nothing landed, so there is nothing stranded to name, and it still
+    // answers rather than throwing out of the helper.
+    expect(error.message).toMatch(/connection reset/)
+  })
+
   it('is a no-op on an empty list, both ways', async () => {
     const { db, updates } = mockDb()
     expect(await trimPublishedRosters(db, [])).toEqual({ trimmed: [], error: null })
@@ -1179,5 +1236,48 @@ describe('trimPublishedRosters / restoreRosterPeriods', () => {
       { period_start: '2026-08-31', period_end: '2026-09-06' },
       { period_start: '2026-09-28', period_end: '2026-10-04' },
     ])
+  })
+})
+
+
+// ROSTER-TRIM.1 — the block-tagging-failed sentence. Stood-down and trimmed
+// are different aftermaths and one sentence for both was FALSE for the
+// trimmed half. These assert the CLAIM, not the phrasing.
+describe('publishAftermathNote', () => {
+  const says = (note, re) => re.test(note)
+
+  it('says nothing when nothing was stood down or trimmed', () => {
+    expect(publishAftermathNote()).toBe('')
+    expect(publishAftermathNote({ releasedCount: 0, trimmedCount: 0 })).toBe('')
+  })
+
+  it('a stood-down roster IS described as reading unpublished', () => {
+    const note = publishAftermathNote({ releasedCount: 1 })
+    expect(says(note, /stood down/i)).toBe(true)
+    expect(says(note, /unpublished/i)).toBe(true)
+  })
+
+  // The claim under test: a trimmed roster stays PUBLISHED, its blocks still
+  // carry its id, and its coaches have lost sight of nothing.
+  it('a trimmed roster is NEVER described as unpublished', () => {
+    const note = publishAftermathNote({ trimmedCount: 1 })
+    expect(says(note, /unpublished/i)).toBe(false)
+    expect(says(note, /still published/i)).toBe(true)
+    expect(says(note, /trimmed back/i)).toBe(true)
+  })
+
+  it('describes each aftermath separately when both happened', () => {
+    const note = publishAftermathNote({ releasedCount: 2, trimmedCount: 1 })
+    expect(says(note, /stood down/i)).toBe(true)
+    expect(says(note, /still published/i)).toBe(true)
+    // The "unpublished" claim is attached to the stood-down sentence only.
+    expect(note.indexOf('unpublished')).toBeLessThan(note.indexOf('still published'))
+  })
+
+  it('agrees in number with what it is describing', () => {
+    expect(publishAftermathNote({ releasedCount: 1 })).toMatch(/roster it replaces has/)
+    expect(publishAftermathNote({ releasedCount: 2 })).toMatch(/rosters it replaces have/)
+    expect(publishAftermathNote({ trimmedCount: 1 })).toMatch(/One overlapping roster was/)
+    expect(publishAftermathNote({ trimmedCount: 3 })).toMatch(/3 overlapping rosters were/)
   })
 })

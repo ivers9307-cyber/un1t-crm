@@ -39,6 +39,7 @@ import {
   suggestedCoveringPeriod,
   trimPublishedRosters,
   restoreRosterPeriods,
+  publishAftermathNote,
   coversPeriod,
 } from '@/lib/roster-publish'
 import { sendOverBudgetApprovalEmail } from '@/lib/roster-email'
@@ -334,8 +335,15 @@ export async function POST(request) {
         periodEnd: period_end,
       })
       if (rel.error) {
-        // Nothing has changed yet, so refusing here is free — and it is far
-        // better than letting the insert fail on the constraint with a 23P01.
+        // ROSTER-TRIM.1 — "nothing has changed yet" USED to be true here and
+        // is not any more: the trim above has already written to disk. A
+        // trimmed roster left behind by a publish that never happened owns
+        // blocks OUTSIDE its own period — exactly the state mig 602's
+        // pre-apply check (c2) requires to be empty — and phase 2's min/max
+        // shrink would later widen its period back over another roster's
+        // days. Put the trims (and anything already released) back before
+        // refusing.
+        await restoreReleased('standing down the rosters this publish replaces failed')
         return NextResponse.json({
           success: false,
           error: `Could not stand down the rosters this publish replaces: ${rel.error.message}`,
@@ -437,24 +445,29 @@ export async function POST(request) {
       // is published again. Restoring them is not on offer: the new roster is
       // published over the same days and the exclusion constraint would
       // refuse to put a second published roster back there.
-      // ROSTER-TRIM.1 — a TRIMMED roster is the same shape of damage: it gave
-      // up its shared days to this publish, and the blocks on them never
-      // moved, so they read as unpublished too.
-      const stranded = (released.length + trimmed.length) > 0
-        ? ' The rosters it replaces have already been stood down or trimmed back, so those shifts read as unpublished until you publish this period again.'
-        : ''
+      // ROSTER-TRIM.1 — stood-down and trimmed are DIFFERENT aftermaths and
+      // one sentence for both was false for the trimmed half: a trimmed
+      // roster is still published and its shifts still read published.
+      // publishAftermathNote says each one only of the rosters it is true of.
+      const stranded = publishAftermathNote({ releasedCount: released.length, trimmedCount: trimmed.length })
       // ROSTER-SUPERSEDE.1 — the HTTP response reaches whoever clicked
       // publish, and only them. Nobody watching the logs learns that a
       // location has a period reading as unpublished, so say it here too,
       // naming the rows a human has to re-publish.
       if (released.length + trimmed.length > 0) {
-        logWarn('rosters', 'block tagging failed after the replaced rosters were stood down; that period now reads as unpublished', {
+        // Two lists, never one: `stoodDown` is the set whose blocks now read
+        // UNPUBLISHED (a human has to re-publish the period), `trimmedBack`
+        // is the set still published whose period no longer matches the
+        // blocks it owns. Merging them told whoever reads this log that live
+        // shifts had vanished when they had not.
+        logWarn('rosters', 'block tagging failed after the replaced rosters were settled', {
           err: tagErr.message,
           location_id,
           period_start,
           period_end,
           roster_id: roster.id,
-          stranded: [...released, ...trimmed].map((r) => r.id),
+          stoodDown: released.map((r) => r.id),
+          trimmedBack: trimmed.map((r) => r.id),
         })
       }
       return NextResponse.json({

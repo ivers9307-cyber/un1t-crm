@@ -71,7 +71,7 @@ function draft(overrides = {}) {
 // (select('*') … .single()), the overlap probe (a narrow select that is
 // awaited), and the status flip. The probe's filters are recorded so the
 // self-exclusion can be asserted.
-function buildDb({ roster, publishedRosters = [], updateError = null, updateThrows = null, captureError = null, tagError = null }) {
+function buildDb({ roster, publishedRosters = [], updateError = null, updateThrows = null, captureError = null, tagError = null, rosterUpdateError = null }) {
   const updates = []
   const probe = []
   const blockUpdates = []
@@ -90,12 +90,29 @@ function buildDb({ roster, publishedRosters = [], updateError = null, updateThro
                 }),
               }
             }
+            // ROSTER-TRIM.1 — the DATE and ID filters are applied, so the
+            // OVERLAP probe and the CONTAINMENT probe (the release) can no
+            // longer be confused for one another: a straddling roster the
+            // release would never select must not come back from it.
+            // status/location_id are not filtered; the fixtures omit them and
+            // those filters are asserted by name instead.
+            const filters = []
+            const DATE_OR_ID = new Set(['period_start', 'period_end', 'id'])
+            const matches = (r) => filters.every(([op, col, val]) => {
+              if (!DATE_OR_ID.has(col)) return true
+              if (op === 'eq') return r[col] === val
+              if (op === 'neq') return r[col] !== val
+              if (op === 'lte') return r[col] <= val
+              if (op === 'gte') return r[col] >= val
+              return true
+            })
+            const record = (op) => (c, v) => { probe.push([op, c, v]); filters.push([op, c, v]); return chain }
             const chain = {
-              eq: (c, v) => { probe.push(['eq', c, v]); return chain },
-              lte: (c, v) => { probe.push(['lte', c, v]); return chain },
-              gte: (c, v) => { probe.push(['gte', c, v]); return chain },
-              neq: (c, v) => { probe.push(['neq', c, v]); return chain },
-              then: (onF, onR) => Promise.resolve({ data: publishedRosters, error: null }).then(onF, onR),
+              eq: record('eq'),
+              lte: record('lte'),
+              gte: record('gte'),
+              neq: record('neq'),
+              then: (onF, onR) => Promise.resolve({ data: publishedRosters.filter(matches), error: null }).then(onF, onR),
             }
             return chain
           },
@@ -106,6 +123,9 @@ function buildDb({ roster, publishedRosters = [], updateError = null, updateThro
             // writes, which are awaited directly.
             const rec = { payload, where: [], afterFlip: updates.some((u) => u.payload.status === 'published') }
             updates.push(rec)
+            // ROSTER-TRIM.1 — a per-payload failure hook, so a test can break
+            // the RELEASE (status: 'superseded') while letting the trim land.
+            const payloadErr = rosterUpdateError ? rosterUpdateError(payload) : null
             const w = {
               eq: (c, v) => { rec.where.push([c, v]); return w },
               in: (c, v) => { rec.where.push([c, v]); return w },
@@ -122,10 +142,13 @@ function buildDb({ roster, publishedRosters = [], updateError = null, updateThro
                 then: (onF, onR) => {
                   const targeted = rec.where.find(([c]) => c === 'id')?.[1]
                   const ids = Array.isArray(targeted) ? targeted : [targeted].filter(Boolean)
-                  return Promise.resolve({ data: ids.map((id) => ({ id })), error: null }).then(onF, onR)
+                  return Promise.resolve({
+                    data: payloadErr ? null : ids.map((id) => ({ id })),
+                    error: payloadErr,
+                  }).then(onF, onR)
                 },
               }),
-              then: (onF, onR) => Promise.resolve({ data: null, error: null }).then(onF, onR),
+              then: (onF, onR) => Promise.resolve({ data: null, error: payloadErr }).then(onF, onR),
             }
             return w
           },
@@ -199,6 +222,30 @@ describe('POST /api/schedule/rosters/[id]/approve — overlap guard', () => {
     const trim = updates.find((u) => u.payload.period_end === '2026-05-03')
     expect(trim.payload).toEqual({ period_start: '2026-04-27', period_end: '2026-05-03' })
     expect(trim.where).toContainEqual(['id', 'r-prev'])
+  })
+
+  // 🔴 THE RELEASE RUNS AFTER THE TRIM, so its refusal is no longer free: a
+  // trimmed roster left behind by an approval that never happened owns blocks
+  // outside its own period (mig 602's pre-apply check (c2)).
+  it('puts a trimmed roster back when standing down the replaced rosters fails', async () => {
+    const { db, updates } = buildDb({
+      roster: draft(),
+      publishedRosters: [
+        { id: 'r-prev', period_start: '2026-04-27', period_end: '2026-05-05' },
+        { id: 'r-inner', period_start: '2026-05-06', period_end: '2026-05-08' },
+      ],
+      rosterUpdateError: (payload) => (payload.status === 'superseded' ? { message: 'lock timeout' } : null),
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST({}, PROPS)
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toMatch(/lock timeout/)
+    // Never flipped, and the trim was undone.
+    expect(updates.some((u) => u.payload.status === 'published')).toBe(false)
+    const restore = updates.at(-1)
+    expect(restore.payload).toEqual({ period_start: '2026-04-27', period_end: '2026-05-05' })
+    expect(restore.where).toContainEqual(['id', 'r-prev'])
   })
 
   it('names the period that would work when a published roster engulfs the draft', async () => {

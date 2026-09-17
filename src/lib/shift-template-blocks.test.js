@@ -61,6 +61,7 @@ describe('clearEmptyFutureBlocks', () => {
           delete: () => { chain._delete = true; return chain },
           eq: () => chain,
           gte: () => chain,
+          order: () => chain,
           in: (_c, ids) => { calls.deletedIds = ids; return chain },
           then: (onF, onR) => {
             if (chain._delete) return Promise.resolve({ data: null, error: deleteError }).then(onF, onR)

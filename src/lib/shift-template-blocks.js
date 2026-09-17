@@ -15,6 +15,15 @@ import { liveAssignments } from './roster'
  * The future blocks for a template, with everything the deactivate decision
  * needs: whether each is on a published roster and whether anyone is on it.
  *
+ * 🔴 UNPAGINATED, and that is a bound, not an oversight: every `.select()`
+ * returns at most 1,000 rows whatever it asks for (CLAUDE.md). This is ONE
+ * template over the generation horizon, which is 8 weeks (generateBlocksFor-
+ * Template) and at most one block per template per day per location (mig 067's
+ * unique key), so the ceiling is 56 rows. If the horizon is ever lengthened
+ * past ~2.7 years, this has to `.range()`-paginate with an explicit `.order()`
+ * or it will silently clear only the first 1,000 blocks. The `.order()` is
+ * here already so that paging can be added without changing what it returns.
+ *
  * @returns {Promise<{ blocks: Array<object>, error: any }>}
  */
 export async function readFutureBlocksForTemplate(db, { templateId, locationId, today }) {
@@ -24,6 +33,7 @@ export async function readFutureBlocksForTemplate(db, { templateId, locationId, 
     .eq('template_id', templateId)
     .eq('location_id', locationId)
     .gte('block_date', today)
+    .order('block_date', { ascending: true })
   return { blocks: data || [], error: error || null }
 }
 

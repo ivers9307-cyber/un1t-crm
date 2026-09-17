@@ -516,6 +516,18 @@ export function coversPeriod(ranges, periodStart, periodEnd) {
  * the operator originally asked to publish, and a later trim is not a change
  * to that ask.
  *
+ * KNOWN RESIDUE, accepted: a trimmed remnant that ends up owning NO blocks
+ * (every block it had was inside the period this publish took) stays published
+ * over dates it owns nothing on, and supersedeSwallowedRosters' phase-2 sweep
+ * will not clean it up — after the trim it no longer overlaps the new period,
+ * so the sweep never sees it. It is harmless as data (it overlaps no other
+ * published roster, so mig 602 is satisfied, and no coach sees anything
+ * wrong); it is only a tidiness cost in the roster list. Superseding it here
+ * instead is NOT obviously right: the sweep's own rule for "owns nothing" is a
+ * live recount, and doing that per trim would add a query per straddler to
+ * every publish to remove a row that is the audit trail of a real publish
+ * event.
+ *
  * @param {Array<{id: string, period_start: string, period_end: string, trim_to: {period_start: string, period_end: string}}>} trims
  * @returns {Promise<{ trimmed: Array<{id: string, period_start: string, period_end: string, trim_to: object}>, error: any }>}
  */
@@ -524,39 +536,96 @@ export async function trimPublishedRosters(db, trims) {
   if (targets.length === 0) return { trimmed: [], error: null }
 
   const trimmed = []
-  for (const t of targets) {
-    // COMPARE-AND-SWAP. The classification was made from a read taken before
-    // the budget projection, so another publish can have moved this row in
-    // between. Pinning the period we read means a raced row is simply not
-    // written — and because a zero-row UPDATE is NOT an error in PostgREST
-    // (CLAUDE.md), the rows touched are judged explicitly: proceeding on a
-    // silent no-op would walk straight into mig 602's 23P01 on the insert.
-    const { data: touched, error: updErr } = await db
-      .from('rosters')
-      .update({ period_start: t.trim_to.period_start, period_end: t.trim_to.period_end })
-      .eq('id', t.id)
-      .eq('status', 'published')
-      .eq('period_start', t.period_start)
-      .eq('period_end', t.period_end)
-      .select('id')
-    if (!updErr && (touched || []).length === 0) {
-      const { error: restoreErr } = await restoreRosterPeriods(db, trimmed)
-      const stale = new Error(`roster ${t.id} changed since it was read, so it was not trimmed`)
-      if (restoreErr) {
-        return { trimmed: [], error: withRestoreFailure(stale, restoreErr, trimmed.map((x) => x.id)) }
-      }
-      return { trimmed: [], error: stale }
+
+  // ONE way out of this function for every failure, so no path can forget the
+  // restore. The restore is itself a write and can itself fail — or throw —
+  // and a roster left trimmed for a publish that never happens owns blocks
+  // outside its own period, so the ids are NAMED when that happens: putting
+  // them back is then a human job.
+  async function abort(err) {
+    let restoreErr = null
+    try {
+      ;({ error: restoreErr } = await restoreRosterPeriods(db, trimmed))
+    } catch (e) {
+      restoreErr = e instanceof Error ? e : new Error(String(e))
     }
-    if (updErr) {
-      const { error: restoreErr } = await restoreRosterPeriods(db, trimmed)
-      if (restoreErr) {
-        return { trimmed: [], error: withRestoreFailure(updErr, restoreErr, trimmed.map((x) => x.id)) }
-      }
-      return { trimmed: [], error: updErr }
+    if (restoreErr) {
+      return { trimmed: [], error: withRestoreFailure(err, restoreErr, trimmed.map((x) => x.id)) }
     }
-    trimmed.push(t)
+    return { trimmed: [], error: err }
+  }
+
+  // 🔴 THE LOOP IS WRAPPED because a THROWN error never produces an error
+  // object: a PostgREST 5xx, a dropped fetch or the function timing out skips
+  // every `updErr` branch below, and the caller's own catch sees the EMPTY
+  // `trimmed` it was handed before the call — so the rosters already trimmed
+  // would stay trimmed forever. It is reachable on the headline case, a month
+  // whose boundary weeks are BOTH published: the first trim lands, the second
+  // throws.
+  try {
+    for (const t of targets) {
+      // COMPARE-AND-SWAP. The classification was made from a read taken before
+      // the budget projection, so another publish can have moved this row in
+      // between. Pinning the period we read means a raced row is simply not
+      // written — and because a zero-row UPDATE is NOT an error in PostgREST
+      // (CLAUDE.md), the rows touched are judged explicitly: proceeding on a
+      // silent no-op would walk straight into mig 602's 23P01 on the insert.
+      const { data: touched, error: updErr } = await db
+        .from('rosters')
+        .update({ period_start: t.trim_to.period_start, period_end: t.trim_to.period_end })
+        .eq('id', t.id)
+        .eq('status', 'published')
+        .eq('period_start', t.period_start)
+        .eq('period_end', t.period_end)
+        .select('id')
+      if (updErr) return await abort(updErr)
+      if ((touched || []).length === 0) {
+        return await abort(new Error(`roster ${t.id} changed since it was read, so it was not trimmed`))
+      }
+      trimmed.push(t)
+    }
+  } catch (e) {
+    return await abort(e instanceof Error ? e : new Error(String(e)))
   }
   return { trimmed, error: null }
+}
+
+/**
+ * ROSTER-TRIM.1 — what to tell the operator when a publish wrote its roster
+ * row but the block re-tag then failed.
+ *
+ * The two aftermaths are NOT the same thing and the first cut described them
+ * with one sentence, which made it false for half of them:
+ *
+ *   - a STOOD-DOWN (superseded) roster is no longer published, so every block
+ *     still hanging off it reads as UNPUBLISHED to its coach. That is the
+ *     urgent one.
+ *   - a TRIMMED roster is still published and its blocks still read published,
+ *     so nobody has lost sight of a shift. What is wrong is narrower: its
+ *     period no longer covers the days it still owns blocks on, which is the
+ *     state mig 602's pre-apply check (c2) requires to be empty, and phase 2's
+ *     min/max shrink would later widen that period back over the days this
+ *     publish was taking. Re-publishing the period settles it.
+ *
+ * Returns a LEADING-SPACE string to append to an existing sentence, or '' when
+ * there is nothing to say.
+ *
+ * @param {{ releasedCount?: number, trimmedCount?: number }} counts
+ * @returns {string}
+ */
+export function publishAftermathNote({ releasedCount = 0, trimmedCount = 0 } = {}) {
+  const parts = []
+  if (releasedCount > 0) {
+    const noun = releasedCount === 1 ? 'roster it replaces has' : 'rosters it replaces have'
+    parts.push(`The ${noun} already been stood down, so those shifts read as unpublished until you publish this period again.`)
+  }
+  if (trimmedCount > 0) {
+    const subject = trimmedCount === 1
+      ? 'One overlapping roster was trimmed back'
+      : `${trimmedCount} overlapping rosters were trimmed back`
+    parts.push(`${subject} to the days outside this period. Those shifts are still published, but that roster's dates no longer match the shifts it owns, so publish this period again to settle it.`)
+  }
+  return parts.length > 0 ? ` ${parts.join(' ')}` : ''
 }
 
 /**

@@ -36,6 +36,7 @@ import {
   suggestedCoveringPeriod,
   trimPublishedRosters,
   restoreRosterPeriods,
+  publishAftermathNote,
 } from '@/lib/roster-publish'
 import { logWarn } from '@/lib/log'
 import { hasPermissionForLocation } from '@/lib/permissions'
@@ -212,7 +213,12 @@ export async function POST(_request, props) {
       excludeRosterId: roster.id,
     })
     if (rel.error) {
-      // Nothing has changed yet; refusing beats a raw 23P01 on the flip below.
+      // ROSTER-TRIM.1 — the trim above has already written to disk, so this
+      // is no longer the free refusal it was: a trimmed roster stranded by an
+      // approval that never happened owns blocks outside its own period (mig
+      // 602's check (c2)), and phase 2 would later widen it back over another
+      // roster's days.
+      await restoreReleased('standing down the rosters this approval replaces failed')
       return NextResponse.json({
         success: false,
         error: `Could not stand down the rosters this approval replaces: ${rel.error.message}`,
@@ -296,24 +302,24 @@ export async function POST(_request, props) {
     // stood down, so their shifts read as unpublished until the period is
     // published again. Restoring them is not on offer either: this roster is
     // published over the same days and the constraint would refuse a second.
-    // ROSTER-TRIM.1 — a TRIMMED roster is the same shape of damage: it gave
-    // up its shared days to this publish, and the blocks on them never
-    // moved, so they read as unpublished too.
-    const stranded = (released.length + trimmed.length) > 0
-      ? ' The rosters it replaces have already been stood down or trimmed back, so those shifts read as unpublished until you publish this period again.'
-      : ''
+    // ROSTER-TRIM.1 — stood-down and trimmed are different aftermaths; see
+    // publishAftermathNote. A trimmed roster stays published and its shifts
+    // still read published, so it must not be described as lost.
+    const stranded = publishAftermathNote({ releasedCount: released.length, trimmedCount: trimmed.length })
     // ROSTER-SUPERSEDE.1 — the HTTP response reaches whoever clicked approve,
     // and only them. Nobody watching the logs learns that a location has a
     // period reading as unpublished, so say it here too, naming the rows a
     // human has to re-publish.
     if (released.length + trimmed.length > 0) {
-      logWarn('rosters/approve', 'block tagging failed after the replaced rosters were stood down; that period now reads as unpublished', {
+      // Two lists, never one: only `stoodDown` has blocks reading unpublished.
+      logWarn('rosters/approve', 'block tagging failed after the replaced rosters were settled', {
         err: tagErr.message,
         location_id: roster.location_id,
         period_start: roster.period_start,
         period_end: roster.period_end,
         roster_id: roster.id,
-        stranded: [...released, ...trimmed].map((r) => r.id),
+        stoodDown: released.map((r) => r.id),
+        trimmedBack: trimmed.map((r) => r.id),
       })
     }
     return NextResponse.json({
