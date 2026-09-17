@@ -28,6 +28,7 @@ import { useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { CalendarOff, RefreshCw } from 'lucide-react'
 import { pickLocationColor } from '@shared/location-colors'
+import { effectiveShiftStart, effectiveShiftEnd } from '@shared/roster-month'
 import Modal from '@/components/ui/Modal'
 import Button from '@/components/ui/Button'
 import RequestTimeOffModal from './RequestTimeOffModal'
@@ -36,9 +37,13 @@ import { shiftHours } from '@/lib/payroll'
 
 // ── Week-mode helpers (moved from today/page.js, byte-identical) ────────────
 
+// REPORTS.2 — override → block → template (shared/roster-month.js). The
+// template-only fallback showed a block's ORIGINAL template times after the
+// block had been moved; the rows carry block_start_time/block_end_time
+// (shared/dashboard-data.js fetchDashboardShifts).
 function shiftTime(shift) {
-  const start = (shift.start_time_override || shift.shift_templates?.start_time || '').slice(0, 5)
-  const end = (shift.end_time_override || shift.shift_templates?.end_time || '').slice(0, 5)
+  const start = (effectiveShiftStart(shift) || '').slice(0, 5)
+  const end = (effectiveShiftEnd(shift) || '').slice(0, 5)
   return `${start} – ${end}`
 }
 
@@ -448,7 +453,7 @@ function ModeToggle({ mode, onChange }) {
 // ── Month chip — one shift entry inside a calendar cell ──────────────────────
 
 function ShiftChip({ shift, isPast, onShiftClick, cellDate }) {
-  const time = (shift.start_time_override || shift.shift_templates?.start_time || '').slice(0, 5)
+  const time = (effectiveShiftStart(shift) || '').slice(0, 5)
   const name = shift.shift_templates?.name || 'Shift'
   // ROSTER-FIX.1 (D1) — the amber "draft" treatment is gone: this component
   // only ever renders the PERSONAL dashboard's shifts, and those are now

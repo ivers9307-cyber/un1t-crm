@@ -15,6 +15,7 @@ import {
   RECEIPT_MIME_TYPES,
   mimeFromFilename,
   sniffReceiptMime,
+  loadQueueRowsForInvoices,
 } from './contractor-invoices'
 
 describe('periodForMonth', () => {
@@ -186,5 +187,57 @@ describe('sniffReceiptMime', () => {
       const got = sniffReceiptMime(s)
       expect(got === null || RECEIPT_MIME_TYPES.includes(got)).toBe(true)
     }
+  })
+})
+
+// INVOICEREVIEW.2 — queue lookup feeding the lifecycle label.
+describe('loadQueueRowsForInvoices', () => {
+  function db(result, calls = []) {
+    const b = {
+      from: (t) => { calls.push(['from', t]); return b },
+      select: () => b,
+      in: (col, vals) => { calls.push(['in', col, vals]); return b },
+      then: (res, rej) => Promise.resolve(result).then(res, rej),
+    }
+    return b
+  }
+
+  it('does not query when no invoice is awaiting the accountant', async () => {
+    const calls = []
+    const lookup = await loadQueueRowsForInvoices(db({ data: [] }, calls), [
+      { id: 'a', status: 'submitted', location_id: 'L' },
+      { id: 'b', status: 'declined', location_id: 'L' },
+    ])
+    expect(calls).toEqual([])
+    expect(lookup('a')).toBeUndefined()
+  })
+
+  it('returns the newest row, null for a looked-up miss, undefined for not looked up', async () => {
+    const calls = []
+    const lookup = await loadQueueRowsForInvoices(db({
+      data: [
+        { id: 'q-old', source_contractor_invoice_id: 'a', created_at: '2026-09-01' },
+        { id: 'q-new', source_contractor_invoice_id: 'a', created_at: '2026-09-02' },
+      ],
+      error: null,
+    }, calls), [
+      { id: 'a', status: 'awaiting_accountant_review', location_id: 'L' },
+      { id: 'b', status: 'awaiting_accountant_review', location_id: 'L' },
+      { id: 'c', status: 'submitted', location_id: 'L' },
+    ])
+    expect(lookup('a').id).toBe('q-new')
+    expect(lookup('b')).toBeNull()
+    expect(lookup('c')).toBeUndefined()
+    // location-scoped as well as source-scoped
+    expect(calls).toContainEqual(['in', 'location_id', ['L']])
+    expect(calls).toContainEqual(['in', 'source_contractor_invoice_id', ['a', 'b']])
+  })
+
+  it('a failed read yields undefined, never a false "not queued"', async () => {
+    const lookup = await loadQueueRowsForInvoices(
+      db({ data: null, error: { message: 'down' } }),
+      [{ id: 'a', status: 'awaiting_accountant_review', location_id: 'L' }],
+    )
+    expect(lookup('a')).toBeUndefined()
   })
 })
