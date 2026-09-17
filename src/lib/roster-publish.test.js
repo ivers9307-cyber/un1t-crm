@@ -231,7 +231,57 @@ describe('projectPublishImpact', () => {
       periodEnd: '2026-05-10',
     })
     expect(r.periodProjectedEur).toBe(70)
-    expect(r.blockCount).toBe(1)  // FTE-only block doesn't count (cost=0)
+    // ROSTERVIS.1 — every block in the period counts, FTE-only ones included.
+    // It used to be 1 (cost=0 blocks were skipped), which under-read the week.
+    expect(r.blockCount).toBe(2)
+  })
+})
+
+// ROSTERVIS.1 — the preview lists empty and below-minimum shifts above the
+// cost figures. Information only; nothing here gates the publish.
+describe('projectPublishImpact — staffing gaps', () => {
+  const withMin = (b, min, name = 'Morning') => ({ ...b, min_coaches: min, shift_templates: { name } })
+
+  it('lists empty and short future blocks in the period, in date/time order, and skips ok and past ones', async () => {
+    const db = mockDb({
+      location: { id: 'loc1', monthly_contractor_budget_eur: 500 },
+      contractors: [dan],
+      blocks: [
+        withMin(block({ id: 'short', date: '2026-05-06', start: '07:00', end: '08:00', coaches: ['dan', { profile_id: 'eve', status: 'cancelled' }] }), 2, 'Early'),
+        withMin(block({ id: 'empty', date: '2026-05-05', start: '09:00', end: '10:00' }), 1, 'Consultation'),
+        withMin(block({ id: 'ok', date: '2026-05-05', start: '07:00', end: '08:00', coaches: ['dan', 'eve'] }), 2),
+        withMin(block({ id: 'past-empty', date: '2026-05-04', start: '09:00', end: '10:00' }), 1),
+        // Outside the period — never listed.
+        withMin(block({ id: 'outside', date: '2026-05-20', start: '09:00', end: '10:00' }), 1),
+      ],
+    })
+    const r = await projectPublishImpact(db, {
+      locationId: 'loc1', periodStart: '2026-05-04', periodEnd: '2026-05-10', todayIso: '2026-05-05',
+    })
+    expect(r.staffingGaps).toEqual([
+      { block_id: 'empty', block_date: '2026-05-05', start_time: '09:00', end_time: '10:00', name: 'Consultation', status: 'empty', count: 0, min: 1 },
+      { block_id: 'short', block_date: '2026-05-06', start_time: '07:00', end_time: '08:00', name: 'Early', status: 'short', count: 1, min: 2 },
+    ])
+    expect(r.blockCount).toBe(4)
+  })
+
+  it('sees the days of a week that straddles the month end, without costing them into this month', async () => {
+    const db = mockDb({
+      location: { id: 'loc1', monthly_contractor_budget_eur: 500 },
+      contractors: [dan],
+      blocks: [
+        withMin(block({ id: 'aug', date: '2026-08-31', start: '09:00', end: '11:00', coaches: ['dan'] }), 1),
+        withMin(block({ id: 'sep', date: '2026-09-02', start: '09:00', end: '11:00', coaches: ['dan'] }), 2),
+      ],
+    })
+    const r = await projectPublishImpact(db, {
+      locationId: 'loc1', periodStart: '2026-08-31', periodEnd: '2026-09-06', todayIso: '2026-08-30',
+    })
+    expect(r.blockCount).toBe(2)
+    expect(r.staffingGaps.map((g) => g.block_id)).toEqual(['sep'])
+    // Month-scoped cost, exactly as before: only the August block is priced.
+    expect(r.periodProjectedEur).toBe(70)
+    expect(r.monthStart).toBe('2026-08-01')
   })
 })
 

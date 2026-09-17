@@ -18,6 +18,8 @@
 
 import { shiftHours } from './payroll'
 import { liveAssignments } from './roster'
+import { staffingGaps } from './roster-staffing'
+import { dublinTodayStr } from './dublin-time'
 
 function isoFirstOfMonth(iso) {
   return `${iso.slice(0, 7)}-01`
@@ -35,9 +37,16 @@ function isoLastOfMonth(iso) {
  * with roster join, current monthly_contractor_budget_eur) needed
  * to evaluate a publish.
  */
-async function loadBudgetContext(db, locationId, periodStart) {
+async function loadBudgetContext(db, locationId, periodStart, periodEnd = periodStart) {
   const monthStart = isoFirstOfMonth(periodStart)
   const monthEnd = isoLastOfMonth(periodStart)
+  // ROSTERVIS.1 — the block read spans the month AND the whole period. A week
+  // that straddles a month end (Mon 31 Aug – Sun 6 Sep) used to load only
+  // August, so its September days were missing from the preview entirely.
+  // Cost stays month-scoped (projectPublishImpact filters it), so the budget
+  // figures are unchanged; the staffing list and block count see every day.
+  const readStart = periodStart < monthStart ? periodStart : monthStart
+  const readEnd = periodEnd > monthEnd ? periodEnd : monthEnd
 
   // Location budget snapshot.
   const { data: loc, error: locErr } = await db
@@ -71,13 +80,14 @@ async function loadBudgetContext(db, locationId, periodStart) {
   const { data: monthBlocks, error: blocksErr } = await db
     .from('shift_blocks')
     .select(`
-      id, location_id, block_date, start_time, end_time, roster_id,
+      id, location_id, block_date, start_time, end_time, roster_id, min_coaches,
+      shift_templates(name),
       shift_assignments(profile_id, status, start_time_override, end_time_override),
       rosters:roster_id(id, status)
     `)
     .eq('location_id', locationId)
-    .gte('block_date', monthStart)
-    .lte('block_date', monthEnd)
+    .gte('block_date', readStart)
+    .lte('block_date', readEnd)
   if (blocksErr) throw new Error(`Block lookup failed: ${blocksErr.message}`)
 
   // ROSTER-FIX.4 — approved leave for the month, in ONE query. A coach on
@@ -154,11 +164,13 @@ function blockContractorCost(block, contractorRateById, leaveByProfile) {
  *   remainingEur: number | null,
  *   overBudget: boolean,
  *   overrunEur: number,              // 0 if under, positive if over
- *   blockCount: number,
+ *   blockCount: number,              // every block in the period
+ *   staffingGaps: Array<{ block_id, block_date, start_time, end_time, name,
+ *                         status: 'empty'|'short', count, min }>,
  * }}
  */
-export async function projectPublishImpact(db, { locationId, periodStart, periodEnd }) {
-  const ctx = await loadBudgetContext(db, locationId, periodStart)
+export async function projectPublishImpact(db, { locationId, periodStart, periodEnd, todayIso = dublinTodayStr() }) {
+  const ctx = await loadBudgetContext(db, locationId, periodStart, periodEnd)
   const { location, monthStart, monthEnd, contractorRateById, leaveByProfile, monthBlocks } = ctx
 
   let alreadyPublishedEur = 0
@@ -166,12 +178,17 @@ export async function projectPublishImpact(db, { locationId, periodStart, period
   let blockCount = 0
 
   for (const b of monthBlocks) {
+    const inPeriod = b.block_date >= periodStart && b.block_date <= periodEnd
+    // ROSTERVIS.1 — "Blocks in period" counts every block in the period. It
+    // used to count only blocks carrying contractor cost, so a week staffed by
+    // FTEs (or not staffed at all) read as having almost no shifts.
+    if (inPeriod) blockCount++
+    // Cost is month-scoped, exactly as before the read was widened above.
+    if (b.block_date < monthStart || b.block_date > monthEnd) continue
     const cost = blockContractorCost(b, contractorRateById, leaveByProfile)
     if (cost === 0) continue
-    const inPeriod = b.block_date >= periodStart && b.block_date <= periodEnd
     if (inPeriod) {
       periodProjectedEur += cost
-      blockCount++
     } else {
       // Only count if currently on a PUBLISHED roster — drafts
       // don't consume budget until they're published.
@@ -190,6 +207,21 @@ export async function projectPublishImpact(db, { locationId, periodStart, period
   const overBudget = budget != null && monthProjectedTotalEur > budget
   const overrunEur = overBudget ? round2(monthProjectedTotalEur - budget) : 0
 
+  // ROSTERVIS.1 — the shifts in this period that are empty or below their
+  // minimum, for the publish preview. Information only: nothing here gates a
+  // publish. Future blocks only, the same rule the calendar applies.
+  const staffingGapsInPeriod = staffingGaps(monthBlocks, { from: periodStart, to: periodEnd, todayIso })
+    .map(({ block, status, count, min }) => ({
+      block_id: block.id,
+      block_date: block.block_date,
+      start_time: block.start_time,
+      end_time: block.end_time,
+      name: block.shift_templates?.name || 'Shift',
+      status,
+      count,
+      min,
+    }))
+
   return {
     monthStart,
     monthEnd,
@@ -201,6 +233,7 @@ export async function projectPublishImpact(db, { locationId, periodStart, period
     overBudget,
     overrunEur,
     blockCount,
+    staffingGaps: staffingGapsInPeriod,
   }
 }
 
