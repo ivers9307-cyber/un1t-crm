@@ -147,6 +147,10 @@ export async function PUT(request, props) {
     // stamped either way; a published, future one is left for dispatch to
     // stamp only once delivery is confirmed.
     if (op.delete && dropLog?.logged && dropLog.id) {
+      // A missing block/roster embed reads as "not published" here (isDraft
+      // defaults true), same as every other logRosterChange caller treats an
+      // unreadable roster status — fail toward "stamp it", never toward
+      // silently leaving the coach exposed to a later re-publish ping.
       const isDraft = block?.rosters?.status !== 'published'
       const isPast = !!block?.block_date && block.block_date < dublinTodayStr()
       if (isDraft || isPast) {
@@ -209,9 +213,12 @@ async function dispatchSwapNotifications(db, decision, swap, user, { dropLog, dr
       case 'decision_for_taker': {
         const verb = decision.swapUpdates.status === 'approved' ? 'approved' : 'declined'
         const note = decision.swapUpdates.review_note ? ` Note: ${decision.swapUpdates.review_note}` : ''
-        // block_date = the requester's shift date (the shift the swap is
-        // about, and the one the taker now holds). Mobile week-preselects
-        // the schedule tab on it.
+        // block_date = the requester's shift date. For a reassign/reciprocal
+        // approval the decision_for_taker notification links to this SAME
+        // date because that is the shift the target now holds — the swap
+        // moved the requester's shift to them, so their new shift and the
+        // requester's old one share a date. Mobile week-preselects the
+        // schedule tab on it.
         const result = await notifyUsersOnce(db, `swap_decision:${swap.id}:${decision.swapUpdates.status}`, n.to, { title: `Swap ${verb}`, body: `Your shift swap was ${verb}.${note}`, category: 'swap', emailSubject: `Your shift swap was ${verb}`, data: { type: 'swap_decision', swap_id: swap.id, status: decision.swapUpdates.status, block_date: swap.requester_shift?.block?.block_date ?? null } })
         // SWAPNOTIFY.1 — this IS the "Swap approved" push for an approved
         // drop; if it actually delivered, stamp the roster_change_log row
