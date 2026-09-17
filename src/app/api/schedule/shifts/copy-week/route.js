@@ -6,7 +6,7 @@ import { validateBody } from '@/lib/validate'
 import { uuidLike, isoDate , MANAGER_ROLES} from '@/lib/schemas'
 import { bulkUpsertShiftAssignments } from '@/lib/roster-write'
 import { fetchSourceBlocks, buildCopyPlan, COPY_MODES } from '@/lib/roster-copy'
-import { formatDate } from '@/lib/roster'
+import { formatDate, fetchSlotRemovalKeys } from '@/lib/roster'
 import { readAssignmentKeysInRange, logAndNotifyCopiedShifts } from '@/lib/roster-change-notify'
 
 const CopyWeekSchema = z.object({
@@ -60,7 +60,7 @@ export function redateShiftDate(shiftDate, dayOffset) {
 // Copy all shifts from one week to another
 // Body: { location_id, source_start (Mon), target_start (Mon), mode? }
 // mode: 'exact' (default) | 'template' — see src/lib/roster-copy.js.
-// Response: { success, copied, skipped, mode }
+// Response: { success, copied, skipped, skipped_removed, mode }
 export async function POST(request) {
   const user = await getCurrentUser()
   if (!user || !MANAGER_ROLES.includes(user.role)) {
@@ -109,13 +109,25 @@ export async function POST(request) {
   const targetEnd = sourceWeekEnd(target_start)
   const before = await readAssignmentKeysInRange(db, { locationId: location_id, startDate: target_start, endDate: targetEnd })
 
+  // SLOTREMOVAL.1 — slots a manager deleted in the target week stay deleted:
+  // the writer neither re-creates them nor places the source's coaches on
+  // them (those coaches are counted as skipped). Read before any write, and
+  // a failed read stops the copy — copying blind would bring them back.
+  let removedSlots
+  try {
+    removedSlots = await fetchSlotRemovalKeys(db, { locationId: location_id, startDate: target_start, endDate: targetEnd })
+  } catch (e) {
+    return NextResponse.json({ success: false, error: e.message }, { status: 500 })
+  }
+
   // Find-or-create blocks + insert assignments (new model). A block created
   // inside an already-published period joins that roster (ROSTER-FIX.4).
-  const { count, error } = await bulkUpsertShiftAssignments(db, {
+  const { count, skippedRemoved = 0, error } = await bulkUpsertShiftAssignments(db, {
     locationId: location_id,
     actorId: user.id,
     rows: plan.rows,
     blocks: plan.blocks,
+    removedSlots,
   })
 
   // NOTIFY.1 review — the AFTER snapshot is read synchronously, here, right
@@ -144,5 +156,9 @@ export async function POST(request) {
   // because its own before-snapshot already contains them.
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
 
-  return NextResponse.json({ success: true, copied: count, skipped: plan.skipped, mode }, { status: 201 })
+  // skipped_removed is the part of `skipped` that landed on a deleted slot
+  // (SLOTREMOVAL.1), so the toast can say why.
+  return NextResponse.json({
+    success: true, copied: count, skipped: plan.skipped + skippedRemoved, skipped_removed: skippedRemoved, mode,
+  }, { status: 201 })
 }

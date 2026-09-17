@@ -266,15 +266,21 @@ function chunk(list, size) {
  *   minCoaches?: number|null,
  *   maxCoaches?: number|null,
  * }>} [opts.blocks]
- * @returns {Promise<{ count: number, error: object|null }>}
+ * @param {Set<string>} [opts.removedSlots]  SLOTREMOVAL.1 — slotKey(template,
+ *   date) of slots a manager deleted (fetchSlotRemovalKeys). A removed slot
+ *   whose block does not exist is NOT re-created: its block spec is dropped
+ *   and its rows are skipped and counted in `skippedRemoved`. A removed slot
+ *   whose block DOES exist (restored by a path that didn't clear the row) is
+ *   a live slot and is written as normal.
+ * @returns {Promise<{ count: number, skippedRemoved: number, error: object|null }>}
  */
-export async function bulkUpsertShiftAssignments(db, { locationId, actorId = null, rows, blocks = [] }) {
-  if (!locationId) return { count: 0, error: { message: 'locationId is required' } }
-  const safeRows = Array.isArray(rows) ? rows : []
-  const safeBlocks = Array.isArray(blocks) ? blocks : []
-  if (safeRows.length === 0 && safeBlocks.length === 0) return { count: 0, error: null }
+export async function bulkUpsertShiftAssignments(db, { locationId, actorId = null, rows, blocks = [], removedSlots = null }) {
+  if (!locationId) return { count: 0, skippedRemoved: 0, error: { message: 'locationId is required' } }
+  let safeRows = Array.isArray(rows) ? rows : []
+  let safeBlocks = Array.isArray(blocks) ? blocks : []
+  if (safeRows.length === 0 && safeBlocks.length === 0) return { count: 0, skippedRemoved: 0, error: null }
 
-  const slots = [...safeRows, ...safeBlocks]
+  let slots = [...safeRows, ...safeBlocks]
 
   // 1. Template defaults for every distinct template referenced.
   const templateIds = [...new Set(slots.map((r) => r.shiftTemplateId))]
@@ -285,10 +291,10 @@ export async function bulkUpsertShiftAssignments(db, { locationId, actorId = nul
     .select('id, start_time, end_time, min_coaches, max_coaches')
     .in('id', templateIds)
     .eq('location_id', locationId)
-  if (tErr) return { count: 0, error: tErr }
+  if (tErr) return { count: 0, skippedRemoved: 0, error: tErr }
   const tplById = new Map((templates || []).map((t) => [t.id, t]))
   const missing = templateIds.filter((id) => !tplById.has(id))
-  if (missing.length > 0) return { count: 0, error: { message: `shift_template not found: ${missing.join(', ')}` } }
+  if (missing.length > 0) return { count: 0, skippedRemoved: 0, error: { message: `shift_template not found: ${missing.join(', ')}` } }
 
   // 2. Find existing blocks covering the needed (template, date) slots. Paged:
   //    a month of blocks can pass the 1,000-row select cap, and a block we
@@ -307,9 +313,25 @@ export async function bulkUpsertShiftAssignments(db, { locationId, actorId = nul
       .lte('block_date', maxDate)
       .order('id', { ascending: true })
       .range(from, from + READ_PAGE - 1)
-    if (bErr) return { count: 0, error: bErr }
+    if (bErr) return { count: 0, skippedRemoved: 0, error: bErr }
     for (const b of page || []) blockByKey.set(`${b.template_id}|${b.block_date}`, b)
     if ((page || []).length < READ_PAGE) break
+  }
+
+  // SLOTREMOVAL.1 — a slot a manager deleted is not re-created by a copy.
+  // Decided here, against the blocks that actually exist, rather than in the
+  // pure plan: only this writer knows whether the target block is there.
+  let skippedRemoved = 0
+  if (removedSlots && removedSlots.size > 0) {
+    const isRemoved = (r) => {
+      const key = `${r.shiftTemplateId}|${r.shiftDate}`
+      return removedSlots.has(key) && !blockByKey.has(key)
+    }
+    const keptRows = safeRows.filter((r) => !isRemoved(r))
+    skippedRemoved = safeRows.length - keptRows.length
+    safeRows = keptRows
+    safeBlocks = safeBlocks.filter((b) => !isRemoved(b))
+    slots = [...safeRows, ...safeBlocks]
   }
 
   // 3. Create blocks for the slots that don't exist yet.
@@ -357,7 +379,7 @@ export async function bulkUpsertShiftAssignments(db, { locationId, actorId = nul
       .from('shift_blocks')
       .insert(batch)
       .select('id, template_id, block_date, start_time, end_time')
-    if (cErr) return { count: 0, error: cErr }
+    if (cErr) return { count: 0, skippedRemoved, error: cErr }
     for (const b of created || []) blockByKey.set(`${b.template_id}|${b.block_date}`, b)
   }
 
@@ -384,7 +406,7 @@ export async function bulkUpsertShiftAssignments(db, { locationId, actorId = nul
     })
   }
   const assignmentRows = [...assignmentByKey.values()]
-  if (assignmentRows.length === 0) return { count: 0, error: null }
+  if (assignmentRows.length === 0) return { count: 0, skippedRemoved, error: null }
 
   // COPYFIX.1 — ON CONFLICT DO NOTHING: an existing (block, profile) row is
   // never modified, so a copy can't clear a manager-set override, reset a
@@ -397,9 +419,9 @@ export async function bulkUpsertShiftAssignments(db, { locationId, actorId = nul
       .from('shift_assignments')
       .upsert(batch, { onConflict: 'block_id,profile_id', ignoreDuplicates: true })
       .select('id')
-    if (aErr) return { count, error: aErr }
+    if (aErr) return { count, skippedRemoved, error: aErr }
     count += (inserted || []).length
   }
 
-  return { count, error: null }
+  return { count, skippedRemoved, error: null }
 }

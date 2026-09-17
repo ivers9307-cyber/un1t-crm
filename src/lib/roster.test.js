@@ -34,9 +34,11 @@ function rostersBuilder(result) {
     calls: [],
     select: (...a) => { b.calls.push(['select', ...a]); return b },
     eq: (...a) => { b.calls.push(['eq', ...a]); return b },
+    in: (...a) => { b.calls.push(['in', ...a]); return b },
     lte: (...a) => { b.calls.push(['lte', ...a]); return b },
     gte: (...a) => { b.calls.push(['gte', ...a]); return b },
     order: (...a) => { b.calls.push(['order', ...a]); return b },
+    range: (...a) => { b.calls.push(['range', ...a]); return b },
     limit: (...a) => { b.calls.push(['limit', ...a]); return b },
     maybeSingle: () => Promise.resolve(result),
     then: (ok, err) => Promise.resolve(result).then(ok, err),
@@ -149,6 +151,8 @@ describe('generateBlocksForTemplate', () => {
   let fromMock
   let db
   let rostersResult
+  let removalsResult
+  let removalsBuilders
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -162,9 +166,17 @@ describe('generateBlocksForTemplate', () => {
     // ROSTER-FIX.5 — the generator now asks `rosters` which published
     // roster covers each date, so the mock has to dispatch per table.
     rostersResult = { data: [], error: null }
-    fromMock = vi.fn((table) => (
-      table === 'rosters' ? rostersBuilder(rostersResult) : { upsert: upsertMock }
-    ))
+    removalsResult = { data: [], error: null }
+    removalsBuilders = []
+    fromMock = vi.fn((table) => {
+      if (table === 'rosters') return rostersBuilder(rostersResult)
+      if (table === 'shift_block_removals') {
+        const b = rostersBuilder(removalsResult)
+        removalsBuilders.push(b)
+        return b
+      }
+      return { upsert: upsertMock }
+    })
     db = { from: fromMock }
   })
 
@@ -281,7 +293,9 @@ describe('generateBlocksForTemplate', () => {
       }),
     })
     const errDb = { from: vi.fn((table) => (
-      table === 'rosters' ? rostersBuilder({ data: [], error: null }) : { upsert: errUpsert }
+      table === 'rosters' || table === 'shift_block_removals'
+        ? rostersBuilder({ data: [], error: null })
+        : { upsert: errUpsert }
     )) }
 
     await expect(
@@ -292,6 +306,54 @@ describe('generateBlocksForTemplate', () => {
         max_coaches: 15,
       }, '2026-05-04', 1)
     ).rejects.toThrow(/unique violation/)
+  })
+
+  // SLOTREMOVAL.1 — a slot a manager deleted must not come back overnight.
+  describe('slot removals', () => {
+    const tpl = {
+      id: 't1', location_id: 'l1',
+      start_time: '09:30', end_time: '10:30',
+      days_of_week: ['mon', 'wed'], max_coaches: 15,
+    }
+
+    it('skips a date that has a removal row and reports it as removed', async () => {
+      removalsResult = { data: [{ id: 'x1', template_id: 't1', block_date: '2026-05-06' }], error: null }
+      upsertMock.mockReturnValue({ select: vi.fn().mockResolvedValue({ data: [{ id: 'a' }, { id: 'b' }, { id: 'c' }], error: null }) })
+      const result = await generateBlocksForTemplate(db, tpl, '2026-05-04', 2)
+      const dates = upsertMock.mock.calls[0][0].map((r) => r.block_date)
+      expect(dates).toEqual(['2026-05-04', '2026-05-11', '2026-05-13'])
+      expect(result).toEqual({ inserted: 3, skipped: 0, removed: 1 })
+    })
+
+    it('reads removals once, scoped to the location, template and window', async () => {
+      await generateBlocksForTemplate(db, tpl, '2026-05-04', 8)
+      expect(removalsBuilders).toHaveLength(1)
+      const calls = removalsBuilders[0].calls
+      expect(calls).toContainEqual(['eq', 'location_id', 'l1'])
+      expect(calls).toContainEqual(['in', 'template_id', ['t1']])
+      expect(calls).toContainEqual(['gte', 'block_date', '2026-05-04'])
+      expect(calls).toContainEqual(['lte', 'block_date', '2026-06-24'])
+      expect(calls.find((c) => c[0] === 'range')).toEqual(['range', 0, 999])
+    })
+
+    it('does not upsert at all when every date in the window was removed', async () => {
+      removalsResult = { data: [{ id: 'x1', template_id: 't1', block_date: '2026-05-04' }, { id: 'x2', template_id: 't1', block_date: '2026-05-06' }], error: null }
+      const result = await generateBlocksForTemplate(db, tpl, '2026-05-04', 1)
+      expect(upsertMock).not.toHaveBeenCalled()
+      expect(result).toEqual({ inserted: 0, skipped: 0, removed: 2 })
+    })
+
+    it('ignores a removal for another template on the same date', async () => {
+      removalsResult = { data: [{ id: 'x1', template_id: 'other', block_date: '2026-05-04' }], error: null }
+      await generateBlocksForTemplate(db, tpl, '2026-05-04', 1)
+      expect(upsertMock.mock.calls[0][0]).toHaveLength(2)
+    })
+
+    it('throws rather than generating blind when the removals read fails', async () => {
+      removalsResult = { data: null, error: { message: 'removals down' } }
+      await expect(generateBlocksForTemplate(db, tpl, '2026-05-04', 1)).rejects.toThrow(/removals down/)
+      expect(upsertMock).not.toHaveBeenCalled()
+    })
   })
 })
 
@@ -538,9 +600,11 @@ describe('generateBlocksForTemplate → roster_id', () => {
     })
     rostersResult = { data: [], error: null }
     db = {
-      from: vi.fn((table) => (
-        table === 'rosters' ? rostersBuilder(rostersResult) : { upsert: upsertMock }
-      )),
+      from: vi.fn((table) => {
+        if (table === 'rosters') return rostersBuilder(rostersResult)
+        if (table === 'shift_block_removals') return rostersBuilder({ data: [], error: null })
+        return { upsert: upsertMock }
+      }),
     }
   })
 

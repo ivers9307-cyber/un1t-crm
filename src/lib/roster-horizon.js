@@ -24,7 +24,9 @@ import { logWarn } from '@/lib/log'
  * @param {SupabaseClient} db   server-role client
  * @param {object} [opts]
  * @param {number} [opts.weeks=8]  weeks to keep materialised from this Monday
- * @returns {Promise<{ templates: number, inserted: number, skipped: number, failed: number }>}
+ * @returns {Promise<{ templates: number, inserted: number, skipped: number, removed: number, failed: number }>}
+ *   `removed` — dates not generated because a manager deleted that slot
+ *   (SLOTREMOVAL.1; the generator reads shift_block_removals once per template).
  * @throws when the template query itself fails — the cron must NOT stamp a
  *         heartbeat for a run that never saw the templates.
  */
@@ -45,12 +47,14 @@ export async function extendRosterHorizon(db, { weeks = 8 } = {}) {
   let inserted = 0
   let skipped = 0
   let failed = 0
+  let removed = 0
 
   for (const template of templates) {
     try {
       const res = await generateBlocksForTemplate(db, template, from, weeks)
       inserted += res.inserted
       skipped += res.skipped
+      removed += res.removed || 0
     } catch (err) {
       // One malformed template must not leave every other location without a
       // horizon for the night.
@@ -61,5 +65,5 @@ export async function extendRosterHorizon(db, { weeks = 8 } = {}) {
     }
   }
 
-  return { templates: templates.length, inserted, skipped, failed }
+  return { templates: templates.length, inserted, skipped, removed, failed }
 }

@@ -304,4 +304,17 @@ describe('copyResultToast', () => {
     expect(copyResultToast({ period: 'week', mode: 'template', copied: 3, skipped: 2 }).message).toMatch(/2 skipped, their template is inactive or no longer runs that weekday/)
     expect(copyResultToast({ period: 'month', mode: 'template', copied: 3, skipped: 2 }).message).toMatch(/5th Monday/)
   })
+
+  // SLOTREMOVAL.1 — a coach skipped because the target slot was deleted gets
+  // its own reason, not the mode's (which would blame a missing weekday).
+  it('names deleted slots as their own skip reason', () => {
+    expect(copyResultToast({ period: 'week', mode: 'exact', copied: 3, skipped: 2, skippedRemoved: 2 })).toEqual({
+      kind: 'warning',
+      message: 'Copied 3 shifts. 2 skipped because that slot was deleted in the target week.',
+    })
+    const mixed = copyResultToast({ period: 'month', mode: 'template', copied: 1, skipped: 3, skippedRemoved: 1 })
+    expect(mixed.message).toBe(
+      'Copied 1 shift. 1 skipped because that slot was deleted in the target month. 2 skipped, their template is inactive, no longer runs that weekday, or the target month has no matching weekday (a 5th Monday).',
+    )
+  })
 })

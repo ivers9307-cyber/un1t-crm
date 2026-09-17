@@ -23,7 +23,7 @@
 // src/app/api/orders/[id]/route.test.js) and a stubbed getCurrentUser.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { WEEKDAY_CODES } from '@/lib/roster'
+import { WEEKDAY_CODES, getMonday, addDays, formatDate } from '@/lib/roster'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/auth', () => ({
@@ -109,6 +109,7 @@ function makeDb(fixtures = {}) {
       lte(col, val) { state.filters.push({ type: 'lte', col, val }); return chain },
       limit() { return chain },
       order() { return chain },
+      range() { return chain },
       single() { return Promise.resolve(settle(true)) },
       maybeSingle() { return Promise.resolve(settle(true)) },
       then(onF, onR) { return Promise.resolve(settle(false)).then(onF, onR) },
@@ -569,5 +570,38 @@ describe('PUT /api/schedule/templates/[id] — published-roster safety', () => {
     expect(body.propagation.deactivatedBlocksDeleted).toBe(0)
     expect(body.propagation.publishedEmptiesKept).toBe(1)
     expect(db._writes.some((w) => w.table === 'shift_blocks' && w.op === 'delete')).toBe(false)
+  })
+})
+
+// SLOTREMOVAL.1 — PUT regenerates the next 8 weeks through
+// generateBlocksForTemplate, which now reads shift_block_removals. A slot a
+// manager deleted must not come back because someone saved its template.
+describe('PUT /api/schedule/templates/[id] — deleted slots stay deleted', () => {
+  it('regeneration skips a (template, date) with a removal row and generates the rest', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    const monday = getMonday(new Date())
+    const removedDate = formatDate(addDays(monday, 7)) // next week's Monday
+    const keptDate = formatDate(addDays(monday, 14))
+    const db = useDb({
+      shift_templates: templates(),
+      shift_blocks: [],
+      rosters: [],
+      shift_block_removals: [
+        { id: 'rm-1', location_id: 'loc-a', template_id: 'tmpl-a', block_date: removedDate },
+        // Another template's removal on the same date must not suppress this one's.
+        { id: 'rm-2', location_id: 'loc-a', template_id: 'tmpl-other', block_date: keptDate },
+      ],
+    })
+
+    const res = await PUT(req({ name: 'Renamed' }), { params: { id: 'tmpl-a' } })
+    const body = await res.json()
+    expect(body.success).toBe(true)
+    expect(body.warning).toBeUndefined()
+
+    const upsert = db._writes.find((w) => w.table === 'shift_blocks' && w.op === 'upsert')
+    const dates = upsert.payload.map((r) => r.block_date)
+    expect(dates).not.toContain(removedDate)
+    expect(dates).toContain(keptDate)
+    expect(body.generated.removed).toBe(1)
   })
 })

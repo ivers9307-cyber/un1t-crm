@@ -4330,9 +4330,56 @@ const CopyModeField = z.enum(['exact', 'template']).default('exact').openapi({
 const CopyShiftsResponse = z.object({
   success: z.literal(true),
   copied: z.number().int().openapi({ description: 'Assignments actually inserted. A coach already on the target is never overwritten (COPYFIX.1), so a re-run reports 0.' }),
-  skipped: z.number().int().optional().openapi({ description: 'Live source assignments not copied (no matching target day, or an inactive / off-day template in template mode).' }),
+  skipped: z.number().int().optional().openapi({ description: 'Live source assignments not copied (no matching target day, an inactive / off-day template in template mode, or a slot a manager deleted in the target period). Includes skipped_removed.' }),
+  skipped_removed: z.number().int().optional().openapi({ description: 'SLOTREMOVAL.1 — the part of skipped that landed on a slot a manager deleted (shift_block_removals). A deleted slot is not re-created by a copy in either mode; add it back with POST /api/schedule/blocks first.' }),
   mode: z.enum(['exact', 'template']),
 }).openapi('CopyShiftsResponse')
+
+// SLOTREMOVAL.1 — manual slot create/delete. A deleted slot is remembered in
+// shift_block_removals so the nightly horizon generator and roster copies
+// don't bring it back; a manual create is the undo.
+registry.registerPath({
+  method: 'post',
+  path: '/api/schedule/blocks',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Add a shift slot for a template on one date (manager-only)',
+  description: 'Creates one shift_blocks row for (location_id, template_id, block_date); times and capacity default from the template. A date inside an already-published roster joins that roster. Also clears any removal recorded for that slot by DELETE /api/schedule/blocks/{id}, so the nightly schedule and roster copies treat it as a normal slot again. If clearing the removal fails the block is still created and the response carries a warning.',
+  request: {
+    body: { content: { 'application/json': { schema: z.object({
+      location_id: z.string(),
+      template_id: z.string(),
+      block_date: z.string().openapi({ description: 'YYYY-MM-DD' }),
+      start_time: z.string().optional(),
+      end_time: z.string().optional(),
+      max_coaches: z.number().int().optional(),
+      min_coaches: z.number().int().optional(),
+      notes: z.string().nullable().optional(),
+    }).openapi('ScheduleBlockCreateRequest') } } },
+  },
+  responses: {
+    201: { description: 'Slot created; `warning` is present when its earlier removal could not be cleared' },
+    400: { description: 'Validation error or unknown template', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — needs a manager role at that location', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'A slot already exists for this template on this date', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/schedule/blocks/{id}',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Delete one shift slot (manager-only)',
+  description: "Deletes a shift_blocks row and its assignments, and records the removal (shift_block_removals) so the nightly schedule and roster copies do not recreate that template's slot on that date. POST /api/schedule/blocks for the same template and date restores it. To stop a slot every week, deactivate the template instead. If recording the removal fails the slot is still deleted and the response carries a warning that it may come back overnight.",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Slot deleted; `warning` is present when the removal could not be recorded', content: { 'application/json': { schema: z.object({ success: z.literal(true), warning: z.string().optional() }) } } },
+    400: { description: 'The delete failed', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — needs a manager role at the slot\'s location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Slot not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
 
 registry.registerPath({
   method: 'post',
@@ -4354,6 +4401,7 @@ registry.registerPath({
     400: { description: 'Validation error, or the read/write failed (writes are batched, so some coaches may have landed; re-running is safe)', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — needs a manager role at that location', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'No shifts in the source week', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Deleted-slot records could not be read; nothing was copied', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -4377,6 +4425,7 @@ registry.registerPath({
     400: { description: 'Validation error, dates not the 1st, or the read/write failed', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — needs a manager role at that location', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'No shifts in the source month', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Deleted-slot records could not be read; nothing was copied', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

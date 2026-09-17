@@ -9,6 +9,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
+vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logInfo: vi.fn(), logError: vi.fn() }))
 vi.mock('@/lib/auth', () => ({
   getCurrentUser: vi.fn(),
   assertLocationAccess: vi.fn(() => null),
@@ -167,11 +168,24 @@ describe('POST /api/schedule/blocks — post-publish blocks join the roster', ()
   const LOC = 'a0000000-0000-0000-0000-000000000001'
   const TPL = 'a0000000-0000-0000-0000-000000000002'
 
-  function postDb({ publishedRoster = null } = {}) {
-    const captured = { insert: null }
+  function postDb({ publishedRoster = null, restoreError = null, insertError = null } = {}) {
+    const captured = { insert: null, restore: null }
     const db = {
       captured,
       from(table) {
+        // SLOTREMOVAL.1 — the undo: a manual create clears the slot's removal.
+        if (table === 'shift_block_removals') {
+          return {
+            delete: () => {
+              captured.restore = []
+              const chain = {
+                eq: (col, val) => { captured.restore.push([col, val]); return chain },
+                then: (ok, err) => Promise.resolve({ data: null, error: restoreError }).then(ok, err),
+              }
+              return chain
+            },
+          }
+        }
         if (table === 'rosters') {
           const chain = {
             select: () => chain, eq: () => chain, lte: () => chain, gte: () => chain, order: () => chain, limit: () => chain,
@@ -184,7 +198,10 @@ describe('POST /api/schedule/blocks — post-publish blocks join the roster', ()
         }
         if (table === 'shift_blocks') {
           return {
-            insert: (row) => { captured.insert = row; return { select: () => ({ single: () => Promise.resolve({ data: { id: 'blk-new', ...row }, error: null }) }) } },
+            insert: (row) => {
+              captured.insert = row
+              return { select: () => ({ single: () => Promise.resolve(insertError ? { data: null, error: insertError } : { data: { id: 'blk-new', ...row }, error: null }) }) }
+            },
           }
         }
         throw new Error('unexpected table: ' + table)
@@ -219,5 +236,48 @@ describe('POST /api/schedule/blocks — post-publish blocks join the roster', ()
     const res = await POST(postReq({ location_id: LOC, template_id: TPL, block_date: '2026-06-06' }))
     expect(res.status).toBe(201)
     expect(db.captured.insert.roster_id).toBeNull()
+  })
+
+  // SLOTREMOVAL.1 — adding a deleted slot back by hand restores it, so the
+  // nightly generator and roster copies treat it as a normal slot again.
+  it('clears the removal row for exactly that location, template and date', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'm', role: 'manager', locations: [{ id: LOC }] })
+    const db = postDb()
+    createServerClient.mockReturnValue(db)
+    const { POST } = await import('./route.js')
+
+    const res = await POST(postReq({ location_id: LOC, template_id: TPL, block_date: '2026-06-06' }))
+    expect(res.status).toBe(201)
+    expect((await res.json()).warning).toBeUndefined()
+    expect(db.captured.restore).toEqual([
+      ['location_id', LOC], ['template_id', TPL], ['block_date', '2026-06-06'],
+    ])
+  })
+
+  it('keeps the created block and returns a warning when clearing the removal fails', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'm', role: 'manager', locations: [{ id: LOC }] })
+    const db = postDb({ restoreError: { message: 'delete boom' } })
+    createServerClient.mockReturnValue(db)
+    const { POST } = await import('./route.js')
+    const { logWarn } = await import('@/lib/log')
+
+    const res = await POST(postReq({ location_id: LOC, template_id: TPL, block_date: '2026-06-06' }))
+    const json = await res.json()
+    expect(res.status).toBe(201)
+    expect(json.success).toBe(true)
+    expect(json.data.id).toBe('blk-new')
+    expect(json.warning).toMatch(/removal could not be cleared/)
+    expect(logWarn).toHaveBeenCalled()
+  })
+
+  it('does not touch the removal when the create fails', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'm', role: 'manager', locations: [{ id: LOC }] })
+    const db = postDb({ insertError: { code: '23505', message: 'dup' } })
+    createServerClient.mockReturnValue(db)
+    const { POST } = await import('./route.js')
+
+    const res = await POST(postReq({ location_id: LOC, template_id: TPL, block_date: '2026-06-06' }))
+    expect(res.status).toBe(409)
+    expect(db.captured.restore).toBeNull()
   })
 })

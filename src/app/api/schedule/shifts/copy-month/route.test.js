@@ -18,6 +18,11 @@ vi.mock('@/lib/roster-copy', async () => {
   return { ...actual, fetchSourceBlocks: vi.fn() }
 })
 vi.mock('@/lib/roster-write', () => ({ bulkUpsertShiftAssignments: vi.fn() }))
+// SLOTREMOVAL.1 — the removals read is mocked; everything else in roster is real.
+vi.mock('@/lib/roster', async () => {
+  const actual = await vi.importActual('@/lib/roster')
+  return { ...actual, fetchSlotRemovalKeys: vi.fn() }
+})
 vi.mock('@/lib/roster-change-notify', () => ({
   readAssignmentKeysInRange: vi.fn(),
   logAndNotifyCopiedShifts: vi.fn(() => Promise.resolve({ logged: 0, notify: null })),
@@ -31,6 +36,7 @@ const { createServerClient } = await import('@/lib/supabase')
 const { getCurrentUser } = await import('@/lib/auth')
 const { fetchSourceBlocks } = await import('@/lib/roster-copy')
 const { bulkUpsertShiftAssignments } = await import('@/lib/roster-write')
+const { fetchSlotRemovalKeys } = await import('@/lib/roster')
 const { readAssignmentKeysInRange, logAndNotifyCopiedShifts } = await import('@/lib/roster-change-notify')
 const { after } = await import('next/server')
 const { POST } = await import('./route.js')
@@ -53,6 +59,8 @@ function sourceBlock(profileIds, over = {}) {
 }
 
 beforeEach(() => {
+  fetchSlotRemovalKeys.mockReset()
+  fetchSlotRemovalKeys.mockResolvedValue(new Set())
   createServerClient.mockReset()
   createServerClient.mockReturnValue({})
   getCurrentUser.mockReset()
@@ -77,7 +85,7 @@ describe('POST /api/schedule/shifts/copy-month — NOTIFY.1', () => {
     const json = await res.json()
 
     expect(res.status).toBe(201)
-    expect(json).toEqual({ success: true, copied: 1, skipped: 0, mode: 'exact' })
+    expect(json).toEqual({ success: true, copied: 1, skipped: 0, skipped_removed: 0, mode: 'exact' })
 
     // July has 31 days.
     expect(readAssignmentKeysInRange).toHaveBeenCalledTimes(2)
@@ -196,7 +204,7 @@ describe('POST /api/schedule/shifts/copy-month — COPYMODES.1', () => {
     const res = await POST(req({ ...BODY, mode: 'template' }))
     const json = await res.json()
     expect(res.status).toBe(201)
-    expect(json).toEqual({ success: true, copied: 0, skipped: 1, mode: 'template' })
+    expect(json).toEqual({ success: true, copied: 0, skipped: 1, skipped_removed: 0, mode: 'template' })
     expect(bulkUpsertShiftAssignments).not.toHaveBeenCalled()
     expect(after).not.toHaveBeenCalled()
   })
@@ -223,5 +231,42 @@ describe('POST /api/schedule/shifts/copy-month — empty blocks off their templa
     // Only the staffed block (carbon copy) — Tue 1 Sep. No empty Tuesdays.
     expect(blocks.map((b) => b.shiftDate)).toEqual(['2026-09-01'])
     expect(rows.map((r) => [r.profileId, r.shiftDate])).toEqual([['coach-1', '2026-09-01']])
+  })
+})
+
+// SLOTREMOVAL.1 — slots deleted in the target month stay deleted. The skip
+// itself is the writer's (roster-write.test.js); this pins the route wiring.
+describe('POST /api/schedule/shifts/copy-month — removed slots', () => {
+  const BODY = { location_id: LOC, source_month_start: '2026-06-01', target_month_start: '2026-07-01' }
+
+  beforeEach(() => {
+    readAssignmentKeysInRange.mockResolvedValue({ rows: [], error: null, truncated: false })
+    fetchSourceBlocks.mockResolvedValue({ blocks: [sourceBlock(['coach-1', 'coach-2'])], error: null })
+  })
+
+  for (const mode of ['exact', 'template']) {
+    it(`${mode}: reads removals for the target month, hands them to the writer, and counts skips`, async () => {
+      const removed = new Set(['tpl-1|2026-01-01'])
+      fetchSlotRemovalKeys.mockResolvedValue(removed)
+      bulkUpsertShiftAssignments.mockResolvedValue({ count: 0, skippedRemoved: 2, error: null })
+
+      const res = await POST(req({ ...BODY, mode }))
+      const json = await res.json()
+
+      expect(res.status).toBe(201)
+      expect(fetchSlotRemovalKeys).toHaveBeenCalledWith(expect.anything(), {
+        locationId: LOC, startDate: '2026-07-01', endDate: '2026-07-31',
+      })
+      expect(bulkUpsertShiftAssignments.mock.calls[0][1].removedSlots).toBe(removed)
+      expect(json).toMatchObject({ copied: 0, skipped_removed: 2, mode })
+      expect(json.skipped).toBeGreaterThanOrEqual(2)
+    })
+  }
+
+  it('refuses to copy blind when the removals read fails', async () => {
+    fetchSlotRemovalKeys.mockRejectedValue(new Error('Failed to load slot removals: down'))
+    const res = await POST(req(BODY))
+    expect(res.status).toBe(500)
+    expect(bulkUpsertShiftAssignments).not.toHaveBeenCalled()
   })
 })
