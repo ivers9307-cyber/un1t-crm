@@ -27,6 +27,7 @@ import { decideApproval } from '../../lib/inbox-approvals-api'
 import ApprovalCard from '../../components/approvals/ApprovalCard'
 import CustomerApprovalCard from '../../components/approvals/CustomerApprovalCard'
 import DeclineSheet from '../../components/approvals/DeclineSheet'
+import { InvoiceRosterCheck } from '../../components/invoices/RosterComparison'
 
 const REASON_REQUIRED = new Set(['fte_expenses', 'contractor_invoices', 'host_events'])
 
@@ -214,7 +215,11 @@ export default function ApprovalsInbox() {
                       busy={busyId === item.id}
                       onApprove={() => onApprove(sec.key, item)}
                       onDecline={() => setDeclineFor({ key: sec.key, id: item.id })}
-                    />
+                    >
+                      {/* INVOICEREVIEW.2 — roster vs invoice before Approve,
+                          via GET /api/invoices/[id] (same route as web). */}
+                      {sec.key === 'contractor_invoices' ? <InvoiceRosterCheck invoiceId={item.id} /> : null}
+                    </ApprovalCard>
                   ))}
                 </View>
               ))}
