@@ -9,7 +9,7 @@ vi.mock('@/lib/roster-change-notify', () => ({ notifyRosterChanges: vi.fn(async 
 
 const { logRosterChange } = await import('@/lib/roster-change-log')
 const { notifyRosterChanges } = await import('@/lib/roster-change-notify')
-const { unassignShiftAssignments } = await import('./shift-unassign.js')
+const { unassignShiftAssignments, logAndNotifyUnassignments } = await import('./shift-unassign.js')
 const { fakeDb, queriesOf } = await import('./time-off.test-helpers.js')
 
 const a = (id, location_id, roster_status = 'published', block_date = '2026-06-01') =>
@@ -40,5 +40,47 @@ describe('unassignShiftAssignments', () => {
     expect(out.removed.map((r) => r.id)).toEqual(['2'])
     expect(logRosterChange).toHaveBeenCalledTimes(1)
     expect(notifyRosterChanges.mock.calls[0][1].changes.map((c) => c.blockId)).toEqual(['b-2'])
+  })
+})
+
+// SLOTNOTIFY.1 — the audit + notification half on its own, for callers whose
+// DELETE cascades (DELETE /api/schedule/blocks/[id] takes the assignments with
+// the block, so there is no per-row delete to hang this off).
+describe('logAndNotifyUnassignments', () => {
+  const db = { /* never touched: both collaborators are mocked */ }
+
+  it('logs and notifies only the PUBLISHED removals, grouped per studio', async () => {
+    const out = await logAndNotifyUnassignments(db, {
+      actorId: 'mgr',
+      assignments: [a('1', 'loc-1'), a('2', 'loc-1', 'published', '2026-06-02'), a('3', 'loc-2', 'draft')],
+    })
+    expect(out).toEqual({ logged: 2, notified: 1 })
+    expect(logRosterChange).toHaveBeenCalledTimes(2)
+    expect(notifyRosterChanges).toHaveBeenCalledTimes(1)
+    expect(notifyRosterChanges.mock.calls[0][1]).toMatchObject({ locationId: 'loc-1', actorId: 'mgr' })
+    expect(notifyRosterChanges.mock.calls[0][1].changes).toEqual([
+      { coachId: 'coach', blockId: 'b-1', blockDate: '2026-06-01', action: 'unassigned' },
+      { coachId: 'coach', blockId: 'b-2', blockDate: '2026-06-02', action: 'unassigned' },
+    ])
+  })
+
+  it('does nothing at all when no removal was on a published roster', async () => {
+    const out = await logAndNotifyUnassignments(db, { actorId: 'mgr', assignments: [a('1', 'loc-1', 'draft')] })
+    expect(out).toEqual({ logged: 0, notified: 0 })
+    expect(logRosterChange).not.toHaveBeenCalled()
+    expect(notifyRosterChanges).not.toHaveBeenCalled()
+  })
+
+  it('passes a caller-supplied `details` through to the change-log row', async () => {
+    await logAndNotifyUnassignments(db, {
+      actorId: 'mgr',
+      assignments: [{ ...a('1', 'loc-1'), details: { via: 'slot_deleted' } }],
+    })
+    expect(logRosterChange.mock.calls[0][1]).toMatchObject({ details: { via: 'slot_deleted' } })
+  })
+
+  it('tolerates an empty / missing list', async () => {
+    expect(await logAndNotifyUnassignments(db, { actorId: 'mgr', assignments: [] })).toEqual({ logged: 0, notified: 0 })
+    expect(await logAndNotifyUnassignments(db, { actorId: 'mgr' })).toEqual({ logged: 0, notified: 0 })
   })
 })

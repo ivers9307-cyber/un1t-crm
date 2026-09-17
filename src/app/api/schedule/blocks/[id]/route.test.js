@@ -21,19 +21,36 @@ vi.mock('@/lib/auth', async (importOriginal) => {
   }
 })
 
+vi.mock('@/lib/shift-unassign', () => ({ logAndNotifyUnassignments: vi.fn(async () => ({ logged: 1, notified: 1 })) }))
+
 const { createServerClient } = await import('@/lib/supabase')
 const { getCurrentUser } = await import('@/lib/auth')
 const { logWarn } = await import('@/lib/log')
+const { logAndNotifyUnassignments } = await import('@/lib/shift-unassign')
 const { DELETE } = await import('./route.js')
 
 const LOC = 'a0000000-0000-0000-0000-000000000001'
 const BLOCK = { id: 'blk-1', location_id: LOC, template_id: 'tpl-1', block_date: '2026-09-15' }
 
-function makeDb({ block = BLOCK, deleteError = null, removalError = null } = {}) {
+// SLOTNOTIFY.1 — `assignments` is who is on the slot when the delete lands;
+// `assignmentsError` makes that read fail, which must refuse the delete rather
+// than cascade away the only record of who to tell.
+function makeDb({ block = BLOCK, deleteError = null, removalError = null, assignments = [], assignmentsError = null } = {}) {
   const captured = { deleted: null, removal: null, removalOpts: null, order: [] }
   const db = {
     captured,
     from(table) {
+      if (table === 'shift_assignments') {
+        return {
+          select: () => ({
+            eq: (col, val) => {
+              captured.order.push('read-assignments')
+              captured.assignmentsQuery = [col, val]
+              return Promise.resolve({ data: assignmentsError ? null : assignments, error: assignmentsError })
+            },
+          }),
+        }
+      }
       if (table === 'shift_blocks') {
         return {
           select: () => ({ eq: () => ({ single: () => Promise.resolve(block ? { data: block, error: null } : { data: null, error: { message: 'no rows' } }) }) }),
@@ -167,5 +184,104 @@ describe('DELETE /api/schedule/blocks/[id] — role at the BLOCK\'s studio (SCHE
     const db = makeDb({ block: { ...BLOCK, location_id: LOC_B } })
     createServerClient.mockReturnValue(db)
     expect((await DELETE({}, params)).status).toBe(200)
+  })
+})
+
+// SLOTNOTIFY.1 — deleting a STAFFED slot on a published roster told nobody:
+// the FK cascade removed the assignments with no change-log row (so the
+// re-publish safety net had nothing to find) and no message to the coaches.
+describe('DELETE /api/schedule/blocks/[id] — SLOTNOTIFY.1', () => {
+  const PUBLISHED = { ...BLOCK, roster_id: 'r-1', rosters: { status: 'published' } }
+  const DRAFT = { ...BLOCK, roster_id: 'r-1', rosters: { status: 'draft' } }
+
+  it('logs and notifies every live coach the cascade removed', async () => {
+    const db = makeDb({
+      block: PUBLISHED,
+      assignments: [
+        { id: 'a-1', profile_id: 'coach-1', status: 'scheduled' },
+        { id: 'a-2', profile_id: 'coach-2', status: 'confirmed' },
+      ],
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await DELETE({}, params)
+    expect(res.status).toBe(200)
+    expect(logAndNotifyUnassignments).toHaveBeenCalledTimes(1)
+    const [, args] = logAndNotifyUnassignments.mock.calls[0]
+    expect(args.actorId).toBe('mgr-1')
+    expect(args.assignments).toEqual([
+      { id: 'a-1', profile_id: 'coach-1', block_id: 'blk-1', block_date: '2026-09-15', location_id: LOC, roster_status: 'published', details: { via: 'slot_deleted' } },
+      { id: 'a-2', profile_id: 'coach-2', block_id: 'blk-1', block_date: '2026-09-15', location_id: LOC, roster_status: 'published', details: { via: 'slot_deleted' } },
+    ])
+  })
+
+  it('reads the assignments BEFORE the delete and notifies BEFORE the removal record', async () => {
+    // Order matters twice: the cascade destroys the rows that say who to tell,
+    // and the slot-removal write can return early with a warning — a lost
+    // tombstone must never cost the coaches their message.
+    const db = makeDb({ block: PUBLISHED, assignments: [{ id: 'a-1', profile_id: 'coach-1', status: 'scheduled' }] })
+    createServerClient.mockReturnValue(db)
+    await DELETE({}, params)
+    expect(db.captured.order).toEqual(['read-assignments', 'delete', 'removal'])
+    const notifyCallOrder = logAndNotifyUnassignments.mock.invocationCallOrder[0]
+    expect(notifyCallOrder).toBeGreaterThan(0)
+  })
+
+  it('still notifies when the slot-removal record fails', async () => {
+    const db = makeDb({ block: PUBLISHED, assignments: [{ id: 'a-1', profile_id: 'coach-1', status: 'scheduled' }], removalError: { message: 'boom' } })
+    createServerClient.mockReturnValue(db)
+    const res = await DELETE({}, params)
+    expect(res.status).toBe(200)
+    expect((await res.json()).warning).toMatch(/nightly schedule/i)
+    expect(logAndNotifyUnassignments).toHaveBeenCalledTimes(1)
+  })
+
+  it('skips a cancelled assignment — it was not on the roster', async () => {
+    const db = makeDb({
+      block: PUBLISHED,
+      assignments: [
+        { id: 'a-1', profile_id: 'coach-1', status: 'cancelled' },
+        { id: 'a-2', profile_id: 'coach-2', status: 'scheduled' },
+      ],
+    })
+    createServerClient.mockReturnValue(db)
+    await DELETE({}, params)
+    expect(logAndNotifyUnassignments.mock.calls[0][1].assignments.map((x) => x.profile_id)).toEqual(['coach-2'])
+  })
+
+  it('never notifies for an empty slot', async () => {
+    const db = makeDb({ block: PUBLISHED, assignments: [] })
+    createServerClient.mockReturnValue(db)
+    expect((await DELETE({}, params)).status).toBe(200)
+    expect(logAndNotifyUnassignments).not.toHaveBeenCalled()
+  })
+
+  it('a DRAFT roster reads no assignments and notifies nobody', async () => {
+    const db = makeDb({ block: DRAFT, assignments: [{ id: 'a-1', profile_id: 'coach-1', status: 'scheduled' }] })
+    createServerClient.mockReturnValue(db)
+    expect((await DELETE({}, params)).status).toBe(200)
+    expect(db.captured.order).toEqual(['delete', 'removal'])
+    expect(logAndNotifyUnassignments).not.toHaveBeenCalled()
+  })
+
+  it('an unreadable assignment list REFUSES the delete, destroying nothing', async () => {
+    const db = makeDb({ block: PUBLISHED, assignmentsError: { message: 'connection reset' } })
+    createServerClient.mockReturnValue(db)
+
+    const res = await DELETE({}, params)
+    const json = await res.json()
+    expect(res.status).toBe(503)
+    expect(json.transient).toBe(true)
+    expect(db.captured.deleted).toBeNull()
+    expect(db.captured.removal).toBeNull()
+    expect(logAndNotifyUnassignments).not.toHaveBeenCalled()
+    expect(logWarn).toHaveBeenCalled()
+  })
+
+  it('does not notify when the block delete itself failed', async () => {
+    const db = makeDb({ block: PUBLISHED, assignments: [{ id: 'a-1', profile_id: 'coach-1', status: 'scheduled' }], deleteError: { message: 'locked' } })
+    createServerClient.mockReturnValue(db)
+    expect((await DELETE({}, params)).status).toBe(400)
+    expect(logAndNotifyUnassignments).not.toHaveBeenCalled()
   })
 })
