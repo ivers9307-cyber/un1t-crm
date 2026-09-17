@@ -27,7 +27,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess, getUserLocationIds, hasRoleAtLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, isoDate, MANAGER_ROLES } from '@/lib/schemas'
 import {
@@ -103,7 +103,7 @@ export async function GET(request) {
 
 export async function POST(request) {
   const user = await getCurrentUser()
-  if (!user || !MANAGER_ROLES.includes(user.role)) {
+  if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -113,6 +113,17 @@ export async function POST(request) {
 
   const guard = assertLocationAccess(user, location_id)
   if (guard) return guard
+
+  // BUDGETAPPROVE.1 — every role decision on this route is made at the
+  // ROSTER's location. `user.role` is the caller's role at their ACTIVE
+  // studio, so an owner at Stillorgan who is head coach at Hatch read as an
+  // owner while publishing Hatch, and could wave an over-budget Hatch roster
+  // through on force_over_budget: a self-approval at a studio where they hold
+  // no budget authority. The same misread let a manager elsewhere publish
+  // here at all. Master bypass is `profileRole`, inside hasRoleAtLocation.
+  if (!hasRoleAtLocation(user, location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+  }
 
   if (period_end < period_start) {
     return NextResponse.json({ success: false, error: 'period_end must be on or after period_start' }, { status: 400 })
@@ -171,7 +182,7 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: e.message }, { status: 500 })
   }
 
-  const isOwnerHere = user.role === 'master' || OWNER_ROLES.includes(user.role)
+  const isOwnerHere = hasRoleAtLocation(user, location_id, OWNER_ROLES)
   const needsApproval = impact.overBudget && !isOwnerHere
   const ownerMustConfirm = impact.overBudget && isOwnerHere && !force_over_budget
 
@@ -275,6 +286,7 @@ export async function POST(request) {
       published_at: status === 'published' ? nowIso : null,
       over_budget_approval_by: status === 'published' && impact.overBudget ? user.id : null,
       over_budget_approval_at: status === 'published' && impact.overBudget ? nowIso : null,
+      // BUDGETAPPROVE.1 — the WHOLE period's cost, every month it touches.
       projected_contractor_eur: impact.periodProjectedEur,
       budget_at_publish_eur: impact.monthlyBudgetEur,
       notes: notes || null,

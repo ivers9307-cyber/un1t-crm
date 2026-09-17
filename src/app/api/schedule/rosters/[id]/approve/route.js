@@ -10,12 +10,25 @@
 // while somebody else publishes a roster over the same dates; approving it
 // then would have created exactly the two-published-rosters-one-day state
 // the POST guard exists to prevent.
+//
+// BUDGETAPPROVE.1 — approving re-runs the budget projection. The draft's
+// stored figures were a snapshot from the moment the manager hit publish, and
+// drafts have waited up to 218 hours in the queue; approval used to stamp the
+// sign-off against that stale number. The approver IS the budget authority,
+// so a changed number never refuses the approval: the fresh figures are
+// written onto the roster and returned, with `projection_changed` and both
+// figures, so the approver sees what they actually signed.
+//
+// The approver's authority resolves at the ROSTER's location
+// (hasPermissionForLocation below), never the caller's active studio.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { notifyStaffOfPublish, publishNotifyRowsForBlocks, renotifyChangedCoaches } from '@/lib/roster-notify'
 import {
+  projectPublishImpact,
+  projectionChanged,
   findConflictingPublishedRosters,
   releasePublishedRostersFor,
   restorePublishedRosters,
@@ -92,6 +105,35 @@ export async function POST(_request, props) {
     }, { status: 409 })
   }
 
+  // BUDGETAPPROVE.1 — re-project against live data before the flip. A failed
+  // projection does NOT block the approval (the approver is the budget
+  // authority and approving on the stored snapshot is exactly what happened
+  // before this change); it is logged, the stored figures are left alone, and
+  // the response says the numbers could not be refreshed.
+  let impact = null
+  let projectionError = null
+  try {
+    impact = await projectPublishImpact(db, {
+      locationId: roster.location_id,
+      periodStart: roster.period_start,
+      periodEnd: roster.period_end,
+    })
+  } catch (e) {
+    projectionError = e?.message || String(e)
+    logWarn('rosters/approve', 'budget re-projection failed; approving on the stored figures', {
+      err: projectionError,
+      roster_id: roster.id,
+    })
+  }
+  const storedProjection = {
+    projected_contractor_eur: roster.projected_contractor_eur == null ? null : Number(roster.projected_contractor_eur),
+    budget_at_publish_eur: roster.budget_at_publish_eur == null ? null : Number(roster.budget_at_publish_eur),
+  }
+  const freshProjection = impact
+    ? { projected_contractor_eur: impact.periodProjectedEur, budget_at_publish_eur: impact.monthlyBudgetEur }
+    : null
+  const changed = projectionChanged(roster, impact)
+
   const nowIso = new Date().toISOString()
 
   // ROSTER-SUPERSEDE.1 — phase 1, before the flip. Approving is a publish, and
@@ -153,6 +195,8 @@ export async function POST(_request, props) {
         published_at: nowIso,
         over_budget_approval_by: user.id,
         over_budget_approval_at: nowIso,
+        // BUDGETAPPROVE.1 — the figures the approval was actually given on.
+        ...(freshProjection || {}),
       })
       .eq('id', params.id)
       .select()
@@ -166,6 +210,14 @@ export async function POST(_request, props) {
   } catch (e) {
     await restoreReleased('approval threw')
     return NextResponse.json({ success: false, error: e?.message || String(e) }, { status: 500 })
+  }
+
+  // BUDGETAPPROVE.1 — carried on every success response, partial or not.
+  const projectionBody = {
+    impact,
+    projection_changed: changed,
+    ...(changed ? { previous_projection: storedProjection, current_projection: freshProjection } : {}),
+    ...(projectionError ? { projection_error: projectionError } : {}),
   }
 
   // RETIRE-SHIFTS-MIRROR.6 — capture the blocks NEWLY being published
@@ -227,6 +279,7 @@ export async function POST(_request, props) {
     return NextResponse.json({
       success: true,
       data: updated,
+      ...projectionBody,
       warning: `Roster approved but block tagging failed: ${tagErr.message}.${stranded}`,
     })
   }
@@ -272,6 +325,7 @@ export async function POST(_request, props) {
   return NextResponse.json({
     success: true,
     data: updated,
+    ...projectionBody,
     // ROSTER-SUPERSEDE.1 — surfaced, not swallowed: the approval DID happen,
     // but an older roster may still be claiming days it owns no blocks on.
     ...(swallow.warning ? { warning: `Roster approved, but standing down the rosters it replaces did not fully complete: ${swallow.warning}` } : {}),

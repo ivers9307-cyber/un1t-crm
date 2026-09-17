@@ -19,6 +19,28 @@ import { rosterErrorMessage } from '@/lib/roster-overlap-message'
 // differs, because from here the way out is to reject the draft.
 const APPROVE_NEXT_STEP = 'Reject this draft and re-publish that range instead.'
 
+function eur(n) {
+  if (n == null) return 'no budget'
+  return new Intl.NumberFormat('en-IE', { style: 'currency', currency: 'EUR', maximumFractionDigits: 2 }).format(n)
+}
+
+// BUDGETAPPROVE.1 — exported for the test. No em dashes (house style).
+export function projectionChangedMessage(data) {
+  const before = data.previous_projection || {}
+  const after = data.current_projection || {}
+  const lines = [
+    'Approved. The figures were re-checked at approval and have changed since this draft was submitted:',
+    `This period: ${eur(after.projected_contractor_eur)} (submitted as ${eur(before.projected_contractor_eur)})`,
+  ]
+  if (before.budget_at_publish_eur !== after.budget_at_publish_eur) {
+    lines.push(`Monthly budget: ${eur(after.budget_at_publish_eur)} (was ${eur(before.budget_at_publish_eur)})`)
+  }
+  for (const m of data.impact?.months || []) {
+    if (m.overrunEur > 0) lines.push(`${m.monthStart.slice(0, 7)}: ${eur(m.overrunEur)} over budget`)
+  }
+  return lines.join('\n')
+}
+
 export default function RosterApprovalActions({ rosterId, canApprove }) {
   const router = useRouter()
   const [busy, setBusy] = useState(false)
@@ -33,6 +55,11 @@ export default function RosterApprovalActions({ rosterId, canApprove }) {
         alert(rosterErrorMessage(data, { nextStep: APPROVE_NEXT_STEP, fallback: 'Approval failed' }))
         return
       }
+      // BUDGETAPPROVE.1 — approval re-projects the budget. If the numbers
+      // moved since the draft was submitted, say what they are now: the
+      // approval stands (the approver is the budget authority), but the
+      // approver should know which figure they signed.
+      if (data.projection_changed) alert(projectionChangedMessage(data))
       // ROSTER-FIX.4 — a partial success (roster approved, block tagging
       // failed) is a 200 with a warning; show it rather than a silent refresh.
       if (data.warning) alert(data.warning)

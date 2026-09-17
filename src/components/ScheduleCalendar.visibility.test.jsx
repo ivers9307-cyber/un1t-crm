@@ -19,6 +19,11 @@ vi.mock('next/navigation', () => ({
 
 import ScheduleCalendar from '@/components/ScheduleCalendar'
 
+// The publish-preview test waits up to 5s for the modal's dry run; the file's
+// budget must sit above that or the wait is never honoured under load
+// (tests/test-timeout-budgets.test.js).
+vi.setConfig({ testTimeout: 20000 })
+
 function iso(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
