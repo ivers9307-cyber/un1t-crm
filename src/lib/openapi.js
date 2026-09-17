@@ -4453,6 +4453,23 @@ registry.registerPath({
   },
 })
 
+// BUDGETAPPROVE.1 — approve re-projects the budget and reports whether it moved.
+registry.registerPath({
+  method: 'post',
+  path: '/api/schedule/rosters/{id}/approve',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Approve and publish a draft roster',
+  description: "Publishes a draft roster that was submitted over the location's monthly contractor budget. The permission is resolved at the ROSTER's location, never the caller's active studio. Approval re-runs the budget projection across every calendar month the period touches and stores the fresh figures on the roster; a changed number never refuses the approval. The response carries `impact` (with the per-month `months` breakdown), `projection_changed`, and, when it changed, `previous_projection` and `current_projection`. A projection that fails is reported as `projection_error` and the approval proceeds on the stored figures.",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Draft approved and published (a `warning` names a partial success)' },
+    403: { description: 'Forbidden — needs the rosters approval permission at this location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Roster not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Roster is not a draft, or it overlaps a published roster', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 registry.registerPath({
   method: 'post',
   path: '/api/schedule/rosters/{id}/reject',

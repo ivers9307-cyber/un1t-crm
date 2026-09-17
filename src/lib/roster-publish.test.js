@@ -9,9 +9,11 @@
 //   4. Already-published-in-month-outside-period adds to the
 //      total (publish is the last shoe to drop, not the only one).
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import {
   projectPublishImpact,
+  projectionChanged,
+  monthsTouched,
   findConflictingPublishedRosters,
   releasePublishedRostersFor,
   restorePublishedRosters,
@@ -24,7 +26,9 @@ function mockDb({ location, contractors = [], blocks = [], timeOff = [] }) {
   //   from('profile_locations').select(...).eq(...) → contractor links
   //   from('shift_blocks').select(...).eq().gte().lte() → blocks
   const calls = []
+  const blockQueries = []
   return {
+    blockQueries,
     from(table) {
       calls.push(table)
       if (table === 'locations') {
@@ -61,16 +65,28 @@ function mockDb({ location, contractors = [], blocks = [], timeOff = [] }) {
         }
         return chain
       }
+      // BUDGETAPPROVE.1 — the block read now spans every month the period
+      // touches and pages with .order().range(), so the mock honours the date
+      // bounds and the page window: a helper that asked for the wrong months
+      // must get the wrong blocks back, not every fixture regardless.
       if (table === 'shift_blocks') {
-        return {
-          select: () => ({
-            eq: () => ({
-              gte: () => ({
-                lte: async () => ({ data: blocks, error: null }),
-              }),
-            }),
-          }),
+        const f = { gte: null, lte: null, from: 0, to: Infinity }
+        blockQueries.push(f)
+        const chain = {
+          select: () => chain,
+          eq: () => chain,
+          order: () => chain,
+          gte: (_c, v) => { f.gte = v; return chain },
+          lte: (_c, v) => { f.lte = v; return chain },
+          range: (from, to) => { f.from = from; f.to = to; return chain },
+          then: (onF, onR) => Promise.resolve({
+            data: blocks
+              .filter((b) => (f.gte == null || b.block_date >= f.gte) && (f.lte == null || b.block_date <= f.lte))
+              .slice(f.from, f.to + 1),
+            error: null,
+          }).then(onF, onR),
         }
+        return chain
       }
       throw new Error('unexpected table: ' + table)
     },
@@ -319,6 +335,125 @@ describe('projectPublishImpact — per-assignment overrides and approved leave',
 // older row keeps claiming dates it owns no blocks for. The helper is shared
 // by POST /api/schedule/rosters and the approve endpoint, which is the point:
 // a guard only one of the two publish paths ran was no guard at all.
+// BUDGETAPPROVE.1 — the projection loaded only the month period_start falls
+// in, so a week running into the next month lost those days entirely: the
+// 31 Aug-6 Sep draft was stored at EUR 99.96 against a real EUR 689.95. The
+// budget is monthly, so each month is judged on its own.
+describe('projectPublishImpact — a period that crosses a month boundary', () => {
+  const realTz = process.env.TZ
+  afterEach(() => { process.env.TZ = realTz })
+
+  // Mon 31 Aug + Tue 1 Sep..Sun 6 Sep, 2h x EUR 35 = EUR 70 each day.
+  function crossMonthDb({ budget = 500 } = {}) {
+    const days = ['2026-08-31', '2026-09-01', '2026-09-02', '2026-09-03', '2026-09-04', '2026-09-05', '2026-09-06']
+    const published = { id: 'r-old', status: 'published' }
+    return mockDb({
+      location: { id: 'loc1', monthly_contractor_budget_eur: budget },
+      contractors: [dan],
+      blocks: [
+        ...days.map((d, i) => block({ id: `w${i}`, date: d, start: '09:00', end: '11:00', coaches: ['dan'] })),
+        // Already published elsewhere in each month, outside the period.
+        block({ id: 'aug-pub', date: '2026-08-10', start: '09:00', end: '13:00', coaches: ['dan'], roster: published }), // 140
+        block({ id: 'sep-pub', date: '2026-09-20', start: '09:00', end: '12:00', coaches: ['dan'], roster: published }), // 105
+        // Outside both months: must never be loaded or counted.
+        block({ id: 'oct-pub', date: '2026-10-01', start: '09:00', end: '17:00', coaches: ['dan'], roster: published }),
+      ],
+    })
+  }
+
+  for (const tz of ['Europe/Dublin', 'America/New_York']) {
+    it(`prices every day of 31 Aug-6 Sep and splits it per month (TZ=${tz})`, async () => {
+      process.env.TZ = tz
+      const db = crossMonthDb()
+      const r = await projectPublishImpact(db, { locationId: 'loc1', periodStart: '2026-08-31', periodEnd: '2026-09-06' })
+
+      // The whole period, not just Monday.
+      expect(r.periodProjectedEur).toBe(490)
+      expect(r.blockCount).toBe(7)
+      expect(r.months).toEqual([
+        {
+          monthStart: '2026-08-01', monthEnd: '2026-08-31', monthlyBudgetEur: 500,
+          alreadyPublishedEur: 140, periodProjectedEur: 70, monthProjectedTotalEur: 210,
+          remainingEur: 290, overBudget: false, overrunEur: 0, blockCount: 1,
+        },
+        {
+          monthStart: '2026-09-01', monthEnd: '2026-09-30', monthlyBudgetEur: 500,
+          alreadyPublishedEur: 105, periodProjectedEur: 420, monthProjectedTotalEur: 525,
+          remainingEur: -25, overBudget: true, overrunEur: 25, blockCount: 6,
+        },
+      ])
+      // Top level: any month over is over; the month line quotes September,
+      // the binding month, never Aug+Sep summed against one month's budget.
+      expect(r.overBudget).toBe(true)
+      expect(r.overrunEur).toBe(25)
+      expect(r.monthStart).toBe('2026-09-01')
+      expect(r.monthEnd).toBe('2026-09-30')
+      expect(r.monthProjectedTotalEur).toBe(525)
+      expect(r.remainingEur).toBe(-25)
+      expect(r.alreadyPublishedEur).toBe(245)
+      // One read spanning both months, bounded to them.
+      expect(db.blockQueries[0]).toMatchObject({ gte: '2026-08-01', lte: '2026-09-30' })
+    })
+  }
+
+  it('a month under budget does not absorb the other month\'s overrun', async () => {
+    // August has EUR 290 headroom; September is EUR 25 over. Summed, the two
+    // months would read as comfortably inside a EUR 1000 two-month allowance.
+    const r = await projectPublishImpact(crossMonthDb(), { locationId: 'loc1', periodStart: '2026-08-31', periodEnd: '2026-09-06' })
+    expect(r.months[0].overBudget).toBe(false)
+    expect(r.overBudget).toBe(true)
+  })
+
+  it('sums overruns when more than one month is over', async () => {
+    const r = await projectPublishImpact(crossMonthDb({ budget: 200 }), { locationId: 'loc1', periodStart: '2026-08-31', periodEnd: '2026-09-06' })
+    expect(r.months.map((m) => m.overrunEur)).toEqual([10, 325])
+    expect(r.overrunEur).toBe(335)
+    expect(r.monthStart).toBe('2026-09-01')
+  })
+
+  it('a period inside one month keeps its old shape, with a one-month breakdown', async () => {
+    const r = await projectPublishImpact(crossMonthDb(), { locationId: 'loc1', periodStart: '2026-09-01', periodEnd: '2026-09-06' })
+    expect(r.months).toHaveLength(1)
+    expect(r.monthStart).toBe('2026-09-01')
+    expect(r.periodProjectedEur).toBe(420)
+    expect(r.monthProjectedTotalEur).toBe(525)
+  })
+
+  it('pages the block read past the 1000-row cap', async () => {
+    const blocks = Array.from({ length: 1001 }, (_, i) => block({
+      id: `b${String(i).padStart(4, '0')}`, date: '2026-09-02', start: '09:00', end: '10:00', coaches: ['dan'],
+    }))
+    const db = mockDb({ location: { id: 'loc1', monthly_contractor_budget_eur: null }, contractors: [dan], blocks })
+    const r = await projectPublishImpact(db, { locationId: 'loc1', periodStart: '2026-08-31', periodEnd: '2026-09-06' })
+    expect(r.blockCount).toBe(1001)
+    expect(db.blockQueries.map((q) => [q.from, q.to])).toEqual([[0, 999], [1000, 1999]])
+  })
+})
+
+describe('monthsTouched', () => {
+  it('lists every month a period touches, across a year end', () => {
+    expect(monthsTouched('2026-12-28', '2027-02-03')).toEqual([
+      { monthStart: '2026-12-01', monthEnd: '2026-12-31' },
+      { monthStart: '2027-01-01', monthEnd: '2027-01-31' },
+      { monthStart: '2027-02-01', monthEnd: '2027-02-28' },
+    ])
+  })
+})
+
+describe('projectionChanged', () => {
+  const impact = { periodProjectedEur: 689.95, monthlyBudgetEur: 5000 }
+  it('is false when the stored snapshot matches to the cent (numeric columns come back as strings)', () => {
+    expect(projectionChanged({ projected_contractor_eur: '689.95', budget_at_publish_eur: '5000' }, impact)).toBe(false)
+  })
+  it('is true when the period cost moved', () => {
+    expect(projectionChanged({ projected_contractor_eur: 99.96, budget_at_publish_eur: 5000 }, impact)).toBe(true)
+  })
+  it('is true when a budget was set or cleared since', () => {
+    expect(projectionChanged({ projected_contractor_eur: 689.95, budget_at_publish_eur: null }, impact)).toBe(true)
+    expect(projectionChanged({ projected_contractor_eur: 689.95, budget_at_publish_eur: 5000 }, { ...impact, monthlyBudgetEur: null })).toBe(true)
+  })
+})
+
 describe('findConflictingPublishedRosters', () => {
   // Records the filters the helper builds and answers with `rows`, so the
   // date-window query is pinned as well as the containment filtering.
