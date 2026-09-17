@@ -160,6 +160,14 @@ const PAIRS = {
       'card; the web path is an `export * from` shim. Cross-named (sonos/playback.js vs sonos-playback.js), so the ' +
       'export-name scan would not pair them on its own — this entry is what makes the identity assertion run.',
   },
+  'roster-staffing.js': {
+    mode: 'reexport',
+    webOnly: ['fetchStaffingGapsThisWeek'],
+    why:
+      'MOBILESCHED.2 moved the pure staffing (empty / short / ok against min_coaches) and publication-status logic to ' +
+      'shared/ so mobile Manage mode stops counting cancelled assignments with its own below-minimum state; src/lib is a ' +
+      'named re-export shim and keeps the one IO helper (fetchStaffingGapsThisWeek) web-only.',
+  },
 
   // ── identical: hand-maintained twins that really are twins ─────────────────
   'challenges.js': {

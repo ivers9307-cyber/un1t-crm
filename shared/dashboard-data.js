@@ -12,7 +12,7 @@
 // safe to import from Metro (React Native) and from server / client
 // React components.
 
-import { upcomingWeeksBounds, summariseShifts } from './roster-month.js'
+import { upcomingWeeksBounds, summariseShifts, effectiveShiftStart, effectiveShiftEnd } from './roster-month.js'
 import { pctDelta, sumCampaignRows, shapeFunnel, FUNNEL_SLUGS } from './dashboard-metrics.js'
 
 // ROSTER-FIX.1 — "this assignment still puts a coach on the block".
@@ -59,9 +59,10 @@ export function startOfMonth(d = new Date()) {
 // ============================================================
 
 export function shiftDurationHours(shift) {
-  // Prefer override times; fall back to template defaults.
-  const start = shift.start_time_override || shift.shift_templates?.start_time
-  const end = shift.end_time_override || shift.shift_templates?.end_time
+  // Override, then the block's own time, then the template default
+  // (MOBILESCHED.2 — the block's time was skipped).
+  const start = effectiveShiftStart(shift)
+  const end = effectiveShiftEnd(shift)
   if (!start || !end) return 0
   const [sh, sm] = start.split(':').map(Number)
   const [eh, em] = end.split(':').map(Number)
@@ -99,7 +100,7 @@ async function fetchDashboardShifts(supabase, { profileId, locationId, startDate
     .from('shift_assignments')
     .select(`
       id, profile_id, start_time_override, end_time_override, status,
-      shift_blocks!inner ( block_date, location_id, roster_id, rosters:roster_id ( status ), shift_templates ( name, start_time, end_time ), locations:location_id ( id, name ) )${profileSelect}
+      shift_blocks!inner ( block_date, start_time, end_time, location_id, roster_id, rosters:roster_id ( status ), shift_templates ( name, start_time, end_time ), locations:location_id ( id, name ) )${profileSelect}
     `)
     .gte('shift_blocks.block_date', startDate)
     .lte('shift_blocks.block_date', endDate)
@@ -114,6 +115,11 @@ async function fetchDashboardShifts(supabase, { profileId, locationId, startDate
       shift_date: block.block_date,
       start_time_override: r.start_time_override,
       end_time_override: r.end_time_override,
+      // MOBILESCHED.2 — the BLOCK's own times ride along under the same keys
+      // src/lib/roster-read.js toApiShiftRow uses, so a block edited away from
+      // its template displays, sorts and totals at its real hours.
+      block_start_time: block.start_time ?? null,
+      block_end_time: block.end_time ?? null,
       status: r.status,
       published: block.rosters?.status === 'published',
       location_id: block.location_id,
@@ -153,7 +159,7 @@ export async function fetchPersonalDashboardData(supabase, profileId, locationId
   // "Upcoming" toggle shows this window instead of a calendar month.
   const { monthStartIso, monthEndIso } = upcomingWeeksBounds(todayIso, 7)
 
-  const [shifts, monthShiftsResult, swapsTargetingMe, myPendingTimeOff, myConvos, myPostedSwapsResult] =
+  const [shifts, monthShiftsResult, myPendingTimeOff, myConvos, myPostedSwapsResult] =
     await Promise.all([
       // Cross-location query — filtered by profile_id only. Multi-
       // location staff see every shift they're assigned to, anywhere.
@@ -170,18 +176,6 @@ export async function fetchPersonalDashboardData(supabase, profileId, locationId
       // D1 (ROSTER-FIX.1) — coaches see published shifts only. Personal =
       // published for everyone; a manager's own drafts live on the calendar.
       fetchDashboardShifts(supabase, { profileId, startDate: monthStartIso, endDate: monthEndIso, publishedOnly: true }),
-
-      // Swaps targeted at this coach that still need their accept/decline.
-      // CT-P3: the old embed referenced the dropped public.shifts table AND
-      // profiles!requester_id (which 500s on mobile's authenticated client —
-      // no profiles grant). Read shift info via shift_assignments only; the
-      // requester NAME for the actionable list is fetched client-side from
-      // GET /api/schedule/swaps?for_me=1 (service-role).
-      supabase
-        .from('shift_swap_requests')
-        .select('id, requester_id, requester_shift_id, target_id, status, reason, created_at, requester_shift:shift_assignments!requester_shift_id(shift_blocks!block_id(block_date, shift_templates(name)))')
-        .eq('target_id', profileId)
-        .eq('status', 'pending'),
 
       supabase
         .from('time_off_requests')
@@ -215,8 +209,8 @@ export async function fetchPersonalDashboardData(supabase, profileId, locationId
 
   const monthShifts = (monthShiftsResult.data || []).slice().sort((a, b) => {
     if (a.shift_date !== b.shift_date) return a.shift_date.localeCompare(b.shift_date)
-    const aStart = a.start_time_override || a.shift_templates?.start_time || ''
-    const bStart = b.start_time_override || b.shift_templates?.start_time || ''
+    const aStart = effectiveShiftStart(a) || ''
+    const bStart = effectiveShiftStart(b) || ''
     return aStart.localeCompare(bStart)
   })
   const monthSummary = summariseShifts(monthShifts)
@@ -224,8 +218,8 @@ export async function fetchPersonalDashboardData(supabase, profileId, locationId
   // Sort by date then start time so "first shift of the day" is index [0].
   const sortedShifts = (shifts.data || []).slice().sort((a, b) => {
     if (a.shift_date !== b.shift_date) return a.shift_date.localeCompare(b.shift_date)
-    const aStart = a.start_time_override || a.shift_templates?.start_time || ''
-    const bStart = b.start_time_override || b.shift_templates?.start_time || ''
+    const aStart = effectiveShiftStart(a) || ''
+    const bStart = effectiveShiftStart(b) || ''
     return aStart.localeCompare(bStart)
   })
 
@@ -261,7 +255,6 @@ export async function fetchPersonalDashboardData(supabase, profileId, locationId
       shiftsThisMonth: monthSummary.count,
       hoursThisMonth: monthSummary.hours,
       // Other
-      pendingSwapsForMe: swapsTargetingMe.data || [],
       myPostedSwaps: myPostedSwapsResult.data || [],
       myPendingTimeOff: myPendingTimeOff.data || [],
       unreadInbox,
