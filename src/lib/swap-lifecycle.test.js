@@ -55,7 +55,9 @@ describe('resolveSwapTransition — coach claim (open swap)', () => {
     expect(r.status).toBe(403)
   })
 
-  it('rejects a claim by a coach not at the swap location', () => {
+  // SCHEDROLES.2 — a stranger to the swap's studio gets the detail-route 404,
+  // not a 403 that confirms the id exists.
+  it('404s a claim by a coach not at the swap location', () => {
     const r = resolveSwapTransition({
       swap: makeSwap(),
       requestedStatus: 'awaiting_approval',
@@ -63,7 +65,8 @@ describe('resolveSwapTransition — coach claim (open swap)', () => {
       userLocationIds: ['loc-other'],
     })
     expect(r.ok).toBe(false)
-    expect(r.status).toBe(403)
+    expect(r.status).toBe(404)
+    expect(r.error).toBe('Swap request not found')
   })
 
   it('rejects claiming a swap already targeted at someone else', () => {
@@ -646,6 +649,70 @@ describe('resolveSwapTransition — manager branches are per studio (SCHEDROLES.
   it('the requester still cancels their own swap with isManagerHere=false', () => {
     const r = resolveSwapTransition({
       swap: makeSwap(), requestedStatus: 'cancelled', user: coach('req-1'), userLocationIds: ['loc-1'], isManagerHere: false,
+    })
+    expect(r.ok).toBe(true)
+  })
+})
+
+// SCHEDSTATUS.1 / SCHEDROLES.2 — the detail-route rule, applied to every
+// transition rather than to the one branch that happened to check membership.
+describe('resolveSwapTransition — a foreign swap id is invisible, not forbidden', () => {
+  const stranger = { id: 'nobody', role: 'staff' }
+  const foreign = ['loc-other']
+
+  for (const requestedStatus of ['cancelled', 'awaiting_approval', 'pending', 'rejected', 'approved']) {
+    it(`404s '${requestedStatus}' from a caller outside the swap's studio`, () => {
+      const r = resolveSwapTransition({
+        swap: makeSwap({ status: 'awaiting_approval', target_id: 'coach-2' }),
+        requestedStatus,
+        user: stranger,
+        userLocationIds: foreign,
+      })
+      expect(r.ok).toBe(false)
+      expect(r.status).toBe(404)
+      // The message must not vary with the transition, or it is still an oracle.
+      expect(r.error).toBe('Swap request not found')
+    })
+  }
+
+  it('a MEMBER of the studio who may not act still gets an honest 403', () => {
+    const r = resolveSwapTransition({
+      swap: makeSwap(),
+      requestedStatus: 'cancelled',
+      user: { id: 'coach-9', role: 'staff' },
+      userLocationIds: ['loc-1'],
+    })
+    expect(r.ok).toBe(false)
+    expect(r.status).toBe(403)
+  })
+
+  it('the requester keeps access even from another studio', () => {
+    const r = resolveSwapTransition({
+      swap: makeSwap(),
+      requestedStatus: 'cancelled',
+      user: { id: 'req-1', role: 'staff' },
+      userLocationIds: foreign,
+    })
+    expect(r.ok).toBe(true)
+  })
+
+  it('the target keeps access even from another studio', () => {
+    const r = resolveSwapTransition({
+      swap: makeSwap({ status: 'awaiting_approval', target_id: 'coach-2' }),
+      requestedStatus: 'pending',
+      user: { id: 'coach-2', role: 'staff' },
+      userLocationIds: foreign,
+    })
+    expect(r.ok).toBe(true)
+  })
+
+  it('a manager at the swap\'s studio (isManagerHere) is never 404d', () => {
+    const r = resolveSwapTransition({
+      swap: makeSwap(),
+      requestedStatus: 'cancelled',
+      user: { id: 'mgr-1', role: 'manager' },
+      userLocationIds: foreign,
+      isManagerHere: true,
     })
     expect(r.ok).toBe(true)
   })

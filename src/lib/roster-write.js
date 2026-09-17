@@ -56,13 +56,32 @@ async function publishedRostersCovering(db, locationId, minDate, maxDate) {
 }
 
 /**
- * Find-or-create the block for (location, template, date), then upsert the
- * coach's assignment on it. Returns { blockId, assignment, template, error }.
+ * Find-or-create the block for (location, template, date), then create or
+ * update the coach's assignment on it.
+ * Returns { blockId, assignment, template, created, error }.
  *
  * SAAS-1: the template and profile are validated against locationId here,
  * inside the helper, so every caller is covered — callers run on the
  * service-role client (no RLS), and the assistant's create_shift passes
  * ids straight from tool input.
+ *
+ * AGENTROSTER.1 — `undefined` means LEAVE ALONE, `null` means CLEAR.
+ *
+ * This used to be a single `.upsert(..., { onConflict: 'block_id,profile_id' })`
+ * with every field defaulted to null, which made "put this coach on this
+ * shift" destructive on a coach who was already on it: the assistant's
+ * create_shift sends no overrides, so the upsert wrote
+ * start_time_override / end_time_override / partial_reason-adjacent state back
+ * to null and wiped the manager-set paid window (mig 099/100) — the one field
+ * every hours and cost reader bills. It also reset `status` to 'scheduled' and
+ * re-stamped `assigned_by`. Nothing said so and nothing logged it.
+ *
+ * So an EXISTING assignment is now patched with only the fields the caller
+ * actually named, and a caller that names none (create_shift) writes nothing
+ * at all. `assigned_by` is stamped on creation only — it records who put the
+ * coach on the shift, not who last touched the row. Same rule COPYFIX.1
+ * applies to the batch path below, which is why a copy cannot clear an
+ * override either.
  *
  * @param {import('@supabase/supabase-js').SupabaseClient} db  service-role client
  * @param {object} input
@@ -70,17 +89,17 @@ async function publishedRostersCovering(db, locationId, minDate, maxDate) {
  * @param {string} input.profileId
  * @param {string} input.shiftTemplateId
  * @param {string} input.shiftDate            YYYY-MM-DD
- * @param {string|null} [input.startTimeOverride]
- * @param {string|null} [input.endTimeOverride]
- * @param {string|null} [input.notes]
- * @param {string} [input.status='scheduled']
+ * @param {string|null} [input.startTimeOverride]  omit to leave unchanged
+ * @param {string|null} [input.endTimeOverride]    omit to leave unchanged
+ * @param {string|null} [input.notes]              omit to leave unchanged
+ * @param {string} [input.status]                  omit to leave unchanged
  * @param {string|null} [input.actorId]
  */
 export async function upsertShiftAssignment(db, input) {
   const {
     locationId, profileId, shiftTemplateId, shiftDate,
-    startTimeOverride = null, endTimeOverride = null,
-    notes = null, status = 'scheduled', actorId = null,
+    startTimeOverride, endTimeOverride,
+    notes, status, actorId = null,
   } = input || {}
 
   if (!locationId || !profileId || !shiftTemplateId || !shiftDate) {
@@ -146,7 +165,7 @@ export async function upsertShiftAssignment(db, input) {
         min_coaches: clampMinCoaches(template.min_coaches, maxCoaches),
         max_coaches: maxCoaches,
         roster_id: rosterId,
-        notes,
+        notes: notes ?? null,
         created_by: actorId,
       })
       .select('id')
@@ -155,24 +174,84 @@ export async function upsertShiftAssignment(db, input) {
     blockId = created.id
   }
 
-  // Upsert the assignment, dedup on (block, profile) — same key the reverse
-  // trigger uses. Overrides ride on the assignment (mig 100).
+  // AGENTROSTER.1 — the fields the caller actually named. An absent key is
+  // "leave it as it is"; an explicit null is "clear it".
+  const patch = {}
+  if (startTimeOverride !== undefined) patch.start_time_override = startTimeOverride
+  if (endTimeOverride !== undefined) patch.end_time_override = endTimeOverride
+  if (notes !== undefined) patch.notes = notes
+  if (status !== undefined) patch.status = status
+
+  // Is the coach already on this block? (block_id, profile_id) is uniquely
+  // indexed (mig 067), so at most one row can match and 0 rows is the ordinary
+  // "not on it yet" answer — .maybeSingle(), with the error checked.
+  const { data: existingAssignment, error: exErr } = await db
+    .from('shift_assignments')
+    .select('id, block_id, profile_id, status')
+    .eq('block_id', blockId)
+    .eq('profile_id', profileId)
+    .maybeSingle()
+  if (exErr) return { error: exErr }
+
+  if (existingAssignment) {
+    const { assignment, error } = await patchExistingAssignment(db, existingAssignment, patch)
+    return error ? { error } : { blockId, assignment, template, created: false, error: null }
+  }
+
   const { data: assignment, error: aErr } = await db
     .from('shift_assignments')
-    .upsert({
+    .insert({
       block_id: blockId,
       profile_id: profileId,
-      notes,
-      status,
-      start_time_override: startTimeOverride,
-      end_time_override: endTimeOverride,
+      notes: notes ?? null,
+      status: status ?? 'scheduled',
+      start_time_override: startTimeOverride ?? null,
+      end_time_override: endTimeOverride ?? null,
+      // Who put the coach on the shift. Never re-stamped by the patch above:
+      // an edit is not a re-assignment.
       assigned_by: actorId,
-    }, { onConflict: 'block_id,profile_id' })
+    })
     .select('id, block_id, profile_id, status')
     .single()
-  if (aErr) return { error: aErr }
+  if (aErr) {
+    // A concurrent caller won the race between the read above and this insert.
+    // The unique index is the referee; complete the request against the row
+    // that won rather than handing back a constraint message.
+    if (aErr.code === '23505') {
+      const { data: raced, error: raceErr } = await db
+        .from('shift_assignments')
+        .select('id, block_id, profile_id, status')
+        .eq('block_id', blockId)
+        .eq('profile_id', profileId)
+        .maybeSingle()
+      if (raceErr) return { error: raceErr }
+      if (raced) {
+        const { assignment: patched, error } = await patchExistingAssignment(db, raced, patch)
+        return error ? { error } : { blockId, assignment: patched, template, created: false, error: null }
+      }
+    }
+    return { error: aErr }
+  }
 
-  return { blockId, assignment, template, error: null }
+  return { blockId, assignment, template, created: true, error: null }
+}
+
+/**
+ * AGENTROSTER.1 — apply `patch` to an assignment that already exists, or write
+ * nothing at all when the caller named no fields. Returns the row either way,
+ * so "the coach is already on this shift" is a success with their adjustments
+ * intact rather than a silent reset.
+ */
+async function patchExistingAssignment(db, existing, patch) {
+  if (Object.keys(patch).length === 0) return { assignment: existing, error: null }
+  const { data, error } = await db
+    .from('shift_assignments')
+    .update(patch)
+    .eq('id', existing.id)
+    .select('id, block_id, profile_id, status')
+    .single()
+  if (error) return { assignment: null, error }
+  return { assignment: data, error: null }
 }
 
 /**
