@@ -27,7 +27,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess, getUserLocationIds, hasRoleAtLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, isoDate, MANAGER_ROLES } from '@/lib/schemas'
 import {
@@ -98,12 +98,49 @@ export async function GET(request) {
 
   const { data, error } = await query
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
-  return NextResponse.json({ success: true, data })
+
+  // COACHSCOPE.1 — this list is open to anyone at the location, and it used to
+  // hand a coach every roster's budget snapshot, contractor cost projection,
+  // over-budget approver and the manager's notes, plus DRAFT rosters (D1: a
+  // coach never learns a period is being drafted). Judged per row against the
+  // caller's role at THAT roster's location (not `user.role`, the active
+  // location's role): a manager row is untouched; a non-manager gets
+  // published/superseded rows only, in the slim shape below.
+  const shaped = (data || []).flatMap((r) => {
+    if (hasRoleAtLocation(user, r.location_id, MANAGER_ROLES)) return [r]
+    if (!COACH_VISIBLE_ROSTER_STATUSES.includes(r.status)) return []
+    return [slimRosterForCoach(r)]
+  })
+  return NextResponse.json({ success: true, data: shaped })
+}
+
+const COACH_VISIBLE_ROSTER_STATUSES = ['published', 'superseded']
+
+// Allow-list, not a delete-list: a budget/cost column added to `rosters` later
+// stays manager-only until someone lists it here on purpose.
+function slimRosterForCoach(r) {
+  return {
+    id: r.id,
+    location_id: r.location_id,
+    period_start: r.period_start,
+    period_end: r.period_end,
+    requested_period_start: r.requested_period_start,
+    requested_period_end: r.requested_period_end,
+    status: r.status,
+    published_at: r.published_at,
+    superseded_by: r.superseded_by,
+    superseded_at: r.superseded_at,
+    created_at: r.created_at,
+    updated_at: r.updated_at,
+    published_by_profile: r.published_by_profile
+      ? { id: r.published_by_profile.id, full_name: r.published_by_profile.full_name }
+      : null,
+  }
 }
 
 export async function POST(request) {
   const user = await getCurrentUser()
-  if (!user || !MANAGER_ROLES.includes(user.role)) {
+  if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -113,6 +150,17 @@ export async function POST(request) {
 
   const guard = assertLocationAccess(user, location_id)
   if (guard) return guard
+
+  // BUDGETAPPROVE.1 — every role decision on this route is made at the
+  // ROSTER's location. `user.role` is the caller's role at their ACTIVE
+  // studio, so an owner at Stillorgan who is head coach at Hatch read as an
+  // owner while publishing Hatch, and could wave an over-budget Hatch roster
+  // through on force_over_budget: a self-approval at a studio where they hold
+  // no budget authority. The same misread let a manager elsewhere publish
+  // here at all. Master bypass is `profileRole`, inside hasRoleAtLocation.
+  if (!hasRoleAtLocation(user, location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+  }
 
   if (period_end < period_start) {
     return NextResponse.json({ success: false, error: 'period_end must be on or after period_start' }, { status: 400 })
@@ -171,7 +219,7 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: e.message }, { status: 500 })
   }
 
-  const isOwnerHere = user.role === 'master' || OWNER_ROLES.includes(user.role)
+  const isOwnerHere = hasRoleAtLocation(user, location_id, OWNER_ROLES)
   const needsApproval = impact.overBudget && !isOwnerHere
   const ownerMustConfirm = impact.overBudget && isOwnerHere && !force_over_budget
 
@@ -275,6 +323,7 @@ export async function POST(request) {
       published_at: status === 'published' ? nowIso : null,
       over_budget_approval_by: status === 'published' && impact.overBudget ? user.id : null,
       over_budget_approval_at: status === 'published' && impact.overBudget ? nowIso : null,
+      // BUDGETAPPROVE.1 — the WHOLE period's cost, every month it touches.
       projected_contractor_eur: impact.periodProjectedEur,
       budget_at_publish_eur: impact.monthlyBudgetEur,
       notes: notes || null,

@@ -219,6 +219,50 @@ describe('fetchApiShiftRows', () => {
     expect(rows.map((r) => r.id)).toEqual(['pub'])
   })
 
+  // COACHSCOPE.1 — per-location viewer: a caller who manages one studio and
+  // coaches at another gets each studio's rows on that studio's terms.
+  it('viewer: non-manager rows are published-only and slimmed; manager rows untouched', async () => {
+    const mk = (id, loc, profileId, rosterStatus) => ({
+      id, profile_id: profileId, status: 'scheduled', notes: `note-${id}`, partial_reason: `why-${id}`,
+      shift_blocks: {
+        location_id: loc, template_id: 't1', block_date: '2026-06-10', start_time: '09:00:00', end_time: '10:00:00',
+        notes: null, roster_id: rosterStatus ? 'r' : null, rosters: rosterStatus ? { status: rosterStatus } : null,
+        shift_templates: { id: 't1', name: 'AM', start_time: '09:00:00', end_time: '10:00:00' },
+      },
+      profiles: { id: profileId, full_name: `Name ${profileId}`, email: `${profileId}@x.ie`, avatar_url: 'a.png', role: 'staff' },
+    })
+    const db = makeDb({
+      data: [
+        mk('coach-own', 'loc-coach', 'me', 'published'),
+        mk('coach-colleague', 'loc-coach', 'sam', 'published'),
+        mk('coach-draft', 'loc-coach', 'me', 'draft'),
+        mk('coach-noroster', 'loc-coach', 'sam', null),
+        mk('mgr-draft', 'loc-mgr', 'sam', 'draft'),
+      ],
+      error: null,
+    })
+    const viewer = { id: 'me', isManagerAt: (loc) => loc === 'loc-mgr' }
+    const { rows } = await fetchApiShiftRows(db, { locationIds: ['loc-coach', 'loc-mgr'], viewer })
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r]))
+
+    // D1 at the coach location; drafts kept where they manage.
+    expect(Object.keys(byId).sort()).toEqual(['coach-colleague', 'coach-own', 'mgr-draft'])
+
+    // Own row: own notes + partial_reason stay; nobody's email is served.
+    expect(byId['coach-own'].notes).toBe('note-coach-own')
+    expect(byId['coach-own'].partial_reason).toBe('why-coach-own')
+    expect(byId['coach-own'].profiles).toEqual({ id: 'me', full_name: 'Name me', avatar_url: 'a.png', role: 'staff' })
+
+    // Colleague row: name stays ("on with Sam"), email / notes / partial_reason go.
+    expect(byId['coach-colleague'].profiles).toEqual({ id: 'sam', full_name: 'Name sam', avatar_url: 'a.png', role: 'staff' })
+    expect(byId['coach-colleague'].notes).toBeNull()
+    expect(byId['coach-colleague'].partial_reason).toBeNull()
+
+    // Manager location: the full row.
+    expect(byId['mgr-draft'].profiles.email).toBe('sam@x.ie')
+    expect(byId['mgr-draft'].notes).toBe('note-mgr-draft')
+  })
+
   it('passes query errors through', async () => {
     const res = await fetchApiShiftRows(makeDb({ data: null, error: { message: 'nope' } }), { locationIds: ['l'] })
     expect(res.error?.message).toBe('nope')

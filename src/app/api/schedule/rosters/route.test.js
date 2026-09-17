@@ -14,10 +14,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth', async (importOriginal) => ({
   getCurrentUser: vi.fn(),
   assertLocationAccess: vi.fn(() => null),
   getUserLocationIds: vi.fn(() => [LOC_1]),
+  // BUDGETAPPROVE.1 — REAL: the role-at-the-roster's-location decision is
+  // what is under test, so it must not be stubbed to an answer.
+  hasRoleAtLocation: (await importOriginal()).hasRoleAtLocation,
 }))
 // ROSTER-FIX.4 — only the budget projection is stubbed. The overlap guard
 // stays REAL (findConflictingPublishedRosters), so these cases exercise the
@@ -153,7 +156,7 @@ beforeEach(async () => {
   getCurrentUser.mockReset()
   projectPublishImpact.mockReset()
   projectPublishImpact.mockResolvedValue(UNDER_BUDGET)
-  getCurrentUser.mockResolvedValue({ id: 'owner-1', role: 'owner', locations: [{ id: LOC_1 }] })
+  getCurrentUser.mockResolvedValue({ id: 'owner-1', role: 'owner', locations: [{ id: LOC_1 }], rolesByLocation: { [LOC_1]: 'owner' } })
   const { renotifyChangedCoaches } = await import('@/lib/roster-notify')
   renotifyChangedCoaches.mockClear()
 })
@@ -238,7 +241,7 @@ describe('POST /api/schedule/rosters — overlapping published rosters', () => {
   })
 
   it('an over-budget manager draft is refused too — a draft becomes a published roster on approval', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'mgr-1', role: 'manager', locations: [{ id: LOC_1 }] })
+    getCurrentUser.mockResolvedValue({ id: 'mgr-1', role: 'manager', locations: [{ id: LOC_1 }], rolesByLocation: { [LOC_1]: 'manager' } })
     projectPublishImpact.mockResolvedValue({ ...UNDER_BUDGET, overBudget: true, overrunEur: 50 })
     const { db, inserts } = buildDb({
       publishedRosters: [{ id: 'r-month', period_start: '2026-05-01', period_end: '2026-05-31' }],
@@ -296,7 +299,7 @@ describe('POST /api/schedule/rosters — supersede', () => {
     // A draft owns no blocks until it is approved, so standing a live roster
     // down on its behalf would unpublish that period for a draft that may
     // never be approved.
-    getCurrentUser.mockResolvedValue({ id: 'mgr-1', role: 'manager', locations: [{ id: LOC_1 }] })
+    getCurrentUser.mockResolvedValue({ id: 'mgr-1', role: 'manager', locations: [{ id: LOC_1 }], rolesByLocation: { [LOC_1]: 'manager' } })
     projectPublishImpact.mockResolvedValue({ ...UNDER_BUDGET, overBudget: true, overrunEur: 50 })
     const { db, inserts, rosterUpdates } = buildDb({ publishedRosters: [] })
     createServerClient.mockReturnValue(db)
@@ -402,7 +405,7 @@ describe('POST /api/schedule/rosters — the requested range is preserved', () =
   })
 
   it('a draft carries it too — approving flips the status, it never re-asks', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'mgr-1', role: 'manager', locations: [{ id: LOC_1 }] })
+    getCurrentUser.mockResolvedValue({ id: 'mgr-1', role: 'manager', locations: [{ id: LOC_1 }], rolesByLocation: { [LOC_1]: 'manager' } })
     projectPublishImpact.mockResolvedValue({ ...UNDER_BUDGET, overBudget: true, overrunEur: 50 })
     const { db, inserts } = buildDb({ publishedRosters: [] })
     createServerClient.mockReturnValue(db)
@@ -456,5 +459,154 @@ describe('GET /api/schedule/rosters — superseded rosters', () => {
     await GET({ url: `https://x.test/api/schedule/rosters?location_id=${LOC_1}&status=draft` })
     expect(filters).toContainEqual(['eq', 'status', 'draft'])
     expect(filters.some((f) => f[0] === 'neq')).toBe(false)
+  })
+})
+
+// COACHSCOPE.1 — the list is open to anyone at the location, so what a coach
+// gets back is judged per row against their role AT that roster's location.
+describe('GET /api/schedule/rosters — coach vs manager shape', () => {
+  const LOC_2 = 'a0000000-0000-0000-0000-000000000002'
+  const ROWS = [
+    {
+      id: 'r-pub', location_id: LOC_1, period_start: '2026-09-01', period_end: '2026-09-30',
+      requested_period_start: '2026-09-01', requested_period_end: '2026-09-30',
+      status: 'published', published_at: '2026-08-25T10:00:00Z', published_by: 'mgr-1',
+      over_budget_approval_by: 'owner-1', over_budget_approval_at: '2026-08-25T09:00:00Z',
+      projected_contractor_eur: 4200, budget_at_publish_eur: 5000, notes: 'tight month, cut Sunday cover',
+      created_by: 'mgr-1', created_at: '2026-08-20T10:00:00Z', updated_at: '2026-08-25T10:00:00Z',
+      superseded_by: null, superseded_at: null,
+      published_by_profile: { id: 'mgr-1', full_name: 'Mona Manager', email: 'mona@x.ie' },
+      over_budget_approval_by_profile: { id: 'owner-1', full_name: 'Owen Owner' },
+    },
+    {
+      id: 'r-draft', location_id: LOC_1, period_start: '2026-10-01', period_end: '2026-10-31',
+      status: 'draft', projected_contractor_eur: 6100, budget_at_publish_eur: null, notes: null,
+    },
+  ]
+  function rowsDb(rows) {
+    const chain = {
+      select: () => chain, order: () => chain, eq: () => chain, neq: () => chain, in: () => chain,
+      then: (onF, onR) => Promise.resolve({ data: rows, error: null }).then(onF, onR),
+    }
+    return { from: () => chain }
+  }
+  const get = () => GET({ url: `https://x.test/api/schedule/rosters?location_id=${LOC_1}` })
+
+  it('a coach gets published rows only, with no budget, cost, approver, notes or emails', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'c-1', role: 'staff', profileRole: 'staff', rolesByLocation: { [LOC_1]: 'staff' }, locations: [{ id: LOC_1 }] })
+    createServerClient.mockReturnValue(rowsDb(ROWS))
+    const body = await (await get()).json()
+    expect(body.data.map((r) => r.id)).toEqual(['r-pub'])
+    const r = body.data[0]
+    for (const key of ['projected_contractor_eur', 'budget_at_publish_eur', 'over_budget_approval_by',
+      'over_budget_approval_at', 'over_budget_approval_by_profile', 'notes', 'created_by', 'published_by']) {
+      expect(key in r, key).toBe(false)
+    }
+    expect(r.published_by_profile).toEqual({ id: 'mgr-1', full_name: 'Mona Manager' })
+    expect(r.period_start).toBe('2026-09-01')
+    expect(r.status).toBe('published')
+  })
+
+  it('a head coach at the location keeps the full rows, drafts included', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'hc-1', role: 'head_coach', profileRole: 'head_coach', rolesByLocation: { [LOC_1]: 'head_coach' }, locations: [{ id: LOC_1 }] })
+    createServerClient.mockReturnValue(rowsDb(ROWS))
+    const body = await (await get()).json()
+    expect(body.data).toEqual(ROWS)
+  })
+
+  it('judges the role at the ROSTER\'s location: head coach elsewhere, staff here, is a coach here', async () => {
+    getCurrentUser.mockResolvedValue({
+      id: 'mx-1', role: 'head_coach', profileRole: 'head_coach',
+      rolesByLocation: { [LOC_1]: 'staff', [LOC_2]: 'head_coach' },
+      locations: [{ id: LOC_1 }, { id: LOC_2 }],
+    })
+    createServerClient.mockReturnValue(rowsDb(ROWS))
+    const body = await (await get()).json()
+    expect(body.data.map((r) => r.id)).toEqual(['r-pub'])
+    expect('budget_at_publish_eur' in body.data[0]).toBe(false)
+  })
+
+  it('a master keeps the full rows', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'ms-1', role: 'master', profileRole: 'master', rolesByLocation: {}, locations: [{ id: LOC_1 }] })
+    createServerClient.mockReturnValue(rowsDb(ROWS))
+    const body = await (await get()).json()
+    expect(body.data).toHaveLength(2)
+  })
+})
+
+// BUDGETAPPROVE.1 — owner status came from the caller's ACTIVE studio, not the
+// roster's. An owner at one studio who is only head coach at another read as
+// an owner while publishing there, and force_over_budget let them self-approve
+// an over-budget roster at a studio where they hold no budget authority.
+describe('POST /api/schedule/rosters — roles resolve at the ROSTER\'s location', () => {
+  const LOC_2 = 'a0000000-0000-0000-0000-000000000002'
+  // Active studio is LOC_2 (owner there), so user.role reads 'owner'.
+  const ownerElsewhere = {
+    id: 'split-1', role: 'owner', profileRole: 'head_coach',
+    locations: [{ id: LOC_1 }, { id: LOC_2 }],
+    rolesByLocation: { [LOC_1]: 'head_coach', [LOC_2]: 'owner' },
+  }
+
+  it('an owner at another studio who is head coach here gets a DRAFT, not a self-approved publish', async () => {
+    getCurrentUser.mockResolvedValue(ownerElsewhere)
+    projectPublishImpact.mockResolvedValue({ ...UNDER_BUDGET, overBudget: true, overrunEur: 50 })
+    const { db, inserts } = buildDb()
+    createServerClient.mockReturnValue(db)
+
+    const res = await publish({ force_over_budget: true })
+    expect(res.status).toBe(202)
+    expect(inserts[0].status).toBe('draft')
+    expect(inserts[0].over_budget_approval_by).toBeNull()
+  })
+
+  it('the dry run says the same: approval needed, no owner confirmation offered', async () => {
+    getCurrentUser.mockResolvedValue(ownerElsewhere)
+    projectPublishImpact.mockResolvedValue({ ...UNDER_BUDGET, overBudget: true, overrunEur: 50 })
+    const { db } = buildDb()
+    createServerClient.mockReturnValue(db)
+
+    const body = await (await publish({ dry_run: true })).json()
+    expect(body.can_publish).toBe(false)
+    expect(body.requires_owner_confirmation).toBe(false)
+  })
+
+  it('an owner HERE whose active studio is elsewhere keeps owner authority here', async () => {
+    getCurrentUser.mockResolvedValue({
+      id: 'split-2', role: 'head_coach', profileRole: 'head_coach',
+      locations: [{ id: LOC_1 }, { id: LOC_2 }],
+      rolesByLocation: { [LOC_1]: 'owner', [LOC_2]: 'head_coach' },
+    })
+    projectPublishImpact.mockResolvedValue({ ...UNDER_BUDGET, overBudget: true, overrunEur: 50 })
+    const { db, inserts } = buildDb()
+    createServerClient.mockReturnValue(db)
+
+    const res = await publish({ force_over_budget: true })
+    expect(res.status).toBe(201)
+    expect(inserts[0]).toMatchObject({ status: 'published', over_budget_approval_by: 'split-2' })
+  })
+
+  it('a manager elsewhere who is plain staff here cannot publish here at all', async () => {
+    getCurrentUser.mockResolvedValue({
+      id: 'split-3', role: 'manager', profileRole: 'manager',
+      locations: [{ id: LOC_1 }, { id: LOC_2 }],
+      rolesByLocation: { [LOC_1]: 'staff', [LOC_2]: 'manager' },
+    })
+    const { db, inserts } = buildDb()
+    createServerClient.mockReturnValue(db)
+
+    const res = await publish()
+    expect(res.status).toBe(403)
+    expect(inserts).toHaveLength(0)
+  })
+
+  it('master (profileRole) keeps the bypass with no per-location role', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'master-1', role: 'master', profileRole: 'master', locations: [], rolesByLocation: {} })
+    projectPublishImpact.mockResolvedValue({ ...UNDER_BUDGET, overBudget: true, overrunEur: 50 })
+    const { db, inserts } = buildDb()
+    createServerClient.mockReturnValue(db)
+
+    const res = await publish({ force_over_budget: true })
+    expect(res.status).toBe(201)
+    expect(inserts[0].over_budget_approval_by).toBe('master-1')
   })
 })

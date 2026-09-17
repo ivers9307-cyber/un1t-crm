@@ -4,7 +4,8 @@
 // (block-shaped data with nested shift_assignments) instead of the
 // legacy flat /api/schedule/shifts. Each block renders as a single
 // card showing template + time + capacity badge + assigned coaches.
-// Empty future blocks get a red unstaffed flag.
+// Empty future blocks get a red unstaffed flag; below-minimum ones an amber
+// "1 of 2" (ROSTERVIS.1). The header says whether the period is published.
 //
 // (Historical: public.shifts was kept in sync via the mig 068/069
 // bidirectional triggers during cutover; the table + triggers were
@@ -30,7 +31,17 @@ import { MANAGER_ROLES } from '@/lib/schemas'
 // byte-for-byte, beside the lib copies this file already imported from. One
 // definition now: a change to the local-day rule cannot land on the server
 // and miss the calendar.
-import { addDays, formatDate, getMonday, isBlockUnstaffedFuture as libUnstaffed, liveAssignments, getMonthStart, monthStartForWeek, weekStartForMonth, periodsOverlap, periodCovers } from '@/lib/roster'
+import { addDays, formatDate, getMonday, liveAssignments, getMonthStart, monthStartForWeek, weekStartForMonth, periodsOverlap, periodCovers } from '@/lib/roster'
+// ROSTERVIS.1 — one staffing answer (empty / short / ok) and one publication
+// answer for every surface; see the module header.
+import {
+  futureBlockStaffing,
+  countStaffingGaps,
+  staffingGapsHeadline,
+  staffingGapsBreakdown,
+  periodPublicationStatus,
+  PUBLICATION_LABELS,
+} from '@/lib/roster-staffing'
 // ROSTER-FIX.4 — the server refuses a publish that would leave two published
 // rosters over the same days. `overlapping_roster` is a code, not copy; the
 // sentence it becomes is shared with the approvals queue so one refusal reads
@@ -51,6 +62,7 @@ import ScheduleErrorBanner from './schedule/ScheduleErrorBanner'
 // request-ordering guard live in the hook now; see its header for why.
 import { useScheduleData } from './schedule/useScheduleData'
 import { useWeekCost } from './schedule/useWeekCost'
+import { useDraftRosters } from './schedule/useDraftRosters'
 
 const TIME_OFF_CONFIG = {
   holiday:     { label: 'Holiday',     color: '#22C55E', icon: Palmtree },
@@ -93,12 +105,25 @@ function getMonthGridRange(monthStart) {
 // have empty assignments (coaches called out, never replaced) —
 // flagging those is noise.
 //
-// ROSTER-FIX.1 — this was a local re-implementation that counted EVERY
-// assignment row, so a cancelled one (an approved swap-drop) made an empty
-// block look staffed and the red marker never appeared. Delegate to the one
-// lib definition and count live rows only.
-function isBlockUnstaffedFuture(block, todayStr) {
-  return libUnstaffed(block, liveAssignments(block.shift_assignments).length, todayStr)
+// ROSTER-FIX.1 — counts LIVE assignments only, so a cancelled row (an
+// approved swap-drop) cannot make an empty block look staffed.
+//
+// ROSTERVIS.1 — 'empty' | 'short' | 'ok', or null for a past block. This used
+// to be a zero-only boolean, so a shift at 1 of 2 coaches read as fine on the
+// calendar while the Studio Overview strip above it counted it as below
+// minimum. Both now answer from src/lib/roster-staffing.
+function blockStaffingStatus(block, todayStr) {
+  return futureBlockStaffing(block, todayStr)?.status || null
+}
+
+// ROSTERVIS.1 — the header chip's look per publication status. Text + icon
+// carry the meaning; colour is the at-a-glance cue (house chip rule: -500/10
+// background, -700 text).
+const PUBLICATION_CHIP = {
+  published: { cls: 'bg-green-500/10 text-green-700 border-green-500/30', Icon: Check },
+  pending: { cls: 'bg-blue-500/10 text-blue-700 border-blue-500/30', Icon: Clock },
+  partial: { cls: 'bg-amber-500/10 text-amber-700 border-amber-500/30', Icon: AlertTriangle },
+  unpublished: { cls: 'bg-slate-500/10 text-slate-700 border-slate-500/30', Icon: CalendarOff },
 }
 
 export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) {
@@ -361,6 +386,9 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
     weekStart: formatDate(weekStart),
     enabled: isManager,
   })
+  // ROSTERVIS.1 — drafts awaiting approval, for the publication chip. Manager
+  // only: a coach's feed is published-only, so there is nothing to tell them.
+  const { draftRosters, refreshDraftRosters } = useDraftRosters({ locationId, enabled: isManager })
   // Dismissed separately from the hook's own state so the operator can clear a
   // banner without it reappearing until the next failure.
   //
@@ -419,6 +447,9 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
     // ROSTER-FIX.6c — the hours panel used to be derived from `blocks`, so it
     // moved on its own. It is a separate fetch now and has to be told.
     refreshWeekCost()
+    // ROSTERVIS.1 — a publish can create (or an approval elsewhere clear) a
+    // draft; re-read so the header chip follows.
+    refreshDraftRosters()
     onDataChange?.()
     // Every edit marks the VISIBLE period dirty so the exit guard fires until
     // the operator publishes that period. Publish opts out (markDirty: false)
@@ -426,7 +457,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
     if (opts.markDirty !== false) {
       setDirtyPeriods((prev) => new Set(prev).add(visiblePeriodKey))
     }
-  }, [fetchData, refreshWeekCost, onDataChange, visiblePeriodKey])
+  }, [fetchData, refreshWeekCost, refreshDraftRosters, onDataChange, visiblePeriodKey])
 
   // ROSTER-FIX.6a — switching location swaps the whole roster out from under
   // the guard; the old location's unpublished edits are no longer reachable
@@ -487,12 +518,26 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
   // the other consumer until ROSTER-FIX.6c moved it to the server.
   const flatShifts = blocksToShiftRows(blocks)
 
-  // Unstaffed-block count for the publish toolbar — surfaces "you
-  // still have empty slots" as a friction signal before publishing.
-  const unstaffedThisWeek = blocks.filter(b => {
-    const inWeek = b.block_date >= formatDate(weekStart) && b.block_date <= formatDate(weekEnd)
-    return inWeek && isBlockUnstaffedFuture(b, todayStr)
-  }).length
+  // Staffing-gap count for the publish toolbar — surfaces "you still have
+  // shifts without enough coaches" as a friction signal before publishing.
+  // ROSTERVIS.1 — below-minimum shifts count as well as empty ones.
+  const staffingGapsThisWeek = countStaffingGaps(blocks, {
+    from: formatDate(weekStart),
+    to: formatDate(weekEnd),
+    todayIso: todayStr,
+  })
+
+  // ROSTERVIS.1 — is the period on screen published? Week view: the week.
+  // Month view: the calendar month (not the 6-week grid), the same bounds the
+  // publish modal's month scope uses.
+  const visiblePeriodStart = viewType === 'month' ? formatDate(monthStart) : formatDate(weekStart)
+  const visiblePeriodEnd = viewType === 'month' ? formatDate(visibleMonthEnd) : formatDate(weekEnd)
+  const publication = periodPublicationStatus({
+    blocks,
+    periodStart: visiblePeriodStart,
+    periodEnd: visiblePeriodEnd,
+    draftRosters,
+  })
 
   // SCHEDULE-MULTI-COACH.1 — assign N coaches in one round-trip. The
   // server returns per-coach outcomes; surface skipped reasons + any
@@ -949,6 +994,37 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
           >
             Today
           </button>
+          {/* ROSTERVIS.1 — whether the period on screen is published. The
+              calendar never said; the only signal was an in-memory
+              unsaved-changes flag a reload drops. Derived from each block's
+              roster status plus the draft rosters awaiting approval.
+              Manager only (a coach's feed is published-only), and hidden
+              while loading so a stale week's answer never sits under new
+              dates. */}
+          {isManager && !loading && publication.status !== 'none' && (() => {
+            const chip = PUBLICATION_CHIP[publication.status]
+            const Icon = chip.Icon
+            const periodWord = viewType === 'month' ? 'Month' : 'Week'
+            const label = PUBLICATION_LABELS[publication.status]
+            const extra = publication.status === 'published' && publication.draftPending
+              ? ', changes awaiting approval'
+              : publication.status === 'partial'
+                ? ` (${publication.publishedCount} of ${publication.blockCount} shifts)`
+                : ''
+            return (
+              <div className="mt-1.5 flex justify-center">
+                <span
+                  role="status"
+                  data-testid="publication-status"
+                  className={`inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full border ${chip.cls}`}
+                >
+                  <Icon size={12} aria-hidden="true" />
+                  <span className="sr-only">{periodWord} status: </span>
+                  {label}{extra}
+                </span>
+              </div>
+            )
+          })()}
         </div>
         <button
           type="button"
@@ -981,20 +1057,28 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
         />
       )}
 
-      {/* Unstaffed-blocks summary — week view only, manager only */}
-      {!loading && isManager && viewType === 'week' && unstaffedThisWeek > 0 && (
-        <div className="mb-4 flex items-start gap-3 p-3 rounded-lg border border-red-500/40 bg-red-500/10 text-sm">
-          <AlertCircle size={16} className="text-red-600 mt-0.5 flex-shrink-0" />
-          <div>
-            <div className="font-medium text-red-700">
-              {unstaffedThisWeek} unstaffed block{unstaffedThisWeek === 1 ? '' : 's'} this week
-            </div>
-            <div className="text-xs text-red-700/80 mt-0.5">
-              Demand windows with no coach assigned. Customers will be in the studio either way — assign coaches or remove the block.
+      {/* Staffing-gaps summary — week view only, manager only.
+          ROSTERVIS.1 — counts below-minimum shifts as well as empty ones; red
+          while any shift has no coach, amber when every gap is a short one. */}
+      {!loading && isManager && viewType === 'week' && staffingGapsThisWeek.total > 0 && (() => {
+        const anyEmpty = staffingGapsThisWeek.empty > 0
+        return (
+          <div
+            data-testid="staffing-gaps-banner"
+            className={`mb-4 flex items-start gap-3 p-3 rounded-lg border text-sm ${anyEmpty ? 'border-red-500/40 bg-red-500/10' : 'border-amber-500/40 bg-amber-500/10'}`}
+          >
+            <AlertCircle size={16} className={`${anyEmpty ? 'text-red-600' : 'text-amber-600'} mt-0.5 flex-shrink-0`} aria-hidden="true" />
+            <div>
+              <div className={`font-medium ${anyEmpty ? 'text-red-700' : 'text-amber-700'}`}>
+                {staffingGapsHeadline(staffingGapsThisWeek)}
+              </div>
+              <div className={`text-xs mt-0.5 ${anyEmpty ? 'text-red-700/80' : 'text-amber-700/90'}`}>
+                {staffingGapsBreakdown(staffingGapsThisWeek)}. Customers will be in the studio either way — assign coaches or remove the block.
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )
+      })()}
 
       {/* Overtime warning panel.
           ROSTER-FIX.6c — the arithmetic ran HERE, over annual_salary /
@@ -1084,7 +1168,11 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                 const isToday = dateStr === todayStr
                 const holiday = holidayByDate.get(dateStr)
                 const totalAssignmentCount = visibleBlocks.reduce((sum, b) => sum + liveAssignments(b.shift_assignments).length, 0)
-                const unstaffedCount = visibleBlocks.filter(b => isBlockUnstaffedFuture(b, todayStr)).length
+                // ROSTERVIS.1 — empty and short counted separately: red for
+                // no coach, amber for below the minimum.
+                const dayGaps = countStaffingGaps(visibleBlocks, { todayIso: todayStr })
+                const unstaffedCount = dayGaps.empty
+                const shortCount = dayGaps.short
 
                 cells.push(
                   <button
@@ -1110,6 +1198,12 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                             <span className="sr-only">{unstaffedCount} unstaffed</span>
                           </span>
                         )}
+                        {isManager && shortCount > 0 && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-700" title={`${shortCount} below minimum`}>
+                            <span aria-hidden="true">↓{shortCount}</span>
+                            <span className="sr-only">{shortCount} below minimum</span>
+                          </span>
+                        )}
                         {totalAssignmentCount > 0 && (
                           <span className="text-[10px] px-1.5 py-0.5 rounded bg-un1t-border/60 text-un1t-subtle">
                             {totalAssignmentCount}
@@ -1126,25 +1220,33 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                       {visibleBlocks.slice(0, 3).map(b => {
                         const tmpl = b.shift_templates || {}
                         const count = liveAssignments(b.shift_assignments).length
-                        const unstaffed = isBlockUnstaffedFuture(b, todayStr)
+                        const staffing = blockStaffingStatus(b, todayStr)
                         // ROSTER-FIX.6b — unstaffed was a red hairline border and
                         // nothing else. It survives neither greyscale nor the
                         // ~8% of male operators with a red/green deficiency, and
                         // there is no text for a screen reader to reach at all.
                         // The warning glyph and the sr-only word carry it now;
                         // the border stays as the at-a-glance cue for everyone else.
-                        const showUnstaffed = isManager && unstaffed
+                        const showUnstaffed = isManager && staffing === 'empty'
+                        // ROSTERVIS.1 — same treatment in amber for below minimum.
+                        const showShort = isManager && staffing === 'short'
                         return (
                           <div
                             key={b.id}
-                            className={`text-[10px] truncate rounded px-1 py-0.5 ${showUnstaffed ? 'border border-red-500/40' : ''}`}
+                            className={`text-[10px] truncate rounded px-1 py-0.5 ${showUnstaffed ? 'border border-red-500/40' : showShort ? 'border border-amber-500/50' : ''}`}
                             style={{ backgroundColor: (tmpl.color || '#3B82F6') + '20', color: tmpl.color || '#3B82F6' }}
-                            title={`${tmpl.name || 'Shift'} · ${formatTime(b.start_time)}–${formatTime(b.end_time)}${isManager ? ` · ${count}/${b.max_coaches}` : ''}${showUnstaffed ? ' · Unstaffed' : ''}`}
+                            title={`${tmpl.name || 'Shift'} · ${formatTime(b.start_time)}–${formatTime(b.end_time)}${isManager ? ` · ${count}/${b.max_coaches}` : ''}${showUnstaffed ? ' · Unstaffed' : ''}${showShort ? ` · ${count} of ${b.min_coaches} minimum` : ''}`}
                           >
                             {showUnstaffed && (
                               <>
                                 <AlertTriangle size={9} className="inline-block mr-0.5 -mt-px text-red-700" aria-hidden="true" />
                                 <span className="sr-only">Unstaffed. </span>
+                              </>
+                            )}
+                            {showShort && (
+                              <>
+                                <AlertTriangle size={9} className="inline-block mr-0.5 -mt-px text-amber-700" aria-hidden="true" />
+                                <span className="sr-only">Below minimum, {count} of {b.min_coaches}. </span>
                               </>
                             )}
                             {formatTime(b.start_time)}{isManager ? ` ${count}/${b.max_coaches}` : ''}
@@ -1250,9 +1352,16 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                       const assignments = liveAssignments(block.shift_assignments)
                       const count = assignments.length
                       const max = block.max_coaches || 15
-                      const unstaffed = isBlockUnstaffedFuture(block, todayStr)
+                      const staffing = blockStaffingStatus(block, todayStr)
+                      const unstaffed = staffing === 'empty'
                       // ROSTER-FIX.2 — same reason: the red unstaffed styling is manager-only, coaches see the neutral card.
                       const showUnstaffed = isManager && unstaffed
+                      // ROSTERVIS.1 — below min_coaches but not empty. Amber, and
+                      // it says the numbers: "1 of 2". min_coaches is a manager
+                      // fact the coach feed never carries, so this is manager-only
+                      // by construction as well as by the gate.
+                      const showShort = isManager && staffing === 'short'
+                      const minCoaches = Number(block.min_coaches) || 0
                       const myAssignment = assignments.find(a => a.profile_id === user.id)
                       const blockColor = tmpl.color || '#3B82F6'
                       const atCapacity = count >= max
@@ -1267,7 +1376,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                       return (
                         <div
                           key={block.id}
-                          className={`rounded-md p-2 text-xs relative group hover:ring-1 hover:ring-un1t-subtle/40 ${myAssignment ? 'ring-1 ring-blue-400/50' : ''} ${showUnstaffed ? 'border border-red-500/50' : ''} ${isSelected ? 'ring-2 ring-amber-400 ring-offset-1 ring-offset-un1t-bg' : ''}`}
+                          className={`rounded-md p-2 text-xs relative group hover:ring-1 hover:ring-un1t-subtle/40 ${myAssignment ? 'ring-1 ring-blue-400/50' : ''} ${showUnstaffed ? 'border border-red-500/50' : showShort ? 'border border-amber-500/50' : ''} ${isSelected ? 'ring-2 ring-amber-400 ring-offset-1 ring-offset-un1t-bg' : ''}`}
                           style={{ backgroundColor: showUnstaffed ? '#7F1D1D20' : blockColor + '20', borderLeft: `3px solid ${showUnstaffed ? '#EF4444' : blockColor}` }}
                         >
                           {/* ROSTER-FIX.6b-7 — this card used to BE the button:
@@ -1339,6 +1448,17 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                             <Clock size={10} />
                             {formatTime(block.start_time)}–{formatTime(block.end_time)}
                           </div>
+                          {showShort && (
+                            <div
+                              data-testid="short-staffed-badge"
+                              className="mt-1 inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-700"
+                              title={`Below minimum: ${count} of ${minCoaches} coaches`}
+                            >
+                              <AlertTriangle size={10} aria-hidden="true" />
+                              <span className="sr-only">Below minimum: </span>
+                              {count} of {minCoaches}
+                            </div>
+                          )}
 
                           {/* Assigned coaches list */}
                           {count === 0 ? (
@@ -1983,6 +2103,11 @@ function PublishRosterModal({ locationId, isOwner, period, onSubmit, onClose, pu
 
         {!loading && impact && !submitResult && (
           <>
+            {/* ROSTERVIS.1 — the preview showed budget figures only, so a
+                week could be published with shifts at 1 of 2 coaches and
+                nobody told. Listed ABOVE the cost, and information only: it
+                never blocks the publish. */}
+            <PublishStaffingGaps gaps={impact.staffingGaps} />
             <div className="grid grid-cols-2 gap-3 mb-4 text-sm">
               <div className="rounded-lg border border-un1t-border p-3">
                 <div className="text-[10px] uppercase tracking-wider text-un1t-subtle">Blocks in period</div>
@@ -2053,6 +2178,52 @@ function PublishRosterModal({ locationId, isOwner, period, onSubmit, onClose, pu
         )}
       </div>
     </Modal>
+  )
+}
+
+// ROSTERVIS.1 — the empty and below-minimum shifts in the period about to be
+// published. `gaps` comes from projectPublishImpact; an older server that does
+// not send it renders nothing rather than a false "all staffed".
+function PublishStaffingGaps({ gaps }) {
+  if (!Array.isArray(gaps)) return null
+  if (gaps.length === 0) {
+    return (
+      <div className="mb-3 text-xs text-green-700 flex items-center gap-1.5" data-testid="publish-staffing-ok">
+        <Check size={12} aria-hidden="true" /> Every upcoming shift in this period has its minimum coaches.
+      </div>
+    )
+  }
+  const empty = gaps.filter((g) => g.status === 'empty').length
+  const short = gaps.length - empty
+  return (
+    <div
+      data-testid="publish-staffing-gaps"
+      className={`mb-4 rounded-lg border p-3 text-sm ${empty > 0 ? 'border-red-500/40 bg-red-500/10' : 'border-amber-500/40 bg-amber-500/10'}`}
+    >
+      <div className={`font-medium ${empty > 0 ? 'text-red-700' : 'text-amber-700'}`}>
+        {staffingGapsHeadline({ total: gaps.length }, 'in this period')}
+      </div>
+      <div className="text-xs text-un1t-subtle mt-0.5">
+        {staffingGapsBreakdown({ empty, short })}. You can still publish.
+      </div>
+      <ul className="mt-2 max-h-40 overflow-y-auto space-y-1">
+        {gaps.map((g) => {
+          const day = new Date(`${g.block_date}T00:00:00`).toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short' })
+          return (
+            <li key={g.block_id} className="flex items-center justify-between gap-2 text-xs">
+              <span className="text-un1t-text truncate">
+                {day} · {formatTime(g.start_time)} {g.name}
+              </span>
+              <span
+                className={`flex-shrink-0 px-1.5 py-0.5 rounded font-medium ${g.status === 'empty' ? 'bg-red-500/10 text-red-700' : 'bg-amber-500/10 text-amber-700'}`}
+              >
+                {g.status === 'empty' ? 'No coach' : `${g.count} of ${g.min}`}
+              </span>
+            </li>
+          )
+        })}
+      </ul>
+    </div>
   )
 }
 
