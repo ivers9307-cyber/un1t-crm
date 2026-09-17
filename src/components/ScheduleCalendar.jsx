@@ -44,6 +44,7 @@ import { blocksToShiftRows } from '@/lib/roster-summary'
 // two more in the manager screens. NOT fmtTime: see the note beside it.
 import { coachConflictsForBlock, formatTime12h as formatTime } from '@/lib/schedule-overlap'
 import Modal from '@/components/ui/Modal'
+import { COPY_MODE_OPTIONS, copyResultToast } from '@/lib/roster-copy'
 import RosterSummaryPanel from './RosterSummaryPanel'
 import ScheduleErrorBanner from './schedule/ScheduleErrorBanner'
 // ROSTER-FIX.6a — the six-endpoint fan-out, its error handling and its
@@ -164,6 +165,9 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
   const [createTarget, setCreateTarget] = useState(null) // { date } when adding an ad-hoc block
   const [publishing, setPublishing] = useState(false)
   const [copying, setCopying] = useState(false)
+  // COPYMODES.1 — { period: 'week'|'month', sourceLabel, targetLabel, source, target }
+  // while the operator is choosing Exact copy vs From templates.
+  const [copyModal, setCopyModal] = useState(null)
   const [swapModal, setSwapModal] = useState(null) // legacy shift-shaped row to swap
   const [publishModal, setPublishModal] = useState(null) // { week, month: {start,end,label}, defaultScope }
   // SCHEDULE-PUBLISH-GUARD.1 — roster edits made since the last publish.
@@ -696,38 +700,20 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
     }
   }
 
-  async function handleCopyWeek() {
+  // COPYMODES.1 — both copy buttons open a chooser (Exact copy / From
+  // templates) instead of a confirm(); the chosen mode is POSTed.
+  function handleCopyWeek() {
     const prevWeekStart = addDays(weekStart, -7)
-    if (!confirm(`Copy last week's roster (${formatDate(prevWeekStart)}) to this week? Coaches already on this week keep their times.`)) return
-    setCopying(true)
-    // copy-week writes shift_blocks + shift_assignments directly
-    // (RETIRE-SHIFTS-MIRROR.5b); the legacy public.shifts table is gone.
-    try {
-      const res = await fetch('/api/schedule/shifts/copy-week', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          location_id: locationId,
-          source_start: formatDate(prevWeekStart),
-          target_start: formatDate(weekStart),
-        }),
-      })
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok || !data.success) {
-        showToast(data.error || 'Failed to copy week')
-        return
-      }
-      refreshAfterMutation()
-    } catch {
-      showToast('Network error, please try again')
-    } finally {
-      // ROSTER-FIX.6a — setCopying(false) used to sit on the happy path, so a
-      // thrown fetch left both copy buttons disabled until a full reload.
-      setCopying(false)
-    }
+    setCopyModal({
+      period: 'week',
+      sourceLabel: `the week of ${formatDate(prevWeekStart)}`,
+      targetLabel: 'this week',
+      source: formatDate(prevWeekStart),
+      target: formatDate(weekStart),
+    })
   }
 
-  async function handleCopyMonth() {
+  function handleCopyMonth() {
     // Both buttons are shown in week view too, so derive the
     // effective month from whichever primary state the operator is
     // working in. Without this, clicking "Copy Last Month" from
@@ -737,34 +723,45 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
     // see handlePublishClick. On the week of Mon 31 Aug 2026 this used to copy
     // into August while the header said September.
     const effectiveMonthStart = viewType === 'month' ? monthStart : monthStartForWeek(weekStart)
-    const targetLabel = effectiveMonthStart.toLocaleDateString('en-IE', { month: 'long', year: 'numeric' })
     const prevMonthStart = addMonths(effectiveMonthStart, -1)
-    const sourceLabel = prevMonthStart.toLocaleDateString('en-IE', { month: 'long', year: 'numeric' })
-    if (!confirm(`Copy last month's roster (${sourceLabel}) to ${targetLabel}? Coaches already on ${targetLabel} keep their times.`)) return
+    setCopyModal({
+      period: 'month',
+      sourceLabel: prevMonthStart.toLocaleDateString('en-IE', { month: 'long', year: 'numeric' }),
+      targetLabel: effectiveMonthStart.toLocaleDateString('en-IE', { month: 'long', year: 'numeric' }),
+      source: formatDate(prevMonthStart),
+      target: formatDate(effectiveMonthStart),
+    })
+  }
+
+  async function runCopy(mode) {
+    const job = copyModal
+    if (!job || copying) return
+    setCopyModal(null)
     setCopying(true)
+    // copy-week / copy-month write shift_blocks + shift_assignments directly
+    // (RETIRE-SHIFTS-MIRROR.5b); the legacy public.shifts table is gone.
+    const isWeek = job.period === 'week'
     try {
-      const res = await fetch('/api/schedule/shifts/copy-month', {
+      const res = await fetch(isWeek ? '/api/schedule/shifts/copy-week' : '/api/schedule/shifts/copy-month', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          location_id: locationId,
-          source_month_start: formatDate(prevMonthStart),
-          target_month_start: formatDate(effectiveMonthStart),
-        }),
+        body: JSON.stringify(isWeek
+          ? { location_id: locationId, source_start: job.source, target_start: job.target, mode }
+          : { location_id: locationId, source_month_start: job.source, target_month_start: job.target, mode }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok || !data.success) {
-        showToast(data.error || 'Failed to copy month')
+        showToast(data.error || (isWeek ? 'Failed to copy week' : 'Failed to copy month'))
         return
       }
-      const skipped = data.skipped || 0
-      if (skipped > 0) {
-        showToast(`Copied ${data.copied} shifts. ${skipped} skipped, that day of the month does not exist in the target (usually 31 Jan into Feb).`, 'warning')
-      }
+      const result = copyResultToast({ period: job.period, mode, copied: data.copied, skipped: data.skipped })
+      showToast(result.message, result.kind)
       refreshAfterMutation()
     } catch {
       showToast('Network error, please try again')
     } finally {
+      // ROSTER-FIX.6a — setCopying(false) used to sit on the happy path, so a
+      // thrown fetch left both copy buttons disabled until a full reload.
       setCopying(false)
     }
   }
@@ -1541,6 +1538,15 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
         />
       )}
 
+      {/* COPYMODES.1 — Copy Last Week / Copy Last Month chooser */}
+      {copyModal && (
+        <CopyRosterModal
+          job={copyModal}
+          onChoose={runCopy}
+          onClose={() => setCopyModal(null)}
+        />
+      )}
+
       {/* Publish Roster Modal — phase 5 */}
       {publishModal && (
         <PublishRosterModal
@@ -1637,6 +1643,47 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
 // /assignments POST whose response shape lists per-coach outcomes
 // so 'one of these is already assigned' becomes a footnote in the
 // confirmation rather than an interruption.
+// COPYMODES.1 — "Exact copy" (a carbon copy of the source period) vs "From
+// templates" (the same coaches on each template slot at its defined times).
+// Choosing an option runs the copy straight away; Cancel / Esc do nothing.
+function CopyRosterModal({ job, onChoose, onClose }) {
+  const title = job.period === 'week' ? 'Copy last week' : 'Copy last month'
+  return (
+    <Modal open onClose={onClose} title={title} size="sm">
+      <div>
+        <p className="text-sm text-un1t-text mb-3">
+          Copy {job.sourceLabel} into {job.targetLabel}.
+        </p>
+        <div className="space-y-2">
+          {COPY_MODE_OPTIONS.map((opt) => (
+            <button
+              key={opt.mode}
+              type="button"
+              onClick={() => onChoose(opt.mode)}
+              className="w-full text-left rounded-lg border border-un1t-border bg-un1t-surface px-3 py-2.5 hover:border-un1t-text/40 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-un1t-accent"
+            >
+              <div className="text-sm font-medium text-un1t-text">{opt.label}</div>
+              <div className="text-xs text-un1t-subtle mt-0.5">{opt.description}</div>
+            </button>
+          ))}
+        </div>
+        <p className="text-xs text-un1t-subtle mt-3">
+          Coaches already on {job.targetLabel} keep their times.
+        </p>
+        <div className="flex justify-end mt-4">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-3 py-2 rounded-md text-sm border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
 function AssignCoachModal({ block, staff, blocks, timeOff, onAssign, onClose, restoreFocusRef }) {
   const [selectedIds, setSelectedIds] = useState(() => new Set())
   const [saving, setSaving] = useState(false)

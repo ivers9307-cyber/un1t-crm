@@ -216,6 +216,8 @@ describe('per-period unpublished-changes guard (ROSTER-FIX.6a)', () => {
     await waitFor(() => expect(screen.queryByText(/Loading roster/)).toBeNull())
     // Copy last week is a real mutation, so it marks the visible week dirty.
     fireEvent.click(screen.getByText('Copy Last Week'))
+    // COPYMODES.1 — the copy now asks which kind of copy first.
+    fireEvent.click(await screen.findByText('Exact copy'))
     // The period is marked dirty only after the post-mutation refetch resolves,
     // so wait for the SECOND blocks read, not just the copy-week POST.
     const blockReads = () => global.fetch.mock.calls.filter(c => String(c[0]).includes('/schedule/blocks')).length
@@ -355,10 +357,12 @@ describe('toasts (ROSTER-FIX.6a-8)', () => {
     await renderReady()
 
     fireEvent.click(screen.getByText('Copy Last Month'))
+    fireEvent.click(await screen.findByText('Exact copy'))
     await waitFor(() => expect(screen.getByText('Copy failed')).toBeTruthy())
     const firstId = document.querySelector('[data-toast-id]').getAttribute('data-toast-id')
 
     fireEvent.click(screen.getByText('Copy Last Month'))
+    fireEvent.click(await screen.findByText('Exact copy'))
     await waitFor(() =>
       expect(document.querySelector('[data-toast-id]').getAttribute('data-toast-id')).not.toBe(firstId)
     )
@@ -374,6 +378,7 @@ describe('toasts (ROSTER-FIX.6a-8)', () => {
       await renderReady()
 
       fireEvent.click(screen.getByText('Copy Last Month'))
+      fireEvent.click(await screen.findByText('Exact copy'))
       await waitFor(() => expect(screen.getByText(/1 skipped/)).toBeTruthy())
 
       await act(async () => { await vi.advanceTimersByTimeAsync(6001) })
@@ -390,6 +395,7 @@ describe('toasts (ROSTER-FIX.6a-8)', () => {
       await renderReady()
 
       fireEvent.click(screen.getByText('Copy Last Month'))
+      fireEvent.click(await screen.findByText('Exact copy'))
       await waitFor(() => expect(screen.getByText('Copy failed')).toBeTruthy())
 
       // A failed mutation is still the operator's to act on, so it must not
@@ -430,9 +436,10 @@ describe('one month rule across toggle, publish and copy (ROSTER-FIX.6a-9)', () 
   it('Copy Last Month targets September and reads from August', async () => {
     await renderStraddlingWeek()
     fireEvent.click(screen.getByText('Copy Last Month'))
-    expect(window.confirm).toHaveBeenCalledWith(
-      "Copy last month's roster (August 2026) to September 2026? Coaches already on September 2026 keep their times."
-    )
+    expect(await screen.findByText('Copy August 2026 into September 2026.')).toBeTruthy()
+    expect(screen.getByText('Coaches already on September 2026 keep their times.')).toBeTruthy()
+    // COPYMODES.1 — the chooser, not confirm(), gates the copy.
+    expect(window.confirm).not.toHaveBeenCalled()
   })
 
   it('the Month toggle agrees with both', async () => {
@@ -467,6 +474,7 @@ describe('the banner says when it is covering stale data (ROSTER-FIX.6a-9)', () 
 
     // A mutation refetches the SAME week; that refetch fails.
     fireEvent.click(screen.getByText('Copy Last Week'))
+    fireEvent.click(await screen.findByText('Exact copy'))
     await waitFor(() => expect(screen.getByText('Could not load the roster')).toBeTruthy())
     expect(screen.getByText(STALE_LINE)).toBeTruthy()
   })
@@ -476,5 +484,65 @@ describe('the banner says when it is covering stale data (ROSTER-FIX.6a-9)', () 
     render(<ScheduleCalendar user={user} />)
     await waitFor(() => expect(screen.getByText('Could not load the roster')).toBeTruthy())
     expect(screen.queryByText(STALE_LINE)).toBeNull()
+  })
+})
+
+// COPYMODES.1 — Copy Last Week / Copy Last Month offer Exact copy vs From
+// templates, and POST the chosen mode.
+describe('copy chooser (COPYMODES.1)', () => {
+  function copyFetch(answer) {
+    return vi.fn(async (url) => {
+      const u = String(url)
+      if (u.includes('/copy-week') || u.includes('/copy-month')) return answer()
+      if (u.includes('contractor-spend')) return okResponse({ success: true, data: {} })
+      return okResponse({ data: [] })
+    })
+  }
+  const copyCalls = () => global.fetch.mock.calls.filter(([u]) => /copy-(week|month)/.test(String(u)))
+
+  async function renderReady() {
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    render(<ScheduleCalendar user={user} />)
+    await waitFor(() => expect(screen.queryByText(/Loading roster/)).toBeNull())
+  }
+
+  it('offers both modes with their explanations and posts nothing until one is chosen', async () => {
+    global.fetch = copyFetch(() => okResponse({ success: true, copied: 0, skipped: 0 }))
+    await renderReady()
+    fireEvent.click(screen.getByText('Copy Last Week'))
+    expect(await screen.findByText('Copies every shift, coach and time exactly as they were.')).toBeTruthy()
+    expect(screen.getByText("Puts the same coaches on each shift at its template times; one-off time changes aren't copied.")).toBeTruthy()
+    expect(screen.getByText('Coaches already on this week keep their times.')).toBeTruthy()
+    for (const label of ['Exact copy', 'From templates', 'Cancel']) {
+      expect(screen.getByText(label).closest('button').getAttribute('type')).toBe('button')
+    }
+    expect(window.confirm).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByText('Cancel'))
+    await waitFor(() => expect(screen.queryByText('From templates')).toBeNull())
+    expect(copyCalls()).toHaveLength(0)
+  })
+
+  it('posts mode=template for a week and toasts the copied and skipped counts', async () => {
+    global.fetch = copyFetch(() => okResponse({ success: true, copied: 4, skipped: 2, mode: 'template' }))
+    await renderReady()
+    fireEvent.click(screen.getByText('Copy Last Week'))
+    fireEvent.click(await screen.findByText('From templates'))
+    await waitFor(() => expect(copyCalls()).toHaveLength(1))
+    const [url, opts] = copyCalls()[0]
+    expect(String(url)).toContain('/copy-week')
+    expect(JSON.parse(opts.body)).toMatchObject({ mode: 'template' })
+    expect(await screen.findByText(/Copied 4 shifts\. 2 skipped, their template is inactive/)).toBeTruthy()
+  })
+
+  it('posts mode=exact for a month and reports a clean copy as a success', async () => {
+    global.fetch = copyFetch(() => okResponse({ success: true, copied: 7, skipped: 0, mode: 'exact' }))
+    await renderReady()
+    fireEvent.click(screen.getByText('Copy Last Month'))
+    fireEvent.click(await screen.findByText('Exact copy'))
+    await waitFor(() => expect(copyCalls()).toHaveLength(1))
+    const [url, opts] = copyCalls()[0]
+    expect(String(url)).toContain('/copy-month')
+    expect(JSON.parse(opts.body)).toMatchObject({ mode: 'exact' })
+    expect(await screen.findByText('Copied 7 shifts.')).toBeTruthy()
   })
 })

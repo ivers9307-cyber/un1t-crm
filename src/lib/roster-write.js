@@ -173,15 +173,48 @@ export async function upsertShiftAssignment(db, input) {
 }
 
 /**
+ * COPYMODES.1 — does an absolute time differ from a block's time? Postgres
+ * `time` renders as HH:MM:SS; a client may send HH:MM. Pure, exported for tests.
+ */
+export function timesDiffer(a, b) {
+  const norm = (t) => {
+    if (t == null || t === '') return null
+    const s = String(t)
+    return s.length === 5 ? `${s}:00` : s.slice(0, 8)
+  }
+  return norm(a) !== norm(b)
+}
+
+/**
+ * COPYMODES.1 — the override a coach needs so that their effective time on
+ * `blockTime` is `time`: null when they already match (or no time is known).
+ * Pure, exported for tests.
+ */
+export function overrideAgainstBlock(time, blockTime) {
+  if (time == null || time === '') return null
+  return timesDiffer(time, blockTime) ? time : null
+}
+
+// Writes are chunked so no single statement returns more than the 1,000-row
+// cap (the inserted-row count is read back from `.select('id')`).
+const WRITE_CHUNK = 500
+const READ_PAGE = 1000
+
+function chunk(list, size) {
+  const out = []
+  for (let i = 0; i < list.length; i += size) out.push(list.slice(i, i + size))
+  return out
+}
+
+/**
  * Batch version of upsertShiftAssignment for the copy-week / copy-month
  * routes (RETIRE-SHIFTS-MIRROR.5b). Replaces a single bulk
  * `upsert into public.shifts` — find-or-create every needed block once,
- * then upsert all assignments in one statement, instead of one
+ * then upsert all assignments in batched statements, instead of one
  * round-trip trio per row.
  *
  * All rows must share a single locationId (the copy routes are
- * per-location). Overrides ride on the assignment (mig 100); new blocks
- * are created at template default times.
+ * per-location). Overrides ride on the assignment (mig 100).
  *
  * COPYFIX.1 — the assignment upsert is `ON CONFLICT DO NOTHING`
  * (`ignoreDuplicates: true`), so a coach already on the target block is
@@ -192,6 +225,20 @@ export async function upsertShiftAssignment(db, input) {
  * payload sent — a re-run over an already-copied period reports 0, not
  * the number it silently re-wrote.
  *
+ * COPYMODES.1 —
+ *  - `blocks` (optional) lists target blocks to ensure even with nobody on
+ *    them; an entry's startTime/endTime/minCoaches/maxCoaches seed the block
+ *    IF it has to be created. An existing block is never modified. Blocks
+ *    created only because a row needs them take the template's defaults.
+ *  - min_coaches is now written on created blocks (it used to fall to the DB
+ *    default of 1 whatever the template said).
+ *  - A row may give ABSOLUTE `startTime`/`endTime` (the time the coach should
+ *    work) instead of `startTimeOverride`/`endTimeOverride`; the override is
+ *    then derived against the target block's actual time, so a block created
+ *    at the source's times carries no redundant override and a pre-existing
+ *    block at template times carries exactly the difference.
+ *  - `partialReason` rides along to shift_assignments.partial_reason.
+ *
  * @param {import('@supabase/supabase-js').SupabaseClient} db service-role client
  * @param {object} opts
  * @param {string} opts.locationId
@@ -200,24 +247,39 @@ export async function upsertShiftAssignment(db, input) {
  *   profileId: string,
  *   shiftTemplateId: string,
  *   shiftDate: string,
+ *   startTime?: string|null,
+ *   endTime?: string|null,
  *   startTimeOverride?: string|null,
  *   endTimeOverride?: string|null,
+ *   partialReason?: string|null,
  *   notes?: string|null,
  *   status?: string,
  * }>} opts.rows
+ * @param {Array<{
+ *   shiftTemplateId: string,
+ *   shiftDate: string,
+ *   startTime?: string|null,
+ *   endTime?: string|null,
+ *   minCoaches?: number|null,
+ *   maxCoaches?: number|null,
+ * }>} [opts.blocks]
  * @returns {Promise<{ count: number, error: object|null }>}
  */
-export async function bulkUpsertShiftAssignments(db, { locationId, actorId = null, rows }) {
+export async function bulkUpsertShiftAssignments(db, { locationId, actorId = null, rows, blocks = [] }) {
   if (!locationId) return { count: 0, error: { message: 'locationId is required' } }
-  if (!Array.isArray(rows) || rows.length === 0) return { count: 0, error: null }
+  const safeRows = Array.isArray(rows) ? rows : []
+  const safeBlocks = Array.isArray(blocks) ? blocks : []
+  if (safeRows.length === 0 && safeBlocks.length === 0) return { count: 0, error: null }
+
+  const slots = [...safeRows, ...safeBlocks]
 
   // 1. Template defaults for every distinct template referenced.
-  const templateIds = [...new Set(rows.map((r) => r.shiftTemplateId))]
+  const templateIds = [...new Set(slots.map((r) => r.shiftTemplateId))]
   // ROSTER-FIX.4 (SAAS-1) — scoped to the location like the single-row path:
   // without it a copied row could seed a block from another tenant's template.
   const { data: templates, error: tErr } = await db
     .from('shift_templates')
-    .select('id, start_time, end_time, max_coaches')
+    .select('id, start_time, end_time, min_coaches, max_coaches')
     .in('id', templateIds)
     .eq('location_id', locationId)
   if (tErr) return { count: 0, error: tErr }
@@ -225,29 +287,41 @@ export async function bulkUpsertShiftAssignments(db, { locationId, actorId = nul
   const missing = templateIds.filter((id) => !tplById.has(id))
   if (missing.length > 0) return { count: 0, error: { message: `shift_template not found: ${missing.join(', ')}` } }
 
-  // 2. Find existing blocks covering the needed (template, date) slots.
-  const dates = rows.map((r) => r.shiftDate)
+  // 2. Find existing blocks covering the needed (template, date) slots. Paged:
+  //    a month of blocks can pass the 1,000-row select cap, and a block we
+  //    fail to see would be re-inserted into the unique key and fail the copy.
+  const dates = slots.map((r) => r.shiftDate)
   const minDate = dates.reduce((a, b) => (a < b ? a : b))
   const maxDate = dates.reduce((a, b) => (a > b ? a : b))
-  const { data: existingBlocks, error: bErr } = await db
-    .from('shift_blocks')
-    .select('id, template_id, block_date')
-    .eq('location_id', locationId)
-    .in('template_id', templateIds)
-    .gte('block_date', minDate)
-    .lte('block_date', maxDate)
-  if (bErr) return { count: 0, error: bErr }
-  const blockIdByKey = new Map((existingBlocks || []).map((b) => [`${b.template_id}|${b.block_date}`, b.id]))
+  const blockByKey = new Map()
+  for (let from = 0; ; from += READ_PAGE) {
+    const { data: page, error: bErr } = await db
+      .from('shift_blocks')
+      .select('id, template_id, block_date, start_time, end_time')
+      .eq('location_id', locationId)
+      .in('template_id', templateIds)
+      .gte('block_date', minDate)
+      .lte('block_date', maxDate)
+      .order('id', { ascending: true })
+      .range(from, from + READ_PAGE - 1)
+    if (bErr) return { count: 0, error: bErr }
+    for (const b of page || []) blockByKey.set(`${b.template_id}|${b.block_date}`, b)
+    if ((page || []).length < READ_PAGE) break
+  }
 
-  // 3. Create blocks for the slots that don't exist yet (template defaults).
-  const neededKeys = new Set(rows.map((r) => `${r.shiftTemplateId}|${r.shiftDate}`))
-  const toCreate = []
+  // 3. Create blocks for the slots that don't exist yet.
+  const specByKey = new Map()
+  for (const spec of safeBlocks) {
+    const key = `${spec.shiftTemplateId}|${spec.shiftDate}`
+    if (!specByKey.has(key)) specByKey.set(key, spec)
+  }
+  const neededKeys = new Set(slots.map((r) => `${r.shiftTemplateId}|${r.shiftDate}`))
   // ROSTER-FIX.4 — same rule as upsertShiftAssignment: a block created inside
   // an already-published period joins that roster, or copy-week silently
   // produces shifts no coach can see. Resolved for the WHOLE span in one query
   // (the block lookup above already reads that span) and matched per date in
   // JS — a copy-month was otherwise firing up to 31 identical-shaped probes.
-  const missingKeys = [...neededKeys].filter((key) => !blockIdByKey.has(key))
+  const missingKeys = [...neededKeys].filter((key) => !blockByKey.has(key))
   const candidateRosters = missingKeys.length > 0
     ? await publishedRostersCovering(db, locationId, minDate, maxDate)
     : []
@@ -255,42 +329,54 @@ export async function bulkUpsertShiftAssignments(db, { locationId, actorId = nul
   // is the roster that owns it.
   const rosterIdFor = (date) => candidateRosters
     .find((r) => r.period_start <= date && r.period_end >= date)?.id ?? null
+  const toCreate = []
   for (const key of missingKeys) {
     const [templateId, blockDate] = key.split('|')
     const tpl = tplById.get(templateId)
+    const spec = specByKey.get(key) || {}
+    const maxCoaches = spec.maxCoaches ?? tpl.max_coaches ?? 15
+    // shift_blocks_min_coaches_check (mig 177): 0 <= min <= max.
+    const minCoaches = Math.max(0, Math.min(spec.minCoaches ?? tpl.min_coaches ?? 1, maxCoaches))
     toCreate.push({
       location_id: locationId,
       template_id: templateId,
       block_date: blockDate,
-      start_time: tpl.start_time,
-      end_time: tpl.end_time,
-      max_coaches: tpl.max_coaches ?? 15,
+      start_time: spec.startTime || tpl.start_time,
+      end_time: spec.endTime || tpl.end_time,
+      min_coaches: minCoaches,
+      max_coaches: maxCoaches,
       roster_id: rosterIdFor(blockDate),
       created_by: actorId,
     })
   }
-  if (toCreate.length > 0) {
+  for (const batch of chunk(toCreate, WRITE_CHUNK)) {
     const { data: created, error: cErr } = await db
       .from('shift_blocks')
-      .insert(toCreate)
-      .select('id, template_id, block_date')
+      .insert(batch)
+      .select('id, template_id, block_date, start_time, end_time')
     if (cErr) return { count: 0, error: cErr }
-    for (const b of created || []) blockIdByKey.set(`${b.template_id}|${b.block_date}`, b.id)
+    for (const b of created || []) blockByKey.set(`${b.template_id}|${b.block_date}`, b)
   }
 
   // 4. Build assignment rows, dedup on (block, profile) so a single
   //    upsert statement can't hit the same conflict key twice.
   const assignmentByKey = new Map()
-  for (const r of rows) {
-    const blockId = blockIdByKey.get(`${r.shiftTemplateId}|${r.shiftDate}`)
-    if (!blockId) continue
-    assignmentByKey.set(`${blockId}|${r.profileId}`, {
-      block_id: blockId,
+  for (const r of safeRows) {
+    const block = blockByKey.get(`${r.shiftTemplateId}|${r.shiftDate}`)
+    if (!block) continue
+    const absolute = r.startTime !== undefined || r.endTime !== undefined
+    assignmentByKey.set(`${block.id}|${r.profileId}`, {
+      block_id: block.id,
       profile_id: r.profileId,
       notes: r.notes ?? null,
+      partial_reason: r.partialReason ?? null,
       status: r.status ?? 'scheduled',
-      start_time_override: r.startTimeOverride ?? null,
-      end_time_override: r.endTimeOverride ?? null,
+      start_time_override: absolute
+        ? overrideAgainstBlock(r.startTime, block.start_time)
+        : (r.startTimeOverride ?? null),
+      end_time_override: absolute
+        ? overrideAgainstBlock(r.endTime, block.end_time)
+        : (r.endTimeOverride ?? null),
       assigned_by: actorId,
     })
   }
@@ -302,11 +388,15 @@ export async function bulkUpsertShiftAssignments(db, { locationId, actorId = nul
   // status, or overwrite assigned_by. `.select('id')` reports only the rows
   // actually inserted, so `count` is accurate even when some rows were
   // skipped as duplicates.
-  const { data: inserted, error: aErr } = await db
-    .from('shift_assignments')
-    .upsert(assignmentRows, { onConflict: 'block_id,profile_id', ignoreDuplicates: true })
-    .select('id')
-  if (aErr) return { count: 0, error: aErr }
+  let count = 0
+  for (const batch of chunk(assignmentRows, WRITE_CHUNK)) {
+    const { data: inserted, error: aErr } = await db
+      .from('shift_assignments')
+      .upsert(batch, { onConflict: 'block_id,profile_id', ignoreDuplicates: true })
+      .select('id')
+    if (aErr) return { count, error: aErr }
+    count += (inserted || []).length
+  }
 
-  return { count: (inserted || []).length, error: null }
+  return { count, error: null }
 }

@@ -4322,6 +4322,64 @@ registry.registerPath({
   },
 })
 
+// COPYMODES.1 — copy a roster week / month forward, as a carbon copy or from
+// the templates.
+const CopyModeField = z.enum(['exact', 'template']).default('exact').openapi({
+  description: "'exact' (default; a missing mode means exact): every live source assignment lands with the times it actually had, its notes and partial_reason, and every staffed source block is ensured on the target, and an empty one where its template runs on the target weekday — a block that has to be created takes the source block's times and min/max coaches. 'template': the same coaches go onto the same template slot at the template's defined times (an override is written only where the target block was hand-edited away from them), with no notes or partial_reason; a coach on a template that is now inactive, or no longer runs that weekday, is skipped and counted.",
+})
+const CopyShiftsResponse = z.object({
+  success: z.literal(true),
+  copied: z.number().int().openapi({ description: 'Assignments actually inserted. A coach already on the target is never overwritten (COPYFIX.1), so a re-run reports 0.' }),
+  skipped: z.number().int().optional().openapi({ description: 'Live source assignments not copied (no matching target day, or an inactive / off-day template in template mode).' }),
+  mode: z.enum(['exact', 'template']),
+}).openapi('CopyShiftsResponse')
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/schedule/shifts/copy-week',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Copy a roster week into another week (manager-only)',
+  description: 'Copies source_start (a Monday) + 6 days onto target_start, weekday for weekday. Insert-only: coaches already on the target keep their times. Coaches copied onto an already-published week are change-logged and notified after the response (NOTIFY.1) — also on a 400 from a write that failed part-way, for the coaches that did land. Cancelled assignments are never copied; everything copied is inserted as scheduled.',
+  request: {
+    body: { content: { 'application/json': { schema: z.object({
+      location_id: z.string(),
+      source_start: z.string().openapi({ description: 'YYYY-MM-DD (Monday)' }),
+      target_start: z.string().openapi({ description: 'YYYY-MM-DD (Monday)' }),
+      mode: CopyModeField,
+    }).openapi('CopyWeekRequest') } } },
+  },
+  responses: {
+    201: { description: 'Copied', content: { 'application/json': { schema: CopyShiftsResponse } } },
+    400: { description: 'Validation error, or the read/write failed (writes are batched, so some coaches may have landed; re-running is safe)', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — needs a manager role at that location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No shifts in the source week', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/schedule/shifts/copy-month',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Copy a roster month into another month (manager-only)',
+  description: "Both dates must be the 1st of a month. Exact mode maps each day to the same day-of-month (31 Jan into Feb is skipped). Template mode maps the Nth weekday to the Nth weekday (first Monday to first Monday) so coaches stay on the same template slot; a 5th weekday the target month lacks is skipped. Insert-only, as copy-week. copied 0 with skipped > 0 means every source coach was skipped.",
+  request: {
+    body: { content: { 'application/json': { schema: z.object({
+      location_id: z.string(),
+      source_month_start: z.string().openapi({ description: 'YYYY-MM-01' }),
+      target_month_start: z.string().openapi({ description: 'YYYY-MM-01' }),
+      mode: CopyModeField,
+    }).openapi('CopyMonthRequest') } } },
+  },
+  responses: {
+    201: { description: 'Copied', content: { 'application/json': { schema: CopyShiftsResponse } } },
+    400: { description: 'Validation error, dates not the 1st, or the read/write failed', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — needs a manager role at that location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No shifts in the source month', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // ROSTER-FIX.6c — the FTE weekly-hours panel's arithmetic, moved off the
 // browser. The panel prints hours, never money, so the payload carries hours
 // and the rates stay on the server.

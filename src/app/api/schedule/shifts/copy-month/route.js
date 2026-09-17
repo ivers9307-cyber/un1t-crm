@@ -5,7 +5,7 @@
 // button — the most common case is "rinse and repeat last month's
 // roster, then tweak".
 //
-// Body: { location_id, source_month_start, target_month_start }
+// Body: { location_id, source_month_start, target_month_start, mode? }
 //   - both must be the FIRST of a calendar month (YYYY-MM-01).
 //   - the date range copied is source_month_start through the last
 //     day of THAT month (28-31 days depending on month / leap year).
@@ -22,6 +22,12 @@
 // Skipping is the safest default; the alternative (clamp to
 // end-of-month) would silently bunch multiple source shifts onto
 // Feb 28, which is rarely what an operator wants.
+//
+// COPYMODES.1 — that day-of-month mapping is the EXACT mode's. In TEMPLATE
+// mode a coach belongs to a template slot (template + weekday), so the Nth
+// weekday maps to the Nth weekday instead (first Monday -> first Monday; a
+// 5th Monday the target lacks is skipped). Day-of-month would move a Monday
+// slot's coach onto a Thursday, where that template mostly doesn't run.
 //
 // Idempotency (COPYFIX.1)
 // -----------------------
@@ -40,7 +46,7 @@ import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, isoDate, MANAGER_ROLES } from '@/lib/schemas'
 import { bulkUpsertShiftAssignments } from '@/lib/roster-write'
-import { fetchSourceShiftRows } from '@/lib/roster-read'
+import { fetchSourceBlocks, buildCopyPlan, mapNthWeekdayOfMonth, COPY_MODES } from '@/lib/roster-copy'
 import { readAssignmentKeysInRange, logAndNotifyCopiedShifts } from '@/lib/roster-change-notify'
 
 export const runtime = 'nodejs'
@@ -51,6 +57,8 @@ const CopyMonthSchema = z.object({
   location_id: uuidLike,
   source_month_start: isoDate,
   target_month_start: isoDate,
+  // COPYMODES.1 — see copy-week. Missing = 'exact', today's behaviour.
+  mode: z.enum(COPY_MODES).default('exact'),
 })
 
 /**
@@ -92,7 +100,7 @@ export async function POST(request) {
 
   const validation = await validateBody(request, CopyMonthSchema)
   if (!validation.ok) return validation.response
-  const { location_id, source_month_start, target_month_start } = validation.data
+  const { location_id, source_month_start, target_month_start, mode } = validation.data
 
   const guard = assertLocationAccess(user, location_id)
   if (guard) return guard
@@ -112,8 +120,9 @@ export async function POST(request) {
   const sourceLastDay = daysInMonth(source_month_start)
   const sourceEnd = `${source_month_start.slice(0, 7)}-${String(sourceLastDay).padStart(2, '0')}`
 
-  // Source rows from the Roster v2 model (blocks + assignments).
-  const { rows: sourceRows, error: fetchError } = await fetchSourceShiftRows(db, {
+  // Source blocks (with template + assignments) from the Roster v2 model.
+  // Paged, so a busy month is never cut at the 1,000-row select cap.
+  const { blocks: sourceBlocks, error: fetchError } = await fetchSourceBlocks(db, {
     locationId: location_id,
     startDate: source_month_start,
     endDate: sourceEnd,
@@ -121,57 +130,39 @@ export async function POST(request) {
 
   if (fetchError) return NextResponse.json({ success: false, error: fetchError.message }, { status: 400 })
 
-  if (!sourceRows || sourceRows.length === 0) {
+  // Map each source block's date into the target month; a day with no
+  // counterpart (e.g. Jan 31 -> Feb, or a 5th weekday in template mode) is
+  // dropped and its coaches are reported back as `skipped`.
+  const plan = buildCopyPlan(sourceBlocks, {
+    mode,
+    mapDate: mode === 'template'
+      ? (d) => mapNthWeekdayOfMonth(d, target_month_start)
+      : (d) => mapDayOfMonth(d, target_month_start),
+  })
+
+  if (plan.sourceAssignments === 0) {
     return NextResponse.json({ success: false, error: 'No shifts found in the source month' }, { status: 404 })
   }
 
-  // Map each source row's date to the target month, dropping ones
-  // that fall on a day-of-month that doesn't exist in the target
-  // (e.g. Jan 31 -> Feb).
-  const newRows = []
-  let skippedCount = 0
-  for (const r of sourceRows) {
-    const mappedDate = mapDayOfMonth(r.shiftDate, target_month_start)
-    if (mappedDate === null) {
-      skippedCount++
-      continue
-    }
-    newRows.push({
-      profileId: r.profileId,
-      shiftTemplateId: r.shiftTemplateId,
-      shiftDate: mappedDate,
-      startTimeOverride: r.startTimeOverride,
-      endTimeOverride: r.endTimeOverride,
-      notes: r.notes,
-      status: 'scheduled',
-    })
-  }
-
-  if (newRows.length === 0) {
-    return NextResponse.json({
-      success: true,
-      data: [],
-      copied: 0,
-      skipped: skippedCount,
-      message: skippedCount > 0
-        ? `Every source shift fell on a day-of-month that doesn't exist in the target (likely Feb).`
-        : 'No shifts to copy.',
-    })
+  // Every source coach was skipped and there is no block to ensure: nothing
+  // to write. Same 201 shape as a copy that wrote (and as copy-week), so the
+  // client reads copied/skipped the one way.
+  if (plan.rows.length === 0 && plan.blocks.length === 0) {
+    return NextResponse.json({ success: true, copied: 0, skipped: plan.skipped, mode }, { status: 201 })
   }
 
   // NOTIFY.1 — see copy-week.
   const targetEnd = `${target_month_start.slice(0, 7)}-${String(daysInMonth(target_month_start)).padStart(2, '0')}`
   const before = await readAssignmentKeysInRange(db, { locationId: location_id, startDate: target_month_start, endDate: targetEnd })
 
-  // Find-or-create blocks + upsert assignments (new model). A block created
+  // Find-or-create blocks + insert assignments (new model). A block created
   // inside an already-published period joins that roster (ROSTER-FIX.4).
   const { count, error } = await bulkUpsertShiftAssignments(db, {
     locationId: location_id,
     actorId: user.id,
-    rows: newRows,
+    rows: plan.rows,
+    blocks: plan.blocks,
   })
-
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
 
   // NOTIFY.1 review — see copy-week: the AFTER snapshot is read synchronously
   // here, right after the upsert commits, so it can't race a second copy onto
@@ -188,9 +179,17 @@ export async function POST(request) {
     via: 'copy_month',
   }))
 
+  // Review fix — the writer batches its inserts, so an error can arrive AFTER
+  // earlier batches committed. Those coaches are real and must still be logged
+  // and told: the snapshot + after() above run first, and the before/after
+  // diff only ever names what actually landed. A retry cannot catch them up,
+  // because its own before-snapshot already contains them.
+  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+
   return NextResponse.json({
     success: true,
     copied: count,
-    skipped: skippedCount,
+    skipped: plan.skipped,
+    mode,
   }, { status: 201 })
 }
