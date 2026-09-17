@@ -136,9 +136,7 @@ describe('POST /api/schedule/shifts/copy-week — NOTIFY.1', () => {
     const res = await POST(req({ location_id: LOC, source_start: '2026-06-01', target_start: '2026-06-08' }))
     const json = await res.json()
 
-    expect(bulkUpsertShiftAssignments).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      rows: expect.arrayContaining([expect.anything(), expect.anything()]),
-    }))
+    expect(bulkUpsertShiftAssignments.mock.calls[0][1].rows).toHaveLength(2)
     expect(json.copied).toBe(1)
   })
 })
