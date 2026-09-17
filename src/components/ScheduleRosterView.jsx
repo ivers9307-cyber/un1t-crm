@@ -5,7 +5,7 @@
 // root page as the default (non-reporting) view. Carries forward the
 // state ScheduleTabs used to own for this panel unchanged.
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import ScheduleCalendar from './ScheduleCalendar'
 import StudioOverviewStrip from './StudioOverviewStrip'
 import { MANAGER_ROLES } from '@/lib/schemas'
@@ -37,6 +37,21 @@ export default function ScheduleRosterView({ user }) {
     setScheduleDataVersion((v) => v + 1)
   }, [])
 
+  // CAL-UI-LOW.2 — a shift the overview strip names, handed to the
+  // calendar below. The strip knows the block id and the date; only the
+  // calendar can navigate to that date and open the block-detail dialog,
+  // and the two are siblings, so the request passes through here.
+  //
+  // The `seq` counter is what makes a REPEAT request work: asking for the
+  // same shift twice is two requests, and a payload compared by value
+  // would look unchanged the second time and do nothing.
+  const [shiftFocus, setShiftFocus] = useState(null)
+  const shiftFocusSeq = useRef(0)
+  const openShift = useCallback((date, blockId) => {
+    shiftFocusSeq.current += 1
+    setShiftFocus({ date, blockId, seq: shiftFocusSeq.current })
+  }, [])
+
   return (
     <>
       {/* Studio overview — demand-vs-supply summary scoped to whatever
@@ -46,12 +61,14 @@ export default function ScheduleRosterView({ user }) {
           range={scheduleRange}
           locationId={user.activeLocation.id}
           dataVersion={scheduleDataVersion}
+          onOpenShift={openShift}
         />
       )}
       <ScheduleCalendar
         user={user}
         onRangeChange={setScheduleRange}
         onDataChange={bumpDataVersion}
+        focusShift={shiftFocus}
       />
     </>
   )
