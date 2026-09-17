@@ -50,9 +50,14 @@ function calendarParts(input) {
   return { y: parsed.getFullYear(), m: parsed.getMonth() + 1, d: parsed.getDate() }
 }
 
-/** Day-of-week (Sun=0..Sat=6) of a calendar date, computed without a TZ. */
-function jsDayOf({ y, m, d }) {
-  return new Date(Date.UTC(y, m - 1, d)).getUTCDay()
+/**
+ * 'mon'..'sun' for calendar components, computed without a TZ. Date.UTC is a
+ * pure calendar calculation here — no local offset ever enters it.
+ */
+function dayCodeOfParts({ y, m, d }) {
+  // JS getUTCDay(): Sun=0, Mon=1, ..., Sat=6. Roll into Mon-first.
+  const jsDay = new Date(Date.UTC(y, m - 1, d)).getUTCDay()
+  return WEEKDAY_CODES[jsDay === 0 ? 6 : jsDay - 1]
 }
 
 /** Render calendar components as 'YYYY-MM-DD'. */
@@ -68,10 +73,7 @@ function partsToIso({ y, m, d }) {
 export function dayCodeForDate(input) {
   const parts = calendarParts(input)
   if (!parts) return undefined
-  // JS getDay(): Sun=0, Mon=1, ..., Sat=6. Roll into Mon-first.
-  const jsDay = jsDayOf(parts)
-  const monFirst = jsDay === 0 ? 6 : jsDay - 1
-  return WEEKDAY_CODES[monFirst]
+  return dayCodeOfParts(parts)
 }
 
 /**
@@ -255,10 +257,7 @@ export function expandDaysToDates(dayCodes, fromDate, toDate) {
   for (let t = Date.UTC(from.y, from.m - 1, from.d); t <= end; t += DAY_MS) {
     const cursor = new Date(t)
     const parts = { y: cursor.getUTCFullYear(), m: cursor.getUTCMonth() + 1, d: cursor.getUTCDate() }
-    const jsDay = cursor.getUTCDay()
-    if (set.has(WEEKDAY_CODES[jsDay === 0 ? 6 : jsDay - 1])) {
-      out.push(partsToIso(parts))
-    }
+    if (set.has(dayCodeOfParts(parts))) out.push(partsToIso(parts))
   }
   return out
 }

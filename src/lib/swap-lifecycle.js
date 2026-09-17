@@ -78,8 +78,8 @@ export function resolveSwapTransition({ swap, requestedStatus, user, userLocatio
   // exactly like an id that does not exist. Every branch below used to refuse
   // a stranger with a 403 whose wording ('Only the requester or a manager can
   // cancel', 'Not at this location', 'Only the taker can withdraw') confirmed
-  // the id was real and leaked which transition it was sitting on — an id
-  // oracle on a sequentially-probeable resource. Note the test is membership,
+  // the id was real and named the state it was sitting in — an id oracle, and
+  // a shape of one the house rule exists to close. Note the test is membership,
   // not authority: a member of the swap's studio who simply isn't allowed to
   // act still gets the honest 403 below, the same split
   // /api/schedule/assignments/[id] and /blocks/[id] use. isManager covers
