@@ -27,14 +27,30 @@ vi.mock('@/lib/push-dedup', () => ({
   notifyUsersOnce: vi.fn().mockResolvedValue(undefined),
   notifyUsersAtRolesOnce: vi.fn().mockResolvedValue(undefined),
 }))
-vi.mock('@/lib/roster-change-log', () => ({ logRosterChange: vi.fn().mockResolvedValue({ logged: true }) }))
+vi.mock('@/lib/roster-change-log', () => ({
+  logRosterChange: vi.fn().mockResolvedValue({ logged: true, id: 'log-1' }),
+  markChangesNotified: vi.fn().mockResolvedValue(undefined),
+}))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
+// SWAPNOTIFY.1 — the route now decides "draft or past shift" itself, so
+// dublinTodayStr has to be pinned rather than read off the real clock. Tests
+// that care about the boundary pass block dates far outside this value
+// (2099 / 2000) so the exact pin never matters to them.
+vi.mock('@/lib/dublin-time', () => ({ dublinTodayStr: vi.fn(() => '2026-06-15') }))
+// SWAPNOTIFY.1 — dispatchSwapNotifications now runs inside after() rather
+// than as an un-awaited promise. Mock next/server partially (keep the real
+// NextResponse) so after() runs its callback synchronously in tests.
+vi.mock('next/server', async (importOriginal) => {
+  const actual = await importOriginal()
+  return { ...actual, after: vi.fn((fn) => fn()) }
+})
 
 const { createServerClient } = await import('@/lib/supabase')
 const { getCurrentUser } = await import('@/lib/auth')
-const { logRosterChange } = await import('@/lib/roster-change-log')
+const { logRosterChange, markChangesNotified } = await import('@/lib/roster-change-log')
 const { logWarn } = await import('@/lib/log')
 const { notifyUsersOnce, notifyUsersAtRolesOnce } = await import('@/lib/push-dedup')
+const { after } = await import('next/server')
 const { PUT } = await import('./route.js')
 
 // The notification fan-out is fire-and-forget, so let it settle before
@@ -51,7 +67,7 @@ function req(body) {
 
 // A drop swap: no target_shift_id and no target_id, so the resolver's
 // approve branch returns assignmentOps: [{ id, delete: true }].
-function dropSwap(rosterStatus = 'published') {
+function dropSwap(rosterStatus = 'published', blockDate = '2026-06-10') {
   return {
     id: 'swap-1',
     status: 'pending',
@@ -67,7 +83,7 @@ function dropSwap(rosterStatus = 'published') {
       block: {
         id: 'block-1',
         location_id: 'loc-1',
-        block_date: '2026-06-10',
+        block_date: blockDate,
         rosters: rosterStatus ? { status: rosterStatus } : null,
       },
     },
@@ -117,10 +133,14 @@ beforeEach(() => {
   createServerClient.mockReset()
   getCurrentUser.mockReset()
   logRosterChange.mockClear()
-  logRosterChange.mockResolvedValue({ logged: true })
+  logRosterChange.mockResolvedValue({ logged: true, id: 'log-1' })
+  markChangesNotified.mockClear()
+  markChangesNotified.mockResolvedValue(undefined)
   logWarn.mockClear()
   notifyUsersOnce.mockClear()
+  notifyUsersOnce.mockResolvedValue(undefined)
   notifyUsersAtRolesOnce.mockClear()
+  after.mockClear()
 })
 
 describe('PUT /api/schedule/swaps/[id] — approved drop audit', () => {
@@ -249,5 +269,139 @@ describe('PUT /api/schedule/swaps/[id] — notifications reach people without th
     expect(decision[2]).toEqual([REQUESTER])
     expect(decision[3].category).toBe('swap')
     expect(decision[3].emailSubject).toBeTruthy()
+  })
+})
+
+// SWAPNOTIFY.1 — an approved drop used to write an unstamped
+// roster_change_log row. The next re-publish/approve covering that date
+// then found it via collectUnnotifiedChanges and sent a SECOND "Roster
+// updated" push on top of the "Swap approved" one this route already sends.
+// These pin: (a) the drop row is stamped by id the moment delivery is
+// confirmed, so the safety net never re-fires for it; (b) a draft roster or
+// a past shift is stamped UNCONDITIONALLY at write time, regardless of
+// delivery, since the coach must never get "Roster updated" for either;
+// (c) an opted-out/failed/deduped-only delivery leaves the row unstamped so
+// the schedule-category safety net can still reach an opted-out coach; (d)
+// the whole dispatch — and therefore any stamping — now runs inside
+// after(), and never at all when the assignment delete failed.
+describe('PUT /api/schedule/swaps/[id] — approved drop does not double-notify (SWAPNOTIFY.1)', () => {
+  const FUTURE = '2099-01-01'
+  const PAST = '2000-01-01'
+
+  it('stamps the drop row when the push is delivered (sent) on a published, future block', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    createServerClient.mockReturnValue(buildDb(dropSwap('published', FUTURE), []))
+    notifyUsersOnce.mockResolvedValueOnce({ sent: 1, emailed: 0, skipped: 0, failed: 0, deduped: 0 })
+
+    const res = await PUT(req({ status: 'approved' }), PROPS)
+    expect(res.status).toBe(200)
+    await flush()
+
+    expect(markChangesNotified).toHaveBeenCalledTimes(1)
+    expect(markChangesNotified.mock.calls[0][1]).toEqual(['log-1'])
+  })
+
+  it('stamps the drop row when delivered via the email fallback (emailed)', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    createServerClient.mockReturnValue(buildDb(dropSwap('published', FUTURE), []))
+    notifyUsersOnce.mockResolvedValueOnce({ sent: 0, emailed: 1, skipped: 0, failed: 0, deduped: 0 })
+
+    await PUT(req({ status: 'approved' }), PROPS)
+    await flush()
+
+    expect(markChangesNotified).toHaveBeenCalledTimes(1)
+    expect(markChangesNotified.mock.calls[0][1]).toEqual(['log-1'])
+  })
+
+  it('does NOT stamp when the requester opted out (skipped, nothing delivered)', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    createServerClient.mockReturnValue(buildDb(dropSwap('published', FUTURE), []))
+    notifyUsersOnce.mockResolvedValueOnce({ sent: 0, emailed: 0, skipped: 1, failed: 0, deduped: 0 })
+
+    await PUT(req({ status: 'approved' }), PROPS)
+    await flush()
+
+    expect(markChangesNotified).not.toHaveBeenCalled()
+  })
+
+  it('does NOT stamp when delivery failed', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    createServerClient.mockReturnValue(buildDb(dropSwap('published', FUTURE), []))
+    notifyUsersOnce.mockResolvedValueOnce({ sent: 0, emailed: 0, skipped: 0, failed: 1, deduped: 0 })
+
+    await PUT(req({ status: 'approved' }), PROPS)
+    await flush()
+
+    expect(markChangesNotified).not.toHaveBeenCalled()
+  })
+
+  it('does NOT stamp on a deduped-only result', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    createServerClient.mockReturnValue(buildDb(dropSwap('published', FUTURE), []))
+    notifyUsersOnce.mockResolvedValueOnce({ sent: 0, emailed: 0, skipped: 0, failed: 0, deduped: 1 })
+
+    await PUT(req({ status: 'approved' }), PROPS)
+    await flush()
+
+    expect(markChangesNotified).not.toHaveBeenCalled()
+  })
+
+  it('stamps a DRAFT roster drop unconditionally, even with nothing delivered', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    createServerClient.mockReturnValue(buildDb(dropSwap('draft', FUTURE), []))
+    notifyUsersOnce.mockResolvedValueOnce({ sent: 0, emailed: 0, skipped: 0, failed: 0, deduped: 0 })
+
+    const res = await PUT(req({ status: 'approved' }), PROPS)
+    expect(res.status).toBe(200)
+    await flush()
+
+    expect(markChangesNotified).toHaveBeenCalledTimes(1)
+    expect(markChangesNotified.mock.calls[0][1]).toEqual(['log-1'])
+  })
+
+  it('stamps a PAST block_date drop unconditionally, even with nothing delivered', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    createServerClient.mockReturnValue(buildDb(dropSwap('published', PAST), []))
+    notifyUsersOnce.mockResolvedValueOnce({ sent: 0, emailed: 0, skipped: 0, failed: 0, deduped: 0 })
+
+    await PUT(req({ status: 'approved' }), PROPS)
+    await flush()
+
+    expect(markChangesNotified).toHaveBeenCalledTimes(1)
+    expect(markChangesNotified.mock.calls[0][1]).toEqual(['log-1'])
+  })
+
+  it('does not stamp twice when the draft/past immediate stamp already covered it and delivery also succeeds', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    createServerClient.mockReturnValue(buildDb(dropSwap('draft', FUTURE), []))
+    notifyUsersOnce.mockResolvedValueOnce({ sent: 1, emailed: 0, skipped: 0, failed: 0, deduped: 0 })
+
+    await PUT(req({ status: 'approved' }), PROPS)
+    await flush()
+
+    expect(markChangesNotified).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not dispatch and does not stamp when the assignment delete fails', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    createServerClient.mockReturnValue(buildDb(dropSwap('published', FUTURE), [], { message: 'delete blew up' }))
+
+    const res = await PUT(req({ status: 'approved' }), PROPS)
+    expect(res.status).toBe(400)
+    await flush()
+
+    expect(notifyUsersOnce).not.toHaveBeenCalled()
+    expect(markChangesNotified).not.toHaveBeenCalled()
+  })
+
+  it('runs the dispatch inside after()', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    createServerClient.mockReturnValue(buildDb(dropSwap('published', FUTURE), []))
+    notifyUsersOnce.mockResolvedValueOnce({ sent: 1, emailed: 0, skipped: 0, failed: 0, deduped: 0 })
+
+    await PUT(req({ status: 'approved' }), PROPS)
+
+    expect(after).toHaveBeenCalledTimes(1)
+    expect(after.mock.calls[0][0]).toBeInstanceOf(Function)
   })
 })
