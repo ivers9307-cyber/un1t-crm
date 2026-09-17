@@ -175,6 +175,25 @@
 -- work and this comment is your starting point.
 --
 -- ===========================================================================
+-- LOCKOUT REVIEW (the question this migration could get fatally wrong)
+-- ===========================================================================
+-- * Does `TO public` → `TO authenticated` on strap_assignments shut the
+--   service-role routes out? NO. VERIFIED LIVE: pg_roles.rolbypassrls is TRUE
+--   for `service_role` and for `postgres` (the tables' owner), and neither
+--   strap_assignments nor rosters has FORCE ROW LEVEL SECURITY
+--   (relforcerowsecurity = false). RLS never applies to /api/bridge/* or
+--   /api/live/*, so no policy scoped to `authenticated` can reach them. Mig
+--   614 made the same conversion on shift_swap_requests and the two report
+--   tables and is live.
+-- * Does the REVOKE break an RLS-bound WRITE of rosters? There is none (every
+--   writer is service_role), and it would not anyway: all four rosters
+--   policies reference only `location_id` and `status`, both still granted,
+--   and INSERT/UPDATE/DELETE grants are untouched — only SELECT is revoked.
+-- * Does it break a coach's schedule screens? Those are served by
+--   /api/schedule/* (service_role). The one grant-bound path is the mobile
+--   dashboard embed, covered above and in the replay test.
+--
+-- ===========================================================================
 -- POST-APPLY CHECKS (run all four)
 -- ===========================================================================
 -- 1. The grant is what we think it is — column_privileges, never this file:
