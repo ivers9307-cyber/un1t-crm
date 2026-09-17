@@ -13,6 +13,7 @@ import { readJson } from './schedule/useScheduleData'
 // three schedule screens. One definition now, in the lib that already owns
 // schedule time formatting.
 import { formatTime12h as formatTime } from '@/lib/schedule-overlap'
+import { SWAP_CONFLICTS_CODE } from '@/lib/swap-lifecycle'
 
 const canManage = (role) => MANAGER_ROLES.includes(role)
 
@@ -79,6 +80,11 @@ export default function SwapRequestsManager({ user }) {
   // and hides the fact the swap was never approved. Each failure now carries
   // its own title and whether a retry means anything: { title, message, retry }.
   const [error, setError] = useState(null)
+  // SWAPS.2 — an approval the server refused because a coach is on leave or
+  // already on an overlapping shift that day: { id, messages }. The card shows
+  // the sentences with "Approve anyway", which re-sends with
+  // confirm_conflicts. Nothing is approved until the manager says so.
+  const [confirmFor, setConfirmFor] = useState(null)
   const searchParams = useSearchParams()
   const focusId = searchParams.get('focus')
   const locationId = user.activeLocation?.id
@@ -115,10 +121,11 @@ export default function SwapRequestsManager({ user }) {
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
   }, [focusId, loading, filter])
 
-  async function handleAction(id, status, note) {
+  async function handleAction(id, status, note, { confirmConflicts = false } = {}) {
     if (actingId) return
     setActingId(id)
     setError(null)
+    setConfirmFor(null)
     const verb = status === 'approved' ? 'approve' : status === 'rejected' ? 'reject' : 'update'
     // retry:false — re-running the LOAD would report success while the swap
     // sits exactly where it was.
@@ -127,9 +134,16 @@ export default function SwapRequestsManager({ user }) {
       const res = await fetch(`/api/schedule/swaps/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status, review_note: note }),
+        body: JSON.stringify(confirmConflicts
+          ? { status, review_note: note, confirm_conflicts: true }
+          : { status, review_note: note }),
       })
       const data = await res.json().catch(() => ({}))
+      if (res.status === 409 && data.code === SWAP_CONFLICTS_CODE) {
+        const messages = (data.conflicts || []).map((c) => c.message).filter(Boolean)
+        setConfirmFor({ id, messages: messages.length ? messages : [data.error || 'This swap has a conflict.'] })
+        return
+      }
       if (!res.ok || !data.success) {
         setError({ title, message: data.error || 'Unknown error', retry: false })
         return
@@ -208,6 +222,7 @@ export default function SwapRequestsManager({ user }) {
             // ROSTER-FIX.8e — the only date a detached swap still has.
             const postedOn = formatPostedOn(req.created_at)
             const busy = actingId === req.id
+            const confirming = confirmFor?.id === req.id ? confirmFor : null
 
             return (
               <div
@@ -305,6 +320,36 @@ export default function SwapRequestsManager({ user }) {
 
                     {req.review_note && (
                       <div className="text-xs text-un1t-subtle mt-1">Manager note: {req.review_note}</div>
+                    )}
+
+                    {/* SWAPS.2 — the confirm step for a conflicting approval. */}
+                    {canReview && confirming && (
+                      <div role="alert" className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-800">
+                        <div className="flex items-center gap-1 font-medium">
+                          <AlertCircle size={14} /> Check before approving
+                        </div>
+                        <ul className="mt-1 list-disc pl-5 space-y-0.5">
+                          {confirming.messages.map((m, i) => <li key={i}>{m}</li>)}
+                        </ul>
+                        <div className="mt-2 flex items-center gap-2">
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => handleAction(req.id, 'approved', undefined, { confirmConflicts: true })}
+                            className="px-3 py-1.5 rounded-md bg-amber-500/20 text-amber-800 hover:bg-amber-500/30 text-xs font-medium transition-colors disabled:opacity-50"
+                          >
+                            Approve anyway
+                          </button>
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => setConfirmFor(null)}
+                            className="px-3 py-1.5 rounded-md text-un1t-subtle hover:text-un1t-text text-xs transition-colors disabled:opacity-50"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
                     )}
                   </div>
 

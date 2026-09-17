@@ -1,13 +1,11 @@
 // ROSTER-FIX.1 (D4) — route-level contract test for
 // PUT /api/schedule/swaps/[id], the approved-DROP path.
 //
-// A drop DELETES the requester's shift_assignments row. Under mig 237's
-// `requester_shift_id ... ON DELETE CASCADE` that took this swap row with it,
-// so the audit row and the swap-row stamp both had to happen BEFORE the
-// delete. ROSTER-FIX.8a's mig 603 makes the FK ON DELETE SET NULL, so the
-// swap row now survives either order — the ordering is kept (the embed still
-// has to be read before the assignment goes) and these tests still lock it,
-// along with the roster_change_log payload.
+// A drop DELETES the requester's shift_assignments row, so its audit row has
+// to be written from the swap + block embed read BEFORE the delete.
+// SWAPS.2 — the approval and the delete are now ONE RPC
+// (approve_drop_shift_swap, mig 615), and the audit row is written only after
+// it succeeds, from that in-memory read; a refused drop leaves no audit row.
 //
 // Supabase + auth + push are mocked (the mock pattern is the one in
 // src/app/api/schedule/blocks/[id]/assignments/route.test.js); the swap
@@ -34,6 +32,9 @@ vi.mock('@/lib/roster-change-log', () => ({
   markChangesNotified: vi.fn().mockResolvedValue(undefined),
 }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
+// SWAPS.2 — the leave / clash reads are unit-tested in swap-conflicts.test.js;
+// here only what the route does with the answer matters.
+vi.mock('@/lib/swap-conflicts', () => ({ findSwapConflicts: vi.fn(async () => []) }))
 // SWAPNOTIFY.1 — the route now decides "draft or past shift" itself, so
 // dublinTodayStr has to be pinned rather than read off the real clock. Tests
 // that care about the boundary pass block dates far outside this value
@@ -52,6 +53,7 @@ const { hasPermissionForLocation } = await import('@/lib/permissions')
 const { getCurrentUser } = await import('@/lib/auth')
 const { logRosterChange, markChangesNotified } = await import('@/lib/roster-change-log')
 const { logWarn } = await import('@/lib/log')
+const { findSwapConflicts } = await import('@/lib/swap-conflicts')
 const { notifyUsersOnce, notifyUsersAtRolesOnce } = await import('@/lib/push-dedup')
 const { after } = await import('next/server')
 const { PUT } = await import('./route.js')
@@ -94,11 +96,19 @@ function dropSwap(rosterStatus = 'published', blockDate = '2026-06-10') {
   }
 }
 
-// Records every write in `calls` so a test can assert the ordering the
-// CASCADE forces on us. `deleteErr` fails the assignment delete, which is the
-// partial state the ordering makes possible.
-function buildDb(swap, calls, deleteErr = null) {
+// Records every write in `calls` so a test can assert the ordering.
+// SWAPS.2 — every approval is an rpc(); `rpcErr` refuses it and `rpcArgs`
+// records what the route sent. The route must never write shift_assignments
+// itself any more, so that table throws.
+function buildDb(swap, calls, rpcErr = null, rpcArgs = []) {
   return {
+    rpc: (fn, args) => {
+      calls.push(`rpc:${fn}`)
+      rpcArgs.push(args)
+      return Promise.resolve(rpcErr
+        ? { data: null, error: rpcErr }
+        : { data: { ...swap, status: 'approved', reviewed_by: args.p_reviewed_by }, error: null })
+    },
     from: (table) => {
       if (table === 'shift_swap_requests') {
         return {
@@ -117,16 +127,6 @@ function buildDb(swap, calls, deleteErr = null) {
           }),
         }
       }
-      if (table === 'shift_assignments') {
-        return {
-          delete: () => ({
-            eq: (col, val) => {
-              calls.push(`assignment_delete:${col}=${val}`)
-              return Promise.resolve({ error: deleteErr })
-            },
-          }),
-        }
-      }
       throw new Error(`unexpected table ${table}`)
     },
   }
@@ -140,6 +140,8 @@ beforeEach(() => {
   markChangesNotified.mockClear()
   markChangesNotified.mockResolvedValue(undefined)
   logWarn.mockClear()
+  findSwapConflicts.mockReset()
+  findSwapConflicts.mockResolvedValue([])
   notifyUsersOnce.mockClear()
   notifyUsersOnce.mockResolvedValue(undefined)
   notifyUsersAtRolesOnce.mockClear()
@@ -169,15 +171,26 @@ describe('PUT /api/schedule/swaps/[id] — approved drop audit', () => {
     expect(change.details.swap_id).toBe('swap-1')
   })
 
-  it('stamps the swap row, then audits, then deletes the assignment', async () => {
+  it('approves + deletes in one RPC, then audits (SWAPS.2)', async () => {
     getCurrentUser.mockResolvedValue(MANAGER)
     const calls = []
-    createServerClient.mockReturnValue(buildDb(dropSwap('published'), calls))
+    const rpcArgs = []
+    createServerClient.mockReturnValue(buildDb(dropSwap('published'), calls, null, rpcArgs))
     logRosterChange.mockImplementation(async () => { calls.push('roster_change_log'); return { logged: true } })
 
-    await PUT(req({ status: 'approved' }), PROPS)
+    const res = await PUT(req({ status: 'approved', review_note: 'fine' }), PROPS)
+    expect(res.status).toBe(200)
 
-    expect(calls).toEqual(['swap_update', 'roster_change_log', 'assignment_delete:id=assign-1'])
+    expect(calls).toEqual(['rpc:approve_drop_shift_swap', 'roster_change_log'])
+    expect(rpcArgs).toEqual([{
+      p_swap_id: 'swap-1',
+      p_reviewed_by: MANAGER.id,
+      p_reviewed_at: expect.any(String),
+      p_review_note: 'fine',
+      p_requester_profile: REQUESTER,
+    }])
+    // A drop moves nobody onto anything: no leave / clash check.
+    expect(findSwapConflicts).not.toHaveBeenCalled()
   })
 
   it('audits a drop on a DRAFT roster too, recording the real roster status', async () => {
@@ -195,37 +208,34 @@ describe('PUT /api/schedule/swaps/[id] — approved drop audit', () => {
     expect(change.details.roster_status).toBe('draft')
   })
 
-  // ROSTER-FIX.1 — the ordering the CASCADE forces makes this partial state
-  // reachable: swap approved, change-log row written, assignment still there.
-  // Nothing retries it, so the audit row is wrong until someone looks.
-  it('logs a warning when the delete fails after the swap is approved and the change logged', async () => {
+  // ROSTER-FIX.1 made this partial state reachable: swap approved, change-log
+  // row written, assignment still there. SWAPS.2 closes it — the RPC rolls
+  // the approval back with the delete, and nothing is audited.
+  it('a refused or failed drop RPC writes no audit row and approves nothing', async () => {
     getCurrentUser.mockResolvedValue(MANAGER)
     const calls = []
-    createServerClient.mockReturnValue(buildDb(dropSwap('published'), calls, { message: 'delete blew up' }))
+    createServerClient.mockReturnValue(buildDb(dropSwap('published'), calls, { code: 'XX000', message: 'delete blew up' }))
 
     const res = await PUT(req({ status: 'approved' }), PROPS)
-    const json = await res.json()
     expect(res.status).toBe(400)
-    expect(json.error).toBe('delete blew up')
+    expect((await res.json()).error).toBe('delete blew up')
 
-    // The swap row was already stamped and the drop already audited — that is
-    // exactly why the warning has to exist.
-    expect(calls).toContain('swap_update')
-    expect(logRosterChange).toHaveBeenCalledTimes(1)
-
-    expect(logWarn).toHaveBeenCalledTimes(1)
-    const [module, message, meta] = logWarn.mock.calls[0]
-    expect(module).toBe('swaps')
-    expect(message).toMatch(/assignment delete failed after swap approved/)
-    expect(meta).toEqual({ swapId: 'swap-1', assignmentId: 'assign-1', err: 'delete blew up' })
+    expect(calls).toEqual(['rpc:approve_drop_shift_swap'])
+    expect(logRosterChange).not.toHaveBeenCalled()
   })
 
-  it('does not warn when the delete succeeds', async () => {
+  it.each([
+    ['swap_stale: claimed since', 409, 'This swap has changed since it was loaded: a shift changed hands or someone else claimed it. Refresh and check it again.'],
+    ['swap_shift_missing: gone', 409, 'One of the shifts in this swap no longer exists'],
+    ['swap_not_open: already approved', 409, 'This swap has already been decided'],
+  ])('maps a refused drop (%s) to %i', async (message, status, error) => {
     getCurrentUser.mockResolvedValue(MANAGER)
-    createServerClient.mockReturnValue(buildDb(dropSwap('published'), []))
+    createServerClient.mockReturnValue(buildDb(dropSwap('published'), [], { code: 'P0001', message }))
 
-    await PUT(req({ status: 'approved' }), PROPS)
-    expect(logWarn).not.toHaveBeenCalled()
+    const res = await PUT(req({ status: 'approved' }), PROPS)
+    expect(res.status).toBe(status)
+    expect(await res.json()).toEqual({ success: false, error })
+    expect(logRosterChange).not.toHaveBeenCalled()
   })
 })
 
@@ -385,7 +395,7 @@ describe('PUT /api/schedule/swaps/[id] — approved drop does not double-notify 
     expect(markChangesNotified).toHaveBeenCalledTimes(1)
   })
 
-  it('does not dispatch and does not stamp when the assignment delete fails', async () => {
+  it('does not dispatch and does not stamp when the drop RPC fails', async () => {
     getCurrentUser.mockResolvedValue(MANAGER)
     createServerClient.mockReturnValue(buildDb(dropSwap('published', FUTURE), [], { message: 'delete blew up' }))
 
@@ -447,34 +457,10 @@ describe('PUT /api/schedule/swaps/[id] — approved reassign/swap audit (SWAPAUD
     }
   }
 
-  // shift_assignments supports update() here (the move ops), recording each
-  // write in `calls` so ordering against the change log can be asserted.
-  // SWAPATOMIC.1 — a reciprocal swap goes through rpc() instead; `rpcErr`
-  // fails it and `rpcArgs` records what the route sent.
-  function buildMoveDb(swap, calls, updateErr = null, { rpcErr = null, rpcArgs = [] } = {}) {
-    const base = buildDb(swap, calls)
-    return {
-      rpc: (fn, args) => {
-        calls.push(`rpc:${fn}`)
-        rpcArgs.push(args)
-        return Promise.resolve(rpcErr
-          ? { data: null, error: rpcErr }
-          : { data: { ...swap, status: 'approved', reviewed_by: args.p_reviewed_by }, error: null })
-      },
-      from: (table) => {
-        if (table === 'shift_assignments') {
-          return {
-            update: () => ({
-              eq: (col, val) => {
-                calls.push(`assignment_update:${val}`)
-                return Promise.resolve({ error: updateErr })
-              },
-            }),
-          }
-        }
-        return base.from(table)
-      },
-    }
+  // SWAPATOMIC.1 / SWAPS.2 — reassign and reciprocal both go through rpc();
+  // `rpcErr` fails it and `rpcArgs` records what the route sent.
+  function buildMoveDb(swap, calls, { rpcErr = null, rpcArgs = [] } = {}) {
+    return buildDb(swap, calls, rpcErr, rpcArgs)
   }
 
   // logRosterChange hands out a distinct id per row so stamps can be checked
@@ -499,7 +485,7 @@ describe('PUT /api/schedule/swaps/[id] — approved reassign/swap audit (SWAPAUD
 
   const stampedIds = () => markChangesNotified.mock.calls.flatMap((c) => c[1]).sort()
 
-  it('a reassign logs unassigned for the requester and assigned for the taker, after the update', async () => {
+  it('a reassign logs unassigned for the requester and assigned for the taker, after the RPC', async () => {
     getCurrentUser.mockResolvedValue(MANAGER)
     const calls = []
     createServerClient.mockReturnValue(buildMoveDb(reassignSwap(), calls))
@@ -509,7 +495,7 @@ describe('PUT /api/schedule/swaps/[id] — approved reassign/swap audit (SWAPAUD
     expect(res.status).toBe(200)
     expect((await res.json()).success).toBe(true)
 
-    expect(calls).toEqual(['swap_update', 'assignment_update:assign-1', 'roster_change_log', 'roster_change_log'])
+    expect(calls).toEqual(['rpc:approve_reassign_shift_swap', 'roster_change_log', 'roster_change_log'])
     const changes = logRosterChange.mock.calls.map((c) => c[1])
     expect(changes).toEqual([
       { isPublished: true, locationId: 'loc-1', blockId: 'block-1', blockDate: FUTURE, actorId: MANAGER.id, coachId: REQUESTER, action: 'unassigned', details: { via: 'swap', swap_id: 'swap-1', effect: 'approved_reassign' } },
@@ -633,9 +619,9 @@ describe('PUT /api/schedule/swaps/[id] — approved reassign/swap audit (SWAPAUD
     expect(stampedIds()).toEqual([`log-${TAKER}-assigned-block-1`, `log-${REQUESTER}-unassigned-block-1`].sort())
   })
 
-  it('writes no change log and stamps nothing when an assignment update fails', async () => {
+  it('writes no change log and stamps nothing when the reassign RPC fails', async () => {
     getCurrentUser.mockResolvedValue(MANAGER)
-    createServerClient.mockReturnValue(buildMoveDb(reassignSwap(), [], { message: 'update blew up' }))
+    createServerClient.mockReturnValue(buildMoveDb(reassignSwap(), [], { rpcErr: { message: 'update blew up' } }))
     idPerRow()
 
     const res = await PUT(req({ status: 'approved' }), PROPS)
@@ -649,7 +635,7 @@ describe('PUT /api/schedule/swaps/[id] — approved reassign/swap audit (SWAPAUD
 
   it('writes no change log and stamps nothing when the reciprocal swap RPC fails', async () => {
     getCurrentUser.mockResolvedValue(MANAGER)
-    createServerClient.mockReturnValue(buildMoveDb(reciprocalSwap(), [], null, { rpcErr: { code: 'XX000', message: 'rpc blew up' } }))
+    createServerClient.mockReturnValue(buildMoveDb(reciprocalSwap(), [], { rpcErr: { code: 'XX000', message: 'rpc blew up' } }))
     idPerRow()
 
     const res = await PUT(req({ status: 'approved' }), PROPS)
@@ -718,20 +704,7 @@ describe('PUT /api/schedule/swaps/[id] — reciprocal swap is atomic (SWAPATOMIC
       target_shift: { id: 'assign-2', profile_id: TAKER, block_id: 'block-2', block: blk('block-2') },
     }
   }
-  function rpcDb(swap, calls, rpcArgs, rpcErr = null) {
-    const base = buildDb(swap, calls)
-    return {
-      rpc: (fn, args) => {
-        calls.push(`rpc:${fn}`)
-        rpcArgs.push(args)
-        return Promise.resolve(rpcErr ? { data: null, error: rpcErr } : { data: { ...swap, status: 'approved' }, error: null })
-      },
-      from: (table) => {
-        if (table === 'shift_assignments') throw new Error('reciprocal swap must not write shift_assignments from the route')
-        return base.from(table)
-      },
-    }
-  }
+  const rpcDb = (swap, calls, rpcArgs, rpcErr = null) => buildDb(swap, calls, rpcErr, rpcArgs)
 
   it('sends the swap id, review fields and the profile ids it read to the RPC, and never updates the swap row itself', async () => {
     getCurrentUser.mockResolvedValue(MANAGER)
@@ -761,9 +734,9 @@ describe('PUT /api/schedule/swaps/[id] — reciprocal swap is atomic (SWAPATOMIC
   })
 
   it.each([
-    ['swap_stale: changed', 409, 'One of these shifts has changed hands since the swap was requested'],
+    ['swap_stale: changed', 409, 'This swap has changed since it was loaded: a shift changed hands or someone else claimed it. Refresh and check it again.'],
     ['swap_same_block: same', 409, 'Both shifts are on the same block, so the swap would change nothing'],
-    ['swap_conflict: already there', 409, 'One of the coaches is already on the other shift'],
+    ['swap_conflict: already there', 409, 'A coach in this swap is already on that shift'],
     ['swap_not_open: swap is already approved', 409, 'This swap has already been decided'],
     ['swap_not_found: gone', 404, 'Swap request not found'],
   ])('maps a refused swap (%s) to %i, and writes, logs and notifies nothing', async (message, status, error) => {
@@ -781,21 +754,44 @@ describe('PUT /api/schedule/swaps/[id] — reciprocal swap is atomic (SWAPATOMIC
     expect(notifyUsersOnce).not.toHaveBeenCalled()
   })
 
-  it('a reassign still uses the swap-row update and a single assignment update, not the RPC', async () => {
+  // SWAPS.2 — a reassign is atomic now too (approve_reassign_shift_swap).
+  it('a reassign goes through approve_reassign_shift_swap with the taker it read, never a route-side write', async () => {
     getCurrentUser.mockResolvedValue(MANAGER)
     const calls = []
+    const rpcArgs = []
     const swap = { ...reciprocal(), target_shift_id: null, target_shift: null }
-    const base = buildDb(swap, calls)
-    createServerClient.mockReturnValue({
-      rpc: () => { throw new Error('reassign must not call the RPC') },
-      from: (table) => table === 'shift_assignments'
-        ? { update: () => ({ eq: (_c, v) => { calls.push(`assignment_update:${v}`); return Promise.resolve({ error: null }) } }) }
-        : base.from(table),
-    })
+    createServerClient.mockReturnValue(rpcDb(swap, calls, rpcArgs))
 
     const res = await PUT(req({ status: 'approved' }), PROPS)
     expect(res.status).toBe(200)
-    expect(calls).toEqual(['swap_update', 'assignment_update:assign-1'])
+    expect(calls).toEqual(['rpc:approve_reassign_shift_swap'])
+    expect(rpcArgs[0]).toEqual({
+      p_swap_id: 'swap-1',
+      p_reviewed_by: MANAGER.id,
+      p_reviewed_at: expect.any(String),
+      p_review_note: null,
+      p_requester_profile: REQUESTER,
+      p_target_profile: TAKER,
+    })
+  })
+
+  it.each([
+    ['swap_stale: taker changed', 409],
+    ['swap_conflict: taker already on block', 409],
+    ['swap_not_found: gone', 404],
+  ])('maps a refused reassign (%s) to %i and logs / notifies nothing', async (message, status) => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const calls = []
+    const swap = { ...reciprocal(), target_shift_id: null, target_shift: null }
+    createServerClient.mockReturnValue(rpcDb(swap, calls, [], { code: 'P0001', message }))
+
+    const res = await PUT(req({ status: 'approved' }), PROPS)
+    expect(res.status).toBe(status)
+    expect((await res.json()).error).not.toMatch(/^swap_/)
+    await flush()
+    expect(calls).toEqual(['rpc:approve_reassign_shift_swap'])
+    expect(logRosterChange).not.toHaveBeenCalled()
+    expect(notifyUsersOnce).not.toHaveBeenCalled()
   })
 })
 
@@ -862,5 +858,164 @@ describe('PUT /api/schedule/swaps/[id] — manager branches judged at the swap\'
     expect((await PUT(req({ status: 'approved' }), PROPS)).status).toBe(403)
     expect(hasPermissionForLocation).toHaveBeenCalledWith(expect.objectContaining({ id: 'mix' }), 'loc-2', expect.any(String))
     expect(calls).toEqual([])
+  })
+})
+
+// SWAPS.2 — leave and same-day clash checks. A claim / accept tells the coach
+// (advisory, the claim stands); a manager approval that moves a coach onto a
+// shift is refused with 409 + code swap_conflicts unless confirm_conflicts.
+describe('PUT /api/schedule/swaps/[id] — leave / clash checks (SWAPS.2)', () => {
+  const TAKER = 'coach-2'
+  const COACH = { id: TAKER, role: 'staff', profileRole: 'staff', rolesByLocation: { 'loc-1': 'staff' }, full_name: 'Cora Coach' }
+  const blk = (id, date = '2099-01-01') => ({ id, location_id: 'loc-1', block_date: date, start_time: '06:00:00', end_time: '10:00:00', rosters: { status: 'published' } })
+  const reassign = () => ({
+    id: 'swap-1', status: 'awaiting_approval', location_id: 'loc-1',
+    requester_id: REQUESTER, requester_shift_id: 'assign-1', target_shift_id: null, target_id: TAKER,
+    requester_shift: { id: 'assign-1', profile_id: REQUESTER, block_id: 'block-1', block: blk('block-1') },
+    target_shift: null,
+  })
+  const reciprocal = () => ({
+    ...reassign(),
+    target_shift_id: 'assign-2',
+    target_shift: { id: 'assign-2', profile_id: TAKER, block_id: 'block-2', block: blk('block-2', '2099-01-02') },
+  })
+  const openDrop = () => ({ ...reassign(), status: 'pending', target_id: null })
+  const LEAVE = { kind: 'leave', role: 'taker', coachId: TAKER, date: '2099-01-01', message: 'Cora Coach has approved holiday on 2099-01-01, which covers the shift on 2099-01-01.' }
+  const OVERLAP = { kind: 'overlap', role: 'requester', coachId: REQUESTER, date: '2099-01-02', message: 'Rory is already on Midday 09:00 to 12:00 on 2099-01-02, which overlaps the shift (06:00 to 10:00).' }
+
+  it('refuses a conflicting reassign approval with 409, the sentences and the conflicts, and writes nothing', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    findSwapConflicts.mockResolvedValue([LEAVE])
+    const calls = []
+    createServerClient.mockReturnValue(buildDb(reassign(), calls))
+
+    const res = await PUT(req({ status: 'approved' }), PROPS)
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ success: false, code: 'swap_conflicts', error: LEAVE.message, conflicts: [LEAVE] })
+    await flush()
+
+    expect(calls).toEqual([])
+    expect(logRosterChange).not.toHaveBeenCalled()
+    expect(notifyUsersOnce).not.toHaveBeenCalled()
+
+    // The check was asked about the taker landing on the requester's block,
+    // from the manager's point of view.
+    const [, moves, opts] = findSwapConflicts.mock.calls[0]
+    expect(moves).toEqual([{ role: 'taker', coachId: TAKER, block: blk('block-1'), leavingAssignmentId: null }])
+    expect(opts).toEqual({ viewerId: MANAGER.id })
+  })
+
+  it('checks BOTH coaches on a reciprocal swap and joins every sentence into the error', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    findSwapConflicts.mockResolvedValue([LEAVE, OVERLAP])
+    const calls = []
+    createServerClient.mockReturnValue(buildDb(reciprocal(), calls))
+
+    const res = await PUT(req({ status: 'approved' }), PROPS)
+    expect(res.status).toBe(409)
+    const json = await res.json()
+    expect(json.error).toBe(`${LEAVE.message} ${OVERLAP.message}`)
+    expect(calls).toEqual([])
+    expect(findSwapConflicts.mock.calls[0][1].map((m) => [m.role, m.coachId, m.leavingAssignmentId])).toEqual([
+      ['taker', TAKER, 'assign-2'],
+      ['requester', REQUESTER, 'assign-1'],
+    ])
+  })
+
+  it('an unreadable check (check_failed) also asks the manager rather than waving the approval through', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    findSwapConflicts.mockResolvedValue([{ kind: 'check_failed', coachId: TAKER, date: '2099-01-01', message: 'Could not check Cora Coach\'s leave and other shifts for 2099-01-01.' }])
+    createServerClient.mockReturnValue(buildDb(reassign(), []))
+
+    const res = await PUT(req({ status: 'approved' }), PROPS)
+    expect(res.status).toBe(409)
+    expect((await res.json()).code).toBe('swap_conflicts')
+  })
+
+  it.each([['reassign', reassign, 'approve_reassign_shift_swap'], ['reciprocal', reciprocal, 'approve_reciprocal_shift_swap']])(
+    'confirm_conflicts approves a %s without re-checking', async (_label, make, fn) => {
+      getCurrentUser.mockResolvedValue(MANAGER)
+      findSwapConflicts.mockResolvedValue([LEAVE])
+      const calls = []
+      createServerClient.mockReturnValue(buildDb(make(), calls))
+
+      const res = await PUT(req({ status: 'approved', confirm_conflicts: true }), PROPS)
+      expect(res.status).toBe(200)
+      expect((await res.json()).success).toBe(true)
+      expect(findSwapConflicts).not.toHaveBeenCalled()
+      expect(calls[0]).toBe(`rpc:${fn}`)
+    })
+
+  it('a clean approval goes straight through to the RPC', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const calls = []
+    createServerClient.mockReturnValue(buildDb(reassign(), calls))
+
+    const res = await PUT(req({ status: 'approved' }), PROPS)
+    expect(res.status).toBe(200)
+    expect(findSwapConflicts).toHaveBeenCalledTimes(1)
+    expect(calls[0]).toBe('rpc:approve_reassign_shift_swap')
+  })
+
+  it('a drop is never checked, even with conflicts on offer', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    findSwapConflicts.mockResolvedValue([LEAVE])
+    const calls = []
+    createServerClient.mockReturnValue(buildDb(openDrop(), calls))
+
+    const res = await PUT(req({ status: 'approved' }), PROPS)
+    expect(res.status).toBe(200)
+    expect(findSwapConflicts).not.toHaveBeenCalled()
+    expect(calls[0]).toBe('rpc:approve_drop_shift_swap')
+  })
+
+  it('a rejection is never checked', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    findSwapConflicts.mockResolvedValue([LEAVE])
+    createServerClient.mockReturnValue(buildDb(reassign(), []))
+
+    expect((await PUT(req({ status: 'rejected' }), PROPS)).status).toBe(200)
+    expect(findSwapConflicts).not.toHaveBeenCalled()
+  })
+
+  it('a claim is saved and returns the coach\'s own warnings, without a check_failed one', async () => {
+    getCurrentUser.mockResolvedValue(COACH)
+    const youLeave = { ...LEAVE, message: 'You have approved holiday on 2099-01-01, which covers the shift on 2099-01-01.' }
+    findSwapConflicts.mockResolvedValue([youLeave, { kind: 'check_failed', coachId: TAKER, message: 'Could not check your leave' }])
+    const calls = []
+    createServerClient.mockReturnValue(buildDb(openDrop(), calls))
+
+    const res = await PUT(req({ status: 'awaiting_approval' }), PROPS)
+    expect(res.status).toBe(200)
+    const json = await res.json()
+    expect(json.success).toBe(true)
+    expect(json.warnings).toEqual([youLeave.message])
+    // The claim itself was written — a warning never blocks it.
+    expect(calls).toEqual(['swap_update'])
+
+    const [, moves, opts] = findSwapConflicts.mock.calls[0]
+    expect(moves).toEqual([{ role: 'taker', coachId: TAKER, block: blk('block-1'), leavingAssignmentId: null }])
+    expect(opts).toEqual({ viewerId: TAKER })
+  })
+
+  it('a targeted accept of a reciprocal swap checks only the accepting coach, leaving their own shift out', async () => {
+    getCurrentUser.mockResolvedValue(COACH)
+    createServerClient.mockReturnValue(buildDb({ ...reciprocal(), status: 'pending' }, []))
+
+    const res = await PUT(req({ status: 'awaiting_approval' }), PROPS)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual(expect.objectContaining({ success: true, warnings: [] }))
+    expect(findSwapConflicts.mock.calls[0][1]).toEqual([
+      { role: 'taker', coachId: TAKER, block: blk('block-1'), leavingAssignmentId: 'assign-2' },
+    ])
+  })
+
+  it('a withdraw, decline or cancel carries no warnings and runs no check', async () => {
+    getCurrentUser.mockResolvedValue(COACH)
+    createServerClient.mockReturnValue(buildDb(reassign(), []))
+    const res = await PUT(req({ status: 'pending' }), PROPS)
+    expect(res.status).toBe(200)
+    expect((await res.json()).warnings).toBeUndefined()
+    expect(findSwapConflicts).not.toHaveBeenCalled()
   })
 })

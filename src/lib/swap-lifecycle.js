@@ -9,7 +9,24 @@
 // Lifecycle: pending -> awaiting_approval -> (approved | rejected); plus
 // cancelled. See docs/superpowers/plans/2026-06-17-coach-today-roster-phase3.md.
 
+import { timeRangesOverlap, fmtTime } from './schedule-overlap'
+
 export const TERMINAL_SWAP_STATES = ['approved', 'rejected', 'cancelled']
+
+// SWAPS.2 — the columns an approved move clears on every assignment that
+// changes hands. They described the PREVIOUS coach's shift: the manager-set
+// paid window + its reason (mig 099) and their arrival stamp (mig 609). The
+// new coach works the block's times. The route never writes these itself —
+// mig 615's approve_* functions do, inside the same transaction as the move —
+// so this is the description the assignmentOps carry, pinned against the SQL
+// by the migration-615 test.
+export const SWAP_MOVE_CLEARS = Object.freeze({
+  start_time_override: null,
+  end_time_override: null,
+  partial_reason: null,
+  arrived_at: null,
+  arrival_source: null,
+})
 
 // Statuses a client may request on PUT /api/schedule/swaps/[id].
 const REQUESTABLE = ['awaiting_approval', 'approved', 'rejected', 'cancelled', 'pending']
@@ -135,8 +152,8 @@ export function resolveSwapTransition({ swap, requestedStatus, user, userLocatio
       // their own shift just changed hands too.
       return { ok: true, status: 200, effect: 'approved_swap', swapUpdates,
         assignmentOps: [
-          { id: swap.requester_shift_id, set: { profile_id: tgtProfile, status: 'swapped' } },
-          { id: swap.target_shift_id, set: { profile_id: reqProfile, status: 'swapped' } },
+          { id: swap.requester_shift_id, set: { profile_id: tgtProfile, status: 'swapped', ...SWAP_MOVE_CLEARS } },
+          { id: swap.target_shift_id, set: { profile_id: reqProfile, status: 'swapped', ...SWAP_MOVE_CLEARS } },
         ],
         notify: [
           { kind: 'decision_for_requester', to: [swap.requester_id] },
@@ -146,7 +163,7 @@ export function resolveSwapTransition({ swap, requestedStatus, user, userLocatio
     if (swap.target_id) {
       return { ok: true, status: 200, effect: 'approved_reassign', swapUpdates,
         assignmentOps: [
-          { id: swap.requester_shift_id, set: { profile_id: swap.target_id, status: 'swapped' } },
+          { id: swap.requester_shift_id, set: { profile_id: swap.target_id, status: 'swapped', ...SWAP_MOVE_CLEARS } },
         ],
         notify: [
           { kind: 'decision_for_requester', to: [swap.requester_id] },
@@ -217,8 +234,44 @@ export function swapChangeLogEntries(effect, swap) {
   return []
 }
 
-// SWAPATOMIC.1 — map an approve_reciprocal_shift_swap error to a response.
-// The function raises P0001 with a `swap_*:` message prefix for every state
+/**
+ * SWAPS.2 — which mig 612/615 function approves this effect, and with what.
+ * Every approved effect is one RPC now: the swap-row approval and the
+ * assignment write (move + clear, or delete) land in one transaction, so a
+ * failed write can no longer leave an approved swap with nobody moved.
+ *
+ * The profile ids passed are the ones the resolver READ; each function
+ * refuses with swap_stale if the rows no longer match them.
+ *
+ * @param {string} effect       resolveSwapTransition(...).effect
+ * @param {string} swapId
+ * @param {object} swap         swap row with requester_shift / target_shift embeds
+ * @param {object} swapUpdates  resolveSwapTransition(...).swapUpdates
+ * @returns {{ fn: string, args: object } | null}  null for a non-approval effect
+ */
+export function swapApprovalRpc(effect, swapId, swap, swapUpdates) {
+  if (!swap || !swapUpdates) return null
+  const review = {
+    p_swap_id: swapId,
+    p_reviewed_by: swapUpdates.reviewed_by,
+    p_reviewed_at: swapUpdates.reviewed_at,
+    p_review_note: swapUpdates.review_note,
+  }
+  const requester = swap.requester_shift?.profile_id ?? null
+  if (effect === 'approved_swap') {
+    return { fn: 'approve_reciprocal_shift_swap', args: { ...review, p_requester_profile: requester, p_target_profile: swap.target_shift?.profile_id ?? null } }
+  }
+  if (effect === 'approved_reassign') {
+    return { fn: 'approve_reassign_shift_swap', args: { ...review, p_requester_profile: requester, p_target_profile: swap.target_id ?? null } }
+  }
+  if (effect === 'approved_drop') {
+    return { fn: 'approve_drop_shift_swap', args: { ...review, p_requester_profile: requester } }
+  }
+  return null
+}
+
+// SWAPATOMIC.1 / SWAPS.2 — map an approve_*_shift_swap error to a response.
+// Each function raises P0001 with a `swap_*:` message prefix for every state
 // it refuses on purpose; those are conflicts with the current data (409) and
 // carry a human sentence after the prefix. A unique-key violation (23505) is
 // the same kind of conflict. Anything else is an unexpected failure (400, as
@@ -227,12 +280,12 @@ const SWAP_RPC_MESSAGES = {
   swap_not_found: 'Swap request not found',
   swap_not_open: 'This swap has already been decided',
   swap_shift_missing: 'One of the shifts in this swap no longer exists',
-  swap_stale: 'One of these shifts has changed hands since the swap was requested',
+  swap_stale: 'This swap has changed since it was loaded: a shift changed hands or someone else claimed it. Refresh and check it again.',
   swap_same_block: 'Both shifts are on the same block, so the swap would change nothing',
-  swap_conflict: 'One of the coaches is already on the other shift',
+  swap_conflict: 'A coach in this swap is already on that shift',
 }
 
-export function reciprocalSwapError(err) {
+export function swapApprovalError(err) {
   const message = err?.message || 'Swap failed'
   const prefix = message.split(':')[0]
   if (err?.code === 'P0001' && SWAP_RPC_MESSAGES[prefix]) {
@@ -242,4 +295,144 @@ export function reciprocalSwapError(err) {
     return { status: 409, error: SWAP_RPC_MESSAGES.swap_conflict }
   }
   return { status: 400, error: message }
+}
+
+// SWAPS.2 — the response `code` PUT /api/schedule/swaps/[id] sends with a
+// 409 when an approval has leave / clash conflicts; a client branches on it
+// to offer "approve anyway" (confirm_conflicts: true). A code, not copy: the
+// response's `error` carries the human sentences.
+export const SWAP_CONFLICTS_CODE = 'swap_conflicts'
+
+// ─────────────────────────────────────────────────────────────────────────
+// SWAPS.2 — leave and same-day clash checks for the coach(es) a swap puts
+// onto a shift. Advisory at claim/accept (the coach is told, nothing is
+// refused); at manager approval the route refuses with 409 unless the
+// manager confirms. The DB reads live in src/lib/swap-conflicts.js; the
+// decisions and the copy are here so they are testable without a DB.
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * The coaches a swap puts onto a shift, and which block each lands on.
+ *
+ *   reassign / claim   the taker lands on the requester's block
+ *   reciprocal         the taker lands on the requester's block AND the
+ *                      requester lands on the taker's block
+ *   drop               nobody lands anywhere -> []
+ *
+ * `leavingAssignmentId` is the coach's own shift in this swap that they give
+ * up, so it can never count as a clash with where they are going.
+ *
+ * @param {object} swap  swap row with requester_shift / target_shift embeds
+ * @param {object} [opts]
+ * @param {string|null} [opts.takerId]  who is taking the requester's shift.
+ *   The claimant at claim/accept time; defaults to the target shift's coach,
+ *   then swap.target_id (the approval view).
+ * @param {boolean} [opts.takerOnly]  only the taker's move. At claim time the
+ *   claiming coach is shown THEIR conflicts, never a colleague's leave.
+ * @returns {Array<{ role:'taker'|'requester', coachId:string, block:object, leavingAssignmentId:string|null }>}
+ */
+export function swapIncomingMoves(swap, { takerId, takerOnly = false } = {}) {
+  if (!swap) return []
+  const reqShift = swap.requester_shift || null
+  const tgtShift = swap.target_shift || null
+  const taker = takerId ?? tgtShift?.profile_id ?? swap.target_id ?? null
+  const moves = []
+  if (taker && reqShift?.block?.block_date) {
+    moves.push({ role: 'taker', coachId: taker, block: reqShift.block, leavingAssignmentId: tgtShift?.id || null })
+  }
+  if (!takerOnly && swap.target_shift_id && tgtShift?.block?.block_date) {
+    const requester = reqShift?.profile_id || swap.requester_id || null
+    if (requester) {
+      moves.push({ role: 'requester', coachId: requester, block: tgtShift.block, leavingAssignmentId: reqShift?.id || null })
+    }
+  }
+  return moves
+}
+
+/**
+ * Conflicts for one move, from rows already read. Pure.
+ *
+ *   leave    an APPROVED time_off_requests row for the coach covers the
+ *            block's date. Status and dates are re-checked here rather than
+ *            trusted from the query. Any studio: leave is per person.
+ *   overlap  another LIVE assignment of the coach's that day whose effective
+ *            window (its own override, else its block's times) overlaps the
+ *            block's times. The moved row's overrides are cleared by the move
+ *            (SWAP_MOVE_CLEARS), so the block's own times are the new coach's
+ *            window. The coach's leaving shift and the destination block
+ *            itself are excluded (the latter is the RPC's swap_conflict).
+ *
+ * @param {object} move  one swapIncomingMoves entry
+ * @param {object} rows
+ * @param {object[]} [rows.timeOff]      time_off_requests rows
+ * @param {object[]} [rows.assignments]  shift_assignments rows with a shift_blocks embed
+ * @returns {Array<object>}
+ */
+export function evaluateSwapMoveConflicts(move, { timeOff = [], assignments = [] } = {}) {
+  if (!move?.coachId || !move.block?.block_date) return []
+  const date = move.block.block_date
+  const out = []
+  for (const t of timeOff || []) {
+    if (t?.profile_id !== move.coachId || t.status !== 'approved') continue
+    if (!(t.start_date <= date && t.end_date >= date)) continue
+    out.push({ kind: 'leave', role: move.role, coachId: move.coachId, date, type: t.type || null, startDate: t.start_date, endDate: t.end_date })
+  }
+  for (const a of assignments || []) {
+    if (!a || a.profile_id !== move.coachId) continue
+    if (a.status === 'cancelled') continue
+    if (a.id === move.leavingAssignmentId) continue
+    const b = a.shift_blocks
+    if (!b || b.block_date !== date) continue
+    if (a.block_id === move.block.id || b.id === move.block.id) continue
+    const start = a.start_time_override || b.start_time
+    const end = a.end_time_override || b.end_time
+    if (!timeRangesOverlap(move.block.start_time, move.block.end_time, start, end)) continue
+    out.push({
+      kind: 'overlap', role: move.role, coachId: move.coachId, date,
+      shiftName: b.shift_templates?.name || null,
+      locationName: b.locations?.name || null,
+      startTime: fmtTime(start),
+      endTime: fmtTime(end),
+      blockStart: fmtTime(move.block.start_time),
+      blockEnd: fmtTime(move.block.end_time),
+    })
+  }
+  return out
+}
+
+// time_off_requests.type (mig 283) as it reads after "approved".
+const LEAVE_LABELS = {
+  holiday: 'holiday',
+  sick: 'sick leave',
+  unpaid: 'unpaid leave',
+  other: 'time off',
+  unavailable: 'unavailability',
+}
+
+/**
+ * One sentence per conflict. `name` is the coach's name; `isViewer` switches
+ * to "You" (the claiming coach reading their own warning).
+ */
+export function swapConflictMessage(conflict, { name, isViewer = false } = {}) {
+  const who = isViewer ? 'You' : (name || 'This coach')
+  const has = isViewer ? 'have' : 'has'
+  const is = isViewer ? 'are' : 'is'
+  const whose = isViewer ? 'your' : `${name || 'this coach'}'s`
+  if (conflict?.kind === 'leave') {
+    const type = LEAVE_LABELS[conflict.type] || 'time off'
+    const range = conflict.startDate === conflict.endDate
+      ? `on ${conflict.startDate}`
+      : `from ${conflict.startDate} to ${conflict.endDate}`
+    return `${who} ${has} approved ${type} ${range}, which covers the shift on ${conflict.date}.`
+  }
+  if (conflict?.kind === 'overlap') {
+    const shift = conflict.shiftName || 'another shift'
+    const at = conflict.locationName ? ` at ${conflict.locationName}` : ''
+    const block = conflict.blockStart && conflict.blockEnd ? ` (${conflict.blockStart} to ${conflict.blockEnd})` : ''
+    return `${who} ${is} already on ${shift} ${conflict.startTime} to ${conflict.endTime}${at} on ${conflict.date}, which overlaps the shift${block}.`
+  }
+  if (conflict?.kind === 'check_failed') {
+    return `Could not check ${whose} leave and other shifts for ${conflict.date || 'that day'}.`
+  }
+  return 'This swap has a conflict.'
 }
