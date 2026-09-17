@@ -16,9 +16,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth', async (importOriginal) => ({
   getCurrentUser: vi.fn(),
-  getUserLocationIds: vi.fn(() => ['loc-1']),
+  getUserLocationIds: vi.fn((u) => (u?.locations ? u.locations.map((l) => l.id) : ['loc-1'])),
+  // SCHEDROLES.1 — REAL: manager cancel / reject are judged at the swap's studio.
+  hasRoleAtLocation: (await importOriginal()).hasRoleAtLocation,
 }))
 vi.mock('@/lib/permissions', () => ({ hasPermissionForLocation: vi.fn(() => true) }))
 vi.mock('@/lib/push-dedup', () => ({
@@ -46,6 +48,7 @@ vi.mock('next/server', async (importOriginal) => {
 })
 
 const { createServerClient } = await import('@/lib/supabase')
+const { hasPermissionForLocation } = await import('@/lib/permissions')
 const { getCurrentUser } = await import('@/lib/auth')
 const { logRosterChange, markChangesNotified } = await import('@/lib/roster-change-log')
 const { logWarn } = await import('@/lib/log')
@@ -57,7 +60,7 @@ const { PUT } = await import('./route.js')
 // asserting on the spies.
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
 
-const MANAGER = { id: 'mgr-1', role: 'manager', full_name: 'Manny Manager' }
+const MANAGER = { id: 'mgr-1', role: 'manager', profileRole: 'manager', rolesByLocation: { 'loc-1': 'manager' }, full_name: 'Manny Manager' }
 const REQUESTER = 'coach-1'
 const PROPS = { params: Promise.resolve({ id: 'swap-1' }) }
 
@@ -231,7 +234,7 @@ describe('PUT /api/schedule/swaps/[id] — approved drop audit', () => {
 // needs their answer. These pin the switch to notifyUsersOnce /
 // notifyUsersAtRolesOnce (push + registry-gated email fallback).
 describe('PUT /api/schedule/swaps/[id] — notifications reach people without the app', () => {
-  const COACH = { id: 'coach-2', role: 'staff', full_name: 'Cora Coach' }
+  const COACH = { id: 'coach-2', role: 'staff', profileRole: 'staff', rolesByLocation: { 'loc-1': 'staff' }, full_name: 'Cora Coach' }
 
   it('a claim notifies the requester and the managers through the fallback senders', async () => {
     getCurrentUser.mockResolvedValue(COACH)
@@ -793,5 +796,71 @@ describe('PUT /api/schedule/swaps/[id] — reciprocal swap is atomic (SWAPATOMIC
     const res = await PUT(req({ status: 'approved' }), PROPS)
     expect(res.status).toBe(200)
     expect(calls).toEqual(['swap_update', 'assignment_update:assign-1'])
+  })
+})
+
+// SCHEDROLES.1 — manager cancel / reject used `user.role` (the ACTIVE
+// studio's role) with no location check at all, so a manager at one studio
+// could cancel or reject any swap id at another. Head coach at loc-1, plain
+// staff at loc-2.
+describe('PUT /api/schedule/swaps/[id] — manager branches judged at the swap\'s studio (SCHEDROLES.1)', () => {
+  const mixed = (active) => ({
+    id: 'mix', role: active === 'loc-1' ? 'head_coach' : 'staff', profileRole: 'staff',
+    full_name: 'Mixed Role', activeLocation: { id: active },
+    locations: [{ id: 'loc-1' }, { id: 'loc-2' }],
+    rolesByLocation: { 'loc-1': 'head_coach', 'loc-2': 'staff' },
+  })
+  const swapAt = (loc) => ({ ...dropSwap('published', '2099-01-01'), location_id: loc })
+
+  it('refuses to reject or cancel a colleague\'s swap at the studio where the caller is staff', async () => {
+    getCurrentUser.mockResolvedValue(mixed('loc-1'))
+    for (const status of ['rejected', 'cancelled']) {
+      const calls = []
+      createServerClient.mockReturnValue(buildDb(swapAt('loc-2'), calls))
+      const res = await PUT(req({ status }), PROPS)
+      expect(res.status).toBe(403)
+      expect(calls).toEqual([])
+    }
+  })
+
+  it('allows reject and cancel at the studio the caller manages', async () => {
+    getCurrentUser.mockResolvedValue(mixed('loc-1'))
+    for (const status of ['rejected', 'cancelled']) {
+      const calls = []
+      createServerClient.mockReturnValue(buildDb(swapAt('loc-1'), calls))
+      expect((await PUT(req({ status }), PROPS)).status).toBe(200)
+      expect(calls).toContain('swap_update')
+    }
+  })
+
+  it('still allows it with the ACTIVE studio set to the one where the caller is staff', async () => {
+    getCurrentUser.mockResolvedValue(mixed('loc-2'))
+    const calls = []
+    createServerClient.mockReturnValue(buildDb(swapAt('loc-1'), calls))
+    expect((await PUT(req({ status: 'rejected' }), PROPS)).status).toBe(200)
+  })
+
+  it('a coach may still cancel their OWN swap at a studio where they are staff', async () => {
+    getCurrentUser.mockResolvedValue({ ...mixed('loc-1'), id: REQUESTER })
+    const calls = []
+    createServerClient.mockReturnValue(buildDb(swapAt('loc-2'), calls))
+    expect((await PUT(req({ status: 'cancelled' }), PROPS)).status).toBe(200)
+  })
+
+  it('master may reject anywhere', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'boss', role: 'master', profileRole: 'master', locations: [], rolesByLocation: {}, full_name: 'Boss' })
+    createServerClient.mockReturnValue(buildDb(swapAt('loc-2'), []))
+    expect((await PUT(req({ status: 'rejected' }), PROPS)).status).toBe(200)
+  })
+
+  it('approve is still asked of the swap\'s studio (APPROVALS-PERCAT.1, unchanged)', async () => {
+    getCurrentUser.mockResolvedValue(mixed('loc-1'))
+    hasPermissionForLocation.mockClear()
+    hasPermissionForLocation.mockReturnValueOnce(false)
+    const calls = []
+    createServerClient.mockReturnValue(buildDb(swapAt('loc-2'), calls))
+    expect((await PUT(req({ status: 'approved' }), PROPS)).status).toBe(403)
+    expect(hasPermissionForLocation).toHaveBeenCalledWith(expect.objectContaining({ id: 'mix' }), 'loc-2', expect.any(String))
+    expect(calls).toEqual([])
   })
 })

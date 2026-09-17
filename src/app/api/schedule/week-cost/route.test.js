@@ -7,10 +7,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => ({})) }))
-vi.mock('@/lib/auth', () => ({
-  getCurrentUser: vi.fn(),
-  assertLocationAccess: vi.fn(() => null),
-}))
+vi.mock('@/lib/auth', async (importOriginal) => {
+  const real = await importOriginal()
+  return {
+    getCurrentUser: vi.fn(),
+    assertLocationAccess: vi.fn(() => null),
+    // SCHEDROLES.1 — REAL: the role at location_id is under test.
+    hasRoleAtLocation: real.hasRoleAtLocation,
+    hasRoleAtAnyLocation: real.hasRoleAtAnyLocation,
+  }
+})
 vi.mock('@/lib/roster-week-cost', () => ({ computeWeeklyFteHours: vi.fn() }))
 
 const { getCurrentUser, assertLocationAccess } = await import('@/lib/auth')
@@ -57,14 +63,14 @@ describe('GET /api/schedule/week-cost — auth', () => {
   })
 
   it('403 for a coach — hours against a contract are manager information', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'staff', locations: [{ id: LOC }] })
+    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'staff', profileRole: 'staff', locations: [{ id: LOC }], rolesByLocation: { [LOC]: 'staff' } })
     const res = await GET(buildReq(okParams))
     expect(res.status).toBe(403)
     expect(computeWeeklyFteHours).not.toHaveBeenCalled()
   })
 
   it('403 for a manager at another location, via assertLocationAccess', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'head_coach', locations: [{ id: OTHER }] })
+    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'head_coach', profileRole: 'staff', locations: [{ id: OTHER }], rolesByLocation: { [OTHER]: 'head_coach' } })
     assertLocationAccess.mockReturnValue(
       NextResponse.json({ success: false, error: 'Forbidden — location not in your assignments' }, { status: 403 })
     )
@@ -75,7 +81,7 @@ describe('GET /api/schedule/week-cost — auth', () => {
   })
 
   it('200 for a head_coach at the location', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'head_coach', locations: [{ id: LOC }] })
+    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'head_coach', profileRole: 'staff', locations: [{ id: LOC }], rolesByLocation: { [LOC]: 'head_coach' } })
     const res = await GET(buildReq(okParams))
     expect(res.status).toBe(200)
     const body = await res.json()
@@ -84,9 +90,42 @@ describe('GET /api/schedule/week-cost — auth', () => {
   })
 })
 
+// SCHEDROLES.1 — head coach at LOC, plain staff at OTHER. The route read
+// `user.role` (the ACTIVE studio's) and then checked only membership.
+describe('GET /api/schedule/week-cost — role at location_id (SCHEDROLES.1)', () => {
+  const mixed = (active) => ({
+    id: 'mix', role: active === LOC ? 'head_coach' : 'staff', profileRole: 'staff',
+    activeLocation: { id: active },
+    locations: [{ id: LOC }, { id: OTHER }],
+    rolesByLocation: { [LOC]: 'head_coach', [OTHER]: 'staff' },
+  })
+
+  it('refuses the studio where the caller is staff, and computes nothing', async () => {
+    getCurrentUser.mockResolvedValue(mixed(LOC))
+    const res = await GET(buildReq({ location_id: OTHER, week_start: '2026-05-04' }))
+    expect(res.status).toBe(403)
+    expect(computeWeeklyFteHours).not.toHaveBeenCalled()
+  })
+
+  it('allows the studio the caller manages', async () => {
+    getCurrentUser.mockResolvedValue(mixed(LOC))
+    expect((await GET(buildReq(okParams))).status).toBe(200)
+  })
+
+  it('still allows it with the ACTIVE studio set to the one where the caller is staff', async () => {
+    getCurrentUser.mockResolvedValue(mixed(OTHER))
+    expect((await GET(buildReq(okParams))).status).toBe(200)
+  })
+
+  it('master is allowed', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'boss', role: 'master', profileRole: 'master', locations: [], rolesByLocation: {} })
+    expect((await GET(buildReq({ location_id: OTHER, week_start: '2026-05-04' }))).status).toBe(200)
+  })
+})
+
 describe('GET /api/schedule/week-cost — contract', () => {
   beforeEach(() => {
-    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'manager', locations: [{ id: LOC }] })
+    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'manager', profileRole: 'staff', locations: [{ id: LOC }], rolesByLocation: { [LOC]: 'manager' } })
   })
 
   it('the body carries hours and NO pay field', async () => {

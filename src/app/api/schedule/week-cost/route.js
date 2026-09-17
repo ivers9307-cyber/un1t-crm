@@ -14,6 +14,8 @@
 // Gate: MANAGER_ROLES, then assertLocationAccess on the caller-supplied
 // location_id — a query-param route, so a foreign location is a 403 (the
 // 404 rule is for detail routes whose id comes from the path).
+// SCHEDROLES.1 — "MANAGER_ROLES" is the role AT location_id
+// (hasRoleAtLocation), never `user.role`, the ACTIVE studio's role.
 //
 // Query params:
 //   location_id  uuid (required)
@@ -26,7 +28,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { uuidLike, isoDate, MANAGER_ROLES } from '@/lib/schemas'
 import { computeWeeklyFteHours } from '@/lib/roster-week-cost'
 
@@ -40,7 +42,7 @@ const QuerySchema = z.object({
 
 export async function GET(request) {
   const user = await getCurrentUser()
-  if (!user || !MANAGER_ROLES.includes(user.role)) {
+  if (!user || !hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -59,6 +61,9 @@ export async function GET(request) {
 
   const guard = assertLocationAccess(user, location_id)
   if (guard) return guard
+  if (!hasRoleAtLocation(user, location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+  }
 
   try {
     const db = createServerClient()

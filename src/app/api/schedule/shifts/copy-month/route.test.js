@@ -7,10 +7,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
-vi.mock('@/lib/auth', () => ({
-  getCurrentUser: vi.fn(),
-  assertLocationAccess: vi.fn(() => null),
-}))
+vi.mock('@/lib/auth', async (importOriginal) => {
+  const real = await importOriginal()
+  return {
+    getCurrentUser: vi.fn(),
+    assertLocationAccess: vi.fn(() => null),
+    // SCHEDROLES.1 — REAL: the role at location_id is under test.
+    hasRoleAtLocation: real.hasRoleAtLocation,
+    hasRoleAtAnyLocation: real.hasRoleAtAnyLocation,
+  }
+})
 // COPYMODES.1 — only the READ is mocked; buildCopyPlan and the date mappers
 // run for real so the route's mode wiring is what's under test.
 vi.mock('@/lib/roster-copy', async () => {
@@ -64,7 +70,7 @@ beforeEach(() => {
   createServerClient.mockReset()
   createServerClient.mockReturnValue({})
   getCurrentUser.mockReset()
-  getCurrentUser.mockResolvedValue({ id: 'mgr-1', role: 'manager', locations: [{ id: LOC }], activeLocation: { id: LOC } })
+  getCurrentUser.mockResolvedValue({ id: 'mgr-1', role: 'manager', profileRole: 'manager', locations: [{ id: LOC }], activeLocation: { id: LOC }, rolesByLocation: { [LOC]: 'manager' } })
   fetchSourceBlocks.mockReset()
   bulkUpsertShiftAssignments.mockReset()
   readAssignmentKeysInRange.mockReset()
@@ -268,5 +274,46 @@ describe('POST /api/schedule/shifts/copy-month — removed slots', () => {
     const res = await POST(req(BODY))
     expect(res.status).toBe(500)
     expect(bulkUpsertShiftAssignments).not.toHaveBeenCalled()
+  })
+})
+
+// SCHEDROLES.1 — manager at LOC, plain staff at LOC_B. The route read
+// `user.role` (the ACTIVE studio's) and then checked only membership.
+describe('POST /api/schedule/shifts/copy-month — role at location_id (SCHEDROLES.1)', () => {
+  const LOC_B = 'b0000000-0000-4000-8000-000000000002'
+  const mixed = (active) => ({
+    id: 'mix', role: active === LOC ? 'manager' : 'staff', profileRole: 'staff',
+    activeLocation: { id: active },
+    locations: [{ id: LOC }, { id: LOC_B }],
+    rolesByLocation: { [LOC]: 'manager', [LOC_B]: 'staff' },
+  })
+  const body = (L) => ({ location_id: L, source_month_start: '2026-06-01', target_month_start: '2026-07-01' })
+  beforeEach(() => {
+    fetchSourceBlocks.mockResolvedValue({ blocks: [sourceBlock(['coach-1'])], error: null })
+    readAssignmentKeysInRange.mockResolvedValue({ rows: [], error: null, truncated: false })
+    bulkUpsertShiftAssignments.mockResolvedValue({ count: 1, error: null })
+  })
+
+  it('refuses the studio where the caller is staff, and reads or writes nothing', async () => {
+    getCurrentUser.mockResolvedValue(mixed(LOC))
+    const res = await POST(req(body(LOC_B)))
+    expect(res.status).toBe(403)
+    expect(fetchSourceBlocks).not.toHaveBeenCalled()
+    expect(bulkUpsertShiftAssignments).not.toHaveBeenCalled()
+  })
+
+  it('allows the studio the caller manages', async () => {
+    getCurrentUser.mockResolvedValue(mixed(LOC))
+    expect((await POST(req(body(LOC)))).status).toBe(201)
+  })
+
+  it('still allows it with the ACTIVE studio set to the one where the caller is staff', async () => {
+    getCurrentUser.mockResolvedValue(mixed(LOC_B))
+    expect((await POST(req(body(LOC)))).status).toBe(201)
+  })
+
+  it('master is allowed', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'boss', role: 'master', profileRole: 'master', locations: [], rolesByLocation: {} })
+    expect((await POST(req(body(LOC_B)))).status).toBe(201)
   })
 })

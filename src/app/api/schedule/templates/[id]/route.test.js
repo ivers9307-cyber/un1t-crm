@@ -26,8 +26,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { WEEKDAY_CODES, getMonday, addDays, formatDate } from '@/lib/roster'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth', async (importOriginal) => ({
   getCurrentUser: vi.fn(),
+  // SCHEDROLES.1 — REAL: the role at the template's studio is under test.
+  hasRoleAtLocation: (await importOriginal()).hasRoleAtLocation,
+  hasRoleAtAnyLocation: (await importOriginal()).hasRoleAtAnyLocation,
   assertLocationAccessOr404: (user, locationId) => {
     if (!user) {
       return new Response(JSON.stringify({ success: false, error: 'Unauthorized' }), { status: 401 })
@@ -122,11 +125,19 @@ function makeDb(fixtures = {}) {
 
 // Manager assigned ONLY to loc-a. Clears MANAGER_ROLES but must be barred
 // from loc-b's rows by the location gate.
-const MANAGER_A = { role: 'manager', locations: [{ id: 'loc-a' }] }
+const MANAGER_A = { role: 'manager', profileRole: 'manager', locations: [{ id: 'loc-a' }], rolesByLocation: { 'loc-a': 'manager' } }
 // Master sees every active location — getCurrentUser populates
 // user.locations with all of them, so assertLocationAccessOr404 is a
 // no-op for master. Mirror that here.
-const MASTER = { role: 'master', locations: [{ id: 'loc-a' }, { id: 'loc-b' }] }
+const MASTER = { role: 'master', profileRole: 'master', locations: [{ id: 'loc-a' }, { id: 'loc-b' }], rolesByLocation: {} }
+// SCHEDROLES.1 — manager at loc-a, plain staff at loc-b. `role` is the
+// ACTIVE studio's, which the route used to read.
+const MIXED = (active) => ({
+  role: active === 'loc-a' ? 'manager' : 'staff', profileRole: 'staff',
+  activeLocation: { id: active },
+  locations: [{ id: 'loc-a' }, { id: 'loc-b' }],
+  rolesByLocation: { 'loc-a': 'manager', 'loc-b': 'staff' },
+})
 
 function req(body) {
   return { json: () => Promise.resolve(body) }
@@ -298,6 +309,32 @@ describe('DELETE /api/schedule/templates/[id] — location scoping', () => {
     const body = await res.json()
     expect(body.success).toBe(true)
     expect(body.data.active).toBe(false)
+  })
+})
+
+// ─── SCHEDROLES.1 — role at the TEMPLATE's studio ────────────────────
+describe('PUT / DELETE /api/schedule/templates/[id] — role at the template\'s studio (SCHEDROLES.1)', () => {
+  it('refuses a template at the studio where the caller is staff (403), writing nothing', async () => {
+    getCurrentUser.mockResolvedValue(MIXED('loc-a'))
+    const db = useDb({ shift_templates: templates(), shift_blocks: [] })
+    expect((await PUT(req({ name: 'HIJACK' }), { params: { id: 'tmpl-b' } })).status).toBe(403)
+    expect((await DELETE(req({}), { params: { id: 'tmpl-b' } })).status).toBe(403)
+    expect(db._writes).toHaveLength(0)
+    expect(db._fixtures.shift_templates.find((t) => t.id === 'tmpl-b').active).toBe(true)
+  })
+
+  it('allows a template at the studio the caller manages', async () => {
+    getCurrentUser.mockResolvedValue(MIXED('loc-a'))
+    useDb({ shift_templates: templates(), shift_blocks: [] })
+    expect((await PUT(req({ name: 'Renamed' }), { params: { id: 'tmpl-a' } })).status).toBe(200)
+    expect((await DELETE(req({}), { params: { id: 'tmpl-a' } })).status).toBe(200)
+  })
+
+  it('still allows it with the ACTIVE studio set to the one where the caller is staff', async () => {
+    getCurrentUser.mockResolvedValue(MIXED('loc-b'))
+    useDb({ shift_templates: templates(), shift_blocks: [] })
+    expect((await PUT(req({ name: 'Renamed' }), { params: { id: 'tmpl-a' } })).status).toBe(200)
+    expect((await DELETE(req({}), { params: { id: 'tmpl-a' } })).status).toBe(200)
   })
 })
 

@@ -14,17 +14,39 @@
 // cannot work a shift raises a swap rather than deleting themselves off a
 // published roster. Managers act on locations they own (a foreign location
 // 404s, the detail-route rule); master acts anywhere.
+//
+// SCHEDROLES.1 — "manager" means manager AT THE SHIFT's location
+// (hasRoleAtLocation), not `user.role` (the ACTIVE studio's role). The early
+// refusal is now "manages nowhere"; a member of the shift's studio who is not
+// a manager THERE gets the same 403 after the row is loaded, and a
+// non-member still gets the 404.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser, getUserLocationIds, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { MANAGER_ROLES, timeOfDay } from '@/lib/schemas'
 import { notifyUsersOnce } from '@/lib/push-dedup'
 import { logRosterChange } from '@/lib/roster-change-log'
 import { notifyRosterChanges, markRosterChangesNotified } from '@/lib/roster-change-notify'
 import { logWarn } from '@/lib/log'
+
+// Shared by PUT and DELETE: the assignment's block location decides.
+// Returns a response to send, or null to carry on.
+function gateOnShiftLocation(user, assignment, forbiddenMessage) {
+  const blockLocation = assignment.shift_blocks?.location_id
+  const isMaster = user.profileRole === 'master'
+  // ROSTER-FIX.3 — an unscopeable row (no location_id) 404s for everyone
+  // but master; a foreign location 404s so the id is never confirmed.
+  if (!isMaster && (!blockLocation || !getUserLocationIds(user).includes(blockLocation))) {
+    return NextResponse.json({ success: false, error: 'Assignment not found' }, { status: 404 })
+  }
+  if (!isMaster && !hasRoleAtLocation(user, blockLocation, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: forbiddenMessage }, { status: 403 })
+  }
+  return null
+}
 
 // All fields optional. To CLEAR an override, send null explicitly
 // (z.nullable() vs .optional() — PUT body should pass null to remove
@@ -50,7 +72,7 @@ export async function PUT(request, props) {
 
   // ROSTER-FIX.3 (D3) — refuse before touching the body or the database:
   // a non-manager has nothing to say about a paid window.
-  if (!MANAGER_ROLES.includes(user.role)) {
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json(
       { success: false, error: 'Only a manager can change shift hours' },
       { status: 403 }
@@ -75,18 +97,13 @@ export async function PUT(request, props) {
     return NextResponse.json({ success: false, error: 'Assignment not found' }, { status: 404 })
   }
 
-  // Per-location ownership for non-master managers. A shift at a location
-  // the caller does not own is invisible, not forbidden — 404, matching the
-  // rest of the detail routes, so the response never confirms it exists.
-  // ROSTER-FIX.3 — a block with no location_id 404s too: an unscopeable row
-  // cannot be proved to belong to this manager, so it is not theirs to edit.
-  if (user.role !== 'master') {
-    const userLocationIds = getUserLocationIds(user)
-    const blockLocation = assignment.shift_blocks?.location_id
-    if (!blockLocation || !userLocationIds.includes(blockLocation)) {
-      return NextResponse.json({ success: false, error: 'Assignment not found' }, { status: 404 })
-    }
-  }
+  // Per-location ownership. A shift at a location the caller does not belong
+  // to is invisible, not forbidden — 404, matching the rest of the detail
+  // routes, so the response never confirms it exists. ROSTER-FIX.3 — a block
+  // with no location_id 404s too. SCHEDROLES.1 — a member who is not a
+  // manager at the shift's studio is refused.
+  const putGate = gateOnShiftLocation(user, assignment, 'Only a manager can change shift hours')
+  if (putGate) return putGate
 
   // Soft sanity check on overrides — if both are set and end <= start
   // (and neither crosses midnight), the operator's typo'd. Reject
@@ -236,7 +253,7 @@ export async function DELETE(_request, props) {
 
   // ROSTER-FIX.3 (D2) — a coach cannot delete themselves off a shift; the
   // way out of a shift you cannot work is a swap "drop" request.
-  if (!MANAGER_ROLES.includes(user.role)) {
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json(
       { success: false, error: 'Ask for a swap to drop this shift' },
       { status: 403 }
@@ -256,16 +273,11 @@ export async function DELETE(_request, props) {
     return NextResponse.json({ success: false, error: 'Assignment not found' }, { status: 404 })
   }
 
-  // Per-location ownership check for non-master managers — 404 (not 403) on
-  // a foreign location, matching the rest of the detail routes. ROSTER-FIX.3
-  // — a block with no location_id 404s too rather than falling through.
-  if (user.role !== 'master') {
-    const userLocationIds = getUserLocationIds(user)
-    const blockLocation = assignment.shift_blocks?.location_id
-    if (!blockLocation || !userLocationIds.includes(blockLocation)) {
-      return NextResponse.json({ success: false, error: 'Assignment not found' }, { status: 404 })
-    }
-  }
+  // Per-location ownership — 404 (not 403) on a foreign location, matching
+  // the rest of the detail routes. ROSTER-FIX.3 — a block with no location_id
+  // 404s too. SCHEDROLES.1 — a member who is not a manager THERE gets 403.
+  const deleteGate = gateOnShiftLocation(user, assignment, 'Ask for a swap to drop this shift')
+  if (deleteGate) return deleteGate
 
   const { error } = await db.from('shift_assignments').delete().eq('id', params.id)
   if (error) {

@@ -15,10 +15,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
-vi.mock('@/lib/auth', () => ({
-  getCurrentUser: vi.fn(),
-  getUserLocationIds: vi.fn(() => ['loc-1']),
-}))
+vi.mock('@/lib/auth', async (importOriginal) => {
+  const real = await importOriginal()
+  return {
+    getCurrentUser: vi.fn(),
+    getUserLocationIds: vi.fn(() => ['loc-1']),
+    // SCHEDROLES.1 — REAL: the role at the shift's studio is under test.
+    hasRoleAtLocation: real.hasRoleAtLocation,
+    hasRoleAtAnyLocation: real.hasRoleAtAnyLocation,
+  }
+})
 vi.mock('@/lib/push-dedup', () => ({ notifyUsersOnce: vi.fn().mockResolvedValue(undefined) }))
 vi.mock('@/lib/roster-change-log', () => ({ logRosterChange: vi.fn().mockResolvedValue({ logged: true }) }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
@@ -34,10 +40,17 @@ const { logRosterChange } = await import('@/lib/roster-change-log')
 const { notifyRosterChanges, markRosterChangesNotified } = await import('@/lib/roster-change-notify')
 const { PUT, DELETE } = await import('./route.js')
 
-const COACH = { id: 'coach-1', role: 'staff' }
-const RECEPTION = { id: 'coach-2', role: 'reception' }
-const MANAGER = { id: 'mgr-1', role: 'manager' }
-const MASTER = { id: 'boss-1', role: 'master' }
+const COACH = { id: 'coach-1', role: 'staff', profileRole: 'staff', rolesByLocation: { 'loc-1': 'staff' } }
+const RECEPTION = { id: 'coach-2', role: 'reception', profileRole: 'staff', rolesByLocation: { 'loc-1': 'reception' } }
+const MANAGER = { id: 'mgr-1', role: 'manager', profileRole: 'manager', rolesByLocation: { 'loc-1': 'manager' } }
+const MASTER = { id: 'boss-1', role: 'master', profileRole: 'master', rolesByLocation: {} }
+// SCHEDROLES.1 — manager at loc-1, plain staff at loc-2. `role` is the ACTIVE
+// studio's, which the route must not consult.
+const mixed = (active) => ({
+  id: 'mix-1', role: active === 'loc-1' ? 'manager' : 'staff', profileRole: 'staff',
+  activeLocation: { id: active },
+  rolesByLocation: { 'loc-1': 'manager', 'loc-2': 'staff' },
+})
 
 const PROPS = { params: Promise.resolve({ id: 'assign-1' }) }
 
@@ -419,5 +432,52 @@ describe('DELETE /api/schedule/assignments/[id] — a coach cannot drop themselv
 
     await PUT(req({ start_time_override: '10:00:00' }), PROPS)
     expect(notifyRosterChanges).not.toHaveBeenCalled()
+  })
+})
+
+describe('PUT / DELETE /api/schedule/assignments/[id] — role at the SHIFT\'s studio (SCHEDROLES.1)', () => {
+  beforeEach(() => { getUserLocationIds.mockReturnValue(['loc-1', 'loc-2']) })
+
+  it('refuses a manager-at-A acting on a shift at B, where they are staff (403, nothing written)', async () => {
+    getCurrentUser.mockResolvedValue(mixed('loc-1'))
+    const put = buildDb({ assignment: assignmentRow({ locationId: 'loc-2' }) })
+    createServerClient.mockReturnValue(put.db)
+    const res = await PUT(req({ start_time_override: '10:00' }), PROPS)
+    expect(res.status).toBe(403)
+    expect(put.updateSpy).not.toHaveBeenCalled()
+
+    const del = buildDb({ assignment: assignmentRow({ locationId: 'loc-2' }) })
+    createServerClient.mockReturnValue(del.db)
+    const res2 = await DELETE(req(), PROPS)
+    expect(res2.status).toBe(403)
+    expect(del.deleteSpy).not.toHaveBeenCalled()
+  })
+
+  it('allows the same caller on a shift at A', async () => {
+    getCurrentUser.mockResolvedValue(mixed('loc-1'))
+    const put = buildDb({ assignment: assignmentRow({ locationId: 'loc-1' }) })
+    createServerClient.mockReturnValue(put.db)
+    expect((await PUT(req({ start_time_override: '10:00' }), PROPS)).status).toBe(200)
+    const del = buildDb({ assignment: assignmentRow({ locationId: 'loc-1' }) })
+    createServerClient.mockReturnValue(del.db)
+    expect((await DELETE(req(), PROPS)).status).toBe(200)
+  })
+
+  it('still allows a shift at A with the ACTIVE studio set to B, where they are staff', async () => {
+    getCurrentUser.mockResolvedValue(mixed('loc-2'))
+    const put = buildDb({ assignment: assignmentRow({ locationId: 'loc-1' }) })
+    createServerClient.mockReturnValue(put.db)
+    expect((await PUT(req({ start_time_override: '10:00' }), PROPS)).status).toBe(200)
+    const del = buildDb({ assignment: assignmentRow({ locationId: 'loc-1' }) })
+    createServerClient.mockReturnValue(del.db)
+    expect((await DELETE(req(), PROPS)).status).toBe(200)
+  })
+
+  it('master is allowed at any studio', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    getUserLocationIds.mockReturnValue([])
+    const del = buildDb({ assignment: assignmentRow({ locationId: 'loc-2' }) })
+    createServerClient.mockReturnValue(del.db)
+    expect((await DELETE(req(), PROPS)).status).toBe(200)
   })
 })

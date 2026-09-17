@@ -2,7 +2,7 @@
 import { NextResponse, after } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser, getUserLocationIds, hasRoleAtLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { swapStatusSchema } from '@/lib/schemas'
 import { resolveSwapTransition, swapChangeLogEntries, reciprocalSwapError } from '@/lib/swap-lifecycle'
@@ -58,6 +58,10 @@ export async function PUT(request, props) {
     // APPROVALS-PERCAT.1 — the "approve" transition is gated by the
     // approvals_shift_swaps permission rather than a bare manager-role check.
     canApprove: swap ? hasPermissionForLocation(user, swap.location_id, APPROVAL_CATEGORY_PERMISSION.shift_swaps) : false,
+    // SCHEDROLES.1 — manager cancel / reject are judged at the SWAP's studio,
+    // not from `user.role` (the ACTIVE studio's role), which carried no
+    // location check at all on those two branches.
+    isManagerHere: swap ? hasRoleAtLocation(user, swap.location_id, MANAGER_ROLES) : false,
   })
 
   if (!decision.ok) {

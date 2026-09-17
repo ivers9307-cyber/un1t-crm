@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess , getUserLocationIds} from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess, getUserLocationIds, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { validateBody, uuidLike } from '@/lib/validate'
 import { MANAGER_ROLES, timeOfDay, hexColor, DEFAULT_COLOR } from '@/lib/schemas'
 import { WEEKDAY_CODES, generateBlocksForTemplate } from '@/lib/roster'
@@ -52,9 +52,12 @@ export async function GET(request) {
 
 // POST /api/schedule/templates — Create a shift template.
 // Auto-generates blocks for the next 8 weeks if days_of_week is set.
+//
+// SCHEDROLES.1 — manager AT body.location_id, not at the active studio
+// (`user.role`); the first check is only "manages somewhere".
 export async function POST(request) {
   const user = await getCurrentUser()
-  if (!user || !MANAGER_ROLES.includes(user.role)) {
+  if (!user || !hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -64,6 +67,9 @@ export async function POST(request) {
 
   const guard = assertLocationAccess(user, body.location_id)
   if (guard) return guard
+  if (!hasRoleAtLocation(user, body.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+  }
 
   const db = createServerClient()
   const { data: template, error } = await db.from('shift_templates').insert({

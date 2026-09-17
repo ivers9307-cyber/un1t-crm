@@ -16,7 +16,7 @@
 // Returns:
 //   { success: true,
 //     assigned: [{ block_id, assignment_id }],
-//     skipped:  [{ block_id, reason }],   // 'at_capacity' | 'already_assigned' | 'not_found' | 'cross_location'
+//     skipped:  [{ block_id, reason }],   // 'at_capacity' | 'already_assigned' | 'not_found' | 'cross_location' | 'not_at_location'
 //     warnings: string[]                  // aggregated time-off advisories
 //   }
 //
@@ -33,11 +33,18 @@
 // window.
 //
 // Manager+ gated (matches the single-block assignment route).
+//
+// SCHEDROLES.1 — judged PER BLOCK at that block's location
+// (hasRoleAtLocation), not from `user.role` (the ACTIVE studio's role). A
+// block at a studio where the caller is not a manager — including one where
+// they are merely staff — is skipped as `cross_location`, exactly as a block
+// at a studio they don't belong to always was. The request-level pre-check
+// is only "manages somewhere".
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
 import { timeRangesOverlap, fmtTime } from '@/lib/schedule-overlap'
@@ -55,7 +62,7 @@ export const runtime = 'nodejs'
 
 export async function POST(request) {
   const user = await getCurrentUser()
-  if (!user || !MANAGER_ROLES.includes(user.role)) {
+  if (!user || !hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -80,9 +87,20 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: blocksErr.message }, { status: 500 })
   }
 
-  const allowedLocations = user.role === 'master'
-    ? null  // master sees all
-    : new Set(getUserLocationIds(user))
+
+  // SCHEDROLES.1 — the coach must belong to each block's studio, master
+  // included. Read once, before any leave read or insert; a block at a studio
+  // the coach is not on is skipped as `not_at_location`, so nothing about a
+  // foreign profile (name, leave, other shifts) reaches the warnings. Fail
+  // closed on a read error.
+  const { data: coachLinks, error: coachLinksErr } = await db
+    .from('profile_locations')
+    .select('location_id')
+    .eq('profile_id', body.profile_id)
+  if (coachLinksErr) {
+    return NextResponse.json({ success: false, error: coachLinksErr.message }, { status: 500 })
+  }
+  const coachLocationIds = new Set((coachLinks || []).map((l) => l.location_id))
 
   const blocksById = new Map((blocks || []).map((b) => [b.id, b]))
   const skipped = []
@@ -95,8 +113,12 @@ export async function POST(request) {
       skipped.push({ block_id: requestedId, reason: 'not_found' })
       continue
     }
-    if (allowedLocations && !allowedLocations.has(block.location_id)) {
+    if (!hasRoleAtLocation(user, block.location_id, MANAGER_ROLES)) {
       skipped.push({ block_id: requestedId, reason: 'cross_location' })
+      continue
+    }
+    if (!coachLocationIds.has(block.location_id)) {
+      skipped.push({ block_id: requestedId, reason: 'not_at_location' })
       continue
     }
     const activeAssignments = (block.shift_assignments || []).filter((a) => a.status !== 'cancelled')

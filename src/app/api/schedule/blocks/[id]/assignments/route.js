@@ -22,13 +22,17 @@
 // so an admin override ("we really do need a 16th coach today") stays
 // possible by passing { allow_over_capacity: true }.
 //
+// SCHEDROLES.1 — authority is the caller's role at the BLOCK's location, not
+// `user.role` (the ACTIVE studio's). The pre-check is only "manages
+// somewhere"; the real decision runs once the block is loaded.
+//
 // Time-off conflicts are surfaced as warnings (advisory; mirrors the
 // legacy /api/schedule/shifts POST), not a hard block.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
 import { timeRangesOverlap, fmtTime } from '@/lib/schedule-overlap'
@@ -54,7 +58,7 @@ const ASSIGNMENT_SELECT = `
 export async function POST(request, props) {
   const params = await props.params
   const user = await getCurrentUser()
-  if (!user || !MANAGER_ROLES.includes(user.role)) {
+  if (!user || !hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -76,18 +80,42 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: 'Block not found' }, { status: 404 })
   }
 
-  if (user.role !== 'master') {
-    const userLocationIds = getUserLocationIds(user)
-    if (!userLocationIds.includes(block.location_id)) {
-      return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
-    }
+  // SCHEDROLES.1 — an outsider to the block's studio gets 404 (the id is not
+  // confirmed); a member who is not a manager THERE gets 403. Master bypasses
+  // both inside the helpers.
+  const notHere = assertLocationAccessOr404(user, block.location_id)
+  if (notHere) return notHere
+  if (!hasRoleAtLocation(user, block.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
   // Normalise to an array; dedupe so a doubled-up client send doesn't
   // produce ambiguous outcomes.
-  const requestedIds = isLegacySingle
+  const allRequestedIds = isLegacySingle
     ? [body.profile_id]
     : Array.from(new Set(body.profile_ids))
+
+  // SCHEDROLES.1 — only a coach who belongs to the BLOCK's studio can be put
+  // on it, master included. Checked before any leave or double-booking read
+  // and before the insert, so a foreign profile id never produces a warning
+  // naming someone at another studio, their leave, or their other shifts.
+  // Fail closed: an unreadable membership list assigns nobody.
+  const { data: memberRows, error: memberErr } = await db
+    .from('profile_locations')
+    .select('profile_id')
+    .eq('location_id', block.location_id)
+    .in('profile_id', allRequestedIds)
+  if (memberErr) {
+    return NextResponse.json({ success: false, error: memberErr.message }, { status: 500 })
+  }
+  const membersHere = new Set((memberRows || []).map((r) => r.profile_id))
+  if (isLegacySingle && !membersHere.has(body.profile_id)) {
+    return NextResponse.json(
+      { success: false, error: 'This coach is not on the staff of this studio.' },
+      { status: 400 },
+    )
+  }
+  const requestedIds = allRequestedIds.filter((id) => membersHere.has(id))
 
   // Who's already on this block? Skip them silently — same posture
   // as bulk-assign. Pulled once up-front to avoid an N+1.
@@ -123,7 +151,9 @@ export async function POST(request, props) {
   let runningCount = liveExisting.length
 
   const assigned = []
-  const skipped = []
+  const skipped = allRequestedIds
+    .filter((id) => !membersHere.has(id))
+    .map((id) => ({ profile_id: id, reason: 'not_at_location' }))
   const warnings = []
 
   for (const profileId of requestedIds) {
@@ -137,6 +167,7 @@ export async function POST(request, props) {
     }
 
     // Per-coach time-off advisory. Mirrors the legacy shifts POST.
+    // `profileId` is a verified member of the block's studio (above).
     const { data: timeOff } = await db
       .from('time_off_requests')
       .select('type, start_date, end_date, profiles!profile_id(full_name)')
