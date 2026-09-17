@@ -333,9 +333,15 @@ BEGIN
   END IF;
 
   -- Inheritance-aware — information_schema does not follow role membership.
+  -- Review finding: the catalog query above filters on the two role NAMES, so
+  -- a PUBLIC or inherited grant would slip past it for every withheld column.
+  -- The budget pair carried that cover; `notes` and the approver stand for the
+  -- rest, so no withheld column rests on the catalog query alone.
   IF has_column_privilege('authenticated', 'public.rosters', 'projected_contractor_eur', 'SELECT')
-     OR has_column_privilege('authenticated', 'public.rosters', 'budget_at_publish_eur', 'SELECT') THEN
-    RAISE EXCEPTION 'RLSSCOPE.2: a budget column is still reachable by authenticated (role inheritance?)';
+     OR has_column_privilege('authenticated', 'public.rosters', 'budget_at_publish_eur', 'SELECT')
+     OR has_column_privilege('authenticated', 'public.rosters', 'notes', 'SELECT')
+     OR has_column_privilege('authenticated', 'public.rosters', 'over_budget_approval_by', 'SELECT') THEN
+    RAISE EXCEPTION 'RLSSCOPE.2: a withheld column is still reachable by authenticated (role inheritance?)';
   END IF;
   IF NOT has_column_privilege('authenticated', 'public.rosters', 'status', 'SELECT')
      OR NOT has_column_privilege('authenticated', 'public.rosters', 'id', 'SELECT') THEN
