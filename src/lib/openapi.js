@@ -4315,7 +4315,7 @@ registry.registerPath({
   tags: ['Schedule'],
   security: [{ CookieAuth: [] }],
   summary: 'List scheduled shifts',
-  description: "Returns shifts for the caller's locations, optionally filtered by location_id, start_date, end_date, profile_id. (The legacy create / update / delete shift endpoints were retired — use the block-based assignment routes.)",
+  description: "Returns shifts for the caller's locations, optionally filtered by location_id, start_date, end_date, profile_id. Each row is judged against the caller's role at THAT row's location: where the caller is not owner/manager/head_coach, draft shifts are omitted and the row is slimmed — the assignee profile carries id, full_name, avatar_url and role only (no email), and notes / partial_reason are null on colleagues' rows. (The legacy create / update / delete shift endpoints were retired — use the block-based assignment routes.)",
   responses: {
     200: { description: 'Shifts' },
     403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },

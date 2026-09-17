@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess , getUserLocationIds} from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess, getUserLocationIds, hasRoleAtLocation } from '@/lib/auth'
+import { hasPermissionForLocation } from '@/lib/permissions'
+import { APPROVAL_CATEGORY_PERMISSION } from '@shared/permissions'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
 import { notifyUsersOnce, notifyUsersAtRolesOnce } from '@/lib/push-dedup'
@@ -56,14 +58,33 @@ export async function GET(request) {
     `)
     .order('created_at', { ascending: false })
 
+  const scopeIds = locationId ? [locationId] : getUserLocationIds(user)
+  if (scopeIds.length === 0) return NextResponse.json({ success: true, data: [] })
   if (locationId) {
     query = query.eq('location_id', locationId)
   } else {
-    const userLocationIds = getUserLocationIds(user)
-    if (userLocationIds.length === 0) return NextResponse.json({ success: true, data: [] })
-    query = query.in('location_id', userLocationIds)
+    query = query.in('location_id', scopeIds)
   }
   if (status) query = query.eq('status', status)
+
+  // COACHSCOPE.1 — this list used to return EVERY swap at the studio to any
+  // coach there (who is swapping with whom, their reasons, the manager's
+  // review notes). A caller now sees a location's whole list only if they
+  // review swaps THERE: a manager role at that location, or the
+  // approvals_shift_swaps permission for it (the same gate PUT /swaps/[id]
+  // approves with). Everyone else gets exactly what the coach swap UIs read:
+  // swaps they requested, swaps targeted at / claimed by them, and the open
+  // pool (untargeted + pending) they may claim.
+  const reviewerLocIds = new Set(scopeIds.filter((loc) => canReviewSwapsAt(user, loc)))
+  if (reviewerLocIds.size < scopeIds.length) {
+    const terms = [
+      `requester_id.eq.${user.id}`,
+      `target_id.eq.${user.id}`,
+      'and(target_id.is.null,status.eq.pending)',
+    ]
+    if (reviewerLocIds.size > 0) terms.unshift(`location_id.in.(${[...reviewerLocIds].join(',')})`)
+    query = query.or(terms.join(','))
+  }
 
   // CT-P3 actionable lists for coaches. for_me = swaps targeted at / claimed
   // by the caller (needs their accept/decline or shows "awaiting manager").
@@ -84,12 +105,42 @@ export async function GET(request) {
 
   // Flatten the embedded assignment back to the legacy shift shape the
   // consumers read (requester_shift.shift_date / .shift_templates / overrides).
-  const shaped = (data || []).map((row) => ({
-    ...row,
-    requester_shift: swapShiftShape(row.requester_shift),
-    target_shift: swapShiftShape(row.target_shift),
-  }))
+  const shaped = (data || []).flatMap((row) => {
+    const full = {
+      ...row,
+      requester_shift: swapShiftShape(row.requester_shift),
+      target_shift: swapShiftShape(row.target_shift),
+    }
+    if (reviewerLocIds.has(row.location_id)) return [full]
+    // The query's .or() already narrowed these; this is the same rule again
+    // in code, so the response never depends on the filter string alone.
+    const mine = row.requester_id === user.id || row.target_id === user.id
+    const openPool = row.target_id == null && row.status === 'pending'
+    if (!mine && !openPool) return []
+    return [slimSwapForCoach(full, user.id, mine)]
+  })
   return NextResponse.json({ success: true, data: shaped })
+}
+
+function canReviewSwapsAt(user, locationId) {
+  return hasRoleAtLocation(user, locationId, MANAGER_ROLES)
+    || hasPermissionForLocation(user, locationId, APPROVAL_CATEGORY_PERMISSION.shift_swaps)
+}
+
+// COACHSCOPE.1 — a coach's view of a swap row. A colleague's shift embed loses
+// its assignment notes (a manager's working notes about that person); a row
+// the caller is not party to (an open-pool swap they may claim) also loses the
+// requester's free-text reason and any review note. Names, shift name, date
+// and times — what the swap UIs render — stay.
+function slimSwapForCoach(row, viewerId, mine) {
+  const slimShift = (sh) => (sh && sh.profile_id !== viewerId ? { ...sh, notes: null } : sh)
+  return {
+    ...row,
+    reason: mine ? row.reason : null,
+    review_note: mine ? row.review_note : null,
+    requester_shift: slimShift(row.requester_shift),
+    target_shift: slimShift(row.target_shift),
+  }
 }
 
 // POST /api/schedule/swaps — Create a swap request
