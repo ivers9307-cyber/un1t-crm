@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { effShiftStart, effShiftEnd, initials, teamRosterForDay } from './schedule-team'
+import { effShiftStart, effShiftEnd, initials, teamRosterForDay, blockStart, blockEnd } from './schedule-team'
 
 describe('initials', () => {
   it('first + last initial for multi-word names', () => {
@@ -49,6 +49,18 @@ describe('effShiftStart / effShiftEnd', () => {
     }
     expect(effShiftStart(blockRow)).toBe('09:30:00')
     expect(effShiftEnd(blockRow)).toBe('13:30:00')
+  })
+
+  // MOBILESCHED.2 — the block default an override is measured against.
+  it('blockStart / blockEnd ignore the override and resolve block → template', () => {
+    const row = {
+      start_time_override: '10:00:00', end_time_override: '11:00:00',
+      block_start_time: '09:30:00',
+      shift_templates: { start_time: '09:00:00', end_time: '13:00:00' },
+    }
+    expect(blockStart(row)).toBe('09:30:00')
+    expect(blockEnd(row)).toBe('13:00:00')
+    expect(blockStart(null)).toBeNull()
   })
 
   it('returns null when there is no time at all', () => {

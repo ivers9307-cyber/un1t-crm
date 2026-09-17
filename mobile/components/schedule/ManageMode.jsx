@@ -15,6 +15,7 @@ import {
   getScheduleBlocks, getLocationStaff, assignCoachToBlock, removeAssignment,
 } from '../../lib/schedule-api'
 import { effShiftStart } from '../../lib/schedule-team'
+import { adjustTargetFor } from '../../lib/schedule-manage'
 import BlockCard from './BlockCard'
 import CoachPickerSheet from './CoachPickerSheet'
 
@@ -52,7 +53,7 @@ export default function ManageMode({ activeLocation, weekStart, weekEnd, selecte
 
   const dayBlocks = blocks
     .filter((b) => b.block_date === selectedIso)
-    .sort((a, b) => (effShiftStart(a) || a.start_time || '').localeCompare(effShiftStart(b) || b.start_time || ''))
+    .sort((a, b) => (effShiftStart(a) || '').localeCompare(effShiftStart(b) || ''))
 
   // ROSTER-FIX.7 — the assignable-staff pool is fetched once and cached for
   // the life of the mount, and it went stale two ways. (1) It is a PER-LOCATION
@@ -119,16 +120,7 @@ export default function ManageMode({ activeLocation, weekStart, weekEnd, selecte
       assignment.profiles?.full_name || 'Coach',
       `${block.shift_templates?.name || 'Shift'} · ${block.block_date}`,
       [
-        { text: 'Adjust times', onPress: () => onAdjust({
-          shift_assignment_id: assignment.id,
-          shift_date: block.block_date,
-          start_time: block.start_time,
-          end_time: block.end_time,
-          shift_templates: block.shift_templates,
-          start_time_override: assignment.start_time_override ?? null,
-          end_time_override: assignment.end_time_override ?? null,
-          partial_reason: assignment.partial_reason ?? null,
-        }) },
+        { text: 'Adjust times', onPress: () => onAdjust(adjustTargetFor(block, assignment)) },
         { text: 'Remove from shift', style: 'destructive', onPress: () => confirmRemove(block, assignment) },
         { text: 'Cancel', style: 'cancel' },
       ],

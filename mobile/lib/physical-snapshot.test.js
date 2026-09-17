@@ -338,6 +338,13 @@ describe('slimShiftsForCache', () => {
       shift_templates: { name: 'Coach AM', start_time: '06:00:00', end_time: '14:00:00' },
     }])
   })
+  // MOBILESCHED.2 — shiftTimeLabel reads the block's time before the
+  // template's, so a cached paint must keep it.
+  it('keeps the block times the Home label resolves before the template', () => {
+    const [row] = slimShiftsForCache([{ ...fat, start_time_override: null, end_time_override: null, block_start_time: '07:00:00', block_end_time: '12:00:00' }])
+    expect(row.block_start_time).toBe('07:00:00')
+    expect(row.block_end_time).toBe('12:00:00')
+  })
   it('drops absent optional branches rather than writing nulls for them', () => {
     const [row] = slimShiftsForCache([{ id: 'a', shift_date: '2026-08-24' }])
     expect(row).toEqual({ id: 'a', shift_date: '2026-08-24' })

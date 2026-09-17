@@ -8,6 +8,10 @@
 // end_time, name, role_label }, shift_date, profile_id, and
 // profiles { id, full_name, avatar_url, role }.
 
+import {
+  effectiveShiftStart, effectiveShiftEnd, blockDefaultStart, blockDefaultEnd,
+} from 'shared/roster-month'
+
 // Effective shift times. Resolve override → block → template. Single
 // definition shared by the Team sort helper AND the Schedule screen (which
 // imports these back).
@@ -19,10 +23,15 @@
 // The template is the LAST resort — a block moved off its template's hours
 // must never sort or display at the template time, which is the one time
 // nobody works.
-export const effShiftStart = (s) =>
-  s?.start_time_override || s?.block_start_time || s?.start_time || s?.shift_templates?.start_time || null
-export const effShiftEnd = (s) =>
-  s?.end_time_override || s?.block_end_time || s?.end_time || s?.shift_templates?.end_time || null
+//
+// MOBILESCHED.2 — the resolution now lives in shared/roster-month.js so the
+// Home tab's dashboard rows, the "On with you today" strip and this screen
+// cannot resolve it three different ways again.
+export const effShiftStart = (s) => effectiveShiftStart(s)
+export const effShiftEnd = (s) => effectiveShiftEnd(s)
+// The block default an override is measured against (no override applied).
+export const blockStart = (s) => blockDefaultStart(s)
+export const blockEnd = (s) => blockDefaultEnd(s)
 
 // Up-to-2-letter initials for an avatar fallback: first letter of the first
 // word + first letter of the last word, uppercased. Single word → one letter.

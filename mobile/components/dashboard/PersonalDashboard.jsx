@@ -17,7 +17,7 @@ import { fetchPersonalDashboard } from '../../lib/dashboard-api'
 // ROSTER-FIX.7h — "today" on a roster is the STUDIO's day. See dates.js.
 import { dublinTodayIso } from '../../lib/dates'
 import { pickLocationColor } from 'shared/location-colors'
-import { buildMonthMatrix, shiftDurationHours } from 'shared/roster-month'
+import { buildMonthMatrix, shiftDurationHours, effectiveShiftStart, effectiveShiftEnd } from 'shared/roster-month'
 import { groupTeamShiftsByCoach, coachSpanLabel } from 'shared/team-today'
 import {
   KpiCard, KpiRow, SectionHeader, ListCard,
@@ -44,9 +44,12 @@ import DueInspectionsCard from './DueInspectionsCard'
 // viewer has no queue permissions or nothing is pending.
 import NeedsAttentionCard from './NeedsAttentionCard'
 
+// MOBILESCHED.2 — override → the block's own time → template, the same
+// resolution shiftDurationHours uses beside it. Was override → template, so a
+// block edited away from its template showed the template's hours.
 function shiftTime(shift) {
-  const start = (shift.start_time_override || shift.shift_templates?.start_time || '').slice(0, 5)
-  const end = (shift.end_time_override || shift.shift_templates?.end_time || '').slice(0, 5)
+  const start = (effectiveShiftStart(shift) || '').slice(0, 5)
+  const end = (effectiveShiftEnd(shift) || '').slice(0, 5)
   return `${start} – ${end}`
 }
 
@@ -146,11 +149,6 @@ function WeekPanel({ title, startIso, endIso, shifts, showLocation, onShiftPress
                         {s.shift_templates?.name || 'Shift'}
                       </Text>
                       <View className="flex-row items-center">
-                        {s.published === false && (
-                          <View className="ml-2 px-1.5 py-0.5 rounded bg-amber-500/20">
-                            <Text className="text-[9px] uppercase text-amber-700 font-semibold">Draft</Text>
-                          </View>
-                        )}
                         {/* ROSTER-FIX.3 (D3) — a coach can no longer adjust their own
                             hours, so they must still be able to SEE that a manager
                             adjusted them. */}
@@ -311,11 +309,6 @@ function MonthAgenda({ matrix, showLocation, onShiftPress }) {
                             {s.shift_templates?.name || 'Shift'}
                           </Text>
                           <View className="flex-row items-center">
-                            {s.published === false && (
-                              <View className="ml-2 px-1.5 py-0.5 rounded bg-amber-500/20">
-                                <Text className="text-[9px] uppercase text-amber-700 font-semibold">Draft</Text>
-                              </View>
-                            )}
                             {/* ROSTER-FIX.3 (D3) — manager-set hours stay visible to the coach. */}
                             {(s.start_time_override || s.end_time_override) && (
                               <View className="ml-2 px-1.5 py-0.5 rounded bg-amber-400">
