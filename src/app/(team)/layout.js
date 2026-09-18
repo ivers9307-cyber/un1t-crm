@@ -34,7 +34,7 @@ export default async function TeamHubLayout({ children }) {
   return (
     <>
       {tabs.length > 1 && (
-        <div className="px-8 pt-6 print:hidden">
+        <div className="px-4 pt-6 sm:px-8 print:hidden">
           <HubTabs tabs={tabs} />
         </div>
       )}

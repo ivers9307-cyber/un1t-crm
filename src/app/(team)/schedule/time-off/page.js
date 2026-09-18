@@ -21,7 +21,7 @@ export default async function TimeOffPage() {
     hasPermissionForLocation(user, user.activeLocation?.id, APPROVAL_CATEGORY_PERMISSION.time_off)
 
   return (
-    <div className="p-8">
+    <div className="px-4 py-6 sm:p-8">
       {/* SCHED.9 — one of the two real convergence targets for the old
           inline "Approvals" tab (see ScheduleTabs.jsx). */}
       <ScheduleTabs user={user} />

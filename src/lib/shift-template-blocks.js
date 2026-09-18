@@ -11,30 +11,46 @@
 
 import { liveAssignments } from './roster'
 
+// PostgREST caps every select at 1,000 rows whatever it asks for (CLAUDE.md).
+const FUTURE_BLOCK_PAGE_SIZE = 1000
+
 /**
  * The future blocks for a template, with everything the deactivate decision
  * needs: whether each is on a published roster and whether anyone is on it.
  *
- * 🔴 UNPAGINATED, and that is a bound, not an oversight: every `.select()`
- * returns at most 1,000 rows whatever it asks for (CLAUDE.md). This is ONE
- * template over the generation horizon, which is 8 weeks (generateBlocksFor-
- * Template) and at most one block per template per day per location (mig 067's
- * unique key), so the ceiling is 56 rows. If the horizon is ever lengthened
- * past ~2.7 years, this has to `.range()`-paginate with an explicit `.order()`
- * or it will silently clear only the first 1,000 blocks. The `.order()` is
- * here already so that paging can be added without changing what it returns.
+ * ROSTERTIDY.1 — PAGED. This used to rest on a bound: one template over the
+ * 8-week generation horizon is at most 56 rows, so the 1,000-row cap looked
+ * unreachable. But the same read feeds the template-minimum propagation, and a
+ * bound that lives in another file (generateBlocksForTemplate's horizon) is
+ * one nobody re-checks when it changes — past the cap this would silently
+ * clamp, or clear, only the first 1,000 blocks. Paged on (block_date, id).
+ * Mig 067's unique key already makes block_date unique within one template at
+ * one location; the id tiebreak is there so page boundaries stay stable even
+ * if that key is ever relaxed.
+ *
+ * A page that fails returns the error and NO blocks, never the pages read so
+ * far — a partial list here reads as "these are all the future blocks", which
+ * is exactly the silent skip paging exists to prevent.
  *
  * @returns {Promise<{ blocks: Array<object>, error: any }>}
  */
 export async function readFutureBlocksForTemplate(db, { templateId, locationId, today }) {
-  const { data, error } = await db
-    .from('shift_blocks')
-    .select('id, block_date, start_time, end_time, min_coaches, max_coaches, roster_id, rosters:roster_id(status), shift_assignments(profile_id, status)')
-    .eq('template_id', templateId)
-    .eq('location_id', locationId)
-    .gte('block_date', today)
-    .order('block_date', { ascending: true })
-  return { blocks: data || [], error: error || null }
+  const blocks = []
+  for (let from = 0; ; from += FUTURE_BLOCK_PAGE_SIZE) {
+    const { data: page, error } = await db
+      .from('shift_blocks')
+      .select('id, block_date, start_time, end_time, min_coaches, max_coaches, roster_id, rosters:roster_id(status), shift_assignments(profile_id, status)')
+      .eq('template_id', templateId)
+      .eq('location_id', locationId)
+      .gte('block_date', today)
+      .order('block_date', { ascending: true })
+      .order('id', { ascending: true })
+      .range(from, from + FUTURE_BLOCK_PAGE_SIZE - 1)
+    if (error) return { blocks: [], error }
+    blocks.push(...(page || []))
+    if (!page || page.length < FUTURE_BLOCK_PAGE_SIZE) break
+  }
+  return { blocks, error: null }
 }
 
 /**

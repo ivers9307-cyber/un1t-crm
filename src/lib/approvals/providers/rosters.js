@@ -21,7 +21,13 @@
 // projection knows which month is over. /schedule/approvals already
 // re-projects per draft for exactly this reason; this is the same read,
 // bounded by the same limit below.
-import { projectPublishImpact } from '@/lib/roster-publish'
+//
+// ROSTERTIDY.1 — re-projected as ONE batch, not once per draft. Each
+// per-draft call reloaded the location, its contractor rates, every block in
+// every month the draft touched and the leave over them — up to 50 times per
+// page view. projectPublishImpactBatch loads that once for the location and
+// judges each draft with the same pure function the single path uses.
+import { projectPublishImpactBatch } from '@/lib/roster-publish'
 import { logWarn } from '@/lib/log'
 import { viewerActiveLocationId } from '../registry'
 
@@ -80,17 +86,25 @@ export const rostersProvider = {
 
     // Bounded by the .limit(50) above. A failed projection never fails the
     // queue: the row still has to appear, or a draft nobody can see is a
-    // draft nobody approves.
-    const items = await Promise.all((data || []).map(async (r) => {
-      let impact = null
-      try {
-        impact = await projectPublishImpact(db, {
-          locationId: r.location_id,
-          periodStart: r.period_start,
-          periodEnd: r.period_end,
-        })
-      } catch (e) {
-        logWarn('approvals/rosters', 'live impact failed; using the stored snapshot', { roster_id: r.id, err: e?.message })
+    // draft nobody approves. The batch never throws; the try is for a future
+    // regression that makes it, and falls back to "could not be re-checked"
+    // for every row rather than losing the queue.
+    const rows = data || []
+    let projections = rows.map(() => ({ impact: null, error: null }))
+    try {
+      projections = await projectPublishImpactBatch(db, rows.map((r) => ({
+        locationId: r.location_id,
+        periodStart: r.period_start,
+        periodEnd: r.period_end,
+      })))
+    } catch (e) {
+      projections = rows.map(() => ({ impact: null, error: e }))
+    }
+
+    const items = rows.map((r, i) => {
+      const impact = projections[i]?.impact || null
+      if (!impact) {
+        logWarn('approvals/rosters', 'live impact failed; using the stored snapshot', { roster_id: r.id, err: projections[i]?.error?.message })
       }
       const publisher = r.published_by_profile?.full_name || 'Manager'
       const overrun = impact?.overrunEur > 0 ? impact.overrunEur : null
@@ -109,7 +123,7 @@ export const rostersProvider = {
         currency: 'EUR',
         reviewUrl: `/schedule/approvals?focus=${r.id}`,
       }
-    }))
+    })
     return { count: items.length, items }
   },
 

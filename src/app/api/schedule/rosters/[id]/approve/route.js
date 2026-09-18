@@ -33,6 +33,7 @@ import {
   releasePublishedRostersFor,
   restorePublishedRosters,
   supersedeSwallowedRosters,
+  supersedeEmptyTrimmedRosters,
   suggestedCoveringPeriod,
   trimPublishedRosters,
   restoreRosterPeriods,
@@ -342,6 +343,18 @@ export async function POST(_request, props) {
   })
   if (swallow.warning) {
     logWarn('rosters/approve', 'supersede of swallowed rosters incomplete', { err: swallow.warning, roster_id: roster.id })
+  }
+
+  // ROSTERTIDY.1 — a trimmed remnant left owning NO blocks is superseded now,
+  // after the re-tag (before it, the remnant still owns the blocks this
+  // approval takes). The sweep above never sees it: after the trim it no
+  // longer overlaps this period. Log-only on failure — the remnant is
+  // harmless as data, and nothing may fail an approval that already landed.
+  if (trimmed.length > 0) {
+    const remnants = await supersedeEmptyTrimmedRosters(db, { newRosterId: roster.id, trimmed })
+    if (remnants.warning) {
+      logWarn('rosters/approve', 'empty trimmed roster could not be superseded', { err: remnants.warning, roster_id: roster.id })
+    }
   }
 
   // Coaches on the newly-published blocks. Without this, an owner-approved

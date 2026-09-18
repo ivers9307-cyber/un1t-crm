@@ -36,6 +36,7 @@ import {
   releasePublishedRostersFor,
   restorePublishedRosters,
   supersedeSwallowedRosters,
+  supersedeEmptyTrimmedRosters,
   suggestedCoveringPeriod,
   trimPublishedRosters,
   restoreRosterPeriods,
@@ -490,6 +491,19 @@ export async function POST(request) {
     if (swallow.warning) {
       logWarn('rosters', 'supersede of swallowed rosters incomplete', { err: swallow.warning, roster_id: roster.id })
       supersedeWarning = swallow.warning
+    }
+
+    // ROSTERTIDY.1 — a trimmed remnant left owning NO blocks is superseded
+    // now, after the re-tag (before it, the remnant still owns the blocks this
+    // publish takes). The sweep above never sees it: after the trim it no
+    // longer overlaps this period. Log-only on failure, deliberately NOT added
+    // to supersedeWarning — the remnant is harmless as data, and the operator
+    // has nothing to act on.
+    if (trimmed.length > 0) {
+      const remnants = await supersedeEmptyTrimmedRosters(db, { newRosterId: roster.id, trimmed })
+      if (remnants.warning) {
+        logWarn('rosters', 'empty trimmed roster could not be superseded', { err: remnants.warning, roster_id: roster.id })
+      }
     }
 
     // Coaches assigned to the newly-published blocks.

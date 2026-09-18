@@ -26,7 +26,7 @@ export default async function SchedulePage({ searchParams }) {
   const showReporting = params.view === 'reporting' && MANAGER_ROLES.includes(user.role)
 
   return (
-    <div className="p-8">
+    <div className="px-4 py-6 sm:p-8">
       <ScheduleTabs user={user} />
       {showReporting
         ? <ScheduleReporting user={user} />

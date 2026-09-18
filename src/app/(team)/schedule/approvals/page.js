@@ -9,7 +9,7 @@ import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import RosterApprovalActions from '@/components/RosterApprovalActions'
-import { projectPublishImpact } from '@/lib/roster-publish'
+import { projectPublishImpactBatch } from '@/lib/roster-publish'
 import { logWarn } from '@/lib/log'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { APPROVAL_CATEGORY_PERMISSION } from '@shared/permissions'
@@ -62,22 +62,35 @@ export default async function RosterApprovalsPage() {
   // the card was quoting a figure that could be days stale. Re-project per
   // draft against live data instead, and fall back to the stored snapshot
   // only if the projection throws — a stale number beats an error page.
-  const impacts = await Promise.all((drafts || []).map(async (d) => {
-    try {
-      return await projectPublishImpact(db, {
-        locationId: d.location_id,
-        periodStart: d.period_start,
-        periodEnd: d.period_end,
-      })
-    } catch (e) {
-      logWarn('schedule/approvals', 'live impact failed; using stored snapshot', { roster_id: d.id, err: e?.message })
-      return null
+  // ROSTERTIDY.1 — one batch, not one full context load per draft: the
+  // location's blocks, rates and leave are read once for the span every draft
+  // touches, and each draft is judged by the same pure function the single
+  // projection uses. The batch never throws; a per-draft failure comes back as
+  // `impact: null` and falls back to the snapshot exactly as before.
+  let projections = (drafts || []).map(() => ({ impact: null, error: null }))
+  try {
+    projections = await projectPublishImpactBatch(db, (drafts || []).map((d) => ({
+      locationId: d.location_id,
+      periodStart: d.period_start,
+      periodEnd: d.period_end,
+    })))
+  } catch (e) {
+    projections = (drafts || []).map(() => ({ impact: null, error: e }))
+  }
+  const impacts = (drafts || []).map((d, i) => {
+    const impact = projections[i]?.impact || null
+    if (!impact) {
+      logWarn('schedule/approvals', 'live impact failed; using stored snapshot', { roster_id: d.id, err: projections[i]?.error?.message })
     }
-  }))
+    return impact
+  })
   const impactByRosterId = Object.fromEntries((drafts || []).map((d, i) => [d.id, impacts[i]]))
 
   return (
-    <div>
+    // ROSTERTIDY.1 — this page had NO wrapper padding at any breakpoint
+    // (AppShell's <main> adds none), so it ran edge-to-edge against the
+    // sidebar. Same wrapper as the other /schedule pages.
+    <div className="px-4 py-6 sm:p-8">
       <Link href="/schedule" className="inline-flex items-center gap-1.5 text-sm text-un1t-subtle hover:text-un1t-text mb-6">
         <ArrowLeft size={16} /> Back to Schedule
       </Link>

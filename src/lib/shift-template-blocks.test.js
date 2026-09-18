@@ -1,7 +1,7 @@
 // SHIFTTPL.1 / SHIFTMIN-CLAMP.1 — the block-side effects of a template edit.
 
 import { describe, it, expect } from 'vitest'
-import { clearEmptyFutureBlocks, planBlockCapacityUpdates } from './shift-template-blocks'
+import { clearEmptyFutureBlocks, planBlockCapacityUpdates, readFutureBlocksForTemplate } from './shift-template-blocks'
 
 describe('planBlockCapacityUpdates', () => {
   const blocks = [
@@ -62,6 +62,7 @@ describe('clearEmptyFutureBlocks', () => {
           eq: () => chain,
           gte: () => chain,
           order: () => chain,
+          range: () => chain,
           in: (_c, ids) => { calls.deletedIds = ids; return chain },
           then: (onF, onR) => {
             if (chain._delete) return Promise.resolve({ data: null, error: deleteError }).then(onF, onR)
@@ -131,5 +132,75 @@ describe('clearEmptyFutureBlocks', () => {
     const res = await clearEmptyFutureBlocks(db, { ...ARGS, blocks: [] })
     expect(res).toEqual({ deleted: 0, publishedEmptiesKept: 0, error: null })
     expect(calls.deletedIds).toBeNull()
+  })
+})
+
+// ROSTERTIDY.1 — the read feeds the template-minimum propagation and the
+// deactivate clean-up. Unpaged, a horizon past 1,000 blocks would silently
+// act on only the first page.
+describe('readFutureBlocksForTemplate', () => {
+  // A mock that honours .range() the way PostgREST does: never more than the
+  // window asked for, and never more than 1,000 whatever the window.
+  function pagedDb(rows, { failOnPage = null } = {}) {
+    const ranges = []
+    const orders = []
+    const db = {
+      from(table) {
+        expect(table).toBe('shift_blocks')
+        const f = { from: 0, to: Infinity }
+        const chain = {
+          select: () => chain,
+          eq: () => chain,
+          gte: () => chain,
+          order: (col) => { orders.push(col); return chain },
+          range: (from, to) => { f.from = from; f.to = to; ranges.push([from, to]); return chain },
+          then: (onF, onR) => {
+            if (failOnPage != null && ranges.length - 1 === failOnPage) {
+              return Promise.resolve({ data: null, error: { message: 'page failed' } }).then(onF, onR)
+            }
+            const end = Math.min(f.to + 1, f.from + 1000)
+            return Promise.resolve({ data: rows.slice(f.from, end), error: null }).then(onF, onR)
+          },
+        }
+        return chain
+      },
+    }
+    return { db, ranges, orders }
+  }
+
+  const ARGS = { templateId: 't1', locationId: 'loc1', today: '2026-09-17' }
+  const rows = Array.from({ length: 2345 }, (_, i) => ({ id: `b${String(i).padStart(5, '0')}` }))
+
+  it('reads every page past the 1,000-row cap', async () => {
+    const { db, ranges, orders } = pagedDb(rows)
+    const res = await readFutureBlocksForTemplate(db, ARGS)
+    expect(res.error).toBeNull()
+    expect(res.blocks).toHaveLength(2345)
+    expect(res.blocks.at(-1).id).toBe('b02344')
+    expect(ranges).toEqual([[0, 999], [1000, 1999], [2000, 2999]])
+    // A stable order is what makes the pages disjoint.
+    expect(orders.slice(0, 2)).toEqual(['block_date', 'id'])
+  })
+
+  it('stops after one read when the first page is short', async () => {
+    const { db, ranges } = pagedDb(rows.slice(0, 56))
+    const res = await readFutureBlocksForTemplate(db, ARGS)
+    expect(res.blocks).toHaveLength(56)
+    expect(ranges).toHaveLength(1)
+  })
+
+  it('reads one extra empty page when the total is an exact multiple of the page size', async () => {
+    const { db, ranges } = pagedDb(rows.slice(0, 1000))
+    const res = await readFutureBlocksForTemplate(db, ARGS)
+    expect(res.blocks).toHaveLength(1000)
+    expect(ranges).toEqual([[0, 999], [1000, 1999]])
+  })
+
+  // A partial list would read as "these are all the future blocks".
+  it('returns the error and NO blocks when a later page fails', async () => {
+    const { db } = pagedDb(rows, { failOnPage: 1 })
+    const res = await readFutureBlocksForTemplate(db, ARGS)
+    expect(res.blocks).toEqual([])
+    expect(res.error).toEqual({ message: 'page failed' })
   })
 })

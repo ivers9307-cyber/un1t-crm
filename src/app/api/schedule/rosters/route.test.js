@@ -33,6 +33,9 @@ vi.mock('@/lib/roster-publish', async (importOriginal) => ({
   ...(await importOriginal()),
   projectPublishImpact: vi.fn(),
 }))
+// ROSTERTIDY.1 — spied so a remnant-supersede failure can be shown to LOG
+// rather than fail the publish.
+vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logWarn: vi.fn() }))
 vi.mock('@/lib/roster-email', () => ({ sendOverBudgetApprovalEmail: vi.fn(() => Promise.resolve()) }))
 vi.mock('@/lib/roster-notify', () => ({
   notifyStaffOfPublish: vi.fn(() => Promise.resolve()),
@@ -43,6 +46,7 @@ vi.mock('@/lib/roster-notify', () => ({
 const { createServerClient } = await import('@/lib/supabase')
 const { getCurrentUser } = await import('@/lib/auth')
 const { projectPublishImpact } = await import('@/lib/roster-publish')
+const { logWarn } = await import('@/lib/log')
 const { POST, GET } = await import('./route.js')
 
 // location_id is validated as UUID-shaped, so the fixture has to be one.
@@ -62,7 +66,7 @@ function req(body) {
 // Minimal Supabase-shaped mock. `rosters` selects resolve to
 // `publishedRosters` (the overlap probe); the insert resolves to a row;
 // shift_blocks reads resolve empty and writes are recorded.
-function buildDb({ publishedRosters = [], insertError = null, insertThrows = null, tagError = null, blockDates = {}, rosterUpdateError = null } = {}) {
+function buildDb({ publishedRosters = [], insertError = null, insertThrows = null, tagError = null, blockDates = {}, rosterUpdateError = null, applyUpdates = false } = {}) {
   const inserts = []
   // ROSTER-SUPERSEDE.1 — rosters now also takes UPDATEs (the release before
   // the insert, the superseded_by stamp after the re-tag, the restore on a
@@ -84,6 +88,9 @@ function buildDb({ publishedRosters = [], insertError = null, insertThrows = nul
         const filters = []
         const DATE_OR_ID = new Set(['period_start', 'period_end', 'id'])
         const matches = (r) => filters.every(([op, col, val]) => {
+          // ROSTERTIDY.1 — a row an applyUpdates test superseded carries a
+          // status; fixtures without one still match every status filter.
+          if (col === 'status' && r.status && op === 'eq') return r.status === val
           if (!DATE_OR_ID.has(col)) return true
           if (op === 'eq') return r[col] === val
           if (op === 'neq') return r[col] !== val
@@ -120,6 +127,19 @@ function buildDb({ publishedRosters = [], insertError = null, insertThrows = nul
           update(payload) {
             const rec = { payload, where: [], afterInsert: inserts.length > 0 }
             rosterUpdates.push(rec)
+            // ROSTERTIDY.1 — opt-in: land a successful update on the fixture
+            // row, so a trimmed roster reads back with its TRIMMED period (and
+            // a superseded one as superseded). Without it the phase-2 sweep
+            // still sees the pre-trim period and settles the remnant itself,
+            // which on real data it never could.
+            if (applyUpdates) {
+              queueMicrotask(() => {
+                if (rosterUpdateError?.(payload)) return
+                const id = rec.where.find(([c]) => c === 'id')?.[1]
+                const row = publishedRosters.find((r) => r.id === id)
+                if (row) Object.assign(row, payload)
+              })
+            }
             // ROSTER-TRIM.1 — a per-payload failure hook, so a test can break
             // the RELEASE (status: 'superseded') while letting the trim land.
             const err = rosterUpdateError ? rosterUpdateError(payload) : null
@@ -256,6 +276,64 @@ describe('POST /api/schedule/rosters — overlapping published rosters', () => {
     expect(inserts).toHaveLength(1)
     const trim = rosterUpdates.find((u) => u.payload.period_end === '2026-08-31')
     expect(trim.payload).toEqual({ period_start: '2026-08-31', period_end: '2026-08-31' })
+  })
+
+  // ROSTERTIDY.1 — after the month publish, the trimmed boundary week keeps
+  // only 31 Aug. Whether it survives turns on whether it still OWNS a block
+  // there, recounted after the re-tag.
+  function isRemnantSupersede(u) {
+    return u.payload.status === 'superseded' && u.payload.superseded_by === 'roster-new'
+      && u.where.some(([c, v]) => c === 'id' && v === 'r-week')
+  }
+
+  it('keeps a trimmed remnant that still owns a block', async () => {
+    const { db, rosterUpdates } = buildDb({
+      publishedRosters: [{ id: 'r-week', period_start: '2026-08-31', period_end: '2026-09-06' }],
+      blockDates: { 'r-week': ['2026-08-31'] },
+      applyUpdates: true,
+    })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(req({ location_id: LOC_1, period_start: '2026-09-01', period_end: '2026-09-30' }))
+    expect(res.status).toBe(201)
+    expect(rosterUpdates.some(isRemnantSupersede)).toBe(false)
+  })
+
+  it('supersedes a trimmed remnant left owning zero blocks, AFTER the insert', async () => {
+    const { db, rosterUpdates } = buildDb({
+      publishedRosters: [{ id: 'r-week', period_start: '2026-08-31', period_end: '2026-09-06' }],
+      blockDates: {},
+      applyUpdates: true,
+    })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(req({ location_id: LOC_1, period_start: '2026-09-01', period_end: '2026-09-30' }))
+    expect(res.status).toBe(201)
+    // Exactly one — from the remnant check, not the sweep (which can no
+    // longer see the trimmed row).
+    const sups = rosterUpdates.filter(isRemnantSupersede)
+    expect(sups).toHaveLength(1)
+    const [sup] = sups
+    expect(sup.afterInsert).toBe(true)
+    expect(sup.where).toContainEqual(['period_start', '2026-08-31'])
+    expect(sup.where).toContainEqual(['period_end', '2026-08-31'])
+  })
+
+  it('a failed remnant supersede only logs — the publish still succeeds, with no warning', async () => {
+    logWarn.mockClear()
+    const { db, inserts } = buildDb({
+      publishedRosters: [{ id: 'r-week', period_start: '2026-08-31', period_end: '2026-09-06' }],
+      rosterUpdateError: (payload) => (payload.superseded_by === 'roster-new' ? { message: 'deadlock' } : null),
+      applyUpdates: true,
+    })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(req({ location_id: LOC_1, period_start: '2026-09-01', period_end: '2026-09-30' }))
+    expect(res.status).toBe(201)
+    expect(inserts).toHaveLength(1)
+    const body = await res.json()
+    expect(body.success).toBe(true)
+    expect(body.warning || '').not.toMatch(/deadlock/)
+    expect(logWarn).toHaveBeenCalledWith('rosters', 'empty trimmed roster could not be superseded', expect.objectContaining({
+      err: expect.stringMatching(/r-week: deadlock/), roster_id: 'roster-new',
+    }))
   })
 
   // A roster running past BOTH ends cannot be trimmed without splitting the

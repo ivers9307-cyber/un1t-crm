@@ -21,7 +21,7 @@ export default async function AttendanceReportPage() {
   if (!hasPermission(user, 'attendance_reports')) redirect('/')
 
   return (
-    <div className="p-8 max-w-7xl">
+    <div className="px-4 py-6 sm:p-8 max-w-7xl">
       {/* SCHED.9 — Schedule tab strip follows onto every sibling page.
           This URL itself is unchanged (live cron-email consumers with no
           in-repo link — see the header comment above). */}
