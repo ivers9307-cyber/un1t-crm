@@ -6,10 +6,12 @@
 // the central invoices_queue, where the bookkeeper handles the
 // Claude Vision analysis + final Xero forward in /invoices.
 //
-// Reimbursement still happens via payroll. The bookkeeper handoff
-// is invisible to the submitter — they just see "Approved by your
-// manager · Awaiting accountant sign-off before forwarding to
-// Xero."
+// Reimbursement still happens via payroll. EXPENSELIFE.1: the claim
+// row stays 'awaiting_accountant_review' for good; the submitter sees
+// an honest lifecycle label derived from the per-item queue rows
+// (queued → sent to Xero → paid, or rejected) — see
+// shared/accountant-queue-lifecycle.js. The notification no longer
+// promises "the next payroll run": the accountant can still reject.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
@@ -90,7 +92,7 @@ export async function POST(request, { params }) {
   try {
     await notifyUsersOnce(db, `expense_approved:${claim.id}`, [claim.profile_id], {
       title: 'Expense claim approved',
-      body: `Your €${Number(claim.total_amount).toFixed(2)} claim for ${periodLabel(claim.period_start)} was approved. Reimbursement goes through with the next payroll run.`,
+      body: `Your €${Number(claim.total_amount).toFixed(2)} claim for ${periodLabel(claim.period_start)} was approved and queued for the accountant. Reimbursement goes through payroll once the accountant has processed it.`,
       emailSubject: `Expense claim approved — ${periodLabel(claim.period_start)}`,
       category: 'expense_approved',
       data: { type: 'expense_approved', claim_id: claim.id },

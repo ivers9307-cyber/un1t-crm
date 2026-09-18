@@ -10,6 +10,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { periodForMonth } from '@/lib/fte-expenses'
+import { withExpenseLifecycle } from '@/lib/fte-expense-lifecycle'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -77,9 +78,13 @@ export async function GET(_request, { params }) {
     ? [...claim.items].sort((a, b) => a.expense_date.localeCompare(b.expense_date))
     : []
 
+  // EXPENSELIFE.1 — claim.status never moves past
+  // awaiting_accountant_review; the label comes from the queue rows.
+  const [{ lifecycle }] = await withExpenseLifecycle(db, [claim])
+
   return NextResponse.json({
     success: true,
-    data: { ...claim, items, viewer_role: role },
+    data: { ...claim, items, viewer_role: role, lifecycle },
   })
 }
 

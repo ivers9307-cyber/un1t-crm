@@ -25,6 +25,8 @@
 //      enqueues (source_contractor_invoice_id). So the label is derived
 //      from that queue row, and stops at what the data can prove.
 
+import { queueRowLifecycle, latestQueueRowBy } from './accountant-queue-lifecycle.js'
+
 // A delta under €1 OR under 1% of the rostered cost reads as a match.
 export const MATCH_TOLERANCE_EUR = 1
 export const MATCH_TOLERANCE_PCT = 1
@@ -182,24 +184,9 @@ export function contractorInvoiceLifecycle(inv, queue) {
   }
 
   if (status === 'awaiting_accountant_review') {
-    if (queue === undefined) return { key: 'approved', label: 'Approved', tone: 'green' }
-    if (queue === null) {
-      return { key: 'approved_not_queued', label: 'Approved, not yet queued for accountant', tone: 'amber' }
-    }
-    const billStatus = String(queue.xero_bill_status || '').toUpperCase()
-    if (queue.xero_bill_paid_at || billStatus === 'PAID') {
-      return { key: 'paid', label: 'Paid', tone: 'green' }
-    }
-    if (billStatus === 'VOIDED' || billStatus === 'DELETED') {
-      return { key: 'voided_in_xero', label: 'Voided in Xero', tone: 'slate' }
-    }
-    if (queue.status === 'forwarded' || queue.xero_bill_id || queue.forwarded_at) {
-      return { key: 'sent_to_xero', label: 'Sent to Xero', tone: 'green' }
-    }
-    if (queue.status === 'rejected') {
-      return { key: 'rejected_by_accountant', label: 'Approved, rejected by accountant', tone: 'red' }
-    }
-    return { key: 'queued_for_accountant', label: 'Approved, queued for accountant', tone: 'green' }
+    // EXPENSELIFE.1 — the queue-row decision is shared with FTE expense
+    // claims (shared/accountant-queue-lifecycle.js) so the two can't drift.
+    return queueRowLifecycle(queue)
   }
 
   return { key: String(status), label: String(status), tone: 'slate' }
@@ -210,12 +197,5 @@ export function contractorInvoiceLifecycle(inv, queue) {
  * enqueued twice). Returns a Map<invoiceId, row>.
  */
 export function latestQueueRowByInvoice(rows) {
-  const map = new Map()
-  for (const r of Array.isArray(rows) ? rows : []) {
-    const key = r?.source_contractor_invoice_id
-    if (!key) continue
-    const prev = map.get(key)
-    if (!prev || String(r.created_at || '') > String(prev.created_at || '')) map.set(key, r)
-  }
-  return map
+  return latestQueueRowBy(rows, 'source_contractor_invoice_id')
 }
