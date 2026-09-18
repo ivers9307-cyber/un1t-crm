@@ -31,14 +31,10 @@ import {
   getReceiptUrl, periodLabel,
   EXPENSE_CATEGORIES, EXPENSE_CATEGORY_LABELS,
 } from '../../../lib/expenses-api'
-
-const STATUS_STYLE = {
-  draft:     { label: 'Draft',           color: '#64748B', bg: 'bg-slate-500/20', text: 'text-slate-700' },
-  submitted: { label: 'Awaiting review', color: '#D97706', bg: 'bg-amber-500/20', text: 'text-amber-700' },
-  approved:  { label: 'Approved',        color: '#059669', bg: 'bg-green-500/20', text: 'text-green-700' },
-  declined:  { label: 'Declined',        color: '#DC2626', bg: 'bg-red-500/20',   text: 'text-red-700' },
-  revoked:   { label: 'Revoked',         color: '#64748B', bg: 'bg-slate-500/20', text: 'text-slate-700' },
-}
+// EXPENSELIFE.1 — badge from the server's honest lifecycle label. The old
+// status map had no 'awaiting_accountant_review' entry, so opening an
+// approved claim read `.bg` off undefined.
+import { expenseStatusBadge } from '../../../lib/expense-review'
 
 export default function ExpenseClaimDetailScreen() {
   const { id } = useLocalSearchParams()
@@ -160,7 +156,7 @@ export default function ExpenseClaimDetailScreen() {
   const isMine = claim.viewer_role === 'self'
   const isDraft = claim.status === 'draft'
   const isSubmitted = claim.status === 'submitted'
-  const statusStyle = STATUS_STYLE[claim.status]
+  const statusStyle = expenseStatusBadge(claim)
 
   return (
     <View className="flex-1 bg-un1t-bg">
@@ -197,6 +193,9 @@ export default function ExpenseClaimDetailScreen() {
           </View>
           {claim.notes && (
             <Text className="text-xs text-un1t-subtle mt-3 italic">{claim.notes}</Text>
+          )}
+          {statusStyle.detail && (
+            <Text className="text-[11px] text-un1t-subtle mt-2">Items: {statusStyle.detail}</Text>
           )}
         </View>
 
