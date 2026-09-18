@@ -24,11 +24,11 @@ export const dynamic = 'force-dynamic'
 // 'self' wins over 'master' / 'owner' so a privileged user viewing
 // their OWN claim sees the submitter UI (Add item, Submit, Revoke,
 // Delete-draft) rather than the approver UI (Approve, Decline).
-// A user can't approve their own claim anyway — the underlying
-// /submit, /approve, /decline, /revoke routes enforce the
-// claim.profile_id === user.id check independently — so this
-// ordering is purely a UI hint to surface the actions the user
-// can actually take.
+// A user can't approve or decline their own claim anyway — /approve
+// and /decline refuse claim.profile_id === user.id with a 403 (master
+// included, FINALTIDY.1), and /submit, /revoke and the item routes
+// require it — so this ordering is purely a UI hint to surface the
+// actions the user can actually take.
 //
 // Prior to the fix, a master who created a draft for themselves
 // got viewer_role='master' and the mobile detail screen (which
@@ -54,6 +54,8 @@ function viewerRole(user, claim) {
 // FINALTIDY.1 — a caller who can't see the claim gets the SAME answer as a
 // missing claim, so ids can't be probed for existence.
 const notFound = () => NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+// A transient read failure is a 500, never the 404 a missing claim gets.
+const readFailed = (err) => NextResponse.json({ success: false, error: err?.message || 'Could not load the claim' }, { status: 500 })
 
 export async function GET(_request, { params }) {
   const user = await getCurrentUser()
@@ -114,11 +116,13 @@ export async function PATCH(request, { params }) {
   const { id } = await params
 
   const db = createServerClient()
-  const { data: claim } = await db
+  const { data: claim, error: readErr } = await db
     .from('fte_expense_claims')
     .select('id, profile_id, location_id, status, period_start')
     .eq('id', id)
     .maybeSingle()
+  // FINALTIDY.1 — a failed read is not a missing claim.
+  if (readErr) return readFailed(readErr)
   if (!claim || !canSeeExpenseClaim(user, claim)) return notFound()
   if (claim.profile_id !== user.id) {
     return NextResponse.json({ success: false, error: 'Only the submitter can edit this claim.' }, { status: 403 })
@@ -165,11 +169,13 @@ export async function DELETE(_request, { params }) {
   const { id } = await params
 
   const db = createServerClient()
-  const { data: claim } = await db
+  const { data: claim, error: readErr } = await db
     .from('fte_expense_claims')
     .select('id, profile_id, location_id, status')
     .eq('id', id)
     .maybeSingle()
+  // FINALTIDY.1 — a failed read is not a missing claim.
+  if (readErr) return readFailed(readErr)
   if (!claim || !canSeeExpenseClaim(user, claim)) return notFound()
   if (claim.profile_id !== user.id) {
     return NextResponse.json({ success: false, error: 'Only the submitter can delete this claim.' }, { status: 403 })

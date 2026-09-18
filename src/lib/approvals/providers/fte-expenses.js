@@ -3,6 +3,10 @@
 // Source: fte_expense_claims.status='submitted' (mig 183). Same
 // approver scope as contractor invoices — owner + master only.
 //
+// FINALTIDY.1 — the viewer's OWN claims are excluded (list and count):
+// /api/expenses/[id]/approve refuses a claimant deciding their own claim,
+// master included, so it must never be offered to them as approvable.
+//
 // APPROVALS-LOCATION-SCOPE — scoped to user.activeLocation only.
 // TENANT.8 (item 4) — every row this provider returns is eq('location_id',
 // activeId)-filtered to the VIEWER'S OWN active location, so the registry's
@@ -32,6 +36,7 @@ export const fteExpensesProvider = {
       `)
       .eq('status', 'submitted')
       .eq('location_id', activeId)
+      .neq('profile_id', user.id)
       .order('submitted_at', { ascending: false })
       .limit(50)
 
@@ -63,6 +68,7 @@ export const fteExpensesProvider = {
       .select('*', { count: 'exact', head: true })
       .eq('status', 'submitted')
       .eq('location_id', activeId)
+      .neq('profile_id', user.id)
     const { count, error } = await q
     if (error) throw new Error(`fte_expense_claims count: ${error.message}`)
     return count || 0

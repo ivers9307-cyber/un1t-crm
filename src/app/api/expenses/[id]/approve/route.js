@@ -48,6 +48,12 @@ export async function POST(request, { params }) {
   if (!claim || !canSeeExpenseClaim(user, claim)) {
     return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   }
+  // FINALTIDY.1 — nobody decides on their own spend, master included. The
+  // claimant can see the claim, so this is an honest 403; to pull a claim
+  // back they revoke it instead.
+  if (claim.profile_id === user.id) {
+    return NextResponse.json({ success: false, error: "You can't approve your own expense claim. Revoke it instead if you need to change it." }, { status: 403 })
+  }
   if (!canApproveExpenseClaim(user, claim)) {
     return NextResponse.json({ success: false, error: 'You do not have permission to approve expenses.' }, { status: 403 })
   }

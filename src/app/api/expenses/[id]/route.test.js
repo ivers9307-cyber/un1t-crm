@@ -12,7 +12,7 @@ const CLAIM_ID = 'cccccccc-cccc-cccc-cccc-cccccccccccc'
 const ITEM_ID = 'dddddddd-dddd-dddd-dddd-dddddddddddd'
 const CLAIMANT_ID = '11111111-1111-1111-1111-111111111111'
 
-const h = vi.hoisted(() => ({ user: null, claim: null, updated: [] }))
+const h = vi.hoisted(() => ({ user: null, claim: null, updated: [], readError: null }))
 
 vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn(async () => h.user) }))
 vi.mock('@/lib/fte-expense-lifecycle', () => ({
@@ -37,6 +37,7 @@ function chain(table) {
     update: (patch) => { h.updated.push({ table, patch }); return q },
     delete: () => q,
     maybeSingle: async () => {
+      if (h.readError) return { data: null, error: h.readError }
       if (!h.claim) return { data: null, error: null }
       if (table === 'fte_expense_items') {
         return { data: { id: ITEM_ID, claim_id: CLAIM_ID, receipt_path: 'x/y/z.jpg', receipt_mime_type: 'image/jpeg', claim: h.claim }, error: null }
@@ -115,6 +116,7 @@ beforeEach(() => {
   h.user = null
   h.claim = claimRow()
   h.updated = []
+  h.readError = null
 })
 
 async function answer(res) {
@@ -227,4 +229,58 @@ describe('submitter-only actions', () => {
     expect(status).toBe(200)
     expect(body.success).toBe(true)
   })
+})
+
+describe('FINALTIDY.1 — nobody approves or declines their own claim', () => {
+  // The claimant OWNS the claim's studio, so they hold approvals_fte_expenses.
+  const claimantOwner = () => member(CLAIMANT_ID, { [LOC_A]: 'owner' })
+
+  it('a claimant holding the approval permission gets 403 on approve, and nothing is written', async () => {
+    h.user = claimantOwner()
+    const { status, body } = await answer(await APPROVE(jsonReq(), ctx))
+    expect(status).toBe(403)
+    expect(body.error).toMatch(/can't approve your own expense claim/)
+    expect(h.updated).toEqual([])
+  })
+
+  it('the same claimant gets 403 on decline, and nothing is written', async () => {
+    h.user = claimantOwner()
+    const { status, body } = await answer(await DECLINE(jsonReq({ reason: 'no' }), ctx))
+    expect(status).toBe(403)
+    expect(body.error).toMatch(/can't decline your own expense claim/)
+    expect(h.updated).toEqual([])
+  })
+
+  it('a master is not exempt from the rule', async () => {
+    h.user = { ...claimantOwner(), role: 'master', profileRole: 'master' }
+    expect((await APPROVE(jsonReq(), ctx)).status).toBe(403)
+    expect(h.updated).toEqual([])
+  })
+
+  it('another approver at the studio approves the same claim → 200', async () => {
+    h.user = ownerAtA()
+    const { status } = await answer(await APPROVE(jsonReq(), ctx))
+    expect(status).toBe(200)
+    expect(h.updated.some((u) => u.table === 'fte_expense_claims')).toBe(true)
+  })
+})
+
+describe('FINALTIDY.1 — a failed read is a 500, not a missing claim', () => {
+  for (const [name, call] of [['PATCH', () => PATCH(jsonReq({ notes: 'x' }), ctx)], ['DELETE', () => DELETE({}, ctx)]]) {
+    it(`${name}: a read error → 500, and nothing is written`, async () => {
+      h.user = claimant()
+      h.claim = claimRow('draft')
+      h.readError = { message: 'connection reset' }
+      const { status, body } = await answer(await call())
+      expect(status).toBe(500)
+      expect(body.error).toBe('connection reset')
+      expect(h.updated).toEqual([])
+    })
+
+    it(`${name}: a genuinely missing claim is still 404`, async () => {
+      h.user = claimant()
+      h.claim = null
+      expect((await call()).status).toBe(404)
+    })
+  }
 })
