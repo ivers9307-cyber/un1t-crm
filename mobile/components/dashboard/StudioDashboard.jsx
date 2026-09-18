@@ -9,7 +9,7 @@ import { View, Text, ActivityIndicator } from 'react-native'
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter, useFocusEffect } from 'expo-router'
 import { useAuth } from '../../lib/auth-context'
-import { fetchStudioDashboard } from '../../lib/dashboard-api'
+import { fetchStudioDashboard, swapRowTitle } from '../../lib/dashboard-api'
 import {
   KpiCard, KpiRow, SectionHeader, PendingRow, ListCard,
 } from './cards'
@@ -133,13 +133,13 @@ export default function StudioDashboard({ refreshKey }) {
       </ListCard>
 
       {/* Approvals queue — swaps */}
-      <SectionHeader title="Swap requests pending" count={pendingSwaps.length} />
+      <SectionHeader title="Swaps awaiting your call" count={pendingSwaps.length} />
       <ListCard empty={pendingSwaps.length === 0} emptyText={swapsFailed ? LOAD_FAILED : 'No swaps to review.'}>
         {pendingSwaps.slice(0, 5).map((s, i, arr) => (
           <PendingRow
             key={s.id}
             icon="swap-horizontal"
-            title={`${s.requester?.full_name || 'Someone'} requested a swap`}
+            title={swapRowTitle(s)}
             subtitle={`Posted ${new Date(s.created_at).toLocaleDateString()}`}
             onPress={() => router.push('/(tabs)/schedule')}
             isLast={i === Math.min(arr.length, 5) - 1}

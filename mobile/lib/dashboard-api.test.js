@@ -18,18 +18,24 @@ vi.mock('shared/dashboard-data', () => ({
 
 const { api } = await import('./api')
 const shared = await import('shared/dashboard-data')
-const { fetchStudioDashboard } = await import('./dashboard-api')
+const { fetchStudioDashboard, swapRowTitle } = await import('./dashboard-api')
 
 const LOC = 'a0000000-0000-0000-0000-000000000001'
 const BASE = { newLeadsThisWeek: 3, funnel: { new_lead: 3 }, totalContacts: 3, totalUnreadWhatsapp: 0 }
 
+// `swaps` is one envelope for both status calls, or { pending, awaiting_approval }.
 function routeApi({ timeOff, swaps }) {
   api.mockImplementation((path) => {
     if (path.startsWith('/api/schedule/time-off')) return Promise.resolve(timeOff)
-    if (path.startsWith('/api/schedule/swaps')) return Promise.resolve(swaps)
+    if (path.startsWith('/api/schedule/swaps')) {
+      const status = new URLSearchParams(path.split('?')[1]).get('status')
+      const env = 'success' in swaps ? swaps : swaps[status]
+      return env instanceof Error ? Promise.reject(env) : Promise.resolve(env)
+    }
     return Promise.reject(new Error(`unexpected ${path}`))
   })
 }
+const OK_EMPTY = { success: true, data: [] }
 
 function queryOf(prefix) {
   const [path, opts] = api.mock.calls.find(([p]) => p.startsWith(prefix))
@@ -52,33 +58,63 @@ describe('fetchStudioDashboard', () => {
     expect(off.params).toEqual({ location_id: LOC, status: 'pending' })
     expect(off.opts).toMatchObject({ locationId: LOC })
 
-    const sw = queryOf('/api/schedule/swaps')
-    expect(sw.pathname).toBe('/api/schedule/swaps')
-    expect(sw.params).toEqual({ location_id: LOC, status: 'pending' })
-    expect(sw.opts).toMatchObject({ locationId: LOC })
+    // STUDIODASH.2 — the manager's swap queue is the web approvals
+    // provider's: pending (open/targeted, or a drop approvable directly) AND
+    // awaiting_approval (a coach claimed it). One call per status — the
+    // route takes a single status.
+    const swapCalls = api.mock.calls.filter(([p]) => p.startsWith('/api/schedule/swaps'))
+    expect(swapCalls.map(([p]) => Object.fromEntries(new URLSearchParams(p.split('?')[1]))))
+      .toEqual(expect.arrayContaining([
+        { location_id: LOC, status: 'pending' },
+        { location_id: LOC, status: 'awaiting_approval' },
+      ]))
+    expect(swapCalls).toHaveLength(2)
+    for (const [, opts] of swapCalls) expect(opts).toMatchObject({ locationId: LOC })
+  })
+
+  it('merges both swap statuses newest-first', async () => {
+    const older = { id: 's1', status: 'pending', created_at: '2026-09-10T10:00:00Z' }
+    const newer = { id: 's2', status: 'awaiting_approval', created_at: '2026-09-12T10:00:00Z' }
+    routeApi({ timeOff: OK_EMPTY, swaps: {
+      pending: { success: true, data: [older] },
+      awaiting_approval: { success: true, data: [newer] },
+    } })
+    const res = await fetchStudioDashboard(LOC)
+    expect(res.data.pendingSwaps.map((s) => s.id)).toEqual(['s2', 's1'])
+  })
+
+  it('either swap call failing makes the swap list null — a half list would hide approvals', async () => {
+    routeApi({ timeOff: OK_EMPTY, swaps: {
+      pending: { success: true, data: [{ id: 's1', created_at: '2026-09-10T10:00:00Z' }] },
+      awaiting_approval: { success: false, error: 'boom' },
+    } })
+    const res = await fetchStudioDashboard(LOC)
+    expect(res.data.pendingSwaps).toBeNull()
+    expect(res.data.pendingTimeOff).toEqual([])
   })
 
   it('merges the named rows into the shared payload', async () => {
     const timeOff = [{ id: 't1', type: 'holiday', profiles: { full_name: 'Coach A' } }]
-    const swaps = [{ id: 's1', requester: { full_name: 'Coach B' } }]
-    routeApi({ timeOff: { success: true, data: timeOff }, swaps: { success: true, data: swaps } })
+    const swap = { id: 's1', created_at: '2026-09-10T10:00:00Z', requester: { full_name: 'Coach B' } }
+    routeApi({ timeOff: { success: true, data: timeOff }, swaps: {
+      pending: { success: true, data: [swap] },
+      awaiting_approval: OK_EMPTY,
+    } })
 
     const res = await fetchStudioDashboard(LOC)
-    expect(res).toEqual({ success: true, data: { ...BASE, pendingTimeOff: timeOff, pendingSwaps: swaps } })
+    expect(res).toEqual({ success: true, data: { ...BASE, pendingTimeOff: timeOff, pendingSwaps: [swap] } })
   })
 
   it('a failed list is null, not an empty list — "nothing waiting" must never stand in for "could not read"', async () => {
-    routeApi({ timeOff: { success: false, error: 'boom' }, swaps: { success: true, data: [{ id: 's1' }] } })
+    routeApi({ timeOff: { success: false, error: 'boom' }, swaps: OK_EMPTY })
     const res = await fetchStudioDashboard(LOC)
     expect(res.success).toBe(true)
     expect(res.data.pendingTimeOff).toBeNull()
-    expect(res.data.pendingSwaps).toEqual([{ id: 's1' }])
+    expect(res.data.pendingSwaps).toEqual([])
   })
 
   it('a rejected list call is also null and does not blank the rest of the tab', async () => {
-    api.mockImplementation((path) => (path.startsWith('/api/schedule/swaps')
-      ? Promise.reject(new Error('offline'))
-      : Promise.resolve({ success: true, data: [] })))
+    routeApi({ timeOff: OK_EMPTY, swaps: { pending: OK_EMPTY, awaiting_approval: new Error('offline') } })
     const res = await fetchStudioDashboard(LOC)
     expect(res.success).toBe(true)
     expect(res.data.pendingSwaps).toBeNull()
@@ -89,6 +125,23 @@ describe('fetchStudioDashboard', () => {
     routeApi({ timeOff: { success: true, data: [] }, swaps: { success: true, data: [] } })
     shared.fetchStudioDashboardData.mockResolvedValue({ success: false, error: 'No location' })
     expect(await fetchStudioDashboard(LOC)).toEqual({ success: false, error: 'No location' })
+  })
+})
+
+describe('swapRowTitle — same wording as the web approvals queue', () => {
+  it('names both sides of a two-way or reassign swap', () => {
+    expect(swapRowTitle({ status: 'pending', requester: { full_name: 'Ann' }, target: { full_name: 'Bo' } }))
+      .toBe('Ann ↔ Bo')
+  })
+  it('an untargeted swap is a drop', () => {
+    expect(swapRowTitle({ status: 'pending', requester: { full_name: 'Ann' }, target: null })).toBe('Ann (drop)')
+  })
+  it('marks a claimed swap — the one waiting on the manager', () => {
+    expect(swapRowTitle({ status: 'awaiting_approval', requester: { full_name: 'Ann' }, target: { full_name: 'Bo' } }))
+      .toBe('Ann ↔ Bo — claimed')
+  })
+  it('falls back to "Coach" without a name', () => {
+    expect(swapRowTitle({ status: 'pending' })).toBe('Coach (drop)')
   })
 })
 
