@@ -5,37 +5,36 @@
 // One component instead of three because the data model + actions
 // overlap heavily. The render branches on (viewer_role, claim.status)
 // to show appropriate actions. Mirrors the structure of
-// InvoicesManager but lighter — no Xero status badges, no scheduled-
-// hours snapshots (those are contractor-specific).
+// InvoicesManager but lighter — no scheduled-hours snapshots (those
+// are contractor-specific). The status badge is the server's honest
+// lifecycle label (EXPENSELIFE.1).
 
 import { useEffect, useMemo, useState } from 'react'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { EXPENSE_CATEGORIES, EXPENSE_CATEGORY_LABELS } from '@/lib/fte-expenses'
+import { expenseClaimLifecycle } from '@shared/accountant-queue-lifecycle'
 import {
   Plus, Loader2, AlertCircle, X, ChevronRight,
   Trash2, Send, RotateCcw, ThumbsUp, ThumbsDown, Eye,
 } from 'lucide-react'
 
-const STATUS_LABEL = {
-  draft: 'Draft', submitted: 'Submitted', approved: 'Approved',
-  // INVOICES-QUEUE.1 — owner has approved; bookkeeper now signs
-  // off in /invoices before the Xero forward. From the submitter's
-  // POV this is the terminal happy-path state — nothing more for
-  // them to do. Short label here; the detail panel below renders
-  // the longer explanatory copy.
-  awaiting_accountant_review: 'With accountant',
-  declined: 'Declined', revoked: 'Revoked',
+// EXPENSELIFE.1 — the badge is the server's honest `lifecycle`
+// (shared/accountant-queue-lifecycle.js): approval parks the claim at
+// awaiting_accountant_review forever, so the label is derived from the
+// per-item invoices_queue rows ("Approved, queued for accountant" →
+// "Sent to Xero" → "Paid", or "Approved, rejected by accountant").
+// A payload without one (stale server) falls back to the status-only
+// derivation, which never over-claims.
+const TONE_CLASS = {
+  green: 'bg-emerald-500/20 text-emerald-700',
+  amber: 'bg-amber-500/20 text-amber-700',
+  red:   'bg-red-500/20 text-red-700',
+  slate: 'bg-un1t-border/30 text-un1t-subtle',
 }
-const STATUS_TONE = {
-  draft:     'bg-un1t-border/30 text-un1t-subtle',
-  submitted: 'bg-amber-500/20 text-amber-700',
-  approved:  'bg-emerald-500/20 text-emerald-700',
-  // Same green palette as approved — both are happy-path post-
-  // approval states. The label difference (With accountant) tells
-  // the submitter where the claim actually sits.
-  awaiting_accountant_review: 'bg-emerald-500/20 text-emerald-700',
-  declined:  'bg-red-500/20 text-red-700',
-  revoked:   'bg-un1t-border/30 text-un1t-muted',
+function resolveLifecycle(claim) {
+  return claim?.lifecycle?.label
+    ? claim.lifecycle
+    : expenseClaimLifecycle({ status: claim?.status, xero_synced_at: claim?.xero_synced_at })
 }
 
 export default function ExpensesManager({ userId, isFte, isApprover, locations }) {
@@ -157,6 +156,7 @@ function ClaimRow({ claim, userId, expanded, onExpand, onChange }) {
   const isDraft = claim.status === 'draft'
   const isSubmitted = claim.status === 'submitted'
   const periodLbl = formatPeriod(claim.period_start)
+  const lifecycle = resolveLifecycle(claim)
   return (
     <div className="bg-un1t-surface border border-un1t-border rounded-md">
       <button
@@ -168,8 +168,8 @@ function ClaimRow({ claim, userId, expanded, onExpand, onChange }) {
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <span className="text-sm font-medium text-un1t-text">{periodLbl}</span>
-              <span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded ${STATUS_TONE[claim.status]}`}>
-                {STATUS_LABEL[claim.status]}
+              <span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded ${TONE_CLASS[lifecycle.tone] || TONE_CLASS.slate}`}>
+                {lifecycle.label}
               </span>
             </div>
             <div className="text-xs text-un1t-subtle truncate">
@@ -270,15 +270,11 @@ function ClaimDetail({ claimId, canEdit, canSubmit, canRevoke, canApprove, onCha
         </div>
       )}
 
-      {/* INVOICES-QUEUE.1 — explain the new accountant-handoff
-          state so the submitter doesn't wonder why their claim is
-          "approved" but not yet in Xero. Renders only on the
-          submitter's own claim (approvers viewing don't need this
-          copy — they already understand the queue handoff). */}
-      {claim.status === 'awaiting_accountant_review' && claim.viewer_role === 'self' && (
-        <div className="text-xs text-emerald-700 bg-emerald-500/10 border border-emerald-200 rounded p-2">
-          <strong>Approved by your manager.</strong> Awaiting accountant sign-off before forwarding to Xero — no further action needed from you.
-        </div>
+      {/* EXPENSELIFE.1 — where the approved claim actually is, from
+          the per-item queue rows. `detail` appears only when the items
+          disagree (e.g. "1 of 2 sent to Xero, 1 of 2 paid"). */}
+      {claim.status === 'awaiting_accountant_review' && (
+        <ApprovedLifecycleNote lifecycle={resolveLifecycle(claim)} isSelf={claim.viewer_role === 'self'} />
       )}
 
       <div className="overflow-x-auto">
@@ -571,4 +567,32 @@ function formatPeriod(periodStart) {
   try {
     return new Date(`${periodStart}T00:00:00Z`).toLocaleDateString('en-IE', { month: 'long', year: 'numeric', timeZone: 'UTC' })
   } catch { return periodStart }
+}
+
+const LIFECYCLE_NOTE = {
+  queued_for_accountant: 'The accountant checks it before it goes to Xero.',
+  sent_to_xero: 'The accountant has sent it to Xero.',
+  paid: 'The bill is marked paid in Xero.',
+  rejected_by_accountant: 'The manager approved it, but the accountant rejected it. Check with the accountant before resubmitting.',
+  voided_in_xero: 'The bill was voided in Xero.',
+  approved_not_queued: 'The approval is recorded, but it has not reached the accountant queue yet. An admin needs to check the queue.',
+  approved: '',
+}
+const NOTE_CLASS = {
+  green: 'text-emerald-700 bg-emerald-500/10 border-emerald-200',
+  amber: 'text-amber-700 bg-amber-500/10 border-amber-200',
+  red:   'text-red-700 bg-red-500/10 border-red-200',
+  slate: 'text-un1t-subtle bg-un1t-surface border-un1t-border',
+}
+function ApprovedLifecycleNote({ lifecycle, isSelf }) {
+  const text = LIFECYCLE_NOTE[lifecycle.key] || ''
+  return (
+    <div className={`text-xs border rounded p-2 ${NOTE_CLASS[lifecycle.tone] || NOTE_CLASS.slate}`}>
+      <strong>{lifecycle.label}.</strong> {text}
+      {lifecycle.detail && <span className="block mt-0.5">Items: {lifecycle.detail}.</span>}
+      {isSelf && lifecycle.key !== 'rejected_by_accountant' && lifecycle.key !== 'approved_not_queued' && (
+        <span className="block mt-0.5">No further action needed from you.</span>
+      )}
+    </div>
+  )
 }
