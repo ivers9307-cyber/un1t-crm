@@ -26,8 +26,8 @@ export function fetchPersonalDashboard(profileId, locationId) {
 // A list the route could not return is `null`, never `[]`: the old direct
 // read embedded profiles, 500'd on every call, and `|| []` showed managers
 // "Nothing waiting on you." for months. The screen renders null as an error.
-async function pendingList(path, locationId) {
-  const qs = new URLSearchParams({ location_id: locationId, status: 'pending' })
+async function pendingList(path, locationId, status = 'pending') {
+  const qs = new URLSearchParams({ location_id: locationId, status })
   try {
     const res = await api(`${path}?${qs.toString()}`, { locationId })
     return res?.success && Array.isArray(res.data) ? res.data : null
@@ -36,13 +36,35 @@ async function pendingList(path, locationId) {
   }
 }
 
+// STUDIODASH.2 — the manager's swap queue is the web approvals provider's
+// (src/lib/approvals/providers/shift-swaps.js): `pending` (open/targeted, or a
+// drop a manager can approve directly) AND `awaiting_approval` (a coach
+// claimed it). The route filters on one status, so one call each. Either
+// failing makes the list null: half a queue would hide approvals.
+async function swapQueue(locationId) {
+  const [open, claimed] = await Promise.all([
+    pendingList('/api/schedule/swaps', locationId, 'pending'),
+    pendingList('/api/schedule/swaps', locationId, 'awaiting_approval'),
+  ])
+  if (!open || !claimed) return null
+  return [...open, ...claimed].sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
+}
+
+// Row title, worded like the web approvals queue.
+export function swapRowTitle(swap) {
+  const requester = swap?.requester?.full_name || 'Coach'
+  const target = swap?.target?.full_name
+  const base = target ? `${requester} ↔ ${target}` : `${requester} (drop)`
+  return swap?.status === 'awaiting_approval' ? `${base} — claimed` : base
+}
+
 export async function fetchStudioDashboard(locationId) {
   const [base, pendingTimeOff, pendingSwaps] = await Promise.all([
     fetchStudioDashboardData(supabase, locationId),
     // Manager scope (incl. LEAVE.2's "leave taken by anyone who belongs
     // here") and the expired-pending cut are the route's, not ours.
     pendingList('/api/schedule/time-off', locationId),
-    pendingList('/api/schedule/swaps', locationId),
+    swapQueue(locationId),
   ])
   if (!base.success) return base
   return { ...base, data: { ...base.data, pendingTimeOff, pendingSwaps } }
