@@ -1447,7 +1447,10 @@ describe('publishAftermathNote', () => {
 describe('supersedeEmptyTrimmedRosters', () => {
   // counts: roster id → blocks it owns. failCount / failUpdate / zeroRowUpdate
   // break one step each.
-  function remnantDb({ counts = {}, failCount = false, failUpdate = false, zeroRowUpdate = false, throwOnCount = false } = {}) {
+  // FINALTIDY.1 — `dates` (roster id → owned block dates) answers the count
+  // and ownedBlockRange's first/last reads; `counts` alone answers a count
+  // only, with first/last read from `dates` (absent → none).
+  function remnantDb({ counts = {}, dates = {}, failCount = false, failUpdate = false, zeroRowUpdate = false, throwOnCount = false } = {}) {
     const updates = []
     const countedIds = []
     const db = {
@@ -1455,16 +1458,24 @@ describe('supersedeEmptyTrimmedRosters', () => {
         if (table === 'shift_blocks') {
           let rosterId = null
           let head = false
+          let asc = true
           const chain = {
             select: (_c, opts) => { head = !!opts?.head; return chain },
             eq: (c, v) => { if (c === 'roster_id') rosterId = v; return chain },
+            order: (_c, o) => { asc = o?.ascending !== false; return chain },
+            limit: () => chain,
+            maybeSingle: () => {
+              const sorted = [...(dates[rosterId] || [])].sort()
+              const pick = asc ? sorted[0] : sorted[sorted.length - 1]
+              return Promise.resolve({ data: pick ? { block_date: pick } : null, error: null })
+            },
             then: (onF, onR) => {
               if (throwOnCount) return Promise.reject(new Error('socket hang up')).then(onF, onR)
               countedIds.push(rosterId)
               expect(head).toBe(true)
               return Promise.resolve(failCount
                 ? { data: null, count: null, error: { message: 'count failed' } }
-                : { data: null, count: counts[rosterId] ?? 0, error: null }).then(onF, onR)
+                : { data: null, count: counts[rosterId] ?? dates[rosterId]?.length ?? 0, error: null }).then(onF, onR)
             },
           }
           return chain
@@ -1498,10 +1509,10 @@ describe('supersedeEmptyTrimmedRosters', () => {
     trim_to: { period_start: '2026-08-31', period_end: '2026-08-31' },
   }
 
-  it('KEEPS a trimmed remnant that still owns blocks, and writes nothing', async () => {
-    const { db, updates, countedIds } = remnantDb({ counts: { 'r-week': 3 } })
+  it('KEEPS a trimmed remnant whose blocks cover its whole trimmed period, and writes nothing', async () => {
+    const { db, updates, countedIds } = remnantDb({ counts: { 'r-week': 3 }, dates: { 'r-week': ['2026-08-31', '2026-08-31', '2026-08-31'] } })
     const res = await supersedeEmptyTrimmedRosters(db, { todayIso: TODAY, newRosterId: 'r-sept', trimmed: [TRIMMED_WEEK] })
-    expect(res).toEqual({ superseded: [], kept: ['r-week'], future: [], warning: null })
+    expect(res).toEqual({ superseded: [], shrunk: [], kept: ['r-week'], future: [], warning: null })
     expect(countedIds).toEqual(['r-week'])
     expect(updates).toHaveLength(0)
   })
@@ -1509,7 +1520,7 @@ describe('supersedeEmptyTrimmedRosters', () => {
   it('SUPERSEDES a trimmed remnant left owning zero blocks, the way the sweep does', async () => {
     const { db, updates } = remnantDb({ counts: { 'r-week': 0 } })
     const res = await supersedeEmptyTrimmedRosters(db, { todayIso: TODAY, newRosterId: 'r-sept', trimmed: [TRIMMED_WEEK] })
-    expect(res).toEqual({ superseded: ['r-week'], kept: [], future: [], warning: null })
+    expect(res).toEqual({ superseded: ['r-week'], shrunk: [], kept: [], future: [], warning: null })
     expect(updates).toHaveLength(1)
     const [u] = updates
     expect(u.payload).toEqual({ status: 'superseded', superseded_at: expect.any(String), superseded_by: 'r-sept' })
@@ -1525,7 +1536,7 @@ describe('supersedeEmptyTrimmedRosters', () => {
   })
 
   it('judges each remnant on its own', async () => {
-    const { db } = remnantDb({ counts: { 'r-prev': 0, 'r-next': 2 } })
+    const { db } = remnantDb({ counts: { 'r-prev': 0 }, dates: { 'r-next': ['2026-06-01', '2026-06-03'] } })
     const res = await supersedeEmptyTrimmedRosters(db, {
       todayIso: TODAY,
       newRosterId: 'r-new',
@@ -1571,7 +1582,7 @@ describe('supersedeEmptyTrimmedRosters', () => {
   it('does nothing without trims, and refuses without a successor id', async () => {
     const { db, countedIds } = remnantDb()
     expect(await supersedeEmptyTrimmedRosters(db, { todayIso: TODAY, newRosterId: 'r-sept', trimmed: [] }))
-      .toEqual({ superseded: [], kept: [], future: [], warning: null })
+      .toEqual({ superseded: [], shrunk: [], kept: [], future: [], warning: null })
     const res = await supersedeEmptyTrimmedRosters(db, { todayIso: TODAY, newRosterId: null, trimmed: [TRIMMED_WEEK] })
     expect(res.superseded).toEqual([])
     expect(res.warning).toMatch(/no newRosterId/)
@@ -1587,7 +1598,7 @@ describe('supersedeEmptyTrimmedRosters', () => {
       todayIso: TODAY, newRosterId: 'r-sept',
       trimmed: [{ id: 'r-oct', trim_to: { period_start: '2026-09-18', period_end: '2026-09-18' } }],
     })
-    expect(res).toEqual({ superseded: [], kept: [], future: ['r-oct'], warning: null })
+    expect(res).toEqual({ superseded: [], shrunk: [], kept: [], future: ['r-oct'], warning: null })
     expect(countedIds).toEqual([])
     expect(updates).toHaveLength(0)
   })
@@ -1611,5 +1622,81 @@ describe('supersedeEmptyTrimmedRosters', () => {
     expect(res.superseded).toEqual(['r-week'])
     expect(res.future).toEqual(['r-oct'])
     expect(updates.map((u) => u.where[0][1])).toEqual(['r-week'])
+  })
+
+  // FINALTIDY.1 — a past remnant that still owns blocks, but on fewer days
+  // than its trimmed period, gives up the empty ends.
+  describe('partly-empty remnant', () => {
+    const FORTNIGHT = {
+      id: 'r-fort', period_start: '2026-08-24', period_end: '2026-09-06',
+      trim_to: { period_start: '2026-08-24', period_end: '2026-08-31' },
+    }
+
+    it('SHRINKS a past remnant to the first/last day it owns, compare-and-swap on the trimmed period', async () => {
+      const { db, updates } = remnantDb({ dates: { 'r-fort': ['2026-08-27', '2026-08-25', '2026-08-26'] } })
+      const res = await supersedeEmptyTrimmedRosters(db, { todayIso: TODAY, newRosterId: 'r-sept', trimmed: [FORTNIGHT] })
+      expect(res).toEqual({
+        superseded: [], kept: [], future: [], warning: null,
+        shrunk: [{ id: 'r-fort', period_start: '2026-08-25', period_end: '2026-08-27' }],
+      })
+      expect(updates).toHaveLength(1)
+      const [u] = updates
+      expect(u.payload).toEqual({ period_start: '2026-08-25', period_end: '2026-08-27' })
+      expect(Object.keys(u.payload)).not.toContain('requested_period_start')
+      expect(Object.keys(u.payload)).not.toContain('requested_period_end')
+      expect(u.where).toEqual([
+        ['id', 'r-fort'], ['status', 'published'],
+        ['period_start', '2026-08-24'], ['period_end', '2026-08-31'],
+      ])
+    })
+
+    it('shrinks only the empty end when the other end is owned', async () => {
+      const { db, updates } = remnantDb({ dates: { 'r-fort': ['2026-08-24', '2026-08-28'] } })
+      const res = await supersedeEmptyTrimmedRosters(db, { todayIso: TODAY, newRosterId: 'r-sept', trimmed: [FORTNIGHT] })
+      expect(res.shrunk).toEqual([{ id: 'r-fort', period_start: '2026-08-24', period_end: '2026-08-28' }])
+      expect(updates[0].payload).toEqual({ period_start: '2026-08-24', period_end: '2026-08-28' })
+    })
+
+    it('leaves a past remnant with full coverage untouched (an interior gap is not shrinkable)', async () => {
+      const { db, updates } = remnantDb({ dates: { 'r-fort': ['2026-08-24', '2026-08-31'] } })
+      const res = await supersedeEmptyTrimmedRosters(db, { todayIso: TODAY, newRosterId: 'r-sept', trimmed: [FORTNIGHT] })
+      expect(res).toEqual({ superseded: [], shrunk: [], kept: ['r-fort'], future: [], warning: null })
+      expect(updates).toHaveLength(0)
+    })
+
+    it('never recounts or shrinks a remnant reaching today, even with empty days', async () => {
+      const { db, updates, countedIds } = remnantDb({ dates: { 'r-live': ['2026-09-22'] } })
+      const res = await supersedeEmptyTrimmedRosters(db, {
+        todayIso: TODAY, newRosterId: 'r-sept',
+        trimmed: [{ id: 'r-live', trim_to: { period_start: '2026-09-18', period_end: '2026-09-27' } }],
+      })
+      expect(res).toEqual({ superseded: [], shrunk: [], kept: [], future: ['r-live'], warning: null })
+      expect(countedIds).toEqual([])
+      expect(updates).toHaveLength(0)
+    })
+
+    // mig 602: only ever narrow. A block outside the trimmed period would make
+    // min/max WIDEN it, possibly back over the period the publish just took.
+    it('refuses to widen: blocks outside the trimmed period leave it alone with a warning', async () => {
+      const { db, updates } = remnantDb({ dates: { 'r-fort': ['2026-08-25', '2026-09-02'] } })
+      const res = await supersedeEmptyTrimmedRosters(db, { todayIso: TODAY, newRosterId: 'r-sept', trimmed: [FORTNIGHT] })
+      expect(updates).toHaveLength(0)
+      expect(res.shrunk).toEqual([])
+      expect(res.warning).toMatch(/r-fort owns blocks 2026-08-25\.\.2026-09-02 outside its period/)
+    })
+
+    it('a failed shrink only warns — it never throws', async () => {
+      const { db } = remnantDb({ dates: { 'r-fort': ['2026-08-25'] }, failUpdate: true })
+      const res = await supersedeEmptyTrimmedRosters(db, { todayIso: TODAY, newRosterId: 'r-sept', trimmed: [FORTNIGHT] })
+      expect(res.shrunk).toEqual([])
+      expect(res.warning).toMatch(/period shrink failed for trimmed roster r-fort: update failed/)
+    })
+
+    it('a zero-row shrink (the remnant moved since) is a warning, not a success', async () => {
+      const { db } = remnantDb({ dates: { 'r-fort': ['2026-08-25'] }, zeroRowUpdate: true })
+      const res = await supersedeEmptyTrimmedRosters(db, { todayIso: TODAY, newRosterId: 'r-sept', trimmed: [FORTNIGHT] })
+      expect(res.shrunk).toEqual([])
+      expect(res.warning).toMatch(/r-fort changed since the trim, so it was not shrunk/)
+    })
   })
 })

@@ -15,7 +15,7 @@
 //   engulfs both ends      → 409 overlapping_roster, nothing inserted, and
 //                            the body names the period that would work
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/auth', async (importOriginal) => ({
@@ -331,9 +331,98 @@ describe('POST /api/schedule/rosters — overlapping published rosters', () => {
     const body = await res.json()
     expect(body.success).toBe(true)
     expect(body.warning || '').not.toMatch(/deadlock/)
-    expect(logWarn).toHaveBeenCalledWith('rosters', 'empty trimmed roster could not be superseded', expect.objectContaining({
+    expect(logWarn).toHaveBeenCalledWith('rosters', 'trimmed roster could not be superseded or shrunk', expect.objectContaining({
       err: expect.stringMatching(/r-week: deadlock/), roster_id: 'roster-new',
     }))
+  })
+
+  // FINALTIDY.1 — a past remnant that still owns blocks, but on fewer days
+  // than its trimmed period, is shrunk to the days it owns. "Today" is pinned
+  // so the past/future split never depends on the clock.
+  describe('partly-empty trimmed remnant (fixed today 18 Sep 2026)', () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(new Date('2026-09-18T12:00:00Z'))
+    })
+    afterEach(() => { vi.useRealTimers() })
+
+    // A fortnight 24 Aug - 6 Sep, trimmed by the September publish to 24 - 31 Aug.
+    const FORTNIGHT = () => ({ id: 'r-week', period_start: '2026-08-24', period_end: '2026-09-06' })
+    const isShrink = (u) => u.afterInsert && 'period_start' in u.payload && !('status' in u.payload)
+      && u.where.some(([c, v]) => c === 'id' && v === 'r-week')
+
+    it('shrinks a PAST remnant with empty days to its first/last owned block, after the insert', async () => {
+      const { db, rosterUpdates } = buildDb({
+        publishedRosters: [FORTNIGHT()],
+        blockDates: { 'r-week': ['2026-08-25', '2026-08-27'] },
+        applyUpdates: true,
+      })
+      createServerClient.mockReturnValue(db)
+      const res = await POST(req({ location_id: LOC_1, period_start: '2026-09-01', period_end: '2026-09-30' }))
+      expect(res.status).toBe(201)
+      expect(rosterUpdates.some(isRemnantSupersede)).toBe(false)
+      const shrinks = rosterUpdates.filter(isShrink)
+      expect(shrinks).toHaveLength(1)
+      const [shrink] = shrinks
+      expect(shrink.payload).toEqual({ period_start: '2026-08-25', period_end: '2026-08-27' })
+      expect(Object.keys(shrink.payload)).not.toContain('requested_period_start')
+      expect(Object.keys(shrink.payload)).not.toContain('requested_period_end')
+      expect(shrink.where).toEqual([
+        ['id', 'r-week'], ['status', 'published'],
+        ['period_start', '2026-08-24'], ['period_end', '2026-08-31'],
+      ])
+    })
+
+    it('leaves a PAST remnant whose blocks span its whole trimmed period untouched', async () => {
+      const { db, rosterUpdates } = buildDb({
+        publishedRosters: [FORTNIGHT()],
+        blockDates: { 'r-week': ['2026-08-24', '2026-08-28', '2026-08-31'] },
+        applyUpdates: true,
+      })
+      createServerClient.mockReturnValue(db)
+      const res = await POST(req({ location_id: LOC_1, period_start: '2026-09-01', period_end: '2026-09-30' }))
+      expect(res.status).toBe(201)
+      expect(rosterUpdates.some(isShrink)).toBe(false)
+      expect(rosterUpdates.some(isRemnantSupersede)).toBe(false)
+    })
+
+    it('leaves a LIVE remnant alone (reaching today or later), and logs it', async () => {
+      logWarn.mockClear()
+      const { db, rosterUpdates } = buildDb({
+        // Straddles the END: trimmed to 21 - 27 Sep, after today, with a gap.
+        publishedRosters: [{ id: 'r-next', period_start: '2026-09-14', period_end: '2026-09-27' }],
+        blockDates: { 'r-next': ['2026-09-22'] },
+        applyUpdates: true,
+      })
+      createServerClient.mockReturnValue(db)
+      const res = await POST(req({ location_id: LOC_1, period_start: '2026-09-01', period_end: '2026-09-20' }))
+      expect(res.status).toBe(201)
+      const afterInsert = rosterUpdates.filter((u) => u.afterInsert && u.where.some(([c, v]) => c === 'id' && v === 'r-next'))
+      expect(afterInsert).toHaveLength(0)
+      expect(logWarn).toHaveBeenCalledWith('rosters', expect.stringMatching(/trimmed roster kept/), expect.objectContaining({
+        trimmed_ids: ['r-next'], roster_id: 'roster-new',
+      }))
+    })
+
+    it('a failed shrink only logs; the publish still succeeds, with no warning', async () => {
+      logWarn.mockClear()
+      const { db, inserts } = buildDb({
+        publishedRosters: [FORTNIGHT()],
+        blockDates: { 'r-week': ['2026-08-25', '2026-08-27'] },
+        rosterUpdateError: (payload) => (payload.period_end === '2026-08-27' ? { message: 'deadlock' } : null),
+        applyUpdates: true,
+      })
+      createServerClient.mockReturnValue(db)
+      const res = await POST(req({ location_id: LOC_1, period_start: '2026-09-01', period_end: '2026-09-30' }))
+      expect(res.status).toBe(201)
+      expect(inserts).toHaveLength(1)
+      const body = await res.json()
+      expect(body.success).toBe(true)
+      expect(body.warning || '').not.toMatch(/deadlock/)
+      expect(logWarn).toHaveBeenCalledWith('rosters', 'trimmed roster could not be superseded or shrunk', expect.objectContaining({
+        err: expect.stringMatching(/period shrink failed for trimmed roster r-week: deadlock/), roster_id: 'roster-new',
+      }))
+    })
   })
 
   // A roster running past BOTH ends cannot be trimmed without splitting the

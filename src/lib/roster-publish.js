@@ -636,6 +636,11 @@ export function coversPeriod(ranges, periodStart, periodEnd) {
  *     adopt a block anyone will work, and is superseded;
  *   - a remnant reaching today or later is KEPT on purpose, empty, because
  *     its period still does real work for blocks added on those days.
+ * FINALTIDY.1 — the same rule now settles the PARTLY empty remnant too: a past
+ * remnant that still owns blocks, but on fewer days than its trimmed period
+ * covers, is shrunk to the first/last day it owns a block on (the phase-2
+ * sweep's min/max shrink, via the same ownedBlockRange). Its empty days are in
+ * the past, so no block will ever be created there to need them.
  * #1716's two objections are answered in the helper: the "owns nothing" rule
  * is the same live recount the sweep uses, taken after the re-tag (before it,
  * the remnant still owns the blocks this publish takes); and the cost is at
@@ -707,9 +712,16 @@ export async function trimPublishedRosters(db, trims) {
 }
 
 /**
- * ROSTERTIDY.1 — after a publish that TRIMMED straddling rosters, supersede
- * every trimmed remnant that is both in the PAST and left owning zero blocks.
- * See trimPublishedRosters' header for the full trade-off.
+ * ROSTERTIDY.1 — after a publish that TRIMMED straddling rosters, settle every
+ * trimmed remnant that is in the PAST. See trimPublishedRosters' header for
+ * the full trade-off. One live recount (ownedBlockRange) decides:
+ *   - owns ZERO blocks → superseded (ROSTERTIDY.1);
+ *   - owns blocks on FEWER days than its trimmed period → shrunk to the
+ *     first/last block_date it owns (FINALTIDY.1), the phase-2 sweep's min/max
+ *     shrink; `requested_period_*` untouched;
+ *   - its blocks span the whole trimmed period → left alone (`kept`).
+ * A block dated OUTSIDE the trimmed period is left alone with a warning: the
+ * range would widen, not shrink, and that is the c2 state mig 602 forbids.
  *
  * 🔴 PAST ONLY. A remnant whose trimmed `period_end` is today or later (Dublin,
  * dublinTodayStr) is kept without even a recount: its period is how a block
@@ -723,6 +735,11 @@ export async function trimPublishedRosters(db, trims) {
  * taking, so the recount would keep it; the route calls this straight after
  * supersedeSwallowedRosters, which has the same precondition.
  *
+ * 🔴 A shrink can never trip mig 602's exclusion constraint: the new period is
+ * a SUBSET of the trimmed one (enforced below, not assumed), and the trimmed
+ * period already overlaps no other published roster at this studio, so no
+ * subset of it can.
+ *
  * Same mechanism as the sweep's zero-block supersede: status `superseded`,
  * `superseded_by` the new roster, `superseded_at` now (both from mig 602), and
  * `requested_period_*` untouched. The write is compare-and-swap on the
@@ -730,23 +747,24 @@ export async function trimPublishedRosters(db, trims) {
  * reshaped is left alone, and the rows touched are judged explicitly because
  * a zero-row UPDATE is not an error.
  *
- * Best-effort and never throws: a past empty remnant left published is only a
- * tidiness cost (it overlaps no published roster, so mig 602 is satisfied,
- * and no block will ever be created on a past day to join it), so nothing
+ * Best-effort and never throws: a past remnant left published over empty days
+ * is only a tidiness cost (it overlaps no published roster, so mig 602 is
+ * satisfied, and no block will ever be created on a past day to join it), so nothing
  * here may fail a publish that already happened. Every problem comes back in
  * `warning` for the caller to logWarn.
  *
  * @param {{ newRosterId: string, trimmed: Array<{id: string, trim_to: {period_start: string, period_end: string}}>, todayIso?: string }} opts
- * @returns {Promise<{ superseded: string[], kept: string[], future: string[], warning: string|null }>}
+ * @returns {Promise<{ superseded: string[], shrunk: Array<{id: string, period_start: string, period_end: string}>, kept: string[], future: string[], warning: string|null }>}
  */
 export async function supersedeEmptyTrimmedRosters(db, { newRosterId, trimmed = [], todayIso = dublinTodayStr() } = {}) {
   const superseded = []
+  const shrunk = []
   const kept = []
   const future = []
   const warnings = []
   const targets = (trimmed || []).filter((t) => t?.id && t.id !== newRosterId && t?.trim_to?.period_start && t?.trim_to?.period_end)
-  if (targets.length === 0) return { superseded, kept, future, warning: null }
-  if (!newRosterId) return { superseded, kept, future, warning: 'trimmed-remnant check skipped: no newRosterId' }
+  if (targets.length === 0) return { superseded, shrunk, kept, future, warning: null }
+  if (!newRosterId) return { superseded, shrunk, kept, future, warning: 'trimmed-remnant check skipped: no newRosterId' }
 
   const nowIso = new Date().toISOString()
   for (const t of targets) {
@@ -758,7 +776,7 @@ export async function supersedeEmptyTrimmedRosters(db, { newRosterId, trimmed = 
     try {
       // Recount-then-supersede is not atomic: a block tagged to this roster
       // in between would be orphaned. Same accepted race as the phase-2 sweep.
-      const { count, error: ownErr } = await ownedBlockCount(db, t.id)
+      const { count, first, last, error: ownErr } = await ownedBlockRange(db, t.id)
       if (ownErr) {
         // Reading a failed count as "owns nothing" would supersede a live
         // roster and unpublish its blocks. Leave it alone and say so.
@@ -766,7 +784,40 @@ export async function supersedeEmptyTrimmedRosters(db, { newRosterId, trimmed = 
         continue
       }
       if (count > 0) {
-        kept.push(t.id)
+        const { period_start: trimStart, period_end: trimEnd } = t.trim_to
+        if (!first || !last) {
+          warnings.push(`block range unreadable for trimmed roster ${t.id}, so it was not shrunk`)
+          continue
+        }
+        if (first < trimStart || last > trimEnd) {
+          // Owns a block outside its own trimmed period: min/max would WIDEN
+          // it, possibly back over the period this publish just took.
+          warnings.push(`trimmed roster ${t.id} owns blocks ${first}..${last} outside its period ${trimStart}..${trimEnd}, so it was not shrunk`)
+          continue
+        }
+        if (first === trimStart && last === trimEnd) {
+          kept.push(t.id)
+          continue
+        }
+        // FINALTIDY.1 — shrink to the days it owns. first..last is inside
+        // trimStart..trimEnd (checked above), so this can only narrow a period
+        // that already clears mig 602. Compare-and-swap on the TRIMMED period
+        // and `published`; requested_period_* is never rewritten.
+        const { data: touched, error: shrinkErr } = await db
+          .from('rosters')
+          .update({ period_start: first, period_end: last })
+          .eq('id', t.id)
+          .eq('status', 'published')
+          .eq('period_start', trimStart)
+          .eq('period_end', trimEnd)
+          .select('id')
+        if (shrinkErr) {
+          warnings.push(`period shrink failed for trimmed roster ${t.id}: ${shrinkErr.message}`)
+        } else if ((touched || []).length === 0) {
+          warnings.push(`trimmed roster ${t.id} changed since the trim, so it was not shrunk`)
+        } else {
+          shrunk.push({ id: t.id, period_start: first, period_end: last })
+        }
         continue
       }
       const { data: touched, error: supErr } = await db
@@ -788,7 +839,7 @@ export async function supersedeEmptyTrimmedRosters(db, { newRosterId, trimmed = 
       warnings.push(`trimmed-remnant check threw for roster ${t.id}: ${e?.message || e}`)
     }
   }
-  return { superseded, kept, future, warning: warnings.length > 0 ? warnings.join('; ') : null }
+  return { superseded, shrunk, kept, future, warning: warnings.length > 0 ? warnings.join('; ') : null }
 }
 
 /**

@@ -16,7 +16,7 @@
 // src/lib/roster-publish.test.js; these tests run the REAL helper so the
 // wiring — including excludeRosterId — is what is under test.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 // getUserLocationIds is the real one-liner from @/lib/auth — mocking it away
@@ -75,7 +75,7 @@ function draft(overrides = {}) {
 // (select('*') … .single()), the overlap probe (a narrow select that is
 // awaited), and the status flip. The probe's filters are recorded so the
 // self-exclusion can be asserted.
-function buildDb({ roster, publishedRosters = [], updateError = null, updateThrows = null, captureError = null, tagError = null, rosterUpdateError = null, blockCounts = {}, applyUpdates = false }) {
+function buildDb({ roster, publishedRosters = [], updateError = null, updateThrows = null, captureError = null, tagError = null, rosterUpdateError = null, blockCounts = {}, blockDates = {}, applyUpdates = false }) {
   const updates = []
   const probe = []
   const blockUpdates = []
@@ -180,8 +180,13 @@ function buildDb({ roster, publishedRosters = [], updateError = null, updateThro
         let isUpdate = false
         // ROSTERTIDY.1 — the owned-block recount is a head:true count by
         // roster_id; answered from `blockCounts`.
+        // FINALTIDY.1 — `blockDates` (roster id → block dates) answers the
+        // count AND the first/last block_date reads ownedBlockRange makes;
+        // `blockCounts` alone still answers a bare count.
         let head = false
         let rosterId = null
+        let asc = true
+        const ownedCount = (id) => (blockDates[id] ? blockDates[id].length : blockCounts[id] || 0)
         const chain = {
           select: (_c, opts) => { head = !!opts?.head; return chain },
           update: (payload) => { isUpdate = true; blockUpdates.push(payload); return chain },
@@ -189,11 +194,18 @@ function buildDb({ roster, publishedRosters = [], updateError = null, updateThro
           gte: () => chain,
           lte: () => chain,
           is: () => chain,
+          order: (_c, o) => { asc = o?.ascending !== false; return chain },
+          limit: () => chain,
+          maybeSingle: () => {
+            const dates = [...(blockDates[rosterId] || [])].sort()
+            const pick = asc ? dates[0] : dates[dates.length - 1]
+            return Promise.resolve({ data: pick ? { block_date: pick } : null, error: null })
+          },
           then: (onF, onR) => Promise.resolve(
             isUpdate
               ? { data: null, error: tagError }
               : head
-                ? { data: null, count: blockCounts[rosterId] || 0, error: null }
+                ? { data: null, count: ownedCount(rosterId), error: null }
                 : { data: [], error: captureError },
           ).then(onF, onR),
         }
@@ -258,18 +270,26 @@ describe('POST /api/schedule/rosters/[id]/approve — overlap guard', () => {
     return u.payload.status === 'superseded' && u.payload.superseded_by === 'roster-1'
       && u.where.some(([c, v]) => c === 'id' && v === 'r-prev')
   }
+  // FINALTIDY.1 — the post-flip shrink: a period write narrowed by the
+  // TRIMMED period (the trim itself is narrowed by the pre-trim period).
+  function isRemnantShrink(u) {
+    return u.afterFlip && 'period_start' in u.payload && !('status' in u.payload)
+      && u.where.some(([c, v]) => c === 'id' && v === 'r-prev')
+  }
 
   it('keeps a trimmed remnant that still owns a block', async () => {
     const { db, updates } = buildDb({
       roster: draft(),
       publishedRosters: [{ id: 'r-prev', period_start: '2026-04-27', period_end: '2026-05-05' }],
-      blockCounts: { 'r-prev': 2 },
+      // Blocks on both ends of the trimmed 27 Apr - 3 May: full coverage.
+      blockDates: { 'r-prev': ['2026-04-27', '2026-05-03'] },
       applyUpdates: true,
     })
     createServerClient.mockReturnValue(db)
     const res = await POST({}, PROPS)
     expect(res.status).toBe(200)
     expect(updates.some(isRemnantSupersede)).toBe(false)
+    expect(updates.some(isRemnantShrink)).toBe(false)
   })
 
   it('supersedes a past trimmed remnant left owning zero blocks, AFTER the flip', async () => {
@@ -306,9 +326,84 @@ describe('POST /api/schedule/rosters/[id]/approve — overlap guard', () => {
     const body = await res.json()
     expect(body.success).toBe(true)
     expect(body.warning || '').not.toMatch(/deadlock/)
-    expect(logWarn).toHaveBeenCalledWith('rosters/approve', 'empty trimmed roster could not be superseded', expect.objectContaining({
+    expect(logWarn).toHaveBeenCalledWith('rosters/approve', 'trimmed roster could not be superseded or shrunk', expect.objectContaining({
       err: expect.stringMatching(/r-prev: deadlock/), roster_id: 'roster-1',
     }))
+  })
+
+  // FINALTIDY.1 — a past remnant that still owns blocks, but on fewer days
+  // than its trimmed period, is shrunk to the days it owns. "Today" is pinned
+  // so the past/future split never depends on the clock.
+  describe('partly-empty trimmed remnant (fixed today 18 Sep 2026)', () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(new Date('2026-09-18T12:00:00Z'))
+    })
+    afterEach(() => { vi.useRealTimers() })
+
+    it('shrinks a PAST remnant with empty days to its first/last owned block, after the flip', async () => {
+      const { db, updates } = buildDb({
+        roster: draft(),
+        publishedRosters: [{ id: 'r-prev', period_start: '2026-04-27', period_end: '2026-05-05' }],
+        // Trimmed to 27 Apr - 3 May; owns blocks only 28 - 30 Apr.
+        blockDates: { 'r-prev': ['2026-04-28', '2026-04-30'] },
+        applyUpdates: true,
+      })
+      createServerClient.mockReturnValue(db)
+      const res = await POST({}, PROPS)
+      expect(res.status).toBe(200)
+      expect(updates.some(isRemnantSupersede)).toBe(false)
+      const shrinks = updates.filter(isRemnantShrink)
+      expect(shrinks).toHaveLength(1)
+      const [shrink] = shrinks
+      expect(shrink.payload).toEqual({ period_start: '2026-04-28', period_end: '2026-04-30' })
+      // requested_period_* (the operator's original ask) is never rewritten.
+      expect(Object.keys(shrink.payload)).not.toContain('requested_period_start')
+      // Compare-and-swap on published + the TRIMMED period.
+      expect(shrink.where).toEqual([
+        ['id', 'r-prev'], ['status', 'published'],
+        ['period_start', '2026-04-27'], ['period_end', '2026-05-03'],
+      ])
+    })
+
+    it('leaves a LIVE remnant alone (reaching today or later), and logs it', async () => {
+      logWarn.mockClear()
+      const { db, updates } = buildDb({
+        roster: draft({ period_start: '2026-09-01', period_end: '2026-09-20' }),
+        // Straddles the END: trimmed to 21 - 27 Sep, which is after today.
+        publishedRosters: [{ id: 'r-next', period_start: '2026-09-14', period_end: '2026-09-27' }],
+        blockDates: { 'r-next': ['2026-09-22'] },
+        applyUpdates: true,
+      })
+      createServerClient.mockReturnValue(db)
+      const res = await POST({}, PROPS)
+      expect(res.status).toBe(200)
+      const afterFlip = updates.filter((u) => u.afterFlip && u.where.some(([c, v]) => c === 'id' && v === 'r-next'))
+      expect(afterFlip).toHaveLength(0)
+      expect(logWarn).toHaveBeenCalledWith('rosters/approve', expect.stringMatching(/trimmed roster kept/), expect.objectContaining({
+        trimmed_ids: ['r-next'], roster_id: 'roster-1',
+      }))
+    })
+
+    it('a failed shrink only logs; the approval still succeeds', async () => {
+      logWarn.mockClear()
+      const { db } = buildDb({
+        roster: draft(),
+        publishedRosters: [{ id: 'r-prev', period_start: '2026-04-27', period_end: '2026-05-05' }],
+        blockDates: { 'r-prev': ['2026-04-28', '2026-04-30'] },
+        rosterUpdateError: (payload) => (payload.period_end === '2026-04-30' ? { message: 'deadlock' } : null),
+        applyUpdates: true,
+      })
+      createServerClient.mockReturnValue(db)
+      const res = await POST({}, PROPS)
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.success).toBe(true)
+      expect(body.warning || '').not.toMatch(/deadlock/)
+      expect(logWarn).toHaveBeenCalledWith('rosters/approve', 'trimmed roster could not be superseded or shrunk', expect.objectContaining({
+        err: expect.stringMatching(/period shrink failed for trimmed roster r-prev: deadlock/), roster_id: 'roster-1',
+      }))
+    })
   })
 
   // 🔴 THE RELEASE RUNS AFTER THE TRIM, so its refusal is no longer free: a
