@@ -9,7 +9,7 @@
 //                    screens (receipts, issues, hyrox, rosters).
 // Reached from the More tab. No client-side role logic — the aggregator
 // role-scopes server-side.
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import { View, Text, ScrollView, RefreshControl, ActivityIndicator, Alert, Pressable } from 'react-native'
 import { Stack, useFocusEffect, useLocalSearchParams, router } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
@@ -22,6 +22,7 @@ import {
 } from '../../lib/approvals'
 import { respondToTimeOff, respondToSwap, unassignLeaveClashes } from '../../lib/schedule-api'
 import { leaveClashPrompt } from 'shared/time-off'
+import { swapConflictPrompt } from '../../lib/swap-conflicts'
 import { approveExpenseClaim, declineExpenseClaim } from '../../lib/expenses-api'
 import { approveInvoice, declineInvoice } from '../../lib/invoices-api'
 import { decideApproval } from '../../lib/inbox-approvals-api'
@@ -59,6 +60,10 @@ export default function ApprovalsInbox() {
   const [error, setError] = useState(null)
   const [busyId, setBusyId] = useState(null)
   const [declineFor, setDeclineFor] = useState(null) // { key, id } — key 'agent_requests' = customer decline
+  // SWAPOVERRIDE.1 — ids with an approve request in flight. busyId disables
+  // the card's buttons only after a re-render; this ref refuses a second tap
+  // that lands before it (and a second "Approve anyway").
+  const approving = useRef(new Set())
 
   const load = useCallback(async () => {
     if (!locationId) return
@@ -103,10 +108,52 @@ export default function ApprovalsInbox() {
   }
 
   async function onApprove(key, item) {
+    if (approving.current.has(item.id)) return
+    approving.current.add(item.id)
     setBusyId(item.id)
-    const res = await approveFn(key, item.id)
-    setBusyId(null)
+    let res
+    try {
+      res = await approveFn(key, item.id)
+    } finally {
+      approving.current.delete(item.id)
+      setBusyId(null)
+    }
+    if (!res.success) {
+      // SWAPOVERRIDE.1 — a swap refused for leave / a same-day clash (409
+      // swap_conflicts) is the manager's call, not a dead end: list the
+      // conflicts and offer to approve anyway, as the web Swaps page does.
+      // Every other failure keeps the plain alert.
+      const conflict = key === 'shift_swaps' ? swapConflictPrompt(res) : null
+      if (conflict) {
+        Alert.alert(conflict.title, conflict.message, [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Approve anyway', onPress: () => approveSwapAnyway(item) },
+        ])
+        return
+      }
+      Alert.alert('Could not approve', res.error || 'Unknown error')
+      return
+    }
+    afterApproved(key, item, res)
+  }
+
+  // SWAPOVERRIDE.1 — the same approval, re-sent with confirm_conflicts: true.
+  async function approveSwapAnyway(item) {
+    if (approving.current.has(item.id)) return
+    approving.current.add(item.id)
+    setBusyId(item.id)
+    let res
+    try {
+      res = await respondToSwap(item.id, 'approved', null, locationId, { confirmConflicts: true })
+    } finally {
+      approving.current.delete(item.id)
+      setBusyId(null)
+    }
     if (!res.success) { Alert.alert('Could not approve', res.error || 'Unknown error'); return }
+    afterApproved('shift_swaps', item, res)
+  }
+
+  function afterApproved(key, item, res) {
     // LEAVE.1 — approved leave the person is still rostered over. Ask; never
     // unassign on the approver's behalf.
     const clash = key === 'time_off' ? leaveClashPrompt(res.clashes) : null
