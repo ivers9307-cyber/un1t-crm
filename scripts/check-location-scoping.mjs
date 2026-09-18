@@ -148,6 +148,12 @@ const SCOPING_HELPERS = [
   // src/lib/permissions.js — permission check evaluated AT a specific
   // location (the fetch-row-then-check-its-location approvals pattern).
   'hasPermissionForLocation(',
+  // src/lib/fte-expense-access.js (FINALTIDY.1) — fetch-claim-by-pk-then-judge
+  // for /api/expenses/[id]/*: claimant, master, owner AT claim.location_id,
+  // else hasPermissionForLocation(user, claim.location_id, …). A caller who
+  // fails canSeeExpenseClaim gets the missing-claim 404.
+  'canSeeExpenseClaim(',
+  'canApproveExpenseClaim(',
   // src/lib/auth.js — org ids the caller OWNS; used for
   // row.organization_id membership compares (contracts revoke/detail).
   'getOwnerOrganizationIds(',
