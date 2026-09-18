@@ -76,11 +76,17 @@ export function createSwapRequest({ requesterShiftId, targetShiftId, targetId, r
   })
 }
 
-export function respondToSwap(id, status, reviewNote, locationId) {
+// SWAPOVERRIDE.1 — `confirmConflicts` re-sends an approval the route refused
+// with 409 swap_conflicts (leave / same-day clash) as confirm_conflicts: true,
+// the manager's "Approve anyway". Only sent when set, so every other call's
+// body is unchanged.
+export function respondToSwap(id, status, reviewNote, locationId, { confirmConflicts = false } = {}) {
+  const body = { status, review_note: reviewNote || null }
+  if (confirmConflicts) body.confirm_conflicts = true
   return api(`/api/schedule/swaps/${id}`, {
     method: 'PUT',
     locationId,
-    body: { status, review_note: reviewNote || null },
+    body,
   })
 }
 

@@ -164,6 +164,13 @@ describe('swaps', () => {
     }])
   })
 
+  it('respondToSwap with confirmConflicts re-sends the approval as confirm_conflicts: true', () => {
+    schedule.respondToSwap('s1', 'approved', null, LOC, { confirmConflicts: true })
+    expect(lastCall()).toEqual(['/api/schedule/swaps/s1', {
+      method: 'PUT', locationId: LOC, body: { status: 'approved', review_note: null, confirm_conflicts: true },
+    }])
+  })
+
   it('cancelSwapRequest PUTs status: cancelled', () => {
     schedule.cancelSwapRequest('s1', LOC)
     expect(lastCall()).toEqual(['/api/schedule/swaps/s1', {
