@@ -31,10 +31,14 @@ export function periodForMonth(monthKey) {
   // First day of the next month, then back off one day = last day
   // of the requested month. UTC math, no DST surprises.
   const end = new Date(Date.UTC(y, m, 0))
+  const period_start = start.toISOString().slice(0, 10)
   return {
-    period_start: start.toISOString().slice(0, 10),
+    period_start,
     period_end: end.toISOString().slice(0, 10),
-    label: start.toLocaleDateString('en-IE', { month: 'long', year: 'numeric' }),
+    // `start` is UTC midnight, so it must be formatted IN UTC: localising it
+    // on a host west of UTC reads the previous day, i.e. the previous month
+    // ('2026-05' labelled 'April 2026'). periodLabel pins timeZone: 'UTC'.
+    label: periodLabel(period_start),
   }
 }
 
