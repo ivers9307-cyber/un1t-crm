@@ -67,10 +67,16 @@ export default function StudioDashboard({ refreshKey }) {
   }
 
   const {
-    pendingTimeOff, pendingSwaps,
     newLeadsThisWeek, funnel, totalContacts,
     totalUnreadWhatsapp,
   } = data
+  // STUDIODASH.1 — null = the list couldn't be read (see dashboard-api.js).
+  // Say so; an empty card would claim nothing is pending.
+  const timeOffFailed = data.pendingTimeOff == null
+  const swapsFailed = data.pendingSwaps == null
+  const pendingTimeOff = data.pendingTimeOff || []
+  const pendingSwaps = data.pendingSwaps || []
+  const LOAD_FAILED = "Couldn't load this list. Pull down to retry."
 
   // Funnel display: pull the headline statuses to a 2x2 grid; everything
   // else is rolled into the contact total. FUNNEL.1 taxonomy — the old
@@ -113,7 +119,7 @@ export default function StudioDashboard({ refreshKey }) {
 
       {/* Approvals queue — time off */}
       <SectionHeader title="Time-off awaiting your call" count={pendingTimeOff.length} />
-      <ListCard empty={pendingTimeOff.length === 0} emptyText="Nothing waiting on you.">
+      <ListCard empty={pendingTimeOff.length === 0} emptyText={timeOffFailed ? LOAD_FAILED : 'Nothing waiting on you.'}>
         {pendingTimeOff.slice(0, 5).map((t, i, arr) => (
           <PendingRow
             key={t.id}
@@ -128,7 +134,7 @@ export default function StudioDashboard({ refreshKey }) {
 
       {/* Approvals queue — swaps */}
       <SectionHeader title="Swap requests pending" count={pendingSwaps.length} />
-      <ListCard empty={pendingSwaps.length === 0} emptyText="No swaps to review.">
+      <ListCard empty={pendingSwaps.length === 0} emptyText={swapsFailed ? LOAD_FAILED : 'No swaps to review.'}>
         {pendingSwaps.slice(0, 5).map((s, i, arr) => (
           <PendingRow
             key={s.id}
