@@ -139,17 +139,29 @@ async function loadBudgetContext(db, locationId, periodStart, periodEnd = period
   // actually within budget.
   // LEAVE.2 — leave covers the person: a coach here who filed leave from
   // another studio is still not working this studio's shifts.
-  const { data: leave, error: leaveErr } = await db
-    .from('time_off_requests')
-    .select('profile_id, start_date, end_date')
-    .or(leaveScopeOrFilter([locationId], (links || []).map((l) => l.profile_id)))
-    .eq('status', 'approved')
-    .lte('start_date', monthEnd)
-    .gte('end_date', monthStart)
-  if (leaveErr) throw new Error(`Leave lookup failed: ${leaveErr.message}`)
+  // ROSTERTIDY.1 — paged like the block read. One month of approved leave
+  // never approaches 1,000 rows, but the batch projection loads the whole span
+  // a queue of drafts touches, and a silently-truncated leave list would bill
+  // coaches who are off.
+  const leave = []
+  for (let from = 0; ; from += BLOCK_PAGE_SIZE) {
+    const { data: page, error: leaveErr } = await db
+      .from('time_off_requests')
+      .select('id, profile_id, start_date, end_date')
+      .or(leaveScopeOrFilter([locationId], (links || []).map((l) => l.profile_id)))
+      .eq('status', 'approved')
+      .lte('start_date', monthEnd)
+      .gte('end_date', monthStart)
+      .order('start_date', { ascending: true })
+      .order('id', { ascending: true })
+      .range(from, from + BLOCK_PAGE_SIZE - 1)
+    if (leaveErr) throw new Error(`Leave lookup failed: ${leaveErr.message}`)
+    leave.push(...(page || []))
+    if (!page || page.length < BLOCK_PAGE_SIZE) break
+  }
 
   const leaveByProfile = new Map()
-  for (const row of leave || []) {
+  for (const row of leave) {
     if (!leaveByProfile.has(row.profile_id)) leaveByProfile.set(row.profile_id, [])
     leaveByProfile.get(row.profile_id).push(row)
   }
@@ -238,6 +250,96 @@ function blockContractorCost(block, contractorRateById, leaveByProfile) {
  */
 export async function projectPublishImpact(db, { locationId, periodStart, periodEnd, todayIso = dublinTodayStr() }) {
   const ctx = await loadBudgetContext(db, locationId, periodStart, periodEnd)
+  return impactFromContext(ctx, { periodStart, periodEnd, todayIso })
+}
+
+/**
+ * ROSTERTIDY.1 — projectPublishImpact for MANY periods, loading each
+ * location's data ONCE.
+ *
+ * The approvals queue (provider + /schedule/approvals) used to call
+ * projectPublishImpact per draft — up to 50 drafts, each reloading the
+ * location, its contractor rates, every block in every month it touches (paged)
+ * and the leave over them. Here the periods are grouped by location, one
+ * context is loaded per location covering the SPAN of every month those
+ * periods touch (first-of-month of the earliest start → last-of-month of the
+ * latest end), and each period is then judged by the SAME pure
+ * impactFromContext the single path uses.
+ *
+ * Why a wider load gives identical figures: impactFromContext only reads
+ * blocks whose month is one this period touches (monthByKey), staffingGaps
+ * filters to [periodStart, periodEnd], leave is matched per block date, and
+ * rates/budget are per location, not per month. Extra rows outside a period's
+ * months are therefore never counted — pinned by a test that runs the same
+ * draft both ways.
+ *
+ * The span is contiguous, so drafts months apart load the months between
+ * them too. That is bounded (blocks and leave both page) and far cheaper than
+ * a load per draft; a queue of 50 is one location in practice.
+ *
+ * Never throws. A location whose context fails to load fails every period at
+ * it; a period that fails to compute fails alone. Callers keep today's
+ * "overrun could not be re-checked" fallback on `impact: null`.
+ *
+ * @param {Array<{ locationId: string, periodStart: string, periodEnd: string }>} periods
+ * @returns {Promise<Array<{ impact: object|null, error: Error|null }>>} same order as `periods`
+ */
+export async function projectPublishImpactBatch(db, periods, { todayIso = dublinTodayStr() } = {}) {
+  const list = periods || []
+  const results = list.map(() => ({ impact: null, error: null }))
+
+  const byLocation = new Map()
+  list.forEach((p, i) => {
+    if (!p?.locationId || !p?.periodStart || !p?.periodEnd) {
+      results[i].error = new Error('period is missing locationId, periodStart or periodEnd')
+      return
+    }
+    if (!byLocation.has(p.locationId)) byLocation.set(p.locationId, [])
+    byLocation.get(p.locationId).push(i)
+  })
+
+  await Promise.all([...byLocation.entries()].map(async ([locationId, idxs]) => {
+    let spanStart = null
+    let spanEnd = null
+    for (const i of idxs) {
+      const { periodStart, periodEnd } = list[i]
+      const end = periodEnd > periodStart ? periodEnd : periodStart
+      if (spanStart == null || periodStart < spanStart) spanStart = periodStart
+      if (spanEnd == null || end > spanEnd) spanEnd = end
+    }
+
+    let ctx
+    try {
+      ctx = await loadBudgetContext(db, locationId, spanStart, spanEnd)
+    } catch (e) {
+      const err = e instanceof Error ? e : new Error(String(e))
+      for (const i of idxs) results[i].error = err
+      return
+    }
+
+    for (const i of idxs) {
+      try {
+        results[i].impact = impactFromContext(ctx, {
+          periodStart: list[i].periodStart,
+          periodEnd: list[i].periodEnd,
+          todayIso,
+        })
+      } catch (e) {
+        results[i].error = e instanceof Error ? e : new Error(String(e))
+      }
+    }
+  }))
+
+  return results
+}
+
+/**
+ * The pure half of projectPublishImpact: judge one period against an already
+ * loaded context. Shared by the single and batch paths so they cannot disagree.
+ * `ctx.monthBlocks` may cover MORE months than the period touches (the batch
+ * loads a span); everything below filters to the period's own months.
+ */
+function impactFromContext(ctx, { periodStart, periodEnd, todayIso }) {
   const { location, contractorRateById, leaveByProfile, monthBlocks } = ctx
 
   const budget = location?.monthly_contractor_budget_eur != null
@@ -516,17 +618,31 @@ export function coversPeriod(ranges, periodStart, periodEnd) {
  * the operator originally asked to publish, and a later trim is not a change
  * to that ask.
  *
- * KNOWN RESIDUE, accepted: a trimmed remnant that ends up owning NO blocks
- * (every block it had was inside the period this publish took) stays published
- * over dates it owns nothing on, and supersedeSwallowedRosters' phase-2 sweep
- * will not clean it up — after the trim it no longer overlaps the new period,
- * so the sweep never sees it. It is harmless as data (it overlaps no other
- * published roster, so mig 602 is satisfied, and no coach sees anything
- * wrong); it is only a tidiness cost in the roster list. Superseding it here
- * instead is NOT obviously right: the sweep's own rule for "owns nothing" is a
- * live recount, and doing that per trim would add a query per straddler to
- * every publish to remove a row that is the audit trail of a real publish
- * event.
+ * ROSTERTIDY.1 — the residue #1716 accepted here is now PARTLY settled,
+ * after the publish, by supersedeEmptyTrimmedRosters(). A trimmed remnant that
+ * ends up owning NO blocks (every block it had was inside the period this
+ * publish took) stays published over dates it owns nothing on, and the
+ * phase-2 sweep can never see it: after the trim it no longer overlaps the new
+ * period.
+ *
+ * It is NOT harmless in general, and it is not always wrong either: a
+ * published roster's period is what findPublishedRosterFor /
+ * findPublishedRosterIdsByDate (src/lib/roster.js) use to adopt a NEW block —
+ * one added by hand (/api/schedule/blocks) or by generation
+ * (roster-write.js). While a remnant covers a day, a block created there joins
+ * it and reads PUBLISHED at once; supersede the remnant and that block has no
+ * roster and reads unpublished until someone publishes again. So:
+ *   - a remnant whose trimmed period ENDED before today (Dublin) can never
+ *     adopt a block anyone will work, and is superseded;
+ *   - a remnant reaching today or later is KEPT on purpose, empty, because
+ *     its period still does real work for blocks added on those days.
+ * #1716's two objections are answered in the helper: the "owns nothing" rule
+ * is the same live recount the sweep uses, taken after the re-tag (before it,
+ * the remnant still owns the blocks this publish takes); and the cost is at
+ * most two count queries (one straddler per end), only on a publish that
+ * trimmed, and none at all for a future remnant.
+ * The row is superseded, never deleted, so the audit trail of the publish
+ * that created it survives exactly as the sweep's own supersede keeps it.
  *
  * @param {Array<{id: string, period_start: string, period_end: string, trim_to: {period_start: string, period_end: string}}>} trims
  * @returns {Promise<{ trimmed: Array<{id: string, period_start: string, period_end: string, trim_to: object}>, error: any }>}
@@ -588,6 +704,91 @@ export async function trimPublishedRosters(db, trims) {
     return await abort(e instanceof Error ? e : new Error(String(e)))
   }
   return { trimmed, error: null }
+}
+
+/**
+ * ROSTERTIDY.1 — after a publish that TRIMMED straddling rosters, supersede
+ * every trimmed remnant that is both in the PAST and left owning zero blocks.
+ * See trimPublishedRosters' header for the full trade-off.
+ *
+ * 🔴 PAST ONLY. A remnant whose trimmed `period_end` is today or later (Dublin,
+ * dublinTodayStr) is kept without even a recount: its period is how a block
+ * added on those days later finds its published roster
+ * (findPublishedRosterFor / findPublishedRosterIdsByDate), so superseding it
+ * would make such a block read unpublished where today it is published at
+ * once. It is reported in `future` for the caller to log.
+ *
+ * 🔴 ORDER: call only once the new roster is inserted AND its blocks are
+ * tagged. Before the re-tag the remnant still owns the blocks the publish is
+ * taking, so the recount would keep it; the route calls this straight after
+ * supersedeSwallowedRosters, which has the same precondition.
+ *
+ * Same mechanism as the sweep's zero-block supersede: status `superseded`,
+ * `superseded_by` the new roster, `superseded_at` now (both from mig 602), and
+ * `requested_period_*` untouched. The write is compare-and-swap on the
+ * TRIMMED period and on `published`, so a remnant another publish has since
+ * reshaped is left alone, and the rows touched are judged explicitly because
+ * a zero-row UPDATE is not an error.
+ *
+ * Best-effort and never throws: a past empty remnant left published is only a
+ * tidiness cost (it overlaps no published roster, so mig 602 is satisfied,
+ * and no block will ever be created on a past day to join it), so nothing
+ * here may fail a publish that already happened. Every problem comes back in
+ * `warning` for the caller to logWarn.
+ *
+ * @param {{ newRosterId: string, trimmed: Array<{id: string, trim_to: {period_start: string, period_end: string}}>, todayIso?: string }} opts
+ * @returns {Promise<{ superseded: string[], kept: string[], future: string[], warning: string|null }>}
+ */
+export async function supersedeEmptyTrimmedRosters(db, { newRosterId, trimmed = [], todayIso = dublinTodayStr() } = {}) {
+  const superseded = []
+  const kept = []
+  const future = []
+  const warnings = []
+  const targets = (trimmed || []).filter((t) => t?.id && t.id !== newRosterId && t?.trim_to?.period_start && t?.trim_to?.period_end)
+  if (targets.length === 0) return { superseded, kept, future, warning: null }
+  if (!newRosterId) return { superseded, kept, future, warning: 'trimmed-remnant check skipped: no newRosterId' }
+
+  const nowIso = new Date().toISOString()
+  for (const t of targets) {
+    // Dates are ISO YYYY-MM-DD strings, so string comparison IS date order.
+    if (t.trim_to.period_end >= todayIso) {
+      future.push(t.id)
+      continue
+    }
+    try {
+      // Recount-then-supersede is not atomic: a block tagged to this roster
+      // in between would be orphaned. Same accepted race as the phase-2 sweep.
+      const { count, error: ownErr } = await ownedBlockCount(db, t.id)
+      if (ownErr) {
+        // Reading a failed count as "owns nothing" would supersede a live
+        // roster and unpublish its blocks. Leave it alone and say so.
+        warnings.push(`block recount failed for trimmed roster ${t.id}: ${ownErr.message}`)
+        continue
+      }
+      if (count > 0) {
+        kept.push(t.id)
+        continue
+      }
+      const { data: touched, error: supErr } = await db
+        .from('rosters')
+        .update({ status: 'superseded', superseded_at: nowIso, superseded_by: newRosterId })
+        .eq('id', t.id)
+        .eq('status', 'published')
+        .eq('period_start', t.trim_to.period_start)
+        .eq('period_end', t.trim_to.period_end)
+        .select('id')
+      if (supErr) {
+        warnings.push(`supersede failed for trimmed roster ${t.id}: ${supErr.message}`)
+      } else if ((touched || []).length === 0) {
+        warnings.push(`trimmed roster ${t.id} changed since the trim, so it was not superseded`)
+      } else {
+        superseded.push(t.id)
+      }
+    } catch (e) {
+      warnings.push(`trimmed-remnant check threw for roster ${t.id}: ${e?.message || e}`)
+    }
+  }
+  return { superseded, kept, future, warning: warnings.length > 0 ? warnings.join('; ') : null }
 }
 
 /**
@@ -791,6 +992,22 @@ export async function restorePublishedRosters(db, rosters) {
 }
 
 /**
+ * How many blocks a roster owns right now: the live recount behind every
+ * "owns nothing → supersede" decision (the phase-2 sweep and, since
+ * ROSTERTIDY.1, the trimmed-remnant check). Count-only, so no row cap applies.
+ *
+ * @returns {Promise<{ count: number, error: any }>}
+ */
+async function ownedBlockCount(db, rosterId) {
+  const { count, error } = await db
+    .from('shift_blocks')
+    .select('id', { count: 'exact', head: true })
+    .eq('roster_id', rosterId)
+  if (error) return { count: 0, error }
+  return { count: count || 0, error: null }
+}
+
+/**
  * The blocks a roster still owns: how many, and the first/last date. Three
  * cheap queries rather than one `select('block_date')` because the 1,000-row
  * select cap would silently truncate min/max on a long period (CLAUDE.md).
@@ -798,10 +1015,7 @@ export async function restorePublishedRosters(db, rosters) {
  * @returns {Promise<{ count: number, first: string|null, last: string|null, error: any }>}
  */
 async function ownedBlockRange(db, rosterId) {
-  const { count, error: countErr } = await db
-    .from('shift_blocks')
-    .select('id', { count: 'exact', head: true })
-    .eq('roster_id', rosterId)
+  const { count, error: countErr } = await ownedBlockCount(db, rosterId)
   if (countErr) return { count: 0, first: null, last: null, error: countErr }
   if (!count) return { count: 0, first: null, last: null, error: null }
 

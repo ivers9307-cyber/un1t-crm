@@ -32,6 +32,9 @@ vi.mock('@/lib/roster-publish', async (importOriginal) => ({
   ...(await importOriginal()),
   projectPublishImpact: vi.fn(),
 }))
+// ROSTERTIDY.1 — spied so a remnant-supersede failure can be shown to LOG
+// rather than fail the approval.
+vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logWarn: vi.fn() }))
 vi.mock('@/lib/roster-notify', () => ({
   notifyStaffOfPublish: vi.fn(() => Promise.resolve()),
   publishNotifyRowsForBlocks: vi.fn(() => Promise.resolve([])),
@@ -43,6 +46,7 @@ const { getCurrentUser } = await import('@/lib/auth')
 const { hasPermissionForLocation } = await import('@/lib/permissions')
 const { notifyStaffOfPublish, renotifyChangedCoaches } = await import('@/lib/roster-notify')
 const { projectPublishImpact } = await import('@/lib/roster-publish')
+const { logWarn } = await import('@/lib/log')
 const { POST } = await import('./route.js')
 
 const FRESH = {
@@ -71,7 +75,7 @@ function draft(overrides = {}) {
 // (select('*') … .single()), the overlap probe (a narrow select that is
 // awaited), and the status flip. The probe's filters are recorded so the
 // self-exclusion can be asserted.
-function buildDb({ roster, publishedRosters = [], updateError = null, updateThrows = null, captureError = null, tagError = null, rosterUpdateError = null }) {
+function buildDb({ roster, publishedRosters = [], updateError = null, updateThrows = null, captureError = null, tagError = null, rosterUpdateError = null, blockCounts = {}, applyUpdates = false }) {
   const updates = []
   const probe = []
   const blockUpdates = []
@@ -99,6 +103,9 @@ function buildDb({ roster, publishedRosters = [], updateError = null, updateThro
             const filters = []
             const DATE_OR_ID = new Set(['period_start', 'period_end', 'id'])
             const matches = (r) => filters.every(([op, col, val]) => {
+              // ROSTERTIDY.1 — a row an applyUpdates test superseded carries a
+              // status; fixtures without one still match every status filter.
+              if (col === 'status' && r.status && op === 'eq') return r.status === val
               if (!DATE_OR_ID.has(col)) return true
               if (op === 'eq') return r[col] === val
               if (op === 'neq') return r[col] !== val
@@ -126,6 +133,18 @@ function buildDb({ roster, publishedRosters = [], updateError = null, updateThro
             // ROSTER-TRIM.1 — a per-payload failure hook, so a test can break
             // the RELEASE (status: 'superseded') while letting the trim land.
             const payloadErr = rosterUpdateError ? rosterUpdateError(payload) : null
+            // ROSTERTIDY.1 — opt-in: land a successful update on the fixture
+            // row, so a trimmed roster reads back with its TRIMMED period.
+            // Without it the phase-2 sweep still sees the pre-trim period and
+            // settles the remnant itself, which on real data it never could.
+            if (applyUpdates) {
+              queueMicrotask(() => {
+                if (payloadErr) return
+                const id = rec.where.find(([c]) => c === 'id')?.[1]
+                const row = publishedRosters.find((r) => r.id === id)
+                if (row) Object.assign(row, payload)
+              })
+            }
             const w = {
               eq: (c, v) => { rec.where.push([c, v]); return w },
               in: (c, v) => { rec.where.push([c, v]); return w },
@@ -159,15 +178,23 @@ function buildDb({ roster, publishedRosters = [], updateError = null, updateThro
         // capture (a select) and the tagging (an update) — so the resolved
         // error has to follow whichever one this chain turned into.
         let isUpdate = false
+        // ROSTERTIDY.1 — the owned-block recount is a head:true count by
+        // roster_id; answered from `blockCounts`.
+        let head = false
+        let rosterId = null
         const chain = {
-          select: () => chain,
+          select: (_c, opts) => { head = !!opts?.head; return chain },
           update: (payload) => { isUpdate = true; blockUpdates.push(payload); return chain },
-          eq: () => chain,
+          eq: (c, v) => { if (c === 'roster_id') rosterId = v; return chain },
           gte: () => chain,
           lte: () => chain,
           is: () => chain,
           then: (onF, onR) => Promise.resolve(
-            isUpdate ? { data: null, error: tagError } : { data: [], error: captureError },
+            isUpdate
+              ? { data: null, error: tagError }
+              : head
+                ? { data: null, count: blockCounts[rosterId] || 0, error: null }
+                : { data: [], error: captureError },
           ).then(onF, onR),
         }
         return chain
@@ -222,6 +249,66 @@ describe('POST /api/schedule/rosters/[id]/approve — overlap guard', () => {
     const trim = updates.find((u) => u.payload.period_end === '2026-05-03')
     expect(trim.payload).toEqual({ period_start: '2026-04-27', period_end: '2026-05-03' })
     expect(trim.where).toContainEqual(['id', 'r-prev'])
+  })
+
+  // ROSTERTIDY.1 — after the approval the trimmed r-prev keeps only 27 Apr to
+  // 3 May, all in the PAST, so whether it survives turns on whether it still
+  // OWNS a block there, recounted after the re-tag.
+  function isRemnantSupersede(u) {
+    return u.payload.status === 'superseded' && u.payload.superseded_by === 'roster-1'
+      && u.where.some(([c, v]) => c === 'id' && v === 'r-prev')
+  }
+
+  it('keeps a trimmed remnant that still owns a block', async () => {
+    const { db, updates } = buildDb({
+      roster: draft(),
+      publishedRosters: [{ id: 'r-prev', period_start: '2026-04-27', period_end: '2026-05-05' }],
+      blockCounts: { 'r-prev': 2 },
+      applyUpdates: true,
+    })
+    createServerClient.mockReturnValue(db)
+    const res = await POST({}, PROPS)
+    expect(res.status).toBe(200)
+    expect(updates.some(isRemnantSupersede)).toBe(false)
+  })
+
+  it('supersedes a past trimmed remnant left owning zero blocks, AFTER the flip', async () => {
+    const { db, updates } = buildDb({
+      roster: draft(),
+      publishedRosters: [{ id: 'r-prev', period_start: '2026-04-27', period_end: '2026-05-05' }],
+      blockCounts: {},
+      applyUpdates: true,
+    })
+    createServerClient.mockReturnValue(db)
+    const res = await POST({}, PROPS)
+    expect(res.status).toBe(200)
+    // Exactly one — from the remnant check, not the sweep (which can no
+    // longer see the trimmed row).
+    const sups = updates.filter(isRemnantSupersede)
+    expect(sups).toHaveLength(1)
+    const [sup] = sups
+    expect(sup.afterFlip).toBe(true)
+    expect(sup.where).toContainEqual(['period_start', '2026-04-27'])
+    expect(sup.where).toContainEqual(['period_end', '2026-05-03'])
+  })
+
+  it('a failed remnant supersede only logs — the approval still succeeds, with no warning', async () => {
+    logWarn.mockClear()
+    const { db } = buildDb({
+      roster: draft(),
+      publishedRosters: [{ id: 'r-prev', period_start: '2026-04-27', period_end: '2026-05-05' }],
+      rosterUpdateError: (payload) => (payload.superseded_by === 'roster-1' ? { message: 'deadlock' } : null),
+      applyUpdates: true,
+    })
+    createServerClient.mockReturnValue(db)
+    const res = await POST({}, PROPS)
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.success).toBe(true)
+    expect(body.warning || '').not.toMatch(/deadlock/)
+    expect(logWarn).toHaveBeenCalledWith('rosters/approve', 'empty trimmed roster could not be superseded', expect.objectContaining({
+      err: expect.stringMatching(/r-prev: deadlock/), roster_id: 'roster-1',
+    }))
   })
 
   // 🔴 THE RELEASE RUNS AFTER THE TRIM, so its refusal is no longer free: a

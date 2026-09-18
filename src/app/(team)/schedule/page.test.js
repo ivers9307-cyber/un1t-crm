@@ -64,3 +64,17 @@ describe('/schedule root — ?view=reporting search param', () => {
     expect(html).not.toContain('reporting-stub')
   })
 })
+
+// ROSTERTIDY.1 — a CLASS PIN, not a layout proof (jsdom/static markup has no
+// layout engine). It only stops the wrapper regressing to a bare `p-8`, which
+// left 32px side margins on a 360px phone; whether 16px actually renders is a
+// browser check.
+describe('/schedule root — wrapper padding classes', () => {
+  it('uses 16px side padding below sm and p-8 from sm up', async () => {
+    getCurrentUser.mockResolvedValue(user())
+    const html = renderToStaticMarkup(await SchedulePage({ searchParams: Promise.resolve({}) }))
+    const firstClass = html.match(/^<div class="([^"]*)"/)?.[1] || ''
+    expect(firstClass.split(' ')).toEqual(expect.arrayContaining(['px-4', 'py-6', 'sm:p-8']))
+    expect(firstClass.split(' ')).not.toContain('p-8')
+  })
+})

@@ -12,6 +12,7 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import {
   projectPublishImpact,
+  projectPublishImpactBatch,
   projectionChanged,
   monthsTouched,
   isoShiftDays,
@@ -25,24 +26,31 @@ import {
   releasePublishedRostersFor,
   restorePublishedRosters,
   supersedeSwallowedRosters,
+  supersedeEmptyTrimmedRosters,
 } from './roster-publish'
 
-function mockDb({ location, contractors = [], blocks = [], timeOff = [] }) {
+function mockDb({ location, locationsById = null, failLocationIds = [], contractors = [], blocks = [], timeOff = [] }) {
   // Mock the chained Supabase queries the helper makes:
   //   from('locations').select(...).eq(...).single() → location
   //   from('profile_locations').select(...).eq(...) → contractor links
   //   from('shift_blocks').select(...).eq().gte().lte() → blocks
   const calls = []
   const blockQueries = []
+  const leaveQueries = []
   return {
+    calls,
     blockQueries,
+    leaveQueries,
     from(table) {
       calls.push(table)
       if (table === 'locations') {
         return {
           select: () => ({
-            eq: () => ({
-              single: async () => ({ data: location, error: null }),
+            // ROSTERTIDY.1 — keyed by id when a test needs several locations.
+            eq: (_c, id) => ({
+              single: async () => (failLocationIds.includes(id)
+                ? { data: null, error: { message: 'location read failed' } }
+                : { data: locationsById ? locationsById[id] : location, error: null }),
             }),
           }),
         }
@@ -62,15 +70,25 @@ function mockDb({ location, contractors = [], blocks = [], timeOff = [] }) {
       }
       // ROSTER-FIX.4 — approved leave for the month, one query.
       if (table === 'time_off_requests') {
+        // ROSTERTIDY.1 — the leave read pages now, so the mock honours the
+        // overlap bounds and the page window, like the block mock below.
+        const f = { startLte: null, endGte: null, from: 0, to: Infinity }
+        leaveQueries.push(f)
         const chain = {
           select: () => chain,
           eq: () => chain,
           // LEAVE.2 — scoped by the person (filed here OR a member here).
           or: () => chain,
-          lte: () => chain,
-          gte: (col) => (col === 'end_date'
-            ? Promise.resolve({ data: timeOff, error: null })
-            : chain),
+          order: () => chain,
+          lte: (_c, v) => { f.startLte = v; return chain },
+          gte: (_c, v) => { f.endGte = v; return chain },
+          range: (from, to) => { f.from = from; f.to = to; return chain },
+          then: (onF, onR) => Promise.resolve({
+            data: timeOff
+              .filter((r) => (f.startLte == null || r.start_date <= f.startLte) && (f.endGte == null || r.end_date >= f.endGte))
+              .slice(f.from, f.to + 1),
+            error: null,
+          }).then(onF, onR),
         }
         return chain
       }
@@ -79,17 +97,18 @@ function mockDb({ location, contractors = [], blocks = [], timeOff = [] }) {
       // bounds and the page window: a helper that asked for the wrong months
       // must get the wrong blocks back, not every fixture regardless.
       if (table === 'shift_blocks') {
-        const f = { gte: null, lte: null, from: 0, to: Infinity }
+        const f = { loc: null, gte: null, lte: null, from: 0, to: Infinity }
         blockQueries.push(f)
         const chain = {
           select: () => chain,
-          eq: () => chain,
+          eq: (c, v) => { if (c === 'location_id') f.loc = v; return chain },
           order: () => chain,
           gte: (_c, v) => { f.gte = v; return chain },
           lte: (_c, v) => { f.lte = v; return chain },
           range: (from, to) => { f.from = from; f.to = to; return chain },
           then: (onF, onR) => Promise.resolve({
             data: blocks
+              .filter((b) => (f.loc == null || b.location_id === f.loc))
               .filter((b) => (f.gte == null || b.block_date >= f.gte) && (f.lte == null || b.block_date <= f.lte))
               .slice(f.from, f.to + 1),
             error: null,
@@ -106,10 +125,10 @@ const dan = { id: 'dan', employment_type: 'contractor', hourly_rate: 35, active:
 const eve = { id: 'eve', employment_type: 'contractor', hourly_rate: 40, active: true }
 const sarah = { id: 'sarah', employment_type: 'fte', hourly_rate: null, active: true }
 
-function block({ id, date, start, end, coaches = [], roster = null }) {
+function block({ id, date, start, end, coaches = [], roster = null, loc = 'loc1' }) {
   return {
     id,
-    location_id: 'loc1',
+    location_id: loc,
     block_date: date,
     start_time: start,
     end_time: end,
@@ -487,6 +506,144 @@ describe('projectPublishImpact — a period that crosses a month boundary', () =
     const r = await projectPublishImpact(db, { locationId: 'loc1', periodStart: '2026-08-31', periodEnd: '2026-09-06' })
     expect(r.blockCount).toBe(1001)
     expect(db.blockQueries.map((q) => [q.from, q.to])).toEqual([[0, 999], [1000, 1999]])
+  })
+})
+
+// ROSTERTIDY.1 — the approvals queue used to re-project each draft on its
+// own (up to 50 × a full context load). The batch loads once per location and
+// judges every draft with the same pure function; these pin that the two
+// paths cannot disagree, and that the load really happens once.
+describe('projectPublishImpactBatch', () => {
+  const realTz = process.env.TZ
+  afterEach(() => { process.env.TZ = realTz })
+  const TODAY = '2026-08-01'
+
+  // A fixture with every ingredient the projection reads: published spend in
+  // each month outside the drafts, a cross-month week, an override, approved
+  // leave, an under-staffed shift (min_coaches 2) and a block in a month only
+  // ONE draft touches — the one a wider batch load must not leak into the
+  // others.
+  function richFixture() {
+    const published = { id: 'r-pub', status: 'published' }
+    const blocks = [
+      block({ id: 'aug-pub', date: '2026-08-10', start: '09:00', end: '13:00', coaches: ['dan'], roster: published }),
+      block({ id: 'w-mon', date: '2026-08-31', start: '09:00', end: '11:00', coaches: ['dan'] }),
+      block({ id: 'w-tue', date: '2026-09-01', start: '09:00', end: '11:00', coaches: ['dan', 'eve'] }),
+      block({
+        id: 'w-wed', date: '2026-09-02', start: '09:00', end: '13:00',
+        coaches: [{ profile_id: 'eve', status: 'scheduled', start_time_override: '09:00', end_time_override: '10:00' }],
+      }),
+      block({ id: 'w-thu', date: '2026-09-03', start: '09:00', end: '11:00', coaches: ['dan'] }),
+      block({ id: 'sep-pub', date: '2026-09-20', start: '09:00', end: '12:00', coaches: ['dan'], roster: published }),
+      block({ id: 'nov-1', date: '2026-11-03', start: '09:00', end: '17:00', coaches: ['dan', 'eve'] }),
+      block({ id: 'nov-pub', date: '2026-11-20', start: '09:00', end: '12:00', coaches: ['eve'], roster: published }),
+    ]
+    blocks.find((b) => b.id === 'w-tue').min_coaches = 3
+    return {
+      location: { id: 'loc1', monthly_contractor_budget_eur: 400 },
+      contractors: [dan, eve, sarah],
+      blocks,
+      timeOff: [{ id: 't1', profile_id: 'dan', start_date: '2026-09-03', end_date: '2026-09-04' }],
+    }
+  }
+  const DRAFTS = [
+    { locationId: 'loc1', periodStart: '2026-08-31', periodEnd: '2026-09-06' },
+    { locationId: 'loc1', periodStart: '2026-11-02', periodEnd: '2026-11-08' },
+    { locationId: 'loc1', periodStart: '2026-09-01', periodEnd: '2026-09-30' },
+  ]
+
+  for (const tz of ['Europe/Dublin', 'America/Los_Angeles']) {
+    it(`gives the SAME result as projectPublishImpact for every draft (TZ=${tz})`, async () => {
+      process.env.TZ = tz
+      const fx = richFixture()
+      const batch = await projectPublishImpactBatch(mockDb(fx), DRAFTS, { todayIso: TODAY })
+      expect(batch).toHaveLength(DRAFTS.length)
+      for (let i = 0; i < DRAFTS.length; i++) {
+        const single = await projectPublishImpact(mockDb(fx), { ...DRAFTS[i], todayIso: TODAY })
+        expect(batch[i].error).toBeNull()
+        expect(batch[i].impact).toEqual(single)
+      }
+      // Sanity that the fixture exercises what it claims: the November block
+      // is inside the batch's load but counted only by the November draft.
+      expect(batch[0].impact.blockCount).toBe(4)
+      expect(batch[1].impact.blockCount).toBe(1)
+      expect(batch[0].impact.staffingGaps.map((g) => g.block_id)).toContain('w-tue')
+    })
+  }
+
+  it('loads the location ONCE, spanning every month its drafts touch', async () => {
+    const db = mockDb(richFixture())
+    await projectPublishImpactBatch(db, DRAFTS, { todayIso: TODAY })
+    expect(db.calls.filter((t) => t === 'locations')).toHaveLength(1)
+    expect(db.calls.filter((t) => t === 'profile_locations')).toHaveLength(1)
+    expect(db.blockQueries).toHaveLength(1)
+    expect(db.blockQueries[0]).toMatchObject({ loc: 'loc1', gte: '2026-08-01', lte: '2026-11-30' })
+    expect(db.leaveQueries).toHaveLength(1)
+    expect(db.leaveQueries[0]).toMatchObject({ endGte: '2026-08-01', startLte: '2026-11-30' })
+  })
+
+  it('groups by location and returns results in input order', async () => {
+    const db = mockDb({
+      locationsById: {
+        loc1: { id: 'loc1', monthly_contractor_budget_eur: 1000 },
+        loc2: { id: 'loc2', monthly_contractor_budget_eur: 50 },
+      },
+      contractors: [dan],
+      blocks: [
+        block({ id: 'a', date: '2026-09-02', start: '09:00', end: '11:00', coaches: ['dan'] }),
+        block({ id: 'b', date: '2026-09-02', start: '09:00', end: '13:00', coaches: ['dan'], loc: 'loc2' }),
+      ],
+    })
+    const out = await projectPublishImpactBatch(db, [
+      { locationId: 'loc2', periodStart: '2026-09-01', periodEnd: '2026-09-06' },
+      { locationId: 'loc1', periodStart: '2026-09-01', periodEnd: '2026-09-06' },
+    ], { todayIso: TODAY })
+    expect(out.map((r) => r.impact.periodProjectedEur)).toEqual([140, 70])
+    expect(out.map((r) => r.impact.overBudget)).toEqual([true, false])
+    expect(db.blockQueries.map((q) => q.loc).sort()).toEqual(['loc1', 'loc2'])
+  })
+
+  it('a location that fails to load fails only its own drafts, and never throws', async () => {
+    const db = mockDb({
+      locationsById: { loc1: { id: 'loc1', monthly_contractor_budget_eur: 1000 } },
+      failLocationIds: ['loc2'],
+      contractors: [dan],
+      blocks: [block({ id: 'a', date: '2026-09-02', start: '09:00', end: '11:00', coaches: ['dan'] })],
+    })
+    const out = await projectPublishImpactBatch(db, [
+      { locationId: 'loc2', periodStart: '2026-09-01', periodEnd: '2026-09-06' },
+      { locationId: 'loc1', periodStart: '2026-09-01', periodEnd: '2026-09-06' },
+      { locationId: 'loc1', periodStart: null, periodEnd: '2026-09-06' },
+    ], { todayIso: TODAY })
+    expect(out[0].impact).toBeNull()
+    expect(out[0].error.message).toMatch(/Location lookup failed/)
+    expect(out[1].error).toBeNull()
+    expect(out[1].impact.periodProjectedEur).toBe(70)
+    expect(out[2].impact).toBeNull()
+    expect(out[2].error).toBeInstanceOf(Error)
+  })
+
+  it('pages the leave read past the 1000-row cap', async () => {
+    const timeOff = Array.from({ length: 1001 }, (_, i) => ({
+      id: `t${String(i).padStart(4, '0')}`, profile_id: i === 1000 ? 'dan' : `other${i}`,
+      start_date: '2026-09-02', end_date: '2026-09-02',
+    }))
+    const db = mockDb({
+      location: { id: 'loc1', monthly_contractor_budget_eur: null },
+      contractors: [dan],
+      blocks: [block({ id: 'a', date: '2026-09-02', start: '09:00', end: '11:00', coaches: ['dan'] })],
+      timeOff,
+    })
+    const [r] = await projectPublishImpactBatch(db, [{ locationId: 'loc1', periodStart: '2026-09-01', periodEnd: '2026-09-06' }], { todayIso: TODAY })
+    // Dan's leave is row 1001 — on the SECOND page. Truncated, he'd be billed.
+    expect(r.impact.periodProjectedEur).toBe(0)
+    expect(db.leaveQueries.map((q) => [q.from, q.to])).toEqual([[0, 999], [1000, 1999]])
+  })
+
+  it('an empty list is an empty result with no reads', async () => {
+    const db = mockDb(richFixture())
+    expect(await projectPublishImpactBatch(db, [])).toEqual([])
+    expect(db.calls).toEqual([])
   })
 })
 
@@ -1279,5 +1436,180 @@ describe('publishAftermathNote', () => {
     expect(publishAftermathNote({ releasedCount: 2 })).toMatch(/rosters it replaces have/)
     expect(publishAftermathNote({ trimmedCount: 1 })).toMatch(/One overlapping roster was/)
     expect(publishAftermathNote({ trimmedCount: 3 })).toMatch(/3 overlapping rosters were/)
+  })
+})
+
+// ROSTERTIDY.1 — a trimmed remnant left owning ZERO blocks used to stay
+// published over days it owns nothing on (the residue #1716 accepted): after
+// the trim it no longer overlaps the new period, so supersedeSwallowedRosters'
+// sweep never sees it. It is now superseded after the re-tag, by a live
+// recount, with the sweep's own mechanism.
+describe('supersedeEmptyTrimmedRosters', () => {
+  // counts: roster id → blocks it owns. failCount / failUpdate / zeroRowUpdate
+  // break one step each.
+  function remnantDb({ counts = {}, failCount = false, failUpdate = false, zeroRowUpdate = false, throwOnCount = false } = {}) {
+    const updates = []
+    const countedIds = []
+    const db = {
+      from(table) {
+        if (table === 'shift_blocks') {
+          let rosterId = null
+          let head = false
+          const chain = {
+            select: (_c, opts) => { head = !!opts?.head; return chain },
+            eq: (c, v) => { if (c === 'roster_id') rosterId = v; return chain },
+            then: (onF, onR) => {
+              if (throwOnCount) return Promise.reject(new Error('socket hang up')).then(onF, onR)
+              countedIds.push(rosterId)
+              expect(head).toBe(true)
+              return Promise.resolve(failCount
+                ? { data: null, count: null, error: { message: 'count failed' } }
+                : { data: null, count: counts[rosterId] ?? 0, error: null }).then(onF, onR)
+            },
+          }
+          return chain
+        }
+        if (table === 'rosters') {
+          return {
+            update(payload) {
+              const rec = { payload, where: [] }
+              updates.push(rec)
+              const w = {
+                eq: (c, v) => { rec.where.push([c, v]); return w },
+                select: () => Promise.resolve(failUpdate
+                  ? { data: null, error: { message: 'update failed' } }
+                  : { data: zeroRowUpdate ? [] : [{ id: rec.where.find(([c]) => c === 'id')[1] }], error: null }),
+              }
+              return w
+            },
+          }
+        }
+        throw new Error('unexpected table: ' + table)
+      },
+    }
+    return { db, updates, countedIds }
+  }
+
+  // A fixed "today", so the past/future split never depends on the clock.
+  // The remnant below ends 31 Aug: in the past.
+  const TODAY = '2026-09-18'
+  const TRIMMED_WEEK = {
+    id: 'r-week', period_start: '2026-08-31', period_end: '2026-09-06',
+    trim_to: { period_start: '2026-08-31', period_end: '2026-08-31' },
+  }
+
+  it('KEEPS a trimmed remnant that still owns blocks, and writes nothing', async () => {
+    const { db, updates, countedIds } = remnantDb({ counts: { 'r-week': 3 } })
+    const res = await supersedeEmptyTrimmedRosters(db, { todayIso: TODAY, newRosterId: 'r-sept', trimmed: [TRIMMED_WEEK] })
+    expect(res).toEqual({ superseded: [], kept: ['r-week'], future: [], warning: null })
+    expect(countedIds).toEqual(['r-week'])
+    expect(updates).toHaveLength(0)
+  })
+
+  it('SUPERSEDES a trimmed remnant left owning zero blocks, the way the sweep does', async () => {
+    const { db, updates } = remnantDb({ counts: { 'r-week': 0 } })
+    const res = await supersedeEmptyTrimmedRosters(db, { todayIso: TODAY, newRosterId: 'r-sept', trimmed: [TRIMMED_WEEK] })
+    expect(res).toEqual({ superseded: ['r-week'], kept: [], future: [], warning: null })
+    expect(updates).toHaveLength(1)
+    const [u] = updates
+    expect(u.payload).toEqual({ status: 'superseded', superseded_at: expect.any(String), superseded_by: 'r-sept' })
+    // requested_period_* (the operator's original ask) is never rewritten,
+    // and nor is the period — the tombstone keeps the dates it was trimmed to.
+    expect(Object.keys(u.payload)).not.toContain('requested_period_start')
+    expect(Object.keys(u.payload)).not.toContain('period_start')
+    // Compare-and-swap on the TRIMMED period, published only.
+    expect(u.where).toEqual([
+      ['id', 'r-week'], ['status', 'published'],
+      ['period_start', '2026-08-31'], ['period_end', '2026-08-31'],
+    ])
+  })
+
+  it('judges each remnant on its own', async () => {
+    const { db } = remnantDb({ counts: { 'r-prev': 0, 'r-next': 2 } })
+    const res = await supersedeEmptyTrimmedRosters(db, {
+      todayIso: TODAY,
+      newRosterId: 'r-new',
+      trimmed: [
+        { id: 'r-prev', trim_to: { period_start: '2026-04-27', period_end: '2026-04-30' } },
+        { id: 'r-next', trim_to: { period_start: '2026-06-01', period_end: '2026-06-03' } },
+      ],
+    })
+    expect(res.superseded).toEqual(['r-prev'])
+    expect(res.kept).toEqual(['r-next'])
+  })
+
+  // A supersede failure must only ever surface as a warning for logWarn.
+  it('a failed supersede only warns — it never throws', async () => {
+    const { db } = remnantDb({ failUpdate: true })
+    const res = await supersedeEmptyTrimmedRosters(db, { todayIso: TODAY, newRosterId: 'r-sept', trimmed: [TRIMMED_WEEK] })
+    expect(res.superseded).toEqual([])
+    expect(res.warning).toMatch(/supersede failed for trimmed roster r-week: update failed/)
+  })
+
+  it('a zero-row supersede (the remnant moved since) is a warning, not a success', async () => {
+    const { db } = remnantDb({ zeroRowUpdate: true })
+    const res = await supersedeEmptyTrimmedRosters(db, { todayIso: TODAY, newRosterId: 'r-sept', trimmed: [TRIMMED_WEEK] })
+    expect(res.superseded).toEqual([])
+    expect(res.warning).toMatch(/changed since the trim/)
+  })
+
+  // Reading a failed count as "owns nothing" would unpublish live shifts.
+  it('a failed recount leaves the remnant alone and warns', async () => {
+    const { db, updates } = remnantDb({ failCount: true })
+    const res = await supersedeEmptyTrimmedRosters(db, { todayIso: TODAY, newRosterId: 'r-sept', trimmed: [TRIMMED_WEEK] })
+    expect(updates).toHaveLength(0)
+    expect(res.warning).toMatch(/block recount failed/)
+  })
+
+  it('a THROWN recount is caught and warned, never rethrown', async () => {
+    const { db, updates } = remnantDb({ throwOnCount: true })
+    const res = await supersedeEmptyTrimmedRosters(db, { todayIso: TODAY, newRosterId: 'r-sept', trimmed: [TRIMMED_WEEK] })
+    expect(updates).toHaveLength(0)
+    expect(res.warning).toMatch(/threw for roster r-week: socket hang up/)
+  })
+
+  it('does nothing without trims, and refuses without a successor id', async () => {
+    const { db, countedIds } = remnantDb()
+    expect(await supersedeEmptyTrimmedRosters(db, { todayIso: TODAY, newRosterId: 'r-sept', trimmed: [] }))
+      .toEqual({ superseded: [], kept: [], future: [], warning: null })
+    const res = await supersedeEmptyTrimmedRosters(db, { todayIso: TODAY, newRosterId: null, trimmed: [TRIMMED_WEEK] })
+    expect(res.superseded).toEqual([])
+    expect(res.warning).toMatch(/no newRosterId/)
+    expect(countedIds).toEqual([])
+  })
+
+  // Review fix — a remnant still covering today or later is how a block added
+  // on those days finds its published roster (findPublishedRosterFor), so it
+  // must stay published even when it owns nothing right now.
+  it('KEEPS an empty remnant whose trimmed period reaches today, without a recount', async () => {
+    const { db, updates, countedIds } = remnantDb({ counts: { 'r-oct': 0 } })
+    const res = await supersedeEmptyTrimmedRosters(db, {
+      todayIso: TODAY, newRosterId: 'r-sept',
+      trimmed: [{ id: 'r-oct', trim_to: { period_start: '2026-09-18', period_end: '2026-09-18' } }],
+    })
+    expect(res).toEqual({ superseded: [], kept: [], future: ['r-oct'], warning: null })
+    expect(countedIds).toEqual([])
+    expect(updates).toHaveLength(0)
+  })
+
+  it('KEEPS an empty remnant whose trimmed period is wholly in the future', async () => {
+    const { db, updates } = remnantDb({ counts: { 'r-oct': 0 } })
+    const res = await supersedeEmptyTrimmedRosters(db, {
+      todayIso: TODAY, newRosterId: 'r-sept',
+      trimmed: [{ id: 'r-oct', trim_to: { period_start: '2026-10-01', period_end: '2026-10-04' } }],
+    })
+    expect(res.future).toEqual(['r-oct'])
+    expect(updates).toHaveLength(0)
+  })
+
+  it('supersedes the PAST empty remnant and keeps the future one in the same call', async () => {
+    const { db, updates } = remnantDb({ counts: { 'r-week': 0, 'r-oct': 0 } })
+    const res = await supersedeEmptyTrimmedRosters(db, {
+      todayIso: TODAY, newRosterId: 'r-sept',
+      trimmed: [TRIMMED_WEEK, { id: 'r-oct', trim_to: { period_start: '2026-10-01', period_end: '2026-10-04' } }],
+    })
+    expect(res.superseded).toEqual(['r-week'])
+    expect(res.future).toEqual(['r-oct'])
+    expect(updates.map((u) => u.where[0][1])).toEqual(['r-week'])
   })
 })

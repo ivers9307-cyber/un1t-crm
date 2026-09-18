@@ -10,10 +10,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('../registry', () => ({ viewerActiveLocationId: vi.fn(() => 'loc1') }))
-vi.mock('@/lib/roster-publish', () => ({ projectPublishImpact: vi.fn() }))
+vi.mock('@/lib/roster-publish', () => ({ projectPublishImpactBatch: vi.fn() }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
 
-const { projectPublishImpact } = await import('@/lib/roster-publish')
+const { projectPublishImpactBatch } = await import('@/lib/roster-publish')
+const { logWarn } = await import('@/lib/log')
 const { rostersProvider, rosterApprovalSubtitle } = await import('./rosters')
 
 const DRAFT = {
@@ -40,7 +41,12 @@ function db(rows = [DRAFT]) {
   return { from: () => b }
 }
 
-beforeEach(() => { projectPublishImpact.mockReset() })
+beforeEach(() => { projectPublishImpactBatch.mockReset(); logWarn.mockReset() })
+
+// The batch answers one { impact, error } per period, in input order.
+function batchOf(...results) {
+  projectPublishImpactBatch.mockResolvedValue(results)
+}
 
 describe('rosterApprovalSubtitle', () => {
   it('quotes the budget as MONTHLY, and the overrun from the projection', () => {
@@ -84,32 +90,57 @@ describe('rosterApprovalSubtitle', () => {
 })
 
 describe('rostersProvider.fetchPending', () => {
-  it('re-projects per draft and reports the projection overrun, not period-minus-month', async () => {
-    projectPublishImpact.mockResolvedValue({
-      periodProjectedEur: 9000, monthlyBudgetEur: 5000, overrunEur: 400,
-      months: [{ monthStart: '2026-09-01', overrunEur: 400 }],
+  it('re-projects the queue as ONE batch and reports the projection overrun, not period-minus-month', async () => {
+    batchOf({
+      impact: {
+        periodProjectedEur: 9000, monthlyBudgetEur: 5000, overrunEur: 400,
+        months: [{ monthStart: '2026-09-01', overrunEur: 400 }],
+      },
+      error: null,
     })
     const { items } = await rostersProvider.fetchPending(db(), { id: 'u1' })
-    expect(projectPublishImpact).toHaveBeenCalledWith(expect.anything(), {
-      locationId: 'loc1', periodStart: '2026-08-31', periodEnd: '2026-09-30',
-    })
+    expect(projectPublishImpactBatch).toHaveBeenCalledTimes(1)
+    expect(projectPublishImpactBatch).toHaveBeenCalledWith(expect.anything(), [
+      { locationId: 'loc1', periodStart: '2026-08-31', periodEnd: '2026-09-30' },
+    ])
     // NOT 4000 (9000 - 5000), which is what the stored columns gave.
     expect(items[0].amount).toBe(400)
     expect(items[0].subtitle).toContain('+€400 over')
   })
 
-  it('still lists the draft when its projection throws', async () => {
-    projectPublishImpact.mockRejectedValue(new Error('block lookup failed'))
+  // ROSTERTIDY.1 — the N+1 this replaced: 50 drafts used to be 50 full
+  // context loads. Now it is one call carrying every draft, results matched
+  // back by position.
+  it('sends every draft in one call and maps results back by position', async () => {
+    const second = { ...DRAFT, id: 'r-2', period_start: '2026-10-05', period_end: '2026-10-11' }
+    batchOf(
+      { impact: { periodProjectedEur: 9000, monthlyBudgetEur: 5000, overrunEur: 400, months: [] }, error: null },
+      { impact: { periodProjectedEur: 900, monthlyBudgetEur: 5000, overrunEur: 0, months: [] }, error: null },
+    )
+    const { items } = await rostersProvider.fetchPending(db([DRAFT, second]), { id: 'u1' })
+    expect(projectPublishImpactBatch).toHaveBeenCalledTimes(1)
+    expect(projectPublishImpactBatch.mock.calls[0][1]).toHaveLength(2)
+    expect(items.map((i) => [i.id, i.amount])).toEqual([['r-1', 400], ['r-2', null]])
+  })
+
+  it('still lists the draft, and says the overrun could not be re-checked, when its projection fails', async () => {
+    batchOf({ impact: null, error: new Error('block lookup failed') })
     const { count, items } = await rostersProvider.fetchPending(db(), { id: 'u1' })
     expect(count).toBe(1)
     expect(items[0].amount).toBeNull()
     expect(items[0].subtitle).toContain('could not be re-checked')
+    expect(logWarn).toHaveBeenCalledWith('approvals/rosters', expect.any(String), expect.objectContaining({ roster_id: 'r-1', err: 'block lookup failed' }))
+  })
+
+  it('still lists every draft if the batch itself throws', async () => {
+    projectPublishImpactBatch.mockRejectedValue(new Error('boom'))
+    const { count, items } = await rostersProvider.fetchPending(db(), { id: 'u1' })
+    expect(count).toBe(1)
+    expect(items[0].subtitle).toContain('could not be re-checked')
   })
 
   it('carries no amount for a draft that is no longer over budget', async () => {
-    projectPublishImpact.mockResolvedValue({
-      periodProjectedEur: 900, monthlyBudgetEur: 5000, overrunEur: 0, months: [],
-    })
+    batchOf({ impact: { periodProjectedEur: 900, monthlyBudgetEur: 5000, overrunEur: 0, months: [] }, error: null })
     const { items } = await rostersProvider.fetchPending(db(), { id: 'u1' })
     expect(items[0].amount).toBeNull()
   })

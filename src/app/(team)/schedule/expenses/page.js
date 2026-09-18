@@ -48,7 +48,7 @@ export default async function ExpensesPage() {
   }
 
   return (
-    <div className="p-6 max-w-6xl mx-auto">
+    <div className="px-4 py-6 sm:p-6 max-w-6xl mx-auto">
       {/* SCHED.9 — Schedule tab strip follows onto every sibling page. */}
       <ScheduleTabs user={user} />
       <header className="mb-6">
