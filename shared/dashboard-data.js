@@ -14,7 +14,6 @@
 
 import { upcomingWeeksBounds, summariseShifts, effectiveShiftStart, effectiveShiftEnd } from './roster-month.js'
 import { pctDelta, sumCampaignRows, shapeFunnel, FUNNEL_SLUGS } from './dashboard-metrics.js'
-import { dublinDateKey } from './dublin-time.js'
 
 // ROSTER-FIX.1 — "this assignment still puts a coach on the block".
 // Inlined rather than imported: `shared/` is the mobile seam and cannot
@@ -427,27 +426,13 @@ export async function fetchStudioDashboardData(supabase, locationId) {
 
   const weekStartIso = startOfWeek().toISOString()
 
-  const [
-    pendingTimeOff, pendingSwaps,
-    newLeadsThisWeek, unreadConvos,
-  ] = await Promise.all([
-    supabase
-      .from('time_off_requests')
-      .select('id, profile_id, type, start_date, end_date, total_days, created_at, profiles!profile_id(full_name)')
-      .eq('location_id', locationId)
-      .eq('status', 'pending')
-      // LEAVE.2 — a pending request past its end_date has EXPIRED (derived,
-      // see isExpiredPendingRequest in ./time-off.js) and is no longer an
-      // approval to action.
-      .gte('end_date', dublinDateKey(Date.now()))
-      .order('start_date', { ascending: true }),
-
-    supabase
-      .from('shift_swap_requests')
-      .select('id, requester_id, target_id, created_at, requester:profiles!requester_id(full_name)')
-      .eq('location_id', locationId)
-      .eq('status', 'pending'),
-
+  // STUDIODASH.1 — the pending time-off + swap lists are NOT read here.
+  // They need the requester's name, and this runs on mobile's authenticated
+  // client, which has no grant on public.profiles (mig 153b) — the embed
+  // 500'd the whole select and `|| []` rendered it as "nothing pending".
+  // mobile/lib/dashboard-api.js reads them from the service-role
+  // /api/schedule/time-off + /api/schedule/swaps routes instead.
+  const [newLeadsThisWeek, unreadConvos] = await Promise.all([
     // joined_at, NOT lead_created_at: the latter defaults to NOW() at
     // insert (mig 001), so every bulk-imported contact carries its
     // import day and any import spikes this count into the thousands.
@@ -503,8 +488,6 @@ export async function fetchStudioDashboardData(supabase, locationId) {
   return {
     success: true,
     data: {
-      pendingTimeOff: pendingTimeOff.data || [],
-      pendingSwaps: pendingSwaps.data || [],
       newLeadsThisWeek: newLeadsThisWeek.count || 0,
       funnel,
       totalContacts,
