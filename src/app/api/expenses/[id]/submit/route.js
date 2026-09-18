@@ -8,6 +8,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
+import { canSeeExpenseClaim } from '@/lib/fte-expense-access'
 import { canTransition, periodLabel } from '@/lib/fte-expenses'
 import { sendPushToRolesAtLocationOnce } from '@/lib/push-dedup'
 import { logAuditEvent } from '@/lib/audit'
@@ -26,7 +27,9 @@ export async function POST(request, { params }) {
     .select('id, profile_id, location_id, status, period_start, item_count, total_amount, location:location_id(name)')
     .eq('id', id)
     .maybeSingle()
-  if (!claim) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  // FINALTIDY.1 — a caller who can't see the claim gets the same 404 as a
+  // missing one; only someone who can see it learns it is not theirs to change.
+  if (!claim || !canSeeExpenseClaim(user, claim)) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   if (claim.profile_id !== user.id) {
     return NextResponse.json({ success: false, error: 'Only the submitter can submit this claim.' }, { status: 403 })
   }
