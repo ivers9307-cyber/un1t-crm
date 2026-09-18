@@ -494,7 +494,8 @@ export async function POST(request) {
     }
 
     // ROSTERTIDY.1 — a PAST trimmed remnant left owning NO blocks is
-    // superseded now, after the re-tag (before it, the remnant still owns the
+    // superseded (FINALTIDY.1: one owning blocks on fewer days is shrunk to
+    // them) now, after the re-tag (before it, the remnant still owns the
     // blocks this publish takes). The sweep above never sees it: after the
     // trim it no longer overlaps this period. A remnant reaching today or
     // later is kept on purpose (new blocks on its days resolve to it; see the
@@ -503,7 +504,7 @@ export async function POST(request) {
     if (trimmed.length > 0) {
       const remnants = await supersedeEmptyTrimmedRosters(db, { newRosterId: roster.id, trimmed })
       if (remnants.warning) {
-        logWarn('rosters', 'empty trimmed roster could not be superseded', { err: remnants.warning, roster_id: roster.id })
+        logWarn('rosters', 'trimmed roster could not be superseded or shrunk', { err: remnants.warning, roster_id: roster.id })
       }
       if (remnants.future.length > 0) {
         logWarn('rosters', 'trimmed roster kept: its period reaches today or later, so blocks added there still join it', { trimmed_ids: remnants.future, roster_id: roster.id })
