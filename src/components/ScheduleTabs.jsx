@@ -123,14 +123,20 @@ export default function ScheduleTabs({ user }) {
   }
 
   return (
-    <div className="flex items-center gap-1 mb-6 border-b border-un1t-border">
+    // TABWRAP.1 — seven tabs don't fit a phone. They used to shrink until
+    // "Time Off" wrapped onto two lines; now each label stays on one line and
+    // the strip scrolls sideways instead. The scroll is phone-only (max-sm):
+    // a scrolling box clips the tabs' -mb-px overlap onto the grey rule, so the
+    // phone strip gets one pixel of bottom padding to keep the underline whole,
+    // and desktop keeps its exact layout.
+    <div className="flex items-center gap-1 mb-6 border-b border-un1t-border max-sm:overflow-x-auto max-sm:overflow-y-hidden max-sm:pb-px max-sm:[scrollbar-width:none] max-sm:[&::-webkit-scrollbar]:hidden">
       {tabs.map(tab => {
         const active = isActive(tab)
         return (
           <Link
             key={tab.key}
             href={tab.href}
-            className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors -mb-px ${
+            className={`flex shrink-0 items-center gap-2 whitespace-nowrap px-4 py-3 text-sm font-medium border-b-2 transition-colors -mb-px ${
               active
                 ? 'border-un1t-text text-un1t-text'
                 : 'border-transparent text-un1t-subtle hover:text-un1t-text'
