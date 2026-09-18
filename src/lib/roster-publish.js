@@ -618,21 +618,29 @@ export function coversPeriod(ranges, periodStart, periodEnd) {
  * the operator originally asked to publish, and a later trim is not a change
  * to that ask.
  *
- * ROSTERTIDY.1 — the residue #1716 accepted here is now settled, AFTER the
- * publish, by supersedeEmptyTrimmedRosters(). A trimmed remnant that ends up
- * owning NO blocks (every block it had was inside the period this publish
- * took) was left published over dates it owns nothing on, and the phase-2
- * sweep can never see it: after the trim it no longer overlaps the new period.
- * #1716 declined to supersede it for two reasons, both answered there:
- *   - "the sweep's rule for 'owns nothing' is a live recount" — so it IS a
- *     live recount, the same count-only ownedBlockCount read the sweep uses,
- *     taken after the new roster's blocks are tagged. It cannot be decided
- *     here: before the insert and the re-tag the remnant's blocks are still
- *     tagged to it and every recount would say it owns them.
- *   - "a query per straddler on every publish" — the cost is bounded by the
- *     shape: a one-sided trim has at most ONE straddler per end of the period,
- *     so it is at most two count queries, and only on a publish that trimmed.
- *     A publish that trimmed nothing pays nothing.
+ * ROSTERTIDY.1 — the residue #1716 accepted here is now PARTLY settled,
+ * after the publish, by supersedeEmptyTrimmedRosters(). A trimmed remnant that
+ * ends up owning NO blocks (every block it had was inside the period this
+ * publish took) stays published over dates it owns nothing on, and the
+ * phase-2 sweep can never see it: after the trim it no longer overlaps the new
+ * period.
+ *
+ * It is NOT harmless in general, and it is not always wrong either: a
+ * published roster's period is what findPublishedRosterFor /
+ * findPublishedRosterIdsByDate (src/lib/roster.js) use to adopt a NEW block —
+ * one added by hand (/api/schedule/blocks) or by generation
+ * (roster-write.js). While a remnant covers a day, a block created there joins
+ * it and reads PUBLISHED at once; supersede the remnant and that block has no
+ * roster and reads unpublished until someone publishes again. So:
+ *   - a remnant whose trimmed period ENDED before today (Dublin) can never
+ *     adopt a block anyone will work, and is superseded;
+ *   - a remnant reaching today or later is KEPT on purpose, empty, because
+ *     its period still does real work for blocks added on those days.
+ * #1716's two objections are answered in the helper: the "owns nothing" rule
+ * is the same live recount the sweep uses, taken after the re-tag (before it,
+ * the remnant still owns the blocks this publish takes); and the cost is at
+ * most two count queries (one straddler per end), only on a publish that
+ * trimmed, and none at all for a future remnant.
  * The row is superseded, never deleted, so the audit trail of the publish
  * that created it survives exactly as the sweep's own supersede keeps it.
  *
@@ -700,8 +708,15 @@ export async function trimPublishedRosters(db, trims) {
 
 /**
  * ROSTERTIDY.1 — after a publish that TRIMMED straddling rosters, supersede
- * every trimmed remnant left owning zero blocks. See trimPublishedRosters'
- * header for why this runs after the fact rather than inside the trim.
+ * every trimmed remnant that is both in the PAST and left owning zero blocks.
+ * See trimPublishedRosters' header for the full trade-off.
+ *
+ * 🔴 PAST ONLY. A remnant whose trimmed `period_end` is today or later (Dublin,
+ * dublinTodayStr) is kept without even a recount: its period is how a block
+ * added on those days later finds its published roster
+ * (findPublishedRosterFor / findPublishedRosterIdsByDate), so superseding it
+ * would make such a block read unpublished where today it is published at
+ * once. It is reported in `future` for the caller to log.
  *
  * 🔴 ORDER: call only once the new roster is inserted AND its blocks are
  * tagged. Before the re-tag the remnant still owns the blocks the publish is
@@ -715,25 +730,34 @@ export async function trimPublishedRosters(db, trims) {
  * reshaped is left alone, and the rows touched are judged explicitly because
  * a zero-row UPDATE is not an error.
  *
- * Best-effort and never throws: an unsuperseded empty remnant is harmless as
- * data (it overlaps no published roster, so mig 602 is satisfied, and no coach
- * sees it), so nothing here may fail a publish that already happened. Every
- * problem comes back in `warning` for the caller to logWarn.
+ * Best-effort and never throws: a past empty remnant left published is only a
+ * tidiness cost (it overlaps no published roster, so mig 602 is satisfied,
+ * and no block will ever be created on a past day to join it), so nothing
+ * here may fail a publish that already happened. Every problem comes back in
+ * `warning` for the caller to logWarn.
  *
- * @param {{ newRosterId: string, trimmed: Array<{id: string, trim_to: {period_start: string, period_end: string}}> }} opts
- * @returns {Promise<{ superseded: string[], kept: string[], warning: string|null }>}
+ * @param {{ newRosterId: string, trimmed: Array<{id: string, trim_to: {period_start: string, period_end: string}}>, todayIso?: string }} opts
+ * @returns {Promise<{ superseded: string[], kept: string[], future: string[], warning: string|null }>}
  */
-export async function supersedeEmptyTrimmedRosters(db, { newRosterId, trimmed = [] } = {}) {
+export async function supersedeEmptyTrimmedRosters(db, { newRosterId, trimmed = [], todayIso = dublinTodayStr() } = {}) {
   const superseded = []
   const kept = []
+  const future = []
   const warnings = []
   const targets = (trimmed || []).filter((t) => t?.id && t.id !== newRosterId && t?.trim_to?.period_start && t?.trim_to?.period_end)
-  if (targets.length === 0) return { superseded, kept, warning: null }
-  if (!newRosterId) return { superseded, kept, warning: 'trimmed-remnant check skipped: no newRosterId' }
+  if (targets.length === 0) return { superseded, kept, future, warning: null }
+  if (!newRosterId) return { superseded, kept, future, warning: 'trimmed-remnant check skipped: no newRosterId' }
 
   const nowIso = new Date().toISOString()
   for (const t of targets) {
+    // Dates are ISO YYYY-MM-DD strings, so string comparison IS date order.
+    if (t.trim_to.period_end >= todayIso) {
+      future.push(t.id)
+      continue
+    }
     try {
+      // Recount-then-supersede is not atomic: a block tagged to this roster
+      // in between would be orphaned. Same accepted race as the phase-2 sweep.
       const { count, error: ownErr } = await ownedBlockCount(db, t.id)
       if (ownErr) {
         // Reading a failed count as "owns nothing" would supersede a live
@@ -764,7 +788,7 @@ export async function supersedeEmptyTrimmedRosters(db, { newRosterId, trimmed = 
       warnings.push(`trimmed-remnant check threw for roster ${t.id}: ${e?.message || e}`)
     }
   }
-  return { superseded, kept, warning: warnings.length > 0 ? warnings.join('; ') : null }
+  return { superseded, kept, future, warning: warnings.length > 0 ? warnings.join('; ') : null }
 }
 
 /**

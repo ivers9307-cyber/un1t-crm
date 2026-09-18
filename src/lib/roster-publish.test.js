@@ -1490,6 +1490,9 @@ describe('supersedeEmptyTrimmedRosters', () => {
     return { db, updates, countedIds }
   }
 
+  // A fixed "today", so the past/future split never depends on the clock.
+  // The remnant below ends 31 Aug: in the past.
+  const TODAY = '2026-09-18'
   const TRIMMED_WEEK = {
     id: 'r-week', period_start: '2026-08-31', period_end: '2026-09-06',
     trim_to: { period_start: '2026-08-31', period_end: '2026-08-31' },
@@ -1497,16 +1500,16 @@ describe('supersedeEmptyTrimmedRosters', () => {
 
   it('KEEPS a trimmed remnant that still owns blocks, and writes nothing', async () => {
     const { db, updates, countedIds } = remnantDb({ counts: { 'r-week': 3 } })
-    const res = await supersedeEmptyTrimmedRosters(db, { newRosterId: 'r-sept', trimmed: [TRIMMED_WEEK] })
-    expect(res).toEqual({ superseded: [], kept: ['r-week'], warning: null })
+    const res = await supersedeEmptyTrimmedRosters(db, { todayIso: TODAY, newRosterId: 'r-sept', trimmed: [TRIMMED_WEEK] })
+    expect(res).toEqual({ superseded: [], kept: ['r-week'], future: [], warning: null })
     expect(countedIds).toEqual(['r-week'])
     expect(updates).toHaveLength(0)
   })
 
   it('SUPERSEDES a trimmed remnant left owning zero blocks, the way the sweep does', async () => {
     const { db, updates } = remnantDb({ counts: { 'r-week': 0 } })
-    const res = await supersedeEmptyTrimmedRosters(db, { newRosterId: 'r-sept', trimmed: [TRIMMED_WEEK] })
-    expect(res).toEqual({ superseded: ['r-week'], kept: [], warning: null })
+    const res = await supersedeEmptyTrimmedRosters(db, { todayIso: TODAY, newRosterId: 'r-sept', trimmed: [TRIMMED_WEEK] })
+    expect(res).toEqual({ superseded: ['r-week'], kept: [], future: [], warning: null })
     expect(updates).toHaveLength(1)
     const [u] = updates
     expect(u.payload).toEqual({ status: 'superseded', superseded_at: expect.any(String), superseded_by: 'r-sept' })
@@ -1524,6 +1527,7 @@ describe('supersedeEmptyTrimmedRosters', () => {
   it('judges each remnant on its own', async () => {
     const { db } = remnantDb({ counts: { 'r-prev': 0, 'r-next': 2 } })
     const res = await supersedeEmptyTrimmedRosters(db, {
+      todayIso: TODAY,
       newRosterId: 'r-new',
       trimmed: [
         { id: 'r-prev', trim_to: { period_start: '2026-04-27', period_end: '2026-04-30' } },
@@ -1537,14 +1541,14 @@ describe('supersedeEmptyTrimmedRosters', () => {
   // A supersede failure must only ever surface as a warning for logWarn.
   it('a failed supersede only warns — it never throws', async () => {
     const { db } = remnantDb({ failUpdate: true })
-    const res = await supersedeEmptyTrimmedRosters(db, { newRosterId: 'r-sept', trimmed: [TRIMMED_WEEK] })
+    const res = await supersedeEmptyTrimmedRosters(db, { todayIso: TODAY, newRosterId: 'r-sept', trimmed: [TRIMMED_WEEK] })
     expect(res.superseded).toEqual([])
     expect(res.warning).toMatch(/supersede failed for trimmed roster r-week: update failed/)
   })
 
   it('a zero-row supersede (the remnant moved since) is a warning, not a success', async () => {
     const { db } = remnantDb({ zeroRowUpdate: true })
-    const res = await supersedeEmptyTrimmedRosters(db, { newRosterId: 'r-sept', trimmed: [TRIMMED_WEEK] })
+    const res = await supersedeEmptyTrimmedRosters(db, { todayIso: TODAY, newRosterId: 'r-sept', trimmed: [TRIMMED_WEEK] })
     expect(res.superseded).toEqual([])
     expect(res.warning).toMatch(/changed since the trim/)
   })
@@ -1552,25 +1556,60 @@ describe('supersedeEmptyTrimmedRosters', () => {
   // Reading a failed count as "owns nothing" would unpublish live shifts.
   it('a failed recount leaves the remnant alone and warns', async () => {
     const { db, updates } = remnantDb({ failCount: true })
-    const res = await supersedeEmptyTrimmedRosters(db, { newRosterId: 'r-sept', trimmed: [TRIMMED_WEEK] })
+    const res = await supersedeEmptyTrimmedRosters(db, { todayIso: TODAY, newRosterId: 'r-sept', trimmed: [TRIMMED_WEEK] })
     expect(updates).toHaveLength(0)
     expect(res.warning).toMatch(/block recount failed/)
   })
 
   it('a THROWN recount is caught and warned, never rethrown', async () => {
     const { db, updates } = remnantDb({ throwOnCount: true })
-    const res = await supersedeEmptyTrimmedRosters(db, { newRosterId: 'r-sept', trimmed: [TRIMMED_WEEK] })
+    const res = await supersedeEmptyTrimmedRosters(db, { todayIso: TODAY, newRosterId: 'r-sept', trimmed: [TRIMMED_WEEK] })
     expect(updates).toHaveLength(0)
     expect(res.warning).toMatch(/threw for roster r-week: socket hang up/)
   })
 
   it('does nothing without trims, and refuses without a successor id', async () => {
     const { db, countedIds } = remnantDb()
-    expect(await supersedeEmptyTrimmedRosters(db, { newRosterId: 'r-sept', trimmed: [] }))
-      .toEqual({ superseded: [], kept: [], warning: null })
-    const res = await supersedeEmptyTrimmedRosters(db, { newRosterId: null, trimmed: [TRIMMED_WEEK] })
+    expect(await supersedeEmptyTrimmedRosters(db, { todayIso: TODAY, newRosterId: 'r-sept', trimmed: [] }))
+      .toEqual({ superseded: [], kept: [], future: [], warning: null })
+    const res = await supersedeEmptyTrimmedRosters(db, { todayIso: TODAY, newRosterId: null, trimmed: [TRIMMED_WEEK] })
     expect(res.superseded).toEqual([])
     expect(res.warning).toMatch(/no newRosterId/)
     expect(countedIds).toEqual([])
+  })
+
+  // Review fix — a remnant still covering today or later is how a block added
+  // on those days finds its published roster (findPublishedRosterFor), so it
+  // must stay published even when it owns nothing right now.
+  it('KEEPS an empty remnant whose trimmed period reaches today, without a recount', async () => {
+    const { db, updates, countedIds } = remnantDb({ counts: { 'r-oct': 0 } })
+    const res = await supersedeEmptyTrimmedRosters(db, {
+      todayIso: TODAY, newRosterId: 'r-sept',
+      trimmed: [{ id: 'r-oct', trim_to: { period_start: '2026-09-18', period_end: '2026-09-18' } }],
+    })
+    expect(res).toEqual({ superseded: [], kept: [], future: ['r-oct'], warning: null })
+    expect(countedIds).toEqual([])
+    expect(updates).toHaveLength(0)
+  })
+
+  it('KEEPS an empty remnant whose trimmed period is wholly in the future', async () => {
+    const { db, updates } = remnantDb({ counts: { 'r-oct': 0 } })
+    const res = await supersedeEmptyTrimmedRosters(db, {
+      todayIso: TODAY, newRosterId: 'r-sept',
+      trimmed: [{ id: 'r-oct', trim_to: { period_start: '2026-10-01', period_end: '2026-10-04' } }],
+    })
+    expect(res.future).toEqual(['r-oct'])
+    expect(updates).toHaveLength(0)
+  })
+
+  it('supersedes the PAST empty remnant and keeps the future one in the same call', async () => {
+    const { db, updates } = remnantDb({ counts: { 'r-week': 0, 'r-oct': 0 } })
+    const res = await supersedeEmptyTrimmedRosters(db, {
+      todayIso: TODAY, newRosterId: 'r-sept',
+      trimmed: [TRIMMED_WEEK, { id: 'r-oct', trim_to: { period_start: '2026-10-01', period_end: '2026-10-04' } }],
+    })
+    expect(res.superseded).toEqual(['r-week'])
+    expect(res.future).toEqual(['r-oct'])
+    expect(updates.map((u) => u.where[0][1])).toEqual(['r-week'])
   })
 })
