@@ -22,6 +22,8 @@
 //   - Bookings (status='confirmed', no skip_reminder) → push to all
 //     users with the location's configured booking roles
 //     (default owner/manager/head_coach), category='bookings'.
+//   - Shifts (published, live shift_assignments) → push to the coach,
+//     category='shift_reminder'. See src/lib/shift-reminders.js.
 //
 // Bookings fan out to a role-set rather than a single staff member
 // because the bookings table has no "assigned coach" column — the
@@ -38,6 +40,7 @@ import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { localToUtc, formatLocalTime } from '@/lib/push-reminders'
 import { getEffectiveConfig, getEffectiveLeadTimesForUser } from '@/lib/notification-config'
 import { selectAll } from '@/lib/select-all'
+import { runShiftReminders } from '@/lib/shift-reminders'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -72,7 +75,7 @@ export async function GET(request) {
   // few (single-digit) so this is cheap regardless of size.
   const { data: locations, error: locErr } = await db
     .from('locations')
-    .select('id, timezone, notification_config')
+    .select('id, name, timezone, notification_config')
 
   if (locErr) {
     logError('cron-push-reminders', 'location fetch failed', { err: locErr })
@@ -369,6 +372,18 @@ export async function GET(request) {
     }
   } catch (err) {
     logError('cron-push-reminders', 'booking block threw', { err })
+  }
+
+  // -------------------------- SHIFTS --------------------------
+  // SHIFTREMIND.1 — one reminder per published shift assignment: 20:00 Dublin
+  // the evening before for a start before 08:00, otherwise 2 hours before.
+  // The rule, the ledger use and the failure posture live in
+  // src/lib/shift-reminders.js. Isolated like the two blocks above: a shift
+  // failure must never cost a task or booking reminder, or the heartbeat.
+  try {
+    Object.assign(summary, await runShiftReminders(db, { nowMs, locations: locations || [] }))
+  } catch (err) {
+    logError('cron-push-reminders', 'shift block threw', { err })
   }
 
   if (Object.values(summary).some(v => Array.isArray(v) ? v.length > 0 : v > 0)) {
