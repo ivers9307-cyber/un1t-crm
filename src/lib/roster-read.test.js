@@ -84,6 +84,33 @@ describe('swapShiftShape', () => {
     expect(shaped.start_time_override).toBe('07:30:00')
     expect(shaped.end_time_override).toBe('08:30:00')
   })
+
+  // COVERLOOP.2 — start_time_override collapses the requester's personal paid
+  // window AND a block-vs-template deviation, so a client cannot tell them
+  // apart. The taker works the BLOCK's hours (a moved shift loses its
+  // overrides, SWAP_MOVE_CLEARS), so the block's times ride along under the
+  // same keys toApiShiftRow uses.
+  it('carries the block times beside the collapsed override', () => {
+    const shaped = swapShiftShape({
+      id: 'a3', profile_id: 'p3', status: 'scheduled', notes: null,
+      start_time_override: '06:15:00', end_time_override: null,
+      shift_blocks: {
+        block_date: '2026-09-24', start_time: '06:00:00', end_time: '07:00:00',
+        shift_templates: { name: 'Morning', start_time: '06:00:00', end_time: '07:00:00' },
+      },
+      profiles: null,
+    })
+    expect(shaped.block_start_time).toBe('06:00:00')
+    expect(shaped.block_end_time).toBe('07:00:00')
+    // unchanged: the requester's own window is still what the override says
+    expect(shaped.start_time_override).toBe('06:15:00')
+  })
+
+  it('block times are null, never undefined, when the block embed is missing', () => {
+    const shaped = swapShiftShape({ id: 'a4', profile_id: 'p4', status: 'scheduled' })
+    expect(shaped.block_start_time).toBeNull()
+    expect(shaped.block_end_time).toBeNull()
+  })
 })
 
 describe('fetchApiShiftRows', () => {
