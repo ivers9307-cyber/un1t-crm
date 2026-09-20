@@ -18,9 +18,9 @@
 // Everything above runShiftReminders is PURE (no clock, no database) so the
 // timing table in shift-reminders.test.js can pin it, DST days included.
 
-import { localToUtc } from './push-reminders'
-import { addDaysISO } from './dublin-time'
-import { effectiveShiftStart } from '@shared/roster-month'
+import { localToUtc, formatLocalTime } from './push-reminders'
+import { addDaysISO, dublinDayStr } from './dublin-time'
+import { effectiveShiftStart, effectiveShiftEnd } from '@shared/roster-month'
 
 export const EARLY_START_CUTOFF = '08:00'
 export const EVENING_REMINDER_TIME = '20:00'
@@ -117,4 +117,47 @@ export function dueShiftReminders(shifts, { nowMs, tzByLocation = {}, onLeave = 
     due.push({ shift: s, ...plan })
   }
   return due
+}
+
+const firstName = (full) => String(full || '').trim().split(/\s+/)[0] || ''
+// shift_blocks is UNIQUE (location_id, template_id, block_date), so these
+// three fields identify the block (the API row carries no block id).
+const sameBlock = (a, b) =>
+  a.location_id === b.location_id && a.shift_template_id === b.shift_template_id && a.shift_date === b.shift_date
+
+/** First names of the OTHER coaches on the same block, A-Z, de-duplicated. */
+export function coRosteredFirstNames(shift, allShifts, onLeave = new Set()) {
+  const names = []
+  for (const o of allShifts || []) {
+    if (o.id === shift.id || o.profile_id === shift.profile_id) continue
+    if (!sameBlock(o, shift)) continue
+    if (o.published !== true || o.status === 'cancelled') continue
+    if (onLeave.has(leaveKey(o.profile_id, o.shift_date))) continue
+    const n = firstName(o.profiles?.full_name)
+    if (n && !names.includes(n)) names.push(n)
+  }
+  return names.sort((a, b) => a.localeCompare(b))
+}
+
+function joinNames(names) {
+  if (names.length <= 1) return names.join('')
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+}
+
+/**
+ * Title + body. "today"/"tomorrow" is computed from the SHIFT's date against
+ * the Dublin day of `nowMs`, not from the reminder kind: a catch-up reminder
+ * for a 06:00 shift that fires at 05:00 must say "today".
+ */
+export function buildShiftReminderMessage({ shift, locationName, coNames = [], nowMs }) {
+  const start = effectiveShiftStart(shift)
+  const end = effectiveShiftEnd(shift)
+  const today = dublinDayStr(nowMs)
+  const dayWord = shift.shift_date === today
+    ? 'today'
+    : shift.shift_date === addDaysISO(today, 1) ? 'tomorrow' : `on ${shift.shift_date}`
+  const range = end ? `${formatLocalTime(start)}-${formatLocalTime(end)}` : formatLocalTime(start)
+  let body = [locationName, shift.shift_templates?.name, range].filter(Boolean).join(' · ')
+  if (coNames.length) body += ` · with ${joinNames(coNames)}`
+  return { title: `Shift ${dayWord} at ${formatLocalTime(start)}`, body }
 }

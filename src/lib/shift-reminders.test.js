@@ -197,3 +197,56 @@ describe('leaveKeysFor', () => {
     expect(leaveKeysFor(null, null).size).toBe(0)
   })
 })
+
+describe('coRosteredFirstNames + buildShiftReminderMessage', () => {
+  const me = shift()
+  const mate = (id, profileId, fullName, over = {}) =>
+    shift({ id, profile_id: profileId, profiles: { id: profileId, full_name: fullName }, ...over })
+
+  it('lists first names of other live, published coaches on the SAME block, A-Z', () => {
+    const all = [
+      me,
+      mate('a2', 'coach-2', 'Sam Sample'),
+      mate('a3', 'coach-3', 'Bo  Placeholder'),
+      mate('a4', 'coach-4', 'Other Day', { shift_date: '2026-09-23' }),
+      mate('a5', 'coach-5', 'Other Template', { shift_template_id: 'tpl-late' }),
+      mate('a6', 'coach-6', 'Other Studio', { location_id: 'loc-2' }),
+      mate('a7', 'coach-7', 'Dropped Out', { status: 'cancelled' }),
+      mate('a8', 'coach-8', 'Draft Only', { published: false }),
+    ]
+    expect(coRosteredFirstNames(me, all)).toEqual(['Bo', 'Sam'])
+  })
+
+  it('leaves out a colleague who is on approved leave that day', () => {
+    const all = [me, mate('a2', 'coach-2', 'Sam Sample')]
+    expect(coRosteredFirstNames(me, all, new Set([leaveKey('coach-2', '2026-09-22')]))).toEqual([])
+  })
+
+  it('evening-before copy says "tomorrow" and names the studio, template, time range and colleagues', () => {
+    expect(buildShiftReminderMessage({
+      shift: me, locationName: 'Studio North', coNames: ['Bo', 'Sam'], nowMs: at('2026-09-21T19:00:00Z'),
+    })).toEqual({
+      title: 'Shift tomorrow at 6:00am',
+      body: 'Studio North · Early · 6:00am-2:00pm · with Bo and Sam',
+    })
+  })
+
+  it('a catch-up that fires on the day says "today", and no colleagues means no "with"', () => {
+    expect(buildShiftReminderMessage({
+      shift: me, locationName: 'Studio North', coNames: [], nowMs: at('2026-09-22T04:00:00Z'),
+    })).toEqual({ title: 'Shift today at 6:00am', body: 'Studio North · Early · 6:00am-2:00pm' })
+  })
+
+  it('"tomorrow" is the DUBLIN tomorrow: 23:30 UTC on 21 Sep is already 22 Sep in Dublin', () => {
+    expect(buildShiftReminderMessage({
+      shift: me, locationName: 'Studio North', nowMs: at('2026-09-21T23:30:00Z'),
+    }).title).toBe('Shift today at 6:00am')
+  })
+
+  it('three colleagues read "A, B and C"; the effective (overridden) times are the ones shown', () => {
+    const moved = shift({ start_time_override: '07:00:00', end_time_override: '11:30:00' })
+    expect(buildShiftReminderMessage({
+      shift: moved, locationName: 'Studio North', coNames: ['Al', 'Bo', 'Cy'], nowMs: at('2026-09-21T19:00:00Z'),
+    }).body).toBe('Studio North · Early · 7:00am-11:30am · with Al, Bo and Cy')
+  })
+})
