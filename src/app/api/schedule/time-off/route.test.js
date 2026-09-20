@@ -717,6 +717,26 @@ describe('GET /api/schedule/time-off?preview=1 — charged days + own published 
     expect(db.queries).toHaveLength(0)
   })
 
+  // The case above mocks the guard, so it proves ORDER (no read before it).
+  // This one runs the REAL assertLocationAccess (the same importOriginal route
+  // this file already takes for hasRoleAtLocation), so it proves the refusal.
+  it('the REAL location guard refuses a studio the caller does not belong to, and allows one they do', async () => {
+    const real = await vi.importActual('@/lib/auth')
+    const { assertLocationAccess } = await import('@/lib/auth')
+    getCurrentUser.mockResolvedValue(USER)   // belongs to loc-1 only
+
+    assertLocationAccess.mockImplementationOnce(real.assertLocationAccess)
+    const denied = fakeDb(() => { throw new Error('must not query') })
+    createServerClient.mockReturnValue(denied)
+    const res = await GET(getReq('?preview=1&type=holiday&start_date=2099-06-01&end_date=2099-06-05&location_id=loc-2'))
+    expect(res.status).toBe(403)
+    expect(denied.queries).toHaveLength(0)
+
+    assertLocationAccess.mockImplementationOnce(real.assertLocationAccess)
+    createServerClient.mockReturnValue(previewDb())
+    expect((await GET(getReq('?preview=1&type=holiday&start_date=2099-06-01&end_date=2099-06-05&location_id=loc-1'))).status).toBe(200)
+  })
+
   it('a non-holiday type counts calendar days and never reads the holiday lists', async () => {
     getCurrentUser.mockResolvedValue(USER)
     const db = previewDb(); createServerClient.mockReturnValue(db)
