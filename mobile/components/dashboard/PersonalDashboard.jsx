@@ -38,7 +38,7 @@ import {
   SWAP_PENDING_LABEL, SWAP_PICKER_TITLE, SWAP_PICKER_EMPTY, SWAP_ALREADY_OPEN_MESSAGE,
 } from '../../lib/swap-cards'
 import { swapClaimNotice } from '../../lib/swap-conflicts'
-import { nextSwapFlowStep, createInFlightGuard } from '../../lib/swap-flow'
+import { createSwapFlow, createInFlightGuard } from '../../lib/swap-flow'
 // CHECKLIST.2 — top-of-Today card showing the coach's checklist
 // when they're on shift today. Self-contained: renders nothing
 // when there's no instance to surface.
@@ -426,10 +426,23 @@ export default function PersonalDashboard({ refreshKey }) {
   // coach null = an open post. Nothing is POSTed until the sheet confirms.
   const [swapConfirm, setSwapConfirm] = useState(null)
   const [swapSending, setSwapSending] = useState(false)
-  // The pick parked while the picker Modal animates out (iOS only). A ref, not
-  // state: it must be readable from the picker's onDismiss without a re-render,
-  // and it is never rendered. See lib/swap-flow.js for why it exists.
-  const swapPendingRef = useRef(null)
+  // The picker -> confirm-sheet flow: the pick parked while the picker Modal
+  // animates out (iOS only) and its fallback timer. Held in a ref so onDismiss
+  // and the timer read live values, never a render closure. Its callbacks are
+  // a state SETTER only, which is stable. See lib/swap-flow.js (tested there).
+  const swapFlowRef = useRef(null)
+  if (swapFlowRef.current === null) {
+    swapFlowRef.current = createSwapFlow({
+      platform: Platform.OS,
+      onOpenConfirm: (request) => setSwapConfirm(request),
+      onReset: () => setSwapConfirm(null),
+    })
+  }
+  // Unmount: the fallback timer must never fire into a gone screen.
+  useEffect(() => {
+    const flow = swapFlowRef.current
+    return () => flow.dispose()
+  }, [])
   // The in-flight latch for submitSwap. `swapSending` (state) only drives the
   // spinner: read from a render closure it is stale for a second tap that
   // lands before the re-render, which POSTed twice and 409'd the second.
@@ -565,7 +578,7 @@ export default function PersonalDashboard({ refreshKey }) {
     // optional reason. Nothing is sent from this menu any more.
     options.push({
       text: 'Post for swap',
-      onPress: () => stepSwapFlow('post', { shift, coach: null }),
+      onPress: () => swapFlowRef.current.dispatch('post', { picked: { shift, coach: null } }),
     })
 
     // CT-P3b — targeted swap: offer this shift to one chosen colleague.
@@ -615,30 +628,17 @@ export default function PersonalDashboard({ refreshKey }) {
   }
 
   // COVERLOOP.2 — every move of the picker -> confirm-sheet flow goes through
-  // nextSwapFlowStep (pure, tested). iOS will not present the confirm sheet
-  // while the picker is still animating out, so there a pick is parked in
-  // swapPendingRef until the picker's onDismiss; Android opens at once. The
-  // ref is ALWAYS assigned from the step, so a stale pick cannot survive.
-  function stepSwapFlow(event, picked) {
-    const step = nextSwapFlowStep({
-      event,
-      platform: Platform.OS,
-      pickerVisible: !!swapPickerShift,
-      pending: swapPendingRef.current,
-      picked,
-    })
-    swapPendingRef.current = step.pending
-    if (step.action === 'open_confirm') setSwapConfirm(step.request)
-    else if (step.action === 'reset') setSwapConfirm(null)
-  }
-
+  // swapFlowRef (lib/swap-flow.js: pure decision + timer, tested). iOS will
+  // not present the confirm sheet while the picker is still animating out, so
+  // there a pick is parked until the picker's onDismiss OR a 700 ms fallback
+  // timer, whichever is first (exactly once); Android opens at once.
   // Open the colleague picker for a targeted swap. Reuses CoachPickerSheet by
   // synthesising a block-like object: shift_assignments carries the current
   // user so the picker excludes them; shift_templates feeds the sheet title.
   async function openSwapPicker(shift) {
     // A fresh start: drop anything an earlier run left behind (a sheet state
     // with no sheet, a parked pick whose dismiss never came).
-    stepSwapFlow('start')
+    swapFlowRef.current.dispatch('start')
     setSwapPickerShift(shift)
     if (swapStaff === null && !swapStaffLoading) {
       setSwapStaffLoading(true)
@@ -654,28 +654,19 @@ export default function PersonalDashboard({ refreshKey }) {
   function pickSwapCoach(coach) {
     const shift = swapPickerShift
     setSwapPickerShift(null)
-    stepSwapFlow('pick', { shift, coach })
+    swapFlowRef.current.dispatch('pick', { picked: { shift, coach }, pickerVisible: true })
   }
 
   function cancelSwapPicker() {
     setSwapPickerShift(null)
-    stepSwapFlow('cancel')
+    swapFlowRef.current.dispatch('cancel')
   }
 
   // iOS only: the picker's Modal has finished dismissing, so a present is
-  // allowed now. `pickerVisible` is passed as false on purpose: this callback
-  // may close over the render in which the picker was still up, and the Modal
-  // that just told us it dismissed is, by definition, not on screen. A no-op
-  // when nothing is parked (the picker was cancelled).
+  // allowed now. Consumes the parked pick and disarms the fallback timer; a
+  // no-op when nothing is parked (the picker was cancelled, or the timer won).
   function onSwapPickerDismissed() {
-    const step = nextSwapFlowStep({
-      event: 'dismissed',
-      platform: Platform.OS,
-      pickerVisible: false,
-      pending: swapPendingRef.current,
-    })
-    swapPendingRef.current = step.pending
-    if (step.action === 'open_confirm') setSwapConfirm(step.request)
+    swapFlowRef.current.dispatch('dismissed')
   }
 
   async function submitSwap(reasonText) {
@@ -691,7 +682,7 @@ export default function PersonalDashboard({ refreshKey }) {
         locationId: activeLocation?.id,
       })
       if (res.success) {
-        setSwapConfirm(null)
+        swapFlowRef.current.dispatch('cancel') // closes the sheet, disarms any timer
         const done = swapPostedCopy(pending.coach)
         Alert.alert(done.title, done.message)
         load(); loadSwaps()
@@ -1104,7 +1095,7 @@ export default function PersonalDashboard({ refreshKey }) {
         copy={swapConfirm ? swapConfirmCopy(swapConfirm) : null}
         sending={swapSending}
         onConfirm={submitSwap}
-        onClose={() => { if (!swapSending) setSwapConfirm(null) }}
+        onClose={() => { if (!swapSending) swapFlowRef.current.dispatch('cancel') }}
       />
     </View>
   )

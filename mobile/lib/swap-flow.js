@@ -24,6 +24,8 @@
 //   'pick'      a coach was chosen in the picker (`picked` = { shift, coach })
 //   'cancel'    the picker was closed without a pick
 //   'dismissed' the picker's Modal finished dismissing (iOS only)
+//   'fallback_elapsed' PICKER_DISMISS_FALLBACK_MS passed since an iOS pick
+//               (see createSwapFlow: the same decision as 'dismissed')
 //
 // Returns { action, pending, request }:
 //   action   'open_confirm' | 'wait_for_dismiss' | 'reset' | 'noop'
@@ -54,7 +56,8 @@ export function nextSwapFlowStep({ event, platform, pickerVisible, pending, pick
       return { action: 'open_confirm', pending: null, request }
     }
 
-    case 'dismissed': {
+    case 'dismissed':
+    case 'fallback_elapsed': {
       const request = usable(pending)
       // Never over a picker that is (again) on screen: that present would be
       // refused too. The parked pick is dropped either way.
@@ -64,6 +67,60 @@ export function nextSwapFlowStep({ event, platform, pickerVisible, pending, pick
 
     default:
       return none
+  }
+}
+
+// iOS's modal dismiss animation is roughly 300-500 ms; by 700 a present is safe.
+export const PICKER_DISMISS_FALLBACK_MS = 700
+
+/**
+ * The flow's one holder of state: the parked pick and the fallback timer.
+ * Lives in a ref in PersonalDashboard.jsx; no React Native in here, so the
+ * timer wiring is tested with fake timers.
+ *
+ * WHY BOTH onDismiss AND A TIMER — do not "simplify" one away: onDismiss is
+ * the exact moment iOS allows the next present, but if a React Native build
+ * never fires it the confirm sheet never opens and the feature is dead on iOS;
+ * the timer alone would be a guess at an animation length.
+ *
+ * Exactly-once: whichever of the two arrives first CONSUMES the parked pick
+ * (pending is nulled before the sheet is opened), and EVERY dispatch disarms
+ * the timer first, so the loser finds nothing parked and does nothing. A
+ * fresh start, a cancel, the confirm sheet closing and dispose() (unmount) all
+ * disarm it too, so it cannot fire into a stale or unmounted screen or open a
+ * sheet after the coach backed out. Silent by design: nothing is logged.
+ */
+export function createSwapFlow({
+  platform, onOpenConfirm, onReset,
+  setTimer = setTimeout, clearTimer = clearTimeout, delayMs = PICKER_DISMISS_FALLBACK_MS,
+} = {}) {
+  let pending = null
+  let timer = null
+
+  function disarm() {
+    if (timer !== null) { clearTimer(timer); timer = null }
+  }
+
+  function dispatch(event, { picked, pickerVisible = false } = {}) {
+    disarm()
+    const step = nextSwapFlowStep({ event, platform, pickerVisible, pending, picked })
+    pending = step.pending
+    if (step.action === 'wait_for_dismiss') {
+      // Only an iOS pick gets here, so Android never arms a timer.
+      timer = setTimer(() => { timer = null; dispatch('fallback_elapsed') }, delayMs)
+    } else if (step.action === 'open_confirm') {
+      onOpenConfirm?.(step.request)
+    } else if (step.action === 'reset') {
+      onReset?.()
+    }
+    return step
+  }
+
+  return {
+    dispatch,
+    /** Unmount: disarm and drop the pick. Not terminal (dev double-mounts effects). */
+    dispose() { disarm(); pending = null },
+    get pending() { return pending },
   }
 }
 

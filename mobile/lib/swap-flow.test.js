@@ -1,8 +1,8 @@
 // COVERLOOP.2 — the picker -> confirm-sheet sequencing decision. Pure, because
 // there is no React Native component test runner and this is the part that
 // wedged: iOS refuses to present a Modal while another is still animating out.
-import { describe, it, expect } from 'vitest'
-import { nextSwapFlowStep, createInFlightGuard } from './swap-flow'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { nextSwapFlowStep, createInFlightGuard, createSwapFlow, PICKER_DISMISS_FALLBACK_MS } from './swap-flow'
 
 const shift = { id: 'a1', shift_date: '2026-09-24' }
 const coach = { id: 'c1', full_name: 'Coach T' }
@@ -116,5 +116,127 @@ describe('createInFlightGuard', () => {
     }
     await Promise.all([submit(), submit()])
     expect(posts).toBe(1)
+  })
+})
+
+// Belt and braces: iOS opens the confirm sheet from the picker Modal's
+// onDismiss, but if a React Native build never fires it the feature is dead on
+// iOS. A fallback timer opens it instead. Whichever comes first consumes the
+// parked pick; the other finds nothing parked.
+describe('nextSwapFlowStep — fallback_elapsed', () => {
+  it.each([
+    {
+      name: 'the timer beat onDismiss: open the sheet, consume the pick',
+      input: { event: 'fallback_elapsed', platform: 'ios', pickerVisible: false, pending: request },
+      expected: { action: 'open_confirm', pending: null, request },
+    },
+    {
+      name: 'onDismiss already consumed it (or the coach cancelled, or restarted): nothing',
+      input: { event: 'fallback_elapsed', platform: 'ios', pickerVisible: false, pending: null },
+      expected: { action: 'noop', pending: null, request: null },
+    },
+    {
+      name: 'never over a picker that is on screen again',
+      input: { event: 'fallback_elapsed', platform: 'ios', pickerVisible: true, pending: request },
+      expected: { action: 'noop', pending: null, request: null },
+    },
+  ])('$name', ({ input, expected }) => {
+    expect(nextSwapFlowStep(input)).toEqual(expected)
+  })
+})
+
+describe('createSwapFlow — onDismiss and the fallback timer, exactly once', () => {
+  let opened
+  let resets
+  const flowFor = (platform) => createSwapFlow({
+    platform,
+    onOpenConfirm: (r) => opened.push(r),
+    onReset: () => { resets += 1 },
+  })
+  const shiftB = { id: 'b2', shift_date: '2026-09-25' }
+
+  beforeEach(() => { vi.useFakeTimers(); opened = []; resets = 0 })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('the constant is long enough for the dismiss animation and short enough to feel like one step', () => {
+    expect(PICKER_DISMISS_FALLBACK_MS).toBe(700)
+  })
+
+  it('iOS, onDismiss never fires: the timer opens the sheet, once, and a late dismiss adds nothing', () => {
+    const flow = flowFor('ios')
+    flow.dispatch('pick', { picked: request, pickerVisible: true })
+    expect(opened).toEqual([])
+    expect(flow.pending).toEqual(request)
+    vi.advanceTimersByTime(PICKER_DISMISS_FALLBACK_MS - 1)
+    expect(opened).toEqual([])
+    vi.advanceTimersByTime(1)
+    expect(opened).toEqual([request])
+    flow.dispatch('dismissed')
+    vi.advanceTimersByTime(5000)
+    expect(opened).toEqual([request])
+    expect(flow.pending).toBeNull()
+  })
+
+  it('iOS, onDismiss fires first: it opens the sheet, once, and the timer is disarmed', () => {
+    const flow = flowFor('ios')
+    flow.dispatch('pick', { picked: request, pickerVisible: true })
+    vi.advanceTimersByTime(350)
+    flow.dispatch('dismissed')
+    expect(opened).toEqual([request])
+    expect(vi.getTimerCount()).toBe(0)
+    vi.advanceTimersByTime(5000)
+    expect(opened).toEqual([request])
+  })
+
+  it('the timer after a cancel does nothing', () => {
+    const flow = flowFor('ios')
+    flow.dispatch('pick', { picked: request, pickerVisible: true })
+    flow.dispatch('cancel')
+    expect(vi.getTimerCount()).toBe(0)
+    vi.advanceTimersByTime(5000)
+    expect(opened).toEqual([])
+    expect(resets).toBe(1)
+  })
+
+  it("a fresh start with a different shift: the OLD pick's deadline opens nothing, the new pick opens once on its own clock", () => {
+    const flow = flowFor('ios')
+    flow.dispatch('pick', { picked: request, pickerVisible: true }) // t=0, deadline 700
+    vi.advanceTimersByTime(500)
+    flow.dispatch('start')
+    const second = { shift: shiftB, coach }
+    flow.dispatch('pick', { picked: second, pickerVisible: true }) // t=500, deadline 1200
+    vi.advanceTimersByTime(200) // t=700: the old deadline
+    expect(opened).toEqual([])
+    vi.advanceTimersByTime(500) // t=1200
+    expect(opened).toEqual([second])
+  })
+
+  it('the confirm sheet closing (cancel) and an open post both disarm a timer', () => {
+    const flow = flowFor('ios')
+    flow.dispatch('pick', { picked: request, pickerVisible: true })
+    flow.dispatch('post', { picked: { shift: shiftB, coach: null } })
+    expect(vi.getTimerCount()).toBe(0)
+    vi.advanceTimersByTime(5000)
+    expect(opened).toEqual([{ shift: shiftB, coach: null }])
+  })
+
+  it('unmount (dispose) disarms the timer and drops the pick; the flow still works if remounted', () => {
+    const flow = flowFor('ios')
+    flow.dispatch('pick', { picked: request, pickerVisible: true })
+    flow.dispose()
+    expect(vi.getTimerCount()).toBe(0)
+    vi.advanceTimersByTime(5000)
+    expect(opened).toEqual([])
+    expect(flow.pending).toBeNull()
+    flow.dispatch('pick', { picked: request, pickerVisible: true })
+    flow.dispatch('dismissed')
+    expect(opened).toEqual([request])
+  })
+
+  it('Android never arms the timer: the sheet opens at once', () => {
+    const flow = flowFor('android')
+    flow.dispatch('pick', { picked: request, pickerVisible: true })
+    expect(opened).toEqual([request])
+    expect(vi.getTimerCount()).toBe(0)
   })
 })
