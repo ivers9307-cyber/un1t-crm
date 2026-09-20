@@ -46,7 +46,8 @@ describe('authDisposition', () => {
 describe('tombstoneErrorStatus', () => {
   it('maps the function\'s message prefixes to HTTP', () => {
     expect(tombstoneErrorStatus('staff_not_found: no profile x')).toEqual({ status: 404, error: 'Profile not found' })
-    expect(tombstoneErrorStatus('staff_already_deleted: x').status).toBe(409)
+    // staff_already_deleted is gone: a second call is safe and answers already_tombstoned (mig 622).
+    expect(tombstoneErrorStatus('staff_tombstone_frozen: x').status).toBe(500)
     expect(tombstoneErrorStatus('staff_still_active: x').status).toBe(400)
     expect(tombstoneErrorStatus('staff_self_delete: x').status).toBe(400)
     expect(tombstoneErrorStatus('deadlock detected')).toEqual({ status: 500, error: 'Permanent delete failed: deadlock detected' })

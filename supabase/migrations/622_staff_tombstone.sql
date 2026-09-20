@@ -188,6 +188,45 @@ ALTER TABLE public.profiles
 CREATE INDEX IF NOT EXISTS idx_profiles_deleted_by
   ON public.profiles (deleted_by) WHERE deleted_by IS NOT NULL;
 
+-- ─── A tombstone is FROZEN ──────────────────────────────────────────────────
+-- The CHECK above cannot stop an UN-delete: `SET deleted_at = NULL,
+-- deleted_role = NULL, active = true` leaves a row that satisfies it (every
+-- living row does). So once OLD.deleted_at is set, the columns that make the
+-- row a tombstone — and the ones RLS or sign-in read — can never change.
+-- tombstone_staff_profile() is unaffected: it writes them while OLD.deleted_at
+-- IS NULL. Other columns (updated_at, …) stay writable. No reads, so
+-- SECURITY INVOKER is enough; `private` keeps it off the PostgREST surface.
+CREATE OR REPLACE FUNCTION private.profiles_tombstone_frozen()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = ''
+AS $$
+DECLARE
+  v_col text;
+BEGIN
+  v_col := CASE
+    WHEN NEW.deleted_at   IS DISTINCT FROM OLD.deleted_at   THEN 'deleted_at'
+    WHEN NEW.deleted_by   IS DISTINCT FROM OLD.deleted_by   THEN 'deleted_by'
+    WHEN NEW.deleted_role IS DISTINCT FROM OLD.deleted_role THEN 'deleted_role'
+    WHEN NEW.role         IS DISTINCT FROM OLD.role         THEN 'role'
+    WHEN NEW.active       IS DISTINCT FROM OLD.active       THEN 'active'
+    WHEN NEW.email        IS DISTINCT FROM OLD.email        THEN 'email'
+    WHEN NEW.permissions  IS DISTINCT FROM OLD.permissions  THEN 'permissions'
+  END;
+  IF v_col IS NOT NULL THEN
+    RAISE EXCEPTION 'staff_tombstone_frozen: profile % was permanently deleted; % can no longer be changed', OLD.id, v_col;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+REVOKE ALL ON FUNCTION private.profiles_tombstone_frozen() FROM PUBLIC, anon, authenticated;
+
+DROP TRIGGER IF EXISTS profiles_tombstone_frozen ON public.profiles;
+CREATE TRIGGER profiles_tombstone_frozen
+  BEFORE UPDATE ON public.profiles
+  FOR EACH ROW WHEN (OLD.deleted_at IS NOT NULL)
+  EXECUTE FUNCTION private.profiles_tombstone_frozen();
+
 -- ─── A tombstone can never be handed access again ──────────────────────────
 -- RLS reads profile_locations (private.auth_is_in_location, auth_role, …) and
 -- profile_organizations (private.auth_is_in_organization) LIVE, and three
@@ -225,8 +264,9 @@ CREATE TRIGGER refuse_tombstone_access_row
   FOR EACH ROW EXECUTE FUNCTION private.refuse_tombstone_access_row();
 
 -- ERRORS (all P0001; the message prefix is the contract the route maps):
---   staff_bad_args, staff_self_delete, staff_not_found, staff_already_deleted,
---   staff_still_active.
+--   staff_bad_args, staff_self_delete, staff_not_found, staff_still_active.
+--   (An existing tombstone is NOT an error: the call returns
+--   already_tombstoned = true and writes nothing.)
 -- SECURITY: SECURITY INVOKER, search_path pinned empty, every name
 -- schema-qualified, EXECUTE for service_role only (mig 496/612 posture).
 CREATE OR REPLACE FUNCTION public.tombstone_staff_profile(
@@ -273,8 +313,16 @@ BEGIN
   IF NOT FOUND THEN
     RAISE EXCEPTION 'staff_not_found: no profile %', p_profile_id;
   END IF;
+  -- Already a tombstone: SAFE to call again. Say so and change nothing (a
+  -- retry, a double click, or two masters at once must never re-run the
+  -- removal against a later "now").
   IF v_profile.deleted_at IS NOT NULL THEN
-    RAISE EXCEPTION 'staff_already_deleted: profile % was deleted at %', p_profile_id, v_profile.deleted_at;
+    RETURN jsonb_build_object('profile_id', p_profile_id, 'full_name', v_profile.full_name, 'dry_run', p_dry_run,
+      'already_tombstoned', true, 'deleted_at', v_profile.deleted_at,
+      'removed_shifts', '[]'::jsonb, 'kept_today_shifts', '[]'::jsonb,
+      'cancelled_swaps', '[]'::jsonb, 'cancelled_time_off', '[]'::jsonb,
+      'role', jsonb_build_object('from', v_profile.deleted_role, 'to', v_profile.role),
+      'deleted', '{}'::jsonb, 'kept', '{}'::jsonb);
   END IF;
   IF v_profile.active IS DISTINCT FROM false THEN
     RAISE EXCEPTION 'staff_still_active: deactivate the profile before deleting it';

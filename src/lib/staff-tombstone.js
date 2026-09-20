@@ -70,12 +70,14 @@ export function authDisposition({ memberContact, hostUser, readFailed }) {
 
 const ERROR_MAP = [
   ['staff_not_found', 404, 'Profile not found'],
-  ['staff_already_deleted', 409, 'This staff member has already been permanently deleted.'],
   ['staff_still_active', 400, 'Profile must be deactivated first. Soft-archive (set Active off) before permanent delete.'],
   ['staff_self_delete', 400, 'You cannot permanently delete your own account.'],
 ]
 
-/** tombstone_staff_profile raises P0001 with a `staff_*:` prefix (mig 622). */
+/**
+ * tombstone_staff_profile raises P0001 with a `staff_*:` prefix (mig 622). An
+ * existing tombstone is NOT an error: the function answers already_tombstoned.
+ */
 export function tombstoneErrorStatus(message) {
   const msg = String(message || '')
   const hit = ERROR_MAP.find(([prefix]) => msg.startsWith(prefix))

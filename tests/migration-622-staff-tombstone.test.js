@@ -372,8 +372,8 @@ describe('mig 622 — tombstone_staff_profile', () => {
     })
     it('the database refuses to re-promote a tombstone, or to forget its role', async () => {
       await tombstone(OLD_MASTER)
-      await expect(runSql(`UPDATE public.profiles SET role = 'master' WHERE id = '${OLD_MASTER}'`)).rejects.toThrow(/profiles_tombstone_is_inactive/)
-      await expect(runSql(`UPDATE public.profiles SET deleted_role = NULL WHERE id = '${OLD_MASTER}'`)).rejects.toThrow(/profiles_tombstone_is_inactive/)
+      await expect(runSql(`UPDATE public.profiles SET role = 'master' WHERE id = '${OLD_MASTER}'`)).rejects.toThrow(/staff_tombstone_frozen/)
+      await expect(runSql(`UPDATE public.profiles SET deleted_role = NULL WHERE id = '${OLD_MASTER}'`)).rejects.toThrow(/staff_tombstone_frozen/)
     })
   })
 
@@ -504,10 +504,8 @@ describe('mig 622 — tombstone_staff_profile', () => {
     expect(await count('public.audit_events', `category = 'mutation' AND details = '{"redacted": "staff_permanent_delete"}'::jsonb`)).toBe(1)
   })
 
-  it('refuses an active profile, a second delete, a missing profile and a self-delete', async () => {
+  it('refuses an active profile, a missing profile and a self-delete', async () => {
     await expect(tombstone(PEER)).rejects.toThrow(/staff_still_active/)
-    await tombstone()
-    await expect(tombstone()).rejects.toThrow(/staff_already_deleted/)
     await expect(tombstone('10000000-0000-0000-0000-0000000000ff')).rejects.toThrow(/staff_not_found/)
     await expect(tombstone(MASTER, { actor: MASTER })).rejects.toThrow(/staff_self_delete/)
   })
@@ -525,7 +523,58 @@ describe('mig 622 — tombstone_staff_profile', () => {
 
   it('the database refuses to reactivate a tombstone', async () => {
     await tombstone()
-    await expect(runSql(`UPDATE public.profiles SET active = true WHERE id = '${GONE}'`)).rejects.toThrow(/profiles_tombstone_is_inactive/)
+    await expect(runSql(`UPDATE public.profiles SET active = true WHERE id = '${GONE}'`)).rejects.toThrow(/staff_tombstone_frozen/)
+  })
+
+  // The CHECK alone passes `SET deleted_at = NULL, deleted_role = NULL, active =
+  // true` — every row with deleted_at NULL satisfies it. A tombstone is FROZEN:
+  // once deleted_at is set, the columns that make it one can never change.
+  describe('a tombstone cannot be un-tombstoned', () => {
+    it('refuses the un-delete that the CHECK would have let through', async () => {
+      await tombstone()
+      await expect(runSql(`UPDATE public.profiles SET deleted_at = NULL, deleted_role = NULL, active = true WHERE id = '${GONE}'`))
+        .rejects.toThrow(/staff_tombstone_frozen/)
+      expect((await rows(`SELECT active, deleted_at IS NOT NULL AS dead FROM public.profiles WHERE id = '${GONE}'`))[0]).toEqual({ active: false, dead: true })
+    })
+    for (const [col, sql] of [
+      ['deleted_at', `deleted_at = now() + interval '1 day'`], ['deleted_by', `deleted_by = '${PEER}'`], ['deleted_role', `deleted_role = 'owner'`],
+      ['role', `role = 'owner'`], ['active', 'active = true'], ['email', `email = 'back@example.test'`], ['permissions', `permissions = '{"settings": true}'::jsonb`],
+    ]) {
+      it(`refuses a change to ${col}`, async () => {
+        await tombstone()
+        await expect(runSql(`UPDATE public.profiles SET ${sql} WHERE id = '${GONE}'`)).rejects.toThrow(new RegExp(`staff_tombstone_frozen.*${col}`))
+      })
+    }
+    it('the CHECK is still the second lock when the trigger is out of the way', async () => {
+      await tombstone()
+      await runSql('ALTER TABLE public.profiles DISABLE TRIGGER profiles_tombstone_frozen')
+      try {
+        await expect(runSql(`UPDATE public.profiles SET active = true WHERE id = '${GONE}'`)).rejects.toThrow(/profiles_tombstone_is_inactive/)
+      } finally { await runSql('ALTER TABLE public.profiles ENABLE TRIGGER profiles_tombstone_frozen') }
+    })
+    it('an unrelated column can still be written, and a LIVING profile is untouched by the freeze', async () => {
+      await tombstone()
+      await runSql(`UPDATE public.profiles SET updated_at = now(), avatar_url = NULL WHERE id = '${GONE}'`)
+      await runSql(`UPDATE public.profiles SET role = 'manager', email = 'peer2@example.test', permissions = '{}'::jsonb WHERE id = '${PEER}'`)
+      expect((await rows(`SELECT role FROM public.profiles WHERE id = '${PEER}'`))[0].role).toBe('manager')
+    })
+    it('a second call is SAFE: it says already tombstoned and changes nothing', async () => {
+      await tombstone()
+      const snap = async () => JSON.stringify([
+        await rows(`SELECT * FROM public.profiles WHERE id = '${GONE}'`),
+        await rows('SELECT id FROM public.shift_assignments ORDER BY id'),
+        await rows('SELECT id, status, review_note FROM public.shift_swap_requests ORDER BY id'),
+        await rows('SELECT id, status FROM public.time_off_requests ORDER BY id'),
+        await count('public.roster_change_log', 'true'), await count('public.audit_events', 'true'),
+      ])
+      const before = await snap()
+      for (const dryRun of [true, false]) {
+        const again = await tombstone(GONE, { dryRun, now: '2026-12-01T09:00:00Z' })
+        expect(again).toMatchObject({ profile_id: GONE, full_name: 'Former Coach', already_tombstoned: true, removed_shifts: [], cancelled_swaps: [], cancelled_time_off: [], role: { from: 'staff', to: 'staff' } })
+        expect(again.deleted_at).toBeTruthy()
+      }
+      expect(await snap()).toBe(before)
+    })
   })
 
   it('EXECUTE is service_role only', async () => {

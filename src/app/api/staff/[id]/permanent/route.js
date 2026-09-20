@@ -53,8 +53,15 @@
 //   • NULL any attribution column. The old hand-written FK list is gone: a row
 //     that stays needs nothing nulled.
 //
-// Reversibility: NONE for the personal data and the upcoming shifts. The
-// database refuses to reactivate a tombstone (CHECK profiles_tombstone_is_inactive).
+// Reversibility: NONE for the personal data and the upcoming shifts, and the
+// database enforces it (mig 622): once deleted_at is set, a BEFORE UPDATE
+// trigger (profiles_tombstone_frozen) refuses any change to deleted_at,
+// deleted_by, deleted_role, role, active, email or permissions — so a
+// tombstone cannot be un-deleted, reactivated or re-promoted by ANY writer —
+// and triggers on profile_locations / profile_organizations refuse to give one
+// a role. The CHECK profiles_tombstone_is_inactive is the second lock. Calling
+// the function again on a tombstone is safe: it answers already_tombstoned
+// and writes nothing.
 
 import { randomBytes } from 'node:crypto'
 import { NextResponse } from 'next/server'
