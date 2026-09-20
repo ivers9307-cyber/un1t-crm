@@ -5,6 +5,8 @@ import {
   shiftDayLabel, shiftWhenLabel, openPoolRecipients,
   inStaffPushHours, STAFF_PUSH_HOURS,
   coverSweepAction, coverNudgePayload, swapExpiryNotices, SWAP_EXPIRY_NOTES,
+  SWAP_EXPIRY_NOTICE_NOTES, EXPIRY_NOTICE_MAX_AGE_MS,
+  swapShiftHasStarted, swapShiftStartMs, swapExpiryNote, deferredExpiryNoticeDue,
 } from './swap-cover'
 
 const LOC = 'loc-1'          // the swap's studio
@@ -388,13 +390,13 @@ describe('coverSweepAction', () => {
       name: 'posted at T-5h: no nudge at all',
       swap: openSwap({ created_at: new Date(START - 5 * H).toISOString() }), now: START - 1 * H, expected: { action: 'none' },
     },
-    { name: 'at the start: expire', swap: openSwap(), now: START, expected: { action: 'expire', reason: 'started' } },
-    { name: 'a day after the start: expire', swap: openSwap(), now: START + 24 * H, expected: { action: 'expire', reason: 'started' } },
+    { name: 'at the start: expire', swap: openSwap(), now: START, expected: { action: 'expire', reason: 'started', notify: true } },
+    { name: 'a day after the start: expire', swap: openSwap(), now: START + 24 * H, expected: { action: 'expire', reason: 'started', notify: true } },
     { name: 'a CLAIMED swap is nudged too', swap: openSwap({ status: 'awaiting_approval', target_id: 'tkr' }), now: START - 12 * H, expected: { action: 'nudge', stage: 't12' } },
-    { name: 'a claimed swap expires too', swap: openSwap({ status: 'awaiting_approval', target_id: 'tkr' }), now: START, expected: { action: 'expire', reason: 'started' } },
+    { name: 'a claimed swap expires too', swap: openSwap({ status: 'awaiting_approval', target_id: 'tkr' }), now: START, expected: { action: 'expire', reason: 'started', notify: true } },
     {
       name: 'the shift was deleted (mig 603 SET NULL): expire, whatever the shift clock says',
-      swap: openSwap({ requester_shift_id: null, requester_shift: null }), now: START - 500 * H, expected: { action: 'expire', reason: 'shift_removed' },
+      swap: openSwap({ requester_shift_id: null, requester_shift: null }), now: START - 500 * H, expected: { action: 'expire', reason: 'shift_removed', notify: true },
     },
     {
       name: 'an embed that did not come back is NOT a deleted shift: do nothing',
@@ -414,17 +416,17 @@ describe('coverSweepAction', () => {
   it('reads the block start as Europe/Dublin wall-clock by default', () => {
     const summer = swapOn('2026-07-02', '09:00:00')
     expect(coverSweepAction(summer, Date.UTC(2026, 6, 2, 7, 59))).toEqual({ action: 'nudge', stage: 't12' })
-    expect(coverSweepAction(summer, Date.UTC(2026, 6, 2, 8, 0))).toEqual({ action: 'expire', reason: 'started' })
+    expect(coverSweepAction(summer, Date.UTC(2026, 6, 2, 8, 0))).toEqual({ action: 'expire', reason: 'started', notify: true })
   })
 
   it('reads the block start in the STUDIO\'s zone when one is given', () => {
     const ny = swapOn('2099-01-01', '09:00:00') // 09:00 EST is 14:00Z
     expect(coverSweepAction(ny, Date.UTC(2099, 0, 1, 13, 59), { tz: 'America/New_York' })).toEqual({ action: 'nudge', stage: 't12' })
-    expect(coverSweepAction(ny, Date.UTC(2099, 0, 1, 14, 0), { tz: 'America/New_York' })).toEqual({ action: 'expire', reason: 'started' })
+    expect(coverSweepAction(ny, Date.UTC(2099, 0, 1, 14, 0), { tz: 'America/New_York' })).toEqual({ action: 'expire', reason: 'started', notify: true })
   })
 
-  // QUIET HOURS. Whatever is due outside 07:00-22:00 studio time waits for a
-  // later tick: no push, no write, nothing for that studio.
+  // QUIET HOURS. A NUDGE that is due outside 07:00-22:00 studio time waits
+  // for a later tick. An EXPIRY never waits: it comes back with notify:false.
   describe('quiet hours', () => {
     const QUIET = { action: 'none', reason: 'quiet_hours' }
     it.each([
@@ -437,22 +439,25 @@ describe('coverSweepAction', () => {
       { name: '... and is sent at 07:00 next morning (still the t48 stage)', swap: swapOn('2099-01-03', '22:00:00'), now: Date.UTC(2099, 0, 2, 7, 0), expected: { action: 'nudge', stage: 't48' } },
       { name: '21:59 is inside the band', swap: swapOn('2099-01-03', '21:59:00'), now: Date.UTC(2099, 0, 1, 21, 59), expected: { action: 'nudge', stage: 't48' } },
       // The gym's real case: the 06:00 class.
-      { name: 'a 06:00 shift that has started is NOT expired at 06:00', swap: swapOn('2099-01-02', '06:00:00'), now: Date.UTC(2099, 0, 2, 6, 0), expected: QUIET },
-      { name: '... nor at 06:45', swap: swapOn('2099-01-02', '06:00:00'), now: Date.UTC(2099, 0, 2, 6, 45), expected: QUIET },
-      { name: '... it expires at 07:00', swap: swapOn('2099-01-02', '06:00:00'), now: Date.UTC(2099, 0, 2, 7, 0), expected: { action: 'expire', reason: 'started' } },
-      { name: 'a 22:30 shift that has started waits for the morning', swap: swapOn('2099-01-01', '22:30:00'), now: Date.UTC(2099, 0, 1, 22, 30), expected: QUIET },
-      { name: '... and expires at 07:00 next day', swap: swapOn('2099-01-01', '22:30:00'), now: Date.UTC(2099, 0, 2, 7, 0), expected: { action: 'expire', reason: 'started' } },
-      { name: 'a removed shift also waits: outside the band the arm does nothing for the studio', swap: openSwap({ requester_shift_id: null, requester_shift: null }), now: Date.UTC(2099, 0, 1, 3, 0), expected: QUIET },
+      // STATE never waits for quiet hours; only the NOTICE does. A started
+      // shift's swap closes on the very next tick, at any hour: nothing else
+      // refuses a claim or an approval on a shift already being worked.
+      { name: 'a 06:00 shift that has started IS expired at 06:00, without a notice', swap: swapOn('2099-01-02', '06:00:00'), now: Date.UTC(2099, 0, 2, 6, 0), expected: { action: 'expire', reason: 'started', notify: false } },
+      { name: '... and at 06:45', swap: swapOn('2099-01-02', '06:00:00'), now: Date.UTC(2099, 0, 2, 6, 45), expected: { action: 'expire', reason: 'started', notify: false } },
+      { name: '... from 07:00 the notice may go with it', swap: swapOn('2099-01-02', '06:00:00'), now: Date.UTC(2099, 0, 2, 7, 0), expected: { action: 'expire', reason: 'started', notify: true } },
+      { name: 'a 22:30 shift is closed at 22:30, not in the morning', swap: swapOn('2099-01-01', '22:30:00'), now: Date.UTC(2099, 0, 1, 22, 30), expected: { action: 'expire', reason: 'started', notify: false } },
+      { name: '... 22:31 too', swap: swapOn('2099-01-01', '22:30:00'), now: Date.UTC(2099, 0, 1, 22, 31), expected: { action: 'expire', reason: 'started', notify: false } },
+      { name: 'a removed shift closes at once, at any hour (it sends nothing anyway)', swap: openSwap({ requester_shift_id: null, requester_shift: null }), now: Date.UTC(2099, 0, 1, 3, 0), expected: { action: 'expire', reason: 'shift_removed', notify: false } },
       { name: 'nothing due in quiet hours is plain "none", not a deferral', swap: swapOn('2099-02-01', '14:00:00'), now: Date.UTC(2099, 0, 2, 2, 0), expected: { action: 'none' } },
       // SPRING FORWARD (Sun 2026-03-29). A 10:00 IST shift starts 09:00Z; T-12h fell at 21:00Z Saturday = 21:00 GMT, so use a swap posted long ago and look at Sunday morning.
       { name: 'spring forward: 06:59 IST (05:59Z) is quiet', swap: swapOn('2026-03-29', '10:00:00'), now: Date.UTC(2026, 2, 29, 5, 59), expected: QUIET },
       { name: 'spring forward: 07:00 IST (06:00Z) sends', swap: swapOn('2026-03-29', '10:00:00'), now: Date.UTC(2026, 2, 29, 6, 0), expected: { action: 'nudge', stage: 't12' } },
-      { name: 'spring forward: the shift starts at 09:00Z, not 10:00Z', swap: swapOn('2026-03-29', '10:00:00'), now: Date.UTC(2026, 2, 29, 9, 0), expected: { action: 'expire', reason: 'started' } },
+      { name: 'spring forward: the shift starts at 09:00Z, not 10:00Z', swap: swapOn('2026-03-29', '10:00:00'), now: Date.UTC(2026, 2, 29, 9, 0), expected: { action: 'expire', reason: 'started', notify: true } },
       // FALL BACK (Sun 2026-10-25). A 10:00 GMT shift starts 10:00Z.
       { name: 'fall back: 06:00Z is 06:00 GMT, quiet (on Saturday the same instant was 07:00 IST)', swap: swapOn('2026-10-25', '10:00:00'), now: Date.UTC(2026, 9, 25, 6, 0), expected: QUIET },
       { name: 'fall back: 07:00 GMT (07:00Z) sends', swap: swapOn('2026-10-25', '10:00:00'), now: Date.UTC(2026, 9, 25, 7, 0), expected: { action: 'nudge', stage: 't12' } },
       { name: 'fall back: 09:59Z has not started', swap: swapOn('2026-10-25', '10:00:00'), now: Date.UTC(2026, 9, 25, 9, 59), expected: { action: 'nudge', stage: 't12' } },
-      { name: 'fall back: 10:00Z has', swap: swapOn('2026-10-25', '10:00:00'), now: Date.UTC(2026, 9, 25, 10, 0), expected: { action: 'expire', reason: 'started' } },
+      { name: 'fall back: 10:00Z has', swap: swapOn('2026-10-25', '10:00:00'), now: Date.UTC(2026, 9, 25, 10, 0), expected: { action: 'expire', reason: 'started', notify: true } },
       { name: 'fall back, Saturday night: 21:00Z is 22:00 IST, quiet', swap: swapOn('2026-10-25', '10:00:00'), now: Date.UTC(2026, 9, 24, 21, 0), expected: QUIET },
     ])('$name', ({ swap, now, expected }) => {
       expect(coverSweepAction(swap, now)).toEqual(expected)
@@ -525,8 +530,129 @@ describe('swapExpiryNotices', () => {
     expect(swapExpiryNotices(openSwap({ requester_shift_id: null, requester_shift: null }), 'shift_removed')).toEqual([])
   })
 
-  it('has a system review_note for both reasons', () => {
-    expect(SWAP_EXPIRY_NOTES.started).toMatch(/^Closed automatically/)
-    expect(SWAP_EXPIRY_NOTES.shift_removed).toMatch(/^Closed automatically/)
+  it('a deferred notice whose shift has since been deleted tells nobody: there is nothing left to describe', () => {
+    const row = openSwap({ status: 'cancelled', review_note: SWAP_EXPIRY_NOTES.started, requester_shift: null })
+    expect(swapExpiryNotices(row, 'started')).toEqual([])
+  })
+
+  it('has a distinct system review_note for every reason', () => {
+    const notes = Object.values(SWAP_EXPIRY_NOTES)
+    expect(Object.keys(SWAP_EXPIRY_NOTES).sort()).toEqual(['shift_removed', 'started', 'started_claimed'])
+    expect(new Set(notes).size).toBe(3)
+    for (const n of notes) expect(n).toMatch(/^Closed automatically/)
+    // The notes that carry a notice: a removed shift tells nobody.
+    expect(SWAP_EXPIRY_NOTICE_NOTES).toEqual([SWAP_EXPIRY_NOTES.started, SWAP_EXPIRY_NOTES.started_claimed])
+  })
+
+  it.each([
+    ['pending', 'started', SWAP_EXPIRY_NOTES.started],
+    ['awaiting_approval', 'started', SWAP_EXPIRY_NOTES.started_claimed],
+    ['pending', 'shift_removed', SWAP_EXPIRY_NOTES.shift_removed],
+    ['awaiting_approval', 'shift_removed', SWAP_EXPIRY_NOTES.shift_removed],
+  ])('swapExpiryNote(%s, %s)', (status, reason, expected) => {
+    expect(swapExpiryNote(openSwap({ status }), reason)).toBe(expected)
+  })
+
+  // The DEFERRED notice is built from the row AFTER it was cancelled, so
+  // "this swap had been claimed" has to survive in the note.
+  it('a CANCELLED row with the started_claimed note still tells the taker', () => {
+    const row = openSwap({ status: 'cancelled', target_id: 'tkr', review_note: SWAP_EXPIRY_NOTES.started_claimed })
+    const out = swapExpiryNotices(row, 'started')
+    expect(out.map((n) => [n.key, n.to])).toEqual([['swap_expired:s1', ['req']], ['swap_expired_taker:s1', ['tkr']]])
+    expect(out[0].payload.body).toContain('was not approved before the shift started')
+  })
+
+  it('a CANCELLED row with the plain started note tells the requester only, in the unclaimed words', () => {
+    const row = openSwap({ status: 'cancelled', target_id: null, review_note: SWAP_EXPIRY_NOTES.started })
+    const out = swapExpiryNotices(row, 'started')
+    expect(out.map((n) => n.key)).toEqual(['swap_expired:s1'])
+    expect(out[0].payload.body).toContain('Nobody took your shift')
+  })
+
+  it('the same keys whether the notice is sent at once or deferred (that is what makes it exactly-once)', () => {
+    const live = swapExpiryNotices(openSwap({ status: 'awaiting_approval', target_id: 'tkr' }), 'started')
+    const later = swapExpiryNotices(openSwap({ status: 'cancelled', target_id: 'tkr', review_note: SWAP_EXPIRY_NOTES.started_claimed }), 'started')
+    expect(later).toEqual(live)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────
+// "Has this shift started?" — ONE predicate, shared by the sweep (which closes
+// the swap) and PUT /api/schedule/swaps/:id (which refuses a claim, accept or
+// approval), so the two can never disagree.
+// ─────────────────────────────────────────────────────────────────────────
+describe('swapShiftHasStarted', () => {
+  const shift = (block_date, start_time, start_time_override = null) => ({ block_date, start_time, start_time_override })
+  it.each([
+    // Winter: Dublin is UTC.
+    ['one minute before', shift('2099-01-01', '09:00:00'), '2099-01-01T08:59:00Z', undefined, false],
+    ['on the minute', shift('2099-01-01', '09:00:00'), '2099-01-01T09:00:00Z', undefined, true],
+    ['the day after', shift('2099-01-01', '09:00:00'), '2099-01-02T03:00:00Z', undefined, true],
+    // Summer (IST): 09:00 is 08:00Z.
+    ['IST: 07:59Z has not', shift('2026-07-02', '09:00:00'), '2026-07-02T07:59:00Z', undefined, false],
+    ['IST: 08:00Z has', shift('2026-07-02', '09:00:00'), '2026-07-02T08:00:00Z', undefined, true],
+    // The EFFECTIVE start: the assignment's own override wins over the block.
+    ['an earlier override starts it earlier', shift('2099-01-01', '09:00:00', '08:30:00'), '2099-01-01T08:30:00Z', undefined, true],
+    ['a later override starts it later', shift('2099-01-01', '09:00:00', '09:30:00'), '2099-01-01T09:15:00Z', undefined, false],
+    // SPRING FORWARD, Sun 2026-03-29 (01:00 GMT -> 02:00 IST).
+    ['spring: Sat 06:00 GMT is 06:00Z', shift('2026-03-28', '06:00:00'), '2026-03-28T05:59:00Z', undefined, false],
+    ['spring: Sat 06:00 GMT started at 06:00Z', shift('2026-03-28', '06:00:00'), '2026-03-28T06:00:00Z', undefined, true],
+    ['spring: Sun 06:00 IST is 05:00Z, not 06:00Z', shift('2026-03-29', '06:00:00'), '2026-03-29T04:59:00Z', undefined, false],
+    ['spring: Sun 06:00 IST started at 05:00Z', shift('2026-03-29', '06:00:00'), '2026-03-29T05:00:00Z', undefined, true],
+    ['spring: a 00:30 shift, before the jump, is 00:30Z', shift('2026-03-29', '00:30:00'), '2026-03-29T00:30:00Z', undefined, true],
+    // FALL BACK, Sun 2026-10-25 (02:00 IST -> 01:00 GMT).
+    ['autumn: Sat 06:00 IST started at 05:00Z', shift('2026-10-24', '06:00:00'), '2026-10-24T05:00:00Z', undefined, true],
+    ['autumn: Sun 06:00 GMT has NOT started at 05:00Z', shift('2026-10-25', '06:00:00'), '2026-10-25T05:00:00Z', undefined, false],
+    ['autumn: Sun 06:00 GMT started at 06:00Z', shift('2026-10-25', '06:00:00'), '2026-10-25T06:00:00Z', undefined, true],
+    ['autumn: a 22:30 shift on the 25-hour day is 22:30Z', shift('2026-10-25', '22:30:00'), '2026-10-25T22:29:00Z', undefined, false],
+    // The studio's zone.
+    ['New York 09:00 is 14:00Z', shift('2099-01-01', '09:00:00'), '2099-01-01T13:59:00Z', 'America/New_York', false],
+    ['New York 09:00 started at 14:00Z', shift('2099-01-01', '09:00:00'), '2099-01-01T14:00:00Z', 'America/New_York', true],
+    ['an invalid zone is Dublin', shift('2099-01-01', '09:00:00'), '2099-01-01T09:00:00Z', 'Not/AZone', true],
+    // Unreadable -> NOT started: never close or refuse on a guess.
+    ['an unreadable time', shift('2099-01-01', 'soon'), '2099-06-01T00:00:00Z', undefined, false],
+    ['an impossible date', shift('2026-02-31', '09:00:00'), '2099-06-01T00:00:00Z', undefined, false],
+    ['no shift', null, '2099-06-01T00:00:00Z', undefined, false],
+  ])('%s', (_name, sh, iso, tz, expected) => {
+    expect(swapShiftHasStarted(sh, Date.parse(iso), tz)).toBe(expected)
+  })
+
+  it('swapShiftStartMs is the instant it is judged on, or null', () => {
+    expect(swapShiftStartMs({ block_date: '2026-07-02', start_time: '09:00:00' })).toBe(Date.UTC(2026, 6, 2, 8, 0))
+    expect(swapShiftStartMs({ block_date: '2026-07-02', start_time: '09:00:00', start_time_override: '08:45:00' })).toBe(Date.UTC(2026, 6, 2, 7, 45))
+    expect(swapShiftStartMs({ block_date: '2026-07-02', start_time: null })).toBe(null)
+  })
+
+  it('the sweep uses the same effective start: an earlier override closes the swap earlier', () => {
+    const swap = openSwap({ requester_shift: { id: 'a1', start_time_override: '08:30:00', shift_blocks: WINTER_BLOCK } })
+    expect(coverSweepAction(swap, Date.UTC(2099, 0, 1, 8, 29))).toEqual({ action: 'nudge', stage: 't12' })
+    expect(coverSweepAction(swap, Date.UTC(2099, 0, 1, 8, 30))).toEqual({ action: 'expire', reason: 'started', notify: true })
+  })
+})
+
+describe('deferredExpiryNoticeDue', () => {
+  const NOW = Date.UTC(2099, 0, 2, 7, 0) // 07:00 Dublin, winter
+  const closed = (over = {}) => openSwap({
+    status: 'cancelled', reviewed_by: null, review_note: SWAP_EXPIRY_NOTES.started,
+    updated_at: new Date(NOW - 8 * H).toISOString(), ...over,
+  })
+  it('the window is 24 hours', () => { expect(EXPIRY_NOTICE_MAX_AGE_MS).toBe(24 * H) })
+
+  it.each([
+    ['closed by the sweep overnight, studio now in band', closed(), NOW, undefined, true],
+    ['the claimed note counts too', closed({ review_note: SWAP_EXPIRY_NOTES.started_claimed, target_id: 'tkr' }), NOW, undefined, true],
+    ['still quiet hours: not yet', closed(), NOW - 60 * 1000, undefined, false],
+    ['quiet in the STUDIO\'s zone: not yet', closed(), NOW, 'America/New_York', false],
+    ['a removed shift never announces', closed({ review_note: SWAP_EXPIRY_NOTES.shift_removed }), NOW, undefined, false],
+    ['a COACH\'s own cancel (no system note) never announces', closed({ review_note: null }), NOW, undefined, false],
+    ['a note that merely resembles a system note does not match', closed({ review_note: `${SWAP_EXPIRY_NOTES.started} ` }), NOW, undefined, false],
+    ['a manager-reviewed row never announces', closed({ reviewed_by: 'mgr' }), NOW, undefined, false],
+    ['not cancelled', closed({ status: 'pending' }), NOW, undefined, false],
+    ['exactly 24h old: still announced', closed({ updated_at: new Date(NOW - 24 * H).toISOString() }), NOW, undefined, true],
+    ['older than 24h: never re-announced', closed({ updated_at: new Date(NOW - 24 * H - 1).toISOString() }), NOW, undefined, false],
+    ['an unreadable updated_at: no', closed({ updated_at: null }), NOW, undefined, false],
+    ['null row', null, NOW, undefined, false],
+  ])('%s', (_name, row, now, tz, expected) => {
+    expect(deferredExpiryNoticeDue(row, now, { tz })).toBe(expected)
   })
 })

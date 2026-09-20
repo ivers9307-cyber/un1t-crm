@@ -36,6 +36,7 @@ function mockDb(results = {}) {
         in: (c, v) => { q.filters.push(['in', c, v]); return b },
         lte: (c, v) => { q.filters.push(['lte', c, v]); return b },
         gte: (c, v) => { q.filters.push(['gte', c, v]); return b },
+        is: (c, v) => { q.filters.push(['is', c, v]); return b },
         order: () => b,
         limit: () => b,
         maybeSingle: () => { q.single = true; return b },
@@ -244,18 +245,60 @@ const sweepSwap = (over = {}) => ({
   requester_shift: { id: 'a1', shift_blocks: { id: 'blk-1', block_date: '2099-01-01', start_time: '09:00:00', end_time: '10:00:00' } },
   ...over,
 })
-// One table, two kinds of query: the open-swap list, and the guarded cancel.
-const swapsTable = (list, updateResult = { data: [{ id: 's1' }], error: null }) =>
-  (q) => (q.update ? updateResult : { data: list, error: null })
+// One table, three kinds of query: the open-swap list, the guarded cancel, and
+// the recently-system-closed list the deferred-notice pass reads.
+const isClosedRead = (q) => !q.update && q.filters.some((f) => f[0] === 'eq' && f[1] === 'status' && f[2] === 'cancelled')
+const swapsTable = (list, updateResult = { data: [{ id: 's1' }], error: null }, closed = []) =>
+  (q) => {
+    if (q.update) return updateResult
+    return { data: isClosedRead(q) ? closed : list, error: null }
+  }
 const DUBLIN = { data: [{ id: LOC, timezone: 'Europe/Dublin' }], error: null }
-const ZERO = { open: 0, nudged: 0, expired: 0, skipped: 0, quiet: 0, errors: 0 }
+const ZERO = { open: 0, nudged: 0, expired: 0, skipped: 0, quiet: 0, announced: 0, errors: 0 }
+
+// A STATEFUL shift_swap_requests + a real at-most-once ledger, for the tests
+// that follow one swap across several ticks. `clock.now` is the tick's time:
+// the UPDATE stamps updated_at with it, as the mig 010 trigger would.
+function world(rows, clock) {
+  const ledger = new Set()
+  notifyUsersOnce.mockImplementation(async (_db, key, ids) => {
+    const fresh = ids.filter((id) => !ledger.has(`${key}|${id}`))
+    fresh.forEach((id) => ledger.add(`${key}|${id}`))
+    return { sent: fresh.length, emailed: 0, deduped: ids.length - fresh.length }
+  })
+  const table = (q) => {
+    const eq = (col) => q.filters.find((f) => f[0] === 'eq' && f[1] === col)?.[2]
+    if (q.update) {
+      const hit = rows.filter((r) => r.id === eq('id') && r.status === eq('status'))
+      hit.forEach((r) => Object.assign(r, q.update, { updated_at: new Date(clock.now).toISOString() }))
+      return { data: hit.map((r) => ({ id: r.id })), error: null }
+    }
+    if (isClosedRead(q)) {
+      const notes = q.filters.find((f) => f[0] === 'in' && f[1] === 'review_note')[2]
+      const since = q.filters.find((f) => f[0] === 'gte' && f[1] === 'updated_at')[2]
+      return { data: rows.filter((r) => r.status === 'cancelled' && r.reviewed_by == null && notes.includes(r.review_note) && r.updated_at >= since).map((r) => ({ ...r })), error: null }
+    }
+    const open = q.filters.find((f) => f[0] === 'in' && f[1] === 'status')[2]
+    return { data: rows.filter((r) => open.includes(r.status)).map((r) => ({ ...r })), error: null }
+  }
+  return { db: mockDb({ shift_swap_requests: table, locations: DUBLIN }), ledger }
+}
+const tick = (w, clock, nowMs) => { clock.now = nowMs; return runSwapCoverSweep(w.db, { nowMs }) }
 
 describe('runSwapCoverSweep', () => {
-  it('reads only OPEN swaps, and nothing else when there are none', async () => {
+  it('reads OPEN swaps, and swaps the sweep itself closed in the last 24h, and nothing else when there are none', async () => {
     const db = mockDb({ shift_swap_requests: swapsTable([]) })
     const stats = await runSwapCoverSweep(db, { nowMs: START })
-    expect(db.queries).toHaveLength(1)
+    expect(db.queries).toHaveLength(2)
     expect(db.queries[0].filters).toEqual([['in', 'status', ['pending', 'awaiting_approval']]])
+    // Bounded, and matched on the EXACT system notes: a coach's own cancel or
+    // a manager's decision can never be announced as an expiry.
+    expect(db.queries[1].filters).toEqual([
+      ['eq', 'status', 'cancelled'],
+      ['is', 'reviewed_by', null],
+      ['in', 'review_note', [SWAP_EXPIRY_NOTES.started, SWAP_EXPIRY_NOTES.started_claimed]],
+      ['gte', 'updated_at', new Date(START - 24 * H).toISOString()],
+    ])
     expect(stats).toEqual(ZERO)
   })
 
@@ -297,6 +340,7 @@ describe('runSwapCoverSweep', () => {
 
     const write = db.queries.find((q) => q.update)
     expect(write.update).toEqual({ status: 'cancelled', review_note: SWAP_EXPIRY_NOTES.started })
+    expect(Object.keys(write.update)).not.toContain('reviewed_by')
     // .eq('status', <what we read>): an approve RPC that won the race leaves 0 rows.
     expect(write.filters).toEqual([['eq', 'id', 's1'], ['eq', 'status', 'pending']])
     expect(write.select).toBe('id')
@@ -314,6 +358,8 @@ describe('runSwapCoverSweep', () => {
     const db = mockDb({ shift_swap_requests: swapsTable([sweepSwap({ status: 'awaiting_approval', target_id: 'tkr' })]), locations: DUBLIN })
     await runSwapCoverSweep(db, { nowMs: START + H })
     expect(db.queries.find((q) => q.update).filters).toEqual([['eq', 'id', 's1'], ['eq', 'status', 'awaiting_approval']])
+    // "It had been claimed" has to survive the cancel, for a deferred notice.
+    expect(db.queries.find((q) => q.update).update.review_note).toBe(SWAP_EXPIRY_NOTES.started_claimed)
     expect(notifyUsersOnce.mock.calls.map((c) => [c[1], c[2]])).toEqual([
       ['swap_expired:s1', ['req']],
       ['swap_expired_taker:s1', ['tkr']],
@@ -359,7 +405,7 @@ describe('runSwapCoverSweep', () => {
   })
 
   it('an unreadable swap list is one logged error and no work', async () => {
-    const db = mockDb({ shift_swap_requests: { data: null, error: { message: 'down' } } })
+    const db = mockDb({ shift_swap_requests: (q) => (isClosedRead(q) ? { data: [], error: null } : { data: null, error: { message: 'down' } }) })
     expect(await runSwapCoverSweep(db, { nowMs: START })).toEqual({ ...ZERO, errors: 1 })
     expect(logError).toHaveBeenCalledWith('swap-cover', expect.any(String), expect.objectContaining({ err: 'down' }))
     expect(notifyUsersOnce).not.toHaveBeenCalled()
@@ -373,20 +419,124 @@ describe('runSwapCoverSweep', () => {
       ...over,
     })
 
-    it('a 06:00 shift that has started is neither cancelled nor announced at 06:15', async () => {
+    // STATE does not wait for quiet hours; only the NOTICE does.
+    it('a 06:00 shift that has started IS cancelled at 06:15, and nobody is pushed or claimed in the ledger', async () => {
       const db = mockDb({ shift_swap_requests: swapsTable([early()]), locations: DUBLIN })
       const stats = await runSwapCoverSweep(db, { nowMs: Date.UTC(2099, 0, 1, 6, 15) })
-      expect(db.queries.some((q) => q.update)).toBe(false)
+      const write = db.queries.find((q) => q.update)
+      expect(write.update).toEqual({ status: 'cancelled', review_note: SWAP_EXPIRY_NOTES.started })
+      expect(write.filters).toEqual([['eq', 'id', 's1'], ['eq', 'status', 'pending']])
+      // notifyUsersOnce CLAIMS its key before it sends, so "not called" is what
+      // leaves the key free for the deferred notice.
       expect(notifyUsersOnce).not.toHaveBeenCalled()
       expect(notifyUsersAtRolesOnce).not.toHaveBeenCalled()
-      expect(stats).toEqual({ ...ZERO, open: 1, quiet: 1 })
+      expect(stats).toEqual({ ...ZERO, open: 1, expired: 1 })
     })
 
-    it('... and is at 07:00', async () => {
+    it('... at 07:00 the close and the notice go together', async () => {
       const db = mockDb({ shift_swap_requests: swapsTable([early()]), locations: DUBLIN })
       const stats = await runSwapCoverSweep(db, { nowMs: Date.UTC(2099, 0, 1, 7, 0) })
       expect(notifyUsersOnce.mock.calls.map((c) => c[1])).toEqual(['swap_expired:s1'])
       expect(stats).toMatchObject({ expired: 1, quiet: 0 })
+    })
+
+    it('a removed shift closes at night too, silently', async () => {
+      const db = mockDb({ shift_swap_requests: swapsTable([sweepSwap({ requester_shift_id: null, requester_shift: null })]), locations: DUBLIN })
+      const stats = await runSwapCoverSweep(db, { nowMs: Date.UTC(2099, 0, 1, 3, 0) })
+      expect(db.queries.find((q) => q.update).update).toEqual({ status: 'cancelled', review_note: SWAP_EXPIRY_NOTES.shift_removed })
+      expect(notifyUsersOnce).not.toHaveBeenCalled()
+      expect(stats).toMatchObject({ expired: 1 })
+    })
+
+    describe('the deferred notice', () => {
+      const late = (over = {}) => sweepSwap({
+        requester_shift: { id: 'a1', start_time_override: null, shift_blocks: { id: 'blk-1', block_date: '2099-01-01', start_time: '22:30:00', end_time: '23:30:00' } },
+        ...over,
+      })
+      const at = (d, h, m) => Date.UTC(2099, 0, d, h, m)
+
+      it('22:30 shift: closed at 22:31 with no push; told on the first tick at or after 07:00; exactly once', async () => {
+        const clock = { now: 0 }
+        const rows = [late()]
+        const w = world(rows, clock)
+
+        expect(await tick(w, clock, at(1, 22, 31))).toMatchObject({ expired: 1, announced: 0 })
+        expect(rows[0]).toMatchObject({ status: 'cancelled', review_note: SWAP_EXPIRY_NOTES.started })
+        expect(notifyUsersOnce).not.toHaveBeenCalled()
+
+        // Through the night: closed, found by the second read, still not told.
+        expect(await tick(w, clock, at(2, 3, 0))).toMatchObject({ open: 0, expired: 0, announced: 0 })
+        expect(await tick(w, clock, at(2, 6, 45))).toMatchObject({ announced: 0 })
+        expect(notifyUsersOnce).not.toHaveBeenCalled()
+
+        expect(await tick(w, clock, at(2, 7, 0))).toMatchObject({ announced: 1 })
+        expect(notifyUsersOnce.mock.calls.map((c) => [c[1], c[2]])).toEqual([['swap_expired:s1', ['req']]])
+        expect(notifyUsersOnce.mock.calls[0][3].body).toContain('Thu 1 Jan, 22:30 to 23:30')
+
+        // Every later tick offers the same key; the ledger refuses it.
+        expect(await tick(w, clock, at(2, 7, 15))).toMatchObject({ announced: 0 })
+        expect(await tick(w, clock, at(2, 12, 0))).toMatchObject({ announced: 0 })
+        expect([...w.ledger]).toEqual(['swap_expired:s1|req'])
+      })
+
+      it('a CLAIMED swap closed at night: the requester AND the taker are told in the morning', async () => {
+        const clock = { now: 0 }
+        const rows = [late({ status: 'awaiting_approval', target_id: 'tkr' })]
+        const w = world(rows, clock)
+        await tick(w, clock, at(1, 22, 45))
+        expect(rows[0]).toMatchObject({ status: 'cancelled', review_note: SWAP_EXPIRY_NOTES.started_claimed, target_id: 'tkr' })
+        await tick(w, clock, at(2, 7, 0))
+        expect([...w.ledger].sort()).toEqual(['swap_expired:s1|req', 'swap_expired_taker:s1|tkr'])
+      })
+
+      it('a crash between the UPDATE and the send: the next in-band tick sends it', async () => {
+        const clock = { now: 0 }
+        // What a crash leaves behind: cancelled with the system note, in band,
+        // and nothing in the ledger.
+        const rows = [sweepSwap({ status: 'cancelled', reviewed_by: null, review_note: SWAP_EXPIRY_NOTES.started, updated_at: new Date(START).toISOString() })]
+        const w = world(rows, clock)
+        expect(await tick(w, clock, START + 15 * 60 * 1000)).toMatchObject({ open: 0, announced: 1 })
+        expect([...w.ledger]).toEqual(['swap_expired:s1|req'])
+      })
+
+      it('a send that FAILED outright (the ledger released it) is retried by the next tick', async () => {
+        const closed = [sweepSwap({ status: 'cancelled', reviewed_by: null, review_note: SWAP_EXPIRY_NOTES.started, updated_at: new Date(START).toISOString() })]
+        notifyUsersOnce.mockResolvedValueOnce({ sent: 0, emailed: 0, failed: 1, deduped: 0 })
+        const db = mockDb({ shift_swap_requests: swapsTable([], undefined, closed), locations: DUBLIN })
+        expect(await runSwapCoverSweep(db, { nowMs: START + H })).toMatchObject({ announced: 0 })
+        expect(await runSwapCoverSweep(db, { nowMs: START + 2 * H })).toMatchObject({ announced: 1 })
+      })
+
+      it('nothing older than 24h is re-announced, even if a row were to arrive', async () => {
+        const closed = [sweepSwap({ status: 'cancelled', reviewed_by: null, review_note: SWAP_EXPIRY_NOTES.started, updated_at: new Date(START - 25 * H).toISOString() })]
+        const db = mockDb({ shift_swap_requests: swapsTable([], undefined, closed), locations: DUBLIN })
+        expect(await runSwapCoverSweep(db, { nowMs: START })).toMatchObject({ announced: 0 })
+        expect(notifyUsersOnce).not.toHaveBeenCalled()
+      })
+
+      it('a coach\'s own cancel or a manager\'s decision is never announced, even if a row were to arrive', async () => {
+        const closed = [
+          sweepSwap({ status: 'cancelled', reviewed_by: null, review_note: null, updated_at: new Date(START).toISOString() }),
+          sweepSwap({ id: 's2', status: 'cancelled', reviewed_by: 'mgr', review_note: SWAP_EXPIRY_NOTES.started, updated_at: new Date(START).toISOString() }),
+          sweepSwap({ id: 's3', status: 'cancelled', reviewed_by: null, review_note: SWAP_EXPIRY_NOTES.shift_removed, updated_at: new Date(START).toISOString() }),
+        ]
+        const db = mockDb({ shift_swap_requests: swapsTable([], undefined, closed), locations: DUBLIN })
+        await runSwapCoverSweep(db, { nowMs: START + H })
+        expect(notifyUsersOnce).not.toHaveBeenCalled()
+      })
+
+      it('an unreadable closed list is one logged error and the OPEN swaps are still swept', async () => {
+        const db = mockDb({
+          locations: DUBLIN,
+          shift_swap_requests: (q) => {
+            if (q.update) return { data: [{ id: 's1' }], error: null }
+            return isClosedRead(q) ? { data: null, error: { message: 'closed down' } } : { data: [sweepSwap()], error: null }
+          },
+        })
+        const stats = await runSwapCoverSweep(db, { nowMs: START })
+        expect(stats).toMatchObject({ open: 1, expired: 1, errors: 1 })
+        expect(logError).toHaveBeenCalledWith('swap-cover', expect.any(String), expect.objectContaining({ err: 'closed down' }))
+      })
     })
 
     it('a manager nudge that comes due at night is not sent at night', async () => {

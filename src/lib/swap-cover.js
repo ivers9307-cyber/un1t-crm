@@ -190,15 +190,67 @@ export const COVER_NUDGE_STAGES = Object.freeze([
 
 // shift_swap_requests.review_note for a swap the sweep closed. There is no
 // reviewer (reviewed_by stays NULL): this text is how a reader tells a system
-// close from a coach's own cancel.
+// close from a coach's own cancel, AND how the deferred-notice pass finds the
+// rows it owes a message to, so these strings are matched EXACTLY. Never edit
+// one in place: a row already closed under the old text would stop matching.
+// `started_claimed` exists because the row is `cancelled` by the time a
+// deferred notice is built, and "a colleague had taken it" must survive so
+// the taker is still told.
 export const SWAP_EXPIRY_NOTES = Object.freeze({
   started: 'Closed automatically: the shift started before this swap was taken and approved.',
+  started_claimed: 'Closed automatically: the shift started before this claimed swap was approved.',
   shift_removed: 'Closed automatically: the shift was removed from the roster.',
 })
 
-/** UTC ms the block starts, on the studio's wall clock. null if unreadable. */
-export function swapBlockStartMs(block, tz) {
-  return wallMsInTz(block?.block_date, fmtTime(block?.start_time), resolveTz(tz))
+// The system notes that carry a notice. A removed shift tells nobody.
+export const SWAP_EXPIRY_NOTICE_NOTES = Object.freeze([
+  SWAP_EXPIRY_NOTES.started,
+  SWAP_EXPIRY_NOTES.started_claimed,
+])
+
+// How long after the sweep closed a swap its notice may still be sent. Longer
+// than any quiet night (9h); short enough that nothing stale is ever announced.
+export const EXPIRY_NOTICE_MAX_AGE_MS = 24 * HOUR_MS
+
+/** The review_note the sweep writes when it closes `swap` for `reason`. */
+export function swapExpiryNote(swap, reason) {
+  if (reason === 'started' && swap?.status === 'awaiting_approval') return SWAP_EXPIRY_NOTES.started_claimed
+  return SWAP_EXPIRY_NOTES[reason]
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// "Has this shift started?" — ONE predicate. The sweep closes a swap on it and
+// PUT /api/schedule/swaps/:id refuses a claim, accept or approval on it, so
+// the two can never disagree.
+//
+// THE RULE: the shift has started when now >= the instant of
+//   block_date + (the assignment's start_time_override, else the block's
+//   start_time), read as WALL CLOCK in the studio's locations.timezone
+//   (empty or invalid -> Europe/Dublin), resolved DST-exactly by wallMsInTz.
+// An unreadable date or time is NOT started: never close or refuse on a guess.
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * @param {{block_date:string, start_time:string, start_time_override?:string|null}} shift
+ * @param {string|null} [tz]
+ * @returns {number|null} UTC ms, or null if unreadable
+ */
+export function swapShiftStartMs(shift, tz) {
+  if (!shift) return null
+  return wallMsInTz(shift.block_date, fmtTime(shift.start_time_override || shift.start_time), resolveTz(tz))
+}
+
+export function swapShiftHasStarted(shift, nowMs, tz) {
+  const startMs = swapShiftStartMs(shift, tz)
+  return startMs != null && Number.isFinite(nowMs) && nowMs >= startMs
+}
+
+// The sweep row's requester shift, in the predicate's shape.
+function sweepShift(swap) {
+  const a = swap?.requester_shift
+  const b = a?.shift_blocks
+  if (!b) return null
+  return { block_date: b.block_date, start_time: b.start_time, start_time_override: a.start_time_override ?? null }
 }
 
 // What is due for this swap, ignoring the time of day.
@@ -208,11 +260,10 @@ function dueAction(swap, nowMs, tz) {
   // survives. An open swap about a shift that no longer exists can never be
   // finalised, so it closes. Judged on the COLUMN, never on a missing embed.
   if (swap.requester_shift_id == null) return { action: 'expire', reason: 'shift_removed' }
-  const block = swap.requester_shift?.shift_blocks
-  if (!block) return { action: 'none' }
-  const startMs = swapBlockStartMs(block, tz)
+  const shift = sweepShift(swap)
+  const startMs = swapShiftStartMs(shift, tz)
   if (startMs == null) return { action: 'none' }
-  if (nowMs >= startMs) return { action: 'expire', reason: 'started' }
+  if (swapShiftHasStarted(shift, nowMs, tz)) return { action: 'expire', reason: 'started' }
 
   const createdMs = Date.parse(swap.created_at)
   for (const stage of COVER_NUDGE_STAGES) {
@@ -229,25 +280,47 @@ function dueAction(swap, nowMs, tz) {
 /**
  * What the sweep does with one open swap, right now. Pure.
  *
- * QUIET HOURS are decided HERE, not by the caller: anything that is due while
- * the studio's wall clock is outside 07:00-22:00 comes back as
- * { action: 'none', reason: 'quiet_hours' }. Nothing is sent and nothing is
- * written; because stages are ranges and expiry is "now >= start", the first
- * tick inside the band picks it up (a T-12h nudge due at 02:00 goes at 07:00,
- * a 06:00 shift's swap closes at 07:00). That includes a removed shift, which
- * sends nothing anyway: outside the band the arm does nothing for the studio.
+ * QUIET HOURS are decided HERE, not by the caller, and they gate MESSAGES,
+ * never STATE:
+ *   - a NUDGE due while the studio's wall clock is outside 07:00-22:00 comes
+ *     back as { action: 'none', reason: 'quiet_hours' }; stages are ranges, so
+ *     the first tick inside the band sends it (due at 02:00, sent at 07:00);
+ *   - an EXPIRY is ALWAYS returned, at any hour, with `notify` saying whether
+ *     its notice may go now. Nothing else refuses a claim or an approval on a
+ *     shift that is already being worked, so the swap must close on the next
+ *     tick; when notify is false the caller closes it silently and the
+ *     deferred-notice pass (deferredExpiryNoticeDue) tells people at 07:00.
  *
  * @param {object} swap  shift_swap_requests row with
  *   requester_shift: { id, shift_blocks: { id, block_date, start_time, end_time } } | null
  * @param {number} nowMs
  * @param {{ tz?: string|null }} [opts]  the studio's locations.timezone
- * @returns {{action:'none', reason?:'quiet_hours'} | {action:'nudge', stage:'t48'|'t12'} | {action:'expire', reason:'started'|'shift_removed'}}
+ * @returns {{action:'none', reason?:'quiet_hours'} | {action:'nudge', stage:'t48'|'t12'} | {action:'expire', reason:'started'|'shift_removed', notify:boolean}}
  */
 export function coverSweepAction(swap, nowMs, { tz } = {}) {
   const due = dueAction(swap, nowMs, tz)
   if (due.action === 'none') return due
-  if (!inStaffPushHours(nowMs, tz)) return { action: 'none', reason: 'quiet_hours' }
-  return due
+  const inBand = inStaffPushHours(nowMs, tz)
+  if (due.action === 'expire') return { ...due, notify: inBand }
+  return inBand ? due : { action: 'none', reason: 'quiet_hours' }
+}
+
+/**
+ * Does the sweep still owe this ALREADY-CLOSED swap its expiry notice, and may
+ * it go now? Pure. True only for a row the sweep itself closed for a started
+ * shift (status cancelled, no reviewer, review_note EXACTLY one of
+ * SWAP_EXPIRY_NOTICE_NOTES), closed within the last 24h (updated_at is
+ * trigger-maintained, mig 010 set_swap_requests_updated_at), while the studio
+ * is inside 07:00-22:00. Whether it was ALREADY sent is not decided here: the
+ * caller sends through the swap_expired* ledger keys, which are at-most-once.
+ */
+export function deferredExpiryNoticeDue(swap, nowMs, { tz } = {}) {
+  if (!swap || swap.status !== 'cancelled' || swap.reviewed_by != null) return false
+  if (!SWAP_EXPIRY_NOTICE_NOTES.includes(swap.review_note)) return false
+  const closedMs = Date.parse(swap.updated_at)
+  if (!Number.isFinite(closedMs) || !Number.isFinite(nowMs)) return false
+  if (nowMs - closedMs > EXPIRY_NOTICE_MAX_AGE_MS) return false
+  return inStaffPushHours(nowMs, tz)
 }
 
 const requesterName = (swap) => swap?.requester?.full_name || 'A coach'
@@ -296,8 +369,13 @@ export function coverNudgePayload(swap, stage) {
 export function swapExpiryNotices(swap, reason) {
   if (reason !== 'started' || !swap?.id) return []
   const block = swap.requester_shift?.shift_blocks
+  // No date to describe (a deferred notice whose assignment was deleted since):
+  // say nothing rather than "your shift on an upcoming shift".
+  if (!block?.block_date) return []
   const when = shiftWhenLabel(block)
-  const claimed = swap.status === 'awaiting_approval'
+  // Built either from the OPEN row (sent at once) or from the row after the
+  // sweep cancelled it (deferred): there the note carries "had been claimed".
+  const claimed = swap.status === 'awaiting_approval' || swap.review_note === SWAP_EXPIRY_NOTES.started_claimed
   const common = {
     title: 'Swap request expired',
     category: 'swap',

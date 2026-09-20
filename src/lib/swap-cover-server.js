@@ -15,7 +15,8 @@ import { logWarn, logError } from './log'
 import { isValidTz } from './tz-time'
 import {
   openPoolRecipients, shiftWhenLabel,
-  coverSweepAction, coverNudgePayload, swapExpiryNotices, SWAP_EXPIRY_NOTES, OPEN_SWAP_STATUSES,
+  coverSweepAction, coverNudgePayload, swapExpiryNotices, swapExpiryNote, deferredExpiryNoticeDue,
+  SWAP_EXPIRY_NOTICE_NOTES, EXPIRY_NOTICE_MAX_AGE_MS, OPEN_SWAP_STATUSES,
 } from './swap-cover'
 
 // profile_locations for one studio. The same table and embed
@@ -154,11 +155,14 @@ export async function notifyOpenPool(db, { swapId, locationId, block, requester 
 // ─────────────────────────────────────────────────────────────────────────
 
 // requester:profiles!requester_id is the same disambiguated embed GET
-// /api/schedule/swaps uses (two FKs to profiles on this table).
-const OPEN_SWAP_SELECT = `
-  id, status, location_id, requester_id, target_id, requester_shift_id, created_at,
+// /api/schedule/swaps uses (two FKs to profiles on this table). The requester
+// shift carries its own start_time_override: "has it started" is judged on the
+// EFFECTIVE start (swapShiftHasStarted), the same rule PUT /swaps/:id applies.
+const SWEEP_SWAP_SELECT = `
+  id, status, location_id, requester_id, target_id, requester_shift_id, created_at, updated_at,
+  reviewed_by, review_note,
   requester:profiles!requester_id(full_name),
-  requester_shift:shift_assignments!requester_shift_id(id, shift_blocks!block_id(id, block_date, start_time, end_time))
+  requester_shift:shift_assignments!requester_shift_id(id, start_time_override, shift_blocks!block_id(id, block_date, start_time, end_time))
 `
 // Open swaps are single digits in production. The cap is a guard, not a page
 // size: if it is ever hit, the oldest 200 are processed and the rest wait a tick.
@@ -167,11 +171,11 @@ const SWEEP_LIMIT = 200
 const delivered = (r) => ((r?.sent || 0) + (r?.emailed || 0)) > 0
 
 /**
- * locations.timezone for the studios that have an open swap: the zone the
- * shift start AND the quiet-hours band are judged in. Never throws. A studio
- * whose timezone is empty or not an IANA name is Europe/Dublin (the pure half
- * resolves it) and is warned about ONCE per sweep, however many swaps it has.
- * An unreadable table is Europe/Dublin for everyone, logged.
+ * locations.timezone for the studios the sweep is about to act on: the zone
+ * the shift start AND the quiet-hours band are judged in. Never throws. A
+ * studio whose timezone is empty or not an IANA name is Europe/Dublin (the
+ * pure half resolves it) and is warned about ONCE per sweep, however many
+ * swaps it has. An unreadable table is Europe/Dublin for everyone, logged.
  */
 async function studioTimezones(db, locationIds) {
   const zones = new Map()
@@ -192,36 +196,67 @@ async function studioTimezones(db, locationIds) {
 }
 
 /**
- * One pass over every open swap: nudge the studio's approvers at T-48h and
- * T-12h, and close a swap whose shift has started (or no longer exists).
- * Never throws. Returns counts for the cron's response.
+ * One pass, every 15 minutes. Never throws. Returns counts for the cron.
  *
- * QUIET HOURS: coverSweepAction answers none/quiet_hours for anything due
- * while the studio's wall clock is outside 07:00-22:00. The sweep then does
- * NOTHING for that swap (no push, no write; `quiet` counts it) and the first
- * tick inside the band picks it up.
+ *   PASS 1, open swaps: nudge the studio's approvers at T-48h and T-12h; CLOSE
+ *   a swap whose shift has started (or no longer exists).
+ *   PASS 2, swaps the sweep closed in the last 24h: send the expiry notice that
+ *   is still owed.
+ *
+ * QUIET HOURS gate MESSAGES, never STATE. A nudge due outside 07:00-22:00
+ * studio time waits (`quiet`). A started shift's swap is closed on THIS tick
+ * at any hour, because nothing else refuses a claim or approval on a shift
+ * already being worked; its notice goes with it only in band, and otherwise is
+ * left for pass 2 of the first in-band tick, with its ledger key UNCLAIMED.
+ *
+ * EXACTLY ONCE: both paths send through the same swap_expired* keys of
+ * notifyUsersOnce (claim-before-send on push_event_sends), so pass 2 can offer
+ * a notice every tick for 24h and only the first is delivered. That also makes
+ * pass 2 the recovery for a crash between the UPDATE and the send, and for a
+ * send that failed outright (the ledger releases the claim, the next tick
+ * retries).
  *
  * @param {object} db  service-role supabase client
  * @param {{ nowMs?: number }} [opts]
  */
 export async function runSwapCoverSweep(db, { nowMs = Date.now() } = {}) {
-  const stats = { open: 0, nudged: 0, expired: 0, skipped: 0, quiet: 0, errors: 0 }
+  const stats = { open: 0, nudged: 0, expired: 0, skipped: 0, quiet: 0, announced: 0, errors: 0 }
 
-  const { data: swaps, error } = await db.from('shift_swap_requests')
-    .select(OPEN_SWAP_SELECT)
-    .in('status', [...OPEN_SWAP_STATUSES])
-    .order('created_at', { ascending: true })
-    .limit(SWEEP_LIMIT)
-  if (error) {
-    logError('swap-cover', 'sweep could not read open swaps', { err: error.message })
+  const [openRes, closedRes] = await Promise.all([
+    db.from('shift_swap_requests')
+      .select(SWEEP_SWAP_SELECT)
+      .in('status', [...OPEN_SWAP_STATUSES])
+      .order('created_at', { ascending: true })
+      .limit(SWEEP_LIMIT),
+    // Bounded: only rows THIS sweep closed for a started shift (no reviewer,
+    // one of the exact system notes), and only for 24h. updated_at is
+    // trigger-maintained (mig 010, set_swap_requests_updated_at), so it is the
+    // moment of the close. deferredExpiryNoticeDue re-checks every condition.
+    db.from('shift_swap_requests')
+      .select(SWEEP_SWAP_SELECT)
+      .eq('status', 'cancelled')
+      .is('reviewed_by', null)
+      .in('review_note', [...SWAP_EXPIRY_NOTICE_NOTES])
+      .gte('updated_at', new Date(nowMs - EXPIRY_NOTICE_MAX_AGE_MS).toISOString())
+      .order('updated_at', { ascending: true })
+      .limit(SWEEP_LIMIT),
+  ])
+  if (openRes.error) {
+    logError('swap-cover', 'sweep could not read open swaps', { err: openRes.error.message })
     stats.errors++
-    return stats
   }
-  stats.open = (swaps || []).length
-  if (!stats.open) return stats
+  if (closedRes.error) {
+    logError('swap-cover', 'sweep could not read recently closed swaps; an owed expiry notice waits a tick', { err: closedRes.error.message })
+    stats.errors++
+  }
+  const swaps = openRes.error ? [] : (openRes.data || [])
+  const closed = closedRes.error ? [] : (closedRes.data || [])
+  stats.open = swaps.length
+  if (!swaps.length && !closed.length) return stats
 
-  const zones = await studioTimezones(db, [...new Set(swaps.map((s) => s.location_id).filter(Boolean))])
+  const zones = await studioTimezones(db, [...new Set([...swaps, ...closed].map((s) => s.location_id).filter(Boolean))])
 
+  // PASS 1 — open swaps.
   for (const swap of swaps) {
     const decision = coverSweepAction(swap, nowMs, { tz: zones.get(swap.location_id) })
     if (decision.action === 'none') {
@@ -238,33 +273,57 @@ export async function runSwapCoverSweep(db, { nowMs = Date.now() } = {}) {
         else stats.skipped++
         continue
       }
-      if (await expireSwap(db, swap, decision.reason)) stats.expired++
+      if (await expireSwap(db, swap, decision.reason, decision.notify)) stats.expired++
       else stats.skipped++
     } catch (e) {
       logError('swap-cover', 'sweep failed on a swap; the next tick retries it', { swapId: swap.id, action: decision.action, err: e?.message })
       stats.errors++
     }
   }
+
+  // PASS 2 — expiry notices still owed (closed in quiet hours, or lost to a
+  // crash or a failed send). The list was read BEFORE pass 1, so a swap closed
+  // and told on this tick is not offered twice in it.
+  for (const swap of closed) {
+    if (!deferredExpiryNoticeDue(swap, nowMs, { tz: zones.get(swap.location_id) })) continue
+    try {
+      if (await sendExpiryNotices(db, swap, 'started')) stats.announced++
+    } catch (e) {
+      logError('swap-cover', 'deferred expiry notice failed; the next tick retries it', { swapId: swap.id, err: e?.message })
+      stats.errors++
+    }
+  }
   return stats
 }
 
-// Close one swap. The UPDATE is guarded on the status we READ: if a manager's
-// approve RPC (migs 612/615 lock the row and refuse swap_not_open) or a coach's
-// claim landed in between, zero rows match, nothing is sent, and the next tick
-// reads the new truth. A zero-row UPDATE is not an error in PostgREST, so the
-// returned rows are the verdict. The notification comes AFTER the write and is
-// ledger-keyed, so a crash between the two costs one message, never a loop.
-async function expireSwap(db, swap, reason) {
+// Send a closed swap's notices through their at-most-once keys. True if
+// anything was actually delivered on this call.
+async function sendExpiryNotices(db, swap, reason) {
+  let any = false
+  for (const notice of swapExpiryNotices(swap, reason)) {
+    if (delivered(await notifyUsersOnce(db, notice.key, notice.to, notice.payload))) any = true
+  }
+  return any
+}
+
+// Close one swap, at ANY hour. The UPDATE is guarded on the status we READ: if
+// a manager's approve RPC (migs 612/615 lock the row and refuse swap_not_open)
+// or a coach's claim landed in between, zero rows match, nothing is sent, and
+// the next tick reads the new truth. A zero-row UPDATE is not an error in
+// PostgREST, so the returned rows are the verdict. reviewed_by is left NULL
+// and the note is one of the exact system notes: that pair is how pass 2 finds
+// the row again. The notice comes AFTER the write, and only when `notify` (the
+// studio is inside 07:00-22:00); otherwise notifyUsersOnce is NOT called, so
+// its key stays unclaimed for pass 2.
+async function expireSwap(db, swap, reason, notify) {
   const { data, error } = await db.from('shift_swap_requests')
-    .update({ status: 'cancelled', review_note: SWAP_EXPIRY_NOTES[reason] })
+    .update({ status: 'cancelled', review_note: swapExpiryNote(swap, reason) })
     .eq('id', swap.id)
     .eq('status', swap.status)
     .select('id')
   if (error) throw new Error(error.message)
   if (!data || data.length === 0) return false
 
-  for (const notice of swapExpiryNotices(swap, reason)) {
-    await notifyUsersOnce(db, notice.key, notice.to, notice.payload)
-  }
+  if (notify) await sendExpiryNotices(db, swap, reason)
   return true
 }
