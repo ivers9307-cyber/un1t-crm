@@ -160,6 +160,36 @@ describe('roster runway push — recipients', () => {
   })
 })
 
+// STAFFDELETE.1 (#1731) — a permanently deleted staff member is a TOMBSTONE:
+// profiles.deleted_at is set, active is false, and their profile_locations
+// rows are gone. Pinned through the real resolver both ways round: the state
+// the delete really leaves (no link at all), and a stale link that somehow
+// survived it (active=false is what keeps them out).
+describe('roster runway push — tombstones', () => {
+  it('a deleted owner never receives it, with or without a surviving link', async () => {
+    const deletedAt = '2026-09-18T10:00:00Z'
+    state.profiles.push(
+      { id: 'owner-gone', full_name: 'Deleted staff member', email: 'owner-gone@example.test', deleted_at: deletedAt },
+      { id: 'owner-stale', full_name: 'Deleted staff member', email: 'owner-stale@example.test', deleted_at: deletedAt },
+    )
+    // owner-gone: no profile_locations row, as the delete leaves it.
+    state.links.push({
+      profile_id: 'owner-stale', location_id: NORTH.id, role: 'owner',
+      profiles: { id: 'owner-stale', role: 'owner', active: false, deleted_at: deletedAt },
+    })
+
+    await runRosterRunwayAlerts(fakeDb, { nowMs: DAY_9 })
+
+    const pushed = sendPush.mock.calls.flatMap(([ids]) => ids)
+    expect([...pushed].sort()).toEqual([...PUBLISHERS].sort())
+    for (const id of ['owner-gone', 'owner-stale']) {
+      expect(pushed).not.toContain(id)
+      expect([...state.claims].some((c) => c.endsWith(`|${id}`))).toBe(false)
+      expect(sendEmail.mock.calls.map(([m]) => m.to)).not.toContain(`${id}@example.test`)
+    }
+  })
+})
+
 describe('roster runway push — the email fallback subject', () => {
   it('the trap is real: the schedule category emails, under a subject that says the opposite', () => {
     const entry = getNotificationCategory('schedule')
