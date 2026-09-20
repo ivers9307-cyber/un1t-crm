@@ -78,7 +78,7 @@ Two implementers at a time is the ceiling on the 8GB machine. Good pairs (no sha
 | When | Step |
 |---|---|
 | Before merging 04 | Apply `619_push_reminder_sends_shift.sql` via the Supabase MCP to project `iyvtbjjxdggiadzwwvdj`, then `get_advisors` (security). Safe alone. |
-| Merging 04 | **Merge between 08:00 and 20:00 Dublin.** The first cron tick sends catch-up reminders for shifts whose fire time has passed. |
+| Merging 04 | No merge-time restriction: the arm never sends outside 07:00 to 22:00 Dublin (see Amendments). Apply mig 619 first. |
 | Before merging 09 | Run the PRE-APPLY queries in the header of `622_staff_tombstone.sql`, apply it, `get_advisors`. **Code alone is NOT safe:** reads wrapped in `excludeTombstones()` 400 on the missing column. |
 | After deploying 02 | Run Task 5's dry-run SELECT, read the rows, then the single data-modifying CTE. A bare `begin;` without `commit;` in the MCP rolls back. |
 | Merging 04, 05, 07, 08 | Each merge **publishes an OTA at 100%**. Merge them one at a time; open the EAS Update run and confirm SUCCESS and the runtime lane before merging the next. A partial rollout blocks the next publish. |
@@ -107,6 +107,7 @@ Two implementers at a time is the ceiling on the 8GB machine. Good pairs (no sha
 
 1. **Nothing fires before 07:00 Dublin.** The evening-before branch (20:00 the evening before) applies to any start before 09:00, not 08:00. A 09:00 start is reminded at 07:00.
 2. **One reminder per run, not per shift.** A coach's live published shifts on a Dublin date, across all studios, are grouped into runs (a shift joins the run when it starts no more than 120 minutes after the run's latest end). Only the first shift of a run carries a reminder, and the body describes the whole run. A split day gives two reminders. The ledger claim stays keyed on the first shift's (assignment, coach).
+4. **Quiet hours are absolute (added after the safety review).** A shift reminder may only be SENT while the Dublin wall-clock is within 07:00 to 22:00, whatever the fire time says; outside it the arm returns before any read. A run that could not be reminded before 22:00 (published or assigned late, or delivery failing) gets no reminder for a start before 07:30; the assign/publish push already told that coach. This replaces the operator instruction to merge between 08:00 and 20:00, which is no longer needed.
 3. **Half-day leave does not suppress a reminder.** Approved leave skips only when it covers the whole day (a single-day request with `total_days < 1` does not skip).
 
 **20 Sep, PR 09 STAFFDELETE.1, after independent review (in addition to the two items above):** an assignment with an arrival (`arrived_at` or a matched attendance event) is history and stays; Copy Last Week/Month drop anyone without an active membership at the target studio (`skipped_not_at_studio`); triggers refuse un-tombstoning and refuse re-adding a tombstone to `profile_locations` / `profile_organizations`; the auth step is retryable and its disposition is recorded; the person's address is removed from `scheduled_reports.email_recipients`; audit rows lose only PII keys; and mig 622 revokes the vestigial INSERT/UPDATE/DELETE/TRUNCATE grants `anon` and `authenticated` hold on `public.profiles` (verified on prod 20 Sep; no client code writes that table).
