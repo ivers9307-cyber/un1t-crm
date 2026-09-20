@@ -81,7 +81,8 @@ describe('GET /api/schedule/shifts — open_swap_status', () => {
     const res = await GET(req())
     const body = await res.json()
 
-    expect(fetchOwnOpenSwaps).toHaveBeenCalledWith(expect.anything(), 'c')
+    // Bounded: only the caller's own assignment ids in THIS payload are asked about.
+    expect(fetchOwnOpenSwaps).toHaveBeenLastCalledWith(expect.anything(), 'c', ['a1'])
     expect(body.data).toEqual([
       { id: 'a1', profile_id: 'c', open_swap_status: 'pending' },
       { id: 'a2', profile_id: 'other', open_swap_status: null },
@@ -101,10 +102,20 @@ describe('GET /api/schedule/shifts — open_swap_status', () => {
 
     const body = await (await GET(req())).json()
 
-    expect(fetchOwnOpenSwaps).toHaveBeenCalledWith(expect.anything(), 'm')
+    expect(fetchOwnOpenSwaps).toHaveBeenLastCalledWith(expect.anything(), 'm', ['a2'])
     expect(body.data).toEqual([
       { id: 'a1', profile_id: 'coach-a', open_swap_status: null },
       { id: 'a2', profile_id: 'm', open_swap_status: 'awaiting_approval' },
     ])
+  })
+
+  it('a caller with no shift of their own in the window is asked about nothing', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'm', role: 'manager', profileRole: 'manager', rolesByLocation: { 'loc-1': 'manager' }, locations: [{ id: 'loc-1' }] })
+    fetchApiShiftRows.mockResolvedValueOnce({ rows: [{ id: 'a1', profile_id: 'coach-a' }], error: null })
+
+    const body = await (await GET(req())).json()
+
+    expect(fetchOwnOpenSwaps).toHaveBeenLastCalledWith(expect.anything(), 'm', [])
+    expect(body.data).toEqual([{ id: 'a1', profile_id: 'coach-a', open_swap_status: null }])
   })
 })

@@ -32,19 +32,49 @@ export function annotateOwnOpenSwaps(rows, swaps, viewerId) {
 }
 
 /**
- * The caller's own open swaps. Scoped by requester_id (a per-user row: the
- * owner check IS the access rule). Never throws and never fails the roster: a
- * failed read is an empty list, which only costs the chip.
+ * The caller's OWN assignment ids in this payload: what the swap read is
+ * bounded by. De-duplicated; never a colleague's row.
  */
-export async function fetchOwnOpenSwaps(db, requesterId) {
-  if (!requesterId) return []
-  const { data, error } = await db.from('shift_swap_requests')
-    .select('requester_shift_id, status')
-    .eq('requester_id', requesterId)
-    .in('status', OPEN_SWAP_STATUSES)
-  if (error) {
-    logWarn('schedule', 'own open swaps read failed; shifts returned without open_swap_status', { err: error.message })
+export function ownShiftIds(rows, viewerId) {
+  if (!viewerId) return []
+  const ids = new Set()
+  for (const r of rows || []) {
+    if (r?.id && r.profile_id === viewerId) ids.add(r.id)
+  }
+  return [...ids]
+}
+
+// Ids per query. One open swap per shift (mig 599's index), so a chunk returns
+// at most this many rows: far under the 1,000-row select cap, and ~4KB of
+// `in.(…)` on the URL.
+export const OWN_SWAP_ID_CHUNK = 100
+
+/**
+ * The caller's own open swaps ON THE GIVEN SHIFTS. This runs on the phone's
+ * most-called feed, so it is bounded twice: by requester_id (a per-user row:
+ * the owner check IS the access rule) and by the caller's own assignment ids in
+ * the payload being returned, so a swap outside the window is never read and a
+ * caller with no shift of their own costs no query at all. Never throws and
+ * never fails the roster: a failed read is an empty list, which only costs the
+ * chip.
+ */
+export async function fetchOwnOpenSwaps(db, requesterId, shiftIds) {
+  const ids = Array.isArray(shiftIds) ? shiftIds.filter(Boolean) : []
+  if (!requesterId || ids.length === 0) return []
+  try {
+    const out = []
+    for (let i = 0; i < ids.length; i += OWN_SWAP_ID_CHUNK) {
+      const { data, error } = await db.from('shift_swap_requests')
+        .select('requester_shift_id, status')
+        .eq('requester_id', requesterId)
+        .in('requester_shift_id', ids.slice(i, i + OWN_SWAP_ID_CHUNK))
+        .in('status', OPEN_SWAP_STATUSES)
+      if (error) throw error
+      out.push(...(data || []))
+    }
+    return out
+  } catch (err) {
+    logWarn('schedule', 'own open swaps read failed; shifts returned without open_swap_status', { err: err?.message || String(err) })
     return []
   }
-  return data || []
 }

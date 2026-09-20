@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('./log', () => ({ logWarn: vi.fn() }))
 const { logWarn } = await import('./log')
-const { annotateOwnOpenSwaps, fetchOwnOpenSwaps } = await import('./shift-open-swaps')
+const { annotateOwnOpenSwaps, fetchOwnOpenSwaps, ownShiftIds, OWN_SWAP_ID_CHUNK } = await import('./shift-open-swaps')
 
 const rows = [
   { id: 'a1', profile_id: 'me' },
@@ -54,37 +54,104 @@ describe('annotateOwnOpenSwaps', () => {
   })
 })
 
+// Records EVERY query (the read is chunked), each with its own filters.
 function mockDb(result) {
-  const q = { table: null, select: null, filters: [] }
-  const b = {
-    select: (c) => { q.select = c; return b },
-    eq: (c, v) => { q.filters.push(['eq', c, v]); return b },
-    in: (c, v) => { q.filters.push(['in', c, v]); return b },
-    then: (res, rej) => Promise.resolve(result).then(res, rej),
+  const queries = []
+  return {
+    queries,
+    get q() { return queries[0] ?? { table: null, select: null, filters: [] } },
+    from(t) {
+      const q = { table: t, select: null, filters: [] }
+      queries.push(q)
+      const b = {
+        select: (c) => { q.select = c; return b },
+        eq: (c, v) => { q.filters.push(['eq', c, v]); return b },
+        in: (c, v) => { q.filters.push(['in', c, v]); return b },
+        then: (res, rej) => Promise.resolve(typeof result === 'function' ? result(q) : result).then(res, rej),
+      }
+      return b
+    },
   }
-  return { q, from: (t) => { q.table = t; return b } }
 }
+
+describe('ownShiftIds', () => {
+  it("is the caller's own assignment ids in the payload, de-duplicated, nobody else's", () => {
+    expect(ownShiftIds([
+      { id: 'a1', profile_id: 'me' }, { id: 'a3', profile_id: 'colleague' },
+      { id: 'a2', profile_id: 'me' }, { id: 'a1', profile_id: 'me' }, { id: null, profile_id: 'me' },
+    ], 'me')).toEqual(['a1', 'a2'])
+  })
+  it.each([[null, 'me'], [[], 'me'], [rows, null], [rows, 'stranger']])('nothing to ask about: %j / %j', (r, viewer) => {
+    expect(ownShiftIds(r, viewer)).toEqual([])
+  })
+})
 
 describe('fetchOwnOpenSwaps', () => {
   beforeEach(() => logWarn.mockClear())
 
-  it('reads only the caller\'s own OPEN swaps', async () => {
+  it("reads only the caller's own OPEN swaps ON THE SHIFTS IN THIS PAYLOAD", async () => {
     const db = mockDb({ data: [{ requester_shift_id: 'a1', status: 'pending' }], error: null })
-    expect(await fetchOwnOpenSwaps(db, 'me')).toEqual([{ requester_shift_id: 'a1', status: 'pending' }])
+    expect(await fetchOwnOpenSwaps(db, 'me', ['a1', 'a2'])).toEqual([{ requester_shift_id: 'a1', status: 'pending' }])
+    expect(db.queries).toHaveLength(1)
     expect(db.q.table).toBe('shift_swap_requests')
     expect(db.q.select).toBe('requester_shift_id, status')
-    expect(db.q.filters).toEqual([['eq', 'requester_id', 'me'], ['in', 'status', ['pending', 'awaiting_approval']]])
+    expect(db.q.filters).toEqual([
+      ['eq', 'requester_id', 'me'],
+      ['in', 'requester_shift_id', ['a1', 'a2']],
+      ['in', 'status', ['pending', 'awaiting_approval']],
+    ])
+  })
+
+  // The phone's most-called feed: a caller with no shift of their own in the
+  // window (a manager's Team view, an empty week) costs no query at all.
+  it.each([[[]], [null], [undefined]])('no own rows in the payload (%j): no query', async (ids) => {
+    const db = mockDb({ data: [{ requester_shift_id: 'a9', status: 'pending' }], error: null })
+    expect(await fetchOwnOpenSwaps(db, 'me', ids)).toEqual([])
+    expect(db.queries).toHaveLength(0)
+  })
+
+  it('a swap on a shift OUTSIDE the payload is never asked for', async () => {
+    // A db that honours the filter, holding swaps on a1 (in the window) and
+    // z9 (next month): only a1 can come back, because only a1 was asked for.
+    const held = [{ requester_shift_id: 'a1', status: 'pending' }, { requester_shift_id: 'z9', status: 'pending' }]
+    const db = mockDb((q) => {
+      const ids = q.filters.find(([op, col]) => op === 'in' && col === 'requester_shift_id')?.[2] || null
+      return { data: ids ? held.filter((h) => ids.includes(h.requester_shift_id)) : held, error: null }
+    })
+    expect(await fetchOwnOpenSwaps(db, 'me', ['a1'])).toEqual([{ requester_shift_id: 'a1', status: 'pending' }])
+  })
+
+  it('bounds every query: a long range is read in chunks, each under the row cap and a sane URL', async () => {
+    const ids = Array.from({ length: OWN_SWAP_ID_CHUNK * 2 + 5 }, (_, i) => `a${i}`)
+    const db = mockDb((q) => {
+      const asked = q.filters.find(([op, col]) => op === 'in' && col === 'requester_shift_id')[2]
+      return { data: [{ requester_shift_id: asked[0], status: 'pending' }], error: null }
+    })
+    const out = await fetchOwnOpenSwaps(db, 'me', ids)
+    expect(db.queries).toHaveLength(3)
+    for (const q of db.queries) {
+      const asked = q.filters.find(([op, col]) => op === 'in' && col === 'requester_shift_id')[2]
+      expect(asked.length).toBeLessThanOrEqual(OWN_SWAP_ID_CHUNK)
+      expect(q.filters[0]).toEqual(['eq', 'requester_id', 'me'])
+    }
+    expect(out.map((s) => s.requester_shift_id)).toEqual(['a0', `a${OWN_SWAP_ID_CHUNK}`, `a${OWN_SWAP_ID_CHUNK * 2}`])
   })
 
   it('a failed read is an empty list and a warning: the roster must still load', async () => {
     const db = mockDb({ data: null, error: { message: 'boom' } })
-    expect(await fetchOwnOpenSwaps(db, 'me')).toEqual([])
+    expect(await fetchOwnOpenSwaps(db, 'me', ['a1'])).toEqual([])
     expect(logWarn).toHaveBeenCalledWith('schedule', expect.any(String), expect.objectContaining({ err: 'boom' }))
+  })
+
+  it('a read that THROWS is fail-soft too', async () => {
+    const db = { from() { throw new Error('socket hang up') } }
+    expect(await fetchOwnOpenSwaps(db, 'me', ['a1'])).toEqual([])
+    expect(logWarn).toHaveBeenCalledWith('schedule', expect.any(String), expect.objectContaining({ err: 'socket hang up' }))
   })
 
   it('no caller id: no query', async () => {
     const db = mockDb({ data: [], error: null })
-    expect(await fetchOwnOpenSwaps(db, null)).toEqual([])
-    expect(db.q.table).toBeNull()
+    expect(await fetchOwnOpenSwaps(db, null, ['a1'])).toEqual([])
+    expect(db.queries).toHaveLength(0)
   })
 })
