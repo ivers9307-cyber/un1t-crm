@@ -9,7 +9,7 @@ import { dublinTodayStr } from '@/lib/dublin-time'
 import {
   getLocationMemberIds, getProfileLocationIds, leaveScopeOrFilter, canDecideTimeOff,
   resolveTimeOffApproverIds, getEmploymentType, getHolidayAllowance, ensureHolidayAllowanceRow,
-  countLeaveClashes, findLeaveClashes, chargeableLeaveSegments, findOwnPublishedShifts,
+  countLeaveClashes, findLeaveClashes, chargeableLeaveSegments, findOwnPublishedShifts, isRealIsoDate,
 } from '@/lib/time-off-leave'
 import {
   isTimeOffTypeAllowedFor, RESTRICTED_TYPE_ERROR, isExpiredPendingRequest, effectiveTimeOffStatus,
@@ -441,18 +441,15 @@ async function previewOwnLeave(user, searchParams) {
   }
   const start = searchParams.get('start_date') || ''
   const end = searchParams.get('end_date') || start
-  if (!ISO_DATE.safeParse(start).success || !ISO_DATE.safeParse(end).success) {
-    return NextResponse.json({ success: false, error: 'start_date and end_date must be YYYY-MM-DD' }, { status: 400 })
+  // Real calendar dates, not only the pattern: 2026-02-30 fits YYYY-MM-DD and
+  // V8 rolls it over to 2 March, which would answer 200 with a nonsense count.
+  if (!isRealIsoDate(start) || !isRealIsoDate(end)) {
+    return NextResponse.json({ success: false, error: 'start_date and end_date must be real dates, YYYY-MM-DD' }, { status: 400 })
   }
   if (end < start) {
     return NextResponse.json({ success: false, error: 'End date must be on or after start date' }, { status: 400 })
   }
   const spanDays = Math.round((Date.parse(`${end}T00:00:00Z`) - Date.parse(`${start}T00:00:00Z`)) / 86400000) + 1
-  // A string that fits the pattern but is no date (2026-13-45) would throw
-  // inside the day loop; it is the caller's mistake, so a 400 not a 500.
-  if (!Number.isFinite(spanDays)) {
-    return NextResponse.json({ success: false, error: 'start_date and end_date must be real dates' }, { status: 400 })
-  }
   if (spanDays > 366) {
     return NextResponse.json({ success: false, error: 'Time-off requests are limited to one year' }, { status: 400 })
   }

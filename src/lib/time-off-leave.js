@@ -296,6 +296,23 @@ export async function getNonWorkingDates(db, locationId, startIso, endIso) {
 }
 
 /**
+ * LEAVEPHONE.1 — pure. Is this a REAL calendar date spelt YYYY-MM-DD? The
+ * pattern alone lets 2026-02-30 through, and V8 rolls that over to 2 March, so
+ * a day loop counts a range nobody asked for. Round-trips through Date.UTC and
+ * compares with the input: no local time, so no timezone can move the day.
+ * TEMPORARY HOME: a sibling PR adds a shared `isRealCalendarDate` to
+ * src/lib/schemas.js; once that is on main, use it here and delete this.
+ */
+export function isRealIsoDate(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const [y, m, d] = value.split('-').map(Number)
+  const t = new Date(Date.UTC(y, m - 1, d))
+  // setUTCFullYear: Date.UTC maps years 0-99 onto 1900-1999.
+  t.setUTCFullYear(y)
+  return !Number.isNaN(t.getTime()) && t.toISOString().slice(0, 10) === value
+}
+
+/**
  * LEAVEPHONE.1 — THE day count: what a request of this type and range is
  * charged, one segment per calendar year (each year has its own allowance).
  * The time-off POST charges with it and the leave form's preview displays it,

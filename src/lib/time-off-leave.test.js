@@ -8,6 +8,7 @@ import {
   leaveScopeOrFilter, canDecideTimeOff, timeOffApproverIdsFrom, entitlementDays,
   clashWindow, bucketClashCounts, getHolidayAllowance, ensureHolidayAllowanceRow,
   getNonWorkingDates, ownShiftPreviewRow, findOwnPublishedShifts, chargeableLeaveSegments,
+  isRealIsoDate,
 } from './time-off-leave.js'
 import { fakeDb, queriesOf } from './time-off.test-helpers.js'
 
@@ -330,5 +331,19 @@ describe('chargeableLeaveSegments — the one day count (LEAVEPHONE.1)', () => {
     expect(res).toEqual({ segments: [], total: 0, error: { message: 'boom' } })
     const loc = await chargeableLeaveSegments(holidayDb({ locError: { message: 'down' } }), { type: 'holiday', locationId: 'loc-1', startIso: '2026-06-01', endIso: '2026-06-07' })
     expect(loc).toEqual({ segments: [], total: 0, error: { message: 'down' } })
+  })
+})
+
+describe('isRealIsoDate (LEAVEPHONE.1)', () => {
+  it('accepts real calendar dates, leap days included', () => {
+    for (const d of ['2026-01-01', '2026-12-31', '2024-02-29', '2000-02-29', '2026-02-28']) expect(isRealIsoDate(d)).toBe(true)
+  })
+  it('refuses a date the calendar does not have — V8 would roll 30 Feb over to 2 Mar', () => {
+    for (const d of ['2026-02-30', '2026-02-29', '1900-02-29', '2026-04-31', '2026-13-01', '2026-00-10', '2026-06-00', '2026-13-45']) {
+      expect(isRealIsoDate(d)).toBe(false)
+    }
+  })
+  it('refuses anything that is not YYYY-MM-DD', () => {
+    for (const d of ['05/10/2026', '2026-6-1', '2026-06-01T00:00:00Z', '', null, undefined, 20260601]) expect(isRealIsoDate(d)).toBe(false)
   })
 })

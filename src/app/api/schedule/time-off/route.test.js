@@ -742,6 +742,10 @@ describe('GET /api/schedule/time-off?preview=1 — charged days + own published 
     expect((await GET(getReq('?preview=1&type=holiday&start_date=05/10/2026&end_date=2026-10-09'))).status).toBe(400)
     expect((await GET(getReq('?preview=1&type=holiday&start_date=2026-10-09&end_date=2026-10-05'))).status).toBe(400)
     expect((await GET(getReq('?preview=1&type=holiday&start_date=2026-13-45&end_date=2026-13-46'))).status).toBe(400)
+    // 30 Feb fits the pattern and V8 rolls it over to 2 Mar: a nonsense count, not a 500.
+    expect((await GET(getReq('?preview=1&type=holiday&start_date=2026-02-30&end_date=2026-03-06'))).status).toBe(400)
+    expect((await GET(getReq('?preview=1&type=holiday&start_date=2026-02-23&end_date=2026-02-30'))).status).toBe(400)
+    expect((await GET(getReq('?preview=1&type=sick&start_date=2026-04-31'))).status).toBe(400)
     expect((await GET(getReq('?preview=1&type=holiday&start_date=2026-01-01&end_date=2028-01-01'))).status).toBe(400)
   })
 
