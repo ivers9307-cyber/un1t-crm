@@ -1,25 +1,28 @@
-// Bottom-sheet picker of coaches assignable to a block. Pure-presentational:
+// Bottom-sheet picker of coaches: "Add coach" for a manager's block (the default), or "Ask a coach to cover" for a coach's targeted swap (title / emptyText props). Pure-presentational:
 // receives the already-fetched staff array; filters with the shared helper.
 import { View, Text, Pressable, Modal, ScrollView, ActivityIndicator } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { initials } from '../../lib/schedule-team'
 import { filterAssignableCoaches } from '../../lib/schedule-manage'
 
-export default function CoachPickerSheet({ visible, block, locationId, staff, loading, onPick, onClose }) {
+// onDismiss (optional, iOS only — Android never fires it): called once the
+// sheet has FINISHED animating out. A caller that opens another Modal after a
+// pick must wait for it; iOS refuses a present while this one is dismissing.
+export default function CoachPickerSheet({ visible, block, locationId, staff, loading, onPick, onClose, onDismiss, title = 'Add coach', emptyText = 'No available coaches to add.' }) {
   const coaches = block ? filterAssignableCoaches(staff || [], block, locationId) : []
   return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose} onDismiss={onDismiss}>
       <View className="flex-1 justify-end bg-black/50">
         <Pressable className="flex-1" onPress={onClose} />
         <View className="bg-un1t-bg border-t border-un1t-border rounded-t-3xl p-5" style={{ maxHeight: '70%' }}>
           <View className="flex-row items-center justify-between mb-3">
-            <Text className="text-lg font-bold text-un1t-text">Add coach{block?.shift_templates?.name ? ` · ${block.shift_templates.name}` : ''}</Text>
+            <Text className="text-lg font-bold text-un1t-text">{title}{block?.shift_templates?.name ? ` · ${block.shift_templates.name}` : ''}</Text>
             <Pressable onPress={onClose} hitSlop={10}><Ionicons name="close" size={22} color="#94A3B8" /></Pressable>
           </View>
           {loading && staff === null ? (
             <View className="py-8 items-center"><ActivityIndicator /></View>
           ) : coaches.length === 0 ? (
-            <Text className="text-sm text-un1t-subtle py-6 text-center">No available coaches to add.</Text>
+            <Text className="text-sm text-un1t-subtle py-6 text-center">{emptyText}</Text>
           ) : (
             <ScrollView>
               {coaches.map((c) => (

@@ -200,7 +200,7 @@ export async function fetchPersonalDashboardData(supabase, profileId, locationId
       // → this list was silently always empty).
       supabase
         .from('shift_swap_requests')
-        .select('id, status, reason, created_at, target_id, requester_shift_id, requester_shift:shift_assignments!requester_shift_id(shift_blocks!block_id(block_date, shift_templates(name)))')
+        .select('id, status, reason, created_at, target_id, requester_shift_id, requester_shift:shift_assignments!requester_shift_id(shift_blocks!block_id(block_date, start_time, end_time, shift_templates(name)))')
         .eq('requester_id', profileId)
         .in('status', ['pending', 'awaiting_approval']),
     ])

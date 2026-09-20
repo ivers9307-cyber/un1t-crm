@@ -10,6 +10,10 @@ import { useState, useEffect, useCallback } from 'react'
 import { useRouter, useFocusEffect } from 'expo-router'
 import { useAuth } from '../../lib/auth-context'
 import { fetchStudioDashboard, swapRowTitle } from '../../lib/dashboard-api'
+// COVERLOOP.2 — pending rows open the approval itself (the same place the
+// manager pushes go), and a swap row says when the shift is.
+import { teamApprovalRoute } from '../../lib/notification-nav'
+import { swapShiftWhen } from '../../lib/swap-cards'
 import {
   KpiCard, KpiRow, SectionHeader, PendingRow, ListCard,
 } from './cards'
@@ -131,7 +135,7 @@ export default function StudioDashboard({ refreshKey }) {
             icon="calendar-outline"
             title={`${t.profiles?.full_name || 'Someone'} · ${t.type}`}
             subtitle={t.start_date === t.end_date ? t.start_date : `${t.start_date} – ${t.end_date} (${t.total_days}d)`}
-            onPress={() => router.push('/(tabs)/schedule')}
+            onPress={() => router.push(teamApprovalRoute(t.id))}
             isLast={i === Math.min(arr.length, 5) - 1}
           />
         ))}
@@ -145,8 +149,8 @@ export default function StudioDashboard({ refreshKey }) {
             key={s.id}
             icon="swap-horizontal"
             title={swapRowTitle(s)}
-            subtitle={`Posted ${new Date(s.created_at).toLocaleDateString()}`}
-            onPress={() => router.push('/(tabs)/schedule')}
+            subtitle={swapShiftWhen(s.requester_shift) || `Posted ${new Date(s.created_at).toLocaleDateString()}`}
+            onPress={() => router.push(teamApprovalRoute(s.id))}
             isLast={i === Math.min(arr.length, 5) - 1}
           />
         ))}
