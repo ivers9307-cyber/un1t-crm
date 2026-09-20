@@ -191,3 +191,90 @@ describe('publish preview staffing list (ROSTERVIS.1)', () => {
     expect(publishButtons[publishButtons.length - 1].disabled).toBe(false)
   })
 })
+
+describe('publish preview clashes (COPYLEAVE.1)', () => {
+  const BASE = { blockCount: 2, periodProjectedEur: 0, monthProjectedTotalEur: 0, monthlyBudgetEur: 100, overBudget: false, staffingGaps: [] }
+  const LEAVE_CLASH = {
+    block_id: 'short', block_date: BLOCK_DATE, start_time: '09:00', end_time: '12:00', name: 'Early',
+    profile_id: 'u2', coach_name: 'Coach A', leave_start: BLOCK_DATE, leave_end: BLOCK_DATE,
+  }
+  const DOUBLE = {
+    profile_id: 'u3', coach_name: 'Coach B', block_date: BLOCK_DATE,
+    first: { block_id: 'ok', name: 'Lunch', start_time: '12:00', end_time: '13:00', location_name: null },
+    second: { block_id: 'ob1', name: 'Open Gym', start_time: '12:30', end_time: '14:00', location_name: 'Studio B' },
+  }
+
+  async function openPreview(impact) {
+    await renderCalendar({ blocks: [SHORT_BLOCK, OK_BLOCK], impact })
+    fireEvent.click(screen.getByText('Publish'))
+    await screen.findByText('Blocks in period', {}, { timeout: 5000 })
+  }
+
+  it('names the coach on leave and the double-booked coach, with times and the other studio', async () => {
+    await openPreview({ ...BASE, leaveClashes: [LEAVE_CLASH], doubleBookings: [DOUBLE], crossLocationChecked: true })
+    const box = screen.getByTestId('publish-roster-clashes')
+    expect(box.textContent).toMatch(/1 coach rostered on approved leave/)
+    expect(box.textContent).toMatch(/Coach A/)
+    expect(box.textContent).toMatch(/9am Early/)
+    expect(box.textContent).toMatch(/1 double booking/)
+    expect(box.textContent).toMatch(/Coach B/)
+    expect(box.textContent).toMatch(/12pm–1pm Lunch/)
+    expect(box.textContent).toMatch(/12:30pm–2pm Open Gym \(Studio B\)/)
+    // Never money.
+    expect(box.textContent).not.toMatch(/€/)
+    // Information only: Publish is still there and enabled.
+    const publishButtons = screen.getAllByRole('button', { name: 'Publish' })
+    expect(publishButtons[publishButtons.length - 1].disabled).toBe(false)
+  })
+
+  // Quality review — one coach off all week and rostered twice is ONE coach.
+  it('counts coaches, not shifts, in the leave headline, and still lists each shift', async () => {
+    const second = { ...LEAVE_CLASH, block_id: 'ok', start_time: '12:00', end_time: '13:00', name: 'Lunch' }
+    await openPreview({ ...BASE, leaveClashes: [LEAVE_CLASH, second], doubleBookings: [], crossLocationChecked: true })
+    const box = screen.getByTestId('publish-roster-clashes')
+    expect(box.textContent).toMatch(/1 coach rostered on approved leave/)
+    expect(box.textContent).not.toMatch(/2 coach/)
+    expect(box.textContent).toMatch(/9am Early/)
+    expect(box.textContent).toMatch(/12pm Lunch/)
+  })
+
+  // Quality review — the leave range is shown on each line. Expected strings
+  // are built with the modal's own day format so the ICU month spelling
+  // ("Sep" / "Sept") can never be what fails this.
+  it('shows the leave range on each leave line: one day, or first to last', async () => {
+    const day = (d) => new Date(`${d}T00:00:00`).toLocaleDateString('en-IE', { day: 'numeric', month: 'short' })
+    const end = iso(new Date(new Date(`${BLOCK_DATE}T00:00:00`).getFullYear() + 1, 0, 15)) // next year: never the same month
+    const ranged = { ...LEAVE_CLASH, block_id: 'ok', profile_id: 'u3', coach_name: 'Coach B', leave_end: end }
+    await openPreview({ ...BASE, leaveClashes: [LEAVE_CLASH, ranged], doubleBookings: [], crossLocationChecked: true })
+    const lines = within(screen.getByTestId('publish-roster-clashes')).getAllByRole('listitem').map((li) => li.textContent)
+    expect(lines[0]).toContain(`on leave ${day(BLOCK_DATE)}`)
+    expect(lines[0]).not.toContain(' to ')
+    expect(lines[1]).toContain(`on leave ${day(BLOCK_DATE)} to ${day(end)}`)
+  })
+
+  it('sits beside the staffing list, above the cost tiles', async () => {
+    await openPreview({ ...BASE, leaveClashes: [LEAVE_CLASH], doubleBookings: [], crossLocationChecked: true })
+    const box = screen.getByTestId('publish-roster-clashes')
+    const tiles = screen.getByText('Blocks in period')
+    expect(box.compareDocumentPosition(tiles) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('renders nothing when there is nothing to say', async () => {
+    await openPreview({ ...BASE, leaveClashes: [], doubleBookings: [], crossLocationChecked: true })
+    expect(screen.queryByTestId('publish-roster-clashes')).toBeNull()
+  })
+
+  it('renders nothing for an older server that does not send the lists', async () => {
+    await openPreview(BASE)
+    expect(screen.queryByTestId('publish-roster-clashes')).toBeNull()
+  })
+
+  // crossLocationChecked: false also covers a helper that threw, so the line
+  // must not blame other studios specifically.
+  it('says so when a check could not be completed, rather than implying an all-clear', async () => {
+    await openPreview({ ...BASE, leaveClashes: [], doubleBookings: [], crossLocationChecked: false })
+    const text = screen.getByTestId('publish-roster-clashes').textContent
+    expect(text).toMatch(/Some clash checks could not be completed\./)
+    expect(text).not.toMatch(/other studios/)
+  })
+})

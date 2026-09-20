@@ -47,7 +47,7 @@ import { validateBody } from '@/lib/validate'
 import { uuidLike, isoDate, MANAGER_ROLES } from '@/lib/schemas'
 import { bulkUpsertShiftAssignments } from '@/lib/roster-write'
 import { fetchSlotRemovalKeys } from '@/lib/roster'
-import { fetchSourceBlocks, buildCopyPlan, mapNthWeekdayOfMonth, COPY_MODES } from '@/lib/roster-copy'
+import { fetchSourceBlocks, fetchLeaveLookup, buildCopyPlan, mapNthWeekdayOfMonth, COPY_MODES } from '@/lib/roster-copy'
 import { readAssignmentKeysInRange, logAndNotifyCopiedShifts } from '@/lib/roster-change-notify'
 
 export const runtime = 'nodejs'
@@ -136,6 +136,19 @@ export async function POST(request) {
 
   if (fetchError) return NextResponse.json({ success: false, error: fetchError.message }, { status: 400 })
 
+  // Target month bounds. Hoisted (it used to be computed below) because the
+  // leave read needs them.
+  const targetEnd = `${target_month_start.slice(0, 7)}-${String(daysInMonth(target_month_start)).padStart(2, '0')}`
+
+  // COPYLEAVE.1 — see copy-week: approved leave over the TARGET month, read
+  // before any write; a failed read stops the copy.
+  const { isOnLeave, error: leaveError } = await fetchLeaveLookup(db, {
+    sourceBlocks,
+    startDate: target_month_start,
+    endDate: targetEnd,
+  })
+  if (leaveError) return NextResponse.json({ success: false, error: leaveError.message }, { status: 500 })
+
   // Map each source block's date into the target month; a day with no
   // counterpart (e.g. Jan 31 -> Feb, or a 5th weekday in template mode) is
   // dropped and its coaches are reported back as `skipped`.
@@ -144,6 +157,7 @@ export async function POST(request) {
     mapDate: mode === 'template'
       ? (d) => mapNthWeekdayOfMonth(d, target_month_start)
       : (d) => mapDayOfMonth(d, target_month_start),
+    isOnLeave,
   })
 
   if (plan.sourceAssignments === 0) {
@@ -154,11 +168,10 @@ export async function POST(request) {
   // to write. Same 201 shape as a copy that wrote (and as copy-week), so the
   // client reads copied/skipped the one way.
   if (plan.rows.length === 0 && plan.blocks.length === 0) {
-    return NextResponse.json({ success: true, copied: 0, skipped: plan.skipped, skipped_removed: 0, mode }, { status: 201 })
+    return NextResponse.json({ success: true, copied: 0, skipped: plan.skipped, skipped_removed: 0, skipped_on_leave: plan.skippedOnLeave, mode }, { status: 201 })
   }
 
   // NOTIFY.1 — see copy-week.
-  const targetEnd = `${target_month_start.slice(0, 7)}-${String(daysInMonth(target_month_start)).padStart(2, '0')}`
   const before = await readAssignmentKeysInRange(db, { locationId: location_id, startDate: target_month_start, endDate: targetEnd })
 
   // SLOTREMOVAL.1 — slots a manager deleted in the target month stay deleted:
@@ -204,12 +217,13 @@ export async function POST(request) {
   // because its own before-snapshot already contains them.
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
 
-  // skipped_removed: see copy-week.
+  // skipped_removed and skipped_on_leave: see copy-week.
   return NextResponse.json({
     success: true,
     copied: count,
     skipped: plan.skipped + skippedRemoved,
     skipped_removed: skippedRemoved,
+    skipped_on_leave: plan.skippedOnLeave,
     mode,
   }, { status: 201 })
 }

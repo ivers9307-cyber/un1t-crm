@@ -103,6 +103,9 @@ describe('rostersProvider.fetchPending', () => {
     expect(projectPublishImpactBatch).toHaveBeenCalledWith(expect.anything(), [
       { locationId: 'loc1', periodStart: '2026-08-31', periodEnd: '2026-09-30' },
     ])
+    // COPYLEAVE.1 — the queue shows no advisory lists, so it must not ask for
+    // them: the batch's default (advisories off) makes no other-studio read.
+    expect(projectPublishImpactBatch.mock.calls[0][2]?.advisories).not.toBe(true)
     // NOT 4000 (9000 - 5000), which is what the stored columns gave.
     expect(items[0].amount).toBe(400)
     expect(items[0].subtitle).toContain('+€400 over')

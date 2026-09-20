@@ -9,7 +9,19 @@
 //   4. Already-published-in-month-outside-period adds to the
 //      total (publish is the last shoe to drop, not the only one).
 
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
+
+// COPYLEAVE.1 review — the two pure advisory helpers run for REAL (wrapped only
+// so one test can make them throw); leaveCovering is untouched because the
+// budget's own leave check uses it.
+vi.mock('./roster-publish-advisories', async () => {
+  const actual = await vi.importActual('./roster-publish-advisories')
+  return { ...actual, leaveClashes: vi.fn(actual.leaveClashes), doubleBookings: vi.fn(actual.doubleBookings) }
+})
+vi.mock('./log', async () => {
+  const actual = await vi.importActual('./log')
+  return { ...actual, logWarn: vi.fn() }
+})
 import {
   projectPublishImpact,
   projectPublishImpactBatch,
@@ -28,8 +40,18 @@ import {
   supersedeSwallowedRosters,
   supersedeEmptyTrimmedRosters,
 } from './roster-publish'
+import { leaveClashes as leaveClashesFn, doubleBookings as doubleBookingsFn } from './roster-publish-advisories'
+import { logWarn } from './log'
 
-function mockDb({ location, locationsById = null, failLocationIds = [], contractors = [], blocks = [], timeOff = [] }) {
+// COPYLEAVE.1 — every location belongs to exactly one organisation (mig 079).
+// loc2 is loc1's sibling; loc9 belongs to somebody else.
+const DEFAULT_ORG_LOCATIONS = [
+  { id: 'loc1', organization_id: 'org1' },
+  { id: 'loc2', organization_id: 'org1' },
+  { id: 'loc9', organization_id: 'org2' },
+]
+
+function mockDb({ location, locationsById = null, failLocationIds = [], contractors = [], blocks = [], timeOff = [], otherAssignments = [], failOtherAssignments = false, orgLocations = DEFAULT_ORG_LOCATIONS, failSiblings = false, throwOn = null }) {
   // Mock the chained Supabase queries the helper makes:
   //   from('locations').select(...).eq(...).single() → location
   //   from('profile_locations').select(...).eq(...) → contractor links
@@ -37,21 +59,37 @@ function mockDb({ location, locationsById = null, failLocationIds = [], contract
   const calls = []
   const blockQueries = []
   const leaveQueries = []
+  const assignmentQueries = []
+  const siblingQueries = []
+  // A fixture location that names no organisation is in org1.
+  const withOrg = (l) => (l ? { organization_id: 'org1', ...l } : l)
   return {
     calls,
     blockQueries,
     leaveQueries,
+    assignmentQueries,
+    siblingQueries,
     from(table) {
       calls.push(table)
       if (table === 'locations') {
         return {
           select: () => ({
             // ROSTERTIDY.1 — keyed by id when a test needs several locations.
-            eq: (_c, id) => ({
-              single: async () => (failLocationIds.includes(id)
-                ? { data: null, error: { message: 'location read failed' } }
-                : { data: locationsById ? locationsById[id] : location, error: null }),
-            }),
+            eq: (c, id) => (c === 'organization_id'
+              // COPYLEAVE.1 — the sibling studios of the one being published.
+              ? {
+                neq: async (_c, notId) => {
+                  siblingQueries.push({ org: id, notId })
+                  if (throwOn === 'siblings') throw new Error('siblings: network down')
+                  if (failSiblings) return { data: null, error: { message: 'siblings unreadable' } }
+                  return { data: orgLocations.filter((l) => l.organization_id === id && l.id !== notId).map((l) => ({ id: l.id })), error: null }
+                },
+              }
+              : {
+                single: async () => (failLocationIds.includes(id)
+                  ? { data: null, error: { message: 'location read failed' } }
+                  : { data: withOrg(locationsById ? locationsById[id] : location), error: null }),
+              }),
           }),
         }
       }
@@ -78,7 +116,7 @@ function mockDb({ location, locationsById = null, failLocationIds = [], contract
           select: () => chain,
           eq: () => chain,
           // LEAVE.2 — scoped by the person (filed here OR a member here).
-          or: () => chain,
+          or: (expr) => { f.or = expr; return chain },
           order: () => chain,
           lte: (_c, v) => { f.startLte = v; return chain },
           gte: (_c, v) => { f.endGte = v; return chain },
@@ -113,6 +151,31 @@ function mockDb({ location, locationsById = null, failLocationIds = [], contract
               .slice(f.from, f.to + 1),
             error: null,
           }).then(onF, onR),
+        }
+        return chain
+      }
+      // COPYLEAVE.1 — the same coaches' live shifts at OTHER studios.
+      if (table === 'shift_assignments') {
+        if (throwOn === 'shift_assignments') throw new Error('shift_assignments: client exploded')
+        const f = { profileIds: null, locIds: null, gte: null, lte: null, orders: [], from: 0, to: Infinity }
+        assignmentQueries.push(f)
+        const chain = {
+          select: () => chain,
+          in: (c, v) => { if (c === 'profile_id') f.profileIds = v; else f.locIds = v; return chain },
+          gte: (_c, v) => { f.gte = v; return chain },
+          lte: (_c, v) => { f.lte = v; return chain },
+          order: (c, opts) => { f.orders.push([c, opts?.ascending !== false]); return chain },
+          range: (from, to) => { f.from = from; f.to = to; return chain },
+          then: (onF, onR) => Promise.resolve(failOtherAssignments
+            ? { data: null, error: { message: 'other studios unreadable' } }
+            : {
+              data: otherAssignments
+                .filter((a) => f.profileIds.includes(a.profile_id))
+                .filter((a) => (f.locIds || []).includes(a.shift_blocks.location_id))
+                .filter((a) => a.shift_blocks.block_date >= f.gte && a.shift_blocks.block_date <= f.lte)
+                .slice(f.from, f.to + 1),
+              error: null,
+            }).then(onF, onR),
         }
         return chain
       }
@@ -407,6 +470,251 @@ describe('projectPublishImpact — per-assignment overrides and approved leave',
   })
 })
 
+// COPYLEAVE.1 — the preview names who is rostered on leave and who is
+// double-booked. Advisory: neither changes overBudget or blocks anything.
+describe('projectPublishImpact — leave clashes and double bookings', () => {
+  const PERIOD = { locationId: 'loc1', periodStart: '2026-05-04', periodEnd: '2026-05-10', todayIso: '2026-05-01' }
+  const named = (id, name, over = {}) => ({ profile_id: id, status: 'scheduled', profiles: { full_name: name }, ...over })
+  const elsewhere = (profileId, date, start, end, loc = 'loc2') => ({
+    id: `oa-${profileId}-${loc}`, profile_id: profileId, status: 'scheduled', start_time_override: null, end_time_override: null,
+    shift_blocks: { id: `ob-${loc}`, location_id: loc, block_date: date, start_time: start, end_time: end, shift_templates: { name: 'Open Gym' }, locations: { name: loc === 'loc2' ? 'Studio B' : 'Studio Z' } },
+  })
+
+  it('lists a coach rostered on approved leave, and still costs them at zero', async () => {
+    const db = mockDb({
+      location: { id: 'loc1', monthly_contractor_budget_eur: 500 },
+      contractors: [dan],
+      blocks: [block({ id: 'b1', date: '2026-05-06', start: '09:00', end: '11:00', coaches: [named('dan', 'Coach D')] })],
+      timeOff: [{ id: 't1', profile_id: 'dan', start_date: '2026-05-04', end_date: '2026-05-08' }],
+    })
+    const r = await projectPublishImpact(db, PERIOD)
+    expect(r.leaveClashes).toEqual([{
+      block_id: 'b1', block_date: '2026-05-06', start_time: '09:00', end_time: '11:00', name: 'Shift',
+      profile_id: 'dan', coach_name: 'Coach D', leave_start: '2026-05-04', leave_end: '2026-05-08',
+    }])
+    expect(r.periodProjectedEur).toBe(0)
+    expect(r.overBudget).toBe(false)
+  })
+
+  it('lists a double booking against a shift at ANOTHER studio', async () => {
+    const db = mockDb({
+      location: { id: 'loc1', monthly_contractor_budget_eur: null },
+      contractors: [dan],
+      blocks: [block({ id: 'b1', date: '2026-05-06', start: '09:00', end: '11:00', coaches: [named('dan', 'Coach D')] })],
+      otherAssignments: [elsewhere('dan', '2026-05-06', '10:00:00', '12:00:00')],
+    })
+    const r = await projectPublishImpact(db, PERIOD)
+    expect(r.crossLocationChecked).toBe(true)
+    expect(r.doubleBookings).toHaveLength(1)
+    expect(r.doubleBookings[0]).toMatchObject({
+      coach_name: 'Coach D', block_date: '2026-05-06',
+      second: { name: 'Open Gym', location_name: 'Studio B', start_time: '10:00', end_time: '12:00' },
+    })
+    // The read asked for THESE coaches, at this organisation's OTHER studios,
+    // over the loaded months.
+    expect(db.siblingQueries).toEqual([{ org: 'org1', notId: 'loc1' }])
+    expect(db.assignmentQueries).toHaveLength(1)
+    expect(db.assignmentQueries[0]).toMatchObject({ profileIds: ['dan'], locIds: ['loc2'], gte: '2026-05-01', lte: '2026-05-31' })
+  })
+
+  // Review blocker — nothing keeps a person inside one organisation, and the
+  // advisory prints the other shift's name, times and studio.
+  it('NEVER reads a shift at a studio in a DIFFERENT organisation', async () => {
+    const db = mockDb({
+      location: { id: 'loc1', organization_id: 'org1', monthly_contractor_budget_eur: null },
+      contractors: [dan],
+      blocks: [block({ id: 'b1', date: '2026-05-06', start: '09:00', end: '11:00', coaches: [named('dan', 'Coach D')] })],
+      otherAssignments: [elsewhere('dan', '2026-05-06', '10:00:00', '12:00:00', 'loc9')],
+    })
+    const r = await projectPublishImpact(db, PERIOD)
+    expect(db.assignmentQueries[0].locIds).toEqual(['loc2'])
+    expect(r.doubleBookings).toEqual([])
+    expect(r.crossLocationChecked).toBe(true)
+    expect(JSON.stringify(r)).not.toContain('Studio Z')
+  })
+
+  it('an organisation with ONE studio makes no other-studio query, and that is a full check (nothing to flag)', async () => {
+    const db = mockDb({
+      location: { id: 'loc1', organization_id: 'org1', monthly_contractor_budget_eur: null },
+      contractors: [dan],
+      orgLocations: [{ id: 'loc1', organization_id: 'org1' }, { id: 'loc9', organization_id: 'org2' }],
+      blocks: [
+        block({ id: 'b1', date: '2026-05-06', start: '09:00', end: '11:00', coaches: [named('dan', 'Coach D')] }),
+        block({ id: 'b2', date: '2026-05-06', start: '10:00', end: '12:00', coaches: [named('dan', 'Coach D')] }),
+      ],
+      otherAssignments: [elsewhere('dan', '2026-05-06', '10:00:00', '12:00:00', 'loc9')],
+    })
+    const r = await projectPublishImpact(db, PERIOD)
+    expect(db.siblingQueries).toHaveLength(1)
+    expect(db.assignmentQueries).toHaveLength(0)
+    expect(r.crossLocationChecked).toBe(true)
+    expect(r.doubleBookings).toHaveLength(1) // this studio's own clash still shows
+  })
+
+  it('an unreadable sibling list fails SOFT: no other-studio query, the gap is flagged, the money is untouched', async () => {
+    const db = mockDb({
+      location: { id: 'loc1', organization_id: 'org1', monthly_contractor_budget_eur: 500 },
+      contractors: [dan],
+      failSiblings: true,
+      blocks: [block({ id: 'b1', date: '2026-05-06', start: '09:00', end: '11:00', coaches: [named('dan', 'Coach D')] })],
+    })
+    const r = await projectPublishImpact(db, PERIOD)
+    expect(db.assignmentQueries).toHaveLength(0)
+    expect(r.crossLocationChecked).toBe(false)
+    expect(r.periodProjectedEur).toBe(70)
+  })
+
+  it('both lists are empty arrays, never undefined, on a clean week', async () => {
+    const db = mockDb({
+      location: { id: 'loc1', monthly_contractor_budget_eur: null },
+      contractors: [dan],
+      blocks: [block({ id: 'b1', date: '2026-05-06', start: '09:00', end: '11:00', coaches: ['dan'] })],
+    })
+    const r = await projectPublishImpact(db, PERIOD)
+    expect(r.leaveClashes).toEqual([])
+    expect(r.doubleBookings).toEqual([])
+    expect(r.crossLocationChecked).toBe(true)
+  })
+
+  it('a week with nobody rostered makes no other-studio query', async () => {
+    const db = mockDb({
+      location: { id: 'loc1', monthly_contractor_budget_eur: null },
+      blocks: [block({ id: 'b1', date: '2026-05-06', start: '09:00', end: '11:00' })],
+    })
+    await projectPublishImpact(db, PERIOD)
+    expect(db.assignmentQueries).toHaveLength(0)
+  })
+
+  // The advisory must never take the budget gate down with it.
+  it('an unreadable other-studio list does NOT throw: same-studio clashes still show and the gap is flagged', async () => {
+    const db = mockDb({
+      location: { id: 'loc1', monthly_contractor_budget_eur: 500 },
+      contractors: [dan],
+      failOtherAssignments: true,
+      blocks: [
+        block({ id: 'b1', date: '2026-05-06', start: '09:00', end: '11:00', coaches: [named('dan', 'Coach D')] }),
+        block({ id: 'b2', date: '2026-05-06', start: '10:00', end: '12:00', coaches: [named('dan', 'Coach D')] }),
+      ],
+    })
+    const r = await projectPublishImpact(db, PERIOD)
+    expect(r.crossLocationChecked).toBe(false)
+    expect(r.doubleBookings).toHaveLength(1)
+    expect(r.periodProjectedEur).toBe(140) // 2 x 2h x 35: the money is untouched
+  })
+
+  it('leave is scoped to the people ON the roster as well as the studio\'s members (a guest coach\'s leave counts)', async () => {
+    const db = mockDb({
+      location: { id: 'loc1', monthly_contractor_budget_eur: null },
+      contractors: [dan],
+      blocks: [block({ id: 'b1', date: '2026-05-06', start: '09:00', end: '11:00', coaches: [named('guest-1', 'Coach G')] })],
+    })
+    await projectPublishImpact(db, PERIOD)
+    expect(db.leaveQueries[0].or).toContain('guest-1')
+    expect(db.leaveQueries[0].or).toContain('dan')
+  })
+
+  // Review — a returned `error` already degraded softly, but a REJECTED read
+  // or a throw still reached the budget gate and 500'd the publish.
+  for (const throwOn of ['siblings', 'shift_assignments']) {
+    it(`a ${throwOn} read that THROWS does not take the budget gate down`, async () => {
+      logWarn.mockClear()
+      const db = mockDb({
+        location: { id: 'loc1', monthly_contractor_budget_eur: 100 },
+        contractors: [dan],
+        throwOn,
+        blocks: [
+          block({ id: 'b1', date: '2026-05-06', start: '09:00', end: '11:00', coaches: [named('dan', 'Coach D')] }),
+          block({ id: 'b2', date: '2026-05-06', start: '10:00', end: '12:00', coaches: [named('dan', 'Coach D')] }),
+        ],
+      })
+      const r = await projectPublishImpact(db, PERIOD)
+      expect(r.periodProjectedEur).toBe(140)
+      expect(r.overBudget).toBe(true) // the hard gate still judges
+      expect(r.overrunEur).toBe(40)
+      expect(r.crossLocationChecked).toBe(false)
+      expect(r.doubleBookings).toHaveLength(1) // this studio's own clash still shows
+      expect(logWarn).toHaveBeenCalledTimes(1)
+    })
+  }
+
+  for (const [name, fn] of [['leaveClashes', leaveClashesFn], ['doubleBookings', doubleBookingsFn]]) {
+    it(`a throw inside ${name} yields [] for it, flags the check as incomplete, and leaves the money alone`, async () => {
+      logWarn.mockClear()
+      fn.mockImplementationOnce(() => { throw new Error(`${name} bug`) })
+      const db = mockDb({
+        location: { id: 'loc1', monthly_contractor_budget_eur: 100 },
+        contractors: [dan],
+        blocks: [
+          block({ id: 'b1', date: '2026-05-06', start: '09:00', end: '11:00', coaches: [named('dan', 'Coach D')] }),
+          block({ id: 'b2', date: '2026-05-07', start: '10:00', end: '12:00', coaches: [named('dan', 'Coach D')] }),
+        ],
+        timeOff: [{ id: 't1', profile_id: 'dan', start_date: '2026-05-07', end_date: '2026-05-07' }],
+      })
+      const r = await projectPublishImpact(db, PERIOD)
+      expect(r[name]).toEqual([])
+      expect(r.crossLocationChecked).toBe(false)
+      // The OTHER list is still computed.
+      if (name === 'doubleBookings') expect(r.leaveClashes).toHaveLength(1)
+      expect(r.periodProjectedEur).toBe(70) // the 7th is leave, so only the 6th bills
+      expect(r.overBudget).toBe(false)
+      expect(logWarn).toHaveBeenCalledTimes(1)
+    })
+  }
+
+  // ...and the HARD inputs keep failing loudly, exactly as before.
+  it('an unreadable LOCATION still throws: the soft-fail never reaches the budget inputs', async () => {
+    const db = mockDb({ location: { id: 'loc1', monthly_contractor_budget_eur: 100 }, failLocationIds: ['loc1'] })
+    await expect(projectPublishImpact(db, PERIOD)).rejects.toThrow(/Location lookup failed/)
+  })
+
+  // Review — nothing failed when the .range() loop was deleted. PostgREST
+  // caps a select at 1,000 rows, so the clash on row 1,001 is the proof.
+  it('pages the other-studio read past 1,000 rows and USES the second page', async () => {
+    // 1,000 harmless rows (another day, outside the period) and then the clash.
+    const filler = Array.from({ length: 1000 }, (_, i) => ({
+      ...elsewhere('dan', '2026-05-20', '06:00:00', '07:00:00'), id: `oa-${String(i).padStart(4, '0')}`,
+    }))
+    const db = mockDb({
+      location: { id: 'loc1', monthly_contractor_budget_eur: null },
+      contractors: [dan],
+      blocks: [block({ id: 'b1', date: '2026-05-06', start: '09:00', end: '11:00', coaches: [named('dan', 'Coach D')] })],
+      otherAssignments: [...filler, elsewhere('dan', '2026-05-06', '10:00:00', '12:00:00')],
+    })
+    const r = await projectPublishImpact(db, PERIOD)
+    expect(db.assignmentQueries.map((q) => [q.from, q.to])).toEqual([[0, 999], [1000, 1999]])
+    // .range() without a total order is not paging: PostgREST may hand back
+    // the same row on two pages and skip another. Every page orders by id.
+    for (const q of db.assignmentQueries) expect(q.orders).toEqual([['id', true]])
+    expect(r.doubleBookings).toHaveLength(1)
+    expect(r.doubleBookings[0].second).toMatchObject({ location_name: 'Studio B', start_time: '10:00' })
+    expect(r.crossLocationChecked).toBe(true)
+  })
+
+  // Review (cost) — a caller that never shows the lists must not pay for them.
+  it('advisories: false does none of the advisory work: no other-studio query, no lists, the leave scope as it was, the same money', async () => {
+    const fx = () => mockDb({
+      location: { id: 'loc1', monthly_contractor_budget_eur: 500 },
+      contractors: [dan],
+      blocks: [
+        block({ id: 'b1', date: '2026-05-06', start: '09:00', end: '11:00', coaches: [named('dan', 'Coach D'), named('guest-1', 'Coach G')] }),
+        block({ id: 'b2', date: '2026-05-06', start: '10:00', end: '12:00', coaches: [named('dan', 'Coach D')] }),
+      ],
+      otherAssignments: [elsewhere('dan', '2026-05-06', '10:00:00', '12:00:00')],
+    })
+    const db = fx()
+    const r = await projectPublishImpact(db, { ...PERIOD, advisories: false })
+    expect(db.assignmentQueries).toHaveLength(0)
+    expect(db.siblingQueries).toHaveLength(0)
+    expect('leaveClashes' in r).toBe(false)
+    expect('doubleBookings' in r).toBe(false)
+    expect('crossLocationChecked' in r).toBe(false)
+    expect(db.leaveQueries[0].or).not.toContain('guest-1')
+    const withLists = await projectPublishImpact(fx(), PERIOD)
+    expect(withLists.doubleBookings.length).toBeGreaterThan(0)
+    expect(r.periodProjectedEur).toBe(withLists.periodProjectedEur)
+    expect(r.staffingGaps).toEqual(withLists.staffingGaps)
+  })
+})
 
 // ROSTER-FIX.4 — the overlap guard. Two published rosters covering one day at
 // one location make "which roster published this day" unanswerable, because
@@ -552,14 +860,17 @@ describe('projectPublishImpactBatch', () => {
     { locationId: 'loc1', periodStart: '2026-09-01', periodEnd: '2026-09-30' },
   ]
 
-  for (const tz of ['Europe/Dublin', 'America/Los_Angeles']) {
-    it(`gives the SAME result as projectPublishImpact for every draft (TZ=${tz})`, async () => {
+  // COPYLEAVE.1 — both settings of `advisories`: the batch defaults to false
+  // (the approvals queue shows no lists), the single path to true.
+  for (const [tz, advisories] of [['Europe/Dublin', false], ['America/Los_Angeles', false], ['Europe/Dublin', true]]) {
+    it(`gives the SAME result as projectPublishImpact for every draft (TZ=${tz}, advisories=${advisories})`, async () => {
       process.env.TZ = tz
       const fx = richFixture()
-      const batch = await projectPublishImpactBatch(mockDb(fx), DRAFTS, { todayIso: TODAY })
+      const batch = await projectPublishImpactBatch(mockDb(fx), DRAFTS, { todayIso: TODAY, advisories })
       expect(batch).toHaveLength(DRAFTS.length)
+      expect('leaveClashes' in batch[0].impact).toBe(advisories)
       for (let i = 0; i < DRAFTS.length; i++) {
-        const single = await projectPublishImpact(mockDb(fx), { ...DRAFTS[i], todayIso: TODAY })
+        const single = await projectPublishImpact(mockDb(fx), { ...DRAFTS[i], todayIso: TODAY, advisories })
         expect(batch[i].error).toBeNull()
         expect(batch[i].impact).toEqual(single)
       }
@@ -570,6 +881,19 @@ describe('projectPublishImpactBatch', () => {
       expect(batch[0].impact.staffingGaps.map((g) => g.block_id)).toContain('w-tue')
     })
   }
+
+  // COPYLEAVE.1 review (cost) — the approvals provider and /schedule/approvals
+  // call the batch with no options and render no advisory lists.
+  it('by DEFAULT makes no other-studio query and carries no advisory lists (the approvals path)', async () => {
+    const db = mockDb(richFixture())
+    const out = await projectPublishImpactBatch(db, DRAFTS, { todayIso: TODAY })
+    expect(db.assignmentQueries).toHaveLength(0)
+    expect(db.calls).not.toContain('shift_assignments')
+    for (const { impact } of out) {
+      expect('leaveClashes' in impact).toBe(false)
+      expect('doubleBookings' in impact).toBe(false)
+    }
+  })
 
   it('loads the location ONCE, spanning every month its drafts touch', async () => {
     const db = mockDb(richFixture())

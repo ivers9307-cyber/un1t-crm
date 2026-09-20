@@ -6,7 +6,10 @@
 //     TZ=$tz npx vitest run src/lib/roster-copy.test.js
 //   done
 import { describe, it, expect } from 'vitest'
-import { buildCopyPlan, mapNthWeekdayOfMonth, weekdayCodeOf, fetchSourceBlocks, copyResultToast } from './roster-copy'
+import {
+  buildCopyPlan, mapNthWeekdayOfMonth, weekdayCodeOf, fetchSourceBlocks, copyResultToast,
+  approvedLeaveLookup, fetchApprovedLeave, fetchLeaveLookup,
+} from './roster-copy'
 import { redateShiftDate } from '../app/api/schedule/shifts/copy-week/route.js'
 
 const MON_FRI = ['mon', 'tue', 'wed', 'thu', 'fri']
@@ -34,6 +37,48 @@ describe('weekdayCodeOf', () => {
     expect(weekdayCodeOf('2026-03-29')).toBe('sun') // spring DST day
     expect(weekdayCodeOf('2026-10-25')).toBe('sun') // autumn DST day
     expect(weekdayCodeOf('2026-12-14')).toBe('mon') // winter
+  })
+})
+
+// COPYLEAVE.1 — the copy honours APPROVED leave, and only approved leave.
+describe('approvedLeaveLookup', () => {
+  const onLeave = approvedLeaveLookup([
+    { profile_id: 'p1', status: 'approved', start_date: '2026-07-06', end_date: '2026-07-08' },
+    { profile_id: 'p2', status: 'pending', start_date: '2026-07-06', end_date: '2026-07-08' },
+    { profile_id: 'p3', status: 'rejected', start_date: '2026-07-06', end_date: '2026-07-08' },
+  ])
+
+  it('covers the first and the last day: end_date is inclusive (mig 011)', () => {
+    expect(onLeave('p1', '2026-07-06')).toBe(true)
+    expect(onLeave('p1', '2026-07-07')).toBe(true)
+    expect(onLeave('p1', '2026-07-08')).toBe(true)
+  })
+
+  it('does not cover the day before or the day after', () => {
+    expect(onLeave('p1', '2026-07-05')).toBe(false)
+    expect(onLeave('p1', '2026-07-09')).toBe(false)
+  })
+
+  it('PENDING and REJECTED leave never count, even if a caller hands them in', () => {
+    expect(onLeave('p2', '2026-07-07')).toBe(false)
+    expect(onLeave('p3', '2026-07-07')).toBe(false)
+  })
+
+  // Review — every status that is not 'approved', by name: a withdrawn
+  // (cancelled) or refused (rejected) request must never keep a coach off.
+  for (const status of ['cancelled', 'rejected', 'pending']) {
+    it(`a ${status} request covering the day does not count`, () => {
+      const lookup = approvedLeaveLookup([
+        { profile_id: 'p9', status, start_date: '2026-07-06', end_date: '2026-07-08' },
+      ])
+      expect(lookup('p9', '2026-07-07')).toBe(false)
+    })
+  }
+
+  it('an unknown coach, and an empty or missing list, are never on leave', () => {
+    expect(onLeave('nobody', '2026-07-07')).toBe(false)
+    expect(approvedLeaveLookup([])('p1', '2026-07-07')).toBe(false)
+    expect(approvedLeaveLookup(null)('p1', '2026-07-07')).toBe(false)
   })
 })
 
@@ -198,6 +243,90 @@ describe('buildCopyPlan — guard', () => {
   })
 })
 
+// COPYLEAVE.1 — Copy Last Week rostered coaches onto days they had booked off.
+describe('buildCopyPlan — approved leave on the TARGET date', () => {
+  const live = (id) => ({ profile_id: id, status: 'scheduled', notes: null, partial_reason: null, start_time_override: null, end_time_override: null })
+  // Source Mon 29 Jun -> target Mon 6 Jul. p1 is off on the 6th.
+  const isOnLeave = approvedLeaveLookup([
+    { profile_id: 'p1', status: 'approved', start_date: '2026-07-06', end_date: '2026-07-06' },
+  ])
+
+  for (const mode of ['exact', 'template']) {
+    it(`${mode}: the coach on leave is skipped and counted, the other coach is copied`, () => {
+      const plan = buildCopyPlan([block({ shift_assignments: [live('p1'), live('p2')] })], { mode, mapDate: weekMap, isOnLeave })
+      expect(plan.rows.map((r) => r.profileId)).toEqual(['p2'])
+      expect(plan.sourceAssignments).toBe(2)
+      expect(plan.skipped).toBe(1)
+      expect(plan.skippedOnLeave).toBe(1)
+    })
+  }
+
+  it('judges the TARGET date, not the source date', () => {
+    // p1 was off on the SOURCE Monday only. They worked it anyway (they are on
+    // the block), and the target Monday is a normal day: they are copied.
+    const offAtSource = approvedLeaveLookup([
+      { profile_id: 'p1', status: 'approved', start_date: '2026-06-29', end_date: '2026-06-29' },
+    ])
+    const plan = buildCopyPlan([block({ shift_assignments: [live('p1')] })], { mode: 'exact', mapDate: weekMap, isOnLeave: offAtSource })
+    expect(plan.rows.map((r) => r.profileId)).toEqual(['p1'])
+    expect(plan.skippedOnLeave).toBe(0)
+  })
+
+  it('exact: the slot is still ensured on the target when its only coach is on leave, so the gap is visible', () => {
+    const plan = buildCopyPlan([block({ shift_assignments: [live('p1')] })], { mode: 'exact', mapDate: weekMap, isOnLeave })
+    expect(plan.rows).toEqual([])
+    expect(plan.blocks.map((b) => b.shiftDate)).toEqual(['2026-07-06'])
+  })
+
+  it('PENDING leave does not skip anyone', () => {
+    const pendingOnly = approvedLeaveLookup([
+      { profile_id: 'p1', status: 'pending', start_date: '2026-07-06', end_date: '2026-07-06' },
+    ])
+    const plan = buildCopyPlan([block({ shift_assignments: [live('p1')] })], { mode: 'exact', mapDate: weekMap, isOnLeave: pendingOnly })
+    expect(plan.rows).toHaveLength(1)
+    expect(plan.skipped).toBe(0)
+    expect(plan.skippedOnLeave).toBe(0)
+  })
+
+  for (const status of ['cancelled', 'rejected']) {
+    it(`${status} leave does not skip anyone`, () => {
+      const notApproved = approvedLeaveLookup([
+        { profile_id: 'p1', status, start_date: '2026-07-06', end_date: '2026-07-06' },
+      ])
+      const plan = buildCopyPlan([block({ shift_assignments: [live('p1')] })], { mode: 'template', mapDate: weekMap, isOnLeave: notApproved })
+      expect(plan.rows.map((r) => r.profileId)).toEqual(['p1'])
+      expect(plan.skipped).toBe(0)
+      expect(plan.skippedOnLeave).toBe(0)
+    })
+  }
+
+  // Review — a CANCELLED source assignment is not a source assignment at all,
+  // so it is not a leave skip either, whoever it belonged to. Counting it
+  // would make the toast report a coach "skipped, on leave" who was never
+  // going to be copied.
+  for (const mode of ['exact', 'template']) {
+    it(`${mode}: a cancelled assignment of a coach on leave is NOT counted in skippedOnLeave`, () => {
+      const plan = buildCopyPlan([block({ shift_assignments: [{ ...live('p1'), status: 'cancelled' }, live('p2')] })], { mode, mapDate: weekMap, isOnLeave })
+      expect(plan.rows.map((r) => r.profileId)).toEqual(['p2'])
+      expect(plan.sourceAssignments).toBe(1)
+      expect(plan.skipped).toBe(0)
+      expect(plan.skippedOnLeave).toBe(0)
+    })
+  }
+
+  it('no isOnLeave option = today\'s behaviour, and skippedOnLeave is 0 not undefined', () => {
+    const plan = buildCopyPlan([block({ shift_assignments: [live('p1')] })], { mode: 'exact', mapDate: weekMap })
+    expect(plan.rows).toHaveLength(1)
+    expect(plan.skippedOnLeave).toBe(0)
+  })
+
+  it('a day with no counterpart is NOT counted as on leave (that skip has its own reason)', () => {
+    const plan = buildCopyPlan([block({ shift_assignments: [live('p1')] })], { mode: 'exact', mapDate: () => null, isOnLeave })
+    expect(plan.skipped).toBe(1)
+    expect(plan.skippedOnLeave).toBe(0)
+  })
+})
+
 describe('mapNthWeekdayOfMonth', () => {
   it('maps the first Monday to the first Monday', () => {
     // Aug 2026: Mon 3 is the first Monday. Sep 2026: Mon 7.
@@ -287,6 +416,124 @@ describe('fetchSourceBlocks', () => {
   })
 })
 
+// Records what was asked for and serves `total` rows a page at a time.
+function leaveDb(total, { fail = false } = {}) {
+  const calls = []
+  const all = Array.from({ length: total }, (_, i) => ({
+    id: `l${String(i).padStart(5, '0')}`, profile_id: 'p1', status: 'approved', start_date: '2026-07-06', end_date: '2026-07-06',
+  }))
+  return {
+    calls,
+    from(table) {
+      expect(table).toBe('time_off_requests')
+      const q = { filters: [], orders: [] }
+      const chain = {
+        select: (s) => { q.select = s; return chain },
+        in: (c, v) => { q.filters.push(['in', c, v]); return chain },
+        eq: (c, v) => { q.filters.push(['eq', c, v]); return chain },
+        lte: (c, v) => { q.filters.push(['lte', c, v]); return chain },
+        gte: (c, v) => { q.filters.push(['gte', c, v]); return chain },
+        order: (c) => { q.orders.push(c); return chain },
+        range: (from, to) => {
+          q.range = [from, to]
+          calls.push(q)
+          if (fail) return Promise.resolve({ data: null, error: { message: 'leave boom' } })
+          return Promise.resolve({ data: all.slice(from, to + 1), error: null })
+        },
+      }
+      return chain
+    },
+  }
+}
+
+describe('fetchApprovedLeave', () => {
+  it('asks for APPROVED leave of these coaches that overlaps the target range', async () => {
+    const db = leaveDb(2)
+    const { leave, error } = await fetchApprovedLeave(db, { profileIds: ['p1', 'p2'], startDate: '2026-07-06', endDate: '2026-07-12' })
+    expect(error).toBeNull()
+    expect(leave).toHaveLength(2)
+    expect(db.calls[0].filters).toEqual([
+      ['in', 'profile_id', ['p1', 'p2']],
+      ['eq', 'status', 'approved'],
+      // overlap: starts on or before the range ends, ends on or after it starts
+      ['lte', 'start_date', '2026-07-12'],
+      ['gte', 'end_date', '2026-07-06'],
+    ])
+    expect(db.calls[0].orders).toEqual(['start_date', 'id'])
+  })
+
+  it('pages past the 1,000-row cap', async () => {
+    const db = leaveDb(1500)
+    const { leave } = await fetchApprovedLeave(db, { profileIds: ['p1'], startDate: '2026-07-01', endDate: '2026-07-31' })
+    expect(leave).toHaveLength(1500)
+    expect(db.calls.map((c) => c.range)).toEqual([[0, 999], [1000, 1999]])
+  })
+
+  it('no coaches = no query', async () => {
+    const db = leaveDb(5)
+    expect(await fetchApprovedLeave(db, { profileIds: [], startDate: 'a', endDate: 'b' })).toEqual({ leave: [], error: null })
+    expect(db.calls).toHaveLength(0)
+  })
+
+  it('returns the error and no partial rows', async () => {
+    const db = leaveDb(5, { fail: true })
+    expect(await fetchApprovedLeave(db, { profileIds: ['p1'], startDate: 'a', endDate: 'b' }))
+      .toEqual({ leave: [], error: { message: 'leave boom' } })
+  })
+})
+
+// COPYLEAVE.1 quality — the ONE call both copy routes make: which coaches are
+// on the source blocks, their approved leave over the target period, and the
+// lookup buildCopyPlan takes. (liveCoachIds is private now; its two rules,
+// "each live coach once" and "never a cancelled one", are pinned here through
+// the ids the query asks for.)
+describe('fetchLeaveLookup', () => {
+  const RANGE = { startDate: '2026-07-06', endDate: '2026-07-12' }
+
+  it('asks about each LIVE source coach once, never a cancelled one, over the target range', async () => {
+    const db = leaveDb(1)
+    const { isOnLeave, error } = await fetchLeaveLookup(db, {
+      sourceBlocks: [
+        block({ shift_assignments: [
+          { profile_id: 'p1', status: 'scheduled' },
+          { profile_id: 'p2', status: 'cancelled' },
+        ] }),
+        block({ id: 'b2', shift_assignments: [
+          { profile_id: 'p1', status: 'swapped' },
+          { profile_id: 'p3', status: 'scheduled' },
+        ] }),
+      ],
+      ...RANGE,
+    })
+    expect(error).toBeNull()
+    expect(db.calls).toHaveLength(1)
+    const [op, col, ids] = db.calls[0].filters[0]
+    expect([op, col]).toEqual(['in', 'profile_id'])
+    expect([...ids].sort()).toEqual(['p1', 'p3'])
+    expect(db.calls[0].filters.slice(2)).toEqual([['lte', 'start_date', '2026-07-12'], ['gte', 'end_date', '2026-07-06']])
+    // The rows that came back ARE the lookup (leaveDb serves p1 off on 6 Jul).
+    expect(isOnLeave('p1', '2026-07-06')).toBe(true)
+    expect(isOnLeave('p1', '2026-07-07')).toBe(false)
+    expect(isOnLeave('p3', '2026-07-06')).toBe(false)
+  })
+
+  it('no coaches = no query, and nobody is on leave', async () => {
+    for (const sourceBlocks of [[], null, [block({ shift_assignments: [{ profile_id: 'p1', status: 'cancelled' }] })]]) {
+      const db = leaveDb(5)
+      const { isOnLeave, error } = await fetchLeaveLookup(db, { sourceBlocks, ...RANGE })
+      expect(error).toBeNull()
+      expect(db.calls).toHaveLength(0)
+      expect(isOnLeave('p1', '2026-07-06')).toBe(false)
+    }
+  })
+
+  it('a failed read returns the error and NO lookup, so a caller cannot copy blind by accident', async () => {
+    const db = leaveDb(5, { fail: true })
+    expect(await fetchLeaveLookup(db, { sourceBlocks: [block({ shift_assignments: [{ profile_id: 'p1', status: 'scheduled' }] })], ...RANGE }))
+      .toEqual({ isOnLeave: null, error: { message: 'leave boom' } })
+  })
+})
+
 describe('copyResultToast', () => {
   it('is a success with the copied count when nothing was skipped', () => {
     expect(copyResultToast({ period: 'week', mode: 'exact', copied: 12, skipped: 0 })).toEqual({ kind: 'success', message: 'Copied 12 shifts.' })
@@ -316,5 +563,26 @@ describe('copyResultToast', () => {
     expect(mixed.message).toBe(
       'Copied 1 shift. 1 skipped because that slot was deleted in the target month. 2 skipped, their template is inactive, no longer runs that weekday, or the target month has no matching weekday (a 5th Monday).',
     )
+  })
+
+  // COPYLEAVE.1 — a coach skipped because they are on approved leave gets that
+  // reason, never the mode's ("their template is inactive").
+  it('names approved leave as its own skip reason', () => {
+    expect(copyResultToast({ period: 'week', mode: 'exact', copied: 9, skipped: 3, skippedOnLeave: 3 })).toEqual({
+      kind: 'warning',
+      message: 'Copied 9 shifts. 3 skipped, on leave.',
+    })
+  })
+
+  it('lists deleted slots, leave, then the mode\'s reason, each with its own count', () => {
+    const r = copyResultToast({ period: 'week', mode: 'template', copied: 1, skipped: 6, skippedRemoved: 1, skippedOnLeave: 2 })
+    expect(r.message).toBe(
+      'Copied 1 shift. 1 skipped because that slot was deleted in the target week. 2 skipped, on leave. 3 skipped, their template is inactive or no longer runs that weekday.',
+    )
+  })
+
+  it('never claims more leave skips than there were skips', () => {
+    expect(copyResultToast({ period: 'week', mode: 'exact', copied: 1, skipped: 1, skippedOnLeave: 5 }).message)
+      .toBe('Copied 1 shift. 1 skipped, on leave.')
   })
 })

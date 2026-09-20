@@ -16,9 +16,10 @@
 // Both modes insert only (COPYFIX.1, via bulkUpsertShiftAssignments): a coach
 // already on the target keeps their times, notes and status.
 //
-// The read (fetchSourceBlocks) is the only I/O here. Everything that decides
-// what gets written (buildCopyPlan + the date mappers) is pure, so both modes
-// are unit-testable without a Supabase mock. Dates are YYYY-MM-DD calendar
+// The reads (fetchSourceBlocks, and COPYLEAVE.1's fetchApprovedLeave) are the
+// only I/O here. Everything that decides what gets written (buildCopyPlan +
+// the date mappers) is pure, so both modes are unit-testable without a
+// Supabase mock. Dates are YYYY-MM-DD calendar
 // strings throughout; they are only ever turned into local-midnight Dates and
 // back through local components, never toISOString() (BST, see CLAUDE.md).
 
@@ -62,6 +63,38 @@ export async function fetchSourceBlocks(db, { locationId, startDate, endDate }) 
     if (page.length < PAGE_SIZE) break
   }
   return { blocks, error: null }
+}
+
+/**
+ * COPYLEAVE.1 — APPROVED time off, of any type, for these coaches that
+ * overlaps [startDate, endDate] (the TARGET period). Filtered by PERSON, not by
+ * location: leave covers the person (LEAVE.2), so a coach who filed from
+ * another studio is still off here. Paged like fetchSourceBlocks.
+ *
+ * @returns {Promise<{ leave: Array<object>, error: object|null }>}
+ */
+export async function fetchApprovedLeave(db, { profileIds, startDate, endDate }) {
+  const ids = [...new Set((profileIds || []).filter(Boolean))]
+  if (ids.length === 0) return { leave: [], error: null }
+  const leave = []
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await db
+      .from('time_off_requests')
+      // Literal on purpose: check:select-columns only resolves literal selects.
+      .select('id, profile_id, start_date, end_date, status')
+      .in('profile_id', ids)
+      .eq('status', 'approved')
+      .lte('start_date', endDate)
+      .gte('end_date', startDate)
+      .order('start_date', { ascending: true })
+      .order('id', { ascending: true })
+      .range(from, from + PAGE_SIZE - 1)
+    if (error) return { leave: [], error }
+    const page = data || []
+    leave.push(...page)
+    if (page.length < PAGE_SIZE) break
+  }
+  return { leave, error: null }
 }
 
 /** Local-midnight Date for a YYYY-MM-DD string (never UTC-parsed). */
@@ -115,6 +148,65 @@ function templateRunsOn(tpl, weekday) {
 }
 
 /**
+ * COPYLEAVE.1 — pure. Turn time_off_requests rows into
+ * `(profileId, dateIso) => boolean`: is this coach on APPROVED leave that day?
+ * Both ends inclusive (time_off_requests.end_date is inclusive, mig 011). Dates
+ * are YYYY-MM-DD strings, so string comparison IS date comparison.
+ *
+ * The status is re-checked here rather than trusted from the caller's query:
+ * this is the function that says "on leave", so it must not be able to say it
+ * about a request nobody approved (same posture as coachConflictsForBlock in
+ * schedule-overlap.js). Any leave TYPE counts: holiday, sick, unavailable.
+ */
+export function approvedLeaveLookup(leaveRows) {
+  const byProfile = new Map()
+  for (const r of leaveRows || []) {
+    if (r?.status !== 'approved' || !r.profile_id || !r.start_date || !r.end_date) continue
+    if (!byProfile.has(r.profile_id)) byProfile.set(r.profile_id, [])
+    byProfile.get(r.profile_id).push(r)
+  }
+  return (profileId, dateIso) =>
+    (byProfile.get(profileId) || []).some((r) => r.start_date <= dateIso && r.end_date >= dateIso)
+}
+
+/** COPYLEAVE.1 — pure. Distinct profile ids with a LIVE assignment in these blocks. */
+function liveCoachIds(sourceBlocks) {
+  const ids = new Set()
+  for (const b of sourceBlocks || []) {
+    for (const a of (b.shift_assignments || []).filter(isLiveAssignment)) {
+      if (a.profile_id) ids.add(a.profile_id)
+    }
+  }
+  return [...ids]
+}
+
+// ── Skip reasons the copy has to READ for ───────────────────────────────────
+// Each is one call the two copy routes make before any write, returning a
+// lookup buildCopyPlan takes as an option, or an error that stops the copy.
+// A new reason (a coach who is no longer at this studio, say) goes here as a
+// sibling of fetchLeaveLookup, and beside `onLeave` in buildCopyPlan's loops.
+
+/**
+ * COPYLEAVE.1 — the leave half of a copy, in one call: the live coaches on
+ * `sourceBlocks`, their APPROVED leave over the TARGET period [startDate,
+ * endDate], and the `(profileId, targetDate) => boolean` buildCopyPlan takes
+ * as `isOnLeave`. On a failed read `isOnLeave` is null, not a lookup that says
+ * "nobody": copying blind is the bug this exists to stop, so the caller must
+ * handle `error` and cannot fall through by accident.
+ *
+ * @returns {Promise<{ isOnLeave: ((profileId: string, dateIso: string) => boolean)|null, error: object|null }>}
+ */
+export async function fetchLeaveLookup(db, { sourceBlocks, startDate, endDate }) {
+  const { leave, error } = await fetchApprovedLeave(db, {
+    profileIds: liveCoachIds(sourceBlocks),
+    startDate,
+    endDate,
+  })
+  if (error) return { isOnLeave: null, error }
+  return { isOnLeave: approvedLeaveLookup(leave), error: null }
+}
+
+/**
  * Pure. Turn source blocks (fetchSourceBlocks shape) into what the batch
  * writer needs.
  *
@@ -123,18 +215,25 @@ function templateRunsOn(tpl, weekday) {
  * @param {'exact'|'template'} opts.mode
  * @param {(sourceDate: string) => string|null} opts.mapDate  source block_date
  *   -> target date, or null when the day has no counterpart (skipped).
+ * @param {(profileId: string, targetDate: string) => boolean} [opts.isOnLeave]
+ *   COPYLEAVE.1 — approvedLeaveLookup(...). A live source coach on APPROVED
+ *   leave on the TARGET date is not copied; they count in `skipped` and in
+ *   `skippedOnLeave`. Omitted = nobody is on leave.
  * @returns {{
  *   rows: Array<object>,     // bulkUpsertShiftAssignments rows
  *   blocks: Array<object>,   // target blocks to ensure (exact mode only)
  *   skipped: number,         // live source assignments not copied
+ *   skippedOnLeave: number,  // the part of skipped that was approved leave
  *   sourceAssignments: number,
  * }}
  */
-export function buildCopyPlan(sourceBlocks, { mode, mapDate }) {
+export function buildCopyPlan(sourceBlocks, { mode, mapDate, isOnLeave = null }) {
   if (!COPY_MODES.includes(mode)) throw new Error(`unknown copy mode: ${mode}`)
+  const onLeave = typeof isOnLeave === 'function' ? isOnLeave : () => false
   const rows = []
   const blocks = []
   let skipped = 0
+  let skippedOnLeave = 0
   let sourceAssignments = 0
 
   for (const b of sourceBlocks || []) {
@@ -162,6 +261,9 @@ export function buildCopyPlan(sourceBlocks, { mode, mapDate }) {
         maxCoaches: b.max_coaches ?? null,
       })
       for (const a of live) {
+        // COPYLEAVE.1 — a coach on approved leave that day is not put back on
+        // it. The block above is still ensured, so the slot shows as a gap.
+        if (onLeave(a.profile_id, targetDate)) { skipped++; skippedOnLeave++; continue }
         rows.push({
           profileId: a.profile_id,
           shiftTemplateId: b.template_id,
@@ -191,6 +293,7 @@ export function buildCopyPlan(sourceBlocks, { mode, mapDate }) {
     // template, so a coach lands at the template's times either way and a
     // block at template times (the normal case) carries no override at all.
     for (const a of live) {
+      if (onLeave(a.profile_id, targetDate)) { skipped++; skippedOnLeave++; continue }
       rows.push({
         profileId: a.profile_id,
         shiftTemplateId: b.template_id,
@@ -204,7 +307,7 @@ export function buildCopyPlan(sourceBlocks, { mode, mapDate }) {
     }
   }
 
-  return { rows, blocks, skipped, sourceAssignments }
+  return { rows, blocks, skipped, skippedOnLeave, sourceAssignments }
 }
 
 // ── UI copy (shared by the schedule calendar's copy dialog) ─────────────────
@@ -232,31 +335,35 @@ export const COPY_MODE_OPTIONS = [
  * @param {'week'|'month'} r.period
  * @param {'exact'|'template'} r.mode
  * @param {number} [r.copied]
- * @param {number} [r.skipped]          includes skippedRemoved
+ * @param {number} [r.skipped]          includes skippedRemoved and skippedOnLeave
  * @param {number} [r.skippedRemoved]   SLOTREMOVAL.1 — skipped because the
  *   target slot was deleted by a manager
+ * @param {number} [r.skippedOnLeave]   COPYLEAVE.1 — skipped because the coach
+ *   has approved leave that day
  */
-export function copyResultToast({ period, mode, copied = 0, skipped = 0, skippedRemoved = 0 }) {
+export function copyResultToast({ period, mode, copied = 0, skipped = 0, skippedRemoved = 0, skippedOnLeave = 0 }) {
   const n = Number(copied) || 0
   const total = Number(skipped) || 0
   const removed = Math.min(Number(skippedRemoved) || 0, total)
+  const onLeave = Math.min(Number(skippedOnLeave) || 0, total - removed)
   const copiedText = `Copied ${n} ${n === 1 ? 'shift' : 'shifts'}.`
   if (total === 0) {
     return { kind: 'success', message: n === 0 ? `${copiedText} Everyone was already on the target ${period}.` : copiedText }
   }
-  const removedText = removed > 0
-    ? `${removed} skipped because that slot was deleted in the target ${period}.`
-    : ''
-  const s = total - removed
-  if (s === 0) return { kind: 'warning', message: `${copiedText} ${removedText}` }
-  let why
-  if (mode === 'template') {
-    why = period === 'month'
-      ? "their template is inactive, no longer runs that weekday, or the target month has no matching weekday (a 5th Monday)."
-      : 'their template is inactive or no longer runs that weekday.'
-  } else {
-    why = 'that day of the month does not exist in the target (usually 31 Jan into Feb).'
+  const parts = [copiedText]
+  if (removed > 0) parts.push(`${removed} skipped because that slot was deleted in the target ${period}.`)
+  if (onLeave > 0) parts.push(`${onLeave} skipped, on leave.`)
+  const s = total - removed - onLeave
+  if (s > 0) {
+    let why
+    if (mode === 'template') {
+      why = period === 'month'
+        ? "their template is inactive, no longer runs that weekday, or the target month has no matching weekday (a 5th Monday)."
+        : 'their template is inactive or no longer runs that weekday.'
+    } else {
+      why = 'that day of the month does not exist in the target (usually 31 Jan into Feb).'
+    }
+    parts.push(`${s} skipped, ${why}`)
   }
-  const otherText = `${s} skipped, ${why}`
-  return { kind: 'warning', message: removedText ? `${copiedText} ${removedText} ${otherText}` : `${copiedText} ${otherText}` }
+  return { kind: 'warning', message: parts.join(' ') }
 }

@@ -935,3 +935,43 @@ describe('POST /api/schedule/rosters — roles resolve at the ROSTER\'s location
     expect(inserts[0].over_budget_approval_by).toBe('master-1')
   })
 })
+
+// COPYLEAVE.1 quality — the advisory lists are rendered from the DRY RUN only
+// (the modal's setImpact reads nothing else; the 409 owner-confirm impact is
+// never shown). A real publish must not pay for the sibling-location and
+// other-studio reads behind them. With advisories off projectPublishImpact
+// makes neither query: pinned in src/lib/roster-publish.test.js.
+describe('POST /api/schedule/rosters — advisories are a dry-run concern', () => {
+  it('the dry run asks for the advisory lists and returns them', async () => {
+    const lists = { leaveClashes: [{ block_id: 'b1', profile_id: 'coach-1' }], doubleBookings: [], crossLocationChecked: true }
+    projectPublishImpact.mockResolvedValue({ ...UNDER_BUDGET, ...lists })
+    const { db } = buildDb()
+    createServerClient.mockReturnValue(db)
+
+    const body = await (await publish({ dry_run: true })).json()
+    expect(projectPublishImpact).toHaveBeenCalledTimes(1)
+    expect(projectPublishImpact.mock.calls[0][1]).toMatchObject({ advisories: true })
+    expect(body.impact).toMatchObject(lists)
+  })
+
+  it('a REAL publish asks for none', async () => {
+    const { db, inserts } = buildDb()
+    createServerClient.mockReturnValue(db)
+
+    const res = await publish()
+    expect(res.status).toBe(201)
+    expect(inserts).toHaveLength(1)
+    expect(projectPublishImpact).toHaveBeenCalledTimes(1)
+    expect(projectPublishImpact.mock.calls[0][1]).toMatchObject({ advisories: false })
+  })
+
+  it('nor does the owner-confirm 409: the modal never renders that impact', async () => {
+    projectPublishImpact.mockResolvedValue({ ...UNDER_BUDGET, overBudget: true, overrunEur: 50 })
+    const { db } = buildDb()
+    createServerClient.mockReturnValue(db)
+
+    const res = await publish()
+    expect(res.status).toBe(409)
+    expect(projectPublishImpact.mock.calls[0][1]).toMatchObject({ advisories: false })
+  })
+})
