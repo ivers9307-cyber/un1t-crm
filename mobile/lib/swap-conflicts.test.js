@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   SWAP_CONFLICTS_CODE, isSwapConflictRefusal, swapConflictLines, swapConflictPrompt,
+  SWAP_CLAIM_NOTICE_HEADING, swapClaimNotice,
 } from './swap-conflicts'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -140,5 +141,36 @@ describe('swapConflictPrompt', () => {
     const p = swapConflictPrompt(refusal([UNCHECKED, OVERLAP]))
     expect(p.title).toBe('Check before approving')
     expect(p.uncheckedOnly).toBe(false)
+  })
+})
+
+// COVERLOOP.2 — a claim/accept that SUCCEEDS can still carry advisory
+// warnings (the claiming coach's own leave / same-day clash). Web shows them;
+// the phone dropped them.
+describe('swapClaimNotice', () => {
+  const LEAVE_WARNING = 'You have approved holiday on 2026-09-24, which covers the shift on 2026-09-24.'
+  const CLASH_WARNING = 'You are already on Open 09:00 to 10:30 at Stillorgan on 2026-09-24, which overlaps the shift (10:00 to 11:00).'
+
+  it('uses the heading the web Today page uses (mobile cannot import it)', () => {
+    const src = readFileSync(join(__dirname, '../../src/components/dashboard/SwapActions.jsx'), 'utf8')
+    expect(src).toContain(SWAP_CLAIM_NOTICE_HEADING)
+  })
+
+  it('titles the alert with that heading and lists every sentence on its own line', () => {
+    expect(swapClaimNotice({ success: true, data: {}, warnings: [LEAVE_WARNING, CLASH_WARNING] })).toEqual({
+      title: 'Sent to your manager. Heads up:',
+      message: `${LEAVE_WARNING}\n${CLASH_WARNING}`,
+      lines: [LEAVE_WARNING, CLASH_WARNING],
+    })
+  })
+
+  it.each([
+    ['no warnings key', { success: true, data: {} }],
+    ['an empty list', { success: true, warnings: [] }],
+    ['only blanks and non-strings', { success: true, warnings: ['', '  ', null, 7] }],
+    ['a FAILED response (its error is shown instead)', { success: false, error: 'nope', warnings: [LEAVE_WARNING] }],
+    ['null', null],
+  ])('says nothing for %s', (_name, res) => {
+    expect(swapClaimNotice(res)).toBeNull()
   })
 })
