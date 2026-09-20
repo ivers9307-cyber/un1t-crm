@@ -40,7 +40,6 @@ import {
   staffingGapsHeadline,
   staffingGapsBreakdown,
   periodPublicationStatus,
-  PUBLICATION_LABELS,
 } from '@/lib/roster-staffing'
 // ROSTER-FIX.4 — the server refuses a publish that would leave two published
 // rosters over the same days. `overlapping_roster` is a code, not copy; the
@@ -66,6 +65,7 @@ import { leaveClashesHeadline, leaveRangeLabel } from '@/lib/roster-publish-advi
 import RosterSummaryPanel from './RosterSummaryPanel'
 import ScheduleErrorBanner from './schedule/ScheduleErrorBanner'
 import RosterChangeLogDrawer from './schedule/RosterChangeLogDrawer'
+import PublicationStatusChip from './schedule/PublicationStatusChip'
 import { timeOffLeaveLabel } from '@shared/time-off'
 // ROSTER-FIX.6a — the six-endpoint fan-out, its error handling and its
 // request-ordering guard live in the hook now; see its header for why.
@@ -137,16 +137,6 @@ function blockStaffingStatus(block, todayStr) {
 // ROSTERROLE.1 — publishing over budget without an approval is an OWNER
 // decision, judged at the roster's studio (the route uses the same set).
 const OWNER_ROLES = ['owner']
-
-// ROSTERVIS.1 — the header chip's look per publication status. Text + icon
-// carry the meaning; colour is the at-a-glance cue (house chip rule: -500/10
-// background, -700 text).
-const PUBLICATION_CHIP = {
-  published: { cls: 'bg-green-500/10 text-green-700 border-green-500/30', Icon: Check },
-  pending: { cls: 'bg-blue-500/10 text-blue-700 border-blue-500/30', Icon: Clock },
-  partial: { cls: 'bg-amber-500/10 text-amber-700 border-amber-500/30', Icon: AlertTriangle },
-  unpublished: { cls: 'bg-slate-500/10 text-slate-700 border-slate-500/30', Icon: CalendarOff },
-}
 
 export default function ScheduleCalendar({ user, onRangeChange, onDataChange, focusShift }) {
   // SCHEDULE-PERSIST.1 — week / month / view persisted in the URL so
@@ -560,6 +550,19 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
   // publish modal's month scope uses.
   const visiblePeriodStart = viewType === 'month' ? formatDate(monthStart) : formatDate(weekStart)
   const visiblePeriodEnd = viewType === 'month' ? formatDate(visibleMonthEnd) : formatDate(weekEnd)
+
+  // CHANGELOG.1 — what the publication chip calls. Named, so the chip can move
+  // (it lives in its own component) and carry one prop with it. A plain
+  // function, not useCallback: the period strings derive from Date objects the
+  // React Compiler cannot prove immutable, so a manual memo here is refused by
+  // react-hooks/preserve-manual-memoization. The compiler memoises it itself.
+  const openChangeLog = () => {
+    setChangeLog({
+      start: visiblePeriodStart,
+      end: visiblePeriodEnd,
+      label: viewType === 'month' ? monthLabel : weekLabel,
+    })
+  }
   const publication = periodPublicationStatus({
     blocks,
     periodStart: visiblePeriodStart,
@@ -1118,54 +1121,13 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
               Manager only (a coach's feed is published-only), and hidden
               while loading so a stale week's answer never sits under new
               dates. */}
-          {isManager && !loading && publication.status !== 'none' && (() => {
-            const chip = PUBLICATION_CHIP[publication.status]
-            const Icon = chip.Icon
-            const periodWord = viewType === 'month' ? 'Month' : 'Week'
-            const label = PUBLICATION_LABELS[publication.status]
-            const extra = publication.status === 'published' && publication.draftPending
-              ? ', changes awaiting approval'
-              : publication.status === 'partial'
-                ? ` (${publication.publishedCount} of ${publication.blockCount} shifts)`
-                : ''
-            // CHANGELOG.1 — a published (or partly published) period can have
-            // post-publish edits, so its chip opens the change log. The TEXT is
-            // identical either way; only the element differs. The live region
-            // sits on the wrapper so the button carries no conflicting role.
-            const canOpenLog = publication.status === 'published' || publication.status === 'partial'
-            const chipCls = `inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full border ${chip.cls}`
-            const chipBody = (
-              <>
-                <Icon size={12} aria-hidden="true" />
-                <span className="sr-only">{periodWord} status: </span>
-                {label}{extra}
-              </>
-            )
-            return (
-              <div className="mt-1.5 flex justify-center" role="status">
-                {canOpenLog ? (
-                  <button
-                    type="button"
-                    data-testid="publication-status"
-                    aria-haspopup="dialog"
-                    title="See changes since publish"
-                    onClick={() => setChangeLog({
-                      start: visiblePeriodStart,
-                      end: visiblePeriodEnd,
-                      label: viewType === 'month' ? monthLabel : weekLabel,
-                    })}
-                    className={`${chipCls} cursor-pointer hover:brightness-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-600`}
-                  >
-                    {chipBody}
-                  </button>
-                ) : (
-                  <span data-testid="publication-status" className={chipCls}>
-                    {chipBody}
-                  </span>
-                )}
-              </div>
-            )
-          })()}
+          {isManager && !loading && publication.status !== 'none' && (
+            <PublicationStatusChip
+              publication={publication}
+              viewType={viewType}
+              onOpenChangeLog={openChangeLog}
+            />
+          )}
         </div>
         <button
           type="button"
