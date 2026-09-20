@@ -1209,16 +1209,20 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
         // ── WEEK VIEW ──
         // Roster v2: one card per BLOCK. Each card is a
         // schedule/ShiftCard. Click opens the block-detail dialog.
-        // ROSTER-FIX.6b — same floor as the month grid; a week card carries a
+        // ROSTER-FIX.6b — a floor, like the month grid's; a week card carries a
         // template name, a time range and a coach list, none of which survive
         // a 50px column.
+        // ROSTERLOOK.1 — 980px, not the month grid's 840: at 840 a card is 99px
+        // and the longest real one-line range ("10:45am–12pm", 95px of text)
+        // spilled over its border. 980 gives about 116px. The grid scrolls
+        // inside its own container, so a wider floor costs the page nothing.
         // ROSTERLOOK.1 — `relative` makes THIS scroller the containing block for
         // every absolutely-positioned descendant (each sr-only span is one).
         // Without it they are not clipped by the scroller and stretch the
         // DOCUMENT sideways on a phone. Browser check, at 390 wide:
         // document.documentElement.scrollWidth <= document.documentElement.clientWidth
         <div className="relative overflow-x-auto">
-        <div className="grid grid-cols-7 gap-2 min-w-[840px]">
+        <div className="grid grid-cols-7 gap-2 min-w-[980px]">
           {(() => {
             const holidayByDate = indexByDate(holidays)
             return DAY_LABELS.map((label, i) => {

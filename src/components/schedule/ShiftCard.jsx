@@ -56,7 +56,7 @@ export default function ShiftCard({ model, dayLabel, isMine = false, showHint = 
       data-tone={model.tone}
       data-status={model.status ? model.status.kind : 'ok'}
       title={model.hoverTitle}
-      className={`relative group rounded-md border p-2 text-xs ${surface} ${border} hover:ring-1 hover:ring-un1t-subtle/40 ${isMine ? 'ring-1 ring-blue-400/50' : ''} ${isSelected ? 'ring-2 ring-amber-400 ring-offset-1 ring-offset-un1t-bg' : ''}`}
+      className={`relative group rounded-md border px-1.5 py-2 text-xs ${surface} ${border} hover:ring-1 hover:ring-un1t-subtle/40 ${isMine ? 'ring-1 ring-blue-400/50' : ''} ${isSelected ? 'ring-2 ring-amber-400 ring-offset-1 ring-offset-un1t-bg' : ''}`}
     >
       <button
         type="button"
@@ -67,8 +67,11 @@ export default function ShiftCard({ model, dayLabel, isMine = false, showHint = 
         <span className="sr-only">{selectMode ? `Select ${cardLabel}` : `Manage ${cardLabel}`}</span>
       </button>
 
-      {/* Line 1 — the time, never wrapping. */}
-      <div data-testid="shift-time" className="whitespace-nowrap font-semibold tabular-nums text-un1t-text">
+      {/* Line 1 — the time, never wrapping and never truncated. Browser-measured
+          at the old 840px grid floor: a 99px card, and "10:45am–12pm" crossed
+          its border by 5px. Hence tracking-tight here, px-1.5 on the card, and
+          a 980px floor on the week grid (ScheduleCalendar). */}
+      <div data-testid="shift-time" className="whitespace-nowrap font-semibold tabular-nums tracking-tight text-un1t-text">
         {model.timeLabel}
       </div>
 

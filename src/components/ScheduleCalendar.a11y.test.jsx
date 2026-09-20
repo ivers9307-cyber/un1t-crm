@@ -5,7 +5,7 @@
 // keyboard.
 //
 // 🔴 Memory `jsdom-cannot-see-layout`: jsdom has NO layout engine, so the
-// responsive part of 6b (the overflow-x-auto + min-w-[840px] wrappers) is
+// responsive part of 6b (the overflow-x-auto + min-w-[840px] / [980px] wrappers) is
 // unprovable here — className assertions would pass on a wrapper that renders
 // nothing. That half needs a browser at 390px. What IS provable is the
 // semantics: roles, names, focus and key handling, and that is all this file

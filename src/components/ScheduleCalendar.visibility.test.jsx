@@ -503,6 +503,15 @@ describe('the roster scrolls inside its own container, not the page (ROSTERLOOK.
     for (const el of hidden) expect(el.parentElement.className, el.parentElement.outerHTML.slice(0, 120)).toMatch(POSITIONED)
   })
 
+  // Browser-measured: at the old 840px floor a card was 99px wide and the
+  // longest real range spilled out of it. 980px gives about 116px a card.
+  it('week view: the grid floor is wide enough for the longest time range', async () => {
+    await renderCalendar({ blocks: [OK_BLOCK] })
+    const grid = screen.getAllByTestId('day-header')[0].closest('.grid')
+    expect(grid.className).toMatch(/min-w-\[980px\]/)
+    expect(grid.parentElement.className).toMatch(/\boverflow-x-auto\b/)
+  })
+
   it('month view: the same', async () => {
     await renderCalendar({ blocks: [SHORT_BLOCK, EMPTY_BLOCK, OK_BLOCK] })
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Month' })) })

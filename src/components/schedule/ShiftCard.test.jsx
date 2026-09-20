@@ -37,6 +37,12 @@ describe('ShiftCard', () => {
     expect(follows(coaches, template)).toBe(true)
     expect(time.textContent).toBe('9:15–10:30am')
     expect(time.className).toMatch(/whitespace-nowrap/)
+    // Browser-measured: at the grid floor "10:45am–12pm" crossed the card's
+    // border by 5px. A time is never truncated, so the line is tightened and
+    // the card's side padding is one step smaller than its vertical padding.
+    expect(time.className).toMatch(/\btracking-tight\b/)
+    expect(time.className).not.toMatch(/truncate|overflow-hidden/)
+    expect(screen.getByTestId('shift-card').className).toMatch(/\bpx-1\.5\b/)
   })
 
   it('coach names are body size, one per line, and the template label is the small one', () => {
