@@ -92,6 +92,24 @@ describe('shiftCardModel', () => {
     expect(JSON.stringify(m)).not.toMatch(/17|\d+\/\d+/)
   })
 
+  // The card's click target is a button stretched OVER its text, so a title on
+  // the template label or a coach's name is never under the pointer. The card
+  // container carries one tooltip that says everything truncation can cut.
+  it('hoverTitle: template, range, full names with adjusted hours, and the status in words', () => {
+    const m = shiftCardModel(
+      block(),
+      [coach('u2', 'Coach A', { start_time_override: '09:30', partial_reason: 'late start' }), coach('u3', 'Coach B')],
+      { status: 'short', count: 2, min: 3 },
+      { isManager: true },
+    )
+    expect(m.hoverTitle).toBe('Morning 8 Week Challenge - Strength · 9:15–10:30am · Coach A (Adjusted: 9:30am–10:30am · late start), Coach B · Below minimum: 2 of 3 coaches')
+  })
+
+  it('hoverTitle for a coach carries no staffing words', () => {
+    const m = shiftCardModel(block(), [coach('u2', 'Coach A')], { status: 'short', count: 1, min: 2 }, { isManager: false })
+    expect(m.hoverTitle).toBe('Morning 8 Week Challenge - Strength · 9:15–10:30am · Coach A')
+  })
+
   it('falls back to "Shift" when the template is missing', () => {
     const m = shiftCardModel(block({ shift_templates: null }), [], null, { isManager: true })
     expect(m.templateName).toBe('Shift')

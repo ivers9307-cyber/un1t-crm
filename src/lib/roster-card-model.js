@@ -78,9 +78,22 @@ export function shiftCardModel(block, assignments, staffing, { isManager = false
   let emptyText = null
   if (coaches.length === 0 && !status) emptyText = isManager ? 'No coach (past)' : 'No coach assigned'
 
+  const timeLabel = formatTimeRange12h(block?.start_time, block?.end_time)
+  // ONE tooltip for the whole card. The card's click target is a <button>
+  // stretched over its text, so a `title` on the template label or on a name
+  // is never under the pointer; the container's is. Built only from what the
+  // model already holds, so it inherits the coach boundary.
+  const hoverTitle = [
+    templateName,
+    timeLabel,
+    coaches.map((c) => (c.adjusted ? `${c.name} (${c.adjusted.title})` : c.name)).join(', '),
+    status?.title,
+  ].filter(Boolean).join(' · ')
+
   return {
     tone: cardTone(block),
-    timeLabel: formatTimeRange12h(block?.start_time, block?.end_time),
+    timeLabel,
+    hoverTitle,
     // The card button's spoken name is built from this plus the day; it keeps
     // the ROSTER-FIX.6b-7 shape "9am Morning shift".
     shortLabel: `${formatTime12h(block?.start_time)} ${templateName} shift`,
