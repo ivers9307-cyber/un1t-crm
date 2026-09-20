@@ -115,6 +115,10 @@ const config = [
       // block comment above describes. The colour-blind and greyscale work in
       // 6b is worth nothing if the text carrying it cannot be read at all.
       'src/components/ScheduleCalendar.jsx',
+      // ROSTERLOOK.1 — the roster's toolbar, day header, card and month cell
+      // moved out of ScheduleCalendar.jsx into this directory; without this
+      // line the move would have quietly un-armed them.
+      'src/components/schedule/**',
       'src/components/ScheduleReporting.jsx',
       'src/components/ShiftTemplateManager.jsx',
       'src/components/TimeOffManager.jsx',

@@ -135,3 +135,27 @@ export function classifyDayLoad({ demand, staff_scheduled, staff_on_leave, block
   if ((blocks_below_min || 0) > 0) return 'amber'
   return 'green'
 }
+
+/**
+ * ROSTERLOOK.1 — who is on leave on `date`, each PERSON once. The route used to
+ * push a name per REQUEST, so two overlapping requests from one person put
+ * their name in the day dialog's "On leave" list twice. Deduped by profile_id,
+ * never by name: two people who share a name are two people. Pure.
+ *
+ * @param {Array} timeOff  rows: profile_id, start_date, end_date, profiles.full_name
+ * @param {string} date    YYYY-MM-DD
+ * @returns {{ names: string[], profileIds: string[] }}
+ */
+export function leaveOnDate(timeOff, date) {
+  const names = []
+  const profileIds = []
+  const seen = new Set()
+  for (const off of timeOff || []) {
+    if (!off || date < off.start_date || date > off.end_date) continue
+    if (off.profile_id && seen.has(off.profile_id)) continue
+    if (off.profile_id) seen.add(off.profile_id)
+    names.push(off.profiles?.full_name || 'Unknown')
+    profileIds.push(off.profile_id)
+  }
+  return { names, profileIds }
+}

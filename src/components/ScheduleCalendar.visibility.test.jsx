@@ -72,14 +72,14 @@ const COACH = { id: 'u2', role: 'coach', activeLocation: { id: 'loc1', name: 'St
 // CHANGELOG.1 — what the drawer's read answers. Reassigned per test.
 let CHANGES = []
 
-function mockFetch({ blocks, drafts = [], impact = null }) {
+function mockFetch({ blocks, drafts = [], impact = null, timeOff = [] }) {
   return vi.fn((url, opts) => {
     const u = String(url)
     let body
     if (u.includes('/api/schedule/blocks')) body = { success: true, data: blocks }
     else if (u.includes('/api/schedule/templates')) body = { success: true, data: [TEMPLATE] }
     else if (u.includes('/api/staff')) body = { success: true, data: STAFF }
-    else if (u.includes('/api/schedule/time-off')) body = { success: true, data: [] }
+    else if (u.includes('/api/schedule/time-off')) body = { success: true, data: timeOff }
     else if (u.includes('/holidays')) body = { success: true, data: [] }
     else if (u.includes('contractor-spend')) body = { success: true, data: null }
     else if (u.includes('/api/schedule/week-cost')) body = { success: true, data: null }
@@ -106,8 +106,40 @@ describe('below-minimum shifts (ROSTERVIS.1)', () => {
     expect(badges).toHaveLength(1)
     expect(badges[0].textContent).toMatch(/1 of 2/)
     expect(badges[0].textContent).toMatch(/Below minimum/)
-    // The empty card keeps its own red treatment.
-    expect(screen.getByText('Unstaffed — assign a coach')).toBeTruthy()
+    // ROSTERLOOK.1 — the empty card says "Needs coach" and is the only one
+    // flagged empty; the staffed card is flagged nothing.
+    expect(screen.getAllByTestId('needs-coach-badge')).toHaveLength(1)
+    const statuses = screen.getAllByTestId('shift-card').map((c) => c.getAttribute('data-status')).sort()
+    expect(statuses).toEqual(['empty', 'ok', 'short'])
+  })
+
+  it('no card carries a capacity chip, and every card is neutral (ROSTERLOOK.1)', async () => {
+    await renderCalendar({ blocks: [SHORT_BLOCK, EMPTY_BLOCK, OK_BLOCK] })
+    for (const card of screen.getAllByTestId('shift-card')) {
+      expect(card.textContent).not.toMatch(/\d+\s*\/\s*\d+/)   // was "1/3" on every card
+      expect(card.getAttribute('data-tone')).toBe('neutral')
+      expect(card.getAttribute('style')).toBeNull()             // was the template colour at 12%
+    }
+  })
+
+  it('a card reads time, then coach, then template (ROSTERLOOK.1)', async () => {
+    await renderCalendar({ blocks: [OK_BLOCK] })
+    const card = screen.getByTestId('shift-card')
+    expect(within(card).getByTestId('shift-time').textContent).toBe('12–1pm')
+    expect(within(card).getByText('Mike Byrne')).toBeTruthy()
+    expect(within(card).getByTestId('shift-template').textContent).toBe('Lunch')
+  })
+
+  it('a coach sees the same cards with no status on them (ROSTERLOOK.1)', async () => {
+    await renderCalendar({ user: COACH, blocks: [SHORT_BLOCK, OK_BLOCK] })
+    const cards = screen.getAllByTestId('shift-card')
+    expect(cards).toHaveLength(2)
+    for (const card of cards) {
+      expect(card.getAttribute('data-status')).toBe('ok')
+      expect(card.textContent).not.toMatch(/\d+ of \d+|\d+\s*\/\s*\d+/)
+      // The tooltip is built from the same model, so it is inside the boundary.
+      expect(card.getAttribute('title')).not.toMatch(/minimum|Needs coach|\d+ of \d+/)
+    }
   })
 
   it('the week banner counts short shifts as well as empty ones', async () => {
@@ -381,5 +413,127 @@ describe('changes since publish (CHANGELOG.1)', () => {
   it('a coach has no chip, so no way in', async () => {
     await renderCalendar({ user: COACH, blocks: [SHORT_BLOCK, OK_BLOCK] })
     expect(screen.queryByTestId('publication-status')).toBeNull()
+  })
+})
+
+describe('day headers carry the staffing status (ROSTERLOOK.1)', () => {
+  const longDay = new Date(`${BLOCK_DATE}T00:00:00`).toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'long' })
+
+  it('a manager sees one status per day with future shifts, in words as well as colour', async () => {
+    await renderCalendar({ blocks: [SHORT_BLOCK, EMPTY_BLOCK, OK_BLOCK] })
+    const dots = screen.getAllByTestId('status-dot')
+    expect(dots).toHaveLength(1) // every fixture sits on BLOCK_DATE
+    expect(dots[0].getAttribute('data-tone')).toBe('empty')
+    // In words, not only in red: which problem, not just how many.
+    expect(dots[0].querySelector('[data-visible-label]').textContent).toBe('1 no coach')
+    expect(dots[0].querySelector('[data-visible-label-wide]').textContent).toBe('1 no coach · 1 short')
+    expect(dots[0].textContent).toMatch(/2 shifts need coaches: 1 with no coach, 1 below the minimum/)
+  })
+
+  it('without somewhere to open, the header is not a button (the calendar rendered alone)', async () => {
+    await renderCalendar({ blocks: [OK_BLOCK] })
+    expect(screen.queryByRole('button', { name: /Open studio overview/ })).toBeNull()
+    expect(screen.getAllByTestId('day-header')).toHaveLength(7)
+  })
+
+  it('given onOpenDayOverview, the header reports its own date', async () => {
+    const onOpenDayOverview = vi.fn()
+    global.fetch = mockFetch({ blocks: [OK_BLOCK] })
+    await act(async () => { render(<ScheduleCalendar user={MANAGER} onOpenDayOverview={onOpenDayOverview} />) })
+    await waitFor(() => expect(screen.queryByText(/Loading roster/)).toBeNull())
+    const header = screen.getByRole('button', { name: new RegExp(`^${longDay}\\.`) })
+    fireEvent.click(header)
+    // The date, and the header element itself: the dialog's owner needs the
+    // opener to give focus back to (Safari never focuses a clicked button).
+    expect(onOpenDayOverview).toHaveBeenCalledWith(BLOCK_DATE, header)
+  })
+
+  it('a coach sees no status and no clickable header, even when handed the prop', async () => {
+    global.fetch = mockFetch({ blocks: [SHORT_BLOCK, OK_BLOCK] })
+    await act(async () => { render(<ScheduleCalendar user={COACH} onOpenDayOverview={() => {}} />) })
+    await waitFor(() => expect(screen.queryByText(/Loading roster/)).toBeNull())
+    expect(screen.queryByTestId('status-dot')).toBeNull()
+    expect(screen.queryByRole('button', { name: /Open studio overview/ })).toBeNull()
+  })
+})
+
+describe('month view names the coaches (ROSTERLOOK.1)', () => {
+  async function renderMonth(opts) {
+    await renderCalendar(opts)
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Month' })) })
+    await waitFor(() => expect(screen.queryByText(/Loading roster/)).toBeNull())
+  }
+
+  it('a manager reads time + first names, numbers only on the short line, and no "!1" / "↓1"', async () => {
+    await renderMonth({ blocks: [SHORT_BLOCK, EMPTY_BLOCK, OK_BLOCK] })
+    const lines = screen.getAllByTestId('month-line').map((n) => n.textContent)
+    expect(lines).toEqual(['9 Sarah (1 of 2)', '12pm Mike', '5pm Needs coach'])
+    expect(document.body.textContent).not.toMatch(/[!↓]\d/)
+    expect(document.body.textContent).not.toMatch(/\d+\/\d+/) // the old "1/3"
+    const dot = screen.getByTestId('status-dot')
+    expect(dot.getAttribute('title')).toBe('2 shifts need coaches: 1 with no coach, 1 below the minimum')
+  })
+
+  it('a coach reads the same names with no status, no numbers and no dot', async () => {
+    await renderMonth({ user: COACH, blocks: [SHORT_BLOCK, OK_BLOCK] })
+    // The fixture hands the coach a short block WITH min_coaches, which the
+    // real feed never does: the guarantee under test is the model's.
+    expect(screen.queryByTestId('status-dot')).toBeNull()
+    for (const line of screen.getAllByTestId('month-line')) {
+      expect(['ok', 'quiet']).toContain(line.getAttribute('data-tone'))
+      expect(line.textContent).not.toMatch(/\d+ of \d+|Needs coach/)
+      expect(line.getAttribute('title')).not.toMatch(/minimum|\d+ of \d+/)
+    }
+  })
+})
+
+// 🔴 NOT proof. The defect was measured in a browser: at 390px the document was
+// 777px wide, because sr-only spans (position:absolute) inside the 7-column
+// grid had no positioned ancestor inside the grid's own scroller, so the
+// scroller did not clip them. The proof is, at 390 wide:
+//   document.documentElement.scrollWidth <= document.documentElement.clientWidth
+// This pins the classes that make that true so they are not dropped again.
+describe('the roster scrolls inside its own container, not the page (ROSTERLOOK.1)', () => {
+  const POSITIONED = /(^|\s)(relative|absolute|fixed|sticky)(\s|$)/
+
+  it('week view: the scroller is a containing block, and no sr-only span escapes it', async () => {
+    await renderCalendar({ blocks: [SHORT_BLOCK, EMPTY_BLOCK, OK_BLOCK] })
+    const scroller = screen.getAllByTestId('day-header')[0].closest('.overflow-x-auto')
+    expect(scroller.className).toMatch(/\brelative\b/)
+    const hidden = scroller.querySelectorAll('.sr-only')
+    expect(hidden.length).toBeGreaterThan(0)
+    for (const el of hidden) expect(el.parentElement.className, el.parentElement.outerHTML.slice(0, 120)).toMatch(POSITIONED)
+  })
+
+  // Browser-measured: at the old 840px floor a card was 99px wide and the
+  // longest real range spilled out of it. 980px gives about 116px a card.
+  it('week view: the grid floor is wide enough for the longest time range', async () => {
+    await renderCalendar({ blocks: [OK_BLOCK] })
+    const grid = screen.getAllByTestId('day-header')[0].closest('.grid')
+    expect(grid.className).toMatch(/min-w-\[980px\]/)
+    expect(grid.parentElement.className).toMatch(/\boverflow-x-auto\b/)
+  })
+
+  it('month view: the same', async () => {
+    await renderCalendar({ blocks: [SHORT_BLOCK, EMPTY_BLOCK, OK_BLOCK] })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Month' })) })
+    await waitFor(() => expect(screen.queryByText(/Loading roster/)).toBeNull())
+    const scroller = screen.getAllByTestId('month-line')[0].closest('.overflow-x-auto')
+    expect(scroller.className).toMatch(/\brelative\b/)
+    const hidden = scroller.querySelectorAll('.sr-only')
+    expect(hidden.length).toBeGreaterThan(0)
+    for (const el of hidden) expect(el.parentElement.className, el.parentElement.outerHTML.slice(0, 120)).toMatch(POSITIONED)
+  })
+})
+
+describe('leave bars: one per person per day (ROSTERLOOK.1)', () => {
+  const leave = (id, type, start_date, end_date) => ({ id, profile_id: 'u2', type, status: 'approved', start_date, end_date, profiles: { full_name: 'Sarah Doyle' } })
+
+  it('two overlapping requests from one coach draw ONE bar, short enough for the column, with the rest in its title', async () => {
+    await renderCalendar({ blocks: [OK_BLOCK], timeOff: [leave('t1', 'unavailable', BLOCK_DATE, BLOCK_DATE), leave('t2', 'unavailable', BLOCK_DATE, BLOCK_DATE)] })
+    const bars = screen.getAllByTestId('leave-bar')
+    expect(bars).toHaveLength(1)
+    expect(bars[0].textContent).toBe('Sarah · Unavailable')
+    expect(bars[0].getAttribute('title')).toMatch(/^Sarah Doyle — Unavailable, \d+ \w+ \(\+1 overlapping request\)$/)
   })
 })
