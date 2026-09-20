@@ -215,3 +215,28 @@ describe('PUT /api/staff/[id]/org-admin', () => {
     expect(res.status).toBe(400)
   })
 })
+
+// STAFFDELETE.1 — a permanently deleted staff member keeps a profiles row (a
+// tombstone). An org-admin grant is owner-everywhere across an organisation;
+// it must never be handed to one. (mig 622 makes the database refuse it too.)
+describe('/api/staff/[id]/org-admin — a tombstone is not found', () => {
+  const tombstone = { id: PROFILE_ID, full_name: 'Former Coach', email: `deleted+${PROFILE_ID}@deleted.invalid`, deleted_at: '2026-09-19T10:00:00Z' }
+
+  it('PUT 404s and grants nothing', async () => {
+    getCurrentUser.mockResolvedValue(master)
+    const { db, inserted, deleted } = mockDb({ target: tombstone })
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(putRequest([ORG_A]), { params: Promise.resolve({ id: PROFILE_ID }) })
+    expect(res.status).toBe(404)
+    expect(inserted).toEqual([])
+    expect(deleted).toEqual([])
+    expect(logAuditEvent).not.toHaveBeenCalled()
+  })
+
+  it('GET 404s', async () => {
+    getCurrentUser.mockResolvedValue(master)
+    createServerClient.mockReturnValue(mockDb({ target: tombstone }).db)
+    const res = await GET(new Request('http://test/api/staff/x/org-admin'), { params: Promise.resolve({ id: PROFILE_ID }) })
+    expect(res.status).toBe(404)
+  })
+})

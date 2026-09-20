@@ -33,6 +33,7 @@ import {
   canRemoveSelfFromLastOwnerLocation,
 } from '@/lib/assignment-changes'
 import { logWarn } from '@/lib/log'
+import { isTombstone } from '@/lib/staff-tombstone'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -80,6 +81,24 @@ export async function POST(request) {
     .eq('profile_id', body.profile_id)
     .eq('location_id', body.location_id)
     .maybeSingle()
+
+  // STAFFDELETE.1 — a permanently deleted staff member keeps a profiles row (a
+  // tombstone) and must never be given a studio role again. 'delete' stays
+  // allowed: removing access is always safe. Fails CLOSED on an unreadable
+  // profile. (mig 622's trigger on profile_locations refuses it too.)
+  if (body.action === 'create' || body.action === 'update') {
+    const { data: target, error: targetErr } = await db
+      .from('profiles')
+      .select('id, deleted_at')
+      .eq('id', body.profile_id)
+      .maybeSingle()
+    if (targetErr) {
+      return NextResponse.json({ success: false, error: 'Could not verify the profile' }, { status: 500 })
+    }
+    if (isTombstone(target)) {
+      return NextResponse.json({ success: false, error: 'Profile not found' }, { status: 404 })
+    }
+  }
 
   if (body.action === 'create') {
     if (existing) {

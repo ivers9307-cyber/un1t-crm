@@ -39,6 +39,7 @@ import { timeRangesOverlap, fmtTime } from '@/lib/schedule-overlap'
 import { logRosterChange } from '@/lib/roster-change-log'
 import { notifyRosterChanges } from '@/lib/roster-change-notify'
 import { isLiveAssignment, liveAssignments } from '@/lib/roster'
+import { isRosterableProfile, notRosterableError } from '@/lib/roster-write'
 
 const AssignSchema = z.object({
   profile_id: uuidLike.optional(),
@@ -115,7 +116,30 @@ export async function POST(request, props) {
       { status: 400 },
     )
   }
-  const requestedIds = allRequestedIds.filter((id) => membersHere.has(id))
+  // STAFFDELETE.1 — the same rule as every other write path
+  // (isRosterableProfile): a deactivated or permanently deleted coach cannot
+  // be put on a shift, even while still linked to the studio. Members only, so
+  // nothing about a foreign profile is read. Fail closed on a read error.
+  const memberIds = allRequestedIds.filter((id) => membersHere.has(id))
+  const peopleById = new Map()
+  if (memberIds.length > 0) {
+    const { data: people, error: peopleErr } = await db
+      .from('profiles')
+      .select('id, full_name, active, deleted_at')
+      .in('id', memberIds)
+    if (peopleErr) {
+      return NextResponse.json({ success: false, error: peopleErr.message }, { status: 500 })
+    }
+    for (const p of people || []) peopleById.set(p.id, p)
+  }
+  const notRosterableIds = memberIds.filter((id) => !isRosterableProfile(peopleById.get(id)))
+  if (isLegacySingle && notRosterableIds.includes(body.profile_id)) {
+    return NextResponse.json(
+      { success: false, error: notRosterableError(peopleById.get(body.profile_id)).message },
+      { status: 400 },
+    )
+  }
+  const requestedIds = memberIds.filter((id) => !notRosterableIds.includes(id))
 
   // Who's already on this block? Skip them silently — same posture
   // as bulk-assign. Pulled once up-front to avoid an N+1.
@@ -154,6 +178,7 @@ export async function POST(request, props) {
   const skipped = allRequestedIds
     .filter((id) => !membersHere.has(id))
     .map((id) => ({ profile_id: id, reason: 'not_at_location' }))
+  for (const id of notRosterableIds) skipped.push({ profile_id: id, reason: 'not_rosterable' })
   const warnings = []
 
   for (const profileId of requestedIds) {

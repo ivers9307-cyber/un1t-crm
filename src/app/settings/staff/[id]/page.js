@@ -4,6 +4,7 @@ import { redirect, notFound } from 'next/navigation'
 import StaffForm from '@/components/StaffForm'
 import WidgetTokensCard from '@/components/WidgetTokensCard'
 import { canEditStaffMember, mapProfileLocationToAssignment } from '@/lib/staff-access'
+import { isTombstone } from '@/lib/staff-tombstone'
 
 export const dynamic = 'force-dynamic'
 
@@ -98,7 +99,8 @@ export default async function EditStaffPage(props) {
       : Promise.resolve({ data: null }),
   ])
 
-  if (!profileRes.data) notFound()
+  // STAFFDELETE.1 — a permanently deleted staff member has no editable profile.
+  if (!profileRes.data || isTombstone(profileRes.data)) notFound()
 
   // Owner-self / owner-peer guard. Master is exempt. The check has
   // a server-side equivalent in /api/staff/[id]'s PUT handler — this

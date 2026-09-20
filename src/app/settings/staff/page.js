@@ -15,6 +15,7 @@ import Link from 'next/link'
 import { Users } from 'lucide-react'
 import StaffSearchableList from '@/components/settings/StaffSearchableList'
 import { deriveTargetVersion, deviceVerdict, currentDevice } from '@/lib/staff-devices'
+import { excludeTombstones } from '@/lib/staff-tombstone'
 
 export const dynamic = 'force-dynamic'
 
@@ -69,13 +70,16 @@ export default async function StaffIndexPage() {
   // deriving it from one studio would call a whole studio up to date merely
   // because nobody there has updated. It needs no personal data — id and
   // active only.
+  // STAFFDELETE.1 — a permanently deleted staff member keeps a profiles row (a
+  // tombstone). The scoped branch cannot contain one (its ids come from
+  // profile_locations, which the delete empties); the two unscoped reads can.
   const rosterQuery = visibleIds === null
-    ? db.from('profiles').select(STAFF_COLUMNS).order('created_at')
+    ? excludeTombstones(db.from('profiles').select(STAFF_COLUMNS)).order('created_at')
     : db.from('profiles').select(STAFF_COLUMNS).in('id', visibleIds).order('created_at')
   const [staffRes, devicesRes, activeRes] = await Promise.all([
     rosterQuery,
     db.from('device_tokens').select('id, user_id, app_version, last_seen_at, geofence_permission'),
-    db.from('profiles').select('id, active'),
+    excludeTombstones(db.from('profiles').select('id, active')),
   ])
   const staff = staffRes.data || []
   const devices = devicesRes.data || []

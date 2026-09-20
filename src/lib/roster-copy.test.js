@@ -554,6 +554,33 @@ describe('copyResultToast', () => {
 
   // SLOTREMOVAL.1 — a coach skipped because the target slot was deleted gets
   // its own reason, not the mode's (which would blame a missing weekday).
+  // STAFFDELETE.1 — mentioned only when it happened.
+  it('names people who no longer work at the studio as their own skip reason, only when > 0', () => {
+    expect(copyResultToast({ period: 'week', mode: 'exact', copied: 3, skipped: 2, skippedNotAtStudio: 2 })).toEqual({
+      kind: 'warning',
+      message: 'Copied 3 shifts. 2 skipped, no longer at this studio.',
+    })
+    expect(copyResultToast({ period: 'month', mode: 'template', copied: 1, skipped: 4, skippedRemoved: 1, skippedNotAtStudio: 1 }).message).toBe(
+      'Copied 1 shift. 1 skipped because that slot was deleted in the target month. 1 skipped, no longer at this studio. 2 skipped, their template is inactive, no longer runs that weekday, or the target month has no matching weekday (a 5th Monday).',
+    )
+    expect(copyResultToast({ period: 'week', mode: 'exact', copied: 3, skipped: 1, skippedNotAtStudio: 0 }).message).not.toMatch(/no longer at this studio/)
+    expect(copyResultToast({ period: 'week', mode: 'exact', copied: 3, skipped: 0 }).message).toBe('Copied 3 shifts.')
+  })
+
+  // COPYLEAVE.1 + STAFFDELETE.1 — one copy can hit both; each is named once, in
+  // the same voice, and the remainder still gets the mode's own reason.
+  it('names on-leave AND no-longer-at-this-studio together when both are > 0', () => {
+    expect(copyResultToast({ period: 'week', mode: 'exact', copied: 37, skipped: 2, skippedOnLeave: 1, skippedNotAtStudio: 1 })).toEqual({
+      kind: 'warning',
+      message: 'Copied 37 shifts. 1 skipped, on leave. 1 skipped, no longer at this studio.',
+    })
+    expect(copyResultToast({ period: 'month', mode: 'exact', copied: 5, skipped: 6, skippedRemoved: 1, skippedOnLeave: 2, skippedNotAtStudio: 2 }).message).toBe(
+      'Copied 5 shifts. 1 skipped because that slot was deleted in the target month. 2 skipped, on leave. 2 skipped, no longer at this studio. 1 skipped, that day of the month does not exist in the target (usually 31 Jan into Feb).',
+    )
+    // The parts can never claim more than `skipped` between them.
+    expect(copyResultToast({ period: 'week', mode: 'exact', copied: 1, skipped: 1, skippedOnLeave: 1, skippedNotAtStudio: 5 }).message).toBe('Copied 1 shift. 1 skipped, on leave.')
+  })
+
   it('names deleted slots as their own skip reason', () => {
     expect(copyResultToast({ period: 'week', mode: 'exact', copied: 3, skipped: 2, skippedRemoved: 2 })).toEqual({
       kind: 'warning',

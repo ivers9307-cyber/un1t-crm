@@ -95,7 +95,7 @@ describe('POST /api/schedule/shifts/copy-month — NOTIFY.1', () => {
     const json = await res.json()
 
     expect(res.status).toBe(201)
-    expect(json).toEqual({ success: true, copied: 1, skipped: 0, skipped_removed: 0, skipped_on_leave: 0, mode: 'exact' })
+    expect(json).toEqual({ success: true, copied: 1, skipped: 0, skipped_removed: 0, skipped_on_leave: 0, skipped_not_at_studio: 0, mode: 'exact' })
 
     // July has 31 days.
     expect(readAssignmentKeysInRange).toHaveBeenCalledTimes(2)
@@ -214,7 +214,7 @@ describe('POST /api/schedule/shifts/copy-month — COPYMODES.1', () => {
     const res = await POST(req({ ...BODY, mode: 'template' }))
     const json = await res.json()
     expect(res.status).toBe(201)
-    expect(json).toEqual({ success: true, copied: 0, skipped: 1, skipped_removed: 0, skipped_on_leave: 0, mode: 'template' })
+    expect(json).toEqual({ success: true, copied: 0, skipped: 1, skipped_removed: 0, skipped_on_leave: 0, skipped_not_at_studio: 0, mode: 'template' })
     expect(bulkUpsertShiftAssignments).not.toHaveBeenCalled()
     expect(after).not.toHaveBeenCalled()
   })
@@ -350,7 +350,7 @@ describe('POST /api/schedule/shifts/copy-month — approved leave', () => {
     fetchLeaveLookup.mockResolvedValue(onLeave(['coach-1', 'coach-2'].map((id) => ({ id: `l-${id}`, profile_id: id, status: 'approved', start_date: '2026-07-01', end_date: '2026-07-31' }))))
     const res = await POST(req({ ...BODY, mode: 'template' }))
     expect(res.status).toBe(201)
-    expect(await res.json()).toEqual({ success: true, copied: 0, skipped: 2, skipped_removed: 0, skipped_on_leave: 2, mode: 'template' })
+    expect(await res.json()).toEqual({ success: true, copied: 0, skipped: 2, skipped_removed: 0, skipped_on_leave: 2, skipped_not_at_studio: 0, mode: 'template' })
     expect(bulkUpsertShiftAssignments).not.toHaveBeenCalled()
   })
 
@@ -359,5 +359,49 @@ describe('POST /api/schedule/shifts/copy-month — approved leave', () => {
     const res = await POST(req(BODY))
     expect(res.status).toBe(500)
     expect(bulkUpsertShiftAssignments).not.toHaveBeenCalled()
+  })
+})
+
+// STAFFDELETE.1 — a permanent delete keeps past shifts, so the source month
+// can still name someone who no longer works here. The drop itself is the
+// writer's (roster-write.test.js); this pins the route wiring in both modes.
+describe('POST /api/schedule/shifts/copy-month — people no longer at the studio', () => {
+  const BODY = { location_id: LOC, source_month_start: '2026-06-01', target_month_start: '2026-07-01' }
+
+  beforeEach(() => {
+    readAssignmentKeysInRange.mockResolvedValue({ rows: [], error: null, truncated: false })
+    fetchSourceBlocks.mockResolvedValue({ blocks: [sourceBlock(['coach-1', 'coach-gone'])], error: null })
+  })
+
+  for (const mode of ['exact', 'template']) {
+    it(`${mode}: reports the writer's skippedNotAtStudio as skipped_not_at_studio, inside skipped`, async () => {
+      bulkUpsertShiftAssignments.mockResolvedValue({ count: 1, skippedRemoved: 0, skippedNotAtStudio: 1, error: null })
+      const res = await POST(req({ ...BODY, mode }))
+      const json = await res.json()
+      expect(res.status).toBe(201)
+      // Both source coaches reach the writer: it, not the plan, knows who still works here.
+      expect(bulkUpsertShiftAssignments.mock.calls[0][1].rows.map((r) => r.profileId)).toEqual(['coach-1', 'coach-gone'])
+      expect(json).toEqual({ success: true, copied: 1, skipped: 1, skipped_removed: 0, skipped_on_leave: 0, skipped_not_at_studio: 1, mode })
+    })
+  }
+
+  // Both skip reasons in ONE copy (COPYLEAVE.1 + STAFFDELETE.1): the plan drops
+  // the coach on approved leave, the writer drops the one who no longer works
+  // here. They are disjoint (a coach on leave never reaches the writer) and
+  // both sit inside `skipped`.
+  it('one copy can hit BOTH reasons: on leave (the plan) and no longer at the studio (the writer)', async () => {
+    fetchSourceBlocks.mockResolvedValue({ blocks: [sourceBlock(['coach-1', 'coach-off', 'coach-gone'])], error: null })
+    fetchLeaveLookup.mockResolvedValue(onLeave([{ id: 'l1', profile_id: 'coach-off', status: 'approved', start_date: '2026-07-01', end_date: '2026-07-31' }]))
+    bulkUpsertShiftAssignments.mockResolvedValue({ count: 1, skippedRemoved: 0, skippedNotAtStudio: 1, error: null })
+    const res = await POST(req(BODY))
+    expect(res.status).toBe(201)
+    expect(bulkUpsertShiftAssignments.mock.calls[0][1].rows.map((r) => r.profileId)).toEqual(['coach-1', 'coach-gone'])
+    expect(await res.json()).toEqual({ success: true, copied: 1, skipped: 2, skipped_removed: 0, skipped_on_leave: 1, skipped_not_at_studio: 1, mode: 'exact' })
+  })
+
+  it('a writer that reports nothing (older shape) reads as zero', async () => {
+    bulkUpsertShiftAssignments.mockResolvedValue({ count: 2, error: null })
+    const json = await (await POST(req(BODY))).json()
+    expect(json.skipped_not_at_studio).toBe(0)
   })
 })

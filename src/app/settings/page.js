@@ -5,6 +5,7 @@ import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { MapPin, ChevronRight } from 'lucide-react'
 import { visibleSettingsTree } from '@/lib/settings-tree'
+import { excludeTombstones } from '@/lib/staff-tombstone'
 
 // SETTINGS.2g Task 3 — the settings index is now a thin renderer over
 // SETTINGS_TREE (src/lib/settings-tree.js): this page's job is (a) the
@@ -130,7 +131,8 @@ export default async function SettingsPage() {
   // at /settings/staff. Pull head=true + count so we don't drag 50+ rows
   // + profile_locations joins for what's effectively a badge.
   const [{ count: staffCount }, locationsRes] = await Promise.all([
-    db.from('profiles').select('id', { count: 'exact', head: true }),
+    // STAFFDELETE.1 — permanently deleted staff keep a row; they are not staff.
+    excludeTombstones(db.from('profiles').select('id', { count: 'exact', head: true })),
     db.from('locations').select('*').eq('is_host_anchor', false).order('created_at'),
   ])
   const locations = locationsRes.data || []

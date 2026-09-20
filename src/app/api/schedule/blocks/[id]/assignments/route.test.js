@@ -62,6 +62,10 @@ function buildDb({
   // SCHEDROLES.1 — profile ids on the block's studio; null = every one asked.
   membersHere = null,
   membersErr = null,
+  // STAFFDELETE.1 — profiles rows for the rosterable check; an id not listed
+  // is an active, living coach, so earlier tests keep their meaning.
+  people = [],
+  peopleErr = null,
 }) {
   const insertSpy = vi.fn()
   const deleteSpy = vi.fn()
@@ -74,6 +78,11 @@ function buildDb({
     timeOffSpy,
     db: {
       from: (table) => {
+        if (table === 'profiles') {
+          return { select: () => ({ in: (_c, ids) => Promise.resolve(peopleErr
+            ? { data: null, error: peopleErr }
+            : { data: ids.map((id) => people.find((x) => x.id === id) || { id, full_name: 'Coach', active: true, deleted_at: null }), error: null }) }) }
+        }
         if (table === 'profile_locations') {
           return {
             select: () => ({
@@ -498,6 +507,44 @@ describe('POST — coach must be at the block\'s studio (SCHEDROLES.1)', () => {
     const { db, insertSpy } = buildDb({ block: blk, membersErr: { message: 'boom' } })
     createServerClient.mockReturnValue(db)
     expect((await POST(req({ profile_ids: [HERE] }), PROPS)).status).toBe(500)
+    expect(insertSpy).not.toHaveBeenCalled()
+  })
+})
+
+// STAFFDELETE.1 review A — the same rule as every other write path
+// (isRosterableProfile): a deactivated coach who is still linked to the studio
+// cannot be put on a shift by hand.
+describe('POST — a deactivated coach cannot be assigned', () => {
+  const OFF = 'dddddddd-dddd-dddd-dddd-dddddddddddd'
+  const ON = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+  const block = { id: 'block-1', location_id: 'loc-1', block_date: '2026-06-01', max_coaches: 5 }
+  const people = [{ id: OFF, full_name: 'Former Coach', active: false, deleted_at: null }]
+
+  it('multi: skipped as not_rosterable, the active coach is still assigned', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const { db, insertSpy } = buildDb({ block, people })
+    createServerClient.mockReturnValue(db)
+    const json = await (await POST(req({ profile_ids: [ON, OFF] }), PROPS)).json()
+    expect(json.assigned.map((a) => a.profile_id)).toEqual([ON])
+    expect(json.skipped).toEqual([{ profile_id: OFF, reason: 'not_rosterable' }])
+    expect(insertSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('legacy single: 400 with what to do about it, nothing inserted', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const { db, insertSpy } = buildDb({ block, people })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(req({ profile_id: OFF }), PROPS)
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toBe('Former Coach is deactivated and cannot be rostered. Reactivate them in Settings > Staff first.')
+    expect(insertSpy).not.toHaveBeenCalled()
+  })
+
+  it('fails closed (500, nothing inserted) when the profiles read errors', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const { db, insertSpy } = buildDb({ block, peopleErr: { message: 'down' } })
+    createServerClient.mockReturnValue(db)
+    expect((await POST(req({ profile_ids: [ON] }), PROPS)).status).toBe(500)
     expect(insertSpy).not.toHaveBeenCalled()
   })
 })

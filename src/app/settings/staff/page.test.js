@@ -49,11 +49,12 @@ const COMP_COLUMNS = [
 function makeDb({ peersError = null } = {}) {
   const calls = []
   const from = (table) => {
-    const q = { table, cols: null, inCol: null, inVals: null }
+    const q = { table, cols: null, inCol: null, inVals: null, is: [] }
     calls.push(q)
     const chain = {
       select: (cols) => { q.cols = cols; return chain },
       in: (col, vals) => { q.inCol = col; q.inVals = vals; return chain },
+      is: (col, val) => { q.is.push([col, val]); return chain }, // STAFFDELETE.1 — excludeTombstones()
       order: () => chain,
       then: (res) => {
         let data = []
@@ -121,6 +122,21 @@ describe('/settings/staff — roster scope and columns', () => {
     await StaffIndexPage()
     expect(db.calls.find(c => c.table === 'profile_locations')).toBeUndefined()
     expect(rosterQuery(db).inVals).toBeNull()
+  })
+
+  // STAFFDELETE.1 — a permanently deleted staff member keeps a profiles row.
+  it('a master\'s unrestricted roster excludes tombstones', async () => {
+    getCurrentUser.mockResolvedValue(user({ isMaster: true }))
+    await StaffIndexPage()
+    expect(rosterQuery(db).is).toEqual([['deleted_at', null]])
+  })
+
+  it('the estate-wide baseline excludes tombstones too; the id-scoped roster needs no filter', async () => {
+    getCurrentUser.mockResolvedValue(user({}))
+    await StaffIndexPage()
+    expect(db.calls.find(c => c.table === 'profiles' && c.cols === 'id, active').is).toEqual([['deleted_at', null]])
+    // Its ids come from profile_locations, which the delete empties (mig 622).
+    expect(rosterQuery(db).is).toEqual([])
   })
 
   it('still derives the app-version baseline estate-wide, from id/active only', async () => {

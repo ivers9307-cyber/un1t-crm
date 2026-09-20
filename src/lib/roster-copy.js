@@ -340,8 +340,10 @@ export const COPY_MODE_OPTIONS = [
  *   target slot was deleted by a manager
  * @param {number} [r.skippedOnLeave]   COPYLEAVE.1 — skipped because the coach
  *   has approved leave that day
+ * @param {number} [r.skippedNotAtStudio]  STAFFDELETE.1 — skipped because the
+ *   coach no longer works at the studio (included in skipped)
  */
-export function copyResultToast({ period, mode, copied = 0, skipped = 0, skippedRemoved = 0, skippedOnLeave = 0 }) {
+export function copyResultToast({ period, mode, copied = 0, skipped = 0, skippedRemoved = 0, skippedOnLeave = 0, skippedNotAtStudio = 0 }) {
   const n = Number(copied) || 0
   const total = Number(skipped) || 0
   const removed = Math.min(Number(skippedRemoved) || 0, total)
@@ -350,10 +352,15 @@ export function copyResultToast({ period, mode, copied = 0, skipped = 0, skipped
   if (total === 0) {
     return { kind: 'success', message: n === 0 ? `${copiedText} Everyone was already on the target ${period}.` : copiedText }
   }
+  // STAFFDELETE.1 — people who no longer work at the studio (left, deactivated
+  // or permanently deleted) get their own reason; said only when it happened.
+  // Disjoint from on-leave: a coach skipped for leave never reaches the writer.
+  const gone = Math.min(Number(skippedNotAtStudio) || 0, total - removed - onLeave)
   const parts = [copiedText]
   if (removed > 0) parts.push(`${removed} skipped because that slot was deleted in the target ${period}.`)
   if (onLeave > 0) parts.push(`${onLeave} skipped, on leave.`)
-  const s = total - removed - onLeave
+  if (gone > 0) parts.push(`${gone} skipped, no longer at this studio.`)
+  const s = total - removed - onLeave - gone
   if (s > 0) {
     let why
     if (mode === 'template') {

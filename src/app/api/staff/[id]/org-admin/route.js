@@ -16,6 +16,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
+import { isTombstone } from '@/lib/staff-tombstone'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
@@ -52,10 +53,11 @@ export async function GET(request, props) {
   const db = createServerClient()
   const { data: target } = await db
     .from('profiles')
-    .select('id')
+    .select('id, deleted_at')
     .eq('id', params.id)
     .single()
-  if (!target) {
+  // STAFFDELETE.1 — a tombstone is "not found" to every surface.
+  if (!target || isTombstone(target)) {
     return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   }
 
@@ -85,10 +87,13 @@ export async function PUT(request, props) {
   const db = createServerClient()
   const { data: target } = await db
     .from('profiles')
-    .select('id, full_name, email')
+    .select('id, full_name, email, deleted_at')
     .eq('id', params.id)
     .single()
-  if (!target) {
+  // STAFFDELETE.1 — an org-admin grant is owner-everywhere across an org; a
+  // permanently deleted staff member can never be handed one. (mig 622's
+  // trigger on profile_organizations refuses it too.)
+  if (!target || isTombstone(target)) {
     return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   }
 

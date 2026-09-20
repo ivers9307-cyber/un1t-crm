@@ -170,6 +170,44 @@ describe('startImpersonation — ASI regression (cookie store reuse)', () => {
   })
 })
 
+// STAFFDELETE.1 — a permanently deleted staff member keeps a profiles row (a
+// tombstone). It is not a user: it cannot be impersonated, and nothing — no
+// log row, no cookie — is written on the way to finding that out.
+describe('startImpersonation — a tombstone cannot be impersonated (STAFFDELETE.1)', () => {
+  it('throws "Target user not found." and writes no log row and no cookie', async () => {
+    vi.resetModules()
+    const setSpy = vi.fn()
+    const insertSpy = vi.fn(async () => ({ error: null }))
+    const selectSpy = vi.fn()
+    vi.doMock('next/headers', () => ({
+      cookies: async () => ({ get: () => undefined, set: setSpy }),
+      headers: async () => ({ get: () => null }),
+    }))
+    vi.doMock('./supabase.js', () => ({
+      createServerClient: () => ({
+        from: () => ({
+          select: (cols) => {
+            selectSpy(cols)
+            return { eq: () => ({ single: async () => ({
+              data: { id: 'target-1', full_name: 'Former Coach', role: 'staff', active: false, deleted_at: '2026-09-19T10:00:00Z' },
+              error: null,
+            }) }) }
+          },
+          update: () => ({ eq: () => ({ is: async () => ({ data: null, error: null }) }) }),
+          insert: insertSpy,
+        }),
+      }),
+    }))
+    const { startImpersonation } = await import('./impersonation.js')
+    await expect(startImpersonation({
+      masterProfile: { id: 'master-1', role: 'master' }, targetUserId: 'target-1', reason: 'debug',
+    })).rejects.toThrow('Target user not found.')
+    expect(selectSpy.mock.calls[0][0]).toContain('deleted_at') // the guard can only see what the select asks for
+    expect(insertSpy).not.toHaveBeenCalled()
+    expect(setSpy).not.toHaveBeenCalled()
+  })
+})
+
 // ── Stale-session reaper (close-stale-impersonations cron) ──────
 // Rows only close on an explicit Stop / re-target, so a session that
 // ends by tab-close / logout / cookie expiry dangles open forever. The

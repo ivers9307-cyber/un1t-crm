@@ -168,7 +168,7 @@ export async function POST(request) {
   // to write. Same 201 shape as a copy that wrote (and as copy-week), so the
   // client reads copied/skipped the one way.
   if (plan.rows.length === 0 && plan.blocks.length === 0) {
-    return NextResponse.json({ success: true, copied: 0, skipped: plan.skipped, skipped_removed: 0, skipped_on_leave: plan.skippedOnLeave, mode }, { status: 201 })
+    return NextResponse.json({ success: true, copied: 0, skipped: plan.skipped, skipped_removed: 0, skipped_on_leave: plan.skippedOnLeave, skipped_not_at_studio: 0, mode }, { status: 201 })
   }
 
   // NOTIFY.1 — see copy-week.
@@ -187,7 +187,7 @@ export async function POST(request) {
 
   // Find-or-create blocks + insert assignments (new model). A block created
   // inside an already-published period joins that roster (ROSTER-FIX.4).
-  const { count, skippedRemoved = 0, error } = await bulkUpsertShiftAssignments(db, {
+  const { count, skippedRemoved = 0, skippedNotAtStudio = 0, error } = await bulkUpsertShiftAssignments(db, {
     locationId: location_id,
     actorId: user.id,
     rows: plan.rows,
@@ -221,9 +221,10 @@ export async function POST(request) {
   return NextResponse.json({
     success: true,
     copied: count,
-    skipped: plan.skipped + skippedRemoved,
+    skipped: plan.skipped + skippedRemoved + skippedNotAtStudio,
     skipped_removed: skippedRemoved,
     skipped_on_leave: plan.skippedOnLeave,
+    skipped_not_at_studio: skippedNotAtStudio, // STAFFDELETE.1 — see copy-week
     mode,
   }, { status: 201 })
 }

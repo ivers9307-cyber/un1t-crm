@@ -371,3 +371,18 @@ describe('getCurrentUser — org admin (SAAS-4)', () => {
     expect(getOwnerOrganizationIds(user)).toEqual(['org-a'])
   })
 })
+
+describe('getCurrentUser — a permanently deleted staff member (STAFFDELETE.1)', () => {
+  const living = { id: 'coach-1', role: 'staff', full_name: 'Former Coach', email: 'coach@example.test', employment_type: 'fte', active: true }
+  const scenario = (profile) => ({ profile, links: [link({ loc: LOC_A1, role: 'staff', is_default: true })], orgLinks: [], orgs: [ORG_A] })
+
+  it('control: the same profile resolves while it is alive', async () => {
+    setup(scenario(living))
+    expect(await getCurrentUser()).not.toBeNull()
+  })
+
+  it('a tombstone resolves to null — an access token issued before the delete gets a 401 everywhere', async () => {
+    setup(scenario({ ...living, active: false, email: 'deleted+coach-1@deleted.invalid', deleted_at: '2026-09-19T10:00:00Z' }))
+    expect(await getCurrentUser()).toBeNull()
+  })
+})
