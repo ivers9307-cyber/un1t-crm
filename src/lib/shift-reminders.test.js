@@ -226,6 +226,27 @@ describe('leaveKeysFor', () => {
   it('tolerates null input', () => {
     expect(leaveKeysFor(null, null).size).toBe(0)
   })
+
+  // AMENDMENT 3 — leave only silences a reminder when it covers the WHOLE day.
+  // time_off_requests does not say WHICH half a half day is, so a coach with a
+  // half day may well be working the other half: remind them.
+  it('a single-day request with total_days < 1 is a half day and does NOT count as leave', () => {
+    const day = { status: 'approved', start_date: '2026-09-22', end_date: '2026-09-22' }
+    const keys = leaveKeysFor([
+      { ...day, profile_id: 'half', total_days: 0.5 },
+      { ...day, profile_id: 'half-as-text', total_days: '0.5' }, // numeric(5,1) can arrive as a string
+      { ...day, profile_id: 'full', total_days: 1 },
+      { ...day, profile_id: 'unknown', total_days: null },       // unreadable -> treated as a full day, as before
+    ], ['2026-09-22'])
+    expect([...keys].sort()).toEqual(['full|2026-09-22', 'unknown|2026-09-22'])
+  })
+
+  it('a multi-day request skips every day it covers, even when its total has a half in it', () => {
+    const keys = leaveKeysFor([
+      { profile_id: 'coach-1', status: 'approved', start_date: '2026-09-22', end_date: '2026-09-23', total_days: 1.5 },
+    ], ['2026-09-22', '2026-09-23'])
+    expect([...keys].sort()).toEqual(['coach-1|2026-09-22', 'coach-1|2026-09-23'])
+  })
 })
 
 describe('coRosteredFirstNames + buildShiftReminderMessage', () => {
@@ -287,18 +308,24 @@ describe('coRosteredFirstNames + buildShiftReminderMessage', () => {
 // ORDER: claim (insert) -> send -> count update, or claim -> send -> release.
 function makeDb({ leave = [], leaveError = null, ledger = [], ledgerError = null, insertError = null, deleteError = null } = {}) {
   const writes = []
-  const chain = (result, record) => {
+  const selects = {}
+  const chain = (result, record, table) => {
     const b = {}
     for (const m of ['select', 'eq', 'in', 'lte', 'gte']) {
-      b[m] = (...args) => { if (record && m === 'eq') record.where[args[0]] = args[1]; return b }
+      b[m] = (...args) => {
+        if (record && m === 'eq') record.where[args[0]] = args[1]
+        if (table && m === 'select') selects[table] = args[0]
+        return b
+      }
     }
     b.then = (resolve, reject) => Promise.resolve(result).then(resolve, reject)
     return b
   }
   return {
     writes,
+    selects,
     from(table) {
-      if (table === 'time_off_requests') return chain({ data: leave, error: leaveError })
+      if (table === 'time_off_requests') return chain({ data: leave, error: leaveError }, null, table)
       if (table === 'push_reminder_sends') {
         const b = chain({ data: ledger, error: ledgerError })
         b.insert = (row) => { writes.push({ op: 'insert', row }); return chain({ data: null, error: insertError }) }
@@ -435,6 +462,13 @@ describe('runShiftReminders', () => {
       ['coach-1', 'Studio North · Early · 6:00am-2:00pm · with Sam'],
       ['coach-9', 'Studio North · Early · 6:00am-2:00pm · with Alex'],
     ])
+  })
+
+  it('a coach on an approved HALF day is still reminded', async () => {
+    const db = makeDb({ leave: [{ profile_id: 'coach-1', status: 'approved', start_date: '2026-09-22', end_date: '2026-09-22', total_days: 0.5 }] })
+    await runShiftReminders(db, { nowMs: NOW, locations: LOCATIONS })
+    expect(notifyUsers).toHaveBeenCalledTimes(1)
+    expect(db.selects.time_off_requests).toMatch(/\btotal_days\b/)
   })
 
   it('leave read failure fails OPEN: the reminder still goes, and it is logged', async () => {

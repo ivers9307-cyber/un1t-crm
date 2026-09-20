@@ -75,8 +75,20 @@ export function isReminderDue(plan, nowMs) {
 export const reminderKey = (assignmentId, profileId) => `${assignmentId}|${profileId}`
 export const leaveKey = (profileId, dateIso) => `${profileId}|${dateIso}`
 
+// A HALF day: a single-day request whose total_days (numeric(5,1), mig 011) is
+// under 1. The table does not record WHICH half, so the coach may be working
+// the other one: a half day never silences a reminder. An unreadable total is
+// treated as a full day (the behaviour before half days were considered).
+function isHalfDay(r) {
+  if (r.start_date !== r.end_date) return false
+  const total = Number(r.total_days)
+  return r.total_days != null && Number.isFinite(total) && total < 1
+}
+
 /**
- * `${profile_id}|${date}` for every (coach, date) covered by APPROVED leave.
+ * `${profile_id}|${date}` for every (coach, date) covered by APPROVED leave
+ * for the WHOLE day (single full days and every day of a multi-day request;
+ * half days excluded, see isHalfDay).
  * Leave is a fact about the person, not the studio, so it is not filtered by
  * location: a coach on holiday at one studio is on holiday at all of them.
  */
@@ -84,6 +96,7 @@ export function leaveKeysFor(requests, dates) {
   const keys = new Set()
   for (const r of requests || []) {
     if (r?.status !== 'approved' || !r.profile_id) continue
+    if (isHalfDay(r)) continue
     for (const d of dates || []) {
       if (r.start_date <= d && d <= r.end_date) keys.add(leaveKey(r.profile_id, d))
     }
@@ -237,7 +250,7 @@ export async function runShiftReminders(db, { nowMs = Date.now(), locations = []
   const profileIds = [...new Set(rows.map((r) => r.profile_id).filter(Boolean))]
   const { data: leaveRows, error: leaveErr } = await db
     .from('time_off_requests')
-    .select('profile_id, start_date, end_date, status')
+    .select('profile_id, start_date, end_date, status, total_days')
     .eq('status', 'approved')
     .in('profile_id', profileIds)
     .lte('start_date', tomorrow)
