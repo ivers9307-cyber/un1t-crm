@@ -27,10 +27,12 @@
 // (sweepChecklists) and whatever happens to it, an unreadable table or an
 // unexpected throw, the swap arm still runs; the swap arm runs inside its own
 // try/catch, so it can never cost the checklist sweep its response or its
-// heartbeat. The arm shares the 'checklist-sweep' heartbeat row, which still
-// means what it always meant: the CHECKLIST sweep succeeded. The swap arm's
-// own health is in the response: `swap_cover` (its counts, null if it threw)
-// and `swap_sweep_failed` (1 if it threw or reported errors), plus a logError.
+// heartbeat. The arm shares the 'checklist-sweep' heartbeat row, whose
+// last_ok_at still means what it always meant: the CHECKLIST sweep succeeded.
+// The swap arm's own health is `swap_cover` (its counts, null if it threw) and
+// `swap_sweep_failed` (1 if it threw or reported errors): in the response, in
+// that row's last_outcome, and as a logError. A seeded heartbeat row of its
+// own (a migration) is the follow-up that would make a failing arm go STALE.
 //
 // Auth: CRON_SECRET header, same pattern as the other crons.
 
@@ -89,8 +91,8 @@ export async function GET(request) {
     swapCover = await runSwapCoverSweep(db)
     if ((swapCover?.errors || 0) > 0) swapSweepFailed = 1
   } catch (e) {
+    // Not stats.errors++: `stats` is the CHECKLIST arm's.
     swapSweepFailed = 1
-    stats.errors++
     logError('cron-checklist-sweep', 'swap cover sweep threw', { err: e?.message })
   }
 
@@ -101,7 +103,12 @@ export async function GET(request) {
     )
   }
 
-  await stampHeartbeat('checklist-sweep').catch((err) =>
+  // The swap arm has no heartbeat row of its own (stampHeartbeat is
+  // UPDATE-only, so a new name needs a seed migration: a follow-up). Until it
+  // does, its outcome rides in this row's last_outcome, the way other crons
+  // report theirs, so "stamped but the swap arm is failing" is readable from
+  // cron_heartbeats and not only from a response nobody keeps.
+  await stampHeartbeat('checklist-sweep', { ...stats, swap_cover: swapCover, swap_sweep_failed: swapSweepFailed }).catch((err) =>
     logWarn('cron-checklist-sweep', 'heartbeat failed', { err }))
 
   return NextResponse.json({ success: true, stats, swap_cover: swapCover, swap_sweep_failed: swapSweepFailed })

@@ -120,7 +120,14 @@ describe('GET /api/cron/checklist-sweep — swap cover arm', () => {
     expect(runSwapCoverSweep).toHaveBeenCalledWith(fakeDb)
     expect(body.swap_cover).toEqual({ open: 2, nudged: 1, expired: 1, skipped: 0, quiet: 0, errors: 0 })
     expect(body.swap_sweep_failed).toBe(0)
-    expect(stampHeartbeat).toHaveBeenCalledWith('checklist-sweep')
+    // The arm shares the checklist heartbeat row (a row of its own needs a
+    // seed migration), so its outcome rides in last_outcome, where ops and
+    // Sentinel can see "ran but the swap arm is broken".
+    expect(stampHeartbeat).toHaveBeenCalledWith('checklist-sweep', {
+      ...body.stats,
+      swap_cover: { open: 2, nudged: 1, expired: 1, skipped: 0, quiet: 0, errors: 0 },
+      swap_sweep_failed: 0,
+    })
   })
 
   it('runs it even when no checklist was overdue', async () => {
@@ -138,13 +145,18 @@ describe('GET /api/cron/checklist-sweep — swap cover arm', () => {
     expect(sendPush).toHaveBeenCalledTimes(1)
     expect(logAuditEvent).toHaveBeenCalledTimes(1)
     expect(logError).toHaveBeenCalledWith('cron-checklist-sweep', expect.any(String), expect.objectContaining({ err: 'boom' }))
-    expect(stampHeartbeat).toHaveBeenCalledWith('checklist-sweep')
+    // The failure is written where a heartbeat reader sees it...
+    expect(stampHeartbeat).toHaveBeenCalledWith('checklist-sweep', expect.objectContaining({ swap_cover: null, swap_sweep_failed: 1 }))
+    // ...and NOT into the CHECKLIST arm's own error count.
+    expect(body.stats.errors).toBe(0)
   })
 
   it('a swap arm that RETURNS errors (it could not read the open swaps) is flagged too', async () => {
     runSwapCoverSweep.mockResolvedValueOnce({ open: 0, nudged: 0, expired: 0, skipped: 0, quiet: 0, errors: 1 })
     const body = await (await GET(req())).json()
     expect(body).toMatchObject({ success: true, swap_sweep_failed: 1, swap_cover: expect.objectContaining({ errors: 1 }) })
+    expect(stampHeartbeat).toHaveBeenCalledWith('checklist-sweep', expect.objectContaining({ swap_sweep_failed: 1 }))
+    expect(body.stats.errors).toBe(0)
   })
 
   it('an unreadable checklist table cannot stop the swap arm: still a 500, no heartbeat, but the swaps were swept', async () => {
