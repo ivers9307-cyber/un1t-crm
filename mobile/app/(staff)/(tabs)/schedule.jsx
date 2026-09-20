@@ -35,6 +35,7 @@ import { canMobile } from '../../../lib/permissions'
 import { useIsTablet } from '../../../lib/use-is-tablet'
 import { effShiftStart, effShiftEnd, blockStart as blockDefaultStart, blockEnd as blockDefaultEnd, teamRosterForDay, initials } from '../../../lib/schedule-team'
 import { canAdjustShiftTimes, canCancelTimeOff, MANAGER_ROLES, scheduleViewFromParam } from '../../../lib/schedule-manage'
+import { hasOpenSwap, swapShiftWhen, SWAP_PENDING_LABEL, SWAP_ALREADY_OPEN_MESSAGE } from '../../../lib/swap-cards'
 import ManageMode from '../../../components/schedule/ManageMode'
 // LEAVE.2 — one label per leave type (unpaid/other used to read "Time off").
 import { timeOffLeaveLabel } from 'shared/time-off'
@@ -125,6 +126,11 @@ function ShiftCard({ shift, onPress, onLongPress, teamMode, selfId }) {
         {shift.status === 'swapped' && (
           <View className="px-1.5 py-0.5 rounded-full bg-blue-500/20">
             <Text className="text-[9px] uppercase text-blue-700 font-medium">Swap</Text>
+          </View>
+        )}
+        {hasOpenSwap(shift) && (
+          <View className="px-1.5 py-0.5 rounded-full bg-amber-500/20">
+            <Text className="text-[9px] uppercase text-amber-700 font-medium">{SWAP_PENDING_LABEL}</Text>
           </View>
         )}
       </View>
@@ -271,6 +277,11 @@ function ShiftRow({ shift, onPress, onLongPress }) {
           {shift.status === 'swapped' && (
             <View className="px-2 py-0.5 rounded-full bg-blue-500/20">
               <Text className="text-[10px] uppercase text-blue-700 font-medium">Swapped</Text>
+            </View>
+          )}
+          {hasOpenSwap(shift) && (
+            <View className="px-2 py-0.5 rounded-full bg-amber-500/20">
+              <Text className="text-[10px] uppercase text-amber-700 font-medium">{SWAP_PENDING_LABEL}</Text>
             </View>
           )}
         </View>
@@ -523,9 +534,16 @@ export default function Schedule() {
       Alert.alert('Can’t post', 'This shift can’t be swapped.')
       return
     }
+    // COVERLOOP.2 — open_swap_status comes from GET /api/schedule/shifts (own
+    // rows only). One open swap per shift: say so rather than earn the 409.
+    if (hasOpenSwap(shift)) {
+      Alert.alert(shift.shift_templates?.name || 'Shift', SWAP_ALREADY_OPEN_MESSAGE)
+      return
+    }
+    const when = swapShiftWhen(shift)
     Alert.alert(
       'Request swap?',
-      `Post ${shift.shift_templates?.name || 'this shift'} on ${shift.shift_date} for someone else to take?`,
+      `Post ${shift.shift_templates?.name || 'this shift'}${when ? ` on ${when}` : ''} for someone else to take?`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
