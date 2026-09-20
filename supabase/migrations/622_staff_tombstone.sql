@@ -130,7 +130,8 @@
 --         FROM unnest(ARRAY['shift_assignments','shift_blocks','rosters','shift_templates','locations',
 --           'shift_swap_requests','time_off_requests','staff_allowances','contractor_invoices',
 --           'schedule_notifications','roster_change_log','profile_locations','profile_organizations',
---           'device_tokens','widget_tokens','email_mailbox_access','mobile_bar_prefs','audit_events']) AS t;
+--           'device_tokens','widget_tokens','email_mailbox_access','mobile_bar_prefs','audit_events',
+--           'scheduled_reports','staff_attendance_events']) AS t;
 --     Expected: ok = true on every row. A false one makes the FUNCTION fail at
 --     call time (not this file) — stop and fix the name.
 --
@@ -371,6 +372,7 @@ DECLARE
   v_leave   jsonb;
   v_kept    jsonb;
   v_deleted jsonb := '{}'::jsonb;
+  v_scrubbed jsonb;
   v_pl_res  text[];
   v_n       integer;
   v_now     timestamptz := now();
@@ -498,11 +500,20 @@ BEGIN
     'contractor_invoices',    (SELECT count(*) FROM public.contractor_invoices    WHERE contractor_id = p_profile_id),
     'schedule_notifications', (SELECT count(*) FROM public.schedule_notifications WHERE profile_id = p_profile_id));
 
+  --    Scheduled reports that EMAIL this person (scheduled_reports
+  --    .email_recipients, mig 012:40). v_profile.email is the address BEFORE
+  --    step 8 scrambles it; matched case-insensitively.
+  v_scrubbed := jsonb_build_object('scheduled_reports',
+    (SELECT count(*) FROM public.scheduled_reports sr
+      WHERE EXISTS (SELECT 1 FROM unnest(sr.email_recipients) r WHERE lower(r) = lower(v_profile.email))
+         OR EXISTS (SELECT 1 FROM unnest(sr.confirmed_external_recipients) r WHERE lower(r) = lower(v_profile.email))));
+
   IF p_dry_run THEN
     RETURN jsonb_build_object('profile_id', p_profile_id, 'full_name', v_profile.full_name, 'dry_run', true,
       'removed_shifts', v_shifts, 'kept_today_shifts', v_today_kept,
       'cancelled_swaps', v_swaps, 'cancelled_time_off', v_leave,
       'role', jsonb_build_object('from', v_profile.role, 'to', v_floor),
+      'scrubbed', v_scrubbed,
       'deleted', v_deleted, 'kept', v_kept);
   END IF;
 
@@ -579,6 +590,19 @@ BEGIN
          deleted_at = v_now, deleted_by = p_actor_id, updated_at = v_now
    WHERE id = p_profile_id;
 
+  -- 8b. Stop MAILING them. A scheduled report keeps sending to the address in
+  --     email_recipients long after the profile's own email is scrambled. The
+  --     address is removed (order kept) from both recipient lists; the
+  --     schedule itself stays, even if that leaves it with nobody to mail.
+  UPDATE public.scheduled_reports sr
+     SET email_recipients = ARRAY(SELECT r FROM unnest(sr.email_recipients) WITH ORDINALITY AS u(r, ord)
+                                   WHERE lower(r) IS DISTINCT FROM lower(v_profile.email) ORDER BY ord),
+         confirmed_external_recipients = ARRAY(SELECT r FROM unnest(sr.confirmed_external_recipients) WITH ORDINALITY AS u(r, ord)
+                                   WHERE lower(r) IS DISTINCT FROM lower(v_profile.email) ORDER BY ord),
+         updated_at = v_now
+   WHERE EXISTS (SELECT 1 FROM unnest(sr.email_recipients) r WHERE lower(r) = lower(v_profile.email))
+      OR EXISTS (SELECT 1 FROM unnest(sr.confirmed_external_recipients) r WHERE lower(r) = lower(v_profile.email));
+
   -- 9. Redact what auditing captured. The mig 191 trigger has just written the
   --    OLD email / pin_hash / door ids into audit_events.details for the rows
   --    above; older rows carry "Name <email>" labels and sign-in emails. The
@@ -598,6 +622,7 @@ BEGIN
     'removed_shifts', v_shifts, 'kept_today_shifts', v_today_kept,
     'cancelled_swaps', v_swaps, 'cancelled_time_off', v_leave,
     'role', jsonb_build_object('from', v_profile.role, 'to', v_floor),
+    'scrubbed', v_scrubbed,
     'deleted', v_deleted, 'kept', v_kept);
 END;
 $$;

@@ -116,6 +116,11 @@ const BASE_SCHEMA = `
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(), profile_id uuid REFERENCES public.profiles(id) ON DELETE SET NULL,
     matched_assignment_id uuid REFERENCES public.shift_assignments(id) ON DELETE SET NULL
   );
+  -- mig 012:40 + mig 617:38 — reports are EMAILED to these addresses.
+  CREATE TABLE public.scheduled_reports (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(), report_name text NOT NULL,
+    email_recipients text[], confirmed_external_recipients text[] NOT NULL DEFAULT '{}', updated_at timestamptz DEFAULT now()
+  );
   CREATE TABLE public.roster_change_log (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(), location_id uuid NOT NULL, block_id uuid, block_date date,
     actor_id uuid REFERENCES public.profiles(id) ON DELETE SET NULL, coach_id uuid REFERENCES public.profiles(id) ON DELETE SET NULL,
@@ -239,7 +244,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await runSql('DROP TRIGGER IF EXISTS fail_strip ON public.profiles')
-  await runSql('TRUNCATE auth.users, public.locations, public.shift_templates, public.rosters, public.audit_events, public.roster_change_log CASCADE')
+  await runSql('TRUNCATE auth.users, public.locations, public.shift_templates, public.rosters, public.audit_events, public.roster_change_log, public.scheduled_reports CASCADE')
   await runSql(SEED)
 })
 
@@ -505,6 +510,25 @@ describe('mig 622 — tombstone_staff_profile', () => {
     }
     expect(s.deleted).toEqual({ profile_locations: 1, profile_organizations: 1, device_tokens: 1, widget_tokens: 1, email_mailbox_access: 1, mobile_bar_prefs: 1 })
     expect(await count('public.profile_locations', `profile_id = '${PEER}'`)).toBe(1)
+  })
+
+  it('stops mailing them: their address leaves every scheduled report, whatever its case; everyone else stays, in order', async () => {
+    await runSql(`INSERT INTO public.scheduled_reports (report_name, email_recipients, confirmed_external_recipients) VALUES
+      ('Weekly cost', ARRAY['boss@example.test', 'Former.Coach@Example.test', 'accounts@example.test'], ARRAY['former.coach@example.test', 'accounts@example.test']),
+      ('Only them',   ARRAY['former.coach@example.test'], '{}'),
+      ('Not them',    ARRAY['boss@example.test'], '{}'),
+      ('Nobody',      NULL, '{}')`)
+    const dry = await tombstone(GONE, { dryRun: true })
+    expect(dry.scrubbed).toEqual({ scheduled_reports: 2 })
+    expect(await count('public.scheduled_reports', `'former.coach@example.test' = ANY (email_recipients)`)).toBe(1) // dry run wrote nothing
+    const s = await tombstone()
+    expect(s.scrubbed).toEqual({ scheduled_reports: 2 })
+    const got = Object.fromEntries((await rows('SELECT report_name, email_recipients, confirmed_external_recipients FROM public.scheduled_reports')).map((r) => [r.report_name, r]))
+    expect(got['Weekly cost']).toMatchObject({ email_recipients: ['boss@example.test', 'accounts@example.test'], confirmed_external_recipients: ['accounts@example.test'] })
+    expect(got['Only them'].email_recipients).toEqual([])
+    expect(got['Not them'].email_recipients).toEqual(['boss@example.test'])
+    expect(got['Nobody'].email_recipients).toBeNull()
+    expect(JSON.stringify(Object.values(got)).toLowerCase()).not.toContain('former.coach@example.test')
   })
 
   it('redacts what the audit trigger re-saved, and the email in older audit rows', async () => {
