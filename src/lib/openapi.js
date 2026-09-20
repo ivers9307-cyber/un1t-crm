@@ -4334,8 +4334,9 @@ const CopyModeField = z.enum(['exact', 'template']).default('exact').openapi({
 const CopyShiftsResponse = z.object({
   success: z.literal(true),
   copied: z.number().int().openapi({ description: 'Assignments actually inserted. A coach already on the target is never overwritten (COPYFIX.1), so a re-run reports 0.' }),
-  skipped: z.number().int().optional().openapi({ description: 'Live source assignments not copied (no matching target day, an inactive / off-day template in template mode, or a slot a manager deleted in the target period). Includes skipped_removed.' }),
+  skipped: z.number().int().optional().openapi({ description: 'Live source assignments not copied (no matching target day, an inactive / off-day template in template mode, or a slot a manager deleted in the target period, or the coach has approved leave that day). Includes skipped_removed and skipped_on_leave.' }),
   skipped_removed: z.number().int().optional().openapi({ description: 'SLOTREMOVAL.1 — the part of skipped that landed on a slot a manager deleted (shift_block_removals). A deleted slot is not re-created by a copy in either mode; add it back with POST /api/schedule/blocks first.' }),
+  skipped_on_leave: z.number().int().optional().openapi({ description: 'COPYLEAVE.1 — the part of skipped whose coach has APPROVED time off (any type) covering the target date. Pending leave does not skip. Leave is matched by person, wherever it was filed. In exact mode the slot itself is still created, so it shows as a staffing gap.' }),
   mode: z.enum(['exact', 'template']),
 }).openapi('CopyShiftsResponse')
 
@@ -4405,7 +4406,7 @@ registry.registerPath({
     400: { description: 'Validation error, or the read/write failed (writes are batched, so some coaches may have landed; re-running is safe)', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — needs a manager role at that location', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'No shifts in the source week', content: { 'application/json': { schema: ErrorResponse } } },
-    500: { description: 'Deleted-slot records could not be read; nothing was copied', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Deleted-slot records or approved leave could not be read; nothing was copied', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -4429,7 +4430,7 @@ registry.registerPath({
     400: { description: 'Validation error, dates not the 1st, or the read/write failed', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — needs a manager role at that location', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'No shifts in the source month', content: { 'application/json': { schema: ErrorResponse } } },
-    500: { description: 'Deleted-slot records could not be read; nothing was copied', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Deleted-slot records or approved leave could not be read; nothing was copied', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
