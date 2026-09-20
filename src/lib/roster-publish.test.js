@@ -9,7 +9,19 @@
 //   4. Already-published-in-month-outside-period adds to the
 //      total (publish is the last shoe to drop, not the only one).
 
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
+
+// COPYLEAVE.1 review — the two pure advisory helpers run for REAL (wrapped only
+// so one test can make them throw); leaveCovering is untouched because the
+// budget's own leave check uses it.
+vi.mock('./roster-publish-advisories', async () => {
+  const actual = await vi.importActual('./roster-publish-advisories')
+  return { ...actual, leaveClashes: vi.fn(actual.leaveClashes), doubleBookings: vi.fn(actual.doubleBookings) }
+})
+vi.mock('./log', async () => {
+  const actual = await vi.importActual('./log')
+  return { ...actual, logWarn: vi.fn() }
+})
 import {
   projectPublishImpact,
   projectPublishImpactBatch,
@@ -28,6 +40,8 @@ import {
   supersedeSwallowedRosters,
   supersedeEmptyTrimmedRosters,
 } from './roster-publish'
+import { leaveClashes as leaveClashesFn, doubleBookings as doubleBookingsFn } from './roster-publish-advisories'
+import { logWarn } from './log'
 
 // COPYLEAVE.1 — every location belongs to exactly one organisation (mig 079).
 // loc2 is loc1's sibling; loc9 belongs to somebody else.
@@ -37,7 +51,7 @@ const DEFAULT_ORG_LOCATIONS = [
   { id: 'loc9', organization_id: 'org2' },
 ]
 
-function mockDb({ location, locationsById = null, failLocationIds = [], contractors = [], blocks = [], timeOff = [], otherAssignments = [], failOtherAssignments = false, orgLocations = DEFAULT_ORG_LOCATIONS, failSiblings = false }) {
+function mockDb({ location, locationsById = null, failLocationIds = [], contractors = [], blocks = [], timeOff = [], otherAssignments = [], failOtherAssignments = false, orgLocations = DEFAULT_ORG_LOCATIONS, failSiblings = false, throwOn = null }) {
   // Mock the chained Supabase queries the helper makes:
   //   from('locations').select(...).eq(...).single() → location
   //   from('profile_locations').select(...).eq(...) → contractor links
@@ -66,6 +80,7 @@ function mockDb({ location, locationsById = null, failLocationIds = [], contract
               ? {
                 neq: async (_c, notId) => {
                   siblingQueries.push({ org: id, notId })
+                  if (throwOn === 'siblings') throw new Error('siblings: network down')
                   if (failSiblings) return { data: null, error: { message: 'siblings unreadable' } }
                   return { data: orgLocations.filter((l) => l.organization_id === id && l.id !== notId).map((l) => ({ id: l.id })), error: null }
                 },
@@ -141,6 +156,7 @@ function mockDb({ location, locationsById = null, failLocationIds = [], contract
       }
       // COPYLEAVE.1 — the same coaches' live shifts at OTHER studios.
       if (table === 'shift_assignments') {
+        if (throwOn === 'shift_assignments') throw new Error('shift_assignments: client exploded')
         const f = { profileIds: null, locIds: null, gte: null, lte: null, from: 0, to: Infinity }
         assignmentQueries.push(f)
         const chain = {
@@ -595,6 +611,60 @@ describe('projectPublishImpact — leave clashes and double bookings', () => {
     await projectPublishImpact(db, PERIOD)
     expect(db.leaveQueries[0].or).toContain('guest-1')
     expect(db.leaveQueries[0].or).toContain('dan')
+  })
+
+  // Review — a returned `error` already degraded softly, but a REJECTED read
+  // or a throw still reached the budget gate and 500'd the publish.
+  for (const throwOn of ['siblings', 'shift_assignments']) {
+    it(`a ${throwOn} read that THROWS does not take the budget gate down`, async () => {
+      logWarn.mockClear()
+      const db = mockDb({
+        location: { id: 'loc1', monthly_contractor_budget_eur: 100 },
+        contractors: [dan],
+        throwOn,
+        blocks: [
+          block({ id: 'b1', date: '2026-05-06', start: '09:00', end: '11:00', coaches: [named('dan', 'Coach D')] }),
+          block({ id: 'b2', date: '2026-05-06', start: '10:00', end: '12:00', coaches: [named('dan', 'Coach D')] }),
+        ],
+      })
+      const r = await projectPublishImpact(db, PERIOD)
+      expect(r.periodProjectedEur).toBe(140)
+      expect(r.overBudget).toBe(true) // the hard gate still judges
+      expect(r.overrunEur).toBe(40)
+      expect(r.crossLocationChecked).toBe(false)
+      expect(r.doubleBookings).toHaveLength(1) // this studio's own clash still shows
+      expect(logWarn).toHaveBeenCalledTimes(1)
+    })
+  }
+
+  for (const [name, fn] of [['leaveClashes', leaveClashesFn], ['doubleBookings', doubleBookingsFn]]) {
+    it(`a throw inside ${name} yields [] for it, flags the check as incomplete, and leaves the money alone`, async () => {
+      logWarn.mockClear()
+      fn.mockImplementationOnce(() => { throw new Error(`${name} bug`) })
+      const db = mockDb({
+        location: { id: 'loc1', monthly_contractor_budget_eur: 100 },
+        contractors: [dan],
+        blocks: [
+          block({ id: 'b1', date: '2026-05-06', start: '09:00', end: '11:00', coaches: [named('dan', 'Coach D')] }),
+          block({ id: 'b2', date: '2026-05-07', start: '10:00', end: '12:00', coaches: [named('dan', 'Coach D')] }),
+        ],
+        timeOff: [{ id: 't1', profile_id: 'dan', start_date: '2026-05-07', end_date: '2026-05-07' }],
+      })
+      const r = await projectPublishImpact(db, PERIOD)
+      expect(r[name]).toEqual([])
+      expect(r.crossLocationChecked).toBe(false)
+      // The OTHER list is still computed.
+      if (name === 'doubleBookings') expect(r.leaveClashes).toHaveLength(1)
+      expect(r.periodProjectedEur).toBe(70) // the 7th is leave, so only the 6th bills
+      expect(r.overBudget).toBe(false)
+      expect(logWarn).toHaveBeenCalledTimes(1)
+    })
+  }
+
+  // ...and the HARD inputs keep failing loudly, exactly as before.
+  it('an unreadable LOCATION still throws: the soft-fail never reaches the budget inputs', async () => {
+    const db = mockDb({ location: { id: 'loc1', monthly_contractor_budget_eur: 100 }, failLocationIds: ['loc1'] })
+    await expect(projectPublishImpact(db, PERIOD)).rejects.toThrow(/Location lookup failed/)
   })
 
   // Review (cost) — a caller that never shows the lists must not pay for them.

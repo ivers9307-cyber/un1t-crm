@@ -194,38 +194,47 @@ async function loadBudgetContext(db, locationId, periodStart, periodEnd = period
   // roster. An organisation has a handful of locations, so this read does not
   // page. No siblings = nothing to check, which is a complete check (the flag
   // stays true and the modal says nothing).
+  //
+  // A REJECTED read (or a client that throws) degrades exactly like a returned
+  // error. The try wraps these two advisory reads ONLY: the budget inputs
+  // above keep throwing, as they always have.
   let otherAssignments = []
-  let siblingIds = []
-  if (rosteredIds.length > 0) {
-    const { data: siblings, error: sibErr } = loc?.organization_id
-      ? await db.from('locations').select('id').eq('organization_id', loc.organization_id).neq('id', locationId)
-      : { data: null, error: { message: 'location has no organization_id' } }
-    if (sibErr) {
-      logWarn('roster-publish', 'sibling studios unreadable; double-booking check is this studio only', { locationId, err: sibErr.message })
-      otherAssignments = null
-    } else {
-      siblingIds = (siblings || []).map((l) => l.id).filter(Boolean)
-    }
-  }
-  if (siblingIds.length > 0) {
-    for (let from = 0; ; from += BLOCK_PAGE_SIZE) {
-      const { data: page, error: otherErr } = await db
-        .from('shift_assignments')
-        .select('id, profile_id, status, start_time_override, end_time_override, shift_blocks!inner(id, location_id, block_date, start_time, end_time, shift_templates(name), locations(name))')
-        .in('profile_id', rosteredIds)
-        .in('shift_blocks.location_id', siblingIds)
-        .gte('shift_blocks.block_date', monthStart)
-        .lte('shift_blocks.block_date', monthEnd)
-        .order('id', { ascending: true })
-        .range(from, from + BLOCK_PAGE_SIZE - 1)
-      if (otherErr) {
-        logWarn('roster-publish', 'other-studio assignments unreadable; double-booking check is this studio only', { locationId, err: otherErr.message })
+  try {
+    let siblingIds = []
+    if (rosteredIds.length > 0) {
+      const { data: siblings, error: sibErr } = loc?.organization_id
+        ? await db.from('locations').select('id').eq('organization_id', loc.organization_id).neq('id', locationId)
+        : { data: null, error: { message: 'location has no organization_id' } }
+      if (sibErr) {
+        logWarn('roster-publish', 'sibling studios unreadable; double-booking check is this studio only', { locationId, err: sibErr.message })
         otherAssignments = null
-        break
+      } else {
+        siblingIds = (siblings || []).map((l) => l.id).filter(Boolean)
       }
-      otherAssignments.push(...(page || []))
-      if (!page || page.length < BLOCK_PAGE_SIZE) break
     }
+    if (siblingIds.length > 0) {
+      for (let from = 0; ; from += BLOCK_PAGE_SIZE) {
+        const { data: page, error: otherErr } = await db
+          .from('shift_assignments')
+          .select('id, profile_id, status, start_time_override, end_time_override, shift_blocks!inner(id, location_id, block_date, start_time, end_time, shift_templates(name), locations(name))')
+          .in('profile_id', rosteredIds)
+          .in('shift_blocks.location_id', siblingIds)
+          .gte('shift_blocks.block_date', monthStart)
+          .lte('shift_blocks.block_date', monthEnd)
+          .order('id', { ascending: true })
+          .range(from, from + BLOCK_PAGE_SIZE - 1)
+        if (otherErr) {
+          logWarn('roster-publish', 'other-studio assignments unreadable; double-booking check is this studio only', { locationId, err: otherErr.message })
+          otherAssignments = null
+          break
+        }
+        otherAssignments.push(...(page || []))
+        if (!page || page.length < BLOCK_PAGE_SIZE) break
+      }
+    }
+  } catch (e) {
+    logWarn('roster-publish', 'other-studio check threw; double-booking check is this studio only', { locationId, err: e?.message })
+    otherAssignments = null
   }
 
   return {
@@ -492,15 +501,26 @@ function impactFromContext(ctx, { periodStart, periodEnd, todayIso }) {
   // COPYLEAVE.1 — advisory, like staffingGaps: nothing here gates a publish.
   // Absent altogether (not empty) when the caller asked for no advisories, so
   // "not computed" can never read as "all clear".
-  const advisoryLists = advisories
-    ? {
-      leaveClashes: leaveClashes(monthBlocks, { from: periodStart, to: periodEnd, todayIso, leaveByProfile }),
-      doubleBookings: doubleBookings(monthBlocks, otherAssignments, { from: periodStart, to: periodEnd, todayIso }),
-      // false = the other-studio read failed, so doubleBookings covers this
-      // studio only. The modal says so instead of implying an all-clear.
-      crossLocationChecked: otherAssignments !== null,
+  let advisoryLists = {}
+  if (advisories) {
+    // A bug in a pure advisory helper must not refuse a publish either: that
+    // list comes back empty and the check is flagged incomplete.
+    let complete = otherAssignments !== null
+    const soft = (name, fn) => {
+      try { return fn() } catch (e) {
+        logWarn('roster-publish', `${name} advisory threw; omitted from the publish preview`, { locationId: location?.id, err: e?.message })
+        complete = false
+        return []
+      }
     }
-    : {}
+    advisoryLists = {
+      leaveClashes: soft('leaveClashes', () => leaveClashes(monthBlocks, { from: periodStart, to: periodEnd, todayIso, leaveByProfile })),
+      doubleBookings: soft('doubleBookings', () => doubleBookings(monthBlocks, otherAssignments, { from: periodStart, to: periodEnd, todayIso })),
+    }
+    // false = the other-studio read failed (or a helper threw), so the lists
+    // are not a full check. The modal says so instead of implying an all-clear.
+    advisoryLists.crossLocationChecked = complete
+  }
 
   return {
     monthStart: binding.monthStart,
