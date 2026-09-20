@@ -263,6 +263,20 @@ describe('fetchApiShiftRows', () => {
     expect(byId['mgr-draft'].notes).toBe('note-mgr-draft')
   })
 
+  // SHIFTREMIND.1 — the read is not paged. PostgREST caps a select at 1,000 rows
+  // and says nothing, so a full page is reported instead of silently truncated.
+  it('flags a read that came back at the 1,000-row cap, and only then', async () => {
+    const row = (i) => ({
+      id: `a${i}`, profile_id: 'p1', status: 'scheduled',
+      shift_blocks: { location_id: 'loc1', template_id: 't1', block_date: '2026-06-08', rosters: { status: 'published' }, shift_templates: {} },
+    })
+    const full = await fetchApiShiftRows(makeDb({ data: Array.from({ length: 1000 }, (_, i) => row(i)), error: null }), { locationIds: ['loc1'] })
+    expect(full.capped).toBe(true)
+    expect(full.rows).toHaveLength(1000)
+    const under = await fetchApiShiftRows(makeDb({ data: Array.from({ length: 999 }, (_, i) => row(i)), error: null }), { locationIds: ['loc1'] })
+    expect('capped' in under).toBe(false)
+  })
+
   it('passes query errors through', async () => {
     const res = await fetchApiShiftRows(makeDb({ data: null, error: { message: 'nope' } }), { locationIds: ['l'] })
     expect(res.error?.message).toBe('nope')

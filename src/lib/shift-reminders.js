@@ -405,6 +405,7 @@ function emptySummary() {
     shift_send_failed: 0,
     shift_send_threw: 0,
     shift_claim_failed: 0,
+    shift_read_capped: 0,
   }
 }
 
@@ -462,13 +463,22 @@ export async function runShiftReminders(db, { nowMs = Date.now(), locations = []
   const tzByLocation = Object.fromEntries(locations.map((l) => [l.id, l.timezone || DEFAULT_TZ]))
   const nameByLocation = Object.fromEntries(locations.map((l) => [l.id, l.name || '']))
 
-  // Two days across the estate is tens of rows, far under the 1,000-row cap.
+  // Two days across the estate is tens of rows, far under the 1,000-row cap
+  // (the reader is not paged; if that ever stops being true it is said, below).
   // publishedOnly is the D1 rule: coaches never see an unpublished shift.
-  const { rows, error: shiftErr } = await fetchApiShiftRows(db, {
+  const { rows, error: shiftErr, capped } = await fetchApiShiftRows(db, {
     locationIds, startDate: today, endDate: tomorrow, publishedOnly: true,
   })
   if (shiftErr) throw new Error(`shift read failed: ${shiftErr.message || shiftErr}`)
+  if (capped) {
+    summary.shift_read_capped = 1
+    logWarn('shift-reminders', 'shift read hit the 1,000-row cap — some shifts were NOT read, so runs may be incomplete and reminders missed; page fetchApiShiftRows', { startDate: today, endDate: tomorrow })
+  }
   if (rows.length === 0) return summary
+
+  // COST: most ticks end here. Leave can only REMOVE a coach's day, never make
+  // a run due, so if nothing is time-due without it there is nothing to read.
+  if (dueShiftReminders(rows, { nowMs, tzByLocation }).length === 0) return summary
 
   let onLeave = new Set()
   const profileIds = [...new Set(rows.map((r) => r.profile_id).filter(Boolean))]

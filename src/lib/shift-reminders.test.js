@@ -872,7 +872,32 @@ describe('runShiftReminders', () => {
     const db = makeDb()
     const from = vi.spyOn(db, 'from')
     await runShiftReminders(db, { nowMs: at('2026-09-21T12:00:00Z'), locations: LOCATIONS })
-    expect(from.mock.calls.map(([t]) => t)).toEqual(['time_off_requests'])
+    // COST: not the ledger, and not the leave table either. Most ticks end here,
+    // after the one shift read.
+    expect(from.mock.calls.map(([t]) => t)).toEqual([])
     expect(notifyUsers).not.toHaveBeenCalled()
+  })
+
+  it('leave is read only once a run is time-due, and BEFORE the ledger', async () => {
+    const db = makeDb()
+    const from = vi.spyOn(db, 'from')
+    await runShiftReminders(db, { nowMs: NOW, locations: LOCATIONS })
+    expect(from.mock.calls.map(([t]) => t).slice(0, 2)).toEqual(['time_off_requests', 'push_reminder_sends'])
+  })
+
+  it('everyone time-due is on leave: the ledger is never read', async () => {
+    const db = makeDb({ leave: [{ profile_id: 'coach-1', status: 'approved', start_date: '2026-09-22', end_date: '2026-09-22', total_days: 1 }] })
+    const from = vi.spyOn(db, 'from')
+    const summary = await runShiftReminders(db, { nowMs: NOW, locations: LOCATIONS })
+    expect(from.mock.calls.map(([t]) => t)).toEqual(['time_off_requests'])
+    expect(summary.shift_candidates).toBe(0)
+  })
+
+  it('a shift read that came back at the 1,000-row cap is warned about and counted, never silently truncated', async () => {
+    fetchApiShiftRows.mockResolvedValue({ rows: [shift()], error: null, capped: true })
+    const summary = await runShiftReminders(makeDb(), { nowMs: NOW, locations: LOCATIONS })
+    expect(logWarn).toHaveBeenCalledWith('shift-reminders', expect.stringMatching(/1,000-row cap/), expect.anything())
+    expect(summary.shift_read_capped).toBe(1)
+    expect(notifyUsers).toHaveBeenCalledTimes(1) // what was read is still reminded
   })
 })
