@@ -44,6 +44,8 @@ function buildDb({
   approverLinks = [],
   assignments = [],
   approveError = null,
+  country = 'IE',
+  customHolidays = [], holidaysError = null,
 }) {
   const insertSpy = vi.fn()
   const updateSpy = vi.fn()
@@ -62,7 +64,14 @@ function buildDb({
       if (cols.includes('permissions')) return { data: approverLinks, error: null }
       return { data: subjectLocations.map((location_id) => ({ location_id })), error: null }
     }
-    if (q.table === 'location_role_permissions' || q.table === 'locations') return { data: [], error: null }
+    if (q.table === 'location_role_permissions') return { data: [], error: null }
+    // HOLIDAYLEAVE.1 — `locations` is read two ways: the approver lookup lists
+    // features (awaited, a list) and getNonWorkingDates reads one studio's
+    // country (.maybeSingle()).
+    if (q.table === 'locations') {
+      return q.terminal === 'maybeSingle' ? { data: { country }, error: null } : { data: [], error: null }
+    }
+    if (q.table === 'location_holidays') return { data: holidaysError ? null : customHolidays, error: holidaysError }
     if (q.table === 'shift_assignments') return { data: assignments, error: null }
     if (q.table === 'time_off_requests') {
       if (q.action === 'insert') {
@@ -107,7 +116,7 @@ describe('POST /api/schedule/time-off — request integrity', () => {
     getCurrentUser.mockResolvedValue(USER)
     const { db, insertSpy } = buildDb({})
     createServerClient.mockReturnValue(db)
-    const res = await POST(req({ type: 'holiday', start_date: '2026-06-01', end_date: '2026-06-07' }))
+    const res = await POST(req({ type: 'holiday', start_date: '2026-06-08', end_date: '2026-06-14' }))
     expect(res.status).toBe(201)
     expect(insertSpy).toHaveBeenCalledTimes(1)
     expect(insertSpy).toHaveBeenCalledWith([expect.objectContaining({ total_days: 5 })])
@@ -159,8 +168,9 @@ describe('POST /api/schedule/time-off — request integrity', () => {
 
   it('400 when the SECOND year of a straddling holiday has no allowance left', async () => {
     getCurrentUser.mockResolvedValue(USER)
-    // 28-31 Dec 2026 = 4 working days against 20; 1-8 Jan 2027 = 6 working
-    // days against 1. Charging the whole range to the first year would pass.
+    // 28-31 Dec 2026 = 4 working days against 20; 1-8 Jan 2027 = 5 working
+    // days (Fri 1 Jan is a bank holiday) against 1. Charging the whole range to
+    // the first year would pass.
     const { db, insertSpy } = buildDb({
       allowanceByYear: {
         2026: { total_days: 20, carried_over: 0, used_days: 0 },
@@ -172,6 +182,89 @@ describe('POST /api/schedule/time-off — request integrity', () => {
     expect(res.status).toBe(400)
     expect((await res.json()).error).toMatch(/Insufficient holiday balance/)
     expect(insertSpy).not.toHaveBeenCalled()
+  })
+})
+
+// HOLIDAYLEAVE.1 — a bank holiday, or a day the studio is closed, inside a
+// holiday request costs no allowance.
+describe('POST /api/schedule/time-off — bank holidays are not charged', () => {
+  it('Mon 1 Jun (June Public Holiday) to Sun 7 Jun is 4 days, not 5', async () => {
+    getCurrentUser.mockResolvedValue(USER)
+    const { db, insertSpy } = buildDb({})
+    createServerClient.mockReturnValue(db)
+    const res = await POST(req({ type: 'holiday', start_date: '2026-06-01', end_date: '2026-06-07' }))
+    expect(res.status).toBe(201)
+    expect(insertSpy).toHaveBeenCalledWith([expect.objectContaining({ total_days: 4 })])
+  })
+
+  it('the studio\'s own closure is not charged either, and is read for THAT studio over the requested range', async () => {
+    getCurrentUser.mockResolvedValue(USER)
+    const { db, insertSpy } = buildDb({ customHolidays: [{ date: '2026-06-10', name: 'Studio closed' }] })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(req({ type: 'holiday', start_date: '2026-06-08', end_date: '2026-06-14' }))
+    expect(res.status).toBe(201)
+    expect(insertSpy).toHaveBeenCalledWith([expect.objectContaining({ total_days: 4 })])
+    const closures = queriesOf(db, 'location_holidays')[0]
+    expect(closures.eq).toEqual({ location_id: 'loc-1' })
+    expect(closures.calls).toContainEqual(['gte', 'date', '2026-06-08'])
+    expect(closures.calls).toContainEqual(['lte', 'date', '2026-06-14'])
+  })
+
+  it('the balance check uses the working-day count: 4 days fit a 4-day balance', async () => {
+    getCurrentUser.mockResolvedValue(USER)
+    const { db, insertSpy } = buildDb({ entitlement: 4 })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(req({ type: 'holiday', start_date: '2026-06-01', end_date: '2026-06-05' }))
+    expect(res.status).toBe(201)
+    expect(insertSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('a holiday that is ONLY a bank holiday is refused: nothing to take', async () => {
+    getCurrentUser.mockResolvedValue(USER)
+    const { db, insertSpy } = buildDb({})
+    createServerClient.mockReturnValue(db)
+    const res = await POST(req({ type: 'holiday', start_date: '2026-06-01', end_date: '2026-06-01' }))
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toBe('No working days in that range')
+    expect(insertSpy).not.toHaveBeenCalled()
+  })
+
+  it('follows the studio\'s country: 1 Jun is an ordinary Monday in the UK', async () => {
+    getCurrentUser.mockResolvedValue(USER)
+    const { db, insertSpy } = buildDb({ country: 'GB' })
+    createServerClient.mockReturnValue(db)
+    await POST(req({ type: 'holiday', start_date: '2026-06-01', end_date: '2026-06-07' }))
+    expect(insertSpy).toHaveBeenCalledWith([expect.objectContaining({ total_days: 5 })])
+  })
+
+  it('sick leave still counts calendar days and never reads the holiday list', async () => {
+    getCurrentUser.mockResolvedValue(USER)
+    const { db, insertSpy } = buildDb({})
+    createServerClient.mockReturnValue(db)
+    await POST(req({ type: 'sick', start_date: '2026-06-01', end_date: '2026-06-07' }))
+    expect(insertSpy).toHaveBeenCalledWith([expect.objectContaining({ total_days: 7 })])
+    expect(queriesOf(db, 'location_holidays')).toHaveLength(0)
+  })
+
+  it('500 and NO insert when the holiday list cannot be read: never charge blind', async () => {
+    getCurrentUser.mockResolvedValue(USER)
+    const { db, insertSpy } = buildDb({ holidaysError: { message: 'closures boom' } })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(req({ type: 'holiday', start_date: '2026-06-01', end_date: '2026-06-05' }))
+    expect(res.status).toBe(500)
+    expect((await res.json()).error).toBe('closures boom')
+    expect(insertSpy).not.toHaveBeenCalled()
+  })
+
+  it('a year-straddling holiday: each year\'s row gets its own working-day count', async () => {
+    getCurrentUser.mockResolvedValue(USER)
+    const { db, insertSpy } = buildDb({})
+    createServerClient.mockReturnValue(db)
+    // Mon 21 Dec 2026 - Fri 8 Jan 2027. 2026: 9 weekdays minus Fri 25 Dec = 8.
+    // 2027: 6 weekdays minus Fri 1 Jan = 5.
+    const res = await POST(req({ type: 'holiday', start_date: '2026-12-21', end_date: '2027-01-08' }))
+    expect(res.status).toBe(201)
+    expect(insertSpy.mock.calls[0][0].map((r) => [r.start_date, r.total_days])).toEqual([['2026-12-21', 8], ['2027-01-01', 5]])
   })
 })
 
@@ -337,7 +430,7 @@ describe('POST /api/schedule/time-off — LEAVE.2', () => {
     // No allowance row; entitlement 3 days; Mon-Fri = 5 working days.
     let { db, insertSpy } = buildDb({ entitlement: 3 })
     createServerClient.mockReturnValue(db)
-    let res = await POST(req({ type: 'holiday', start_date: '2026-06-01', end_date: '2026-06-05' }))
+    let res = await POST(req({ type: 'holiday', start_date: '2026-06-08', end_date: '2026-06-12' }))
     expect(res.status).toBe(400)
     expect((await res.json()).error).toMatch(/3 days remaining/)
     expect(insertSpy).not.toHaveBeenCalled()
@@ -345,7 +438,7 @@ describe('POST /api/schedule/time-off — LEAVE.2', () => {
     // No entitlement recorded → 20, so the same week passes.
     ;({ db, insertSpy } = buildDb({ entitlement: null }))
     createServerClient.mockReturnValue(db)
-    res = await POST(req({ type: 'holiday', start_date: '2026-06-01', end_date: '2026-06-05' }))
+    res = await POST(req({ type: 'holiday', start_date: '2026-06-08', end_date: '2026-06-12' }))
     expect(res.status).toBe(201)
   })
 
@@ -432,7 +525,7 @@ describe('POST /api/schedule/time-off — LEAVE.2', () => {
 
       ;({ db, insertSpy } = buildDb({ entitlement: 1 }))
       createServerClient.mockReturnValue(db)
-      const res = await POST(req(body({ type: 'holiday' })))
+      const res = await POST(req(body({ type: 'holiday', start_date: '2026-06-08', end_date: '2026-06-09' })))
       expect(res.status).toBe(400)
       expect((await res.json()).error).toMatch(/They have 1 days remaining/)
       const staffAllowanceRead = queriesOf(db, 'staff_allowances')[0]
