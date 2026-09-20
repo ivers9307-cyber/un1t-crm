@@ -7,6 +7,7 @@ import { validateBody } from '@/lib/validate'
 import { swapStatusSchema } from '@/lib/schemas'
 import { resolveSwapTransition, swapChangeLogEntries, swapApprovalRpc, swapApprovalError, swapIncomingMoves, SWAP_CONFLICTS_CODE } from '@/lib/swap-lifecycle'
 import { findSwapConflicts } from '@/lib/swap-conflicts'
+import { swapShiftHasStarted, swapShiftStartedInEveryZone } from '@/lib/swap-cover'
 import { notifyUsersOnce, notifyUsersAtRolesOnce } from '@/lib/push-dedup'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { hasPermissionForLocation } from '@/lib/permissions'
@@ -14,6 +15,9 @@ import { APPROVAL_CATEGORY_PERMISSION } from '@shared/permissions'
 import { logRosterChange, markChangesNotified } from '@/lib/roster-change-log'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { logWarn } from '@/lib/log'
+
+// COVERLOOP.1 — the status guard on the non-RPC update matched no row.
+const SWAP_CHANGED_ERROR = 'This swap has just changed. Refresh and try again.'
 
 const SwapReviewSchema = z.object({
   status: swapStatusSchema,
@@ -51,13 +55,30 @@ export async function PUT(request, props) {
   // SWAPS.2 — both block embeds also carry the block's times: the leave /
   // clash check compares them with the incoming coach's other shifts that day
   // (a moved shift loses its overrides, so the block's times are the window).
+  // COVERLOOP.1 — both shifts also carry their own start_time_override: "has
+  // this shift started" is judged on the EFFECTIVE start.
   const { data: swap } = await db.from('shift_swap_requests')
-    .select('*, requester_shift:shift_assignments!requester_shift_id(id, profile_id, block_id, block:shift_blocks!block_id(id, location_id, block_date, start_time, end_time, rosters:roster_id(status))), target_shift:shift_assignments!target_shift_id(id, profile_id, block_id, block:shift_blocks!block_id(id, location_id, block_date, start_time, end_time, rosters:roster_id(status)))')
+    .select('*, requester_shift:shift_assignments!requester_shift_id(id, profile_id, block_id, start_time_override, block:shift_blocks!block_id(id, location_id, block_date, start_time, end_time, rosters:roster_id(status))), target_shift:shift_assignments!target_shift_id(id, profile_id, block_id, start_time_override, block:shift_blocks!block_id(id, location_id, block_date, start_time, end_time, rosters:roster_id(status)))')
     .eq('id', params.id)
     .single()
 
+  // COVERLOOP.1 — a claim, accept or approval on a shift that has already
+  // started is refused (409). Only asked for those two target statuses: the
+  // ways out (withdraw, cancel, reject, decline) never need it.
+  // A RECIPROCAL swap moves two shifts, so its TARGET shift is asked too, on
+  // its OWN studio's clock.
+  const asksStarted = !!swap && (body.status === 'awaiting_approval' || body.status === 'approved')
+  const nowMs = Date.now()
+  const zoneCache = new Map()
+  const shiftStarted = asksStarted ? await swapShiftStarted(db, swap, swap.requester_shift, nowMs, zoneCache) : false
+  const targetShiftStarted = asksStarted && swap.target_shift_id != null
+    ? await swapShiftStarted(db, swap, swap.target_shift, nowMs, zoneCache)
+    : false
+
   const decision = resolveSwapTransition({
     swap,
+    shiftStarted,
+    targetShiftStarted,
     requestedStatus: body.status,
     user,
     userLocationIds: getUserLocationIds(user),
@@ -117,13 +138,25 @@ export async function PUT(request, props) {
     }
     data = approved
   } else {
-    const { data: updated, error } = await db.from('shift_swap_requests')
+    // COVERLOOP.1 — guarded on the status this request READ. The decision
+    // above was made about that status; if the cover sweep (a shift that just
+    // started), a manager or another coach changed the swap in between, an
+    // unguarded write would overwrite theirs: a claim that read `pending` a
+    // moment before the shift started turned the sweep's `cancelled` back into
+    // `awaiting_approval`, and the managers were pushed to approve a dead
+    // swap. A zero-row UPDATE is NOT an error in PostgREST, so the rows that
+    // come back are the verdict (hence no .single()): none means nothing was
+    // written, and nothing below (audit, warnings, notifications) may run.
+    const { data: rows, error } = await db.from('shift_swap_requests')
       .update(decision.swapUpdates)
       .eq('id', params.id)
+      .eq('status', swap.status)
       .select()
-      .single()
     if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
-    data = updated
+    if (!rows || rows.length === 0) {
+      return NextResponse.json({ success: false, error: SWAP_CHANGED_ERROR }, { status: 409 })
+    }
+    data = rows[0]
   }
 
   // SWAPNOTIFY.1 — the drop's roster_change_log row (dropLog below) can end
@@ -215,6 +248,42 @@ export async function PUT(request, props) {
     .catch(err => console.error('[swaps] notify failed', err)))
 
   return NextResponse.json(warnings ? { success: true, data, warnings } : { success: true, data })
+}
+
+// COVERLOOP.1 — has one of the swap's shifts (the requester's, or the target's
+// on a reciprocal swap) started? The rule is swapShiftHasStarted
+// (src/lib/swap-cover.js), the SAME predicate the cover sweep closes a swap on,
+// so the two can never disagree: block_date + the assignment's
+// start_time_override (else the block's start_time), as wall clock in the
+// timezone of THAT shift's own studio (its block's location; the swap's if the
+// block has none). Far from the start every zone on earth agrees and nothing
+// is read; near it the studio's timezone is read once per studio per request,
+// and an unreadable, empty or invalid one is Europe/Dublin. Never throws: this
+// guard must not turn a swap action into a 500.
+async function swapShiftStarted(db, swap, assignment, nowMs, zoneCache) {
+  if (!assignment?.block) return false
+  const shift = {
+    block_date: assignment.block.block_date,
+    start_time: assignment.block.start_time,
+    start_time_override: assignment.start_time_override ?? null,
+  }
+  const everywhere = swapShiftStartedInEveryZone(shift, nowMs)
+  if (everywhere !== null) return everywhere
+
+  const locationId = assignment.block.location_id || swap.location_id
+  if (!zoneCache.has(locationId)) {
+    let tz = null
+    try {
+      // 0 rows is a legitimate answer (-> Europe/Dublin), hence maybeSingle.
+      const { data, error } = await db.from('locations').select('id, timezone').eq('id', locationId).maybeSingle()
+      if (error) throw new Error(error.message)
+      tz = data?.timezone ?? null
+    } catch (e) {
+      logWarn('swaps', 'could not read the studio timezone for the started-shift check; using Europe/Dublin', { swapId: swap.id, locationId, err: e?.message })
+    }
+    zoneCache.set(locationId, tz)
+  }
+  return swapShiftHasStarted(shift, nowMs, zoneCache.get(locationId))
 }
 
 // SWAPAUDIT.1 — write the roster_change_log rows for an approved reassign

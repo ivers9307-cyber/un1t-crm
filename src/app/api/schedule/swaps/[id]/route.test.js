@@ -11,7 +11,7 @@
 // src/app/api/schedule/blocks/[id]/assignments/route.test.js); the swap
 // resolver itself is real, so the drop branch is exercised for real.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/auth', async (importOriginal) => ({
@@ -100,7 +100,10 @@ function dropSwap(rosterStatus = 'published', blockDate = '2026-06-10') {
 // SWAPS.2 — every approval is an rpc(); `rpcErr` refuses it and `rpcArgs`
 // records what the route sent. The route must never write shift_assignments
 // itself any more, so that table throws.
-function buildDb(swap, calls, rpcErr = null, rpcArgs = []) {
+// COVERLOOP.1 — `upd.filters` records the non-RPC update's .eq() filters, and
+// `upd.rows` overrides the rows it returns ([] = the status guard matched
+// nothing: somebody else changed the swap first).
+function buildDb(swap, calls, rpcErr = null, rpcArgs = [], upd = {}) {
   return {
     rpc: (fn, args) => {
       calls.push(`rpc:${fn}`)
@@ -115,16 +118,18 @@ function buildDb(swap, calls, rpcErr = null, rpcArgs = []) {
           select: () => ({
             eq: () => ({ single: () => Promise.resolve({ data: swap, error: null }) }),
           }),
-          update: (patch) => ({
-            eq: () => ({
-              select: () => ({
-                single: () => {
-                  calls.push('swap_update')
-                  return Promise.resolve({ data: { ...swap, ...patch }, error: null })
-                },
-              }),
-            }),
-          }),
+          update: (patch) => {
+            const chain = {
+              eq: (col, val) => { upd.filters?.push([col, val]); return chain },
+              // No .single(): a zero-row UPDATE is not an error in PostgREST,
+              // so the route has to judge the ROWS that came back.
+              select: () => {
+                calls.push('swap_update')
+                return Promise.resolve({ data: upd.rows ?? [{ ...swap, ...patch }], error: upd.error ?? null })
+              },
+            }
+            return chain
+          },
         }
       }
       throw new Error(`unexpected table ${table}`)
@@ -1017,5 +1022,298 @@ describe('PUT /api/schedule/swaps/[id] — leave / clash checks (SWAPS.2)', () =
     expect(res.status).toBe(200)
     expect((await res.json()).warnings).toBeUndefined()
     expect(findSwapConflicts).not.toHaveBeenCalled()
+  })
+})
+
+// COVERLOOP.1 — a swap on a shift that has already STARTED. The sweep closes
+// it within 15 minutes; until then (and whatever happens to the cron) the
+// route itself refuses to claim, accept or approve it. Approving would move a
+// shift that is being worked and clear that coach's arrival stamp and
+// overrides (SWAP_MOVE_CLEARS). The RPCs are untouched. The predicate is
+// swapShiftHasStarted (src/lib/swap-cover.js), the one the sweep uses; its
+// table (effective start, studio timezone, both DST weekends) is in
+// swap-cover.test.js.
+describe('PUT /api/schedule/swaps/[id] — a started shift (COVERLOOP.1)', () => {
+  const TAKER = 'coach-2'
+  const COACH = { id: TAKER, role: 'staff', profileRole: 'staff', rolesByLocation: { 'loc-1': 'staff' }, full_name: 'Cora Coach' }
+  const REQ_USER = { id: REQUESTER, role: 'staff', profileRole: 'staff', rolesByLocation: { 'loc-1': 'staff' }, full_name: 'Rory' }
+  const blk = (date, start = '06:00:00') => ({ id: 'block-1', location_id: 'loc-1', block_date: date, start_time: start, end_time: '10:00:00', rosters: { status: 'published' } })
+  const swapOn = (date, over = {}, shiftOver = {}) => ({
+    id: 'swap-1', status: 'pending', location_id: 'loc-1',
+    requester_id: REQUESTER, requester_shift_id: 'assign-1', target_shift_id: null, target_id: null,
+    requester_shift: { id: 'assign-1', profile_id: REQUESTER, block_id: 'block-1', start_time_override: null, block: blk(date), ...shiftOver },
+    target_shift: null,
+    ...over,
+  })
+  // buildDb plus a `locations` table (the studio's timezone).
+  const dbWithTz = (swap, calls, locations) => {
+    const db = buildDb(swap, calls)
+    const from = db.from
+    db.from = (table) => {
+      if (table !== 'locations') return from(table)
+      calls.push('locations_read')
+      return { select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve(locations) }) }) }
+    }
+    return db
+  }
+  const LONG_AGO = '2000-01-01'
+
+  afterEach(() => { vi.useRealTimers() })
+
+  it.each([
+    ['an open claim', () => swapOn(LONG_AGO), COACH, 'awaiting_approval'],
+    ['a targeted accept', () => swapOn(LONG_AGO, { target_id: TAKER }), COACH, 'awaiting_approval'],
+    ['approving a drop', () => swapOn(LONG_AGO), MANAGER, 'approved'],
+    ['approving a reassign', () => swapOn(LONG_AGO, { status: 'awaiting_approval', target_id: TAKER }), MANAGER, 'approved'],
+  ])('refuses %s with 409 and writes nothing', async (_name, make, user, status) => {
+    getCurrentUser.mockResolvedValue(user)
+    const calls = []
+    createServerClient.mockReturnValue(buildDb(make(), calls))
+
+    const res = await PUT(req({ status, confirm_conflicts: true }), PROPS)
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ success: false, error: 'This shift has already started' })
+    await flush()
+    expect(calls).toEqual([])
+    expect(findSwapConflicts).not.toHaveBeenCalled()
+    expect(logRosterChange).not.toHaveBeenCalled()
+    expect(notifyUsersOnce).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['the taker withdraws', () => swapOn(LONG_AGO, { status: 'awaiting_approval', target_id: TAKER }), COACH, 'pending', 'pending'],
+    ['the requester cancels', () => swapOn(LONG_AGO), REQ_USER, 'cancelled', 'cancelled'],
+    ['a manager rejects', () => swapOn(LONG_AGO, { status: 'awaiting_approval', target_id: TAKER }), MANAGER, 'rejected', 'rejected'],
+  ])('%s: still works on a started shift', async (_name, make, user, status, expected) => {
+    getCurrentUser.mockResolvedValue(user)
+    const calls = []
+    createServerClient.mockReturnValue(buildDb(make(), calls))
+    const res = await PUT(req({ status }), PROPS)
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.status).toBe(expected)
+    expect(calls).toEqual(['swap_update'])
+  })
+
+  it('far from the start the studio timezone is not even read', async () => {
+    getCurrentUser.mockResolvedValue(COACH)
+    const calls = []
+    createServerClient.mockReturnValue(dbWithTz(swapOn('2099-01-01'), calls, { data: { id: 'loc-1', timezone: 'Europe/Dublin' }, error: null }))
+    expect((await PUT(req({ status: 'awaiting_approval' }), PROPS)).status).toBe(200)
+    expect(calls).toEqual(['swap_update'])
+  })
+
+  // A RECIPROCAL swap moves two shifts: the TARGET shift having started
+  // refuses the accept and the approval too, and says which shift it is.
+  describe('a reciprocal swap', () => {
+    const FUTURE = '2099-01-01'
+    const recip = (reqDate, tgtDate, over = {}) => swapOn(reqDate, {
+      target_id: TAKER, target_shift_id: 'assign-2',
+      target_shift: { id: 'assign-2', profile_id: TAKER, block_id: 'block-2', start_time_override: null, block: { ...blk(tgtDate), id: 'block-2' } },
+      ...over,
+    })
+
+    it.each([
+      ['ACCEPT: the accepting coach\'s own shift has started', () => recip(FUTURE, LONG_AGO), COACH, 'awaiting_approval', 'Your own shift in this swap has already started'],
+      ['ACCEPT: the shift they would be taking has started', () => recip(LONG_AGO, FUTURE), COACH, 'awaiting_approval', 'The shift you would be taking has already started'],
+      ['APPROVE: the other coach\'s shift has started', () => recip(FUTURE, LONG_AGO, { status: 'awaiting_approval' }), MANAGER, 'approved', "The other coach's shift has already started"],
+      ['APPROVE: the requester\'s shift has started', () => recip(LONG_AGO, FUTURE, { status: 'awaiting_approval' }), MANAGER, 'approved', "The requester's shift has already started"],
+    ])('%s -> 409, nothing written', async (_name, make, user, status, error) => {
+      getCurrentUser.mockResolvedValue(user)
+      const calls = []
+      createServerClient.mockReturnValue(buildDb(make(), calls))
+      const res = await PUT(req({ status, confirm_conflicts: true }), PROPS)
+      expect(res.status).toBe(409)
+      expect(await res.json()).toEqual({ success: false, error })
+      await flush()
+      expect(calls).toEqual([])
+      expect(notifyUsersOnce).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      ['the target withdraws', () => recip(FUTURE, LONG_AGO, { status: 'awaiting_approval' }), COACH, 'pending'],
+      ['the target declines', () => recip(FUTURE, LONG_AGO), COACH, 'rejected'],
+      ['the requester cancels', () => recip(FUTURE, LONG_AGO), REQ_USER, 'cancelled'],
+      ['a manager rejects', () => recip(FUTURE, LONG_AGO, { status: 'awaiting_approval' }), MANAGER, 'rejected'],
+    ])('%s: still works with the target shift started', async (_name, make, user, status) => {
+      getCurrentUser.mockResolvedValue(user)
+      const calls = []
+      createServerClient.mockReturnValue(buildDb(make(), calls))
+      expect((await PUT(req({ status }), PROPS)).status).toBe(200)
+      expect(calls).toEqual(['swap_update'])
+    })
+
+    it('both shifts in the future: the approval goes through', async () => {
+      getCurrentUser.mockResolvedValue(MANAGER)
+      const calls = []
+      createServerClient.mockReturnValue(buildDb(recip(FUTURE, '2099-01-02', { status: 'awaiting_approval' }), calls))
+      expect((await PUT(req({ status: 'approved', confirm_conflicts: true }), PROPS)).status).toBe(200)
+      expect(calls).toEqual(['rpc:approve_reciprocal_shift_swap'])
+    })
+
+    // 2026-01-15 10:00Z, both shifts 09:00 that day: the requester's studio is
+    // on New York time (not started), the TARGET shift's studio on Dublin time
+    // (started). Each shift must be read on its OWN studio's clock.
+    it('each shift is judged in its OWN studio\'s timezone', async () => {
+      vi.useFakeTimers({ toFake: ['Date'], now: Date.UTC(2026, 0, 15, 10, 0) })
+      getCurrentUser.mockResolvedValue(MANAGER)
+      const swap = recip('2026-01-15', '2026-01-15', { status: 'awaiting_approval' })
+      swap.requester_shift.block = blk('2026-01-15', '09:00:00')
+      swap.target_shift.block = { ...blk('2026-01-15', '09:00:00'), id: 'block-2', location_id: 'loc-2' }
+      const calls = []
+      const db = buildDb(swap, calls)
+      const from = db.from
+      const reads = []
+      db.from = (table) => {
+        if (table !== 'locations') return from(table)
+        return { select: () => ({ eq: (_c, id) => ({ maybeSingle: () => { reads.push(id); return Promise.resolve({ data: { id, timezone: id === 'loc-2' ? 'Europe/Dublin' : 'America/New_York' }, error: null }) } }) }) }
+      }
+      createServerClient.mockReturnValue(db)
+      const res = await PUT(req({ status: 'approved', confirm_conflicts: true }), PROPS)
+      expect(res.status).toBe(409)
+      expect((await res.json()).error).toBe("The other coach's shift has already started")
+      expect(reads.sort()).toEqual(['loc-1', 'loc-2'])
+      expect(calls).toEqual([])
+    })
+  })
+
+  // 2026-01-15 10:00Z: a 09:00 shift has started in Dublin (09:00Z) and has
+  // NOT in New York (14:00Z). Only the studio's own zone can answer.
+  describe('near the start, the studio\'s timezone decides', () => {
+    const NOW = Date.UTC(2026, 0, 15, 10, 0)
+    const nearSwap = () => swapOn('2026-01-15', {}, { block: blk('2026-01-15', '09:00:00') })
+
+    it('Dublin studio: started, refused', async () => {
+      vi.useFakeTimers({ toFake: ['Date'], now: NOW })
+      getCurrentUser.mockResolvedValue(COACH)
+      const calls = []
+      createServerClient.mockReturnValue(dbWithTz(nearSwap(), calls, { data: { id: 'loc-1', timezone: 'Europe/Dublin' }, error: null }))
+      const res = await PUT(req({ status: 'awaiting_approval' }), PROPS)
+      expect(res.status).toBe(409)
+      expect(calls).toEqual(['locations_read'])
+    })
+
+    it('New York studio: not started, the claim goes through', async () => {
+      vi.useFakeTimers({ toFake: ['Date'], now: NOW })
+      getCurrentUser.mockResolvedValue(COACH)
+      const calls = []
+      createServerClient.mockReturnValue(dbWithTz(nearSwap(), calls, { data: { id: 'loc-1', timezone: 'America/New_York' }, error: null }))
+      const res = await PUT(req({ status: 'awaiting_approval' }), PROPS)
+      expect(res.status).toBe(200)
+      expect(calls).toEqual(['locations_read', 'swap_update'])
+    })
+
+    it.each([
+      ['an unreadable locations row', { data: null, error: { message: 'down' } }],
+      ['an empty timezone', { data: { id: 'loc-1', timezone: null }, error: null }],
+      ['an invalid timezone', { data: { id: 'loc-1', timezone: 'Mars/Olympus' }, error: null }],
+    ])('%s is judged as Europe/Dublin, never a 500', async (_name, locations) => {
+      vi.useFakeTimers({ toFake: ['Date'], now: NOW })
+      getCurrentUser.mockResolvedValue(COACH)
+      createServerClient.mockReturnValue(dbWithTz(nearSwap(), [], locations))
+      expect((await PUT(req({ status: 'awaiting_approval' }), PROPS)).status).toBe(409)
+    })
+
+    it.each([
+      ['a LATER override (11:00) has not started at 10:00', '11:00:00', 200],
+      ['an EARLIER override (08:00) had already started at 08:30', '08:00:00', 409, Date.UTC(2026, 0, 15, 8, 30)],
+    ])('judges the EFFECTIVE start: %s', async (_name, override, status, now = NOW) => {
+      vi.useFakeTimers({ toFake: ['Date'], now })
+      getCurrentUser.mockResolvedValue(COACH)
+      const swap = swapOn('2026-01-15', {}, { start_time_override: override, block: blk('2026-01-15', '09:00:00') })
+      createServerClient.mockReturnValue(dbWithTz(swap, [], { data: { id: 'loc-1', timezone: 'Europe/Dublin' }, error: null }))
+      expect((await PUT(req({ status: 'awaiting_approval' }), PROPS)).status).toBe(status)
+    })
+
+    it('one minute before the start it is still claimable', async () => {
+      vi.useFakeTimers({ toFake: ['Date'], now: Date.UTC(2026, 0, 15, 8, 59) })
+      getCurrentUser.mockResolvedValue(COACH)
+      createServerClient.mockReturnValue(dbWithTz(nearSwap(), [], { data: { id: 'loc-1', timezone: 'Europe/Dublin' }, error: null }))
+      expect((await PUT(req({ status: 'awaiting_approval' }), PROPS)).status).toBe(200)
+    })
+  })
+})
+
+// COVERLOOP.1 — the non-RPC update (claim / accept / decline / withdraw /
+// cancel / reject) is guarded on the status the route READ. Without it a claim
+// that read the swap just before its shift started overwrote the sweep's
+// `cancelled` with `awaiting_approval`: a dead swap came back to life, the
+// managers were pushed to approve it, and the next tick had to close it again.
+// The approval RPCs (migs 612/615) lock the row themselves and are untouched.
+describe('PUT /api/schedule/swaps/[id] — the status update is guarded on the status that was read (COVERLOOP.1)', () => {
+  const TAKER = 'coach-2'
+  const COACH = { id: TAKER, role: 'staff', profileRole: 'staff', rolesByLocation: { 'loc-1': 'staff' }, full_name: 'Cora Coach' }
+  const open = (over = {}) => ({
+    id: 'swap-1', status: 'pending', location_id: 'loc-1',
+    requester_id: REQUESTER, requester_shift_id: 'assign-1', target_shift_id: null, target_id: null,
+    requester_shift: { id: 'assign-1', profile_id: REQUESTER, block_id: 'block-1', start_time_override: null, block: { id: 'block-1', location_id: 'loc-1', block_date: '2099-01-01', start_time: '06:00:00', end_time: '10:00:00', rosters: { status: 'published' } } },
+    target_shift: null,
+    ...over,
+  })
+
+  it.each([
+    ['a claim', () => open(), COACH, 'awaiting_approval', 'pending'],
+    ['a withdraw', () => open({ status: 'awaiting_approval', target_id: TAKER }), COACH, 'pending', 'awaiting_approval'],
+    ['a manager reject', () => open({ status: 'awaiting_approval', target_id: TAKER }), MANAGER, 'rejected', 'awaiting_approval'],
+  ])('%s is written only if the swap is still in the status that was read', async (_name, make, user, status, readStatus) => {
+    getCurrentUser.mockResolvedValue(user)
+    const calls = []
+    const upd = { filters: [] }
+    createServerClient.mockReturnValue(buildDb(make(), calls, null, [], upd))
+
+    const res = await PUT(req({ status }), PROPS)
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.status).toBe(status)
+    expect(upd.filters).toEqual([['id', 'swap-1'], ['status', readStatus]])
+    expect(calls).toEqual(['swap_update'])
+  })
+
+  it('ZERO rows (the sweep, a manager or another coach got there first): 409, a truthful message, and NO notification', async () => {
+    getCurrentUser.mockResolvedValue(COACH)
+    const calls = []
+    createServerClient.mockReturnValue(buildDb(open(), calls, null, [], { filters: [], rows: [] }))
+
+    const res = await PUT(req({ status: 'awaiting_approval' }), PROPS)
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ success: false, error: 'This swap has just changed. Refresh and try again.' })
+    await flush()
+
+    expect(calls).toEqual(['swap_update'])
+    expect(after).not.toHaveBeenCalled()
+    expect(notifyUsersOnce).not.toHaveBeenCalled()
+    expect(notifyUsersAtRolesOnce).not.toHaveBeenCalled()
+    // The claim warnings are not computed for a claim that did not happen.
+    expect(findSwapConflicts).not.toHaveBeenCalled()
+  })
+
+  it('a null result is judged the same way as no rows', async () => {
+    getCurrentUser.mockResolvedValue(COACH)
+    const db = buildDb(open(), [])
+    const from = db.from
+    db.from = (t) => ({
+      ...from(t),
+      update: () => { const c = { eq: () => c, select: () => Promise.resolve({ data: null, error: null }) }; return c },
+    })
+    createServerClient.mockReturnValue(db)
+    expect((await PUT(req({ status: 'awaiting_approval' }), PROPS)).status).toBe(409)
+    expect(after).not.toHaveBeenCalled()
+  })
+
+  it('a failed update is still a 400 with the database message, as before', async () => {
+    getCurrentUser.mockResolvedValue(COACH)
+    createServerClient.mockReturnValue(buildDb(open(), [], null, [], { filters: [], rows: [], error: { message: 'boom' } }))
+    const res = await PUT(req({ status: 'awaiting_approval' }), PROPS)
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toBe('boom')
+    expect(after).not.toHaveBeenCalled()
+  })
+
+  it('the approval path is untouched: still one RPC, no guarded update', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const calls = []
+    const upd = { filters: [] }
+    createServerClient.mockReturnValue(buildDb(open(), calls, null, [], upd))
+    expect((await PUT(req({ status: 'approved' }), PROPS)).status).toBe(200)
+    expect(calls).toEqual(['rpc:approve_drop_shift_swap'])
+    expect(upd.filters).toEqual([])
   })
 })

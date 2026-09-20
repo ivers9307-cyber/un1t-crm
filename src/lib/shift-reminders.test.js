@@ -994,3 +994,16 @@ describe('runShiftReminders', () => {
     expect(notifyUsers).toHaveBeenCalledTimes(1) // what was read is still reminded
   })
 })
+
+// Quiet hours are ONE rule (src/lib/staff-push-hours.js, tabled in
+// staff-push-hours.test.js). This module's long-standing names are that rule,
+// not a copy of it.
+describe('quiet hours are the shared staff-push-hours rule', () => {
+  it('re-exports it under the names this module always had', async () => {
+    const shared = await import('./staff-push-hours')
+    const mod = await import('./shift-reminders')
+    expect(mod.isInSendWindow).toBe(shared.inStaffPushHours)
+    expect(mod.isValidTimeZone).toBe(shared.isValidStaffTimeZone)
+    expect([mod.NO_REMINDER_BEFORE, mod.NO_REMINDER_FROM]).toEqual([shared.STAFF_PUSH_FROM, shared.STAFF_PUSH_UNTIL])
+  })
+})

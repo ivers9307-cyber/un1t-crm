@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   resolveSwapTransition, TERMINAL_SWAP_STATES, swapChangeLogEntries, swapApprovalError, swapApprovalRpc,
-  swapIncomingMoves, evaluateSwapMoveConflicts, swapConflictMessage, SWAP_MOVE_CLEARS,
+  swapIncomingMoves, evaluateSwapMoveConflicts, swapConflictMessage, SWAP_MOVE_CLEARS, SHIFT_STARTED_ERROR, SHIFT_STARTED_ERRORS,
 } from './swap-lifecycle'
 
 // Minimal swap factory. requester_shift / target_shift mirror the embed the
@@ -715,5 +715,114 @@ describe('resolveSwapTransition — a foreign swap id is invisible, not forbidde
       isManagerHere: true,
     })
     expect(r.ok).toBe(true)
+  })
+})
+
+// COVERLOOP.1 — nothing used to refuse a swap on a shift that is already being
+// worked: approving one moves a live shift and clears that coach's arrival
+// stamp and overrides (SWAP_MOVE_CLEARS). The route answers `shiftStarted`
+// with swapShiftHasStarted (src/lib/swap-cover.js), the predicate the sweep
+// closes the swap on. The ways OUT of a swap must keep working.
+describe('resolveSwapTransition — a started shift (COVERLOOP.1)', () => {
+  const claimed = () => makeSwap({ status: 'awaiting_approval', target_id: 'coach-2' })
+  const call = (swap, requestedStatus, user, extra = {}) => resolveSwapTransition({
+    swap, requestedStatus, user, userLocationIds: ['loc-1'], shiftStarted: true, ...extra,
+  })
+
+  it('the message is exported, once', () => {
+    expect(SHIFT_STARTED_ERROR).toBe('This shift has already started')
+  })
+
+  it.each([
+    ['an open CLAIM', () => call(makeSwap(), 'awaiting_approval', coach('coach-2'))],
+    ['a targeted ACCEPT', () => call(makeSwap({ target_id: 'coach-2' }), 'awaiting_approval', coach('coach-2'))],
+    ['an APPROVE of a drop', () => call(makeSwap(), 'approved', manager, { isManagerHere: true })],
+    ['an APPROVE of a reassign', () => call(claimed(), 'approved', manager, { isManagerHere: true })],
+  ])('refuses %s with 409', (_name, run) => {
+    const r = run()
+    expect(r).toMatchObject({ ok: false, status: 409, error: 'This shift has already started' })
+    expect(r.swapUpdates).toBe(null)
+    expect(r.assignmentOps).toEqual([])
+  })
+
+  it.each([
+    ['the taker WITHDRAWS', () => call(claimed(), 'pending', coach('coach-2')), 'withdrawn'],
+    ['the requester CANCELS', () => call(claimed(), 'cancelled', coach('req-1')), 'cancelled'],
+    ['a manager CANCELS', () => call(makeSwap(), 'cancelled', manager, { isManagerHere: true }), 'cancelled'],
+    ['a manager REJECTS', () => call(claimed(), 'rejected', manager, { isManagerHere: true }), 'rejected'],
+    ['the target DECLINES', () => call(makeSwap({ target_id: 'coach-2' }), 'rejected', coach('coach-2')), 'declined'],
+  ])('%s still works', (_name, run, effect) => {
+    expect(run()).toMatchObject({ ok: true, effect })
+  })
+
+  it('does not become an id oracle: a stranger still gets 404, a non-approver still gets 403', () => {
+    expect(resolveSwapTransition({ swap: makeSwap(), requestedStatus: 'awaiting_approval', user: coach('x'), userLocationIds: ['loc-9'], shiftStarted: true }))
+      .toMatchObject({ ok: false, status: 404 })
+    expect(call(makeSwap(), 'approved', coach('coach-2'))).toMatchObject({ ok: false, status: 403 })
+    expect(call(makeSwap({ target_id: 'coach-3' }), 'awaiting_approval', coach('coach-2'))).toMatchObject({ ok: false, status: 403 })
+  })
+
+  it('omitted or false: nothing changes', () => {
+    expect(resolveSwapTransition({ swap: makeSwap(), requestedStatus: 'awaiting_approval', user: coach('coach-2'), userLocationIds: ['loc-1'] })).toMatchObject({ ok: true, effect: 'claimed' })
+    expect(resolveSwapTransition({ swap: makeSwap(), requestedStatus: 'awaiting_approval', user: coach('coach-2'), userLocationIds: ['loc-1'], shiftStarted: false })).toMatchObject({ ok: true, effect: 'claimed' })
+  })
+})
+
+// COVERLOOP.1 — a RECIPROCAL swap moves TWO shifts. Either one having started
+// refuses the accept and the approval, and the message says WHICH shift, in
+// words that read right for whoever is acting.
+describe('resolveSwapTransition — a started shift in a reciprocal swap (COVERLOOP.1)', () => {
+  const recip = (over = {}) => makeSwap({
+    target_id: 'coach-2', target_shift_id: 'asg-tgt', target_shift: { id: 'asg-tgt', profile_id: 'coach-2' }, ...over,
+  })
+  const call = (swap, requestedStatus, user, extra = {}) => resolveSwapTransition({ swap, requestedStatus, user, userLocationIds: ['loc-1'], ...extra })
+  const asManager = { isManagerHere: true }
+
+  it('the messages are exported, once', () => {
+    expect(SHIFT_STARTED_ERRORS).toEqual({
+      single: 'This shift has already started',
+      acceptTheirs: 'The shift you would be taking has already started',
+      acceptOwn: 'Your own shift in this swap has already started',
+      approveRequester: "The requester's shift has already started",
+      approveTarget: "The other coach's shift has already started",
+    })
+    expect(SHIFT_STARTED_ERRORS.single).toBe(SHIFT_STARTED_ERROR)
+  })
+
+  it.each([
+    ['ACCEPT, the requester\'s shift started', () => call(recip(), 'awaiting_approval', coach('coach-2'), { shiftStarted: true }), 'The shift you would be taking has already started'],
+    ['ACCEPT, the accepting coach\'s OWN shift started', () => call(recip(), 'awaiting_approval', coach('coach-2'), { targetShiftStarted: true }), 'Your own shift in this swap has already started'],
+    ['ACCEPT, both started: the one they would be taking is named', () => call(recip(), 'awaiting_approval', coach('coach-2'), { shiftStarted: true, targetShiftStarted: true }), 'The shift you would be taking has already started'],
+    ['APPROVE, the requester\'s shift started', () => call(recip({ status: 'awaiting_approval' }), 'approved', manager, { ...asManager, shiftStarted: true }), "The requester's shift has already started"],
+    ['APPROVE, the other coach\'s shift started', () => call(recip({ status: 'awaiting_approval' }), 'approved', manager, { ...asManager, targetShiftStarted: true }), "The other coach's shift has already started"],
+  ])('%s -> 409', (_name, run, error) => {
+    const r = run()
+    expect(r).toMatchObject({ ok: false, status: 409, error })
+    expect(r.assignmentOps).toEqual([])
+  })
+
+  it('targetShiftStarted means nothing on a swap that is NOT reciprocal', () => {
+    expect(call(makeSwap(), 'awaiting_approval', coach('coach-2'), { targetShiftStarted: true })).toMatchObject({ ok: true, effect: 'claimed' })
+    expect(call(makeSwap({ status: 'awaiting_approval', target_id: 'coach-2' }), 'approved', manager, { ...asManager, targetShiftStarted: true })).toMatchObject({ ok: true, effect: 'approved_reassign' })
+  })
+
+  it('a swap with ONE shift keeps the plain message', () => {
+    expect(call(makeSwap(), 'awaiting_approval', coach('coach-2'), { shiftStarted: true }).error).toBe('This shift has already started')
+    expect(call(makeSwap(), 'approved', manager, { ...asManager, shiftStarted: true }).error).toBe('This shift has already started')
+  })
+
+  it.each([
+    ['the target WITHDRAWS', () => call(recip({ status: 'awaiting_approval' }), 'pending', coach('coach-2'), { shiftStarted: true, targetShiftStarted: true }), 'withdrawn'],
+    ['the target DECLINES', () => call(recip(), 'rejected', coach('coach-2'), { shiftStarted: true, targetShiftStarted: true }), 'declined'],
+    ['the requester CANCELS', () => call(recip(), 'cancelled', coach('req-1'), { shiftStarted: true, targetShiftStarted: true }), 'cancelled'],
+    ['a manager REJECTS', () => call(recip({ status: 'awaiting_approval' }), 'rejected', manager, { ...asManager, shiftStarted: true, targetShiftStarted: true }), 'rejected'],
+  ])('%s still works with both shifts started', (_name, run, effect) => {
+    expect(run()).toMatchObject({ ok: true, effect })
+  })
+
+  it('still not an id oracle', () => {
+    expect(resolveSwapTransition({ swap: recip(), requestedStatus: 'awaiting_approval', user: coach('x'), userLocationIds: ['loc-9'], targetShiftStarted: true })).toMatchObject({ status: 404 })
+    expect(call(recip(), 'awaiting_approval', coach('coach-3'), { targetShiftStarted: true })).toMatchObject({ status: 403 })
+    expect(call(recip({ status: 'awaiting_approval' }), 'approved', coach('coach-3'), { targetShiftStarted: true })).toMatchObject({ status: 403 })
   })
 })
