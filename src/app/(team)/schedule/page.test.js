@@ -23,7 +23,7 @@ vi.mock('next/navigation', () => ({
 vi.mock('@/components/ScheduleRosterView', () => ({ default: () => <div>roster-view-stub</div> }))
 vi.mock('@/components/ScheduleReporting', () => ({ default: () => <div>reporting-stub</div> }))
 
-import SchedulePage from './page.js'
+import SchedulePage, { generateMetadata } from './page.js'
 import { getCurrentUser } from '@/lib/auth'
 
 function user({ role = 'manager' } = {}) {
@@ -76,5 +76,24 @@ describe('/schedule root — wrapper padding classes', () => {
     const firstClass = html.match(/^<div class="([^"]*)"/)?.[1] || ''
     expect(firstClass.split(' ')).toEqual(expect.arrayContaining(['px-4', 'py-6', 'sm:p-8']))
     expect(firstClass.split(' ')).not.toContain('p-8')
+  })
+})
+
+// ROSTERLOOK.1 — the tab read "UN1T Hatch Street" with the Stillorgan roster on
+// screen: the root layout's title is the first company_settings row by
+// location_id, for everyone. This page names the studio it is showing.
+describe('/schedule root — tab title', () => {
+  it('names the ACTIVE studio, not the deployment default', async () => {
+    getCurrentUser.mockResolvedValue({ ...user(), activeLocation: { id: 'loc1', name: 'UN1T Stillorgan', features: {} } })
+    expect(await generateMetadata()).toEqual({ title: 'Schedule · UN1T Stillorgan' })
+  })
+
+  it('degrades to the page name with no session or no named location, and never throws', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    expect(await generateMetadata()).toEqual({ title: 'Schedule' })
+    getCurrentUser.mockResolvedValue(user()) // activeLocation has no name
+    expect(await generateMetadata()).toEqual({ title: 'Schedule' })
+    getCurrentUser.mockRejectedValue(new Error('auth down'))
+    expect(await generateMetadata()).toEqual({ title: 'Schedule' })
   })
 })
