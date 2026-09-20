@@ -537,7 +537,28 @@ describe('mig 622 — tombstone_staff_profile', () => {
     expect(all).not.toContain('former.coach@example.test')
     expect(all).not.toContain('hash-1')
     expect(await count('public.audit_events', `actor_id = '${GONE}' AND actor_label = 'Former Coach'`)).toBe(2)
-    expect(await count('public.audit_events', `category = 'mutation' AND details = '{"redacted": "staff_permanent_delete"}'::jsonb`)).toBe(1)
+  })
+
+  // The first cut REPLACED the whole details payload of every past
+  // profiles/<id> mutation row — destroying the before/after of every pay
+  // change ever made to them. Only the PII keys go.
+  it('strips ONLY the PII keys from past audit rows: a pay-change keeps its before/after', async () => {
+    await runSql(`INSERT INTO public.audit_events (category, action, actor_id, target_profile_id, target_resource, details) VALUES
+      ('mutation', 'profiles.updated', '${MASTER}', '${GONE}', 'profiles/${GONE}',
+       '{"before": {"hourly_rate": 20, "email": "former.coach@example.test", "pin_hash": "hash-0", "unifi_user_id": "unifi-0", "avatar_url": "https://example.test/old.png", "email_signature": "Old sig", "phone": "+353000000000"},
+         "after":  {"hourly_rate": 25, "email": "former.coach@example.test", "pin_hash": "hash-1", "pin_failed_count": 2, "mobile_phone": "+353000000001", "protect_face_id": "face-1", "unifi_door_ids": ["d1"]}}'::jsonb),
+      ('mutation', 'profiles.updated', '${MASTER}', '${PEER}', 'profiles/${PEER}', '{"before": {"email": "peer-old@example.test"}, "after": {"email": "peer@example.test"}}'::jsonb)`)
+    await tombstone()
+    const pay = (await rows(`SELECT details FROM public.audit_events WHERE target_resource = 'profiles/${GONE}' AND details->'before' ? 'hourly_rate'`))[0].details
+    expect(pay).toEqual({ before: { hourly_rate: 20 }, after: { hourly_rate: 25 } })
+    // The tombstone's own mutation row (written by the audit trigger during the strip) keeps its shape too.
+    const own = await rows(`SELECT details FROM public.audit_events WHERE category = 'mutation' AND target_resource = 'profiles/${GONE}'`)
+    expect(own).toHaveLength(2)
+    const all = JSON.stringify(own)
+    for (const leaked of ['example.test', 'hash-', 'unifi-0', 'Old sig', '+353', 'face-1', '"d1"']) expect(all).not.toContain(leaked)
+    expect(await count('public.audit_events', `details::text LIKE '%redacted%'`)).toBe(0)
+    // Somebody else's audit history is not touched.
+    expect((await rows(`SELECT details FROM public.audit_events WHERE target_resource = 'profiles/${PEER}'`))[0].details.before.email).toBe('peer-old@example.test')
   })
 
   it('refuses an active profile, a missing profile and a self-delete', async () => {

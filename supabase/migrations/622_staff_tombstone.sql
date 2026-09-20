@@ -378,6 +378,9 @@ DECLARE
   v_now     timestamptz := now();
   v_note    constant text := 'Cancelled automatically: staff member permanently deleted';
   v_floor   constant text := 'staff';  -- least-privileged role; see the header
+  -- Keys stripped from audit payloads, plus pin_* and *phone* by pattern.
+  v_pii     constant text[] := ARRAY['email', 'avatar_url', 'email_signature', 'email_signature_rich',
+                                     'unifi_user_id', 'unifi_door_ids', 'protect_face_id', 'mobile'];
 BEGIN
   IF p_profile_id IS NULL OR p_actor_id IS NULL OR p_now IS NULL THEN
     RAISE EXCEPTION 'staff_bad_args: profile, actor and now are all required';
@@ -607,10 +610,24 @@ BEGIN
   --    OLD email / pin_hash / door ids into audit_events.details for the rows
   --    above; older rows carry "Name <email>" labels and sign-in emails. The
   --    rows stay (who did what, when) — the values go.
-  UPDATE public.audit_events
-     SET details = jsonb_build_object('redacted', 'staff_permanent_delete')
-   WHERE category = 'mutation'
-     AND (target_resource = 'profiles/' || p_profile_id::text OR target_resource = ANY (v_pl_res));
+  --    ONLY the PII keys go — from the payload's top level and from its
+  --    before/after objects (the mig 191 shape). These same rows hold the
+  --    before/after of every PAY and role change, which is history the business
+  --    keeps; the first cut of this step replaced the whole payload. Inline on
+  --    purpose: service_role holds no USAGE on schema `private` by the
+  --    migrations, so a helper there could fail at call time.
+  UPDATE public.audit_events ae
+     SET details = (
+       SELECT COALESCE(jsonb_object_agg(e.key,
+                CASE WHEN e.key IN ('before', 'after') AND jsonb_typeof(e.value) = 'object'
+                     THEN (SELECT COALESCE(jsonb_object_agg(i.key, i.value), '{}'::jsonb)
+                             FROM jsonb_each(e.value) AS i
+                            WHERE NOT (i.key = ANY (v_pii) OR i.key LIKE 'pin\_%' OR i.key LIKE '%phone%'))
+                     ELSE e.value END), '{}'::jsonb)
+         FROM jsonb_each(ae.details) AS e
+        WHERE NOT (e.key = ANY (v_pii) OR e.key LIKE 'pin\_%' OR e.key LIKE '%phone%'))
+   WHERE ae.category = 'mutation' AND jsonb_typeof(ae.details) = 'object'
+     AND (ae.target_resource = 'profiles/' || p_profile_id::text OR ae.target_resource = ANY (v_pl_res));
   UPDATE public.audit_events SET actor_label = v_profile.full_name
    WHERE actor_id = p_profile_id AND actor_label IS NOT NULL AND actor_label IS DISTINCT FROM v_profile.full_name;
   UPDATE public.audit_events SET target_label = v_profile.full_name
