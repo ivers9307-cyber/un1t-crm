@@ -9,6 +9,7 @@ import { evaluateSwapMoveConflicts } from './swap-lifecycle'
 import { fmtTime } from './schedule-overlap'
 import { isLiveAssignment } from './roster'
 import { MANAGER_ROLES } from './schemas'
+import { wallMsInTz, dayStrInTz, resolveTz } from './tz-time'
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -137,6 +138,197 @@ export function openPoolRecipients({
     const move = { role: 'taker', coachId: id, block, leavingAssignmentId: null }
     if (evaluateSwapMoveConflicts(move, { timeOff: wholeDayLeave, assignments: usable }).length > 0) continue
     out.push(id)
+  }
+  return out
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Quiet hours.
+//
+// A staff push that is NOT a direct response to the recipient's own action
+// (here: the manager nudges and the expiry notice) may only be SENT while the
+// studio's wall clock is inside this band. Outside it the sweep does nothing
+// for that studio and a later tick tries again. The open-pool broadcast is a
+// direct consequence of a coach posting a swap and is not subject to this.
+// ─────────────────────────────────────────────────────────────────────────
+
+export const STAFF_PUSH_HOURS = Object.freeze({ start: '07:00', end: '22:00' })
+
+/**
+ * Is `nowMs` inside 07:00 (inclusive) to 22:00 (exclusive) on the studio's
+ * wall clock? `tz` is locations.timezone: nullable free text, so an empty or
+ * invalid value is Europe/Dublin (resolveTz), never a throw. DST-exact: both
+ * edges are resolved through wallMsInTz on the studio's own calendar day, so
+ * the band is 07:00-22:00 local on the 23-hour and the 25-hour day alike. An
+ * unreadable clock is OUTSIDE the band: when in doubt, send nothing.
+ */
+export function inStaffPushHours(nowMs, tz) {
+  if (typeof nowMs !== 'number' || !Number.isFinite(nowMs)) return false
+  const zone = resolveTz(tz)
+  const day = dayStrInTz(nowMs, zone)
+  const opens = wallMsInTz(day, STAFF_PUSH_HOURS.start, zone)
+  const closes = wallMsInTz(day, STAFF_PUSH_HOURS.end, zone)
+  if (opens == null || closes == null) return false
+  return nowMs >= opens && nowMs < closes
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// The sweep (an arm of /api/cron/checklist-sweep, every 15 minutes).
+// ─────────────────────────────────────────────────────────────────────────
+
+const HOUR_MS = 3600 * 1000
+export const OPEN_SWAP_STATUSES = Object.freeze(['pending', 'awaiting_approval'])
+
+// Nearest first: the first stage whose range covers "now" wins. A stage is a
+// RANGE ("inside the last 48h"), not a window around a moment, so a missed
+// cron tick, or a night of quiet hours, fires late instead of never; the
+// push_event_sends ledger makes each stage fire once.
+export const COVER_NUDGE_STAGES = Object.freeze([
+  Object.freeze({ key: 't12', hours: 12 }),
+  Object.freeze({ key: 't48', hours: 48 }),
+])
+
+// shift_swap_requests.review_note for a swap the sweep closed. There is no
+// reviewer (reviewed_by stays NULL): this text is how a reader tells a system
+// close from a coach's own cancel.
+export const SWAP_EXPIRY_NOTES = Object.freeze({
+  started: 'Closed automatically: the shift started before this swap was taken and approved.',
+  shift_removed: 'Closed automatically: the shift was removed from the roster.',
+})
+
+/** UTC ms the block starts, on the studio's wall clock. null if unreadable. */
+export function swapBlockStartMs(block, tz) {
+  return wallMsInTz(block?.block_date, fmtTime(block?.start_time), resolveTz(tz))
+}
+
+// What is due for this swap, ignoring the time of day.
+function dueAction(swap, nowMs, tz) {
+  if (!swap || !OPEN_SWAP_STATUSES.includes(swap.status)) return { action: 'none' }
+  // mig 603: deleting the assignment NULLs requester_shift_id and the swap row
+  // survives. An open swap about a shift that no longer exists can never be
+  // finalised, so it closes. Judged on the COLUMN, never on a missing embed.
+  if (swap.requester_shift_id == null) return { action: 'expire', reason: 'shift_removed' }
+  const block = swap.requester_shift?.shift_blocks
+  if (!block) return { action: 'none' }
+  const startMs = swapBlockStartMs(block, tz)
+  if (startMs == null) return { action: 'none' }
+  if (nowMs >= startMs) return { action: 'expire', reason: 'started' }
+
+  const createdMs = Date.parse(swap.created_at)
+  for (const stage of COVER_NUDGE_STAGES) {
+    const stageOpensMs = startMs - stage.hours * HOUR_MS
+    if (nowMs < stageOpensMs) continue
+    // Posted inside this stage's range: swap_open told the managers moments
+    // ago, and the ranges nest, so no wider stage applies either.
+    if (Number.isFinite(createdMs) && createdMs >= stageOpensMs) return { action: 'none' }
+    return { action: 'nudge', stage: stage.key }
+  }
+  return { action: 'none' }
+}
+
+/**
+ * What the sweep does with one open swap, right now. Pure.
+ *
+ * QUIET HOURS are decided HERE, not by the caller: anything that is due while
+ * the studio's wall clock is outside 07:00-22:00 comes back as
+ * { action: 'none', reason: 'quiet_hours' }. Nothing is sent and nothing is
+ * written; because stages are ranges and expiry is "now >= start", the first
+ * tick inside the band picks it up (a T-12h nudge due at 02:00 goes at 07:00,
+ * a 06:00 shift's swap closes at 07:00). That includes a removed shift, which
+ * sends nothing anyway: outside the band the arm does nothing for the studio.
+ *
+ * @param {object} swap  shift_swap_requests row with
+ *   requester_shift: { id, shift_blocks: { id, block_date, start_time, end_time } } | null
+ * @param {number} nowMs
+ * @param {{ tz?: string|null }} [opts]  the studio's locations.timezone
+ * @returns {{action:'none', reason?:'quiet_hours'} | {action:'nudge', stage:'t48'|'t12'} | {action:'expire', reason:'started'|'shift_removed'}}
+ */
+export function coverSweepAction(swap, nowMs, { tz } = {}) {
+  const due = dueAction(swap, nowMs, tz)
+  if (due.action === 'none') return due
+  if (!inStaffPushHours(nowMs, tz)) return { action: 'none', reason: 'quiet_hours' }
+  return due
+}
+
+const requesterName = (swap) => swap?.requester?.full_name || 'A coach'
+
+/**
+ * The manager re-push for one stage. data.type reuses swap_open /
+ * swap_awaiting on purpose: every installed build already routes those to
+ * /approvals?tab=team&focus=<id> (mobile/lib/notification-nav.js), so this
+ * needs no OTA. The status is in the key: a swap that was nudged while
+ * pending and is later claimed still gets its awaiting-approval nudge.
+ */
+export function coverNudgePayload(swap, stage) {
+  const when = shiftWhenLabel(swap?.requester_shift?.shift_blocks)
+  const name = requesterName(swap)
+  const key = `swap_cover_nudge:${swap.id}:${swap.status}:${stage}`
+  if (swap.status === 'awaiting_approval') {
+    return {
+      key,
+      payload: {
+        title: 'Swap still waiting for approval',
+        body: `${when}: ${name}'s shift has been taken by a colleague and still needs your approval. Tap to approve.`,
+        category: 'swap',
+        emailSubject: `A shift swap still needs your approval: ${when}`,
+        data: { type: 'swap_awaiting', swap_id: swap.id },
+      },
+    }
+  }
+  return {
+    key,
+    payload: {
+      title: 'Shift still uncovered',
+      body: `Still uncovered: ${when}. ${name} posted it and nobody has taken it yet. Tap to review.`,
+      category: 'swap',
+      emailSubject: `Still uncovered: ${when}`,
+      data: { type: 'swap_open', swap_id: swap.id },
+    },
+  }
+}
+
+/**
+ * Who is told a swap expired, and how. data.type is swap_decision (every
+ * installed build routes it to the Schedule tab on block_date).
+ * shift_removed tells nobody: the roster change notification already told the
+ * coach their shift went, and there is no date left to describe.
+ */
+export function swapExpiryNotices(swap, reason) {
+  if (reason !== 'started' || !swap?.id) return []
+  const block = swap.requester_shift?.shift_blocks
+  const when = shiftWhenLabel(block)
+  const claimed = swap.status === 'awaiting_approval'
+  const common = {
+    title: 'Swap request expired',
+    category: 'swap',
+    emailSubject: 'Your swap request expired',
+    data: { type: 'swap_decision', swap_id: swap.id, status: 'cancelled', block_date: block?.block_date ?? null },
+  }
+  const out = [{
+    key: `swap_expired:${swap.id}`,
+    to: [swap.requester_id],
+    payload: {
+      title: common.title,
+      body: claimed
+        ? `Your swap for ${when} was not approved before the shift started, so it has closed and the shift stayed with you.`
+        : `Nobody took your shift on ${when} before it started, so the swap request has closed and the shift stayed with you.`,
+      category: common.category,
+      emailSubject: common.emailSubject,
+      data: common.data,
+    },
+  }]
+  if (claimed && swap.target_id) {
+    out.push({
+      key: `swap_expired_taker:${swap.id}`,
+      to: [swap.target_id],
+      payload: {
+        title: common.title,
+        body: `The swap you took for ${when} was not approved before the shift started, so it has closed. The shift stayed with ${requesterName(swap)}.`,
+        category: common.category,
+        emailSubject: common.emailSubject,
+        data: common.data,
+      },
+    })
   }
   return out
 }

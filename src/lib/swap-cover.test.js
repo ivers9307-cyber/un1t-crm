@@ -1,7 +1,11 @@
 // src/lib/swap-cover.test.js
 // COVERLOOP.1 — the pure half of the cover loop. No DB, no clock.
 import { describe, it, expect } from 'vitest'
-import { shiftDayLabel, shiftWhenLabel, openPoolRecipients } from './swap-cover'
+import {
+  shiftDayLabel, shiftWhenLabel, openPoolRecipients,
+  inStaffPushHours, STAFF_PUSH_HOURS,
+  coverSweepAction, coverNudgePayload, swapExpiryNotices, SWAP_EXPIRY_NOTES,
+} from './swap-cover'
 
 const LOC = 'loc-1'          // the swap's studio
 const SIBLING = 'loc-2'      // another studio in the SAME organisation
@@ -275,5 +279,254 @@ describe('openPoolRecipients', () => {
     ])('$name', ({ input, expected }) => {
       expect(openPoolRecipients({ ...base, rosteredHereOnly: true, ...input })).toEqual(expected)
     })
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────
+// QUIET HOURS — a staff push that is not a direct response to the recipient's
+// own action is only SENT while the studio's wall clock is 07:00 to 22:00.
+// ─────────────────────────────────────────────────────────────────────────
+describe('inStaffPushHours', () => {
+  it('the band is 07:00 (inclusive) to 22:00 (exclusive)', () => {
+    expect(STAFF_PUSH_HOURS).toEqual({ start: '07:00', end: '22:00' })
+  })
+
+  it.each([
+    // Winter (GMT): Dublin wall clock IS UTC.
+    ['2099-01-01T06:59:00Z', 'Europe/Dublin', false],
+    ['2099-01-01T07:00:00Z', 'Europe/Dublin', true],
+    ['2099-01-01T21:59:00Z', 'Europe/Dublin', true],
+    ['2099-01-01T22:00:00Z', 'Europe/Dublin', false],
+    ['2099-01-01T02:00:00Z', 'Europe/Dublin', false],
+    // Summer (IST, UTC+1): 07:00 is 06:00Z, 22:00 is 21:00Z.
+    ['2026-07-02T05:59:00Z', 'Europe/Dublin', false],
+    ['2026-07-02T06:00:00Z', 'Europe/Dublin', true],
+    ['2026-07-02T20:59:00Z', 'Europe/Dublin', true],
+    ['2026-07-02T21:00:00Z', 'Europe/Dublin', false],
+    // SPRING FORWARD weekend: Sun 2026-03-29, 01:00 GMT -> 02:00 IST.
+    ['2026-03-28T06:59:00Z', 'Europe/Dublin', false], // Sat, still GMT
+    ['2026-03-28T07:00:00Z', 'Europe/Dublin', true],
+    ['2026-03-28T21:59:00Z', 'Europe/Dublin', true],
+    ['2026-03-28T22:00:00Z', 'Europe/Dublin', false],
+    ['2026-03-29T00:30:00Z', 'Europe/Dublin', false], // 00:30 GMT, before the jump
+    ['2026-03-29T01:30:00Z', 'Europe/Dublin', false], // 02:30 IST, after it
+    ['2026-03-29T05:59:00Z', 'Europe/Dublin', false], // 06:59 IST
+    ['2026-03-29T06:00:00Z', 'Europe/Dublin', true],  // 07:00 IST
+    ['2026-03-29T20:59:00Z', 'Europe/Dublin', true],  // 21:59 IST
+    ['2026-03-29T21:00:00Z', 'Europe/Dublin', false], // 22:00 IST
+    // FALL BACK weekend: Sun 2026-10-25, 02:00 IST -> 01:00 GMT.
+    ['2026-10-24T05:59:00Z', 'Europe/Dublin', false], // Sat, still IST: 06:59
+    ['2026-10-24T06:00:00Z', 'Europe/Dublin', true],  // 07:00 IST
+    ['2026-10-24T21:00:00Z', 'Europe/Dublin', false], // 22:00 IST
+    ['2026-10-25T00:30:00Z', 'Europe/Dublin', false], // 01:30 IST (first pass)
+    ['2026-10-25T01:30:00Z', 'Europe/Dublin', false], // 01:30 GMT (second pass)
+    ['2026-10-25T06:00:00Z', 'Europe/Dublin', false], // 06:00 GMT: an hour EARLIER than Saturday's open
+    ['2026-10-25T06:59:00Z', 'Europe/Dublin', false],
+    ['2026-10-25T07:00:00Z', 'Europe/Dublin', true],
+    ['2026-10-25T21:00:00Z', 'Europe/Dublin', true],  // 21:00 GMT: Saturday was already shut at this instant
+    ['2026-10-25T21:59:00Z', 'Europe/Dublin', true],
+    ['2026-10-25T22:00:00Z', 'Europe/Dublin', false],
+    // The STUDIO's zone, not Dublin's and not the server's.
+    ['2026-01-15T11:59:00Z', 'America/New_York', false], // 06:59 EST
+    ['2026-01-15T12:00:00Z', 'America/New_York', true],  // 07:00 EST
+    ['2026-03-08T10:59:00Z', 'America/New_York', false], // US spring forward: 06:59 EDT
+    ['2026-03-08T11:00:00Z', 'America/New_York', true],  // 07:00 EDT
+    ['2026-11-01T11:00:00Z', 'America/New_York', false], // US fall back: 06:00 EST
+    ['2026-11-01T12:00:00Z', 'America/New_York', true],  // 07:00 EST
+    // An invalid or empty zone is Europe/Dublin, never a throw.
+    ['2026-07-02T06:00:00Z', 'Mars/Olympus', true],
+    ['2026-07-02T05:59:00Z', 'Mars/Olympus', false],
+    ['2026-07-02T06:00:00Z', '+05:30', true],
+    ['2026-07-02T06:00:00Z', '', true],
+    ['2026-07-02T06:00:00Z', null, true],
+    ['2026-07-02T06:00:00Z', undefined, true],
+  ])('%s in %s -> %s', (iso, tz, expected) => {
+    expect(inStaffPushHours(Date.parse(iso), tz)).toBe(expected)
+  })
+
+  it('an unreadable clock is OUTSIDE the band (send nothing), not a throw', () => {
+    expect(inStaffPushHours(NaN, 'Europe/Dublin')).toBe(false)
+    expect(inStaffPushHours(undefined, 'Europe/Dublin')).toBe(false)
+  })
+})
+
+const H = 3600 * 1000
+// 2099-01-01 is winter: 09:00 Dublin IS 09:00 UTC. A 09:00 start keeps every
+// stage boundary below (T-48h 09:00, T-12h 21:00, the start itself) INSIDE
+// the 07:00-22:00 band, so these rows test the stage logic alone.
+const START = Date.UTC(2099, 0, 1, 9, 0)
+const WINTER_BLOCK = { id: 'blk-1', block_date: '2099-01-01', start_time: '09:00:00', end_time: '10:00:00' }
+const openSwap = (over = {}) => ({
+  id: 's1', status: 'pending', location_id: 'loc-1', requester_id: 'req', target_id: null,
+  requester_shift_id: 'a1', created_at: new Date(START - 200 * H).toISOString(),
+  requester: { full_name: 'Coach R' },
+  requester_shift: { id: 'a1', shift_blocks: WINTER_BLOCK },
+  ...over,
+})
+const swapOn = (block_date, start_time, over = {}) => openSwap({
+  created_at: '2020-01-01T00:00:00.000Z',
+  requester_shift: { id: 'a1', shift_blocks: { id: 'b', block_date, start_time, end_time: '23:59:00' } },
+  ...over,
+})
+
+describe('coverSweepAction', () => {
+  it.each([
+    { name: 'more than 48h out: nothing', swap: openSwap(), now: START - 49 * H, expected: { action: 'none' } },
+    { name: 'exactly T-48h: first nudge', swap: openSwap(), now: START - 48 * H, expected: { action: 'nudge', stage: 't48' } },
+    { name: 'T-36h (a missed tick fires late, not never)', swap: openSwap(), now: START - 36 * H, expected: { action: 'nudge', stage: 't48' } },
+    { name: 'exactly T-12h: second nudge', swap: openSwap(), now: START - 12 * H, expected: { action: 'nudge', stage: 't12' } },
+    { name: 'T-1h: still the t12 stage', swap: openSwap(), now: START - 1 * H, expected: { action: 'nudge', stage: 't12' } },
+    {
+      name: 'posted at T-30h: no t48 nudge, managers heard swap_open minutes ago',
+      swap: openSwap({ created_at: new Date(START - 30 * H).toISOString() }), now: START - 20 * H, expected: { action: 'none' },
+    },
+    {
+      name: 'posted at T-30h: the t12 nudge still fires',
+      swap: openSwap({ created_at: new Date(START - 30 * H).toISOString() }), now: START - 2 * H, expected: { action: 'nudge', stage: 't12' },
+    },
+    {
+      name: 'posted at T-5h: no nudge at all',
+      swap: openSwap({ created_at: new Date(START - 5 * H).toISOString() }), now: START - 1 * H, expected: { action: 'none' },
+    },
+    { name: 'at the start: expire', swap: openSwap(), now: START, expected: { action: 'expire', reason: 'started' } },
+    { name: 'a day after the start: expire', swap: openSwap(), now: START + 24 * H, expected: { action: 'expire', reason: 'started' } },
+    { name: 'a CLAIMED swap is nudged too', swap: openSwap({ status: 'awaiting_approval', target_id: 'tkr' }), now: START - 12 * H, expected: { action: 'nudge', stage: 't12' } },
+    { name: 'a claimed swap expires too', swap: openSwap({ status: 'awaiting_approval', target_id: 'tkr' }), now: START, expected: { action: 'expire', reason: 'started' } },
+    {
+      name: 'the shift was deleted (mig 603 SET NULL): expire, whatever the shift clock says',
+      swap: openSwap({ requester_shift_id: null, requester_shift: null }), now: START - 500 * H, expected: { action: 'expire', reason: 'shift_removed' },
+    },
+    {
+      name: 'an embed that did not come back is NOT a deleted shift: do nothing',
+      swap: openSwap({ requester_shift: null }), now: START + H, expected: { action: 'none' },
+    },
+    {
+      name: 'an unreadable start time: do nothing rather than guess',
+      swap: openSwap({ requester_shift: { id: 'a1', shift_blocks: { ...WINTER_BLOCK, start_time: 'soon' } } }), now: START + H, expected: { action: 'none' },
+    },
+    { name: 'a decided swap is never touched', swap: openSwap({ status: 'approved' }), now: START + H, expected: { action: 'none' } },
+    { name: 'null swap', swap: null, now: START, expected: { action: 'none' } },
+  ])('$name', ({ swap, now, expected }) => {
+    expect(coverSweepAction(swap, now)).toEqual(expected)
+  })
+
+  // Studio wall-clock, not UTC: on 2026-07-02 (IST, UTC+1) 09:00 is 08:00Z.
+  it('reads the block start as Europe/Dublin wall-clock by default', () => {
+    const summer = swapOn('2026-07-02', '09:00:00')
+    expect(coverSweepAction(summer, Date.UTC(2026, 6, 2, 7, 59))).toEqual({ action: 'nudge', stage: 't12' })
+    expect(coverSweepAction(summer, Date.UTC(2026, 6, 2, 8, 0))).toEqual({ action: 'expire', reason: 'started' })
+  })
+
+  it('reads the block start in the STUDIO\'s zone when one is given', () => {
+    const ny = swapOn('2099-01-01', '09:00:00') // 09:00 EST is 14:00Z
+    expect(coverSweepAction(ny, Date.UTC(2099, 0, 1, 13, 59), { tz: 'America/New_York' })).toEqual({ action: 'nudge', stage: 't12' })
+    expect(coverSweepAction(ny, Date.UTC(2099, 0, 1, 14, 0), { tz: 'America/New_York' })).toEqual({ action: 'expire', reason: 'started' })
+  })
+
+  // QUIET HOURS. Whatever is due outside 07:00-22:00 studio time waits for a
+  // later tick: no push, no write, nothing for that studio.
+  describe('quiet hours', () => {
+    const QUIET = { action: 'none', reason: 'quiet_hours' }
+    it.each([
+      // A 14:00 shift: T-12h comes due at 02:00.
+      { name: 'a T-12h nudge that comes due at 02:00 is NOT sent at 02:00', swap: swapOn('2099-01-02', '14:00:00'), now: Date.UTC(2099, 0, 2, 2, 0), expected: QUIET },
+      { name: '... nor at 06:59', swap: swapOn('2099-01-02', '14:00:00'), now: Date.UTC(2099, 0, 2, 6, 59), expected: QUIET },
+      { name: '... it is sent at 07:00, the shift has not started', swap: swapOn('2099-01-02', '14:00:00'), now: Date.UTC(2099, 0, 2, 7, 0), expected: { action: 'nudge', stage: 't12' } },
+      // A 22:00 shift two days out: T-48h comes due at 22:00 exactly, which is outside the band.
+      { name: 'a T-48h nudge that comes due at 22:00 waits', swap: swapOn('2099-01-03', '22:00:00'), now: Date.UTC(2099, 0, 1, 22, 0), expected: QUIET },
+      { name: '... and is sent at 07:00 next morning (still the t48 stage)', swap: swapOn('2099-01-03', '22:00:00'), now: Date.UTC(2099, 0, 2, 7, 0), expected: { action: 'nudge', stage: 't48' } },
+      { name: '21:59 is inside the band', swap: swapOn('2099-01-03', '21:59:00'), now: Date.UTC(2099, 0, 1, 21, 59), expected: { action: 'nudge', stage: 't48' } },
+      // The gym's real case: the 06:00 class.
+      { name: 'a 06:00 shift that has started is NOT expired at 06:00', swap: swapOn('2099-01-02', '06:00:00'), now: Date.UTC(2099, 0, 2, 6, 0), expected: QUIET },
+      { name: '... nor at 06:45', swap: swapOn('2099-01-02', '06:00:00'), now: Date.UTC(2099, 0, 2, 6, 45), expected: QUIET },
+      { name: '... it expires at 07:00', swap: swapOn('2099-01-02', '06:00:00'), now: Date.UTC(2099, 0, 2, 7, 0), expected: { action: 'expire', reason: 'started' } },
+      { name: 'a 22:30 shift that has started waits for the morning', swap: swapOn('2099-01-01', '22:30:00'), now: Date.UTC(2099, 0, 1, 22, 30), expected: QUIET },
+      { name: '... and expires at 07:00 next day', swap: swapOn('2099-01-01', '22:30:00'), now: Date.UTC(2099, 0, 2, 7, 0), expected: { action: 'expire', reason: 'started' } },
+      { name: 'a removed shift also waits: outside the band the arm does nothing for the studio', swap: openSwap({ requester_shift_id: null, requester_shift: null }), now: Date.UTC(2099, 0, 1, 3, 0), expected: QUIET },
+      { name: 'nothing due in quiet hours is plain "none", not a deferral', swap: swapOn('2099-02-01', '14:00:00'), now: Date.UTC(2099, 0, 2, 2, 0), expected: { action: 'none' } },
+      // SPRING FORWARD (Sun 2026-03-29). A 10:00 IST shift starts 09:00Z; T-12h fell at 21:00Z Saturday = 21:00 GMT, so use a swap posted long ago and look at Sunday morning.
+      { name: 'spring forward: 06:59 IST (05:59Z) is quiet', swap: swapOn('2026-03-29', '10:00:00'), now: Date.UTC(2026, 2, 29, 5, 59), expected: QUIET },
+      { name: 'spring forward: 07:00 IST (06:00Z) sends', swap: swapOn('2026-03-29', '10:00:00'), now: Date.UTC(2026, 2, 29, 6, 0), expected: { action: 'nudge', stage: 't12' } },
+      { name: 'spring forward: the shift starts at 09:00Z, not 10:00Z', swap: swapOn('2026-03-29', '10:00:00'), now: Date.UTC(2026, 2, 29, 9, 0), expected: { action: 'expire', reason: 'started' } },
+      // FALL BACK (Sun 2026-10-25). A 10:00 GMT shift starts 10:00Z.
+      { name: 'fall back: 06:00Z is 06:00 GMT, quiet (on Saturday the same instant was 07:00 IST)', swap: swapOn('2026-10-25', '10:00:00'), now: Date.UTC(2026, 9, 25, 6, 0), expected: QUIET },
+      { name: 'fall back: 07:00 GMT (07:00Z) sends', swap: swapOn('2026-10-25', '10:00:00'), now: Date.UTC(2026, 9, 25, 7, 0), expected: { action: 'nudge', stage: 't12' } },
+      { name: 'fall back: 09:59Z has not started', swap: swapOn('2026-10-25', '10:00:00'), now: Date.UTC(2026, 9, 25, 9, 59), expected: { action: 'nudge', stage: 't12' } },
+      { name: 'fall back: 10:00Z has', swap: swapOn('2026-10-25', '10:00:00'), now: Date.UTC(2026, 9, 25, 10, 0), expected: { action: 'expire', reason: 'started' } },
+      { name: 'fall back, Saturday night: 21:00Z is 22:00 IST, quiet', swap: swapOn('2026-10-25', '10:00:00'), now: Date.UTC(2026, 9, 24, 21, 0), expected: QUIET },
+    ])('$name', ({ swap, now, expected }) => {
+      expect(coverSweepAction(swap, now)).toEqual(expected)
+    })
+
+    it('the band is judged in the studio\'s zone', () => {
+      const ny = swapOn('2099-01-02', '14:00:00') // 14:00 EST = 19:00Z
+      expect(coverSweepAction(ny, Date.UTC(2099, 0, 2, 11, 59), { tz: 'America/New_York' })).toEqual(QUIET) // 06:59 EST
+      expect(coverSweepAction(ny, Date.UTC(2099, 0, 2, 12, 0), { tz: 'America/New_York' })).toEqual({ action: 'nudge', stage: 't12' })
+    })
+
+    it('an invalid studio zone behaves as Europe/Dublin', () => {
+      const s = swapOn('2099-01-02', '14:00:00')
+      expect(coverSweepAction(s, Date.UTC(2099, 0, 2, 6, 59), { tz: 'Not/AZone' })).toEqual(QUIET)
+      expect(coverSweepAction(s, Date.UTC(2099, 0, 2, 7, 0), { tz: 'Not/AZone' })).toEqual({ action: 'nudge', stage: 't12' })
+    })
+  })
+})
+
+describe('coverNudgePayload', () => {
+  it('an unclaimed swap: "Still uncovered", routed like swap_open (managers -> approvals)', () => {
+    expect(coverNudgePayload(openSwap(), 't48')).toEqual({
+      key: 'swap_cover_nudge:s1:pending:t48',
+      payload: {
+        title: 'Shift still uncovered',
+        body: 'Still uncovered: Thu 1 Jan, 09:00 to 10:00. Coach R posted it and nobody has taken it yet. Tap to review.',
+        category: 'swap',
+        emailSubject: 'Still uncovered: Thu 1 Jan, 09:00 to 10:00',
+        data: { type: 'swap_open', swap_id: 's1' },
+      },
+    })
+  })
+
+  it('a claimed swap: asks for the approval, routed like swap_awaiting', () => {
+    const out = coverNudgePayload(openSwap({ status: 'awaiting_approval', target_id: 'tkr' }), 't12')
+    expect(out.key).toBe('swap_cover_nudge:s1:awaiting_approval:t12')
+    expect(out.payload.title).toBe('Swap still waiting for approval')
+    expect(out.payload.body).toBe("Thu 1 Jan, 09:00 to 10:00: Coach R's shift has been taken by a colleague and still needs your approval. Tap to approve.")
+    expect(out.payload.data).toEqual({ type: 'swap_awaiting', swap_id: 's1' })
+  })
+
+  it('never prints "null" for a requester with no name', () => {
+    expect(coverNudgePayload(openSwap({ requester: { full_name: null } }), 't48').payload.body).toContain('A coach posted it')
+  })
+})
+
+describe('swapExpiryNotices', () => {
+  it('an unclaimed swap: the requester is told once, and it lands on that day of the schedule', () => {
+    expect(swapExpiryNotices(openSwap(), 'started')).toEqual([{
+      key: 'swap_expired:s1',
+      to: ['req'],
+      payload: {
+        title: 'Swap request expired',
+        body: 'Nobody took your shift on Thu 1 Jan, 09:00 to 10:00 before it started, so the swap request has closed and the shift stayed with you.',
+        category: 'swap',
+        emailSubject: 'Your swap request expired',
+        data: { type: 'swap_decision', swap_id: 's1', status: 'cancelled', block_date: '2099-01-01' },
+      },
+    }])
+  })
+
+  it('a claimed swap: the requester AND the taker are told, each in their own words', () => {
+    const out = swapExpiryNotices(openSwap({ status: 'awaiting_approval', target_id: 'tkr' }), 'started')
+    expect(out.map((n) => [n.key, n.to])).toEqual([['swap_expired:s1', ['req']], ['swap_expired_taker:s1', ['tkr']]])
+    expect(out[0].payload.body).toBe('Your swap for Thu 1 Jan, 09:00 to 10:00 was not approved before the shift started, so it has closed and the shift stayed with you.')
+    expect(out[1].payload.body).toBe('The swap you took for Thu 1 Jan, 09:00 to 10:00 was not approved before the shift started, so it has closed. The shift stayed with Coach R.')
+  })
+
+  it('a removed shift tells nobody: the roster change already did, and there is no date left to describe', () => {
+    expect(swapExpiryNotices(openSwap({ requester_shift_id: null, requester_shift: null }), 'shift_removed')).toEqual([])
+  })
+
+  it('has a system review_note for both reasons', () => {
+    expect(SWAP_EXPIRY_NOTES.started).toMatch(/^Closed automatically/)
+    expect(SWAP_EXPIRY_NOTES.shift_removed).toMatch(/^Closed automatically/)
   })
 })
