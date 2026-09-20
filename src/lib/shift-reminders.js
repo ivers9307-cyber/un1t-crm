@@ -33,6 +33,7 @@ export const DAY_LEAD_MINUTES = 120
 export const MIN_NOTICE_MINUTES = 30
 export const BODY_MAX_CHARS = 140 // roughly what a lock screen shows before it cuts the body
 export const MAX_CO_NAMES = 3
+export const LEDGER_LOOKBACK_HOURS = 48
 export const RUN_GAP_MINUTES = 120 // a shift starting within this of the run's latest end is the same run
 
 const DEFAULT_TZ = 'Europe/Dublin'
@@ -402,11 +403,17 @@ export async function runShiftReminders(db, { nowMs = Date.now(), locations = []
   summary.shift_candidates = timeDue.length
 
   // One batched ledger read, only once something is time-due (most ticks: never).
+  // Read by COACH, not by the first shift's id: the claim that marks a run as
+  // reminded may sit on ANY shift of it (an earlier shift was added since), or
+  // on a shift the coach has since swapped away (buildShiftRuns' ghost). A run
+  // on date D is reminded no earlier than 20:00 on D-1 and the rows cover today
+  // and tomorrow, so the oldest claim that can matter is about 28 hours old.
   const { data: ledgerRows, error: ledgerErr } = await db
     .from('push_reminder_sends')
     .select('entity_id, recipient_id')
     .eq('entity_type', 'shift')
-    .in('entity_id', timeDue.map((d) => d.shift.id))
+    .in('recipient_id', [...new Set(timeDue.map((d) => d.shift.profile_id))])
+    .gte('sent_at', new Date(nowMs - LEDGER_LOOKBACK_HOURS * 60 * MINUTE_MS).toISOString())
   if (ledgerErr) throw new Error(`reminder ledger read failed: ${ledgerErr.message || ledgerErr}`)
   const sentKeys = new Set((ledgerRows || []).map((r) => reminderKey(r.entity_id, r.recipient_id)))
 

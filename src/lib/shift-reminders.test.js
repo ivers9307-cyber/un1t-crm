@@ -506,6 +506,7 @@ describe('coRosteredFirstNames + buildShiftReminderMessage', () => {
 function makeDb({ leave = [], leaveError = null, ledger = [], ledgerError = null, insertError = null, deleteError = null } = {}) {
   const writes = []
   const selects = {}
+  const ledgerReads = []
   const chain = (result, record, table) => {
     const b = {}
     for (const m of ['select', 'eq', 'in', 'lte', 'gte']) {
@@ -521,10 +522,23 @@ function makeDb({ leave = [], leaveError = null, ledger = [], ledgerError = null
   return {
     writes,
     selects,
+    ledgerReads,
     from(table) {
       if (table === 'time_off_requests') return chain({ data: leave, error: leaveError }, null, table)
       if (table === 'push_reminder_sends') {
-        const b = chain({ data: ledger, error: ledgerError })
+        // The ledger READ honours its filters, like the real table would: a test
+        // that seeds a row the arm forgot to ask for must not pass by accident.
+        const filters = []
+        ledgerReads.push(filters)
+        const b = chain(null)
+        for (const m of ['eq', 'in', 'gte']) b[m] = (col, val) => { filters.push([m, col, val]); return b }
+        b.then = (resolve, reject) => {
+          const rows = ledger
+            .map((r) => ({ entity_type: 'shift', sent_at: new Date(NOW - 60e3).toISOString(), ...r }))
+            .filter((r) => filters.every(([m, col, val]) =>
+              m === 'eq' ? r[col] === val : m === 'in' ? val.includes(r[col]) : r[col] >= val))
+          return Promise.resolve({ data: ledgerError ? null : rows, error: ledgerError }).then(resolve, reject)
+        }
         b.insert = (row) => { writes.push({ op: 'insert', row }); return chain({ data: null, error: insertError }) }
         b.delete = () => { const w = { op: 'delete', where: {} }; writes.push(w); return chain({ data: null, error: deleteError }, w) }
         b.update = (patch) => { const w = { op: 'update', patch, where: {} }; writes.push(w); return chain({ data: null, error: null }, w) }
@@ -689,6 +703,60 @@ describe('runShiftReminders', () => {
     const summary = await runShiftReminders(makeDb(), { nowMs: NOW, locations: [] })
     expect(fetchApiShiftRows).not.toHaveBeenCalled()
     expect(summary.shift_candidates).toBe(0)
+  })
+
+  // ── runs, at the arm ──────────────────────────────────────────────────────
+  it('a run of three shifts is ONE claim and ONE push that describes the whole run', async () => {
+    fetchApiShiftRows.mockResolvedValue({ rows: [r2(), r3(), r1()], error: null })
+    const db = makeDb()
+    const summary = await runShiftReminders(db, { nowMs: NOW, locations: LOCATIONS })
+    expect(notifyUsers).toHaveBeenCalledTimes(1)
+    expect(notifyUsers.mock.calls[0][1]).toMatchObject({
+      title: '3 shifts tomorrow from 05:45',
+      body: 'Tomorrow 05:45 to 10:30 at Studio North: Early Morning, Morning 8am, Morning 9:15',
+      data: { type: 'shift_reminder', assignment_id: 'r1', block_date: '2026-09-22', shift_count: 3 },
+    })
+    expect(db.writes.filter((w) => w.op === 'insert').map((w) => w.row.entity_id)).toEqual(['r1'])
+    expect(summary).toMatchObject({ shift_candidates: 1, shift_pushed: 1 })
+  })
+
+  it('reads the ledger by COACH over the last 48 hours, so a claim on ANY shift of the run is seen', async () => {
+    const db = makeDb()
+    await runShiftReminders(db, { nowMs: NOW, locations: LOCATIONS })
+    expect(db.ledgerReads[0]).toEqual([
+      ['eq', 'entity_type', 'shift'],
+      ['in', 'recipient_id', ['coach-1']],
+      ['gte', 'sent_at', new Date(NOW - 48 * 3600e3).toISOString()],
+    ])
+  })
+
+  it('(a) an EARLIER shift added after the reminder went: the claim sits on the old first shift, nothing is sent', async () => {
+    fetchApiShiftRows.mockResolvedValue({ rows: [r1(), r2()], error: null })
+    const db = makeDb({ ledger: [{ entity_id: 'r2', recipient_id: 'coach-1' }] })
+    const summary = await runShiftReminders(db, { nowMs: NOW + 5 * 60e3, locations: LOCATIONS })
+    expect(notifyUsers).not.toHaveBeenCalled()
+    expect(db.writes).toEqual([])
+    expect(summary).toMatchObject({ shift_candidates: 1, shift_skipped_dup: 1 })
+  })
+
+  it('(b) the first shift swapped away after the reminder went: the giver is not reminded again, the taker is', async () => {
+    fetchApiShiftRows.mockResolvedValue({
+      rows: [r1({ profile_id: 'coach-2', status: 'swapped', profiles: { id: 'coach-2', full_name: 'Sam Sample' } }), r2(), r3()],
+      error: null,
+    })
+    const db = makeDb({ ledger: [{ entity_id: 'r1', recipient_id: 'coach-1' }] })
+    await runShiftReminders(db, { nowMs: NOW + 5 * 60e3, locations: LOCATIONS })
+    expect(notifyUsers.mock.calls.map(([ids]) => ids)).toEqual([['coach-2']])
+    expect(db.writes.filter((w) => w.op === 'insert').map((w) => [w.row.entity_id, w.row.recipient_id])).toEqual([['r1', 'coach-2']])
+  })
+
+  it('a ledger row older than the lookback, or for another entity type, does not silence a reminder', async () => {
+    const db = makeDb({ ledger: [
+      { entity_id: 'assign-1', recipient_id: 'coach-1', sent_at: new Date(NOW - 49 * 3600e3).toISOString() },
+      { entity_id: 'assign-1', recipient_id: 'coach-1', entity_type: 'task' },
+    ] })
+    await runShiftReminders(db, { nowMs: NOW, locations: LOCATIONS })
+    expect(notifyUsers).toHaveBeenCalledTimes(1)
   })
 
   it('nothing due means the ledger is never touched', async () => {
