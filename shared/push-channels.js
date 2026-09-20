@@ -84,6 +84,7 @@ const CATEGORY_CHANNELS = Object.freeze({
   // Time-sensitive nudges (cron lead-time reminders + speed-to-lead).
   tasks: 'reminders',
   bookings: 'reminders',
+  shift_reminder: 'reminders', // SHIFTREMIND.1 — cron lead-time reminder, same family
   checklist_overdue: 'reminders',
   lead: 'reminders',
   // Needs a manager decision.
