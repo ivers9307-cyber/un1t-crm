@@ -22,6 +22,21 @@ export const isoDate = z.string().regex(
   'Use YYYY-MM-DD'
 )
 
+/**
+ * CHANGELOG.1 — isoDate above checks the SHAPE only: '2026-13-01' and
+ * '2026-02-30' pass it, reach Postgres, and come back as a 500. This is the
+ * calendar check to pair with it on a route that hands a date to the database.
+ * Pure arithmetic on the three numbers: no Date parsing, so no host timezone
+ * and no engine leniency (V8 rolls '2026-02-30' over to 2 March).
+ */
+export function isRealCalendarDate(str) {
+  if (typeof str !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(str)) return false
+  const [y, m, d] = str.split('-').map(Number)
+  if (m < 1 || m > 12 || d < 1) return false
+  const leap = (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0
+  return d <= [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1]
+}
+
 // Time of day, HH:MM or HH:MM:SS.
 export const timeOfDay = z.string().regex(
   /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/,

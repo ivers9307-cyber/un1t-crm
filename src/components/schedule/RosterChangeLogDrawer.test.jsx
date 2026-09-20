@@ -12,8 +12,8 @@ import { render, screen, cleanup, within } from '@testing-library/react'
 import RosterChangeLogDrawer from './RosterChangeLogDrawer.jsx'
 
 const change = (over = {}) => ({
-  id: 'c1', action: 'assigned', block_id: 'b1', block_date: '2026-09-15', start_time: '06:00:00', end_time: '07:00:00',
-  shift_name: 'Morning', coach_id: 'p1', coach_name: 'Coach A', actor_name: 'Manager B',
+  id: 'c1', action: 'assigned', block_date: '2026-09-15', start_time: '06:00:00', end_time: '07:00:00',
+  shift_name: 'Morning', coach_name: 'Coach A', actor_name: 'Manager B', self_change: false,
   details: {}, notified_at: '2026-09-15T13:02:00Z', created_at: '2026-09-15T12:58:00Z', ...over,
 })
 
@@ -48,11 +48,26 @@ describe('RosterChangeLogDrawer', () => {
     const list = await screen.findByTestId('roster-change-list')
     const items = within(list).getAllByRole('listitem')
     expect(items).toHaveLength(2)
-    expect(items[0].textContent).toMatch(/Assigned Coach A to Tue 15 Sep 06:00/)
+    expect(items[0].textContent).toMatch(/Assigned Coach A to Tue 15 Sep 6am/)
     expect(items[0].textContent).toMatch(/told 14:02/)
     expect(items[0].textContent).toMatch(/Manager B · 15 Sep 13:58/)
-    expect(items[1].textContent).toMatch(/Removed Coach C from Tue 15 Sep 06:00/)
+    expect(items[1].textContent).toMatch(/Removed Coach C from Tue 15 Sep 6am/)
     expect(items[1].textContent).toMatch(/not told yet/)
+  })
+
+  it('a row stamped without a message shows NO told chip: not a time nobody was told at', async () => {
+    global.fetch = answer(200, { success: true, data: { truncated: false, changes: [
+      change({ action: 'unassigned', details: { reason: 'staff_permanent_delete' } }),
+      change({ id: 'c2' }),
+    ] } })
+    render(<RosterChangeLogDrawer {...props} />)
+    const items = within(await screen.findByTestId('roster-change-list')).getAllByRole('listitem')
+    expect(items[0].textContent).toMatch(/Removed Coach A from Tue 15 Sep 6am \(staff member deleted\)/)
+    expect(items[0].textContent).not.toMatch(/told/)
+    expect(within(items[0]).queryByTestId('roster-change-told')).toBeNull()
+    expect(within(items[1]).getByTestId('roster-change-told').textContent).toBe('told 14:02')
+    // Stamped, so it is not counted as somebody still waiting to hear.
+    expect(screen.getByTestId('roster-change-summary').textContent).toMatch(/2 changes$/)
   })
 
   it('counts who has not been told, and says how they will be', async () => {

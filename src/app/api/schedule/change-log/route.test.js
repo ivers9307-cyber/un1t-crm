@@ -31,8 +31,8 @@ const LOC = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
 const OTHER = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'
 
 const CHANGE = {
-  id: 'c1', action: 'assigned', block_id: 'b1', block_date: '2026-09-15', start_time: '06:00:00', end_time: '07:00:00',
-  shift_name: 'Morning', coach_id: 'p1', coach_name: 'Coach A', actor_name: 'Manager B',
+  id: 'c1', action: 'assigned', block_date: '2026-09-15', start_time: '06:00:00', end_time: '07:00:00',
+  shift_name: 'Morning', coach_name: 'Coach A', actor_name: 'Manager B', self_change: false,
   details: {}, notified_at: null, created_at: '2026-09-15T12:58:00Z',
 }
 
@@ -130,6 +130,12 @@ describe('GET /api/schedule/change-log — contract', () => {
       expect((await res.json()).error).toMatch(/not a real date/)
     }
     expect(listRosterChanges).not.toHaveBeenCalled()
+  })
+
+  it('leap years: 29 Feb is a real day in 2024 and 2000, and not in 1900', async () => {
+    expect((await GET(buildReq({ ...ok, from: '2024-02-29', to: '2024-03-01' }))).status).toBe(200)
+    expect((await GET(buildReq({ ...ok, from: '2000-02-29', to: '2000-03-01' }))).status).toBe(200)
+    expect((await GET(buildReq({ ...ok, from: '1900-02-29', to: '1900-03-01' }))).status).toBe(400)
   })
 
   it('400 when to is before from', async () => {

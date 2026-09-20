@@ -290,8 +290,8 @@ describe('changes since publish (CHANGELOG.1)', () => {
 
   it('the Published chip is a button that opens the drawer for the week on screen', async () => {
     CHANGES = [{
-      id: 'c1', action: 'assigned', block_id: 'ok', block_date: BLOCK_DATE, start_time: '12:00:00', end_time: '13:00:00',
-      shift_name: 'Lunch', coach_id: 'u3', coach_name: 'Coach A', actor_name: 'Manager B',
+      id: 'c1', action: 'assigned', block_date: BLOCK_DATE, start_time: '12:00:00', end_time: '13:00:00',
+      shift_name: 'Lunch', coach_name: 'Coach A', actor_name: 'Manager B', self_change: false,
       details: {}, notified_at: null, created_at: `${BLOCK_DATE}T10:00:00.000+00:00`,
     }]
     await renderCalendar({ blocks: [SHORT_BLOCK, OK_BLOCK] })

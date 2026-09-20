@@ -153,7 +153,7 @@ describe('markChangesNotified — resolved error', () => {
 
 // A raw row as PostgREST returns it for the select in listRosterChanges.
 const raw = (i, over = {}) => ({
-  id: `c${String(i).padStart(5, '0')}`, block_id: 'b1', block_date: '2026-09-15', coach_id: 'p1',
+  id: `c${String(i).padStart(5, '0')}`, block_id: 'b1', block_date: '2026-09-15', coach_id: 'p1', actor_id: 'm1',
   action: 'assigned', details: { via: 'copy_week' },
   notified_at: null, created_at: '2026-09-15T12:58:00Z',
   actor: { id: 'm1', full_name: 'Manager B' },
@@ -190,17 +190,24 @@ function pagedDb(total, { failOnPage = null } = {}) {
 
 describe('shapeRosterChange', () => {
   it('flattens the embeds to exactly the fields the drawer needs, and nothing else', () => {
+    // toEqual: no id of a block or a person crosses the wire, only what prints.
     expect(shapeRosterChange(raw(1))).toEqual({
-      id: 'c00001', action: 'assigned', block_id: 'b1', block_date: '2026-09-15',
+      id: 'c00001', action: 'assigned', block_date: '2026-09-15',
       start_time: '06:00:00', end_time: '07:00:00', shift_name: 'Morning',
-      coach_id: 'p1', coach_name: 'Coach A', actor_name: 'Manager B',
+      coach_name: 'Coach A', actor_name: 'Manager B', self_change: false,
       details: { via: 'copy_week' }, notified_at: null, created_at: '2026-09-15T12:58:00Z',
     })
   })
 
+  it('self_change: the coach made the change themselves (stamped, nobody to tell)', () => {
+    expect(shapeRosterChange(raw(1, { actor_id: 'p1' })).self_change).toBe(true)
+    // Two SET NULL ids are not "the same person".
+    expect(shapeRosterChange(raw(1, { actor_id: null, coach_id: null })).self_change).toBe(false)
+  })
+
   it('a deleted slot (block_id SET NULL) and deleted profiles become nulls, not a crash', () => {
     expect(shapeRosterChange(raw(1, { block_id: null, shift_blocks: null, actor: null, coach: null, coach_id: null, details: null })))
-      .toMatchObject({ block_id: null, start_time: null, end_time: null, shift_name: null, coach_id: null, coach_name: null, actor_name: null, details: {} })
+      .toMatchObject({ start_time: null, end_time: null, shift_name: null, coach_name: null, actor_name: null, self_change: false, details: {} })
   })
 })
 
@@ -217,7 +224,7 @@ describe('shapeRosterChange — details whitelist', () => {
       to: { start_time: '06:30:00', end_time: '07:30:00' },
     } }))
     expect(shaped.details).toEqual({
-      via: 'swap', source: 'template_edit',
+      via: 'swap', source: 'template_edit', roster_status: 'published',
       start_time_override: null, end_time_override: '07:30:00',
       from: { start_time: '06:00:00', end_time: '07:00:00' },
       to: { start_time: '06:30:00', end_time: '07:30:00' },
@@ -227,6 +234,36 @@ describe('shapeRosterChange — details whitelist', () => {
   it('keeps a null override KEY: "both cleared" is how the formatter knows a reset', () => {
     expect(shapeRosterChange(raw(1, { details: { start_time_override: null, end_time_override: null } })).details)
       .toEqual({ start_time_override: null, end_time_override: null })
+  })
+
+  it('whitelists VALUES too: an object or an oversized string under a known key does not pass', () => {
+    const d = shapeRosterChange(raw(1, { details: {
+      via: { rate: 50 }, source: 'x'.repeat(41),
+      start_time_override: { rate: 50 }, end_time_override: '7am',
+      from: { start_time: 'DROP TABLE', end_time: 50 }, to: { start_time: '06:30:00', end_time: '25:99' },
+    } })).details
+    expect(d).toEqual({
+      from: { start_time: null, end_time: null },
+      to: { start_time: '06:30:00', end_time: null },
+    })
+    expect(JSON.stringify(d)).not.toMatch(/rate|DROP/)
+  })
+
+  it('HH:MM and HH:MM:SS are both times', () => {
+    expect(shapeRosterChange(raw(1, { details: { start_time_override: '06:30', end_time_override: '07:30:00' } })).details)
+      .toEqual({ start_time_override: '06:30', end_time_override: '07:30:00' })
+  })
+
+  it('reason passes by KNOWN VALUE only', () => {
+    expect(shapeRosterChange(raw(1, { details: { reason: 'staff_permanent_delete' } })).details).toEqual({ reason: 'staff_permanent_delete' })
+    expect(shapeRosterChange(raw(1, { details: { reason: 'they were let go for misconduct' } })).details).toEqual({})
+    expect(shapeRosterChange(raw(1, { details: { reason: { note: 'x' } } })).details).toEqual({})
+  })
+
+  it('roster_status passes by known value, and keeps its KEY when unreadable (a draft, to the reader)', () => {
+    expect(shapeRosterChange(raw(1, { details: { via: 'swap_drop', roster_status: 'draft' } })).details).toEqual({ via: 'swap_drop', roster_status: 'draft' })
+    expect(shapeRosterChange(raw(1, { details: { via: 'swap_drop', roster_status: null } })).details).toEqual({ via: 'swap_drop', roster_status: null })
+    expect(shapeRosterChange(raw(1, { details: { via: 'swap_drop', roster_status: { x: 1 } } })).details).toEqual({ via: 'swap_drop', roster_status: null })
   })
 
   it('a non-object details is an empty one', () => {

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  isoDate, timeOfDay, hexColor, email, url,
+  isoDate, isRealCalendarDate, timeOfDay, hexColor, email, url,
   money, hours, days,
   roleSchema, locationRoleSchema, assignmentSchema,
   employmentTypeSchema,
@@ -288,5 +288,26 @@ describe('password complexity', () => {
   it('treats spaces and accented characters as valid symbols/letters', () => {
     // Defensive: don't break for non-ASCII users
     expect(passwordSchema.safeParse('Café!2024').success).toBe(true)
+  })
+})
+
+// CHANGELOG.1 — isoDate is a SHAPE check; this is the calendar check beside it.
+describe('isRealCalendarDate', () => {
+  it('accepts days that exist', () => {
+    for (const d of ['2026-01-31', '2026-09-30', '2026-12-31', '2026-02-28']) expect(isRealCalendarDate(d)).toBe(true)
+  })
+
+  it('refuses days that do not, which V8 would silently roll over', () => {
+    for (const d of ['2026-02-30', '2026-09-31', '2026-13-01', '2026-00-10', '2026-04-00', '2026-02-29']) expect(isRealCalendarDate(d)).toBe(false)
+  })
+
+  it('knows the leap-year rule in full: every 4, not every 100, but every 400', () => {
+    expect(isRealCalendarDate('2024-02-29')).toBe(true)
+    expect(isRealCalendarDate('1900-02-29')).toBe(false)
+    expect(isRealCalendarDate('2000-02-29')).toBe(true)
+  })
+
+  it('refuses anything that is not YYYY-MM-DD, without throwing', () => {
+    for (const d of ['', null, undefined, 20260915, '15-09-2026', '2026-9-15', '2026-09-15T00:00:00Z']) expect(isRealCalendarDate(d)).toBe(false)
   })
 })

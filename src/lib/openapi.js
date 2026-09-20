@@ -27,6 +27,7 @@ import {
 import { LeadSchema } from './leads.js'
 import { MAX_STORED_EXAMPLE_CHARS, MAX_STORED_EXAMPLES } from '@/lib/hyrox/constants'
 import { WindowBase } from '@/lib/schedule/windows'
+import { ROSTER_CHANGE_LOG_MAX_ROWS } from '@/lib/roster-change-format'
 // SHELLY-UI.9 — the /api/shelly/* request vocabulary. Aliased on import so
 // the .openapi()-decorated re-derivations below can carry the canonical
 // names; see the Shelly block for why .extend({}) is required.
@@ -4459,7 +4460,7 @@ registry.registerPath({
   tags: ['Schedule'],
   security: [{ CookieAuth: [] }],
   summary: 'Edits made to published rosters in a period (manager-only)',
-  description: "Query: location_id (uuid), from and to (YYYY-MM-DD, inclusive, matched on the SHIFT date, at most 92 days). Returns the roster_change_log rows for that studio, newest first: action (assigned | unassigned | time_changed), the coach's name, who made the change, the shift's date, times and name, `details` (whitelisted to how it happened and the old/new times; never a free-form writer field), created_at, and notified_at (null = the coach has not been told yet; the next re-publish tells them). Only edits to an ALREADY-PUBLISHED roster are logged, so a draft week is empty by design. Manager-only (master, owner, manager, head_coach) at location_id, scoped by assertLocationAccess: a studio outside the caller's assignments is a 403. Names and times only, never pay. `truncated` is true when more than 5,000 rows matched.",
+  description: "Query: location_id (uuid), from and to (YYYY-MM-DD, inclusive, matched on the SHIFT date, at most 92 days). Returns the roster_change_log rows for that studio, newest first: action (assigned | unassigned | time_changed), the coach's name, who made the change, the shift's date, times and name, self_change (the coach made the change themselves), `details` (whitelisted by key AND value: how it happened, an allow-listed reason, the old/new times; never a free-form writer field), created_at, and notified_at (null = the coach has not been told yet; the next re-publish tells them. A stamp is not always a message: see stampMeansTold in roster-change-format.js). Only edits to an ALREADY-PUBLISHED roster are logged, so a draft week is empty by design. Manager-only (master, owner, manager, head_coach) at location_id, scoped by assertLocationAccess: a studio outside the caller's assignments is a 403. Names and times only, never pay. `truncated` is true when more than " + ROSTER_CHANGE_LOG_MAX_ROWS.toLocaleString('en-IE') + " rows matched.",
   responses: {
     200: { description: '{ success, data: { changes, truncated } }' },
     400: { description: 'Missing or malformed location_id / from / to, a from or to that is not a real calendar date, to before from, or a range over 92 days', content: { 'application/json': { schema: ErrorResponse } } },

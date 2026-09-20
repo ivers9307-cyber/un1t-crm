@@ -9,6 +9,7 @@
 // aren't re-pinged next time.
 
 import { logWarn } from './log'
+import { ROSTER_CHANGE_LOG_MAX_ROWS } from './roster-change-format'
 
 export const ROSTER_CHANGE_ACTIONS = ['assigned', 'unassigned', 'time_changed']
 
@@ -104,50 +105,84 @@ export async function markChangesNotified(db, rowIds) {
 // "nothing" when the read failed is a lie. So it returns the error.
 
 const CHANGE_LOG_PAGE = 1000
-/** Ceiling on one drawer's rows (a multiple of the page). Past it the answer is flagged `truncated`. */
-export const ROSTER_CHANGE_LOG_MAX_ROWS = 5000
+// The ceiling is declared in the pure, client-safe formatter module (the drawer
+// prints it) and re-exported here, where the read enforces it.
+export { ROSTER_CHANGE_LOG_MAX_ROWS }
 
-// `details` is free-form jsonb that any writer can extend. Only the keys
-// roster-change-format.js prints leave the server, so a field a future writer
-// adds (a note, a rate) cannot reach a browser through this read by accident.
-const DETAIL_SCALAR_KEYS = ['via', 'source', 'start_time_override', 'end_time_override']
+// `details` is free-form jsonb that any writer can extend, so NOTHING in it is
+// trusted on the way out: not the keys and not the values. What leaves the
+// server is exactly what roster-change-format.js reads, in exactly the type it
+// expects. A field a future writer adds (a note, a rate), or an object tucked
+// under a known key, cannot reach a browser through this read by accident.
+const DETAIL_LABEL_KEYS = ['via', 'source'] // short machine labels
+const DETAIL_LABEL_MAX = 40
+const DETAIL_OVERRIDE_KEYS = ['start_time_override', 'end_time_override']
 const DETAIL_TIME_KEYS = ['from', 'to']
+// `reason` passes by KNOWN VALUE only: it is the one key whose name invites
+// free text. Add a value here AND a sentence for it in roster-change-format.js.
+const DETAIL_REASONS = ['staff_permanent_delete'] // mig 622
+const ROSTER_STATUSES = ['draft', 'published', 'superseded'] // migs 072, 602
+const TIME_SHAPE = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/
 
 function isPlainObject(v) {
   return Boolean(v) && typeof v === 'object' && !Array.isArray(v)
 }
 
+function timeOrNull(v) {
+  return typeof v === 'string' && TIME_SHAPE.test(v) ? v : null
+}
+
 function publicDetails(details) {
   if (!isPlainObject(details)) return {}
   const out = {}
-  // Key PRESENCE is kept even when the value is null: both overrides present
-  // and null is how the formatter tells "reset" from "unknown".
-  for (const k of DETAIL_SCALAR_KEYS) if (k in details) out[k] = details[k] ?? null
+  for (const k of DETAIL_LABEL_KEYS) {
+    const v = details[k]
+    if (typeof v === 'string' && v.length > 0 && v.length <= DETAIL_LABEL_MAX) out[k] = v
+  }
+  if (DETAIL_REASONS.includes(details.reason)) out.reason = details.reason
+  // Key PRESENCE is meaningful for the next two, so a null survives as null.
+  //   roster_status: the swap-drop writer always sets it, and anything but
+  //     'published' (null included) means "stamped without a roster message".
+  //   overrides: both present and null is how the formatter reads a RESET. A
+  //     value that is neither null nor a time drops the key, so garbage can
+  //     never be read as "cleared".
+  if ('roster_status' in details) {
+    out.roster_status = ROSTER_STATUSES.includes(details.roster_status) ? details.roster_status : null
+  }
+  for (const k of DETAIL_OVERRIDE_KEYS) {
+    if (!(k in details)) continue
+    const v = details[k]
+    if (v === null || v === undefined) out[k] = null
+    else if (timeOrNull(v)) out[k] = v
+  }
   for (const k of DETAIL_TIME_KEYS) {
     if (isPlainObject(details[k])) {
-      out[k] = { start_time: details[k].start_time ?? null, end_time: details[k].end_time ?? null }
+      out[k] = { start_time: timeOrNull(details[k].start_time), end_time: timeOrNull(details[k].end_time) }
     }
   }
   return out
 }
 
 /**
- * Pure. One PostgREST row (listRosterChanges' select) -> the API shape. Names
- * and times only; `details` is whitelisted (publicDetails). block_id / actor_id / coach_id are ON DELETE SET NULL (mig
- * 236), so every embed may be null.
+ * Pure. One PostgREST row (listRosterChanges' select) -> the API shape: names,
+ * times and the whitelisted `details` (publicDetails). No id of a block or a
+ * person crosses the wire; `self_change` is the one fact the ids were needed
+ * for. block_id, actor_id and coach_id are ON DELETE SET NULL (mig 236), so
+ * every embed may be null.
  */
 export function shapeRosterChange(r) {
   return {
     id: r.id,
     action: r.action,
-    block_id: r.block_id ?? null,
     block_date: r.block_date ?? null,
     start_time: r.shift_blocks?.start_time ?? null,
     end_time: r.shift_blocks?.end_time ?? null,
     shift_name: r.shift_blocks?.shift_templates?.name ?? null,
-    coach_id: r.coach_id ?? null,
     coach_name: r.coach?.full_name ?? null,
     actor_name: r.actor?.full_name ?? null,
+    // The coach made the change themselves: the notifier stamps the row and
+    // tells nobody, so the drawer must not print a "told" time for it.
+    self_change: Boolean(r.actor_id) && r.actor_id === r.coach_id,
     details: publicDetails(r.details),
     notified_at: r.notified_at ?? null,
     created_at: r.created_at ?? null,
@@ -176,7 +211,7 @@ export async function listRosterChanges(db, { locationId, from, to } = {}) {
       // Literal on purpose: check:select-columns only resolves literal selects.
       // Two FKs to profiles, so each embed names its column (PGRST201 otherwise).
       .select(`
-        id, block_id, block_date, coach_id, action, details, notified_at, created_at,
+        id, block_id, block_date, actor_id, coach_id, action, details, notified_at, created_at,
         actor:profiles!actor_id(id, full_name),
         coach:profiles!coach_id(id, full_name),
         shift_blocks!block_id(start_time, end_time, shift_templates(name))

@@ -1,12 +1,13 @@
 // src/lib/roster-change-format.test.js
 // CHANGELOG.1 — one roster_change_log row as a sentence a manager can read.
 // Pure. Host-TZ independent; run under both:
-//   for tz in Europe/Dublin America/Los_Angeles; do
+//   for tz in Europe/Dublin America/Los_Angeles UTC; do
 //     TZ=$tz npx vitest run src/lib/roster-change-format.test.js
 //   done
 import { describe, it, expect } from 'vitest'
 import {
-  rosterChangeSentence, rosterChangeTold, rosterChangeByline, formatRosterChange,
+  rosterChangeSentence, rosterChangeTold, rosterChangeByline,
+  stampMeansTold, NO_MESSAGE_REASONS, ROSTER_CHANGE_LOG_MAX_ROWS,
 } from './roster-change-format'
 
 // Tue 15 Sep 2026. 13:02Z is 14:02 in Dublin (summer time, UTC+1).
@@ -18,20 +19,20 @@ const row = (over = {}) => ({
 
 describe('rosterChangeSentence', () => {
   it('assigned', () => {
-    expect(rosterChangeSentence(row())).toBe('Assigned Coach A to Tue 15 Sep 06:00')
+    expect(rosterChangeSentence(row())).toBe('Assigned Coach A to Tue 15 Sep 6am')
   })
 
   it('unassigned', () => {
-    expect(rosterChangeSentence(row({ action: 'unassigned' }))).toBe('Removed Coach A from Tue 15 Sep 06:00')
+    expect(rosterChangeSentence(row({ action: 'unassigned' }))).toBe('Removed Coach A from Tue 15 Sep 6am')
   })
 
   it('says how it happened when the writer recorded it', () => {
-    expect(rosterChangeSentence(row({ details: { via: 'copy_week' } }))).toBe('Assigned Coach A to Tue 15 Sep 06:00 (copied from another week)')
-    expect(rosterChangeSentence(row({ details: { via: 'copy_month' } }))).toBe('Assigned Coach A to Tue 15 Sep 06:00 (copied from another month)')
+    expect(rosterChangeSentence(row({ details: { via: 'copy_week' } }))).toBe('Assigned Coach A to Tue 15 Sep 6am (copied from another week)')
+    expect(rosterChangeSentence(row({ details: { via: 'copy_month' } }))).toBe('Assigned Coach A to Tue 15 Sep 6am (copied from another month)')
     expect(rosterChangeSentence(row({ action: 'unassigned', details: { via: 'swap', swap_id: 's1', effect: 'approved_reassign' } })))
-      .toBe('Removed Coach A from Tue 15 Sep 06:00 (shift swap)')
+      .toBe('Removed Coach A from Tue 15 Sep 6am (shift swap)')
     expect(rosterChangeSentence(row({ action: 'unassigned', details: { via: 'swap_drop', swap_id: 's1' } })))
-      .toBe('Removed Coach A from Tue 15 Sep 06:00 (dropped shift approved)')
+      .toBe('Removed Coach A from Tue 15 Sep 6am (dropped shift approved)')
   })
 
   it('a deleted slot has no block left to read a time from: the date alone', () => {
@@ -41,31 +42,31 @@ describe('rosterChangeSentence', () => {
 
   it('time_changed from the assignment editor: the hours the coach now has', () => {
     expect(rosterChangeSentence(row({ action: 'time_changed', details: { start_time_override: '06:30:00', end_time_override: null } })))
-      .toBe("Changed Coach A's hours on Tue 15 Sep 06:00 to 06:30–07:00")
+      .toBe("Changed Coach A's hours on Tue 15 Sep 6am to 6:30am–7am")
   })
 
   it('time_changed with both overrides cleared is a reset', () => {
     expect(rosterChangeSentence(row({ action: 'time_changed', details: { start_time_override: null, end_time_override: null } })))
-      .toBe("Reset Coach A's hours on Tue 15 Sep 06:00 to the shift's own")
+      .toBe("Reset Coach A's hours on Tue 15 Sep 6am to the shift's own")
   })
 
   it('time_changed from a template edit names the OLD time, because the block now holds the new one', () => {
     expect(rosterChangeSentence(row({
       action: 'time_changed', start_time: '06:30:00', end_time: '07:30:00',
       details: { source: 'template_edit', template_id: 't1', from: { start_time: '06:00:00', end_time: '07:00:00' }, to: { start_time: '06:30:00', end_time: '07:30:00' } },
-    }))).toBe("Moved Coach A's Tue 15 Sep 06:00 shift to 06:30–07:30 (template edited)")
+    }))).toBe("Moved Coach A's Tue 15 Sep 6am shift to 6:30am–7:30am (template edited)")
   })
 
   it('time_changed with details it does not recognise still says something true', () => {
-    expect(rosterChangeSentence(row({ action: 'time_changed', details: {} }))).toBe("Changed Coach A's hours on Tue 15 Sep 06:00")
+    expect(rosterChangeSentence(row({ action: 'time_changed', details: {} }))).toBe("Changed Coach A's hours on Tue 15 Sep 6am")
   })
 
   it('never invents a name, a date or an action', () => {
-    expect(rosterChangeSentence(row({ coach_name: null }))).toBe('Assigned a coach to Tue 15 Sep 06:00')
+    expect(rosterChangeSentence(row({ coach_name: null }))).toBe('Assigned a coach to Tue 15 Sep 6am')
     expect(rosterChangeSentence(row({ block_date: null, start_time: null }))).toBe('Assigned Coach A to a shift')
-    expect(rosterChangeSentence(row({ action: 'mystery' }))).toBe("Changed Coach A's shift on Tue 15 Sep 06:00")
-    expect(rosterChangeSentence(row({ details: { via: 'something_new' } }))).toBe('Assigned Coach A to Tue 15 Sep 06:00')
-    expect(rosterChangeSentence(row({ details: null }))).toBe('Assigned Coach A to Tue 15 Sep 06:00')
+    expect(rosterChangeSentence(row({ action: 'mystery' }))).toBe("Changed Coach A's shift on Tue 15 Sep 6am")
+    expect(rosterChangeSentence(row({ details: { via: 'something_new' } }))).toBe('Assigned Coach A to Tue 15 Sep 6am')
+    expect(rosterChangeSentence(row({ details: null }))).toBe('Assigned Coach A to Tue 15 Sep 6am')
   })
 
   it('reads the weekday off the calendar date, whatever the host timezone', () => {
@@ -80,14 +81,14 @@ describe('rosterChangeTold', () => {
     expect(rosterChangeTold(row())).toBe('told 14:02')
   })
   it('winter: Dublin is UTC, no shift', () => {
-    expect(rosterChangeTold(row({ notified_at: '2026-12-01T14:02:00Z', created_at: '2026-12-01T09:00:00Z' }))).toBe('told 14:02')
+    expect(rosterChangeTold(row({ block_date: '2026-12-01', notified_at: '2026-12-01T14:02:00Z', created_at: '2026-12-01T09:00:00Z' }))).toBe('told 14:02')
   })
   it('names the day when the coach was told on a later day than the change', () => {
-    expect(rosterChangeTold(row({ notified_at: '2026-09-17T08:05:00Z' }))).toBe('told 17 Sep 09:05')
+    expect(rosterChangeTold(row({ block_date: '2026-09-20', notified_at: '2026-09-17T08:05:00Z' }))).toBe('told 17 Sep 09:05')
   })
   it('a change at 23:30 Dublin told at 00:10 Dublin is a later DAY, even though UTC calls it the same day', () => {
     // 22:30Z = 23:30 Dublin on the 15th; 23:10Z = 00:10 Dublin on the 16th.
-    expect(rosterChangeTold(row({ created_at: '2026-09-15T22:30:00Z', notified_at: '2026-09-15T23:10:00Z' }))).toBe('told 16 Sep 00:10')
+    expect(rosterChangeTold(row({ block_date: '2026-09-18', created_at: '2026-09-15T22:30:00Z', notified_at: '2026-09-15T23:10:00Z' }))).toBe('told 16 Sep 00:10')
   })
   it('not told yet', () => {
     expect(rosterChangeTold(row({ notified_at: null }))).toBe('not told yet')
@@ -109,9 +110,83 @@ describe('rosterChangeByline', () => {
   })
 })
 
-describe('formatRosterChange', () => {
-  it('is the sentence and the told state in one line', () => {
-    expect(formatRosterChange(row())).toBe('Assigned Coach A to Tue 15 Sep 06:00 · told 14:02')
-    expect(formatRosterChange(row({ notified_at: null }))).toBe('Assigned Coach A to Tue 15 Sep 06:00 · not told yet')
+describe('rosterChangeSentence — shift times read the way the calendar cards print them', () => {
+  it('uses the 12-hour card form, minutes only when there are some', () => {
+    expect(rosterChangeSentence(row({ start_time: '09:30:00' }))).toBe('Assigned Coach A to Tue 15 Sep 9:30am')
+    expect(rosterChangeSentence(row({ start_time: '12:00:00' }))).toBe('Assigned Coach A to Tue 15 Sep 12pm')
+    expect(rosterChangeSentence(row({ start_time: '17:15:00' }))).toBe('Assigned Coach A to Tue 15 Sep 5:15pm')
+  })
+
+  it('a time that is not a time is left out, never printed as NaN', () => {
+    expect(rosterChangeSentence(row({ start_time: 'garbage' }))).toBe('Assigned Coach A to Tue 15 Sep')
+    expect(rosterChangeSentence(row({ action: 'time_changed', details: { start_time_override: { x: 1 }, end_time_override: null } })))
+      .toBe("Changed Coach A's hours on Tue 15 Sep 6am")
+  })
+})
+
+describe('a row written because the staff member was deleted (mig 622)', () => {
+  const deleted = (over = {}) => row({ action: 'unassigned', details: { reason: 'staff_permanent_delete' }, ...over })
+
+  it('says why', () => {
+    expect(rosterChangeSentence(deleted())).toBe('Removed Coach A from Tue 15 Sep 6am (staff member deleted)')
+  })
+
+  it('an unknown reason adds nothing', () => {
+    expect(rosterChangeSentence(row({ action: 'unassigned', details: { reason: 'something_new' } }))).toBe('Removed Coach A from Tue 15 Sep 6am')
+  })
+
+  it('is stamped at once but nobody was told: no told state at all', () => {
+    expect(NO_MESSAGE_REASONS).toContain('staff_permanent_delete')
+    expect(stampMeansTold(deleted())).toBe(false)
+    expect(rosterChangeTold(deleted())).toBeNull()
+  })
+})
+
+describe('stampMeansTold — a stamp is not always a message', () => {
+  const future = { block_date: '2026-09-20' }
+
+  it('an ordinary stamped row was told', () => {
+    expect(stampMeansTold(row(future))).toBe(true)
+    expect(stampMeansTold(row({ ...future, details: { via: 'swap', swap_id: 's1' } }))).toBe(true)
+  })
+
+  it('an approved drop on a DRAFT roster is stamped without a roster message', () => {
+    const drop = (roster_status) => row({ ...future, action: 'unassigned', details: { via: 'swap_drop', roster_status } })
+    expect(stampMeansTold(drop('draft'))).toBe(false)
+    expect(rosterChangeTold(drop('draft'))).toBeNull()
+    // An unreadable roster status is treated as a draft by the writer too.
+    expect(stampMeansTold(drop(null))).toBe(false)
+    expect(stampMeansTold(drop('published'))).toBe(true)
+    expect(rosterChangeTold(drop('published'))).toBe('told 14:02')
+  })
+
+  it('a shift already over when the stamp was made: every writer stamps those without a message', () => {
+    expect(stampMeansTold(row({ block_date: '2026-09-14' }))).toBe(false)
+    expect(rosterChangeTold(row({ block_date: '2026-09-14' }))).toBeNull()
+    // Same day is NOT over.
+    expect(stampMeansTold(row({ block_date: '2026-09-15' }))).toBe(true)
+  })
+
+  it('"over" is judged on the DUBLIN day of the stamp, not the UTC one', () => {
+    // 23:10Z on the 15th is 00:10 on the 16th in Dublin: the 15th is over.
+    expect(stampMeansTold(row({ block_date: '2026-09-15', notified_at: '2026-09-15T23:10:00Z' }))).toBe(false)
+    // 22:50Z on the 15th is 23:50 on the 15th in Dublin: it is not.
+    expect(stampMeansTold(row({ block_date: '2026-09-15', notified_at: '2026-09-15T22:50:00Z' }))).toBe(true)
+  })
+
+  it('a coach who made the change themselves is stamped, and there was nobody to tell', () => {
+    expect(stampMeansTold(row({ ...future, self_change: true }))).toBe(false)
+    expect(rosterChangeTold(row({ ...future, self_change: true }))).toBeNull()
+  })
+
+  it('an unstamped row is still "not told yet", whatever else is true of it', () => {
+    expect(rosterChangeTold(row({ notified_at: null, self_change: true }))).toBe('not told yet')
+    expect(rosterChangeTold(row({ notified_at: null, details: { reason: 'staff_permanent_delete' } }))).toBe('not told yet')
+  })
+})
+
+describe('ROSTER_CHANGE_LOG_MAX_ROWS', () => {
+  it('lives here (client-safe) and is a whole number of pages', () => {
+    expect(ROSTER_CHANGE_LOG_MAX_ROWS % 1000).toBe(0)
   })
 })

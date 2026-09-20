@@ -92,22 +92,30 @@ export default function RosterChangeLogDrawer({ locationId, periodStart, periodE
               className="max-h-[60vh] overflow-y-auto rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-un1t-accent"
             >
               <ul data-testid="roster-change-list" className="divide-y divide-un1t-border">
-                {changes.map((c) => (
+                {changes.map((c) => {
+                // null = stamped, but the stamp does not mean anybody was told
+                // (stampMeansTold): no chip, rather than a time nobody was told at.
+                const told = rosterChangeTold(c)
+                return (
                   <li key={c.id} className="py-2">
                     <div className="flex items-start justify-between gap-3">
                       <span className="text-sm text-un1t-text">
                         {rosterChangeSentence(c)}
                         {c.shift_name ? <span className="text-un1t-subtle"> · {c.shift_name}</span> : null}
                       </span>
-                      <span
-                        className={`flex-shrink-0 text-[11px] font-medium px-1.5 py-0.5 rounded ${c.notified_at ? 'bg-green-500/10 text-green-700' : 'bg-amber-500/10 text-amber-700'}`}
-                      >
-                        {rosterChangeTold(c)}
-                      </span>
+                      {told && (
+                        <span
+                          data-testid="roster-change-told"
+                          className={`flex-shrink-0 text-[11px] font-medium px-1.5 py-0.5 rounded ${c.notified_at ? 'bg-green-500/10 text-green-700' : 'bg-amber-500/10 text-amber-700'}`}
+                        >
+                          {told}
+                        </span>
+                      )}
                     </div>
                     <div className="text-[11px] text-un1t-subtle mt-0.5">{rosterChangeByline(c)}</div>
                   </li>
-                ))}
+                )
+              })}
               </ul>
             </div>
             {truncated && (

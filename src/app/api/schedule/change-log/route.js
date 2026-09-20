@@ -28,7 +28,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
-import { uuidLike, isoDate, MANAGER_ROLES } from '@/lib/schemas'
+import { uuidLike, isoDate, isRealCalendarDate, MANAGER_ROLES } from '@/lib/schemas'
 import { listRosterChanges } from '@/lib/roster-change-log'
 
 export const runtime = 'nodejs'
@@ -41,19 +41,6 @@ const QuerySchema = z.object({
   from: isoDate,
   to: isoDate,
 })
-
-/**
- * 'YYYY-MM-DD' names a day that exists. Pure calendar arithmetic on the three
- * numbers: no Date parsing, so no host timezone and no engine leniency
- * (V8 rolls '2026-02-30' over to 2 March rather than refusing it).
- */
-function isRealCalendarDate(str) {
-  const [y, m, d] = str.split('-').map(Number)
-  if (m < 1 || m > 12 || d < 1) return false
-  const leap = (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0
-  const daysInMonth = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1]
-  return d <= daysInMonth
-}
 
 export async function GET(request) {
   const user = await getCurrentUser()
