@@ -16,6 +16,9 @@ import { logRosterChange, markChangesNotified } from '@/lib/roster-change-log'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { logWarn } from '@/lib/log'
 
+// COVERLOOP.1 — the status guard on the non-RPC update matched no row.
+const SWAP_CHANGED_ERROR = 'This swap has just changed. Refresh and try again.'
+
 const SwapReviewSchema = z.object({
   status: swapStatusSchema,
   review_note: z.string().max(2000).nullable().optional(),
@@ -135,13 +138,25 @@ export async function PUT(request, props) {
     }
     data = approved
   } else {
-    const { data: updated, error } = await db.from('shift_swap_requests')
+    // COVERLOOP.1 — guarded on the status this request READ. The decision
+    // above was made about that status; if the cover sweep (a shift that just
+    // started), a manager or another coach changed the swap in between, an
+    // unguarded write would overwrite theirs: a claim that read `pending` a
+    // moment before the shift started turned the sweep's `cancelled` back into
+    // `awaiting_approval`, and the managers were pushed to approve a dead
+    // swap. A zero-row UPDATE is NOT an error in PostgREST, so the rows that
+    // come back are the verdict (hence no .single()): none means nothing was
+    // written, and nothing below (audit, warnings, notifications) may run.
+    const { data: rows, error } = await db.from('shift_swap_requests')
       .update(decision.swapUpdates)
       .eq('id', params.id)
+      .eq('status', swap.status)
       .select()
-      .single()
     if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
-    data = updated
+    if (!rows || rows.length === 0) {
+      return NextResponse.json({ success: false, error: SWAP_CHANGED_ERROR }, { status: 409 })
+    }
+    data = rows[0]
   }
 
   // SWAPNOTIFY.1 — the drop's roster_change_log row (dropLog below) can end

@@ -100,7 +100,10 @@ function dropSwap(rosterStatus = 'published', blockDate = '2026-06-10') {
 // SWAPS.2 — every approval is an rpc(); `rpcErr` refuses it and `rpcArgs`
 // records what the route sent. The route must never write shift_assignments
 // itself any more, so that table throws.
-function buildDb(swap, calls, rpcErr = null, rpcArgs = []) {
+// COVERLOOP.1 — `upd.filters` records the non-RPC update's .eq() filters, and
+// `upd.rows` overrides the rows it returns ([] = the status guard matched
+// nothing: somebody else changed the swap first).
+function buildDb(swap, calls, rpcErr = null, rpcArgs = [], upd = {}) {
   return {
     rpc: (fn, args) => {
       calls.push(`rpc:${fn}`)
@@ -115,16 +118,18 @@ function buildDb(swap, calls, rpcErr = null, rpcArgs = []) {
           select: () => ({
             eq: () => ({ single: () => Promise.resolve({ data: swap, error: null }) }),
           }),
-          update: (patch) => ({
-            eq: () => ({
-              select: () => ({
-                single: () => {
-                  calls.push('swap_update')
-                  return Promise.resolve({ data: { ...swap, ...patch }, error: null })
-                },
-              }),
-            }),
-          }),
+          update: (patch) => {
+            const chain = {
+              eq: (col, val) => { upd.filters?.push([col, val]); return chain },
+              // No .single(): a zero-row UPDATE is not an error in PostgREST,
+              // so the route has to judge the ROWS that came back.
+              select: () => {
+                calls.push('swap_update')
+                return Promise.resolve({ data: upd.rows ?? [{ ...swap, ...patch }], error: upd.error ?? null })
+              },
+            }
+            return chain
+          },
         }
       }
       throw new Error(`unexpected table ${table}`)
@@ -1225,5 +1230,90 @@ describe('PUT /api/schedule/swaps/[id] — a started shift (COVERLOOP.1)', () =>
       createServerClient.mockReturnValue(dbWithTz(nearSwap(), [], { data: { id: 'loc-1', timezone: 'Europe/Dublin' }, error: null }))
       expect((await PUT(req({ status: 'awaiting_approval' }), PROPS)).status).toBe(200)
     })
+  })
+})
+
+// COVERLOOP.1 — the non-RPC update (claim / accept / decline / withdraw /
+// cancel / reject) is guarded on the status the route READ. Without it a claim
+// that read the swap just before its shift started overwrote the sweep's
+// `cancelled` with `awaiting_approval`: a dead swap came back to life, the
+// managers were pushed to approve it, and the next tick had to close it again.
+// The approval RPCs (migs 612/615) lock the row themselves and are untouched.
+describe('PUT /api/schedule/swaps/[id] — the status update is guarded on the status that was read (COVERLOOP.1)', () => {
+  const TAKER = 'coach-2'
+  const COACH = { id: TAKER, role: 'staff', profileRole: 'staff', rolesByLocation: { 'loc-1': 'staff' }, full_name: 'Cora Coach' }
+  const open = (over = {}) => ({
+    id: 'swap-1', status: 'pending', location_id: 'loc-1',
+    requester_id: REQUESTER, requester_shift_id: 'assign-1', target_shift_id: null, target_id: null,
+    requester_shift: { id: 'assign-1', profile_id: REQUESTER, block_id: 'block-1', start_time_override: null, block: { id: 'block-1', location_id: 'loc-1', block_date: '2099-01-01', start_time: '06:00:00', end_time: '10:00:00', rosters: { status: 'published' } } },
+    target_shift: null,
+    ...over,
+  })
+
+  it.each([
+    ['a claim', () => open(), COACH, 'awaiting_approval', 'pending'],
+    ['a withdraw', () => open({ status: 'awaiting_approval', target_id: TAKER }), COACH, 'pending', 'awaiting_approval'],
+    ['a manager reject', () => open({ status: 'awaiting_approval', target_id: TAKER }), MANAGER, 'rejected', 'awaiting_approval'],
+  ])('%s is written only if the swap is still in the status that was read', async (_name, make, user, status, readStatus) => {
+    getCurrentUser.mockResolvedValue(user)
+    const calls = []
+    const upd = { filters: [] }
+    createServerClient.mockReturnValue(buildDb(make(), calls, null, [], upd))
+
+    const res = await PUT(req({ status }), PROPS)
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.status).toBe(status)
+    expect(upd.filters).toEqual([['id', 'swap-1'], ['status', readStatus]])
+    expect(calls).toEqual(['swap_update'])
+  })
+
+  it('ZERO rows (the sweep, a manager or another coach got there first): 409, a truthful message, and NO notification', async () => {
+    getCurrentUser.mockResolvedValue(COACH)
+    const calls = []
+    createServerClient.mockReturnValue(buildDb(open(), calls, null, [], { filters: [], rows: [] }))
+
+    const res = await PUT(req({ status: 'awaiting_approval' }), PROPS)
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ success: false, error: 'This swap has just changed. Refresh and try again.' })
+    await flush()
+
+    expect(calls).toEqual(['swap_update'])
+    expect(after).not.toHaveBeenCalled()
+    expect(notifyUsersOnce).not.toHaveBeenCalled()
+    expect(notifyUsersAtRolesOnce).not.toHaveBeenCalled()
+    // The claim warnings are not computed for a claim that did not happen.
+    expect(findSwapConflicts).not.toHaveBeenCalled()
+  })
+
+  it('a null result is judged the same way as no rows', async () => {
+    getCurrentUser.mockResolvedValue(COACH)
+    const db = buildDb(open(), [])
+    const from = db.from
+    db.from = (t) => ({
+      ...from(t),
+      update: () => { const c = { eq: () => c, select: () => Promise.resolve({ data: null, error: null }) }; return c },
+    })
+    createServerClient.mockReturnValue(db)
+    expect((await PUT(req({ status: 'awaiting_approval' }), PROPS)).status).toBe(409)
+    expect(after).not.toHaveBeenCalled()
+  })
+
+  it('a failed update is still a 400 with the database message, as before', async () => {
+    getCurrentUser.mockResolvedValue(COACH)
+    createServerClient.mockReturnValue(buildDb(open(), [], null, [], { filters: [], rows: [], error: { message: 'boom' } }))
+    const res = await PUT(req({ status: 'awaiting_approval' }), PROPS)
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toBe('boom')
+    expect(after).not.toHaveBeenCalled()
+  })
+
+  it('the approval path is untouched: still one RPC, no guarded update', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const calls = []
+    const upd = { filters: [] }
+    createServerClient.mockReturnValue(buildDb(open(), calls, null, [], upd))
+    expect((await PUT(req({ status: 'approved' }), PROPS)).status).toBe(200)
+    expect(calls).toEqual(['rpc:approve_drop_shift_swap'])
+    expect(upd.filters).toEqual([])
   })
 })
