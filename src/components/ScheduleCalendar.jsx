@@ -3,9 +3,10 @@
 // Roster v2 phase 2 — calendar now reads from /api/schedule/blocks
 // (block-shaped data with nested shift_assignments) instead of the
 // legacy flat /api/schedule/shifts. Each block renders as a single
-// card showing template + time + capacity badge + assigned coaches.
-// Empty future blocks get a red unstaffed flag; below-minimum ones an amber
-// "1 of 2" (ROSTERVIS.1). The header says whether the period is published.
+// NEUTRAL card: time, assigned coaches, template name (ROSTERLOOK.1; see
+// schedule/ShiftCard). Colour means staffing only: empty future blocks get a
+// red dashed "Needs coach", below-minimum ones an amber "1 of 2"
+// (ROSTERVIS.1). The toolbar says whether the period is published.
 //
 // (Historical: public.shifts was kept in sync via the mig 068/069
 // bidirectional triggers during cutover; the table + triggers were
@@ -74,7 +75,8 @@ import { useDraftRosters } from './schedule/useDraftRosters'
 // ROSTERLOOK.1 — the toolbar row, and the pure model that says what is on it.
 import RosterToolbar from './schedule/RosterToolbar'
 import DayHeader from './schedule/DayHeader'
-import { rosterToolbarModel, dayHeaderStatus } from '@/lib/roster-card-model'
+import ShiftCard from './schedule/ShiftCard'
+import { rosterToolbarModel, dayHeaderStatus, shiftCardModel } from '@/lib/roster-card-model'
 
 // LEAVE.2 — every leave type gets its own label (timeOffLeaveLabel) and
 // colour. Unpaid and "other" were missing, so approved unpaid/other leave
@@ -1287,11 +1289,8 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
         </div>
       ) : (
         // ── WEEK VIEW ──
-        // Roster v2: one card per BLOCK. Each card shows the
-        // template colour + name + time + capacity badge + a list
-        // of assigned coaches (or an empty-state with a red flag
-        // for future unstaffed demand windows). Click opens the
-        // assign popover.
+        // Roster v2: one card per BLOCK. Each card is a
+        // schedule/ShiftCard. Click opens the block-detail dialog.
         // ROSTER-FIX.6b — same floor as the month grid; a week card carries a
         // template name, a time range and a coach list, none of which survive
         // a 50px column.
@@ -1357,176 +1356,38 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
                       <div className="text-center py-6 text-xs text-un1t-muted">No shifts</div>
                     )}
 
-                    {dayBlocks.map(block => {
-                      const tmpl = block.shift_templates || {}
-                      const assignments = liveAssignments(block.shift_assignments)
-                      const count = assignments.length
-                      const max = block.max_coaches || 15
-                      const staffing = blockStaffingStatus(block, todayStr)
-                      const unstaffed = staffing === 'empty'
-                      // ROSTER-FIX.2 — same reason: the red unstaffed styling is manager-only, coaches see the neutral card.
-                      const showUnstaffed = isManager && unstaffed
-                      // ROSTERVIS.1 — below min_coaches but not empty. Amber, and
-                      // it says the numbers: "1 of 2". min_coaches is a manager
-                      // fact the coach feed never carries, so this is manager-only
-                      // by construction as well as by the gate.
-                      const showShort = isManager && staffing === 'short'
-                      const minCoaches = Number(block.min_coaches) || 0
-                      const myAssignment = assignments.find(a => a.profile_id === user.id)
-                      const blockColor = tmpl.color || '#3B82F6'
-                      const atCapacity = count >= max
-
-                      const isSelected = selectedBlockIds.has(block.id)
-                      // ROSTER-FIX.6b-7 — the card's own short name, spoken by
-                      // the overlay button below. It is deliberately NOT the
-                      // card's contents: the coach list, the capacity chip and
-                      // the "Unstaffed."/"Adjusted hours…" text stay in the
-                      // card so a screen reader can browse them line by line.
-                      const cardLabel = `${formatTime(block.start_time)} ${tmpl.name || 'Shift'} shift, ${cardDayLabel}`
+                    {/* ROSTERLOOK.1 — one ShiftCard per block. WHAT the card
+                        says is shiftCardModel's decision (pure, tested in
+                        src/lib/roster-card-model.test.js), including the coach
+                        boundary: for a non-manager the model carries no
+                        staffing status, and it reads max_coaches for nobody.
+                        The historical notes on this card (ROSTER-FIX.2, .6b,
+                        .6b-7, ROSTERVIS.1) moved into ShiftCard.jsx with the
+                        markup they explain. */}
+                    {dayBlocks.map((block) => {
+                      const model = shiftCardModel(
+                        block,
+                        block.shift_assignments,
+                        futureBlockStaffing(block, todayStr),
+                        { isManager, viewerId: user.id },
+                      )
+                      const isMine = model.coaches.some((c) => c.isMe)
                       return (
-                        <div
+                        <ShiftCard
                           key={block.id}
-                          className={`rounded-md p-2 text-xs relative group hover:ring-1 hover:ring-un1t-subtle/40 ${myAssignment ? 'ring-1 ring-blue-400/50' : ''} ${showUnstaffed ? 'border border-red-500/50' : showShort ? 'border border-amber-500/50' : ''} ${isSelected ? 'ring-2 ring-amber-400 ring-offset-1 ring-offset-un1t-bg' : ''}`}
-                          style={{ backgroundColor: showUnstaffed ? '#7F1D1D20' : blockColor + '20', borderLeft: `3px solid ${showUnstaffed ? '#EF4444' : blockColor}` }}
-                        >
-                          {/* ROSTER-FIX.6b-7 — this card used to BE the button:
-                              role="button" + tabIndex on the wrapper. That is
-                              the a11y trap 6b walked into — an element with a
-                              button role has its whole subtree flattened into
-                              ONE accessible name, so the sr-only "Unstaffed."
-                              and "Adjusted hours: …" this PR added for exactly
-                              this card, plus every coach's name, were read as a
-                              single run-on string and nothing inside it could
-                              be reached on its own. The wrapper goes back to
-                              being a plain container and the click target
-                              becomes a real <button> stretched over it with a
-                              short label of its own. Enter and Space (with the
-                              scroll suppressed) come free with a real button —
-                              no hand-rolled key handler, and nothing to bubble
-                              up from a child. */}
-                          <button
-                            type="button"
-                            aria-pressed={selectMode ? isSelected : undefined}
-                            onClick={() => {
-                              // BULK-ASSIGN.1 — in select mode, clicks
-                              // toggle selection instead of opening
-                              // the detail modal. The action bar at
-                              // the bottom takes the bulk-assign call.
-                              if (selectMode) toggleBlockSelection(block.id)
-                              else setBlockDetail(block)
-                            }}
-                            className="absolute inset-0 z-10 w-full rounded-md cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-un1t-accent"
-                          >
-                            <span className="sr-only">
-                              {selectMode ? `Select ${cardLabel}` : `Manage ${cardLabel}`}
-                            </span>
-                          </button>
-                          <div className="flex items-center justify-between gap-1">
-                            <div className="font-semibold truncate" style={{ color: showUnstaffed ? '#FCA5A5' : 'inherit' }}>
-                              {/* ROSTER-FIX.6b — the card said "unstaffed" with a red
-                                  wash and a red left rule. Both vanish in greyscale
-                                  and neither is announced. The glyph plus the
-                                  visually-hidden word say it in text. */}
-                              {showUnstaffed && (
-                                <>
-                                  <AlertTriangle size={11} className="inline-block mr-1 -mt-0.5 text-red-700" aria-hidden="true" />
-                                  <span className="sr-only">Unstaffed. </span>
-                                </>
-                              )}
-                              {tmpl.name || 'Shift'}
-                            </div>
-                            {/* ROSTER-FIX.2 — capacity is a manager fact. A coach
-                                sees the shift, its time and who is on it; how many
-                                bodies it is budgeted for is not their business, and
-                                the API no longer sends max_coaches to them anyway. */}
-                            {isManager && (
-                              <span
-                                className={`text-[10px] px-1.5 py-0.5 rounded font-medium flex-shrink-0 ${
-                                  unstaffed
-                                    ? 'bg-red-500/20 text-red-700'
-                                    : atCapacity
-                                      ? 'bg-un1t-border/60 text-un1t-text'
-                                      : ''
-                                }`}
-                                style={!unstaffed && !atCapacity ? { backgroundColor: blockColor + '30', color: blockColor } : undefined}
-                              >
-                                {count}/{max}
-                              </span>
-                            )}
-                          </div>
-                          <div className="text-un1t-subtle mt-0.5 flex items-center gap-1">
-                            <Clock size={10} />
-                            {formatTime(block.start_time)}–{formatTime(block.end_time)}
-                          </div>
-                          {showShort && (
-                            <div
-                              data-testid="short-staffed-badge"
-                              className="mt-1 inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-700"
-                              title={`Below minimum: ${count} of ${minCoaches} coaches`}
-                            >
-                              <AlertTriangle size={10} aria-hidden="true" />
-                              <span className="sr-only">Below minimum: </span>
-                              {count} of {minCoaches}
-                            </div>
-                          )}
-
-                          {/* Assigned coaches list */}
-                          {count === 0 ? (
-                            <div className="mt-1.5 text-[11px] text-red-700 italic">
-                              {!isManager ? 'No coach assigned' : unstaffed ? 'Unstaffed — assign a coach' : 'No coach (past)'}
-                            </div>
-                          ) : (
-                            <div className="mt-1.5 space-y-0.5">
-                              {assignments.map(a => {
-                                const isMe = a.profile_id === user.id
-                                const hasOverride = !!(a.start_time_override || a.end_time_override)
-                                return (
-                                  <div key={a.id} className="flex items-center justify-between gap-1 text-[11px]">
-                                    <span className={`truncate ${isMe ? 'text-blue-700 font-medium' : 'text-un1t-text'}`}>
-                                      {a.profiles?.full_name || 'Unknown'}
-                                      {hasOverride && (
-                                        // ROSTER-FIX.6b — a bare bullet with a colour
-                                        // and a tooltip. Screen readers say "black
-                                        // circle" or nothing at all, and the amber is
-                                        // the only thing separating it from the name
-                                        // beside it. It gets a real name and its
-                                        // detail moves into a visually-hidden span so
-                                        // the tooltip is no longer the only copy.
-                                        <span
-                                          className="ml-1 text-amber-700"
-                                          title={
-                                            `Adjusted: ${formatTime(a.start_time_override || block.start_time)}–${formatTime(a.end_time_override || block.end_time)}` +
-                                            (a.partial_reason ? ` · ${a.partial_reason}` : '')
-                                          }
-                                        >
-                                          <span aria-hidden="true">●</span>
-                                          <span className="sr-only">
-                                            {' '}Adjusted hours: {formatTime(a.start_time_override || block.start_time)} to {formatTime(a.end_time_override || block.end_time)}
-                                            {a.partial_reason ? `. ${a.partial_reason}` : ''}
-                                          </span>
-                                        </span>
-                                      )}
-                                    </span>
-                                  </div>
-                                )
-                              })}
-                            </div>
-                          )}
-
-                          {/* Subtle "click to manage" hint at the bottom.
-                              Everything actionable (assign coach, partial-shift
-                              edits, remove coach, delete block, swap) lives in
-                              the modal that opens on click. */}
-                          {(isManager || myAssignment) && (
-                            // ROSTER-FIX.6b-7 — aria-hidden: it says "Click",
-                            // it only appears on hover, and the button above
-                            // already says "Manage …". Left visible, taken out
-                            // of the accessibility tree.
-                            <div aria-hidden="true" className="mt-1.5 text-[10px] text-un1t-muted italic text-right opacity-0 group-hover:opacity-100 transition-opacity">
-                              Click to manage
-                            </div>
-                          )}
-                        </div>
+                          model={model}
+                          dayLabel={cardDayLabel}
+                          isMine={isMine}
+                          showHint={isManager || isMine}
+                          selectMode={selectMode}
+                          isSelected={selectedBlockIds.has(block.id)}
+                          onActivate={() => {
+                            // BULK-ASSIGN.1 — in select mode, clicks toggle
+                            // selection instead of opening the detail modal.
+                            if (selectMode) toggleBlockSelection(block.id)
+                            else setBlockDetail(block)
+                          }}
+                        />
                       )
                     })}
 

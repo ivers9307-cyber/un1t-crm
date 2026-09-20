@@ -106,8 +106,40 @@ describe('below-minimum shifts (ROSTERVIS.1)', () => {
     expect(badges).toHaveLength(1)
     expect(badges[0].textContent).toMatch(/1 of 2/)
     expect(badges[0].textContent).toMatch(/Below minimum/)
-    // The empty card keeps its own red treatment.
-    expect(screen.getByText('Unstaffed — assign a coach')).toBeTruthy()
+    // ROSTERLOOK.1 — the empty card says "Needs coach" and is the only one
+    // flagged empty; the staffed card is flagged nothing.
+    expect(screen.getAllByTestId('needs-coach-badge')).toHaveLength(1)
+    const statuses = screen.getAllByTestId('shift-card').map((c) => c.getAttribute('data-status')).sort()
+    expect(statuses).toEqual(['empty', 'ok', 'short'])
+  })
+
+  it('no card carries a capacity chip, and every card is neutral (ROSTERLOOK.1)', async () => {
+    await renderCalendar({ blocks: [SHORT_BLOCK, EMPTY_BLOCK, OK_BLOCK] })
+    for (const card of screen.getAllByTestId('shift-card')) {
+      expect(card.textContent).not.toMatch(/\d+\s*\/\s*\d+/)   // was "1/3" on every card
+      expect(card.getAttribute('data-tone')).toBe('neutral')
+      expect(card.getAttribute('style')).toBeNull()             // was the template colour at 12%
+    }
+  })
+
+  it('a card reads time, then coach, then template (ROSTERLOOK.1)', async () => {
+    await renderCalendar({ blocks: [OK_BLOCK] })
+    const card = screen.getByTestId('shift-card')
+    expect(within(card).getByTestId('shift-time').textContent).toBe('12–1pm')
+    expect(within(card).getByText('Mike Byrne')).toBeTruthy()
+    expect(within(card).getByTestId('shift-template').textContent).toBe('Lunch')
+  })
+
+  it('a coach sees the same cards with no status on them (ROSTERLOOK.1)', async () => {
+    await renderCalendar({ user: COACH, blocks: [SHORT_BLOCK, OK_BLOCK] })
+    const cards = screen.getAllByTestId('shift-card')
+    expect(cards).toHaveLength(2)
+    for (const card of cards) {
+      expect(card.getAttribute('data-status')).toBe('ok')
+      expect(card.textContent).not.toMatch(/\d+ of \d+|\d+\s*\/\s*\d+/)
+      // The tooltip is built from the same model, so it is inside the boundary.
+      expect(card.getAttribute('title')).not.toMatch(/minimum|Needs coach|\d+ of \d+/)
+    }
   })
 
   it('the week banner counts short shifts as well as empty ones', async () => {

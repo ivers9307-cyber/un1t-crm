@@ -12,7 +12,7 @@
 // claims.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, cleanup, screen, fireEvent, act } from '@testing-library/react'
+import { render, cleanup, screen, fireEvent, act, within } from '@testing-library/react'
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ replace() {} }),
@@ -380,15 +380,16 @@ describe('every icon-only control on the calendar has a name (ROSTER-FIX.6b)', (
 
 // ─── state is not carried by colour alone ─────────────────────────────
 describe('unstaffed and adjusted read as text (ROSTER-FIX.6b)', () => {
-  it('says "Unstaffed" in text on the week card, not only in red', async () => {
+  it('says an empty shift needs a coach in TEXT on the week card, not only in red', async () => {
     await renderCalendar()
     const eveningCard = cardButton('Evening').parentElement
-    // Specifically the visually-hidden word beside the glyph — the red wash
-    // and red left rule are the things that do not survive greyscale, and the
-    // italic "Unstaffed - assign a coach" line only appears while the block
-    // has zero coaches AND the viewer is a manager.
-    const hidden = Array.from(eveningCard.querySelectorAll('.sr-only')).map(n => n.textContent.trim())
-    expect(hidden).toContain('Unstaffed.')
+    // ROSTERLOOK.1 — was a visually-hidden "Unstaffed." beside a glyph, because
+    // the visible signal was a red wash. The visible signal is now the words
+    // themselves, so there is nothing left for greyscale to lose.
+    const badge = within(eveningCard).getByTestId('needs-coach-badge')
+    expect(badge.textContent).toBe('Needs coach')
+    expect(badge.className).not.toMatch(/sr-only/)
+    expect(eveningCard.className).toMatch(/border-dashed/)
   })
 
   it('says "Unstaffed" on the month grid bar, where the only signal was a red hairline', async () => {
