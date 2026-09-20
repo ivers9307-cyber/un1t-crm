@@ -93,7 +93,9 @@ export const NOTIFICATION_REGISTRY = Object.freeze([
   {
     category: 'schedule',
     label: 'Schedule published',
-    description: "Fires when a new week's schedule is published.",
+    // RUNWAY.1 — the roster-runway alert rides this category (and so this
+    // toggle), with its OWN email subject: see src/lib/roster-runway-notify.js.
+    description: "Fires when a new week's schedule is published. The people who can publish a studio's roster also get its roster-runway alert here (an upcoming week, inside 10 days, that is unpublished or has shifts with no coach; once at 10 days, once more at 5; never between 10pm and 7am).",
     trigger: { kind: 'event', source: 'POST /api/schedule/publish' },
     recipients: { kind: 'roles_at_location', detail: 'All staff with shifts in the published week' },
     configurable: { leadTimes: false, roles: false },
