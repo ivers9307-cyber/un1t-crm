@@ -73,6 +73,14 @@ describe('routeForNotification', () => {
     }
   })
 
+  // RUNWAY.1
+  it('opens the unready week in Manage mode for a roster-runway alert', () => {
+    expect(routeForNotification({ type: 'roster_runway', location_id: 'l1', week_start: '2026-09-28', severity: 'amber' }))
+      .toBe('/(tabs)/schedule?date=2026-09-28&view=manage')
+    expect(routeForNotification({ type: 'roster_runway' })).toBe('/(tabs)/schedule?view=manage')
+    expect(routeForNotification({ type: 'roster_runway', week_start: '28 Sep' })).toBe('/(tabs)/schedule?view=manage')
+  })
+
   it('routes schedule-affecting types to the schedule tab', () => {
     for (const type of ['swap_decision', 'time_off_decision', 'schedule_published', 'schedule_updated', 'shift_adjusted']) {
       expect(routeForNotification({ type })).toBe('/(tabs)/schedule')

@@ -77,6 +77,13 @@ export function routeForNotification(data) {
       return isIsoDay(data.start_date) ? `/(tabs)/schedule?date=${data.start_date}` : '/(tabs)/schedule'
 
     // ── Roster (roster-notify, rosters republish, assignment adjust) ─
+    // RUNWAY.1 — manager alert that an upcoming week is not built. Opens that
+    // week in Manage mode (schedule.jsx reads ?view=manage for manager roles
+    // only; anyone else lands on their own week).
+    case 'roster_runway':
+      return isIsoDay(data.week_start)
+        ? `/(tabs)/schedule?date=${data.week_start}&view=manage`
+        : '/(tabs)/schedule?view=manage'
     case 'schedule_published':
     case 'schedule_updated':
       return isIsoDay(data.start_date) ? `/(tabs)/schedule?date=${data.start_date}` : '/(tabs)/schedule'

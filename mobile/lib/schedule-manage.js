@@ -98,6 +98,15 @@ export function filterAssignableCoaches(staff, block, locationId) {
 // module and shared/permissions.js does not export it.
 export const MANAGER_ROLES = ['master', 'owner', 'manager', 'head_coach']
 
+// RUNWAY.1 — the schedule tab's ?view= deep-link param (set by
+// lib/notification-nav.js for roster_runway pushes and by the Studio
+// dashboard's runway chip). Only 'manage' is honoured, and only for a manager
+// role: a coach who is handed the link lands on their own week. null = leave
+// the view alone.
+export function scheduleViewFromParam(viewParam, role) {
+  return viewParam === 'manage' && MANAGER_ROLES.includes(role) ? 'manage' : null
+}
+
 // ROSTER-FIX.3 (D3) — who may move a shift's paid window. Richard's call
 // (2026-09-09): a coach is paid for a window a manager set, so owning the
 // shift buys you nothing here — only a manager role does. This mirrors the

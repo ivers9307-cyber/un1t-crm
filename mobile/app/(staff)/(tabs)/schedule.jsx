@@ -34,7 +34,7 @@ import {
 import { canMobile } from '../../../lib/permissions'
 import { useIsTablet } from '../../../lib/use-is-tablet'
 import { effShiftStart, effShiftEnd, blockStart as blockDefaultStart, blockEnd as blockDefaultEnd, teamRosterForDay, initials } from '../../../lib/schedule-team'
-import { canAdjustShiftTimes, canCancelTimeOff, MANAGER_ROLES } from '../../../lib/schedule-manage'
+import { canAdjustShiftTimes, canCancelTimeOff, MANAGER_ROLES, scheduleViewFromParam } from '../../../lib/schedule-manage'
 import ManageMode from '../../../components/schedule/ManageMode'
 // LEAVE.2 — one label per leave type (unpaid/other used to read "Time off").
 import { timeOffLeaveLabel } from 'shared/time-off'
@@ -309,6 +309,8 @@ export default function Schedule() {
   // sync effect below can key on a stable primitive.
   const params = useLocalSearchParams()
   const dateParam = typeof params.date === 'string' ? params.date : ''
+  // RUNWAY.1 — optional ?view=manage (roster_runway push / Studio chip).
+  const viewParam = typeof params.view === 'string' ? params.view : ''
   const [anchor, setAnchor] = useState(() => weekStart(parseIsoDate(dateParam) || new Date()))
   const [selected, setSelected] = useState(() => parseIsoDate(dateParam) || new Date())
   const [shifts, setShifts] = useState([])
@@ -316,7 +318,7 @@ export default function Schedule() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState(null)
-  const [view, setView] = useState('me') // 'me' | 'team' | 'manage'
+  const [view, setView] = useState(() => scheduleViewFromParam(viewParam, profile?.role) || 'me') // 'me' | 'team' | 'manage'
   const [manageRefreshKey, setManageRefreshKey] = useState(0)
 
   // A push tap can re-target an already-mounted tab (router.push just
@@ -425,6 +427,14 @@ export default function Schedule() {
   useEffect(() => {
     if (view === 'manage' && !isManagerRole(profile?.role)) setView('me')
   }, [profile?.role, view])
+
+  // RUNWAY.1 — a push tap can re-target this mounted tab with ?view=manage.
+  // scheduleViewFromParam returns null for a non-manager, so this can never
+  // fight the effect above.
+  useEffect(() => {
+    const v = scheduleViewFromParam(viewParam, profile?.role)
+    if (v) setView(v)
+  }, [viewParam, profile?.role])
 
   async function onRefresh() {
     setRefreshing(true)
