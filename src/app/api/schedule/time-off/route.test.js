@@ -269,8 +269,21 @@ describe('POST /api/schedule/time-off — bank holidays are not charged', () => 
       expect((await res.json()).error).toBe('No studio to file this request against')
       expect(queriesOf(db, 'staff_allowances')).toHaveLength(0)
       expect(queriesOf(db, 'location_holidays')).toHaveLength(0)
+      // It is judged before ANY read: nothing was asked of the database.
+      expect(db.queries).toHaveLength(0)
       expect(insertSpy).not.toHaveBeenCalled()
     }
+  })
+
+  it('recording for a colleague with no studio is the same 400, not the approver 403', async () => {
+    getCurrentUser.mockResolvedValue({ ...USER, id: 'hc', role: 'head_coach', activeLocation: null })
+    const { db, insertSpy } = buildDb({})
+    createServerClient.mockReturnValue(db)
+    const res = await POST(req({ type: 'holiday', start_date: '2026-06-01', end_date: '2026-06-05', profile_id: '99999999-9999-4999-8999-999999999999' }))
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toBe('No studio to file this request against')
+    expect(db.queries).toHaveLength(0)
+    expect(insertSpy).not.toHaveBeenCalled()
   })
 
   it('a year-straddling holiday: each year\'s row gets its own working-day count', async () => {

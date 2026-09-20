@@ -151,6 +151,14 @@ export async function POST(request) {
   const onBehalf = subjectId !== user.id
   const targetLocation = location_id || user.activeLocation?.id
 
+  // HOLIDAYLEAVE.1 — no body location_id and no active studio on the session.
+  // The row cannot be inserted (location_id is NOT NULL) and a holiday could
+  // not be counted, so say so before any read, rather than let the approver
+  // check answer 403 or the balance check answer with a number worked out blind.
+  if (!targetLocation) {
+    return NextResponse.json({ success: false, error: 'No studio to file this request against' }, { status: 400 })
+  }
+
   if (end_date < start_date) {
     return NextResponse.json({ success: false, error: 'End date must be on or after start date' }, { status: 400 })
   }
@@ -167,7 +175,7 @@ export async function POST(request) {
   // the person is on that studio's staff. A non-member is a 404 so the id is
   // not confirmed.
   if (onBehalf) {
-    if (!targetLocation || !canDecideTimeOff(user, targetLocation)) {
+    if (!canDecideTimeOff(user, targetLocation)) {
       return NextResponse.json({ success: false, error: 'Only someone who approves time off at this studio can record leave for a colleague' }, { status: 403 })
     }
     const { ids: subjectLocations, error: memberError } = await getProfileLocationIds(db, subjectId)
@@ -210,14 +218,6 @@ export async function POST(request) {
     const range = c.start_date === c.end_date ? c.start_date : `${c.start_date} – ${c.end_date}`
     const whose = onBehalf ? 'an existing request' : 'your existing request'
     return NextResponse.json({ success: false, error: `Overlaps ${whose} for ${range}` }, { status: 409 })
-  }
-
-  // HOLIDAYLEAVE.1 — no body location_id and no active studio on the session.
-  // The row cannot be inserted (location_id is NOT NULL) and a holiday could
-  // not be counted, so say so here rather than let the balance check below
-  // answer with a number worked out blind.
-  if (!targetLocation) {
-    return NextResponse.json({ success: false, error: 'No studio to file this request against' }, { status: 400 })
   }
 
   // HOLIDAYLEAVE.1 — a holiday is charged for working days only, so load the

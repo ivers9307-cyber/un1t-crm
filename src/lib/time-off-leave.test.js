@@ -148,6 +148,7 @@ describe('getNonWorkingDates', () => {
     expect(queriesOf(db, 'locations')[0].eq).toEqual({ id: 'loc-1' })
     const closures = queriesOf(db, 'location_holidays')[0]
     expect(closures.eq).toEqual({ location_id: 'loc-1' })
+    expect(closures.columns).toBe('date') // the only column the day count needs
     expect(closures.calls).toContainEqual(['gte', 'date', '2026-06-01'])
     expect(closures.calls).toContainEqual(['lte', 'date', '2026-06-14'])
   })

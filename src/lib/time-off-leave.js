@@ -272,7 +272,7 @@ export async function getNonWorkingDates(db, locationId, startIso, endIso) {
 
   const { data: custom, error: customError } = await db
     .from('location_holidays')
-    .select('date, name')
+    .select('date')
     .eq('location_id', locationId)
     .gte('date', startIso)
     .lte('date', endIso)
