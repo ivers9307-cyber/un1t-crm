@@ -58,16 +58,34 @@ export function swapRowTitle(swap) {
   return swap?.status === 'awaiting_approval' ? `${base} — claimed` : base
 }
 
+// RUNWAY.1 — the roster runway for this studio (shared/roster-runway.js shape)
+// or null. null means "no chip": every week is ready, the caller is not a
+// manager here (the route 403s), the read failed, or the route is not deployed
+// yet (the OTA can land before the web deploy: an HTML 404, which api() turns
+// into a { success: false } envelope). Unlike the two pending
+// lists above, hiding on failure is right: this is an alert, the daily push is
+// its primary channel, and a chip must never claim a problem it could not read.
+export async function fetchRosterRunway(locationId) {
+  const qs = new URLSearchParams({ location_id: locationId })
+  try {
+    const res = await api(`/api/schedule/runway?${qs.toString()}`, { locationId })
+    return res?.success ? (res.data?.runway ?? null) : null
+  } catch {
+    return null
+  }
+}
+
 export async function fetchStudioDashboard(locationId) {
-  const [base, pendingTimeOff, pendingSwaps] = await Promise.all([
+  const [base, pendingTimeOff, pendingSwaps, rosterRunway] = await Promise.all([
     fetchStudioDashboardData(supabase, locationId),
     // Manager scope (incl. LEAVE.2's "leave taken by anyone who belongs
     // here") and the expired-pending cut are the route's, not ours.
     pendingList('/api/schedule/time-off', locationId),
     swapQueue(locationId),
+    fetchRosterRunway(locationId),
   ])
   if (!base.success) return base
-  return { ...base, data: { ...base.data, pendingTimeOff, pendingSwaps } }
+  return { ...base, data: { ...base.data, pendingTimeOff, pendingSwaps, rosterRunway } }
 }
 
 /**

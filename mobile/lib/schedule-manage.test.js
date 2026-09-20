@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   blockFillState, liveBlockAssignments, adjustTargetFor, assignmentWindow,
-  filterAssignableCoaches, canAdjustShiftTimes, canCancelTimeOff,
+  filterAssignableCoaches, canAdjustShiftTimes, canCancelTimeOff, scheduleViewFromParam,
 } from './schedule-manage'
 import { blockStart, blockEnd } from './schedule-team'
 
@@ -187,5 +187,24 @@ describe('canCancelTimeOff', () => {
     expect(canCancelTimeOff(mine, null)).toBe(false)
     expect(canCancelTimeOff({ id: 't1', status: 'pending' }, me)).toBe(false)
     expect(canCancelTimeOff(mine, { role: 'staff' })).toBe(false)
+  })
+})
+
+// RUNWAY.1 — ?view=manage on the schedule tab.
+describe('scheduleViewFromParam', () => {
+  it('opens Manage mode for every manager role', () => {
+    for (const role of ['master', 'owner', 'manager', 'head_coach']) {
+      expect(scheduleViewFromParam('manage', role)).toBe('manage')
+    }
+  })
+  it('never for a coach, whatever the link says', () => {
+    expect(scheduleViewFromParam('manage', 'staff')).toBeNull()
+    expect(scheduleViewFromParam('manage', 'reception')).toBeNull()
+    expect(scheduleViewFromParam('manage', undefined)).toBeNull()
+  })
+  it('ignores every other value, so an absent or junk param leaves the view alone', () => {
+    for (const v of ['', 'me', 'team', 'MANAGE', undefined, null, ['manage']]) {
+      expect(scheduleViewFromParam(v, 'owner')).toBeNull()
+    }
   })
 })

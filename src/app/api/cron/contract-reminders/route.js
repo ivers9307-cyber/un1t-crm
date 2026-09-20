@@ -17,13 +17,16 @@
 // contracts.js) so it's independently unit-tested. The SQL filters below
 // are a coarse pre-filter only (status + not-yet-capped) — reminderDue()
 // is still applied per-row as the authoritative client-side guard.
+//
+// RUNWAY.1 — also runs the daily roster-runway push (second arm, top of GET).
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { reminderDue } from '@/lib/contracts'
 import { sendContractReminderEmail } from '@/lib/contracts-email'
 import { sendPush } from '@/lib/push'
-import { logWarn } from '@/lib/log'
+import { logWarn, logError } from '@/lib/log'
+import { runRosterRunwayAlerts } from '@/lib/roster-runway-notify'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -40,6 +43,29 @@ export async function GET(request) {
 
   const db = createServerClient()
   const now = new Date()
+
+  // RUNWAY.1 — second arm: the daily roster-runway push (one per location per
+  // week per severity; src/lib/roster-runway-notify.js). It rides this cron
+  // because both are once-a-day staff nudges and 08:00 UTC is 08:00/09:00 in
+  // Dublin, a civil hour to tell a manager next week is not built; the roster
+  // cron (extend-roster-horizon) runs at 03:20 UTC, which is not. (The arm
+  // also refuses to send outside 07:00-22:00 studio time on its own, so moving
+  // this cron cannot push at night.)
+  //
+  // Isolated BOTH ways. It runs FIRST, so nothing the contract half does can
+  // cost it its run; and it is wrapped, so its own failure is logged, rides in
+  // last_outcome.runway, is counted in runway_arm_failed, and never costs the
+  // contract reminders their run or their heartbeat (the same partial-failure
+  // posture as extend-roster-horizon).
+  let runway
+  let runwayArmFailed = 0
+  try {
+    runway = await runRosterRunwayAlerts(db)
+  } catch (err) {
+    runwayArmFailed = 1
+    logError('cron-contract-reminders', 'roster runway arm threw', { err })
+    runway = { error: err?.message || 'runway arm failed' }
+  }
 
   // Candidate contracts — status in ('issued','viewed') and not yet at the
   // reminder cap. Paginated with an explicit .order() (1k-row cap
@@ -127,8 +153,9 @@ export async function GET(request) {
     }
   }
 
-  await stampHeartbeat('contract-reminders', { checked: candidates.length, sent, emailFailed, rowErrors }).catch((err) =>
+  const outcome = { checked: candidates.length, sent, emailFailed, rowErrors, runway, runway_arm_failed: runwayArmFailed }
+  await stampHeartbeat('contract-reminders', outcome).catch((err) =>
     logWarn('cron-contract-reminders', 'heartbeat failed', { err }))
 
-  return NextResponse.json({ success: true, checked: candidates.length, sent, emailFailed, rowErrors })
+  return NextResponse.json({ success: true, ...outcome })
 }

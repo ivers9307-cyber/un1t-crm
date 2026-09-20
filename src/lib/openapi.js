@@ -4469,6 +4469,22 @@ registry.registerPath({
   },
 })
 
+// RUNWAY.1 — is the next week coming up built and published? One studio.
+registry.registerPath({
+  method: 'get',
+  path: '/api/schedule/runway',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Roster runway for one studio (manager-only)',
+  description: "The first Mon-Sun week, out of the two that start after today, whose Monday is 1 to 10 days away and that is not ready: some shift has no live coach, or some shift is not on a published roster. The current week is never reported (the Today staffing card and the schedule banner cover it). `runway` is null when every week inside the horizon is ready, and for a studio with no active shift template. severity is 'red' at 1 to 5 days and 'amber' at 6 to 10. Counts cover that week's shifts only. Manager-only (master, owner, manager, head_coach AT location_id) and scoped by assertLocationAccess: whether a week is published is not coach information. Drives the mobile Studio dashboard chip; the web Today page reads the same function server-side.",
+  responses: {
+    200: { description: '{ runway: null | { weekStart, daysAway, severity, blocks, staffed, underMin, published, unstaffed, unpublished } }' },
+    400: { description: 'Missing or malformed location_id', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — needs a manager role at that location', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The roster read failed (never reported as "ready")', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 registry.registerPath({
   method: 'post',
   path: '/api/schedule/time-off',

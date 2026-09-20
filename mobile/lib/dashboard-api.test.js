@@ -18,14 +18,15 @@ vi.mock('shared/dashboard-data', () => ({
 
 const { api } = await import('./api')
 const shared = await import('shared/dashboard-data')
-const { fetchStudioDashboard, swapRowTitle } = await import('./dashboard-api')
+const { fetchStudioDashboard, fetchRosterRunway, swapRowTitle } = await import('./dashboard-api')
 
 const LOC = 'a0000000-0000-0000-0000-000000000001'
 const BASE = { newLeadsThisWeek: 3, funnel: { new_lead: 3 }, totalContacts: 3, totalUnreadWhatsapp: 0 }
 
 // `swaps` is one envelope for both status calls, or { pending, awaiting_approval }.
-function routeApi({ timeOff, swaps }) {
+function routeApi({ timeOff, swaps, runway = { success: true, data: { runway: null } } }) {
   api.mockImplementation((path) => {
+    if (path.startsWith('/api/schedule/runway')) return runway instanceof Error ? Promise.reject(runway) : Promise.resolve(runway)
     if (path.startsWith('/api/schedule/time-off')) return Promise.resolve(timeOff)
     if (path.startsWith('/api/schedule/swaps')) {
       const status = new URLSearchParams(path.split('?')[1]).get('status')
@@ -102,7 +103,7 @@ describe('fetchStudioDashboard', () => {
     } })
 
     const res = await fetchStudioDashboard(LOC)
-    expect(res).toEqual({ success: true, data: { ...BASE, pendingTimeOff: timeOff, pendingSwaps: [swap] } })
+    expect(res).toEqual({ success: true, data: { ...BASE, pendingTimeOff: timeOff, pendingSwaps: [swap], rosterRunway: null } })
   })
 
   it('a failed list is null, not an empty list — "nothing waiting" must never stand in for "could not read"', async () => {
@@ -125,6 +126,59 @@ describe('fetchStudioDashboard', () => {
     routeApi({ timeOff: { success: true, data: [] }, swaps: { success: true, data: [] } })
     shared.fetchStudioDashboardData.mockResolvedValue({ success: false, error: 'No location' })
     expect(await fetchStudioDashboard(LOC)).toEqual({ success: false, error: 'No location' })
+  })
+})
+
+// RUNWAY.1 — the Studio tab's roster-runway chip.
+describe('fetchStudioDashboard — roster runway', () => {
+  const RUNWAY = {
+    weekStart: '2026-09-28', daysAway: 9, severity: 'amber',
+    blocks: 34, staffed: 0, underMin: 0, published: 0, unstaffed: 34, unpublished: 34,
+  }
+
+  it('reads the runway through the manager-gated route, scoped to the location', async () => {
+    routeApi({ timeOff: OK_EMPTY, swaps: OK_EMPTY, runway: { success: true, data: { runway: RUNWAY } } })
+    const res = await fetchStudioDashboard(LOC)
+    expect(res.data.rosterRunway).toEqual(RUNWAY)
+    const call = queryOf('/api/schedule/runway')
+    expect(call.pathname).toBe('/api/schedule/runway')
+    expect(call.params).toEqual({ location_id: LOC })
+    expect(call.opts).toMatchObject({ locationId: LOC })
+  })
+
+  it('a 403 envelope, a rejected call and a ready studio are all null: no chip, and the tab still loads', async () => {
+    for (const runway of [{ success: false, error: 'Unauthorized' }, new Error('offline'), { success: true, data: { runway: null } }]) {
+      routeApi({ timeOff: OK_EMPTY, swaps: OK_EMPTY, runway })
+      const res = await fetchStudioDashboard(LOC)
+      expect(res.success).toBe(true)
+      expect(res.data.rosterRunway).toBeNull()
+      expect(res.data.pendingTimeOff).toEqual([])
+    }
+  })
+
+  // DEPLOY ORDER: the merge publishes the OTA and deploys the route together,
+  // and either can land first. A phone on the new bundle that reaches a
+  // not-yet-deployed route gets Next's HTML 404, which api() turns into a
+  // transport envelope (or, behind a JSON edge, a bare { success: false,
+  // status: 404 }). Both must be SILENT: no chip, no thrown error, no banner,
+  // and the rest of the Studio tab still loads.
+  it('a 404 from a not-yet-deployed route is silent: null, and the tab still loads', async () => {
+    for (const runway of [
+      { success: false, transport: true, status: 404, error: 'Non-JSON response (404)' },
+      { success: false, status: 404, error: 'HTTP 404' },
+    ]) {
+      routeApi({ timeOff: OK_EMPTY, swaps: OK_EMPTY, runway })
+      await expect(fetchRosterRunway(LOC)).resolves.toBeNull()
+      const res = await fetchStudioDashboard(LOC)
+      expect(res).toEqual({ success: true, data: { ...BASE, pendingTimeOff: [], pendingSwaps: [], rosterRunway: null } })
+    }
+  })
+
+  it('a success envelope with no usable runway is null, never undefined', async () => {
+    for (const runway of [{ success: true }, { success: true, data: {} }, { success: true, data: null }, null, undefined]) {
+      routeApi({ timeOff: OK_EMPTY, swaps: OK_EMPTY, runway })
+      expect(await fetchRosterRunway(LOC)).toBeNull()
+    }
   })
 })
 
