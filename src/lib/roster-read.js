@@ -169,6 +169,9 @@ export function slimShiftRowForCoach(row, viewerId) {
   }
 }
 
+// PostgREST's silent per-select row cap (CLAUDE.md: "1,000-row select cap").
+const POSTGREST_ROW_CAP = 1000
+
 /**
  * Read shifts for GET /api/schedule/shifts from the Roster v2 model,
  * normalised to the legacy shift shape (see toApiShiftRow). Filters by a set
@@ -186,7 +189,7 @@ export function slimShiftRowForCoach(row, viewerId) {
  *   Where the caller is not a manager: draft rows are dropped (D1) and the row
  *   is slimmed (slimShiftRowForCoach). Where they are, the row is untouched.
  *   A multi-location caller can be both in one response.
- * @returns {Promise<{ rows: Array<object>, error: object|null }>}
+ * @returns {Promise<{ rows: Array<object>, error: object|null, capped?: true }>}
  */
 export async function fetchApiShiftRows(db, { locationIds, startDate, endDate, profileId, publishedOnly = false, viewer = null }) {
   if (!Array.isArray(locationIds) || locationIds.length === 0) return { rows: [], error: null }
@@ -211,5 +214,11 @@ export async function fetchApiShiftRows(db, { locationIds, startDate, endDate, p
     .filter((r) => !viewer || r.published || viewer.isManagerAt(r.location_id))
     .map((r) => (!viewer || viewer.isManagerAt(r.location_id) ? r : slimShiftRowForCoach(r, viewer.id)))
     .sort((x, y) => (x.shift_date < y.shift_date ? -1 : x.shift_date > y.shift_date ? 1 : 0))
+  // SHIFTREMIND.1 — this read is not paged, and PostgREST caps a select at
+  // 1,000 rows without saying so. A FULL page is therefore reported (`capped`,
+  // present only when true) so a caller that must see every row can say so
+  // instead of acting on a silently truncated set. Judged on the RAW count:
+  // cancelled and draft rows are filtered out above but still used the page.
+  if ((data || []).length >= POSTGREST_ROW_CAP) return { rows, error: null, capped: true }
   return { rows, error: null }
 }

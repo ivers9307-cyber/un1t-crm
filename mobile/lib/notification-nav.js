@@ -19,8 +19,8 @@
 //     The payload id (swap_id / request_id / claim_id) equals the pending-
 //     approvals item id, so it rides along as ?focus= and the inbox
 //     highlights the matching card.
-//   schedule_published / schedule_updated / shift_adjusted / swap_decision /
-//     time_off_decision — carry the affected date (start_date / block_date);
+//   schedule_published / schedule_updated / shift_adjusted / shift_reminder /
+//     swap_decision / time_off_decision — carry the affected date (start_date / block_date);
 //     ?date= preselects that week+day on the schedule tab instead of
 //     landing on the current week.
 //   instagram fallback — the WhatsApp tab is the unified inbox (it lists IG
@@ -81,6 +81,9 @@ export function routeForNotification(data) {
     case 'schedule_updated':
       return isIsoDay(data.start_date) ? `/(tabs)/schedule?date=${data.start_date}` : '/(tabs)/schedule'
     case 'shift_adjusted':
+      return isIsoDay(data.block_date) ? `/(tabs)/schedule?date=${data.block_date}` : '/(tabs)/schedule'
+    // SHIFTREMIND.1 — "you are on tomorrow / in 2 hours": open that day.
+    case 'shift_reminder':
       return isIsoDay(data.block_date) ? `/(tabs)/schedule?date=${data.block_date}` : '/(tabs)/schedule'
 
     // ── Leads (POST /api/contacts) ──────────────────────────────────

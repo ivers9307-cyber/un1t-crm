@@ -65,6 +65,22 @@ export const NOTIFICATION_REGISTRY = Object.freeze([
     },
   },
   {
+    category: 'shift_reminder',
+    label: 'Shift reminders',
+    description: 'One reminder before each run of published shifts (shifts no more than 2 hours apart count as one run): 2 hours before the first start, or 8pm the evening before when the first start is before 9am. Never sent between 10pm and 7am: a shift added late in the evening for a start before 7:30am gets no reminder. Names the studio, the times, the shifts and who you are on with. Skipped on a whole day of approved leave.',
+    trigger: { kind: 'cron', source: '/api/cron/send-push-reminders (every 5 min) -> src/lib/shift-reminders.js' },
+    recipients: { kind: 'assignee', detail: 'The coach on the shift (shift_assignments.profile_id). Skipped while on approved leave.' },
+    // Fixed rule, not a per-location lead-time list: 96 shifts in 8 weeks
+    // started before 07:00, where any fixed lead is either useless or a 4am push.
+    // The rule itself lives at the top of src/lib/shift-reminders.js.
+    configurable: { leadTimes: false, roles: false },
+    // Unlike tasks/bookings this DOES fall back to email. The evening-before
+    // reminder has ten hours of slack, and Android staff have no push tokens
+    // until FCM credentials exist, so email is the only channel they have.
+    fallbackEmail: true,
+    emailSubject: 'Shift reminder',
+  },
+  {
     category: 'time_off',
     label: 'Time-off decisions',
     description: 'When your own time-off request is approved or declined, and when a new request lands for managers to review.',

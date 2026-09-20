@@ -137,3 +137,24 @@ describe('inLeadWindow', () => {
     })
   })
 })
+
+// SHIFTREMIND.1 — localToUtc now reuses one Intl formatter per timezone. The
+// tolerance it always had must survive that: an invalid IANA string returns
+// null (the caller skips that entity), it never throws into the task or
+// booking arm, and a bad zone is never cached or allowed to poison a good one.
+describe('localToUtc — invalid timezone tolerance (cached-formatter path)', () => {
+  it('returns null, never throws, every time it is asked', () => {
+    for (let i = 0; i < 3; i++) {
+      expect(() => localToUtc('2026-09-22', '06:00', 'Not/AZone')).not.toThrow()
+      expect(localToUtc('2026-09-22', '06:00', 'Not/AZone')).toBeNull()
+      expect(localToUtc('2026-09-22', '06:00', '')).toBeNull()
+    }
+  })
+
+  it('a valid zone still converts correctly before and after a bad one was asked for', () => {
+    expect(localToUtc('2026-09-22', '06:00', 'Europe/Dublin').toISOString()).toBe('2026-09-22T05:00:00.000Z')
+    localToUtc('2026-09-22', '06:00', 'Not/AZone')
+    expect(localToUtc('2026-09-22', '06:00', 'Europe/Dublin').toISOString()).toBe('2026-09-22T05:00:00.000Z')
+    expect(localToUtc('2026-12-15', '14:00', 'Europe/Dublin').toISOString()).toBe('2026-12-15T14:00:00.000Z')
+  })
+})

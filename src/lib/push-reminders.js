@@ -4,6 +4,23 @@
 // the full route handler (Supabase + push.js are awkward to mock,
 // and the time math is the only bit that's genuinely tricky).
 
+// One formatter per timezone: constructing an Intl.DateTimeFormat is by far the
+// dearest step here, and the shift arm converts several times per shift per
+// tick. Same options as before, so the output is unchanged. An invalid tz
+// still throws inside localToUtc's try (and is not cached).
+const partsFormatters = new Map()
+function partsFormatterFor(tz) {
+  let fmt = partsFormatters.get(tz)
+  if (!fmt) {
+    fmt = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+    })
+    partsFormatters.set(tz, fmt)
+  }
+  return fmt
+}
+
 /**
  * Treat (dateStr, timeStr) as wall-clock time in `tz`, return the
  * equivalent UTC Date.
@@ -29,10 +46,7 @@ export function localToUtc(dateStr, timeStr, tz) {
     const candidate = new Date(Date.UTC(y, m - 1, d, Number(hh), Number(mm), Number(ss)))
     if (Number.isNaN(candidate.getTime())) return null
 
-    const parts = new Intl.DateTimeFormat('en-US', {
-      timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
-      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
-    }).formatToParts(candidate).reduce((a, p) => (a[p.type] = p.value, a), {})
+    const parts = partsFormatterFor(tz).formatToParts(candidate).reduce((a, p) => (a[p.type] = p.value, a), {})
 
     const actualMs = Date.UTC(
       Number(parts.year), Number(parts.month) - 1, Number(parts.day),

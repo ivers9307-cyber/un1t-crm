@@ -22,6 +22,9 @@
 //   - Bookings (status='confirmed', no skip_reminder) → push to all
 //     users with the location's configured booking roles
 //     (default owner/manager/head_coach), category='bookings'.
+//   - Shifts (published, live shift_assignments, grouped into runs) → one
+//     push per run to the coach, category='shift_reminder'. See
+//     src/lib/shift-reminders.js.
 //
 // Bookings fan out to a role-set rather than a single staff member
 // because the bookings table has no "assigned coach" column — the
@@ -38,6 +41,7 @@ import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { localToUtc, formatLocalTime } from '@/lib/push-reminders'
 import { getEffectiveConfig, getEffectiveLeadTimesForUser } from '@/lib/notification-config'
 import { selectAll } from '@/lib/select-all'
+import { runShiftReminders } from '@/lib/shift-reminders'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -72,7 +76,7 @@ export async function GET(request) {
   // few (single-digit) so this is cheap regardless of size.
   const { data: locations, error: locErr } = await db
     .from('locations')
-    .select('id, timezone, notification_config')
+    .select('id, name, timezone, notification_config')
 
   if (locErr) {
     logError('cron-push-reminders', 'location fetch failed', { err: locErr })
@@ -111,6 +115,7 @@ export async function GET(request) {
     booking_pushed: 0,
     booking_skipped_dup: 0,
     booking_send_failed: 0,
+    shift_arm_failed: 0, // 1 = the shift arm THREW this tick (see the SHIFTS block)
     lead_time_buckets: [], // for logging / debugging
   }
 
@@ -371,7 +376,26 @@ export async function GET(request) {
     logError('cron-push-reminders', 'booking block threw', { err })
   }
 
-  if (Object.values(summary).some(v => Array.isArray(v) ? v.length > 0 : v > 0)) {
+  // -------------------------- SHIFTS --------------------------
+  // SHIFTREMIND.1 — one reminder per RUN of a coach's published shifts (shifts
+  // no more than 2 hours apart): 2 hours before the run's first start, or
+  // 20:00 the evening before when that would be before 07:00 (a start before 09:00).
+  // The rule, the ledger use and the failure posture live in
+  // src/lib/shift-reminders.js. Isolated like the two blocks above: a shift
+  // failure must never cost a task or booking reminder, or the heartbeat.
+  try {
+    Object.assign(summary, await runShiftReminders(db, { nowMs, locations: locations || [] }))
+  } catch (err) {
+    // VISIBLE, not just logged: the heartbeat below is stamped either way and
+    // the response is ok:true, so without this key an arm that throws on every
+    // tick (a select 400, say) would look exactly like a quiet day. Same class
+    // as the 24-day silent enrolment outage (#1685).
+    summary.shift_arm_failed = 1
+    logError('cron-push-reminders', 'shift block threw', { err })
+  }
+
+  // quiet_hours alone is not news: it is 1 on every tick from 22:00 to 07:00.
+  if (Object.entries(summary).some(([k, v]) => k !== 'quiet_hours' && (Array.isArray(v) ? v.length > 0 : v > 0))) {
     logInfo('cron-push-reminders', 'tick', summary)
   }
 

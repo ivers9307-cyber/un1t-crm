@@ -16,7 +16,7 @@ const STAFF_TYPES = [
   'swap_inbound', 'swap_claimed', 'swap_accepted', 'swap_withdrawn',
   'swap_declined', 'swap_open', 'swap_awaiting', 'swap_decision',
   'time_off_inbound', 'time_off_decision',
-  'schedule_published', 'schedule_updated', 'shift_adjusted',
+  'schedule_published', 'schedule_updated', 'shift_adjusted', 'shift_reminder',
   'lead_new', 'whatsapp_inbound', 'whatsapp_agent_handoff',
   'instagram_inbound', 'instagram_agent_handoff',
   'invoice_approved', 'invoice_declined',

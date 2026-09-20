@@ -714,6 +714,10 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   // the category to post-publish adds/removes too; the key stays
   // `notify_shift_adjusted` so existing opt-outs keep applying.
   { key: 'notify_shift_adjusted',   label: '… Shift changes',      hint: 'Notify when a manager adds you to a shift, removes you from one, or changes its times', mobileOnly: true, isNotify: true },
+  // SHIFTREMIND.1 — one reminder per run of published shifts from the
+  // send-push-reminders cron: 2 hours before the first start, or 8pm the
+  // evening before for a start before 09:00. Default ON for every role.
+  { key: 'notify_shift_reminder',   label: '… Shift reminders',    hint: 'One reminder before your shifts: 8pm the evening before for a start before 9am, otherwise 2 hours before', mobileOnly: true, isNotify: true },
   // Digital contracts (mig 106). Recipient gets a push when a
   // master/owner issues them a contract for signature. Default-on
   // for every role because the prompt-to-sign flow depends on it.
@@ -780,6 +784,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_invoice_approved: true, notify_invoice_declined: true,
     notify_expense_submitted: true, notify_expense_approved: true, notify_expense_declined: true,
     notify_shift_adjusted: true,
+    notify_shift_reminder: true,
     notify_contract_issued: true,
     notify_tasks: true, notify_bookings: true,
     notify_checklist_overdue: true, notify_checklist_compliance: true,
@@ -818,6 +823,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     // ping (they aren't approvers).
     notify_expense_submitted: false, notify_expense_approved: true, notify_expense_declined: true,
     notify_shift_adjusted: true,
+    notify_shift_reminder: true,
     notify_contract_issued: true,
     notify_tasks: true, notify_bookings: false,
     // Staff get the 'you missed items' push but NOT the compliance
@@ -859,6 +865,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_invoice_approved: true, notify_invoice_declined: true,
     notify_expense_submitted: false, notify_expense_approved: true, notify_expense_declined: true,
     notify_shift_adjusted: true,
+    notify_shift_reminder: true,
     notify_contract_issued: true,
     notify_tasks: true, notify_bookings: true,
     notify_checklist_overdue: true, notify_checklist_compliance: false,
@@ -894,6 +901,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     // studio); own-claim outcomes on like every role.
     notify_expense_submitted: true, notify_expense_approved: true, notify_expense_declined: true,
     notify_shift_adjusted: true,
+    notify_shift_reminder: true,
     notify_contract_issued: true,
     notify_tasks: true, notify_bookings: true,
     // Head coach owns the floor — gets both the personal heads-up
@@ -933,6 +941,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     // own-claim outcomes on (parity-superset of staff too).
     notify_expense_submitted: true, notify_expense_approved: true, notify_expense_declined: true,
     notify_shift_adjusted: true,
+    notify_shift_reminder: true,
     notify_contract_issued: true,
     notify_tasks: true, notify_bookings: true,
     // Managers oversee front-of-house + sometimes work a shift —
@@ -974,6 +983,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     // + master) — submitted ping on; own-claim outcomes on.
     notify_expense_submitted: true, notify_expense_approved: true, notify_expense_declined: true,
     notify_shift_adjusted: true,
+    notify_shift_reminder: true,
     notify_contract_issued: true,
     notify_tasks: true, notify_bookings: true,
     // Owners get both — they get the compliance summary as
