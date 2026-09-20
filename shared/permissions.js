@@ -714,10 +714,10 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   // the category to post-publish adds/removes too; the key stays
   // `notify_shift_adjusted` so existing opt-outs keep applying.
   { key: 'notify_shift_adjusted',   label: '… Shift changes',      hint: 'Notify when a manager adds you to a shift, removes you from one, or changes its times', mobileOnly: true, isNotify: true },
-  // SHIFTREMIND.1 — one reminder per published shift from the
-  // send-push-reminders cron: 8pm the evening before for a start before
-  // 08:00, otherwise 2 hours before. Default ON for every role.
-  { key: 'notify_shift_reminder',   label: '… Shift reminders',    hint: 'Notify before each of your shifts: 8pm the evening before for a start before 8am, otherwise 2 hours before', mobileOnly: true, isNotify: true },
+  // SHIFTREMIND.1 — one reminder per run of published shifts from the
+  // send-push-reminders cron: 2 hours before the first start, or 8pm the
+  // evening before for a start before 09:00. Default ON for every role.
+  { key: 'notify_shift_reminder',   label: '… Shift reminders',    hint: 'One reminder before your shifts: 8pm the evening before for a start before 9am, otherwise 2 hours before', mobileOnly: true, isNotify: true },
   // Digital contracts (mig 106). Recipient gets a push when a
   // master/owner issues them a contract for signature. Default-on
   // for every role because the prompt-to-sign flow depends on it.

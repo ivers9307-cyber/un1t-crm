@@ -1,11 +1,39 @@
 // SHIFTREMIND.1 — shift reminders for coaches.
 //
 // THE RULE:
+//   - ONE REMINDER PER RUN OF SHIFTS, NOT PER SHIFT. A coach's live, published
+//     shifts for a date, across ALL locations, are sorted by effective start
+//     and grouped into runs: a shift joins the current run when it starts no
+//     more than 120 minutes (RUN_GAP_MINUTES) after the run's LATEST end
+//     (overlaps and back-to-back included); otherwise it opens a new run.
+//     05:45-08:00 + 08:00-09:00 + 09:15-10:30 is one run and one push; a split
+//     day (morning + evening) is two. Only the run's FIRST shift carries the
+//     reminder, timed by that shift's start; the message describes the run.
 //   - NOBODY IS REMINDED BEFORE 07:00 (location time). A reminder normally goes
-//     2 hours before the start. If that would land before 07:00 (any start
-//     before 09:00: a 2-hour lead on a 06:00 shift is a 04:00 push, on an 08:30
-//     shift a 06:30 one), it goes at 20:00 the evening before instead.
-//     A 09:00 start is reminded at 07:00, the earliest push of any day.
+//     2 hours before the start (DAY_LEAD_MINUTES). If that would land before
+//     07:00 (NO_REMINDER_BEFORE), i.e. any start before 09:00 (a 2-hour lead on
+//     a 06:00 shift is a 04:00 push, on an 08:30 shift a 06:30 one), it goes at
+//     20:00 the evening before instead. A 09:00 start is reminded at 07:00,
+//     the earliest push of any day.
+//   - Whole-day approved leave skips the coach's day. A HALF day (single-day
+//     request, total_days < 1) does not: the table does not say which half.
+//
+// ONCE PER RUN, VIA THE LEDGER YOU ALREADY HAVE: the claim is keyed on the
+// first shift's (assignment, coach). A run counts as reminded when the ledger
+// holds a claim for that coach on ANY of its shifts, so:
+//   - a shift added to a reminded run, later OR earlier than its first shift,
+//     does not re-remind (the shift_adjusted push has told the coach);
+//   - a first shift SWAPPED AWAY after the reminder went still marks the run
+//     reminded for the giver: the row still exists (now the taker's), so it
+//     stands in the giver's day as a "ghost" (buildShiftRuns). The taker is
+//     reminded for their own run.
+//   - ACCEPTED, NOT HANDLED: a first shift REMOVED after the reminder went. A
+//     manager unassign is a hard DELETE (src/lib/shift-unassign.js), and the
+//     ledger row records no date, times or run, so nothing is left to mark the
+//     rest of the run as reminded: it is reminded ONCE more, keyed on its new
+//     first shift (the coach's day now starts at a different time, so the
+//     extra reminder carries the corrected start). Closing this would need a
+//     schema change (a run/date column on the ledger). Pinned by a test.
 //
 // WHEN IT IS DUE: from its fire time onwards, until 30 minutes before the
 // shift starts. There is deliberately NO upper "late window" like the task /
@@ -341,7 +369,8 @@ const ownLedgerRow = (query, s) =>
 
 /**
  * The cron arm. Reads today's + tomorrow's PUBLISHED live shifts at every
- * location, decides what is due, and sends each reminder once.
+ * location (whole dates, so every run is complete), decides which RUNS are
+ * due, and sends each run's reminder once.
  *
  * CLAIM BEFORE SEND, unlike the task and booking arms (send, then ledger).
  * Their late window is 15 minutes, so an unwritable ledger costs three

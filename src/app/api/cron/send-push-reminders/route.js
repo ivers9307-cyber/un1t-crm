@@ -22,8 +22,9 @@
 //   - Bookings (status='confirmed', no skip_reminder) → push to all
 //     users with the location's configured booking roles
 //     (default owner/manager/head_coach), category='bookings'.
-//   - Shifts (published, live shift_assignments) → push to the coach,
-//     category='shift_reminder'. See src/lib/shift-reminders.js.
+//   - Shifts (published, live shift_assignments, grouped into runs) → one
+//     push per run to the coach, category='shift_reminder'. See
+//     src/lib/shift-reminders.js.
 //
 // Bookings fan out to a role-set rather than a single staff member
 // because the bookings table has no "assigned coach" column — the
@@ -375,8 +376,9 @@ export async function GET(request) {
   }
 
   // -------------------------- SHIFTS --------------------------
-  // SHIFTREMIND.1 — one reminder per published shift assignment: 20:00 Dublin
-  // the evening before for a start before 08:00, otherwise 2 hours before.
+  // SHIFTREMIND.1 — one reminder per RUN of a coach's published shifts (shifts
+  // no more than 2 hours apart): 2 hours before the run's first start, or
+  // 20:00 the evening before when that would be before 07:00 (a start before 09:00).
   // The rule, the ledger use and the failure posture live in
   // src/lib/shift-reminders.js. Isolated like the two blocks above: a shift
   // failure must never cost a task or booking reminder, or the heartbeat.
