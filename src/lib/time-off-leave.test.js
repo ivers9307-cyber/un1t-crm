@@ -7,9 +7,9 @@ const { logWarn } = await import('@/lib/log')
 import {
   leaveScopeOrFilter, canDecideTimeOff, timeOffApproverIdsFrom, entitlementDays,
   clashWindow, bucketClashCounts, getHolidayAllowance, ensureHolidayAllowanceRow,
-  getNonWorkingDates,
+  getNonWorkingDates, findLeaveClashes, decidingLocationIds,
 } from './time-off-leave.js'
-import { fakeDb, queriesOf } from './time-off.test-helpers.js'
+import { fakeDb, queriesOf, resolveLocations, scopedAssignments, locationScopeOf } from './time-off.test-helpers.js'
 
 describe('leaveScopeOrFilter', () => {
   it('filed at the studio OR taken by one of its members, deduped', () => {
@@ -124,6 +124,104 @@ describe('clashes', () => {
       { profile_id: 'p2', status: 'confirmed', shift_blocks: { block_date: '2026-06-01' } },
     ]
     expect(bucketClashCounts(requests, shifts, '2026-05-01')).toEqual({ r1: 1, r2: 1 })
+  })
+})
+
+// ORGSCOPE.1 — nothing keeps a person inside one organisation, and a clash
+// row carries the other shift's name, times and studio. "Any studio" must mean
+// "any studio of the organisation the decider is acting in".
+describe('findLeaveClashes — organisation boundary', () => {
+  // loc-a1 + loc-a2 share org-a; loc-b1 is another organisation's studio.
+  const ORGS = { 'loc-a1': 'org-a', 'loc-a2': 'org-a', 'loc-b1': 'org-b' }
+  const shift = (id, location_id, name) => ({
+    id, profile_id: 'p1', block_id: `b-${id}`, status: 'scheduled',
+    shift_blocks: {
+      id: `b-${id}`, block_date: '2026-06-02', start_time: '09:00', end_time: '10:00', location_id,
+      rosters: { status: 'published' }, shift_templates: { name }, locations: { name: `Studio ${location_id}` },
+    },
+  })
+  const SHIFTS = [shift('s1', 'loc-a1', 'Morning'), shift('s2', 'loc-a2', 'Lunch'), shift('s3', 'loc-b1', 'Other org shift')]
+  const REQUEST = { id: 'r1', profile_id: 'p1', location_id: 'loc-a1', start_date: '2026-06-01', end_date: '2026-06-03' }
+
+  // The fakes honour the location filter the way PostgREST would: no filter =
+  // every row, which is exactly the leak.
+  function db({ locationsErr = null } = {}) {
+    return fakeDb((q) => {
+      if (q.table === 'locations') return locationsErr ? { data: null, error: locationsErr } : resolveLocations(q, ORGS)
+      if (q.table === 'shift_assignments') return scopedAssignments(q, SHIFTS)
+      throw new Error(`unexpected table ${q.table}`)
+    })
+  }
+  const scopeOf = (d) => locationScopeOf(queriesOf(d, 'shift_assignments')[0])
+
+  beforeEach(() => logWarn.mockClear())
+
+  it('a shift at a studio in a DIFFERENT organisation is not a clash', async () => {
+    const { clashes, error } = await findLeaveClashes(db(), REQUEST, '2026-05-01')
+    expect(error).toBeNull()
+    expect(clashes.map((c) => c.id)).toEqual(['s1', 's2'])
+    expect(clashes.map((c) => c.template_name)).not.toContain('Other org shift')
+  })
+
+  it('a studio with no siblings reads that studio only: no cross-studio read at all', async () => {
+    const d = db()
+    const { clashes } = await findLeaveClashes(d, { ...REQUEST, location_id: 'loc-b1' }, '2026-05-01')
+    expect(scopeOf(d)).toEqual(['loc-b1'])
+    expect(queriesOf(d, 'shift_assignments')).toHaveLength(1)
+    expect(clashes.map((c) => c.id)).toEqual(['s3'])
+  })
+
+  it('scopes from the studios the DECIDER acts at, not from where the leave was filed', async () => {
+    // Filed at org-a, decided by someone entitled only at the person's org-b
+    // studio: they see org-b's shift and none of org-a's.
+    const { clashes } = await findLeaveClashes(db(), REQUEST, '2026-05-01', { scopeLocationIds: ['loc-b1'] })
+    expect(clashes.map((c) => c.id)).toEqual(['s3'])
+  })
+
+  it('several deciding studios widen the scope to each of their organisations', async () => {
+    const { clashes } = await findLeaveClashes(db(), REQUEST, '2026-05-01', { scopeLocationIds: ['loc-a2', 'loc-b1'] })
+    expect(clashes.map((c) => c.id).sort()).toEqual(['s1', 's2', 's3'])
+  })
+
+  it('fails soft: unreadable siblings narrow the check to the deciding studio, never widen it and never error', async () => {
+    const d = db({ locationsErr: { message: 'down' } })
+    const { clashes, error } = await findLeaveClashes(d, REQUEST, '2026-05-01')
+    expect(error).toBeNull()
+    expect(scopeOf(d)).toEqual(['loc-a1'])
+    expect(clashes.map((c) => c.id)).toEqual(['s1'])
+    expect(logWarn).toHaveBeenCalled()
+  })
+
+  it('a decider with NO deciding studio sees nothing: an empty scope never falls back to the filed-at studio', async () => {
+    const d = db()
+    const { clashes } = await findLeaveClashes(d, REQUEST, '2026-05-01', { scopeLocationIds: [] })
+    expect(clashes).toEqual([])
+    expect(queriesOf(d, 'shift_assignments')).toHaveLength(0)
+  })
+
+  it('no studio to scope from: no assignments are read', async () => {
+    const d = db()
+    const { clashes, error } = await findLeaveClashes(d, { ...REQUEST, location_id: null }, '2026-05-01')
+    expect(clashes).toEqual([])
+    expect(error).toBeNull()
+    expect(queriesOf(d, 'shift_assignments')).toHaveLength(0)
+    expect(logWarn).toHaveBeenCalled()
+  })
+})
+
+describe('decidingLocationIds', () => {
+  const hc = (locs) => ({
+    id: 'u', role: 'head_coach', profileRole: 'staff',
+    locations: locs.map((id) => ({ id, role: 'head_coach', features: {} })),
+    assignmentsByLocation: Object.fromEntries(locs.map((id) => [id, { role: 'head_coach', permissions: {} }])),
+  })
+  it('only the candidate studios where the caller holds time-off approval', () => {
+    expect(decidingLocationIds(hc(['l2', 'l9']), 'l1', ['l1', 'l2'])).toEqual(['l2'])
+    expect(decidingLocationIds(hc(['l9']), 'l1', ['l1', 'l2'])).toEqual([])
+  })
+  it('master: every candidate; nobody: none', () => {
+    expect(decidingLocationIds({ profileRole: 'master' }, 'l1', ['l1', 'l2'])).toEqual(['l1', 'l2'])
+    expect(decidingLocationIds(null, 'l1', ['l2'])).toEqual([])
   })
 })
 

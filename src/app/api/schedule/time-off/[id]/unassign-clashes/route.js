@@ -24,7 +24,7 @@ import { getCurrentUser, hasRoleAtLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
 import { dublinTodayStr } from '@/lib/dublin-time'
-import { canDecideTimeOff, getProfileLocationIds, findLeaveClashes } from '@/lib/time-off-leave'
+import { canDecideTimeOff, decidingLocationIds, getProfileLocationIds, findLeaveClashes } from '@/lib/time-off-leave'
 import { unassignShiftAssignments } from '@/lib/shift-unassign'
 
 const UnassignSchema = z.object({
@@ -60,7 +60,10 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: 'Only approved leave can clear the roster' }, { status: 409 })
   }
 
-  const { clashes, error: clashError } = await findLeaveClashes(db, leave, dublinTodayStr())
+  // ORGSCOPE.1 — the same organisation-bounded list the approver was shown.
+  const { clashes, error: clashError } = await findLeaveClashes(db, leave, dublinTodayStr(), {
+    scopeLocationIds: decidingLocationIds(user, leave.location_id, requesterLocations),
+  })
   if (clashError) return NextResponse.json({ success: false, error: clashError.message }, { status: 500 })
 
   const wanted = assignment_ids ? new Set(assignment_ids) : null

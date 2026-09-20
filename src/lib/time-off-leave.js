@@ -13,10 +13,11 @@
 //     holiday has created one — the person's contract entitlement
 //     (profile_compensation.annual_leave_entitlement, mig 152), 20 only when
 //     that is null.
-//   • Shift clashes: live assignments of the requester, at ANY studio, on a
-//     day the leave covers, from today on. Past shifts are history (worked or
-//     not, payroll has already read them), so they are neither counted nor
-//     offered for unassigning.
+//   • Shift clashes: live assignments of the requester, at any studio OF THE
+//     ORGANISATION(S) THE DECIDER ACTS IN (ORGSCOPE.1), on a day the leave
+//     covers, from today on. Past shifts are history (worked or not, payroll
+//     has already read them), so they are neither counted nor offered for
+//     unassigning.
 
 import {
   resolvePermission,
@@ -29,6 +30,7 @@ import { isLiveAssignment } from '@/lib/roster'
 import { nonWorkingDateSet } from '@/lib/time-off-days'
 import { uncoveredHolidayYears } from '@/lib/bank-holidays'
 import { logWarn } from '@/lib/log'
+import { siblingLocationIds } from '@/lib/sibling-locations'
 
 export const TIME_OFF_APPROVE_PERMISSION = APPROVAL_CATEGORY_PERMISSION.time_off
 export const DEFAULT_LEAVE_ENTITLEMENT = 20
@@ -87,6 +89,21 @@ export function canDecideTimeOff(user, filedLocationId, requesterLocationIds = [
   const mine = new Set((user.locations || []).map((l) => l.id))
   const candidates = [...new Set([filedLocationId, ...(requesterLocationIds || [])].filter(Boolean))]
   return candidates.some((id) => mine.has(id) && hasPermissionForLocation(user, id, TIME_OFF_APPROVE_PERMISSION))
+}
+
+/**
+ * ORGSCOPE.1 — the studios this user decides the request FROM: the candidates
+ * of canDecideTimeOff where they actually hold the permission (master: every
+ * candidate). findLeaveClashes scopes to these studios' organisations, so a
+ * decider entitled through the person's studio in organisation B is never
+ * shown organisation A's roster just because the leave was filed there. Pure.
+ */
+export function decidingLocationIds(user, filedLocationId, requesterLocationIds = []) {
+  if (!user) return []
+  const candidates = [...new Set([filedLocationId, ...(requesterLocationIds || [])].filter(Boolean))]
+  if (user.profileRole === 'master') return candidates
+  const mine = new Set((user.locations || []).map((l) => l.id))
+  return candidates.filter((id) => mine.has(id) && hasPermissionForLocation(user, id, TIME_OFF_APPROVE_PERMISSION))
 }
 
 /**
@@ -312,13 +329,16 @@ function flattenAssignment(a) {
   }
 }
 
-async function readAssignmentsInRange(db, profileIds, lo, hi, columns) {
+async function readAssignmentsInRange(db, profileIds, lo, hi, columns, locationIds = null) {
   const rows = []
   for (let from = 0; ; from += PAGE) {
-    const { data, error } = await db
+    let q = db
       .from('shift_assignments')
       .select(columns)
       .in('profile_id', profileIds)
+    // ORGSCOPE.1 — a caller that SHOWS the rows passes the studios it may show.
+    if (locationIds) q = q.in('shift_blocks.location_id', locationIds)
+    const { data, error } = await q
       .gte('shift_blocks.block_date', lo)
       .lte('shift_blocks.block_date', hi)
       .order('id', { ascending: true })
@@ -339,19 +359,50 @@ export function clashWindow(request, todayIso) {
 
 /**
  * Live shifts the requester is rostered on during the leave, from today on,
- * at any studio.
+ * at the deciding studios and their organisations' other studios.
+ *
+ * ORGSCOPE.1 — a clash row carries the shift's name, times and studio, and
+ * nothing keeps a person inside one organisation, so "any studio" is bounded
+ * by organisation. `scopeLocationIds` is where the decider acts from
+ * (decidingLocationIds); it defaults to the studio the leave was filed at,
+ * which is right whenever that is where the caller was authorised.
+ *
+ * FAILS SOFT, and only ever narrower: unreadable siblings leave the deciding
+ * studios themselves (logged), never an open read and never an error that
+ * would cost the approver the clashes at their own studio.
  */
-export async function findLeaveClashes(db, request, todayIso) {
+export async function findLeaveClashes(db, request, todayIso, { scopeLocationIds } = {}) {
   const win = clashWindow(request, todayIso)
   if (!win) return { clashes: [], error: null }
+
+  // An explicit empty scope means "this decider acts from nowhere": nothing is
+  // read. Only an OMITTED scope defaults to the filed-at studio.
+  const anchors = [...new Set((scopeLocationIds === undefined ? [request.location_id] : scopeLocationIds || []).filter(Boolean))]
+  if (anchors.length === 0) {
+    logWarn('time-off', 'no studio to scope the leave clash check from; no clashes read', { requestId: request.id })
+    return { clashes: [], error: null }
+  }
+  const scope = new Set(anchors)
+  for (const anchor of anchors) {
+    const { ids, error: sibErr } = await siblingLocationIds(db, anchor)
+    if (sibErr) {
+      logWarn('time-off', 'sibling studios unreadable; leave clash check is the deciding studio only', { requestId: request.id, locationId: anchor, err: sibErr.message })
+      continue
+    }
+    for (const id of ids) scope.add(id)
+  }
+
   const { rows, error } = await readAssignmentsInRange(
     db, [request.profile_id], win.lo, win.hi,
     'id, profile_id, block_id, status, shift_blocks!inner(id, block_date, start_time, end_time, location_id, rosters:roster_id(status), shift_templates(name), locations(name))',
+    [...scope],
   )
   if (error) return { clashes: [], error }
   const clashes = rows
     .filter(isLiveAssignment)
     .map(flattenAssignment)
+    // The query filter is the boundary; re-checked here at no cost.
+    .filter((c) => scope.has(c.location_id))
     .filter((c) => c.block_date >= win.lo && c.block_date <= win.hi)
     .sort((a, b) => (a.block_date + (a.start_time || '')).localeCompare(b.block_date + (b.start_time || '')))
   return { clashes, error: null }
