@@ -16,12 +16,20 @@ const { fetchApiShiftRows } = await import('./roster-read')
 const { notifyUsers } = await import('./notify')
 const { logWarn, logError } = await import('./log')
 const {
-  NO_REMINDER_BEFORE, DAY_LEAD_MINUTES,
+  NO_REMINDER_BEFORE, NO_REMINDER_FROM, DAY_LEAD_MINUTES, isInSendWindow,
   reminderPlanFor, isReminderDue, dueShiftReminders, buildShiftRuns, leaveKeysFor, leaveKey, reminderKey,
   coRosteredFirstNames, buildShiftReminderMessage, BODY_MAX_CHARS, runShiftReminders,
 } = await import('./shift-reminders')
 
 const at = (iso) => Date.parse(iso)
+// Dublin wall clock -> epoch ms, by search (deliberately NOT the module's own localToUtc).
+function localMs(date, hhmmStr) {
+  const fmt = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Dublin', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+  for (let ms = Date.parse(`${date}T00:00:00Z`) - 3 * 3600e3; ms < Date.parse(`${date}T00:00:00Z`) + 27 * 3600e3; ms += 60e3) {
+    if (fmt.format(ms) === `${date} ${hhmmStr}`) return ms
+  }
+  throw new Error(`no such wall-clock time: ${date} ${hhmmStr}`)
+}
 const iso = (ms) => new Date(ms).toISOString()
 
 // A fetchApiShiftRows() row. Fictional people only: the repo is public.
@@ -139,15 +147,22 @@ describe('dueShiftReminders — the timing table', () => {
     ['06:00 shift at 19:59 the evening before -> not yet', shift(), '2026-09-21T18:59:00Z', []],
     ['06:00 shift at 20:00 the evening before -> due', shift(), '2026-09-21T19:00:00Z', ['evening_before']],
     ['06:00 shift at 20:14 (two missed ticks) -> still due', shift(), '2026-09-21T19:14:00Z', ['evening_before']],
-    ['06:00 shift published at 23:30 -> due on the next tick', shift(), '2026-09-21T22:30:00Z', ['evening_before']],
-    ['06:00 shift at 05:30 (exactly 30 min notice) -> due', shift(), '2026-09-22T04:30:00Z', ['evening_before']],
+    // QUIET HOURS: nothing is ever due outside [07:00, 22:00) on the wall clock.
+    ['06:00 shift at 21:55 (last tick of the evening) -> still due', shift(), '2026-09-21T20:55:00Z', ['evening_before']],
+    ['06:00 shift at 22:00 -> quiet hours, NOT due', shift(), '2026-09-21T21:00:00Z', []],
+    ['06:00 shift published at 23:30 -> NOT due at 23:35', shift(), '2026-09-21T22:35:00Z', []],
+    ['06:00 shift, still unsent, at 05:30 (30 min notice) -> NOT due: before 07:00', shift(), '2026-09-22T04:30:00Z', []],
+    ['07:29 shift, unsent overnight, at 07:00 -> under 30 min, never', shift({ shift_templates: { name: 'T', start_time: '07:29:00', end_time: '13:00:00' } }), '2026-09-22T06:00:00Z', []],
+    ['07:30 shift, unsent overnight, at 06:59 -> quiet hours', shift({ shift_templates: { name: 'T', start_time: '07:30:00', end_time: '13:00:00' } }), '2026-09-22T05:59:00Z', []],
+    ['07:30 shift, unsent overnight, at 07:00 -> due (exactly 30 min left)', shift({ shift_templates: { name: 'T', start_time: '07:30:00', end_time: '13:00:00' } }), '2026-09-22T06:00:00Z', ['evening_before']],
     ['06:00 shift at 05:31 (29 min notice) -> never fires late', shift(), '2026-09-22T04:31:00Z', []],
     ['06:00 shift after it has started -> nothing', shift(), '2026-09-22T05:10:00Z', []],
     ['10:00 shift at 07:59 -> not yet', midShift(), '2026-09-22T06:59:00Z', []],
     ['10:00 shift at 08:00 (T-2h) -> due', midShift(), '2026-09-22T07:00:00Z', ['two_hours']],
     ['10:00 shift created at 09:30 (30 min notice) -> due', midShift(), '2026-09-22T08:30:00Z', ['two_hours']],
     ['10:00 shift created at 09:31 (29 min notice) -> nothing', midShift(), '2026-09-22T08:31:00Z', []],
-    ['08:30 shift at 06:30 (where the old rule fired) -> already due since 20:00 the evening before', shift({ shift_templates: { name: 'T', start_time: '08:30:00', end_time: '13:00:00' } }), '2026-09-22T05:30:00Z', ['evening_before']],
+    ['08:30 shift, unsent overnight, at 06:30 (where the old rule fired) -> quiet hours', shift({ shift_templates: { name: 'T', start_time: '08:30:00', end_time: '13:00:00' } }), '2026-09-22T05:30:00Z', []],
+    ['08:30 shift, unsent overnight, at 07:00 -> due', shift({ shift_templates: { name: 'T', start_time: '08:30:00', end_time: '13:00:00' } }), '2026-09-22T06:00:00Z', ['evening_before']],
     ['08:30 shift at 19:59 the evening before -> not yet', shift({ shift_templates: { name: 'T', start_time: '08:30:00', end_time: '13:00:00' } }), '2026-09-21T18:59:00Z', []],
     ['08:30 shift at 20:00 the evening before -> due', shift({ shift_templates: { name: 'T', start_time: '08:30:00', end_time: '13:00:00' } }), '2026-09-21T19:00:00Z', ['evening_before']],
     ['09:00 shift at 06:59 -> not yet', shift({ shift_templates: { name: 'T', start_time: '09:00:00', end_time: '13:00:00' } }), '2026-09-22T05:59:00Z', []],
@@ -207,6 +222,18 @@ describe('dueShiftReminders — the timing table', () => {
     const tzByLocation = { 'loc-ny': 'America/New_York' }
     expect(dueShiftReminders([s], { nowMs: at('2026-09-21T23:59:00Z'), tzByLocation })).toEqual([])
     expect(dueShiftReminders([s], { nowMs: at('2026-09-22T00:00:00Z'), tzByLocation })).toHaveLength(1)
+  })
+
+  it('the send window is two named bounds, [07:00, 22:00), read on the LOCATION wall clock', () => {
+    expect([NO_REMINDER_BEFORE, NO_REMINDER_FROM]).toEqual(['07:00', '22:00'])
+    expect(isInSendWindow(at('2026-09-22T05:59:59Z'))).toBe(false) // 06:59:59 Dublin (summer)
+    expect(isInSendWindow(at('2026-09-22T06:00:00Z'))).toBe(true)  // 07:00
+    expect(isInSendWindow(at('2026-09-22T20:59:00Z'))).toBe(true)  // 21:59
+    expect(isInSendWindow(at('2026-09-22T21:00:00Z'))).toBe(false) // 22:00
+    expect(isInSendWindow(at('2026-01-15T07:00:00Z'))).toBe(true)  // 07:00 Dublin (winter)
+    expect(isInSendWindow(at('2026-01-15T06:59:00Z'))).toBe(false)
+    expect(isInSendWindow(at('2026-09-22T00:00:00Z'))).toBe(false) // 01:00 Dublin; midnight must not read as "24"
+    expect(isInSendWindow(at('2026-09-22T00:00:00Z'), 'America/New_York')).toBe(true) // 20:00 in New York
   })
 
   it('isReminderDue(null) is false, not a throw', () => {
@@ -350,31 +377,60 @@ describe('dueShiftReminders — one reminder per run', () => {
     const sentKeys = new Set(first.map((d) => reminderKey(d.shift.id, d.shift.profile_id)))
     expect(dueShiftReminders([r1(), r2(), r3()], { nowMs: EVENING_BEFORE + 5 * 60e3, sentKeys })).toEqual([])
   })
+})
 
-  it('(e) a 5-minute tick for 3 days over BOTH DST weekends: exactly one reminder per run, never before 07:00', () => {
-    const wall = (ms) => new Intl.DateTimeFormat('en-GB', {
-      timeZone: 'Europe/Dublin', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
-    }).format(ms)
-    for (const date of ['2026-03-29', '2026-10-25']) {
-      const dayBefore = date === '2026-03-29' ? '28' : '24'
-      const day = [r1, r2, r3, r4].map((f) => f({ shift_date: date }))
-      const other = tplShift('o1', 'Mid', '10:00', '14:00', { shift_date: date, profile_id: 'coach-2' })
-      const sentKeys = new Set()
-      const fired = []
-      const t0 = Date.parse(`${date}T00:00:00Z`) - 36 * 3600e3
-      for (let now = t0; now < t0 + 72 * 3600e3; now += 5 * 60e3) {
-        for (const d of dueShiftReminders([...day, other], { nowMs: now, sentKeys })) {
-          fired.push(`${d.shift.profile_id}:${d.shift.id}@${wall(now)}`)
-          sentKeys.add(reminderKey(d.shift.id, d.shift.profile_id))
-        }
+// (e) DST: the 5-minute tick simulation over both change weekends, multi-shift
+// runs included, is the sweep below.
+describe('QUIET HOURS SWEEP — every 5-minute tick across 48 hours', () => {
+  const STARTS = ['00:15', '01:30', '05:45', '06:00', '08:59', '09:00', '12:00', '17:45', '23:00']
+  const wallOf = (ms) => new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Dublin', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(ms)
+  const dayOf = (ms) => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Dublin' }).format(ms)
+  const fixture = (date) => [
+    // one lone shift per coach (01:30 happens TWICE on the fall-back night) ...
+    ...STARTS.map((start, i) => tplShift(`s${i}`, `S ${start}`, start, '23:59', { shift_date: date, profile_id: `c${i}` })),
+    // ... and one coach with a three-shift morning run plus an evening run.
+    ...[r1, r2, r3, r4].map((f) => f({ shift_date: date, profile_id: 'c-run' })),
+  ]
+
+  // Ticks from 00:00 UTC the day before to 00:00 UTC the day after: 48h, 576 ticks.
+  function sweep(date, visibleFromMs) {
+    const rows = fixture(date)
+    const sentKeys = new Set()
+    const fired = {}
+    const t0 = Date.parse(`${addDays(date, -1)}T00:00:00Z`)
+    let ticks = 0
+    for (let now = t0; now < t0 + 48 * 3600e3; now += 5 * 60e3) {
+      ticks++
+      const due = dueShiftReminders(now >= visibleFromMs ? rows : [], { nowMs: now, sentKeys })
+      const wall = wallOf(now)
+      if (due.length) expect(wall >= '07:00' && wall < '22:00', `${date}: due at ${wall} Dublin`).toBe(true)
+      for (const d of due) {
+        const key = reminderKey(d.shift.id, d.shift.profile_id)
+        expect(sentKeys.has(key), `${key} fired twice`).toBe(false)
+        sentKeys.add(key)
+        fired[d.shift.id] = `${dayOf(now) === date ? 'D' : 'D-1'} ${wall}`
       }
-      expect(fired, date).toEqual([
-        `coach-1:r1@${dayBefore}, 20:00`,            // morning run, the evening before
-        `coach-2:o1@${date.slice(8)}, 08:00`,        // a lone 10:00 shift, 2 hours before
-        `coach-1:r4@${date.slice(8)}, 15:45`,        // evening run, 2 hours before
-      ])
     }
-  })
+    expect(ticks).toBe(576)
+    return fired
+  }
+  const addDays = (d, n) => new Date(Date.parse(`${d}T12:00:00Z`) + n * 86400e3).toISOString().slice(0, 10)
+
+  it.each(['2026-09-22', '2026-03-29', '2026-10-25'])('%s, everything published in good time: every run exactly once, at its planned time, never in quiet hours', (date) => {
+    expect(sweep(date, 0)).toEqual({
+      s0: 'D-1 20:00', s1: 'D-1 20:00', s2: 'D-1 20:00', s3: 'D-1 20:00', s4: 'D-1 20:00', // starts before 09:00
+      s5: 'D 07:00', s6: 'D 10:00', s7: 'D 15:45', s8: 'D 21:00',
+      r1: 'D-1 20:00', r4: 'D 15:45', // the run coach: once for the morning run, once for the evening
+    })
+  }, 60000)
+
+  it.each(['2026-09-22', '2026-03-29', '2026-10-25'])('%s, published at 22:05 the evening before: starts before 07:30 get NOTHING, the rest wait for 07:00', (date) => {
+    const publishedAt = localMs(addDays(date, -1), '22:05')
+    expect(sweep(date, publishedAt)).toEqual({
+      s4: 'D 07:00', s5: 'D 07:00', s6: 'D 10:00', s7: 'D 15:45', s8: 'D 21:00',
+      r4: 'D 15:45', // the morning run starts 05:45: its chance went; r2/r3 never carry one
+    })
+  }, 60000)
 })
 
 describe('leaveKeysFor', () => {
@@ -560,6 +616,25 @@ describe('runShiftReminders', () => {
     notifyUsers.mockReset().mockResolvedValue({ ...SENT })
     logWarn.mockReset()
     logError.mockReset()
+  })
+
+  it.each([
+    ['22:00', '2026-09-21T21:00:00Z'],
+    ['23:35', '2026-09-21T22:35:00Z'],
+    ['03:00', '2026-09-22T02:00:00Z'],
+    ['06:55', '2026-09-22T05:55:00Z'],
+  ])('QUIET HOURS (%s Dublin): returns before ANY database read, and says so', async (_wall, now) => {
+    const db = makeDb()
+    const from = vi.spyOn(db, 'from')
+    const summary = await runShiftReminders(db, { nowMs: at(now), locations: LOCATIONS })
+    expect(fetchApiShiftRows).not.toHaveBeenCalled()
+    expect(from).not.toHaveBeenCalled()
+    expect(notifyUsers).not.toHaveBeenCalled()
+    expect(summary).toMatchObject({ quiet_hours: 1, shift_candidates: 0, shift_pushed: 0 })
+  })
+
+  it('inside the send window quiet_hours is 0', async () => {
+    expect((await runShiftReminders(makeDb(), { nowMs: NOW, locations: LOCATIONS })).quiet_hours).toBe(0)
   })
 
   it('reads PUBLISHED shifts for the Dublin today + tomorrow at every location', async () => {

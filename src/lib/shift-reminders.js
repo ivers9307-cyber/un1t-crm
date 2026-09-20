@@ -9,12 +9,25 @@
 //     05:45-08:00 + 08:00-09:00 + 09:15-10:30 is one run and one push; a split
 //     day (morning + evening) is two. Only the run's FIRST shift carries the
 //     reminder, timed by that shift's start; the message describes the run.
-//   - NOBODY IS REMINDED BEFORE 07:00 (location time). A reminder normally goes
-//     2 hours before the start (DAY_LEAD_MINUTES). If that would land before
-//     07:00 (NO_REMINDER_BEFORE), i.e. any start before 09:00 (a 2-hour lead on
-//     a 06:00 shift is a 04:00 push, on an 08:30 shift a 06:30 one), it goes at
-//     20:00 the evening before instead. A 09:00 start is reminded at 07:00,
-//     the earliest push of any day.
+//   - QUIET HOURS, A HARD RULE: a reminder is only ever SENT while the wall
+//     clock (location time, Europe/Dublin today) is inside [07:00, 22:00):
+//     NO_REMINDER_BEFORE / NO_REMINDER_FROM. Outside that band nothing is due,
+//     full stop, whatever the reason the reminder is late (published at 23:30,
+//     a send failing and retrying, a ledger outage ending, mig 619 applied at
+//     night). It is tested on NOW, in the pure function, and runShiftReminders
+//     returns before any database read.
+//   - PLANNED TIME: 2 hours before the start (DAY_LEAD_MINUTES). If that would
+//     land before 07:00, i.e. any start before 09:00 (a 2-hour lead on a 06:00
+//     shift is a 04:00 push, on an 08:30 shift a 06:30 one), it is planned for
+//     20:00 the evening before instead. A 09:00 start is reminded at 07:00.
+//     Every planned time is inside the band (the latest, for a 23:59 start, is
+//     21:59).
+//   - ACCEPTED CONSEQUENCE of quiet hours: a run whose reminder could not be
+//     sent before 22:00 (published or assigned late in the evening, or delivery
+//     failing until 22:00) gets NO reminder if it starts before 07:30 the next
+//     morning; the assign / publish push has already told that coach. A run
+//     starting 07:30 or later is still reminded from 07:00, as long as 30+
+//     minutes remain.
 //   - Whole-day approved leave skips the coach's day. A HALF day (single-day
 //     request, total_days < 1) does not: the table does not say which half.
 //
@@ -35,8 +48,8 @@
 //     extra reminder carries the corrected start). Closing this would need a
 //     schema change (a run/date column on the ledger). Pinned by a test.
 //
-// WHEN IT IS DUE: from its fire time onwards, until 30 minutes before the
-// shift starts. There is deliberately NO upper "late window" like the task /
+// WHEN IT IS DUE: outside quiet hours, from its planned time onwards, until 30
+// minutes before the run starts. There is deliberately NO upper "late window" like the task /
 // booking arms have (15 min): a shift that is published, assigned or swapped
 // AFTER its fire time has passed still gets its one reminder on the next
 // 5-minute tick, and missed cron ticks catch up by themselves. Under 30
@@ -55,7 +68,10 @@ import { fetchApiShiftRows } from './roster-read'
 import { notifyUsers } from './notify'
 import { logWarn, logError } from './log'
 
-export const NO_REMINDER_BEFORE = '07:00' // no push earlier than this, location wall-clock
+// QUIET HOURS: a reminder may only be SENT while the location's wall clock is
+// inside [NO_REMINDER_BEFORE, NO_REMINDER_FROM). Outside it nothing is due.
+export const NO_REMINDER_BEFORE = '07:00'
+export const NO_REMINDER_FROM = '22:00'
 export const EVENING_REMINDER_TIME = '20:00'
 export const DAY_LEAD_MINUTES = 120
 export const MIN_NOTICE_MINUTES = 30
@@ -98,9 +114,32 @@ export function reminderPlanFor(shift, tz = DEFAULT_TZ) {
   return { kind: 'two_hours', startMs, fireAtMs: startMs - DAY_LEAD_MINUTES * MINUTE_MS, leadMinutes: DAY_LEAD_MINUTES }
 }
 
-/** Due = the fire time has arrived AND the shift is still >= 30 minutes away. */
-export function isReminderDue(plan, nowMs) {
+const wallClockFormatters = new Map()
+function wallClockHHMM(ms, tz) {
+  if (!wallClockFormatters.has(tz)) {
+    // hourCycle h23: midnight is "00", never "24".
+    wallClockFormatters.set(tz, new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }))
+  }
+  const parts = wallClockFormatters.get(tz).formatToParts(new Date(ms))
+  const get = (type) => parts.find((p) => p.type === type)?.value
+  return `${get('hour')}:${get('minute')}`
+}
+
+/** QUIET HOURS. True only while the wall clock at `tz` is inside [07:00, 22:00). */
+export function isInSendWindow(nowMs, tz = DEFAULT_TZ) {
+  const wall = wallClockHHMM(nowMs, tz)
+  return wall >= NO_REMINDER_BEFORE && wall < NO_REMINDER_FROM
+}
+
+/**
+ * Due = it is not quiet hours, the fire time has arrived, AND the shift is
+ * still >= 30 minutes away. The quiet-hours test is on NOW, not on the planned
+ * fire time: a planned time is always inside the window, but a catch-up (late
+ * publish, a failed send retrying, a ledger outage ending) can land anywhere.
+ */
+export function isReminderDue(plan, nowMs, tz = DEFAULT_TZ) {
   if (!plan) return false
+  if (!isInSendWindow(nowMs, tz)) return false
   return nowMs >= plan.fireAtMs && plan.startMs - nowMs >= MIN_NOTICE_MINUTES * MINUTE_MS
 }
 
@@ -248,10 +287,14 @@ export function buildShiftRuns(shifts, { tzByLocation = {}, onLeave = new Set(),
  */
 export function dueShiftReminders(shifts, { nowMs, tzByLocation = {}, onLeave = new Set(), sentKeys = new Set() } = {}) {
   const due = []
+  // Quiet hours at every location in play: nothing can be due, skip the work.
+  const zones = new Set((shifts || []).map((sh) => tzByLocation[sh?.location_id] || DEFAULT_TZ))
+  if (![...zones].some((tz) => isInSendWindow(nowMs, tz))) return due
   for (const run of buildShiftRuns(shifts, { tzByLocation, onLeave, sentKeys })) {
     if (run.reminded) continue
-    const plan = reminderPlanFor(run.first, tzByLocation[run.first.location_id] || DEFAULT_TZ)
-    if (!isReminderDue(plan, nowMs)) continue
+    const tz = tzByLocation[run.first.location_id] || DEFAULT_TZ
+    const plan = reminderPlanFor(run.first, tz)
+    if (!isReminderDue(plan, nowMs, tz)) continue
     due.push({ shift: run.first, run: run.shifts, runEndMs: run.endMs, ...plan })
   }
   return due
@@ -310,8 +353,8 @@ function latestEndLabel(run) {
  *   "Tomorrow 05:45 to 10:30 at Studio North: Early Morning, Morning 8am, Morning 9:15 · with Bo and Sam"
  *
  * "today"/"tomorrow" is computed from the run's date against the Dublin day of
- * `nowMs`, not from the reminder kind: a catch-up reminder for a 06:00 shift
- * that fires at 05:00 must say "today". Studios are named in the order they
+ * `nowMs`, not from the reminder kind: an evening-before reminder for an 08:30
+ * shift that could not go until 07:00 on the day must say "today". Studios are named in the order they
  * are worked. `coNames` are the colleagues on the FIRST shift only.
  *
  * Kept lock-screen short: colleagues cap at MAX_CO_NAMES, and shift names give
@@ -353,6 +396,7 @@ export function buildShiftReminderMessage({ run, nameByLocation = {}, coNames = 
 
 function emptySummary() {
   return {
+    quiet_hours: 0,
     shift_candidates: 0,
     shift_pushed: 0,
     shift_emailed: 0,
@@ -401,6 +445,14 @@ export async function runShiftReminders(db, { nowMs = Date.now(), locations = []
   const summary = emptySummary()
   const locationIds = locations.map((l) => l.id).filter(Boolean)
   if (locationIds.length === 0) return summary
+
+  // QUIET HOURS — before ANY database read. Outside [07:00, 22:00) nothing can
+  // be due (dueShiftReminders enforces the same rule per run; this is the cheap
+  // exit for the 9 hours a night when the answer is already known).
+  if (!locations.some((l) => isInSendWindow(nowMs, l.timezone || DEFAULT_TZ))) {
+    summary.quiet_hours = 1
+    return summary
+  }
 
   const today = dublinDayStr(nowMs)
   const tomorrow = addDaysISO(today, 1)

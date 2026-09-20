@@ -7,7 +7,8 @@
 -- a SHIFT on any channel. SHIFTREMIND.1 adds a `shift` arm to that cron: one
 -- reminder per RUN of a coach's published shifts (shifts no more than 2 hours
 -- apart), 2 hours before the run's first start, or 20:00 Dublin the evening
--- before when that would be before 07:00. It reuses this ledger:
+-- before when that would be before 07:00; never sent outside 07:00-22:00.
+-- It reuses this ledger:
 --
 --   entity_type       = 'shift'
 --   entity_id         = shift_assignments.id of the run's FIRST shift
