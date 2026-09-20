@@ -4,8 +4,19 @@
 // `effective_status` is the server's (GET /api/schedule/time-off annotates
 // every row, LEAVE.2): a pending request whose last day has passed is
 // 'expired'. Cancel is NOT re-decided here — canCancelTimeOff is the existing
-// rule and the same one the Schedule tab's amber card uses: the caller's own
-// request, RAW status pending. Approved leave cannot be self-cancelled.
+// rule and the same one the Schedule tab's amber card uses: the phone OFFERS
+// Cancel on the caller's own request while its RAW status is pending, and on
+// nothing else.
+//
+// What the server does today (PUT /api/schedule/time-off/[id]): a requester
+// who manages NO studio the request belongs to may only set their own PENDING
+// request to cancelled; anything else is a 403 "You can only cancel your own
+// pending requests". That 403 is skipped for a requester who IS a manager
+// there, so the server alone does not stop a manager's cancel landing on a
+// request that was approved a moment ago. The phone therefore never relies on
+// the server to refuse: it re-reads the list just before sending
+// (stillCancellable), shows the server's own words on a refusal
+// (myLeaveCancelOutcome), and redraws from a fresh read on every outcome.
 
 import { timeOffLeaveLabel, leaveDateRangeLabel } from 'shared/time-off'
 import { canCancelTimeOff } from './schedule-manage'
@@ -28,6 +39,27 @@ export const MY_LEAVE_CANCEL_CONFIRM = {
   message: 'Your request will be withdrawn. You can raise a new one at any time.',
   keep: 'Keep it',
   confirm: 'Cancel request',
+}
+
+export const MY_LEAVE_NO_LONGER_PENDING = {
+  title: 'Already decided',
+  message: 'This request is no longer pending, so it was not cancelled. The list has been refreshed.',
+}
+
+/**
+ * Just before the cancel is sent: is this row STILL the caller's own pending
+ * request in a list read a moment ago? A manager may have decided it while the
+ * screen sat open; then nothing is sent and the row is redrawn as it now is.
+ */
+export function stillCancellable(freshRows, id, profile) {
+  const row = (freshRows || []).find((r) => r && r.id === id)
+  return !!row && canCancelTimeOff(row, profile)
+}
+
+/** What to tell the coach after the cancel PUT. null = it worked; the redrawn list says so. */
+export function myLeaveCancelOutcome(res) {
+  if (res?.success) return null
+  return { title: 'Couldn’t cancel', message: res?.error || 'Unknown error' }
 }
 
 // ONE reading of a row's status, used by the row and by the grouping, so a

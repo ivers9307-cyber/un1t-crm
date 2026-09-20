@@ -12,7 +12,10 @@ import { useRouter, Stack, useFocusEffect } from 'expo-router'
 import { View, Text, Pressable, ScrollView, ActivityIndicator, Alert, RefreshControl } from 'react-native'
 import { useAuth } from '../../../lib/auth-context'
 import { getMyTimeOff, cancelTimeOffRequest } from '../../../lib/schedule-api'
-import { myLeaveSections, MY_LEAVE_EMPTY, MY_LEAVE_CANCEL_CONFIRM } from '../../../lib/my-leave'
+import {
+  myLeaveSections, stillCancellable, myLeaveCancelOutcome,
+  MY_LEAVE_EMPTY, MY_LEAVE_CANCEL_CONFIRM, MY_LEAVE_NO_LONGER_PENDING,
+} from '../../../lib/my-leave'
 import { createInFlightGuard } from '../../../lib/in-flight-guard'
 
 // Status chips: the house recipe, bg-<c>-500/10 + text-<c>-700. Written out as
@@ -34,17 +37,21 @@ export default function MyLeave() {
   const cancelGuard = useRef(null)
   if (cancelGuard.current === null) cancelGuard.current = createInFlightGuard()
 
+  // Resolves the fresh rows, or null when the read failed (the cancel path
+  // needs to tell "not pending any more" from "could not find out").
   const load = useCallback(async () => {
-    if (!profile?.id) { setLoading(false); return }
+    if (!profile?.id) { setLoading(false); return null }
     // No locationId: leave covers the person, so the list is every request of
     // theirs wherever it was filed. profile_id keeps a MANAGER's list to their
     // own rows (the route would otherwise return their whole studio's), and
     // myLeaveSections drops anything that is not the caller's regardless.
     const res = await getMyTimeOff({ profileId: profile.id })
     setLoading(false)
-    if (!res?.success) { setError(res?.error || 'Failed to load your leave'); return }
+    if (!res?.success) { setError(res?.error || 'Failed to load your leave'); return null }
+    const fresh = Array.isArray(res.data) ? res.data : []
     setError(null)
-    setRows(Array.isArray(res.data) ? res.data : [])
+    setRows(fresh)
+    return fresh
   }, [profile?.id])
 
   useFocusEffect(useCallback(() => { load() }, [load]))
@@ -64,10 +71,21 @@ export default function MyLeave() {
           text: MY_LEAVE_CANCEL_CONFIRM.confirm,
           style: 'destructive',
           onPress: () => cancelGuard.current.run(async () => {
+            // Re-read first: a manager may have decided it while this list sat
+            // on screen, and the server does not refuse every such cancel (see
+            // lib/my-leave.js). Not pending any more = nothing is sent; the
+            // fresh read has already redrawn the row as it now is. A failed
+            // re-read (null) sends nothing either; load() has set the banner.
+            const fresh = await load()
+            if (fresh === null) return
+            if (!stillCancellable(fresh, row.id, profile)) {
+              Alert.alert(MY_LEAVE_NO_LONGER_PENDING.title, MY_LEAVE_NO_LONGER_PENDING.message)
+              return
+            }
             const res = await cancelTimeOffRequest(row.id, activeLocation?.id)
-            if (!res?.success) Alert.alert('Couldn’t cancel', res?.error || 'Unknown error')
-            // Refetch either way: the usual failure is "no longer pending" —
-            // a manager decided it while this list sat on screen.
+            const failed = myLeaveCancelOutcome(res)
+            if (failed) Alert.alert(failed.title, failed.message)
+            // Refresh on ANY outcome, so the list is what the server now holds.
             await load()
           }),
         },
@@ -83,7 +101,12 @@ export default function MyLeave() {
         options={{
           title: 'My leave',
           headerLeft: () => (
-            <Pressable onPress={() => router.back()} hitSlop={10}>
+            <Pressable
+              onPress={() => (router.canGoBack() ? router.back() : router.replace('/(tabs)/schedule'))}
+              hitSlop={10}
+              accessibilityRole="button"
+              accessibilityLabel="Close My leave"
+            >
               <Text className="text-base text-un1t-text">Close</Text>
             </Pressable>
           ),
@@ -130,6 +153,8 @@ export default function MyLeave() {
                   <Pressable
                     onPress={() => cancel(r)}
                     hitSlop={8}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${MY_LEAVE_CANCEL_CONFIRM.confirm}: ${r.title}, ${r.range}`}
                     className="self-start mt-3 px-3 py-1.5 rounded-full bg-un1t-surface border border-amber-500/40 active:opacity-70"
                   >
                     <Text className="text-xs font-semibold text-amber-700">{MY_LEAVE_CANCEL_CONFIRM.confirm}</Text>

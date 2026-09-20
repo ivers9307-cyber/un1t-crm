@@ -1,6 +1,9 @@
 // LEAVEPHONE.1 — the My leave list. Pure; the screen only renders it.
 import { describe, it, expect } from 'vitest'
-import { myLeaveRow, myLeaveSections, MY_LEAVE_EMPTY, MY_LEAVE_CANCEL_CONFIRM } from './my-leave'
+import {
+  myLeaveRow, myLeaveSections, MY_LEAVE_EMPTY, MY_LEAVE_CANCEL_CONFIRM,
+  stillCancellable, myLeaveCancelOutcome, MY_LEAVE_NO_LONGER_PENDING,
+} from './my-leave'
 
 const ME = { id: 'me' }
 const row = (id, status, start, extra = {}) => ({
@@ -74,9 +77,35 @@ describe('myLeaveSections', () => {
   })
 })
 
+describe('stillCancellable — re-checked against a FRESH list just before the PUT', () => {
+  it('true only while the row is still the caller\'s own raw-pending request', () => {
+    expect(stillCancellable([row('r1', 'pending', '2026-10-05')], 'r1', ME)).toBe(true)
+    // A manager decided it while the list sat on screen: do not send the cancel.
+    expect(stillCancellable([row('r1', 'approved', '2026-10-05')], 'r1', ME)).toBe(false)
+    expect(stillCancellable([row('r1', 'rejected', '2026-10-05')], 'r1', ME)).toBe(false)
+    expect(stillCancellable([row('r1', 'pending', '2026-10-05', { profile_id: 'other' })], 'r1', ME)).toBe(false)
+    expect(stillCancellable([], 'r1', ME)).toBe(false)
+    expect(stillCancellable(null, 'r1', ME)).toBe(false)
+  })
+})
+
+describe('myLeaveCancelOutcome', () => {
+  it('success says nothing: the redrawn list is the confirmation', () => {
+    expect(myLeaveCancelOutcome({ success: true, data: {} })).toBeNull()
+  })
+  it('a refusal shows the SERVER\'s words', () => {
+    expect(myLeaveCancelOutcome({ success: false, status: 403, error: 'You can only cancel your own pending requests' }))
+      .toEqual({ title: 'Couldn’t cancel', message: 'You can only cancel your own pending requests' })
+  })
+  it('no message, or no answer at all, still says something', () => {
+    expect(myLeaveCancelOutcome({ success: false })).toEqual({ title: 'Couldn’t cancel', message: 'Unknown error' })
+    expect(myLeaveCancelOutcome(undefined)).toEqual({ title: 'Couldn’t cancel', message: 'Unknown error' })
+  })
+})
+
 describe('copy', () => {
   it('is plain and has no em dash', () => {
-    for (const s of [MY_LEAVE_EMPTY, MY_LEAVE_CANCEL_CONFIRM.title, MY_LEAVE_CANCEL_CONFIRM.message, MY_LEAVE_CANCEL_CONFIRM.confirm, MY_LEAVE_CANCEL_CONFIRM.keep]) {
+    for (const s of [MY_LEAVE_EMPTY, MY_LEAVE_NO_LONGER_PENDING.title, MY_LEAVE_NO_LONGER_PENDING.message, MY_LEAVE_CANCEL_CONFIRM.title, MY_LEAVE_CANCEL_CONFIRM.message, MY_LEAVE_CANCEL_CONFIRM.confirm, MY_LEAVE_CANCEL_CONFIRM.keep]) {
       expect(typeof s).toBe('string')
       expect(s).not.toContain('—')
     }
