@@ -42,7 +42,7 @@ export default function MonthCell({ dayNumber, inFocusedMonth, isToday, holiday,
           {dayNumber}
         </span>
         <span className="flex items-center gap-1">
-          <StatusDot status={status} />
+          <StatusDot status={status} compact />
           {assignmentCount > 0 && (
             <span
               data-testid="month-assignment-count"

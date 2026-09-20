@@ -424,7 +424,9 @@ describe('day headers carry the staffing status (ROSTERLOOK.1)', () => {
     const dots = screen.getAllByTestId('status-dot')
     expect(dots).toHaveLength(1) // every fixture sits on BLOCK_DATE
     expect(dots[0].getAttribute('data-tone')).toBe('empty')
-    expect(dots[0].textContent).toMatch(/2 short/)
+    // In words, not only in red: which problem, not just how many.
+    expect(dots[0].querySelector('[data-visible-label]').textContent).toBe('1 no coach')
+    expect(dots[0].querySelector('[data-visible-label-wide]').textContent).toBe('1 no coach · 1 short')
     expect(dots[0].textContent).toMatch(/2 shifts need coaches: 1 with no coach, 1 below the minimum/)
   })
 

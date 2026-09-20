@@ -16,7 +16,7 @@ const LINES = [
   { id: 'b', tone: 'short', text: '6:45 Casey (1 of 2)', title: 'HIIT · 6:45–7:45am · Casey Third · Below minimum: 1 of 2 coaches' },
   { id: 'c', tone: 'empty', text: '5:45pm Needs coach', title: 'Evening · 5:45–6:45pm · No coach is assigned to this shift' },
 ]
-const STATUS = { tone: 'empty', label: '2 short', srLabel: '2 shifts need coaches: 1 with no coach, 1 below the minimum', title: '2 shifts need coaches: 1 with no coach, 1 below the minimum' }
+const STATUS = { tone: 'empty', label: '1 no coach', labelWide: '1 no coach · 1 short', srLabel: '2 shifts need coaches: 1 with no coach, 1 below the minimum', title: '2 shifts need coaches: 1 with no coach, 1 below the minimum' }
 const base = { dayNumber: 22, inFocusedMonth: true, isToday: false, holiday: null, lines: LINES, more: 4, status: STATUS, assignmentCount: 3, timeOffEntry: null }
 
 describe('MonthCell', () => {
@@ -67,7 +67,10 @@ describe('MonthCell', () => {
     const dot = screen.getByTestId('status-dot')
     expect(dot.getAttribute('data-tone')).toBe('empty')
     expect(dot.getAttribute('title')).toBe(STATUS.title)
-    expect(dot.textContent).toContain('2 short')
+    expect(dot.textContent).toContain('1 no coach')
+    // A month cell shares its top row with the date and the count: it never
+    // has room for the pair, at any width.
+    expect(dot.querySelector('[data-visible-label-wide]')).toBeNull()
     expect(dot.querySelector('.sr-only').textContent).toBe(STATUS.srLabel)
   })
 

@@ -11,9 +11,9 @@ import DayHeader from '@/components/schedule/DayHeader'
 
 afterEach(() => cleanup())
 
-const OK = { tone: 'ok', label: '', srLabel: 'Fully staffed', title: 'Every shift has its minimum number of coaches' }
-const SHORT = { tone: 'short', label: '1 short', srLabel: '1 shift needs coaches: 1 below the minimum', title: '1 shift needs coaches: 1 below the minimum' }
-const EMPTY = { tone: 'empty', label: '2 short', srLabel: '2 shifts need coaches: 1 with no coach, 1 below the minimum', title: '2 shifts need coaches: 1 with no coach, 1 below the minimum' }
+const OK = { tone: 'ok', label: '', labelWide: '', srLabel: 'Shifts at minimum', title: 'Every shift has its minimum number of coaches' }
+const SHORT = { tone: 'short', label: '1 short', labelWide: '1 short', srLabel: '1 shift needs coaches: 1 below the minimum', title: '1 shift needs coaches: 1 below the minimum' }
+const EMPTY = { tone: 'empty', label: '1 no coach', labelWide: '1 no coach · 1 short', srLabel: '2 shifts need coaches: 1 with no coach, 1 below the minimum', title: '2 shifts need coaches: 1 with no coach, 1 below the minimum' }
 const NONE = { tone: 'none', label: '', srLabel: '', title: '' }
 const base = { label: 'Mon', dayNumber: 21, fullDate: 'Monday 21 September', isToday: false, holiday: null }
 
@@ -40,9 +40,9 @@ describe('DayHeader', () => {
   })
 
   it.each([
-    ['ok: a dot and words for a screen reader, NO visible count', OK, 'ok', null, 'Fully staffed'],
+    ['ok: a dot and words for a screen reader, NO visible count', OK, 'ok', null, 'Shifts at minimum'],
     ['short: amber, "1 short"', SHORT, 'short', '1 short', SHORT.srLabel],
-    ['empty: red, the total', EMPTY, 'empty', '2 short', EMPTY.srLabel],
+    ['empty: red, and it SAYS no coach', EMPTY, 'empty', '1 no coach', EMPTY.srLabel],
   ])('%s', (_n, status, tone, visible, sr) => {
     render(<DayHeader {...base} status={status} onOpen={() => {}} />)
     const dot = screen.getByTestId('status-dot')
@@ -71,6 +71,28 @@ describe('DayHeader', () => {
     expect(screen.getByTestId('day-header').className).toMatch(/\brelative\b/)
   })
 
+  it('both problems: the severe one always shows; the full pair only from 2xl up', () => {
+    render(<DayHeader {...base} status={EMPTY} onOpen={() => {}} />)
+    const dot = screen.getByTestId('status-dot')
+    const narrow = dot.querySelector('[data-visible-label]')
+    const wide = dot.querySelector('[data-visible-label-wide]')
+    expect(narrow.textContent).toBe('1 no coach')
+    expect(narrow.className).toMatch(/2xl:hidden/)
+    expect(wide.textContent).toBe('1 no coach · 1 short')
+    expect(wide.className).toMatch(/\bhidden\b/)
+    expect(wide.className).toMatch(/2xl:inline/)
+    // Both are decoration for the eye; the sentence is what is announced.
+    expect(narrow.getAttribute('aria-hidden')).toBe('true')
+    expect(wide.getAttribute('aria-hidden')).toBe('true')
+  })
+
+  it('one problem: one label, no responsive pair', () => {
+    render(<DayHeader {...base} status={SHORT} onOpen={() => {}} />)
+    const dot = screen.getByTestId('status-dot')
+    expect(dot.querySelector('[data-visible-label-wide]')).toBeNull()
+    expect(dot.querySelector('[data-visible-label]').className).not.toMatch(/2xl:hidden/)
+  })
+
   it('says nothing for a day with no future shifts', () => {
     render(<DayHeader {...base} status={NONE} onOpen={() => {}} />)
     expect(screen.queryByTestId('status-dot')).toBeNull()
@@ -85,7 +107,7 @@ describe('DayHeader', () => {
 
   it('keeps the holiday line and names it in the button', () => {
     render(<DayHeader {...base} holiday={{ name: 'October Bank Holiday', source: 'national' }} status={OK} onOpen={() => {}} />)
-    expect(screen.getByRole('button').getAttribute('aria-label')).toBe('Monday 21 September. October Bank Holiday. Fully staffed. Open studio overview')
+    expect(screen.getByRole('button').getAttribute('aria-label')).toBe('Monday 21 September. October Bank Holiday. Shifts at minimum. Open studio overview')
     expect(screen.getByTestId('day-header').textContent).toContain('October Bank Holiday')
   })
 

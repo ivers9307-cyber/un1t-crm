@@ -104,7 +104,7 @@ export function shiftCardModel(block, assignments, staffing, { isManager = false
   }
 }
 
-const NO_STATUS = Object.freeze({ tone: 'none', label: '', srLabel: '', title: '', empty: 0, short: 0 })
+const NO_STATUS = Object.freeze({ tone: 'none', label: '', labelWide: '', srLabel: '', title: '', empty: 0, short: 0 })
 
 /**
  * The staffing status of ONE day, for the week view's day header and the
@@ -115,7 +115,12 @@ const NO_STATUS = Object.freeze({ tone: 'none', label: '', srLabel: '', title: '
  *          'ok'    every future shift is at or above its minimum
  *          'short' at least one below its minimum, none empty   (amber)
  *          'empty' at least one with no coach                   (red)
- *   label  visible text, ONLY when not ok: "2 short"
+ *   label  visible text, ONLY when not ok, and it says WHICH problem in
+ *          words ("2 no coach", "1 short") so red vs amber is never the only
+ *          difference. When both apply it is the more severe one, which
+ *          always fits the narrowest header.
+ *   labelWide  the same, plus the other problem when both apply
+ *          ("1 no coach · 1 short"), for a header wide enough to hold it
  *   srLabel / title  the sentence, built from the same two functions the week
  *          banner uses, so the header and the banner cannot disagree
  *
@@ -129,12 +134,20 @@ export function dayHeaderStatus(blocksForDay, { todayIso } = {}) {
   if (future.length === 0) return NO_STATUS
   const gaps = countStaffingGaps(future, { todayIso })
   if (gaps.total === 0) {
-    return { tone: 'ok', label: '', srLabel: 'Fully staffed', title: 'Every shift has its minimum number of coaches', empty: 0, short: 0 }
+    // "Shifts at minimum", never "Fully staffed": the dialog this opens also
+    // weighs EVENT demand against supply minus leave, and can say UNDERMANNED
+    // on a day whose shifts are all at minimum. Claim only what was measured.
+    return { tone: 'ok', label: '', labelWide: '', srLabel: 'Shifts at minimum', title: 'Every shift has its minimum number of coaches', empty: 0, short: 0 }
   }
   const sentence = `${staffingGapsHeadline(gaps, '')}: ${staffingGapsBreakdown(gaps)}`
+  const parts = [
+    gaps.empty > 0 ? `${gaps.empty} no coach` : '',
+    gaps.short > 0 ? `${gaps.short} short` : '',
+  ].filter(Boolean)
   return {
     tone: gaps.empty > 0 ? 'empty' : 'short',
-    label: `${gaps.total} short`,
+    label: parts[0],
+    labelWide: parts.join(' · '),
     srLabel: sentence,
     title: sentence,
     empty: gaps.empty,

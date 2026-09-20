@@ -17,8 +17,13 @@
 const DOT = { ok: 'bg-emerald-600', short: 'bg-amber-500', empty: 'bg-red-600' }
 const TEXT = { ok: 'text-emerald-700', short: 'text-amber-700', empty: 'text-red-700' }
 
-export default function StatusDot({ status }) {
+// `compact`: never show the two-problem pair. The week header has room for
+// "1 no coach · 1 short" from 2xl up (about 175px a column; at 1280 a column is
+// about 125px and the pair is about 126px); a month cell shares its row with
+// the date and the count and never does.
+export default function StatusDot({ status, compact = false }) {
   if (!status || status.tone === 'none') return null
+  const pair = !compact && !!status.labelWide && status.labelWide !== status.label
   return (
     <span
       data-testid="status-dot"
@@ -27,7 +32,10 @@ export default function StatusDot({ status }) {
       className={`relative inline-flex items-center gap-1 rounded-full bg-un1t-bg px-1.5 py-0.5 text-[10px] font-medium leading-none whitespace-nowrap ${TEXT[status.tone]}`}
     >
       <span aria-hidden="true" className={`inline-block h-1.5 w-1.5 rounded-full ${DOT[status.tone]}`} />
-      {status.label && <span aria-hidden="true" data-visible-label>{status.label}</span>}
+      {status.label && (
+        <span aria-hidden="true" data-visible-label className={pair ? '2xl:hidden' : undefined}>{status.label}</span>
+      )}
+      {pair && <span aria-hidden="true" data-visible-label-wide className="hidden 2xl:inline">{status.labelWide}</span>}
       <span className="sr-only">{status.srLabel}</span>
     </span>
   )

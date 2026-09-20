@@ -120,19 +120,33 @@ describe('dayHeaderStatus', () => {
   const live = (n) => Array.from({ length: n }, (_, i) => ({ id: `a${i}`, profile_id: `u${i}`, status: 'confirmed' }))
   const b = (id, min, n, date = TODAY) => ({ id, block_date: date, start_time: '09:00', min_coaches: min, shift_assignments: live(n) })
 
+  // The visible label says WHICH problem in words, so red vs amber is never the
+  // only thing separating "no coach" from "below minimum". `label` is the one
+  // that always fits (the more severe problem); `labelWide` adds the other when
+  // both apply, for a header wide enough to hold it.
   it.each([
-    ['no blocks at all',            [],                                        'none',  '',        ''],
-    ['only past blocks',            [b('p', 1, 0, '2026-09-01')],              'none',  '',        ''],
-    ['every shift at its minimum',  [b('x', 1, 1), b('y', 2, 2)],              'ok',    '',        'Fully staffed'],
-    ['one below minimum',           [b('x', 2, 1), b('y', 1, 1)],              'short', '1 short', '1 shift needs coaches: 1 below the minimum'],
-    ['one with no coach',           [b('x', 1, 0), b('y', 1, 1)],              'empty', '1 short', '1 shift needs coaches: 1 with no coach'],
-    ['one of each: red wins',       [b('x', 1, 0), b('y', 2, 1)],              'empty', '2 short', '2 shifts need coaches: 1 with no coach, 1 below the minimum'],
-    ['past gaps are not counted',   [b('p', 1, 0, '2026-09-01'), b('y', 1, 1)], 'ok',   '',        'Fully staffed'],
-  ])('%s', (_name, blocks, tone, label, srLabel) => {
+    ['no blocks at all',            [],                                        'none',  '',           '',                     ''],
+    ['only past blocks',            [b('p', 1, 0, '2026-09-01')],              'none',  '',           '',                     ''],
+    ['every shift at its minimum',  [b('x', 1, 1), b('y', 2, 2)],              'ok',    '',           '',                     'Shifts at minimum'],
+    ['one below minimum',           [b('x', 2, 1), b('y', 1, 1)],              'short', '1 short',    '1 short',              '1 shift needs coaches: 1 below the minimum'],
+    ['one with no coach',           [b('x', 1, 0), b('y', 1, 1)],              'empty', '1 no coach', '1 no coach',           '1 shift needs coaches: 1 with no coach'],
+    ['two with no coach',           [b('x', 1, 0), b('y', 1, 0)],              'empty', '2 no coach', '2 no coach',           '2 shifts need coaches: 2 with no coach'],
+    ['one of each: red wins',       [b('x', 1, 0), b('y', 2, 1)],              'empty', '1 no coach', '1 no coach · 1 short', '2 shifts need coaches: 1 with no coach, 1 below the minimum'],
+    ['past gaps are not counted',   [b('p', 1, 0, '2026-09-01'), b('y', 1, 1)], 'ok',   '',           '',                     'Shifts at minimum'],
+  ])('%s', (_name, blocks, tone, label, labelWide, srLabel) => {
     const s = dayHeaderStatus(blocks, { todayIso: TODAY })
     expect(s.tone).toBe(tone)
     expect(s.label).toBe(label)
+    expect(s.labelWide).toBe(labelWide)
     expect(s.srLabel).toBe(srLabel)
+  })
+
+  // The dialog a header opens counts EVENT demand against supply minus leave,
+  // and can say UNDERMANNED on a day whose shifts are all at minimum. The dot
+  // claims only what it measured.
+  it('ok never claims "fully staffed"', () => {
+    const s = dayHeaderStatus([b('x', 1, 1)], { todayIso: TODAY })
+    expect(`${s.srLabel} ${s.title}`).not.toMatch(/fully staffed/i)
   })
 
   it('a cancelled assignment is not a coach', () => {
