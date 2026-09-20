@@ -122,12 +122,20 @@ export function describeTombstoneImpact(summary) {
     k.time_off_requests > 0 && plural(k.time_off_requests, 'leave request', 'leave requests'),
     k.contractor_invoices > 0 && plural(k.contractor_invoices, 'invoice', 'invoices'),
   ].filter(Boolean)
-  const keptToday = (summary?.kept_today_shifts || []).length
+  const keptRows = summary?.kept_today_shifts || []
+  const arrived = keptRows.filter((x) => x?.reason === 'arrived').length
+  const started = keptRows.length - arrived
+  const keptLines = [
+    started > 0 && `Today's shifts already started: kept (${plural(started, 'shift', 'shifts')}).`,
+    // An arrival is matched up to 45 min before the start: a shift they have
+    // turned up for is history even though the clock says "not started".
+    arrived > 0 && `Already arrived for ${plural(arrived, 'upcoming shift', 'upcoming shifts')}: kept.`,
+  ].filter(Boolean)
   const role = summary?.role
   return {
     removes,
     // Today's shifts that have already started are HISTORY, not "upcoming".
-    keptToday: keptToday > 0 ? `Today's shifts already started: kept (${plural(keptToday, 'shift', 'shifts')}).` : undefined,
+    keptToday: keptLines.length > 0 ? keptLines.join(' ') : undefined,
     demotion: role?.from && role.from !== role.to
       ? `Their ${role.from} role is removed (the account is reduced to basic ${role.to} so it keeps no admin rights). The record still shows their role was ${role.from}.`
       : undefined,

@@ -118,6 +118,15 @@ describe('describeTombstoneImpact — today\'s started shifts and the demotion',
     expect(d.keptToday).toBe("Today's shifts already started: kept (2 shifts).")
     expect(d.demotion).toBeUndefined()
   })
+  it('a shift they have already ARRIVED for is kept too, and says why', () => {
+    const d = describeTombstoneImpact({
+      removed_shifts: [], cancelled_swaps: [], cancelled_time_off: [], kept: {},
+      kept_today_shifts: [{ reason: 'started' }, { reason: 'arrived' }],
+    })
+    expect(d.keptToday).toBe("Today's shifts already started: kept (1 shift). Already arrived for 1 upcoming shift: kept.")
+    const onlyArrived = describeTombstoneImpact({ removed_shifts: [], cancelled_swaps: [], cancelled_time_off: [], kept: {}, kept_today_shifts: [{ reason: 'arrived' }, { reason: 'arrived' }] })
+    expect(onlyArrived.keptToday).toBe('Already arrived for 2 upcoming shifts: kept.')
+  })
   it('says in plain words that an elevated role is removed and remembered', () => {
     const d = describeTombstoneImpact({
       removed_shifts: [], cancelled_swaps: [], cancelled_time_off: [], kept: {}, role: { from: 'master', to: 'staff' },

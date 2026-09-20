@@ -91,7 +91,8 @@ const BASE_SCHEMA = `
   CREATE TABLE public.shift_assignments (
     id uuid PRIMARY KEY, block_id uuid NOT NULL REFERENCES public.shift_blocks(id) ON DELETE CASCADE,
     profile_id uuid NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
-    status text DEFAULT 'scheduled', start_time_override time, end_time_override time
+    status text DEFAULT 'scheduled', start_time_override time, end_time_override time,
+    arrived_at timestamptz  -- mig 609 (ARRIVAL.1): a geofence arrival, matched up to 45 min BEFORE the start
   );
   CREATE TABLE public.shift_swap_requests (
     id uuid PRIMARY KEY, location_id uuid NOT NULL REFERENCES public.locations(id),
@@ -294,12 +295,39 @@ describe('mig 622 — tombstone_staff_profile', () => {
       expect(await has(A_YDAY)).toBe(true)
     })
     it('the assignment override beats the block time, in both directions', async () => {
-      await runSql(`UPDATE public.shift_assignments SET start_time_override = '15:00' WHERE id = '${A_TODAY_AM}';   -- block 06:00, really starts 15:00
+      // (A_TODAY_AM is not used here: the seed matched an attendance event to it, which keeps it regardless.)
+      await runSql(`UPDATE public.shift_assignments SET start_time_override = '15:00' WHERE id = '${A_TODAY_NOW}';  -- block 14:00, really starts 15:00
                     UPDATE public.shift_assignments SET start_time_override = '13:00' WHERE id = '${A_TODAY_PM}';`) // block 18:00, really started 13:00
       const s = await tombstone()
-      expect(await has(A_TODAY_AM)).toBe(false)
+      expect(await has(A_TODAY_NOW)).toBe(false)
       expect(await has(A_TODAY_PM)).toBe(true)
-      expect(s.kept_today_shifts.map((x) => x.assignment_id)).toEqual([A_TODAY_PM, A_TODAY_NOW])
+      expect(s.kept_today_shifts.map((x) => x.assignment_id)).toEqual([A_TODAY_AM, A_TODAY_PM])
+    })
+    // An arrival can be matched up to 45 min BEFORE the start
+    // (GEOFENCE_EARLY_WINDOW_MS, src/lib/staff-attendance.js). A shift someone
+    // has already turned up for is history even if the clock says "not started".
+    it('not started, but arrived_at is set → kept, reason "arrived", no change-log row', async () => {
+      await runSql(`UPDATE public.shift_assignments SET arrived_at = '2026-09-19T12:50:00Z' WHERE id = '${A_TODAY_PM}'`)
+      const s = await tombstone()
+      expect(await has(A_TODAY_PM)).toBe(true)
+      expect(s.removed_shifts.map((x) => x.assignment_id)).not.toContain(A_TODAY_PM)
+      expect(s.kept_today_shifts.map((x) => [x.assignment_id, x.reason])).toEqual([[A_TODAY_AM, 'started'], [A_TODAY_NOW, 'started'], [A_TODAY_PM, 'arrived']])
+      expect(await count('public.roster_change_log', `block_id = '${B_TODAY_PM}'`)).toBe(0)
+      expect(s.kept.past_shifts).toBe(5)
+    })
+    it('not started, but an attendance event is matched to it → kept, and the event stays linked', async () => {
+      await runSql(`INSERT INTO public.staff_attendance_events (profile_id, matched_assignment_id) VALUES ('${GONE}', '${A_TMRW}')`)
+      const s = await tombstone()
+      expect(await has(A_TMRW)).toBe(true)
+      expect(await count('public.staff_attendance_events', `matched_assignment_id = '${A_TMRW}'`)).toBe(1)
+      expect(s.kept_today_shifts.find((x) => x.assignment_id === A_TMRW)).toMatchObject({ reason: 'arrived', block_date: '2026-09-20' })
+    })
+    it('NO attendance event is ever unlinked by a permanent delete', async () => {
+      await runSql(`UPDATE public.shift_assignments SET arrived_at = '2026-09-19T12:50:00Z' WHERE id = '${A_TODAY_PM}';
+                    INSERT INTO public.staff_attendance_events (profile_id, matched_assignment_id) VALUES ('${GONE}', '${A_TMRW}'), ('${GONE}', '${A_YDAY}')`)
+      const before = await count('public.staff_attendance_events', 'matched_assignment_id IS NOT NULL')
+      await tombstone()
+      expect(await count('public.staff_attendance_events', 'matched_assignment_id IS NOT NULL')).toBe(before)
     })
     it('"today" is the DUBLIN date: 23:30 UTC on the 19th is already the 20th in Dublin', async () => {
       const s = await tombstone(GONE, { dryRun: true, now: '2026-09-19T23:30:00Z' }) // 00:30 IST, 20 Sep

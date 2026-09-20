@@ -22,7 +22,9 @@
 -- shift_blocks.start_time) — the assignment -> block precedence the app uses
 -- (shift_blocks.start_time is NOT NULL, mig 067:70; blocks snapshot their
 -- times, so no template fallback). A shift in progress, finished today, or
--- starting EXACTLY now has started: it is HISTORY and stays, so
+-- starting EXACTLY now has started: it is HISTORY and stays. So does a shift
+-- the person has ALREADY ARRIVED for (arrived_at set, or an attendance event
+-- matched to it — arrivals match up to 45 min early), so
 -- staff_attendance_events.matched_assignment_id (mig 120:79, ON DELETE SET
 -- NULL) is never unlinked from a worked shift. Dublin date and time are both
 -- derived in SQL from ONE instant (p_now AT TIME ZONE 'Europe/Dublin'), so the
@@ -254,7 +256,14 @@ BEGIN
     JOIN public.shift_blocks b ON b.id = a.block_id
    WHERE a.profile_id = p_profile_id
      AND (b.block_date > v_today
-          OR (b.block_date = v_today AND COALESCE(a.start_time_override, b.start_time) > v_time));
+          OR (b.block_date = v_today AND COALESCE(a.start_time_override, b.start_time) > v_time))
+     -- ALREADY ARRIVED = HISTORY, whatever the clock says. A geofence arrival
+     -- is matched up to 45 min BEFORE the start (GEOFENCE_EARLY_WINDOW_MS,
+     -- src/lib/staff-attendance.js) and stamps arrived_at (mig 609); deleting
+     -- that assignment would NULL staff_attendance_events.matched_assignment_id
+     -- (mig 120:79) — a worked shift losing its attendance.
+     AND a.arrived_at IS NULL
+     AND NOT EXISTS (SELECT 1 FROM public.staff_attendance_events e WHERE e.matched_assignment_id = a.id);
 
   --    The summary shows LIVE ones, with the EFFECTIVE times the calendar shows.
   SELECT COALESCE(jsonb_agg(jsonb_build_object(
@@ -273,15 +282,20 @@ BEGIN
    WHERE a.id = ANY (v_remove)
      AND a.status IS DISTINCT FROM 'cancelled';
 
-  --    Today's shifts that HAVE started (in progress, finished, or starting
-  --    exactly now): history. Reported so the dialog can say they are kept.
+  --    Kept although dated today or later: shifts that HAVE started (in
+  --    progress, finished, or starting exactly now — reason 'started'), and
+  --    not-started shifts the person has already arrived for (reason
+  --    'arrived'). History. Reported so the dialog can say they are kept.
   SELECT COALESCE(jsonb_agg(jsonb_build_object(
+           'reason', CASE WHEN b.block_date > v_today
+                            OR COALESCE(a.start_time_override, b.start_time) > v_time
+                          THEN 'arrived' ELSE 'started' END,
            'assignment_id', a.id, 'block_id', b.id, 'block_date', b.block_date,
            'start_time', COALESCE(a.start_time_override, b.start_time),
            'end_time',   COALESCE(a.end_time_override,   b.end_time),
            'template_name', t.name, 'location_id', b.location_id, 'location_name', l.name,
            'roster_status', r.status)
-           ORDER BY COALESCE(a.start_time_override, b.start_time), a.id), '[]'::jsonb)
+           ORDER BY b.block_date, COALESCE(a.start_time_override, b.start_time), a.id), '[]'::jsonb)
     INTO v_today_kept
     FROM public.shift_assignments a
     JOIN public.shift_blocks b ON b.id = a.block_id
@@ -289,7 +303,7 @@ BEGIN
     LEFT JOIN public.shift_templates t ON t.id = b.template_id
     LEFT JOIN public.locations l ON l.id = b.location_id
    WHERE a.profile_id = p_profile_id
-     AND b.block_date = v_today
+     AND b.block_date >= v_today
      AND NOT (a.id = ANY (v_remove))
      AND a.status IS DISTINCT FROM 'cancelled';
 
