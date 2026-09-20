@@ -672,27 +672,29 @@ export default function PersonalDashboard({ refreshKey }) {
   async function submitSwap(reasonText) {
     const pending = swapConfirm
     if (!pending) return
-    if (!swapPostGuard.current.begin()) return // already sending (set synchronously)
-    setSwapSending(true)
-    try {
-      const res = await createSwapRequest({
-        requesterShiftId: pending.shift.id,
-        targetId: pending.coach?.id,
-        reason: swapReasonForPost(reasonText),
-        locationId: activeLocation?.id,
-      })
-      if (res.success) {
-        swapFlowRef.current.dispatch('cancel') // closes the sheet, disarms any timer
-        const done = swapPostedCopy(pending.coach)
-        Alert.alert(done.title, done.message)
-        load(); loadSwaps()
-      } else {
-        Alert.alert(pending.coach ? "Couldn't send request" : "Couldn't post", res.error || 'Unknown error')
+    // run(): the latch is taken synchronously (a second tap is a no-op) and is
+    // ALWAYS released, the same helper the Schedule tab's post uses.
+    await swapPostGuard.current.run(async () => {
+      setSwapSending(true)
+      try {
+        const res = await createSwapRequest({
+          requesterShiftId: pending.shift.id,
+          targetId: pending.coach?.id,
+          reason: swapReasonForPost(reasonText),
+          locationId: activeLocation?.id,
+        })
+        if (res.success) {
+          swapFlowRef.current.dispatch('cancel') // closes the sheet, disarms any timer
+          const done = swapPostedCopy(pending.coach)
+          Alert.alert(done.title, done.message)
+          load(); loadSwaps()
+        } else {
+          Alert.alert(pending.coach ? "Couldn't send request" : "Couldn't post", res.error || 'Unknown error')
+        }
+      } finally {
+        setSwapSending(false)
       }
-    } finally {
-      swapPostGuard.current.end()
-      setSwapSending(false)
-    }
+    })
   }
 
   // Block-like shape for CoachPickerSheet (targeted swap). Excludes self via

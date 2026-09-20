@@ -554,12 +554,15 @@ export default function Schedule() {
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Post for swap',
-          onPress: async () => {
-            if (!swapPostGuard.current.begin()) return
+          // run() releases the latch whatever happens inside, including a
+          // throw while the request is being built. locationId is only the
+          // x-active-location override (the server takes the studio from the
+          // shift), so no active location still posts and still answers.
+          onPress: () => swapPostGuard.current.run(async () => {
             const res = await createSwapRequest({
               requesterShiftId: shift.shift_assignment_id,
-              locationId: activeLocation.id,
-            }).finally(() => swapPostGuard.current.end())
+              locationId: activeLocation?.id,
+            })
             if (res.success) {
               // Same words as the Dashboard: coaches who can cover are told too.
               const done = swapPostedCopy(null)
@@ -568,7 +571,7 @@ export default function Schedule() {
             } else {
               Alert.alert('Couldn’t post', res.error || 'Unknown error')
             }
-          },
+          }),
         },
       ]
     )

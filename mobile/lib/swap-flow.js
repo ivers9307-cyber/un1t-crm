@@ -133,13 +133,29 @@ export function createSwapFlow({
  */
 export function createInFlightGuard() {
   let busy = false
+  function begin() {
+    if (busy) return false
+    busy = true
+    return true
+  }
+  function end() { busy = false }
   return {
-    begin() {
-      if (busy) return false
-      busy = true
-      return true
+    begin,
+    end,
+    /**
+     * PREFER THIS: take the latch, do the work, ALWAYS release. Everything
+     * that can throw (building the request included) goes inside `work`, so a
+     * synchronous throw cannot strand the latch. Resolves undefined, without
+     * calling `work`, when a run is already in flight.
+     */
+    async run(work) {
+      if (!begin()) return undefined
+      try {
+        return await work()
+      } finally {
+        end()
+      }
     },
-    end() { busy = false },
     get busy() { return busy },
   }
 }

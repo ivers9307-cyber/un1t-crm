@@ -119,6 +119,56 @@ describe('createInFlightGuard', () => {
   })
 })
 
+// run() is begin + try/finally in one place, so a caller cannot take the latch
+// and then fail to release it (the Schedule tab took it, then threw while
+// BUILDING the request, before the promise its .finally hung off existed: every
+// later post was blocked until the screen remounted).
+describe('createInFlightGuard().run', () => {
+  it('resolves with the work\'s value and releases', async () => {
+    const g = createInFlightGuard()
+    await expect(g.run(async () => 'posted')).resolves.toBe('posted')
+    expect(g.busy).toBe(false)
+  })
+
+  it('work that THROWS SYNCHRONOUSLY (before any promise exists) still releases', async () => {
+    const g = createInFlightGuard()
+    const activeLocation = null
+    await expect(g.run(() => ({ locationId: activeLocation.id }))).rejects.toThrow(TypeError)
+    expect(g.busy).toBe(false)
+    await expect(g.run(async () => 'second try')).resolves.toBe('second try')
+  })
+
+  it('work that rejects still releases', async () => {
+    const g = createInFlightGuard()
+    await expect(g.run(async () => { throw new Error('boom') })).rejects.toThrow('boom')
+    expect(g.busy).toBe(false)
+  })
+
+  it('a re-entrant call while held does not run its work, resolves undefined, and does not release the holder', async () => {
+    const g = createInFlightGuard()
+    let release
+    const first = g.run(() => new Promise((resolve) => { release = () => resolve('first') }))
+    const second = vi.fn(async () => 'second')
+    await expect(g.run(second)).resolves.toBeUndefined()
+    expect(second).not.toHaveBeenCalled()
+    expect(g.busy).toBe(true) // the skipped call must not have end()ed the first
+    release()
+    await expect(first).resolves.toBe('first')
+    expect(g.busy).toBe(false)
+  })
+
+  it('shares the latch with begin()/end()', async () => {
+    const g = createInFlightGuard()
+    expect(g.begin()).toBe(true)
+    const work = vi.fn()
+    await g.run(work)
+    expect(work).not.toHaveBeenCalled()
+    g.end()
+    await g.run(work)
+    expect(work).toHaveBeenCalledTimes(1)
+  })
+})
+
 // Belt and braces: iOS opens the confirm sheet from the picker Modal's
 // onDismiss, but if a React Native build never fires it the feature is dead on
 // iOS. A fallback timer opens it instead. Whichever comes first consumes the
