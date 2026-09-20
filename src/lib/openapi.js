@@ -4457,14 +4457,15 @@ registry.registerPath({
   tags: ['Schedule'],
   security: [{ CookieAuth: [] }],
   summary: 'Submit a time-off request, or record one for a colleague',
-  description: "Without profile_id: the caller's own request, created pending; everyone holding the time-off approval permission at the studio it is filed at and at every studio the caller belongs to is notified. With profile_id (someone else): the caller must hold that permission at the target studio and the person must belong to it; the request is created approved with created_by set and the response carries `clashes` (live shifts the person is still rostered on). Contractors may only file `unavailable` (400 otherwise). Holiday is checked against the balance on every request: the allowance row, or the contract entitlement when none exists yet.",
+  description: "Without profile_id: the caller's own request, created pending; everyone holding the time-off approval permission at the studio it is filed at and at every studio the caller belongs to is notified. With profile_id (someone else): the caller must hold that permission at the target studio and the person must belong to it; the request is created approved with created_by set and the response carries `clashes` (live shifts the person is still rostered on). Contractors may only file `unavailable` (400 otherwise). Holiday is checked against the balance on every request: the allowance row, or the contract entitlement when none exists yet. A holiday is charged for working days only: Mon-Fri, excluding the national bank holidays of the studio's country and that studio's own closures (GET /api/locations/{id}/holidays); other leave types count calendar days. A holiday made up entirely of such days is refused (400, no working days).",
   request: { body: { content: { 'application/json': { schema: TimeOffRequest } } } },
   responses: {
     201: { description: 'Request submitted (or recorded and approved)' },
-    400: { description: 'Invalid dates, no working days, contractor leave type, or insufficient holiday balance', content: { 'application/json': { schema: ErrorResponse } } },
+    400: { description: 'Invalid dates, no studio to file against (no location_id and no active studio), no working days, contractor leave type, or insufficient holiday balance', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Recording for a colleague without time-off approval at that studio', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'The colleague is not on that studio’s staff', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'Overlaps an existing pending or approved request', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'A read the decision depends on failed (employment type, overlap probe, balance, or the studio\'s holiday list); nothing was created', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

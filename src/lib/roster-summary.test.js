@@ -270,6 +270,20 @@ describe('leaveHoursInWeek (phase 6)', () => {
     expect(r).toBe(30)
   })
 
+  // HOLIDAYLEAVE.1 — deliberately NOT bank-holiday aware. This answers "how
+  // many contracted hours is the coach unavailable for", not "how much
+  // allowance does it cost" (that is countLeaveDays). Mon 4 May 2026 is the May
+  // Public Holiday: the coach on leave that day is still not available, so it
+  // still comes off the expected hours. If this ever changes to 24, an FTE on
+  // leave over a bank holiday reads as under-used for a day they are off.
+  it('keeps counting a bank holiday that falls inside approved leave', () => {
+    const r = leaveHoursInWeek({
+      timeOff: [{ profile_id: 's1', status: 'approved', start_date: '2026-05-04', end_date: '2026-05-08' }],
+      profileId: 's1', weekStart, contractedHoursPerWeek: fte30,
+    })
+    expect(r).toBe(30)
+  })
+
   it('weekend leave (Sat-Sun) deducts nothing', () => {
     const r = leaveHoursInWeek({
       timeOff: [{ profile_id: 's1', status: 'approved', start_date: '2026-05-09', end_date: '2026-05-10' }],

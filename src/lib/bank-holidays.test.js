@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  uncoveredHolidayYears,
   getStaticHolidays, mergeHolidays, indexByDate,
   SUPPORTED_HOLIDAY_COUNTRIES, countryName,
 } from './bank-holidays.js'
@@ -231,5 +232,22 @@ describe('indexByDate', () => {
   it('handles empty / null input', () => {
     expect(indexByDate([]).size).toBe(0)
     expect(indexByDate(null).size).toBe(0)
+  })
+})
+
+// HOLIDAYLEAVE.1 — the static lists end (2030 today) and do not know every
+// country. A caller that charges leave needs to know when "no holidays" means
+// "no list", so it can say so instead of silently over-charging.
+describe('uncoveredHolidayYears', () => {
+  it('a covered country and year is fine', () => {
+    expect(uncoveredHolidayYears('IE', '2026-06-01', '2026-06-07')).toEqual([])
+  })
+  it('names every year of the range the list does not reach', () => {
+    const lastCovered = Number(getStaticHolidays(undefined, undefined, 'IE').at(-1).date.slice(0, 4))
+    expect(uncoveredHolidayYears('IE', `${lastCovered}-12-20`, `${lastCovered + 1}-01-05`)).toEqual([lastCovered + 1])
+    expect(uncoveredHolidayYears('IE', '1999-12-30', '2000-01-02')).toEqual([1999, 2000])
+  })
+  it('an unknown country is uncovered for every year', () => {
+    expect(uncoveredHolidayYears('ZZ', '2026-12-30', '2027-01-02')).toEqual([2026, 2027])
   })
 })

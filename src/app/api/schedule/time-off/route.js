@@ -10,7 +10,7 @@ import { dublinTodayStr } from '@/lib/dublin-time'
 import {
   getLocationMemberIds, getProfileLocationIds, leaveScopeOrFilter, canDecideTimeOff,
   resolveTimeOffApproverIds, getEmploymentType, getHolidayAllowance, ensureHolidayAllowanceRow,
-  countLeaveClashes, findLeaveClashes,
+  countLeaveClashes, findLeaveClashes, getNonWorkingDates,
 } from '@/lib/time-off-leave'
 import {
   isTimeOffTypeAllowedFor, RESTRICTED_TYPE_ERROR, isExpiredPendingRequest, effectiveTimeOffStatus,
@@ -151,6 +151,14 @@ export async function POST(request) {
   const onBehalf = subjectId !== user.id
   const targetLocation = location_id || user.activeLocation?.id
 
+  // HOLIDAYLEAVE.1 — no body location_id and no active studio on the session.
+  // The row cannot be inserted (location_id is NOT NULL) and a holiday could
+  // not be counted, so say so before any read, rather than let the approver
+  // check answer 403 or the balance check answer with a number worked out blind.
+  if (!targetLocation) {
+    return NextResponse.json({ success: false, error: 'No studio to file this request against' }, { status: 400 })
+  }
+
   if (end_date < start_date) {
     return NextResponse.json({ success: false, error: 'End date must be on or after start date' }, { status: 400 })
   }
@@ -167,7 +175,7 @@ export async function POST(request) {
   // the person is on that studio's staff. A non-member is a 404 so the id is
   // not confirmed.
   if (onBehalf) {
-    if (!targetLocation || !canDecideTimeOff(user, targetLocation)) {
+    if (!canDecideTimeOff(user, targetLocation)) {
       return NextResponse.json({ success: false, error: 'Only someone who approves time off at this studio can record leave for a colleague' }, { status: 403 })
     }
     const { ids: subjectLocations, error: memberError } = await getProfileLocationIds(db, subjectId)
@@ -212,11 +220,25 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: `Overlaps ${whose} for ${range}` }, { status: 409 })
   }
 
+  // HOLIDAYLEAVE.1 — a holiday is charged for working days only, so load the
+  // dates that cost nothing at the studio it is filed at: national bank
+  // holidays plus that studio's own closures. Only holiday needs it. Fails
+  // closed like the reads around it: an unreadable list must not become
+  // "no bank holidays", which is the over-charge this fixes.
+  let nonWorkingDates = null
+  if (type === 'holiday') {
+    const { dates, error: holidaysError } = await getNonWorkingDates(db, targetLocation, start_date, end_date)
+    if (holidaysError) {
+      return NextResponse.json({ success: false, error: holidaysError.message }, { status: 500 })
+    }
+    nonWorkingDates = dates
+  }
+
   // ROSTER-FIX.2 — a range that straddles 31 December becomes one row per
   // year, so each year's allowance is charged its own days. Each segment is
-  // counted with the leave-type's own day rule (holiday = Mon-Fri).
+  // counted with the leave-type's own day rule (holiday = working days).
   const segments = splitAtYearEnd(start_date, end_date)
-    .map(([s, e]) => ({ s, e, days: countLeaveDays(type, s, e) }))
+    .map(([s, e]) => ({ s, e, days: countLeaveDays(type, s, e, nonWorkingDates) }))
 
   if (segments.reduce((sum, seg) => sum + seg.days, 0) < 1) {
     return NextResponse.json({ success: false, error: 'No working days in that range' }, { status: 400 })
