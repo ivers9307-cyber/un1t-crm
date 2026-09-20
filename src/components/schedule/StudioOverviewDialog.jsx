@@ -1,19 +1,22 @@
 'use client'
 
-// StudioOverviewStrip — per-day demand-vs-supply summary rendered
-// above ScheduleCalendar inside the Schedule tab (mig 125).
+// StudioOverviewDialog — the per-day demand-vs-supply breakdown (mig 125),
+// opened from a day header in the roster calendar.
 //
-// Re-fetches /api/schedule/overview whenever the calendar below it
-// changes its date range (parent ScheduleTabs holds the range state
-// and pipes it in via the `range` prop).
+// ROSTERLOOK.1 — this file was StudioOverviewStrip: a row of seven day tiles
+// ABOVE the calendar, each opening this dialog. The tiles are gone (their
+// status moved into the calendar's own day headers, see schedule/DayHeader);
+// the dialog, its data and its focus handling are what they were. It is
+// CONTROLLED now: the parent says which day is open (`openDate`) because the
+// thing that opens it lives in a sibling component.
 //
-// Each day-card shows a compact summary; clicking opens a dialog with
-// the full breakdown (event names + times, booking-type windows, who's
-// on leave, etc.). Almost all of it is informational and editing happens
-// in the source views (/events/[id]/edit, /bookings/event-types/[id]/
-// edit). The ONE exception is the undermanned-shift rows: since
-// CAL-UI-LOW.2 each opens that shift in the calendar below, via the
-// `onOpenShift` prop — see the note on it.
+// It still fetches /api/schedule/overview whenever the calendar's range or
+// `dataVersion` changes, open or not, so a click on a header opens onto data
+// that is already there. Same request count as the strip.
+//
+// Almost all of it is informational (edit events at /events, booking types at
+// /bookings/event-types). The ONE exception is the undermanned-shift rows:
+// since CAL-UI-LOW.2 each opens that shift in the calendar, via `onOpenShift`.
 
 import { useState, useEffect } from 'react'
 import { Calendar, AlertCircle, Loader2, Flag, Palmtree, Users, Clock, UserX } from 'lucide-react'
@@ -40,29 +43,30 @@ function fmtTime(t) {
 }
 
 // OVERVIEW-REFRESH.1 — `dataVersion` is a monotonic counter the parent
-// (ScheduleTabs) bumps every time ScheduleCalendar reports a successful
+// (ScheduleRosterView) bumps every time ScheduleCalendar reports a successful
 // mutation (assign / unassign / create / delete / bulk-assign / publish
 // / copy-week / partial save). Including it in the useEffect deps
-// causes this strip to re-fetch in lockstep with the calendar, so
+// causes this dialog to re-fetch in lockstep with the calendar, so
 // operators no longer need to hard-refresh to see updated coverage
 // numbers or under-min flags.
 // CAL-UI-LOW.2 — `onOpenShift(date, blockId)` is how a row in the day
-// dialog reaches the shift it names. The strip itself owns no roster
+// dialog reaches the shift it names. The dialog itself owns no roster
 // state, so it hands the request to its parent (ScheduleRosterView),
-// which routes it to the calendar below: the calendar navigates to the
+// which routes it to the calendar: the calendar navigates to the
 // date and opens the SAME block-detail dialog a click on the card
 // opens. Before this the dialog named an undermanned shift and left
 // the operator to find it by eye.
-export default function StudioOverviewStrip({ range, locationId, dataVersion = 0, onOpenShift }) {
+// ROSTERLOOK.1 — `restoreFocusRef` points at the day header that opened the
+// dialog. The Modal returns focus to document.activeElement-at-open, and
+// Safari does not focus a button on click, so there the opener has to be
+// handed over rather than inferred.
+export default function StudioOverviewDialog({ range, locationId, dataVersion = 0, openDate, onClose, onOpenShift, restoreFocusRef }) {
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
-  const [loading, setLoading] = useState(false)
-  const [openDate, setOpenDate] = useState(null)  // YYYY-MM-DD of currently-open detail modal
 
   useEffect(() => {
     if (!range?.from || !range?.to || !locationId) return
     let cancelled = false
-    setLoading(true)
     setError(null)
     const url = `/api/schedule/overview?from=${range.from}&to=${range.to}&location_id=${locationId}`
     fetch(url, { cache: 'no-store' })
@@ -77,134 +81,45 @@ export default function StudioOverviewStrip({ range, locationId, dataVersion = 0
         }
       })
       .catch((e) => { if (!cancelled) setError(e.message || 'Network error') })
-      .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [range?.from, range?.to, locationId, dataVersion])
 
-  if (!range?.from || !range?.to) return null
-  if (error) {
-    return (
-      <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-xs rounded-md px-3 py-2 mb-4 inline-flex items-center gap-2">
-        <AlertCircle size={12} /> Overview: {error}
-      </div>
-    )
-  }
-  if (!data) {
-    return (
-      <div className="text-xs text-un1t-subtle inline-flex items-center gap-2 mb-4">
-        <Loader2 size={12} className="animate-spin" /> Loading overview…
-      </div>
-    )
-  }
+  if (!openDate) return null
 
-  const days = data.days || []
-  const flagged = days.filter((d) => d.classification !== 'green').length
-  const range_label = `${days.length} day${days.length === 1 ? '' : 's'}, ${flagged} flagged`
-  const openDay = days.find((d) => d.date === openDate) || null
+  const day = (data?.days || []).find((d) => d.date === openDate) || null
+  const longDate = new Date(openDate + 'T00:00:00').toLocaleDateString('en-IE', {
+    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
+  })
 
+  // The three states the strip used to show ABOVE the calendar (failed,
+  // loading, no such day) render INSIDE the dialog now: there is no strip left
+  // to hold them. `!data` is the loading state; a refetch keeps the previous
+  // data on screen exactly as the strip did.
   return (
-    <section className="mb-4">
-      <div className="flex items-center gap-2 mb-2">
-        <Calendar size={13} className="text-un1t-subtle" />
-        <h3 className="text-xs uppercase tracking-wider text-un1t-subtle font-semibold">Studio overview</h3>
-        <span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full ${
-          flagged === 0 ? 'bg-emerald-500/15 text-emerald-700' : 'bg-amber-500/15 text-amber-700'
-        }`}>
-          {range_label}
-        </span>
-        {loading && <Loader2 size={11} className="animate-spin text-un1t-subtle" />}
-      </div>
-
-      <div className="overflow-x-auto -mx-2 px-2">
-        <div className="flex gap-2 pb-1" style={{ minWidth: 'min-content' }}>
-          {days.map((d) => (
-            <DayCard key={d.date} day={d} onClick={() => setOpenDate(d.date)} />
-          ))}
+    <Modal open onClose={onClose} title={longDate} size="md" restoreFocusRef={restoreFocusRef}>
+      {error ? (
+        <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-xs rounded-md px-3 py-2 inline-flex items-center gap-2">
+          <AlertCircle size={12} aria-hidden="true" /> Overview: {error}
         </div>
-      </div>
-
-      {openDay && (
-        <DayDetailModal
-          day={openDay}
-          onClose={() => setOpenDate(null)}
+      ) : !data ? (
+        <div className="text-xs text-un1t-subtle inline-flex items-center gap-2">
+          <Loader2 size={12} className="animate-spin" aria-hidden="true" /> Loading overview…
+        </div>
+      ) : !day ? (
+        <Muted>No overview for this day.</Muted>
+      ) : (
+        <DayDetailBody
+          day={day}
           onOpenShift={onOpenShift && ((blockId) => {
-            // Close the summary first: the operator asked for the shift,
-            // and leaving this dialog stacked over the calendar's own
-            // block dialog would bury the thing they came for.
-            setOpenDate(null)
-            onOpenShift(openDay.date, blockId)
+            // Close the summary first: the operator asked for the shift, and
+            // leaving this dialog stacked over the calendar's own block dialog
+            // would bury the thing they came for.
+            onClose()
+            onOpenShift(day.date, blockId)
           })}
         />
       )}
-    </section>
-  )
-}
-
-function DayCard({ day, onClick }) {
-  const status = STATUS_STYLES[day.classification] || STATUS_STYLES.green
-  const dt = new Date(day.date + 'T00:00:00')
-  const dayName = dt.toLocaleDateString('en-IE', { weekday: 'short' })
-  const dayNum  = dt.getDate()
-  const monthShort = dt.toLocaleDateString('en-IE', { month: 'short' })
-  const supply = day.staff_scheduled - day.staff_on_leave
-
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title="Click for details"
-      className={`min-w-[110px] border rounded-md p-2 text-xs text-left transition-colors hover:brightness-110 cursor-pointer ${status.border} ${status.bg}`}
-    >
-      <div className="flex items-baseline justify-between mb-1.5">
-        <div>
-          <div className="text-[10px] uppercase tracking-wider text-un1t-subtle">{dayName}</div>
-          <div className="text-base font-semibold text-un1t-text leading-none">{dayNum}</div>
-          <div className="text-[10px] text-un1t-muted">{monthShort}</div>
-        </div>
-        <div className="text-right">
-          <div className={`text-[10px] uppercase tracking-wider ${
-            day.classification === 'red' ? 'text-red-700' :
-            day.classification === 'amber' ? 'text-amber-700' :
-            'text-emerald-700'
-          }`}>
-            {status.label}
-          </div>
-          <div className="font-mono tabular-nums text-sm font-semibold text-un1t-text">
-            {Math.max(0, supply)}<span className="text-un1t-muted">/{day.demand}</span>
-          </div>
-        </div>
-      </div>
-
-      <div className="space-y-0.5 text-[11px] text-un1t-subtle">
-        {day.events.length > 0 && (
-          <div className="flex items-center gap-1">
-            <Flag size={10} /> {day.events.length}
-          </div>
-        )}
-        {day.event_types.length > 0 && (
-          <div className="flex items-center gap-1">
-            <Calendar size={10} /> {day.event_types.length}
-          </div>
-        )}
-        {day.staff_scheduled > 0 && (
-          <div className="flex items-center gap-1">
-            <Users size={10} /> {day.staff_scheduled}
-          </div>
-        )}
-        {day.time_off.length > 0 && (
-          <div className="flex items-center gap-1 text-un1t-muted">
-            <Palmtree size={10} /> {day.time_off.length}
-          </div>
-        )}
-        {/* SHIFTMIN.1 — surface undermanned-block count on the card.
-            Modal opens with the per-block breakdown when clicked. */}
-        {(day.under_min_blocks?.length || 0) > 0 && (
-          <div className="flex items-center gap-1 text-amber-700" title={`${day.under_min_blocks.length} shift${day.under_min_blocks.length === 1 ? '' : 's'} below minimum coach floor`}>
-            <UserX size={10} /> {day.under_min_blocks.length} undermanned
-          </div>
-        )}
-      </div>
-    </button>
+    </Modal>
   )
 }
 
@@ -216,17 +131,12 @@ function DayCard({ day, onClick }) {
 // CAL-UI-LOW.2 — built on the Modal primitive rather than a bespoke
 // fixed overlay, so it inherits the dialog contract: focus moves into
 // the panel on open, Tab is trapped inside it, Escape and the backdrop
-// close it, and focus returns to the day card that opened it.
-function DayDetailModal({ day, onClose, onOpenShift }) {
-  const dt = new Date(day.date + 'T00:00:00')
-  const longDate = dt.toLocaleDateString('en-IE', {
-    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
-  })
+// close it, and focus returns to the day header that opened it.
+function DayDetailBody({ day, onOpenShift }) {
   const status = STATUS_STYLES[day.classification] || STATUS_STYLES.green
   const supply = Math.max(0, day.staff_scheduled - day.staff_on_leave)
 
   return (
-    <Modal open onClose={onClose} title={longDate} size="md">
       <div>
         {/* Demand-vs-supply summary headline */}
         <div className={`px-3 py-2 rounded-md border ${status.border} ${status.bg}`}>
@@ -347,11 +257,10 @@ function DayDetailModal({ day, onClose, onOpenShift }) {
           Edit events at <code>/events</code>, booking types at <code>/bookings/event-types</code>, shifts inside the calendar below.
         </div>
       </div>
-    </Modal>
   )
 }
 
-// One undermanned shift. A row is a real <button> when the strip has been
+// One undermanned shift. A row is a real <button> when the dialog has been
 // given somewhere to send the request (the calendar below), and plain text
 // when it has not — a control that looks clickable and does nothing is worse
 // than one that never offered.

@@ -62,6 +62,8 @@ export default function ScheduleRosterView({ user }) {
           locationId={user.activeLocation.id}
           dataVersion={scheduleDataVersion}
           onOpenShift={openShift}
+          openDate={null}
+          onClose={() => {}}
         />
       )}
       <ScheduleCalendar
