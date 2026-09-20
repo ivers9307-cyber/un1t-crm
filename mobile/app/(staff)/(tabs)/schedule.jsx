@@ -37,6 +37,7 @@ import { effShiftStart, effShiftEnd, blockStart as blockDefaultStart, blockEnd a
 import { canAdjustShiftTimes, canCancelTimeOff, MANAGER_ROLES, scheduleViewFromParam } from '../../../lib/schedule-manage'
 import { hasOpenSwap, swapShiftWhen, swapPostedCopy, SWAP_PENDING_LABEL, SWAP_ALREADY_OPEN_MESSAGE } from '../../../lib/swap-cards'
 import { createInFlightGuard } from '../../../lib/swap-flow'
+import LeaveFloatingButtons from '../../../components/LeaveFloatingButtons'
 import ManageMode from '../../../components/schedule/ManageMode'
 // LEAVE.2 — one label per leave type (unpaid/other used to read "Time off").
 import { timeOffLeaveLabel } from 'shared/time-off'
@@ -744,14 +745,14 @@ export default function Schedule() {
           shows the roster). Default on for every role, so this stays
           visible unless an admin turns time-off off for the user. */}
       {canMobile(profile, 'time_off', activeLocation) && (
-        <Pressable
-          onPress={() => router.push('/schedule/time-off-new')}
-          className="absolute bottom-6 right-6 bg-un1t-text rounded-full px-5 py-3.5 flex-row items-center shadow-lg active:opacity-80"
-        >
-          <Ionicons name="add" size={20} color="#FFFFFF" />
-          <Text className="text-un1t-bg font-semibold ml-1.5">Request time off</Text>
-        </Pressable>
+        <LeaveFloatingButtons
+          onRequest={() => router.push('/schedule/time-off-new')}
+          onMyLeave={() => router.push('/schedule/my-leave')}
+        />
       )}
+      {/* LEAVEPHONE.1 — "My leave" (the coach's own requests, with the
+          manager's reply) sits beside it under the same gate; the pair lives
+          in components/LeaveFloatingButtons so the two can never overlap. */}
 
       {/* Adjust modal — partial-shift override editor (mig 099/100). */}
       <AdjustSheet

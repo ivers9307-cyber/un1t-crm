@@ -33,6 +33,32 @@ export function getMyTimeOff({ locationId, profileId, status }) {
   return api(`/api/schedule/time-off?${qs.toString()}`, { locationId })
 }
 
+// LEAVEPHONE.1 — the caller's OWN holiday allowance. No profile_id on purpose:
+// GET /api/schedule/allowances defaults it to the caller, and a coach may read
+// nobody else's. The response carries `not_applicable: true` for a contractor.
+export function getMyAllowance({ year, locationId }) {
+  const qs = new URLSearchParams()
+  if (year) qs.set('year', String(year))
+  return api(`/api/schedule/allowances?${qs.toString()}`, { locationId })
+}
+
+// LEAVEPHONE.1 — ask the SERVER what this request would cost and which of MY
+// published shifts it hits. The phone never counts days itself: a holiday's
+// cost depends on bank holidays and studio closures only the server can see.
+// location_id is the studio createTimeOffRequest will file at, so the answer
+// is about the same studio. The route ignores profile_id in preview mode, so
+// none is sent. Read the answer with leavePreviewFrom (lib/leave-form.js),
+// which also recognises an older deployment answering with the request list.
+export function getLeavePreview({ type, startDate, endDate, locationId }) {
+  const qs = new URLSearchParams()
+  qs.set('preview', '1')
+  qs.set('type', type)
+  qs.set('start_date', startDate)
+  qs.set('end_date', endDate || startDate)
+  if (locationId) qs.set('location_id', locationId)
+  return api(`/api/schedule/time-off?${qs.toString()}`, { locationId })
+}
+
 export function createTimeOffRequest({ type, startDate, endDate, reason, locationId }) {
   return api('/api/schedule/time-off', {
     method: 'POST',
