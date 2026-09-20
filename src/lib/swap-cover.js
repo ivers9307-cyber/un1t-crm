@@ -9,7 +9,8 @@ import { evaluateSwapMoveConflicts } from './swap-lifecycle'
 import { fmtTime } from './schedule-overlap'
 import { isLiveAssignment } from './roster'
 import { MANAGER_ROLES } from './schemas'
-import { wallMsInTz, dayStrInTz, resolveTz } from './tz-time'
+import { wallMsInTz } from './tz-time'
+import { inStaffPushHours, resolveStaffTimeZone, STAFF_PUSH_HOURS } from './staff-push-hours'
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -171,34 +172,14 @@ export function openPoolRecipients({
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// Quiet hours.
-//
-// A staff push that is NOT a direct response to the recipient's own action
-// (here: the manager nudges and the expiry notice) may only be SENT while the
-// studio's wall clock is inside this band. Outside it the sweep does nothing
-// for that studio and a later tick tries again. The open-pool broadcast is a
-// direct consequence of a coach posting a swap and is not subject to this.
+// Quiet hours: ONE shared rule, src/lib/staff-push-hours.js (the 07:00-22:00
+// band, the studio wall-clock read, the timezone fallback; tabled in
+// staff-push-hours.test.js). Here it gates the manager nudges and the expiry
+// notice. The open-pool broadcast is a direct consequence of a coach posting a
+// swap and is not subject to it. Re-exported so this module's callers and
+// tests keep their names.
 // ─────────────────────────────────────────────────────────────────────────
-
-export const STAFF_PUSH_HOURS = Object.freeze({ start: '07:00', end: '22:00' })
-
-/**
- * Is `nowMs` inside 07:00 (inclusive) to 22:00 (exclusive) on the studio's
- * wall clock? `tz` is locations.timezone: nullable free text, so an empty or
- * invalid value is Europe/Dublin (resolveTz), never a throw. DST-exact: both
- * edges are resolved through wallMsInTz on the studio's own calendar day, so
- * the band is 07:00-22:00 local on the 23-hour and the 25-hour day alike. An
- * unreadable clock is OUTSIDE the band: when in doubt, send nothing.
- */
-export function inStaffPushHours(nowMs, tz) {
-  if (typeof nowMs !== 'number' || !Number.isFinite(nowMs)) return false
-  const zone = resolveTz(tz)
-  const day = dayStrInTz(nowMs, zone)
-  const opens = wallMsInTz(day, STAFF_PUSH_HOURS.start, zone)
-  const closes = wallMsInTz(day, STAFF_PUSH_HOURS.end, zone)
-  if (opens == null || closes == null) return false
-  return nowMs >= opens && nowMs < closes
-}
+export { inStaffPushHours, STAFF_PUSH_HOURS }
 
 // ─────────────────────────────────────────────────────────────────────────
 // The sweep (an arm of /api/cron/checklist-sweep, every 15 minutes).
@@ -265,7 +246,9 @@ export function swapExpiryNote(swap, reason) {
  */
 export function swapShiftStartMs(shift, tz) {
   if (!shift) return null
-  return wallMsInTz(shift.block_date, fmtTime(shift.start_time_override || shift.start_time), resolveTz(tz))
+  // The SAME zone resolution the quiet-hours band uses, so a shift's start and
+  // its studio's band can never be read in two different zones.
+  return wallMsInTz(shift.block_date, fmtTime(shift.start_time_override || shift.start_time), resolveStaffTimeZone(tz).timeZone)
 }
 
 export function swapShiftHasStarted(shift, nowMs, tz) {

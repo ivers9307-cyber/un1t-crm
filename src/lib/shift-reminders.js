@@ -67,11 +67,21 @@ import { effectiveShiftStart, effectiveShiftEnd } from '@shared/roster-month'
 import { fetchApiShiftRows } from './roster-read'
 import { notifyUsers } from './notify'
 import { logWarn, logError } from './log'
+import {
+  STAFF_PUSH_FROM, STAFF_PUSH_UNTIL, STAFF_PUSH_DEFAULT_TZ,
+  isValidStaffTimeZone, resolveStaffTimeZone, inStaffPushHours,
+} from './staff-push-hours'
 
 // QUIET HOURS: a reminder may only be SENT while the location's wall clock is
 // inside [NO_REMINDER_BEFORE, NO_REMINDER_FROM). Outside it nothing is due.
-export const NO_REMINDER_BEFORE = '07:00'
-export const NO_REMINDER_FROM = '22:00'
+// QUIET HOURS are ONE shared rule: src/lib/staff-push-hours.js (the band, the
+// wall-clock read, the timezone fallback; its table is staff-push-hours.test.js).
+// The names this module has always exported are kept, as the same values and
+// functions, so no caller or test changes.
+export const NO_REMINDER_BEFORE = STAFF_PUSH_FROM
+export const NO_REMINDER_FROM = STAFF_PUSH_UNTIL
+export const isValidTimeZone = isValidStaffTimeZone
+export const isInSendWindow = inStaffPushHours
 export const EVENING_REMINDER_TIME = '20:00'
 export const DAY_LEAD_MINUTES = 120
 export const MIN_NOTICE_MINUTES = 30
@@ -80,7 +90,7 @@ export const MAX_CO_NAMES = 3
 export const LEDGER_LOOKBACK_HOURS = 48
 export const RUN_GAP_MINUTES = 120 // a shift starting within this of the run's latest end is the same run
 
-const DEFAULT_TZ = 'Europe/Dublin'
+const DEFAULT_TZ = STAFF_PUSH_DEFAULT_TZ
 const MINUTE_MS = 60 * 1000
 const hhmm = (t) => String(t || '').slice(0, 5)
 const minutesOfDay = (t) => { const [h, m] = hhmm(t).split(':').map(Number); return h * 60 + m }
@@ -112,42 +122,6 @@ export function reminderPlanFor(shift, tz = DEFAULT_TZ) {
     return { kind: 'evening_before', startMs, fireAtMs, leadMinutes: Math.round((startMs - fireAtMs) / MINUTE_MS) }
   }
   return { kind: 'two_hours', startMs, fireAtMs: startMs - DAY_LEAD_MINUTES * MINUTE_MS, leadMinutes: DAY_LEAD_MINUTES }
-}
-
-const wallClockFormatters = new Map()
-function wallClockFormatterFor(tz) {
-  if (!wallClockFormatters.has(tz)) {
-    let fmt = null
-    try {
-      // hourCycle h23: midnight is "00", never "24".
-      fmt = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
-    } catch {
-      fmt = null // not an IANA zone (a RangeError); remembered, so it is tried once
-    }
-    wallClockFormatters.set(tz, fmt)
-  }
-  return wallClockFormatters.get(tz)
-}
-
-/** Is this a timezone string Intl accepts? Empty and non-strings are not. */
-export function isValidTimeZone(tz) {
-  return typeof tz === 'string' && tz !== '' && !!wallClockFormatterFor(tz)
-}
-
-// Never throws: an invalid zone reads the Dublin wall clock. runShiftReminders
-// validates every location's zone once per run (and warns), so this fallback
-// is the pure functions' own floor, not the reporting path.
-function wallClockHHMM(ms, tz) {
-  const fmt = (isValidTimeZone(tz) && wallClockFormatterFor(tz)) || wallClockFormatterFor(DEFAULT_TZ)
-  const parts = fmt.formatToParts(new Date(ms))
-  const get = (type) => parts.find((p) => p.type === type)?.value
-  return `${get('hour')}:${get('minute')}`
-}
-
-/** QUIET HOURS. True only while the wall clock at `tz` is inside [07:00, 22:00). */
-export function isInSendWindow(nowMs, tz = DEFAULT_TZ) {
-  const wall = wallClockHHMM(nowMs, tz)
-  return wall >= NO_REMINDER_BEFORE && wall < NO_REMINDER_FROM
 }
 
 /**
@@ -483,10 +457,9 @@ export async function runShiftReminders(db, { nowMs = Date.now(), locations = []
   const tzByLocation = {}
   for (const l of locations) {
     if (!l.id) continue
-    if (l.timezone == null || isValidTimeZone(l.timezone)) {
-      tzByLocation[l.id] = l.timezone || DEFAULT_TZ
-    } else {
-      tzByLocation[l.id] = DEFAULT_TZ
+    const zone = resolveStaffTimeZone(l.timezone)
+    tzByLocation[l.id] = zone.timeZone
+    if (zone.warn) {
       logWarn('shift-reminders', `invalid timezone on a location — using ${DEFAULT_TZ} for it`, { location: l.id, timezone: l.timezone })
     }
   }

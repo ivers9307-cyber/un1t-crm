@@ -593,10 +593,21 @@ describe('runSwapCoverSweep', () => {
       expect(notifyUsersOnce.mock.calls.map((c) => c[1])).toEqual(['swap_cover_nudge:s1:pending:t12'])
     })
 
+    // The shared staff-push-hours rule, the one the shift reminder uses too: a
+    // NULL timezone was never set and is the Dublin default, SILENTLY.
+    it('a null timezone is Europe/Dublin with no warning', async () => {
+      const db = mockDb({
+        shift_swap_requests: swapsTable([sweepSwap()]),
+        locations: { data: [{ id: LOC, timezone: null }], error: null },
+      })
+      expect(await runSwapCoverSweep(db, { nowMs: START - 48 * H })).toMatchObject({ nudged: 1, errors: 0 })
+      expect(logWarn).not.toHaveBeenCalled()
+    })
+
     it.each([
       ['an invalid', 'Mars/Olympus'],
       ['an empty', ''],
-      ['a null', null],
+      ['a blank', '   '],
     ])('%s timezone falls back to Europe/Dublin with ONE warning per studio, never a throw', async (_label, timezone) => {
       const db = mockDb({
         shift_swap_requests: swapsTable([sweepSwap(), sweepSwap({ id: 's2' })]),

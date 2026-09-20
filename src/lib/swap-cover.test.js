@@ -8,6 +8,7 @@ import {
   SWAP_EXPIRY_NOTICE_NOTES, EXPIRY_NOTICE_MAX_AGE_MS,
   swapShiftHasStarted, swapShiftStartMs, swapShiftStartedInEveryZone, swapExpiryNote, deferredExpiryNoticeDue,
 } from './swap-cover'
+import * as sharedHours from './staff-push-hours'
 
 const LOC = 'loc-1'          // the swap's studio
 const SIBLING = 'loc-2'      // another studio in the SAME organisation
@@ -313,67 +314,14 @@ describe('openPoolRecipients', () => {
 // QUIET HOURS — a staff push that is not a direct response to the recipient's
 // own action is only SENT while the studio's wall clock is 07:00 to 22:00.
 // ─────────────────────────────────────────────────────────────────────────
+// The band itself (exact boundaries, both DST weekends, other zones, invalid
+// and empty zones) is tabled ONCE, in staff-push-hours.test.js. Here: this
+// module uses THAT rule, not a copy of it.
 describe('inStaffPushHours', () => {
-  it('the band is 07:00 (inclusive) to 22:00 (exclusive)', () => {
+  it('is the shared staff-push-hours rule, re-exported under the names this module always had', () => {
+    expect(inStaffPushHours).toBe(sharedHours.inStaffPushHours)
+    expect(STAFF_PUSH_HOURS).toBe(sharedHours.STAFF_PUSH_HOURS)
     expect(STAFF_PUSH_HOURS).toEqual({ start: '07:00', end: '22:00' })
-  })
-
-  it.each([
-    // Winter (GMT): Dublin wall clock IS UTC.
-    ['2099-01-01T06:59:00Z', 'Europe/Dublin', false],
-    ['2099-01-01T07:00:00Z', 'Europe/Dublin', true],
-    ['2099-01-01T21:59:00Z', 'Europe/Dublin', true],
-    ['2099-01-01T22:00:00Z', 'Europe/Dublin', false],
-    ['2099-01-01T02:00:00Z', 'Europe/Dublin', false],
-    // Summer (IST, UTC+1): 07:00 is 06:00Z, 22:00 is 21:00Z.
-    ['2026-07-02T05:59:00Z', 'Europe/Dublin', false],
-    ['2026-07-02T06:00:00Z', 'Europe/Dublin', true],
-    ['2026-07-02T20:59:00Z', 'Europe/Dublin', true],
-    ['2026-07-02T21:00:00Z', 'Europe/Dublin', false],
-    // SPRING FORWARD weekend: Sun 2026-03-29, 01:00 GMT -> 02:00 IST.
-    ['2026-03-28T06:59:00Z', 'Europe/Dublin', false], // Sat, still GMT
-    ['2026-03-28T07:00:00Z', 'Europe/Dublin', true],
-    ['2026-03-28T21:59:00Z', 'Europe/Dublin', true],
-    ['2026-03-28T22:00:00Z', 'Europe/Dublin', false],
-    ['2026-03-29T00:30:00Z', 'Europe/Dublin', false], // 00:30 GMT, before the jump
-    ['2026-03-29T01:30:00Z', 'Europe/Dublin', false], // 02:30 IST, after it
-    ['2026-03-29T05:59:00Z', 'Europe/Dublin', false], // 06:59 IST
-    ['2026-03-29T06:00:00Z', 'Europe/Dublin', true],  // 07:00 IST
-    ['2026-03-29T20:59:00Z', 'Europe/Dublin', true],  // 21:59 IST
-    ['2026-03-29T21:00:00Z', 'Europe/Dublin', false], // 22:00 IST
-    // FALL BACK weekend: Sun 2026-10-25, 02:00 IST -> 01:00 GMT.
-    ['2026-10-24T05:59:00Z', 'Europe/Dublin', false], // Sat, still IST: 06:59
-    ['2026-10-24T06:00:00Z', 'Europe/Dublin', true],  // 07:00 IST
-    ['2026-10-24T21:00:00Z', 'Europe/Dublin', false], // 22:00 IST
-    ['2026-10-25T00:30:00Z', 'Europe/Dublin', false], // 01:30 IST (first pass)
-    ['2026-10-25T01:30:00Z', 'Europe/Dublin', false], // 01:30 GMT (second pass)
-    ['2026-10-25T06:00:00Z', 'Europe/Dublin', false], // 06:00 GMT: an hour EARLIER than Saturday's open
-    ['2026-10-25T06:59:00Z', 'Europe/Dublin', false],
-    ['2026-10-25T07:00:00Z', 'Europe/Dublin', true],
-    ['2026-10-25T21:00:00Z', 'Europe/Dublin', true],  // 21:00 GMT: Saturday was already shut at this instant
-    ['2026-10-25T21:59:00Z', 'Europe/Dublin', true],
-    ['2026-10-25T22:00:00Z', 'Europe/Dublin', false],
-    // The STUDIO's zone, not Dublin's and not the server's.
-    ['2026-01-15T11:59:00Z', 'America/New_York', false], // 06:59 EST
-    ['2026-01-15T12:00:00Z', 'America/New_York', true],  // 07:00 EST
-    ['2026-03-08T10:59:00Z', 'America/New_York', false], // US spring forward: 06:59 EDT
-    ['2026-03-08T11:00:00Z', 'America/New_York', true],  // 07:00 EDT
-    ['2026-11-01T11:00:00Z', 'America/New_York', false], // US fall back: 06:00 EST
-    ['2026-11-01T12:00:00Z', 'America/New_York', true],  // 07:00 EST
-    // An invalid or empty zone is Europe/Dublin, never a throw.
-    ['2026-07-02T06:00:00Z', 'Mars/Olympus', true],
-    ['2026-07-02T05:59:00Z', 'Mars/Olympus', false],
-    ['2026-07-02T06:00:00Z', '+05:30', true],
-    ['2026-07-02T06:00:00Z', '', true],
-    ['2026-07-02T06:00:00Z', null, true],
-    ['2026-07-02T06:00:00Z', undefined, true],
-  ])('%s in %s -> %s', (iso, tz, expected) => {
-    expect(inStaffPushHours(Date.parse(iso), tz)).toBe(expected)
-  })
-
-  it('an unreadable clock is OUTSIDE the band (send nothing), not a throw', () => {
-    expect(inStaffPushHours(NaN, 'Europe/Dublin')).toBe(false)
-    expect(inStaffPushHours(undefined, 'Europe/Dublin')).toBe(false)
   })
 })
 

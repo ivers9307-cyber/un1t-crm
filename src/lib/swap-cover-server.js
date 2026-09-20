@@ -12,7 +12,7 @@ import { resolveRoleRecipientIds } from './push'
 import { notifyUsersOnce } from './push-dedup'
 import { MANAGER_ROLES } from './schemas'
 import { logWarn, logError } from './log'
-import { isValidTz } from './tz-time'
+import { resolveStaffTimeZone } from './staff-push-hours'
 import {
   openPoolRecipients, openPoolPayload,
   coverSweepAction, coverNudgePayload, swapExpiryNotices, swapExpiryNote, deferredExpiryNoticeDue,
@@ -170,9 +170,9 @@ const delivered = (r) => ((r?.sent || 0) + (r?.emailed || 0)) > 0
 /**
  * locations.timezone for the studios the sweep is about to act on: the zone
  * the shift start AND the quiet-hours band are judged in. Never throws. A
- * studio whose timezone is empty or not an IANA name is Europe/Dublin (the
- * pure half resolves it) and is warned about ONCE per sweep, however many
- * swaps it has. An unreadable table is Europe/Dublin for everyone, logged.
+ * studio whose timezone is empty or invalid is Europe/Dublin (resolved by the
+ * shared staff-push-hours rule) and is warned about ONCE per sweep, however
+ * many swaps it has; a NULL timezone is the Dublin default, silently. An unreadable table is Europe/Dublin for everyone, logged.
  */
 async function studioTimezones(db, locationIds) {
   const zones = new Map()
@@ -184,9 +184,11 @@ async function studioTimezones(db, locationIds) {
   }
   for (const row of data || []) zones.set(row.id, row.timezone)
   for (const id of locationIds) {
+    // The shared rule (staff-push-hours.js): NULL is the Dublin default,
+    // silently; an empty or invalid value is Dublin with one warning.
     const tz = zones.get(id)
-    if (!isValidTz(tz)) {
-      logWarn('swap-cover', 'studio timezone is empty or invalid; using Europe/Dublin', { locationId: id, timezone: tz ?? null })
+    if (resolveStaffTimeZone(tz).warn) {
+      logWarn('swap-cover', 'studio timezone is empty or invalid; using Europe/Dublin', { locationId: id, timezone: tz })
     }
   }
   return zones
