@@ -26,6 +26,7 @@ import {
 } from '@shared/permissions'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { isLiveAssignment } from '@/lib/roster'
+import { effectiveShiftStart, effectiveShiftEnd } from '@shared/roster-month'
 import { nonWorkingDateSet } from '@/lib/time-off-days'
 import { uncoveredHolidayYears } from '@/lib/bank-holidays'
 import { logWarn } from '@/lib/log'
@@ -355,6 +356,61 @@ export async function findLeaveClashes(db, request, todayIso) {
     .filter((c) => c.block_date >= win.lo && c.block_date <= win.hi)
     .sort((a, b) => (a.block_date + (a.start_time || '')).localeCompare(b.block_date + (b.start_time || '')))
   return { clashes, error: null }
+}
+
+// ── Own-shift preview (LEAVEPHONE.1) ──────────────────────────────────────
+//
+// What a COACH is shown before filing leave: their own shifts inside the
+// range. Not findLeaveClashes — that is the approver's read (drafts included,
+// block times). Two rules differ here, both load-bearing:
+//   • PUBLISHED ONLY. A coach never sees an unpublished shift; "published" is
+//     derived from the block's roster exactly as roster-read.js toApiShiftRow
+//     does. A block with no roster is not published.
+//   • EFFECTIVE times: assignment override → block → template, the calendar's
+//     resolution (shared/roster-month.js).
+// The row is an allow-list: id, date, times, template name, studio name.
+const OWN_SHIFT_PREVIEW_SELECT =
+  'id, profile_id, status, start_time_override, end_time_override, shift_blocks!inner(id, block_date, start_time, end_time, location_id, rosters:roster_id(status), shift_templates(name, start_time, end_time), locations(name))'
+
+/** Pure. One embedded shift_assignments row → the preview row. */
+export function ownShiftPreviewRow(a) {
+  const b = a?.shift_blocks || {}
+  const tpl = b.shift_templates || {}
+  const shape = {
+    start_time_override: a?.start_time_override || null,
+    end_time_override: a?.end_time_override || null,
+    block_start_time: b.start_time || null,
+    block_end_time: b.end_time || null,
+    shift_templates: tpl,
+  }
+  return {
+    id: a?.id,
+    block_date: b.block_date,
+    start_time: effectiveShiftStart(shape),
+    end_time: effectiveShiftEnd(shape),
+    template_name: tpl.name || null,
+    location_name: b.locations?.name || null,
+  }
+}
+
+/**
+ * The profile's own PUBLISHED, live shifts inside [startIso, endIso], from
+ * today on, at any studio. `profileId` must be the authenticated caller — the
+ * route never takes it from the request.
+ */
+export async function findOwnPublishedShifts(db, profileId, startIso, endIso, todayIso) {
+  const win = clashWindow({ start_date: startIso, end_date: endIso }, todayIso)
+  if (!profileId || !win) return { shifts: [], error: null }
+  const { rows, error } = await readAssignmentsInRange(db, [profileId], win.lo, win.hi, OWN_SHIFT_PREVIEW_SELECT)
+  if (error) return { shifts: [], error }
+  const shifts = rows
+    .filter(isLiveAssignment)
+    .filter((a) => a.profile_id === profileId)
+    .filter((a) => a.shift_blocks?.rosters?.status === 'published')
+    .map(ownShiftPreviewRow)
+    .filter((s) => s.block_date >= win.lo && s.block_date <= win.hi)
+    .sort((x, y) => (x.block_date + (x.start_time || '')).localeCompare(y.block_date + (y.start_time || '')))
+  return { shifts, error: null }
 }
 
 /**

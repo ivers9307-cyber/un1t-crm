@@ -7,7 +7,7 @@ const { logWarn } = await import('@/lib/log')
 import {
   leaveScopeOrFilter, canDecideTimeOff, timeOffApproverIdsFrom, entitlementDays,
   clashWindow, bucketClashCounts, getHolidayAllowance, ensureHolidayAllowanceRow,
-  getNonWorkingDates,
+  getNonWorkingDates, ownShiftPreviewRow, findOwnPublishedShifts,
 } from './time-off-leave.js'
 import { fakeDb, queriesOf } from './time-off.test-helpers.js'
 
@@ -202,5 +202,85 @@ describe('getNonWorkingDates', () => {
       .toEqual({ dates: null, error: { message: 'loc boom' } })
     expect(await getNonWorkingDates(dbWith({ customError: { message: 'closures boom' } }), 'loc-1', '2026-06-01', '2026-06-07'))
       .toEqual({ dates: null, error: { message: 'closures boom' } })
+  })
+})
+
+describe('own published shifts — the coach leave preview (LEAVEPHONE.1)', () => {
+  const asg = (id, date, rosterStatus, extra = {}) => ({
+    id, profile_id: 'me', status: 'scheduled', start_time_override: null, end_time_override: null,
+    shift_blocks: {
+      id: `b-${id}`, block_date: date, start_time: '06:00:00', end_time: '09:00:00', location_id: 'loc-1',
+      rosters: rosterStatus ? { status: rosterStatus } : null,
+      shift_templates: { name: 'Morning', start_time: '06:00:00', end_time: '07:00:00' },
+      locations: { name: 'Studio One' },
+    },
+    ...extra,
+  })
+
+  it('ownShiftPreviewRow resolves times override → block → template and carries nothing else', () => {
+    expect(ownShiftPreviewRow(asg('a', '2026-10-05', 'published'))).toEqual({
+      id: 'a', block_date: '2026-10-05', start_time: '06:00:00', end_time: '09:00:00',
+      template_name: 'Morning', location_name: 'Studio One',
+    })
+    expect(ownShiftPreviewRow(asg('a', '2026-10-05', 'published', { start_time_override: '07:30:00' })).start_time).toBe('07:30:00')
+    const templateOnly = asg('a', '2026-10-05', 'published')
+    templateOnly.shift_blocks.start_time = null
+    templateOnly.shift_blocks.end_time = null
+    expect(ownShiftPreviewRow(templateOnly)).toMatchObject({ start_time: '06:00:00', end_time: '07:00:00' })
+  })
+
+  it('the row is an allow-list: notes, pay, status and other ids on the source never reach it', () => {
+    const noisy = asg('a', '2026-10-05', 'published', { notes: 'private', partial_reason: 'x', assigned_by: 'boss' })
+    noisy.shift_blocks.notes = 'block note'
+    noisy.shift_blocks.shift_templates.hourly_rate = 25
+    noisy.shift_blocks.shift_templates.capacity = 3
+    expect(Object.keys(ownShiftPreviewRow(noisy)).sort()).toEqual(
+      ['block_date', 'end_time', 'id', 'location_name', 'start_time', 'template_name'],
+    )
+  })
+
+  it('returns published, live, in-window shifts of THAT profile only, sorted by date then time', async () => {
+    const db = fakeDb((q) => {
+      if (q.table !== 'shift_assignments') throw new Error(q.table)
+      return { data: [
+        asg('late', '2026-10-06', 'published', { start_time_override: '17:00:00' }),
+        asg('early', '2026-10-06', 'published'),
+        asg('taken', '2026-10-07', 'published', { status: 'swapped' }),
+        asg('draft', '2026-10-06', 'draft'),
+        asg('noroster', '2026-10-06', null),
+        asg('dropped', '2026-10-06', 'published', { status: 'cancelled' }),
+        asg('other', '2026-10-06', 'published', { profile_id: 'someone-else' }),
+      ], error: null }
+    })
+    const { shifts, error } = await findOwnPublishedShifts(db, 'me', '2026-10-05', '2026-10-09', '2026-09-19')
+    expect(error).toBeNull()
+    // `swapped` is a LIVE shift (owned by the taker); only `cancelled` is dead.
+    expect(shifts.map((s) => s.id)).toEqual(['early', 'late', 'taken'])
+    // The read itself is scoped to the one profile and the requested window.
+    const q = queriesOf(db, 'shift_assignments')[0]
+    expect(q.calls).toContainEqual(['in', 'profile_id', ['me']])
+    expect(q.calls).toContainEqual(['gte', 'shift_blocks.block_date', '2026-10-05'])
+    expect(q.calls).toContainEqual(['lte', 'shift_blocks.block_date', '2026-10-09'])
+  })
+
+  it('starts at today (past shifts are history) and makes NO read for a range wholly in the past', async () => {
+    const db = fakeDb(() => ({ data: [], error: null }))
+    await findOwnPublishedShifts(db, 'me', '2026-09-01', '2026-09-30', '2026-09-19')
+    expect(queriesOf(db, 'shift_assignments')[0].calls).toContainEqual(['gte', 'shift_blocks.block_date', '2026-09-19'])
+
+    const past = fakeDb(() => { throw new Error('must not query') })
+    expect(await findOwnPublishedShifts(past, 'me', '2026-08-01', '2026-08-02', '2026-09-19')).toEqual({ shifts: [], error: null })
+  })
+
+  it('no profile id is no read and no rows — never an unscoped roster read', async () => {
+    const db = fakeDb(() => { throw new Error('must not query') })
+    expect(await findOwnPublishedShifts(db, null, '2026-10-05', '2026-10-09', '2026-09-19')).toEqual({ shifts: [], error: null })
+  })
+
+  it('a failed read is an error, never an empty list that reads as "no clashes"', async () => {
+    const db = fakeDb(() => ({ data: null, error: { message: 'boom' } }))
+    const res = await findOwnPublishedShifts(db, 'me', '2026-10-05', '2026-10-09', '2026-09-19')
+    expect(res.shifts).toEqual([])
+    expect(res.error).toEqual({ message: 'boom' })
   })
 })
