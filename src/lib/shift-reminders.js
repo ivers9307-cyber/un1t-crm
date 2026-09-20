@@ -21,6 +21,9 @@
 import { localToUtc, formatLocalTime } from './push-reminders'
 import { addDaysISO, dublinDayStr } from './dublin-time'
 import { effectiveShiftStart, effectiveShiftEnd } from '@shared/roster-month'
+import { fetchApiShiftRows } from './roster-read'
+import { notifyUsers } from './notify'
+import { logWarn, logError } from './log'
 
 export const EARLY_START_CUTOFF = '08:00'
 export const EVENING_REMINDER_TIME = '20:00'
@@ -160,4 +163,160 @@ export function buildShiftReminderMessage({ shift, locationName, coNames = [], n
   let body = [locationName, shift.shift_templates?.name, range].filter(Boolean).join(' · ')
   if (coNames.length) body += ` · with ${joinNames(coNames)}`
   return { title: `Shift ${dayWord} at ${formatLocalTime(start)}`, body }
+}
+
+function emptySummary() {
+  return {
+    shift_candidates: 0,
+    shift_pushed: 0,
+    shift_emailed: 0,
+    shift_skipped_dup: 0,
+    shift_skipped_no_recipient: 0,
+    shift_send_failed: 0,
+    shift_claim_failed: 0,
+  }
+}
+
+// Narrow a push_reminder_sends delete/update to this shift's own ledger row.
+const ownLedgerRow = (query, s) =>
+  query.eq('entity_type', 'shift').eq('entity_id', s.id).eq('recipient_id', s.profile_id)
+
+/**
+ * The cron arm. Reads today's + tomorrow's PUBLISHED live shifts at every
+ * location, decides what is due, and sends each reminder once.
+ *
+ * CLAIM BEFORE SEND, unlike the task and booking arms (send, then ledger).
+ * Their late window is 15 minutes, so an unwritable ledger costs three
+ * duplicates. This arm has no late window (see the header): if the ledger row
+ * cannot be written (mig 619 not applied yet, a constraint, an outage), a
+ * send-then-ledger order would re-send the same reminder every 5 minutes for
+ * up to ten hours. So the ledger row is inserted first, the unique key
+ * settles a race between two overlapping ticks, and a send that fails
+ * outright RELEASES the claim so the next tick retries. The cost is CLAUDE.md's
+ * "claim before send" trade: a process killed in the few milliseconds between
+ * the claim and the send loses that one reminder. For a staff reminder that
+ * is the right side of the trade; for a customer receipt it would not be.
+ *
+ * Failure posture:
+ *   - shift read fails   -> throw (the route logs it; nothing was sent).
+ *   - leave read fails   -> fail OPEN: a reminder to someone on holiday is
+ *                           mild, a lost reminder is not.
+ *   - ledger read fails  -> throw: fail CLOSED for this tick, next tick retries.
+ *   - claim insert fails -> that reminder is NOT sent, logged at error level.
+ *   - send fails         -> claim released, next tick retries.
+ *
+ * @param {object} db  service-role supabase client
+ * @param {object} opts
+ * @param {number} [opts.nowMs]
+ * @param {Array<{id:string,name?:string,timezone?:string}>} opts.locations
+ */
+export async function runShiftReminders(db, { nowMs = Date.now(), locations = [] } = {}) {
+  const summary = emptySummary()
+  const locationIds = locations.map((l) => l.id).filter(Boolean)
+  if (locationIds.length === 0) return summary
+
+  const today = dublinDayStr(nowMs)
+  const tomorrow = addDaysISO(today, 1)
+  const tzByLocation = Object.fromEntries(locations.map((l) => [l.id, l.timezone || DEFAULT_TZ]))
+  const nameByLocation = Object.fromEntries(locations.map((l) => [l.id, l.name || '']))
+
+  // Two days across the estate is tens of rows, far under the 1,000-row cap.
+  // publishedOnly is the D1 rule: coaches never see an unpublished shift.
+  const { rows, error: shiftErr } = await fetchApiShiftRows(db, {
+    locationIds, startDate: today, endDate: tomorrow, publishedOnly: true,
+  })
+  if (shiftErr) throw new Error(`shift read failed: ${shiftErr.message || shiftErr}`)
+  if (rows.length === 0) return summary
+
+  let onLeave = new Set()
+  const profileIds = [...new Set(rows.map((r) => r.profile_id).filter(Boolean))]
+  const { data: leaveRows, error: leaveErr } = await db
+    .from('time_off_requests')
+    .select('profile_id, start_date, end_date, status')
+    .eq('status', 'approved')
+    .in('profile_id', profileIds)
+    .lte('start_date', tomorrow)
+    .gte('end_date', today)
+  if (leaveErr) logWarn('shift-reminders', 'leave read failed — reminding without the leave check', { err: leaveErr })
+  else onLeave = leaveKeysFor(leaveRows, [today, tomorrow])
+
+  const timeDue = dueShiftReminders(rows, { nowMs, tzByLocation, onLeave })
+  if (timeDue.length === 0) return summary
+  summary.shift_candidates = timeDue.length
+
+  // One batched ledger read, only once something is time-due (most ticks: never).
+  const { data: ledgerRows, error: ledgerErr } = await db
+    .from('push_reminder_sends')
+    .select('entity_id, recipient_id')
+    .eq('entity_type', 'shift')
+    .in('entity_id', timeDue.map((d) => d.shift.id))
+  if (ledgerErr) throw new Error(`reminder ledger read failed: ${ledgerErr.message || ledgerErr}`)
+  const sentKeys = new Set((ledgerRows || []).map((r) => reminderKey(r.entity_id, r.recipient_id)))
+
+  const fresh = dueShiftReminders(rows, { nowMs, tzByLocation, onLeave, sentKeys })
+  summary.shift_skipped_dup = timeDue.length - fresh.length
+
+  for (const d of fresh) {
+    const s = d.shift
+    const { error: claimErr } = await db.from('push_reminder_sends').insert({
+      entity_type: 'shift',
+      entity_id: s.id,
+      recipient_id: s.profile_id,
+      lead_time_minutes: d.leadMinutes,
+      push_count: 0,
+      push_invalidated: 0,
+    })
+    if (claimErr) {
+      if (claimErr.code === '23505') { summary.shift_skipped_dup++; continue } // an overlapping tick claimed it
+      summary.shift_claim_failed++
+      logError('shift-reminders', 'ledger claim failed — reminder NOT sent (without a ledger row it would repeat every 5 minutes)', { err: claimErr, assignment: s.id })
+      continue
+    }
+
+    const { title, body } = buildShiftReminderMessage({
+      shift: s,
+      locationName: nameByLocation[s.location_id],
+      coNames: coRosteredFirstNames(s, rows, onLeave),
+      nowMs,
+    })
+    let result = null
+    try {
+      result = await notifyUsers([s.profile_id], {
+        title,
+        body,
+        category: 'shift_reminder',
+        emailSubject: title,
+        data: {
+          type: 'shift_reminder',
+          assignment_id: s.id,
+          block_date: s.shift_date,
+          location_id: s.location_id,
+          lead_minutes: d.leadMinutes,
+        },
+      })
+    } catch (err) {
+      logWarn('shift-reminders', 'notify threw', { err: err?.message, assignment: s.id })
+    }
+
+    const delivered = !!result && ((result.sent || 0) > 0 || (result.emailed || 0) > 0)
+    if (!result || (!delivered && (result.failed || 0) > 0)) {
+      summary.shift_send_failed++
+      const { error: releaseErr } = await ownLedgerRow(db.from('push_reminder_sends').delete(), s)
+      if (releaseErr) logError('shift-reminders', 'claim release failed — this reminder will NOT retry', { err: releaseErr, assignment: s.id })
+      continue
+    }
+
+    // Diagnostics only (mig 169: push_count / push_invalidated).
+    const { error: countErr } = await ownLedgerRow(db.from('push_reminder_sends').update({
+      push_count: result.sent || 0,
+      push_invalidated: result.invalidated || 0,
+    }), s)
+    if (countErr) logWarn('shift-reminders', 'ledger count update failed', { err: countErr, assignment: s.id })
+
+    if ((result.sent || 0) > 0) summary.shift_pushed++
+    else if ((result.emailed || 0) > 0) summary.shift_emailed++
+    else summary.shift_skipped_no_recipient++
+  }
+
+  return summary
 }

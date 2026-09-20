@@ -250,3 +250,191 @@ describe('coRosteredFirstNames + buildShiftReminderMessage', () => {
     }).body).toBe('Studio North · Early · 7:00am-11:30am · with Al, Bo and Cy')
   })
 })
+
+// ── the cron arm ────────────────────────────────────────────────────────────
+
+// Records every write against push_reminder_sends so a test can assert the
+// ORDER: claim (insert) -> send -> count update, or claim -> send -> release.
+function makeDb({ leave = [], leaveError = null, ledger = [], ledgerError = null, insertError = null, deleteError = null } = {}) {
+  const writes = []
+  const chain = (result, record) => {
+    const b = {}
+    for (const m of ['select', 'eq', 'in', 'lte', 'gte']) {
+      b[m] = (...args) => { if (record && m === 'eq') record.where[args[0]] = args[1]; return b }
+    }
+    b.then = (resolve, reject) => Promise.resolve(result).then(resolve, reject)
+    return b
+  }
+  return {
+    writes,
+    from(table) {
+      if (table === 'time_off_requests') return chain({ data: leave, error: leaveError })
+      if (table === 'push_reminder_sends') {
+        const b = chain({ data: ledger, error: ledgerError })
+        b.insert = (row) => { writes.push({ op: 'insert', row }); return chain({ data: null, error: insertError }) }
+        b.delete = () => { const w = { op: 'delete', where: {} }; writes.push(w); return chain({ data: null, error: deleteError }, w) }
+        b.update = (patch) => { const w = { op: 'update', patch, where: {} }; writes.push(w); return chain({ data: null, error: null }, w) }
+        return b
+      }
+      throw new Error(`unexpected table ${table}`)
+    },
+  }
+}
+
+const LOCATIONS = [{ id: 'loc-1', name: 'Studio North', timezone: 'Europe/Dublin' }]
+const NOW = at('2026-09-21T19:00:00Z') // 20:00 Dublin, Mon 21 Sep
+const SENT = { sent: 1, skipped: 0, invalidated: 0, failed: 0, emailed: 0, email_failed: 0 }
+const OWN_ROW = { entity_type: 'shift', entity_id: 'assign-1', recipient_id: 'coach-1' }
+
+describe('runShiftReminders', () => {
+  beforeEach(() => {
+    fetchApiShiftRows.mockReset().mockResolvedValue({ rows: [shift()], error: null })
+    notifyUsers.mockReset().mockResolvedValue({ ...SENT })
+    logWarn.mockReset()
+    logError.mockReset()
+  })
+
+  it('reads PUBLISHED shifts for the Dublin today + tomorrow at every location', async () => {
+    await runShiftReminders(makeDb(), { nowMs: NOW, locations: LOCATIONS })
+    expect(fetchApiShiftRows).toHaveBeenCalledWith(expect.anything(), {
+      locationIds: ['loc-1'], startDate: '2026-09-21', endDate: '2026-09-22', publishedOnly: true,
+    })
+  })
+
+  it('claims the ledger row, THEN sends on the shift_reminder category, then records the counts', async () => {
+    const db = makeDb()
+    let writesAtSend = null
+    notifyUsers.mockImplementation(async () => { writesAtSend = db.writes.map((w) => w.op); return { ...SENT } })
+
+    const summary = await runShiftReminders(db, { nowMs: NOW, locations: LOCATIONS })
+
+    expect(writesAtSend).toEqual(['insert']) // the claim was already written when the push went out
+    expect(notifyUsers).toHaveBeenCalledTimes(1)
+    expect(notifyUsers).toHaveBeenCalledWith(['coach-1'], {
+      title: 'Shift tomorrow at 6:00am',
+      body: 'Studio North · Early · 6:00am-2:00pm',
+      category: 'shift_reminder',
+      emailSubject: 'Shift tomorrow at 6:00am',
+      data: { type: 'shift_reminder', assignment_id: 'assign-1', block_date: '2026-09-22', location_id: 'loc-1', lead_minutes: 600 },
+    })
+    expect(db.writes).toEqual([
+      { op: 'insert', row: { ...OWN_ROW, lead_time_minutes: 600, push_count: 0, push_invalidated: 0 } },
+      { op: 'update', patch: { push_count: 1, push_invalidated: 0 }, where: OWN_ROW },
+    ])
+    expect(summary).toMatchObject({ shift_candidates: 1, shift_pushed: 1, shift_skipped_dup: 0, shift_send_failed: 0, shift_claim_failed: 0 })
+  })
+
+  it('second run in the same window: the ledger row stops it, nothing is sent or written', async () => {
+    const db = makeDb({ ledger: [{ entity_id: 'assign-1', recipient_id: 'coach-1' }] })
+    const summary = await runShiftReminders(db, { nowMs: NOW + 5 * 60 * 1000, locations: LOCATIONS })
+    expect(notifyUsers).not.toHaveBeenCalled()
+    expect(db.writes).toEqual([])
+    expect(summary).toMatchObject({ shift_candidates: 1, shift_skipped_dup: 1, shift_pushed: 0 })
+  })
+
+  it('two overlapping ticks: the loser hits the unique key (23505) on its claim and sends nothing', async () => {
+    const db = makeDb({ insertError: { code: '23505' } })
+    const summary = await runShiftReminders(db, { nowMs: NOW, locations: LOCATIONS })
+    expect(notifyUsers).not.toHaveBeenCalled()
+    expect(summary).toMatchObject({ shift_skipped_dup: 1, shift_claim_failed: 0 })
+    expect(logError).not.toHaveBeenCalled()
+  })
+
+  it('the claim cannot be written (e.g. mig 619 not applied -> 23514): NOT sent, logged at error level', async () => {
+    const db = makeDb({ insertError: { code: '23514', message: 'violates check constraint' } })
+    const summary = await runShiftReminders(db, { nowMs: NOW, locations: LOCATIONS })
+    expect(notifyUsers).not.toHaveBeenCalled()
+    expect(summary).toMatchObject({ shift_claim_failed: 1, shift_pushed: 0 })
+    expect(logError).toHaveBeenCalledTimes(1)
+  })
+
+  it('a pipeline failure RELEASES the claim, so the next tick retries', async () => {
+    notifyUsers.mockResolvedValue({ ...SENT, sent: 0, failed: 1 })
+    const db = makeDb()
+    const summary = await runShiftReminders(db, { nowMs: NOW, locations: LOCATIONS })
+    expect(db.writes.map((w) => w.op)).toEqual(['insert', 'delete'])
+    expect(db.writes[1].where).toEqual(OWN_ROW)
+    expect(summary).toMatchObject({ shift_send_failed: 1, shift_pushed: 0 })
+  })
+
+  it('a throwing sender is treated the same way: released, counted, never rethrown', async () => {
+    notifyUsers.mockRejectedValue(new Error('expo down'))
+    const db = makeDb()
+    const summary = await runShiftReminders(db, { nowMs: NOW, locations: LOCATIONS })
+    expect(db.writes.map((w) => w.op)).toEqual(['insert', 'delete'])
+    expect(summary.shift_send_failed).toBe(1)
+  })
+
+  it('a failed release is logged at error level: that reminder will not retry', async () => {
+    notifyUsers.mockResolvedValue({ ...SENT, sent: 0, failed: 1 })
+    await runShiftReminders(makeDb({ deleteError: { message: 'boom' } }), { nowMs: NOW, locations: LOCATIONS })
+    expect(logError).toHaveBeenCalledTimes(1)
+  })
+
+  it('an opted-out / no-device coach (nothing sent, nothing failed) KEEPS the claim: there is nothing to retry against', async () => {
+    notifyUsers.mockResolvedValue({ ...SENT, sent: 0, skipped: 1 })
+    const db = makeDb()
+    const summary = await runShiftReminders(db, { nowMs: NOW, locations: LOCATIONS })
+    expect(db.writes.map((w) => w.op)).toEqual(['insert', 'update'])
+    expect(summary).toMatchObject({ shift_skipped_no_recipient: 1, shift_pushed: 0 })
+  })
+
+  it('an email-fallback delivery counts as delivered', async () => {
+    notifyUsers.mockResolvedValue({ ...SENT, sent: 0, emailed: 1 })
+    const db = makeDb()
+    const summary = await runShiftReminders(db, { nowMs: NOW, locations: LOCATIONS })
+    expect(db.writes.map((w) => w.op)).toEqual(['insert', 'update'])
+    expect(summary).toMatchObject({ shift_emailed: 1, shift_send_failed: 0 })
+  })
+
+  it('a coach on approved leave gets nothing, and is not named to colleagues', async () => {
+    const mate = shift({ id: 'assign-9', profile_id: 'coach-9', profiles: { id: 'coach-9', full_name: 'Sam Sample' } })
+    fetchApiShiftRows.mockResolvedValue({ rows: [shift(), mate], error: null })
+    const db = makeDb({ leave: [{ profile_id: 'coach-9', status: 'approved', start_date: '2026-09-22', end_date: '2026-09-22' }] })
+    await runShiftReminders(db, { nowMs: NOW, locations: LOCATIONS })
+    expect(notifyUsers).toHaveBeenCalledTimes(1)
+    expect(notifyUsers.mock.calls[0][0]).toEqual(['coach-1'])
+    expect(notifyUsers.mock.calls[0][1].body).toBe('Studio North · Early · 6:00am-2:00pm')
+  })
+
+  it('two coaches on one block each get their own reminder naming the other', async () => {
+    const mate = shift({ id: 'assign-9', profile_id: 'coach-9', profiles: { id: 'coach-9', full_name: 'Sam Sample' } })
+    fetchApiShiftRows.mockResolvedValue({ rows: [shift(), mate], error: null })
+    await runShiftReminders(makeDb(), { nowMs: NOW, locations: LOCATIONS })
+    expect(notifyUsers.mock.calls.map(([ids, p]) => [ids[0], p.body])).toEqual([
+      ['coach-1', 'Studio North · Early · 6:00am-2:00pm · with Sam'],
+      ['coach-9', 'Studio North · Early · 6:00am-2:00pm · with Alex'],
+    ])
+  })
+
+  it('leave read failure fails OPEN: the reminder still goes, and it is logged', async () => {
+    const db = makeDb({ leaveError: { message: 'boom' } })
+    await runShiftReminders(db, { nowMs: NOW, locations: LOCATIONS })
+    expect(notifyUsers).toHaveBeenCalledTimes(1)
+    expect(logWarn).toHaveBeenCalled()
+  })
+
+  it('ledger read failure fails CLOSED for this tick: throws before any claim or send', async () => {
+    const db = makeDb({ ledgerError: { message: 'boom' } })
+    await expect(runShiftReminders(db, { nowMs: NOW, locations: LOCATIONS })).rejects.toThrow(/ledger read failed/)
+    expect(notifyUsers).not.toHaveBeenCalled()
+    expect(db.writes).toEqual([])
+  })
+
+  it('a shift read failure throws; no locations means no reads at all', async () => {
+    fetchApiShiftRows.mockResolvedValue({ rows: [], error: { message: 'down' } })
+    await expect(runShiftReminders(makeDb(), { nowMs: NOW, locations: LOCATIONS })).rejects.toThrow(/shift read failed/)
+    fetchApiShiftRows.mockClear()
+    const summary = await runShiftReminders(makeDb(), { nowMs: NOW, locations: [] })
+    expect(fetchApiShiftRows).not.toHaveBeenCalled()
+    expect(summary.shift_candidates).toBe(0)
+  })
+
+  it('nothing due means the ledger is never touched', async () => {
+    const db = makeDb()
+    const from = vi.spyOn(db, 'from')
+    await runShiftReminders(db, { nowMs: at('2026-09-21T12:00:00Z'), locations: LOCATIONS })
+    expect(from.mock.calls.map(([t]) => t)).toEqual(['time_off_requests'])
+    expect(notifyUsers).not.toHaveBeenCalled()
+  })
+})
