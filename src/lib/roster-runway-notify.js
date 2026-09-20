@@ -1,6 +1,8 @@
 // RUNWAY.1 — the daily roster-runway push. ONE push per location, per week,
 // per severity: a week is announced once when it enters the 10-day horizon
-// unready (amber) and once more if it is still unready at 5 days (red).
+// unready (amber) and once more if it is still unready at 5 days (red). Every
+// unready week inside the horizon is walked, so up to three weeks can each
+// have their say, but never twice.
 //
 // Idempotency is push_event_sends (mig 349) through notifyUsersAtRolesOnce:
 // the claim key carries location + week + severity, and each recipient gets
@@ -119,6 +121,8 @@ export function decideRunwayPush({ runway, location, nowMs }) {
 /**
  * @param {object} db  service-role supabase client
  * @param {{ nowMs?: number }} [opts]  the instant; "today" is its Dublin day
+ * `alerts` counts unready (studio, week) pairs; `quiet_hours` how many of them
+ * were held back by the band.
  * @returns {Promise<{ locations: number, alerts: number, quiet_hours: number, sent: number, emailed: number, deduped: number, failed: number }>}
  *   throws when the locations or runway read fails, BEFORE anything is sent
  *   (the cron records it).
@@ -136,26 +140,34 @@ export async function runRosterRunwayAlerts(db, { nowMs = Date.now() } = {}) {
   if (!res.success) throw new Error(`runway read failed: ${res.error}`)
 
   for (const loc of locations) {
-    const decision = decideRunwayPush({ runway: res.data.byLocation[loc.id], location: loc, nowMs })
-    if (decision.reason === 'ready') continue
-    outcome.alerts++
-    if (decision.timezoneFallback) {
-      logWarn('roster-runway', `invalid timezone on a location: using ${DEFAULT_TZ} for it`, { locationId: loc.id, timezone: loc.timezone })
-    }
-    if (!decision.send) {
-      outcome.quiet_hours++
-      continue
-    }
-    try {
-      const r = await notifyUsersAtRolesOnce(db, decision.eventKey, loc.id, RUNWAY_NOTIFY_ROLES, decision.payload)
-      outcome.sent += r.sent || 0
-      outcome.emailed += r.emailed || 0
-      outcome.deduped += r.deduped || 0
-      outcome.failed += r.failed || 0
-    } catch (err) {
-      // One studio's failure must not cost the next studio its alert.
-      outcome.failed++
-      logWarn('roster-runway', 'notify failed for location', { locationId: loc.id, err: err?.message })
+    // EVERY unready week inside the horizon, not just the first: one empty
+    // shift this Friday keeps THIS week unready until Friday has passed, and
+    // would otherwise swallow next week's amber for the very days it covers.
+    // Each week has its own key, so each is still announced once per severity.
+    let warnedTimezone = false
+    for (const runway of res.data.weeksByLocation?.[loc.id] || []) {
+      const decision = decideRunwayPush({ runway, location: loc, nowMs })
+      if (decision.reason === 'ready') continue
+      outcome.alerts++
+      if (decision.timezoneFallback && !warnedTimezone) {
+        warnedTimezone = true
+        logWarn('roster-runway', `invalid timezone on a location: using ${DEFAULT_TZ} for it`, { locationId: loc.id, timezone: loc.timezone })
+      }
+      if (!decision.send) {
+        outcome.quiet_hours++
+        continue
+      }
+      try {
+        const r = await notifyUsersAtRolesOnce(db, decision.eventKey, loc.id, RUNWAY_NOTIFY_ROLES, decision.payload)
+        outcome.sent += r.sent || 0
+        outcome.emailed += r.emailed || 0
+        outcome.deduped += r.deduped || 0
+        outcome.failed += r.failed || 0
+      } catch (err) {
+        // One send's failure must not cost the next week or studio its alert.
+        outcome.failed++
+        logWarn('roster-runway', 'notify failed for location', { locationId: loc.id, weekStart: runway.weekStart, err: err?.message })
+      }
     }
   }
   return outcome

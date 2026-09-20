@@ -13,7 +13,7 @@
 
 import { selectAll } from './select-all'
 import { dublinTodayStr } from './dublin-time'
-import { runwayWindow, runwayWeeksFromBlocks, rosterRunway } from '@shared/roster-runway'
+import { runwayWindow, runwayWeeksFromBlocks, rosterRunwayWeeks } from '@shared/roster-runway'
 
 /**
  * Roster runway per location.
@@ -26,12 +26,17 @@ import { runwayWindow, runwayWeeksFromBlocks, rosterRunway } from '@shared/roste
  * @param {object} db  service-role supabase client
  * @param {string[]} locationIds
  * @param {{ todayIso?: string }} [opts]  the Dublin business day
- * @returns {Promise<{ success: true, data: { byLocation: Record<string, object|null> } } | { success: false, error: string }>}
+ * `byLocation[id]` is the FIRST unready week (or null): what a chip shows.
+ * `weeksByLocation[id]` is EVERY unready week inside the horizon (or []): what
+ * the daily push walks, so a gap this week cannot mask next week's alert.
+ *
+ * @returns {Promise<{ success: true, data: { byLocation: Record<string, object|null>, weeksByLocation: Record<string, object[]> } } | { success: false, error: string }>}
  */
 export async function fetchRosterRunways(db, locationIds, { todayIso = dublinTodayStr() } = {}) {
   const ids = [...new Set((locationIds || []).filter(Boolean))]
   const byLocation = Object.fromEntries(ids.map((id) => [id, null]))
-  if (ids.length === 0) return { success: true, data: { byLocation } }
+  const weeksByLocation = Object.fromEntries(ids.map((id) => [id, []]))
+  if (ids.length === 0) return { success: true, data: { byLocation, weeksByLocation } }
 
   const { data: templates, error: tplErr } = await db
     .from('shift_templates')
@@ -45,7 +50,7 @@ export async function fetchRosterRunways(db, locationIds, { todayIso = dublinTod
       .filter((t) => Array.isArray(t.days_of_week) && t.days_of_week.length > 0)
       .map((t) => t.location_id),
   )]
-  if (rostered.length === 0) return { success: true, data: { byLocation } }
+  if (rostered.length === 0) return { success: true, data: { byLocation, weeksByLocation } }
 
   const { from, to } = runwayWindow(todayIso)
   let blocks
@@ -66,7 +71,8 @@ export async function fetchRosterRunways(db, locationIds, { todayIso = dublinTod
 
   for (const id of rostered) {
     const mine = blocks.filter((b) => b.location_id === id)
-    byLocation[id] = rosterRunway(runwayWeeksFromBlocks(mine, todayIso), todayIso)
+    weeksByLocation[id] = rosterRunwayWeeks(runwayWeeksFromBlocks(mine, todayIso), todayIso)
+    byLocation[id] = weeksByLocation[id][0] ?? null
   }
-  return { success: true, data: { byLocation } }
+  return { success: true, data: { byLocation, weeksByLocation } }
 }

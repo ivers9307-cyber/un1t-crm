@@ -39,10 +39,20 @@ function makeDb(locations, error = null) {
   return { selects, from: (table) => { if (table !== 'locations') throw new Error(`unexpected table ${table}`); return b } }
 }
 
+// The reader's shape: every unready week per studio, plus its head.
+const runwaysAre = (weeksByLocation) => fetchRosterRunways.mockResolvedValue({
+  success: true,
+  data: {
+    weeksByLocation,
+    byLocation: Object.fromEntries(Object.entries(weeksByLocation).map(([id, list]) => [id, list[0] ?? null])),
+  },
+})
+
 beforeEach(() => {
   logWarn.mockReset()
   notifyUsersAtRolesOnce.mockReset().mockResolvedValue({ sent: 2, skipped: 0, invalidated: 0, failed: 0, emailed: 0, deduped: 0 })
-  fetchRosterRunways.mockReset().mockResolvedValue({ success: true, data: { byLocation: { [NORTH.id]: RUNWAY, [SOUTH.id]: null } } })
+  fetchRosterRunways.mockReset()
+  runwaysAre({ [NORTH.id]: [RUNWAY], [SOUTH.id]: [] })
 })
 
 // ── quiet hours ──────────────────────────────────────────────────────────
@@ -199,7 +209,7 @@ describe('runRosterRunwayAlerts', () => {
 
   it('the band is per studio: one asleep, one awake', async () => {
     const west = { ...SOUTH, timezone: 'America/New_York' } // 04:00 there at the tick
-    fetchRosterRunways.mockResolvedValue({ success: true, data: { byLocation: { [NORTH.id]: RUNWAY, [west.id]: RUNWAY } } })
+    runwaysAre({ [NORTH.id]: [RUNWAY], [west.id]: [RUNWAY] })
     const outcome = await runRosterRunwayAlerts(makeDb([NORTH, west]), { nowMs: CRON_TICK })
     expect(notifyUsersAtRolesOnce).toHaveBeenCalledTimes(1)
     expect(notifyUsersAtRolesOnce.mock.calls[0][2]).toBe(NORTH.id)
@@ -213,6 +223,24 @@ describe('runRosterRunwayAlerts', () => {
     expect(logWarn).toHaveBeenCalledWith('roster-runway', expect.stringMatching(/invalid timezone/), { locationId: NORTH.id, timezone: 'Mars/Olympus' })
   })
 
+  it('EVERY unready week is announced, each under its own key: a gap this week cannot mask next week', async () => {
+    const thisWeek = { ...RUNWAY, weekStart: '2026-09-14', daysAway: -5, severity: 'red', blocks: 4, staffed: 3, unstaffed: 1, published: 4, unpublished: 0 }
+    runwaysAre({ [NORTH.id]: [thisWeek, RUNWAY] })
+    const outcome = await runRosterRunwayAlerts(makeDb([NORTH]), { nowMs: CRON_TICK })
+    expect(notifyUsersAtRolesOnce.mock.calls.map((c) => [c[1], c[4].body])).toEqual([
+      ['roster_runway:loc-north:2026-09-14:red', 'This week: 1 of 4 shifts has no coach.'],
+      ['roster_runway:loc-north:2026-09-28:amber', 'Starts in 9 days: 34 of 34 shifts have no coach, not published.'],
+    ])
+    expect(outcome).toMatchObject({ locations: 1, alerts: 2, sent: 4 })
+  })
+
+  it('an invalid timezone still warns once for the studio, not once per week', async () => {
+    runwaysAre({ [NORTH.id]: [{ ...RUNWAY, weekStart: '2026-09-21', daysAway: 2, severity: 'red' }, RUNWAY] })
+    await runRosterRunwayAlerts(makeDb([{ ...NORTH, timezone: 'Mars/Olympus' }]), { nowMs: CRON_TICK })
+    expect(notifyUsersAtRolesOnce).toHaveBeenCalledTimes(2)
+    expect(logWarn).toHaveBeenCalledTimes(1)
+  })
+
   it('a second run the same day is reported as deduped, not as a send', async () => {
     notifyUsersAtRolesOnce.mockResolvedValue({ sent: 0, skipped: 0, invalidated: 0, failed: 0, deduped: 2 })
     const outcome = await runRosterRunwayAlerts(makeDb([NORTH]), { nowMs: CRON_TICK })
@@ -220,14 +248,14 @@ describe('runRosterRunwayAlerts', () => {
   })
 
   it('nothing unready -> nothing sent', async () => {
-    fetchRosterRunways.mockResolvedValue({ success: true, data: { byLocation: { [NORTH.id]: null } } })
+    runwaysAre({ [NORTH.id]: [] })
     const outcome = await runRosterRunwayAlerts(makeDb([NORTH]), { nowMs: CRON_TICK })
     expect(notifyUsersAtRolesOnce).not.toHaveBeenCalled()
     expect(outcome).toMatchObject({ locations: 1, alerts: 0 })
   })
 
   it("one studio's send throwing does not cost the next studio its alert", async () => {
-    fetchRosterRunways.mockResolvedValue({ success: true, data: { byLocation: { [NORTH.id]: RUNWAY, [SOUTH.id]: RUNWAY } } })
+    runwaysAre({ [NORTH.id]: [RUNWAY], [SOUTH.id]: [RUNWAY] })
     notifyUsersAtRolesOnce.mockRejectedValueOnce(new Error('expo down'))
     const outcome = await runRosterRunwayAlerts(makeDb([NORTH, SOUTH]), { nowMs: CRON_TICK })
     expect(notifyUsersAtRolesOnce).toHaveBeenCalledTimes(2)

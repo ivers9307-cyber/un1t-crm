@@ -62,29 +62,35 @@ export function runwayWindow(todayIso) {
 }
 
 /**
- * The first week, soonest first, whose Monday is within 10 days and that is
- * not ready: some block has no coach, or some block is not published.
+ * EVERY week, soonest first, whose Monday is within 10 days and that is not
+ * ready: some block has no coach, or some block is not published.
  *
  *   severity 'red'   — the week starts in 5 days or fewer (or is this week)
  *   severity 'amber' — it starts in 6 to 10 days
  *
- * Returns null when every week inside the horizon is ready. A week with ZERO
- * blocks says nothing: a studio with no shift templates has no blocks at all,
- * and "0 of 0" is not a roster that needs building.
+ * Empty when every week inside the horizon is ready. A week with ZERO blocks
+ * says nothing: a studio with no shift templates has no blocks at all, and
+ * "0 of 0" is not a roster that needs building.
  *
  * `underMin` rides along for the copy but does not raise the alert on its own:
  * this is about a roster that has not been BUILT, and a built week that is one
  * coach short is the staffing chip's job.
  *
+ * The daily push walks this whole list. It must: one empty shift this Friday
+ * keeps THIS week unready until Friday has passed, and announcing only the
+ * first unready week would swallow next week's amber for exactly the days it
+ * exists to cover. The chips show the head of the list (rosterRunway).
+ *
  * @param {Array<{ weekStart: string, blocks: number, staffed: number, underMin: number, published: number }>} weeks
  * @param {string} todayIso
  */
-export function rosterRunway(weeks, todayIso) {
+export function rosterRunwayWeeks(weeks, todayIso) {
   const sorted = (weeks || [])
     .filter((w) => w?.weekStart)
     .slice()
     .sort((a, b) => a.weekStart.localeCompare(b.weekStart))
 
+  const unready = []
   for (const w of sorted) {
     const daysAway = daysBetween(todayIso, w.weekStart)
     if (daysAway > RUNWAY_AMBER_DAYS) break
@@ -96,7 +102,7 @@ export function rosterRunway(weeks, todayIso) {
     const unstaffed = blocks - staffed
     const unpublished = blocks - published
     if (unstaffed === 0 && unpublished === 0) continue
-    return {
+    unready.push({
       weekStart: w.weekStart,
       daysAway,
       severity: daysAway <= RUNWAY_RED_DAYS ? 'red' : 'amber',
@@ -106,9 +112,17 @@ export function rosterRunway(weeks, todayIso) {
       published,
       unstaffed,
       unpublished,
-    }
+    })
   }
-  return null
+  return unready
+}
+
+/**
+ * The FIRST unready week inside the horizon (see rosterRunwayWeeks), or null
+ * when every week is ready. This is what the chips show: one line per studio.
+ */
+export function rosterRunway(weeks, todayIso) {
+  return rosterRunwayWeeks(weeks, todayIso)[0] ?? null
 }
 
 /**

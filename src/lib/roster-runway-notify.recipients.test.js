@@ -99,8 +99,13 @@ const NIGHT_9 = Date.UTC(2026, 8, 19, 2, 20) // 03:20 in Dublin
 
 const PUBLISHERS = ['owner-n', 'manager-n', 'headcoach-n', 'master-n']
 
-const runwayIs = (runway) =>
-  fetchRosterRunways.mockResolvedValue({ success: true, data: { byLocation: { [NORTH.id]: runway, [SOUTH.id]: null } } })
+const runwayIs = (runway) => fetchRosterRunways.mockResolvedValue({
+  success: true,
+  data: {
+    byLocation: { [NORTH.id]: runway, [SOUTH.id]: null },
+    weeksByLocation: { [NORTH.id]: runway ? [runway] : [], [SOUTH.id]: [] },
+  },
+})
 
 beforeEach(() => {
   state.locations = [NORTH, SOUTH]

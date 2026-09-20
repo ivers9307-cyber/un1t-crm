@@ -38,7 +38,7 @@ const block = (location_id, block_date, { coaches = 0, roster = null } = {}) => 
 describe('fetchRosterRunways', () => {
   it('no locations -> no queries', async () => {
     const db = makeDb()
-    expect(await fetchRosterRunways(db, [], { todayIso: TODAY })).toEqual({ success: true, data: { byLocation: {} } })
+    expect(await fetchRosterRunways(db, [], { todayIso: TODAY })).toEqual({ success: true, data: { byLocation: {}, weeksByLocation: {} } })
     expect(db.calls).toEqual([])
   })
 
@@ -77,6 +77,21 @@ describe('fetchRosterRunways', () => {
     const { data } = await fetchRosterRunways(db, [NORTH, SOUTH], { todayIso: TODAY })
     expect(data.byLocation[NORTH]).toBeNull()
     expect(data.byLocation[SOUTH]).toMatchObject({ weekStart: '2026-09-28' })
+  })
+
+  it('weeksByLocation carries EVERY unready week (the push must not be masked); byLocation is its head', async () => {
+    const db = makeDb({
+      templates: [tpl(NORTH)],
+      blocks: [
+        block(NORTH, '2026-09-20', { coaches: 0, roster: 'published' }), // one empty shift left this week
+        block(NORTH, '2026-09-22', { coaches: 1, roster: 'published' }), // next week is fine
+        block(NORTH, '2026-09-28'),                                      // the week after is unbuilt
+      ],
+    })
+    const { data } = await fetchRosterRunways(db, [NORTH, SOUTH], { todayIso: TODAY })
+    expect(data.weeksByLocation[NORTH].map((r) => [r.weekStart, r.severity])).toEqual([['2026-09-14', 'red'], ['2026-09-28', 'amber']])
+    expect(data.byLocation[NORTH]).toEqual(data.weeksByLocation[NORTH][0])
+    expect(data.weeksByLocation[SOUTH]).toEqual([]) // no active template: nothing, not undefined
   })
 
   it('a failed read is a failure, never "every week is ready"', async () => {

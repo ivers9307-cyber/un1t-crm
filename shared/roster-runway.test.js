@@ -4,7 +4,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   RUNWAY_AMBER_DAYS, RUNWAY_RED_DAYS,
-  runwayWindow, runwayWeeksFromBlocks, rosterRunway, rosterRunwayHeadline, rosterRunwayDetail,
+  runwayWindow, runwayWeeksFromBlocks, rosterRunway, rosterRunwayWeeks, rosterRunwayHeadline, rosterRunwayDetail,
 } from './roster-runway.js'
 
 const ready = (weekStart, n = 34) => ({ weekStart, blocks: n, staffed: n, underMin: 0, published: n })
@@ -106,6 +106,27 @@ describe('rosterRunway', () => {
       .toMatchObject({ staffed: 2, unstaffed: 0, unpublished: 2 })
   })
 })
+// The PUSH must not be masked. One empty shift this Friday makes THIS week
+// "unready" until Friday passes; if only the first unready week were ever
+// announced, next week's amber would be swallowed for exactly the days it
+// exists to cover, and the first word a manager got would be the red.
+describe('rosterRunwayWeeks', () => {
+  const gapThisWeek = { weekStart: '2026-09-14', blocks: 4, staffed: 3, underMin: 0, published: 4 }
+
+  it('every unready week inside the horizon, soonest first; rosterRunway is its head', () => {
+    const weeks = [unbuilt('2026-09-28'), gapThisWeek, ready('2026-09-21')]
+    const all = rosterRunwayWeeks(weeks, '2026-09-19')
+    expect(all.map((r) => [r.weekStart, r.severity])).toEqual([['2026-09-14', 'red'], ['2026-09-28', 'amber']])
+    expect(rosterRunway(weeks, '2026-09-19')).toEqual(all[0])
+  })
+
+  it('still stops at the horizon, and is empty (never null) when everything is ready', () => {
+    expect(rosterRunwayWeeks([gapThisWeek, unbuilt('2026-09-28')], '2026-09-17').map((r) => r.weekStart)).toEqual(['2026-09-14'])
+    expect(rosterRunwayWeeks(LIVE.slice(0, 2), '2026-09-19')).toEqual([])
+    expect(rosterRunwayWeeks(null, '2026-09-19')).toEqual([])
+  })
+})
+
 describe('runwayWeeksFromBlocks', () => {
   const block = (block_date, { coaches = 0, min = 1, roster = null, cancelled = 0 } = {}) => ({
     block_date,
