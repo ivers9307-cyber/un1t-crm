@@ -76,7 +76,8 @@ import { useDraftRosters } from './schedule/useDraftRosters'
 import RosterToolbar from './schedule/RosterToolbar'
 import DayHeader from './schedule/DayHeader'
 import ShiftCard from './schedule/ShiftCard'
-import { rosterToolbarModel, dayHeaderStatus, shiftCardModel } from '@/lib/roster-card-model'
+import MonthCell from './schedule/MonthCell'
+import { rosterToolbarModel, dayHeaderStatus, shiftCardModel, monthCellLines } from '@/lib/roster-card-model'
 
 // LEAVE.2 — every leave type gets its own label (timeOffLeaveLabel) and
 // colour. Unpaid and "other" were missing, so approved unpaid/other leave
@@ -121,22 +122,6 @@ function getMonthGridRange(monthStart) {
   const start = getMonday(monthStart)
   const end = addDays(start, 41)
   return { start, end }
-}
-
-// Roster v2: a block is "unstaffed" when it has zero assignments
-// AND its date is today or later. Past blocks may legitimately
-// have empty assignments (coaches called out, never replaced) —
-// flagging those is noise.
-//
-// ROSTER-FIX.1 — counts LIVE assignments only, so a cancelled row (an
-// approved swap-drop) cannot make an empty block look staffed.
-//
-// ROSTERVIS.1 — 'empty' | 'short' | 'ok', or null for a past block. This used
-// to be a zero-only boolean, so a shift at 1 of 2 coaches read as fine on the
-// calendar while the Studio Overview strip above it counted it as below
-// minimum. Both now answer from src/lib/roster-staffing.
-function blockStaffingStatus(block, todayStr) {
-  return futureBlockStaffing(block, todayStr)?.status || null
 }
 
 // ROSTERROLE.1 — publishing over budget without an approval is an OWNER
@@ -1142,10 +1127,9 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
         <div className="text-center py-20 text-un1t-subtle">Loading roster...</div>
       ) : viewType === 'month' ? (
         // ── MONTH VIEW ──
-        // Renders a 6x7 grid; each cell shows the date + count of
-        // assignments + count of unstaffed blocks. Clicking drills
-        // into the week view. Roster v2: separately surfaces empty
-        // blocks as a red badge.
+        // Renders a 6x7 grid; each cell is a schedule/MonthCell: the date,
+        // the day's staffing status, and up to three lines of time + coach
+        // first names. Clicking drills into the week view.
         // ROSTER-FIX.6b — seven columns with no breakpoint. On a 390px phone
         // each day cell was ~50px wide and every block label inside it was an
         // ellipsis. The grid keeps its seven columns and gets a floor instead;
@@ -1178,108 +1162,35 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
                 const isToday = dateStr === todayStr
                 const holiday = holidayByDate.get(dateStr)
                 const totalAssignmentCount = visibleBlocks.reduce((sum, b) => sum + liveAssignments(b.shift_assignments).length, 0)
-                // ROSTERVIS.1 — empty and short counted separately: red for
-                // no coach, amber for below the minimum.
-                const dayGaps = countStaffingGaps(visibleBlocks, { todayIso: todayStr })
-                const unstaffedCount = dayGaps.empty
-                const shortCount = dayGaps.short
+                // ROSTERLOOK.1 — the lines name the coaches (monthCellLines),
+                // and the day's status is the week headers' status, from the
+                // same function. Manager-only, as "!1" / "↓1" were
+                // (ROSTER-FIX.2: a coach gets no staffing cues). Like those
+                // badges it answers for the VISIBLE blocks, so it agrees with
+                // the lines under it.
+                const { lines, more } = monthCellLines(visibleBlocks, { todayIso: todayStr, isManager })
+                const firstTimeOff = dayTimeOff[0]
+                const timeOffConf = firstTimeOff ? (TIME_OFF_CONFIG[firstTimeOff.type] || TIME_OFF_FALLBACK) : null
 
                 cells.push(
-                  <button
+                  <MonthCell
                     key={dateStr}
-                    type="button"
-                    onClick={() => {
+                    dayNumber={date.getDate()}
+                    inFocusedMonth={inFocusedMonth}
+                    isToday={isToday}
+                    holiday={holiday}
+                    lines={lines}
+                    more={more}
+                    status={isManager ? dayHeaderStatus(visibleBlocks, { todayIso: todayStr }) : null}
+                    assignmentCount={totalAssignmentCount}
+                    timeOffEntry={firstTimeOff
+                      ? { text: `${firstTimeOff.profiles?.full_name?.split(' ')[0]} ${timeOffConf.label}`, color: timeOffConf.color }
+                      : null}
+                    onOpen={() => {
                       setWeekStart(getMonday(date))
                       setViewType('week')
                     }}
-                    className={`text-left bg-un1t-surface border rounded-md p-1.5 min-h-[88px] transition-colors hover:border-un1t-text/30 ${
-                      inFocusedMonth ? 'border-un1t-border' : 'border-un1t-border/50 opacity-60'
-                    } ${isToday ? 'ring-1 ring-blue-400/50' : ''} ${holiday ? 'bg-amber-500/[0.06]' : ''}`}
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <span className={`text-xs font-semibold ${isToday ? 'text-blue-700' : inFocusedMonth ? 'text-un1t-text' : 'text-un1t-muted'}`}>
-                        {date.getDate()}
-                      </span>
-                      <div className="flex items-center gap-1">
-                        {/* ROSTER-FIX.2 — unstaffed is a manager cue; coaches get a capacity-free feed and no red flags. */}
-                        {isManager && unstaffedCount > 0 && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-700" title={`${unstaffedCount} unstaffed`}>
-                            <span aria-hidden="true">!{unstaffedCount}</span>
-                            <span className="sr-only">{unstaffedCount} unstaffed</span>
-                          </span>
-                        )}
-                        {isManager && shortCount > 0 && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-700" title={`${shortCount} below minimum`}>
-                            <span aria-hidden="true">↓{shortCount}</span>
-                            <span className="sr-only">{shortCount} below minimum</span>
-                          </span>
-                        )}
-                        {totalAssignmentCount > 0 && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-un1t-border/60 text-un1t-subtle">
-                            {totalAssignmentCount}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    {holiday && (
-                      <div className="text-[9px] text-amber-700 mb-1 truncate" title={holiday.name}>
-                        {holiday.name}
-                      </div>
-                    )}
-                    <div className="space-y-0.5">
-                      {visibleBlocks.slice(0, 3).map(b => {
-                        const tmpl = b.shift_templates || {}
-                        const count = liveAssignments(b.shift_assignments).length
-                        const staffing = blockStaffingStatus(b, todayStr)
-                        // ROSTER-FIX.6b — unstaffed was a red hairline border and
-                        // nothing else. It survives neither greyscale nor the
-                        // ~8% of male operators with a red/green deficiency, and
-                        // there is no text for a screen reader to reach at all.
-                        // The warning glyph and the sr-only word carry it now;
-                        // the border stays as the at-a-glance cue for everyone else.
-                        const showUnstaffed = isManager && staffing === 'empty'
-                        // ROSTERVIS.1 — same treatment in amber for below minimum.
-                        const showShort = isManager && staffing === 'short'
-                        return (
-                          <div
-                            key={b.id}
-                            className={`text-[10px] truncate rounded px-1 py-0.5 ${showUnstaffed ? 'border border-red-500/40' : showShort ? 'border border-amber-500/50' : ''}`}
-                            style={{ backgroundColor: (tmpl.color || '#3B82F6') + '20', color: tmpl.color || '#3B82F6' }}
-                            title={`${tmpl.name || 'Shift'} · ${formatTime(b.start_time)}–${formatTime(b.end_time)}${isManager ? ` · ${count}/${b.max_coaches}` : ''}${showUnstaffed ? ' · Unstaffed' : ''}${showShort ? ` · ${count} of ${b.min_coaches} minimum` : ''}`}
-                          >
-                            {showUnstaffed && (
-                              <>
-                                <AlertTriangle size={9} className="inline-block mr-0.5 -mt-px text-red-700" aria-hidden="true" />
-                                <span className="sr-only">Unstaffed. </span>
-                              </>
-                            )}
-                            {showShort && (
-                              <>
-                                <AlertTriangle size={9} className="inline-block mr-0.5 -mt-px text-amber-700" aria-hidden="true" />
-                                <span className="sr-only">Below minimum, {count} of {b.min_coaches}. </span>
-                              </>
-                            )}
-                            {formatTime(b.start_time)}{isManager ? ` ${count}/${b.max_coaches}` : ''}
-                          </div>
-                        )
-                      })}
-                      {visibleBlocks.length > 3 && (
-                        <div className="text-[10px] text-un1t-muted">+{visibleBlocks.length - 3} more</div>
-                      )}
-                      {dayTimeOff.slice(0, 1).map(t => {
-                        const conf = TIME_OFF_CONFIG[t.type] || TIME_OFF_FALLBACK
-                        return (
-                          <div
-                            key={`to-${t.id}`}
-                            className="text-[10px] truncate rounded px-1 py-0.5"
-                            style={{ backgroundColor: conf.color + '18', color: conf.color }}
-                          >
-                            {t.profiles?.full_name?.split(' ')[0]} {conf.label}
-                          </div>
-                        )
-                      })}
-                    </div>
-                  </button>
+                  />
                 )
               }
               return cells

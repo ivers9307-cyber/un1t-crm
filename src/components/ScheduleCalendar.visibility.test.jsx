@@ -454,3 +454,33 @@ describe('day headers carry the staffing status (ROSTERLOOK.1)', () => {
     expect(screen.queryByRole('button', { name: /Open studio overview/ })).toBeNull()
   })
 })
+
+describe('month view names the coaches (ROSTERLOOK.1)', () => {
+  async function renderMonth(opts) {
+    await renderCalendar(opts)
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Month' })) })
+    await waitFor(() => expect(screen.queryByText(/Loading roster/)).toBeNull())
+  }
+
+  it('a manager reads time + first names, numbers only on the short line, and no "!1" / "↓1"', async () => {
+    await renderMonth({ blocks: [SHORT_BLOCK, EMPTY_BLOCK, OK_BLOCK] })
+    const lines = screen.getAllByTestId('month-line').map((n) => n.textContent)
+    expect(lines).toEqual(['9 Sarah (1 of 2)', '12pm Mike', '5pm Needs coach'])
+    expect(document.body.textContent).not.toMatch(/[!↓]\d/)
+    expect(document.body.textContent).not.toMatch(/\d+\/\d+/) // the old "1/3"
+    const dot = screen.getByTestId('status-dot')
+    expect(dot.getAttribute('title')).toBe('2 shifts need coaches: 1 with no coach, 1 below the minimum')
+  })
+
+  it('a coach reads the same names with no status, no numbers and no dot', async () => {
+    await renderMonth({ user: COACH, blocks: [SHORT_BLOCK, OK_BLOCK] })
+    // The fixture hands the coach a short block WITH min_coaches, which the
+    // real feed never does: the guarantee under test is the model's.
+    expect(screen.queryByTestId('status-dot')).toBeNull()
+    for (const line of screen.getAllByTestId('month-line')) {
+      expect(['ok', 'quiet']).toContain(line.getAttribute('data-tone'))
+      expect(line.textContent).not.toMatch(/\d+ of \d+|Needs coach/)
+      expect(line.getAttribute('title')).not.toMatch(/minimum|\d+ of \d+/)
+    }
+  })
+})

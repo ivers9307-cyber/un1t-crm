@@ -392,15 +392,19 @@ describe('unstaffed and adjusted read as text (ROSTER-FIX.6b)', () => {
     expect(eveningCard.className).toMatch(/border-dashed/)
   })
 
-  it('says "Unstaffed" on the month grid bar, where the only signal was a red hairline', async () => {
+  it('says it in text on the month grid too: the line, and the day\'s status', async () => {
     await renderCalendar()
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Month' })) })
 
-    // The mini bar for the evening block: red border only, before 6b.
-    const bars = Array.from(document.querySelectorAll('.sr-only')).map(n => n.textContent.trim())
-    expect(bars).toContain('Unstaffed.')
-    // And the day cell's count chip is spoken as well as shown as "!2".
-    expect(bars.some(t => /unstaffed$/.test(t))).toBe(true)
+    // ROSTERLOOK.1 — the evening block's line. Was a red hairline plus a
+    // visually-hidden "Unstaffed."; now the visible words carry it.
+    const lines = screen.getAllByTestId('month-line').map((n) => n.textContent)
+    expect(lines).toContain('5pm Needs coach')
+    // The staffed block names its coach instead of printing "9am 1/3".
+    expect(lines).toContain('9 Sarah')
+    // And the cell's "!1" is a status with words behind it.
+    const spoken = screen.getAllByTestId('status-dot').map((n) => n.querySelector('.sr-only').textContent)
+    expect(spoken).toContain('1 shift needs coaches: 1 with no coach')
   })
 
   it('gives the override marker a spoken name instead of a bare bullet', async () => {
