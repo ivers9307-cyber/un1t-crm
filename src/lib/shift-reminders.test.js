@@ -722,6 +722,27 @@ describe('runShiftReminders', () => {
     expect(summary).toMatchObject({ shift_skipped_no_recipient: 1, shift_pushed: 0 })
   })
 
+  it('email is the ONLY channel and the mail failed (sent 0, failed 0, email_failed 1): the claim is RELEASED so the next tick retries', async () => {
+    notifyUsers.mockResolvedValue({ ...SENT, sent: 0, email_failed: 1 })
+    const db = makeDb()
+    const summary = await runShiftReminders(db, { nowMs: NOW, locations: LOCATIONS })
+    expect(db.writes.map((w) => w.op)).toEqual(['insert', 'delete'])
+    expect(db.writes[1].where).toEqual(OWN_ROW)
+    expect(summary).toMatchObject({ shift_send_failed: 1, shift_skipped_no_recipient: 0 })
+  })
+
+  it.each([
+    ['push delivered, a second device failed', { sent: 1, failed: 1 }],
+    ['push delivered, the email fallback for someone failed', { sent: 1, email_failed: 1 }],
+    ['push failed, the email got through', { sent: 0, failed: 1, emailed: 1 }],
+  ])('a PARTIAL success never releases the claim: %s', async (_name, counts) => {
+    notifyUsers.mockResolvedValue({ ...SENT, sent: 0, ...counts })
+    const db = makeDb()
+    const summary = await runShiftReminders(db, { nowMs: NOW, locations: LOCATIONS })
+    expect(db.writes.map((w) => w.op)).toEqual(['insert', 'update'])
+    expect(summary.shift_send_failed).toBe(0)
+  })
+
   it('an email-fallback delivery counts as delivered', async () => {
     notifyUsers.mockResolvedValue({ ...SENT, sent: 0, emailed: 1 })
     const db = makeDb()

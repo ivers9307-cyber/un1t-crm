@@ -434,7 +434,8 @@ const ownLedgerRow = (query, s) =>
  *                           mild, a lost reminder is not.
  *   - ledger read fails  -> throw: fail CLOSED for this tick, next tick retries.
  *   - claim insert fails -> that reminder is NOT sent, logged at error level.
- *   - send fails         -> claim released, next tick retries.
+ *   - send fails         -> nothing delivered AND push or email failed: claim
+ *                           released, next tick retries (inside the send window).
  *
  * @param {object} db  service-role supabase client
  * @param {object} opts
@@ -544,8 +545,14 @@ export async function runShiftReminders(db, { nowMs = Date.now(), locations = []
       logWarn('shift-reminders', 'notify threw', { err: err?.message, assignment: s.id })
     }
 
+    // Release ONLY when nothing at all was delivered AND something failed, on
+    // either channel. email_failed counts: for a coach with no device (Android
+    // today) the email fallback is the only channel, and a mail blip with
+    // failed = 0 used to keep the claim and lose the reminder. Any delivery, on
+    // any channel, keeps the claim: a partial success must never repeat.
     const delivered = !!result && ((result.sent || 0) > 0 || (result.emailed || 0) > 0)
-    if (!result || (!delivered && (result.failed || 0) > 0)) {
+    const somethingFailed = !!result && ((result.failed || 0) > 0 || (result.email_failed || 0) > 0)
+    if (!result || (!delivered && somethingFailed)) {
       summary.shift_send_failed++
       const { error: releaseErr } = await ownLedgerRow(db.from('push_reminder_sends').delete(), s)
       if (releaseErr) logError('shift-reminders', 'claim release failed — this reminder will NOT retry', { err: releaseErr, assignment: s.id })
