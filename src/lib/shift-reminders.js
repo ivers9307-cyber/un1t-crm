@@ -20,7 +20,7 @@
 // Everything above runShiftReminders is PURE (no clock, no database) so the
 // timing table in shift-reminders.test.js can pin it, DST days included.
 
-import { localToUtc, formatLocalTime } from './push-reminders'
+import { localToUtc } from './push-reminders'
 import { addDaysISO, dublinDayStr } from './dublin-time'
 import { effectiveShiftStart, effectiveShiftEnd } from '@shared/roster-month'
 import { fetchApiShiftRows } from './roster-read'
@@ -31,6 +31,8 @@ export const NO_REMINDER_BEFORE = '07:00' // no push earlier than this, location
 export const EVENING_REMINDER_TIME = '20:00'
 export const DAY_LEAD_MINUTES = 120
 export const MIN_NOTICE_MINUTES = 30
+export const BODY_MAX_CHARS = 140 // roughly what a lock screen shows before it cuts the body
+export const MAX_CO_NAMES = 3
 export const RUN_GAP_MINUTES = 120 // a shift starting within this of the run's latest end is the same run
 
 const DEFAULT_TZ = 'Europe/Dublin'
@@ -251,22 +253,73 @@ function joinNames(names) {
   return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
 }
 
+// "Al, Bo and Cy" up to MAX_CO_NAMES, then "Al, Bo, Cy +2 more".
+function coNamesLabel(names) {
+  if (names.length <= MAX_CO_NAMES) return joinNames(names)
+  return `${names.slice(0, MAX_CO_NAMES).join(', ')} +${names.length - MAX_CO_NAMES} more`
+}
+
+// The wall-clock end of whichever shift of the run ends LATEST (a long shift
+// can outlast the one that starts after it). Minutes are counted from the
+// run's date, an end at or before its own start being the next day.
+function latestEndLabel(run) {
+  let best = null
+  for (const s of run) {
+    const start = effectiveShiftStart(s)
+    const end = effectiveShiftEnd(s)
+    if (!start || !end) continue
+    let mins = minutesOfDay(end)
+    if (mins < minutesOfDay(start)) mins += 24 * 60
+    if (!best || mins > best.mins) best = { mins, label: hhmm(end) }
+  }
+  return best?.label || ''
+}
+
 /**
- * Title + body. "today"/"tomorrow" is computed from the SHIFT's date against
- * the Dublin day of `nowMs`, not from the reminder kind: a catch-up reminder
- * for a 06:00 shift that fires at 05:00 must say "today".
+ * Title + body for ONE RUN of shifts (see buildShiftRuns), e.g.
+ *   "3 shifts tomorrow from 05:45"
+ *   "Tomorrow 05:45 to 10:30 at Studio North: Early Morning, Morning 8am, Morning 9:15 · with Bo and Sam"
+ *
+ * "today"/"tomorrow" is computed from the run's date against the Dublin day of
+ * `nowMs`, not from the reminder kind: a catch-up reminder for a 06:00 shift
+ * that fires at 05:00 must say "today". Studios are named in the order they
+ * are worked. `coNames` are the colleagues on the FIRST shift only.
+ *
+ * Kept lock-screen short: colleagues cap at MAX_CO_NAMES, and shift names give
+ * way to "+N more" from the end until the body fits BODY_MAX_CHARS (never
+ * below one name; the day, times and studio are never cut).
  */
-export function buildShiftReminderMessage({ shift, locationName, coNames = [], nowMs }) {
-  const start = effectiveShiftStart(shift)
-  const end = effectiveShiftEnd(shift)
+export function buildShiftReminderMessage({ run, nameByLocation = {}, coNames = [], nowMs }) {
+  const first = run[0]
+  const start = hhmm(effectiveShiftStart(first))
+  const end = latestEndLabel(run)
   const today = dublinDayStr(nowMs)
-  const dayWord = shift.shift_date === today
+  const dayWord = first.shift_date === today
     ? 'today'
-    : shift.shift_date === addDaysISO(today, 1) ? 'tomorrow' : `on ${shift.shift_date}`
-  const range = end ? `${formatLocalTime(start)}-${formatLocalTime(end)}` : formatLocalTime(start)
-  let body = [locationName, shift.shift_templates?.name, range].filter(Boolean).join(' · ')
-  if (coNames.length) body += ` · with ${joinNames(coNames)}`
-  return { title: `Shift ${dayWord} at ${formatLocalTime(start)}`, body }
+    : first.shift_date === addDaysISO(today, 1) ? 'tomorrow' : `on ${first.shift_date}`
+
+  const studios = []
+  for (const s of run) {
+    const n = nameByLocation[s.location_id]
+    if (n && !studios.includes(n)) studios.push(n)
+  }
+  const shiftNames = run.map((s) => s.shift_templates?.name).filter(Boolean)
+
+  let head = `${dayWord[0].toUpperCase()}${dayWord.slice(1)} ${start}`
+  if (end) head += ` to ${end}`
+  if (studios.length) head += ` at ${joinNames(studios)}`
+  const tail = coNames.length ? ` · with ${coNamesLabel(coNames)}` : ''
+
+  const compose = (shown) => {
+    if (shiftNames.length === 0) return head + tail
+    const hidden = shiftNames.length - shown
+    return `${head}: ${shiftNames.slice(0, shown).join(', ')}${hidden ? ` +${hidden} more` : ''}${tail}`
+  }
+  let shown = shiftNames.length
+  while (shown > 1 && compose(shown).length > BODY_MAX_CHARS) shown--
+
+  const title = run.length > 1 ? `${run.length} shifts ${dayWord} from ${start}` : `Shift ${dayWord} at ${start}`
+  return { title, body: compose(shown) }
 }
 
 function emptySummary() {
@@ -378,9 +431,9 @@ export async function runShiftReminders(db, { nowMs = Date.now(), locations = []
     }
 
     const { title, body } = buildShiftReminderMessage({
-      shift: s,
-      locationName: nameByLocation[s.location_id],
-      coNames: coRosteredFirstNames(s, rows, onLeave),
+      run: d.run,
+      nameByLocation,
+      coNames: coRosteredFirstNames(s, rows, onLeave), // the FIRST shift's colleagues only
       nowMs,
     })
     let result = null
@@ -396,6 +449,7 @@ export async function runShiftReminders(db, { nowMs = Date.now(), locations = []
           block_date: s.shift_date,
           location_id: s.location_id,
           lead_minutes: d.leadMinutes,
+          shift_count: d.run.length,
         },
       })
     } catch (err) {

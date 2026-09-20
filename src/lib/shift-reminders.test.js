@@ -18,7 +18,7 @@ const { logWarn, logError } = await import('./log')
 const {
   NO_REMINDER_BEFORE, DAY_LEAD_MINUTES,
   reminderPlanFor, isReminderDue, dueShiftReminders, buildShiftRuns, leaveKeysFor, leaveKey, reminderKey,
-  coRosteredFirstNames, buildShiftReminderMessage, runShiftReminders,
+  coRosteredFirstNames, buildShiftReminderMessage, BODY_MAX_CHARS, runShiftReminders,
 } = await import('./shift-reminders')
 
 const at = (iso) => Date.parse(iso)
@@ -436,32 +436,66 @@ describe('coRosteredFirstNames + buildShiftReminderMessage', () => {
     expect(coRosteredFirstNames(me, all, new Set([leaveKey('coach-2', '2026-09-22')]))).toEqual([])
   })
 
-  it('evening-before copy says "tomorrow" and names the studio, template, time range and colleagues', () => {
-    expect(buildShiftReminderMessage({
-      shift: me, locationName: 'Studio North', coNames: ['Bo', 'Sam'], nowMs: at('2026-09-21T19:00:00Z'),
-    })).toEqual({
-      title: 'Shift tomorrow at 6:00am',
-      body: 'Studio North · Early · 6:00am-2:00pm · with Bo and Sam',
+  // The message describes the RUN: day, first start to last end, studio(s), the
+  // shift names in order, then who is on the FIRST shift with you.
+  const NAMES = { 'loc-1': 'Studio North', 'loc-2': 'Studio South' }
+  const EVE = at('2026-09-21T19:00:00Z')
+  const msg = (run, over = {}) => buildShiftReminderMessage({ run, nameByLocation: NAMES, nowMs: EVE, ...over })
+
+  it('a single shift the evening before: "tomorrow", 24h times, studio, shift name, colleagues', () => {
+    expect(msg([me], { coNames: ['Bo', 'Sam'] })).toEqual({
+      title: 'Shift tomorrow at 06:00',
+      body: 'Tomorrow 06:00 to 14:00 at Studio North: Early · with Bo and Sam',
     })
   })
 
-  it('a catch-up that fires on the day says "today", and no colleagues means no "with"', () => {
-    expect(buildShiftReminderMessage({
-      shift: me, locationName: 'Studio North', coNames: [], nowMs: at('2026-09-22T04:00:00Z'),
-    })).toEqual({ title: 'Shift today at 6:00am', body: 'Studio North · Early · 6:00am-2:00pm' })
+  it('a run of three reads first start to LAST end with the shift names in order', () => {
+    expect(msg([r1(), r2(), r3()])).toEqual({
+      title: '3 shifts tomorrow from 05:45',
+      body: 'Tomorrow 05:45 to 10:30 at Studio North: Early Morning, Morning 8am, Morning 9:15',
+    })
+  })
+
+  it('a reminder that fires on the day says "today", and no colleagues means no "with"', () => {
+    expect(msg([r4()], { nowMs: at('2026-09-22T14:45:00Z') })).toEqual({
+      title: 'Shift today at 17:45',
+      body: 'Today 17:45 to 20:30 at Studio North: Evening',
+    })
   })
 
   it('"tomorrow" is the DUBLIN tomorrow: 23:30 UTC on 21 Sep is already 22 Sep in Dublin', () => {
-    expect(buildShiftReminderMessage({
-      shift: me, locationName: 'Studio North', nowMs: at('2026-09-21T23:30:00Z'),
-    }).title).toBe('Shift today at 6:00am')
+    expect(msg([me], { nowMs: at('2026-09-21T23:30:00Z') }).title).toBe('Shift today at 06:00')
   })
 
-  it('three colleagues read "A, B and C"; the effective (overridden) times are the ones shown', () => {
+  it('a run across two studios names both, in the order they are worked', () => {
+    expect(msg([r1({ location_id: 'loc-2' }), r2(), r3({ location_id: 'loc-2' })]).body)
+      .toBe('Tomorrow 05:45 to 10:30 at Studio South and Studio North: Early Morning, Morning 8am, Morning 9:15')
+  })
+
+  it('the end is the LATEST end in the run, not the last shift\'s; overridden and overnight times are the ones shown', () => {
+    const long = tplShift('long', 'Long', '06:00', '12:00')
+    const inside = tplShift('inside', 'Inside', '07:00', '08:00')
+    expect(msg([long, inside]).body).toBe('Tomorrow 06:00 to 12:00 at Studio North: Long, Inside')
     const moved = shift({ start_time_override: '07:00:00', end_time_override: '11:30:00' })
-    expect(buildShiftReminderMessage({
-      shift: moved, locationName: 'Studio North', coNames: ['Al', 'Bo', 'Cy'], nowMs: at('2026-09-21T19:00:00Z'),
-    }).body).toBe('Studio North · Early · 7:00am-11:30am · with Al, Bo and Cy')
+    expect(msg([moved], { coNames: ['Al', 'Bo', 'Cy'] }).body).toBe('Tomorrow 07:00 to 11:30 at Studio North: Early · with Al, Bo and Cy')
+    expect(msg([tplShift('n', 'Night', '22:00', '02:00')]).body).toBe('Tomorrow 22:00 to 02:00 at Studio North: Night')
+  })
+
+  it('stays lock-screen short: colleagues cap at 3, shift names give way to "+N more" until the body fits', () => {
+    expect(BODY_MAX_CHARS).toBe(140)
+    expect(msg([me], { coNames: ['Al', 'Bo', 'Cy', 'Di', 'Ed'] }).body)
+      .toBe('Tomorrow 06:00 to 14:00 at Studio North: Early · with Al, Bo, Cy +2 more')
+    const many = ['05:45', '06:45', '07:45', '08:45', '09:45', '10:45'].map((start, i) =>
+      tplShift(`m${i}`, `Strength and Conditioning Block ${i + 1}`, start, `${String(Number(start.slice(0, 2)) + 1).padStart(2, '0')}:45`))
+    const { title, body } = msg(many, { coNames: ['Al', 'Bo'] })
+    expect(title).toBe('6 shifts tomorrow from 05:45')
+    expect(body).toBe('Tomorrow 05:45 to 11:45 at Studio North: Strength and Conditioning Block 1, Strength and Conditioning Block 2 +4 more · with Al and Bo')
+    expect(body.length).toBeLessThanOrEqual(BODY_MAX_CHARS)
+  })
+
+  it('never drops below one shift name, and tolerates a missing studio name or template name', () => {
+    expect(msg([me], { nameByLocation: {} }).body).toBe('Tomorrow 06:00 to 14:00: Early')
+    expect(msg([shift({ shift_templates: { start_time: '06:00:00', end_time: '14:00:00' } })]).body).toBe('Tomorrow 06:00 to 14:00 at Studio North')
   })
 })
 
@@ -531,11 +565,11 @@ describe('runShiftReminders', () => {
     expect(writesAtSend).toEqual(['insert']) // the claim was already written when the push went out
     expect(notifyUsers).toHaveBeenCalledTimes(1)
     expect(notifyUsers).toHaveBeenCalledWith(['coach-1'], {
-      title: 'Shift tomorrow at 6:00am',
-      body: 'Studio North · Early · 6:00am-2:00pm',
+      title: 'Shift tomorrow at 06:00',
+      body: 'Tomorrow 06:00 to 14:00 at Studio North: Early',
       category: 'shift_reminder',
-      emailSubject: 'Shift tomorrow at 6:00am',
-      data: { type: 'shift_reminder', assignment_id: 'assign-1', block_date: '2026-09-22', location_id: 'loc-1', lead_minutes: 600 },
+      emailSubject: 'Shift tomorrow at 06:00',
+      data: { type: 'shift_reminder', assignment_id: 'assign-1', block_date: '2026-09-22', location_id: 'loc-1', lead_minutes: 600, shift_count: 1 },
     })
     expect(db.writes).toEqual([
       { op: 'insert', row: { ...OWN_ROW, lead_time_minutes: 600, push_count: 0, push_invalidated: 0 } },
@@ -614,7 +648,7 @@ describe('runShiftReminders', () => {
     await runShiftReminders(db, { nowMs: NOW, locations: LOCATIONS })
     expect(notifyUsers).toHaveBeenCalledTimes(1)
     expect(notifyUsers.mock.calls[0][0]).toEqual(['coach-1'])
-    expect(notifyUsers.mock.calls[0][1].body).toBe('Studio North · Early · 6:00am-2:00pm')
+    expect(notifyUsers.mock.calls[0][1].body).toBe('Tomorrow 06:00 to 14:00 at Studio North: Early')
   })
 
   it('two coaches on one block each get their own reminder naming the other', async () => {
@@ -622,8 +656,8 @@ describe('runShiftReminders', () => {
     fetchApiShiftRows.mockResolvedValue({ rows: [shift(), mate], error: null })
     await runShiftReminders(makeDb(), { nowMs: NOW, locations: LOCATIONS })
     expect(notifyUsers.mock.calls.map(([ids, p]) => [ids[0], p.body])).toEqual([
-      ['coach-1', 'Studio North · Early · 6:00am-2:00pm · with Sam'],
-      ['coach-9', 'Studio North · Early · 6:00am-2:00pm · with Alex'],
+      ['coach-1', 'Tomorrow 06:00 to 14:00 at Studio North: Early · with Sam'],
+      ['coach-9', 'Tomorrow 06:00 to 14:00 at Studio North: Early · with Alex'],
     ])
   })
 
