@@ -753,6 +753,19 @@ export default function Schedule() {
         </Pressable>
       )}
 
+      {/* LEAVEPHONE.1 — "My leave": the coach's own requests with the manager's
+          reply. Same `time_off` gate as the button above; bottom-left so the
+          two never overlap. */}
+      {canMobile(profile, 'time_off', activeLocation) && (
+        <Pressable
+          onPress={() => router.push('/schedule/my-leave')}
+          className="absolute bottom-6 left-6 bg-un1t-surface border border-un1t-border rounded-full px-5 py-3.5 flex-row items-center shadow-lg active:opacity-80"
+        >
+          <Ionicons name="list-outline" size={18} color="#111827" />
+          <Text className="text-un1t-text font-semibold ml-1.5">My leave</Text>
+        </Pressable>
+      )}
+
       {/* Adjust modal — partial-shift override editor (mig 099/100). */}
       <AdjustSheet
         shift={adjustingShift}
