@@ -115,6 +115,7 @@ export async function GET(request) {
     booking_pushed: 0,
     booking_skipped_dup: 0,
     booking_send_failed: 0,
+    shift_arm_failed: 0, // 1 = the shift arm THREW this tick (see the SHIFTS block)
     lead_time_buckets: [], // for logging / debugging
   }
 
@@ -385,10 +386,16 @@ export async function GET(request) {
   try {
     Object.assign(summary, await runShiftReminders(db, { nowMs, locations: locations || [] }))
   } catch (err) {
+    // VISIBLE, not just logged: the heartbeat below is stamped either way and
+    // the response is ok:true, so without this key an arm that throws on every
+    // tick (a select 400, say) would look exactly like a quiet day. Same class
+    // as the 24-day silent enrolment outage (#1685).
+    summary.shift_arm_failed = 1
     logError('cron-push-reminders', 'shift block threw', { err })
   }
 
-  if (Object.values(summary).some(v => Array.isArray(v) ? v.length > 0 : v > 0)) {
+  // quiet_hours alone is not news: it is 1 on every tick from 22:00 to 07:00.
+  if (Object.entries(summary).some(([k, v]) => k !== 'quiet_hours' && (Array.isArray(v) ? v.length > 0 : v > 0))) {
     logInfo('cron-push-reminders', 'tick', summary)
   }
 
