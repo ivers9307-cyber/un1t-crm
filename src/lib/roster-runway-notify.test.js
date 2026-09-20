@@ -11,7 +11,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('./push-dedup', () => ({ notifyUsersAtRolesOnce: vi.fn() }))
 vi.mock('./roster-runway-data', () => ({ fetchRosterRunways: vi.fn() }))
-vi.mock('./log', () => ({ logWarn: vi.fn() }))
+vi.mock('./log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
 
 const { notifyUsersAtRolesOnce } = await import('./push-dedup')
 const { fetchRosterRunways } = await import('./roster-runway-data')
@@ -59,8 +59,13 @@ beforeEach(() => {
 // A staff push that is not a reply to the recipient's own action may only be
 // SENT while the studio's wall clock is inside [07:00, 22:00).
 describe('isInRunwaySendWindow', () => {
-  it('pins the band', () => {
+  it('pins the band, and that it IS the shift reminders\' band (one rule for every unprompted staff push)', async () => {
     expect([RUNWAY_SEND_FROM, RUNWAY_SEND_UNTIL]).toEqual(['07:00', '22:00'])
+    const shared = await import('./shift-reminders')
+    expect([RUNWAY_SEND_FROM, RUNWAY_SEND_UNTIL]).toEqual([shared.NO_REMINDER_BEFORE, shared.NO_REMINDER_FROM])
+    for (const ms of [Date.UTC(2026, 8, 19, 5, 59), Date.UTC(2026, 8, 19, 6, 0), Date.UTC(2026, 8, 19, 20, 59), Date.UTC(2026, 8, 19, 21, 0)]) {
+      expect(isInRunwaySendWindow(ms, 'Europe/Dublin')).toBe(shared.isInSendWindow(ms, 'Europe/Dublin'))
+    }
   })
 
   // [UTC instant, zone, open?]
@@ -147,7 +152,7 @@ describe('decideRunwayPush — pure', () => {
     expect(decideRunwayPush({ ...tick, location: { id: NORTH.id, name: NORTH.name } })).toMatchObject({ send: true, timezoneFallback: false })
   })
 
-  it.each(['', '   ', 'Mars/Olympus', 'Europe/Dubln', '+01:00', 42, {}])(
+  it.each(['', '   ', 'Mars/Olympus', 'Europe/Dubln', 42, {}, []])(
     'an invalid or empty timezone (%j) falls back to Dublin, says so, and never throws',
     (timezone) => {
       expect(decideRunwayPush({ runway: RUNWAY, location: { ...NORTH, timezone }, nowMs: CRON_TICK }))

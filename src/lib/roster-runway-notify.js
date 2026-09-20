@@ -34,7 +34,11 @@
 import { notifyUsersAtRolesOnce } from './push-dedup'
 import { fetchRosterRunways } from './roster-runway-data'
 import { dublinDayStr } from './dublin-time'
-import { isValidTz, DEFAULT_TZ } from './tz-time'
+// QUIET HOURS are SHIFTREMIND.1's (#1730): one band, one predicate, one
+// timezone validator for every unprompted staff push. Imported, not copied, so
+// the two cannot drift. (COVERLOOP.1 is moving them to src/lib/staff-push-hours.js
+// and re-exporting from shift-reminders.js, so this import keeps working.)
+import { isInSendWindow, isValidTimeZone, NO_REMINDER_BEFORE, NO_REMINDER_FROM } from './shift-reminders'
 import { rosterRunwayHeadline, rosterRunwayDetail } from '@shared/roster-runway'
 import { logWarn } from './log'
 
@@ -42,38 +46,24 @@ import { logWarn } from './log'
 // masters linked to the location.
 export const RUNWAY_NOTIFY_ROLES = Object.freeze(['owner', 'manager', 'head_coach'])
 
-// The send band, studio wall clock, [from, until).
-export const RUNWAY_SEND_FROM = '07:00'
-export const RUNWAY_SEND_UNTIL = '22:00'
+const DEFAULT_TZ = 'Europe/Dublin'
+
+// The send band, studio wall clock, [from, until): shift-reminders' own.
+export const RUNWAY_SEND_FROM = NO_REMINDER_BEFORE
+export const RUNWAY_SEND_UNTIL = NO_REMINDER_FROM
 
 export const runwayEventKey = (locationId, runway) =>
   `roster_runway:${locationId}:${runway.weekStart}:${runway.severity}`
 
-const _clockFmt = new Map()
-function wallClockHHMM(nowMs, tz) {
-  if (!_clockFmt.has(tz)) {
-    _clockFmt.set(tz, new Intl.DateTimeFormat('en-GB', {
-      timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
-    }))
-  }
-  const parts = _clockFmt.get(tz).formatToParts(new Date(nowMs))
-  const get = (type) => parts.find((p) => p.type === type)?.value
-  // 'en-GB' has historically emitted hour '24' at midnight (tz-time.js and
-  // dublin-time.js carry the same guard).
-  const hour = get('hour') === '24' ? '00' : get('hour')
-  return `${hour}:${get('minute')}`
-}
-
 /**
- * True only while the wall clock in `tz` is inside [07:00, 22:00). Intl does
- * the DST work, so the 23-hour and 25-hour days need no special case. An
- * invalid `tz` reads as Dublin rather than throwing (decideRunwayPush is what
- * reports the fallback). An unreadable instant is CLOSED: never push on a guess.
+ * True only while the wall clock in `tz` is inside [07:00, 22:00): 07:00
+ * inclusive, 22:00 exclusive. The predicate is shift-reminders' isInSendWindow
+ * (Intl does the DST work; an invalid `tz` reads as Dublin rather than
+ * throwing). The one thing added here: an unreadable instant is CLOSED, never
+ * a throw and never a push on a guess.
  */
 export function isInRunwaySendWindow(nowMs, tz = DEFAULT_TZ) {
-  if (!Number.isFinite(nowMs)) return false
-  const wall = wallClockHHMM(nowMs, isValidTz(tz) ? tz : DEFAULT_TZ)
-  return wall >= RUNWAY_SEND_FROM && wall < RUNWAY_SEND_UNTIL
+  return Number.isFinite(nowMs) && isInSendWindow(nowMs, tz)
 }
 
 /**
@@ -81,7 +71,7 @@ export function isInRunwaySendWindow(nowMs, tz = DEFAULT_TZ) {
  *
  * locations.timezone is nullable free text. null / undefined is "not set" and
  * means Dublin, silently (the column default). Anything else that is not a
- * real IANA zone (empty, a typo, a fixed offset, a non-string) ALSO means
+ * zone Intl accepts (empty, blank, a typo, a non-string) ALSO means
  * Dublin, but `timezoneFallback` is true so the caller can warn once. Never
  * throws.
  *
@@ -94,7 +84,7 @@ export function decideRunwayPush({ runway, location, nowMs }) {
   if (!runway) return { send: false, reason: 'ready' }
 
   const raw = location?.timezone
-  const valid = isValidTz(raw)
+  const valid = isValidTimeZone(raw)
   const timezoneFallback = raw != null && !valid
   const tz = valid ? raw : DEFAULT_TZ
 
