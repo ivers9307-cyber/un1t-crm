@@ -2,7 +2,7 @@
 // what these return. Note what is NOT here: any counting of days.
 import { describe, it, expect } from 'vitest'
 import {
-  leavePreviewFrom, leaveDaysLabel, pendingHolidayDays, leaveBalanceView, leaveBalanceLines,
+  leavePreviewFrom, leaveDaysLabel, leaveDaysHint, pendingHolidayDays, leaveBalanceView, leaveBalanceLines,
   leaveClashSummary, submittedDays, leaveSubmittedMessage,
 } from './leave-form'
 
@@ -47,6 +47,13 @@ describe('leaveDaysLabel', () => {
   it('when the server could not say, it says so — it never shows a locally computed number', () => {
     expect(leaveDaysLabel({ loading: false, preview: UNKNOWN })).toBe('Days are counted when you submit')
     expect(leaveDaysLabel({ loading: false, preview: undefined })).toBe('Days are counted when you submit')
+  })
+})
+
+describe('leaveDaysHint', () => {
+  it('explains the working-day rule for holiday only', () => {
+    expect(leaveDaysHint('holiday')).toMatch(/bank holidays/)
+    for (const t of ['sick', 'unpaid', 'other', 'unavailable']) expect(leaveDaysHint(t)).toBeNull()
   })
 })
 

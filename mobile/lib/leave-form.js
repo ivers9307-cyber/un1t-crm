@@ -45,6 +45,13 @@ export function leaveDaysLabel({ loading, preview }) {
   return `This request uses ${n} ${plural(n, 'day', 'days')}`
 }
 
+/** The small print under the days line: only holiday has a rule worth explaining. */
+export function leaveDaysHint(type) {
+  return type === 'holiday'
+    ? 'Holiday counts working days only. Weekends, bank holidays and days the studio is closed are free.'
+    : null
+}
+
 /**
  * Mirrors the POST's pending read: type 'holiday', RAW status 'pending' (an
  * expired pending request still counts server-side), start_date in the year.
