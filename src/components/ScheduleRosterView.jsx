@@ -84,7 +84,10 @@ export default function ScheduleRosterView({ user }) {
           from that day's header. Manager only, as the strip was. */}
       {showOverview && (
         <StudioOverviewDialog
-          range={scheduleRange}
+          // Week view only. The dialog opens from a WEEK day header; month
+          // view has none, so its 42-day range would be fetched (on every
+          // navigation and every mutation) for nobody.
+          range={scheduleRange?.viewType === 'month' ? null : scheduleRange}
           locationId={user.activeLocation.id}
           dataVersion={scheduleDataVersion}
           openDate={overviewDate}

@@ -10,9 +10,10 @@
 // CONTROLLED now: the parent says which day is open (`openDate`) because the
 // thing that opens it lives in a sibling component.
 //
-// It still fetches /api/schedule/overview whenever the calendar's range or
+// It still fetches /api/schedule/overview whenever the calendar's WEEK range or
 // `dataVersion` changes, open or not, so a click on a header opens onto data
-// that is already there. Same request count as the strip.
+// that is already there. In month view the parent passes no range and nothing
+// is fetched: the strip drew 42 tiles there, the dialog cannot be opened there.
 //
 // Almost all of it is informational (edit events at /events, booking types at
 // /bookings/event-types). The ONE exception is the undermanned-shift rows:
@@ -61,11 +62,20 @@ function fmtTime(t) {
 // Safari does not focus a button on click, so there the opener has to be
 // handed over rather than inferred.
 export default function StudioOverviewDialog({ range, locationId, dataVersion = 0, openDate, onClose, onOpenShift, restoreFocusRef }) {
-  const [data, setData] = useState(null)
+  // `loaded` remembers WHICH range the data answers for. A refetch of the same
+  // range (a dataVersion bump) keeps the previous data on screen, as the strip
+  // did; data for a DIFFERENT range is not this range's data, and showing it
+  // would tell the operator "No overview for this day" about a day that is
+  // simply still loading.
+  const [loaded, setLoaded] = useState(null) // { key, data }
   const [error, setError] = useState(null)
+  const rangeKey = range?.from && range?.to && locationId ? `${range.from}|${range.to}|${locationId}` : null
+  const data = loaded && loaded.key === rangeKey ? loaded.data : null
 
   useEffect(() => {
-    if (!range?.from || !range?.to || !locationId) return
+    // No range = nothing can open this dialog (the parent passes none in month
+    // view, where there are no day headers), so there is nothing to fetch.
+    if (!rangeKey) return
     let cancelled = false
     setError(null)
     const url = `/api/schedule/overview?from=${range.from}&to=${range.to}&location_id=${locationId}`
@@ -75,14 +85,14 @@ export default function StudioOverviewDialog({ range, locationId, dataVersion = 
         if (cancelled) return
         if (!j.success) {
           setError(j.error || 'Failed to load overview')
-          setData(null)
+          setLoaded(null)
         } else {
-          setData(j.data)
+          setLoaded({ key: rangeKey, data: j.data })
         }
       })
       .catch((e) => { if (!cancelled) setError(e.message || 'Network error') })
     return () => { cancelled = true }
-  }, [range?.from, range?.to, locationId, dataVersion])
+  }, [rangeKey, range?.from, range?.to, locationId, dataVersion])
 
   if (!openDate) return null
 

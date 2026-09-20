@@ -203,3 +203,25 @@ describe('Studio Overview, from a day header → the shift it names (CAL-UI-LOW.
     })
   })
 })
+
+// ROSTERLOOK.1 — the strip used to show 42 tiles in month view, so it fetched
+// 42 days. The dialog cannot be opened from month view at all (only a week
+// day header opens it), so a month-view fetch is a request, on every
+// navigation and every mutation, for data nobody can look at.
+describe('the Studio Overview is only fetched where it can be opened', () => {
+  const overviewCalls = () => global.fetch.mock.calls.map(([u]) => String(u)).filter((u) => u.includes('/api/schedule/overview'))
+
+  it('week view fetches it eagerly; month view does not fetch it at all', async () => {
+    await renderView({ near: true })
+    expect(overviewCalls()).toHaveLength(1)
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Month' })) })
+    await waitFor(() => expect(screen.queryByText(/Loading roster/)).toBeNull())
+    expect(overviewCalls()).toHaveLength(1)
+
+    // Back in week view it is wanted again.
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Week' })) })
+    await waitFor(() => expect(screen.queryByText(/Loading roster/)).toBeNull())
+    expect(overviewCalls()).toHaveLength(2)
+  })
+})

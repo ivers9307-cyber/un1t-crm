@@ -173,6 +173,34 @@ describe('states the strip used to show above the calendar now show in the dialo
     expect(dialog.textContent).toMatch(/No overview for this day/)
   })
 
+  it('opened for a NEW range whose overview has not answered: loading, never the last range\'s "no overview"', async () => {
+    // First range answers; the second never does.
+    let calls = 0
+    global.fetch = vi.fn(() => {
+      calls += 1
+      return calls === 1
+        ? Promise.resolve({ ok: true, json: () => Promise.resolve(okResponse) })
+        : new Promise(() => {})
+    })
+    function Moving() {
+      const [range, setRange] = useState(RANGE)
+      const [openDate, setOpenDate] = useState(null)
+      return (
+        <>
+          <button type="button" onClick={() => setRange({ from: '2026-09-28', to: '2026-10-04' })}>next week</button>
+          <button type="button" onClick={() => setOpenDate('2026-09-29')}>open day</button>
+          <StudioOverviewDialog range={range} locationId={LOCATION} openDate={openDate} onClose={() => setOpenDate(null)} />
+        </>
+      )
+    }
+    await act(async () => { render(<Moving />) })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'next week' })) })
+    fireEvent.click(screen.getByRole('button', { name: 'open day' }))
+    const dialog = screen.getByRole('dialog')
+    expect(dialog.textContent).toMatch(/Loading overview/)
+    expect(dialog.textContent).not.toMatch(/No overview for this day/)
+  })
+
   it('opened before the overview has answered: a loading line, then nothing to wait for', async () => {
     // A fetch that never resolves: the state under test IS "still loading".
     global.fetch = vi.fn(() => new Promise(() => {}))
