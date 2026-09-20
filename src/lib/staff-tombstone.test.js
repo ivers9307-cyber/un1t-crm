@@ -181,3 +181,29 @@ describe('needsAuthRetry / describeDeleteResult', () => {
       .toEqual(['They were already permanently deleted. Nothing was changed.', 'Their login has been disabled.'])
   })
 })
+
+// The scrub matches on the ADDRESS alone. If the profile's email was a shared
+// studio mailbox, everyone reading that mailbox stops getting the report — so
+// the operator must see the count BEFORE confirming, and again in the result.
+describe('describeTombstoneImpact — scheduled reports', () => {
+  const base = { removed_shifts: [], cancelled_swaps: [], cancelled_time_off: [], kept: {} }
+  it('says how many reports lose the address, and what that means for a shared mailbox', () => {
+    expect(describeTombstoneImpact({ ...base, scrubbed: { scheduled_reports: 3 } }).reports)
+      .toBe('Removed from 3 scheduled reports. Anyone sharing that address stops receiving them.')
+    expect(describeTombstoneImpact({ ...base, scrubbed: { scheduled_reports: 1 } }).reports)
+      .toBe('Removed from 1 scheduled report. Anyone sharing that address stops receiving them.')
+  })
+  it('says nothing when no report names them', () => {
+    expect(describeTombstoneImpact({ ...base, scrubbed: { scheduled_reports: 0 } }).reports).toBeUndefined()
+    expect(describeTombstoneImpact(base).reports).toBeUndefined()
+  })
+  it('is part of the RESULT notice too, and never of a retry (a retry scrubs nothing)', () => {
+    expect(describeDeleteResult({ ...base, scrubbed: { scheduled_reports: 2 }, auth: 'ban', auth_completed: true })).toEqual([
+      'They are on no upcoming shifts.',
+      'Removed from 2 scheduled reports. Anyone sharing that address stops receiving them.',
+      'Their login has been disabled.',
+      'Kept, under their name: their allowance and pay records, and every report.',
+    ])
+    expect(describeDeleteResult({ already_deleted: true, auth: 'ban', auth_completed: true, scrubbed: { scheduled_reports: 2 } }).join(' ')).not.toMatch(/scheduled report/)
+  })
+})

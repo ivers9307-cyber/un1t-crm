@@ -134,8 +134,16 @@ export function describeTombstoneImpact(summary) {
     arrived > 0 && `Already arrived for ${plural(arrived, 'upcoming shift', 'upcoming shifts')}: kept.`,
   ].filter(Boolean)
   const role = summary?.role
+  // mig 622 takes their address off every scheduled report's recipient list.
+  // It matches on the ADDRESS alone, so a shared studio mailbox used as the
+  // profile email stops receiving those reports for everyone — the operator
+  // must see the count BEFORE confirming (the dry run computes it, read-only).
+  const reports = Number(summary?.scrubbed?.scheduled_reports) || 0
   return {
     removes,
+    reports: reports > 0
+      ? `Removed from ${plural(reports, 'scheduled report', 'scheduled reports')}. Anyone sharing that address stops receiving them.`
+      : undefined,
     // Today's shifts that have already started are HISTORY, not "upcoming".
     keptToday: keptLines.length > 0 ? keptLines.join(' ') : undefined,
     demotion: role?.from && role.from !== role.to
@@ -178,5 +186,5 @@ export function describeDeleteResult(result) {
     return [result.changed === false ? 'They were already permanently deleted. Nothing was changed.' : 'They were already permanently deleted.', login]
   }
   const d = describeTombstoneImpact(result)
-  return [...d.removes, d.keptToday, d.demotion, login, d.keeps].filter(Boolean)
+  return [...d.removes, d.keptToday, d.demotion, d.reports, login, d.keeps].filter(Boolean)
 }

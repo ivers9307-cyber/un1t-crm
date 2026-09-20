@@ -1385,6 +1385,7 @@ function PermanentDeleteButton({ staffId, staffName }) {
               </ul>
               {impact.keptToday && <p>{impact.keptToday}</p>}
               {impact.demotion && <p>{impact.demotion}</p>}
+              {impact.reports && <p className="font-medium text-red-700">{impact.reports}</p>}
               <p>{impact.login}</p>
               <p>{impact.keeps}</p>
             </>

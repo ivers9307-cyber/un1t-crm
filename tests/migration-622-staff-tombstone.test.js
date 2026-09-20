@@ -579,6 +579,15 @@ describe('mig 622 — tombstone_staff_profile', () => {
     expect(JSON.stringify(Object.values(got)).toLowerCase()).not.toContain('former.coach@example.test')
   })
 
+  it('the DRY RUN counts the reports that WILL lose the address — a shared studio mailbox included — and changes none of them', async () => {
+    // The profile's email doubles as a shared mailbox on two reports.
+    await runSql(`INSERT INTO public.scheduled_reports (report_name, email_recipients) VALUES
+      ('Studio weekly', ARRAY['former.coach@example.test']), ('Studio monthly', ARRAY['FORMER.COACH@example.test', 'boss@example.test']), ('Other', ARRAY['boss@example.test'])`)
+    const before = JSON.stringify(await rows('SELECT report_name, email_recipients, updated_at FROM public.scheduled_reports ORDER BY report_name'))
+    expect((await tombstone(GONE, { dryRun: true })).scrubbed).toEqual({ scheduled_reports: 2 })
+    expect(JSON.stringify(await rows('SELECT report_name, email_recipients, updated_at FROM public.scheduled_reports ORDER BY report_name'))).toBe(before)
+  })
+
   it('redacts what the audit trigger re-saved, and the email in older audit rows', async () => {
     await tombstone()
     const all = JSON.stringify(await rows('SELECT actor_label, target_label, details FROM public.audit_events'))
