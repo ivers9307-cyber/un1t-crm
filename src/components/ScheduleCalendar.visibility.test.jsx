@@ -484,3 +484,33 @@ describe('month view names the coaches (ROSTERLOOK.1)', () => {
     }
   })
 })
+
+// 🔴 NOT proof. The defect was measured in a browser: at 390px the document was
+// 777px wide, because sr-only spans (position:absolute) inside the 7-column
+// grid had no positioned ancestor inside the grid's own scroller, so the
+// scroller did not clip them. The proof is, at 390 wide:
+//   document.documentElement.scrollWidth <= document.documentElement.clientWidth
+// This pins the classes that make that true so they are not dropped again.
+describe('the roster scrolls inside its own container, not the page (ROSTERLOOK.1)', () => {
+  const POSITIONED = /(^|\s)(relative|absolute|fixed|sticky)(\s|$)/
+
+  it('week view: the scroller is a containing block, and no sr-only span escapes it', async () => {
+    await renderCalendar({ blocks: [SHORT_BLOCK, EMPTY_BLOCK, OK_BLOCK] })
+    const scroller = screen.getAllByTestId('day-header')[0].closest('.overflow-x-auto')
+    expect(scroller.className).toMatch(/\brelative\b/)
+    const hidden = scroller.querySelectorAll('.sr-only')
+    expect(hidden.length).toBeGreaterThan(0)
+    for (const el of hidden) expect(el.parentElement.className, el.parentElement.outerHTML.slice(0, 120)).toMatch(POSITIONED)
+  })
+
+  it('month view: the same', async () => {
+    await renderCalendar({ blocks: [SHORT_BLOCK, EMPTY_BLOCK, OK_BLOCK] })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Month' })) })
+    await waitFor(() => expect(screen.queryByText(/Loading roster/)).toBeNull())
+    const scroller = screen.getAllByTestId('month-line')[0].closest('.overflow-x-auto')
+    expect(scroller.className).toMatch(/\brelative\b/)
+    const hidden = scroller.querySelectorAll('.sr-only')
+    expect(hidden.length).toBeGreaterThan(0)
+    for (const el of hidden) expect(el.parentElement.className, el.parentElement.outerHTML.slice(0, 120)).toMatch(POSITIONED)
+  })
+})

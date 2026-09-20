@@ -33,7 +33,7 @@ export default function MonthCell({ dayNumber, inFocusedMonth, isToday, holiday,
     <button
       type="button"
       onClick={onOpen}
-      className={`text-left bg-un1t-surface border rounded-md p-1.5 min-h-[88px] transition-colors hover:border-un1t-text/30 ${
+      className={`relative text-left bg-un1t-surface border rounded-md p-1.5 min-h-[88px] transition-colors hover:border-un1t-text/30 ${
         inFocusedMonth ? 'border-un1t-border' : 'border-un1t-border/50 opacity-60'
       } ${isToday ? 'ring-1 ring-blue-400/50' : ''} ${holiday ? 'bg-amber-500/[0.06]' : ''}`}
     >
@@ -46,7 +46,7 @@ export default function MonthCell({ dayNumber, inFocusedMonth, isToday, holiday,
           {assignmentCount > 0 && (
             <span
               data-testid="month-assignment-count"
-              className="text-[10px] px-1.5 py-0.5 rounded bg-un1t-border/60 text-un1t-subtle"
+              className="relative text-[10px] px-1.5 py-0.5 rounded bg-un1t-border/60 text-un1t-subtle"
               title={`${assignmentCount} coach assignment${assignmentCount === 1 ? '' : 's'}`}
             >
               {assignmentCount}

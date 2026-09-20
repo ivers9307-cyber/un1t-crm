@@ -28,6 +28,11 @@
 // status in words); being an ancestor of the button it shows on hover without
 // becoming part of the button's accessible name or description.
 //
+// 🔴 POSITIONING. The card is `relative` (the button stretches over it), and so
+// is every inner element holding an sr-only span: sr-only is position:absolute
+// and an unanchored one escapes the roster's horizontal scroller and widens
+// the page on a phone. Do not drop those `relative`s.
+//
 // STRUCTURE (ROSTER-FIX.6b-7, kept): the card is a plain container; the click
 // target is a real <button> stretched over it with a short name of its own, so
 // the card's text stays separately browsable by a screen reader.
@@ -76,7 +81,7 @@ export default function ShiftCard({ model, dayLabel, isMine = false, showHint = 
               {c.adjusted && (
                 <span
                   data-testid="adjusted-marker"
-                  className="shrink-0 rounded bg-amber-500/10 px-1 text-[10px] font-medium text-amber-700"
+                  className="relative shrink-0 rounded bg-amber-500/10 px-1 text-[10px] font-medium text-amber-700"
                   title={c.adjusted.title}
                 >
                   <span aria-hidden="true">Adjusted</span>
@@ -106,7 +111,7 @@ export default function ShiftCard({ model, dayLabel, isMine = false, showHint = 
       {model.status?.kind === 'short' && (
         <div
           data-testid="short-staffed-badge"
-          className="mt-1 inline-flex items-center rounded bg-amber-500/10 px-1.5 py-0.5 text-[11px] font-medium text-amber-700"
+          className="relative mt-1 inline-flex items-center rounded bg-amber-500/10 px-1.5 py-0.5 text-[11px] font-medium text-amber-700"
           title={model.status.title}
         >
           <span className="sr-only">{model.status.srPrefix}</span>

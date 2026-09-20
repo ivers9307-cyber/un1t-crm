@@ -54,6 +54,23 @@ describe('DayHeader', () => {
     else expect(shown).toBeNull()
   })
 
+  // 🔴 Tailwind's sr-only is position:absolute + white-space:nowrap. Inside the
+  // roster's horizontal scroller an sr-only span with no positioned ancestor is
+  // NOT clipped by that scroller: it widened the whole DOCUMENT to 777px on a
+  // 390px phone. jsdom cannot see that (memory `jsdom-cannot-see-layout`); what
+  // it can pin is that every sr-only span's parent is itself positioned.
+  it('every sr-only span is anchored to a positioned parent, and the header itself is positioned', () => {
+    const { container } = render(<DayHeader {...base} isToday status={EMPTY} onOpen={() => {}} />)
+    const hidden = container.querySelectorAll('.sr-only')
+    expect(hidden.length).toBeGreaterThan(0)
+    for (const el of hidden) expect(el.parentElement.className).toMatch(/(^|\s)(relative|absolute|fixed|sticky)(\s|$)/)
+    expect(screen.getByTestId('day-header').className).toMatch(/\brelative\b/)
+    cleanup()
+    // The coach's plain header too: same element, same rule.
+    render(<DayHeader {...base} status={null} />)
+    expect(screen.getByTestId('day-header').className).toMatch(/\brelative\b/)
+  })
+
   it('says nothing for a day with no future shifts', () => {
     render(<DayHeader {...base} status={NONE} onOpen={() => {}} />)
     expect(screen.queryByTestId('status-dot')).toBeNull()

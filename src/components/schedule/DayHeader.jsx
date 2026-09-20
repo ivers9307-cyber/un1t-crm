@@ -31,7 +31,8 @@ export default function DayHeader({ label, dayNumber, fullDate, isToday, holiday
     : holiday
       ? 'bg-amber-500/15 text-amber-700 border border-amber-500/30'
       : 'bg-un1t-surface text-un1t-subtle'
-  const cls = `block w-full text-center py-2 rounded-t-lg text-xs font-semibold ${headerCls}`
+  // `relative`: anchors any sr-only descendant to this header (see StatusDot).
+  const cls = `relative block w-full text-center py-2 rounded-t-lg text-xs font-semibold ${headerCls}`
 
   const body = (
     <>

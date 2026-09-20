@@ -78,6 +78,20 @@ describe('MonthCell', () => {
     expect(count.querySelector('.sr-only').textContent).toBe(' coach assignments')
   })
 
+  // 🔴 Tailwind's sr-only is position:absolute + white-space:nowrap. Inside the
+  // roster's horizontal scroller an sr-only span with no positioned ancestor is
+  // NOT clipped by that scroller: it widened the whole DOCUMENT to 777px on a
+  // 390px phone. jsdom cannot see that (memory `jsdom-cannot-see-layout`); what
+  // it can pin is that every sr-only span's parent is itself positioned.
+  it('every sr-only span is anchored to a positioned parent, and the cell itself is positioned', () => {
+    render(<MonthCell {...base} onOpen={() => {}} />)
+    const cell = screen.getByRole('button')
+    const hidden = cell.querySelectorAll('.sr-only')
+    expect(hidden.length).toBe(2)
+    for (const el of hidden) expect(el.parentElement.className).toMatch(/(^|\s)(relative|absolute|fixed|sticky)(\s|$)/)
+    expect(cell.className).toMatch(/\brelative\b/)
+  })
+
   it('coach: no status at all', () => {
     render(<MonthCell {...base} status={null} lines={[LINES[0]]} onOpen={() => {}} />)
     expect(screen.queryByTestId('status-dot')).toBeNull()

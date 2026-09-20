@@ -80,6 +80,22 @@ describe('ShiftCard', () => {
     expect(screen.getByTestId('shift-card').className).toMatch(/\bbg-un1t-bg\b/)
   })
 
+  // 🔴 Tailwind's sr-only is position:absolute + white-space:nowrap. Inside the
+  // roster's horizontal scroller an sr-only span with no positioned ancestor is
+  // NOT clipped by that scroller: it widened the whole DOCUMENT to 777px on a
+  // 390px phone. jsdom cannot see that (memory `jsdom-cannot-see-layout`); what
+  // it can pin is that every sr-only span's parent is itself positioned.
+  it('every sr-only span is anchored to a positioned parent (button, Adjusted marker, short badge)', () => {
+    const { card } = renderCard({
+      assignments: [on('u2', 'Coach A', { start_time_override: '09:30', partial_reason: 'late start' })],
+      staffing: { status: 'short', count: 1, min: 2 },
+    })
+    const hidden = card.querySelectorAll('.sr-only')
+    expect(hidden.length).toBe(3)
+    for (const el of hidden) expect(el.parentElement.className).toMatch(/(^|\s)(relative|absolute|fixed|sticky)(\s|$)/)
+    expect(card.className).toMatch(/\brelative\b/)
+  })
+
   it('never prints a capacity chip', () => {
     const { card } = renderCard()
     expect(card.textContent).not.toMatch(/\d+\s*\/\s*\d+/)

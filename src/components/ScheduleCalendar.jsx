@@ -1138,7 +1138,12 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
         // the page scrolls the calendar sideways rather than crushing it.
         // Header row and cells share ONE scroller so the weekday labels stay
         // over their own columns.
-        <div className="overflow-x-auto">
+        // ROSTERLOOK.1 — `relative` makes THIS scroller the containing block for
+        // every absolutely-positioned descendant (each sr-only span is one).
+        // Without it they are not clipped by the scroller and stretch the
+        // DOCUMENT sideways on a phone. Browser check, at 390 wide:
+        // document.documentElement.scrollWidth <= document.documentElement.clientWidth
+        <div className="relative overflow-x-auto">
           <div className="min-w-[840px]">
           <div className="grid grid-cols-7 gap-1.5 mb-1.5">
             {DAY_LABELS.map(label => (
@@ -1207,7 +1212,12 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
         // ROSTER-FIX.6b — same floor as the month grid; a week card carries a
         // template name, a time range and a coach list, none of which survive
         // a 50px column.
-        <div className="overflow-x-auto">
+        // ROSTERLOOK.1 — `relative` makes THIS scroller the containing block for
+        // every absolutely-positioned descendant (each sr-only span is one).
+        // Without it they are not clipped by the scroller and stretch the
+        // DOCUMENT sideways on a phone. Browser check, at 390 wide:
+        // document.documentElement.scrollWidth <= document.documentElement.clientWidth
+        <div className="relative overflow-x-auto">
         <div className="grid grid-cols-7 gap-2 min-w-[840px]">
           {(() => {
             const holidayByDate = indexByDate(holidays)
