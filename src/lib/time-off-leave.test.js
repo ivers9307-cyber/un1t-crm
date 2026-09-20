@@ -7,7 +7,7 @@ const { logWarn } = await import('@/lib/log')
 import {
   leaveScopeOrFilter, canDecideTimeOff, timeOffApproverIdsFrom, entitlementDays,
   clashWindow, bucketClashCounts, getHolidayAllowance, ensureHolidayAllowanceRow,
-  getNonWorkingDates, ownShiftPreviewRow, findOwnPublishedShifts,
+  getNonWorkingDates, ownShiftPreviewRow, findOwnPublishedShifts, chargeableLeaveSegments,
 } from './time-off-leave.js'
 import { fakeDb, queriesOf } from './time-off.test-helpers.js'
 
@@ -282,5 +282,53 @@ describe('own published shifts — the coach leave preview (LEAVEPHONE.1)', () =
     const res = await findOwnPublishedShifts(db, 'me', '2026-10-05', '2026-10-09', '2026-09-19')
     expect(res.shifts).toEqual([])
     expect(res.error).toEqual({ message: 'boom' })
+  })
+})
+
+describe('chargeableLeaveSegments — the one day count (LEAVEPHONE.1)', () => {
+  // Mon 1 Jun 2026 is the Irish June Public Holiday (src/lib/bank-holidays.js).
+  function holidayDb({ country = 'IE', closures = [], locError = null, closuresError = null } = {}) {
+    return fakeDb((q) => {
+      if (q.table === 'locations') return { data: locError ? null : { country }, error: locError }
+      if (q.table === 'location_holidays') return { data: closuresError ? null : closures, error: closuresError }
+      throw new Error(`unexpected read of ${q.table}`)
+    })
+  }
+
+  it('holiday: Mon-Fri minus the bank holiday minus the studio\'s own closure', async () => {
+    const db = holidayDb({ closures: [{ date: '2026-06-03', name: 'Studio closed' }] })
+    const res = await chargeableLeaveSegments(db, { type: 'holiday', locationId: 'loc-1', startIso: '2026-06-01', endIso: '2026-06-07' })
+    expect(res).toEqual({ segments: [{ s: '2026-06-01', e: '2026-06-07', days: 3 }], total: 3, error: null })
+    expect(queriesOf(db, 'location_holidays')[0].eq).toEqual({ location_id: 'loc-1' })
+  })
+
+  it('one segment per year, each counted on its own', async () => {
+    const res = await chargeableLeaveSegments(holidayDb(), { type: 'holiday', locationId: 'loc-1', startIso: '2026-12-30', endIso: '2027-01-04' })
+    // 30, 31 Dec are working days; Fri 1 Jan 2027 is New Year's Day; Mon 4 Jan works.
+    expect(res.segments).toEqual([{ s: '2026-12-30', e: '2026-12-31', days: 2 }, { s: '2027-01-01', e: '2027-01-04', days: 1 }])
+    expect(res.total).toBe(3)
+  })
+
+  it('other leave types count calendar days and read NOTHING', async () => {
+    const db = fakeDb(() => { throw new Error('must not query') })
+    const res = await chargeableLeaveSegments(db, { type: 'sick', locationId: 'loc-1', startIso: '2026-06-01', endIso: '2026-06-07' })
+    expect(res).toMatchObject({ total: 7, error: null })
+  })
+
+  // HOLIDAYLEAVE.1 (as merged) — the POST refuses a request with no studio
+  // BEFORE any read, so there is no "count Mon-Fri blind" fallback to mirror.
+  it('holiday with no studio to ask is an error and reads NOTHING — never counted blind', async () => {
+    const db = fakeDb(() => { throw new Error('must not query') })
+    const res = await chargeableLeaveSegments(db, { type: 'holiday', locationId: null, startIso: '2026-06-01', endIso: '2026-06-07' })
+    expect(res.segments).toEqual([])
+    expect(res.total).toBe(0)
+    expect(res.error?.message).toMatch(/studio/i)
+  })
+
+  it('fails CLOSED — an unreadable list is an error, never "no bank holidays"', async () => {
+    const res = await chargeableLeaveSegments(holidayDb({ closuresError: { message: 'boom' } }), { type: 'holiday', locationId: 'loc-1', startIso: '2026-06-01', endIso: '2026-06-07' })
+    expect(res).toEqual({ segments: [], total: 0, error: { message: 'boom' } })
+    const loc = await chargeableLeaveSegments(holidayDb({ locError: { message: 'down' } }), { type: 'holiday', locationId: 'loc-1', startIso: '2026-06-01', endIso: '2026-06-07' })
+    expect(loc).toEqual({ segments: [], total: 0, error: { message: 'down' } })
   })
 })

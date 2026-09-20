@@ -27,7 +27,7 @@ import {
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { isLiveAssignment } from '@/lib/roster'
 import { effectiveShiftStart, effectiveShiftEnd } from '@shared/roster-month'
-import { nonWorkingDateSet } from '@/lib/time-off-days'
+import { nonWorkingDateSet, countLeaveDays, splitAtYearEnd } from '@/lib/time-off-days'
 import { uncoveredHolidayYears } from '@/lib/bank-holidays'
 import { logWarn } from '@/lib/log'
 
@@ -293,6 +293,35 @@ export async function getNonWorkingDates(db, locationId, startIso, endIso) {
     dates: nonWorkingDateSet({ country, customHolidays: custom || [], start: startIso, end: endIso }),
     error: null,
   }
+}
+
+/**
+ * LEAVEPHONE.1 — THE day count: what a request of this type and range is
+ * charged, one segment per calendar year (each year has its own allowance).
+ * The time-off POST charges with it and the leave form's preview displays it,
+ * so the phone can never show a number the server will not charge. Any change
+ * to the rule (HOLIDAYLEAVE.1 added bank holidays + studio closures) lands in
+ * both at once.
+ *
+ * Only `holiday` consults the non-working dates. Fails CLOSED like
+ * getNonWorkingDates: an unreadable list is an error, never an empty set
+ * (which would over-charge) — and so is a holiday with no studio to ask, which
+ * the POST refuses before it ever gets here (HOLIDAYLEAVE.1's "No studio"
+ * 400); this is the same rule for any other caller, never a blind Mon-Fri.
+ *
+ * @returns {Promise<{ segments: Array<{ s: string, e: string, days: number }>, total: number, error: object|null }>}
+ */
+export async function chargeableLeaveSegments(db, { type, locationId, startIso, endIso }) {
+  let nonWorkingDates = null
+  if (type === 'holiday') {
+    if (!locationId) return { segments: [], total: 0, error: { message: 'No studio to count holiday leave against' } }
+    const { dates, error } = await getNonWorkingDates(db, locationId, startIso, endIso)
+    if (error) return { segments: [], total: 0, error }
+    nonWorkingDates = dates
+  }
+  const segments = splitAtYearEnd(startIso, endIso)
+    .map(([s, e]) => ({ s, e, days: countLeaveDays(type, s, e, nonWorkingDates) }))
+  return { segments, total: segments.reduce((sum, seg) => sum + seg.days, 0), error: null }
 }
 
 // ── Shift clashes ─────────────────────────────────────────────────────────

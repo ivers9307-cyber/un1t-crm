@@ -5,12 +5,11 @@ import { getCurrentUser, getUserLocationIds, assertLocationAccess, hasRoleAtLoca
 import { validateBody, uuidLike } from '@/lib/validate'
 import { timeOffTypeSchema, MANAGER_ROLES } from '@/lib/schemas'
 import { notifyUsersOnce } from '@/lib/push-dedup'
-import { countLeaveDays, splitAtYearEnd } from '@/lib/time-off-days'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import {
   getLocationMemberIds, getProfileLocationIds, leaveScopeOrFilter, canDecideTimeOff,
   resolveTimeOffApproverIds, getEmploymentType, getHolidayAllowance, ensureHolidayAllowanceRow,
-  countLeaveClashes, findLeaveClashes, getNonWorkingDates,
+  countLeaveClashes, findLeaveClashes, chargeableLeaveSegments,
 } from '@/lib/time-off-leave'
 import {
   isTimeOffTypeAllowedFor, RESTRICTED_TYPE_ERROR, isExpiredPendingRequest, effectiveTimeOffStatus,
@@ -220,25 +219,22 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: `Overlaps ${whose} for ${range}` }, { status: 409 })
   }
 
-  // HOLIDAYLEAVE.1 — a holiday is charged for working days only, so load the
-  // dates that cost nothing at the studio it is filed at: national bank
-  // holidays plus that studio's own closures. Only holiday needs it. Fails
-  // closed like the reads around it: an unreadable list must not become
-  // "no bank holidays", which is the over-charge this fixes.
-  let nonWorkingDates = null
-  if (type === 'holiday') {
-    const { dates, error: holidaysError } = await getNonWorkingDates(db, targetLocation, start_date, end_date)
-    if (holidaysError) {
-      return NextResponse.json({ success: false, error: holidaysError.message }, { status: 500 })
-    }
-    nonWorkingDates = dates
-  }
-
+  // HOLIDAYLEAVE.1 — a holiday is charged for working days only (Mon-Fri,
+  // minus the studio country's bank holidays, minus the studio's closures),
+  // at the studio it is filed at.
   // ROSTER-FIX.2 — a range that straddles 31 December becomes one row per
-  // year, so each year's allowance is charged its own days. Each segment is
-  // counted with the leave-type's own day rule (holiday = working days).
-  const segments = splitAtYearEnd(start_date, end_date)
-    .map(([s, e]) => ({ s, e, days: countLeaveDays(type, s, e, nonWorkingDates) }))
+  // year, so each year's allowance is charged its own days.
+  // LEAVEPHONE.1 — both live in chargeableLeaveSegments, which the leave
+  // form's preview (GET ?preview=1) ALSO calls: the number a coach is shown
+  // before filing is this number. Fails closed like the reads around it: an
+  // unreadable holiday list is a 500, never "no bank holidays" (the
+  // over-charge HOLIDAYLEAVE.1 fixed).
+  const { segments, error: segmentsError } = await chargeableLeaveSegments(db, {
+    type, locationId: targetLocation, startIso: start_date, endIso: end_date,
+  })
+  if (segmentsError) {
+    return NextResponse.json({ success: false, error: segmentsError.message }, { status: 500 })
+  }
 
   if (segments.reduce((sum, seg) => sum + seg.days, 0) < 1) {
     return NextResponse.json({ success: false, error: 'No working days in that range' }, { status: 400 })
