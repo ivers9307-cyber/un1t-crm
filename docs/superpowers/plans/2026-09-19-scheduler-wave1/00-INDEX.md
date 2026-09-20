@@ -103,6 +103,16 @@ Two implementers at a time is the ceiling on the 8GB machine. Good pairs (no sha
 1. **A tombstone does not keep its role.** `private.auth_is_master()` / `auth_role()` (mig 051) and dozens of inline policies decide from `profiles.role` alone, so a tombstoned master or owner whose login survives (`kept_*_login`, or a failed ban) would stay a master at the RLS layer. `tombstone_staff_profile()` therefore copies `role` into a new `deleted_role text` column and sets `role` to the least-privileged allowed value, in the same transaction. Readers the plan already touches use `deleted_role ?? role` for history.
 2. **"Upcoming" means not started, not "today or later".** The function takes `p_now timestamptz default now()` and removes an assignment only when `block_date` is after Dublin today, or is today with an effective start (`coalesce(start_time_override, shift_blocks.start_time)`) later than Dublin local time. A shift in progress or already worked today is history and stays, so `staff_attendance_events.matched_assignment_id` is never unlinked from a worked shift. The preview lists kept-today shifts separately.
 
+**20 Sep, PR 04 SHIFTREMIND.1 (rule amended after the first build; overrides "The rule" in `04-SHIFTREMIND.1.md`):**
+
+1. **Nothing fires before 07:00 Dublin.** The evening-before branch (20:00 the evening before) applies to any start before 09:00, not 08:00. A 09:00 start is reminded at 07:00.
+2. **One reminder per run, not per shift.** A coach's live published shifts on a Dublin date, across all studios, are grouped into runs (a shift joins the run when it starts no more than 120 minutes after the run's latest end). Only the first shift of a run carries a reminder, and the body describes the whole run. A split day gives two reminders. The ledger claim stays keyed on the first shift's (assignment, coach).
+3. **Half-day leave does not suppress a reminder.** Approved leave skips only when it covers the whole day (a single-day request with `total_days < 1` does not skip).
+
+**20 Sep, PR 09 STAFFDELETE.1, after independent review (in addition to the two items above):** an assignment with an arrival (`arrived_at` or a matched attendance event) is history and stays; Copy Last Week/Month drop anyone without an active membership at the target studio (`skipped_not_at_studio`); triggers refuse un-tombstoning and refuse re-adding a tombstone to `profile_locations` / `profile_organizations`; the auth step is retryable and its disposition is recorded; the person's address is removed from `scheduled_reports.email_recipients`; audit rows lose only PII keys; and mig 622 revokes the vestigial INSERT/UPDATE/DELETE/TRUNCATE grants `anon` and `authenticated` hold on `public.profiles` (verified on prod 20 Sep; no client code writes that table).
+
+**20 Sep, PR 01 COPYLEAVE.1, after review:** the other-studio double-booking read is limited to sibling studios in the same organisation; advisories run on the dry run only, never on the real publish or an approval.
+
 ## Self-review record (19 Sep)
 
 - Spec coverage: every Wave 1 item in the review and all six live defects map to a PR, except the assistant tool (latent, listed above).
