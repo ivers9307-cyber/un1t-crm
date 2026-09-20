@@ -289,6 +289,36 @@ function chunk(list, size) {
 }
 
 /**
+ * STAFFDELETE.1 — which of these profiles may be rostered at this location
+ * NOW: linked through profile_locations, not deactivated, not a tombstone.
+ * `active` NULL is a legacy row and counts as active (mig 004:41). A profile
+ * the read does not return is not rosterable. Pure reads; ids are the distinct
+ * people on one location's period, far below the 1,000-row select cap.
+ *
+ * @returns {Promise<{ ids: Set<string>, error: object|null }>}
+ */
+async function fetchRosterableProfileIds(db, locationId, profileIds) {
+  const ids = [...new Set((profileIds || []).filter(Boolean))]
+  if (ids.length === 0) return { ids: new Set(), error: null }
+  const { data: links, error: lErr } = await db
+    .from('profile_locations')
+    .select('profile_id')
+    .eq('location_id', locationId)
+    .in('profile_id', ids)
+  if (lErr) return { ids: new Set(), error: lErr }
+  const { data: people, error: pErr } = await db
+    .from('profiles')
+    .select('id, active, deleted_at')
+    .in('id', ids)
+  if (pErr) return { ids: new Set(), error: pErr }
+  const linked = new Set((links || []).map((l) => l.profile_id))
+  return {
+    ids: new Set((people || []).filter((p) => linked.has(p.id) && p.active !== false && !p.deleted_at).map((p) => p.id)),
+    error: null,
+  }
+}
+
+/**
  * Batch version of upsertShiftAssignment for the copy-week / copy-month
  * routes (RETIRE-SHIFTS-MIRROR.5b). Replaces a single bulk
  * `upsert into public.shifts` — find-or-create every needed block once,
@@ -351,7 +381,9 @@ function chunk(list, size) {
  *   and its rows are skipped and counted in `skippedRemoved`. A removed slot
  *   whose block DOES exist (restored by a path that didn't clear the row) is
  *   a live slot and is written as normal.
- * @returns {Promise<{ count: number, skippedRemoved: number, error: object|null }>}
+ * @returns {Promise<{ count: number, skippedRemoved: number, skippedNotAtStudio?: number, error: object|null }>}
+ *   skippedNotAtStudio (STAFFDELETE.1): rows dropped because the profile has no
+ *   active membership at the location (left, deactivated, or permanently deleted).
  */
 export async function bulkUpsertShiftAssignments(db, { locationId, actorId = null, rows, blocks = [], removedSlots = null }) {
   if (!locationId) return { count: 0, skippedRemoved: 0, error: { message: 'locationId is required' } }
@@ -413,6 +445,23 @@ export async function bulkUpsertShiftAssignments(db, { locationId, actorId = nul
     slots = [...safeRows, ...safeBlocks]
   }
 
+  // STAFFDELETE.1 — only people who still work at the TARGET studio are
+  // written. A permanent delete keeps past shifts, so the source period of
+  // the next copy still names the deleted person; upsertShiftAssignment
+  // checks profile_locations, and this batch path (both copy routes) did not.
+  // Dropped: no profile_locations row here, profiles.active = false, or a
+  // tombstone (deleted_at). Their BLOCKS are still ensured — an empty slot
+  // that needs cover is the truth. Read before any write; a failed read stops
+  // the copy rather than copying blind.
+  let skippedNotAtStudio = 0
+  if (safeRows.length > 0) {
+    const { ids: rosterable, error: mErr } = await fetchRosterableProfileIds(db, locationId, safeRows.map((r) => r.profileId))
+    if (mErr) return { count: 0, skippedRemoved, skippedNotAtStudio: 0, error: mErr }
+    const keptRows = safeRows.filter((r) => rosterable.has(r.profileId))
+    skippedNotAtStudio = safeRows.length - keptRows.length
+    safeRows = keptRows
+  }
+
   // 3. Create blocks for the slots that don't exist yet.
   const specByKey = new Map()
   for (const spec of safeBlocks) {
@@ -458,7 +507,7 @@ export async function bulkUpsertShiftAssignments(db, { locationId, actorId = nul
       .from('shift_blocks')
       .insert(batch)
       .select('id, template_id, block_date, start_time, end_time')
-    if (cErr) return { count: 0, skippedRemoved, error: cErr }
+    if (cErr) return { count: 0, skippedRemoved, skippedNotAtStudio, error: cErr }
     for (const b of created || []) blockByKey.set(`${b.template_id}|${b.block_date}`, b)
   }
 
@@ -485,7 +534,7 @@ export async function bulkUpsertShiftAssignments(db, { locationId, actorId = nul
     })
   }
   const assignmentRows = [...assignmentByKey.values()]
-  if (assignmentRows.length === 0) return { count: 0, skippedRemoved, error: null }
+  if (assignmentRows.length === 0) return { count: 0, skippedRemoved, skippedNotAtStudio, error: null }
 
   // COPYFIX.1 — ON CONFLICT DO NOTHING: an existing (block, profile) row is
   // never modified, so a copy can't clear a manager-set override, reset a
@@ -498,9 +547,9 @@ export async function bulkUpsertShiftAssignments(db, { locationId, actorId = nul
       .from('shift_assignments')
       .upsert(batch, { onConflict: 'block_id,profile_id', ignoreDuplicates: true })
       .select('id')
-    if (aErr) return { count, skippedRemoved, error: aErr }
+    if (aErr) return { count, skippedRemoved, skippedNotAtStudio, error: aErr }
     count += (inserted || []).length
   }
 
-  return { count, skippedRemoved, error: null }
+  return { count, skippedRemoved, skippedNotAtStudio, error: null }
 }

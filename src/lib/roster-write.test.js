@@ -289,7 +289,11 @@ describe('upsertShiftAssignment', () => {
 // Per-table mock for the batch writer. shift_blocks is queried twice —
 // a select-chain (existing-block lookup) and an insert-chain (create) —
 // so the builder supports both.
-function makeBulkDb({ templates = [], existingBlocks = [], createdBlocks = null, publishedRosters = [], rosterError = null, insertedAssignments = null, assignmentError = null } = {}) {
+// STAFFDELETE.1 — `members` (profile ids linked to the location) and
+// `profiles` (id/active/deleted_at rows) feed the writer's "still works here"
+// filter. null = permissive: everyone asked about is a linked, active, living
+// profile, so tests written before the filter keep their meaning.
+function makeBulkDb({ templates = [], existingBlocks = [], createdBlocks = null, publishedRosters = [], rosterError = null, insertedAssignments = null, assignmentError = null, members = null, profiles = null, membershipError = null } = {}) {
   const captured = { blockInsert: null, blockInsertBatches: [], blockPages: [], assignmentUpsert: null, assignmentUpsertBatches: [], rosterQueries: [] }
   const db = {
     captured,
@@ -324,6 +328,24 @@ function makeBulkDb({ templates = [], existingBlocks = [], createdBlocks = null,
           },
         }
         return chain
+      }
+      if (table === 'profile_locations') {
+        let scope = null
+        const chain = {
+          select: () => chain,
+          eq: (col, val) => { scope = { col, val }; return chain },
+          in: (col, ids) => {
+            captured.membershipQuery = { scope, col, ids }
+            if (membershipError) return Promise.resolve({ data: null, error: membershipError })
+            return Promise.resolve({ data: ids.filter((id) => !members || members.includes(id)).map((id) => ({ profile_id: id })), error: null })
+          },
+        }
+        return chain
+      }
+      if (table === 'profiles') {
+        return { select: () => ({ in: (col, ids) => Promise.resolve({
+          data: ids.map((id) => (profiles || []).find((x) => x.id === id) || { id, active: true, deleted_at: null }), error: null,
+        }) }) }
       }
       if (table === 'shift_templates') {
         // ROSTER-FIX.4 — the bulk path scopes templates to the location too.
@@ -393,7 +415,7 @@ describe('bulkUpsertShiftAssignments', () => {
       locationId: 'loc1', actorId: 'mgr1',
       rows: [{ profileId: 'p1', shiftTemplateId: 't1', shiftDate: '2026-06-08', startTimeOverride: '08:00:00', endTimeOverride: null, notes: 'n' }],
     })
-    expect(res).toEqual({ count: 1, skippedRemoved: 0, error: null })
+    expect(res).toEqual({ count: 1, skippedRemoved: 0, skippedNotAtStudio: 0, error: null })
     expect(db.captured.blockInsert).toBeNull()
     // ROSTER-FIX.4 (SAAS-1) — templates are read at the caller's location only
     expect(db.captured.templateScope).toEqual({ col: 'location_id', val: 'loc1' })
@@ -533,7 +555,7 @@ describe('bulkUpsertShiftAssignments', () => {
     })
     // Fails soft, exactly as findPublishedRosterFor does: the operator's
     // copy-week survives, the blocks just aren't on a roster yet.
-    expect(res).toEqual({ count: 1, skippedRemoved: 0, error: null })
+    expect(res).toEqual({ count: 1, skippedRemoved: 0, skippedNotAtStudio: 0, error: null })
     expect(db.captured.blockInsert[0].roster_id).toBeNull()
   })
 
@@ -568,7 +590,7 @@ describe('bulkUpsertShiftAssignments', () => {
         { profileId: 'p2', shiftTemplateId: 't1', shiftDate: '2026-06-08' },
       ],
     })
-    expect(res).toEqual({ count: 1, skippedRemoved: 0, error: null })
+    expect(res).toEqual({ count: 1, skippedRemoved: 0, skippedNotAtStudio: 0, error: null })
     expect(db.captured.assignmentUpsert.rows).toHaveLength(2)
     expect(db.captured.assignmentUpsert.opts).toEqual({ onConflict: 'block_id,profile_id', ignoreDuplicates: true })
   })
@@ -583,7 +605,7 @@ describe('bulkUpsertShiftAssignments', () => {
       locationId: 'loc1',
       rows: [{ profileId: 'p1', shiftTemplateId: 't1', shiftDate: '2026-06-08' }],
     })
-    expect(res).toEqual({ count: 0, skippedRemoved: 0, error: { message: 'upsert boom' } })
+    expect(res).toEqual({ count: 0, skippedRemoved: 0, skippedNotAtStudio: 0, error: { message: 'upsert boom' } })
   })
 })
 
@@ -615,7 +637,7 @@ describe('bulkUpsertShiftAssignments — COPYMODES.1', () => {
       locationId: 'loc1', actorId: 'mgr1', rows: [],
       blocks: [{ shiftTemplateId: 't1', shiftDate: '2026-06-08', startTime: '06:30:00', endTime: '08:00:00', minCoaches: 1, maxCoaches: 3 }],
     })
-    expect(res).toEqual({ count: 0, skippedRemoved: 0, error: null })
+    expect(res).toEqual({ count: 0, skippedRemoved: 0, skippedNotAtStudio: 0, error: null })
     expect(db.captured.blockInsert).toEqual([expect.objectContaining({
       template_id: 't1', block_date: '2026-06-08', start_time: '06:30:00', end_time: '08:00:00', min_coaches: 1, max_coaches: 3, created_by: 'mgr1',
     })])
@@ -696,7 +718,7 @@ describe('bulkUpsertShiftAssignments — COPYMODES.1', () => {
     expect(db.captured.blockPages).toEqual([[0, 999], [1000, 1999]])
     expect(db.captured.blockInsert).toBeNull() // every block was found, none re-inserted
     expect(db.captured.assignmentUpsertBatches.map((b) => b.length)).toEqual([500, 500, 200])
-    expect(res).toEqual({ count: 1200, skippedRemoved: 0, error: null })
+    expect(res).toEqual({ count: 1200, skippedRemoved: 0, skippedNotAtStudio: 0, error: null })
   })
 })
 
@@ -728,7 +750,7 @@ describe('bulkUpsertShiftAssignments — removed slots', () => {
       ],
       blocks: [{ shiftTemplateId: 't1', shiftDate: '2026-06-09' }, { shiftTemplateId: 't1', shiftDate: '2026-06-10' }],
     })
-    expect(res).toEqual({ count: 1, skippedRemoved: 2, error: null })
+    expect(res).toEqual({ count: 1, skippedRemoved: 2, skippedNotAtStudio: 0, error: null })
     expect(db.captured.blockInsert.map((b) => b.block_date).sort()).toEqual(['2026-06-08', '2026-06-10'])
     expect(db.captured.assignmentUpsert.rows.map((r) => r.profile_id)).toEqual(['p1'])
   })
@@ -743,7 +765,7 @@ describe('bulkUpsertShiftAssignments — removed slots', () => {
       removedSlots: REMOVED,
       rows: [{ profileId: 'p2', shiftTemplateId: 't1', shiftDate: '2026-06-09' }],
     })
-    expect(res).toEqual({ count: 1, skippedRemoved: 0, error: null })
+    expect(res).toEqual({ count: 1, skippedRemoved: 0, skippedNotAtStudio: 0, error: null })
     expect(db.captured.assignmentUpsert.rows[0].block_id).toBe('blk-back')
   })
 
@@ -755,8 +777,70 @@ describe('bulkUpsertShiftAssignments — removed slots', () => {
       rows: [{ profileId: 'p2', shiftTemplateId: 't1', shiftDate: '2026-06-09' }],
       blocks: [{ shiftTemplateId: 't1', shiftDate: '2026-06-09' }],
     })
-    expect(res).toEqual({ count: 0, skippedRemoved: 1, error: null })
+    expect(res).toEqual({ count: 0, skippedRemoved: 1, skippedNotAtStudio: 0, error: null })
     expect(db.captured.blockInsertBatches).toHaveLength(0)
     expect(db.captured.assignmentUpsert).toBeNull()
+  })
+})
+
+// STAFFDELETE.1 — a permanent delete KEEPS past shifts (that is the point), so
+// the source period of the next Copy Last Week / Month still names the deleted
+// person. The single-assign path checks profile_locations; this batch writer —
+// the one point both copy routes pass through — did not, so a copy would have
+// put a tombstone straight back on upcoming shifts.
+describe('bulkUpsertShiftAssignments — only people who still work at the TARGET studio', () => {
+  const rows = [
+    { profileId: 'p-here', shiftTemplateId: 't1', shiftDate: '2026-06-08' },
+    { profileId: 'p-gone', shiftTemplateId: 't1', shiftDate: '2026-06-08' },
+    { profileId: 'p-gone', shiftTemplateId: 't1', shiftDate: '2026-06-09' },
+  ]
+
+  it('drops rows for a profile with no profile_locations row at the location, and counts them', async () => {
+    const db = makeBulkDb({ templates: [tpl1], members: ['p-here'] })
+    const res = await bulkUpsertShiftAssignments(db, { locationId: 'loc1', rows })
+    expect(res).toEqual({ count: 1, skippedRemoved: 0, skippedNotAtStudio: 2, error: null })
+    expect(db.captured.assignmentUpsert.rows.map((r) => r.profile_id)).toEqual(['p-here'])
+    // Membership is asked about the TARGET location, for exactly the people on the rows.
+    expect(db.captured.membershipQuery).toEqual({ scope: { col: 'location_id', val: 'loc1' }, col: 'profile_id', ids: ['p-here', 'p-gone'] })
+  })
+
+  it('drops a DEACTIVATED member and a TOMBSTONE even if a membership row lingers; active NULL is a legacy active row', async () => {
+    const db = makeBulkDb({
+      templates: [tpl1],
+      profiles: [
+        { id: 'p-off', active: false, deleted_at: null },
+        { id: 'p-tomb', active: false, deleted_at: '2026-09-19T10:00:00Z' },
+        { id: 'p-legacy', active: null, deleted_at: null },
+      ],
+    })
+    const res = await bulkUpsertShiftAssignments(db, {
+      locationId: 'loc1',
+      rows: ['p-off', 'p-tomb', 'p-legacy'].map((profileId) => ({ profileId, shiftTemplateId: 't1', shiftDate: '2026-06-08' })),
+    })
+    expect(res).toEqual({ count: 1, skippedRemoved: 0, skippedNotAtStudio: 2, error: null })
+    expect(db.captured.assignmentUpsert.rows.map((r) => r.profile_id)).toEqual(['p-legacy'])
+  })
+
+  it('a profile the profiles read does not return at all is dropped (fail closed per person)', async () => {
+    const db = makeBulkDb({ templates: [tpl1] })
+    const realFrom = db.from.bind(db)
+    db.from = (t) => (t === 'profiles' ? { select: () => ({ in: () => Promise.resolve({ data: [{ id: 'p-here', active: true, deleted_at: null }], error: null }) }) } : realFrom(t))
+    const res = await bulkUpsertShiftAssignments(db, { locationId: 'loc1', rows })
+    expect(res).toMatchObject({ count: 1, skippedNotAtStudio: 2 })
+  })
+
+  it('an unreadable membership list stops the copy BEFORE anything is written', async () => {
+    const db = makeBulkDb({ templates: [tpl1], membershipError: { message: 'down' } })
+    const res = await bulkUpsertShiftAssignments(db, { locationId: 'loc1', rows })
+    expect(res.error).toEqual({ message: 'down' })
+    expect(res.count).toBe(0)
+    expect(db.captured.blockInsertBatches).toHaveLength(0)
+    expect(db.captured.assignmentUpsert).toBeNull()
+  })
+
+  it('a row on a manager-deleted slot is counted once, as skippedRemoved', async () => {
+    const db = makeBulkDb({ templates: [tpl1], members: ['p-here'] })
+    const res = await bulkUpsertShiftAssignments(db, { locationId: 'loc1', rows, removedSlots: new Set(['t1|2026-06-09']) })
+    expect(res).toEqual({ count: 1, skippedRemoved: 1, skippedNotAtStudio: 1, error: null })
   })
 })

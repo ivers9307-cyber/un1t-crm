@@ -896,7 +896,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
         showToast(data.error || (isWeek ? 'Failed to copy week' : 'Failed to copy month'))
         return
       }
-      const result = copyResultToast({ period: job.period, mode, copied: data.copied, skipped: data.skipped, skippedRemoved: data.skipped_removed, skippedOnLeave: data.skipped_on_leave })
+      const result = copyResultToast({ period: job.period, mode, copied: data.copied, skipped: data.skipped, skippedRemoved: data.skipped_removed, skippedOnLeave: data.skipped_on_leave, skippedNotAtStudio: data.skipped_not_at_studio })
       showToast(result.message, result.kind)
       refreshAfterMutation()
     } catch {

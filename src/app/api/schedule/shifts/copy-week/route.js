@@ -60,7 +60,7 @@ export function redateShiftDate(shiftDate, dayOffset) {
 // Copy all shifts from one week to another
 // Body: { location_id, source_start (Mon), target_start (Mon), mode? }
 // mode: 'exact' (default) | 'template' — see src/lib/roster-copy.js.
-// Response: { success, copied, skipped, skipped_removed, skipped_on_leave, mode }
+// Response: { success, copied, skipped, skipped_removed, skipped_on_leave, skipped_not_at_studio, mode }
 export async function POST(request) {
   const user = await getCurrentUser()
   // SCHEDROLES.1 — coarse pre-check; the decision is the role AT
@@ -141,7 +141,7 @@ export async function POST(request) {
 
   // Find-or-create blocks + insert assignments (new model). A block created
   // inside an already-published period joins that roster (ROSTER-FIX.4).
-  const { count, skippedRemoved = 0, error } = await bulkUpsertShiftAssignments(db, {
+  const { count, skippedRemoved = 0, skippedNotAtStudio = 0, error } = await bulkUpsertShiftAssignments(db, {
     locationId: location_id,
     actorId: user.id,
     rows: plan.rows,
@@ -175,14 +175,18 @@ export async function POST(request) {
   // because its own before-snapshot already contains them.
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
 
-  // skipped_removed (SLOTREMOVAL.1) and skipped_on_leave (COPYLEAVE.1) are
-  // parts of `skipped`, so the toast can say why.
+  // skipped_removed (SLOTREMOVAL.1), skipped_on_leave (COPYLEAVE.1) and
+  // skipped_not_at_studio (STAFFDELETE.1 — the coach no longer works here:
+  // left, deactivated or permanently deleted) are parts of `skipped`, so the
+  // toast can say why. A coach counted on leave never reaches the writer, so
+  // the three never overlap.
   return NextResponse.json({
     success: true,
     copied: count,
-    skipped: plan.skipped + skippedRemoved,
+    skipped: plan.skipped + skippedRemoved + skippedNotAtStudio,
     skipped_removed: skippedRemoved,
     skipped_on_leave: plan.skippedOnLeave,
+    skipped_not_at_studio: skippedNotAtStudio,
     mode,
   }, { status: 201 })
 }
