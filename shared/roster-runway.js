@@ -14,6 +14,8 @@
 // supplies the Dublin "today" (dublinTodayStr on the server). All arithmetic
 // goes through Date.UTC so a 23h / 25h DST day can never shift a calendar day.
 
+import { futureBlockStaffing } from './roster-staffing.js'
+
 export const RUNWAY_AMBER_DAYS = 10
 export const RUNWAY_RED_DAYS = 5
 export const RUNWAY_WEEKS = 3
@@ -107,4 +109,65 @@ export function rosterRunway(weeks, todayIso) {
     }
   }
   return null
+}
+
+/**
+ * Per-week counts from raw shift_blocks rows (ONE location's rows).
+ *
+ *   blocks    — blocks dated today or later (a past shift is history)
+ *   staffed   — of those, blocks with at least one LIVE coach
+ *   underMin  — of the staffed ones, blocks below their min_coaches
+ *   published — blocks whose roster is published, i.e. exactly what a coach
+ *               can see (`rosters.status === 'published'`; superseded is NOT)
+ *
+ * Staffing is futureBlockStaffing's answer, the same one the calendar, the
+ * banner and the this-week chip use, so a cancelled assignment is not a coach.
+ *
+ * @param {Array<object>} blocks  rows: block_date, min_coaches, rosters: { status }, shift_assignments: [{ status }]
+ * @param {string} todayIso
+ * @returns {Array<{ weekStart: string, blocks: number, staffed: number, underMin: number, published: number }>}
+ */
+export function runwayWeeksFromBlocks(blocks, todayIso) {
+  const byWeek = new Map(
+    runwayWindow(todayIso).weekStarts.map((ws) => [ws, { weekStart: ws, blocks: 0, staffed: 0, underMin: 0, published: 0 }]),
+  )
+  for (const b of blocks || []) {
+    const s = futureBlockStaffing(b, todayIso)
+    if (!s) continue // past, or unreadable
+    const week = byWeek.get(weekStartIso(b.block_date))
+    if (!week) continue // beyond the third week
+    week.blocks++
+    if (s.status !== 'empty') week.staffed++
+    if (s.status === 'short') week.underMin++
+    if (b.rosters?.status === 'published') week.published++
+  }
+  return [...byWeek.values()]
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+const shortDate = (iso) => {
+  const [, m, d] = String(iso).split('-').map(Number)
+  return `${d} ${MONTHS[m - 1]}`
+}
+const plural = (n, one, many) => (n === 1 ? one : many)
+
+/** "Week of 28 Sep is not ready", or "Studio North: week of 28 Sep is not ready". */
+export function rosterRunwayHeadline(runway, { locationName = '' } = {}) {
+  const lead = locationName ? `${locationName}: week` : 'Week'
+  return `${lead} of ${shortDate(runway.weekStart)} is not ready`
+}
+
+/** "Starts in 9 days: 34 of 34 shifts have no coach, not published." */
+export function rosterRunwayDetail(runway) {
+  const parts = []
+  if (runway.unstaffed > 0) {
+    parts.push(`${runway.unstaffed} of ${runway.blocks} ${plural(runway.blocks, 'shift', 'shifts')} ${plural(runway.unstaffed, 'has', 'have')} no coach`)
+  }
+  if (runway.underMin > 0) parts.push(`${runway.underMin} below the minimum`)
+  if (runway.unpublished === runway.blocks) parts.push('not published')
+  else if (runway.unpublished > 0) parts.push(`${runway.unpublished} ${plural(runway.unpublished, 'shift', 'shifts')} not published`)
+  const when = runway.daysAway <= 0
+    ? 'This week'
+    : runway.daysAway === 1 ? 'Starts tomorrow' : `Starts in ${runway.daysAway} days`
+  return `${when}: ${parts.join(', ')}.`
 }

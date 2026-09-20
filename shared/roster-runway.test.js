@@ -106,3 +106,53 @@ describe('rosterRunway', () => {
       .toMatchObject({ staffed: 2, unstaffed: 0, unpublished: 2 })
   })
 })
+describe('runwayWeeksFromBlocks', () => {
+  const block = (block_date, { coaches = 0, min = 1, roster = null, cancelled = 0 } = {}) => ({
+    block_date,
+    min_coaches: min,
+    rosters: roster ? { status: roster } : null,
+    shift_assignments: [
+      ...Array.from({ length: coaches }, () => ({ status: 'scheduled' })),
+      ...Array.from({ length: cancelled }, () => ({ status: 'cancelled' })),
+    ],
+  })
+
+  it('counts only today-or-later blocks inside the three weeks, per Mon-Sun week', () => {
+    const weeks = runwayWeeksFromBlocks([
+      block('2026-09-18', { coaches: 0 }),                                   // yesterday: history
+      block('2026-09-19', { coaches: 1, roster: 'published' }),              // today
+      block('2026-09-28', { coaches: 1, min: 2 }),                           // short, unpublished
+      block('2026-09-29', { coaches: 0, cancelled: 1, roster: 'superseded' }), // a cancelled coach is no coach; superseded is not published
+      block('2026-10-05', { coaches: 0 }),                                   // a fourth week: out of the window
+    ], '2026-09-19')
+    expect(weeks).toEqual([
+      { weekStart: '2026-09-14', blocks: 1, staffed: 1, underMin: 0, published: 1 },
+      { weekStart: '2026-09-21', blocks: 0, staffed: 0, underMin: 0, published: 0 },
+      { weekStart: '2026-09-28', blocks: 2, staffed: 1, underMin: 1, published: 0 },
+    ])
+  })
+
+  it('feeds rosterRunway: the same rows give the alert', () => {
+    const weeks = runwayWeeksFromBlocks([block('2026-09-28', { coaches: 1, min: 2 }), block('2026-09-29')], '2026-09-19')
+    expect(rosterRunway(weeks, '2026-09-19')).toMatchObject({ weekStart: '2026-09-28', blocks: 2, unstaffed: 1, underMin: 1, unpublished: 2 })
+  })
+
+  it('no rows -> three empty weeks', () => {
+    expect(runwayWeeksFromBlocks(null, '2026-09-19').map((w) => w.blocks)).toEqual([0, 0, 0])
+  })
+})
+
+describe('copy', () => {
+  const r = rosterRunway(LIVE, '2026-09-19')
+  it('headline names the week, and the studio when asked', () => {
+    expect(rosterRunwayHeadline(r)).toBe('Week of 28 Sep is not ready')
+    expect(rosterRunwayHeadline(r, { locationName: 'Studio North' })).toBe('Studio North: week of 28 Sep is not ready')
+  })
+  it('detail says how far off and what is missing', () => {
+    expect(rosterRunwayDetail(r)).toBe('Starts in 9 days: 34 of 34 shifts have no coach, not published.')
+    expect(rosterRunwayDetail({ ...r, daysAway: 1, staffed: 33, unstaffed: 1, underMin: 2, published: 30, unpublished: 4 }))
+      .toBe('Starts tomorrow: 1 of 34 shifts has no coach, 2 below the minimum, 4 shifts not published.')
+    expect(rosterRunwayDetail({ ...r, daysAway: -2, blocks: 1, unstaffed: 1, unpublished: 0 }))
+      .toBe('This week: 1 of 1 shift has no coach.')
+  })
+})
