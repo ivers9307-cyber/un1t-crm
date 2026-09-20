@@ -13,7 +13,7 @@
 //
 // Pure. Future blocks only (block_date >= todayIso), the rule staffingGaps uses.
 
-import { isLiveAssignment } from './roster'
+import { liveAssignments } from './roster'
 import { timeRangesOverlap, fmtTime } from './schedule-overlap'
 
 /**
@@ -35,6 +35,9 @@ function inScope(dateIso, { from, to, todayIso }) {
   return true
 }
 
+// A window as the payload carries it: without the internal `here` marker.
+const stripHere = ({ here: _here, ...rest }) => rest
+
 const byDateThenStart = (a, b) =>
   String(a.block_date).localeCompare(String(b.block_date))
   || String(a.start_time || '').localeCompare(String(b.start_time || ''))
@@ -47,7 +50,7 @@ export function leaveClashes(blocks, { from = null, to = null, todayIso = null, 
   const out = []
   for (const b of blocks || []) {
     if (!inScope(b?.block_date, { from, to, todayIso })) continue
-    for (const a of (b.shift_assignments || []).filter(isLiveAssignment)) {
+    for (const a of liveAssignments(b.shift_assignments)) {
       const leave = leaveCovering(leaveByProfile, a.profile_id, b.block_date)
       if (!leave) continue
       out.push({
@@ -90,7 +93,7 @@ export function doubleBookings(blocks, otherAssignments, { from = null, to = nul
 
   for (const b of blocks || []) {
     if (!inScope(b?.block_date, { from, to, todayIso })) continue
-    for (const a of (b.shift_assignments || []).filter(isLiveAssignment)) {
+    for (const a of liveAssignments(b.shift_assignments)) {
       if (a.profiles?.full_name) names.set(a.profile_id, a.profiles.full_name)
       add(a.profile_id, b.block_date, {
         here: true,
@@ -103,7 +106,7 @@ export function doubleBookings(blocks, otherAssignments, { from = null, to = nul
     }
   }
 
-  for (const a of (otherAssignments || []).filter(isLiveAssignment)) {
+  for (const a of liveAssignments(otherAssignments)) {
     const ob = a.shift_blocks
     if (!ob || !inScope(ob.block_date, { from, to, todayIso })) continue
     add(a.profile_id, ob.block_date, {
@@ -126,13 +129,12 @@ export function doubleBookings(blocks, otherAssignments, { from = null, to = nul
         const second = sorted[j]
         if (!first.here && !second.here) continue
         if (!timeRangesOverlap(first.start_time, first.end_time, second.start_time, second.end_time)) continue
-        const strip = ({ here: _here, ...rest }) => rest
         out.push({
           profile_id: profileId,
           coach_name: names.get(profileId) || 'Coach',
           block_date: date,
-          first: strip(first),
-          second: strip(second),
+          first: stripHere(first),
+          second: stripHere(second),
         })
       }
     }
