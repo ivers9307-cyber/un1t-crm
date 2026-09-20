@@ -16,6 +16,7 @@
 // Web-only on purpose: anything under shared/ publishes an OTA.
 
 import { liveAssignments } from './roster'
+import { futureBlockStaffing, countStaffingGaps, staffingGapsHeadline, staffingGapsBreakdown } from './roster-staffing'
 import { formatTime12h, formatTimeRange12h } from './schedule-overlap'
 
 /**
@@ -87,5 +88,43 @@ export function shiftCardModel(block, assignments, staffing, { isManager = false
     coaches,
     status,
     emptyText,
+  }
+}
+
+const NO_STATUS = Object.freeze({ tone: 'none', label: '', srLabel: '', title: '', empty: 0, short: 0 })
+
+/**
+ * The staffing status of ONE day, for the week view's day header and the
+ * month view's cell. Replaces three things that each said it differently: the
+ * Studio Overview tile ("UNDERMANNED 4/1"), and the month cell's "!1" / "↓1".
+ *
+ *   tone   'none'  no future shift on the day: say nothing
+ *          'ok'    every future shift is at or above its minimum
+ *          'short' at least one below its minimum, none empty   (amber)
+ *          'empty' at least one with no coach                   (red)
+ *   label  visible text, ONLY when not ok: "2 short"
+ *   srLabel / title  the sentence, built from the same two functions the week
+ *          banner uses, so the header and the banner cannot disagree
+ *
+ * Answers from futureBlockStaffing, like every other staffing surface
+ * (ROSTERVIS.1), so cancelled assignments never count and past days are quiet.
+ * Manager-only by CALLER: a coach's blocks carry no min_coaches, and the
+ * calendar passes `status={null}` for a coach.
+ */
+export function dayHeaderStatus(blocksForDay, { todayIso } = {}) {
+  const future = (blocksForDay || []).filter((blk) => futureBlockStaffing(blk, todayIso))
+  if (future.length === 0) return NO_STATUS
+  const gaps = countStaffingGaps(future, { todayIso })
+  if (gaps.total === 0) {
+    return { tone: 'ok', label: '', srLabel: 'Fully staffed', title: 'Every shift has its minimum number of coaches', empty: 0, short: 0 }
+  }
+  const sentence = `${staffingGapsHeadline(gaps, '')}: ${staffingGapsBreakdown(gaps)}`
+  return {
+    tone: gaps.empty > 0 ? 'empty' : 'short',
+    label: `${gaps.total} short`,
+    srLabel: sentence,
+    title: sentence,
+    empty: gaps.empty,
+    short: gaps.short,
   }
 }

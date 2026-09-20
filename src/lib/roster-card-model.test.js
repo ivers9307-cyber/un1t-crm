@@ -3,7 +3,7 @@
 // and toolbar make is made HERE, in pure functions, because jsdom cannot see
 // layout and a component test can only say "this text is present".
 import { describe, it, expect } from 'vitest'
-import { cardTone, shiftCardModel } from './roster-card-model'
+import { cardTone, shiftCardModel, dayHeaderStatus } from './roster-card-model'
 
 const TODAY = '2026-09-21'
 const block = (over = {}) => ({
@@ -95,5 +95,40 @@ describe('shiftCardModel', () => {
   it('falls back to "Shift" when the template is missing', () => {
     const m = shiftCardModel(block({ shift_templates: null }), [], null, { isManager: true })
     expect(m.templateName).toBe('Shift')
+  })
+})
+
+describe('dayHeaderStatus', () => {
+  const live = (n) => Array.from({ length: n }, (_, i) => ({ id: `a${i}`, profile_id: `u${i}`, status: 'confirmed' }))
+  const b = (id, min, n, date = TODAY) => ({ id, block_date: date, start_time: '09:00', min_coaches: min, shift_assignments: live(n) })
+
+  it.each([
+    ['no blocks at all',            [],                                        'none',  '',        ''],
+    ['only past blocks',            [b('p', 1, 0, '2026-09-01')],              'none',  '',        ''],
+    ['every shift at its minimum',  [b('x', 1, 1), b('y', 2, 2)],              'ok',    '',        'Fully staffed'],
+    ['one below minimum',           [b('x', 2, 1), b('y', 1, 1)],              'short', '1 short', '1 shift needs coaches: 1 below the minimum'],
+    ['one with no coach',           [b('x', 1, 0), b('y', 1, 1)],              'empty', '1 short', '1 shift needs coaches: 1 with no coach'],
+    ['one of each: red wins',       [b('x', 1, 0), b('y', 2, 1)],              'empty', '2 short', '2 shifts need coaches: 1 with no coach, 1 below the minimum'],
+    ['past gaps are not counted',   [b('p', 1, 0, '2026-09-01'), b('y', 1, 1)], 'ok',   '',        'Fully staffed'],
+  ])('%s', (_name, blocks, tone, label, srLabel) => {
+    const s = dayHeaderStatus(blocks, { todayIso: TODAY })
+    expect(s.tone).toBe(tone)
+    expect(s.label).toBe(label)
+    expect(s.srLabel).toBe(srLabel)
+  })
+
+  it('a cancelled assignment is not a coach', () => {
+    const blocks = [{ id: 'x', block_date: TODAY, min_coaches: 1, shift_assignments: [{ id: 'a', profile_id: 'u', status: 'cancelled' }] }]
+    expect(dayHeaderStatus(blocks, { todayIso: TODAY }).tone).toBe('empty')
+  })
+
+  it('the tooltip is the sentence, so the dot is never the only explanation', () => {
+    const s = dayHeaderStatus([b('x', 2, 1)], { todayIso: TODAY })
+    expect(s.title).toBe(s.srLabel)
+    expect(dayHeaderStatus([b('x', 1, 1)], { todayIso: TODAY }).title).toBe('Every shift has its minimum number of coaches')
+  })
+
+  it('tolerates null', () => {
+    expect(dayHeaderStatus(null, { todayIso: TODAY }).tone).toBe('none')
   })
 })
