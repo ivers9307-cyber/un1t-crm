@@ -37,6 +37,12 @@ import { effectiveOverride } from './roster-read'
 // leave doesn't reduce availability — the contract didn't count
 // it in the first place.
 //
+// HOLIDAYLEAVE.1 — a bank holiday inside approved leave STILL counts here.
+// countLeaveDays (time-off-days.js) skips it because it costs no ALLOWANCE;
+// this function measures AVAILABILITY, and the coach is no more available on a
+// bank holiday they are on leave for. The two are different questions and are
+// meant to disagree on that one day.
+//
 // Half-days aren't honoured here; we'd need a `hours_per_day`
 // or similar on time_off_requests for that. The error from
 // treating a half-day as a full day is small and conservative
