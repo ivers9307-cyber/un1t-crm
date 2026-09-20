@@ -236,6 +236,12 @@ describe('dueShiftReminders — the timing table', () => {
     expect(isInSendWindow(at('2026-09-22T00:00:00Z'), 'America/New_York')).toBe(true) // 20:00 in New York
   })
 
+  it('an invalid timezone never throws out of the pure functions: the wall clock falls back to Dublin', () => {
+    expect(isInSendWindow(at('2026-09-22T06:00:00Z'), 'Not/AZone')).toBe(true)  // 07:00 Dublin
+    expect(isInSendWindow(at('2026-09-22T05:59:00Z'), 'Not/AZone')).toBe(false)
+    expect(isInSendWindow(at('2026-09-22T06:00:00Z'), '')).toBe(true)
+  })
+
   it('isReminderDue(null) is false, not a throw', () => {
     expect(isReminderDue(null, 0)).toBe(false)
   })
@@ -670,6 +676,42 @@ describe('runShiftReminders', () => {
     expect(summary).toMatchObject({ quiet_hours: 1, shift_candidates: 0, shift_pushed: 0 })
   })
 
+  // ONE bad locations.timezone (any row, gym or not) must not stop the arm for
+  // every coach: it is validated once per run and falls back to Dublin.
+  it('an INVALID timezone on a location WITH shifts: its coaches are reminded on Dublin time, every other location as normal, one warning', async () => {
+    const locations = [
+      { id: 'loc-1', name: 'Studio North', timezone: 'Europe/Dublinn' },
+      { id: 'loc-2', name: 'Studio South', timezone: 'Europe/Dublin' },
+    ]
+    const south = shift({ id: 'assign-s', profile_id: 'coach-s', location_id: 'loc-2', profiles: { id: 'coach-s', full_name: 'Sam Sample' } })
+    fetchApiShiftRows.mockResolvedValue({ rows: [shift(), south], error: null })
+    const summary = await runShiftReminders(makeDb(), { nowMs: NOW, locations })
+    expect(notifyUsers.mock.calls.map(([ids, p]) => [ids[0], p.title])).toEqual([
+      ['coach-1', 'Shift tomorrow at 06:00'],
+      ['coach-s', 'Shift tomorrow at 06:00'],
+    ])
+    expect(summary.shift_pushed).toBe(2)
+    const tzWarnings = logWarn.mock.calls.filter(([, m]) => /invalid timezone/.test(m))
+    expect(tzWarnings).toHaveLength(1)
+    expect(tzWarnings[0][2]).toMatchObject({ location: 'loc-1', timezone: 'Europe/Dublinn' })
+  })
+
+  it.each([['a typo', 'Mars/Olympus'], ['an empty string', '']])('an invalid timezone (%s) on a location with NO shifts changes nothing', async (_n, bad) => {
+    const locations = [...LOCATIONS, { id: 'loc-cars', name: 'Not A Gym', timezone: bad }]
+    const db = makeDb()
+    const summary = await runShiftReminders(db, { nowMs: NOW, locations })
+    expect(notifyUsers).toHaveBeenCalledTimes(1)
+    expect(summary).toMatchObject({ shift_candidates: 1, shift_pushed: 1, quiet_hours: 0 })
+    // ... and in quiet hours it still exits cleanly instead of throwing.
+    await expect(runShiftReminders(makeDb(), { nowMs: at('2026-09-22T02:00:00Z'), locations })).resolves.toMatchObject({ quiet_hours: 1 })
+  })
+
+  it('a timezone that was never set (null) is the Dublin default, silently', async () => {
+    await runShiftReminders(makeDb(), { nowMs: NOW, locations: [{ id: 'loc-1', name: 'Studio North', timezone: null }] })
+    expect(notifyUsers).toHaveBeenCalledTimes(1)
+    expect(logWarn.mock.calls.filter(([, m]) => /invalid timezone/.test(m))).toEqual([])
+  })
+
   it('inside the send window quiet_hours is 0', async () => {
     expect((await runShiftReminders(makeDb(), { nowMs: NOW, locations: LOCATIONS })).quiet_hours).toBe(0)
   })
@@ -735,6 +777,20 @@ describe('runShiftReminders', () => {
     expect(db.writes.map((w) => w.op)).toEqual(['insert', 'delete'])
     expect(db.writes[1].where).toEqual(OWN_ROW)
     expect(summary).toMatchObject({ shift_send_failed: 1, shift_pushed: 0 })
+  })
+
+  // It retries every 5 minutes until T-30 (or 22:00). That is a real fault
+  // (a dead token, a hard-bounced fallback address): someone should SEE it.
+  it.each([
+    ['push_failed', { failed: 1 }],
+    ['email_failed', { email_failed: 1 }],
+    ['push_failed+email_failed', { failed: 1, email_failed: 1 }],
+  ])('a release is WARNED about once, naming the assignment and the failure class: %s', async (failure, counts) => {
+    notifyUsers.mockResolvedValue({ ...SENT, sent: 0, ...counts })
+    await runShiftReminders(makeDb(), { nowMs: NOW, locations: LOCATIONS })
+    const released = logWarn.mock.calls.filter(([, m]) => /claim released/.test(m))
+    expect(released).toHaveLength(1)
+    expect(released[0][2]).toMatchObject({ assignment: 'assign-1', failure })
   })
 
   // notifyUsers is documented as never throwing. If it throws anyway the arm
@@ -909,8 +965,8 @@ describe('runShiftReminders', () => {
     const db = makeDb()
     const from = vi.spyOn(db, 'from')
     await runShiftReminders(db, { nowMs: at('2026-09-21T12:00:00Z'), locations: LOCATIONS })
-    // COST: not the ledger, and not the leave table either. Most ticks end here,
-    // after the one shift read.
+    // COST: not the ledger, and not the leave table either. A tick with no run
+    // in its reminder window ends after the one shift read.
     expect(from.mock.calls.map(([t]) => t)).toEqual([])
     expect(notifyUsers).not.toHaveBeenCalled()
   })

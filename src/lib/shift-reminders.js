@@ -115,12 +115,31 @@ export function reminderPlanFor(shift, tz = DEFAULT_TZ) {
 }
 
 const wallClockFormatters = new Map()
-function wallClockHHMM(ms, tz) {
+function wallClockFormatterFor(tz) {
   if (!wallClockFormatters.has(tz)) {
-    // hourCycle h23: midnight is "00", never "24".
-    wallClockFormatters.set(tz, new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }))
+    let fmt = null
+    try {
+      // hourCycle h23: midnight is "00", never "24".
+      fmt = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+    } catch {
+      fmt = null // not an IANA zone (a RangeError); remembered, so it is tried once
+    }
+    wallClockFormatters.set(tz, fmt)
   }
-  const parts = wallClockFormatters.get(tz).formatToParts(new Date(ms))
+  return wallClockFormatters.get(tz)
+}
+
+/** Is this a timezone string Intl accepts? Empty and non-strings are not. */
+export function isValidTimeZone(tz) {
+  return typeof tz === 'string' && tz !== '' && !!wallClockFormatterFor(tz)
+}
+
+// Never throws: an invalid zone reads the Dublin wall clock. runShiftReminders
+// validates every location's zone once per run (and warns), so this fallback
+// is the pure functions' own floor, not the reporting path.
+function wallClockHHMM(ms, tz) {
+  const fmt = (isValidTimeZone(tz) && wallClockFormatterFor(tz)) || wallClockFormatterFor(DEFAULT_TZ)
+  const parts = fmt.formatToParts(new Date(ms))
   const get = (type) => parts.find((p) => p.type === type)?.value
   return `${get('hour')}:${get('minute')}`
 }
@@ -456,17 +475,32 @@ export async function runShiftReminders(db, { nowMs = Date.now(), locations = []
   const locationIds = locations.map((l) => l.id).filter(Boolean)
   if (locationIds.length === 0) return summary
 
+  // Timezones are validated ONCE per run, here. One invalid IANA string on ANY
+  // locations row (a gym or not) would otherwise throw a RangeError out of the
+  // wall-clock read and stop the arm for every coach until someone fixed the
+  // row. A bad or empty value falls back to Dublin with one warning naming the
+  // row; a value that was never set (null) is the Dublin default, silently.
+  const tzByLocation = {}
+  for (const l of locations) {
+    if (!l.id) continue
+    if (l.timezone == null || isValidTimeZone(l.timezone)) {
+      tzByLocation[l.id] = l.timezone || DEFAULT_TZ
+    } else {
+      tzByLocation[l.id] = DEFAULT_TZ
+      logWarn('shift-reminders', `invalid timezone on a location — using ${DEFAULT_TZ} for it`, { location: l.id, timezone: l.timezone })
+    }
+  }
+
   // QUIET HOURS — before ANY database read. Outside [07:00, 22:00) nothing can
   // be due (dueShiftReminders enforces the same rule per run; this is the cheap
   // exit for the 9 hours a night when the answer is already known).
-  if (!locations.some((l) => isInSendWindow(nowMs, l.timezone || DEFAULT_TZ))) {
+  if (!Object.values(tzByLocation).some((tz) => isInSendWindow(nowMs, tz))) {
     summary.quiet_hours = 1
     return summary
   }
 
   const today = dublinDayStr(nowMs)
   const tomorrow = addDaysISO(today, 1)
-  const tzByLocation = Object.fromEntries(locations.map((l) => [l.id, l.timezone || DEFAULT_TZ]))
   const nameByLocation = Object.fromEntries(locations.map((l) => [l.id, l.name || '']))
 
   // Two days across the estate is tens of rows, far under the 1,000-row cap
@@ -482,8 +516,14 @@ export async function runShiftReminders(db, { nowMs = Date.now(), locations = []
   }
   if (rows.length === 0) return summary
 
-  // COST: most ticks end here. Leave can only REMOVE a coach's day, never make
-  // a run due, so if nothing is time-due without it there is nothing to read.
+  // COST: a tick with NO run inside its reminder window ends here, after the
+  // one shift read. Leave can only REMOVE a coach's day, never make a run due,
+  // so if nothing is time-due without it there is nothing more to read. This
+  // pre-pass has no ledger keys, so it cannot tell a reminded run from an
+  // unreminded one: an ALREADY-REMINDED run keeps triggering the leave read and
+  // the ledger read on every tick from its planned time until 30 minutes
+  // before it starts (quiet hours excepted). The saving is the ticks where no
+  // run is in its window at all, not "most ticks".
   if (dueShiftReminders(rows, { nowMs, tzByLocation }).length === 0) return summary
 
   let onLeave = new Set()
@@ -502,7 +542,7 @@ export async function runShiftReminders(db, { nowMs = Date.now(), locations = []
   if (timeDue.length === 0) return summary
   summary.shift_candidates = timeDue.length
 
-  // One batched ledger read, only once something is time-due (most ticks: never).
+  // One batched ledger read, only once a run is time-due (a tick with no run in its window: never).
   // Read by COACH, not by the first shift's id: the claim that marks a run as
   // reminded may sit on ANY shift of it (an earlier shift was added since), or
   // on a shift the coach has since swapped away (buildShiftRuns' ghost). A run
@@ -578,6 +618,12 @@ export async function runShiftReminders(db, { nowMs = Date.now(), locations = []
     const somethingFailed = (result?.failed || 0) > 0 || (result?.email_failed || 0) > 0
     if (!delivered && somethingFailed) {
       summary.shift_send_failed++
+      // Once per assignment per run (this loop sees each once). It WILL repeat
+      // on every tick until the send works, the run is 30 minutes away or it
+      // is 22:00: a dead token or a hard-bounced fallback address is a real
+      // fault, and a counter in an info line is not enough of a trace.
+      const failure = [(result?.failed || 0) > 0 && 'push_failed', (result?.email_failed || 0) > 0 && 'email_failed'].filter(Boolean).join('+')
+      logWarn('shift-reminders', 'nothing delivered — claim released, will retry next tick', { assignment: s.id, recipient: s.profile_id, failure })
       const { error: releaseErr } = await ownLedgerRow(db.from('push_reminder_sends').delete(), s)
       if (releaseErr) logError('shift-reminders', 'claim release failed — this reminder will NOT retry', { err: releaseErr, assignment: s.id })
       continue
