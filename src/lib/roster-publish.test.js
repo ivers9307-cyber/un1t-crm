@@ -157,14 +157,14 @@ function mockDb({ location, locationsById = null, failLocationIds = [], contract
       // COPYLEAVE.1 — the same coaches' live shifts at OTHER studios.
       if (table === 'shift_assignments') {
         if (throwOn === 'shift_assignments') throw new Error('shift_assignments: client exploded')
-        const f = { profileIds: null, locIds: null, gte: null, lte: null, from: 0, to: Infinity }
+        const f = { profileIds: null, locIds: null, gte: null, lte: null, orders: [], from: 0, to: Infinity }
         assignmentQueries.push(f)
         const chain = {
           select: () => chain,
           in: (c, v) => { if (c === 'profile_id') f.profileIds = v; else f.locIds = v; return chain },
           gte: (_c, v) => { f.gte = v; return chain },
           lte: (_c, v) => { f.lte = v; return chain },
-          order: () => chain,
+          order: (c, opts) => { f.orders.push([c, opts?.ascending !== false]); return chain },
           range: (from, to) => { f.from = from; f.to = to; return chain },
           then: (onF, onR) => Promise.resolve(failOtherAssignments
             ? { data: null, error: { message: 'other studios unreadable' } }
@@ -682,6 +682,9 @@ describe('projectPublishImpact — leave clashes and double bookings', () => {
     })
     const r = await projectPublishImpact(db, PERIOD)
     expect(db.assignmentQueries.map((q) => [q.from, q.to])).toEqual([[0, 999], [1000, 1999]])
+    // .range() without a total order is not paging: PostgREST may hand back
+    // the same row on two pages and skip another. Every page orders by id.
+    for (const q of db.assignmentQueries) expect(q.orders).toEqual([['id', true]])
     expect(r.doubleBookings).toHaveLength(1)
     expect(r.doubleBookings[0].second).toMatchObject({ location_name: 'Studio B', start_time: '10:00' })
     expect(r.crossLocationChecked).toBe(true)
