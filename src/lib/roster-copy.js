@@ -16,9 +16,10 @@
 // Both modes insert only (COPYFIX.1, via bulkUpsertShiftAssignments): a coach
 // already on the target keeps their times, notes and status.
 //
-// The read (fetchSourceBlocks) is the only I/O here. Everything that decides
-// what gets written (buildCopyPlan + the date mappers) is pure, so both modes
-// are unit-testable without a Supabase mock. Dates are YYYY-MM-DD calendar
+// The reads (fetchSourceBlocks, and COPYLEAVE.1's fetchApprovedLeave) are the
+// only I/O here. Everything that decides what gets written (buildCopyPlan +
+// the date mappers) is pure, so both modes are unit-testable without a
+// Supabase mock. Dates are YYYY-MM-DD calendar
 // strings throughout; they are only ever turned into local-midnight Dates and
 // back through local components, never toISOString() (BST, see CLAUDE.md).
 
@@ -62,6 +63,38 @@ export async function fetchSourceBlocks(db, { locationId, startDate, endDate }) 
     if (page.length < PAGE_SIZE) break
   }
   return { blocks, error: null }
+}
+
+/**
+ * COPYLEAVE.1 — APPROVED time off, of any type, for these coaches that
+ * overlaps [startDate, endDate] (the TARGET period). Filtered by PERSON, not by
+ * location: leave covers the person (LEAVE.2), so a coach who filed from
+ * another studio is still off here. Paged like fetchSourceBlocks.
+ *
+ * @returns {Promise<{ leave: Array<object>, error: object|null }>}
+ */
+export async function fetchApprovedLeave(db, { profileIds, startDate, endDate }) {
+  const ids = [...new Set((profileIds || []).filter(Boolean))]
+  if (ids.length === 0) return { leave: [], error: null }
+  const leave = []
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await db
+      .from('time_off_requests')
+      // Literal on purpose: check:select-columns only resolves literal selects.
+      .select('id, profile_id, start_date, end_date, status')
+      .in('profile_id', ids)
+      .eq('status', 'approved')
+      .lte('start_date', endDate)
+      .gte('end_date', startDate)
+      .order('start_date', { ascending: true })
+      .order('id', { ascending: true })
+      .range(from, from + PAGE_SIZE - 1)
+    if (error) return { leave: [], error }
+    const page = data || []
+    leave.push(...page)
+    if (page.length < PAGE_SIZE) break
+  }
+  return { leave, error: null }
 }
 
 /** Local-midnight Date for a YYYY-MM-DD string (never UTC-parsed). */

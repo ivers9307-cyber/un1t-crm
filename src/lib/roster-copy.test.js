@@ -400,6 +400,72 @@ describe('fetchSourceBlocks', () => {
   })
 })
 
+describe('fetchApprovedLeave', () => {
+  // Records what was asked for and serves `total` rows a page at a time.
+  function leaveDb(total, { fail = false } = {}) {
+    const calls = []
+    const all = Array.from({ length: total }, (_, i) => ({
+      id: `l${String(i).padStart(5, '0')}`, profile_id: 'p1', status: 'approved', start_date: '2026-07-06', end_date: '2026-07-06',
+    }))
+    return {
+      calls,
+      from(table) {
+        expect(table).toBe('time_off_requests')
+        const q = { filters: [], orders: [] }
+        const chain = {
+          select: (s) => { q.select = s; return chain },
+          in: (c, v) => { q.filters.push(['in', c, v]); return chain },
+          eq: (c, v) => { q.filters.push(['eq', c, v]); return chain },
+          lte: (c, v) => { q.filters.push(['lte', c, v]); return chain },
+          gte: (c, v) => { q.filters.push(['gte', c, v]); return chain },
+          order: (c) => { q.orders.push(c); return chain },
+          range: (from, to) => {
+            q.range = [from, to]
+            calls.push(q)
+            if (fail) return Promise.resolve({ data: null, error: { message: 'leave boom' } })
+            return Promise.resolve({ data: all.slice(from, to + 1), error: null })
+          },
+        }
+        return chain
+      },
+    }
+  }
+
+  it('asks for APPROVED leave of these coaches that overlaps the target range', async () => {
+    const db = leaveDb(2)
+    const { leave, error } = await fetchApprovedLeave(db, { profileIds: ['p1', 'p2'], startDate: '2026-07-06', endDate: '2026-07-12' })
+    expect(error).toBeNull()
+    expect(leave).toHaveLength(2)
+    expect(db.calls[0].filters).toEqual([
+      ['in', 'profile_id', ['p1', 'p2']],
+      ['eq', 'status', 'approved'],
+      // overlap: starts on or before the range ends, ends on or after it starts
+      ['lte', 'start_date', '2026-07-12'],
+      ['gte', 'end_date', '2026-07-06'],
+    ])
+    expect(db.calls[0].orders).toEqual(['start_date', 'id'])
+  })
+
+  it('pages past the 1,000-row cap', async () => {
+    const db = leaveDb(1500)
+    const { leave } = await fetchApprovedLeave(db, { profileIds: ['p1'], startDate: '2026-07-01', endDate: '2026-07-31' })
+    expect(leave).toHaveLength(1500)
+    expect(db.calls.map((c) => c.range)).toEqual([[0, 999], [1000, 1999]])
+  })
+
+  it('no coaches = no query', async () => {
+    const db = leaveDb(5)
+    expect(await fetchApprovedLeave(db, { profileIds: [], startDate: 'a', endDate: 'b' })).toEqual({ leave: [], error: null })
+    expect(db.calls).toHaveLength(0)
+  })
+
+  it('returns the error and no partial rows', async () => {
+    const db = leaveDb(5, { fail: true })
+    expect(await fetchApprovedLeave(db, { profileIds: ['p1'], startDate: 'a', endDate: 'b' }))
+      .toEqual({ leave: [], error: { message: 'leave boom' } })
+  })
+})
+
 describe('copyResultToast', () => {
   it('is a success with the copied count when nothing was skipped', () => {
     expect(copyResultToast({ period: 'week', mode: 'exact', copied: 12, skipped: 0 })).toEqual({ kind: 'success', message: 'Copied 12 shifts.' })
