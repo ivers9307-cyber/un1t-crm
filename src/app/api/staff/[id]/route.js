@@ -14,6 +14,7 @@ import { canEditStaffMember } from '@/lib/staff-access'
 import { applyStaffProfileWrite, assertOwnerAssignmentScope, computeDesiredAssignments, computeProfileRole, sparsifyAssignmentPermissions, syncStaffAssignments } from '@/lib/staff-write'
 import { getStaffForUser } from '@/lib/staff'
 import { logAuditEvent } from '@/lib/audit'
+import { isTombstone } from '@/lib/staff-tombstone'
 
 export const runtime = 'nodejs'
 
@@ -101,7 +102,10 @@ export async function PUT(request, props) {
     .eq('id', id)
     .single()
 
-  if (!targetBefore) {
+  // STAFFDELETE.1 — a tombstone cannot be edited back to life. (The database
+  // refuses active=true, or any role but 'staff', on one too: CHECK
+  // profiles_tombstone_is_inactive.)
+  if (!targetBefore || isTombstone(targetBefore)) {
     return NextResponse.json({ success: false, error: 'Profile not found' }, { status: 404 })
   }
 

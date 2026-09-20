@@ -8,6 +8,7 @@ import { hasPermission } from './permissions'
 import { loadRoleTemplatesForLocations } from './role-templates.js'
 import { SUPPORT_COOKIE, verifySupportCookie } from './support-session-edge'
 import { hasRoleAtLocation, hasRoleAtAnyLocation } from './role-at-location'
+import { isTombstone } from './staff-tombstone.js'
 
 // React 18's `cache()` is only exported from the server build of react.
 // In the Vitest (Node) environment we get the client build which omits
@@ -282,7 +283,10 @@ export const getCurrentUser = cache(async function getCurrentUser() {
     import('./impersonation.js'),
   ])
 
-  if (!realProfile) return null
+  // STAFFDELETE.1 — a permanently deleted staff member keeps a profiles row (a
+  // tombstone, so history still names them) but is nobody: the auth user is
+  // banned, and an access token issued before the ban dies here.
+  if (!realProfile || isTombstone(realProfile)) return null
 
   // Master impersonation (mig 035). If `un1t_impersonate` cookie OR
   // `x-impersonate-target` header is set AND the underlying session
@@ -313,7 +317,8 @@ export const getCurrentUser = cache(async function getCurrentUser() {
       // no real session behind it — which showed up as "Viewing as
       // <yourself> · signed in as Master". Gating on the audit row makes
       // the cookie inert once the session is closed.
-      if (target) {
+      // STAFFDELETE.1 — and a tombstone is never a target.
+      if (target && !isTombstone(target)) {
         const { data: openRow } = await db
           .from('impersonation_log')
           .select('id')
