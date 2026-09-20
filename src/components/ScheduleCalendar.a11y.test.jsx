@@ -168,7 +168,9 @@ describe('week-view block card (ROSTER-FIX.6b)', () => {
     // Outside select mode the card is not a toggle, so it carries no state.
     expect(cardButton('Morning').getAttribute('aria-pressed')).toBeNull()
 
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Select multiple/ })) })
+    // ROSTERLOOK.1 — Select multiple moved into the toolbar's More menu.
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'More' })) })
+    await act(async () => { fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /Select multiple/ })) })
     const selectMorning = () => screen.getByRole('button', { name: /^Select .*Morning shift,/ })
     expect(selectMorning().getAttribute('aria-pressed')).toBe('false')
 

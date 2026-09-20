@@ -22,8 +22,7 @@
 // (RETIRE-SHIFTS-MIRROR.5c). The legacy public.shifts mirror is gone (mig 238).
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import { ChevronLeft, ChevronRight, Copy, Send, Plus, Users, User, Clock, X, ArrowLeftRight, CalendarOff, Palmtree, ThermometerSun, Ban, Wallet, CircleEllipsis, AlertTriangle, AlertCircle, CalendarDays, CalendarRange, Pencil, Check, Settings } from 'lucide-react'
-import Link from 'next/link'
+import { Plus, Clock, X, ArrowLeftRight, CalendarOff, Palmtree, ThermometerSun, Ban, Wallet, CircleEllipsis, AlertTriangle, AlertCircle, Pencil, Check } from 'lucide-react'
 import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 import { indexByDate } from '@/lib/bank-holidays'
 import { MANAGER_ROLES } from '@/lib/schemas'
@@ -72,6 +71,9 @@ import { timeOffLeaveLabel } from '@shared/time-off'
 import { useScheduleData } from './schedule/useScheduleData'
 import { useWeekCost } from './schedule/useWeekCost'
 import { useDraftRosters } from './schedule/useDraftRosters'
+// ROSTERLOOK.1 — the toolbar row, and the pure model that says what is on it.
+import RosterToolbar from './schedule/RosterToolbar'
+import { rosterToolbarModel } from '@/lib/roster-card-model'
 
 // LEAVE.2 — every leave type gets its own label (timeOffLeaveLabel) and
 // colour. Unpaid and "other" were missing, so approved unpaid/other leave
@@ -939,185 +941,90 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
     }
   }
 
+  // ROSTERLOOK.1 — the toolbar's handlers. Each is the inline onClick the old
+  // header carried, given a name so RosterToolbar can call it. No behaviour
+  // changed in the move.
+  function showWeekView() {
+    // ROSTER-FIX.6a — see weekStartForMonth: getMonday(monthStart)
+    // used to land on the previous month whenever the 1st fell on
+    // a weekend, and the next Month click then kept that month.
+    if (viewType === 'month') setWeekStart(weekStartForMonth(monthStart, weekStart))
+    setViewType('week')
+  }
+  function showMonthView() {
+    // Midweek decides which month a straddling week belongs to.
+    if (viewType === 'week') setMonthStart(monthStartForWeek(weekStart))
+    setViewType('month')
+  }
+  function goPrevious() {
+    if (viewType === 'month') setMonthStart(addMonths(monthStart, -1))
+    else setWeekStart(addDays(weekStart, -7))
+  }
+  function goNext() {
+    if (viewType === 'month') setMonthStart(addMonths(monthStart, 1))
+    else setWeekStart(addDays(weekStart, 7))
+  }
+  function goToday() {
+    const now = new Date()
+    if (viewType === 'month') setMonthStart(getMonthStart(now))
+    else setWeekStart(getMonday(now))
+  }
+  // BULK-ASSIGN.1 — multi-select mode toggle. Off by default so single-block
+  // edits still work as before. On entry, the floating action bar at the
+  // bottom of the page takes over until the operator hits Cancel or Assign.
+  function toggleSelectMode() {
+    if (selectMode) exitSelectMode()
+    else setSelectMode(true)
+  }
+
+  // SCHEDULE-COPY-VISIBILITY.1 — both copy actions are offered regardless of
+  // view (handleCopyMonth derives the target month from the effective view
+  // state). SCHEDULE-TEMPLATES-SHORTCUT.1 — "Manage templates" is every
+  // manager-class role's one-click path to /settings/shifts, which head_coach
+  // could not otherwise reach. Both rules now live in rosterToolbarModel.
+  const toolbarModel = rosterToolbarModel({
+    isManager,
+    viewType,
+    selectMode,
+    selectedCount: selectedBlockIds.size,
+    copying,
+  })
+
   return (
     <div ref={calendarRef}>
-      {/* Header */}
-      {/* CAL-UI-LOW.1 — the header row is a WRAPPING row.
-          It used to be a single `flex items-center justify-between`
-          with a non-wrapping action group, so every control past the
-          available width was pushed off the right edge of the page —
-          at phone width that is Publish, the one action the week view
-          exists for, with no horizontal scroll to reach it (the page
-          is `p-8`, so a 360px phone leaves 296px of content). Wrapping
-          here changes nothing on a desktop row that already fits; it
-          only decides where the overflow goes when it does not.
-          `items-center` is kept from the original so the desktop row is
-          pixel-identical (measured: `items-start` lifted the whole action
-          group 11px). Titles get `min-w-0` so a long studio name shrinks
-          instead of pushing the actions out, and each pill carries
-          `whitespace-nowrap` so the wrap happens BETWEEN controls
-          rather than inside a label. */}
-      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 mb-6">
-        <div className="min-w-0">
-          <h2 className="text-2xl font-bold">Schedule</h2>
-          <p className="text-sm text-un1t-subtle mt-1">
-            {user.activeLocation?.name} — Staff roster
-          </p>
-        </div>
-        <div data-testid="schedule-toolbar" className="flex flex-wrap items-center gap-2">
-          <Link
-            href="/schedule/time-off"
-            className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30 transition-colors whitespace-nowrap"
-          >
-            <CalendarOff size={14} /> Time Off
-          </Link>
+      {/* ROSTERLOOK.1 — the visible "Schedule / <studio> — Staff roster" block
+          is gone: the sidebar names the studio, two tab strips say "Schedule",
+          and the tab title says both. Heading navigation keeps a landmark. */}
+      <h2 className="sr-only">
+        {user.activeLocation?.name ? `${user.activeLocation.name} staff roster` : 'Staff roster'}
+      </h2>
 
-          <div className="flex shrink-0 bg-un1t-surface border border-un1t-border rounded-lg overflow-hidden text-xs">
-            <button
-              type="button"
-              onClick={() => setViewMode('my')}
-              className={`flex items-center gap-1.5 px-3 py-2 whitespace-nowrap transition-colors ${viewMode === 'my' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'}`}
-            >
-              <User size={14} /> My Shifts
-            </button>
-            <button
-              type="button"
-              onClick={() => setViewMode('all')}
-              className={`flex items-center gap-1.5 px-3 py-2 whitespace-nowrap transition-colors ${viewMode === 'all' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'}`}
-            >
-              <Users size={14} /> All Staff
-            </button>
-          </div>
+      {/* ROSTERLOOK.1 — ONE toolbar row (was: eight buttons on two rows, then
+          a separate week navigator). Gating lives in rosterToolbarModel; the
+          handlers are the ones this file has always had. CAL-UI-LOW.1's
+          wrapping rules moved into RosterToolbar with the markup. */}
+      <RosterToolbar
+        viewType={viewType}
+        periodLabel={viewType === 'month' ? monthLabel : weekLabel}
+        onPrev={goPrevious}
+        onNext={goNext}
+        onToday={goToday}
+        viewMode={viewMode}
+        onViewMode={setViewMode}
+        onViewType={(next) => (next === 'month' ? showMonthView() : showWeekView())}
+        model={toolbarModel}
+        onSelectToggle={toggleSelectMode}
+        onCopyWeek={handleCopyWeek}
+        onCopyMonth={handleCopyMonth}
+        onPublish={handlePublishClick}
+        publishing={publishing}
+      />
 
-          <div className="flex shrink-0 bg-un1t-surface border border-un1t-border rounded-lg overflow-hidden text-xs">
-            <button
-              type="button"
-              onClick={() => {
-                // ROSTER-FIX.6a — see weekStartForMonth: getMonday(monthStart)
-                // used to land on the previous month whenever the 1st fell on
-                // a weekend, and the next Month click then kept that month.
-                if (viewType === 'month') setWeekStart(weekStartForMonth(monthStart, weekStart))
-                setViewType('week')
-              }}
-              className={`flex items-center gap-1.5 px-3 py-2 whitespace-nowrap transition-colors ${viewType === 'week' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'}`}
-            >
-              <CalendarDays size={14} /> Week
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                // Midweek decides which month a straddling week belongs to.
-                if (viewType === 'week') setMonthStart(monthStartForWeek(weekStart))
-                setViewType('month')
-              }}
-              className={`flex items-center gap-1.5 px-3 py-2 whitespace-nowrap transition-colors ${viewType === 'month' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'}`}
-            >
-              <CalendarRange size={14} /> Month
-            </button>
-          </div>
-
-          {isManager && (
-            <>
-              {/* BULK-ASSIGN.1 — multi-select mode toggle. Off by
-                  default so single-block edits still work as
-                  before. On entry, the floating action bar at the
-                  bottom of the page takes over until the operator
-                  hits Cancel or Assign. */}
-              <button
-                type="button"
-                onClick={() => {
-                  if (selectMode) exitSelectMode()
-                  else setSelectMode(true)
-                }}
-                className={`flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border whitespace-nowrap transition-colors ${
-                  selectMode
-                    ? 'bg-amber-500/20 border-amber-500/50 text-amber-700'
-                    : 'border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30'
-                }`}
-                title={selectMode ? 'Exit multi-select' : 'Select multiple shifts to assign a coach in bulk'}
-              >
-                <Check size={14} /> {selectMode ? `Selecting (${selectedBlockIds.size})` : 'Select multiple'}
-              </button>
-              {/* SCHEDULE-COPY-VISIBILITY.1 — both copy actions are
-                  surfaced regardless of view. The copy-month endpoint
-                  has always existed but was only visible in month
-                  view, so operators working in week view never
-                  discovered it. handleCopyMonth derives the target
-                  month from the effective view state. */}
-              <button
-                type="button"
-                onClick={handleCopyWeek}
-                disabled={copying}
-                className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30 transition-colors disabled:opacity-50 whitespace-nowrap"
-                title="Duplicate last week's shifts into this week"
-              >
-                <Copy size={14} /> {copying ? 'Copying...' : 'Copy Last Week'}
-              </button>
-              <button
-                type="button"
-                onClick={handleCopyMonth}
-                disabled={copying}
-                className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30 transition-colors disabled:opacity-50 whitespace-nowrap"
-                title="Duplicate last month's shifts into this month"
-              >
-                <Copy size={14} /> {copying ? 'Copying...' : 'Copy Last Month'}
-              </button>
-              {/* SCHEDULE-TEMPLATES-SHORTCUT.1 — direct path to the
-                  shift-template editor. /settings/shifts has always
-                  been MANAGER_ROLES-gated (head_coach included), but
-                  the only link to it lived inside /settings/locations/
-                  [id], which is master/owner-only — so head_coach
-                  could never reach it. Surfacing the link here gives
-                  every manager-class role a one-click entry point
-                  from the view where they think about templates. */}
-              <Link
-                href="/settings/shifts"
-                className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30 transition-colors whitespace-nowrap"
-                title="Add, edit, or retire the shift templates that build this roster"
-              >
-                <Settings size={14} /> Manage templates
-              </Link>
-              {viewType === 'week' && (
-                <button
-                  type="button"
-                  onClick={handlePublishClick}
-                  disabled={publishing}
-                  className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white transition-colors disabled:opacity-50 whitespace-nowrap"
-                >
-                  <Send size={14} /> {publishing ? 'Publishing...' : 'Publish'}
-                </button>
-              )}
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* Range Navigation */}
-      <div className="flex items-center justify-between mb-4">
-        <button
-          type="button"
-          onClick={() => {
-            if (viewType === 'month') setMonthStart(addMonths(monthStart, -1))
-            else setWeekStart(addDays(weekStart, -7))
-          }}
-          aria-label={viewType === 'month' ? 'Previous month' : 'Previous week'}
-          className="p-2 rounded-lg hover:bg-un1t-border/50 text-un1t-subtle hover:text-un1t-text transition-colors"
-        >
-          <ChevronLeft size={20} aria-hidden="true" />
-        </button>
-        <div className="text-center">
-          <span className="font-semibold">{viewType === 'month' ? monthLabel : weekLabel}</span>
-          <button
-            type="button"
-            onClick={() => {
-              const now = new Date()
-              if (viewType === 'month') setMonthStart(getMonthStart(now))
-              else setWeekStart(getMonday(now))
-            }}
-            className="ml-3 text-xs text-blue-700 hover:text-blue-800"
-          >
-            Today
-          </button>
+      {/* ROSTERLOOK.1 — INTERIM: the publish-state chip below is CHANGELOG.1's,
+          untouched, only no longer inside the old navigator. Its move into
+          the toolbar's `statusChip` slot is this PR's last code commit, held
+          back so CHANGELOG.1 (which turns the chip into a button) can land on
+          an untouched block. */}
           {/* ROSTERVIS.1 — whether the period on screen is published. The
               calendar never said; the only signal was an in-memory
               unsaved-changes flag a reload drops. Derived from each block's
@@ -1133,19 +1040,6 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
               triggerRef={changeLogTriggerRef}
             />
           )}
-        </div>
-        <button
-          type="button"
-          onClick={() => {
-            if (viewType === 'month') setMonthStart(addMonths(monthStart, 1))
-            else setWeekStart(addDays(weekStart, 7))
-          }}
-          aria-label={viewType === 'month' ? 'Next month' : 'Next week'}
-          className="p-2 rounded-lg hover:bg-un1t-border/50 text-un1t-subtle hover:text-un1t-text transition-colors"
-        >
-          <ChevronRight size={20} aria-hidden="true" />
-        </button>
-      </div>
 
       {/* ROSTER-FIX.6a — a failed load used to leave the screen on
           "Loading roster..." forever with nothing said. The banner names the
