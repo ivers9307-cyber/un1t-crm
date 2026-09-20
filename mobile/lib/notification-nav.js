@@ -11,9 +11,10 @@
 //               surface as a console error instead of a silent dead tap.
 //
 // Routing choices that aren't obvious:
-//   swaps (staff-recipient types) — the accept/decline + "my posted swaps"
-//     cards live on the personal dashboard, not /schedule. That dashboard
-//     moved off Home onto its own Dashboard tab in HOME-LOC.7.
+//   swaps (staff-recipient types, incl. the swap_open_pool broadcast) — the
+//     accept/decline, "Open swaps you can take" + "my posted swaps" cards live
+//     on the personal dashboard, not /schedule. That dashboard moved off Home
+//     onto its own Dashboard tab in HOME-LOC.7.
 //   swap_open / swap_awaiting / time_off_inbound / expense_submitted — sent
 //     to managers/owners; their decision queue is the /approvals inbox.
 //     The payload id (swap_id / request_id / claim_id) equals the pending-
@@ -38,6 +39,13 @@
 const isIsoDay = (s) => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s)
 const isSafeId = (s) => typeof s === 'string' && /^[A-Za-z0-9_-]+$/.test(s)
 
+// The team-approvals inbox, focused on one item when its id is URL-safe.
+// Exported because the Studio tab's pending rows open the same place the
+// manager pushes do (COVERLOOP.2): one spelling of the route, one guard.
+export function teamApprovalRoute(id) {
+  return isSafeId(id) ? `/approvals?tab=team&focus=${id}` : '/approvals?tab=team'
+}
+
 export function routeForNotification(data) {
   if (!data?.type) return null
   switch (data.type) {
@@ -49,6 +57,7 @@ export function routeForNotification(data) {
 
     // ── Shift swaps (schedule/swaps routes) ─────────────────────────
     case 'swap_inbound':   // targeted at me — respond on the dashboard
+    case 'swap_open_pool': // a colleague needs cover — claim it on the dashboard
     case 'swap_claimed':   // my posted shift was claimed
     case 'swap_accepted':  // my targeted swap was accepted
     case 'swap_withdrawn': // taker withdrew — my shift is open again
@@ -56,14 +65,14 @@ export function routeForNotification(data) {
       return '/(tabs)/dashboard'
     case 'swap_open':      // manager: open swap posted
     case 'swap_awaiting':  // manager: swap awaiting approval
-      return isSafeId(data.swap_id) ? `/approvals?tab=team&focus=${data.swap_id}` : '/approvals?tab=team'
+      return teamApprovalRoute(data.swap_id)
     case 'swap_decision':  // requester/taker: final decision — roster changed
       // on the requester-shift's date; preselect that week+day.
       return isIsoDay(data.block_date) ? `/(tabs)/schedule?date=${data.block_date}` : '/(tabs)/schedule'
 
     // ── Time off ────────────────────────────────────────────────────
     case 'time_off_inbound': // manager: new request
-      return isSafeId(data.request_id) ? `/approvals?tab=team&focus=${data.request_id}` : '/approvals?tab=team'
+      return teamApprovalRoute(data.request_id)
 
     // ── Customer approvals (APPROVALS-STUDIO.1) ─────────────────────
     case 'agent_request': // manager: a customer request needs a decision
@@ -71,7 +80,7 @@ export function routeForNotification(data) {
 
     // ── Host events (HOST-APPROVALS.1) ──────────────────────────────
     case 'host_event_review': // admin: a host submitted an event for review
-      return isSafeId(data.event_id) ? `/approvals?tab=team&focus=${data.event_id}` : '/approvals?tab=team'
+      return teamApprovalRoute(data.event_id)
     case 'time_off_decision': // staff: approved/declined — preselect the
       // week+day of the request's first day.
       return isIsoDay(data.start_date) ? `/(tabs)/schedule?date=${data.start_date}` : '/(tabs)/schedule'
@@ -130,7 +139,7 @@ export function routeForNotification(data) {
 
     // ── FTE expenses (expenses submit/approve/decline) ──────────────
     case 'expense_submitted': // owner: awaiting approval
-      return isSafeId(data.claim_id) ? `/approvals?tab=team&focus=${data.claim_id}` : '/approvals?tab=team'
+      return teamApprovalRoute(data.claim_id)
     case 'expense_approved':
     case 'expense_declined':
       return data.claim_id ? `/expenses/${data.claim_id}` : '/(tabs)/expenses'

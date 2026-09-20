@@ -1,6 +1,6 @@
 // SCHEDULE-DOUBLE-BOOKING.1 — unit tests for the overlap helpers.
 import { describe, it, expect } from 'vitest'
-import { coachConflictsForBlock, fmtTime, formatTime12h, timeRangesOverlap } from './schedule-overlap'
+import { coachConflictsForBlock, fmtTime, formatTime12h, formatTimeRange12h, timeRangesOverlap } from './schedule-overlap'
 
 describe('fmtTime', () => {
   it('trims HH:MM:SS to HH:MM', () => {
@@ -165,5 +165,46 @@ describe('coachConflictsForBlock', () => {
     expect(coachConflictsForBlock({ coachId: 'c1', block: BLOCK })).toEqual({ clash: null, onLeave: false })
     expect(coachConflictsForBlock({ coachId: null, block: BLOCK, blocks: [other()], timeOff: [] })).toEqual({ clash: null, onLeave: false })
     expect(coachConflictsForBlock({ coachId: 'c1', block: null, blocks: [other()], timeOff: [] })).toEqual({ clash: null, onLeave: false })
+  })
+})
+
+// ROSTERLOOK.1 — the week card prints the range on ONE line. The suffix is
+// said once when both ends share it, which is what keeps "9:15–10:30am" inside
+// a 118px card where "9:15am–10:30am" wrapped.
+describe('formatTimeRange12h (ROSTERLOOK.1)', () => {
+  it.each([
+    ['09:15', '10:30', '9:15–10:30am'],
+    ['09:00:00', '12:00:00', '9am–12pm'],
+    ['06:00', '07:00', '6–7am'],
+    ['05:45', '06:45', '5:45–6:45am'],
+    ['11:30', '12:30', '11:30am–12:30pm'],
+    ['17:00', '20:00', '5–8pm'],
+    ['00:00', '01:15', '12–1:15am'],
+  ])('%s to %s reads %s', (start, end, expected) => {
+    expect(formatTimeRange12h(start, end)).toBe(expected)
+  })
+
+  it('never contains a space or a hyphen-minus, so it cannot break mid-range', () => {
+    expect(formatTimeRange12h('09:15', '10:30')).not.toMatch(/[\s-]/)
+  })
+
+  it('degrades to the one end it was given, and to empty for none', () => {
+    expect(formatTimeRange12h('09:00', null)).toBe('9am')
+    expect(formatTimeRange12h(null, '10:00')).toBe('10am')
+    expect(formatTimeRange12h(null, null)).toBe('')
+  })
+})
+
+describe('formatTime12h amSuffix option (ROSTERLOOK.1)', () => {
+  it('drops "am" only: a month-cell line reads "5:45", and 5:45pm still says so', () => {
+    expect(formatTime12h('05:45', { amSuffix: false })).toBe('5:45')
+    expect(formatTime12h('09:00', { amSuffix: false })).toBe('9')
+    expect(formatTime12h('17:45', { amSuffix: false })).toBe('5:45pm')
+    expect(formatTime12h('12:00', { amSuffix: false })).toBe('12pm')
+  })
+
+  it('is unchanged for every existing caller (no options)', () => {
+    expect(formatTime12h('05:45')).toBe('5:45am')
+    expect(formatTime12h('17:00')).toBe('5pm')
   })
 })

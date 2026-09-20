@@ -5,7 +5,7 @@
 // missing id falls back to the relevant inbox/list.
 
 import { describe, it, expect } from 'vitest'
-import { routeForNotification } from './notification-nav'
+import { routeForNotification, teamApprovalRoute } from './notification-nav'
 
 describe('routeForNotification', () => {
   it('deep-links when the payload carries the entity id', () => {
@@ -67,7 +67,7 @@ describe('routeForNotification', () => {
     expect(routeForNotification({ type: 'time_off_inbound', request_id: 42 })).toBe('/approvals?tab=team')
   })
 
-  it('routes staff swap-response types to the Dashboard tab (swap cards live there)', () => {
+  it('routes staff swap types to the Dashboard tab (swap cards live there)', () => {
     for (const type of ['swap_inbound', 'swap_claimed', 'swap_accepted', 'swap_withdrawn', 'swap_declined']) {
       expect(routeForNotification({ type, swap_id: 's1' })).toBe('/(tabs)/dashboard')
     }
@@ -79,6 +79,21 @@ describe('routeForNotification', () => {
       .toBe('/(tabs)/schedule?date=2026-09-28&view=manage')
     expect(routeForNotification({ type: 'roster_runway' })).toBe('/(tabs)/schedule?view=manage')
     expect(routeForNotification({ type: 'roster_runway', week_start: '28 Sep' })).toBe('/(tabs)/schedule?view=manage')
+  })
+
+  // COVERLOOP.2 — the server has sent this type with "Tap to take it" since
+  // ROSTER-FIX.8d and the tap went nowhere (undefined = unknown type). The
+  // "Open swaps you can take" card is on the Dashboard tab.
+  it('routes the open-pool broadcast to the Dashboard tab, where the Claim button is', () => {
+    expect(routeForNotification({ type: 'swap_open_pool', swap_id: 's1', block_date: '2026-09-24' })).toBe('/(tabs)/dashboard')
+    expect(routeForNotification({ type: 'swap_open_pool' })).toBe('/(tabs)/dashboard')
+  })
+
+  // No payload field rides into the route, so a malformed one cannot build a
+  // junk URL: the bare tab, exactly, whatever the ids and dates look like.
+  it('a malformed open-pool payload still lands on the bare Dashboard tab', () => {
+    expect(routeForNotification({ type: 'swap_open_pool', swap_id: 'a?b=c', block_date: 'next week' })).toBe('/(tabs)/dashboard')
+    expect(routeForNotification({ type: 'swap_open_pool', swap_id: 42, block_date: null })).toBe('/(tabs)/dashboard')
   })
 
   it('routes schedule-affecting types to the schedule tab', () => {
@@ -139,5 +154,15 @@ describe('routeForNotification', () => {
   it('returns null for missing/blank payloads', () => {
     expect(routeForNotification(null)).toBe(null)
     expect(routeForNotification({})).toBe(null)
+  })
+})
+
+// COVERLOOP.2 — the Studio tab's pending rows open the same place the pushes do.
+describe('teamApprovalRoute', () => {
+  it('focuses the approval when the id is safe to put in a URL', () => {
+    expect(teamApprovalRoute('0a0a0a0a-0000-4000-8000-000000000000')).toBe('/approvals?tab=team&focus=0a0a0a0a-0000-4000-8000-000000000000')
+  })
+  it.each([[undefined], [null], [42], [''], ['a?b=c'], ['a b']])('falls back to the bare team tab for %j', (id) => {
+    expect(teamApprovalRoute(id)).toBe('/approvals?tab=team')
   })
 })

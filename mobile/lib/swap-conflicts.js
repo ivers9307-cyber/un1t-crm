@@ -92,3 +92,25 @@ export function swapConflictPrompt(res) {
     uncheckedOnly,
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// COVERLOOP.2 — the CLAIM side. A coach's claim / accept succeeds and is
+// saved even when they are on approved leave or already on an overlapping
+// shift that day; the response then carries `warnings`, finished sentences
+// about the claiming coach only. Advisory: the manager's approval is where it
+// is enforced. The web Today page (src/components/dashboard/SwapActions.jsx)
+// shows them under this heading; the phone uses the same words, pinned by a
+// test that reads that file.
+// ─────────────────────────────────────────────────────────────────────────
+export const SWAP_CLAIM_NOTICE_HEADING = 'Sent to your manager. Heads up:'
+
+/**
+ * @param {object} res  the api() result of a claim / accept
+ * @returns {null | { title: string, message: string, lines: string[] }}
+ */
+export function swapClaimNotice(res) {
+  if (!res || res.success !== true || !Array.isArray(res.warnings)) return null
+  const lines = res.warnings.filter((w) => typeof w === 'string' && w.trim()).map((w) => w.trim())
+  if (lines.length === 0) return null
+  return { title: SWAP_CLAIM_NOTICE_HEADING, message: lines.join('\n'), lines }
+}

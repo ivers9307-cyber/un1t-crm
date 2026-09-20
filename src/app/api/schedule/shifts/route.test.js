@@ -20,8 +20,14 @@ vi.mock('@/lib/auth', () => ({
   },
 }))
 vi.mock('@/lib/roster-read', () => ({ fetchApiShiftRows: vi.fn(() => Promise.resolve({ rows: [], error: null })) }))
+// COVERLOOP.2 — keep the real annotate (pure); stub only the read.
+vi.mock('@/lib/shift-open-swaps', async (importOriginal) => ({
+  ...(await importOriginal()),
+  fetchOwnOpenSwaps: vi.fn(() => Promise.resolve([])),
+}))
 const { getCurrentUser } = await import('@/lib/auth')
 const { fetchApiShiftRows } = await import('@/lib/roster-read')
+const { fetchOwnOpenSwaps } = await import('@/lib/shift-open-swaps')
 const { GET } = await import('./route.js')
 const req = (url = 'http://x/api/schedule/shifts?location_id=loc-1') => ({ url })
 beforeEach(() => { getCurrentUser.mockReset(); fetchApiShiftRows.mockClear() })
@@ -59,5 +65,57 @@ describe('GET /api/schedule/shifts — per-location viewer (D1 + COACHSCOPE.1)',
   it('a master is a manager everywhere', async () => {
     const v = await viewerFor({ id: 'ms', role: 'master', profileRole: 'master', rolesByLocation: {}, locations: [{ id: 'loc-1' }] })
     expect(v.isManagerAt('loc-1')).toBe(true)
+  })
+})
+
+// COVERLOOP.2 — the Schedule tab's "Swap pending" chip reads open_swap_status.
+describe('GET /api/schedule/shifts — open_swap_status', () => {
+  it("marks the caller's own shift that has an open swap, and nobody else's", async () => {
+    getCurrentUser.mockResolvedValue({ id: 'c', role: 'staff', profileRole: 'staff', rolesByLocation: { 'loc-1': 'staff' }, locations: [{ id: 'loc-1' }] })
+    fetchApiShiftRows.mockResolvedValueOnce({ rows: [{ id: 'a1', profile_id: 'c' }, { id: 'a2', profile_id: 'other' }], error: null })
+    fetchOwnOpenSwaps.mockResolvedValueOnce([
+      { requester_shift_id: 'a1', status: 'pending' },
+      { requester_shift_id: 'a2', status: 'pending' },
+    ])
+
+    const res = await GET(req())
+    const body = await res.json()
+
+    // Bounded: only the caller's own assignment ids in THIS payload are asked about.
+    expect(fetchOwnOpenSwaps).toHaveBeenLastCalledWith(expect.anything(), 'c', ['a1'])
+    expect(body.data).toEqual([
+      { id: 'a1', profile_id: 'c', open_swap_status: 'pending' },
+      { id: 'a2', profile_id: 'other', open_swap_status: null },
+    ])
+  })
+
+  // The Team view reads this same feed. A manager gets the field on their OWN
+  // rows only: the read is keyed on the caller, and the annotate re-checks
+  // profile_id, so other people's swap state never rides on this field.
+  it("a manager reading the team feed gets no colleague's swap state", async () => {
+    getCurrentUser.mockResolvedValue({ id: 'm', role: 'manager', profileRole: 'manager', rolesByLocation: { 'loc-1': 'manager' }, locations: [{ id: 'loc-1' }] })
+    fetchApiShiftRows.mockResolvedValueOnce({ rows: [{ id: 'a1', profile_id: 'coach-a' }, { id: 'a2', profile_id: 'm' }], error: null })
+    fetchOwnOpenSwaps.mockResolvedValueOnce([
+      { requester_shift_id: 'a1', status: 'pending' },
+      { requester_shift_id: 'a2', status: 'awaiting_approval' },
+    ])
+
+    const body = await (await GET(req())).json()
+
+    expect(fetchOwnOpenSwaps).toHaveBeenLastCalledWith(expect.anything(), 'm', ['a2'])
+    expect(body.data).toEqual([
+      { id: 'a1', profile_id: 'coach-a', open_swap_status: null },
+      { id: 'a2', profile_id: 'm', open_swap_status: 'awaiting_approval' },
+    ])
+  })
+
+  it('a caller with no shift of their own in the window is asked about nothing', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'm', role: 'manager', profileRole: 'manager', rolesByLocation: { 'loc-1': 'manager' }, locations: [{ id: 'loc-1' }] })
+    fetchApiShiftRows.mockResolvedValueOnce({ rows: [{ id: 'a1', profile_id: 'coach-a' }], error: null })
+
+    const body = await (await GET(req())).json()
+
+    expect(fetchOwnOpenSwaps).toHaveBeenLastCalledWith(expect.anything(), 'm', [])
+    expect(body.data).toEqual([{ id: 'a1', profile_id: 'coach-a', open_swap_status: null }])
   })
 })

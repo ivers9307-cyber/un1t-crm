@@ -65,6 +65,10 @@ export function swapShiftShape(a) {
     status: a.status,
     notes: a.notes ?? null,
     shift_date: b.block_date ?? null,
+    // COVERLOOP.2 — the block's own times, same keys as toApiShiftRow. The
+    // taker works these (a moved shift loses its overrides).
+    block_start_time: b.start_time ?? null,
+    block_end_time: b.end_time ?? null,
     start_time_override: effectiveOverride(a.start_time_override, b.start_time, tpl.start_time),
     end_time_override: effectiveOverride(a.end_time_override, b.end_time, tpl.end_time),
     role_label: tpl.role_label ?? null,

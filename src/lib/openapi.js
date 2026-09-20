@@ -4320,7 +4320,7 @@ registry.registerPath({
   tags: ['Schedule'],
   security: [{ CookieAuth: [] }],
   summary: 'List scheduled shifts',
-  description: "Returns shifts for the caller's locations, optionally filtered by location_id, start_date, end_date, profile_id. Each row is judged against the caller's role at THAT row's location: where the caller is not owner/manager/head_coach, draft shifts are omitted and the row is slimmed — the assignee profile carries id, full_name, avatar_url and role only (no email), and notes / partial_reason are null on colleagues' rows. (The legacy create / update / delete shift endpoints were retired — use the block-based assignment routes.)",
+  description: "Returns shifts for the caller's locations, optionally filtered by location_id, start_date, end_date, profile_id. Each row is judged against the caller's role at THAT row's location: where the caller is not owner/manager/head_coach, draft shifts are omitted and the row is slimmed — the assignee profile carries id, full_name, avatar_url and role only (no email), and notes / partial_reason are null on colleagues' rows. (The legacy create / update / delete shift endpoints were retired — use the block-based assignment routes.) Each row also carries open_swap_status: 'pending' or 'awaiting_approval' when the CALLER has an open swap request on that shift of their own, otherwise null (never set on a colleague's row).",
   responses: {
     200: { description: 'Shifts' },
     403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
@@ -4482,6 +4482,21 @@ registry.registerPath({
     400: { description: 'Missing or malformed location_id', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — needs a manager role at that location', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'The roster read failed (never reported as "ready")', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/schedule/time-off',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'List time-off requests, or preview what a request would cost the caller',
+  description: "Default: time-off requests, scoped per studio role — a non-manager sees only their own; a manager sees leave filed at, or taken by members of, the studios they manage. Filters: location_id, start_date, end_date, status (pending excludes expired; expired asks for exactly those), profile_id (managers), with_clashes=1. With preview=1&type=&start_date=&end_date=[&location_id=] (LEAVEPHONE.1) it answers a different question, for the CALLER only: data.days { total, segments[{ year, start_date, end_date, days }] } is exactly what POST would charge at the studio POST would file at — location_id, else the active studio (holiday = Mon-Fri minus the studio country's bank holidays minus that studio's closures; other types = calendar days; one segment per year; total 0 where POST would answer 'No working days'), and data.clashes[{ id, block_date, start_time, end_time, template_name, location_name }] are the caller's own published, live shifts in the range from today on, at any studio, with effective times. profile_id is ignored in preview mode and unpublished rosters are never included. Preview does not judge the balance, overlap or employment gate; POST does.",
+  responses: {
+    200: { description: 'Array of requests; or, with preview=1, { type, start_date, end_date, days, clashes }' },
+    400: { description: 'preview=1 with an unknown type, missing/malformed dates, an inverted range, a span over a year, or no studio to file against', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'location_id outside the caller’s assignments', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'preview=1 and the holiday list or the roster could not be read (fails closed)', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

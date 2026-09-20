@@ -5,12 +5,11 @@ import { getCurrentUser, getUserLocationIds, assertLocationAccess, hasRoleAtLoca
 import { validateBody, uuidLike } from '@/lib/validate'
 import { timeOffTypeSchema, MANAGER_ROLES } from '@/lib/schemas'
 import { notifyUsersOnce } from '@/lib/push-dedup'
-import { countLeaveDays, splitAtYearEnd } from '@/lib/time-off-days'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import {
   getLocationMemberIds, getProfileLocationIds, leaveScopeOrFilter, canDecideTimeOff,
   resolveTimeOffApproverIds, getEmploymentType, getHolidayAllowance, ensureHolidayAllowanceRow,
-  countLeaveClashes, findLeaveClashes, getNonWorkingDates,
+  countLeaveClashes, findLeaveClashes, chargeableLeaveSegments, findOwnPublishedShifts, isRealIsoDate,
 } from '@/lib/time-off-leave'
 import {
   isTimeOffTypeAllowedFor, RESTRICTED_TYPE_ERROR, isExpiredPendingRequest, effectiveTimeOffStatus,
@@ -34,6 +33,7 @@ const TimeOffRequestSchema = z.object({
 })
 
 // GET /api/schedule/time-off?location_id=xxx&start_date=xxx&end_date=xxx&status=xxx&profile_id=xxx
+// GET /api/schedule/time-off?preview=1&type=xxx&start_date=xxx&end_date=xxx[&location_id=xxx]   (LEAVEPHONE.1 — see previewOwnLeave)
 export async function GET(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
@@ -42,6 +42,12 @@ export async function GET(request) {
   const locationId = searchParams.get('location_id')
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
+
+  // LEAVEPHONE.1 — the leave form's preview. A different question from the
+  // list below ("what will this cost me, and which of MY shifts does it hit?"),
+  // answered for the caller only, so it returns before any of the list's
+  // scoping runs. location_id has already cleared assertLocationAccess above.
+  if (searchParams.get('preview') === '1') return previewOwnLeave(user, searchParams)
 
   const startDate = searchParams.get('start_date')
   const endDate = searchParams.get('end_date')
@@ -220,25 +226,22 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: `Overlaps ${whose} for ${range}` }, { status: 409 })
   }
 
-  // HOLIDAYLEAVE.1 — a holiday is charged for working days only, so load the
-  // dates that cost nothing at the studio it is filed at: national bank
-  // holidays plus that studio's own closures. Only holiday needs it. Fails
-  // closed like the reads around it: an unreadable list must not become
-  // "no bank holidays", which is the over-charge this fixes.
-  let nonWorkingDates = null
-  if (type === 'holiday') {
-    const { dates, error: holidaysError } = await getNonWorkingDates(db, targetLocation, start_date, end_date)
-    if (holidaysError) {
-      return NextResponse.json({ success: false, error: holidaysError.message }, { status: 500 })
-    }
-    nonWorkingDates = dates
-  }
-
+  // HOLIDAYLEAVE.1 — a holiday is charged for working days only (Mon-Fri,
+  // minus the studio country's bank holidays, minus the studio's closures),
+  // at the studio it is filed at.
   // ROSTER-FIX.2 — a range that straddles 31 December becomes one row per
-  // year, so each year's allowance is charged its own days. Each segment is
-  // counted with the leave-type's own day rule (holiday = working days).
-  const segments = splitAtYearEnd(start_date, end_date)
-    .map(([s, e]) => ({ s, e, days: countLeaveDays(type, s, e, nonWorkingDates) }))
+  // year, so each year's allowance is charged its own days.
+  // LEAVEPHONE.1 — both live in chargeableLeaveSegments, which the leave
+  // form's preview (GET ?preview=1) ALSO calls: the number a coach is shown
+  // before filing is this number. Fails closed like the reads around it: an
+  // unreadable holiday list is a 500, never "no bank holidays" (the
+  // over-charge HOLIDAYLEAVE.1 fixed).
+  const { segments, error: segmentsError } = await chargeableLeaveSegments(db, {
+    type, locationId: targetLocation, startIso: start_date, endIso: end_date,
+  })
+  if (segmentsError) {
+    return NextResponse.json({ success: false, error: segmentsError.message }, { status: 500 })
+  }
 
   if (segments.reduce((sum, seg) => sum + seg.days, 0) < 1) {
     return NextResponse.json({ success: false, error: 'No working days in that range' }, { status: 400 })
@@ -409,4 +412,75 @@ async function approveRecordedLeave(db, user, created, { type, employmentType })
   }).catch(err => console.error('[time-off] notify failed', err))
 
   return NextResponse.json({ success: true, data, data_all: approved, clashes }, { status: 201 })
+}
+
+// LEAVEPHONE.1 — GET ?preview=1&type=&start_date=&end_date=[&location_id=]
+//
+// What the caller's leave form shows BEFORE they file:
+//   • days    — what the POST would charge, from the SAME function it charges
+//               with (chargeableLeaveSegments), for the studio the POST would
+//               file at (location_id, else the active studio — the POST's own
+//               targetLocation rule, including its "No studio" 400). The phone
+//               does no day arithmetic: a holiday's cost depends on bank
+//               holidays and studio closures it cannot see. A range the POST
+//               would refuse as "No working days" is total 0 here, not an error.
+//   • clashes — the caller's OWN published, live shifts in the range, from
+//               today on, at any studio (leave covers the person).
+// The profile is ALWAYS user.id: a profile_id in the query string is ignored,
+// manager or not (recording leave for a colleague is a web flow with its own
+// clash read on approval). Every read fails closed — a 500, never a guessed
+// number. It does NOT judge the balance, the overlap or the employment gate:
+// those stay the POST's, and the form says so by still submitting.
+// `data` is an OBJECT on purpose: the list above returns an ARRAY, and the
+// phone uses that difference to recognise a deployment that predates this
+// branch and show nothing rather than something wrong.
+async function previewOwnLeave(user, searchParams) {
+  const type = timeOffTypeSchema.safeParse(searchParams.get('type'))
+  if (!type.success) {
+    return NextResponse.json({ success: false, error: 'type must be a valid time-off type' }, { status: 400 })
+  }
+  const start = searchParams.get('start_date') || ''
+  const end = searchParams.get('end_date') || start
+  // Real calendar dates, not only the pattern: 2026-02-30 fits YYYY-MM-DD and
+  // V8 rolls it over to 2 March, which would answer 200 with a nonsense count.
+  if (!isRealIsoDate(start) || !isRealIsoDate(end)) {
+    return NextResponse.json({ success: false, error: 'start_date and end_date must be real dates, YYYY-MM-DD' }, { status: 400 })
+  }
+  if (end < start) {
+    return NextResponse.json({ success: false, error: 'End date must be on or after start date' }, { status: 400 })
+  }
+  const spanDays = Math.round((Date.parse(`${end}T00:00:00Z`) - Date.parse(`${start}T00:00:00Z`)) / 86400000) + 1
+  if (spanDays > 366) {
+    return NextResponse.json({ success: false, error: 'Time-off requests are limited to one year' }, { status: 400 })
+  }
+  const locationId = searchParams.get('location_id') || user.activeLocation?.id || null
+  if (!locationId) {
+    return NextResponse.json({ success: false, error: 'No studio to file this request against' }, { status: 400 })
+  }
+
+  const db = createServerClient()
+  const { segments, total, error: daysError } = await chargeableLeaveSegments(db, {
+    type: type.data, locationId, startIso: start, endIso: end,
+    // Asking is not requesting: the POST keeps the no-holiday-list warning,
+    // a preview fired on every calendar tap does not repeat it.
+    quiet: true,
+  })
+  if (daysError) return NextResponse.json({ success: false, error: daysError.message }, { status: 500 })
+
+  const { shifts, error: shiftsError } = await findOwnPublishedShifts(db, user.id, start, end, dublinTodayStr())
+  if (shiftsError) return NextResponse.json({ success: false, error: shiftsError.message }, { status: 500 })
+
+  return NextResponse.json({
+    success: true,
+    data: {
+      type: type.data,
+      start_date: start,
+      end_date: end,
+      days: {
+        total,
+        segments: segments.map((seg) => ({ year: Number(seg.s.slice(0, 4)), start_date: seg.s, end_date: seg.e, days: seg.days })),
+      },
+      clashes: shifts,
+    },
+  })
 }

@@ -473,6 +473,26 @@ describe('fetchPersonalDashboardData — draft shifts (D1)', () => {
     expect(res.data).not.toHaveProperty('pendingSwapsForMe')
     expect(res.data).toHaveProperty('myPostedSwaps')
   })
+
+  // COVERLOOP.2 — "Swap posted" printed a raw ISO date and no time because the
+  // embed never asked for the block's times.
+  it('asks for the posted swap\'s block times', async () => {
+    const selects = []
+    const base = makePersonalDb({})
+    const db = {
+      from(table) {
+        const b = base.from(table)
+        const sel = b.select
+        b.select = function (cols) { selects.push([table, cols]); return sel.call(this) }
+        return b
+      },
+    }
+    await fetchPersonalDashboardData(db, 'p1')
+    const swapSelect = selects.find(([t]) => t === 'shift_swap_requests')[1]
+    expect(swapSelect).toContain('shift_blocks!block_id(block_date, start_time, end_time, shift_templates(name))')
+    // MOBILESCHED.2's guard still holds.
+    expect(swapSelect).not.toMatch(/requester_id,/)
+  })
 })
 
 // ROSTER-FIX.1 (D2) — the unstaffed-blocks alert used to select

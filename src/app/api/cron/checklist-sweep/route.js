@@ -27,12 +27,20 @@
 // (sweepChecklists) and whatever happens to it, an unreadable table or an
 // unexpected throw, the swap arm still runs; the swap arm runs inside its own
 // try/catch, so it can never cost the checklist sweep its response or its
-// heartbeat. The arm shares the 'checklist-sweep' heartbeat row, whose
-// last_ok_at still means what it always meant: the CHECKLIST sweep succeeded.
-// The swap arm's own health is `swap_cover` (its counts, null if it threw) and
-// `swap_sweep_failed` (1 if it threw or reported errors): in the response, in
-// that row's last_outcome, and as a logError. A seeded heartbeat row of its
-// own (a migration) is the follow-up that would make a failing arm go STALE.
+// heartbeat. The 'checklist-sweep' heartbeat row's last_ok_at still means what
+// it always meant: the CHECKLIST sweep succeeded. The swap arm's own health is
+// `swap_cover` (its counts, null if it threw) and `swap_sweep_failed` (1 if it
+// threw or reported errors): in the response, in that row's last_outcome, and
+// as a logError.
+//
+// SWAPHB.1 — none of those three pages anybody: the health-check reads only
+// cron_health.is_stale, never last_outcome. So the arm has a heartbeat row of
+// its own, 'swap-cover-sweep' (mig 623), stamped ONLY when the arm ran and
+// swap_sweep_failed is 0. An arm that fails on every tick now goes STALE and
+// 503s the health-check. It is stamped before the checklist arm's 500 is
+// answered, so a checklist outage never reads as a swap outage too. A
+// quiet-hours tick returns normally with errors: 0 and therefore stamps: the
+// row does not go stale overnight.
 //
 // Auth: CRON_SECRET header, same pattern as the other crons.
 
@@ -96,6 +104,14 @@ export async function GET(request) {
     logError('cron-checklist-sweep', 'swap cover sweep threw', { err: e?.message })
   }
 
+  // SWAPHB.1 — the swap arm's own heartbeat (see the header). Before the
+  // checklist 500 below, and with its own catch: neither arm's stamp can cost
+  // the other arm anything.
+  if (swapSweepFailed === 0 && swapCover) {
+    await stampHeartbeat('swap-cover-sweep', swapCover).catch((err) =>
+      logWarn('cron-checklist-sweep', 'swap heartbeat failed', { err }))
+  }
+
   if (checklistError) {
     return NextResponse.json(
       { success: false, error: checklistError, swap_cover: swapCover, swap_sweep_failed: swapSweepFailed },
@@ -103,11 +119,9 @@ export async function GET(request) {
     )
   }
 
-  // The swap arm has no heartbeat row of its own (stampHeartbeat is
-  // UPDATE-only, so a new name needs a seed migration: a follow-up). Until it
-  // does, its outcome rides in this row's last_outcome, the way other crons
-  // report theirs, so "stamped but the swap arm is failing" is readable from
-  // cron_heartbeats and not only from a response nobody keeps.
+  // The swap arm's outcome still rides in this row's last_outcome as well, the
+  // way other crons report theirs, so "stamped but the swap arm is failing" is
+  // readable from cron_heartbeats and not only from a response nobody keeps.
   await stampHeartbeat('checklist-sweep', { ...stats, swap_cover: swapCover, swap_sweep_failed: swapSweepFailed }).catch((err) =>
     logWarn('cron-checklist-sweep', 'heartbeat failed', { err }))
 
