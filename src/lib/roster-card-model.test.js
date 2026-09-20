@@ -3,7 +3,7 @@
 // and toolbar make is made HERE, in pure functions, because jsdom cannot see
 // layout and a component test can only say "this text is present".
 import { describe, it, expect } from 'vitest'
-import { cardTone, shiftCardModel, dayHeaderStatus } from './roster-card-model'
+import { cardTone, shiftCardModel, dayHeaderStatus, monthCellLines } from './roster-card-model'
 
 const TODAY = '2026-09-21'
 const block = (over = {}) => ({
@@ -130,5 +130,71 @@ describe('dayHeaderStatus', () => {
 
   it('tolerates null', () => {
     expect(dayHeaderStatus(null, { todayIso: TODAY }).tone).toBe('none')
+  })
+})
+
+describe('monthCellLines', () => {
+  const on = (...names) => names.map((n, i) => ({ id: `a-${n}-${i}`, profile_id: `u-${n}-${i}`, status: 'confirmed', profiles: { full_name: n } }))
+  const mb = (id, start, end, min, assignments, date = TODAY) => ({
+    id, block_date: date, start_time: start, end_time: end, min_coaches: min, max_coaches: 10,
+    shift_templates: { name: `Template ${id}` }, shift_assignments: assignments,
+  })
+
+  it('time + first names, in start order, three lines then "+N more"', () => {
+    const blocks = [
+      mb('d', '17:45', '18:45', 1, on('Devon Fourth')),
+      mb('a', '05:45', '06:45', 1, on('Alex First', 'Blake Second')),
+      mb('b', '06:45', '07:45', 1, on('Casey Third')),
+      mb('c', '09:00', '10:00', 1, on('Eden Fifth')),
+      mb('e', '18:45', '19:45', 1, on('Flynn Sixth')),
+    ]
+    const { lines, more } = monthCellLines(blocks, { todayIso: TODAY, isManager: true })
+    expect(lines.map((l) => l.text)).toEqual(['5:45 Alex, Blake', '6:45 Casey', '9 Eden'])
+    expect(more).toBe(2)
+  })
+
+  it('pm keeps its suffix so 5:45 and 5:45pm never read the same', () => {
+    const { lines } = monthCellLines([mb('d', '17:45', '18:45', 1, on('Devon Fourth'))], { todayIso: TODAY, isManager: true })
+    expect(lines[0].text).toBe('5:45pm Devon')
+  })
+
+  it('two coaches sharing a first name get a last initial', () => {
+    const { lines } = monthCellLines([mb('a', '05:45', '06:45', 1, on('Sam Alpha', 'Sam Bravo', 'Casey Third'))], { todayIso: TODAY, isManager: true })
+    expect(lines[0].text).toBe('5:45 Sam A, Sam B, Casey')
+  })
+
+  it.each([
+    // name,                         assignments,        min, date,          isManager, tone,    text
+    ['staffed',                      on('Coach A'),      1,   TODAY,         true,      'ok',    '9 Coach'],
+    ['short: numbers only here',     on('Coach A'),      2,   TODAY,         true,      'short', '9 Coach (1 of 2)'],
+    ['empty future',                 [],                 1,   TODAY,         true,      'empty', '9 Needs coach'],
+    ['empty past is history',        [],                 1,   '2026-09-01',  true,      'quiet', '9 No coach'],
+    ['coach never sees a status',    on('Coach A'),      2,   TODAY,         false,     'ok',    '9 Coach'],
+    ['coach, empty block',           [],                 1,   TODAY,         false,     'quiet', '9 No coach'],
+  ])('%s', (_n, assignments, min, date, isManager, tone, text) => {
+    const { lines } = monthCellLines([mb('x', '09:00', '10:00', min, assignments, date)], { todayIso: TODAY, isManager })
+    expect(lines[0].tone).toBe(tone)
+    expect(lines[0].text).toBe(text)
+  })
+
+  it('the title says everything the line had to cut: template, full range, full names, and the status in words', () => {
+    const { lines } = monthCellLines([mb('x', '05:45', '06:45', 2, on('Alex First'))], { todayIso: TODAY, isManager: true })
+    expect(lines[0].title).toBe('Template x · 5:45–6:45am · Alex First · Below minimum: 1 of 2 coaches')
+  })
+
+  it('no capacity figure for anyone: the old "2/10" is gone', () => {
+    const out = monthCellLines([mb('x', '09:00', '10:00', 1, on('Coach A'))], { todayIso: TODAY, isManager: true })
+    expect(JSON.stringify(out)).not.toMatch(/\d+\/\d+/)
+  })
+
+  it('cancelled assignments are not named', () => {
+    const list = [...on('Coach A'), { id: 'c', profile_id: 'u9', status: 'cancelled', profiles: { full_name: 'Gone Person' } }]
+    expect(monthCellLines([mb('x', '09:00', '10:00', 1, list)], { todayIso: TODAY, isManager: true }).lines[0].text).toBe('9 Coach')
+  })
+
+  it('tolerates null and honours a custom limit', () => {
+    expect(monthCellLines(null, { todayIso: TODAY })).toEqual({ lines: [], more: 0 })
+    const two = [mb('a', '06:00', '07:00', 1, on('A B')), mb('b', '07:00', '08:00', 1, on('C D'))]
+    expect(monthCellLines(two, { todayIso: TODAY, limit: 1 }).more).toBe(1)
   })
 })

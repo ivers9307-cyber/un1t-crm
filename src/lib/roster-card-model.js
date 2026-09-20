@@ -128,3 +128,68 @@ export function dayHeaderStatus(blocksForDay, { todayIso } = {}) {
     short: gaps.short,
   }
 }
+
+// First names for a line with ~120px to spend. Two people sharing a first name
+// ON THE SAME SHIFT get a last initial; across shifts the time disambiguates.
+function firstNames(assignments) {
+  const parts = assignments.map((a) => String(a.profiles?.full_name || 'Unknown').trim().split(/\s+/))
+  return parts.map((p) => {
+    const shared = parts.filter((q) => q[0] === p[0]).length > 1
+    return shared && p.length > 1 ? `${p[0]} ${p[p.length - 1][0]}` : p[0]
+  })
+}
+
+/**
+ * The lines of one month-view cell: "5:45 Alex, Blake".
+ *
+ * Replaces "5:45am 2/10": a time and a capacity ratio, three times over, with
+ * nobody named. Capacity is not read for anyone now. Staffing numbers appear
+ * ONLY on a short line ("(1 of 2)"), and only for a manager.
+ *
+ *   tone  'ok'     staffed (or: the viewer is a coach)
+ *         'short'  manager, below minimum       amber
+ *         'empty'  manager, future, no coach    red, "Needs coach"
+ *         'quiet'  nobody on it and nothing to act on (past, or a coach's view)
+ *
+ * @param {Array} blocks  the day's VISIBLE blocks (the caller applies My shifts)
+ * @returns {{ lines: Array<{id:string,tone:string,text:string,title:string}>, more: number }}
+ */
+export function monthCellLines(blocks, { todayIso, isManager = false, limit = 3 } = {}) {
+  const sorted = [...(blocks || [])].sort((a, b) => String(a.start_time || '').localeCompare(String(b.start_time || '')))
+  const lines = sorted.slice(0, limit).map((blk) => {
+    const live = liveAssignments(blk.shift_assignments)
+    const staffing = isManager ? futureBlockStaffing(blk, todayIso) : null
+    const time = formatTime12h(blk.start_time, { amSuffix: false })
+    const names = firstNames(live)
+
+    let tone = 'ok'
+    let text
+    let statusWords = ''
+    if (names.length === 0) {
+      if (staffing?.status === 'empty') {
+        tone = 'empty'
+        text = `${time} Needs coach`
+        statusWords = 'No coach is assigned to this shift'
+      } else {
+        tone = 'quiet'
+        text = `${time} No coach`
+      }
+    } else if (staffing?.status === 'short') {
+      tone = 'short'
+      text = `${time} ${names.join(', ')} (${staffing.count} of ${staffing.min})`
+      statusWords = `Below minimum: ${staffing.count} of ${staffing.min} coaches`
+    } else {
+      text = `${time} ${names.join(', ')}`
+    }
+
+    const title = [
+      blk.shift_templates?.name || 'Shift',
+      formatTimeRange12h(blk.start_time, blk.end_time),
+      live.map((a) => a.profiles?.full_name || 'Unknown').join(', '),
+      statusWords,
+    ].filter(Boolean).join(' · ')
+
+    return { id: blk.id, tone, text, title }
+  })
+  return { lines, more: Math.max(0, sorted.length - limit) }
+}
