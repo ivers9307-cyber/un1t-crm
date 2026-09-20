@@ -227,6 +227,17 @@ describe('publish preview clashes (COPYLEAVE.1)', () => {
     expect(publishButtons[publishButtons.length - 1].disabled).toBe(false)
   })
 
+  // Quality review — one coach off all week and rostered twice is ONE coach.
+  it('counts coaches, not shifts, in the leave headline, and still lists each shift', async () => {
+    const second = { ...LEAVE_CLASH, block_id: 'ok', start_time: '12:00', end_time: '13:00', name: 'Lunch' }
+    await openPreview({ ...BASE, leaveClashes: [LEAVE_CLASH, second], doubleBookings: [], crossLocationChecked: true })
+    const box = screen.getByTestId('publish-roster-clashes')
+    expect(box.textContent).toMatch(/1 coach rostered on approved leave/)
+    expect(box.textContent).not.toMatch(/2 coach/)
+    expect(box.textContent).toMatch(/9am Early/)
+    expect(box.textContent).toMatch(/12pm Lunch/)
+  })
+
   it('sits beside the staffing list, above the cost tiles', async () => {
     await openPreview({ ...BASE, leaveClashes: [LEAVE_CLASH], doubleBookings: [], crossLocationChecked: true })
     const box = screen.getByTestId('publish-roster-clashes')

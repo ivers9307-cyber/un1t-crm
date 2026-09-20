@@ -142,3 +142,15 @@ export function doubleBookings(blocks, otherAssignments, { from = null, to = nul
     || a.first.start_time.localeCompare(b.first.start_time)
     || a.coach_name.localeCompare(b.coach_name))
 }
+
+// ── UI copy (the publish modal) ─────────────────────────────────────────────
+
+/**
+ * Pure. "1 coach rostered on approved leave" / "3 coaches ...". Counts PEOPLE:
+ * leaveClashes has one row per SHIFT, so a coach off for a week and rostered
+ * on five shifts is five rows and still one coach.
+ */
+export function leaveClashesHeadline(clashes) {
+  const people = new Set((clashes || []).map((c) => c.profile_id)).size
+  return `${people} coach${people === 1 ? '' : 'es'} rostered on approved leave`
+}

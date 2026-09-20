@@ -1,7 +1,7 @@
 // COPYLEAVE.1 — what the publish preview warns about besides staffing gaps.
 // Pure, so no Supabase mock. Fixtures are invented: the repo is public.
 import { describe, it, expect } from 'vitest'
-import { leaveCovering, leaveClashes, doubleBookings } from './roster-publish-advisories'
+import { leaveCovering, leaveClashes, doubleBookings, leaveClashesHeadline } from './roster-publish-advisories'
 
 const TODAY = '2026-05-01'
 const PERIOD = { from: '2026-05-04', to: '2026-05-10', todayIso: TODAY }
@@ -139,5 +139,20 @@ describe('doubleBookings', () => {
 
   it('tolerates a null other-studio list (the cross-studio read failed)', () => {
     expect(doubleBookings([blk('b1', '2026-05-05', '09:00', '11:00', [asg('a', 'Coach A')])], null, PERIOD)).toEqual([])
+  })
+})
+
+// Quality review — the headline counted shift ROWS, so one coach off for a week
+// and rostered on five shifts read "5 coaches rostered on approved leave".
+describe('leaveClashesHeadline', () => {
+  const row = (profileId, blockId) => ({ profile_id: profileId, block_id: blockId })
+  it('counts PEOPLE, not shifts', () => {
+    expect(leaveClashesHeadline([row('a', 'b1'), row('a', 'b2'), row('a', 'b3')])).toBe('1 coach rostered on approved leave')
+    expect(leaveClashesHeadline([row('a', 'b1'), row('b', 'b1'), row('a', 'b2')])).toBe('2 coaches rostered on approved leave')
+  })
+  it('is singular for one and tolerates nothing', () => {
+    expect(leaveClashesHeadline([row('a', 'b1')])).toBe('1 coach rostered on approved leave')
+    expect(leaveClashesHeadline([])).toBe('0 coaches rostered on approved leave')
+    expect(leaveClashesHeadline(null)).toBe('0 coaches rostered on approved leave')
   })
 })

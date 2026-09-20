@@ -61,6 +61,8 @@ import { blocksToShiftRows } from '@/lib/roster-summary'
 import { coachConflictsForBlock, formatTime12h as formatTime } from '@/lib/schedule-overlap'
 import Modal from '@/components/ui/Modal'
 import { COPY_MODE_OPTIONS, copyResultToast } from '@/lib/roster-copy'
+// COPYLEAVE.1 — the publish modal's clash wording (pure, unit-tested there).
+import { leaveClashesHeadline } from '@/lib/roster-publish-advisories'
 import RosterSummaryPanel from './RosterSummaryPanel'
 import ScheduleErrorBanner from './schedule/ScheduleErrorBanner'
 import { timeOffLeaveLabel } from '@shared/time-off'
@@ -2409,7 +2411,7 @@ function PublishRosterClashes({ leaveClashes, doubleBookings, crossLocationCheck
         <div>
           <div className="font-medium text-amber-700 flex items-center gap-1.5">
             <AlertTriangle size={14} aria-hidden="true" />
-            {leaveClashes.length} coach{leaveClashes.length === 1 ? '' : 'es'} rostered on approved leave
+            {leaveClashesHeadline(leaveClashes)}
           </div>
           <ul className="mt-1.5 max-h-32 overflow-y-auto space-y-1">
             {leaveClashes.map((c) => (
