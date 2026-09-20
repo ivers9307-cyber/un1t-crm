@@ -118,6 +118,9 @@ const config = [
       'src/components/ScheduleReporting.jsx',
       'src/components/ShiftTemplateManager.jsx',
       'src/components/TimeOffManager.jsx',
+      // CHANGELOG.1 — born clean, on the Modal primitive's white panel.
+      'src/components/schedule/RosterChangeLogDrawer.jsx',
+      'src/components/schedule/PublicationStatusChip.jsx',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },

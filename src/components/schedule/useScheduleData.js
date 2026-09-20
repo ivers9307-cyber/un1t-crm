@@ -68,6 +68,18 @@ export async function readJson(url, options) {
   if (res.status === 401) {
     throw new Error(SESSION_ENDED_MESSAGE)
   }
+  // CHANGELOG.1 — in production a signed-out request is not answered 401 at
+  // all: src/proxy.js redirects it to /login, fetch follows, and the answer is
+  // 200 + an HTML page. No schedule route ever redirects, so a followed
+  // redirect IS a dead session. A 200 that is not JSON is the same thing seen
+  // without the flag, but only on a READ: a mutation that answers 200 with an
+  // empty body keeps meaning success, as it always has here.
+  // Known edge: a GET that legitimately answers 204, or a literal JSON `null`,
+  // would read as signed out here. No current caller does either.
+  const isRead = !options?.method || String(options.method).toUpperCase() === 'GET'
+  if (res.redirected || (isRead && res.ok && data === null)) {
+    throw new Error(SESSION_ENDED_MESSAGE)
+  }
   if (res.status === 403) {
     throw new Error(data?.error || NO_ACCESS_MESSAGE)
   }

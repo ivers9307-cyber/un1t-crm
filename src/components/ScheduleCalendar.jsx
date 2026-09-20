@@ -40,7 +40,6 @@ import {
   staffingGapsHeadline,
   staffingGapsBreakdown,
   periodPublicationStatus,
-  PUBLICATION_LABELS,
 } from '@/lib/roster-staffing'
 // ROSTER-FIX.4 — the server refuses a publish that would leave two published
 // rosters over the same days. `overlapping_roster` is a code, not copy; the
@@ -65,6 +64,8 @@ import { COPY_MODE_OPTIONS, copyResultToast } from '@/lib/roster-copy'
 import { leaveClashesHeadline, leaveRangeLabel } from '@/lib/roster-publish-advisories'
 import RosterSummaryPanel from './RosterSummaryPanel'
 import ScheduleErrorBanner from './schedule/ScheduleErrorBanner'
+import RosterChangeLogDrawer from './schedule/RosterChangeLogDrawer'
+import PublicationStatusChip from './schedule/PublicationStatusChip'
 import { timeOffLeaveLabel } from '@shared/time-off'
 // ROSTER-FIX.6a — the six-endpoint fan-out, its error handling and its
 // request-ordering guard live in the hook now; see its header for why.
@@ -137,16 +138,6 @@ function blockStaffingStatus(block, todayStr) {
 // decision, judged at the roster's studio (the route uses the same set).
 const OWNER_ROLES = ['owner']
 
-// ROSTERVIS.1 — the header chip's look per publication status. Text + icon
-// carry the meaning; colour is the at-a-glance cue (house chip rule: -500/10
-// background, -700 text).
-const PUBLICATION_CHIP = {
-  published: { cls: 'bg-green-500/10 text-green-700 border-green-500/30', Icon: Check },
-  pending: { cls: 'bg-blue-500/10 text-blue-700 border-blue-500/30', Icon: Clock },
-  partial: { cls: 'bg-amber-500/10 text-amber-700 border-amber-500/30', Icon: AlertTriangle },
-  unpublished: { cls: 'bg-slate-500/10 text-slate-700 border-slate-500/30', Icon: CalendarOff },
-}
-
 export default function ScheduleCalendar({ user, onRangeChange, onDataChange, focusShift }) {
   // SCHEDULE-PERSIST.1 — week / month / view persisted in the URL so
   // refresh keeps the operator's position. Before this, the state
@@ -216,6 +207,14 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
   const [copyModal, setCopyModal] = useState(null)
   const [swapModal, setSwapModal] = useState(null) // legacy shift-shaped row to swap
   const [publishModal, setPublishModal] = useState(null) // { week, month: {start,end,label}, defaultScope }
+  // CHANGELOG.1 — { start, end, label } while the "Changes since publish"
+  // drawer is open. The period is captured at click time so the drawer keeps
+  // describing the period it was opened for.
+  const [changeLog, setChangeLog] = useState(null)
+  // Where focus goes back to when the drawer closes. Safari and Firefox on
+  // macOS do not focus a button on click, so Modal's own "where did focus come
+  // from" reads <body> there and needs to be told.
+  const changeLogTriggerRef = useRef(null)
   // SCHEDULE-PUBLISH-GUARD.1 — roster edits made since the last publish.
   // Drives the "you have unpublished changes" exit guard below.
   //
@@ -555,6 +554,19 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
   // publish modal's month scope uses.
   const visiblePeriodStart = viewType === 'month' ? formatDate(monthStart) : formatDate(weekStart)
   const visiblePeriodEnd = viewType === 'month' ? formatDate(visibleMonthEnd) : formatDate(weekEnd)
+
+  // CHANGELOG.1 — what the publication chip calls. Named, so the chip can move
+  // (it lives in its own component) and carry one prop with it. A plain
+  // function, not useCallback: the period strings derive from Date objects the
+  // React Compiler cannot prove immutable, so a manual memo here is refused by
+  // react-hooks/preserve-manual-memoization. The compiler memoises it itself.
+  const openChangeLog = () => {
+    setChangeLog({
+      start: visiblePeriodStart,
+      end: visiblePeriodEnd,
+      label: viewType === 'month' ? monthLabel : weekLabel,
+    })
+  }
   const publication = periodPublicationStatus({
     blocks,
     periodStart: visiblePeriodStart,
@@ -1110,33 +1122,17 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
               calendar never said; the only signal was an in-memory
               unsaved-changes flag a reload drops. Derived from each block's
               roster status plus the draft rosters awaiting approval.
-              Manager only (a coach's feed is published-only), and hidden
+              Manager only (a coach's feed is published-only), and EMPTIED
               while loading so a stale week's answer never sits under new
-              dates. */}
-          {isManager && !loading && publication.status !== 'none' && (() => {
-            const chip = PUBLICATION_CHIP[publication.status]
-            const Icon = chip.Icon
-            const periodWord = viewType === 'month' ? 'Month' : 'Week'
-            const label = PUBLICATION_LABELS[publication.status]
-            const extra = publication.status === 'published' && publication.draftPending
-              ? ', changes awaiting approval'
-              : publication.status === 'partial'
-                ? ` (${publication.publishedCount} of ${publication.blockCount} shifts)`
-                : ''
-            return (
-              <div className="mt-1.5 flex justify-center">
-                <span
-                  role="status"
-                  data-testid="publication-status"
-                  className={`inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full border ${chip.cls}`}
-                >
-                  <Icon size={12} aria-hidden="true" />
-                  <span className="sr-only">{periodWord} status: </span>
-                  {label}{extra}
-                </span>
-              </div>
-            )
-          })()}
+              dates. The chip's live region itself stays mounted (CHANGELOG.1). */}
+          {isManager && (
+            <PublicationStatusChip
+              publication={loading ? null : publication}
+              viewType={viewType}
+              onOpenChangeLog={openChangeLog}
+              triggerRef={changeLogTriggerRef}
+            />
+          )}
         </div>
         <button
           type="button"
@@ -1792,6 +1788,18 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
           onSubmit={submitPublish}
           onClose={() => setPublishModal(null)}
           publishing={publishing}
+        />
+      )}
+
+      {/* CHANGELOG.1 — Changes since publish */}
+      {changeLog && (
+        <RosterChangeLogDrawer
+          locationId={locationId}
+          periodStart={changeLog.start}
+          periodEnd={changeLog.end}
+          periodLabel={changeLog.label}
+          restoreFocusRef={changeLogTriggerRef}
+          onClose={() => setChangeLog(null)}
         />
       )}
 

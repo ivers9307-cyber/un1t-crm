@@ -212,6 +212,34 @@ describe('readJson session handling (ROSTER-FIX.6a-8)', () => {
   })
 })
 
+// CHANGELOG.1 — in production a signed-out request never reaches a route to be
+// answered 401: src/proxy.js redirects it to /login, fetch FOLLOWS the redirect,
+// and what comes back is 200 + an HTML page. That read as "Request failed
+// (200)", or worse as an empty success.
+describe('readJson — a signed-out request that was redirected to /login', () => {
+  const html = async () => { throw new Error("Unexpected token '<'") }
+
+  it('a followed redirect is a signed-out session', async () => {
+    global.fetch = vi.fn(async () => ({ ok: true, status: 200, redirected: true, json: html }))
+    await expect(readJson('/api/schedule/blocks')).rejects.toThrow(SESSION_ENDED_MESSAGE)
+  })
+
+  it('so is a 200 whose body is not JSON, on a read', async () => {
+    global.fetch = vi.fn(async () => ({ ok: true, status: 200, redirected: false, json: html }))
+    await expect(readJson('/api/schedule/blocks')).rejects.toThrow(SESSION_ENDED_MESSAGE)
+  })
+
+  it('a redirected MUTATION is signed out too', async () => {
+    global.fetch = vi.fn(async () => ({ ok: true, status: 200, redirected: true, json: html }))
+    await expect(readJson('/api/schedule/reports/scheduled/x', { method: 'DELETE' })).rejects.toThrow(SESSION_ENDED_MESSAGE)
+  })
+
+  it('but a mutation that answers 200 with an empty body is still a success (unchanged)', async () => {
+    global.fetch = vi.fn(async () => ({ ok: true, status: 200, redirected: false, json: html }))
+    await expect(readJson('/api/schedule/reports/scheduled/x', { method: 'DELETE' })).resolves.toEqual({})
+  })
+})
+
 // ROSTER-FIX.6a-9 (finding 4) — keeping the last-good data under the banner is
 // right for a flaky refresh of the SAME week and wrong the moment the header
 // has moved on: the previous week's blocks then render under the new week's
