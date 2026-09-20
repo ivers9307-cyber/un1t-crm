@@ -27,6 +27,7 @@ const { createServerClient } = await import('@/lib/supabase')
 const { getCurrentUser, getUserLocationIds } = await import('@/lib/auth')
 const { POST } = await import('./route.js')
 const { notifyRosterChanges } = await import('@/lib/roster-change-notify')
+const { fakeDb, resolveLocations, scopedAssignments, locationScopeOf } = await import('@/lib/time-off.test-helpers')
 
 beforeEach(() => {
   createServerClient.mockReset()
@@ -66,7 +67,17 @@ function buildDb({
   // is an active, living coach, so earlier tests keep their meaning.
   people = [],
   peopleErr = null,
+  // ORGSCOPE.1 — the double-booking advisory. `otherShifts` are the coach's
+  // assignments anywhere (the read honours its location filter, so an OPEN
+  // read returns all of them); `orgs` maps location → organisation.
+  otherShifts = [],
+  orgs = { 'loc-1': 'org-1', 'loc-2': 'org-1' },
+  locationsErr = null,
 }) {
+  const advisoryDb = fakeDb((q) => {
+    if (q.table === 'locations') return locationsErr ? { data: null, error: locationsErr } : resolveLocations(q, orgs)
+    return scopedAssignments(q, otherShifts)
+  })
   const insertSpy = vi.fn()
   const deleteSpy = vi.fn()
   const timeOffSpy = vi.fn()
@@ -76,8 +87,11 @@ function buildDb({
     insertSpy,
     deleteSpy,
     timeOffSpy,
+    // The double-booking read(s), for asserting on what the route asked for.
+    advisoryReads: () => advisoryDb.queries.filter((q) => q.table === 'shift_assignments'),
     db: {
       from: (table) => {
+        if (table === 'locations') return advisoryDb.from('locations')
         if (table === 'profiles') {
           return { select: () => ({ in: (_c, ids) => Promise.resolve(peopleErr
             ? { data: null, error: peopleErr }
@@ -120,6 +134,8 @@ function buildDb({
                     }),
                 }
               }
+              // SCHEDULE-DOUBLE-BOOKING.1 — the advisory read after the inserts.
+              if (sel.includes('shift_blocks!inner')) return advisoryDb.from('shift_assignments').select(sel)
               // The post-insert .select() — shouldn't be called this way.
               throw new Error(`unexpected shift_assignments.select(${sel})`)
             },
@@ -546,5 +562,68 @@ describe('POST — a deactivated coach cannot be assigned', () => {
     createServerClient.mockReturnValue(db)
     expect((await POST(req({ profile_ids: [ON] }), PROPS)).status).toBe(500)
     expect(insertSpy).not.toHaveBeenCalled()
+  })
+})
+
+// ORGSCOPE.1 — nothing keeps a coach inside one organisation, and the warning
+// prints the other shift's name, times and studio.
+describe('POST — double-booking advisory stays inside the organisation (ORGSCOPE.1)', () => {
+  const COACH = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+  const BLOCK = { id: 'block-1', location_id: 'loc-1', block_date: '2026-06-01', max_coaches: 5, start_time: '09:00:00', end_time: '10:00:00', roster_id: null, rosters: null }
+  // loc-1 + loc-2 are one organisation; loc-x is another organisation's studio.
+  const ORGS = { 'loc-1': 'org-1', 'loc-2': 'org-1', 'loc-x': 'org-x' }
+  const other = (location_id, template, studio) => ({
+    profile_id: COACH,
+    profiles: { full_name: 'Coach One' },
+    shift_blocks: { location_id, block_date: '2026-06-01', start_time: '09:30:00', end_time: '10:30:00', shift_templates: { name: template }, locations: { name: studio } },
+  })
+  const HERE = other('loc-1', 'Same studio shift', 'Studio One')
+  const SIBLING = other('loc-2', 'Sibling shift', 'Studio Two')
+  const FOREIGN = other('loc-x', 'Other org shift', 'Other Org Studio')
+
+  beforeEach(() => getCurrentUser.mockResolvedValue(MASTER))
+
+  it('still warns about an overlap at this studio and at a sibling studio', async () => {
+    const { db } = buildDb({ block: BLOCK, orgs: ORGS, otherShifts: [HERE, SIBLING] })
+    createServerClient.mockReturnValue(db)
+    const json = await (await POST(req({ profile_ids: [COACH] }), PROPS)).json()
+    expect(json.warnings).toHaveLength(2)
+    expect(json.warnings.join(' ')).toContain('Same studio shift')
+    expect(json.warnings.join(' ')).toContain('Sibling shift')
+  })
+
+  it('an overlapping shift at a studio in a DIFFERENT organisation is never read or named', async () => {
+    const { db, advisoryReads } = buildDb({ block: BLOCK, orgs: ORGS, otherShifts: [SIBLING, FOREIGN] })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(req({ profile_ids: [COACH] }), PROPS)
+    const json = await res.json()
+    expect(res.status).toBe(201)
+    expect(json.warnings).toHaveLength(1)
+    expect(JSON.stringify(json)).not.toContain('Other org shift')
+    expect(JSON.stringify(json)).not.toContain('Other Org Studio')
+    expect(locationScopeOf(advisoryReads()[0]).sort()).toEqual(['loc-1', 'loc-2'])
+  })
+
+  it('a studio with no siblings checks itself only: no cross-studio read', async () => {
+    const { db, advisoryReads } = buildDb({ block: { ...BLOCK, location_id: 'loc-x' }, orgs: ORGS, otherShifts: [SIBLING, FOREIGN] })
+    createServerClient.mockReturnValue(db)
+    getCurrentUser.mockResolvedValue({ ...MASTER, locations: [{ id: 'loc-x' }] })
+    const json = await (await POST(req({ profile_ids: [COACH] }), PROPS)).json()
+    expect(advisoryReads()).toHaveLength(1)
+    expect(locationScopeOf(advisoryReads()[0])).toEqual(['loc-x'])
+    expect(json.warnings.join(' ')).not.toContain('Sibling shift')
+  })
+
+  it('fails soft: unreadable siblings narrow the check to this studio, and the assignment still succeeds', async () => {
+    const { db, advisoryReads, insertSpy } = buildDb({ block: BLOCK, orgs: ORGS, otherShifts: [HERE, SIBLING, FOREIGN], locationsErr: { message: 'down' } })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(req({ profile_ids: [COACH] }), PROPS)
+    const json = await res.json()
+    expect(res.status).toBe(201)
+    expect(insertSpy).toHaveBeenCalledTimes(1)
+    expect(json.assigned).toHaveLength(1)
+    expect(locationScopeOf(advisoryReads()[0])).toEqual(['loc-1'])
+    expect(json.warnings).toHaveLength(1)
+    expect(json.warnings[0]).toContain('Same studio shift')
   })
 })

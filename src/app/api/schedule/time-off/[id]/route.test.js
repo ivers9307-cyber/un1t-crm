@@ -23,7 +23,7 @@ const { createServerClient } = await import('@/lib/supabase')
 const { getCurrentUser } = await import('@/lib/auth')
 const { hasPermissionForLocation } = await import('@/lib/permissions')
 const { PUT } = await import('./route.js')
-const { fakeDb, queriesOf } = await import('@/lib/time-off.test-helpers')
+const { fakeDb, queriesOf, resolveLocations, scopedAssignments, locationScopeOf } = await import('@/lib/time-off.test-helpers')
 
 const PROPS = { params: Promise.resolve({ id: 'req-1' }) }
 
@@ -54,7 +54,9 @@ function buildDb({
     if (q.table === 'staff_allowances' && q.action === 'select') return { data: allowance, error: null }
     if (q.table === 'staff_allowances' && q.action === 'insert') { allowanceInsertSpy(q.payload); return { data: null, error: null } }
     if (q.table === 'profile_compensation') return { data: entitlement == null ? null : { annual_leave_entitlement: entitlement }, error: null }
-    if (q.table === 'shift_assignments') return { data: assignments, error: null }
+    // ORGSCOPE.1 — loc-1 + loc-2 are one organisation; loc-x is another's.
+    if (q.table === 'locations') return resolveLocations(q, { 'loc-1': 'org-1', 'loc-2': 'org-1', 'loc-x': 'org-x' })
+    if (q.table === 'shift_assignments') return scopedAssignments(q, assignments)
     throw new Error(`unexpected ${q.table}/${q.action}`)
   })
   return { db, updateSpy, allowanceInsertSpy }
@@ -271,5 +273,30 @@ describe('PUT /api/schedule/time-off/[id] — LEAVE.2', () => {
     const json = await (await PUT(req({ status: 'approved' }), PROPS)).json()
     expect(json.clashes.map((c) => c.id)).toEqual(['a1', 'a3'])
     expect(queriesOf(db, 'shift_assignments', 'delete')).toHaveLength(0)
+  })
+
+  // ORGSCOPE.1 — the coach is also on staff at loc-x, another organisation.
+  const orgBlock = (id, location_id, name) => ({ id, block_date: '2026-06-01', start_time: '09:00:00', end_time: '10:00:00', location_id, rosters: { status: 'published' }, shift_templates: { name }, locations: { name: `Studio ${location_id}` } })
+  const ORG_SHIFTS = [
+    { id: 'a1', profile_id: 'coach', status: 'scheduled', shift_blocks: orgBlock('b1', 'loc-1', 'AM') },
+    { id: 'ax', profile_id: 'coach', status: 'scheduled', shift_blocks: orgBlock('bx', 'loc-x', 'Other org shift') },
+  ]
+
+  it('approving never shows the coach\'s shifts at another organisation\'s studio', async () => {
+    getCurrentUser.mockResolvedValue(HC(['loc-1']))
+    const { db } = buildDb({ existing: row({ type: 'unavailable' }), requesterLocations: ['loc-1', 'loc-x'], assignments: ORG_SHIFTS })
+    createServerClient.mockReturnValue(db)
+    const json = await (await PUT(req({ status: 'approved' }), PROPS)).json()
+    expect(json.clashes.map((c) => c.id)).toEqual(['a1'])
+    expect(JSON.stringify(json)).not.toContain('Other org shift')
+  })
+
+  it('an approver entitled only at the other organisation\'s studio is shown that organisation alone, not where the leave was filed', async () => {
+    getCurrentUser.mockResolvedValue(HC(['loc-x']))
+    const { db } = buildDb({ existing: row({ type: 'unavailable' }), requesterLocations: ['loc-1', 'loc-x'], assignments: ORG_SHIFTS })
+    createServerClient.mockReturnValue(db)
+    const json = await (await PUT(req({ status: 'approved' }), PROPS)).json()
+    expect(locationScopeOf(queriesOf(db, 'shift_assignments')[0])).toEqual(['loc-x'])
+    expect(json.clashes.map((c) => c.id)).toEqual(['ax'])
   })
 })

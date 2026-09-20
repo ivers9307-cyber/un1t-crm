@@ -20,7 +20,7 @@ const { getCurrentUser } = await import('@/lib/auth')
 const { hasPermissionForLocation } = await import('@/lib/permissions')
 const { unassignShiftAssignments } = await import('@/lib/shift-unassign')
 const { POST } = await import('./route.js')
-const { fakeDb } = await import('@/lib/time-off.test-helpers')
+const { fakeDb, queriesOf, resolveLocations, scopedAssignments, locationScopeOf } = await import('@/lib/time-off.test-helpers')
 
 const PROPS = { params: Promise.resolve({ id: 'req-1' }) }
 const req = (body = {}) => ({ json: () => Promise.resolve(body), headers: { get: () => '' } })
@@ -28,11 +28,16 @@ const req = (body = {}) => ({ json: () => Promise.resolve(body), headers: { get:
 const HC = { id: 'hc', role: 'head_coach', profileRole: 'staff', locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': 'head_coach' } }
 const block = (id, date, location_id) => ({ id, block_date: date, start_time: '09:00:00', end_time: '10:00:00', location_id, rosters: { status: 'published' }, shift_templates: { name: 'AM' }, locations: { name: location_id } })
 
+// ORGSCOPE.1 — loc-1 + loc-2 are one organisation; loc-x is another's studio.
+// The shift read honours its location filter, so an open read shows as a leak.
+const ORGS = { 'loc-1': 'org-1', 'loc-2': 'org-1', 'loc-x': 'org-x' }
+
 function buildDb({ leave, requesterLocations = ['loc-1'], assignments = [] }) {
   return fakeDb((q) => {
     if (q.table === 'time_off_requests') return { data: leave, error: null }
     if (q.table === 'profile_locations') return { data: requesterLocations.map((location_id) => ({ location_id })), error: null }
-    if (q.table === 'shift_assignments') return { data: assignments, error: null }
+    if (q.table === 'locations') return resolveLocations(q, ORGS)
+    if (q.table === 'shift_assignments') return scopedAssignments(q, assignments)
     throw new Error(q.table)
   })
 }
@@ -85,6 +90,30 @@ describe('POST /api/schedule/time-off/[id]/unassign-clashes', () => {
     expect(passed.assignments.map((a) => a.id)).toEqual(['a1'])
     expect(passed.assignments[0]).toMatchObject({ block_id: 'b1', block_date: '2026-06-01', location_id: 'loc-1', roster_status: 'published' })
     expect(json.data.skipped).toEqual([expect.objectContaining({ assignment_id: 'a2', reason: 'not_manager_at_location' })])
+  })
+
+  // ORGSCOPE.1 — the coach is also on staff at loc-x, another organisation.
+  it('never reads or reports the coach\'s shifts at another organisation\'s studio', async () => {
+    getCurrentUser.mockResolvedValue(HC)
+    const db = buildDb({
+      leave: LEAVE,
+      requesterLocations: ['loc-1', 'loc-x'],
+      assignments: [...ASSIGNMENTS, { id: 'ax', profile_id: 'coach', status: 'scheduled', shift_blocks: block('bx', '2026-06-02', 'loc-x') }],
+    })
+    createServerClient.mockReturnValue(db)
+    const json = await (await POST(req(), PROPS)).json()
+    expect(locationScopeOf(queriesOf(db, 'shift_assignments')[0]).sort()).toEqual(['loc-1', 'loc-2'])
+    expect(JSON.stringify(json)).not.toContain('loc-x')
+    expect(json.data.skipped.map((x) => x.assignment_id)).toEqual(['a2'])
+  })
+
+  it('scopes from where the CALLER decides: entitled only at the other organisation\'s studio, they get that organisation alone', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'hx', role: 'head_coach', profileRole: 'staff', locations: [{ id: 'loc-x' }], rolesByLocation: { 'loc-x': 'head_coach' } })
+    const db = buildDb({ leave: LEAVE, requesterLocations: ['loc-1', 'loc-x'], assignments: ASSIGNMENTS })
+    createServerClient.mockReturnValue(db)
+    await POST(req(), PROPS)
+    expect(locationScopeOf(queriesOf(db, 'shift_assignments')[0])).toEqual(['loc-x'])
+    expect(unassignShiftAssignments.mock.calls[0][1].assignments).toEqual([])
   })
 
   it('honours assignment_ids — a clash the approver was not shown is left alone', async () => {
