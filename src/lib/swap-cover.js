@@ -43,6 +43,34 @@ export function shiftWhenLabel(block) {
   return day || times || 'an upcoming shift'
 }
 
+// locations.name, short enough that the time range after it still fits on a
+// lock screen. '' when unreadable: the sentence is then built without it.
+const STUDIO_NAME_MAX = 30
+function shortStudioName(name) {
+  const n = String(name ?? '').trim()
+  if (n.length <= STUDIO_NAME_MAX) return n
+  return `${n.slice(0, STUDIO_NAME_MAX).trimEnd()}…`
+}
+
+/**
+ * The open-pool broadcast: WHO needs cover, WHERE and WHEN. The studio is
+ * named because a coach who works at two studios gets this push from both and
+ * could not otherwise tell which one it is about.
+ */
+export function openPoolPayload({ swapId, block, requesterName, studioName }) {
+  const actor = requesterName || 'A coach'
+  const when = shiftWhenLabel(block)
+  const studio = shortStudioName(studioName)
+  const at = studio ? ` at ${studio}` : ''
+  return {
+    title: 'A shift needs cover',
+    body: `${actor} needs cover${at}: ${when}. Tap to take it.`,
+    category: 'swap',
+    emailSubject: `A shift needs cover${at}: ${when}`,
+    data: { type: 'swap_open_pool', swap_id: swapId, block_date: block?.block_date ?? null },
+  }
+}
+
 // A single-day request worth less than a day is a HALF day (total_days is
 // NUMERIC(5,1), "supports half days", mig 011). Which half is not recorded, so
 // the coach may well be free for the shift: they are told, and the claim

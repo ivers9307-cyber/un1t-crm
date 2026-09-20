@@ -14,7 +14,7 @@ import { MANAGER_ROLES } from './schemas'
 import { logWarn, logError } from './log'
 import { isValidTz } from './tz-time'
 import {
-  openPoolRecipients, shiftWhenLabel,
+  openPoolRecipients, openPoolPayload,
   coverSweepAction, coverNudgePayload, swapExpiryNotices, swapExpiryNote, deferredExpiryNoticeDue,
   SWAP_EXPIRY_NOTICE_NOTES, EXPIRY_NOTICE_MAX_AGE_MS, OPEN_SWAP_STATUSES,
 } from './swap-cover'
@@ -34,20 +34,22 @@ const DAY_ASSIGNMENT_SELECT = 'id, profile_id, block_id, status, start_time_over
  * A coach cannot be at two studios at once, but "any studio" stops at the
  * organisation's edge: another tenant's roster is never read. On any failure
  * the answer is this studio alone, with `error` set so the caller degrades.
+ * The same read carries the studio's `name`, for the broadcast's copy.
  */
 async function sameOrgLocationIds(db, locationId) {
   const { data: loc, error: locErr } = await db.from('locations')
-    .select('id, organization_id')
+    .select('id, name, organization_id')
     .eq('id', locationId)
     .maybeSingle()
-  if (locErr) return { ids: [locationId], error: locErr.message }
-  if (!loc?.organization_id) return { ids: [locationId], error: null }
+  if (locErr) return { ids: [locationId], name: null, error: locErr.message }
+  const name = loc?.name ?? null
+  if (!loc?.organization_id) return { ids: [locationId], name, error: null }
 
   const { data: studios, error: orgErr } = await db.from('locations')
     .select('id')
     .eq('organization_id', loc.organization_id)
-  if (orgErr) return { ids: [locationId], error: orgErr.message }
-  return { ids: [...new Set([locationId, ...(studios || []).map((s) => s.id)])], error: null }
+  if (orgErr) return { ids: [locationId], name, error: orgErr.message }
+  return { ids: [...new Set([locationId, ...(studios || []).map((s) => s.id)])], name, error: null }
 }
 
 /**
@@ -140,15 +142,8 @@ export async function notifyOpenPool(db, { swapId, locationId, block, requester 
   })
   if (!ids.length) return { notified: 0, degraded }
 
-  const actor = requester?.full_name || 'A coach'
-  const when = shiftWhenLabel(block)
-  await notifyUsersOnce(db, `swap_open_pool:${swapId}`, ids, {
-    title: 'A shift needs cover',
-    body: `${actor} needs cover: ${when}. Tap to take it.`,
-    category: 'swap',
-    emailSubject: `A shift needs cover: ${when}`,
-    data: { type: 'swap_open_pool', swap_id: swapId, block_date: block.block_date },
-  })
+  await notifyUsersOnce(db, `swap_open_pool:${swapId}`, ids,
+    openPoolPayload({ swapId, block, requesterName: requester?.full_name, studioName: org.name }))
   return { notified: ids.length, degraded }
 }
 

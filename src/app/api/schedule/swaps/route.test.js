@@ -369,6 +369,9 @@ describe('POST /api/schedule/swaps — notification copy', () => {
     await flush()
 
     const [, , , , managerPayload] = notifyUsersAtRolesOnce.mock.calls[0]
-    expect(managerPayload.body).toBe('A coach posted a shift for swap. Tap to review.')
+    // COVERLOOP.1 — managers and head coaches are the likeliest senior cover:
+    // they are told WHEN the shift is too.
+    expect(managerPayload.body).toBe('A coach posted a shift for swap: Thu 1 Jan, 06:00 to 07:00. Tap to review.')
+    expect(managerPayload.emailSubject).toBe('An open shift swap needs a decision: Thu 1 Jan, 06:00 to 07:00')
   })
 })

@@ -64,7 +64,7 @@ const MEMBERS = [link('req'), link('a'), link('b'), link('mgr', { role: 'manager
 // locations answers two reads: this studio's organisation, then that
 // organisation's studios.
 const locationsTable = (q) => (q.single
-  ? { data: { id: LOC, organization_id: ORG }, error: null }
+  ? { data: { id: LOC, name: 'Studio North', organization_id: ORG }, error: null }
   : { data: [{ id: LOC }, { id: SIBLING }], error: null })
 const healthy = (over = {}) => ({
   profile_locations: { data: MEMBERS, error: null },
@@ -104,9 +104,9 @@ describe('notifyOpenPool', () => {
     expect(ids).toEqual(['a', 'b'])
     expect(payload).toEqual({
       title: 'A shift needs cover',
-      body: 'Coach R needs cover: Thu 24 Sep, 06:00 to 07:00. Tap to take it.',
+      body: 'Coach R needs cover at Studio North: Thu 24 Sep, 06:00 to 07:00. Tap to take it.',
       category: 'swap',
-      emailSubject: 'A shift needs cover: Thu 24 Sep, 06:00 to 07:00',
+      emailSubject: 'A shift needs cover at Studio North: Thu 24 Sep, 06:00 to 07:00',
       data: { type: 'swap_open_pool', swap_id: 'swap-1', block_date: '2026-09-24' },
     })
     expect(out).toEqual({ notified: 2, degraded: false })
@@ -118,6 +118,8 @@ describe('notifyOpenPool', () => {
 
     const [orgOf, orgStudios] = db.queries.filter((q) => q.table === 'locations')
     expect(orgOf.filters).toEqual([['eq', 'id', LOC]])
+    // The studio's name rides on the read that was already being made.
+    expect(orgOf.select).toBe('id, name, organization_id')
     expect(orgStudios.filters).toEqual([['eq', 'organization_id', ORG]])
 
     const leave = db.queries.find((q) => q.table === 'time_off_requests')
@@ -222,7 +224,7 @@ describe('notifyOpenPool', () => {
   it('says "A coach" when the requester has no full_name (it is nullable on profiles)', async () => {
     await notifyOpenPool(mockDb(healthy()), { ...ARGS, requester: { id: 'req', full_name: null } })
     const payload = notifyUsersOnce.mock.calls[0][3]
-    expect(payload.body).toBe('A coach needs cover: Thu 24 Sep, 06:00 to 07:00. Tap to take it.')
+    expect(payload.body).toBe('A coach needs cover at Studio North: Thu 24 Sep, 06:00 to 07:00. Tap to take it.')
     expect(payload.body).not.toContain('null')
   })
 

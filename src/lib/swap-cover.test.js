@@ -2,7 +2,7 @@
 // COVERLOOP.1 — the pure half of the cover loop. No DB, no clock.
 import { describe, it, expect } from 'vitest'
 import {
-  shiftDayLabel, shiftWhenLabel, openPoolRecipients,
+  shiftDayLabel, shiftWhenLabel, openPoolRecipients, openPoolPayload,
   inStaffPushHours, STAFF_PUSH_HOURS,
   coverSweepAction, coverNudgePayload, swapExpiryNotices, SWAP_EXPIRY_NOTES,
   SWAP_EXPIRY_NOTICE_NOTES, EXPIRY_NOTICE_MAX_AGE_MS,
@@ -61,6 +61,31 @@ describe('shiftWhenLabel', () => {
     [null, 'an upcoming shift'],
   ])('%j -> "%s"', (block, expected) => {
     expect(shiftWhenLabel(block)).toBe(expected)
+  })
+})
+
+describe('openPoolPayload', () => {
+  const args = { swapId: 'swap-1', block: BLOCK, requesterName: 'Coach R', studioName: 'Studio North' }
+  it('says WHO, WHERE and WHEN: a coach who works at two studios must be able to tell which', () => {
+    expect(openPoolPayload(args)).toEqual({
+      title: 'A shift needs cover',
+      body: 'Coach R needs cover at Studio North: Thu 24 Sep, 06:00 to 07:00. Tap to take it.',
+      category: 'swap',
+      emailSubject: 'A shift needs cover at Studio North: Thu 24 Sep, 06:00 to 07:00',
+      data: { type: 'swap_open_pool', swap_id: 'swap-1', block_date: '2026-09-24' },
+    })
+  })
+  it.each([[null], [''], ['   '], [undefined]])('an unreadable studio name (%j) is left out, never printed', (studioName) => {
+    const p = openPoolPayload({ ...args, studioName })
+    expect(p.body).toBe('Coach R needs cover: Thu 24 Sep, 06:00 to 07:00. Tap to take it.')
+    expect(p.emailSubject).toBe('A shift needs cover: Thu 24 Sep, 06:00 to 07:00')
+  })
+  it('keeps the studio SHORT: a long name is cut so the time range still fits on a lock screen', () => {
+    const p = openPoolPayload({ ...args, studioName: 'The Very Long Official Registered Name Of A Studio Limited' })
+    expect(p.body).toBe('Coach R needs cover at The Very Long Official Registe…: Thu 24 Sep, 06:00 to 07:00. Tap to take it.')
+  })
+  it('says "A coach" when the requester has no name', () => {
+    expect(openPoolPayload({ ...args, requesterName: null }).body).toBe('A coach needs cover at Studio North: Thu 24 Sep, 06:00 to 07:00. Tap to take it.')
   })
 })
 

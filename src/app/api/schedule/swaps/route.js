@@ -8,6 +8,7 @@ import { validateBody } from '@/lib/validate'
 import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
 import { notifyUsersOnce, notifyUsersAtRolesOnce } from '@/lib/push-dedup'
 import { notifyOpenPool } from '@/lib/swap-cover-server'
+import { shiftWhenLabel } from '@/lib/swap-cover'
 import { swapShiftShape } from '@/lib/roster-read'
 import { isLiveAssignment } from '@/lib/roster'
 import { dublinTodayStr } from '@/lib/dublin-time'
@@ -276,11 +277,14 @@ export async function POST(request) {
       data: { type: 'swap_inbound', swap_id: data.id },
     }).catch(err => console.error('[swaps] notify target failed', err))
   } else {
+    // COVERLOOP.1 — with the time range: managers and head coaches are the
+    // likeliest senior cover, and "a shift" told them nothing about WHEN.
+    const when = shiftWhenLabel(assignment.shift_blocks)
     notifyUsersAtRolesOnce(db, `swap_open:${data.id}`, swapLocationId, MANAGER_ROLES, {
       title: 'Open swap request',
-      body: `${actor} posted a shift for swap. Tap to review.`,
+      body: `${actor} posted a shift for swap: ${when}. Tap to review.`,
       category: 'swap',
-      emailSubject: 'An open shift swap needs a decision',
+      emailSubject: `An open shift swap needs a decision: ${when}`,
       data: { type: 'swap_open', swap_id: data.id },
     }).catch(err => console.error('[swaps] notify managers failed', err))
 
