@@ -26,6 +26,7 @@ import {
 } from '@shared/permissions'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { isLiveAssignment } from '@/lib/roster'
+import { nonWorkingDateSet } from '@/lib/time-off-days'
 
 export const TIME_OFF_APPROVE_PERMISSION = APPROVAL_CATEGORY_PERMISSION.time_off
 export const DEFAULT_LEAVE_ENTITLEMENT = 20
@@ -239,6 +240,43 @@ export async function ensureHolidayAllowanceRow(db, profileId, year) {
   // 23505 — someone else seeded it between the read and the insert. Fine.
   if (insErr && insErr.code !== '23505') return { error: insErr }
   return { error: null }
+}
+
+/**
+ * HOLIDAYLEAVE.1 — the dates in [startIso, endIso] that cost no holiday
+ * allowance at this studio: its country's national bank holidays
+ * (bank-holidays.js, static) plus its own location_holidays rows (mig 017).
+ *
+ * Fails CLOSED like every other read behind the time-off POST: an unreadable
+ * list returns the error, never an empty set, because an empty set silently
+ * over-charges the allowance (the bug this exists to fix). A request is capped
+ * at 366 days by the route, so the closures read cannot reach the 1,000-row
+ * select cap and is not paged.
+ *
+ * @returns {Promise<{ dates: Set<string>|null, error: object|null }>}
+ */
+export async function getNonWorkingDates(db, locationId, startIso, endIso) {
+  // Primary-key lookup; a missing row falls back to Ireland, as
+  // GET /api/locations/[id]/holidays does.
+  const { data: loc, error: locError } = await db
+    .from('locations')
+    .select('country')
+    .eq('id', locationId)
+    .maybeSingle()
+  if (locError) return { dates: null, error: locError }
+
+  const { data: custom, error: customError } = await db
+    .from('location_holidays')
+    .select('date, name')
+    .eq('location_id', locationId)
+    .gte('date', startIso)
+    .lte('date', endIso)
+  if (customError) return { dates: null, error: customError }
+
+  return {
+    dates: nonWorkingDateSet({ country: loc?.country || 'IE', customHolidays: custom || [], start: startIso, end: endIso }),
+    error: null,
+  }
 }
 
 // ── Shift clashes ─────────────────────────────────────────────────────────

@@ -4,6 +4,7 @@ import { describe, it, expect } from 'vitest'
 import {
   leaveScopeOrFilter, canDecideTimeOff, timeOffApproverIdsFrom, entitlementDays,
   clashWindow, bucketClashCounts, getHolidayAllowance, ensureHolidayAllowanceRow,
+  getNonWorkingDates,
 } from './time-off-leave.js'
 import { fakeDb, queriesOf } from './time-off.test-helpers.js'
 
@@ -120,5 +121,48 @@ describe('clashes', () => {
       { profile_id: 'p2', status: 'confirmed', shift_blocks: { block_date: '2026-06-01' } },
     ]
     expect(bucketClashCounts(requests, shifts, '2026-05-01')).toEqual({ r1: 1, r2: 1 })
+  })
+})
+
+// HOLIDAYLEAVE.1 — which dates cost no holiday allowance at this studio.
+describe('getNonWorkingDates', () => {
+  const dbWith = ({ country = 'IE', custom = [], locError = null, customError = null } = {}) => fakeDb((q) => {
+    if (q.table === 'locations') return { data: locError ? null : { country }, error: locError }
+    if (q.table === 'location_holidays') return { data: customError ? null : custom, error: customError }
+    throw new Error(q.table)
+  })
+
+  it('national bank holidays for the studio\'s country plus its own closures, inside the range', async () => {
+    const db = dbWith({ custom: [{ date: '2026-06-10', name: 'Studio closed' }] })
+    const { dates, error } = await getNonWorkingDates(db, 'loc-1', '2026-06-01', '2026-06-14')
+    expect(error).toBeNull()
+    expect([...dates].sort()).toEqual(['2026-06-01', '2026-06-10'])
+  })
+
+  it('scopes BOTH reads to the studio, and the closures read to the range', async () => {
+    const db = dbWith()
+    await getNonWorkingDates(db, 'loc-1', '2026-06-01', '2026-06-14')
+    expect(queriesOf(db, 'locations')[0].eq).toEqual({ id: 'loc-1' })
+    const closures = queriesOf(db, 'location_holidays')[0]
+    expect(closures.eq).toEqual({ location_id: 'loc-1' })
+    expect(closures.calls).toContainEqual(['gte', 'date', '2026-06-01'])
+    expect(closures.calls).toContainEqual(['lte', 'date', '2026-06-14'])
+  })
+
+  it('a studio in another country gets that country\'s list', async () => {
+    const { dates } = await getNonWorkingDates(dbWith({ country: 'GB' }), 'loc-1', '2026-05-25', '2026-06-07')
+    expect([...dates]).toEqual(['2026-05-25'])
+  })
+
+  it('a studio with no country on file is treated as Ireland (the GET holidays route does the same)', async () => {
+    const { dates } = await getNonWorkingDates(dbWith({ country: null }), 'loc-1', '2026-06-01', '2026-06-07')
+    expect([...dates]).toEqual(['2026-06-01'])
+  })
+
+  it('an unreadable studio or closures list is an ERROR, never "no holidays"', async () => {
+    expect(await getNonWorkingDates(dbWith({ locError: { message: 'loc boom' } }), 'loc-1', '2026-06-01', '2026-06-07'))
+      .toEqual({ dates: null, error: { message: 'loc boom' } })
+    expect(await getNonWorkingDates(dbWith({ customError: { message: 'closures boom' } }), 'loc-1', '2026-06-01', '2026-06-07'))
+      .toEqual({ dates: null, error: { message: 'closures boom' } })
   })
 })
