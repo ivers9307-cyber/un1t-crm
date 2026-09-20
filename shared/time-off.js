@@ -118,3 +118,30 @@ export function leaveClashPrompt(clashes) {
     assignmentIds: list.map((c) => c.id),
   }
 }
+
+// LEAVEPHONE.1 — "Mon 5 Oct – Fri 9 Oct". The year is printed only when the
+// range crosses a year end, where "30 Dec – 2 Jan" alone is ambiguous. Built on
+// shortDay above, which reads the ISO string's own parts (Date.UTC), so the
+// phone's timezone can never shift the day.
+export function leaveRangeLabel(startIso, endIso) {
+  if (!startIso) return ''
+  const end = endIso || startIso
+  if (end === startIso) return shortDay(startIso)
+  const crossesYear = String(startIso).slice(0, 4) !== String(end).slice(0, 4)
+  const withYear = (iso) => `${shortDay(iso)} ${String(iso).slice(0, 4)}`
+  return crossesYear ? `${withYear(startIso)} – ${withYear(end)}` : `${shortDay(startIso)} – ${shortDay(end)}`
+}
+
+// LEAVEPHONE.1 — one line per shift the leave form's clash preview lists. The
+// times are the EFFECTIVE ones the server resolved (override → block →
+// template), so this only trims them to HH:MM.
+export function leavePreviewLine(shift) {
+  const hhmm = (t) => (t ? String(t).slice(0, 5) : '')
+  const start = hhmm(shift?.start_time)
+  const end = hhmm(shift?.end_time)
+  const time = start && end ? `${start}–${end}` : start
+  const day = shift?.block_date ? shortDay(shift.block_date) : ''
+  return [day, time, shift?.template_name, shift?.location_name]
+    .filter(Boolean)
+    .join(' · ')
+}

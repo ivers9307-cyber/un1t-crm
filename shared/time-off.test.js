@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   TIME_OFF_TYPES, timeOffTypesFor, defaultTimeOffTypeFor, timeOffTypeLabel,
   isTimeOffTypeAllowedFor, timeOffLeaveLabel, isExpiredPendingRequest, effectiveTimeOffStatus, leaveClashLabel,
-  leaveClashPrompt,
+  leaveClashPrompt, leaveRangeLabel, leavePreviewLine,
 } from './time-off'
 
 describe('time-off catalogue + gating', () => {
@@ -90,5 +90,32 @@ describe('leaveClashPrompt', () => {
     const many = Array.from({ length: 8 }, (_, i) => ({ id: `a${i}`, block_date: '2026-09-18' }))
     expect(leaveClashPrompt(many).message).toContain('and 2 more')
     expect(leaveClashPrompt(many).assignmentIds).toHaveLength(8)
+  })
+})
+
+describe('leaveRangeLabel', () => {
+  it('one day reads as one day, a range as a range', () => {
+    expect(leaveRangeLabel('2026-10-05', '2026-10-05')).toBe('Mon 5 Oct')
+    expect(leaveRangeLabel('2026-10-05', '2026-10-09')).toBe('Mon 5 Oct – Fri 9 Oct')
+  })
+  it('a missing end is the start; a range across a year end names both years', () => {
+    expect(leaveRangeLabel('2026-10-05', null)).toBe('Mon 5 Oct')
+    expect(leaveRangeLabel('2026-12-30', '2027-01-02')).toBe('Wed 30 Dec 2026 – Sat 2 Jan 2027')
+  })
+  it('no start is an empty label, never "undefined"', () => {
+    expect(leaveRangeLabel(null, null)).toBe('')
+  })
+})
+
+describe('leavePreviewLine', () => {
+  it('date, effective start–end, template, studio', () => {
+    expect(leavePreviewLine({
+      block_date: '2026-10-05', start_time: '06:00:00', end_time: '09:00:00',
+      template_name: 'Morning', location_name: 'Studio One',
+    })).toBe('Mon 5 Oct · 06:00–09:00 · Morning · Studio One')
+  })
+  it('leaves out whatever is missing rather than printing "null"', () => {
+    expect(leavePreviewLine({ block_date: '2026-10-05', start_time: '06:00:00' })).toBe('Mon 5 Oct · 06:00')
+    expect(leavePreviewLine({ block_date: '2026-10-05' })).toBe('Mon 5 Oct')
   })
 })
