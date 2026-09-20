@@ -27,7 +27,7 @@ const { createServerClient } = await import('@/lib/supabase')
 const { getCurrentUser } = await import('@/lib/auth')
 const { GET, POST } = await import('./route.js')
 
-const { fakeDb, queriesOf } = await import('@/lib/time-off.test-helpers')
+const { fakeDb, queriesOf, resolveLocations, scopedAssignments, locationScopeOf } = await import('@/lib/time-off.test-helpers')
 const { notifyUsersOnce } = await import('@/lib/push-dedup')
 const { hasPermissionForLocation } = await import('@/lib/permissions')
 const { logWarn } = await import('@/lib/log')
@@ -411,16 +411,17 @@ describe('GET /api/schedule/time-off — role per studio (SCHEDROLES.1)', () => 
     try {
       getCurrentUser.mockResolvedValue(mixed('loc-1'))
       const rows = [
-        { id: 'old', profile_id: 'm1', status: 'pending', start_date: '2026-08-26', end_date: '2026-08-26' },
-        { id: 'next', profile_id: 'm2', status: 'approved', start_date: '2026-09-18', end_date: '2026-09-20' },
+        { id: 'old', profile_id: 'm1', location_id: 'loc-1', status: 'pending', start_date: '2026-08-26', end_date: '2026-08-26' },
+        { id: 'next', profile_id: 'm2', location_id: 'loc-1', status: 'approved', start_date: '2026-09-18', end_date: '2026-09-20' },
       ]
       const db = fakeDb((q) => {
-        if (q.table === 'profile_locations') return { data: [{ profile_id: 'm1' }, { profile_id: 'm2' }], error: null }
+        if (q.table === 'profile_locations') return { data: [{ profile_id: 'm1', location_id: 'loc-1' }, { profile_id: 'm2', location_id: 'loc-1' }], error: null }
+        if (q.table === 'locations') return resolveLocations(q, { 'loc-1': 'org-1', 'loc-2': 'org-1' })
         if (q.table === 'shift_assignments') {
-          return { data: [
-            { id: 'a', profile_id: 'm2', status: 'scheduled', shift_blocks: { block_date: '2026-09-19' } },
-            { id: 'b', profile_id: 'm2', status: 'cancelled', shift_blocks: { block_date: '2026-09-19' } },
-          ], error: null }
+          return scopedAssignments(q, [
+            { id: 'a', profile_id: 'm2', status: 'scheduled', shift_blocks: { block_date: '2026-09-19', location_id: 'loc-1' } },
+            { id: 'b', profile_id: 'm2', status: 'cancelled', shift_blocks: { block_date: '2026-09-19', location_id: 'loc-1' } },
+          ])
         }
         return { data: rows, error: null }
       })
@@ -430,6 +431,33 @@ describe('GET /api/schedule/time-off — role per studio (SCHEDROLES.1)', () => 
       expect(byId.old).toMatchObject({ expired: true, effective_status: 'expired' })
       expect(byId.old.clash_count).toBeUndefined()
       expect(byId.next).toMatchObject({ expired: false, effective_status: 'approved', clash_count: 1 })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // ORGSCOPE.2 — m2 is also on staff at loc-x, another organisation's studio.
+  it('with_clashes=1 never counts a coach\'s shifts at another organisation\'s studio', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-17T10:00:00Z'))
+    try {
+      getCurrentUser.mockResolvedValue(mixed('loc-1'))
+      const rows = [{ id: 'next', profile_id: 'm2', location_id: 'loc-1', status: 'approved', start_date: '2026-09-18', end_date: '2026-09-20' }]
+      const db = fakeDb((q) => {
+        if (q.table === 'profile_locations') return { data: [{ profile_id: 'm2', location_id: 'loc-1' }, { profile_id: 'm2', location_id: 'loc-x' }], error: null }
+        if (q.table === 'locations') return resolveLocations(q, { 'loc-1': 'org-1', 'loc-2': 'org-1', 'loc-x': 'org-x' })
+        if (q.table === 'shift_assignments') {
+          return scopedAssignments(q, [
+            { id: 'a', profile_id: 'm2', status: 'scheduled', shift_blocks: { block_date: '2026-09-19', location_id: 'loc-1' } },
+            { id: 'x', profile_id: 'm2', status: 'scheduled', shift_blocks: { block_date: '2026-09-19', location_id: 'loc-x' } },
+          ])
+        }
+        return { data: rows, error: null }
+      })
+      createServerClient.mockReturnValue(db)
+      const json = await (await GET(getReq('?location_id=loc-1&with_clashes=1'))).json()
+      expect(json.data[0].clash_count).toBe(1)
+      expect(locationScopeOf(queriesOf(db, 'shift_assignments')[0]).sort()).toEqual(['loc-1', 'loc-2'])
     } finally {
       vi.useRealTimers()
     }

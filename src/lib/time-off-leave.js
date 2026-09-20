@@ -49,6 +49,33 @@ export async function getProfileLocationIds(db, profileId) {
   return { ids: [...new Set((data || []).map((r) => r.location_id).filter(Boolean))], error: null }
 }
 
+/**
+ * ORGSCOPE.2 — every studio each of these profiles belongs to, in one paged
+ * read: Map(profileId → locationId[]). A profile with no rows is absent.
+ */
+export async function getLocationIdsByProfile(db, profileIds) {
+  const ids = [...new Set((profileIds || []).filter(Boolean))]
+  const byProfile = new Map()
+  if (ids.length === 0) return { byProfile, error: null }
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await db
+      .from('profile_locations')
+      .select('profile_id, location_id')
+      .in('profile_id', ids)
+      .order('profile_id', { ascending: true })
+      .order('location_id', { ascending: true })
+      .range(from, from + PAGE - 1)
+    if (error) return { byProfile: new Map(), error }
+    for (const r of data || []) {
+      if (!r.profile_id || !r.location_id) continue
+      if (!byProfile.has(r.profile_id)) byProfile.set(r.profile_id, [])
+      byProfile.get(r.profile_id).push(r.location_id)
+    }
+    if (!data || data.length < PAGE) break
+  }
+  return { byProfile, error: null }
+}
+
 /** Every profile that belongs to any of these studios. */
 export async function getLocationMemberIds(db, locationIds) {
   const ids = [...new Set((locationIds || []).filter(Boolean))]
@@ -521,37 +548,111 @@ export async function findOwnPublishedShifts(db, profileId, startIso, endIso, to
 /**
  * Pure. request id → number of live shifts it clashes with. Only pending
  * (unexpired) and approved requests can clash; everything else is 0/absent.
+ *
+ * ORGSCOPE.2 — `scopeByRequestId` (Map: request id → Set of location ids), when
+ * given, is the studios each request may count shifts AT; a request it does
+ * not list counts 0. Omitted = every shift passed in counts (the caller has
+ * already decided they all may).
  */
-export function bucketClashCounts(requests, assignments, todayIso) {
+export function bucketClashCounts(requests, assignments, todayIso, scopeByRequestId = null) {
   const byProfile = new Map()
   for (const a of assignments || []) {
     if (!isLiveAssignment(a)) continue
     const date = a.shift_blocks?.block_date || a.block_date
     if (!date) continue
     if (!byProfile.has(a.profile_id)) byProfile.set(a.profile_id, [])
-    byProfile.get(a.profile_id).push(date)
+    byProfile.get(a.profile_id).push({ date, locationId: a.shift_blocks?.location_id || a.location_id || null })
   }
   const counts = {}
   for (const r of requests || []) {
     if (r.status !== 'pending' && r.status !== 'approved') continue
     const win = clashWindow(r, todayIso)
     if (!win) continue
-    counts[r.id] = (byProfile.get(r.profile_id) || []).filter((d) => d >= win.lo && d <= win.hi).length
+    const scope = scopeByRequestId ? scopeByRequestId.get(r.id) || new Set() : null
+    counts[r.id] = (byProfile.get(r.profile_id) || [])
+      .filter((x) => x.date >= win.lo && x.date <= win.hi && (!scope || scope.has(x.locationId)))
+      .length
   }
   return counts
 }
 
-/** One read for a whole list of requests. */
-export async function countLeaveClashes(db, requests, todayIso) {
+const COUNT_SELECT = 'id, profile_id, status, shift_blocks!inner(block_date, location_id)'
+
+function spanOf(requests, todayIso) {
+  const windows = requests.map((r) => clashWindow(r, todayIso))
+  return { lo: windows.map((w) => w.lo).sort()[0], hi: windows.map((w) => w.hi).sort().at(-1) }
+}
+
+/**
+ * request id → how many live shifts it clashes with, for a whole list.
+ *
+ * ORGSCOPE.2 — this count is the badge on the Time Off list and the warning in
+ * the approvals queue; findLeaveClashes is the list the approver then gets. It
+ * read every shift of the person at every studio, so for a coach on staff in
+ * two organisations it told one tenant how busy the other's roster is, and
+ * disagreed with the (ORGSCOPE.1-bounded) list it sits above. Now each
+ * request counts exactly what findLeaveClashes would show THIS caller for it:
+ * shifts at the studios they decide it from (decidingLocationIds — master:
+ * every studio the person or the request belongs to) and those studios'
+ * organisations. One whole-call scope would be simpler and still wrong: a
+ * caller who approves in two organisations would count organisation B's
+ * shifts into a request they can only decide from organisation A.
+ *
+ * The caller's OWN requests count their own shifts anywhere: those are theirs
+ * to see, and nobody decides their own leave, so there is no list to disagree
+ * with. They are read separately so they never widen a colleague's read.
+ *
+ * Still ONE batched shift read for everyone else's requests, restricted to the
+ * union of the per-request scopes and re-checked per request in code.
+ *
+ * FAILS SOFT, only ever narrower: unreadable memberships leave each request
+ * its filed-at studio, unreadable siblings leave the deciding studio alone
+ * (both logged). A failed SHIFT read is still returned as `error` with no
+ * counts; both callers already degrade that to "no badge", never to a hidden
+ * list or queue.
+ */
+export async function countLeaveClashes(db, requests, todayIso, { user } = {}) {
   const open = (requests || []).filter((r) => (r.status === 'pending' || r.status === 'approved') && clashWindow(r, todayIso))
   if (open.length === 0) return { counts: {}, error: null }
-  const profileIds = [...new Set(open.map((r) => r.profile_id))]
-  const windows = open.map((r) => clashWindow(r, todayIso))
-  const lo = windows.map((w) => w.lo).sort()[0]
-  const hi = windows.map((w) => w.hi).sort().at(-1)
-  const { rows, error } = await readAssignmentsInRange(
-    db, profileIds, lo, hi, 'id, profile_id, status, shift_blocks!inner(block_date)',
-  )
-  if (error) return { counts: {}, error }
-  return { counts: bucketClashCounts(open, rows, todayIso), error: null }
+
+  const own = user?.id ? open.filter((r) => r.profile_id === user.id) : []
+  const others = open.filter((r) => !own.includes(r))
+  let counts = {}
+
+  if (own.length > 0) {
+    const { lo, hi } = spanOf(own, todayIso)
+    const { rows, error } = await readAssignmentsInRange(db, [user.id], lo, hi, COUNT_SELECT)
+    if (error) return { counts: {}, error }
+    counts = bucketClashCounts(own, rows, todayIso)
+  }
+  if (others.length === 0) return { counts, error: null }
+
+  // Where the caller decides each request from.
+  const { byProfile, error: memberErr } = await getLocationIdsByProfile(db, others.map((r) => r.profile_id))
+  if (memberErr) {
+    logWarn('time-off', 'memberships unreadable; leave clash counts use the filed-at studio only', { err: memberErr.message })
+  }
+  const anchorsByRequest = new Map(others.map((r) => [r.id, decidingLocationIds(user, r.location_id, byProfile.get(r.profile_id) || [])]))
+
+  // Each deciding studio → itself plus its organisation's other studios.
+  const anchors = [...new Set([...anchorsByRequest.values()].flat())]
+  const orgScope = new Map(await Promise.all(anchors.map(async (anchor) => {
+    const { ids, error: sibErr } = await siblingLocationIds(db, anchor)
+    if (sibErr) {
+      logWarn('time-off', 'sibling studios unreadable; leave clash count is the deciding studio only', { locationId: anchor, err: sibErr.message })
+    }
+    return [anchor, [anchor, ...ids]]
+  })))
+  const scopeByRequestId = new Map(others.map((r) => [r.id, new Set(anchorsByRequest.get(r.id).flatMap((a) => orgScope.get(a)))]))
+
+  const countable = others.filter((r) => scopeByRequestId.get(r.id).size > 0)
+  let rows = []
+  if (countable.length > 0) {
+    const { lo, hi } = spanOf(countable, todayIso)
+    const union = [...new Set(countable.flatMap((r) => [...scopeByRequestId.get(r.id)]))]
+    const read = await readAssignmentsInRange(db, [...new Set(countable.map((r) => r.profile_id))], lo, hi, COUNT_SELECT, union)
+    if (read.error) return { counts: {}, error: read.error }
+    rows = read.rows
+  }
+  return { counts: { ...counts, ...bucketClashCounts(others, rows, todayIso, scopeByRequestId) }, error: null }
 }

@@ -119,7 +119,9 @@ export async function GET(request) {
   // each open request collides with. Advisory: a failed count degrades to no
   // count rather than hiding the requests.
   if (searchParams.get('with_clashes') === '1') {
-    const { counts, error: clashError } = await countLeaveClashes(db, rows.filter((r) => !r.expired), today)
+    // ORGSCOPE.2 — counted per request from where THIS caller decides it, so
+    // the badge is the number the approve list will show them.
+    const { counts, error: clashError } = await countLeaveClashes(db, rows.filter((r) => !r.expired), today, { user })
     if (clashError) {
       console.error('[time-off] clash count failed', clashError.message)
     } else {
