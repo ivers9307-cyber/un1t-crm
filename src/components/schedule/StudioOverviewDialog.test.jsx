@@ -21,7 +21,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, cleanup, screen, fireEvent, act, waitFor, within } from '@testing-library/react'
 
-import StudioOverviewStrip from '@/components/StudioOverviewStrip'
+import StudioOverviewStrip from '@/components/schedule/StudioOverviewDialog'
 
 const RANGE = { from: '2026-09-21', to: '2026-09-27' }
 const LOCATION = 'a0000000-0000-0000-0000-000000000001'

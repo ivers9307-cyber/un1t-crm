@@ -7,7 +7,7 @@
 
 import { useState, useCallback, useRef } from 'react'
 import ScheduleCalendar from './ScheduleCalendar'
-import StudioOverviewStrip from './StudioOverviewStrip'
+import StudioOverviewStrip from './schedule/StudioOverviewDialog'
 import { MANAGER_ROLES } from '@/lib/schemas'
 
 const canManage = (role) => MANAGER_ROLES.includes(role)
