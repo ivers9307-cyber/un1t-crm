@@ -11,37 +11,39 @@
 
 import { useEffect, useState } from 'react'
 import Modal from '@/components/ui/Modal'
-import { rosterChangeSentence, rosterChangeTold, rosterChangeByline } from '@/lib/roster-change-format'
-import { SESSION_ENDED_MESSAGE } from './useScheduleData'
+import {
+  rosterChangeSentence, rosterChangeTold, rosterChangeByline, ROSTER_CHANGE_LOG_MAX_ROWS,
+} from '@/lib/roster-change-format'
+import { readJson } from './useScheduleData'
 
 export default function RosterChangeLogDrawer({ locationId, periodStart, periodEnd, periodLabel, onClose, restoreFocusRef }) {
   // Starts in `loading`, so the effect below never sets state synchronously.
   const [state, setState] = useState({ loading: true, error: null, changes: [], truncated: false })
 
   useEffect(() => {
+    // The generation guard in its effect-scoped form: a response for a period
+    // that is no longer the one on screen (or for a drawer that has closed)
+    // writes nothing.
     let cancelled = false
     async function load() {
       try {
-        const res = await fetch(`/api/schedule/change-log?location_id=${locationId}&from=${periodStart}&to=${periodEnd}`)
-        const body = await res.json().catch(() => null)
-        // The generation guard in its effect-scoped form: a response for a
-        // period that is no longer the one on screen writes nothing.
+        // readJson is the schedule screen's one reader: it THROWS on anything
+        // that is not a success, in words an operator can act on. A dead
+        // session reads as signed out whether it arrives as a 401 or, as in
+        // production, as a followed redirect to /login (200 + HTML); a 403
+        // keeps the server's own sentence.
+        const body = await readJson(`/api/schedule/change-log?location_id=${locationId}&from=${periodStart}&to=${periodEnd}`)
         if (cancelled) return
-        if (res.status === 401) {
-          // ROSTER-FIX.6a-8 — a dead session is not a server fault. Same words
-          // as the rest of the schedule screen.
-          setState({ loading: false, error: SESSION_ENDED_MESSAGE, changes: [], truncated: false })
-          return
-        }
-        if (!res.ok || !body?.success) {
-          setState({ loading: false, error: body?.error || `Could not load the changes (${res.status})`, changes: [], truncated: false })
-          return
-        }
         setState({ loading: false, error: null, changes: body.data?.changes || [], truncated: Boolean(body.data?.truncated) })
-      } catch {
-        // ROSTER-FIX.6a — never print e.message: a dropped connection reaches
-        // the operator as "Failed to fetch".
-        if (!cancelled) setState({ loading: false, error: 'Network error, could not load the changes.', changes: [], truncated: false })
+      } catch (e) {
+        if (cancelled) return
+        // ROSTER-FIX.6a — fetch rejects with a TypeError when the connection
+        // drops, and its message ("Failed to fetch") is not for an operator.
+        // Everything readJson throws itself is a plain Error written for one.
+        const message = e instanceof TypeError || !e?.message
+          ? 'Network error, could not load the changes.'
+          : e.message
+        setState({ loading: false, error: message, changes: [], truncated: false })
       }
     }
     load()
@@ -52,7 +54,22 @@ export default function RosterChangeLogDrawer({ locationId, periodStart, periodE
   const untold = changes.filter((c) => !c.notified_at).length
 
   return (
-    <Modal open onClose={onClose} title="Changes since publish" size="lg" restoreFocusRef={restoreFocusRef}>
+    <Modal
+      open
+      onClose={onClose}
+      title="Changes since publish"
+      size="lg"
+      restoreFocusRef={restoreFocusRef}
+      footer={(
+        <button
+          type="button"
+          onClick={onClose}
+          className="px-3 py-2 rounded-md text-sm border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30"
+        >
+          Close
+        </button>
+      )}
+    >
       <div>
         <div className="text-xs text-un1t-subtle mb-3">{periodLabel}</div>
 
@@ -84,12 +101,22 @@ export default function RosterChangeLogDrawer({ locationId, periodStart, periodE
               )}
             </div>
             {/* A scrolling box with nothing focusable inside cannot be scrolled
-                from the keyboard, so the box itself takes focus and a name. */}
+                from the keyboard, so the box itself takes focus and a name.
+
+                ONE scroller, not two. Modal's body scrolls too, and a fixed
+                60vh list inside it double-scrolled on a short viewport. The cap
+                is the viewport minus everything else the dialog stacks: 2rem
+                of backdrop padding, the header and footer bars (~3.1rem and
+                ~3.6rem), the body's 2rem of padding, and the period, summary
+                and cut-short lines above and below the list (~5rem). 17rem
+                leaves a little slack, so the body never needs its own scroll
+                while the list has room; min-h keeps a usable list on a very
+                short screen, where the body scrolling is the lesser evil. */}
             <div
               role="region"
               aria-label="Changes, newest first"
               tabIndex={0}
-              className="max-h-[60vh] overflow-y-auto rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-un1t-accent"
+              className="max-h-[calc(100vh-17rem)] min-h-[6rem] overflow-y-auto rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-un1t-accent"
             >
               <ul data-testid="roster-change-list" className="divide-y divide-un1t-border">
                 {changes.map((c) => {
@@ -119,20 +146,10 @@ export default function RosterChangeLogDrawer({ locationId, periodStart, periodE
               </ul>
             </div>
             {truncated && (
-              <p className="text-xs text-un1t-subtle mt-2">Showing the most recent 5,000. Pick a shorter period to see older ones.</p>
+              <p className="text-xs text-un1t-subtle mt-2">Showing the most recent {ROSTER_CHANGE_LOG_MAX_ROWS.toLocaleString('en-IE')}. Pick a shorter period to see older ones.</p>
             )}
           </>
         )}
-
-        <div className="flex justify-end mt-4">
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-3 py-2 rounded-md text-sm border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30"
-          >
-            Close
-          </button>
-        </div>
       </div>
     </Modal>
   )

@@ -8,7 +8,7 @@
 
 import React from 'react'
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, cleanup, within } from '@testing-library/react'
+import { render, screen, cleanup, within, act } from '@testing-library/react'
 import RosterChangeLogDrawer from './RosterChangeLogDrawer.jsx'
 
 const change = (over = {}) => ({
@@ -104,7 +104,8 @@ describe('RosterChangeLogDrawer', () => {
   })
 
   it('a dropped connection is an error too, in words an operator can read', async () => {
-    global.fetch = vi.fn(async () => { throw new Error('Failed to fetch') })
+    // What a browser's fetch really rejects with when the connection drops.
+    global.fetch = vi.fn(async () => { throw new TypeError('Failed to fetch') })
     render(<RosterChangeLogDrawer {...props} />)
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toMatch(/Network error/)
@@ -150,5 +151,65 @@ describe('RosterChangeLogDrawer', () => {
     const list = await screen.findByTestId('roster-change-list')
     expect(list.textContent).toMatch(/Assigned Coach D \(left\) to/)
     expect(list.textContent).toMatch(/Manager E \(left\) · /)
+  })
+
+  // In production a signed-out request is REDIRECTED to /login by src/proxy.js;
+  // fetch follows it and gets 200 + HTML. That used to read "Could not load the
+  // changes (200)".
+  it('a request redirected to /login reads as signed out', async () => {
+    global.fetch = vi.fn(async () => ({ ok: true, status: 200, redirected: true, json: async () => { throw new Error("Unexpected token '<'") } }))
+    render(<RosterChangeLogDrawer {...props} />)
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toMatch(/signed out/i)
+    expect(alert.textContent).not.toMatch(/200/)
+    expect(screen.queryByText(/No changes since this was published/)).toBeNull()
+  })
+
+  it('so does a 200 that is not JSON, even without the redirected flag', async () => {
+    global.fetch = vi.fn(async () => ({ ok: true, status: 200, redirected: false, json: async () => { throw new Error("Unexpected token '<'") } }))
+    render(<RosterChangeLogDrawer {...props} />)
+    expect((await screen.findByRole('alert')).textContent).toMatch(/signed out/i)
+  })
+
+  it('a 403 keeps the server\'s own words, and never says signed out', async () => {
+    global.fetch = answer(403, { success: false, error: 'Forbidden — location not in your assignments' })
+    render(<RosterChangeLogDrawer {...props} />)
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toMatch(/location not in your assignments/)
+    expect(alert.textContent).not.toMatch(/signed out/i)
+  })
+
+  it('a late answer for a period that is no longer on screen writes nothing', async () => {
+    // Deleting the `cancelled` guard in the drawer's effect must fail this.
+    const pending = {}
+    global.fetch = vi.fn((url) => new Promise((resolve) => { pending[String(url).includes('from=2026-09-14') ? 'first' : 'second'] = resolve }))
+    const reply = (changes) => ({ ok: true, status: 200, json: async () => ({ success: true, data: { changes, truncated: false } }) })
+
+    const { rerender } = render(<RosterChangeLogDrawer {...props} />)
+    rerender(<RosterChangeLogDrawer {...props} periodStart="2026-09-21" periodEnd="2026-09-27" periodLabel="21 Sep – 27 Sep 2026" />)
+    expect(global.fetch).toHaveBeenCalledTimes(2)
+
+    // The SECOND request answers first…
+    await act(async () => { pending.second(reply([change({ id: 'new', coach_name: 'Coach New', block_date: '2026-09-22' })])) })
+    expect((await screen.findByTestId('roster-change-list')).textContent).toMatch(/Coach New/)
+
+    // …and the first one lands late. It is fully flushed before the assertion,
+    // so this is not a wait for something to stop happening.
+    await act(async () => { pending.first(reply([change({ id: 'old', coach_name: 'Coach Old' })])) })
+    const text = screen.getByTestId('roster-change-list').textContent
+    expect(text).toMatch(/Coach New/)
+    expect(text).not.toMatch(/Coach Old/)
+  })
+
+  it('Close sits in the dialog footer, outside the scrolling body, and closes', async () => {
+    const onClose = vi.fn()
+    global.fetch = answer(200, { success: true, data: { changes: [change()], truncated: false } })
+    render(<RosterChangeLogDrawer {...props} onClose={onClose} />)
+    const region = await screen.findByRole('region', { name: 'Changes, newest first' })
+    const close = within(screen.getByRole('dialog')).getByText('Close')
+    // The footer is a sibling of Modal's scrolling body, not inside it.
+    expect(region.parentElement.parentElement.contains(close)).toBe(false)
+    close.click()
+    expect(onClose).toHaveBeenCalledTimes(1)
   })
 })
