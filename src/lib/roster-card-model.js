@@ -193,3 +193,37 @@ export function monthCellLines(blocks, { todayIso, isManager = false, limit = 3 
   })
   return { lines, more: Math.max(0, sorted.length - limit) }
 }
+
+/**
+ * What the one toolbar row shows, and what the More menu holds.
+ *
+ * The gating is the gating ScheduleCalendar has always had, written down once:
+ *   everyone   Time off, My shifts | All staff, Week | Month
+ *   manager    Select multiple, Copy last week, Copy last month, Manage templates
+ *   manager + week view   Publish
+ * Icons are attached by RosterToolbar (by key); this stays a pure data shape.
+ * `checked` present = a menuitemcheckbox. `href` present = a link, not a button.
+ */
+export function rosterToolbarModel({ isManager = false, viewType = 'week', selectMode = false, selectedCount = 0, copying = false } = {}) {
+  if (!isManager) {
+    return { timeOffInline: true, moreItems: [], moreLabel: 'More', moreActive: false, showPublish: false }
+  }
+  return {
+    timeOffInline: false,
+    moreLabel: copying ? 'Copying…' : 'More',
+    moreActive: selectMode,
+    showPublish: viewType === 'week',
+    moreItems: [
+      { key: 'time-off', label: 'Time off', href: '/schedule/time-off' },
+      {
+        key: 'select',
+        label: selectMode ? `Exit multi-select (${selectedCount})` : 'Select multiple',
+        checked: selectMode,
+        title: selectMode ? 'Exit multi-select' : 'Select multiple shifts to assign a coach in bulk',
+      },
+      { key: 'copy-week', label: 'Copy last week', disabled: copying, title: "Duplicate last week's shifts into this week" },
+      { key: 'copy-month', label: 'Copy last month', disabled: copying, title: "Duplicate last month's shifts into this month" },
+      { key: 'templates', label: 'Manage templates', href: '/settings/shifts', title: 'Add, edit, or retire the shift templates that build this roster' },
+    ],
+  }
+}

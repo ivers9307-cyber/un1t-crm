@@ -3,7 +3,7 @@
 // and toolbar make is made HERE, in pure functions, because jsdom cannot see
 // layout and a component test can only say "this text is present".
 import { describe, it, expect } from 'vitest'
-import { cardTone, shiftCardModel, dayHeaderStatus, monthCellLines } from './roster-card-model'
+import { cardTone, shiftCardModel, dayHeaderStatus, monthCellLines, rosterToolbarModel } from './roster-card-model'
 
 const TODAY = '2026-09-21'
 const block = (over = {}) => ({
@@ -196,5 +196,53 @@ describe('monthCellLines', () => {
     expect(monthCellLines(null, { todayIso: TODAY })).toEqual({ lines: [], more: 0 })
     const two = [mb('a', '06:00', '07:00', 1, on('A B')), mb('b', '07:00', '08:00', 1, on('C D'))]
     expect(monthCellLines(two, { todayIso: TODAY, limit: 1 }).more).toBe(1)
+  })
+})
+
+describe('rosterToolbarModel', () => {
+  const base = { isManager: true, viewType: 'week', selectMode: false, selectedCount: 0, copying: false }
+
+  it('a manager in week view: five actions in More, in this order, and Publish on the row', () => {
+    const m = rosterToolbarModel(base)
+    expect(m.moreItems.map((i) => i.key)).toEqual(['time-off', 'select', 'copy-week', 'copy-month', 'templates'])
+    expect(m.moreItems.map((i) => i.label)).toEqual(['Time off', 'Select multiple', 'Copy last week', 'Copy last month', 'Manage templates'])
+    expect(m.showPublish).toBe(true)
+    expect(m.timeOffInline).toBe(false)
+  })
+
+  it('links are links: Time off and Manage templates keep their hrefs', () => {
+    const byKey = Object.fromEntries(rosterToolbarModel(base).moreItems.map((i) => [i.key, i]))
+    expect(byKey['time-off'].href).toBe('/schedule/time-off')
+    expect(byKey.templates.href).toBe('/settings/shifts')
+    expect(byKey['copy-week'].href).toBeUndefined()
+  })
+
+  it('Publish is week-view only; everything in More stays reachable in month view', () => {
+    const m = rosterToolbarModel({ ...base, viewType: 'month' })
+    expect(m.showPublish).toBe(false)
+    expect(m.moreItems).toHaveLength(5)
+  })
+
+  it('a coach: Time off inline, no More, no Publish', () => {
+    const m = rosterToolbarModel({ ...base, isManager: false })
+    expect(m.moreItems).toEqual([])
+    expect(m.timeOffInline).toBe(true)
+    expect(m.showPublish).toBe(false)
+  })
+
+  it('select mode is a checked item that says how to leave it, and marks the menu button', () => {
+    const m = rosterToolbarModel({ ...base, selectMode: true, selectedCount: 3 })
+    const item = m.moreItems.find((i) => i.key === 'select')
+    expect(item.checked).toBe(true)
+    expect(item.label).toBe('Exit multi-select (3)')
+    expect(m.moreActive).toBe(true)
+    expect(rosterToolbarModel(base).moreItems.find((i) => i.key === 'select').checked).toBe(false)
+  })
+
+  it('both copies are disabled while a copy runs, and the menu button says so', () => {
+    const m = rosterToolbarModel({ ...base, copying: true })
+    expect(m.moreItems.filter((i) => i.disabled).map((i) => i.key)).toEqual(['copy-week', 'copy-month'])
+    expect(m.moreLabel).toBe('Copying…')
+    expect(rosterToolbarModel(base).moreLabel).toBe('More')
   })
 })
