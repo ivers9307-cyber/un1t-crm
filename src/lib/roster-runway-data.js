@@ -42,12 +42,21 @@ export async function fetchRosterRunways(db, locationIds, { todayIso = dublinTod
   const weeksByLocation = Object.fromEntries(ids.map((id) => [id, []]))
   if (ids.length === 0) return { success: true, data: { byLocation, weeksByLocation } }
 
-  const { data: templates, error: tplErr } = await db
-    .from('shift_templates')
-    .select('location_id, days_of_week')
-    .eq('active', true)
-    .in('location_id', ids)
-  if (tplErr) return { success: false, error: tplErr.message }
+  // Paged and ordered like the blocks read below: .select() is capped at 1,000
+  // rows, and a studio whose active templates fell past the cap would silently
+  // read as "nothing to roster", i.e. ready.
+  let templates
+  try {
+    templates = await selectAll((lo, hi) => db
+      .from('shift_templates')
+      .select('id, location_id, days_of_week')
+      .eq('active', true)
+      .in('location_id', ids)
+      .order('id', { ascending: true })
+      .range(lo, hi))
+  } catch (e) {
+    return { success: false, error: e?.message || 'Failed to read shift templates' }
+  }
 
   const rostered = [...new Set(
     (templates || [])

@@ -15,14 +15,18 @@ function makeDb({ templates = [], templatesError = null, blocks = [], blocksErro
     from(table) {
       const call = { table, filters: [] }
       calls.push(call)
-      const result = table === 'shift_templates'
-        ? { data: templates, error: templatesError }
-        : { data: blocks, error: blocksError }
+      const [rows, error] = table === 'shift_templates' ? [templates, templatesError] : [blocks, blocksError]
       const b = {}
       for (const m of ['select', 'eq', 'in', 'gte', 'lte', 'order', 'range']) {
         b[m] = (...args) => { call.filters.push([m, ...args]); return b }
       }
-      b.then = (resolve, reject) => Promise.resolve(result).then(resolve, reject)
+      // Like PostgREST: a read is CAPPED at 1,000 rows whatever you ask for,
+      // and only .range() moves the window.
+      b.then = (resolve, reject) => {
+        const range = call.filters.find(([m]) => m === 'range')
+        const [lo, hi] = range ? [range[1], Math.min(range[2], range[1] + 999)] : [0, 999]
+        return Promise.resolve({ data: error ? null : rows.slice(lo, hi + 1), error }).then(resolve, reject)
+      }
       return b
     },
   }
@@ -57,6 +61,20 @@ describe('fetchRosterRunways', () => {
     const res = await fetchRosterRunways(db, [NORTH], { todayIso: TODAY })
     expect(res.data.byLocation).toEqual({ [NORTH]: null })
     expect(db.calls.map((c) => c.table)).toEqual(['shift_templates'])
+  })
+
+  it('templates are read paged and ordered: the 1,001st active template still counts', async () => {
+    // 1,000 templates elsewhere come first; NORTH's only one is row 1,001. An
+    // un-paged read stops at 1,000 and NORTH silently reads as "nothing to roster".
+    const many = [...Array.from({ length: 1000 }, () => tpl(SOUTH, [])), tpl(NORTH)]
+    const db = makeDb({ templates: many, blocks: [block(NORTH, '2026-09-28')] })
+    const { data } = await fetchRosterRunways(db, [NORTH, SOUTH], { todayIso: TODAY })
+    expect(data.byLocation[NORTH]).toMatchObject({ weekStart: '2026-09-28', severity: 'amber' })
+    const tplCalls = db.calls.filter((c) => c.table === 'shift_templates')
+    expect(tplCalls).toHaveLength(2)
+    expect(tplCalls[0].filters).toContainEqual(['order', 'id', { ascending: true }])
+    expect(tplCalls[0].filters).toContainEqual(['range', 0, 999])
+    expect(tplCalls[1].filters).toContainEqual(['range', 1000, 1999])
   })
 
   it('reads NEXT Monday to the Sunday of the week after (never the current week), ordered and ranged (the 1,000-row cap)', async () => {
