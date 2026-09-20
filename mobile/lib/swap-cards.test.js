@@ -2,6 +2,9 @@
 // COVERLOOP.2 — what the phone's swap surfaces say and decide. Pure: there is
 // no React Native component test runner, so the components only render these.
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   swapDayLabel, swapShiftWhen, postedSwapShift, swapReasonForPost, swapConfirmCopy, swapPostedCopy,
   hasOpenSwap, annotateOpenSwaps,
@@ -162,5 +165,25 @@ describe('labels', () => {
     expect(SWAP_PICKER_TITLE).toBe('Ask a coach to cover')
     expect(SWAP_PICKER_EMPTY).toBe('No other coaches at this studio to ask.')
     expect(SWAP_ALREADY_OPEN_MESSAGE).toBe('A swap request is already open for this shift. You can cancel it under My requests on the Dashboard tab.')
+  })
+})
+
+// An open post tells eligible coaches as well as managers, so "Managers have
+// been notified." was untrue, and the Schedule tab and the Dashboard said
+// different things about the same POST. Both read swapPostedCopy; there is no
+// RN component runner, so the wiring is pinned by reading the two sources.
+describe('one success message for an open post, on both surfaces', () => {
+  const here = dirname(fileURLToPath(import.meta.url))
+  const surfaces = [
+    '../app/(staff)/(tabs)/schedule.jsx',
+    '../components/dashboard/PersonalDashboard.jsx',
+  ]
+  it.each(surfaces)('%s uses swapPostedCopy and carries no wording of its own', (rel) => {
+    const src = readFileSync(join(here, rel), 'utf8')
+    expect(src).toContain('swapPostedCopy(')
+    expect(src).not.toContain('Managers have been notified')
+  })
+  it('says who is told, truthfully for both', () => {
+    expect(swapPostedCopy(null).message).toBe('Coaches who can cover it and your managers have been notified.')
   })
 })

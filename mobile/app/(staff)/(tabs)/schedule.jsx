@@ -35,7 +35,7 @@ import { canMobile } from '../../../lib/permissions'
 import { useIsTablet } from '../../../lib/use-is-tablet'
 import { effShiftStart, effShiftEnd, blockStart as blockDefaultStart, blockEnd as blockDefaultEnd, teamRosterForDay, initials } from '../../../lib/schedule-team'
 import { canAdjustShiftTimes, canCancelTimeOff, MANAGER_ROLES, scheduleViewFromParam } from '../../../lib/schedule-manage'
-import { hasOpenSwap, swapShiftWhen, SWAP_PENDING_LABEL, SWAP_ALREADY_OPEN_MESSAGE } from '../../../lib/swap-cards'
+import { hasOpenSwap, swapShiftWhen, swapPostedCopy, SWAP_PENDING_LABEL, SWAP_ALREADY_OPEN_MESSAGE } from '../../../lib/swap-cards'
 import { createInFlightGuard } from '../../../lib/swap-flow'
 import ManageMode from '../../../components/schedule/ManageMode'
 // LEAVE.2 — one label per leave type (unpaid/other used to read "Time off").
@@ -561,7 +561,9 @@ export default function Schedule() {
               locationId: activeLocation.id,
             }).finally(() => swapPostGuard.current.end())
             if (res.success) {
-              Alert.alert('Posted', 'Managers have been notified.')
+              // Same words as the Dashboard: coaches who can cover are told too.
+              const done = swapPostedCopy(null)
+              Alert.alert(done.title, done.message)
               fetchWeek()
             } else {
               Alert.alert('Couldn’t post', res.error || 'Unknown error')
