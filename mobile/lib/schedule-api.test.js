@@ -45,7 +45,9 @@ describe('schedule-api — every helper is exercised', () => {
       'cancelTimeOffRequest',
       'createSwapRequest',
       'createTimeOffRequest',
+      'getLeavePreview',
       'getLocationStaff',
+      'getMyAllowance',
       'getMyShifts',
       'getMyTimeOff',
       'getOpenSwaps',
@@ -236,5 +238,35 @@ describe('assignments and blocks (manager surfaces)', () => {
     // fields=picker is load-bearing: plain /api/staff hands an admin caller
     // hourly_rate and annual_salary just to render a dropdown.
     expect(lastCall()).toEqual(['/api/staff?fields=picker', { locationId: LOC }])
+  })
+})
+
+describe('LEAVEPHONE.1 — leave form reads', () => {
+  it('getMyAllowance asks for the caller\'s own allowance: a year, and NO profile_id', async () => {
+    await schedule.getMyAllowance({ year: 2026, locationId: LOC })
+    expect(lastPathname()).toBe('/api/schedule/allowances')
+    expect(lastQuery()).toEqual({ year: '2026' })
+    expect(lastCall()[1]).toEqual({ locationId: LOC })
+  })
+
+  it('getLeavePreview sends preview=1, the type, the route\'s date names and the studio the POST will file at — and NO profile_id', async () => {
+    await schedule.getLeavePreview({ type: 'holiday', startDate: '2026-06-01', endDate: '2026-06-07', locationId: LOC })
+    expect(lastPathname()).toBe('/api/schedule/time-off')
+    expect(lastQuery()).toEqual({ preview: '1', type: 'holiday', start_date: '2026-06-01', end_date: '2026-06-07', location_id: LOC })
+    expect(lastCall()[1]).toEqual({ locationId: LOC })
+  })
+
+  it('getLeavePreview with a one-tap pick sends end_date = start_date; no studio sends no location_id', async () => {
+    await schedule.getLeavePreview({ type: 'sick', startDate: '2026-10-05', endDate: null, locationId: undefined })
+    expect(lastQuery()).toEqual({ preview: '1', type: 'sick', start_date: '2026-10-05', end_date: '2026-10-05' })
+  })
+
+  it('getLeavePreview asks about the SAME studio createTimeOffRequest files at', async () => {
+    await schedule.getLeavePreview({ type: 'holiday', startDate: '2026-06-01', endDate: '2026-06-07', locationId: LOC })
+    const previewStudio = lastQuery().location_id
+    api.mockClear()   // lastCall() insists on exactly one call
+    await schedule.createTimeOffRequest({ type: 'holiday', startDate: '2026-06-01', endDate: '2026-06-07', locationId: LOC })
+    expect(lastCall()[1].body.location_id).toBe(previewStudio)
+    expect(previewStudio).toBe(LOC)
   })
 })
