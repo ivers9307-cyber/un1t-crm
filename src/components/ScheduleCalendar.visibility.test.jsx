@@ -191,3 +191,61 @@ describe('publish preview staffing list (ROSTERVIS.1)', () => {
     expect(publishButtons[publishButtons.length - 1].disabled).toBe(false)
   })
 })
+
+describe('publish preview clashes (COPYLEAVE.1)', () => {
+  const BASE = { blockCount: 2, periodProjectedEur: 0, monthProjectedTotalEur: 0, monthlyBudgetEur: 100, overBudget: false, staffingGaps: [] }
+  const LEAVE_CLASH = {
+    block_id: 'short', block_date: BLOCK_DATE, start_time: '09:00', end_time: '12:00', name: 'Early',
+    profile_id: 'u2', coach_name: 'Coach A', leave_start: BLOCK_DATE, leave_end: BLOCK_DATE,
+  }
+  const DOUBLE = {
+    profile_id: 'u3', coach_name: 'Coach B', block_date: BLOCK_DATE,
+    first: { block_id: 'ok', name: 'Lunch', start_time: '12:00', end_time: '13:00', location_name: null },
+    second: { block_id: 'ob1', name: 'Open Gym', start_time: '12:30', end_time: '14:00', location_name: 'Studio B' },
+  }
+
+  async function openPreview(impact) {
+    await renderCalendar({ blocks: [SHORT_BLOCK, OK_BLOCK], impact })
+    fireEvent.click(screen.getByText('Publish'))
+    await screen.findByText('Blocks in period', {}, { timeout: 5000 })
+  }
+
+  it('names the coach on leave and the double-booked coach, with times and the other studio', async () => {
+    await openPreview({ ...BASE, leaveClashes: [LEAVE_CLASH], doubleBookings: [DOUBLE], crossLocationChecked: true })
+    const box = screen.getByTestId('publish-roster-clashes')
+    expect(box.textContent).toMatch(/1 coach rostered on approved leave/)
+    expect(box.textContent).toMatch(/Coach A/)
+    expect(box.textContent).toMatch(/9am Early/)
+    expect(box.textContent).toMatch(/1 double booking/)
+    expect(box.textContent).toMatch(/Coach B/)
+    expect(box.textContent).toMatch(/12pm–1pm Lunch/)
+    expect(box.textContent).toMatch(/12:30pm–2pm Open Gym \(Studio B\)/)
+    // Never money.
+    expect(box.textContent).not.toMatch(/€/)
+    // Information only: Publish is still there and enabled.
+    const publishButtons = screen.getAllByRole('button', { name: 'Publish' })
+    expect(publishButtons[publishButtons.length - 1].disabled).toBe(false)
+  })
+
+  it('sits beside the staffing list, above the cost tiles', async () => {
+    await openPreview({ ...BASE, leaveClashes: [LEAVE_CLASH], doubleBookings: [], crossLocationChecked: true })
+    const box = screen.getByTestId('publish-roster-clashes')
+    const tiles = screen.getByText('Blocks in period')
+    expect(box.compareDocumentPosition(tiles) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('renders nothing when there is nothing to say', async () => {
+    await openPreview({ ...BASE, leaveClashes: [], doubleBookings: [], crossLocationChecked: true })
+    expect(screen.queryByTestId('publish-roster-clashes')).toBeNull()
+  })
+
+  it('renders nothing for an older server that does not send the lists', async () => {
+    await openPreview(BASE)
+    expect(screen.queryByTestId('publish-roster-clashes')).toBeNull()
+  })
+
+  it('says so when other studios could not be checked, rather than implying an all-clear', async () => {
+    await openPreview({ ...BASE, leaveClashes: [], doubleBookings: [], crossLocationChecked: false })
+    expect(screen.getByTestId('publish-roster-clashes').textContent).toMatch(/Shifts at other studios could not be checked/)
+  })
+})

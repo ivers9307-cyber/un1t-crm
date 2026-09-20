@@ -2265,6 +2265,13 @@ function PublishRosterModal({ locationId, isOwner, period, onSubmit, onClose, pu
                 nobody told. Listed ABOVE the cost, and information only: it
                 never blocks the publish. */}
             <PublishStaffingGaps gaps={impact.staffingGaps} />
+            {/* COPYLEAVE.1 — who is rostered on approved leave, and who is
+                double-booked (another studio included). Information only. */}
+            <PublishRosterClashes
+              leaveClashes={impact.leaveClashes}
+              doubleBookings={impact.doubleBookings}
+              crossLocationChecked={impact.crossLocationChecked}
+            />
             <div className="grid grid-cols-2 gap-3 mb-4 text-sm">
               <div className="rounded-lg border border-un1t-border p-3">
                 <div className="text-[10px] uppercase tracking-wider text-un1t-subtle">Blocks in period</div>
@@ -2380,6 +2387,58 @@ function PublishStaffingGaps({ gaps }) {
           )
         })}
       </ul>
+    </div>
+  )
+}
+
+// COPYLEAVE.1 — coaches rostered on approved leave, and double bookings, in
+// the period about to be published. Both come from projectPublishImpact. An
+// older server that sends neither renders nothing. Names and times only.
+function PublishRosterClashes({ leaveClashes, doubleBookings, crossLocationChecked }) {
+  if (!Array.isArray(leaveClashes) || !Array.isArray(doubleBookings)) return null
+  const unchecked = crossLocationChecked === false
+  if (leaveClashes.length === 0 && doubleBookings.length === 0 && !unchecked) return null
+  const dayOf = (iso) => new Date(`${iso}T00:00:00`).toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short' })
+  const slot = (s) => `${formatTime(s.start_time)}–${formatTime(s.end_time)} ${s.name}${s.location_name ? ` (${s.location_name})` : ''}`
+  return (
+    <div
+      data-testid="publish-roster-clashes"
+      className="mb-4 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm"
+    >
+      {leaveClashes.length > 0 && (
+        <div>
+          <div className="font-medium text-amber-700 flex items-center gap-1.5">
+            <AlertTriangle size={14} aria-hidden="true" />
+            {leaveClashes.length} coach{leaveClashes.length === 1 ? '' : 'es'} rostered on approved leave
+          </div>
+          <ul className="mt-1.5 max-h-32 overflow-y-auto space-y-1">
+            {leaveClashes.map((c) => (
+              <li key={`${c.block_id}|${c.profile_id}`} className="text-xs text-un1t-text">
+                <span className="font-medium">{c.coach_name}</span> · {dayOf(c.block_date)} · {formatTime(c.start_time)} {c.name}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {doubleBookings.length > 0 && (
+        <div className={leaveClashes.length > 0 ? 'mt-3' : ''}>
+          <div className="font-medium text-amber-700 flex items-center gap-1.5">
+            <AlertTriangle size={14} aria-hidden="true" />
+            {doubleBookings.length} double booking{doubleBookings.length === 1 ? '' : 's'}
+          </div>
+          <ul className="mt-1.5 max-h-32 overflow-y-auto space-y-1">
+            {doubleBookings.map((d) => (
+              <li key={`${d.profile_id}|${d.first.block_id}|${d.second.block_id}`} className="text-xs text-un1t-text">
+                <span className="font-medium">{d.coach_name}</span> · {dayOf(d.block_date)} · {slot(d.first)} and {slot(d.second)}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {unchecked && (
+        <div className="text-xs text-un1t-subtle mt-2">Shifts at other studios could not be checked.</div>
+      )}
+      <div className="text-xs text-un1t-subtle mt-2">You can still publish.</div>
     </div>
   )
 }
