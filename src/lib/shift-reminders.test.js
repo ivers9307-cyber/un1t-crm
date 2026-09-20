@@ -700,12 +700,25 @@ describe('runShiftReminders', () => {
     expect(summary).toMatchObject({ shift_send_failed: 1, shift_pushed: 0 })
   })
 
-  it('a throwing sender is treated the same way: released, counted, never rethrown', async () => {
+  // notifyUsers is documented as never throwing. If it throws anyway the arm
+  // cannot know whether the push already left, and releasing the claim would
+  // repeat it every 5 minutes: KEEP the claim, say so loudly, never rethrow.
+  it('a THROWING sender keeps the claim (outcome unknown), is logged at error level, and is never rethrown', async () => {
     notifyUsers.mockRejectedValue(new Error('expo down'))
     const db = makeDb()
     const summary = await runShiftReminders(db, { nowMs: NOW, locations: LOCATIONS })
-    expect(db.writes.map((w) => w.op)).toEqual(['insert', 'delete'])
-    expect(summary.shift_send_failed).toBe(1)
+    expect(db.writes.map((w) => w.op)).toEqual(['insert'])
+    expect(logError).toHaveBeenCalledTimes(1)
+    expect(summary).toMatchObject({ shift_send_threw: 1, shift_send_failed: 0, shift_pushed: 0 })
+  })
+
+  it('one coach\'s sender throwing does not stop the next coach\'s reminder', async () => {
+    const mate = shift({ id: 'assign-9', profile_id: 'coach-9', profiles: { id: 'coach-9', full_name: 'Sam Sample' } })
+    fetchApiShiftRows.mockResolvedValue({ rows: [shift(), mate], error: null })
+    notifyUsers.mockRejectedValueOnce(new Error('expo down'))
+    const summary = await runShiftReminders(makeDb(), { nowMs: NOW, locations: LOCATIONS })
+    expect(notifyUsers).toHaveBeenCalledTimes(2)
+    expect(summary).toMatchObject({ shift_send_threw: 1, shift_pushed: 1 })
   })
 
   it('a failed release is logged at error level: that reminder will not retry', async () => {

@@ -403,6 +403,7 @@ function emptySummary() {
     shift_skipped_dup: 0,
     shift_skipped_no_recipient: 0,
     shift_send_failed: 0,
+    shift_send_threw: 0,
     shift_claim_failed: 0,
   }
 }
@@ -434,6 +435,7 @@ const ownLedgerRow = (query, s) =>
  *                           mild, a lost reminder is not.
  *   - ledger read fails  -> throw: fail CLOSED for this tick, next tick retries.
  *   - claim insert fails -> that reminder is NOT sent, logged at error level.
+ *   - sender THROWS      -> outcome unknown: claim KEPT, logged at error level.
  *   - send fails         -> nothing delivered AND push or email failed: claim
  *                           released, next tick retries (inside the send window).
  *
@@ -542,7 +544,13 @@ export async function runShiftReminders(db, { nowMs = Date.now(), locations = []
         },
       })
     } catch (err) {
-      logWarn('shift-reminders', 'notify threw', { err: err?.message, assignment: s.id })
+      // notifyUsers is documented as never throwing. If it throws anyway we do
+      // not know whether the push already left, and releasing the claim would
+      // repeat it every 5 minutes. KEEP the claim: at worst this one reminder
+      // is lost, and it is said at error level.
+      summary.shift_send_threw++
+      logError('shift-reminders', 'notify THREW — outcome unknown, claim KEPT, this reminder will not retry', { err: err?.message, assignment: s.id })
+      continue
     }
 
     // Release ONLY when nothing at all was delivered AND something failed, on
@@ -550,9 +558,9 @@ export async function runShiftReminders(db, { nowMs = Date.now(), locations = []
     // today) the email fallback is the only channel, and a mail blip with
     // failed = 0 used to keep the claim and lose the reminder. Any delivery, on
     // any channel, keeps the claim: a partial success must never repeat.
-    const delivered = !!result && ((result.sent || 0) > 0 || (result.emailed || 0) > 0)
-    const somethingFailed = !!result && ((result.failed || 0) > 0 || (result.email_failed || 0) > 0)
-    if (!result || (!delivered && somethingFailed)) {
+    const delivered = (result?.sent || 0) > 0 || (result?.emailed || 0) > 0
+    const somethingFailed = (result?.failed || 0) > 0 || (result?.email_failed || 0) > 0
+    if (!delivered && somethingFailed) {
       summary.shift_send_failed++
       const { error: releaseErr } = await ownLedgerRow(db.from('push_reminder_sends').delete(), s)
       if (releaseErr) logError('shift-reminders', 'claim release failed — this reminder will NOT retry', { err: releaseErr, assignment: s.id })
@@ -561,13 +569,13 @@ export async function runShiftReminders(db, { nowMs = Date.now(), locations = []
 
     // Diagnostics only (mig 169: push_count / push_invalidated).
     const { error: countErr } = await ownLedgerRow(db.from('push_reminder_sends').update({
-      push_count: result.sent || 0,
-      push_invalidated: result.invalidated || 0,
+      push_count: result?.sent || 0,
+      push_invalidated: result?.invalidated || 0,
     }), s)
     if (countErr) logWarn('shift-reminders', 'ledger count update failed', { err: countErr, assignment: s.id })
 
-    if ((result.sent || 0) > 0) summary.shift_pushed++
-    else if ((result.emailed || 0) > 0) summary.shift_emailed++
+    if ((result?.sent || 0) > 0) summary.shift_pushed++
+    else if ((result?.emailed || 0) > 0) summary.shift_emailed++
     else summary.shift_skipped_no_recipient++
   }
 
