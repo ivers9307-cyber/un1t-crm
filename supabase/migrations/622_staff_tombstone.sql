@@ -67,7 +67,10 @@
 --
 -- SAFE ALONE: yes. Nullable columns, a CHECK every existing row passes (it
 -- binds only rows with deleted_at set, and there are none), one
--- partial index, a function nobody calls until the code deploys. Apply BEFORE
+-- partial index, a function nobody calls until the code deploys; three
+-- triggers that only ever fire for a row with deleted_at set (none exist); and
+-- a REVOKE of write grants that no client uses (every profiles write in the
+-- codebase is service-role — list in the REVOKE section). Apply BEFORE
 -- merging the code: excludeTombstones() filters on deleted_at and PostgREST
 -- 400s on a column that does not exist.
 --
@@ -147,9 +150,25 @@
 --              (SELECT count(*) FROM public.staff_allowances    WHERE profile_id = :id)    AS allowance_rows,
 --              (SELECT count(*) FROM public.contractor_invoices WHERE contractor_id = :id) AS invoices;
 --
+-- (e2) The grants this file revokes — keep the output (it is the rollback
+--     recipe, should one ever be needed):
+--
+--       SELECT grantee, privilege_type, NULL AS column_name FROM information_schema.table_privileges
+--        WHERE table_schema='public' AND table_name='profiles' AND grantee IN ('anon','authenticated')
+--       UNION ALL
+--       SELECT grantee, privilege_type, column_name FROM information_schema.column_privileges
+--        WHERE table_schema='public' AND table_name='profiles' AND grantee IN ('anon','authenticated')
+--        ORDER BY 1, 2, 3;
+--     Expected today: INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER at
+--     table level and INSERT/UPDATE/REFERENCES per column; no table-level
+--     SELECT (mig 153b). Any column-level SELECT rows are left untouched.
+--
 -- ─────────────────────────────────────────────────────────────────────────
 -- POST-APPLY CHECKS
 -- ─────────────────────────────────────────────────────────────────────────
+-- (f0) Re-run (e2). Expected: NO row whose privilege_type is not SELECT (the
+--     file's own DO block already refuses to commit otherwise), and the SELECT
+--     rows identical to before.
 -- (f) SELECT column_name FROM information_schema.columns
 --      WHERE table_schema='public' AND table_name='profiles' AND column_name IN ('deleted_at','deleted_by','deleted_role');  -- 3 rows
 --     SELECT conname FROM pg_constraint WHERE conname = 'profiles_tombstone_is_inactive';                     -- 1 row
@@ -187,6 +206,42 @@ ALTER TABLE public.profiles
 
 CREATE INDEX IF NOT EXISTS idx_profiles_deleted_by
   ON public.profiles (deleted_by) WHERE deleted_by IS NOT NULL;
+
+-- ─── anon / authenticated lose their WRITE grants on profiles ────────────────
+-- Migs 153/153b revoked only SELECT ("Keep INSERT/UPDATE/DELETE alone"). So
+-- both roles still hold table-level INSERT, UPDATE, DELETE, TRUNCATE,
+-- REFERENCES, TRIGGER (and column-level INSERT/UPDATE/REFERENCES) on
+-- profiles, `profiles_update` allows `id = auth.uid()`, and nothing guards
+-- `role` — a signed-in user is kept from `UPDATE profiles SET role='master'`
+-- only by accident (no SELECT grant, so a filtered UPDATE fails; safeupdate
+-- refuses an unfiltered one). That matters more now that role is what a
+-- tombstone's safety rests on.
+-- VERIFIED BEFORE ADDING THIS (2026-09-20): every write to profiles in src/
+-- uses the service-role client — auth/set-pin (x3), admin/master-toggle (x2),
+-- me/preferences, staff (POST), staff/[id] (x3), lib/staff-write — 11 sites;
+-- shared/, mobile/ and champ-app never touch profiles; the only DB-side
+-- writer reachable by a user action is handle_new_user(), SECURITY DEFINER.
+-- A table-level REVOKE also removes the matching column-level grants
+-- (PostgreSQL: "the corresponding column privileges are automatically revoked
+-- on each column"), and SELECT — table or column — is not touched. Verified
+-- against the catalog below, never against this text (the mig 153 lesson).
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON public.profiles FROM anon, authenticated;
+
+DO $$
+DECLARE
+  v_left integer;
+BEGIN
+  SELECT (SELECT count(*) FROM information_schema.table_privileges
+           WHERE table_schema = 'public' AND table_name = 'profiles'
+             AND grantee IN ('anon', 'authenticated') AND privilege_type <> 'SELECT')
+       + (SELECT count(*) FROM information_schema.column_privileges
+           WHERE table_schema = 'public' AND table_name = 'profiles'
+             AND grantee IN ('anon', 'authenticated') AND privilege_type <> 'SELECT')
+    INTO v_left;
+  IF v_left > 0 THEN
+    RAISE EXCEPTION 'mig 622: % write privilege(s) on public.profiles still held by anon/authenticated', v_left;
+  END IF;
+END $$;
 
 -- ─── A tombstone is FROZEN ──────────────────────────────────────────────────
 -- The CHECK above cannot stop an UN-delete: `SET deleted_at = NULL,

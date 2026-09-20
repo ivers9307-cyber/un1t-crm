@@ -217,9 +217,21 @@ async function tombstone(id = GONE, { actor = MASTER, dryRun = false, now = NOW 
   }
 }
 
+// What production holds today (verified read-only by the reviewer): migs
+// 153/153b revoked only SELECT, so anon + authenticated still hold table-level
+// INSERT/UPDATE/DELETE/TRUNCATE/REFERENCES/TRIGGER on profiles, plus
+// column-level INSERT/UPDATE/REFERENCES. One column-level SELECT is seeded too:
+// mig 622 must leave SELECT exactly as it found it.
+const PROD_LIKE_PROFILE_GRANTS = `
+  GRANT INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON public.profiles TO anon, authenticated;
+  GRANT INSERT (full_name, role), UPDATE (full_name, role, active), REFERENCES (id) ON public.profiles TO anon, authenticated;
+  GRANT SELECT (id) ON public.profiles TO authenticated;
+`
+
 beforeAll(async () => {
   db = new PGlite()
   await runSql(BASE_SCHEMA)
+  await runSql(PROD_LIKE_PROFILE_GRANTS)
   await runSql(MIG_622)
   await runSql(MASTER_GUARD)
   await runSql('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO service_role')
@@ -574,6 +586,38 @@ describe('mig 622 — tombstone_staff_profile', () => {
         expect(again.deleted_at).toBeTruthy()
       }
       expect(await snap()).toBe(before)
+    })
+  })
+
+  // The vestigial write grants. Nothing in src/, shared/ or mobile/ writes
+  // profiles through a user-JWT client (all 11 write sites use the service
+  // role), and with them gone `profiles_update USING (id = auth.uid())` can no
+  // longer be the only thing between a signed-in user and their own `role`.
+  describe('anon / authenticated can no longer write profiles', () => {
+    it('no table-level write privilege remains', async () => {
+      const left = await rows(`SELECT grantee, privilege_type FROM information_schema.table_privileges
+        WHERE table_schema = 'public' AND table_name = 'profiles' AND grantee IN ('anon', 'authenticated')`)
+      expect(left).toEqual([])
+    })
+    it('no column-level write privilege remains — and column-level SELECT is left exactly as it was', async () => {
+      const left = await rows(`SELECT grantee, column_name, privilege_type FROM information_schema.column_privileges
+        WHERE table_schema = 'public' AND table_name = 'profiles' AND grantee IN ('anon', 'authenticated') ORDER BY 1, 2, 3`)
+      expect(left).toEqual([{ grantee: 'authenticated', column_name: 'id', privilege_type: 'SELECT' }])
+    })
+    it('a signed-in user cannot promote themselves, even unfiltered', async () => {
+      for (const role of ['authenticated', 'anon']) {
+        // One transaction per statement: the first refusal aborts its transaction.
+        for (const sql of [`UPDATE public.profiles SET role = 'master'`, 'DELETE FROM public.profiles', `INSERT INTO public.profiles (id, email, full_name) VALUES ('${PEER}', 'x@example.test', 'X')`]) {
+          await runSql('BEGIN'); await runSql(`SET LOCAL ROLE ${role}`)
+          try { await expect(runSql(sql)).rejects.toThrow(/permission denied/) } finally { await runSql('ROLLBACK') }
+        }
+      }
+    })
+    it('the migration TEXT revokes every write privilege from both roles, and self-checks', () => {
+      const sql = MIG_622.replace(/--.*$/gm, '')
+      expect(sql).toMatch(/REVOKE\s+INSERT,\s*UPDATE,\s*DELETE,\s*TRUNCATE,\s*REFERENCES,\s*TRIGGER\s+ON\s+public\.profiles\s+FROM\s+anon,\s*authenticated/)
+      expect(sql).not.toMatch(/REVOKE[^;]*\bSELECT\b[^;]*ON\s+public\.profiles/)   // SELECT is migs 153/153b's business
+      expect(sql).toMatch(/information_schema\.column_privileges/)                    // verified against the catalog, not the text
     })
   })
 
