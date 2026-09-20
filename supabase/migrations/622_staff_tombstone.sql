@@ -93,6 +93,19 @@
 --        WHERE conrelid = 'public.profiles'::regclass AND contype = 'f'
 --          AND confrelid = 'auth.users'::regclass;
 --
+-- (b2) Nothing may CASCADE off shift_assignments: the function deletes
+--     not-started assignments, and a cascade there would take swap history
+--     with them. By the migrations every FK in is SET NULL (mig 603 replaced
+--     mig 237's CASCADE on shift_swap_requests.requester_shift_id; also
+--     target_shift_id, schedule_notifications.shift_id,
+--     staff_attendance_events.matched_assignment_id):
+--
+--       SELECT c.conrelid::regclass AS tbl, c.conname, c.confdeltype
+--         FROM pg_constraint c
+--        WHERE c.contype = 'f' AND c.confrelid = 'public.shift_assignments'::regclass;
+--     Expected: every row confdeltype = 'n'. A 'c' row means STOP — do not
+--     run a permanent delete until that FK is SET NULL.
+--
 -- (c) Has the OLD route half-run in prod? It writes its audit row and nulls
 --     ~21 attribution columns BEFORE failing on the dropped public.shifts:
 --
