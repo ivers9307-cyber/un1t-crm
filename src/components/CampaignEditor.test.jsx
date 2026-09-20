@@ -12,7 +12,7 @@
 //   (c) delete navigated to /email/campaigns, which has no page — a 404.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, cleanup, screen, fireEvent, waitFor, act } from '@testing-library/react'
 
 const push = vi.fn()
 const refresh = vi.fn()
@@ -237,29 +237,71 @@ describe('CampaignEditor — the count is debounced and last-request-wins (P1.6b
 
   const previewCalls = () => fetch.mock.calls.filter(([url]) => String(url).includes('/preview'))
 
+  // COUNTFLAKE.1 — every advance of the fake clock goes through act().
+  //
+  // These tests used a bare `await vi.advanceTimersByTimeAsync(0)` to "let the
+  // tab switch land" and then reached for the builder with getByRole. That is
+  // a fixed number of event-loop hops, not a flush, and it lost once in CI
+  // (EAS Update gate, 77b92f39, 2026-09-20): the dumped DOM still had Design
+  // active and no builder. Why one hop is not enough:
+  //   - switchTab() awaits stashUnlayerToState() BEFORE setTab, so setTab runs
+  //     in a microtask AFTER the act() that fireEvent wraps the click in has
+  //     closed. The Audience render is therefore scheduled on React's real
+  //     Scheduler — a real setImmediate it captured at import, which fake
+  //     timers never touch.
+  //   - The Scheduler yields to the host after every commit (requestPaint), so
+  //     the previous render's passive-effect flush is always still queued, and
+  //     the Audience render queues BEHIND it. If that flush overruns the
+  //     Scheduler's 5ms frame budget — measured on the REAL clock, so a GC
+  //     pause or a preempted worker on a loaded runner is enough — the
+  //     Scheduler yields again and the render moves one macrotask later.
+  //   - advanceTimersByTimeAsync(0) is exactly ONE real setTimeout hop, so it
+  //     then resolves first and getByRole reads the Design tab.
+  // Reproduced deterministically by stalling that one effect flush for 6ms;
+  // the render was late by exactly one macrotask, never lost — the component
+  // is fine, the test was reading too early. Inside act() React queues its
+  // work on the act queue instead of the Scheduler and drains it before act
+  // resolves, so there is no frame budget and no hop count to lose to.
+  //
+  // Not findBy*: under a plain vi.useFakeTimers() RTL's async wrapper awaits a
+  // `setTimeout(0)` on the FAKED clock and never returns (the test dies at its
+  // 5000ms budget), and `shouldAdvanceTime: true` — what makes it work
+  // elsewhere — leaks REAL elapsed time into the fake clock, so a stall between
+  // two edits of the burst would fire the debounce these tests count. Not real
+  // timers for the tab switch either: the mount debounce would then be a real
+  // timer the fake clearTimeout cannot cancel. This is the same idiom every
+  // other fake-timer component test here uses; tests/fake-timer-act.test.js
+  // now enforces it.
+  const advance = (ms) => act(async () => { await vi.advanceTimersByTimeAsync(ms) })
+
+  // What the operator does and then sees: click Audience, the builder is there.
+  // getByRole (not a wait) on purpose — once act() has drained, a missing
+  // builder is a product defect and must fail, not be waited out.
+  async function openAudienceTab() {
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /audience/i })) })
+    return screen.getByRole('button', { name: /mock edit filter/i })
+  }
+
   it('fires ONE preview POST per edit, not two', async () => {
     renderEditor()
-    await vi.advanceTimersByTimeAsync(1000)
+    await advance(1000)
     const before = previewCalls().length
-    fireEvent.click(screen.getByRole('button', { name: /audience/i }))
-    await vi.advanceTimersByTimeAsync(0)   // switchTab awaits before setTab
-    fireEvent.click(screen.getByRole('button', { name: /mock edit filter/i }))
-    await vi.advanceTimersByTimeAsync(1000)
+    const edit = await openAudienceTab()
+    fireEvent.click(edit)
+    await advance(1000)
     expect(previewCalls().length - before).toBe(1)
   })
 
   it('debounces a burst of edits into a single POST', async () => {
     renderEditor()
-    await vi.advanceTimersByTimeAsync(1000)
+    await advance(1000)
     const before = previewCalls().length
-    fireEvent.click(screen.getByRole('button', { name: /audience/i }))
-    await vi.advanceTimersByTimeAsync(0)   // switchTab awaits before setTab
-    const edit = screen.getByRole('button', { name: /mock edit filter/i })
+    const edit = await openAudienceTab()
     for (let i = 0; i < 5; i++) {
       fireEvent.click(edit)
-      await vi.advanceTimersByTimeAsync(50)
+      await advance(50)
     }
-    await vi.advanceTimersByTimeAsync(1000)
+    await advance(1000)
     expect(previewCalls().length - before).toBe(1)
   })
 
@@ -267,23 +309,38 @@ describe('CampaignEditor — the count is debounced and last-request-wins (P1.6b
     // The first in-flight POST resolves SLOWLY with a stale 999; the later one
     // resolves fast with the real 10. The banner must never settle on 999 —
     // the Send confirm dialog quotes this number verbatim.
-    let call = 0
-    vi.stubGlobal('fetch', vi.fn(() => {
-      call += 1
-      const n = call === 1 ? 999 : 10
-      const delay = call === 1 ? 3000 : 0
+    //
+    // COUNTFLAKE.1 — the slow/fast sequence counts PREVIEW POSTs only. It used
+    // to count every fetch, and the same day this test landed (#1324) GAPS-P4
+    // (#1333) mounted SendQuietHoursNotice in the editor, which fetches on
+    // mount. That fetch became "call 1" and took the slow 999; the first
+    // preview POST got the fast 10 and had resolved before the edit, so no two
+    // previews were ever in flight together and the test passed with the
+    // sequence guard DELETED from the component. The two premise assertions
+    // below are what stop it going vacuous again.
+    let previews = 0
+    vi.stubGlobal('fetch', vi.fn((url) => {
+      if (!String(url).includes('/preview')) {
+        return Promise.resolve({ ok: true, json: async () => ({ success: true }) })
+      }
+      previews += 1
+      const n = previews === 1 ? 999 : 10
+      const delay = previews === 1 ? 3000 : 0
       return new Promise(resolve => setTimeout(
         () => resolve({ ok: true, json: async () => ({ success: true, audience_count: n }) }),
         delay,
       ))
     }))
     renderEditor()
-    fireEvent.click(screen.getByRole('button', { name: /audience/i }))
-    await vi.advanceTimersByTimeAsync(600)          // first POST in flight (slow)
-    fireEvent.click(screen.getByRole('button', { name: /mock edit filter/i }))
-    await vi.advanceTimersByTimeAsync(600)          // second POST fires + resolves 10
+    const edit = await openAudienceTab()
+    await advance(600)                              // first POST in flight (slow)
+    expect(previewCalls()).toHaveLength(1)
+    expect(screen.getByTestId('audience-count').textContent).toBe('Computing…')   // premise: still in flight
+    fireEvent.click(edit)
+    await advance(600)                              // second POST fires + resolves 10
+    expect(previewCalls()).toHaveLength(2)          // premise: it overlapped the first
     expect(screen.getByTestId('audience-count').textContent).toBe('10')
-    await vi.advanceTimersByTimeAsync(5000)         // the stale 999 lands late
+    await advance(5000)                             // the stale 999 lands late
     expect(screen.getByTestId('audience-count').textContent).toBe('10')
   })
 })
