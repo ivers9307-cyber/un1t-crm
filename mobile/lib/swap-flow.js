@@ -66,3 +66,23 @@ export function nextSwapFlowStep({ event, platform, pickerVisible, pending, pick
       return none
   }
 }
+
+/**
+ * A synchronous in-flight latch. React state read from a render closure is
+ * stale until the re-render, so `if (sending) return` lets a second tap through
+ * and POSTs twice (the server's one-open-swap index then 409s the second, and
+ * the coach sees an error straight after a success). Hold one of these in a
+ * ref: begin() is true exactly once until end().
+ */
+export function createInFlightGuard() {
+  let busy = false
+  return {
+    begin() {
+      if (busy) return false
+      busy = true
+      return true
+    },
+    end() { busy = false },
+    get busy() { return busy },
+  }
+}

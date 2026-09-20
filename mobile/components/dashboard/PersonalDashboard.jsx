@@ -38,7 +38,7 @@ import {
   SWAP_PENDING_LABEL, SWAP_PICKER_TITLE, SWAP_PICKER_EMPTY, SWAP_ALREADY_OPEN_MESSAGE,
 } from '../../lib/swap-cards'
 import { swapClaimNotice } from '../../lib/swap-conflicts'
-import { nextSwapFlowStep } from '../../lib/swap-flow'
+import { nextSwapFlowStep, createInFlightGuard } from '../../lib/swap-flow'
 // CHECKLIST.2 — top-of-Today card showing the coach's checklist
 // when they're on shift today. Self-contained: renders nothing
 // when there's no instance to surface.
@@ -430,6 +430,11 @@ export default function PersonalDashboard({ refreshKey }) {
   // state: it must be readable from the picker's onDismiss without a re-render,
   // and it is never rendered. See lib/swap-flow.js for why it exists.
   const swapPendingRef = useRef(null)
+  // The in-flight latch for submitSwap. `swapSending` (state) only drives the
+  // spinner: read from a render closure it is stale for a second tap that
+  // lands before the re-render, which POSTed twice and 409'd the second.
+  const swapPostGuard = useRef(null)
+  if (swapPostGuard.current === null) swapPostGuard.current = createInFlightGuard()
 
   const load = useCallback(async () => {
     if (!profile) return
@@ -675,7 +680,8 @@ export default function PersonalDashboard({ refreshKey }) {
 
   async function submitSwap(reasonText) {
     const pending = swapConfirm
-    if (!pending || swapSending) return
+    if (!pending) return
+    if (!swapPostGuard.current.begin()) return // already sending (set synchronously)
     setSwapSending(true)
     try {
       const res = await createSwapRequest({
@@ -693,6 +699,7 @@ export default function PersonalDashboard({ refreshKey }) {
         Alert.alert(pending.coach ? "Couldn't send request" : "Couldn't post", res.error || 'Unknown error')
       }
     } finally {
+      swapPostGuard.current.end()
       setSwapSending(false)
     }
   }

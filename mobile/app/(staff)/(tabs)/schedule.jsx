@@ -36,6 +36,7 @@ import { useIsTablet } from '../../../lib/use-is-tablet'
 import { effShiftStart, effShiftEnd, blockStart as blockDefaultStart, blockEnd as blockDefaultEnd, teamRosterForDay, initials } from '../../../lib/schedule-team'
 import { canAdjustShiftTimes, canCancelTimeOff, MANAGER_ROLES, scheduleViewFromParam } from '../../../lib/schedule-manage'
 import { hasOpenSwap, swapShiftWhen, SWAP_PENDING_LABEL, SWAP_ALREADY_OPEN_MESSAGE } from '../../../lib/swap-cards'
+import { createInFlightGuard } from '../../../lib/swap-flow'
 import ManageMode from '../../../components/schedule/ManageMode'
 // LEAVE.2 — one label per leave type (unpaid/other used to read "Time off").
 import { timeOffLeaveLabel } from 'shared/time-off'
@@ -527,6 +528,11 @@ export default function Schedule() {
     )
   }
 
+  // COVERLOOP.2 — one post at a time: a second confirm while the first POST is
+  // in flight earned a 409 straight after the success.
+  const swapPostGuard = useRef(null)
+  if (swapPostGuard.current === null) swapPostGuard.current = createInFlightGuard()
+
   function requestSwapForShift(shift) {
     // RETIRE-SHIFTS-MIRROR.5c — swaps now key off the shift_assignment id
     // (stitched into the GET /shifts row), not the legacy shifts.id.
@@ -549,10 +555,11 @@ export default function Schedule() {
         {
           text: 'Post for swap',
           onPress: async () => {
+            if (!swapPostGuard.current.begin()) return
             const res = await createSwapRequest({
               requesterShiftId: shift.shift_assignment_id,
               locationId: activeLocation.id,
-            })
+            }).finally(() => swapPostGuard.current.end())
             if (res.success) {
               Alert.alert('Posted', 'Managers have been notified.')
               fetchWeek()

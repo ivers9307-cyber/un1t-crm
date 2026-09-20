@@ -2,7 +2,7 @@
 // there is no React Native component test runner and this is the part that
 // wedged: iOS refuses to present a Modal while another is still animating out.
 import { describe, it, expect } from 'vitest'
-import { nextSwapFlowStep } from './swap-flow'
+import { nextSwapFlowStep, createInFlightGuard } from './swap-flow'
 
 const shift = { id: 'a1', shift_date: '2026-09-24' }
 const coach = { id: 'c1', full_name: 'Coach T' }
@@ -81,5 +81,40 @@ describe('nextSwapFlowStep', () => {
   it('only ever opens the sheet with a request that has a shift', () => {
     const out = nextSwapFlowStep({ event: 'dismissed', platform: 'ios', pickerVisible: false, pending: { shift: null, coach } })
     expect(out).toEqual({ action: 'noop', pending: null, request: null })
+  })
+})
+
+// A second tap lands before React re-renders, so `if (sending) return` read
+// from the render closure lets it through and the swap is POSTed twice.
+describe('createInFlightGuard', () => {
+  it('lets exactly one caller in until end()', () => {
+    const g = createInFlightGuard()
+    expect(g.busy).toBe(false)
+    expect(g.begin()).toBe(true)
+    expect(g.busy).toBe(true)
+    expect(g.begin()).toBe(false) // the double tap, same tick
+    expect(g.begin()).toBe(false)
+    g.end()
+    expect(g.busy).toBe(false)
+    expect(g.begin()).toBe(true) // a retry after a failure is allowed
+  })
+
+  it('end() without begin() is harmless, and guards are independent', () => {
+    const a = createInFlightGuard()
+    const b = createInFlightGuard()
+    a.end()
+    expect(a.begin()).toBe(true)
+    expect(b.begin()).toBe(true)
+  })
+
+  it('two synchronous submits make one request', async () => {
+    const g = createInFlightGuard()
+    let posts = 0
+    async function submit() {
+      if (!g.begin()) return
+      try { posts += 1; await Promise.resolve() } finally { g.end() }
+    }
+    await Promise.all([submit(), submit()])
+    expect(posts).toBe(1)
   })
 })
