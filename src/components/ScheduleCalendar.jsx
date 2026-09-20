@@ -62,7 +62,7 @@ import { coachConflictsForBlock, formatTime12h as formatTime } from '@/lib/sched
 import Modal from '@/components/ui/Modal'
 import { COPY_MODE_OPTIONS, copyResultToast } from '@/lib/roster-copy'
 // COPYLEAVE.1 — the publish modal's clash wording (pure, unit-tested there).
-import { leaveClashesHeadline } from '@/lib/roster-publish-advisories'
+import { leaveClashesHeadline, leaveRangeLabel } from '@/lib/roster-publish-advisories'
 import RosterSummaryPanel from './RosterSummaryPanel'
 import ScheduleErrorBanner from './schedule/ScheduleErrorBanner'
 import { timeOffLeaveLabel } from '@shared/time-off'
@@ -2401,6 +2401,8 @@ function PublishRosterClashes({ leaveClashes, doubleBookings, crossLocationCheck
   const unchecked = crossLocationChecked === false
   if (leaveClashes.length === 0 && doubleBookings.length === 0 && !unchecked) return null
   const dayOf = (iso) => new Date(`${iso}T00:00:00`).toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short' })
+  // Same parse-local / format-local pattern as dayOf, without the weekday.
+  const shortDay = (iso) => new Date(`${iso}T00:00:00`).toLocaleDateString('en-IE', { day: 'numeric', month: 'short' })
   const slot = (s) => `${formatTime(s.start_time)}–${formatTime(s.end_time)} ${s.name}${s.location_name ? ` (${s.location_name})` : ''}`
   return (
     <div
@@ -2417,6 +2419,7 @@ function PublishRosterClashes({ leaveClashes, doubleBookings, crossLocationCheck
             {leaveClashes.map((c) => (
               <li key={`${c.block_id}|${c.profile_id}`} className="text-xs text-un1t-text">
                 <span className="font-medium">{c.coach_name}</span> · {dayOf(c.block_date)} · {formatTime(c.start_time)} {c.name}
+                <span className="text-un1t-subtle"> · {leaveRangeLabel(c.leave_start, c.leave_end, shortDay)}</span>
               </li>
             ))}
           </ul>

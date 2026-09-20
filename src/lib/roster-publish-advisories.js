@@ -156,3 +156,18 @@ export function leaveClashesHeadline(clashes) {
   const people = new Set((clashes || []).map((c) => c.profile_id)).size
   return `${people} coach${people === 1 ? '' : 'es'} rostered on approved leave`
 }
+
+/**
+ * Pure. The leave a clash line quotes: "on leave 21 Sep" for one day,
+ * "on leave 21 to 27 Sep" inside one month, "on leave 28 Sep to 3 Oct" across
+ * months. `fmtDay(iso)` is the CALLER's "21 Sep" formatter, so the wording
+ * matches the rest of the line it sits on. Only string slices of the ISO dates
+ * are read here: no Date, so no timezone can move a day.
+ */
+export function leaveRangeLabel(startIso, endIso, fmtDay) {
+  if (!startIso) return 'on leave'
+  if (!endIso || endIso === startIso) return `on leave ${fmtDay(startIso)}`
+  const sameMonth = startIso.slice(0, 7) === endIso.slice(0, 7)
+  const from = sameMonth ? String(Number(startIso.slice(8, 10))) : fmtDay(startIso)
+  return `on leave ${from} to ${fmtDay(endIso)}`
+}

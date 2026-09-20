@@ -1,7 +1,7 @@
 // COPYLEAVE.1 — what the publish preview warns about besides staffing gaps.
 // Pure, so no Supabase mock. Fixtures are invented: the repo is public.
 import { describe, it, expect } from 'vitest'
-import { leaveCovering, leaveClashes, doubleBookings, leaveClashesHeadline } from './roster-publish-advisories'
+import { leaveCovering, leaveClashes, doubleBookings, leaveClashesHeadline, leaveRangeLabel } from './roster-publish-advisories'
 
 const TODAY = '2026-05-01'
 const PERIOD = { from: '2026-05-04', to: '2026-05-10', todayIso: TODAY }
@@ -154,5 +154,31 @@ describe('leaveClashesHeadline', () => {
     expect(leaveClashesHeadline([row('a', 'b1')])).toBe('1 coach rostered on approved leave')
     expect(leaveClashesHeadline([])).toBe('0 coaches rostered on approved leave')
     expect(leaveClashesHeadline(null)).toBe('0 coaches rostered on approved leave')
+  })
+})
+
+// Quality review — leave_start / leave_end were returned and never shown. The
+// manager needs the range to judge the clash (one day off, or the whole week?).
+describe('leaveRangeLabel', () => {
+  // The caller supplies the day formatter (the modal reuses its own); this
+  // stand-in is pure string work so the test is the same in every timezone.
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  const fmt = (iso) => `${Number(iso.slice(8, 10))} ${MONTHS[Number(iso.slice(5, 7)) - 1]}`
+
+  it('a single day names the day once', () => {
+    expect(leaveRangeLabel('2026-09-21', '2026-09-21', fmt)).toBe('on leave 21 Sep')
+  })
+  it('a range inside one month names the month once', () => {
+    expect(leaveRangeLabel('2026-09-21', '2026-09-27', fmt)).toBe('on leave 21 to 27 Sep')
+  })
+  it('a range across months (or years) names both', () => {
+    expect(leaveRangeLabel('2026-09-28', '2026-10-03', fmt)).toBe('on leave 28 Sep to 3 Oct')
+    expect(leaveRangeLabel('2026-12-28', '2027-01-03', fmt)).toBe('on leave 28 Dec to 3 Jan')
+    // Same month NUMBER, different year: not "the same month".
+    expect(leaveRangeLabel('2026-09-21', '2027-09-27', fmt)).toBe('on leave 21 Sep to 27 Sep')
+  })
+  it('says just "on leave" when the dates are missing (an older server)', () => {
+    expect(leaveRangeLabel(null, null, fmt)).toBe('on leave')
+    expect(leaveRangeLabel('2026-09-21', undefined, fmt)).toBe('on leave 21 Sep')
   })
 })

@@ -238,6 +238,20 @@ describe('publish preview clashes (COPYLEAVE.1)', () => {
     expect(box.textContent).toMatch(/12pm Lunch/)
   })
 
+  // Quality review — the leave range is shown on each line. Expected strings
+  // are built with the modal's own day format so the ICU month spelling
+  // ("Sep" / "Sept") can never be what fails this.
+  it('shows the leave range on each leave line: one day, or first to last', async () => {
+    const day = (d) => new Date(`${d}T00:00:00`).toLocaleDateString('en-IE', { day: 'numeric', month: 'short' })
+    const end = iso(new Date(new Date(`${BLOCK_DATE}T00:00:00`).getFullYear() + 1, 0, 15)) // next year: never the same month
+    const ranged = { ...LEAVE_CLASH, block_id: 'ok', profile_id: 'u3', coach_name: 'Coach B', leave_end: end }
+    await openPreview({ ...BASE, leaveClashes: [LEAVE_CLASH, ranged], doubleBookings: [], crossLocationChecked: true })
+    const lines = within(screen.getByTestId('publish-roster-clashes')).getAllByRole('listitem').map((li) => li.textContent)
+    expect(lines[0]).toContain(`on leave ${day(BLOCK_DATE)}`)
+    expect(lines[0]).not.toContain(' to ')
+    expect(lines[1]).toContain(`on leave ${day(BLOCK_DATE)} to ${day(end)}`)
+  })
+
   it('sits beside the staffing list, above the cost tiles', async () => {
     await openPreview({ ...BASE, leaveClashes: [LEAVE_CLASH], doubleBookings: [], crossLocationChecked: true })
     const box = screen.getByTestId('publish-roster-clashes')
