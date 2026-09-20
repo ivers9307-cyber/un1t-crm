@@ -15,7 +15,7 @@
 //     POST refuses on `remaining - pendingDays`, so the form subtracts the same
 //     sum from the coach's own requests (whose total_days are the server's).
 
-import { isRestrictedEmployment, timeOffTypeLabel, leaveRangeLabel, leavePreviewLine } from 'shared/time-off'
+import { isRestrictedEmployment, timeOffTypeLabel, leaveDateRangeLabel, leavePreviewLine } from 'shared/time-off'
 
 const unknownPreview = () => ({ known: false, days: null, clashes: [] })
 const plural = (n, one, many) => (n === 1 ? one : many)
@@ -149,7 +149,7 @@ export function submittedDays(res) {
 
 /** The confirmation shown after a successful submit. `days` is submittedDays(res). */
 export function leaveSubmittedMessage({ type, startIso, endIso, days, clashCount }) {
-  const head = [timeOffTypeLabel(type), leaveRangeLabel(startIso, endIso)]
+  const head = [timeOffTypeLabel(type), leaveDateRangeLabel(startIso, endIso)]
   if (days !== null && days !== undefined) head.push(`${days} ${plural(days, 'day', 'days')}`)
   const lines = [`${head.join(' · ')}.`, 'Your manager has been notified. Track it under My leave.']
   const c = Number(clashCount) || 0

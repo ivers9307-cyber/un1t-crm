@@ -123,7 +123,11 @@ export function leaveClashPrompt(clashes) {
 // range crosses a year end, where "30 Dec – 2 Jan" alone is ambiguous. Built on
 // shortDay above, which reads the ISO string's own parts (Date.UTC), so the
 // phone's timezone can never shift the day.
-export function leaveRangeLabel(startIso, endIso) {
+// Named leaveDateRangeLabel, not leaveRangeLabel: src/lib/roster-publish-advisories.js
+// already exports a leaveRangeLabel with different wording ("on leave 21 to 27
+// Sep", for the publish preview), and tests/shared-pair-sync.test.js rightly
+// refuses two modules exporting one name for two meanings.
+export function leaveDateRangeLabel(startIso, endIso) {
   if (!startIso) return ''
   const end = endIso || startIso
   if (end === startIso) return shortDay(startIso)

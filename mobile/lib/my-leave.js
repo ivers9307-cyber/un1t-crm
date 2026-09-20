@@ -7,7 +7,7 @@
 // rule and the same one the Schedule tab's amber card uses: the caller's own
 // request, RAW status pending. Approved leave cannot be self-cancelled.
 
-import { timeOffLeaveLabel, leaveRangeLabel } from 'shared/time-off'
+import { timeOffLeaveLabel, leaveDateRangeLabel } from 'shared/time-off'
 import { canCancelTimeOff } from './schedule-manage'
 
 const STATUS = {
@@ -42,7 +42,7 @@ function statusOf(r) {
 export function myLeaveRow(r, profile) {
   const status = statusOf(r)
   const days = Number(r.total_days) || 0
-  const range = leaveRangeLabel(r.start_date, r.end_date)
+  const range = leaveDateRangeLabel(r.start_date, r.end_date)
   const note = r.review_note || null
   return {
     id: r.id,
