@@ -1,6 +1,7 @@
 // /api/staff/[id]/permanent — permanent delete that KEEPS HISTORY (STAFFDELETE.1).
 //
-//   GET    → what a permanent delete WOULD do (a dry run of the same function).
+//   GET    → what a permanent delete WOULD do (a dry run of the same function,
+//            plus what will happen to their login: `auth`).
 //   DELETE → do it.
 //
 // WHAT IT DOES
@@ -213,7 +214,11 @@ export async function GET(_request, props) {
     const mapped = tombstoneErrorStatus(error.message)
     return NextResponse.json({ success: false, error: mapped.error }, { status: mapped.status })
   }
-  return NextResponse.json({ success: true, data })
+  // What will happen to their LOGIN — read-only (no ban, nothing recorded), by
+  // the same rules DELETE applies, so the dialog never promises "their login
+  // is removed" to someone whose member or host login will be kept.
+  const auth = await readAuthDisposition(t.db, id)
+  return NextResponse.json({ success: true, data: { ...data, auth } })
 }
 
 export async function DELETE(request, props) {

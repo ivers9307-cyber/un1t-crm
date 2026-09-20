@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from 'vitest'
 import {
   isTombstone, excludeTombstones, tombstoneEmail, authDisposition, tombstoneErrorStatus,
   coverNoticesByLocation, swapCounterparties, describeTombstoneImpact,
-  roleAtDeletion, TOMBSTONE_FLOOR_ROLE,
+  roleAtDeletion, TOMBSTONE_FLOOR_ROLE, describeAuthOutcome, needsAuthRetry, describeDeleteResult,
 } from './staff-tombstone.js'
 
 const ID = '10000000-0000-0000-0000-000000000001'
@@ -134,5 +134,50 @@ describe('describeTombstoneImpact — today\'s started shifts and the demotion',
     })
     expect(d.demotion).toBe('Their master role is removed (the account is reduced to basic staff so it keeps no admin rights). The record still shows their role was master.')
     expect(d.keptToday).toBeUndefined()
+  })
+})
+
+// The dialog used to promise the delete removes "their login". False whenever
+// the same account is also a gym member or an event host: that login is KEPT.
+describe('describeAuthOutcome — what happens to their LOGIN, in plain words', () => {
+  it('before the delete (the GET dry run)', () => {
+    expect(describeAuthOutcome('ban')).toBe('Their login will be disabled.')
+    expect(describeAuthOutcome('kept_member_login')).toBe('Their login is kept because they are also a gym member; staff access is removed.')
+    expect(describeAuthOutcome('kept_host_login')).toBe('Their login is kept because they are also an event host; staff access is removed.')
+    expect(describeAuthOutcome('kept_unverified')).toBe('We could not check whether their login is also a member or host account, so it is kept for now; staff access is removed.')
+  })
+  it('after the delete: says what actually happened, including a ban that did NOT land', () => {
+    expect(describeAuthOutcome('ban', { done: true, completed: true })).toBe('Their login has been disabled.')
+    expect(describeAuthOutcome('ban', { done: true, completed: false })).toBe('Their login has NOT been disabled yet; staff access is removed.')
+    expect(describeAuthOutcome('kept_member_login', { done: true, completed: true })).toBe('Their login is kept because they are also a gym member; staff access is removed.')
+  })
+  it('an unknown or missing disposition claims nothing about the login', () => {
+    expect(describeAuthOutcome(undefined)).toBe('Staff access is removed.')
+    expect(describeAuthOutcome('something_new', { done: true })).toBe('Staff access is removed.')
+  })
+})
+
+describe('needsAuthRetry / describeDeleteResult', () => {
+  it('only an unfinished BAN is worth retrying from the dialog', () => {
+    expect(needsAuthRetry({ auth: 'ban', auth_completed: false })).toBe(true)
+    expect(needsAuthRetry({ auth: 'ban', auth_completed: true })).toBe(false)
+    expect(needsAuthRetry({ auth: 'kept_member_login', auth_completed: true })).toBe(false)
+    expect(needsAuthRetry({ auth: 'kept_unverified', auth_completed: false })).toBe(true)
+    expect(needsAuthRetry(null)).toBe(false)
+  })
+  it('a first delete lists what went, what stayed and the login outcome', () => {
+    expect(describeDeleteResult({
+      removed_shifts: [{}], cancelled_swaps: [], cancelled_time_off: [], kept: {}, auth: 'kept_member_login', auth_completed: true,
+    })).toEqual([
+      'Removed from 1 upcoming shift. These will need cover.',
+      'Their login is kept because they are also a gym member; staff access is removed.',
+      'Kept, under their name: their allowance and pay records, and every report.',
+    ])
+  })
+  it('a RETRY reports only the login step — it removed nothing this time', () => {
+    expect(describeDeleteResult({ already_deleted: true, auth: 'ban', auth_completed: true, changed: true }))
+      .toEqual(['They were already permanently deleted.', 'Their login has been disabled.'])
+    expect(describeDeleteResult({ already_deleted: true, auth: 'ban', auth_completed: true, changed: false }))
+      .toEqual(['They were already permanently deleted. Nothing was changed.', 'Their login has been disabled.'])
   })
 })

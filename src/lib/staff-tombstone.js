@@ -144,3 +144,39 @@ export function describeTombstoneImpact(summary) {
     keeps: `Kept, under their name: ${[...kept, 'their allowance and pay records', 'and every report'].join(', ')}.`,
   }
 }
+
+const KEPT_LOGIN = {
+  kept_member_login: 'Their login is kept because they are also a gym member; staff access is removed.',
+  kept_host_login: 'Their login is kept because they are also an event host; staff access is removed.',
+  kept_unverified: 'We could not check whether their login is also a member or host account, so it is kept for now; staff access is removed.',
+}
+
+/**
+ * What happens to the person's LOGIN, in plain words. The delete does NOT
+ * always remove it: the same account may also be a gym member or an event
+ * host, and that login is deliberately kept (authDisposition). `done` = after
+ * the delete ran; `completed` = the login step reached its final outcome.
+ * An unknown disposition claims nothing about the login.
+ */
+export function describeAuthOutcome(disposition, { done = false, completed = false } = {}) {
+  if (KEPT_LOGIN[disposition]) return KEPT_LOGIN[disposition]
+  if (disposition !== 'ban') return 'Staff access is removed.'
+  if (!done) return 'Their login will be disabled.'
+  return completed ? 'Their login has been disabled.' : 'Their login has NOT been disabled yet; staff access is removed.'
+}
+
+/** The login step did not reach a final outcome: DELETE again re-runs only that step. */
+export function needsAuthRetry(result) {
+  if (!result) return false
+  return result.auth_completed === false && (result.auth === 'ban' || result.auth === 'kept_unverified')
+}
+
+/** Lines for the "done" notice, from a DELETE response's `data`. A retry removed nothing, so it says only that. */
+export function describeDeleteResult(result) {
+  const login = describeAuthOutcome(result?.auth, { done: true, completed: result?.auth_completed === true })
+  if (result?.already_deleted) {
+    return [result.changed === false ? 'They were already permanently deleted. Nothing was changed.' : 'They were already permanently deleted.', login]
+  }
+  const d = describeTombstoneImpact(result)
+  return [...d.removes, d.keptToday, d.demotion, login, d.keeps].filter(Boolean)
+}

@@ -259,6 +259,14 @@ describe('DELETE /api/staff/[id]/permanent — the login step is retryable', () 
 })
 
 describe('GET /api/staff/[id]/permanent — impact preview', () => {
+  it('previews a KEPT login truthfully', async () => {
+    for (const [opts, expected] of [[{ contact: { id: 'c1' } }, 'kept_member_login'], [{ hostUser: { host_id: 'h1' } }, 'kept_host_login'], [{ identityError: { message: 'boom' } }, 'kept_unverified']]) {
+      const db = makeDb({ ...opts, rpcData: { ...SUMMARY, dry_run: true } }); createServerClient.mockReturnValue(db)
+      expect((await (await GET(req(), props)).json()).data.auth).toBe(expected)
+      expect(db.auth.admin.updateUserById).not.toHaveBeenCalled()
+    }
+  })
+
   it('master only; runs the SAME function as a dry run and changes nothing', async () => {
     const db = makeDb({ rpcData: { ...SUMMARY, dry_run: true } }); createServerClient.mockReturnValue(db)
     const res = await GET(req(), props)
@@ -268,6 +276,9 @@ describe('GET /api/staff/[id]/permanent — impact preview', () => {
     expect(queriesOf(db, 'assignment_change_log', 'insert')).toEqual([])
     const preview = (await res.json()).data
     expect(preview.removed_shifts).toHaveLength(2)
+    // What will happen to their LOGIN is part of the preview (read-only: no ban, nothing recorded).
+    expect(preview.auth).toBe('ban')
+    expect(queriesOf(db, 'profiles', 'update')).toEqual([])
     // Today's already-started shifts and the demotion ride through untouched.
     expect(preview.kept_today_shifts).toHaveLength(1)
     expect(preview.role).toEqual({ from: 'manager', to: 'staff' })

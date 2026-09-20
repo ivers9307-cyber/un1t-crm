@@ -10,7 +10,7 @@ import StaffDevicesCard from './settings/StaffDevicesCard'
 import LeadTimeOverrideRow from './settings/LeadTimeOverrideRow'
 import MobileBarPlanner from './MobileBarPlanner'
 import AcDeviceAllowlistPicker from './AcDeviceAllowlistPicker'
-import { describeTombstoneImpact } from '@/lib/staff-tombstone'
+import { describeTombstoneImpact, describeAuthOutcome, describeDeleteResult, needsAuthRetry } from '@/lib/staff-tombstone'
 import {
   OWNER_ASSIGNABLE_ROLES, MASTER_ASSIGNABLE_ROLES,
 } from '@/lib/schemas'
@@ -1174,7 +1174,7 @@ function DangerZone({ staffId, staffName, isActive, callerIsMaster }) {
         <p className="text-xs text-un1t-subtle mt-1">
           {isActive
             ? "Deactivating revokes all door access and prevents sign-in. Their history (shifts, contact events, audit log) stays intact — that's almost always what you want when someone leaves."
-            : "This account is deactivated. Reactivate to restore access, or permanently delete (master only). Permanent delete removes their personal details, login, any admin role and upcoming shifts; their past shifts (including any already started today), leave, invoices and reports stay under their name."}
+            : "This account is deactivated. Reactivate to restore access, or permanently delete (master only). Permanent delete removes their personal details, staff access, any admin role and upcoming shifts (their login is disabled too, unless the same account is also a gym member or event host); their past shifts (including any already started today), leave, invoices and reports stay under their name."}
         </p>
       </div>
 
@@ -1319,6 +1319,8 @@ function PermanentDeleteButton({ staffId, staffName }) {
   // STAFFDELETE.1 — GET is a dry run of the very function DELETE calls, so
   // what this dialog promises is what will happen.
   const [impact, setImpact] = useState(null)
+  // The person is already deleted but their login step did not finish.
+  const [loginRetry, setLoginRetry] = useState(false)
 
   async function openConfirm() {
     setState('confirming')
@@ -1326,7 +1328,8 @@ function PermanentDeleteButton({ staffId, staffName }) {
     try {
       const res = await fetch(`/api/staff/${staffId}/permanent`)
       const data = await res.json().catch(() => ({}))
-      if (res.ok && data.success) setImpact(describeTombstoneImpact(data.data))
+      // `login` is what will happen to their LOGIN — it is NOT always removed.
+      if (res.ok && data.success) setImpact({ ...describeTombstoneImpact(data.data), login: describeAuthOutcome(data.data?.auth) })
       else setError(data.error || `Could not load what this will remove (${res.status})`)
     } catch (e) {
       setError(e.message || 'Could not load what this will remove')
@@ -1348,8 +1351,16 @@ function PermanentDeleteButton({ staffId, staffName }) {
       }
       // The profile is a tombstone now — there is no page to return to. Tell
       // the operator what was removed (and any login caveat) before leaving.
-      const done = describeTombstoneImpact(data.data)
-      alert([...done.removes, done.keptToday, done.demotion, done.keeps, data.warning].filter(Boolean).join('\n\n'))
+      // If the login step did not finish (the ban failed), stay here: the
+      // detail page 404s a tombstone, so this dialog is the only place to
+      // retry from. Pressing the button again re-runs ONLY that step.
+      if (needsAuthRetry(data.data)) {
+        setLoginRetry(true)
+        setState('error')
+        setError([...describeDeleteResult(data.data), data.warning].filter(Boolean).join(' '))
+        return
+      }
+      alert([...describeDeleteResult(data.data), data.warning].filter(Boolean).join('\n\n'))
       router.push('/settings')
     } catch (e) {
       setState('error')
@@ -1364,7 +1375,7 @@ function PermanentDeleteButton({ staffId, staffName }) {
           <strong className="block text-red-700">This cannot be undone.</strong>
           <p>
             Permanently deleting <span className="font-mono">{staffName}</span> removes their personal details
-            (email, photo, PIN, door credentials, devices), their login and every studio assignment. Any
+            (email, photo, PIN, door credentials, devices), their staff access and every studio assignment. Any
             admin role they held is taken off the account, and kept on record.
           </p>
           {impact ? (
@@ -1374,6 +1385,7 @@ function PermanentDeleteButton({ staffId, staffName }) {
               </ul>
               {impact.keptToday && <p>{impact.keptToday}</p>}
               {impact.demotion && <p>{impact.demotion}</p>}
+              <p>{impact.login}</p>
               <p>{impact.keeps}</p>
             </>
           ) : !error ? (
@@ -1404,15 +1416,15 @@ function PermanentDeleteButton({ staffId, staffName }) {
             className="text-xs bg-red-600 text-white px-3 py-1.5 rounded-md hover:bg-red-700 font-medium inline-flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {state === 'working' ? <Loader2 size={11} className="animate-spin" /> : <Skull size={11} />}
-            {state === 'working' ? 'Deleting…' : 'Permanently delete'}
+            {state === 'working' ? 'Working…' : loginRetry ? 'Retry disabling their login' : 'Permanently delete'}
           </button>
           <button
             type="button"
-            onClick={() => { setState('idle'); setError(null); setTypedName('') }}
+            onClick={() => { if (loginRetry) { router.push('/settings'); return } setState('idle'); setError(null); setTypedName('') }}
             disabled={state === 'working'}
             className="text-xs text-un1t-subtle hover:text-un1t-text"
           >
-            Cancel
+            {loginRetry ? 'Leave (already deleted)' : 'Cancel'}
           </button>
         </div>
         {error && (
