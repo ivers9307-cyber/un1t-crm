@@ -61,6 +61,20 @@
 --      employment_type and pay, moves role into deleted_role and demotes role
 --      to 'staff', and redacts the PII that the mig 191 audit trigger re-saves
 --      while it does so. dry_run returns the same summary and writes nothing.
+--      It also strips ONLY the PII keys from past audit payloads (pay-change
+--      before/after survives), takes the person's address off every scheduled
+--      report's recipient list, and is SAFE to call twice (already_tombstoned).
+--   3. Three triggers: profiles_tombstone_frozen (a tombstone cannot be
+--      un-deleted, reactivated, re-promoted or re-addressed; the two auth_*
+--      columns may go NULL -> value once) and refuse_tombstone_access_row on
+--      profile_locations + profile_organizations (a tombstone can never be
+--      handed a role again, whatever route forgets to ask).
+--   4. auth_disposition / auth_completed_at: the login step runs in the app
+--      AFTER this transaction; a tombstone with auth_completed_at NULL is a
+--      half-finished delete, and DELETE on it re-runs only that step.
+--   5. REVOKEs the vestigial INSERT/UPDATE/DELETE/TRUNCATE/REFERENCES/TRIGGER
+--      grants anon + authenticated still held on profiles (self-checked
+--      against the catalog).
 --   It never deletes from profiles, and nothing here touches auth.users: the
 --   route bans the auth user instead, because deleting it would cascade
 --   straight back through profiles.
