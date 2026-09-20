@@ -223,12 +223,12 @@ describe('runRosterRunwayAlerts', () => {
     expect(logWarn).toHaveBeenCalledWith('roster-runway', expect.stringMatching(/invalid timezone/), { locationId: NORTH.id, timezone: 'Mars/Olympus' })
   })
 
-  it('EVERY unready week is announced, each under its own key: a gap this week cannot mask next week', async () => {
-    const thisWeek = { ...RUNWAY, weekStart: '2026-09-14', daysAway: -5, severity: 'red', blocks: 4, staffed: 3, unstaffed: 1, published: 4, unpublished: 0 }
-    runwaysAre({ [NORTH.id]: [thisWeek, RUNWAY] })
+  it('EVERY unready week is announced, each under its own key: a gap next week cannot hide the week after', async () => {
+    const nextWeek = { ...RUNWAY, weekStart: '2026-09-21', daysAway: 2, severity: 'red', blocks: 30, staffed: 29, unstaffed: 1, published: 30, unpublished: 0 }
+    runwaysAre({ [NORTH.id]: [nextWeek, RUNWAY] })
     const outcome = await runRosterRunwayAlerts(makeDb([NORTH]), { nowMs: CRON_TICK })
     expect(notifyUsersAtRolesOnce.mock.calls.map((c) => [c[1], c[4].body])).toEqual([
-      ['roster_runway:loc-north:2026-09-14:red', 'This week: 1 of 4 shifts has no coach.'],
+      ['roster_runway:loc-north:2026-09-21:red', 'Starts in 2 days: 1 of 30 shifts has no coach.'],
       ['roster_runway:loc-north:2026-09-28:amber', 'Starts in 9 days: 34 of 34 shifts have no coach, not published.'],
     ])
     expect(outcome).toMatchObject({ locations: 1, alerts: 2, sent: 4 })

@@ -6,6 +6,17 @@
 // 12-14. The this-week staffing chip (shared/roster-staffing.js) cannot see
 // it: it stops at Sunday and knows nothing about publication.
 //
+// SCOPE: weeks that START IN THE FUTURE (Monday > today), and only those. The
+// current week already has its surfaces: the Today page's staffing-gap card
+// (fetchStaffingGapsThisWeek) counts empty and short shifts from today to
+// Sunday, and the schedule banner covers publication. Counting it here too
+// let one empty shift this week MASK the chip for an unbuilt later week and
+// sent a red "This week: ..." push that said nothing the card did not.
+//
+// ACCEPTED: on its Monday a week drops off the runway even if it is staffed
+// but still unpublished. By then its amber and its red have both fired and
+// the chip has shown for ten days; from Monday it is the banner's job.
+//
 // `rosterRunway` is the one answer, shared by the web Today chip, the mobile
 // Studio dashboard chip and the daily push, so the three cannot disagree.
 //
@@ -18,7 +29,7 @@ import { futureBlockStaffing } from './roster-staffing.js'
 
 export const RUNWAY_AMBER_DAYS = 10
 export const RUNWAY_RED_DAYS = 5
-export const RUNWAY_WEEKS = 3
+export const RUNWAY_WEEKS = 2
 
 const DAY_MS = 24 * 60 * 60 * 1000
 const utcMs = (iso) => {
@@ -48,25 +59,29 @@ function addDaysIso(dateIso, days) {
 }
 
 /**
- * The block-date window the reader must fetch: today to the Sunday of the
- * third week (this week, next week, the week after). A 10-day horizon can
- * never reach a fourth week, because the third Monday is at most 14 days off.
+ * The block-date window the reader must fetch: NEXT Monday to the Sunday of
+ * the week after it (next week and the week after). The current week is not
+ * read at all. A 10-day horizon can never reach a third upcoming week: next
+ * Monday is 1 to 7 days off, so the third one is at least 15.
  */
 export function runwayWindow(todayIso) {
-  const thisMonday = weekStartIso(todayIso)
+  const nextMonday = addDaysIso(weekStartIso(todayIso), 7)
   return {
-    from: todayIso,
-    to: addDaysIso(thisMonday, RUNWAY_WEEKS * 7 - 1),
-    weekStarts: Array.from({ length: RUNWAY_WEEKS }, (_, i) => addDaysIso(thisMonday, i * 7)),
+    from: nextMonday,
+    to: addDaysIso(nextMonday, RUNWAY_WEEKS * 7 - 1),
+    weekStarts: Array.from({ length: RUNWAY_WEEKS }, (_, i) => addDaysIso(nextMonday, i * 7)),
   }
 }
 
 /**
- * EVERY week, soonest first, whose Monday is within 10 days and that is not
+ * EVERY week, soonest first, whose Monday is 1 to 10 days away and that is not
  * ready: some block has no coach, or some block is not published.
  *
- *   severity 'red'   — the week starts in 5 days or fewer (or is this week)
+ *   severity 'red'   — the week starts in 1 to 5 days
  *   severity 'amber' — it starts in 6 to 10 days
+ *
+ * A week that has started (its Monday is today or earlier) is never returned,
+ * whatever state it is in: see SCOPE at the top of this file.
  *
  * Empty when every week inside the horizon is ready. A week with ZERO blocks
  * says nothing: a studio with no shift templates has no blocks at all, and
@@ -76,10 +91,11 @@ export function runwayWindow(todayIso) {
  * this is about a roster that has not been BUILT, and a built week that is one
  * coach short is the staffing chip's job.
  *
- * The daily push walks this whole list. It must: one empty shift this Friday
- * keeps THIS week unready until Friday has passed, and announcing only the
- * first unready week would swallow next week's amber for exactly the days it
- * exists to cover. The chips show the head of the list (rosterRunway).
+ * The daily push walks this whole list. It must: one shift in NEXT week that
+ * cannot be filled keeps next week unready until it starts, and announcing
+ * only the first unready week would hide the week after until it was 7 days
+ * out, swallowing most of its amber. The chips show the head of the list
+ * (rosterRunway).
  *
  * @param {Array<{ weekStart: string, blocks: number, staffed: number, underMin: number, published: number }>} weeks
  * @param {string} todayIso
@@ -94,7 +110,7 @@ export function rosterRunwayWeeks(weeks, todayIso) {
   for (const w of sorted) {
     const daysAway = daysBetween(todayIso, w.weekStart)
     if (daysAway > RUNWAY_AMBER_DAYS) break
-    if (daysAway < -6) continue // a week that has fully passed
+    if (daysAway < 1) continue // this week (or a past one): not the runway's business
     const blocks = Number(w.blocks) || 0
     if (blocks === 0) continue
     const staffed = Math.min(blocks, Number(w.staffed) || 0)
@@ -128,7 +144,8 @@ export function rosterRunway(weeks, todayIso) {
 /**
  * Per-week counts from raw shift_blocks rows (ONE location's rows).
  *
- *   blocks    — blocks dated today or later (a past shift is history)
+ *   blocks    — blocks dated inside the two upcoming Mon-Sun weeks (the current
+ *               week, and anything past, is not counted at all)
  *   staffed   — of those, blocks with at least one LIVE coach
  *   underMin  — of the staffed ones, blocks below their min_coaches
  *   published — blocks whose roster is published, i.e. exactly what a coach
@@ -147,9 +164,9 @@ export function runwayWeeksFromBlocks(blocks, todayIso) {
   )
   for (const b of blocks || []) {
     const s = futureBlockStaffing(b, todayIso)
-    if (!s) continue // past, or unreadable
+    if (!s) continue // unreadable (or past, which the window excludes anyway)
     const week = byWeek.get(weekStartIso(b.block_date))
-    if (!week) continue // beyond the third week
+    if (!week) continue // the current week, or beyond the second upcoming one
     week.blocks++
     if (s.status !== 'empty') week.staffed++
     if (s.status === 'short') week.underMin++
@@ -180,8 +197,7 @@ export function rosterRunwayDetail(runway) {
   if (runway.underMin > 0) parts.push(`${runway.underMin} below the minimum`)
   if (runway.unpublished === runway.blocks) parts.push('not published')
   else if (runway.unpublished > 0) parts.push(`${runway.unpublished} ${plural(runway.unpublished, 'shift', 'shifts')} not published`)
-  const when = runway.daysAway <= 0
-    ? 'This week'
-    : runway.daysAway === 1 ? 'Starts tomorrow' : `Starts in ${runway.daysAway} days`
+  // daysAway is always >= 1: a week that has started is never on the runway.
+  const when = runway.daysAway === 1 ? 'Starts tomorrow' : `Starts in ${runway.daysAway} days`
   return `${when}: ${parts.join(', ')}.`
 }

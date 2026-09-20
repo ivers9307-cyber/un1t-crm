@@ -59,11 +59,11 @@ describe('fetchRosterRunways', () => {
     expect(db.calls.map((c) => c.table)).toEqual(['shift_templates'])
   })
 
-  it('reads today to the Sunday of the third week, ordered and ranged (the 1,000-row cap)', async () => {
+  it('reads NEXT Monday to the Sunday of the week after (never the current week), ordered and ranged (the 1,000-row cap)', async () => {
     const db = makeDb({ templates: [tpl(NORTH)] })
     await fetchRosterRunways(db, [NORTH], { todayIso: TODAY })
     const f = db.calls.find((c) => c.table === 'shift_blocks').filters
-    expect(f).toContainEqual(['gte', 'block_date', '2026-09-19'])
+    expect(f).toContainEqual(['gte', 'block_date', '2026-09-21'])
     expect(f).toContainEqual(['lte', 'block_date', '2026-10-04'])
     expect(f).toContainEqual(['order', 'id', { ascending: true }])
     expect(f).toContainEqual(['range', 0, 999])
@@ -83,15 +83,25 @@ describe('fetchRosterRunways', () => {
     const db = makeDb({
       templates: [tpl(NORTH)],
       blocks: [
-        block(NORTH, '2026-09-20', { coaches: 0, roster: 'published' }), // one empty shift left this week
-        block(NORTH, '2026-09-22', { coaches: 1, roster: 'published' }), // next week is fine
+        block(NORTH, '2026-09-22', { coaches: 1, roster: 'published' }),
+        block(NORTH, '2026-09-23', { coaches: 0, roster: 'published' }), // one shift next week nobody can fill
         block(NORTH, '2026-09-28'),                                      // the week after is unbuilt
       ],
     })
     const { data } = await fetchRosterRunways(db, [NORTH, SOUTH], { todayIso: TODAY })
-    expect(data.weeksByLocation[NORTH].map((r) => [r.weekStart, r.severity])).toEqual([['2026-09-14', 'red'], ['2026-09-28', 'amber']])
+    expect(data.weeksByLocation[NORTH].map((r) => [r.weekStart, r.severity])).toEqual([['2026-09-21', 'red'], ['2026-09-28', 'amber']])
     expect(data.byLocation[NORTH]).toEqual(data.weeksByLocation[NORTH][0])
     expect(data.weeksByLocation[SOUTH]).toEqual([]) // no active template: nothing, not undefined
+  })
+
+  it('a gap in the CURRENT week is not the runway\'s business, even if a row for it turns up', async () => {
+    const db = makeDb({
+      templates: [tpl(NORTH)],
+      blocks: [block(NORTH, '2026-09-20', { coaches: 0, roster: 'published' }), block(NORTH, '2026-09-28')],
+    })
+    const { data } = await fetchRosterRunways(db, [NORTH], { todayIso: TODAY })
+    expect(data.weeksByLocation[NORTH].map((r) => r.weekStart)).toEqual(['2026-09-28'])
+    expect(data.byLocation[NORTH]).toMatchObject({ weekStart: '2026-09-28', severity: 'amber' })
   })
 
   it('a failed read is a failure, never "every week is ready"', async () => {

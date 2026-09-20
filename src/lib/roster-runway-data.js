@@ -6,10 +6,13 @@
 //
 // Why this does not call fetchStaffingGapsThisWeek (src/lib/roster-staffing.js):
 // that reader is hard-wired to "today .. this Sunday" and returns three totals
-// across all locations. The runway needs three weeks, per location, plus each
-// block's roster status. What IS reused is the part that matters, the staffing
-// answer (futureBlockStaffing, via runwayWeeksFromBlocks) and the same select
-// shape, so "staffed" means the same thing on every surface.
+// across all locations. The two are COMPLEMENTS: it owns the current week (as
+// does the schedule banner, for publication), and the runway owns the two
+// weeks that start after it, per location, with each block's roster status.
+// The current week's blocks are not read here at all. What IS reused is the
+// part that matters, the staffing answer (futureBlockStaffing, via
+// runwayWeeksFromBlocks) and the same select shape, so "staffed" means the
+// same thing on every surface.
 
 import { selectAll } from './select-all'
 import { dublinTodayStr } from './dublin-time'
@@ -28,7 +31,8 @@ import { runwayWindow, runwayWeeksFromBlocks, rosterRunwayWeeks } from '@shared/
  * @param {{ todayIso?: string }} [opts]  the Dublin business day
  * `byLocation[id]` is the FIRST unready week (or null): what a chip shows.
  * `weeksByLocation[id]` is EVERY unready week inside the horizon (or []): what
- * the daily push walks, so a gap this week cannot mask next week's alert.
+ * the daily push walks, so one unfillable shift next week cannot hide the week
+ * after until it is 7 days out. Only weeks that start AFTER today appear.
  *
  * @returns {Promise<{ success: true, data: { byLocation: Record<string, object|null>, weeksByLocation: Record<string, object[]> } } | { success: false, error: string }>}
  */
@@ -55,7 +59,7 @@ export async function fetchRosterRunways(db, locationIds, { todayIso = dublinTod
   const { from, to } = runwayWindow(todayIso)
   let blocks
   try {
-    // Paged: three weeks x ~50 blocks x several studios can pass the 1,000-row
+    // Paged: two weeks x ~50 blocks x many studios can pass the 1,000-row
     // select cap, and a truncated read would silently call a week "ready".
     blocks = await selectAll((lo, hi) => db
       .from('shift_blocks')
