@@ -20,12 +20,22 @@ const PUBLICATION_CHIP = {
 
 /**
  * @param {object} props
- * @param {{status:string, draftPending?:boolean, publishedCount?:number, blockCount?:number}} props.publication
+ * @param {{status:string, draftPending?:boolean, publishedCount?:number, blockCount?:number}|null} props.publication
+ *   null (or status 'none') = nothing to say right now: loading, or a period
+ *   with no shifts. The live region stays; only its contents go.
  * @param {'week'|'month'} props.viewType
  * @param {()=>void} props.onOpenChangeLog
+ * @param {React.RefObject<HTMLButtonElement>} [props.triggerRef]  set on the
+ *   button, so the drawer can hand focus back to it on close.
  */
-export default function PublicationStatusChip({ publication, viewType, onOpenChangeLog }) {
-  const chip = PUBLICATION_CHIP[publication.status]
+export default function PublicationStatusChip({ publication, viewType, onOpenChangeLog, triggerRef }) {
+  // The role=status wrapper is ALWAYS mounted. A live region that is inserted
+  // already populated is often skipped by screen readers; one that is already
+  // there and then changes is announced. It used to unmount on every load.
+  // React leaves the DOM alone when a re-render produces the same text, so a
+  // plain re-render announces nothing.
+  const chip = publication ? PUBLICATION_CHIP[publication.status] : null
+  if (!chip) return <div className="flex justify-center" role="status" />
   const Icon = chip.Icon
   const periodWord = viewType === 'month' ? 'Month' : 'Week'
   const label = PUBLICATION_LABELS[publication.status]
@@ -51,8 +61,13 @@ export default function PublicationStatusChip({ publication, viewType, onOpenCha
     <div className="mt-1.5 flex justify-center" role="status">
       {canOpenLog ? (
         <button
+          ref={triggerRef}
           type="button"
           data-testid="publication-status"
+          // The content alone names it "Week status: Published", which says
+          // nothing about what pressing it does, and a title never reaches a
+          // touch user. The visible text is unchanged.
+          aria-label={`${label}${extra}. View changes since publish`}
           aria-haspopup="dialog"
           title="See changes since publish"
           onClick={onOpenChangeLog}

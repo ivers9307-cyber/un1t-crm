@@ -211,6 +211,10 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
   // drawer is open. The period is captured at click time so the drawer keeps
   // describing the period it was opened for.
   const [changeLog, setChangeLog] = useState(null)
+  // Where focus goes back to when the drawer closes. Safari and Firefox on
+  // macOS do not focus a button on click, so Modal's own "where did focus come
+  // from" reads <body> there and needs to be told.
+  const changeLogTriggerRef = useRef(null)
   // SCHEDULE-PUBLISH-GUARD.1 — roster edits made since the last publish.
   // Drives the "you have unpublished changes" exit guard below.
   //
@@ -1118,14 +1122,15 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
               calendar never said; the only signal was an in-memory
               unsaved-changes flag a reload drops. Derived from each block's
               roster status plus the draft rosters awaiting approval.
-              Manager only (a coach's feed is published-only), and hidden
+              Manager only (a coach's feed is published-only), and EMPTIED
               while loading so a stale week's answer never sits under new
-              dates. */}
-          {isManager && !loading && publication.status !== 'none' && (
+              dates. The chip's live region itself stays mounted (CHANGELOG.1). */}
+          {isManager && (
             <PublicationStatusChip
-              publication={publication}
+              publication={loading ? null : publication}
               viewType={viewType}
               onOpenChangeLog={openChangeLog}
+              triggerRef={changeLogTriggerRef}
             />
           )}
         </div>
@@ -1793,6 +1798,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
           periodStart={changeLog.start}
           periodEnd={changeLog.end}
           periodLabel={changeLog.label}
+          restoreFocusRef={changeLogTriggerRef}
           onClose={() => setChangeLog(null)}
         />
       )}

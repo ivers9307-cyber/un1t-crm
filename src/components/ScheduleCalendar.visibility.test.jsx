@@ -329,16 +329,44 @@ describe('changes since publish (CHANGELOG.1)', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
   })
 
-  it('focus goes back to the chip when the drawer closes', async () => {
+  it('focus goes back to the chip when the drawer closes, even when the click never focused it', async () => {
+    // Safari and Firefox on macOS do not focus a button on click, so Modal
+    // captures <body> as "where focus came from". fireEvent.click behaves the
+    // same way, which makes this the honest case: the chip is NOT pre-focused.
     await renderCalendar({ blocks: [SHORT_BLOCK, OK_BLOCK] })
     const chip = screen.getByTestId('publication-status')
-    chip.focus() // fireEvent.click does not move focus the way a real click or Enter does
+    expect(document.activeElement).not.toBe(chip)
     fireEvent.click(chip)
     const dialog = await screen.findByRole('dialog')
     expect(dialog.contains(document.activeElement)).toBe(true)
     fireEvent.keyDown(document, { key: 'Escape' })
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect(document.activeElement).toBe(screen.getByTestId('publication-status'))
+  })
+
+  it('the button is named for what it opens, not only for the status', async () => {
+    await renderCalendar({ blocks: [SHORT_BLOCK, OK_BLOCK] })
+    expect(screen.getByRole('button', { name: 'Published. View changes since publish' }))
+      .toBe(screen.getByTestId('publication-status'))
+  })
+
+  it('a partly published week names its count too', async () => {
+    await renderCalendar({ blocks: [SHORT_BLOCK, EMPTY_BLOCK, OK_BLOCK] })
+    expect(screen.getByRole('button', { name: 'Partly published (2 of 3 shifts). View changes since publish' })).toBeTruthy()
+  })
+
+  it('the live region stays mounted while the week changes, so the new status is announced', async () => {
+    // A role=status node that is inserted ALREADY populated is often skipped
+    // by screen readers. The wrapper must be the same node before, during and
+    // after a load; only its contents change.
+    await renderCalendar({ blocks: [SHORT_BLOCK, OK_BLOCK] })
+    const region = screen.getByTestId('publication-status').closest('[role="status"]')
+    fireEvent.click(screen.getByLabelText('Next week'))
+    await waitFor(() => expect(screen.queryByText(/Loading roster/)).toBeNull())
+    expect(region.isConnected).toBe(true)
+    fireEvent.click(screen.getByLabelText('Previous week'))
+    const chip = await screen.findByTestId('publication-status')
+    expect(chip.closest('[role="status"]')).toBe(region)
   })
 
   it('the status is still a live region, and the button says what it opens', async () => {

@@ -14,7 +14,7 @@ import Modal from '@/components/ui/Modal'
 import { rosterChangeSentence, rosterChangeTold, rosterChangeByline } from '@/lib/roster-change-format'
 import { SESSION_ENDED_MESSAGE } from './useScheduleData'
 
-export default function RosterChangeLogDrawer({ locationId, periodStart, periodEnd, periodLabel, onClose }) {
+export default function RosterChangeLogDrawer({ locationId, periodStart, periodEnd, periodLabel, onClose, restoreFocusRef }) {
   // Starts in `loading`, so the effect below never sets state synchronously.
   const [state, setState] = useState({ loading: true, error: null, changes: [], truncated: false })
 
@@ -52,7 +52,7 @@ export default function RosterChangeLogDrawer({ locationId, periodStart, periodE
   const untold = changes.filter((c) => !c.notified_at).length
 
   return (
-    <Modal open onClose={onClose} title="Changes since publish" size="lg">
+    <Modal open onClose={onClose} title="Changes since publish" size="lg" restoreFocusRef={restoreFocusRef}>
       <div>
         <div className="text-xs text-un1t-subtle mb-3">{periodLabel}</div>
 
