@@ -16,6 +16,7 @@ const { fetchApiShiftRows } = await import('./roster-read')
 const { notifyUsers } = await import('./notify')
 const { logWarn, logError } = await import('./log')
 const {
+  NO_REMINDER_BEFORE, DAY_LEAD_MINUTES,
   reminderPlanFor, isReminderDue, dueShiftReminders, leaveKeysFor, leaveKey, reminderKey,
   coRosteredFirstNames, buildShiftReminderMessage, runShiftReminders,
 } = await import('./shift-reminders')
@@ -64,10 +65,34 @@ describe('reminderPlanFor — which rule, and the fire instant', () => {
     expect(p.leadMinutes).toBe(120)
   })
 
-  it('the 08:00 boundary: 07:59 is early, 08:00 is not', () => {
-    const tpl = (start) => ({ name: 'T', start_time: start, end_time: '13:00:00' })
-    expect(reminderPlanFor(shift({ shift_templates: tpl('07:59:00') })).kind).toBe('evening_before')
-    expect(reminderPlanFor(shift({ shift_templates: tpl('08:00:00') })).kind).toBe('two_hours')
+  // AMENDED RULE: nobody is reminded before 07:00 Dublin. If 2 hours before the
+  // start would land before 07:00 (any start before 09:00), it goes the evening
+  // before instead.
+  it.each([
+    ['08:00', 'evening_before', '2026-09-21T19:00:00.000Z'], // T-2h would be 06:00
+    ['08:59', 'evening_before', '2026-09-21T19:00:00.000Z'], // T-2h would be 06:59
+    ['09:00', 'two_hours', '2026-09-22T06:00:00.000Z'],      // 07:00 Dublin, the earliest push of any day
+    ['09:15', 'two_hours', '2026-09-22T06:15:00.000Z'],      // 07:15 Dublin
+  ])('a %s start is %s', (start, kind, fireIso) => {
+    const p = reminderPlanFor(shift({ shift_templates: { name: 'T', start_time: `${start}:00`, end_time: '13:00:00' } }))
+    expect(p.kind).toBe(kind)
+    expect(iso(p.fireAtMs)).toBe(fireIso)
+  })
+
+  it('the threshold is the two named numbers, not a third one', () => {
+    expect(NO_REMINDER_BEFORE).toBe('07:00')
+    expect(DAY_LEAD_MINUTES).toBe(120)
+  })
+
+  it('no start time of day ever produces a fire time before 07:00 or after 22:00 Dublin', () => {
+    for (let m = 0; m < 24 * 60; m += 5) {
+      const hh = String(Math.floor(m / 60)).padStart(2, '0'), mm = String(m % 60).padStart(2, '0')
+      for (const date of ['2026-09-22', '2026-03-29', '2026-10-25', '2026-01-15']) {
+        const p = reminderPlanFor(shift({ shift_date: date, shift_templates: { name: 'T', start_time: `${hh}:${mm}:00`, end_time: '23:59:00' } }))
+        const wall = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Dublin', hour: '2-digit', minute: '2-digit', hour12: false }).format(p.fireAtMs)
+        expect(wall >= '07:00' && wall <= '22:00', `${date} ${hh}:${mm} fires at ${wall}`).toBe(true)
+      }
+    }
   })
 
   it('uses the EFFECTIVE start: assignment override, then block, then template', () => {
@@ -122,6 +147,11 @@ describe('dueShiftReminders — the timing table', () => {
     ['10:00 shift at 08:00 (T-2h) -> due', midShift(), '2026-09-22T07:00:00Z', ['two_hours']],
     ['10:00 shift created at 09:30 (30 min notice) -> due', midShift(), '2026-09-22T08:30:00Z', ['two_hours']],
     ['10:00 shift created at 09:31 (29 min notice) -> nothing', midShift(), '2026-09-22T08:31:00Z', []],
+    ['08:30 shift at 06:30 (where the old rule fired) -> already due since 20:00 the evening before', shift({ shift_templates: { name: 'T', start_time: '08:30:00', end_time: '13:00:00' } }), '2026-09-22T05:30:00Z', ['evening_before']],
+    ['08:30 shift at 19:59 the evening before -> not yet', shift({ shift_templates: { name: 'T', start_time: '08:30:00', end_time: '13:00:00' } }), '2026-09-21T18:59:00Z', []],
+    ['08:30 shift at 20:00 the evening before -> due', shift({ shift_templates: { name: 'T', start_time: '08:30:00', end_time: '13:00:00' } }), '2026-09-21T19:00:00Z', ['evening_before']],
+    ['09:00 shift at 06:59 -> not yet', shift({ shift_templates: { name: 'T', start_time: '09:00:00', end_time: '13:00:00' } }), '2026-09-22T05:59:00Z', []],
+    ['09:00 shift at 07:00 -> due', shift({ shift_templates: { name: 'T', start_time: '09:00:00', end_time: '13:00:00' } }), '2026-09-22T06:00:00Z', ['two_hours']],
     ['spring-forward 06:00 shift at 19:59 Sat -> not yet', shift({ shift_date: '2026-03-29' }), '2026-03-28T19:59:00Z', []],
     ['spring-forward 06:00 shift at 20:00 Sat -> due', shift({ shift_date: '2026-03-29' }), '2026-03-28T20:00:00Z', ['evening_before']],
     ['fall-back 06:00 shift at 19:59 Sat -> not yet', shift({ shift_date: '2026-10-25' }), '2026-10-24T18:59:00Z', []],

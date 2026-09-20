@@ -1,9 +1,11 @@
 // SHIFTREMIND.1 — shift reminders for coaches.
 //
-// THE RULE (one reminder per shift assignment, ever):
-//   - a shift that starts BEFORE 08:00 Dublin gets its reminder at 20:00 Dublin
-//     the evening before (a 2-hour lead on a 06:00 shift is a 04:00 push);
-//   - every other shift gets it 2 hours before the start.
+// THE RULE:
+//   - NOBODY IS REMINDED BEFORE 07:00 (location time). A reminder normally goes
+//     2 hours before the start. If that would land before 07:00 (any start
+//     before 09:00: a 2-hour lead on a 06:00 shift is a 04:00 push, on an 08:30
+//     shift a 06:30 one), it goes at 20:00 the evening before instead.
+//     A 09:00 start is reminded at 07:00, the earliest push of any day.
 //
 // WHEN IT IS DUE: from its fire time onwards, until 30 minutes before the
 // shift starts. There is deliberately NO upper "late window" like the task /
@@ -25,7 +27,7 @@ import { fetchApiShiftRows } from './roster-read'
 import { notifyUsers } from './notify'
 import { logWarn, logError } from './log'
 
-export const EARLY_START_CUTOFF = '08:00'
+export const NO_REMINDER_BEFORE = '07:00' // no push earlier than this, location wall-clock
 export const EVENING_REMINDER_TIME = '20:00'
 export const DAY_LEAD_MINUTES = 120
 export const MIN_NOTICE_MINUTES = 30
@@ -33,6 +35,7 @@ export const MIN_NOTICE_MINUTES = 30
 const DEFAULT_TZ = 'Europe/Dublin'
 const MINUTE_MS = 60 * 1000
 const hhmm = (t) => String(t || '').slice(0, 5)
+const minutesOfDay = (t) => { const [h, m] = hhmm(t).split(':').map(Number); return h * 60 + m }
 
 /**
  * When does this shift's one reminder fire?
@@ -50,12 +53,14 @@ export function reminderPlanFor(shift, tz = DEFAULT_TZ) {
   if (!startUtc) return null
   const startMs = startUtc.getTime()
 
-  if (hhmm(start) < EARLY_START_CUTOFF) {
+  // Would "2 hours before" fall before 07:00 on the wall clock? Then the evening before.
+  if (minutesOfDay(start) - DAY_LEAD_MINUTES < minutesOfDay(NO_REMINDER_BEFORE)) {
     const fireUtc = localToUtc(addDaysISO(shift.shift_date, -1), EVENING_REMINDER_TIME, tz)
     if (!fireUtc) return null
     const fireAtMs = fireUtc.getTime()
     // Wall-clock 20:00 -> wall-clock start, measured in REAL minutes: 600 for
-    // a 06:00 shift on a normal day, 540 / 660 across the two DST changes.
+    // a 06:00 shift on a normal day, 540 / 660 across the two DST changes
+    // (so 240..839 overall, for starts 00:00..08:59).
     return { kind: 'evening_before', startMs, fireAtMs, leadMinutes: Math.round((startMs - fireAtMs) / MINUTE_MS) }
   }
   return { kind: 'two_hours', startMs, fireAtMs: startMs - DAY_LEAD_MINUTES * MINUTE_MS, leadMinutes: DAY_LEAD_MINUTES }
