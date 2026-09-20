@@ -7,7 +7,7 @@ import { timeOffStatusSchema, MANAGER_ROLES } from '@/lib/schemas'
 import { notifyUsersOnce } from '@/lib/push-dedup'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import {
-  canDecideTimeOff, getProfileLocationIds, getEmploymentType, ensureHolidayAllowanceRow, findLeaveClashes,
+  canDecideTimeOff, decidingLocationIds, getProfileLocationIds, getEmploymentType, ensureHolidayAllowanceRow, findLeaveClashes,
 } from '@/lib/time-off-leave'
 import { isExpiredPendingRequest, isTimeOffTypeAllowedFor } from '@shared/time-off'
 
@@ -167,7 +167,11 @@ export async function PUT(request, props) {
   // clash and choose "Unassign them" (POST ./unassign-clashes). Advisory: a
   // failed lookup never undoes the approval.
   if (status === 'approved') {
-    const { clashes, error: clashError } = await findLeaveClashes(db, data, today)
+    // ORGSCOPE.1 — bounded by the organisation(s) of the studios this approver
+    // decides from, not by where the leave was filed.
+    const { clashes, error: clashError } = await findLeaveClashes(db, data, today, {
+      scopeLocationIds: decidingLocationIds(user, existing.location_id, requesterLocations),
+    })
     if (clashError) {
       console.error('[time-off] clash lookup failed', clashError.message)
       return NextResponse.json({ success: true, data, clashes: [], clashes_error: 'Could not check the roster for clashes' })

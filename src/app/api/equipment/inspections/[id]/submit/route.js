@@ -243,13 +243,14 @@ export const POST = withAuth(
       issueId = out.issue.id
 
       // The owner notification rides the EXISTING issues push — no new
-      // category. Best-effort: never block the response.
+      // category (bare, as /api/issues sends it: push.js prepends
+      // `notify_`). Best-effort: never block the response.
       try {
         await sendPushToRolesAtLocation(locationId, ['owner', 'master'], {
           title: 'Equipment fault reported',
           body: `${asset?.name || 'Equipment'} failed inspection.`,
           data: { type: 'issue', issueId },
-          category: 'notify_issue_submitted',
+          category: 'issue_submitted',
         })
       } catch (err) {
         logWarn('equipment', 'fault push failed', { issueId, error: err.message })

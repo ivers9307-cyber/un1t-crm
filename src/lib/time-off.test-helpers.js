@@ -44,3 +44,37 @@ export function fakeDb(resolve) {
 export function queriesOf(db, table, action = 'select') {
   return db.queries.filter((q) => q.table === table && q.action === action)
 }
+
+// ── ORGSCOPE.1 — fakes that HONOUR the organisation filters ────────────────
+// A canned answer would pass whether or not the code sent the filter; these
+// answer the way PostgREST would, so a dropped filter is a wrong result.
+
+/**
+ * Answer a `locations` query from `{ locationId: organisationId }`: the
+ * single-row read siblingLocationIds starts with, then its
+ * `.eq('organization_id').neq('id')` sibling read.
+ */
+export function resolveLocations(q, orgByLocation) {
+  if (q.terminal === 'single' || q.terminal === 'maybeSingle') {
+    const org = orgByLocation[q.eq.id]
+    return { data: org ? { id: q.eq.id, organization_id: org } : null, error: null }
+  }
+  const not = q.calls.filter(([op]) => op === 'neq').map(([, , v]) => v)
+  return {
+    data: Object.entries(orgByLocation)
+      .filter(([id, org]) => org === q.eq.organization_id && !not.includes(id))
+      .map(([id]) => ({ id })),
+    error: null,
+  }
+}
+
+/** The studios a shift_assignments read was restricted to, or undefined if it was open. */
+export function locationScopeOf(q) {
+  return q.calls.find(([op, col]) => op === 'in' && col === 'shift_blocks.location_id')?.[2]
+}
+
+/** shift_assignments rows as filtered by that restriction; an OPEN read returns every row. */
+export function scopedAssignments(q, rows) {
+  const scope = locationScopeOf(q)
+  return { data: scope ? rows.filter((r) => scope.includes(r.shift_blocks?.location_id)) : rows, error: null }
+}
