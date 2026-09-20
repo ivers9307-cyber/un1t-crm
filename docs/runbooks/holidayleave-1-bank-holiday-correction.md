@@ -1,6 +1,6 @@
 # Bank-holiday leave correction runbook (HOLIDAYLEAVE.1)
 
-One-off, operator-run, **after** the HOLIDAYLEAVE.1 deploy is live: **dry run → read every row → apply once → dry run again.**
+One-off, operator-run, **after** the HOLIDAYLEAVE.1 deploy is live: **dry run → read every row → save it → apply once → save the rollback record → dry run again.** An undo is in section 5.
 Not a migration. Supabase MCP `execute_sql` against the **un1t-crm** project
 (`iyvtbjjxdggiadzwwvdj`, confirm with `list_projects`; NOT sentinel).
 
@@ -24,7 +24,9 @@ became **Ready**, in UTC. The merge time alone is minutes too early, and
 requests filed in that gap were still counted the old way:
 
 ```bash
-gh pr view <PR> --repo ivers9307-cyber/un1t-crm --json mergeCommit --jq .mergeCommit.oid
+# <merge sha> must be the FULL 40-character commit oid: the deployments API
+# answers an empty list for a short sha. This prints it:
+gh pr view <PR> --repo ivers9307-cyber/un1t-crm --json mergeCommit -q .mergeCommit.oid
 gh api "repos/ivers9307-cyber/un1t-crm/deployments?sha=<merge sha>&environment=Production" --jq '.[0].id'
 gh api "repos/ivers9307-cyber/un1t-crm/deployments/<deployment id>/statuses" \
   --jq '.[] | select(.state == "success") | .created_at'      # e.g. 2026-09-22T10:41:07Z
@@ -128,6 +130,14 @@ Before going on:
 - The output contains staff names. The repo is **public**: never paste it into
   a PR, an issue or the changelog.
 
+**Save it before doing anything else.** Write the full dry-run output, and the
+`:deploy_ts` literal used, to a local file outside every git checkout (so not
+under `~/code`), e.g. `~/Documents/un1t-ops/holidayleave-1/dry-run-<date>.json`.
+The apply's `rollback_record` (section 3) goes beside it. Keep the folder until
+**31 January 2028**, when the 2027 leave year is closed and carried over and
+these numbers can no longer matter, then delete it: the dry run holds staff
+names, so it is not kept for ever.
+
 ## 3. Apply (one statement, atomic) — once
 
 One statement with data-modifying CTEs, deliberately: the SQL tool rolls back a
@@ -195,7 +205,7 @@ fixed_requests AS (
    WHERE r.id = f.id
      AND r.status = f.status
      AND r.total_days = f.total_days
-  RETURNING r.id, r.profile_id, r.status, f.yr, f.holiday_count
+  RETURNING r.id, r.profile_id, r.status, f.yr, f.holiday_count, f.total_days AS old_total_days
 ),
 fixed_allowances AS (
   -- Only APPROVED requests were ever charged, each to the allowance row of
@@ -218,8 +228,18 @@ SELECT
   (SELECT count(*) FROM fixed_requests WHERE status = 'pending')                         AS of_which_pending,
   (SELECT coalesce(sum(holiday_count), 0) FROM fixed_requests WHERE status = 'approved') AS allowance_days_returned,
   (SELECT count(*) FROM fixed_allowances)                                                AS allowance_rows_updated,
-  (SELECT count(*) FROM fixable) - (SELECT count(*) FROM fixed_requests)                 AS skipped_changed_underneath;
+  (SELECT count(*) FROM fixable) - (SELECT count(*) FROM fixed_requests)                 AS skipped_changed_underneath,
+  -- What this run REALLY changed (the dry run can differ: rows skipped, or
+  -- approved in between). Ids and numbers only, no names. Input of the undo.
+  (SELECT jsonb_agg(jsonb_build_object('id', id, 'status', status, 'yr', yr, 'old', old_total_days, 'days_back', holiday_count))
+     FROM fixed_requests)                                                                AS rollback_record;
 ```
+
+**Save `rollback_record` immediately**, verbatim, as
+`rollback-record-<date>.json` beside the dry run (section 2). It is the only
+record of what was changed and the only input the undo accepts; it holds ids
+and numbers, no names. It is `null` when the run corrected nothing. If you
+apply more than once (section 4), save each run's record separately.
 
 ## 4. Prove it is done
 
@@ -228,9 +248,77 @@ rows with `will_fix = true`**; the corrected rows now read `already correct`.
 If `skipped_changed_underneath` was not 0, somebody approved, cancelled or
 edited a request while the statement ran: those rows are still `will_fix` in
 this dry run, read them and apply once more. A further apply on a finished
-estate answers `0, 0, 0, 0, 0`.
+estate answers `0, 0, 0, 0, 0` and a `null` record.
 
-Record the five numbers (numbers only, no names) in the PR's changelog row.
+Post the five numbers (numbers only, no names, not the record) as a **comment
+on the PR**, and keep the local files. Do NOT edit the PR's changelog row to
+add them: that row is already pushed, and `merge=union` on `docs/CHANGELOG.md`
+turns an edited row into a duplicate.
+
+## 5. Undo
+
+Only if the correction itself turns out to be wrong. ONE self-committing
+statement again. Replace `:rollback_record` with the saved JSON as a literal,
+e.g. `'[{"id": "…", "status": "approved", "yr": 2026, "old": 5.0, "days_back": 1}]'::jsonb`
+(one undo per saved record). Un-substituted it is a syntax error; a `null`
+record is an error too, and means there was nothing to undo.
+
+```sql
+WITH rec AS (
+  SELECT (e->>'id')::uuid          AS id,
+         e->>'status'              AS status,
+         (e->>'yr')::int           AS yr,
+         (e->>'old')::numeric      AS old_total_days,
+         (e->>'days_back')::numeric AS days_back
+    FROM jsonb_array_elements(:rollback_record) e
+),
+restored AS (
+  -- Same guards, same race argument as the apply: the row is locked and this
+  -- WHERE is re-checked on its latest version. It is restored only while it is
+  -- STILL in the status the apply recorded AND still holds the corrected value
+  -- (old - days_back). Anything else is skipped and left as it is:
+  --   approved -> cancelled/rejected since: the trigger already returned the
+  --     corrected count, so the books balance. Re-charging would double-count.
+  --   pending -> approved since: the trigger charged the corrected count and
+  --     the row holds the corrected count. Consistent, nothing to restore.
+  --   total_days edited since, or this undo already run: not ours to touch.
+  UPDATE public.time_off_requests r
+     SET total_days = rec.old_total_days,
+         updated_at = now()
+    FROM rec
+   WHERE r.id = rec.id
+     AND r.status = rec.status
+     AND r.total_days = rec.old_total_days - rec.days_back
+  RETURNING r.id, r.profile_id, r.status, rec.yr, rec.days_back
+),
+recharged AS (
+  -- The mig 616 trigger fires on the UPDATE above and does nothing, because
+  -- status did not change: so, as in the apply, the allowance is moved by
+  -- hand, and only for rows recorded approved that are STILL approved (the
+  -- guard above). A cancellation arriving later waits for the row lock and
+  -- then returns the restored count, matching what is re-charged here.
+  UPDATE public.staff_allowances sa
+     SET used_days = sa.used_days + d.days_back,
+         updated_at = now()
+    FROM (SELECT profile_id, yr, sum(days_back) AS days_back
+            FROM restored
+           WHERE status = 'approved'
+           GROUP BY profile_id, yr) d
+   WHERE sa.profile_id = d.profile_id
+     AND sa.year = d.yr
+  RETURNING sa.id
+)
+SELECT
+  (SELECT count(*) FROM restored)                                                  AS requests_restored,
+  (SELECT count(*) FROM restored WHERE status = 'pending')                         AS of_which_pending,
+  (SELECT coalesce(sum(days_back), 0) FROM restored WHERE status = 'approved')     AS allowance_days_recharged,
+  (SELECT count(*) FROM recharged)                                                 AS allowance_rows_updated,
+  (SELECT count(*) FROM rec) - (SELECT count(*) FROM restored)                     AS skipped;
+```
+
+`requests_restored + skipped` is the length of the record. A second run of the
+same undo answers `0, 0, 0, 0, <length>`. For every skipped row, compare the
+record with the row as it is now and decide by hand.
 
 ## Notes
 
@@ -253,6 +341,11 @@ Record the five numbers (numbers only, no names) in the PR's changelog row.
   which is the riskier path. Both bank lists are copied from
   `src/lib/bank-holidays.js` and the test fails if they drift. Anything after
   2027, and any legacy row spanning two years, is reported and never touched.
+- **2025 and earlier are out of scope** (`r.end_date >= '2026-01-01'`; no 2025
+  list is embedded in the statements). That leave year is closed: its
+  allowances have been settled and carried over, so handing a day back to a
+  2025 row changes nothing anyone can take, and most 2025 rows pre-date
+  ROSTER-FIX.2 and would fail the old-count test anyway.
 - **Scope mirrors the code:** type `holiday`; studios whose `locations.country`
   is `IE` (or null, the route's default); contractors excluded (no allowance,
   mig 616; cannot file holiday, LEAVE.3); a closure counts only for the studio
@@ -265,3 +358,13 @@ Record the five numbers (numbers only, no names) in the PR's changelog row.
 - **Assumes READ COMMITTED**, Postgres' and Supabase's default, which
   `execute_sql` does not change. The race argument in section 3 does not hold
   under REPEATABLE READ (there the statement would fail, not mis-charge).
+
+## Known follow-up
+
+- **The WEB leave form still previews calendar days.** `TimeOffManager.jsx`
+  (~550) computes `totalDays` as end minus start plus one and flags
+  "(exceeds balance)" against that number, while the server now charges fewer
+  (weekends were already a mismatch; bank holidays and closures widen it). A
+  coach can be warned off a request the server would accept. Not touched by
+  HOLIDAYLEAVE.1: it is fixed by reusing the server-computed preview that the
+  LEAVEPHONE.1 PR adds.

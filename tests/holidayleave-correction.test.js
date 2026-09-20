@@ -27,7 +27,8 @@ const mig = (f) => readFileSync(path.join(root, 'supabase/migrations', f), 'utf8
 const RUNBOOK = readFileSync(path.join(root, 'docs/runbooks/holidayleave-1-bank-holiday-correction.md'), 'utf8')
 
 const SQL_BLOCKS = [...RUNBOOK.matchAll(/```sql\n([\s\S]*?)```/g)].map((m) => m[1])
-const [DRY_RAW, APPLY_RAW] = SQL_BLOCKS
+const [DRY_RAW, APPLY_RAW, UNDO_RAW] = SQL_BLOCKS
+const DEPLOY_SCOPED = [DRY_RAW, APPLY_RAW]
 const DEPLOY_TS = "'2026-09-25T12:00:00Z'::timestamptz"
 const withDeployTs = (sql) => sql.replaceAll(':deploy_ts', DEPLOY_TS)
 
@@ -112,9 +113,18 @@ async function used() {
   return Object.fromEntries(rows.map((r) => [`coach${r.profile_id.slice(-1)}/${r.year}`, r.used]))
 }
 const dryRun = async () => (await db.query(withDeployTs(DRY_RAW))).rows
-const apply = async () => {
-  const [row] = (await db.query(withDeployTs(APPLY_RAW))).rows
-  return Object.fromEntries(Object.entries(row).map(([k, v]) => [k, Number(v)]))
+const counts = (row) => Object.fromEntries(Object.entries(row).map(([k, v]) => [k, Number(v)]))
+// The apply's counts, and (applyFull) the rollback_record it hands the operator.
+const applyFull = async () => {
+  const [{ rollback_record: record, ...rest }] = (await db.query(withDeployTs(APPLY_RAW))).rows
+  return { result: counts(rest), record }
+}
+const apply = async () => (await applyFull()).result
+// What the operator does: paste the saved JSON in as the statement's literal.
+const undo = async (record) => {
+  const literal = `'${JSON.stringify(record)}'::jsonb`
+  const [row] = (await db.query(UNDO_RAW.replaceAll(':rollback_record', literal))).rows
+  return counts(row)
 }
 const keyOf = (id) => Object.keys(ids).find((k) => ids[k] === id)
 
@@ -158,9 +168,11 @@ const CORRECTED = {
 }
 
 describe('the runbook itself', () => {
-  it('carries exactly two SQL statements, both scoped by the same :deploy_ts placeholder', () => {
-    expect(SQL_BLOCKS).toHaveLength(2)
-    for (const sql of SQL_BLOCKS) expect(sql).toMatch(/r\.created_at < :deploy_ts/)
+  it('carries exactly three SQL statements: dry run and apply scoped by the same :deploy_ts, undo fed by :rollback_record', () => {
+    expect(SQL_BLOCKS).toHaveLength(3)
+    for (const sql of DEPLOY_SCOPED) expect(sql).toMatch(/r\.created_at < :deploy_ts/)
+    expect(UNDO_RAW).toMatch(/jsonb_array_elements\(:rollback_record\)/)
+    expect(UNDO_RAW).not.toMatch(/:deploy_ts/)
   })
 
   it('refuses to run until :deploy_ts has been substituted', async () => {
@@ -169,15 +181,26 @@ describe('the runbook itself', () => {
     expect(await totals()).toMatchObject({ juneBankHolidayWeek: 5 })
   })
 
-  it('the dry run writes nothing; the apply is ONE statement with no transaction control', () => {
+  it('the undo refuses to run until :rollback_record has been substituted', async () => {
+    const { record } = await applyFull()
+    expect(record).toHaveLength(8)
+    const [days, allowances] = [await totals(), await used()]
+    await expect(db.query(UNDO_RAW)).rejects.toThrow()
+    expect(await totals()).toEqual(days)
+    expect(await used()).toEqual(allowances)
+  })
+
+  it('the dry run writes nothing; the apply and the undo are each ONE statement with no transaction control', () => {
     expect(DRY_RAW).not.toMatch(/\b(UPDATE|INSERT|DELETE)\b/i)
-    expect(APPLY_RAW.trim().replace(/;$/, '')).not.toMatch(/;/)
-    expect(APPLY_RAW).not.toMatch(/\b(BEGIN|COMMIT)\b/i)
+    for (const sql of [APPLY_RAW, UNDO_RAW]) {
+      expect(sql.trim().replace(/;$/, '')).not.toMatch(/;/)
+      expect(sql).not.toMatch(/\b(BEGIN|COMMIT)\b/i)
+    }
   })
 
   it('both statements embed the app\'s own Irish bank-holiday list for 2026-2027', () => {
     const app = getStaticHolidays('2026-01-01', '2027-12-31', 'IE').map((h) => h.date)
-    for (const sql of SQL_BLOCKS) {
+    for (const sql of DEPLOY_SCOPED) {
       const bank = sql.slice(sql.indexOf('bank(d) AS ('), sql.indexOf('candidates AS ('))
       expect([...bank.matchAll(/'(\d{4}-\d{2}-\d{2})'/g)].map((m) => m[1])).toEqual(app)
     }
@@ -263,6 +286,77 @@ describe('the correction', () => {
     await apply()
     expect(await totals()).toMatchObject({ juneBankHolidayWeek: 5 })
     expect((await used())['coach1/2026']).toBe(9) // 15 - 5 cancelled - 1 for closureWeek
+  })
+})
+
+describe('the rollback record and the undo', () => {
+  it('the apply records exactly what it changed: ids and numbers, no names', async () => {
+    const before = await totals()
+    const { record } = await applyFull()
+    expect(record.map((e) => keyOf(e.id)).sort()).toEqual(Object.keys(CORRECTED).sort())
+    for (const e of record) {
+      expect(Object.keys(e).sort()).toEqual(['days_back', 'id', 'old', 'status', 'yr'])
+      expect(Number(e.old)).toBe(before[keyOf(e.id)])
+      expect(Number(e.old) - Number(e.days_back)).toBe(CORRECTED[keyOf(e.id)])
+    }
+    const by = Object.fromEntries(record.map((e) => [keyOf(e.id), e]))
+    expect(by.january2027).toMatchObject({ status: 'approved', yr: 2027 })
+    expect(by.pendingOctober).toMatchObject({ status: 'pending', yr: 2026 })
+    expect(JSON.stringify(record)).not.toMatch(/Coach/)
+  })
+
+  it('an apply that corrects nothing records nothing', async () => {
+    await apply()
+    expect((await applyFull()).record).toBeNull()
+  })
+
+  it('apply then undo returns every touched request and allowance to its original numbers', async () => {
+    const [days, allowances] = [await totals(), await used()]
+    const { record } = await applyFull()
+    expect(await undo(record)).toEqual({
+      requests_restored: 8, of_which_pending: 2, allowance_days_recharged: 7, allowance_rows_updated: 5, skipped: 0,
+    })
+    expect(await totals()).toEqual(days)
+    expect(await used()).toEqual(allowances)
+  })
+
+  it('undo twice: the second changes nothing', async () => {
+    const { record } = await applyFull()
+    await undo(record)
+    const [days, allowances] = [await totals(), await used()]
+    expect(await undo(record)).toEqual({
+      requests_restored: 0, of_which_pending: 0, allowance_days_recharged: 0, allowance_rows_updated: 0, skipped: 8,
+    })
+    expect(await totals()).toEqual(days)
+    expect(await used()).toEqual(allowances)
+  })
+
+  it('a request cancelled between apply and undo is skipped, and its allowance is not credited twice', async () => {
+    const { record } = await applyFull()
+    await setStatus('juneBankHolidayWeek', 'cancelled') // the real trigger returns the corrected 4
+    expect((await used())['coach1/2026']).toBe(9) // 15 - 1 - 1 by the apply, - 4 by the cancel
+    const result = await undo(record)
+    expect(result).toMatchObject({ requests_restored: 7, skipped: 1 })
+    expect(await totals()).toMatchObject({ juneBankHolidayWeek: 4, closureWeek: 5 })
+    // Only closureWeek's day is re-charged: 10 = the original 15 less the whole
+    // cancelled request (5). Re-charging the cancelled one too would say 11.
+    expect((await used())['coach1/2026']).toBe(10)
+  })
+
+  it('a pending request approved between apply and undo is skipped: it was charged the corrected count', async () => {
+    const { record } = await applyFull()
+    await setStatus('pendingOctober', 'approved') // the real trigger charges the corrected 4
+    expect((await undo(record)).skipped).toBe(1)
+    expect(await totals()).toMatchObject({ pendingOctober: 4 })
+    expect((await used())['coach2/2026']).toBe(7)
+  })
+
+  it('a request whose total_days was edited after the apply is skipped', async () => {
+    const { record } = await applyFull()
+    await db.query('UPDATE public.time_off_requests SET total_days = 2 WHERE id = $1', [ids.closureWeek])
+    expect(await undo(record)).toMatchObject({ requests_restored: 7, skipped: 1 })
+    expect(await totals()).toMatchObject({ closureWeek: 2, juneBankHolidayWeek: 5 })
+    expect((await used())['coach1/2026']).toBe(14) // 13 + the one day that WAS restored
   })
 })
 
