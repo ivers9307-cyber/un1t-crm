@@ -60,7 +60,7 @@ const user = {
 // back the item, so every call site stays a one-line click. The Time off item
 // is itself the <a>, so the exit-guard tests need no .closest('a').
 function moreItem(label) {
-  if (!screen.queryByRole('menu')) fireEvent.click(screen.getByRole('button', { name: /^(More|Copying…)$/ }))
+  if (!screen.queryByRole('menu')) fireEvent.click(screen.getByRole('button', { name: /^More( · .+)?$/ }))
   return screen.getByRole('menuitem', { name: label })
 }
 

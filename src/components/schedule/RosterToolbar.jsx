@@ -21,6 +21,10 @@
 // controls, and Publish is the last child so on a phone it drops to its own
 // line instead of leaving the screen. Toggle icons hide below `sm` to let both
 // toggles and More share one 358px line. None of that is provable in jsdom.
+// In select mode More reads "More · selecting (3)" (about 150px): it no longer
+// shares that line, it takes the next one, and Publish (about 85px) sits
+// beside it or under it. Every control is a nowrap flex item narrower than the
+// 358px content box inside a flex-wrap group, so none can leave the screen.
 
 import Link from 'next/link'
 import { ChevronLeft, ChevronRight, Send, Users, User, CalendarDays, CalendarRange, CalendarOff, Check, Copy, Settings } from 'lucide-react'
@@ -63,7 +67,10 @@ export default function RosterToolbar({
         >
           Today
         </button>
-        {statusChip && <span className="ml-1 inline-flex whitespace-nowrap">{statusChip}</span>}
+        {/* whitespace-nowrap lives on the SLOT, so it holds whatever element the
+            chip is (CHANGELOG.1: a button when published, a span otherwise).
+            `relative` anchors the chip's sr-only "Week status:" span. */}
+        {statusChip && <span className="relative ml-1 inline-flex whitespace-nowrap">{statusChip}</span>}
       </div>
 
       <div data-testid="schedule-toolbar-actions" className="relative flex flex-wrap items-center gap-2">

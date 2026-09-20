@@ -117,8 +117,10 @@ describe('roster toolbar wiring (ROSTERLOOK.1)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'More' }))
     fireEvent.click(screen.getByRole('menuitemcheckbox', { name: 'Select multiple' }))
     expect(screen.getByText('Click shifts on the calendar to select')).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'More' }).getAttribute('data-active')).toBe('true')
-    fireEvent.click(screen.getByRole('button', { name: 'More' }))
+    // The mode is in the button's WORDS, not only its amber fill.
+    const more = screen.getByRole('button', { name: 'More · selecting' })
+    expect(more.getAttribute('data-active')).toBe('true')
+    fireEvent.click(more)
     expect(screen.getByRole('menuitemcheckbox', { name: 'Exit multi-select (0)' }).getAttribute('aria-checked')).toBe('true')
   })
 

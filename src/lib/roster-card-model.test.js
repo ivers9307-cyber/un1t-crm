@@ -268,13 +268,19 @@ describe('rosterToolbarModel', () => {
     expect(item.checked).toBe(true)
     expect(item.label).toBe('Exit multi-select (3)')
     expect(m.moreActive).toBe(true)
+    // The old row said "Selecting (3)" on its own amber button. An amber button
+    // still reading "More" hid the mode; the label carries it now.
+    expect(m.moreLabel).toBe('More · selecting (3)')
+    expect(rosterToolbarModel({ ...base, selectMode: true, selectedCount: 0 }).moreLabel).toBe('More · selecting')
     expect(rosterToolbarModel(base).moreItems.find((i) => i.key === 'select').checked).toBe(false)
   })
 
   it('both copies are disabled while a copy runs, and the menu button says so', () => {
     const m = rosterToolbarModel({ ...base, copying: true })
     expect(m.moreItems.filter((i) => i.disabled).map((i) => i.key)).toEqual(['copy-week', 'copy-month'])
-    expect(m.moreLabel).toBe('Copying…')
+    expect(m.moreLabel).toBe('More · copying…')
+    // A running copy outranks select mode: it is the thing about to change the roster.
+    expect(rosterToolbarModel({ ...base, copying: true, selectMode: true, selectedCount: 2 }).moreLabel).toBe('More · copying…')
     expect(rosterToolbarModel(base).moreLabel).toBe('More')
   })
 })

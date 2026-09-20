@@ -236,7 +236,13 @@ export function rosterToolbarModel({ isManager = false, viewType = 'week', selec
   }
   return {
     timeOffInline: false,
-    moreLabel: copying ? 'Copying…' : 'More',
+    // The mode is in the WORDS. The old row had a button of its own reading
+    // "Selecting (3)"; an amber "More" that still says "More" hides it.
+    moreLabel: copying
+      ? 'More · copying…'
+      : selectMode
+        ? `More · selecting${selectedCount > 0 ? ` (${selectedCount})` : ''}`
+        : 'More',
     moreActive: selectMode,
     showPublish: viewType === 'week',
     moreItems: [

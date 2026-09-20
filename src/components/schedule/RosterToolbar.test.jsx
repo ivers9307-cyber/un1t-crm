@@ -60,6 +60,8 @@ describe('RosterToolbar', () => {
       expect(order[i].compareDocumentPosition(order[i + 1]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     }
     expect(label.className).toMatch(/whitespace-nowrap/)
+    // The chip's SLOT keeps it on one line, whatever element the chip becomes.
+    expect(chip.parentElement.className).toMatch(/whitespace-nowrap/)
   })
 
   it('month view renames the arrows', () => {
