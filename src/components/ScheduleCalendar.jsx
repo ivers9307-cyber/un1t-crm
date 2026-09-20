@@ -2438,7 +2438,7 @@ function PublishRosterClashes({ leaveClashes, doubleBookings, crossLocationCheck
         </div>
       )}
       {unchecked && (
-        <div className="text-xs text-un1t-subtle mt-2">Shifts at other studios could not be checked.</div>
+        <div className="text-xs text-un1t-subtle mt-2">Some clash checks could not be completed.</div>
       )}
       <div className="text-xs text-un1t-subtle mt-2">You can still publish.</div>
     </div>

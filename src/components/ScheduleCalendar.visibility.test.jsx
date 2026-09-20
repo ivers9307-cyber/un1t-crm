@@ -255,8 +255,12 @@ describe('publish preview clashes (COPYLEAVE.1)', () => {
     expect(screen.queryByTestId('publish-roster-clashes')).toBeNull()
   })
 
-  it('says so when other studios could not be checked, rather than implying an all-clear', async () => {
+  // crossLocationChecked: false also covers a helper that threw, so the line
+  // must not blame other studios specifically.
+  it('says so when a check could not be completed, rather than implying an all-clear', async () => {
     await openPreview({ ...BASE, leaveClashes: [], doubleBookings: [], crossLocationChecked: false })
-    expect(screen.getByTestId('publish-roster-clashes').textContent).toMatch(/Shifts at other studios could not be checked/)
+    const text = screen.getByTestId('publish-roster-clashes').textContent
+    expect(text).toMatch(/Some clash checks could not be completed\./)
+    expect(text).not.toMatch(/other studios/)
   })
 })
