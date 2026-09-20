@@ -72,14 +72,14 @@ const COACH = { id: 'u2', role: 'coach', activeLocation: { id: 'loc1', name: 'St
 // CHANGELOG.1 — what the drawer's read answers. Reassigned per test.
 let CHANGES = []
 
-function mockFetch({ blocks, drafts = [], impact = null }) {
+function mockFetch({ blocks, drafts = [], impact = null, timeOff = [] }) {
   return vi.fn((url, opts) => {
     const u = String(url)
     let body
     if (u.includes('/api/schedule/blocks')) body = { success: true, data: blocks }
     else if (u.includes('/api/schedule/templates')) body = { success: true, data: [TEMPLATE] }
     else if (u.includes('/api/staff')) body = { success: true, data: STAFF }
-    else if (u.includes('/api/schedule/time-off')) body = { success: true, data: [] }
+    else if (u.includes('/api/schedule/time-off')) body = { success: true, data: timeOff }
     else if (u.includes('/holidays')) body = { success: true, data: [] }
     else if (u.includes('contractor-spend')) body = { success: true, data: null }
     else if (u.includes('/api/schedule/week-cost')) body = { success: true, data: null }
@@ -523,5 +523,17 @@ describe('the roster scrolls inside its own container, not the page (ROSTERLOOK.
     const hidden = scroller.querySelectorAll('.sr-only')
     expect(hidden.length).toBeGreaterThan(0)
     for (const el of hidden) expect(el.parentElement.className, el.parentElement.outerHTML.slice(0, 120)).toMatch(POSITIONED)
+  })
+})
+
+describe('leave bars: one per person per day (ROSTERLOOK.1)', () => {
+  const leave = (id, type, start_date, end_date) => ({ id, profile_id: 'u2', type, status: 'approved', start_date, end_date, profiles: { full_name: 'Sarah Doyle' } })
+
+  it('two overlapping requests from one coach draw ONE bar, short enough for the column, with the rest in its title', async () => {
+    await renderCalendar({ blocks: [OK_BLOCK], timeOff: [leave('t1', 'unavailable', BLOCK_DATE, BLOCK_DATE), leave('t2', 'unavailable', BLOCK_DATE, BLOCK_DATE)] })
+    const bars = screen.getAllByTestId('leave-bar')
+    expect(bars).toHaveLength(1)
+    expect(bars[0].textContent).toBe('Sarah · Unavailable')
+    expect(bars[0].getAttribute('title')).toMatch(/^Sarah Doyle — Unavailable, \d+ \w+ \(\+1 overlapping request\)$/)
   })
 })

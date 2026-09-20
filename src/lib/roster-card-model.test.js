@@ -3,7 +3,7 @@
 // and toolbar make is made HERE, in pure functions, because jsdom cannot see
 // layout and a component test can only say "this text is present".
 import { describe, it, expect } from 'vitest'
-import { cardTone, shiftCardModel, dayHeaderStatus, monthCellLines, rosterToolbarModel } from './roster-card-model'
+import { cardTone, shiftCardModel, dayHeaderStatus, monthCellLines, rosterToolbarModel, dayLeaveBars } from './roster-card-model'
 
 const TODAY = '2026-09-21'
 const block = (over = {}) => ({
@@ -310,5 +310,68 @@ describe('rosterToolbarModel', () => {
     // A running copy outranks select mode: it is the thing about to change the roster.
     expect(rosterToolbarModel({ ...base, copying: true, selectMode: true, selectedCount: 2 }).moreLabel).toBe('More · copying…')
     expect(rosterToolbarModel(base).moreLabel).toBe('More')
+  })
+})
+
+// ROSTERLOOK.1 — seen live once the cards went quiet: a person with two
+// overlapping requests had their leave bar drawn TWICE on every day of the
+// week, and "Firstname Lastname — Unavailable" never fitted a 99-116px column.
+describe('dayLeaveBars', () => {
+  const DAY = '2026-09-23'
+  const req = (id, profile_id, full_name, type, start_date, end_date) => ({ id, profile_id, type, start_date, end_date, profiles: { full_name } })
+
+  it('one bar per person per day: the first by start date wins', () => {
+    const bars = dayLeaveBars([
+      req('r2', 'p1', 'Coach A', 'unavailable', '2026-09-22', '2026-09-24'),
+      req('r1', 'p1', 'Coach A', 'unavailable', '2026-09-21', '2026-09-27'),
+      req('r3', 'p2', 'Devon Fourth', 'holiday', '2026-09-23', '2026-09-23'),
+    ], DAY)
+    expect(bars.map((b) => b.id)).toEqual(['r1', 'r3'])
+    expect(bars.map((b) => b.text)).toEqual(['Coach · Unavailable', 'Devon · Holiday'])
+  })
+
+  it('when the types differ, the more specific one is the one shown', () => {
+    const bars = dayLeaveBars([
+      req('r1', 'p1', 'Coach A', 'unavailable', '2026-09-21', '2026-09-27'),
+      req('r2', 'p1', 'Coach A', 'sick', '2026-09-23', '2026-09-23'),
+      req('r3', 'p1', 'Coach A', 'other', '2026-09-20', '2026-09-27'),
+    ], DAY)
+    expect(bars).toHaveLength(1)
+    expect(bars[0].id).toBe('r2')
+    expect(bars[0].type).toBe('sick')
+    expect(bars[0].text).toBe('Coach · Sick leave')
+  })
+
+  it('the title carries what the bar cut: full name, type, the date range, and that requests overlap', () => {
+    const [one] = dayLeaveBars([req('r1', 'p1', 'Coach A', 'holiday', '2026-09-21', '2026-09-27')], DAY)
+    expect(one.title).toBe('Coach A — Holiday, 21 Sep – 27 Sep')
+    const [single] = dayLeaveBars([req('r1', 'p1', 'Coach A', 'holiday', DAY, DAY)], DAY)
+    expect(single.title).toBe('Coach A — Holiday, 23 Sep')
+    const [merged] = dayLeaveBars([
+      req('r1', 'p1', 'Coach A', 'holiday', '2026-09-21', '2026-09-27'),
+      req('r2', 'p1', 'Coach A', 'holiday', '2026-09-23', '2026-09-24'),
+    ], DAY)
+    expect(merged.title).toBe('Coach A — Holiday, 21 Sep – 27 Sep (+1 overlapping request)')
+  })
+
+  it('two people sharing a first name are told apart, as in the month cell', () => {
+    const bars = dayLeaveBars([
+      req('r1', 'p1', 'Sam Alpha', 'holiday', DAY, DAY),
+      req('r2', 'p2', 'Sam Bravo', 'sick', DAY, DAY),
+    ], DAY)
+    expect(bars.map((b) => b.text)).toEqual(['Sam A · Holiday', 'Sam B · Sick leave'])
+  })
+
+  it('only requests covering the day; an unknown type reads "Time off"; null is no bars', () => {
+    expect(dayLeaveBars([req('r1', 'p1', 'Coach A', 'holiday', '2026-09-21', '2026-09-22')], DAY)).toEqual([])
+    expect(dayLeaveBars([req('r1', 'p1', 'Coach A', 'legacy', DAY, DAY)], DAY)[0].text).toBe('Coach · Time off')
+    expect(dayLeaveBars(null, DAY)).toEqual([])
+  })
+
+  it('does not decide WHO may see a bar: it returns what it is given, deduped', () => {
+    // The caller keeps its own filter (a coach sees only their own leave).
+    const bars = dayLeaveBars([req('r1', 'p9', 'Coach Z', 'holiday', DAY, DAY)], DAY)
+    expect(bars).toHaveLength(1)
+    expect(bars[0].profileId).toBe('p9')
   })
 })

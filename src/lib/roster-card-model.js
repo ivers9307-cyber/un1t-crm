@@ -18,6 +18,7 @@
 import { liveAssignments } from './roster'
 import { futureBlockStaffing, countStaffingGaps, staffingGapsHeadline, staffingGapsBreakdown } from './roster-staffing'
 import { formatTime12h, formatTimeRange12h } from './schedule-overlap'
+import { timeOffLeaveLabel } from '../../shared/time-off'
 
 /**
  * The card's surface tone. 'neutral' for every block today: the template's
@@ -160,8 +161,8 @@ export function dayHeaderStatus(blocksForDay, { todayIso } = {}) {
 // If the initial does not separate them either ("Sam Alpha" / "Sam Avery"),
 // that pair gets full names: two identical labels on one line name nobody.
 // Comparison ignores case; what is printed is what was stored.
-function firstNames(assignments) {
-  const parts = assignments.map((a) => String(a.profiles?.full_name || 'Unknown').trim().split(/\s+/))
+function firstNames(rows) {
+  const parts = rows.map((a) => String(a.profiles?.full_name || 'Unknown').trim().split(/\s+/))
   const lower = (x) => String(x || '').toLowerCase()
   const withInitial = (p) => (p.length > 1 ? `${p[0]} ${p[p.length - 1][0]}` : p[0])
   return parts.map((p) => {
@@ -266,4 +267,61 @@ export function rosterToolbarModel({ isManager = false, viewType = 'week', selec
       { key: 'templates', label: 'Manage templates', href: '/settings/shifts', title: 'Add, edit, or retire the shift templates that build this roster' },
     ],
   }
+}
+
+// How much a leave type says. When one person has two requests covering the
+// same day, the bar shows the one that says most: a named kind of leave beats
+// "Unavailable", which beats "Other", which beats a type this code never met.
+const LEAVE_SPECIFICITY = { holiday: 3, sick: 3, unpaid: 3, unavailable: 2, other: 1 }
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+// '2026-09-21' → '21 Sep'. String slices only: no Date, so no timezone can move a day.
+const dayMonth = (iso) => `${Number(String(iso).slice(8, 10))} ${MONTHS[Number(String(iso).slice(5, 7)) - 1] || ''}`.trim()
+
+/**
+ * The leave bars of ONE day in the week view: one per PERSON.
+ *
+ * Seen live once the cards went quiet: a person with two overlapping requests
+ * had the same bar drawn twice on every day of the week (the month cell, which
+ * shows one entry, never did). Per person the more specific type wins, then
+ * the earlier start date, then the id (so the choice is stable between
+ * renders). The text is "Firstname · Type", which fits a 99-116px column where
+ * "Firstname Lastname — Type" never did; the title carries the full name, the
+ * date range, and says when other requests were folded in.
+ *
+ * It does NOT decide who may see a bar: the caller filters first (a coach is
+ * shown only their own leave) and this dedupes whatever it is handed. Pure.
+ *
+ * @param {Array} timeOff  time_off_requests rows: id, profile_id, type, start_date, end_date, profiles.full_name
+ * @param {string} dateStr YYYY-MM-DD
+ * @returns {Array<{id:string, profileId:string, type:string, text:string, title:string}>}
+ */
+export function dayLeaveBars(timeOff, dateStr) {
+  const covering = (timeOff || []).filter((t) => t && t.start_date <= dateStr && t.end_date >= dateStr)
+  const byPerson = new Map()
+  for (const t of covering) {
+    const key = t.profile_id || `row:${t.id}`
+    const list = byPerson.get(key)
+    if (list) list.push(t)
+    else byPerson.set(key, [t])
+  }
+  const kept = [...byPerson.values()].map((list) => {
+    const sorted = [...list].sort((a, b) =>
+      (LEAVE_SPECIFICITY[b.type] || 0) - (LEAVE_SPECIFICITY[a.type] || 0)
+      || String(a.start_date).localeCompare(String(b.start_date))
+      || String(a.id).localeCompare(String(b.id)))
+    return { row: sorted[0], folded: list.length - 1 }
+  })
+  const names = firstNames(kept.map((k) => k.row))
+  return kept.map(({ row, folded }, i) => {
+    const label = timeOffLeaveLabel(row.type)
+    const range = row.start_date === row.end_date ? dayMonth(row.start_date) : `${dayMonth(row.start_date)} – ${dayMonth(row.end_date)}`
+    const more = folded > 0 ? ` (+${folded} overlapping request${folded === 1 ? '' : 's'})` : ''
+    return {
+      id: row.id,
+      profileId: row.profile_id,
+      type: row.type,
+      text: `${names[i]} · ${label}`,
+      title: `${row.profiles?.full_name || 'Unknown'} — ${label}, ${range}${more}`,
+    }
+  })
 }

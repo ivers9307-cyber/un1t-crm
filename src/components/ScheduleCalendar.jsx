@@ -77,7 +77,7 @@ import RosterToolbar from './schedule/RosterToolbar'
 import DayHeader from './schedule/DayHeader'
 import ShiftCard from './schedule/ShiftCard'
 import MonthCell from './schedule/MonthCell'
-import { rosterToolbarModel, dayHeaderStatus, shiftCardModel, monthCellLines } from '@/lib/roster-card-model'
+import { rosterToolbarModel, dayHeaderStatus, shiftCardModel, monthCellLines, dayLeaveBars } from '@/lib/roster-card-model'
 
 // LEAVE.2 — every leave type gets its own label (timeOffLeaveLabel) and
 // colour. Unpaid and "other" were missing, so approved unpaid/other leave
@@ -1257,27 +1257,33 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
                   />
 
                   <div className={`bg-un1t-surface/50 border border-un1t-border border-t-0 rounded-b-lg p-1.5 space-y-1.5 min-h-[160px] ${holiday ? 'bg-amber-500/[0.04]' : ''}`}>
-                    {/* Time-off bars */}
-                    {timeOff
-                      .filter(t => t.start_date <= dateStr && t.end_date >= dateStr)
-                      .filter(t => viewMode === 'all' || t.profile_id === user.id)
-                      .map(t => {
-                        const conf = TIME_OFF_CONFIG[t.type] || TIME_OFF_FALLBACK
-                        const Icon = conf.icon
-                        return (
-                          <div
-                            key={`to-${t.id}`}
-                            className="rounded-md px-2 py-1.5 text-xs flex items-center gap-1.5"
-                            style={{ backgroundColor: conf.color + '18', borderLeft: `3px solid ${conf.color}` }}
-                          >
-                            <Icon size={12} style={{ color: conf.color }} />
-                            <span className="font-medium truncate" style={{ color: conf.color }}>
-                              {t.profiles?.full_name} — {conf.label}
-                            </span>
-                          </div>
-                        )
-                      })
-                    }
+                    {/* Time-off bars. ROSTERLOOK.1 — one per PERSON per day
+                        (two overlapping requests drew the same bar twice), and
+                        "Firstname · Type" so it fits the column; the full name
+                        and the date range are in the title. WHO is shown is
+                        still this filter's decision, unchanged: dayLeaveBars
+                        only dedupes what it is handed. */}
+                    {dayLeaveBars(
+                      timeOff.filter(t => viewMode === 'all' || t.profile_id === user.id),
+                      dateStr,
+                    ).map(bar => {
+                      const conf = TIME_OFF_CONFIG[bar.type] || TIME_OFF_FALLBACK
+                      const Icon = conf.icon
+                      return (
+                        <div
+                          key={`to-${bar.id}`}
+                          data-testid="leave-bar"
+                          title={bar.title}
+                          className="rounded-md px-2 py-1.5 text-xs flex items-center gap-1.5"
+                          style={{ backgroundColor: conf.color + '18', borderLeft: `3px solid ${conf.color}` }}
+                        >
+                          <Icon size={12} className="shrink-0" style={{ color: conf.color }} aria-hidden="true" />
+                          <span className="font-medium truncate" style={{ color: conf.color }}>
+                            {bar.text}
+                          </span>
+                        </div>
+                      )
+                    })}
 
                     {dayBlocks.length === 0 && timeOff.filter(t => t.start_date <= dateStr && t.end_date >= dateStr).length === 0 && (
                       <div className="text-center py-6 text-xs text-un1t-muted">No shifts</div>
