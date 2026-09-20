@@ -7,7 +7,7 @@ const { logWarn } = await import('@/lib/log')
 import {
   leaveScopeOrFilter, canDecideTimeOff, timeOffApproverIdsFrom, entitlementDays,
   clashWindow, bucketClashCounts, getHolidayAllowance, ensureHolidayAllowanceRow,
-  getNonWorkingDates, findLeaveClashes, decidingLocationIds,
+  getNonWorkingDates, findLeaveClashes, decidingLocationIds, countLeaveClashes,
   ownShiftPreviewRow, findOwnPublishedShifts, chargeableLeaveSegments, isRealIsoDate,
 } from './time-off-leave.js'
 import { fakeDb, queriesOf, resolveLocations, scopedAssignments, locationScopeOf } from './time-off.test-helpers.js'
@@ -126,6 +126,18 @@ describe('clashes', () => {
     ]
     expect(bucketClashCounts(requests, shifts, '2026-05-01')).toEqual({ r1: 1, r2: 1 })
   })
+
+  it('bucketClashCounts with a per-request scope: a shift outside that request\'s studios is not counted; an unlisted request counts 0', () => {
+    const requests = [
+      { id: 'r1', profile_id: 'p1', status: 'pending', start_date: '2026-06-01', end_date: '2026-06-03' },
+      { id: 'r2', profile_id: 'p1', status: 'pending', start_date: '2026-06-01', end_date: '2026-06-03' },
+    ]
+    const shifts = [
+      { profile_id: 'p1', status: 'scheduled', shift_blocks: { block_date: '2026-06-02', location_id: 'l1' } },
+      { profile_id: 'p1', status: 'scheduled', shift_blocks: { block_date: '2026-06-02', location_id: 'l9' } },
+    ]
+    expect(bucketClashCounts(requests, shifts, '2026-05-01', new Map([['r1', new Set(['l1'])]]))).toEqual({ r1: 1, r2: 0 })
+  })
 })
 
 // ORGSCOPE.1 — nothing keeps a person inside one organisation, and a clash
@@ -207,6 +219,181 @@ describe('findLeaveClashes — organisation boundary', () => {
     expect(error).toBeNull()
     expect(queriesOf(d, 'shift_assignments')).toHaveLength(0)
     expect(logWarn).toHaveBeenCalled()
+  })
+})
+
+// ORGSCOPE.2 — the clash COUNT (the Time Off list badge and the approvals
+// queue warning) obeys the same boundary as the clash LIST the approver gets
+// from findLeaveClashes, request by request, so the two can never disagree.
+describe('countLeaveClashes — organisation boundary', () => {
+  // org-a: loc-a1 + loc-a2. org-b: loc-b1 + loc-b2. org-c: loc-c1 alone.
+  const ORGS = { 'loc-a1': 'org-a', 'loc-a2': 'org-a', 'loc-b1': 'org-b', 'loc-b2': 'org-b', 'loc-c1': 'org-c' }
+  const shift = (id, profile_id, location_id, block_date = '2026-06-02') => ({
+    id, profile_id, status: 'scheduled', shift_blocks: { block_date, location_id },
+  })
+  const request = (id, profile_id, location_id, over = {}) => ({
+    id, profile_id, location_id, status: 'pending', start_date: '2026-06-01', end_date: '2026-06-03', ...over,
+  })
+  const approver = (locs, id = 'u') => ({
+    id, role: 'head_coach', profileRole: 'staff',
+    locations: locs.map((l) => ({ id: l, role: 'head_coach', features: {} })),
+    assignmentsByLocation: Object.fromEntries(locs.map((l) => [l, { role: 'head_coach', permissions: {} }])),
+  })
+
+  // The fakes honour the filters: an OPEN shift read returns every shift.
+  function db({ memberships, shifts, locationsErr = null, membershipsErr = null }) {
+    return fakeDb((q) => {
+      if (q.table === 'locations') return locationsErr ? { data: null, error: locationsErr } : resolveLocations(q, ORGS)
+      if (q.table === 'profile_locations') {
+        if (membershipsErr) return { data: null, error: membershipsErr }
+        const ids = q.calls.find(([op, col]) => op === 'in' && col === 'profile_id')?.[2] || []
+        return { data: ids.flatMap((pid) => (memberships[pid] || []).map((location_id) => ({ profile_id: pid, location_id }))), error: null }
+      }
+      if (q.table === 'shift_assignments') {
+        const who = q.calls.find(([op, col]) => op === 'in' && col === 'profile_id')?.[2] || []
+        return scopedAssignments(q, shifts.filter((s) => who.includes(s.profile_id)))
+      }
+      throw new Error(`unexpected table ${q.table}`)
+    })
+  }
+  const shiftReads = (d) => queriesOf(d, 'shift_assignments')
+  const scopeOf = (d, i = 0) => locationScopeOf(shiftReads(d)[i])
+
+  beforeEach(() => logWarn.mockClear())
+
+  it('a shift at a studio in a DIFFERENT organisation is not counted', async () => {
+    const d = db({
+      memberships: { p1: ['loc-a1', 'loc-b1'] },
+      shifts: [shift('s1', 'p1', 'loc-a1'), shift('s2', 'p1', 'loc-a2'), shift('s3', 'p1', 'loc-b1')],
+    })
+    const { counts, error } = await countLeaveClashes(d, [request('r1', 'p1', 'loc-a1')], '2026-05-01', { user: approver(['loc-a1']) })
+    expect(error).toBeNull()
+    expect(counts).toEqual({ r1: 2 })
+    expect(scopeOf(d).sort()).toEqual(['loc-a1', 'loc-a2'])
+  })
+
+  it('a caller whose studio has no siblings reads that studio only: no cross-studio read', async () => {
+    const d = db({
+      memberships: { p1: ['loc-c1', 'loc-a1'] },
+      shifts: [shift('s1', 'p1', 'loc-c1'), shift('s2', 'p1', 'loc-a1')],
+    })
+    const { counts } = await countLeaveClashes(d, [request('r1', 'p1', 'loc-c1')], '2026-05-01', { user: approver(['loc-c1']) })
+    expect(shiftReads(d)).toHaveLength(1)
+    expect(scopeOf(d)).toEqual(['loc-c1'])
+    expect(counts).toEqual({ r1: 1 })
+  })
+
+  it('fails soft: unreadable siblings narrow the count to the deciding studio, never widen it and never error', async () => {
+    const d = db({
+      memberships: { p1: ['loc-a1', 'loc-a2', 'loc-b1'] },
+      shifts: [shift('s1', 'p1', 'loc-a1'), shift('s2', 'p1', 'loc-a2'), shift('s3', 'p1', 'loc-b1')],
+      locationsErr: { message: 'down' },
+    })
+    const { counts, error } = await countLeaveClashes(d, [request('r1', 'p1', 'loc-a1')], '2026-05-01', { user: approver(['loc-a1']) })
+    expect(error).toBeNull()
+    expect(scopeOf(d)).toEqual(['loc-a1'])
+    expect(counts).toEqual({ r1: 1 })
+    expect(logWarn).toHaveBeenCalled()
+  })
+
+  it('fails soft: unreadable memberships narrow each request to the studio it was filed at', async () => {
+    // The caller approves at loc-b1 too, and would reach org-b through the
+    // person's membership there; without the membership list only the filed-at
+    // studio is a candidate.
+    const d = db({
+      memberships: { p1: ['loc-a1', 'loc-b1'] },
+      shifts: [shift('s1', 'p1', 'loc-a1'), shift('s3', 'p1', 'loc-b1')],
+      membershipsErr: { message: 'down' },
+    })
+    const { counts, error } = await countLeaveClashes(d, [request('r1', 'p1', 'loc-a1')], '2026-05-01', { user: approver(['loc-a1', 'loc-b1']) })
+    expect(error).toBeNull()
+    expect(scopeOf(d).sort()).toEqual(['loc-a1', 'loc-a2'])
+    expect(counts).toEqual({ r1: 1 })
+    expect(logWarn).toHaveBeenCalled()
+  })
+
+  it('scopes PER REQUEST: one batched read, but a studio that only another request reaches is not counted', async () => {
+    // The caller approves at loc-a1 and loc-b1. p1 is at loc-a1 only; p2 is at
+    // loc-b1 only. The read covers both organisations, the counts do not mix.
+    const d = db({
+      memberships: { p1: ['loc-a1'], p2: ['loc-b1'] },
+      shifts: [shift('s1', 'p1', 'loc-a1'), shift('s2', 'p1', 'loc-b2'), shift('s3', 'p2', 'loc-b1'), shift('s4', 'p2', 'loc-a2')],
+    })
+    const { counts } = await countLeaveClashes(d, [request('r1', 'p1', 'loc-a1'), request('r2', 'p2', 'loc-b1')], '2026-05-01', { user: approver(['loc-a1', 'loc-b1']) })
+    expect(shiftReads(d)).toHaveLength(1)
+    expect(counts).toEqual({ r1: 1, r2: 1 })
+  })
+
+  it('the badge equals the list: same number findLeaveClashes shows this approver for this request', async () => {
+    const fixture = {
+      memberships: { p1: ['loc-a1', 'loc-b2'] },
+      shifts: [shift('s1', 'p1', 'loc-a1'), shift('s2', 'p1', 'loc-a2'), shift('s3', 'p1', 'loc-b2'), shift('s4', 'p1', 'loc-b1')],
+    }
+    const user = approver(['loc-a1', 'loc-b1'])
+    const r = request('r1', 'p1', 'loc-a1')
+    const { counts } = await countLeaveClashes(db(fixture), [r], '2026-05-01', { user })
+    const { clashes } = await findLeaveClashes(db(fixture), r, '2026-05-01', {
+      scopeLocationIds: decidingLocationIds(user, r.location_id, fixture.memberships.p1),
+    })
+    expect(counts.r1).toBe(clashes.length)
+    expect(counts.r1).toBe(2)
+  })
+
+  it('a caller who decides nowhere for a request reads no shifts for it and counts 0', async () => {
+    const d = db({ memberships: { p1: ['loc-a1'] }, shifts: [shift('s1', 'p1', 'loc-a1')] })
+    const { counts, error } = await countLeaveClashes(d, [request('r1', 'p1', 'loc-a1')], '2026-05-01', { user: approver(['loc-c1']) })
+    expect(error).toBeNull()
+    expect(counts).toEqual({ r1: 0 })
+    expect(shiftReads(d)).toHaveLength(0)
+  })
+
+  it('no caller at all: nothing is read', async () => {
+    const d = db({ memberships: { p1: ['loc-a1'] }, shifts: [shift('s1', 'p1', 'loc-a1')] })
+    const { counts } = await countLeaveClashes(d, [request('r1', 'p1', 'loc-a1')], '2026-05-01')
+    expect(counts).toEqual({ r1: 0 })
+    expect(shiftReads(d)).toHaveLength(0)
+  })
+
+  it('your OWN request counts your own shifts at every studio: they are yours to see', async () => {
+    const d = db({
+      memberships: { me: ['loc-a1', 'loc-b1'] },
+      shifts: [shift('s1', 'me', 'loc-a1'), shift('s2', 'me', 'loc-b1')],
+    })
+    const staff = { id: 'me', profileRole: 'staff', locations: [{ id: 'loc-a1', role: 'staff' }], assignmentsByLocation: { 'loc-a1': { role: 'staff', permissions: {} } } }
+    const { counts } = await countLeaveClashes(d, [request('r1', 'me', 'loc-a1')], '2026-05-01', { user: staff })
+    expect(counts).toEqual({ r1: 2 })
+  })
+
+  it('an own request never widens the read for a colleague\'s request in the same list', async () => {
+    const d = db({
+      memberships: { me: ['loc-a1', 'loc-b1'], p1: ['loc-a1', 'loc-b1'] },
+      shifts: [shift('s1', 'me', 'loc-b1'), shift('s2', 'p1', 'loc-a1'), shift('s3', 'p1', 'loc-b1')],
+    })
+    const { counts } = await countLeaveClashes(d, [request('mine', 'me', 'loc-a1'), request('r1', 'p1', 'loc-a1')], '2026-05-01', { user: approver(['loc-a1'], 'me') })
+    expect(counts).toEqual({ mine: 1, r1: 1 })
+    const colleagueRead = shiftReads(d).find((q) => q.calls.some(([op, col, v]) => op === 'in' && col === 'profile_id' && v.includes('p1')))
+    expect(locationScopeOf(colleagueRead).sort()).toEqual(['loc-a1', 'loc-a2'])
+  })
+
+  it('master: every organisation the PERSON is in, which is what the approve list shows a master', async () => {
+    const d = db({
+      memberships: { p1: ['loc-a1', 'loc-b1'] },
+      shifts: [shift('s1', 'p1', 'loc-a1'), shift('s2', 'p1', 'loc-b2'), shift('s3', 'p1', 'loc-c1')],
+    })
+    const { counts } = await countLeaveClashes(d, [request('r1', 'p1', 'loc-a1')], '2026-05-01', { user: { id: 'boss', profileRole: 'master', role: 'master' } })
+    expect(scopeOf(d).sort()).toEqual(['loc-a1', 'loc-a2', 'loc-b1', 'loc-b2'])
+    expect(counts).toEqual({ r1: 2 })
+  })
+
+  it('a failed shift read is returned as an error with no counts, as before', async () => {
+    const d = fakeDb((q) => {
+      if (q.table === 'locations') return resolveLocations(q, ORGS)
+      if (q.table === 'profile_locations') return { data: [{ profile_id: 'p1', location_id: 'loc-a1' }], error: null }
+      return { data: null, error: { message: 'boom' } }
+    })
+    const { counts, error } = await countLeaveClashes(d, [request('r1', 'p1', 'loc-a1')], '2026-05-01', { user: approver(['loc-a1']) })
+    expect(counts).toEqual({})
+    expect(error.message).toBe('boom')
   })
 })
 

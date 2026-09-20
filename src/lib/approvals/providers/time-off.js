@@ -59,7 +59,8 @@ export const timeOffProvider = {
     if (error) throw new Error(`time_off_requests: ${error.message}`)
 
     // Advisory — a failed clash count shows no warning rather than no queue.
-    const { counts } = await countLeaveClashes(db, data || [], today)
+    // ORGSCOPE.2 — counted from where THIS viewer decides each request.
+    const { counts } = await countLeaveClashes(db, data || [], today, { user })
 
     const items = (data || []).map((r) => ({
       id: r.id,
