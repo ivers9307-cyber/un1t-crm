@@ -14,6 +14,7 @@ import {
   calculateNextRun,
   calculatePeriodForSchedule,
   generateReport,
+  reportableProfiles,
 } from './report-generator'
 import { shiftHours } from './payroll'
 
@@ -566,13 +567,18 @@ describe('generateReport — staff_cost', () => {
   it('restricts profiles to the location via profile_locations', async () => {
     const { db, captured } = makeReportDb({
       profile_locations: PL_ROWS,
-      profiles: [PROFILES[0]],
+      // Both rows come back (the mock does not apply .in()), so it is the pure
+      // filter — not the fixture — that keeps the outsider out.
+      profiles: PROFILES,
       shift_assignments: [assignmentRow('p-here'), assignmentRow('p-away')],
     })
     createServerClient.mockReturnValue(db)
 
     await generateReport({ report_type: 'staff_cost', ...PERIOD })
-    expect(captured['profiles.in']).toEqual({ col: 'id', vals: ['p-here'] })
+    // STAFFDELETE.1 — the read now covers members AND whoever worked, so a
+    // leaver can be found; reportableProfiles() is what keeps an ACTIVE
+    // outsider (p-away) out, exactly as before.
+    expect(captured['profiles.in']).toEqual({ col: 'id', vals: ['p-here', 'p-away'] })
     // A shift belonging to a profile outside the location is not costed —
     // the generator already skips shifts with no matching profile.
     expect(captured.inserted.report_data.staff.map(s => s.name)).toEqual(['Coach Here'])
@@ -660,5 +666,71 @@ describe('generateReport — the staff-list query failing is not "no staff"', ()
     expect(res).toMatchObject({ success: false })
     expect(res.error).toMatch(/boom/)
     expect(from).not.toHaveBeenCalledWith('generated_reports')
+  })
+})
+
+// STAFFDELETE.1 — history stays reportable BY NAME. A coach who left (active
+// false — deactivated, or permanently deleted and now a tombstone with no
+// profile_locations row) used to vanish from staff_cost and utilisation for
+// the weeks they actually worked.
+describe('reportableProfiles', () => {
+  const p = (id, active) => ({ id, full_name: id, active })
+  it('active members, plus anyone inactive who worked in the period', () => {
+    const out = reportableProfiles(
+      [p('member', true), p('member-left-worked', false), p('member-left-idle', false), p('deleted-worked', false), p('visitor-active', true)],
+      { memberIds: ['member', 'member-left-worked', 'member-left-idle'], shiftProfileIds: ['member', 'member-left-worked', 'deleted-worked', 'visitor-active'] },
+    )
+    expect(out.map((x) => x.id)).toEqual(['member', 'member-left-worked', 'deleted-worked'])
+  })
+  it('a legacy row with active NULL counts as active', () => {
+    expect(reportableProfiles([p('m', null)], { memberIds: ['m'], shiftProfileIds: [] }).map((x) => x.id)).toEqual(['m'])
+  })
+})
+
+describe('generateReport — leavers keep their history (STAFFDELETE.1)', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+  const TOMBSTONE = {
+    // role is the floor the delete demoted them to; deleted_role is what they WERE.
+    id: 'p-gone', full_name: 'Former Coach', role: 'staff', deleted_role: 'head_coach', employment_type: 'contractor', active: false,
+    deleted_at: '2026-05-20T10:00:00Z', contracted_hours_per_week: 10, annual_salary: null, hourly_rate: 20, overtime_rate: null,
+  }
+
+  it('staff_cost costs a permanently deleted coach\'s past shifts, under their name', async () => {
+    const { db, captured } = makeReportDb({
+      profile_locations: PL_ROWS,                       // p-here only — the tombstone has no membership
+      profiles: [PROFILES[0], TOMBSTONE],
+      shift_assignments: [assignmentRow('p-here'), assignmentRow('p-gone')],
+    })
+    createServerClient.mockReturnValue(db)
+    await generateReport({ report_type: 'staff_cost', ...PERIOD })
+    expect(captured['profiles.in']).toEqual({ col: 'id', vals: ['p-here', 'p-gone'] })
+    const gone = captured.inserted.report_data.staff.find((s) => s.name === 'Former Coach')
+    expect(gone).toMatchObject({ regular_hours: 3, total_cost: 60 })   // 09:00-12:00 at €20/h
+    // Role HISTORY: the role they held, not the 'staff' floor the tombstone carries.
+    expect(gone.role).toBe('head_coach')
+    expect(captured.inserted.report_data.staff.find((s) => s.name === 'Coach Here').role).toBe('staff')
+  })
+
+  it('utilisation lists a leaver who worked, not one who did not', async () => {
+    const idle = { ...TOMBSTONE, id: 'p-idle', full_name: 'Idle Leaver', deleted_at: null }
+    const { db, captured } = makeReportDb({
+      profile_locations: [...PL_ROWS, { profile_id: 'p-idle' }],
+      profiles: [PROFILES[0], TOMBSTONE, idle],
+      shift_assignments: [assignmentRow('p-here'), assignmentRow('p-gone')],
+    })
+    createServerClient.mockReturnValue(db)
+    await generateReport({ report_type: 'utilisation', ...PERIOD })
+    expect(captured.inserted.report_data.staff.map((s) => s.name).sort()).toEqual(['Coach Here', 'Former Coach'])
+    expect(captured.inserted.report_data.staff.find((s) => s.name === 'Former Coach').role).toBe('head_coach')
+  })
+
+  it('staff_hours shows the role a deleted coach HELD (the shift row\'s own profiles embed)', async () => {
+    const row = assignmentRow('p-gone')
+    row.profiles = { full_name: 'Former Coach', role: 'staff', deleted_role: 'head_coach', employment_type: 'contractor' }
+    const { db, captured } = makeReportDb({ shift_assignments: [row, assignmentRow('p-here')] })
+    createServerClient.mockReturnValue(db)
+    await generateReport({ report_type: 'staff_hours', ...PERIOD })
+    const roles = Object.fromEntries(captured.inserted.report_data.staff.map((s) => [s.name, s.role]))
+    expect(roles).toEqual({ 'Former Coach': 'head_coach', 'p-here': 'staff' })
   })
 })

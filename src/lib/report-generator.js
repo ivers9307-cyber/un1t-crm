@@ -3,6 +3,7 @@ import { createServerClient } from '@/lib/supabase'
 import { computeWeeklyCost, implicitHourlyRate, mondayOf, shiftHours } from '@/lib/payroll'
 import { isLiveAssignment, formatDate } from '@/lib/roster'
 import { logWarn } from '@/lib/log'
+import { roleAtDeletion } from '@/lib/staff-tombstone'
 
 // RETIRE-SHIFTS-MIRROR.1 — reports now read the Roster v2 source of truth
 // (shift_assignments + shift_blocks) instead of the legacy public.shifts
@@ -17,7 +18,7 @@ import { logWarn } from '@/lib/log'
 // which is what the mirror's 1:1-with-assignments behaviour inherited.
 const SHIFT_ROW_SELECT = `
   profile_id, start_time_override, end_time_override, status,
-  profiles:profile_id ( full_name, role, employment_type ),
+  profiles:profile_id ( full_name, role, deleted_role, employment_type ),
   shift_blocks!inner ( block_date, start_time, end_time, location_id, shift_templates ( name, start_time, end_time ) )
 `
 
@@ -40,6 +41,19 @@ export async function fetchLocationProfileIds(db, locationId) {
   // report scoped to nobody, which reads as "no staff worked here".
   if (error) return { profileIds: [], error: `Failed to load location staff: ${error.message}` }
   return { profileIds: [...new Set((data || []).map(r => r.profile_id).filter(Boolean))], error: null }
+}
+
+// STAFFDELETE.1 — who a per-location staff report is about: the location's
+// ACTIVE members, plus anyone no longer active (deactivated, or permanently
+// deleted — a tombstone has no profile_locations row at all) who WORKED here
+// in the period. Without the second half a coach who left on the 20th vanished
+// from that month's cost report, and "reportable by name" failed.
+// An ACTIVE profile outside the location stays out (ROSTER-FIX.5), and an
+// inactive one with no shifts adds no empty row. active NULL = legacy = active.
+export function reportableProfiles(profiles, { memberIds, shiftProfileIds }) {
+  const members = new Set(memberIds || [])
+  const worked = new Set(shiftProfileIds || [])
+  return (profiles || []).filter((p) => (p.active === false ? worked.has(p.id) : members.has(p.id)))
 }
 
 // ROSTER-FIX.5 — returns { rows, error }, not a bare array. The error used to
@@ -151,7 +165,7 @@ export async function generateReport({ report_type, period_start, period_end, lo
         const name = shift.profiles?.full_name || 'Unknown'
         const profileId = shift.profile_id
         if (!staffHours[profileId]) {
-          staffHours[profileId] = { name, role: shift.profiles?.role, employment_type: shift.profiles?.employment_type, days: {}, total: 0 }
+          staffHours[profileId] = { name, role: roleAtDeletion(shift.profiles), employment_type: shift.profiles?.employment_type, days: {}, total: 0 }
         }
 
         // ROSTER-FIX.5 — shiftHours() honours start_time_override /
@@ -188,15 +202,16 @@ export async function generateReport({ report_type, period_start, period_end, lo
       // operator will believe. Distinct from scopeError above so the two
       // causes stay tellable apart.
       if (profileIds.length === 0) return { success: false, error: 'No staff are assigned to this location' }
-      const [{ data: profiles, error: profilesError }, { rows: shifts, error: shiftsError }] = await Promise.all([
-        db.from('profiles')
-          .select('id, full_name, role, employment_type, annual_salary, hourly_rate, contracted_hours_per_week, overtime_rate')
-          .eq('active', true)
-          .in('id', profileIds),
-        fetchScheduledShiftRows(db, { locationId: locId, periodStart: period_start, periodEnd: period_end }),
-      ])
-      if (profilesError) return { success: false, error: profilesError.message }
+      // Sequential now: the profile read depends on who is on the shifts.
+      const { rows: shifts, error: shiftsError } = await fetchScheduledShiftRows(db, { locationId: locId, periodStart: period_start, periodEnd: period_end })
       if (shiftsError) return { success: false, error: shiftsError }
+      const shiftProfileIds = [...new Set((shifts || []).map((s) => s.profile_id).filter(Boolean))]
+      // STAFFDELETE.1 — no `.eq('active', true)`: reportableProfiles decides.
+      const { data: profileRows, error: profilesError } = await db.from('profiles')
+        .select('id, full_name, role, deleted_role, employment_type, active, annual_salary, hourly_rate, contracted_hours_per_week, overtime_rate')
+        .in('id', [...new Set([...profileIds, ...shiftProfileIds])])
+      if (profilesError) return { success: false, error: profilesError.message }
+      const profiles = reportableProfiles(profileRows, { memberIds: profileIds, shiftProfileIds })
 
       const profileMap = {}
       for (const p of (profiles || [])) profileMap[p.id] = p
@@ -224,7 +239,7 @@ export async function generateReport({ report_type, period_start, period_end, lo
         const profile = profileMap[pid]
         const entry = {
           name: profile.full_name,
-          role: profile.role,
+          role: roleAtDeletion(profile), // a tombstone's `role` is the 'staff' floor (mig 622)
           employment_type: profile.employment_type,
           regular_rate: Math.round(implicitHourlyRate(profile) * 100) / 100,
           overtime_rate: Number(profile.overtime_rate) > 0
@@ -369,7 +384,7 @@ export async function generateReport({ report_type, period_start, period_end, lo
 
     case 'utilisation': {
       reportName = 'Staff Utilisation'
-      // profiles + shifts are independent — fetch in parallel.
+      // STAFFDELETE.1 — shifts first, then profiles: the profile read covers whoever worked.
       const { profileIds, error: scopeError } = await fetchLocationProfileIds(db, locId)
       if (scopeError) return { success: false, error: scopeError }
       // ROSTER-FIX.5 — same fail-closed rule as staff_cost: no rows in
@@ -377,15 +392,15 @@ export async function generateReport({ report_type, period_start, period_end, lo
       // with an unknown denominator saved as "0% across 0 staff" is worse than
       // no report at all.
       if (profileIds.length === 0) return { success: false, error: 'No staff are assigned to this location' }
-      const [{ data: profiles, error: profilesError }, { rows: shifts, error: shiftsError }] = await Promise.all([
-        db.from('profiles')
-          .select('id, full_name, role, employment_type, contracted_hours_per_week')
-          .eq('active', true)
-          .in('id', profileIds),
-        fetchScheduledShiftRows(db, { locationId: locId, periodStart: period_start, periodEnd: period_end }),
-      ])
-      if (profilesError) return { success: false, error: profilesError.message }
+      const { rows: shifts, error: shiftsError } = await fetchScheduledShiftRows(db, { locationId: locId, periodStart: period_start, periodEnd: period_end })
       if (shiftsError) return { success: false, error: shiftsError }
+      const shiftProfileIds = [...new Set((shifts || []).map((s) => s.profile_id).filter(Boolean))]
+      // STAFFDELETE.1 — no `.eq('active', true)`: reportableProfiles decides.
+      const { data: profileRows, error: profilesError } = await db.from('profiles')
+        .select('id, full_name, role, deleted_role, employment_type, active, contracted_hours_per_week')
+        .in('id', [...new Set([...profileIds, ...shiftProfileIds])])
+      if (profilesError) return { success: false, error: profilesError.message }
+      const profiles = reportableProfiles(profileRows, { memberIds: profileIds, shiftProfileIds })
 
       const periodStartD = new Date(period_start + 'T00:00:00')
       const periodEndD = new Date(period_end + 'T00:00:00')
@@ -394,7 +409,7 @@ export async function generateReport({ report_type, period_start, period_end, lo
       const staffUtil = {}
       for (const p of (profiles || [])) {
         const contracted = (Number(p.contracted_hours_per_week) || 40) * weeks
-        staffUtil[p.id] = { name: p.full_name, role: p.role, contracted_hours: contracted, actual_hours: 0 }
+        staffUtil[p.id] = { name: p.full_name, role: roleAtDeletion(p), contracted_hours: contracted, actual_hours: 0 }
       }
 
       for (const shift of (shifts || [])) {
