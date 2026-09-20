@@ -99,6 +99,14 @@ describe('routeForNotification', () => {
     expect(routeForNotification({ type: 'swap_decision', swap_id: 's1' })).toBe('/(tabs)/schedule')
   })
 
+  // SHIFTREMIND.1
+  it('opens the shift day for a shift reminder', () => {
+    expect(routeForNotification({ type: 'shift_reminder', assignment_id: 'a1', block_date: '2026-09-22', lead_minutes: 600 }))
+      .toBe('/(tabs)/schedule?date=2026-09-22')
+    expect(routeForNotification({ type: 'shift_reminder' })).toBe('/(tabs)/schedule')
+    expect(routeForNotification({ type: 'shift_reminder', block_date: 'tomorrow' })).toBe('/(tabs)/schedule')
+  })
+
   it('routes WhatsApp health/template alerts to the WhatsApp tab', () => {
     for (const type of ['wa_quality', 'number_health', 'flow_health', 'template_status']) {
       expect(routeForNotification({ type })).toBe('/(tabs)/whatsapp')
