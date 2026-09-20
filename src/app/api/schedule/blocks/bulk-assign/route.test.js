@@ -49,7 +49,9 @@ function buildRequest(body) {
 // the production route does via .select() on the insert.
 // `coachLocations`: the coach's profile_locations. Defaults to every block's
 // studio so the older cases below are about their own disposition only.
-function buildDb({ blocks, insertError = null, timeOff = [], coachLocations = null, coachLinksError = null }) {
+function buildDb({ blocks, insertError = null, timeOff = [], coachLocations = null, coachLinksError = null,
+  // STAFFDELETE.1 — the coach's profiles row; default an active, living coach.
+  person = { id: 'coach', full_name: 'Coach', active: true, deleted_at: null }, personError = null }) {
   const links = coachLocations ?? [...new Set((blocks || []).map((b) => b.location_id))]
   const insertSpy = vi.fn()
   const timeOffSpy = vi.fn()
@@ -57,6 +59,9 @@ function buildDb({ blocks, insertError = null, timeOff = [], coachLocations = nu
     insertSpy,
     timeOffSpy,
     from: vi.fn((table) => {
+      if (table === 'profiles') {
+        return { select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: personError ? null : person, error: personError }) }) }) }
+      }
       if (table === 'profile_locations') {
         return {
           select: () => ({
@@ -441,6 +446,31 @@ describe('POST /api/schedule/blocks/bulk-assign — coach must be at the block\'
     createServerClient.mockReturnValue(db)
     const res = await POST(buildRequest({ block_ids: [VALID_UUID_A], profile_id: PROFILE_A }))
     expect(res.status).toBe(500)
+    expect(db.insertSpy).not.toHaveBeenCalled()
+  })
+})
+
+// STAFFDELETE.1 review A — the same rule as every other write path.
+describe('POST /api/schedule/blocks/bulk-assign — a deactivated coach cannot be assigned', () => {
+  const MASTER = { id: 'boss', role: 'master', profileRole: 'master', rolesByLocation: {} }
+  const blocks = [{ id: VALID_UUID_A, location_id: 'loc-1', block_date: '2026-05-18', max_coaches: 5, shift_assignments: [] }]
+
+  it('400 with what to do about it; nothing inserted, no leave read', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const db = buildDb({ blocks, person: { id: PROFILE_A, full_name: 'Former Coach', active: false, deleted_at: null } })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(buildRequest({ block_ids: [VALID_UUID_A], profile_id: PROFILE_A }))
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toBe('Former Coach is deactivated and cannot be rostered. Reactivate them in Settings > Staff first.')
+    expect(db.insertSpy).not.toHaveBeenCalled()
+    expect(db.timeOffSpy).not.toHaveBeenCalled()
+  })
+
+  it('fails closed (500) when the profile read errors', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const db = buildDb({ blocks, personError: { message: 'down' } })
+    createServerClient.mockReturnValue(db)
+    expect((await POST(buildRequest({ block_ids: [VALID_UUID_A], profile_id: PROFILE_A }))).status).toBe(500)
     expect(db.insertSpy).not.toHaveBeenCalled()
   })
 })

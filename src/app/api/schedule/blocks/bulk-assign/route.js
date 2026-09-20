@@ -50,6 +50,7 @@ import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
 import { timeRangesOverlap, fmtTime } from '@/lib/schedule-overlap'
 import { logRosterChange } from '@/lib/roster-change-log'
 import { notifyRosterChanges } from '@/lib/roster-change-notify'
+import { isRosterableProfile, notRosterableError } from '@/lib/roster-write'
 
 const BulkAssignSchema = z.object({
   block_ids: z.array(uuidLike).min(1, 'At least one block_id is required').max(200, 'Max 200 blocks per request'),
@@ -101,6 +102,29 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: coachLinksErr.message }, { status: 500 })
   }
   const coachLocationIds = new Set((coachLinks || []).map((l) => l.location_id))
+
+  // STAFFDELETE.1 — the same rule as every other write path
+  // (isRosterableProfile): a deactivated or permanently deleted coach cannot
+  // be put on a shift, even while still linked. Only read for a coach who is
+  // at a studio of a requested block that the CALLER manages — every other
+  // block is skipped below as not_at_location / cross_location, so nothing
+  // could be written, and a foreign coach is never named (SCHEDROLES.1).
+  // Fail closed on a read error.
+  const couldAssignSomewhere = (blocks || []).some((b) =>
+    coachLocationIds.has(b.location_id) && hasRoleAtLocation(user, b.location_id, MANAGER_ROLES))
+  if (couldAssignSomewhere) {
+    const { data: coach, error: coachErr } = await db
+      .from('profiles')
+      .select('id, full_name, active, deleted_at')
+      .eq('id', body.profile_id)
+      .maybeSingle()
+    if (coachErr) {
+      return NextResponse.json({ success: false, error: coachErr.message }, { status: 500 })
+    }
+    if (!isRosterableProfile(coach)) {
+      return NextResponse.json({ success: false, error: notRosterableError(coach).message }, { status: 400 })
+    }
+  }
 
   const blocksById = new Map((blocks || []).map((b) => [b.id, b]))
   const skipped = []

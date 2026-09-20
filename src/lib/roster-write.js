@@ -318,8 +318,8 @@ export function isRosterableProfile(profile) {
   return !!profile && profile.active !== false && !profile.deleted_at
 }
 
-/** The operator-facing reason, with what to do about it. */
-function notRosterableError(profile) {
+/** The operator-facing reason, with what to do about it. Shared by every assign path. */
+export function notRosterableError(profile) {
   if (!profile) return { message: 'profile not found', code: 'profile_not_rosterable' }
   const name = profile.full_name || 'This person'
   return {
