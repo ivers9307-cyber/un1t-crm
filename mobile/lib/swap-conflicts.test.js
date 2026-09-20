@@ -151,9 +151,16 @@ describe('swapClaimNotice', () => {
   const LEAVE_WARNING = 'You have approved holiday on 2026-09-24, which covers the shift on 2026-09-24.'
   const CLASH_WARNING = 'You are already on Open 09:00 to 10:30 at Stillorgan on 2026-09-24, which overlaps the shift (10:00 to 11:00).'
 
+  // The literal first: `expect(src).toContain(undefined)` PASSES (the web file
+  // contains the word "undefined"), and so would an empty string, so a deleted
+  // or blanked constant used to sail through this pin.
   it('uses the heading the web Today page uses (mobile cannot import it)', () => {
+    expect(SWAP_CLAIM_NOTICE_HEADING).toBe('Sent to your manager. Heads up:')
     const src = readFileSync(join(__dirname, '../../src/components/dashboard/SwapActions.jsx'), 'utf8')
-    expect(src).toContain(SWAP_CLAIM_NOTICE_HEADING)
+    // Extracted the way the SWAP_CONFLICTS_CODE test does: the JSX text node
+    // of the notice's heading row, not a substring that could sit anywhere.
+    const m = src.match(/<div className="font-medium">([^<{]+)<\/div>\s*\{notice\.map/)
+    expect(m?.[1]).toBe(SWAP_CLAIM_NOTICE_HEADING)
   })
 
   it('titles the alert with that heading and lists every sentence on its own line', () => {
