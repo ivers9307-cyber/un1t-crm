@@ -31,6 +31,10 @@ export const SWAP_MOVE_CLEARS = Object.freeze({
 // Statuses a client may request on PUT /api/schedule/swaps/[id].
 const REQUESTABLE = ['awaiting_approval', 'approved', 'rejected', 'cancelled', 'pending']
 
+// COVERLOOP.1 — the refusal for a claim, accept or approval on a shift that is
+// already being worked.
+export const SHIFT_STARTED_ERROR = 'This shift has already started'
+
 function deny(status, error) {
   return { ok: false, status, error, swapUpdates: null, assignmentOps: [], notify: [], effect: 'denied' }
 }
@@ -50,12 +54,20 @@ function deny(status, error) {
  *   the approve default when canApprove is omitted. Omitted = NOT a manager
  *   (fail closed); the bare active-studio role let a manager at one studio
  *   cancel or reject any swap id at another.
+ * @param {boolean} [args.shiftStarted]  COVERLOOP.1 — has the requester's shift
+ *   started? Answered by the route with swapShiftHasStarted (swap-cover.js),
+ *   the SAME predicate the sweep closes the swap on. True refuses a claim, an
+ *   accept and an approval (409): approving would move a shift that is being
+ *   worked and clear that coach's arrival stamp and overrides
+ *   (SWAP_MOVE_CLEARS). Withdraw, cancel, reject and decline are ways OUT and
+ *   are never refused. Checked AFTER the visibility / permission refusals, so
+ *   it is not an id oracle.
  * @returns {{ ok:boolean, status?:number, error?:string,
  *   swapUpdates:object|null,
  *   assignmentOps:Array<{id:string, set?:object, delete?:boolean}>,
  *   notify:Array<{kind:string,to?:string[]}>, effect:string }}
  */
-export function resolveSwapTransition({ swap, requestedStatus, user, userLocationIds, reviewNote = null, nowIso, canApprove, isManagerHere }) {
+export function resolveSwapTransition({ swap, requestedStatus, user, userLocationIds, reviewNote = null, nowIso, canApprove, isManagerHere, shiftStarted }) {
   if (!swap) return deny(404, 'Swap request not found')
   if (!user) return deny(401, 'Unauthorized')
   if (!REQUESTABLE.includes(requestedStatus)) return deny(400, 'Invalid status')
@@ -109,6 +121,8 @@ export function resolveSwapTransition({ swap, requestedStatus, user, userLocatio
     if (swap.status !== 'pending') return deny(409, 'Swap is not open for accepting')
     if (isRequester) return deny(403, 'You cannot accept your own swap')
     if (!atLocation) return deny(403, 'Not at this location')
+    if (swap.target_id != null && !isTarget) return deny(403, 'This swap is targeted at someone else')
+    if (shiftStarted === true) return deny(409, SHIFT_STARTED_ERROR)
     if (swap.target_id == null) {
       // open claim
       return { ok: true, status: 200, effect: 'claimed', assignmentOps: [],
@@ -158,6 +172,7 @@ export function resolveSwapTransition({ swap, requestedStatus, user, userLocatio
   // ── Manager approve: finalise on the assignments ──
   if (requestedStatus === 'approved') {
     if (!mayApprove) return deny(403, 'You do not have permission to approve swaps')
+    if (shiftStarted === true) return deny(409, SHIFT_STARTED_ERROR)
     const ts = nowIso || new Date().toISOString()
     const swapUpdates = { status: 'approved', reviewed_by: user.id, reviewed_at: ts, review_note: reviewNote || null }
     if (swap.target_shift_id) {

@@ -6,7 +6,7 @@ import {
   inStaffPushHours, STAFF_PUSH_HOURS,
   coverSweepAction, coverNudgePayload, swapExpiryNotices, SWAP_EXPIRY_NOTES,
   SWAP_EXPIRY_NOTICE_NOTES, EXPIRY_NOTICE_MAX_AGE_MS,
-  swapShiftHasStarted, swapShiftStartMs, swapExpiryNote, deferredExpiryNoticeDue,
+  swapShiftHasStarted, swapShiftStartMs, swapShiftStartedInEveryZone, swapExpiryNote, deferredExpiryNoticeDue,
 } from './swap-cover'
 
 const LOC = 'loc-1'          // the swap's studio
@@ -627,6 +627,38 @@ describe('swapShiftHasStarted', () => {
     const swap = openSwap({ requester_shift: { id: 'a1', start_time_override: '08:30:00', shift_blocks: WINTER_BLOCK } })
     expect(coverSweepAction(swap, Date.UTC(2099, 0, 1, 8, 29))).toEqual({ action: 'nudge', stage: 't12' })
     expect(coverSweepAction(swap, Date.UTC(2099, 0, 1, 8, 30))).toEqual({ action: 'expire', reason: 'started', notify: true })
+  })
+})
+
+// The route's read-avoidance: far from the start, the answer is the same in
+// every timezone on earth (UTC-12 to UTC+14), so locations.timezone need not
+// be read. null = "it depends on the zone: read it".
+describe('swapShiftStartedInEveryZone', () => {
+  const sh = { block_date: '2099-01-10', start_time: '09:00:00', start_time_override: null }
+  const utc = Date.UTC(2099, 0, 10, 9, 0)
+  it.each([
+    ['days before', utc - 72 * H, false],
+    ['15h before the UTC reading: no zone has started', utc - 15 * H, false],
+    ['14h59 before: a UTC+14 studio might have', utc - 15 * H + 60 * 1000, null],
+    ['at the UTC reading', utc, null],
+    ['12h59 after: a UTC-12 studio might not have', utc + 13 * H - 60 * 1000, null],
+    ['13h after: every zone has started', utc + 13 * H, true],
+    ['years after', utc + 9000 * H, true],
+  ])('%s', (_n, now, expected) => {
+    expect(swapShiftStartedInEveryZone(sh, now)).toBe(expected)
+  })
+  it('never contradicts the real predicate, in the widest real zones', () => {
+    for (const tz of ['Pacific/Kiritimati', 'Etc/UTC', 'Europe/Dublin', 'America/New_York', 'Pacific/Pago_Pago']) {
+      for (let h = -40; h <= 40; h++) {
+        const now = utc + h * H
+        const quick = swapShiftStartedInEveryZone(sh, now)
+        if (quick !== null) expect([tz, h, quick]).toEqual([tz, h, swapShiftHasStarted(sh, now, tz)])
+      }
+    }
+  })
+  it('unreadable: false, like the predicate', () => {
+    expect(swapShiftStartedInEveryZone({ block_date: '2099-01-10', start_time: null }, utc)).toBe(false)
+    expect(swapShiftStartedInEveryZone(null, utc)).toBe(false)
   })
 })
 

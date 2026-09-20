@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   resolveSwapTransition, TERMINAL_SWAP_STATES, swapChangeLogEntries, swapApprovalError, swapApprovalRpc,
-  swapIncomingMoves, evaluateSwapMoveConflicts, swapConflictMessage, SWAP_MOVE_CLEARS,
+  swapIncomingMoves, evaluateSwapMoveConflicts, swapConflictMessage, SWAP_MOVE_CLEARS, SHIFT_STARTED_ERROR,
 } from './swap-lifecycle'
 
 // Minimal swap factory. requester_shift / target_shift mirror the embed the
@@ -715,5 +715,56 @@ describe('resolveSwapTransition — a foreign swap id is invisible, not forbidde
       isManagerHere: true,
     })
     expect(r.ok).toBe(true)
+  })
+})
+
+// COVERLOOP.1 — nothing used to refuse a swap on a shift that is already being
+// worked: approving one moves a live shift and clears that coach's arrival
+// stamp and overrides (SWAP_MOVE_CLEARS). The route answers `shiftStarted`
+// with swapShiftHasStarted (src/lib/swap-cover.js), the predicate the sweep
+// closes the swap on. The ways OUT of a swap must keep working.
+describe('resolveSwapTransition — a started shift (COVERLOOP.1)', () => {
+  const claimed = () => makeSwap({ status: 'awaiting_approval', target_id: 'coach-2' })
+  const call = (swap, requestedStatus, user, extra = {}) => resolveSwapTransition({
+    swap, requestedStatus, user, userLocationIds: ['loc-1'], shiftStarted: true, ...extra,
+  })
+
+  it('the message is exported, once', () => {
+    expect(SHIFT_STARTED_ERROR).toBe('This shift has already started')
+  })
+
+  it.each([
+    ['an open CLAIM', () => call(makeSwap(), 'awaiting_approval', coach('coach-2'))],
+    ['a targeted ACCEPT', () => call(makeSwap({ target_id: 'coach-2' }), 'awaiting_approval', coach('coach-2'))],
+    ['an APPROVE of a drop', () => call(makeSwap(), 'approved', manager, { isManagerHere: true })],
+    ['an APPROVE of a reassign', () => call(claimed(), 'approved', manager, { isManagerHere: true })],
+    ['an APPROVE of a reciprocal swap', () => call(makeSwap({ status: 'awaiting_approval', target_id: 'coach-2', target_shift_id: 'asg-tgt', target_shift: { id: 'asg-tgt', profile_id: 'coach-2' } }), 'approved', manager, { isManagerHere: true })],
+  ])('refuses %s with 409', (_name, run) => {
+    const r = run()
+    expect(r).toMatchObject({ ok: false, status: 409, error: 'This shift has already started' })
+    expect(r.swapUpdates).toBe(null)
+    expect(r.assignmentOps).toEqual([])
+  })
+
+  it.each([
+    ['the taker WITHDRAWS', () => call(claimed(), 'pending', coach('coach-2')), 'withdrawn'],
+    ['the requester CANCELS', () => call(claimed(), 'cancelled', coach('req-1')), 'cancelled'],
+    ['a manager CANCELS', () => call(makeSwap(), 'cancelled', manager, { isManagerHere: true }), 'cancelled'],
+    ['a manager REJECTS', () => call(claimed(), 'rejected', manager, { isManagerHere: true }), 'rejected'],
+    ['the target DECLINES', () => call(makeSwap({ target_id: 'coach-2' }), 'rejected', coach('coach-2')), 'declined'],
+  ])('%s still works', (_name, run, effect) => {
+    expect(run()).toMatchObject({ ok: true, effect })
+  })
+
+  it('does not become an id oracle: a stranger still gets 404, a non-approver still gets 403', () => {
+    expect(resolveSwapTransition({ swap: makeSwap(), requestedStatus: 'awaiting_approval', user: coach('x'), userLocationIds: ['loc-9'], shiftStarted: true }))
+      .toMatchObject({ ok: false, status: 404 })
+    expect(call(makeSwap(), 'approved', coach('coach-2'))).toMatchObject({ ok: false, status: 403 })
+    expect(call(makeSwap({ target_id: 'coach-3' }), 'awaiting_approval', coach('coach-2'))).toMatchObject({ ok: false, status: 403 })
+  })
+
+  it('omitted or false: nothing changes', () => {
+    expect(resolveSwapTransition({ swap: makeSwap(), requestedStatus: 'awaiting_approval', user: coach('coach-2'), userLocationIds: ['loc-1'] })).toMatchObject({ ok: true, effect: 'claimed' })
+    expect(resolveSwapTransition({ swap: makeSwap(), requestedStatus: 'awaiting_approval', user: coach('coach-2'), userLocationIds: ['loc-1'], shiftStarted: false })).toMatchObject({ ok: true, effect: 'claimed' })
   })
 })

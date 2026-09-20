@@ -7,6 +7,7 @@ import { validateBody } from '@/lib/validate'
 import { swapStatusSchema } from '@/lib/schemas'
 import { resolveSwapTransition, swapChangeLogEntries, swapApprovalRpc, swapApprovalError, swapIncomingMoves, SWAP_CONFLICTS_CODE } from '@/lib/swap-lifecycle'
 import { findSwapConflicts } from '@/lib/swap-conflicts'
+import { swapShiftHasStarted, swapShiftStartedInEveryZone } from '@/lib/swap-cover'
 import { notifyUsersOnce, notifyUsersAtRolesOnce } from '@/lib/push-dedup'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { hasPermissionForLocation } from '@/lib/permissions'
@@ -51,13 +52,23 @@ export async function PUT(request, props) {
   // SWAPS.2 — both block embeds also carry the block's times: the leave /
   // clash check compares them with the incoming coach's other shifts that day
   // (a moved shift loses its overrides, so the block's times are the window).
+  // COVERLOOP.1 — the requester shift also carries its own start_time_override:
+  // "has this shift started" is judged on the EFFECTIVE start.
   const { data: swap } = await db.from('shift_swap_requests')
-    .select('*, requester_shift:shift_assignments!requester_shift_id(id, profile_id, block_id, block:shift_blocks!block_id(id, location_id, block_date, start_time, end_time, rosters:roster_id(status))), target_shift:shift_assignments!target_shift_id(id, profile_id, block_id, block:shift_blocks!block_id(id, location_id, block_date, start_time, end_time, rosters:roster_id(status)))')
+    .select('*, requester_shift:shift_assignments!requester_shift_id(id, profile_id, block_id, start_time_override, block:shift_blocks!block_id(id, location_id, block_date, start_time, end_time, rosters:roster_id(status))), target_shift:shift_assignments!target_shift_id(id, profile_id, block_id, block:shift_blocks!block_id(id, location_id, block_date, start_time, end_time, rosters:roster_id(status)))')
     .eq('id', params.id)
     .single()
 
+  // COVERLOOP.1 — a claim, accept or approval on a shift that has already
+  // started is refused (409). Only asked for those two target statuses: the
+  // ways out (withdraw, cancel, reject, decline) never need it.
+  const shiftStarted = swap && (body.status === 'awaiting_approval' || body.status === 'approved')
+    ? await requesterShiftStarted(db, swap, Date.now())
+    : false
+
   const decision = resolveSwapTransition({
     swap,
+    shiftStarted,
     requestedStatus: body.status,
     user,
     userLocationIds: getUserLocationIds(user),
@@ -215,6 +226,33 @@ export async function PUT(request, props) {
     .catch(err => console.error('[swaps] notify failed', err)))
 
   return NextResponse.json(warnings ? { success: true, data, warnings } : { success: true, data })
+}
+
+// COVERLOOP.1 — has the requester's shift started? The rule is
+// swapShiftHasStarted (src/lib/swap-cover.js), the SAME predicate the cover
+// sweep closes a swap on, so the two can never disagree: block_date + the
+// assignment's start_time_override (else the block's start_time), as wall
+// clock in the studio's locations.timezone. Far from the start every zone on
+// earth agrees and nothing is read; near it the studio's timezone is read, and
+// an unreadable, empty or invalid one is Europe/Dublin. Never throws: this
+// guard must not turn a swap action into a 500.
+async function requesterShiftStarted(db, swap, nowMs) {
+  const a = swap.requester_shift
+  if (!a?.block) return false
+  const shift = { block_date: a.block.block_date, start_time: a.block.start_time, start_time_override: a.start_time_override ?? null }
+  const everywhere = swapShiftStartedInEveryZone(shift, nowMs)
+  if (everywhere !== null) return everywhere
+
+  let tz = null
+  try {
+    // 0 rows is a legitimate answer (-> Europe/Dublin), hence maybeSingle.
+    const { data, error } = await db.from('locations').select('id, timezone').eq('id', swap.location_id).maybeSingle()
+    if (error) throw new Error(error.message)
+    tz = data?.timezone ?? null
+  } catch (e) {
+    logWarn('swaps', 'could not read the studio timezone for the started-shift check; using Europe/Dublin', { swapId: swap.id, err: e?.message })
+  }
+  return swapShiftHasStarted(shift, nowMs, tz)
 }
 
 // SWAPAUDIT.1 — write the roster_change_log rows for an approved reassign

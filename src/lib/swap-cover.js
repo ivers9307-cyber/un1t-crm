@@ -245,6 +245,26 @@ export function swapShiftHasStarted(shift, nowMs, tz) {
   return startMs != null && Number.isFinite(nowMs) && nowMs >= startMs
 }
 
+// Real zones run from UTC-12 to UTC+14. Read as UTC, a wall-clock start is
+// therefore at most 14h LATER than the true instant (a UTC+14 studio) and at
+// most 12h EARLIER (UTC-12); one spare hour each way covers DST.
+const ZONE_EARLIEST_MS = 15 * HOUR_MS
+const ZONE_LATEST_MS = 13 * HOUR_MS
+
+/**
+ * swapShiftHasStarted without knowing the zone, when the zone cannot matter:
+ * true / false if every timezone on earth agrees, null if it depends on the
+ * studio's zone (within ~a day of the start) and the caller must read it.
+ * Exists so PUT /swaps/:id does not read locations on every request.
+ */
+export function swapShiftStartedInEveryZone(shift, nowMs) {
+  const asUtc = swapShiftStartMs(shift, 'UTC')
+  if (asUtc == null || !Number.isFinite(nowMs)) return false
+  if (nowMs <= asUtc - ZONE_EARLIEST_MS) return false
+  if (nowMs >= asUtc + ZONE_LATEST_MS) return true
+  return null
+}
+
 // The sweep row's requester shift, in the predicate's shape.
 function sweepShift(swap) {
   const a = swap?.requester_shift
