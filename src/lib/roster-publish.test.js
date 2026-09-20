@@ -667,6 +667,26 @@ describe('projectPublishImpact — leave clashes and double bookings', () => {
     await expect(projectPublishImpact(db, PERIOD)).rejects.toThrow(/Location lookup failed/)
   })
 
+  // Review — nothing failed when the .range() loop was deleted. PostgREST
+  // caps a select at 1,000 rows, so the clash on row 1,001 is the proof.
+  it('pages the other-studio read past 1,000 rows and USES the second page', async () => {
+    // 1,000 harmless rows (another day, outside the period) and then the clash.
+    const filler = Array.from({ length: 1000 }, (_, i) => ({
+      ...elsewhere('dan', '2026-05-20', '06:00:00', '07:00:00'), id: `oa-${String(i).padStart(4, '0')}`,
+    }))
+    const db = mockDb({
+      location: { id: 'loc1', monthly_contractor_budget_eur: null },
+      contractors: [dan],
+      blocks: [block({ id: 'b1', date: '2026-05-06', start: '09:00', end: '11:00', coaches: [named('dan', 'Coach D')] })],
+      otherAssignments: [...filler, elsewhere('dan', '2026-05-06', '10:00:00', '12:00:00')],
+    })
+    const r = await projectPublishImpact(db, PERIOD)
+    expect(db.assignmentQueries.map((q) => [q.from, q.to])).toEqual([[0, 999], [1000, 1999]])
+    expect(r.doubleBookings).toHaveLength(1)
+    expect(r.doubleBookings[0].second).toMatchObject({ location_name: 'Studio B', start_time: '10:00' })
+    expect(r.crossLocationChecked).toBe(true)
+  })
+
   // Review (cost) — a caller that never shows the lists must not pay for them.
   it('advisories: false does none of the advisory work: no other-studio query, no lists, the leave scope as it was, the same money', async () => {
     const fx = () => mockDb({
