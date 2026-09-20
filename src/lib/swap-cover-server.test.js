@@ -167,7 +167,8 @@ describe('notifyOpenPool', () => {
       expect(await notifyOpenPool(db, ARGS)).toEqual({ notified: 0, degraded: true })
       expect(notifyUsersOnce).not.toHaveBeenCalled()
       expect(db.queries.some((q) => q.table === 'shift_assignments')).toBe(false)
-      expect(logWarn).toHaveBeenCalledWith('swap-cover', expect.stringContaining('members'), expect.objectContaining({ swapId: 'swap-1', err: 'boom' }))
+      // Nothing retries this broadcast: nobody hearing is an ERROR, not a warning.
+      expect(logError).toHaveBeenCalledWith('swap-cover', expect.stringContaining('members'), expect.objectContaining({ swapId: 'swap-1', err: 'boom' }))
     })
 
     it('leave unreadable: only coaches already working here that day are told', async () => {
@@ -185,7 +186,7 @@ describe('notifyOpenPool', () => {
       const db = mockDb(healthy({ shift_assignments: { data: null, error: { message: 'boom' } } }))
       expect(await notifyOpenPool(db, ARGS)).toEqual({ notified: 0, degraded: true })
       expect(notifyUsersOnce).not.toHaveBeenCalled()
-      expect(logWarn).toHaveBeenCalledWith('swap-cover', expect.stringContaining('shifts'), expect.objectContaining({ swapId: 'swap-1', err: 'boom' }))
+      expect(logError).toHaveBeenCalledWith('swap-cover', expect.stringContaining('shifts'), expect.objectContaining({ swapId: 'swap-1', err: 'boom' }))
     })
 
     it.each([

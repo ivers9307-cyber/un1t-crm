@@ -68,7 +68,9 @@ async function sameOrgLocationIds(db, locationId) {
  *   shifts unreadable         -> nobody (the old rule named nobody either)
  *   leave unreadable          -> degraded: only coaches working here that day
  *   organisation unreadable   -> shifts read for THIS studio only, degraded
- * Every one of them is logged. `degraded: true` in the result says it happened.
+ * Every one of them is logged: the two NOBODY outcomes with logError (nothing
+ * ever retries this broadcast), the two degraded ones with logWarn.
+ * `degraded: true` in the result says it happened.
  *
  * @param {object} db  service-role supabase client
  * @param {{ swapId: string, locationId: string,
@@ -84,7 +86,7 @@ export async function notifyOpenPool(db, { swapId, locationId, block, requester 
     resolveRoleRecipientIds(db, locationId, MANAGER_ROLES),
   ])
   if (membersRes.error) {
-    logWarn('swap-cover', 'open-pool members read failed; nobody was notified (managers still were)', { swapId, err: membersRes.error.message })
+    logError('swap-cover', 'open-pool members read failed; nobody was notified (managers still were)', { swapId, err: membersRes.error.message })
     return { notified: 0, degraded: true }
   }
 
@@ -121,7 +123,7 @@ export async function notifyOpenPool(db, { swapId, locationId, block, requester 
       .in('shift_blocks.location_id', org.ids),
   ])
   if (assignRes.error) {
-    logWarn('swap-cover', 'open-pool shifts read failed; nobody was notified (managers still were)', { swapId, err: assignRes.error.message })
+    logError('swap-cover', 'open-pool shifts read failed; nobody was notified (managers still were)', { swapId, err: assignRes.error.message })
     return { notified: 0, degraded: true }
   }
   if (leaveRes.error) {
