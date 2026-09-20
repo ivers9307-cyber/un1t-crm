@@ -4452,6 +4452,22 @@ registry.registerPath({
   },
 })
 
+// CHANGELOG.1 — the human-facing read of roster_change_log (mig 236).
+registry.registerPath({
+  method: 'get',
+  path: '/api/schedule/change-log',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Edits made to published rosters in a period (manager-only)',
+  description: "Query: location_id (uuid), from and to (YYYY-MM-DD, inclusive, matched on the SHIFT date, at most 92 days). Returns the roster_change_log rows for that studio, newest first: action (assigned | unassigned | time_changed), the coach's name, who made the change, the shift's date, times and name, `details` (whitelisted to how it happened and the old/new times; never a free-form writer field), created_at, and notified_at (null = the coach has not been told yet; the next re-publish tells them). Only edits to an ALREADY-PUBLISHED roster are logged, so a draft week is empty by design. Manager-only (master, owner, manager, head_coach) at location_id, scoped by assertLocationAccess: a studio outside the caller's assignments is a 403. Names and times only, never pay. `truncated` is true when more than 5,000 rows matched.",
+  responses: {
+    200: { description: '{ success, data: { changes, truncated } }' },
+    400: { description: 'Missing or malformed location_id / from / to, a from or to that is not a real calendar date, to before from, or a range over 92 days', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — needs a manager role at that location', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The change log could not be read', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 registry.registerPath({
   method: 'post',
   path: '/api/schedule/time-off',
