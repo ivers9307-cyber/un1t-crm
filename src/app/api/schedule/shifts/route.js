@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess, getUserLocationIds, hasRoleAtLocation } from '@/lib/auth'
 import { fetchApiShiftRows } from '@/lib/roster-read'
+import { fetchOwnOpenSwaps, annotateOwnOpenSwaps } from '@/lib/shift-open-swaps'
 import { MANAGER_ROLES } from '@/lib/schemas'
 
 // RETIRE-SHIFTS-MIRROR.5d — GET reads the Roster v2 model (shift_blocks +
@@ -52,5 +53,8 @@ export async function GET(request) {
   })
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
 
-  return NextResponse.json({ success: true, data: rows })
+  // COVERLOOP.2 — the caller's OWN rows say whether a swap is open on them
+  // (the phone's "Swap pending" chip). One read, keyed on the caller.
+  const ownOpenSwaps = await fetchOwnOpenSwaps(db, user.id)
+  return NextResponse.json({ success: true, data: annotateOwnOpenSwaps(rows, ownOpenSwaps, user.id) })
 }
