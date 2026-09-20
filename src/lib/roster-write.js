@@ -130,6 +130,20 @@ export async function upsertShiftAssignment(db, input) {
   if (lErr) return { error: lErr }
   if (!link) return { error: { message: 'profile not linked to this location' } }
 
+  // STAFFDELETE.1 — a deactivated or permanently deleted person cannot be put
+  // on a shift by ANY path: the same predicate the copy path uses
+  // (isRosterableProfile), so the two cannot drift. Judged only where a NEW
+  // assignment would be written — editing a shift they are already on
+  // (cancelling a leaver's shift, correcting past hours) is not rostering.
+  // Fails closed on an unreadable profile.
+  const { data: person, error: pErr } = await db
+    .from('profiles')
+    .select('id, full_name, active, deleted_at')
+    .eq('id', profileId)
+    .maybeSingle()
+  if (pErr) return { error: pErr }
+  const notRosterable = isRosterableProfile(person) ? null : { error: notRosterableError(person) }
+
   // Find the block for (location, template, date).
   const { data: existing, error: fErr } = await db
     .from('shift_blocks')
@@ -141,6 +155,8 @@ export async function upsertShiftAssignment(db, input) {
   if (fErr) return { error: fErr }
 
   let blockId = existing?.id
+  // No block means nobody is on it: this can only be a NEW assignment.
+  if (!blockId && notRosterable) return notRosterable
   if (!blockId) {
     // ROSTER-FIX.4 — a block created for a date INSIDE an already-published
     // period joins that roster. Publishing tags the blocks that exist at
@@ -197,6 +213,8 @@ export async function upsertShiftAssignment(db, input) {
     const { assignment, error } = await patchExistingAssignment(db, existingAssignment, patch)
     return error ? { error } : { blockId, assignment, template, created: false, error: null }
   }
+
+  if (notRosterable) return notRosterable
 
   const { data: assignment, error: aErr } = await db
     .from('shift_assignments')
@@ -289,6 +307,30 @@ function chunk(list, size) {
 }
 
 /**
+ * STAFFDELETE.1 — THE rule for "may this person be put on a shift", shared by
+ * the single-assign path (upsertShiftAssignment) and the batch/copy path
+ * (fetchRosterableProfileIds) so they cannot drift: not deactivated, not a
+ * tombstone. `active` NULL is a legacy row and counts as active (mig 004:41);
+ * a missing row is not rosterable. Location membership is each path's own
+ * profile_locations check. Pure, exported for tests.
+ */
+export function isRosterableProfile(profile) {
+  return !!profile && profile.active !== false && !profile.deleted_at
+}
+
+/** The operator-facing reason, with what to do about it. */
+function notRosterableError(profile) {
+  if (!profile) return { message: 'profile not found', code: 'profile_not_rosterable' }
+  const name = profile.full_name || 'This person'
+  return {
+    code: 'profile_not_rosterable',
+    message: profile.deleted_at
+      ? `${name} was permanently deleted and cannot be rostered.`
+      : `${name} is deactivated and cannot be rostered. Reactivate them in Settings > Staff first.`,
+  }
+}
+
+/**
  * STAFFDELETE.1 — which of these profiles may be rostered at this location
  * NOW: linked through profile_locations, not deactivated, not a tombstone.
  * `active` NULL is a legacy row and counts as active (mig 004:41). A profile
@@ -313,7 +355,7 @@ async function fetchRosterableProfileIds(db, locationId, profileIds) {
   if (pErr) return { ids: new Set(), error: pErr }
   const linked = new Set((links || []).map((l) => l.profile_id))
   return {
-    ids: new Set((people || []).filter((p) => linked.has(p.id) && p.active !== false && !p.deleted_at).map((p) => p.id)),
+    ids: new Set((people || []).filter((p) => linked.has(p.id) && isRosterableProfile(p)).map((p) => p.id)),
     error: null,
   }
 }
