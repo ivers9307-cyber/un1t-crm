@@ -120,6 +120,14 @@ export default function TimeOffNew() {
   const clashes = previewLoading ? null : leaveClashSummary(preview)
   const daysHint = leaveDaysHint(type)
 
+  // Opened cold (a deep link, a notification) there is nothing to pop back to,
+  // and a no-op back() after a success would leave this form on screen and
+  // inert (`sent` is true). Same guard as issues/inbox/[id] and BackHeaderLeft.
+  function leave() {
+    if (router.canGoBack()) router.back()
+    else router.replace('/(tabs)/schedule')
+  }
+
   function submit() {
     if (sent.current) return undefined
     return submitGuard.current.run(sendRequest)
@@ -161,7 +169,7 @@ export default function TimeOffNew() {
     const done = leaveSubmittedMessage({
       type, startIso: start, endIso: endDate, days: submittedDays(res), clashCount: clashes?.count || 0,
     })
-    Alert.alert(done.title, done.message, [{ text: 'OK', onPress: () => router.back() }])
+    Alert.alert(done.title, done.message, [{ text: 'OK', onPress: leave }])
   }
 
   return (
@@ -174,12 +182,19 @@ export default function TimeOffNew() {
         options={{
           title: 'Request time off',
           headerLeft: () => (
-            <Pressable onPress={() => router.back()} hitSlop={10}>
+            <Pressable onPress={leave} hitSlop={10} accessibilityRole="button" accessibilityLabel="Cancel, close without sending">
               <Text className="text-base text-un1t-text">Cancel</Text>
             </Pressable>
           ),
           headerRight: () => (
-            <Pressable onPress={submit} disabled={submitting} hitSlop={10}>
+            <Pressable
+              onPress={submit}
+              disabled={submitting}
+              hitSlop={10}
+              accessibilityRole="button"
+              accessibilityLabel="Submit time-off request"
+              accessibilityState={{ disabled: submitting, busy: submitting }}
+            >
               {submitting ? (
                 <ActivityIndicator />
               ) : (
