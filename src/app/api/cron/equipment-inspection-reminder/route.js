@@ -61,9 +61,11 @@ export async function GET(request) {
         title: 'Equipment inspections due',
         body: buildReminderBody(outstanding),
         data: { type: 'equipment_inspection' },
-        // Registered in MOBILE_PERMISSIONS — an unregistered category
-        // resolves false for every role but master.
-        category: 'notify_inspection_due',
+        // BARE — push.js prepends `notify_` itself, so this gates on
+        // notify_inspection_due (registered in MOBILE_PERMISSIONS). The
+        // prefixed form resolved notify_notify_…, which is unregistered
+        // and reaches no one but master (PUSHCAT.1).
+        category: 'inspection_due',
       })
 
       await logAuditEvent({
