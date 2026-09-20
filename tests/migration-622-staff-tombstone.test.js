@@ -377,6 +377,40 @@ describe('mig 622 — tombstone_staff_profile', () => {
     })
   })
 
+  // Whatever route forgets to ask, the DATABASE refuses to hand a tombstone a
+  // studio role or an organisation-admin grant (RLS reads both tables live).
+  describe('a tombstone cannot be re-granted access — refused by the database', () => {
+    it('profile_locations: INSERT and UPDATE-onto-a-tombstone are refused; a living profile is unaffected', async () => {
+      await tombstone()
+      await expect(runSql(`INSERT INTO public.profile_locations (profile_id, location_id, role) VALUES ('${GONE}', '${LOC}', 'owner')`))
+        .rejects.toThrow(/staff_tombstone_access/)
+      await expect(runSql(`UPDATE public.profile_locations SET profile_id = '${GONE}' WHERE profile_id = '${PEER}'`))
+        .rejects.toThrow(/staff_tombstone_access/)
+      expect(await count('public.profile_locations', `profile_id = '${GONE}'`)).toBe(0)
+      await runSql(`UPDATE public.profile_locations SET role = 'head_coach' WHERE profile_id = '${PEER}'`)
+      await runSql(`INSERT INTO public.profile_locations (profile_id, location_id, role) VALUES ('${MASTER}', '${LOC}', 'owner')`)
+      expect(await count('public.profile_locations', `profile_id IN ('${PEER}', '${MASTER}')`)).toBe(2)
+    })
+    it('profile_organizations: INSERT and UPDATE-onto-a-tombstone are refused; a living profile is unaffected', async () => {
+      await tombstone()
+      await expect(runSql(`INSERT INTO public.profile_organizations (profile_id) VALUES ('${GONE}')`)).rejects.toThrow(/staff_tombstone_access/)
+      await runSql(`INSERT INTO public.profile_organizations (profile_id) VALUES ('${PEER}')`)
+      await expect(runSql(`UPDATE public.profile_organizations SET profile_id = '${GONE}' WHERE profile_id = '${PEER}'`)).rejects.toThrow(/staff_tombstone_access/)
+      expect(await count('public.profile_organizations', `profile_id = '${GONE}'`)).toBe(0)
+      expect(await count('public.profile_organizations', `profile_id = '${PEER}'`)).toBe(1)
+    })
+    it('the guard works for a role with NO read access to profiles (mig 153b revoked SELECT from authenticated)', async () => {
+      await tombstone()
+      await runSql(`GRANT INSERT ON public.profile_organizations TO authenticated`)
+      await runSql('BEGIN'); await runSql('SET LOCAL ROLE authenticated')
+      try {
+        await expect(runSql(`INSERT INTO public.profile_organizations (profile_id) VALUES ('${GONE}')`)).rejects.toThrow(/staff_tombstone_access/)
+      } finally { await runSql('ROLLBACK') }
+      await runSql('BEGIN'); await runSql('SET LOCAL ROLE authenticated')
+      try { await runSql(`INSERT INTO public.profile_organizations (profile_id) VALUES ('${PEER}')`) } finally { await runSql('ROLLBACK') }
+    })
+  })
+
   describe('the REAL last-master guard (mig 080) still holds', () => {
     it('the last ACTIVE master cannot be tombstoned: still active → refused; deactivating them → refused by the guard', async () => {
       await expect(tombstone(MASTER, { actor: PEER })).rejects.toThrow(/staff_still_active/)

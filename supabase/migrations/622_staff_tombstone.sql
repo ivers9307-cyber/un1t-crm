@@ -188,6 +188,42 @@ ALTER TABLE public.profiles
 CREATE INDEX IF NOT EXISTS idx_profiles_deleted_by
   ON public.profiles (deleted_by) WHERE deleted_by IS NOT NULL;
 
+-- ─── A tombstone can never be handed access again ──────────────────────────
+-- RLS reads profile_locations (private.auth_is_in_location, auth_role, …) and
+-- profile_organizations (private.auth_is_in_organization) LIVE, and three
+-- routes write them by profile id (staff/[id]/org-admin, admin/assignments,
+-- admin/assignments/bulk). The routes now refuse a tombstone; this makes the
+-- DATABASE refuse it whichever path forgets to ask. DELETE is not guarded:
+-- removing access is always allowed (and is what the function below does).
+-- SECURITY DEFINER because `authenticated` holds no SELECT on profiles (mig
+-- 153b) and the guard must still be able to read deleted_at for any writer;
+-- it lives in `private` (not exposed by PostgREST), reads one boolean, and
+-- pins search_path.
+CREATE OR REPLACE FUNCTION private.refuse_tombstone_access_row()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = NEW.profile_id AND p.deleted_at IS NOT NULL) THEN
+    RAISE EXCEPTION 'staff_tombstone_access: profile % was permanently deleted and cannot be given a role in %', NEW.profile_id, TG_TABLE_NAME;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+REVOKE ALL ON FUNCTION private.refuse_tombstone_access_row() FROM PUBLIC, anon, authenticated;
+
+DROP TRIGGER IF EXISTS refuse_tombstone_access_row ON public.profile_locations;
+CREATE TRIGGER refuse_tombstone_access_row
+  BEFORE INSERT OR UPDATE ON public.profile_locations
+  FOR EACH ROW EXECUTE FUNCTION private.refuse_tombstone_access_row();
+
+DROP TRIGGER IF EXISTS refuse_tombstone_access_row ON public.profile_organizations;
+CREATE TRIGGER refuse_tombstone_access_row
+  BEFORE INSERT OR UPDATE ON public.profile_organizations
+  FOR EACH ROW EXECUTE FUNCTION private.refuse_tombstone_access_row();
+
 -- ERRORS (all P0001; the message prefix is the contract the route maps):
 --   staff_bad_args, staff_self_delete, staff_not_found, staff_already_deleted,
 --   staff_still_active.
