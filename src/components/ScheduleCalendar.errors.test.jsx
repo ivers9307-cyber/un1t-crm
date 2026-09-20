@@ -550,4 +550,13 @@ describe('copy chooser (COPYMODES.1)', () => {
     expect(JSON.parse(opts.body)).toMatchObject({ mode: 'exact' })
     expect(await screen.findByText('Copied 7 shifts.')).toBeTruthy()
   })
+
+  // COPYLEAVE.1 — the component must hand skipped_on_leave to the toast.
+  it('toasts how many coaches were skipped because they are on leave', async () => {
+    global.fetch = copyFetch(() => okResponse({ success: true, copied: 9, skipped: 3, skipped_removed: 0, skipped_on_leave: 3, mode: 'exact' }))
+    await renderReady()
+    fireEvent.click(screen.getByText('Copy Last Week'))
+    fireEvent.click(await screen.findByText('Exact copy'))
+    expect(await screen.findByText('Copied 9 shifts. 3 skipped, on leave.')).toBeTruthy()
+  })
 })

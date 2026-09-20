@@ -496,4 +496,25 @@ describe('copyResultToast', () => {
       'Copied 1 shift. 1 skipped because that slot was deleted in the target month. 2 skipped, their template is inactive, no longer runs that weekday, or the target month has no matching weekday (a 5th Monday).',
     )
   })
+
+  // COPYLEAVE.1 — a coach skipped because they are on approved leave gets that
+  // reason, never the mode's ("their template is inactive").
+  it('names approved leave as its own skip reason', () => {
+    expect(copyResultToast({ period: 'week', mode: 'exact', copied: 9, skipped: 3, skippedOnLeave: 3 })).toEqual({
+      kind: 'warning',
+      message: 'Copied 9 shifts. 3 skipped, on leave.',
+    })
+  })
+
+  it('lists deleted slots, leave, then the mode\'s reason, each with its own count', () => {
+    const r = copyResultToast({ period: 'week', mode: 'template', copied: 1, skipped: 6, skippedRemoved: 1, skippedOnLeave: 2 })
+    expect(r.message).toBe(
+      'Copied 1 shift. 1 skipped because that slot was deleted in the target week. 2 skipped, on leave. 3 skipped, their template is inactive or no longer runs that weekday.',
+    )
+  })
+
+  it('never claims more leave skips than there were skips', () => {
+    expect(copyResultToast({ period: 'week', mode: 'exact', copied: 1, skipped: 1, skippedOnLeave: 5 }).message)
+      .toBe('Copied 1 shift. 1 skipped, on leave.')
+  })
 })

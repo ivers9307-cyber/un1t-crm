@@ -309,31 +309,35 @@ export const COPY_MODE_OPTIONS = [
  * @param {'week'|'month'} r.period
  * @param {'exact'|'template'} r.mode
  * @param {number} [r.copied]
- * @param {number} [r.skipped]          includes skippedRemoved
+ * @param {number} [r.skipped]          includes skippedRemoved and skippedOnLeave
  * @param {number} [r.skippedRemoved]   SLOTREMOVAL.1 — skipped because the
  *   target slot was deleted by a manager
+ * @param {number} [r.skippedOnLeave]   COPYLEAVE.1 — skipped because the coach
+ *   has approved leave that day
  */
-export function copyResultToast({ period, mode, copied = 0, skipped = 0, skippedRemoved = 0 }) {
+export function copyResultToast({ period, mode, copied = 0, skipped = 0, skippedRemoved = 0, skippedOnLeave = 0 }) {
   const n = Number(copied) || 0
   const total = Number(skipped) || 0
   const removed = Math.min(Number(skippedRemoved) || 0, total)
+  const onLeave = Math.min(Number(skippedOnLeave) || 0, total - removed)
   const copiedText = `Copied ${n} ${n === 1 ? 'shift' : 'shifts'}.`
   if (total === 0) {
     return { kind: 'success', message: n === 0 ? `${copiedText} Everyone was already on the target ${period}.` : copiedText }
   }
-  const removedText = removed > 0
-    ? `${removed} skipped because that slot was deleted in the target ${period}.`
-    : ''
-  const s = total - removed
-  if (s === 0) return { kind: 'warning', message: `${copiedText} ${removedText}` }
-  let why
-  if (mode === 'template') {
-    why = period === 'month'
-      ? "their template is inactive, no longer runs that weekday, or the target month has no matching weekday (a 5th Monday)."
-      : 'their template is inactive or no longer runs that weekday.'
-  } else {
-    why = 'that day of the month does not exist in the target (usually 31 Jan into Feb).'
+  const parts = [copiedText]
+  if (removed > 0) parts.push(`${removed} skipped because that slot was deleted in the target ${period}.`)
+  if (onLeave > 0) parts.push(`${onLeave} skipped, on leave.`)
+  const s = total - removed - onLeave
+  if (s > 0) {
+    let why
+    if (mode === 'template') {
+      why = period === 'month'
+        ? "their template is inactive, no longer runs that weekday, or the target month has no matching weekday (a 5th Monday)."
+        : 'their template is inactive or no longer runs that weekday.'
+    } else {
+      why = 'that day of the month does not exist in the target (usually 31 Jan into Feb).'
+    }
+    parts.push(`${s} skipped, ${why}`)
   }
-  const otherText = `${s} skipped, ${why}`
-  return { kind: 'warning', message: removedText ? `${copiedText} ${removedText} ${otherText}` : `${copiedText} ${otherText}` }
+  return { kind: 'warning', message: parts.join(' ') }
 }
