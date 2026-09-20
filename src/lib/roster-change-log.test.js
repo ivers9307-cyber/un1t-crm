@@ -10,6 +10,9 @@ import {
   ROSTER_CHANGE_ACTIONS,
   collectUnnotifiedChanges,
   markChangesNotified,
+  listRosterChanges,
+  shapeRosterChange,
+  ROSTER_CHANGE_LOG_MAX_ROWS,
 } from './roster-change-log'
 
 function mockDb(captured, { insertResult = { data: { id: 'log-1' }, error: null } } = {}) {
@@ -143,5 +146,157 @@ describe('markChangesNotified — resolved error', () => {
     const db = updateDb({ data: null, error: { message: 'deadlock detected' } })
     await expect(markChangesNotified(db, ['ch1'])).resolves.toBeUndefined()
     expect(logWarn).toHaveBeenCalledWith('roster-change-log', 'mark notified failed', { err: 'deadlock detected' })
+  })
+})
+
+// CHANGELOG.1 — the human-facing read.
+
+// A raw row as PostgREST returns it for the select in listRosterChanges.
+const raw = (i, over = {}) => ({
+  id: `c${String(i).padStart(5, '0')}`, block_id: 'b1', block_date: '2026-09-15', coach_id: 'p1',
+  action: 'assigned', details: { via: 'copy_week' },
+  notified_at: null, created_at: '2026-09-15T12:58:00Z',
+  actor: { id: 'm1', full_name: 'Manager B' },
+  coach: { id: 'p1', full_name: 'Coach A' },
+  shift_blocks: { start_time: '06:00:00', end_time: '07:00:00', shift_templates: { name: 'Morning' } },
+  ...over,
+})
+
+function pagedDb(total, { failOnPage = null } = {}) {
+  const calls = []
+  const all = Array.from({ length: total }, (_, i) => raw(i))
+  return {
+    calls,
+    from(table) {
+      expect(table).toBe('roster_change_log')
+      const q = { filters: [], orders: [] }
+      const chain = {
+        select: (s) => { q.select = s; return chain },
+        eq: (c, v) => { q.filters.push(['eq', c, v]); return chain },
+        gte: (c, v) => { q.filters.push(['gte', c, v]); return chain },
+        lte: (c, v) => { q.filters.push(['lte', c, v]); return chain },
+        order: (c, o) => { q.orders.push([c, o?.ascending]); return chain },
+        range: (from, to) => {
+          q.range = [from, to]
+          calls.push(q)
+          if (failOnPage !== null && calls.length - 1 === failOnPage) return Promise.resolve({ data: null, error: { message: 'boom' } })
+          return Promise.resolve({ data: all.slice(from, to + 1), error: null })
+        },
+      }
+      return chain
+    },
+  }
+}
+
+describe('shapeRosterChange', () => {
+  it('flattens the embeds to exactly the fields the drawer needs, and nothing else', () => {
+    expect(shapeRosterChange(raw(1))).toEqual({
+      id: 'c00001', action: 'assigned', block_id: 'b1', block_date: '2026-09-15',
+      start_time: '06:00:00', end_time: '07:00:00', shift_name: 'Morning',
+      coach_id: 'p1', coach_name: 'Coach A', actor_name: 'Manager B',
+      details: { via: 'copy_week' }, notified_at: null, created_at: '2026-09-15T12:58:00Z',
+    })
+  })
+
+  it('a deleted slot (block_id SET NULL) and deleted profiles become nulls, not a crash', () => {
+    expect(shapeRosterChange(raw(1, { block_id: null, shift_blocks: null, actor: null, coach: null, coach_id: null, details: null })))
+      .toMatchObject({ block_id: null, start_time: null, end_time: null, shift_name: null, coach_id: null, coach_name: null, actor_name: null, details: {} })
+  })
+})
+
+describe('shapeRosterChange — details whitelist', () => {
+  // `details` is free-form jsonb any writer can extend. Only the keys the
+  // formatter prints cross the wire, so a future writer cannot leak a field
+  // (a note, a rate) through this read by accident.
+  it('passes on only the keys the drawer prints, and only times inside from/to', () => {
+    const shaped = shapeRosterChange(raw(1, { details: {
+      via: 'swap', swap_id: 's1', effect: 'approved_reassign', roster_status: 'published', note: 'private',
+      source: 'template_edit', template_id: 't1',
+      start_time_override: null, end_time_override: '07:30:00',
+      from: { start_time: '06:00:00', end_time: '07:00:00', hourly_rate: 1 },
+      to: { start_time: '06:30:00', end_time: '07:30:00' },
+    } }))
+    expect(shaped.details).toEqual({
+      via: 'swap', source: 'template_edit',
+      start_time_override: null, end_time_override: '07:30:00',
+      from: { start_time: '06:00:00', end_time: '07:00:00' },
+      to: { start_time: '06:30:00', end_time: '07:30:00' },
+    })
+  })
+
+  it('keeps a null override KEY: "both cleared" is how the formatter knows a reset', () => {
+    expect(shapeRosterChange(raw(1, { details: { start_time_override: null, end_time_override: null } })).details)
+      .toEqual({ start_time_override: null, end_time_override: null })
+  })
+
+  it('a non-object details is an empty one', () => {
+    expect(shapeRosterChange(raw(1, { details: 'oops' })).details).toEqual({})
+    expect(shapeRosterChange(raw(1, { details: { from: 'oops' } })).details).toEqual({})
+  })
+})
+
+describe('listRosterChanges', () => {
+  it('reads ONE studio\'s changes whose shift date is in the range, newest first', async () => {
+    const db = pagedDb(3)
+    const { changes, truncated, error } = await listRosterChanges(db, { locationId: 'loc1', from: '2026-09-14', to: '2026-09-20' })
+    expect(error).toBeNull()
+    expect(truncated).toBe(false)
+    expect(changes).toHaveLength(3)
+    expect(changes[0]).toMatchObject({ coach_name: 'Coach A', actor_name: 'Manager B', shift_name: 'Morning' })
+    expect(db.calls[0].filters).toEqual([
+      ['eq', 'location_id', 'loc1'], ['gte', 'block_date', '2026-09-14'], ['lte', 'block_date', '2026-09-20'],
+    ])
+    // A TOTAL order, or pages can repeat or skip rows that share a created_at.
+    expect(db.calls[0].orders).toEqual([['created_at', false], ['id', false]])
+  })
+
+  it('names both profile foreign keys, or PostgREST answers 300 PGRST201', async () => {
+    const db = pagedDb(1)
+    await listRosterChanges(db, { locationId: 'loc1', from: 'a', to: 'b' })
+    expect(db.calls[0].select).toContain('actor:profiles!actor_id(')
+    expect(db.calls[0].select).toContain('coach:profiles!coach_id(')
+  })
+
+  it('selects no pay field', async () => {
+    const db = pagedDb(1)
+    await listRosterChanges(db, { locationId: 'loc1', from: 'a', to: 'b' })
+    expect(db.calls[0].select).not.toMatch(/hourly_rate|annual_salary|overtime_rate|contracted_hours/)
+  })
+
+  it('pages past the 1,000-row cap', async () => {
+    const db = pagedDb(2300)
+    const { changes, truncated } = await listRosterChanges(db, { locationId: 'loc1', from: 'a', to: 'b' })
+    expect(changes).toHaveLength(2300)
+    expect(truncated).toBe(false)
+    expect(db.calls.map((c) => c.range)).toEqual([[0, 999], [1000, 1999], [2000, 2999]])
+  })
+
+  it('stops at the ceiling and SAYS it stopped', async () => {
+    const db = pagedDb(ROSTER_CHANGE_LOG_MAX_ROWS + 2500)
+    const { changes, truncated } = await listRosterChanges(db, { locationId: 'loc1', from: 'a', to: 'b' })
+    expect(changes).toHaveLength(ROSTER_CHANGE_LOG_MAX_ROWS)
+    expect(truncated).toBe(true)
+    // One page past the ceiling is read to learn that, and no more.
+    expect(db.calls).toHaveLength(ROSTER_CHANGE_LOG_MAX_ROWS / 1000 + 1)
+  })
+
+  it('exactly the ceiling is NOT truncated', async () => {
+    const db = pagedDb(ROSTER_CHANGE_LOG_MAX_ROWS)
+    const { changes, truncated } = await listRosterChanges(db, { locationId: 'loc1', from: 'a', to: 'b' })
+    expect(changes).toHaveLength(ROSTER_CHANGE_LOG_MAX_ROWS)
+    expect(truncated).toBe(false)
+  })
+
+  it('returns the error and NO partial rows: a failed read must not look like a quiet week', async () => {
+    const db = pagedDb(1500, { failOnPage: 1 })
+    expect(await listRosterChanges(db, { locationId: 'loc1', from: 'a', to: 'b' }))
+      .toEqual({ changes: [], truncated: false, error: { message: 'boom' } })
+  })
+
+  it('refuses to run unscoped', async () => {
+    const db = pagedDb(5)
+    const res = await listRosterChanges(db, { locationId: '', from: 'a', to: 'b' })
+    expect(res.error?.message).toMatch(/locationId, from and to are required/)
+    expect(db.calls).toHaveLength(0)
   })
 })
