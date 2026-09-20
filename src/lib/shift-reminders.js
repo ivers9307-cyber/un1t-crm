@@ -31,6 +31,7 @@ export const NO_REMINDER_BEFORE = '07:00' // no push earlier than this, location
 export const EVENING_REMINDER_TIME = '20:00'
 export const DAY_LEAD_MINUTES = 120
 export const MIN_NOTICE_MINUTES = 30
+export const RUN_GAP_MINUTES = 120 // a shift starting within this of the run's latest end is the same run
 
 const DEFAULT_TZ = 'Europe/Dublin'
 const MINUTE_MS = 60 * 1000
@@ -104,38 +105,123 @@ export function leaveKeysFor(requests, dates) {
   return keys
 }
 
+const isLivePublished = (s) => !!s?.id && !!s.profile_id && s.published === true && s.status !== 'cancelled'
+
+/** A shift's real [start, end] instants. An end at or before the start is the NEXT day (overnight). */
+function shiftWindow(shift, tz) {
+  const start = effectiveShiftStart(shift)
+  if (!shift?.shift_date || !start) return null
+  const startUtc = localToUtc(shift.shift_date, start, tz)
+  if (!startUtc) return null
+  const startMs = startUtc.getTime()
+  const end = effectiveShiftEnd(shift)
+  if (!end) return { startMs, endMs: startMs }
+  let endUtc = localToUtc(shift.shift_date, end, tz)
+  if (endUtc && endUtc.getTime() < startMs) endUtc = localToUtc(addDaysISO(shift.shift_date, 1), end, tz)
+  return { startMs, endMs: endUtc ? Math.max(endUtc.getTime(), startMs) : startMs }
+}
+
 /**
- * Which reminders are due right now? PURE.
+ * Group every coach's live, published shifts for a date into RUNS. PURE.
+ *
+ * Sorted by effective start, a shift joins the current run when it starts no
+ * more than RUN_GAP_MINUTES after the run's LATEST end (overlaps and
+ * back-to-back included); otherwise it opens a new run. Runs are per coach and
+ * per shift date, across ALL locations. A coach on whole-day leave has no runs
+ * that day.
+ *
+ * `reminded` is true when the ledger already holds a reminder for this coach
+ * on ANY shift of the run, including a GHOST: a shift of that date that the
+ * coach was reminded about and that now belongs to someone else (swapped
+ * away). The ghost sits in the coach's day only to mark its run as reminded;
+ * it is never in `shifts` and never carries a reminder.
+ *
+ * @returns {Array<{ profileId: string, date: string, shifts: object[], first: object,
+ *   startMs: number, endMs: number, reminded: boolean }>}
+ */
+export function buildShiftRuns(shifts, { tzByLocation = {}, onLeave = new Set(), sentKeys = new Set() } = {}) {
+  // One entry per assignment id whatever the input: the reader returns one row
+  // per id, and this does not rely on that.
+  const byId = new Map()
+  for (const s of shifts || []) {
+    if (!isLivePublished(s) || byId.has(s.id)) continue
+    const win = shiftWindow(s, tzByLocation[s.location_id] || DEFAULT_TZ)
+    if (win) byId.set(s.id, { shift: s, ...win })
+  }
+  const all = [...byId.values()]
+
+  const groups = new Map()
+  for (const item of all) {
+    const key = leaveKey(item.shift.profile_id, item.shift.shift_date)
+    if (onLeave.has(key)) continue
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key).push(item)
+  }
+
+  const runs = []
+  for (const own of groups.values()) {
+    const { profile_id: profileId, shift_date: date } = own[0].shift
+    const ghosts = all
+      .filter((i) => i.shift.profile_id !== profileId && i.shift.shift_date === date && sentKeys.has(reminderKey(i.shift.id, profileId)))
+      .map((i) => ({ ...i, ghost: true }))
+    const items = [...own, ...ghosts].sort((a, b) =>
+      a.startMs - b.startMs || a.endMs - b.endMs || String(a.shift.id).localeCompare(String(b.shift.id)))
+
+    let current = null
+    const close = () => {
+      const real = current.items.filter((i) => !i.ghost)
+      if (real.length === 0) return
+      runs.push({
+        profileId,
+        date,
+        shifts: real.map((i) => i.shift),
+        first: real[0].shift,
+        startMs: real[0].startMs,
+        endMs: Math.max(...real.map((i) => i.endMs)),
+        reminded: current.items.some((i) => i.ghost || sentKeys.has(reminderKey(i.shift.id, profileId))),
+      })
+    }
+    for (const item of items) {
+      if (current && item.startMs <= current.endMs + RUN_GAP_MINUTES * MINUTE_MS) {
+        current.items.push(item)
+        current.endMs = Math.max(current.endMs, item.endMs)
+      } else {
+        if (current) close()
+        current = { items: [item], endMs: item.endMs }
+      }
+    }
+    if (current) close()
+  }
+  return runs
+}
+
+/**
+ * Which reminders are due right now? PURE. ONE PER RUN (see buildShiftRuns):
+ * only the run's FIRST shift carries it, timed by that shift's start, and the
+ * ledger key is that first shift's (assignment, coach).
  *
  * Re-asserts `published` and the live status even though the reader already
  * filters on both: a coach must never learn about an unpublished shift, and
  * this function is the last thing between a row and a push.
  *
- * @param {Array<object>} shifts  fetchApiShiftRows() rows
+ * @param {Array<object>} shifts  fetchApiShiftRows() rows for WHOLE dates (a
+ *   run is only right when every shift of its date is present)
  * @param {object} ctx
  * @param {number} ctx.nowMs
  * @param {Record<string,string>} [ctx.tzByLocation]  location_id -> IANA tz
- * @param {Set<string>} [ctx.onLeave]   leaveKey() values
+ * @param {Set<string>} [ctx.onLeave]   leaveKey() values (whole-day leave)
  * @param {Set<string>} [ctx.sentKeys]  reminderKey() values already in the ledger
- * @returns {Array<{ shift: object, kind: string, startMs: number, fireAtMs: number, leadMinutes: number }>}
+ * @returns {Array<{ shift: object, run: object[], runEndMs: number, kind: string,
+ *   startMs: number, fireAtMs: number, leadMinutes: number }>}
+ *   `shift` is the run's first shift; `run` is every shift of the run in order.
  */
 export function dueShiftReminders(shifts, { nowMs, tzByLocation = {}, onLeave = new Set(), sentKeys = new Set() } = {}) {
   const due = []
-  // At most one reminder per (assignment, coach) in a single run too. The
-  // reader returns one row per assignment id, so this never fires today; it
-  // is here so that guarantee does not rest on the reader.
-  const seen = new Set()
-  for (const s of shifts || []) {
-    if (!s?.id || !s.profile_id) continue
-    if (s.published !== true) continue
-    if (s.status === 'cancelled') continue // `swapped` is a live shift owned by the taker
-    if (onLeave.has(leaveKey(s.profile_id, s.shift_date))) continue
-    const key = reminderKey(s.id, s.profile_id)
-    if (sentKeys.has(key) || seen.has(key)) continue
-    const plan = reminderPlanFor(s, tzByLocation[s.location_id] || DEFAULT_TZ)
+  for (const run of buildShiftRuns(shifts, { tzByLocation, onLeave, sentKeys })) {
+    if (run.reminded) continue
+    const plan = reminderPlanFor(run.first, tzByLocation[run.first.location_id] || DEFAULT_TZ)
     if (!isReminderDue(plan, nowMs)) continue
-    seen.add(key)
-    due.push({ shift: s, ...plan })
+    due.push({ shift: run.first, run: run.shifts, runEndMs: run.endMs, ...plan })
   }
   return due
 }

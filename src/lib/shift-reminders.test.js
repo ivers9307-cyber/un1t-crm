@@ -17,7 +17,7 @@ const { notifyUsers } = await import('./notify')
 const { logWarn, logError } = await import('./log')
 const {
   NO_REMINDER_BEFORE, DAY_LEAD_MINUTES,
-  reminderPlanFor, isReminderDue, dueShiftReminders, leaveKeysFor, leaveKey, reminderKey,
+  reminderPlanFor, isReminderDue, dueShiftReminders, buildShiftRuns, leaveKeysFor, leaveKey, reminderKey,
   coRosteredFirstNames, buildShiftReminderMessage, runShiftReminders,
 } = await import('./shift-reminders')
 
@@ -211,6 +211,169 @@ describe('dueShiftReminders — the timing table', () => {
 
   it('isReminderDue(null) is false, not a throw', () => {
     expect(isReminderDue(null, 0)).toBe(false)
+  })
+})
+
+// ── AMENDMENT 2: one reminder per RUN of shifts, not per shift ──────────────
+//
+// The day that prompted it: 05:45-08:00, 08:00-09:00 and 09:15-10:30 is ONE
+// morning of work and must be ONE push, carried by the first shift.
+
+const tplShift = (id, name, start, end, over = {}) => shift({
+  id, shift_template_id: `tpl-${id}`,
+  shift_templates: { name, start_time: `${start}:00`, end_time: `${end}:00` },
+  ...over,
+})
+const r1 = (over) => tplShift('r1', 'Early Morning', '05:45', '08:00', over)
+const r2 = (over) => tplShift('r2', 'Morning 8am', '08:00', '09:00', over)
+const r3 = (over) => tplShift('r3', 'Morning 9:15', '09:15', '10:30', over)
+const r4 = (over) => tplShift('r4', 'Evening', '17:45', '20:30', over)
+const EVENING_BEFORE = at('2026-09-21T19:00:00Z') // 20:00 Dublin, Mon 21 Sep
+const ids = (due) => due.map((d) => `${d.shift.profile_id}:${d.shift.id}`)
+const keysFor = (...pairs) => new Set(pairs.map(([a, c]) => reminderKey(a, c)))
+
+describe('buildShiftRuns — grouping a coach-day into runs', () => {
+  const runIds = (shifts, ctx) => buildShiftRuns(shifts, ctx).map((r) => r.shifts.map((s) => s.id))
+
+  it('back-to-back and near shifts are one run, whatever order the rows arrive in', () => {
+    expect(runIds([r3(), r1(), r2()])).toEqual([['r1', 'r2', 'r3']])
+  })
+
+  it('the gap is measured from the run\'s LATEST end: exactly 120 minutes joins, 121 starts a new run', () => {
+    const a = tplShift('a', 'A', '06:00', '08:00')
+    expect(runIds([a, tplShift('b', 'B', '10:00', '11:00')])).toEqual([['a', 'b']])
+    expect(runIds([a, tplShift('b', 'B', '10:01', '11:00')])).toEqual([['a'], ['b']])
+    // A long shift swallows a short one inside it; the run's end stays the long one's.
+    const long = tplShift('long', 'Long', '06:00', '12:00')
+    const inside = tplShift('inside', 'Inside', '07:00', '08:00')
+    expect(runIds([long, inside, tplShift('c', 'C', '13:30', '15:00')])).toEqual([['long', 'inside', 'c']])
+  })
+
+  it('a split day (gap over 120 minutes) is two runs', () => {
+    expect(runIds([r1(), r2(), r3(), r4()])).toEqual([['r1', 'r2', 'r3'], ['r4']])
+  })
+
+  it('runs are per COACH and per DATE, and span ALL locations', () => {
+    expect(runIds([r1(), r2({ location_id: 'loc-2' })])).toEqual([['r1', 'r2']])
+    expect(runIds([r1(), r2({ profile_id: 'coach-2' })])).toEqual([['r1'], ['r2']])
+    expect(runIds([r1(), r2({ shift_date: '2026-09-23' })])).toEqual([['r1'], ['r2']])
+  })
+
+  it('only live, published shifts make a run; whole-day leave removes the coach-day', () => {
+    expect(runIds([r1({ published: false }), r2(), r3()])).toEqual([['r2', 'r3']])
+    expect(runIds([r1({ status: 'cancelled' }), r2(), r3()])).toEqual([['r2', 'r3']])
+    expect(runIds([r1(), r2()], { onLeave: new Set([leaveKey('coach-1', '2026-09-22')]) })).toEqual([])
+  })
+
+  it('an overnight shift ends the NEXT day, so its run reaches past midnight', () => {
+    const [run] = buildShiftRuns([tplShift('n', 'Night', '22:00', '02:00')])
+    expect(iso(run.startMs)).toBe('2026-09-22T21:00:00.000Z')
+    expect(iso(run.endMs)).toBe('2026-09-23T01:00:00.000Z')
+  })
+})
+
+describe('dueShiftReminders — one reminder per run', () => {
+  it('three shifts in one morning are ONE reminder, carried by the first shift, fired by the first start', () => {
+    const due = dueShiftReminders([r2(), r3(), r1()], { nowMs: EVENING_BEFORE })
+    expect(ids(due)).toEqual(['coach-1:r1'])
+    expect(due[0].kind).toBe('evening_before')
+    expect(due[0].run.map((s) => s.id)).toEqual(['r1', 'r2', 'r3'])
+    expect(iso(due[0].runEndMs)).toBe('2026-09-22T09:30:00.000Z') // 10:30 Dublin
+  })
+
+  it('the later shifts of a run never carry a reminder of their own, at any time of the day', () => {
+    const sentKeys = keysFor(['r1', 'coach-1'])
+    // 07:15 is when the 09:15 shift would fire if it stood alone.
+    for (const now of ['2026-09-21T19:05:00Z', '2026-09-22T05:00:00Z', '2026-09-22T06:15:00Z', '2026-09-22T07:00:00Z']) {
+      expect(dueShiftReminders([r1(), r2(), r3()], { nowMs: at(now), sentKeys }), now).toEqual([])
+    }
+    // Even with NO ledger row: once the first start is under 30 minutes away the run's chance has gone.
+    expect(dueShiftReminders([r1(), r2(), r3()], { nowMs: at('2026-09-22T06:15:00Z') })).toEqual([])
+  })
+
+  it('(a) a shift ADDED to a run after its reminder went: no second reminder, later OR earlier than the first', () => {
+    const sentKeys = keysFor(['r2', 'coach-1']) // reminded when the run was just [r2]
+    const later = dueShiftReminders([r2(), r3()], { nowMs: EVENING_BEFORE + 5 * 60e3, sentKeys })
+    const earlier = dueShiftReminders([r1(), r2()], { nowMs: EVENING_BEFORE + 5 * 60e3, sentKeys })
+    expect(later).toEqual([])
+    expect(earlier).toEqual([]) // r1 is the new first shift, but the run it belongs to was already reminded
+  })
+
+  it('(b) the FIRST shift is SWAPPED AWAY after the reminder went: the rest of the run is not reminded again', () => {
+    // r1 now belongs to coach-2 (migs 612/615 move profile_id, status -> swapped).
+    // The ledger still holds (r1, coach-1), and r1 is still a row we can see, so
+    // it stands in coach-1's day as a ghost that marks the run as reminded.
+    const sentKeys = keysFor(['r1', 'coach-1'])
+    const rows = [r1({ profile_id: 'coach-2', status: 'swapped' }), r2(), r3()]
+    expect(ids(dueShiftReminders(rows, { nowMs: EVENING_BEFORE + 5 * 60e3, sentKeys }))).toEqual(['coach-2:r1'])
+  })
+
+  it('(b) a ghost only covers ITS run: the evening run of the same day is still reminded', () => {
+    const sentKeys = keysFor(['r1', 'coach-1'])
+    const rows = [r1({ profile_id: 'coach-2', status: 'swapped' }), r2(), r4()]
+    const due = dueShiftReminders(rows, { nowMs: at('2026-09-22T14:45:00Z'), sentKeys }) // 15:45 Dublin = 17:45 - 2h
+    expect(ids(due)).toEqual(['coach-1:r4'])
+  })
+
+  it('(b) the first shift is REMOVED (a manager unassign is a hard DELETE): ACCEPTED, the rest of the run gets one more reminder', () => {
+    // Nothing is left to stand as a ghost: the assignment row is gone and the
+    // ledger row carries no date, times or run. So the run [r2, r3] looks new
+    // and is reminded once, keyed on r2. Accepted on purpose: it is rare, the
+    // coach's day now STARTS at a different time, and it can happen only once
+    // more per removal (r2 then holds the claim).
+    const sentKeys = keysFor(['r1', 'coach-1'])
+    const due = dueShiftReminders([r2(), r3()], { nowMs: EVENING_BEFORE + 5 * 60e3, sentKeys })
+    expect(ids(due)).toEqual(['coach-1:r2'])
+    const after = keysFor(['r1', 'coach-1'], ['r2', 'coach-1'])
+    expect(dueShiftReminders([r2(), r3()], { nowMs: EVENING_BEFORE + 10 * 60e3, sentKeys: after })).toEqual([])
+  })
+
+  it('(c) a split day yields two reminders: the morning run the evening before, the evening run 2 hours before', () => {
+    const day = [r1(), r2(), r3(), r4()]
+    expect(ids(dueShiftReminders(day, { nowMs: EVENING_BEFORE }))).toEqual(['coach-1:r1'])
+    const sentKeys = keysFor(['r1', 'coach-1'])
+    expect(dueShiftReminders(day, { nowMs: at('2026-09-22T14:44:00Z'), sentKeys })).toEqual([])
+    expect(ids(dueShiftReminders(day, { nowMs: at('2026-09-22T14:45:00Z'), sentKeys }))).toEqual(['coach-1:r4'])
+  })
+
+  it('(d) a coach who TAKES a shift in the middle of someone else\'s run is reminded for their OWN run', () => {
+    const sentKeys = keysFor(['r1', 'coach-1']) // coach-1 was reminded before the swap
+    const taken = r2({ profile_id: 'coach-2', status: 'swapped' })
+    const own = tplShift('r5', 'Late Morning', '09:30', '11:00', { profile_id: 'coach-2' })
+    const due = dueShiftReminders([r1(), taken, r3(), own], { nowMs: EVENING_BEFORE + 5 * 60e3, sentKeys })
+    expect(ids(due)).toEqual(['coach-2:r2']) // coach-1's [r1, r3] is already reminded; coach-2's run is [r2, r5]
+    expect(due[0].run.map((s) => s.id)).toEqual(['r2', 'r5'])
+  })
+
+  it('(f) a duplicate tick in the same window sends nothing for the run', () => {
+    const first = dueShiftReminders([r1(), r2(), r3()], { nowMs: EVENING_BEFORE })
+    const sentKeys = new Set(first.map((d) => reminderKey(d.shift.id, d.shift.profile_id)))
+    expect(dueShiftReminders([r1(), r2(), r3()], { nowMs: EVENING_BEFORE + 5 * 60e3, sentKeys })).toEqual([])
+  })
+
+  it('(e) a 5-minute tick for 3 days over BOTH DST weekends: exactly one reminder per run, never before 07:00', () => {
+    const wall = (ms) => new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Europe/Dublin', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+    }).format(ms)
+    for (const date of ['2026-03-29', '2026-10-25']) {
+      const dayBefore = date === '2026-03-29' ? '28' : '24'
+      const day = [r1, r2, r3, r4].map((f) => f({ shift_date: date }))
+      const other = tplShift('o1', 'Mid', '10:00', '14:00', { shift_date: date, profile_id: 'coach-2' })
+      const sentKeys = new Set()
+      const fired = []
+      const t0 = Date.parse(`${date}T00:00:00Z`) - 36 * 3600e3
+      for (let now = t0; now < t0 + 72 * 3600e3; now += 5 * 60e3) {
+        for (const d of dueShiftReminders([...day, other], { nowMs: now, sentKeys })) {
+          fired.push(`${d.shift.profile_id}:${d.shift.id}@${wall(now)}`)
+          sentKeys.add(reminderKey(d.shift.id, d.shift.profile_id))
+        }
+      }
+      expect(fired, date).toEqual([
+        `coach-1:r1@${dayBefore}, 20:00`,            // morning run, the evening before
+        `coach-2:o1@${date.slice(8)}, 08:00`,        // a lone 10:00 shift, 2 hours before
+        `coach-1:r4@${date.slice(8)}, 15:45`,        // evening run, 2 hours before
+      ])
+    }
   })
 })
 
