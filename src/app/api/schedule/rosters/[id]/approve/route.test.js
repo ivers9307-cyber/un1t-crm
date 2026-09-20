@@ -711,7 +711,9 @@ describe('POST /api/schedule/rosters/[id]/approve — re-projection', () => {
 
     const res = await POST({}, PROPS)
     expect(res.status).toBe(200)
-    expect(projectPublishImpact).toHaveBeenCalledWith(db, { locationId: 'loc-1', periodStart: '2026-05-04', periodEnd: '2026-05-10' })
+    // COPYLEAVE.1 — an approval shows no advisory lists, so it asks for none
+    // (no sibling-location or other-studio read on the approval path).
+    expect(projectPublishImpact).toHaveBeenCalledWith(db, { locationId: 'loc-1', periodStart: '2026-05-04', periodEnd: '2026-05-10', advisories: false })
     const flip = updates.find((u) => u.payload.status === 'published')
     expect(flip.payload).toMatchObject({ projected_contractor_eur: 689.95, budget_at_publish_eur: 5000 })
 

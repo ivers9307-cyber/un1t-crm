@@ -701,6 +701,7 @@ describe('projectPublishImpact — leave clashes and double bookings', () => {
     const db = fx()
     const r = await projectPublishImpact(db, { ...PERIOD, advisories: false })
     expect(db.assignmentQueries).toHaveLength(0)
+    expect(db.siblingQueries).toHaveLength(0)
     expect('leaveClashes' in r).toBe(false)
     expect('doubleBookings' in r).toBe(false)
     expect('crossLocationChecked' in r).toBe(false)

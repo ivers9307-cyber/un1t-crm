@@ -127,6 +127,8 @@ export async function POST(_request, props) {
       locationId: roster.location_id,
       periodStart: roster.period_start,
       periodEnd: roster.period_end,
+      // COPYLEAVE.1 — budget figures only; nothing here shows advisory lists.
+      advisories: false,
     })
   } catch (e) {
     projectionError = e?.message || String(e)

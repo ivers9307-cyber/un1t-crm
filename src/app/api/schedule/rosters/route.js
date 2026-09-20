@@ -228,6 +228,10 @@ export async function POST(request) {
       locationId: location_id,
       periodStart: period_start,
       periodEnd: period_end,
+      // COPYLEAVE.1 — the leave-clash / double-booking lists are rendered from
+      // the dry run only (the modal never shows the impact on the 409 or the
+      // publish response), so a real publish skips the reads behind them.
+      advisories: !!dry_run,
     })
   } catch (e) {
     return NextResponse.json({ success: false, error: e.message }, { status: 500 })
