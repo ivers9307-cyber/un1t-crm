@@ -35,6 +35,8 @@ import { canMobile } from '../../../lib/permissions'
 import { useIsTablet } from '../../../lib/use-is-tablet'
 import { effShiftStart, effShiftEnd, blockStart as blockDefaultStart, blockEnd as blockDefaultEnd, teamRosterForDay, initials } from '../../../lib/schedule-team'
 import { canAdjustShiftTimes, canCancelTimeOff, MANAGER_ROLES, scheduleViewFromParam } from '../../../lib/schedule-manage'
+import { hasOpenSwap, swapShiftWhen, swapPostedCopy, SWAP_PENDING_LABEL, SWAP_ALREADY_OPEN_MESSAGE } from '../../../lib/swap-cards'
+import { createInFlightGuard } from '../../../lib/swap-flow'
 import ManageMode from '../../../components/schedule/ManageMode'
 // LEAVE.2 — one label per leave type (unpaid/other used to read "Time off").
 import { timeOffLeaveLabel } from 'shared/time-off'
@@ -125,6 +127,11 @@ function ShiftCard({ shift, onPress, onLongPress, teamMode, selfId }) {
         {shift.status === 'swapped' && (
           <View className="px-1.5 py-0.5 rounded-full bg-blue-500/20">
             <Text className="text-[9px] uppercase text-blue-700 font-medium">Swap</Text>
+          </View>
+        )}
+        {hasOpenSwap(shift) && (
+          <View className="px-1.5 py-0.5 rounded-full bg-amber-500/20">
+            <Text className="text-[9px] uppercase text-amber-700 font-medium">{SWAP_PENDING_LABEL}</Text>
           </View>
         )}
       </View>
@@ -271,6 +278,11 @@ function ShiftRow({ shift, onPress, onLongPress }) {
           {shift.status === 'swapped' && (
             <View className="px-2 py-0.5 rounded-full bg-blue-500/20">
               <Text className="text-[10px] uppercase text-blue-700 font-medium">Swapped</Text>
+            </View>
+          )}
+          {hasOpenSwap(shift) && (
+            <View className="px-2 py-0.5 rounded-full bg-amber-500/20">
+              <Text className="text-[10px] uppercase text-amber-700 font-medium">{SWAP_PENDING_LABEL}</Text>
             </View>
           )}
         </View>
@@ -516,6 +528,11 @@ export default function Schedule() {
     )
   }
 
+  // COVERLOOP.2 — one post at a time: a second confirm while the first POST is
+  // in flight earned a 409 straight after the success.
+  const swapPostGuard = useRef(null)
+  if (swapPostGuard.current === null) swapPostGuard.current = createInFlightGuard()
+
   function requestSwapForShift(shift) {
     // RETIRE-SHIFTS-MIRROR.5c — swaps now key off the shift_assignment id
     // (stitched into the GET /shifts row), not the legacy shifts.id.
@@ -523,25 +540,38 @@ export default function Schedule() {
       Alert.alert('Can’t post', 'This shift can’t be swapped.')
       return
     }
+    // COVERLOOP.2 — open_swap_status comes from GET /api/schedule/shifts (own
+    // rows only). One open swap per shift: say so rather than earn the 409.
+    if (hasOpenSwap(shift)) {
+      Alert.alert(shift.shift_templates?.name || 'Shift', SWAP_ALREADY_OPEN_MESSAGE)
+      return
+    }
+    const when = swapShiftWhen(shift)
     Alert.alert(
       'Request swap?',
-      `Post ${shift.shift_templates?.name || 'this shift'} on ${shift.shift_date} for someone else to take?`,
+      `Post ${shift.shift_templates?.name || 'this shift'}${when ? ` on ${when}` : ''} for someone else to take?`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Post for swap',
-          onPress: async () => {
+          // run() releases the latch whatever happens inside, including a
+          // throw while the request is being built. locationId is only the
+          // x-active-location override (the server takes the studio from the
+          // shift), so no active location still posts and still answers.
+          onPress: () => swapPostGuard.current.run(async () => {
             const res = await createSwapRequest({
               requesterShiftId: shift.shift_assignment_id,
-              locationId: activeLocation.id,
+              locationId: activeLocation?.id,
             })
             if (res.success) {
-              Alert.alert('Posted', 'Managers have been notified.')
+              // Same words as the Dashboard: coaches who can cover are told too.
+              const done = swapPostedCopy(null)
+              Alert.alert(done.title, done.message)
               fetchWeek()
             } else {
               Alert.alert('Couldn’t post', res.error || 'Unknown error')
             }
-          },
+          }),
         },
       ]
     )
