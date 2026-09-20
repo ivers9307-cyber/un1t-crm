@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   leavePreviewFrom, leaveDaysLabel, leaveDaysHint, pendingHolidayDays, leaveBalanceView, leaveBalanceLines,
-  leaveClashSummary, submittedDays, leaveSubmittedMessage,
+  leaveClashSummary, submittedDays, leaveSubmittedMessage, leaveFloatingButtons,
 } from './leave-form'
 
 const ALLOWANCE = { year: 2026, total_days: 20, used_days: 6, carried_over: 1, remaining: 15, not_applicable: false }
@@ -217,5 +217,30 @@ describe('submittedDays / leaveSubmittedMessage', () => {
       .toBe('Unavailable · Mon 5 Oct · 1 day.\nYour manager has been notified. Track it under My leave.\nYou are still rostered on 2 shifts in that time. A manager will need to cover these.')
     expect(leaveSubmittedMessage({ type: 'sick', startIso: '2026-10-05', endIso: '2026-10-05', days: null, clashCount: 0 }).message)
       .toBe('Sick · Mon 5 Oct.\nYour manager has been notified. Track it under My leave.')
+  })
+})
+
+describe('leaveFloatingButtons — do "My leave" and "Request time off" fit side by side?', () => {
+  it('a 390pt phone at the default text size keeps the full label', () => {
+    expect(leaveFloatingButtons({ width: 390, fontScale: 1 })).toEqual({
+      compact: false, requestLabel: 'Request time off', myLeaveLabel: 'My leave',
+      requestA11y: 'Request time off', myLeaveA11y: 'My leave, your time-off requests',
+    })
+  })
+  it('a 360pt phone, or larger text on a 390pt one, shortens the visible label only', () => {
+    for (const dims of [{ width: 360, fontScale: 1 }, { width: 390, fontScale: 1.3 }, { width: 320, fontScale: 1 }]) {
+      const b = leaveFloatingButtons(dims)
+      expect(b).toMatchObject({ compact: true, requestLabel: 'Time off', myLeaveLabel: 'My leave' })
+      // A screen reader always hears the full name.
+      expect(b.requestA11y).toBe('Request time off')
+    }
+  })
+  it('unknown dimensions take the safe, short label', () => {
+    expect(leaveFloatingButtons({}).compact).toBe(true)
+    expect(leaveFloatingButtons(undefined).compact).toBe(true)
+    expect(leaveFloatingButtons({ width: 390 }).compact).toBe(false)   // fontScale defaults to 1
+  })
+  it('a wide screen keeps the full label even with larger text', () => {
+    expect(leaveFloatingButtons({ width: 768, fontScale: 1.5 }).compact).toBe(false)
   })
 })

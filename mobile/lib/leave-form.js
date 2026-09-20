@@ -165,3 +165,30 @@ export function leaveSubmittedMessage({ type, startIso, endIso, days, clashCount
   if (c > 0) lines.push(`You are still rostered on ${c} ${plural(c, 'shift', 'shifts')} in that time. A manager will need to cover these.`)
   return { title: 'Request sent', message: lines.join('\n') }
 }
+
+// ── The Schedule tab's two floating buttons ───────────────────────────────
+//
+// "My leave" (left) and "Request time off" (right) share one row. ESTIMATED,
+// never measured (no layout runner): at the default text size the two need
+// about 190pt of text plus 190pt of padding, icons, the gap and the screen
+// margins, and the text part grows with the user's font scale. 390pt at 1.0
+// fits with ~10pt to spare; 360pt, or 390pt with larger text, does not. When it
+// does not fit the VISIBLE request label shortens to "Time off"; the
+// accessibility label never does. The row also wraps (the screen's container
+// is flex-wrap), which is the net for the largest accessibility text sizes
+// that even the short labels overflow.
+const FLOATING_TEXT_PT = 190
+const FLOATING_CHROME_PT = 190
+
+export function leaveFloatingButtons({ width, fontScale } = {}) {
+  const w = Number(width)
+  const scale = Number(fontScale) > 0 ? Number(fontScale) : 1
+  const compact = !(Number.isFinite(w) && w >= FLOATING_TEXT_PT * scale + FLOATING_CHROME_PT)
+  return {
+    compact,
+    requestLabel: compact ? 'Time off' : 'Request time off',
+    myLeaveLabel: 'My leave',
+    requestA11y: 'Request time off',
+    myLeaveA11y: 'My leave, your time-off requests',
+  }
+}
