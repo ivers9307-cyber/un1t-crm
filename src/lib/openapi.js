@@ -4461,7 +4461,7 @@ registry.registerPath({
   request: { body: { content: { 'application/json': { schema: TimeOffRequest } } } },
   responses: {
     201: { description: 'Request submitted (or recorded and approved)' },
-    400: { description: 'Invalid dates, no working days, contractor leave type, or insufficient holiday balance', content: { 'application/json': { schema: ErrorResponse } } },
+    400: { description: 'Invalid dates, no studio to file against (no location_id and no active studio), no working days, contractor leave type, or insufficient holiday balance', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Recording for a colleague without time-off approval at that studio', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'The colleague is not on that studio’s staff', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'Overlaps an existing pending or approved request', content: { 'application/json': { schema: ErrorResponse } } },

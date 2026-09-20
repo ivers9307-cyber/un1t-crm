@@ -212,13 +212,21 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: `Overlaps ${whose} for ${range}` }, { status: 409 })
   }
 
+  // HOLIDAYLEAVE.1 — no body location_id and no active studio on the session.
+  // The row cannot be inserted (location_id is NOT NULL) and a holiday could
+  // not be counted, so say so here rather than let the balance check below
+  // answer with a number worked out blind.
+  if (!targetLocation) {
+    return NextResponse.json({ success: false, error: 'No studio to file this request against' }, { status: 400 })
+  }
+
   // HOLIDAYLEAVE.1 — a holiday is charged for working days only, so load the
   // dates that cost nothing at the studio it is filed at: national bank
   // holidays plus that studio's own closures. Only holiday needs it. Fails
   // closed like the reads around it: an unreadable list must not become
   // "no bank holidays", which is the over-charge this fixes.
   let nonWorkingDates = null
-  if (type === 'holiday' && targetLocation) {
+  if (type === 'holiday') {
     const { dates, error: holidaysError } = await getNonWorkingDates(db, targetLocation, start_date, end_date)
     if (holidaysError) {
       return NextResponse.json({ success: false, error: holidaysError.message }, { status: 500 })

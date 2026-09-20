@@ -256,6 +256,23 @@ describe('POST /api/schedule/time-off — bank holidays are not charged', () => 
     expect(insertSpy).not.toHaveBeenCalled()
   })
 
+  it('400 with no studio to file against: never counted blind, never a misleading balance error', async () => {
+    // No location_id in the body and no active studio on the session.
+    getCurrentUser.mockResolvedValue({ ...USER, activeLocation: null })
+    for (const type of ['holiday', 'sick']) {
+      // entitlement 1: had the count run (old Mon-Fri rule, 5 days) this would
+      // have answered "Insufficient holiday balance" instead.
+      const { db, insertSpy } = buildDb({ entitlement: 1 })
+      createServerClient.mockReturnValue(db)
+      const res = await POST(req({ type, start_date: '2026-06-01', end_date: '2026-06-05' }))
+      expect(res.status).toBe(400)
+      expect((await res.json()).error).toBe('No studio to file this request against')
+      expect(queriesOf(db, 'staff_allowances')).toHaveLength(0)
+      expect(queriesOf(db, 'location_holidays')).toHaveLength(0)
+      expect(insertSpy).not.toHaveBeenCalled()
+    }
+  })
+
   it('a year-straddling holiday: each year\'s row gets its own working-day count', async () => {
     getCurrentUser.mockResolvedValue(USER)
     const { db, insertSpy } = buildDb({})
