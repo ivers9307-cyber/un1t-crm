@@ -130,6 +130,23 @@ describe('rosterRunway', () => {
     expect(rosterRunway([{ ...ready('2026-09-28'), underMin: 5 }], '2026-09-19')).toBeNull()
   })
 
+  // DELIBERATE. This studio routinely runs several shifts one coach short
+  // every week; alerting on that would push every week forever and teach
+  // people to ignore the alert.
+  it('published, every shift has at least one live coach, one shift below its minimum -> NO alert', () => {
+    const block = (block_date, coaches, min) => ({
+      block_date, min_coaches: min, rosters: { status: 'published' },
+      shift_assignments: Array.from({ length: coaches }, () => ({ status: 'scheduled' })),
+    })
+    const weeks = runwayWeeksFromBlocks([block('2026-09-28', 2, 2), block('2026-09-29', 1, 2), block('2026-09-30', 1, 1)], '2026-09-19')
+    expect(weeks[1]).toEqual({ weekStart: '2026-09-28', blocks: 3, staffed: 3, underMin: 1, published: 3 })
+    expect(rosterRunway(weeks, '2026-09-19')).toBeNull()
+    expect(rosterRunwayWeeks(weeks, '2026-09-19')).toEqual([])
+    // ...but when the week alerts for ANOTHER reason, the body still says so.
+    const unpublished = weeks.map((w) => ({ ...w, published: 0 }))
+    expect(rosterRunwayDetail(rosterRunway(unpublished, '2026-09-19'))).toBe('Starts in 9 days: 1 below the minimum, not published.')
+  })
+
   it('a studio with no blocks at all (no active shift templates) produces nothing', () => {
     const none = (ws) => ({ weekStart: ws, blocks: 0, staffed: 0, underMin: 0, published: 0 })
     expect(rosterRunway([none('2026-09-14'), none('2026-09-21'), none('2026-09-28')], '2026-09-19')).toBeNull()

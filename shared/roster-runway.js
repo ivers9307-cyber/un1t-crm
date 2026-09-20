@@ -13,6 +13,13 @@
 // let one empty shift this week MASK the chip for an unbuilt later week and
 // sent a red "This week: ..." push that said nothing the card did not.
 //
+// DELIBERATE: a PUBLISHED week whose only problem is a shift BELOW its minimum
+// (but with at least one coach) does NOT alert. This studio routinely runs
+// several shifts one coach short every week, so alerting on it would push
+// every week forever and train people to ignore the alert; the calendar's
+// amber "1 of 2" badges and the publish preview already show it. The body
+// still reports "N below the minimum" when a week alerts for another reason.
+//
 // ACCEPTED: on its Monday a week drops off the runway even if it is staffed
 // but still unpublished. By then its amber and its red have both fired and
 // the chip has shown for ten days; from Monday it is the banner's job.
