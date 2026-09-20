@@ -21,7 +21,7 @@ vi.mock('@/lib/auth', async (importOriginal) => {
 // run for real so the route's mode wiring is what's under test.
 vi.mock('@/lib/roster-copy', async () => {
   const actual = await vi.importActual('@/lib/roster-copy')
-  return { ...actual, fetchSourceBlocks: vi.fn() }
+  return { ...actual, fetchSourceBlocks: vi.fn(), fetchApprovedLeave: vi.fn() }
 })
 vi.mock('@/lib/roster-write', () => ({ bulkUpsertShiftAssignments: vi.fn() }))
 // SLOTREMOVAL.1 — the removals read is mocked; everything else in roster is real.
@@ -40,7 +40,7 @@ vi.mock('next/server', async () => {
 
 const { createServerClient } = await import('@/lib/supabase')
 const { getCurrentUser } = await import('@/lib/auth')
-const { fetchSourceBlocks } = await import('@/lib/roster-copy')
+const { fetchSourceBlocks, fetchApprovedLeave } = await import('@/lib/roster-copy')
 const { bulkUpsertShiftAssignments } = await import('@/lib/roster-write')
 const { fetchSlotRemovalKeys } = await import('@/lib/roster')
 const { readAssignmentKeysInRange, logAndNotifyCopiedShifts } = await import('@/lib/roster-change-notify')
@@ -72,6 +72,8 @@ beforeEach(() => {
   getCurrentUser.mockReset()
   getCurrentUser.mockResolvedValue({ id: 'mgr-1', role: 'manager', profileRole: 'manager', locations: [{ id: LOC }], activeLocation: { id: LOC }, rolesByLocation: { [LOC]: 'manager' } })
   fetchSourceBlocks.mockReset()
+  fetchApprovedLeave.mockReset()
+  fetchApprovedLeave.mockResolvedValue({ leave: [], error: null })
   bulkUpsertShiftAssignments.mockReset()
   readAssignmentKeysInRange.mockReset()
   logAndNotifyCopiedShifts.mockClear()
@@ -91,7 +93,7 @@ describe('POST /api/schedule/shifts/copy-month — NOTIFY.1', () => {
     const json = await res.json()
 
     expect(res.status).toBe(201)
-    expect(json).toEqual({ success: true, copied: 1, skipped: 0, skipped_removed: 0, mode: 'exact' })
+    expect(json).toEqual({ success: true, copied: 1, skipped: 0, skipped_removed: 0, skipped_on_leave: 0, mode: 'exact' })
 
     // July has 31 days.
     expect(readAssignmentKeysInRange).toHaveBeenCalledTimes(2)
@@ -210,7 +212,7 @@ describe('POST /api/schedule/shifts/copy-month — COPYMODES.1', () => {
     const res = await POST(req({ ...BODY, mode: 'template' }))
     const json = await res.json()
     expect(res.status).toBe(201)
-    expect(json).toEqual({ success: true, copied: 0, skipped: 1, skipped_removed: 0, mode: 'template' })
+    expect(json).toEqual({ success: true, copied: 0, skipped: 1, skipped_removed: 0, skipped_on_leave: 0, mode: 'template' })
     expect(bulkUpsertShiftAssignments).not.toHaveBeenCalled()
     expect(after).not.toHaveBeenCalled()
   })
@@ -315,5 +317,51 @@ describe('POST /api/schedule/shifts/copy-month — role at location_id (SCHEDROL
   it('master is allowed', async () => {
     getCurrentUser.mockResolvedValue({ id: 'boss', role: 'master', profileRole: 'master', locations: [], rolesByLocation: {} })
     expect((await POST(req(body(LOC_B)))).status).toBe(201)
+  })
+})
+
+// COPYLEAVE.1 — see copy-week.
+describe('POST /api/schedule/shifts/copy-month — approved leave', () => {
+  const BODY = { location_id: LOC, source_month_start: '2026-06-01', target_month_start: '2026-07-01' }
+
+  beforeEach(() => {
+    readAssignmentKeysInRange.mockResolvedValue({ rows: [], error: null, truncated: false })
+    bulkUpsertShiftAssignments.mockResolvedValue({ count: 1, error: null })
+    fetchSourceBlocks.mockResolvedValue({ blocks: [sourceBlock(['coach-1', 'coach-2'])], error: null })
+  })
+
+  it('reads leave over the whole TARGET month', async () => {
+    await POST(req(BODY))
+    const [, args] = fetchApprovedLeave.mock.calls[0]
+    expect([...args.profileIds].sort()).toEqual(['coach-1', 'coach-2'])
+    expect(args).toMatchObject({ startDate: '2026-07-01', endDate: '2026-07-31' })
+  })
+
+  it('skips the coach who is off on the mapped day and reports it', async () => {
+    fetchApprovedLeave.mockResolvedValue({
+      leave: [{ id: 'l1', profile_id: 'coach-2', status: 'approved', start_date: '2026-07-04', end_date: '2026-07-06' }],
+      error: null,
+    })
+    const json = await (await POST(req(BODY))).json()
+    expect(bulkUpsertShiftAssignments.mock.calls[0][1].rows.map((r) => [r.profileId, r.shiftDate])).toEqual([['coach-1', '2026-07-05']])
+    expect(json).toMatchObject({ success: true, skipped: 1, skipped_on_leave: 1 })
+  })
+
+  it('template mode with EVERY coach on leave: 201, copied 0, the skip is named, nothing is written', async () => {
+    fetchApprovedLeave.mockResolvedValue({
+      leave: ['coach-1', 'coach-2'].map((id) => ({ id: `l-${id}`, profile_id: id, status: 'approved', start_date: '2026-07-01', end_date: '2026-07-31' })),
+      error: null,
+    })
+    const res = await POST(req({ ...BODY, mode: 'template' }))
+    expect(res.status).toBe(201)
+    expect(await res.json()).toEqual({ success: true, copied: 0, skipped: 2, skipped_removed: 0, skipped_on_leave: 2, mode: 'template' })
+    expect(bulkUpsertShiftAssignments).not.toHaveBeenCalled()
+  })
+
+  it('500s and writes nothing when the leave read fails', async () => {
+    fetchApprovedLeave.mockResolvedValue({ leave: [], error: { message: 'leave boom' } })
+    const res = await POST(req(BODY))
+    expect(res.status).toBe(500)
+    expect(bulkUpsertShiftAssignments).not.toHaveBeenCalled()
   })
 })
