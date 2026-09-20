@@ -22,7 +22,7 @@ import {
   Radar, CheckSquare, Flag, Mail, Receipt, FileText, Wallet, Zap,
   ArrowLeftRight, Users, Handshake, ShoppingBag,
 } from 'lucide-react'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser, getUserLocationIds, hasRoleAtLocation } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import {
@@ -33,6 +33,8 @@ import {
 import { buildMonthMatrix } from '@shared/roster-month'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { fetchStaffingGapsThisWeek, staffingGapsHeadline, staffingGapsBreakdown } from '@/lib/roster-staffing'
+import { fetchRosterRunways } from '@/lib/roster-runway-data'
+import RosterRunwayChip from '@/components/dashboard/RosterRunwayChip'
 import { fetchTodayFeed } from '@/lib/today-feed-data'
 import { assembleHomeQueue, queueCountLabel, groupQueueRows } from '@/lib/home-queue'
 import { dublinTodayStr } from '@/lib/dublin-time'
@@ -218,6 +220,18 @@ export default async function PersonalDashboardPage() {
         .map(([id]) => id)
   const isOwnerSomewhere = ownerLocationIds.length > 0
 
+  // RUNWAY.1 — studios where THIS user can publish a roster (the gate on
+  // POST /api/schedule/rosters). Deliberately not `locIds` below, which is
+  // every studio the user belongs to: whether next week is published is
+  // manager information, and hasRoleAtLocation judges the role AT that studio,
+  // not the active one. Started here and awaited after the block below so the
+  // two reads overlap. A failed read shows NO chip: an alert must never claim
+  // a problem it could not read.
+  const runwayLocations = (user.locations || []).filter((l) => hasRoleAtLocation(user, l.id, MANAGER_ROLES))
+  const runwayPromise = runwayLocations.length > 0
+    ? fetchRosterRunways(db, runwayLocations.map((l) => l.id)).catch(() => ({ success: false }))
+    : Promise.resolve({ success: false })
+
   // ROSTERVIS.1 — empty AND below-minimum shifts. This chip used to count only
   // shifts with zero coaches, so a shift at 1 of 2 never raised it.
   let staffingGaps = { empty: 0, short: 0, total: 0 }
@@ -236,6 +250,13 @@ export default async function PersonalDashboardPage() {
     if (payRes.success) incompletePay = payRes.data
     if (approvalsRes.success) pendingApprovals = approvalsRes.data.count
   }
+
+  const runwayRes = await runwayPromise
+  const rosterRunways = runwayRes.success
+    ? runwayLocations
+        .map((l) => ({ id: l.id, name: l.name, runway: runwayRes.data.byLocation[l.id] }))
+        .filter((r) => r.runway)
+    : []
 
   // Show the per-shift location chip only when the user is assigned
   // to 2+ locations — otherwise it's redundant clutter for staff
@@ -397,6 +418,13 @@ export default async function PersonalDashboardPage() {
           </div>
         </Link>
       )}
+
+      {/* RUNWAY.1 — an upcoming week, inside 10 days, that is not built or not
+          published. One chip per studio this user can publish at; the studio
+          is named only when the user has more than one. */}
+      {rosterRunways.map((r) => (
+        <RosterRunwayChip key={r.id} runway={r.runway} locationName={showLocation ? r.name : ''} />
+      ))}
 
       {/* Roster v2 phase 3 — pay-data completeness for managers.
           Phase 4's cost panel zero-costs anyone whose employment
