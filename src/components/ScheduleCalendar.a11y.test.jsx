@@ -22,6 +22,11 @@ vi.mock('next/navigation', () => ({
 
 import ScheduleCalendar from '@/components/ScheduleCalendar'
 
+// Every test here renders the WHOLE calendar. Under a loaded machine that has
+// run past vitest's 5s default (it flaked a parallel suite once), so the file
+// declares its own budget, as the other whole-calendar suites do.
+vi.setConfig({ testTimeout: 20000 })
+
 // A dialog's accessible name is whatever aria-labelledby points at — the
 // assertion the whole conversion is for.
 function dialogName(dialog) {

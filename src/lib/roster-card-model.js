@@ -47,8 +47,8 @@ export function shiftCardModel(block, assignments, staffing, { isManager = false
   const templateName = block?.shift_templates?.name || 'Shift'
   const coaches = liveAssignments(assignments).map((a) => {
     const hasOverride = !!(a.start_time_override || a.end_time_override)
-    const from = formatTime12h(a.start_time_override || block.start_time)
-    const to = formatTime12h(a.end_time_override || block.end_time)
+    const from = formatTime12h(a.start_time_override || block?.start_time)
+    const to = formatTime12h(a.end_time_override || block?.end_time)
     return {
       id: a.id,
       name: a.profiles?.full_name || 'Unknown',
@@ -157,11 +157,19 @@ export function dayHeaderStatus(blocksForDay, { todayIso } = {}) {
 
 // First names for a line with ~120px to spend. Two people sharing a first name
 // ON THE SAME SHIFT get a last initial; across shifts the time disambiguates.
+// If the initial does not separate them either ("Sam Alpha" / "Sam Avery"),
+// that pair gets full names: two identical labels on one line name nobody.
+// Comparison ignores case; what is printed is what was stored.
 function firstNames(assignments) {
   const parts = assignments.map((a) => String(a.profiles?.full_name || 'Unknown').trim().split(/\s+/))
+  const lower = (x) => String(x || '').toLowerCase()
+  const withInitial = (p) => (p.length > 1 ? `${p[0]} ${p[p.length - 1][0]}` : p[0])
   return parts.map((p) => {
-    const shared = parts.filter((q) => q[0] === p[0]).length > 1
-    return shared && p.length > 1 ? `${p[0]} ${p[p.length - 1][0]}` : p[0]
+    const sameFirst = parts.filter((q) => lower(q[0]) === lower(p[0]))
+    if (sameFirst.length < 2) return p[0]
+    const label = withInitial(p)
+    const collides = sameFirst.filter((q) => lower(withInitial(q)) === lower(label)).length > 1
+    return collides ? p.join(' ') : label
   })
 }
 

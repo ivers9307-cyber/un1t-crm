@@ -21,6 +21,11 @@ vi.mock('next/navigation', () => ({
 
 import ScheduleCalendar from '@/components/ScheduleCalendar'
 
+// Every test here renders the WHOLE calendar. Under a loaded machine that has
+// run past vitest's 5s default (it flaked a parallel suite once), so the file
+// declares its own budget, as the other whole-calendar suites do.
+vi.setConfig({ testTimeout: 20000 })
+
 const MANAGER = { id: 'u1', role: 'manager', activeLocation: { id: 'loc1', name: 'Stillorgan' } }
 const COACH = { id: 'u2', role: 'coach', activeLocation: { id: 'loc1', name: 'Stillorgan' } }
 

@@ -34,6 +34,17 @@ describe('shiftCardModel', () => {
     expect(m.emptyText).toBeNull()
   })
 
+  it('a swapped assignment IS a coach: only cancelled is dead (ROSTER-FIX.1)', () => {
+    const m = shiftCardModel(block(), [coach('u2', 'Coach A', { status: 'swapped' }), coach('u3', 'Coach B', { status: undefined })], { status: 'ok', count: 2, min: 2 }, { isManager: true })
+    expect(m.coaches.map((c) => c.name)).toEqual(['Coach A', 'Coach B'])
+  })
+
+  it('tolerates a null block like every other field does', () => {
+    const m = shiftCardModel(null, [coach('u2', 'Coach A', { start_time_override: '09:30' })], null, { isManager: true })
+    expect(m.coaches[0].adjusted.title).toBe('Adjusted: 9:30am–')
+    expect(m.templateName).toBe('Shift')
+  })
+
   it('cancelled assignments are not coaches', () => {
     const m = shiftCardModel(block(), [coach('u2', 'Coach A'), coach('u3', 'Coach B', { status: 'cancelled' })], { status: 'short', count: 1, min: 2 }, { isManager: true })
     expect(m.coaches.map((c) => c.name)).toEqual(['Coach A'])
@@ -193,6 +204,23 @@ describe('monthCellLines', () => {
   it('two coaches sharing a first name get a last initial', () => {
     const { lines } = monthCellLines([mb('a', '05:45', '06:45', 1, on('Sam Alpha', 'Sam Bravo', 'Casey Third'))], { todayIso: TODAY, isManager: true })
     expect(lines[0].text).toBe('5:45 Sam A, Sam B, Casey')
+  })
+
+  it('same first name AND last initial: both get their full names, never two identical labels', () => {
+    const { lines } = monthCellLines([mb('a', '05:45', '06:45', 1, on('Sam Alpha', 'Sam Avery', 'Casey Third'))], { todayIso: TODAY, isManager: true })
+    expect(lines[0].text).toBe('5:45 Sam Alpha, Sam Avery, Casey')
+  })
+
+  it('a shared first name is shared whatever its case', () => {
+    const { lines } = monthCellLines([mb('a', '05:45', '06:45', 1, on('sam Alpha', 'Sam Bravo'))], { todayIso: TODAY, isManager: true })
+    expect(lines[0].text).toBe('5:45 sam A, Sam B')
+  })
+
+  it('a swapped assignment is named; it is a real shift owned by the taker', () => {
+    const list = [{ id: 's', profile_id: 'u8', status: 'swapped', profiles: { full_name: 'Devon Fourth' } }]
+    const { lines } = monthCellLines([mb('x', '09:00', '10:00', 1, list)], { todayIso: TODAY, isManager: true })
+    expect(lines[0].text).toBe('9 Devon')
+    expect(lines[0].tone).toBe('ok')
   })
 
   it.each([

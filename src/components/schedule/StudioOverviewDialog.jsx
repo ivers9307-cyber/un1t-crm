@@ -134,7 +134,7 @@ export default function StudioOverviewDialog({ range, locationId, dataVersion = 
 }
 
 // Day-detail dialog. Summary of the day; the undermanned-shift rows are
-// the one actionable part — each opens that shift in the calendar below.
+// the one actionable part — each opens that shift in the roster behind this dialog.
 // Everything else is read-only (edit events at /events, booking types at
 // /bookings/event-types).
 //
@@ -264,14 +264,14 @@ function DayDetailBody({ day, onOpenShift }) {
         </DetailSection>
 
         <div className="mt-4 pt-3 border-t border-un1t-border text-[11px] text-un1t-muted">
-          Edit events at <code>/events</code>, booking types at <code>/bookings/event-types</code>, shifts inside the calendar below.
+          Edit events at <code>/events</code>, booking types at <code>/bookings/event-types</code>, shifts in the roster behind this dialog.
         </div>
       </div>
   )
 }
 
 // One undermanned shift. A row is a real <button> when the dialog has been
-// given somewhere to send the request (the calendar below), and plain text
+// given somewhere to send the request (the roster behind it), and plain text
 // when it has not — a control that looks clickable and does nothing is worse
 // than one that never offered.
 function UnderMinRow({ block, onOpen }) {
