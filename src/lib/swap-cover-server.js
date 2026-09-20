@@ -9,10 +9,14 @@
 // arm of a cron whose own job must not be starved.
 
 import { resolveRoleRecipientIds } from './push'
-import { notifyUsersOnce } from './push-dedup'
+import { notifyUsersOnce, notifyUsersAtRolesOnce } from './push-dedup'
 import { MANAGER_ROLES } from './schemas'
-import { logWarn } from './log'
-import { openPoolRecipients, shiftWhenLabel } from './swap-cover'
+import { logWarn, logError } from './log'
+import { isValidTz } from './tz-time'
+import {
+  openPoolRecipients, shiftWhenLabel,
+  coverSweepAction, coverNudgePayload, swapExpiryNotices, SWAP_EXPIRY_NOTES, OPEN_SWAP_STATUSES,
+} from './swap-cover'
 
 // profile_locations for one studio. The same table and embed
 // resolveLocationMemberIds (src/lib/push.js) reads, but with the ERROR kept
@@ -143,4 +147,124 @@ export async function notifyOpenPool(db, { swapId, locationId, block, requester 
     data: { type: 'swap_open_pool', swap_id: swapId, block_date: block.block_date },
   })
   return { notified: ids.length, degraded }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// The sweep — called by /api/cron/checklist-sweep every 15 minutes.
+// ─────────────────────────────────────────────────────────────────────────
+
+// requester:profiles!requester_id is the same disambiguated embed GET
+// /api/schedule/swaps uses (two FKs to profiles on this table).
+const OPEN_SWAP_SELECT = `
+  id, status, location_id, requester_id, target_id, requester_shift_id, created_at,
+  requester:profiles!requester_id(full_name),
+  requester_shift:shift_assignments!requester_shift_id(id, shift_blocks!block_id(id, block_date, start_time, end_time))
+`
+// Open swaps are single digits in production. The cap is a guard, not a page
+// size: if it is ever hit, the oldest 200 are processed and the rest wait a tick.
+const SWEEP_LIMIT = 200
+
+const delivered = (r) => ((r?.sent || 0) + (r?.emailed || 0)) > 0
+
+/**
+ * locations.timezone for the studios that have an open swap: the zone the
+ * shift start AND the quiet-hours band are judged in. Never throws. A studio
+ * whose timezone is empty or not an IANA name is Europe/Dublin (the pure half
+ * resolves it) and is warned about ONCE per sweep, however many swaps it has.
+ * An unreadable table is Europe/Dublin for everyone, logged.
+ */
+async function studioTimezones(db, locationIds) {
+  const zones = new Map()
+  if (!locationIds.length) return zones
+  const { data, error } = await db.from('locations').select('id, timezone').in('id', locationIds)
+  if (error) {
+    logWarn('swap-cover', 'sweep could not read studio timezones; using Europe/Dublin', { err: error.message })
+    return zones
+  }
+  for (const row of data || []) zones.set(row.id, row.timezone)
+  for (const id of locationIds) {
+    const tz = zones.get(id)
+    if (!isValidTz(tz)) {
+      logWarn('swap-cover', 'studio timezone is empty or invalid; using Europe/Dublin', { locationId: id, timezone: tz ?? null })
+    }
+  }
+  return zones
+}
+
+/**
+ * One pass over every open swap: nudge the studio's approvers at T-48h and
+ * T-12h, and close a swap whose shift has started (or no longer exists).
+ * Never throws. Returns counts for the cron's response.
+ *
+ * QUIET HOURS: coverSweepAction answers none/quiet_hours for anything due
+ * while the studio's wall clock is outside 07:00-22:00. The sweep then does
+ * NOTHING for that swap (no push, no write; `quiet` counts it) and the first
+ * tick inside the band picks it up.
+ *
+ * @param {object} db  service-role supabase client
+ * @param {{ nowMs?: number }} [opts]
+ */
+export async function runSwapCoverSweep(db, { nowMs = Date.now() } = {}) {
+  const stats = { open: 0, nudged: 0, expired: 0, skipped: 0, quiet: 0, errors: 0 }
+
+  const { data: swaps, error } = await db.from('shift_swap_requests')
+    .select(OPEN_SWAP_SELECT)
+    .in('status', [...OPEN_SWAP_STATUSES])
+    .order('created_at', { ascending: true })
+    .limit(SWEEP_LIMIT)
+  if (error) {
+    logError('swap-cover', 'sweep could not read open swaps', { err: error.message })
+    stats.errors++
+    return stats
+  }
+  stats.open = (swaps || []).length
+  if (!stats.open) return stats
+
+  const zones = await studioTimezones(db, [...new Set(swaps.map((s) => s.location_id).filter(Boolean))])
+
+  for (const swap of swaps) {
+    const decision = coverSweepAction(swap, nowMs, { tz: zones.get(swap.location_id) })
+    if (decision.action === 'none') {
+      if (decision.reason === 'quiet_hours') stats.quiet++
+      continue
+    }
+    try {
+      if (decision.action === 'nudge') {
+        const { key, payload } = coverNudgePayload(swap, decision.stage)
+        // The same recipients swap_open reached: MANAGER_ROLES at the swap's
+        // own studio. At-most-once per (swap, status, stage) via the ledger.
+        const result = await notifyUsersAtRolesOnce(db, key, swap.location_id, MANAGER_ROLES, payload)
+        if (delivered(result)) stats.nudged++
+        else stats.skipped++
+        continue
+      }
+      if (await expireSwap(db, swap, decision.reason)) stats.expired++
+      else stats.skipped++
+    } catch (e) {
+      logError('swap-cover', 'sweep failed on a swap; the next tick retries it', { swapId: swap.id, action: decision.action, err: e?.message })
+      stats.errors++
+    }
+  }
+  return stats
+}
+
+// Close one swap. The UPDATE is guarded on the status we READ: if a manager's
+// approve RPC (migs 612/615 lock the row and refuse swap_not_open) or a coach's
+// claim landed in between, zero rows match, nothing is sent, and the next tick
+// reads the new truth. A zero-row UPDATE is not an error in PostgREST, so the
+// returned rows are the verdict. The notification comes AFTER the write and is
+// ledger-keyed, so a crash between the two costs one message, never a loop.
+async function expireSwap(db, swap, reason) {
+  const { data, error } = await db.from('shift_swap_requests')
+    .update({ status: 'cancelled', review_note: SWAP_EXPIRY_NOTES[reason] })
+    .eq('id', swap.id)
+    .eq('status', swap.status)
+    .select('id')
+  if (error) throw new Error(error.message)
+  if (!data || data.length === 0) return false
+
+  for (const notice of swapExpiryNotices(swap, reason)) {
+    await notifyUsersOnce(db, notice.key, notice.to, notice.payload)
+  }
+  return true
 }
