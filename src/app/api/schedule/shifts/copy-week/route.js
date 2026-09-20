@@ -5,7 +5,7 @@ import { getCurrentUser, assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLo
 import { validateBody } from '@/lib/validate'
 import { uuidLike, isoDate , MANAGER_ROLES} from '@/lib/schemas'
 import { bulkUpsertShiftAssignments } from '@/lib/roster-write'
-import { fetchSourceBlocks, buildCopyPlan, COPY_MODES } from '@/lib/roster-copy'
+import { fetchSourceBlocks, fetchApprovedLeave, approvedLeaveLookup, liveCoachIds, buildCopyPlan, COPY_MODES } from '@/lib/roster-copy'
 import { formatDate, fetchSlotRemovalKeys } from '@/lib/roster'
 import { readAssignmentKeysInRange, logAndNotifyCopiedShifts } from '@/lib/roster-change-notify'
 
@@ -60,7 +60,7 @@ export function redateShiftDate(shiftDate, dayOffset) {
 // Copy all shifts from one week to another
 // Body: { location_id, source_start (Mon), target_start (Mon), mode? }
 // mode: 'exact' (default) | 'template' — see src/lib/roster-copy.js.
-// Response: { success, copied, skipped, skipped_removed, mode }
+// Response: { success, copied, skipped, skipped_removed, skipped_on_leave, mode }
 export async function POST(request) {
   const user = await getCurrentUser()
   // SCHEDROLES.1 — coarse pre-check; the decision is the role AT
@@ -95,11 +95,26 @@ export async function POST(request) {
 
   if (fetchError) return NextResponse.json({ success: false, error: fetchError.message }, { status: 400 })
 
+  // Target week bounds. Hoisted above the plan (it used to sit below it)
+  // because the leave read needs them.
+  const targetEnd = sourceWeekEnd(target_start)
+
+  // COPYLEAVE.1 — approved leave for the coaches being copied, over the TARGET
+  // week. Read before any write, and a failed read stops the copy: copying
+  // blind is exactly how coaches landed back on days they had booked off.
+  const { leave, error: leaveError } = await fetchApprovedLeave(db, {
+    profileIds: liveCoachIds(sourceBlocks),
+    startDate: target_start,
+    endDate: targetEnd,
+  })
+  if (leaveError) return NextResponse.json({ success: false, error: leaveError.message }, { status: 500 })
+
   // Re-date each source block into the target week (same weekday).
   const dayOffset = weekDayOffset(source_start, target_start)
   const plan = buildCopyPlan(sourceBlocks, {
     mode,
     mapDate: (d) => redateShiftDate(d, dayOffset),
+    isOnLeave: approvedLeaveLookup(leave),
   })
 
   // Nothing rostered in the source week: nothing to copy (the empty blocks the
@@ -111,7 +126,6 @@ export async function POST(request) {
   // NOTIFY.1 — snapshot the target week so coaches copied onto an already
   // PUBLISHED week can be logged and told. A copy onto an unpublished week
   // changes nothing here: the first publish notifies them.
-  const targetEnd = sourceWeekEnd(target_start)
   const before = await readAssignmentKeysInRange(db, { locationId: location_id, startDate: target_start, endDate: targetEnd })
 
   // SLOTREMOVAL.1 — slots a manager deleted in the target week stay deleted:
@@ -161,9 +175,14 @@ export async function POST(request) {
   // because its own before-snapshot already contains them.
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
 
-  // skipped_removed is the part of `skipped` that landed on a deleted slot
-  // (SLOTREMOVAL.1), so the toast can say why.
+  // skipped_removed (SLOTREMOVAL.1) and skipped_on_leave (COPYLEAVE.1) are
+  // parts of `skipped`, so the toast can say why.
   return NextResponse.json({
-    success: true, copied: count, skipped: plan.skipped + skippedRemoved, skipped_removed: skippedRemoved, mode,
+    success: true,
+    copied: count,
+    skipped: plan.skipped + skippedRemoved,
+    skipped_removed: skippedRemoved,
+    skipped_on_leave: plan.skippedOnLeave,
+    mode,
   }, { status: 201 })
 }
