@@ -29,7 +29,15 @@ import {
   supersedeEmptyTrimmedRosters,
 } from './roster-publish'
 
-function mockDb({ location, locationsById = null, failLocationIds = [], contractors = [], blocks = [], timeOff = [], otherAssignments = [], failOtherAssignments = false }) {
+// COPYLEAVE.1 — every location belongs to exactly one organisation (mig 079).
+// loc2 is loc1's sibling; loc9 belongs to somebody else.
+const DEFAULT_ORG_LOCATIONS = [
+  { id: 'loc1', organization_id: 'org1' },
+  { id: 'loc2', organization_id: 'org1' },
+  { id: 'loc9', organization_id: 'org2' },
+]
+
+function mockDb({ location, locationsById = null, failLocationIds = [], contractors = [], blocks = [], timeOff = [], otherAssignments = [], failOtherAssignments = false, orgLocations = DEFAULT_ORG_LOCATIONS, failSiblings = false }) {
   // Mock the chained Supabase queries the helper makes:
   //   from('locations').select(...).eq(...).single() → location
   //   from('profile_locations').select(...).eq(...) → contractor links
@@ -38,22 +46,35 @@ function mockDb({ location, locationsById = null, failLocationIds = [], contract
   const blockQueries = []
   const leaveQueries = []
   const assignmentQueries = []
+  const siblingQueries = []
+  // A fixture location that names no organisation is in org1.
+  const withOrg = (l) => (l ? { organization_id: 'org1', ...l } : l)
   return {
     calls,
     blockQueries,
     leaveQueries,
     assignmentQueries,
+    siblingQueries,
     from(table) {
       calls.push(table)
       if (table === 'locations') {
         return {
           select: () => ({
             // ROSTERTIDY.1 — keyed by id when a test needs several locations.
-            eq: (_c, id) => ({
-              single: async () => (failLocationIds.includes(id)
-                ? { data: null, error: { message: 'location read failed' } }
-                : { data: locationsById ? locationsById[id] : location, error: null }),
-            }),
+            eq: (c, id) => (c === 'organization_id'
+              // COPYLEAVE.1 — the sibling studios of the one being published.
+              ? {
+                neq: async (_c, notId) => {
+                  siblingQueries.push({ org: id, notId })
+                  if (failSiblings) return { data: null, error: { message: 'siblings unreadable' } }
+                  return { data: orgLocations.filter((l) => l.organization_id === id && l.id !== notId).map((l) => ({ id: l.id })), error: null }
+                },
+              }
+              : {
+                single: async () => (failLocationIds.includes(id)
+                  ? { data: null, error: { message: 'location read failed' } }
+                  : { data: withOrg(locationsById ? locationsById[id] : location), error: null }),
+              }),
           }),
         }
       }
@@ -120,12 +141,11 @@ function mockDb({ location, locationsById = null, failLocationIds = [], contract
       }
       // COPYLEAVE.1 — the same coaches' live shifts at OTHER studios.
       if (table === 'shift_assignments') {
-        const f = { profileIds: null, notLoc: null, gte: null, lte: null, from: 0, to: Infinity }
+        const f = { profileIds: null, locIds: null, gte: null, lte: null, from: 0, to: Infinity }
         assignmentQueries.push(f)
         const chain = {
           select: () => chain,
-          in: (_c, v) => { f.profileIds = v; return chain },
-          neq: (_c, v) => { f.notLoc = v; return chain },
+          in: (c, v) => { if (c === 'profile_id') f.profileIds = v; else f.locIds = v; return chain },
           gte: (_c, v) => { f.gte = v; return chain },
           lte: (_c, v) => { f.lte = v; return chain },
           order: () => chain,
@@ -135,7 +155,7 @@ function mockDb({ location, locationsById = null, failLocationIds = [], contract
             : {
               data: otherAssignments
                 .filter((a) => f.profileIds.includes(a.profile_id))
-                .filter((a) => a.shift_blocks.location_id !== f.notLoc)
+                .filter((a) => (f.locIds || []).includes(a.shift_blocks.location_id))
                 .filter((a) => a.shift_blocks.block_date >= f.gte && a.shift_blocks.block_date <= f.lte)
                 .slice(f.from, f.to + 1),
               error: null,
@@ -439,9 +459,9 @@ describe('projectPublishImpact — per-assignment overrides and approved leave',
 describe('projectPublishImpact — leave clashes and double bookings', () => {
   const PERIOD = { locationId: 'loc1', periodStart: '2026-05-04', periodEnd: '2026-05-10', todayIso: '2026-05-01' }
   const named = (id, name, over = {}) => ({ profile_id: id, status: 'scheduled', profiles: { full_name: name }, ...over })
-  const elsewhere = (profileId, date, start, end) => ({
-    id: `oa-${profileId}`, profile_id: profileId, status: 'scheduled', start_time_override: null, end_time_override: null,
-    shift_blocks: { id: 'ob1', location_id: 'loc2', block_date: date, start_time: start, end_time: end, shift_templates: { name: 'Open Gym' }, locations: { name: 'Studio B' } },
+  const elsewhere = (profileId, date, start, end, loc = 'loc2') => ({
+    id: `oa-${profileId}-${loc}`, profile_id: profileId, status: 'scheduled', start_time_override: null, end_time_override: null,
+    shift_blocks: { id: `ob-${loc}`, location_id: loc, block_date: date, start_time: start, end_time: end, shift_templates: { name: 'Open Gym' }, locations: { name: loc === 'loc2' ? 'Studio B' : 'Studio Z' } },
   })
 
   it('lists a coach rostered on approved leave, and still costs them at zero', async () => {
@@ -474,9 +494,58 @@ describe('projectPublishImpact — leave clashes and double bookings', () => {
       coach_name: 'Coach D', block_date: '2026-05-06',
       second: { name: 'Open Gym', location_name: 'Studio B', start_time: '10:00', end_time: '12:00' },
     })
-    // The read asked for THESE coaches, NOT this studio, over the loaded months.
+    // The read asked for THESE coaches, at this organisation's OTHER studios,
+    // over the loaded months.
+    expect(db.siblingQueries).toEqual([{ org: 'org1', notId: 'loc1' }])
     expect(db.assignmentQueries).toHaveLength(1)
-    expect(db.assignmentQueries[0]).toMatchObject({ profileIds: ['dan'], notLoc: 'loc1', gte: '2026-05-01', lte: '2026-05-31' })
+    expect(db.assignmentQueries[0]).toMatchObject({ profileIds: ['dan'], locIds: ['loc2'], gte: '2026-05-01', lte: '2026-05-31' })
+  })
+
+  // Review blocker — nothing keeps a person inside one organisation, and the
+  // advisory prints the other shift's name, times and studio.
+  it('NEVER reads a shift at a studio in a DIFFERENT organisation', async () => {
+    const db = mockDb({
+      location: { id: 'loc1', organization_id: 'org1', monthly_contractor_budget_eur: null },
+      contractors: [dan],
+      blocks: [block({ id: 'b1', date: '2026-05-06', start: '09:00', end: '11:00', coaches: [named('dan', 'Coach D')] })],
+      otherAssignments: [elsewhere('dan', '2026-05-06', '10:00:00', '12:00:00', 'loc9')],
+    })
+    const r = await projectPublishImpact(db, PERIOD)
+    expect(db.assignmentQueries[0].locIds).toEqual(['loc2'])
+    expect(r.doubleBookings).toEqual([])
+    expect(r.crossLocationChecked).toBe(true)
+    expect(JSON.stringify(r)).not.toContain('Studio Z')
+  })
+
+  it('an organisation with ONE studio makes no other-studio query, and that is a full check (nothing to flag)', async () => {
+    const db = mockDb({
+      location: { id: 'loc1', organization_id: 'org1', monthly_contractor_budget_eur: null },
+      contractors: [dan],
+      orgLocations: [{ id: 'loc1', organization_id: 'org1' }, { id: 'loc9', organization_id: 'org2' }],
+      blocks: [
+        block({ id: 'b1', date: '2026-05-06', start: '09:00', end: '11:00', coaches: [named('dan', 'Coach D')] }),
+        block({ id: 'b2', date: '2026-05-06', start: '10:00', end: '12:00', coaches: [named('dan', 'Coach D')] }),
+      ],
+      otherAssignments: [elsewhere('dan', '2026-05-06', '10:00:00', '12:00:00', 'loc9')],
+    })
+    const r = await projectPublishImpact(db, PERIOD)
+    expect(db.siblingQueries).toHaveLength(1)
+    expect(db.assignmentQueries).toHaveLength(0)
+    expect(r.crossLocationChecked).toBe(true)
+    expect(r.doubleBookings).toHaveLength(1) // this studio's own clash still shows
+  })
+
+  it('an unreadable sibling list fails SOFT: no other-studio query, the gap is flagged, the money is untouched', async () => {
+    const db = mockDb({
+      location: { id: 'loc1', organization_id: 'org1', monthly_contractor_budget_eur: 500 },
+      contractors: [dan],
+      failSiblings: true,
+      blocks: [block({ id: 'b1', date: '2026-05-06', start: '09:00', end: '11:00', coaches: [named('dan', 'Coach D')] })],
+    })
+    const r = await projectPublishImpact(db, PERIOD)
+    expect(db.assignmentQueries).toHaveLength(0)
+    expect(r.crossLocationChecked).toBe(false)
+    expect(r.periodProjectedEur).toBe(70)
   })
 
   it('both lists are empty arrays, never undefined, on a clean week', async () => {

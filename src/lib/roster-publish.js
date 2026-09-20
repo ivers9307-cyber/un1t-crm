@@ -92,7 +92,7 @@ async function loadBudgetContext(db, locationId, periodStart, periodEnd = period
   // Location budget snapshot.
   const { data: loc, error: locErr } = await db
     .from('locations')
-    .select('id, monthly_contractor_budget_eur')
+    .select('id, organization_id, monthly_contractor_budget_eur')
     .eq('id', locationId)
     .single()
   if (locErr) throw new Error(`Location lookup failed: ${locErr.message}`)
@@ -187,14 +187,33 @@ async function loadBudgetContext(db, locationId, periodStart, periodEnd = period
   // gate for a real publish, and an advisory must never be able to refuse one.
   // null = "could not check", which impactFromContext reports as
   // crossLocationChecked: false rather than as "no clashes".
+  //
+  // ONLY this organisation's other studios. Nothing keeps a person inside one
+  // organisation, and the advisory prints the other shift's name, times and
+  // studio: "not this location" alone would show one tenant another tenant's
+  // roster. An organisation has a handful of locations, so this read does not
+  // page. No siblings = nothing to check, which is a complete check (the flag
+  // stays true and the modal says nothing).
   let otherAssignments = []
+  let siblingIds = []
   if (rosteredIds.length > 0) {
+    const { data: siblings, error: sibErr } = loc?.organization_id
+      ? await db.from('locations').select('id').eq('organization_id', loc.organization_id).neq('id', locationId)
+      : { data: null, error: { message: 'location has no organization_id' } }
+    if (sibErr) {
+      logWarn('roster-publish', 'sibling studios unreadable; double-booking check is this studio only', { locationId, err: sibErr.message })
+      otherAssignments = null
+    } else {
+      siblingIds = (siblings || []).map((l) => l.id).filter(Boolean)
+    }
+  }
+  if (siblingIds.length > 0) {
     for (let from = 0; ; from += BLOCK_PAGE_SIZE) {
       const { data: page, error: otherErr } = await db
         .from('shift_assignments')
         .select('id, profile_id, status, start_time_override, end_time_override, shift_blocks!inner(id, location_id, block_date, start_time, end_time, shift_templates(name), locations(name))')
         .in('profile_id', rosteredIds)
-        .neq('shift_blocks.location_id', locationId)
+        .in('shift_blocks.location_id', siblingIds)
         .gte('shift_blocks.block_date', monthStart)
         .lte('shift_blocks.block_date', monthEnd)
         .order('id', { ascending: true })
