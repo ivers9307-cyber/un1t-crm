@@ -170,7 +170,7 @@ export function approvedLeaveLookup(leaveRows) {
 }
 
 /** COPYLEAVE.1 — pure. Distinct profile ids with a LIVE assignment in these blocks. */
-export function liveCoachIds(sourceBlocks) {
+function liveCoachIds(sourceBlocks) {
   const ids = new Set()
   for (const b of sourceBlocks || []) {
     for (const a of (b.shift_assignments || []).filter(isLiveAssignment)) {
@@ -178,6 +178,32 @@ export function liveCoachIds(sourceBlocks) {
     }
   }
   return [...ids]
+}
+
+// ── Skip reasons the copy has to READ for ───────────────────────────────────
+// Each is one call the two copy routes make before any write, returning a
+// lookup buildCopyPlan takes as an option, or an error that stops the copy.
+// A new reason (a coach who is no longer at this studio, say) goes here as a
+// sibling of fetchLeaveLookup, and beside `onLeave` in buildCopyPlan's loops.
+
+/**
+ * COPYLEAVE.1 — the leave half of a copy, in one call: the live coaches on
+ * `sourceBlocks`, their APPROVED leave over the TARGET period [startDate,
+ * endDate], and the `(profileId, targetDate) => boolean` buildCopyPlan takes
+ * as `isOnLeave`. On a failed read `isOnLeave` is null, not a lookup that says
+ * "nobody": copying blind is the bug this exists to stop, so the caller must
+ * handle `error` and cannot fall through by accident.
+ *
+ * @returns {Promise<{ isOnLeave: ((profileId: string, dateIso: string) => boolean)|null, error: object|null }>}
+ */
+export async function fetchLeaveLookup(db, { sourceBlocks, startDate, endDate }) {
+  const { leave, error } = await fetchApprovedLeave(db, {
+    profileIds: liveCoachIds(sourceBlocks),
+    startDate,
+    endDate,
+  })
+  if (error) return { isOnLeave: null, error }
+  return { isOnLeave: approvedLeaveLookup(leave), error: null }
 }
 
 /**

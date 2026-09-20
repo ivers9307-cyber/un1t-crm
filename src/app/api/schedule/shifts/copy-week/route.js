@@ -5,7 +5,7 @@ import { getCurrentUser, assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLo
 import { validateBody } from '@/lib/validate'
 import { uuidLike, isoDate , MANAGER_ROLES} from '@/lib/schemas'
 import { bulkUpsertShiftAssignments } from '@/lib/roster-write'
-import { fetchSourceBlocks, fetchApprovedLeave, approvedLeaveLookup, liveCoachIds, buildCopyPlan, COPY_MODES } from '@/lib/roster-copy'
+import { fetchSourceBlocks, fetchLeaveLookup, buildCopyPlan, COPY_MODES } from '@/lib/roster-copy'
 import { formatDate, fetchSlotRemovalKeys } from '@/lib/roster'
 import { readAssignmentKeysInRange, logAndNotifyCopiedShifts } from '@/lib/roster-change-notify'
 
@@ -102,8 +102,8 @@ export async function POST(request) {
   // COPYLEAVE.1 — approved leave for the coaches being copied, over the TARGET
   // week. Read before any write, and a failed read stops the copy: copying
   // blind is exactly how coaches landed back on days they had booked off.
-  const { leave, error: leaveError } = await fetchApprovedLeave(db, {
-    profileIds: liveCoachIds(sourceBlocks),
+  const { isOnLeave, error: leaveError } = await fetchLeaveLookup(db, {
+    sourceBlocks,
     startDate: target_start,
     endDate: targetEnd,
   })
@@ -114,7 +114,7 @@ export async function POST(request) {
   const plan = buildCopyPlan(sourceBlocks, {
     mode,
     mapDate: (d) => redateShiftDate(d, dayOffset),
-    isOnLeave: approvedLeaveLookup(leave),
+    isOnLeave,
   })
 
   // Nothing rostered in the source week: nothing to copy (the empty blocks the

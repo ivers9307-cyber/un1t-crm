@@ -47,7 +47,7 @@ import { validateBody } from '@/lib/validate'
 import { uuidLike, isoDate, MANAGER_ROLES } from '@/lib/schemas'
 import { bulkUpsertShiftAssignments } from '@/lib/roster-write'
 import { fetchSlotRemovalKeys } from '@/lib/roster'
-import { fetchSourceBlocks, fetchApprovedLeave, approvedLeaveLookup, liveCoachIds, buildCopyPlan, mapNthWeekdayOfMonth, COPY_MODES } from '@/lib/roster-copy'
+import { fetchSourceBlocks, fetchLeaveLookup, buildCopyPlan, mapNthWeekdayOfMonth, COPY_MODES } from '@/lib/roster-copy'
 import { readAssignmentKeysInRange, logAndNotifyCopiedShifts } from '@/lib/roster-change-notify'
 
 export const runtime = 'nodejs'
@@ -142,8 +142,8 @@ export async function POST(request) {
 
   // COPYLEAVE.1 — see copy-week: approved leave over the TARGET month, read
   // before any write; a failed read stops the copy.
-  const { leave, error: leaveError } = await fetchApprovedLeave(db, {
-    profileIds: liveCoachIds(sourceBlocks),
+  const { isOnLeave, error: leaveError } = await fetchLeaveLookup(db, {
+    sourceBlocks,
     startDate: target_month_start,
     endDate: targetEnd,
   })
@@ -157,7 +157,7 @@ export async function POST(request) {
     mapDate: mode === 'template'
       ? (d) => mapNthWeekdayOfMonth(d, target_month_start)
       : (d) => mapDayOfMonth(d, target_month_start),
-    isOnLeave: approvedLeaveLookup(leave),
+    isOnLeave,
   })
 
   if (plan.sourceAssignments === 0) {

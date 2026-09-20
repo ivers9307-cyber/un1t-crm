@@ -8,7 +8,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   buildCopyPlan, mapNthWeekdayOfMonth, weekdayCodeOf, fetchSourceBlocks, copyResultToast,
-  approvedLeaveLookup, liveCoachIds, fetchApprovedLeave,
+  approvedLeaveLookup, fetchApprovedLeave, fetchLeaveLookup,
 } from './roster-copy'
 import { redateShiftDate } from '../app/api/schedule/shifts/copy-week/route.js'
 
@@ -79,27 +79,6 @@ describe('approvedLeaveLookup', () => {
     expect(onLeave('nobody', '2026-07-07')).toBe(false)
     expect(approvedLeaveLookup([])('p1', '2026-07-07')).toBe(false)
     expect(approvedLeaveLookup(null)('p1', '2026-07-07')).toBe(false)
-  })
-})
-
-describe('liveCoachIds', () => {
-  it('returns each live coach once, and never a cancelled one', () => {
-    const ids = liveCoachIds([
-      block({ shift_assignments: [
-        { profile_id: 'p1', status: 'scheduled' },
-        { profile_id: 'p2', status: 'cancelled' },
-      ] }),
-      block({ id: 'b2', shift_assignments: [
-        { profile_id: 'p1', status: 'swapped' },
-        { profile_id: 'p3', status: 'scheduled' },
-      ] }),
-    ])
-    expect(ids.sort()).toEqual(['p1', 'p3'])
-  })
-
-  it('is empty for no blocks', () => {
-    expect(liveCoachIds([])).toEqual([])
-    expect(liveCoachIds(null)).toEqual([])
   })
 })
 
@@ -437,37 +416,37 @@ describe('fetchSourceBlocks', () => {
   })
 })
 
-describe('fetchApprovedLeave', () => {
-  // Records what was asked for and serves `total` rows a page at a time.
-  function leaveDb(total, { fail = false } = {}) {
-    const calls = []
-    const all = Array.from({ length: total }, (_, i) => ({
-      id: `l${String(i).padStart(5, '0')}`, profile_id: 'p1', status: 'approved', start_date: '2026-07-06', end_date: '2026-07-06',
-    }))
-    return {
-      calls,
-      from(table) {
-        expect(table).toBe('time_off_requests')
-        const q = { filters: [], orders: [] }
-        const chain = {
-          select: (s) => { q.select = s; return chain },
-          in: (c, v) => { q.filters.push(['in', c, v]); return chain },
-          eq: (c, v) => { q.filters.push(['eq', c, v]); return chain },
-          lte: (c, v) => { q.filters.push(['lte', c, v]); return chain },
-          gte: (c, v) => { q.filters.push(['gte', c, v]); return chain },
-          order: (c) => { q.orders.push(c); return chain },
-          range: (from, to) => {
-            q.range = [from, to]
-            calls.push(q)
-            if (fail) return Promise.resolve({ data: null, error: { message: 'leave boom' } })
-            return Promise.resolve({ data: all.slice(from, to + 1), error: null })
-          },
-        }
-        return chain
-      },
-    }
+// Records what was asked for and serves `total` rows a page at a time.
+function leaveDb(total, { fail = false } = {}) {
+  const calls = []
+  const all = Array.from({ length: total }, (_, i) => ({
+    id: `l${String(i).padStart(5, '0')}`, profile_id: 'p1', status: 'approved', start_date: '2026-07-06', end_date: '2026-07-06',
+  }))
+  return {
+    calls,
+    from(table) {
+      expect(table).toBe('time_off_requests')
+      const q = { filters: [], orders: [] }
+      const chain = {
+        select: (s) => { q.select = s; return chain },
+        in: (c, v) => { q.filters.push(['in', c, v]); return chain },
+        eq: (c, v) => { q.filters.push(['eq', c, v]); return chain },
+        lte: (c, v) => { q.filters.push(['lte', c, v]); return chain },
+        gte: (c, v) => { q.filters.push(['gte', c, v]); return chain },
+        order: (c) => { q.orders.push(c); return chain },
+        range: (from, to) => {
+          q.range = [from, to]
+          calls.push(q)
+          if (fail) return Promise.resolve({ data: null, error: { message: 'leave boom' } })
+          return Promise.resolve({ data: all.slice(from, to + 1), error: null })
+        },
+      }
+      return chain
+    },
   }
+}
 
+describe('fetchApprovedLeave', () => {
   it('asks for APPROVED leave of these coaches that overlaps the target range', async () => {
     const db = leaveDb(2)
     const { leave, error } = await fetchApprovedLeave(db, { profileIds: ['p1', 'p2'], startDate: '2026-07-06', endDate: '2026-07-12' })
@@ -500,6 +479,58 @@ describe('fetchApprovedLeave', () => {
     const db = leaveDb(5, { fail: true })
     expect(await fetchApprovedLeave(db, { profileIds: ['p1'], startDate: 'a', endDate: 'b' }))
       .toEqual({ leave: [], error: { message: 'leave boom' } })
+  })
+})
+
+// COPYLEAVE.1 quality — the ONE call both copy routes make: which coaches are
+// on the source blocks, their approved leave over the target period, and the
+// lookup buildCopyPlan takes. (liveCoachIds is private now; its two rules,
+// "each live coach once" and "never a cancelled one", are pinned here through
+// the ids the query asks for.)
+describe('fetchLeaveLookup', () => {
+  const RANGE = { startDate: '2026-07-06', endDate: '2026-07-12' }
+
+  it('asks about each LIVE source coach once, never a cancelled one, over the target range', async () => {
+    const db = leaveDb(1)
+    const { isOnLeave, error } = await fetchLeaveLookup(db, {
+      sourceBlocks: [
+        block({ shift_assignments: [
+          { profile_id: 'p1', status: 'scheduled' },
+          { profile_id: 'p2', status: 'cancelled' },
+        ] }),
+        block({ id: 'b2', shift_assignments: [
+          { profile_id: 'p1', status: 'swapped' },
+          { profile_id: 'p3', status: 'scheduled' },
+        ] }),
+      ],
+      ...RANGE,
+    })
+    expect(error).toBeNull()
+    expect(db.calls).toHaveLength(1)
+    const [op, col, ids] = db.calls[0].filters[0]
+    expect([op, col]).toEqual(['in', 'profile_id'])
+    expect([...ids].sort()).toEqual(['p1', 'p3'])
+    expect(db.calls[0].filters.slice(2)).toEqual([['lte', 'start_date', '2026-07-12'], ['gte', 'end_date', '2026-07-06']])
+    // The rows that came back ARE the lookup (leaveDb serves p1 off on 6 Jul).
+    expect(isOnLeave('p1', '2026-07-06')).toBe(true)
+    expect(isOnLeave('p1', '2026-07-07')).toBe(false)
+    expect(isOnLeave('p3', '2026-07-06')).toBe(false)
+  })
+
+  it('no coaches = no query, and nobody is on leave', async () => {
+    for (const sourceBlocks of [[], null, [block({ shift_assignments: [{ profile_id: 'p1', status: 'cancelled' }] })]]) {
+      const db = leaveDb(5)
+      const { isOnLeave, error } = await fetchLeaveLookup(db, { sourceBlocks, ...RANGE })
+      expect(error).toBeNull()
+      expect(db.calls).toHaveLength(0)
+      expect(isOnLeave('p1', '2026-07-06')).toBe(false)
+    }
+  })
+
+  it('a failed read returns the error and NO lookup, so a caller cannot copy blind by accident', async () => {
+    const db = leaveDb(5, { fail: true })
+    expect(await fetchLeaveLookup(db, { sourceBlocks: [block({ shift_assignments: [{ profile_id: 'p1', status: 'scheduled' }] })], ...RANGE }))
+      .toEqual({ isOnLeave: null, error: { message: 'leave boom' } })
   })
 })
 

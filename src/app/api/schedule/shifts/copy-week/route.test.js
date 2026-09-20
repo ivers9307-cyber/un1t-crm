@@ -21,7 +21,7 @@ vi.mock('@/lib/auth', async (importOriginal) => {
 // run for real so the route's mode wiring is what's under test.
 vi.mock('@/lib/roster-copy', async () => {
   const actual = await vi.importActual('@/lib/roster-copy')
-  return { ...actual, fetchSourceBlocks: vi.fn(), fetchApprovedLeave: vi.fn() }
+  return { ...actual, fetchSourceBlocks: vi.fn(), fetchLeaveLookup: vi.fn() }
 })
 vi.mock('@/lib/roster-write', () => ({ bulkUpsertShiftAssignments: vi.fn() }))
 // SLOTREMOVAL.1 — the removals read is mocked; everything else in roster is real.
@@ -40,7 +40,9 @@ vi.mock('next/server', async () => {
 
 const { createServerClient } = await import('@/lib/supabase')
 const { getCurrentUser } = await import('@/lib/auth')
-const { fetchSourceBlocks, fetchApprovedLeave } = await import('@/lib/roster-copy')
+const { fetchSourceBlocks, fetchLeaveLookup, approvedLeaveLookup } = await import('@/lib/roster-copy')
+// COPYLEAVE.1 — what the (mocked) leave read answers: the REAL lookup over these rows.
+const onLeave = (rows) => ({ isOnLeave: approvedLeaveLookup(rows), error: null })
 const { bulkUpsertShiftAssignments } = await import('@/lib/roster-write')
 const { fetchSlotRemovalKeys } = await import('@/lib/roster')
 const { readAssignmentKeysInRange, logAndNotifyCopiedShifts } = await import('@/lib/roster-change-notify')
@@ -72,8 +74,8 @@ beforeEach(() => {
   getCurrentUser.mockReset()
   getCurrentUser.mockResolvedValue({ id: 'mgr-1', role: 'manager', profileRole: 'manager', locations: [{ id: LOC }], activeLocation: { id: LOC }, rolesByLocation: { [LOC]: 'manager' } })
   fetchSourceBlocks.mockReset()
-  fetchApprovedLeave.mockReset()
-  fetchApprovedLeave.mockResolvedValue({ leave: [], error: null })
+  fetchLeaveLookup.mockReset()
+  fetchLeaveLookup.mockResolvedValue(onLeave([]))
   bulkUpsertShiftAssignments.mockReset()
   readAssignmentKeysInRange.mockReset()
   logAndNotifyCopiedShifts.mockClear()
@@ -340,20 +342,19 @@ describe('POST /api/schedule/shifts/copy-week — approved leave', () => {
 
   it('reads leave for the source coaches over the TARGET week, before anything is written', async () => {
     await POST(req(BODY))
-    expect(fetchApprovedLeave).toHaveBeenCalledTimes(1)
-    const [, args] = fetchApprovedLeave.mock.calls[0]
-    expect([...args.profileIds].sort()).toEqual(['coach-1', 'coach-2'])
+    expect(fetchLeaveLookup).toHaveBeenCalledTimes(1)
+    const [, args] = fetchLeaveLookup.mock.calls[0]
+    // The source blocks go in whole; which coaches that means is
+    // fetchLeaveLookup's business (roster-copy.test.js).
+    expect(args.sourceBlocks.flatMap((b) => b.shift_assignments.map((a) => a.profile_id)).sort()).toEqual(['coach-1', 'coach-2'])
     expect(args).toMatchObject({ startDate: '2026-06-08', endDate: '2026-06-14' })
-    expect(fetchApprovedLeave.mock.invocationCallOrder[0])
+    expect(fetchLeaveLookup.mock.invocationCallOrder[0])
       .toBeLessThan(bulkUpsertShiftAssignments.mock.invocationCallOrder[0])
   })
 
   it('does not send the coach on leave to the writer, and reports the skip', async () => {
     // The source block is Mon 1 Jun, so the target is Mon 8 Jun.
-    fetchApprovedLeave.mockResolvedValue({
-      leave: [{ id: 'l1', profile_id: 'coach-1', status: 'approved', start_date: '2026-06-08', end_date: '2026-06-09' }],
-      error: null,
-    })
+    fetchLeaveLookup.mockResolvedValue(onLeave([{ id: 'l1', profile_id: 'coach-1', status: 'approved', start_date: '2026-06-08', end_date: '2026-06-09' }]))
     const res = await POST(req(BODY))
     const json = await res.json()
     expect(res.status).toBe(201)
@@ -364,10 +365,7 @@ describe('POST /api/schedule/shifts/copy-week — approved leave', () => {
   // Review — copy-month had this; template mode takes a different loop in
   // buildCopyPlan, so the week route pins it too.
   it('template mode: the coach on leave is not sent to the writer, at template times, and the skip is reported', async () => {
-    fetchApprovedLeave.mockResolvedValue({
-      leave: [{ id: 'l1', profile_id: 'coach-2', status: 'approved', start_date: '2026-06-08', end_date: '2026-06-08' }],
-      error: null,
-    })
+    fetchLeaveLookup.mockResolvedValue(onLeave([{ id: 'l1', profile_id: 'coach-2', status: 'approved', start_date: '2026-06-08', end_date: '2026-06-08' }]))
     const res = await POST(req({ ...BODY, mode: 'template' }))
     const json = await res.json()
     expect(res.status).toBe(201)
@@ -378,7 +376,7 @@ describe('POST /api/schedule/shifts/copy-week — approved leave', () => {
   })
 
   it('500s and writes NOTHING when the leave read fails: copying blind is the bug', async () => {
-    fetchApprovedLeave.mockResolvedValue({ leave: [], error: { message: 'leave boom' } })
+    fetchLeaveLookup.mockResolvedValue({ isOnLeave: null, error: { message: 'leave boom' } })
     const res = await POST(req(BODY))
     expect(res.status).toBe(500)
     expect((await res.json()).error).toBe('leave boom')
@@ -391,9 +389,9 @@ describe('POST /api/schedule/shifts/copy-week — approved leave', () => {
     fetchSourceBlocks.mockResolvedValue({ blocks: [sourceBlock([])], error: null })
     const res = await POST(req(BODY))
     expect(res.status).toBe(404)
-    // Called, but with no coaches, so the real fetchApprovedLeave makes no
-    // query (pinned in roster-copy.test.js, "no coaches = no query").
-    expect(fetchApprovedLeave).toHaveBeenCalledTimes(1)
-    expect(fetchApprovedLeave.mock.calls[0][1].profileIds).toEqual([])
+    // Called, but with blocks nobody is on, so the real fetchLeaveLookup makes
+    // no query (pinned in roster-copy.test.js, "no coaches = no query").
+    expect(fetchLeaveLookup).toHaveBeenCalledTimes(1)
+    expect(fetchLeaveLookup.mock.calls[0][1].sourceBlocks.flatMap((b) => b.shift_assignments)).toEqual([])
   })
 })

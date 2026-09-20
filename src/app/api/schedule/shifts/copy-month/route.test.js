@@ -21,7 +21,7 @@ vi.mock('@/lib/auth', async (importOriginal) => {
 // run for real so the route's mode wiring is what's under test.
 vi.mock('@/lib/roster-copy', async () => {
   const actual = await vi.importActual('@/lib/roster-copy')
-  return { ...actual, fetchSourceBlocks: vi.fn(), fetchApprovedLeave: vi.fn() }
+  return { ...actual, fetchSourceBlocks: vi.fn(), fetchLeaveLookup: vi.fn() }
 })
 vi.mock('@/lib/roster-write', () => ({ bulkUpsertShiftAssignments: vi.fn() }))
 // SLOTREMOVAL.1 — the removals read is mocked; everything else in roster is real.
@@ -40,7 +40,9 @@ vi.mock('next/server', async () => {
 
 const { createServerClient } = await import('@/lib/supabase')
 const { getCurrentUser } = await import('@/lib/auth')
-const { fetchSourceBlocks, fetchApprovedLeave } = await import('@/lib/roster-copy')
+const { fetchSourceBlocks, fetchLeaveLookup, approvedLeaveLookup } = await import('@/lib/roster-copy')
+// COPYLEAVE.1 — what the (mocked) leave read answers: the REAL lookup over these rows.
+const onLeave = (rows) => ({ isOnLeave: approvedLeaveLookup(rows), error: null })
 const { bulkUpsertShiftAssignments } = await import('@/lib/roster-write')
 const { fetchSlotRemovalKeys } = await import('@/lib/roster')
 const { readAssignmentKeysInRange, logAndNotifyCopiedShifts } = await import('@/lib/roster-change-notify')
@@ -72,8 +74,8 @@ beforeEach(() => {
   getCurrentUser.mockReset()
   getCurrentUser.mockResolvedValue({ id: 'mgr-1', role: 'manager', profileRole: 'manager', locations: [{ id: LOC }], activeLocation: { id: LOC }, rolesByLocation: { [LOC]: 'manager' } })
   fetchSourceBlocks.mockReset()
-  fetchApprovedLeave.mockReset()
-  fetchApprovedLeave.mockResolvedValue({ leave: [], error: null })
+  fetchLeaveLookup.mockReset()
+  fetchLeaveLookup.mockResolvedValue(onLeave([]))
   bulkUpsertShiftAssignments.mockReset()
   readAssignmentKeysInRange.mockReset()
   logAndNotifyCopiedShifts.mockClear()
@@ -332,26 +334,20 @@ describe('POST /api/schedule/shifts/copy-month — approved leave', () => {
 
   it('reads leave over the whole TARGET month', async () => {
     await POST(req(BODY))
-    const [, args] = fetchApprovedLeave.mock.calls[0]
-    expect([...args.profileIds].sort()).toEqual(['coach-1', 'coach-2'])
+    const [, args] = fetchLeaveLookup.mock.calls[0]
+    expect(args.sourceBlocks.flatMap((b) => b.shift_assignments.map((a) => a.profile_id)).sort()).toEqual(['coach-1', 'coach-2'])
     expect(args).toMatchObject({ startDate: '2026-07-01', endDate: '2026-07-31' })
   })
 
   it('skips the coach who is off on the mapped day and reports it', async () => {
-    fetchApprovedLeave.mockResolvedValue({
-      leave: [{ id: 'l1', profile_id: 'coach-2', status: 'approved', start_date: '2026-07-04', end_date: '2026-07-06' }],
-      error: null,
-    })
+    fetchLeaveLookup.mockResolvedValue(onLeave([{ id: 'l1', profile_id: 'coach-2', status: 'approved', start_date: '2026-07-04', end_date: '2026-07-06' }]))
     const json = await (await POST(req(BODY))).json()
     expect(bulkUpsertShiftAssignments.mock.calls[0][1].rows.map((r) => [r.profileId, r.shiftDate])).toEqual([['coach-1', '2026-07-05']])
     expect(json).toMatchObject({ success: true, skipped: 1, skipped_on_leave: 1 })
   })
 
   it('template mode with EVERY coach on leave: 201, copied 0, the skip is named, nothing is written', async () => {
-    fetchApprovedLeave.mockResolvedValue({
-      leave: ['coach-1', 'coach-2'].map((id) => ({ id: `l-${id}`, profile_id: id, status: 'approved', start_date: '2026-07-01', end_date: '2026-07-31' })),
-      error: null,
-    })
+    fetchLeaveLookup.mockResolvedValue(onLeave(['coach-1', 'coach-2'].map((id) => ({ id: `l-${id}`, profile_id: id, status: 'approved', start_date: '2026-07-01', end_date: '2026-07-31' }))))
     const res = await POST(req({ ...BODY, mode: 'template' }))
     expect(res.status).toBe(201)
     expect(await res.json()).toEqual({ success: true, copied: 0, skipped: 2, skipped_removed: 0, skipped_on_leave: 2, mode: 'template' })
@@ -359,7 +355,7 @@ describe('POST /api/schedule/shifts/copy-month — approved leave', () => {
   })
 
   it('500s and writes nothing when the leave read fails', async () => {
-    fetchApprovedLeave.mockResolvedValue({ leave: [], error: { message: 'leave boom' } })
+    fetchLeaveLookup.mockResolvedValue({ isOnLeave: null, error: { message: 'leave boom' } })
     const res = await POST(req(BODY))
     expect(res.status).toBe(500)
     expect(bulkUpsertShiftAssignments).not.toHaveBeenCalled()
