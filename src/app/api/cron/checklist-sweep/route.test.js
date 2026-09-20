@@ -16,17 +16,19 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // One thenable builder per from() call: chain methods no-op, awaiting
 // resolves the table's rows.
 let tables = {}
-function makeBuilder(rows) {
+// COVERLOOP.1 — a table named here resolves { data: null, error } instead.
+let tableErrors = {}
+function makeBuilder(rows, error = null) {
   const b = {}
   for (const m of ['select', 'eq', 'not', 'lte', 'order', 'limit']) b[m] = () => b
-  b.then = (resolve) => Promise.resolve({ data: rows, error: null }).then(resolve)
+  b.then = (resolve) => Promise.resolve(error ? { data: null, error } : { data: rows, error: null }).then(resolve)
   return b
 }
-const fakeDb = { from: (t) => makeBuilder(tables[t] ?? []) }
+const fakeDb = { from: (t) => makeBuilder(tables[t] ?? [], tableErrors[t] ?? null) }
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => fakeDb }))
 vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: vi.fn(() => Promise.resolve()) }))
-vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
+vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn() }))
 vi.mock('@/lib/audit', () => ({ logAuditEvent: vi.fn(async () => ({ logged: true })) }))
 vi.mock('@/lib/push', () => ({
   sendPush: vi.fn(async () => ({ sent: 1 })),
@@ -39,9 +41,19 @@ vi.mock('@/lib/checklist-sweep', () => ({
   isEligibleForSweep: vi.fn(() => ({ eligible: true })),
   markIncomplete: vi.fn(async () => true),
 }))
+// COVERLOOP.1 — the swap cover arm. Its behaviour is pinned in
+// src/lib/swap-cover-server.test.js; here it is a spy.
+vi.mock('@/lib/swap-cover-server', () => ({
+  runSwapCoverSweep: vi.fn(async () => ({ open: 2, nudged: 1, expired: 1, skipped: 0, quiet: 0, errors: 0 })),
+}))
 
 import { GET } from './route.js'
 import { logAuditEvent } from '@/lib/audit'
+import { runSwapCoverSweep } from '@/lib/swap-cover-server'
+import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { markIncomplete } from '@/lib/checklist-sweep'
+import { sendPush } from '@/lib/push'
+import { logError } from '@/lib/log'
 
 const INSTANCE = {
   id: 'inst-1',
@@ -64,6 +76,7 @@ function req(auth = 'Bearer test-secret') {
 beforeEach(() => {
   process.env.CRON_SECRET = 'test-secret'
   tables = { checklist_instances: [INSTANCE] }
+  tableErrors = {}
   vi.clearAllMocks()
 })
 
@@ -92,5 +105,73 @@ describe('GET /api/cron/checklist-sweep', () => {
       locationId: 'loc-1',
       details: expect.objectContaining({ profile_id: 'prof-coach', items_missed: 1 }),
     }))
+  })
+})
+
+// COVERLOOP.1 — the swap cover sweep rides this cron (see the route header for
+// why). It must run every tick and report its counts, and the two arms must be
+// ISOLATED in both directions: neither one failing may stop the other, and a
+// failed swap arm must be visible in the response, never a silent success.
+describe('GET /api/cron/checklist-sweep — swap cover arm', () => {
+  it('runs the swap cover sweep with the cron\'s db and reports its counts', async () => {
+    const res = await GET(req())
+    const body = await res.json()
+    expect(runSwapCoverSweep).toHaveBeenCalledTimes(1)
+    expect(runSwapCoverSweep).toHaveBeenCalledWith(fakeDb)
+    expect(body.swap_cover).toEqual({ open: 2, nudged: 1, expired: 1, skipped: 0, quiet: 0, errors: 0 })
+    expect(body.swap_sweep_failed).toBe(0)
+    expect(stampHeartbeat).toHaveBeenCalledWith('checklist-sweep')
+  })
+
+  it('runs it even when no checklist was overdue', async () => {
+    tables = { checklist_instances: [] }
+    await GET(req())
+    expect(runSwapCoverSweep).toHaveBeenCalledTimes(1)
+  })
+
+  it('a THROWING swap arm cannot stop the checklist arm: it is logged, flagged in the response, and the heartbeat is still stamped', async () => {
+    runSwapCoverSweep.mockRejectedValueOnce(new Error('boom'))
+    const res = await GET(req())
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(body).toMatchObject({ success: true, swap_cover: null, swap_sweep_failed: 1, stats: expect.objectContaining({ swept: 1 }) })
+    expect(sendPush).toHaveBeenCalledTimes(1)
+    expect(logAuditEvent).toHaveBeenCalledTimes(1)
+    expect(logError).toHaveBeenCalledWith('cron-checklist-sweep', expect.any(String), expect.objectContaining({ err: 'boom' }))
+    expect(stampHeartbeat).toHaveBeenCalledWith('checklist-sweep')
+  })
+
+  it('a swap arm that RETURNS errors (it could not read the open swaps) is flagged too', async () => {
+    runSwapCoverSweep.mockResolvedValueOnce({ open: 0, nudged: 0, expired: 0, skipped: 0, quiet: 0, errors: 1 })
+    const body = await (await GET(req())).json()
+    expect(body).toMatchObject({ success: true, swap_sweep_failed: 1, swap_cover: expect.objectContaining({ errors: 1 }) })
+  })
+
+  it('an unreadable checklist table cannot stop the swap arm: still a 500, no heartbeat, but the swaps were swept', async () => {
+    tableErrors = { checklist_instances: { message: 'checklists down' } }
+    const res = await GET(req())
+    const body = await res.json()
+    expect(res.status).toBe(500)
+    expect(body).toMatchObject({ success: false, error: 'checklists down', swap_sweep_failed: 0 })
+    expect(body.swap_cover).toMatchObject({ open: 2 })
+    expect(runSwapCoverSweep).toHaveBeenCalledTimes(1)
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+
+  it('a THROWING checklist arm cannot stop the swap arm either', async () => {
+    markIncomplete.mockRejectedValueOnce(new Error('network reset'))
+    const res = await GET(req())
+    const body = await res.json()
+    expect(res.status).toBe(500)
+    expect(body).toMatchObject({ success: false, error: 'network reset' })
+    expect(body.swap_cover).toMatchObject({ open: 2 })
+    expect(runSwapCoverSweep).toHaveBeenCalledTimes(1)
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+    expect(logError).toHaveBeenCalledWith('cron-checklist-sweep', expect.any(String), expect.objectContaining({ err: 'network reset' }))
+  })
+
+  it('does not run for an unauthorised caller', async () => {
+    await GET(req('Bearer nope'))
+    expect(runSwapCoverSweep).not.toHaveBeenCalled()
   })
 })

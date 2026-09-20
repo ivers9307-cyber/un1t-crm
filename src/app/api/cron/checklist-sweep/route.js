@@ -14,6 +14,24 @@
 // stops the loop. Push delivery itself is best-effort; sendPush
 // returns counts and never throws.
 //
+// COVERLOOP.1 — SECOND ARM: the swap cover sweep (src/lib/swap-cover-server.js
+// runSwapCoverSweep). It re-pushes a studio's approvers about an unresolved
+// swap at T-48h and T-12h, and closes a swap whose shift has started; outside
+// 07:00-22:00 studio time it does nothing and a later tick tries again. It
+// lives here rather than on a cron of its own because it is the same job in
+// the same domain at the same grain: a coach-owed thing whose deadline passed,
+// flipped with a status-guarded UPDATE, coach and managers pushed. vercel.json
+// already carries 79 crons.
+//
+// The two arms are ISOLATED, in both directions. The checklist arm runs first
+// (sweepChecklists) and whatever happens to it, an unreadable table or an
+// unexpected throw, the swap arm still runs; the swap arm runs inside its own
+// try/catch, so it can never cost the checklist sweep its response or its
+// heartbeat. The arm shares the 'checklist-sweep' heartbeat row, which still
+// means what it always meant: the CHECKLIST sweep succeeded. The swap arm's
+// own health is in the response: `swap_cover` (its counts, null if it threw)
+// and `swap_sweep_failed` (1 if it threw or reported errors), plus a logError.
+//
 // Auth: CRON_SECRET header, same pattern as the other crons.
 
 import { NextResponse } from 'next/server'
@@ -21,7 +39,7 @@ import { createServerClient } from '@/lib/supabase'
 import { sendPush, sendPushToRolesAtLocation } from '@/lib/push'
 import { logAuditEvent } from '@/lib/audit'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
-import { logWarn } from '@/lib/log'
+import { logWarn, logError } from '@/lib/log'
 import {
   COMPLIANCE_ROLES,
   listMissedItems,
@@ -29,6 +47,7 @@ import {
   isEligibleForSweep,
   markIncomplete,
 } from '@/lib/checklist-sweep'
+import { runSwapCoverSweep } from '@/lib/swap-cover-server'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -43,7 +62,6 @@ export async function GET(request) {
   }
 
   const db = createServerClient()
-  const nowIso = new Date().toISOString()
   const stats = {
     found: 0,
     swept: 0,
@@ -52,6 +70,47 @@ export async function GET(request) {
     push_compliance: 0,
     errors: 0,
   }
+
+  // Arm 1 — checklists. A throw is caught here ONLY so that arm 2 still runs;
+  // it is still answered as a 500 below, with no heartbeat, as it always was.
+  let checklistError = null
+  try {
+    checklistError = await sweepChecklists(db, stats)
+  } catch (e) {
+    checklistError = e?.message || 'checklist sweep threw'
+    logError('cron-checklist-sweep', 'checklist sweep threw', { err: e?.message })
+  }
+
+  // Arm 2 — COVERLOOP.1 swap cover (see the header). runSwapCoverSweep does
+  // not throw; the try/catch is for the day someone changes that.
+  let swapCover = null
+  let swapSweepFailed = 0
+  try {
+    swapCover = await runSwapCoverSweep(db)
+    if ((swapCover?.errors || 0) > 0) swapSweepFailed = 1
+  } catch (e) {
+    swapSweepFailed = 1
+    stats.errors++
+    logError('cron-checklist-sweep', 'swap cover sweep threw', { err: e?.message })
+  }
+
+  if (checklistError) {
+    return NextResponse.json(
+      { success: false, error: checklistError, swap_cover: swapCover, swap_sweep_failed: swapSweepFailed },
+      { status: 500 },
+    )
+  }
+
+  await stampHeartbeat('checklist-sweep').catch((err) =>
+    logWarn('cron-checklist-sweep', 'heartbeat failed', { err }))
+
+  return NextResponse.json({ success: true, stats, swap_cover: swapCover, swap_sweep_failed: swapSweepFailed })
+}
+
+// The checklist arm. Returns null on success, or the error message of an
+// unreadable checklist_instances read (the route answers that as a 500).
+async function sweepChecklists(db, stats) {
+  const nowIso = new Date().toISOString()
 
   // Pull pending instances whose deadline has passed. The partial
   // index (mig 215) makes this cheap.
@@ -69,9 +128,7 @@ export async function GET(request) {
     .order('deadline_at', { ascending: true })
     .limit(BATCH_LIMIT)
 
-  if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
-  }
+  if (error) return error.message
   stats.found = expired?.length || 0
 
   for (const row of expired || []) {
@@ -175,8 +232,5 @@ export async function GET(request) {
     })
   }
 
-  await stampHeartbeat('checklist-sweep').catch((err) =>
-    logWarn('cron-checklist-sweep', 'heartbeat failed', { err }))
-
-  return NextResponse.json({ success: true, stats })
+  return null
 }
