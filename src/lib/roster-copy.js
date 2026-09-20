@@ -156,18 +156,25 @@ export function liveCoachIds(sourceBlocks) {
  * @param {'exact'|'template'} opts.mode
  * @param {(sourceDate: string) => string|null} opts.mapDate  source block_date
  *   -> target date, or null when the day has no counterpart (skipped).
+ * @param {(profileId: string, targetDate: string) => boolean} [opts.isOnLeave]
+ *   COPYLEAVE.1 — approvedLeaveLookup(...). A live source coach on APPROVED
+ *   leave on the TARGET date is not copied; they count in `skipped` and in
+ *   `skippedOnLeave`. Omitted = nobody is on leave.
  * @returns {{
  *   rows: Array<object>,     // bulkUpsertShiftAssignments rows
  *   blocks: Array<object>,   // target blocks to ensure (exact mode only)
  *   skipped: number,         // live source assignments not copied
+ *   skippedOnLeave: number,  // the part of skipped that was approved leave
  *   sourceAssignments: number,
  * }}
  */
-export function buildCopyPlan(sourceBlocks, { mode, mapDate }) {
+export function buildCopyPlan(sourceBlocks, { mode, mapDate, isOnLeave = null }) {
   if (!COPY_MODES.includes(mode)) throw new Error(`unknown copy mode: ${mode}`)
+  const onLeave = typeof isOnLeave === 'function' ? isOnLeave : () => false
   const rows = []
   const blocks = []
   let skipped = 0
+  let skippedOnLeave = 0
   let sourceAssignments = 0
 
   for (const b of sourceBlocks || []) {
@@ -195,6 +202,9 @@ export function buildCopyPlan(sourceBlocks, { mode, mapDate }) {
         maxCoaches: b.max_coaches ?? null,
       })
       for (const a of live) {
+        // COPYLEAVE.1 — a coach on approved leave that day is not put back on
+        // it. The block above is still ensured, so the slot shows as a gap.
+        if (onLeave(a.profile_id, targetDate)) { skipped++; skippedOnLeave++; continue }
         rows.push({
           profileId: a.profile_id,
           shiftTemplateId: b.template_id,
@@ -224,6 +234,7 @@ export function buildCopyPlan(sourceBlocks, { mode, mapDate }) {
     // template, so a coach lands at the template's times either way and a
     // block at template times (the normal case) carries no override at all.
     for (const a of live) {
+      if (onLeave(a.profile_id, targetDate)) { skipped++; skippedOnLeave++; continue }
       rows.push({
         profileId: a.profile_id,
         shiftTemplateId: b.template_id,
@@ -237,7 +248,7 @@ export function buildCopyPlan(sourceBlocks, { mode, mapDate }) {
     }
   }
 
-  return { rows, blocks, skipped, sourceAssignments }
+  return { rows, blocks, skipped, skippedOnLeave, sourceAssignments }
 }
 
 // ── UI copy (shared by the schedule calendar's copy dialog) ─────────────────

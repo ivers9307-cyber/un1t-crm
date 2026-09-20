@@ -253,6 +253,64 @@ describe('buildCopyPlan — guard', () => {
   })
 })
 
+// COPYLEAVE.1 — Copy Last Week rostered coaches onto days they had booked off.
+describe('buildCopyPlan — approved leave on the TARGET date', () => {
+  const live = (id) => ({ profile_id: id, status: 'scheduled', notes: null, partial_reason: null, start_time_override: null, end_time_override: null })
+  // Source Mon 29 Jun -> target Mon 6 Jul. p1 is off on the 6th.
+  const isOnLeave = approvedLeaveLookup([
+    { profile_id: 'p1', status: 'approved', start_date: '2026-07-06', end_date: '2026-07-06' },
+  ])
+
+  for (const mode of ['exact', 'template']) {
+    it(`${mode}: the coach on leave is skipped and counted, the other coach is copied`, () => {
+      const plan = buildCopyPlan([block({ shift_assignments: [live('p1'), live('p2')] })], { mode, mapDate: weekMap, isOnLeave })
+      expect(plan.rows.map((r) => r.profileId)).toEqual(['p2'])
+      expect(plan.sourceAssignments).toBe(2)
+      expect(plan.skipped).toBe(1)
+      expect(plan.skippedOnLeave).toBe(1)
+    })
+  }
+
+  it('judges the TARGET date, not the source date', () => {
+    // p1 was off on the SOURCE Monday only. They worked it anyway (they are on
+    // the block), and the target Monday is a normal day: they are copied.
+    const offAtSource = approvedLeaveLookup([
+      { profile_id: 'p1', status: 'approved', start_date: '2026-06-29', end_date: '2026-06-29' },
+    ])
+    const plan = buildCopyPlan([block({ shift_assignments: [live('p1')] })], { mode: 'exact', mapDate: weekMap, isOnLeave: offAtSource })
+    expect(plan.rows.map((r) => r.profileId)).toEqual(['p1'])
+    expect(plan.skippedOnLeave).toBe(0)
+  })
+
+  it('exact: the slot is still ensured on the target when its only coach is on leave, so the gap is visible', () => {
+    const plan = buildCopyPlan([block({ shift_assignments: [live('p1')] })], { mode: 'exact', mapDate: weekMap, isOnLeave })
+    expect(plan.rows).toEqual([])
+    expect(plan.blocks.map((b) => b.shiftDate)).toEqual(['2026-07-06'])
+  })
+
+  it('PENDING leave does not skip anyone', () => {
+    const pendingOnly = approvedLeaveLookup([
+      { profile_id: 'p1', status: 'pending', start_date: '2026-07-06', end_date: '2026-07-06' },
+    ])
+    const plan = buildCopyPlan([block({ shift_assignments: [live('p1')] })], { mode: 'exact', mapDate: weekMap, isOnLeave: pendingOnly })
+    expect(plan.rows).toHaveLength(1)
+    expect(plan.skipped).toBe(0)
+    expect(plan.skippedOnLeave).toBe(0)
+  })
+
+  it('no isOnLeave option = today\'s behaviour, and skippedOnLeave is 0 not undefined', () => {
+    const plan = buildCopyPlan([block({ shift_assignments: [live('p1')] })], { mode: 'exact', mapDate: weekMap })
+    expect(plan.rows).toHaveLength(1)
+    expect(plan.skippedOnLeave).toBe(0)
+  })
+
+  it('a day with no counterpart is NOT counted as on leave (that skip has its own reason)', () => {
+    const plan = buildCopyPlan([block({ shift_assignments: [live('p1')] })], { mode: 'exact', mapDate: () => null, isOnLeave })
+    expect(plan.skipped).toBe(1)
+    expect(plan.skippedOnLeave).toBe(0)
+  })
+})
+
 describe('mapNthWeekdayOfMonth', () => {
   it('maps the first Monday to the first Monday', () => {
     // Aug 2026: Mon 3 is the first Monday. Sep 2026: Mon 7.
