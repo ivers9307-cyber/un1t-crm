@@ -19,6 +19,9 @@ vi.mock('@/lib/auth', async (importOriginal) => {
 })
 vi.mock('@/lib/push-dedup', () => ({ notifyUsersOnce: vi.fn(() => Promise.resolve()) }))
 vi.mock('@/lib/permissions', () => ({ hasPermissionForLocation: vi.fn(() => true) }))
+// LEAVEPHONE.1 — observed, not silenced for its own sake: who writes the
+// no-holiday-list warning (the POST) and who must not (the preview).
+vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
 
 const { createServerClient } = await import('@/lib/supabase')
 const { getCurrentUser } = await import('@/lib/auth')
@@ -27,6 +30,7 @@ const { GET, POST } = await import('./route.js')
 const { fakeDb, queriesOf } = await import('@/lib/time-off.test-helpers')
 const { notifyUsersOnce } = await import('@/lib/push-dedup')
 const { hasPermissionForLocation } = await import('@/lib/permissions')
+const { logWarn } = await import('@/lib/log')
 
 function req(body) {
   return { url: 'http://x/api/schedule/time-off', json: () => Promise.resolve(body), headers: { get: () => '' } }
@@ -764,6 +768,21 @@ describe('GET /api/schedule/time-off?preview=1 — charged days + own published 
     const res = await GET(getReq('?preview=1&type=holiday&start_date=2099-10-05&end_date=2099-10-09'))
     expect(res.status).toBe(500)
     expect((await res.json()).success).toBe(false)
+  })
+
+  it('a year with no national holiday list: the PREVIEW writes no warning, the POST still writes exactly one', async () => {
+    getCurrentUser.mockResolvedValue(USER)
+    createServerClient.mockReturnValue(previewDb())
+    logWarn.mockClear()
+    const res = await GET(getReq('?preview=1&type=holiday&start_date=2099-06-01&end_date=2099-06-05'))
+    expect(res.status).toBe(200)
+    expect(logWarn).not.toHaveBeenCalled()
+
+    const { db } = buildDb({})
+    createServerClient.mockReturnValue(db)
+    expect((await POST(req({ type: 'holiday', start_date: '2099-06-01', end_date: '2099-06-05' }))).status).toBe(201)
+    expect(logWarn).toHaveBeenCalledTimes(1)
+    expect(logWarn).toHaveBeenCalledWith('time-off', expect.stringMatching(/no national bank-holiday list/i), expect.objectContaining({ years: [2099] }))
   })
 
   it('401 without a session', async () => {

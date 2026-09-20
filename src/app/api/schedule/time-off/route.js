@@ -461,6 +461,9 @@ async function previewOwnLeave(user, searchParams) {
   const db = createServerClient()
   const { segments, total, error: daysError } = await chargeableLeaveSegments(db, {
     type: type.data, locationId, startIso: start, endIso: end,
+    // Asking is not requesting: the POST keeps the no-holiday-list warning,
+    // a preview fired on every calendar tap does not repeat it.
+    quiet: true,
   })
   if (daysError) return NextResponse.json({ success: false, error: daysError.message }, { status: 500 })
 

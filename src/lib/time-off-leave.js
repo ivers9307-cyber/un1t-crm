@@ -259,9 +259,14 @@ export async function ensureHolidayAllowanceRow(db, profileId, year) {
  * Only called for holiday-type requests. A year or country bank-holidays.js
  * has no list for is served (closures only) and logged once, never thrown.
  *
+ * LEAVEPHONE.1 — `quiet: true` skips that log and nothing else. The leave
+ * form's preview asks on every tap of the calendar and is not a request, so it
+ * must not write "this holiday request" once per tap; the POST (the default)
+ * still leaves its one trace per call.
+ *
  * @returns {Promise<{ dates: Set<string>|null, error: object|null }>}
  */
-export async function getNonWorkingDates(db, locationId, startIso, endIso) {
+export async function getNonWorkingDates(db, locationId, startIso, endIso, { quiet = false } = {}) {
   // Primary-key lookup; a missing row falls back to Ireland, as
   // GET /api/locations/[id]/holidays does.
   const { data: loc, error: locError } = await db
@@ -285,7 +290,7 @@ export async function getNonWorkingDates(db, locationId, startIso, endIso) {
   // is served with the studio's own closures and leaves one trace per call.
   const country = loc?.country || 'IE'
   const years = uncoveredHolidayYears(country, startIso, endIso)
-  if (years.length > 0) {
+  if (years.length > 0 && !quiet) {
     logWarn('time-off', 'no national bank-holiday list for this holiday request; only the studio\'s own closures were left uncharged', { locationId, country, years })
   }
 
@@ -326,13 +331,16 @@ export function isRealIsoDate(value) {
  * the POST refuses before it ever gets here (HOLIDAYLEAVE.1's "No studio"
  * 400); this is the same rule for any other caller, never a blind Mon-Fri.
  *
+ * `quiet` is for a caller that is only ASKING (the preview): same count, no
+ * no-holiday-list warning. The POST leaves it off and logs once per call.
+ *
  * @returns {Promise<{ segments: Array<{ s: string, e: string, days: number }>, total: number, error: object|null }>}
  */
-export async function chargeableLeaveSegments(db, { type, locationId, startIso, endIso }) {
+export async function chargeableLeaveSegments(db, { type, locationId, startIso, endIso, quiet = false }) {
   let nonWorkingDates = null
   if (type === 'holiday') {
     if (!locationId) return { segments: [], total: 0, error: { message: 'No studio to count holiday leave against' } }
-    const { dates, error } = await getNonWorkingDates(db, locationId, startIso, endIso)
+    const { dates, error } = await getNonWorkingDates(db, locationId, startIso, endIso, { quiet })
     if (error) return { segments: [], total: 0, error }
     nonWorkingDates = dates
   }

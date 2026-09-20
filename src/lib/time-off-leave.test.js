@@ -192,6 +192,16 @@ describe('getNonWorkingDates', () => {
       expect(logWarn.mock.calls[0][2]).toEqual({ locationId: 'loc-1', country: 'ZZ', years: [2026] })
     })
 
+    // LEAVEPHONE.1 — the leave form's preview asks on every tap of the
+    // calendar; it is not a request, so it must not write the request's warning.
+    it('quiet: the same dates, and NO warning', async () => {
+      const db = dbWith({ custom: [{ date: '2099-12-30', name: 'Studio closed' }] })
+      const { dates, error } = await getNonWorkingDates(db, 'loc-1', '2099-12-20', '2100-01-10', { quiet: true })
+      expect(error).toBeNull()
+      expect([...dates]).toEqual(['2099-12-30'])
+      expect(logWarn).not.toHaveBeenCalled()
+    })
+
     it('does not warn when the read itself failed: that is already an error', async () => {
       await getNonWorkingDates(dbWith({ country: 'ZZ', customError: { message: 'closures boom' } }), 'loc-1', '2026-06-01', '2026-06-07')
       expect(logWarn).not.toHaveBeenCalled()
@@ -331,6 +341,30 @@ describe('chargeableLeaveSegments — the one day count (LEAVEPHONE.1)', () => {
     expect(res).toEqual({ segments: [], total: 0, error: { message: 'boom' } })
     const loc = await chargeableLeaveSegments(holidayDb({ locError: { message: 'down' } }), { type: 'holiday', locationId: 'loc-1', startIso: '2026-06-01', endIso: '2026-06-07' })
     expect(loc).toEqual({ segments: [], total: 0, error: { message: 'down' } })
+  })
+})
+
+describe('chargeableLeaveSegments — who writes the no-holiday-list warning (LEAVEPHONE.1)', () => {
+  const db = () => fakeDb((q) => {
+    if (q.table === 'locations') return { data: { country: 'IE' }, error: null }
+    if (q.table === 'location_holidays') return { data: [], error: null }
+    throw new Error(q.table)
+  })
+  const args = { type: 'holiday', locationId: 'loc-1', startIso: '2099-12-20', endIso: '2100-01-10' }
+  beforeEach(() => logWarn.mockClear())
+
+  it('the default (the POST) warns exactly ONCE per call, however many year segments', async () => {
+    const res = await chargeableLeaveSegments(db(), args)
+    expect(res.segments).toHaveLength(2)
+    expect(logWarn).toHaveBeenCalledTimes(1)
+  })
+
+  it('quiet (the preview) counts the SAME days and writes nothing', async () => {
+    const loud = await chargeableLeaveSegments(db(), args)
+    logWarn.mockClear()
+    const quiet = await chargeableLeaveSegments(db(), { ...args, quiet: true })
+    expect(quiet).toEqual(loud)
+    expect(logWarn).not.toHaveBeenCalled()
   })
 })
 
