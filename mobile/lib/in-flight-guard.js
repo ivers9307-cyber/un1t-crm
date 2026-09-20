@@ -6,9 +6,9 @@
 // sees an error straight after a success). Hold one of these in a useRef:
 // begin() is true exactly once until end().
 //
-// Same shape as the latch COVERLOOP.2 adds to lib/swap-flow.js for the swap
-// post; that PR was not on main when this was written. Once both are, one
-// should re-export the other.
+// ONE owner: lib/swap-flow.js re-exports this for the swap post (COVERLOOP.2
+// shipped an identical copy there first). Everything that can throw, building
+// the request included, goes inside run(work).
 export function createInFlightGuard() {
   let busy = false
   function begin() {
