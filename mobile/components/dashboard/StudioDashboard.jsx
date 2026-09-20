@@ -13,6 +13,7 @@ import { fetchStudioDashboard, swapRowTitle } from '../../lib/dashboard-api'
 import {
   KpiCard, KpiRow, SectionHeader, PendingRow, ListCard,
 } from './cards'
+import RosterRunwayChip from './RosterRunwayChip'
 
 // Friendlier labels for the pipeline_stage_slug values than the raw
 // snake_case the DB stores. Anything not in the map falls back to a
@@ -86,6 +87,10 @@ export default function StudioDashboard({ refreshKey }) {
 
   return (
     <View>
+      {/* RUNWAY.1 — an upcoming week that is not built or not published.
+          Draws nothing when data.rosterRunway is null (ready, not a manager
+          here, or the read failed). */}
+      <RosterRunwayChip runway={data.rosterRunway} />
       <KpiRow>
         <KpiCard
           label="New leads this week"
