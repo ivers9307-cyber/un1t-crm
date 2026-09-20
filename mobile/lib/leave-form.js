@@ -72,10 +72,14 @@ export function pendingHolidayDays(requests, year, profileId = null) {
  * is unknown — then there is no "after", rather than a guessed one). `year`
  * (optional) is the year the leave starts in: an allowance still on screen for
  * a different year is not this request's balance, so it is hidden.
+ * `requestsKnown: false` says the coach's own request list could not be read:
+ * the pending sum is then UNKNOWN, not 0, and `remaining` alone overstates
+ * what the POST will judge — so there is no card rather than a generous one.
  */
-export function leaveBalanceView({ employmentType, allowance, requests, type, days, year: wantedYear = null, profileId = null }) {
+export function leaveBalanceView({ employmentType, allowance, requests, requestsKnown = true, type, days, year: wantedYear = null, profileId = null }) {
   if (isRestrictedEmployment(employmentType)) return null
   if (!allowance || allowance.not_applicable) return null
+  if (!requestsKnown) return null
   const year = Number(allowance.year)
   const remaining = Number(allowance.remaining)
   if (!Number.isFinite(year) || !Number.isFinite(remaining)) return null
@@ -99,7 +103,12 @@ export function leaveBalanceView({ employmentType, allowance, requests, type, da
   }
 }
 
-/** The balance card's words, from leaveBalanceView's numbers. null = no card. */
+/**
+ * The balance card's words, from leaveBalanceView's numbers. null = no card.
+ * `short` and "N days left" judge the START year's allowance only. The POST
+ * also refuses when the FOLLOWING year falls short, and the phone has not read
+ * that year's allowance, so the other-year note says it is checked on submit.
+ */
 export function leaveBalanceLines(view, type) {
   if (!view) return null
   const breakdown = [`${view.total} allowance${view.carriedOver ? ` + ${view.carriedOver} carried over` : ''}`, `${view.used} used`]
@@ -118,7 +127,7 @@ export function leaveBalanceLines(view, type) {
     breakdown: breakdown.join(' · '),
     request,
     otherYear: o > 0
-      ? `${o} of these days ${plural(o, 'falls', 'fall')} in ${view.year + 1} and ${plural(o, 'counts', 'count')} against that year’s allowance.`
+      ? `${o} of these days ${plural(o, 'falls', 'fall')} in ${view.year + 1} and ${plural(o, 'counts', 'count')} against that year’s allowance. That balance is checked when you submit.`
       : null,
   }
 }

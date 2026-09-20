@@ -97,6 +97,15 @@ describe('leaveBalanceView', () => {
     expect(leaveBalanceView({ ...base, year: 2026 })).not.toBeNull()
   })
 
+  // The allowance loaded but the coach's own request list did NOT: pending is
+  // unknown, and "remaining" alone overstates what the POST will judge
+  // (3 remaining - 3 pending reads "3 days available", then the POST 400s).
+  it('hidden when the requests read failed — an unknown pending sum is never shown as 0', () => {
+    expect(leaveBalanceView({ ...base, requestsKnown: false })).toBeNull()
+    expect(leaveBalanceView({ ...base, requestsKnown: false, allowance: { ...ALLOWANCE, remaining: 3 }, requests: [] })).toBeNull()
+    expect(leaveBalanceView({ ...base, requestsKnown: true })).not.toBeNull()
+  })
+
   it('available = remaining minus pending; a holiday request shows what is left after it', () => {
     const requests = [{ type: 'holiday', status: 'pending', start_date: '2026-11-02', total_days: 3 }]
     expect(leaveBalanceView({ ...base, requests })).toEqual({
@@ -156,9 +165,9 @@ describe('leaveBalanceLines — the card\'s words', () => {
   })
   it('days in the next year are named against that year', () => {
     expect(leaveBalanceLines({ ...view, otherYearDays: 1 }, 'holiday').otherYear)
-      .toBe('1 of these days falls in 2027 and counts against that year’s allowance.')
+      .toBe('1 of these days falls in 2027 and counts against that year’s allowance. That balance is checked when you submit.')
     expect(leaveBalanceLines({ ...view, otherYearDays: 2 }, 'holiday').otherYear)
-      .toBe('2 of these days fall in 2027 and count against that year’s allowance.')
+      .toBe('2 of these days fall in 2027 and count against that year’s allowance. That balance is checked when you submit.')
   })
 })
 

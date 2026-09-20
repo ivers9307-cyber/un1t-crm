@@ -62,6 +62,9 @@ export default function TimeOffNew() {
   // server still enforces balance and overlap on submit).
   const [allowance, setAllowance] = useState(null)
   const [myRequests, setMyRequests] = useState([])
+  // false until the coach's own request list has really been read. A failed
+  // read is "pending unknown", not "nothing pending": no balance card then.
+  const [requestsKnown, setRequestsKnown] = useState(false)
   // The SERVER's answer for the current type + range: the days it would charge
   // and the coach's own published shifts inside it. The phone counts nothing.
   const [preview, setPreview] = useState(() => leavePreviewFrom(null))
@@ -80,10 +83,12 @@ export default function TimeOffNew() {
       getMyTimeOff({ profileId: profile.id }),
     ]).then(([a, t]) => {
       if (!live) return
+      const known = !!t?.success && Array.isArray(t.data)
       setAllowance(a?.success && a.data ? a.data : null)
-      setMyRequests(t?.success && Array.isArray(t.data) ? t.data : [])
+      setMyRequests(known ? t.data : [])
+      setRequestsKnown(known)
     }).catch(() => {
-      if (live) { setAllowance(null); setMyRequests([]) }
+      if (live) { setAllowance(null); setMyRequests([]); setRequestsKnown(false) }
     })
     return () => { live = false }
   }, [hasAllowance, profile?.id, activeLocation?.id, allowanceYear])
@@ -109,7 +114,7 @@ export default function TimeOffNew() {
   }, [type, start, end, activeLocation?.id])
 
   const balance = leaveBalanceLines(leaveBalanceView({
-    employmentType: profile?.employment_type, allowance, requests: myRequests, type,
+    employmentType: profile?.employment_type, allowance, requests: myRequests, requestsKnown, type,
     days: previewLoading ? null : preview.days, year: allowanceYear, profileId: profile?.id,
   }), type)
   const clashes = previewLoading ? null : leaveClashSummary(preview)
