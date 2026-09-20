@@ -94,7 +94,10 @@ describe('GET /api/cron/equipment-inspection-reminder', () => {
     expect(sendPushToRolesAtLocation).not.toHaveBeenCalled()
   })
 
-  it('sends exactly one push with category notify_inspection_due when something is outstanding', async () => {
+  // The category is BARE: resolvePushAllowedIds prepends `notify_` itself, so
+  // a prefixed literal gates on the unregistered `notify_notify_inspection_due`
+  // and the push reaches nobody but masters (PUSHCAT.1).
+  it('sends exactly one push with the bare category inspection_due when something is outstanding', async () => {
     listEnabledSettings.mockResolvedValue([TUESDAY_SETTINGS])
     listActiveEquipment.mockResolvedValue(ASSETS)
     listSubmittedSince.mockResolvedValue([])
@@ -103,7 +106,7 @@ describe('GET /api/cron/equipment-inspection-reminder', () => {
     expect(sendPushToRolesAtLocation).toHaveBeenCalledWith(
       'loc-tue',
       expect.any(Array),
-      expect.objectContaining({ category: 'notify_inspection_due' })
+      expect.objectContaining({ category: 'inspection_due' })
     )
   })
 
