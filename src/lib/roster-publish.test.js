@@ -29,7 +29,7 @@ import {
   supersedeEmptyTrimmedRosters,
 } from './roster-publish'
 
-function mockDb({ location, locationsById = null, failLocationIds = [], contractors = [], blocks = [], timeOff = [] }) {
+function mockDb({ location, locationsById = null, failLocationIds = [], contractors = [], blocks = [], timeOff = [], otherAssignments = [], failOtherAssignments = false }) {
   // Mock the chained Supabase queries the helper makes:
   //   from('locations').select(...).eq(...).single() → location
   //   from('profile_locations').select(...).eq(...) → contractor links
@@ -37,10 +37,12 @@ function mockDb({ location, locationsById = null, failLocationIds = [], contract
   const calls = []
   const blockQueries = []
   const leaveQueries = []
+  const assignmentQueries = []
   return {
     calls,
     blockQueries,
     leaveQueries,
+    assignmentQueries,
     from(table) {
       calls.push(table)
       if (table === 'locations') {
@@ -78,7 +80,7 @@ function mockDb({ location, locationsById = null, failLocationIds = [], contract
           select: () => chain,
           eq: () => chain,
           // LEAVE.2 — scoped by the person (filed here OR a member here).
-          or: () => chain,
+          or: (expr) => { f.or = expr; return chain },
           order: () => chain,
           lte: (_c, v) => { f.startLte = v; return chain },
           gte: (_c, v) => { f.endGte = v; return chain },
@@ -113,6 +115,31 @@ function mockDb({ location, locationsById = null, failLocationIds = [], contract
               .slice(f.from, f.to + 1),
             error: null,
           }).then(onF, onR),
+        }
+        return chain
+      }
+      // COPYLEAVE.1 — the same coaches' live shifts at OTHER studios.
+      if (table === 'shift_assignments') {
+        const f = { profileIds: null, notLoc: null, gte: null, lte: null, from: 0, to: Infinity }
+        assignmentQueries.push(f)
+        const chain = {
+          select: () => chain,
+          in: (_c, v) => { f.profileIds = v; return chain },
+          neq: (_c, v) => { f.notLoc = v; return chain },
+          gte: (_c, v) => { f.gte = v; return chain },
+          lte: (_c, v) => { f.lte = v; return chain },
+          order: () => chain,
+          range: (from, to) => { f.from = from; f.to = to; return chain },
+          then: (onF, onR) => Promise.resolve(failOtherAssignments
+            ? { data: null, error: { message: 'other studios unreadable' } }
+            : {
+              data: otherAssignments
+                .filter((a) => f.profileIds.includes(a.profile_id))
+                .filter((a) => a.shift_blocks.location_id !== f.notLoc)
+                .filter((a) => a.shift_blocks.block_date >= f.gte && a.shift_blocks.block_date <= f.lte)
+                .slice(f.from, f.to + 1),
+              error: null,
+            }).then(onF, onR),
         }
         return chain
       }
@@ -407,6 +434,100 @@ describe('projectPublishImpact — per-assignment overrides and approved leave',
   })
 })
 
+// COPYLEAVE.1 — the preview names who is rostered on leave and who is
+// double-booked. Advisory: neither changes overBudget or blocks anything.
+describe('projectPublishImpact — leave clashes and double bookings', () => {
+  const PERIOD = { locationId: 'loc1', periodStart: '2026-05-04', periodEnd: '2026-05-10', todayIso: '2026-05-01' }
+  const named = (id, name, over = {}) => ({ profile_id: id, status: 'scheduled', profiles: { full_name: name }, ...over })
+  const elsewhere = (profileId, date, start, end) => ({
+    id: `oa-${profileId}`, profile_id: profileId, status: 'scheduled', start_time_override: null, end_time_override: null,
+    shift_blocks: { id: 'ob1', location_id: 'loc2', block_date: date, start_time: start, end_time: end, shift_templates: { name: 'Open Gym' }, locations: { name: 'Studio B' } },
+  })
+
+  it('lists a coach rostered on approved leave, and still costs them at zero', async () => {
+    const db = mockDb({
+      location: { id: 'loc1', monthly_contractor_budget_eur: 500 },
+      contractors: [dan],
+      blocks: [block({ id: 'b1', date: '2026-05-06', start: '09:00', end: '11:00', coaches: [named('dan', 'Coach D')] })],
+      timeOff: [{ id: 't1', profile_id: 'dan', start_date: '2026-05-04', end_date: '2026-05-08' }],
+    })
+    const r = await projectPublishImpact(db, PERIOD)
+    expect(r.leaveClashes).toEqual([{
+      block_id: 'b1', block_date: '2026-05-06', start_time: '09:00', end_time: '11:00', name: 'Shift',
+      profile_id: 'dan', coach_name: 'Coach D', leave_start: '2026-05-04', leave_end: '2026-05-08',
+    }])
+    expect(r.periodProjectedEur).toBe(0)
+    expect(r.overBudget).toBe(false)
+  })
+
+  it('lists a double booking against a shift at ANOTHER studio', async () => {
+    const db = mockDb({
+      location: { id: 'loc1', monthly_contractor_budget_eur: null },
+      contractors: [dan],
+      blocks: [block({ id: 'b1', date: '2026-05-06', start: '09:00', end: '11:00', coaches: [named('dan', 'Coach D')] })],
+      otherAssignments: [elsewhere('dan', '2026-05-06', '10:00:00', '12:00:00')],
+    })
+    const r = await projectPublishImpact(db, PERIOD)
+    expect(r.crossLocationChecked).toBe(true)
+    expect(r.doubleBookings).toHaveLength(1)
+    expect(r.doubleBookings[0]).toMatchObject({
+      coach_name: 'Coach D', block_date: '2026-05-06',
+      second: { name: 'Open Gym', location_name: 'Studio B', start_time: '10:00', end_time: '12:00' },
+    })
+    // The read asked for THESE coaches, NOT this studio, over the loaded months.
+    expect(db.assignmentQueries).toHaveLength(1)
+    expect(db.assignmentQueries[0]).toMatchObject({ profileIds: ['dan'], notLoc: 'loc1', gte: '2026-05-01', lte: '2026-05-31' })
+  })
+
+  it('both lists are empty arrays, never undefined, on a clean week', async () => {
+    const db = mockDb({
+      location: { id: 'loc1', monthly_contractor_budget_eur: null },
+      contractors: [dan],
+      blocks: [block({ id: 'b1', date: '2026-05-06', start: '09:00', end: '11:00', coaches: ['dan'] })],
+    })
+    const r = await projectPublishImpact(db, PERIOD)
+    expect(r.leaveClashes).toEqual([])
+    expect(r.doubleBookings).toEqual([])
+    expect(r.crossLocationChecked).toBe(true)
+  })
+
+  it('a week with nobody rostered makes no other-studio query', async () => {
+    const db = mockDb({
+      location: { id: 'loc1', monthly_contractor_budget_eur: null },
+      blocks: [block({ id: 'b1', date: '2026-05-06', start: '09:00', end: '11:00' })],
+    })
+    await projectPublishImpact(db, PERIOD)
+    expect(db.assignmentQueries).toHaveLength(0)
+  })
+
+  // The advisory must never take the budget gate down with it.
+  it('an unreadable other-studio list does NOT throw: same-studio clashes still show and the gap is flagged', async () => {
+    const db = mockDb({
+      location: { id: 'loc1', monthly_contractor_budget_eur: 500 },
+      contractors: [dan],
+      failOtherAssignments: true,
+      blocks: [
+        block({ id: 'b1', date: '2026-05-06', start: '09:00', end: '11:00', coaches: [named('dan', 'Coach D')] }),
+        block({ id: 'b2', date: '2026-05-06', start: '10:00', end: '12:00', coaches: [named('dan', 'Coach D')] }),
+      ],
+    })
+    const r = await projectPublishImpact(db, PERIOD)
+    expect(r.crossLocationChecked).toBe(false)
+    expect(r.doubleBookings).toHaveLength(1)
+    expect(r.periodProjectedEur).toBe(140) // 2 x 2h x 35: the money is untouched
+  })
+
+  it('leave is scoped to the people ON the roster as well as the studio\'s members (a guest coach\'s leave counts)', async () => {
+    const db = mockDb({
+      location: { id: 'loc1', monthly_contractor_budget_eur: null },
+      contractors: [dan],
+      blocks: [block({ id: 'b1', date: '2026-05-06', start: '09:00', end: '11:00', coaches: [named('guest-1', 'Coach G')] })],
+    })
+    await projectPublishImpact(db, PERIOD)
+    expect(db.leaveQueries[0].or).toContain('guest-1')
+    expect(db.leaveQueries[0].or).toContain('dan')
+  })
+})
 
 // ROSTER-FIX.4 — the overlap guard. Two published rosters covering one day at
 // one location make "which roster published this day" unanswerable, because

@@ -22,6 +22,8 @@ import { liveAssignments } from './roster'
 import { staffingGaps } from './roster-staffing'
 import { dublinTodayStr } from './dublin-time'
 import { leaveScopeOrFilter } from './time-off-leave'
+import { logWarn } from './log'
+import { leaveCovering, leaveClashes, doubleBookings } from './roster-publish-advisories'
 
 function isoFirstOfMonth(iso) {
   return `${iso.slice(0, 7)}-01`
@@ -119,7 +121,7 @@ async function loadBudgetContext(db, locationId, periodStart, periodEnd = period
       .select(`
         id, location_id, block_date, start_time, end_time, roster_id, min_coaches,
         shift_templates(name),
-        shift_assignments(profile_id, status, start_time_override, end_time_override),
+        shift_assignments(profile_id, status, start_time_override, end_time_override, profiles:profile_id(full_name)),
         rosters:roster_id(id, status)
       `)
       .eq('location_id', locationId)
@@ -132,6 +134,11 @@ async function loadBudgetContext(db, locationId, periodStart, periodEnd = period
     monthBlocks.push(...(page || []))
     if (!page || page.length < BLOCK_PAGE_SIZE) break
   }
+
+  // COPYLEAVE.1 — everyone with a live shift on these blocks. Used twice
+  // below: to widen the leave scope to a guest coach (leave covers the PERSON,
+  // LEAVE.2), and to look for the same people's shifts at other studios.
+  const rosteredIds = [...new Set(monthBlocks.flatMap((b) => liveAssignments(b.shift_assignments).map((a) => a.profile_id)).filter(Boolean))]
 
   // ROSTER-FIX.4 — approved leave for the months, in ONE query. A coach on
   // approved leave is not working the shift they are still rostered on, so
@@ -148,7 +155,7 @@ async function loadBudgetContext(db, locationId, periodStart, periodEnd = period
     const { data: page, error: leaveErr } = await db
       .from('time_off_requests')
       .select('id, profile_id, start_date, end_date')
-      .or(leaveScopeOrFilter([locationId], (links || []).map((l) => l.profile_id)))
+      .or(leaveScopeOrFilter([locationId], [...(links || []).map((l) => l.profile_id), ...rosteredIds]))
       .eq('status', 'approved')
       .lte('start_date', monthEnd)
       .gte('end_date', monthStart)
@@ -166,6 +173,34 @@ async function loadBudgetContext(db, locationId, periodStart, periodEnd = period
     leaveByProfile.get(row.profile_id).push(row)
   }
 
+  // COPYLEAVE.1 — the same coaches' assignments at OTHER studios, for the
+  // double-booking advisory. Same shape and paging as readAssignmentsInRange
+  // (time-off-leave.js). FAILS SOFT: this function is also the hard budget
+  // gate for a real publish, and an advisory must never be able to refuse one.
+  // null = "could not check", which impactFromContext reports as
+  // crossLocationChecked: false rather than as "no clashes".
+  let otherAssignments = []
+  if (rosteredIds.length > 0) {
+    for (let from = 0; ; from += BLOCK_PAGE_SIZE) {
+      const { data: page, error: otherErr } = await db
+        .from('shift_assignments')
+        .select('id, profile_id, status, start_time_override, end_time_override, shift_blocks!inner(id, location_id, block_date, start_time, end_time, shift_templates(name), locations(name))')
+        .in('profile_id', rosteredIds)
+        .neq('shift_blocks.location_id', locationId)
+        .gte('shift_blocks.block_date', monthStart)
+        .lte('shift_blocks.block_date', monthEnd)
+        .order('id', { ascending: true })
+        .range(from, from + BLOCK_PAGE_SIZE - 1)
+      if (otherErr) {
+        logWarn('roster-publish', 'other-studio assignments unreadable; double-booking check is this studio only', { locationId, err: otherErr.message })
+        otherAssignments = null
+        break
+      }
+      otherAssignments.push(...(page || []))
+      if (!page || page.length < BLOCK_PAGE_SIZE) break
+    }
+  }
+
   return {
     location: loc,
     monthStart,
@@ -173,6 +208,7 @@ async function loadBudgetContext(db, locationId, periodStart, periodEnd = period
     contractorRateById,
     leaveByProfile,
     monthBlocks,
+    otherAssignments,
   }
 }
 
@@ -182,9 +218,7 @@ async function loadBudgetContext(db, locationId, periodStart, periodEnd = period
  * ISO YYYY-MM-DD strings, so string comparison IS date comparison.
  */
 function isOnLeave(leaveByProfile, profileId, dateIso) {
-  const rows = leaveByProfile?.get(profileId)
-  if (!rows) return false
-  return rows.some((r) => r.start_date <= dateIso && r.end_date >= dateIso)
+  return Boolean(leaveCovering(leaveByProfile, profileId, dateIso))
 }
 
 function blockContractorCost(block, contractorRateById, leaveByProfile) {
@@ -241,6 +275,10 @@ function blockContractorCost(block, contractorRateById, leaveByProfile) {
  *   blockCount: number,              // ROSTERVIS.1 — every block in the period
  *   staffingGaps: Array<{ block_id, block_date, start_time, end_time, name,
  *                         status: 'empty'|'short', count, min }>,
+ *   leaveClashes: Array<{ block_id, block_date, start_time, end_time, name,
+ *                         profile_id, coach_name, leave_start, leave_end }>,
+ *   doubleBookings: Array<{ profile_id, coach_name, block_date, first, second }>,
+ *   crossLocationChecked: boolean,
  *   months: Array<{
  *     monthStart, monthEnd, monthlyBudgetEur, alreadyPublishedEur,
  *     periodProjectedEur, monthProjectedTotalEur, remainingEur,
@@ -340,7 +378,7 @@ export async function projectPublishImpactBatch(db, periods, { todayIso = dublin
  * loads a span); everything below filters to the period's own months.
  */
 function impactFromContext(ctx, { periodStart, periodEnd, todayIso }) {
-  const { location, contractorRateById, leaveByProfile, monthBlocks } = ctx
+  const { location, contractorRateById, leaveByProfile, monthBlocks, otherAssignments } = ctx
 
   const budget = location?.monthly_contractor_budget_eur != null
     ? Number(location.monthly_contractor_budget_eur)
@@ -429,6 +467,12 @@ function impactFromContext(ctx, { periodStart, periodEnd, todayIso }) {
     blockCount: perMonth.reduce((s, m) => s + m.blockCount, 0),
     months: perMonth,
     staffingGaps: staffingGapsInPeriod,
+    // COPYLEAVE.1 — advisory, like staffingGaps: nothing here gates a publish.
+    leaveClashes: leaveClashes(monthBlocks, { from: periodStart, to: periodEnd, todayIso, leaveByProfile }),
+    doubleBookings: doubleBookings(monthBlocks, otherAssignments, { from: periodStart, to: periodEnd, todayIso }),
+    // false = the other-studio read failed, so doubleBookings covers this
+    // studio only. The modal says so instead of implying an all-clear.
+    crossLocationChecked: otherAssignments !== null,
   }
 }
 
