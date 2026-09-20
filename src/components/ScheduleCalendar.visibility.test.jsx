@@ -69,6 +69,9 @@ const STAFF = [
 const MANAGER = { id: 'u1', role: 'manager', activeLocation: { id: 'loc1', name: 'Stillorgan' } }
 const COACH = { id: 'u2', role: 'coach', activeLocation: { id: 'loc1', name: 'Stillorgan' } }
 
+// CHANGELOG.1 — what the drawer's read answers. Reassigned per test.
+let CHANGES = []
+
 function mockFetch({ blocks, drafts = [], impact = null }) {
   return vi.fn((url, opts) => {
     const u = String(url)
@@ -81,6 +84,7 @@ function mockFetch({ blocks, drafts = [], impact = null }) {
     else if (u.includes('contractor-spend')) body = { success: true, data: null }
     else if (u.includes('/api/schedule/week-cost')) body = { success: true, data: null }
     else if (u.includes('/api/schedule/rosters') && (!opts || opts.method !== 'POST')) body = { success: true, data: drafts }
+    else if (u.includes('/api/schedule/change-log')) body = { success: true, data: { changes: CHANGES, truncated: false } }
     else body = { success: true, impact }
     return Promise.resolve({ ok: true, json: () => Promise.resolve(body) })
   })
@@ -276,5 +280,78 @@ describe('publish preview clashes (COPYLEAVE.1)', () => {
     const text = screen.getByTestId('publish-roster-clashes').textContent
     expect(text).toMatch(/Some clash checks could not be completed\./)
     expect(text).not.toMatch(/other studios/)
+  })
+})
+
+describe('changes since publish (CHANGELOG.1)', () => {
+  const changeLogCalls = () => global.fetch.mock.calls.map(([u]) => String(u)).filter((u) => u.includes('/api/schedule/change-log'))
+
+  beforeEach(() => { CHANGES = [] })
+
+  it('the Published chip is a button that opens the drawer for the week on screen', async () => {
+    CHANGES = [{
+      id: 'c1', action: 'assigned', block_id: 'ok', block_date: BLOCK_DATE, start_time: '12:00:00', end_time: '13:00:00',
+      shift_name: 'Lunch', coach_id: 'u3', coach_name: 'Coach A', actor_name: 'Manager B',
+      details: {}, notified_at: null, created_at: `${BLOCK_DATE}T10:00:00.000+00:00`,
+    }]
+    await renderCalendar({ blocks: [SHORT_BLOCK, OK_BLOCK] })
+    const chip = screen.getByTestId('publication-status')
+    expect(chip.tagName).toBe('BUTTON')
+    expect(chip.getAttribute('type')).toBe('button')
+    // Nothing is fetched until it is asked for.
+    expect(changeLogCalls()).toHaveLength(0)
+
+    fireEvent.click(chip)
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText('Changes since publish')).toBeTruthy()
+    expect(await within(dialog).findByText(/Assigned Coach A to/)).toBeTruthy()
+
+    const sunday = new Date(`${isoMonday()}T00:00:00`)
+    sunday.setDate(sunday.getDate() + 6)
+    expect(changeLogCalls()).toEqual([`/api/schedule/change-log?location_id=loc1&from=${isoMonday()}&to=${iso(sunday)}`])
+  })
+
+  it('a partly published week opens it too', async () => {
+    await renderCalendar({ blocks: [SHORT_BLOCK, EMPTY_BLOCK, OK_BLOCK] })
+    expect(screen.getByTestId('publication-status').tagName).toBe('BUTTON')
+  })
+
+  it('an unpublished week has nothing to show: the chip stays plain text', async () => {
+    await renderCalendar({ blocks: [EMPTY_BLOCK] })
+    expect(screen.getByTestId('publication-status').tagName).toBe('SPAN')
+  })
+
+  it('closing the drawer returns to the calendar', async () => {
+    await renderCalendar({ blocks: [SHORT_BLOCK, OK_BLOCK] })
+    fireEvent.click(screen.getByTestId('publication-status'))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByText('Close'))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  })
+
+  it('focus goes back to the chip when the drawer closes', async () => {
+    await renderCalendar({ blocks: [SHORT_BLOCK, OK_BLOCK] })
+    const chip = screen.getByTestId('publication-status')
+    chip.focus() // fireEvent.click does not move focus the way a real click or Enter does
+    fireEvent.click(chip)
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog.contains(document.activeElement)).toBe(true)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(document.activeElement).toBe(screen.getByTestId('publication-status'))
+  })
+
+  it('the status is still a live region, and the button says what it opens', async () => {
+    await renderCalendar({ blocks: [SHORT_BLOCK, OK_BLOCK] })
+    const chip = screen.getByTestId('publication-status')
+    expect(chip.closest('[role="status"]')).toBeTruthy()
+    expect(chip.getAttribute('role')).toBeNull()
+    expect(chip.getAttribute('aria-haspopup')).toBe('dialog')
+    expect(chip.getAttribute('title')).toBe('See changes since publish')
+  })
+
+  it('a coach has no chip, so no way in', async () => {
+    await renderCalendar({ user: COACH, blocks: [SHORT_BLOCK, OK_BLOCK] })
+    expect(screen.queryByTestId('publication-status')).toBeNull()
   })
 })

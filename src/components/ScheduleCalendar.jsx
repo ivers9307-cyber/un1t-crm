@@ -65,6 +65,7 @@ import { COPY_MODE_OPTIONS, copyResultToast } from '@/lib/roster-copy'
 import { leaveClashesHeadline, leaveRangeLabel } from '@/lib/roster-publish-advisories'
 import RosterSummaryPanel from './RosterSummaryPanel'
 import ScheduleErrorBanner from './schedule/ScheduleErrorBanner'
+import RosterChangeLogDrawer from './schedule/RosterChangeLogDrawer'
 import { timeOffLeaveLabel } from '@shared/time-off'
 // ROSTER-FIX.6a — the six-endpoint fan-out, its error handling and its
 // request-ordering guard live in the hook now; see its header for why.
@@ -216,6 +217,10 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
   const [copyModal, setCopyModal] = useState(null)
   const [swapModal, setSwapModal] = useState(null) // legacy shift-shaped row to swap
   const [publishModal, setPublishModal] = useState(null) // { week, month: {start,end,label}, defaultScope }
+  // CHANGELOG.1 — { start, end, label } while the "Changes since publish"
+  // drawer is open. The period is captured at click time so the drawer keeps
+  // describing the period it was opened for.
+  const [changeLog, setChangeLog] = useState(null)
   // SCHEDULE-PUBLISH-GUARD.1 — roster edits made since the last publish.
   // Drives the "you have unpublished changes" exit guard below.
   //
@@ -1123,17 +1128,41 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
               : publication.status === 'partial'
                 ? ` (${publication.publishedCount} of ${publication.blockCount} shifts)`
                 : ''
+            // CHANGELOG.1 — a published (or partly published) period can have
+            // post-publish edits, so its chip opens the change log. The TEXT is
+            // identical either way; only the element differs. The live region
+            // sits on the wrapper so the button carries no conflicting role.
+            const canOpenLog = publication.status === 'published' || publication.status === 'partial'
+            const chipCls = `inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full border ${chip.cls}`
+            const chipBody = (
+              <>
+                <Icon size={12} aria-hidden="true" />
+                <span className="sr-only">{periodWord} status: </span>
+                {label}{extra}
+              </>
+            )
             return (
-              <div className="mt-1.5 flex justify-center">
-                <span
-                  role="status"
-                  data-testid="publication-status"
-                  className={`inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full border ${chip.cls}`}
-                >
-                  <Icon size={12} aria-hidden="true" />
-                  <span className="sr-only">{periodWord} status: </span>
-                  {label}{extra}
-                </span>
+              <div className="mt-1.5 flex justify-center" role="status">
+                {canOpenLog ? (
+                  <button
+                    type="button"
+                    data-testid="publication-status"
+                    aria-haspopup="dialog"
+                    title="See changes since publish"
+                    onClick={() => setChangeLog({
+                      start: visiblePeriodStart,
+                      end: visiblePeriodEnd,
+                      label: viewType === 'month' ? monthLabel : weekLabel,
+                    })}
+                    className={`${chipCls} cursor-pointer hover:brightness-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-600`}
+                  >
+                    {chipBody}
+                  </button>
+                ) : (
+                  <span data-testid="publication-status" className={chipCls}>
+                    {chipBody}
+                  </span>
+                )}
               </div>
             )
           })()}
@@ -1792,6 +1821,17 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
           onSubmit={submitPublish}
           onClose={() => setPublishModal(null)}
           publishing={publishing}
+        />
+      )}
+
+      {/* CHANGELOG.1 — Changes since publish */}
+      {changeLog && (
+        <RosterChangeLogDrawer
+          locationId={locationId}
+          periodStart={changeLog.start}
+          periodEnd={changeLog.end}
+          periodLabel={changeLog.label}
+          onClose={() => setChangeLog(null)}
         />
       )}
 
