@@ -96,6 +96,13 @@ Two implementers at a time is the ceiling on the 8GB machine. Good pairs (no sha
 - Class-timetable link, late and no-show alerts (gated on geofence coverage, 19% today), labour against revenue, publish snapshot, qualifications (Wave 3).
 - Found while planning, tracked separately: three equipment pushes pass a double-prefixed category and are suppressed for everyone but masters; the browser tab title is wrong estate-wide (root layout takes the first `company_settings.company_name` by `location_id`; PR 10 fixes `/schedule` only); `getCurrentUser()` ignores `profiles.active`; the staff assistant's `get_shifts_for_week` uses template times and no published filter (latent, assistant is off everywhere).
 
+## Amendments after the plan was written
+
+**20 Sep, PR 09 STAFFDELETE.1 (found by the implementer before any code was written; these override the text of `09-STAFFDELETE.1.md`):**
+
+1. **A tombstone does not keep its role.** `private.auth_is_master()` / `auth_role()` (mig 051) and dozens of inline policies decide from `profiles.role` alone, so a tombstoned master or owner whose login survives (`kept_*_login`, or a failed ban) would stay a master at the RLS layer. `tombstone_staff_profile()` therefore copies `role` into a new `deleted_role text` column and sets `role` to the least-privileged allowed value, in the same transaction. Readers the plan already touches use `deleted_role ?? role` for history.
+2. **"Upcoming" means not started, not "today or later".** The function takes `p_now timestamptz default now()` and removes an assignment only when `block_date` is after Dublin today, or is today with an effective start (`coalesce(start_time_override, shift_blocks.start_time)`) later than Dublin local time. A shift in progress or already worked today is history and stays, so `staff_attendance_events.matched_assignment_id` is never unlinked from a worked shift. The preview lists kept-today shifts separately.
+
 ## Self-review record (19 Sep)
 
 - Spec coverage: every Wave 1 item in the review and all six live defects map to a PR, except the assistant tool (latent, listed above).
