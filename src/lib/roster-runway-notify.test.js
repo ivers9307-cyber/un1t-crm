@@ -77,6 +77,11 @@ describe('isInRunwaySendWindow', () => {
     [Date.UTC(2026, 8, 19, 20, 59), 'Europe/Dublin', true], // 21:59
     [Date.UTC(2026, 8, 19, 21, 0), 'Europe/Dublin', false], // 22:00, exclusive
     [Date.UTC(2026, 8, 19, 23, 30), 'Europe/Dublin', false], // 00:30 next day
+    // To the SECOND: the band is [07:00:00, 22:00:00), not "roughly 7 to 10".
+    [Date.UTC(2026, 8, 19, 5, 59, 59), 'Europe/Dublin', false], // 06:59:59
+    [Date.UTC(2026, 8, 19, 6, 0, 0), 'Europe/Dublin', true],    // 07:00:00
+    [Date.UTC(2026, 8, 19, 20, 59, 59), 'Europe/Dublin', true], // 21:59:59
+    [Date.UTC(2026, 8, 19, 21, 0, 0), 'Europe/Dublin', false],  // 22:00:00
     // Winter (GMT, UTC+0): 07:00 Dublin is 07:00 UTC.
     [Date.UTC(2026, 0, 15, 6, 59), 'Europe/Dublin', false],
     [Date.UTC(2026, 0, 15, 7, 0), 'Europe/Dublin', true],
