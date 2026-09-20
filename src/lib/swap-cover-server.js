@@ -9,7 +9,7 @@
 // arm of a cron whose own job must not be starved.
 
 import { resolveRoleRecipientIds } from './push'
-import { notifyUsersOnce, notifyUsersAtRolesOnce } from './push-dedup'
+import { notifyUsersOnce } from './push-dedup'
 import { MANAGER_ROLES } from './schemas'
 import { logWarn, logError } from './log'
 import { isValidTz } from './tz-time'
@@ -263,9 +263,13 @@ export async function runSwapCoverSweep(db, { nowMs = Date.now() } = {}) {
     try {
       if (decision.action === 'nudge') {
         const { key, payload } = coverNudgePayload(swap, decision.stage)
-        // The same recipients swap_open reached: MANAGER_ROLES at the swap's
-        // own studio. At-most-once per (swap, status, stage) via the ledger.
-        const result = await notifyUsersAtRolesOnce(db, key, swap.location_id, MANAGER_ROLES, payload)
+        // The same recipients swap_open reached (the same resolver,
+        // MANAGER_ROLES at the swap's own studio), minus the requester: a
+        // manager who posted their own swap is not chased to review it.
+        // At-most-once per (swap, status, stage, recipient) via the ledger.
+        const approvers = (await resolveRoleRecipientIds(db, swap.location_id, MANAGER_ROLES))
+          .filter((id) => id && id !== swap.requester_id)
+        const result = approvers.length ? await notifyUsersOnce(db, key, approvers, payload) : null
         if (delivered(result)) stats.nudged++
         else stats.skipped++
         continue

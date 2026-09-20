@@ -317,12 +317,14 @@ describe('runSwapCoverSweep', () => {
     const db = mockDb({ shift_swap_requests: swapsTable([sweepSwap()]), locations: DUBLIN })
     const stats = await runSwapCoverSweep(db, { nowMs: START - 48 * H })
 
-    expect(notifyUsersAtRolesOnce).toHaveBeenCalledTimes(1)
-    const [dbArg, key, locationId, roles, payload] = notifyUsersAtRolesOnce.mock.calls[0]
+    // The same recipients swap_open reached: the SAME resolver, the same role
+    // set, at the swap's own studio.
+    expect(resolveRoleRecipientIds).toHaveBeenCalledWith(db, LOC, MANAGER_ROLES)
+    expect(notifyUsersOnce).toHaveBeenCalledTimes(1)
+    const [dbArg, key, ids, payload] = notifyUsersOnce.mock.calls[0]
     expect(dbArg).toBe(db)
     expect(key).toBe('swap_cover_nudge:s1:pending:t48')
-    expect(locationId).toBe(LOC)
-    expect(roles).toBe(MANAGER_ROLES)
+    expect(ids).toEqual(['mgr'])
     expect(payload.body).toContain('Still uncovered: Thu 1 Jan, 09:00 to 10:00')
     expect(payload.data).toEqual({ type: 'swap_open', swap_id: 's1' })
     expect(stats).toMatchObject({ open: 1, nudged: 1, expired: 0 })
@@ -331,8 +333,34 @@ describe('runSwapCoverSweep', () => {
     expect(logWarn).not.toHaveBeenCalled()
   })
 
+  it('the sweep row carries what the pure decision needs: the claim time and the effective start', async () => {
+    const db = mockDb({ shift_swap_requests: swapsTable([]) })
+    await runSwapCoverSweep(db, { nowMs: START })
+    for (const q of db.queries) {
+      expect(q.select).toContain('updated_at')
+      expect(q.select).toContain('start_time_override')
+      expect(q.select).toContain('reviewed_by, review_note')
+    }
+  })
+
+  // A manager who posts their OWN swap is not chased to review it.
+  it('never nudges the requester about their own swap', async () => {
+    resolveRoleRecipientIds.mockResolvedValue(['mgr', 'req', 'mgr2'])
+    const db = mockDb({ shift_swap_requests: swapsTable([sweepSwap()]), locations: DUBLIN })
+    await runSwapCoverSweep(db, { nowMs: START - 48 * H })
+    expect(notifyUsersOnce.mock.calls[0][2]).toEqual(['mgr', 'mgr2'])
+  })
+
+  it('a studio whose only approver is the requester: nobody to nudge, nothing sent, not an error', async () => {
+    resolveRoleRecipientIds.mockResolvedValue(['req'])
+    const db = mockDb({ shift_swap_requests: swapsTable([sweepSwap()]), locations: DUBLIN })
+    const stats = await runSwapCoverSweep(db, { nowMs: START - 48 * H })
+    expect(notifyUsersOnce).not.toHaveBeenCalled()
+    expect(stats).toMatchObject({ nudged: 0, skipped: 1, errors: 0 })
+  })
+
   it('a repeat tick is swallowed by the ledger and is not counted as a nudge', async () => {
-    notifyUsersAtRolesOnce.mockResolvedValue({ sent: 0, emailed: 0, deduped: 3 })
+    notifyUsersOnce.mockResolvedValue({ sent: 0, emailed: 0, deduped: 3 })
     const db = mockDb({ shift_swap_requests: swapsTable([sweepSwap()]), locations: DUBLIN })
     expect(await runSwapCoverSweep(db, { nowMs: START - 40 * H })).toMatchObject({ nudged: 0, skipped: 1 })
   })
@@ -353,7 +381,6 @@ describe('runSwapCoverSweep', () => {
     expect(key).toBe('swap_expired:s1')
     expect(ids).toEqual(['req'])
     expect(payload.data).toEqual({ type: 'swap_decision', swap_id: 's1', status: 'cancelled', block_date: '2099-01-01' })
-    expect(notifyUsersAtRolesOnce).not.toHaveBeenCalled()
     expect(stats).toMatchObject({ expired: 1, errors: 0 })
   })
 
@@ -393,7 +420,7 @@ describe('runSwapCoverSweep', () => {
   })
 
   it('a throwing send is one error and the next swap is still processed', async () => {
-    notifyUsersAtRolesOnce.mockRejectedValueOnce(new Error('push down'))
+    notifyUsersOnce.mockRejectedValueOnce(new Error('push down'))
     const db = mockDb({ shift_swap_requests: swapsTable([sweepSwap(), sweepSwap({ id: 's2' })]), locations: DUBLIN })
     const stats = await runSwapCoverSweep(db, { nowMs: START - 48 * H })
     expect(stats).toMatchObject({ open: 2, nudged: 1, errors: 1 })
@@ -432,7 +459,6 @@ describe('runSwapCoverSweep', () => {
       // notifyUsersOnce CLAIMS its key before it sends, so "not called" is what
       // leaves the key free for the deferred notice.
       expect(notifyUsersOnce).not.toHaveBeenCalled()
-      expect(notifyUsersAtRolesOnce).not.toHaveBeenCalled()
       expect(stats).toEqual({ ...ZERO, open: 1, expired: 1 })
     })
 
@@ -546,7 +572,7 @@ describe('runSwapCoverSweep', () => {
       const db = mockDb({ shift_swap_requests: swapsTable([sweepSwap()]), locations: DUBLIN })
       // T-7h = 02:00: deep inside the t12 stage, and the middle of the night.
       const stats = await runSwapCoverSweep(db, { nowMs: START - 7 * H })
-      expect(notifyUsersAtRolesOnce).not.toHaveBeenCalled()
+      expect(notifyUsersOnce).not.toHaveBeenCalled()
       expect(stats).toEqual({ ...ZERO, open: 1, quiet: 1 })
     })
 
@@ -560,11 +586,11 @@ describe('runSwapCoverSweep', () => {
       })
       const stats = await runSwapCoverSweep(db, { nowMs: START })
       expect(db.queries.some((q) => q.update)).toBe(false)
-      expect(notifyUsersAtRolesOnce).not.toHaveBeenCalled()
+      expect(notifyUsersOnce).not.toHaveBeenCalled()
       expect(stats).toEqual({ ...ZERO, open: 1, quiet: 1 })
       // 12:00Z is 07:00 EST: the nudge goes.
       await runSwapCoverSweep(db, { nowMs: START + 3 * H })
-      expect(notifyUsersAtRolesOnce.mock.calls.map((c) => c[1])).toEqual(['swap_cover_nudge:s1:pending:t12'])
+      expect(notifyUsersOnce.mock.calls.map((c) => c[1])).toEqual(['swap_cover_nudge:s1:pending:t12'])
     })
 
     it.each([
