@@ -30,6 +30,14 @@ import {
 } from '../../lib/schedule-api'
 // CT-P3b — reuse the schedule Manage-mode colleague picker for targeted swaps.
 import CoachPickerSheet from '../schedule/CoachPickerSheet'
+// COVERLOOP.2 — the confirm step, and every swap-card decision (pure, tested).
+import SwapConfirmSheet from '../schedule/SwapConfirmSheet'
+import {
+  swapShiftWhen, postedSwapShift, swapConfirmCopy, swapPostedCopy, swapReasonForPost,
+  hasOpenSwap, annotateOpenSwaps,
+  SWAP_PENDING_LABEL, SWAP_PICKER_TITLE, SWAP_PICKER_EMPTY, SWAP_ALREADY_OPEN_MESSAGE,
+} from '../../lib/swap-cards'
+import { swapClaimNotice } from '../../lib/swap-conflicts'
 // CHECKLIST.2 — top-of-Today card showing the coach's checklist
 // when they're on shift today. Self-contained: renders nothing
 // when there's no instance to surface.
@@ -160,6 +168,11 @@ function WeekPanel({ title, startIso, endIso, shifts, showLocation, onShiftPress
                         {s.status === 'swapped' && (
                           <View className="ml-2 px-1.5 py-0.5 rounded bg-blue-500/20">
                             <Text className="text-[9px] uppercase text-blue-700 font-semibold">Swapped</Text>
+                          </View>
+                        )}
+                        {hasOpenSwap(s) && (
+                          <View className="ml-2 px-1.5 py-0.5 rounded bg-amber-500/20">
+                            <Text className="text-[9px] uppercase text-amber-700 font-semibold">{SWAP_PENDING_LABEL}</Text>
                           </View>
                         )}
                         {onShiftPress && !day.isPast && s.status !== 'swapped' && (
@@ -320,6 +333,11 @@ function MonthAgenda({ matrix, showLocation, onShiftPress }) {
                                 <Text className="text-[9px] uppercase text-blue-700 font-semibold">Swapped</Text>
                               </View>
                             )}
+                            {hasOpenSwap(s) && (
+                              <View className="ml-2 px-1.5 py-0.5 rounded bg-amber-500/20">
+                                <Text className="text-[9px] uppercase text-amber-700 font-semibold">{SWAP_PENDING_LABEL}</Text>
+                              </View>
+                            )}
                             {onShiftPress && !day.isPast && s.status !== 'swapped' && (
                               <Ionicons name="ellipsis-horizontal" size={14} color="#94A3B8" style={{ marginLeft: 4 }} />
                             )}
@@ -403,6 +421,10 @@ export default function PersonalDashboard({ refreshKey }) {
   const [swapPickerShift, setSwapPickerShift] = useState(null)
   const [swapStaff, setSwapStaff] = useState(null) // null = not loaded
   const [swapStaffLoading, setSwapStaffLoading] = useState(false)
+  // COVERLOOP.2 — the request waiting on the confirm sheet: { shift, coach },
+  // coach null = an open post. Nothing is POSTed until the sheet confirms.
+  const [swapConfirm, setSwapConfirm] = useState(null)
+  const [swapSending, setSwapSending] = useState(false)
 
   const load = useCallback(async () => {
     if (!profile) return
@@ -520,29 +542,25 @@ export default function PersonalDashboard({ refreshKey }) {
       Alert.alert('No actions', 'This shift has no assignment ID and cannot be acted on.')
       return
     }
+    // COVERLOOP.2 — one open swap per shift (mig 599). Say so instead of
+    // offering a second post that the route would answer with a 409.
+    if (hasOpenSwap(shift)) {
+      Alert.alert(shift.shift_templates?.name || 'Shift', SWAP_ALREADY_OPEN_MESSAGE)
+      return
+    }
     const shiftLabel = shift.shift_templates?.name || 'Shift'
     const options = []
 
-    // Post for swap — only when shift isn't already swapped
+    // COVERLOOP.2 — both paths go through the confirm sheet, which collects the
+    // optional reason. Nothing is sent from this menu any more.
     options.push({
       text: 'Post for swap',
-      onPress: async () => {
-        const res = await createSwapRequest({
-          requesterShiftId: shift.id,
-          locationId: activeLocation?.id,
-        })
-        if (res.success) {
-          Alert.alert('Posted', 'Managers have been notified.')
-          load(); loadSwaps()
-        } else {
-          Alert.alert("Couldn't post", res.error || 'Unknown error')
-        }
-      },
+      onPress: () => setSwapConfirm({ shift, coach: null }),
     })
 
     // CT-P3b — targeted swap: offer this shift to one chosen colleague.
     options.push({
-      text: 'Swap with a specific coach…',
+      text: 'Ask a coach to cover…',
       onPress: () => openSwapPicker(shift),
     })
 
@@ -571,8 +589,13 @@ export default function PersonalDashboard({ refreshKey }) {
     try {
       const res = await respondToSwap(id, status, null, activeLocation?.id)
       if (res.success) {
+        // COVERLOOP.2 — a claim / accept is saved even when the coach is on
+        // approved leave or already on an overlapping shift; the response says
+        // so in `warnings`. Web shows them; this used to drop them.
+        const notice = swapClaimNotice(res)
         await loadSwaps()
         load()
+        if (notice) Alert.alert(notice.title, notice.message)
       } else {
         Alert.alert(`Couldn't ${verb}`, res.error || 'Unknown error')
       }
@@ -595,20 +618,36 @@ export default function PersonalDashboard({ refreshKey }) {
     }
   }
 
-  async function pickSwapCoach(coach) {
+  // COVERLOOP.2 — picking a colleague used to POST on that one tap. It now
+  // opens the confirm sheet; submitSwap is the only place a swap is created.
+  function pickSwapCoach(coach) {
     const shift = swapPickerShift
     setSwapPickerShift(null)
     if (!shift) return
-    const res = await createSwapRequest({
-      requesterShiftId: shift.id,
-      targetId: coach.id,
-      locationId: activeLocation?.id,
-    })
-    if (res.success) {
-      Alert.alert('Swap offered', `${coach.full_name} has been asked to take this shift.`)
-      load(); loadSwaps()
-    } else {
-      Alert.alert("Couldn't offer swap", res.error || 'Unknown error')
+    setSwapConfirm({ shift, coach })
+  }
+
+  async function submitSwap(reasonText) {
+    const pending = swapConfirm
+    if (!pending || swapSending) return
+    setSwapSending(true)
+    try {
+      const res = await createSwapRequest({
+        requesterShiftId: pending.shift.id,
+        targetId: pending.coach?.id,
+        reason: swapReasonForPost(reasonText),
+        locationId: activeLocation?.id,
+      })
+      if (res.success) {
+        setSwapConfirm(null)
+        const done = swapPostedCopy(pending.coach)
+        Alert.alert(done.title, done.message)
+        load(); loadSwaps()
+      } else {
+        Alert.alert(pending.coach ? "Couldn't send request" : "Couldn't post", res.error || 'Unknown error')
+      }
+    } finally {
+      setSwapSending(false)
     }
   }
 
@@ -630,8 +669,10 @@ export default function PersonalDashboard({ refreshKey }) {
   // else, so it goes through dublinTodayIso() with the hero ring and the
   // "On with you today" query.
   const todayIso = dublinTodayIso()
+  // COVERLOOP.2 — join my posted swaps onto the roster rows so a shift with an
+  // open swap carries open_swap_status (the chip, and the no-second-post guard).
   const monthMatrix = (monthShifts && monthStartIso && monthEndIso)
-    ? buildMonthMatrix(monthStartIso, monthEndIso, monthShifts, todayIso)
+    ? buildMonthMatrix(monthStartIso, monthEndIso, annotateOpenSwaps(monthShifts, myPostedSwaps), todayIso)
     : []
 
   // Group today's team shifts by coach — one row per person (not per shift).
@@ -684,7 +725,7 @@ export default function PersonalDashboard({ refreshKey }) {
             title="This week"
             startIso={weekStartIso}
             endIso={weekEndIso}
-            shifts={weekShifts}
+            shifts={annotateOpenSwaps(weekShifts, myPostedSwaps)}
             showLocation={showLocation}
             onShiftPress={handleShiftPress}
           />
@@ -692,7 +733,7 @@ export default function PersonalDashboard({ refreshKey }) {
             title="Next week"
             startIso={nextWeekStartIso}
             endIso={nextWeekEndIso}
-            shifts={nextWeekShifts}
+            shifts={annotateOpenSwaps(nextWeekShifts, myPostedSwaps)}
             showLocation={showLocation}
             onShiftPress={handleShiftPress}
           />
@@ -710,7 +751,7 @@ export default function PersonalDashboard({ refreshKey }) {
               const isLast = i === offered.length - 1
               const name = s.requester?.full_name || 'A colleague'
               const tpl = s.requester_shift?.shift_templates?.name || 'a shift'
-              const date = s.requester_shift?.shift_date
+              const when = swapShiftWhen(s.requester_shift)
               const awaiting = s.status === 'awaiting_approval'
               return (
                 <View
@@ -724,8 +765,11 @@ export default function PersonalDashboard({ refreshKey }) {
                     <Text className="text-sm font-medium text-un1t-text" numberOfLines={1}>
                       {`${name} wants you to take ${tpl}`}
                     </Text>
-                    {date ? (
-                      <Text className="text-xs text-un1t-subtle" numberOfLines={1}>{date}</Text>
+                    {when ? (
+                      <Text className="text-xs text-un1t-subtle" numberOfLines={1}>{when}</Text>
+                    ) : null}
+                    {s.reason ? (
+                      <Text className="text-xs text-un1t-subtle italic" numberOfLines={2}>{`Reason: ${s.reason}`}</Text>
                     ) : null}
                   </View>
                   {awaiting ? (
@@ -782,7 +826,7 @@ export default function PersonalDashboard({ refreshKey }) {
               const isLast = i === openPool.length - 1
               const name = s.requester?.full_name || 'A colleague'
               const tpl = s.requester_shift?.shift_templates?.name || 'Shift'
-              const date = s.requester_shift?.shift_date
+              const when = swapShiftWhen(s.requester_shift)
               return (
                 <View
                   key={s.id}
@@ -795,8 +839,8 @@ export default function PersonalDashboard({ refreshKey }) {
                     <Text className="text-sm font-medium text-un1t-text" numberOfLines={1}>
                       {`${name} · ${tpl}`}
                     </Text>
-                    {date ? (
-                      <Text className="text-xs text-un1t-subtle" numberOfLines={1}>{date}</Text>
+                    {when ? (
+                      <Text className="text-xs text-un1t-subtle" numberOfLines={1}>{when}</Text>
                     ) : null}
                   </View>
                   <Pressable
@@ -886,9 +930,9 @@ export default function PersonalDashboard({ refreshKey }) {
         <View className="bg-un1t-surface border border-un1t-border rounded-2xl overflow-hidden mb-3">
           {(myPostedSwaps || []).map((s, i) => {
             const shiftName = s.requester_shift?.shift_blocks?.shift_templates?.name
-            const shiftDate = s.requester_shift?.shift_blocks?.block_date
-            const subtitle = shiftName && shiftDate
-              ? `${shiftName} on ${shiftDate}`
+            const when = swapShiftWhen(postedSwapShift(s))
+            const subtitle = shiftName && when
+              ? `${shiftName} · ${when}`
               : `Posted ${new Date(s.created_at).toLocaleDateString()}`
             const isLast = i === (myPostedSwaps || []).length - 1
             // CT-P3b — reflect the real status. awaiting_approval = a coach has
@@ -996,6 +1040,17 @@ export default function PersonalDashboard({ refreshKey }) {
         loading={swapStaffLoading}
         onPick={pickSwapCoach}
         onClose={() => setSwapPickerShift(null)}
+        title={SWAP_PICKER_TITLE}
+        emptyText={SWAP_PICKER_EMPTY}
+      />
+
+      {/* COVERLOOP.2 — nothing is POSTed until this confirms. */}
+      <SwapConfirmSheet
+        visible={!!swapConfirm}
+        copy={swapConfirm ? swapConfirmCopy(swapConfirm) : null}
+        sending={swapSending}
+        onConfirm={submitSwap}
+        onClose={() => { if (!swapSending) setSwapConfirm(null) }}
       />
     </View>
   )
