@@ -27,6 +27,8 @@ import {
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { isLiveAssignment } from '@/lib/roster'
 import { nonWorkingDateSet } from '@/lib/time-off-days'
+import { uncoveredHolidayYears } from '@/lib/bank-holidays'
+import { logWarn } from '@/lib/log'
 
 export const TIME_OFF_APPROVE_PERMISSION = APPROVAL_CATEGORY_PERMISSION.time_off
 export const DEFAULT_LEAVE_ENTITLEMENT = 20
@@ -253,6 +255,9 @@ export async function ensureHolidayAllowanceRow(db, profileId, year) {
  * at 366 days by the route, so the closures read cannot reach the 1,000-row
  * select cap and is not paged.
  *
+ * Only called for holiday-type requests. A year or country bank-holidays.js
+ * has no list for is served (closures only) and logged once, never thrown.
+ *
  * @returns {Promise<{ dates: Set<string>|null, error: object|null }>}
  */
 export async function getNonWorkingDates(db, locationId, startIso, endIso) {
@@ -273,8 +278,18 @@ export async function getNonWorkingDates(db, locationId, startIso, endIso) {
     .lte('date', endIso)
   if (customError) return { dates: null, error: customError }
 
+  // The static lists end (and do not know every country). Past that, "no
+  // national holidays" really means "no list", which is the old over-charge
+  // coming back in silence. It is not a reason to refuse leave, so the request
+  // is served with the studio's own closures and leaves one trace per call.
+  const country = loc?.country || 'IE'
+  const years = uncoveredHolidayYears(country, startIso, endIso)
+  if (years.length > 0) {
+    logWarn('time-off', 'no national bank-holiday list for this holiday request; only the studio\'s own closures were left uncharged', { locationId, country, years })
+  }
+
   return {
-    dates: nonWorkingDateSet({ country: loc?.country || 'IE', customHolidays: custom || [], start: startIso, end: endIso }),
+    dates: nonWorkingDateSet({ country, customHolidays: custom || [], start: startIso, end: endIso }),
     error: null,
   }
 }
