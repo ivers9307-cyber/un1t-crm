@@ -96,6 +96,11 @@ export function createSwapFlow({
 } = {}) {
   let pending = null
   let timer = null
+  // Counts OPEN REQUESTS. The component keys <SwapConfirmSheet> on it, so every
+  // request REMOUNTS the sheet: if iOS ever refused a present (say at the
+  // fallback), re-setting the same state would change nothing and the flow
+  // could not recover; a new key presents a fresh Modal. Never reset.
+  let openSeq = 0
 
   function disarm() {
     if (timer !== null) { clearTimer(timer); timer = null }
@@ -109,7 +114,8 @@ export function createSwapFlow({
       // Only an iOS pick gets here, so Android never arms a timer.
       timer = setTimer(() => { timer = null; dispatch('fallback_elapsed') }, delayMs)
     } else if (step.action === 'open_confirm') {
-      onOpenConfirm?.(step.request)
+      openSeq += 1
+      onOpenConfirm?.(step.request, openSeq)
     } else if (step.action === 'reset') {
       onReset?.()
     }

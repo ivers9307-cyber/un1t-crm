@@ -290,3 +290,54 @@ describe('createSwapFlow — onDismiss and the fallback timer, exactly once', ()
     expect(vi.getTimerCount()).toBe(0)
   })
 })
+
+// Every OPEN REQUEST gets a new key, which the component puts on
+// <SwapConfirmSheet key=…>. If iOS ever refuses a present, the sheet's <Modal>
+// is mounted-but-invisible; setting the same state again changes nothing, but
+// a new key REMOUNTS it, so the next "Post for swap" presents afresh.
+describe('createSwapFlow — a new key per open request', () => {
+  let opens
+  const flowFor = (platform) => createSwapFlow({ platform, onOpenConfirm: (r, key) => opens.push([r, key]) })
+  const post = { shift, coach: null }
+
+  beforeEach(() => { vi.useFakeTimers(); opens = [] })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('two opens in a row yield different, increasing keys', () => {
+    const flow = flowFor('ios')
+    flow.dispatch('post', { picked: post })
+    flow.dispatch('post', { picked: post }) // same shift, same object: still a new key
+    expect(opens.map(([, k]) => k)).toEqual([1, 2])
+    expect(opens[0][0]).toBe(post)
+  })
+
+  it('a close then an open yields a new key; a close alone yields none', () => {
+    const flow = flowFor('android')
+    flow.dispatch('pick', { picked: request, pickerVisible: true })
+    flow.dispatch('cancel')
+    expect(opens).toHaveLength(1)
+    flow.dispatch('pick', { picked: request, pickerVisible: true })
+    expect(opens.map(([, k]) => k)).toEqual([1, 2])
+  })
+
+  it('the onDismiss open and the fallback open are keyed too, once each', () => {
+    const flow = flowFor('ios')
+    flow.dispatch('pick', { picked: request, pickerVisible: true })
+    flow.dispatch('dismissed')
+    flow.dispatch('start')
+    flow.dispatch('pick', { picked: request, pickerVisible: true })
+    vi.advanceTimersByTime(PICKER_DISMISS_FALLBACK_MS)
+    flow.dispatch('dismissed') // the loser: no open, no key
+    expect(opens.map(([, k]) => k)).toEqual([1, 2])
+  })
+
+  it('keys are per flow (per mounted Dashboard), and survive dispose so a remount never reuses one', () => {
+    const a = flowFor('android')
+    const b = flowFor('android')
+    a.dispatch('post', { picked: post })
+    b.dispatch('post', { picked: post })
+    a.dispose()
+    a.dispatch('post', { picked: post })
+    expect(opens.map(([, k]) => k)).toEqual([1, 1, 2])
+  })
+})

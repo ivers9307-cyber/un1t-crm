@@ -426,6 +426,8 @@ export default function PersonalDashboard({ refreshKey }) {
   // coach null = an open post. Nothing is POSTed until the sheet confirms.
   const [swapConfirm, setSwapConfirm] = useState(null)
   const [swapSending, setSwapSending] = useState(false)
+  // A new value per open REQUEST (from the flow helper): the sheet's React key.
+  const [swapConfirmKey, setSwapConfirmKey] = useState(0)
   // The picker -> confirm-sheet flow: the pick parked while the picker Modal
   // animates out (iOS only) and its fallback timer. Held in a ref so onDismiss
   // and the timer read live values, never a render closure. Its callbacks are
@@ -434,7 +436,7 @@ export default function PersonalDashboard({ refreshKey }) {
   if (swapFlowRef.current === null) {
     swapFlowRef.current = createSwapFlow({
       platform: Platform.OS,
-      onOpenConfirm: (request) => setSwapConfirm(request),
+      onOpenConfirm: (request, openKey) => { setSwapConfirmKey(openKey); setSwapConfirm(request) },
       onReset: () => setSwapConfirm(null),
     })
   }
@@ -1092,7 +1094,10 @@ export default function PersonalDashboard({ refreshKey }) {
       />
 
       {/* COVERLOOP.2 — nothing is POSTed until this confirms. */}
+      {/* key: every open request remounts the sheet, so a present iOS refused
+          can be retried; the sheet keeps no state between opens by design. */}
       <SwapConfirmSheet
+        key={swapConfirmKey}
         visible={!!swapConfirm}
         copy={swapConfirm ? swapConfirmCopy(swapConfirm) : null}
         sending={swapSending}
