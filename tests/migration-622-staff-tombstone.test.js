@@ -250,6 +250,54 @@ beforeEach(async () => {
 
 afterAll(async () => { await db?.close() })
 
+// The file ends in a self-check that RAISES if any write grant survives the
+// REVOKE. A raise must leave NOTHING behind — not the columns, not the
+// triggers, not half a REVOKE — whatever tool applies the file, so the file
+// carries its own BEGIN/COMMIT (the repo's convention for a migration with a
+// grants self-check: 613, 614, 618) instead of relying on the tool sending it
+// as one implicit transaction.
+describe('mig 622 — all or nothing', () => {
+  it('wraps itself in one explicit transaction', () => {
+    const sql = MIG_622.replace(/--.*$/gm, '')
+    expect(sql.match(/^\s*BEGIN;\s*$/gm)).toHaveLength(1)
+    expect(sql.match(/^\s*COMMIT;\s*$/gm)).toHaveLength(1)
+    expect(sql.trimStart().startsWith('BEGIN;')).toBe(true)
+    expect(sql.trimEnd().endsWith('COMMIT;')).toBe(true)
+  })
+
+  it('a failing self-check leaves NOTHING applied: no columns, no triggers, no functions, no revoke', async () => {
+    const fresh = new PGlite()
+    try {
+      await fresh.exec(BASE_SCHEMA)
+      await fresh.exec(PROD_LIKE_PROFILE_GRANTS)
+      // A write grant the REVOKE cannot reach: REVOKE only removes grants made
+      // by the revoking role (here the owner). One made by another grantor
+      // survives, so the self-check must fire. (On production every one of
+      // these grants has grantor postgres — see the file header.)
+      await fresh.exec(`
+        CREATE ROLE other_admin NOLOGIN;
+        GRANT UPDATE ON public.profiles TO other_admin WITH GRANT OPTION;
+        SET ROLE other_admin;
+        GRANT UPDATE ON public.profiles TO authenticated;
+        RESET ROLE;`)
+      const grants = async () => JSON.stringify((await fresh.query(`SELECT grantor, grantee, privilege_type FROM information_schema.table_privileges
+        WHERE table_schema = 'public' AND table_name = 'profiles' AND grantee IN ('anon', 'authenticated') ORDER BY 1, 2, 3`)).rows)
+      const before = await grants()
+
+      await expect(fresh.exec(MIG_622)).rejects.toThrow(/write privilege\(s\) on public\.profiles still held/)
+      await fresh.exec('ROLLBACK') // what any client does after a failed transaction
+
+      const one = async (sql) => Number((await fresh.query(sql)).rows[0].n)
+      expect(await one(`SELECT count(*)::int AS n FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'profiles'
+        AND column_name IN ('deleted_at', 'deleted_by', 'deleted_role', 'auth_disposition', 'auth_completed_at')`)).toBe(0)
+      expect(await one(`SELECT count(*)::int AS n FROM pg_trigger WHERE NOT tgisinternal AND tgname IN ('profiles_tombstone_frozen', 'refuse_tombstone_access_row')`)).toBe(0)
+      expect(await one(`SELECT count(*)::int AS n FROM pg_proc WHERE proname IN ('tombstone_staff_profile', 'profiles_tombstone_frozen', 'refuse_tombstone_access_row')`)).toBe(0)
+      expect(await one(`SELECT count(*)::int AS n FROM pg_constraint WHERE conname LIKE 'profiles_tombstone%'`)).toBe(0)
+      expect(await grants()).toBe(before)
+    } finally { await fresh.close() }
+  }, 60_000)
+})
+
 describe('mig 622 — why the auth user is never deleted', () => {
   it('deleting auth.users cascades through profiles and takes the history with it', async () => {
     // The NO ACTION swap FKs would refuse the delete outright — the old route

@@ -88,6 +88,26 @@
 -- merging the code: excludeTombstones() filters on deleted_at and PostgREST
 -- 400s on a column that does not exist.
 --
+-- KNOWN LIMITS (accepted, recorded so nobody rediscovers them)
+--   (D) private.refuse_tombstone_access_row() reads profiles WITHOUT a lock, so
+--       a master's role grant racing the delete can pass the check and land
+--       just after the delete commits. The three route guards narrow the
+--       window; FOR SHARE is deliberately NOT used, because it would take the
+--       profiles row lock from the access-table side while
+--       tombstone_staff_profile() takes it (FOR UPDATE) BEFORE touching the
+--       access tables — an inverted lock order, i.e. a deadlock. A stray row
+--       grants a tombstone nothing at the API (getCurrentUser refuses it) and
+--       shows up as: SELECT pl.* FROM profile_locations pl JOIN profiles p
+--       ON p.id = pl.profile_id WHERE p.deleted_at IS NOT NULL;
+--   (E) The route's side effects run AFTER this function commits. If the
+--       process dies in between, a retry re-runs ONLY the login step, so the
+--       assignment_change_log role-history row and the "shifts need cover"
+--       notices are never written. Nothing is lost: profiles.deleted_role holds
+--       the role and roster_change_log holds every published removal.
+--   (F) The freeze trigger makes any future sweep that rewrites role /
+--       permissions / email / active for EVERY profile fail on a tombstone:
+--       such sweeps must filter `deleted_at IS NULL` (CLAUDE.md invariant).
+--
 -- ─────────────────────────────────────────────────────────────────────────
 -- PRE-APPLY CHECKS (read-only; run them and keep the output)
 -- ─────────────────────────────────────────────────────────────────────────
@@ -168,12 +188,18 @@
 -- (e2) The grants this file revokes — keep the output (it is the rollback
 --     recipe, should one ever be needed):
 --
---       SELECT grantee, privilege_type, NULL AS column_name FROM information_schema.table_privileges
+--       SELECT grantor, grantee, privilege_type, NULL AS column_name FROM information_schema.table_privileges
 --        WHERE table_schema='public' AND table_name='profiles' AND grantee IN ('anon','authenticated')
 --       UNION ALL
---       SELECT grantee, privilege_type, column_name FROM information_schema.column_privileges
+--       SELECT grantor, grantee, privilege_type, column_name FROM information_schema.column_privileges
 --        WHERE table_schema='public' AND table_name='profiles' AND grantee IN ('anon','authenticated')
---        ORDER BY 1, 2, 3;
+--        ORDER BY 2, 3, 4;
+--     GRANTOR MATTERS: a REVOKE removes only grants made by the revoking role.
+--     VERIFIED on production 2026-09-20 (read-only): every one of these grants
+--     has grantor `postgres`, and the table owner is `postgres` — so this
+--     REVOKE, run as `postgres`, removes them all. If (e2) ever shows another
+--     grantor, the file's self-check will abort the whole apply (nothing is
+--     left behind); revoke that grant as its grantor first.
 --     Expected today: INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER at
 --     table level and INSERT/UPDATE/REFERENCES per column; no table-level
 --     SELECT (mig 153b). Any column-level SELECT rows are left untouched.
@@ -204,6 +230,14 @@
 --     SELECT count(*) FROM public.profile_locations WHERE profile_id = :id;   -- 0
 --     SELECT p.full_name, count(*) FROM public.shift_assignments a JOIN public.profiles p ON p.id = a.profile_id
 --      WHERE a.profile_id = :id GROUP BY 1;                                    -- their name, past_shifts
+
+-- ONE explicit transaction (the repo's convention for a migration that ends
+-- in a grants self-check: 613, 614, 618). The DO block below RAISES if a write
+-- grant survives the REVOKE; with BEGIN/COMMIT in the file, that abort leaves
+-- NOTHING applied — no columns, no triggers, no half-done REVOKE — whichever
+-- tool applies it, instead of relying on the tool sending the file as a single
+-- implicit transaction. (tests/migration-622-staff-tombstone.test.js proves it.)
+BEGIN;
 
 ALTER TABLE public.profiles
   ADD COLUMN IF NOT EXISTS deleted_at timestamptz,
@@ -663,3 +697,5 @@ COMMENT ON FUNCTION public.tombstone_staff_profile(uuid, uuid, timestamptz, bool
 
 REVOKE ALL ON FUNCTION public.tombstone_staff_profile(uuid, uuid, timestamptz, boolean) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.tombstone_staff_profile(uuid, uuid, timestamptz, boolean) TO service_role;
+
+COMMIT;
