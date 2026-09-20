@@ -185,6 +185,54 @@ describe('stampMeansTold — a stamp is not always a message', () => {
   })
 })
 
+describe('the assignment editor\'s time change stamps ONLY on confirmed delivery', () => {
+  // assignments/[id] PUT messages the coach with no past-date and no self
+  // check, and stamps its row only when the push or email went out. So its
+  // stamp always means told, even for yesterday's shift and even when the
+  // manager edited their own hours. It writes exactly this shape.
+  const edit = (over = {}) => row({
+    action: 'time_changed', block_date: '2026-09-14', // the day BEFORE the stamp
+    details: { start_time_override: '06:30:00', end_time_override: null }, ...over,
+  })
+
+  it('correcting yesterday\'s hours: the coach WAS told', () => {
+    expect(stampMeansTold(edit())).toBe(true)
+    expect(rosterChangeTold(edit())).toBe('told 14:02')
+  })
+
+  it('the same row unstamped is not told yet', () => {
+    expect(rosterChangeTold(edit({ notified_at: null }))).toBe('not told yet')
+  })
+
+  it('a manager who edited their own hours was messaged too', () => {
+    expect(rosterChangeTold(edit({ self_change: true }))).toBe('told 14:02')
+    expect(rosterChangeTold(edit({ self_change: true, block_date: '2026-09-20' }))).toBe('told 14:02')
+  })
+
+  it('a reset (both overrides null) is the same writer', () => {
+    expect(rosterChangeTold(edit({ details: { start_time_override: null, end_time_override: null } }))).toBe('told 14:02')
+  })
+
+  it('but a stamp made LATER is the re-publish safety net, which messages nobody about a shift already over', () => {
+    // Delivery failed at edit time (row left unstamped), the shift passed, and
+    // a re-publish two days on stamped it without a message.
+    expect(rosterChangeTold(edit({ notified_at: '2026-09-17T08:05:00Z' }))).toBeNull()
+    // The same late stamp for a shift still ahead DID come with a message.
+    expect(rosterChangeTold(edit({ block_date: '2026-09-20', notified_at: '2026-09-17T08:05:00Z' }))).toBe('told 17 Sep 09:05')
+  })
+
+  it('only that writer\'s shape is exempt: a template edit or a plain assign is not', () => {
+    const template = { source: 'template_edit', from: { start_time: '06:00:00', end_time: '07:00:00' }, to: { start_time: '06:30:00', end_time: '07:30:00' } }
+    expect(rosterChangeTold(edit({ details: template }))).toBeNull()
+    expect(rosterChangeTold(edit({ action: 'assigned' }))).toBeNull()
+    expect(rosterChangeTold(edit({ details: { start_time_override: '06:30:00' } }))).toBeNull() // one key only: not what it writes
+  })
+
+  it('rules 1 and 2 still come first (no writer produces this mix; it is a guard, not a case)', () => {
+    expect(rosterChangeTold(edit({ details: { start_time_override: null, end_time_override: null, reason: 'staff_permanent_delete' } }))).toBeNull()
+  })
+})
+
 describe('ROSTER_CHANGE_LOG_MAX_ROWS', () => {
   it('lives here (client-safe) and is a whole number of pages', () => {
     expect(ROSTER_CHANGE_LOG_MAX_ROWS % 1000).toBe(0)

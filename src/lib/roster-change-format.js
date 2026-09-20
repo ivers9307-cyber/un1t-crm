@@ -60,6 +60,25 @@ const REASON_NOTE = {
 //      so there was nobody to tell. The API row carries it as `self_change`.
 //
 // For these the drawer shows NO told state, rather than a time nobody was told at.
+//
+// And one writer whose stamp ALWAYS means told, so rules 3 and 4 must not
+// touch it:
+//
+//   5. assignments/[id]/route.js PUT (the assignment editor's hours change):
+//      action 'time_changed' with details EXACTLY { start_time_override,
+//      end_time_override } (both keys, either may be null). It messages the
+//      coach with no past-date check and no self check, and stamps the row
+//      ONLY on confirmed delivery, in the same request. A manager correcting
+//      yesterday's hours really did tell the coach.
+//      The exemption covers THAT stamp only, recognised by being made within
+//      OWN_STAMP_WINDOW_MS of the row: if delivery failed, the row stays
+//      unstamped until renotifyChangedCoaches stamps it at a later re-publish,
+//      and that one is rule 3 like any other row.
+//      Rules 1 and 2 are checked first regardless. They cannot coexist with
+//      this shape in practice (mig 622 writes action 'unassigned' with details
+//      { reason } and nothing else; a swap drop is 'unassigned' with `via`),
+//      so that ordering is a guard, not a case.
+const OWN_STAMP_WINDOW_MS = 10 * 60 * 1000
 export const NO_MESSAGE_REASONS = Object.freeze(['staff_permanent_delete'])
 
 const VIA_NOTE = {
@@ -155,12 +174,21 @@ function isInstant(v) {
  * Does this row's stamp mean the coach was sent something? See the list above
  * NO_MESSAGE_REASONS. Only meaningful for a row that HAS a stamp.
  */
+/** Writer 5 above: the assignment editor's row, carrying the stamp that writer made itself. */
+function isDeliveredTimeEdit(c, d) {
+  if (c.action !== 'time_changed' || !('start_time_override' in d) || !('end_time_override' in d)) return false
+  if (!isInstant(c.notified_at) || !isInstant(c.created_at)) return false
+  const gap = Date.parse(c.notified_at) - Date.parse(c.created_at)
+  return gap >= 0 && gap <= OWN_STAMP_WINDOW_MS
+}
+
 export function stampMeansTold(change) {
   const c = change || {}
   const d = c.details || {}
   if (NO_MESSAGE_REASONS.includes(d.reason)) return false
-  if (c.self_change === true) return false
   if (d.via === 'swap_drop' && 'roster_status' in d && d.roster_status !== 'published') return false
+  if (isDeliveredTimeEdit(c, d)) return true
+  if (c.self_change === true) return false
   // 'YYYY-MM-DD' strings compare correctly as text. The stamp's day is the
   // DUBLIN day, which is the "today" every writer judged "past" against.
   if (dateParts(c.block_date) && isInstant(c.notified_at) && String(c.block_date).slice(0, 10) < dublinDayStr(c.notified_at)) return false

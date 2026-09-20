@@ -74,6 +74,8 @@ export async function readJson(url, options) {
   // redirect IS a dead session. A 200 that is not JSON is the same thing seen
   // without the flag, but only on a READ: a mutation that answers 200 with an
   // empty body keeps meaning success, as it always has here.
+  // Known edge: a GET that legitimately answers 204, or a literal JSON `null`,
+  // would read as signed out here. No current caller does either.
   const isRead = !options?.method || String(options.method).toUpperCase() === 'GET'
   if (res.redirected || (isRead && res.ok && data === null)) {
     throw new Error(SESSION_ENDED_MESSAGE)
