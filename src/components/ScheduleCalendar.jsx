@@ -983,6 +983,28 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
     copying,
   })
 
+  // ROSTERVIS.1 — whether the period on screen is published. The
+  // calendar never said; the only signal was an in-memory
+  // unsaved-changes flag a reload drops. Derived from each block's
+  // roster status plus the draft rosters awaiting approval.
+  // Manager only (a coach's feed is published-only), and EMPTIED
+  // while loading so a stale week's answer never sits under new
+  // dates. The chip's live region itself stays mounted (CHANGELOG.1).
+  // ROSTERLOOK.1 — built HERE and handed to the toolbar as its `statusChip`
+  // slot, so the change-log state, the trigger ref and the drawer stay in this
+  // file. Gated on isManager ONLY: PublicationStatusChip's role="status"
+  // wrapper must stay mounted through loading and through a period with
+  // nothing to say, both so a screen reader hears the status CHANGE and so the
+  // toolbar's right-hand group does not jump rows while a week loads.
+  const publicationChip = isManager ? (
+    <PublicationStatusChip
+      publication={loading ? null : publication}
+      viewType={viewType}
+      onOpenChangeLog={openChangeLog}
+      triggerRef={changeLogTriggerRef}
+    />
+  ) : null
+
   return (
     <div ref={calendarRef}>
       {/* ROSTERLOOK.1 — the visible "Schedule / <studio> — Staff roster" block
@@ -1002,6 +1024,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
         onPrev={goPrevious}
         onNext={goNext}
         onToday={goToday}
+        statusChip={publicationChip}
         viewMode={viewMode}
         onViewMode={setViewMode}
         onViewType={(next) => (next === 'month' ? showMonthView() : showWeekView())}
@@ -1012,27 +1035,6 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
         onPublish={handlePublishClick}
         publishing={publishing}
       />
-
-      {/* ROSTERLOOK.1 — INTERIM: the publish-state chip below is CHANGELOG.1's,
-          untouched, only no longer inside the old navigator. Its move into
-          the toolbar's `statusChip` slot is this PR's last code commit, held
-          back so CHANGELOG.1 (which turns the chip into a button) can land on
-          an untouched block. */}
-          {/* ROSTERVIS.1 — whether the period on screen is published. The
-              calendar never said; the only signal was an in-memory
-              unsaved-changes flag a reload drops. Derived from each block's
-              roster status plus the draft rosters awaiting approval.
-              Manager only (a coach's feed is published-only), and EMPTIED
-              while loading so a stale week's answer never sits under new
-              dates. The chip's live region itself stays mounted (CHANGELOG.1). */}
-          {isManager && (
-            <PublicationStatusChip
-              publication={loading ? null : publication}
-              viewType={viewType}
-              onOpenChangeLog={openChangeLog}
-              triggerRef={changeLogTriggerRef}
-            />
-          )}
 
       {/* ROSTER-FIX.6a — a failed load used to leave the screen on
           "Loading roster..." forever with nothing said. The banner names the

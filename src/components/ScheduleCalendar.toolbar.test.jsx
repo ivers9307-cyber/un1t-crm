@@ -58,17 +58,23 @@ describe('roster toolbar wiring (ROSTERLOOK.1)', () => {
     await renderCalendar()
     expect(screen.getAllByTestId('schedule-toolbar')).toHaveLength(1)
     const nav = screen.getByTestId('schedule-toolbar-nav')
-    // The arrows and Today live in the toolbar's left group now.
+    // The arrows, Today and the chip all live in the toolbar's left group now.
     expect(within(nav).getByRole('button', { name: 'Previous week' })).toBeTruthy()
     expect(within(nav).getByRole('button', { name: 'Next week' })).toBeTruthy()
     expect(within(nav).getByRole('button', { name: 'Today' })).toBeTruthy()
     expect(screen.getAllByRole('button', { name: 'Previous week' })).toHaveLength(1)
   })
 
-  it('the publish-state chip keeps its test id and its words', async () => {
+  it('the publish-state chip keeps its test id and its words, inside the left group', async () => {
     await renderCalendar()
     const chip = screen.getByTestId('publication-status')
+    expect(screen.getByTestId('schedule-toolbar-nav').contains(chip)).toBe(true)
     expect(chip.textContent).toMatch(/Week status: Not published/)
+    // Still a live region, and it may not break mid-label inside the row.
+    expect(chip.closest('[role="status"]')).toBeTruthy()
+    // The SLOT carries nowrap, so it holds whatever element the chip is
+    // (CHANGELOG.1: a button when published, a span otherwise).
+    expect(chip.closest('[role="status"]').parentElement.className).toMatch(/whitespace-nowrap/)
   })
 
   // CAL-UI-LOW.1's pins, carried over: the row wraps, Publish is IN the

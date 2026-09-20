@@ -35,7 +35,10 @@ export default function PublicationStatusChip({ publication, viewType, onOpenCha
   // React leaves the DOM alone when a re-render produces the same text, so a
   // plain re-render announces nothing.
   const chip = publication ? PUBLICATION_CHIP[publication.status] : null
-  if (!chip) return <div className="flex justify-center" role="status" />
+  // ROSTERLOOK.1 — the wrapper is an inline <span>: the chip sits in the
+  // toolbar's left group now, not centred on a row of its own under the
+  // navigator. It is still the live region, and still always mounted.
+  if (!chip) return <span className="inline-flex" role="status" />
   const Icon = chip.Icon
   const periodWord = viewType === 'month' ? 'Month' : 'Week'
   const label = PUBLICATION_LABELS[publication.status]
@@ -58,7 +61,7 @@ export default function PublicationStatusChip({ publication, viewType, onOpenCha
     </>
   )
   return (
-    <div className="mt-1.5 flex justify-center" role="status">
+    <span className="inline-flex" role="status">
       {canOpenLog ? (
         <button
           ref={triggerRef}
@@ -80,6 +83,6 @@ export default function PublicationStatusChip({ publication, viewType, onOpenCha
           {chipBody}
         </span>
       )}
-    </div>
+    </span>
   )
 }

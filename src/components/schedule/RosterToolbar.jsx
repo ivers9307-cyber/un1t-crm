@@ -63,7 +63,7 @@ export default function RosterToolbar({
         >
           Today
         </button>
-        {statusChip && <span className="ml-1 inline-flex">{statusChip}</span>}
+        {statusChip && <span className="ml-1 inline-flex whitespace-nowrap">{statusChip}</span>}
       </div>
 
       <div data-testid="schedule-toolbar-actions" className="relative flex flex-wrap items-center gap-2">
