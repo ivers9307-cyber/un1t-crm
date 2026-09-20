@@ -34,6 +34,13 @@
 //        • redacts the PII the audit trigger captured along the way.
 //   5. Bans + scrambles the auth user — unless the same login is also a member
 //      or a host, in which case it is left alone and the response says so.
+//      This step runs AFTER the transaction, so it can fail. Its FINAL outcome
+//      is recorded on the tombstone (auth_disposition + auth_completed_at); a
+//      tombstone with auth_completed_at NULL is a half-finished delete, and
+//      DELETE on it re-runs ONLY this step (GET still 404s a tombstone, and
+//      an id that never existed is 404 on both verbs). Until it finishes, the
+//      person cannot use staff access anyway: getCurrentUser() refuses a
+//      tombstone, their role is 'staff' and they hold no profile_locations.
 //   6. Removes their public signature photo, records the role history, tells
 //      each affected studio's managers which shifts need cover, and tells the
 //      other party of any swap that was cancelled.
@@ -84,8 +91,12 @@ const AUTH_WARNINGS = {
   kept_unverified: 'Their login was NOT disabled because we could not check whether it is also a member or host account. Staff access is gone. Check it in the Supabase dashboard and ban the user if it is staff-only.',
 }
 
-/** Shared by GET and DELETE: caller is a master, target exists, is inactive, is not already a tombstone. */
-async function loadTarget(id) {
+/**
+ * Shared by GET and DELETE: caller is a master, target exists and is inactive.
+ * An existing tombstone is "not found" — EXCEPT to DELETE (allowTombstone),
+ * which may still owe it the login step (see finishTombstoneAuth).
+ */
+async function loadTarget(id, { allowTombstone = false } = {}) {
   const user = await getCurrentUser()
   if (!user) return { fail: NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 }) }
   if (!user.isMaster) {
@@ -97,17 +108,92 @@ async function loadTarget(id) {
   const db = createServerClient()
   const { data: profile, error } = await db
     .from('profiles')
-    .select('id, full_name, role, active, deleted_at, profile_locations(*, locations(*))')
+    .select('id, full_name, role, active, deleted_at, auth_disposition, auth_completed_at, profile_locations(*, locations(*))')
     .eq('id', id)
     .single()
-  // A tombstone is "not found" to every surface, this one included.
-  if (error || !profile || isTombstone(profile)) {
+  // An id that never existed is 404. So is a tombstone, to every surface but
+  // the DELETE retry.
+  if (error || !profile || (isTombstone(profile) && !allowTombstone)) {
     return { fail: NextResponse.json({ success: false, error: 'Profile not found' }, { status: 404 }) }
   }
+  if (isTombstone(profile)) return { user, db, profile, tombstone: true }
   if (profile.active) {
     return { fail: NextResponse.json({ success: false, error: 'Profile must be deactivated first. Soft-archive (set Active off) before permanent delete.' }, { status: 400 }) }
   }
   return { user, db, profile }
+}
+
+/** Is this login ALSO a member or a host? Pure reads. */
+async function readAuthDisposition(db, id) {
+  const [contactRes, hostRes] = await Promise.all([
+    db.from('contacts').select('id').eq('user_id', id).limit(1).maybeSingle(),
+    db.from('host_users').select('host_id').eq('auth_user_id', id).limit(1).maybeSingle(),
+  ])
+  return authDisposition({
+    memberContact: contactRes.data, hostUser: hostRes.data, readFailed: !!(contactRes.error || hostRes.error),
+  })
+}
+
+/**
+ * The LOGIN step, for a profile that is ALREADY a tombstone: ban + scramble a
+ * staff-only login, or deliberately keep a member's / host's. It runs after
+ * the SQL transaction committed, so it can fail or never run — which is why it
+ * is (a) recorded on the tombstone ONLY when it reached a FINAL outcome
+ * (auth_disposition + auth_completed_at, mig 622: NULL -> value, once), so a
+ * half-finished delete stays visible as auth_completed_at NULL, and (b) safe
+ * to run again: DELETE on an existing tombstone re-runs this and nothing else.
+ * 'kept_unverified' (we could not tell) is NOT final and is never recorded.
+ * Never throws; never turns an existing tombstone into a reported failure.
+ *
+ * @returns {Promise<{ disposition: string, completed: boolean, completedAt: string|null, warnings: string[] }>}
+ */
+async function finishTombstoneAuth(db, id) {
+  const warnings = []
+  const disposition = await readAuthDisposition(db, id)
+  let final = false
+  if (disposition === 'ban') {
+    const { error: authErr } = await db.auth.admin.updateUserById(id, {
+      email: tombstoneEmail(id),
+      email_confirm: true,
+      password: randomBytes(32).toString('hex'),
+      ban_duration: AUTH_BAN_DURATION,
+      user_metadata: { full_name: null },
+    })
+    if (authErr) {
+      warnings.push(`Staff access is removed, but disabling the login failed: ${authErr.message}. Retry from the delete dialog (it re-runs only this step), or ban the user in the Supabase dashboard (Authentication → Users).`)
+    } else {
+      final = true
+    }
+  } else {
+    warnings.push(AUTH_WARNINGS[disposition])
+    final = disposition !== 'kept_unverified'
+  }
+  if (!final) return { disposition, completed: false, completedAt: null, warnings }
+
+  const completedAt = new Date().toISOString()
+  const { data: recorded, error: recErr } = await db
+    .from('profiles')
+    .update({ auth_disposition: disposition, auth_completed_at: completedAt })
+    .eq('id', id)
+    .is('auth_completed_at', null)
+    .select('id')
+  if (recErr) {
+    warnings.push(`The login step finished but could not be recorded (${recErr.message}), so this delete still shows as unfinished. Retry from the delete dialog to record it.`)
+    return { disposition, completed: false, completedAt: null, warnings }
+  }
+  // Zero rows = someone else recorded it first. The step IS finished either way.
+  return { disposition, completed: true, completedAt: (recorded || []).length > 0 ? completedAt : null, warnings }
+}
+
+function retryResponse(profile, auth) {
+  return NextResponse.json({
+    success: true,
+    data: {
+      profile_id: profile.id, full_name: profile.full_name, already_deleted: true,
+      auth: auth.disposition, auth_completed: auth.completed, auth_completed_at: auth.completedAt, changed: true,
+    },
+    ...(auth.warnings.length > 0 ? { warning: auth.warnings.join(' ') } : {}),
+  })
 }
 
 // p_now is deliberately NOT passed: the function defaults it to the database's
@@ -132,9 +218,33 @@ export async function GET(_request, props) {
 
 export async function DELETE(request, props) {
   const { id } = await props.params
-  const t = await loadTarget(id)
+  const t = await loadTarget(id, { allowTombstone: true })
   if (t.fail) return t.fail
   const { user, db, profile } = t
+
+  // RETRY. The person is already a tombstone: nothing is removed, logged or
+  // notified again — only the login step, and only if it never finished.
+  if (t.tombstone) {
+    if (profile.auth_completed_at) {
+      return NextResponse.json({
+        success: true,
+        data: {
+          profile_id: profile.id, full_name: profile.full_name, already_deleted: true,
+          auth: profile.auth_disposition, auth_completed: true, auth_completed_at: profile.auth_completed_at, changed: false,
+        },
+      })
+    }
+    const auth = await finishTombstoneAuth(db, id)
+    await logAuditEvent({
+      category: 'business',
+      action: 'profile.permanent_delete_login_step_retried',
+      actor: { id: user.id, full_name: user.full_name, email: user.email },
+      target: { id, label: profile.full_name, resource: `profiles/${id}` },
+      details: { auth: auth.disposition, auth_completed: auth.completed },
+      request,
+    })
+    return retryResponse(profile, auth)
+  }
 
   // Defence in depth: the deactivate flow already revoked door access. A UniFi
   // failure does not stop the delete — the UniFi user is keyed on its own id
@@ -150,15 +260,6 @@ export async function DELETE(request, props) {
     }
   }
 
-  // Is this login ALSO a member or a host? Read before anything changes.
-  const [contactRes, hostRes] = await Promise.all([
-    db.from('contacts').select('id').eq('user_id', id).limit(1).maybeSingle(),
-    db.from('host_users').select('host_id').eq('auth_user_id', id).limit(1).maybeSingle(),
-  ])
-  const disposition = authDisposition({
-    memberContact: contactRes.data, hostUser: hostRes.data, readFailed: !!(contactRes.error || hostRes.error),
-  })
-
   // The irreversible step — one transaction (mig 622).
   const { data: summary, error: rpcError } = await runTombstone(db, { id, actorId: user.id, dryRun: false })
   if (rpcError || !summary) {
@@ -166,24 +267,18 @@ export async function DELETE(request, props) {
     return NextResponse.json({ success: false, error: mapped.error }, { status: mapped.status })
   }
 
+  // Two masters at once: the other request won, and the function (safe to call
+  // twice) changed nothing. Its side effects are the other request's; this one
+  // only makes sure the login step is finished.
+  if (summary.already_tombstoned) {
+    return retryResponse(profile, await finishTombstoneAuth(db, id))
+  }
+
   // From here the tombstone EXISTS. Nothing below may turn that into a
   // reported failure: each step is best-effort and reports as a warning.
-  const warnings = []
-
-  if (disposition === 'ban') {
-    const { error: authErr } = await db.auth.admin.updateUserById(id, {
-      email: tombstoneEmail(id),
-      email_confirm: true,
-      password: randomBytes(32).toString('hex'),
-      ban_duration: AUTH_BAN_DURATION,
-      user_metadata: { full_name: null },
-    })
-    if (authErr) {
-      warnings.push(`Staff access is removed, but disabling the login failed: ${authErr.message}. Ban the user in the Supabase dashboard (Authentication → Users).`)
-    }
-  } else {
-    warnings.push(AUTH_WARNINGS[disposition])
-  }
+  const auth = await finishTombstoneAuth(db, id)
+  const disposition = auth.disposition
+  const warnings = [...auth.warnings]
 
   try {
     const bucket = db.storage.from('branding')
@@ -225,6 +320,7 @@ export async function DELETE(request, props) {
       kept_today_shifts: summary.kept_today_shifts?.length || 0,
       role_was: profile.role,
       auth: disposition,
+      auth_completed: auth.completed,
     },
     request,
   })
@@ -254,7 +350,7 @@ export async function DELETE(request, props) {
 
   return NextResponse.json({
     success: true,
-    data: { ...summary, auth: disposition },
+    data: { ...summary, auth: disposition, auth_completed: auth.completed },
     ...(warnings.length > 0 ? { warning: warnings.join(' ') } : {}),
   })
 }

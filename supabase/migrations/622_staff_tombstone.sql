@@ -170,7 +170,7 @@
 --     file's own DO block already refuses to commit otherwise), and the SELECT
 --     rows identical to before.
 -- (f) SELECT column_name FROM information_schema.columns
---      WHERE table_schema='public' AND table_name='profiles' AND column_name IN ('deleted_at','deleted_by','deleted_role');  -- 3 rows
+--      WHERE table_schema='public' AND table_name='profiles' AND column_name IN ('deleted_at','deleted_by','deleted_role','auth_disposition','auth_completed_at');  -- 5 rows
 --     SELECT conname FROM pg_constraint WHERE conname = 'profiles_tombstone_is_inactive';                     -- 1 row
 --     SELECT has_function_privilege('authenticated', 'public.tombstone_staff_profile(uuid, uuid, timestamptz, boolean)', 'EXECUTE');  -- false
 --     SELECT count(*) FROM public.profiles WHERE deleted_at IS NOT NULL;                                      -- 0
@@ -181,6 +181,9 @@
 --     upcoming_shifts = 0.
 -- (i) SELECT full_name, email, active, role, deleted_role, deleted_at, deleted_by, avatar_url, pin_hash FROM public.profiles WHERE id = :id;
 --     -- name intact, email 'deleted+<id>@deleted.invalid', active false, role 'staff', deleted_role = what they were, deleted_* set, the rest NULL
+--     SELECT auth_disposition, auth_completed_at FROM public.profiles WHERE id = :id;
+--     -- both set. auth_completed_at NULL = the login step did NOT finish: re-send
+--     -- DELETE /api/staff/<id>/permanent (it re-runs only that step).
 --     SELECT email, banned_until FROM auth.users WHERE id = :id;
 --     -- scrambled + banned_until ~100 years out, UNLESS the response said auth = kept_*
 --     SELECT count(*) FROM public.profile_locations WHERE profile_id = :id;   -- 0
@@ -190,7 +193,9 @@
 ALTER TABLE public.profiles
   ADD COLUMN IF NOT EXISTS deleted_at timestamptz,
   ADD COLUMN IF NOT EXISTS deleted_by uuid REFERENCES public.profiles(id) ON DELETE SET NULL,
-  ADD COLUMN IF NOT EXISTS deleted_role text;
+  ADD COLUMN IF NOT EXISTS deleted_role text,
+  ADD COLUMN IF NOT EXISTS auth_disposition text,
+  ADD COLUMN IF NOT EXISTS auth_completed_at timestamptz;
 
 COMMENT ON COLUMN public.profiles.deleted_at IS
   'STAFFDELETE.1 (mig 622): set = TOMBSTONE. The person was permanently deleted: PII stripped, access rows gone, auth user banned, full_name kept so history stays reportable by name. Readers that list profiles must exclude these (src/lib/staff-tombstone.js). Never DELETE the row: ~25 tables cascade off it.';
@@ -198,6 +203,21 @@ COMMENT ON COLUMN public.profiles.deleted_by IS
   'STAFFDELETE.1 (mig 622): the master who ran the permanent delete.';
 COMMENT ON COLUMN public.profiles.deleted_role IS
   'STAFFDELETE.1 (mig 622): the role the person held when they were permanently deleted. profiles.role is demoted to ''staff'' on a tombstone because RLS reads it live (private.auth_is_master() and inline role policies) — role HISTORY is this column. NULL on every living profile.';
+
+COMMENT ON COLUMN public.profiles.auth_disposition IS
+  'STAFFDELETE.1 (mig 622): the FINAL outcome of the login step of a permanent delete — ban | kept_member_login | kept_host_login. The ban runs in the app AFTER tombstone_staff_profile() commits, so it can fail or never run: a tombstone with auth_completed_at NULL is a HALF-FINISHED delete — re-send DELETE /api/staff/<id>/permanent, which re-runs only this step. Set once (NULL -> value), then frozen.';
+COMMENT ON COLUMN public.profiles.auth_completed_at IS
+  'STAFFDELETE.1 (mig 622): when the login step finished. Always set together with auth_disposition.';
+
+-- Half-finished deletes, for an operator or a monitor:
+--   SELECT id, full_name, deleted_at FROM public.profiles
+--    WHERE deleted_at IS NOT NULL AND auth_completed_at IS NULL;
+ALTER TABLE public.profiles DROP CONSTRAINT IF EXISTS profiles_tombstone_auth_step;
+ALTER TABLE public.profiles
+  ADD CONSTRAINT profiles_tombstone_auth_step
+  CHECK ((auth_disposition IS NULL AND auth_completed_at IS NULL)
+      OR (deleted_at IS NOT NULL AND auth_completed_at IS NOT NULL
+          AND auth_disposition IN ('ban', 'kept_member_login', 'kept_host_login')));
 
 ALTER TABLE public.profiles DROP CONSTRAINT IF EXISTS profiles_tombstone_is_inactive;
 ALTER TABLE public.profiles
@@ -249,7 +269,8 @@ END $$;
 -- living row does). So once OLD.deleted_at is set, the columns that make the
 -- row a tombstone — and the ones RLS or sign-in read — can never change.
 -- tombstone_staff_profile() is unaffected: it writes them while OLD.deleted_at
--- IS NULL. Other columns (updated_at, …) stay writable. No reads, so
+-- IS NULL. auth_disposition / auth_completed_at are the one exemption: NULL ->
+-- value, once. Other columns (updated_at, …) stay writable. No reads, so
 -- SECURITY INVOKER is enough; `private` keeps it off the PostgREST surface.
 CREATE OR REPLACE FUNCTION private.profiles_tombstone_frozen()
 RETURNS trigger
@@ -267,6 +288,10 @@ BEGIN
     WHEN NEW.active       IS DISTINCT FROM OLD.active       THEN 'active'
     WHEN NEW.email        IS DISTINCT FROM OLD.email        THEN 'email'
     WHEN NEW.permissions  IS DISTINCT FROM OLD.permissions  THEN 'permissions'
+    -- The login step is recorded AFTER the tombstone exists, so these two —
+    -- and ONLY these two — may go from NULL to a value, once.
+    WHEN OLD.auth_disposition  IS NOT NULL AND NEW.auth_disposition  IS DISTINCT FROM OLD.auth_disposition  THEN 'auth_disposition'
+    WHEN OLD.auth_completed_at IS NOT NULL AND NEW.auth_completed_at IS DISTINCT FROM OLD.auth_completed_at THEN 'auth_completed_at'
   END;
   IF v_col IS NOT NULL THEN
     RAISE EXCEPTION 'staff_tombstone_frozen: profile % was permanently deleted; % can no longer be changed', OLD.id, v_col;
@@ -374,6 +399,7 @@ BEGIN
   IF v_profile.deleted_at IS NOT NULL THEN
     RETURN jsonb_build_object('profile_id', p_profile_id, 'full_name', v_profile.full_name, 'dry_run', p_dry_run,
       'already_tombstoned', true, 'deleted_at', v_profile.deleted_at,
+      'auth_disposition', v_profile.auth_disposition, 'auth_completed_at', v_profile.auth_completed_at,
       'removed_shifts', '[]'::jsonb, 'kept_today_shifts', '[]'::jsonb,
       'cancelled_swaps', '[]'::jsonb, 'cancelled_time_off', '[]'::jsonb,
       'role', jsonb_build_object('from', v_profile.deleted_role, 'to', v_profile.role),

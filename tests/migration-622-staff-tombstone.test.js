@@ -557,6 +557,28 @@ describe('mig 622 — tombstone_staff_profile', () => {
         await expect(runSql(`UPDATE public.profiles SET ${sql} WHERE id = '${GONE}'`)).rejects.toThrow(new RegExp(`staff_tombstone_frozen.*${col}`))
       })
     }
+    // The login step (ban, or a deliberate keep) runs in the app AFTER this
+    // transaction. It is recorded on the tombstone so a half-finished delete
+    // is visible (deleted_at set, auth_completed_at NULL) and can be retried.
+    it('auth_disposition / auth_completed_at may be set ONCE on a tombstone, then freeze', async () => {
+      await tombstone()
+      expect((await rows(`SELECT auth_disposition, auth_completed_at FROM public.profiles WHERE id = '${GONE}'`))[0]).toEqual({ auth_disposition: null, auth_completed_at: null })
+      await runSql(`UPDATE public.profiles SET auth_disposition = 'ban', auth_completed_at = now() WHERE id = '${GONE}'`)
+      await expect(runSql(`UPDATE public.profiles SET auth_disposition = 'kept_member_login' WHERE id = '${GONE}'`)).rejects.toThrow(/staff_tombstone_frozen.*auth_disposition/)
+      await expect(runSql(`UPDATE public.profiles SET auth_completed_at = NULL, auth_disposition = NULL WHERE id = '${GONE}'`)).rejects.toThrow(/staff_tombstone_frozen/)
+      await expect(runSql(`UPDATE public.profiles SET auth_completed_at = now() + interval '1 hour' WHERE id = '${GONE}'`)).rejects.toThrow(/staff_tombstone_frozen.*auth_completed_at/)
+    })
+    it('the NULL -> value exemption is for the auth columns ONLY', async () => {
+      await tombstone()
+      // deleted_by is never NULL after a delete, but permissions/email are not NULL-able escapes either:
+      await expect(runSql(`UPDATE public.profiles SET auth_disposition = 'ban', auth_completed_at = now(), role = 'master' WHERE id = '${GONE}'`)).rejects.toThrow(/staff_tombstone_frozen.*role/)
+    })
+    it('the two auth columns are set together, to a known FINAL outcome, and only on a tombstone', async () => {
+      await tombstone()
+      await expect(runSql(`UPDATE public.profiles SET auth_disposition = 'ban' WHERE id = '${GONE}'`)).rejects.toThrow(/profiles_tombstone_auth_step/)
+      await expect(runSql(`UPDATE public.profiles SET auth_disposition = 'kept_unverified', auth_completed_at = now() WHERE id = '${GONE}'`)).rejects.toThrow(/profiles_tombstone_auth_step/)
+      await expect(runSql(`UPDATE public.profiles SET auth_disposition = 'ban', auth_completed_at = now() WHERE id = '${PEER}'`)).rejects.toThrow(/profiles_tombstone_auth_step/)
+    })
     it('the CHECK is still the second lock when the trigger is out of the way', async () => {
       await tombstone()
       await runSql('ALTER TABLE public.profiles DISABLE TRIGGER profiles_tombstone_frozen')
