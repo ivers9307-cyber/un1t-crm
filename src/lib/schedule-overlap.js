@@ -24,13 +24,29 @@ export function fmtTime(t) {
  * schedule time formatting, so the two forms sit side by side and the reason
  * there are two is written down instead of guessed at.
  */
-export function formatTime12h(time) {
+// ROSTERLOOK.1 — `amSuffix: false` is for the month cell, where a line has
+// about 120px for a time AND two first names. Only "am" is dropped: a roster
+// that runs 5:45am and 5:45pm classes must never print both as "5:45".
+export function formatTime12h(time, { amSuffix = true } = {}) {
   if (!time) return ''
   const [h, m] = String(time).split(':')
   const hour = parseInt(h)
-  const suffix = hour >= 12 ? 'pm' : 'am'
+  const suffix = hour >= 12 ? 'pm' : amSuffix ? 'am' : ''
   const display = hour > 12 ? hour - 12 : hour === 0 ? 12 : hour
   return m === '00' ? `${display}${suffix}` : `${display}:${m}${suffix}`
+}
+
+/**
+ * ROSTERLOOK.1 — a shift's range on ONE line: '9:15–10:30am', '11:30am–12:30pm'.
+ * Built on formatTime12h so there is still one 12-hour rule. The suffix is
+ * printed once when both ends share it. En dash, no spaces: there is no break
+ * opportunity inside it (the card adds whitespace-nowrap as well). Pure.
+ */
+export function formatTimeRange12h(start, end) {
+  const from = formatTime12h(start)
+  const to = formatTime12h(end)
+  if (!from || !to) return from || to
+  return from.slice(-2) === to.slice(-2) ? `${from.slice(0, -2)}–${to}` : `${from}–${to}`
 }
 
 /**

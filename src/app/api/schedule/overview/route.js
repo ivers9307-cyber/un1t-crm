@@ -30,6 +30,7 @@ import {
   eventTypeHasWindowForDate,
   sumStaffRequired,
   classifyDayLoad,
+  leaveOnDate,
 } from '@/lib/schedule-overview'
 import { logWarn } from '@/lib/log'
 
@@ -256,13 +257,11 @@ async function handleGet(request) {
     // Staff on leave today: any time_off row whose [start_date, end_date]
     // window contains this date AND whose profile_id is in the scheduled
     // set (people on leave only matter if they were going to work).
-    const onLeaveSet = new Set()
-    const onLeaveNames = []
-    for (const off of time_off) {
-      if (date < off.start_date || date > off.end_date) continue
-      onLeaveNames.push(off.profiles?.full_name || 'Unknown')
-      if (staffSet.has(off.profile_id)) onLeaveSet.add(off.profile_id)
-    }
+    // ROSTERLOOK.1 — each PERSON once: two overlapping requests from one
+    // coach used to list their name twice in the day dialog.
+    const onLeave = leaveOnDate(time_off, date)
+    const onLeaveNames = onLeave.names
+    const onLeaveSet = new Set(onLeave.profileIds.filter((id) => staffSet.has(id)))
 
     const staff_scheduled = staffSet.size
     const staff_on_leave  = onLeaveSet.size

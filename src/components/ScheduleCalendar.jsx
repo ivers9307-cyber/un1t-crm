@@ -3,9 +3,10 @@
 // Roster v2 phase 2 — calendar now reads from /api/schedule/blocks
 // (block-shaped data with nested shift_assignments) instead of the
 // legacy flat /api/schedule/shifts. Each block renders as a single
-// card showing template + time + capacity badge + assigned coaches.
-// Empty future blocks get a red unstaffed flag; below-minimum ones an amber
-// "1 of 2" (ROSTERVIS.1). The header says whether the period is published.
+// NEUTRAL card: time, assigned coaches, template name (ROSTERLOOK.1; see
+// schedule/ShiftCard). Colour means staffing only: empty future blocks get a
+// red dashed "Needs coach", below-minimum ones an amber "1 of 2"
+// (ROSTERVIS.1). The toolbar says whether the period is published.
 //
 // (Historical: public.shifts was kept in sync via the mig 068/069
 // bidirectional triggers during cutover; the table + triggers were
@@ -22,8 +23,7 @@
 // (RETIRE-SHIFTS-MIRROR.5c). The legacy public.shifts mirror is gone (mig 238).
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import { ChevronLeft, ChevronRight, Copy, Send, Plus, Users, User, Clock, X, ArrowLeftRight, CalendarOff, Palmtree, ThermometerSun, Ban, Wallet, CircleEllipsis, AlertTriangle, AlertCircle, CalendarDays, CalendarRange, Pencil, Check, Settings } from 'lucide-react'
-import Link from 'next/link'
+import { Plus, Clock, X, ArrowLeftRight, CalendarOff, Palmtree, ThermometerSun, Ban, Wallet, CircleEllipsis, AlertTriangle, AlertCircle, Pencil, Check } from 'lucide-react'
 import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 import { indexByDate } from '@/lib/bank-holidays'
 import { MANAGER_ROLES } from '@/lib/schemas'
@@ -72,6 +72,12 @@ import { timeOffLeaveLabel } from '@shared/time-off'
 import { useScheduleData } from './schedule/useScheduleData'
 import { useWeekCost } from './schedule/useWeekCost'
 import { useDraftRosters } from './schedule/useDraftRosters'
+// ROSTERLOOK.1 — the toolbar row, and the pure model that says what is on it.
+import RosterToolbar from './schedule/RosterToolbar'
+import DayHeader from './schedule/DayHeader'
+import ShiftCard from './schedule/ShiftCard'
+import MonthCell from './schedule/MonthCell'
+import { rosterToolbarModel, dayHeaderStatus, shiftCardModel, monthCellLines, dayLeaveBars } from '@/lib/roster-card-model'
 
 // LEAVE.2 — every leave type gets its own label (timeOffLeaveLabel) and
 // colour. Unpaid and "other" were missing, so approved unpaid/other leave
@@ -118,27 +124,16 @@ function getMonthGridRange(monthStart) {
   return { start, end }
 }
 
-// Roster v2: a block is "unstaffed" when it has zero assignments
-// AND its date is today or later. Past blocks may legitimately
-// have empty assignments (coaches called out, never replaced) —
-// flagging those is noise.
-//
-// ROSTER-FIX.1 — counts LIVE assignments only, so a cancelled row (an
-// approved swap-drop) cannot make an empty block look staffed.
-//
-// ROSTERVIS.1 — 'empty' | 'short' | 'ok', or null for a past block. This used
-// to be a zero-only boolean, so a shift at 1 of 2 coaches read as fine on the
-// calendar while the Studio Overview strip above it counted it as below
-// minimum. Both now answer from src/lib/roster-staffing.
-function blockStaffingStatus(block, todayStr) {
-  return futureBlockStaffing(block, todayStr)?.status || null
-}
-
 // ROSTERROLE.1 — publishing over budget without an approval is an OWNER
 // decision, judged at the roster's studio (the route uses the same set).
 const OWNER_ROLES = ['owner']
 
-export default function ScheduleCalendar({ user, onRangeChange, onDataChange, focusShift }) {
+// ROSTERLOOK.1 — `onOpenDayOverview(dateStr, headerEl)`: a manager's day
+// header asks the parent to open the Studio Overview for that day, and hands
+// over its own element so the dialog can give focus back to it (Safari does
+// not focus a clicked button, so the opener cannot be inferred). Optional:
+// rendered alone (every test but one) the headers are plain, not dead buttons.
+export default function ScheduleCalendar({ user, onRangeChange, onDataChange, focusShift, onOpenDayOverview }) {
   // SCHEDULE-PERSIST.1 — week / month / view persisted in the URL so
   // refresh keeps the operator's position. Before this, the state
   // initialised from `new Date()` on every mount, so a page refresh
@@ -183,7 +178,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
   }, [viewType, weekStart, monthStart, pathname, router])
 
   // Mig 125: notify parent (ScheduleTabs) of the visible date range
-  // so the StudioOverviewStrip above us can re-fetch its per-day demand
+  // so the StudioOverviewDialog beside us can re-fetch its per-day demand
   // summary. Fires every time the operator switches week / month or
   // navigates date. Uses formatDate(YYYY-MM-DD) for the wire shape.
   useEffect(() => {
@@ -939,213 +934,107 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
     }
   }
 
+  // ROSTERLOOK.1 — the toolbar's handlers. Each is the inline onClick the old
+  // header carried, given a name so RosterToolbar can call it. No behaviour
+  // changed in the move.
+  function showWeekView() {
+    // ROSTER-FIX.6a — see weekStartForMonth: getMonday(monthStart)
+    // used to land on the previous month whenever the 1st fell on
+    // a weekend, and the next Month click then kept that month.
+    if (viewType === 'month') setWeekStart(weekStartForMonth(monthStart, weekStart))
+    setViewType('week')
+  }
+  function showMonthView() {
+    // Midweek decides which month a straddling week belongs to.
+    if (viewType === 'week') setMonthStart(monthStartForWeek(weekStart))
+    setViewType('month')
+  }
+  function goPrevious() {
+    if (viewType === 'month') setMonthStart(addMonths(monthStart, -1))
+    else setWeekStart(addDays(weekStart, -7))
+  }
+  function goNext() {
+    if (viewType === 'month') setMonthStart(addMonths(monthStart, 1))
+    else setWeekStart(addDays(weekStart, 7))
+  }
+  function goToday() {
+    const now = new Date()
+    if (viewType === 'month') setMonthStart(getMonthStart(now))
+    else setWeekStart(getMonday(now))
+  }
+  // BULK-ASSIGN.1 — multi-select mode toggle. Off by default so single-block
+  // edits still work as before. On entry, the floating action bar at the
+  // bottom of the page takes over until the operator hits Cancel or Assign.
+  function toggleSelectMode() {
+    if (selectMode) exitSelectMode()
+    else setSelectMode(true)
+  }
+
+  // SCHEDULE-COPY-VISIBILITY.1 — both copy actions are offered regardless of
+  // view (handleCopyMonth derives the target month from the effective view
+  // state). SCHEDULE-TEMPLATES-SHORTCUT.1 — "Manage templates" is every
+  // manager-class role's one-click path to /settings/shifts, which head_coach
+  // could not otherwise reach. Both rules now live in rosterToolbarModel.
+  const toolbarModel = rosterToolbarModel({
+    isManager,
+    viewType,
+    selectMode,
+    selectedCount: selectedBlockIds.size,
+    copying,
+  })
+
+  // ROSTERVIS.1 — whether the period on screen is published. The
+  // calendar never said; the only signal was an in-memory
+  // unsaved-changes flag a reload drops. Derived from each block's
+  // roster status plus the draft rosters awaiting approval.
+  // Manager only (a coach's feed is published-only), and EMPTIED
+  // while loading so a stale week's answer never sits under new
+  // dates. The chip's live region itself stays mounted (CHANGELOG.1).
+  // ROSTERLOOK.1 — built HERE and handed to the toolbar as its `statusChip`
+  // slot, so the change-log state, the trigger ref and the drawer stay in this
+  // file. Gated on isManager ONLY: PublicationStatusChip's role="status"
+  // wrapper must stay mounted through loading and through a period with
+  // nothing to say, both so a screen reader hears the status CHANGE and so the
+  // toolbar's right-hand group does not jump rows while a week loads.
+  const publicationChip = isManager ? (
+    <PublicationStatusChip
+      publication={loading ? null : publication}
+      viewType={viewType}
+      onOpenChangeLog={openChangeLog}
+      triggerRef={changeLogTriggerRef}
+    />
+  ) : null
+
   return (
     <div ref={calendarRef}>
-      {/* Header */}
-      {/* CAL-UI-LOW.1 — the header row is a WRAPPING row.
-          It used to be a single `flex items-center justify-between`
-          with a non-wrapping action group, so every control past the
-          available width was pushed off the right edge of the page —
-          at phone width that is Publish, the one action the week view
-          exists for, with no horizontal scroll to reach it (the page
-          is `p-8`, so a 360px phone leaves 296px of content). Wrapping
-          here changes nothing on a desktop row that already fits; it
-          only decides where the overflow goes when it does not.
-          `items-center` is kept from the original so the desktop row is
-          pixel-identical (measured: `items-start` lifted the whole action
-          group 11px). Titles get `min-w-0` so a long studio name shrinks
-          instead of pushing the actions out, and each pill carries
-          `whitespace-nowrap` so the wrap happens BETWEEN controls
-          rather than inside a label. */}
-      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 mb-6">
-        <div className="min-w-0">
-          <h2 className="text-2xl font-bold">Schedule</h2>
-          <p className="text-sm text-un1t-subtle mt-1">
-            {user.activeLocation?.name} — Staff roster
-          </p>
-        </div>
-        <div data-testid="schedule-toolbar" className="flex flex-wrap items-center gap-2">
-          <Link
-            href="/schedule/time-off"
-            className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30 transition-colors whitespace-nowrap"
-          >
-            <CalendarOff size={14} /> Time Off
-          </Link>
+      {/* ROSTERLOOK.1 — the visible "Schedule / <studio> — Staff roster" block
+          is gone: the sidebar names the studio, two tab strips say "Schedule",
+          and the tab title says both. Heading navigation keeps a landmark. */}
+      <h2 className="sr-only">
+        {user.activeLocation?.name ? `${user.activeLocation.name} staff roster` : 'Staff roster'}
+      </h2>
 
-          <div className="flex shrink-0 bg-un1t-surface border border-un1t-border rounded-lg overflow-hidden text-xs">
-            <button
-              type="button"
-              onClick={() => setViewMode('my')}
-              className={`flex items-center gap-1.5 px-3 py-2 whitespace-nowrap transition-colors ${viewMode === 'my' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'}`}
-            >
-              <User size={14} /> My Shifts
-            </button>
-            <button
-              type="button"
-              onClick={() => setViewMode('all')}
-              className={`flex items-center gap-1.5 px-3 py-2 whitespace-nowrap transition-colors ${viewMode === 'all' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'}`}
-            >
-              <Users size={14} /> All Staff
-            </button>
-          </div>
-
-          <div className="flex shrink-0 bg-un1t-surface border border-un1t-border rounded-lg overflow-hidden text-xs">
-            <button
-              type="button"
-              onClick={() => {
-                // ROSTER-FIX.6a — see weekStartForMonth: getMonday(monthStart)
-                // used to land on the previous month whenever the 1st fell on
-                // a weekend, and the next Month click then kept that month.
-                if (viewType === 'month') setWeekStart(weekStartForMonth(monthStart, weekStart))
-                setViewType('week')
-              }}
-              className={`flex items-center gap-1.5 px-3 py-2 whitespace-nowrap transition-colors ${viewType === 'week' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'}`}
-            >
-              <CalendarDays size={14} /> Week
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                // Midweek decides which month a straddling week belongs to.
-                if (viewType === 'week') setMonthStart(monthStartForWeek(weekStart))
-                setViewType('month')
-              }}
-              className={`flex items-center gap-1.5 px-3 py-2 whitespace-nowrap transition-colors ${viewType === 'month' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'}`}
-            >
-              <CalendarRange size={14} /> Month
-            </button>
-          </div>
-
-          {isManager && (
-            <>
-              {/* BULK-ASSIGN.1 — multi-select mode toggle. Off by
-                  default so single-block edits still work as
-                  before. On entry, the floating action bar at the
-                  bottom of the page takes over until the operator
-                  hits Cancel or Assign. */}
-              <button
-                type="button"
-                onClick={() => {
-                  if (selectMode) exitSelectMode()
-                  else setSelectMode(true)
-                }}
-                className={`flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border whitespace-nowrap transition-colors ${
-                  selectMode
-                    ? 'bg-amber-500/20 border-amber-500/50 text-amber-700'
-                    : 'border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30'
-                }`}
-                title={selectMode ? 'Exit multi-select' : 'Select multiple shifts to assign a coach in bulk'}
-              >
-                <Check size={14} /> {selectMode ? `Selecting (${selectedBlockIds.size})` : 'Select multiple'}
-              </button>
-              {/* SCHEDULE-COPY-VISIBILITY.1 — both copy actions are
-                  surfaced regardless of view. The copy-month endpoint
-                  has always existed but was only visible in month
-                  view, so operators working in week view never
-                  discovered it. handleCopyMonth derives the target
-                  month from the effective view state. */}
-              <button
-                type="button"
-                onClick={handleCopyWeek}
-                disabled={copying}
-                className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30 transition-colors disabled:opacity-50 whitespace-nowrap"
-                title="Duplicate last week's shifts into this week"
-              >
-                <Copy size={14} /> {copying ? 'Copying...' : 'Copy Last Week'}
-              </button>
-              <button
-                type="button"
-                onClick={handleCopyMonth}
-                disabled={copying}
-                className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30 transition-colors disabled:opacity-50 whitespace-nowrap"
-                title="Duplicate last month's shifts into this month"
-              >
-                <Copy size={14} /> {copying ? 'Copying...' : 'Copy Last Month'}
-              </button>
-              {/* SCHEDULE-TEMPLATES-SHORTCUT.1 — direct path to the
-                  shift-template editor. /settings/shifts has always
-                  been MANAGER_ROLES-gated (head_coach included), but
-                  the only link to it lived inside /settings/locations/
-                  [id], which is master/owner-only — so head_coach
-                  could never reach it. Surfacing the link here gives
-                  every manager-class role a one-click entry point
-                  from the view where they think about templates. */}
-              <Link
-                href="/settings/shifts"
-                className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30 transition-colors whitespace-nowrap"
-                title="Add, edit, or retire the shift templates that build this roster"
-              >
-                <Settings size={14} /> Manage templates
-              </Link>
-              {viewType === 'week' && (
-                <button
-                  type="button"
-                  onClick={handlePublishClick}
-                  disabled={publishing}
-                  className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white transition-colors disabled:opacity-50 whitespace-nowrap"
-                >
-                  <Send size={14} /> {publishing ? 'Publishing...' : 'Publish'}
-                </button>
-              )}
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* Range Navigation */}
-      <div className="flex items-center justify-between mb-4">
-        <button
-          type="button"
-          onClick={() => {
-            if (viewType === 'month') setMonthStart(addMonths(monthStart, -1))
-            else setWeekStart(addDays(weekStart, -7))
-          }}
-          aria-label={viewType === 'month' ? 'Previous month' : 'Previous week'}
-          className="p-2 rounded-lg hover:bg-un1t-border/50 text-un1t-subtle hover:text-un1t-text transition-colors"
-        >
-          <ChevronLeft size={20} aria-hidden="true" />
-        </button>
-        <div className="text-center">
-          <span className="font-semibold">{viewType === 'month' ? monthLabel : weekLabel}</span>
-          <button
-            type="button"
-            onClick={() => {
-              const now = new Date()
-              if (viewType === 'month') setMonthStart(getMonthStart(now))
-              else setWeekStart(getMonday(now))
-            }}
-            className="ml-3 text-xs text-blue-700 hover:text-blue-800"
-          >
-            Today
-          </button>
-          {/* ROSTERVIS.1 — whether the period on screen is published. The
-              calendar never said; the only signal was an in-memory
-              unsaved-changes flag a reload drops. Derived from each block's
-              roster status plus the draft rosters awaiting approval.
-              Manager only (a coach's feed is published-only), and EMPTIED
-              while loading so a stale week's answer never sits under new
-              dates. The chip's live region itself stays mounted (CHANGELOG.1). */}
-          {isManager && (
-            <PublicationStatusChip
-              publication={loading ? null : publication}
-              viewType={viewType}
-              onOpenChangeLog={openChangeLog}
-              triggerRef={changeLogTriggerRef}
-            />
-          )}
-        </div>
-        <button
-          type="button"
-          onClick={() => {
-            if (viewType === 'month') setMonthStart(addMonths(monthStart, 1))
-            else setWeekStart(addDays(weekStart, 7))
-          }}
-          aria-label={viewType === 'month' ? 'Next month' : 'Next week'}
-          className="p-2 rounded-lg hover:bg-un1t-border/50 text-un1t-subtle hover:text-un1t-text transition-colors"
-        >
-          <ChevronRight size={20} aria-hidden="true" />
-        </button>
-      </div>
+      {/* ROSTERLOOK.1 — ONE toolbar row (was: eight buttons on two rows, then
+          a separate week navigator). Gating lives in rosterToolbarModel; the
+          handlers are the ones this file has always had. CAL-UI-LOW.1's
+          wrapping rules moved into RosterToolbar with the markup. */}
+      <RosterToolbar
+        viewType={viewType}
+        periodLabel={viewType === 'month' ? monthLabel : weekLabel}
+        onPrev={goPrevious}
+        onNext={goNext}
+        onToday={goToday}
+        statusChip={publicationChip}
+        viewMode={viewMode}
+        onViewMode={setViewMode}
+        onViewType={(next) => (next === 'month' ? showMonthView() : showWeekView())}
+        model={toolbarModel}
+        onSelectToggle={toggleSelectMode}
+        onCopyWeek={handleCopyWeek}
+        onCopyMonth={handleCopyMonth}
+        onPublish={handlePublishClick}
+        publishing={publishing}
+      />
 
       {/* ROSTER-FIX.6a — a failed load used to leave the screen on
           "Loading roster..." forever with nothing said. The banner names the
@@ -1240,17 +1129,21 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
         <div className="text-center py-20 text-un1t-subtle">Loading roster...</div>
       ) : viewType === 'month' ? (
         // ── MONTH VIEW ──
-        // Renders a 6x7 grid; each cell shows the date + count of
-        // assignments + count of unstaffed blocks. Clicking drills
-        // into the week view. Roster v2: separately surfaces empty
-        // blocks as a red badge.
+        // Renders a 6x7 grid; each cell is a schedule/MonthCell: the date,
+        // the day's staffing status, and up to three lines of time + coach
+        // first names. Clicking drills into the week view.
         // ROSTER-FIX.6b — seven columns with no breakpoint. On a 390px phone
         // each day cell was ~50px wide and every block label inside it was an
         // ellipsis. The grid keeps its seven columns and gets a floor instead;
         // the page scrolls the calendar sideways rather than crushing it.
         // Header row and cells share ONE scroller so the weekday labels stay
         // over their own columns.
-        <div className="overflow-x-auto">
+        // ROSTERLOOK.1 — `relative` makes THIS scroller the containing block for
+        // every absolutely-positioned descendant (each sr-only span is one).
+        // Without it they are not clipped by the scroller and stretch the
+        // DOCUMENT sideways on a phone. Browser check, at 390 wide:
+        // document.documentElement.scrollWidth <= document.documentElement.clientWidth
+        <div className="relative overflow-x-auto">
           <div className="min-w-[840px]">
           <div className="grid grid-cols-7 gap-1.5 mb-1.5">
             {DAY_LABELS.map(label => (
@@ -1276,108 +1169,35 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
                 const isToday = dateStr === todayStr
                 const holiday = holidayByDate.get(dateStr)
                 const totalAssignmentCount = visibleBlocks.reduce((sum, b) => sum + liveAssignments(b.shift_assignments).length, 0)
-                // ROSTERVIS.1 — empty and short counted separately: red for
-                // no coach, amber for below the minimum.
-                const dayGaps = countStaffingGaps(visibleBlocks, { todayIso: todayStr })
-                const unstaffedCount = dayGaps.empty
-                const shortCount = dayGaps.short
+                // ROSTERLOOK.1 — the lines name the coaches (monthCellLines),
+                // and the day's status is the week headers' status, from the
+                // same function. Manager-only, as "!1" / "↓1" were
+                // (ROSTER-FIX.2: a coach gets no staffing cues). Like those
+                // badges it answers for the VISIBLE blocks, so it agrees with
+                // the lines under it.
+                const { lines, more } = monthCellLines(visibleBlocks, { todayIso: todayStr, isManager })
+                const firstTimeOff = dayTimeOff[0]
+                const timeOffConf = firstTimeOff ? (TIME_OFF_CONFIG[firstTimeOff.type] || TIME_OFF_FALLBACK) : null
 
                 cells.push(
-                  <button
+                  <MonthCell
                     key={dateStr}
-                    type="button"
-                    onClick={() => {
+                    dayNumber={date.getDate()}
+                    inFocusedMonth={inFocusedMonth}
+                    isToday={isToday}
+                    holiday={holiday}
+                    lines={lines}
+                    more={more}
+                    status={isManager ? dayHeaderStatus(visibleBlocks, { todayIso: todayStr }) : null}
+                    assignmentCount={totalAssignmentCount}
+                    timeOffEntry={firstTimeOff
+                      ? { text: `${firstTimeOff.profiles?.full_name?.split(' ')[0]} ${timeOffConf.label}`, color: timeOffConf.color }
+                      : null}
+                    onOpen={() => {
                       setWeekStart(getMonday(date))
                       setViewType('week')
                     }}
-                    className={`text-left bg-un1t-surface border rounded-md p-1.5 min-h-[88px] transition-colors hover:border-un1t-text/30 ${
-                      inFocusedMonth ? 'border-un1t-border' : 'border-un1t-border/50 opacity-60'
-                    } ${isToday ? 'ring-1 ring-blue-400/50' : ''} ${holiday ? 'bg-amber-500/[0.06]' : ''}`}
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <span className={`text-xs font-semibold ${isToday ? 'text-blue-700' : inFocusedMonth ? 'text-un1t-text' : 'text-un1t-muted'}`}>
-                        {date.getDate()}
-                      </span>
-                      <div className="flex items-center gap-1">
-                        {/* ROSTER-FIX.2 — unstaffed is a manager cue; coaches get a capacity-free feed and no red flags. */}
-                        {isManager && unstaffedCount > 0 && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-700" title={`${unstaffedCount} unstaffed`}>
-                            <span aria-hidden="true">!{unstaffedCount}</span>
-                            <span className="sr-only">{unstaffedCount} unstaffed</span>
-                          </span>
-                        )}
-                        {isManager && shortCount > 0 && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-700" title={`${shortCount} below minimum`}>
-                            <span aria-hidden="true">↓{shortCount}</span>
-                            <span className="sr-only">{shortCount} below minimum</span>
-                          </span>
-                        )}
-                        {totalAssignmentCount > 0 && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-un1t-border/60 text-un1t-subtle">
-                            {totalAssignmentCount}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    {holiday && (
-                      <div className="text-[9px] text-amber-700 mb-1 truncate" title={holiday.name}>
-                        {holiday.name}
-                      </div>
-                    )}
-                    <div className="space-y-0.5">
-                      {visibleBlocks.slice(0, 3).map(b => {
-                        const tmpl = b.shift_templates || {}
-                        const count = liveAssignments(b.shift_assignments).length
-                        const staffing = blockStaffingStatus(b, todayStr)
-                        // ROSTER-FIX.6b — unstaffed was a red hairline border and
-                        // nothing else. It survives neither greyscale nor the
-                        // ~8% of male operators with a red/green deficiency, and
-                        // there is no text for a screen reader to reach at all.
-                        // The warning glyph and the sr-only word carry it now;
-                        // the border stays as the at-a-glance cue for everyone else.
-                        const showUnstaffed = isManager && staffing === 'empty'
-                        // ROSTERVIS.1 — same treatment in amber for below minimum.
-                        const showShort = isManager && staffing === 'short'
-                        return (
-                          <div
-                            key={b.id}
-                            className={`text-[10px] truncate rounded px-1 py-0.5 ${showUnstaffed ? 'border border-red-500/40' : showShort ? 'border border-amber-500/50' : ''}`}
-                            style={{ backgroundColor: (tmpl.color || '#3B82F6') + '20', color: tmpl.color || '#3B82F6' }}
-                            title={`${tmpl.name || 'Shift'} · ${formatTime(b.start_time)}–${formatTime(b.end_time)}${isManager ? ` · ${count}/${b.max_coaches}` : ''}${showUnstaffed ? ' · Unstaffed' : ''}${showShort ? ` · ${count} of ${b.min_coaches} minimum` : ''}`}
-                          >
-                            {showUnstaffed && (
-                              <>
-                                <AlertTriangle size={9} className="inline-block mr-0.5 -mt-px text-red-700" aria-hidden="true" />
-                                <span className="sr-only">Unstaffed. </span>
-                              </>
-                            )}
-                            {showShort && (
-                              <>
-                                <AlertTriangle size={9} className="inline-block mr-0.5 -mt-px text-amber-700" aria-hidden="true" />
-                                <span className="sr-only">Below minimum, {count} of {b.min_coaches}. </span>
-                              </>
-                            )}
-                            {formatTime(b.start_time)}{isManager ? ` ${count}/${b.max_coaches}` : ''}
-                          </div>
-                        )
-                      })}
-                      {visibleBlocks.length > 3 && (
-                        <div className="text-[10px] text-un1t-muted">+{visibleBlocks.length - 3} more</div>
-                      )}
-                      {dayTimeOff.slice(0, 1).map(t => {
-                        const conf = TIME_OFF_CONFIG[t.type] || TIME_OFF_FALLBACK
-                        return (
-                          <div
-                            key={`to-${t.id}`}
-                            className="text-[10px] truncate rounded px-1 py-0.5"
-                            style={{ backgroundColor: conf.color + '18', color: conf.color }}
-                          >
-                            {t.profiles?.full_name?.split(' ')[0]} {conf.label}
-                          </div>
-                        )
-                      })}
-                    </div>
-                  </button>
+                  />
                 )
               }
               return cells
@@ -1387,16 +1207,22 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
         </div>
       ) : (
         // ── WEEK VIEW ──
-        // Roster v2: one card per BLOCK. Each card shows the
-        // template colour + name + time + capacity badge + a list
-        // of assigned coaches (or an empty-state with a red flag
-        // for future unstaffed demand windows). Click opens the
-        // assign popover.
-        // ROSTER-FIX.6b — same floor as the month grid; a week card carries a
+        // Roster v2: one card per BLOCK. Each card is a
+        // schedule/ShiftCard. Click opens the block-detail dialog.
+        // ROSTER-FIX.6b — a floor, like the month grid's; a week card carries a
         // template name, a time range and a coach list, none of which survive
         // a 50px column.
-        <div className="overflow-x-auto">
-        <div className="grid grid-cols-7 gap-2 min-w-[840px]">
+        // ROSTERLOOK.1 — 980px, not the month grid's 840: at 840 a card is 99px
+        // and the longest real one-line range ("10:45am–12pm", 95px of text)
+        // spilled over its border. 980 gives about 116px. The grid scrolls
+        // inside its own container, so a wider floor costs the page nothing.
+        // ROSTERLOOK.1 — `relative` makes THIS scroller the containing block for
+        // every absolutely-positioned descendant (each sr-only span is one).
+        // Without it they are not clipped by the scroller and stretch the
+        // DOCUMENT sideways on a phone. Browser check, at 390 wide:
+        // document.documentElement.scrollWidth <= document.documentElement.clientWidth
+        <div className="relative overflow-x-auto">
+        <div className="grid grid-cols-7 gap-2 min-w-[980px]">
           {(() => {
             const holidayByDate = indexByDate(holidays)
             return DAY_LABELS.map((label, i) => {
@@ -1410,221 +1236,91 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
               // otherwise read "Manage the 09:30 Morning shift", seven times.
               const cardDayLabel = date.toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'long' })
 
-              const headerCls = isToday
-                ? 'bg-blue-600 text-white'
-                : holiday
-                  ? 'bg-amber-500/15 text-amber-700 border border-amber-500/30'
-                  : 'bg-un1t-surface text-un1t-subtle'
+              // ROSTERLOOK.1 — the Studio Overview strip, folded into the
+              // header. The status is the STUDIO's day (all blocks, whatever
+              // the My shifts filter shows), manager-only, and answers from the
+              // same futureBlockStaffing the cards and the banner use.
+              const dayStatus = isManager
+                ? dayHeaderStatus(blocks.filter((b) => b.block_date === dateStr), { todayIso: todayStr })
+                : null
 
               return (
                 <div key={i} className="min-h-[200px]">
-                  <div className={`text-center py-2 rounded-t-lg text-xs font-semibold ${headerCls}`} title={holiday?.name || undefined}>
-                    <div>{label}</div>
-                    <div className={`text-lg font-bold ${isToday ? 'text-white' : 'text-un1t-text'}`}>{date.getDate()}</div>
-                    {holiday && (
-                      <div className={`mt-0.5 text-[10px] font-medium leading-tight px-1 truncate ${isToday ? 'text-white/80' : 'text-amber-700'}`}>
-                        {holiday.source === 'national' ? '🇮🇪 ' : '🏷 '}{holiday.name}
-                      </div>
-                    )}
-                  </div>
+                  <DayHeader
+                    label={label}
+                    dayNumber={date.getDate()}
+                    fullDate={cardDayLabel}
+                    isToday={isToday}
+                    holiday={holiday}
+                    status={dayStatus}
+                    onOpen={isManager && onOpenDayOverview ? (el) => onOpenDayOverview(dateStr, el) : undefined}
+                  />
 
                   <div className={`bg-un1t-surface/50 border border-un1t-border border-t-0 rounded-b-lg p-1.5 space-y-1.5 min-h-[160px] ${holiday ? 'bg-amber-500/[0.04]' : ''}`}>
-                    {/* Time-off bars */}
-                    {timeOff
-                      .filter(t => t.start_date <= dateStr && t.end_date >= dateStr)
-                      .filter(t => viewMode === 'all' || t.profile_id === user.id)
-                      .map(t => {
-                        const conf = TIME_OFF_CONFIG[t.type] || TIME_OFF_FALLBACK
-                        const Icon = conf.icon
-                        return (
-                          <div
-                            key={`to-${t.id}`}
-                            className="rounded-md px-2 py-1.5 text-xs flex items-center gap-1.5"
-                            style={{ backgroundColor: conf.color + '18', borderLeft: `3px solid ${conf.color}` }}
-                          >
-                            <Icon size={12} style={{ color: conf.color }} />
-                            <span className="font-medium truncate" style={{ color: conf.color }}>
-                              {t.profiles?.full_name} — {conf.label}
-                            </span>
-                          </div>
-                        )
-                      })
-                    }
+                    {/* Time-off bars. ROSTERLOOK.1 — one per PERSON per day
+                        (two overlapping requests drew the same bar twice), and
+                        "Firstname · Type" so it fits the column; the full name
+                        and the date range are in the title. WHO is shown is
+                        still this filter's decision, unchanged: dayLeaveBars
+                        only dedupes what it is handed. */}
+                    {dayLeaveBars(
+                      timeOff.filter(t => viewMode === 'all' || t.profile_id === user.id),
+                      dateStr,
+                    ).map(bar => {
+                      const conf = TIME_OFF_CONFIG[bar.type] || TIME_OFF_FALLBACK
+                      const Icon = conf.icon
+                      return (
+                        <div
+                          key={`to-${bar.id}`}
+                          data-testid="leave-bar"
+                          title={bar.title}
+                          className="rounded-md px-2 py-1.5 text-xs flex items-center gap-1.5"
+                          style={{ backgroundColor: conf.color + '18', borderLeft: `3px solid ${conf.color}` }}
+                        >
+                          <Icon size={12} className="shrink-0" style={{ color: conf.color }} aria-hidden="true" />
+                          <span className="font-medium truncate" style={{ color: conf.color }}>
+                            {bar.text}
+                          </span>
+                        </div>
+                      )
+                    })}
 
                     {dayBlocks.length === 0 && timeOff.filter(t => t.start_date <= dateStr && t.end_date >= dateStr).length === 0 && (
                       <div className="text-center py-6 text-xs text-un1t-muted">No shifts</div>
                     )}
 
-                    {dayBlocks.map(block => {
-                      const tmpl = block.shift_templates || {}
-                      const assignments = liveAssignments(block.shift_assignments)
-                      const count = assignments.length
-                      const max = block.max_coaches || 15
-                      const staffing = blockStaffingStatus(block, todayStr)
-                      const unstaffed = staffing === 'empty'
-                      // ROSTER-FIX.2 — same reason: the red unstaffed styling is manager-only, coaches see the neutral card.
-                      const showUnstaffed = isManager && unstaffed
-                      // ROSTERVIS.1 — below min_coaches but not empty. Amber, and
-                      // it says the numbers: "1 of 2". min_coaches is a manager
-                      // fact the coach feed never carries, so this is manager-only
-                      // by construction as well as by the gate.
-                      const showShort = isManager && staffing === 'short'
-                      const minCoaches = Number(block.min_coaches) || 0
-                      const myAssignment = assignments.find(a => a.profile_id === user.id)
-                      const blockColor = tmpl.color || '#3B82F6'
-                      const atCapacity = count >= max
-
-                      const isSelected = selectedBlockIds.has(block.id)
-                      // ROSTER-FIX.6b-7 — the card's own short name, spoken by
-                      // the overlay button below. It is deliberately NOT the
-                      // card's contents: the coach list, the capacity chip and
-                      // the "Unstaffed."/"Adjusted hours…" text stay in the
-                      // card so a screen reader can browse them line by line.
-                      const cardLabel = `${formatTime(block.start_time)} ${tmpl.name || 'Shift'} shift, ${cardDayLabel}`
+                    {/* ROSTERLOOK.1 — one ShiftCard per block. WHAT the card
+                        says is shiftCardModel's decision (pure, tested in
+                        src/lib/roster-card-model.test.js), including the coach
+                        boundary: for a non-manager the model carries no
+                        staffing status, and it reads max_coaches for nobody.
+                        The historical notes on this card (ROSTER-FIX.2, .6b,
+                        .6b-7, ROSTERVIS.1) moved into ShiftCard.jsx with the
+                        markup they explain. */}
+                    {dayBlocks.map((block) => {
+                      const model = shiftCardModel(
+                        block,
+                        block.shift_assignments,
+                        futureBlockStaffing(block, todayStr),
+                        { isManager, viewerId: user.id },
+                      )
+                      const isMine = model.coaches.some((c) => c.isMe)
                       return (
-                        <div
+                        <ShiftCard
                           key={block.id}
-                          className={`rounded-md p-2 text-xs relative group hover:ring-1 hover:ring-un1t-subtle/40 ${myAssignment ? 'ring-1 ring-blue-400/50' : ''} ${showUnstaffed ? 'border border-red-500/50' : showShort ? 'border border-amber-500/50' : ''} ${isSelected ? 'ring-2 ring-amber-400 ring-offset-1 ring-offset-un1t-bg' : ''}`}
-                          style={{ backgroundColor: showUnstaffed ? '#7F1D1D20' : blockColor + '20', borderLeft: `3px solid ${showUnstaffed ? '#EF4444' : blockColor}` }}
-                        >
-                          {/* ROSTER-FIX.6b-7 — this card used to BE the button:
-                              role="button" + tabIndex on the wrapper. That is
-                              the a11y trap 6b walked into — an element with a
-                              button role has its whole subtree flattened into
-                              ONE accessible name, so the sr-only "Unstaffed."
-                              and "Adjusted hours: …" this PR added for exactly
-                              this card, plus every coach's name, were read as a
-                              single run-on string and nothing inside it could
-                              be reached on its own. The wrapper goes back to
-                              being a plain container and the click target
-                              becomes a real <button> stretched over it with a
-                              short label of its own. Enter and Space (with the
-                              scroll suppressed) come free with a real button —
-                              no hand-rolled key handler, and nothing to bubble
-                              up from a child. */}
-                          <button
-                            type="button"
-                            aria-pressed={selectMode ? isSelected : undefined}
-                            onClick={() => {
-                              // BULK-ASSIGN.1 — in select mode, clicks
-                              // toggle selection instead of opening
-                              // the detail modal. The action bar at
-                              // the bottom takes the bulk-assign call.
-                              if (selectMode) toggleBlockSelection(block.id)
-                              else setBlockDetail(block)
-                            }}
-                            className="absolute inset-0 z-10 w-full rounded-md cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-un1t-accent"
-                          >
-                            <span className="sr-only">
-                              {selectMode ? `Select ${cardLabel}` : `Manage ${cardLabel}`}
-                            </span>
-                          </button>
-                          <div className="flex items-center justify-between gap-1">
-                            <div className="font-semibold truncate" style={{ color: showUnstaffed ? '#FCA5A5' : 'inherit' }}>
-                              {/* ROSTER-FIX.6b — the card said "unstaffed" with a red
-                                  wash and a red left rule. Both vanish in greyscale
-                                  and neither is announced. The glyph plus the
-                                  visually-hidden word say it in text. */}
-                              {showUnstaffed && (
-                                <>
-                                  <AlertTriangle size={11} className="inline-block mr-1 -mt-0.5 text-red-700" aria-hidden="true" />
-                                  <span className="sr-only">Unstaffed. </span>
-                                </>
-                              )}
-                              {tmpl.name || 'Shift'}
-                            </div>
-                            {/* ROSTER-FIX.2 — capacity is a manager fact. A coach
-                                sees the shift, its time and who is on it; how many
-                                bodies it is budgeted for is not their business, and
-                                the API no longer sends max_coaches to them anyway. */}
-                            {isManager && (
-                              <span
-                                className={`text-[10px] px-1.5 py-0.5 rounded font-medium flex-shrink-0 ${
-                                  unstaffed
-                                    ? 'bg-red-500/20 text-red-700'
-                                    : atCapacity
-                                      ? 'bg-un1t-border/60 text-un1t-text'
-                                      : ''
-                                }`}
-                                style={!unstaffed && !atCapacity ? { backgroundColor: blockColor + '30', color: blockColor } : undefined}
-                              >
-                                {count}/{max}
-                              </span>
-                            )}
-                          </div>
-                          <div className="text-un1t-subtle mt-0.5 flex items-center gap-1">
-                            <Clock size={10} />
-                            {formatTime(block.start_time)}–{formatTime(block.end_time)}
-                          </div>
-                          {showShort && (
-                            <div
-                              data-testid="short-staffed-badge"
-                              className="mt-1 inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-700"
-                              title={`Below minimum: ${count} of ${minCoaches} coaches`}
-                            >
-                              <AlertTriangle size={10} aria-hidden="true" />
-                              <span className="sr-only">Below minimum: </span>
-                              {count} of {minCoaches}
-                            </div>
-                          )}
-
-                          {/* Assigned coaches list */}
-                          {count === 0 ? (
-                            <div className="mt-1.5 text-[11px] text-red-700 italic">
-                              {!isManager ? 'No coach assigned' : unstaffed ? 'Unstaffed — assign a coach' : 'No coach (past)'}
-                            </div>
-                          ) : (
-                            <div className="mt-1.5 space-y-0.5">
-                              {assignments.map(a => {
-                                const isMe = a.profile_id === user.id
-                                const hasOverride = !!(a.start_time_override || a.end_time_override)
-                                return (
-                                  <div key={a.id} className="flex items-center justify-between gap-1 text-[11px]">
-                                    <span className={`truncate ${isMe ? 'text-blue-700 font-medium' : 'text-un1t-text'}`}>
-                                      {a.profiles?.full_name || 'Unknown'}
-                                      {hasOverride && (
-                                        // ROSTER-FIX.6b — a bare bullet with a colour
-                                        // and a tooltip. Screen readers say "black
-                                        // circle" or nothing at all, and the amber is
-                                        // the only thing separating it from the name
-                                        // beside it. It gets a real name and its
-                                        // detail moves into a visually-hidden span so
-                                        // the tooltip is no longer the only copy.
-                                        <span
-                                          className="ml-1 text-amber-700"
-                                          title={
-                                            `Adjusted: ${formatTime(a.start_time_override || block.start_time)}–${formatTime(a.end_time_override || block.end_time)}` +
-                                            (a.partial_reason ? ` · ${a.partial_reason}` : '')
-                                          }
-                                        >
-                                          <span aria-hidden="true">●</span>
-                                          <span className="sr-only">
-                                            {' '}Adjusted hours: {formatTime(a.start_time_override || block.start_time)} to {formatTime(a.end_time_override || block.end_time)}
-                                            {a.partial_reason ? `. ${a.partial_reason}` : ''}
-                                          </span>
-                                        </span>
-                                      )}
-                                    </span>
-                                  </div>
-                                )
-                              })}
-                            </div>
-                          )}
-
-                          {/* Subtle "click to manage" hint at the bottom.
-                              Everything actionable (assign coach, partial-shift
-                              edits, remove coach, delete block, swap) lives in
-                              the modal that opens on click. */}
-                          {(isManager || myAssignment) && (
-                            // ROSTER-FIX.6b-7 — aria-hidden: it says "Click",
-                            // it only appears on hover, and the button above
-                            // already says "Manage …". Left visible, taken out
-                            // of the accessibility tree.
-                            <div aria-hidden="true" className="mt-1.5 text-[10px] text-un1t-muted italic text-right opacity-0 group-hover:opacity-100 transition-opacity">
-                              Click to manage
-                            </div>
-                          )}
-                        </div>
+                          model={model}
+                          dayLabel={cardDayLabel}
+                          isMine={isMine}
+                          showHint={isManager || isMine}
+                          selectMode={selectMode}
+                          isSelected={selectedBlockIds.has(block.id)}
+                          onActivate={() => {
+                            // BULK-ASSIGN.1 — in select mode, clicks toggle
+                            // selection instead of opening the detail modal.
+                            if (selectMode) toggleBlockSelection(block.id)
+                            else setBlockDetail(block)
+                          }}
+                        />
                       )
                     })}
 

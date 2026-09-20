@@ -5,14 +5,14 @@
 // keyboard.
 //
 // 🔴 Memory `jsdom-cannot-see-layout`: jsdom has NO layout engine, so the
-// responsive part of 6b (the overflow-x-auto + min-w-[840px] wrappers) is
+// responsive part of 6b (the overflow-x-auto + min-w-[840px] / [980px] wrappers) is
 // unprovable here — className assertions would pass on a wrapper that renders
 // nothing. That half needs a browser at 390px. What IS provable is the
 // semantics: roles, names, focus and key handling, and that is all this file
 // claims.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, cleanup, screen, fireEvent, act } from '@testing-library/react'
+import { render, cleanup, screen, fireEvent, act, within } from '@testing-library/react'
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ replace() {} }),
@@ -21,6 +21,11 @@ vi.mock('next/navigation', () => ({
 }))
 
 import ScheduleCalendar from '@/components/ScheduleCalendar'
+
+// Every test here renders the WHOLE calendar. Under a loaded machine that has
+// run past vitest's 5s default (it flaked a parallel suite once), so the file
+// declares its own budget, as the other whole-calendar suites do.
+vi.setConfig({ testTimeout: 20000 })
 
 // A dialog's accessible name is whatever aria-labelledby points at — the
 // assertion the whole conversion is for.
@@ -168,7 +173,9 @@ describe('week-view block card (ROSTER-FIX.6b)', () => {
     // Outside select mode the card is not a toggle, so it carries no state.
     expect(cardButton('Morning').getAttribute('aria-pressed')).toBeNull()
 
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Select multiple/ })) })
+    // ROSTERLOOK.1 — Select multiple moved into the toolbar's More menu.
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'More' })) })
+    await act(async () => { fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /Select multiple/ })) })
     const selectMorning = () => screen.getByRole('button', { name: /^Select .*Morning shift,/ })
     expect(selectMorning().getAttribute('aria-pressed')).toBe('false')
 
@@ -378,26 +385,31 @@ describe('every icon-only control on the calendar has a name (ROSTER-FIX.6b)', (
 
 // ─── state is not carried by colour alone ─────────────────────────────
 describe('unstaffed and adjusted read as text (ROSTER-FIX.6b)', () => {
-  it('says "Unstaffed" in text on the week card, not only in red', async () => {
+  it('says an empty shift needs a coach in TEXT on the week card, not only in red', async () => {
     await renderCalendar()
     const eveningCard = cardButton('Evening').parentElement
-    // Specifically the visually-hidden word beside the glyph — the red wash
-    // and red left rule are the things that do not survive greyscale, and the
-    // italic "Unstaffed - assign a coach" line only appears while the block
-    // has zero coaches AND the viewer is a manager.
-    const hidden = Array.from(eveningCard.querySelectorAll('.sr-only')).map(n => n.textContent.trim())
-    expect(hidden).toContain('Unstaffed.')
+    // ROSTERLOOK.1 — was a visually-hidden "Unstaffed." beside a glyph, because
+    // the visible signal was a red wash. The visible signal is now the words
+    // themselves, so there is nothing left for greyscale to lose.
+    const badge = within(eveningCard).getByTestId('needs-coach-badge')
+    expect(badge.textContent).toBe('Needs coach')
+    expect(badge.className).not.toMatch(/sr-only/)
+    expect(eveningCard.className).toMatch(/border-dashed/)
   })
 
-  it('says "Unstaffed" on the month grid bar, where the only signal was a red hairline', async () => {
+  it('says it in text on the month grid too: the line, and the day\'s status', async () => {
     await renderCalendar()
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Month' })) })
 
-    // The mini bar for the evening block: red border only, before 6b.
-    const bars = Array.from(document.querySelectorAll('.sr-only')).map(n => n.textContent.trim())
-    expect(bars).toContain('Unstaffed.')
-    // And the day cell's count chip is spoken as well as shown as "!2".
-    expect(bars.some(t => /unstaffed$/.test(t))).toBe(true)
+    // ROSTERLOOK.1 — the evening block's line. Was a red hairline plus a
+    // visually-hidden "Unstaffed."; now the visible words carry it.
+    const lines = screen.getAllByTestId('month-line').map((n) => n.textContent)
+    expect(lines).toContain('5pm Needs coach')
+    // The staffed block names its coach instead of printing "9am 1/3".
+    expect(lines).toContain('9 Sarah')
+    // And the cell's "!1" is a status with words behind it.
+    const spoken = screen.getAllByTestId('status-dot').map((n) => n.querySelector('.sr-only').textContent)
+    expect(spoken).toContain('1 shift needs coaches: 1 with no coach')
   })
 
   it('gives the override marker a spoken name instead of a bare bullet', async () => {
