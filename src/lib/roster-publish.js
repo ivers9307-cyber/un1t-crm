@@ -80,8 +80,12 @@ const BLOCK_PAGE_SIZE = 1000
  * the month periodStart falls in. Loading only that month silently dropped
  * the days a week carried into the next month: the 31 Aug–6 Sep draft was
  * stored at €99.96 (Monday alone) against a real €689.95.
+ *
+ * COPYLEAVE.1 — `advisories: false` skips everything that only feeds the
+ * advisory lists (the widened leave scope and the other-studio read), for
+ * callers that never show them. The budget inputs are identical either way.
  */
-async function loadBudgetContext(db, locationId, periodStart, periodEnd = periodStart) {
+async function loadBudgetContext(db, locationId, periodStart, periodEnd = periodStart, { advisories = true } = {}) {
   const monthStart = isoFirstOfMonth(periodStart)
   const monthEnd = isoLastOfMonth(periodEnd > periodStart ? periodEnd : periodStart)
 
@@ -136,9 +140,13 @@ async function loadBudgetContext(db, locationId, periodStart, periodEnd = period
   }
 
   // COPYLEAVE.1 — everyone with a live shift on these blocks. Used twice
-  // below: to widen the leave scope to a guest coach (leave covers the PERSON,
-  // LEAVE.2), and to look for the same people's shifts at other studios.
-  const rosteredIds = [...new Set(monthBlocks.flatMap((b) => liveAssignments(b.shift_assignments).map((a) => a.profile_id)).filter(Boolean))]
+  // below, both times for the advisory lists only: to widen the leave scope to
+  // a guest coach so leaveClashes can name them (leave covers the PERSON,
+  // LEAVE.2; the money is unaffected, a guest has no rate here), and to look
+  // for the same people's shifts at other studios.
+  const rosteredIds = advisories
+    ? [...new Set(monthBlocks.flatMap((b) => liveAssignments(b.shift_assignments).map((a) => a.profile_id)).filter(Boolean))]
+    : []
 
   // ROSTER-FIX.4 — approved leave for the months, in ONE query. A coach on
   // approved leave is not working the shift they are still rostered on, so
@@ -209,6 +217,7 @@ async function loadBudgetContext(db, locationId, periodStart, periodEnd = period
     leaveByProfile,
     monthBlocks,
     otherAssignments,
+    advisories,
   }
 }
 
@@ -275,6 +284,9 @@ function blockContractorCost(block, contractorRateById, leaveByProfile) {
  *   blockCount: number,              // ROSTERVIS.1 — every block in the period
  *   staffingGaps: Array<{ block_id, block_date, start_time, end_time, name,
  *                         status: 'empty'|'short', count, min }>,
+ *   // COPYLEAVE.1 — the next three are present only with `advisories: true`
+ *   // (the default here; the batch defaults to false). Callers that never
+ *   // show the lists pass false and skip the reads behind them.
  *   leaveClashes: Array<{ block_id, block_date, start_time, end_time, name,
  *                         profile_id, coach_name, leave_start, leave_end }>,
  *   doubleBookings: Array<{ profile_id, coach_name, block_date, first, second }>,
@@ -286,8 +298,8 @@ function blockContractorCost(block, contractorRateById, leaveByProfile) {
  *   }>,
  * }}
  */
-export async function projectPublishImpact(db, { locationId, periodStart, periodEnd, todayIso = dublinTodayStr() }) {
-  const ctx = await loadBudgetContext(db, locationId, periodStart, periodEnd)
+export async function projectPublishImpact(db, { locationId, periodStart, periodEnd, todayIso = dublinTodayStr(), advisories = true }) {
+  const ctx = await loadBudgetContext(db, locationId, periodStart, periodEnd, { advisories })
   return impactFromContext(ctx, { periodStart, periodEnd, todayIso })
 }
 
@@ -320,9 +332,13 @@ export async function projectPublishImpact(db, { locationId, periodStart, period
  * "overrun could not be re-checked" fallback on `impact: null`.
  *
  * @param {Array<{ locationId: string, periodStart: string, periodEnd: string }>} periods
+ * @param {{ todayIso?: string, advisories?: boolean }} [opts]  COPYLEAVE.1 —
+ *   `advisories` defaults to FALSE here: both callers (the approvals provider
+ *   and /schedule/approvals) show budget figures only, so the other-studio
+ *   read and the advisory lists are skipped unless asked for.
  * @returns {Promise<Array<{ impact: object|null, error: Error|null }>>} same order as `periods`
  */
-export async function projectPublishImpactBatch(db, periods, { todayIso = dublinTodayStr() } = {}) {
+export async function projectPublishImpactBatch(db, periods, { todayIso = dublinTodayStr(), advisories = false } = {}) {
   const list = periods || []
   const results = list.map(() => ({ impact: null, error: null }))
 
@@ -348,7 +364,7 @@ export async function projectPublishImpactBatch(db, periods, { todayIso = dublin
 
     let ctx
     try {
-      ctx = await loadBudgetContext(db, locationId, spanStart, spanEnd)
+      ctx = await loadBudgetContext(db, locationId, spanStart, spanEnd, { advisories })
     } catch (e) {
       const err = e instanceof Error ? e : new Error(String(e))
       for (const i of idxs) results[i].error = err
@@ -378,7 +394,7 @@ export async function projectPublishImpactBatch(db, periods, { todayIso = dublin
  * loads a span); everything below filters to the period's own months.
  */
 function impactFromContext(ctx, { periodStart, periodEnd, todayIso }) {
-  const { location, contractorRateById, leaveByProfile, monthBlocks, otherAssignments } = ctx
+  const { location, contractorRateById, leaveByProfile, monthBlocks, otherAssignments, advisories = true } = ctx
 
   const budget = location?.monthly_contractor_budget_eur != null
     ? Number(location.monthly_contractor_budget_eur)
@@ -454,6 +470,19 @@ function impactFromContext(ctx, { periodStart, periodEnd, todayIso }) {
       min,
     }))
 
+  // COPYLEAVE.1 — advisory, like staffingGaps: nothing here gates a publish.
+  // Absent altogether (not empty) when the caller asked for no advisories, so
+  // "not computed" can never read as "all clear".
+  const advisoryLists = advisories
+    ? {
+      leaveClashes: leaveClashes(monthBlocks, { from: periodStart, to: periodEnd, todayIso, leaveByProfile }),
+      doubleBookings: doubleBookings(monthBlocks, otherAssignments, { from: periodStart, to: periodEnd, todayIso }),
+      // false = the other-studio read failed, so doubleBookings covers this
+      // studio only. The modal says so instead of implying an all-clear.
+      crossLocationChecked: otherAssignments !== null,
+    }
+    : {}
+
   return {
     monthStart: binding.monthStart,
     monthEnd: binding.monthEnd,
@@ -467,12 +496,7 @@ function impactFromContext(ctx, { periodStart, periodEnd, todayIso }) {
     blockCount: perMonth.reduce((s, m) => s + m.blockCount, 0),
     months: perMonth,
     staffingGaps: staffingGapsInPeriod,
-    // COPYLEAVE.1 — advisory, like staffingGaps: nothing here gates a publish.
-    leaveClashes: leaveClashes(monthBlocks, { from: periodStart, to: periodEnd, todayIso, leaveByProfile }),
-    doubleBookings: doubleBookings(monthBlocks, otherAssignments, { from: periodStart, to: periodEnd, todayIso }),
-    // false = the other-studio read failed, so doubleBookings covers this
-    // studio only. The modal says so instead of implying an all-clear.
-    crossLocationChecked: otherAssignments !== null,
+    ...advisoryLists,
   }
 }
 

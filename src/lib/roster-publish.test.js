@@ -527,6 +527,30 @@ describe('projectPublishImpact — leave clashes and double bookings', () => {
     expect(db.leaveQueries[0].or).toContain('guest-1')
     expect(db.leaveQueries[0].or).toContain('dan')
   })
+
+  // Review (cost) — a caller that never shows the lists must not pay for them.
+  it('advisories: false does none of the advisory work: no other-studio query, no lists, the leave scope as it was, the same money', async () => {
+    const fx = () => mockDb({
+      location: { id: 'loc1', monthly_contractor_budget_eur: 500 },
+      contractors: [dan],
+      blocks: [
+        block({ id: 'b1', date: '2026-05-06', start: '09:00', end: '11:00', coaches: [named('dan', 'Coach D'), named('guest-1', 'Coach G')] }),
+        block({ id: 'b2', date: '2026-05-06', start: '10:00', end: '12:00', coaches: [named('dan', 'Coach D')] }),
+      ],
+      otherAssignments: [elsewhere('dan', '2026-05-06', '10:00:00', '12:00:00')],
+    })
+    const db = fx()
+    const r = await projectPublishImpact(db, { ...PERIOD, advisories: false })
+    expect(db.assignmentQueries).toHaveLength(0)
+    expect('leaveClashes' in r).toBe(false)
+    expect('doubleBookings' in r).toBe(false)
+    expect('crossLocationChecked' in r).toBe(false)
+    expect(db.leaveQueries[0].or).not.toContain('guest-1')
+    const withLists = await projectPublishImpact(fx(), PERIOD)
+    expect(withLists.doubleBookings.length).toBeGreaterThan(0)
+    expect(r.periodProjectedEur).toBe(withLists.periodProjectedEur)
+    expect(r.staffingGaps).toEqual(withLists.staffingGaps)
+  })
 })
 
 // ROSTER-FIX.4 — the overlap guard. Two published rosters covering one day at
@@ -673,14 +697,17 @@ describe('projectPublishImpactBatch', () => {
     { locationId: 'loc1', periodStart: '2026-09-01', periodEnd: '2026-09-30' },
   ]
 
-  for (const tz of ['Europe/Dublin', 'America/Los_Angeles']) {
-    it(`gives the SAME result as projectPublishImpact for every draft (TZ=${tz})`, async () => {
+  // COPYLEAVE.1 — both settings of `advisories`: the batch defaults to false
+  // (the approvals queue shows no lists), the single path to true.
+  for (const [tz, advisories] of [['Europe/Dublin', false], ['America/Los_Angeles', false], ['Europe/Dublin', true]]) {
+    it(`gives the SAME result as projectPublishImpact for every draft (TZ=${tz}, advisories=${advisories})`, async () => {
       process.env.TZ = tz
       const fx = richFixture()
-      const batch = await projectPublishImpactBatch(mockDb(fx), DRAFTS, { todayIso: TODAY })
+      const batch = await projectPublishImpactBatch(mockDb(fx), DRAFTS, { todayIso: TODAY, advisories })
       expect(batch).toHaveLength(DRAFTS.length)
+      expect('leaveClashes' in batch[0].impact).toBe(advisories)
       for (let i = 0; i < DRAFTS.length; i++) {
-        const single = await projectPublishImpact(mockDb(fx), { ...DRAFTS[i], todayIso: TODAY })
+        const single = await projectPublishImpact(mockDb(fx), { ...DRAFTS[i], todayIso: TODAY, advisories })
         expect(batch[i].error).toBeNull()
         expect(batch[i].impact).toEqual(single)
       }
@@ -691,6 +718,19 @@ describe('projectPublishImpactBatch', () => {
       expect(batch[0].impact.staffingGaps.map((g) => g.block_id)).toContain('w-tue')
     })
   }
+
+  // COPYLEAVE.1 review (cost) — the approvals provider and /schedule/approvals
+  // call the batch with no options and render no advisory lists.
+  it('by DEFAULT makes no other-studio query and carries no advisory lists (the approvals path)', async () => {
+    const db = mockDb(richFixture())
+    const out = await projectPublishImpactBatch(db, DRAFTS, { todayIso: TODAY })
+    expect(db.assignmentQueries).toHaveLength(0)
+    expect(db.calls).not.toContain('shift_assignments')
+    for (const { impact } of out) {
+      expect('leaveClashes' in impact).toBe(false)
+      expect('doubleBookings' in impact).toBe(false)
+    }
+  })
 
   it('loads the location ONCE, spanning every month its drafts touch', async () => {
     const db = mockDb(richFixture())
