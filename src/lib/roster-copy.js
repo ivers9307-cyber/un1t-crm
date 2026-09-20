@@ -115,6 +115,39 @@ function templateRunsOn(tpl, weekday) {
 }
 
 /**
+ * COPYLEAVE.1 — pure. Turn time_off_requests rows into
+ * `(profileId, dateIso) => boolean`: is this coach on APPROVED leave that day?
+ * Both ends inclusive (time_off_requests.end_date is inclusive, mig 011). Dates
+ * are YYYY-MM-DD strings, so string comparison IS date comparison.
+ *
+ * The status is re-checked here rather than trusted from the caller's query:
+ * this is the function that says "on leave", so it must not be able to say it
+ * about a request nobody approved (same posture as coachConflictsForBlock in
+ * schedule-overlap.js). Any leave TYPE counts: holiday, sick, unavailable.
+ */
+export function approvedLeaveLookup(leaveRows) {
+  const byProfile = new Map()
+  for (const r of leaveRows || []) {
+    if (r?.status !== 'approved' || !r.profile_id || !r.start_date || !r.end_date) continue
+    if (!byProfile.has(r.profile_id)) byProfile.set(r.profile_id, [])
+    byProfile.get(r.profile_id).push(r)
+  }
+  return (profileId, dateIso) =>
+    (byProfile.get(profileId) || []).some((r) => r.start_date <= dateIso && r.end_date >= dateIso)
+}
+
+/** COPYLEAVE.1 — pure. Distinct profile ids with a LIVE assignment in these blocks. */
+export function liveCoachIds(sourceBlocks) {
+  const ids = new Set()
+  for (const b of sourceBlocks || []) {
+    for (const a of (b.shift_assignments || []).filter(isLiveAssignment)) {
+      if (a.profile_id) ids.add(a.profile_id)
+    }
+  }
+  return [...ids]
+}
+
+/**
  * Pure. Turn source blocks (fetchSourceBlocks shape) into what the batch
  * writer needs.
  *

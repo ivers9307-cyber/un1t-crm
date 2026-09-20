@@ -6,7 +6,10 @@
 //     TZ=$tz npx vitest run src/lib/roster-copy.test.js
 //   done
 import { describe, it, expect } from 'vitest'
-import { buildCopyPlan, mapNthWeekdayOfMonth, weekdayCodeOf, fetchSourceBlocks, copyResultToast } from './roster-copy'
+import {
+  buildCopyPlan, mapNthWeekdayOfMonth, weekdayCodeOf, fetchSourceBlocks, copyResultToast,
+  approvedLeaveLookup, liveCoachIds, fetchApprovedLeave,
+} from './roster-copy'
 import { redateShiftDate } from '../app/api/schedule/shifts/copy-week/route.js'
 
 const MON_FRI = ['mon', 'tue', 'wed', 'thu', 'fri']
@@ -34,6 +37,58 @@ describe('weekdayCodeOf', () => {
     expect(weekdayCodeOf('2026-03-29')).toBe('sun') // spring DST day
     expect(weekdayCodeOf('2026-10-25')).toBe('sun') // autumn DST day
     expect(weekdayCodeOf('2026-12-14')).toBe('mon') // winter
+  })
+})
+
+// COPYLEAVE.1 — the copy honours APPROVED leave, and only approved leave.
+describe('approvedLeaveLookup', () => {
+  const onLeave = approvedLeaveLookup([
+    { profile_id: 'p1', status: 'approved', start_date: '2026-07-06', end_date: '2026-07-08' },
+    { profile_id: 'p2', status: 'pending', start_date: '2026-07-06', end_date: '2026-07-08' },
+    { profile_id: 'p3', status: 'rejected', start_date: '2026-07-06', end_date: '2026-07-08' },
+  ])
+
+  it('covers the first and the last day: end_date is inclusive (mig 011)', () => {
+    expect(onLeave('p1', '2026-07-06')).toBe(true)
+    expect(onLeave('p1', '2026-07-07')).toBe(true)
+    expect(onLeave('p1', '2026-07-08')).toBe(true)
+  })
+
+  it('does not cover the day before or the day after', () => {
+    expect(onLeave('p1', '2026-07-05')).toBe(false)
+    expect(onLeave('p1', '2026-07-09')).toBe(false)
+  })
+
+  it('PENDING and REJECTED leave never count, even if a caller hands them in', () => {
+    expect(onLeave('p2', '2026-07-07')).toBe(false)
+    expect(onLeave('p3', '2026-07-07')).toBe(false)
+  })
+
+  it('an unknown coach, and an empty or missing list, are never on leave', () => {
+    expect(onLeave('nobody', '2026-07-07')).toBe(false)
+    expect(approvedLeaveLookup([])('p1', '2026-07-07')).toBe(false)
+    expect(approvedLeaveLookup(null)('p1', '2026-07-07')).toBe(false)
+  })
+})
+
+describe('liveCoachIds', () => {
+  it('returns each live coach once, and never a cancelled one', () => {
+    const ids = liveCoachIds([
+      block({ shift_assignments: [
+        { profile_id: 'p1', status: 'scheduled' },
+        { profile_id: 'p2', status: 'cancelled' },
+      ] }),
+      block({ id: 'b2', shift_assignments: [
+        { profile_id: 'p1', status: 'swapped' },
+        { profile_id: 'p3', status: 'scheduled' },
+      ] }),
+    ])
+    expect(ids.sort()).toEqual(['p1', 'p3'])
+  })
+
+  it('is empty for no blocks', () => {
+    expect(liveCoachIds([])).toEqual([])
+    expect(liveCoachIds(null)).toEqual([])
   })
 })
 
