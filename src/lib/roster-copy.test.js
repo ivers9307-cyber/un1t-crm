@@ -64,6 +64,17 @@ describe('approvedLeaveLookup', () => {
     expect(onLeave('p3', '2026-07-07')).toBe(false)
   })
 
+  // Review — every status that is not 'approved', by name: a withdrawn
+  // (cancelled) or refused (rejected) request must never keep a coach off.
+  for (const status of ['cancelled', 'rejected', 'pending']) {
+    it(`a ${status} request covering the day does not count`, () => {
+      const lookup = approvedLeaveLookup([
+        { profile_id: 'p9', status, start_date: '2026-07-06', end_date: '2026-07-08' },
+      ])
+      expect(lookup('p9', '2026-07-07')).toBe(false)
+    })
+  }
+
   it('an unknown coach, and an empty or missing list, are never on leave', () => {
     expect(onLeave('nobody', '2026-07-07')).toBe(false)
     expect(approvedLeaveLookup([])('p1', '2026-07-07')).toBe(false)
@@ -297,6 +308,32 @@ describe('buildCopyPlan — approved leave on the TARGET date', () => {
     expect(plan.skipped).toBe(0)
     expect(plan.skippedOnLeave).toBe(0)
   })
+
+  for (const status of ['cancelled', 'rejected']) {
+    it(`${status} leave does not skip anyone`, () => {
+      const notApproved = approvedLeaveLookup([
+        { profile_id: 'p1', status, start_date: '2026-07-06', end_date: '2026-07-06' },
+      ])
+      const plan = buildCopyPlan([block({ shift_assignments: [live('p1')] })], { mode: 'template', mapDate: weekMap, isOnLeave: notApproved })
+      expect(plan.rows.map((r) => r.profileId)).toEqual(['p1'])
+      expect(plan.skipped).toBe(0)
+      expect(plan.skippedOnLeave).toBe(0)
+    })
+  }
+
+  // Review — a CANCELLED source assignment is not a source assignment at all,
+  // so it is not a leave skip either, whoever it belonged to. Counting it
+  // would make the toast report a coach "skipped, on leave" who was never
+  // going to be copied.
+  for (const mode of ['exact', 'template']) {
+    it(`${mode}: a cancelled assignment of a coach on leave is NOT counted in skippedOnLeave`, () => {
+      const plan = buildCopyPlan([block({ shift_assignments: [{ ...live('p1'), status: 'cancelled' }, live('p2')] })], { mode, mapDate: weekMap, isOnLeave })
+      expect(plan.rows.map((r) => r.profileId)).toEqual(['p2'])
+      expect(plan.sourceAssignments).toBe(1)
+      expect(plan.skipped).toBe(0)
+      expect(plan.skippedOnLeave).toBe(0)
+    })
+  }
 
   it('no isOnLeave option = today\'s behaviour, and skippedOnLeave is 0 not undefined', () => {
     const plan = buildCopyPlan([block({ shift_assignments: [live('p1')] })], { mode: 'exact', mapDate: weekMap })

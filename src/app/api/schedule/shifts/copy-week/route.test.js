@@ -361,6 +361,22 @@ describe('POST /api/schedule/shifts/copy-week — approved leave', () => {
     expect(json).toEqual({ success: true, copied: 1, skipped: 1, skipped_removed: 0, skipped_on_leave: 1, mode: 'exact' })
   })
 
+  // Review — copy-month had this; template mode takes a different loop in
+  // buildCopyPlan, so the week route pins it too.
+  it('template mode: the coach on leave is not sent to the writer, at template times, and the skip is reported', async () => {
+    fetchApprovedLeave.mockResolvedValue({
+      leave: [{ id: 'l1', profile_id: 'coach-2', status: 'approved', start_date: '2026-06-08', end_date: '2026-06-08' }],
+      error: null,
+    })
+    const res = await POST(req({ ...BODY, mode: 'template' }))
+    const json = await res.json()
+    expect(res.status).toBe(201)
+    const { rows, blocks } = bulkUpsertShiftAssignments.mock.calls[0][1]
+    expect(blocks).toEqual([])
+    expect(rows.map((r) => [r.profileId, r.shiftDate, r.startTime])).toEqual([['coach-1', '2026-06-08', '09:00:00']])
+    expect(json).toEqual({ success: true, copied: 1, skipped: 1, skipped_removed: 0, skipped_on_leave: 1, mode: 'template' })
+  })
+
   it('500s and writes NOTHING when the leave read fails: copying blind is the bug', async () => {
     fetchApprovedLeave.mockResolvedValue({ leave: [], error: { message: 'leave boom' } })
     const res = await POST(req(BODY))
