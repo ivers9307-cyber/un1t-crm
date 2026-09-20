@@ -285,13 +285,21 @@ function dueAction(swap, nowMs, tz) {
   if (startMs == null) return { action: 'none' }
   if (swapShiftHasStarted(shift, nowMs, tz)) return { action: 'expire', reason: 'started' }
 
+  // When the managers last heard about this swap IN ITS CURRENT STATUS: the
+  // posting (swap_open) for a pending swap, the claim (swap_awaiting) for a
+  // claimed one. updated_at is trigger-maintained (mig 010) and the claim is
+  // the write that made the row awaiting_approval. The nudge key carries the
+  // status, so without this a claim at T-30h was followed by an
+  // awaiting_approval:t48 nudge within 15 minutes.
   const createdMs = Date.parse(swap.created_at)
+  const claimedMs = swap.status === 'awaiting_approval' ? Date.parse(swap.updated_at) : NaN
+  const sinceMs = Number.isFinite(claimedMs) ? claimedMs : createdMs
   for (const stage of COVER_NUDGE_STAGES) {
     const stageOpensMs = startMs - stage.hours * HOUR_MS
     if (nowMs < stageOpensMs) continue
-    // Posted inside this stage's range: swap_open told the managers moments
-    // ago, and the ranges nest, so no wider stage applies either.
-    if (Number.isFinite(createdMs) && createdMs >= stageOpensMs) return { action: 'none' }
+    // Heard inside this stage's range: the managers were told moments ago,
+    // and the ranges nest, so no wider stage applies either.
+    if (Number.isFinite(sinceMs) && sinceMs >= stageOpensMs) return { action: 'none' }
     return { action: 'nudge', stage: stage.key }
   }
   return { action: 'none' }

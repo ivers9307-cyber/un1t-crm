@@ -412,6 +412,30 @@ describe('coverSweepAction', () => {
     expect(coverSweepAction(swap, now)).toEqual(expected)
   })
 
+  // The "managers heard moments ago" suppression must count the CLAIM too: a
+  // claim sends managers swap_awaiting, and the nudge key carries the status,
+  // so without this a swap posted at T-100h and claimed at T-30h re-pushed
+  // them (awaiting_approval:t48) on the very next tick.
+  describe('a swap claimed inside a stage', () => {
+    const claimedAt = (hoursBefore, over = {}) => openSwap({
+      status: 'awaiting_approval', target_id: 'tkr',
+      created_at: new Date(START - 100 * H).toISOString(),
+      updated_at: new Date(START - hoursBefore * H).toISOString(),
+      ...over,
+    })
+    it.each([
+      { name: 'claimed at T-30h: no t48 nudge a tick later', swap: claimedAt(30), now: START - 30 * H + 15 * 60 * 1000, expected: { action: 'none' } },
+      { name: '... nor for the rest of the t48 stage', swap: claimedAt(30), now: START - 13 * H, expected: { action: 'none' } },
+      { name: '... the t12 nudge still fires', swap: claimedAt(30), now: START - 12 * H, expected: { action: 'nudge', stage: 't12' } },
+      { name: 'claimed at T-5h: no nudge at all', swap: claimedAt(5), now: START - 1 * H, expected: { action: 'none' } },
+      { name: 'claimed at T-60h (before any stage): t48 fires as normal', swap: claimedAt(60), now: START - 48 * H, expected: { action: 'nudge', stage: 't48' } },
+      { name: 'a PENDING swap ignores updated_at: only the posting counts', swap: openSwap({ updated_at: new Date(START - 30 * H).toISOString() }), now: START - 24 * H, expected: { action: 'nudge', stage: 't48' } },
+      { name: 'an unreadable updated_at falls back to created_at', swap: claimedAt(30, { updated_at: null }), now: START - 24 * H, expected: { action: 'nudge', stage: 't48' } },
+    ])('$name', ({ swap, now, expected }) => {
+      expect(coverSweepAction(swap, now)).toEqual(expected)
+    })
+  })
+
   // Studio wall-clock, not UTC: on 2026-07-02 (IST, UTC+1) 09:00 is 08:00Z.
   it('reads the block start as Europe/Dublin wall-clock by default', () => {
     const summer = swapOn('2026-07-02', '09:00:00')
