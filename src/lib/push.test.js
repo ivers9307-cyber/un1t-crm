@@ -435,6 +435,41 @@ describe('resolvePushAllowedIds', () => {
   })
 })
 
+// PUSHCAT.1 — the resolver prepends `notify_` ITSELF, so `category` is the
+// bare name. Three equipment senders passed the permission key instead and
+// gated on notify_notify_<x>: unregistered, so it fails closed for every
+// role holding an assignment. Source-scan twin: tests/push-category-literals.
+describe('resolvePushAllowedIds — the category is bare', () => {
+  const ownerAtLoc = () => {
+    fakeProfiles = [{ id: 'o', active: true }]
+    fakeLinks = [{ profile_id: 'o', location_id: 'loc1', role: 'owner', permissions: null }]
+  }
+
+  it.each(['inspection_due', 'inspection_overdue', 'issue_submitted'])(
+    'an owner receives the bare equipment category %s',
+    async (category) => {
+      ownerAtLoc()
+      const allowed = await resolvePushAllowedIds(makeFakeDb(), ['o'], category, { locationId: 'loc1' })
+      expect(allowed.has('o')).toBe(true)
+    }
+  )
+
+  it('a category that already carries the prefix reaches no assigned user', async () => {
+    ownerAtLoc()
+    const allowed = await resolvePushAllowedIds(makeFakeDb(), ['o'], 'notify_inspection_due', { locationId: 'loc1' })
+    expect(allowed.has('o')).toBe(false)
+  })
+
+  it('staff keep their role default: inspection-day reminder on, overdue sweep off', async () => {
+    fakeProfiles = [{ id: 's', active: true }]
+    fakeLinks = [{ profile_id: 's', location_id: 'loc1', role: 'staff', permissions: null }]
+    const due = await resolvePushAllowedIds(makeFakeDb(), ['s'], 'inspection_due', { locationId: 'loc1' })
+    const overdue = await resolvePushAllowedIds(makeFakeDb(), ['s'], 'inspection_overdue', { locationId: 'loc1' })
+    expect(due.has('s')).toBe(true)
+    expect(overdue.has('s')).toBe(false)
+  })
+})
+
 // PUSH-LOC.1 — the notification's location decides the per-category gate.
 describe('resolvePushAllowedIds — per-location gating', () => {
   // Richard's live case: owner at Stillorgan (role default notify_whatsapp

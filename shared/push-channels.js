@@ -86,6 +86,8 @@ const CATEGORY_CHANNELS = Object.freeze({
   bookings: 'reminders',
   shift_reminder: 'reminders', // SHIFTREMIND.1 — cron lead-time reminder, same family
   checklist_overdue: 'reminders',
+  inspection_due: 'reminders', // EQUIP-MAINT.3 — inspection-day cron nudge
+  inspection_overdue: 'reminders', // …and the owners' "nobody did it" sweep
   lead: 'reminders',
   // Needs a manager decision.
   swap: 'approvals',

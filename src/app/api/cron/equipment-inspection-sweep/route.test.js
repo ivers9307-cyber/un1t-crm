@@ -100,7 +100,7 @@ describe('GET /api/cron/equipment-inspection-sweep', () => {
     expect(sendPushOnce).not.toHaveBeenCalled()
   })
 
-  it('resolves recipients for owner+master only, and dedups via sendPushOnce with category notify_inspection_overdue', async () => {
+  it('resolves recipients for owner+master only, and dedups via sendPushOnce with the bare category inspection_overdue', async () => {
     listEnabledSettings.mockResolvedValue([SETTINGS_A])
     listActiveEquipment.mockResolvedValue(OVERDUE_ASSETS)
     resolveRoleRecipientIds.mockResolvedValue(['prof-owner', 'prof-master'])
@@ -110,7 +110,8 @@ describe('GET /api/cron/equipment-inspection-sweep', () => {
       fakeDb,
       expect.stringContaining('loc-a'),
       ['prof-owner', 'prof-master'],
-      expect.objectContaining({ category: 'notify_inspection_overdue' })
+      // bare — push.js prepends `notify_` itself (PUSHCAT.1)
+      expect.objectContaining({ category: 'inspection_overdue' })
     )
   })
 
