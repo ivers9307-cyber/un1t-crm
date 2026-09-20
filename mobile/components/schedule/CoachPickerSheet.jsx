@@ -5,10 +5,13 @@ import { Ionicons } from '@expo/vector-icons'
 import { initials } from '../../lib/schedule-team'
 import { filterAssignableCoaches } from '../../lib/schedule-manage'
 
-export default function CoachPickerSheet({ visible, block, locationId, staff, loading, onPick, onClose, title = 'Add coach', emptyText = 'No available coaches to add.' }) {
+// onDismiss (optional, iOS only — Android never fires it): called once the
+// sheet has FINISHED animating out. A caller that opens another Modal after a
+// pick must wait for it; iOS refuses a present while this one is dismissing.
+export default function CoachPickerSheet({ visible, block, locationId, staff, loading, onPick, onClose, onDismiss, title = 'Add coach', emptyText = 'No available coaches to add.' }) {
   const coaches = block ? filterAssignableCoaches(staff || [], block, locationId) : []
   return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose} onDismiss={onDismiss}>
       <View className="flex-1 justify-end bg-black/50">
         <Pressable className="flex-1" onPress={onClose} />
         <View className="bg-un1t-bg border-t border-un1t-border rounded-t-3xl p-5" style={{ maxHeight: '70%' }}>

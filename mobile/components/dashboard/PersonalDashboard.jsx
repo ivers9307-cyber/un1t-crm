@@ -7,10 +7,10 @@
 //   Week mode — the original two-week (This week / Next week) panels.
 
 import {
-  View, Text, ActivityIndicator, Pressable, Alert,
+  View, Text, ActivityIndicator, Pressable, Alert, Platform,
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter, useFocusEffect } from 'expo-router'
 import { useAuth } from '../../lib/auth-context'
 import { fetchPersonalDashboard } from '../../lib/dashboard-api'
@@ -38,6 +38,7 @@ import {
   SWAP_PENDING_LABEL, SWAP_PICKER_TITLE, SWAP_PICKER_EMPTY, SWAP_ALREADY_OPEN_MESSAGE,
 } from '../../lib/swap-cards'
 import { swapClaimNotice } from '../../lib/swap-conflicts'
+import { nextSwapFlowStep } from '../../lib/swap-flow'
 // CHECKLIST.2 — top-of-Today card showing the coach's checklist
 // when they're on shift today. Self-contained: renders nothing
 // when there's no instance to surface.
@@ -425,6 +426,10 @@ export default function PersonalDashboard({ refreshKey }) {
   // coach null = an open post. Nothing is POSTed until the sheet confirms.
   const [swapConfirm, setSwapConfirm] = useState(null)
   const [swapSending, setSwapSending] = useState(false)
+  // The pick parked while the picker Modal animates out (iOS only). A ref, not
+  // state: it must be readable from the picker's onDismiss without a re-render,
+  // and it is never rendered. See lib/swap-flow.js for why it exists.
+  const swapPendingRef = useRef(null)
 
   const load = useCallback(async () => {
     if (!profile) return
@@ -555,7 +560,7 @@ export default function PersonalDashboard({ refreshKey }) {
     // optional reason. Nothing is sent from this menu any more.
     options.push({
       text: 'Post for swap',
-      onPress: () => setSwapConfirm({ shift, coach: null }),
+      onPress: () => stepSwapFlow('post', { shift, coach: null }),
     })
 
     // CT-P3b — targeted swap: offer this shift to one chosen colleague.
@@ -604,10 +609,31 @@ export default function PersonalDashboard({ refreshKey }) {
     }
   }
 
+  // COVERLOOP.2 — every move of the picker -> confirm-sheet flow goes through
+  // nextSwapFlowStep (pure, tested). iOS will not present the confirm sheet
+  // while the picker is still animating out, so there a pick is parked in
+  // swapPendingRef until the picker's onDismiss; Android opens at once. The
+  // ref is ALWAYS assigned from the step, so a stale pick cannot survive.
+  function stepSwapFlow(event, picked) {
+    const step = nextSwapFlowStep({
+      event,
+      platform: Platform.OS,
+      pickerVisible: !!swapPickerShift,
+      pending: swapPendingRef.current,
+      picked,
+    })
+    swapPendingRef.current = step.pending
+    if (step.action === 'open_confirm') setSwapConfirm(step.request)
+    else if (step.action === 'reset') setSwapConfirm(null)
+  }
+
   // Open the colleague picker for a targeted swap. Reuses CoachPickerSheet by
   // synthesising a block-like object: shift_assignments carries the current
   // user so the picker excludes them; shift_templates feeds the sheet title.
   async function openSwapPicker(shift) {
+    // A fresh start: drop anything an earlier run left behind (a sheet state
+    // with no sheet, a parked pick whose dismiss never came).
+    stepSwapFlow('start')
     setSwapPickerShift(shift)
     if (swapStaff === null && !swapStaffLoading) {
       setSwapStaffLoading(true)
@@ -623,8 +649,28 @@ export default function PersonalDashboard({ refreshKey }) {
   function pickSwapCoach(coach) {
     const shift = swapPickerShift
     setSwapPickerShift(null)
-    if (!shift) return
-    setSwapConfirm({ shift, coach })
+    stepSwapFlow('pick', { shift, coach })
+  }
+
+  function cancelSwapPicker() {
+    setSwapPickerShift(null)
+    stepSwapFlow('cancel')
+  }
+
+  // iOS only: the picker's Modal has finished dismissing, so a present is
+  // allowed now. `pickerVisible` is passed as false on purpose: this callback
+  // may close over the render in which the picker was still up, and the Modal
+  // that just told us it dismissed is, by definition, not on screen. A no-op
+  // when nothing is parked (the picker was cancelled).
+  function onSwapPickerDismissed() {
+    const step = nextSwapFlowStep({
+      event: 'dismissed',
+      platform: Platform.OS,
+      pickerVisible: false,
+      pending: swapPendingRef.current,
+    })
+    swapPendingRef.current = step.pending
+    if (step.action === 'open_confirm') setSwapConfirm(step.request)
   }
 
   async function submitSwap(reasonText) {
@@ -1039,7 +1085,8 @@ export default function PersonalDashboard({ refreshKey }) {
         staff={swapStaff}
         loading={swapStaffLoading}
         onPick={pickSwapCoach}
-        onClose={() => setSwapPickerShift(null)}
+        onClose={cancelSwapPicker}
+        onDismiss={onSwapPickerDismissed}
         title={SWAP_PICKER_TITLE}
         emptyText={SWAP_PICKER_EMPTY}
       />

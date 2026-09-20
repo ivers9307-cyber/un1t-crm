@@ -17,8 +17,11 @@ import { SWAP_REASON_MAX } from '../../lib/swap-cards'
 export default function SwapConfirmSheet({ visible, copy, sending, onConfirm, onClose }) {
   const [reason, setReason] = useState('')
 
-  // A freshly opened sheet never inherits the last request's reason.
-  useEffect(() => { if (visible) setReason('') }, [visible])
+  // A freshly opened sheet never inherits the last request's reason. Cleared
+  // when the sheet CLOSES as well as when it opens: clearing only on open
+  // painted one frame of the previous text before the effect ran. A failed
+  // send leaves `visible` true, so the typed reason survives a retry.
+  useEffect(() => { setReason('') }, [visible])
 
   if (!visible || !copy) return null
   return (
