@@ -1097,6 +1097,80 @@ describe('PUT /api/schedule/swaps/[id] — a started shift (COVERLOOP.1)', () =>
     expect(calls).toEqual(['swap_update'])
   })
 
+  // A RECIPROCAL swap moves two shifts: the TARGET shift having started
+  // refuses the accept and the approval too, and says which shift it is.
+  describe('a reciprocal swap', () => {
+    const FUTURE = '2099-01-01'
+    const recip = (reqDate, tgtDate, over = {}) => swapOn(reqDate, {
+      target_id: TAKER, target_shift_id: 'assign-2',
+      target_shift: { id: 'assign-2', profile_id: TAKER, block_id: 'block-2', start_time_override: null, block: { ...blk(tgtDate), id: 'block-2' } },
+      ...over,
+    })
+
+    it.each([
+      ['ACCEPT: the accepting coach\'s own shift has started', () => recip(FUTURE, LONG_AGO), COACH, 'awaiting_approval', 'Your own shift in this swap has already started'],
+      ['ACCEPT: the shift they would be taking has started', () => recip(LONG_AGO, FUTURE), COACH, 'awaiting_approval', 'The shift you would be taking has already started'],
+      ['APPROVE: the other coach\'s shift has started', () => recip(FUTURE, LONG_AGO, { status: 'awaiting_approval' }), MANAGER, 'approved', "The other coach's shift has already started"],
+      ['APPROVE: the requester\'s shift has started', () => recip(LONG_AGO, FUTURE, { status: 'awaiting_approval' }), MANAGER, 'approved', "The requester's shift has already started"],
+    ])('%s -> 409, nothing written', async (_name, make, user, status, error) => {
+      getCurrentUser.mockResolvedValue(user)
+      const calls = []
+      createServerClient.mockReturnValue(buildDb(make(), calls))
+      const res = await PUT(req({ status, confirm_conflicts: true }), PROPS)
+      expect(res.status).toBe(409)
+      expect(await res.json()).toEqual({ success: false, error })
+      await flush()
+      expect(calls).toEqual([])
+      expect(notifyUsersOnce).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      ['the target withdraws', () => recip(FUTURE, LONG_AGO, { status: 'awaiting_approval' }), COACH, 'pending'],
+      ['the target declines', () => recip(FUTURE, LONG_AGO), COACH, 'rejected'],
+      ['the requester cancels', () => recip(FUTURE, LONG_AGO), REQ_USER, 'cancelled'],
+      ['a manager rejects', () => recip(FUTURE, LONG_AGO, { status: 'awaiting_approval' }), MANAGER, 'rejected'],
+    ])('%s: still works with the target shift started', async (_name, make, user, status) => {
+      getCurrentUser.mockResolvedValue(user)
+      const calls = []
+      createServerClient.mockReturnValue(buildDb(make(), calls))
+      expect((await PUT(req({ status }), PROPS)).status).toBe(200)
+      expect(calls).toEqual(['swap_update'])
+    })
+
+    it('both shifts in the future: the approval goes through', async () => {
+      getCurrentUser.mockResolvedValue(MANAGER)
+      const calls = []
+      createServerClient.mockReturnValue(buildDb(recip(FUTURE, '2099-01-02', { status: 'awaiting_approval' }), calls))
+      expect((await PUT(req({ status: 'approved', confirm_conflicts: true }), PROPS)).status).toBe(200)
+      expect(calls).toEqual(['rpc:approve_reciprocal_shift_swap'])
+    })
+
+    // 2026-01-15 10:00Z, both shifts 09:00 that day: the requester's studio is
+    // on New York time (not started), the TARGET shift's studio on Dublin time
+    // (started). Each shift must be read on its OWN studio's clock.
+    it('each shift is judged in its OWN studio\'s timezone', async () => {
+      vi.useFakeTimers({ toFake: ['Date'], now: Date.UTC(2026, 0, 15, 10, 0) })
+      getCurrentUser.mockResolvedValue(MANAGER)
+      const swap = recip('2026-01-15', '2026-01-15', { status: 'awaiting_approval' })
+      swap.requester_shift.block = blk('2026-01-15', '09:00:00')
+      swap.target_shift.block = { ...blk('2026-01-15', '09:00:00'), id: 'block-2', location_id: 'loc-2' }
+      const calls = []
+      const db = buildDb(swap, calls)
+      const from = db.from
+      const reads = []
+      db.from = (table) => {
+        if (table !== 'locations') return from(table)
+        return { select: () => ({ eq: (_c, id) => ({ maybeSingle: () => { reads.push(id); return Promise.resolve({ data: { id, timezone: id === 'loc-2' ? 'Europe/Dublin' : 'America/New_York' }, error: null }) } }) }) }
+      }
+      createServerClient.mockReturnValue(db)
+      const res = await PUT(req({ status: 'approved', confirm_conflicts: true }), PROPS)
+      expect(res.status).toBe(409)
+      expect((await res.json()).error).toBe("The other coach's shift has already started")
+      expect(reads.sort()).toEqual(['loc-1', 'loc-2'])
+      expect(calls).toEqual([])
+    })
+  })
+
   // 2026-01-15 10:00Z: a 09:00 shift has started in Dublin (09:00Z) and has
   // NOT in New York (14:00Z). Only the studio's own zone can answer.
   describe('near the start, the studio\'s timezone decides', () => {

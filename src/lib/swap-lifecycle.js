@@ -34,6 +34,26 @@ const REQUESTABLE = ['awaiting_approval', 'approved', 'rejected', 'cancelled', '
 // COVERLOOP.1 — the refusal for a claim, accept or approval on a shift that is
 // already being worked.
 export const SHIFT_STARTED_ERROR = 'This shift has already started'
+// A RECIPROCAL swap has two shifts, so the refusal says WHICH one, in words
+// that read right for whoever is acting: the accepting coach ("you would be
+// taking" / "your own"), or the approving manager ("the requester's" / "the
+// other coach's").
+export const SHIFT_STARTED_ERRORS = Object.freeze({
+  single: SHIFT_STARTED_ERROR,
+  acceptTheirs: 'The shift you would be taking has already started',
+  acceptOwn: 'Your own shift in this swap has already started',
+  approveRequester: "The requester's shift has already started",
+  approveTarget: "The other coach's shift has already started",
+})
+
+// null when nothing relevant has started. `acting` is 'accept' or 'approve'.
+function startedShiftError(swap, acting, shiftStarted, targetShiftStarted) {
+  const reciprocal = swap.target_shift_id != null
+  if (!reciprocal) return shiftStarted === true ? SHIFT_STARTED_ERRORS.single : null
+  if (shiftStarted === true) return acting === 'accept' ? SHIFT_STARTED_ERRORS.acceptTheirs : SHIFT_STARTED_ERRORS.approveRequester
+  if (targetShiftStarted === true) return acting === 'accept' ? SHIFT_STARTED_ERRORS.acceptOwn : SHIFT_STARTED_ERRORS.approveTarget
+  return null
+}
 
 function deny(status, error) {
   return { ok: false, status, error, swapUpdates: null, assignmentOps: [], notify: [], effect: 'denied' }
@@ -62,12 +82,15 @@ function deny(status, error) {
  *   (SWAP_MOVE_CLEARS). Withdraw, cancel, reject and decline are ways OUT and
  *   are never refused. Checked AFTER the visibility / permission refusals, so
  *   it is not an id oracle.
+ * @param {boolean} [args.targetShiftStarted]  the same, for the TARGET shift of
+ *   a reciprocal swap (target_shift_id set), judged in that shift's own
+ *   studio's timezone. Ignored on a swap that is not reciprocal.
  * @returns {{ ok:boolean, status?:number, error?:string,
  *   swapUpdates:object|null,
  *   assignmentOps:Array<{id:string, set?:object, delete?:boolean}>,
  *   notify:Array<{kind:string,to?:string[]}>, effect:string }}
  */
-export function resolveSwapTransition({ swap, requestedStatus, user, userLocationIds, reviewNote = null, nowIso, canApprove, isManagerHere, shiftStarted }) {
+export function resolveSwapTransition({ swap, requestedStatus, user, userLocationIds, reviewNote = null, nowIso, canApprove, isManagerHere, shiftStarted, targetShiftStarted }) {
   if (!swap) return deny(404, 'Swap request not found')
   if (!user) return deny(401, 'Unauthorized')
   if (!REQUESTABLE.includes(requestedStatus)) return deny(400, 'Invalid status')
@@ -122,7 +145,8 @@ export function resolveSwapTransition({ swap, requestedStatus, user, userLocatio
     if (isRequester) return deny(403, 'You cannot accept your own swap')
     if (!atLocation) return deny(403, 'Not at this location')
     if (swap.target_id != null && !isTarget) return deny(403, 'This swap is targeted at someone else')
-    if (shiftStarted === true) return deny(409, SHIFT_STARTED_ERROR)
+    const startedOnAccept = startedShiftError(swap, 'accept', shiftStarted, targetShiftStarted)
+    if (startedOnAccept) return deny(409, startedOnAccept)
     if (swap.target_id == null) {
       // open claim
       return { ok: true, status: 200, effect: 'claimed', assignmentOps: [],
@@ -172,7 +196,8 @@ export function resolveSwapTransition({ swap, requestedStatus, user, userLocatio
   // ── Manager approve: finalise on the assignments ──
   if (requestedStatus === 'approved') {
     if (!mayApprove) return deny(403, 'You do not have permission to approve swaps')
-    if (shiftStarted === true) return deny(409, SHIFT_STARTED_ERROR)
+    const startedOnApprove = startedShiftError(swap, 'approve', shiftStarted, targetShiftStarted)
+    if (startedOnApprove) return deny(409, startedOnApprove)
     const ts = nowIso || new Date().toISOString()
     const swapUpdates = { status: 'approved', reviewed_by: user.id, reviewed_at: ts, review_note: reviewNote || null }
     if (swap.target_shift_id) {

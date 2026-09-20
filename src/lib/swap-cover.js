@@ -276,25 +276,43 @@ export function swapShiftStartedInEveryZone(shift, nowMs) {
   return null
 }
 
-// The sweep row's requester shift, in the predicate's shape.
-function sweepShift(swap) {
-  const a = swap?.requester_shift
+// A sweep row's assignment embed, in the predicate's shape.
+function sweepShift(a) {
   const b = a?.shift_blocks
   if (!b) return null
   return { block_date: b.block_date, start_time: b.start_time, start_time_override: a.start_time_override ?? null }
 }
 
+/**
+ * The studio whose clock a sweep row's TARGET shift is read on, or null when
+ * the swap is not reciprocal. The DB half uses it to know which timezones to
+ * read; each shift is judged in its OWN studio's zone.
+ */
+export function swapTargetShiftLocationId(swap) {
+  if (swap?.target_shift_id == null) return null
+  return swap.target_shift?.shift_blocks?.location_id ?? null
+}
+
 // What is due for this swap, ignoring the time of day.
-function dueAction(swap, nowMs, tz) {
+function dueAction(swap, nowMs, tz, targetTz) {
   if (!swap || !OPEN_SWAP_STATUSES.includes(swap.status)) return { action: 'none' }
   // mig 603: deleting the assignment NULLs requester_shift_id and the swap row
   // survives. An open swap about a shift that no longer exists can never be
   // finalised, so it closes. Judged on the COLUMN, never on a missing embed.
   if (swap.requester_shift_id == null) return { action: 'expire', reason: 'shift_removed' }
-  const shift = sweepShift(swap)
-  const startMs = swapShiftStartMs(shift, tz)
-  if (startMs == null) return { action: 'none' }
-  if (swapShiftHasStarted(shift, nowMs, tz)) return { action: 'expire', reason: 'started' }
+  const shift = sweepShift(swap.requester_shift)
+  const requesterStartMs = swapShiftStartMs(shift, tz)
+  if (requesterStartMs == null) return { action: 'none' }
+  // A RECIPROCAL swap (target_shift_id set) moves two shifts, so EITHER one
+  // starting closes it, each judged in its own studio's zone. A target embed
+  // that did not come back, or an unreadable start, is ignored: never guessed.
+  const targetShift = swap.target_shift_id != null ? sweepShift(swap.target_shift) : null
+  const targetStartMs = swapShiftStartMs(targetShift, targetTz ?? tz)
+  if (swapShiftHasStarted(shift, nowMs, tz) || swapShiftHasStarted(targetShift, nowMs, targetTz ?? tz)) {
+    return { action: 'expire', reason: 'started' }
+  }
+  // The managers' deadline is the EARLIER of the two starts.
+  const startMs = targetStartMs == null ? requesterStartMs : Math.min(requesterStartMs, targetStartMs)
 
   // When the managers last heard about this swap IN ITS CURRENT STATUS: the
   // posting (swap_open) for a pending swap, the claim (swap_awaiting) for a
@@ -333,11 +351,13 @@ function dueAction(swap, nowMs, tz) {
  * @param {object} swap  shift_swap_requests row with
  *   requester_shift: { id, shift_blocks: { id, block_date, start_time, end_time } } | null
  * @param {number} nowMs
- * @param {{ tz?: string|null }} [opts]  the studio's locations.timezone
+ * @param {{ tz?: string|null, targetTz?: string|null }} [opts]  locations.timezone
+ *   of the swap's studio (the requester's shift, and the quiet-hours band) and,
+ *   for a reciprocal swap, of the TARGET shift's studio (default: the same).
  * @returns {{action:'none', reason?:'quiet_hours'} | {action:'nudge', stage:'t48'|'t12'} | {action:'expire', reason:'started'|'shift_removed', notify:boolean}}
  */
-export function coverSweepAction(swap, nowMs, { tz } = {}) {
-  const due = dueAction(swap, nowMs, tz)
+export function coverSweepAction(swap, nowMs, { tz, targetTz } = {}) {
+  const due = dueAction(swap, nowMs, tz, targetTz)
   if (due.action === 'none') return due
   const inBand = inStaffPushHours(nowMs, tz)
   if (due.action === 'expire') return { ...due, notify: inBand }
@@ -421,14 +441,20 @@ export function swapExpiryNotices(swap, reason) {
     emailSubject: 'Your swap request expired',
     data: { type: 'swap_decision', swap_id: swap.id, status: 'cancelled', block_date: block?.block_date ?? null },
   }
+  // A reciprocal swap (target_shift_id survives the cancel) moved nothing on
+  // EITHER side, and it closes when either shift starts: say so.
+  const reciprocal = swap.target_shift_id != null
+  const requesterBody = reciprocal
+    ? `Your swap for ${when} was not ${claimed ? '' : 'accepted and '}approved before one of the shifts started, so it has closed. Both shifts stayed as they were.`
+    : claimed
+      ? `Your swap for ${when} was not approved before the shift started, so it has closed and the shift stayed with you.`
+      : `Nobody took your shift on ${when} before it started, so the swap request has closed and the shift stayed with you.`
   const out = [{
     key: `swap_expired:${swap.id}`,
     to: [swap.requester_id],
     payload: {
       title: common.title,
-      body: claimed
-        ? `Your swap for ${when} was not approved before the shift started, so it has closed and the shift stayed with you.`
-        : `Nobody took your shift on ${when} before it started, so the swap request has closed and the shift stayed with you.`,
+      body: requesterBody,
       category: common.category,
       emailSubject: common.emailSubject,
       data: common.data,
@@ -440,7 +466,9 @@ export function swapExpiryNotices(swap, reason) {
       to: [swap.target_id],
       payload: {
         title: common.title,
-        body: `The swap you took for ${when} was not approved before the shift started, so it has closed. The shift stayed with ${requesterName(swap)}.`,
+        body: reciprocal
+          ? `The swap you accepted with ${requesterName(swap)} (${when}) was not approved before one of the shifts started, so it has closed. Both shifts stayed as they were.`
+          : `The swap you took for ${when} was not approved before the shift started, so it has closed. The shift stayed with ${requesterName(swap)}.`,
         category: common.category,
         emailSubject: common.emailSubject,
         data: common.data,

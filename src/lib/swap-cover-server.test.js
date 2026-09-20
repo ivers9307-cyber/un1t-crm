@@ -343,6 +343,48 @@ describe('runSwapCoverSweep', () => {
     }
   })
 
+  // A RECIPROCAL swap closes when EITHER shift starts, each in its own zone.
+  describe('a reciprocal swap', () => {
+    const recip = (target_shift, over = {}) => sweepSwap({
+      status: 'awaiting_approval', target_id: 'tkr', target_shift_id: 'a2', target_shift,
+      updated_at: new Date(START - 200 * H).toISOString(), ...over,
+    })
+    const tShift = (location_id, block_date, start_time) => ({ id: 'a2', start_time_override: null, shift_blocks: { id: 'blk-2', location_id, block_date, start_time, end_time: '23:00:00' } })
+
+    it('the sweep row carries the TARGET shift, with its studio', async () => {
+      const db = mockDb({ shift_swap_requests: swapsTable([]) })
+      await runSwapCoverSweep(db, { nowMs: START })
+      expect(db.queries[0].select).toContain('target_shift_id')
+      expect(db.queries[0].select).toMatch(/target_shift:shift_assignments!target_shift_id\(id, start_time_override, shift_blocks!block_id\(id, location_id, block_date, start_time, end_time\)\)/)
+    })
+
+    it('the TARGET shift starting first closes it, and both coaches are told', async () => {
+      // Target shift: the day before the requester's, 12:00 Dublin.
+      const db = mockDb({ shift_swap_requests: swapsTable([recip(tShift(LOC, '2098-12-31', '12:00:00'))]), locations: DUBLIN })
+      const stats = await runSwapCoverSweep(db, { nowMs: Date.UTC(2098, 11, 31, 12, 0) })
+      expect(db.queries.find((q) => q.update).update).toEqual({ status: 'cancelled', review_note: SWAP_EXPIRY_NOTES.started_claimed })
+      expect(notifyUsersOnce.mock.calls.map((c) => [c[1], c[2]])).toEqual([['swap_expired:s1', ['req']], ['swap_expired_taker:s1', ['tkr']]])
+      expect(notifyUsersOnce.mock.calls[0][3].body).toContain('Both shifts stayed as they were')
+      expect(stats).toMatchObject({ expired: 1 })
+    })
+
+    it('reads the target studio\'s timezone too, and judges the target shift in it', async () => {
+      // Target shift at a SIBLING studio on New York time: 09:00 EST = 14:00Z.
+      const swap = recip(tShift(SIBLING, '2098-12-31', '09:00:00'))
+      const zones = { data: [{ id: LOC, timezone: 'Europe/Dublin' }, { id: SIBLING, timezone: 'America/New_York' }], error: null }
+      const db = mockDb({ shift_swap_requests: swapsTable([swap]), locations: zones })
+
+      // 09:00Z: started on a Dublin clock, NOT on the target studio's.
+      await runSwapCoverSweep(db, { nowMs: Date.UTC(2098, 11, 31, 9, 0) })
+      expect(db.queries.find((q) => q.table === 'locations').filters).toEqual([['in', 'id', [LOC, SIBLING]]])
+      expect(db.queries.some((q) => q.update)).toBe(false)
+
+      // 14:00Z: it has.
+      const stats = await runSwapCoverSweep(db, { nowMs: Date.UTC(2098, 11, 31, 14, 0) })
+      expect(stats).toMatchObject({ expired: 1 })
+    })
+  })
+
   // A manager who posts their OWN swap is not chased to review it.
   it('never nudges the requester about their own swap', async () => {
     resolveRoleRecipientIds.mockResolvedValue(['mgr', 'req', 'mgr2'])

@@ -409,6 +409,39 @@ describe('coverSweepAction', () => {
     })
   })
 
+  // A RECIPROCAL swap moves TWO shifts. Approving it after EITHER has started
+  // moves a shift that is being worked, so either one starting closes it, and
+  // the managers' deadline is the EARLIER start.
+  describe('a reciprocal swap', () => {
+    const tShift = (block_date, start_time, over = {}) => ({ id: 'a2', start_time_override: null, shift_blocks: { id: 'blk-2', location_id: 'loc-1', block_date, start_time, end_time: '23:59:00' }, ...over })
+    const recip = (target_shift, over = {}) => openSwap({ status: 'awaiting_approval', target_id: 'tkr', target_shift_id: 'a2', target_shift, updated_at: new Date(START - 200 * H).toISOString(), ...over })
+    it.each([
+      // requester 2099-01-01 09:00; target the day BEFORE at 12:00.
+      { name: 'the TARGET shift started first: expire', swap: recip(tShift('2098-12-31', '12:00:00')), now: Date.UTC(2098, 11, 31, 12, 0), expected: { action: 'expire', reason: 'started', notify: true } },
+      { name: '... one minute earlier it has not', swap: recip(tShift('2098-12-31', '12:00:00')), now: Date.UTC(2098, 11, 31, 11, 59), expected: { action: 'nudge', stage: 't12' } },
+      { name: 'the nudge stages count down to the EARLIER start (T-48h of the target shift)', swap: recip(tShift('2098-12-31', '12:00:00')), now: Date.UTC(2098, 11, 29, 12, 0), expected: { action: 'nudge', stage: 't48' } },
+      { name: '... and not before it', swap: recip(tShift('2098-12-31', '12:00:00')), now: Date.UTC(2098, 11, 29, 11, 59), expected: { action: 'none' } },
+      { name: 'the target shift is LATER: the requester\'s start still closes it', swap: recip(tShift('2099-01-02', '12:00:00')), now: START, expected: { action: 'expire', reason: 'started', notify: true } },
+      { name: 'the target\'s own override is its effective start', swap: recip(tShift('2098-12-31', '12:00:00', { start_time_override: '11:00:00' })), now: Date.UTC(2098, 11, 31, 11, 0), expected: { action: 'expire', reason: 'started', notify: true } },
+      { name: 'a target embed that did not come back is ignored, never guessed', swap: recip(null), now: START - 12 * H, expected: { action: 'nudge', stage: 't12' } },
+      { name: 'an unreadable target start is ignored', swap: recip(tShift('2098-12-31', 'noon')), now: START - 12 * H, expected: { action: 'nudge', stage: 't12' } },
+      { name: 'NOT reciprocal (no target_shift_id): a stray target embed is never read', swap: recip(tShift('2000-01-01', '12:00:00'), { target_shift_id: null }), now: START - 12 * H, expected: { action: 'nudge', stage: 't12' } },
+      { name: 'started at night: closed now, notice later', swap: recip(tShift('2098-12-31', '23:00:00')), now: Date.UTC(2098, 11, 31, 23, 0), expected: { action: 'expire', reason: 'started', notify: false } },
+    ])('$name', ({ swap, now, expected }) => {
+      expect(coverSweepAction(swap, now)).toEqual(expected)
+    })
+
+    it('each shift is judged in its OWN studio\'s timezone', () => {
+      // Target shift: 09:00 on 2098-12-31 in New York = 14:00Z.
+      const swap = recip(tShift('2098-12-31', '09:00:00'))
+      const at = (h, m) => Date.UTC(2098, 11, 31, h, m)
+      expect(coverSweepAction(swap, at(13, 59), { tz: 'Europe/Dublin', targetTz: 'America/New_York' }).action).toBe('nudge')
+      expect(coverSweepAction(swap, at(14, 0), { tz: 'Europe/Dublin', targetTz: 'America/New_York' })).toEqual({ action: 'expire', reason: 'started', notify: true })
+      // With no targetTz the swap's own studio zone is used (Dublin: 09:00Z).
+      expect(coverSweepAction(swap, at(9, 0), { tz: 'Europe/Dublin' })).toEqual({ action: 'expire', reason: 'started', notify: true })
+    })
+  })
+
   // Studio wall-clock, not UTC: on 2026-07-02 (IST, UTC+1) 09:00 is 08:00Z.
   it('reads the block start as Europe/Dublin wall-clock by default', () => {
     const summer = swapOn('2026-07-02', '09:00:00')
@@ -521,6 +554,20 @@ describe('swapExpiryNotices', () => {
     expect(out.map((n) => [n.key, n.to])).toEqual([['swap_expired:s1', ['req']], ['swap_expired_taker:s1', ['tkr']]])
     expect(out[0].payload.body).toBe('Your swap for Thu 1 Jan, 09:00 to 10:00 was not approved before the shift started, so it has closed and the shift stayed with you.')
     expect(out[1].payload.body).toBe('The swap you took for Thu 1 Jan, 09:00 to 10:00 was not approved before the shift started, so it has closed. The shift stayed with Coach R.')
+  })
+
+  it('a RECIPROCAL swap: both coaches are told that BOTH shifts stayed put', () => {
+    const swap = openSwap({ status: 'awaiting_approval', target_id: 'tkr', target_shift_id: 'a2' })
+    const out = swapExpiryNotices(swap, 'started')
+    expect(out.map((n) => [n.key, n.to])).toEqual([['swap_expired:s1', ['req']], ['swap_expired_taker:s1', ['tkr']]])
+    expect(out[0].payload.body).toBe('Your swap for Thu 1 Jan, 09:00 to 10:00 was not approved before one of the shifts started, so it has closed. Both shifts stayed as they were.')
+    expect(out[1].payload.body).toBe('The swap you accepted with Coach R (Thu 1 Jan, 09:00 to 10:00) was not approved before one of the shifts started, so it has closed. Both shifts stayed as they were.')
+  })
+
+  it('a reciprocal swap the other coach never accepted: only the requester is told', () => {
+    const out = swapExpiryNotices(openSwap({ status: 'pending', target_id: 'tkr', target_shift_id: 'a2' }), 'started')
+    expect(out.map((n) => n.key)).toEqual(['swap_expired:s1'])
+    expect(out[0].payload.body).toBe('Your swap for Thu 1 Jan, 09:00 to 10:00 was not accepted and approved before one of the shifts started, so it has closed. Both shifts stayed as they were.')
   })
 
   it('a removed shift tells nobody: the roster change already did, and there is no date left to describe', () => {

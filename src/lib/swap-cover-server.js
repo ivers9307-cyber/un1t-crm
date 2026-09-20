@@ -16,6 +16,7 @@ import { resolveStaffTimeZone } from './staff-push-hours'
 import {
   openPoolRecipients, openPoolPayload,
   coverSweepAction, coverNudgePayload, swapExpiryNotices, swapExpiryNote, deferredExpiryNoticeDue,
+  swapTargetShiftLocationId,
   SWAP_EXPIRY_NOTICE_NOTES, EXPIRY_NOTICE_MAX_AGE_MS, OPEN_SWAP_STATUSES,
 } from './swap-cover'
 
@@ -155,11 +156,14 @@ export async function notifyOpenPool(db, { swapId, locationId, block, requester 
 // /api/schedule/swaps uses (two FKs to profiles on this table). The requester
 // shift carries its own start_time_override: "has it started" is judged on the
 // EFFECTIVE start (swapShiftHasStarted), the same rule PUT /swaps/:id applies.
+// A RECIPROCAL swap also carries its target shift and that block's studio:
+// either shift starting closes the swap, each judged in its own timezone.
 const SWEEP_SWAP_SELECT = `
-  id, status, location_id, requester_id, target_id, requester_shift_id, created_at, updated_at,
+  id, status, location_id, requester_id, target_id, requester_shift_id, target_shift_id, created_at, updated_at,
   reviewed_by, review_note,
   requester:profiles!requester_id(full_name),
-  requester_shift:shift_assignments!requester_shift_id(id, start_time_override, shift_blocks!block_id(id, block_date, start_time, end_time))
+  requester_shift:shift_assignments!requester_shift_id(id, start_time_override, shift_blocks!block_id(id, location_id, block_date, start_time, end_time)),
+  target_shift:shift_assignments!target_shift_id(id, start_time_override, shift_blocks!block_id(id, location_id, block_date, start_time, end_time))
 `
 // Open swaps are single digits in production. The cap is a guard, not a page
 // size: if it is ever hit, the oldest 200 are processed and the rest wait a tick.
@@ -253,11 +257,18 @@ export async function runSwapCoverSweep(db, { nowMs = Date.now() } = {}) {
   stats.open = swaps.length
   if (!swaps.length && !closed.length) return stats
 
-  const zones = await studioTimezones(db, [...new Set([...swaps, ...closed].map((s) => s.location_id).filter(Boolean))])
+  const zones = await studioTimezones(db, [...new Set([
+    ...[...swaps, ...closed].map((s) => s.location_id),
+    ...swaps.map(swapTargetShiftLocationId),
+  ].filter(Boolean))])
 
   // PASS 1 — open swaps.
   for (const swap of swaps) {
-    const decision = coverSweepAction(swap, nowMs, { tz: zones.get(swap.location_id) })
+    const targetLocationId = swapTargetShiftLocationId(swap)
+    const decision = coverSweepAction(swap, nowMs, {
+      tz: zones.get(swap.location_id),
+      targetTz: targetLocationId ? zones.get(targetLocationId) : undefined,
+    })
     if (decision.action === 'none') {
       if (decision.reason === 'quiet_hours') stats.quiet++
       continue
