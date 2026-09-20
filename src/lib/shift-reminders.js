@@ -325,10 +325,10 @@ function joinNames(names) {
   return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
 }
 
-// "Al, Bo and Cy" up to MAX_CO_NAMES, then "Al, Bo, Cy +2 more".
-function coNamesLabel(names) {
-  if (names.length <= MAX_CO_NAMES) return joinNames(names)
-  return `${names.slice(0, MAX_CO_NAMES).join(', ')} +${names.length - MAX_CO_NAMES} more`
+// "Al, Bo and Cy" when all are shown, otherwise "Al, Bo +2 more".
+function coNamesLabel(names, shown) {
+  if (shown >= names.length) return joinNames(names)
+  return `${names.slice(0, shown).join(', ')} +${names.length - shown} more`
 }
 
 // The wall-clock end of whichever shift of the run ends LATEST (a long shift
@@ -357,9 +357,9 @@ function latestEndLabel(run) {
  * shift that could not go until 07:00 on the day must say "today". Studios are named in the order they
  * are worked. `coNames` are the colleagues on the FIRST shift only.
  *
- * Kept lock-screen short: colleagues cap at MAX_CO_NAMES, and shift names give
- * way to "+N more" from the end until the body fits BODY_MAX_CHARS (never
- * below one name; the day, times and studio are never cut).
+ * Kept lock-screen short, as a HARD cap (BODY_MAX_CHARS): colleagues start at
+ * MAX_CO_NAMES; shift names give way to "+N more" from the end (never below
+ * one), then colleagues (to none), then the body is cut with an ellipsis.
  */
 export function buildShiftReminderMessage({ run, nameByLocation = {}, coNames = [], nowMs }) {
   const first = run[0]
@@ -380,18 +380,24 @@ export function buildShiftReminderMessage({ run, nameByLocation = {}, coNames = 
   let head = `${dayWord[0].toUpperCase()}${dayWord.slice(1)} ${start}`
   if (end) head += ` to ${end}`
   if (studios.length) head += ` at ${joinNames(studios)}`
-  const tail = coNames.length ? ` · with ${coNamesLabel(coNames)}` : ''
-
-  const compose = (shown) => {
-    if (shiftNames.length === 0) return head + tail
-    const hidden = shiftNames.length - shown
-    return `${head}: ${shiftNames.slice(0, shown).join(', ')}${hidden ? ` +${hidden} more` : ''}${tail}`
+  const compose = (shownShifts, shownCo) => {
+    const hidden = shiftNames.length - shownShifts
+    const names = shiftNames.length ? `: ${shiftNames.slice(0, shownShifts).join(', ')}${hidden ? ` +${hidden} more` : ''}` : ''
+    const tail = shownCo > 0 ? ` · with ${coNamesLabel(coNames, shownCo)}` : ''
+    return head + names + tail
   }
-  let shown = shiftNames.length
-  while (shown > 1 && compose(shown).length > BODY_MAX_CHARS) shown--
+  // BODY_MAX_CHARS is a HARD cap. What gives way, in order: shift names (down
+  // to one), then colleagues (down to none), then an ellipsis. The day, times
+  // and studio lead the body so they are the last thing an ellipsis can reach.
+  let shownShifts = shiftNames.length
+  let shownCo = Math.min(coNames.length, MAX_CO_NAMES)
+  while (shownShifts > 1 && compose(shownShifts, shownCo).length > BODY_MAX_CHARS) shownShifts--
+  while (shownCo > 0 && compose(shownShifts, shownCo).length > BODY_MAX_CHARS) shownCo--
+  let body = compose(shownShifts, shownCo)
+  if (body.length > BODY_MAX_CHARS) body = `${body.slice(0, BODY_MAX_CHARS - 1).trimEnd()}…`
 
   const title = run.length > 1 ? `${run.length} shifts ${dayWord} from ${start}` : `Shift ${dayWord} at ${start}`
-  return { title, body: compose(shown) }
+  return { title, body }
 }
 
 function emptySummary() {

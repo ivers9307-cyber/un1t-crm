@@ -549,6 +549,43 @@ describe('coRosteredFirstNames + buildShiftReminderMessage', () => {
     expect(body.length).toBeLessThanOrEqual(BODY_MAX_CHARS)
   })
 
+  // The cap is HARD. Order of sacrifice: shift names (to one, "+N more"), then
+  // colleagues (to one, then none), then an ellipsis. The day, the times and
+  // the studio come first in the body precisely so they are the last to go.
+  it('worst case: two long studio names, a long first shift name and three long colleague names still fit 140', () => {
+    const LONG = { 'loc-1': 'Repset Performance Studio Hatch Street Upper', 'loc-2': 'Repset Performance Studio Stillorgan Village' }
+    const run = [
+      tplShift('w1', 'Early Morning Strength and Conditioning Foundations Small Group', '05:45', '08:00'),
+      tplShift('w2', 'Morning Hyrox Engine Builder Intermediate', '08:00', '09:00', { location_id: 'loc-2' }),
+      tplShift('w3', 'Mid Morning Mobility', '09:15', '10:30', { location_id: 'loc-2' }),
+    ]
+    const co = ['Bartholomew', 'Christabella', 'Maximilian', 'Wilhelmina']
+    const { title, body } = msg(run, { nameByLocation: LONG, coNames: co })
+    expect(title).toBe('3 shifts tomorrow from 05:45')
+    expect(body.length).toBeLessThanOrEqual(BODY_MAX_CHARS)
+    expect(body).toBe('Tomorrow 05:45 to 10:30 at Repset Performance Studio Hatch Street Upper and Repset Performance Studio Stillorgan Village: Early Morning Str…')
+    expect(body.length).toBe(BODY_MAX_CHARS) // 139 characters and the ellipsis
+    expect(body.startsWith('Tomorrow 05:45 to 10:30 at Repset Performance Studio Hatch Street Upper')).toBe(true)
+  })
+
+  it('colleagues give way before anything is cut mid-word: three, then fewer with "+N more", then none', () => {
+    const name = 'Strength and Conditioning Foundations for Absolute Beginners Small Group' // 72 chars
+    const one = [tplShift('w1', name, '05:45', '08:00')]
+    const co = ['Bartholomew', 'Christabella', 'Maximilian']
+    const { body } = msg(one, { coNames: co })
+    expect(body).toBe(`Tomorrow 05:45 to 08:00 at Studio North: ${name} · with Bartholomew +2 more`)
+    expect(body.length).toBeLessThanOrEqual(BODY_MAX_CHARS)
+  })
+
+  it('no input at all produces a body over the cap', () => {
+    const word = (n) => 'x'.repeat(n)
+    for (const studio of [5, 40, 90, 200]) for (const shiftName of [0, 10, 80, 300]) for (const nCo of [0, 1, 3, 6]) for (const nShifts of [1, 3, 8]) {
+      const run = Array.from({ length: nShifts }, (_, i) => tplShift(`z${i}`, word(shiftName), '05:45', '08:00'))
+      const { body } = msg(run, { nameByLocation: { 'loc-1': word(studio) }, coNames: Array.from({ length: nCo }, () => word(12)) })
+      expect(body.length, `studio ${studio}, shift ${shiftName}, co ${nCo}, shifts ${nShifts}`).toBeLessThanOrEqual(BODY_MAX_CHARS)
+    }
+  })
+
   it('never drops below one shift name, and tolerates a missing studio name or template name', () => {
     expect(msg([me], { nameByLocation: {} }).body).toBe('Tomorrow 06:00 to 14:00: Early')
     expect(msg([shift({ shift_templates: { start_time: '06:00:00', end_time: '14:00:00' } })]).body).toBe('Tomorrow 06:00 to 14:00 at Studio North')
