@@ -69,6 +69,9 @@ const INSTANCE = {
   profiles: { id: 'prof-coach', full_name: 'Casey Coach', role: 'head_coach' },
 }
 
+// SWAPHB.1 — the heartbeat rows this tick stamped, in call order.
+const stampedNames = () => stampHeartbeat.mock.calls.map((c) => c[0])
+
 function req(auth = 'Bearer test-secret') {
   return { headers: { get: (k) => (k.toLowerCase() === 'authorization' ? auth : null) } }
 }
@@ -120,9 +123,8 @@ describe('GET /api/cron/checklist-sweep — swap cover arm', () => {
     expect(runSwapCoverSweep).toHaveBeenCalledWith(fakeDb)
     expect(body.swap_cover).toEqual({ open: 2, nudged: 1, expired: 1, skipped: 0, quiet: 0, errors: 0 })
     expect(body.swap_sweep_failed).toBe(0)
-    // The arm shares the checklist heartbeat row (a row of its own needs a
-    // seed migration), so its outcome rides in last_outcome, where ops and
-    // Sentinel can see "ran but the swap arm is broken".
+    // The checklist row still carries the swap arm's outcome in last_outcome
+    // (unchanged by SWAPHB.1), where ops and Sentinel can read it.
     expect(stampHeartbeat).toHaveBeenCalledWith('checklist-sweep', {
       ...body.stats,
       swap_cover: { open: 2, nudged: 1, expired: 1, skipped: 0, quiet: 0, errors: 0 },
@@ -147,6 +149,9 @@ describe('GET /api/cron/checklist-sweep — swap cover arm', () => {
     expect(logError).toHaveBeenCalledWith('cron-checklist-sweep', expect.any(String), expect.objectContaining({ err: 'boom' }))
     // The failure is written where a heartbeat reader sees it...
     expect(stampHeartbeat).toHaveBeenCalledWith('checklist-sweep', expect.objectContaining({ swap_cover: null, swap_sweep_failed: 1 }))
+    // SWAPHB.1 — ...and the arm's OWN heartbeat is left to go stale, which is
+    // what finally pages someone.
+    expect(stampedNames()).toEqual(['checklist-sweep'])
     // ...and NOT into the CHECKLIST arm's own error count.
     expect(body.stats.errors).toBe(0)
   })
@@ -156,6 +161,7 @@ describe('GET /api/cron/checklist-sweep — swap cover arm', () => {
     const body = await (await GET(req())).json()
     expect(body).toMatchObject({ success: true, swap_sweep_failed: 1, swap_cover: expect.objectContaining({ errors: 1 }) })
     expect(stampHeartbeat).toHaveBeenCalledWith('checklist-sweep', expect.objectContaining({ swap_sweep_failed: 1 }))
+    expect(stampedNames()).toEqual(['checklist-sweep'])
     expect(body.stats.errors).toBe(0)
   })
 
@@ -167,7 +173,9 @@ describe('GET /api/cron/checklist-sweep — swap cover arm', () => {
     expect(body).toMatchObject({ success: false, error: 'checklists down', swap_sweep_failed: 0 })
     expect(body.swap_cover).toMatchObject({ open: 2 })
     expect(runSwapCoverSweep).toHaveBeenCalledTimes(1)
-    expect(stampHeartbeat).not.toHaveBeenCalled()
+    // No CHECKLIST heartbeat, as always. SWAPHB.1: the swap arm did its work,
+    // so its own row is stamped; a checklist outage must not page as a swap one.
+    expect(stampedNames()).toEqual(['swap-cover-sweep'])
   })
 
   it('a THROWING checklist arm cannot stop the swap arm either', async () => {
@@ -178,12 +186,59 @@ describe('GET /api/cron/checklist-sweep — swap cover arm', () => {
     expect(body).toMatchObject({ success: false, error: 'network reset' })
     expect(body.swap_cover).toMatchObject({ open: 2 })
     expect(runSwapCoverSweep).toHaveBeenCalledTimes(1)
-    expect(stampHeartbeat).not.toHaveBeenCalled()
+    expect(stampedNames()).toEqual(['swap-cover-sweep'])
     expect(logError).toHaveBeenCalledWith('cron-checklist-sweep', expect.any(String), expect.objectContaining({ err: 'network reset' }))
   })
 
   it('does not run for an unauthorised caller', async () => {
     await GET(req('Bearer nope'))
     expect(runSwapCoverSweep).not.toHaveBeenCalled()
+  })
+})
+
+// SWAPHB.1 — the swap arm has a heartbeat row of its own ('swap-cover-sweep',
+// mig 623). Riding in the checklist row's last_outcome was not enough: the
+// health-check reads only is_stale, so an arm that failed on every tick paged
+// nobody. The row is stamped ONLY when the arm ran and swap_sweep_failed is 0,
+// so a persistently failing arm goes stale and 503s the health-check.
+describe('GET /api/cron/checklist-sweep — swap-cover-sweep heartbeat', () => {
+  it('both arms ok: both heartbeats are stamped, the swap row with the arm\'s counts', async () => {
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    expect(stampedNames().sort()).toEqual(['checklist-sweep', 'swap-cover-sweep'])
+    expect(stampHeartbeat).toHaveBeenCalledWith('swap-cover-sweep', { open: 2, nudged: 1, expired: 1, skipped: 0, quiet: 0, errors: 0 })
+  })
+
+  it('a quiet-hours tick (the arm ran, did nothing, reported no errors) still stamps, so the row cannot go stale overnight', async () => {
+    runSwapCoverSweep.mockResolvedValueOnce({ open: 3, nudged: 0, expired: 0, skipped: 0, quiet: 3, errors: 0 })
+    await GET(req())
+    expect(stampHeartbeat).toHaveBeenCalledWith('swap-cover-sweep', expect.objectContaining({ quiet: 3, errors: 0 }))
+  })
+
+  it('swap arm throws: checklist-sweep stamped, swap-cover-sweep NOT, still a 200 with swap_sweep_failed: 1', async () => {
+    runSwapCoverSweep.mockRejectedValueOnce(new Error('boom'))
+    const res = await GET(req())
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(body).toMatchObject({ success: true, swap_sweep_failed: 1 })
+    expect(stampedNames()).toEqual(['checklist-sweep'])
+  })
+
+  it('an arm that resolves with NOTHING has not shown it ran: no swap stamp', async () => {
+    runSwapCoverSweep.mockResolvedValueOnce(undefined)
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    expect(stampedNames()).toEqual(['checklist-sweep'])
+  })
+
+  it('a swap heartbeat stamp that rejects cannot cost the checklist arm its stamp or its response', async () => {
+    stampHeartbeat.mockImplementation((name) =>
+      name === 'swap-cover-sweep' ? Promise.reject(new Error('stamp down')) : Promise.resolve())
+    const res = await GET(req())
+    const body = await res.json()
+    stampHeartbeat.mockImplementation(() => Promise.resolve())
+    expect(res.status).toBe(200)
+    expect(body).toMatchObject({ success: true, swap_sweep_failed: 0 })
+    expect(stampedNames()).toContain('checklist-sweep')
   })
 })
