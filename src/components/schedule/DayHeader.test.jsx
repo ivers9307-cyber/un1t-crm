@@ -1,0 +1,80 @@
+// src/components/schedule/DayHeader.test.jsx
+// @vitest-environment jsdom
+//
+// ROSTERLOOK.1 — the Studio Overview strip folded into the week's day headers.
+// Roles, names and presence only; nothing here says the pill FITS the header
+// (memory `jsdom-cannot-see-layout`).
+
+import { describe, it, expect, afterEach, vi } from 'vitest'
+import { render, cleanup, screen, fireEvent } from '@testing-library/react'
+import DayHeader from '@/components/schedule/DayHeader'
+
+afterEach(() => cleanup())
+
+const OK = { tone: 'ok', label: '', srLabel: 'Fully staffed', title: 'Every shift has its minimum number of coaches' }
+const SHORT = { tone: 'short', label: '1 short', srLabel: '1 shift needs coaches: 1 below the minimum', title: '1 shift needs coaches: 1 below the minimum' }
+const EMPTY = { tone: 'empty', label: '2 short', srLabel: '2 shifts need coaches: 1 with no coach, 1 below the minimum', title: '2 shifts need coaches: 1 with no coach, 1 below the minimum' }
+const NONE = { tone: 'none', label: '', srLabel: '', title: '' }
+const base = { label: 'Mon', dayNumber: 21, fullDate: 'Monday 21 September', isToday: false, holiday: null }
+
+describe('DayHeader', () => {
+  it('manager: the header is a button named by its date, its status and what it opens', () => {
+    const onOpen = vi.fn()
+    render(<DayHeader {...base} status={SHORT} onOpen={onOpen} />)
+    const btn = screen.getByRole('button', { name: 'Monday 21 September. 1 shift needs coaches: 1 below the minimum. Open studio overview' })
+    expect(btn.getAttribute('type')).toBe('button')
+    fireEvent.click(btn)
+    expect(onOpen).toHaveBeenCalledTimes(1)
+  })
+
+  // Safari does not focus a button on click, so a dialog that remembers
+  // document.activeElement as its opener would hand focus back to the wrong
+  // place. The header focuses itself and hands its own element upward.
+  it('focuses itself on click and reports its element, so a dialog can return focus to it', () => {
+    const onOpen = vi.fn()
+    render(<DayHeader {...base} status={OK} onOpen={onOpen} />)
+    const btn = screen.getByRole('button')
+    fireEvent.click(btn)
+    expect(document.activeElement).toBe(btn)
+    expect(onOpen).toHaveBeenCalledWith(btn)
+  })
+
+  it.each([
+    ['ok: a dot and words for a screen reader, NO visible count', OK, 'ok', null, 'Fully staffed'],
+    ['short: amber, "1 short"', SHORT, 'short', '1 short', SHORT.srLabel],
+    ['empty: red, the total', EMPTY, 'empty', '2 short', EMPTY.srLabel],
+  ])('%s', (_n, status, tone, visible, sr) => {
+    render(<DayHeader {...base} status={status} onOpen={() => {}} />)
+    const dot = screen.getByTestId('status-dot')
+    expect(dot.getAttribute('data-tone')).toBe(tone)
+    expect(dot.getAttribute('title')).toBe(status.title)
+    expect(dot.querySelector('.sr-only').textContent).toBe(sr)
+    const shown = dot.querySelector('[data-visible-label]')
+    if (visible) expect(shown.textContent).toBe(visible)
+    else expect(shown).toBeNull()
+  })
+
+  it('says nothing for a day with no future shifts', () => {
+    render(<DayHeader {...base} status={NONE} onOpen={() => {}} />)
+    expect(screen.queryByTestId('status-dot')).toBeNull()
+  })
+
+  it('coach: a plain header, no status, nothing to click', () => {
+    render(<DayHeader {...base} status={null} />)
+    expect(screen.queryByRole('button')).toBeNull()
+    expect(screen.queryByTestId('status-dot')).toBeNull()
+    expect(screen.getByTestId('day-header').textContent).toBe('Mon21')
+  })
+
+  it('keeps the holiday line and names it in the button', () => {
+    render(<DayHeader {...base} holiday={{ name: 'October Bank Holiday', source: 'national' }} status={OK} onOpen={() => {}} />)
+    expect(screen.getByRole('button').getAttribute('aria-label')).toBe('Monday 21 September. October Bank Holiday. Fully staffed. Open studio overview')
+    expect(screen.getByTestId('day-header').textContent).toContain('October Bank Holiday')
+  })
+
+  it('today keeps its solid header; the status rides in its own light pill', () => {
+    render(<DayHeader {...base} isToday status={SHORT} onOpen={() => {}} />)
+    expect(screen.getByTestId('day-header').className).toMatch(/\bbg-blue-600\b/)
+    expect(screen.getByTestId('status-dot').className).toMatch(/\bbg-un1t-bg\b/)
+  })
+})
