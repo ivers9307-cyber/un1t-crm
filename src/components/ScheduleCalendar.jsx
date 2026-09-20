@@ -73,7 +73,8 @@ import { useWeekCost } from './schedule/useWeekCost'
 import { useDraftRosters } from './schedule/useDraftRosters'
 // ROSTERLOOK.1 — the toolbar row, and the pure model that says what is on it.
 import RosterToolbar from './schedule/RosterToolbar'
-import { rosterToolbarModel } from '@/lib/roster-card-model'
+import DayHeader from './schedule/DayHeader'
+import { rosterToolbarModel, dayHeaderStatus } from '@/lib/roster-card-model'
 
 // LEAVE.2 — every leave type gets its own label (timeOffLeaveLabel) and
 // colour. Unpaid and "other" were missing, so approved unpaid/other leave
@@ -140,7 +141,12 @@ function blockStaffingStatus(block, todayStr) {
 // decision, judged at the roster's studio (the route uses the same set).
 const OWNER_ROLES = ['owner']
 
-export default function ScheduleCalendar({ user, onRangeChange, onDataChange, focusShift }) {
+// ROSTERLOOK.1 — `onOpenDayOverview(dateStr, headerEl)`: a manager's day
+// header asks the parent to open the Studio Overview for that day, and hands
+// over its own element so the dialog can give focus back to it (Safari does
+// not focus a clicked button, so the opener cannot be inferred). Optional:
+// rendered alone (every test but one) the headers are plain, not dead buttons.
+export default function ScheduleCalendar({ user, onRangeChange, onDataChange, focusShift, onOpenDayOverview }) {
   // SCHEDULE-PERSIST.1 — week / month / view persisted in the URL so
   // refresh keeps the operator's position. Before this, the state
   // initialised from `new Date()` on every mount, so a page refresh
@@ -185,7 +191,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
   }, [viewType, weekStart, monthStart, pathname, router])
 
   // Mig 125: notify parent (ScheduleTabs) of the visible date range
-  // so the StudioOverviewStrip above us can re-fetch its per-day demand
+  // so the StudioOverviewDialog beside us can re-fetch its per-day demand
   // summary. Fires every time the operator switches week / month or
   // navigates date. Uses formatDate(YYYY-MM-DD) for the wire shape.
   useEffect(() => {
@@ -1304,23 +1310,25 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
               // otherwise read "Manage the 09:30 Morning shift", seven times.
               const cardDayLabel = date.toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'long' })
 
-              const headerCls = isToday
-                ? 'bg-blue-600 text-white'
-                : holiday
-                  ? 'bg-amber-500/15 text-amber-700 border border-amber-500/30'
-                  : 'bg-un1t-surface text-un1t-subtle'
+              // ROSTERLOOK.1 — the Studio Overview strip, folded into the
+              // header. The status is the STUDIO's day (all blocks, whatever
+              // the My shifts filter shows), manager-only, and answers from the
+              // same futureBlockStaffing the cards and the banner use.
+              const dayStatus = isManager
+                ? dayHeaderStatus(blocks.filter((b) => b.block_date === dateStr), { todayIso: todayStr })
+                : null
 
               return (
                 <div key={i} className="min-h-[200px]">
-                  <div className={`text-center py-2 rounded-t-lg text-xs font-semibold ${headerCls}`} title={holiday?.name || undefined}>
-                    <div>{label}</div>
-                    <div className={`text-lg font-bold ${isToday ? 'text-white' : 'text-un1t-text'}`}>{date.getDate()}</div>
-                    {holiday && (
-                      <div className={`mt-0.5 text-[10px] font-medium leading-tight px-1 truncate ${isToday ? 'text-white/80' : 'text-amber-700'}`}>
-                        {holiday.source === 'national' ? '🇮🇪 ' : '🏷 '}{holiday.name}
-                      </div>
-                    )}
-                  </div>
+                  <DayHeader
+                    label={label}
+                    dayNumber={date.getDate()}
+                    fullDate={cardDayLabel}
+                    isToday={isToday}
+                    holiday={holiday}
+                    status={dayStatus}
+                    onOpen={isManager && onOpenDayOverview ? (el) => onOpenDayOverview(dateStr, el) : undefined}
+                  />
 
                   <div className={`bg-un1t-surface/50 border border-un1t-border border-t-0 rounded-b-lg p-1.5 space-y-1.5 min-h-[160px] ${holiday ? 'bg-amber-500/[0.04]' : ''}`}>
                     {/* Time-off bars */}

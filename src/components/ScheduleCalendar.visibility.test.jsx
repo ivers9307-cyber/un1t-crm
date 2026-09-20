@@ -383,3 +383,42 @@ describe('changes since publish (CHANGELOG.1)', () => {
     expect(screen.queryByTestId('publication-status')).toBeNull()
   })
 })
+
+describe('day headers carry the staffing status (ROSTERLOOK.1)', () => {
+  const longDay = new Date(`${BLOCK_DATE}T00:00:00`).toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'long' })
+
+  it('a manager sees one status per day with future shifts, in words as well as colour', async () => {
+    await renderCalendar({ blocks: [SHORT_BLOCK, EMPTY_BLOCK, OK_BLOCK] })
+    const dots = screen.getAllByTestId('status-dot')
+    expect(dots).toHaveLength(1) // every fixture sits on BLOCK_DATE
+    expect(dots[0].getAttribute('data-tone')).toBe('empty')
+    expect(dots[0].textContent).toMatch(/2 short/)
+    expect(dots[0].textContent).toMatch(/2 shifts need coaches: 1 with no coach, 1 below the minimum/)
+  })
+
+  it('without somewhere to open, the header is not a button (the calendar rendered alone)', async () => {
+    await renderCalendar({ blocks: [OK_BLOCK] })
+    expect(screen.queryByRole('button', { name: /Open studio overview/ })).toBeNull()
+    expect(screen.getAllByTestId('day-header')).toHaveLength(7)
+  })
+
+  it('given onOpenDayOverview, the header reports its own date', async () => {
+    const onOpenDayOverview = vi.fn()
+    global.fetch = mockFetch({ blocks: [OK_BLOCK] })
+    await act(async () => { render(<ScheduleCalendar user={MANAGER} onOpenDayOverview={onOpenDayOverview} />) })
+    await waitFor(() => expect(screen.queryByText(/Loading roster/)).toBeNull())
+    const header = screen.getByRole('button', { name: new RegExp(`^${longDay}\\.`) })
+    fireEvent.click(header)
+    // The date, and the header element itself: the dialog's owner needs the
+    // opener to give focus back to (Safari never focuses a clicked button).
+    expect(onOpenDayOverview).toHaveBeenCalledWith(BLOCK_DATE, header)
+  })
+
+  it('a coach sees no status and no clickable header, even when handed the prop', async () => {
+    global.fetch = mockFetch({ blocks: [SHORT_BLOCK, OK_BLOCK] })
+    await act(async () => { render(<ScheduleCalendar user={COACH} onOpenDayOverview={() => {}} />) })
+    await waitFor(() => expect(screen.queryByText(/Loading roster/)).toBeNull())
+    expect(screen.queryByTestId('status-dot')).toBeNull()
+    expect(screen.queryByRole('button', { name: /Open studio overview/ })).toBeNull()
+  })
+})

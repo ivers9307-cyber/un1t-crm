@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 //
-// CAL-UI-LOW.2 — the whole path: a row in the Studio Overview day dialog
-// opens THAT shift in the calendar below it.
+// CAL-UI-LOW.2 / ROSTERLOOK.1 — the whole path: a day header opens the
+// Studio Overview dialog, and a row in it opens THAT shift.
 //
-// The strip and the calendar are siblings with no shared state, so the
-// request travels strip → ScheduleRosterView → calendar. Testing the two
+// The dialog and the calendar are siblings with no shared state, so the
+// request travels calendar header → ScheduleRosterView → dialog →
+// ScheduleRosterView → calendar. Testing the two
 // halves separately would prove the message is sent and that something
 // could receive it, and nothing about them being connected.
 //
@@ -32,6 +33,7 @@ vi.mock('next/navigation', () => ({
 }))
 
 import ScheduleRosterView from '@/components/ScheduleRosterView'
+import ScheduleCalendar from '@/components/ScheduleCalendar'
 
 vi.setConfig({ testTimeout: 20000 })
 
@@ -118,23 +120,33 @@ function mockFetch({ blocksGone = false, near = false } = {}) {
   })
 }
 
+// ROSTERLOOK.1 — the overview opens from the calendar's own day header now.
+// The header is named by the same en-IE long date the calendar prints.
+function dayHeader(dateIso) {
+  const label = new Date(`${dateIso}T00:00:00`).toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'long' })
+  return screen.getByRole('button', { name: new RegExp(`^${label}\\..*Open studio overview$`) })
+}
+
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); replace.mockClear() })
 
 async function renderView(opts) {
   global.fetch = mockFetch(opts)
   await act(async () => { render(<ScheduleRosterView user={MANAGER} />) })
   await waitFor(() => expect(screen.queryByText(/Loading roster/)).toBeNull())
-  await waitFor(() => expect(screen.queryByText(/Loading overview/)).toBeNull())
 }
 
-describe('Studio Overview → the shift it names (CAL-UI-LOW.2)', () => {
-  it('opens a shift that is in the week already on screen', async () => {
-    // The strip summarises the days the calendar is showing, so this is what
-    // an operator meets nearly every time. Nothing has to load and nothing
-    // has to move: the block is already in the calendar's rows.
+describe('Studio Overview, from a day header → the shift it names (CAL-UI-LOW.2 / ROSTERLOOK.1)', () => {
+  it('a day header opens the overview, and a row in it opens that shift', async () => {
+    // The only case an operator can reach: the header IS a day on screen, so
+    // the block is already in the calendar's rows.
     await renderView({ near: true })
 
-    fireEvent.click(screen.getByRole('button', { name: /undermanned/i }))
+    const header = dayHeader(NEAR_DATE)
+    header.focus()
+    fireEvent.click(header)
+    const summary = screen.getByRole('dialog')
+    expect(summary.textContent).toMatch(/0 of 2 assigned/)
+
     await act(async () => {
       fireEvent.click(screen.getByTestId('under-min-shift'))
     })
@@ -144,49 +156,46 @@ describe('Studio Overview → the shift it names (CAL-UI-LOW.2)', () => {
       expect(dialog.textContent).toMatch(/Morning/)
       expect(dialog.textContent).toMatch(/6:30am\s*–\s*9am/)
     })
+    // The day summary is gone rather than stacked behind it.
     expect(screen.getAllByRole('dialog')).toHaveLength(1)
   })
 
-  it('navigates the calendar to the date and opens that shift', async () => {
-    await renderView()
+  it('the header says the day is short before anyone opens anything', async () => {
+    await renderView({ near: true })
+    expect(dayHeader(NEAR_DATE).getAttribute('aria-label')).toMatch(/1 shift needs coaches: 1 with no coach/)
+  })
 
-    // Open the day summary from the overview strip.
-    fireEvent.click(screen.getByRole('button', { name: /undermanned/i }))
-    const summary = screen.getByRole('dialog')
-    expect(summary.textContent).toMatch(/0 of 2 assigned/)
+  // The two cases below drive the calendar's `focusShift` prop directly. No
+  // day header can ask for a shift in a week that is not on screen, so the UI
+  // no longer reaches this path; the machinery is kept (see "Not in this PR")
+  // and these keep it honest while it exists.
+  it('focusShift for a far week: navigates the calendar and opens that shift once it has loaded', async () => {
+    global.fetch = mockFetch()
+    const view = render(<ScheduleCalendar user={MANAGER} />)
+    await waitFor(() => expect(screen.queryByText(/Loading roster/)).toBeNull())
 
     await act(async () => {
-      fireEvent.click(screen.getByTestId('under-min-shift'))
+      view.rerender(<ScheduleCalendar user={MANAGER} focusShift={{ date: FAR_DATE, blockId: BLOCK.id, seq: 1 }} />)
     })
 
-    // The calendar moved to the week holding that date…
     await waitFor(() => {
       expect(replace.mock.calls.some(([href]) => String(href).includes(`week=${FAR_MONDAY}`))).toBe(true)
     })
-
-    // …and the block-detail dialog for that shift is what is open now — the
-    // same surface a click on the block card opens.
     await waitFor(() => {
       const dialog = screen.getByRole('dialog')
       expect(dialog.getAttribute('aria-labelledby')).toBeTruthy()
       expect(dialog.textContent).toMatch(/Evening/)
       expect(dialog.textContent).toMatch(/5pm\s*–\s*8pm/)
     })
-    // The day summary is gone rather than stacked behind it.
-    expect(screen.getAllByRole('dialog')).toHaveLength(1)
   })
 
-  it('says so instead of doing nothing when the shift has gone', async () => {
-    await renderView()
-    fireEvent.click(screen.getByRole('button', { name: /undermanned/i }))
-
-    // The roster no longer has the block the overview named — deleted between
-    // the strip's fetch and the click. Silence here is the defect class this
-    // repo keeps paying for, so the operator is told.
+  it('focusShift for a shift that has gone: says so instead of doing nothing', async () => {
     global.fetch = mockFetch({ blocksGone: true })
+    const view = render(<ScheduleCalendar user={MANAGER} />)
+    await waitFor(() => expect(screen.queryByText(/Loading roster/)).toBeNull())
 
     await act(async () => {
-      fireEvent.click(screen.getByTestId('under-min-shift'))
+      view.rerender(<ScheduleCalendar user={MANAGER} focusShift={{ date: FAR_DATE, blockId: BLOCK.id, seq: 1 }} />)
     })
 
     await waitFor(() => {
