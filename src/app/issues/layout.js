@@ -3,12 +3,15 @@
 // first company_settings.company_name by location_id), whichever studio the
 // operator was actually working in. This adds NO chrome and NO gate; pages
 // here keep their own. It exists only to name the ACTIVE studio in the tab.
-// See src/lib/staff-tab-title.js for why this cannot live in the root layout.
+// See src/lib/staff-tab-title.js for why the root generateMetadata must not
+// resolve it (who can read the name, not rendering cost).
 
 import { staffTabMetadata } from '@/lib/staff-tab-title'
 
-// Already true of every page under here (each reads the session). Stated so
-// a page added later cannot be prerendered with a sessionless title.
+// Belt-and-braces, NOT what makes these routes dynamic: the root layout
+// already reads the session for every route (AppShellServer), and every page
+// under here is force-dynamic itself. Stated so the intent survives if either
+// of those ever changes.
 export const dynamic = 'force-dynamic'
 
 export async function generateMetadata() {
