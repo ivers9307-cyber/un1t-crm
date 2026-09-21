@@ -51,6 +51,10 @@ export const timeOffCancellationsProvider = {
   key: 'time_off_cancellations',
   label: 'Leave cancellations',
   reviewBase: '/schedule/time-off',
+  // Decided on the web Time Off page only. The phone ignores this key, so the
+  // phone-side count (the iOS widget, via getHomeQueueCounts) must not include
+  // it. REMOVE this flag when the phone ships a surface for it.
+  noPhoneSurface: true,
 
   isVisible(user) {
     return canDecideHere(user)

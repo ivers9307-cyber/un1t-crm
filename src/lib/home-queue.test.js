@@ -615,6 +615,25 @@ describe('assembleHomeQueue — every email row is a Mail row', () => {
   })
 })
 describe('getHomeQueueCounts', () => {
+  // LEAVECANCEL.1 — GET /api/home-queue/count is read ONLY by the iOS widget, so
+  // its approvals number is the PHONE-surface count: categories with no phone
+  // surface (time_off_cancellations) stay out, or the widget reads 1 above an
+  // empty phone list. The web queue (assembleHomeQueue) keeps the full count.
+  it('asks the registry for the phone-surface count; the web queue asks for the full one', async () => {
+    getPendingApprovalsCount.mockResolvedValue(0)
+    hasPermission.mockReturnValue(false)
+    hasPermissionForLocation.mockReturnValue(false)
+    const db = makeDb({})
+    const user = userAt()
+    await getHomeQueueCounts(db, user)
+    expect(getPendingApprovalsCount).toHaveBeenLastCalledWith(db, user, { phoneSurfaceOnly: true })
+
+    getPendingApprovalsCount.mockClear()
+    getPendingApprovals.mockResolvedValue({ providers: [], total: 0 })
+    await assembleHomeQueue(db, user)
+    expect(getPendingApprovalsCount).toHaveBeenCalledWith(db, user)
+  })
+
   it('returns a per-source breakdown that sums to count', async () => {
     getPendingApprovalsCount.mockResolvedValue(3)
     hasPermission.mockReturnValue(true)

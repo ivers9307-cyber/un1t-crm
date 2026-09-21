@@ -458,7 +458,14 @@ export async function getHomeQueueCounts(db, user) {
   if (!locationId) return empty
 
   const settled = await Promise.allSettled([
-    getPendingApprovalsCount(db, user),
+    // LEAVECANCEL.1 — this function's ONLY reader is GET /api/home-queue/count,
+    // and that route's only caller is the iOS widget, so the approvals number
+    // is the PHONE-surface count: a category the phone cannot open
+    // (time_off_cancellations today) stays out, or the widget says 1 above an
+    // empty phone list. assembleHomeQueue (the WEB dashboard queue) still
+    // counts everything. If a web reader is ever added here, give it its own
+    // count rather than dropping this option.
+    getPendingApprovalsCount(db, user, { phoneSurfaceOnly: true }),
     countConversationsNeedsReply(db, user, locationId),
     countInboxNeedsAction(db, user, locationId),
   ])

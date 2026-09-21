@@ -139,6 +139,31 @@ describe('through the registry: the tab and the badge agree, per role', () => {
     expect(await only(MANAGER)).toBe(0)
   })
 
+  // LEAVECANCEL.1 (review) — the count-gate-vs-row-gate class. The phone has no
+  // surface for these (its approvals list ignores the key, correctly), but the
+  // iOS widget reads GET /api/home-queue/count, which sums every provider: an
+  // owner's widget would say 1 above an empty phone list. The provider declares
+  // `noPhoneSurface`, and the phone-facing count skips it WITHOUT querying.
+  it('the WEB badge counts it; the phone-surface count does not, and never even asks', async () => {
+    freeze()
+    const make = () => fakeDb((q) => {
+      if (q.table === 'profile_locations') return { data: [{ profile_id: 'mgr', location_id: 'loc-1' }], error: null }
+      const openAsk = q.table === 'time_off_requests' && q.calls.some(([op, col]) => op === 'not' && col === 'cancel_requested_at')
+      return { data: [], count: openAsk ? 1 : 0, error: null }
+    })
+    expect(timeOffCancellationsProvider.noPhoneSurface).toBe(true)
+    expect(await getPendingApprovalsCount(make(), OWNER)).toBe(1)
+
+    const phone = make()
+    expect(await getPendingApprovalsCount(phone, OWNER, { phoneSurfaceOnly: true })).toBe(0)
+    const askedForOpenAsks = phone.queries.some((q) => q.table === 'time_off_requests' && q.calls.some(([op, col]) => op === 'not' && col === 'cancel_requested_at'))
+    expect(askedForOpenAsks).toBe(false)
+  })
+
+  it('it is the ONLY provider the phone-surface count leaves out', () => {
+    expect(APPROVALS_PROVIDERS.filter((p) => p.noPhoneSurface).map((p) => p.key)).toEqual(['time_off_cancellations'])
+  })
+
   it('follows bundle_team like the rest of the scheduling reviews', async () => {
     freeze()
     expect(await keysFor(at('own', 'owner', 'staff', { bundle_team: false }))).not.toContain('time_off_cancellations')

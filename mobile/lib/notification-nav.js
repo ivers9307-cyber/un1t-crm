@@ -81,6 +81,11 @@ export function routeForNotification(data) {
     // ── Host events (HOST-APPROVALS.1) ──────────────────────────────
     case 'host_event_review': // admin: a host submitted an event for review
       return teamApprovalRoute(data.event_id)
+    // LEAVECANCEL.1 — owner: a manager asked to cancel approved leave. Decided
+    // on the web Time Off page (the push says so); the approvals inbox has no
+    // card for it, so this must not go there, and leaving it to `default`
+    // makes the tap do nothing. The Schedule tab, on the leave's first week.
+    case 'time_off_cancel_request':
     case 'time_off_decision': // staff: approved/declined — preselect the
       // week+day of the request's first day.
       return isIsoDay(data.start_date) ? `/(tabs)/schedule?date=${data.start_date}` : '/(tabs)/schedule'

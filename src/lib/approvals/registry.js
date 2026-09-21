@@ -21,6 +21,11 @@
 //     // where showing a permanently-empty tab to non-permitted
 //     // users would just confuse them.
 //     isVisible?(user) → boolean
+//     // LEAVECANCEL.1 — optional. true = the phone has no surface for this
+//     // category (mobile/lib/approvals.js neither renders nor counts its
+//     // key), so phone-side COUNTS must leave it out too: see
+//     // getPendingApprovalsCount's `phoneSurfaceOnly`.
+//     noPhoneSurface?: boolean
 //   }
 //
 // ApprovalItem shape (uniform across categories so the UI can
@@ -217,11 +222,22 @@ export async function getPendingApprovals(db, user) {
  * fan-out but without item materialisation. Each provider can
  * optimise via .countOnly() if defined; otherwise falls back to
  * fetchPending + read .count off the result.
+ *
+ * LEAVECANCEL.1 — `phoneSurfaceOnly`: the count for a PHONE-side reader (the
+ * iOS "What Needs Me" widget, via getHomeQueueCounts). A provider that
+ * declares `noPhoneSurface: true` has nothing on the phone to open, so
+ * counting it there puts a number above an empty list: the
+ * count-gate-vs-row-gate class. Such providers are skipped before they query.
+ * The WEB callers (GET /api/approvals/count for the sidebar, the dashboard
+ * queue) pass nothing and keep counting everything. When a provider gains a
+ * phone surface, delete its `noPhoneSurface` flag; nothing here changes.
  */
-export async function getPendingApprovalsCount(db, user) {
+export async function getPendingApprovalsCount(db, user, { phoneSurfaceOnly = false } = {}) {
   // Mirror the visibility filter from getPendingApprovals so the
   // sidebar badge matches what the inbox renders.
-  const visible = APPROVALS_PROVIDERS.filter((p) => isProviderVisible(p, user))
+  const visible = APPROVALS_PROVIDERS
+    .filter((p) => isProviderVisible(p, user))
+    .filter((p) => !(phoneSurfaceOnly && p.noPhoneSurface))
   const settled = await Promise.allSettled(
     visible.map(async (p) => {
       if (typeof p.countPending === 'function') {
