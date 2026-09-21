@@ -60,8 +60,8 @@ describe('suspendStaffLogin — deactivate', () => {
   })
 
   it.each([
-    ['kept_member_login', { contact: { id: 'c1' } }, /also a gym member/],
-    ['kept_host_login', { hostUser: { host_id: 'h1' } }, /also an event host/],
+    ['kept_member_login', { contact: { id: 'c1' } }, /also a gym member login/],
+    ['kept_host_login', { hostUser: { host_id: 'h1' } }, /also an event host login/],
     ['kept_unverified', { identityError: { message: 'boom' } }, /could not check/],
   ])('%s: the login is left alone and the operator is told why', async (outcome, dbOpts, copy) => {
     const db = makeDb(dbOpts)
@@ -72,12 +72,27 @@ describe('suspendStaffLogin — deactivate', () => {
     expect(db.auth.admin.updateUserById).not.toHaveBeenCalled()
   })
 
+  // Review S2 — HONESTY. A kept login is not "access fully off": its JWT keeps
+  // refreshing, and the RLS helpers never read `active`, so a direct PostgREST
+  // call still reads studio data. The operator must not be told otherwise.
+  it.each([
+    [{ contact: { id: 'c1' } }, /also a gym member login/],
+    [{ hostUser: { host_id: 'h1' } }, /also an event host login/],
+  ])('a kept-login warning says WHAT is blocked and that the login still works, never "access is off"', async (opts, why) => {
+    const { warning } = await suspendStaffLogin(makeDb(opts), ID)
+    expect(warning).toMatch(/staff app and home screen widgets are blocked/i)
+    expect(warning).toMatch(/login itself was left working/)
+    expect(warning).toMatch(why)
+    expect(warning).not.toMatch(/access is off/i)
+    expect(warning).not.toMatch(/[—–]/)
+  })
+
   it('a FAILED ban is a warning, never a failure: logged structurally, and it never throws', async () => {
     const db = makeDb({ updateError: { message: 'gotrue 500', status: 500 } })
     const res = await suspendStaffLogin(db, ID)
     expect(res.outcome).toBe('ban_failed')
     expect(res.ok).toBe(false)
-    expect(res.warning).toMatch(/Staff access is off/)
+    expect(res.warning).toMatch(/disabling their login failed/)
     expect(res.warning).toMatch(/gotrue 500/)
     expect(logError).toHaveBeenCalledWith('staff-login-access', expect.any(String), expect.objectContaining({ profileId: ID }))
   })

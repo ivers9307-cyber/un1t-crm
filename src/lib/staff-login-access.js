@@ -12,10 +12,22 @@
 //      this file.
 //   2. The ban here. It closes what lock 1 cannot see: the BROWSER's and the
 //      phone's direct, RLS-bound Supabase client. RLS reads profiles.role LIVE
-//      and ignores `active` (CLAUDE.md, the staff-tombstone invariant), so an
-//      unbanned deactivated login keeps its role's row access until its access
-//      token dies. A ban stops the refresh, so that is at most the token's
-//      remaining lifetime.
+//      and NEVER reads `active`: private.auth_is_in_location(),
+//      private.auth_role() and private.auth_is_master() (and the inline
+//      `p.role = 'master'` policies) answer exactly as they did before the
+//      deactivation. So what the ban buys depends on whether there IS one:
+//        • BANNED login (staff-only): the refresh stops, so direct access
+//          lasts at most the access token's remaining lifetime (the
+//          project's JWT expiry, one hour by default).
+//        • KEPT login (also a member's / host's, or the ban failed, or we
+//          could not check): the JWT keeps refreshing INDEFINITELY, and a
+//          hand-made PostgREST call with it still reads the studio data RLS
+//          grants that role. The CRM, the staff app's /api calls and widgets
+//          are blocked (lock 1); the data layer is not.
+//      FOLLOW-UP, NOT IN THIS PR: a forward-only migration adding
+//      `active IS NOT FALSE` to those three helpers (and the inline master
+//      policies), which closes the kept-login case at the database. Until it
+//      lands, the kept_* warnings below must not claim access is fully off.
 //
 // Because lock 1 already holds, the two directions fail DIFFERENTLY — this is
 // "removing a silent failure must never create a louder one" applied:
@@ -34,6 +46,13 @@
 // one we could not check — a wrong ban locks a paying member out of their app,
 // while the staff side is dead either way (lock 1).
 //
+// KNOWN GAP (review S6, a PRODUCT question, no code here): an ex-staff member
+// whose login was BANNED at deactivation and who later joins as a gym member
+// with the same email cannot sign in to the member app — the ban predates the
+// contact link, and nothing re-evaluates it. Operator workaround: reactivate
+// them (lifts the ban), link the contact to the login, then deactivate again —
+// the login is now also a member's, so this time it is kept.
+//
 // WHAT A DEACTIVATION NEVER DOES: scramble the email, reset the password or
 // clear metadata. Those are the tombstone's, and they are irreversible; a
 // deactivation must be undone by one click. Callers must never pass a
@@ -45,10 +64,12 @@ import { logError } from './log.js'
 /** GoTrue's spelling of "lift the ban". */
 export const LOGIN_UNBAN = 'none'
 
+// (review S2) These say what IS blocked and that the login still works — never
+// "access is off", which is not true of a kept login (see lock 2 above).
 const KEPT_WARNINGS = {
-  kept_member_login: 'Staff access is off. Their login was not disabled because the same account is also a gym member, so their member app still works.',
-  kept_host_login: 'Staff access is off. Their login was not disabled because the same account is also an event host, so their host portal still works.',
-  kept_unverified: 'Staff access is off. Their login was not disabled because we could not check whether it is also a member or host account. Save their profile again to retry.',
+  kept_member_login: 'The CRM, the staff app and home screen widgets are blocked for them. The login itself was left working because it is also a gym member login, so their member app still works.',
+  kept_host_login: 'The CRM, the staff app and home screen widgets are blocked for them. The login itself was left working because it is also an event host login, so their host portal still works.',
+  kept_unverified: 'The CRM, the staff app and home screen widgets are blocked for them. The login itself was left working because we could not check whether it is also a member or host login. Save their profile again to retry.',
 }
 
 /** Is this login ALSO a member or a host? Pure reads. Shared with permanent delete. */
@@ -104,7 +125,7 @@ export async function suspendStaffLogin(db, id) {
   return {
     outcome: 'ban_failed',
     ok: false,
-    warning: `Staff access is off, but disabling their login failed: ${err.message || err}. Save their profile again to retry, or ban the user in the Supabase dashboard (Authentication, Users).`,
+    warning: `The CRM, the staff app and home screen widgets are blocked for them, but disabling their login failed: ${err.message || err}. Save their profile again to retry, or ban the user in the Supabase dashboard (Authentication, Users).`,
   }
 }
 

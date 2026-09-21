@@ -122,7 +122,7 @@ describe('DELETE /api/staff/[id] — deactivate ends the sessions', () => {
     const body = await res.json()
     expect(body.success).toBe(true)
     expect(body.data).toEqual({ login: 'ban_failed' })
-    expect(body.warning).toMatch(/Staff access is off/)
+    expect(body.warning).toMatch(/disabling their login failed/)
     // Nothing flips `active` back.
     expect(queriesOf(db, 'profiles', 'update').map((q) => q.payload)).toEqual([{ active: false, unifi_door_access: false }])
     // The audit row records what really happened to the login.
@@ -136,7 +136,7 @@ describe('DELETE /api/staff/[id] — deactivate ends the sessions', () => {
     const body = await (await DELETE(del(), props)).json()
     expect(body.success).toBe(true)
     expect(body.data).toEqual({ login: 'kept_member_login' })
-    expect(body.warning).toMatch(/also a gym member/)
+    expect(body.warning).toMatch(/also a gym member login/)
     expect(db.auth.admin.updateUserById).not.toHaveBeenCalled()
   })
 
