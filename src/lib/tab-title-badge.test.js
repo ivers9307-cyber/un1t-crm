@@ -26,4 +26,23 @@ describe('tab title badge', () => {
     expect(stripTitleBadge('Week (2) plan')).toBe('Week (2) plan')
     expect(stripTitleBadge(null)).toBe('')
   })
+
+  // document.title's GETTER trims, so "(3) " + "" reads back as "(3)". A strip
+  // rule that needs whitespace after the badge then misses it, and the next
+  // pass stacks a second one: "(3) (3)", which is where the Sidebar observer
+  // converged on a page with no <title> yet.
+  it('an EMPTY or whitespace base title is idempotent too', () => {
+    expect(withTitleBadge('', 3)).toBe('(3)')
+    expect(withTitleBadge('   ', 3)).toBe('(3)')
+    expect(withTitleBadge('(3)', 3)).toBe('(3)')
+    expect(withTitleBadge(withTitleBadge('', 3), 5)).toBe('(5)')
+    expect(withTitleBadge('(3)', 0)).toBe('')
+    expect(stripTitleBadge('(99+)')).toBe('')
+  })
+
+  // KNOWN LIMIT, deliberately left alone: a page whose real title begins with
+  // a bare "(12) " is indistinguishable from our badge and loses it.
+  it('cannot tell a legitimate leading "(12) " from its own badge', () => {
+    expect(stripTitleBadge('(12) Angry Men')).toBe('Angry Men')
+  })
 })

@@ -225,7 +225,10 @@ export default function Sidebar({ user, isLinkedHost = false, mobileOpen = false
     }
     apply()
     let observer = null
-    if (typeof MutationObserver !== 'undefined' && document.head) {
+    // Nothing to re-apply at zero, so nothing to watch: apply() above has
+    // already stripped any prefix left behind, and the cleanup of the n > 0
+    // run disconnected its observer before this run started.
+    if (titleCount > 0 && typeof MutationObserver !== 'undefined' && document.head) {
       observer = new MutationObserver(apply)
       // childList: Next/React may swap the <title> element outright.
       // subtree + characterData: or re-write the text inside the same one.
