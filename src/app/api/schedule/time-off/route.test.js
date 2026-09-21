@@ -982,21 +982,30 @@ describe('GET /api/schedule/time-off — before mig 624 is applied (LEAVECANCEL.
 // LEAVEGUARD.1 — the list says, per row, whether THIS caller may take a
 // colleague's approved leave out of force. `approved_locked_to_owner: true` is
 // a manager-tier person's approved leave seen by someone who is not an owner
-// at a studio it belongs to (nor a master). Judged by the same function the
-// PUT refuses with, from the requester's per-studio role.
+// at a studio it belongs to (nor a master), or a master's approved leave seen
+// by anyone but another master. Judged by the same functions the PUT refuses
+// with (requesterLeaveTier + approvedLeaveGuardAllows).
 describe('GET /api/schedule/time-off — approved_locked_to_owner (LEAVEGUARD.1)', () => {
   const getReq = (qs = '') => ({ url: `http://x/api/schedule/time-off${qs}`, headers: { get: () => '' } })
   const at = (id, role) => ({
     id, role, profileRole: 'staff', activeLocation: { id: 'loc-1' },
     locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': role },
   })
+  const MASTER = { id: 'boss', role: 'master', profileRole: 'master', locations: [{ id: 'loc-1' }], rolesByLocation: {} }
+  const row = (id, profile_id, status = 'approved', role = 'staff') => ({
+    id, profile_id, location_id: 'loc-1', status, start_date: '2026-10-05', end_date: '2026-10-07',
+    profiles: { id: profile_id, full_name: profile_id, role },
+  })
   const ROWS = [
-    { id: 'mgr-approved', profile_id: 'mgr', location_id: 'loc-1', status: 'approved', start_date: '2026-10-05', end_date: '2026-10-07' },
-    { id: 'mgr-pending', profile_id: 'mgr', location_id: 'loc-1', status: 'pending', start_date: '2026-10-12', end_date: '2026-10-12' },
-    { id: 'coach-approved', profile_id: 'coach', location_id: 'loc-1', status: 'approved', start_date: '2026-10-05', end_date: '2026-10-05' },
-    // Filed at loc-1 where they are staff; manager at loc-2 (leave covers the person).
-    { id: 'hc-approved', profile_id: 'hc', location_id: 'loc-1', status: 'approved', start_date: '2026-10-05', end_date: '2026-10-05' },
-    { id: 'own-approved', profile_id: 'own', location_id: 'loc-1', status: 'approved', start_date: '2026-10-05', end_date: '2026-10-05' },
+    row('mgr-approved', 'mgr'),
+    row('mgr-pending', 'mgr', 'pending'),
+    row('coach-approved', 'coach'),
+    // Filed at loc-1 where they are staff; head coach at loc-2 (leave covers the person).
+    row('hc-approved', 'hc'),
+    row('own-approved', 'own'),
+    // No studio rows: tier from the embedded profiles.role / an org grant.
+    row('master-approved', 'boss-2', 'approved', 'master'),
+    row('oa-approved', 'oa'),
   ]
   const MEMBERSHIPS = [
     { profile_id: 'mgr', location_id: 'loc-1', role: 'manager' },
@@ -1005,21 +1014,27 @@ describe('GET /api/schedule/time-off — approved_locked_to_owner (LEAVEGUARD.1)
     { profile_id: 'hc', location_id: 'loc-2', role: 'head_coach' },
     { profile_id: 'own', location_id: 'loc-1', role: 'owner' },
   ]
-  const listDb = ({ membershipError = null } = {}) => fakeDb((q) => {
+  const listDb = ({ membershipError = null, orgError = null } = {}) => fakeDb((q) => {
+    const inIds = (col) => q.calls.find(([op, c]) => op === 'in' && c === col)?.[2] || []
     if (q.table === 'profile_locations') {
       const cols = (q.columns || '').replace(/\s/g, '')
       // The scope read (members of the managed studio) selects profile_id only.
       if (cols === 'profile_id') return { data: MEMBERSHIPS.map(({ profile_id }) => ({ profile_id })), error: null }
       if (membershipError) return { data: null, error: membershipError }
-      const ids = q.calls.find(([op, col]) => op === 'in' && col === 'profile_id')?.[2] || []
-      return { data: MEMBERSHIPS.filter((m) => ids.includes(m.profile_id)), error: null }
+      return { data: MEMBERSHIPS.filter((m) => inIds('profile_id').includes(m.profile_id)), error: null }
     }
+    if (q.table === 'profile_organizations') {
+      if (orgError) return { data: null, error: orgError }
+      return { data: inIds('profile_id').includes('oa') ? [{ profile_id: 'oa', organization_id: 'org-1', role: 'org_admin' }] : [], error: null }
+    }
+    if (q.table === 'locations') return { data: [{ id: 'loc-1', organization_id: 'org-1' }, { id: 'loc-2', organization_id: 'org-1' }], error: null }
     return { data: ROWS, error: null }
   })
   const run = async (user, opts) => {
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date('2026-09-17T10:00:00Z'))
     try {
+      logError.mockClear()
       getCurrentUser.mockResolvedValue(user)
       const db = listDb(opts)
       createServerClient.mockReturnValue(db)
@@ -1031,39 +1046,52 @@ describe('GET /api/schedule/time-off — approved_locked_to_owner (LEAVEGUARD.1)
     }
   }
 
-  it('a manager: a fellow manager-tier person\'s approved leave is locked (other studio\'s role included); pending and staff leave are not', async () => {
+  it('a manager: manager-tier, org-admin and master leave is locked; pending and staff leave are not', async () => {
     const { res, locked } = await run(at('mgr-2', 'manager'))
     expect(res.status).toBe(200)
     expect(locked).toEqual({
-      'mgr-approved': true, 'mgr-pending': false, 'coach-approved': false, 'hc-approved': true, 'own-approved': true,
+      'mgr-approved': true, 'mgr-pending': false, 'coach-approved': false, 'hc-approved': true,
+      'own-approved': true, 'master-approved': true, 'oa-approved': true,
     })
   })
 
-  it('an owner: nothing is locked (their own leave is the self path, not this rule)', async () => {
+  it('an owner: only a MASTER\'s approved leave is locked (an owner is not above a master); their own is the self path', async () => {
     const { locked } = await run(at('own', 'owner'))
     expect(locked).toEqual({
-      'mgr-approved': false, 'mgr-pending': false, 'coach-approved': false, 'hc-approved': false, 'own-approved': false,
+      'mgr-approved': false, 'mgr-pending': false, 'coach-approved': false, 'hc-approved': false,
+      'own-approved': false, 'master-approved': true, 'oa-approved': false,
     })
   })
 
-  it('a master: nothing is locked', async () => {
-    const { locked } = await run({ id: 'boss', role: 'master', profileRole: 'master', locations: [{ id: 'loc-1' }], rolesByLocation: {} })
+  it('a master: nothing is locked, and no role or org read is paid for the flag', async () => {
+    const { db, locked } = await run(MASTER)
     expect(Object.values(locked).every((v) => v === false)).toBe(true)
+    expect(queriesOf(db, 'profile_locations').filter((q) => (q.columns || '').includes('role'))).toHaveLength(0)
+    expect(queriesOf(db, 'profile_organizations')).toHaveLength(0)
   })
 
-  it('reads the colleagues\' roles in ONE paged profile_locations query, with the role column', async () => {
+  it('reads the colleagues\' roles in ONE paged profile_locations query, and their org grants in one', async () => {
     const { db } = await run(at('mgr-2', 'manager'))
     const roleReads = queriesOf(db, 'profile_locations').filter((q) => (q.columns || '').includes('role'))
     expect(roleReads).toHaveLength(1)
     expect(roleReads[0].columns.replace(/\s/g, '')).toBe('profile_id,location_id,role')
+    expect(queriesOf(db, 'profile_organizations')).toHaveLength(1)
   })
 
-  it('unreadable memberships only NARROW: every colleague\'s approved leave locks for a manager, an owner at the filed-at studio keeps it', async () => {
+  it('unreadable memberships only NARROW, and are logged through logError', async () => {
     let { res, locked } = await run(at('mgr-2', 'manager'), { membershipError: { message: 'boom' } })
     expect(res.status).toBe(200)
     expect(locked).toMatchObject({ 'mgr-approved': true, 'coach-approved': true, 'mgr-pending': false })
+    expect(logError).toHaveBeenCalledTimes(1)
+    expect(logError.mock.calls[0][0]).toBe('time-off')
     ;({ locked } = await run(at('own-2', 'owner'), { membershipError: { message: 'boom' } }))
-    expect(locked).toMatchObject({ 'mgr-approved': false, 'coach-approved': false })
+    expect(locked).toMatchObject({ 'mgr-approved': false, 'coach-approved': false, 'master-approved': true })
+  })
+
+  it('unreadable org grants narrow too: a colleague with no manager row is locked for a manager', async () => {
+    const { locked } = await run(at('mgr-2', 'manager'), { orgError: { message: 'boom' } })
+    expect(locked).toMatchObject({ 'coach-approved': true, 'oa-approved': true, 'mgr-approved': true, 'mgr-pending': false })
+    expect(logError).toHaveBeenCalledTimes(1)
   })
 
   it('a plain coach sees only their own rows, and none is locked; no role read is made', async () => {
@@ -1077,6 +1105,7 @@ describe('GET /api/schedule/time-off — approved_locked_to_owner (LEAVEGUARD.1)
       const json = await (await GET(getReq('?location_id=loc-1'))).json()
       expect(json.data.map((r) => r.approved_locked_to_owner)).toEqual([false])
       expect(queriesOf(db, 'profile_locations')).toHaveLength(0)
+      expect(queriesOf(db, 'profile_organizations')).toHaveLength(0)
     } finally {
       vi.useRealTimers()
     }

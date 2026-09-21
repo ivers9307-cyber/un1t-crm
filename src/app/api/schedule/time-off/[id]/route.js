@@ -8,13 +8,14 @@ import { notifyUsersOnce } from '@/lib/push-dedup'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import {
   canDecideTimeOff, decidingLocationIds, getProfileLocationIds, getEmploymentType, ensureHolidayAllowanceRow, findLeaveClashes,
+  getOrgAdminLocationIdsByProfile,
 } from '@/lib/time-off-leave'
 import { isExpiredPendingRequest, isTimeOffTypeAllowedFor, timeOffLeaveLabel } from '@shared/time-off'
 import {
   selfCancelMode, isOpenCancelAsk, leaveActingLocationIds, resolveLeaveCancelDeciderIds,
   cancelAskNoticeKey, reAskBlockedUntil, leaveRangeText, CLEARED_CANCEL_ASK,
   isMissingCancelSchemaError, dublinRetryLabel,
-  isManagerTierRequester, approvedLeaveGuardAllows, APPROVED_LEAVE_OWNER_ONLY_ERROR,
+  requesterLeaveTier, approvedLeaveGuardAllows, approvedLeaveRefusal,
 } from '@/lib/time-off-cancel'
 import { logError } from '@/lib/log'
 
@@ -56,15 +57,19 @@ export async function PUT(request, props) {
   // Get the existing request
   // Primary-key read: 0 rows is a legitimate answer (404 below); a failed read
   // is not, and used to be reported as "not found" (the error was discarded).
-  const { data: existing, error: readError } = await db.from('time_off_requests')
-    .select('*')
+  // LEAVEGUARD.1 — the requester's profiles.role rides on this read (a
+  // master holds no studio rows, so it is the only place their tier lives).
+  // It is taken off the row at once: nothing below writes or answers with it.
+  const { data: found, error: readError } = await db.from('time_off_requests')
+    .select('*, requester:profiles!profile_id(role)')
     .eq('id', params.id)
     .maybeSingle()
   if (readError) return NextResponse.json({ success: false, error: readError.message }, { status: 500 })
 
-  if (!existing) {
+  if (!found) {
     return NextResponse.json({ success: false, error: 'Request not found' }, { status: 404 })
   }
+  const { requester, ...existing } = found
 
   const { status, review_note } = body
 
@@ -150,10 +155,20 @@ export async function PUT(request, props) {
   // staff leave, pending leave and approved -> approved are untouched, and the
   // requester's own leave took the self path above. This is a default the
   // owner may reverse; the rule lives in approvedLeaveGuardAllows.
+  // A master's leave needs another master, and an org admin (a synthetic owner
+  // at their organisation's studios, SAAS-4) counts as manager-tier: the tier
+  // is requesterLeaveTier, shared with the list GET. The org-grant read is
+  // paid only here, and fails closed like the membership read above.
   if (!isSelf && existing.status === 'approved' && status !== 'approved') {
-    const requesterIsManagerTier = isManagerTierRequester(requesterMemberships, existing, requesterLocations)
-    if (!approvedLeaveGuardAllows(user, existing, status, requesterLocations, requesterIsManagerTier)) {
-      return NextResponse.json({ success: false, error: APPROVED_LEAVE_OWNER_ONLY_ERROR }, { status: 403 })
+    let orgAdminLocationIds = []
+    if (requester?.role !== 'master') {
+      const { byProfile, error: orgError } = await getOrgAdminLocationIdsByProfile(db, [existing.profile_id])
+      if (orgError) return NextResponse.json({ success: false, error: orgError.message }, { status: 500 })
+      orgAdminLocationIds = byProfile.get(existing.profile_id) || []
+    }
+    const tier = requesterLeaveTier({ profileRole: requester?.role ?? null, memberships: requesterMemberships, orgAdminLocationIds }, existing, requesterLocations)
+    if (!approvedLeaveGuardAllows(user, existing, status, requesterLocations, tier)) {
+      return NextResponse.json({ success: false, error: approvedLeaveRefusal(tier) }, { status: 403 })
     }
   }
 

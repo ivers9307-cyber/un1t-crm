@@ -10,10 +10,10 @@ import {
   getLocationMemberIds, getProfileLocationIds, leaveScopeOrFilter, canDecideTimeOff,
   resolveTimeOffApproverIds, getEmploymentType, getHolidayAllowance, ensureHolidayAllowanceRow,
   countLeaveClashes, findLeaveClashes, chargeableLeaveSegments, findOwnPublishedShifts, isRealIsoDate,
-  getLocationIdsByProfile,
+  getLocationIdsByProfile, getOrgAdminLocationIdsByProfile,
 } from '@/lib/time-off-leave'
 import {
-  annotateCancelAsk, isMissingCancelSchemaError, CANCEL_ASK_OFF, annotateApprovedLeaveGuard, isManagerTierRequester,
+  annotateCancelAsk, isMissingCancelSchemaError, CANCEL_ASK_OFF, annotateApprovedLeaveGuard, requesterLeaveTier,
 } from '@/lib/time-off-cancel'
 import { logError } from '@/lib/log'
 import {
@@ -167,25 +167,39 @@ export async function GET(request) {
   // CANCEL_ASK_OFF, so no screen offers a button whose write would fail.
   //
   // LEAVEGUARD.1 — and `approved_locked_to_owner`: a colleague's APPROVED
-  // leave that only an owner may take out of force (the PUT's rule, judged by
-  // the same function), because the person it belongs to is manager-tier at a
-  // studio it belongs to. That needs their per-studio ROLES, so the one
-  // membership read now also covers every colleague with approved leave in
-  // the list, not only those with an undecided ask. It is independent of mig
-  // 624 (no cancel_* column is involved). An unreadable read NARROWS here
-  // too: the requester is judged manager-tier (null), so only an owner at the
-  // filed-at studio or a master is left unlocked.
+  // leave that only an owner (a master's: only another master) may take out
+  // of force, judged by the PUT's own functions (requesterLeaveTier +
+  // approvedLeaveGuardAllows). The tier needs the requester's profiles.role
+  // (already on the row, the profiles!profile_id embed), their per-studio
+  // ROLES (the one membership read, now also covering colleagues with
+  // approved leave) and their org-admin grants (one more paged read). It is
+  // independent of mig 624. Not paid when it cannot matter: a master caller
+  // is never locked out, and a list with no colleague's approved leave has
+  // nothing to lock. An unreadable read NARROWS: the tier is unknown (null),
+  // judged as manager, so only an owner at a studio the request belongs to or
+  // a master stays unlocked.
   const askedByOthers = cancelSchemaMissing ? [] : rows.filter((r) => r.cancel_requested_at && !r.cancel_decided_at && r.profile_id !== user.id)
-  const approvedOfOthers = rows.filter((r) => r.status === 'approved' && r.profile_id !== user.id)
+  const callerIsMaster = user.profileRole === 'master'
+  const approvedOfOthers = callerIsMaster ? [] : rows.filter((r) => r.status === 'approved' && r.profile_id !== user.id)
   let studiosByProfile = new Map()
   let rolesByProfile = null
   if (askedByOthers.length > 0 || approvedOfOthers.length > 0) {
     const { byProfile, membershipsByProfile, error: memberError } = await getLocationIdsByProfile(db, [...askedByOthers, ...approvedOfOthers].map((r) => r.profile_id))
     if (memberError) {
-      console.error('[time-off] memberships unreadable; cancel-request buttons use the filed-at studio only, and colleagues\' approved leave is locked to owners', memberError.message)
+      logError('time-off', 'memberships unreadable; cancel-request buttons use the filed-at studio only, and colleagues\' approved leave is locked to owners', { err: memberError })
     } else {
       studiosByProfile = byProfile
       rolesByProfile = membershipsByProfile
+    }
+  }
+  let orgAdminByProfile = new Map()
+  if (approvedOfOthers.length > 0) {
+    const { byProfile, error: orgError } = await getOrgAdminLocationIdsByProfile(db, approvedOfOthers.map((r) => r.profile_id))
+    if (orgError) {
+      logError('time-off', 'org-admin grants unreadable; colleagues\' approved leave is locked to owners', { err: orgError })
+      orgAdminByProfile = null
+    } else {
+      orgAdminByProfile = byProfile
     }
   }
   const ownStudios = getUserLocationIds(user)
@@ -193,11 +207,15 @@ export async function GET(request) {
   rows = rows.map((r) => {
     const isOwn = r.profile_id === user.id
     const studios = isOwn ? ownStudios : studiosByProfile.get(r.profile_id) || []
-    const managerTier = isOwn || !rolesByProfile ? null : isManagerTierRequester(rolesByProfile.get(r.profile_id), r, studios)
+    const tier = isOwn || callerIsMaster || r.status !== 'approved' ? null : requesterLeaveTier({
+      profileRole: r.profiles?.role ?? null,
+      memberships: rolesByProfile ? rolesByProfile.get(r.profile_id) || [] : null,
+      orgAdminLocationIds: orgAdminByProfile ? orgAdminByProfile.get(r.profile_id) || [] : null,
+    }, r, studios)
     return {
       ...r,
       ...(cancelSchemaMissing ? CANCEL_ASK_OFF : annotateCancelAsk(r, user, today, studios, nowMs)),
-      ...annotateApprovedLeaveGuard(r, user, studios, managerTier),
+      ...annotateApprovedLeaveGuard(r, user, studios, tier),
     }
   })
 

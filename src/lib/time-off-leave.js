@@ -86,6 +86,60 @@ export async function getLocationIdsByProfile(db, profileIds) {
   return { byProfile, membershipsByProfile, error: null }
 }
 
+/**
+ * LEAVEGUARD.1 — for each profile, the studios of every organisation they are
+ * ORG ADMIN of (mig 417): Map(profileId → locationId[]). getCurrentUser makes
+ * an org admin a synthetic OWNER at those studios (SAAS-4), so the leave guard
+ * counts them as manager-tier. Paged like the membership read; `active` is not
+ * filtered (a closed studio still counts: the guard only ever protects more).
+ * A failed read is returned as the error, never as "nobody is an org admin".
+ */
+export async function getOrgAdminLocationIdsByProfile(db, profileIds) {
+  const ids = [...new Set((profileIds || []).filter(Boolean))]
+  const byProfile = new Map()
+  if (ids.length === 0) return { byProfile, error: null }
+  const orgsByProfile = new Map()
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await db
+      .from('profile_organizations')
+      .select('profile_id, organization_id, role')
+      .in('profile_id', ids)
+      .eq('role', 'org_admin')
+      .order('profile_id', { ascending: true })
+      .order('organization_id', { ascending: true })
+      .range(from, from + PAGE - 1)
+    if (error) return { byProfile: new Map(), error }
+    for (const r of data || []) {
+      if (!r.profile_id || !r.organization_id) continue
+      if (!orgsByProfile.has(r.profile_id)) orgsByProfile.set(r.profile_id, new Set())
+      orgsByProfile.get(r.profile_id).add(r.organization_id)
+    }
+    if (!data || data.length < PAGE) break
+  }
+  const orgIds = [...new Set([...orgsByProfile.values()].flatMap((set) => [...set]))]
+  if (orgIds.length === 0) return { byProfile, error: null }
+  const locationsByOrg = new Map()
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await db
+      .from('locations')
+      .select('id, organization_id')
+      .in('organization_id', orgIds)
+      .order('id', { ascending: true })
+      .range(from, from + PAGE - 1)
+    if (error) return { byProfile: new Map(), error }
+    for (const r of data || []) {
+      if (!r.id || !r.organization_id) continue
+      if (!locationsByOrg.has(r.organization_id)) locationsByOrg.set(r.organization_id, [])
+      locationsByOrg.get(r.organization_id).push(r.id)
+    }
+    if (!data || data.length < PAGE) break
+  }
+  for (const [profileId, orgs] of orgsByProfile) {
+    byProfile.set(profileId, [...orgs].flatMap((o) => locationsByOrg.get(o) || []))
+  }
+  return { byProfile, error: null }
+}
+
 /** Every profile that belongs to any of these studios. */
 export async function getLocationMemberIds(db, locationIds) {
   const ids = [...new Set((locationIds || []).filter(Boolean))]
