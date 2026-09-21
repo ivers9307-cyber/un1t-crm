@@ -63,6 +63,10 @@ function buildDb({
   // What the status PUT's .single() UPDATE answers when it fails.
   updateError = null,
   readError = null,
+  // LEAVEGUARD.1 — the requester's per-studio role (location -> role) and a
+  // failed membership read.
+  requesterRoles = {},
+  membershipError = null,
 }) {
   const updateSpy = vi.fn()
   const allowanceInsertSpy = vi.fn()
@@ -90,7 +94,10 @@ function buildDb({
         ? { data: null, error: ownersError }
         : { data: owners.map((profile_id) => ({ profile_id, location_id: existing.location_id, role: 'owner', profiles: { id: profile_id, role: 'staff', active: true, deleted_at: null } })), error: null }
     }
-    if (q.table === 'profile_locations') return { data: requesterLocations.map((location_id) => ({ location_id })), error: null }
+    if (q.table === 'profile_locations') {
+      if (membershipError) return { data: null, error: membershipError }
+      return { data: requesterLocations.map((location_id) => ({ location_id, role: requesterRoles[location_id] ?? 'staff' })), error: null }
+    }
     if (q.table === 'profiles' && q.eq.role === 'master') return { data: masters.map((id) => ({ id })), error: null }
     if (q.table === 'profiles') return { data: { employment_type: employmentType }, error: null }
     if (q.table === 'staff_allowances' && q.action === 'select') return { data: allowance, error: null }
@@ -625,9 +632,17 @@ describe('PUT /api/schedule/time-off/[id] — cancelling your own APPROVED leave
     expect(updateSpy).not.toHaveBeenCalled()
   })
 
-  it('a colleague\'s approved leave is unchanged by this rule: a manager there still cancels it directly', async () => {
+  // LEAVEGUARD.1 — this used to pin the hole: a fellow manager cancelled a
+  // manager's approved leave outright. It is now an owner's call.
+  it('a colleague\'s approved leave: a fellow manager is refused (LEAVEGUARD.1), an owner there still cancels it directly', async () => {
     getCurrentUser.mockResolvedValue(at('other-mgr', 'manager'))
-    const { db, updateSpy } = buildDb({ existing: own() })
+    let { db, updateSpy } = buildDb({ existing: own(), requesterRoles: { 'loc-1': 'manager' } })
+    createServerClient.mockReturnValue(db)
+    expect((await PUT(req({ status: 'cancelled' }), PROPS)).status).toBe(403)
+    expect(updateSpy).not.toHaveBeenCalled()
+
+    getCurrentUser.mockResolvedValue(at('own-1', 'owner'))
+    ;({ db, updateSpy } = buildDb({ existing: own(), requesterRoles: { 'loc-1': 'manager' } }))
     createServerClient.mockReturnValue(db)
     expect((await PUT(req({ status: 'cancelled' }), PROPS)).status).toBe(200)
     expect(updateSpy.mock.calls[0][0]).toMatchObject({ status: 'cancelled' })
@@ -640,7 +655,10 @@ describe('PUT /api/schedule/time-off/[id] — cancelling your own APPROVED leave
 // and a later re-approval made it OPEN again: back in the owners' queue, where
 // an owner could cancel reinstated leave nobody had asked about.
 describe('PUT /api/schedule/time-off/[id] — an ask dies with the state it was about (LEAVECANCEL.1)', () => {
-  const colleague = (role = 'manager') => ({
+  // LEAVEGUARD.1 — only a manager-tier person can have an ask on their leave,
+  // so only an OWNER (or a master) may move it out of approved: the colleague
+  // here is an owner. A fellow manager is refused, pinned at the end.
+  const colleague = (role = 'owner') => ({
     id: 'other', role, profileRole: 'staff', full_name: 'Colm Colleague',
     locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': role },
   })
@@ -738,6 +756,14 @@ describe('PUT /api/schedule/time-off/[id] — an ask dies with the state it was 
     expect((await res.json()).error).toBe('This leave was already cancelled.')
   })
 
+  it('LEAVEGUARD.1: a fellow MANAGER cannot cancel it while the ask is open either; the ask stays for an owner', async () => {
+    getCurrentUser.mockResolvedValue(colleague('manager'))
+    const { db, updateSpy } = buildDb({ existing: theirs(), requesterRoles: { 'loc-1': 'manager' } })
+    createServerClient.mockReturnValue(db)
+    expect((await PUT(req({ status: 'cancelled' }), PROPS)).status).toBe(403)
+    expect(updateSpy).not.toHaveBeenCalled()
+  })
+
   it('a FAILED read of the request is a 500, not "Request not found" (the error used to be discarded)', async () => {
     getCurrentUser.mockResolvedValue(colleague())
     const { db, updateSpy } = buildDb({ existing: theirs(), readError: { message: 'connection reset' } })
@@ -754,5 +780,136 @@ describe('PUT /api/schedule/time-off/[id] — an ask dies with the state it was 
     const res = await PUT(req({ status: 'cancelled' }), PROPS)
     expect(res.status).toBe(400)
     expect((await res.json()).error).toBe('boom')
+  })
+})
+
+// LEAVEGUARD.1 — every cell of caller × requester × from-status × to-status.
+//
+// The rule under test (a default the owner may reverse): taking APPROVED leave
+// out of force (to rejected, cancelled or pending) when the person it belongs
+// to is manager-tier at a studio the request belongs to needs an OWNER there
+// who is not them, or a master. Everything else is what the PUT did before.
+// The expectation below is written out cell by cell from the rules, not from
+// the implementation, so a change to either shows up as a failing cell.
+describe('PUT /api/schedule/time-off/[id] — approved leave of a manager-tier person (LEAVEGUARD.1 matrix)', () => {
+  const ID = 'a0000000-0000-4000-8000-00000000000e'
+  const REQUESTER_ROLES = ['staff', 'head_coach', 'manager', 'owner']
+  const CALLERS = ['staff', 'head_coach', 'manager', 'owner', 'master', 'self']
+  const FROM = ['pending', 'approved']
+  const TO = ['approved', 'rejected', 'cancelled', 'pending']
+  const MANAGER_TIER = new Set(['head_coach', 'manager', 'owner'])
+
+  const callerFor = (kind, requesterRole) => {
+    if (kind === 'master') return { id: 'boss', role: 'master', profileRole: 'master', full_name: 'Boss', locations: [], rolesByLocation: {} }
+    if (kind === 'self') return { id: 'req', role: requesterRole, profileRole: 'staff', full_name: 'Ria Requester', locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': requesterRole } }
+    return { id: `c-${kind}`, role: kind, profileRole: 'staff', full_name: 'Cal Caller', locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': kind } }
+  }
+
+  // [status, outcome] for one cell. outcome: 'written' (a status write),
+  // 'asked' (LEAVECANCEL.1's ask, no status write), 'guard' (this rule's 403),
+  // or 'refused' (any other refusal, nothing written).
+  function expected(caller, rr, from, to) {
+    if (caller === 'self') {
+      if (to === 'approved' || to === 'rejected') return [403, 'refused']
+      if (!MANAGER_TIER.has(rr)) return from === 'pending' && to === 'cancelled' ? [200, 'written'] : [403, 'refused']
+      if (to !== 'cancelled') return [403, 'refused']
+      return from === 'pending' ? [200, 'written'] : [200, 'asked']
+    }
+    if (caller === 'staff') return [404, 'refused']
+    // A manager-tier caller at the studio, or a master.
+    if (from === 'approved' && to !== 'approved' && MANAGER_TIER.has(rr) && caller !== 'owner' && caller !== 'master') {
+      return [403, 'guard']
+    }
+    return [200, 'written']
+  }
+
+  const cells = []
+  for (const caller of CALLERS) for (const rr of REQUESTER_ROLES) for (const from of FROM) for (const to of TO) {
+    cells.push({ caller, rr, from, to, exp: expected(caller, rr, from, to) })
+  }
+
+  it.each(cells.map((c) => [`${c.caller} → ${c.rr}'s ${c.from} leave → ${c.to}: ${c.exp[0]} ${c.exp[1]}`, c]))('%s', async (_name, { caller, rr, from, to, exp }) => {
+    const user = callerFor(caller, rr)
+    getCurrentUser.mockResolvedValue(user)
+    const existing = {
+      id: ID, profile_id: 'req', location_id: 'loc-1', status: from, type: 'unavailable',
+      start_date: '2026-06-01', end_date: '2026-06-02', total_days: 2,
+      cancel_requested_at: null, cancel_requested_by: null, cancel_decided_at: null, cancel_decision: null,
+    }
+    // The requester's own owner-ness is the SOLE-owner case: the ask goes to a master.
+    const { db, updateSpy } = buildDb({ existing, requesterRoles: { 'loc-1': rr }, owners: rr === 'owner' ? ['req'] : ['own-1'], masters: ['boss'] })
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(req({ status: to }), PROPS)
+    const json = await res.json()
+    const [status, outcome] = exp
+    expect(res.status).toBe(status)
+    if (outcome === 'written') {
+      expect(updateSpy).toHaveBeenCalledTimes(1)
+      expect(updateSpy.mock.calls[0][0]).toMatchObject({ status: to })
+    } else if (outcome === 'asked') {
+      expect(json.cancellation).toBe('requested')
+      expect(updateSpy.mock.calls[0][0]).not.toHaveProperty('status')
+    } else {
+      expect(updateSpy).not.toHaveBeenCalled()
+    }
+    if (outcome === 'guard') {
+      expect(json.error).toBe("Only an owner can cancel a manager's approved leave. Ask the person whose leave it is to request the cancellation, or ask an owner.")
+    } else if (status === 403) {
+      expect(json.error).not.toMatch(/Only an owner can cancel/)
+    }
+  })
+
+  it('covers every cell: 6 callers × 4 requesters × 2 from × 4 to', () => {
+    expect(cells).toHaveLength(192)
+    // Sanity: the rule refuses exactly head coach + manager callers on the
+    // three out-of-approved moves for the three manager-tier requesters.
+    expect(cells.filter((c) => c.exp[1] === 'guard')).toHaveLength(2 * 3 * 3)
+  })
+
+  const mgrApproved = { id: ID, profile_id: 'req', location_id: 'loc-1', status: 'approved', type: 'unavailable', start_date: '2026-06-01', end_date: '2026-06-02', total_days: 2 }
+  const MANAGER = callerFor('manager')
+
+  it('manager-tier at the requester\'s OTHER studio counts: staff where filed, manager at loc-2', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const { db, updateSpy } = buildDb({ existing: mgrApproved, requesterLocations: ['loc-1', 'loc-2'], requesterRoles: { 'loc-1': 'staff', 'loc-2': 'manager' } })
+    createServerClient.mockReturnValue(db)
+    expect((await PUT(req({ status: 'cancelled' }), PROPS)).status).toBe(403)
+    expect(updateSpy).not.toHaveBeenCalled()
+  })
+
+  it('an owner only at the requester\'s OTHER studio may still cancel (it is a studio the request belongs to)', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'own-2', role: 'owner', profileRole: 'staff', locations: [{ id: 'loc-2' }], rolesByLocation: { 'loc-2': 'owner' } })
+    const { db, updateSpy } = buildDb({ existing: mgrApproved, requesterLocations: ['loc-1', 'loc-2'], requesterRoles: { 'loc-1': 'manager', 'loc-2': 'staff' } })
+    createServerClient.mockReturnValue(db)
+    expect((await PUT(req({ status: 'cancelled' }), PROPS)).status).toBe(200)
+    expect(updateSpy.mock.calls[0][0]).toMatchObject({ status: 'cancelled' })
+  })
+
+  it('an unreadable membership read fails CLOSED: 500, nothing written', async () => {
+    getCurrentUser.mockResolvedValue(callerFor('owner'))
+    const { db, updateSpy } = buildDb({ existing: mgrApproved, membershipError: { message: 'connection reset' } })
+    createServerClient.mockReturnValue(db)
+    expect((await PUT(req({ status: 'cancelled' }), PROPS)).status).toBe(500)
+    expect(updateSpy).not.toHaveBeenCalled()
+  })
+
+  it('reads the requester\'s role in the SAME membership query (one profile_locations read)', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const { db } = buildDb({ existing: mgrApproved, requesterRoles: { 'loc-1': 'manager' } })
+    createServerClient.mockReturnValue(db)
+    await PUT(req({ status: 'cancelled' }), PROPS)
+    const reads = queriesOf(db, 'profile_locations')
+    expect(reads).toHaveLength(1)
+    expect(reads[0].columns.replace(/\s/g, '')).toBe('location_id,role')
+    expect(reads[0].eq).toEqual({ profile_id: 'req' })
+  })
+
+  it('an owner cancelling outright while an ask is open still clears the ask (LEAVECANCEL.1 kept)', async () => {
+    getCurrentUser.mockResolvedValue(callerFor('owner'))
+    const asked = { ...mgrApproved, cancel_requested_at: '2026-05-19T09:00:00.000Z', cancel_requested_by: 'req', cancel_decided_at: null, cancel_decision: null }
+    const { db, updateSpy } = buildDb({ existing: asked, requesterRoles: { 'loc-1': 'manager' } })
+    createServerClient.mockReturnValue(db)
+    expect((await PUT(req({ status: 'cancelled' }), PROPS)).status).toBe(200)
+    expect(updateSpy.mock.calls[0][0]).toMatchObject({ status: 'cancelled', cancel_requested_at: null, cancel_decided_at: null })
   })
 })

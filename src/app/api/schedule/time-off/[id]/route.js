@@ -14,6 +14,7 @@ import {
   selfCancelMode, isOpenCancelAsk, leaveActingLocationIds, resolveLeaveCancelDeciderIds,
   cancelAskNoticeKey, reAskBlockedUntil, leaveRangeText, CLEARED_CANCEL_ASK,
   isMissingCancelSchemaError, dublinRetryLabel,
+  isManagerTierRequester, approvedLeaveGuardAllows, APPROVED_LEAVE_OWNER_ONLY_ERROR,
 } from '@/lib/time-off-cancel'
 import { logError } from '@/lib/log'
 
@@ -73,7 +74,10 @@ export async function PUT(request, props) {
   // LEAVE.2 — leave covers the person, so the studios that may act on it are
   // the one it was filed at AND every studio the requester belongs to.
   // Unreadable memberships fail closed to "filed-at only" for authority.
-  const { ids: requesterLocations, error: requesterLocError } = await getProfileLocationIds(db, existing.profile_id)
+  // LEAVEGUARD.1 — the same read carries the requester's per-studio role
+  // (`requesterMemberships`), so an unreadable one is this 500 too: nothing
+  // is written on a guess about who the leave belongs to.
+  const { ids: requesterLocations, memberships: requesterMemberships, error: requesterLocError } = await getProfileLocationIds(db, existing.profile_id)
   if (requesterLocError) {
     return NextResponse.json({ success: false, error: requesterLocError.message }, { status: 500 })
   }
@@ -134,6 +138,23 @@ export async function PUT(request, props) {
   // reach mig 624's CHECK and hand the caller raw constraint text.
   if (existing.cancel_decision === 'approved' && (status === 'rejected' || status === 'pending')) {
     return ALREADY_CANCELLED()
+  }
+
+  // LEAVEGUARD.1 — LEAVECANCEL.1 made a manager's cancel of their OWN approved
+  // leave an owner's decision, but a manager-tier COLLEAGUE could still take
+  // that leave out of force here (cancelled, rejected, or back to pending),
+  // so two managers could cancel each other's leave around the rule. Moving
+  // APPROVED leave of someone who is manager-tier at a studio this request
+  // belongs to now needs the cancellation decider: an owner at one of those
+  // studios who is not the requester, or a master (canDecideLeaveCancel). Plain
+  // staff leave, pending leave and approved -> approved are untouched, and the
+  // requester's own leave took the self path above. This is a default the
+  // owner may reverse; the rule lives in approvedLeaveGuardAllows.
+  if (!isSelf && existing.status === 'approved' && status !== 'approved') {
+    const requesterIsManagerTier = isManagerTierRequester(requesterMemberships, existing, requesterLocations)
+    if (!approvedLeaveGuardAllows(user, existing, status, requesterLocations, requesterIsManagerTier)) {
+      return NextResponse.json({ success: false, error: APPROVED_LEAVE_OWNER_ONLY_ERROR }, { status: 403 })
+    }
   }
 
   const updates = { status, updated_at: new Date().toISOString() }
