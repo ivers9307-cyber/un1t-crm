@@ -83,8 +83,16 @@ const findCall = (q, method) => q.calls.find(c => c[0] === method)
 function respondFor(s) {
   return (q) => {
     switch (q.table) {
-      case 'profiles':
+      case 'profiles': {
+        // ACTIVEUSER.1 — `profilesById` scripts the impersonation TARGET read
+        // (a second profiles query, by a different id). Absent, every
+        // profiles read answers the one scripted caller, as before.
+        const idCall = q.calls.find(c => c[0] === 'eq' && c[1] === 'id')
+        if (s.profilesById && idCall && s.profilesById[idCall[2]]) {
+          return { data: s.profilesById[idCall[2]] }
+        }
         return { data: s.profile }
+      }
       case 'profile_locations':
         return { data: s.links || [] }
       case 'locations': {
@@ -102,7 +110,7 @@ function respondFor(s) {
       case 'location_role_permissions':
         return { data: s.roleTemplateRows || [] }
       case 'impersonation_log':
-        return { data: null }
+        return { data: s.openImpersonation ? { id: 'imp-1' } : null }
       default:
         return { data: null }
     }
@@ -384,5 +392,136 @@ describe('getCurrentUser — a permanently deleted staff member (STAFFDELETE.1)'
   it('a tombstone resolves to null — an access token issued before the delete gets a 401 everywhere', async () => {
     setup(scenario({ ...living, active: false, email: 'deleted+coach-1@deleted.invalid', deleted_at: '2026-09-19T10:00:00Z' }))
     expect(await getCurrentUser()).toBeNull()
+  })
+})
+
+// ACTIVEUSER.1 — "Deactivate" only ever set profiles.active=false. The Supabase
+// auth user is untouched, so every live session (web cookie, mobile Bearer JWT,
+// studio PIN cookie) kept resolving as a fully signed-in user. One check on the
+// REAL profile closes all three, because all three funnel into the same read.
+describe('getCurrentUser — a deactivated staff member (ACTIVEUSER.1)', () => {
+  const living = { id: 'coach-2', role: 'staff', full_name: 'Paused Coach', email: 'paused@example.test', employment_type: 'fte', active: true }
+  const scenario = (profile, extra = {}) => ({
+    profile, links: [link({ loc: LOC_A1, role: 'staff', is_default: true })], orgLinks: [], orgs: [ORG_A], ...extra,
+  })
+
+  // Bearer + studio paths build their clients through the (mocked)
+  // supabase-js createClient, so the double grows an `auth.getUser`.
+  function setupVia(source, s) {
+    const { db, queries } = makeDb(respondFor(s))
+    const identity = { id: s.profile.id, email: s.profile.email }
+    createClient.mockReturnValue({ ...db, auth: { getUser: async () => ({ data: { user: source === 'bearer' ? identity : null } }) } })
+    authUser = source === 'cookie' ? identity : null
+    if (source === 'bearer') headerMap.set('authorization', 'Bearer a.supabase.jwt')
+    return { queries }
+  }
+
+  async function setupStudio(s) {
+    process.env.NEXT_PUBLIC_SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://example.supabase.co'
+    process.env.SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'service-role-test-key'
+    const { mintStudioSession } = await import('./studio-session.js')
+    cookieMap.set('studio_session', mintStudioSession({ profileId: s.profile.id, deviceId: 'dev-1', locationId: LOC_A1.id }))
+    return setupVia('studio', s)
+  }
+
+  it('control: the same profile resolves on all three auth sources while it is active', async () => {
+    setupVia('cookie', scenario(living))
+    expect((await getCurrentUser())?.id).toBe('coach-2')
+    setupVia('bearer', scenario(living))
+    expect((await getCurrentUser())?.id).toBe('coach-2')
+    headerMap.clear()
+    await setupStudio(scenario(living))
+    expect((await getCurrentUser())?.id).toBe('coach-2')
+  })
+
+  it('resolves to null on a live web cookie session', async () => {
+    setupVia('cookie', scenario({ ...living, active: false }))
+    expect(await getCurrentUser()).toBeNull()
+  })
+
+  it('resolves to null on a live mobile Bearer JWT', async () => {
+    setupVia('bearer', scenario({ ...living, active: false }))
+    expect(await getCurrentUser()).toBeNull()
+  })
+
+  it('resolves to null on a live studio_session PIN cookie', async () => {
+    await setupStudio(scenario({ ...living, active: false }))
+    expect(await getCurrentUser()).toBeNull()
+  })
+
+  it('stops before loading anything else — no locations, orgs or templates are read for a deactivated caller', async () => {
+    const { queries } = setupVia('cookie', scenario({ ...living, active: false }))
+    await getCurrentUser()
+    expect(queries.map(q => q.table)).toEqual(['profiles'])
+  })
+
+  // STRICTLY `=== false`. A row whose `active` is missing must never be locked
+  // out by this check: the column is NOT NULL DEFAULT true today, but a
+  // narrowed select, a view or a fixture that omits it would otherwise turn
+  // "we did not read it" into "everyone is signed out".
+  it.each([['null', null], ['undefined', undefined]])('active: %s still resolves', async (_label, value) => {
+    setupVia('cookie', scenario({ ...living, active: value }))
+    expect((await getCurrentUser())?.id).toBe('coach-2')
+  })
+
+  it('an active master is unaffected', async () => {
+    setupVia('cookie', {
+      profile: { id: 'master-1', role: 'master', full_name: 'The Master', email: 'master@un1t.ie', employment_type: null, active: true },
+      links: [], allLocations: [LOC_A1], orgs: [ORG_A],
+    })
+    const user = await getCurrentUser()
+    expect(user.isMaster).toBe(true)
+    expect(user.locations.map(l => l.id)).toEqual(['loc-a1'])
+  })
+
+  it('a deactivated MASTER is refused too — the check reads the real profile, not the role', async () => {
+    setupVia('cookie', {
+      profile: { id: 'master-2', role: 'master', full_name: 'Former Master', email: 'former@un1t.ie', employment_type: null, active: false },
+      links: [], allLocations: [LOC_A1], orgs: [ORG_A],
+    })
+    expect(await getCurrentUser()).toBeNull()
+  })
+
+  describe('"View as" — impersonation target', () => {
+    const MASTER = { id: '11111111-1111-4111-8111-111111111111', role: 'master', full_name: 'The Master', email: 'master@un1t.ie', employment_type: null, active: true }
+    const TARGET_ID = '22222222-2222-4222-8222-222222222222'
+    const target = { id: TARGET_ID, role: 'staff', full_name: 'Paused Coach', email: 'paused@example.test', employment_type: 'fte', active: false }
+    const viewAs = (targetProfile) => {
+      cookieMap.set('un1t_impersonate', TARGET_ID)
+      setupVia('cookie', {
+        profile: MASTER, profilesById: { [MASTER.id]: MASTER, [TARGET_ID]: targetProfile },
+        openImpersonation: true, links: [], allLocations: [LOC_A1], orgs: [ORG_A],
+      })
+    }
+
+    // KEPT ON PURPOSE. The gate on "View as" is the MASTER's own session (real
+    // profile, active, open impersonation_log row), and a master reproducing
+    // what a deactivated person saw is exactly what the tool is for. It grants
+    // the deactivated person nothing: their own sessions die at the check
+    // above, which reads the REAL profile.
+    it('a master can still view as a deactivated (non-tombstone) profile', async () => {
+      viewAs(target)
+      const user = await getCurrentUser()
+      expect(user.id).toBe(TARGET_ID)
+      expect(user.active).toBe(false)
+      expect(user.impersonatingFrom).toEqual({ masterId: MASTER.id, masterName: 'The Master', masterEmail: 'master@un1t.ie' })
+    })
+
+    it('a tombstone is still never a target — the master stays themselves', async () => {
+      viewAs({ ...target, deleted_at: '2026-09-19T10:00:00Z' })
+      const user = await getCurrentUser()
+      expect(user.id).toBe(MASTER.id)
+      expect(user.impersonatingFrom).toBeNull()
+    })
+
+    it('a DEACTIVATED master cannot impersonate their way back in', async () => {
+      cookieMap.set('un1t_impersonate', TARGET_ID)
+      const gone = { ...MASTER, active: false }
+      setupVia('cookie', {
+        profile: gone, profilesById: { [MASTER.id]: gone, [TARGET_ID]: { ...target, active: true } },
+        openImpersonation: true, links: [], allLocations: [LOC_A1], orgs: [ORG_A],
+      })
+      expect(await getCurrentUser()).toBeNull()
+    })
   })
 })

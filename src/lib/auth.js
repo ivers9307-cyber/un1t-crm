@@ -288,6 +288,25 @@ export const getCurrentUser = cache(async function getCurrentUser() {
   // banned, and an access token issued before the ban dies here.
   if (!realProfile || isTombstone(realProfile)) return null
 
+  // ACTIVEUSER.1 — and a DEACTIVATED staff member is nobody either, until
+  // someone reactivates them. "Deactivate" only ever wrote profiles.active =
+  // false: the Supabase auth user was untouched, so a live web cookie, a mobile
+  // Bearer JWT or a studio_session PIN cookie kept resolving as a fully
+  // signed-in user on every route and page. All three sources funnel into the
+  // read above, so this one line closes all three. The deactivate route also
+  // bans the login (src/lib/staff-login-access.js), but that is the second
+  // lock: it can fail, and it is deliberately skipped for a login that is also
+  // a member's or a host's.
+  //
+  // STRICTLY `=== false`. A missing/null `active` must keep resolving — "we did
+  // not read the column" must never become "everyone is signed out".
+  //
+  // It reads the REAL profile, so a deactivated master cannot "View as" their
+  // way back in. The impersonation TARGET below is deliberately NOT held to
+  // it: a master reproducing what a deactivated person saw is what the tool
+  // is for, and the gate on it is the master's own (active) session.
+  if (realProfile.active === false) return null
+
   // Master impersonation (mig 035). If `un1t_impersonate` cookie OR
   // `x-impersonate-target` header is set AND the underlying session
   // belongs to a master, swap to the target profile so the rest of
@@ -318,6 +337,8 @@ export const getCurrentUser = cache(async function getCurrentUser() {
       // <yourself> · signed in as Master". Gating on the audit row makes
       // the cookie inert once the session is closed.
       // STAFFDELETE.1 — and a tombstone is never a target.
+      // ACTIVEUSER.1 — a merely DEACTIVATED profile still is (see the check
+      // on realProfile above for why); pinned in auth.getCurrentUser.test.js.
       if (target && !isTombstone(target)) {
         const { data: openRow } = await db
           .from('impersonation_log')
