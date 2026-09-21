@@ -10,10 +10,11 @@
 //   * BEFORE: a coach's own JWT can INSERT their leave already `approved`, and
 //     the allowance is not charged (the hole this file closes);
 //   * the self-check aborts the WHOLE file when a write grant survives (a grant
-//     made by another grantor), leaving nothing applied;
+//     made by another grantor, or one inherited through role membership that
+//     information_schema does not list), leaving nothing applied;
 //   * AFTER 624 + 625: INSERT, UPDATE, DELETE and TRUNCATE are refused for the
 //     browser roles; SELECT still returns exactly the rows it did; the INSERT
-//     policy is gone; service_role still inserts and approves (and the approve
+//     and UPDATE policies are gone (one SELECT policy left); service_role still inserts and approves (and the approve
 //     still charges through the trigger).
 //
 // `npm run check:rls-restrictive` is run separately (it reads the migration
@@ -214,6 +215,24 @@ describe('the self-check aborts the WHOLE file when a write grant survives', () 
   })
 })
 
+describe('the self-check reads has_table_privilege too, so an INHERITED write privilege aborts the file', () => {
+  it('authenticated as a member of a role holding INSERT: information_schema lists nothing for authenticated, the file still aborts', async () => {
+    await runSql(`
+      CREATE ROLE inherits_insert NOLOGIN;
+      GRANT INSERT ON public.time_off_requests TO inherits_insert;
+      GRANT inherits_insert TO authenticated;
+    `)
+    await expect(runSql(MIG_625)).rejects.toThrow(/mig 625: authenticated still holds INSERT on public.time_off_requests/)
+    await runSql('ROLLBACK')
+    expect((await policies()).map((p) => p.policyname)).toContain('Staff can create own time off')
+    await runSql(`
+      REVOKE inherits_insert FROM authenticated;
+      REVOKE INSERT ON public.time_off_requests FROM inherits_insert;
+      DROP ROLE inherits_insert;
+    `)
+  })
+})
+
 describe('after 624 + 625', () => {
   beforeAll(async () => {
     await runSql(MIG_624)
@@ -229,11 +248,17 @@ describe('after 624 + 625', () => {
     expect(rows[0].n).toBe(0)
   })
 
-  it('the INSERT policy is gone; SELECT and (grantless since 624) UPDATE remain', async () => {
-    expect(await policies()).toEqual([
-      { policyname: 'time_off_requests_select', cmd: 'SELECT' },
-      { policyname: 'time_off_requests_update', cmd: 'UPDATE' },
-    ])
+  it('the INSERT policy and the grantless UPDATE policy are gone: exactly one SELECT policy remains', async () => {
+    expect(await policies()).toEqual([{ policyname: 'time_off_requests_select', cmd: 'SELECT' }])
+  })
+
+  it('has_table_privilege (the real catalog, inherited roles included) agrees: SELECT only, for anon, authenticated and PUBLIC writes', async () => {
+    const { rows } = await db.query(`
+      SELECT r, p, has_table_privilege(r, 'public.time_off_requests', p) AS held
+        FROM unnest(ARRAY['anon','authenticated','public']) r,
+             unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER']) p`)
+    const held = rows.filter((x) => x.held).map((x) => `${x.r}:${x.p}`).sort()
+    expect(held).toEqual(['anon:SELECT', 'authenticated:SELECT'])
   })
 
   it('the forged approved INSERT is refused, as are DELETE, TRUNCATE and UPDATE', async () => {

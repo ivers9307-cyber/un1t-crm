@@ -1,5 +1,6 @@
 -- 625 — LEAVEGUARD.1: the browser loses INSERT (and DELETE, TRUNCATE,
--- REFERENCES, TRIGGER) on time_off_requests; the dead INSERT policy goes.
+-- REFERENCES, TRIGGER) on time_off_requests; the dead INSERT and UPDATE
+-- policies go. End state: a SELECT grant and exactly one SELECT policy.
 --
 -- NOT APPLIED YET. Apply AFTER mig 624 (which revoked UPDATE; this file's
 -- self-check asserts the end state of both). No code in this PR depends on it:
@@ -54,8 +55,10 @@
 --   * SELECT is untouched (table and column level): the phone reads it.
 --   * DROP POLICY "Staff can create own time off": with no INSERT grant behind
 --     it, a policy that reads "staff can create" is misleading.
---   `time_off_requests_update` (mig 600) is NOT dropped here: it has had no
---   grant behind it since mig 624, the same shape, but it is 624's to decide.
+--   * DROP POLICY "time_off_requests_update" (mig 600): the same shape, with
+--     no UPDATE grant behind it since mig 624. A policy is inert without a
+--     grant, but it would silently re-arm the browser write the day anyone
+--     re-granted UPDATE.
 --
 -- GRANTOR RULE. A REVOKE removes only grants made by the role issuing it.
 -- Every anon/authenticated grant on this table was granted by `postgres`
@@ -89,11 +92,12 @@
 --     TRIGGER, TRUNCATE. No PUBLIC rows. No column rows. Any grantor other
 --     than postgres: stop (see GRANTOR RULE).
 --
--- (c) The policies:
---       SELECT policyname, cmd, roles FROM pg_policies
+-- (c) The policies. KEEP THE OUTPUT (qual / with_check) alongside (b):
+--       SELECT policyname, cmd, roles, qual, with_check FROM pg_policies
 --        WHERE schemaname='public' AND tablename='time_off_requests' ORDER BY 1;
 --     Expected: "Staff can create own time off" INSERT {authenticated},
---     time_off_requests_select SELECT, time_off_requests_update UPDATE.
+--     time_off_requests_select SELECT, time_off_requests_update UPDATE, the
+--     last matching mig 600 (the rollback recipe below recreates it from there).
 --
 -- (d) Forensics, not a blocker: rows that look browser-inserted (approved
 --     with no reviewer: every route stamps reviewed_by when it approves):
@@ -112,32 +116,49 @@
 --       FROM unnest(ARRAY['anon','authenticated']) r,
 --            unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER']) p
 --      ORDER BY 1, 2;
---     Expected: held = true for SELECT only, for both roles.
+--     Expected: held = true for SELECT only, for both roles. (has_table_privilege
+--     reads the real catalog, privileges inherited through role membership and
+--     PUBLIC included, which information_schema does not always list.)
 --       SELECT has_table_privilege('service_role','public.time_off_requests','INSERT');   -- true
 -- (f) SELECT policyname, cmd FROM pg_policies
 --      WHERE schemaname='public' AND tablename='time_off_requests' ORDER BY 1;
---     Expected: time_off_requests_select SELECT, time_off_requests_update UPDATE.
+--     Expected: exactly one row, time_off_requests_select SELECT.
 -- (g) get_advisors (type = security). Expected: nothing new.
 -- (h) Smoke, once deployed: file a leave request as a coach from the web and
 --     from the phone (both go through POST /api/schedule/time-off): 201.
 --
 -- ROLLBACK (only if a real browser writer turns up): re-grant exactly what
--- (b) listed, as postgres, and recreate the policy as mig 048/050 left it:
+-- (b) listed, as postgres, and recreate the policies as mig 048/050 and mig
+-- 600 left them:
 --   GRANT INSERT, DELETE, TRUNCATE, REFERENCES, TRIGGER ON public.time_off_requests TO anon, authenticated;
 --   CREATE POLICY "Staff can create own time off" ON public.time_off_requests
 --     FOR INSERT TO authenticated WITH CHECK (profile_id = (SELECT auth.uid()));
--- (UPDATE stays revoked: that is mig 624's, and rolling it back reopens 624's hole.)
+--   CREATE POLICY "time_off_requests_update" ON public.time_off_requests
+--     FOR UPDATE TO authenticated
+--     USING (
+--       private.auth_is_manager_at(location_id)
+--       OR (profile_id = (SELECT auth.uid()) AND status = 'pending'::text)
+--     )
+--     WITH CHECK (
+--       private.auth_is_manager_at(location_id)
+--       OR status = 'cancelled'::text
+--     );
+-- (The UPDATE GRANT stays revoked: that is mig 624's, and re-granting it
+-- reopens 624's hole. The recreated UPDATE policy is inert without it.)
 
 BEGIN;
 
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON public.time_off_requests FROM anon, authenticated, PUBLIC;
 
 DROP POLICY IF EXISTS "Staff can create own time off" ON public.time_off_requests;
+DROP POLICY IF EXISTS "time_off_requests_update" ON public.time_off_requests;
 
 DO $$
 DECLARE
   v_extra text;
   v_policies text;
+  v_role text;
+  v_priv text;
 BEGIN
   -- Anything but SELECT, at table or column level, for the browser roles.
   SELECT string_agg(DISTINCT grantee || ':' || privilege_type || ' (grantor ' || grantor || ')', ', ')
@@ -155,19 +176,33 @@ BEGIN
     RAISE EXCEPTION 'mig 625: anon/authenticated still hold write privileges on public.time_off_requests: %', v_extra;
   END IF;
 
-  -- SELECT must survive: the phone reads this table with the anon key.
-  IF NOT has_table_privilege('authenticated', 'public.time_off_requests', 'SELECT') THEN
-    RAISE EXCEPTION 'mig 625: authenticated lost SELECT on public.time_off_requests';
-  END IF;
+  -- The same question asked of the real catalog: has_table_privilege counts
+  -- privileges inherited through role membership and from PUBLIC, which the
+  -- information_schema views above do not always list. Insurance.
+  FOREACH v_role IN ARRAY ARRAY['anon', 'authenticated', 'public'] LOOP
+    FOREACH v_priv IN ARRAY ARRAY['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'] LOOP
+      IF has_table_privilege(v_role, 'public.time_off_requests', v_priv) THEN
+        RAISE EXCEPTION 'mig 625: % still holds % on public.time_off_requests', v_role, v_priv;
+      END IF;
+    END LOOP;
+  END LOOP;
+
+  -- SELECT must survive for both browser roles (the phone reads this table
+  -- with the anon key; anon's own read is refused by RLS, as today).
+  FOREACH v_role IN ARRAY ARRAY['anon', 'authenticated'] LOOP
+    IF NOT has_table_privilege(v_role, 'public.time_off_requests', 'SELECT') THEN
+      RAISE EXCEPTION 'mig 625: % lost SELECT on public.time_off_requests', v_role;
+    END IF;
+  END LOOP;
 
   -- No policy may be left that would arm a write if a grant came back.
   SELECT string_agg(policyname || ' ' || cmd, ', ')
     INTO v_policies
     FROM pg_policies
    WHERE schemaname = 'public' AND tablename = 'time_off_requests'
-     AND cmd IN ('INSERT', 'DELETE', 'ALL');
+     AND cmd IN ('INSERT', 'UPDATE', 'DELETE', 'ALL');
   IF v_policies IS NOT NULL THEN
-    RAISE EXCEPTION 'mig 625: insert/delete policies remain on public.time_off_requests: %', v_policies;
+    RAISE EXCEPTION 'mig 625: write policies remain on public.time_off_requests: %', v_policies;
   END IF;
 END $$;
 
