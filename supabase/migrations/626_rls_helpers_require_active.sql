@@ -72,12 +72,22 @@
 -- are untouched.
 --
 -- Signatures, return types, LANGUAGE, STABLE, SECURITY DEFINER and each
--- function's `SET search_path` are preserved exactly. CREATE OR REPLACE keeps
--- the function's OID, owner and ACL (grants), so no GRANT is re-issued for an
--- existing helper — re-granting would change auth_can_view_all_profiles' ACL,
--- which has never been restricted from PUBLIC (verify-on-prod (P1)).
--- auth_is_active_staff() is new and gets the 502/614/618 posture: REVOKE from
--- PUBLIC and anon, EXECUTE to authenticated.
+-- function's `SET search_path` are preserved for every helper EXCEPT
+-- is_owner(): its live search_path is 'public' and becomes '' (the new body
+-- is fully schema-qualified), and it is declared STABLE (live is STABLE per
+-- the 22 Sep read, so expected unchanged). The self-check (4a) compares each
+-- helper's prosecdef / provolatile / proconfig / owner / ACL against the
+-- values captured at the top of THIS transaction, before any replace, and
+-- allows only is_owner()'s documented search_path change.
+-- CREATE OR REPLACE keeps the function's OID, owner and ACL (grants), so no
+-- GRANT is re-issued for an existing helper — re-granting would change
+-- auth_can_view_all_profiles' ACL, which has never been restricted from
+-- PUBLIC (P1). auth_is_active_staff() is new: REVOKE ALL FROM PUBLIC, then
+-- EXECUTE to anon AND authenticated — the posture its siblings already have
+-- on prod (anon executes auth_is_master, auth_is_owner_at,
+-- auth_is_manager_at, auth_is_admin_at, auth_is_in_organization,
+-- auth_mobile_can, auth_can_view_all_profiles). anon MUST hold it: see NEW
+-- BEHAVIOUR.
 --
 -- INLINE POLICIES — CHANGED (47)
 -- ──────────────────────────────
@@ -103,7 +113,10 @@
 --     audit_events              audit_events_select_master_owner   (180)
 --     fte_expense_claims        fte_expense_claims_read            (183)
 --     fte_expense_items         fte_expense_items_read             (183)
---     inbound_invoices          inbound_invoices_read              (184)
+--     invoices_queue            inbound_invoices_read   (184; table renamed
+--                               from inbound_invoices by mig 185; USING
+--                               rewritten by mig 204's ALTER POLICY — this
+--                               file rebuilds it from 204's text)
 --   Read profile_locations / profile_organizations for the CALLER (32 more):
 --     storage.objects "Owner reads org signed PDFs" (106) · organizations_select (417)
 --     contract_templates_write (167) · contracts_read (167) · contracts_insert/_update/_delete (320)
@@ -133,17 +146,29 @@
 --   "Staff can create own time off") make the person the SUBJECT of the row,
 --   not a holder of authority over anyone else. They stay open to a
 --   deactivated profile; a follow-up can close them if the owner wants
---   deactivated staff to lose their own history too.
+--   deactivated staff to lose their own history too. The subject-row WRITES
+--   an inactive profile still has after 626:
+--     contracts_update            own-row branch (profile_id = auth.uid())
+--     policy_views_insert_own / policy_views_update_own
+--     time_off_requests INSERT ("Staff can create own time off") and the
+--     own-pending branch of time_off_requests_update — both closed by mig 625
+--     on another branch.
 --
 -- NEW BEHAVIOUR TO KNOW ABOUT
---   * Four policies are TO public and called no private function before:
---     glofox_invoices_select, glofox_sync_runs_select,
---     glofox_push_events_select, pipeline_classification_runs_select. anon has
---     no USAGE on schema private (mig 022), so an anon SELECT on those four
---     tables now raises "permission denied for schema private" where it used
---     to return an empty set — the same behaviour every other TO public
---     policy that calls a private helper (contacts_select, ig_msg_select, …)
---     already has. Nothing anon reads them (verify (P6)).
+--   * anon. A policy stores its functions by OID, so evaluating it checks
+--     EXECUTE on each function — not USAGE on its schema. Eight tables anon
+--     can SELECT on prod (22 Sep) have a TO public policy this file gates:
+--     glofox_invoices, glofox_sync_runs, glofox_push_events,
+--     pipeline_classification_runs (which called no private function
+--     before), and channel_connections, instagram_conversations,
+--     instagram_messages, glofox_memberships (which already called
+--     auth_is_master(), which anon executes). Without EXECUTE on
+--     auth_is_active_staff(), anon would get "permission denied for function
+--     auth_is_active_staff" on all eight where it gets an empty set today. So
+--     anon is GRANTed EXECUTE: auth.uid() is NULL for anon, the helper returns
+--     false, and anon keeps its empty set. profile_compensation (TO public,
+--     anon-readable) reads profiles inline, which anon cannot read: it errors
+--     for anon today and still does — unchanged.
 --   * The 15 profiles-inline policies: if (P5) confirms `authenticated` has
 --     no SELECT on profiles, those policies ERROR for every browser/mobile
 --     caller today (policy subqueries run with the caller's privileges) and
@@ -201,13 +226,18 @@
 --                             an inactive staff login now reads/writes none.
 --
 -- ─────────────────────────────────────────────────────────────────────────
--- PRE-APPLY CHECKS (read-only; keep the output)
+-- PRE-APPLY CHECKS (read-only)
+-- SAVE THE OUTPUT OF P1 AND P3 BEFORE APPLYING. There is no down-migration:
+-- a rollback is a NEW forward migration built from that saved output (P1's
+-- functiondef for every helper, P3's qual / with_check / roles / cmd for every
+-- policy).
 -- ─────────────────────────────────────────────────────────────────────────
--- (P1) The helpers as they are — this is also the ROLLBACK RECIPE
---      (pg_get_functiondef of each):
+-- (P1) The helpers as they are — the rollback recipe:
 --
 --   SELECT p.oid::regprocedure AS fn, p.prosecdef, p.provolatile, p.proconfig,
---          pg_get_userbyid(p.proowner) AS owner, p.proacl, md5(p.prosrc) AS body_md5
+--          pg_get_userbyid(p.proowner) AS owner, p.proacl,
+--          md5(regexp_replace(regexp_replace(p.prosrc, '--[^\n]*', '', 'g'), '\s+', '', 'g')) AS body_norm_md5,
+--          pg_get_functiondef(p.oid) AS functiondef
 --     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
 --    WHERE n.nspname = 'private'
 --      AND p.proname IN ('auth_can_view_all_profiles','auth_is_admin_at','auth_is_admin_or_head_coach',
@@ -218,47 +248,54 @@
 --        'auth_can_read_shift_assignment','auth_contact_id','auth_is_active_staff')
 --    ORDER BY 1;
 --
---   Expected: no auth_is_active_staff row; every row prosecdef = t, provolatile = s.
---   body_md5 expected (md5 of the body text in the migration that last
---   defined it). A MISMATCH means the live body is not the file's: diff
---   pg_get_functiondef(fn) against the file before applying — 626 replaces
---   the body with the file's version plus the active predicate.
---     auth_can_view_all_profiles     d83d90348fab6f7ac936a47b5a8c5624  (105)
---     auth_is_admin_at               011868048f9a8071f7961713312c5650  (051)
---     auth_is_admin_or_head_coach    d575142191e496d2928225c1b7ff5b86  (109)
---     auth_is_in_location            5585021618fe2dfda852c6b0a9022e65  (051)
---     auth_is_in_organization        c61c8fdaee4360d161c1e17919020be5  (417)
---     auth_is_manager_at             0509d54f975b83c1c7f000d70e3dd5c1  (051)
---     auth_is_master                 6a2cb4905d4a533f9a90ece17cca4126  (051)
---     auth_is_owner_at               4b11fbc310d7955cfe2cbcf1daa20317  (051)
---     auth_role                      f060b68b2adb19d4990f75b4729e55a5  (051)
---     get_user_role                  c130372217643714741fddc915c4e2dd  (051)
---     get_user_role_at               c2f948e7f3d8280a8e48a27710943e00  (051)
---     mobile_can_for                 f56c74abf2faf9d5df83b53290a81898  (218)
---     auth_has_mailbox_grant         b6bb00c33d651a24d6daf9a1c5cfba3a  (502)
---     auth_has_ticket_mailbox_grant  730bd0ed13edbedc0ce466246ad69238  (502)
---     (unchanged by 626, listed for completeness)
---     auth_is_owner                  627df992d85f34f6a050dd59f79bf212  (051)
---     auth_is_owner_or_manager       91bfe1f260a51a365aed4d6efffdb9f0  (051)
---     auth_mobile_can                395f59a70ad8aa97950156b4b6d58bee  (550)
---     auth_is_manager_at_bridge      ed04da8f4d5ec210600f09dc1fac0d92  (618)
---     auth_can_read_shift_block      d0d1380f82eb2b453e45a7f7e8ef4368  (614)
---     auth_can_read_shift_assignment 84ef3e57bd49c1a724e1b751290bb427  (614)
---     auth_contact_id                656f43742679eb117733be6f0c5c376c  (110)
+--   Expected: no auth_is_active_staff row; every row prosecdef = t,
+--   provolatile = s, owner = postgres. body_norm_md5 = md5 of the body with
+--   `--` comments and ALL whitespace removed; it must equal the same
+--   normalisation of the body in the migration that last defined it. Raw
+--   (un-normalised) text differs on prod for auth_can_view_all_profiles,
+--   auth_is_admin_or_head_coach, auth_mobile_can and mobile_can_for — comment
+--   and whitespace drift, verified cosmetic on 22 Sep. ANY normalised
+--   mismatch is a STOP: 626 would replace a body that is not the one it was
+--   written against.
+--     helper                          normalised md5 before 626          (mig)
+--     auth_can_view_all_profiles      fe46c690ea4ac1297ebc0b4cec988c43  (105)
+--     auth_is_admin_at                3d6eb0863e8213743a4ee750f70a787e  (051)
+--     auth_is_admin_or_head_coach     5017b8cb044594706f9cd0bd33053ee3  (109)
+--     auth_is_in_location             35958842a2bc5971b35b125cd4e8b87d  (051)
+--     auth_is_in_organization         19f6d69b10f8b8d08993f1804a987af5  (417)
+--     auth_is_manager_at              a69cf970db6b339194595e4e8b9578bb  (051)
+--     auth_is_master                  50b2bd5a39b533ec6e488c3a5bc5f0c7  (051)
+--     auth_is_owner_at                78288bdbb7d640f2937f01ab1a9ea556  (051)
+--     auth_role                       6246d882befe9a5e548894630dd676d6  (051)
+--     get_user_role                   b8c78ee435ad2994c73d655731e8b3ff  (051)
+--     get_user_role_at                f42f8bd58670a155deedfddb27ac5318  (051)
+--     mobile_can_for                  2a76f31c5d4913960251a0529fd80186  (218)
+--     auth_has_mailbox_grant          63a1c56e2e41ec8da147527f96b9500a  (502)
+--     auth_has_ticket_mailbox_grant   305735f6284a59b5c46c297c3412c094  (502)
+--     is_owner                        (no migration defines it — P2)
+--     unchanged by 626:
+--     auth_is_owner                   92ca5ec0584e5c84e59ad0cb0af8c8bb  (051)
+--     auth_is_owner_or_manager        46d23bb48e43bd37d0ec6f87f4793f30  (051)
+--     auth_mobile_can                 590307b91d424da4441cf8d91fde1746  (550)
+--     auth_is_manager_at_bridge       0fc4798920a1ba488f2689bb66702710  (618)
+--     auth_can_read_shift_block       7d45356ad6b5e4e13e02dee4b63d534b  (614)
+--     auth_can_read_shift_assignment  3780e385ebdce9936535c4f966c0f115  (614)
+--     auth_contact_id                 cb6b8b766e378301412b3dd16417c79b  (110)
 --
 -- (P2) is_owner() has no CREATE in any migration (out-of-band; moved to
 --      private by mig 549). Read it and confirm it is exactly
 --      "profiles.role IN ('owner','master') for auth.uid()":
 --   SELECT pg_get_functiondef('private.is_owner()'::regprocedure);
 --      626 replaces it with that + the active predicate, LANGUAGE sql STABLE
---      SECURITY DEFINER SET search_path = ''. The DO block before the replace
---      refuses (and aborts everything) if the live body reads
---      profile_locations or lacks 'owner'/'master'/profiles — but it cannot
---      spot every extra condition, so READ it.
+--      SECURITY DEFINER SET search_path = '' (live: 'public'; the new body is
+--      fully qualified). The DO block before the replace refuses (and aborts
+--      everything) if the live body reads profile_locations or lacks
+--      'owner'/'master'/profiles — but it cannot spot every extra condition,
+--      so READ it.
 --
--- (P3) Every policy 626 drops + re-creates, as it stands (compare with the
---      file text quoted in this header / the migrations named above).
---      Expected 47 rows:
+-- (P3) Every policy 626 drops + re-creates, as it stands. Expected 47 rows —
+--      inbound_invoices_read is on public.invoices_queue (mig 185 renamed the
+--      table; mig 204 rewrote its USING):
 --   SELECT schemaname, tablename, policyname, permissive, roles, cmd, qual, with_check
 --     FROM pg_policies
 --    WHERE (schemaname, tablename, policyname) IN (
@@ -268,7 +305,7 @@
 --      ('public','policy_versions','policy_versions_ins'),('public','policy_versions','policy_versions_upd'),('public','policy_versions','policy_versions_del'),
 --      ('public','policy_views','policy_views_select_own_or_admin'),('public','audit_events','audit_events_select_master_owner'),
 --      ('public','fte_expense_claims','fte_expense_claims_read'),('public','fte_expense_items','fte_expense_items_read'),
---      ('public','inbound_invoices','inbound_invoices_read'),('storage','objects','Owner reads org signed PDFs'),
+--      ('public','invoices_queue','inbound_invoices_read'),('storage','objects','Owner reads org signed PDFs'),
 --      ('public','organizations','organizations_select'),('public','contract_templates','contract_templates_write'),
 --      ('public','contracts','contracts_read'),('public','contracts','contracts_insert'),('public','contracts','contracts_update'),
 --      ('public','contracts','contracts_delete'),('public','landing_page_settings','landing_page_settings_ins'),
@@ -290,12 +327,12 @@
 --   SELECT policyname, qual, with_check FROM pg_policies
 --    WHERE schemaname = 'storage' AND tablename = 'objects' AND policyname LIKE 'Owners can % branding';
 --
--- (P4) Every policy that reads a profile table inline, prod-wide. The file
---      state gives 51 = the 47 above + staff_allowances_select/_ins/_upd/_del.
---      You counted 16 profiles-inline on prod; the files give 15 (plus the 3
---      branding ones, which call is_owner() on prod). ANY row here that is not
---      one of the 51 will make 626's self-check RAISE and abort the whole
---      apply — read it, and either add it to 626 or allowlist it with a reason:
+-- (P4) Every policy that reads a profile table inline, prod-wide. Expected 51
+--      = the 47 above + staff_allowances_select/_ins/_upd/_del. (The earlier
+--      "16 on prod vs 15 in the files" was the inbound_invoices →
+--      invoices_queue rename, not a policy missing from the files.) ANY other
+--      row makes 626's self-check RAISE and abort the whole apply — read it,
+--      then add it to 626 or allowlist it with a reason:
 --   SELECT schemaname, tablename, policyname, cmd, roles
 --     FROM pg_policies
 --    WHERE coalesce(qual, '') || ' ' || coalesce(with_check, '') ~* '\m(profiles|profile_locations|profile_organizations)\M'
@@ -309,11 +346,23 @@
 --    WHERE table_schema = 'public' AND table_name = 'profiles' AND privilege_type = 'SELECT'
 --      AND grantee IN ('authenticated', 'anon');
 --
--- (P6) Can anon read the four TO public tables that newly call a private
---      helper (see NEW BEHAVIOUR)?
---   SELECT t, has_table_privilege('anon', 'public.' || t, 'SELECT') AS anon_select
---     FROM unnest(ARRAY['glofox_invoices','glofox_sync_runs','glofox_push_events',
---                       'pipeline_classification_runs']) AS t;
+-- (P6) anon: which gated tables it can SELECT, and which helpers it executes.
+--      Expected (22 Sep): anon_select true for the first ten; the new helper
+--      does not exist yet (NULL).
+--   SELECT t, has_table_privilege('anon', t, 'SELECT') AS anon_select
+--     FROM unnest(ARRAY['public.glofox_invoices','public.glofox_sync_runs','public.glofox_push_events',
+--       'public.pipeline_classification_runs','public.channel_connections','public.instagram_conversations',
+--       'public.instagram_messages','public.glofox_memberships','public.profile_compensation',
+--       'public.profile_locations','public.organizations','public.contracts','public.contract_templates',
+--       'public.landing_page_settings','public.org_settings','public.chooser_settings','public.agent_knowledge',
+--       'public.agent_membership_requests','public.car_bca_submissions','public.car_bca_submission_events',
+--       'public.contract_template_versions','public.zoom_sync_runs','public.cancellation_form_links',
+--       'public.invoices_queue','public.audit_events','public.policies','public.policy_versions',
+--       'public.policy_views','public.password_overrides_audit','public.fte_expense_claims',
+--       'public.fte_expense_items','storage.objects']) AS t;
+--   SELECT f, has_function_privilege('anon', f, 'EXECUTE') AS anon_exec
+--     FROM unnest(ARRAY['private.auth_is_master()','private.auth_is_manager_at(uuid)',
+--       'private.auth_is_in_organization(uuid)','private.auth_is_in_location(uuid)']) AS f;
 --
 -- (P7) Anything else on prod that calls the p_user_id helpers (expected: only
 --      private.auth_mobile_can calling mobile_can_for; 0 policies):
@@ -341,6 +390,12 @@
 -- (P10) BASELINE for the role-play below: run (R) for the inactive profile
 --       AND for one active staff id, BEFORE applying. Keep the numbers.
 --
+-- ─────────────────────────────────────────────────────────────────────────
+-- LOCKS. DROP/CREATE POLICY takes ACCESS EXCLUSIVE on ~30 tables (including
+-- storage.objects and instagram_messages). The file sets lock_timeout = 3s
+-- right after BEGIN, so a long-running reader makes the apply ABORT rather
+-- than queue the app behind it. An abort ("canceling statement due to lock
+-- timeout") means NOTHING was applied: re-run later.
 -- ─────────────────────────────────────────────────────────────────────────
 -- ROLE-PLAY (R) — run before AND after; ends in ROLLBACK. Replace <ID>.
 -- MCP execute_sql: `begin;` without `commit;` rolls back, and only the last
@@ -372,23 +427,67 @@
 --   (Before applying, auth_is_active_staff() does not exist — drop that column
 --   from the baseline run.)
 --
+--   ANON, before and after — must be 0 rows and NO error:
+--   begin; set local role anon;
+--   select (select count(*) from public.instagram_messages) as ig,
+--          (select count(*) from public.glofox_invoices)    as glofox;
+--   rollback;
+--
 -- ─────────────────────────────────────────────────────────────────────────
 -- POST-APPLY CHECKS
 -- ─────────────────────────────────────────────────────────────────────────
--- (Q1) Re-run (P1): body_md5 changed for the 16 gated helpers and for none of
---      the 7 "unchanged" ones; prosecdef, provolatile, proconfig, owner and
---      proacl IDENTICAL to before for every pre-existing helper;
---      auth_is_active_staff: owner postgres, proacl = postgres + authenticated
---      only.
+-- (Q1) Re-run (P1). prosecdef, provolatile, proconfig, owner and proacl
+--      IDENTICAL to before for every pre-existing helper, except is_owner()'s
+--      proconfig ({search_path=public} → {search_path=""}). body_norm_md5 is
+--      unchanged for the 7 "unchanged" helpers and is now:
+--     auth_can_view_all_profiles      abff65571f5ff7d492f91ee299794c06
+--     auth_is_admin_at                c21de4446dcdc20662fb18b550887e38
+--     auth_is_admin_or_head_coach     fb64e76e72f89f2c9d5e67b97a7e5031
+--     auth_is_in_location             4c874dfabf18f472ae65c87d6184bd20
+--     auth_is_in_organization         0777061078b133dca9edf121d29dec35
+--     auth_is_manager_at              8185763547736edd5eb1826dd8aa813b
+--     auth_is_master                  3ed9c526408190b1ded76a8f090ffc74
+--     auth_is_owner_at                e5b74def6d4ee68454ce325e0dd1bb71
+--     auth_role                       63045c8fae37ab8dafec0f92dab296a4
+--     get_user_role                   5d6b8c9bf57b916f1cbfd9ccc4194558
+--     get_user_role_at                31c0a9aaab3d9424a3214971d8d746f8
+--     mobile_can_for                  ceb961b928947022d840db8fe244c470
+--     auth_has_mailbox_grant          12a6983f7da4ff8dcd139cb1d495c6ad
+--     auth_has_ticket_mailbox_grant   2ec0a27c247254a1f34ac808f4d8efe1
+--     is_owner                        ccb736a05760da324420d819cf2c704d
+--     auth_is_active_staff            eecef176921045314f03f06a6a603484
+--      auth_is_active_staff: owner postgres; EXECUTE for anon and
+--      authenticated (and postgres), not PUBLIC:
+--   SELECT has_function_privilege('anon', 'private.auth_is_active_staff()', 'EXECUTE');           -- true
+--   SELECT has_function_privilege('authenticated', 'private.auth_is_active_staff()', 'EXECUTE');  -- true
 -- (Q2) Re-run (P4): every row except the four staff_allowances policies has
 --      auth_is_active_staff in qual (and in with_check where with_check is
 --      set). The file's own DO block already refuses to commit otherwise.
 -- (Q3) Re-run (P3): same 47 rows, same permissive/roles/cmd.
--- (Q4) Role-play (R) for the inactive profile and the active staff id.
+-- (Q4) Role-play (R) for the inactive profile, the active staff id, and anon.
 -- (Q5) get_advisors — security AND performance. Expected: nothing new
 --      (auth_rls_initplan: every auth.uid() and the new helper are wrapped).
 
 BEGIN;
+
+-- Wait at most 3s for any table lock; a long-running reader then aborts the
+-- apply (nothing applied — re-run later) instead of queueing the app behind
+-- an ACCESS EXCLUSIVE request on ~30 tables.
+SET LOCAL lock_timeout = '3s';
+
+-- The helpers' catalog attributes BEFORE any replace — self-check 4a compares
+-- against these, so it detects drift instead of re-reading what this file
+-- just wrote.
+CREATE TEMP TABLE mig626_helpers_before ON COMMIT DROP AS
+SELECT p.oid, p.oid::regprocedure::text AS sig, p.prosecdef, p.provolatile, p.proconfig, p.proowner, p.proacl
+  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+ WHERE n.nspname = 'private'
+   AND p.proname IN ('auth_is_master','auth_is_in_location','auth_is_owner_at','auth_is_admin_at',
+     'auth_is_manager_at','auth_is_in_organization','auth_role','get_user_role','get_user_role_at',
+     'mobile_can_for','auth_can_view_all_profiles','auth_is_admin_or_head_coach','is_owner',
+     'auth_has_mailbox_grant','auth_has_ticket_mailbox_grant','auth_is_owner','auth_is_owner_or_manager',
+     'auth_mobile_can','auth_is_manager_at_bridge','auth_can_read_shift_block',
+     'auth_can_read_shift_assignment','auth_contact_id');
 
 -- ═════════════════════════════════════════════════════════════════════════
 -- 1. The predicate
@@ -408,8 +507,11 @@ AS $$
   )
 $$;
 
-REVOKE ALL ON FUNCTION private.auth_is_active_staff() FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION private.auth_is_active_staff() TO authenticated;
+-- anon too: eight anon-readable tables carry a TO public policy that now calls
+-- this; for anon auth.uid() is NULL, so it returns false and anon keeps its
+-- empty set instead of a permission error (header, NEW BEHAVIOUR).
+REVOKE ALL ON FUNCTION private.auth_is_active_staff() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION private.auth_is_active_staff() TO anon, authenticated;
 
 COMMENT ON FUNCTION private.auth_is_active_staff() IS
   'RLSACTIVE.1 (mig 626): TRUE iff the CALLER holds a staff profile that is active (active IS NOT FALSE — NULL counts as active, matching the app) and not a tombstone (deleted_at IS NULL). Staff authority at the RLS layer requires it: every staff helper returns false/NULL without it, and inline policies that read profiles/profile_locations/profile_organizations append (SELECT private.auth_is_active_staff()). Member authority (auth_contact_id) never uses it.';
@@ -988,22 +1090,23 @@ CREATE POLICY fte_expense_items_read ON public.fte_expense_items
     )
   );
 
--- inbound_invoices (184) --------------------------------------------------
-DROP POLICY IF EXISTS inbound_invoices_read ON public.inbound_invoices;
-CREATE POLICY inbound_invoices_read ON public.inbound_invoices
+-- invoices_queue (184 CREATE on inbound_invoices; 185 renamed the table;
+-- 204 rewrote USING with ALTER POLICY — this is 204's text + the gate) -----
+DROP POLICY IF EXISTS inbound_invoices_read ON public.invoices_queue;
+CREATE POLICY inbound_invoices_read ON public.invoices_queue
   FOR SELECT TO authenticated
   USING (
-    EXISTS (
-      SELECT 1 FROM public.profiles p
-      WHERE p.id = (SELECT auth.uid()) AND p.role = 'master'
-        AND (SELECT private.auth_is_active_staff())
+    exists (
+      select 1 from profiles p
+      where p.id = (select auth.uid()) and p.role = 'master'::text
+        and (SELECT private.auth_is_active_staff())
     )
-    OR EXISTS (
-      SELECT 1 FROM public.profile_locations pl
-      WHERE pl.profile_id = (SELECT auth.uid())
-        AND pl.location_id = inbound_invoices.location_id
-        AND pl.role = 'owner'
-        AND (SELECT private.auth_is_active_staff())
+    or exists (
+      select 1 from profile_locations pl
+      where pl.profile_id = (select auth.uid())
+        and pl.location_id = invoices_queue.location_id
+        and pl.role = 'owner'::text
+        and (SELECT private.auth_is_active_staff())
     )
   );
 
@@ -1419,36 +1522,62 @@ DECLARE
   v_bad text[] := ARRAY[]::text[];
   v_n integer;
 BEGIN
-  -- 4a. Gated helpers: the exact predicate text, SECURITY DEFINER, STABLE,
-  --     and the search_path each had before.
+  -- 4a. Gated helpers carry the predicate, are SECURITY DEFINER and STABLE.
   FOR r IN
-    SELECT x.sig, x.search_path, p.prosrc, p.prosecdef, p.provolatile, p.proconfig
+    SELECT x.sig, p.prosrc, p.prosecdef, p.provolatile
       FROM (VALUES
-        ('private.auth_is_active_staff()',                   'search_path=""'),
-        ('private.auth_is_master()',                         'search_path=""'),
-        ('private.auth_is_in_location(uuid)',                'search_path=""'),
-        ('private.auth_is_owner_at(uuid)',                   'search_path=""'),
-        ('private.auth_is_admin_at(uuid)',                   'search_path=""'),
-        ('private.auth_is_manager_at(uuid)',                 'search_path=""'),
-        ('private.auth_is_in_organization(uuid)',            'search_path=""'),
-        ('private.auth_role()',                              'search_path=""'),
-        ('private.get_user_role(uuid)',                      'search_path=""'),
-        ('private.get_user_role_at(uuid, uuid)',             'search_path=""'),
-        ('private.mobile_can_for(uuid, uuid, text)',         'search_path=""'),
-        ('private.auth_can_view_all_profiles()',             'search_path=""'),
-        ('private.auth_is_admin_or_head_coach()',            'search_path=public, pg_temp'),
-        ('private.is_owner()',                               'search_path=""'),
-        ('private.auth_has_mailbox_grant(uuid)',             'search_path=""'),
-        ('private.auth_has_ticket_mailbox_grant(uuid)',      'search_path=""')
-      ) AS x(sig, search_path)
+        ('private.auth_is_active_staff()'), ('private.auth_is_master()'),
+        ('private.auth_is_in_location(uuid)'), ('private.auth_is_owner_at(uuid)'),
+        ('private.auth_is_admin_at(uuid)'), ('private.auth_is_manager_at(uuid)'),
+        ('private.auth_is_in_organization(uuid)'), ('private.auth_role()'),
+        ('private.get_user_role(uuid)'), ('private.get_user_role_at(uuid, uuid)'),
+        ('private.mobile_can_for(uuid, uuid, text)'), ('private.auth_can_view_all_profiles()'),
+        ('private.auth_is_admin_or_head_coach()'), ('private.is_owner()'),
+        ('private.auth_has_mailbox_grant(uuid)'), ('private.auth_has_ticket_mailbox_grant(uuid)')
+      ) AS x(sig)
       JOIN pg_proc p ON p.oid = x.sig::regprocedure
   LOOP
     IF r.prosrc !~* 'active\s+is\s+not\s+false' OR r.prosrc !~* 'deleted_at\s+is\s+null'
-       OR NOT r.prosecdef OR r.provolatile <> 's'
-       OR r.proconfig IS DISTINCT FROM ARRAY[r.search_path] THEN
+       OR NOT r.prosecdef OR r.provolatile <> 's' THEN
       v_bad := v_bad || r.sig;
     END IF;
   END LOOP;
+
+  -- 4a'. Nothing else moved: every pre-existing helper keeps the SECURITY
+  --      DEFINER flag, volatility, search_path, owner and ACL captured at the
+  --      top of this transaction. The only allowed change is is_owner()'s:
+  --      search_path becomes '' (and STABLE, if it was not already).
+  SELECT count(*) INTO v_n FROM mig626_helpers_before;
+  IF v_n <> 22 THEN
+    v_bad := v_bad || ('expected 22 pre-existing helpers, found ' || v_n);
+  END IF;
+  FOR r IN
+    SELECT b.sig, b.prosecdef AS b_def, p.prosecdef, b.provolatile AS b_vol, p.provolatile,
+           b.proconfig AS b_cfg, p.proconfig, b.proowner AS b_own, p.proowner,
+           b.proacl::text AS b_acl, p.proacl::text AS acl
+      FROM mig626_helpers_before b
+      LEFT JOIN pg_proc p ON p.oid = b.oid
+  LOOP
+    IF r.prosecdef IS DISTINCT FROM r.b_def OR r.proowner IS DISTINCT FROM r.b_own
+       OR r.acl IS DISTINCT FROM r.b_acl
+       OR (r.sig <> 'private.is_owner()' AND (r.provolatile IS DISTINCT FROM r.b_vol
+                                               OR r.proconfig IS DISTINCT FROM r.b_cfg))
+       OR (r.sig = 'private.is_owner()' AND (r.provolatile <> 's'
+                                              OR r.proconfig IS DISTINCT FROM ARRAY['search_path=""'])) THEN
+      v_bad := v_bad || ('catalog drift on ' || r.sig);
+    END IF;
+  END LOOP;
+
+  -- 4a''. The new helper: search_path '', EXECUTE for anon + authenticated,
+  --       none for PUBLIC.
+  IF (SELECT proconfig FROM pg_proc WHERE oid = 'private.auth_is_active_staff()'::regprocedure)
+       IS DISTINCT FROM ARRAY['search_path=""']
+     OR NOT has_function_privilege('anon', 'private.auth_is_active_staff()', 'EXECUTE')
+     OR NOT has_function_privilege('authenticated', 'private.auth_is_active_staff()', 'EXECUTE')
+     OR EXISTS (SELECT 1 FROM pg_proc p, aclexplode(p.proacl) a
+                 WHERE p.oid = 'private.auth_is_active_staff()'::regprocedure AND a.grantee = 0) THEN
+    v_bad := v_bad || 'private.auth_is_active_staff() grants/search_path'::text;
+  END IF;
 
   -- 4b. Delegating staff helpers still delegate to a gated helper.
   FOR r IN
@@ -1491,7 +1620,7 @@ BEGIN
         ('public','audit_events','audit_events_select_master_owner'),
         ('public','fte_expense_claims','fte_expense_claims_read'),
         ('public','fte_expense_items','fte_expense_items_read'),
-        ('public','inbound_invoices','inbound_invoices_read'),
+        ('public','invoices_queue','inbound_invoices_read'),
         ('storage','objects','Owner reads org signed PDFs'),
         ('public','organizations','organizations_select'),
         ('public','contract_templates','contract_templates_write'),

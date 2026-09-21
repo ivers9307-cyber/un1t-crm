@@ -46,7 +46,7 @@ const GATED_POLICIES = [
   ['public', 'audit_events', 'audit_events_select_master_owner'],
   ['public', 'fte_expense_claims', 'fte_expense_claims_read'],
   ['public', 'fte_expense_items', 'fte_expense_items_read'],
-  ['public', 'inbound_invoices', 'inbound_invoices_read'],
+  ['public', 'invoices_queue', 'inbound_invoices_read'], // table renamed by mig 185; USING by mig 204
   ['storage', 'objects', 'Owner reads org signed PDFs'],
   ['public', 'organizations', 'organizations_select'],
   ['public', 'contract_templates', 'contract_templates_write'],
@@ -96,6 +96,16 @@ const TOMB = '10000000-0000-0000-0000-000000000004'     // tombstone WITH stray 
 const MASTER_ON = '10000000-0000-0000-0000-000000000005'
 const MASTER_OFF = '10000000-0000-0000-0000-000000000006'
 const MEMBER = '10000000-0000-0000-0000-000000000007'   // member-only login, no profile
+
+// mobile_can_for truth table (all ACTIVE; see MOBILE_CASES)
+const LOC_C = 'c1000000-0000-0000-0000-00000000000c'   // features NULL
+const LOC_D = 'd3000000-0000-0000-0000-00000000000d'   // features {"bookings": false}
+const MC_STAFF_OVR_TRUE = '11000000-0000-0000-0000-000000000001'
+const MC_OWNER_OVR_FALSE = '11000000-0000-0000-0000-000000000002'
+const MC_STAFF_DEFAULT_FALSE = '11000000-0000-0000-0000-000000000003'
+const MC_HC_DEFAULT_MISSING = '11000000-0000-0000-0000-000000000004'
+const MC_OWNER_FEATURES_NULL = '11000000-0000-0000-0000-000000000005'
+const MC_OWNER_FEATURE_FALSE = '11000000-0000-0000-0000-000000000006'
 
 const INACTIVE_CONTACT = 'c0000000-0000-0000-0000-000000000002'
 const MEMBER_CONTACT = 'c0000000-0000-0000-0000-000000000007'
@@ -154,8 +164,18 @@ function netPolicySql (list) {
 const locTables = ['landing_page_settings', 'glofox_invoices', 'glofox_sync_runs', 'glofox_push_events',
   'pipeline_classification_runs', 'agent_knowledge', 'channel_connections', 'instagram_conversations',
   'instagram_messages', 'glofox_memberships', 'agent_membership_requests', 'cancellation_form_links',
-  'inbound_invoices', 'bookings']
+  'invoices_queue', 'bookings']
 const orgTables = ['chooser_settings', 'org_settings', 'zoom_sync_runs']
+
+// Tables anon can SELECT on prod (22 Sep) that 626 touches, + profile_locations.
+const ANON_TABLES = ['public.glofox_invoices', 'public.glofox_sync_runs', 'public.glofox_push_events',
+  'public.pipeline_classification_runs', 'public.channel_connections', 'public.instagram_conversations',
+  'public.instagram_messages', 'public.glofox_memberships', 'public.profile_compensation', 'public.profile_locations']
+// Private helpers anon may EXECUTE on prod (22 Sep); it may not execute
+// auth_is_in_location or auth_role, nor anything else.
+const ANON_FUNCTIONS = ['private.auth_is_master()', 'private.auth_is_owner_at(uuid)', 'private.auth_is_manager_at(uuid)',
+  'private.auth_is_admin_at(uuid)', 'private.auth_is_in_organization(uuid)', 'private.auth_mobile_can(uuid, text)',
+  'private.auth_can_view_all_profiles()']
 
 const BASE_SCHEMA = `
   SET check_function_bodies = off;
@@ -168,12 +188,13 @@ const BASE_SCHEMA = `
   GRANT USAGE ON SCHEMA private TO authenticated;
 
   CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$
-    SELECT nullif(current_setting('request.jwt.claims', true)::json->>'sub', '')::uuid
+    -- Supabase's shape: an unset or reset claim ('' after a local set_config) is NULL.
+    SELECT nullif(nullif(current_setting('request.jwt.claims', true), '')::json->>'sub', '')::uuid
   $$;
   GRANT EXECUTE ON FUNCTION auth.uid() TO authenticated, anon;
 
   CREATE TABLE public.organizations (id uuid PRIMARY KEY);
-  CREATE TABLE public.locations (id uuid PRIMARY KEY, organization_id uuid REFERENCES public.organizations(id), features jsonb NOT NULL DEFAULT '{}');
+  CREATE TABLE public.locations (id uuid PRIMARY KEY, organization_id uuid REFERENCES public.organizations(id), features jsonb DEFAULT '{}');
   CREATE TABLE public.profiles (id uuid PRIMARY KEY, role text NOT NULL DEFAULT 'staff', active boolean DEFAULT true, deleted_at timestamptz);
   CREATE TABLE public.profile_locations (profile_id uuid REFERENCES public.profiles(id), location_id uuid REFERENCES public.locations(id),
     role text NOT NULL, permissions jsonb NOT NULL DEFAULT '{}', PRIMARY KEY (profile_id, location_id));
@@ -215,6 +236,8 @@ const BASE_SCHEMA = `
   GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO authenticated;
   -- Prod: no SELECT on profiles for the browser roles (mig 153b), no writes (mig 622).
   REVOKE ALL ON public.profiles FROM authenticated, anon;
+  -- Prod (22 Sep): anon can SELECT these (and has no USAGE on schema private).
+  GRANT SELECT ON ${ANON_TABLES.join(', ')} TO anon;
 
   -- is_owner(): out-of-band on prod; mig 549 documents role IN (owner, master).
   CREATE FUNCTION public.is_owner() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
@@ -263,14 +286,48 @@ const SEED = `
   INSERT INTO public.car_bca_submissions VALUES ('${BCA}', '${LOC_A}');
   INSERT INTO public.car_bca_submission_events (submission_id) VALUES ('${BCA}');
   INSERT INTO storage.objects (bucket_id, name) VALUES ('contracts', '${ORG_CONTRACT}/signed.pdf');
+
+  INSERT INTO public.locations VALUES ('${LOC_C}', '${ORG_A}', NULL), ('${LOC_D}', '${ORG_A}', '{"bookings": false}');
+  INSERT INTO private.mobile_permission_defaults VALUES ('staff', 'bookings', false);
+  INSERT INTO public.profiles (id, role, active) VALUES
+    ('${MC_STAFF_OVR_TRUE}', 'staff', true), ('${MC_OWNER_OVR_FALSE}', 'owner', true),
+    ('${MC_STAFF_DEFAULT_FALSE}', 'staff', true), ('${MC_HC_DEFAULT_MISSING}', 'head_coach', true),
+    ('${MC_OWNER_FEATURES_NULL}', 'owner', true), ('${MC_OWNER_FEATURE_FALSE}', 'owner', true);
+  INSERT INTO public.profile_locations (profile_id, location_id, role, permissions) VALUES
+    ('${MC_STAFF_OVR_TRUE}', '${LOC_A}', 'staff', '{"mobile": {"bookings": true}}'),
+    ('${MC_OWNER_OVR_FALSE}', '${LOC_A}', 'owner', '{"mobile": {"bookings": false}}'),
+    ('${MC_STAFF_DEFAULT_FALSE}', '${LOC_A}', 'staff', '{}'),
+    ('${MC_HC_DEFAULT_MISSING}', '${LOC_A}', 'head_coach', '{}'),
+    ('${MC_OWNER_FEATURES_NULL}', '${LOC_C}', 'owner', '{}'),
+    ('${MC_OWNER_FEATURE_FALSE}', '${LOC_D}', 'owner', '{}');
 `
+
+// [case, p_uid, loc_id, expected] — every branch of mobile_can_for (mig 218).
+const MOBILE_CASES = [
+  ['no profile row', MEMBER, LOC_A, false],
+  ['master at a location they are not assigned to', MASTER_ON, LOC_B, true],
+  ['member of the location, per-user override true', MC_STAFF_OVR_TRUE, LOC_A, true],
+  ['per-user override false beats a true default', MC_OWNER_OVR_FALSE, LOC_A, false],
+  ['role default true', ACTIVE, LOC_A, true],
+  ['role default false', MC_STAFF_DEFAULT_FALSE, LOC_A, false],
+  ['role default missing', MC_HC_DEFAULT_MISSING, LOC_A, false],
+  ['location features NULL', MC_OWNER_FEATURES_NULL, LOC_C, true],
+  ['location features {bookings:false}', MC_OWNER_FEATURE_FALSE, LOC_D, false],
+]
+const mobileCan = async ([, uid, loc]) =>
+  (await db.query(`SELECT coalesce(private.mobile_can_for($1, $2, 'bookings'), false) AS v`, [uid, loc])).rows[0].v
+const mobileBefore = []
 
 /** The state 626 lands on: schema, helpers from the migrations, net-state policies, seed. */
 async function buildPre626 (pg) {
   const run = (text) => pg.exec(text)
   await run(BASE_SCHEMA)
   for (const name of HELPERS) await run(latestPrivateFunctionSql(name).sql)
+  // Prod ACLs: no PUBLIC execute on the helpers; authenticated executes all,
+  // anon only the listed siblings.
+  await run('REVOKE ALL ON ALL FUNCTIONS IN SCHEMA private FROM PUBLIC;')
   await run('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA private TO authenticated;')
+  await run(`GRANT EXECUTE ON FUNCTION ${ANON_FUNCTIONS.join(', ')} TO anon;`)
   await run(rlsTables.map((t) => `ALTER TABLE ${t} ENABLE ROW LEVEL SECURITY;`).join('\n'))
   await run(netPolicySql([...GATED_POLICIES, ...HELPER_POLICIES]))
   await run(PROD_BRANDING)
@@ -295,6 +352,22 @@ async function asUser (uid, sql, params = []) {
 const scalar = async (uid, expr) => (await asUser(uid, `SELECT ${expr} AS v`))[0].v
 const truthy = async (uid, expr) => (await scalar(uid, `coalesce((${expr})::boolean, false)`)) === true
 const count = async (uid, sql) => Number((await asUser(uid, `SELECT count(*)::int AS n FROM (${sql}) q`))[0].n)
+
+/** Run `sql` as anon (no JWT) inside a rolled-back tx. */
+async function asAnon (sql) {
+  await runSql('BEGIN')
+  try {
+    await runSql('SET LOCAL ROLE anon')
+    return (await db.query(sql)).rows
+  } finally {
+    await runSql('ROLLBACK')
+  }
+}
+const anonCount = async (table) => Number((await asAnon(`SELECT count(*)::int AS n FROM ${table}`))[0].n)
+// anon-readable tables whose TO public policy 626 gates: anon reads 0 rows, no error.
+const ANON_GATED = ['public.glofox_invoices', 'public.glofox_sync_runs', 'public.glofox_push_events',
+  'public.pipeline_classification_runs', 'public.channel_connections', 'public.instagram_conversations',
+  'public.instagram_messages', 'public.glofox_memberships']
 
 // Staff-authority expressions that are TRUE for an owner at LOC_A before 626.
 const OWNER_HELPERS = [
@@ -332,7 +405,7 @@ const STAFF_READS = {
   ...Object.fromEntries([...locTables, ...orgTables].map((t) => [t, `SELECT id FROM public.${t}`])),
 }
 delete STAFF_READS.landing_page_settings // write-only policies (no SELECT policy installed)
-delete STAFF_READS.inbound_invoices      // reads profiles inline: errors for authenticated (asserted below)
+delete STAFF_READS.invoices_queue        // reads profiles inline: errors for authenticated (asserted below)
 delete STAFF_READS.chooser_settings      // write policies only here (its SELECT policy uses the helpers)
 
 beforeAll(async () => {
@@ -373,6 +446,16 @@ describe('before 626 — the leak is real (guards against a vacuous pass)', () =
   it('the p_user_id helpers answer for an inactive user', async () => {
     expect(await scalar(ACTIVE, `private.get_user_role('${INACTIVE}')`)).toBe('owner')
     expect(await truthy(ACTIVE, `private.mobile_can_for('${INACTIVE}', '${LOC_A}', 'bookings')`)).toBe(true)
+  })
+  it('mobile_can_for truth table (recorded for the after-626 comparison)', async () => {
+    for (const c of MOBILE_CASES) {
+      const v = await mobileCan(c)
+      expect(v, c[0]).toBe(c[3])
+      mobileBefore.push(v)
+    }
+  })
+  it('anon: 0 rows and no error on every gated anon-readable table', async () => {
+    for (const t of ANON_GATED) expect(await anonCount(t), t).toBe(0)
   })
 })
 
@@ -423,6 +506,33 @@ describe('after 626', () => {
       expect(await truthy(ACTIVE, 'private.auth_is_in_location(NULL)')).toBe(false)
       expect(await truthy(ACTIVE, 'private.auth_is_in_organization(NULL)')).toBe(false)
       expect(await truthy(MASTER_ON, 'private.auth_is_in_location(NULL)')).toBe(false)
+    })
+  })
+
+  describe('mobile_can_for — every branch identical for ACTIVE users, false when inactive', () => {
+    it('same answers as before 626', async () => {
+      const after = []
+      for (const c of MOBILE_CASES) after.push(await mobileCan(c))
+      expect(after).toEqual(mobileBefore)
+    })
+    it('the same users, deactivated, get false everywhere', async () => {
+      const ids = MOBILE_CASES.map(([, uid]) => uid).filter((id) => id !== MEMBER)
+      await runSql('BEGIN')
+      try {
+        await db.query('UPDATE public.profiles SET active = false WHERE id = ANY($1::uuid[])', [ids])
+        for (const c of MOBILE_CASES) expect(await mobileCan(c), c[0]).toBe(false)
+      } finally {
+        await runSql('ROLLBACK')
+      }
+    })
+  })
+
+  describe('anon', () => {
+    it('still gets 0 rows and NO error on every gated anon-readable table', async () => {
+      for (const t of ANON_GATED) expect(await anonCount(t), t).toBe(0)
+    })
+    it('profile_compensation (reads profiles inline) errors for anon exactly as before', async () => {
+      await expect(anonCount('public.profile_compensation')).rejects.toThrow(/permission denied for table profiles/)
     })
   })
 
@@ -481,14 +591,24 @@ describe('after 626', () => {
     })
     it('policies that read public.profiles inline still ERROR for authenticated (no SELECT on profiles, mig 153b) — fail-closed as before', async () => {
       await expect(count(ACTIVE, 'SELECT id FROM public.audit_events')).rejects.toThrow(/permission denied for table profiles/)
-      await expect(count(INACTIVE, 'SELECT id FROM public.inbound_invoices')).rejects.toThrow(/permission denied for table profiles/)
+      await expect(count(INACTIVE, 'SELECT id FROM public.invoices_queue')).rejects.toThrow(/permission denied for table profiles/)
     })
   })
 
-  it('grants: auth_is_active_staff is executable by authenticated, not anon', async () => {
+  it('grants: auth_is_active_staff is executable by anon and authenticated, not PUBLIC', async () => {
     const one = async (sql) => (await db.query(sql)).rows[0].v
     expect(await one(`SELECT has_function_privilege('authenticated', 'private.auth_is_active_staff()', 'EXECUTE') AS v`)).toBe(true)
-    expect(await one(`SELECT has_function_privilege('anon', 'private.auth_is_active_staff()', 'EXECUTE') AS v`)).toBe(false)
+    expect(await one(`SELECT has_function_privilege('anon', 'private.auth_is_active_staff()', 'EXECUTE') AS v`)).toBe(true)
+    expect(await one(`SELECT count(*)::int AS v FROM pg_proc p, aclexplode(p.proacl) a
+      WHERE p.oid = 'private.auth_is_active_staff()'::regprocedure AND a.grantee = 0`)).toBe(0)
+  })
+  it('anon still cannot execute what it could not before (auth_is_in_location, auth_role)', async () => {
+    const one = async (sql) => (await db.query(sql)).rows[0].v
+    expect(await one(`SELECT has_function_privilege('anon', 'private.auth_is_in_location(uuid)', 'EXECUTE') AS v`)).toBe(false)
+    expect(await one(`SELECT has_function_privilege('anon', 'private.auth_role()', 'EXECUTE') AS v`)).toBe(false)
+  })
+  it('sets lock_timeout right after BEGIN', () => {
+    expect(MIG_626.replace(/--.*$/gm, '')).toMatch(/BEGIN;\s*SET LOCAL lock_timeout = '3s';/)
   })
 })
 
