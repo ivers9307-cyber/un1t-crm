@@ -461,7 +461,10 @@ export default function StaffForm({
       const issues = Array.isArray(data.issues) && data.issues.length
         ? data.issues.map(i => `${i.path || '(root)'}: ${i.message}`).join('; ')
         : null
-      setError(issues ? `${data.error || 'Failed to save'} — ${issues}` : (data.error || 'Failed to save'))
+      const base = issues ? `${data.error || 'Failed to save'} — ${issues}` : (data.error || 'Failed to save')
+      // ACTIVEUSER.1 (review S5) — a FAILED save can still carry a login
+      // `warning` (the Active flip landed, then the pay write failed).
+      setError([base, data.warning].filter(Boolean).join(' '))
     }
   }
 
