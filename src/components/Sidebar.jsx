@@ -11,6 +11,7 @@ import clsx from 'clsx'
 import { hasPermission } from '@/lib/permissions'
 import { usePolledCount } from './use-polled-count'
 import { ALL_NAV, NAV_SECTIONS, DASHBOARD_LINK_PERM_KEYS, activeHrefFor } from '@/lib/nav-items'
+import { withTitleBadge, stripTitleBadge } from '@/lib/tab-title-badge'
 
 const roleLabels = {
   master: 'Master',
@@ -199,18 +200,41 @@ export default function Sidebar({ user, isLinkedHost = false, mobileOpen = false
   const titleCount = nav.reduce((sum, item) => sum + (navBadges[item.href] ?? 0), 0)
 
   // Browser tab title prefix — surfaces the pending count even when the
-  // operator is on a different tab. Format: "(3) Repset · …". Restores
-  // the original title on cleanup so a stale "(3)" doesn't survive a
-  // navigation that triggers a Sidebar unmount.
+  // operator is on a different tab. Format: "(3) UN1T Stillorgan". Strips
+  // the prefix on cleanup so a stale "(3)" doesn't survive a navigation
+  // that triggers a Sidebar unmount.
+  //
+  // TABTITLE.1 — the prefix has to survive Next re-writing <title>. This
+  // effect used to run on [titleCount] alone, so it applied the prefix once
+  // and then lost it the moment the title changed underneath it: a client
+  // navigation between pages with different titles (/schedule and anything
+  // else), or a studio switch, which is a cookie + router.refresh() and
+  // re-renders the metadata with the NEW studio's name. Both now happen on
+  // every staff page, because the tab names the active studio. Re-running on
+  // pathname would not be enough: metadata streams, so the new title can land
+  // AFTER this effect has run. So watch <head> and re-apply whenever the
+  // title stops being what it should be. The title is re-derived from the
+  // document each time, never captured, so a stale studio name cannot be
+  // replayed. Converges in one extra callback: our own write produces a
+  // title that already equals `wanted`, which is a no-op.
   useEffect(() => {
     if (typeof document === 'undefined') return
-    const original = document.title.replace(/^\(\d+\+?\)\s+/, '')
-    document.title = titleCount > 0
-      ? `(${titleCount > 99 ? '99+' : titleCount}) ${original}`
-      : original
+    const apply = () => {
+      const wanted = withTitleBadge(document.title, titleCount)
+      if (document.title !== wanted) document.title = wanted
+    }
+    apply()
+    let observer = null
+    if (typeof MutationObserver !== 'undefined' && document.head) {
+      observer = new MutationObserver(apply)
+      // childList: Next/React may swap the <title> element outright.
+      // subtree + characterData: or re-write the text inside the same one.
+      observer.observe(document.head, { childList: true, subtree: true, characterData: true })
+    }
     return () => {
+      observer?.disconnect()
       if (typeof document !== 'undefined') {
-        document.title = document.title.replace(/^\(\d+\+?\)\s+/, '')
+        document.title = stripTitleBadge(document.title)
       }
     }
   }, [titleCount])

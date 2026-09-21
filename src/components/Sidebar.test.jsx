@@ -275,3 +275,60 @@ describe('Approvals badge', () => {
     expect(screen.getByText('150 items need your attention')).toBeTruthy()
   })
 })
+
+// ── TABTITLE.1 — the "(n)" prefix survives Next re-writing <title> ─────
+// Every staff tab now names the ACTIVE studio, so the title changes under the
+// Sidebar on a studio switch (cookie + router.refresh()) and between pages
+// with different titles. The old effect ran on [titleCount] alone: it set the
+// prefix once and lost it at the next metadata write. These simulate that
+// write the two ways React can make it; whether Next really does either on a
+// given navigation is a BROWSER check, not something jsdom can show.
+describe('tab title prefix vs. Next metadata writes (TABTITLE.1)', () => {
+  const flushObserver = () => new Promise((resolve) => setTimeout(resolve, 0))
+  const sevenApprovals = ({ url }) => (url === '/api/approvals/count' ? 7 : 0)
+
+  it('re-applies the prefix when the <title> TEXT is re-written (studio switch)', async () => {
+    document.title = 'UN1T Hatch Street'
+    usePolledCount.mockImplementation(sevenApprovals)
+    render(<Sidebar user={USER} />)
+    expect(document.title).toBe('(7) UN1T Hatch Street')
+
+    document.querySelector('title').firstChild.nodeValue = 'UN1T Stillorgan'
+    await flushObserver()
+    // The NEW studio, prefixed. Not the old name replayed from a capture.
+    expect(document.title).toBe('(7) UN1T Stillorgan')
+  })
+
+  it('re-applies the prefix when the <title> ELEMENT is replaced (navigation)', async () => {
+    document.title = 'UN1T Stillorgan'
+    usePolledCount.mockImplementation(sevenApprovals)
+    render(<Sidebar user={USER} />)
+
+    document.querySelector('title').remove()
+    const next = document.createElement('title')
+    next.textContent = 'Schedule · UN1T Stillorgan'
+    document.head.appendChild(next)
+    await flushObserver()
+    expect(document.title).toBe('(7) Schedule · UN1T Stillorgan')
+  })
+
+  it('never writes a prefix at zero, and leaves the new title alone', async () => {
+    document.title = 'UN1T Hatch Street'
+    render(<Sidebar user={USER} />)
+    document.querySelector('title').firstChild.nodeValue = 'UN1T Stillorgan'
+    await flushObserver()
+    expect(document.title).toBe('UN1T Stillorgan')
+  })
+
+  it('stops watching and strips the prefix on unmount', async () => {
+    document.title = 'UN1T Stillorgan'
+    usePolledCount.mockImplementation(sevenApprovals)
+    const { unmount } = render(<Sidebar user={USER} />)
+    expect(document.title).toBe('(7) UN1T Stillorgan')
+    unmount()
+    expect(document.title).toBe('UN1T Stillorgan')
+    document.querySelector('title').firstChild.nodeValue = 'Login'
+    await flushObserver()
+    expect(document.title).toBe('Login')
+  })
+})
