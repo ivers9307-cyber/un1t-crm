@@ -271,6 +271,32 @@ export async function getHolidayAllowance(db, profileId, year) {
 }
 
 /**
+ * LEAVEDAYS.1 — holiday days a person has asked for in `year` and not yet had
+ * decided: what the time-off POST subtracts from the balance before it judges
+ * a new request, and what GET /api/schedule/allowances reports as
+ * `pending_days`. ONE function so the leave form's "remaining, pending" line
+ * and the POST's refusal cannot disagree. The rows are exactly the ones the
+ * POST always read: type holiday, RAW status pending (an expired pending
+ * request still counts until someone declines it), attributed to the year its
+ * start_date falls in (requests are split at 31 December on insert, so a row
+ * never spans two). `total_days` is the server's own charge for each.
+ * Fails closed: an unreadable sum is an error, never 0.
+ *
+ * @returns {Promise<{ days: number|null, error: object|null }>}
+ */
+export async function getPendingHolidayDays(db, profileId, year) {
+  const { data, error } = await db.from('time_off_requests')
+    .select('total_days')
+    .eq('profile_id', profileId)
+    .eq('type', 'holiday')
+    .eq('status', 'pending')
+    .gte('start_date', `${year}-01-01`)
+    .lte('start_date', `${year}-12-31`)
+  if (error) return { days: null, error }
+  return { days: (data || []).reduce((sum, r) => sum + Number(r.total_days), 0), error: null }
+}
+
+/**
  * Make sure the allowance row exists BEFORE a holiday is approved, seeded from
  * the entitlement. The approval trigger (mig 011 update_holiday_allowance)
  * inserts a 20-day row when none exists and only increments on conflict, so
