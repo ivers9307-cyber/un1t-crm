@@ -32,6 +32,22 @@
 //
 // `showingStaleData` is what lets the banner say "showing the last data that
 // loaded" only when there is in fact data being shown.
+//
+// ROSTERLOAD.1 — the fan-out above was ONE Promise.all, so ANY of the six
+// reads failing failed the whole roster: a 500 from the approved-leave, bank-
+// holiday or contractor-spend read put the stale banner over the week, or on
+// a new week cleared the blocks and showed the manager an empty roster. Only
+// the BLOCKS read decides whether the roster loaded now, with every rule above
+// unchanged for it. The other five settle on their own (Promise.allSettled):
+// a failed slice keeps its last value only while that value still belongs to
+// what is on screen (its own scope key, below), is otherwise cleared, and is
+// named in `partialErrors` so the screen can SAY it is missing. An empty leave
+// slice that nobody mentions reads as "nobody is on leave", and a manager
+// rosters over approved leave on the strength of it.
+//
+// A 401 / signed-out redirect / 403 on ANY read is not a degraded slice: the
+// session or the access is gone and the next action fails the same way. That
+// is treated exactly like a failed blocks read.
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 
@@ -60,13 +76,29 @@ export const NO_ACCESS_MESSAGE =
  * with the schedule manager screens so "the request failed" is one shape
  * everywhere and cannot be forgotten at a call site.
  */
+// ROSTERLOAD.1 — the error readJson throws carries the HTTP status it judged,
+// so a caller can tell "this session/access is gone" (401, and a followed
+// login redirect, both stamped 401; 403) from "this one read broke" without
+// matching on words: a 403 keeps the SERVER's message, so its text cannot
+// identify it. Existing callers only read `.message` and are unaffected.
+function httpError(message, status) {
+  const e = new Error(message)
+  e.status = status
+  return e
+}
+
+/** True when a readJson failure means the session or location access is gone. */
+export function isSessionOrAccessError(e) {
+  return e?.status === 401 || e?.status === 403
+}
+
 export async function readJson(url, options) {
   const res = await fetch(url, options)
   // A non-JSON body (an HTML 502 from the edge, say) must not throw a parse
   // error that reads like a bug - fall back to the status code.
   const data = await res.json().catch(() => null)
   if (res.status === 401) {
-    throw new Error(SESSION_ENDED_MESSAGE)
+    throw httpError(SESSION_ENDED_MESSAGE, 401)
   }
   // CHANGELOG.1 — in production a signed-out request is not answered 401 at
   // all: src/proxy.js redirects it to /login, fetch follows, and the answer is
@@ -78,16 +110,38 @@ export async function readJson(url, options) {
   // would read as signed out here. No current caller does either.
   const isRead = !options?.method || String(options.method).toUpperCase() === 'GET'
   if (res.redirected || (isRead && res.ok && data === null)) {
-    throw new Error(SESSION_ENDED_MESSAGE)
+    throw httpError(SESSION_ENDED_MESSAGE, 401)
   }
   if (res.status === 403) {
-    throw new Error(data?.error || NO_ACCESS_MESSAGE)
+    throw httpError(data?.error || NO_ACCESS_MESSAGE, 403)
   }
   if (!res.ok || data?.success === false) {
-    throw new Error(data?.error || `Request failed (${res.status})`)
+    throw httpError(data?.error || `Request failed (${res.status})`, res.status)
   }
   return data || {}
 }
+
+// ROSTERLOAD.1 — the five slices that no longer decide whether the roster
+// loaded. `scope` is what a held value must still match to be kept after its
+// read fails: the dates matter for leave, holidays and spend; templates and
+// the coach list do not depend on the dates, but they do belong to a location.
+// `apply` turns a successful body into the slice's value, as the old
+// Promise.all branch did.
+const SLICES = [
+  { key: 'templates', scope: ({ locationId }) => locationId, apply: (res) => (res.data || []).filter(t => t.active) },
+  { key: 'staff', scope: ({ locationId }) => locationId, apply: (res) => res.data || [] },
+  { key: 'timeOff', scope: ({ locationId, range }) => `${locationId}|${range}`, apply: (res) => res.data || [] },
+  { key: 'holidays', scope: ({ locationId, range }) => `${locationId}|${range}`, apply: (res) => res.data || [] },
+  {
+    key: 'contractorSpend',
+    // Spend answers for `spendReferenceDate`, but it is scoped to the range
+    // too: ROSTER-FIX.6a-9 cleared it with the blocks on a new week, and a
+    // spend figure held across weeks is the same mislabelling risk.
+    scope: ({ locationId, range, spendReferenceDate }) => `${locationId}|${range}|${spendReferenceDate}`,
+    apply: (res) => (res?.success ? res.data : null),
+  },
+]
+const EMPTY = { templates: [], staff: [], timeOff: [], holidays: [], contractorSpend: null }
 
 export function useScheduleData({ locationId, startDate, endDate, spendReferenceDate }) {
   const [blocks, setBlocks] = useState([])
@@ -99,6 +153,14 @@ export function useScheduleData({ locationId, startDate, endDate, spendReference
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [showingStaleData, setShowingStaleData] = useState(false)
+  // ROSTERLOAD.1 — `{ [slice]: { message, kept } }` for every non-blocks slice
+  // whose read failed on the latest load, or null when none did. `kept` says
+  // whether the slice still holds the value an earlier load gave it for the
+  // same scope (true) or was cleared (false), so the screen can tell "could
+  // not be refreshed" from "not available". Like `error`, it is NOT cleared at
+  // the start of a refresh — only replaced when the next load settles — so a
+  // note does not blink on every background refresh.
+  const [partialErrors, setPartialErrors] = useState(null)
   // ROSTER-FIX.6a-13 — a monotonic count of loads that actually succeeded.
   // The calendar needs it to tell a REPEAT of a failure from a NEW one: an
   // identical message after a success is fresh information, and an identical
@@ -109,6 +171,9 @@ export function useScheduleData({ locationId, startDate, endDate, spendReference
   // The range the data currently in state was actually loaded for. Compared
   // against the range that just failed to decide keep-vs-clear.
   const loadedRange = useRef(null)
+  // ROSTERLOAD.1 — the same idea, per non-blocks slice: the scope key each
+  // slice's value in state was loaded for (null = nothing loaded / cleared).
+  const loadedScope = useRef({})
 
   // Monotonic request id. Bumped before each fan-out; a response whose stamp
   // is no longer the current one is a loser and writes nothing.
@@ -134,8 +199,14 @@ export function useScheduleData({ locationId, startDate, endDate, spendReference
     // cleared on SUCCESS, below. The banner carries `busy={loading}` and says
     // what it is doing instead of vanishing.
     setShowingStaleData(false)
+    const setters = {
+      templates: setTemplates, staff: setStaff, timeOff: setTimeOff,
+      holidays: setHolidays, contractorSpend: setContractorSpend,
+    }
     try {
-      const [blocksRes, templatesRes, staffRes, timeOffRes, holidaysRes, spendRes] = await Promise.all([
+      // ROSTERLOAD.1 — allSettled, not all: one read failing no longer throws
+      // the other five away. The order below is the SLICES order after blocks.
+      const [blocksOutcome, ...sliceOutcomes] = await Promise.allSettled([
         readJson(`/api/schedule/blocks?location_id=${locationId}&start_date=${startDate}&end_date=${endDate}`),
         readJson(`/api/schedule/templates?location_id=${locationId}`),
         // ROSTER-FIX.6c — `?fields=picker`. Without it an admin caller's browser
@@ -148,30 +219,68 @@ export function useScheduleData({ locationId, startDate, endDate, spendReference
         readJson(`/api/locations/${locationId}/holidays?start=${startDate}&end=${endDate}`),
         readJson(`/api/schedule/contractor-spend?location_id=${locationId}&reference_date=${spendReferenceDate}`),
       ])
+      // allSettled never rejects, so this guard is now the ONLY one: a late
+      // loser drops here for every slice, resolved or rejected.
       if (gen !== generation.current) return
-      setBlocks(blocksRes.data || [])
-      setTemplates((templatesRes.data || []).filter(t => t.active))
-      setStaff(staffRes.data || [])
-      setTimeOff(timeOffRes.data || [])
-      setHolidays(holidaysRes.data || [])
-      setContractorSpend(spendRes?.success ? spendRes.data : null)
+
+      // ROSTERLOAD.1 — the roster failed to load if blocks failed, or if ANY
+      // read says the session or the access is gone (a blocks error wins, so
+      // the message is the roster's own when there is one).
+      const fatal = [blocksOutcome, ...sliceOutcomes]
+        .find(o => o.status === 'rejected' && isSessionOrAccessError(o.reason))
+      const rosterFailure = blocksOutcome.status === 'rejected' ? blocksOutcome.reason : fatal?.reason
+
+      const ctx = { locationId, range: requestedRange, spendReferenceDate }
+      const partial = {}
+      SLICES.forEach((slice, i) => {
+        const outcome = sliceOutcomes[i]
+        const scope = slice.scope(ctx)
+        // A fatal load writes nothing new, for any slice: the same rule the
+        // roster itself follows (keep what still belongs on screen).
+        if (!fatal && outcome.status === 'fulfilled') {
+          setters[slice.key](slice.apply(outcome.value))
+          loadedScope.current[slice.key] = scope
+          return
+        }
+        const kept = loadedScope.current[slice.key] === scope
+        if (!kept) {
+          setters[slice.key](EMPTY[slice.key])
+          loadedScope.current[slice.key] = null
+        }
+        // Only a slice's OWN failure is partial; under a fatal load the top-
+        // level error already says everything.
+        if (!fatal && outcome.status === 'rejected') {
+          partial[slice.key] = { message: outcome.reason?.message || 'Could not load', kept }
+        }
+      })
+      setPartialErrors(Object.keys(partial).length ? partial : null)
+
+      if (rosterFailure) {
+        // The roster's failure path, unchanged from ROSTER-FIX.6a / 6a-9.
+        setError(rosterFailure?.message || 'Could not load the roster')
+        if (loadedRange.current === requestedRange) {
+          // Same week, flaky refresh: the roster underneath is still true.
+          setShowingStaleData(true)
+        } else {
+          // The dates on screen moved on. Whatever is held belongs to another
+          // range, so showing it under these dates would be a lie the operator
+          // has no way to spot. (Contractor spend, leave and holidays are
+          // cleared by their own scope rule above.)
+          setBlocks([])
+          loadedRange.current = null
+        }
+        return
+      }
+
+      setBlocks(blocksOutcome.value.data || [])
       loadedRange.current = requestedRange
       setError(null)
       setSuccessCount(n => n + 1)
     } catch (e) {
+      // allSettled cannot reject, so this is a throw from the state writes
+      // above. Still never a silent hang: say it, and clear loading below.
       if (gen !== generation.current) return
       setError(e?.message || 'Could not load the roster')
-      if (loadedRange.current === requestedRange) {
-        // Same week, flaky refresh: the roster underneath is still true.
-        setShowingStaleData(true)
-      } else {
-        // The dates on screen moved on. Whatever is held belongs to another
-        // range, so showing it under these dates would be a lie the operator
-        // has no way to spot.
-        setBlocks([])
-        setContractorSpend(null)
-        loadedRange.current = null
-      }
     } finally {
       if (gen === generation.current) setLoading(false)
     }
@@ -179,5 +288,8 @@ export function useScheduleData({ locationId, startDate, endDate, spendReference
 
   useEffect(() => { refresh() }, [refresh])
 
-  return { blocks, templates, staff, timeOff, holidays, contractorSpend, loading, error, showingStaleData, successCount, refresh }
+  return {
+    blocks, templates, staff, timeOff, holidays, contractorSpend,
+    loading, error, showingStaleData, partialErrors, successCount, refresh,
+  }
 }

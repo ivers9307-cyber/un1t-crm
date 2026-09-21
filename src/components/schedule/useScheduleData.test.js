@@ -294,3 +294,240 @@ describe('stale data on a failed load (ROSTER-FIX.6a-9)', () => {
     expect(result.current.error).toBeNull()
   })
 })
+
+// ROSTERLOAD.1 — the fan-out was all-or-nothing: ONE Promise.all over six
+// reads, so a 500 from the approved-leave read, the bank-holiday read or the
+// contractor-spend read failed the whole roster (same week: stale banner; new
+// week: blocks cleared, an empty week on screen). Only the blocks read decides
+// whether the roster loaded now. Every other slice settles on its own, keeps
+// its last value only while that value still belongs to what is on screen,
+// and says it failed in `partialErrors` instead of reading as "none".
+describe('each slice settles on its own (ROSTERLOAD.1)', () => {
+  const WEEK_B = { ...ARGS, startDate: '2026-05-11', endDate: '2026-05-17' }
+
+  // Fails every read whose URL contains `fragment`; answers the rest normally.
+  function failing(fragment, response = { ok: false, status: 500, json: async () => ({ error: `${fragment} broke` }) }) {
+    return vi.fn(async (url) => (url.includes(fragment) ? response : okResponse(defaultBody(url))))
+  }
+
+  async function loaded(props = ARGS) {
+    const hook = renderHook((p) => useScheduleData(p), { initialProps: props })
+    await waitFor(() => expect(hook.result.current.successCount).toBe(1))
+    return hook
+  }
+
+  it('a clean load reports no partial errors', async () => {
+    const { result } = await loaded()
+    expect(result.current.partialErrors).toBeNull()
+  })
+
+  describe('the blocks read still decides the roster, exactly as before', () => {
+    it('same week: keeps the roster, flags it stale, and the other slices are not partial', async () => {
+      const { result } = await loaded()
+      global.fetch = failing('/schedule/blocks')
+      await act(async () => { await result.current.refresh() })
+      expect(result.current.error).toBe('/schedule/blocks broke')
+      expect(result.current.showingStaleData).toBe(true)
+      expect(result.current.blocks).toHaveLength(1)
+      expect(result.current.successCount).toBe(1)
+      expect(result.current.partialErrors).toBeNull()
+      expect(result.current.loading).toBe(false)
+    })
+
+    it('new week: clears the roster and does not claim stale data', async () => {
+      const { result, rerender } = await loaded()
+      global.fetch = failing('/schedule/blocks')
+      rerender(WEEK_B)
+      await waitFor(() => expect(result.current.error).toBe('/schedule/blocks broke'))
+      await waitFor(() => expect(result.current.loading).toBe(false))
+      expect(result.current.blocks).toEqual([])
+      expect(result.current.showingStaleData).toBe(false)
+      expect(result.current.successCount).toBe(1)
+    })
+  })
+
+  describe('approved leave fails alone', () => {
+    it('the roster still loads, the error is not top-level, and leave is marked missing', async () => {
+      global.fetch = failing('/schedule/time-off')
+      const { result } = await loaded()
+      expect(result.current.error).toBeNull()
+      expect(result.current.showingStaleData).toBe(false)
+      expect(result.current.blocks).toHaveLength(1)
+      expect(result.current.timeOff).toEqual([])
+      expect(result.current.partialErrors).toEqual({
+        timeOff: { message: '/schedule/time-off broke', kept: false },
+      })
+    })
+
+    it('a same-week refresh keeps the leave it already had, and says so', async () => {
+      const { result } = await loaded()
+      global.fetch = failing('/schedule/time-off')
+      await act(async () => { await result.current.refresh() })
+      expect(result.current.error).toBeNull()
+      expect(result.current.timeOff).toHaveLength(1)
+      expect(result.current.partialErrors.timeOff).toEqual({ message: '/schedule/time-off broke', kept: true })
+    })
+
+    it('a new week clears the previous week\'s leave rather than painting it under new dates', async () => {
+      const { result, rerender } = await loaded()
+      global.fetch = failing('/schedule/time-off')
+      rerender(WEEK_B)
+      await waitFor(() => expect(result.current.successCount).toBe(2))
+      expect(result.current.error).toBeNull()
+      expect(result.current.timeOff).toEqual([])
+      expect(result.current.partialErrors.timeOff.kept).toBe(false)
+    })
+  })
+
+  it('bank holidays: kept on a same-week refresh, cleared on a new week', async () => {
+    const { result, rerender } = await loaded()
+    global.fetch = failing('/holidays')
+    await act(async () => { await result.current.refresh() })
+    expect(result.current.error).toBeNull()
+    expect(result.current.holidays).toHaveLength(1)
+    expect(result.current.partialErrors).toEqual({ holidays: { message: '/holidays broke', kept: true } })
+
+    rerender(WEEK_B)
+    await waitFor(() => expect(result.current.successCount).toBe(3))
+    expect(result.current.holidays).toEqual([])
+    expect(result.current.partialErrors).toEqual({ holidays: { message: '/holidays broke', kept: false } })
+  })
+
+  it('contractor spend: kept on a same-range refresh, cleared on a new week', async () => {
+    const { result, rerender } = await loaded()
+    global.fetch = failing('contractor-spend')
+    await act(async () => { await result.current.refresh() })
+    expect(result.current.error).toBeNull()
+    expect(result.current.contractorSpend).toEqual({ spend: 100 })
+    expect(result.current.partialErrors).toEqual({ contractorSpend: { message: 'contractor-spend broke', kept: true } })
+
+    rerender(WEEK_B)
+    await waitFor(() => expect(result.current.successCount).toBe(3))
+    expect(result.current.contractorSpend).toBeNull()
+    expect(result.current.partialErrors.contractorSpend.kept).toBe(false)
+  })
+
+  it('contractor spend failing on the very first load leaves it null and says so', async () => {
+    global.fetch = failing('contractor-spend')
+    const { result } = await loaded()
+    expect(result.current.contractorSpend).toBeNull()
+    expect(result.current.partialErrors).toEqual({ contractorSpend: { message: 'contractor-spend broke', kept: false } })
+  })
+
+  // Templates and the coach list do not depend on the dates, so a new week
+  // can keep them. They DO belong to a location, so a new location cannot.
+  for (const [slice, fragment, expected] of [
+    ['templates', '/schedule/templates', ['t1']],
+    ['staff', '/api/staff', ['s1']],
+  ]) {
+    describe(`${slice} fails alone`, () => {
+      it('the first load leaves it empty and marks it missing', async () => {
+        global.fetch = failing(fragment)
+        const { result } = await loaded()
+        expect(result.current.error).toBeNull()
+        expect(result.current[slice]).toEqual([])
+        expect(result.current.partialErrors).toEqual({ [slice]: { message: `${fragment} broke`, kept: false } })
+      })
+
+      it('a new week at the same location keeps the list it had', async () => {
+        const { result, rerender } = await loaded()
+        global.fetch = failing(fragment)
+        rerender(WEEK_B)
+        await waitFor(() => expect(result.current.successCount).toBe(2))
+        expect(result.current[slice].map(x => x.id)).toEqual(expected)
+        expect(result.current.partialErrors[slice].kept).toBe(true)
+      })
+
+      it('a different location clears it', async () => {
+        const { result, rerender } = await loaded()
+        global.fetch = failing(fragment)
+        rerender({ ...ARGS, locationId: 'loc2' })
+        await waitFor(() => expect(result.current.successCount).toBe(2))
+        expect(result.current[slice]).toEqual([])
+        expect(result.current.partialErrors[slice].kept).toBe(false)
+      })
+    })
+  }
+
+  // A 401/403 on ANY read means the session or the access is gone, and the
+  // next action will fail the same way. That is not a degraded slice, it is
+  // the roster not loading.
+  describe('a signed-out or forbidden answer on a non-blocks read is top-level', () => {
+    it('401 on holidays: top-level error, no success, no partials', async () => {
+      global.fetch = failing('/holidays', { ok: false, status: 401, json: async () => ({}) })
+      const { result } = renderHook(() => useScheduleData(ARGS))
+      await waitFor(() => expect(result.current.loading).toBe(false))
+      expect(result.current.error).toBe(SESSION_ENDED_MESSAGE)
+      expect(result.current.successCount).toBe(0)
+      expect(result.current.partialErrors).toBeNull()
+      expect(result.current.blocks).toEqual([])
+    })
+
+    it('a signed-out redirect on the leave read during a same-week refresh keeps the week and flags it stale', async () => {
+      const { result } = await loaded()
+      global.fetch = failing('/schedule/time-off', { ok: true, status: 200, redirected: true, json: async () => { throw new Error('html') } })
+      await act(async () => { await result.current.refresh() })
+      expect(result.current.error).toBe(SESSION_ENDED_MESSAGE)
+      expect(result.current.showingStaleData).toBe(true)
+      expect(result.current.blocks).toHaveLength(1)
+      expect(result.current.successCount).toBe(1)
+    })
+
+    it('403 on the coach list: top-level error in the server\'s words, new week cleared', async () => {
+      const { result, rerender } = await loaded()
+      global.fetch = failing('/api/staff', { ok: false, status: 403, json: async () => ({ error: 'Forbidden - location not in your assignments' }) })
+      rerender(WEEK_B)
+      await waitFor(() => expect(result.current.error).toBe('Forbidden - location not in your assignments'))
+      await waitFor(() => expect(result.current.loading).toBe(false))
+      expect(result.current.blocks).toEqual([])
+      expect(result.current.showingStaleData).toBe(false)
+      expect(result.current.partialErrors).toBeNull()
+    })
+  })
+
+  it('a later full success clears partialErrors', async () => {
+    global.fetch = failing('/schedule/time-off')
+    const { result } = await loaded()
+    expect(result.current.partialErrors).not.toBeNull()
+    global.fetch = vi.fn(async (url) => okResponse(defaultBody(url)))
+    await act(async () => { await result.current.refresh() })
+    expect(result.current.partialErrors).toBeNull()
+    expect(result.current.timeOff).toHaveLength(1)
+  })
+
+  // The generation guard must hold for EVERY slice now that they settle
+  // separately: a late loser for week A may neither write its data nor its
+  // failure over week B.
+  for (const fragment of ['/schedule/blocks', '/schedule/templates', '/api/staff', '/schedule/time-off', '/holidays', 'contractor-spend']) {
+    for (const outcome of ['resolves', 'rejects']) {
+    it(`a late loser cannot write ${fragment} over the current week when it ${outcome}`, async () => {
+      const held = []
+      let firstRound = true
+      global.fetch = vi.fn((url) => {
+        if (firstRound && url.includes(fragment)) {
+          return new Promise((resolve, reject) => { held.push({ resolve, reject }) })
+        }
+        return Promise.resolve(okResponse(defaultBody(url)))
+      })
+      const { result, rerender } = renderHook((p) => useScheduleData(p), { initialProps: ARGS })
+      firstRound = false
+      rerender(WEEK_B)
+      await waitFor(() => expect(result.current.successCount).toBe(1))
+      const before = { ...result.current }
+
+      await act(async () => {
+        held.forEach(h => (outcome === 'rejects'
+          ? h.reject(new TypeError('Failed to fetch'))
+          : h.resolve(okResponse({ success: true, data: [{ id: 'STALE', active: true }] }))))
+        await new Promise(r => setTimeout(r, 0))
+      })
+      expect(result.current.error).toBeNull()
+      expect(result.current.partialErrors).toBeNull()
+      for (const k of ['blocks', 'templates', 'staff', 'timeOff', 'holidays', 'contractorSpend']) {
+        expect(result.current[k]).toEqual(before[k])
+      }
+      expect(result.current.loading).toBe(false)
+    })
+    }
+  }
+})
