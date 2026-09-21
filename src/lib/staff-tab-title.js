@@ -6,13 +6,22 @@
 // working in UN1T Stillorgan read "UN1T Hatch Street" on every tab.
 // ROSTERLOOK.1 fixed /schedule alone; this is the same fix for all of them.
 //
-// WHY IT IS NOT IN THE ROOT LAYOUT. The root generateMetadata must stay
-// cookie-free. getCurrentUser() reads cookies/headers, so calling it there
-// would opt every route in the app, public and customer-facing ones
-// included, into dynamic rendering, and would put a staff studio name within
-// reach of anonymous pages. Staff layouts already call getCurrentUser() and
-// are force-dynamic, and getCurrentUser is React.cache()'d, so reading it
-// again from a staff layout's generateMetadata shares the layout's own read.
+// WHY IT IS NOT IN THE ROOT LAYOUT. Not rendering cost: the root layout
+// already reads the session for every route (AppShellServer calls
+// getCurrentUser()), so nothing here is "kept static" by staying out of it.
+// The reasons are about WHO can resolve the name:
+//   (a) the root generateMetadata is every page's metadata ancestor, public
+//       and customer-facing ones included. A staff member with a live
+//       session opens /book, /event or /host links too, and a studio name
+//       resolved there would title a customer surface with staff context. Keeping session reads out of the root generateMetadata
+//       means a staff studio name is simply not resolvable on those routes.
+//   (b) customer-facing titles are OWNED by customerFacingMetadata()
+//       (src/lib/default-site-name.js, pinned by brand-chrome.test.js). One
+//       resolver per audience; a root-level staff title would be a second
+//       answer competing with it.
+// So the name is resolved only from layouts that sit above staff pages.
+// getCurrentUser is React.cache()'d, so a staff layout's generateMetadata
+// shares the read its own render already makes.
 //
 // THE NEXT RULES THIS LEANS ON (verified against next@16.3.4:
 // node_modules/next/dist/docs/01-app/03-api-reference/04-functions/
@@ -82,6 +91,9 @@ export async function staffTabMetadata() {
     // Swallowing one of those here could let a route be prerendered with {}
     // baked in as its metadata. Everything else is ours to swallow.
     unstable_rethrow(err)
+    // Swallowed, but not silently: the page renders fine either way, so a
+    // sustained failure here would otherwise be visible nowhere.
+    console.error('[staff-tab-title] could not resolve the active studio; tab keeps the default title', err)
     return {}
   }
 }

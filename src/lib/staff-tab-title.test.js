@@ -2,10 +2,19 @@
 //
 // Two halves. The resolver (what staffTabMetadata returns for a session), and
 // the COMPOSITION: the rendered <title> is not what this module returns, it is
-// what Next makes of it together with the root layout and the page. That half
-// runs the installed Next's own title resolver, replaying the same loop as
-// accumulateMetadata (lib/metadata/resolve-metadata.js), so a Next upgrade
-// that changes the template rules fails here instead of in a browser tab.
+// what Next makes of it together with the root layout and the page.
+//
+// The composition half drives the INSTALLED Next's own accumulateMetadata
+// (next/dist/lib/metadata/resolve-metadata), the function the server renders
+// <title> from, with one item per route-tree node. Nothing of Next's rules is
+// re-implemented here, so an upgrade that changes how templates reach child
+// segments, or how a nested default meets a parent template, fails in this
+// file rather than in a browser tab.
+//
+// What is NOT pinned: that the route tree really has the nodes each case
+// spells out (one per directory, route groups included, plus the page). That
+// is resolveMetadataItems' job, it needs a compiled loader tree, and it was
+// read in source, not executed. `next build` + a browser is the check for it.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createRequire } from 'node:module'
@@ -25,8 +34,21 @@ import {
   STAFF_TITLE_SEPARATOR,
 } from './staff-tab-title.js'
 
+// resolve-metadata.js does `require('server-only')`, a bare specifier that only
+// Next's bundler can resolve (it aliases it to this same compiled no-op on the
+// server). Point Node at that module for the one require, then put it back.
 const require = createRequire(import.meta.url)
-const { resolveTitle } = require('next/dist/lib/metadata/resolvers/resolve-title')
+const Module = require('node:module')
+const resolveFilename = Module._resolveFilename
+Module._resolveFilename = function (request, ...rest) {
+  return resolveFilename.call(this, request === 'server-only' ? 'next/dist/compiled/server-only/empty' : request, ...rest)
+}
+let accumulateMetadata
+try {
+  ;({ accumulateMetadata } = require('next/dist/lib/metadata/resolve-metadata'))
+} finally {
+  Module._resolveFilename = resolveFilename
+}
 
 beforeEach(() => vi.clearAllMocks())
 
@@ -56,17 +78,35 @@ describe('staffTabMetadata — resolver', () => {
     expect(await staffTabMetadata()).toEqual({})
   })
 
-  it('a title is never worth a 500', async () => {
-    getCurrentUser.mockRejectedValue(new Error('auth down'))
-    await expect(staffTabMetadata()).resolves.toEqual({})
+  // Swallowed, but never silently: a sustained metadata-only failure renders
+  // every page fine and shows up nowhere else.
+  it('a title is never worth a 500, and the failure is logged', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const boom = new Error('auth down')
+      getCurrentUser.mockRejectedValue(boom)
+      await expect(staffTabMetadata()).resolves.toEqual({})
+      expect(logged).toHaveBeenCalledTimes(1)
+      expect(logged.mock.calls[0][0]).toMatch(/^\[staff-tab-title\]/)
+      expect(logged.mock.calls[0][1]).toBe(boom)
+    } finally {
+      logged.mockRestore()
+    }
   })
 
   // Swallowing Next's own control-flow throw could prerender a route with {}
   // baked in. unstable_rethrow is the documented way to let those through.
-  it('does NOT swallow an error Next threw on purpose', async () => {
-    const bailout = Object.assign(new Error('Dynamic server usage: cookies'), { digest: 'DYNAMIC_SERVER_USAGE' })
-    getCurrentUser.mockRejectedValue(bailout)
-    await expect(staffTabMetadata()).rejects.toBe(bailout)
+  // Not ours, so not logged either.
+  it('does NOT swallow (or log) an error Next threw on purpose', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const bailout = Object.assign(new Error('Dynamic server usage: cookies'), { digest: 'DYNAMIC_SERVER_USAGE' })
+      getCurrentUser.mockRejectedValue(bailout)
+      await expect(staffTabMetadata()).rejects.toBe(bailout)
+      expect(logged).not.toHaveBeenCalled()
+    } finally {
+      logged.mockRestore()
+    }
   })
 
   it('trims the name and uses no em-dash', () => {
@@ -82,54 +122,52 @@ describe('staffTabMetadata — resolver', () => {
   })
 })
 
-// Replays accumulateMetadata's title handling: one item per TREE NODE (root
-// layout ... page), null where a node exports nothing, and the template a
-// node defines is only stashed for nodes before the last two (the leaf layout
-// and its page share a segment).
-function renderedTitle(items) {
-  let title = null
-  let stashedTemplate = null
-  items.forEach((meta, i) => {
-    if (meta && 'title' in meta) title = resolveTitle(meta.title, stashedTemplate)
-    if (i < items.length - 2) stashedTemplate = title?.template || null
-  })
-  return title?.absolute ?? ''
+// One item per route-tree node, root layout first, page last; null where a
+// node exports no metadata. Items are [metadataExport, staticFilesMetadata].
+async function renderedTitle(items) {
+  const resolved = await accumulateMetadata(
+    '/probe',
+    items.map((meta) => [meta, null]),
+    '/probe',
+    { trailingSlash: false, isStaticMetadataRouteFile: false },
+  )
+  return resolved.title?.absolute ?? ''
 }
 
-describe('staffTabMetadata — what the tab actually reads (installed Next resolver)', () => {
+describe('staffTabMetadata — what the tab actually reads (installed Next accumulateMetadata)', () => {
   const ROOT = { title: 'UN1T Hatch Street' } // resolveDefaultSiteName: first row by location_id
   const STAFF = staffTabMetadataFor('UN1T Stillorgan')
 
-  it('a staff page with no title of its own reads the active studio', () => {
+  it('a staff page with no title of its own reads the active studio', async () => {
     // '' -> (sales) -> contacts -> __PAGE__
-    expect(renderedTitle([ROOT, STAFF, null, null])).toBe('UN1T Stillorgan')
+    expect(await renderedTitle([ROOT, STAFF, null, null])).toBe('UN1T Stillorgan')
     // '' -> approvals (new pass-through layout) -> __PAGE__
-    expect(renderedTitle([ROOT, STAFF, null])).toBe('UN1T Stillorgan')
+    expect(await renderedTitle([ROOT, STAFF, null])).toBe('UN1T Stillorgan')
   })
 
-  it('/schedule still reads exactly what ROSTERLOOK.1 shipped', () => {
+  it('/schedule still reads exactly what ROSTERLOOK.1 shipped', async () => {
     // '' -> (team) -> schedule -> __PAGE__ { title: 'Schedule' }
-    expect(renderedTitle([ROOT, STAFF, null, { title: 'Schedule' }])).toBe('Schedule · UN1T Stillorgan')
+    expect(await renderedTitle([ROOT, STAFF, null, { title: 'Schedule' }])).toBe('Schedule · UN1T Stillorgan')
     // ...and with no active studio, the bare page name, as before.
-    expect(renderedTitle([ROOT, {}, null, { title: 'Schedule' }])).toBe('Schedule')
+    expect(await renderedTitle([ROOT, {}, null, { title: 'Schedule' }])).toBe('Schedule')
   })
 
-  it('no active studio leaves the root title in place', () => {
-    expect(renderedTitle([ROOT, {}, null, null])).toBe('UN1T Hatch Street')
+  it('no active studio leaves the root title in place', async () => {
+    expect(await renderedTitle([ROOT, {}, null, null])).toBe('UN1T Hatch Street')
   })
 
-  it('a layout nested under the staff layout that adds nothing changes nothing', () => {
+  it('a layout nested under the staff layout that adds nothing changes nothing', async () => {
     // '' -> communications -> (hub) -> inbox -> __PAGE__
-    expect(renderedTitle([ROOT, STAFF, null, null, null])).toBe('UN1T Stillorgan')
+    expect(await renderedTitle([ROOT, STAFF, null, null, null])).toBe('UN1T Stillorgan')
   })
 
   // The two traps the coverage test exists to keep out of src/app. Pinned here
   // so its rules are demonstrably Next's behaviour, not folklore.
-  it('TRAP: two staff layouts on one route double the studio', () => {
-    expect(renderedTitle([ROOT, STAFF, STAFF, null])).toBe('UN1T Stillorgan · UN1T Stillorgan')
+  it('TRAP: two staff layouts on one route double the studio', async () => {
+    expect(await renderedTitle([ROOT, STAFF, STAFF, null])).toBe('UN1T Stillorgan · UN1T Stillorgan')
   })
 
-  it('TRAP: a page in the SAME segment as the staff layout is not templated', () => {
-    expect(renderedTitle([ROOT, STAFF, { title: 'Approvals' }])).toBe('Approvals')
+  it('TRAP: a page in the SAME segment as the staff layout is not templated', async () => {
+    expect(await renderedTitle([ROOT, STAFF, { title: 'Approvals' }])).toBe('Approvals')
   })
 })
