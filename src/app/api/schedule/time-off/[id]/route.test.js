@@ -736,13 +736,15 @@ describe('PUT /api/schedule/time-off/[id] — an ask dies with the state it was 
     expect(updateSpy.mock.calls[0][0]).not.toHaveProperty('cancel_requested_at')
   })
 
-  it('a row with no ask is written exactly as before: no clear, no status guard', async () => {
+  it('a row with no ask is written with no clear, and (LEAVEGUARD.1) still pinned to the status it read', async () => {
     getCurrentUser.mockResolvedValue(colleague())
     const { db, updateSpy } = buildDb({ existing: theirs({ cancel_requested_at: null, cancel_requested_by: null, cancel_request_note: null }) })
     createServerClient.mockReturnValue(db)
     expect((await PUT(req({ status: 'cancelled' }), PROPS)).status).toBe(200)
     expect(updateSpy.mock.calls[0][0]).not.toHaveProperty('cancel_requested_at')
-    expect(queriesOf(db, 'time_off_requests', 'update')[0].calls).toEqual([['eq', 'id', 'a0000000-0000-4000-8000-00000000000e']])
+    expect(queriesOf(db, 'time_off_requests', 'update')[0].calls).toEqual([
+      ['eq', 'id', 'a0000000-0000-4000-8000-00000000000e'], ['eq', 'status', 'approved'],
+    ])
   })
 
   it('leave an owner has ALREADY cancelled cannot then be rejected or reopened from a stale screen: a calm 409, nothing written', async () => {
@@ -767,7 +769,8 @@ describe('PUT /api/schedule/time-off/[id] — an ask dies with the state it was 
     expect(res.status).toBe(409)
     expect((await res.json()).error).toMatch(/changed a moment ago/)
 
-    // No ask on the row this PUT read, so no guard: the CHECK is what refuses.
+    // Defence in depth: should the CHECK ever be what refuses (the status pin
+    // makes a real race a zero-row write), it is still the calm 409.
     built = buildDb({
       existing: theirs({ cancel_requested_at: null, cancel_requested_by: null, cancel_request_note: null }),
       updateError: { code: '23514', message: 'new row for relation "time_off_requests" violates check constraint "time_off_requests_cancel_approved_is_cancelled"' },
@@ -967,4 +970,46 @@ describe('PUT /api/schedule/time-off/[id] — approved leave of a manager-tier p
     expect((await PUT(req({ status: 'cancelled' }), PROPS)).status).toBe(200)
     expect(updateSpy.mock.calls[0][0]).toMatchObject({ status: 'cancelled', cancel_requested_at: null, cancel_decided_at: null })
   })
+})
+
+// LEAVEGUARD.1 (review) — the guard judges the status it READ. Unless the write
+// is pinned to that status, a manager's `rejected` on a manager's PENDING leave
+// passes the guard, an owner approves it in between, and the reject lands on
+// APPROVED leave (the allowance trigger refunds it) with no owner involved.
+// Every status write is now `.eq('status', existing.status)`, and zero rows is
+// the existing 409.
+describe('PUT /api/schedule/time-off/[id] — every status write is pinned to the status it read (LEAVEGUARD.1)', () => {
+  const ID = 'a0000000-0000-4000-8000-00000000000e'
+  const MANAGER = { id: 'mgr-2', role: 'manager', profileRole: 'staff', full_name: 'Mo', locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': 'manager' } }
+  const pendingOfManager = { id: ID, profile_id: 'mgr', location_id: 'loc-1', status: 'pending', type: 'unavailable', start_date: '2026-06-01', end_date: '2026-06-02', total_days: 2 }
+  const ZERO_ROWS = { code: 'PGRST116', message: 'JSON object requested, multiple (or no) rows returned' }
+
+  it('the race: the leave was approved between the read and the write, so the reject touches no row and is a 409', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const { db, updateSpy } = buildDb({ existing: pendingOfManager, requesterRoles: { 'loc-1': 'manager' }, updateError: ZERO_ROWS })
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(req({ status: 'rejected' }), PROPS)
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ success: false, error: 'This leave changed a moment ago. Refresh to see where it stands.' })
+    expect(updateSpy).toHaveBeenCalledTimes(1)
+    expect(queriesOf(db, 'time_off_requests', 'update')[0].calls).toContainEqual(['eq', 'status', 'pending'])
+    expect(notifyUsersOnce).not.toHaveBeenCalled()
+  })
+
+  for (const [to, from] of [['rejected', 'pending'], ['cancelled', 'pending'], ['approved', 'pending'], ['cancelled', 'approved'], ['approved', 'approved']]) {
+    it(`no race (${from} -> ${to}): pinned to ${from}, and the answer is the same body as before`, async () => {
+      const caller = from === 'approved' ? { ...MANAGER, id: 'own-1', role: 'owner', rolesByLocation: { 'loc-1': 'owner' } } : MANAGER
+      getCurrentUser.mockResolvedValue(caller)
+      const existing = { ...pendingOfManager, status: from }
+      const { db } = buildDb({ existing, requesterRoles: { 'loc-1': 'manager' } })
+      createServerClient.mockReturnValue(db)
+      const res = await PUT(req({ status: to }), PROPS)
+      expect(res.status).toBe(200)
+      const json = await res.json()
+      const write = queriesOf(db, 'time_off_requests', 'update')[0]
+      expect(write.calls).toEqual([['eq', 'id', ID], ['eq', 'status', from]])
+      // The old body: { success, data } (+ clashes on an approval), data being the written row.
+      expect(json).toEqual({ success: true, data: { ...existing, ...write.payload }, ...(to === 'approved' ? { clashes: [] } : {}) })
+    })
+  }
 })

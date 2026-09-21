@@ -237,29 +237,36 @@ export async function PUT(request, props) {
     }
   }
 
-  let write = db.from('time_off_requests')
+  // LEAVEGUARD.1 — EVERY status write is pinned to the status this PUT read.
+  // Every gate above (the owner guard, canDecideTimeOff, the expiry and ask
+  // checks) judged THAT status, so a write that lands on a different one was
+  // never judged: a manager's `rejected` on a manager's PENDING leave passes
+  // the guard, an owner approves it in between, and the reject would land on
+  // APPROVED leave (the trigger refunding it) with no owner involved. A
+  // zero-row write is not an error in PostgREST; `.single()` turns it into
+  // PGRST116, answered below as the same 409 the ask-clearing write always
+  // gave. With no race the row is the same one, so the answer is unchanged.
+  //
+  // LEAVECANCEL.1 — for a write that clears an ask this also catches an owner
+  // APPROVING the cancellation a moment earlier (status moved to cancelled).
+  // It does NOT catch an owner DECLINING it a moment earlier: a decline
+  // leaves status approved, so this write still matches and clears the
+  // decline along with the ask. That is the same end state as the accepted
+  // sequence "owner declines, then a colleague cancels the leave" (the leave
+  // is cancelled either way; the decline has nothing left to be about).
+  const { data, error } = await db.from('time_off_requests')
     .update(updates)
     .eq('id', params.id)
-  // LEAVECANCEL.1 — a write that clears an ask is guarded on the status it
-  // read. That catches an owner APPROVING the cancellation a moment earlier
-  // (status moved to cancelled, zero rows, 409). It does NOT catch an owner
-  // DECLINING it a moment earlier: a decline leaves status approved, so this
-  // write still matches and clears the decline along with the ask. That is the
-  // same end state as the accepted sequence "owner declines, then a colleague
-  // cancels the leave" (the leave is cancelled either way; the decline has
-  // nothing left to be about), so it is left as is. A row with no ask is
-  // written exactly as before.
-  if (clearsAsk) write = write.eq('status', existing.status)
-  const { data, error } = await write
+    .eq('status', existing.status)
     .select(REQUEST_WITH_PEOPLE)
     .single()
 
   if (error) {
-    // The guard matched no row (.single() answers PGRST116 for zero rows).
-    if (clearsAsk && error.code === 'PGRST116') {
+    // The pin matched no row (.single() answers PGRST116 for zero rows).
+    if (error.code === 'PGRST116') {
       return NextResponse.json({ success: false, error: 'This leave changed a moment ago. Refresh to see where it stands.' }, { status: 409 })
     }
-    // The same race with no ask on the row this PUT read: the CHECK refuses it.
+    // Defence in depth: mig 624's CHECK, should it ever be what refuses.
     if (String(error.message || '').includes(CANCEL_APPROVED_CHECK)) return ALREADY_CANCELLED()
     return NextResponse.json({ success: false, error: error.message }, { status: 400 })
   }
