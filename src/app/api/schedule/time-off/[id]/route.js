@@ -9,12 +9,25 @@ import { dublinTodayStr } from '@/lib/dublin-time'
 import {
   canDecideTimeOff, decidingLocationIds, getProfileLocationIds, getEmploymentType, ensureHolidayAllowanceRow, findLeaveClashes,
 } from '@/lib/time-off-leave'
-import { isExpiredPendingRequest, isTimeOffTypeAllowedFor } from '@shared/time-off'
+import { isExpiredPendingRequest, isTimeOffTypeAllowedFor, timeOffLeaveLabel } from '@shared/time-off'
+import {
+  selfCancelMode, isOpenCancelAsk, isOwnerForLeave, leaveActingLocationIds,
+  resolveLeaveCancelDeciderIds, cancelAskEventKey, leaveRangeText,
+} from '@/lib/time-off-cancel'
 
 const TimeOffReviewSchema = z.object({
   status: timeOffStatusSchema,
   review_note: z.string().max(2000).nullable().optional(),
+  // LEAVECANCEL.1 — the requester's optional reason when `cancelled` on their
+  // own approved leave becomes an ask. Ignored on every other path.
+  cancel_request_note: z.string().max(2000).nullable().optional(),
 })
+
+const REQUEST_WITH_PEOPLE = `
+      *,
+      profiles!profile_id(id, full_name, avatar_url, role),
+      reviewer:profiles!reviewed_by(id, full_name)
+    `
 
 // PUT /api/schedule/time-off/:id — Approve, reject, or cancel a request
 export async function PUT(request, props) {
@@ -49,7 +62,7 @@ export async function PUT(request, props) {
   if (requesterLocError) {
     return NextResponse.json({ success: false, error: requesterLocError.message }, { status: 500 })
   }
-  const actingLocations = [...new Set([existing.location_id, ...requesterLocations].filter(Boolean))]
+  const actingLocations = leaveActingLocationIds(existing, requesterLocations)
 
   // SCHEDROLES.1 — manager AT A STUDIO THE REQUEST BELONGS TO
   // (hasRoleAtLocation), not `user.role` (the ACTIVE studio's role).
@@ -67,11 +80,40 @@ export async function PUT(request, props) {
     return NextResponse.json({ success: false, error: 'You cannot decide your own time-off request' }, { status: 403 })
   }
   if (isSelf && !isManager && (status !== 'cancelled' || existing.status !== 'pending')) {
+    // LEAVECANCEL.1 — unchanged and out of scope: a plain coach's own APPROVED
+    // leave stays refused here. Only a caller this gate lets through (manager
+    // tier at a studio the request belongs to) reaches the ask below.
     return NextResponse.json({ success: false, error: 'You can only cancel your own pending requests' }, { status: 403 })
+  }
+  // LEAVECANCEL.1 — the only thing anyone may do to their OWN request is cancel
+  // it. approved/rejected are refused above; `pending` was the value left, and
+  // for a manager it was a side door: approved -> pending -> cancelled takes
+  // the leave out of force with no owner asked (and no allowance refund).
+  if (isSelf && status !== 'cancelled') {
+    return NextResponse.json({ success: false, error: 'You can only cancel your own requests' }, { status: 403 })
+  }
+
+  const today = dublinTodayStr()
+
+  // LEAVECANCEL.1 — the owner's rule: a manager cancelling their OWN APPROVED
+  // leave needs an owner's approval. So this PUT does not cancel it: it
+  // records the ask (mig 624 columns) and the leave STAYS APPROVED, in force
+  // for every reader, until POST ./cancel-request decides. A master is
+  // 'direct' and falls through to the plain cancel below, as before.
+  if (isSelf && status === 'cancelled' && existing.status === 'approved') {
+    const mode = selfCancelMode(user, existing, today, requesterLocations)
+    if (mode === 'ended') {
+      return NextResponse.json({
+        success: false,
+        error: `This leave ended on ${existing.end_date}, so there is nothing left to cancel.`,
+      }, { status: 409 })
+    }
+    if (mode === 'ask') {
+      return requestOwnLeaveCancel(db, user, existing, { today, requesterLocations, note: body.cancel_request_note })
+    }
   }
 
   const updates = { status, updated_at: new Date().toISOString() }
-  const today = dublinTodayStr()
 
   // If approving or rejecting, record who did it
   if (status === 'approved' || status === 'rejected') {
@@ -122,11 +164,7 @@ export async function PUT(request, props) {
   const { data, error } = await db.from('time_off_requests')
     .update(updates)
     .eq('id', params.id)
-    .select(`
-      *,
-      profiles!profile_id(id, full_name, avatar_url, role),
-      reviewer:profiles!reviewed_by(id, full_name)
-    `)
+    .select(REQUEST_WITH_PEOPLE)
     .single()
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
@@ -180,4 +218,94 @@ export async function PUT(request, props) {
   }
 
   return NextResponse.json({ success: true, data })
+}
+
+// LEAVECANCEL.1 — record "please cancel my approved leave" and tell whoever
+// can decide it. Nothing here touches `status`.
+async function requestOwnLeaveCancel(db, user, existing, { today, requesterLocations, note }) {
+  // Asking twice is one ask: nothing written, nobody told again.
+  if (isOpenCancelAsk(existing, today)) {
+    return NextResponse.json({ success: true, data: existing, cancellation: 'requested', already_requested: true })
+  }
+
+  // Someone must be able to decide it BEFORE it is recorded, or it sits in a
+  // queue nobody has. Fails closed: an unreadable list is a 500, not a guess.
+  const actingLocations = leaveActingLocationIds(existing, requesterLocations)
+  const { ownerIds, masterIds, error: deciderError } = await resolveLeaveCancelDeciderIds(db, actingLocations, user.id)
+  if (deciderError) {
+    return NextResponse.json({ success: false, error: deciderError.message }, { status: 500 })
+  }
+  if (ownerIds.length === 0 && isOwnerForLeave(user, existing, requesterLocations)) {
+    // An owner needs a DIFFERENT owner. With none, the ask is refused rather
+    // than rerouted: a platform admin can cancel the leave for them through
+    // this same PUT. (Whether a sole owner's ask should go to the masters'
+    // queue instead is the owner's call; flagged on the PR.)
+    return NextResponse.json({
+      success: false,
+      error: 'There is no other owner at your studios to approve this. Ask a platform admin to cancel the leave for you.',
+    }, { status: 409 })
+  }
+  const deciderIds = ownerIds.length > 0 ? ownerIds : masterIds
+  if (deciderIds.length === 0) {
+    return NextResponse.json({
+      success: false,
+      error: 'There is no owner or platform admin who could approve this cancellation, so it was not sent.',
+    }, { status: 409 })
+  }
+
+  const now = new Date().toISOString()
+  const { data: rows, error } = await db.from('time_off_requests')
+    .update({
+      cancel_requested_at: now,
+      cancel_requested_by: user.id,
+      cancel_request_note: note || null,
+      // A second ask after a decline starts clean.
+      cancel_decided_at: null,
+      cancel_decided_by: null,
+      cancel_decision: null,
+      cancel_decision_note: null,
+      updated_at: now,
+    })
+    .eq('id', existing.id)
+    .eq('status', 'approved')
+    // Never on top of an ask that is still waiting.
+    .or('cancel_requested_at.is.null,cancel_decided_at.not.is.null')
+    .select(REQUEST_WITH_PEOPLE)
+  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+
+  // A zero-row UPDATE is not an error in PostgREST: the row moved between the
+  // read and the write. Look again. An ask that is now open is the same
+  // outcome the caller wanted (a double click); anything else is said plainly.
+  if (!rows || rows.length === 0) {
+    const { data: fresh, error: freshError } = await db.from('time_off_requests')
+      .select('*')
+      .eq('id', existing.id)
+      .maybeSingle()
+    if (!freshError && isOpenCancelAsk(fresh, today)) {
+      return NextResponse.json({ success: true, data: fresh, cancellation: 'requested', already_requested: true })
+    }
+    return NextResponse.json({
+      success: false,
+      error: 'This leave changed while you were asking. Refresh to see where it stands.',
+    }, { status: 409 })
+  }
+  const data = rows[0]
+
+  // Event-driven, like time_off_inbound: sent when it happens, with no quiet-
+  // hours gate. staff-push-hours.js gates CRON pushes, where a later tick
+  // retries; there is no later tick here, so a gate would lose the notice.
+  // Best-effort: a failed notice never fails the ask.
+  try {
+    notifyUsersOnce(db, cancelAskEventKey('time_off_cancel_ask', data), deciderIds, {
+      title: 'Leave cancellation to approve',
+      body: `${user.full_name || 'A manager'} has asked to cancel approved leave: ${timeOffLeaveLabel(data.type)}, ${leaveRangeText(data)}.`,
+      category: 'time_off',
+      emailSubject: `Leave cancellation request from ${user.full_name || 'a manager'}`,
+      data: { type: 'time_off_cancel_request', request_id: data.id },
+    }).catch(err => console.error('[time-off] cancel-ask notify failed', err))
+  } catch (err) {
+    console.error('[time-off] cancel-ask notify failed', err)
+  }
+
+  return NextResponse.json({ success: true, data, cancellation: 'requested' })
 }

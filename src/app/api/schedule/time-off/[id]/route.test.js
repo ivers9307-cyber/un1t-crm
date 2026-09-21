@@ -22,6 +22,7 @@ vi.mock('@/lib/push-dedup', () => ({ notifyUsersOnce: vi.fn(() => Promise.resolv
 const { createServerClient } = await import('@/lib/supabase')
 const { getCurrentUser } = await import('@/lib/auth')
 const { hasPermissionForLocation } = await import('@/lib/permissions')
+const { notifyUsersOnce } = await import('@/lib/push-dedup')
 const { PUT } = await import('./route.js')
 const { fakeDb, queriesOf, resolveLocations, scopedAssignments, locationScopeOf } = await import('@/lib/time-off.test-helpers')
 
@@ -40,16 +41,37 @@ function buildDb({
   allowance = null,
   entitlement = null,
   assignments = [],
+  // LEAVECANCEL.1 — who could decide a cancellation (owner links at the
+  // request's studios, the estate's masters), what a re-read after a lost race
+  // finds, and whether the guarded ask UPDATE matches a row at all.
+  owners = [],
+  masters = [],
+  ownersError = null,
+  reread = null,
+  askMatches = true,
 }) {
   const updateSpy = vi.fn()
   const allowanceInsertSpy = vi.fn()
+  let reads = 0
   const db = fakeDb((q) => {
-    if (q.table === 'time_off_requests' && q.action === 'select') return { data: existing, error: null }
+    if (q.table === 'time_off_requests' && q.action === 'select') {
+      reads += 1
+      return { data: reads > 1 && reread ? reread : existing, error: null }
+    }
     if (q.table === 'time_off_requests' && q.action === 'update') {
       updateSpy(q.payload)
-      return { data: { ...existing, ...q.payload }, error: null }
+      // The status PUT ends in .single(); the guarded ask UPDATE returns the
+      // rows it touched, and a zero-row UPDATE is [] with no error.
+      if (q.terminal === 'single') return { data: { ...existing, ...q.payload }, error: null }
+      return { data: askMatches ? [{ ...existing, ...q.payload }] : [], error: null }
+    }
+    if (q.table === 'profile_locations' && q.eq.role === 'owner') {
+      return ownersError
+        ? { data: null, error: ownersError }
+        : { data: owners.map((profile_id) => ({ profile_id, location_id: existing.location_id, role: 'owner', profiles: { id: profile_id, role: 'staff', active: true, deleted_at: null } })), error: null }
     }
     if (q.table === 'profile_locations') return { data: requesterLocations.map((location_id) => ({ location_id })), error: null }
+    if (q.table === 'profiles' && q.eq.role === 'master') return { data: masters.map((id) => ({ id })), error: null }
     if (q.table === 'profiles') return { data: { employment_type: employmentType }, error: null }
     if (q.table === 'staff_allowances' && q.action === 'select') return { data: allowance, error: null }
     if (q.table === 'staff_allowances' && q.action === 'insert') { allowanceInsertSpy(q.payload); return { data: null, error: null } }
@@ -63,7 +85,7 @@ function buildDb({
 }
 
 beforeEach(() => {
-  createServerClient.mockReset(); getCurrentUser.mockReset()
+  createServerClient.mockReset(); getCurrentUser.mockReset(); notifyUsersOnce.mockClear()
   hasPermissionForLocation.mockImplementation(() => true)
   // Requests below run 1-2 Jun 2026; "today" is before them, so none has expired.
   vi.useFakeTimers({ toFake: ['Date'] })
@@ -298,5 +320,206 @@ describe('PUT /api/schedule/time-off/[id] — LEAVE.2', () => {
     const json = await (await PUT(req({ status: 'approved' }), PROPS)).json()
     expect(locationScopeOf(queriesOf(db, 'shift_assignments')[0])).toEqual(['loc-x'])
     expect(json.clashes.map((c) => c.id)).toEqual(['ax'])
+  })
+})
+
+// LEAVECANCEL.1 — the owner's rule (20 Sep 2026): a manager cancelling their
+// OWN APPROVED leave needs an owner's approval. The PUT used to let any
+// manager-tier requester straight through. It now RECORDS THE ASK and leaves
+// the leave approved; POST ./cancel-request decides it.
+describe('PUT /api/schedule/time-off/[id] — cancelling your own APPROVED leave (LEAVECANCEL.1)', () => {
+  const at = (id, role, profileRole = 'staff') => ({
+    id, role, profileRole, full_name: 'Mia Manager',
+    locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': role },
+  })
+  const own = (over = {}) => ({
+    id: 'req-1', profile_id: 'me', location_id: 'loc-1', status: 'approved', type: 'holiday',
+    start_date: '2026-06-01', end_date: '2026-06-02', total_days: 2,
+    cancel_requested_at: null, cancel_requested_by: null, cancel_decided_at: null, cancel_decision: null,
+    ...over,
+  })
+  const OPEN = { cancel_requested_at: '2026-05-19T09:00:00.000Z', cancel_requested_by: 'me' }
+
+  it('a manager\'s cancel records the ask, tells the owners, and LEAVES THE LEAVE APPROVED', async () => {
+    getCurrentUser.mockResolvedValue(at('me', 'manager'))
+    const { db, updateSpy } = buildDb({ existing: own(), owners: ['own-1', 'own-2'] })
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(req({ status: 'cancelled', cancel_request_note: 'Trip fell through' }), PROPS)
+    expect(res.status).toBe(200)
+    const json = await res.json()
+    expect(json).toMatchObject({ success: true, cancellation: 'requested' })
+    expect(json.data.status).toBe('approved')
+
+    // The write never names `status`: every reader of status='approved' is untouched.
+    expect(updateSpy).toHaveBeenCalledTimes(1)
+    const payload = updateSpy.mock.calls[0][0]
+    expect(payload).not.toHaveProperty('status')
+    expect(payload).toMatchObject({
+      cancel_requested_by: 'me', cancel_request_note: 'Trip fell through',
+      cancel_decided_at: null, cancel_decided_by: null, cancel_decision: null, cancel_decision_note: null,
+    })
+    expect(payload.cancel_requested_at).toBe('2026-05-20T10:00:00.000Z')
+
+    // Guarded so it cannot land on leave that stopped being approved, or on top of an open ask.
+    const write = queriesOf(db, 'time_off_requests', 'update')[0]
+    expect(write.calls).toContainEqual(['eq', 'id', 'req-1'])
+    expect(write.calls).toContainEqual(['eq', 'status', 'approved'])
+    expect(write.calls).toContainEqual(['or', 'cancel_requested_at.is.null,cancel_decided_at.not.is.null'])
+
+    expect(notifyUsersOnce).toHaveBeenCalledTimes(1)
+    const [, key, recipients, notice] = notifyUsersOnce.mock.calls[0]
+    expect(key).toBe('time_off_cancel_ask:req-1:2026-05-20T10:00:00.000Z')
+    expect(recipients).toEqual(['own-1', 'own-2'])
+    expect(notice).toMatchObject({ category: 'time_off', data: { type: 'time_off_cancel_request', request_id: 'req-1' } })
+    expect(`${notice.title} ${notice.body}`).not.toMatch(/—/)
+  })
+
+  it('a head coach must ask too', async () => {
+    getCurrentUser.mockResolvedValue(at('me', 'head_coach'))
+    const { db, updateSpy } = buildDb({ existing: own(), owners: ['own-1'] })
+    createServerClient.mockReturnValue(db)
+    expect((await (await PUT(req({ status: 'cancelled' }), PROPS)).json()).cancellation).toBe('requested')
+    expect(updateSpy.mock.calls[0][0]).not.toHaveProperty('status')
+  })
+
+  it('asking again while one is open is idempotent: nothing written, nobody told twice', async () => {
+    getCurrentUser.mockResolvedValue(at('me', 'manager'))
+    const { db, updateSpy } = buildDb({ existing: own(OPEN), owners: ['own-1'] })
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(req({ status: 'cancelled' }), PROPS)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ success: true, cancellation: 'requested', already_requested: true })
+    expect(updateSpy).not.toHaveBeenCalled()
+    expect(notifyUsersOnce).not.toHaveBeenCalled()
+  })
+
+  it('after a decline the person may ask again, and the old answer is cleared', async () => {
+    getCurrentUser.mockResolvedValue(at('me', 'manager'))
+    const declined = own({ ...OPEN, cancel_decided_at: '2026-05-19T12:00:00.000Z', cancel_decided_by: 'own-1', cancel_decision: 'rejected' })
+    const { db, updateSpy } = buildDb({ existing: declined, owners: ['own-1'] })
+    createServerClient.mockReturnValue(db)
+    expect((await PUT(req({ status: 'cancelled' }), PROPS)).status).toBe(200)
+    expect(updateSpy.mock.calls[0][0]).toMatchObject({ cancel_decided_at: null, cancel_decision: null })
+    expect(notifyUsersOnce.mock.calls[0][1]).toBe('time_off_cancel_ask:req-1:2026-05-20T10:00:00.000Z')
+  })
+
+  it('an OWNER asks too, and only a DIFFERENT owner is told', async () => {
+    getCurrentUser.mockResolvedValue(at('me', 'owner'))
+    const { db } = buildDb({ existing: own(), owners: ['me', 'own-2'] })
+    createServerClient.mockReturnValue(db)
+    expect((await (await PUT(req({ status: 'cancelled' }), PROPS)).json()).cancellation).toBe('requested')
+    expect(notifyUsersOnce.mock.calls[0][2]).toEqual(['own-2'])
+  })
+
+  it('a SOLE owner is refused and pointed at a platform admin; nothing is written', async () => {
+    getCurrentUser.mockResolvedValue(at('me', 'owner'))
+    const { db, updateSpy } = buildDb({ existing: own(), owners: ['me'], masters: ['boss'] })
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(req({ status: 'cancelled' }), PROPS)
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toMatch(/no other owner.*platform admin/i)
+    expect(updateSpy).not.toHaveBeenCalled()
+    expect(notifyUsersOnce).not.toHaveBeenCalled()
+  })
+
+  it('a manager at a studio with NO owner: the ask is recorded and the masters are told', async () => {
+    getCurrentUser.mockResolvedValue(at('me', 'manager'))
+    const { db, updateSpy } = buildDb({ existing: own(), owners: [], masters: ['boss'] })
+    createServerClient.mockReturnValue(db)
+    expect((await PUT(req({ status: 'cancelled' }), PROPS)).status).toBe(200)
+    expect(updateSpy).toHaveBeenCalledTimes(1)
+    expect(notifyUsersOnce.mock.calls[0][2]).toEqual(['boss'])
+  })
+
+  it('...and with no owner and no master either, it is refused rather than parked where nobody will see it', async () => {
+    getCurrentUser.mockResolvedValue(at('me', 'manager'))
+    const { db, updateSpy } = buildDb({ existing: own(), owners: [], masters: [] })
+    createServerClient.mockReturnValue(db)
+    expect((await PUT(req({ status: 'cancelled' }), PROPS)).status).toBe(409)
+    expect(updateSpy).not.toHaveBeenCalled()
+  })
+
+  it('an unreadable owner list fails closed: 500, nothing written', async () => {
+    getCurrentUser.mockResolvedValue(at('me', 'manager'))
+    const { db, updateSpy } = buildDb({ existing: own(), ownersError: { message: 'boom' } })
+    createServerClient.mockReturnValue(db)
+    expect((await PUT(req({ status: 'cancelled' }), PROPS)).status).toBe(500)
+    expect(updateSpy).not.toHaveBeenCalled()
+  })
+
+  it('a MASTER still cancels their own approved leave directly', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'me', role: 'master', profileRole: 'master', locations: [], rolesByLocation: {} })
+    const { db, updateSpy } = buildDb({ existing: own(), owners: ['own-1'] })
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(req({ status: 'cancelled' }), PROPS)
+    expect(res.status).toBe(200)
+    expect((await res.json()).cancellation).toBeUndefined()
+    expect(updateSpy.mock.calls[0][0]).toMatchObject({ status: 'cancelled' })
+    expect(notifyUsersOnce).not.toHaveBeenCalled()
+  })
+
+  it('a manager\'s own PENDING request still cancels directly (nothing was approved, nothing to ask about)', async () => {
+    getCurrentUser.mockResolvedValue(at('me', 'manager'))
+    const { db, updateSpy } = buildDb({ existing: own({ status: 'pending' }) })
+    createServerClient.mockReturnValue(db)
+    expect((await PUT(req({ status: 'cancelled' }), PROPS)).status).toBe(200)
+    expect(updateSpy.mock.calls[0][0]).toMatchObject({ status: 'cancelled' })
+  })
+
+  it('leave whose last day has passed cannot be asked about (409); leave that has only STARTED can', async () => {
+    getCurrentUser.mockResolvedValue(at('me', 'manager'))
+    vi.setSystemTime(new Date('2026-06-03T10:00:00Z'))
+    let { db, updateSpy } = buildDb({ existing: own(), owners: ['own-1'] })
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(req({ status: 'cancelled' }), PROPS)
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toMatch(/ended on 2026-06-02/)
+    expect(updateSpy).not.toHaveBeenCalled()
+
+    vi.setSystemTime(new Date('2026-06-02T10:00:00Z'))
+    ;({ db, updateSpy } = buildDb({ existing: own(), owners: ['own-1'] }))
+    createServerClient.mockReturnValue(db)
+    expect((await PUT(req({ status: 'cancelled' }), PROPS)).status).toBe(200)
+    expect(updateSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('a lost race (the guarded UPDATE touched no row): an ask that is now open is a success, anything else is a 409', async () => {
+    getCurrentUser.mockResolvedValue(at('me', 'manager'))
+    let { db } = buildDb({ existing: own(), owners: ['own-1'], askMatches: false, reread: own(OPEN) })
+    createServerClient.mockReturnValue(db)
+    let res = await PUT(req({ status: 'cancelled' }), PROPS)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ cancellation: 'requested', already_requested: true })
+    expect(notifyUsersOnce).not.toHaveBeenCalled()
+
+    ;({ db } = buildDb({ existing: own(), owners: ['own-1'], askMatches: false, reread: own({ status: 'cancelled' }) }))
+    createServerClient.mockReturnValue(db)
+    res = await PUT(req({ status: 'cancelled' }), PROPS)
+    expect(res.status).toBe(409)
+    expect(notifyUsersOnce).not.toHaveBeenCalled()
+  })
+
+  it('a failed notice never fails the ask', async () => {
+    getCurrentUser.mockResolvedValue(at('me', 'manager'))
+    notifyUsersOnce.mockImplementationOnce(() => Promise.reject(new Error('expo down')))
+    const { db } = buildDb({ existing: own(), owners: ['own-1'] })
+    createServerClient.mockReturnValue(db)
+    expect((await PUT(req({ status: 'cancelled' }), PROPS)).status).toBe(200)
+  })
+
+  it('the side door is shut: a manager cannot put their own approved leave back to pending', async () => {
+    getCurrentUser.mockResolvedValue(at('me', 'manager'))
+    const { db, updateSpy } = buildDb({ existing: own() })
+    createServerClient.mockReturnValue(db)
+    expect((await PUT(req({ status: 'pending' }), PROPS)).status).toBe(403)
+    expect(updateSpy).not.toHaveBeenCalled()
+  })
+
+  it('a colleague\'s approved leave is unchanged by this rule: a manager there still cancels it directly', async () => {
+    getCurrentUser.mockResolvedValue(at('other-mgr', 'manager'))
+    const { db, updateSpy } = buildDb({ existing: own() })
+    createServerClient.mockReturnValue(db)
+    expect((await PUT(req({ status: 'cancelled' }), PROPS)).status).toBe(200)
+    expect(updateSpy.mock.calls[0][0]).toMatchObject({ status: 'cancelled' })
   })
 })
