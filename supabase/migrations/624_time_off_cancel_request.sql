@@ -3,7 +3,15 @@
 --
 -- NOT APPLIED YET. Apply BEFORE the code that depends on it deploys: the new
 -- PUT branch and POST/DELETE /api/schedule/time-off/[id]/cancel-request write
--- these columns, and GET /api/schedule/time-off reads them through `*`.
+-- these columns; GET /api/schedule/time-off reads them through `*` AND embeds
+-- `cancel_decider:profiles!cancel_decided_by(id, full_name)`, which needs the
+-- cancel_decided_by FK this file creates (without it PostgREST refuses the
+-- embed hint, PGRST200); and the Leave cancellations approvals provider
+-- filters on cancel_requested_at / cancel_decided_at. Each of those readers
+-- falls back or answers empty, and logs, when the columns are missing (a
+-- Vercel preview of this branch runs against prod before the apply), so an
+-- ordering slip turns the new feature off rather than the leave list. It is
+-- still a slip: apply first.
 -- Behaviour is proven ahead of apply by a PGlite replay
 -- (tests/migration-624-time-off-cancel-request.test.js), which installs the
 -- mig 011/616 allowance trigger and the mig 600 policies, runs this file
@@ -110,14 +118,18 @@
 -- ─────────────────────────────────────────────────────────────────────────
 -- PRE-APPLY CHECKS (read-only)
 -- ─────────────────────────────────────────────────────────────────────────
--- STATE ON 21 SEP 2026 (read on prod, read-only, by the reviewer of this PR;
--- re-run them if the apply is not the same week): (a) no cancel_* columns;
--- (b) trg_update_holiday_allowance is enabled, AFTER UPDATE, and the live
--- update_holiday_allowance() body is mig 616's minus one comment line;
--- (c) every anon/authenticated grant on time_off_requests has grantor
--- `postgres` and the table owner is `postgres`, so this file's REVOKE removes
--- them; (d) the three policies are exactly the ones named below. 9 approved
--- leave rows are still in the future, none with an ask (the columns are new).
+-- LAST OBSERVED 21 SEP 2026. These read-only queries were run by the session
+-- orchestrating this PR, through the Supabase MCP, against project
+-- iyvtbjjxdggiadzwwvdj. (The branch's code reviewer touched no database.)
+-- What they showed then: (a) no cancel_* columns; (b)
+-- trg_update_holiday_allowance enabled, AFTER UPDATE, and the live
+-- update_holiday_allowance() body equal to mig 616's minus one comment line;
+-- (c) every anon/authenticated grant on time_off_requests with grantor
+-- `postgres`, and the table owner `postgres`, so this file's REVOKE removes
+-- them; (d) exactly the three policies named below. 9 approved leave rows
+-- were still in the future.
+-- State drifts: whoever applies this file RE-RUNS (a) to (d) IMMEDIATELY
+-- BEFORE applying, and stops if any answer differs from "Expected".
 --
 -- (a) The columns do not exist yet and the number is free:
 --       SELECT column_name FROM information_schema.columns
