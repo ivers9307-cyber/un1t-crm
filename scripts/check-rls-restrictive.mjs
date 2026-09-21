@@ -114,10 +114,11 @@ const coversSelect = (cmd) => cmd === 'ALL' || cmd === 'SELECT'
 
 // Exported for tests/rls-active-staff-gate.test.js (RLSACTIVE.1), which
 // reads each policy's `body` (everything after `ON <table>`) to prove every
-// inline read of a profile table carries the active-staff gate.
-export function netPolicyState (migDir = MIG_DIR) {
+// inline read of a profile table carries the active-staff gate. `before`
+// replays only migrations numbered below it (the state a migration lands on).
+export function netPolicyState (migDir = MIG_DIR, { before = Infinity } = {}) {
   const files = fs.readdirSync(migDir)
-    .filter((f) => f.endsWith('.sql'))
+    .filter((f) => f.endsWith('.sql') && (before === Infinity || parseInt(f, 10) < before))
     .sort((a, b) => {
       const na = parseInt(a, 10)
       const nb = parseInt(b, 10)
