@@ -35,13 +35,25 @@
 import { viewerActiveLocationId, canApproveAtActiveLocation } from '../registry'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { getLocationMemberIds, leaveScopeOrFilter } from '@/lib/time-off-leave'
-import { applyOpenCancelAskFilter, LEAVE_CANCEL_DECIDER_ROLES } from '@/lib/time-off-cancel'
+import { applyOpenCancelAskFilter, LEAVE_CANCEL_DECIDER_ROLES, isMissingCancelSchemaError } from '@/lib/time-off-cancel'
+import { logError } from '@/lib/log'
 import { timeOffLeaveLabel } from '@shared/time-off'
 
 async function scopeFilter(db, activeId) {
   const { ids, error } = await getLocationMemberIds(db, [activeId])
   if (error) throw new Error(`profile_locations: ${error.message}`)
   return leaveScopeOrFilter([activeId], ids)
+}
+
+// LEAVECANCEL.1 — before mig 624 is applied (a Vercel preview of the branch,
+// an ordering slip) the open-ask filter names columns Postgres does not have.
+// The registry would score a throwing provider 0 in the COUNT without a word,
+// and log a bare warning in the LIST; this category instead answers empty and
+// says why, at error level. Any other error still throws.
+function missingSchema(error, where) {
+  if (!isMissingCancelSchemaError(error)) return false
+  logError('approvals', `mig 624 (time_off_requests cancel_* columns) is not applied; the Leave cancellations ${where} is empty`, { err: error })
+  return true
 }
 
 // Master, or OWNER at the active studio (canApproveAtActiveLocation handles both).
@@ -82,6 +94,7 @@ export const timeOffCancellationsProvider = {
       .limit(50)
 
     const { data, error } = await q
+    if (error && missingSchema(error, 'queue')) return { count: 0, items: [] }
     if (error) throw new Error(`time_off_requests (cancellations): ${error.message}`)
 
     const items = (data || []).map((r) => ({
@@ -111,6 +124,7 @@ export const timeOffCancellationsProvider = {
       dublinTodayStr(),
     )
     const { count, error } = await q
+    if (error && missingSchema(error, 'count')) return 0
     if (error) throw new Error(`time_off_requests (cancellations) count: ${error.message}`)
     return count || 0
   },

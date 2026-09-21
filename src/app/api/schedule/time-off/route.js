@@ -12,7 +12,8 @@ import {
   countLeaveClashes, findLeaveClashes, chargeableLeaveSegments, findOwnPublishedShifts, isRealIsoDate,
   getLocationIdsByProfile,
 } from '@/lib/time-off-leave'
-import { annotateCancelAsk } from '@/lib/time-off-cancel'
+import { annotateCancelAsk, isMissingCancelSchemaError, CANCEL_ASK_OFF } from '@/lib/time-off-cancel'
+import { logError } from '@/lib/log'
 import {
   isTimeOffTypeAllowedFor, RESTRICTED_TYPE_ERROR, isExpiredPendingRequest, effectiveTimeOffStatus,
 } from '@shared/time-off'
@@ -57,14 +58,9 @@ export async function GET(request) {
   const profileId = searchParams.get('profile_id')
   const db = createServerClient()
 
-  let query = db.from('time_off_requests')
-    .select(`
-      *,
-      profiles!profile_id(id, full_name, avatar_url, role),
-      reviewer:profiles!reviewed_by(id, full_name),
-      cancel_decider:profiles!cancel_decided_by(id, full_name)
-    `)
-    .order('start_date', { ascending: true })
+  // Every filter is recorded, then applied to whichever select is sent, so the
+  // pre-624 retry below can never be a DIFFERENT (wider) read than the first.
+  const filters = []
 
   // ROSTER-FIX.2 — anyone who is not a manager sees only their own requests.
   // SCHEDROLES.1 — "manager" is judged PER STUDIO (hasRoleAtLocation), never
@@ -81,7 +77,7 @@ export async function GET(request) {
   if (scopeIds.length === 0) return NextResponse.json({ success: true, data: [] })
   const managedIds = scopeIds.filter((id) => hasRoleAtLocation(user, id, MANAGER_ROLES))
   if (managedIds.length === 0) {
-    query = query.eq('profile_id', user.id)
+    filters.push((q) => q.eq('profile_id', user.id))
   } else {
     // Fail closed: an unreadable member list must not silently narrow a
     // manager's view to "filed here" (that is the bug this fixes).
@@ -89,8 +85,9 @@ export async function GET(request) {
     if (membersError) {
       return NextResponse.json({ success: false, error: membersError.message }, { status: 500 })
     }
-    query = query.or(`${leaveScopeOrFilter(managedIds, memberIds)},profile_id.eq.${user.id}`)
-    if (profileId) query = query.eq('profile_id', profileId)
+    const scope = `${leaveScopeOrFilter(managedIds, memberIds)},profile_id.eq.${user.id}`
+    filters.push((q) => q.or(scope))
+    if (profileId) filters.push((q) => q.eq('profile_id', profileId))
   }
 
   // LEAVE.2 — a pending request whose last day has passed is EXPIRED
@@ -98,18 +95,56 @@ export async function GET(request) {
   // means "still decidable" and drops them; `expired` asks for exactly them.
   const today = dublinTodayStr()
   if (status === 'expired') {
-    query = query.eq('status', 'pending').lt('end_date', today)
+    filters.push((q) => q.eq('status', 'pending').lt('end_date', today))
   } else if (status === 'pending') {
-    query = query.eq('status', 'pending').gte('end_date', today)
+    filters.push((q) => q.eq('status', 'pending').gte('end_date', today))
   } else if (status) {
-    query = query.eq('status', status)
+    filters.push((q) => q.eq('status', status))
   }
 
   // Date range filter — show requests that overlap with the given range
-  if (startDate) query = query.lte('start_date', endDate || startDate)
-  if (endDate) query = query.gte('end_date', startDate || endDate)
+  if (startDate) filters.push((q) => q.lte('start_date', endDate || startDate))
+  if (endDate) filters.push((q) => q.gte('end_date', startDate || endDate))
 
-  const { data, error } = await query
+  // LEAVECANCEL.1 — `cancel_decider` is an embed through mig 624's
+  // cancel_decided_by FK; the second read is the list as it was before that
+  // migration, used ONLY when it is missing (below). Both selects are written
+  // inline on purpose: check:select-columns only reads a literal .select() on
+  // a .from() chain, and a shared constant hid them from it (probed).
+  const listQuery = (withCancelDecider) => filters.reduce(
+    (q, apply) => apply(q),
+    withCancelDecider
+      ? db.from('time_off_requests')
+        .select(`
+          *,
+          profiles!profile_id(id, full_name, avatar_url, role),
+          reviewer:profiles!reviewed_by(id, full_name),
+          cancel_decider:profiles!cancel_decided_by(id, full_name)
+        `)
+        .order('start_date', { ascending: true })
+      : db.from('time_off_requests')
+        .select(`
+          *,
+          profiles!profile_id(id, full_name, avatar_url, role),
+          reviewer:profiles!reviewed_by(id, full_name)
+        `)
+        .order('start_date', { ascending: true }),
+  )
+
+  let { data, error } = await listQuery(true)
+  // LEAVECANCEL.1 — code reaches prod before its migration whenever a Vercel
+  // preview of this branch runs, or on an ordering slip. Without mig 624,
+  // PostgREST refuses the cancel_decider hint (PGRST200) and this GET used to
+  // answer 400 to EVERY reader of leave (the Time Off page, the roster's
+  // approved-leave read, the phone's My leave, Schedule and Studio tabs). That
+  // one error class, and only that one, retries ONCE with the pre-624 read and
+  // turns the new feature off for the answer; it is logged at error level
+  // because it is still a slip. Any other error is the 400 it always was.
+  const cancelSchemaMissing = !!error && isMissingCancelSchemaError(error)
+  if (cancelSchemaMissing) {
+    logError('time-off', 'mig 624 (time_off_requests cancel_* columns) is not applied; the leave list is served without cancellation requests', { err: error })
+    ;({ data, error } = await listQuery(false))
+  }
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
 
   let rows = (data || []).map((r) => ({
@@ -126,7 +161,9 @@ export async function GET(request) {
   // studios, read only for colleagues' rows that carry an undecided ask (a
   // handful at most). Unreadable memberships only ever NARROW: the row keeps
   // its filed-at studio, and an owner there still sees their button.
-  const askedByOthers = rows.filter((r) => r.cancel_requested_at && !r.cancel_decided_at && r.profile_id !== user.id)
+  // Without mig 624 there is no ask to show and none to make: every row gets
+  // CANCEL_ASK_OFF, so no screen offers a button whose write would fail.
+  const askedByOthers = cancelSchemaMissing ? [] : rows.filter((r) => r.cancel_requested_at && !r.cancel_decided_at && r.profile_id !== user.id)
   let studiosByProfile = new Map()
   if (askedByOthers.length > 0) {
     const { byProfile, error: memberError } = await getLocationIdsByProfile(db, askedByOthers.map((r) => r.profile_id))
@@ -134,9 +171,12 @@ export async function GET(request) {
     else studiosByProfile = byProfile
   }
   const ownStudios = getUserLocationIds(user)
+  const nowMs = Date.now()
   rows = rows.map((r) => ({
     ...r,
-    ...annotateCancelAsk(r, user, today, r.profile_id === user.id ? ownStudios : studiosByProfile.get(r.profile_id) || []),
+    ...(cancelSchemaMissing
+      ? CANCEL_ASK_OFF
+      : annotateCancelAsk(r, user, today, r.profile_id === user.id ? ownStudios : studiosByProfile.get(r.profile_id) || [], nowMs)),
   }))
 
   // LEAVE.2 — `with_clashes=1` (the Time Off page) adds how many live shifts

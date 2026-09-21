@@ -5,6 +5,7 @@ import {
   isOpenCancelAsk, cancelAskState, selfCancelMode, canDecideLeaveCancel, leaveActingLocationIds,
   resolveLeaveCancelDeciderIds, annotateCancelAsk, cancelAskEventKey,
   cancelAskNoticeKey, reAskBlockedUntil, CLEARED_CANCEL_ASK,
+  isMissingCancelSchemaError, CANCEL_ASK_OFF,
 } from './time-off-cancel.js'
 import { LEAVE_CANCEL_NOTICES, cancelledAtRequestText } from './time-off-cancel-copy.js'
 import { fakeDb, queriesOf } from './time-off.test-helpers.js'
@@ -241,5 +242,39 @@ describe('copy shared by the Time Off page and the dashboard card', () => {
     expect(cancelledAtRequestText({ ...row, cancel_decider: null }, { own: true })).toBe('Cancelled at your request, approved by an owner.')
     expect(cancelledAtRequestText({ status: 'cancelled', cancel_decision: null }, { own: true })).toBeNull()
     expect(cancelledAtRequestText({ status: 'approved', cancel_decision: 'rejected' }, { own: true })).toBeNull()
+  })
+})
+
+// LEAVECANCEL.1 (review) — code that reaches prod before mig 624 does (a
+// Vercel preview of this branch, or an ordering slip) must turn the NEW feature
+// off, not break the leave list. These are the exact shapes PostgREST and
+// Postgres answer when the cancel_* columns / FK are not there.
+describe('isMissingCancelSchemaError', () => {
+  it('PGRST200: the cancel_decider embed hint names a relationship that does not exist yet', () => {
+    expect(isMissingCancelSchemaError({
+      code: 'PGRST200',
+      message: "Could not find a relationship between 'time_off_requests' and 'profiles' in the schema cache",
+      details: "Searched for a foreign key relationship between 'time_off_requests' and 'profiles' using the hint 'cancel_decided_by' in the schema 'public', but no matches were found.",
+    })).toBe(true)
+  })
+  it('42703: a filter, order or select on a cancel_* column Postgres does not have', () => {
+    expect(isMissingCancelSchemaError({ code: '42703', message: 'column time_off_requests.cancel_requested_at does not exist' })).toBe(true)
+  })
+  it('PGRST204: a write naming a cancel_* column PostgREST has never heard of', () => {
+    expect(isMissingCancelSchemaError({ code: 'PGRST204', message: "Could not find the 'cancel_decided_at' column of 'time_off_requests' in the schema cache" })).toBe(true)
+  })
+  it('the same codes about ANYTHING ELSE are not this, and neither is any other error', () => {
+    expect(isMissingCancelSchemaError({ code: 'PGRST200', message: "Could not find a relationship between 'time_off_requests' and 'profiles'", details: "using the hint 'reviewed_by'" })).toBe(false)
+    expect(isMissingCancelSchemaError({ code: '42703', message: 'column time_off_requests.reason does not exist' })).toBe(false)
+    expect(isMissingCancelSchemaError({ code: '57014', message: 'canceling statement due to statement timeout, cancel_requested_at' })).toBe(false)
+    expect(isMissingCancelSchemaError(null)).toBe(false)
+    expect(isMissingCancelSchemaError({ message: 'cancel_requested_at' })).toBe(false)
+  })
+  it('CANCEL_ASK_OFF is the annotation for a row when the feature is not there: nothing offered, nothing waiting', () => {
+    expect(CANCEL_ASK_OFF).toEqual({
+      cancel_request_state: null, can_request_cancel: false, cancel_needs_owner: false,
+      can_withdraw_cancel: false, can_decide_cancel: false, cancel_retry_after: null, cancel_retry_after_label: null,
+    })
+    expect(Object.isFrozen(CANCEL_ASK_OFF)).toBe(true)
   })
 })

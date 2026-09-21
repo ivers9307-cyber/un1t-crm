@@ -194,6 +194,29 @@ export const CLEARED_CANCEL_ASK = Object.freeze({
   cancel_decided_at: null, cancel_decided_by: null, cancel_decision: null, cancel_decision_note: null,
 })
 
+// LEAVECANCEL.1 — the error class "mig 624 is not applied here". Code reaches
+// prod before its migration whenever a Vercel PREVIEW of the branch runs, or
+// on an ordering slip, and then:
+//   PGRST200  PostgREST cannot find the relationship an embed hint names
+//             (cancel_decider:profiles!cancel_decided_by: the FK is mig 624's)
+//   42703     Postgres undefined_column (a filter/order/select on cancel_*)
+//   PGRST204  PostgREST's schema cache has no such column (a write of cancel_*)
+// The CODE alone is not enough: the same codes mean a real bug anywhere else,
+// and must stay errors. So the error text must also name a cancel_* column;
+// PostgREST puts the hint in `details` for PGRST200, the column in `message`
+// for the other two.
+const MISSING_SCHEMA_CODES = new Set(['PGRST200', '42703', 'PGRST204'])
+export function isMissingCancelSchemaError(err) {
+  if (!err || !MISSING_SCHEMA_CODES.has(err.code)) return false
+  return /\bcancel_(requested|decided|decision|request)/.test(`${err.message || ''} ${err.details || ''} ${err.hint || ''}`)
+}
+
+/** Annotations for a row when the feature is not there (pre-mig 624): nothing offered, nothing waiting. */
+export const CANCEL_ASK_OFF = Object.freeze({
+  cancel_request_state: null, can_request_cancel: false, cancel_needs_owner: false,
+  can_withdraw_cancel: false, can_decide_cancel: false, cancel_retry_after: null, cancel_retry_after_label: null,
+})
+
 export function leaveRangeText(row) {
   return row.start_date === row.end_date ? row.start_date : `${row.start_date} to ${row.end_date}`
 }

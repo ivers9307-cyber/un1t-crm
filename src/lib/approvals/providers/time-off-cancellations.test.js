@@ -5,6 +5,10 @@
 // refuse them.
 
 import { describe, it, expect, vi, afterEach } from 'vitest'
+
+// Observed: before mig 624 the provider must LOG that the columns are missing.
+vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
+const { logError } = await import('@/lib/log')
 // The registry FIRST, as every real caller does. Providers import helpers from
 // '../registry' and the registry imports the providers; entering that cycle
 // through a provider leaves the registry's list holding `undefined` for it.
@@ -167,5 +171,48 @@ describe('through the registry: the tab and the badge agree, per role', () => {
   it('follows bundle_team like the rest of the scheduling reviews', async () => {
     freeze()
     expect(await keysFor(at('own', 'owner', 'staff', { bundle_team: false }))).not.toContain('time_off_cancellations')
+  })
+})
+
+// LEAVECANCEL.1 (review) — before mig 624 is applied (a Vercel preview of the
+// branch, an ordering slip) the open-ask filter names columns Postgres does not
+// have (42703). The owner's approvals count and queue must lose THIS category,
+// loudly, and nothing else. The registry already scores a throwing provider 0
+// in the count, but silently; and in the list it logs a bare warning.
+describe('timeOffCancellationsProvider — before mig 624 is applied', () => {
+  const MISSING = { code: '42703', message: 'column time_off_requests.cancel_requested_at does not exist' }
+  const broken = (error) => fakeDb((q) => {
+    if (q.table === 'profile_locations') return { data: [{ profile_id: 'mgr', location_id: 'loc-1' }], error: null }
+    if (q.table === 'time_off_requests') return { data: null, count: null, error }
+    return { data: [], count: 0, error: null }
+  })
+
+  it('fetchPending and countPending answer empty / 0 and log it at error level', async () => {
+    freeze()
+    logError.mockClear()
+    expect(await timeOffCancellationsProvider.fetchPending(broken(MISSING), OWNER)).toEqual({ count: 0, items: [] })
+    expect(await timeOffCancellationsProvider.countPending(broken(MISSING), OWNER)).toBe(0)
+    expect(logError).toHaveBeenCalledTimes(2)
+    expect(logError.mock.calls[0][1]).toMatch(/mig 624/)
+    expect(logError.mock.calls[0][2]).toMatchObject({ err: { code: '42703' } })
+  })
+
+  it('the rest of the approvals count is untouched', async () => {
+    freeze()
+    const d = fakeDb((q) => {
+      if (q.table === 'profile_locations') return { data: [{ profile_id: 'mgr', location_id: 'loc-1' }], error: null }
+      const openAsk = q.table === 'time_off_requests' && q.calls.some(([op, col]) => op === 'not' && col === 'cancel_requested_at')
+      if (openAsk) return { data: null, count: null, error: MISSING }
+      // Ordinary pending leave still counts.
+      if (q.table === 'time_off_requests') return { data: [], count: 2, error: null }
+      return { data: [], count: 0, error: null }
+    })
+    expect(await getPendingApprovalsCount(d, OWNER)).toBe(2)
+  })
+
+  it('any OTHER error still throws, exactly as before (the registry decides what to do with it)', async () => {
+    freeze()
+    await expect(timeOffCancellationsProvider.countPending(broken({ code: '57014', message: 'timeout' }), OWNER)).rejects.toThrow(/timeout/)
+    await expect(timeOffCancellationsProvider.fetchPending(broken({ code: '57014', message: 'timeout' }), OWNER)).rejects.toThrow(/timeout/)
   })
 })

@@ -13,7 +13,9 @@ import { isExpiredPendingRequest, isTimeOffTypeAllowedFor, timeOffLeaveLabel } f
 import {
   selfCancelMode, isOpenCancelAsk, leaveActingLocationIds, resolveLeaveCancelDeciderIds,
   cancelAskNoticeKey, reAskBlockedUntil, leaveRangeText, CLEARED_CANCEL_ASK,
+  isMissingCancelSchemaError,
 } from '@/lib/time-off-cancel'
+import { logError } from '@/lib/log'
 
 const TimeOffReviewSchema = z.object({
   status: timeOffStatusSchema,
@@ -327,6 +329,16 @@ async function requestOwnLeaveCancel(db, user, existing, { today, requesterLocat
     // Never on top of an ask that is still waiting.
     .or('cancel_requested_at.is.null,cancel_decided_at.not.is.null')
     .select(REQUEST_WITH_PEOPLE)
+  // Before mig 624 is applied (a Vercel preview, an ordering slip) the columns
+  // are not there. The list hides the button then, so this is a stale screen
+  // or a hand-made call: say so plainly, log it loudly, tell nobody.
+  if (error && isMissingCancelSchemaError(error)) {
+    logError('time-off', 'mig 624 (time_off_requests cancel_* columns) is not applied; a request to cancel approved leave was refused', { err: error, requestId: existing.id })
+    return NextResponse.json({
+      success: false,
+      error: 'Asking an owner to cancel approved leave is not available yet, so nothing was changed. Your leave is still approved.',
+    }, { status: 503 })
+  }
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
 
   // A zero-row UPDATE is not an error in PostgREST: the row moved between the

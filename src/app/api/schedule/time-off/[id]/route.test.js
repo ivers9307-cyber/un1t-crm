@@ -24,12 +24,14 @@ vi.mock('@/lib/auth', async (importOriginal) => {
 })
 vi.mock('@/lib/permissions', () => ({ hasPermissionForLocation: vi.fn(() => true) }))
 vi.mock('@/lib/push-dedup', () => ({ notifyUsersOnce: vi.fn(() => Promise.resolve()) }))
+vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
 
 const { createServerClient } = await import('@/lib/supabase')
 const { getCurrentUser } = await import('@/lib/auth')
 const { hasPermissionForLocation } = await import('@/lib/permissions')
 const { notifyUsersOnce } = await import('@/lib/push-dedup')
 const { after } = await import('next/server')
+const { logError } = await import('@/lib/log')
 const { PUT } = await import('./route.js')
 const { fakeDb, queriesOf, resolveLocations, scopedAssignments, locationScopeOf } = await import('@/lib/time-off.test-helpers')
 
@@ -56,6 +58,8 @@ function buildDb({
   ownersError = null,
   reread = null,
   askMatches = true,
+  // What the guarded ask UPDATE answers when it fails.
+  askError = null,
   // What the status PUT's .single() UPDATE answers when it fails.
   updateError = null,
   readError = null,
@@ -78,6 +82,7 @@ function buildDb({
       // The status PUT ends in .single(); the guarded ask UPDATE returns the
       // rows it touched, and a zero-row UPDATE is [] with no error.
       if (q.terminal === 'single') return updateError ? { data: null, error: updateError } : { data: { ...existing, ...q.payload }, error: null }
+      if (askError) return { data: null, error: askError }
       return { data: askMatches ? [{ ...existing, ...q.payload }] : [], error: null }
     }
     if (q.table === 'profile_locations' && q.eq.role === 'owner') {
@@ -550,6 +555,39 @@ describe('PUT /api/schedule/time-off/[id] — cancelling your own APPROVED leave
     res = await PUT(req({ status: 'cancelled' }), PROPS)
     expect(res.status).toBe(409)
     expect(notifyUsersOnce).not.toHaveBeenCalled()
+  })
+
+  // LEAVECANCEL.1 (review) — before mig 624 is applied (a Vercel preview, an
+  // ordering slip) the ask write names columns PostgREST does not have. The
+  // list GET hides the button then (CANCEL_ASK_OFF), so this is a stale screen
+  // or a hand-made request: a clear message, a loud log, and nobody told.
+  it('before mig 624: the ask write is refused plainly (503), logged, and nobody is told', async () => {
+    getCurrentUser.mockResolvedValue(at('me', 'manager'))
+    logError.mockClear()
+    const { db } = buildDb({
+      existing: own(), owners: ['own-1'],
+      askError: { code: 'PGRST204', message: "Could not find the 'cancel_decided_at' column of 'time_off_requests' in the schema cache" },
+    })
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(req({ status: 'cancelled' }), PROPS)
+    expect(res.status).toBe(503)
+    const json = await res.json()
+    expect(json.error).toMatch(/not available yet/)
+    expect(json.error).toMatch(/still approved/)
+    expect(json.error).not.toMatch(/schema cache|—/)
+    expect(logError).toHaveBeenCalledTimes(1)
+    expect(logError.mock.calls[0][1]).toMatch(/mig 624/)
+    expect(notifyUsersOnce).not.toHaveBeenCalled()
+    expect(after).not.toHaveBeenCalled()
+  })
+
+  it('...while any other failed ask write is still the 400 it was', async () => {
+    getCurrentUser.mockResolvedValue(at('me', 'manager'))
+    const { db } = buildDb({ existing: own(), owners: ['own-1'], askError: { code: '57014', message: 'timeout' } })
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(req({ status: 'cancelled' }), PROPS)
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toBe('timeout')
   })
 
   it('a failed notice never fails the ask', async () => {
