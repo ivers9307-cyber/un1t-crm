@@ -515,6 +515,17 @@ describe('PUT /api/schedule/time-off/[id] — cancelling your own APPROVED leave
     expect(updateSpy).not.toHaveBeenCalled()
   })
 
+  it('re-approving leave whose cancellation an owner approved clears the old ask (mig 624\'s CHECK would refuse the row otherwise)', async () => {
+    getCurrentUser.mockResolvedValue(at('own-1', 'owner'))
+    const cancelled = own({ status: 'cancelled', ...OPEN, cancel_decided_at: '2026-05-19T12:00:00.000Z', cancel_decided_by: 'own-1', cancel_decision: 'approved' })
+    const { db, updateSpy } = buildDb({ existing: cancelled })
+    createServerClient.mockReturnValue(db)
+    expect((await PUT(req({ status: 'approved' }), PROPS)).status).toBe(200)
+    expect(updateSpy.mock.calls[0][0]).toMatchObject({
+      status: 'approved', cancel_requested_at: null, cancel_requested_by: null, cancel_decided_at: null, cancel_decided_by: null, cancel_decision: null,
+    })
+  })
+
   it('a colleague\'s approved leave is unchanged by this rule: a manager there still cancels it directly', async () => {
     getCurrentUser.mockResolvedValue(at('other-mgr', 'manager'))
     const { db, updateSpy } = buildDb({ existing: own() })

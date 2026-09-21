@@ -115,6 +115,18 @@ export async function PUT(request, props) {
 
   const updates = { status, updated_at: new Date().toISOString() }
 
+  // LEAVECANCEL.1 — mig 624 ties cancel_decision='approved' to
+  // status='cancelled' (a row may not claim an approved cancellation while in
+  // force). Moving such a row to any other status (an approver re-approving
+  // leave that was cancelled) would therefore be refused by the CHECK with a
+  // constraint error. The old cancellation goes with the old status instead.
+  if (status !== 'cancelled' && existing.cancel_decision === 'approved') {
+    Object.assign(updates, {
+      cancel_requested_at: null, cancel_requested_by: null, cancel_request_note: null,
+      cancel_decided_at: null, cancel_decided_by: null, cancel_decision: null, cancel_decision_note: null,
+    })
+  }
+
   // If approving or rejecting, record who did it
   if (status === 'approved' || status === 'rejected') {
     // APPROVALS-PERCAT.1 — permission is the only gate for the decision.

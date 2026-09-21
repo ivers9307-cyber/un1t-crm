@@ -261,6 +261,22 @@ describe('after 624', () => {
     })
   })
 
+  it('reviving leave whose cancellation was approved is refused UNLESS the old ask is cleared with it (the PUT does)', async () => {
+    await rolledBack(async () => {
+      await runSql(`UPDATE public.time_off_requests SET ${ASK} WHERE id = '${LEAVE}'`)
+      await runSql(`UPDATE public.time_off_requests SET status = 'cancelled', ${DECIDED('approved')} WHERE id = '${LEAVE}'`)
+      await runSql('SAVEPOINT s')
+      await expect(runSql(`UPDATE public.time_off_requests SET status = 'approved' WHERE id = '${LEAVE}'`)).rejects.toThrow(/cancel_approved_is_cancelled/)
+      await runSql('ROLLBACK TO SAVEPOINT s')
+      await runSql(`UPDATE public.time_off_requests SET status = 'approved',
+        cancel_requested_at = NULL, cancel_requested_by = NULL, cancel_request_note = NULL,
+        cancel_decided_at = NULL, cancel_decided_by = NULL, cancel_decision = NULL, cancel_decision_note = NULL WHERE id = '${LEAVE}'`)
+      expect((await leaveRow()).status).toBe('approved')
+      // approved -> cancelled refunded 3; cancelled -> approved charges them again.
+      expect(await usedDays(MANAGER)).toBe(3)
+    })
+  })
+
   describe('the CHECKs refuse a row that contradicts itself', () => {
     const refuses = (name, set, constraint) => it(name, async () => {
       await rolledBack(async () => {

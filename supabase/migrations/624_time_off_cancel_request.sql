@@ -59,6 +59,10 @@
 --   * cancel_decision='approved' on a row that is not cancelled (the approve
 --     UPDATE sets both at once, so a row claiming an approved cancellation
 --     while still in force is a forgery or a half-applied write).
+--     CONSEQUENCE, handled in the PUT and pinned by the replay: moving a row
+--     whose cancellation was APPROVED to any other status (an approver
+--     re-approving cancelled leave) must clear the seven columns in the same
+--     UPDATE, or this CHECK refuses it. No other writer moves a cancelled row.
 --
 -- FKs INTO profiles. Plain REFERENCES (NO ACTION), the same as `reviewed_by`
 -- (mig 011). A staff profile is never deleted (tombstoned instead, mig 622),
