@@ -10,7 +10,9 @@ import {
   getLocationMemberIds, getProfileLocationIds, leaveScopeOrFilter, canDecideTimeOff,
   resolveTimeOffApproverIds, getEmploymentType, getHolidayAllowance, ensureHolidayAllowanceRow,
   countLeaveClashes, findLeaveClashes, chargeableLeaveSegments, findOwnPublishedShifts, isRealIsoDate,
+  getLocationIdsByProfile,
 } from '@/lib/time-off-leave'
+import { annotateCancelAsk } from '@/lib/time-off-cancel'
 import {
   isTimeOffTypeAllowedFor, RESTRICTED_TYPE_ERROR, isExpiredPendingRequest, effectiveTimeOffStatus,
 } from '@shared/time-off'
@@ -113,6 +115,27 @@ export async function GET(request) {
     ...r,
     effective_status: effectiveTimeOffStatus(r, today),
     expired: isExpiredPendingRequest(r, today),
+  }))
+
+  // LEAVECANCEL.1 — a request to cancel APPROVED leave is columns on the row
+  // (mig 624), and the leave stays `approved` while it waits. Each row says
+  // where its ask stands and what THIS caller may do about it, judged by the
+  // same functions the routes re-judge with, so the screen never offers a
+  // button the server will refuse. Deciding depends on the requester's
+  // studios, read only for colleagues' rows that carry an undecided ask (a
+  // handful at most). Unreadable memberships only ever NARROW: the row keeps
+  // its filed-at studio, and an owner there still sees their button.
+  const askedByOthers = rows.filter((r) => r.cancel_requested_at && !r.cancel_decided_at && r.profile_id !== user.id)
+  let studiosByProfile = new Map()
+  if (askedByOthers.length > 0) {
+    const { byProfile, error: memberError } = await getLocationIdsByProfile(db, askedByOthers.map((r) => r.profile_id))
+    if (memberError) console.error('[time-off] memberships unreadable; cancel-request buttons use the filed-at studio only', memberError.message)
+    else studiosByProfile = byProfile
+  }
+  const ownStudios = getUserLocationIds(user)
+  rows = rows.map((r) => ({
+    ...r,
+    ...annotateCancelAsk(r, user, today, r.profile_id === user.id ? ownStudios : studiosByProfile.get(r.profile_id) || []),
   }))
 
   // LEAVE.2 — `with_clashes=1` (the Time Off page) adds how many live shifts

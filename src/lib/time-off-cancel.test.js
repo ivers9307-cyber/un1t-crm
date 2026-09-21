@@ -158,7 +158,7 @@ describe('resolveLeaveCancelDeciderIds', () => {
 describe('annotateCancelAsk — what the list tells the screen', () => {
   it('the requester of an open ask may withdraw it and nothing else', () => {
     expect(annotateCancelAsk(asked(), MANAGER, TODAY, ['loc-1'])).toEqual({
-      cancel_request_state: 'open', can_request_cancel: false, can_withdraw_cancel: true, can_decide_cancel: false,
+      cancel_request_state: 'open', can_request_cancel: false, cancel_needs_owner: false, can_withdraw_cancel: true, can_decide_cancel: false,
     })
   })
 
@@ -168,7 +168,7 @@ describe('annotateCancelAsk — what the list tells the screen', () => {
 
   it('another manager sees that it is open and can do nothing about it', () => {
     expect(annotateCancelAsk(asked(), OTHER_MANAGER, TODAY, ['loc-1'])).toEqual({
-      cancel_request_state: 'open', can_request_cancel: false, can_withdraw_cancel: false, can_decide_cancel: false,
+      cancel_request_state: 'open', can_request_cancel: false, cancel_needs_owner: false, can_withdraw_cancel: false, can_decide_cancel: false,
     })
   })
 
@@ -177,6 +177,11 @@ describe('annotateCancelAsk — what the list tells the screen', () => {
     const declined = asked({ cancel_decided_at: '2026-09-20T10:00:00Z', cancel_decision: 'rejected' })
     expect(annotateCancelAsk(declined, MANAGER, TODAY, ['loc-1'])).toMatchObject({ cancel_request_state: 'rejected', can_request_cancel: true })
     expect(annotateCancelAsk(leave(), COACH, TODAY, ['loc-1']).can_request_cancel).toBe(false)
+  })
+
+  it('says whether the button asks an owner (manager tier) or cancels outright (a master)', () => {
+    expect(annotateCancelAsk(leave(), MANAGER, TODAY, ['loc-1'])).toMatchObject({ can_request_cancel: true, cancel_needs_owner: true })
+    expect(annotateCancelAsk(leave(), { ...MASTER, id: 'mgr' }, TODAY, [])).toMatchObject({ can_request_cancel: true, cancel_needs_owner: false })
   })
 })
 

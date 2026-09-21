@@ -94,6 +94,9 @@ export function annotateCancelAsk(row, user, todayIso, requesterLocationIds = []
     // 'direct' counts: a master's own approved leave gets the same button, and
     // the PUT's answer says which of the two happened.
     can_request_cancel: !open && (mode === 'ask' || mode === 'direct'),
+    // true = the button ASKS an owner; false with can_request_cancel = a
+    // master, whose cancel is immediate. The screen words its confirm from it.
+    cancel_needs_owner: !open && mode === 'ask',
     can_withdraw_cancel: open && isSelf,
     can_decide_cancel: open && canDecideLeaveCancel(user, row, requesterLocationIds),
   }

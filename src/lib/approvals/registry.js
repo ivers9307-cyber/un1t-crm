@@ -48,6 +48,7 @@
 import { contractorInvoicesProvider } from './providers/contractor-invoices'
 import { fteExpensesProvider } from './providers/fte-expenses'
 import { timeOffProvider } from './providers/time-off'
+import { timeOffCancellationsProvider } from './providers/time-off-cancellations'
 import { shiftSwapsProvider } from './providers/shift-swaps'
 import { rostersProvider } from './providers/rosters'
 import { invoicesQueueProvider } from './providers/invoices-queue'
@@ -75,6 +76,10 @@ export const APPROVALS_PROVIDERS = Object.freeze([
   // class-booking drafts). Time-sensitive, so they ride the badge.
   agentRequestsProvider,
   timeOffProvider,
+  // LEAVECANCEL.1 — requests to cancel APPROVED leave. Owner/master only
+  // (isVisible, role-based), and a separate key so the phone, which decides
+  // `time_off` items through the status PUT, never renders one.
+  timeOffCancellationsProvider,
   shiftSwapsProvider,
   rostersProvider,
   // HYROX-TC.2 — coach review of AI-generated Hyrox Training Club

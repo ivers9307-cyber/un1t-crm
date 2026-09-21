@@ -848,3 +848,46 @@ describe('GET /api/schedule/time-off?preview=1 — charged days + own published 
     expect(Array.isArray(json.data)).toBe(true)
   })
 })
+
+// LEAVECANCEL.1 — the list tells the screen where a cancellation request
+// stands and what THIS caller may do about it; the leave itself stays approved.
+describe('GET /api/schedule/time-off — cancel-request annotations (LEAVECANCEL.1)', () => {
+  const getReq = (qs = '') => ({ url: `http://x/api/schedule/time-off${qs}`, headers: { get: () => '' } })
+  const at = (id, role) => ({
+    id, role, profileRole: 'staff', activeLocation: { id: 'loc-1' },
+    locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': role },
+  })
+  const OPEN = { cancel_requested_at: '2026-09-16T09:00:00Z', cancel_requested_by: 'mgr', cancel_decided_at: null, cancel_decision: null }
+  const ROWS = [
+    { id: 'asked', profile_id: 'mgr', location_id: 'loc-1', status: 'approved', start_date: '2026-10-05', end_date: '2026-10-07', ...OPEN },
+    { id: 'plain', profile_id: 'mgr', location_id: 'loc-1', status: 'approved', start_date: '2026-11-02', end_date: '2026-11-03', cancel_requested_at: null, cancel_decided_at: null },
+  ]
+  const listDb = () => fakeDb((q) => {
+    if (q.table === 'profile_locations') return { data: [{ profile_id: 'mgr', location_id: 'loc-1' }], error: null }
+    return { data: ROWS, error: null }
+  })
+  const byId = async (user) => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-17T10:00:00Z'))
+    try {
+      getCurrentUser.mockResolvedValue(user)
+      createServerClient.mockReturnValue(listDb())
+      const json = await (await GET(getReq('?location_id=loc-1'))).json()
+      return Object.fromEntries(json.data.map((r) => [r.id, r]))
+    } finally {
+      vi.useRealTimers()
+    }
+  }
+
+  it('the requester: the asked row is still APPROVED, shows as open, and offers Withdraw; their other leave offers the ask', async () => {
+    const rows = await byId(at('mgr', 'manager'))
+    expect(rows.asked).toMatchObject({ status: 'approved', effective_status: 'approved', cancel_request_state: 'open', can_withdraw_cancel: true, can_request_cancel: false, can_decide_cancel: false })
+    expect(rows.plain).toMatchObject({ cancel_request_state: null, can_request_cancel: true, cancel_needs_owner: true, can_withdraw_cancel: false })
+  })
+
+  it('an owner may decide it; another manager sees it is open and is offered nothing', async () => {
+    expect((await byId(at('own', 'owner'))).asked).toMatchObject({ cancel_request_state: 'open', can_decide_cancel: true, can_withdraw_cancel: false })
+    const seenByManager = (await byId(at('mgr-2', 'manager'))).asked
+    expect(seenByManager).toMatchObject({ cancel_request_state: 'open', can_decide_cancel: false, can_withdraw_cancel: false, can_request_cancel: false })
+  })
+})
