@@ -34,7 +34,17 @@
 //     mobile_can_for AND which is SECURITY INVOKER (a DEFINER one reading a
 //     profile table is caught by the definer rule);
 //   * a view (views carry no policies; security_invoker views inherit the
-//     underlying tables' RLS, which this file does cover).
+//     underlying tables' RLS, which this file does cover);
+//   * a function whose `SECURITY DEFINER` is written AFTER its body (the
+//     definer flag is read from the header before `AS $$`);
+//   * a gate that sits in a nested sub-subquery, or inside an `OR`, within the
+//     SELECT that reads the table — the check is "the gate appears somewhere
+//     in that SELECT", not "the gate constrains every row it returns";
+//   * parentheses inside string literals (the group matcher ignores quotes).
+// OVER-FLAGS one valid shape, accepted because it fails closed:
+//   `(SELECT private.auth_is_active_staff()) AND EXISTS (SELECT … FROM
+//   profile_locations …)` — correct, but the gate is outside the SELECT that
+//   reads the table, so it is flagged; write the gate inside that SELECT.
 // Mig 626's own self-check covers the live catalog at apply time.
 
 import { describe, it, expect, afterAll } from 'vitest'

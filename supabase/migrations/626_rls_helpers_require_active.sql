@@ -151,8 +151,8 @@
 --     contracts_update            own-row branch (profile_id = auth.uid())
 --     policy_views_insert_own / policy_views_update_own
 --     time_off_requests INSERT ("Staff can create own time off") and the
---     own-pending branch of time_off_requests_update — both closed by mig 625
---     on another branch.
+--     own-pending branch of time_off_requests_update — both to be closed by
+--     mig 625 (LEAVEGUARD.1, PR #1749, not yet merged).
 --
 -- NEW BEHAVIOUR TO KNOW ABOUT
 --   * anon. A policy stores its functions by OID, so evaluating it checks
@@ -257,6 +257,8 @@
 --   and whitespace drift, verified cosmetic on 22 Sep. ANY normalised
 --   mismatch is a STOP: 626 would replace a body that is not the one it was
 --   written against.
+--   RUN ON PROD 22 Sep (read-only): all 21 normalised before-values below
+--   matched.
 --     helper                          normalised md5 before 626          (mig)
 --     auth_can_view_all_profiles      fe46c690ea4ac1297ebc0b4cec988c43  (105)
 --     auth_is_admin_at                3d6eb0863e8213743a4ee750f70a787e  (051)
@@ -395,7 +397,10 @@
 -- storage.objects and instagram_messages). The file sets lock_timeout = 3s
 -- right after BEGIN, so a long-running reader makes the apply ABORT rather
 -- than queue the app behind it. An abort ("canceling statement due to lock
--- timeout") means NOTHING was applied: re-run later.
+-- timeout") means NOTHING was applied: re-run later. The 3s limit is PER
+-- LOCK, and every lock already taken is HELD while the next one waits, so the
+-- app can still queue behind the apply for a few seconds at a time: apply in
+-- a quiet window.
 -- ─────────────────────────────────────────────────────────────────────────
 -- ROLE-PLAY (R) — run before AND after; ends in ROLLBACK. Replace <ID>.
 -- MCP execute_sql: `begin;` without `commit;` rolls back, and only the last
@@ -479,7 +484,9 @@ SET LOCAL lock_timeout = '3s';
 -- against these, so it detects drift instead of re-reading what this file
 -- just wrote.
 CREATE TEMP TABLE mig626_helpers_before ON COMMIT DROP AS
-SELECT p.oid, p.oid::regprocedure::text AS sig, p.prosecdef, p.provolatile, p.proconfig, p.proowner, p.proacl
+SELECT p.oid, p.oid::regprocedure::text AS sig,
+       coalesce(p.oid = to_regprocedure('private.is_owner()')::oid, false) AS is_is_owner,
+       p.prosecdef, p.provolatile, p.proconfig, p.proowner, p.proacl
   FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
  WHERE n.nspname = 'private'
    AND p.proname IN ('auth_is_master','auth_is_in_location','auth_is_owner_at','auth_is_admin_at',
@@ -1552,7 +1559,7 @@ BEGIN
     v_bad := v_bad || ('expected 22 pre-existing helpers, found ' || v_n);
   END IF;
   FOR r IN
-    SELECT b.sig, b.prosecdef AS b_def, p.prosecdef, b.provolatile AS b_vol, p.provolatile,
+    SELECT b.sig, b.is_is_owner, b.prosecdef AS b_def, p.prosecdef, b.provolatile AS b_vol, p.provolatile,
            b.proconfig AS b_cfg, p.proconfig, b.proowner AS b_own, p.proowner,
            b.proacl::text AS b_acl, p.proacl::text AS acl
       FROM mig626_helpers_before b
@@ -1560,9 +1567,9 @@ BEGIN
   LOOP
     IF r.prosecdef IS DISTINCT FROM r.b_def OR r.proowner IS DISTINCT FROM r.b_own
        OR r.acl IS DISTINCT FROM r.b_acl
-       OR (r.sig <> 'private.is_owner()' AND (r.provolatile IS DISTINCT FROM r.b_vol
+       OR (NOT r.is_is_owner AND (r.provolatile IS DISTINCT FROM r.b_vol
                                                OR r.proconfig IS DISTINCT FROM r.b_cfg))
-       OR (r.sig = 'private.is_owner()' AND (r.provolatile <> 's'
+       OR (r.is_is_owner AND (r.provolatile <> 's'
                                               OR r.proconfig IS DISTINCT FROM ARRAY['search_path=""'])) THEN
       v_bad := v_bad || ('catalog drift on ' || r.sig);
     END IF;
