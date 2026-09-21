@@ -7,6 +7,8 @@ import { MANAGER_ROLES } from '@/lib/schemas'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { timeOffTypesFor, defaultTimeOffTypeFor, leaveClashLabel, leaveClashPrompt } from '@shared/time-off'
 import Modal from '@/components/ui/Modal'
+// LEAVEDAYS.1 — what the form's "days requested" line says, and when.
+import { LEAVE_PREVIEW_DEBOUNCE_MS, leavePreviewRequest, leavePreviewFrom, leavePreviewState, leaveDaysView } from '@/lib/leave-days-preview'
 // ROSTER-FIX.6a — one failure shape and one banner across the schedule
 // screens, so no call site can quietly forget to check the response.
 import ScheduleErrorBanner from './schedule/ScheduleErrorBanner'
@@ -551,6 +553,39 @@ function TimeOffFormModal({ user, canRecordForOthers = false, allowance, onClose
     ? Math.max(1, Math.round((new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24)) + 1)
     : 0
 
+  // LEAVEDAYS.1 — `totalDays` above is a CALENDAR count. The server charges a
+  // holiday in working days (no weekends, bank holidays or studio closures —
+  // HOLIDAYLEAVE.1), so the line under the dates shows the server's number,
+  // from the preview the phone already uses (LEAVEPHONE.1), and judges
+  // "exceeds balance" on that alone. Asked for the studio this form POSTs to.
+  // The days depend on the studio and the dates, not the person, so this is
+  // right for an on-behalf request too; the preview's `clashes` are the
+  // CALLER's own shifts and are never read here.
+  const previewRequest = leavePreviewRequest({ type: effectiveType, startDate, endDate, locationId })
+  const previewKey = previewRequest?.key || null
+  const previewUrl = previewRequest?.url || null
+  // { key, known, days } — only ever shown for the key it was asked with.
+  const [previewResult, setPreviewResult] = useState(null)
+  useEffect(() => {
+    if (!previewUrl) return
+    // Date inputs fire on every change: wait for a pause, and let only the
+    // newest request speak. The abort covers the network; the flag covers a
+    // body that arrives anyway.
+    const controller = new AbortController()
+    const timer = setTimeout(() => {
+      readJson(previewUrl, { signal: controller.signal })
+        .then((res) => leavePreviewFrom(res), () => leavePreviewFrom(null))
+        .then((next) => {
+          if (!controller.signal.aborted) setPreviewResult({ key: previewKey, ...next })
+        })
+    }, LEAVE_PREVIEW_DEBOUNCE_MS)
+    return () => { clearTimeout(timer); controller.abort() }
+  }, [previewKey, previewUrl])
+  const daysView = leaveDaysView({
+    calendarDays: totalDays, preview: leavePreviewState(previewRequest, previewResult),
+    type: effectiveType, onBehalf, allowance, startDate, endDate,
+  })
+
   async function handleSubmit(e) {
     e.preventDefault()
     setError(null)
@@ -671,17 +706,19 @@ function TimeOffFormModal({ user, canRecordForOthers = false, allowance, onClose
             </div>
           </div>
 
-          {totalDays > 0 && (
+          {daysView && (
             <div className="text-sm text-un1t-subtle">
-              {totalDays} day{totalDays !== 1 ? 's' : ''} requested
-              {effectiveType === 'holiday' && allowance && !onBehalf && !allowance.not_applicable && (
+              {daysView.text}
+              {daysView.balance && (
                 <span className="ml-2">
-                  · {allowance.remaining} remaining
-                  {totalDays > allowance.remaining && (
+                  · {daysView.balance}
+                  {daysView.exceeds && (
                     <span className="text-red-700 ml-1">(exceeds balance)</span>
                   )}
                 </span>
               )}
+              {daysView.hint && <div className="text-xs text-un1t-muted mt-1">{daysView.hint}</div>}
+              {daysView.note && <div className="text-xs text-un1t-muted mt-1">{daysView.note}</div>}
             </div>
           )}
 
