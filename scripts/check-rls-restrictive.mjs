@@ -22,9 +22,10 @@
 // them; this script is what stops #17.
 //
 // Model: replay every migration in filename order, tracking CREATE /
-// DROP / ALTER POLICY (and DROP TABLE) to get the NET policy state — a
-// grep for CREATE POLICY is wrong, since several of these were dropped
-// and recreated along the way. Then flag any table where BOTH hold:
+// DROP / ALTER POLICY (TO / USING / WITH CHECK / RENAME TO), DROP TABLE
+// and ALTER TABLE … RENAME TO (a policy moves with its table) to get the
+// NET policy state — a grep for CREATE POLICY is wrong, since several of
+// these were dropped, recreated, altered or renamed along the way. Then flag any table where BOTH hold:
 //
 //   - a RESTRICTIVE policy with `USING (false)` whose command is ALL or
 //     SELECT and whose roles reach `authenticated` (directly or via
@@ -67,6 +68,10 @@ const RE_DROP = new RegExp(
   String.raw`\bDROP\s+POLICY\s+(?:IF\s+EXISTS\s+)?(${IDENT})\s+ON\s+(${TABLE})`, 'i')
 const RE_DROP_TABLE = new RegExp(
   String.raw`\bDROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(${TABLE})`, 'i')
+const RE_RENAME_TABLE = new RegExp(
+  String.raw`\bALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?(${TABLE})\s+RENAME\s+TO\s+(${IDENT})\s*$`, 'i')
+const RE_ALTER_POLICY = new RegExp(
+  String.raw`\bALTER\s+POLICY\s+(${IDENT})\s+ON\s+(${TABLE})([\s\S]*)`, 'i')
 
 function stripSql (text) {
   // Dollar-quoted bodies can contain semicolons and their own DDL; the
@@ -88,22 +93,57 @@ function normTable (s) {
   return parts.length === 1 ? `public.${parts[0]}` : parts.slice(-2).join('.')
 }
 
+// The parenthesised argument of a top-level `USING (…)` / `WITH CHECK (…)`
+// in a policy tail. Top level = paren depth 0 outside quotes, so a
+// `JOIN … USING (id)` inside the expression is never mistaken for it.
+function topLevelClause (tail, keyword) {
+  const kw = new RegExp(String.raw`^${keyword}\s*\(`, 'i')
+  let depth = 0
+  for (let i = 0; i < tail.length; i++) {
+    const ch = tail[i]
+    if (ch === "'") { i = tail.indexOf("'", i + 1); if (i < 0) return null; continue }
+    if (ch === '"') { i = tail.indexOf('"', i + 1); if (i < 0) return null; continue }
+    if (ch === '(') { depth++; continue }
+    if (ch === ')') { depth--; continue }
+    if (depth !== 0 || (i > 0 && /\w/.test(tail[i - 1]))) continue
+    const m = tail.slice(i).match(kw)
+    if (!m) continue
+    const start = i + m[0].length
+    let d = 1
+    for (let j = start; j < tail.length; j++) {
+      const c = tail[j]
+      if (c === "'") { j = tail.indexOf("'", j + 1); if (j < 0) return null; continue }
+      if (c === '"') { j = tail.indexOf('"', j + 1); if (j < 0) return null; continue }
+      if (c === '(') d++
+      else if (c === ')' && --d === 0) return tail.slice(start, j).trim()
+    }
+    return null
+  }
+  return null
+}
+
+function parseRoles (tail) {
+  const toMatch = tail.match(/(?:^|\s)TO\s+([\w",\s]+?)(?=\bUSING\b|\bWITH\b|$)/i)
+  return toMatch ? toMatch[1].split(',').map(normIdent).filter(Boolean) : null
+}
+
 function parseTail (body) {
   const permissive = /\bAS\s+RESTRICTIVE\b/i.test(body) ? 'RESTRICTIVE' : 'PERMISSIVE'
   const cmdMatch = body.match(/\bFOR\s+(ALL|SELECT|INSERT|UPDATE|DELETE)\b/i)
   // `FOR ALL` is the Postgres default when FOR is omitted.
   const cmd = cmdMatch ? cmdMatch[1].toUpperCase() : 'ALL'
-  const toMatch = body.match(/\bTO\s+([\w",\s]+?)(?=\bUSING\b|\bWITH\b|$)/i)
   // Omitting TO defaults to PUBLIC (every role).
-  const roles = toMatch
-    ? toMatch[1].split(',').map(normIdent).filter(Boolean)
-    : ['public']
-  return {
-    permissive,
-    cmd,
-    roles,
-    usingFalse: /\bUSING\s*\(\s*false\s*\)/i.test(body),
-  }
+  const roles = parseRoles(body) || ['public']
+  const using = topLevelClause(body, 'USING')
+  const check = topLevelClause(body, String.raw`WITH\s+CHECK`)
+  return { permissive, cmd, roles, using, check, usingFalse: /^\s*false\s*$/i.test(using || '') }
+}
+
+// The tail a policy would be re-created from after ALTER POLICY rewrote it.
+function rebuildBody (p) {
+  return `AS ${p.permissive} FOR ${p.cmd} TO ${p.roles.join(', ')}` +
+    (p.using != null ? ` USING (${p.using})` : '') +
+    (p.check != null ? ` WITH CHECK (${p.check})` : '')
 }
 
 // `public` is every role, so it reaches authenticated.
@@ -160,6 +200,50 @@ export function netPolicyState (migDir = MIG_DIR, { before = Infinity } = {}) {
       if (/\bDROP\s+POLICY\b/i.test(stmt)) {
         const m = stmt.match(RE_DROP)
         if (m) policies.get(normTable(m[2]))?.delete(normIdent(m[1]))
+        continue
+      }
+
+      // A policy moves with its table (mig 185: inbound_invoices → invoices_queue).
+      if (/\bALTER\s+TABLE\b/i.test(stmt) && /\bRENAME\s+TO\b/i.test(stmt)) {
+        const m = stmt.match(RE_RENAME_TABLE)
+        if (m) {
+          const from = normTable(m[1])
+          const to = `${from.split('.')[0]}.${normIdent(m[2])}`
+          const byName = policies.get(from)
+          if (byName) {
+            policies.delete(from)
+            for (const p of byName.values()) p.table = to
+            policies.set(to, byName)
+          }
+        }
+        continue
+      }
+
+      // ALTER POLICY replaces only the clauses it names (mig 204's USING
+      // rewrites; mig 050's TO authenticated); RENAME TO re-keys it.
+      if (/\bALTER\s+POLICY\b/i.test(stmt)) {
+        const m = stmt.match(RE_ALTER_POLICY)
+        if (!m) continue
+        const byName = policies.get(normTable(m[2]))
+        const p = byName?.get(normIdent(m[1]))
+        if (!p) continue
+        const tail = m[3]
+        const rename = tail.match(new RegExp(String.raw`^\s*RENAME\s+TO\s+(${IDENT})\s*$`, 'i'))
+        if (rename) {
+          byName.delete(p.name)
+          p.name = normIdent(rename[1])
+          byName.set(p.name, p)
+          continue
+        }
+        const roles = parseRoles(tail)
+        const using = topLevelClause(tail, 'USING')
+        const check = topLevelClause(tail, String.raw`WITH\s+CHECK`)
+        if (roles) p.roles = roles
+        if (using != null) p.using = using
+        if (check != null) p.check = check
+        p.usingFalse = /^\s*false\s*$/i.test(p.using || '')
+        p.body = rebuildBody(p)
+        p.file = file
       }
     }
   }
