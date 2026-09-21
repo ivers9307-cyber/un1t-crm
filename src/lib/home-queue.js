@@ -120,7 +120,7 @@ async function fetchApprovalsSource(db, user) {
 // fold into the ordinary degraded-source path (counts.tickets = 0, same as
 // any other source); THIS failure is not, because "0" here reads as "no
 // conversations need a reply" when the true answer is "we don't know". A
-// dedicated error type lets assembleHomeQueue and getHomeQueueCount each
+// dedicated error type lets assembleHomeQueue and getHomeQueueCounts each
 // catch this ONE case and answer honestly instead of a confident zero —
 // see both call sites below.
 class ConversationsVisibilityUnavailableError extends Error {}
@@ -488,13 +488,4 @@ export async function getHomeQueueCounts(db, user) {
     bySource,
     degraded,
   }
-}
-
-/**
- * Unchanged contract: a bare number. Kept because the sidebar poller and
- * /dashboard/today both consume it as one, and this is not their change.
- */
-export async function getHomeQueueCount(db, user) {
-  const { count } = await getHomeQueueCounts(db, user)
-  return count
 }
