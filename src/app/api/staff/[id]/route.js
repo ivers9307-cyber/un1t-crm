@@ -15,6 +15,7 @@ import { applyStaffProfileWrite, assertOwnerAssignmentScope, computeDesiredAssig
 import { getStaffForUser } from '@/lib/staff'
 import { logAuditEvent } from '@/lib/audit'
 import { isTombstone } from '@/lib/staff-tombstone'
+import { suspendStaffLogin, restoreStaffLogin } from '@/lib/staff-login-access'
 
 export const runtime = 'nodejs'
 
@@ -157,6 +158,25 @@ export async function PUT(request, props) {
     return NextResponse.json({ success: false, error: profileWrite.error }, { status: 400 })
   }
 
+  // ACTIVEUSER.1 — `active` is the form's toggle AND the Reactivate button, so
+  // this handler is both a deactivate and THE reactivate path. The login
+  // follows the flag, and only AFTER the write above landed: a refused
+  // deactivation (mig 080, the last active master) must ban nobody.
+  //   active:false → ban a staff-only login. Sent on every such save, so
+  //                  saving again IS the retry. A failure is a `warning`.
+  //   active:true  → lift the ban. On a real false→true flip it is sent
+  //                  outright; on an already-active profile it is the retry
+  //                  for an unban that failed, and only writes if the login
+  //                  is still banned. A failure is an ERROR (see below).
+  // A body without `active` (mobile's staff editor) never reaches the auth
+  // admin API. A tombstone 404'd above, so its permanent ban is never touched.
+  let loginAccess = null
+  if (body.active === false) {
+    loginAccess = await suspendStaffLogin(db, id)
+  } else if (body.active === true) {
+    loginAccess = await restoreStaffLogin(db, id, { transition: targetBefore.active === false })
+  }
+
   // ----- Assignment diff -----
   //
   // The body's `assignments` array is the DESIRED-STATE for the
@@ -277,7 +297,7 @@ export async function PUT(request, props) {
         action: body.active ? 'profile.reactivated' : 'profile.deactivated',
         actor: actorRef,
         target: targetRef,
-        details: { before: targetBefore.active, after: body.active },
+        details: { before: targetBefore.active, after: body.active, login: loginAccess?.outcome || null },
         request,
       })
     }
@@ -297,7 +317,24 @@ export async function PUT(request, props) {
     }
   } catch { /* audit must never break the response */ }
 
-  return NextResponse.json({ success: true, data: final })
+  // ACTIVEUSER.1 — a failed UNBAN is not a warning. The profile IS reactivated
+  // (the write is kept, like the UniFi branch above keeps its writes), but the
+  // person cannot sign in and nothing else will ever say so — so it is the
+  // response's error, with the retry in the copy. Pressing Reactivate or saving
+  // again re-attempts it (restoreStaffLogin's no-transition path).
+  if (loginAccess?.outcome === 'restore_failed') {
+    return NextResponse.json({
+      success: false,
+      error: loginAccess.error,
+      login_restore_failed: true,
+    }, { status: 502 })
+  }
+
+  return NextResponse.json({
+    success: true,
+    data: final,
+    ...(loginAccess?.warning ? { warning: loginAccess.warning } : {}),
+  })
 }
 
 // DELETE /api/staff/[id] — Soft-delete (deactivate) a staff member.
@@ -305,6 +342,14 @@ export async function PUT(request, props) {
 //
 // Revokes any UniFi door-access policies the staff member had — we
 // don't want a deactivated employee still able to walk into the studio.
+//
+// ACTIVEUSER.1 — and ENDS THEIR SESSIONS, which until now it only claimed to.
+// It used to write active=false and stop: the Supabase auth user was untouched,
+// so a signed-in deactivated person stayed fully signed in. Two locks now:
+// getCurrentUser() refuses active=false (the one that cannot fail), and the
+// login is banned here AFTER the write — see src/lib/staff-login-access.js for
+// who is deliberately not banned and why a failed ban is only a warning.
+// Calling it again on an inactive profile is the retry for that ban.
 export async function DELETE(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
@@ -331,7 +376,7 @@ export async function DELETE(request, props) {
 
   const { data: profile } = await db
     .from('profiles')
-    .select('id, profile_locations(*, locations(*))')
+    .select('id, deleted_at, profile_locations(*, locations(*))')
     .eq('id', id)
     .single()
 
@@ -350,6 +395,17 @@ export async function DELETE(request, props) {
         error: 'You can only deactivate staff assigned to a location where you are an owner.',
       }, { status: 403 })
     }
+  }
+
+  // ACTIVEUSER.1 — this handler now acts on the LOGIN, so it must know who it
+  // is acting on. A tombstone's ban is permanent and owned by
+  // /api/staff/[id]/permanent; an unknown id used to fall through to a
+  // zero-row UPDATE and answer success. Both are "not found", as on PUT.
+  // AFTER the owner-overlap check on purpose: an owner gets the same 403 for a
+  // missing id, a tombstone (no profile_locations) and another studio's staff,
+  // so this 404 is not an id-existence oracle. Only a master reaches it.
+  if (!profile || isTombstone(profile)) {
+    return NextResponse.json({ success: false, error: 'Profile not found' }, { status: 404 })
   }
 
   // Revoke door access first. If UniFi is unreachable on any
@@ -387,10 +443,17 @@ export async function DELETE(request, props) {
     .update({ unifi_door_access: false })
     .eq('profile_id', id)
 
-  // AUDIT-EXPAND.1 — staff deactivation is high-stakes (revokes
-  // door access + access to the platform). Logged as a business
-  // event so it appears alongside contract issuance / policy
-  // publish in the unified log.
+  // ACTIVEUSER.1 — only now, with the deactivation landed (the update above is
+  // where mig 080 refuses the last active master). Never throws, and never
+  // fails this response: the app is already closed to them by getCurrentUser().
+  const loginAccess = await suspendStaffLogin(db, id)
+
+  // AUDIT-EXPAND.1 — staff deactivation is high-stakes (revokes door access
+  // and staff access to the platform). Logged as a business event so it
+  // appears alongside contract issuance / policy publish in the unified log.
+  // ACTIVEUSER.1 — "access to the platform" was not true when this comment was
+  // written; `login` records what actually happened to the sign-in (banned /
+  // ban_failed / kept_member_login / kept_host_login / kept_unverified).
   await logAuditEvent({
     category: 'business',
     action: 'profile.deactivated',
@@ -399,9 +462,13 @@ export async function DELETE(request, props) {
       id,
       resource: `profiles/${id}`,
     },
-    details: { via: 'staff_delete' },
+    details: { via: 'staff_delete', login: loginAccess.outcome },
     request,
   })
 
-  return NextResponse.json({ success: true })
+  return NextResponse.json({
+    success: true,
+    data: { login: loginAccess.outcome },
+    ...(loginAccess.warning ? { warning: loginAccess.warning } : {}),
+  })
 }

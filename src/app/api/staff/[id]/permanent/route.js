@@ -80,9 +80,10 @@ import { logAuditEvent } from '@/lib/audit'
 import { notifyUsersOnce, notifyUsersAtRolesOnce } from '@/lib/push-dedup'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import {
-  isTombstone, tombstoneEmail, authDisposition, tombstoneErrorStatus,
+  isTombstone, tombstoneEmail, tombstoneErrorStatus,
   coverNoticesByLocation, swapCounterparties, AUTH_BAN_DURATION,
 } from '@/lib/staff-tombstone'
+import { readLoginDisposition } from '@/lib/staff-login-access'
 
 export const runtime = 'nodejs'
 
@@ -124,16 +125,10 @@ async function loadTarget(id, { allowTombstone = false } = {}) {
   return { user, db, profile }
 }
 
-/** Is this login ALSO a member or a host? Pure reads. */
-async function readAuthDisposition(db, id) {
-  const [contactRes, hostRes] = await Promise.all([
-    db.from('contacts').select('id').eq('user_id', id).limit(1).maybeSingle(),
-    db.from('host_users').select('host_id').eq('auth_user_id', id).limit(1).maybeSingle(),
-  ])
-  return authDisposition({
-    memberContact: contactRes.data, hostUser: hostRes.data, readFailed: !!(contactRes.error || hostRes.error),
-  })
-}
+// ACTIVEUSER.1 — "is this login ALSO a member or a host?" moved to
+// @/lib/staff-login-access: deactivate now bans a login too, and the two must
+// never disagree about whose login is safe to ban.
+const readAuthDisposition = readLoginDisposition
 
 /**
  * The LOGIN step, for a profile that is ALREADY a tombstone: ban + scramble a

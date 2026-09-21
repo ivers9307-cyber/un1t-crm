@@ -137,6 +137,10 @@ export default function StaffForm({
   })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
+  // ACTIVEUSER.1 — a save can succeed AND carry a `warning` (the Active toggle
+  // went off but their login could not be disabled, or was deliberately kept).
+  // Navigating away on success would throw it away unread.
+  const [notice, setNotice] = useState(null)
 
   // Which assignment's permissions are currently being edited. Set
   // to the first editable assignment's location_id by default; the
@@ -447,7 +451,10 @@ export default function StaffForm({
     const data = await res.json()
     setSaving(false)
 
-    if (data.success) {
+    if (data.success && data.warning) {
+      setNotice(data.warning)
+      router.refresh()
+    } else if (data.success) {
       router.push('/settings')
       router.refresh()
     } else {
@@ -467,6 +474,12 @@ export default function StaffForm({
       {error && (
         <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-sm rounded-lg p-3">
           {error}
+        </div>
+      )}
+
+      {notice && (
+        <div role="status" className="bg-amber-500/10 border border-amber-500/30 text-amber-700 text-sm rounded-lg p-3">
+          Saved. {notice}
         </div>
       )}
 
@@ -1195,8 +1208,13 @@ function DangerZone({ staffId, staffName, isActive, callerIsMaster }) {
 // Soft-archive (DELETE /api/staff/[id]). Two-state inline confirm.
 function DeactivateButton({ staffId, staffName }) {
   const router = useRouter()
-  const [state, setState] = useState('idle') // idle | confirming | working | error
+  const [state, setState] = useState('idle') // idle | confirming | working | error | warned
   const [error, setError] = useState(null)
+  // ACTIVEUSER.1 — the deactivation landed but their LOGIN was not disabled
+  // (the ban failed, or the login is also a member's / host's). Shown until
+  // the operator has read it: router.refresh() swaps this whole component for
+  // the Reactivate button, so it only runs from "Done".
+  const [warning, setWarning] = useState(null)
 
   async function run() {
     setState('working')
@@ -1207,12 +1225,45 @@ function DeactivateButton({ staffId, staffName }) {
       if (!res.ok || data.success === false) {
         throw new Error(data.error || `Deactivate failed (${res.status})`)
       }
+      if (data.warning) {
+        setWarning({ text: data.warning, retryable: data.data?.login === 'ban_failed' || data.data?.login === 'kept_unverified' })
+        setState('warned')
+        return
+      }
       router.refresh()
       setState('idle')
     } catch (e) {
       setState('error')
       setError(e.message || 'Deactivate failed')
     }
+  }
+
+  if (state === 'warned' && warning) {
+    return (
+      <div role="status" className="bg-amber-500/10 border border-amber-500/30 rounded-md p-3 space-y-2">
+        <div className="text-xs text-amber-700">
+          <span className="font-medium">{staffName} is deactivated.</span> {warning.text}
+        </div>
+        <div className="flex items-center gap-2">
+          {warning.retryable && (
+            <button
+              type="button"
+              onClick={run}
+              className="text-xs bg-un1t-surface border border-un1t-border text-un1t-text px-3 py-1.5 rounded-md hover:bg-un1t-bg font-medium"
+            >
+              Try again
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => { setWarning(null); setState('idle'); router.refresh() }}
+            className="text-xs text-un1t-subtle hover:text-un1t-text"
+          >
+            Done
+          </button>
+        </div>
+      </div>
+    )
   }
 
   if (state === 'confirming' || state === 'working' || state === 'error') {
@@ -1263,6 +1314,10 @@ function DeactivateButton({ staffId, staffName }) {
 }
 
 // Reactivate (PUT /api/staff/[id] with active:true). One-step — low risk.
+// ACTIVEUSER.1 — it also lifts the login ban. If THAT fails the route answers
+// 502 (login_restore_failed) although the profile is now active: the error
+// stays on screen with this button still under it, and pressing it again is
+// the retry (the route re-attempts the unban for an already-active profile).
 function ReactivateButton({ staffId }) {
   const router = useRouter()
   const [state, setState] = useState('idle')
