@@ -21,7 +21,7 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds, hasRoleAtLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { MANAGER_ROLES } from '@/lib/schemas'
+import { MANAGER_ROLES, uuidLike } from '@/lib/schemas'
 import { notifyUsersOnce } from '@/lib/push-dedup'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { getProfileLocationIds } from '@/lib/time-off-leave'
@@ -43,6 +43,10 @@ const REQUEST_WITH_PEOPLE = `
     `
 
 const NOT_FOUND = () => NextResponse.json({ success: false, error: 'Request not found' }, { status: 404 })
+
+// A malformed id used to reach Postgres and come back as a 500 with raw text
+// (22P02). It is the same 404 as a missing id, decided before any read.
+const isRequestId = (id) => uuidLike.safeParse(id).success
 
 /**
  * Read the request and place the caller relative to it. `response` is set when
@@ -81,6 +85,7 @@ export async function POST(request, props) {
   const params = await props.params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (!isRequestId(params.id)) return NOT_FOUND()
 
   const validation = await validateBody(request, LeaveCancelDecisionSchema)
   if (!validation.ok) return validation.response
@@ -172,6 +177,7 @@ export async function DELETE(request, props) {
   const params = await props.params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (!isRequestId(params.id)) return NOT_FOUND()
   const db = createServerClient()
 
   const loaded = await loadForCaller(db, user, params.id)

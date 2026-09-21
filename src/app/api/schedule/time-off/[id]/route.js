@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds, hasRoleAtLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { timeOffStatusSchema, MANAGER_ROLES } from '@/lib/schemas'
+import { timeOffStatusSchema, MANAGER_ROLES, uuidLike } from '@/lib/schemas'
 import { notifyUsersOnce } from '@/lib/push-dedup'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import {
@@ -41,6 +41,11 @@ export async function PUT(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  // LEAVECANCEL.1 — a malformed id used to reach Postgres and come back as a
+  // 500 with raw text (22P02). It is the same 404 as a missing id.
+  if (!uuidLike.safeParse(params.id).success) {
+    return NextResponse.json({ success: false, error: 'Request not found' }, { status: 404 })
+  }
 
   const validation = await validateBody(request, TimeOffReviewSchema)
   if (!validation.ok) return validation.response

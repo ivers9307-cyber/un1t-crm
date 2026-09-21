@@ -35,7 +35,7 @@ const { logError } = await import('@/lib/log')
 const { PUT } = await import('./route.js')
 const { fakeDb, queriesOf, resolveLocations, scopedAssignments, locationScopeOf } = await import('@/lib/time-off.test-helpers')
 
-const PROPS = { params: Promise.resolve({ id: 'req-1' }) }
+const PROPS = { params: Promise.resolve({ id: 'a0000000-0000-4000-8000-00000000000e' }) }
 
 function req(body) {
   return { json: () => Promise.resolve(body), headers: { get: () => '' } }
@@ -114,9 +114,24 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers() })
 
 describe('PUT /api/schedule/time-off/[id] — authorisation', () => {
+  // LEAVECANCEL.1 (review) — a malformed id reached Postgres and came back as
+  // a 500 with raw text (22P02, invalid input syntax for type uuid). It is the
+  // same 404 as a missing id, decided before any read.
+  it('a malformed id is the same 404 as a missing one, and nothing is read', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'm', role: 'manager', profileRole: 'manager', locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': 'manager' } })
+    const { db } = buildDb({ existing: { id: 'x', profile_id: 'c', location_id: 'loc-1', status: 'pending' } })
+    createServerClient.mockReturnValue(db)
+    for (const id of ['not-a-uuid', "1' or '1'='1", '']) {
+      const res = await PUT(req({ status: 'cancelled' }), { params: Promise.resolve({ id }) })
+      expect(res.status).toBe(404)
+      expect((await res.json()).error).toBe('Request not found')
+    }
+    expect(db.queries).toHaveLength(0)
+  })
+
   it('a manager at another location cannot cancel', async () => {
     getCurrentUser.mockResolvedValue({ id: 'm', role: 'manager', profileRole: 'manager', locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': 'manager' } })
-    const { db, updateSpy } = buildDb({ existing: { id: 'req-1', profile_id: 'c', location_id: 'loc-2', status: 'pending', type: 'holiday', start_date: '2026-06-01', end_date: '2026-06-02' } })
+    const { db, updateSpy } = buildDb({ existing: { id: 'a0000000-0000-4000-8000-00000000000e', profile_id: 'c', location_id: 'loc-2', status: 'pending', type: 'holiday', start_date: '2026-06-01', end_date: '2026-06-02' } })
     createServerClient.mockReturnValue(db)
     const res = await PUT(req({ status: 'cancelled' }), PROPS)
     expect(res.status).toBe(404)
@@ -125,7 +140,7 @@ describe('PUT /api/schedule/time-off/[id] — authorisation', () => {
 
   it('a manager cannot approve their own request', async () => {
     getCurrentUser.mockResolvedValue({ id: 'c', role: 'manager', profileRole: 'manager', locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': 'manager' } })
-    const { db, updateSpy } = buildDb({ existing: { id: 'req-1', profile_id: 'c', location_id: 'loc-1', status: 'pending', type: 'holiday', start_date: '2026-06-01', end_date: '2026-06-02' } })
+    const { db, updateSpy } = buildDb({ existing: { id: 'a0000000-0000-4000-8000-00000000000e', profile_id: 'c', location_id: 'loc-1', status: 'pending', type: 'holiday', start_date: '2026-06-01', end_date: '2026-06-02' } })
     createServerClient.mockReturnValue(db)
     const res = await PUT(req({ status: 'approved' }), PROPS)
     expect(res.status).toBe(403)
@@ -134,7 +149,7 @@ describe('PUT /api/schedule/time-off/[id] — authorisation', () => {
 
   it('a coach may cancel their own pending request', async () => {
     getCurrentUser.mockResolvedValue({ id: 'c', role: 'staff', profileRole: 'staff', locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': 'staff' } })
-    const { db } = buildDb({ existing: { id: 'req-1', profile_id: 'c', location_id: 'loc-1', status: 'pending', type: 'holiday', start_date: '2026-06-01', end_date: '2026-06-02' } })
+    const { db } = buildDb({ existing: { id: 'a0000000-0000-4000-8000-00000000000e', profile_id: 'c', location_id: 'loc-1', status: 'pending', type: 'holiday', start_date: '2026-06-01', end_date: '2026-06-02' } })
     createServerClient.mockReturnValue(db)
     const res = await PUT(req({ status: 'cancelled' }), PROPS)
     expect(res.status).toBe(200)
@@ -142,7 +157,7 @@ describe('PUT /api/schedule/time-off/[id] — authorisation', () => {
 
   it('a coach may not cancel an approved request', async () => {
     getCurrentUser.mockResolvedValue({ id: 'c', role: 'staff', profileRole: 'staff', locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': 'staff' } })
-    const { db, updateSpy } = buildDb({ existing: { id: 'req-1', profile_id: 'c', location_id: 'loc-1', status: 'approved', type: 'holiday', start_date: '2026-06-01', end_date: '2026-06-02' } })
+    const { db, updateSpy } = buildDb({ existing: { id: 'a0000000-0000-4000-8000-00000000000e', profile_id: 'c', location_id: 'loc-1', status: 'approved', type: 'holiday', start_date: '2026-06-01', end_date: '2026-06-02' } })
     createServerClient.mockReturnValue(db)
     const res = await PUT(req({ status: 'cancelled' }), PROPS)
     expect(res.status).toBe(403)
@@ -161,7 +176,7 @@ describe('PUT /api/schedule/time-off/[id] — role at the request\'s studio (SCH
     rolesByLocation: { 'loc-1': 'head_coach', 'loc-2': 'staff' },
   })
   const row = (location_id, profile_id = 'colleague', status = 'pending') => ({
-    id: 'req-1', profile_id, location_id, status, type: 'holiday', start_date: '2026-06-01', end_date: '2026-06-02',
+    id: 'a0000000-0000-4000-8000-00000000000e', profile_id, location_id, status, type: 'holiday', start_date: '2026-06-01', end_date: '2026-06-02',
   })
 
   it('refuses a colleague\'s request at the studio where the caller is staff (404, nothing written)', async () => {
@@ -221,7 +236,7 @@ describe('PUT /api/schedule/time-off/[id] — LEAVE.2', () => {
     rolesByLocation: Object.fromEntries(locs.map((l) => [l, 'head_coach'])),
   })
   const row = (over = {}) => ({
-    id: 'req-1', profile_id: 'coach', location_id: 'loc-1', status: 'pending', type: 'holiday',
+    id: 'a0000000-0000-4000-8000-00000000000e', profile_id: 'coach', location_id: 'loc-1', status: 'pending', type: 'holiday',
     start_date: '2026-06-01', end_date: '2026-06-02', total_days: 2, ...over,
   })
 
@@ -353,7 +368,7 @@ describe('PUT /api/schedule/time-off/[id] — cancelling your own APPROVED leave
     locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': role },
   })
   const own = (over = {}) => ({
-    id: 'req-1', profile_id: 'me', location_id: 'loc-1', status: 'approved', type: 'holiday',
+    id: 'a0000000-0000-4000-8000-00000000000e', profile_id: 'me', location_id: 'loc-1', status: 'approved', type: 'holiday',
     start_date: '2026-06-01', end_date: '2026-06-02', total_days: 2,
     cancel_requested_at: null, cancel_requested_by: null, cancel_decided_at: null, cancel_decision: null,
     ...over,
@@ -382,16 +397,16 @@ describe('PUT /api/schedule/time-off/[id] — cancelling your own APPROVED leave
 
     // Guarded so it cannot land on leave that stopped being approved, or on top of an open ask.
     const write = queriesOf(db, 'time_off_requests', 'update')[0]
-    expect(write.calls).toContainEqual(['eq', 'id', 'req-1'])
+    expect(write.calls).toContainEqual(['eq', 'id', 'a0000000-0000-4000-8000-00000000000e'])
     expect(write.calls).toContainEqual(['eq', 'status', 'approved'])
     expect(write.calls).toContainEqual(['or', 'cancel_requested_at.is.null,cancel_decided_at.not.is.null'])
 
     expect(notifyUsersOnce).toHaveBeenCalledTimes(1)
     const [, key, recipients, notice] = notifyUsersOnce.mock.calls[0]
     // One notice per leave per hour (cancelAskNoticeKey), sent from after().
-    expect(key).toBe('time_off_cancel_ask:req-1:2026-05-20T10')
+    expect(key).toBe('time_off_cancel_ask:a0000000-0000-4000-8000-00000000000e:2026-05-20T10')
     expect(recipients).toEqual(['own-1', 'own-2'])
-    expect(notice).toMatchObject({ category: 'time_off', data: { type: 'time_off_cancel_request', request_id: 'req-1', start_date: '2026-06-01' } })
+    expect(notice).toMatchObject({ category: 'time_off', data: { type: 'time_off_cancel_request', request_id: 'a0000000-0000-4000-8000-00000000000e', start_date: '2026-06-01' } })
     expect(`${notice.title} ${notice.body}`).not.toMatch(/—/)
     // The phone has nowhere to decide this, so the push says where to go.
     expect(notice.body).toMatch(/Decide it on the Time Off page on the web\.$/)
@@ -429,7 +444,7 @@ describe('PUT /api/schedule/time-off/[id] — cancelling your own APPROVED leave
     createServerClient.mockReturnValue(db)
     expect((await PUT(req({ status: 'cancelled' }), PROPS)).status).toBe(200)
     expect(updateSpy.mock.calls[0][0]).toMatchObject({ cancel_decided_at: null, cancel_decision: null })
-    expect(notifyUsersOnce.mock.calls[0][1]).toBe('time_off_cancel_ask:req-1:2026-05-20T10')
+    expect(notifyUsersOnce.mock.calls[0][1]).toBe('time_off_cancel_ask:a0000000-0000-4000-8000-00000000000e:2026-05-20T10')
   })
 
   it('...but NOT within 24h of the decline: every ask pages every owner (409, nothing written, nobody told)', async () => {
@@ -626,7 +641,7 @@ describe('PUT /api/schedule/time-off/[id] — an ask dies with the state it was 
     locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': role },
   })
   const theirs = (over = {}) => ({
-    id: 'req-1', profile_id: 'mgr', location_id: 'loc-1', status: 'approved', type: 'unavailable',
+    id: 'a0000000-0000-4000-8000-00000000000e', profile_id: 'mgr', location_id: 'loc-1', status: 'approved', type: 'unavailable',
     start_date: '2026-06-01', end_date: '2026-06-02', total_days: 2,
     cancel_requested_at: '2026-05-19T09:00:00.000Z', cancel_requested_by: 'mgr', cancel_request_note: 'Trip fell through',
     cancel_decided_at: null, cancel_decided_by: null, cancel_decision: null, cancel_decision_note: null,
@@ -683,7 +698,7 @@ describe('PUT /api/schedule/time-off/[id] — an ask dies with the state it was 
     createServerClient.mockReturnValue(db)
     expect((await PUT(req({ status: 'cancelled' }), PROPS)).status).toBe(200)
     expect(updateSpy.mock.calls[0][0]).not.toHaveProperty('cancel_requested_at')
-    expect(queriesOf(db, 'time_off_requests', 'update')[0].calls).toEqual([['eq', 'id', 'req-1']])
+    expect(queriesOf(db, 'time_off_requests', 'update')[0].calls).toEqual([['eq', 'id', 'a0000000-0000-4000-8000-00000000000e']])
   })
 
   it('leave an owner has ALREADY cancelled cannot then be rejected or reopened from a stale screen: a calm 409, nothing written', async () => {
