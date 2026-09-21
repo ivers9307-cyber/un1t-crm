@@ -978,3 +978,107 @@ describe('GET /api/schedule/time-off — before mig 624 is applied (LEAVECANCEL.
     }
   })
 })
+
+// LEAVEGUARD.1 — the list says, per row, whether THIS caller may take a
+// colleague's approved leave out of force. `approved_locked_to_owner: true` is
+// a manager-tier person's approved leave seen by someone who is not an owner
+// at a studio it belongs to (nor a master). Judged by the same function the
+// PUT refuses with, from the requester's per-studio role.
+describe('GET /api/schedule/time-off — approved_locked_to_owner (LEAVEGUARD.1)', () => {
+  const getReq = (qs = '') => ({ url: `http://x/api/schedule/time-off${qs}`, headers: { get: () => '' } })
+  const at = (id, role) => ({
+    id, role, profileRole: 'staff', activeLocation: { id: 'loc-1' },
+    locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': role },
+  })
+  const ROWS = [
+    { id: 'mgr-approved', profile_id: 'mgr', location_id: 'loc-1', status: 'approved', start_date: '2026-10-05', end_date: '2026-10-07' },
+    { id: 'mgr-pending', profile_id: 'mgr', location_id: 'loc-1', status: 'pending', start_date: '2026-10-12', end_date: '2026-10-12' },
+    { id: 'coach-approved', profile_id: 'coach', location_id: 'loc-1', status: 'approved', start_date: '2026-10-05', end_date: '2026-10-05' },
+    // Filed at loc-1 where they are staff; manager at loc-2 (leave covers the person).
+    { id: 'hc-approved', profile_id: 'hc', location_id: 'loc-1', status: 'approved', start_date: '2026-10-05', end_date: '2026-10-05' },
+    { id: 'own-approved', profile_id: 'own', location_id: 'loc-1', status: 'approved', start_date: '2026-10-05', end_date: '2026-10-05' },
+  ]
+  const MEMBERSHIPS = [
+    { profile_id: 'mgr', location_id: 'loc-1', role: 'manager' },
+    { profile_id: 'coach', location_id: 'loc-1', role: 'staff' },
+    { profile_id: 'hc', location_id: 'loc-1', role: 'staff' },
+    { profile_id: 'hc', location_id: 'loc-2', role: 'head_coach' },
+    { profile_id: 'own', location_id: 'loc-1', role: 'owner' },
+  ]
+  const listDb = ({ membershipError = null } = {}) => fakeDb((q) => {
+    if (q.table === 'profile_locations') {
+      const cols = (q.columns || '').replace(/\s/g, '')
+      // The scope read (members of the managed studio) selects profile_id only.
+      if (cols === 'profile_id') return { data: MEMBERSHIPS.map(({ profile_id }) => ({ profile_id })), error: null }
+      if (membershipError) return { data: null, error: membershipError }
+      const ids = q.calls.find(([op, col]) => op === 'in' && col === 'profile_id')?.[2] || []
+      return { data: MEMBERSHIPS.filter((m) => ids.includes(m.profile_id)), error: null }
+    }
+    return { data: ROWS, error: null }
+  })
+  const run = async (user, opts) => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-17T10:00:00Z'))
+    try {
+      getCurrentUser.mockResolvedValue(user)
+      const db = listDb(opts)
+      createServerClient.mockReturnValue(db)
+      const res = await GET(getReq('?location_id=loc-1'))
+      const json = await res.json()
+      return { res, db, locked: Object.fromEntries(json.data.map((r) => [r.id, r.approved_locked_to_owner])) }
+    } finally {
+      vi.useRealTimers()
+    }
+  }
+
+  it('a manager: a fellow manager-tier person\'s approved leave is locked (other studio\'s role included); pending and staff leave are not', async () => {
+    const { res, locked } = await run(at('mgr-2', 'manager'))
+    expect(res.status).toBe(200)
+    expect(locked).toEqual({
+      'mgr-approved': true, 'mgr-pending': false, 'coach-approved': false, 'hc-approved': true, 'own-approved': true,
+    })
+  })
+
+  it('an owner: nothing is locked (their own leave is the self path, not this rule)', async () => {
+    const { locked } = await run(at('own', 'owner'))
+    expect(locked).toEqual({
+      'mgr-approved': false, 'mgr-pending': false, 'coach-approved': false, 'hc-approved': false, 'own-approved': false,
+    })
+  })
+
+  it('a master: nothing is locked', async () => {
+    const { locked } = await run({ id: 'boss', role: 'master', profileRole: 'master', locations: [{ id: 'loc-1' }], rolesByLocation: {} })
+    expect(Object.values(locked).every((v) => v === false)).toBe(true)
+  })
+
+  it('reads the colleagues\' roles in ONE paged profile_locations query, with the role column', async () => {
+    const { db } = await run(at('mgr-2', 'manager'))
+    const roleReads = queriesOf(db, 'profile_locations').filter((q) => (q.columns || '').includes('role'))
+    expect(roleReads).toHaveLength(1)
+    expect(roleReads[0].columns.replace(/\s/g, '')).toBe('profile_id,location_id,role')
+  })
+
+  it('unreadable memberships only NARROW: every colleague\'s approved leave locks for a manager, an owner at the filed-at studio keeps it', async () => {
+    let { res, locked } = await run(at('mgr-2', 'manager'), { membershipError: { message: 'boom' } })
+    expect(res.status).toBe(200)
+    expect(locked).toMatchObject({ 'mgr-approved': true, 'coach-approved': true, 'mgr-pending': false })
+    ;({ locked } = await run(at('own-2', 'owner'), { membershipError: { message: 'boom' } }))
+    expect(locked).toMatchObject({ 'mgr-approved': false, 'coach-approved': false })
+  })
+
+  it('a plain coach sees only their own rows, and none is locked; no role read is made', async () => {
+    const coachRows = ROWS.filter((r) => r.profile_id === 'coach')
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-17T10:00:00Z'))
+    try {
+      getCurrentUser.mockResolvedValue({ ...at('coach', 'staff') })
+      const db = fakeDb((q) => (q.table === 'profile_locations' ? { data: [], error: null } : { data: coachRows, error: null }))
+      createServerClient.mockReturnValue(db)
+      const json = await (await GET(getReq('?location_id=loc-1'))).json()
+      expect(json.data.map((r) => r.approved_locked_to_owner)).toEqual([false])
+      expect(queriesOf(db, 'profile_locations')).toHaveLength(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
