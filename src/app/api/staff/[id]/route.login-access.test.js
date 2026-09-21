@@ -17,12 +17,17 @@ vi.mock('@/lib/unifi-access', () => ({
   UnifiError: class UnifiError extends Error {},
 }))
 vi.mock('@/lib/audit', () => ({ logAuditEvent: vi.fn(async () => {}) }))
+vi.mock('@/lib/profile-compensation', async (importOriginal) => ({
+  ...(await importOriginal()),
+  upsertCompensationForProfile: vi.fn(async () => ({ ok: true })),
+}))
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 
 const { createServerClient } = await import('@/lib/supabase')
 const { getCurrentUser } = await import('@/lib/auth')
 const { getUnifiConfig, revokeUnifiUserPolicies } = await import('@/lib/unifi-access')
 const { logAuditEvent } = await import('@/lib/audit')
+const { upsertCompensationForProfile } = await import('@/lib/profile-compensation')
 const { fakeDb, queriesOf } = await import('@/lib/time-off.test-helpers')
 const { AUTH_BAN_DURATION } = await import('@/lib/staff-tombstone')
 const { PUT, DELETE } = await import('./route.js')
@@ -50,8 +55,20 @@ function makeDb({ profile = PROFILE, writeError = null, contact = null, hostUser
     }
     if (q.table === 'profile_locations' && q.action === 'update') {
       events.push(['profile_locations.update', q.payload])
+      // Applied to the embedded rows, as the database would: the route re-reads
+      // them to keep the legacy profiles.unifi_door_access flag in step.
+      if (current?.profile_locations) {
+        current = {
+          ...current,
+          profile_locations: current.profile_locations.map((l) => (
+            !q.eq.location_id || q.eq.location_id === l.location_id ? { ...l, ...q.payload, locations: l.locations } : l
+          )),
+        }
+      }
       return { data: null, error: null }
     }
+    if (q.table === 'profile_locations') return { data: null, error: null }
+    if (q.table === 'location_role_permissions') return { data: [], error: null }
     if (q.table === 'contacts') return { data: contact, error: null }
     if (q.table === 'host_users') return { data: hostUser, error: null }
     throw new Error(`unexpected ${q.action} on ${q.table}`)
@@ -205,8 +222,10 @@ describe('PUT /api/staff/[id] — the Active toggle and the Reactivate button', 
     const db = use(makeDb())
     const res = await PUT(put({ active: false }), props)
     expect(res.status).toBe(200)
+    // (review S4) the transition also clears the door flags, as DELETE does.
     expect(db.events).toEqual([
-      ['profiles.update', { active: false }],
+      ['profiles.update', { active: false, unifi_door_access: false }],
+      ['profile_locations.update', { unifi_door_access: false }],
       ['auth.update', { ban_duration: AUTH_BAN_DURATION }],
     ])
     const body = await res.json()
@@ -275,5 +294,170 @@ describe('PUT /api/staff/[id] — the Active toggle and the Reactivate button', 
     const db = use(makeDb({ profile: { ...PROFILE, active: false, deleted_at: '2026-09-19T10:00:00Z' } }))
     expect((await PUT(put({ active: true }), props)).status).toBe(404)
     expect(db.events).toEqual([])
+  })
+})
+
+// ── Review round 2 ──────────────────────────────────────────────────────────
+const LOC = 'a0000000-0000-0000-0000-0000000000b1'
+const DOOR_PROFILE = {
+  ...PROFILE,
+  unifi_door_access: true,
+  profile_locations: [{
+    location_id: LOC, role: 'staff', is_default: true, unifi_door_access: true, unifi_user_id: 'unifi-u1',
+    permissions: {}, locations: { id: LOC, name: 'Studio One' },
+  }],
+}
+
+describe('PUT — S3: nobody deactivates THEMSELVES (it would now ban them)', () => {
+  it('400 with DELETE\'s copy, nothing written, nobody banned — a master included', async () => {
+    getCurrentUser.mockResolvedValue({ ...MASTER, id: ID })
+    const db = use(makeDb())
+    const res = await PUT(put({ active: false }), props)
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toBe('Cannot deactivate your own account')
+    expect(db.events).toEqual([])
+  })
+  it('a master may still save their own profile with active:true', async () => {
+    getCurrentUser.mockResolvedValue({ ...MASTER, id: ID })
+    use(makeDb())
+    expect((await PUT(put({ active: true, full_name: 'Me' }), props)).status).toBe(200)
+  })
+})
+
+describe('PUT — S4: "deactivate" means ONE thing (doors too), on the true→false transition only', () => {
+  it('revokes UniFi policies FIRST, then writes active=false with the door flags cleared, then bans', async () => {
+    getUnifiConfig.mockResolvedValue({ configured: true })
+    const db = use(makeDb({ profile: DOOR_PROFILE }))
+    const res = await PUT(put({ active: false }), props)
+    expect(res.status).toBe(200)
+    expect(revokeUnifiUserPolicies).toHaveBeenCalledWith({ configured: true }, 'unifi-u1')
+    expect(db.events).toEqual([
+      ['profiles.update', { active: false, unifi_door_access: false }],
+      ['profile_locations.update', { unifi_door_access: false }],
+      ['auth.update', { ban_duration: AUTH_BAN_DURATION }],
+    ])
+    getUnifiConfig.mockResolvedValue({ configured: false })
+  })
+
+  it('a UniFi failure is DELETE\'s 502: NOTHING is written and nobody is banned', async () => {
+    getUnifiConfig.mockResolvedValue({ configured: true })
+    revokeUnifiUserPolicies.mockRejectedValueOnce(new Error('controller offline'))
+    const db = use(makeDb({ profile: DOOR_PROFILE }))
+    const res = await PUT(put({ active: false, full_name: 'Renamed' }), props)
+    expect(res.status).toBe(502)
+    expect((await res.json()).error).toMatch(/Could not revoke UniFi door access at Studio One .* Profile not deactivated\./)
+    expect(db.events).toEqual([])
+    getUnifiConfig.mockResolvedValue({ configured: false })
+  })
+
+  it('the form\'s own assignments cannot re-grant the door in the same save', async () => {
+    getUnifiConfig.mockResolvedValue({ configured: true })
+    const { syncUnifiUserPolicyForRole } = await import('@/lib/unifi-access')
+    const db = use(makeDb({ profile: DOOR_PROFILE }))
+    const res = await PUT(put({
+      active: false,
+      assignments: [{ location_id: LOC, role: 'staff', is_default: true, unifi_door_access: true, permissions: {} }],
+    }), props)
+    expect(res.status).toBe(200)
+    expect(syncUnifiUserPolicyForRole).not.toHaveBeenCalled()
+    const rowWrites = db.events.filter(([t]) => t === 'profile_locations.update').map(([, p]) => p.unifi_door_access)
+    expect(rowWrites.every((v) => v === false)).toBe(true)
+    getUnifiConfig.mockResolvedValue({ configured: false })
+  })
+
+  it('inactive → inactive does NOT re-run the revoke (but still retries the ban)', async () => {
+    getUnifiConfig.mockResolvedValue({ configured: true })
+    const db = use(makeDb({ profile: { ...DOOR_PROFILE, active: false } }))
+    expect((await PUT(put({ active: false }), props)).status).toBe(200)
+    expect(revokeUnifiUserPolicies).not.toHaveBeenCalled()
+    expect(db.events).toEqual([
+      ['profiles.update', { active: false }],
+      ['auth.update', { ban_duration: AUTH_BAN_DURATION }],
+    ])
+    getUnifiConfig.mockResolvedValue({ configured: false })
+  })
+})
+
+describe('PUT — S5: the login outcome rides EVERY response once the profiles write has landed', () => {
+  it('(a) unban fails AND a UniFi sync error occurs: the 502 carries BOTH', async () => {
+    // getUnifiConfig → not configured, door toggle ON → applyDoorAccessChange throws.
+    const db = use(makeDb({ profile: { ...DOOR_PROFILE, active: false, unifi_door_access: false, profile_locations: [{ ...DOOR_PROFILE.profile_locations[0], unifi_door_access: false }] }, banError: { message: 'gotrue 500' } }))
+    const res = await PUT(put({
+      active: true,
+      assignments: [{ location_id: LOC, role: 'staff', is_default: true, unifi_door_access: true, permissions: {} }],
+    }), props)
+    expect(res.status).toBe(502)
+    const body = await res.json()
+    expect(body.success).toBe(false)
+    expect(body.unifi_failed).toBe(true)
+    expect(body.login_restore_failed).toBe(true)
+    expect(body.error).toMatch(/UniFi Access is not configured/)
+    expect(body.error).toMatch(/cannot sign in/)
+    expect(db.events).toContainEqual(['auth.update', { ban_duration: 'none' }])
+  })
+
+  it('(b) a compensation failure AFTER the profiles write still runs the unban, and says so if it failed', async () => {
+    upsertCompensationForProfile.mockResolvedValueOnce({ ok: false, error: 'rls' })
+    const db = use(makeDb({ profile: { ...PROFILE, active: false }, banError: { message: 'gotrue 500' } }))
+    const res = await PUT(put({ active: true, hourly_rate: 20 }), props)
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.success).toBe(false)
+    expect(body.error).toMatch(/compensation: rls/)
+    expect(body.error).toMatch(/cannot sign in/)
+    expect(body.login_restore_failed).toBe(true)
+    expect(db.events).toContainEqual(['auth.update', { ban_duration: 'none' }])
+  })
+
+  it('(b) the same failure with a GOOD unban: reactivated and signed-in-able, still a 400 for the pay', async () => {
+    upsertCompensationForProfile.mockResolvedValueOnce({ ok: false, error: 'rls' })
+    const db = use(makeDb({ profile: { ...PROFILE, active: false } }))
+    const res = await PUT(put({ active: true, hourly_rate: 20 }), props)
+    expect(res.status).toBe(400)
+    expect((await res.json()).login_restore_failed).toBeUndefined()
+    expect(db.events).toContainEqual(['auth.update', { ban_duration: 'none' }])
+  })
+
+  it('(b) deactivating: the comp failure still bans, and a ban warning rides the 400', async () => {
+    upsertCompensationForProfile.mockResolvedValueOnce({ ok: false, error: 'rls' })
+    const db = use(makeDb({ banError: { message: 'gotrue 500' } }))
+    const res = await PUT(put({ active: false, hourly_rate: 20 }), props)
+    expect(res.status).toBe(400)
+    expect((await res.json()).warning).toMatch(/disabling their login failed/)
+    expect(db.auth.admin.updateUserById).toHaveBeenCalled()
+  })
+
+  it('a profiles write that did NOT land still touches no login', async () => {
+    const db = use(makeDb({ profile: { ...PROFILE, active: false }, writeError: { message: 'nope' } }))
+    expect((await PUT(put({ active: true }), props)).status).toBe(400)
+    expect(db.auth.admin.updateUserById).not.toHaveBeenCalled()
+  })
+})
+
+describe('nits — a kept login warns ONCE, and a retry is not a second deactivation', () => {
+  it('PUT: saving an ALREADY inactive profile whose login is kept shows no warning (the form would never navigate)', async () => {
+    use(makeDb({ profile: { ...PROFILE, active: false }, contact: { id: 'c1' } }))
+    const body = await (await PUT(put({ active: false, full_name: 'A Coach' }), props)).json()
+    expect(body.success).toBe(true)
+    expect(body.warning).toBeUndefined()
+  })
+  it('PUT: the TRANSITION with a kept login does warn', async () => {
+    use(makeDb({ contact: { id: 'c1' } }))
+    expect((await (await PUT(put({ active: false }), props)).json()).warning).toMatch(/also a gym member/)
+  })
+  it('PUT: an already inactive profile whose ban is attempted and FAILS still warns', async () => {
+    use(makeDb({ profile: { ...PROFILE, active: false }, banError: { message: 'gotrue 500' } }))
+    expect((await (await PUT(put({ active: false }), props)).json()).warning).toMatch(/disabling their login failed/)
+  })
+  it('DELETE "Try again" on an already inactive profile logs its OWN action, not a second profile.deactivated', async () => {
+    use(makeDb({ profile: { ...PROFILE, active: false } }))
+    expect((await DELETE(del(), props)).status).toBe(200)
+    const actions = logAuditEvent.mock.calls.map(([e]) => e.action)
+    expect(actions).toEqual(['profile.deactivation_login_step_retried'])
+  })
+  it('DELETE on an ACTIVE profile still logs profile.deactivated, once', async () => {
+    use(makeDb())
+    await DELETE(del(), props)
+    expect(logAuditEvent.mock.calls.map(([e]) => e.action)).toEqual(['profile.deactivated'])
   })
 })
