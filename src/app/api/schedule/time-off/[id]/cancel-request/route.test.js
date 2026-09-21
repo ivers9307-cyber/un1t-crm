@@ -5,6 +5,12 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
+// The decision notice runs inside after() (next/server), the SWAPNOTIFY.1
+// pattern: keep the real NextResponse, run the callback at once.
+vi.mock('next/server', async (importOriginal) => {
+  const actual = await importOriginal()
+  return { ...actual, after: vi.fn((fn) => fn()) }
+})
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/auth', async (importOriginal) => {
   const real = await importOriginal()
@@ -21,6 +27,7 @@ vi.mock('@/lib/push-dedup', () => ({ notifyUsersOnce: vi.fn(() => Promise.resolv
 const { createServerClient } = await import('@/lib/supabase')
 const { getCurrentUser } = await import('@/lib/auth')
 const { notifyUsersOnce } = await import('@/lib/push-dedup')
+const { after } = await import('next/server')
 const { POST, DELETE } = await import('./route.js')
 const { fakeDb, queriesOf } = await import('@/lib/time-off.test-helpers')
 
@@ -67,7 +74,7 @@ function arrange(user, opts) {
 }
 
 beforeEach(() => {
-  createServerClient.mockReset(); getCurrentUser.mockReset(); notifyUsersOnce.mockClear()
+  createServerClient.mockReset(); getCurrentUser.mockReset(); notifyUsersOnce.mockClear(); after.mockClear()
   vi.useFakeTimers({ toFake: ['Date'] })
   vi.setSystemTime(new Date('2026-05-20T10:00:00Z'))
 })
@@ -104,6 +111,10 @@ describe('POST /api/schedule/time-off/[id]/cancel-request — deciding', () => {
     expect(recipients).toEqual(['me'])
     expect(notice).toMatchObject({ category: 'time_off', data: { type: 'time_off_decision', request_id: 'req-1', status: 'cancelled', start_date: '2026-06-01' } })
     expect(`${notice.title} ${notice.body}`).not.toMatch(/—/)
+    // Inside after(): notifyUsersOnce claims before it sends, so a promise
+    // Vercel froze after the response would never tell the requester.
+    expect(after).toHaveBeenCalledTimes(1)
+    expect(after.mock.calls[0][0]).toBeInstanceOf(Function)
   })
 
   it('an owner REJECTS: the decision is stamped and the leave STAYS APPROVED', async () => {
@@ -182,6 +193,7 @@ describe('POST /api/schedule/time-off/[id]/cancel-request — deciding', () => {
     expect(res.status).toBe(409)
     expect(updateSpy).toHaveBeenCalledTimes(1)
     expect(notifyUsersOnce).not.toHaveBeenCalled()
+    expect(after).not.toHaveBeenCalled()
   })
 
   it('a failed read is a 500, not a 404; a failed notice never fails the decision', async () => {
@@ -210,6 +222,7 @@ describe('DELETE /api/schedule/time-off/[id]/cancel-request — withdrawing', ()
     expect(write.calls).toContainEqual(['eq', 'status', 'approved'])
     expect(write.calls).toContainEqual(['is', 'cancel_decided_at', null])
     expect(notifyUsersOnce).not.toHaveBeenCalled()
+    expect(after).not.toHaveBeenCalled()
   })
 
   it('nobody else withdraws it: 403 for someone who can see it, 404 for someone who cannot', async () => {

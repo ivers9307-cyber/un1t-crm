@@ -16,7 +16,7 @@
 // cannot half-apply and two deciders cannot both land; the mig 011/616 trigger
 // refunds a holiday's days on that approved -> cancelled transition.
 
-import { NextResponse } from 'next/server'
+import { NextResponse, after } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds, hasRoleAtLocation } from '@/lib/auth'
@@ -28,6 +28,7 @@ import { getProfileLocationIds } from '@/lib/time-off-leave'
 import { timeOffLeaveLabel } from '@shared/time-off'
 import {
   isOpenCancelAsk, canDecideLeaveCancel, leaveActingLocationIds, cancelAskEventKey, leaveRangeText,
+  CLEARED_CANCEL_ASK,
 } from '@/lib/time-off-cancel'
 
 const LeaveCancelDecisionSchema = z.object({
@@ -141,28 +142,27 @@ export async function POST(request, props) {
   const data = rows[0]
 
   // A reply to the requester's own action, so it is sent when it happens.
-  // Best-effort: a failed notice never fails the decision.
-  try {
-    const label = timeOffLeaveLabel(existing.type)
-    const range = leaveRangeText(existing)
-    notifyUsersOnce(db, `${cancelAskEventKey('time_off_cancel_decision', existing)}:${updates.cancel_decision}`, [existing.profile_id], {
-      title: approve ? 'Leave cancellation approved' : 'Leave cancellation declined',
-      body: `${approve
-        ? `Your leave is cancelled: ${label}, ${range}.`
-        : `Your leave stays approved: ${label}, ${range}.`}${note ? ` Note: "${note}"` : ''}`,
-      category: 'time_off',
-      emailSubject: approve ? 'Leave cancellation approved' : 'Leave cancellation declined',
-      data: {
-        type: 'time_off_decision',
-        request_id: existing.id,
-        // What the LEAVE now is, which is what the phone's schedule tab shows.
-        status: approve ? 'cancelled' : 'approved',
-        start_date: existing.start_date,
-      },
-    }).catch(err => console.error('[time-off] cancel-decision notify failed', err))
-  } catch (err) {
-    console.error('[time-off] cancel-decision notify failed', err)
-  }
+  // Best-effort: a failed notice never fails the decision. Inside after()
+  // (the SWAPNOTIFY.1 pattern): notifyUsersOnce CLAIMS before it sends, so an
+  // un-awaited promise Vercel froze after the response would leave the claim
+  // behind and the requester would never hear.
+  const label = timeOffLeaveLabel(existing.type)
+  const range = leaveRangeText(existing)
+  after(() => notifyUsersOnce(db, `${cancelAskEventKey('time_off_cancel_decision', existing)}:${updates.cancel_decision}`, [existing.profile_id], {
+    title: approve ? 'Leave cancellation approved' : 'Leave cancellation declined',
+    body: `${approve
+      ? `Your leave is cancelled: ${label}, ${range}.`
+      : `Your leave stays approved: ${label}, ${range}.`}${note ? ` Note: "${note}"` : ''}`,
+    category: 'time_off',
+    emailSubject: approve ? 'Leave cancellation approved' : 'Leave cancellation declined',
+    data: {
+      type: 'time_off_decision',
+      request_id: existing.id,
+      // What the LEAVE now is, which is what the phone's schedule tab shows.
+      status: approve ? 'cancelled' : 'approved',
+      start_date: existing.start_date,
+    },
+  }).catch(err => console.error('[time-off] cancel-decision notify failed', err)))
 
   return NextResponse.json({ success: true, data, cancellation: updates.cancel_decision })
 }
@@ -188,16 +188,7 @@ export async function DELETE(request, props) {
   }
 
   const { data: rows, error } = await db.from('time_off_requests')
-    .update({
-      cancel_requested_at: null,
-      cancel_requested_by: null,
-      cancel_request_note: null,
-      cancel_decided_at: null,
-      cancel_decided_by: null,
-      cancel_decision: null,
-      cancel_decision_note: null,
-      updated_at: new Date().toISOString(),
-    })
+    .update({ ...CLEARED_CANCEL_ASK, updated_at: new Date().toISOString() })
     .eq('id', existing.id)
     .eq('profile_id', user.id)
     .eq('status', 'approved')
