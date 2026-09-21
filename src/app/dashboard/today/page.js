@@ -18,7 +18,7 @@
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import {
-  Calendar, AlertCircle, AlertTriangle, ClipboardCheck, Inbox, MessagesSquare,
+  Calendar, CalendarX, AlertCircle, AlertTriangle, ClipboardCheck, Inbox, MessagesSquare,
   Radar, CheckSquare, Flag, Mail, Receipt, FileText, Wallet, Zap,
   ArrowLeftRight, Users, Handshake, ShoppingBag,
 } from 'lucide-react'
@@ -102,6 +102,8 @@ const QUEUE_SOURCE_ICONS = {
   fte_expenses: <Wallet size={16} />,
   agent_requests: <Zap size={16} />,
   time_off: <Calendar size={16} />,
+  // LEAVECANCEL.1 — a request to cancel approved leave (owner/master only).
+  time_off_cancellations: <CalendarX size={16} />,
   shift_swaps: <ArrowLeftRight size={16} />,
   rosters: <ClipboardCheck size={16} />,
   hyrox_sessions: <Users size={16} />,

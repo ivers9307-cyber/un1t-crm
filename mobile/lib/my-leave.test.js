@@ -58,6 +58,12 @@ describe('myLeaveRow', () => {
     expect(r.cancelNote).toBe('Cancellation declined. Your leave stays approved. "We are short that week"')
     expect(r.canWithdrawCancel).toBe(false)
   })
+  it('leave cancelled at the person\'s own request says so, and who approved it', () => {
+    const done = row('r1', 'cancelled', '2026-10-05', { cancel_request_state: 'approved', cancel_decision: 'approved', cancel_decider: { full_name: 'Olive Owner' } })
+    expect(myLeaveRow(done, ME).cancelNote).toBe('Cancelled at your request, approved by Olive Owner.')
+    expect(myLeaveRow({ ...done, cancel_decider: null }, ME).cancelNote).toBe('Cancelled at your request, approved by an owner.')
+    expect(myLeaveRow(row('r1', 'cancelled', '2026-10-05'), ME).cancelNote).toBeNull()
+  })
   it('a row from a deployment that predates LEAVECANCEL.1 carries no flags and reads exactly as before', () => {
     expect(myLeaveRow(row('r1', 'approved', '2026-10-05'), ME)).toMatchObject({ cancelNote: null, canWithdrawCancel: false })
   })

@@ -58,6 +58,7 @@ function buildDb({
   askMatches = true,
   // What the status PUT's .single() UPDATE answers when it fails.
   updateError = null,
+  readError = null,
 }) {
   const updateSpy = vi.fn()
   const allowanceInsertSpy = vi.fn()
@@ -65,6 +66,7 @@ function buildDb({
   const db = fakeDb((q) => {
     if (q.table === 'time_off_requests' && q.action === 'select') {
       reads += 1
+      if (readError) return { data: null, error: readError }
       const row = reads > 1 && reread ? reread : existing
       // A read that asks for the people embeds gets them, so a test can tell
       // the full answer shape from a bare row.
@@ -677,6 +679,15 @@ describe('PUT /api/schedule/time-off/[id] — an ask dies with the state it was 
     res = await PUT(req({ status: 'rejected' }), PROPS)
     expect(res.status).toBe(409)
     expect((await res.json()).error).toBe('This leave was already cancelled.')
+  })
+
+  it('a FAILED read of the request is a 500, not "Request not found" (the error used to be discarded)', async () => {
+    getCurrentUser.mockResolvedValue(colleague())
+    const { db, updateSpy } = buildDb({ existing: theirs(), readError: { message: 'connection reset' } })
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(req({ status: 'cancelled' }), PROPS)
+    expect(res.status).toBe(500)
+    expect(updateSpy).not.toHaveBeenCalled()
   })
 
   it('any other failed write is still the 400 it always was', async () => {

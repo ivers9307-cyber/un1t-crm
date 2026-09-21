@@ -86,6 +86,17 @@ describe('TimeOffManager — asking to cancel your own approved leave', () => {
     await waitFor(() => expect(within(screen.getByRole('dialog')).getByRole('alert').textContent).toMatch(/no other owner/))
   })
 
+  it('a cancelled row whose cancellation an owner approved says how it came to be cancelled, to the person and to managers', async () => {
+    const done = { ...base, status: 'cancelled', effective_status: 'cancelled', cancel_request_state: 'approved', cancel_decision: 'approved', cancel_decider: { id: 'own', full_name: 'Olive Owner' } }
+    mockFetch({ requests: [done] })
+    await show(MANAGER)
+    expect(screen.getByText('Cancelled at your request, approved by Olive Owner.')).toBeTruthy()
+    cleanup()
+    mockFetch({ requests: [done] })
+    await show(OTHER_MANAGER)
+    expect(screen.getByText("Cancelled at Mia Manager's request, approved by Olive Owner.")).toBeTruthy()
+  })
+
   it('a plain approved row of someone who may not ask offers nothing', async () => {
     mockFetch({ requests: [base] })
     await show(MANAGER)

@@ -885,6 +885,14 @@ describe('GET /api/schedule/time-off — cancel-request annotations (LEAVECANCEL
     expect(rows.plain).toMatchObject({ cancel_request_state: null, can_request_cancel: true, cancel_needs_owner: true, can_withdraw_cancel: false })
   })
 
+  it('reads who DECIDED a cancellation, so a cancelled row can say "approved by <name>"', async () => {
+    getCurrentUser.mockResolvedValue(at('mgr', 'manager'))
+    const db = listDb()
+    createServerClient.mockReturnValue(db)
+    await GET(getReq('?location_id=loc-1'))
+    expect(queriesOf(db, 'time_off_requests')[0].columns.replace(/\s/g, '')).toContain('cancel_decider:profiles!cancel_decided_by(id,full_name)')
+  })
+
   it('an owner may decide it; another manager sees it is open and is offered nothing', async () => {
     expect((await byId(at('own', 'owner'))).asked).toMatchObject({ cancel_request_state: 'open', can_decide_cancel: true, can_withdraw_cancel: false })
     const seenByManager = (await byId(at('mgr-2', 'manager'))).asked

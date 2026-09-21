@@ -61,7 +61,8 @@ export async function GET(request) {
     .select(`
       *,
       profiles!profile_id(id, full_name, avatar_url, role),
-      reviewer:profiles!reviewed_by(id, full_name)
+      reviewer:profiles!reviewed_by(id, full_name),
+      cancel_decider:profiles!cancel_decided_by(id, full_name)
     `)
     .order('start_date', { ascending: true })
 

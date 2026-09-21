@@ -95,6 +95,11 @@ export function myLeaveWithdrawOutcome(res) {
 // LEAVECANCEL.1 — the line under approved leave whose cancellation was asked for.
 function cancelNoteOf(r) {
   if (r?.cancel_request_state === 'open') return MY_LEAVE_CANCEL_REQUESTED
+  // The same sentence the web list shows (src/lib/time-off-cancel-copy.js;
+  // mobile cannot import src/lib). `cancel_decider` is the list route's embed.
+  if (r?.status === 'cancelled' && r.cancel_decision === 'approved') {
+    return `Cancelled at your request, approved by ${r.cancel_decider?.full_name || 'an owner'}.`
+  }
   if (r?.cancel_request_state === 'rejected' && r.status === 'approved') {
     return `Cancellation declined. Your leave stays approved.${r.cancel_decision_note ? ` "${r.cancel_decision_note}"` : ''}`
   }

@@ -46,10 +46,13 @@ export async function PUT(request, props) {
   const db = createServerClient()
 
   // Get the existing request
-  const { data: existing } = await db.from('time_off_requests')
+  // Primary-key read: 0 rows is a legitimate answer (404 below); a failed read
+  // is not, and used to be reported as "not found" (the error was discarded).
+  const { data: existing, error: readError } = await db.from('time_off_requests')
     .select('*')
     .eq('id', params.id)
-    .single()
+    .maybeSingle()
+  if (readError) return NextResponse.json({ success: false, error: readError.message }, { status: 500 })
 
   if (!existing) {
     return NextResponse.json({ success: false, error: 'Request not found' }, { status: 404 })

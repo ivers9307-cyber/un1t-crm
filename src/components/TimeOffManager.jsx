@@ -7,6 +7,8 @@ import { MANAGER_ROLES } from '@/lib/schemas'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { timeOffTypesFor, defaultTimeOffTypeFor, leaveClashLabel, leaveClashPrompt } from '@shared/time-off'
 import { Modal, Button } from '@/components/ui'
+// LEAVECANCEL.1 — shared with the dashboard's My requests card.
+import { LEAVE_CANCEL_NOTICES, cancelledAtRequestText } from '@/lib/time-off-cancel-copy'
 // ROSTER-FIX.6a — one failure shape and one banner across the schedule
 // screens, so no call site can quietly forget to check the response.
 import ScheduleErrorBanner from './schedule/ScheduleErrorBanner'
@@ -245,13 +247,8 @@ export default function TimeOffManager({ user, canApprove, canDecideCancellation
   // LEAVECANCEL.1 — ask (PUT), decide (POST) or withdraw (DELETE). Returns the
   // failure message for the dialog to show in place, or null when it worked.
   // The notice is worded from the server's `cancellation`, never assumed: a
-  // master's PUT cancels outright, a manager's only asks.
-  const CANCEL_NOTICES = {
-    requested: 'Sent to an owner. Your leave is still approved until they decide.',
-    approved: 'Cancellation approved. The leave is cancelled and the person has been told.',
-    rejected: 'Cancellation declined. The leave stays approved and the person has been told.',
-    withdrawn: 'Cancellation request withdrawn. Your leave is still approved.',
-  }
+  // master's PUT cancels outright, a manager's only asks. The words are
+  // LEAVE_CANCEL_NOTICES, shared with the dashboard's My requests card.
   async function sendCancelAction(id, method, path, body) {
     if (actingId) return 'Another action is still in progress.'
     setActingId(id)
@@ -265,7 +262,7 @@ export default function TimeOffManager({ user, canApprove, canDecideCancellation
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok || !data.success) return data.error || 'The request was not updated.'
-      setNotice(CANCEL_NOTICES[data.cancellation] || 'Leave cancelled.')
+      setNotice(LEAVE_CANCEL_NOTICES[data.cancellation] || 'Leave cancelled.')
       await fetchData()
       return null
     } catch {
@@ -493,6 +490,9 @@ export default function TimeOffManager({ user, canApprove, canDecideCancellation
                         : 'Asked to cancel this leave. It is still approved until an owner decides.'}
                       {req.cancel_request_note ? ` Reason: "${req.cancel_request_note}"` : ''}
                     </div>
+                  )}
+                  {cancelledAtRequestText(req, { own: isOwn }) && (
+                    <div className="text-xs text-un1t-subtle mt-1">{cancelledAtRequestText(req, { own: isOwn })}</div>
                   )}
                   {cancelAsk === 'rejected' && isOwn && (
                     <div className="text-xs text-un1t-subtle mt-1">
