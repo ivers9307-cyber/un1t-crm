@@ -22,8 +22,11 @@ vi.mock('next/navigation', () => ({
   useSearchParams: () => new URLSearchParams(search),
 }))
 
+const SESSION_A = { access_token: 't', user: { id: 'user-a' } }
+const SESSION_B = { access_token: 't2', user: { id: 'user-b' } }
 const auth = {
   getSession: vi.fn(),
+  resetPasswordForEmail: vi.fn(async () => ({ error: null })),
   signOut: vi.fn(async () => ({ error: null })),
   signInWithPassword: vi.fn(),
   signInWithOtp: vi.fn(async () => ({ error: null })),
@@ -68,7 +71,7 @@ describe('/login — landing with a live session', () => {
   })
 
   it('deactivated: says so calmly and clears the LOCAL session only', async () => {
-    auth.getSession.mockResolvedValue({ data: { session: { access_token: 't' } } })
+    auth.getSession.mockResolvedValue({ data: { session: SESSION_A } })
     accountState = 'deactivated'
     render(<LoginPage />)
     expect(await screen.findByText(DEACTIVATED_MESSAGE)).toBeTruthy()
@@ -79,7 +82,7 @@ describe('/login — landing with a live session', () => {
   })
 
   it.each(['active', 'unknown', 'signed_out'])('%s: a live session is left alone, and nothing is shown', async (state) => {
-    auth.getSession.mockResolvedValue({ data: { session: { access_token: 't' } } })
+    auth.getSession.mockResolvedValue({ data: { session: SESSION_A } })
     accountState = state
     render(<LoginPage />)
     await waitFor(() => expect(stateCalls).toBe(1))
@@ -88,7 +91,7 @@ describe('/login — landing with a live session', () => {
   })
 
   it('a failing account-state call changes nothing (the page must still let people sign in)', async () => {
-    auth.getSession.mockResolvedValue({ data: { session: { access_token: 't' } } })
+    auth.getSession.mockResolvedValue({ data: { session: SESSION_A } })
     global.fetch = vi.fn(async () => { throw new Error('offline') })
     render(<LoginPage />)
     await waitFor(() => expect(global.fetch).toHaveBeenCalled())
@@ -97,7 +100,7 @@ describe('/login — landing with a live session', () => {
   })
 
   it('the notice survives switching sign-in mode (switchMode clears ordinary errors)', async () => {
-    auth.getSession.mockResolvedValue({ data: { session: { access_token: 't' } } })
+    auth.getSession.mockResolvedValue({ data: { session: SESSION_A } })
     accountState = 'deactivated'
     render(<LoginPage />)
     await screen.findByText(DEACTIVATED_MESSAGE)
@@ -106,7 +109,7 @@ describe('/login — landing with a live session', () => {
   })
 
   it('never signs out once a login link has been requested from this page — signOut() deletes the PKCE code verifier', async () => {
-    auth.getSession.mockResolvedValue({ data: { session: { access_token: 't' } } })
+    auth.getSession.mockResolvedValue({ data: { session: SESSION_A } })
     accountState = 'deactivated'
     let release
     global.fetch = vi.fn((url) => {
@@ -125,10 +128,79 @@ describe('/login — landing with a live session', () => {
     expect(auth.signOut).not.toHaveBeenCalled()
   })
 
+  // A pending account-state answer, released by the test.
+  const holdAccountState = () => {
+    const held = {}
+    global.fetch = vi.fn((url) => {
+      if (String(url).includes('/api/auth/account-state')) {
+        return new Promise((resolve) => { held.release = () => resolve({ ok: true, json: async () => ({ success: true, data: { state: 'deactivated' } }) }) })
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ success: false }) })
+    })
+    return held
+  }
+
+  it('…nor once a PASSWORD RESET has been requested — resetPasswordForEmail stores a PKCE verifier too', async () => {
+    auth.getSession.mockResolvedValue({ data: { session: SESSION_A } })
+    const held = holdAccountState()
+    render(<LoginPage />)
+    await waitFor(() => expect(held.release).toBeTypeOf('function'))
+    fireEvent.click(screen.getByText('Sign in with a password instead'))
+    fireEvent.click(screen.getByText('Reset password'))
+    fireEvent.change(screen.getByPlaceholderText('you@un1t.ie'), { target: { value: 'coach@example.test' } })
+    fireEvent.click(screen.getByText('Send reset link'))
+    await waitFor(() => expect(auth.resetPasswordForEmail).toHaveBeenCalled())
+    held.release()
+    expect(await screen.findByText(DEACTIVATED_MESSAGE)).toBeTruthy()
+    expect(auth.signOut).not.toHaveBeenCalled()
+  })
+
+  it('never signs out a session established AFTER the check started: the answer was about user A, the session is now user B', async () => {
+    auth.getSession.mockResolvedValueOnce({ data: { session: SESSION_A } })
+    auth.getSession.mockResolvedValue({ data: { session: SESSION_B } })
+    const held = holdAccountState()
+    render(<LoginPage />)
+    await waitFor(() => expect(held.release).toBeTypeOf('function'))
+    held.release()
+    await waitFor(() => expect(auth.getSession).toHaveBeenCalledTimes(2))
+    expect(auth.signOut).not.toHaveBeenCalled()
+    // …and user B is not told THEIR account is deactivated.
+    expect(screen.queryByText(DEACTIVATED_MESSAGE)).toBeNull()
+  })
+
+  it('a session with no readable user id is never signed out by the landing check', async () => {
+    auth.getSession.mockResolvedValue({ data: { session: { access_token: 't' } } })
+    accountState = 'deactivated'
+    render(<LoginPage />)
+    await waitFor(() => expect(auth.getSession).toHaveBeenCalled())
+    await new Promise((r) => setTimeout(r, 20))
+    expect(auth.signOut).not.toHaveBeenCalled()
+  })
+
   it('?error=account_deactivated seeds the same notice', async () => {
     search = 'error=account_deactivated'
     render(<LoginPage />)
     expect(screen.getByText(DEACTIVATED_MESSAGE)).toBeTruthy()
+  })
+})
+
+describe('/login — login-link request by a deactivated person (review S1)', () => {
+  it('a BANNED answer from the OTP request shows the notice, not the generic "link is on its way"', async () => {
+    auth.signInWithOtp.mockResolvedValueOnce({ error: { message: 'User is banned', code: 'user_banned', status: 400 } })
+    render(<LoginPage />)
+    fireEvent.change(screen.getByPlaceholderText('you@un1t.ie'), { target: { value: 'coach@example.test' } })
+    fireEvent.click(screen.getByText('Email me a login link'))
+    expect(await screen.findByText(DEACTIVATED_MESSAGE)).toBeTruthy()
+    expect(screen.queryByText(/a login link is on its way/)).toBeNull()
+    expect(screen.queryByText(/Couldn't send the link/)).toBeNull()
+  })
+  it('an unknown email still gets the identical generic success (anti-enumeration unchanged)', async () => {
+    auth.signInWithOtp.mockResolvedValueOnce({ error: { message: 'Signups not allowed for otp' } })
+    render(<LoginPage />)
+    fireEvent.change(screen.getByPlaceholderText('you@un1t.ie'), { target: { value: 'nobody@example.test' } })
+    fireEvent.click(screen.getByText('Email me a login link'))
+    expect(await screen.findByText(/a login link is on its way/)).toBeTruthy()
+    expect(screen.queryByText(DEACTIVATED_MESSAGE)).toBeNull()
   })
 })
 

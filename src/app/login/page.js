@@ -50,10 +50,11 @@ function LoginInner() {
   const [accountNotice, setAccountNotice] = useState(
     () => (searchParams.get('error') === 'account_deactivated' ? DEACTIVATED_MESSAGE : null)
   )
-  // Set the moment a login link is requested from this page. signOut() deletes
-  // the PKCE code verifier (CLAUDE.md), which would turn the link they are
-  // about to click into "link expired" — so the landing check below must never
-  // sign out after it.
+  // Set the moment this page asks Supabase for ANY emailed link — the login
+  // link (signInWithOtp) and the password reset (resetPasswordForEmail) both
+  // store a PKCE code verifier. signOut() deletes it (CLAUDE.md), which would
+  // turn the link they are about to click into "link expired" — so the landing
+  // check below must never sign out after either.
   const linkRequestedRef = useRef(false)
 
   useEffect(() => {
@@ -79,9 +80,17 @@ function LoginInner() {
       try {
         const supa = createBrowserClient()
         const { data } = await supa.auth.getSession()
-        if (cancelled || !data?.session) return
+        // The answer below is about THIS user. No readable id → nothing to pin
+        // it to, so nothing is said and nobody is signed out.
+        const checkedUserId = data?.session?.user?.id
+        if (cancelled || !checkedUserId) return
         const state = await fetchAccountState()
         if (cancelled || state !== 'deactivated') return
+        // The round trip took time, and someone may have signed in on this
+        // page meanwhile. Only act if the session is STILL the one the answer
+        // was about: never tell, or sign out, a different person.
+        const { data: now } = await supa.auth.getSession()
+        if (cancelled || now?.session?.user?.id !== checkedUserId) return
         setAccountNotice(DEACTIVATED_MESSAGE)
         if (!linkRequestedRef.current) await supa.auth.signOut({ scope: 'local' })
       } catch { /* the form below still works */ }
@@ -120,6 +129,11 @@ function LoginInner() {
         },
       })
       logAuthEvent({ action: 'auth.magic_link_requested', email })
+      // ACTIVEUSER.1 (review S1) — same as handlePassword: a banned login is a
+      // deactivated account, and "a link is on its way" would be a promise
+      // nothing keeps. (GoTrue already tells a password attempt the same, so
+      // this reveals nothing the form did not.)
+      if (isBannedSignInError(error)) { setAccountNotice(DEACTIVATED_MESSAGE); return }
       if (error && (error.status === 429 || /rate/i.test(error.message || ''))) {
         setError('Too many requests. Please wait a minute and try again.')
       } else if (error && !/signups? not allowed|not found|otp_disabled/i.test(error.message || '')) {
@@ -177,6 +191,7 @@ function LoginInner() {
     setBusy(true); setError(null); setSuccess(null)
     try {
       if (!email) throw new Error('Please enter your email address')
+      linkRequestedRef.current = true
       const supa = createBrowserClient()
       const { error } = await supa.auth.resetPasswordForEmail(email, {
         redirectTo: `${window.location.origin}/reset-password`,

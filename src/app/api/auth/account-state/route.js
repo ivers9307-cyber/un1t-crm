@@ -30,7 +30,12 @@ import { logError } from '@/lib/log'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-const answer = (state) => NextResponse.json({ success: true, data: { state } })
+// no-store: the answer is about one session at one instant. A cached
+// `deactivated` would outlive a reactivation and sign the person out again.
+const answer = (state) => NextResponse.json(
+  { success: true, data: { state } },
+  { headers: { 'Cache-Control': 'no-store' } },
+)
 
 export async function GET() {
   const user = await getCurrentUser()

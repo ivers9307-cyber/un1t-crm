@@ -81,6 +81,13 @@ describe('GET /api/auth/account-state', () => {
     expect(await stateOf()).toBe('unknown')
   })
 
+  it('every answer is Cache-Control: no-store — a cached "deactivated" would outlive a reactivation', async () => {
+    for (const opts of [{ resolved: { id: ID } }, { sessionUser: null }, { profile: { id: ID, active: false, deleted_at: null } }, { profile: null }]) {
+      arrange(opts)
+      expect((await GET()).headers.get('cache-control')).toBe('no-store')
+    }
+  })
+
   it('a throwing session read is signed_out, not a 500', async () => {
     arrange({ sessionThrows: true })
     expect(await stateOf()).toBe('signed_out')
