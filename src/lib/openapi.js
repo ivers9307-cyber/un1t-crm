@@ -4534,8 +4534,9 @@ registry.registerPath({
   responses: {
     200: { description: 'Request updated, or (own approved leave, manager tier) the cancellation was requested and the leave is still approved' },
     403: { description: 'Deciding your own request, a status other than cancelled on your own request, or no time-off approval permission', content: { 'application/json': { schema: ErrorResponse } } },
-    404: { description: 'Not found, or not at a studio the caller manages', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found, a malformed id, or not at a studio the caller manages', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'Expired pending request; own approved leave that has ended, has nobody else to approve its cancellation, or was declined under 24h ago; or the leave changed / was already cancelled a moment ago', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'LEAVECANCEL.1: asking an owner to cancel approved leave while mig 624 is not applied; nothing was changed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
