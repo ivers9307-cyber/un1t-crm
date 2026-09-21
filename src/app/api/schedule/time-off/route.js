@@ -449,6 +449,11 @@ export async function POST(request) {
 // just inserted, through the same update the approval route makes (so the
 // allowance trigger charges a holiday), and hand back the shift clashes the
 // same way an approval does.
+//
+// LEAVEGUARD.1 — deliberately NOT owner-gated when the person is a manager:
+// recording leave (someone phoned in sick) puts leave INTO force, which is the
+// ordinary approval permission's call. Only taking a manager's approved leave
+// OUT of force needs an owner (PUT /api/schedule/time-off/[id]).
 async function approveRecordedLeave(db, user, created, { type, employmentType }) {
   const ids = created.map((r) => r.id)
   if (type === 'holiday' && employmentType !== 'contractor') {
