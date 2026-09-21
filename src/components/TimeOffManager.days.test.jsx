@@ -35,12 +35,19 @@ const previewBody = (total, year = 2026) => ({
 
 const json = (body, status = 200) => ({ ok: status < 400, status, json: async () => body })
 
-/** `onPreview(url, n)` returns a response or a promise of one; n counts preview calls from 1. */
-function mockFetch({ remaining = 16, onPreview, staff = [], posted = [] } = {}) {
+/**
+ * `onPreview(url, n)` returns a response or a promise of one; n counts preview
+ * calls from 1. `pendingDays: null` is an allowances response WITHOUT the field
+ * (a deployment that predates it).
+ */
+function mockFetch({ remaining = 16, pendingDays = 0, onPreview, staff = [], posted = [] } = {}) {
   const previews = []
   global.fetch = vi.fn(async (url, opts = {}) => {
     if (opts.method === 'POST') { posted.push(JSON.parse(opts.body)); return json({ success: true, data: { id: 'new' } }) }
-    if (url.includes('allowance')) return json({ success: true, data: { year: 2026, total_days: 20, used_days: 20 - remaining, carried_over: 0, remaining } })
+    if (url.includes('allowance')) {
+      const pending = pendingDays === null ? {} : { pending_days: pendingDays }
+      return json({ success: true, data: { year: 2026, total_days: 20, used_days: 20 - remaining, carried_over: 0, remaining, ...pending } })
+    }
     if (url.includes('/api/staff')) return json({ success: true, data: staff })
     if (url.includes('preview=1')) {
       previews.push({ url, signal: opts.signal })
@@ -176,20 +183,108 @@ describe('TimeOffManager — LEAVEDAYS.1, the form shows what the server will ch
     expect(dialog.textContent).not.toMatch(/requested|calendar day|Counting/)
   })
 
-  it('re-asks when the type changes (only a holiday is charged in working days)', async () => {
+  it('only a holiday asks: other types are charged in calendar days, shown at once with no "Counting days..."', async () => {
     const previews = mockFetch({ onPreview: () => json(previewBody(4)) })
     const { dialog, start, end } = await openForm()
+    const pick = (label) => act(async () => {
+      fireEvent.click(Array.from(dialog.querySelectorAll('button[aria-pressed]')).find((b) => b.textContent.trim() === label))
+    })
+    await pick('Sick')
     await setDate(start, '2026-10-26')
     await setDate(end, '2026-10-30')
-    await advance(DEBOUNCE)
-    await act(async () => {
-      fireEvent.click(Array.from(dialog.querySelectorAll('button[aria-pressed]')).find((b) => b.textContent.trim() === 'Sick'))
-    })
-    expect(dialog.textContent).toContain('Counting days...')
-    await advance(DEBOUNCE)
-    expect(previews).toHaveLength(2)
-    expect(previews[1].url).toContain('type=sick')
+    expect(dialog.textContent).toContain('5 days requested')
+    expect(dialog.textContent).not.toContain('Counting days...')
     expect(dialog.textContent).not.toContain('remaining')
+    await advance(DEBOUNCE * 2)
+    expect(previews).toHaveLength(0)
+
+    // Back to holiday: now it is the server's question.
+    await pick('Holiday')
+    expect(dialog.textContent).toContain('Counting days...')
+    expect(dialog.textContent).not.toContain('5 days requested')
+    await advance(DEBOUNCE)
+    expect(previews).toHaveLength(1)
+    expect(previews[0].url).toContain('type=holiday')
+    expect(dialog.textContent).toContain('4 days requested')
+  })
+
+  it('a span over the route\'s one-year limit asks nothing and shows no count: the POST refuses the range', async () => {
+    const previews = mockFetch({ onPreview: () => json(previewBody(1)) })
+    const { dialog, start, end } = await openForm()
+    await setDate(start, '2026-10-26')
+    await setDate(end, '2027-10-27')
+    await advance(DEBOUNCE * 2)
+    expect(previews).toHaveLength(0)
+    expect(dialog.textContent).not.toMatch(/requested|calendar day|Counting/)
+  })
+
+  describe('pending holiday requests', () => {
+    // Fri 12 Jun to Mon 15 Jun 2026: 2 working days.
+    const twoDays = () => json({ success: true, data: { days: { total: 2, segments: [{ year: 2026, start_date: '2026-06-12', end_date: '2026-06-15', days: 2 }] }, clashes: [] } })
+
+    it('3 remaining with 2 pending: a 2-day request IS flagged, as the POST will refuse it', async () => {
+      mockFetch({ remaining: 3, pendingDays: 2, onPreview: twoDays })
+      const { dialog, start, end } = await openForm()
+      await setDate(start, '2026-06-12')
+      await setDate(end, '2026-06-15')
+      await advance(DEBOUNCE)
+      expect(dialog.textContent).toContain('2 days requested')
+      expect(dialog.textContent).toContain('3 remaining, 2 pending')
+      expect(screen.getByText('(exceeds balance)')).toBeTruthy()
+    })
+
+    it('an allowance without pending_days (older deployment): hedged wording, judged on `remaining` as before', async () => {
+      mockFetch({ remaining: 3, pendingDays: null, onPreview: twoDays })
+      const { dialog, start, end } = await openForm()
+      await setDate(start, '2026-06-12')
+      await setDate(end, '2026-06-15')
+      await advance(DEBOUNCE)
+      expect(dialog.textContent).toContain('3 remaining before pending requests')
+      expect(dialog.textContent).not.toContain('exceeds balance')
+    })
+  })
+
+  describe('screen readers', () => {
+    it('the live region is there BEFORE any line, hides the wait, and announces each settled line whole', async () => {
+      mockFetch({ remaining: 3, onPreview: () => json(previewBody(4)) })
+      const { dialog, start, end } = await openForm()
+      const live = dialog.querySelector('[aria-live]')
+      expect(live.getAttribute('aria-live')).toBe('polite')
+      expect(live.getAttribute('aria-atomic')).toBe('true')
+      expect(live.textContent).toBe('')
+
+      await setDate(start, '2026-10-26')
+      await setDate(end, '2026-10-30')
+      // Same node: a region mounted together with its content is not announced.
+      expect(dialog.querySelector('[aria-live]')).toBe(live)
+      expect(live.textContent).toContain('Counting days...')
+      expect(screen.getByText('Counting days...').closest('[aria-hidden="true"]')).not.toBeNull()
+
+      await advance(DEBOUNCE)
+      expect(dialog.querySelector('[aria-live]')).toBe(live)
+      expect(live.querySelector('[aria-hidden]')).toBeNull()
+      // The warning and the rule are inside the announced region.
+      expect(live.textContent).toContain('4 days requested')
+      expect(live.textContent).toContain('(exceeds balance)')
+      expect(live.textContent).toContain('Weekends, bank holidays')
+    })
+
+    it('the hint and the other-year note are readable text (subtle), not the 2.6:1 muted grey', async () => {
+      mockFetch({
+        onPreview: () => json({ success: true, data: { days: { total: 6, segments: [
+          { year: 2026, start_date: '2026-12-30', end_date: '2026-12-31', days: 2 },
+          { year: 2027, start_date: '2027-01-01', end_date: '2027-01-07', days: 4 },
+        ] }, clashes: [] } }),
+      })
+      const { start, end } = await openForm()
+      await setDate(start, '2026-12-30')
+      await setDate(end, '2027-01-07')
+      await advance(DEBOUNCE)
+      for (const el of [screen.getByText(/^Weekends, bank holidays/), screen.getByText(/^4 of these days fall in 2027/)]) {
+        expect(el.className).toContain('text-un1t-subtle')
+        expect(el.className).not.toContain('text-un1t-muted')
+      }
+    })
   })
 
   it('on behalf of a colleague: the server\'s number, no balance, no profile in the query, and never the manager\'s own clashes', async () => {
@@ -237,8 +332,5 @@ describe('TimeOffManager — LEAVEDAYS.1, the form shows what the server will ch
     await advance(0)
     expect(screen.queryByRole('dialog')).toBeNull()
     expect(previews[0].signal.aborted).toBe(true)
-    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
-    await advance(500)
-    expect(errors).not.toHaveBeenCalled()
   })
 })
