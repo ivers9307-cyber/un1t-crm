@@ -50,6 +50,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 const MIG_DIR = 'supabase/migrations'
 
@@ -111,8 +112,11 @@ const reachesAuthenticated = (roles) =>
 
 const coversSelect = (cmd) => cmd === 'ALL' || cmd === 'SELECT'
 
-function netPolicyState () {
-  const files = fs.readdirSync(MIG_DIR)
+// Exported for tests/rls-active-staff-gate.test.js (RLSACTIVE.1), which
+// reads each policy's `body` (everything after `ON <table>`) to prove every
+// inline read of a profile table carries the active-staff gate.
+export function netPolicyState (migDir = MIG_DIR) {
+  const files = fs.readdirSync(migDir)
     .filter((f) => f.endsWith('.sql'))
     .sort((a, b) => {
       const na = parseInt(a, 10)
@@ -128,7 +132,7 @@ function netPolicyState () {
   const policies = new Map()
 
   for (const file of files) {
-    const sql = stripSql(fs.readFileSync(path.join(MIG_DIR, file), 'utf8'))
+    const sql = stripSql(fs.readFileSync(path.join(migDir, file), 'utf8'))
     for (const raw of sql.split(';')) {
       const stmt = raw.trim()
       if (!stmt) continue
@@ -146,7 +150,7 @@ function netPolicyState () {
           const name = normIdent(m[1])
           if (!policies.has(table)) policies.set(table, new Map())
           policies.get(table).set(name, {
-            table, name, file, ...parseTail(m[3]),
+            table, name, file, body: m[3].trim(), ...parseTail(m[3]),
           })
         }
         continue
@@ -223,4 +227,6 @@ function main () {
   process.exit(1)
 }
 
-main()
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main()
+}
