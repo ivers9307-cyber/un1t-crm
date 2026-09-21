@@ -376,7 +376,7 @@ export async function DELETE(request, props) {
 
   const { data: profile } = await db
     .from('profiles')
-    .select('id, deleted_at, profile_locations(*, locations(*))')
+    .select('id, role, active, deleted_at, profile_locations(*, locations(*))')
     .eq('id', id)
     .single()
 
@@ -406,6 +406,20 @@ export async function DELETE(request, props) {
   // so this 404 is not an id-existence oracle. Only a master reaches it.
   if (!profile || isTombstone(profile)) {
     return NextResponse.json({ success: false, error: 'Profile not found' }, { status: 404 })
+  }
+
+  // ACTIVEUSER.1 (review B1) — the SAME who-may-edit-whom rule PUT enforces.
+  // Overlap alone let owner A deactivate, and now BAN, peer owner B at a studio
+  // they share, while PUT refused that exact pair. Self is already a 400 above,
+  // so the only refusal left to word is the peer-owner one. Masters pass.
+  if (!canEditStaffMember(
+    { id: user.id, role: user.role, isMaster: user.isMaster, rolesByLocation: user.rolesByLocation },
+    { id: profile.id, role: profile.role, locationIds: (profile.profile_locations || []).map(l => l.location_id) },
+  )) {
+    return NextResponse.json({
+      success: false,
+      error: 'Owners cannot edit other owners. Ask a master to make this change.',
+    }, { status: 403 })
   }
 
   // Revoke door access first. If UniFi is unreachable on any

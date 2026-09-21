@@ -48,7 +48,10 @@ function makeDb({ profile = PROFILE, writeError = null, contact = null, hostUser
       current = { ...current, ...q.payload }
       return { data: null, error: null }
     }
-    if (q.table === 'profile_locations' && q.action === 'update') return { data: null, error: null }
+    if (q.table === 'profile_locations' && q.action === 'update') {
+      events.push(['profile_locations.update', q.payload])
+      return { data: null, error: null }
+    }
     if (q.table === 'contacts') return { data: contact, error: null }
     if (q.table === 'host_users') return { data: hostUser, error: null }
     throw new Error(`unexpected ${q.action} on ${q.table}`)
@@ -81,6 +84,7 @@ describe('DELETE /api/staff/[id] — deactivate ends the sessions', () => {
     expect(await res.json()).toEqual({ success: true, data: { login: 'banned' } })
     expect(db.events).toEqual([
       ['profiles.update', { active: false, unifi_door_access: false }],
+      ['profile_locations.update', { unifi_door_access: false }],
       ['auth.update', { ban_duration: AUTH_BAN_DURATION }],
     ])
     expect(db.auth.admin.deleteUser).not.toHaveBeenCalled()
@@ -156,6 +160,43 @@ describe('DELETE /api/staff/[id] — deactivate ends the sessions', () => {
     getCurrentUser.mockResolvedValue({ ...MASTER, id: ID })
     expect((await DELETE(del(), props)).status).toBe(400)
     expect(db.events).toEqual([])
+  })
+})
+
+// B1 — DELETE gated only on location OVERLAP, so owner A could deactivate — and
+// now BAN — peer owner B at a studio they share (prod has a two-owner studio),
+// while PUT refused the same pair via canEditStaffMember.
+describe('DELETE /api/staff/[id] — who may deactivate whom (canEditStaffMember, as on PUT)', () => {
+  const OWNER = { id: 'owner-a', isMaster: false, role: 'owner', full_name: 'Owner A', email: 'a@example.test', rolesByLocation: { 'loc-1': 'owner' } }
+  const peerOwner = { ...PROFILE, role: 'owner', profile_locations: [{ ...PROFILE.profile_locations[0], role: 'owner' }] }
+
+  it('owner → PEER OWNER at a shared studio: 403 with PUT\'s wording, nothing written, nobody banned', async () => {
+    getCurrentUser.mockResolvedValue(OWNER)
+    const db = use(makeDb({ profile: peerOwner }))
+    const res = await DELETE(del(), props)
+    expect(res.status).toBe(403)
+    expect((await res.json()).error).toBe('Owners cannot edit other owners. Ask a master to make this change.')
+    expect(db.events).toEqual([])
+    expect(db.auth.admin.updateUserById).not.toHaveBeenCalled()
+  })
+
+  it('owner → staff at their studio: allowed, and banned', async () => {
+    getCurrentUser.mockResolvedValue(OWNER)
+    const db = use(makeDb())
+    expect((await DELETE(del(), props)).status).toBe(200)
+    expect(db.auth.admin.updateUserById).toHaveBeenCalledWith(ID, { ban_duration: AUTH_BAN_DURATION })
+  })
+
+  it('master → owner: allowed', async () => {
+    const db = use(makeDb({ profile: peerOwner }))
+    expect((await DELETE(del(), props)).status).toBe(200)
+    expect(db.auth.admin.updateUserById).toHaveBeenCalled()
+  })
+
+  it('reads the target\'s role — a select without it could never refuse', async () => {
+    const db = use(makeDb())
+    await DELETE(del(), props)
+    expect(queriesOf(db, 'profiles', 'select')[0].columns).toMatch(/\brole\b/)
   })
 })
 
