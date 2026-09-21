@@ -160,6 +160,8 @@ const TimeOffRequest = z.object({
 const TimeOffReview = z.object({
   status: timeOffStatusSchema,
   review_note: z.string().max(2000).nullable().optional(),
+  // LEAVECANCEL.1 — the reason sent with `cancelled` on your own approved leave.
+  cancel_request_note: z.string().max(2000).nullable().optional(),
 }).openapi('TimeOffReview')
 
 const SwapCreate = z.object({
@@ -4524,12 +4526,54 @@ registry.registerPath({
   tags: ['Schedule'],
   security: [{ CookieAuth: [] }],
   summary: 'Approve, reject, or cancel a time-off request',
-  description: 'Deciding needs the time-off approval permission at the studio the request was filed at or at any studio the requester belongs to. Approving refuses a pending request whose end_date has passed (409, expired), and a contractor leave type other than unavailable (400). An approval response carries `clashes`: live shifts, from today, that the person is still rostered on at any studio. Nothing is unassigned; see POST /api/schedule/time-off/{id}/unassign-clashes.',
+  description: 'Deciding needs the time-off approval permission at the studio the request was filed at or at any studio the requester belongs to. Approving refuses a pending request whose end_date has passed (409, expired), and a contractor leave type other than unavailable (400). An approval response carries `clashes`: live shifts, from today, that the person is still rostered on at any studio. Nothing is unassigned; see POST /api/schedule/time-off/{id}/unassign-clashes. LEAVECANCEL.1: the only status a caller may send for their OWN request is `cancelled`. On their own PENDING request that cancels it. On their own APPROVED request it is refused for a plain coach (403), cancels directly for a master, and for manager-tier staff (owner, manager, head coach at a studio the request belongs to) it does NOT cancel: it records a request for an owner to cancel it and answers `{ success, data, cancellation: "requested" }` with the leave still approved (`already_requested: true` when one was already waiting; cancel_request_note is the optional reason). 409 when the leave has already ended, when the caller is the only owner at those studios (a platform admin must cancel it), or when nobody could decide it. Decided by POST /api/schedule/time-off/{id}/cancel-request.',
   request: {
     params: z.object({ id: uuidLike }),
     body: { content: { 'application/json': { schema: TimeOffReview } } },
   },
-  responses: { 200: { description: 'Request updated' } },
+  responses: {
+    200: { description: 'Request updated, or (own approved leave, manager tier) the cancellation was requested and the leave is still approved' },
+    403: { description: 'Deciding your own request, a status other than cancelled on your own request, or no time-off approval permission', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found, or not at a studio the caller manages', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Expired pending request; or own approved leave that has ended / has no other owner to approve its cancellation', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// LEAVECANCEL.1 — a manager cancelling their OWN APPROVED leave needs an
+// owner's approval. The PUT above records the ask; these decide or withdraw it.
+registry.registerPath({
+  method: 'post',
+  path: '/api/schedule/time-off/{id}/cancel-request',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Approve or decline a request to cancel approved leave',
+  description: 'Role-based by the owner\'s rule, NOT the time-off approval permission: the caller must be an OWNER at the studio the leave was filed at or at any studio the requester belongs to, or a master, and never the requester. Until this lands the leave is still approved and in force. approve sets status=cancelled and the decision in ONE guarded update (a holiday\'s days are refunded by the allowance trigger); reject stamps the decision and the leave stays approved. The requester is notified either way. 409 when there is no open request (never asked, withdrawn, already decided by someone else a moment ago, or the leave has ended).',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ decision: z.enum(['approve', 'reject']), note: z.string().max(2000).nullable().optional() }) } } },
+  },
+  responses: {
+    200: { description: '{ success, data, cancellation: "approved" | "rejected" }' },
+    403: { description: 'The caller can see the request but is the requester, or is not an owner or master', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found, or not at a studio the caller manages', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'No open cancellation request on this leave', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/schedule/time-off/{id}/cancel-request',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Withdraw your own request to cancel approved leave',
+  description: 'Only the person whose leave it is. Clears the request; the leave stays approved. Nobody is notified. 409 when there is nothing to withdraw or an owner decided it a moment ago.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ success, data, cancellation: "withdrawn" }' },
+    403: { description: 'The caller can see the request but did not make it', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found, or not at a studio the caller manages', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'No cancellation request to withdraw', content: { 'application/json': { schema: ErrorResponse } } },
+  },
 })
 
 registry.registerPath({
