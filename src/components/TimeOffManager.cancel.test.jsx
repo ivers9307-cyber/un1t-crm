@@ -75,15 +75,15 @@ describe('TimeOffManager — asking to cancel your own approved leave', () => {
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 
-  it('a refusal (sole owner, ended leave) is shown in the server\'s own words and the dialog stays open', async () => {
+  it('a refusal (ended leave, declined under a day ago, nobody else to decide) is shown in the server\'s own words and the dialog stays open', async () => {
     mockFetch({
       requests: [ASKABLE],
-      respond: () => ({ status: 409, body: { success: false, error: 'There is no other owner at your studios to approve this. Ask a platform admin to cancel the leave for you.' } }),
+      respond: () => ({ status: 409, body: { success: false, error: 'An owner declined this less than a day ago. You can ask again after 24 hours, or speak to them directly.' } }),
     })
     await show(MANAGER)
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Cancel approved Holiday request from Mia Manager' })) })
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Ask an owner' })) })
-    await waitFor(() => expect(within(screen.getByRole('dialog')).getByRole('alert').textContent).toMatch(/no other owner/))
+    await waitFor(() => expect(within(screen.getByRole('dialog')).getByRole('alert').textContent).toMatch(/declined this less than a day ago/))
   })
 
   it('a cancelled row whose cancellation an owner approved says how it came to be cancelled, to the person and to managers', async () => {

@@ -110,6 +110,15 @@
 -- ─────────────────────────────────────────────────────────────────────────
 -- PRE-APPLY CHECKS (read-only)
 -- ─────────────────────────────────────────────────────────────────────────
+-- STATE ON 21 SEP 2026 (read on prod, read-only, by the reviewer of this PR;
+-- re-run them if the apply is not the same week): (a) no cancel_* columns;
+-- (b) trg_update_holiday_allowance is enabled, AFTER UPDATE, and the live
+-- update_holiday_allowance() body is mig 616's minus one comment line;
+-- (c) every anon/authenticated grant on time_off_requests has grantor
+-- `postgres` and the table owner is `postgres`, so this file's REVOKE removes
+-- them; (d) the three policies are exactly the ones named below. 9 approved
+-- leave rows are still in the future, none with an ask (the columns are new).
+--
 -- (a) The columns do not exist yet and the number is free:
 --       SELECT column_name FROM information_schema.columns
 --        WHERE table_schema='public' AND table_name='time_off_requests'
