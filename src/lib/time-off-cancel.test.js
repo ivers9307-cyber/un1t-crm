@@ -4,7 +4,9 @@ import { describe, it, expect } from 'vitest'
 import {
   isOpenCancelAsk, cancelAskState, selfCancelMode, canDecideLeaveCancel, leaveActingLocationIds,
   resolveLeaveCancelDeciderIds, annotateCancelAsk, cancelAskEventKey,
+  cancelAskNoticeKey, reAskBlockedUntil, CLEARED_CANCEL_ASK,
 } from './time-off-cancel.js'
+import { LEAVE_CANCEL_NOTICES, cancelledAtRequestText } from './time-off-cancel-copy.js'
 import { fakeDb, queriesOf } from './time-off.test-helpers.js'
 
 const TODAY = '2026-09-21'
@@ -191,5 +193,53 @@ describe('cancelAskEventKey', () => {
     expect(first).toBe('time_off_cancel_ask:req-1:2026-09-20T09:00:00Z')
     expect(cancelAskEventKey('time_off_cancel_ask', asked())).toBe(first)
     expect(cancelAskEventKey('time_off_cancel_ask', asked({ cancel_requested_at: '2026-09-22T09:00:00Z' }))).not.toBe(first)
+  })
+})
+
+describe('cancelAskNoticeKey — the ASK notice is at most one per leave per hour', () => {
+  it('withdraw and re-ask inside the hour reuses the key (owners are not told twice); the next hour, or a replay, behaves as expected', () => {
+    const first = cancelAskNoticeKey(asked({ cancel_requested_at: '2026-09-20T09:05:00.000Z' }))
+    expect(first).toBe('time_off_cancel_ask:req-1:2026-09-20T09')
+    expect(cancelAskNoticeKey(asked({ cancel_requested_at: '2026-09-20T09:55:00.000Z' }))).toBe(first)
+    expect(cancelAskNoticeKey(asked({ cancel_requested_at: '2026-09-20T10:05:00.000Z' }))).not.toBe(first)
+  })
+})
+
+describe('reAskBlockedUntil — one re-ask per 24h after a DECLINE (each ask notifies every owner)', () => {
+  const declined = asked({ cancel_decided_at: '2026-09-20T10:00:00.000Z', cancel_decision: 'rejected' })
+  it('blocked inside 24h, with the instant it lifts; free after', () => {
+    expect(reAskBlockedUntil(declined, Date.parse('2026-09-21T09:59:00Z'))).toBe('2026-09-21T10:00:00.000Z')
+    expect(reAskBlockedUntil(declined, Date.parse('2026-09-21T10:00:00Z'))).toBeNull()
+  })
+  it('never asked, withdrawn, or an approved cancellation: nothing to wait for', () => {
+    expect(reAskBlockedUntil(leave(), Date.parse('2026-09-20T10:01:00Z'))).toBeNull()
+    expect(reAskBlockedUntil(asked({ cancel_decided_at: '2026-09-20T10:00:00.000Z', cancel_decision: 'approved' }), Date.parse('2026-09-20T10:01:00Z'))).toBeNull()
+  })
+})
+
+describe('CLEARED_CANCEL_ASK', () => {
+  it('is exactly the seven mig 624 columns, all null', () => {
+    expect(CLEARED_CANCEL_ASK).toEqual({
+      cancel_requested_at: null, cancel_requested_by: null, cancel_request_note: null,
+      cancel_decided_at: null, cancel_decided_by: null, cancel_decision: null, cancel_decision_note: null,
+    })
+    expect(Object.isFrozen(CLEARED_CANCEL_ASK)).toBe(true)
+  })
+})
+
+describe('copy shared by the Time Off page and the dashboard card', () => {
+  it('has a line for every outcome and no em dash', () => {
+    for (const k of ['requested', 'approved', 'rejected', 'withdrawn']) {
+      expect(typeof LEAVE_CANCEL_NOTICES[k]).toBe('string')
+      expect(LEAVE_CANCEL_NOTICES[k]).not.toContain('—')
+    }
+  })
+  it('a cancelled row whose cancellation an owner approved says who asked and who approved', () => {
+    const row = { status: 'cancelled', cancel_decision: 'approved', profiles: { full_name: 'Mia Manager' }, cancel_decider: { full_name: 'Olive Owner' } }
+    expect(cancelledAtRequestText(row, { own: false })).toBe("Cancelled at Mia Manager's request, approved by Olive Owner.")
+    expect(cancelledAtRequestText(row, { own: true })).toBe('Cancelled at your request, approved by Olive Owner.')
+    expect(cancelledAtRequestText({ ...row, cancel_decider: null }, { own: true })).toBe('Cancelled at your request, approved by an owner.')
+    expect(cancelledAtRequestText({ status: 'cancelled', cancel_decision: null }, { own: true })).toBeNull()
+    expect(cancelledAtRequestText({ status: 'approved', cancel_decision: 'rejected' }, { own: true })).toBeNull()
   })
 })

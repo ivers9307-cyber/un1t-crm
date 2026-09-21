@@ -261,6 +261,27 @@ describe('after 624', () => {
     })
   })
 
+  it('the plain PUT\'s clear (all seven to NULL with ANY status change) is a legal row from every ask state, so it can never trip a CHECK', async () => {
+    const CLEAR = `cancel_requested_at = NULL, cancel_requested_by = NULL, cancel_request_note = NULL,
+      cancel_decided_at = NULL, cancel_decided_by = NULL, cancel_decision = NULL, cancel_decision_note = NULL`
+    for (const to of ['cancelled', 'rejected', 'pending']) {
+      await rolledBack(async () => {
+        await runSql(`UPDATE public.time_off_requests SET ${ASK} WHERE id = '${LEAVE}'`)                       // open ask
+        await runSql(`UPDATE public.time_off_requests SET status = '${to}', ${CLEAR} WHERE id = '${LEAVE}' AND status = 'approved'`)
+        await runSql(`UPDATE public.time_off_requests SET status = 'approved' WHERE id = '${LEAVE}'`)          // reinstated
+        const row = await leaveRow()
+        // The bug this pins: the old ask must NOT be open again.
+        expect([row.status, row.cancel_requested_at, row.cancel_decided_at]).toEqual(['approved', null, null])
+      })
+    }
+    await rolledBack(async () => {
+      await runSql(`UPDATE public.time_off_requests SET ${ASK} WHERE id = '${LEAVE}'`)
+      await runSql(`UPDATE public.time_off_requests SET ${DECIDED('rejected')} WHERE id = '${LEAVE}'`)         // declined ask
+      await runSql(`UPDATE public.time_off_requests SET status = 'cancelled', ${CLEAR} WHERE id = '${LEAVE}'`)
+      expect((await leaveRow()).cancel_decision).toBeNull()
+    })
+  })
+
   it('reviving leave whose cancellation was approved is refused UNLESS the old ask is cleared with it (the PUT does)', async () => {
     await rolledBack(async () => {
       await runSql(`UPDATE public.time_off_requests SET ${ASK} WHERE id = '${LEAVE}'`)

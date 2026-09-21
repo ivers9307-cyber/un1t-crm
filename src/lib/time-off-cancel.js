@@ -163,6 +163,37 @@ export function cancelAskEventKey(prefix, row) {
   return `${prefix}:${row.id}:${row.cancel_requested_at}`
 }
 
+/**
+ * Dedup key for the notice that an ask was MADE: one per leave per UTC hour of
+ * the stored cancel_requested_at. A withdraw clears the row, so nothing on it
+ * remembers the earlier ask; bucketing the key is what stops withdraw + re-ask
+ * from paging every owner again minutes later. Still replay-safe (it is the
+ * stored value, not the call's clock), and a re-ask after a decline is at
+ * least 24h on (reAskBlockedUntil), so it always lands in a new bucket.
+ */
+export function cancelAskNoticeKey(row) {
+  return `time_off_cancel_ask:${row.id}:${String(row.cancel_requested_at).slice(0, 13)}`
+}
+
+const RE_ASK_AFTER_DECLINE_MS = 24 * 60 * 60 * 1000
+
+/**
+ * After a DECLINE the same leave cannot be asked about again for 24h: every
+ * ask notifies every owner. Returns the ISO instant the wait ends, or null
+ * when the person is free to ask. Pure.
+ */
+export function reAskBlockedUntil(row, nowMs) {
+  if (!row?.cancel_decided_at || row.cancel_decision !== 'rejected') return null
+  const until = Date.parse(row.cancel_decided_at) + RE_ASK_AFTER_DECLINE_MS
+  return Number.isFinite(until) && nowMs < until ? new Date(until).toISOString() : null
+}
+
+/** All seven mig 624 columns back to NULL: a withdraw, or an ask dying with the state it was about. */
+export const CLEARED_CANCEL_ASK = Object.freeze({
+  cancel_requested_at: null, cancel_requested_by: null, cancel_request_note: null,
+  cancel_decided_at: null, cancel_decided_by: null, cancel_decision: null, cancel_decision_note: null,
+})
+
 export function leaveRangeText(row) {
   return row.start_date === row.end_date ? row.start_date : `${row.start_date} to ${row.end_date}`
 }

@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server'
+import { NextResponse, after } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds, hasRoleAtLocation } from '@/lib/auth'
@@ -11,8 +11,8 @@ import {
 } from '@/lib/time-off-leave'
 import { isExpiredPendingRequest, isTimeOffTypeAllowedFor, timeOffLeaveLabel } from '@shared/time-off'
 import {
-  selfCancelMode, isOpenCancelAsk, isOwnerForLeave, leaveActingLocationIds,
-  resolveLeaveCancelDeciderIds, cancelAskEventKey, leaveRangeText,
+  selfCancelMode, isOpenCancelAsk, leaveActingLocationIds, resolveLeaveCancelDeciderIds,
+  cancelAskNoticeKey, reAskBlockedUntil, leaveRangeText, CLEARED_CANCEL_ASK,
 } from '@/lib/time-off-cancel'
 
 const TimeOffReviewSchema = z.object({
@@ -28,6 +28,11 @@ const REQUEST_WITH_PEOPLE = `
       profiles!profile_id(id, full_name, avatar_url, role),
       reviewer:profiles!reviewed_by(id, full_name)
     `
+
+// LEAVECANCEL.1 — mig 624's CHECK: a row may not claim an approved cancellation
+// unless it is cancelled. Its name in a write error means exactly one thing.
+const CANCEL_APPROVED_CHECK = 'time_off_requests_cancel_approved_is_cancelled'
+const ALREADY_CANCELLED = () => NextResponse.json({ success: false, error: 'This leave was already cancelled.' }, { status: 409 })
 
 // PUT /api/schedule/time-off/:id — Approve, reject, or cancel a request
 export async function PUT(request, props) {
@@ -113,19 +118,32 @@ export async function PUT(request, props) {
     }
   }
 
+  // LEAVECANCEL.1 — leave an owner has already cancelled at the person's
+  // request is finished business. Re-approving it is a real action (below);
+  // rejecting or reopening it from a stale screen is not, and would otherwise
+  // reach mig 624's CHECK and hand the caller raw constraint text.
+  if (existing.cancel_decision === 'approved' && (status === 'rejected' || status === 'pending')) {
+    return ALREADY_CANCELLED()
+  }
+
   const updates = { status, updated_at: new Date().toISOString() }
 
-  // LEAVECANCEL.1 — mig 624 ties cancel_decision='approved' to
-  // status='cancelled' (a row may not claim an approved cancellation while in
-  // force). Moving such a row to any other status (an approver re-approving
-  // leave that was cancelled) would therefore be refused by the CHECK with a
-  // constraint error. The old cancellation goes with the old status instead.
-  if (status !== 'cancelled' && existing.cancel_decision === 'approved') {
-    Object.assign(updates, {
-      cancel_requested_at: null, cancel_requested_by: null, cancel_request_note: null,
-      cancel_decided_at: null, cancel_decided_by: null, cancel_decision: null, cancel_decision_note: null,
-    })
-  }
+  // LEAVECANCEL.1 — an ask is ABOUT a state ("this approved leave, please
+  // cancel it"), so it dies with that state. Whenever this plain PUT changes
+  // the status of a row that carries ask columns, all seven are cleared in the
+  // same write:
+  //   • away from `approved` (a colleague cancels, rejects or reopens it while
+  //     an ask is waiting): left behind, the ask was merely "lapsed", and a
+  //     later re-approval made it OPEN again, back in the owners' queue, where
+  //     an owner could cancel reinstated leave nobody had asked about;
+  //   • back to `approved` (the second lock: whatever is on the row, leave
+  //     that is reinstated starts with no ask). This is also what keeps mig
+  //     624's CHECK quiet when the old cancellation had been APPROVED.
+  // An approver re-stamping leave that is still approved changes no state and
+  // keeps the ask. The approve-cancellation path is NOT this write: it sets
+  // status and the decision together in POST ./cancel-request.
+  const clearsAsk = !!existing.cancel_requested_at && status !== existing.status
+  if (clearsAsk) Object.assign(updates, CLEARED_CANCEL_ASK)
 
   // If approving or rejecting, record who did it
   if (status === 'approved' || status === 'rejected') {
@@ -173,13 +191,26 @@ export async function PUT(request, props) {
     }
   }
 
-  const { data, error } = await db.from('time_off_requests')
+  let write = db.from('time_off_requests')
     .update(updates)
     .eq('id', params.id)
+  // LEAVECANCEL.1 — a write that clears an ask is guarded on the status it
+  // read, so it can never land on top of an owner's decision made a moment ago
+  // (and wipe it). A row with no ask is written exactly as before.
+  if (clearsAsk) write = write.eq('status', existing.status)
+  const { data, error } = await write
     .select(REQUEST_WITH_PEOPLE)
     .single()
 
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+  if (error) {
+    // The guard matched no row (.single() answers PGRST116 for zero rows).
+    if (clearsAsk && error.code === 'PGRST116') {
+      return NextResponse.json({ success: false, error: 'This leave changed a moment ago. Refresh to see where it stands.' }, { status: 409 })
+    }
+    // The same race with no ask on the row this PUT read: the CHECK refuses it.
+    if (String(error.message || '').includes(CANCEL_APPROVED_CHECK)) return ALREADY_CANCELLED()
+    return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+  }
 
   // Notify the requester on a manager decision (approval / rejection).
   // Cancellations by the requester themselves don't need a push back to
@@ -235,9 +266,24 @@ export async function PUT(request, props) {
 // LEAVECANCEL.1 — record "please cancel my approved leave" and tell whoever
 // can decide it. Nothing here touches `status`.
 async function requestOwnLeaveCancel(db, user, existing, { today, requesterLocations, note }) {
-  // Asking twice is one ask: nothing written, nobody told again.
+  // Asking twice is one ask: nothing written, nobody told again. Answered in
+  // the same shape as the first time (the row WITH its people).
   if (isOpenCancelAsk(existing, today)) {
-    return NextResponse.json({ success: true, data: existing, cancellation: 'requested', already_requested: true })
+    const { data: full, error: fullError } = await db.from('time_off_requests')
+      .select(REQUEST_WITH_PEOPLE)
+      .eq('id', existing.id)
+      .maybeSingle()
+    return NextResponse.json({ success: true, data: fullError || !full ? existing : full, cancellation: 'requested', already_requested: true })
+  }
+
+  // One re-ask per 24h after a decline: every ask notifies every owner.
+  const blockedUntil = reAskBlockedUntil(existing, Date.now())
+  if (blockedUntil) {
+    return NextResponse.json({
+      success: false,
+      error: 'An owner declined this less than a day ago. You can ask again after 24 hours, or speak to them directly.',
+      retry_after: blockedUntil,
+    }, { status: 409 })
   }
 
   // Someone must be able to decide it BEFORE it is recorded, or it sits in a
@@ -247,21 +293,16 @@ async function requestOwnLeaveCancel(db, user, existing, { today, requesterLocat
   if (deciderError) {
     return NextResponse.json({ success: false, error: deciderError.message }, { status: 500 })
   }
-  if (ownerIds.length === 0 && isOwnerForLeave(user, existing, requesterLocations)) {
-    // An owner needs a DIFFERENT owner. With none, the ask is refused rather
-    // than rerouted: a platform admin can cancel the leave for them through
-    // this same PUT. (Whether a sole owner's ask should go to the masters'
-    // queue instead is the owner's call; flagged on the PR.)
-    return NextResponse.json({
-      success: false,
-      error: 'There is no other owner at your studios to approve this. Ask a platform admin to cancel the leave for you.',
-    }, { status: 409 })
-  }
+  // Another owner first; with none (a manager at a studio that has no owner,
+  // or a SOLE owner asking about their own leave) the estate's masters decide.
+  // A sole owner is not refused: on main they could cancel outright, so a
+  // refusal would be a new dead end, and "someone else must approve" holds
+  // either way. Refused only when there is truly nobody else.
   const deciderIds = ownerIds.length > 0 ? ownerIds : masterIds
   if (deciderIds.length === 0) {
     return NextResponse.json({
       success: false,
-      error: 'There is no owner or platform admin who could approve this cancellation, so it was not sent.',
+      error: 'There is nobody else who could approve this cancellation (no other owner and no platform admin), so it was not sent.',
     }, { status: 409 })
   }
 
@@ -290,7 +331,7 @@ async function requestOwnLeaveCancel(db, user, existing, { today, requesterLocat
   // outcome the caller wanted (a double click); anything else is said plainly.
   if (!rows || rows.length === 0) {
     const { data: fresh, error: freshError } = await db.from('time_off_requests')
-      .select('*')
+      .select(REQUEST_WITH_PEOPLE)
       .eq('id', existing.id)
       .maybeSingle()
     if (!freshError && isOpenCancelAsk(fresh, today)) {
@@ -307,17 +348,23 @@ async function requestOwnLeaveCancel(db, user, existing, { today, requesterLocat
   // hours gate. staff-push-hours.js gates CRON pushes, where a later tick
   // retries; there is no later tick here, so a gate would lose the notice.
   // Best-effort: a failed notice never fails the ask.
-  try {
-    notifyUsersOnce(db, cancelAskEventKey('time_off_cancel_ask', data), deciderIds, {
-      title: 'Leave cancellation to approve',
-      body: `${user.full_name || 'A manager'} has asked to cancel approved leave: ${timeOffLeaveLabel(data.type)}, ${leaveRangeText(data)}.`,
-      category: 'time_off',
-      emailSubject: `Leave cancellation request from ${user.full_name || 'a manager'}`,
-      data: { type: 'time_off_cancel_request', request_id: data.id },
-    }).catch(err => console.error('[time-off] cancel-ask notify failed', err))
-  } catch (err) {
-    console.error('[time-off] cancel-ask notify failed', err)
-  }
+  //
+  // Inside after() (the SWAPNOTIFY.1 pattern): an un-awaited promise left
+  // hanging past the response is the shape Vercel can freeze mid-flight, and
+  // notifyUsersOnce CLAIMS before it sends, so a freeze would leave the claim
+  // behind and an idempotent re-ask could never tell the owner again.
+  //
+  // The body ends by saying WHERE it is decided: the phone has no surface for
+  // this yet (the approvals list ignores the key on purpose), and the fallback
+  // email is built from the same body.
+  after(() => notifyUsersOnce(db, cancelAskNoticeKey(data), deciderIds, {
+    title: 'Leave cancellation to approve',
+    body: `${user.full_name || 'A manager'} has asked to cancel approved leave: ${timeOffLeaveLabel(data.type)}, ${leaveRangeText(data)}. Decide it on the Time Off page on the web.`,
+    category: 'time_off',
+    emailSubject: `Leave cancellation request from ${user.full_name || 'a manager'}`,
+    // start_date: the phone lands the tap on that week of the Schedule tab.
+    data: { type: 'time_off_cancel_request', request_id: data.id, start_date: data.start_date },
+  }).catch(err => console.error('[time-off] cancel-ask notify failed', err)))
 
   return NextResponse.json({ success: true, data, cancellation: 'requested' })
 }
