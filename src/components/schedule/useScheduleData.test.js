@@ -19,6 +19,9 @@ const ARGS = {
   startDate: '2026-05-04',
   endDate: '2026-05-10',
   spendReferenceDate: '2026-05-01',
+  // ROSTERLOAD.1 (B1) — the spend route is manager-only; the default suite
+  // runs as a manager so the six-read fan-out stays under test.
+  canReadSpend: true,
 }
 
 // Every endpoint the hook fans out to, keyed by the path fragment that
@@ -452,7 +455,7 @@ describe('each slice settles on its own (ROSTERLOAD.1)', () => {
   // A 401/403 on ANY read means the session or the access is gone, and the
   // next action will fail the same way. That is not a degraded slice, it is
   // the roster not loading.
-  describe('a signed-out or forbidden answer on a non-blocks read is top-level', () => {
+  describe('a signed-out answer on a non-blocks read is top-level', () => {
     it('401 on holidays: top-level error, no success, no partials', async () => {
       global.fetch = failing('/holidays', { ok: false, status: 401, json: async () => ({}) })
       const { result } = renderHook(() => useScheduleData(ARGS))
@@ -472,16 +475,108 @@ describe('each slice settles on its own (ROSTERLOAD.1)', () => {
       expect(result.current.blocks).toHaveLength(1)
       expect(result.current.successCount).toBe(1)
     })
+  })
 
-    it('403 on the coach list: top-level error in the server\'s words, new week cleared', async () => {
+  // ROSTERLOAD.1 (B1) — on a SIDE read only 401 is fatal. A 403 there is a
+  // permission difference, not lost access: blocks, templates, time-off and
+  // holidays all run assertLocationAccess for the same location, so lost
+  // access shows up as a 403 on BLOCKS. The live case was contractor spend,
+  // which is manager-only and answered every coach's calendar 403, killing
+  // the roster for every coach and reception user.
+  describe('a 403 on a side read is a permission difference, not a dead roster', () => {
+    const forbidden = { ok: false, status: 403, json: async () => ({ success: false, error: 'Unauthorized' }) }
+
+    it('403 on contractor spend (the real body): roster loads, spend is a partial error', async () => {
+      global.fetch = failing('contractor-spend', forbidden)
+      const { result } = await loaded()
+      expect(result.current.error).toBeNull()
+      expect(result.current.blocks).toHaveLength(1)
+      expect(result.current.contractorSpend).toBeNull()
+      expect(result.current.partialErrors).toEqual({ contractorSpend: { message: 'Unauthorized', kept: false } })
+    })
+
+    it('403 on the coach list: roster loads, staff is a partial error', async () => {
+      global.fetch = failing('/api/staff', forbidden)
+      const { result } = await loaded()
+      expect(result.current.error).toBeNull()
+      expect(result.current.partialErrors).toEqual({ staff: { message: 'Unauthorized', kept: false } })
+    })
+
+    it('403 on BLOCKS stays fatal, in the server\'s words, and a new week is cleared', async () => {
       const { result, rerender } = await loaded()
-      global.fetch = failing('/api/staff', { ok: false, status: 403, json: async () => ({ error: 'Forbidden - location not in your assignments' }) })
+      global.fetch = failing('/schedule/blocks', { ok: false, status: 403, json: async () => ({ error: 'Forbidden - location not in your assignments' }) })
       rerender(WEEK_B)
       await waitFor(() => expect(result.current.error).toBe('Forbidden - location not in your assignments'))
       await waitFor(() => expect(result.current.loading).toBe(false))
       expect(result.current.blocks).toEqual([])
       expect(result.current.showingStaleData).toBe(false)
+    })
+  })
+
+  describe('contractor spend is not asked for when it cannot succeed (B1)', () => {
+    it('without canReadSpend: no spend request, spend null, and nothing partial', async () => {
+      const { result } = await loaded({ ...ARGS, canReadSpend: false })
+      expect(global.fetch.mock.calls.some(([url]) => url.includes('contractor-spend'))).toBe(false)
+      expect(result.current.contractorSpend).toBeNull()
       expect(result.current.partialErrors).toBeNull()
+      expect(result.current.error).toBeNull()
+      expect(result.current.blocks).toHaveLength(1)
+    })
+
+    it('losing canReadSpend drops a spend figure loaded earlier', async () => {
+      const { result, rerender } = await loaded()
+      expect(result.current.contractorSpend).toEqual({ spend: 100 })
+      rerender({ ...ARGS, canReadSpend: false })
+      await waitFor(() => expect(result.current.successCount).toBe(2))
+      expect(result.current.contractorSpend).toBeNull()
+    })
+  })
+
+  // ROSTERLOAD.1 (S1) — the blocks key was the date range alone, so a failed
+  // blocks read after a studio switch in the same week kept studio A's
+  // blocks under studio B, while staff and templates moved to B.
+  it('a failed blocks read after a location switch in the same week clears the blocks', async () => {
+    const { result, rerender } = await loaded()
+    global.fetch = failing('/schedule/blocks')
+    rerender({ ...ARGS, locationId: 'loc2' })
+    await waitFor(() => expect(result.current.error).toBe('/schedule/blocks broke'))
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    expect(result.current.blocks).toEqual([])
+    expect(result.current.showingStaleData).toBe(false)
+  })
+
+  // ROSTERLOAD.1 (S3) — a body of the wrong shape must fail THAT slice, not
+  // throw out of the state writes half-applied.
+  describe('a malformed body fails its own slice', () => {
+    const malformed = okResponse({ data: 'not a list' })
+
+    it('malformed templates: roster loads, templates is a partial error', async () => {
+      global.fetch = failing('/schedule/templates', malformed)
+      const { result } = await loaded()
+      expect(result.current.error).toBeNull()
+      expect(result.current.templates).toEqual([])
+      expect(result.current.partialErrors.templates.kept).toBe(false)
+      expect(result.current.timeOff).toHaveLength(1)
+    })
+
+    it('malformed blocks on a new week: the full roster failure, blocks cleared, not stale', async () => {
+      const { result, rerender } = await loaded()
+      global.fetch = failing('/schedule/blocks', malformed)
+      rerender(WEEK_B)
+      await waitFor(() => expect(result.current.error).toBeTruthy())
+      await waitFor(() => expect(result.current.loading).toBe(false))
+      expect(result.current.blocks).toEqual([])
+      expect(result.current.showingStaleData).toBe(false)
+      expect(result.current.successCount).toBe(1)
+    })
+
+    it('malformed blocks on a same-week refresh: keeps the week and flags it stale', async () => {
+      const { result } = await loaded()
+      global.fetch = failing('/schedule/blocks', malformed)
+      await act(async () => { await result.current.refresh() })
+      expect(result.current.error).toBeTruthy()
+      expect(result.current.blocks).toHaveLength(1)
+      expect(result.current.showingStaleData).toBe(true)
     })
   })
 

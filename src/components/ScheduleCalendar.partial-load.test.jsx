@@ -33,6 +33,10 @@ import { SESSION_ENDED_MESSAGE } from './schedule/useScheduleData'
 
 const LOC = 'loc1'
 const manager = { id: 'u1', role: 'manager', activeLocation: { id: LOC, name: 'Stillorgan' } }
+const coach = { id: 'u2', role: 'staff', activeLocation: { id: LOC, name: 'Stillorgan' } }
+const reception = { id: 'u3', role: 'reception', activeLocation: { id: LOC, name: 'Stillorgan' } }
+// What /api/schedule/contractor-spend really answers a non-manager.
+const SPEND_FORBIDDEN = { ok: false, status: 403, json: async () => ({ success: false, error: 'Unauthorized' }) }
 
 const block = {
   id: 'b1',
@@ -68,6 +72,7 @@ function fetchFailing(fail = [], response = broken) {
 }
 
 const LEAVE_LINE = 'Leave could not be loaded. Days off are not shown, so check leave before assigning coaches.'
+const COACH_LEAVE_LINE = 'Leave could not be loaded, so days off are not shown.'
 
 beforeEach(() => { global.fetch = fetchFailing() })
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
@@ -116,6 +121,55 @@ describe('a side read failing does not fail the roster (ROSTERLOAD.1)', () => {
     await waitFor(() => expect(screen.getByText('Could not load the roster')).toBeTruthy())
     expect(screen.getByText(SESSION_ENDED_MESSAGE)).toBeTruthy()
     expect(screen.queryByTestId('schedule-partial-load-note')).toBeNull()
+  })
+})
+
+// ROSTERLOAD.1 (review B1) — the web roster was dead for every coach and
+// reception user, on main too: the calendar fired the manager-only spend read
+// for everyone, the route answered 403, and the load failed as a whole.
+describe('the roster for someone who cannot read contractor spend (review B1)', () => {
+  for (const [label, who] of [['a coach', coach], ['reception', reception]]) {
+    it(`${label}: the roster renders, no red banner, no spend request, no spend line`, async () => {
+      global.fetch = fetchFailing(['contractor-spend'], SPEND_FORBIDDEN)
+      render(<ScheduleCalendar user={who} />)
+      await waitFor(() => expect(screen.getAllByTestId('shift-card')).toHaveLength(1))
+      expect(screen.queryByText('Could not load the roster')).toBeNull()
+      expect(screen.queryByTestId('schedule-partial-load-note')).toBeNull()
+      expect(global.fetch.mock.calls.some(([url]) => url.includes('contractor-spend'))).toBe(false)
+    })
+  }
+
+  it('a manager whose spend read is refused gets the quiet spend line, and the roster', async () => {
+    global.fetch = fetchFailing(['contractor-spend'], SPEND_FORBIDDEN)
+    render(<ScheduleCalendar user={manager} />)
+    await rosterOnScreen()
+    await waitFor(() => expect(screen.getByText('Contractor spend could not be loaded.')).toBeTruthy())
+    expect(screen.queryByText('Could not load the roster')).toBeNull()
+  })
+
+  it('a 403 on the BLOCKS read is still the roster failing', async () => {
+    global.fetch = fetchFailing(['/schedule/blocks'], { ok: false, status: 403, json: async () => ({ error: 'Forbidden - location not in your assignments' }) })
+    render(<ScheduleCalendar user={manager} />)
+    await waitFor(() => expect(screen.getByText('Could not load the roster')).toBeTruthy())
+    expect(screen.getByText('Forbidden - location not in your assignments')).toBeTruthy()
+  })
+
+  it('a coach is told leave is missing in coach words, not manager words', async () => {
+    global.fetch = fetchFailing(['/schedule/time-off'])
+    render(<ScheduleCalendar user={coach} />)
+    await waitFor(() => expect(screen.getByText(COACH_LEAVE_LINE)).toBeTruthy())
+    expect(screen.queryByText(LEAVE_LINE)).toBeNull()
+  })
+})
+
+describe('the note and the roster banner together', () => {
+  it('the note is held back under the red banner, and comes back when the banner is dismissed', async () => {
+    global.fetch = fetchFailing(['/schedule/blocks', '/schedule/time-off'])
+    render(<ScheduleCalendar user={manager} />)
+    await waitFor(() => expect(screen.getByText('Could not load the roster')).toBeTruthy())
+    expect(screen.queryByTestId('schedule-partial-load-note')).toBeNull()
+    fireEvent.click(screen.getByLabelText('Dismiss'))
+    await waitFor(() => expect(screen.getByText(LEAVE_LINE)).toBeTruthy())
   })
 })
 
@@ -178,8 +232,11 @@ describe('partialLoadLines', () => {
     for (const l of lines) expect(l).not.toMatch(/—/)
   })
 
-  it('a coach is told only about what they can see: leave and holidays', () => {
-    expect(partialLoadLines(all, { isManager: false })).toHaveLength(2)
+  it('a coach is told only about what they can see: leave and holidays, in coach words', () => {
+    expect(partialLoadLines(all, { isManager: false })).toEqual([
+      COACH_LEAVE_LINE,
+      'Bank holidays and closures could not be refreshed. Showing them as they last loaded.',
+    ])
   })
 
   it('nothing to say when nothing failed', () => {

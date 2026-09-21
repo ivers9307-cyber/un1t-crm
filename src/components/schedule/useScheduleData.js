@@ -45,9 +45,20 @@
 // slice that nobody mentions reads as "nobody is on leave", and a manager
 // rosters over approved leave on the strength of it.
 //
-// A 401 / signed-out redirect / 403 on ANY read is not a degraded slice: the
-// session or the access is gone and the next action fails the same way. That
-// is treated exactly like a failed blocks read.
+// A 401 / signed-out redirect on ANY read is not a degraded slice: the
+// session is gone and the next action fails the same way. That is treated
+// exactly like a failed blocks read.
+//
+// ROSTERLOAD.1 (review B1) — a 403 on a SIDE read is NOT fatal, and the first
+// cut of this said it was. Contractor spend is manager-only (MANAGER_ROLES at
+// the location) while `staff` and `reception` both reach this calendar, so
+// every coach's load answered 403 on spend: on main that rejected the
+// Promise.all and blanked the roster for every coach and reception user, and
+// "403 is fatal" here kept it dead. A side read's 403 is a permission
+// difference; LOST access shows as a 403 on BLOCKS (blocks, templates,
+// time-off and holidays all run assertLocationAccess for the same location),
+// and a failed blocks read is fatal whatever its status. And spend is not
+// asked for at all by someone who cannot read it (`canReadSpend`).
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 
@@ -87,9 +98,24 @@ function httpError(message, status) {
   return e
 }
 
-/** True when a readJson failure means the session or location access is gone. */
-export function isSessionOrAccessError(e) {
-  return e?.status === 401 || e?.status === 403
+/**
+ * True when a readJson failure means the session is gone (401, or a followed
+ * login redirect / 200-non-JSON read, both stamped 401). A 403 is deliberately
+ * NOT included: see the ROSTERLOAD.1 (review B1) note at the top.
+ */
+export function isSessionEnded(e) {
+  return e?.status === 401
+}
+
+// ROSTERLOAD.1 (review S3) — a body of the wrong shape must fail its own
+// slice, not throw out of the state writes with half of them applied (or,
+// for blocks, reach the grid as a string and crash a `.filter`). A missing or
+// null `data` stays an empty list, as it always was.
+function listOf(res) {
+  const data = res?.data
+  if (data == null) return []
+  if (!Array.isArray(data)) throw new Error('The server sent an answer this screen could not read.')
+  return data
 }
 
 export async function readJson(url, options) {
@@ -128,10 +154,10 @@ export async function readJson(url, options) {
 // `apply` turns a successful body into the slice's value, as the old
 // Promise.all branch did.
 const SLICES = [
-  { key: 'templates', scope: ({ locationId }) => locationId, apply: (res) => (res.data || []).filter(t => t.active) },
-  { key: 'staff', scope: ({ locationId }) => locationId, apply: (res) => res.data || [] },
-  { key: 'timeOff', scope: ({ locationId, range }) => `${locationId}|${range}`, apply: (res) => res.data || [] },
-  { key: 'holidays', scope: ({ locationId, range }) => `${locationId}|${range}`, apply: (res) => res.data || [] },
+  { key: 'templates', scope: ({ locationId }) => locationId, apply: (res) => listOf(res).filter(t => t?.active) },
+  { key: 'staff', scope: ({ locationId }) => locationId, apply: listOf },
+  { key: 'timeOff', scope: ({ locationId, range }) => `${locationId}|${range}`, apply: listOf },
+  { key: 'holidays', scope: ({ locationId, range }) => `${locationId}|${range}`, apply: listOf },
   {
     key: 'contractorSpend',
     // Spend answers for `spendReferenceDate`, but it is scoped to the range
@@ -143,7 +169,13 @@ const SLICES = [
 ]
 const EMPTY = { templates: [], staff: [], timeOff: [], holidays: [], contractorSpend: null }
 
-export function useScheduleData({ locationId, startDate, endDate, spendReferenceDate }) {
+// `canReadSpend` — ROSTERLOAD.1 (review B1): whether the caller may read
+// contractor spend at this location (the calendar passes its `isManager`, the
+// same gate useWeekCost is `enabled` on). Without it spend resolves to null
+// with NO request, and no partial error: nobody is told a figure they were
+// never meant to see is missing. Defaults to false, the side that cannot
+// fire a request the route will refuse.
+export function useScheduleData({ locationId, startDate, endDate, spendReferenceDate, canReadSpend = false }) {
   const [blocks, setBlocks] = useState([])
   const [templates, setTemplates] = useState([])
   const [staff, setStaff] = useState([])
@@ -185,7 +217,12 @@ export function useScheduleData({ locationId, startDate, endDate, spendReference
       return
     }
     const gen = ++generation.current
-    const requestedRange = `${startDate}..${endDate}`
+    // ROSTERLOAD.1 (review S1) — the location is part of the key. It was the
+    // dates alone, and LocationSwitcher only calls router.refresh() (the
+    // calendar is not re-keyed), so a failed blocks read after switching
+    // studio in the same week kept studio A's blocks under studio B, while
+    // the coach list and templates correctly moved to B.
+    const requestedRange = `${locationId}|${startDate}..${endDate}`
     setLoading(true)
     // 🔴 THE ERROR IS NOT CLEARED HERE, and that is deliberate. It used to be,
     // and clearing it before the attempt is what made a persistent outage
@@ -217,28 +254,41 @@ export function useScheduleData({ locationId, startDate, endDate, spendReference
         readJson('/api/staff?fields=picker'),
         readJson(`/api/schedule/time-off?location_id=${locationId}&start_date=${startDate}&end_date=${endDate}&status=approved`),
         readJson(`/api/locations/${locationId}/holidays?start=${startDate}&end=${endDate}`),
-        readJson(`/api/schedule/contractor-spend?location_id=${locationId}&reference_date=${spendReferenceDate}`),
+        // ROSTERLOAD.1 (review B1) — no request a non-manager's session is
+        // certain to be refused; `null` applies as "no spend figure".
+        canReadSpend
+          ? readJson(`/api/schedule/contractor-spend?location_id=${locationId}&reference_date=${spendReferenceDate}`)
+          : Promise.resolve(null),
       ])
       // allSettled never rejects, so this guard is now the ONLY one: a late
       // loser drops here for every slice, resolved or rejected.
       if (gen !== generation.current) return
 
-      // ROSTERLOAD.1 — the roster failed to load if blocks failed, or if ANY
-      // read says the session or the access is gone (a blocks error wins, so
-      // the message is the roster's own when there is one).
-      const fatal = [blocksOutcome, ...sliceOutcomes]
-        .find(o => o.status === 'rejected' && isSessionOrAccessError(o.reason))
-      const rosterFailure = blocksOutcome.status === 'rejected' ? blocksOutcome.reason : fatal?.reason
+      // ROSTERLOAD.1 (review S3) — turn every outcome into a value or a
+      // failure BEFORE any state is written, so an `apply` that throws on a
+      // malformed body fails its own slice instead of escaping half-applied.
+      const judge = (outcome, apply) => {
+        if (outcome.status === 'rejected') return { ok: false, reason: outcome.reason }
+        try { return { ok: true, value: apply(outcome.value) } } catch (e) { return { ok: false, reason: e } }
+      }
+      const blocksResult = judge(blocksOutcome, listOf)
+      const sliceResults = SLICES.map((slice, i) => judge(sliceOutcomes[i], slice.apply))
+
+      // The roster failed to load if blocks failed (any status, including a
+      // malformed body), or if a side read says the session is gone. A 403 on
+      // a side read is a partial error: see the review B1 note at the top.
+      const fatal = sliceResults.find(r => !r.ok && isSessionEnded(r.reason))
+      const rosterFailure = !blocksResult.ok ? blocksResult.reason : fatal?.reason
 
       const ctx = { locationId, range: requestedRange, spendReferenceDate }
       const partial = {}
       SLICES.forEach((slice, i) => {
-        const outcome = sliceOutcomes[i]
+        const result = sliceResults[i]
         const scope = slice.scope(ctx)
         // A fatal load writes nothing new, for any slice: the same rule the
         // roster itself follows (keep what still belongs on screen).
-        if (!fatal && outcome.status === 'fulfilled') {
-          setters[slice.key](slice.apply(outcome.value))
+        if (!fatal && result.ok) {
+          setters[slice.key](result.value)
           loadedScope.current[slice.key] = scope
           return
         }
@@ -249,42 +299,55 @@ export function useScheduleData({ locationId, startDate, endDate, spendReference
         }
         // Only a slice's OWN failure is partial; under a fatal load the top-
         // level error already says everything.
-        if (!fatal && outcome.status === 'rejected') {
-          partial[slice.key] = { message: outcome.reason?.message || 'Could not load', kept }
+        if (!fatal && !result.ok) {
+          partial[slice.key] = { message: result.reason?.message || 'Could not load', kept }
         }
       })
       setPartialErrors(Object.keys(partial).length ? partial : null)
 
       if (rosterFailure) {
-        // The roster's failure path, unchanged from ROSTER-FIX.6a / 6a-9.
-        setError(rosterFailure?.message || 'Could not load the roster')
-        if (loadedRange.current === requestedRange) {
-          // Same week, flaky refresh: the roster underneath is still true.
-          setShowingStaleData(true)
-        } else {
-          // The dates on screen moved on. Whatever is held belongs to another
-          // range, so showing it under these dates would be a lie the operator
-          // has no way to spot. (Contractor spend, leave and holidays are
-          // cleared by their own scope rule above.)
-          setBlocks([])
-          loadedRange.current = null
-        }
+        failRoster(rosterFailure)
         return
       }
 
-      setBlocks(blocksOutcome.value.data || [])
+      setBlocks(blocksResult.value)
       loadedRange.current = requestedRange
       setError(null)
       setSuccessCount(n => n + 1)
     } catch (e) {
-      // allSettled cannot reject, so this is a throw from the state writes
-      // above. Still never a silent hang: say it, and clear loading below.
+      // allSettled cannot reject and every `apply` is judged above, so this is
+      // a backstop for a throw nobody predicted. It still takes the roster's
+      // full failure path (stale-or-clear), never a half-way state.
       if (gen !== generation.current) return
-      setError(e?.message || 'Could not load the roster')
+      if (loadedRange.current !== requestedRange) {
+        // As the old catch did for spend: whatever the range-scoped slices
+        // hold may belong to another week, and nothing above got to judge.
+        for (const key of ['timeOff', 'holidays', 'contractorSpend']) {
+          setters[key](EMPTY[key])
+          loadedScope.current[key] = null
+        }
+      }
+      failRoster(e)
     } finally {
       if (gen === generation.current) setLoading(false)
     }
-  }, [locationId, startDate, endDate, spendReferenceDate])
+
+    // The roster's failure path, unchanged from ROSTER-FIX.6a / 6a-9.
+    function failRoster(reason) {
+      setError(reason?.message || 'Could not load the roster')
+      if (loadedRange.current === requestedRange) {
+        // Same week, flaky refresh: the roster underneath is still true.
+        setShowingStaleData(true)
+      } else {
+        // The dates on screen moved on. Whatever is held belongs to another
+        // range, so showing it under these dates would be a lie the operator
+        // has no way to spot. (Contractor spend, leave and holidays are
+        // cleared by their own scope rule above.)
+        setBlocks([])
+        loadedRange.current = null
+      }
+    }
+  }, [locationId, startDate, endDate, spendReferenceDate, canReadSpend])
 
   useEffect(() => { refresh() }, [refresh])
 

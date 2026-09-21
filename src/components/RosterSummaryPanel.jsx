@@ -75,6 +75,12 @@ export default function RosterSummaryPanel({
   // range. `contractorSpend` is null then too, and "Calculating…" would be a
   // promise nothing is going to keep.
   contractorSpendUnavailable = false,
+  // ROSTERLOAD.1 (review S2) — the calendar's coach list / leave failed to
+  // load. Without these the panel states false things: an empty staff slice
+  // reads "No FTE coaches assigned to this week yet.", and utilisation
+  // computed with no leave can never show a coach as on leave.
+  staffUnavailable = false,
+  leaveMissing = false,
   // REPORTS.2 — set (YYYY-MM-01) when the visible week straddles two months:
   // the panel reports the month holding most of the week and names the other.
   spendOtherMonthStart = null,
@@ -97,11 +103,18 @@ export default function RosterSummaryPanel({
             FTE utilisation — this week
           </h3>
           <span className="text-[11px] text-un1t-subtle">
-            {week.fte.length} {week.fte.length === 1 ? 'coach' : 'coaches'} rostered
+            {staffUnavailable
+              ? null
+              : <>{week.fte.length} {week.fte.length === 1 ? 'coach' : 'coaches'} rostered</>}
+            {!staffUnavailable && leaveMissing && (
+              <span className="ml-1.5 px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-700">Leave not included</span>
+            )}
           </span>
         </div>
 
-        {week.fte.length === 0 ? (
+        {staffUnavailable ? (
+          <p className="text-xs text-amber-700 py-2">Coach list could not be loaded</p>
+        ) : week.fte.length === 0 ? (
           <p className="text-xs text-un1t-subtle py-2">
             No FTE coaches assigned to this week yet.
           </p>

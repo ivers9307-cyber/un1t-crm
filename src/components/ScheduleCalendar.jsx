@@ -396,6 +396,11 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
     startDate: rangeStart,
     endDate: rangeEnd,
     spendReferenceDate: formatDate(spendMonth.monthStart),
+    // ROSTERLOAD.1 (review B1) — the spend route is manager-only, and `staff`
+    // and `reception` both reach this calendar. Asking anyway got a 403 on
+    // every coach's load, which on main blanked the whole roster. Same gate
+    // useWeekCost is enabled on, below.
+    canReadSpend: isManager,
   })
   // ROSTERLOAD.1 — a side read can fail now without failing the roster, so
   // the actions that depend on it must not offer an empty list as if it were
@@ -1068,8 +1073,10 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
           than the banner above, and specific: an empty leave slice nobody
           mentions reads as "nobody is on leave". Held back while the roster
           banner is up, which already says the load failed, so a dead network
-          is one red banner and not a red banner plus five amber lines. */}
-      {!error && (
+          is one red banner and not a red banner plus five amber lines.
+          (review nit) Held back only while that banner is actually SHOWN:
+          dismissing it must not take the note with it. */}
+      {!(error && !errorDismissed) && (
         <SchedulePartialLoadNote
           partialErrors={partialErrors}
           isManager={isManager}
@@ -1384,6 +1391,8 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
           timeOff={timeOff}
           contractorSpend={contractorSpend}
           contractorSpendUnavailable={Boolean(partialErrors?.contractorSpend && !partialErrors.contractorSpend.kept)}
+          staffUnavailable={Boolean(staffUnavailable)}
+          leaveMissing={leaveMissing}
           spendOtherMonthStart={spendMonth.straddles ? formatDate(spendMonth.otherMonthStart) : null}
         />
       )}

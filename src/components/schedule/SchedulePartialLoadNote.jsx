@@ -19,11 +19,15 @@ export const TEMPLATES_UNAVAILABLE_MESSAGE =
 export const LEAVE_NOT_FLAGGED_MESSAGE =
   'Leave could not be loaded, so coaches on leave are not flagged here.'
 
-// [slice, managerOnly, copy when cleared, copy when an earlier load is kept]
+// [slice, managerOnly, copy when cleared, copy when an earlier load is kept,
+//  optional coach copy when cleared]
 const COPY = [
   ['timeOff', false,
     'Leave could not be loaded. Days off are not shown, so check leave before assigning coaches.',
-    'Leave could not be refreshed. Showing leave as it last loaded.'],
+    'Leave could not be refreshed. Showing leave as it last loaded.',
+    // ROSTERLOAD.1 (review nit) — a coach does not assign anyone, so the
+    // manager's "check leave before assigning" is the wrong instruction.
+    'Leave could not be loaded, so days off are not shown.'],
   ['holidays', false,
     'Bank holidays and closures could not be loaded, so they are not marked on the calendar.',
     'Bank holidays and closures could not be refreshed. Showing them as they last loaded.'],
@@ -47,7 +51,10 @@ export function partialLoadLines(partialErrors, { isManager }) {
   if (!partialErrors) return []
   return COPY
     .filter(([key, managerOnly]) => partialErrors[key] && (isManager || !managerOnly))
-    .map(([key, , cleared, kept]) => (partialErrors[key].kept ? kept : cleared))
+    .map(([key, , cleared, kept, coachCleared]) => {
+      if (partialErrors[key].kept) return kept
+      return !isManager && coachCleared ? coachCleared : cleared
+    })
 }
 
 export default function SchedulePartialLoadNote({ partialErrors, isManager, onRetry, busy }) {
