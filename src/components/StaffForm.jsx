@@ -451,8 +451,10 @@ export default function StaffForm({
     const data = await res.json()
     setSaving(false)
 
-    if (data.success && data.warning) {
-      setNotice(data.warning)
+    if (data.success && (data.warning || data.notice)) {
+      // `notice` (review round 3): a reactivation that landed, with the one
+      // thing the operator now has to do by hand (door access stays off).
+      setNotice([data.warning, data.notice].filter(Boolean).join(' '))
       router.refresh()
     } else if (data.success) {
       router.push('/settings')
@@ -1323,8 +1325,9 @@ function DeactivateButton({ staffId, staffName }) {
 // the retry (the route re-attempts the unban for an already-active profile).
 function ReactivateButton({ staffId }) {
   const router = useRouter()
-  const [state, setState] = useState('idle')
+  const [state, setState] = useState('idle') // idle | working | error | done
   const [error, setError] = useState(null)
+  const [notice, setNotice] = useState(null)
 
   async function run() {
     setState('working')
@@ -1339,12 +1342,34 @@ function ReactivateButton({ staffId }) {
       if (!res.ok || data.success === false) {
         throw new Error(data.error || `Reactivate failed (${res.status})`)
       }
+      if (data.notice) {
+        // Shown until read: router.refresh() swaps this component for the
+        // Deactivate button, so it only runs from "Done".
+        setNotice(data.notice)
+        setState('done')
+        return
+      }
       router.refresh()
       setState('idle')
     } catch (e) {
       setState('error')
       setError(e.message || 'Reactivate failed')
     }
+  }
+
+  if (state === 'done' && notice) {
+    return (
+      <div role="status" className="bg-green-500/10 border border-green-500/30 rounded-md p-3 space-y-2">
+        <div className="text-xs text-green-700"><span className="font-medium">Reactivated.</span> {notice}</div>
+        <button
+          type="button"
+          onClick={() => { setNotice(null); setState('idle'); router.refresh() }}
+          className="text-xs text-un1t-subtle hover:text-un1t-text"
+        >
+          Done
+        </button>
+      </div>
+    )
   }
 
   return (

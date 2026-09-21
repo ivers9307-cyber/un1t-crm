@@ -91,7 +91,13 @@ const put = (body) => new Request(`http://localhost/api/staff/${ID}`, {
 const props = { params: Promise.resolve({ id: ID }) }
 const use = (db) => { createServerClient.mockReturnValue(db); return db }
 
-beforeEach(() => { vi.clearAllMocks(); getCurrentUser.mockResolvedValue(MASTER) })
+// clearAllMocks keeps implementations, so a test that configures UniFi and then
+// FAILS before its own reset would leak `configured: true` into the next one.
+beforeEach(() => {
+  vi.clearAllMocks()
+  getCurrentUser.mockResolvedValue(MASTER)
+  getUnifiConfig.mockResolvedValue({ configured: false })
+})
 
 describe('DELETE /api/staff/[id] — deactivate ends the sessions', () => {
   it('writes active=false FIRST, then bans the login — and only bans it', async () => {
@@ -459,5 +465,137 @@ describe('nits — a kept login warns ONCE, and a retry is not a second deactiva
     use(makeDb())
     await DELETE(del(), props)
     expect(logAuditEvent.mock.calls.map(([e]) => e.action)).toEqual(['profile.deactivated'])
+  })
+})
+
+// ── Review round 3 ──────────────────────────────────────────────────────────
+describe('R2-S1 — an owner can never deactivate (and ban) a MASTER', () => {
+  const OWNER = { id: 'owner-a', isMaster: false, role: 'owner', full_name: 'Owner A', email: 'a@example.test', rolesByLocation: { [LOC]: 'owner' } }
+  // The master holds a row AT the owner's studio, with a live door: exactly the
+  // shape that used to pass, and whose UniFi revoke ran BEFORE mig 080 refused.
+  const masterAtStudio = { ...DOOR_PROFILE, role: 'master' }
+
+  it.each([
+    ['DELETE', () => DELETE(del(), props)],
+    ['PUT active:false', () => PUT(put({ active: false }), props)],
+  ])('%s: 403, NO UniFi call, NO write, NO ban', async (_label, call) => {
+    getCurrentUser.mockResolvedValue(OWNER)
+    getUnifiConfig.mockResolvedValue({ configured: true })
+    const db = use(makeDb({ profile: masterAtStudio }))
+    const res = await call()
+    expect(res.status).toBe(403)
+    expect((await res.json()).error).toBe('Owners cannot edit a master account. Ask a master to make this change.')
+    expect(revokeUnifiUserPolicies).not.toHaveBeenCalled()
+    expect(db.events).toEqual([])
+    getUnifiConfig.mockResolvedValue({ configured: false })
+  })
+
+  it('a master may still deactivate another master (mig 080 guards the last one)', async () => {
+    const db = use(makeDb({ profile: masterAtStudio }))
+    expect((await DELETE(del(), props)).status).toBe(200)
+    expect(db.auth.admin.updateUserById).toHaveBeenCalled()
+  })
+})
+
+describe('R2-S2 — a save that ENDS inactive can never grant a door', () => {
+  const doorOn = [{ location_id: LOC, role: 'staff', is_default: true, unifi_door_access: true, permissions: {} }]
+  const inactiveDoorOff = {
+    ...DOOR_PROFILE, active: false, unifi_door_access: false,
+    profile_locations: [{ ...DOOR_PROFILE.profile_locations[0], unifi_door_access: false }],
+  }
+  const expectNoGrant = async (db) => {
+    const { syncUnifiUserPolicyForRole, findOrCreateUnifiUser } = await import('@/lib/unifi-access')
+    expect(syncUnifiUserPolicyForRole).not.toHaveBeenCalled()
+    expect(findOrCreateUnifiUser).not.toHaveBeenCalled()
+    const rowWrites = db.events.filter(([t]) => t === 'profile_locations.update').map(([, p]) => p.unifi_door_access)
+    expect(rowWrites.length).toBeGreaterThan(0)
+    expect(rowWrites.every((v) => v === false)).toBe(true)
+  }
+
+  it('STALE FORM: someone else already deactivated them; this form (active, door on) turns Active off and saves', async () => {
+    getUnifiConfig.mockResolvedValue({ configured: true })
+    const db = use(makeDb({ profile: inactiveDoorOff }))
+    expect((await PUT(put({ active: false, assignments: doorOn }), props)).status).toBe(200)
+    await expectNoGrant(db)
+    getUnifiConfig.mockResolvedValue({ configured: false })
+  })
+
+  it('TOGGLE ON while inactive: a body that does not mention `active` cannot grant a door to an inactive profile', async () => {
+    getUnifiConfig.mockResolvedValue({ configured: true })
+    const db = use(makeDb({ profile: inactiveDoorOff }))
+    expect((await PUT(put({ assignments: doorOn }), props)).status).toBe(200)
+    await expectNoGrant(db)
+    getUnifiConfig.mockResolvedValue({ configured: false })
+  })
+
+  it('control: REACTIVATING with the door toggle on does grant it (the operator asked for it)', async () => {
+    getUnifiConfig.mockResolvedValue({ configured: true })
+    const { syncUnifiUserPolicyForRole } = await import('@/lib/unifi-access')
+    use(makeDb({ profile: inactiveDoorOff }))
+    expect((await PUT(put({ active: true, assignments: doorOn }), props)).status).toBe(200)
+    expect(syncUnifiUserPolicyForRole).toHaveBeenCalled()
+    getUnifiConfig.mockResolvedValue({ configured: false })
+  })
+})
+
+describe('R2-S3 — a retry that comes back kept_unverified AGAIN still warns', () => {
+  it('already inactive + the member/host check fails again → warning, so the form does not navigate away on a clean-looking success', async () => {
+    const db = makeDb({ profile: { ...PROFILE, active: false } })
+    const from = db.from.bind(db)
+    db.from = (table) => {
+      const chain = from(table)
+      if (table === 'contacts') chain.maybeSingle = async () => ({ data: null, error: { message: 'db blip' } })
+      return chain
+    }
+    use(db)
+    const body = await (await PUT(put({ active: false }), props)).json()
+    expect(body.success).toBe(true)
+    expect(body.warning).toMatch(/could not check/)
+  })
+})
+
+describe('nits round 3', () => {
+  it('reactivate success tells the operator door access stays off', async () => {
+    use(makeDb({ profile: { ...PROFILE, active: false } }))
+    const body = await (await PUT(put({ active: true }), props)).json()
+    expect(body.success).toBe(true)
+    expect(body.notice).toBe('Door access stays off until you turn it back on.')
+    expect(body.notice).not.toMatch(/[—–]/)
+  })
+  it('…but not when the same save turned a door back ON (it would be false)', async () => {
+    getUnifiConfig.mockResolvedValue({ configured: true })
+    use(makeDb({ profile: { ...DOOR_PROFILE, active: false, unifi_door_access: false, profile_locations: [{ ...DOOR_PROFILE.profile_locations[0], unifi_door_access: false }] } }))
+    const body = await (await PUT(put({ active: true, assignments: [{ location_id: LOC, role: 'staff', is_default: true, unifi_door_access: true, permissions: {} }] }), props)).json()
+    expect(body.success).toBe(true)
+    expect(body.notice).toBeUndefined()
+    getUnifiConfig.mockResolvedValue({ configured: false })
+  })
+  it('…and only on the real false→true flip', async () => {
+    use(makeDb())
+    expect((await (await PUT(put({ active: true }), props)).json()).notice).toBeUndefined()
+  })
+
+  it('the audit row is written whenever the transition LANDED, even when a later step returns early (comp 400)', async () => {
+    upsertCompensationForProfile.mockResolvedValueOnce({ ok: false, error: 'rls' })
+    use(makeDb())
+    expect((await PUT(put({ active: false, hourly_rate: 20 }), props)).status).toBe(400)
+    expect(logAuditEvent.mock.calls.map(([e]) => e.action)).toEqual(['profile.deactivated'])
+    expect(logAuditEvent.mock.calls[0][0].details).toEqual({ before: true, after: false, login: 'banned' })
+  })
+  it('…and on the UniFi 502 path (reactivated, door sync failed)', async () => {
+    use(makeDb({ profile: { ...DOOR_PROFILE, active: false, unifi_door_access: false, profile_locations: [{ ...DOOR_PROFILE.profile_locations[0], unifi_door_access: false }] } }))
+    const res = await PUT(put({ active: true, assignments: [{ location_id: LOC, role: 'staff', is_default: true, unifi_door_access: true, permissions: {} }] }), props)
+    expect(res.status).toBe(502)
+    expect(logAuditEvent.mock.calls.map(([e]) => e.action)).toEqual(['profile.reactivated'])
+  })
+  it('exactly ONE active audit row on the ordinary success path (not one early and one late)', async () => {
+    use(makeDb())
+    await PUT(put({ active: false }), props)
+    expect(logAuditEvent.mock.calls.map(([e]) => e.action).filter((a) => a.startsWith('profile.'))).toEqual(['profile.deactivated'])
+  })
+  it('no audit row when the write did NOT land', async () => {
+    use(makeDb({ writeError: { message: 'Cannot deactivate the last active master' } }))
+    await PUT(put({ active: false }), props)
+    expect(logAuditEvent).not.toHaveBeenCalled()
   })
 })
