@@ -71,6 +71,10 @@ export default function RosterSummaryPanel({
   // eslint-disable-next-line no-unused-vars
   monthStart, location,
   contractorSpend,
+  // ROSTERLOAD.1 — the spend read failed and nothing earlier is held for this
+  // range. `contractorSpend` is null then too, and "Calculating…" would be a
+  // promise nothing is going to keep.
+  contractorSpendUnavailable = false,
   // REPORTS.2 — set (YYYY-MM-01) when the visible week straddles two months:
   // the panel reports the month holding most of the week and names the other.
   spendOtherMonthStart = null,
@@ -162,7 +166,7 @@ export default function RosterSummaryPanel({
             <h3 className="text-sm font-semibold flex items-center gap-2">
               <Wallet size={14} className="text-emerald-400" /> Contractor spend
             </h3>
-            <span className="text-[11px] text-un1t-subtle">Calculating…</span>
+            <span className="text-[11px] text-un1t-subtle">{contractorSpendUnavailable ? 'Could not be loaded' : 'Calculating…'}</span>
           </div>
         ) : (
           <>

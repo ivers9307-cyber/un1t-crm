@@ -64,6 +64,9 @@ import { COPY_MODE_OPTIONS, copyResultToast } from '@/lib/roster-copy'
 import { leaveClashesHeadline, leaveRangeLabel } from '@/lib/roster-publish-advisories'
 import RosterSummaryPanel from './RosterSummaryPanel'
 import ScheduleErrorBanner from './schedule/ScheduleErrorBanner'
+import SchedulePartialLoadNote, {
+  STAFF_UNAVAILABLE_MESSAGE, TEMPLATES_UNAVAILABLE_MESSAGE, LEAVE_NOT_FLAGGED_MESSAGE,
+} from './schedule/SchedulePartialLoadNote'
 import RosterChangeLogDrawer from './schedule/RosterChangeLogDrawer'
 import PublicationStatusChip from './schedule/PublicationStatusChip'
 import { timeOffLeaveLabel } from '@shared/time-off'
@@ -387,13 +390,20 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
   const rangeEnd = formatDate(viewType === 'month' ? monthGrid.end : weekEnd)
   const {
     blocks, templates, staff, timeOff, holidays, contractorSpend,
-    loading, error, showingStaleData, successCount, refresh: fetchData,
+    loading, error, showingStaleData, partialErrors, successCount, refresh: fetchData,
   } = useScheduleData({
     locationId,
     startDate: rangeStart,
     endDate: rangeEnd,
     spendReferenceDate: formatDate(spendMonth.monthStart),
   })
+  // ROSTERLOAD.1 — a side read can fail now without failing the roster, so
+  // the actions that depend on it must not offer an empty list as if it were
+  // the truth. A slice the hook KEPT from an earlier load of the same scope is
+  // still usable; only a cleared one disables anything.
+  const staffUnavailable = partialErrors?.staff && !partialErrors.staff.kept ? STAFF_UNAVAILABLE_MESSAGE : null
+  const templatesUnavailable = partialErrors?.templates && !partialErrors.templates.kept ? TEMPLATES_UNAVAILABLE_MESSAGE : null
+  const leaveMissing = Boolean(partialErrors?.timeOff && !partialErrors.timeOff.kept)
   // ROSTER-FIX.6c — its own hook, not a seventh slice of the fan-out above: a
   // summary panel must not be able to take the roster down with it. See its
   // header. Manager-gated on the client too, so a coach's calendar never fires
@@ -1054,6 +1064,20 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
         />
       )}
 
+      {/* ROSTERLOAD.1 — the roster loaded but a side read did not. Quieter
+          than the banner above, and specific: an empty leave slice nobody
+          mentions reads as "nobody is on leave". Held back while the roster
+          banner is up, which already says the load failed, so a dead network
+          is one red banner and not a red banner plus five amber lines. */}
+      {!error && (
+        <SchedulePartialLoadNote
+          partialErrors={partialErrors}
+          isManager={isManager}
+          onRetry={fetchData}
+          busy={loading}
+        />
+      )}
+
       {/* Staffing-gaps summary — week view only, manager only.
           ROSTERVIS.1 — counts below-minimum shifts as well as empty ones; red
           while any shift has no coach, amber when every gap is a short one. */}
@@ -1359,6 +1383,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
           location={user.activeLocation}
           timeOff={timeOff}
           contractorSpend={contractorSpend}
+          contractorSpendUnavailable={Boolean(partialErrors?.contractorSpend && !partialErrors.contractorSpend.kept)}
           spendOtherMonthStart={spendMonth.straddles ? formatDate(spendMonth.otherMonthStart) : null}
         />
       )}
@@ -1370,6 +1395,8 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
           staff={locationStaff}
           blocks={blocks}
           timeOff={timeOff}
+          unavailableReason={staffUnavailable}
+          leaveMissing={leaveMissing}
           onAssign={(profileIds) => handleAssignCoaches(assignTarget.block.id, profileIds)}
           onClose={() => setAssignTarget(null)}
           // ROSTER-FIX.6b-7 — the Add-coach button that opened this lives in
@@ -1383,6 +1410,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
         <CreateBlockModal
           date={createTarget.date}
           templates={templates}
+          unavailableReason={templatesUnavailable}
           onCreate={(templateId) => handleCreateBlock(createTarget.date, templateId)}
           onClose={() => setCreateTarget(null)}
         />
@@ -1520,10 +1548,13 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
               <select
                 value={bulkAssignProfile}
                 onChange={(e) => setBulkAssignProfile(e.target.value)}
-                disabled={selectedBlockIds.size === 0 || bulkAssignBusy}
+                // ROSTERLOAD.1 — no coach list, no picker: the reason goes in
+                // the placeholder rather than an empty dropdown.
+                disabled={selectedBlockIds.size === 0 || bulkAssignBusy || Boolean(staffUnavailable)}
+                title={staffUnavailable || undefined}
                 className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text disabled:opacity-50"
               >
-                <option value="">— Select a coach —</option>
+                <option value="">{staffUnavailable ? 'Coach list could not be loaded' : '— Select a coach —'}</option>
                 {locationStaff.map((s) => (
                   <option key={s.id} value={s.id}>{s.full_name}</option>
                 ))}
@@ -1624,7 +1655,11 @@ function CopyRosterModal({ job, onChoose, onClose }) {
   )
 }
 
-function AssignCoachModal({ block, staff, blocks, timeOff, onAssign, onClose, restoreFocusRef }) {
+// ROSTERLOAD.1 — `unavailableReason`: the coach list failed to load, so the
+// picker says so and cannot submit, instead of showing an empty list that reads
+// as "everyone is already assigned". `leaveMissing`: leave failed to load, so
+// the on-leave badge cannot fire and the picker says that too.
+function AssignCoachModal({ block, staff, blocks, timeOff, unavailableReason = null, leaveMissing = false, onAssign, onClose, restoreFocusRef }) {
   const [selectedIds, setSelectedIds] = useState(() => new Set())
   const [saving, setSaving] = useState(false)
   const tmpl = block.shift_templates || {}
@@ -1678,7 +1713,12 @@ function AssignCoachModal({ block, staff, blocks, timeOff, onAssign, onClose, re
         </div>
         <div>
           <label className="block text-xs text-un1t-subtle mb-2">Pick one or more coaches</label>
-          {available.length === 0 ? (
+          {!unavailableReason && leaveMissing && (
+            <p className="mb-2 text-[11px] px-2 py-1.5 rounded bg-amber-500/10 text-amber-700">{LEAVE_NOT_FLAGGED_MESSAGE}</p>
+          )}
+          {unavailableReason ? (
+            <p className="text-[11px] px-2 py-1.5 rounded bg-amber-500/10 text-amber-700">{unavailableReason}</p>
+          ) : available.length === 0 ? (
             <p className="text-[11px] text-un1t-subtle">All staff already assigned to this slot.</p>
           ) : (
             <ul className="max-h-72 overflow-y-auto border border-un1t-border rounded-md divide-y divide-un1t-border/50">
@@ -1731,7 +1771,7 @@ function AssignCoachModal({ block, staff, blocks, timeOff, onAssign, onClose, re
         <button
           type="button"
           onClick={handleClick}
-          disabled={selectedIds.size === 0 || saving || available.length === 0}
+          disabled={selectedIds.size === 0 || saving || available.length === 0 || Boolean(unavailableReason)}
           className="w-full mt-4 bg-un1t-text text-un1t-bg font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
         >
           {submitLabel}
@@ -1741,7 +1781,9 @@ function AssignCoachModal({ block, staff, blocks, timeOff, onAssign, onClose, re
   )
 }
 
-function CreateBlockModal({ date, templates, onCreate, onClose }) {
+// ROSTERLOAD.1 — `unavailableReason`: the template list failed to load, so
+// the modal says so and cannot submit, instead of an empty dropdown.
+function CreateBlockModal({ date, templates, unavailableReason = null, onCreate, onClose }) {
   const [templateId, setTemplateId] = useState('')
   const [saving, setSaving] = useState(false)
   const dayLabel = new Date(date + 'T00:00:00').toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'long' })
@@ -1761,7 +1803,10 @@ function CreateBlockModal({ date, templates, onCreate, onClose }) {
         </p>
         <div>
           <label className="block text-xs text-un1t-subtle mb-1">Template *</label>
-          <select value={templateId} onChange={e => setTemplateId(e.target.value)} className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text">
+          {unavailableReason && (
+            <p className="mb-2 text-[11px] px-2 py-1.5 rounded bg-amber-500/10 text-amber-700">{unavailableReason}</p>
+          )}
+          <select value={templateId} onChange={e => setTemplateId(e.target.value)} disabled={Boolean(unavailableReason)} className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text disabled:opacity-50">
             <option value="">Select template...</option>
             {templates.map(t => (
               <option key={t.id} value={t.id}>{t.name} ({formatTime(t.start_time)}–{formatTime(t.end_time)})</option>
