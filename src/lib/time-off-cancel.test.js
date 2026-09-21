@@ -5,7 +5,7 @@ import {
   isOpenCancelAsk, cancelAskState, selfCancelMode, canDecideLeaveCancel, leaveActingLocationIds,
   resolveLeaveCancelDeciderIds, annotateCancelAsk, cancelAskEventKey,
   cancelAskNoticeKey, reAskBlockedUntil, CLEARED_CANCEL_ASK,
-  isMissingCancelSchemaError, CANCEL_ASK_OFF,
+  isMissingCancelSchemaError, CANCEL_ASK_OFF, dublinRetryLabel,
 } from './time-off-cancel.js'
 import { LEAVE_CANCEL_NOTICES, cancelledAtRequestText } from './time-off-cancel-copy.js'
 import { fakeDb, queriesOf } from './time-off.test-helpers.js'
@@ -162,6 +162,7 @@ describe('annotateCancelAsk — what the list tells the screen', () => {
   it('the requester of an open ask may withdraw it and nothing else', () => {
     expect(annotateCancelAsk(asked(), MANAGER, TODAY, ['loc-1'])).toEqual({
       cancel_request_state: 'open', can_request_cancel: false, cancel_needs_owner: false, can_withdraw_cancel: true, can_decide_cancel: false,
+      cancel_retry_after: null, cancel_retry_after_label: null,
     })
   })
 
@@ -172,14 +173,30 @@ describe('annotateCancelAsk — what the list tells the screen', () => {
   it('another manager sees that it is open and can do nothing about it', () => {
     expect(annotateCancelAsk(asked(), OTHER_MANAGER, TODAY, ['loc-1'])).toEqual({
       cancel_request_state: 'open', can_request_cancel: false, cancel_needs_owner: false, can_withdraw_cancel: false, can_decide_cancel: false,
+      cancel_retry_after: null, cancel_retry_after_label: null,
     })
   })
 
   it('a manager\'s own approved leave with no ask (or a declined one) offers the ask; a coach\'s never does', () => {
     expect(annotateCancelAsk(leave(), MANAGER, TODAY, ['loc-1']).can_request_cancel).toBe(true)
     const declined = asked({ cancel_decided_at: '2026-09-20T10:00:00Z', cancel_decision: 'rejected' })
-    expect(annotateCancelAsk(declined, MANAGER, TODAY, ['loc-1'])).toMatchObject({ cancel_request_state: 'rejected', can_request_cancel: true })
+    // A day after the decline (the clock is passed in, never read here).
+    expect(annotateCancelAsk(declined, MANAGER, TODAY, ['loc-1'], Date.parse('2026-09-21T10:00:00Z'))).toMatchObject({
+      cancel_request_state: 'rejected', can_request_cancel: true, cancel_needs_owner: true, cancel_retry_after: null, cancel_retry_after_label: null,
+    })
     expect(annotateCancelAsk(leave(), COACH, TODAY, ['loc-1']).can_request_cancel).toBe(false)
+  })
+
+  // LEAVECANCEL.1 (review) — the PUT refuses a re-ask within 24h of a decline.
+  // The list must agree, or the button shows and the dialog then 409s.
+  it('within 24h of a decline the ask is NOT offered, and the row carries when it will be (Dublin wall clock)', () => {
+    const declined = asked({ cancel_decided_at: '2026-09-20T10:00:00Z', cancel_decision: 'rejected' })
+    expect(annotateCancelAsk(declined, MANAGER, TODAY, ['loc-1'], Date.parse('2026-09-20T13:30:00Z'))).toMatchObject({
+      cancel_request_state: 'rejected', can_request_cancel: false, cancel_needs_owner: false,
+      cancel_retry_after: '2026-09-21T10:00:00.000Z',
+      // 10:00 UTC is 11:00 in Dublin in September (IST).
+      cancel_retry_after_label: '11:00 on 21 Sep',
+    })
   })
 
   it('says whether the button asks an owner (manager tier) or cancels outright (a master)', () => {
@@ -215,6 +232,19 @@ describe('reAskBlockedUntil — one re-ask per 24h after a DECLINE (each ask not
   it('never asked, withdrawn, or an approved cancellation: nothing to wait for', () => {
     expect(reAskBlockedUntil(leave(), Date.parse('2026-09-20T10:01:00Z'))).toBeNull()
     expect(reAskBlockedUntil(asked({ cancel_decided_at: '2026-09-20T10:00:00.000Z', cancel_decision: 'approved' }), Date.parse('2026-09-20T10:01:00Z'))).toBeNull()
+  })
+})
+
+describe('dublinRetryLabel — "HH:MM on D Mon", Dublin wall clock, whatever the process timezone', () => {
+  it('reads Irish summer time and winter time', () => {
+    expect(dublinRetryLabel('2026-09-22T13:30:00.000Z')).toBe('14:30 on 22 Sep')
+    expect(dublinRetryLabel('2026-12-01T14:30:00.000Z')).toBe('14:30 on 1 Dec')
+    // Late evening UTC is already the next day in Dublin in summer.
+    expect(dublinRetryLabel('2026-06-30T23:30:00.000Z')).toBe('00:30 on 1 Jul')
+  })
+  it('null for anything unreadable', () => {
+    expect(dublinRetryLabel(null)).toBeNull()
+    expect(dublinRetryLabel('not a date')).toBeNull()
   })
 })
 

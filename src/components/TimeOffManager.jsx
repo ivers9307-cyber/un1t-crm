@@ -498,6 +498,8 @@ export default function TimeOffManager({ user, canApprove, canDecideCancellation
                     <div className="text-xs text-un1t-subtle mt-1">
                       Cancellation declined. Your leave stays approved.
                       {req.cancel_decision_note ? ` Note: "${req.cancel_decision_note}"` : ''}
+                      {/* LEAVECANCEL.1 — the server hides the ask for 24h after a decline and says when it lifts. */}
+                      {req.cancel_retry_after_label ? ` You can ask again after ${req.cancel_retry_after_label}.` : ''}
                     </div>
                   )}
                 </div>

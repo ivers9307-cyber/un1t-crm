@@ -26,6 +26,7 @@
 
 import { hasRoleAtLocation } from '@/lib/role-at-location'
 import { MANAGER_ROLES } from '@/lib/schemas'
+import { dublinTimeLabel, dublinDateKey } from '@/lib/dublin-time'
 
 export const LEAVE_CANCEL_DECIDER_ROLES = Object.freeze(['owner'])
 
@@ -83,20 +84,30 @@ export function canDecideLeaveCancel(user, row, requesterLocationIds = []) {
 /**
  * What GET /api/schedule/time-off tells the screen about one row, for THIS
  * caller. The screen offers exactly these and the routes re-judge every one.
+ * `nowMs` is passed in (the route's clock) so the 24h re-ask wait agrees with
+ * the PUT that enforces it.
  */
-export function annotateCancelAsk(row, user, todayIso, requesterLocationIds = []) {
+export function annotateCancelAsk(row, user, todayIso, requesterLocationIds = [], nowMs = Date.now()) {
   const state = cancelAskState(row, todayIso)
   const open = state === 'open'
   const isSelf = !!user?.id && row?.profile_id === user.id
   const mode = selfCancelMode(user, row, todayIso, requesterLocationIds)
+  // Within 24h of a decline the PUT refuses a re-ask (reAskBlockedUntil); the
+  // button must not show and then 409. Only an ASK waits: a master's cancel is
+  // direct and notifies nobody.
+  const retryAfter = mode === 'ask' ? reAskBlockedUntil(row, nowMs) : null
+  const canAsk = !open && !retryAfter
   return {
     cancel_request_state: state,
     // 'direct' counts: a master's own approved leave gets the same button, and
     // the PUT's answer says which of the two happened.
-    can_request_cancel: !open && (mode === 'ask' || mode === 'direct'),
+    can_request_cancel: canAsk && (mode === 'ask' || mode === 'direct'),
     // true = the button ASKS an owner; false with can_request_cancel = a
     // master, whose cancel is immediate. The screen words its confirm from it.
-    cancel_needs_owner: !open && mode === 'ask',
+    cancel_needs_owner: canAsk && mode === 'ask',
+    // When the wait lifts: the instant, and the Dublin wall-clock words for it.
+    cancel_retry_after: retryAfter,
+    cancel_retry_after_label: retryAfter ? dublinRetryLabel(retryAfter) : null,
     can_withdraw_cancel: open && isSelf,
     can_decide_cancel: open && canDecideLeaveCancel(user, row, requesterLocationIds),
   }
@@ -186,6 +197,21 @@ export function reAskBlockedUntil(row, nowMs) {
   if (!row?.cancel_decided_at || row.cancel_decision !== 'rejected') return null
   const until = Date.parse(row.cancel_decided_at) + RE_ASK_AFTER_DECLINE_MS
   return Number.isFinite(until) && nowMs < until ? new Date(until).toISOString() : null
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+/**
+ * "14:30 on 22 Sep": an instant as Dublin wall-clock words, whatever the
+ * process timezone. The time is the house helper's; the day is built from
+ * dublinDateKey with a fixed month list, because ICU's en-GB short month for
+ * September varies between versions ("Sep" / "Sept"). null if unreadable. Pure.
+ */
+export function dublinRetryLabel(iso) {
+  const time = dublinTimeLabel(iso)
+  if (!time) return null
+  const [, m, d] = dublinDateKey(iso).split('-').map(Number)
+  return `${time} on ${d} ${MONTHS[m - 1]}`
 }
 
 /** All seven mig 624 columns back to NULL: a withdraw, or an ask dying with the state it was about. */

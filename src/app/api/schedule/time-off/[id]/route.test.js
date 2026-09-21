@@ -454,7 +454,11 @@ describe('PUT /api/schedule/time-off/[id] — cancelling your own APPROVED leave
     createServerClient.mockReturnValue(db)
     const res = await PUT(req({ status: 'cancelled' }), PROPS)
     expect(res.status).toBe(409)
-    expect((await res.json()).error).toMatch(/declined this less than a day ago/)
+    const { error: message } = await res.json()
+    expect(message).toMatch(/declined this less than a day ago/)
+    // Declined 12:00 UTC on 19 May: the wait ends 13:00 Dublin (IST) on 20 May.
+    expect(message).toContain('You can ask again after 13:00 on 20 May')
+    expect(message).not.toMatch(/—/)
     expect(updateSpy).not.toHaveBeenCalled()
     expect(notifyUsersOnce).not.toHaveBeenCalled()
   })

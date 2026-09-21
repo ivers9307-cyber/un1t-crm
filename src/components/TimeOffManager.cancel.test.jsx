@@ -86,6 +86,16 @@ describe('TimeOffManager — asking to cancel your own approved leave', () => {
     await waitFor(() => expect(within(screen.getByRole('dialog')).getByRole('alert').textContent).toMatch(/declined this less than a day ago/))
   })
 
+  it('within a day of a decline the row says when it can be asked again, and offers no ask', async () => {
+    mockFetch({ requests: [{
+      ...base, cancel_request_state: 'rejected', cancel_decision_note: null,
+      can_request_cancel: false, cancel_retry_after: '2026-09-22T13:30:00.000Z', cancel_retry_after_label: '14:30 on 22 Sep',
+    }] })
+    await show(MANAGER)
+    expect(screen.getByText(/You can ask again after 14:30 on 22 Sep\./)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Cancel approved/ })).toBeNull()
+  })
+
   it('a cancelled row whose cancellation an owner approved says how it came to be cancelled, to the person and to managers', async () => {
     const done = { ...base, status: 'cancelled', effective_status: 'cancelled', cancel_request_state: 'approved', cancel_decision: 'approved', cancel_decider: { id: 'own', full_name: 'Olive Owner' } }
     mockFetch({ requests: [done] })

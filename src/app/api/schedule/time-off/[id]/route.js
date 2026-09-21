@@ -13,7 +13,7 @@ import { isExpiredPendingRequest, isTimeOffTypeAllowedFor, timeOffLeaveLabel } f
 import {
   selfCancelMode, isOpenCancelAsk, leaveActingLocationIds, resolveLeaveCancelDeciderIds,
   cancelAskNoticeKey, reAskBlockedUntil, leaveRangeText, CLEARED_CANCEL_ASK,
-  isMissingCancelSchemaError,
+  isMissingCancelSchemaError, dublinRetryLabel,
 } from '@/lib/time-off-cancel'
 import { logError } from '@/lib/log'
 
@@ -297,7 +297,7 @@ async function requestOwnLeaveCancel(db, user, existing, { today, requesterLocat
   if (blockedUntil) {
     return NextResponse.json({
       success: false,
-      error: 'An owner declined this less than a day ago. You can ask again after 24 hours, or speak to them directly.',
+      error: `An owner declined this less than a day ago. You can ask again after ${dublinRetryLabel(blockedUntil) || '24 hours'}, or speak to them directly.`,
       retry_after: blockedUntil,
     }, { status: 409 })
   }
