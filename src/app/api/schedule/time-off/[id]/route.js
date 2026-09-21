@@ -200,8 +200,14 @@ export async function PUT(request, props) {
     .update(updates)
     .eq('id', params.id)
   // LEAVECANCEL.1 — a write that clears an ask is guarded on the status it
-  // read, so it can never land on top of an owner's decision made a moment ago
-  // (and wipe it). A row with no ask is written exactly as before.
+  // read. That catches an owner APPROVING the cancellation a moment earlier
+  // (status moved to cancelled, zero rows, 409). It does NOT catch an owner
+  // DECLINING it a moment earlier: a decline leaves status approved, so this
+  // write still matches and clears the decline along with the ask. That is the
+  // same end state as the accepted sequence "owner declines, then a colleague
+  // cancels the leave" (the leave is cancelled either way; the decline has
+  // nothing left to be about), so it is left as is. A row with no ask is
+  // written exactly as before.
   if (clearsAsk) write = write.eq('status', existing.status)
   const { data, error } = await write
     .select(REQUEST_WITH_PEOPLE)
