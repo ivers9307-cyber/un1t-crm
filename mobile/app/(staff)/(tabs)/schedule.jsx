@@ -35,6 +35,7 @@ import { canMobile } from '../../../lib/permissions'
 import { useIsTablet } from '../../../lib/use-is-tablet'
 import { effShiftStart, effShiftEnd, blockStart as blockDefaultStart, blockEnd as blockDefaultEnd, teamRosterForDay, initials } from '../../../lib/schedule-team'
 import { canAdjustShiftTimes, canCancelTimeOff, MANAGER_ROLES, scheduleViewFromParam } from '../../../lib/schedule-manage'
+import { myLeaveCancelOutcome } from '../../../lib/my-leave'
 import { hasOpenSwap, swapShiftWhen, swapPostedCopy, SWAP_PENDING_LABEL, SWAP_ALREADY_OPEN_MESSAGE } from '../../../lib/swap-cards'
 import { createInFlightGuard } from '../../../lib/swap-flow'
 import LeaveFloatingButtons from '../../../components/LeaveFloatingButtons'
@@ -515,7 +516,11 @@ export default function Schedule() {
           style: 'destructive',
           onPress: async () => {
             const res = await cancelTimeOffRequest(row.id, activeLocation?.id)
-            if (!res.success) Alert.alert('Couldn’t cancel', res.error || 'Unknown error')
+            // LEAVECANCEL.1 — same words as My leave, and not only failures: a
+            // manager's cancel landing on just-approved leave succeeds WITHOUT
+            // cancelling (an owner was asked), and that has to be said.
+            const outcome = myLeaveCancelOutcome(res)
+            if (outcome) Alert.alert(outcome.title, outcome.message)
             // ROSTER-FIX.7h — refetch EITHER WAY, not only on success. The
             // common failure here is "no longer pending": a manager approved or
             // rejected the request while the card sat on screen, so the row the

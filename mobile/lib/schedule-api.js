@@ -81,6 +81,13 @@ export function cancelTimeOffRequest(id, locationId) {
   })
 }
 
+// LEAVECANCEL.1 — a manager's cancel of their own APPROVED leave becomes a
+// request for an owner to cancel it (the PUT above answers cancellation:
+// 'requested'). This withdraws that request; the leave stays approved.
+export function withdrawLeaveCancelRequest(id, locationId) {
+  return api(`/api/schedule/time-off/${id}/cancel-request`, { method: 'DELETE', locationId })
+}
+
 export function cancelSwapRequest(id, locationId) {
   return api(`/api/schedule/swaps/${id}`, {
     method: 'PUT',

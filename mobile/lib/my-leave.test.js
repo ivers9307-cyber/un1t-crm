@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest'
 import {
   myLeaveRow, myLeaveSections, MY_LEAVE_EMPTY, MY_LEAVE_CANCEL_CONFIRM,
   stillCancellable, myLeaveCancelOutcome, MY_LEAVE_NO_LONGER_PENDING,
+  myLeaveWithdrawOutcome, MY_LEAVE_CANCEL_REQUESTED, MY_LEAVE_CANCEL_SENT_TO_OWNER, MY_LEAVE_WITHDRAW_CONFIRM,
 } from './my-leave'
 
 const ME = { id: 'me' }
@@ -19,6 +20,7 @@ describe('myLeaveRow', () => {
       id: 'r1', title: 'Holiday', range: 'Mon 5 Oct – Fri 9 Oct', summary: 'Mon 5 Oct – Fri 9 Oct · 5 days', days: 5,
       status: 'rejected', statusLabel: 'Declined', tone: 'red',
       reason: null, note: 'Two others are already off that week.', noteHeading: 'Note from Manager One', canCancel: false,
+      cancelNote: null, canWithdrawCancel: false,
     })
   })
   it('a note with no reviewer name still gets a heading; no note, no heading', () => {
@@ -39,6 +41,27 @@ describe('myLeaveRow', () => {
     const r = myLeaveRow(row('r1', 'pending', '2026-03-02', { effective_status: 'expired' }), ME)
     expect(r).toMatchObject({ status: 'expired', statusLabel: 'Expired', tone: 'slate', canCancel: false })
   })
+  // LEAVECANCEL.1 — approved leave whose cancellation is waiting for an owner
+  // is STILL approved: same chip, same section, plus a line saying so. The
+  // flags are the server's (GET /api/schedule/time-off); the phone re-decides
+  // nothing.
+  it('an open cancellation request keeps the row Approved, says it is waiting, and offers Withdraw when the server says so', () => {
+    const r = myLeaveRow(row('r1', 'approved', '2026-10-05', { cancel_request_state: 'open', can_withdraw_cancel: true }), ME)
+    expect(r).toMatchObject({ status: 'approved', statusLabel: 'Approved', canCancel: false, cancelNote: MY_LEAVE_CANCEL_REQUESTED, canWithdrawCancel: true })
+  })
+  it('Withdraw is never offered on someone else\'s row, whatever the flags say', () => {
+    const r = myLeaveRow(row('r1', 'approved', '2026-10-05', { profile_id: 'other', cancel_request_state: 'open', can_withdraw_cancel: true }), ME)
+    expect(r.canWithdrawCancel).toBe(false)
+  })
+  it('a declined cancellation says the leave stays approved, with the owner\'s note', () => {
+    const r = myLeaveRow(row('r1', 'approved', '2026-10-05', { cancel_request_state: 'rejected', cancel_decision_note: 'We are short that week' }), ME)
+    expect(r.cancelNote).toBe('Cancellation declined. Your leave stays approved. "We are short that week"')
+    expect(r.canWithdrawCancel).toBe(false)
+  })
+  it('a row from a deployment that predates LEAVECANCEL.1 carries no flags and reads exactly as before', () => {
+    expect(myLeaveRow(row('r1', 'approved', '2026-10-05'), ME)).toMatchObject({ cancelNote: null, canWithdrawCancel: false })
+  })
+
   it('a row from an older deployment with no effective_status falls back to its raw status', () => {
     const r = row('r1', 'approved', '2026-10-05'); delete r.effective_status
     expect(myLeaveRow(r, ME)).toMatchObject({ status: 'approved', statusLabel: 'Approved', tone: 'green' })
@@ -101,11 +124,21 @@ describe('myLeaveCancelOutcome', () => {
     expect(myLeaveCancelOutcome({ success: false })).toEqual({ title: 'Couldn’t cancel', message: 'Unknown error' })
     expect(myLeaveCancelOutcome(undefined)).toEqual({ title: 'Couldn’t cancel', message: 'Unknown error' })
   })
+  // LEAVECANCEL.1 — a manager's cancel that lands just after the request was
+  // approved is answered { success: true, cancellation: 'requested' }: nothing
+  // was cancelled, an owner was asked. Saying nothing would read as "cancelled".
+  it('success with cancellation: requested is NOT a cancel: say an owner was asked', () => {
+    expect(myLeaveCancelOutcome({ success: true, data: {}, cancellation: 'requested' })).toEqual(MY_LEAVE_CANCEL_SENT_TO_OWNER)
+  })
+  it('withdraw: null when it worked, the server\'s words when it did not', () => {
+    expect(myLeaveWithdrawOutcome({ success: true, cancellation: 'withdrawn' })).toBeNull()
+    expect(myLeaveWithdrawOutcome({ success: false, error: 'An owner decided this a moment ago' })).toEqual({ title: 'Couldn’t withdraw', message: 'An owner decided this a moment ago' })
+  })
 })
 
 describe('copy', () => {
   it('is plain and has no em dash', () => {
-    for (const s of [MY_LEAVE_EMPTY, MY_LEAVE_NO_LONGER_PENDING.title, MY_LEAVE_NO_LONGER_PENDING.message, MY_LEAVE_CANCEL_CONFIRM.title, MY_LEAVE_CANCEL_CONFIRM.message, MY_LEAVE_CANCEL_CONFIRM.confirm, MY_LEAVE_CANCEL_CONFIRM.keep]) {
+    for (const s of [MY_LEAVE_CANCEL_REQUESTED, MY_LEAVE_CANCEL_SENT_TO_OWNER.title, MY_LEAVE_CANCEL_SENT_TO_OWNER.message, MY_LEAVE_WITHDRAW_CONFIRM.title, MY_LEAVE_WITHDRAW_CONFIRM.message, MY_LEAVE_WITHDRAW_CONFIRM.confirm, MY_LEAVE_WITHDRAW_CONFIRM.keep, MY_LEAVE_EMPTY, MY_LEAVE_NO_LONGER_PENDING.title, MY_LEAVE_NO_LONGER_PENDING.message, MY_LEAVE_CANCEL_CONFIRM.title, MY_LEAVE_CANCEL_CONFIRM.message, MY_LEAVE_CANCEL_CONFIRM.confirm, MY_LEAVE_CANCEL_CONFIRM.keep]) {
       expect(typeof s).toBe('string')
       expect(s).not.toContain('—')
     }
