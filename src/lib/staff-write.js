@@ -8,6 +8,7 @@
 import { OWNER_ASSIGNABLE_ROLES, MASTER_ASSIGNABLE_ROLES } from '@/lib/schemas'
 import { diffPermissionsBlob, hydratePermissions, mergeTemplates } from '@shared/permissions'
 import { splitCompFromProfilePatch, upsertCompensationForProfile } from '@/lib/profile-compensation'
+import { logError } from '@/lib/log'
 import {
   getUnifiConfig, findOrCreateUnifiUser,
   syncUnifiUserPolicyForRole, revokeUnifiUserPolicies, UnifiError,
@@ -205,12 +206,21 @@ export function buildAssignmentRow({ id, assignment, wantsDoor, unifiUserId, syn
  * to `profiles`, then the 5 comp fields to `profile_compensation`
  * (undefined skipped, null clears). Pure mirror of route lines ~190-215.
  * Returns { ok:true } or { ok:false, error } — the route maps a failure
- * to a 400. NO UniFi/door-access here (that's a later increment). */
-export async function applyStaffProfileWrite({ db, id, body, actorId }) {
-  const profileUpdates = buildStaffProfilePatch(body)
+ * to a 400. NO UniFi/door-access here (that's a later increment).
+ *
+ * ACTIVEUSER.1 — two additions. `extraPatch` rides the SAME profiles UPDATE
+ * (the deactivating transition clears the legacy door flag with it, as DELETE
+ * does). And a failure reports `profileWritten`: the compensation upsert runs
+ * AFTER the profiles write, so "failed" used to hide the fact that `active`
+ * had already flipped — the route must still ban/unban the login for a flip
+ * that landed. */
+export async function applyStaffProfileWrite({ db, id, body, actorId, extraPatch = null }) {
+  const profileUpdates = { ...buildStaffProfilePatch(body), ...(extraPatch || {}) }
+  let profileWritten = false
   if (Object.keys(profileUpdates).length > 0) {
     const { error } = await db.from('profiles').update(profileUpdates).eq('id', id)
-    if (error) return { ok: false, error: error.message }
+    if (error) return { ok: false, error: error.message, profileWritten: false }
+    profileWritten = true
   }
 
   const { compFields } = splitCompFromProfilePatch({
@@ -225,9 +235,51 @@ export async function applyStaffProfileWrite({ db, id, body, actorId }) {
   )
   if (Object.keys(cleanComp).length > 0) {
     const compResult = await upsertCompensationForProfile(db, id, cleanComp, { actorId })
-    if (!compResult.ok) return { ok: false, error: `compensation: ${compResult.error}` }
+    if (!compResult.ok) return { ok: false, error: `compensation: ${compResult.error}`, profileWritten }
   }
-  return { ok: true }
+  return { ok: true, profileWritten }
+}
+
+// ── ACTIVEUSER.1 — the DOOR side of "deactivate", shared by both writers ─────
+// DELETE /api/staff/[id] always revoked UniFi door policies and cleared the
+// door flags; PUT { active:false } (the form's Active toggle) did neither, so
+// "deactivated" meant two different things depending on which control was
+// pressed. Both now call these two, with DELETE's semantics.
+
+/** Revoke every UniFi door policy the person holds. Runs BEFORE anything is
+ * written: on the first failure it answers `{ status: 502, error }` and the
+ * caller must return it having written NOTHING — better than silently leaving
+ * an ex-employee with working doors. Null means every revoke went through. */
+export async function revokeDoorAccessForDeactivation({ db, links }) {
+  for (const link of links || []) {
+    if (!link.unifi_door_access || !link.unifi_user_id || !link.locations) continue
+    // INTEG-A2 dual-read: registry row first, legacy settings.unifi otherwise.
+    const cfg = await getUnifiConfig(db, link.locations)
+    if (!cfg.configured) continue
+    try {
+      await revokeUnifiUserPolicies(cfg, link.unifi_user_id)
+    } catch (e) {
+      const msg = e instanceof UnifiError ? e.message : `UniFi revoke failed: ${e.message || e}`
+      return {
+        status: 502,
+        error: `Could not revoke UniFi door access at ${link.locations.name} — ${msg}. Profile not deactivated.`,
+      }
+    }
+  }
+  return null
+}
+
+/** Clear every per-location door flag so anyone reading
+ * profile_locations.unifi_door_access sees the deactivation at once. The
+ * policies are already revoked at UniFi by now, so a failure here is a stale
+ * FLAG, not an open door: logged, never a reason to fail the deactivation. */
+export async function clearLocationDoorFlags({ db, id }) {
+  const { error } = await db
+    .from('profile_locations')
+    .update({ unifi_door_access: false })
+    .eq('profile_id', id)
+  if (error) logError('staff-write', 'could not clear door flags on deactivate', { profileId: id, err: error })
+  return { error: error || null }
 }
 
 /** Sync a staff member's profile_locations to the desired-state list:

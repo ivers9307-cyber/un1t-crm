@@ -90,6 +90,19 @@ describe('badges', () => {
     expect(teamBadgeCount(providers)).toBe(9)
     expect(approvalsBadgeCount(providers)).toBe(11)
   })
+  // LEAVECANCEL.1 — the server's pending list carries `time_off_cancellations`
+  // for an owner. The phone has no surface for it (deciding is web-only), so it
+  // must be neither rendered, nor tiled, nor counted: a badge of 1 above an
+  // empty list is the count-gate-vs-row-gate trap. Remove this with the
+  // exclusion when the phone gets a real card for it (never the time_off card:
+  // its Decline sends status=rejected to the status PUT).
+  it('ignores a category it has no surface for: not a section, not a tile, not in any badge', () => {
+    const providers = [prov('time_off', 2), prov('time_off_cancellations', 3)]
+    expect(mobileApprovalSections(providers).map((p) => p.key)).toEqual(['time_off'])
+    expect(teamNavTiles(providers)).toEqual([])
+    expect(teamBadgeCount(providers)).toBe(2)
+    expect(approvalsBadgeCount(providers)).toBe(2)
+  })
   it('is 0 for none / non-array', () => {
     expect(approvalsBadgeCount([])).toBe(0)
     expect(approvalsBadgeCount(null)).toBe(0)

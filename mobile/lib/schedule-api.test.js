@@ -58,6 +58,7 @@ describe('schedule-api — every helper is exercised', () => {
       'respondToSwap',
       'respondToTimeOff',
       'unassignLeaveClashes',
+      'withdrawLeaveCancelRequest',
     ])
   })
 })
@@ -115,6 +116,12 @@ describe('time off', () => {
     expect(lastCall()).toEqual(['/api/schedule/time-off/t1', {
       method: 'PUT', locationId: LOC, body: { status: 'cancelled' },
     }])
+  })
+
+  // LEAVECANCEL.1 — the requester withdraws their ask; the leave stays approved.
+  it('withdrawLeaveCancelRequest DELETEs the cancel-request sub-route', () => {
+    schedule.withdrawLeaveCancelRequest('t1', LOC)
+    expect(lastCall()).toEqual(['/api/schedule/time-off/t1/cancel-request', { method: 'DELETE', locationId: LOC }])
   })
 
   it('unassignLeaveClashes POSTs only the shifts the approver was shown', () => {

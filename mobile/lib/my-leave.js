@@ -8,15 +8,23 @@
 // Cancel on the caller's own request while its RAW status is pending, and on
 // nothing else.
 //
-// What the server does today (PUT /api/schedule/time-off/[id]): a requester
-// who manages NO studio the request belongs to may only set their own PENDING
+// What the server does (PUT /api/schedule/time-off/[id]): a requester who
+// manages NO studio the request belongs to may only set their own PENDING
 // request to cancelled; anything else is a 403 "You can only cancel your own
-// pending requests". That 403 is skipped for a requester who IS a manager
-// there, so the server alone does not stop a manager's cancel landing on a
-// request that was approved a moment ago. The phone therefore never relies on
-// the server to refuse: it re-reads the list just before sending
-// (stillCancellable), shows the server's own words on a refusal
-// (myLeaveCancelOutcome), and redraws from a fresh read on every outcome.
+// pending requests". A requester who IS a manager there is not refused, and
+// since LEAVECANCEL.1 their cancel of leave that was approved a moment ago
+// does NOT cancel it: the server records a request for an OWNER to cancel it
+// and answers { success: true, cancellation: 'requested' }, with the leave
+// still approved. So the phone re-reads the list just before sending
+// (stillCancellable), never reads a success as "cancelled" without looking at
+// `cancellation` (myLeaveCancelOutcome), shows the server's own words on a
+// refusal, and redraws from a fresh read on every outcome.
+//
+// LEAVECANCEL.1 — the phone still does not OFFER cancelling approved leave
+// (that is the web Time Off page). It shows where such a request stands and
+// lets the person withdraw it. `cancel_request_state` and `can_withdraw_cancel`
+// are the server's per-row flags; absent on an older deployment, where every
+// row reads exactly as before.
 
 import { timeOffLeaveLabel, leaveDateRangeLabel } from 'shared/time-off'
 import { canCancelTimeOff } from './schedule-manage'
@@ -41,6 +49,18 @@ export const MY_LEAVE_CANCEL_CONFIRM = {
   confirm: 'Cancel request',
 }
 
+export const MY_LEAVE_CANCEL_REQUESTED = 'Cancellation requested. Waiting for an owner; your leave is still approved.'
+export const MY_LEAVE_CANCEL_SENT_TO_OWNER = {
+  title: 'Sent to an owner',
+  message: 'This leave was approved before your cancel arrived, so cancelling it needs an owner. They have been asked, and your leave is still approved until they decide.',
+}
+export const MY_LEAVE_WITHDRAW_CONFIRM = {
+  title: 'Withdraw this request?',
+  message: 'Your cancellation request will be withdrawn. Your leave stays approved.',
+  keep: 'Leave it',
+  confirm: 'Withdraw',
+}
+
 export const MY_LEAVE_NO_LONGER_PENDING = {
   title: 'Already decided',
   message: 'This request is no longer pending, so it was not cancelled. The list has been refreshed.',
@@ -56,10 +76,34 @@ export function stillCancellable(freshRows, id, profile) {
   return !!row && canCancelTimeOff(row, profile)
 }
 
-/** What to tell the coach after the cancel PUT. null = it worked; the redrawn list says so. */
+/**
+ * What to tell the coach after the cancel PUT. null = it was cancelled; the
+ * redrawn list says so. `cancellation: 'requested'` is a success that
+ * cancelled NOTHING (an owner was asked), so it is said out loud.
+ */
 export function myLeaveCancelOutcome(res) {
-  if (res?.success) return null
+  if (res?.success) return res.cancellation === 'requested' ? MY_LEAVE_CANCEL_SENT_TO_OWNER : null
   return { title: 'Couldn’t cancel', message: res?.error || 'Unknown error' }
+}
+
+/** After the withdraw DELETE. null = it worked; the redrawn list says so. */
+export function myLeaveWithdrawOutcome(res) {
+  if (res?.success) return null
+  return { title: 'Couldn’t withdraw', message: res?.error || 'Unknown error' }
+}
+
+// LEAVECANCEL.1 — the line under approved leave whose cancellation was asked for.
+function cancelNoteOf(r) {
+  if (r?.cancel_request_state === 'open') return MY_LEAVE_CANCEL_REQUESTED
+  // The same sentence the web list shows (src/lib/time-off-cancel-copy.js;
+  // mobile cannot import src/lib). `cancel_decider` is the list route's embed.
+  if (r?.status === 'cancelled' && r.cancel_decision === 'approved') {
+    return `Cancelled at your request, approved by ${r.cancel_decider?.full_name || 'an owner'}.`
+  }
+  if (r?.cancel_request_state === 'rejected' && r.status === 'approved') {
+    return `Cancellation declined. Your leave stays approved.${r.cancel_decision_note ? ` "${r.cancel_decision_note}"` : ''}`
+  }
+  return null
 }
 
 // ONE reading of a row's status, used by the row and by the grouping, so a
@@ -89,6 +133,8 @@ export function myLeaveRow(r, profile) {
     note,
     noteHeading: note ? (r.reviewer?.full_name ? `Note from ${r.reviewer.full_name}` : 'Manager’s note') : null,
     canCancel: status === 'pending' && canCancelTimeOff(r, profile),
+    cancelNote: cancelNoteOf(r),
+    canWithdrawCancel: r.can_withdraw_cancel === true && !!profile?.id && r.profile_id === profile.id,
   }
 }
 

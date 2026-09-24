@@ -83,7 +83,7 @@ export const NOTIFICATION_REGISTRY = Object.freeze([
   {
     category: 'time_off',
     label: 'Time-off decisions',
-    description: 'When your own time-off request is approved or declined, and when a new request lands for managers to review.',
+    description: 'When your own time-off request is approved or declined, and when a new request lands for managers to review. Also when a manager asks to cancel their own approved leave (owners are told) and when an owner decides it.',
     trigger: { kind: 'event', source: 'PUT /api/schedule/time-off/[id] (status change) + POST /api/schedule/time-off (new request)' },
     recipients: { kind: 'individual_or_creator', detail: 'Requester (on decision) or owner/manager (on new request)' },
     configurable: { leadTimes: false, roles: false },

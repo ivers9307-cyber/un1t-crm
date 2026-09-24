@@ -8,11 +8,12 @@
 
 'use client'
 
-import { Suspense, useState, useEffect } from 'react'
+import { Suspense, useState, useEffect, useRef } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Lock, Mail } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 import { safeInternalPath } from '@/lib/urlish'
+import { DEACTIVATED_MESSAGE, isBannedSignInError, fetchAccountState } from '@/lib/login-account-state'
 
 // useSearchParams wants dynamic rendering; the Suspense boundary lets Next.js
 // skip prerender at build time (permanent React 19 / Next 16 pattern).
@@ -44,12 +45,57 @@ function LoginInner() {
   const [success, setSuccess] = useState(null)
   const [busy, setBusy] = useState(false)
   const [branding, setBranding] = useState(null)
+  // ACTIVEUSER.1 — its own state, not `error`: switchMode() clears errors, and
+  // this must still be on screen when they try the other sign-in method.
+  const [accountNotice, setAccountNotice] = useState(
+    () => (searchParams.get('error') === 'account_deactivated' ? DEACTIVATED_MESSAGE : null)
+  )
+  // Set the moment this page asks Supabase for ANY emailed link — the login
+  // link (signInWithOtp) and the password reset (resetPasswordForEmail) both
+  // store a PKCE code verifier. signOut() deletes it (CLAUDE.md), which would
+  // turn the link they are about to click into "link expired" — so the landing
+  // check below must never sign out after either.
+  const linkRequestedRef = useRef(false)
 
   useEffect(() => {
     fetch('/api/public/branding')
       .then((r) => r.json())
       .then((data) => { if (data.success && data.data) setBranding(data.data) })
       .catch(() => {})
+  }, [])
+
+  // ACTIVEUSER.1 — a DEACTIVATED person arrives here with a Supabase session
+  // that is still VALID: getCurrentUser() answers null for them, so every gated
+  // page (and AppShell's client gate) redirects to /login. There is no
+  // server-side loop — /login is public and never bounces a signed-in visitor —
+  // but the page used to say nothing, and the live session stayed behind. If
+  // there IS a session, ask the server why it is not good enough; only on
+  // `deactivated` say so and clear the LOCAL session ({ scope: 'local' }: the
+  // default global scope would sign their member app out on every device).
+  // Any failure along the way changes nothing — this page must always still
+  // let people sign in.
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const supa = createBrowserClient()
+        const { data } = await supa.auth.getSession()
+        // The answer below is about THIS user. No readable id → nothing to pin
+        // it to, so nothing is said and nobody is signed out.
+        const checkedUserId = data?.session?.user?.id
+        if (cancelled || !checkedUserId) return
+        const state = await fetchAccountState()
+        if (cancelled || state !== 'deactivated') return
+        // The round trip took time, and someone may have signed in on this
+        // page meanwhile. Only act if the session is STILL the one the answer
+        // was about: never tell, or sign out, a different person.
+        const { data: now } = await supa.auth.getSession()
+        if (cancelled || now?.session?.user?.id !== checkedUserId) return
+        setAccountNotice(DEACTIVATED_MESSAGE)
+        if (!linkRequestedRef.current) await supa.auth.signOut({ scope: 'local' })
+      } catch { /* the form below still works */ }
+    })()
+    return () => { cancelled = true }
   }, [])
 
   // Fire-and-forget audit logger (the Supabase auth calls bypass our Node
@@ -68,6 +114,7 @@ function LoginInner() {
   async function handleMagicLink(e) {
     e.preventDefault()
     setBusy(true); setError(null); setSuccess(null)
+    linkRequestedRef.current = true
     try {
       const supa = createBrowserClient()
       // emailRedirectTo -> /auth/callback (PKCE code exchange). shouldCreateUser
@@ -82,6 +129,11 @@ function LoginInner() {
         },
       })
       logAuthEvent({ action: 'auth.magic_link_requested', email })
+      // ACTIVEUSER.1 (review S1) — same as handlePassword: a banned login is a
+      // deactivated account, and "a link is on its way" would be a promise
+      // nothing keeps. (GoTrue already tells a password attempt the same, so
+      // this reveals nothing the form did not.)
+      if (isBannedSignInError(error)) { setAccountNotice(DEACTIVATED_MESSAGE); return }
       if (error && (error.status === 429 || /rate/i.test(error.message || ''))) {
         setError('Too many requests. Please wait a minute and try again.')
       } else if (error && !/signups? not allowed|not found|otp_disabled/i.test(error.message || '')) {
@@ -109,7 +161,20 @@ function LoginInner() {
       const { error } = await supa.auth.signInWithPassword({ email, password })
       if (error) {
         logAuthEvent({ action: 'auth.sign_in', ok: false, email, reason: error.message })
+        // ACTIVEUSER.1 — deactivation bans the login; GoTrue's raw "User is
+        // banned" is neither calm nor actionable.
+        if (isBannedSignInError(error)) { setAccountNotice(DEACTIVATED_MESSAGE); return }
         throw error
+      }
+      // ACTIVEUSER.1 — the sign-in can SUCCEED for a deactivated person (a
+      // login that is also a member's is never banned, and a ban can fail).
+      // Navigating would bounce them straight back here in silence, so ask
+      // first. 'unknown' (incl. any failure to ask) proceeds exactly as before.
+      if ((await fetchAccountState()) === 'deactivated') {
+        logAuthEvent({ action: 'auth.sign_in', ok: false, email, reason: 'account deactivated' })
+        setAccountNotice(DEACTIVATED_MESSAGE)
+        await supa.auth.signOut({ scope: 'local' })
+        return
       }
       logAuthEvent({ action: 'auth.sign_in', ok: true, email })
       router.push(redirect)
@@ -126,6 +191,7 @@ function LoginInner() {
     setBusy(true); setError(null); setSuccess(null)
     try {
       if (!email) throw new Error('Please enter your email address')
+      linkRequestedRef.current = true
       const supa = createBrowserClient()
       const { error } = await supa.auth.resetPasswordForEmail(email, {
         redirectTo: `${window.location.origin}/reset-password`,
@@ -173,6 +239,12 @@ function LoginInner() {
           )}
           <p className="text-sm text-un1t-subtle mt-2">Lead Management</p>
         </div>
+
+        {accountNotice && (
+          <p role="status" className="mb-4 text-xs text-amber-700 bg-amber-500/10 border border-amber-500/30 rounded p-2">
+            {accountNotice}
+          </p>
+        )}
 
         {mode === 'magic' && (
           <form onSubmit={handleMagicLink} className="space-y-3">

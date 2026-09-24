@@ -28,6 +28,7 @@ import {
   getSwapsForMe, getOpenSwaps, getTeamShifts, respondToSwap,
   getLocationStaff,
 } from '../../lib/schedule-api'
+import { myLeaveCancelOutcome } from '../../lib/my-leave'
 // CT-P3b — reuse the schedule Manage-mode colleague picker for targeted swaps.
 import CoachPickerSheet from '../schedule/CoachPickerSheet'
 // COVERLOOP.2 — the confirm step, and every swap-card decision (pure, tested).
@@ -1061,8 +1062,14 @@ export default function PersonalDashboard({ refreshKey }) {
                         style: 'destructive',
                         onPress: async () => {
                           const res = await cancelTimeOffRequest(t.id, activeLocation?.id)
+                          // LEAVECANCEL.1 — a success is not always a cancel: a
+                          // manager's cancel landing on just-approved leave only
+                          // ASKS an owner, and the row then leaves this pending
+                          // list, which would read as "cancelled". Same words as
+                          // My leave and the Schedule tab.
+                          const outcome = myLeaveCancelOutcome(res)
+                          if (outcome) Alert.alert(outcome.title, outcome.message)
                           if (res.success) load()
-                          else Alert.alert("Couldn't cancel", res.error || 'Unknown error')
                         },
                       },
                     ])
