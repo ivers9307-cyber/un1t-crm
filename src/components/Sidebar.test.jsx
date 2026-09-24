@@ -24,7 +24,7 @@
 // permission matrix, so hasPermission is stubbed open.
 
 import React from 'react'
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 
 const mockPathname = vi.fn(() => '/dashboard')
@@ -45,6 +45,13 @@ import { hasPermission } from '@/lib/permissions'
 // `activeLocation` — Sidebar's branding effect no-ops without an id, so
 // no fetch mock is needed either.
 const USER = { role: 'owner', full_name: 'Test Owner' }
+
+// TABTITLE.1 — a real base title, reset per test. These assertions used to be
+// /^\(10\) / against an EMPTY jsdom title, and passed only because of the bug
+// tab-title-badge.js now fixes: the getter trims "(7) " to "(7)", the old strip
+// rule then missed it, so each test inherited the previous one's badge as its
+// "title" ("(10) (7)"). Exact strings cannot pass by accident.
+beforeEach(() => { document.title = 'Repset' })
 
 afterEach(() => {
   cleanup()
@@ -218,7 +225,7 @@ describe('Approvals badge', () => {
       return 0
     })
     render(<Sidebar user={USER} />)
-    expect(document.title).toMatch(/^\(10\) /)
+    expect(document.title).toBe('(10) Repset')
   })
 
   // The endpoint's gate and the nav row's gate are NOT the same question, so a
@@ -233,7 +240,7 @@ describe('Approvals badge', () => {
     })
     render(<Sidebar user={USER} />)
     expect(screen.queryByRole('link', { name: /Approvals/ })).toBeNull()
-    expect(document.title).toMatch(/^\(3\) /)
+    expect(document.title).toBe('(3) Repset')
   })
 
   // Review fix — the accessible text now lives in an sr-only sibling span,
@@ -260,7 +267,7 @@ describe('Approvals badge', () => {
     usePolledCount.mockImplementation(({ url }) =>
       url === '/api/approvals/count' ? 150 : 0)
     render(<Sidebar user={USER} />)
-    expect(document.title).toMatch(/^\(99\+\) /)
+    expect(document.title).toBe('(99+) Repset')
   })
 
   // The visible pill IS capped at 99+ (SidebarItem's `badge > 99 ? '99+' :
@@ -275,3 +282,110 @@ describe('Approvals badge', () => {
     expect(screen.getByText('150 items need your attention')).toBeTruthy()
   })
 })
+
+// ── TABTITLE.1 — the "(n)" prefix survives Next re-writing <title> ─────
+// Every staff tab now names the ACTIVE studio, so the title changes under the
+// Sidebar on a studio switch (cookie + router.refresh()) and between pages
+// with different titles. The old effect ran on [titleCount] alone: it set the
+// prefix once and lost it at the next metadata write. These simulate that
+// write the two ways React can make it; whether Next really does either on a
+// given navigation is a BROWSER check, not something jsdom can show.
+describe('tab title prefix vs. Next metadata writes (TABTITLE.1)', () => {
+  const flushObserver = () => new Promise((resolve) => setTimeout(resolve, 0))
+  const sevenApprovals = ({ url }) => (url === '/api/approvals/count' ? 7 : 0)
+
+  it('re-applies the prefix when the <title> TEXT is re-written (studio switch)', async () => {
+    document.title = 'UN1T Hatch Street'
+    usePolledCount.mockImplementation(sevenApprovals)
+    render(<Sidebar user={USER} />)
+    expect(document.title).toBe('(7) UN1T Hatch Street')
+
+    document.querySelector('title').firstChild.nodeValue = 'UN1T Stillorgan'
+    await flushObserver()
+    // The NEW studio, prefixed. Not the old name replayed from a capture.
+    expect(document.title).toBe('(7) UN1T Stillorgan')
+  })
+
+  it('re-applies the prefix when the <title> ELEMENT is replaced (navigation)', async () => {
+    document.title = 'UN1T Stillorgan'
+    usePolledCount.mockImplementation(sevenApprovals)
+    render(<Sidebar user={USER} />)
+
+    document.querySelector('title').remove()
+    const next = document.createElement('title')
+    next.textContent = 'Schedule · UN1T Stillorgan'
+    document.head.appendChild(next)
+    await flushObserver()
+    expect(document.title).toBe('(7) Schedule · UN1T Stillorgan')
+  })
+
+  it('never writes a prefix at zero, and leaves the new title alone', async () => {
+    document.title = 'UN1T Hatch Street'
+    render(<Sidebar user={USER} />)
+    document.querySelector('title').firstChild.nodeValue = 'UN1T Stillorgan'
+    await flushObserver()
+    expect(document.title).toBe('UN1T Stillorgan')
+  })
+
+  it('stops watching and strips the prefix on unmount', async () => {
+    document.title = 'UN1T Stillorgan'
+    usePolledCount.mockImplementation(sevenApprovals)
+    const { unmount } = render(<Sidebar user={USER} />)
+    expect(document.title).toBe('(7) UN1T Stillorgan')
+    unmount()
+    expect(document.title).toBe('UN1T Stillorgan')
+    document.querySelector('title').firstChild.nodeValue = 'Login'
+    await flushObserver()
+    expect(document.title).toBe('Login')
+  })
+
+  // Nothing to re-apply at zero, so nothing to watch: <head> mutates on every
+  // navigation (preloads, stylesheets) and the callback would be pure cost.
+  it('does not observe <head> at all while the count is 0', () => {
+    const observe = vi.spyOn(MutationObserver.prototype, 'observe')
+    try {
+      document.title = 'UN1T Stillorgan'
+      render(<Sidebar user={USER} />)
+      const watchedHead = observe.mock.calls.filter(([target]) => target === document.head)
+      expect(watchedHead).toHaveLength(0)
+    } finally {
+      observe.mockRestore()
+    }
+  })
+
+  it('going from n to 0 strips the prefix and stops watching', async () => {
+    const disconnect = vi.spyOn(MutationObserver.prototype, 'disconnect')
+    try {
+      document.title = 'UN1T Stillorgan'
+      usePolledCount.mockImplementation(sevenApprovals)
+      const { rerender } = render(<Sidebar user={USER} />)
+      expect(document.title).toBe('(7) UN1T Stillorgan')
+
+      usePolledCount.mockImplementation(() => 0)
+      const observe = vi.spyOn(MutationObserver.prototype, 'observe')
+      rerender(<Sidebar user={USER} />)
+      expect(document.title).toBe('UN1T Stillorgan')
+      expect(disconnect).toHaveBeenCalled()
+      expect(observe.mock.calls.filter(([target]) => target === document.head)).toHaveLength(0)
+      observe.mockRestore()
+    } finally {
+      disconnect.mockRestore()
+    }
+  })
+
+  // No <title> yet (metadata streams): the getter reads '' and trims what we
+  // write, which used to converge on "(7) (7)".
+  it('an EMPTY title converges on one prefix, not two', async () => {
+    document.title = ''
+    usePolledCount.mockImplementation(sevenApprovals)
+    render(<Sidebar user={USER} />)
+    // Any <head> mutation re-runs the observer: a preload link is the usual one.
+    const link = document.createElement('link')
+    document.head.appendChild(link)
+    await flushObserver()
+    await flushObserver()
+    link.remove()
+    expect(document.title).toBe('(7)')
+  })
+})
+
