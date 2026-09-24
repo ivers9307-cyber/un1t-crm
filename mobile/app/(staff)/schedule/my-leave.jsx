@@ -11,10 +11,10 @@ import { useState, useCallback, useRef } from 'react'
 import { useRouter, Stack, useFocusEffect } from 'expo-router'
 import { View, Text, Pressable, ScrollView, ActivityIndicator, Alert, RefreshControl } from 'react-native'
 import { useAuth } from '../../../lib/auth-context'
-import { getMyTimeOff, cancelTimeOffRequest } from '../../../lib/schedule-api'
+import { getMyTimeOff, cancelTimeOffRequest, withdrawLeaveCancelRequest } from '../../../lib/schedule-api'
 import {
-  myLeaveSections, stillCancellable, myLeaveCancelOutcome,
-  MY_LEAVE_EMPTY, MY_LEAVE_CANCEL_CONFIRM, MY_LEAVE_NO_LONGER_PENDING,
+  myLeaveSections, stillCancellable, myLeaveCancelOutcome, myLeaveWithdrawOutcome,
+  MY_LEAVE_EMPTY, MY_LEAVE_CANCEL_CONFIRM, MY_LEAVE_NO_LONGER_PENDING, MY_LEAVE_WITHDRAW_CONFIRM,
 } from '../../../lib/my-leave'
 import { createInFlightGuard } from '../../../lib/in-flight-guard'
 
@@ -83,9 +83,33 @@ export default function MyLeave() {
               return
             }
             const res = await cancelTimeOffRequest(row.id, activeLocation?.id)
-            const failed = myLeaveCancelOutcome(res)
-            if (failed) Alert.alert(failed.title, failed.message)
+            // LEAVECANCEL.1 — not only failures: a manager's cancel that lands
+            // on just-approved leave is a SUCCESS that cancelled nothing (an
+            // owner was asked), and the outcome says so.
+            const outcome = myLeaveCancelOutcome(res)
+            if (outcome) Alert.alert(outcome.title, outcome.message)
             // Refresh on ANY outcome, so the list is what the server now holds.
+            await load()
+          }),
+        },
+      ],
+    )
+  }
+
+  // LEAVECANCEL.1 — withdraw a request for an owner to cancel approved leave.
+  // The leave stays approved either way; the server re-judges who may.
+  function withdraw(row) {
+    Alert.alert(
+      MY_LEAVE_WITHDRAW_CONFIRM.title,
+      MY_LEAVE_WITHDRAW_CONFIRM.message,
+      [
+        { text: MY_LEAVE_WITHDRAW_CONFIRM.keep, style: 'cancel' },
+        {
+          text: MY_LEAVE_WITHDRAW_CONFIRM.confirm,
+          onPress: () => cancelGuard.current.run(async () => {
+            const res = await withdrawLeaveCancelRequest(row.id, activeLocation?.id)
+            const failed = myLeaveWithdrawOutcome(res)
+            if (failed) Alert.alert(failed.title, failed.message)
             await load()
           }),
         },
@@ -148,6 +172,20 @@ export default function MyLeave() {
                     <Text className="text-xs uppercase tracking-wider text-un1t-subtle">{r.noteHeading}</Text>
                     <Text className="text-sm text-un1t-text mt-1">{r.note}</Text>
                   </View>
+                ) : null}
+                {r.cancelNote ? (
+                  <Text className="text-xs text-amber-700 mt-2">{r.cancelNote}</Text>
+                ) : null}
+                {r.canWithdrawCancel ? (
+                  <Pressable
+                    onPress={() => withdraw(r)}
+                    hitSlop={8}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${MY_LEAVE_WITHDRAW_CONFIRM.confirm} cancellation request: ${r.title}, ${r.range}`}
+                    className="self-start mt-3 px-3 py-1.5 rounded-full bg-un1t-surface border border-amber-500/40 active:opacity-70"
+                  >
+                    <Text className="text-xs font-semibold text-amber-700">{MY_LEAVE_WITHDRAW_CONFIRM.confirm}</Text>
+                  </Pressable>
                 ) : null}
                 {r.canCancel ? (
                   <Pressable

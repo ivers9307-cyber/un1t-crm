@@ -30,7 +30,7 @@ const { GET, POST } = await import('./route.js')
 const { fakeDb, queriesOf, resolveLocations, scopedAssignments, locationScopeOf } = await import('@/lib/time-off.test-helpers')
 const { notifyUsersOnce } = await import('@/lib/push-dedup')
 const { hasPermissionForLocation } = await import('@/lib/permissions')
-const { logWarn } = await import('@/lib/log')
+const { logWarn, logError } = await import('@/lib/log')
 
 function req(body) {
   return { url: 'http://x/api/schedule/time-off', json: () => Promise.resolve(body), headers: { get: () => '' } }
@@ -846,5 +846,135 @@ describe('GET /api/schedule/time-off?preview=1 — charged days + own published 
     }))
     const json = await (await GET(getReq('?type=holiday&start_date=2099-10-05&end_date=2099-10-09'))).json()
     expect(Array.isArray(json.data)).toBe(true)
+  })
+})
+
+// LEAVECANCEL.1 — the list tells the screen where a cancellation request
+// stands and what THIS caller may do about it; the leave itself stays approved.
+describe('GET /api/schedule/time-off — cancel-request annotations (LEAVECANCEL.1)', () => {
+  const getReq = (qs = '') => ({ url: `http://x/api/schedule/time-off${qs}`, headers: { get: () => '' } })
+  const at = (id, role) => ({
+    id, role, profileRole: 'staff', activeLocation: { id: 'loc-1' },
+    locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': role },
+  })
+  const OPEN = { cancel_requested_at: '2026-09-16T09:00:00Z', cancel_requested_by: 'mgr', cancel_decided_at: null, cancel_decision: null }
+  const ROWS = [
+    { id: 'asked', profile_id: 'mgr', location_id: 'loc-1', status: 'approved', start_date: '2026-10-05', end_date: '2026-10-07', ...OPEN },
+    { id: 'plain', profile_id: 'mgr', location_id: 'loc-1', status: 'approved', start_date: '2026-11-02', end_date: '2026-11-03', cancel_requested_at: null, cancel_decided_at: null },
+  ]
+  const listDb = () => fakeDb((q) => {
+    if (q.table === 'profile_locations') return { data: [{ profile_id: 'mgr', location_id: 'loc-1' }], error: null }
+    return { data: ROWS, error: null }
+  })
+  const byId = async (user) => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-17T10:00:00Z'))
+    try {
+      getCurrentUser.mockResolvedValue(user)
+      createServerClient.mockReturnValue(listDb())
+      const json = await (await GET(getReq('?location_id=loc-1'))).json()
+      return Object.fromEntries(json.data.map((r) => [r.id, r]))
+    } finally {
+      vi.useRealTimers()
+    }
+  }
+
+  it('the requester: the asked row is still APPROVED, shows as open, and offers Withdraw; their other leave offers the ask', async () => {
+    const rows = await byId(at('mgr', 'manager'))
+    expect(rows.asked).toMatchObject({ status: 'approved', effective_status: 'approved', cancel_request_state: 'open', can_withdraw_cancel: true, can_request_cancel: false, can_decide_cancel: false })
+    expect(rows.plain).toMatchObject({ cancel_request_state: null, can_request_cancel: true, cancel_needs_owner: true, can_withdraw_cancel: false })
+  })
+
+  it('reads who DECIDED a cancellation, so a cancelled row can say "approved by <name>"', async () => {
+    getCurrentUser.mockResolvedValue(at('mgr', 'manager'))
+    const db = listDb()
+    createServerClient.mockReturnValue(db)
+    await GET(getReq('?location_id=loc-1'))
+    expect(queriesOf(db, 'time_off_requests')[0].columns.replace(/\s/g, '')).toContain('cancel_decider:profiles!cancel_decided_by(id,full_name)')
+  })
+
+  it('an owner may decide it; another manager sees it is open and is offered nothing', async () => {
+    expect((await byId(at('own', 'owner'))).asked).toMatchObject({ cancel_request_state: 'open', can_decide_cancel: true, can_withdraw_cancel: false })
+    const seenByManager = (await byId(at('mgr-2', 'manager'))).asked
+    expect(seenByManager).toMatchObject({ cancel_request_state: 'open', can_decide_cancel: false, can_withdraw_cancel: false, can_request_cancel: false })
+  })
+})
+
+// LEAVECANCEL.1 (review) — the list embeds cancel_decider through mig 624's FK.
+// Code that reaches prod BEFORE the migration (a Vercel preview of the branch,
+// an ordering slip) must turn the new feature off, never the leave list: this
+// GET feeds the Time Off page, the web roster's approved-leave read, and the
+// phone's My leave, Schedule tab and Studio list.
+describe('GET /api/schedule/time-off — before mig 624 is applied (LEAVECANCEL.1)', () => {
+  const getReq = (qs = '') => ({ url: `http://x/api/schedule/time-off${qs}`, headers: { get: () => '' } })
+  const MANAGER = { id: 'mgr', role: 'manager', profileRole: 'staff', activeLocation: { id: 'loc-1' }, locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': 'manager' } }
+  const ROWS = [{ id: 'own', profile_id: 'mgr', location_id: 'loc-1', status: 'approved', start_date: '2026-10-05', end_date: '2026-10-07' }]
+  const EMBED_MISSING = {
+    code: 'PGRST200',
+    message: "Could not find a relationship between 'time_off_requests' and 'profiles' in the schema cache",
+    details: "Searched for a foreign key relationship between 'time_off_requests' and 'profiles' using the hint 'cancel_decided_by' in the schema 'public', but no matches were found.",
+  }
+  const listDb = (firstError) => fakeDb((q) => {
+    if (q.table === 'profile_locations') return { data: [{ profile_id: 'mgr', location_id: 'loc-1' }], error: null }
+    const cols = (q.columns || '').replace(/\s/g, '')
+    if (q.table === 'time_off_requests' && cols.includes('cancel_decider')) return { data: null, error: firstError }
+    return { data: ROWS, error: null }
+  })
+  const run = async (firstError) => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-17T10:00:00Z'))
+    try {
+      logError.mockClear()
+      getCurrentUser.mockResolvedValue(MANAGER)
+      const db = listDb(firstError)
+      createServerClient.mockReturnValue(db)
+      const res = await GET(getReq('?location_id=loc-1&status=approved'))
+      return { res, db }
+    } finally {
+      vi.useRealTimers()
+    }
+  }
+
+  it('the embed hint is refused: retries ONCE without it, answers 200 with the rows and the feature off, and logs it', async () => {
+    const { res, db } = await run(EMBED_MISSING)
+    expect(res.status).toBe(200)
+    const json = await res.json()
+    expect(json.data.map((r) => r.id)).toEqual(['own'])
+    // Feature off: nothing waiting, nothing offered (a button would only 503).
+    expect(json.data[0]).toMatchObject({ status: 'approved', cancel_request_state: null, can_request_cancel: false, can_withdraw_cancel: false, can_decide_cancel: false })
+
+    const [first, second, ...rest] = queriesOf(db, 'time_off_requests')
+    expect(rest).toHaveLength(0)
+    expect(first.columns.replace(/\s/g, '')).toContain('cancel_decider')
+    expect(second.columns.replace(/\s/g, '')).not.toContain('cancel')
+    // 🔴 The retry keeps EVERY filter: a fallback that dropped the scope would
+    // hand a manager the estate's leave.
+    expect(second.calls).toEqual(first.calls)
+    expect(second.calls).toContainEqual(['or', 'location_id.in.(loc-1),profile_id.in.(mgr),profile_id.eq.mgr'])
+    expect(second.calls).toContainEqual(['eq', 'status', 'approved'])
+
+    expect(logError).toHaveBeenCalledTimes(1)
+    expect(logError.mock.calls[0][0]).toBe('time-off')
+    expect(logError.mock.calls[0][1]).toMatch(/mig 624/)
+    expect(logError.mock.calls[0][2]).toMatchObject({ err: { code: 'PGRST200' } })
+  })
+
+  it('a missing column (42703) is the same class', async () => {
+    const { res } = await run({ code: '42703', message: 'column time_off_requests.cancel_decided_by does not exist' })
+    expect(res.status).toBe(200)
+    expect(logError).toHaveBeenCalledTimes(1)
+  })
+
+  it('any OTHER error is unchanged: a 400, one query, no retry, nothing logged as a missing migration', async () => {
+    for (const error of [
+      { code: '57014', message: 'canceling statement due to statement timeout' },
+      { code: 'PGRST200', message: "Could not find a relationship between 'time_off_requests' and 'profiles'", details: "using the hint 'reviewed_by'" },
+    ]) {
+      const { res, db } = await run(error)
+      expect(res.status).toBe(400)
+      expect((await res.json()).error).toBe(error.message)
+      expect(queriesOf(db, 'time_off_requests')).toHaveLength(1)
+      expect(logError).not.toHaveBeenCalled()
+    }
   })
 })

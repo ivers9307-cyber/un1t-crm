@@ -485,6 +485,9 @@ export const CATEGORY_BUNDLES = Object.freeze({
   // key). All three are staff-scheduling reviews that live beside
   // `schedule`/`contracts`/`attendance_reports` in bundle_team.
   time_off: ['bundle_team'],
+  // LEAVECANCEL.1 — requests to cancel approved leave: the same surface as
+  // time_off, split out only because a different population decides it.
+  time_off_cancellations: ['bundle_team'],
   shift_swaps: ['bundle_team'],
   rosters: ['bundle_team'],
   // JUDGEMENT CALL, confirmed by reading providers/agent-requests.js:
