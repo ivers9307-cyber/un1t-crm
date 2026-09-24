@@ -23,7 +23,7 @@ vi.mock('next/navigation', () => ({
 vi.mock('@/components/ScheduleRosterView', () => ({ default: () => <div>roster-view-stub</div> }))
 vi.mock('@/components/ScheduleReporting', () => ({ default: () => <div>reporting-stub</div> }))
 
-import SchedulePage, { generateMetadata } from './page.js'
+import SchedulePage, * as pageModule from './page.js'
 import { getCurrentUser } from '@/lib/auth'
 
 function user({ role = 'manager' } = {}) {
@@ -81,19 +81,17 @@ describe('/schedule root — wrapper padding classes', () => {
 
 // ROSTERLOOK.1 — the tab read "UN1T Hatch Street" with the Stillorgan roster on
 // screen: the root layout's title is the first company_settings row by
-// location_id, for everyone. This page names the studio it is showing.
+// location_id, for everyone. TABTITLE.1 moved the studio name up into
+// (team)/layout.js (title.template), so this page now only names ITSELF. That
+// the two still compose to "Schedule · UN1T Stillorgan" is pinned against the
+// installed Next resolver in src/lib/staff-tab-title.test.js.
 describe('/schedule root — tab title', () => {
-  it('names the ACTIVE studio, not the deployment default', async () => {
-    getCurrentUser.mockResolvedValue({ ...user(), activeLocation: { id: 'loc1', name: 'UN1T Stillorgan', features: {} } })
-    expect(await generateMetadata()).toEqual({ title: 'Schedule · UN1T Stillorgan' })
+  it('names the page and leaves the studio to the (team) layout template', () => {
+    expect(pageModule.metadata).toEqual({ title: 'Schedule' })
   })
 
-  it('degrades to the page name with no session or no named location, and never throws', async () => {
-    getCurrentUser.mockResolvedValue(null)
-    expect(await generateMetadata()).toEqual({ title: 'Schedule' })
-    getCurrentUser.mockResolvedValue(user()) // activeLocation has no name
-    expect(await generateMetadata()).toEqual({ title: 'Schedule' })
-    getCurrentUser.mockRejectedValue(new Error('auth down'))
-    expect(await generateMetadata()).toEqual({ title: 'Schedule' })
+  // Next refuses a segment that exports both, and only `next build` says so.
+  it('does not also export generateMetadata', () => {
+    expect(pageModule.generateMetadata).toBeUndefined()
   })
 })
