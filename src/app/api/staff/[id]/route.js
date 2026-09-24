@@ -7,14 +7,16 @@ import {
   employmentTypeSchema, money, hours, days, permissionsSchema,
   assignmentSchema,
 } from '@/lib/schemas'
-import {
-  getUnifiConfig, revokeUnifiUserPolicies, UnifiError,
-} from '@/lib/unifi-access'
 import { canEditStaffMember } from '@/lib/staff-access'
-import { applyStaffProfileWrite, assertOwnerAssignmentScope, computeDesiredAssignments, computeProfileRole, sparsifyAssignmentPermissions, syncStaffAssignments } from '@/lib/staff-write'
+import {
+  applyStaffProfileWrite, assertOwnerAssignmentScope, computeDesiredAssignments, computeProfileRole,
+  sparsifyAssignmentPermissions, syncStaffAssignments,
+  revokeDoorAccessForDeactivation, clearLocationDoorFlags,
+} from '@/lib/staff-write'
 import { getStaffForUser } from '@/lib/staff'
 import { logAuditEvent } from '@/lib/audit'
 import { isTombstone } from '@/lib/staff-tombstone'
+import { suspendStaffLogin, restoreStaffLogin } from '@/lib/staff-login-access'
 
 export const runtime = 'nodejs'
 
@@ -84,6 +86,16 @@ export async function PUT(request, props) {
   const validation = await validateBody(request, UpdateStaffSchema)
   if (!validation.ok) return validation.response
   const body = validation.data
+
+  // ACTIVEUSER.1 (review S3) — nobody deactivates THEMSELVES here either.
+  // DELETE always refused it; this handler did not, and `active:false` now
+  // bans the login, so a master toggling their own Active off would lock
+  // themselves out of the estate mid-request. (Owners were already refused
+  // below by canEditStaffMember; masters were not.) Same copy as DELETE.
+  if (id === user.id && body.active === false) {
+    return NextResponse.json({ success: false, error: 'Cannot deactivate your own account' }, { status: 400 })
+  }
+
   const db = createServerClient()
 
   // Master-flag guard: only a master can grant or revoke master.
@@ -125,9 +137,7 @@ export async function PUT(request, props) {
   )) {
     return NextResponse.json({
       success: false,
-      error: targetBefore.id === user.id
-        ? 'Owners cannot edit their own permissions. Ask a master to make this change.'
-        : 'Owners cannot edit other owners. Ask a master to make this change.',
+      error: editRefusalCopy(user, targetBefore),
     }, { status: 403 })
   }
 
@@ -147,14 +157,89 @@ export async function PUT(request, props) {
     if (scopeErr) return NextResponse.json({ success: false, error: scopeErr.error }, { status: scopeErr.status })
   }
 
+  // ACTIVEUSER.1 (review S4) — ONE meaning for "deactivate". On the true→false
+  // TRANSITION this handler now does what DELETE always did: revoke the UniFi
+  // door policies FIRST, and if UniFi refuses, return DELETE's 502 having
+  // written nothing. Only the transition: re-saving an already inactive
+  // profile must not re-run the revoke (its flags are already cleared).
+  // `active !== false` rather than `=== true`, matching getCurrentUser(): a
+  // row with no readable `active` is a live account.
+  const deactivating = body.active === false && targetBefore.active !== false
+  const reactivating = body.active === true && targetBefore.active === false
+  const endsInactive = body.active === false || (body.active === undefined && targetBefore.active === false)
+  if (deactivating) {
+    const revokeFail = await revokeDoorAccessForDeactivation({ db, links: targetBefore.profile_locations })
+    if (revokeFail) {
+      return NextResponse.json({ success: false, error: revokeFail.error }, { status: revokeFail.status })
+    }
+  }
+
   // Apply profile-level updates (full_name, HR fields, master flag,
   // permissions, active) + the SECURITY.1 comp dual-write.
   // Delegated to applyStaffProfileWrite (C2b.2a) — pure mirror of
   // the previous inline block; profiles.role is recomputed AFTER
   // assignment updates so it reflects the final state.
-  const profileWrite = await applyStaffProfileWrite({ db, id, body, actorId: user.id })
+  const profileWrite = await applyStaffProfileWrite({
+    db, id, body, actorId: user.id,
+    extraPatch: deactivating ? { unifi_door_access: false } : null,
+  })
+
+  // ACTIVEUSER.1 — `active` is the form's toggle AND the Reactivate button, so
+  // this handler is both a deactivate and THE reactivate path. The login
+  // follows the flag, and only once the PROFILES write has landed: a refused
+  // deactivation (mig 080, the last active master) must ban nobody.
+  //   active:false → ban a staff-only login. Sent on every such save, so
+  //                  saving again IS the retry. A failure is a `warning`.
+  //   active:true  → lift the ban. On a real false→true flip it is sent
+  //                  outright; on an already-active profile it is the retry
+  //                  for an unban that failed, and only writes if the login
+  //                  is still banned. A failure is an ERROR (see loginFields).
+  // A body without `active` (mobile's staff editor) never reaches the auth
+  // admin API. A tombstone 404'd above, so its permanent ban is never touched.
+  //
+  // (review S5) "landed" is `profileWritten`, NOT `ok`: the compensation upsert
+  // runs after the profiles write, so its failure used to return 400 from here
+  // with `active` already flipped and the login never touched — a reactivated
+  // person left banned with no signal. The login step now runs for any flip
+  // that landed, and its outcome rides EVERY response below via loginFields().
+  let loginAccess = null
+  if (profileWrite.profileWritten) {
+    if (deactivating) await clearLocationDoorFlags({ db, id })
+    if (body.active === false) {
+      loginAccess = await suspendStaffLogin(db, id)
+    } else if (body.active === true) {
+      loginAccess = await restoreStaffLogin(db, id, { transition: reactivating })
+    }
+  }
+  // (review round 3) The audit row belongs to the TRANSITION, not to the happy
+  // path: it used to sit at the very end, so a deactivation that landed and
+  // then hit the comp 400 or the UniFi 502 below was never logged at all.
+  if (profileWrite.profileWritten && (deactivating || reactivating)) {
+    try {
+      await logAuditEvent({
+        category: 'business',
+        action: reactivating ? 'profile.reactivated' : 'profile.deactivated',
+        actor: { id: user.id, full_name: user.full_name, email: user.email },
+        target: { id: targetBefore.id, label: targetBefore.full_name, resource: `profiles/${targetBefore.id}` },
+        details: { before: targetBefore.active, after: body.active, login: loginAccess?.outcome || null },
+        request,
+      })
+    } catch { /* audit must never break the response */ }
+  }
+
+  // A kept login (also a member's / host's) warns on the TRANSITION only. The
+  // form sends `active` on every save and stays on the page to show a warning,
+  // so repeating it for an already inactive profile would block navigation
+  // forever. A ban that FAILED, or a login we could not check, always warns
+  // (loginFields): those are still owed a retry.
+  const login = loginFields(loginAccess, { transition: deactivating || reactivating })
+
   if (!profileWrite.ok) {
-    return NextResponse.json({ success: false, error: profileWrite.error }, { status: 400 })
+    return NextResponse.json({
+      success: false,
+      error: [profileWrite.error, login.error].filter(Boolean).join(' '),
+      ...login.flags,
+    }, { status: 400 })
   }
 
   // ----- Assignment diff -----
@@ -194,6 +279,19 @@ export async function PUT(request, props) {
         existingLinks: targetBefore.profile_locations || [],
       }),
     })
+    // ACTIVEUSER.1 (review S4) — syncStaffAssignments re-syncs the door policy
+    // for every row whose toggle is on, and the form sends the toggles it
+    // loaded. On the deactivating transition that would hand back, in the same
+    // request, the door access revoked a moment ago.
+    // (review R2-S2) Keyed on how the save ENDS, not on the transition: a stale
+    // form (loaded active, door on) saved after someone else deactivated them
+    // is `active:false` on an already inactive profile, and a door toggle
+    // turned on for an inactive profile sends no `active` at all. Either would
+    // grant a door policy to an inactive, banned person. The revoke-first step
+    // above stays transition-only; this only stops a GRANT.
+    if (endsInactive) {
+      for (const a of desired) a.unifi_door_access = false
+    }
     const desiredIds = new Set(desired.map(a => a.location_id))
 
     const syncResult = await syncStaffAssignments({
@@ -235,8 +333,11 @@ export async function PUT(request, props) {
   if (unifiErrors.length) {
     return NextResponse.json({
       success: false,
-      error: unifiErrors.join(' '),
+      // ACTIVEUSER.1 (review S5) — a failed unban must not be hidden behind
+      // the UniFi error: both are true, so both are said.
+      error: [unifiErrors.join(' '), login.error].filter(Boolean).join(' '),
       unifi_failed: true,
+      ...login.flags,
     }, { status: 502 })
   }
 
@@ -271,16 +372,8 @@ export async function PUT(request, props) {
         request,
       })
     }
-    if (body.active !== undefined && body.active !== targetBefore.active) {
-      await logAuditEvent({
-        category: 'business',
-        action: body.active ? 'profile.reactivated' : 'profile.deactivated',
-        actor: actorRef,
-        target: targetRef,
-        details: { before: targetBefore.active, after: body.active },
-        request,
-      })
-    }
+    // (profile.deactivated / profile.reactivated is logged earlier, the moment
+    // the transition lands — see the login step above.)
     if (body.permissions !== undefined) {
       const beforeP = JSON.stringify(targetBefore.permissions || {})
       const afterP = JSON.stringify(body.permissions || {})
@@ -297,7 +390,57 @@ export async function PUT(request, props) {
     }
   } catch { /* audit must never break the response */ }
 
-  return NextResponse.json({ success: true, data: final })
+  // ACTIVEUSER.1 — a failed UNBAN is not a warning. The profile IS reactivated
+  // (the write is kept, like the UniFi branch above keeps its writes), but the
+  // person cannot sign in and nothing else will ever say so — so it is the
+  // response's error, with the retry in the copy. Pressing Reactivate or saving
+  // again re-attempts it (restoreStaffLogin's no-transition path).
+  if (login.error) {
+    return NextResponse.json({ success: false, error: login.error, ...login.flags }, { status: 502 })
+  }
+
+  return NextResponse.json({
+    success: true,
+    data: final,
+    ...login.flags,
+    // Deactivating revoked every door policy and cleared the toggles, and
+    // reactivating deliberately does not guess them back.
+    // (Unless this very save turned one back on: then it would be false.)
+    ...(reactivating && !(body.assignments || []).some(a => a.unifi_door_access)
+      ? { notice: REACTIVATED_DOORS_NOTICE }
+      : {}),
+  })
+}
+
+const REACTIVATED_DOORS_NOTICE = 'Door access stays off until you turn it back on.'
+
+// Why canEditStaffMember said no, in the operator's words. One copy of it, so
+// PUT and DELETE cannot word the same refusal differently.
+function editRefusalCopy(user, target) {
+  if (target.id === user.id) return 'Owners cannot edit their own permissions. Ask a master to make this change.'
+  // ACTIVEUSER.1 (review R2-S1)
+  if (target.role === 'master') return 'Owners cannot edit a master account. Ask a master to make this change.'
+  return 'Owners cannot edit other owners. Ask a master to make this change.'
+}
+
+// ACTIVEUSER.1 (review S5) — the login outcome in ONE shape, so no early return
+// can forget half of it. `error` is a failed UNBAN (the person cannot sign in);
+// `flags` are the additive response keys: `login_restore_failed` with it, and
+// `warning` for the deactivate side (a failed ban or an unverifiable login
+// always; a deliberately kept login on the transition only).
+function loginFields(loginAccess, { transition }) {
+  const error = loginAccess?.outcome === 'restore_failed' ? loginAccess.error : null
+  // (review R2-S3) kept_unverified is a retryable FAILURE too: a retry that
+  // comes back "could not check" again must not read as a clean success.
+  const stillOwed = loginAccess?.outcome === 'ban_failed' || loginAccess?.outcome === 'kept_unverified'
+  const warning = loginAccess?.warning && (transition || stillOwed) ? loginAccess.warning : null
+  return {
+    error,
+    flags: {
+      ...(error ? { login_restore_failed: true } : {}),
+      ...(warning ? { warning } : {}),
+    },
+  }
 }
 
 // DELETE /api/staff/[id] — Soft-delete (deactivate) a staff member.
@@ -305,6 +448,14 @@ export async function PUT(request, props) {
 //
 // Revokes any UniFi door-access policies the staff member had — we
 // don't want a deactivated employee still able to walk into the studio.
+//
+// ACTIVEUSER.1 — and ENDS THEIR SESSIONS, which until now it only claimed to.
+// It used to write active=false and stop: the Supabase auth user was untouched,
+// so a signed-in deactivated person stayed fully signed in. Two locks now:
+// getCurrentUser() refuses active=false (the one that cannot fail), and the
+// login is banned here AFTER the write — see src/lib/staff-login-access.js for
+// who is deliberately not banned and why a failed ban is only a warning.
+// Calling it again on an inactive profile is the retry for that ban.
 export async function DELETE(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
@@ -331,7 +482,7 @@ export async function DELETE(request, props) {
 
   const { data: profile } = await db
     .from('profiles')
-    .select('id, profile_locations(*, locations(*))')
+    .select('id, role, active, deleted_at, profile_locations(*, locations(*))')
     .eq('id', id)
     .single()
 
@@ -352,24 +503,37 @@ export async function DELETE(request, props) {
     }
   }
 
+  // ACTIVEUSER.1 — this handler now acts on the LOGIN, so it must know who it
+  // is acting on. A tombstone's ban is permanent and owned by
+  // /api/staff/[id]/permanent; an unknown id used to fall through to a
+  // zero-row UPDATE and answer success. Both are "not found", as on PUT.
+  // AFTER the owner-overlap check on purpose: an owner gets the same 403 for a
+  // missing id, a tombstone (no profile_locations) and another studio's staff,
+  // so this 404 is not an id-existence oracle. Only a master reaches it.
+  if (!profile || isTombstone(profile)) {
+    return NextResponse.json({ success: false, error: 'Profile not found' }, { status: 404 })
+  }
+
+  // ACTIVEUSER.1 (review B1) — the SAME who-may-edit-whom rule PUT enforces.
+  // Overlap alone let owner A deactivate, and now BAN, peer owner B at a studio
+  // they share, while PUT refused that exact pair. Self is already a 400 above,
+  // so the only refusal left to word is the peer-owner one. Masters pass.
+  if (!canEditStaffMember(
+    { id: user.id, role: user.role, isMaster: user.isMaster, rolesByLocation: user.rolesByLocation },
+    { id: profile.id, role: profile.role, locationIds: (profile.profile_locations || []).map(l => l.location_id) },
+  )) {
+    return NextResponse.json({ success: false, error: editRefusalCopy(user, profile) }, { status: 403 })
+  }
+
   // Revoke door access first. If UniFi is unreachable on any
   // location, surface the error so an owner can retry — better than
   // silently leaving an ex-employee with active doors. The HTTP 502
   // makes it clear the deactivation did not happen.
-  for (const link of profile?.profile_locations || []) {
-    if (!link.unifi_door_access || !link.unifi_user_id || !link.locations) continue
-    // INTEG-A2 dual-read: registry row first, legacy settings.unifi otherwise.
-    const cfg = await getUnifiConfig(db, link.locations)
-    if (!cfg.configured) continue
-    try {
-      await revokeUnifiUserPolicies(cfg, link.unifi_user_id)
-    } catch (e) {
-      const msg = e instanceof UnifiError ? e.message : `UniFi revoke failed: ${e.message || e}`
-      return NextResponse.json({
-        success: false,
-        error: `Could not revoke UniFi door access at ${link.locations.name} — ${msg}. Profile not deactivated.`,
-      }, { status: 502 })
-    }
+  // ACTIVEUSER.1 (review S4) — shared with PUT's true→false transition, so
+  // "deactivate" means the same thing from either control.
+  const revokeFail = await revokeDoorAccessForDeactivation({ db, links: profile.profile_locations })
+  if (revokeFail) {
+    return NextResponse.json({ success: false, error: revokeFail.error }, { status: revokeFail.status })
   }
 
   // Mark inactive AND clear all per-location door flags so anyone
@@ -382,26 +546,38 @@ export async function DELETE(request, props) {
     .eq('id', id)
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
 
-  await db
-    .from('profile_locations')
-    .update({ unifi_door_access: false })
-    .eq('profile_id', id)
+  await clearLocationDoorFlags({ db, id })
 
-  // AUDIT-EXPAND.1 — staff deactivation is high-stakes (revokes
-  // door access + access to the platform). Logged as a business
-  // event so it appears alongside contract issuance / policy
-  // publish in the unified log.
+  // ACTIVEUSER.1 — only now, with the deactivation landed (the update above is
+  // where mig 080 refuses the last active master). Never throws, and never
+  // fails this response: the app is already closed to them by getCurrentUser().
+  const loginAccess = await suspendStaffLogin(db, id)
+
+  // AUDIT-EXPAND.1 — staff deactivation is high-stakes (revokes door access
+  // and staff access to the platform). Logged as a business event so it
+  // appears alongside contract issuance / policy publish in the unified log.
+  // ACTIVEUSER.1 — "access to the platform" was not true when this comment was
+  // written; `login` records what actually happened to the sign-in (banned /
+  // ban_failed / kept_member_login / kept_host_login / kept_unverified).
+  // A call on an ALREADY inactive profile is the dialog's "Try again" for the
+  // ban, not a second deactivation: it gets its own action so the log never
+  // shows one person deactivated twice.
+  const wasAlreadyInactive = profile.active === false
   await logAuditEvent({
     category: 'business',
-    action: 'profile.deactivated',
+    action: wasAlreadyInactive ? 'profile.deactivation_login_step_retried' : 'profile.deactivated',
     actor: { id: user.id, full_name: user.full_name, email: user.email },
     target: {
       id,
       resource: `profiles/${id}`,
     },
-    details: { via: 'staff_delete' },
+    details: { via: 'staff_delete', login: loginAccess.outcome },
     request,
   })
 
-  return NextResponse.json({ success: true })
+  return NextResponse.json({
+    success: true,
+    data: { login: loginAccess.outcome },
+    ...(loginAccess.warning ? { warning: loginAccess.warning } : {}),
+  })
 }

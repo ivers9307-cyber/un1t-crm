@@ -8,6 +8,7 @@
 //       - Master: can edit everyone (incl. other masters, themselves)
 //       - Owner:  can NOT edit themselves
 //                 can NOT edit any profile whose `role === 'owner'`
+//                 can NOT edit any profile whose `role === 'master'`
 //                 can edit manager / head_coach / staff AT A LOCATION
 //                 THE CALLER OWNS
 //       - Anyone else: cannot use the staff editor at all (the
@@ -108,6 +109,12 @@ export function canEditStaffMember(caller, target) {
   // Owner editing another owner — denied. Master is the only role
   // that can promote/demote owner-level assignments.
   if (target.role === 'owner') return false
+  // ACTIVEUSER.1 (review R2-S1) — …and never a MASTER. The header has always
+  // said an owner edits "manager / head_coach / staff", but only `owner` was
+  // refused, so a master who holds a row at the owner's studio passed. Editing
+  // includes deactivating, which now bans the login; mig 080 only guards the
+  // LAST active master, and the UniFi revoke runs before that refusal.
+  if (target.role === 'master') return false
   // …and the caller must be an OWNER AT one of the target's locations —
   // not merely an owner somewhere. rolesByLocation is the per-location
   // truth; `caller.role` is the ACTIVE-location role and answers a
