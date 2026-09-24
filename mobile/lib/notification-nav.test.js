@@ -119,6 +119,17 @@ describe('routeForNotification', () => {
     expect(routeForNotification({ type: 'swap_decision', swap_id: 's1', block_date: null })).toBe('/(tabs)/schedule')
     // Older payloads without the date still land on the schedule tab.
     expect(routeForNotification({ type: 'time_off_decision', request_id: 'r1' })).toBe('/(tabs)/schedule')
+  })
+
+  // LEAVECANCEL.1 — an owner is told a manager asked to cancel approved leave.
+  // It is decided on the web (the push says so) and the phone's approvals list
+  // deliberately has no card for it, so the tap must NOT go to /approvals
+  // (an empty list) and must not be `undefined` (a dead tap, logged as an
+  // unhandled type). It lands on the Schedule tab, on the leave's first week.
+  it('time_off_cancel_request lands on the Schedule tab at the leave\'s week, never on the approvals inbox', () => {
+    expect(routeForNotification({ type: 'time_off_cancel_request', request_id: 'r1', start_date: '2026-10-05' })).toBe('/(tabs)/schedule?date=2026-10-05')
+    expect(routeForNotification({ type: 'time_off_cancel_request', request_id: 'r1' })).toBe('/(tabs)/schedule')
+    expect(routeForNotification({ type: 'time_off_cancel_request', start_date: '../approvals' })).toBe('/(tabs)/schedule')
     expect(routeForNotification({ type: 'swap_decision', swap_id: 's1' })).toBe('/(tabs)/schedule')
   })
 

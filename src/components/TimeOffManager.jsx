@@ -6,7 +6,9 @@ import { CalendarOff, Plus, Check, X, Palmtree, ThermometerSun, Ban, Wallet, Cir
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { timeOffTypesFor, defaultTimeOffTypeFor, leaveClashLabel, leaveClashPrompt } from '@shared/time-off'
-import Modal from '@/components/ui/Modal'
+import { Modal, Button } from '@/components/ui'
+// LEAVECANCEL.1 — shared with the dashboard's My requests card.
+import { LEAVE_CANCEL_NOTICES, cancelledAtRequestText } from '@/lib/time-off-cancel-copy'
 // LEAVEDAYS.1 — what the form's "days requested" line says, and when.
 import { LEAVE_PREVIEW_DEBOUNCE_MS, leavePreviewRequest, leavePreviewFrom, leavePreviewState, leaveDaysView } from '@/lib/leave-days-preview'
 // ROSTER-FIX.6a — one failure shape and one banner across the schedule
@@ -40,7 +42,13 @@ const STATUS_STYLES = {
 // LEAVE.5 — `canApprove` is resolved by the page against the per-location
 // time-off approval permission at the active studio. Without it (older
 // callers, tests) the role at the active studio decides, as before.
-export default function TimeOffManager({ user, canApprove }) {
+//
+// LEAVECANCEL.1 — `canDecideCancellations`: an owner at the active studio or a
+// master (resolved by the page, ROLE-based). It only widens who gets the Team
+// tab: the approvals queue links owners to a colleague's row there, and an
+// owner whose time-off approval permission was removed would otherwise have no
+// way to reach it. What each row offers comes from the server's per-row flags.
+export default function TimeOffManager({ user, canApprove, canDecideCancellations = false }) {
   // BOOKKEEPER-APPROVALS-FIX — `?focus=<id>` arrives when the user
   // drilled in from /approvals. Default to the 'team' tab (the
   // request being approved belongs to someone else, not the
@@ -50,7 +58,12 @@ export default function TimeOffManager({ user, canApprove }) {
   const searchParams = useSearchParams()
   const focusId = searchParams?.get('focus') || null
   const isManager = typeof canApprove === 'boolean' ? canApprove : MANAGER_ROLES.includes(user.role)
-  const hasFocus = !!focusId && isManager
+  const showTeam = isManager || canDecideCancellations
+  const hasFocus = !!focusId && showTeam
+  // LEAVECANCEL.1 — from the Leave cancellations queue. The row is APPROVED
+  // leave (the ask is not a status), so the usual focus landing (Pending)
+  // would not contain it.
+  const focusCancellations = hasFocus && searchParams?.get('view') === 'cancellations'
 
   const [requests, setRequests] = useState([])
   const [allowance, setAllowance] = useState(null)
@@ -70,14 +83,17 @@ export default function TimeOffManager({ user, canApprove }) {
   // double-clicking used to fire two PUTs.
   const [actingId, setActingId] = useState(null)
   const [showForm, setShowForm] = useState(false)
-  const [filter, setFilter] = useState(hasFocus ? 'pending' : 'all') // 'all', 'pending', 'approved'
+  const [filter, setFilter] = useState(focusCancellations ? 'approved' : hasFocus ? 'pending' : 'all') // 'all', 'pending', 'approved'
   // LEAVE.5 — approvers land on the team's requests; their own allowance
   // moves to a smaller section below.
-  const [tab, setTab] = useState(isManager ? 'team' : 'my') // 'my' or 'team' (team only for managers)
+  const [tab, setTab] = useState(showTeam ? 'team' : 'my') // 'my' or 'team' (team only for managers)
   // LEAVE.1 — after an approval that left the person rostered:
   // { requestId, name, prompt } until "Unassign them" or "Keep them".
   const [clashFollowUp, setClashFollowUp] = useState(null)
   const [notice, setNotice] = useState(null)
+  // LEAVECANCEL.1 — { mode: 'ask' | 'approve' | 'reject', req } while the
+  // cancel dialog is open.
+  const [cancelDialog, setCancelDialog] = useState(null)
   // Ref-map of request id → DOM node so we can scroll the focused
   // row into view once it lands in the result set.
   const rowRefs = useRef(new Map())
@@ -230,6 +246,56 @@ export default function TimeOffManager({ user, canApprove }) {
     await reviewRequest(id, { status: 'cancelled' }, 'Could not cancel')
   }
 
+  // LEAVECANCEL.1 — ask (PUT), decide (POST) or withdraw (DELETE). Returns the
+  // failure message for the dialog to show in place, or null when it worked.
+  // The notice is worded from the server's `cancellation`, never assumed: a
+  // master's PUT cancels outright, a manager's only asks. The words are
+  // LEAVE_CANCEL_NOTICES, shared with the dashboard's My requests card.
+  async function sendCancelAction(id, method, path, body) {
+    if (actingId) return 'Another action is still in progress.'
+    setActingId(id)
+    setError(null)
+    setNotice(null)
+    try {
+      const res = await fetch(path, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data.success) return data.error || 'The request was not updated.'
+      setNotice(LEAVE_CANCEL_NOTICES[data.cancellation] || 'Leave cancelled.')
+      await fetchData()
+      return null
+    } catch {
+      return 'Network error, please try again'
+    } finally {
+      setActingId(null)
+    }
+  }
+
+  async function submitCancelDialog(note) {
+    const { mode, req } = cancelDialog
+    const failed = mode === 'ask'
+      ? await sendCancelAction(req.id, 'PUT', `/api/schedule/time-off/${req.id}`, { status: 'cancelled', cancel_request_note: note || null })
+      : await sendCancelAction(req.id, 'POST', `/api/schedule/time-off/${req.id}/cancel-request`, { decision: mode, note: note || null })
+    if (!failed) setCancelDialog(null)
+    return failed
+  }
+
+  async function handleWithdrawCancel(id) {
+    if (!confirm('Withdraw your cancellation request? Your leave stays approved.')) return
+    const failed = await sendCancelAction(id, 'DELETE', `/api/schedule/time-off/${id}/cancel-request`)
+    if (failed) setError({ title: 'Could not withdraw', message: failed, retry: false })
+  }
+
+  // A master's own approved leave: the PUT cancels it outright, no owner asked.
+  async function handleCancelApproved(id) {
+    if (!confirm('Cancel this approved leave? Any holiday days go back to your allowance.')) return
+    const failed = await sendCancelAction(id, 'PUT', `/api/schedule/time-off/${id}`, { status: 'cancelled' })
+    if (failed) setError({ title: 'Could not cancel', message: failed, retry: false })
+  }
+
   return (
     <div>
       {/* Header */}
@@ -263,7 +329,7 @@ export default function TimeOffManager({ user, canApprove }) {
           >
             My Requests
           </button>
-          {isManager && (
+          {showTeam && (
             <button
               type="button"
               onClick={() => setTab('team')}
@@ -362,6 +428,9 @@ export default function TimeOffManager({ user, canApprove }) {
             // and repeat down the list, so "Approve" alone would read as the
             // same control fifteen times. Name the row they act on.
             const requestLabel = `${typeConf.label} request${req.profiles?.full_name ? ` from ${req.profiles.full_name}` : ''}`
+            // LEAVECANCEL.1 — where a request to cancel this APPROVED leave
+            // stands. The row's status chip still reads "approved": it is.
+            const cancelAsk = req.cancel_request_state
 
             const isFocused = req.id === focusId
             return (
@@ -392,6 +461,11 @@ export default function TimeOffManager({ user, canApprove }) {
                     <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium uppercase ${STATUS_STYLES[displayStatus] || STATUS_STYLES[req.status]}`}>
                       {displayStatus}
                     </span>
+                    {cancelAsk === 'open' && (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full font-medium uppercase bg-amber-500/10 text-amber-700">
+                        Cancellation requested
+                      </span>
+                    )}
                   </div>
                   <div className="text-xs text-un1t-subtle mt-1 flex items-center gap-3">
                     <span>
@@ -409,6 +483,25 @@ export default function TimeOffManager({ user, canApprove }) {
                   {req.review_note && (
                     <div className="text-xs text-un1t-muted mt-1 italic">
                       Note: {req.review_note} {req.reviewer && `— ${req.reviewer.full_name}`}
+                    </div>
+                  )}
+                  {cancelAsk === 'open' && (
+                    <div className="text-xs text-amber-700 mt-1">
+                      {isOwn
+                        ? 'Waiting for an owner to decide. Your leave is still approved.'
+                        : 'Asked to cancel this leave. It is still approved until an owner decides.'}
+                      {req.cancel_request_note ? ` Reason: "${req.cancel_request_note}"` : ''}
+                    </div>
+                  )}
+                  {cancelledAtRequestText(req, { own: isOwn }) && (
+                    <div className="text-xs text-un1t-subtle mt-1">{cancelledAtRequestText(req, { own: isOwn })}</div>
+                  )}
+                  {cancelAsk === 'rejected' && isOwn && (
+                    <div className="text-xs text-un1t-subtle mt-1">
+                      Cancellation declined. Your leave stays approved.
+                      {req.cancel_decision_note ? ` Note: "${req.cancel_decision_note}"` : ''}
+                      {/* LEAVECANCEL.1 — the server hides the ask for 24h after a decline and says when it lifts. */}
+                      {req.cancel_retry_after_label ? ` You can ask again after ${req.cancel_retry_after_label}.` : ''}
                     </div>
                   )}
                 </div>
@@ -439,6 +532,50 @@ export default function TimeOffManager({ user, canApprove }) {
                       </button>
                     </>
                   )}
+                  {req.can_decide_cancel && (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        disabled={!!actingId}
+                        onClick={() => setCancelDialog({ mode: 'approve', req })}
+                        aria-label={`Approve cancellation of ${requestLabel}`}
+                      >
+                        Approve cancellation
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={!!actingId}
+                        onClick={() => setCancelDialog({ mode: 'reject', req })}
+                        aria-label={`Decline cancellation of ${requestLabel}`}
+                      >
+                        Decline
+                      </Button>
+                    </>
+                  )}
+                  {req.can_withdraw_cancel && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={!!actingId}
+                      onClick={() => handleWithdrawCancel(req.id)}
+                      aria-label={`Withdraw cancellation request for ${requestLabel}`}
+                    >
+                      Withdraw
+                    </Button>
+                  )}
+                  {req.can_request_cancel && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={!!actingId}
+                      onClick={() => (req.cancel_needs_owner ? setCancelDialog({ mode: 'ask', req }) : handleCancelApproved(req.id))}
+                      aria-label={`Cancel approved ${requestLabel}`}
+                    >
+                      Cancel leave
+                    </Button>
+                  )}
                   {canCancel && (
                     <button
                       type="button"
@@ -464,6 +601,15 @@ export default function TimeOffManager({ user, canApprove }) {
         </section>
       )}
 
+      {cancelDialog && (
+        <LeaveCancelDialog
+          mode={cancelDialog.mode}
+          req={cancelDialog.req}
+          onClose={() => setCancelDialog(null)}
+          onSubmit={submitCancelDialog}
+        />
+      )}
+
       {/* Request Form Modal */}
       {showForm && (
         <TimeOffFormModal
@@ -484,6 +630,82 @@ export default function TimeOffManager({ user, canApprove }) {
         />
       )}
     </div>
+  )
+}
+
+// LEAVECANCEL.1 — one dialog, three jobs: the requester ASKS an owner to
+// cancel their approved leave; an owner APPROVES or DECLINES that. Each takes
+// an optional note. A refusal is shown here, in the server's own words, and
+// the dialog stays open.
+const CANCEL_DIALOG = {
+  ask: {
+    title: 'Cancel approved leave',
+    body: () => 'This leave is approved, so cancelling it needs an owner\'s approval. It stays approved until they decide, and you can withdraw the request at any time.',
+    noteLabel: () => 'Reason (optional)',
+    submit: 'Ask an owner',
+    keep: 'Keep my leave',
+  },
+  approve: {
+    title: 'Approve cancellation',
+    body: (name) => `${name}'s leave will be cancelled. Any holiday days go back to their allowance, and they can be rostered on those dates again.`,
+    noteLabel: (name) => `Note to ${name} (optional)`,
+    submit: 'Approve cancellation',
+    keep: 'Not now',
+  },
+  reject: {
+    title: 'Decline cancellation',
+    body: (name) => `${name}'s leave stays approved and they will be told.`,
+    noteLabel: (name) => `Note to ${name} (optional)`,
+    submit: 'Decline cancellation',
+    keep: 'Not now',
+  },
+}
+
+function LeaveCancelDialog({ mode, req, onClose, onSubmit }) {
+  const copy = CANCEL_DIALOG[mode]
+  const name = req.profiles?.full_name || 'This person'
+  const [note, setNote] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState(null)
+
+  async function handleSubmit(e) {
+    e.preventDefault()
+    setSaving(true)
+    setError(null)
+    const failed = await onSubmit(note.trim())
+    // On success the parent has already unmounted this dialog.
+    if (failed) { setError(failed); setSaving(false) }
+  }
+
+  return (
+    <Modal open onClose={onClose} title={copy.title} dismissOnBackdrop={!note.trim()}>
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <p className="text-sm text-un1t-text">{copy.body(name)}</p>
+        <p className="text-xs text-un1t-subtle">
+          {(TYPE_CONFIG[req.type] || FALLBACK_TYPE).label} · {req.start_date}{req.start_date !== req.end_date ? ` to ${req.end_date}` : ''} · {req.total_days} day{Number(req.total_days) === 1 ? '' : 's'}
+        </p>
+        {error && (
+          <div role="alert" className="bg-red-500/10 border border-red-500/30 text-red-700 text-sm rounded-lg p-3">
+            {error}
+          </div>
+        )}
+        <div>
+          <label htmlFor="leave-cancel-note" className="block text-xs text-un1t-subtle mb-1">{copy.noteLabel(name)}</label>
+          <textarea
+            id="leave-cancel-note"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            rows={2}
+            maxLength={2000}
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text resize-none"
+          />
+        </div>
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="ghost" onClick={onClose} disabled={saving}>{copy.keep}</Button>
+          <Button type="submit" variant={mode === 'reject' ? 'secondary' : 'primary'} loading={saving}>{copy.submit}</Button>
+        </div>
+      </form>
+    </Modal>
   )
 }
 
