@@ -69,7 +69,7 @@ Task 0 says what to do when 1a or 1b is unmerged.
 
    Program default 4 already shows contracted hours to managers ("hours only, never rates, reach anyone but owners"). Head coaches are in `MANAGER_ROLES`, so they see colleagues' contracted hours too. Review note 2.
 10. **Pay never enters.** No rate, salary, overtime or cost column is selected anywhere. Tests assert that no key or select string in this feature matches `/rate|salary|overtime|cost/`. `profiles` is read through the member embed, for `id, full_name, active, deleted_at, employment_type` only.
-11. **The swap picker needs the block id.** Today's dashboard shift rows (`shared/dashboard-data.js` `fetchDashboardShifts`, lines 95-122) carry the assignment id as `id` and no block id. This PR adds `shift_blocks.id` to that embed and `block_id` to the row. The row is the coach's own shift, so nothing new is revealed. `shared/` publishes either way.
+11. **The swap picker needs the block id.** Today's dashboard shift rows (`shared/dashboard-data.js` `fetchDashboardShifts`, lines 95-133) carry the assignment id as `id` and no block id. This PR adds `shift_blocks.id` to that embed and `block_id` to the row. The row is the coach's own shift, so nothing new is revealed. `shared/` publishes either way.
 
 ### Query budget (per call)
 
@@ -104,7 +104,7 @@ The manager path makes **9 fixed queries**, plus one more per extra 1,000 rows o
 | `src/components/ScheduleCalendar.jsx` (modify: imports near lines 60-66, a constant, `AssignCoachModal`) | ranked list, badges, hours line, fallback | |
 | `src/components/ScheduleCalendar.candidates.test.jsx` (create) | the web wiring | |
 | `src/components/ScheduleCalendar.working-time.test.jsx` (modify: drop the picker tests) | its picker half moves to the new file | |
-| `shared/dashboard-data.js` (modify: lines 100 and 108) | dashboard shift rows carry `block_id` | **yes** |
+| `shared/dashboard-data.js` (modify: lines 103 and 114) | dashboard shift rows carry `block_id` | **yes** |
 | `shared/dashboard-data.test.js` (modify: the D1 describe) | pin it | yes (test file) |
 | `mobile/lib/schedule-api.js` (modify: after `assignCoachToBlock`, line 188) | `getBlockCandidates` through `api()` | **yes** |
 | `mobile/lib/schedule-api.test.js` (modify: export list lines 41-62; a test) | wire contract | yes (test file) |
@@ -122,7 +122,7 @@ The manager path makes **9 fixed queries**, plus one more per extra 1,000 rows o
 - The date and time helpers in `shared/candidates.js` stay private, because `src/lib` already exports `addDaysISO`, `mondayOf` and `formatTime12h`.
 - Regex matching in the shared file uses `String#match`, not `RegExp#exec`. (The workspace's security hook flags any `exec(` in a plan or source file.)
 
-**Conflict hotspots:** `src/components/ScheduleCalendar.jsx` (AVAIL.1b, BLOCKEDIT.1 and REPLACE.1 touch it), `mobile/lib/schedule-api.js` and its test's export list (AVAIL.2 may add wrappers; keep both names, sorted), `shared/dashboard-data.js` and `docs/CHANGELOG.md`. Rebase before merge, and merge in batch order.
+**Conflict hotspots:** `src/components/ScheduleCalendar.jsx` (AVAIL.1b, BLOCKEDIT.1 and REPLACE.1 touch it), `mobile/lib/schedule-api.js` and its test's export list (AVAIL.2 deliberately does not touch it, its decision D9, putting its wrappers in a new `mobile/lib/availability-api.js`; REPLACE.1 may add to it later: keep both names, sorted), `shared/dashboard-data.js` and `docs/CHANGELOG.md`. Rebase before merge, and merge in batch order.
 
 ---
 
@@ -2408,7 +2408,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ### Task 8: Dashboard shift rows carry their block id (for the swap picker)
 
 **Files:**
-- Modify: `shared/dashboard-data.js` (lines 100 and 108) — **OTA path**
+- Modify: `shared/dashboard-data.js` (lines 103 and 114) — **OTA path**
 - Modify: `shared/dashboard-data.test.js` (the `fetchPersonalDashboardData — draft shifts (D1)` describe, main line 374)
 
 - [ ] **Step 1: Write the failing test**
@@ -2450,15 +2450,15 @@ Expected: FAIL. The row has no `block_id`, and the select has no `id`.
 - [ ] **Step 3: Implement**
 
 In `shared/dashboard-data.js` `fetchDashboardShifts`:
-- line 100: `shift_blocks!inner ( block_date, start_time, …` becomes `shift_blocks!inner ( id, block_date, start_time, …` (the rest of the line unchanged).
-- after `      id: r.id,` (line 108), add:
+- line 103: `shift_blocks!inner ( block_date, start_time, …` becomes `shift_blocks!inner ( id, block_date, start_time, …` (the rest of the line unchanged).
+- after `      id: r.id,` (line 114), add:
 
 ```js
       // CANDIDATES.1 — the swap picker ranks colleagues for this BLOCK.
       block_id: block.id ?? null,
 ```
 
-Also correct the doc comment above the function (lines 85-94). Its sentence "`id` is the assignment id — used only as a display key here (the swap flow reads shift ids from the schedule screen, not the dashboard)" is wrong today, because PersonalDashboard's swap flow posts `shift.id`. Replace it with: "`id` is the assignment id (the Today swap flow posts it as requester_shift_id); `block_id` is its block (CANDIDATES.1's colleague ranking)."
+Also correct the doc comment above the function (lines 86-94, the sentence at line 93). Its sentence "`id` is the assignment id — used only as a display key here (the swap flow reads shift ids from the schedule screen, not the dashboard)" is wrong today, because PersonalDashboard's swap flow posts `shift.id`. Replace it with: "`id` is the assignment id (the Today swap flow posts it as requester_shift_id); `block_id` is its block (CANDIDATES.1's colleague ranking)."
 
 - [ ] **Step 4: Run it, expect PASS**
 
@@ -2992,7 +2992,7 @@ npm run build
 
 Expected: every command exits 0. `npm run build` is the only check that proves two things: `@shared/candidates` resolves from the route, the lib and the client component, and the shared file's relative imports (`./working-time.js`, `./availability.js`, `./time-off.js`) resolve under Turbopack. On the 8GB machine, run the build with nothing else running. If it is too slow, push and let the required **Next build** check be the gate. Never skip both.
 
-- [ ] **Rebase** onto `origin/main` right before opening, because AVAIL.2 and BLOCKEDIT.1 touch the same files. Re-run the focused tests after any conflict. A conflict in `mobile/lib/schedule-api.test.js`'s export list: keep both names, sorted.
+- [ ] **Rebase** onto `origin/main` right before opening, because BLOCKEDIT.1 (ScheduleCalendar, the phone schedule tab) and AVAIL.2 (the phone, and a publish of its own) land around the same time. Re-run the focused tests after any conflict. A conflict in `mobile/lib/schedule-api.test.js`'s export list: keep both names, sorted.
 
 - [ ] **Open the PR.** Title: `CANDIDATES.1 — ranked coaches wherever a coach is picked: free, leave, availability, on site, week hours, rest (web and phone)`. The body must state:
   - **No migration.** It depends on mig 630 (AVAIL.1a) being applied, which happened before AVAIL.1a merged.

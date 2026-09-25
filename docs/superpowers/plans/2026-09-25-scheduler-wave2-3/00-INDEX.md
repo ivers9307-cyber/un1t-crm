@@ -105,6 +105,7 @@ These are marked **REVIEW** in the artifact until he confirms or changes them. E
 22. **An edit to a shift made overnight is told from 07:00,** even when the shift starts before then (quiet hours gate the notice). The edit itself is saved at once, and the manager's toast says coaches hear after 7am.
 23. **A standing weekly briefing** (the same note every Monday) would need a template field; BLOCKEDIT.1 adds a briefing per shift only.
 24. **Availability: the last save wins** if a coach edits on the web and the phone at once (no conflict check). New weekly rows on the phone default to all day; the web defaults to a time window.
+25. **Head coaches see colleagues' contracted hours** in the ranked picker (hours, never pay; contracted hours live in `profile_compensation`, read by column name only). A coach asking a colleague to cover sees only who is free, never leave or availability.
 
 ## Follow-ups found along the way (not in any PR yet)
 
@@ -116,6 +117,7 @@ These are marked **REVIEW** in the artifact until he confirms or changes them. E
 - `src/lib/cron-heartbeat.js` docstring out of date (found building 31).
 - 🔴 A shift block's MANAGER `notes` reach a coach's own phone row through `toApiShiftRow` (`notes: a.notes ?? b.notes`); COACHSCOPE.1 meant block notes as manager working notes. Check whether coaches should see them; BLOCKEDIT.1's briefing is the coach-facing field (found planning 14).
 - Migration 633's header still says "apply before the code deploys"; the CLAUDE.md rule it added says after. Harmless (the file re-arms) but fix the header next time the file is touched.
+- Delete the old `GET /api/schedule/working-time` route one deploy after CANDIDATES.1 ships (kept so open tabs keep working).
 - The staff assistant's `generate_report` tool passes model-supplied report periods unchecked (Postgres refuses a bad one; harmless) (found reviewing 11).
 - The staff assistant's `create_shift` and `get_time_off` tools take dates with no calendar check (found planning 11; the assistant is off everywhere).
 
@@ -123,6 +125,7 @@ These are marked **REVIEW** in the artifact until he confirms or changes them. E
 
 Updated by the loop. Newest first.
 
+- 25 Sep ~13:05Z: 19 CANDIDATES.1 plan written (one endpoint `GET /api/schedule/blocks/[id]/candidates`, two audiences; `shared/candidates.js` ranking; replaces WORKTIME's per-open picker GET; old working-time route kept one deploy then deleted as a follow-up; Task 0 waits for AVAIL.1a/1b).
 - 25 Sep ~13:00Z: 22 ICSFEED.1 = [PR #1761](https://github.com/ivers9307-cyber/un1t-crm/pull/1761) (gate 28,163 + build; mig 632 already applied), auto-merge on — check its EAS run before the next OTA. 16 AVAIL.1a third check APPROVED (duplicate-not-loss holds; no starvation; `gave_up` logged) → full gate running; mig 630 before merge; merges after #1761's EAS. AVAIL.1b rebasing onto final 1a + main.
 - 25 Sep ~12:50Z: 14 BLOCKEDIT.1 built (14 commits, mig 629, 805 tests; fixed the plan's `btrim()` blank check, a newline-only briefing slipped past it), in independent review. Its new notice arm gets its OWN heartbeat row in a separate mig **639** (applied after the deploy, per the arm rule; 629 must go before). AVAIL.1a round-3 fixes landed (fully-deduped attempts don't stamp; sweep re-reads before sending; `carryStartedRules`; give-up after 4 retries = `gave_up`), short third check running. Batch 6 plans commissioned (20 REPLACE.1 — uses mig 640 if needed; 21 GRID.1).
 - 25 Sep ~12:40Z: 17 AVAIL.2 plan written (modal from the Schedule tab Me view; reuses the leave form's MonthCalendar; typed times; no native module → pure OTA; save blocked until a load succeeded; tap on the managers' notice opens Manage mode). Waits for AVAIL.1a to merge.
