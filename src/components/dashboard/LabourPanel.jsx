@@ -1,0 +1,101 @@
+// src/components/dashboard/LabourPanel.jsx
+//
+// LABOUR.1 — the owner's "Labour against revenue" block. Presentational and
+// server-component-safe (no state, no 'use client'): it is rendered to HTML on
+// the server by LabourBlock, so its props never travel to the browser as data.
+// The view model (src/lib/labour-month-model.js) carries totals, ratios, hours
+// and names only.
+
+const REASONS = {
+  no_salary: 'no salary',
+  inactive_employee: 'deactivated employee',
+  no_rate: 'no hourly rate',
+  unknown_type: 'no employment type',
+  unknown_person: 'profile not found',
+}
+
+function euros(cents) {
+  if (cents == null) return '—'
+  return `€${Math.round(cents / 100).toLocaleString('en-IE')}`
+}
+
+function pctLabel(p) {
+  return p == null ? null : `${p.toFixed(1)}%`
+}
+
+function revenueLine(row) {
+  if (row.revenue_status === 'tracked') {
+    return `${euros(row.mrr_cents)}/month recurring (MRR), ${row.recurring_members} members`
+  }
+  if (row.revenue_status === 'unavailable') return 'Could not be read'
+  return 'Not tracked here'
+}
+
+function StudioLabour({ row, isTotal = false }) {
+  const f = pctLabel(row.forecast_pct)
+  const a = pctLabel(row.actual_pct)
+  return (
+    <div className={`rounded-md border border-un1t-border px-3 py-2 ${isTotal ? 'bg-un1t-bg' : ''}`}>
+      <p className="text-sm font-medium text-un1t-text">{row.name}</p>
+      <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
+        <dt className="text-un1t-muted">Forecast, whole month</dt>
+        <dd className="text-un1t-text">
+          <span className="font-semibold">{euros(row.forecast.cost_cents)}</span>
+          {f ? ` · ${f} of revenue` : ''} · {row.forecast.hours}h
+        </dd>
+        <dt className="text-un1t-muted">So far</dt>
+        <dd className="text-un1t-text">
+          <span className="font-semibold">{euros(row.actual.cost_cents)}</span>
+          {a ? ` · ${a} of revenue to date` : ''} · {row.actual.hours}h
+        </dd>
+        <dt className="text-un1t-muted">Revenue</dt>
+        <dd className="text-un1t-text">{revenueLine(row)}</dd>
+        <dt className="text-un1t-muted">Forecast split</dt>
+        <dd className="text-un1t-text">
+          employees {euros(row.forecast.employees_cents)} · contractors {euros(row.forecast.contractors_cents)}
+        </dd>
+      </dl>
+      {row.draft_hours > 0 ? (
+        <p className="mt-1 text-xs text-un1t-muted">{row.draft_hours}h in draft rosters not counted</p>
+      ) : null}
+      {isTotal && row.ratio_excludes?.length > 0 ? (
+        <p className="mt-1 text-xs text-un1t-muted">
+          Ratios leave out {row.ratio_excludes.join(', ')}: no revenue tracked there.
+        </p>
+      ) : null}
+    </div>
+  )
+}
+
+export function LabourPanel({ vm }) {
+  return (
+    <section aria-labelledby="labour-heading" className="bg-un1t-surface border border-un1t-border rounded-lg px-4 py-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <h2 id="labour-heading" className="text-sm font-semibold text-un1t-text">
+          Labour against revenue · {vm.month_label}
+        </h2>
+        <span className="text-xs text-un1t-muted">Day {vm.day_of_month} of {vm.days_in_month} · owners only</span>
+      </div>
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        {vm.studios.map((row) => <StudioLabour key={row.location_id} row={row} />)}
+        {vm.total ? <StudioLabour row={vm.total} isTotal /> : null}
+      </div>
+      {vm.uncosted.length > 0 ? (
+        <p className="mt-3 text-xs text-amber-700">
+          No pay on file, so not counted: {vm.uncosted.map((u) => `${u.name} (${u.hours}h, ${REASONS[u.reason] || u.reason})`).join(', ')}.
+        </p>
+      ) : null}
+      {vm.untimed_shifts > 0 ? (
+        <p className="mt-1 text-xs text-amber-700">
+          {vm.untimed_shifts} published shift{vm.untimed_shifts === 1 ? ' has' : 's have'} no times and {vm.untimed_shifts === 1 ? 'is' : 'are'} not counted.
+        </p>
+      ) : null}
+      <p className="mt-3 text-xs text-un1t-subtle">
+        Revenue is the recurring membership base billing now (the Studio scorecard&apos;s MRR), pro-rated to today for
+        &quot;so far&quot;. Class packs, drop-ins and one-off charges are not in it. Forecast is the published roster for
+        the whole month. Salaries count in full (a twelfth a month, pro-rated to today for &quot;so far&quot;), split
+        between studios by rostered hours. Contractors count per rostered hour at their rate, admin shifts included.
+      </p>
+    </section>
+  )
+}

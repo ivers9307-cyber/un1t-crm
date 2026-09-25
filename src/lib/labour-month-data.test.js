@@ -4,6 +4,8 @@
 // and a failed read is an error, never a €0.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 
 vi.mock('@shared/studio-kpis', () => ({ fetchMrr: vi.fn() }))
 vi.mock('./log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
@@ -11,6 +13,7 @@ vi.mock('./log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() 
 import { fetchMrr } from '@shared/studio-kpis'
 import { logError } from './log'
 import { loadLabourMonth } from './labour-month-data'
+import { LabourPanel } from '@/components/dashboard/LabourPanel'
 
 const ORG = 'org-un1t'
 const STILL = 'loc-still'
@@ -213,7 +216,7 @@ describe('no pay value reaches the rendered block', () => {
     return out
   }
 
-  it('the view model carries no rate, no salary and no pay column', async () => {
+  it('neither the view model nor the HTML rendered from it carries a rate, a salary or a pay column', async () => {
     const db = fakeDb(okSpec({ profile_compensation: { data: PAY, error: null } }))
     const { data, error } = await loadLabourMonth(db, { activeLocationId: STILL, studios: STUDIOS, nowMs: NOW })
     expect(error).toBeUndefined()
@@ -222,7 +225,12 @@ describe('no pay value reaches the rendered block', () => {
     expect(data.studios[0].forecast.contractors_cents).toBe(6_234)
 
     const json = JSON.stringify(data)
-    for (const leak of LEAKS) expect(json).not.toContain(leak)
+    const html = renderToStaticMarkup(createElement(LabourPanel, { vm: data }))
+    expect(html).toContain('€3,063') // the panel really rendered the costed figures
+    for (const leak of LEAKS) {
+      expect(json).not.toContain(leak)
+      expect(html).not.toContain(leak)
+    }
     for (const k of keysDeep(data)) {
       expect(k).not.toMatch(/salary|rate|contracted|leave|overtime/)
     }
