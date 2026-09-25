@@ -4,7 +4,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, days , MANAGER_ROLES} from '@/lib/schemas'
-import { getEmploymentType, getLeaveEntitlement } from '@/lib/time-off-leave'
+import { getEmploymentType, getLeaveEntitlement, getPendingHolidayDays } from '@/lib/time-off-leave'
 
 // ROSTER-FIX.2 — a profile is in scope when it shares a location with the
 // caller (master = everywhere). Detail-style 404 on miss so a cross-tenant
@@ -86,6 +86,17 @@ export async function GET(request) {
   }
   const notApplicable = employmentType === 'contractor'
 
+  // LEAVEDAYS.1 — `remaining` has never deducted PENDING holiday requests, and
+  // the time-off POST refuses on remaining minus them, so a form judging on
+  // `remaining` alone stays quiet about a request the POST then refuses.
+  // `pending_days` is that sum, from the function the POST judges with.
+  // ADDED beside `remaining`, whose meaning is unchanged (the phone subtracts
+  // its own pending sum from it). An unreadable sum is OMITTED, never 0: the
+  // allowance still loads and the form hedges its wording instead.
+  const { days: pendingDays, error: pendingError } = await getPendingHolidayDays(db, profileId, year)
+  if (pendingError) console.error('[allowances] pending holiday days unreadable', pendingError.message)
+  const pendingField = pendingError ? {} : { pending_days: pendingDays }
+
   if (!data) {
     const { days, error: entError } = await getLeaveEntitlement(db, profileId)
     if (entError) {
@@ -100,6 +111,7 @@ export async function GET(request) {
         used_days: 0,
         carried_over: 0,
         remaining: days,
+        ...pendingField,
         not_applicable: notApplicable,
       }
     })
@@ -110,6 +122,7 @@ export async function GET(request) {
     data: {
       ...data,
       remaining: data.total_days + data.carried_over - data.used_days,
+      ...pendingField,
       not_applicable: notApplicable,
     }
   })

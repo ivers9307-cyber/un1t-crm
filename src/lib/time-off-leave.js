@@ -39,39 +39,103 @@ const PAGE = 1000
 
 // ── Memberships ───────────────────────────────────────────────────────────
 
-/** Every studio a profile belongs to. */
+/**
+ * Every studio a profile belongs to.
+ * LEAVEGUARD.1 — also the per-studio `role` of each membership
+ * (`memberships`), read in the same query: the PUT judges whether the
+ * requester is manager-tier from it, and a failed read is one error for both.
+ */
 export async function getProfileLocationIds(db, profileId) {
   const { data, error } = await db
     .from('profile_locations')
-    .select('location_id')
+    .select('location_id, role')
     .eq('profile_id', profileId)
-  if (error) return { ids: [], error }
-  return { ids: [...new Set((data || []).map((r) => r.location_id).filter(Boolean))], error: null }
+  if (error) return { ids: [], memberships: [], error }
+  const memberships = (data || []).filter((r) => r?.location_id).map((r) => ({ location_id: r.location_id, role: r.role ?? null }))
+  return { ids: [...new Set(memberships.map((r) => r.location_id))], memberships, error: null }
 }
 
 /**
  * ORGSCOPE.2 — every studio each of these profiles belongs to, in one paged
  * read: Map(profileId → locationId[]). A profile with no rows is absent.
+ * LEAVEGUARD.1 — `membershipsByProfile` carries the same rows WITH their
+ * per-studio role: Map(profileId → { location_id, role }[]).
  */
 export async function getLocationIdsByProfile(db, profileIds) {
   const ids = [...new Set((profileIds || []).filter(Boolean))]
   const byProfile = new Map()
-  if (ids.length === 0) return { byProfile, error: null }
+  const membershipsByProfile = new Map()
+  if (ids.length === 0) return { byProfile, membershipsByProfile, error: null }
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await db
       .from('profile_locations')
-      .select('profile_id, location_id')
+      .select('profile_id, location_id, role')
       .in('profile_id', ids)
       .order('profile_id', { ascending: true })
       .order('location_id', { ascending: true })
       .range(from, from + PAGE - 1)
-    if (error) return { byProfile: new Map(), error }
+    if (error) return { byProfile: new Map(), membershipsByProfile: new Map(), error }
     for (const r of data || []) {
       if (!r.profile_id || !r.location_id) continue
-      if (!byProfile.has(r.profile_id)) byProfile.set(r.profile_id, [])
+      if (!byProfile.has(r.profile_id)) { byProfile.set(r.profile_id, []); membershipsByProfile.set(r.profile_id, []) }
       byProfile.get(r.profile_id).push(r.location_id)
+      membershipsByProfile.get(r.profile_id).push({ location_id: r.location_id, role: r.role ?? null })
     }
     if (!data || data.length < PAGE) break
+  }
+  return { byProfile, membershipsByProfile, error: null }
+}
+
+/**
+ * LEAVEGUARD.1 — for each profile, the studios of every organisation they are
+ * ORG ADMIN of (mig 417): Map(profileId → locationId[]). getCurrentUser makes
+ * an org admin a synthetic OWNER at those studios (SAAS-4), so the leave guard
+ * counts them as manager-tier. Paged like the membership read; `active` is not
+ * filtered (a closed studio still counts: the guard only ever protects more).
+ * A failed read is returned as the error, never as "nobody is an org admin".
+ */
+export async function getOrgAdminLocationIdsByProfile(db, profileIds) {
+  const ids = [...new Set((profileIds || []).filter(Boolean))]
+  const byProfile = new Map()
+  if (ids.length === 0) return { byProfile, error: null }
+  const orgsByProfile = new Map()
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await db
+      .from('profile_organizations')
+      .select('profile_id, organization_id, role')
+      .in('profile_id', ids)
+      .eq('role', 'org_admin')
+      .order('profile_id', { ascending: true })
+      .order('organization_id', { ascending: true })
+      .range(from, from + PAGE - 1)
+    if (error) return { byProfile: new Map(), error }
+    for (const r of data || []) {
+      if (!r.profile_id || !r.organization_id) continue
+      if (!orgsByProfile.has(r.profile_id)) orgsByProfile.set(r.profile_id, new Set())
+      orgsByProfile.get(r.profile_id).add(r.organization_id)
+    }
+    if (!data || data.length < PAGE) break
+  }
+  const orgIds = [...new Set([...orgsByProfile.values()].flatMap((set) => [...set]))]
+  if (orgIds.length === 0) return { byProfile, error: null }
+  const locationsByOrg = new Map()
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await db
+      .from('locations')
+      .select('id, organization_id')
+      .in('organization_id', orgIds)
+      .order('id', { ascending: true })
+      .range(from, from + PAGE - 1)
+    if (error) return { byProfile: new Map(), error }
+    for (const r of data || []) {
+      if (!r.id || !r.organization_id) continue
+      if (!locationsByOrg.has(r.organization_id)) locationsByOrg.set(r.organization_id, [])
+      locationsByOrg.get(r.organization_id).push(r.id)
+    }
+    if (!data || data.length < PAGE) break
+  }
+  for (const [profileId, orgs] of orgsByProfile) {
+    byProfile.set(profileId, [...orgs].flatMap((o) => locationsByOrg.get(o) || []))
   }
   return { byProfile, error: null }
 }
@@ -268,6 +332,32 @@ export async function getHolidayAllowance(db, profileId, year) {
     allowance: { exists: false, total_days: ent.days, used_days: 0, carried_over: 0 },
     error: null,
   }
+}
+
+/**
+ * LEAVEDAYS.1 — holiday days a person has asked for in `year` and not yet had
+ * decided: what the time-off POST subtracts from the balance before it judges
+ * a new request, and what GET /api/schedule/allowances reports as
+ * `pending_days`. ONE function so the leave form's "remaining, pending" line
+ * and the POST's refusal cannot disagree. The rows are exactly the ones the
+ * POST always read: type holiday, RAW status pending (an expired pending
+ * request still counts until someone declines it), attributed to the year its
+ * start_date falls in (requests are split at 31 December on insert, so a row
+ * never spans two). `total_days` is the server's own charge for each.
+ * Fails closed: an unreadable sum is an error, never 0.
+ *
+ * @returns {Promise<{ days: number|null, error: object|null }>}
+ */
+export async function getPendingHolidayDays(db, profileId, year) {
+  const { data, error } = await db.from('time_off_requests')
+    .select('total_days')
+    .eq('profile_id', profileId)
+    .eq('type', 'holiday')
+    .eq('status', 'pending')
+    .gte('start_date', `${year}-01-01`)
+    .lte('start_date', `${year}-12-31`)
+  if (error) return { days: null, error }
+  return { days: (data || []).reduce((sum, r) => sum + Number(r.total_days), 0), error: null }
 }
 
 /**

@@ -6,6 +6,7 @@ import {
   resolveLeaveCancelDeciderIds, annotateCancelAsk, cancelAskEventKey,
   cancelAskNoticeKey, reAskBlockedUntil, CLEARED_CANCEL_ASK,
   isMissingCancelSchemaError, CANCEL_ASK_OFF, dublinRetryLabel,
+  requesterLeaveTier, approvedLeaveGuardAllows, annotateApprovedLeaveGuard, approvedLeaveRefusal,
 } from './time-off-cancel.js'
 import { LEAVE_CANCEL_NOTICES, cancelledAtRequestText } from './time-off-cancel-copy.js'
 import { fakeDb, queriesOf } from './time-off.test-helpers.js'
@@ -306,5 +307,100 @@ describe('isMissingCancelSchemaError', () => {
       can_withdraw_cancel: false, can_decide_cancel: false, cancel_retry_after: null, cancel_retry_after_label: null,
     })
     expect(Object.isFrozen(CANCEL_ASK_OFF)).toBe(true)
+  })
+})
+
+// LEAVEGUARD.1 — a colleague taking a manager's APPROVED leave out of force
+// needs the cancellation decider (an owner who is not the requester, or a
+// master); a master's needs another master.
+describe('requesterLeaveTier — ONE definition for the PUT and the list', () => {
+  const tier = (who, locs = ['loc-1']) => requesterLeaveTier(who, leave(), locs)
+
+  it('manager, head coach or owner at the filed-at studio: manager; staff: staff', () => {
+    for (const role of ['manager', 'head_coach', 'owner']) expect(tier({ memberships: [{ location_id: 'loc-1', role }] })).toBe('manager')
+    expect(tier({ memberships: [{ location_id: 'loc-1', role: 'staff' }] })).toBe('staff')
+    expect(tier({}, [])).toBe('staff')
+  })
+
+  it('a manager role at their OTHER studio counts (leave covers the person, LEAVE.2); one at an unrelated studio does not', () => {
+    expect(tier({ memberships: [{ location_id: 'loc-1', role: 'staff' }, { location_id: 'loc-2', role: 'manager' }] }, ['loc-1', 'loc-2'])).toBe('manager')
+    expect(tier({ memberships: [{ location_id: 'loc-9', role: 'owner' }] })).toBe('staff')
+  })
+
+  it('profiles.role master is master, with no studio rows at all', () => {
+    expect(tier({ profileRole: 'master', memberships: [] }, [])).toBe('master')
+    expect(tier({ profileRole: 'master', memberships: null, orgAdminLocationIds: null })).toBe('master')
+  })
+
+  it('an org admin of an organisation owning one of the studios is manager-tier (their synthetic owner role, SAAS-4); of another organisation, not', () => {
+    expect(tier({ memberships: [{ location_id: 'loc-1', role: 'staff' }], orgAdminLocationIds: ['loc-1', 'loc-2'] })).toBe('manager')
+    expect(tier({ memberships: [], orgAdminLocationIds: ['loc-x'] })).toBe('staff')
+  })
+
+  it('unreadable memberships or org grants, and nothing found: null (unknown), never staff', () => {
+    expect(tier({ memberships: null })).toBeNull()
+    expect(tier({ memberships: [], orgAdminLocationIds: null })).toBeNull()
+    // Something positive found still answers.
+    expect(tier({ memberships: [{ location_id: 'loc-1', role: 'owner' }], orgAdminLocationIds: null })).toBe('manager')
+  })
+})
+
+describe('approvedLeaveGuardAllows — who may move APPROVED leave out of force', () => {
+  const mgrLeave = leave({ profile_id: 'mgr' })
+  const ANOTHER_OWNER = person('own-2', { 'loc-1': 'owner' })
+  const ORG_ADMIN_CALLER = person('oa', { 'loc-1': 'owner' }) // getCurrentUser's synthetic owner
+
+  it('a manager-tier requester\'s approved leave: only an owner (not them) or a master', () => {
+    for (const to of ['cancelled', 'rejected', 'pending']) {
+      expect(approvedLeaveGuardAllows(OTHER_MANAGER, mgrLeave, to, ['loc-1'], 'manager')).toBe(false)
+      expect(approvedLeaveGuardAllows(person('hc', { 'loc-1': 'head_coach' }), mgrLeave, to, ['loc-1'], 'manager')).toBe(false)
+      expect(approvedLeaveGuardAllows(OWNER, mgrLeave, to, ['loc-1'], 'manager')).toBe(true)
+      expect(approvedLeaveGuardAllows(ANOTHER_OWNER, mgrLeave, to, ['loc-1'], 'manager')).toBe(true)
+      expect(approvedLeaveGuardAllows(ORG_ADMIN_CALLER, mgrLeave, to, ['loc-1'], 'manager')).toBe(true)
+      expect(approvedLeaveGuardAllows(MASTER, mgrLeave, to, ['loc-1'], 'manager')).toBe(true)
+    }
+  })
+
+  it('a MASTER requester\'s approved leave: only another master; an owner is not above a master', () => {
+    expect(approvedLeaveGuardAllows(OWNER, mgrLeave, 'cancelled', ['loc-1'], 'master')).toBe(false)
+    expect(approvedLeaveGuardAllows(OTHER_MANAGER, mgrLeave, 'rejected', ['loc-1'], 'master')).toBe(false)
+    expect(approvedLeaveGuardAllows(MASTER, mgrLeave, 'pending', ['loc-1'], 'master')).toBe(true)
+  })
+
+  it('staff leave, pending leave and a re-stamp to approved are not this rule\'s business', () => {
+    expect(approvedLeaveGuardAllows(OTHER_MANAGER, mgrLeave, 'cancelled', ['loc-1'], 'staff')).toBe(true)
+    expect(approvedLeaveGuardAllows(OTHER_MANAGER, leave({ status: 'pending' }), 'rejected', ['loc-1'], 'manager')).toBe(true)
+    expect(approvedLeaveGuardAllows(OTHER_MANAGER, mgrLeave, 'approved', ['loc-1'], 'master')).toBe(true)
+  })
+
+  it('the requester\'s own leave is LEAVECANCEL.1\'s path, not this one', () => {
+    expect(approvedLeaveGuardAllows(MANAGER, mgrLeave, 'cancelled', ['loc-1'], 'manager')).toBe(true)
+  })
+
+  it('an unreadable tier (null) is judged as manager: authority only narrows', () => {
+    expect(approvedLeaveGuardAllows(OTHER_MANAGER, mgrLeave, 'cancelled', ['loc-1'], null)).toBe(false)
+    expect(approvedLeaveGuardAllows(OWNER, mgrLeave, 'cancelled', ['loc-1'], null)).toBe(true)
+  })
+
+  it('an owner only at a studio the request does not belong to is refused', () => {
+    expect(approvedLeaveGuardAllows(person('own-9', { 'loc-9': 'owner' }), mgrLeave, 'cancelled', ['loc-1'], 'manager')).toBe(false)
+  })
+
+  it('the refusal says what to do instead, per tier, with no em-dash', () => {
+    expect(approvedLeaveRefusal('manager')).toBe("Only an owner can change a manager's approved leave. Ask the person whose leave it is to request the cancellation, or ask an owner.")
+    expect(approvedLeaveRefusal(null)).toBe(approvedLeaveRefusal('manager'))
+    expect(approvedLeaveRefusal('master')).toBe("Only another master can change a master's approved leave.")
+    for (const t of ['manager', 'master']) expect(approvedLeaveRefusal(t)).not.toMatch(/—/)
+  })
+})
+
+describe('annotateApprovedLeaveGuard — the list\'s per-row flag', () => {
+  it('locked for a manager looking at a fellow manager\'s approved leave; not for an owner, and not on staff leave', () => {
+    expect(annotateApprovedLeaveGuard(leave(), OTHER_MANAGER, ['loc-1'], 'manager')).toEqual({ approved_locked_to_owner: true })
+    expect(annotateApprovedLeaveGuard(leave(), OWNER, ['loc-1'], 'manager')).toEqual({ approved_locked_to_owner: false })
+    expect(annotateApprovedLeaveGuard(leave(), OWNER, ['loc-1'], 'master')).toEqual({ approved_locked_to_owner: true })
+    expect(annotateApprovedLeaveGuard(leave(), OTHER_MANAGER, ['loc-1'], 'staff')).toEqual({ approved_locked_to_owner: false })
+    expect(annotateApprovedLeaveGuard(leave({ status: 'pending' }), OTHER_MANAGER, ['loc-1'], 'manager')).toEqual({ approved_locked_to_owner: false })
+    expect(annotateApprovedLeaveGuard(leave(), MANAGER, ['loc-1'], 'manager')).toEqual({ approved_locked_to_owner: false })
   })
 })

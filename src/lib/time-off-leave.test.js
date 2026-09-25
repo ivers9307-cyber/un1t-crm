@@ -9,6 +9,8 @@ import {
   clashWindow, bucketClashCounts, getHolidayAllowance, ensureHolidayAllowanceRow,
   getNonWorkingDates, findLeaveClashes, decidingLocationIds, countLeaveClashes,
   ownShiftPreviewRow, findOwnPublishedShifts, chargeableLeaveSegments, isRealIsoDate,
+  getOrgAdminLocationIdsByProfile, getProfileLocationIds,
+  getPendingHolidayDays,
 } from './time-off-leave.js'
 import { fakeDb, queriesOf, resolveLocations, scopedAssignments, locationScopeOf } from './time-off.test-helpers.js'
 
@@ -664,5 +666,88 @@ describe('isRealIsoDate (LEAVEPHONE.1)', () => {
   })
   it('refuses anything that is not YYYY-MM-DD', () => {
     for (const d of ['05/10/2026', '2026-6-1', '2026-06-01T00:00:00Z', '', null, undefined, 20260601]) expect(isRealIsoDate(d)).toBe(false)
+  })
+})
+
+// LEAVEGUARD.1 — the reads the leave guard judges a requester's tier from.
+describe('getOrgAdminLocationIdsByProfile', () => {
+  const dbWith = ({ grants = [], locations = [], grantError = null, locError = null } = {}) => fakeDb((q) => {
+    if (q.table === 'profile_organizations') return grantError ? { data: null, error: grantError } : { data: grants, error: null }
+    if (q.table === 'locations') return locError ? { data: null, error: locError } : { data: locations, error: null }
+    throw new Error(q.table)
+  })
+
+  it('maps each org admin to the studios of their organisations, org_admin grants only, paged and ordered', async () => {
+    const db = dbWith({
+      grants: [{ profile_id: 'p1', organization_id: 'org-1', role: 'org_admin' }],
+      locations: [{ id: 'loc-1', organization_id: 'org-1' }, { id: 'loc-2', organization_id: 'org-1' }],
+    })
+    const { byProfile, error } = await getOrgAdminLocationIdsByProfile(db, ['p1', 'p2', 'p1'])
+    expect(error).toBeNull()
+    expect(byProfile.get('p1')).toEqual(['loc-1', 'loc-2'])
+    expect(byProfile.has('p2')).toBe(false)
+    const grantRead = queriesOf(db, 'profile_organizations')[0]
+    expect(grantRead.calls).toContainEqual(['in', 'profile_id', ['p1', 'p2']])
+    expect(grantRead.calls).toContainEqual(['eq', 'role', 'org_admin'])
+    expect(grantRead.calls.some(([op]) => op === 'range')).toBe(true)
+    expect(queriesOf(db, 'locations')[0].calls).toContainEqual(['in', 'organization_id', ['org-1']])
+  })
+
+  it('no grants: no locations read; no ids: no read at all', async () => {
+    let db = dbWith()
+    expect((await getOrgAdminLocationIdsByProfile(db, ['p1'])).byProfile.size).toBe(0)
+    expect(queriesOf(db, 'locations')).toHaveLength(0)
+    db = dbWith()
+    await getOrgAdminLocationIdsByProfile(db, [])
+    expect(db.queries).toHaveLength(0)
+  })
+
+  it('either read failing is returned as the error, never as "no org admin"', async () => {
+    expect((await getOrgAdminLocationIdsByProfile(dbWith({ grantError: { message: 'a' } }), ['p1'])).error).toEqual({ message: 'a' })
+    const db = dbWith({ grants: [{ profile_id: 'p1', organization_id: 'org-1', role: 'org_admin' }], locError: { message: 'b' } })
+    expect((await getOrgAdminLocationIdsByProfile(db, ['p1'])).error).toEqual({ message: 'b' })
+  })
+})
+
+describe('getProfileLocationIds — memberships carry the per-studio role', () => {
+  it('returns ids and { location_id, role } rows from one read', async () => {
+    const db = fakeDb(() => ({ data: [{ location_id: 'loc-1', role: 'manager' }, { location_id: 'loc-2', role: 'staff' }], error: null }))
+    expect(await getProfileLocationIds(db, 'p1')).toEqual({
+      ids: ['loc-1', 'loc-2'],
+      memberships: [{ location_id: 'loc-1', role: 'manager' }, { location_id: 'loc-2', role: 'staff' }],
+      error: null,
+    })
+  })
+})
+
+// LEAVEDAYS.1 — the pending-holiday sum the POST refuses on, now also what
+// GET /api/schedule/allowances reports as `pending_days`. One function, so the
+// form's "remaining, pending" line and the POST's refusal cannot disagree.
+describe('getPendingHolidayDays — the one pending sum (LEAVEDAYS.1)', () => {
+  it('asks for exactly the rows the POST always judged: holiday, RAW pending, start_date in the year, this person', async () => {
+    const db = fakeDb(() => ({ data: [{ total_days: 2 }, { total_days: '1.0' }], error: null }))
+    const out = await getPendingHolidayDays(db, 'p1', 2026)
+    expect(out).toEqual({ days: 3, error: null })
+    const [q] = queriesOf(db, 'time_off_requests')
+    expect(q.columns).toBe('total_days')
+    expect(q.eq).toEqual({ profile_id: 'p1', type: 'holiday', status: 'pending' })
+    expect(q.calls).toContainEqual(['gte', 'start_date', '2026-01-01'])
+    expect(q.calls).toContainEqual(['lte', 'start_date', '2026-12-31'])
+    // An EXPIRED pending request (end_date passed) still counts: the POST never
+    // filtered on end_date, so neither does this.
+    expect(q.calls.some(([, col]) => col === 'end_date')).toBe(false)
+  })
+
+  it('no rows is 0; a year given as a query-string is the same year', async () => {
+    const db = fakeDb(() => ({ data: [], error: null }))
+    expect(await getPendingHolidayDays(db, 'p1', '2027')).toEqual({ days: 0, error: null })
+    expect(queriesOf(db, 'time_off_requests')[0].calls).toContainEqual(['gte', 'start_date', '2027-01-01'])
+  })
+
+  it('a read error is returned, never read as "nothing pending"', async () => {
+    const db = fakeDb(() => ({ data: null, error: { message: 'down' } }))
+    const out = await getPendingHolidayDays(db, 'p1', 2026)
+    expect(out.days).toBeNull()
+    expect(out.error.message).toBe('down')
   })
 })

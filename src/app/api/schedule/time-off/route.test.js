@@ -41,7 +41,7 @@ function req(body) {
 function buildDb({
   overlapping = [], overlappingError = null,
   allowance = null, allowanceByYear = null,
-  pendingHoliday = [],
+  pendingHoliday = [], pendingError = null,
   employmentType = 'fte',
   entitlement = null,
   subjectLocations = ['loc-1'],
@@ -89,7 +89,7 @@ function buildDb({
       }
       // The holiday allowance check reads only total_days; everything
       // else selected here is the overlap probe.
-      if (cols === 'total_days') return { data: pendingHoliday, error: null }
+      if (cols === 'total_days') return { data: pendingError ? null : pendingHoliday, error: pendingError }
       return { data: overlappingError ? null : overlapping, error: overlappingError }
     }
     throw new Error(q.table)
@@ -191,6 +191,45 @@ describe('POST /api/schedule/time-off — request integrity', () => {
 
 // HOLIDAYLEAVE.1 — a bank holiday, or a day the studio is closed, inside a
 // holiday request costs no allowance.
+// LEAVEDAYS.1 — the pending sum moved into getPendingHolidayDays so the
+// allowances GET can report the same number the refusal is judged on. These pin
+// the refusal itself across that move.
+describe('POST /api/schedule/time-off — pending holiday requests count against the balance', () => {
+  it('3 remaining with 2 pending: a 2-day request is refused, naming the NET figure', async () => {
+    getCurrentUser.mockResolvedValue(USER)
+    const { db, insertSpy } = buildDb({
+      allowance: { total_days: 20, used_days: 17, carried_over: 0 },
+      pendingHoliday: [{ total_days: 2 }],
+    })
+    createServerClient.mockReturnValue(db)
+    // Fri 12 Jun to Mon 15 Jun: 2 working days.
+    const res = await POST(req({ type: 'holiday', start_date: '2026-06-12', end_date: '2026-06-15' }))
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toBe('Insufficient holiday balance. You have 1 days remaining (including pending requests).')
+    expect(insertSpy).not.toHaveBeenCalled()
+    const pendingRead = db.queries.find((q) => q.table === 'time_off_requests' && q.columns === 'total_days')
+    expect(pendingRead.eq).toEqual({ profile_id: 'c', type: 'holiday', status: 'pending' })
+    expect(pendingRead.calls).toContainEqual(['gte', 'start_date', '2026-01-01'])
+    expect(pendingRead.calls).toContainEqual(['lte', 'start_date', '2026-12-31'])
+  })
+
+  it('the same request fits once nothing is pending', async () => {
+    getCurrentUser.mockResolvedValue(USER)
+    const { db } = buildDb({ allowance: { total_days: 20, used_days: 17, carried_over: 0 } })
+    createServerClient.mockReturnValue(db)
+    expect((await POST(req({ type: 'holiday', start_date: '2026-06-12', end_date: '2026-06-15' }))).status).toBe(201)
+  })
+
+  it('500 (no insert) when the pending read fails: an unreadable sum is not "nothing pending"', async () => {
+    getCurrentUser.mockResolvedValue(USER)
+    const { db, insertSpy } = buildDb({ pendingError: { message: 'down' } })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(req({ type: 'holiday', start_date: '2026-06-12', end_date: '2026-06-15' }))
+    expect(res.status).toBe(500)
+    expect(insertSpy).not.toHaveBeenCalled()
+  })
+})
+
 describe('POST /api/schedule/time-off — bank holidays are not charged', () => {
   it('Mon 1 Jun (June Public Holiday) to Sun 7 Jun is 4 days, not 5', async () => {
     getCurrentUser.mockResolvedValue(USER)
@@ -975,6 +1014,139 @@ describe('GET /api/schedule/time-off — before mig 624 is applied (LEAVECANCEL.
       expect((await res.json()).error).toBe(error.message)
       expect(queriesOf(db, 'time_off_requests')).toHaveLength(1)
       expect(logError).not.toHaveBeenCalled()
+    }
+  })
+})
+
+// LEAVEGUARD.1 — the list says, per row, whether THIS caller may take a
+// colleague's approved leave out of force. `approved_locked_to_owner: true` is
+// a manager-tier person's approved leave seen by someone who is not an owner
+// at a studio it belongs to (nor a master), or a master's approved leave seen
+// by anyone but another master. Judged by the same functions the PUT refuses
+// with (requesterLeaveTier + approvedLeaveGuardAllows).
+describe('GET /api/schedule/time-off — approved_locked_to_owner (LEAVEGUARD.1)', () => {
+  const getReq = (qs = '') => ({ url: `http://x/api/schedule/time-off${qs}`, headers: { get: () => '' } })
+  const at = (id, role) => ({
+    id, role, profileRole: 'staff', activeLocation: { id: 'loc-1' },
+    locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': role },
+  })
+  const MASTER = { id: 'boss', role: 'master', profileRole: 'master', locations: [{ id: 'loc-1' }], rolesByLocation: {} }
+  const row = (id, profile_id, status = 'approved', role = 'staff') => ({
+    id, profile_id, location_id: 'loc-1', status, start_date: '2026-10-05', end_date: '2026-10-07',
+    profiles: { id: profile_id, full_name: profile_id, role },
+  })
+  const ROWS = [
+    row('mgr-approved', 'mgr'),
+    row('mgr-pending', 'mgr', 'pending'),
+    row('coach-approved', 'coach'),
+    // Filed at loc-1 where they are staff; head coach at loc-2 (leave covers the person).
+    row('hc-approved', 'hc'),
+    row('own-approved', 'own'),
+    // No studio rows: tier from the embedded profiles.role / an org grant.
+    row('master-approved', 'boss-2', 'approved', 'master'),
+    row('oa-approved', 'oa'),
+  ]
+  const MEMBERSHIPS = [
+    { profile_id: 'mgr', location_id: 'loc-1', role: 'manager' },
+    { profile_id: 'coach', location_id: 'loc-1', role: 'staff' },
+    { profile_id: 'hc', location_id: 'loc-1', role: 'staff' },
+    { profile_id: 'hc', location_id: 'loc-2', role: 'head_coach' },
+    { profile_id: 'own', location_id: 'loc-1', role: 'owner' },
+  ]
+  const listDb = ({ membershipError = null, orgError = null } = {}) => fakeDb((q) => {
+    const inIds = (col) => q.calls.find(([op, c]) => op === 'in' && c === col)?.[2] || []
+    if (q.table === 'profile_locations') {
+      const cols = (q.columns || '').replace(/\s/g, '')
+      // The scope read (members of the managed studio) selects profile_id only.
+      if (cols === 'profile_id') return { data: MEMBERSHIPS.map(({ profile_id }) => ({ profile_id })), error: null }
+      if (membershipError) return { data: null, error: membershipError }
+      return { data: MEMBERSHIPS.filter((m) => inIds('profile_id').includes(m.profile_id)), error: null }
+    }
+    if (q.table === 'profile_organizations') {
+      if (orgError) return { data: null, error: orgError }
+      return { data: inIds('profile_id').includes('oa') ? [{ profile_id: 'oa', organization_id: 'org-1', role: 'org_admin' }] : [], error: null }
+    }
+    if (q.table === 'locations') return { data: [{ id: 'loc-1', organization_id: 'org-1' }, { id: 'loc-2', organization_id: 'org-1' }], error: null }
+    return { data: ROWS, error: null }
+  })
+  const run = async (user, opts) => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-17T10:00:00Z'))
+    try {
+      logError.mockClear()
+      getCurrentUser.mockResolvedValue(user)
+      const db = listDb(opts)
+      createServerClient.mockReturnValue(db)
+      const res = await GET(getReq('?location_id=loc-1'))
+      const json = await res.json()
+      return { res, db, locked: Object.fromEntries(json.data.map((r) => [r.id, r.approved_locked_to_owner])) }
+    } finally {
+      vi.useRealTimers()
+    }
+  }
+
+  it('a manager: manager-tier, org-admin and master leave is locked; pending and staff leave are not', async () => {
+    const { res, locked } = await run(at('mgr-2', 'manager'))
+    expect(res.status).toBe(200)
+    expect(locked).toEqual({
+      'mgr-approved': true, 'mgr-pending': false, 'coach-approved': false, 'hc-approved': true,
+      'own-approved': true, 'master-approved': true, 'oa-approved': true,
+    })
+  })
+
+  it('an owner: only a MASTER\'s approved leave is locked (an owner is not above a master); their own is the self path', async () => {
+    const { locked } = await run(at('own', 'owner'))
+    expect(locked).toEqual({
+      'mgr-approved': false, 'mgr-pending': false, 'coach-approved': false, 'hc-approved': false,
+      'own-approved': false, 'master-approved': true, 'oa-approved': false,
+    })
+  })
+
+  it('a master: nothing is locked, and no role or org read is paid for the flag', async () => {
+    const { db, locked } = await run(MASTER)
+    expect(Object.values(locked).every((v) => v === false)).toBe(true)
+    expect(queriesOf(db, 'profile_locations').filter((q) => (q.columns || '').includes('role'))).toHaveLength(0)
+    expect(queriesOf(db, 'profile_organizations')).toHaveLength(0)
+  })
+
+  it('reads the colleagues\' roles in ONE paged profile_locations query, and their org grants in one', async () => {
+    const { db } = await run(at('mgr-2', 'manager'))
+    const roleReads = queriesOf(db, 'profile_locations').filter((q) => (q.columns || '').includes('role'))
+    expect(roleReads).toHaveLength(1)
+    expect(roleReads[0].columns.replace(/\s/g, '')).toBe('profile_id,location_id,role')
+    expect(queriesOf(db, 'profile_organizations')).toHaveLength(1)
+  })
+
+  it('unreadable memberships only NARROW, and are logged through logError', async () => {
+    let { res, locked } = await run(at('mgr-2', 'manager'), { membershipError: { message: 'boom' } })
+    expect(res.status).toBe(200)
+    expect(locked).toMatchObject({ 'mgr-approved': true, 'coach-approved': true, 'mgr-pending': false })
+    expect(logError).toHaveBeenCalledTimes(1)
+    expect(logError.mock.calls[0][0]).toBe('time-off')
+    ;({ locked } = await run(at('own-2', 'owner'), { membershipError: { message: 'boom' } }))
+    expect(locked).toMatchObject({ 'mgr-approved': false, 'coach-approved': false, 'master-approved': true })
+  })
+
+  it('unreadable org grants narrow too: a colleague with no manager row is locked for a manager', async () => {
+    const { locked } = await run(at('mgr-2', 'manager'), { orgError: { message: 'boom' } })
+    expect(locked).toMatchObject({ 'coach-approved': true, 'oa-approved': true, 'mgr-approved': true, 'mgr-pending': false })
+    expect(logError).toHaveBeenCalledTimes(1)
+  })
+
+  it('a plain coach sees only their own rows, and none is locked; no role read is made', async () => {
+    const coachRows = ROWS.filter((r) => r.profile_id === 'coach')
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-17T10:00:00Z'))
+    try {
+      getCurrentUser.mockResolvedValue({ ...at('coach', 'staff') })
+      const db = fakeDb((q) => (q.table === 'profile_locations' ? { data: [], error: null } : { data: coachRows, error: null }))
+      createServerClient.mockReturnValue(db)
+      const json = await (await GET(getReq('?location_id=loc-1'))).json()
+      expect(json.data.map((r) => r.approved_locked_to_owner)).toEqual([false])
+      expect(queriesOf(db, 'profile_locations')).toHaveLength(0)
+      expect(queriesOf(db, 'profile_organizations')).toHaveLength(0)
+    } finally {
+      vi.useRealTimers()
     }
   })
 })
