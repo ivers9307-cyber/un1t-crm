@@ -28,9 +28,11 @@
 //     The shift arm has its own heartbeat row, 'shift-reminders' (HEARTBEAT.1,
 //     mig 633), stamped only when it ran clean; 'send-push-reminders' still
 //     means "the tick ran".
+//   - Shift time changes (BLOCKEDIT.1) → one shift_adjusted notice per coach
+//     per edited shift, src/lib/block-edit-notify.js. Own heartbeat row
+//     'shift-time-changes' (mig 639).
 //   - Held replace notices (REPLACE.1a): src/lib/shift-replace-notify.js.
-//     Its own heartbeat row, 'replace-notices', arrives with mig 640
-//     (REPLACE.1b); until then its stamp is a logged no-op.
+//     Own heartbeat row 'replace-notices' (mig 640).
 //
 // Bookings fan out to a role-set rather than a single staff member
 // because the bookings table has no "assigned coach" column — the
@@ -48,7 +50,8 @@ import { localToUtc, formatLocalTime } from '@/lib/push-reminders'
 import { getEffectiveConfig, getEffectiveLeadTimesForUser } from '@/lib/notification-config'
 import { selectAll } from '@/lib/select-all'
 import { runShiftReminders } from '@/lib/shift-reminders'
-import { SHIFT_REMINDERS_HEARTBEAT, shiftReminderArmHealthy } from '@/lib/cron-arm-health'
+import { SHIFT_REMINDERS_HEARTBEAT, shiftReminderArmHealthy, SHIFT_TIME_CHANGES_HEARTBEAT, timeChangeArmHealthy } from '@/lib/cron-arm-health'
+import { runShiftTimeChangeNotices } from '@/lib/block-edit-notify'
 // REPLACE.1a — the held replace-notice arm, self-contained (see its block below).
 import { runReplaceNotices } from '@/lib/shift-replace-notify'
 import { REPLACE_NOTICES_HEARTBEAT, replaceNoticeArmHealthy } from '@/lib/cron-arm-health'
@@ -126,6 +129,7 @@ export async function GET(request) {
     booking_skipped_dup: 0,
     booking_send_failed: 0,
     shift_arm_failed: 0, // 1 = the shift arm THREW this tick (see the SHIFTS block)
+    time_change_arm_failed: 0, // 1 = the time-change arm THREW this tick (BLOCKEDIT.1)
     replace_arm_failed: 0, // 1 = the held replace-notice arm threw or reported errors (REPLACE.1a)
     lead_time_buckets: [], // for logging / debugging
   }
@@ -420,15 +424,41 @@ export async function GET(request) {
       logWarn('cron-push-reminders', 'shift-reminders heartbeat failed', { err }))
   }
 
+  // ----------------------- SHIFT TIME CHANGES -----------------------
+  // BLOCKEDIT.1 — a manager moved a PUBLISHED shift (PUT /api/schedule/blocks/
+  // [id]); each coach whose own hours moved has an unsent roster_change_log
+  // row. This arm is the later tick that lets quiet hours gate that notice
+  // without losing it: one message per coach per shift, 07:00-22:00 at the
+  // studio. The rule lives in src/lib/block-edit-notify.js. Isolated like the
+  // arms above: its failure costs nothing else, and is VISIBLE in the response.
+  // Placed AFTER the shift arm's own heartbeat stamp, so it can never cost it.
+  // Its own heartbeat row, 'shift-time-changes' (mig 639), is stamped below.
+  let timeChangeSummary = null
+  try {
+    timeChangeSummary = await runShiftTimeChangeNotices(db, { nowMs, locations: locations || [] })
+    Object.assign(summary, timeChangeSummary)
+  } catch (err) {
+    summary.time_change_arm_failed = 1
+    logError('cron-push-reminders', 'time-change block threw', { err })
+  }
+
+  // The time-change arm's OWN heartbeat row (the CLAUDE.md arm rule, mig 639):
+  // stamped ONLY on a clean run (src/lib/cron-arm-health.js timeChangeArmHealthy),
+  // quiet-hours ticks included; never on a throw, a failed or capped read, or a
+  // failed not-needed stamp. Its own catch: it cannot cost the parent's stamp.
+  if (summary.time_change_arm_failed === 0 && timeChangeArmHealthy(timeChangeSummary)) {
+    await stampHeartbeat(SHIFT_TIME_CHANGES_HEARTBEAT, timeChangeSummary).catch((err) =>
+      logWarn('cron-push-reminders', 'shift-time-changes heartbeat failed', { err }))
+  }
+
   // -------------------------- HELD REPLACE NOTICES --------------------------
   // REPLACE.1a — replace notices made in quiet hours (or lost with a dead
   // after()) go out from here, from 07:00 studio time. The rule is in
   // src/lib/shift-replace-notify.js. Isolated like the arms above: it can cost
   // no reminder and no other heartbeat. Its OWN row, 'replace-notices', is
   // stamped only on a clean run (cron-arm-health.js), under its own catch.
-  // That row is seeded by mig 640 (REPLACE.1b): until it exists the stamp
-  // matches 0 rows, which stampHeartbeat logs and ignores, and a failing arm
-  // shows as replace_arm_failed in the response, the tick log and logError.
+  // That row is seeded by mig 640; a failing arm also shows as
+  // replace_arm_failed in the response, the tick log and logError.
   let replaceSummary = null
   try {
     replaceSummary = await runReplaceNotices(db, { nowMs })
@@ -444,7 +474,8 @@ export async function GET(request) {
   }
 
   // quiet_hours alone is not news: it is 1 on every tick from 22:00 to 07:00.
-  if (Object.entries(summary).some(([k, v]) => k !== 'quiet_hours' && (Array.isArray(v) ? v.length > 0 : v > 0))) {
+  // time_change_quiet likewise (BLOCKEDIT.1).
+  if (Object.entries(summary).some(([k, v]) => k !== 'quiet_hours' && k !== 'time_change_quiet' && (Array.isArray(v) ? v.length > 0 : v > 0))) {
     logInfo('cron-push-reminders', 'tick', summary)
   }
 

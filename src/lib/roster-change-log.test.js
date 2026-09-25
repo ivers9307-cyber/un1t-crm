@@ -13,6 +13,8 @@ import {
   listRosterChanges,
   shapeRosterChange,
   ROSTER_CHANGE_LOG_MAX_ROWS,
+  logBlockEdit,
+  BLOCK_EDITED_ACTION,
 } from './roster-change-log'
 
 function mockDb(captured, { insertResult = { data: { id: 'log-1' }, error: null } } = {}) {
@@ -340,5 +342,74 @@ describe('listRosterChanges', () => {
     const res = await listRosterChanges(db, { locationId: '', from: 'a', to: 'b' })
     expect(res.error?.message).toMatch(/locationId, from and to are required/)
     expect(db.calls).toHaveLength(0)
+  })
+})
+// BLOCKEDIT.1 — one coachless row per edit of a published block, born stamped.
+describe('logBlockEdit', () => {
+  it('writes one coachless block_edited row, stamped at insert', async () => {
+    const captured = []
+    const res = await logBlockEdit(mockDb(captured), {
+      isPublished: true, locationId: 'loc-1', blockId: 'b1', blockDate: '2026-09-30', actorId: 'mgr',
+      details: { source: 'block_edit', min_coaches: { from: 1, to: 2 } },
+    })
+    expect(res).toEqual({ logged: true, id: 'log-1' })
+    expect(captured).toHaveLength(1)
+    expect(captured[0]).toMatchObject({
+      location_id: 'loc-1', block_id: 'b1', block_date: '2026-09-30', actor_id: 'mgr',
+      coach_id: null, action: BLOCK_EDITED_ACTION,
+      details: { source: 'block_edit', min_coaches: { from: 1, to: 2 } },
+    })
+    expect(Number.isFinite(Date.parse(captured[0].notified_at))).toBe(true)
+  })
+
+  it('a draft block is not logged (drafts ride the first publish)', async () => {
+    const captured = []
+    expect(await logBlockEdit(mockDb(captured), { isPublished: false, locationId: 'loc-1', blockId: 'b1' }))
+      .toEqual({ logged: false, reason: 'not_published' })
+    expect(captured).toEqual([])
+  })
+
+  it('never throws: a failed insert is logged and reported', async () => {
+    const res = await logBlockEdit(mockDb([], { insertResult: { data: null, error: { message: 'boom' } } }), {
+      isPublished: true, locationId: 'loc-1', blockId: 'b1',
+    })
+    expect(res).toEqual({ logged: false, reason: 'error' })
+    expect(logWarn).toHaveBeenCalled()
+  })
+})
+
+describe('shapeRosterChange — BLOCKEDIT.1 details', () => {
+  const raw = (details, over = {}) => ({
+    id: 'r1', action: 'block_edited', block_id: 'b1', block_date: '2026-09-30', actor_id: 'm', coach_id: null,
+    details, notified_at: '2026-09-29T10:00:00Z', created_at: '2026-09-29T10:00:00Z',
+    shift_blocks: { start_time: '10:00:00', end_time: '13:00:00', shift_templates: { name: 'Morning' } },
+    coach: null, actor: { full_name: 'Manager B' }, ...over,
+  })
+
+  it('passes min/max as integer pairs, the briefing change by known value, and never free text', () => {
+    const out = shapeRosterChange(raw({
+      source: 'block_edit',
+      from: { start_time: '09:00:00', end_time: '12:00:00' },
+      to: { start_time: '10:00:00', end_time: '13:00:00' },
+      min_coaches: { from: 1, to: 2 },
+      max_coaches: { from: 3, to: 'lots' },
+      briefing: 'added',
+      briefing_text: 'Fire drill at 10',
+    }))
+    expect(out.details).toEqual({
+      source: 'block_edit',
+      from: { start_time: '09:00:00', end_time: '12:00:00' },
+      to: { start_time: '10:00:00', end_time: '13:00:00' },
+      min_coaches: { from: 1, to: 2 },
+      max_coaches: { from: 3, to: null },
+      briefing: 'added',
+    })
+    expect(JSON.stringify(out)).not.toMatch(/Fire drill/)
+  })
+
+  it('drops an unknown briefing value and keeps a known notice', () => {
+    expect(shapeRosterChange(raw({ briefing: 'Bring bands' })).details).toEqual({})
+    expect(shapeRosterChange(raw({ notice: 'not_needed' })).details).toEqual({ notice: 'not_needed' })
+    expect(shapeRosterChange(raw({ notice: 'whatever' })).details).toEqual({})
   })
 })

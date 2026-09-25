@@ -12,6 +12,8 @@
 // them: capacity is not read for ANYONE (the "1/15" chip is gone), and staffing
 // status exists only when `isManager` is true. A component cannot leak what its
 // model does not contain.
+// The briefing (BLOCKEDIT.1) is written for coaches; the model carries only
+// that one exists.
 //
 // Web-only on purpose: anything under shared/ publishes an OTA.
 
@@ -19,7 +21,9 @@ import { liveAssignments } from './roster'
 import { futureBlockStaffing, countStaffingGaps, staffingGapsHeadline, staffingGapsBreakdown } from './roster-staffing'
 import { formatTime12h, formatTimeRange12h } from './schedule-overlap'
 import { timeOffLeaveLabel } from '../../shared/time-off'
+import { unavailableFor, unavailableSummary, describeRule } from '../../shared/availability'
 import { isAdminShift, SHIFT_KIND_LABELS } from '../../shared/shift-kind'
+import { briefingOf } from '../../shared/shift-briefing'
 
 /**
  * The card's surface tone. The template's colour is no longer a fill, because
@@ -54,6 +58,9 @@ export function shiftCardModel(block, assignments, staffing, { isManager = false
   // futureBlockStaffing's null for it.
   const isAdmin = isAdminShift(block)
   const kindLabel = isAdmin ? SHIFT_KIND_LABELS.admin : null
+  // BLOCKEDIT.1 — whether the shift carries a coach briefing. The TEXT stays
+  // out of the model: the card only says one exists; the dialog shows it.
+  const hasBriefing = Boolean(briefingOf(block))
   const coaches = liveAssignments(assignments).map((a) => {
     const hasOverride = !!(a.start_time_override || a.end_time_override)
     const from = formatTime12h(a.start_time_override || block?.start_time)
@@ -98,6 +105,7 @@ export function shiftCardModel(block, assignments, staffing, { isManager = false
   const hoverTitle = [
     templateName,
     kindLabel,
+    hasBriefing ? 'Has a briefing' : null,
     timeLabel,
     coaches.map((c) => (c.adjusted ? `${c.name} (${c.adjusted.title})` : c.name)).join(', '),
     status?.title,
@@ -112,6 +120,7 @@ export function shiftCardModel(block, assignments, staffing, { isManager = false
     shortLabel: `${formatTime12h(block?.start_time)} ${templateName} shift`,
     templateName,
     kindLabel,
+    hasBriefing,
     coaches,
     status,
     emptyText,
@@ -339,4 +348,52 @@ export function dayLeaveBars(timeOff, dateStr) {
       title: `${row.profiles?.full_name || 'Unknown'} — ${label}, ${range}${more}`,
     }
   })
+}
+
+/**
+ * AVAIL.1 — the unavailability bars of ONE day in the manager's week view:
+ * one per person with any rule that day, "Firstname · Unavailable 9am–12pm".
+ * The title has the full name, every rule and its note.
+ *
+ * Only people in `staff` (the studio's coaches, which the calendar already
+ * holds) are drawn: a rule for anyone else has no name to show. People in
+ * `skipProfileIds` are left out: the caller passes the day's leave bars, and
+ * leave already says more than "unavailable". ADVISORY: nothing is blocked
+ * by a bar. Pure.
+ *
+ * With `todayIso`, a WEEKLY rule is drawn only on today and later: it is
+ * what the coach says now about every such weekday, and on a past week it
+ * would claim an unavailability nobody declared then. Dated rules are about
+ * their own dates, so they are drawn on any day (the kept history rows).
+ *
+ * @param {Array} availability  flat rules from GET /api/schedule/availability?location_id=
+ * @param {string} dateStr YYYY-MM-DD
+ * @param {Array<{id:string, full_name:string}>} staff
+ * @returns {Array<{id:string, profileId:string, text:string, title:string}>}
+ */
+export function dayUnavailableBars(availability, dateStr, staff, { skipProfileIds = [], todayIso = null } = {}) {
+  const skip = new Set(skipProfileIds)
+  const pastDay = Boolean(todayIso) && dateStr < todayIso
+  const nameById = new Map((staff || []).map((s) => [s.id, s.full_name]))
+  const byPerson = new Map()
+  for (const rule of availability || []) {
+    const id = rule?.profile_id
+    if (!id || skip.has(id) || !nameById.has(id)) continue
+    if (pastDay && rule.kind === 'weekly') continue
+    if (!byPerson.has(id)) byPerson.set(id, [])
+    byPerson.get(id).push(rule)
+  }
+  const people = []
+  for (const [profileId, rules] of byPerson) {
+    const hits = unavailableFor(rules, dateStr)
+    if (hits) people.push({ profileId, fullName: nameById.get(profileId) || 'Unknown', hits })
+  }
+  people.sort((a, b) => a.fullName.localeCompare(b.fullName) || a.profileId.localeCompare(b.profileId))
+  const names = firstNames(people.map((p) => ({ profiles: { full_name: p.fullName } })))
+  return people.map((p, i) => ({
+    id: `unavail-${p.profileId}-${dateStr}`,
+    profileId: p.profileId,
+    text: `${names[i]} · Unavailable ${unavailableSummary(p.hits)}`,
+    title: `${p.fullName}: unavailable ${p.hits.map((r) => (r.note ? `${describeRule(r)} (${r.note})` : describeRule(r))).join('; ')}`,
+  }))
 }

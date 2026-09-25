@@ -242,4 +242,12 @@ describe('partialLoadLines', () => {
   it('nothing to say when nothing failed', () => {
     expect(partialLoadLines(null, { isManager: true })).toEqual([])
   })
+
+  it('names missing availability to a manager only (AVAIL.1)', () => {
+    expect(partialLoadLines({ availability: { kept: false } }, { isManager: true }))
+      .toEqual(['Availability could not be loaded, so unavailable coaches are not shaded or flagged.'])
+    expect(partialLoadLines({ availability: { kept: true } }, { isManager: true }))
+      .toEqual(['Availability could not be refreshed. Showing it as it last loaded.'])
+    expect(partialLoadLines({ availability: { kept: false } }, { isManager: false })).toEqual([])
+  })
 })

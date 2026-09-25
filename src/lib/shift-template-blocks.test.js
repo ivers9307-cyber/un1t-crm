@@ -15,8 +15,8 @@ describe('planBlockCapacityUpdates', () => {
   it('clamps the minimum at each block’s own ceiling, in groups', () => {
     const groups = planBlockCapacityUpdates(blocks, { minCoaches: 3 })
     expect(groups).toEqual([
-      { patch: { min_coaches: 3 }, ids: ['roomy'] },
-      { patch: { min_coaches: 2 }, ids: ['tight'] },
+      { patch: { min_coaches: 3 }, expect: { min_coaches: 1, max_coaches: 10 }, ids: ['roomy'] },
+      { patch: { min_coaches: 2 }, expect: { min_coaches: 1, max_coaches: 2 }, ids: ['tight'] },
       // `tighter` clamps to 1, which it already is, so it is not written.
     ])
   })
@@ -26,7 +26,7 @@ describe('planBlockCapacityUpdates', () => {
       [{ id: 'a', min_coaches: 1, max_coaches: 2 }, { id: 'b', min_coaches: 1, max_coaches: 2 }],
       { minCoaches: 5 },
     )
-    expect(groups).toEqual([{ patch: { min_coaches: 2 }, ids: ['a', 'b'] }])
+    expect(groups).toEqual([{ patch: { min_coaches: 2 }, expect: { min_coaches: 1, max_coaches: 2 }, ids: ['a', 'b'] }])
   })
 
   it('never writes a block whose value already matches', () => {
@@ -37,12 +37,26 @@ describe('planBlockCapacityUpdates', () => {
   // The same CHECK, from the other side: min 3 against a new max of 2.
   it('drags a block’s minimum down when the maximum is lowered under it, in one patch', () => {
     expect(planBlockCapacityUpdates([{ id: 'a', min_coaches: 3, max_coaches: 10 }], { maxCoaches: 2 }))
-      .toEqual([{ patch: { max_coaches: 2, min_coaches: 2 }, ids: ['a'] }])
+      .toEqual([{ patch: { max_coaches: 2, min_coaches: 2 }, expect: { min_coaches: 3, max_coaches: 10 }, ids: ['a'] }])
   })
 
   it('applies both at once when both are edited', () => {
     expect(planBlockCapacityUpdates([{ id: 'a', min_coaches: 1, max_coaches: 10 }], { minCoaches: 4, maxCoaches: 3 }))
-      .toEqual([{ patch: { max_coaches: 3, min_coaches: 3 }, ids: ['a'] }])
+      .toEqual([{ patch: { max_coaches: 3, min_coaches: 3 }, expect: { min_coaches: 1, max_coaches: 10 }, ids: ['a'] }])
+  })
+
+  // BLOCKEDIT.1 third check 2 — each group carries the values its blocks were
+  // READ with, and blocks read differently never share a statement, so the
+  // write can be guarded on them.
+  it('splits blocks that land on the same patch but were read with different values', () => {
+    const groups = planBlockCapacityUpdates(
+      [{ id: 'a', min_coaches: 1, max_coaches: 10 }, { id: 'b', min_coaches: 2, max_coaches: 10 }],
+      { maxCoaches: 8 },
+    )
+    expect(groups).toEqual([
+      { patch: { max_coaches: 8 }, expect: { min_coaches: 1, max_coaches: 10 }, ids: ['a'] },
+      { patch: { max_coaches: 8 }, expect: { min_coaches: 2, max_coaches: 10 }, ids: ['b'] },
+    ])
   })
 
   it('plans nothing when neither is being edited', () => {

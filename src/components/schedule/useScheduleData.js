@@ -59,6 +59,13 @@
 // time-off and holidays all run assertLocationAccess for the same location),
 // and a failed blocks read is fatal whatever its status. And spend is not
 // asked for at all by someone who cannot read it (`canReadSpend`).
+//
+// AVAIL.1 — a seventh read, `availability` (every active member's
+// unavailability rules bearing on the range, GET /api/schedule/availability
+// ?location_id=…). It is a side slice like spend and gated the same way: the
+// route is MANAGER_ROLES at the studio, so it is asked for only with
+// `canReadAvailability`, and a failed read is a named partial error. An
+// empty availability slice nobody mentions reads as "every coach is free".
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 
@@ -147,7 +154,7 @@ export async function readJson(url, options) {
   return data || {}
 }
 
-// ROSTERLOAD.1 — the five slices that no longer decide whether the roster
+// ROSTERLOAD.1 — the side slices (five, six with AVAIL.1) that no longer decide whether the roster
 // loaded. `scope` is what a held value must still match to be kept after its
 // read fails: the dates matter for leave, holidays and spend; templates and
 // the coach list do not depend on the dates, but they do belong to a location.
@@ -166,8 +173,13 @@ const SLICES = [
     scope: ({ locationId, range, spendReferenceDate }) => `${locationId}|${range}|${spendReferenceDate}`,
     apply: (res) => (res?.success ? res.data : null),
   },
+  // AVAIL.1 — every active member's unavailability bearing on the range.
+  // Manager-only (the route's gate), asked for only with canReadAvailability,
+  // the way spend is asked for only with canReadSpend. A null (not asked)
+  // applies as [] through listOf.
+  { key: 'availability', scope: ({ locationId, range }) => `${locationId}|${range}`, apply: listOf },
 ]
-const EMPTY = { templates: [], staff: [], timeOff: [], holidays: [], contractorSpend: null }
+const EMPTY = { templates: [], staff: [], timeOff: [], holidays: [], contractorSpend: null, availability: [] }
 
 // `canReadSpend` — ROSTERLOAD.1 (review B1): whether the caller may read
 // contractor spend at this location (the calendar passes its `isManager`, the
@@ -175,13 +187,18 @@ const EMPTY = { templates: [], staff: [], timeOff: [], holidays: [], contractorS
 // with NO request, and no partial error: nobody is told a figure they were
 // never meant to see is missing. Defaults to false, the side that cannot
 // fire a request the route will refuse.
-export function useScheduleData({ locationId, startDate, endDate, spendReferenceDate, canReadSpend = false }) {
+//
+// `canReadAvailability` — AVAIL.1: the same rule for the availability read.
+export function useScheduleData({
+  locationId, startDate, endDate, spendReferenceDate, canReadSpend = false, canReadAvailability = false,
+}) {
   const [blocks, setBlocks] = useState([])
   const [templates, setTemplates] = useState([])
   const [staff, setStaff] = useState([])
   const [timeOff, setTimeOff] = useState([])
   const [holidays, setHolidays] = useState([])
   const [contractorSpend, setContractorSpend] = useState(null)
+  const [availability, setAvailability] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [showingStaleData, setShowingStaleData] = useState(false)
@@ -239,10 +256,11 @@ export function useScheduleData({ locationId, startDate, endDate, spendReference
     const setters = {
       templates: setTemplates, staff: setStaff, timeOff: setTimeOff,
       holidays: setHolidays, contractorSpend: setContractorSpend,
+      availability: setAvailability,
     }
     try {
       // ROSTERLOAD.1 — allSettled, not all: one read failing no longer throws
-      // the other five away. The order below is the SLICES order after blocks.
+      // the others away. The order below is the SLICES order after blocks.
       const [blocksOutcome, ...sliceOutcomes] = await Promise.allSettled([
         readJson(`/api/schedule/blocks?location_id=${locationId}&start_date=${startDate}&end_date=${endDate}`),
         readJson(`/api/schedule/templates?location_id=${locationId}`),
@@ -258,6 +276,10 @@ export function useScheduleData({ locationId, startDate, endDate, spendReference
         // certain to be refused; `null` applies as "no spend figure".
         canReadSpend
           ? readJson(`/api/schedule/contractor-spend?location_id=${locationId}&reference_date=${spendReferenceDate}`)
+          : Promise.resolve(null),
+        // AVAIL.1 — likewise manager-only; `null` applies as "no rules".
+        canReadAvailability
+          ? readJson(`/api/schedule/availability?location_id=${locationId}&start_date=${startDate}&end_date=${endDate}`)
           : Promise.resolve(null),
       ])
       // allSettled never rejects, so this guard is now the ONLY one: a late
@@ -322,7 +344,7 @@ export function useScheduleData({ locationId, startDate, endDate, spendReference
       if (loadedRange.current !== requestedRange) {
         // As the old catch did for spend: whatever the range-scoped slices
         // hold may belong to another week, and nothing above got to judge.
-        for (const key of ['timeOff', 'holidays', 'contractorSpend']) {
+        for (const key of ['timeOff', 'holidays', 'contractorSpend', 'availability']) {
           setters[key](EMPTY[key])
           loadedScope.current[key] = null
         }
@@ -347,12 +369,12 @@ export function useScheduleData({ locationId, startDate, endDate, spendReference
         loadedRange.current = null
       }
     }
-  }, [locationId, startDate, endDate, spendReferenceDate, canReadSpend])
+  }, [locationId, startDate, endDate, spendReferenceDate, canReadSpend, canReadAvailability])
 
   useEffect(() => { refresh() }, [refresh])
 
   return {
-    blocks, templates, staff, timeOff, holidays, contractorSpend,
+    blocks, templates, staff, timeOff, holidays, contractorSpend, availability,
     loading, error, showingStaleData, partialErrors, successCount, refresh,
   }
 }

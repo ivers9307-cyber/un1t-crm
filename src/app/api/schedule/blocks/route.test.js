@@ -467,3 +467,31 @@ describe('POST /api/schedule/blocks — post-publish blocks join the roster', ()
     })
   })
 })
+
+// BLOCKEDIT.1 — the coach allow-list gains the briefing, and only the briefing:
+// block notes stay manager-only.
+describe('GET /api/schedule/blocks — briefing (BLOCKEDIT.1)', () => {
+  const WITH_BRIEFING = { ...PUBLISHED_BLOCK, briefing: 'Fire drill at 10' }
+
+  it("keeps the briefing in a coach's slim shape, and still no notes or capacity", async () => {
+    getCurrentUser.mockResolvedValue({ id: 'c', role: 'staff', profileRole: 'staff', rolesByLocation: { 'loc-1': 'staff' } })
+    createServerClient.mockReturnValue(buildDb([WITH_BRIEFING]))
+    const body = await (await GET(req())).json()
+    expect(body.data[0].briefing).toBe('Fire drill at 10')
+    expect('notes' in body.data[0]).toBe(false)
+    expect('max_coaches' in body.data[0]).toBe(false)
+  })
+
+  it('a block with no briefing reads null for a coach, not undefined', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'c', role: 'staff', profileRole: 'staff', rolesByLocation: { 'loc-1': 'staff' } })
+    createServerClient.mockReturnValue(buildDb([PUBLISHED_BLOCK]))
+    const body = await (await GET(req())).json()
+    expect(body.data[0].briefing).toBeNull()
+  })
+
+  it('a manager gets it through the unchanged `*`', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'm', role: 'manager', profileRole: 'manager', rolesByLocation: { 'loc-1': 'manager' } })
+    createServerClient.mockReturnValue(buildDb([WITH_BRIEFING]))
+    expect((await (await GET(req())).json()).data[0].briefing).toBe('Fire drill at 10')
+  })
+})

@@ -5,6 +5,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { timeRange, dublinTodayIso } from '../../lib/dates'
 import { effShiftStart, effShiftEnd, initials } from '../../lib/schedule-team'
 import { blockFillState, emptyBlockText, liveBlockAssignments, assignmentWindow } from '../../lib/schedule-manage'
+import { briefingOf } from 'shared/shift-briefing'
 
 // MOBILESCHED.2 — empty and short are different chips, as on the web calendar:
 // red "No coach", amber "1 of 2". Over capacity stays red. SHIFTTYPE.1 — an
@@ -17,6 +18,7 @@ export default function BlockCard({ block, busy, onAddCoach, onCoachPress }) {
   // Live coaches only: a cancelled row is a tombstone, not someone on the shift.
   const coaches = liveBlockAssignments(block)
   const fill = blockFillState(block, dublinTodayIso())
+  const briefing = briefingOf(block)
   return (
     <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 mb-2">
       <View className="flex-row items-center justify-between mb-2">
@@ -31,6 +33,13 @@ export default function BlockCard({ block, busy, onAddCoach, onCoachPress }) {
           {timeRange(effShiftStart(block), effShiftEnd(block))}
         </Text>
       </View>
+      {/* BLOCKEDIT.1 — the shift's briefing, as its coaches read it. Edited on the web. */}
+      {briefing ? (
+        <View className="flex-row items-start mb-2">
+          <Ionicons name="document-text-outline" size={13} color="#64748B" />
+          <Text className="text-[12px] text-un1t-text ml-1 flex-1" numberOfLines={3}>{briefing}</Text>
+        </View>
+      ) : null}
 
       {coaches.length === 0 ? (
         <Text className="text-[12px] text-un1t-muted italic mb-1">{emptyBlockText(block)}</Text>

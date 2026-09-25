@@ -260,3 +260,51 @@ describe('ROSTER_CHANGE_LOG_MAX_ROWS', () => {
     expect(ROSTER_CHANGE_LOG_MAX_ROWS % 1000).toBe(0)
   })
 })
+// BLOCKEDIT.1
+describe('rosterChangeSentence — block edits', () => {
+  it("a coach moved by a shift edit reads like a template edit, labelled (shift edited)", () => {
+    expect(rosterChangeSentence(row({
+      action: 'time_changed', start_time: '07:00:00', end_time: '11:00:00',
+      details: { source: 'block_edit', from: { start_time: '06:00:00', end_time: '10:00:00' }, to: { start_time: '07:00:00', end_time: '11:00:00' } },
+    }))).toBe("Moved Coach A's Tue 15 Sep 6am shift to 7am–11am (shift edited)")
+  })
+
+  it('the coachless row lists what changed, naming the shift by its OLD time', () => {
+    expect(rosterChangeSentence(row({
+      action: 'block_edited', coach_name: null, start_time: '07:00:00',
+      details: {
+        source: 'block_edit',
+        from: { start_time: '06:00:00', end_time: '10:00:00' }, to: { start_time: '07:00:00', end_time: '11:00:00' },
+        min_coaches: { from: 1, to: 2 }, max_coaches: { from: 4, to: 3 }, briefing: 'added',
+      },
+    }))).toBe('Edited the Tue 15 Sep 6am Morning shift: times to 7am–11am, minimum 1 to 2, maximum 4 to 3, briefing added')
+  })
+
+  it('says only what it can read', () => {
+    expect(rosterChangeSentence(row({ action: 'block_edited', details: { briefing: 'removed' } })))
+      .toBe('Edited the Tue 15 Sep 6am Morning shift: briefing removed')
+    expect(rosterChangeSentence(row({ action: 'block_edited', details: { min_coaches: { from: null, to: 2 } } })))
+      .toBe('Edited the Tue 15 Sep 6am Morning shift')
+    expect(rosterChangeSentence(row({ action: 'block_edited', block_date: null, details: {} })))
+      .toBe('Edited a shift')
+  })
+})
+
+describe('stampMeansTold — block edits', () => {
+  it('a block_edited row has no told state: nobody is messaged about it', () => {
+    const c = row({ action: 'block_edited', coach_name: null })
+    expect(stampMeansTold(c)).toBe(false)
+    expect(rosterChangeTold(c)).toBeNull()
+  })
+
+  it("a row the notice arm stamped without a message (notice: 'not_needed') has no told state", () => {
+    const c = row({ action: 'time_changed', details: { source: 'block_edit', notice: 'not_needed' } })
+    expect(stampMeansTold(c)).toBe(false)
+  })
+
+  it('a delivered block-edit notice is told', () => {
+    const c = row({ action: 'time_changed', details: { source: 'block_edit', from: { start_time: '06:00:00', end_time: '10:00:00' }, to: { start_time: '07:00:00', end_time: '11:00:00' } } })
+    expect(stampMeansTold(c)).toBe(true)
+    expect(rosterChangeTold(c)).toBe('told 14:02')
+  })
+})

@@ -40,6 +40,8 @@ const REASON_NOTE = {
   replace_undone: 'coach replaced, then undone before anyone was told', // REPLACE.1a
 }
 
+const BRIEFING_NOTE = { added: 'briefing added', changed: 'briefing changed', removed: 'briefing removed' }
+
 // ── A stamp is not always a message ─────────────────────────────────────────
 //
 // notified_at means "the re-publish safety net must not message this coach
@@ -59,11 +61,20 @@ const REASON_NOTE = {
 //      future ones only).
 //   4. notifyRosterChanges, coach === actor: they made the change themselves,
 //      so there was nobody to tell. The API row carries it as `self_change`.
-//   6. REPLACE.1a, the held replace-notice arm (shift-replace-notify.js): a
+//   (6 and 7 are numbered after writer 5 below so references to rules 1-5
+//   elsewhere stay true.)
+//   6. BLOCKEDIT.1 (mig 629): action 'block_edited', a coachless row per edit
+//      of a published shift, stamped in the INSERT by logBlockEdit. There is
+//      no coach, so there is never a told state.
+//   7. BLOCKEDIT.1: block-edit-notify.js stamps a 'time_changed' row it
+//      decided NOT to send (coach no longer on the shift, shift gone or
+//      started, net change nothing) and marks it details.notice =
+//      'not_needed'.
+//   8. REPLACE.1a, the held replace-notice arm (shift-replace-notify.js): a
 //      coach replaced and put back before their held notice went out nets to
 //      nothing, so those rows are stamped with no message and marked
 //      details.reason = 'replace_undone' in the same UPDATE (checked with
-//      rule 1, by reason). Numbered after 5, the always-told writer below.
+//      rule 1, by reason).
 //
 // For these the drawer shows NO told state, rather than a time nobody was told at.
 //
@@ -131,6 +142,7 @@ function lookup(table, key) {
 }
 
 function howNote(details) {
+  if (details?.source === 'block_edit') return ' (shift edited)'
   if (details?.source === 'template_edit') return ' (template edited)'
   const text = lookup(REASON_NOTE, details?.reason) || lookup(VIA_NOTE, details?.via)
   return text ? ` (${text})` : ''
@@ -170,6 +182,26 @@ export function rosterChangeSentence(change) {
     return `Changed ${coach}'s hours on ${when}`
   }
 
+  if (c.action === 'block_edited') {
+    // The block has already moved, so its row start_time is the NEW one.
+    // Name the shift by the time it USED to be, as the template edit does.
+    const day = dayLabel(c.block_date)
+    if (!day) return 'Edited a shift'
+    const was = whenLabel(c.block_date, timeLabel(d.from?.start_time) ? d.from.start_time : c.start_time)
+    const subject = `the ${was}${c.shift_name ? ` ${c.shift_name}` : ''} shift`
+    const parts = []
+    const toStart = timeLabel(d.to?.start_time)
+    const toEnd = timeLabel(d.to?.end_time)
+    if (toStart && toEnd) parts.push(`times to ${toStart}–${toEnd}`)
+    for (const [key, word] of [['min_coaches', 'minimum'], ['max_coaches', 'maximum']]) {
+      const pair = d[key]
+      if (Number.isInteger(pair?.from) && Number.isInteger(pair?.to)) parts.push(`${word} ${pair.from} to ${pair.to}`)
+    }
+    const briefing = lookup(BRIEFING_NOTE, d.briefing)
+    if (briefing) parts.push(briefing)
+    return parts.length ? `Edited ${subject}: ${parts.join(', ')}` : `Edited ${subject}`
+  }
+
   return `Changed ${coach}'s shift on ${when}`
 }
 
@@ -193,6 +225,8 @@ export function stampMeansTold(change) {
   const c = change || {}
   const d = c.details || {}
   if (NO_MESSAGE_REASONS.includes(d.reason)) return false
+  if (c.action === 'block_edited') return false
+  if (d.notice === 'not_needed') return false
   if (d.via === 'swap_drop' && 'roster_status' in d && d.roster_status !== 'published') return false
   if (isDeliveredTimeEdit(c, d)) return true
   if (c.self_change === true) return false
