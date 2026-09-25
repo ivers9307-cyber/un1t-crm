@@ -179,6 +179,13 @@ describe('mig 641 — claim_shift_offer', () => {
     expect(await offerRow(id)).toMatchObject({ notice_attempts: 0, notice_lease_until: null })
   })
 
+  it('review 5 — the SAME claimer\'s second claim is theirs, not "someone else\'s": offer_already_yours', async () => {
+    const id = await offer(BLK)
+    await claim(id, C1)
+    await expect(claim(id, C1)).rejects.toThrow(/^offer_already_yours/)
+    expect(await liveOn(BLK)).toEqual([C1])
+  })
+
   it('the second claimer reads the first one\'s lock: offer_not_open, nothing inserted', async () => {
     const id = await offer(BLK)
     await claim(id, C1)

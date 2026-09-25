@@ -78,7 +78,7 @@ describe('offerClaimRefusal (unavailability does NOT block: claiming says you ar
   it('leave, a clash, already on it, not a member', () => {
     expect(ask('c2')).toEqual({ status: 409, code: 'leave', error: "You're on approved leave that day, so you can't take this shift." })
     expect(ask('c3')).toEqual({ status: 409, code: 'overlap', error: "You're already on another shift at that time." })
-    expect(ask('c5')).toEqual({ status: 409, code: 'on_block', error: 'You are already on this shift.' })
+    expect(ask('c5')).toEqual({ status: 409, code: 'on_block', error: 'You already have this shift.' })
     expect(ask('stranger')).toEqual({ status: 403, code: 'not_member', error: 'You are not on the staff of this studio.' })
   })
   it('never a claim on a guess: an unreadable answer, or shifts / other studios / leave unchecked, is 503', () => {
@@ -196,8 +196,10 @@ describe('offerClaimRpcError', () => {
     expect(offerClaimRpcError(e('offer_not_found: x')).status).toBe(404)
     expect(offerClaimRpcError(e('offer_not_published: x')).status).toBe(409)
     expect(offerClaimRpcError(e('offer_not_eligible: x')).status).toBe(403)
-    expect(offerClaimRpcError(e('offer_already_on: x'))).toEqual({ status: 409, error: 'You are already on this shift.' })
-    expect(offerClaimRpcError(e('dup', '23505'))).toEqual({ status: 409, error: 'You are already on this shift.' })
+    expect(offerClaimRpcError(e('offer_already_on: x'))).toEqual({ status: 409, error: 'You already have this shift.' })
+    expect(offerClaimRpcError(e('dup', '23505'))).toEqual({ status: 409, error: 'You already have this shift.' })
+    // Review 5 — the same coach's second tap: theirs, not "someone else".
+    expect(offerClaimRpcError(e('offer_already_yours: x'))).toEqual({ status: 409, error: 'You already have this shift.' })
     expect(offerClaimRpcError(e('claimant_overlap: x'))).toEqual({ status: 409, error: "You're already on another shift at that time." })
     expect(offerClaimRpcError(e('boom', 'XX000'))).toEqual({ status: 500, error: 'Could not claim the shift.' })
   })

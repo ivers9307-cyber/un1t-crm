@@ -71,6 +71,20 @@ describe('POST /api/schedule/offers/[id]/claim', () => {
     expect((await res.json()).error).toBe('Someone else has just taken this shift.')
   })
 
+  it('review 5 — the same coach\'s second tap on an offer they already won: "You already have this shift."', async () => {
+    readOffer.mockResolvedValue({ offer: { ...OFFER, status: 'claimed', claimed_by: 'c1' }, error: null })
+    let res = await call()
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toBe('You already have this shift.')
+    // …and the race where both taps passed the read: the database says it.
+    readOffer.mockResolvedValue({ offer: OFFER, error: null })
+    claimOffer.mockResolvedValue({ result: null, error: { code: 'P0001', message: 'offer_already_yours: the claimant already holds this offer' } })
+    res = await call()
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toBe('You already have this shift.')
+    expect(logRosterChange).not.toHaveBeenCalled()
+  })
+
   it('a started shift is 409, nothing claimed', async () => {
     vi.setSystemTime(Date.parse('2026-09-29T05:00:00Z'))
     expect((await call()).status).toBe(409)

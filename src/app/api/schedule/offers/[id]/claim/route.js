@@ -55,6 +55,10 @@ export async function POST(_request, props) {
   const notHere = assertLocationAccessOr404(user, offer.location_id)
   if (notHere) return notHere
 
+  // Review 5 — the same coach's second tap on an offer they already won.
+  if (offer.status === 'claimed' && offer.claimed_by === user.id) {
+    return NextResponse.json({ success: false, error: 'You already have this shift.' }, { status: 409 })
+  }
   if (offer.status !== 'open') {
     return NextResponse.json({ success: false, error: CLOSED_WORDS[offer.status] || 'This shift is no longer on offer.' }, { status: 409 })
   }

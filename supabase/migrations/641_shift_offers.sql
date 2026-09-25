@@ -53,7 +53,8 @@
 --    its lock and must still name the locked shift.
 --    Errors: P0001 with a message prefix the route maps: offer_bad_request,
 --    offer_not_found, offer_not_open, offer_not_published,
---    offer_not_eligible, offer_already_on, claimant_overlap.
+--    offer_not_eligible, offer_already_on, offer_already_yours (the same
+--    claimer's second tap), claimant_overlap.
 --    Per-claimant advisory lock + overlap check (review 5): the same coach
 --    claiming two overlapping offers at once serialises on
 --    pg_advisory_xact_lock('claim_shift_offer:' || profile), taken before any
@@ -183,6 +184,10 @@ BEGIN
   SELECT * INTO v_offer FROM public.shift_offers WHERE id = p_offer_id FOR UPDATE;
   IF NOT FOUND OR v_offer.block_id IS DISTINCT FROM v_block_id THEN
     RAISE EXCEPTION 'offer_not_found: offer % does not exist', p_offer_id;
+  END IF;
+  -- The same claimer's second tap (review 5): theirs, not "someone else's".
+  IF v_offer.status = 'claimed' AND v_offer.claimed_by = p_profile_id THEN
+    RAISE EXCEPTION 'offer_already_yours: the claimant already holds this offer';
   END IF;
   IF v_offer.status <> 'open' THEN
     RAISE EXCEPTION 'offer_not_open: offer is already %', v_offer.status;

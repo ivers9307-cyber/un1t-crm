@@ -39,6 +39,10 @@ export const OFFER_TAKEN_MAX_AGE_MS = 24 * 60 * 60 * 1000
 /** CANDIDATES.1 tiers that are "free, not on leave, not unavailable". */
 export const OFFER_TIERS = Object.freeze(['ready', 'advisory'])
 
+// Review 5 — the words for "this shift is already on your roster": a second
+// tap, a double claim, or a manager who assigned you first. Never "someone else".
+const ALREADY_YOURS = 'You already have this shift.'
+
 // The facts that decide default 6. contract only ranks, so it never blocks.
 const DECIDING_FACTS = ['shifts', 'cross_studio', 'leave', 'availability']
 // The facts that decide a CLAIM (availability does not block one).
@@ -85,7 +89,7 @@ export function offerClaimRefusal(result, { profileId, liveOnBlockIds = [] }) {
     // loadBlockCandidates lists rosterable members NOT on the shift, so an
     // absent caller is either on it already or not a member here.
     return liveOnBlockIds.includes(profileId)
-      ? { status: 409, code: 'on_block', error: 'You are already on this shift.' }
+      ? { status: 409, code: 'on_block', error: ALREADY_YOURS }
       : { status: 403, code: 'not_member', error: 'You are not on the staff of this studio.' }
   }
   if (c.on_leave) return { status: 409, code: 'leave', error: "You're on approved leave that day, so you can't take this shift." }
@@ -183,7 +187,7 @@ export const offerNoticeKey = (kind, offerId, attempt) => `shift_offer_${kind}:$
 
 /** claim_shift_offer error -> { status, error }. */
 export function offerClaimRpcError(err) {
-  if (err?.code === '23505') return { status: 409, error: 'You are already on this shift.' }
+  if (err?.code === '23505') return { status: 409, error: ALREADY_YOURS }
   const msg = String(err?.message || '')
   switch (msg.split(':')[0]) {
     case 'offer_not_open':
@@ -191,7 +195,8 @@ export function offerClaimRpcError(err) {
     case 'offer_not_found': return { status: 404, error: 'Offer not found' }
     case 'offer_not_published': return { status: 409, error: 'This shift is no longer on offer.' }
     case 'offer_not_eligible': return { status: 403, error: 'You are not on the staff of this studio.' }
-    case 'offer_already_on': return { status: 409, error: 'You are already on this shift.' }
+    case 'offer_already_on':
+    case 'offer_already_yours': return { status: 409, error: ALREADY_YOURS }
     case 'claimant_overlap': return { status: 409, error: "You're already on another shift at that time." }
     default: return { status: 500, error: 'Could not claim the shift.' }
   }
