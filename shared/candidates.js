@@ -45,7 +45,7 @@ export const CANDIDATE_TIERS = Object.freeze(['ready', 'advisory', 'unavailable'
 const CANDIDATE_TONES = Object.freeze({ ready: 'good', advisory: 'warn', unavailable: 'muted', blocked: 'bad' })
 
 export const CANDIDATES_RANKING_NOTE = 'Ranking coaches…'
-export const CANDIDATES_UNRANKED_NOTE = 'Coaches could not be ranked, so they are listed A–Z.'
+export const CANDIDATES_UNRANKED_NOTE = 'Coaches could not be checked or ranked, so they are listed A–Z.'
 
 const MINUTE_MS = 60 * 1000
 const DAY_MS = 24 * 60 * MINUTE_MS

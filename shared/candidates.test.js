@@ -121,7 +121,7 @@ describe('words', () => {
     expect(candidatesUncheckedNote({ shifts: true })).toBeNull()
     expect(candidatesUncheckedNote(undefined)).toBeNull()
     expect(CANDIDATES_RANKING_NOTE).toBe('Ranking coaches…')
-    expect(CANDIDATES_UNRANKED_NOTE).toBe('Coaches could not be ranked, so they are listed A–Z.')
+    expect(CANDIDATES_UNRANKED_NOTE).toBe('Coaches could not be checked or ranked, so they are listed A–Z.')
   })
 })
 
