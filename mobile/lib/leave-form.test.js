@@ -235,7 +235,7 @@ describe('leaveFloatingButtons — do "My leave" and "Request time off" fit side
       requestIcon: 'time-outline', requestTarget: '/schedule/availability', myLeaveLabel: 'My leave',
     })
     expect(leaveFloatingButtons({ width: 320, fontScale: 1, employmentType: 'casual' }))
-      .toMatchObject({ compact: true, requestLabel: 'Availability', requestTarget: '/schedule/availability' })
+      .toMatchObject({ compact: true, requestLabel: 'Avail.', requestTarget: '/schedule/availability' })
   })
   it('a 360pt phone, or larger text on a 390pt one, shortens the visible label only', () => {
     for (const dims of [{ width: 360, fontScale: 1 }, { width: 390, fontScale: 1.3 }, { width: 320, fontScale: 1 }]) {
@@ -269,9 +269,23 @@ describe('leaveRequestEntry', () => {
   it('a contractor or casual staff member is sent to My availability', () => {
     for (const et of ['contractor', 'casual']) {
       expect(leaveRequestEntry(et)).toEqual({
-        target: '/schedule/availability', label: 'My availability', shortLabel: 'Availability',
+        target: '/schedule/availability', label: 'My availability', shortLabel: 'Avail.',
         a11y: 'My availability, when you can’t work', icon: 'time-outline', rowIcon: 'time-outline',
       })
+    }
+  })
+})
+
+// AVAIL.3 review N9 — the compact label is what is left at the LARGEST text
+// sizes, where the row wraps and each button sits alone. "Availability" (12
+// characters) overflowed its own row there on a 375pt phone by the file's
+// estimate; the compact labels must be no longer than "Time off", the label
+// that estimate was made for. The screen reader always hears the full name.
+describe('the compact labels fit where "Time off" fits', () => {
+  it('no compact request label is longer than "Time off"', () => {
+    for (const et of ['fte', 'contractor', 'casual', null]) {
+      expect(leaveRequestEntry(et).shortLabel.length).toBeLessThanOrEqual('Time off'.length)
+      expect(leaveFloatingButtons({ width: 320, fontScale: 3.1, employmentType: et }).requestA11y).toBe(leaveRequestEntry(et).a11y)
     }
   })
 })

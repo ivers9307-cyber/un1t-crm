@@ -179,6 +179,17 @@ export function leaveSubmittedMessage({ type, startIso, endIso, days, clashCount
 // accessibility label never does. The row also wraps (the screen's container
 // is flex-wrap), which is the net for the largest accessibility text sizes
 // that even the short labels overflow.
+//
+// AVAIL.3 (review N9) — the compact label is the one left at the LARGEST
+// sizes, so it is checked there. 190pt for the 24 characters of the two full
+// labels is ~7.9pt a character at 1.0; each button's own chrome (padding,
+// icon, gap) is ~66pt and does not scale; the row's margins take 48pt. At the
+// largest iOS accessibility size (fontScale ~3.1) on a 375pt phone, a button
+// alone on its wrapped row has 327pt: "Time off" (8) needs ~262pt and fits;
+// "Availability" (12) needed ~360pt and overflowed. So a contractor's
+// compact label is "Avail." (6), and no compact label may be longer than
+// "Time off" (pinned in the test). "My availability" (15) is one character
+// shorter than "Request time off", so the full-label estimate holds as is.
 const FLOATING_TEXT_PT = 190
 const FLOATING_CHROME_PT = 190
 
@@ -187,7 +198,7 @@ export function leaveFloatingButtons({ width, fontScale, employmentType } = {}) 
   const scale = Number(fontScale) > 0 ? Number(fontScale) : 1
   const compact = !(Number.isFinite(w) && w >= FLOATING_TEXT_PT * scale + FLOATING_CHROME_PT)
   // AVAIL.3 — "My availability" is one character shorter than "Request time
-  // off", so the same width estimate holds for both.
+  // off", so the same width estimate holds for both (compact: see above).
   const entry = leaveRequestEntry(employmentType)
   return {
     compact,
@@ -216,7 +227,7 @@ export function leaveRequestEntry(employmentType) {
     }
   }
   return {
-    target: '/schedule/availability', label: 'My availability', shortLabel: 'Availability',
+    target: '/schedule/availability', label: 'My availability', shortLabel: 'Avail.',
     a11y: 'My availability, when you can’t work', icon: 'time-outline', rowIcon: 'time-outline',
   }
 }
