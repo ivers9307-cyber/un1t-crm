@@ -455,13 +455,12 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
   // availability overlay applies the Days view's own per-day rule
   // (dayAvailabilityRules, todayIso) so the two layouts cannot disagree.
   const showCoachGrid = isManager && viewType === 'week' && rosterLayout === 'coaches'
-  const weekStartIso = formatDate(weekStart)
   const { grid: gridData, gridError, gridLoading, refreshGrid } = useRosterGrid({
-    locationId, weekStart: weekStartIso, enabled: showCoachGrid,
+    locationId, weekStart: formatDate(weekStart), enabled: showCoachGrid,
   })
   const rosterGridModel = useMemo(
-    () => (gridData ? buildRosterGrid({ weekStart: weekStartIso, grid: gridData, timeOff, availability, todayIso: todayStr }) : null),
-    [gridData, weekStartIso, timeOff, availability, todayStr],
+    () => (gridData ? buildRosterGrid({ weekStart: formatDate(weekStart), grid: gridData, timeOff, availability, todayIso: todayStr }) : null),
+    [gridData, weekStart, timeOff, availability, todayStr],
   )
   // Dismissed separately from the hook's own state so the operator can clear a
   // banner without it reappearing until the next failure.
