@@ -84,7 +84,9 @@
 --                           save would be refused)
 --   avail3_too_many_dates   more than 60 current dated rules for one person
 --                           (AVAILABILITY_LIMITS.dated: same reason)
--- All four were 0 on 25 Sep.
+--   avail3_fk_into_time_off a foreign key references time_off_requests (a
+--                           moved row is DELETED; checked before anything)
+-- All five were 0 on 25 Sep.
 --
 -- ORDER: (1) the AVAIL.3 code deploys (the POST then refuses the type, so
 -- nothing can be filed behind the move); (2) this file is applied (installs
@@ -110,6 +112,7 @@
 --     crm.repset.ie tab, POST /api/schedule/time-off
 --     {"type":"unavailable","start_date":"<tomorrow>","end_date":"<tomorrow>"}
 --     answers 400 "Unavailable is no longer a time-off request…".
+--     And no foreign key points INTO time_off_requests (see (g); 0 rows).
 -- (c) THE CARRY SET, row by row (ids and shapes only, no names):
 --       WITH t AS (SELECT (now() AT TIME ZONE 'Europe/Dublin')::date AS d)
 --       SELECT r.id, r.profile_id, r.location_id, r.status, r.start_date, r.end_date, r.total_days,
@@ -164,6 +167,11 @@
 --          AND pg_get_functiondef('public.update_holiday_allowance()'::regprocedure)
 --              LIKE '%NEW.type = ''holiday'' AND OLD.status = ''approved''%';
 --     Expected: one row, trg_update_holiday_allowance AFTER UPDATE; true.
+--     AND nothing references the table (a moved row is DELETED; the move
+--     itself also aborts with avail3_fk_into_time_off if this is not 0):
+--       SELECT conrelid::regclass, conname FROM pg_constraint
+--        WHERE contype = 'f' AND confrelid = 'public.time_off_requests'::regclass;
+--     Expected: 0 rows.
 -- (h) Advisor baseline: get_advisors(security) rls_enabled_no_policy count.
 --
 -- ─────────────────────────────────────────────────────────────────────────
@@ -272,13 +280,27 @@ DECLARE
   v_split  int;
   v_rules  int;
   v_people int;
+  v_fks    text;
 BEGIN
   IF p_today IS NULL THEN
     RAISE EXCEPTION 'avail3_bad_args: today is required';
   END IF;
 
   -- Nothing else writes time_off_requests while this runs (reads carry on).
+  -- The same lock mode that adding a foreign key needs, so none can appear
+  -- between the check below and the DELETE.
   LOCK TABLE public.time_off_requests IN SHARE ROW EXCLUSIVE MODE;
+
+  -- 0. The DELETE of a moved row is only safe while NOTHING references
+  --    time_off_requests (none did on 25 Sep): an FK would either cascade,
+  --    silently deleting its rows, or refuse halfway. Any FK aborts the move.
+  SELECT string_agg(format('%s.%s', c.conrelid::regclass, c.conname), ', ' ORDER BY c.conname)
+    INTO v_fks
+    FROM pg_catalog.pg_constraint c
+   WHERE c.contype = 'f' AND c.confrelid = 'public.time_off_requests'::regclass;
+  IF v_fks IS NOT NULL THEN
+    RAISE EXCEPTION 'avail3_fk_into_time_off: % references time_off_requests; a moved row is DELETED, so decide what those rows need first', v_fks;
+  END IF;
 
   -- 1. THE CARRY SET, recorded in full before anything changes.
   INSERT INTO public.time_off_availability_moves

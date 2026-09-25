@@ -371,6 +371,15 @@ describe('migration 631 — guards abort the whole move', () => {
     expect(await rowJson(R.FUTURE)).not.toBeNull()
   }))
 
+  // Review D3 — a DELETE is only safe while nothing references the table: an
+  // FK would either cascade (silently deleting its rows) or refuse mid-move.
+  it('a foreign key into time_off_requests', () => inTx(async () => {
+    await runSql(`CREATE TABLE public.leave_notes (id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+                    time_off_request_id uuid REFERENCES public.time_off_requests(id) ON DELETE CASCADE)`)
+    await expectRaise(MOVE_SQL, [TODAY], /avail3_fk_into_time_off: .*leave_notes/)
+    await nothingMoved()
+  }))
+
   it('no today', () => inTx(async () => {
     await expectRaise('SELECT public.move_unavailable_time_off_to_availability(NULL)', [], /avail3_bad_args/)
   }))
