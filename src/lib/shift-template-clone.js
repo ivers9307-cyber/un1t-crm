@@ -7,6 +7,11 @@
 // below. Keep the database OUT of this file: check:location-scoping reads route
 // and page files only, so a query moved in here would be invisible to it.
 
+// Both client-safe: role-at-location exists so a client component can ask the
+// route's question (ROSTERROLE.1), and schemas is already in the browser bundle.
+import { hasRoleAtLocation } from './role-at-location'
+import { MANAGER_ROLES } from './schemas'
+
 /**
  * The columns a copy carries across.
  *
@@ -155,4 +160,45 @@ export function organizationCheck(locationRows, fromLocationId, toLocationId) {
   if (!from || !to) return 'not_found'
   if (!from.organization_id || !to.organization_id) return 'cross_org'
   return from.organization_id === to.organization_id ? 'same_org' : 'cross_org'
+}
+
+/**
+ * The studios the template manager may offer as a source for a copy INTO
+ * `targetLocationId`: same organisation (both ids present and equal), and the
+ * caller holds a manager role AT BOTH (hasRoleAtLocation: master passes, the
+ * active studio's `user.role` is never read). This only decides what the
+ * screen offers; the route re-checks every part of it.
+ *
+ * @returns {Array<{ id: string, name: string }>} sorted by name
+ */
+export function cloneSourceStudios(user, targetLocationId) {
+  const locations = user?.locations || []
+  const target = locations.find((l) => l?.id === targetLocationId)
+  if (!target?.organization_id) return []
+  if (!hasRoleAtLocation(user, targetLocationId, MANAGER_ROLES)) return []
+  return locations
+    .filter((l) => l?.id
+      && l.id !== targetLocationId
+      && l.organization_id
+      && l.organization_id === target.organization_id
+      && hasRoleAtLocation(user, l.id, MANAGER_ROLES))
+    .map((l) => ({ id: l.id, name: l.name || 'Another studio' }))
+    .sort((a, b) => a.name.localeCompare(b.name))
+}
+
+/** The one-line outcome the template manager shows after a copy. */
+export function cloneResultNotice(result, fromName = 'the other studio') {
+  const created = result?.created || []
+  const skipped = result?.skipped || []
+  const blocks = result?.generated_blocks || 0
+  const n = created.length
+  const parts = [n === 0
+    ? `Nothing was copied from ${fromName}.`
+    : `Copied ${n} template${n === 1 ? '' : 's'} from ${fromName}.`]
+  if (skipped.length > 0) {
+    const reasons = [...new Set(skipped.map((s) => CLONE_SKIP_LABELS[s.reason] || s.reason))]
+    parts.push(`${skipped.length} skipped: ${reasons.join('; ')}.`)
+  }
+  if (blocks > 0) parts.push(`${blocks} empty shift${blocks === 1 ? '' : 's'} added over the next 8 weeks.`)
+  return parts.join(' ')
 }

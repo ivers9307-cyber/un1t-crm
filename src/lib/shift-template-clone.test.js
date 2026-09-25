@@ -9,6 +9,8 @@ import {
   templateNameKey,
   planTemplateClone,
   organizationCheck,
+  cloneSourceStudios,
+  cloneResultNotice,
 } from './shift-template-clone'
 
 const src = (over = {}) => ({
@@ -160,5 +162,72 @@ describe('organizationCheck', () => {
   it('a studio missing from the rows is not_found', () => {
     expect(organizationCheck([A], 'studio-a', 'studio-b')).toBe('not_found')
     expect(organizationCheck(null, 'studio-a', 'studio-b')).toBe('not_found')
+  })
+})
+
+describe('cloneSourceStudios', () => {
+  const A = { id: 'studio-a', name: 'Studio A', organization_id: 'org-1' }
+  const B = { id: 'studio-b', name: 'Studio B', organization_id: 'org-1' }
+  const C = { id: 'studio-c', name: 'Studio C', organization_id: 'org-1' }
+  const X = { id: 'studio-x', name: 'Studio X', organization_id: 'org-2' }
+  const member = (locations, rolesByLocation) => ({ id: 'u1', profileRole: 'staff', locations, rolesByLocation })
+
+  it('offers a sibling studio the caller manages', () => {
+    expect(cloneSourceStudios(member([A, B], { 'studio-a': 'manager', 'studio-b': 'head_coach' }), 'studio-b'))
+      .toEqual([{ id: 'studio-a', name: 'Studio A' }])
+  })
+
+  it('never offers a studio in another organisation, even to a master', () => {
+    const master = { id: 'm', profileRole: 'master', locations: [C, X, A, B], rolesByLocation: {} }
+    expect(cloneSourceStudios(master, 'studio-b')).toEqual([
+      { id: 'studio-a', name: 'Studio A' },
+      { id: 'studio-c', name: 'Studio C' },
+    ])
+  })
+
+  it('never offers a sibling where the caller is only staff', () => {
+    expect(cloneSourceStudios(member([A, B], { 'studio-a': 'staff', 'studio-b': 'manager' }), 'studio-b')).toEqual([])
+  })
+
+  it('offers nothing when the caller does not manage the studio on screen', () => {
+    expect(cloneSourceStudios(member([A, B], { 'studio-a': 'manager', 'studio-b': 'staff' }), 'studio-b')).toEqual([])
+  })
+
+  it('offers nothing when an organisation cannot be read, on either side', () => {
+    const noOrgTarget = { ...B, organization_id: null }
+    expect(cloneSourceStudios(member([A, noOrgTarget], { 'studio-a': 'manager', 'studio-b': 'manager' }), 'studio-b')).toEqual([])
+    const noOrgSource = { ...A, organization_id: undefined }
+    expect(cloneSourceStudios(member([noOrgSource, B], { 'studio-a': 'manager', 'studio-b': 'manager' }), 'studio-b')).toEqual([])
+  })
+
+  it('a user with no locations (the old test fixtures) is offered nothing', () => {
+    expect(cloneSourceStudios({ id: 'u1', role: 'manager', activeLocation: { id: 'loc1' } }, 'loc1')).toEqual([])
+    expect(cloneSourceStudios(null, 'loc1')).toEqual([])
+  })
+})
+
+describe('cloneResultNotice', () => {
+  const made = (name) => ({ id: `new-${name}`, source_id: `src-${name}`, name })
+
+  it('counts what was copied and the shifts it put on the calendar', () => {
+    expect(cloneResultNotice({ created: [made('Early'), made('Late')], skipped: [], generated_blocks: 16 }, 'Studio A'))
+      .toBe('Copied 2 templates from Studio A. 16 empty shifts added over the next 8 weeks.')
+  })
+
+  it('names each skip reason once', () => {
+    expect(cloneResultNotice({
+      created: [made('Early')],
+      skipped: [
+        { source_id: 's2', name: 'Late', reason: 'name_exists' },
+        { source_id: 's3', name: 'Mid', reason: 'name_exists' },
+        { source_id: 's4', name: 'Old', reason: 'inactive' },
+      ],
+      generated_blocks: 0,
+    }, 'Studio A')).toBe('Copied 1 template from Studio A. 3 skipped: a template with this name is already here; deactivated at the other studio.')
+  })
+
+  it('says so when nothing was copied', () => {
+    expect(cloneResultNotice({ created: [], skipped: [], generated_blocks: 0 }, 'Studio A')).toBe('Nothing was copied from Studio A.')
+    expect(cloneResultNotice(undefined)).toBe('Nothing was copied from the other studio.')
   })
 })
