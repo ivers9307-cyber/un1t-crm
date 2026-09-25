@@ -19,6 +19,7 @@
 
 import { shiftHours } from './payroll'
 import { liveAssignments } from './roster'
+import { isAdminShift } from '@shared/shift-kind'
 import { staffingGaps } from './roster-staffing'
 import { dublinTodayStr } from './dublin-time'
 import { leaveScopeOrFilter } from './time-off-leave'
@@ -124,7 +125,7 @@ async function loadBudgetContext(db, locationId, periodStart, periodEnd = period
       .from('shift_blocks')
       .select(`
         id, location_id, block_date, start_time, end_time, roster_id, min_coaches,
-        shift_templates(name),
+        shift_templates(name, kind),
         shift_assignments(profile_id, status, start_time_override, end_time_override, profiles:profile_id(full_name)),
         rosters:roster_id(id, status)
       `)
@@ -259,6 +260,12 @@ function isOnLeave(leaveByProfile, profileId, dateIso) {
 }
 
 function blockContractorCost(block, contractorRateById, leaveByProfile) {
+  // SHIFTTYPE.1 — an admin shift stays out of the contractor budget gate
+  // (Richard, 25 Sep 2026). This is the ONE euro projection every publish path
+  // reads (POST rosters, approve, the approvals queue), so skipping it here
+  // is the whole gate. Its hours still count wherever hours are counted
+  // (payroll, week-cost, the hours report); only this figure leaves it out.
+  if (isAdminShift(block)) return 0
   let cost = 0
   // ROSTER-FIX.1 — a cancelled assignment costs nothing; counting it here
   // pushed publishes over the contractor budget for shifts nobody works.
