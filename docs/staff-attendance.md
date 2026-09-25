@@ -78,3 +78,15 @@ Transient DB errors in the match/stamp path return **503 with `transient: true`*
 - `mobile/index.js` (custom entry), `mobile/lib/geofence.js` (task + retry queue + `syncGeofences`), `mobile/components/LocationGate.jsx`
 - `/schedule/attendance` Source column gains the Geofence badge
 
+
+### What coaches see (ARRIVALSHOW.1)
+
+The phone's Schedule tab (Me view, phone and iPad) shows one line under each of the coach's OWN shifts: "Arrived 06:52", "On site from your earlier shift (arrived 06:52)", "No arrival recorded yet" (the shift has started) or "No arrival recorded" (it has ended). Nothing is shown before a shift starts, at a studio with the geofence off, for a geofence-exempt coach, on a draft, or when the server could not read the arrivals. It never shows minutes late, and no alert is sent (late and no-show alerts are held until coverage is above ~80%).
+
+**Shipped with positive lines only.** The two absence lines are behind `SHOW_ABSENCE_LINES = false` in `mobile/lib/shift-arrival.js` (owner decision pending Richard): at ~19% stamp coverage a missing stamp mostly means the app could not stamp (a >60-min gap spent inside, a >45-min-early arrival, an adjusted start >4h after the block start, an offline ping that lands up to 24h late), not that the coach was absent. The absence rules stay implemented and tested; turning them on is that one constant.
+
+- Source: `GET /api/schedule/shifts?include=arrival` adds `arrival` on the caller's own rows only (`src/lib/shift-arrivals.js`); colleagues' rows, and a manager's Team feed, carry `null`. Without `include=arrival` (old phones, the Team view, the Home tab) every row carries `null` and no arrival read is made.
+- **Arrived = `shift_assignments.arrived_at`, nothing else.** The manager-set `start_time_override` is the paid window and is never an arrival; it only moves the window the "No arrival recorded" line is judged on (the times the card shows).
+- **On site** = the attendance report's carry-over (`inferContinuousArrivals`: the same coach, day and studio, the next shift starting ≤ 60 min after the previous block's end), plus a stamp at the same instant as the stamp on any earlier-starting shift that day at any studio (mig 610's `duplicate_orphan`, the old double-stamp shape; display only).
+- The server sends the studio-local `HH:MM`; the phone does no timezone maths (`mobile/lib/shift-arrival.js`).
+- **Safe to switch absence on later:** each arrival carries `as_of` (the server clock at the read) and the phone judges absence at the earlier of its own clock and `as_of`; rows kept on screen through a failed refresh (the amber bar) never claim absence; and `tracked` is false for any shift before `ARRIVAL_TRACKING_FROM` (`2026-09-25`, `src/lib/shift-arrivals.js`: `settings.geofence` has no `enabled_at`).

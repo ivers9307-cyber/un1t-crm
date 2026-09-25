@@ -25,9 +25,23 @@ vi.mock('@/lib/shift-open-swaps', async (importOriginal) => ({
   ...(await importOriginal()),
   fetchOwnOpenSwaps: vi.fn(() => Promise.resolve([])),
 }))
+// ARRIVALSHOW.1 — keep the real annotate (pure); stub only the read. The
+// default answers "stamps unreadable", so every row carries arrival: null.
+vi.mock('@/lib/shift-arrivals', async (importOriginal) => {
+  const real = await importOriginal()
+  return {
+    ...real,
+    fetchOwnArrivalFacts: vi.fn(() => Promise.resolve({ stamps: null, timezones: new Map(), tracked: null })),
+    // Real by default; one test makes it throw (review 3).
+    annotateOwnArrivals: vi.fn(real.annotateOwnArrivals),
+  }
+})
+vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logError: vi.fn() }))
 const { getCurrentUser } = await import('@/lib/auth')
 const { fetchApiShiftRows } = await import('@/lib/roster-read')
 const { fetchOwnOpenSwaps } = await import('@/lib/shift-open-swaps')
+const { fetchOwnArrivalFacts, annotateOwnArrivals } = await import('@/lib/shift-arrivals')
+const { logError } = await import('@/lib/log')
 const { GET } = await import('./route.js')
 const req = (url = 'http://x/api/schedule/shifts?location_id=loc-1') => ({ url })
 beforeEach(() => { getCurrentUser.mockReset(); fetchApiShiftRows.mockClear() })
@@ -84,8 +98,8 @@ describe('GET /api/schedule/shifts — open_swap_status', () => {
     // Bounded: only the caller's own assignment ids in THIS payload are asked about.
     expect(fetchOwnOpenSwaps).toHaveBeenLastCalledWith(expect.anything(), 'c', ['a1'])
     expect(body.data).toEqual([
-      { id: 'a1', profile_id: 'c', open_swap_status: 'pending' },
-      { id: 'a2', profile_id: 'other', open_swap_status: null },
+      { id: 'a1', profile_id: 'c', open_swap_status: 'pending', arrival: null },
+      { id: 'a2', profile_id: 'other', open_swap_status: null, arrival: null },
     ])
   })
 
@@ -104,8 +118,8 @@ describe('GET /api/schedule/shifts — open_swap_status', () => {
 
     expect(fetchOwnOpenSwaps).toHaveBeenLastCalledWith(expect.anything(), 'm', ['a2'])
     expect(body.data).toEqual([
-      { id: 'a1', profile_id: 'coach-a', open_swap_status: null },
-      { id: 'a2', profile_id: 'm', open_swap_status: 'awaiting_approval' },
+      { id: 'a1', profile_id: 'coach-a', open_swap_status: null, arrival: null },
+      { id: 'a2', profile_id: 'm', open_swap_status: 'awaiting_approval', arrival: null },
     ])
   })
 
@@ -116,7 +130,7 @@ describe('GET /api/schedule/shifts — open_swap_status', () => {
     const body = await (await GET(req())).json()
 
     expect(fetchOwnOpenSwaps).toHaveBeenLastCalledWith(expect.anything(), 'm', [])
-    expect(body.data).toEqual([{ id: 'a1', profile_id: 'coach-a', open_swap_status: null }])
+    expect(body.data).toEqual([{ id: 'a1', profile_id: 'coach-a', open_swap_status: null, arrival: null }])
   })
 })
 
@@ -143,5 +157,84 @@ describe('GET /api/schedule/shifts — a date the calendar does not have', () =>
     const res = await GET(req('http://x/api/schedule/shifts?location_id=loc-1&start_date=2028-02-28&end_date=2028-02-29'))
     expect(res.status).toBe(200)
     expect(fetchApiShiftRows.mock.calls[0][1]).toMatchObject({ startDate: '2028-02-28', endDate: '2028-02-29' })
+  })
+})
+
+// ARRIVALSHOW.1 — the Schedule tab's arrival line reads `arrival`. Own rows only.
+describe('GET /api/schedule/shifts — own arrival (ARRIVALSHOW.1)', () => {
+  // Review 3 — arrivals are read only when the caller asks (?include=arrival:
+  // the phone's Me view). Every other caller costs no arrivals read.
+  const withArrivals = () => req('http://x/api/schedule/shifts?location_id=loc-1&include=arrival')
+  beforeEach(() => { fetchOwnArrivalFacts.mockClear() })
+  const coach = { id: 'c', role: 'staff', profileRole: 'staff', rolesByLocation: { 'loc-1': 'staff' }, locations: [{ id: 'loc-1' }] }
+  const shiftRow = (id, profileId) => ({
+    id, profile_id: profileId, location_id: 'loc-1', shift_date: '2026-10-01',
+    block_start_time: '07:00:00', block_end_time: '08:00:00', start_time_override: null, end_time_override: null,
+  })
+
+  it("asks about the caller's own assignment ids and studios only", async () => {
+    getCurrentUser.mockResolvedValue(coach)
+    fetchApiShiftRows.mockResolvedValueOnce({ rows: [shiftRow('a1', 'c'), shiftRow('a2', 'other')], error: null })
+    await GET(withArrivals())
+    expect(fetchOwnArrivalFacts).toHaveBeenLastCalledWith(expect.anything(), 'c', ['a1'], ['loc-1'])
+  })
+
+  it("puts the arrival on the caller's row and null on a colleague's", async () => {
+    getCurrentUser.mockResolvedValue(coach)
+    fetchApiShiftRows.mockResolvedValueOnce({ rows: [shiftRow('a1', 'c'), shiftRow('a2', 'other')], error: null })
+    fetchOwnArrivalFacts.mockResolvedValueOnce({
+      stamps: new Map([
+        ['a1', { id: 'a1', arrived_at: '2026-10-01T05:52:00.000Z', arrival_source: 'geofence' }],
+        ['a2', { id: 'a2', arrived_at: '2026-10-01T05:40:00.000Z', arrival_source: 'geofence' }],
+      ]),
+      timezones: new Map([['loc-1', 'Europe/Dublin']]),
+      tracked: new Map([['loc-1', true]]),
+    })
+    const body = await (await GET(withArrivals())).json()
+    expect(body.data[0].arrival).toMatchObject({ at: '2026-10-01T05:52:00.000Z', at_local: '06:52', carried: false, tracked: true })
+    expect(Number.isFinite(Date.parse(body.data[0].arrival.as_of))).toBe(true)
+    expect(body.data[1].arrival).toBeNull()
+  })
+
+  it('a failed arrivals read still returns the roster, with no arrival on any row', async () => {
+    getCurrentUser.mockResolvedValue(coach)
+    fetchApiShiftRows.mockResolvedValueOnce({ rows: [shiftRow('a1', 'c')], error: null })
+    const res = await GET(withArrivals())
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.success).toBe(true)
+    expect(body.data.map((r) => r.arrival)).toEqual([null])
+  })
+
+  it('an annotate that throws still returns the roster, with arrival: null on every row, and logs', async () => {
+    getCurrentUser.mockResolvedValue(coach)
+    fetchApiShiftRows.mockResolvedValueOnce({ rows: [shiftRow('a1', 'c'), shiftRow('a2', 'other')], error: null })
+    fetchOwnOpenSwaps.mockResolvedValueOnce([{ requester_shift_id: 'a1', status: 'pending' }])
+    annotateOwnArrivals.mockImplementationOnce(() => { throw new Error('boom') })
+    logError.mockClear()
+    const res = await GET(withArrivals())
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.success).toBe(true)
+    expect(body.data.map((r) => [r.id, r.arrival, r.open_swap_status])).toEqual([['a1', null, 'pending'], ['a2', null, null]])
+    expect(logError).toHaveBeenCalledWith('schedule', expect.stringContaining('arrival'), expect.anything())
+  })
+
+  it('without ?include=arrival: no arrivals read at all, and arrival: null on every row (old phones, Team view, Home tab)', async () => {
+    getCurrentUser.mockResolvedValue(coach)
+    fetchApiShiftRows.mockResolvedValueOnce({ rows: [shiftRow('a1', 'c')], error: null })
+    const body = await (await GET(req())).json()
+    expect(fetchOwnArrivalFacts).not.toHaveBeenCalled()
+    expect(body.data.map((r) => r.arrival)).toEqual([null])
+  })
+
+  it('include is a comma list; any other value reads nothing', async () => {
+    getCurrentUser.mockResolvedValue(coach)
+    fetchApiShiftRows.mockResolvedValueOnce({ rows: [shiftRow('a1', 'c')], error: null })
+    await GET(req('http://x/api/schedule/shifts?location_id=loc-1&include=foo,arrival'))
+    expect(fetchOwnArrivalFacts).toHaveBeenCalledTimes(1)
+    fetchApiShiftRows.mockResolvedValueOnce({ rows: [shiftRow('a1', 'c')], error: null })
+    await GET(req('http://x/api/schedule/shifts?location_id=loc-1&include=arrivals'))
+    expect(fetchOwnArrivalFacts).toHaveBeenCalledTimes(1)
   })
 })
