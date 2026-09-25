@@ -276,3 +276,171 @@ export function parseCandidatesAnswer(json) {
     untimed: Number(d.untimed) > 0 ? Number(d.untimed) : 0,
   }
 }
+
+// ── Facts ───────────────────────────────────────────────────────────────────
+
+// A window as a slot a badge names. The studio is named only when it is
+// ANOTHER one (the manager is assigning here).
+function slotOf(w, hereLocationId) {
+  return {
+    block_id: w.block_id ?? null,
+    date: w.date,
+    start: w.start,
+    end: w.end,
+    name: w.name,
+    location_name: hereLocationId && w.location_id === hereLocationId ? null : (w.location_name ?? null),
+  }
+}
+
+/**
+ * One person's facts about one shift. `target` is workingWindow() of the
+ * shift (null when it has no usable times); `candidateRow` is the shift as
+ * this person's row (for WORKTIME.1's rule); `own` is this person's live
+ * assignments from the reader, any studio of the organisation. `checked`
+ * false for a facet = the reader could not read it: that facet stays null.
+ */
+export function candidateFacts({
+  target, candidateRow, own = [], leave = [], rules = [], contractedHours = null,
+  covered = false, hereLocationId = null, checked = {},
+} = {}) {
+  const date = candidateRow?.block_date ?? target?.date ?? null
+  const facts = {
+    free: null, busy: null, on_site: null, week_minutes: null, rest_gap: null, week_over: null,
+    on_leave: null, unavailable: null, contracted_hours: null,
+  }
+
+  if (checked.shifts !== false && target) {
+    const seen = new Set()
+    const windows = []
+    for (const row of own) {
+      const w = workingWindow(row)
+      if (!w || w.block_id === target.block_id) continue
+      const key = w.block_id ?? `${w.date}|${w.start}|${w.end}|${w.location_id}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      windows.push(w)
+    }
+    const overlaps = (w) => w.startMs < target.endMs && target.startMs < w.endMs
+    const busy = windows.filter(overlaps).sort((a, b) => a.startMs - b.startMs)[0] || null
+    facts.free = !busy
+    facts.busy = busy ? slotOf(busy, hereLocationId) : null
+    const near = windows
+      .filter((w) => !overlaps(w) && hereLocationId && w.location_id === hereLocationId && w.date === target.date)
+      .map((w) => ({ w, gap: Math.round((w.endMs <= target.startMs ? target.startMs - w.endMs : w.startMs - target.endMs) / MINUTE_MS) }))
+      .sort((a, b) => a.gap - b.gap || a.w.startMs - b.w.startMs)[0]
+    facts.on_site = near
+      ? { block_id: near.w.block_id ?? null, start: near.w.start, end: near.w.end, name: near.w.name, gap_minutes: near.gap }
+      : null
+    const week = weekStartOf(target.date)
+    facts.week_minutes = Math.round(windows
+      .filter((w) => weekStartOf(w.date) === week)
+      .reduce((sum, w) => sum + (w.endMs - w.startMs), 0) / MINUTE_MS)
+    if (covered && candidateRow) {
+      const wt = candidateWorkingTime(own, candidateRow, { hereLocationId })
+      facts.rest_gap = wt.restGap
+      facts.week_over = wt.weekHours
+    }
+  }
+
+  if (checked.leave !== false && date) {
+    const hit = (leave || [])
+      .filter((l) => l?.start_date && l.end_date && l.start_date <= date && l.end_date >= date)
+      .sort((a, b) => String(a.start_date).localeCompare(String(b.start_date)))[0]
+    facts.on_leave = hit
+      ? { type: hit.type ?? null, label: timeOffLeaveLabel(hit.type), start_date: hit.start_date, end_date: hit.end_date }
+      : null
+  }
+
+  if (checked.availability !== false && date) {
+    const matches = unavailableFor(rules, date, target?.start ?? null, target?.end ?? null)
+    facts.unavailable = matches
+      ? {
+        summary: unavailableSummary(matches),
+        detail: matches.map((r) => (r.note ? `${describeRule(r)} (${r.note})` : describeRule(r))).join('; '),
+      }
+      : null
+  }
+
+  if (checked.contract !== false && covered && Number(contractedHours) > 0) facts.contracted_hours = Number(contractedHours)
+  return facts
+}
+
+function groupByProfile(rows) {
+  const out = new Map()
+  for (const r of rows || []) {
+    if (!r?.profile_id) continue
+    if (!out.has(r.profile_id)) out.set(r.profile_id, [])
+    out.get(r.profile_id).push(r)
+  }
+  return out
+}
+
+const valueOf = (mapOrObject, key) => {
+  if (!mapOrObject) return null
+  return (typeof mapOrObject.get === 'function' ? mapOrObject.get(key) : mapOrObject[key]) ?? null
+}
+
+/**
+ * The ranked candidate list for one block.
+ *
+ * @param {{
+ *   block: { id, location_id, block_date, start_time, end_time, shift_templates },
+ *   members: Array<{ profile_id, full_name, role, employment_type }>,  eligible, not on the block
+ *   shifts: object[],   readOrgShiftRows rows (every studio of the organisation)
+ *   leave: Array<{ profile_id, type, start_date, end_date }>,  approved
+ *   rules: Array<{ profile_id, ...AVAIL rule }>,
+ *   contracts: Map|object  profile_id → contracted hours per week (employees)
+ *   checked: { shifts, cross_studio, leave, availability, contract },
+ *   audience: 'manager' | 'colleague',
+ * }} args
+ * @returns {{ candidates: object[], untimed: number }}
+ *   manager:   every fact + tier, rank, reason
+ *   colleague: { profile_id, full_name, role, free, tier, rank, reason } only
+ */
+export function buildCandidates({
+  block, members = [], shifts = [], leave = [], rules = [], contracts = null, checked = {}, audience = 'manager',
+} = {}) {
+  if (!block?.id) return { candidates: [], untimed: 0 }
+  const colleague = audience === 'colleague'
+  const here = block.location_id ?? null
+  const rowFor = (profileId) => ({
+    profile_id: profileId,
+    block_id: block.id,
+    block_date: block.block_date,
+    location_id: here,
+    location_name: null,
+    name: block.shift_templates?.name || 'Shift',
+    status: 'scheduled',
+    start_time: block.start_time ?? null,
+    end_time: block.end_time ?? null,
+    shift_templates: { start_time: block.shift_templates?.start_time ?? null, end_time: block.shift_templates?.end_time ?? null },
+  })
+  const target = workingWindow(rowFor('target'))
+  const shiftsBy = groupByProfile(shifts)
+  const leaveBy = groupByProfile(leave)
+  const rulesBy = groupByProfile(rules)
+  const people = (members || []).filter((m) => m?.profile_id)
+
+  const facts = people.map((m) => {
+    const f = candidateFacts({
+      target,
+      candidateRow: rowFor(m.profile_id),
+      own: shiftsBy.get(m.profile_id) || [],
+      leave: colleague ? [] : leaveBy.get(m.profile_id) || [],
+      rules: colleague ? [] : rulesBy.get(m.profile_id) || [],
+      contractedHours: colleague ? null : valueOf(contracts, m.profile_id),
+      covered: !colleague && isWorkingTimeCovered(m.employment_type),
+      hereLocationId: here,
+      checked,
+    })
+    const base = { profile_id: m.profile_id, full_name: m.full_name ?? null, role: m.role ?? null }
+    // Project BEFORE ranking: a colleague's order must not encode the rest.
+    return colleague ? { ...base, free: f.free } : { ...base, ...f }
+  })
+
+  const ids = new Set(people.map((m) => m.profile_id))
+  const untimed = colleague || people.length === 0
+    ? 0
+    : untimedShiftCount((shifts || []).filter((s) => ids.has(s?.profile_id))) + (target ? 0 : 1)
+  return { candidates: rankCandidates(facts, colleague ? 'colleague' : 'manager'), untimed }
+}

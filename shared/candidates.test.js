@@ -145,3 +145,135 @@ describe('parseCandidatesAnswer', () => {
       .toEqual({ ok: true, audience: 'colleague', candidates: [], checked: { shifts: false }, untimed: 2 })
   })
 })
+
+// One Wednesday shift, 10:00–12:00 at Studio North, and eight people around it.
+const HERE = 'loc-here'
+const THERE = 'loc-there'
+const BLOCK = {
+  id: 'blk', location_id: HERE, block_date: '2026-09-23', start_time: '10:00:00', end_time: '12:00:00',
+  shift_templates: { name: 'Midday Strength', start_time: '10:00:00', end_time: '12:00:00', kind: 'class' },
+}
+// A live assignment in the flat shape src/lib/working-time-data.js returns.
+const S = (profile_id, block_date, start_time, end_time, over = {}) => ({
+  profile_id, block_id: `${profile_id}-${block_date}-${start_time}`, block_date, start_time, end_time,
+  location_id: HERE, location_name: 'Studio North', name: 'Class', status: 'scheduled',
+  start_time_override: null, end_time_override: null, shift_templates: { start_time, end_time }, ...over,
+})
+const M = (profile_id, full_name, employment_type = 'fte') => ({ profile_id, full_name, role: 'staff', employment_type })
+const MEMBERS = [
+  M('ann', 'Ann Free'), M('bob', 'Bob Here', 'contractor'), M('cat', 'Cat Busy'), M('dan', 'Dan Away', 'contractor'),
+  M('eve', 'Eve Unavail'), M('fay', 'Fay Late'), M('gus', 'Gus Steady'), M('hal', 'Hal Contract', 'contractor'),
+]
+const SHIFTS = [
+  S('ann', '2026-09-21', '09:00:00', '13:00:00'),
+  S('bob', '2026-09-23', '07:00:00', '09:00:00', { name: 'Early' }),
+  S('cat', '2026-09-23', '11:00:00', '13:00:00', { location_id: THERE, location_name: 'Studio South', name: 'Lunch Pilates' }),
+  S('fay', '2026-09-22', '21:00:00', '23:30:00', { location_id: THERE, location_name: 'Studio South', name: 'Late' }),
+  S('gus', '2026-09-21', '09:00:00', '17:00:00'),
+  S('gus', '2026-09-22', '09:00:00', '17:00:00'),
+  S('hal', '2026-09-28', '09:00:00', '10:00:00'), // next Monday: read, but not this week
+]
+const LEAVE = [{ profile_id: 'dan', type: 'holiday', start_date: '2026-09-22', end_date: '2026-09-24' }]
+const RULES = [{ profile_id: 'eve', kind: 'weekly', weekday: 'wed', all_day: false, start_time: '09:00', end_time: '11:00', note: 'School run' }]
+// bob is a contractor with a stray row: contractors never show one.
+const CONTRACTS = new Map([['ann', 39], ['cat', 20], ['eve', 30], ['fay', 39], ['gus', 39], ['bob', 25]])
+const ALL_CHECKED = { shifts: true, cross_studio: true, leave: true, availability: true, contract: true }
+const build = (over = {}) => buildCandidates({
+  block: BLOCK, members: MEMBERS, shifts: SHIFTS, leave: LEAVE, rules: RULES, contracts: CONTRACTS, checked: ALL_CHECKED, ...over,
+})
+
+describe('buildCandidates — manager', () => {
+  it('ranks: on site, under contract, the rest, short rest, unavailable, then working or on leave', () => {
+    const { candidates } = build()
+    expect(candidates.map((c) => c.profile_id)).toEqual(['bob', 'ann', 'gus', 'hal', 'fay', 'eve', 'cat', 'dan'])
+    expect(Object.fromEntries(candidates.map((c) => [c.profile_id, c.reason]))).toEqual({
+      bob: 'Here 7am–9am · 2h this week',
+      ann: 'Free · 4h of 39h this week',
+      gus: 'Free · 16h of 39h this week',
+      hal: 'Free · No shifts this week',
+      fay: 'Only 10h 30m rest · 2h 30m of 39h this week',
+      eve: 'Unavailable 9am–11am · 0h of 30h this week',
+      cat: 'Working 11am–1pm Lunch Pilates at Studio South · 2h of 20h this week',
+      dan: 'On leave (Holiday) · No shifts this week',
+    })
+  })
+
+  it('carries each fact, the other studio named, this one not', () => {
+    const by = Object.fromEntries(build().candidates.map((c) => [c.profile_id, c]))
+    expect(by.bob).toMatchObject({ free: true, busy: null, on_site: { start: '07:00', end: '09:00', name: 'Early', gap_minutes: 60 }, week_minutes: 120, contracted_hours: null, rest_gap: null })
+    expect(by.cat).toMatchObject({ free: false, busy: { date: '2026-09-23', start: '11:00', end: '13:00', name: 'Lunch Pilates', location_name: 'Studio South' }, tier: 'blocked' })
+    expect(by.dan.on_leave).toEqual({ type: 'holiday', label: 'Holiday', start_date: '2026-09-22', end_date: '2026-09-24' })
+    expect(by.eve.unavailable).toEqual({ summary: '9am–11am', detail: 'Wednesdays, 9am–11am (School run)' })
+    expect(by.fay.rest_gap).toMatchObject({ rest_minutes: 630, side: 'before', other: { date: '2026-09-22', start: '21:00', end: '23:30', name: 'Late', location_name: 'Studio South' } })
+    expect(by.hal.week_minutes).toBe(0)
+    expect(by.ann).toMatchObject({ contracted_hours: 39, week_minutes: 240, on_site: null, rank: 2, tier: 'ready' })
+  })
+
+  it('an override counts (effective window); an end that only touches is on site, not busy', () => {
+    const { candidates } = buildCandidates({
+      block: BLOCK, checked: ALL_CHECKED,
+      members: [M('jay', 'Jay Late', 'contractor'), M('kim', 'Kim Next', 'contractor')],
+      shifts: [
+        S('jay', '2026-09-23', '07:00:00', '09:00:00', { end_time_override: '10:30:00' }),
+        S('kim', '2026-09-23', '12:00:00', '13:00:00'),
+      ],
+    })
+    const [kim, jay] = candidates
+    expect(kim).toMatchObject({ profile_id: 'kim', free: true, on_site: { start: '12:00', end: '13:00', gap_minutes: 0 }, reason: 'Here 12pm–1pm · 1h this week' })
+    expect(jay).toMatchObject({ profile_id: 'jay', free: false, busy: { start: '07:00', end: '10:30', location_name: null }, tier: 'blocked' })
+  })
+
+  it('48 hours: an employee this shift takes over the week is advisory; a contractor never is', () => {
+    const ivy = [
+      S('ivy', '2026-09-21', '06:00:00', '18:00:00'), S('ivy', '2026-09-22', '06:00:00', '18:00:00'),
+      S('ivy', '2026-09-24', '06:00:00', '18:00:00'), S('ivy', '2026-09-25', '06:00:00', '17:00:00'),
+    ]
+    const lee = ivy.map((s) => ({ ...s, profile_id: 'lee', block_id: `lee-${s.block_date}` }))
+    const { candidates } = buildCandidates({
+      block: BLOCK, checked: ALL_CHECKED, contracts: new Map([['ivy', 39]]),
+      members: [M('ivy', 'Ivy Long'), M('lee', 'Lee Long', 'contractor')], shifts: [...ivy, ...lee],
+    })
+    const by = Object.fromEntries(candidates.map((c) => [c.profile_id, c]))
+    expect(by.ivy).toMatchObject({ week_minutes: 2820, week_over: { week_start: '2026-09-21', minutes: 2940 }, tier: 'advisory', reason: '49h with this shift · 47h of 39h this week' })
+    expect(by.lee).toMatchObject({ week_minutes: 2820, week_over: null, rest_gap: null, tier: 'ready' })
+  })
+
+  it('what was not read is null, never false: everyone ready, ranked by name, no reason', () => {
+    const { candidates } = build({ checked: { shifts: false, cross_studio: true, leave: false, availability: false, contract: false } })
+    expect(candidates.map((c) => c.profile_id)).toEqual(['ann', 'bob', 'cat', 'dan', 'eve', 'fay', 'gus', 'hal'])
+    for (const c of candidates) {
+      expect(c).toMatchObject({ free: null, busy: null, on_site: null, week_minutes: null, on_leave: null, unavailable: null, contracted_hours: null, tier: 'ready', reason: null })
+    }
+  })
+
+  it('counts shifts without usable times, and never returns a pay field', () => {
+    const { candidates, untimed } = build({ shifts: [...SHIFTS, S('ann', '2026-09-24', null, null, { shift_templates: { start_time: null, end_time: null } })] })
+    expect(untimed).toBe(1)
+    expect(JSON.stringify(candidates)).not.toMatch(/rate|salary|overtime|cost/)
+  })
+})
+
+describe('buildCandidates — colleague (the coach asking for cover)', () => {
+  it('free or working only, ranked on that alone: leave and availability cannot leak through the order', () => {
+    const { candidates, untimed } = build({ audience: 'colleague' })
+    expect(candidates.map((c) => c.profile_id)).toEqual(['ann', 'bob', 'dan', 'eve', 'fay', 'gus', 'hal', 'cat'])
+    for (const c of candidates) {
+      expect(Object.keys(c).sort()).toEqual(['free', 'full_name', 'profile_id', 'rank', 'reason', 'role', 'tier'])
+    }
+    expect(candidates[0].reason).toBe('Free then')
+    expect(candidates[7]).toMatchObject({ profile_id: 'cat', free: false, reason: 'Working then', tier: 'blocked' })
+    expect(untimed).toBe(0)
+  })
+})
+
+describe('candidateFacts', () => {
+  it('no target window (a block without times): shift facts unknown, leave and availability judged on the day', () => {
+    const f = candidateFacts({
+      target: null, candidateRow: { profile_id: 'x', block_date: '2026-09-23' },
+      leave: [{ type: 'sick', start_date: '2026-09-23', end_date: '2026-09-23' }],
+      rules: [{ kind: 'weekly', weekday: 'wed', all_day: false, start_time: '18:00', end_time: '19:00' }],
+      checked: ALL_CHECKED,
+    })
+    expect(f).toMatchObject({ free: null, week_minutes: null, on_leave: { type: 'sick', label: 'Sick leave' }, unavailable: { summary: '6pm–7pm' } })
+  })
+})
