@@ -74,8 +74,9 @@
 --     LATER batch reused is kept until that batch is restored too
 --     (restored_rule_in_use), so restoring one batch never strands another
 --     batch's days. Idempotent. A restored row stays remembered by
---     the ledger, so a later move leaves it alone; to move it again, delete
---     its ledger row first.
+--     the ledger, so a later move leaves it alone; to move it again, an
+--     operator deletes its ledger row first, AS THE TABLE OWNER (postgres,
+--     the Supabase MCP role): service_role holds no DELETE on the ledger.
 --
 -- GUARDS (any one aborts the whole move, nothing half-moved):
 --   avail3_open_cancel_ask  a carry row has a cancellation ask no owner has
@@ -219,6 +220,8 @@
 -- (n) Grants: 0 rows from
 --       SELECT r, p FROM unnest(ARRAY['anon','authenticated']) r, unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE']) p
 --        WHERE has_table_privilege(r, 'public.time_off_availability_moves', p);
+--     and 0 rows from the same with ARRAY['service_role'] and
+--     ARRAY['DELETE','TRUNCATE'] (it records and stamps, never erases);
 --     and false, false from
 --       SELECT has_function_privilege('authenticated', 'public.move_unavailable_time_off_to_availability(date)', 'EXECUTE'),
 --              has_function_privilege('authenticated', 'public.restore_moved_unavailable_time_off(uuid)', 'EXECUTE');
@@ -266,7 +269,11 @@ CREATE INDEX IF NOT EXISTS time_off_availability_moves_batch_idx
   ON public.time_off_availability_moves (batch_id);
 
 ALTER TABLE public.time_off_availability_moves ENABLE ROW LEVEL SECURITY;
-REVOKE ALL ON public.time_off_availability_moves FROM anon, authenticated, PUBLIC;
+-- service_role (the functions run as it) records and stamps the ledger and
+-- never erases it: no DELETE, no TRUNCATE (Supabase's default privileges
+-- would otherwise give it ALL). Deleting a ledger row (to move a restored
+-- request again) is a deliberate operator step as the table owner.
+REVOKE ALL ON public.time_off_availability_moves FROM anon, authenticated, service_role, PUBLIC;
 GRANT SELECT, INSERT, UPDATE ON public.time_off_availability_moves TO service_role;
 
 COMMENT ON TABLE public.time_off_availability_moves IS
@@ -652,6 +659,12 @@ BEGIN
     IF has_function_privilege(v_role, 'public.move_unavailable_time_off_to_availability(date)', 'EXECUTE')
        OR has_function_privilege(v_role, 'public.restore_moved_unavailable_time_off(uuid)', 'EXECUTE') THEN
       RAISE EXCEPTION 'mig 631: % can execute a move function', v_role;
+    END IF;
+  END LOOP;
+
+  FOREACH v_priv IN ARRAY ARRAY['DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'] LOOP
+    IF has_table_privilege('service_role', 'public.time_off_availability_moves', v_priv) THEN
+      RAISE EXCEPTION 'mig 631: service_role still holds % on the ledger', v_priv;
     END IF;
   END LOOP;
 

@@ -197,6 +197,17 @@ describe('migration 631 — grants and posture', () => {
     }
   })
 
+  // Review N4 — the app role only ever reads, records and stamps the ledger;
+  // it can never erase the rollback record. (The re-move step's DELETE is an
+  // operator action as the table owner, not service_role.)
+  it('service_role can SELECT, INSERT and UPDATE the ledger, never DELETE or TRUNCATE it', async () => {
+    const privs = await q(`SELECT p, has_table_privilege('service_role', 'public.time_off_availability_moves', p) AS ok
+                             FROM unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER']) p`)
+    expect(Object.fromEntries(privs.map((r) => [r.p, r.ok]))).toEqual({
+      SELECT: true, INSERT: true, UPDATE: true, DELETE: false, TRUNCATE: false, REFERENCES: false, TRIGGER: false,
+    })
+  })
+
   it('RLS is on and there are no policies on the ledger', async () => {
     expect(await q(`SELECT relrowsecurity FROM pg_class WHERE oid = 'public.time_off_availability_moves'::regclass`))
       .toEqual([{ relrowsecurity: true }])
