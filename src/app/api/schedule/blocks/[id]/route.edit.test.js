@@ -16,6 +16,7 @@ vi.mock('@/lib/auth', async (importOriginal) => {
   }
 })
 vi.mock('@/lib/shift-unassign', () => ({ logAndNotifyUnassignments: vi.fn() }))
+vi.mock('@/lib/shift-overlaps', () => ({ findShiftOverlaps: vi.fn(async () => ({ clashes: [] })) }))
 let logSeq = 0
 vi.mock('@/lib/roster-change-log', () => ({
   logRosterChange: vi.fn(async () => ({ logged: true, id: `log-${++logSeq}` })),
@@ -26,6 +27,7 @@ vi.mock('@/lib/roster-change-log', () => ({
 const { createServerClient } = await import('@/lib/supabase')
 const { getCurrentUser } = await import('@/lib/auth')
 const { logRosterChange, logBlockEdit, markChangesNotified } = await import('@/lib/roster-change-log')
+const { findShiftOverlaps } = await import('@/lib/shift-overlaps')
 const { PUT } = await import('./route.js')
 
 const LOC = 'a0000000-0000-0000-0000-000000000001'
@@ -347,6 +349,30 @@ describe('PUT /api/schedule/blocks/[id] — expected (review fix 2)', () => {
     createServerClient.mockReturnValue(makeDb())
     const res = await PUT(req({ expected: OPENED }), params)
     expect((await res.json()).error).toBe('nothing_to_change')
+  })
+})
+
+// Review fix 4 — moving or stretching a shift can put a coach on two shifts at
+// once. Warned (never blocked), with the assign route's org-scoped check.
+describe('PUT /api/schedule/blocks/[id] — double-booking advisory (review fix 4)', () => {
+  it("checks each moved coach's NEW window and lists any clash in the response and the warning", async () => {
+    findShiftOverlaps.mockResolvedValueOnce({ clashes: [{ profileId: 'u1', name: 'Coach A', text: 'Coach A is already on Evening 13:00–15:00 at Studio Two that day — overlaps this shift.' }] })
+    createServerClient.mockReturnValue(makeDb())
+    const body = await (await PUT(req({ start_time: '10:00', end_time: '14:00' }), params)).json()
+    expect(findShiftOverlaps).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      locationId: LOC, blockId: 'blk-1', blockDate: '2026-09-30',
+      windows: [{ profileId: 'u1', start_time: '10:00:00', end_time: '14:00:00' }],
+    }))
+    expect(body.success).toBe(true)
+    expect(body.overlaps).toEqual([{ profile_id: 'u1', message: 'Coach A is already on Evening 13:00–15:00 at Studio Two that day — overlaps this shift.' }])
+    expect(body.warning).toMatch(/already on Evening/)
+  })
+
+  it('an edit that moves nobody does not look', async () => {
+    createServerClient.mockReturnValue(makeDb())
+    const body = await (await PUT(req({ briefing: 'x' }), params)).json()
+    expect(findShiftOverlaps).not.toHaveBeenCalled()
+    expect(body.overlaps).toBeUndefined()
   })
 })
 

@@ -32,6 +32,8 @@ export default function BlockEditForm({ block, onSave, onDone }) {
   const [briefing, setBriefing] = useState(initial.briefing)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
+  // Review fix 4 — saved, but someone now overlaps another of their shifts.
+  const [overlaps, setOverlaps] = useState(null)
 
   function changedFields() {
     const out = {}
@@ -57,7 +59,11 @@ export default function BlockEditForm({ block, onSave, onDone }) {
     setError(null)
     const result = await onSave(payload)
     setSaving(false)
-    if (result?.ok) { onDone(); return }
+    if (result?.ok) {
+      if (result.overlaps?.length > 0) { setOverlaps(result.overlaps); return }
+      onDone()
+      return
+    }
     if (result?.code === 'below_assigned' && !payload.allow_below_assigned) {
       if (confirm(`${result.error}\n\nSave anyway? Nobody is removed from the shift.`)) {
         await send({ ...payload, allow_below_assigned: true })
@@ -72,6 +78,24 @@ export default function BlockEditForm({ block, onSave, onDone }) {
     const payload = changedFields()
     if (Object.keys(payload).length === 0) { onDone(); return }
     await send(payload)
+  }
+
+  if (overlaps) {
+    return (
+      <div className="mb-4 space-y-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3">
+        <div role="status" className="text-xs text-amber-800">
+          <p className="font-semibold">Saved. Check these coaches: they are now on two shifts at once.</p>
+          <ul className="mt-1 list-disc pl-4">
+            {overlaps.map((o, i) => <li key={`${o.profile_id}-${i}`}>{o.message}</li>)}
+          </ul>
+        </div>
+        <div className="flex justify-end">
+          <button type="button" onClick={onDone} className="text-xs px-3 py-2 rounded-md border border-un1t-border text-un1t-text hover:bg-un1t-bg">
+            Done
+          </button>
+        </div>
+      </div>
+    )
   }
 
   return (

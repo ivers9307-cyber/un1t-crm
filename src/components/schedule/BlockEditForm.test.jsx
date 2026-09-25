@@ -86,4 +86,19 @@ describe('BlockEditForm', () => {
     expect(screen.getByRole('alert').textContent).toBe('A shift must end after it starts.')
     expect(onDone).not.toHaveBeenCalled()
   })
+
+  // Review fix 4 — a saved move that double-books someone is shown before
+  // the form closes.
+  it('saved with overlaps: lists them and closes only on Done', async () => {
+    const onSave = vi.fn(async () => ({ ok: true, overlaps: [{ profile_id: 'u1', message: 'Coach A is already on Evening 13:00–15:00 that day — overlaps this shift.' }] }))
+    const onDone = vi.fn()
+    render(<BlockEditForm block={BLOCK} onSave={onSave} onDone={onDone} />)
+    fireEvent.change(screen.getByLabelText('End'), { target: { value: '14:00' } })
+    await save()
+    expect(screen.getByRole('status').textContent).toMatch(/Coach A is already on Evening/)
+    expect(onDone).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+    expect(onDone).toHaveBeenCalled()
+  })
 })
+

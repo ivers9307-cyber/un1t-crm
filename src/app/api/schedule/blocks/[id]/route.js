@@ -56,6 +56,7 @@ import { logRosterChange, logBlockEdit, markChangesNotified } from '@/lib/roster
 import { planBlockEdit, sameWindow, matchesExpected, blockEditNoticeWhen, TIME_CHANGE_SOURCE } from '@/lib/block-edit'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { BRIEFING_MAX_LENGTH } from '@shared/shift-briefing'
+import { findShiftOverlaps } from '@/lib/shift-overlaps'
 import { logWarn } from '@/lib/log'
 
 export async function DELETE(_request, props) {
@@ -311,6 +312,22 @@ export async function PUT(request, props) {
     .map((a) => (stuck.has(a.assignmentId) ? { ...a, to: a.toIfStuck } : a))
     .filter((a) => !sameWindow(a.from, a.to))
 
+  // Review fix 4 — a moved or stretched shift can put a coach on two shifts at
+  // once. The assign route's org-scoped advisory, on each moved coach's NEW
+  // window: warned, never blocked, never throws (src/lib/shift-overlaps.js).
+  let overlaps = []
+  if (affected.length > 0) {
+    const { clashes } = await findShiftOverlaps(db, {
+      locationId: block.location_id,
+      blockId: block.id,
+      blockDate: block.block_date,
+      windows: affected.map((a) => ({ profileId: a.coachId, start_time: a.to.start_time, end_time: a.to.end_time })),
+      logTag: 'schedule-blocks',
+    })
+    overlaps = clashes.map((c) => ({ profile_id: c.profileId, message: c.text }))
+    warnings.push(...clashes.map((c) => c.text))
+  }
+
   // 3. D4/D5 — change log, published only. Best-effort: a lost audit row never
   //    fails a save that already happened.
   let notice = null
@@ -356,6 +373,7 @@ export async function PUT(request, props) {
     data: saved[0],
     ...(notice ? { notice } : {}),
     ...(plan.kept.length > 0 ? { kept_overrides: plan.kept.map((k) => ({ assignment_id: k.assignmentId, profile_id: k.coachId })) } : {}),
+    ...(overlaps.length > 0 ? { overlaps } : {}),
     ...(warnings.length > 0 ? { warning: warnings.join(' ') } : {}),
   })
 }

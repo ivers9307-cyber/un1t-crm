@@ -690,7 +690,8 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
       // Review fix 3 — 'too_late' asks the manager to ring the coaches: a warning, not a success.
       if (data.warning || data.notice?.when === 'too_late') showToast([data.warning, told].filter(Boolean).join(' '), 'warning')
       else showToast(told || 'Shift saved.', 'success')
-      return { ok: true }
+      // Review fix 4 — the form lists any double-booking before it closes.
+      return { ok: true, overlaps: data.overlaps || [] }
     }
     return { ok: false, error: data.message || data.error || 'Could not save this shift', code: data.error }
   }
