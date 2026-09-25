@@ -288,7 +288,9 @@ describe('PUT /api/schedule/blocks/[id] — change log and notice (published onl
     createServerClient.mockReturnValue(makeDb({ block: { ...BLOCK, block_date: '2026-09-28' } }))
     let body = await (await PUT(req({ start_time: '10:00', confirm_past: true }), params)).json()
     expect(markChangesNotified).toHaveBeenCalledWith(expect.anything(), ['log-1'])
-    expect(body.notice).toBeUndefined()
+    // Second review 3 — logged as not needed, and the answer says why.
+    expect(logRosterChange.mock.calls[0][1].details.notice).toBe('not_needed')
+    expect(body.notice).toEqual({ coaches: 1, when: 'past' })
 
     vi.clearAllMocks()
     createServerClient.mockReturnValue(makeDb({ block: { ...BLOCK, shift_assignments: [on('mgr-1', 'Manager B')] } }))
@@ -423,6 +425,43 @@ describe('PUT /api/schedule/blocks/[id] — past shifts need confirm_past (revie
   it('confirm_past alone is not an edit', async () => {
     createServerClient.mockReturnValue(makeDb({ block: PAST }))
     expect((await (await PUT(req({ confirm_past: true }), params)).json()).error).toBe('nothing_to_change')
+  })
+})
+
+// BLOCKEDIT.1 second review 3 — a shift that has already ENDED today is past
+// too (D8: past shifts are never messaged). It is logged, stamped as
+// not_needed at once, and the answer is when: 'past'. Before, it was messaged
+// during the day, and after 22:00 answered 'morning' for a notice the arm
+// (which reads today-or-later dates only) would never send or stamp.
+describe('PUT /api/schedule/blocks/[id] — a shift that already ended today (second review 3)', () => {
+  it('ended earlier today (11:00 Dublin, shift 06:00-08:00): not_needed, stamped, when past', async () => {
+    createServerClient.mockReturnValue(makeDb({ block: { ...BLOCK, block_date: '2026-09-29', start_time: '06:00:00', end_time: '08:00:00' } }))
+    const body = await (await PUT(req({ start_time: '06:30' }), params)).json()
+    expect(logRosterChange.mock.calls[0][1].details).toMatchObject({ source: 'block_edit', notice: 'not_needed' })
+    expect(markChangesNotified).toHaveBeenCalledWith(expect.anything(), ['log-1'])
+    expect(body.notice).toEqual({ coaches: 1, when: 'past' })
+  })
+
+  it("after 22:00, today's finished shift is past, not 'morning'", async () => {
+    vi.setSystemTime(new Date('2026-09-29T22:30:00Z')) // 23:30 Dublin
+    createServerClient.mockReturnValue(makeDb({ block: { ...BLOCK, block_date: '2026-09-29' } }))
+    const body = await (await PUT(req({ start_time: '10:00' }), params)).json()
+    expect(body.notice).toEqual({ coaches: 1, when: 'past' })
+    expect(markChangesNotified).toHaveBeenCalled()
+  })
+
+  it('a RUNNING shift whose end moves later is still told', async () => {
+    createServerClient.mockReturnValue(makeDb({ block: { ...BLOCK, block_date: '2026-09-29' } })) // 09-12, now 11:00
+    const body = await (await PUT(req({ end_time: '13:00' }), params)).json()
+    expect(logRosterChange.mock.calls[0][1].details.notice).toBeUndefined()
+    expect(markChangesNotified).not.toHaveBeenCalled()
+    expect(body.notice).toEqual({ coaches: 1, when: 'shortly' })
+  })
+
+  it('an ended shift pulled back into the future (end moved past now) is still told', async () => {
+    createServerClient.mockReturnValue(makeDb({ block: { ...BLOCK, block_date: '2026-09-29', start_time: '06:00:00', end_time: '08:00:00' } }))
+    const body = await (await PUT(req({ end_time: '13:00' }), params)).json()
+    expect(body.notice).toEqual({ coaches: 1, when: 'shortly' })
   })
 })
 

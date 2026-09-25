@@ -225,10 +225,30 @@ export function blockEditNoticeWhen({ nowMs, timeZone, blockDate, windows = [] }
   return blockDate === noticeDay && early ? 'too_late' : 'morning'
 }
 
+/**
+ * Second review 3 — is this coach's shift already OVER? D8: a past shift is
+ * never messaged. Past = dated before today (Dublin), or today with both the
+ * old and the new end at or before the wall clock now. (An ended shift pulled
+ * back into the future by a later end is not over: the coach may go back.)
+ * @param {{ blockDate: string, from: {end_time}, to: {end_time}, nowMs: number, timeZone?: string|null }} args
+ */
+export function coachShiftOver({ blockDate, from, to, nowMs, timeZone }) {
+  const today = dublinDayStr(nowMs)
+  if (blockDate < today) return true
+  if (blockDate > today) return false
+  const now = staffWallClockHHMM(nowMs, timeZone)
+  const ends = [from?.end_time, to?.end_time].map(toHms).filter(Boolean).map((t) => t.slice(0, 5))
+  if (!now || ends.length === 0) return false
+  return ends.every((e) => e <= now)
+}
+
 /** The web toast's second half, from the PUT response's `notice`. '' when nobody is told. */
 export function blockEditNoticeText(notice) {
   if (!notice || !(notice.coaches > 0)) return ''
   const who = notice.coaches === 1 ? 'The coach on this shift' : `The ${notice.coaches} coaches on this shift`
+  if (notice.when === 'past') {
+    return `Saved. This shift is over, so ${notice.coaches === 1 ? 'the coach is' : `the ${notice.coaches} coaches are`} not notified.`
+  }
   if (notice.when === 'too_late') {
     return `Saved. ${who} will NOT be told before it starts (no notifications before 7am). Ring them.`
   }

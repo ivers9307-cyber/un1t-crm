@@ -79,6 +79,15 @@ describe('planTimeChangeNotices', () => {
     expect(planTimeChangeNotices([r], opts).send).toHaveLength(1)
   })
 
+  it('ended today (both the old and the new end have passed): no message', () => {
+    const r = row('r1', {
+      block_date: '2026-09-29',
+      details: { source: 'block_edit', from: { start_time: '07:00:00', end_time: '09:00:00' }, to: { start_time: '07:00:00', end_time: '10:00:00' } },
+      shift_blocks: blockEmbed({ start_time: '07:00:00', end_time: '10:00:00' }),
+    }) // clock 11:00
+    expect(planTimeChangeNotices([r], opts)).toEqual({ send: [], silent: [r] })
+  })
+
   it('not started by its original start, even though the NEW start has passed: told (they are now late)', () => {
     const r = row('r1', {
       block_date: '2026-09-29',

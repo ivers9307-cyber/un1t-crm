@@ -53,7 +53,7 @@ import { validateBody } from '@/lib/validate'
 import { isLiveAssignment } from '@/lib/roster'
 import { logAndNotifyUnassignments } from '@/lib/shift-unassign'
 import { logRosterChange, logBlockEdit, markChangesNotified } from '@/lib/roster-change-log'
-import { planBlockEdit, sameWindow, matchesExpected, blockEditNoticeWhen, TIME_CHANGE_SOURCE } from '@/lib/block-edit'
+import { planBlockEdit, sameWindow, matchesExpected, blockEditNoticeWhen, coachShiftOver, TIME_CHANGE_SOURCE } from '@/lib/block-edit'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { BRIEFING_MAX_LENGTH } from '@shared/shift-briefing'
 import { findShiftOverlaps } from '@/lib/shift-overlaps'
@@ -351,7 +351,12 @@ export async function PUT(request, props) {
       blockDate: block.block_date, actorId: user.id, details: plan.blockDetails,
     })
     const logged = []
+    const nowMs = Date.now()
     for (const a of affected) {
+      // Second review 3 — a shift already OVER (earlier date, or ended today)
+      // is never messaged (D8). Logged as not_needed and stamped below, so the
+      // drawer shows no told time and the notice arm never picks it up.
+      const over = coachShiftOver({ blockDate: block.block_date, from: a.from, to: a.to, nowMs, timeZone: block.locations?.timezone })
       const r = await logRosterChange(db, {
         isPublished: true,
         locationId: block.location_id,
@@ -360,16 +365,16 @@ export async function PUT(request, props) {
         actorId: user.id,
         blockId: block.id,
         blockDate: block.block_date,
-        details: { source: TIME_CHANGE_SOURCE, from: a.from, to: a.to },
+        details: { source: TIME_CHANGE_SOURCE, from: a.from, to: a.to, ...(over ? { notice: 'not_needed' } : {}) },
       })
-      if (r?.logged) logged.push({ id: r.id, coachId: a.coachId, from: a.from, to: a.to })
+      if (r?.logged) logged.push({ id: r.id, coachId: a.coachId, from: a.from, to: a.to, over })
     }
-    // Nobody to tell: a shift already in the past, or the manager moved their
-    // own shift. Stamped now so the notice arm and the re-publish safety net
-    // leave them alone (stampMeansTold rules 3 and 4).
-    const past = block.block_date < dublinTodayStr()
-    const silent = logged.filter((r) => past || r.coachId === user.id)
+    // Nobody to tell: a shift already over, or the manager moved their own
+    // shift. Stamped now so the notice arm and the re-publish safety net
+    // leave them alone (stampMeansTold: notice not_needed, rule 4).
+    const silent = logged.filter((r) => r.over || r.coachId === user.id)
     const silentIds = silent.map((r) => r.id)
+    const pastCount = logged.filter((r) => r.over && r.coachId !== user.id).length
     if (silentIds.length > 0) await markChangesNotified(db, silentIds)
     const toTell = logged.filter((r) => !silentIds.includes(r.id))
     if (toTell.length > 0) {
@@ -377,8 +382,10 @@ export async function PUT(request, props) {
       // told (quiet hours now, a start before 07:00 on the notice morning).
       notice = {
         coaches: toTell.length,
-        when: blockEditNoticeWhen({ nowMs: Date.now(), timeZone: block.locations?.timezone, blockDate: block.block_date, windows: toTell }),
+        when: blockEditNoticeWhen({ nowMs, timeZone: block.locations?.timezone, blockDate: block.block_date, windows: toTell }),
       }
+    } else if (pastCount > 0) {
+      notice = { coaches: pastCount, when: 'past' }
     }
   }
 

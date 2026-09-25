@@ -16,7 +16,8 @@
 //   - Not sent, stamped with details.notice = 'not_needed' (the drawer then
 //     shows no told time): the coach is no longer on the shift, the shift was
 //     deleted, the net change is nothing, or it has already started today
-//     (judged on the ORIGINAL start) and only its start moved.
+//     (judged on the ORIGINAL start) and only its start moved, or it has
+//     already ended today (both the old and the new end passed; D8).
 //   - Stamped only on DELIVERY (push or email fallback). Opted out, no
 //     device, or a failed send: left UNSTAMPED for the re-publish safety net
 //     (renotifyChangedCoaches); the per-row claim key stops this arm
@@ -102,7 +103,11 @@ export function planTimeChangeNotices(rows, { todayStr, nowHHMMByLocation = {} }
     // (already passed) start is not.
     const started = oldest.block_date === todayStr && Boolean(nowHHMM) && toHms(from.start_time).slice(0, 5) <= nowHHMM
     const endMoved = toHms(from.end_time) !== now.end_time
-    if (sameWindow(from, now) || (started && !endMoved) || oldest.block_date < todayStr) {
+    // Second review 3 — over today (both the old and the new end have passed):
+    // D8, a past shift is never messaged.
+    const ended = oldest.block_date === todayStr && Boolean(nowHHMM)
+      && toHms(from.end_time).slice(0, 5) <= nowHHMM && now.end_time.slice(0, 5) <= nowHHMM
+    if (sameWindow(from, now) || (started && !endMoved) || ended || oldest.block_date < todayStr) {
       silent.push(...list)
       continue
     }
