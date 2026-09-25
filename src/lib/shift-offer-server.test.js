@@ -6,11 +6,11 @@ import { scriptedDb, chainsFor, argsOf, allArgsOf } from './scripted-db.test-hel
 import { collectSchema, parseSelect } from '../../scripts/check-select-columns.mjs'
 
 vi.mock('./push-dedup', () => ({ notifyUsersOnce: vi.fn(async () => ({ sent: 1, emailed: 0, failed: 0 })) }))
-vi.mock('./push', () => ({ resolveRoleRecipientIds: vi.fn(async () => ['mgr', 'c1']) }))
+vi.mock('./push', () => ({ readRoleRecipientIds: vi.fn(async () => ({ ids: ['mgr', 'c1'], error: null })) }))
 vi.mock('./candidates-data', () => ({ loadBlockCandidates: vi.fn() }))
 vi.mock('./log', () => ({ logError: vi.fn(), logWarn: vi.fn() }))
 const { notifyUsersOnce } = await import('./push-dedup')
-const { resolveRoleRecipientIds } = await import('./push')
+const { readRoleRecipientIds } = await import('./push')
 const { loadBlockCandidates } = await import('./candidates-data')
 const { logError, logWarn } = await import('./log')
 const {
@@ -38,7 +38,7 @@ const none = { data: [], error: null }
 beforeEach(() => {
   vi.clearAllMocks()
   notifyUsersOnce.mockResolvedValue({ sent: 1, emailed: 0, failed: 0 })
-  resolveRoleRecipientIds.mockResolvedValue(['mgr', 'c1'])
+  readRoleRecipientIds.mockResolvedValue({ ids: ['mgr', 'c1'], error: null })
   loadBlockCandidates.mockResolvedValue(ANSWER)
 })
 
@@ -155,7 +155,7 @@ describe('processOffer — closing and the taken notice', () => {
     const claimed = { ...OFFER, status: 'claimed', claimed_by: 'c1', claimed_at: '2026-09-28T09:59:00Z', taken_notified_at: null, claimer: { full_name: 'Coach B' } }
     const db = scriptedDb({ shift_offers: [ok, ok] })
     expect(await processOffer(db, claimed, { nowMs: IN_BAND })).toBe('sent')
-    expect(resolveRoleRecipientIds).toHaveBeenCalledWith(db, 'loc-1', expect.arrayContaining(['manager', 'owner']))
+    expect(readRoleRecipientIds).toHaveBeenCalledWith(db, 'loc-1', expect.arrayContaining(['manager', 'owner']))
     expect(notifyUsersOnce).toHaveBeenCalledWith(db, 'shift_offer_taken:o1:a1', ['mgr'], expect.objectContaining({ title: 'Offered shift taken', body: 'Coach B took Morning, Tue 29 Sep, 06:00 to 07:00.' }))
     expect(allArgsOf(chainsFor(db, 'shift_offers')[0], 'eq')).toEqual([['id', 'o1'], ['status', 'claimed'], ['notice_attempts', 0]])
     const stamp = chainsFor(db, 'shift_offers')[1]
@@ -163,6 +163,17 @@ describe('processOffer — closing and the taken notice', () => {
     expect(allArgsOf(stamp, 'eq')).toEqual([['id', 'o1'], ['status', 'claimed'], ['notice_attempts', 1]])
     expect(loadBlockCandidates).not.toHaveBeenCalled()
   })
+  it('review 1 — a failed managers read releases the lease and NEVER stamps (the managers\' only signal)', async () => {
+    readRoleRecipientIds.mockResolvedValueOnce({ ids: [], error: { message: 'down' } })
+    const claimed = { ...OFFER, status: 'claimed', claimed_by: 'c1', claimed_at: '2026-09-28T09:59:00Z', taken_notified_at: null }
+    const db = scriptedDb({ shift_offers: [ok, ok] })
+    expect(await processOffer(db, claimed, { nowMs: IN_BAND })).toBe('retry')
+    expect(notifyUsersOnce).not.toHaveBeenCalled()
+    const release = chainsFor(db, 'shift_offers')[1]
+    expect(argsOf(release, 'update')[0]).toEqual({ notice_lease_until: null })
+    expect(chainsFor(db, 'shift_offers').some((c) => argsOf(c, 'update')?.[0]?.taken_notified_at)).toBe(false)
+  })
+
   it('claimed more than 24 h ago and never told: gives up (stamped), never a stale message', async () => {
     const claimed = { ...OFFER, status: 'claimed', claimed_by: 'c1', claimed_at: '2026-09-27T09:00:00Z', taken_notified_at: null }
     const db = scriptedDb({ shift_offers: [ok] })

@@ -13,7 +13,8 @@
 //      notice_attempts + 1; zero rows = someone else holds it ('busy');
 //   2. recipients: CANDIDATES.1's ready + advisory minus the poster
 //      (broadcast) or the studio's managers minus the claimant (taken); an
-//      unreadable or unchecked answer RELEASES the lease ('retry');
+//      unreadable or unchecked answer, or an unreadable managers list,
+//      RELEASES the lease ('retry'), never stamps an empty send;
 //   3. send: notifyUsersOnce under shift_offer_<kind>:<id>:a<attempt>; a send
 //      that failed outright releases the lease ('retry');
 //   4. stamp, guarded on the status and the attempt. A process killed between
@@ -26,7 +27,7 @@
 // still in flight at attempt 1 could stamp (and unlease) the taken attempt 1.
 
 import { notifyUsersOnce } from './push-dedup'
-import { resolveRoleRecipientIds } from './push'
+import { readRoleRecipientIds } from './push'
 import { loadBlockCandidates } from './candidates-data'
 import { MANAGER_ROLES } from './schemas'
 import { logError, logWarn } from './log'
@@ -168,7 +169,15 @@ async function deliver(db, offer, kind, nowMs) {
     }
     ids = audience.ids
   } else {
-    ids = (await resolveRoleRecipientIds(db, offer.location_id, MANAGER_ROLES)).filter((id) => id && id !== offer.claimed_by)
+    // Review 1 — a failed read is NOT "no managers": stamping on it would lose
+    // the managers' only signal that the shift was taken. Release, retry.
+    const managers = await readRoleRecipientIds(db, offer.location_id, MANAGER_ROLES)
+    if (managers.error) {
+      logWarn('shift-offer', 'managers unreadable; the taken notice is retried next tick', { offerId: offer.id, err: managers.error.message })
+      await releaseLease(db, offer, attempt)
+      return 'retry'
+    }
+    ids = managers.ids.filter((id) => id && id !== offer.claimed_by)
   }
 
   if (ids.length > 0) {
