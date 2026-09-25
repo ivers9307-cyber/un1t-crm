@@ -989,7 +989,7 @@ describe('PUT /api/schedule/templates/[id] — one-off staffing edits survive (B
 
   it('re-saving the SAME times reports nothing kept (nothing was going to change)', async () => {
     getCurrentUser.mockResolvedValue(MANAGER_A)
-    const db = useDb({ shift_templates: templates(), rosters: [], shift_blocks: [blk('blk-edited', { start_time: '09:30' })] })
+    useDb({ shift_templates: templates(), rosters: [], shift_blocks: [blk('blk-edited', { start_time: '09:30' })] })
     const body = await (await PUT(req({ start_time: '09:00', end_time: '10:00' }), { params: { id: 'tmpl-a' } })).json()
     expect(body.propagation.futureBlocksKeptEdited).toBe(0)
   })
@@ -1024,3 +1024,26 @@ describe('PUT /api/schedule/templates/[id] — staffing writes guarded on the va
     expect(body.propagation.futureBlocksUpdated).toBe(0)
   })
 })
+
+// BLOCKEDIT.1 third check 3 — both rules at once, per field: a block with its
+// own TIMES but the template's default minimum takes the new minimum and keeps
+// its times.
+describe('PUT /api/schedule/templates/[id] — time and minimum together (third check 3)', () => {
+  it('the minimum propagates; the edited time does not', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    const db = useDb({
+      shift_templates: templates(), rosters: [],
+      shift_blocks: [{ id: 'blk-own-time', location_id: 'loc-a', template_id: 'tmpl-a', block_date: FUTURE, start_time: '09:30', end_time: '10:00', min_coaches: 1, max_coaches: 10, shift_assignments: [] }],
+    })
+    const body = await (await PUT(req({ start_time: '08:00', min_coaches: 2 }), { params: { id: 'tmpl-a' } })).json()
+    const writes = db._writes.filter((w) => w.table === 'shift_blocks' && w.op === 'update')
+    const timeWrite = writes.find((w) => 'start_time' in w.payload)
+    const minWrite = writes.find((w) => 'min_coaches' in w.payload)
+    expect(timeWrite.affected).toBe(0)
+    expect(minWrite.payload).toEqual({ min_coaches: 2 })
+    expect(minWrite.filters.find((f) => f.type === 'in').val).toEqual(['blk-own-time'])
+    expect(minWrite.affected).toBe(1)
+    expect(body.propagation.futureBlocksKeptEdited).toBe(1)
+  })
+})
+
