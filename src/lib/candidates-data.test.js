@@ -49,11 +49,12 @@ const COMP = [
   { profile_id: 'nul', contracted_hours_per_week: null },
 ]
 
-function mockDb({ links = LINKS, leave = LEAVE, comp = COMP, fail = {} } = {}) {
+function mockDb({ links = LINKS, leave = LEAVE, comp = COMP, fail = {}, throwOn = [] } = {}) {
   const log = []
   return {
     log,
     from(table) {
+      if (throwOn.includes(table)) throw new Error(`${table}: client exploded`)
       const q = { table, select: null, eqs: [], ins: [], lte: null, gte: null, orders: [], range: null }
       log.push(q)
       const ids = () => q.ins.find(([c]) => c === 'profile_id')?.[1] || []
@@ -175,6 +176,35 @@ describe('loadBlockCandidates — manager', () => {
 
     const broken = await loadBlockCandidates(mockDb({ fail: { profile_locations: true } }), { block: BLOCK, audience: 'manager' })
     expect(broken.error).toEqual({ message: 'profile_locations unreadable' })
+  })
+
+  // CANDIDATES.1 review 3 — the header's promise holds for a read that THROWS
+  // (a client bug, a network fault), not only one that returns an error.
+  it('a side read that throws only clears its checked flag; the list still comes back', async () => {
+    readOrgShiftRows.mockRejectedValue(new Error('shift reader exploded'))
+    readStudioAvailability.mockRejectedValue(new Error('availability reader exploded'))
+    const db = mockDb({ throwOn: ['time_off_requests', 'profile_compensation'] })
+    const out = await loadBlockCandidates(db, { block: BLOCK, audience: 'manager' })
+    expect(out.error).toBeNull()
+    expect(out.checked).toEqual({ shifts: false, cross_studio: true, leave: false, availability: false, contract: false })
+    expect(out.candidates.map((c) => c.profile_id)).toEqual(['ann', 'con', 'nul'])
+    expect(out.candidates.every((c) => c.free === null && c.on_leave === null && c.unavailable === null && c.contracted_hours === null)).toBe(true)
+  })
+
+  it('a throwing sibling read narrows to this studio and says so, not a 500', async () => {
+    siblingLocationIds.mockRejectedValue(new Error('siblings exploded'))
+    const out = await loadBlockCandidates(mockDb(), { block: BLOCK, audience: 'manager' })
+    expect(out.error).toBeNull()
+    expect(out.checked.cross_studio).toBe(false)
+    expect(readOrgShiftRows.mock.calls[0][1].scopeIds).toEqual(['loc1'])
+  })
+
+  it('one throwing read does not cost the others their answer', async () => {
+    readStudioAvailability.mockRejectedValue(new Error('availability reader exploded'))
+    const out = await loadBlockCandidates(mockDb(), { block: BLOCK, audience: 'manager' })
+    expect(out.checked).toEqual({ shifts: true, cross_studio: true, leave: true, availability: false, contract: true })
+    expect(out.candidates.find((c) => c.profile_id === 'con').on_leave).toMatchObject({ label: 'Holiday' })
+    expect(out.candidates.find((c) => c.profile_id === 'ann')).toMatchObject({ contracted_hours: 39, week_minutes: 240 })
   })
 
   it('nobody eligible: no further reads', async () => {

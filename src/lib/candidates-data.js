@@ -21,8 +21,8 @@
 // contracted_hours_per_week BY NAME (the table's other four columns are pay).
 //
 // Never throws. A failed member read is { error } (nothing to rank). Any
-// other failed read sets its `checked` flag false and leaves that fact null,
-// so the picker can say what it did not check.
+// other read that fails OR THROWS (settle) sets its `checked` flag false and
+// leaves that fact null, so the picker can say what it did not check.
 
 import { siblingLocationIds } from './sibling-locations'
 import { readOrgShiftRows } from './working-time-data'
@@ -37,6 +37,17 @@ import { isWorkingTimeCovered } from '@shared/working-time'
 
 const PAGE = 1000
 const CHUNK = 200
+
+// CANDIDATES.1 review 3 — a side read that THROWS (a client bug, a network
+// fault) is the same as one that returns an error: its facet is "not
+// checked", never a 500 for the whole list and never an all-clear.
+async function settle(read) {
+  try {
+    return (await read()) || { error: { message: 'no answer' } }
+  } catch (e) {
+    return { error: { message: e?.message || 'read threw' } }
+  }
+}
 
 /**
  * Rosterable members of one studio, minus `excludeIds`, in profile_id order.
@@ -128,7 +139,7 @@ export async function loadBlockCandidates(db, { block, audience = 'manager' } = 
     const ids = members.map((m) => m.profile_id)
     if (ids.length === 0) return { ...buildCandidates({ block, members, checked, audience: who }), checked, error: null }
 
-    const { ids: siblingIds, error: sibErr } = await siblingLocationIds(db, block.location_id)
+    const { ids: siblingIds, error: sibErr } = await settle(() => siblingLocationIds(db, block.location_id))
     if (sibErr) {
       checked.cross_studio = false
       logWarn('candidates', 'sibling studios unreadable; candidates check this studio only', { blockId: block.id, err: sibErr.message })
@@ -138,16 +149,18 @@ export async function loadBlockCandidates(db, { block, audience = 'manager' } = 
     const employees = members.filter((m) => isWorkingTimeCovered(m.employment_type)).map((m) => m.profile_id)
     const memberIds = new Set(ids)
 
+    // Each read settles on its own (settle): one that throws clears only its
+    // own checked flag, and never costs the others their answer.
     const [shiftRead, leaveRead, availRead, contractRead] = await Promise.all([
       // A coach is never told of a draft (ROSTER-FIX.1 D1): published rosters
       // only for the colleague audience. A manager counts drafts, as WORKTIME.
-      readOrgShiftRows(db, {
+      settle(() => readOrgShiftRows(db, {
         locationId: block.location_id, scopeIds, profileIds: ids,
         from: addDaysISO(monday, -1), to: addDaysISO(monday, 7), publishedOnly: !manager,
-      }),
-      manager ? readApprovedLeaveOn(db, ids, block.block_date) : null,
-      manager ? readStudioAvailability(db, { locationId: block.location_id, startDate: block.block_date, endDate: block.block_date }) : null,
-      manager ? readContractedHours(db, employees) : null,
+      })),
+      manager ? settle(() => readApprovedLeaveOn(db, ids, block.block_date)) : null,
+      manager ? settle(() => readStudioAvailability(db, { locationId: block.location_id, startDate: block.block_date, endDate: block.block_date })) : null,
+      manager ? settle(() => readContractedHours(db, employees)) : null,
     ])
 
     const note = (facet, err) => {
