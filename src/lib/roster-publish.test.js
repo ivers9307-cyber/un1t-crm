@@ -9,7 +9,7 @@
 //   4. Already-published-in-month-outside-period adds to the
 //      total (publish is the last shoe to drop, not the only one).
 
-import { describe, it, expect, afterEach, vi } from 'vitest'
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 
 // COPYLEAVE.1 review — the two pure advisory helpers run for REAL (wrapped only
 // so one test can make them throw); leaveCovering is untouched because the
@@ -22,6 +22,11 @@ vi.mock('./log', async () => {
   const actual = await vi.importActual('./log')
   return { ...actual, logWarn: vi.fn() }
 })
+// WORKTIME.1 — the reader is pinned in working-time-data.test.js. Here it is a
+// seam, so no budget fixture above ever meets a profiles table. Default: an
+// empty, complete read.
+const EMPTY_WORKING_TIME = () => ({ shifts: [], people: new Map(), crossStudioChecked: true, error: null })
+vi.mock('./working-time-data', () => ({ loadWorkingTimeShifts: vi.fn(async () => EMPTY_WORKING_TIME()) }))
 import {
   projectPublishImpact,
   projectPublishImpactBatch,
@@ -42,6 +47,7 @@ import {
 } from './roster-publish'
 import { leaveClashes as leaveClashesFn, doubleBookings as doubleBookingsFn } from './roster-publish-advisories'
 import { logWarn } from './log'
+import { loadWorkingTimeShifts } from './working-time-data'
 
 // COPYLEAVE.1 — every location belongs to exactly one organisation (mig 079).
 // loc2 is loc1's sibling; loc9 belongs to somebody else.
@@ -2077,5 +2083,111 @@ describe('projectPublishImpact — admin shifts', () => {
     const db = mockDb({ location: { id: 'loc1', monthly_contractor_budget_eur: 500 }, contractors: [dan], blocks: [] })
     await projectPublishImpact(db, PERIOD)
     expect(db.blockQueries[0].select).toMatch(/shift_templates\(name, kind\)/)
+  })
+})
+
+describe('projectPublishImpact — working time (WORKTIME.1)', () => {
+  const PERIOD = { locationId: 'loc1', periodStart: '2026-05-04', periodEnd: '2026-05-10', todayIso: '2026-05-01' }
+  const PEOPLE = new Map([['sarah', { full_name: 'Sam Demo', employment_type: 'fte' }]])
+  const read = (over = {}) => ({ shifts: [], people: PEOPLE, crossStudioChecked: true, error: null, ...over })
+  const row = (block_id, block_date, start_time, end_time, location_id = 'loc1', location_name = 'Studio North') =>
+    ({ profile_id: 'sarah', block_id, block_date, start_time, end_time, location_id, location_name, name: 'Class' })
+  const fixture = () => mockDb({
+    location: { id: 'loc1', monthly_contractor_budget_eur: 500 },
+    contractors: [dan, sarah],
+    blocks: [
+      block({ id: 'b1', date: '2026-05-06', start: '09:00', end: '11:00', coaches: ['sarah', 'dan'] }),
+      block({ id: 'b-later', date: '2026-05-20', start: '09:00', end: '11:00', coaches: ['eve'] }), // same month, outside the period
+    ],
+  })
+
+  beforeEach(() => { loadWorkingTimeShifts.mockReset(); loadWorkingTimeShifts.mockResolvedValue(read()) })
+  afterEach(() => { loadWorkingTimeShifts.mockReset(); loadWorkingTimeShifts.mockImplementation(async () => EMPTY_WORKING_TIME()) })
+
+  it('reads ONCE per preview: the people rostered here in the period, Sunday before its first week to Monday after its last', async () => {
+    await projectPublishImpact(fixture(), PERIOD)
+    expect(loadWorkingTimeShifts).toHaveBeenCalledTimes(1)
+    const [, args] = loadWorkingTimeShifts.mock.calls[0]
+    expect({ ...args, profileIds: [...args.profileIds].sort() }).toEqual({
+      locationId: 'loc1', profileIds: ['dan', 'sarah'], from: '2026-05-03', to: '2026-05-11',
+    })
+  })
+
+  it('lists a long week, hours only', async () => {
+    loadWorkingTimeShifts.mockResolvedValue(read({
+      shifts: ['2026-05-04', '2026-05-05', '2026-05-06', '2026-05-07', '2026-05-08', '2026-05-09']
+        .map((d) => row(`w-${d}`, d, '09:00', '17:15')),
+    }))
+    const r = await projectPublishImpact(fixture(), PERIOD)
+    expect(r.workingTime).toEqual({
+      checked: true,
+      untimed: 0,
+      restGaps: [],
+      longWeeks: [{ profile_id: 'sarah', coach_name: 'Sam Demo', week_start: '2026-05-04', minutes: 2970, shift_count: 6, studio_count: 1 }],
+    })
+    expect(JSON.stringify(r.workingTime)).not.toMatch(/€|rate|salary|cost/i)
+  })
+
+  it('lists a short rest across the two studios, naming only the other one', async () => {
+    loadWorkingTimeShifts.mockResolvedValue(read({
+      shifts: [row('hs', '2026-05-05', '20:00', '22:00', 'loc2', 'Studio South'), row('b1', '2026-05-06', '06:30', '08:00')],
+    }))
+    const r = await projectPublishImpact(fixture(), PERIOD)
+    expect(r.workingTime.restGaps).toMatchObject([{
+      profile_id: 'sarah', coach_name: 'Sam Demo', rest_minutes: 510,
+      before: { date: '2026-05-05', location_name: 'Studio South' }, after: { date: '2026-05-06', location_name: null },
+    }])
+  })
+
+  it('a failed read, or one that throws, says "not checked" and touches neither the budget nor the clash lists', async () => {
+    const baseline = await projectPublishImpact(fixture(), PERIOD)
+    for (const setup of [
+      () => loadWorkingTimeShifts.mockResolvedValue(read({ people: new Map(), crossStudioChecked: false, error: { message: 'down' } })),
+      () => loadWorkingTimeShifts.mockRejectedValue(new Error('boom')),
+    ]) {
+      setup()
+      const r = await projectPublishImpact(fixture(), PERIOD)
+      expect(r.workingTime).toEqual({ restGaps: [], longWeeks: [], untimed: 0, checked: false })
+      expect(r.crossLocationChecked).toBe(true)
+      expect(r.periodProjectedEur).toBe(baseline.periodProjectedEur)
+      expect(r.overBudget).toBe(baseline.overBudget)
+    }
+  })
+
+  it('unreadable other studios: lists what it could read and says the check is incomplete', async () => {
+    loadWorkingTimeShifts.mockResolvedValue(read({
+      crossStudioChecked: false,
+      shifts: ['2026-05-04', '2026-05-05', '2026-05-06', '2026-05-07', '2026-05-08', '2026-05-09']
+        .map((d) => row(`w-${d}`, d, '09:00', '17:15')),
+    }))
+    const r = await projectPublishImpact(fixture(), PERIOD)
+    expect(r.workingTime.checked).toBe(false)
+    expect(r.workingTime.longWeeks).toHaveLength(1)
+  })
+
+  // The batch loads one context over a SPAN of drafts, so its reader answer
+  // can hold people rostered in another draft's period. Each period lists only
+  // the people rostered here in IT, which is exactly what the single path read.
+  it('lists only people rostered here in this period, whatever else the read holds', async () => {
+    const people = new Map([...PEOPLE, ['eve', { full_name: 'Eve Other', employment_type: 'fte' }]])
+    loadWorkingTimeShifts.mockResolvedValue(read({
+      people,
+      shifts: ['2026-05-04', '2026-05-05', '2026-05-06', '2026-05-07', '2026-05-08', '2026-05-09']
+        .flatMap((d) => [row(`w-${d}`, d, '09:00', '17:15'), { ...row(`e-${d}`, d, '09:00', '17:15'), profile_id: 'eve' }]),
+    }))
+    const r = await projectPublishImpact(fixture(), PERIOD)
+    expect(r.workingTime.longWeeks.map((w) => w.profile_id)).toEqual(['sarah'])
+  })
+
+  it('counts the shifts it could not time, so the modal can say the check is partial', async () => {
+    loadWorkingTimeShifts.mockResolvedValue(read({ shifts: [row('nt', '2026-05-06', null, null), row('ok', '2026-05-07', '09:00', '10:00')] }))
+    const r = await projectPublishImpact(fixture(), PERIOD)
+    expect(r.workingTime).toMatchObject({ untimed: 1, checked: true })
+  })
+
+  it('a real publish (advisories: false) never reads it and carries no workingTime key', async () => {
+    const r = await projectPublishImpact(fixture(), { ...PERIOD, advisories: false })
+    expect(loadWorkingTimeShifts).not.toHaveBeenCalled()
+    expect('workingTime' in r).toBe(false)
   })
 })
