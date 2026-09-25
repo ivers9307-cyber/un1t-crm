@@ -32,6 +32,8 @@
 //   checklist_compliance — manager-side alert about a coach's checklist;
 //     there is no manager checklist surface on mobile, so land on the
 //     Dashboard tab (the studio dashboard for managers).
+//   availability_changed — manager-side notice that a coach changed their
+//     availability; no per-coach view on mobile, so Manage mode.
 
 // Param guards — server payload fields become URL search params, so only
 // well-formed values are appended; anything else falls back to the bare
@@ -98,6 +100,13 @@ export function routeForNotification(data) {
       return isIsoDay(data.week_start)
         ? `/(tabs)/schedule?date=${data.week_start}&view=manage`
         : '/(tabs)/schedule?view=manage'
+    // AVAIL.2 — a coach changed when they can't work (AVAIL.1a, sent to the
+    // roster builders at their studios). No per-coach availability view on
+    // the phone, so open the roster they build: Manage mode (schedule.jsx
+    // honours ?view=manage for manager roles only; anyone else lands on their
+    // own week). The payload's profile_id is there for a better target later.
+    case 'availability_changed':
+      return '/(tabs)/schedule?view=manage'
     case 'schedule_published':
     case 'schedule_updated':
       return isIsoDay(data.start_date) ? `/(tabs)/schedule?date=${data.start_date}` : '/(tabs)/schedule'
