@@ -128,6 +128,17 @@ describe('deliverAvailabilityNotice', () => {
     expect(stamp.ops).toContainEqual(['is', 'notified_at', null])
   })
 
+  it("a manager whose active is NULL still counts (mig 626's `active IS NOT FALSE`)", async () => {
+    const db = world({
+      members: [
+        { profile_id: 'mgr-null', location_id: LOC_A, role: 'manager', profiles: { id: 'mgr-null', role: 'staff', active: null } },
+        { profile_id: 'mgr-off', location_id: LOC_A, role: 'manager', profiles: { id: 'mgr-off', role: 'staff', active: false } },
+      ],
+    })
+    await deliverAvailabilityNotice(db, change(), { nowMs: NOON })
+    expect(sendPushOnce.mock.calls[0][2]).toEqual(['mgr-null'])
+  })
+
   it('outside the band: nothing sent, nothing stamped (the sweep sends it at 07:00)', async () => {
     const db = world()
     expect(await deliverAvailabilityNotice(db, change({ created_at: '2026-09-25T22:29:00Z' }), { nowMs: LATE })).toEqual({ status: 'deferred', sent: 0 })

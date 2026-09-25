@@ -72,7 +72,8 @@ async function readRecipients(db, locationIds, coachId) {
   if (error) return { ids: null, error }
   const ids = new Set()
   for (const l of data || []) {
-    if (!l?.profiles?.active || l.profile_id === coachId) continue
+    // mig 626's staff predicate: `active IS NOT FALSE` (a NULL active counts).
+    if (!l?.profiles || l.profiles.active === false || l.profile_id === coachId) continue
     if (AVAILABILITY_NOTIFY_ROLES.includes(l.role) || l.profiles.role === 'master') ids.add(l.profile_id)
   }
   return { ids: [...ids], error: null }
