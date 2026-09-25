@@ -216,24 +216,31 @@ export async function deliverAvailabilityNotice(db, change, { nowMs = Date.now()
  */
 export async function deliverOwedAvailabilityNotices(db, profileId, { nowMs = Date.now() } = {}) {
   try {
-    const { data, error } = await db
-      .from('staff_availability_changes')
-      .select('id, profile_id, actor_id, before, after, created_at')
-      .eq('profile_id', profileId)
-      .is('notified_at', null)
-      .order('created_at', { ascending: true })
-      .limit(AVAILABILITY_SWEEP_BATCH)
+    const { rows, error } = await readOwedRows(db, profileId)
     if (error) {
       // The sweep picks it up once the lease has run out.
       logError('availability-notify', "could not read the coach's owed notices", { profile_id: profileId, err: error.message })
       return { status: 'error', sent: 0 }
     }
-    if (!data || data.length === 0) return { status: 'none', sent: 0 }
-    return await deliverAvailabilityNotice(db, foldChanges(data), { nowMs })
+    if (rows.length === 0) return { status: 'none', sent: 0 }
+    return await deliverAvailabilityNotice(db, foldChanges(rows), { nowMs })
   } catch (err) {
     logError('availability-notify', 'deliver owed threw', { profile_id: profileId, err: err?.message })
     return { status: 'error', sent: 0 }
   }
+}
+
+/** One coach's change rows still owed a notice, oldest first. */
+async function readOwedRows(db, profileId) {
+  const { data, error } = await db
+    .from('staff_availability_changes')
+    .select('id, profile_id, actor_id, before, after, created_at')
+    .eq('profile_id', profileId)
+    .is('notified_at', null)
+    .order('created_at', { ascending: true })
+    .limit(AVAILABILITY_SWEEP_BATCH)
+  if (error) return { rows: null, error }
+  return { rows: data || [], error: null }
 }
 
 /**
@@ -241,10 +248,10 @@ export async function deliverOwedAvailabilityNotices(db, profileId, { nowMs = Da
  * coach. Never throws; `errors` > 0 keeps its heartbeat from stamping.
  */
 export async function runAvailabilityNoticeSweep(db, { nowMs = Date.now() } = {}) {
-  const out = { pending: 0, groups: 0, leased: 0, sent: 0, deferred: 0, stale: 0, reverted: 0, no_recipients: 0, errors: 0 }
+  const out = { pending: 0, groups: 0, leased: 0, settled_elsewhere: 0, sent: 0, deferred: 0, stale: 0, reverted: 0, no_recipients: 0, errors: 0 }
   const { data, error } = await db
     .from('staff_availability_changes')
-    .select('id, profile_id, actor_id, before, after, created_at')
+    .select('id, profile_id, created_at')
     .is('notified_at', null)
     .order('created_at', { ascending: true })
     .limit(AVAILABILITY_SWEEP_BATCH)
@@ -254,13 +261,23 @@ export async function runAvailabilityNoticeSweep(db, { nowMs = Date.now() } = {}
     return out
   }
   out.pending = (data || []).length
-  const byCoach = new Map()
-  for (const row of data || []) {
-    if (!byCoach.has(row.profile_id)) byCoach.set(row.profile_id, [])
-    byCoach.get(row.profile_id).push(row)
-  }
-  for (const rows of byCoach.values()) {
+  // The snapshot only says WHICH coaches are owed. Each coach's rows are read
+  // again just before their notice goes, so a save that landed since the
+  // snapshot is seen: that coach is back under the lease (the save is sending
+  // everything, folded), rather than sent an older change alone after it.
+  const coaches = [...new Set((data || []).map((row) => row.profile_id))]
+  for (const profileId of coaches) {
     out.groups++
+    const { rows, error: rowsError } = await readOwedRows(db, profileId)
+    if (rowsError) {
+      logError('availability-notify', "could not re-read the coach's owed notices", { profile_id: profileId, err: rowsError.message })
+      out.errors++
+      continue
+    }
+    if (rows.length === 0) {
+      out.settled_elsewhere++
+      continue
+    }
     const last = rows[rows.length - 1]
     // Inside the lease the save's own attempt may still be sending; leave it.
     const lastMs = Date.parse(last.created_at)

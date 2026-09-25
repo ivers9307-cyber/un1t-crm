@@ -73,7 +73,7 @@ function world({ coachStudios = [LOC_A, LOC_B], tz = 'Europe/Dublin', members, l
     profiles: () => ({ data: { full_name: 'Sam Demo' }, error: null }),
     staff_availability_changes: (call) => (has(call, 'update')
       ? { data: null, error: stampError }
-      : { data: queueError ? null : queue, error: queueError }),
+      : { data: queueError ? null : (typeof queue === 'function' ? queue(call) : queue), error: queueError }),
   })
 }
 
@@ -309,6 +309,32 @@ describe('runAvailabilityNoticeSweep', () => {
     expect(availabilityRetryKey('x', NOON)).toBe(availabilityRetryKey('x', NOON + 1000))
     expect(availabilityRetryKey('x', NOON)).not.toBe(availabilityRetryKey('x', NOON + AVAILABILITY_RETRY_SLOT_MS))
     expect(availabilityRetryKey('x', NOON)).not.toBe(availabilityEventKey('x'))
+  })
+
+  it("re-reads each coach's owed rows just before sending: a save that landed since the snapshot puts the coach back under the lease", async () => {
+    const A = { id: 'ch-1', profile_id: COACH, before: [MON], after: [], created_at: new Date(NOON - 60 * 60_000).toISOString() }
+    const B = { id: 'ch-2', profile_id: COACH, before: [], after: [TUE], created_at: new Date(NOON - 30_000).toISOString() }
+    const db = world({ queue: (call) => (has(call, 'eq') ? [A, B] : [A]) })
+    expect(await runAvailabilityNoticeSweep(db, { nowMs: NOON })).toMatchObject({ pending: 1, leased: 1, sent: 0, errors: 0 })
+    expect(sendPushOnce).not.toHaveBeenCalled()
+    expect(stamps(db)).toHaveLength(0)
+    const reread = db.calls.filter((c) => c.table === 'staff_availability_changes' && !has(c, 'update'))[1]
+    expect(reread.ops).toContainEqual(['eq', 'profile_id', COACH])
+    expect(reread.ops).toContainEqual(['is', 'notified_at', null])
+  })
+
+  it('sends what the fresh read says (folded), and skips a coach settled elsewhere since the snapshot', async () => {
+    const A = { id: 'ch-1', profile_id: COACH, before: [MON], after: [], created_at: new Date(NOON - 60 * 60_000).toISOString() }
+    const B = { id: 'ch-2', profile_id: COACH, before: [], after: [TUE], created_at: new Date(NOON - 40 * 60_000).toISOString() }
+    let db = world({ queue: (call) => (has(call, 'eq') ? [A, B] : [A]) })
+    await runAvailabilityNoticeSweep(db, { nowMs: NOON })
+    expect(sendPushOnce.mock.calls[0][1]).toBe(availabilityRetryKey('ch-2', NOON))
+    expect(stamps(db)[0].ops).toContainEqual(['in', 'id', ['ch-1', 'ch-2']])
+
+    sendPushOnce.mockClear()
+    db = world({ queue: (call) => (has(call, 'eq') ? [] : [A]) })
+    expect(await runAvailabilityNoticeSweep(db, { nowMs: NOON })).toMatchObject({ settled_elsewhere: 1, sent: 0, errors: 0 })
+    expect(sendPushOnce).not.toHaveBeenCalled()
   })
 
   it('reads only un-notified rows, oldest first, capped', async () => {
