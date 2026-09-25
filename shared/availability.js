@@ -137,8 +137,26 @@ export function splitRules(rows) {
   })
 }
 
-/** What is wrong with one canonical rule, in the coach's words; null if nothing. */
-export function ruleProblem(rule, { todayIso = null } = {}) {
+/**
+ * A rule's CONTENT identity (kind, day or dates, window; not the note), for
+ * matching what a client sends back against what is stored.
+ */
+export function ruleKey(rule) {
+  const r = normaliseRule(rule)
+  return r ? windowKey(r) : ''
+}
+
+/**
+ * What is wrong with one canonical rule, in the coach's words; null if nothing.
+ * `knownKeys` (optional): ruleKey()s of the person's STORED dated rules that
+ * started before today. A dated rule that ended before today is refused
+ * ('That date has passed') unless it is one of them: then it is history the
+ * client merely sent back (a tab left open over midnight), which is no
+ * problem, and the caller drops it with withoutEnded() before saving. A dated
+ * rule that STARTS before today and is not one of them is refused too ('Start
+ * today or later'): no backdating.
+ */
+export function ruleProblem(rule, { todayIso = null, knownKeys = null } = {}) {
   if (!rule) return 'This entry could not be read'
   if (rule.kind === 'weekly') {
     if (!AVAILABILITY_WEEKDAYS.includes(rule.weekday)) return 'Choose a day of the week'
@@ -149,7 +167,13 @@ export function ruleProblem(rule, { todayIso = null } = {}) {
     if (end < start) return 'The last day is before the first day'
     if (end - start + 1 > AVAILABILITY_LIMITS.spanDays) return 'Up to a year at a time'
     const today = dayIndex(todayIso)
-    if (today !== null && end < today) return 'That date has passed'
+    if (today !== null && end < today) return knownKeys?.has(windowKey(rule)) ? null : 'That date has passed'
+    // Backdating: a NEW or CHANGED rule may not start before today (its past
+    // days would read as "now unavailable" on days already gone). One the
+    // coach already has, by content (a note edit is fine), stays. Judged only
+    // when knownKeys is given: the route always gives it; a client that has
+    // not loaded them leaves it to the route.
+    if (knownKeys && today !== null && start < today && !knownKeys.has(windowKey(rule))) return 'Start today or later'
     if (today !== null && start > today + AVAILABILITY_LIMITS.aheadDays) return 'Up to two years ahead'
   }
   if (!rule.all_day) {
@@ -160,6 +184,60 @@ export function ruleProblem(rule, { todayIso = null } = {}) {
   }
   if (rule.note && rule.note.length > AVAILABILITY_LIMITS.noteChars) return `Keep the note to ${AVAILABILITY_LIMITS.noteChars} characters`
   return null
+}
+
+/**
+ * THE STARTED-RULE CONTRACT (server side; web and phone just send the edited
+ * rule). A dated rule that has already started (start_date < today) may come
+ * back from a client in only three shapes:
+ *   * unchanged, or with only its note edited: kept as it is;
+ *   * with only its END moved (same start_date, all_day and times as a stored
+ *     rule that is still current): the days already gone are history, so the
+ *     rule is carried to continue FROM TODAY (start_date := today), and the
+ *     save (replace_staff_unavailability, mig 630) keeps start..yesterday of
+ *     the stored rule as a history row. 20-30 Sep edited to end on the 27th,
+ *     saved on the 25th, becomes history 20-24 + current 25-27. An end moved
+ *     to before today means "not from today": the rule is marked known, so
+ *     validation passes it and withoutEnded() drops it (the RPC keeps its
+ *     elapsed days as history, as for a delete);
+ *   * anything else (a new rule, a moved start, a changed window): left as
+ *     sent, so ruleProblem refuses it ('Start today or later').
+ * `stored` = the person's stored dated rules that started before today (the
+ * route reads them). Returns the carried input (same order and length, so
+ * issue paths still index what was validated) and the knownKeys to validate
+ * with.
+ */
+export function carryStartedRules(input, stored, todayIso) {
+  const today = dayIndex(todayIso)
+  const known = (stored || []).map(normaliseRule).filter((r) => r && r.kind === 'dated')
+  const knownKeys = new Set(known.map(windowKey))
+  if (today === null) return { input, knownKeys }
+  const sameWindow = (a, b) => a.all_day === b.all_day && (a.all_day || (a.start_time === b.start_time && a.end_time === b.end_time))
+  const dated = input.dated.map((r) => {
+    const start = dayIndex(r.start_date)
+    const end = dayIndex(r.end_date)
+    if (start === null || end === null || start >= today || knownKeys.has(windowKey(r))) return r
+    const match = known.find((k) => k.start_date === r.start_date && dayIndex(k.end_date) >= today && sameWindow(k, r))
+    if (!match) return r
+    if (end < today) {
+      knownKeys.add(windowKey(r))
+      return r
+    }
+    return { ...r, start_date: todayIso }
+  })
+  return { input: { weekly: input.weekly, dated }, knownKeys }
+}
+
+/** { weekly, dated } without the dated rules that ended before todayIso (history is never re-saved). */
+export function withoutEnded(input, todayIso) {
+  const today = dayIndex(todayIso)
+  return {
+    weekly: input.weekly,
+    dated: input.dated.filter((r) => {
+      const end = dayIndex(r.end_date)
+      return today === null || end === null || end >= today
+    }),
+  }
 }
 
 /** Every problem with a canonical { weekly, dated }: [{ path, message }] (validateBody's issue shape). */
@@ -235,15 +313,68 @@ export function unavailableSummary(matches) {
   return [...new Set(matches.map(describeWindow))].join(', ')
 }
 
-/** What a save added and removed, by content (a note-only edit is neither). */
-export function diffAvailability(before, after) {
-  const b = flat(splitRules(flat(before)))
-  const a = flat(splitRules(flat(after)))
+/** 'YYYY-MM-DD' for a whole-day index (dayIndex's inverse). UTC arithmetic: no host timezone. */
+function isoFromDayIndex(n) {
+  const d = new Date(n * DAY_MS)
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`
+}
+
+const windowSig = (r) => (r.all_day ? 'all' : `${r.start_time}-${r.end_time}`)
+
+// The parts of each dated rule in `rules` not covered by a same-window rule in
+// `others` (a range minus ranges: a middle cut leaves two pieces).
+function subtractRanges(rules, others) {
+  const out = []
+  for (const r of rules) {
+    let pieces = [[dayIndex(r.start_date), dayIndex(r.end_date)]]
+    for (const o of others) {
+      if (windowSig(o) !== windowSig(r)) continue
+      const os = dayIndex(o.start_date)
+      const oe = dayIndex(o.end_date)
+      pieces = pieces.flatMap(([ps, pe]) => {
+        if (oe < ps || os > pe) return [[ps, pe]]
+        const keep = []
+        if (ps < os) keep.push([ps, os - 1])
+        if (pe > oe) keep.push([oe + 1, pe])
+        return keep
+      })
+    }
+    for (const [ps, pe] of pieces) out.push({ ...r, start_date: isoFromDayIndex(ps), end_date: isoFromDayIndex(pe) })
+  }
+  return out
+}
+
+/**
+ * What a save added and removed, by content (a note-only edit is neither).
+ * With `fromIso` (the day of the save), dated rules are judged from that day
+ * on: the days before it are history the save cannot change (mig 630 keeps a
+ * started rule's elapsed days), so they are clipped away, and a removed and an
+ * added dated rule with the same window cancel where they overlap. 20-30 Sep
+ * cut to 25-27 on the 25th is then "removed 28-30", not "removed 20-30, added
+ * 25-27".
+ */
+export function diffAvailability(before, after, { fromIso = null } = {}) {
+  const from = dayIndex(fromIso)
+  const clip = (rules) => (from === null ? rules : rules.flatMap((r) => {
+    if (r.kind !== 'dated') return [r]
+    const s = dayIndex(r.start_date)
+    const e = dayIndex(r.end_date)
+    if (s === null || e === null) return [r]
+    if (e < from) return []
+    return [s < from ? { ...r, start_date: fromIso } : r]
+  }))
+  const b = clip(flat(splitRules(flat(before))))
+  const a = clip(flat(splitRules(flat(after))))
   const bKeys = new Set(b.map(windowKey))
   const aKeys = new Set(a.map(windowKey))
+  const added = a.filter((r) => !bKeys.has(windowKey(r)))
+  const removed = b.filter((r) => !aKeys.has(windowKey(r)))
+  if (from === null) return { added, removed }
+  const dated = (list) => list.filter((r) => r.kind === 'dated' && dayIndex(r.start_date) !== null && dayIndex(r.end_date) !== null)
+  const other = (list) => list.filter((r) => !dated([r]).length)
   return {
-    added: a.filter((r) => !bKeys.has(windowKey(r))),
-    removed: b.filter((r) => !aKeys.has(windowKey(r))),
+    added: [...other(added), ...subtractRanges(dated(added), dated(removed))],
+    removed: [...other(removed), ...subtractRanges(dated(removed), dated(added))],
   }
 }
 

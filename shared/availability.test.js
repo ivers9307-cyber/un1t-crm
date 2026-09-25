@@ -6,7 +6,7 @@ import { describe, it, expect } from 'vitest'
 import {
   AVAILABILITY_WEEKDAYS, AVAILABILITY_LIMITS, weekdayOf, normaliseRule, normaliseAvailability,
   splitRules, ruleProblem, availabilityProblems, rulesOnDate, unavailableFor, unavailableSummary,
-  describeWindow, describeRule, diffAvailability, sameAvailability,
+  describeWindow, describeRule, diffAvailability, sameAvailability, ruleKey, withoutEnded, carryStartedRules,
 } from './availability'
 
 const weekly = (weekday, start, end, note = null) =>
@@ -81,6 +81,69 @@ describe('ruleProblem', () => {
   })
 })
 
+describe('stale tab over midnight: an ended rule the coach already has', () => {
+  const today = '2026-09-25'
+  const ended = normaliseRule(dated('2026-09-23', '2026-09-24', null, null, 'Wedding'))
+  it('is not a problem when it is a rule already stored (history), whatever its note', () => {
+    const knownKeys = new Set([ruleKey({ ...ended, note: 'old words' })])
+    expect(ruleProblem(ended, { todayIso: today, knownKeys })).toBeNull()
+  })
+  it('is still refused when it is NEW (not stored)', () => {
+    expect(ruleProblem(ended, { todayIso: today, knownKeys: new Set() })).toBe('That date has passed')
+    expect(ruleProblem(ended, { todayIso: today })).toBe('That date has passed')
+  })
+  it('withoutEnded drops dated rules that ended before today and keeps the rest', () => {
+    const input = normaliseAvailability({ weekly: [weekly('mon', null, null)], dated: [ended, dated('2026-09-25', '2026-09-25')] })
+    const out = withoutEnded(input, today)
+    expect(out.weekly).toHaveLength(1)
+    expect(out.dated.map((r) => r.start_date)).toEqual(['2026-09-25'])
+  })
+})
+
+describe('a dated rule that starts before today (backdating)', () => {
+  const today = '2026-09-25'
+  const started = normaliseRule(dated('2026-09-20', '2026-09-30'))
+  it('is refused when it is new or changed', () => {
+    expect(ruleProblem(started, { todayIso: today, knownKeys: new Set() })).toBe('Start today or later')
+    const other = new Set([ruleKey(dated('2026-09-20', '2026-09-29'))])
+    expect(ruleProblem(started, { todayIso: today, knownKeys: other })).toBe('Start today or later')
+  })
+  it('is fine when the coach already has it (a note edit included)', () => {
+    const knownKeys = new Set([ruleKey({ ...started, note: 'before the edit' })])
+    expect(ruleProblem({ ...started, note: 'after the edit' }, { todayIso: today, knownKeys })).toBeNull()
+  })
+  it('without knownKeys (a client that has not loaded them) it is not judged; the server always judges it', () => {
+    expect(ruleProblem(started, { todayIso: today })).toBeNull()
+  })
+})
+
+describe('carryStartedRules: a started rule whose END moved (the one edit allowed besides the note)', () => {
+  const today = '2026-09-25'
+  const stored = [normaliseRule(dated('2026-09-20', '2026-09-30', '09:00', '12:00', 'Course'))]
+  const run = (rule) => carryStartedRules(normaliseAvailability({ dated: [rule] }), stored, today)
+  it('shortened or extended: continues from TODAY (the RPC keeps 20-24 as history)', () => {
+    expect(run(dated('2026-09-20', '2026-09-27', '09:00', '12:00', 'Course')).input.dated[0]).toMatchObject({ start_date: '2026-09-25', end_date: '2026-09-27' })
+    expect(run(dated('2026-09-20', '2026-10-05', '09:00', '12:00')).input.dated[0]).toMatchObject({ start_date: '2026-09-25', end_date: '2026-10-05' })
+  })
+  it('the carried rule then passes validation', () => {
+    const { input, knownKeys } = run(dated('2026-09-20', '2026-09-27', '09:00', '12:00'))
+    expect(ruleProblem(input.dated[0], { todayIso: today, knownKeys })).toBeNull()
+  })
+  it('an end moved to before today: kept as a known ended rule, so validation passes and withoutEnded drops it', () => {
+    const { input, knownKeys } = run(dated('2026-09-20', '2026-09-23', '09:00', '12:00'))
+    expect(input.dated[0]).toMatchObject({ start_date: '2026-09-20', end_date: '2026-09-23' })
+    expect(ruleProblem(input.dated[0], { todayIso: today, knownKeys })).toBeNull()
+    expect(withoutEnded(input, today).dated).toEqual([])
+  })
+  it('a changed window or start is NOT carried (still refused), and an unchanged rule is left alone', () => {
+    const { input, knownKeys } = carryStartedRules(normaliseAvailability({
+      dated: [dated('2026-09-20', '2026-09-27', null, null), dated('2026-09-21', '2026-09-27', '09:00', '12:00'), stored[0]],
+    }), stored, today)
+    expect(input.dated.map((r) => r.start_date)).toEqual(['2026-09-20', '2026-09-20', '2026-09-21'])
+    expect(input.dated.map((r) => ruleProblem(r, { todayIso: today, knownKeys }))).toEqual(['Start today or later', null, 'Start today or later'])
+  })
+})
+
 describe('rulesOnDate / unavailableFor', () => {
   const rules = [weekly('wed', '10:00', '11:00', 'School run'), dated('2026-05-07', '2026-05-08', null, null, 'Wedding')]
 
@@ -136,6 +199,26 @@ describe('diffAvailability / sameAvailability', () => {
     expect(added.map(describeRule)).toEqual(['Tuesdays, all day'])
     expect(removed).toEqual([])
     expect(sameAvailability(before, after)).toBe(false)
+  })
+  it('with fromIso: dated rules clip to that day, and same-window overlaps cancel (a started rule cut short)', () => {
+    const from = '2026-09-25'
+    // 20-30 Sep cut to end on the 27th on the 25th: the RPC stores 25-27 and history 20-24.
+    let d = diffAvailability([dated('2026-09-20', '2026-09-30')], [dated('2026-09-25', '2026-09-27')], { fromIso: from })
+    expect(d.added).toEqual([])
+    expect(d.removed.map(describeRule)).toEqual(['28 Sep – 30 Sep, all day'])
+    // deleted outright: only the days from today come back
+    d = diffAvailability([dated('2026-09-20', '2026-09-30')], [], { fromIso: from })
+    expect(d.removed.map(describeRule)).toEqual(['25 Sep – 30 Sep, all day'])
+    // extended: only the new days are added
+    d = diffAvailability([dated('2026-09-20', '2026-09-30')], [dated('2026-09-25', '2026-10-03')], { fromIso: from })
+    expect(d.added.map(describeRule)).toEqual(['1 Oct – 3 Oct, all day'])
+    expect(d.removed).toEqual([])
+    // a different window never cancels, and a middle cut leaves two pieces
+    d = diffAvailability([dated('2026-10-01', '2026-10-10')], [dated('2026-10-04', '2026-10-05', '09:00', '10:00')], { fromIso: from })
+    expect(d.removed.map(describeRule)).toEqual(['1 Oct – 10 Oct, all day'])
+    d = diffAvailability([dated('2026-10-01', '2026-10-10')], [dated('2026-10-01', '2026-10-03'), dated('2026-10-06', '2026-10-10')], { fromIso: from })
+    expect(d.removed.map(describeRule)).toEqual(['4 Oct – 5 Oct, all day'])
+    expect(d.added).toEqual([])
   })
   it('accepts either flat arrays or { weekly, dated }', () => {
     expect(sameAvailability({ weekly: [weekly('mon', null, null)], dated: [] }, [weekly('mon', null, null)])).toBe(true)

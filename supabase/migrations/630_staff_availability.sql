@@ -13,6 +13,11 @@
 --   * A save REPLACES the person's weekly rules and their dated rules that
 --     have not ended (end_date >= the caller's Dublin today). A dated rule
 --     that ended before today is history: kept, never replaced, never added.
+--     A dated rule may not START before today unless it is one the person
+--     already has with the same dates and window (no backdating).
+--     A started rule that a save deletes or cuts short keeps its elapsed days
+--     (start_date..yesterday) as a history row: what was declared for a day
+--     that has gone is never rewritten.
 --   * Every real change writes ONE staff_availability_changes row (before and
 --     after snapshots, the actor). That row is also the notice queue: the
 --     route tells the managers at once inside 07:00-22:00 studio time, and
@@ -147,7 +152,7 @@ CREATE TABLE IF NOT EXISTS public.staff_availability_changes (
   notified_at    timestamptz,
   notice_outcome text,
   CONSTRAINT staff_availability_changes_notice_outcome CHECK (
-    notice_outcome IS NULL OR notice_outcome IN ('sent', 'no_recipients', 'stale', 'reverted')
+    notice_outcome IS NULL OR notice_outcome IN ('sent', 'no_recipients', 'stale', 'reverted', 'gave_up')
   ),
   CONSTRAINT staff_availability_changes_notice_pair CHECK ((notified_at IS NULL) = (notice_outcome IS NULL))
 );
@@ -169,7 +174,7 @@ REVOKE ALL ON public.staff_availability_changes FROM anon, authenticated, PUBLIC
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.staff_availability_changes TO service_role;
 
 COMMENT ON TABLE public.staff_availability_changes IS
-  'AVAIL.1 (mig 630) — one row per real change to a coach''s availability (the RPC writes none for a no-op save): before/after snapshots of the weekly + current/future dated rules, actor_id (the master under View as user). Also the notice queue: notified_at NULL = the managers are still owed a push (sent at once inside 07:00-22:00 studio time, else by the checklist-sweep cron''s availability arm); notice_outcome says how it ended (sent | no_recipients | stale after 24h | reverted when later saves undid it). Service-role only.';
+  'AVAIL.1 (mig 630) — one row per real change to a coach''s availability (the RPC writes none for a no-op save): before/after snapshots of the weekly + current/future dated rules, actor_id (the master under View as user). Also the notice queue: notified_at NULL = the managers are still owed a push (sent at once inside 07:00-22:00 studio time, else by the checklist-sweep cron''s availability arm); notice_outcome says how it ended (sent | no_recipients | stale after 24h | reverted when later saves undid it | gave_up after the sweep retry cap). Service-role only.';
 
 -- ── The save ─────────────────────────────────────────────────────────────
 CREATE OR REPLACE FUNCTION public.replace_staff_unavailability(
@@ -261,9 +266,50 @@ BEGIN
     RAISE EXCEPTION 'availability_past_date: a date that has already passed cannot be added';
   END IF;
 
+  -- No backdating: a dated rule that starts before today must be one the
+  -- person already has, current (end_date >= today), with the same content
+  -- (dates, all_day, times; the note may change). A new or changed one would
+  -- claim days that are already gone.
+  IF EXISTS (
+    SELECT 1
+      FROM jsonb_to_recordset(v_after) AS x(kind text, start_date date, end_date date,
+                                            all_day boolean, start_time time, end_time time)
+     WHERE x.kind = 'dated' AND x.start_date < p_today
+       AND NOT EXISTS (
+         SELECT 1 FROM public.staff_unavailability u
+          WHERE u.profile_id = p_profile_id AND u.kind = 'dated' AND u.end_date >= p_today
+            AND u.start_date = x.start_date AND u.end_date = x.end_date AND u.all_day = x.all_day
+            AND u.start_time IS NOT DISTINCT FROM x.start_time
+            AND u.end_time IS NOT DISTINCT FROM x.end_time)
+  ) THEN
+    RAISE EXCEPTION 'availability_past_start: a new date cannot start before today';
+  END IF;
+
   IF v_after = v_before THEN
     RETURN jsonb_build_object('changed', false, 'change_id', NULL, 'before', v_before, 'after', v_after);
   END IF;
+
+  -- The days already gone are history. A dated rule that has STARTED
+  -- (start_date < today <= end_date) and is not kept as it is (same dates and
+  -- window; a note edit keeps it whole) is deleted or cut short by this save:
+  -- first keep its elapsed part, start_date..yesterday, as a row of its own.
+  -- It ends before today, so the DELETE below never touches it.
+  INSERT INTO public.staff_unavailability
+         (profile_id, kind, start_date, end_date, all_day, start_time, end_time, note)
+  SELECT u.profile_id, 'dated', u.start_date, p_today - 1, u.all_day, u.start_time, u.end_time, u.note
+    FROM public.staff_unavailability u
+   WHERE u.profile_id = p_profile_id
+     AND u.kind = 'dated'
+     AND u.start_date < p_today
+     AND u.end_date >= p_today
+     AND NOT EXISTS (
+       SELECT 1
+         FROM jsonb_to_recordset(v_after) AS x(kind text, start_date date, end_date date,
+                                               all_day boolean, start_time time, end_time time)
+        WHERE x.kind = 'dated'
+          AND x.start_date = u.start_date AND x.end_date = u.end_date AND x.all_day = u.all_day
+          AND x.start_time IS NOT DISTINCT FROM u.start_time
+          AND x.end_time IS NOT DISTINCT FROM u.end_time);
 
   DELETE FROM public.staff_unavailability u
    WHERE u.profile_id = p_profile_id
@@ -286,7 +332,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION public.replace_staff_unavailability(uuid, uuid, date, jsonb, jsonb) IS
-  'AVAIL.1 (mig 630) — replaces a coach''s weekly rules and their dated rules ending on/after p_today with p_weekly/p_dated, atomically, and logs ONE staff_availability_changes row. Returns { changed, change_id, before, after } (canonical snapshots); changed=false writes nothing. Refuses a dated rule ending before p_today (availability_past_date), a tombstoned or unknown profile (availability_no_profile), non-array input (availability_bad_args); the table CHECKs refuse malformed rules (23514). service_role only.';
+  'AVAIL.1 (mig 630) — replaces a coach''s weekly rules and their dated rules ending on/after p_today with p_weekly/p_dated, atomically, and logs ONE staff_availability_changes row. Returns { changed, change_id, before, after } (canonical snapshots); changed=false writes nothing. Refuses a dated rule ending before p_today (availability_past_date), a new or changed dated rule starting before p_today (availability_past_start), a tombstoned or unknown profile (availability_no_profile), non-array input (availability_bad_args); the table CHECKs refuse malformed rules (23514). service_role only.';
 
 REVOKE ALL ON FUNCTION public.replace_staff_unavailability(uuid, uuid, date, jsonb, jsonb) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.replace_staff_unavailability(uuid, uuid, date, jsonb, jsonb) TO service_role;

@@ -184,11 +184,45 @@ describe('migration 630 — replace_staff_unavailability', () => {
     expect(await count('staff_unavailability', `profile_id = '${COACH_C}'`)).toBe(1) // only the history row
   })
 
-  it('a dated rule running through today is current: replaced like any other', async () => {
+  it('a dated rule running through today is current: replaced like any other (its elapsed days stay as history)', async () => {
     await save(COACH_D, [], [{ start_date: '2026-09-20', end_date: '2026-09-27', all_day: true }], { today: '2026-09-20' })
     const r = await save(COACH_D, [], [])
     expect(r.before).toHaveLength(1)
-    expect(await count('staff_unavailability', `profile_id = '${COACH_D}'`)).toBe(0)
+    expect(await count('staff_unavailability', `profile_id = '${COACH_D}' AND end_date >= '${TODAY}'`)).toBe(0)
+  })
+
+  it('deleting a STARTED rule keeps the days already gone: start..yesterday stays as history, window and note included', async () => {
+    const F = '10000000-0000-0000-0000-0000000000f1'
+    await runSql(`INSERT INTO public.profiles (id, full_name) VALUES ('${F}', 'Coach F')`)
+    const rule = { start_date: '2026-09-20', end_date: '2026-09-30', all_day: false, start_time: '09:00', end_time: '12:00', note: 'Course' }
+    await save(F, [], [rule], { today: '2026-09-20' })
+    await save(F, [], [])
+    const { rows } = await db.query(`SELECT start_date::text, end_date::text, all_day, left(start_time::text, 5) AS s, left(end_time::text, 5) AS e, note
+      FROM public.staff_unavailability WHERE profile_id = $1 ORDER BY start_date`, [F])
+    expect(rows).toEqual([{ start_date: '2026-09-20', end_date: '2026-09-24', all_day: false, s: '09:00', e: '12:00', note: 'Course' }])
+  })
+
+  it('shortening a started rule (old one out, the rest from today in) keeps the elapsed part too', async () => {
+    const G = '10000000-0000-0000-0000-0000000000f2'
+    await runSql(`INSERT INTO public.profiles (id, full_name) VALUES ('${G}', 'Coach G')`)
+    await save(G, [], [{ start_date: '2026-09-20', end_date: '2026-09-30', all_day: true }], { today: '2026-09-20' })
+    const changesBefore = await count('staff_availability_changes', `profile_id = '${G}'`)
+    // What the route sends for "20-30 with its end moved to 27" on the 25th (carryStartedRules).
+    await save(G, [], [{ start_date: '2026-09-25', end_date: '2026-09-27', all_day: true }])
+    expect(await count('staff_availability_changes', `profile_id = '${G}'`)).toBe(changesBefore + 1)
+    const { rows } = await db.query(`SELECT start_date::text, end_date::text FROM public.staff_unavailability WHERE profile_id = $1 ORDER BY start_date`, [G])
+    expect(rows).toEqual([{ start_date: '2026-09-20', end_date: '2026-09-24' }, { start_date: '2026-09-25', end_date: '2026-09-27' }])
+  })
+
+  it('a started rule kept as it is (or with only its note changed) is not split', async () => {
+    const H = '10000000-0000-0000-0000-0000000000f3'
+    await runSql(`INSERT INTO public.profiles (id, full_name) VALUES ('${H}', 'Coach H')`)
+    const rule = { start_date: '2026-09-20', end_date: '2026-09-30', all_day: true, note: 'a' }
+    await save(H, [], [rule], { today: '2026-09-20' })
+    await save(H, [{ weekday: 'mon', all_day: true }], [rule])
+    await save(H, [{ weekday: 'mon', all_day: true }], [{ ...rule, note: 'b' }])
+    const { rows } = await db.query(`SELECT start_date::text, end_date::text, note FROM public.staff_unavailability WHERE profile_id = $1 AND kind = 'dated'`, [H])
+    expect(rows).toEqual([{ start_date: '2026-09-20', end_date: '2026-09-30', note: 'b' }])
   })
 
   it('refuses to ADD a date that has passed, and writes nothing', async () => {
@@ -196,6 +230,17 @@ describe('migration 630 — replace_staff_unavailability', () => {
     await expect(save(COACH_B, [], [{ start_date: '2026-09-01', end_date: '2026-09-02', all_day: true }]))
       .rejects.toThrow(/availability_past_date/)
     expect(await count('staff_availability_changes', `profile_id = '${COACH_B}'`)).toBe(before)
+  })
+
+  it('refuses a NEW or CHANGED rule that starts before today; an unchanged started rule (a note edit too) is fine', async () => {
+    const E = '10000000-0000-0000-0000-0000000000e1'
+    await runSql(`INSERT INTO public.profiles (id, full_name) VALUES ('${E}', 'Coach E')`)
+    const rule = { start_date: '2026-09-20', end_date: '2026-09-30', all_day: true, note: 'Trip' }
+    await save(E, [], [rule], { today: '2026-09-20' })
+    await expect(save(E, [], [{ ...rule, end_date: '2026-09-29' }])).rejects.toThrow(/availability_past_start/)
+    await expect(save(E, [], [rule, { start_date: '2026-09-01', end_date: '2026-09-26', all_day: true }])).rejects.toThrow(/availability_past_start/)
+    await expect(save(E, [], [rule])).resolves.toMatchObject({ changed: false })
+    await expect(save(E, [], [{ ...rule, note: 'Trip, edited' }])).resolves.toMatchObject({ changed: true })
   })
 
   it('a malformed rule aborts the whole save: the old set survives', async () => {
@@ -224,5 +269,10 @@ describe('migration 630 — replace_staff_unavailability', () => {
       .rejects.toThrow(/staff_availability_changes_notice_pair/)
     await expect(runSql(`UPDATE public.staff_availability_changes SET notified_at = now(), notice_outcome = 'maybe'`))
       .rejects.toThrow(/staff_availability_changes_notice_outcome/)
+    for (const outcome of ['sent', 'no_recipients', 'stale', 'reverted', 'gave_up']) {
+      await runSql('BEGIN')
+      await runSql(`UPDATE public.staff_availability_changes SET notified_at = now(), notice_outcome = '${outcome}'`)
+      await runSql('ROLLBACK')
+    }
   })
 })

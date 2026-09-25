@@ -32,6 +32,8 @@ describe('getOpenApiSpec', () => {
     // Owner's decision: managers see a coach's note, and the contract says so.
     expect(path.get.description).toMatch(/shown to managers/)
     expect(path.put.description).toMatch(/managers/)
+    // The started-rule contract (shared/availability.js carryStartedRules).
+    expect(path.put.description).toMatch(/only its end date moved/)
   })
 
   it('declares the pre-existing browser/integration auth schemes', () => {
