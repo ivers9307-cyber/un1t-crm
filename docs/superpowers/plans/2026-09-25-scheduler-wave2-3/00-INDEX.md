@@ -173,6 +173,7 @@ These are marked **REVIEW** in the artifact until he confirms or changes them. E
 
 Updated by the loop. Newest first.
 
+- 25 Sep ~17:40Z: ✅ **#1772 LABOUR.1 MERGED** (web). Remaining: REPLACE.1b (fixes in progress, migs 641/642), AVAIL.3 (built, HELD for Richard), CLASSLINK.1–3 (HELD for Richard).
 - 25 Sep ~17:35Z: 18 AVAIL.3 review: approved w/ should-fixes; D1 (carried days lose every leave guard: copy skip, publish clash, assign/swap warnings, reminder suppression) is an OWNER decision (default 36); mechanical fixes (restore could delete a rule another batch reuses; FK-into-table abort; restore vs a future column; whitespace/UTF-16 note parity; ledger TRUNCATE) in progress. Whole PR stays held.
 - 25 Sep ~17:25Z: 20 REPLACE.1b review: approved w/ should-fixes (a failed managers read silently LOST the "taken" notice via `resolveRoleRecipientIds`; claim RPC lock order could deadlock with a shift delete's cascade; Manage view kept showing a filled offer) → fixes + my call (published-only clash check for claimants) in progress.
 - 25 Sep ~17:15Z: 18 AVAIL.3 built (7 commits): mig 631 now INSTALLS ONLY (ledger + move/restore functions; ends asserting an empty ledger); the move is a separate held script `supabase/operator-scripts/631_run_move_unavailable_time_off.sql` → independent review. 🔴 **The whole AVAIL.3 merge is held with the move** (merging removes the contractors' type at once, which is part of Richard's decision). Apply order once he says go: merge → deploy + EAS → apply 631 (installs) → run the move away from Dublin midnight.
