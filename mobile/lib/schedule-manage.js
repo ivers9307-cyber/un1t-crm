@@ -6,6 +6,7 @@
 import { futureBlockStaffing } from 'shared/roster-staffing'
 import { isAdminShift } from 'shared/shift-kind'
 import { effectiveShiftStart, effectiveShiftEnd } from 'shared/roster-month'
+import { isSwapConflictRefusal, swapConflictLines } from './swap-conflicts'
 
 // MOBILESCHED.2 — "this assignment still puts a coach on the block". Only
 // `cancelled` is dead (a swap-drop tombstone, ROSTER-FIX.1 D4); `swapped` is a
@@ -132,6 +133,45 @@ export function scheduleViewFromParam(viewParam, role) {
 export function canAdjustShiftTimes(profile, shift) {
   if (!shift?.shift_assignment_id) return false
   return MANAGER_ROLES.includes(profile?.role)
+}
+
+// REPLACE.1a — what a manager's press on a coach in Manage mode offers, in
+// order. 'replace' only on a shift today or later: a past one is history (the
+// route also refuses a started shift, on the studio clock).
+export function coachPressActions(block, todayIso) {
+  const out = ['adjust']
+  if (block?.block_date && todayIso && block.block_date >= todayIso) out.push('replace')
+  out.push('remove')
+  return out
+}
+
+// REPLACE.1a — the coach picker's title when it is replacing someone.
+export function replacePickerTitle(assignment) {
+  const name = assignment?.profiles?.full_name
+  return name ? `Replace ${name}` : 'Replace coach'
+}
+
+/**
+ * REPLACE.1a — the Alert after POST /replace (api() envelope). 'confirm' = a
+ * clash the manager may override (resend with confirmConflicts); 'error' =
+ * refused or no answer; 'done' = replaced, and when the coaches hear. Same
+ * words as the web (src/lib/shift-replace.js replaceResponseOutcome, pinned
+ * against this in src/lib/shift-replace.test.js).
+ */
+export function replaceResultAlert(res, { fromName, toName } = {}) {
+  const from = fromName || 'The coach'
+  const to = toName || 'The new coach'
+  if (isSwapConflictRefusal(res)) {
+    return { kind: 'confirm', title: 'Check before replacing', message: swapConflictLines(res).join('\n') }
+  }
+  if (!res?.success) return { kind: 'error', title: 'Could not replace', message: res?.error || 'Unknown error' }
+  const notice = res?.data?.notice
+  const tail = notice === 'morning'
+    ? `${from} and ${to} are told after 7am; if the shift is at or before 7am, ring them.`
+    : notice === 'none'
+      ? 'The roster is a draft, so nobody is told until it is published.'
+      : `${from} and ${to} have been told.`
+  return { kind: 'done', title: 'Coach replaced', message: `${to} is on the shift. ${tail}` }
 }
 
 // ROSTER-FIX.7 — may this person withdraw this leave request? Mirrors the self

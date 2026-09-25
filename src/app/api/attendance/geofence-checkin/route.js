@@ -272,10 +272,15 @@ export async function POST(request) {
     return NextResponse.json({ success: true, data: { match_outcome: matchOutcome } })
   }
 
+  // REPLACE.1a review 2 — pinned to THIS coach and a live row, as the
+  // recovery stamp above is: a replace (or an approved swap) hands the row to
+  // another coach under the same id between the read and this write.
   const { data: stamped, error: updErr } = await db
     .from('shift_assignments')
     .update({ arrived_at: eventAt.toISOString(), arrival_source: 'geofence' })
     .eq('id', decision.shift.id)
+    .eq('profile_id', user.id)
+    .neq('status', 'cancelled')
     .is('arrived_at', null)
     .select('id')
   if (updErr) {
@@ -290,6 +295,27 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: updErr.message, transient: true }, { status: 503 })
   }
   if (!stamped || stamped.length === 0) {
+    // REPLACE.1a review 2 — zero rows is either a lost race (another ping
+    // stamped this coach's shift) or a row that is no longer this coach's
+    // (replaced, swapped, cancelled, deleted). The second is no match at all:
+    // the audit row must stop naming the other coach's shift, since a matched
+    // event counts as an arrival (mig 622). An unreadable re-read keeps the
+    // old answer.
+    const { data: now, error: rereadErr } = await db
+      .from('shift_assignments')
+      .select('profile_id, status')
+      .eq('id', decision.shift.id)
+      .maybeSingle()
+    if (!rereadErr && (!now || now.profile_id !== user.id || now.status === 'cancelled')) {
+      const { error: unmatchErr } = await db
+        .from('staff_attendance_events')
+        .update({ match_outcome: 'no_shift_in_window', matched_assignment_id: null })
+        .eq('id', claim.id)
+      if (unmatchErr) {
+        logWarn('geofence-checkin', 'shift changed hands before the stamp; audit row still names it', { eventId: claim.id, err: unmatchErr.message })
+      }
+      return NextResponse.json({ success: true, data: { match_outcome: 'no_shift_in_window' } })
+    }
     // Another request stamped this shift between our read and our write.
     const { error: relabelErr } = await db
       .from('staff_attendance_events')

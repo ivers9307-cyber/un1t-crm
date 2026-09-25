@@ -89,12 +89,19 @@ function assignmentRow({
 
 // Supabase mock over the single table this route touches. `updateSpy` and
 // `deleteSpy` let a test assert the write never happened on a refused call.
-function buildDb({ assignment = assignmentRow(), fetchErr = null, updateErr = null, deleteErr = null } = {}) {
+// REPLACE.1a review 2 — `updateEqs` / `deleteEqs` record every .eq() on the
+// write, and `changedUnder: true` answers the write with zero rows, as
+// PostgREST does when the pinned profile no longer holds the row.
+function buildDb({ assignment = assignmentRow(), fetchErr = null, updateErr = null, deleteErr = null, changedUnder = false } = {}) {
   const updateSpy = vi.fn()
   const deleteSpy = vi.fn()
+  const updateEqs = []
+  const deleteEqs = []
   return {
     updateSpy,
     deleteSpy,
+    updateEqs,
+    deleteEqs,
     db: {
       from: (table) => {
         if (table !== 'shift_assignments') throw new Error(`unexpected table ${table}`)
@@ -106,11 +113,8 @@ function buildDb({ assignment = assignmentRow(), fetchErr = null, updateErr = nu
           }),
           update: (patch) => {
             updateSpy(patch)
-            return {
-              eq: () => ({
-                select: () => ({
-                  single: () => Promise.resolve({
-                    data: updateErr ? null : {
+            const updated = () => Promise.resolve({
+                    data: updateErr || changedUnder ? null : {
                       id: 'assign-1',
                       block_id: 'block-1',
                       profile_id: assignment?.profile_id ?? COACH.id,
@@ -126,14 +130,20 @@ function buildDb({ assignment = assignmentRow(), fetchErr = null, updateErr = nu
                       },
                     },
                     error: updateErr,
-                  }),
-                }),
-              }),
+                  })
+            const chain = {
+              eq: (col, val) => { updateEqs.push([col, val]); return chain },
+              select: () => ({ single: updated, maybeSingle: updated }),
             }
+            return chain
           },
-          delete: () => ({
-            eq: (col, val) => { deleteSpy(col, val); return Promise.resolve({ error: deleteErr }) },
-          }),
+          delete: () => {
+            const chain = {
+              eq: (col, val) => { if (deleteEqs.length === 0) deleteSpy(col, val); deleteEqs.push([col, val]); return chain },
+              select: () => Promise.resolve({ data: deleteErr || changedUnder ? [] : [{ id: 'assign-1' }], error: deleteErr }),
+            }
+            return chain
+          },
         }
       },
     },
@@ -456,6 +466,49 @@ describe('DELETE /api/schedule/assignments/[id] — a coach cannot drop themselv
     createServerClient.mockReturnValue(db)
 
     await PUT(req({ start_time_override: '10:00:00' }), PROPS)
+    expect(notifyRosterChanges).not.toHaveBeenCalled()
+  })
+})
+
+// REPLACE.1a review 2 — a replace hands the row to another coach under the
+// same id. A write read as "Coach A's row" must not land on Coach B: both
+// writes are pinned to the coach that was read, and zero rows is 409.
+describe('PUT / DELETE /api/schedule/assignments/[id] — pinned to the coach that was read (review 2)', () => {
+  it('PUT updates by id AND the profile it read', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const { db, updateEqs } = buildDb()
+    createServerClient.mockReturnValue(db)
+    expect((await PUT(req({ start_time_override: '10:00:00' }), PROPS)).status).toBe(200)
+    expect(updateEqs).toEqual([['id', 'assign-1'], ['profile_id', COACH.id]])
+  })
+
+  it('PUT: the row changed hands meanwhile (zero rows) is 409, nobody pushed, nothing logged', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const { db } = buildDb({ changedUnder: true })
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(req({ start_time_override: '10:00:00' }), PROPS)
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toBe('This shift has just changed. Refresh and try again.')
+    expect(notifyUsersOnce).not.toHaveBeenCalled()
+    expect(logRosterChange).not.toHaveBeenCalled()
+  })
+
+  it('DELETE removes by id AND the profile it read', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const { db, deleteEqs } = buildDb()
+    createServerClient.mockReturnValue(db)
+    expect((await DELETE({}, PROPS)).status).toBe(200)
+    expect(deleteEqs).toEqual([['id', 'assign-1'], ['profile_id', COACH.id]])
+  })
+
+  it('DELETE: the row changed hands meanwhile is 409, nothing logged, nobody told', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const { db } = buildDb({ changedUnder: true })
+    createServerClient.mockReturnValue(db)
+    const res = await DELETE({}, PROPS)
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toBe('This shift has just changed. Refresh and try again.')
+    expect(logRosterChange).not.toHaveBeenCalled()
     expect(notifyRosterChanges).not.toHaveBeenCalled()
   })
 })

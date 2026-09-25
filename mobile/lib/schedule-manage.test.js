@@ -3,6 +3,7 @@ import {
   blockFillState, emptyBlockText, liveBlockAssignments, adjustTargetFor, assignmentWindow,
   filterAssignableCoaches, canAdjustShiftTimes, canCancelTimeOff, scheduleViewFromParam,
   rosterKey, rosterLoadOutcome, staffLoadOutcome, STAFF_LOAD_FAILED, isCurrentLoad,
+  coachPressActions, replacePickerTitle, replaceResultAlert,
 } from './schedule-manage'
 import { blockStart, blockEnd } from './schedule-team'
 
@@ -375,5 +376,42 @@ describe('emptyBlockText', () => {
   it('a class block, or one whose kind cannot be read, is unchanged', () => {
     expect(emptyBlockText(block(0, 1, 3, { shift_templates: { kind: 'class' } }))).toBe('No one assigned yet.')
     expect(emptyBlockText(block(0, 1, 3))).toBe('No one assigned yet.')
+  })
+})
+
+describe('REPLACE.1a — coachPressActions', () => {
+  it('offers Replace on a shift today or later, never on a past one', () => {
+    expect(coachPressActions({ block_date: '2026-09-29' }, '2026-09-29')).toEqual(['adjust', 'replace', 'remove'])
+    expect(coachPressActions({ block_date: '2026-09-30' }, '2026-09-29')).toEqual(['adjust', 'replace', 'remove'])
+    expect(coachPressActions({ block_date: '2026-09-28' }, '2026-09-29')).toEqual(['adjust', 'remove'])
+    expect(coachPressActions({}, '2026-09-29')).toEqual(['adjust', 'remove'])
+    expect(coachPressActions({ block_date: '2026-09-29' }, null)).toEqual(['adjust', 'remove'])
+  })
+})
+
+describe('REPLACE.1a — replacePickerTitle', () => {
+  it('names the coach going off', () => {
+    expect(replacePickerTitle({ profiles: { full_name: 'Coach A' } })).toBe('Replace Coach A')
+    expect(replacePickerTitle(null)).toBe('Replace coach')
+  })
+})
+
+describe('REPLACE.1a — replaceResultAlert', () => {
+  const names = { fromName: 'Coach A', toName: 'Coach B' }
+  it('a clash asks to confirm, in the server\'s sentences', () => {
+    const res = { success: false, status: 409, code: 'swap_conflicts', conflicts: [{ kind: 'leave', message: 'Coach B has approved holiday on 2026-09-29, which covers the shift on 2026-09-29.' }] }
+    expect(replaceResultAlert(res, names)).toEqual({ kind: 'confirm', title: 'Check before replacing', message: 'Coach B has approved holiday on 2026-09-29, which covers the shift on 2026-09-29.' })
+  })
+  it('any other refusal is an error in the server\'s words', () => {
+    expect(replaceResultAlert({ success: false, status: 409, code: 'shift_started', error: 'This shift has already started.' }, names))
+      .toEqual({ kind: 'error', title: 'Could not replace', message: 'This shift has already started.' })
+    expect(replaceResultAlert({ success: false, transport: true, error: 'Network error: x' }, names).kind).toBe('error')
+    expect(replaceResultAlert(null, names)).toEqual({ kind: 'error', title: 'Could not replace', message: 'Unknown error' })
+  })
+  it('done says who is told and when (the web\'s words)', () => {
+    const done = (notice) => replaceResultAlert({ success: true, data: { notice } }, names)
+    expect(done('now')).toEqual({ kind: 'done', title: 'Coach replaced', message: 'Coach B is on the shift. Coach A and Coach B have been told.' })
+    expect(done('morning').message).toBe('Coach B is on the shift. Coach A and Coach B are told after 7am; if the shift is at or before 7am, ring them.')
+    expect(done('none').message).toBe('Coach B is on the shift. The roster is a draft, so nobody is told until it is published.')
   })
 })

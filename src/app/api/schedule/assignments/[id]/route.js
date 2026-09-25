@@ -31,7 +31,7 @@ import { notifyUsersOnce } from '@/lib/push-dedup'
 import { logRosterChange } from '@/lib/roster-change-log'
 import { markRosterChangesNotified } from '@/lib/roster-change-notify'
 import { logWarn } from '@/lib/log'
-import { unassignShiftAssignments } from '@/lib/shift-unassign'
+import { unassignShiftAssignments, SHIFT_CHANGED_ERROR } from '@/lib/shift-unassign'
 
 // Shared by PUT and DELETE: the assignment's block location decides.
 // Returns a response to send, or null to carry on.
@@ -131,10 +131,15 @@ export async function PUT(request, props) {
     )
   }
 
+  // REPLACE.1a review 2 — pinned to the coach that was READ: a replace hands
+  // this row to another coach under the same id, and the hours (and the push
+  // below) belong to the coach the manager was looking at. Zero rows = it
+  // changed hands meanwhile: 409, nobody pushed, nothing logged.
   const { data, error } = await db
     .from('shift_assignments')
     .update(updates)
     .eq('id', params.id)
+    .eq('profile_id', assignment.profile_id)
     .select(`
       id, block_id, profile_id, notes, status, assigned_at, updated_at,
       start_time_override, end_time_override, partial_reason,
@@ -144,10 +149,13 @@ export async function PUT(request, props) {
       ),
       profiles:profile_id(id, full_name, email, avatar_url, role)
     `)
-    .single()
+    .maybeSingle() // zero rows is a legitimate answer: the row changed hands
 
   if (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+  }
+  if (!data) {
+    return NextResponse.json({ success: false, code: 'changed', error: SHIFT_CHANGED_ERROR }, { status: 409 })
   }
 
   // Push the affected coach, and log the change, only when an override
@@ -300,6 +308,10 @@ export async function DELETE(_request, props) {
     }],
   })
   if (failed.length > 0) {
+    // REPLACE.1a review 2 — the row changed hands (or went) since it was read.
+    if (failed[0].code === 'changed') {
+      return NextResponse.json({ success: false, code: 'changed', error: failed[0].error }, { status: 409 })
+    }
     return NextResponse.json({ success: false, error: failed[0].error }, { status: 400 })
   }
 

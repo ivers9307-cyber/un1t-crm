@@ -35,6 +35,14 @@ describe('rosterChangeSentence', () => {
       .toBe('Removed Coach A from Tue 15 Sep 6am (dropped shift approved)')
   })
 
+  it('REPLACE.1a — a replace names itself on both rows', () => {
+    const base = { block_date: '2026-09-29', start_time: '06:00:00', details: { via: 'replace' } }
+    expect(rosterChangeSentence({ ...base, action: 'assigned', coach_name: 'Coach B' }))
+      .toBe('Assigned Coach B to Tue 29 Sep 6am (coach replaced)')
+    expect(rosterChangeSentence({ ...base, action: 'unassigned', coach_name: 'Coach A' }))
+      .toBe('Removed Coach A from Tue 29 Sep 6am (coach replaced)')
+  })
+
   it('a deleted slot has no block left to read a time from: the date alone', () => {
     expect(rosterChangeSentence(row({ action: 'unassigned', start_time: null, end_time: null, details: { via: 'slot_deleted' } })))
       .toBe('Removed Coach A from Tue 15 Sep (slot deleted)')
@@ -139,6 +147,42 @@ describe('a row written because the staff member was deleted (mig 622)', () => {
     expect(NO_MESSAGE_REASONS).toContain('staff_permanent_delete')
     expect(stampMeansTold(deleted())).toBe(false)
     expect(rosterChangeTold(deleted())).toBeNull()
+  })
+})
+
+describe('REPLACE.1a — a replace undone before anyone was told (the held-notice arm stamps it silently)', () => {
+  const undone = (over = {}) => row({ action: 'unassigned', details: { via: 'replace', reason: 'replace_undone' }, ...over })
+
+  it('says so, neutrally, in place of "(coach replaced)"', () => {
+    expect(rosterChangeSentence(undone())).toBe('Removed Coach A from Tue 15 Sep 6am (changed again before anyone was told)')
+  })
+
+  it('its stamp is not a message: no told state', () => {
+    expect(NO_MESSAGE_REASONS).toContain('replace_undone')
+    expect(stampMeansTold(undone())).toBe(false)
+    expect(rosterChangeTold(undone())).toBeNull()
+  })
+})
+
+describe('REPLACE.1a review 3 — a replace whose shift started before its held notice could go out', () => {
+  const started = (over = {}) => row({ action: 'assigned', details: { via: 'replace', reason: 'replace_shift_started' }, ...over })
+  it('says so', () => {
+    expect(rosterChangeSentence(started())).toBe('Assigned Coach A to Tue 15 Sep 6am (coach replaced, not sent: the shift had started)')
+  })
+  it('its stamp is not a message', () => {
+    expect(NO_MESSAGE_REASONS).toContain('replace_shift_started')
+    expect(rosterChangeTold(started())).toBeNull()
+  })
+})
+
+describe('REPLACE.1a review 4 — a replace whose shift was deleted before its held notice went out', () => {
+  const gone = (over = {}) => row({ action: 'assigned', start_time: null, end_time: null, details: { via: 'replace', reason: 'replace_shift_deleted' }, ...over })
+  it('says so', () => {
+    expect(rosterChangeSentence(gone())).toBe('Assigned Coach A to Tue 15 Sep (coach replaced, not sent: the shift was deleted)')
+  })
+  it('its stamp is not a message', () => {
+    expect(NO_MESSAGE_REASONS).toContain('replace_shift_deleted')
+    expect(rosterChangeTold(gone())).toBeNull()
   })
 })
 
