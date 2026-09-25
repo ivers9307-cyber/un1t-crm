@@ -94,11 +94,12 @@ These are marked **REVIEW** in the artifact until he confirms or changes them. E
 12. **Draft shifts at the other studio count toward the 48 hours, and approved leave is not subtracted.** Both make the advisory err towards flagging.
 13. **Changing a template's kind changes its past shifts too** (kind lives on the template, not copied onto each shift). Hours are unaffected either way; only staffing gaps and contractor spend read the kind.
 14. **Contractor spend leaves admin shifts out,** as decided, so if a contractor does placed admin work the spend figure under-reports what they will invoice.
-15. **Someone has to mark Stillorgan's admin templates** after SHIFTTYPE.1 merges (front desk, sales calls, consultations?). Until then every template stays a class template and nothing changes.
+15. **Someone has to mark Stillorgan's admin templates** after SHIFTTYPE.1 merges AND its phone update has reached phones (older phones show an admin shift as "No coach") (front desk, sales calls, consultations?). Until then every template stays a class template and nothing changes.
 16. **Managers see the note a coach writes on an availability rule,** and the editor tells the coach so.
 17. **A permanently deleted coach's availability rules are kept, not wiped** (they stop mattering because the person can't be rostered). The availability change log is kept indefinitely for now.
 18. **The availability-change notice is on by default for every role,** not just managers: a push can't be scoped to one studio, so a manager who is plain staff at another studio would otherwise never get it. Outside 07:00–22:00 it waits for 07:00 and overnight saves fold into one notice.
 19. **Managers can't set availability on a coach's behalf** in this cut.
+20. **A posted admin shift nobody takes still escalates as "Shift still uncovered"** (`src/lib/swap-cover.js` ~413). The admin work still needs its person, so it stays.
 
 ## Follow-ups found along the way (not in any PR yet)
 
@@ -106,6 +107,8 @@ These are marked **REVIEW** in the artifact until he confirms or changes them. E
 - In `ShiftTemplateManager.jsx` the warning after deactivating or reactivating a template is wiped by the list reload before it can show (found planning 12).
 - No schedule range route checks that the start comes before the end; `allowances?year=` is not validated (found building 11).
 - `resolveRoleRecipientIds` in `src/lib/push.js` discards its read error, so a failed read looks like a clean runway run with nobody to notify (found planning 31).
+- Two dead staffing readers (`shared/dashboard-data.js` `fetchUnstaffedBlocksThisWeek`, `src/lib/roster.js` `isBlockUnstaffedFuture`) would treat an admin shift as a gap if revived; delete them (found reviewing 13).
+- `src/lib/cron-heartbeat.js` docstring out of date (found building 31).
 - The staff assistant's `generate_report` tool passes model-supplied report periods unchecked (Postgres refuses a bad one; harmless) (found reviewing 11).
 - The staff assistant's `create_shift` and `get_time_off` tools take dates with no calendar check (found planning 11; the assistant is off everywhere).
 
@@ -113,6 +116,8 @@ These are marked **REVIEW** in the artifact until he confirms or changes them. E
 
 Updated by the loop. Newest first.
 
+- 25 Sep ~13:35 IST: **#1757 DATECHECK.1 MERGED** (11:33Z). 15 WORKTIME.1 = [PR #1758](https://github.com/ivers9307-cyber/un1t-crm/pull/1758) (gate 27,838 + build; main merged in cleanly), auto-merge on; **check its EAS Update run before SHIFTTYPE.1 merges** (both publish).
+- 25 Sep: 13 SHIFTTYPE.1 review approved w/ should-fixes (4 UI nits → fixing). HARD GATE before its merge: mig 628 applied and in `list_migrations` (every roster read names `kind`). 31 HEARTBEAT.1 built (mig 633, DO UPDATE re-arm), in review.
 - 25 Sep: 16 AVAIL.1 plan written, split 1a (mig 630, API, notice, sweep arm, OTA) / 1b (web). AVAIL.1a implementer started (`~/code/un1t-crm-avail1a`). WORKTIME.1 fixes done, in my gate. Batch 4 plans (14 BLOCKEDIT.1, 22 ICSFEED.1) commissioned.
 - 25 Sep ~12:25 IST: **#1756 TPLCLONE.1 MERGED** (11:18Z). 11 DATECHECK.1 = [PR #1757](https://github.com/ivers9307-cyber/un1t-crm/pull/1757) (gate 27,730 + build; 2 review rounds; main merged in, one openapi.test.js conflict kept both), auto-merge on. 15 WORKTIME.1 review approved w/ should-fixes (picker loading state, 2027 spring-forward test, `24:00` end time) → fixes in progress. 31 HEARTBEAT.1 implementer started (`~/code/un1t-crm-heartbeat1`). Review artifact v7 (status table, 15 review items, follow-ups section).
 - 25 Sep: 11 DATECHECK.1 fixes landed (reports now refuse a reversed period or one over 366 days, checked in the route and again in `generateReport`; guard tightened; GET /blocks and GET /overview newly in the API docs). Short second review running. 13 SHIFTTYPE.1 implementer started in `~/code/un1t-crm-shifttype1`.
