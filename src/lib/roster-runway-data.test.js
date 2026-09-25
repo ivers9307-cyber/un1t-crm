@@ -128,4 +128,25 @@ describe('fetchRosterRunways', () => {
     expect(await fetchRosterRunways(makeDb({ templates: [tpl(NORTH)], blocksError: { message: 'blocks down' } }), [NORTH], { todayIso: TODAY }))
       .toEqual({ success: false, error: 'blocks down' })
   })
+
+  // SHIFTTYPE.1 — the runway is class shifts only.
+  it("reads each block's template kind, and a studio whose only active templates are admin has nothing to roster", async () => {
+    const db = makeDb({
+      templates: [
+        { location_id: NORTH, days_of_week: ['mon'], kind: 'class' },
+        { location_id: SOUTH, days_of_week: ['mon'], kind: 'admin' },
+      ],
+      blocks: [block(NORTH, '2026-09-28')],
+    })
+    const res = await fetchRosterRunways(db, [NORTH, SOUTH], { todayIso: TODAY })
+    expect(res.data.byLocation[SOUTH]).toBeNull()
+    expect(res.data.byLocation[NORTH]).toMatchObject({ weekStart: '2026-09-28', unstaffed: 1 })
+
+    const tplSelect = db.calls.find((c) => c.table === 'shift_templates').filters.find(([m]) => m === 'select')[1]
+    expect(tplSelect).toMatch(/\bkind\b/)
+    const blockCall = db.calls.find((c) => c.table === 'shift_blocks')
+    // SOUTH's blocks are never read: it has nothing to roster.
+    expect(blockCall.filters).toContainEqual(['in', 'location_id', [NORTH]])
+    expect(blockCall.filters.find(([m]) => m === 'select')[1]).toMatch(/shift_templates \( kind \)/)
+  })
 })

@@ -144,7 +144,7 @@ function mockDb({ location, locationsById = null, failLocationIds = [], contract
         const f = { loc: null, gte: null, lte: null, from: 0, to: Infinity }
         blockQueries.push(f)
         const chain = {
-          select: () => chain,
+          select: (s) => { f.select = s; return chain },
           eq: (c, v) => { if (c === 'location_id') f.loc = v; return chain },
           order: () => chain,
           gte: (_c, v) => { f.gte = v; return chain },
@@ -2028,6 +2028,61 @@ describe('supersedeEmptyTrimmedRosters', () => {
       expect(res.shrunk).toEqual([])
       expect(res.warning).toMatch(/r-fort changed since the trim, so it was not shrunk/)
     })
+  })
+})
+
+// SHIFTTYPE.1 — an admin shift is out of the contractor budget gate and is
+// never a staffing gap in the publish preview, but it is still a shift in the
+// period (it is published with the rest).
+describe('projectPublishImpact — admin shifts', () => {
+  const admin = (b) => ({ ...b, min_coaches: 0, shift_templates: { name: 'Admin', kind: 'admin' } })
+  const cls = (b, min = 1) => ({ ...b, min_coaches: min, shift_templates: { name: 'Morning', kind: 'class' } })
+  const PERIOD = { locationId: 'loc1', periodStart: '2026-05-04', periodEnd: '2026-05-10', todayIso: '2026-05-01' }
+
+  it('prices a contractor on a class shift and NOT on an admin shift', async () => {
+    const db = mockDb({
+      location: { id: 'loc1', monthly_contractor_budget_eur: 100 },
+      contractors: [dan],
+      blocks: [
+        cls(block({ id: 'class', date: '2026-05-05', start: '09:00', end: '11:00', coaches: ['dan'] })),   // 2h x 35 = 70
+        admin(block({ id: 'admin', date: '2026-05-06', start: '09:00', end: '13:00', coaches: ['dan'] })), // 4h, not priced
+      ],
+    })
+    const r = await projectPublishImpact(db, PERIOD)
+    expect(r.periodProjectedEur).toBe(70)
+    expect(r.overBudget).toBe(false)
+    expect(r.remainingEur).toBe(30)
+    expect(r.blockCount).toBe(2)
+  })
+
+  it('leaves a published admin shift out of the already-published spend too', async () => {
+    const db = mockDb({
+      location: { id: 'loc1', monthly_contractor_budget_eur: 100 },
+      contractors: [dan],
+      blocks: [admin(block({ id: 'admin-pub', date: '2026-05-20', start: '09:00', end: '13:00', coaches: ['dan'], roster: { id: 'r-old', status: 'published' } }))],
+    })
+    const r = await projectPublishImpact(db, PERIOD)
+    expect(r.alreadyPublishedEur).toBe(0)
+    expect(r.monthProjectedTotalEur).toBe(0)
+  })
+
+  it('never lists an admin shift as a staffing gap', async () => {
+    const db = mockDb({
+      location: { id: 'loc1', monthly_contractor_budget_eur: 500 },
+      contractors: [dan],
+      blocks: [
+        admin(block({ id: 'admin-empty', date: '2026-05-05', start: '09:00', end: '10:00' })),
+        cls(block({ id: 'class-empty', date: '2026-05-05', start: '11:00', end: '12:00' })),
+      ],
+    })
+    const r = await projectPublishImpact(db, PERIOD)
+    expect(r.staffingGaps.map((g) => g.block_id)).toEqual(['class-empty'])
+  })
+
+  it("reads each block's template kind", async () => {
+    const db = mockDb({ location: { id: 'loc1', monthly_contractor_budget_eur: 500 }, contractors: [dan], blocks: [] })
+    await projectPublishImpact(db, PERIOD)
+    expect(db.blockQueries[0].select).toMatch(/shift_templates\(name, kind\)/)
   })
 })
 

@@ -219,6 +219,26 @@ describe('runwayWeeksFromBlocks', () => {
   it('no rows -> two empty weeks', () => {
     expect(runwayWeeksFromBlocks(null, '2026-09-19').map((w) => [w.weekStart, w.blocks])).toEqual([['2026-09-21', 0], ['2026-09-28', 0]])
   })
+
+  // SHIFTTYPE.1 — the runway looks at class shifts only: an admin block is not
+  // a shift that needs a coach, so it is neither counted nor alerts.
+  it('leaves admin blocks out of every count, so a week unready only in admin is ready', () => {
+    const admin = (date, opts) => ({ ...block(date, opts), shift_templates: { kind: 'admin' } })
+    const weeks = runwayWeeksFromBlocks([
+      block('2026-09-28', { coaches: 1, roster: 'published' }),
+      admin('2026-09-29'),                 // empty, unpublished
+      admin('2026-09-30', { coaches: 1 }), // staffed, unpublished
+    ], '2026-09-19')
+    expect(weeks[1]).toEqual({ weekStart: '2026-09-28', blocks: 1, staffed: 1, underMin: 0, published: 1 })
+    expect(rosterRunway(weeks, '2026-09-19')).toBeNull()
+  })
+
+  it('a week of ONLY admin blocks is "0 blocks": nothing to build, no alert', () => {
+    const admin = (date) => ({ ...block(date), shift_templates: { kind: 'admin' } })
+    const weeks = runwayWeeksFromBlocks([admin('2026-09-28'), admin('2026-09-29')], '2026-09-19')
+    expect(weeks[1]).toMatchObject({ weekStart: '2026-09-28', blocks: 0 })
+    expect(rosterRunway(weeks, '2026-09-19')).toBeNull()
+  })
 })
 
 describe('copy', () => {

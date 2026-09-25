@@ -180,3 +180,28 @@ describe('ShiftCard', () => {
     expect(screen.getByText('Coach A').className).toMatch(/text-blue-700/)
   })
 })
+
+describe('ShiftCard — admin shifts (SHIFTTYPE.1)', () => {
+  it('draws the admin surface and says "Admin" in words, so the tone is never the only signal', () => {
+    const model = shiftCardModel({ ...BLOCK, min_coaches: 0, shift_templates: { name: 'Stock take', kind: 'admin' } }, [], null, { isManager: true })
+    render(<ShiftCard model={model} dayLabel="Monday 21 September" onActivate={() => {}} />)
+    const card = screen.getByTestId('shift-card')
+    expect(card.getAttribute('data-tone')).toBe('admin')
+    expect(card.className).toMatch(/\bbg-slate-500\/10\b/)
+    expect(card.className).not.toMatch(/border-dashed|border-red|border-amber/)
+    expect(screen.getByTestId('shift-kind').textContent).toBe('Admin')
+    // The chip sits ON the slate surface, so a slate fill alone has no edge.
+    const chip = screen.getByTestId('shift-kind')
+    expect(chip.className).toMatch(/\bborder\b/)
+    expect(chip.className).toMatch(/\bborder-slate-300\b/)
+    expect(chip.className).toMatch(/\btext-slate-700\b/)
+    expect(screen.queryByTestId('needs-coach-badge')).toBeNull()
+    expect(screen.getByText('Nobody assigned')).toBeTruthy()
+  })
+
+  it('a class card keeps the neutral surface and has no kind tag', () => {
+    renderCard()
+    expect(screen.getByTestId('shift-card').className).toMatch(/\bbg-un1t-bg\b/)
+    expect(screen.queryByTestId('shift-kind')).toBeNull()
+  })
+})

@@ -16,7 +16,7 @@ import {
 const src = (over = {}) => ({
   id: 'src-1', location_id: 'studio-a', name: 'Early',
   start_time: '06:00:00', end_time: '09:00:00', color: '#10B981', role_label: 'Floor',
-  active: true, display_order: 0, days_of_week: ['mon', 'wed'], min_coaches: 2, max_coaches: 4,
+  active: true, display_order: 0, days_of_week: ['mon', 'wed'], min_coaches: 2, max_coaches: 4, kind: 'class',
   created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-02T00:00:00Z',
   ...over,
 })
@@ -40,7 +40,7 @@ describe('planTemplateClone', () => {
         name: 'Early', start_time: '06:00:00', end_time: '09:00:00', color: '#10B981',
         // `[]` is the schema's "no weekdays" (mig 067: NOT NULL DEFAULT '{}',
         // "Empty array = no blocks generated"): a one-off template.
-        role_label: 'Floor', days_of_week: [], min_coaches: 2, max_coaches: 4,
+        role_label: 'Floor', days_of_week: [], min_coaches: 2, max_coaches: 4, kind: 'class',
         active: true, display_order: 0,
       },
     }])
@@ -138,6 +138,12 @@ describe('planTemplateClone', () => {
     const target = [Object.freeze({ name: 'Late', display_order: 2 })]
     Object.freeze(source); Object.freeze(target)
     expect(() => planTemplateClone({ sourceTemplates: source, targetTemplates: target, copyWeekdays: true })).not.toThrow()
+  })
+
+  // SHIFTTYPE.1 — an admin template stays admin at the new studio.
+  it('copies the kind, so an admin template is still admin (with its 0 minimum)', () => {
+    const { toCreate } = planTemplateClone({ sourceTemplates: [src({ kind: 'admin', min_coaches: 0 })], targetTemplates: [] })
+    expect(toCreate[0].row).toMatchObject({ kind: 'admin', min_coaches: 0 })
   })
 })
 

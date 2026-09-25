@@ -4387,7 +4387,7 @@ registry.registerPath({
   tags: ['Schedule'],
   security: [{ CookieAuth: [] }],
   summary: 'Add a shift slot for a template on one date (manager-only)',
-  description: 'Creates one shift_blocks row for (location_id, template_id, block_date); times and capacity default from the template. A date inside an already-published roster joins that roster. Also clears any removal recorded for that slot by DELETE /api/schedule/blocks/{id}, so the nightly schedule and roster copies treat it as a normal slot again. If clearing the removal fails the block is still created and the response carries a warning.',
+  description: 'Creates one shift_blocks row for (location_id, template_id, block_date); times and capacity default from the template. A date inside an already-published roster joins that roster. Also clears any removal recorded for that slot by DELETE /api/schedule/blocks/{id}, so the nightly schedule and roster copies treat it as a normal slot again. If clearing the removal fails the block is still created and the response carries a warning. For an admin template (SHIFTTYPE.1, mig 628) the slot\'s minimum is always 0; an explicit non-zero min_coaches is refused with 400 `admin_has_no_minimum`.',
   request: {
     body: { content: { 'application/json': { schema: z.object({
       location_id: z.string(),
@@ -4402,7 +4402,7 @@ registry.registerPath({
   },
   responses: {
     201: { description: 'Slot created; `warning` is present when its earlier removal could not be cleared' },
-    400: { description: 'Validation error or unknown template', content: { 'application/json': { schema: ErrorResponse } } },
+    400: { description: 'Validation error, unknown template, or a minimum on an admin template (admin_has_no_minimum)', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — needs a manager role at that location', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'A slot already exists for this template on this date', content: { 'application/json': { schema: ErrorResponse } } },
   },

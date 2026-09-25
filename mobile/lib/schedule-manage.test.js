@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  blockFillState, liveBlockAssignments, adjustTargetFor, assignmentWindow,
+  blockFillState, emptyBlockText, liveBlockAssignments, adjustTargetFor, assignmentWindow,
   filterAssignableCoaches, canAdjustShiftTimes, canCancelTimeOff, scheduleViewFromParam,
   rosterKey, rosterLoadOutcome, staffLoadOutcome, STAFF_LOAD_FAILED, isCurrentLoad,
 } from './schedule-manage'
@@ -341,5 +341,39 @@ describe('isCurrentLoad (MANAGEMODE.1 review)', () => {
   it('the NEWEST load may not write if it asked for a studio or week the screen has left', () => {
     // An assign's refresh fired from studio A's render after a switch to B.
     expect(isCurrentLoad({ gen: 4, currentGen: 4, requestedKey: A, currentKey: B })).toBe(false)
+  })
+})
+
+// SHIFTTYPE.1 — an admin shift has no minimum: never 'empty', never 'short'.
+describe('blockFillState — admin shifts (SHIFTTYPE.1)', () => {
+  const admin = (n, max = 3) => block(n, 0, max, { shift_templates: { name: 'Stock take', kind: 'admin' } })
+
+  it('reads "Admin" whether or not anyone is on it', () => {
+    expect(blockFillState(admin(0), TODAY)).toEqual({ state: 'admin', count: 0, min: 0, max: 3, label: 'Admin' })
+    expect(blockFillState(admin(2), TODAY)).toMatchObject({ state: 'admin', count: 2, label: 'Admin' })
+  })
+
+  it('even when the block still carries a minimum', () => {
+    expect(blockFillState(block(1, 2, 3, { shift_templates: { kind: 'admin' } }), TODAY).state).toBe('admin')
+  })
+
+  it('over capacity is still over', () => {
+    expect(blockFillState(admin(4, 3), TODAY)).toMatchObject({ state: 'over', label: '4/3' })
+  })
+
+  it('a class block is unchanged', () => {
+    expect(blockFillState(block(0, 1, 3, { shift_templates: { kind: 'class' } }), TODAY)).toMatchObject({ state: 'empty', label: 'No coach' })
+  })
+})
+
+// SHIFTTYPE.1 — the line an empty block shows. Admin matches the web card
+// ("Nobody assigned"); a class block keeps its wording.
+describe('emptyBlockText', () => {
+  it('an admin block reads "Nobody assigned"', () => {
+    expect(emptyBlockText(block(0, 0, 3, { shift_templates: { kind: 'admin' } }))).toBe('Nobody assigned')
+  })
+  it('a class block, or one whose kind cannot be read, is unchanged', () => {
+    expect(emptyBlockText(block(0, 1, 3, { shift_templates: { kind: 'class' } }))).toBe('No one assigned yet.')
+    expect(emptyBlockText(block(0, 1, 3))).toBe('No one assigned yet.')
   })
 })
