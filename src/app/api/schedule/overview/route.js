@@ -24,7 +24,7 @@ import { z } from 'zod'
 import { getCurrentUser, assertLocationAccess, hasRoleAtLocation } from '@/lib/auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
-import { MANAGER_ROLES, uuidLike } from '@/lib/schemas'
+import { MANAGER_ROLES, uuidLike, realIsoDate } from '@/lib/schemas'
 import { getLocationMemberIds, leaveScopeOrFilter } from '@/lib/time-off-leave'
 import {
   eventTypeHasWindowForDate,
@@ -45,9 +45,12 @@ export const dynamic = 'force-dynamic'
 // strict UUID validation rejects them. uuidLike is the codebase's
 // shared lenient regex (src/lib/schemas.js) — UUID-shaped, no
 // version assertion. Same choice every other API route makes.
+//
+// DATECHECK.1 — the shared shape+calendar schema. The old regex let 2026-02-30
+// through; Date.UTC below rolled it to 2 March and the reads 500'd.
 const QuerySchema = z.object({
-  from:        z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD'),
-  to:          z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD'),
+  from:        realIsoDate,
+  to:          realIsoDate,
   location_id: uuidLike,
 })
 

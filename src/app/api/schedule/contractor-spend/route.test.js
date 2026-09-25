@@ -147,6 +147,17 @@ describe('GET — query validation', () => {
     const res = await GET(buildReq({ location_id: 'not-a-uuid', reference_date: '2026-05-01' }))
     expect(res.status).toBe(400)
   })
+
+  // DATECHECK.1 — 2026-02-30 was read as 2 March and answered 200 with
+  // MARCH's spend and budget.
+  it('400 on a reference_date the calendar does not have, and computes nothing', async () => {
+    for (const reference_date of ['2026-02-30', '2026-09-31', '2026-13-01']) {
+      const res = await GET(buildReq({ location_id: LOC, reference_date }))
+      expect(res.status).toBe(400)
+      expect((await res.json()).error).toBe('reference_date: Use a real date, YYYY-MM-DD')
+    }
+    expect(computeMonthlyContractorSpend).not.toHaveBeenCalled()
+  })
 })
 
 describe('GET — success + error envelopes', () => {

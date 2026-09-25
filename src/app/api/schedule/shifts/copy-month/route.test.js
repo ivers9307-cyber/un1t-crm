@@ -405,3 +405,23 @@ describe('POST /api/schedule/shifts/copy-month — people no longer at the studi
     expect(json.skipped_not_at_studio).toBe(0)
   })
 })
+
+// DATECHECK.1 — the first-of-month check stops day 30, but month 00 and 13
+// passed it: daysInMonth gave NaN and '2026-13-NaN' reached the source read.
+describe('POST /api/schedule/shifts/copy-month — a month the calendar does not have', () => {
+  it('400s and reads or writes nothing', async () => {
+    for (const [over, path] of [
+      [{ source_month_start: '2026-13-01' }, 'source_month_start'],
+      [{ target_month_start: '2026-00-01' }, 'target_month_start'],
+    ]) {
+      const res = await POST(req({ location_id: LOC, source_month_start: '2026-08-01', target_month_start: '2026-09-01', ...over }))
+      expect(res.status).toBe(400)
+      const json = await res.json()
+      expect(json.error).toBe('Invalid request body')
+      expect(json.issues).toEqual([{ path, message: 'Use a real date, YYYY-MM-DD' }])
+    }
+    expect(fetchSourceBlocks).not.toHaveBeenCalled()
+    expect(fetchLeaveLookup).not.toHaveBeenCalled()
+    expect(bulkUpsertShiftAssignments).not.toHaveBeenCalled()
+  })
+})

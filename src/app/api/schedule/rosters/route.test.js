@@ -975,3 +975,23 @@ describe('POST /api/schedule/rosters — advisories are a dry-run concern', () =
     expect(projectPublishImpact.mock.calls[0][1]).toMatchObject({ advisories: false })
   })
 })
+
+// DATECHECK.1 — an impossible period reached the overlap probe, and the publish
+// (or its dry run) answered 400 with Postgres's "date/time field value out of range".
+describe('POST /api/schedule/rosters — a period the calendar does not have', () => {
+  it('400s before any read, dry run or not', async () => {
+    for (const [body, path] of [
+      [{ period_start: '2026-02-30', period_end: '2026-03-06' }, 'period_start'],
+      [{ period_start: '2026-04-27', period_end: '2026-04-31' }, 'period_end'],
+      [{ period_start: '2026-13-01', period_end: '2026-13-07', dry_run: true }, 'period_start'],
+    ]) {
+      const res = await publish(body)
+      expect(res.status).toBe(400)
+      const json = await res.json()
+      expect(json.error).toBe('Invalid request body')
+      expect(json.issues).toContainEqual({ path, message: 'Use a real date, YYYY-MM-DD' })
+    }
+    expect(createServerClient).not.toHaveBeenCalled()
+    expect(projectPublishImpact).not.toHaveBeenCalled()
+  })
+})

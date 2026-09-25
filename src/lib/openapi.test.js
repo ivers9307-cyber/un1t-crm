@@ -310,6 +310,20 @@ describe('getOpenApiSpec', () => {
     expect(path.delete.description).toMatch(/swap/i)
   })
 
+  // DATECHECK.1 — every schedule read that now refuses an impossible date
+  // says so in its 400.
+  it('documents the schedule date refusals on the list reads', () => {
+    for (const [p, method] of [
+      ['/api/schedule/blocks', 'get'],
+      ['/api/schedule/overview', 'get'],
+      ['/api/schedule/time-off', 'get'],
+      ['/api/schedule/shifts', 'get'],
+      ['/api/schedule/week-cost', 'get'],
+    ]) {
+      expect(spec.paths[p]?.[method]?.responses?.['400']?.description, `${method} ${p}`).toMatch(/real calendar date/)
+    }
+  })
+
   // TPLCLONE.1
   it('documents the template copy, including the one-organisation rule and the weekdays default', () => {
     const op = spec.paths['/api/schedule/templates/clone']?.post

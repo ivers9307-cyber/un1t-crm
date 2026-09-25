@@ -19,7 +19,7 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess, getUserLocationIds, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { uuidLike, isoDate, timeOfDay, MANAGER_ROLES } from '@/lib/schemas'
+import { uuidLike, realIsoDate, isRealCalendarDate, timeOfDay, MANAGER_ROLES } from '@/lib/schemas'
 import { findPublishedRosterFor } from '@/lib/roster'
 import { logWarn } from '@/lib/log'
 import { adminMinimumRefusal } from '@/lib/shift-template-kind'
@@ -27,7 +27,7 @@ import { adminMinimumRefusal } from '@/lib/shift-template-kind'
 const BlockCreateSchema = z.object({
   location_id: uuidLike,
   template_id: uuidLike,
-  block_date: isoDate,
+  block_date: realIsoDate,
   start_time: timeOfDay.optional(),
   end_time: timeOfDay.optional(),
   max_coaches: z.number().int().min(1).max(50).optional(),
@@ -45,6 +45,14 @@ export async function GET(request) {
 
   const startDate = searchParams.get('start_date')
   const endDate = searchParams.get('end_date')
+  // DATECHECK.1 — these bounds reach Postgres as they are, and it refuses
+  // 2026-02-30 (the route used to hand back its error text as the 400). Refuse
+  // it here, in change-log's words. Absent or empty = no bound, as before.
+  for (const [name, value] of [['start_date', startDate], ['end_date', endDate]]) {
+    if (value && !isRealCalendarDate(value)) {
+      return NextResponse.json({ success: false, error: `${name}: not a real date` }, { status: 400 })
+    }
+  }
   const db = createServerClient()
 
   let query = db

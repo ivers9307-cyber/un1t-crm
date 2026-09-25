@@ -44,7 +44,7 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { uuidLike, isoDate, MANAGER_ROLES } from '@/lib/schemas'
+import { uuidLike, realIsoDate, MANAGER_ROLES } from '@/lib/schemas'
 import { bulkUpsertShiftAssignments } from '@/lib/roster-write'
 import { fetchSlotRemovalKeys } from '@/lib/roster'
 import { fetchSourceBlocks, fetchLeaveLookup, buildCopyPlan, mapNthWeekdayOfMonth, COPY_MODES } from '@/lib/roster-copy'
@@ -56,8 +56,10 @@ export const runtime = 'nodejs'
 // consistent across the two endpoints.
 const CopyMonthSchema = z.object({
   location_id: uuidLike,
-  source_month_start: isoDate,
-  target_month_start: isoDate,
+  // DATECHECK.1 — real dates, not just the shape (month 00/13 passed the
+  // first-of-month check below).
+  source_month_start: realIsoDate,
+  target_month_start: realIsoDate,
   // COPYMODES.1 — see copy-week. Missing = 'exact', today's behaviour.
   mode: z.enum(COPY_MODES).default('exact'),
 })
