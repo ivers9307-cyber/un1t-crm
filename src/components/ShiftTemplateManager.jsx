@@ -138,6 +138,7 @@ export default function ShiftTemplateManager({ user }) {
     }
 
     setError(null)
+    setNotice(null)
     try {
       const res = await fetch(url, {
         method,
@@ -151,6 +152,13 @@ export default function ShiftTemplateManager({ user }) {
       }
       setShowForm(false)
       fetchTemplates()
+      // BLOCKEDIT.1 — shifts edited on their own on the calendar keep their
+      // own times/staffing; say how many, so a template edit that did not
+      // reach them is not a surprise.
+      const keptEdited = data.propagation?.futureBlocksKeptEdited || 0
+      if (keptEdited > 0) {
+        setNotice(`${keptEdited} shift${keptEdited === 1 ? '' : 's'} you edited individually kept ${keptEdited === 1 ? 'its' : 'their'} own times/staffing.`)
+      }
       // If the API generated blocks, surface the count so the
       // operator knows their schedule is ready to staff.
       if (data.generated?.inserted > 0) {

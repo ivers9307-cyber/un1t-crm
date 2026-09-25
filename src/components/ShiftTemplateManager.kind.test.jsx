@@ -98,3 +98,30 @@ describe('template editor — Kind', () => {
     expect(screen.getByRole('radio', { name: /^Class/ }).checked).toBe(true)
   })
 })
+
+// BLOCKEDIT.1 second review 2 — a template edit that left individually edited
+// shifts alone says so.
+describe('template editor — shifts edited on their own', () => {
+  it('names how many future shifts kept their own times/staffing', async () => {
+    global.fetch = vi.fn(async (url, opts) => {
+      if (opts?.method === 'PUT') return { ok: true, status: 200, json: async () => ({ success: true, data: {}, propagation: { futureBlocksUpdated: 3, futureBlocksKeptEdited: 2 } }) }
+      return { ok: true, status: 200, json: async () => ({ success: true, data: [CLASS_T] }) }
+    })
+    await act(async () => { render(<ShiftTemplateManager user={MANAGER} />) })
+    fireEvent.click(screen.getByRole('button', { name: 'Edit the Morning template' }))
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save Changes' })) })
+    expect(screen.getByText('2 shifts you edited individually kept their own times/staffing.')).toBeTruthy()
+  })
+
+  it('says nothing when none were kept', async () => {
+    global.fetch = vi.fn(async (url, opts) => {
+      if (opts?.method === 'PUT') return { ok: true, status: 200, json: async () => ({ success: true, data: {}, propagation: { futureBlocksUpdated: 3, futureBlocksKeptEdited: 0 } }) }
+      return { ok: true, status: 200, json: async () => ({ success: true, data: [CLASS_T] }) }
+    })
+    await act(async () => { render(<ShiftTemplateManager user={MANAGER} />) })
+    fireEvent.click(screen.getByRole('button', { name: 'Edit the Morning template' }))
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save Changes' })) })
+    expect(screen.queryByText(/edited individually/)).toBeNull()
+  })
+})
+

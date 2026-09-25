@@ -288,6 +288,12 @@ const config = [
       // resolves with { data, error } instead of throwing. Born clean, armed
       // on arrival.
       'src/lib/waitlist-entry.js',
+      // BLOCKEDIT.1 — the shift editor (PUT beside the existing DELETE) and its
+      // */5 notice arm. Every write judges its error (and the block UPDATE its
+      // rows) from day one. `[[]id]`: files entries are minimatch globs, and a
+      // bare `[id]` is a character class.
+      'src/app/api/schedule/blocks/[[]id]/route.js',
+      'src/lib/block-edit-notify.js',
       // AVAIL.1 — coach availability: the save, the studio read and the
       // notice stamps. Born clean, armed on arrival.
       'src/lib/availability-server.js',

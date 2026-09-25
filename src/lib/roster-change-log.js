@@ -13,6 +13,11 @@ import { ROSTER_CHANGE_LOG_MAX_ROWS } from './roster-change-format'
 
 export const ROSTER_CHANGE_ACTIONS = ['assigned', 'unassigned', 'time_changed']
 
+// BLOCKEDIT.1 (mig 629) — one COACHLESS row per edit of a published block
+// (times, minimum, maximum, briefing). Not in ROSTER_CHANGE_ACTIONS: that list
+// is logRosterChange's, which requires a coach.
+export const BLOCK_EDITED_ACTION = 'block_edited'
+
 /**
  * Record a post-publish roster edit. Best-effort — never throws.
  * @param {import('@supabase/supabase-js').SupabaseClient} db
@@ -48,6 +53,41 @@ export async function logRosterChange(db, change = {}) {
     return { logged: true, id: data.id }
   } catch (e) {
     logWarn('roster-change-log', 'insert failed', { err: e?.message })
+    return { logged: false, reason: 'error' }
+  }
+}
+
+/**
+ * BLOCKEDIT.1 — record an edit to a PUBLISHED block that has no coach to hang
+ * it on (min/max/briefing, and the block's own time change). Best-effort,
+ * never throws.
+ *
+ * Born STAMPED: nobody is messaged about a coachless row, so the re-publish
+ * safety net (collectUnnotifiedChanges) must never collect it, and the drawer
+ * shows no told state for it (stampMeansTold, roster-change-format.js).
+ * `details` must never carry the briefing TEXT, only what kind of change.
+ */
+export async function logBlockEdit(db, { isPublished, locationId, blockId, blockDate, actorId, details } = {}) {
+  try {
+    if (!isPublished) return { logged: false, reason: 'not_published' }
+    if (!locationId || !blockId) return { logged: false, reason: 'missing' }
+    const { data, error } = await db.from('roster_change_log').insert({
+      location_id: locationId,
+      block_id: blockId,
+      block_date: blockDate || null,
+      actor_id: actorId || null,
+      coach_id: null,
+      action: BLOCK_EDITED_ACTION,
+      details: details || {},
+      notified_at: new Date().toISOString(),
+    }).select('id').single()
+    if (error) {
+      logWarn('roster-change-log', 'block edit insert failed', { err: error.message })
+      return { logged: false, reason: 'error' }
+    }
+    return { logged: true, id: data.id }
+  } catch (e) {
+    logWarn('roster-change-log', 'block edit insert failed', { err: e?.message })
     return { logged: false, reason: 'error' }
   }
 }
@@ -123,6 +163,18 @@ const DETAIL_TIME_KEYS = ['from', 'to']
 const DETAIL_REASONS = ['staff_permanent_delete'] // mig 622
 const ROSTER_STATUSES = ['draft', 'published', 'superseded'] // migs 072, 602
 const TIME_SHAPE = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/
+// BLOCKEDIT.1 — a block edit's capacity change, as { from, to } integers
+// (0..50, the shift_blocks CHECKs). Manager-only facts, and this read is
+// manager-only (GET /api/schedule/change-log).
+const DETAIL_COUNT_KEYS = ['min_coaches', 'max_coaches']
+// The briefing passes as the KIND of change only, never its text.
+const DETAIL_BRIEFING_VALUES = ['added', 'changed', 'removed']
+// Stamped by the notice arm WITHOUT a message (block-edit-notify.js).
+const DETAIL_NOTICES = ['not_needed']
+
+function countOrNull(v) {
+  return Number.isInteger(v) && v >= 0 && v <= 50 ? v : null
+}
 
 function isPlainObject(v) {
   return Boolean(v) && typeof v === 'object' && !Array.isArray(v)
@@ -160,6 +212,11 @@ function publicDetails(details) {
       out[k] = { start_time: timeOrNull(details[k].start_time), end_time: timeOrNull(details[k].end_time) }
     }
   }
+  for (const k of DETAIL_COUNT_KEYS) {
+    if (isPlainObject(details[k])) out[k] = { from: countOrNull(details[k].from), to: countOrNull(details[k].to) }
+  }
+  if (DETAIL_BRIEFING_VALUES.includes(details.briefing)) out.briefing = details.briefing
+  if (DETAIL_NOTICES.includes(details.notice)) out.notice = details.notice
   return out
 }
 

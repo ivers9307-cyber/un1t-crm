@@ -12,8 +12,11 @@
 //                       shift arm of the */5 send-push-reminders cron.
 //   'roster-runway'   — runRosterRunwayAlerts (src/lib/roster-runway-notify.js),
 //                       the first arm of the daily 08:00 UTC contract-reminders cron.
+//   'shift-time-changes' — runShiftTimeChangeNotices (src/lib/block-edit-notify.js,
+//                       BLOCKEDIT.1), the time-change notice arm of send-push-reminders.
 //
-// Both rows are seeded by mig 633 (stampHeartbeat is UPDATE-only).
+// The first two rows are seeded by mig 633, the third by mig 639
+// (stampHeartbeat is UPDATE-only).
 //
 // THE RULE. Stamp only when the arm RETURNED an outcome object (a throw, or a
 // resolved non-object, has not shown it ran) and that outcome carries no
@@ -25,6 +28,9 @@
 
 export const SHIFT_REMINDERS_HEARTBEAT = 'shift-reminders'
 export const ROSTER_RUNWAY_HEARTBEAT = 'roster-runway'
+// BLOCKEDIT.1 — the time-change notice arm (src/lib/block-edit-notify.js
+// runShiftTimeChangeNotices) of the */5 send-push-reminders cron. Seeded by mig 639.
+export const SHIFT_TIME_CHANGES_HEARTBEAT = 'shift-time-changes'
 
 // runShiftReminders' counters that mean the ARM went wrong, not a device:
 //   shift_claim_failed — a ledger claim insert failed; that reminder was NOT sent.
@@ -52,3 +58,20 @@ export function runwayArmHealthy(outcome) {
   if (!isOutcome(outcome)) return false
   return !Object.prototype.hasOwnProperty.call(outcome, 'error')
 }
+
+// runShiftTimeChangeNotices' counters that mean the ARM went wrong, not a device:
+//   time_change_read_failed  — the unsent-rows read failed; nobody was told this tick.
+//   time_change_read_capped  — the read hit the 1,000-row page; the rest waited.
+//   time_change_stamp_failed — a 'not_needed' stamp failed; that row is re-planned
+//                              next tick, and meanwhile the drawer shows it unsent.
+// NOT here: time_change_send_failed (claim released, next tick retries),
+// time_change_deduped / _undelivered (left for the re-publish safety net) and
+// time_change_told_stamp_failed (the coach WAS told; logged and counted).
+export const TIME_CHANGE_ARM_FAULT_KEYS = Object.freeze(['time_change_read_failed', 'time_change_read_capped', 'time_change_stamp_failed'])
+
+/** True when a runShiftTimeChangeNotices() summary shows a clean run (quiet ticks included). */
+export function timeChangeArmHealthy(summary) {
+  if (!isOutcome(summary)) return false
+  return TIME_CHANGE_ARM_FAULT_KEYS.every((key) => count(summary[key]) === 0)
+}
+

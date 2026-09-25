@@ -35,13 +35,11 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
-import { timeRangesOverlap, fmtTime } from '@/lib/schedule-overlap'
 import { logRosterChange } from '@/lib/roster-change-log'
 import { notifyRosterChanges } from '@/lib/roster-change-notify'
 import { isLiveAssignment, liveAssignments } from '@/lib/roster'
 import { isRosterableProfile, notRosterableError } from '@/lib/roster-write'
-import { siblingLocationIds } from '@/lib/sibling-locations'
-import { logWarn } from '@/lib/log'
+import { findShiftOverlaps } from '@/lib/shift-overlaps'
 
 const AssignSchema = z.object({
   profile_id: uuidLike.optional(),
@@ -262,37 +260,16 @@ export async function POST(request, props) {
   // widen it and never touch the assignment that already succeeded.
   const assignedIds = assigned.map((a) => a.profile_id).filter(Boolean)
   if (assignedIds.length > 0 && block.start_time && block.end_time) {
-    try {
-      const { ids: siblingIds, error: sibErr } = await siblingLocationIds(db, block.location_id)
-      if (sibErr) {
-        logWarn('schedule-assign', 'sibling studios unreadable; double-booking check is this studio only', { locationId: block.location_id, err: sibErr.message })
-      }
-      const scopeIds = [block.location_id, ...siblingIds]
-      const { data: clashes, error: clashErr } = await db
-        .from('shift_assignments')
-        .select('profile_id, shift_blocks!inner(location_id, start_time, end_time, block_date, shift_templates(name), locations(name)), profiles:profile_id(full_name)')
-        .in('profile_id', assignedIds)
-        .in('shift_blocks.location_id', scopeIds)
-        .eq('shift_blocks.block_date', block.block_date)
-        .neq('block_id', params.id)
-      if (clashErr) {
-        logWarn('schedule-assign', 'double-booking check unreadable; no overlap warnings for this assignment', { blockId: block.id, err: clashErr.message })
-      }
-      for (const c of clashes || []) {
-        const ob = c.shift_blocks
-        // The filter above is the boundary; this re-check costs nothing and
-        // does not depend on how an embedded filter is applied.
-        if (ob && scopeIds.includes(ob.location_id) && timeRangesOverlap(block.start_time, block.end_time, ob.start_time, ob.end_time)) {
-          const who = c.profiles?.full_name || 'This coach'
-          const tpl = ob.shift_templates?.name || 'another shift'
-          const loc = ob.locations?.name ? ` at ${ob.locations.name}` : ''
-          warnings.push(`${who} is already on ${tpl} ${fmtTime(ob.start_time)}–${fmtTime(ob.end_time)}${loc} that day — overlaps this shift.`)
-        }
-      }
-    } catch {
-      // Advisory only — a double-booking check failure must never block
-      // the assignment that already succeeded.
-    }
+    // BLOCKEDIT.1 review 4 — the check is shared with the shift editor
+    // (src/lib/shift-overlaps.js). Advisory only, never throws.
+    const { clashes } = await findShiftOverlaps(db, {
+      locationId: block.location_id,
+      blockId: params.id,
+      blockDate: block.block_date,
+      windows: assignedIds.map((profileId) => ({ profileId, start_time: block.start_time, end_time: block.end_time })),
+      logTag: 'schedule-assign',
+    })
+    for (const c of clashes) warnings.push(c.text)
   }
 
   // SCHEDULE-CHANGE-LOG.1 — record each new assignment on a published roster

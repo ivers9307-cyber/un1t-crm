@@ -14,6 +14,7 @@ import {
 } from '@/lib/shift-template-blocks'
 import { SHIFT_KINDS } from '@shared/shift-kind'
 import { resolveTemplateKindWrite } from '@/lib/shift-template-kind'
+import { toHms } from '@/lib/block-edit'
 
 const TemplateUpdateSchema = z.object({
   name: z.string().min(1).max(100).optional(),
@@ -38,6 +39,13 @@ const TemplateUpdateSchema = z.object({
 //     shifts keep the times/capacity they ran at. Audit truth.
 //   - FUTURE blocks (block_date >= today) reflect the new template
 //     IMMEDIATELY for start_time / end_time / max_coaches.
+//     BLOCKEDIT.1 review 5: start/end only reach future blocks whose times
+//     still EQUAL the template's old times. A block edited away from its
+//     template (a one-off via PUT /api/schedule/blocks/[id]) keeps its own
+//     hours; `propagation.futureBlocksKeptEdited` counts them. Second review:
+//     the same for min_coaches / max_coaches, per field (a switch to admin
+//     still zeroes every minimum). A block whose own value coincides with the
+//     template's OLD value cannot be told from an unedited one: it follows.
 //   - days_of_week add → new blocks materialised for added days
 //     across the next 8 weeks via generateBlocksForTemplate (idempotent).
 //   - days_of_week remove → future blocks for the removed days are
@@ -92,7 +100,9 @@ export async function PUT(request, props) {
   // so a cross-tenant id is indistinguishable from a missing one).
   const { data: priorTemplate } = await db
     .from('shift_templates')
-    .select('location_id, days_of_week, kind, min_coaches')
+    // start_time/end_time: BLOCKEDIT.1 review 5, which future blocks still
+    // follow the template (see the propagation below).
+    .select('location_id, days_of_week, kind, min_coaches, max_coaches, start_time, end_time')
     .eq('id', params.id)
     .maybeSingle()
   if (!priorTemplate) {
@@ -209,6 +219,27 @@ export async function PUT(request, props) {
   if (Object.prototype.hasOwnProperty.call(updates, 'end_time')) {
     futureFieldUpdates.end_time = template.end_time
   }
+  //
+  // BLOCKEDIT.1 review 5 — ONLY blocks still at the template's OLD times. A
+  // block edited away from its template (PUT /api/schedule/blocks/[id]: "this
+  // Tuesday runs 10-1") is a deliberate one-off; rewriting it here silently
+  // undid the manager's edit. It keeps its own hours, and is counted.
+  const followsTemplate = (b) => toHms(b.start_time) === toHms(priorTemplate.start_time)
+    && toHms(b.end_time) === toHms(priorTemplate.end_time)
+  // Second review 2 — the same rule for staffing, per field (below). A block
+  // counts as "kept" only when a value was really changing and it held its own.
+  // (A block edited to a value that equals the template's OLD one looks
+  // unedited, and is treated as unedited.)
+  const switchingToAdmin = updates.kind === 'admin' && priorTemplate.kind !== 'admin'
+  const timesMove = changingTimes && (toHms(template.start_time) !== toHms(priorTemplate.start_time)
+    || toHms(template.end_time) !== toHms(priorTemplate.end_time))
+  const minMoves = !switchingToAdmin && Object.prototype.hasOwnProperty.call(updates, 'min_coaches')
+    && Number(template.min_coaches) !== Number(priorTemplate.min_coaches)
+  const maxMoves = Object.prototype.hasOwnProperty.call(updates, 'max_coaches')
+    && Number(template.max_coaches) !== Number(priorTemplate.max_coaches)
+  const futureBlocksKeptEdited = futureBlocks.filter((b) => (timesMove && !followsTemplate(b))
+    || (minMoves && Number(b.min_coaches) !== Number(priorTemplate.min_coaches))
+    || (maxMoves && Number(b.max_coaches) !== Number(priorTemplate.max_coaches))).length
   let futureBlocksUpdated = 0
   if (Object.keys(futureFieldUpdates).length > 0) {
     const { data: updatedBlocks, error: updErr } = await db
@@ -217,6 +248,8 @@ export async function PUT(request, props) {
       .eq('template_id', params.id)
       .eq('location_id', locationId)
       .gte('block_date', today)
+      .eq('start_time', priorTemplate.start_time)
+      .eq('end_time', priorTemplate.end_time)
       .select('id')
     if (updErr) {
       return NextResponse.json({
@@ -241,6 +274,11 @@ export async function PUT(request, props) {
     const groups = planBlockCapacityUpdates(futureBlocks, {
       minCoaches: Object.prototype.hasOwnProperty.call(updates, 'min_coaches') ? template.min_coaches : null,
       maxCoaches: Object.prototype.hasOwnProperty.call(updates, 'max_coaches') ? template.max_coaches : null,
+      // Second review 2 — only blocks still at the template's OLD value; a
+      // block with its own staffing keeps it. A switch to admin forces the
+      // minimum everywhere (an admin shift has no minimum, SHIFTTYPE.1).
+      followMin: switchingToAdmin ? undefined : priorTemplate.min_coaches,
+      followMax: priorTemplate.max_coaches,
     })
     const failures = []
     for (const g of groups) {
@@ -249,6 +287,11 @@ export async function PUT(request, props) {
         .update(g.patch)
         .in('id', g.ids)
         .eq('location_id', locationId)
+        // BLOCKEDIT.1 third check — only if still at the values READ (for a
+        // following block, the template's OLD value): a manager who edited
+        // the block in the meantime keeps their edit.
+        .eq('min_coaches', g.expect.min_coaches)
+        .eq('max_coaches', g.expect.max_coaches)
         .select('id')
       // One failing group must not abandon the rest: the whole point is that
       // the blocks are no longer all-or-nothing.
@@ -270,6 +313,8 @@ export async function PUT(request, props) {
   if (changingTimes) {
     for (const b of futureBlocks) {
       if (!isPublishedBlock(b)) continue
+      // BLOCKEDIT.1 review 5 — an edited block was not rewritten above.
+      if (!followsTemplate(b)) continue
       const newStart = futureFieldUpdates.start_time ?? b.start_time
       const newEnd = futureFieldUpdates.end_time ?? b.end_time
       if (newStart === b.start_time && newEnd === b.end_time) continue
@@ -353,7 +398,7 @@ export async function PUT(request, props) {
         success: true,
         data: template,
         warning: `Template deactivated but clearing its empty future blocks failed: ${cleared.error.message}`,
-        propagation: { futureBlocksUpdated, futureBlocksDeleted, timeChangesLogged, deactivatedBlocksDeleted: 0, publishedEmptiesKept },
+        propagation: { futureBlocksUpdated, futureBlocksKeptEdited, futureBlocksDeleted, timeChangesLogged, deactivatedBlocksDeleted: 0, publishedEmptiesKept },
       })
     }
     deactivatedBlocksDeleted = cleared.deleted
@@ -375,7 +420,7 @@ export async function PUT(request, props) {
         success: true,
         data: template,
         warning: `Template + future fields saved, but new-day generation failed: ${e.message}`,
-        propagation: { futureBlocksUpdated, futureBlocksDeleted, timeChangesLogged, deactivatedBlocksDeleted, publishedEmptiesKept },
+        propagation: { futureBlocksUpdated, futureBlocksKeptEdited, futureBlocksDeleted, timeChangesLogged, deactivatedBlocksDeleted, publishedEmptiesKept },
       })
     }
   }
@@ -384,7 +429,7 @@ export async function PUT(request, props) {
     success: true,
     data: template,
     generated,
-    propagation: { futureBlocksUpdated, futureBlocksDeleted, timeChangesLogged, deactivatedBlocksDeleted, publishedEmptiesKept },
+    propagation: { futureBlocksUpdated, futureBlocksKeptEdited, futureBlocksDeleted, timeChangesLogged, deactivatedBlocksDeleted, publishedEmptiesKept },
     ...(capacityWarning ? { warning: capacityWarning } : {}),
   })
 }
