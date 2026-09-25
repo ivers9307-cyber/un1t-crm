@@ -327,6 +327,13 @@ describe('rosterToolbarModel', () => {
     expect(rosterToolbarModel({ ...base, copying: true, selectMode: true, selectedCount: 2 }).moreLabel).toBe('More · copying…')
     expect(rosterToolbarModel(base).moreLabel).toBe('More')
   })
+
+  // GRID.1 — Days | Coaches: the grid is a week-level layout, for managers.
+  it('offers Days | Coaches to a manager in week view only', () => {
+    expect(rosterToolbarModel(base).showLayoutToggle).toBe(true)
+    expect(rosterToolbarModel({ ...base, viewType: 'month' }).showLayoutToggle).toBe(false)
+    expect(rosterToolbarModel({ ...base, isManager: false }).showLayoutToggle).toBe(false)
+  })
 })
 
 // ROSTERLOOK.1 — seen live once the cards went quiet: a person with two

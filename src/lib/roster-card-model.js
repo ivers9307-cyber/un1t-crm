@@ -260,12 +260,13 @@ export function monthCellLines(blocks, { todayIso, isManager = false, limit = 3 
  *   everyone   Time off, My shifts | All staff, Week | Month
  *   manager    Select multiple, Copy last week, Copy last month, Manage templates
  *   manager + week view   Publish
+ *   manager + week view   Days | Coaches (GRID.1)
  * Icons are attached by RosterToolbar (by key); this stays a pure data shape.
  * `checked` present = a menuitemcheckbox. `href` present = a link, not a button.
  */
 export function rosterToolbarModel({ isManager = false, viewType = 'week', selectMode = false, selectedCount = 0, copying = false } = {}) {
   if (!isManager) {
-    return { timeOffInline: true, moreItems: [], moreLabel: 'More', moreActive: false, showPublish: false }
+    return { timeOffInline: true, moreItems: [], moreLabel: 'More', moreActive: false, showPublish: false, showLayoutToggle: false }
   }
   return {
     timeOffInline: false,
@@ -278,6 +279,8 @@ export function rosterToolbarModel({ isManager = false, viewType = 'week', selec
         : 'More',
     moreActive: selectMode,
     showPublish: viewType === 'week',
+    // GRID.1 — Days | Coaches: the coach-by-day grid is a week layout.
+    showLayoutToggle: viewType === 'week',
     moreItems: [
       { key: 'time-off', label: 'Time off', href: '/schedule/time-off' },
       {
