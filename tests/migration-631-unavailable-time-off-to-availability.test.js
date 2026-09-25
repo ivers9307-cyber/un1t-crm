@@ -352,6 +352,21 @@ describe('migration 631 — the move', () => {
       .toEqual([{ rule_inserted: false }])
   }))
 
+  // Review N5 — "the earliest request's note" is judged on the instant, not
+  // on to_jsonb's text. Across the Dublin clock change the text sorts wrong:
+  // 00:20Z renders "…T01:20:00+01:00", 01:10Z renders "…T01:10:00+00:00".
+  it('the earliest note wins by instant, even across a clock change', () => inTx(async () => {
+    await runSql(`SET LOCAL TimeZone = 'Europe/Dublin'`)
+    await runSql(`
+      INSERT INTO public.time_off_requests (profile_id, location_id, type, start_date, end_date, total_days, reason, status, created_at)
+      VALUES ('${CON_C}', '${LOC}', 'unavailable', '2026-11-10', '2026-11-11', 2, 'later',   'approved', '2026-10-25T01:10:00Z'),
+             ('${CON_C}', '${LOC}', 'unavailable', '2026-11-10', '2026-11-11', 2, 'earlier', 'approved', '2026-10-25T00:20:00Z');`)
+    const texts = (await q(`SELECT to_jsonb(r)->>'created_at' AS t FROM public.time_off_requests r WHERE profile_id = '${CON_C}' ORDER BY created_at`)).map((r) => r.t)
+    expect(texts).toEqual(['2026-10-25T01:20:00+01:00', '2026-10-25T01:10:00+00:00']) // text order would invert them
+    await move()
+    expect((await rulesOf(CON_C)).map((x) => x.note)).toEqual(['earlier'])
+  }))
+
   it('an overlapping pair (different ranges) keeps both rules', () => inTx(async () => {
     await runSql(`
       INSERT INTO public.time_off_requests (profile_id, location_id, type, start_date, end_date, total_days, status)

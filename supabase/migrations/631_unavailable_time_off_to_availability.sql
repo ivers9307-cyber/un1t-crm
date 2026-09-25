@@ -407,7 +407,9 @@ BEGIN
              AND u.start_date = (b.rule->>'start_date')::date
              AND u.end_date = (b.rule->>'end_date')::date)
       ORDER BY b.profile_id, b.rule->>'start_date', b.rule->>'end_date',
-               (b.original->>'created_at') NULLS LAST, b.time_off_request_id);
+               -- By the instant, never the text: to_jsonb renders the
+               -- session's offset, which changes at a clock change.
+               (b.original->>'created_at')::timestamptz NULLS LAST, b.time_off_request_id);
 
   -- The mig 630 CHECKs judge every row: one bad rule aborts everything.
   INSERT INTO public.staff_unavailability (profile_id, kind, start_date, end_date, all_day, note)
