@@ -90,18 +90,27 @@ These are marked **REVIEW** in the artifact until he confirms or changes them. E
 8. **Labour against revenue** uses whatever revenue source the studio scorecard already trusts; the LABOUR.1 plan names it before any code.
 9. **The class link does not widen the Glofox sync** beyond what the API can bear; CLASSLINK.2's plan measures the call cost first.
 10. **Copying templates does not copy their weekdays unless the manager ticks a box.** Copying them fills the target studio's next eight weeks with empty shifts and starts its unbuilt-week alerts at once.
+11. **Rest is measured from a day's last shift to the next day's first,** so a split shift inside one day (06:00–10:00 then 17:00–21:00) never flags. The Organisation of Working Time Act asks for 11 consecutive hours in each 24; a stricter reading would flag some split days.
+12. **Draft shifts at the other studio count toward the 48 hours, and approved leave is not subtracted.** Both make the advisory err towards flagging.
+13. **Changing a template's kind changes its past shifts too** (kind lives on the template, not copied onto each shift). Hours are unaffected either way; only staffing gaps and contractor spend read the kind.
+14. **Contractor spend leaves admin shifts out,** as decided, so if a contractor does placed admin work the spend figure under-reports what they will invoice.
+15. **Someone has to mark Stillorgan's admin templates** after SHIFTTYPE.1 merges (front desk, sales calls, consultations?). Until then every template stays a class template and nothing changes.
 
 ## Follow-ups found along the way (not in any PR yet)
 
 - The time-off summary report ignores a failed read and saves an empty report (found planning 11).
 - In `ShiftTemplateManager.jsx` the warning after deactivating or reactivating a template is wiped by the list reload before it can show (found planning 12).
 - No schedule range route checks that the start comes before the end; `allowances?year=` is not validated (found building 11).
+- The staff assistant's `generate_report` tool passes model-supplied report periods unchecked (Postgres refuses a bad one; harmless) (found reviewing 11).
 - The staff assistant's `create_shift` and `get_time_off` tools take dates with no calendar check (found planning 11; the assistant is off everywhere).
 
 ## Status log
 
 Updated by the loop. Newest first.
 
+- 25 Sep: 13 SHIFTTYPE.1 plan written (14 tasks; `kind` on templates only; mig 628 with a DB CHECK that admin min = 0; admin priced at €0 in the one contractor-cost function; phone Manage chip gets an admin state). Waiting for an implementer slot.
+- 25 Sep: 11 DATECHECK.1 review: approved with should-fixes. Real defect caught: a roster-coverage report to 9999-12-31 would walk ~2.9M days and hang (reports will be capped at 366 days). Fixes in progress.
+- 25 Sep: 15 WORKTIME.1 plan written (rule in `shared/working-time.js` for the phone later; employees = `employment_type = 'fte'`; no pay read); implementer started in `~/code/un1t-crm-worktime1`. Merges after SHIFTTYPE.1's update run (both publish).
 - 25 Sep: 12 TPLCLONE.1 built (9 commits, 226 targeted tests; copies land as "One-off" templates unless weekdays are ticked). In independent review. Batch 3 plans (16 AVAIL.1, 31 HEARTBEAT.1) commissioned.
 - 25 Sep: 11 DATECHECK.1 built (10 commits, 32 tests; `week-cost` and `contractor-spend` used to answer 200 for 30 Feb with March's figures). In independent review.
 - 25 Sep: 12 TPLCLONE.1 plan written (no migration: the unique (studio, name) key already exists); implementer started in `~/code/un1t-crm-tplclone1` with weekdays NOT copied by default (default 10).
