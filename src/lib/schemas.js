@@ -37,6 +37,16 @@ export function isRealCalendarDate(str) {
   return d <= [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1]
 }
 
+/**
+ * DATECHECK.1 — isoDate AND isRealCalendarDate as one schema. Use it for any
+ * date a route hands to the database or does arithmetic on: the shape alone
+ * lets 2026-02-30 through, which V8 reads as 2 March and Postgres refuses.
+ * A well-shaped impossible date gets one issue (the message below); a bad
+ * shape gets 'Use YYYY-MM-DD' as well (Zod runs the refine after a failed
+ * regex). For a raw query param, call isRealCalendarDate directly.
+ */
+export const realIsoDate = isoDate.refine(isRealCalendarDate, 'Use a real date, YYYY-MM-DD')
+
 // Time of day, HH:MM or HH:MM:SS.
 export const timeOfDay = z.string().regex(
   /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/,

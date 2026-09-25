@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  isoDate, isRealCalendarDate, timeOfDay, hexColor, email, url,
+  isoDate, isRealCalendarDate, realIsoDate, timeOfDay, hexColor, email, url,
   money, hours, days,
   roleSchema, locationRoleSchema, assignmentSchema,
   employmentTypeSchema,
@@ -309,5 +309,32 @@ describe('isRealCalendarDate', () => {
 
   it('refuses anything that is not YYYY-MM-DD, without throwing', () => {
     for (const d of ['', null, undefined, 20260915, '15-09-2026', '2026-9-15', '2026-09-15T00:00:00Z']) expect(isRealCalendarDate(d)).toBe(false)
+  })
+})
+
+// DATECHECK.1 — the two checks as one schema, for every schedule route.
+describe('realIsoDate', () => {
+  it('passes a real date through unchanged, leap day included', () => {
+    expect(realIsoDate.parse('2026-09-25')).toBe('2026-09-25')
+    expect(realIsoDate.parse('2028-02-29')).toBe('2028-02-29')
+  })
+
+  it('refuses a well-shaped date the calendar does not have, with exactly one message', () => {
+    for (const d of ['2026-02-30', '2026-04-31', '2026-13-01', '2026-00-10', '2027-02-29']) {
+      const r = realIsoDate.safeParse(d)
+      expect(r.success).toBe(false)
+      expect(r.error.issues.map((i) => i.message)).toEqual(['Use a real date, YYYY-MM-DD'])
+    }
+  })
+
+  it('still names the shape when the shape is wrong', () => {
+    const r = realIsoDate.safeParse('25/09/2026')
+    expect(r.success).toBe(false)
+    expect(r.error.issues.map((i) => i.message)).toContain('Use YYYY-MM-DD')
+  })
+
+  it('refuses a non-string without throwing', () => {
+    expect(realIsoDate.safeParse(null).success).toBe(false)
+    expect(realIsoDate.safeParse(20260925).success).toBe(false)
   })
 })
