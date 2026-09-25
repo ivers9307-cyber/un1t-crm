@@ -24,6 +24,7 @@ const STAFF_TYPES = [
   'contract_issued', 'checklist_overdue', 'checklist_compliance',
   'roster_runway', // RUNWAY.1 — rides category 'schedule'
   'availability_changed', // AVAIL.1 — rides category 'availability_change'
+  'qualification_digest', // QUALS.1 — rides category 'qualification_expiry'
   'issue_submitted', 'issue_resolved',
   'wa_quality', 'number_health', 'flow_health', 'template_status',
   'email_inbound',
