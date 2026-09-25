@@ -99,6 +99,47 @@ describe('AvailabilityEditor', () => {
     expect(putBody).toEqual({ weekly: [], dated: [] })
   })
 
+  // AVAIL.1a's started-rule contract (shared/availability.js
+  // carryStartedRules): the client judges with the same knownKeys the route
+  // does, so what it lets through is what the server accepts.
+  describe('a dated rule that has already started', () => {
+    const STARTED = { kind: 'dated', weekday: null, start_date: '2026-09-20', end_date: '2026-09-30', all_day: true, start_time: null, end_time: null, note: 'Away' }
+    beforeEach(() => {
+      const base = global.fetch
+      global.fetch = vi.fn(async (url, options) => (options?.method === 'PUT'
+        ? base(url, options)
+        : ok({ success: true, data: { weekly: [], dated: [STARTED] } })))
+    })
+
+    it('says it has started, and only its last day and note can change', async () => {
+      render(<AvailabilityEditor todayIso={TODAY} />)
+      await screen.findByLabelText('Last day')
+      expect(screen.getByText(/Started 20 Sep/)).toBeTruthy()
+      expect(screen.getByLabelText('First day').disabled).toBe(true)
+      expect(screen.getByLabelText('All day').disabled).toBe(true)
+      expect(screen.getByLabelText('Last day').disabled).toBe(false)
+      expect(screen.getByLabelText('Note').disabled).toBe(false)
+    })
+
+    it('moving only its end saves it with its stored start (the server carries it from today)', async () => {
+      render(<AvailabilityEditor todayIso={TODAY} />)
+      fireEvent.change(await screen.findByLabelText('Last day'), { target: { value: '2026-09-27' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+      await waitFor(() => expect(putBody).not.toBeNull())
+      expect(putBody.dated).toEqual([{ start_date: '2026-09-20', end_date: '2026-09-27', all_day: true, start_time: null, end_time: null, note: 'Away' }])
+    })
+  })
+
+  it('a new date may not start before today (no backdating), and is not sent', async () => {
+    render(<AvailabilityEditor todayIso={TODAY} />)
+    await screen.findByLabelText('Day of the week')
+    fireEvent.click(screen.getByRole('button', { name: 'Add a date' }))
+    fireEvent.change(screen.getByLabelText('First day'), { target: { value: '2026-09-24' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await screen.findByText('Start today or later')
+    expect(putCount).toBe(0)
+  })
+
   it("shows the server's issues when it refuses", async () => {
     global.fetch = vi.fn(async (url, options) => (options?.method === 'PUT'
       ? ok({ success: false, error: 'Invalid availability', issues: [{ path: 'dated.0', message: 'That date has passed' }] }, 400)

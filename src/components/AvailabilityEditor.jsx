@@ -7,12 +7,20 @@
 // notification per save. The rules and the words for what is wrong are
 // shared/availability.js's, the same the server applies (PUT
 // /api/schedule/availability re-checks everything; this only says it sooner).
+//
+// A dated rule that has already started (AVAIL.1a's contract,
+// carryStartedRules): only its last day and its note can change, or it can be
+// removed. The row is sent back with its STORED start; the server keeps the
+// days already gone as history and carries the rule on from today. The client
+// judges every row with the same knownKeys the route does, so a new or moved
+// rule starting before today is refused here, not only after a round trip.
 
 import { useEffect, useState } from 'react'
 import { Plus, Trash2 } from 'lucide-react'
 import { Button, Card } from '@/components/ui'
 import {
   AVAILABILITY_WEEKDAYS, AVAILABILITY_WEEKDAY_LABELS, AVAILABILITY_LIMITS, normaliseRule, ruleProblem,
+  carryStartedRules,
 } from '@shared/availability'
 import { readJson } from './schedule/useScheduleData'
 
@@ -21,10 +29,13 @@ import { readJson } from './schedule/useScheduleData'
 let keySeq = 0
 const nextKey = () => ++keySeq
 
-function toRow(rule) {
+function toRow(rule, todayIso) {
   return {
     key: nextKey(),
     kind: rule.kind,
+    // The stored start of a dated rule that began before today (the row can
+    // no longer move it), else null. YYYY-MM-DD strings order as dates.
+    startedOn: rule.kind === 'dated' && rule.start_date && rule.start_date < todayIso ? rule.start_date : null,
     weekday: rule.weekday || 'mon',
     start_date: rule.start_date || '',
     end_date: rule.end_date || '',
@@ -34,7 +45,10 @@ function toRow(rule) {
     note: rule.note || '',
   }
 }
-const rowsFrom = (data) => [...(data?.weekly || []), ...(data?.dated || [])].map(toRow)
+const rowsFrom = (data, todayIso) => [...(data?.weekly || []), ...(data?.dated || [])].map((r) => toRow(r, todayIso))
+// The stored dated rules that started before today: carryStartedRules'
+// `stored`, exactly what the route reads back before it judges a save.
+const startedFrom = (data, todayIso) => (data?.dated || []).map(normaliseRule).filter((r) => r && r.start_date < todayIso)
 
 // What the PUT body carries for one row: the route's schema, no `kind` (the
 // list it sits in says it), times null when the whole day is out.
@@ -47,14 +61,23 @@ export function rowToPayload(row) {
     ? { weekday: row.weekday, all_day: row.all_day, ...times, note }
     : { start_date: row.start_date, end_date: row.end_date || row.start_date, all_day: row.all_day, ...times, note }
 }
-const rowProblem = (row, todayIso) => ruleProblem(normaliseRule({ ...rowToPayload(row), kind: row.kind }), { todayIso })
+function rowProblem(row, todayIso, stored) {
+  const rule = normaliseRule({ ...rowToPayload(row), kind: row.kind })
+  if (row.kind !== 'dated') return ruleProblem(rule, { todayIso })
+  const carried = carryStartedRules({ weekly: [], dated: [rule] }, stored, todayIso)
+  return ruleProblem(carried.input.dated[0], { todayIso, knownKeys: carried.knownKeys })
+}
+// '2026-09-20' → '20 Sep', from the digits (no Date, so no timezone moves a day).
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+const dayMonth = (iso) => `${Number(iso.slice(8, 10))} ${MONTHS[Number(iso.slice(5, 7)) - 1] || ''}`.trim()
 
 const inputClass = 'rounded-md border border-un1t-border bg-un1t-bg px-2 py-1.5 text-sm text-un1t-text'
 const labelClass = 'flex flex-col text-xs text-un1t-subtle gap-1'
 
-function RuleRow({ row, todayIso, showProblem, onChange, onRemove }) {
+function RuleRow({ row, todayIso, stored, showProblem, onChange, onRemove }) {
   const set = (patch) => onChange({ ...row, ...patch })
-  const problem = showProblem ? rowProblem(row, todayIso) : null
+  const problem = showProblem ? rowProblem(row, todayIso, stored) : null
+  const started = Boolean(row.startedOn)
   return (
     <li className="py-3">
       <div className="flex flex-wrap items-end gap-3">
@@ -70,7 +93,7 @@ function RuleRow({ row, todayIso, showProblem, onChange, onRemove }) {
             <label className={labelClass}>
               First day
               <input
-                aria-label="First day" type="date" min={todayIso} className={inputClass} value={row.start_date}
+                aria-label="First day" type="date" min={todayIso} className={inputClass} value={row.start_date} disabled={started}
                 // Moving the first day past the last drags the last day with
                 // it, so a one-day entry stays one day.
                 onChange={(e) => set({ start_date: e.target.value, end_date: row.end_date && row.end_date >= e.target.value ? row.end_date : e.target.value })}
@@ -78,23 +101,23 @@ function RuleRow({ row, todayIso, showProblem, onChange, onRemove }) {
             </label>
             <label className={labelClass}>
               Last day
-              <input aria-label="Last day" type="date" min={row.start_date || todayIso} className={inputClass} value={row.end_date} onChange={(e) => set({ end_date: e.target.value })} />
+              <input aria-label="Last day" type="date" min={started ? todayIso : (row.start_date || todayIso)} className={inputClass} value={row.end_date} onChange={(e) => set({ end_date: e.target.value })} />
             </label>
           </>
         )}
         <label className="flex items-center gap-1.5 text-sm text-un1t-text pb-1.5">
-          <input aria-label="All day" type="checkbox" className="accent-un1t-text" checked={row.all_day} onChange={(e) => set({ all_day: e.target.checked })} />
+          <input aria-label="All day" type="checkbox" className="accent-un1t-text" checked={row.all_day} disabled={started} onChange={(e) => set({ all_day: e.target.checked })} />
           All day
         </label>
         {!row.all_day && (
           <>
             <label className={labelClass}>
               From
-              <input aria-label="From" type="time" className={inputClass} value={row.start_time} onChange={(e) => set({ start_time: e.target.value })} />
+              <input aria-label="From" type="time" className={inputClass} value={row.start_time} disabled={started} onChange={(e) => set({ start_time: e.target.value })} />
             </label>
             <label className={labelClass}>
               To
-              <input aria-label="To" type="time" className={inputClass} value={row.end_time} onChange={(e) => set({ end_time: e.target.value })} />
+              <input aria-label="To" type="time" className={inputClass} value={row.end_time} disabled={started} onChange={(e) => set({ end_time: e.target.value })} />
             </label>
           </>
         )}
@@ -104,6 +127,11 @@ function RuleRow({ row, todayIso, showProblem, onChange, onRemove }) {
         </label>
         <Button variant="ghost" size="sm" icon={Trash2} onClick={onRemove}>Remove</Button>
       </div>
+      {started && (
+        <p className="mt-1 text-xs text-un1t-subtle">
+          Started {dayMonth(row.startedOn)}. The days already gone stay as they are: you can change the last day or the note, or remove it from today.
+        </p>
+      )}
       {problem && <p className="mt-1 text-xs text-red-700">{problem}</p>}
     </li>
   )
@@ -111,6 +139,7 @@ function RuleRow({ row, todayIso, showProblem, onChange, onRemove }) {
 
 export default function AvailabilityEditor({ todayIso }) {
   const [rows, setRows] = useState(null)
+  const [stored, setStored] = useState([])
   const [loadError, setLoadError] = useState(null)
   const [saving, setSaving] = useState(false)
   const [showProblems, setShowProblems] = useState(false)
@@ -119,10 +148,14 @@ export default function AvailabilityEditor({ todayIso }) {
   useEffect(() => {
     let live = true
     readJson('/api/schedule/availability')
-      .then((body) => { if (live) setRows(rowsFrom(body.data)) })
+      .then((body) => {
+        if (!live) return
+        setRows(rowsFrom(body.data, todayIso))
+        setStored(startedFrom(body.data, todayIso))
+      })
       .catch((e) => { if (live) setLoadError(e?.message || 'Could not load your availability') })
     return () => { live = false }
-  }, [])
+  }, [todayIso])
 
   const update = (key, next) => setRows((prev) => prev.map((r) => (r.key === key ? next : r)))
   const remove = (key) => setRows((prev) => prev.filter((r) => r.key !== key))
@@ -132,7 +165,7 @@ export default function AvailabilityEditor({ todayIso }) {
 
   async function save() {
     setShowProblems(true)
-    if (rows.some((r) => rowProblem(r, todayIso))) {
+    if (rows.some((r) => rowProblem(r, todayIso, stored))) {
       setMessage({ tone: 'error', text: 'Fix the entries marked below, then save.' })
       return
     }
@@ -153,7 +186,8 @@ export default function AvailabilityEditor({ todayIso }) {
         setMessage({ tone: 'error', text: issues || body?.error || `Could not save (${res.status}).` })
         return
       }
-      setRows(rowsFrom(body.data))
+      setRows(rowsFrom(body.data, todayIso))
+      setStored(startedFrom(body.data, todayIso))
       setShowProblems(false)
       setMessage({ tone: 'ok', text: body.data?.changed ? 'Saved. Your managers will get a notification.' : 'Nothing changed.' })
     } catch {
@@ -170,7 +204,7 @@ export default function AvailabilityEditor({ todayIso }) {
   const list = (kind) => (
     <ul className="divide-y divide-un1t-border">
       {section(kind).map((r) => (
-        <RuleRow key={r.key} row={r} todayIso={todayIso} showProblem={showProblems} onChange={(next) => update(r.key, next)} onRemove={() => remove(r.key)} />
+        <RuleRow key={r.key} row={r} todayIso={todayIso} stored={stored} showProblem={showProblems} onChange={(next) => update(r.key, next)} onRemove={() => remove(r.key)} />
       ))}
     </ul>
   )
