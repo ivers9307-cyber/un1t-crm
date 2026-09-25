@@ -187,3 +187,134 @@ describe('POST /api/schedule/templates/clone — who may copy (TPLCLONE.1)', () 
     expect(calls.reads).toEqual(['locations'])
   })
 })
+
+describe('POST /api/schedule/templates/clone — the copy (TPLCLONE.1)', () => {
+  const COPY_WITH_DAYS = { ...COPY_A_TO_B, copy_weekdays: true }
+
+  it('copies the source\'s active templates into a same-org studio, after its existing ones, as one-offs by default', async () => {
+    const existing = tpl({ id: T9, location_id: STUDIO_B, name: 'Open gym', display_order: 4 })
+    const { status, json, calls } = await run(BOTH, COPY_A_TO_B, { templates: [EARLY, LATE, existing] })
+    expect(status).toBe(201)
+    expect(calls.upserts).toHaveLength(1)
+    expect(calls.upserts[0].opts).toEqual({ onConflict: 'location_id,name', ignoreDuplicates: true })
+    // No id, no created_at/updated_at, the target's studio, active, ordered
+    // after 4, and NO weekdays: `[]` is the schema's "generates nothing".
+    expect(calls.upserts[0].rows).toEqual([
+      { location_id: STUDIO_B, name: 'Early', start_time: '06:00:00', end_time: '09:00:00', color: '#10B981', role_label: 'Floor', days_of_week: [], min_coaches: 2, max_coaches: 4, active: true, display_order: 5 },
+      { location_id: STUDIO_B, name: 'Late', start_time: '18:00:00', end_time: '21:00:00', color: '#10B981', role_label: 'Floor', days_of_week: [], min_coaches: 1, max_coaches: 3, active: true, display_order: 6 },
+    ])
+    expect(json.data.dry_run).toBe(false)
+    expect(json.data.created).toEqual([
+      { id: 'new-1', source_id: T1, name: 'Early', start_time: '06:00:00', end_time: '09:00:00', days_of_week: [], source_days_of_week: ['mon', 'wed'] },
+      { id: 'new-2', source_id: T2, name: 'Late', start_time: '18:00:00', end_time: '21:00:00', days_of_week: [], source_days_of_week: [] },
+    ])
+    expect(json.data.skipped).toEqual([])
+  })
+
+  it('by default puts nothing on the calendar', async () => {
+    const { json } = await run(BOTH, COPY_A_TO_B)
+    expect(generateBlocksForTemplate).not.toHaveBeenCalled()
+    expect(json.data.generated_blocks).toBe(0)
+  })
+
+  it('copy_weekdays: true carries the weekly pattern across', async () => {
+    const { json, calls } = await run(BOTH, COPY_WITH_DAYS)
+    expect(calls.upserts[0].rows.map((r) => r.days_of_week)).toEqual([['mon', 'wed'], []])
+    expect(json.data.created.map((c) => c.days_of_week)).toEqual([['mon', 'wed'], []])
+  })
+
+  it('a master and a head coach at both studios may copy too', async () => {
+    expect((await run(MASTER, COPY_A_TO_B)).status).toBe(201)
+    expect((await run(member({ [STUDIO_A]: 'head_coach', [STUDIO_B]: 'owner' }), COPY_A_TO_B)).status).toBe(201)
+  })
+
+  it('skips a name the target already has, whatever its case', async () => {
+    const existing = tpl({ id: T9, location_id: STUDIO_B, name: 'early ', display_order: 0 })
+    const { json, calls } = await run(BOTH, COPY_A_TO_B, { templates: [EARLY, LATE, existing] })
+    expect(calls.upserts[0].rows.map((r) => r.name)).toEqual(['Late'])
+    expect(json.data.created.map((c) => c.name)).toEqual(['Late'])
+    expect(json.data.skipped).toEqual([{ source_id: T1, name: 'Early', reason: 'name_exists' }])
+  })
+
+  it('a name the target gained while the copy ran is skipped, not an error', async () => {
+    const { status, json } = await run(BOTH, COPY_A_TO_B, { takenMeanwhile: ['Late'] })
+    expect(status).toBe(201)
+    expect(json.data.created.map((c) => c.name)).toEqual(['Early'])
+    expect(json.data.skipped).toEqual([{ source_id: T2, name: 'Late', reason: 'name_exists' }])
+  })
+
+  it('leaves inactive templates out by default, without reporting them', async () => {
+    const { json, calls } = await run(BOTH, COPY_A_TO_B, { templates: [EARLY, LATE, OLD] })
+    expect(calls.upserts[0].rows.map((r) => r.name)).toEqual(['Early', 'Late'])
+    expect(json.data.skipped).toEqual([])
+  })
+
+  it('template_ids copies only those; an inactive one, another studio\'s and an unknown one come back skipped, nameless where not the source\'s', async () => {
+    const { json, calls } = await run(BOTH, { ...COPY_A_TO_B, template_ids: [T2, T3, T_FOREIGN, T_UNKNOWN] }, { templates: [EARLY, LATE, OLD, FOREIGN] })
+    expect(calls.upserts[0].rows.map((r) => r.name)).toEqual(['Late'])
+    expect(json.data.skipped).toEqual([
+      { source_id: T3, name: 'Old', reason: 'inactive' },
+      // The source read is pinned to from_location_id, so another studio's
+      // template is simply not there: no name comes back for it.
+      { source_id: T_FOREIGN, name: null, reason: 'not_found' },
+      { source_id: T_UNKNOWN, name: null, reason: 'not_found' },
+    ])
+  })
+
+  it('dry_run answers the same lists, with each source\'s weekdays, and writes nothing', async () => {
+    const { status, json, calls } = await run(BOTH, { ...COPY_A_TO_B, dry_run: true })
+    expect(status).toBe(200)
+    expect(json.data.dry_run).toBe(true)
+    expect(json.data.created.map((c) => c.name)).toEqual(['Early', 'Late'])
+    expect(json.data.created[0]).not.toHaveProperty('id')
+    expect(json.data.created[0].source_days_of_week).toEqual(['mon', 'wed'])
+    expect(calls.upserts).toEqual([])
+    expect(generateBlocksForTemplate).not.toHaveBeenCalled()
+  })
+
+  it('nothing left to create writes nothing and answers 200', async () => {
+    const taken = [tpl({ id: T9, location_id: STUDIO_B, name: 'Early' }), tpl({ id: T3, location_id: STUDIO_B, name: 'Late' })]
+    const { status, json, calls } = await run(BOTH, COPY_A_TO_B, { templates: [EARLY, LATE, ...taken] })
+    expect(status).toBe(200)
+    expect(json.data.created).toEqual([])
+    expect(json.data.skipped.map((s) => s.reason)).toEqual(['name_exists', 'name_exists'])
+    expect(calls.upserts).toEqual([])
+  })
+
+  it('with copy_weekdays, fills the next 8 weeks for copied templates that run on weekdays, and only those', async () => {
+    const { json } = await run(BOTH, COPY_WITH_DAYS)
+    expect(generateBlocksForTemplate).toHaveBeenCalledTimes(1)
+    expect(generateBlocksForTemplate.mock.calls[0][1]).toMatchObject({
+      id: 'new-1', location_id: STUDIO_B, name: 'Early', days_of_week: ['mon', 'wed'], min_coaches: 2, max_coaches: 4,
+    })
+    expect(json.data.generated_blocks).toBe(8)
+    expect(json).not.toHaveProperty('warning')
+  })
+
+  it('a calendar fill that fails keeps the copy and says so', async () => {
+    generateBlocksForTemplate.mockRejectedValueOnce(new Error('upsert refused'))
+    const { status, json } = await run(BOTH, COPY_WITH_DAYS)
+    expect(status).toBe(201)
+    expect(json.data.created).toHaveLength(2)
+    expect(json.data.generated_blocks).toBe(0)
+    expect(json.warning).toMatch(/Early/)
+    expect(json.warning).toMatch(/nightly/)
+  })
+
+  it('refuses a copy_weekdays that is not a boolean', async () => {
+    expect((await run(BOTH, { ...COPY_A_TO_B, copy_weekdays: 'yes' })).status).toBe(400)
+  })
+
+  it('a failed template read writes nothing', async () => {
+    const { status, calls } = await run(BOTH, COPY_A_TO_B, { fail: { shift_templates: true } })
+    expect(status).toBe(500)
+    expect(calls.upserts).toEqual([])
+  })
+
+  it('a failed insert is a 500, and nothing is filled', async () => {
+    const { status, json } = await run(BOTH, COPY_WITH_DAYS, { fail: { upsert: true } })
+    expect(status).toBe(500)
+    expect(json.error).toMatch(/nothing was copied/)
+    expect(generateBlocksForTemplate).not.toHaveBeenCalled()
+  })
+})
