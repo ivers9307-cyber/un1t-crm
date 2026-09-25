@@ -19,20 +19,23 @@ import { liveAssignments } from './roster'
 import { futureBlockStaffing, countStaffingGaps, staffingGapsHeadline, staffingGapsBreakdown } from './roster-staffing'
 import { formatTime12h, formatTimeRange12h } from './schedule-overlap'
 import { timeOffLeaveLabel } from '../../shared/time-off'
+import { isAdminShift, SHIFT_KIND_LABELS } from '../../shared/shift-kind'
 
 /**
- * The card's surface tone. 'neutral' for every block today: the template's
- * colour is no longer a fill, because a pastel per template (nearly all blue,
- * evenings pink-red) collided with the amber/red that means "needs a coach".
- * Wave 2 returns 'admin' here for a non-class block; ShiftCard already maps a
- * tone to a surface class, so that is a change to THIS function and one line
- * of its TONE_SURFACE map, not to the card's markup.
+ * The card's surface tone. The template's colour is no longer a fill, because
+ * a pastel per template (nearly all blue, evenings pink-red) collided with the
+ * amber/red that means "needs a coach".
  *
- * @returns {'neutral'}
+ *   'neutral'  a class shift (and anything whose kind cannot be read)
+ *   'admin'    SHIFTTYPE.1 — an admin shift: a DIFFERENT neutral (slate), never
+ *              amber or red, because an admin shift has no minimum and never
+ *              needs a coach. ShiftCard maps the tone to a surface class and
+ *              adds the "Admin" word, so colour is never the only signal.
+ *
+ * @returns {'neutral'|'admin'}
  */
-export function cardTone(_block) {
-  // `_block` is Wave 2's input; the underscore is the repo's unused-arg escape.
-  return 'neutral'
+export function cardTone(block) {
+  return isAdminShift(block) ? 'admin' : 'neutral'
 }
 
 /**
@@ -46,6 +49,11 @@ export function cardTone(_block) {
  */
 export function shiftCardModel(block, assignments, staffing, { isManager = false, viewerId = null } = {}) {
   const templateName = block?.shift_templates?.name || 'Shift'
+  // SHIFTTYPE.1 — an admin shift is labelled in words for everyone (not a
+  // capacity fact), and never carries a staffing status: its caller passes
+  // futureBlockStaffing's null for it.
+  const isAdmin = isAdminShift(block)
+  const kindLabel = isAdmin ? SHIFT_KIND_LABELS.admin : null
   const coaches = liveAssignments(assignments).map((a) => {
     const hasOverride = !!(a.start_time_override || a.end_time_override)
     const from = formatTime12h(a.start_time_override || block?.start_time)
@@ -77,7 +85,10 @@ export function shiftCardModel(block, assignments, staffing, { isManager = false
   }
 
   let emptyText = null
-  if (coaches.length === 0 && !status) emptyText = isManager ? 'No coach (past)' : 'No coach assigned'
+  if (coaches.length === 0 && !status) {
+    // An admin shift has no status even in the future, so "(past)" would lie.
+    emptyText = isAdmin ? 'Nobody assigned' : (isManager ? 'No coach (past)' : 'No coach assigned')
+  }
 
   const timeLabel = formatTimeRange12h(block?.start_time, block?.end_time)
   // ONE tooltip for the whole card. The card's click target is a <button>
@@ -86,6 +97,7 @@ export function shiftCardModel(block, assignments, staffing, { isManager = false
   // model already holds, so it inherits the coach boundary.
   const hoverTitle = [
     templateName,
+    kindLabel,
     timeLabel,
     coaches.map((c) => (c.adjusted ? `${c.name} (${c.adjusted.title})` : c.name)).join(', '),
     status?.title,
@@ -99,6 +111,7 @@ export function shiftCardModel(block, assignments, staffing, { isManager = false
     // the ROSTER-FIX.6b-7 shape "9am Morning shift".
     shortLabel: `${formatTime12h(block?.start_time)} ${templateName} shift`,
     templateName,
+    kindLabel,
     coaches,
     status,
     emptyText,

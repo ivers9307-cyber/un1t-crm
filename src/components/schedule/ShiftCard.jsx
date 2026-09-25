@@ -14,9 +14,10 @@
 // red/green deficiency (ROSTER-FIX.6b). Both are manager-only, and that is
 // enforced in the MODEL: a coach's model has `status: null`.
 //
-// TONE. `model.tone` comes from cardTone(), 'neutral' for every block today.
-// Wave 2 adds 'admin' by returning it there and adding ONE line to
-// TONE_SURFACE. The markup below does not change.
+// TONE. `model.tone` comes from cardTone(): 'neutral' for a class shift,
+// 'admin' for an admin shift (SHIFTTYPE.1) — slate, never amber or red. An
+// admin card never has a staffing badge, so the "Admin" tag takes that slot
+// and the tone is never the only signal.
 //
 // CONTENT ORDER: time (one line) → who (body size) → what (small, muted, full
 // name, with a title for when the column truncates it). The old order led with
@@ -39,6 +40,7 @@
 
 const TONE_SURFACE = {
   neutral: 'bg-un1t-bg',
+  admin: 'bg-slate-500/10',
 }
 const STATUS_BORDER = {
   short: 'border-amber-500/60',
@@ -119,6 +121,16 @@ export default function ShiftCard({ model, dayLabel, isMine = false, showHint = 
         >
           <span className="sr-only">{model.status.srPrefix}</span>
           {model.status.label}
+        </div>
+      )}
+      {/* SHIFTTYPE.1 — the admin word. An admin shift never has a staffing
+          badge (no minimum), so this is the only chip it can carry. */}
+      {model.kindLabel && (
+        <div
+          data-testid="shift-kind"
+          className="mt-1 inline-flex items-center rounded bg-slate-500/10 px-1.5 py-0.5 text-[11px] font-medium text-slate-700"
+        >
+          {model.kindLabel}
         </div>
       )}
 
