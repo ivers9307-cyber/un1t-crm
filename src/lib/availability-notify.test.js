@@ -139,6 +139,12 @@ describe('deliverAvailabilityNotice', () => {
     expect(sendPushOnce.mock.calls[0][2]).toEqual(['mgr-null'])
   })
 
+  it('View as user: the master who made the change is not told about it', async () => {
+    const db = world()
+    await deliverAvailabilityNotice(db, change({ actor_id: 'master' }), { nowMs: NOON })
+    expect([...sendPushOnce.mock.calls[0][2]].sort()).toEqual(['hc-b', 'mgr-a', 'own'])
+  })
+
   it('outside the band: nothing sent, nothing stamped (the sweep sends it at 07:00)', async () => {
     const db = world()
     expect(await deliverAvailabilityNotice(db, change({ created_at: '2026-09-25T22:29:00Z' }), { nowMs: LATE })).toEqual({ status: 'deferred', sent: 0 })
@@ -202,6 +208,18 @@ describe('runAvailabilityNoticeSweep', () => {
     expect(key).toBe('availability_changed:ch-2')
     expect(payload.body).toBe('Sam Demo is now unavailable Tuesdays, all day; available again Mondays, 9am–12pm.')
     expect(stamps(db)[0].ops).toContainEqual(['in', 'id', ['ch-1', 'ch-2']])
+  })
+
+  it('excludes an actor only when every folded change was theirs', async () => {
+    const q = (actorB) => [
+      { id: 'ch-1', profile_id: COACH, actor_id: 'master', before: [MON], after: [], created_at: '2026-09-24T22:10:00Z' },
+      { id: 'ch-2', profile_id: COACH, actor_id: actorB, before: [], after: [TUE], created_at: '2026-09-24T22:40:00Z' },
+    ]
+    await runAvailabilityNoticeSweep(world({ queue: q('master') }), { nowMs: Date.parse('2026-09-25T06:05:00Z') })
+    expect(sendPushOnce.mock.calls[0][2]).not.toContain('master')
+    sendPushOnce.mockClear()
+    await runAvailabilityNoticeSweep(world({ queue: q(COACH) }), { nowMs: Date.parse('2026-09-25T06:05:00Z') })
+    expect(sendPushOnce.mock.calls[0][2]).toContain('master')
   })
 
   it('reads only un-notified rows, oldest first, capped', async () => {

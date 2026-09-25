@@ -64,7 +64,7 @@ export function splitStudiosByBand(studios, nowMs) {
   return { inBand, quiet }
 }
 
-async function readRecipients(db, locationIds, coachId) {
+async function readRecipients(db, locationIds, excludeIds) {
   const { data, error } = await db
     .from('profile_locations')
     .select('profile_id, location_id, role, profiles!inner(id, role, active)')
@@ -73,7 +73,7 @@ async function readRecipients(db, locationIds, coachId) {
   const ids = new Set()
   for (const l of data || []) {
     // mig 626's staff predicate: `active IS NOT FALSE` (a NULL active counts).
-    if (!l?.profiles || l.profiles.active === false || l.profile_id === coachId) continue
+    if (!l?.profiles || l.profiles.active === false || excludeIds.includes(l.profile_id)) continue
     if (AVAILABILITY_NOTIFY_ROLES.includes(l.role) || l.profiles.role === 'master') ids.add(l.profile_id)
   }
   return { ids: [...ids], error: null }
@@ -118,7 +118,11 @@ export async function deliverAvailabilityNotice(db, change, { nowMs = Date.now()
     const { inBand, quiet } = splitStudiosByBand(studios, nowMs)
     if (inBand.length === 0) return { status: 'deferred', sent: 0 }
 
-    const { ids: recipients, error: recipientError } = await readRecipients(db, inBand.map((s) => s.id), change.profile_id)
+    // Never the coach, and never the person who made the change (a master
+    // under View as user): they know. change.actor_id is set only when every
+    // folded change had the same actor.
+    const exclude = [change.profile_id, change.actor_id].filter(Boolean)
+    const { ids: recipients, error: recipientError } = await readRecipients(db, inBand.map((s) => s.id), exclude)
     if (recipientError) {
       logError('availability-notify', 'could not read the recipients', { change_id: change.id, err: recipientError.message })
       return { status: 'error', sent: 0 }
@@ -157,7 +161,7 @@ export async function runAvailabilityNoticeSweep(db, { nowMs = Date.now() } = {}
   const out = { pending: 0, groups: 0, sent: 0, deferred: 0, stale: 0, reverted: 0, no_recipients: 0, errors: 0 }
   const { data, error } = await db
     .from('staff_availability_changes')
-    .select('id, profile_id, before, after, created_at')
+    .select('id, profile_id, actor_id, before, after, created_at')
     .is('notified_at', null)
     .order('created_at', { ascending: true })
     .limit(AVAILABILITY_SWEEP_BATCH)
@@ -180,6 +184,7 @@ export async function runAvailabilityNoticeSweep(db, { nowMs = Date.now() } = {}
       id: last.id,
       ids: rows.map((x) => x.id),
       profile_id: last.profile_id,
+      actor_id: new Set(rows.map((x) => x.actor_id)).size === 1 ? last.actor_id : null,
       before: first.before,
       after: last.after,
       created_at: last.created_at,
