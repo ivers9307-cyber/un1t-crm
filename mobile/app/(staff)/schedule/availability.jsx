@@ -24,7 +24,7 @@ import { getMyAvailability, saveMyAvailability } from '../../../lib/availability
 import {
   AVAILABILITY_COPY as COPY, AVAILABILITY_TITLE, AVAILABILITY_INTRO, AVAILABILITY_NO_OVERNIGHT, WEEKDAY_CHIPS,
   createRowKeys, rowsFromServer, newRow, timeOnBlur, datesLabel, calendarRange, rangeFromCalendar,
-  hasEnded, startedRules, formProblems, duplicateKeys, canAdd, startedNote, rowSummary,
+  hasEnded, isStarted, startedRules, formProblems, duplicateKeys, canAdd, startedNote, rowSummary,
   buildSaveBody, isDirty, loadOutcome, saveOutcome, closeAction, saveButtonState, impersonationLine, cardsEditable,
 } from '../../../lib/availability-form'
 import { createInFlightGuard } from '../../../lib/in-flight-guard'
@@ -91,7 +91,7 @@ export default function MyAvailability() {
       setLoadState({ loading: false, message: out.message, canRetry: out.canRetry })
       return
     }
-    const fresh = rowsFromServer(out.data, nextKey.current, { todayIso: dublinTodayIso() })
+    const fresh = rowsFromServer(out.data, nextKey.current)
     setRows(fresh)
     setBaseline(fresh)
     setServerErrors({})
@@ -190,7 +190,7 @@ export default function MyAvailability() {
       setShowProblems(false)
       setOpenCalendar(null)
       if (out.saved) {
-        const fresh = rowsFromServer(out.saved, nextKey.current, { todayIso })
+        const fresh = rowsFromServer(out.saved, nextKey.current)
         setRows(fresh)
         setBaseline(fresh)
       } else {
@@ -360,8 +360,10 @@ function RuleCard({ row, today, problem, duplicate, frozen, calendarOpen, onTogg
   // contract, as the web editor): its start and window are locked; the
   // calendar moves only its last day, and the note can change.
   const started = startedNote(row, { todayIso: today })
-  const locked = !!started
-  const range = calendarRange(row)
+  // Judged now, from today (not at load): a screen left open past midnight
+  // locks a rule that started yesterday.
+  const locked = isStarted(row, today)
+  const range = calendarRange(row, { todayIso: today })
   const dates = datesLabel(row)
 
   return (
@@ -423,7 +425,7 @@ function RuleCard({ row, today, problem, duplicate, frozen, calendarOpen, onTogg
                 endDate={range.endDate}
                 initialMonth={range.initialMonth}
                 minDate={today}
-                onChange={(picked) => onChange(rangeFromCalendar(picked, row))}
+                onChange={(picked) => onChange(rangeFromCalendar(picked, row, { todayIso: today }))}
               />
               <Text className="text-xs text-un1t-subtle mt-1 px-1">{locked ? COPY.calendarHintStarted : COPY.calendarHint}</Text>
             </View>

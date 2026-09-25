@@ -126,19 +126,19 @@ export function timeOnBlur(text) {
 }
 
 const BLANK = Object.freeze({
-  weekday: 'mon', start_date: '', end_date: '', all_day: true, start_time: '', end_time: '', note: '', startedOn: null,
+  weekday: 'mon', start_date: '', end_date: '', all_day: true, start_time: '', end_time: '', note: '', storedStart: null,
 })
 
 /**
- * A stored rule (the GET's or the PUT's shape) → an editable row. With
- * `todayIso`, a dated rule that started before today keeps its stored start
- * as `startedOn`: the card then locks the start and the window, the way the
- * web editor does, and the save sends that start back for the server to carry.
+ * A stored rule (the GET's or the PUT's shape) → an editable row. A dated
+ * row remembers its stored start (`storedStart`): once that is before today
+ * (judged at render time, isStarted) the card locks the start and the window,
+ * the way the web editor does, and the save sends that start back for the
+ * server to carry on from today.
  */
-export function rowFromRule(rule, key, { todayIso = null } = {}) {
+export function rowFromRule(rule, key) {
   const r = normaliseRule(rule)
   if (!r) return null
-  const started = r.kind === 'dated' && !!todayIso && !!r.start_date && r.start_date < todayIso
   return {
     key,
     kind: r.kind,
@@ -149,19 +149,19 @@ export function rowFromRule(rule, key, { todayIso = null } = {}) {
     start_time: r.start_time || '',
     end_time: r.end_time || '',
     note: r.note || '',
-    startedOn: started ? r.start_date : null,
+    storedStart: r.kind === 'dated' ? (r.start_date || null) : null,
   }
 }
 
 /** The server's { weekly, dated } → rows, weekly first, in the server's order. Anything unreadable is skipped. */
-export function rowsFromServer(data, nextKey, { todayIso = null } = {}) {
+export function rowsFromServer(data, nextKey) {
   const tagged = [
     ...(Array.isArray(data?.weekly) ? data.weekly : []).map((r) => [r, 'weekly']),
     ...(Array.isArray(data?.dated) ? data.dated : []).map((r) => [r, 'dated']),
   ]
   return tagged
     .filter(([r]) => r && typeof r === 'object')
-    .map(([r, kind]) => rowFromRule({ ...r, kind }, nextKey(), { todayIso }))
+    .map(([r, kind]) => rowFromRule({ ...r, kind }, nextKey()))
 }
 
 /**
@@ -203,10 +203,10 @@ export function datesLabel(row) {
  * the second tap from ever making a range. A started entry opens on the month
  * of its last day: its first days are in the past and cannot be picked.
  */
-export function calendarRange(row) {
+export function calendarRange(row, { todayIso = null } = {}) {
   const start = row?.start_date || null
   const end = row?.end_date && row.end_date !== start ? row.end_date : null
-  return { startDate: start, endDate: end, initialMonth: row?.startedOn ? (end || start) : null }
+  return { startDate: start, endDate: end, initialMonth: isStarted(row, todayIso) ? (end || start) : null }
 }
 
 /**
@@ -215,9 +215,21 @@ export function calendarRange(row) {
  * arrives as a fresh start: it becomes the new LAST day, and the stored start
  * stays (AVAIL.1a carries the rule on from today).
  */
-export function rangeFromCalendar({ start, end } = {}, row = null) {
-  if (row?.startedOn) return { start_date: row.startedOn, end_date: end || start || row.end_date || row.startedOn }
+export function rangeFromCalendar({ start, end } = {}, row = null, { todayIso = null } = {}) {
+  if (isStarted(row, todayIso)) return { start_date: row.storedStart, end_date: end || start || row.end_date || row.storedStart }
   return { start_date: start || '', end_date: end || start || '' }
+}
+
+/**
+ * A STORED dated rule that has started (its stored start, unchanged, is
+ * before today) and not ended. Judged at render time from today, so a screen
+ * left open past midnight locks a rule that started "today" when it loaded.
+ * A card the coach added is never started: it has no stored start.
+ */
+export function isStarted(row, todayIso) {
+  if (row?.kind !== 'dated' || !todayIso || !row.storedStart) return false
+  if (row.start_date !== row.storedStart || row.storedStart >= todayIso) return false
+  return !hasEnded(row, todayIso)
 }
 
 /** A dated row whose last day is before today: history. Shown, never edited, never sent. */
@@ -304,8 +316,8 @@ const dayMonth = (iso) => `${Number(String(iso).slice(8, 10))} ${MONTHS[Number(S
 
 /** The line under a started dated card that has not ended (the web editor's words); else null. */
 export function startedNote(row, { todayIso = null } = {}) {
-  if (row?.kind !== 'dated' || !row.startedOn || hasEnded(row, todayIso)) return null
-  return `Started ${dayMonth(row.startedOn)}. The days already gone stay as they are: you can change the last day or the note, or remove it from today.`
+  if (!isStarted(row, todayIso)) return null
+  return `Started ${dayMonth(row.storedStart)}. The days already gone stay as they are: you can change the last day or the note, or remove it from today.`
 }
 
 /** A card's one-line name, 'Mondays, all day'; an unfinished card says so. */

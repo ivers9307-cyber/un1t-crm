@@ -14,7 +14,7 @@ import {
   newRow, rowToRule, datesLabel, calendarRange, rangeFromCalendar,
   hasEnded, startedRules, rowProblem, formProblems, canAdd, duplicateKeys, startedNote, rowSummary,
   buildSaveBody, isDirty,
-  loadOutcome, saveOutcome, closeAction, saveButtonState, impersonationLine, cardsEditable,
+  loadOutcome, saveOutcome, closeAction, saveButtonState, impersonationLine, cardsEditable, isStarted,
 } from './availability-form'
 import { calendarTap } from './month-calendar'
 
@@ -70,20 +70,32 @@ describe('rows from the server', () => {
     const rows = loaded()
     expect(rows.map((r) => r.key)).toEqual(['r1', 'r2', 'r3', 'r4'])
     expect(rows[0]).toEqual({
-      key: 'r1', kind: 'weekly', weekday: 'mon', start_date: '', end_date: '', all_day: true, start_time: '', end_time: '', note: '', startedOn: null,
+      key: 'r1', kind: 'weekly', weekday: 'mon', start_date: '', end_date: '', all_day: true, start_time: '', end_time: '', note: '', storedStart: null,
     })
     expect(rows[1]).toMatchObject({ kind: 'weekly', weekday: 'tue', all_day: false, start_time: '09:00', end_time: '12:00', note: 'college' })
     expect(rows[3]).toMatchObject({
-      kind: 'dated', start_date: '2026-10-03', end_date: '2026-10-05', all_day: false, start_time: '17:00', end_time: '19:30', note: 'wedding', startedOn: null,
+      kind: 'dated', start_date: '2026-10-03', end_date: '2026-10-05', all_day: false, start_time: '17:00', end_time: '19:30', note: 'wedding', storedStart: '2026-10-03',
     })
   })
 
-  it('a dated rule that started before today remembers its stored start (only its end and note may change)', () => {
+  it('a dated rule from the server remembers its stored start; a weekly one and a new card have none', () => {
     const rows = loaded()
-    expect(rows[2]).toMatchObject({ start_date: '2026-09-20', end_date: '2026-09-30', startedOn: '2026-09-20' })
-    // Starting today is not "started"; with no today nothing is judged started.
-    expect(rowFromRule({ kind: 'dated', start_date: TODAY, end_date: TODAY, all_day: true }, 'k', { todayIso: TODAY }).startedOn).toBeNull()
-    expect(rowsFromServer(SERVER, createRowKeys())[2].startedOn).toBeNull()
+    expect(rows.map((r) => r.storedStart)).toEqual([null, null, '2026-09-20', '2026-10-03'])
+    expect(newRow('dated', { nextKey: createRowKeys() }).storedStart).toBeNull()
+  })
+
+  it("'started' is judged at RENDER time from today: a screen left open past midnight locks yesterday's rule", () => {
+    const [mon, , started, future] = loaded()
+    expect(isStarted(started, TODAY)).toBe(true)
+    expect(isStarted(future, TODAY)).toBe(false)
+    expect(isStarted(future, '2026-10-04')).toBe(true) // opened on the 25th, still open on 4 Oct
+    expect(isStarted(mon, TODAY)).toBe(false)
+    expect(isStarted({ ...started, end_date: '2026-09-24' }, TODAY)).toBe(false) // ended
+    // Not stored: a card added yesterday on a screen left open is not "started"
+    // (the coach can still re-pick its dates; the save refuses it until then).
+    expect(isStarted({ ...future, storedStart: null, start_date: '2026-09-24' }, TODAY)).toBe(false)
+    // A stored rule whose start the coach moved is a new rule, not a started one.
+    expect(isStarted({ ...future, start_date: '2026-10-04' }, '2026-10-05')).toBe(false)
   })
 
   it("reads Postgres's HH:MM:SS too", () => {
@@ -95,20 +107,20 @@ describe('rows from the server', () => {
     expect(rowsFromServer(null, createRowKeys())).toEqual([])
     expect(rowsFromServer({ weekly: [null, 'x', 7], dated: 'nope' }, createRowKeys())).toEqual([])
     expect(rowsFromServer({ weekly: [{ weekday: 'wed', all_day: true }] }, createRowKeys()))
-      .toEqual([{ key: 'r1', kind: 'weekly', weekday: 'wed', start_date: '', end_date: '', all_day: true, start_time: '', end_time: '', note: '', startedOn: null }])
+      .toEqual([{ key: 'r1', kind: 'weekly', weekday: 'wed', start_date: '', end_date: '', all_day: true, start_time: '', end_time: '', note: '', storedStart: null }])
   })
 })
 
 describe('newRow', () => {
-  it('weekly: Monday, all day; dated: today, all day', () => {
+  it('weekly: Monday, all day; dated: all day, no dates yet', () => {
     const next = createRowKeys('n')
     expect(newRow('weekly', { todayIso: TODAY, nextKey: next })).toEqual({
-      key: 'n1', kind: 'weekly', weekday: 'mon', start_date: '', end_date: '', all_day: true, start_time: '', end_time: '', note: '', startedOn: null,
+      key: 'n1', kind: 'weekly', weekday: 'mon', start_date: '', end_date: '', all_day: true, start_time: '', end_time: '', note: '', storedStart: null,
     })
     // No dates until one is tapped: a card opened on today made the first
     // tap EXTEND from today (review fix 1).
     expect(newRow('dated', { todayIso: TODAY, nextKey: next })).toEqual({
-      key: 'n2', kind: 'dated', weekday: 'mon', start_date: '', end_date: '', all_day: true, start_time: '', end_time: '', note: '', startedOn: null,
+      key: 'n2', kind: 'dated', weekday: 'mon', start_date: '', end_date: '', all_day: true, start_time: '', end_time: '', note: '', storedStart: null,
     })
   })
 
@@ -159,7 +171,8 @@ describe('dates on a card', () => {
   })
 
   it('a started entry shows its whole span but opens on the month of its last day (the days before today cannot be picked)', () => {
-    expect(calendarRange(loaded()[2])).toEqual({ startDate: '2026-09-20', endDate: '2026-09-30', initialMonth: '2026-09-30' })
+    expect(calendarRange(loaded()[2], { todayIso: TODAY })).toEqual({ startDate: '2026-09-20', endDate: '2026-09-30', initialMonth: '2026-09-30' })
+    expect(calendarRange(loaded()[3], { todayIso: TODAY }).initialMonth).toBeNull()
   })
 
   it("the calendar's first tap is a one-day entry; the second extends it", () => {
@@ -170,15 +183,18 @@ describe('dates on a card', () => {
   it('on a started entry every tap moves only the last day; the stored start stays (the server carries it on from today)', () => {
     const started = loaded()[2]
     // The calendar holds both ends, so a tap arrives as a fresh start.
-    expect(rangeFromCalendar({ start: '2026-10-02', end: null }, started)).toEqual({ start_date: '2026-09-20', end_date: '2026-10-02' })
-    expect(rangeFromCalendar({ start: '2026-09-27', end: null }, started)).toEqual({ start_date: '2026-09-20', end_date: '2026-09-27' })
-    expect(rangeFromCalendar({ start: '2026-09-26', end: '2026-09-28' }, started)).toEqual({ start_date: '2026-09-20', end_date: '2026-09-28' })
+    const at = { todayIso: TODAY }
+    expect(rangeFromCalendar({ start: '2026-10-02', end: null }, started, at)).toEqual({ start_date: '2026-09-20', end_date: '2026-10-02' })
+    expect(rangeFromCalendar({ start: '2026-09-27', end: null }, started, at)).toEqual({ start_date: '2026-09-20', end_date: '2026-09-27' })
+    expect(rangeFromCalendar({ start: '2026-09-26', end: '2026-09-28' }, started, at)).toEqual({ start_date: '2026-09-20', end_date: '2026-09-28' })
+    // Not started yet: the tap is the calendar's own.
+    expect(rangeFromCalendar({ start: '2026-10-09', end: null }, loaded()[3], at)).toEqual({ start_date: '2026-10-09', end_date: '2026-10-09' })
   })
 })
 
 // A dated row by hand (the key is 'x' unless given).
 const datedRow = (start, end, extra = {}) => ({
-  key: 'x', kind: 'dated', weekday: 'mon', start_date: start, end_date: end, all_day: true, start_time: '', end_time: '', note: '', startedOn: null, ...extra,
+  key: 'x', kind: 'dated', weekday: 'mon', start_date: start, end_date: end, all_day: true, start_time: '', end_time: '', note: '', storedStart: null, ...extra,
 })
 
 describe('hasEnded', () => {
@@ -316,6 +332,7 @@ describe('startedNote / rowSummary', () => {
     expect(startedNote(future, { todayIso: TODAY })).toBeNull()
     expect(startedNote(mon, { todayIso: TODAY })).toBeNull()
     expect(startedNote({ ...started, end_date: '2026-09-24' }, { todayIso: TODAY })).toBeNull()
+    expect(startedNote(future, { todayIso: '2026-10-04' })).toMatch(/^Started 3 Oct\. /)
   })
   it("a card's one-line name is the shared description; an unfinished card says so", () => {
     expect(rowSummary(mon, { todayIso: TODAY })).toBe('Mondays, all day')
@@ -347,7 +364,7 @@ describe('buildSaveBody', () => {
 
   it('a started card goes back with its STORED start and its new last day (the server carries it on from today)', () => {
     const rows = loaded()
-    const moved = rangeFromCalendar({ start: '2026-10-02', end: null }, rows[2])
+    const moved = rangeFromCalendar({ start: '2026-10-02', end: null }, rows[2], { todayIso: TODAY })
     const { body } = buildSaveBody([rows[0], rows[1], { ...rows[2], ...moved }, rows[3]], { todayIso: TODAY })
     expect(body.dated[0]).toEqual({ start_date: '2026-09-20', end_date: '2026-10-02', all_day: true, start_time: null, end_time: null, note: null })
     // The route validates the carried body with no issue.
