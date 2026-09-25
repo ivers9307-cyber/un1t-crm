@@ -630,7 +630,12 @@ describe('POST /api/schedule/time-off — LEAVE.2', () => {
       getCurrentUser.mockResolvedValue(HC)
       let { db, insertSpy } = buildDb({ employmentType: 'contractor' })
       createServerClient.mockReturnValue(db)
-      expect((await POST(req(body({ type: 'holiday' })))).status).toBe(400)
+      const refused = await POST(req(body({ type: 'holiday' })))
+      expect(refused.status).toBe(400)
+      // AVAIL.3 review N8 — spoken about the contractor, not to the approver.
+      const refusedError = (await refused.json()).error
+      expect(refusedError).toMatch(/^Contractors.*My availability/)
+      expect(refusedError).not.toMatch(/\byou\b|\byour\b/i)
       expect(insertSpy).not.toHaveBeenCalled()
 
       ;({ db, insertSpy } = buildDb({ entitlement: 1 }))
@@ -679,10 +684,14 @@ describe('POST /api/schedule/time-off — AVAIL.3: unavailable is refused', () =
     createServerClient.mockReturnValue(db)
     const res = await POST(req({ type: 'unavailable', start_date: '2026-10-03', end_date: '2026-10-05', ...extra }))
     expect(res.status).toBe(400)
-    expect(await res.json()).toEqual({
+    const json = await res.json()
+    expect(json).toEqual({
       success: false,
       error: expect.stringMatching(/^Unavailable is no longer a time-off request\..*My availability/),
     })
+    // Review N8 — "you can't work" only when the caller IS the person.
+    if (extra.profile_id) expect(json.error).not.toMatch(/\byou\b|\byour\b/i)
+    else expect(json.error).toMatch(/you can’t work/)
     expect(insertSpy).not.toHaveBeenCalled()
     // Refused before the database is even opened: no read, no write, no notice.
     expect(createServerClient).not.toHaveBeenCalled()

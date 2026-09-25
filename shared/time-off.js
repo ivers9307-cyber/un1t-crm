@@ -72,11 +72,20 @@ export function isTimeOffTypeAllowedFor(employmentType, type) {
 export const RESTRICTED_TYPE_ERROR =
   'Contractors don’t book leave. Set the days and times you can’t work in My availability, on the Schedule screen.'
 
+// AVAIL.3 — recording leave for a contractor (an approver on their behalf).
+export const RESTRICTED_TYPE_ON_BEHALF_ERROR =
+  'Contractors don’t take leave, so there is nothing to record for them. They set the days and times they can’t work in My availability, on the Schedule screen.'
+
 // AVAIL.3 — the POST's answer to a new 'unavailable' request (an old phone
 // or a stale tab still offers it). The old phone shows it in its
 // "Couldn't submit" alert, so it must say where to go.
 export const UNAVAILABLE_MOVED_ERROR =
   'Unavailable is no longer a time-off request. Set the days and times you can’t work in My availability, on the Schedule screen. No approval is needed, and your managers are told.'
+
+// AVAIL.3 — the same refusal when an approver records it for someone else:
+// they are not the person who can't work, so it speaks about that person.
+export const UNAVAILABLE_MOVED_ON_BEHALF_ERROR =
+  'Unavailable is no longer a time-off request. Each person sets the days and times they can’t work themselves, in My availability on the Schedule screen. No approval is needed, and managers are told.'
 
 // AVAIL.3 — approving a contractor's holiday/sick/unpaid/other (existing rows).
 export const CONTRACTOR_DECIDE_ERROR =

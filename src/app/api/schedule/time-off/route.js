@@ -19,7 +19,7 @@ import {
 import { logError } from '@/lib/log'
 import {
   isTimeOffTypeAllowedFor, RESTRICTED_TYPE_ERROR, isExpiredPendingRequest, effectiveTimeOffStatus,
-  isRequestableTimeOffType, UNAVAILABLE_MOVED_ERROR,
+  isRequestableTimeOffType, UNAVAILABLE_MOVED_ERROR, UNAVAILABLE_MOVED_ON_BEHALF_ERROR, RESTRICTED_TYPE_ON_BEHALF_ERROR,
 } from '@shared/time-off'
 
 // SCHEDHYGIENE.1 — the shared shape check plus the shared calendar check. The
@@ -274,8 +274,14 @@ export async function POST(request) {
   // Refused, not converted: a second writer to staff_unavailability outside
   // the replace RPC would race the coach's own editor, and the old phone
   // would then claim "your manager has been notified… track it under My leave".
+  // The words follow who is asking: an approver recording it for someone
+  // else is told about that person, not "you can't work" (no read needed).
   if (!isRequestableTimeOffType(type)) {
-    return NextResponse.json({ success: false, error: UNAVAILABLE_MOVED_ERROR }, { status: 400 })
+    const forSomeoneElse = !!profile_id && profile_id !== user.id
+    return NextResponse.json({
+      success: false,
+      error: forSomeoneElse ? UNAVAILABLE_MOVED_ON_BEHALF_ERROR : UNAVAILABLE_MOVED_ERROR,
+    }, { status: 400 })
   }
 
   // If location_id is explicitly passed, it must be one the caller belongs to.
@@ -334,7 +340,7 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: employmentError.message }, { status: 500 })
   }
   if (!isTimeOffTypeAllowedFor(employmentType, type)) {
-    return NextResponse.json({ success: false, error: RESTRICTED_TYPE_ERROR }, { status: 400 })
+    return NextResponse.json({ success: false, error: onBehalf ? RESTRICTED_TYPE_ON_BEHALF_ERROR : RESTRICTED_TYPE_ERROR }, { status: 400 })
   }
 
   // ROSTER-FIX.2 — nothing stopped a coach filing the same week twice (or

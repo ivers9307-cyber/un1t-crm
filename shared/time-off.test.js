@@ -5,6 +5,7 @@ import {
   leaveClashPrompt, leaveDateRangeLabel, leavePreviewLine,
   isRequestableTimeOffType, canRequestTimeOff, UNAVAILABLE_MOVED_ERROR, RESTRICTED_TYPE_ERROR,
   CONTRACTOR_DECIDE_ERROR, AVAILABILITY_INSTEAD,
+  UNAVAILABLE_MOVED_ON_BEHALF_ERROR, RESTRICTED_TYPE_ON_BEHALF_ERROR,
 } from './time-off'
 
 describe('time-off catalogue + gating', () => {
@@ -163,8 +164,23 @@ describe('AVAIL.3 — unavailable is no longer requested', () => {
     })
   })
 
+  // Review N8 — an approver recording leave for someone else is not the
+  // person who can't work, so the words must not say "you" / "your managers".
+  it('the on-behalf answers speak about the person, not to the approver', () => {
+    expect(UNAVAILABLE_MOVED_ON_BEHALF_ERROR).toMatch(/^Unavailable is no longer a time-off request\./)
+    expect(UNAVAILABLE_MOVED_ON_BEHALF_ERROR).toMatch(/My availability/)
+    expect(RESTRICTED_TYPE_ON_BEHALF_ERROR).toMatch(/^Contractors.*My availability/)
+    for (const s of [UNAVAILABLE_MOVED_ON_BEHALF_ERROR, RESTRICTED_TYPE_ON_BEHALF_ERROR]) {
+      expect(s).not.toMatch(/\byou\b|\byour\b/i)
+    }
+    // The own-request answers do address the person.
+    expect(UNAVAILABLE_MOVED_ERROR).toMatch(/you can’t work/)
+    expect(RESTRICTED_TYPE_ERROR).toMatch(/you can’t work/)
+  })
+
   it('no em dashes in any of the words (staff copy follows the customer-copy rule)', () => {
-    for (const s of [UNAVAILABLE_MOVED_ERROR, RESTRICTED_TYPE_ERROR, CONTRACTOR_DECIDE_ERROR, ...Object.values(AVAILABILITY_INSTEAD)]) {
+    for (const s of [UNAVAILABLE_MOVED_ERROR, RESTRICTED_TYPE_ERROR, CONTRACTOR_DECIDE_ERROR, ...Object.values(AVAILABILITY_INSTEAD),
+      UNAVAILABLE_MOVED_ON_BEHALF_ERROR, RESTRICTED_TYPE_ON_BEHALF_ERROR]) {
       expect(s).not.toMatch(/—/)
     }
   })
