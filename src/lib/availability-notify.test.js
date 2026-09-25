@@ -175,6 +175,19 @@ describe('deliverAvailabilityNotice', () => {
     expect(stamps(db)).toHaveLength(0)
   })
 
+  it('a FULLY deduped attempt (another attempt holds every claim) does not stamp: the claim-holder stamps, or a later slot retries', async () => {
+    sendPushOnce.mockResolvedValueOnce({ sent: 0, skipped: 0, invalidated: 0, failed: 0, deduped: 4 })
+    const db = world()
+    expect(await deliverAvailabilityNotice(db, change(), { nowMs: NOON })).toEqual({ status: 'deferred', sent: 0 })
+    expect(stamps(db)).toHaveLength(0)
+  })
+
+  it('recipients with no device (nothing sent, nothing deduped) still settle: there is nothing to retry', async () => {
+    sendPushOnce.mockResolvedValueOnce({ sent: 0, skipped: 4, invalidated: 0, failed: 0, deduped: 0 })
+    const db = world()
+    expect((await deliverAvailabilityNotice(db, change(), { nowMs: NOON })).status).toBe('sent')
+  })
+
   it('older than 24 hours: stamped stale, never sent', async () => {
     const db = world()
     const old = change({ created_at: new Date(NOON - AVAILABILITY_NOTICE_MAX_AGE_MS - 1).toISOString() })

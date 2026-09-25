@@ -178,6 +178,7 @@ export async function deliverAvailabilityNotice(db, change, { nowMs = Date.now()
 
     let sent = 0
     let failedOutright = false
+    let fullyDeduped = false
     if (recipients.length > 0) {
       // A failed name read only costs the name ("A coach"), never the notice.
       const { data: person } = await db.from('profiles').select('full_name').eq('id', change.profile_id).maybeSingle()
@@ -190,10 +191,16 @@ export async function deliverAvailabilityNotice(db, change, { nowMs = Date.now()
       })
       sent = r?.sent || 0
       failedOutright = (r?.failed || 0) > 0 && sent === 0
+      // Every recipient was already claimed under this key by ANOTHER attempt
+      // (two saves folding to the same newest change, two sweeps in one slot).
+      // That attempt may still fail or die after its claim, so this one must
+      // not stamp: the claim-holder stamps, or the next slot's retry key
+      // sends it again (a duplicate at worst, never a loss).
+      fullyDeduped = sent === 0 && (r?.failed || 0) === 0 && (r?.deduped || 0) >= recipients.length
     }
     // A studio still in quiet hours, or a push that failed outright: leave it
     // owed for a later tick (see KNOWN LIMIT in the header).
-    if (quiet.length > 0 || failedOutright) return { status: 'deferred', sent }
+    if (quiet.length > 0 || failedOutright || fullyDeduped) return { status: 'deferred', sent }
     return settle(db, ids, recipients.length > 0 ? 'sent' : 'no_recipients', nowMs, sent)
   } catch (err) {
     logError('availability-notify', 'deliver threw', { change_id: change?.id, err: err?.message })
