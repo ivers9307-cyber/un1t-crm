@@ -143,3 +143,55 @@ describe('restGapViolations', () => {
     expect(restGapViolations([S('p1', '2026-09-22', '06:00', '08:00'), S('p1', '2026-09-22', '19:00', '21:00')], { restScope: 'shift' })).toEqual([])
   })
 })
+
+describe('weekHoursOver', () => {
+  const SIX = ['2026-09-21', '2026-09-22', '2026-09-23', '2026-09-24', '2026-09-25', '2026-09-26']
+  const six = (lastEnd = '17:00') => SIX.map((d, i) => S('p1', d, '09:00', i === 5 ? lastEnd : '17:00'))
+  const FIVE = SIX.slice(0, 5).map((d) => S('p1', d, '09:00', '17:00')) // 40h
+
+  it('48.0 hours is fine', () => {
+    expect(weekHoursOver(six())).toEqual([])
+  })
+
+  it('48.25 hours flags', () => {
+    expect(weekHoursOver(six('17:15'))).toEqual([{
+      profile_id: 'p1', week_start: '2026-09-21', minutes: 2895, shift_count: 6,
+      block_ids: SIX.map((d) => `p1-${d}-09:00`), location_ids: ['loc1'],
+    }])
+  })
+
+  it('sums both studios, and the limit is a parameter', () => {
+    const rows = [
+      ...SIX.map((d, i) => S('p1', d, '09:00', '17:00', i % 2 ? { location_id: 'loc2', location_name: 'Studio South' } : {})),
+      S('p1', '2026-09-27', '10:00', '11:00', { location_id: 'loc2', location_name: 'Studio South' }),
+    ]
+    expect(weekHoursOver(rows)).toMatchObject([{ minutes: 2940, shift_count: 7, location_ids: ['loc1', 'loc2'] }])
+    expect(weekHoursOver(rows, 50)).toEqual([])
+  })
+
+  it('Monday to Sunday: a Sunday belongs to the week that began the Monday before; the next Monday starts afresh', () => {
+    expect(weekHoursOver([...FIVE, S('p1', '2026-09-27', '09:00', '18:00')])).toMatchObject([{ week_start: '2026-09-21', minutes: 2940 }])
+    expect(weekHoursOver([...FIVE, S('p1', '2026-09-28', '09:00', '18:00')])).toEqual([])
+  })
+
+  it('the DST week (w/c 19 Oct 2026): Sunday 25 Oct counts in it, 48.0 is fine and 48.25 flags', () => {
+    const OCT = ['2026-10-19', '2026-10-20', '2026-10-21', '2026-10-22', '2026-10-23'].map((d) => S('p1', d, '09:00', '17:00'))
+    expect(weekHoursOver([...OCT, S('p1', '2026-10-25', '09:00', '17:00')])).toEqual([])
+    expect(weekHoursOver([...OCT, S('p1', '2026-10-25', '09:00', '17:15')])).toMatchObject([{ week_start: '2026-10-19', minutes: 2895 }])
+  })
+
+  it('a shift through the clock change counts its real hours (wall clock would say 47h 15m)', () => {
+    const OCT = ['2026-10-19', '2026-10-20', '2026-10-21', '2026-10-22', '2026-10-23'].map((d) => S('p1', d, '09:00', '17:00'))
+    expect(weekHoursOver([
+      ...OCT,
+      S('p1', '2026-10-24', '09:00', '13:15'),
+      S('p1', '2026-10-25', '00:30', '03:30'), // 4 real hours
+    ])).toMatchObject([{ week_start: '2026-10-19', minutes: 2895 }])
+  })
+
+  it('a cancelled row does not count, and a row listed twice counts once', () => {
+    const rows = six('17:15')
+    expect(weekHoursOver([...rows, rows[0], S('p1', '2026-09-27', '09:00', '17:00', { status: 'cancelled' })]))
+      .toMatchObject([{ minutes: 2895, shift_count: 6 }])
+  })
+})

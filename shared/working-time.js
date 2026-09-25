@@ -76,6 +76,18 @@ function addDays(iso, n) {
   return new Date(Date.UTC(p.y, p.mo - 1, p.d) + n * DAY_MS).toISOString().slice(0, 10)
 }
 
+// The Monday of the Mon-Sun week containing `iso`: the week bucket for
+// MAX_WEEK_HOURS. OWNER REVIEW: the Act's 48 hours is an AVERAGE over a
+// four-month reference period; this checks each rostered week on its own,
+// which flags early (the safe side for an advisory). An average needs a
+// longer read, so it would be a second rule, not a change to this bucket.
+function weekStartOf(iso) {
+  const p = parseDate(iso)
+  const ms = Date.UTC(p.y, p.mo - 1, p.d)
+  const sinceMonday = (new Date(ms).getUTCDay() + 6) % 7
+  return new Date(ms - sinceMonday * DAY_MS).toISOString().slice(0, 10)
+}
+
 // Europe/Dublin wall-clock parts for an instant. Same formatter shape as
 // shared/dublin-time.js (which normalises the same '24' midnight quirk).
 const WALL_FMT = new Intl.DateTimeFormat('en-GB', {
@@ -230,4 +242,38 @@ export function restGapViolations(shifts, { minRestHours = MIN_REST_HOURS, restS
     a.after.date.localeCompare(b.after.date)
     || a.after.start.localeCompare(b.after.start)
     || String(a.profile_id).localeCompare(String(b.profile_id)))
+}
+
+/**
+ * Per person, each Mon-Sun week (by block_date) whose rostered hours are MORE
+ * than `limit`. Real elapsed time, compared in milliseconds, so 48h 15m flags
+ * and 48h does not.
+ *
+ * @returns {Array<{ profile_id, week_start, minutes, shift_count, block_ids: string[], location_ids: string[] }>}
+ */
+export function weekHoursOver(shifts, limit = MAX_WEEK_HOURS) {
+  const limitMs = limit * HOUR_MS
+  const weeks = new Map()
+  for (const w of windowsOf(shifts)) {
+    const weekStart = weekStartOf(w.date)
+    const key = `${w.profile_id}|${weekStart}`
+    if (!weeks.has(key)) {
+      weeks.set(key, { profile_id: w.profile_id, week_start: weekStart, ms: 0, block_ids: [], location_ids: new Set() })
+    }
+    const acc = weeks.get(key)
+    acc.ms += w.endMs - w.startMs
+    acc.block_ids.push(w.block_id)
+    if (w.location_id) acc.location_ids.add(w.location_id)
+  }
+  return [...weeks.values()]
+    .filter((acc) => acc.ms > limitMs)
+    .map((acc) => ({
+      profile_id: acc.profile_id,
+      week_start: acc.week_start,
+      minutes: Math.round(acc.ms / MINUTE_MS),
+      shift_count: acc.block_ids.length,
+      block_ids: acc.block_ids,
+      location_ids: [...acc.location_ids],
+    }))
+    .sort((a, b) => a.week_start.localeCompare(b.week_start) || String(a.profile_id).localeCompare(String(b.profile_id)))
 }
