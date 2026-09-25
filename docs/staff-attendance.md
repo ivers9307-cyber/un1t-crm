@@ -85,7 +85,7 @@ The phone's Schedule tab (Me view, phone and iPad) shows one line under each of 
 
 **Shipped with positive lines only.** The two absence lines are behind `SHOW_ABSENCE_LINES = false` in `mobile/lib/shift-arrival.js` (owner decision pending Richard): at ~19% stamp coverage a missing stamp mostly means the app could not stamp (a >60-min gap spent inside, a >45-min-early arrival, an adjusted start >4h after the block start, an offline ping that lands up to 24h late), not that the coach was absent. The absence rules stay implemented and tested; turning them on is that one constant.
 
-- Source: `GET /api/schedule/shifts` adds `arrival` on the caller's own rows only (`src/lib/shift-arrivals.js`); colleagues' rows, and a manager's Team feed, carry `null`.
+- Source: `GET /api/schedule/shifts?include=arrival` adds `arrival` on the caller's own rows only (`src/lib/shift-arrivals.js`); colleagues' rows, and a manager's Team feed, carry `null`. Without `include=arrival` (old phones, the Team view, the Home tab) every row carries `null` and no arrival read is made.
 - **Arrived = `shift_assignments.arrived_at`, nothing else.** The manager-set `start_time_override` is the paid window and is never an arrival; it only moves the window the "No arrival recorded" line is judged on (the times the card shows).
 - **On site** = the attendance report's carry-over (`inferContinuousArrivals`: the same coach, day and studio, the next shift starting ≤ 60 min after the previous block's end), plus a stamp at the same instant as the stamp on any earlier-starting shift that day at any studio (mig 610's `duplicate_orphan`, the old double-stamp shape; display only).
 - The server sends the studio-local `HH:MM`; the phone does no timezone maths (`mobile/lib/shift-arrival.js`).

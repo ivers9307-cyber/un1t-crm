@@ -25,6 +25,11 @@ export async function GET(request) {
   const startDate = searchParams.get('start_date')
   const endDate = searchParams.get('end_date')
   const profileId = searchParams.get('profile_id')
+  // ARRIVALSHOW.1 review 3 — the arrival facts cost three reads, so they are
+  // read only when the caller asks: ?include=arrival (a comma list), sent by
+  // the phone's Schedule tab Me view. Everyone else (old phones, the Team
+  // view, the Home tab, web) gets arrival: null and no extra read.
+  const includeArrival = (searchParams.get('include') || '').split(',').map((x) => x.trim()).includes('arrival')
   // DATECHECK.1 — these bounds reach Postgres as they are, and it refuses
   // 2026-02-30 (the route used to hand back its error text as the 400). Refuse
   // it here, in change-log's words. Absent or empty = no bound, as before.
@@ -72,7 +77,9 @@ export async function GET(request) {
   const ownIds = ownShiftIds(rows, user.id)
   const [ownOpenSwaps, arrivalFacts] = await Promise.all([
     fetchOwnOpenSwaps(db, user.id, ownIds),
-    fetchOwnArrivalFacts(db, user.id, ownIds, ownLocationIds(rows, user.id)),
+    includeArrival
+      ? fetchOwnArrivalFacts(db, user.id, ownIds, ownLocationIds(rows, user.id))
+      : { stamps: null, timezones: null, tracked: null },
   ])
   const withSwaps = annotateOwnOpenSwaps(rows, ownOpenSwaps, user.id)
   // Review 3 — the arrival line is never worth the roster: if the annotate

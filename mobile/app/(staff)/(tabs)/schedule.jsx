@@ -429,6 +429,7 @@ export default function Schedule() {
         profileId: profile.id,
         startDate: start,
         endDate: end,
+        withArrivals: true,
       }),
       getMyTimeOff({
         locationId: activeLocation.id,
