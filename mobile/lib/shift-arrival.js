@@ -15,13 +15,23 @@
 // time, never minutes late, never "missed". Tone classes live in
 // components/schedule/ArrivalLine.jsx (NativeWind does not scan mobile/lib).
 
+// Review 1 — POSITIVE LINES ONLY for now (the coordinator's call, pending
+// Richard): "No arrival recorded (yet)" stays switched off, because today a
+// missing stamp mostly means the app could not stamp, not that the coach was
+// not there. Coverage is ~19% of shifts; a gap of more than 60 min spent
+// inside the studio, an arrival more than 45 min early, and an adjusted start
+// more than 4h after the block start can never stamp; and an offline ping can
+// stamp up to 24h late (QUEUEDARRIVAL.1). The absence rules below are kept
+// and tested with the flag forced on; turning it on is this one line.
+export const SHOW_ABSENCE_LINES = false
+
 export const ARRIVAL_WORDS = Object.freeze({
   arrived: (hhmm) => `Arrived ${hhmm}`,
   arrivedDayBefore: (hhmm) => `Arrived ${hhmm} the day before`,
   onSite: (hhmm) => `On site from your earlier shift (arrived ${hhmm})`,
   notYet: 'No arrival recorded yet',
   notRecorded: 'No arrival recorded',
-  help: "Arrival times come from your phone's location when you reach the studio. They don't change your hours.",
+  help: "Arrival times come from your phone's location when you reach the studio, so not every shift shows one. They don't change your hours.",
 })
 
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/
@@ -30,9 +40,10 @@ const DATE = /^\d{4}-\d{2}-\d{2}$/
 /**
  * @param {object|null} shift  a GET /api/schedule/shifts row
  * @param {number} nowMs       Date.now() at render
+ * @param {{ showAbsence?: boolean }} [opts]  showAbsence defaults to SHOW_ABSENCE_LINES
  * @returns {{ kind: 'arrived'|'on_site'|'not_yet'|'not_recorded', text: string } | null}
  */
-export function arrivalLine(shift, nowMs) {
+export function arrivalLine(shift, nowMs, { showAbsence = SHOW_ABSENCE_LINES } = {}) {
   const a = shift?.arrival
   if (!a || typeof a !== 'object') return null
 
@@ -45,8 +56,9 @@ export function arrivalLine(shift, nowMs) {
   // saying "No arrival recorded" would be false. Say nothing.
   if (a.at != null) return null
 
-  // No stamp: say so only where arrivals are really tracked, on a published
-  // shift, once it has started.
+  // No stamp: say so only when absence lines are on, where arrivals are really
+  // tracked, on a published shift, once it has started.
+  if (showAbsence !== true) return null
   if (a.tracked !== true || shift.published === false) return null
   const starts = Date.parse(a.starts_at ?? '')
   const ends = Date.parse(a.ends_at ?? '')
@@ -57,9 +69,9 @@ export function arrivalLine(shift, nowMs) {
 }
 
 /** The help line under the Me list: shown only when some line shows. */
-export function arrivalHelpFor(shifts, nowMs) {
+export function arrivalHelpFor(shifts, nowMs, opts) {
   for (const s of Array.isArray(shifts) ? shifts : []) {
-    if (arrivalLine(s, nowMs)) return ARRIVAL_WORDS.help
+    if (arrivalLine(s, nowMs, opts)) return ARRIVAL_WORDS.help
   }
   return null
 }

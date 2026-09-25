@@ -6,11 +6,14 @@
 // here may depend on the phone's zone.
 
 import { describe, it, expect } from 'vitest'
-import { arrivalLine, arrivalHelpFor, ARRIVAL_WORDS } from './shift-arrival'
+import { arrivalLine, arrivalHelpFor, ARRIVAL_WORDS, SHOW_ABSENCE_LINES } from './shift-arrival'
 
 const START = '2026-09-24T06:00:00.000Z' // 07:00 Dublin
 const END = '2026-09-24T07:00:00.000Z'   // 08:00 Dublin
 const at = (iso) => Date.parse(iso)
+// Review 1 — the absence lines ship switched off (SHOW_ABSENCE_LINES). Their
+// rules are still pinned, with the flag forced on.
+const ON = { showAbsence: true }
 
 const shift = (arrival, over = {}) => ({ id: 'a1', shift_date: '2026-09-24', published: true, arrival, ...over })
 const none = (over = {}) => ({
@@ -51,40 +54,40 @@ describe('arrivalLine — no stamp', () => {
     ['exactly at the end', '2026-09-24T07:00:00Z', 'not_recorded'],
     ['after the shift', '2026-09-25T12:00:00Z', 'not_recorded'],
   ])('%s', (_name, nowIso, kind) => {
-    const line = arrivalLine(shift(none()), at(nowIso))
+    const line = arrivalLine(shift(none()), at(nowIso), ON)
     expect(line?.kind ?? null).toBe(kind)
   })
 
   it('the words', () => {
-    expect(arrivalLine(shift(none()), at('2026-09-24T06:30:00Z')).text).toBe('No arrival recorded yet')
-    expect(arrivalLine(shift(none()), at('2026-09-24T08:00:00Z')).text).toBe('No arrival recorded')
+    expect(arrivalLine(shift(none()), at('2026-09-24T06:30:00Z'), ON).text).toBe('No arrival recorded yet')
+    expect(arrivalLine(shift(none()), at('2026-09-24T08:00:00Z'), ON).text).toBe('No arrival recorded')
   })
 
   it('not tracked (studio off, exempt) shows nothing', () => {
-    expect(arrivalLine(shift(none({ tracked: false })), at('2026-09-24T08:00:00Z'))).toBeNull()
+    expect(arrivalLine(shift(none({ tracked: false })), at('2026-09-24T08:00:00Z'), ON)).toBeNull()
   })
 
   it('tracking unknown (a failed read) shows nothing: unknown is never absence', () => {
-    expect(arrivalLine(shift(none({ tracked: null })), at('2026-09-24T08:00:00Z'))).toBeNull()
+    expect(arrivalLine(shift(none({ tracked: null })), at('2026-09-24T08:00:00Z'), ON)).toBeNull()
   })
 
   it('a draft shows no absence line', () => {
-    expect(arrivalLine(shift(none(), { published: false }), at('2026-09-24T08:00:00Z'))).toBeNull()
+    expect(arrivalLine(shift(none(), { published: false }), at('2026-09-24T08:00:00Z'), ON)).toBeNull()
   })
 
   it('no window, or a broken one, shows nothing', () => {
-    expect(arrivalLine(shift(none({ starts_at: null })), at('2026-09-24T08:00:00Z'))).toBeNull()
-    expect(arrivalLine(shift(none({ ends_at: 'soon' })), at('2026-09-24T08:00:00Z'))).toBeNull()
+    expect(arrivalLine(shift(none({ starts_at: null })), at('2026-09-24T08:00:00Z'), ON)).toBeNull()
+    expect(arrivalLine(shift(none({ ends_at: 'soon' })), at('2026-09-24T08:00:00Z'), ON)).toBeNull()
   })
 
   it('a stamp with a malformed local time shows nothing: never "Arrived undefined", never an absence', () => {
-    expect(arrivalLine(shift(stamped({ at_local: '6:52' })), at('2026-09-24T08:00:00Z'))).toBeNull()
-    expect(arrivalLine(shift(stamped({ at_local: null })), at('2026-09-24T06:30:00Z'))).toBeNull()
+    expect(arrivalLine(shift(stamped({ at_local: '6:52' })), at('2026-09-24T08:00:00Z'), ON)).toBeNull()
+    expect(arrivalLine(shift(stamped({ at_local: null })), at('2026-09-24T06:30:00Z'), ON)).toBeNull()
   })
 
   it('a missing "now" shows no absence line', () => {
-    expect(arrivalLine(shift(none()), undefined)).toBeNull()
-    expect(arrivalLine(shift(none()), NaN)).toBeNull()
+    expect(arrivalLine(shift(none()), undefined, ON)).toBeNull()
+    expect(arrivalLine(shift(none()), NaN, ON)).toBeNull()
   })
 })
 
@@ -115,7 +118,32 @@ describe('arrivalHelpFor', () => {
     expect(arrivalHelpFor([], now)).toBeNull()
     expect(arrivalHelpFor(null, now)).toBeNull()
     expect(arrivalHelpFor([shift(none({ tracked: false })), shift(null)], now)).toBeNull()
-    expect(arrivalHelpFor([shift(null), shift(none())], now)).toBe(ARRIVAL_WORDS.help)
+    expect(arrivalHelpFor([shift(null), shift(none())], now, ON)).toBe(ARRIVAL_WORDS.help)
     expect(arrivalHelpFor([shift(stamped())], now)).toBe(ARRIVAL_WORDS.help)
+  })
+
+  it('an absence alone never shows the help line while absence lines are off', () => {
+    expect(arrivalHelpFor([shift(none())], at('2026-09-24T08:00:00Z'))).toBeNull()
+  })
+
+  it('does not promise a line on every shift, and keeps "They don\'t change your hours"', () => {
+    expect(ARRIVAL_WORDS.help).toContain('not every shift shows one')
+    expect(ARRIVAL_WORDS.help).toContain("They don't change your hours.")
+  })
+})
+
+describe('positive lines only (review 1, owner decision pending Richard)', () => {
+  it('absence lines are switched off', () => {
+    expect(SHOW_ABSENCE_LINES).toBe(false)
+  })
+
+  it('with the flag off, a started or ended shift with no arrival shows nothing', () => {
+    expect(arrivalLine(shift(none()), at('2026-09-24T06:30:00Z'))).toBeNull()
+    expect(arrivalLine(shift(none()), at('2026-09-24T08:00:00Z'))).toBeNull()
+  })
+
+  it('with the flag off, a stamp and an on-site carry still show', () => {
+    expect(arrivalLine(shift(stamped()), at('2026-09-24T08:00:00Z')).kind).toBe('arrived')
+    expect(arrivalLine(shift(stamped({ carried: true, source: null })), at('2026-09-24T08:00:00Z')).kind).toBe('on_site')
   })
 })
