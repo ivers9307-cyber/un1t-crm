@@ -17,13 +17,15 @@
 // flipping a draft — have to run it, and a guard that only one of
 // them ran was no guard at all.
 
-import { shiftHours } from './payroll'
+import { shiftHours, mondayOf } from './payroll'
 import { liveAssignments } from './roster'
 import { staffingGaps } from './roster-staffing'
-import { dublinTodayStr } from './dublin-time'
+import { dublinTodayStr, addDaysISO } from './dublin-time'
 import { leaveScopeOrFilter } from './time-off-leave'
 import { logWarn } from './log'
 import { leaveCovering, leaveClashes, doubleBookings } from './roster-publish-advisories'
+import { loadWorkingTimeShifts } from './working-time-data'
+import { workingTimeAdvisories } from '@shared/working-time'
 
 function isoFirstOfMonth(iso) {
   return `${iso.slice(0, 7)}-01`
@@ -237,6 +239,29 @@ async function loadBudgetContext(db, locationId, periodStart, periodEnd = period
     otherAssignments = null
   }
 
+  // WORKTIME.1 — every shift, at any studio of this organisation, of the
+  // people rostered HERE in the period, from the Sunday before the period's
+  // first week to the Monday after its last (a rest gap reaches one day either
+  // side; a week total needs the whole Mon-Sun week). ONE reader call per
+  // preview, never per block. The reader never throws and reads names and
+  // employment type only, never a rate. The try is belt and braces: this
+  // function is also the budget gate, and an advisory must never be able to
+  // refuse a publish.
+  let workingTime = null
+  if (advisories) {
+    try {
+      workingTime = await loadWorkingTimeShifts(db, {
+        locationId,
+        profileIds: rosteredHereIn(monthBlocks, periodStart, periodEnd),
+        from: addDaysISO(mondayOf(periodStart), -1),
+        to: addDaysISO(mondayOf(periodEnd), 7),
+      })
+    } catch (e) {
+      logWarn('roster-publish', 'working-time read threw; omitted from the publish preview', { locationId, err: e?.message })
+      workingTime = { shifts: [], people: new Map(), crossStudioChecked: false, error: { message: e?.message || 'working-time read threw' } }
+    }
+  }
+
   return {
     location: loc,
     monthStart,
@@ -245,8 +270,17 @@ async function loadBudgetContext(db, locationId, periodStart, periodEnd = period
     leaveByProfile,
     monthBlocks,
     otherAssignments,
+    workingTime,
     advisories,
   }
+}
+
+// WORKTIME.1 — the people with a live shift at this studio in [from, to].
+function rosteredHereIn(blocks, from, to) {
+  return [...new Set((blocks || [])
+    .filter((b) => b.block_date >= from && b.block_date <= to)
+    .flatMap((b) => liveAssignments(b.shift_assignments).map((a) => a.profile_id))
+    .filter(Boolean))]
 }
 
 /**
@@ -319,6 +353,10 @@ function blockContractorCost(block, contractorRateById, leaveByProfile) {
  *                         profile_id, coach_name, leave_start, leave_end }>,
  *   doubleBookings: Array<{ profile_id, coach_name, block_date, first, second }>,
  *   crossLocationChecked: boolean,
+ *   // WORKTIME.1 — with `advisories: true` only. Employees, hours only.
+ *   workingTime: { restGaps: Array<{ profile_id, coach_name, rest_minutes, before, after }>,
+ *                  longWeeks: Array<{ profile_id, coach_name, week_start, minutes, shift_count, studio_count }>,
+ *                  checked: boolean },
  *   months: Array<{
  *     monthStart, monthEnd, monthlyBudgetEur, alreadyPublishedEur,
  *     periodProjectedEur, monthProjectedTotalEur, remainingEur,
@@ -416,13 +454,36 @@ export async function projectPublishImpactBatch(db, periods, { todayIso = dublin
 }
 
 /**
+ * WORKTIME.1 — the preview's working-time list from the reader's answer.
+ * Only the people rostered here in THIS period are listed: the batch reads
+ * once for a span of drafts, and a draft must not list another draft's people.
+ * `checked: false` when the read failed, could not see the other studios, or
+ * the pure helper threw: an empty list is then "not checked", never "clear".
+ */
+function workingTimeList(wt, { locationId, monthBlocks, periodStart, periodEnd, todayIso }) {
+  const unchecked = { restGaps: [], longWeeks: [], checked: false }
+  if (!wt || wt.error) return unchecked
+  try {
+    const here = new Set(rosteredHereIn(monthBlocks, periodStart, periodEnd))
+    const { restGaps, longWeeks } = workingTimeAdvisories(
+      (wt.shifts || []).filter((s) => here.has(s.profile_id)),
+      { people: wt.people, hereLocationId: locationId, from: periodStart, to: periodEnd, todayIso },
+    )
+    return { restGaps, longWeeks, checked: wt.crossStudioChecked !== false }
+  } catch (e) {
+    logWarn('roster-publish', 'working-time advisory threw; omitted from the publish preview', { locationId, err: e?.message })
+    return unchecked
+  }
+}
+
+/**
  * The pure half of projectPublishImpact: judge one period against an already
  * loaded context. Shared by the single and batch paths so they cannot disagree.
  * `ctx.monthBlocks` may cover MORE months than the period touches (the batch
  * loads a span); everything below filters to the period's own months.
  */
 function impactFromContext(ctx, { periodStart, periodEnd, todayIso }) {
-  const { location, contractorRateById, leaveByProfile, monthBlocks, otherAssignments, advisories = true } = ctx
+  const { location, contractorRateById, leaveByProfile, monthBlocks, otherAssignments, workingTime, advisories = true } = ctx
 
   const budget = location?.monthly_contractor_budget_eur != null
     ? Number(location.monthly_contractor_budget_eur)
@@ -520,6 +581,10 @@ function impactFromContext(ctx, { periodStart, periodEnd, todayIso }) {
     // false = the other-studio read failed (or a helper threw), so the lists
     // are not a full check. The modal says so instead of implying an all-clear.
     advisoryLists.crossLocationChecked = complete
+    // WORKTIME.1 — employees' rest and weekly hours, both studios. Its own
+    // `checked`: a working-time read that failed is not a clash check that
+    // failed, and neither may read as an all-clear.
+    advisoryLists.workingTime = workingTimeList(workingTime, { locationId: location?.id, monthBlocks, periodStart, periodEnd, todayIso })
   }
 
   return {
