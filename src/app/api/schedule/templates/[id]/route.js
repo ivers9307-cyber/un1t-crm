@@ -12,6 +12,8 @@ import {
   clearEmptyFutureBlocks,
   planBlockCapacityUpdates,
 } from '@/lib/shift-template-blocks'
+import { SHIFT_KINDS } from '@shared/shift-kind'
+import { resolveTemplateKindWrite } from '@/lib/shift-template-kind'
 
 const TemplateUpdateSchema = z.object({
   name: z.string().min(1).max(100).optional(),
@@ -25,6 +27,8 @@ const TemplateUpdateSchema = z.object({
   max_coaches: z.number().int().min(1).max(50).optional(),
   // SHIFTMIN.1 — minimum coaches floor.
   min_coaches: z.number().int().min(0).max(50).optional(),
+  // SHIFTTYPE.1 (mig 628) — see resolveTemplateKindWrite for the rule.
+  kind: z.enum(SHIFT_KINDS).optional(),
 })
 
 // PUT /api/schedule/templates/:id
@@ -56,6 +60,10 @@ const TemplateUpdateSchema = z.object({
 //     is no change-log entry saying it went, so the slot would vanish
 //     from a published week with nothing recording it. The count kept
 //     back comes out as `propagation.publishedEmptiesKept`.
+//   - kind (SHIFTTYPE.1): class -> admin also writes min_coaches 0, which
+//     propagates to FUTURE blocks like any minimum edit. Past blocks keep
+//     their minimum; staffing never reads a past block, and it reads kind
+//     through the template, so an admin block's stale minimum is inert.
 //
 // Today is computed in UTC because shift_blocks.block_date is a
 // calendar date with no TZ. Comparing block_date >= today_utc gives
@@ -84,7 +92,7 @@ export async function PUT(request, props) {
   // so a cross-tenant id is indistinguishable from a missing one).
   const { data: priorTemplate } = await db
     .from('shift_templates')
-    .select('location_id, days_of_week')
+    .select('location_id, days_of_week, kind, min_coaches')
     .eq('id', params.id)
     .maybeSingle()
   if (!priorTemplate) {
@@ -98,6 +106,14 @@ export async function PUT(request, props) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
   const locationId = priorTemplate.location_id
+  // SHIFTTYPE.1 — kind + minimum. Runs BEFORE changingCapacity is computed
+  // below: a switch to admin adds min_coaches: 0 to `updates`, and that must
+  // reach the future blocks through the SHIFTMIN-CLAMP.1 path like any other
+  // minimum edit. An explicit minimum on an admin template is refused before
+  // any write.
+  const kindWrite = resolveTemplateKindWrite({ prior: priorTemplate, body: validation.data })
+  if (!kindWrite.ok) return NextResponse.json(kindWrite.body, { status: kindWrite.status })
+  Object.assign(updates, kindWrite.patch)
   const priorDays = new Set(priorTemplate.days_of_week || [])
 
   const today = dublinTodayStr()
