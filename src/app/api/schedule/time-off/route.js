@@ -10,10 +10,12 @@ import {
   getLocationMemberIds, getProfileLocationIds, leaveScopeOrFilter, canDecideTimeOff,
   resolveTimeOffApproverIds, getEmploymentType, getHolidayAllowance, ensureHolidayAllowanceRow,
   countLeaveClashes, findLeaveClashes, chargeableLeaveSegments, findOwnPublishedShifts, isRealIsoDate,
-  getLocationIdsByProfile,
+  getLocationIdsByProfile, getOrgAdminLocationIdsByProfile,
   getPendingHolidayDays,
 } from '@/lib/time-off-leave'
-import { annotateCancelAsk, isMissingCancelSchemaError, CANCEL_ASK_OFF } from '@/lib/time-off-cancel'
+import {
+  annotateCancelAsk, isMissingCancelSchemaError, CANCEL_ASK_OFF, annotateApprovedLeaveGuard, requesterLeaveTier,
+} from '@/lib/time-off-cancel'
 import { logError } from '@/lib/log'
 import {
   isTimeOffTypeAllowedFor, RESTRICTED_TYPE_ERROR, isExpiredPendingRequest, effectiveTimeOffStatus,
@@ -164,21 +166,59 @@ export async function GET(request) {
   // its filed-at studio, and an owner there still sees their button.
   // Without mig 624 there is no ask to show and none to make: every row gets
   // CANCEL_ASK_OFF, so no screen offers a button whose write would fail.
+  //
+  // LEAVEGUARD.1 — and `approved_locked_to_owner`: a colleague's APPROVED
+  // leave that only an owner (a master's: only another master) may take out
+  // of force, judged by the PUT's own functions (requesterLeaveTier +
+  // approvedLeaveGuardAllows). The tier needs the requester's profiles.role
+  // (already on the row, the profiles!profile_id embed), their per-studio
+  // ROLES (the one membership read, now also covering colleagues with
+  // approved leave) and their org-admin grants (one more paged read). It is
+  // independent of mig 624. Not paid when it cannot matter: a master caller
+  // is never locked out, and a list with no colleague's approved leave has
+  // nothing to lock. An unreadable read NARROWS: the tier is unknown (null),
+  // judged as manager, so only an owner at a studio the request belongs to or
+  // a master stays unlocked.
   const askedByOthers = cancelSchemaMissing ? [] : rows.filter((r) => r.cancel_requested_at && !r.cancel_decided_at && r.profile_id !== user.id)
+  const callerIsMaster = user.profileRole === 'master'
+  const approvedOfOthers = callerIsMaster ? [] : rows.filter((r) => r.status === 'approved' && r.profile_id !== user.id)
   let studiosByProfile = new Map()
-  if (askedByOthers.length > 0) {
-    const { byProfile, error: memberError } = await getLocationIdsByProfile(db, askedByOthers.map((r) => r.profile_id))
-    if (memberError) console.error('[time-off] memberships unreadable; cancel-request buttons use the filed-at studio only', memberError.message)
-    else studiosByProfile = byProfile
+  let rolesByProfile = null
+  if (askedByOthers.length > 0 || approvedOfOthers.length > 0) {
+    const { byProfile, membershipsByProfile, error: memberError } = await getLocationIdsByProfile(db, [...askedByOthers, ...approvedOfOthers].map((r) => r.profile_id))
+    if (memberError) {
+      logError('time-off', 'memberships unreadable; cancel-request buttons use the filed-at studio only, and colleagues\' approved leave is locked to owners', { err: memberError })
+    } else {
+      studiosByProfile = byProfile
+      rolesByProfile = membershipsByProfile
+    }
+  }
+  let orgAdminByProfile = new Map()
+  if (approvedOfOthers.length > 0) {
+    const { byProfile, error: orgError } = await getOrgAdminLocationIdsByProfile(db, approvedOfOthers.map((r) => r.profile_id))
+    if (orgError) {
+      logError('time-off', 'org-admin grants unreadable; colleagues\' approved leave is locked to owners', { err: orgError })
+      orgAdminByProfile = null
+    } else {
+      orgAdminByProfile = byProfile
+    }
   }
   const ownStudios = getUserLocationIds(user)
   const nowMs = Date.now()
-  rows = rows.map((r) => ({
-    ...r,
-    ...(cancelSchemaMissing
-      ? CANCEL_ASK_OFF
-      : annotateCancelAsk(r, user, today, r.profile_id === user.id ? ownStudios : studiosByProfile.get(r.profile_id) || [], nowMs)),
-  }))
+  rows = rows.map((r) => {
+    const isOwn = r.profile_id === user.id
+    const studios = isOwn ? ownStudios : studiosByProfile.get(r.profile_id) || []
+    const tier = isOwn || callerIsMaster || r.status !== 'approved' ? null : requesterLeaveTier({
+      profileRole: r.profiles?.role ?? null,
+      memberships: rolesByProfile ? rolesByProfile.get(r.profile_id) || [] : null,
+      orgAdminLocationIds: orgAdminByProfile ? orgAdminByProfile.get(r.profile_id) || [] : null,
+    }, r, studios)
+    return {
+      ...r,
+      ...(cancelSchemaMissing ? CANCEL_ASK_OFF : annotateCancelAsk(r, user, today, studios, nowMs)),
+      ...annotateApprovedLeaveGuard(r, user, studios, tier),
+    }
+  })
 
   // LEAVE.2 — `with_clashes=1` (the Time Off page) adds how many live shifts
   // each open request collides with. Advisory: a failed count degrades to no
@@ -422,6 +462,11 @@ export async function POST(request) {
 // just inserted, through the same update the approval route makes (so the
 // allowance trigger charges a holiday), and hand back the shift clashes the
 // same way an approval does.
+//
+// LEAVEGUARD.1 — deliberately NOT owner-gated when the person is a manager:
+// recording leave (someone phoned in sick) puts leave INTO force, which is the
+// ordinary approval permission's call. Only taking a manager's approved leave
+// OUT of force needs an owner (PUT /api/schedule/time-off/[id]).
 async function approveRecordedLeave(db, user, created, { type, employmentType }) {
   const ids = created.map((r) => r.id)
   if (type === 'holiday' && employmentType !== 'contractor') {

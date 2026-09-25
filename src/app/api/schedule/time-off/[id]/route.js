@@ -8,12 +8,14 @@ import { notifyUsersOnce } from '@/lib/push-dedup'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import {
   canDecideTimeOff, decidingLocationIds, getProfileLocationIds, getEmploymentType, ensureHolidayAllowanceRow, findLeaveClashes,
+  getOrgAdminLocationIdsByProfile,
 } from '@/lib/time-off-leave'
 import { isExpiredPendingRequest, isTimeOffTypeAllowedFor, timeOffLeaveLabel } from '@shared/time-off'
 import {
   selfCancelMode, isOpenCancelAsk, leaveActingLocationIds, resolveLeaveCancelDeciderIds,
   cancelAskNoticeKey, reAskBlockedUntil, leaveRangeText, CLEARED_CANCEL_ASK,
   isMissingCancelSchemaError, dublinRetryLabel,
+  requesterLeaveTier, approvedLeaveGuardAllows, approvedLeaveRefusal,
 } from '@/lib/time-off-cancel'
 import { logError } from '@/lib/log'
 
@@ -55,15 +57,19 @@ export async function PUT(request, props) {
   // Get the existing request
   // Primary-key read: 0 rows is a legitimate answer (404 below); a failed read
   // is not, and used to be reported as "not found" (the error was discarded).
-  const { data: existing, error: readError } = await db.from('time_off_requests')
-    .select('*')
+  // LEAVEGUARD.1 — the requester's profiles.role rides on this read (a
+  // master holds no studio rows, so it is the only place their tier lives).
+  // It is taken off the row at once: nothing below writes or answers with it.
+  const { data: found, error: readError } = await db.from('time_off_requests')
+    .select('*, requester:profiles!profile_id(role)')
     .eq('id', params.id)
     .maybeSingle()
   if (readError) return NextResponse.json({ success: false, error: readError.message }, { status: 500 })
 
-  if (!existing) {
+  if (!found) {
     return NextResponse.json({ success: false, error: 'Request not found' }, { status: 404 })
   }
+  const { requester, ...existing } = found
 
   const { status, review_note } = body
 
@@ -73,7 +79,10 @@ export async function PUT(request, props) {
   // LEAVE.2 — leave covers the person, so the studios that may act on it are
   // the one it was filed at AND every studio the requester belongs to.
   // Unreadable memberships fail closed to "filed-at only" for authority.
-  const { ids: requesterLocations, error: requesterLocError } = await getProfileLocationIds(db, existing.profile_id)
+  // LEAVEGUARD.1 — the same read carries the requester's per-studio role
+  // (`requesterMemberships`), so an unreadable one is this 500 too: nothing
+  // is written on a guess about who the leave belongs to.
+  const { ids: requesterLocations, memberships: requesterMemberships, error: requesterLocError } = await getProfileLocationIds(db, existing.profile_id)
   if (requesterLocError) {
     return NextResponse.json({ success: false, error: requesterLocError.message }, { status: 500 })
   }
@@ -134,6 +143,33 @@ export async function PUT(request, props) {
   // reach mig 624's CHECK and hand the caller raw constraint text.
   if (existing.cancel_decision === 'approved' && (status === 'rejected' || status === 'pending')) {
     return ALREADY_CANCELLED()
+  }
+
+  // LEAVEGUARD.1 — LEAVECANCEL.1 made a manager's cancel of their OWN approved
+  // leave an owner's decision, but a manager-tier COLLEAGUE could still take
+  // that leave out of force here (cancelled, rejected, or back to pending),
+  // so two managers could cancel each other's leave around the rule. Moving
+  // APPROVED leave of someone who is manager-tier at a studio this request
+  // belongs to now needs the cancellation decider: an owner at one of those
+  // studios who is not the requester, or a master (canDecideLeaveCancel). Plain
+  // staff leave, pending leave and approved -> approved are untouched, and the
+  // requester's own leave took the self path above. This is a default the
+  // owner may reverse; the rule lives in approvedLeaveGuardAllows.
+  // A master's leave needs another master, and an org admin (a synthetic owner
+  // at their organisation's studios, SAAS-4) counts as manager-tier: the tier
+  // is requesterLeaveTier, shared with the list GET. The org-grant read is
+  // paid only here, and fails closed like the membership read above.
+  if (!isSelf && existing.status === 'approved' && status !== 'approved') {
+    let orgAdminLocationIds = []
+    if (requester?.role !== 'master') {
+      const { byProfile, error: orgError } = await getOrgAdminLocationIdsByProfile(db, [existing.profile_id])
+      if (orgError) return NextResponse.json({ success: false, error: orgError.message }, { status: 500 })
+      orgAdminLocationIds = byProfile.get(existing.profile_id) || []
+    }
+    const tier = requesterLeaveTier({ profileRole: requester?.role ?? null, memberships: requesterMemberships, orgAdminLocationIds }, existing, requesterLocations)
+    if (!approvedLeaveGuardAllows(user, existing, status, requesterLocations, tier)) {
+      return NextResponse.json({ success: false, error: approvedLeaveRefusal(tier) }, { status: 403 })
+    }
   }
 
   const updates = { status, updated_at: new Date().toISOString() }
@@ -201,29 +237,36 @@ export async function PUT(request, props) {
     }
   }
 
-  let write = db.from('time_off_requests')
+  // LEAVEGUARD.1 — EVERY status write is pinned to the status this PUT read.
+  // Every gate above (the owner guard, canDecideTimeOff, the expiry and ask
+  // checks) judged THAT status, so a write that lands on a different one was
+  // never judged: a manager's `rejected` on a manager's PENDING leave passes
+  // the guard, an owner approves it in between, and the reject would land on
+  // APPROVED leave (the trigger refunding it) with no owner involved. A
+  // zero-row write is not an error in PostgREST; `.single()` turns it into
+  // PGRST116, answered below as the same 409 the ask-clearing write always
+  // gave. With no race the row is the same one, so the answer is unchanged.
+  //
+  // LEAVECANCEL.1 — for a write that clears an ask this also catches an owner
+  // APPROVING the cancellation a moment earlier (status moved to cancelled).
+  // It does NOT catch an owner DECLINING it a moment earlier: a decline
+  // leaves status approved, so this write still matches and clears the
+  // decline along with the ask. That is the same end state as the accepted
+  // sequence "owner declines, then a colleague cancels the leave" (the leave
+  // is cancelled either way; the decline has nothing left to be about).
+  const { data, error } = await db.from('time_off_requests')
     .update(updates)
     .eq('id', params.id)
-  // LEAVECANCEL.1 — a write that clears an ask is guarded on the status it
-  // read. That catches an owner APPROVING the cancellation a moment earlier
-  // (status moved to cancelled, zero rows, 409). It does NOT catch an owner
-  // DECLINING it a moment earlier: a decline leaves status approved, so this
-  // write still matches and clears the decline along with the ask. That is the
-  // same end state as the accepted sequence "owner declines, then a colleague
-  // cancels the leave" (the leave is cancelled either way; the decline has
-  // nothing left to be about), so it is left as is. A row with no ask is
-  // written exactly as before.
-  if (clearsAsk) write = write.eq('status', existing.status)
-  const { data, error } = await write
+    .eq('status', existing.status)
     .select(REQUEST_WITH_PEOPLE)
     .single()
 
   if (error) {
-    // The guard matched no row (.single() answers PGRST116 for zero rows).
-    if (clearsAsk && error.code === 'PGRST116') {
+    // The pin matched no row (.single() answers PGRST116 for zero rows).
+    if (error.code === 'PGRST116') {
       return NextResponse.json({ success: false, error: 'This leave changed a moment ago. Refresh to see where it stands.' }, { status: 409 })
     }
-    // The same race with no ask on the row this PUT read: the CHECK refuses it.
+    // Defence in depth: mig 624's CHECK, should it ever be what refuses.
     if (String(error.message || '').includes(CANCEL_APPROVED_CHECK)) return ALREADY_CANCELLED()
     return NextResponse.json({ success: false, error: error.message }, { status: 400 })
   }

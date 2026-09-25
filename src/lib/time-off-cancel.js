@@ -81,6 +81,89 @@ export function canDecideLeaveCancel(user, row, requesterLocationIds = []) {
   return isOwnerForLeave(user, row, requesterLocationIds)
 }
 
+// ── LEAVEGUARD.1 — a colleague taking a manager's APPROVED leave out of force ──
+//
+// LEAVECANCEL.1 made a manager's cancel of their OWN approved leave an ask an
+// owner decides. The plain PUT still let any manager-tier COLLEAGUE set that
+// same leave to cancelled / rejected / pending outright, so two managers could
+// cancel each other's leave and walk around the rule. The rule, as built (the
+// owner may reverse it; it is a default, not their words):
+//
+//   • The requester's TIER (requesterLeaveTier, the one definition the PUT and
+//     the list share):
+//       'master'  profiles.role = 'master' (platform-wide, no studio rows);
+//       'manager' a manager-tier (MANAGER_ROLES) profile_locations row at a
+//                 studio the request belongs to, OR org admin (mig 417) of an
+//                 organisation that owns one of those studios; getCurrentUser
+//                 makes an org admin a synthetic OWNER there (SAAS-4), and
+//                 selfCancelMode already counts them, so the guard must too;
+//       'staff'   neither.
+//   • Moving APPROVED leave to any other status needs, by tier:
+//       'manager' the SAME decider as a cancellation ask: an OWNER at a studio
+//                 the request belongs to who is not the requester, or a master
+//                 (canDecideLeaveCancel). An owner's leave needs another owner.
+//       'master'  another master. An owner is not above a master.
+//       'staff'   nothing new: managers keep cancelling/rejecting it.
+//   • Pending leave: unchanged (deciding it is canDecideTimeOff's question).
+//   • Approved -> approved (an approver re-stamping it) changes no state and
+//     is not gated.
+//   • The requester's own leave is LEAVECANCEL.1's path, not this one.
+// Role is per studio (never the caller's active studio).
+
+/** The refusal, by requester tier. Says what to do instead. No em-dashes. */
+export function approvedLeaveRefusal(tier) {
+  return tier === 'master'
+    ? 'Only another master can change a master\'s approved leave.'
+    : 'Only an owner can change a manager\'s approved leave. Ask the person whose leave it is to request the cancellation, or ask an owner.'
+}
+
+/**
+ * The requester's tier for this request: 'master' | 'manager' | 'staff', or
+ * null when it could not be read (memberships null). Pure.
+ *
+ * @param {object} who
+ * @param {string|null} who.profileRole          profiles.role of the requester
+ * @param {Array<{location_id, role}>|null} who.memberships   their profile_locations rows; null = unreadable
+ * @param {string[]|null} who.orgAdminLocationIds  studios of organisations they are org admin of; null = unreadable
+ */
+export function requesterLeaveTier({ profileRole = null, memberships = [], orgAdminLocationIds = [] } = {}, row, requesterLocationIds = []) {
+  if (profileRole === 'master') return 'master'
+  const acting = new Set(leaveActingLocationIds(row, requesterLocationIds))
+  const byRow = (memberships || []).some((m) => acting.has(m?.location_id) && MANAGER_ROLES.includes(m?.role))
+  const byOrg = (orgAdminLocationIds || []).some((id) => acting.has(id))
+  if (byRow || byOrg) return 'manager'
+  // Something unreadable and nothing found: unknown, never "staff".
+  if (memberships == null || orgAdminLocationIds == null) return null
+  return 'staff'
+}
+
+/**
+ * LEAVEGUARD.1 — may `user` move this leave to `nextStatus`, as far as THIS
+ * rule goes? true = the rule has no objection (every other gate in the PUT
+ * still applies). `requesterTier` null means "could not be read" and is judged
+ * as 'manager': authority only ever narrows on a failed read. Pure.
+ */
+export function approvedLeaveGuardAllows(user, row, nextStatus, requesterLocationIds = [], requesterTier = null) {
+  if (!row || row.status !== 'approved' || nextStatus === 'approved') return true
+  if (user?.id && user.id === row.profile_id) return true
+  if (requesterTier === 'staff') return true
+  if (requesterTier === 'master') return user?.profileRole === 'master' && !!user.id && user.id !== row.profile_id
+  return canDecideLeaveCancel(user, row, requesterLocationIds)
+}
+
+/**
+ * The list GET's per-row flag. `approved_locked_to_owner: true` = this is a
+ * colleague's APPROVED leave that only an owner (or, for a master's leave,
+ * another master) may take out of force, and the caller is not one, so a
+ * screen must not offer Cancel / Reject / Reopen on it. Deliberately a
+ * REFUSAL flag: absent (an older server, which accepts the action) reads as
+ * "not locked", so a client reading `=== true` keeps today's behaviour
+ * against a server that predates the rule. Pure.
+ */
+export function annotateApprovedLeaveGuard(row, user, requesterLocationIds = [], requesterTier = null) {
+  return { approved_locked_to_owner: !approvedLeaveGuardAllows(user, row, 'cancelled', requesterLocationIds, requesterTier) }
+}
+
 /**
  * What GET /api/schedule/time-off tells the screen about one row, for THIS
  * caller. The screen offers exactly these and the routes re-judge every one.

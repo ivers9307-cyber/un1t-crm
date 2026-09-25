@@ -63,6 +63,15 @@ function buildDb({
   // What the status PUT's .single() UPDATE answers when it fails.
   updateError = null,
   readError = null,
+  // LEAVEGUARD.1 — the requester's per-studio role (location -> role) and a
+  // failed membership read.
+  requesterRoles = {},
+  membershipError = null,
+  // profiles.role of the requester (the PUT's first read embeds it), the
+  // organisations they are org admin of, and a failed org-grant read.
+  requesterProfileRole = 'staff',
+  orgAdminOrgs = [],
+  orgError = null,
 }) {
   const updateSpy = vi.fn()
   const allowanceInsertSpy = vi.fn()
@@ -74,8 +83,15 @@ function buildDb({
       const row = reads > 1 && reread ? reread : existing
       // A read that asks for the people embeds gets them, so a test can tell
       // the full answer shape from a bare row.
-      const withPeople = row && String(q.columns || '').includes('profiles!profile_id')
-      return { data: withPeople ? { ...row, profiles: { id: row.profile_id, full_name: 'Mia Manager' } } : row, error: null }
+      const cols = String(q.columns || '').replace(/\s/g, '')
+      const withPeople = row && cols.includes('profiles!profile_id(id')
+      const withRequester = row && cols.includes('requester:profiles!profile_id(role)')
+      return {
+        data: row && (withPeople || withRequester)
+          ? { ...row, ...(withPeople ? { profiles: { id: row.profile_id, full_name: 'Mia Manager' } } : {}), ...(withRequester ? { requester: { role: requesterProfileRole } } : {}) }
+          : row,
+        error: null,
+      }
     }
     if (q.table === 'time_off_requests' && q.action === 'update') {
       updateSpy(q.payload)
@@ -90,12 +106,25 @@ function buildDb({
         ? { data: null, error: ownersError }
         : { data: owners.map((profile_id) => ({ profile_id, location_id: existing.location_id, role: 'owner', profiles: { id: profile_id, role: 'staff', active: true, deleted_at: null } })), error: null }
     }
-    if (q.table === 'profile_locations') return { data: requesterLocations.map((location_id) => ({ location_id })), error: null }
+    if (q.table === 'profile_locations') {
+      if (membershipError) return { data: null, error: membershipError }
+      return { data: requesterLocations.map((location_id) => ({ location_id, role: requesterRoles[location_id] ?? 'staff' })), error: null }
+    }
     if (q.table === 'profiles' && q.eq.role === 'master') return { data: masters.map((id) => ({ id })), error: null }
     if (q.table === 'profiles') return { data: { employment_type: employmentType }, error: null }
     if (q.table === 'staff_allowances' && q.action === 'select') return { data: allowance, error: null }
     if (q.table === 'staff_allowances' && q.action === 'insert') { allowanceInsertSpy(q.payload); return { data: null, error: null } }
     if (q.table === 'profile_compensation') return { data: entitlement == null ? null : { annual_leave_entitlement: entitlement }, error: null }
+    if (q.table === 'profile_organizations') {
+      if (orgError) return { data: null, error: orgError }
+      return { data: orgAdminOrgs.map((organization_id) => ({ profile_id: existing.profile_id, organization_id, role: 'org_admin' })), error: null }
+    }
+    // LEAVEGUARD.1 — the studios of the requester's org-admin organisations.
+    const orgIn = q.table === 'locations' && q.calls.find(([op, col]) => op === 'in' && col === 'organization_id')
+    if (orgIn) {
+      const byOrg = { 'loc-1': 'org-1', 'loc-2': 'org-1', 'loc-x': 'org-x' }
+      return { data: Object.entries(byOrg).filter(([, o]) => orgIn[2].includes(o)).map(([id, organization_id]) => ({ id, organization_id })), error: null }
+    }
     // ORGSCOPE.1 — loc-1 + loc-2 are one organisation; loc-x is another's.
     if (q.table === 'locations') return resolveLocations(q, { 'loc-1': 'org-1', 'loc-2': 'org-1', 'loc-x': 'org-x' })
     if (q.table === 'shift_assignments') return scopedAssignments(q, assignments)
@@ -625,9 +654,17 @@ describe('PUT /api/schedule/time-off/[id] — cancelling your own APPROVED leave
     expect(updateSpy).not.toHaveBeenCalled()
   })
 
-  it('a colleague\'s approved leave is unchanged by this rule: a manager there still cancels it directly', async () => {
+  // LEAVEGUARD.1 — this used to pin the hole: a fellow manager cancelled a
+  // manager's approved leave outright. It is now an owner's call.
+  it('a colleague\'s approved leave: a fellow manager is refused (LEAVEGUARD.1), an owner there still cancels it directly', async () => {
     getCurrentUser.mockResolvedValue(at('other-mgr', 'manager'))
-    const { db, updateSpy } = buildDb({ existing: own() })
+    let { db, updateSpy } = buildDb({ existing: own(), requesterRoles: { 'loc-1': 'manager' } })
+    createServerClient.mockReturnValue(db)
+    expect((await PUT(req({ status: 'cancelled' }), PROPS)).status).toBe(403)
+    expect(updateSpy).not.toHaveBeenCalled()
+
+    getCurrentUser.mockResolvedValue(at('own-1', 'owner'))
+    ;({ db, updateSpy } = buildDb({ existing: own(), requesterRoles: { 'loc-1': 'manager' } }))
     createServerClient.mockReturnValue(db)
     expect((await PUT(req({ status: 'cancelled' }), PROPS)).status).toBe(200)
     expect(updateSpy.mock.calls[0][0]).toMatchObject({ status: 'cancelled' })
@@ -640,7 +677,10 @@ describe('PUT /api/schedule/time-off/[id] — cancelling your own APPROVED leave
 // and a later re-approval made it OPEN again: back in the owners' queue, where
 // an owner could cancel reinstated leave nobody had asked about.
 describe('PUT /api/schedule/time-off/[id] — an ask dies with the state it was about (LEAVECANCEL.1)', () => {
-  const colleague = (role = 'manager') => ({
+  // LEAVEGUARD.1 — only a manager-tier person can have an ask on their leave,
+  // so only an OWNER (or a master) may move it out of approved: the colleague
+  // here is an owner. A fellow manager is refused, pinned at the end.
+  const colleague = (role = 'owner') => ({
     id: 'other', role, profileRole: 'staff', full_name: 'Colm Colleague',
     locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': role },
   })
@@ -696,13 +736,15 @@ describe('PUT /api/schedule/time-off/[id] — an ask dies with the state it was 
     expect(updateSpy.mock.calls[0][0]).not.toHaveProperty('cancel_requested_at')
   })
 
-  it('a row with no ask is written exactly as before: no clear, no status guard', async () => {
+  it('a row with no ask is written with no clear, and (LEAVEGUARD.1) still pinned to the status it read', async () => {
     getCurrentUser.mockResolvedValue(colleague())
     const { db, updateSpy } = buildDb({ existing: theirs({ cancel_requested_at: null, cancel_requested_by: null, cancel_request_note: null }) })
     createServerClient.mockReturnValue(db)
     expect((await PUT(req({ status: 'cancelled' }), PROPS)).status).toBe(200)
     expect(updateSpy.mock.calls[0][0]).not.toHaveProperty('cancel_requested_at')
-    expect(queriesOf(db, 'time_off_requests', 'update')[0].calls).toEqual([['eq', 'id', 'a0000000-0000-4000-8000-00000000000e']])
+    expect(queriesOf(db, 'time_off_requests', 'update')[0].calls).toEqual([
+      ['eq', 'id', 'a0000000-0000-4000-8000-00000000000e'], ['eq', 'status', 'approved'],
+    ])
   })
 
   it('leave an owner has ALREADY cancelled cannot then be rejected or reopened from a stale screen: a calm 409, nothing written', async () => {
@@ -727,7 +769,8 @@ describe('PUT /api/schedule/time-off/[id] — an ask dies with the state it was 
     expect(res.status).toBe(409)
     expect((await res.json()).error).toMatch(/changed a moment ago/)
 
-    // No ask on the row this PUT read, so no guard: the CHECK is what refuses.
+    // Defence in depth: should the CHECK ever be what refuses (the status pin
+    // makes a real race a zero-row write), it is still the calm 409.
     built = buildDb({
       existing: theirs({ cancel_requested_at: null, cancel_requested_by: null, cancel_request_note: null }),
       updateError: { code: '23514', message: 'new row for relation "time_off_requests" violates check constraint "time_off_requests_cancel_approved_is_cancelled"' },
@@ -736,6 +779,14 @@ describe('PUT /api/schedule/time-off/[id] — an ask dies with the state it was 
     res = await PUT(req({ status: 'rejected' }), PROPS)
     expect(res.status).toBe(409)
     expect((await res.json()).error).toBe('This leave was already cancelled.')
+  })
+
+  it('LEAVEGUARD.1: a fellow MANAGER cannot cancel it while the ask is open either; the ask stays for an owner', async () => {
+    getCurrentUser.mockResolvedValue(colleague('manager'))
+    const { db, updateSpy } = buildDb({ existing: theirs(), requesterRoles: { 'loc-1': 'manager' } })
+    createServerClient.mockReturnValue(db)
+    expect((await PUT(req({ status: 'cancelled' }), PROPS)).status).toBe(403)
+    expect(updateSpy).not.toHaveBeenCalled()
   })
 
   it('a FAILED read of the request is a 500, not "Request not found" (the error used to be discarded)', async () => {
@@ -755,4 +806,210 @@ describe('PUT /api/schedule/time-off/[id] — an ask dies with the state it was 
     expect(res.status).toBe(400)
     expect((await res.json()).error).toBe('boom')
   })
+})
+
+// LEAVEGUARD.1 — every cell of caller × requester × from-status × to-status.
+//
+// The rule under test (a default the owner may reverse): taking APPROVED leave
+// out of force (to rejected, cancelled or pending) needs, by the requester's
+// tier: manager-tier at a studio the request belongs to (a manager-tier row,
+// or org admin of its organisation) -> an OWNER there who is not them, or a
+// master; a master -> another master. Everything else is what the PUT did
+// before. The expectation is written out from the rules, not from the
+// implementation, so a change to either shows up as a failing cell.
+describe('PUT /api/schedule/time-off/[id] — approved leave of a manager-tier person (LEAVEGUARD.1 matrix)', () => {
+  const ID = 'a0000000-0000-4000-8000-00000000000e'
+  const REQUESTER_ROLES = ['staff', 'head_coach', 'manager', 'owner', 'org_admin', 'master']
+  const CALLERS = ['staff', 'head_coach', 'manager', 'owner', 'cross_org_owner', 'master', 'self']
+  const FROM = ['pending', 'approved']
+  const TO = ['approved', 'rejected', 'cancelled', 'pending']
+  const MANAGER_TIER = new Set(['head_coach', 'manager', 'owner', 'org_admin'])
+  const MANAGER_COPY = "Only an owner can change a manager's approved leave. Ask the person whose leave it is to request the cancellation, or ask an owner."
+  const MASTER_COPY = "Only another master can change a master's approved leave."
+
+  const callerFor = (kind, requesterRole) => {
+    if (kind === 'master') return { id: 'boss', role: 'master', profileRole: 'master', full_name: 'Boss', locations: [], rolesByLocation: {} }
+    if (kind === 'cross_org_owner') return { id: 'c-x', role: 'owner', profileRole: 'staff', full_name: 'Xan', locations: [{ id: 'loc-x' }], rolesByLocation: { 'loc-x': 'owner' } }
+    if (kind === 'self') {
+      if (requesterRole === 'master') return { id: 'req', role: 'master', profileRole: 'master', full_name: 'Ria Requester', locations: [], rolesByLocation: {} }
+      // An org admin is a synthetic OWNER at their organisation's studios (getCurrentUser, SAAS-4).
+      const role = requesterRole === 'org_admin' ? 'owner' : requesterRole
+      return { id: 'req', role, profileRole: 'staff', full_name: 'Ria Requester', locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': role } }
+    }
+    return { id: `c-${kind}`, role: kind, profileRole: 'staff', full_name: 'Cal Caller', locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': kind } }
+  }
+
+  // How the requester is stored: a per-studio row, an org grant, or profiles.role.
+  const requesterFixture = (rr) => {
+    if (rr === 'master') return { requesterLocations: [], requesterProfileRole: 'master' }
+    if (rr === 'org_admin') return { requesterLocations: [], orgAdminOrgs: ['org-1'] }
+    return { requesterLocations: ['loc-1'], requesterRoles: { 'loc-1': rr } }
+  }
+
+  // [status, outcome] for one cell. outcome: 'written' (a status write),
+  // 'asked' (LEAVECANCEL.1's ask, no status write), 'guard' / 'guard-master'
+  // (this rule's 403), or 'refused' (any other refusal, nothing written).
+  function expected(caller, rr, from, to) {
+    if (caller === 'self') {
+      if (to === 'approved' || to === 'rejected') return [403, 'refused']
+      if (rr === 'master') return to === 'cancelled' ? [200, 'written'] : [403, 'refused']
+      if (!MANAGER_TIER.has(rr)) return from === 'pending' && to === 'cancelled' ? [200, 'written'] : [403, 'refused']
+      if (to !== 'cancelled') return [403, 'refused']
+      return from === 'pending' ? [200, 'written'] : [200, 'asked']
+    }
+    if (caller === 'staff' || caller === 'cross_org_owner') return [404, 'refused']
+    if (from === 'approved' && to !== 'approved') {
+      if (rr === 'master' && caller !== 'master') return [403, 'guard-master']
+      if (MANAGER_TIER.has(rr) && caller !== 'owner' && caller !== 'master') return [403, 'guard']
+    }
+    return [200, 'written']
+  }
+
+  const cells = []
+  for (const caller of CALLERS) for (const rr of REQUESTER_ROLES) for (const from of FROM) for (const to of TO) {
+    cells.push({ caller, rr, from, to, exp: expected(caller, rr, from, to) })
+  }
+
+  it.each(cells.map((c) => [`${c.caller} → ${c.rr}'s ${c.from} leave → ${c.to}: ${c.exp[0]} ${c.exp[1]}`, c]))('%s', async (_name, { caller, rr, from, to, exp }) => {
+    getCurrentUser.mockResolvedValue(callerFor(caller, rr))
+    const existing = {
+      id: ID, profile_id: 'req', location_id: 'loc-1', status: from, type: 'unavailable',
+      start_date: '2026-06-01', end_date: '2026-06-02', total_days: 2,
+      cancel_requested_at: null, cancel_requested_by: null, cancel_decided_at: null, cancel_decision: null,
+    }
+    // An owner requester is the SOLE-owner case: the ask goes to a master.
+    const { db, updateSpy } = buildDb({ existing, ...requesterFixture(rr), owners: rr === 'owner' ? ['req'] : ['own-1'], masters: ['boss'] })
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(req({ status: to }), PROPS)
+    const json = await res.json()
+    const [status, outcome] = exp
+    expect(res.status).toBe(status)
+    if (outcome === 'written') {
+      expect(updateSpy).toHaveBeenCalledTimes(1)
+      expect(updateSpy.mock.calls[0][0]).toMatchObject({ status: to })
+      // The embed that carried profiles.role never leaks into the answer.
+      expect(json.data).not.toHaveProperty('requester')
+    } else if (outcome === 'asked') {
+      expect(json.cancellation).toBe('requested')
+      expect(updateSpy.mock.calls[0][0]).not.toHaveProperty('status')
+    } else {
+      expect(updateSpy).not.toHaveBeenCalled()
+    }
+    if (outcome === 'guard') expect(json.error).toBe(MANAGER_COPY)
+    else if (outcome === 'guard-master') expect(json.error).toBe(MASTER_COPY)
+    else if (status === 403) expect(json.error).not.toMatch(/^Only (an owner|another master)/)
+  })
+
+  it('covers every cell: 7 callers × 6 requesters × 2 from × 4 to', () => {
+    expect(cells).toHaveLength(336)
+    // Head coach + manager callers on the three out-of-approved moves for the
+    // four manager-tier requesters; head coach, manager and owner for a master's.
+    expect(cells.filter((c) => c.exp[1] === 'guard')).toHaveLength(2 * 4 * 3)
+    expect(cells.filter((c) => c.exp[1] === 'guard-master')).toHaveLength(3 * 3)
+  })
+
+  it('an unreadable org-grant read fails CLOSED: 500, nothing written', async () => {
+    getCurrentUser.mockResolvedValue(callerFor('manager'))
+    const { db, updateSpy } = buildDb({ existing: { id: ID, profile_id: 'req', location_id: 'loc-1', status: 'approved', type: 'unavailable', start_date: '2026-06-01', end_date: '2026-06-02' }, requesterRoles: { 'loc-1': 'staff' }, orgError: { message: 'boom' } })
+    createServerClient.mockReturnValue(db)
+    expect((await PUT(req({ status: 'cancelled' }), PROPS)).status).toBe(500)
+    expect(updateSpy).not.toHaveBeenCalled()
+  })
+
+  it('reads profiles.role in the FIRST read, as an embed', async () => {
+    getCurrentUser.mockResolvedValue(callerFor('owner'))
+    const { db } = buildDb({ existing: { id: ID, profile_id: 'req', location_id: 'loc-1', status: 'approved', type: 'unavailable', start_date: '2026-06-01', end_date: '2026-06-02' } })
+    createServerClient.mockReturnValue(db)
+    await PUT(req({ status: 'cancelled' }), PROPS)
+    expect(queriesOf(db, 'time_off_requests')[0].columns.replace(/\s/g, '')).toBe('*,requester:profiles!profile_id(role)')
+  })
+
+  const mgrApproved = { id: ID, profile_id: 'req', location_id: 'loc-1', status: 'approved', type: 'unavailable', start_date: '2026-06-01', end_date: '2026-06-02', total_days: 2 }
+  const MANAGER = callerFor('manager')
+
+  it('manager-tier at the requester\'s OTHER studio counts: staff where filed, manager at loc-2', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const { db, updateSpy } = buildDb({ existing: mgrApproved, requesterLocations: ['loc-1', 'loc-2'], requesterRoles: { 'loc-1': 'staff', 'loc-2': 'manager' } })
+    createServerClient.mockReturnValue(db)
+    expect((await PUT(req({ status: 'cancelled' }), PROPS)).status).toBe(403)
+    expect(updateSpy).not.toHaveBeenCalled()
+  })
+
+  it('an owner only at the requester\'s OTHER studio may still cancel (it is a studio the request belongs to)', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'own-2', role: 'owner', profileRole: 'staff', locations: [{ id: 'loc-2' }], rolesByLocation: { 'loc-2': 'owner' } })
+    const { db, updateSpy } = buildDb({ existing: mgrApproved, requesterLocations: ['loc-1', 'loc-2'], requesterRoles: { 'loc-1': 'manager', 'loc-2': 'staff' } })
+    createServerClient.mockReturnValue(db)
+    expect((await PUT(req({ status: 'cancelled' }), PROPS)).status).toBe(200)
+    expect(updateSpy.mock.calls[0][0]).toMatchObject({ status: 'cancelled' })
+  })
+
+  it('an unreadable membership read fails CLOSED: 500, nothing written', async () => {
+    getCurrentUser.mockResolvedValue(callerFor('owner'))
+    const { db, updateSpy } = buildDb({ existing: mgrApproved, membershipError: { message: 'connection reset' } })
+    createServerClient.mockReturnValue(db)
+    expect((await PUT(req({ status: 'cancelled' }), PROPS)).status).toBe(500)
+    expect(updateSpy).not.toHaveBeenCalled()
+  })
+
+  it('reads the requester\'s role in the SAME membership query (one profile_locations read)', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const { db } = buildDb({ existing: mgrApproved, requesterRoles: { 'loc-1': 'manager' } })
+    createServerClient.mockReturnValue(db)
+    await PUT(req({ status: 'cancelled' }), PROPS)
+    const reads = queriesOf(db, 'profile_locations')
+    expect(reads).toHaveLength(1)
+    expect(reads[0].columns.replace(/\s/g, '')).toBe('location_id,role')
+    expect(reads[0].eq).toEqual({ profile_id: 'req' })
+  })
+
+  it('an owner cancelling outright while an ask is open still clears the ask (LEAVECANCEL.1 kept)', async () => {
+    getCurrentUser.mockResolvedValue(callerFor('owner'))
+    const asked = { ...mgrApproved, cancel_requested_at: '2026-05-19T09:00:00.000Z', cancel_requested_by: 'req', cancel_decided_at: null, cancel_decision: null }
+    const { db, updateSpy } = buildDb({ existing: asked, requesterRoles: { 'loc-1': 'manager' } })
+    createServerClient.mockReturnValue(db)
+    expect((await PUT(req({ status: 'cancelled' }), PROPS)).status).toBe(200)
+    expect(updateSpy.mock.calls[0][0]).toMatchObject({ status: 'cancelled', cancel_requested_at: null, cancel_decided_at: null })
+  })
+})
+
+// LEAVEGUARD.1 (review) — the guard judges the status it READ. Unless the write
+// is pinned to that status, a manager's `rejected` on a manager's PENDING leave
+// passes the guard, an owner approves it in between, and the reject lands on
+// APPROVED leave (the allowance trigger refunds it) with no owner involved.
+// Every status write is now `.eq('status', existing.status)`, and zero rows is
+// the existing 409.
+describe('PUT /api/schedule/time-off/[id] — every status write is pinned to the status it read (LEAVEGUARD.1)', () => {
+  const ID = 'a0000000-0000-4000-8000-00000000000e'
+  const MANAGER = { id: 'mgr-2', role: 'manager', profileRole: 'staff', full_name: 'Mo', locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': 'manager' } }
+  const pendingOfManager = { id: ID, profile_id: 'mgr', location_id: 'loc-1', status: 'pending', type: 'unavailable', start_date: '2026-06-01', end_date: '2026-06-02', total_days: 2 }
+  const ZERO_ROWS = { code: 'PGRST116', message: 'JSON object requested, multiple (or no) rows returned' }
+
+  it('the race: the leave was approved between the read and the write, so the reject touches no row and is a 409', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const { db, updateSpy } = buildDb({ existing: pendingOfManager, requesterRoles: { 'loc-1': 'manager' }, updateError: ZERO_ROWS })
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(req({ status: 'rejected' }), PROPS)
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ success: false, error: 'This leave changed a moment ago. Refresh to see where it stands.' })
+    expect(updateSpy).toHaveBeenCalledTimes(1)
+    expect(queriesOf(db, 'time_off_requests', 'update')[0].calls).toContainEqual(['eq', 'status', 'pending'])
+    expect(notifyUsersOnce).not.toHaveBeenCalled()
+  })
+
+  for (const [to, from] of [['rejected', 'pending'], ['cancelled', 'pending'], ['approved', 'pending'], ['cancelled', 'approved'], ['approved', 'approved']]) {
+    it(`no race (${from} -> ${to}): pinned to ${from}, and the answer is the same body as before`, async () => {
+      const caller = from === 'approved' ? { ...MANAGER, id: 'own-1', role: 'owner', rolesByLocation: { 'loc-1': 'owner' } } : MANAGER
+      getCurrentUser.mockResolvedValue(caller)
+      const existing = { ...pendingOfManager, status: from }
+      const { db } = buildDb({ existing, requesterRoles: { 'loc-1': 'manager' } })
+      createServerClient.mockReturnValue(db)
+      const res = await PUT(req({ status: to }), PROPS)
+      expect(res.status).toBe(200)
+      const json = await res.json()
+      const write = queriesOf(db, 'time_off_requests', 'update')[0]
+      expect(write.calls).toEqual([['eq', 'id', ID], ['eq', 'status', from]])
+      // The old body: { success, data } (+ clashes on an approval), data being the written row.
+      expect(json).toEqual({ success: true, data: { ...existing, ...write.payload }, ...(to === 'approved' ? { clashes: [] } : {}) })
+    })
+  }
 })
