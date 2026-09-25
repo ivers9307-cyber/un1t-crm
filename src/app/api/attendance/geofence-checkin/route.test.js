@@ -368,6 +368,7 @@ describe('POST /api/attendance/geofence-checkin', () => {
     getCurrentUser.mockResolvedValue(staff)
     const db = mockDb({ shiftRows: [shiftRow()], stampRowsTouched: 0, rereadRow: null })
     expect((await (await POST(postReq(validBody()))).json()).data.match_outcome).toBe('no_shift_in_window')
+    expect(db.updates).toContainEqual({ table: 'staff_attendance_events', patch: { match_outcome: 'no_shift_in_window', matched_assignment_id: null } })
   })
 
   it('a zero-row stamp whose relabel ALSO errors still returns already_stamped and logs a warning', async () => {
