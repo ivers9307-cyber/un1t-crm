@@ -288,6 +288,11 @@ const config = [
       // resolves with { data, error } instead of throwing. Born clean, armed
       // on arrival.
       'src/lib/waitlist-entry.js',
+      // AVAIL.1 — coach availability: the save, the studio read and the
+      // notice stamps. Born clean, armed on arrival.
+      'src/lib/availability-server.js',
+      'src/lib/availability-notify.js',
+      'src/app/api/schedule/availability/**',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },
