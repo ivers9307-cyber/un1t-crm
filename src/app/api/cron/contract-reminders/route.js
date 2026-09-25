@@ -19,6 +19,8 @@
 // is still applied per-row as the authoritative client-side guard.
 //
 // RUNWAY.1 — also runs the daily roster-runway push (second arm, top of GET).
+// HEARTBEAT.1 — that arm stamps its own heartbeat row, 'roster-runway' (mig
+// 633), only when it ran clean; 'contract-reminders' is unchanged.
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
@@ -27,6 +29,7 @@ import { sendContractReminderEmail } from '@/lib/contracts-email'
 import { sendPush } from '@/lib/push'
 import { logWarn, logError } from '@/lib/log'
 import { runRosterRunwayAlerts } from '@/lib/roster-runway-notify'
+import { ROSTER_RUNWAY_HEARTBEAT, runwayArmHealthy } from '@/lib/cron-arm-health'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -65,6 +68,19 @@ export async function GET(request) {
     runwayArmFailed = 1
     logError('cron-contract-reminders', 'roster runway arm threw', { err })
     runway = { error: err?.message || 'runway arm failed' }
+  }
+
+  // HEARTBEAT.1 — the runway arm's OWN heartbeat row ('roster-runway', mig
+  // 633). runway_arm_failed rides in the contract-reminders row's last_outcome,
+  // which the health-check never reads; this row goes STALE instead. Stamped
+  // HERE, before the contract half, so a contract crash (which answers nothing
+  // and stamps nothing, as always) cannot cost a clean runway run its stamp;
+  // its own catch, so the stamp can never cost the contract half anything.
+  // Only when the arm returned an outcome and did not throw
+  // (src/lib/cron-arm-health.js): a day with nothing to announce stamps.
+  if (runwayArmFailed === 0 && runwayArmHealthy(runway)) {
+    await stampHeartbeat(ROSTER_RUNWAY_HEARTBEAT, runway).catch((err) =>
+      logWarn('cron-contract-reminders', 'roster-runway heartbeat failed', { err }))
   }
 
   // Candidate contracts — status in ('issued','viewed') and not yet at the

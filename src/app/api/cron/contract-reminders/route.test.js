@@ -25,17 +25,20 @@ vi.mock('@/lib/roster-runway-notify', () => ({ runRosterRunwayAlerts: vi.fn() })
 const { GET } = await import('./route.js')
 const { runRosterRunwayAlerts } = await import('@/lib/roster-runway-notify')
 const { stampHeartbeat } = await import('@/lib/cron-heartbeat')
-const { logError } = await import('@/lib/log')
+const { logError, logWarn } = await import('@/lib/log')
 const { reminderDue } = await import('@/lib/contracts')
 
 const req = (auth = 'Bearer test-secret') => ({
   headers: { get: (k) => (k.toLowerCase() === 'authorization' ? auth : null) },
 })
 const OUTCOME = { locations: 3, alerts: 1, quiet_hours: 0, sent: 2, emailed: 0, deduped: 0, failed: 0 }
+// HEARTBEAT.1 — the heartbeat rows this run stamped, in call order.
+const stampedNames = () => stampHeartbeat.mock.calls.map((c) => c[0])
 
 beforeEach(() => {
   process.env.CRON_SECRET = 'test-secret'
   vi.clearAllMocks()
+  stampHeartbeat.mockImplementation(async () => {})
   contractRows = []
   reminderDue.mockReset().mockReturnValue(false)
   runRosterRunwayAlerts.mockReset().mockResolvedValue(OUTCOME)
@@ -85,7 +88,80 @@ describe('GET /api/cron/contract-reminders — roster runway arm', () => {
     reminderDue.mockImplementation(() => { throw new Error('contracts blew up') })
     await expect(GET(req())).rejects.toThrow('contracts blew up')
     expect(runRosterRunwayAlerts).toHaveBeenCalledTimes(1)
-    // Unchanged from before RUNWAY.1: a crashed contract run does not stamp.
-    expect(stampHeartbeat).not.toHaveBeenCalled()
+    // Unchanged from before RUNWAY.1: a crashed contract run does not stamp
+    // 'contract-reminders'. HEARTBEAT.1: the runway arm had already run clean
+    // and stamped its own row, so a contract crash never reads as a runway one.
+    expect(stampedNames()).toEqual(['roster-runway'])
+  })
+})
+
+// HEARTBEAT.1 — the runway arm has a heartbeat row of its own ('roster-runway',
+// mig 633). 'contract-reminders' is stamped whatever the arm did and the
+// health-check reads only is_stale, so runway_arm_failed: 1 every day paged
+// nobody. The row is stamped right after the arm (before the contract half can
+// crash) and ONLY when it returned an outcome and did not throw.
+describe('GET /api/cron/contract-reminders — roster-runway heartbeat', () => {
+  it('a clean arm: roster-runway is stamped with the arm\'s outcome BEFORE the contract half runs, then contract-reminders as before', async () => {
+    contractRows = [{ id: 'c1', status: 'issued', reminder_count: 0 }]
+    let stampedBeforeContracts = null
+    reminderDue.mockImplementation(() => { stampedBeforeContracts ??= stampedNames().slice(); return false })
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    expect(stampedBeforeContracts).toEqual(['roster-runway'])
+    expect(stampedNames()).toEqual(['roster-runway', 'contract-reminders'])
+    expect(stampHeartbeat).toHaveBeenCalledWith('roster-runway', OUTCOME)
+  })
+
+  it('a day with nothing to announce stamps: a quiet day is healthy', async () => {
+    const idle = { locations: 3, alerts: 0, quiet_hours: 0, sent: 0, emailed: 0, deduped: 0, failed: 0 }
+    runRosterRunwayAlerts.mockResolvedValue(idle)
+    await GET(req())
+    expect(stampHeartbeat).toHaveBeenCalledWith('roster-runway', idle)
+  })
+
+  it('alerts held back by quiet hours still stamp (the arm ran; the next in-band run sends)', async () => {
+    const held = { ...OUTCOME, quiet_hours: 1, sent: 0 }
+    runRosterRunwayAlerts.mockResolvedValue(held)
+    await GET(req())
+    expect(stampHeartbeat).toHaveBeenCalledWith('roster-runway', held)
+  })
+
+  it('a delivery failure inside a completed run still stamps (claim released for tomorrow; failed rides in last_outcome)', async () => {
+    runRosterRunwayAlerts.mockResolvedValue({ ...OUTCOME, failed: 1 })
+    await GET(req())
+    expect(stampHeartbeat).toHaveBeenCalledWith('roster-runway', expect.objectContaining({ failed: 1 }))
+  })
+
+  it('the arm THROWS: roster-runway is NOT stamped; contract-reminders is, exactly as before', async () => {
+    runRosterRunwayAlerts.mockRejectedValue(new Error('runway read failed: blocks down'))
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    expect(stampedNames()).toEqual(['contract-reminders'])
+    expect(stampHeartbeat).toHaveBeenCalledWith('contract-reminders', {
+      checked: 0, sent: 0, emailFailed: 0, rowErrors: 0, runway: { error: 'runway read failed: blocks down' }, runway_arm_failed: 1,
+    })
+  })
+
+  it('an arm that resolves with nothing has not shown it ran: not stamped', async () => {
+    runRosterRunwayAlerts.mockResolvedValue(undefined)
+    await GET(req())
+    expect(stampedNames()).toEqual(['contract-reminders'])
+  })
+
+  it('an arm that resolves with an { error } outcome is not stamped', async () => {
+    runRosterRunwayAlerts.mockResolvedValue({ error: 'something' })
+    await GET(req())
+    expect(stampedNames()).toEqual(['contract-reminders'])
+  })
+
+  it('a rejecting roster-runway stamp cannot cost the contract half its run, its stamp or its 200', async () => {
+    contractRows = [{ id: 'c1', status: 'issued', reminder_count: 0 }]
+    stampHeartbeat.mockImplementation((name) =>
+      name === 'roster-runway' ? Promise.reject(new Error('stamp down')) : Promise.resolve())
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    expect(reminderDue).toHaveBeenCalledTimes(1)
+    expect(stampedNames()).toEqual(['roster-runway', 'contract-reminders'])
+    expect(logWarn).toHaveBeenCalledWith('cron-contract-reminders', 'roster-runway heartbeat failed', expect.anything())
   })
 })
