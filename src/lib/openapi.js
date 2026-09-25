@@ -7310,6 +7310,88 @@ registry.registerPath({
 })
 
 // ============================================================================
+// ICSFEED.1 — per-person calendar subscription (mig 632)
+// ============================================================================
+// The feed is anonymous by design (calendar apps hold no session); the rcf_
+// token in the path is the credential. Management is session-only and acts on
+// the caller's own link; no id parameter exists.
+
+const CalendarFeedStatus = z.object({
+  active: z.boolean(),
+  created_at: z.string().nullable(),
+  rotated_at: z.string().nullable(),
+  last_fetched_at: z.string().nullable(),
+}).openapi('CalendarFeedStatus')
+
+const CalendarFeedLinks = z.object({
+  url: z.string().openapi({ description: 'https feed URL. Shown ONCE: only its sha256 is stored (mig 632).' }),
+  webcal_url: z.string().openapi({ description: 'webcal:// form: Apple Calendar and Outlook open a subscribe dialog.' }),
+  google_url: z.string().openapi({ description: "Google Calendar's add-by-URL page for this feed." }),
+  replaced: z.boolean(),
+}).openapi('CalendarFeedLinks')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/calendar-feed/{file}',
+  tags: ['Public'],
+  summary: "A person's own published shifts as an iCalendar feed",
+  description:
+    'Anonymous; `file` is `<rcf_ token>.ics` (the suffix is optional). RFC 5545, times in UTC. Contains the token holder\'s OWN published, not-cancelled shifts at every studio they are rostered at, across organisations if they work in more than one (their own diary, deliberately not narrowed to one organisation), Dublin today −14 to +56 days: template name · studio, the studio address, stable UIDs per assignment, SEQUENCE raised by any edit. No colleague, note or pay. ' +
+    'One 404 for every refusal (not a token, unknown, replaced, turned off, or the person is deactivated or deleted). 429 per token (never per IP). 503 on a read failure, never an empty 200, because a subscribed calendar replaces its whole copy. Public on the CRM hosts only.',
+  request: { params: z.object({ file: z.string().openapi({ description: '`<token>.ics`' }) }) },
+  responses: {
+    200: { description: 'iCalendar body', content: { 'text/calendar': { schema: z.string() } } },
+    404: { description: 'Not found (every refusal)' },
+    429: { description: 'Rate limited (per token)' },
+    503: { description: 'Temporarily unavailable; Retry-After: 900' },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/me/calendar-feed',
+  tags: ['Me'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "The caller's calendar link status",
+  description: 'Never the URL: only its hash is stored, so it cannot be shown again. `last_fetched_at` is stamped at most every 15 minutes.',
+  responses: {
+    200: { description: 'Status', content: { 'application/json': { schema: SuccessResponse(CalendarFeedStatus) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/me/calendar-feed',
+  tags: ['Me'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Make (or replace) the caller\'s calendar link',
+  description: 'Returns the links ONCE (Cache-Control: no-store). An existing link without `replace: true` is 409 `feed_exists`; `replace: true` swaps it in one statement (the old link stops at once). Refused (403) while a master is viewing as someone.',
+  request: { body: { content: { 'application/json': { schema: z.object({ replace: z.boolean().optional() }).strict().openapi('CalendarFeedIssueBody') } } } },
+  responses: {
+    200: { description: 'The links, shown once', content: { 'application/json': { schema: SuccessResponse(CalendarFeedLinks) } } },
+    400: { description: 'Validation failed', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Viewing as someone else', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'A link already exists (feed_exists)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/me/calendar-feed',
+  tags: ['Me'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Turn the caller\'s calendar link off',
+  description: 'Idempotent: `revoked` says whether there was one. Refused (403) while a master is viewing as someone.',
+  responses: {
+    200: { description: '{ revoked }', content: { 'application/json': { schema: SuccessResponse(z.object({ revoked: z.boolean() })) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Viewing as someone else', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// ============================================================================
 // Customer (champ-app member) self-service
 // ============================================================================
 

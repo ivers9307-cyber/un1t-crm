@@ -4,6 +4,7 @@
 //   - Default landing page (permissions.landing_preference)
 //   - Email signature (profiles.email_signature, EMAIL-TICKET.5) —
 //     only for people who work an email queue somewhere
+//   - Calendar subscription link (ICSFEED.1, /api/me/calendar-feed)
 //
 // Linked to from the user block at the bottom of the sidebar.
 // Visible to every authenticated user — no permission gate beyond
@@ -21,6 +22,7 @@ import AccountForm from '@/components/AccountForm'
 import EmailSignatureForm from '@/components/EmailSignatureForm'
 import PasswordChangeForm from '@/components/PasswordChangeForm'
 import StudioPinSettings from '@/components/StudioPinSettings'
+import CalendarFeedCard from '@/components/CalendarFeedCard'
 
 export const dynamic = 'force-dynamic'
 
@@ -99,6 +101,10 @@ export default async function AccountPage() {
           pinSetAt={pinInfo?.pin_set_at || null}
           homeScreenPath={pinInfo?.home_screen_path || '/dashboard'}
         />
+      </div>
+
+      <div className="mt-8">
+        <CalendarFeedCard />
       </div>
 
       <div className="mt-8 pt-6 border-t border-un1t-border">
