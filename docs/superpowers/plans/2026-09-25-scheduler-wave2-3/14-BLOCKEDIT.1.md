@@ -4,9 +4,9 @@
 
 **Goal:** A manager opens one shift on the web calendar and changes its start and end time, its minimum and maximum coaches, and a **briefing**: a short note written for the coaches on that shift. The change is saved immediately. On a published roster it is written to `roster_change_log` and every coach whose own hours moved is told, within quiet hours. Coaches read the briefing on the web (the shift dialog, a marker on the calendar card, and the Today roster) and on the phone (the Me list and the Manage-mode card). Coaches never edit it.
 
-**Why:** Today `/api/schedule/blocks/[id]` is DELETE only. The only way to move one shift is to edit its template, which moves every future shift, or to override each coach one at a time, which leaves the block itself at the old time. There is also nowhere to tell the coaches on one shift something about it: `shift_blocks.notes` and `shift_assignments.notes` are a manager's working notes. The calendar feed strips them from coaches (`slimBlockForCoach`, `src/app/api/schedule/blocks/route.js:121`), and so does the `/shifts` feed for colleagues' rows (`slimShiftRowForCoach`, `src/lib/roster-read.js:163`).
+**Why:** Today `/api/schedule/blocks/[id]` is DELETE only. The only way to move one shift is to edit its template, which moves every future shift, or to override each coach one at a time, which leaves the block itself at the old time. There is also nowhere to tell the coaches on one shift something about it: `shift_blocks.notes` and `shift_assignments.notes` are a manager's working notes. The calendar feed strips them from coaches (`slimBlockForCoach`, `src/app/api/schedule/blocks/route.js:129`), and so does the `/shifts` feed for colleagues' rows (`slimShiftRowForCoach`, `src/lib/roster-read.js:163`).
 
-**Depends on 13 SHIFTTYPE.1** (mig 628, not merged when this plan was written). This plan is written against **main + SHIFTTYPE.1**, read from the local worktree `~/code/un1t-crm-shifttype1` at `ff65d6e3`, which already contains `origin/main` `6eb3ef65` (#1756). **Line numbers cited below are from that tree. After rebasing, find each anchor by the quoted text, not the number.** From SHIFTTYPE.1 this PR uses:
+**Depends on 13 SHIFTTYPE.1, now MERGED** (#1759, `fa7fedcb`, mig 628; DATECHECK.1 #1757 and WORKTIME.1 #1758 are on main too). Written against SHIFTTYPE's branch, then **every cited path and line re-verified against `origin/main` `fa7fedcb`**. If main moves before the build, find each anchor by the quoted text, not the number. From SHIFTTYPE.1 this PR uses:
 - `adminMinimumRefusal(kind, minCoaches)` in `src/lib/shift-template-kind.js`. It returns `null`, or `{ status: 400, body: { success: false, error: 'admin_has_no_minimum', message } }` when kind is `admin` and the minimum SENT is anything but `undefined`/`null`/`0`.
 - `shiftKindOf(row)` / `isAdminShift(row)` in `shared/shift-kind.js`. These read `row.kind ?? row.shift_templates.kind`, and anything unreadable counts as `class`.
 - The `kind` column exists on `shift_templates` only (mig 628, D1). A block reads it through its `shift_templates` embed, so this PR embeds `shift_templates ( name, kind )`.
@@ -19,11 +19,11 @@
 3. **Then merge.** The code names `shift_blocks.briefing` in the calendar feed, the `/shifts` feed, the Today roster (`shared/dashboard-data.js`, which the phone also runs directly against Supabase) and the editor. Without the column every one of those selects returns 400 (the ENROLFIX.1 class, CLAUDE.md). A Vercel preview of this branch runs against prod, so the preview is broken until 629 is applied.
 4. A phone that has not taken the OTA never asks for `briefing`, so it behaves as today.
 
-**Worktree:** a fresh worktree off `origin/main` **after #13 merges**, branch `blockedit-1`. Tests: `npx vitest run <file>`. Do NOT run the whole suite or `npm run build` until the PR gate (8GB machine).
+**Worktree:** a fresh worktree off `origin/main` (#13 is already there), branch `blockedit-1`. Confirm mig 628 is applied (`list_migrations`) before starting. Tests: `npx vitest run <file>`. Do NOT run the whole suite or `npm run build` until the PR gate (8GB machine).
 
 **Rules that bite in this PR (read `CLAUDE.md` Invariants first):**
 - **An `/api` route gets NO RLS.** The new PUT reads the block by id, then `assertLocationAccessOr404` (404 for a block outside the caller's studios), then `hasRoleAtLocation(user, block.location_id, MANAGER_ROLES)` (403). This is the DELETE handler's gate in the same file (`blocks/[id]/route.js:49-75`). The role that counts is the role AT the block's studio (SCHEDROLES.1), never `user.role`.
-- **`MANAGER_ROLES` is `['master','owner','manager','head_coach']`** (`src/lib/schemas.js:183`). "Manager-level" means that set, as it does for every other schedule write.
+- **`MANAGER_ROLES` is `['master','owner','manager','head_coach']`** (`src/lib/schemas.js:193`). "Manager-level" means that set, as it does for every other schedule write.
 - **A column named in a `.select()` is a claim about the schema.** Task 1 lands mig 629 first, so `check:select-columns` can resolve `briefing` in every later task.
 - **A bare supabase write resolves, it does not throw.** Every write here destructures `error`, and the block UPDATE judges the rows it touched (`.select('id')` → zero rows = the block changed underneath us). Both new files are armed in `eslint.guardrails.config.mjs` (Task 7).
 - **Removing a silent failure must never create a louder one.** A failed change-log row or a failed notice must never fail a save that already happened. They are logged, and the save still answers `success: true`.
@@ -106,7 +106,7 @@
 | `src/app/api/cron/send-push-reminders/route.test.js` | Modify: mock + describe | |
 | `src/lib/roster-read.js` | Modify: `API_SHIFT_SELECT` (line 103) and `toApiShiftRow` (after line 128) carry `briefing` | |
 | `src/lib/roster-read.test.js` | Modify | |
-| `src/app/api/schedule/blocks/route.js` | Modify: `slimBlockForCoach` keeps `briefing` (after line 131) | |
+| `src/app/api/schedule/blocks/route.js` | Modify: `slimBlockForCoach` keeps `briefing` (after line 139) | |
 | `src/app/api/schedule/blocks/route.test.js` | Modify | |
 | `shared/dashboard-data.js` | Modify: `fetchDashboardShifts` select (line 103) + row (after line 122) | **yes** |
 | `shared/dashboard-data.test.js` | Modify | yes (no-op over-trigger) |
@@ -122,7 +122,7 @@
 | `src/components/dashboard/MonthRoster.briefing.test.jsx` | Create | |
 | `mobile/app/(staff)/(tabs)/schedule.jsx` | Modify: import (after line 44), `ShiftRow` (after line 309) | **yes** |
 | `mobile/components/schedule/BlockCard.jsx` | Modify: briefing under the time (after line 33) | **yes** |
-| `src/lib/openapi.js` | Modify: `registerPath` PUT after the DELETE block (ends line 4391) | |
+| `src/lib/openapi.js` | Modify: `registerPath` PUT after the DELETE block (ends line 4425) | |
 | `src/lib/openapi.test.js` | Modify | |
 | `docs/roster-v2.md` | Modify: a section after "Shift kinds" (line 195) | |
 | `docs/CHANGELOG.md` | One new row after `gh pr create` | |
@@ -2528,7 +2528,7 @@ and in `toApiShiftRow`, after `notes: a.notes ?? b.notes ?? null,` (line 128):
 
 Add one line to the `slimShiftRowForCoach` doc comment (line 150): `The briefing (BLOCKEDIT.1) is a coach fact and passes on every row.`
 
-(b) `src/app/api/schedule/blocks/route.js`, `slimBlockForCoach`, after `rosters: block.rosters,` (line 131):
+(b) `src/app/api/schedule/blocks/route.js`, `slimBlockForCoach`, after `rosters: block.rosters,` (line 139):
 
 ```js
     // BLOCKEDIT.1 (mig 629) — the one block text a coach DOES read: written
@@ -2619,13 +2619,13 @@ npx vitest run src/lib/roster-card-model.test.js src/components/schedule/ShiftCa
 
 - [ ] **Step 3: Implement**
 
-(a) `src/lib/roster-card-model.js`: add after the `shift-kind` import (line 21):
+(a) `src/lib/roster-card-model.js`: add after the `shift-kind` import (line 22):
 
 ```js
 import { briefingOf } from '../../shared/shift-briefing'
 ```
 
-In `shiftCardModel`, after `const kindLabel = …` (the SHIFTTYPE lines 54-55):
+In `shiftCardModel`, after `const kindLabel = …` (line 56):
 
 ```js
   // BLOCKEDIT.1 — whether the shift carries a coach briefing. The TEXT stays
@@ -2987,7 +2987,7 @@ export default function BlockEditForm({ block, onSave, onDone }) {
 
 (b) `src/components/ScheduleCalendar.jsx`:
 
-- Import, after `import ShiftCard from './schedule/ShiftCard'` (line 81):
+- Import, after `import ShiftCard from './schedule/ShiftCard'` (line 83):
 
 ```js
 import BlockEditForm from './schedule/BlockEditForm'
@@ -2995,7 +2995,7 @@ import { blockEditNoticeText } from '@/lib/block-edit'
 import { briefingOf } from '@shared/shift-briefing'
 ```
 
-- After `handlePartialSave` (ends line 662):
+- After `handlePartialSave` (starts line 636, ends line 666):
 
 ```js
   // BLOCKEDIT.1 — one shift's times, min/max and briefing. Returns
@@ -3025,9 +3025,9 @@ import { briefingOf } from '@shared/shift-briefing'
   }
 ```
 
-- The `<BlockDetailModal … />` render (line 1436): add the prop `onEditBlock={handleBlockEdit}`.
+- The `<BlockDetailModal … />` render (line 1438): add the prop `onEditBlock={handleBlockEdit}`.
 
-- `BlockDetailModal` (line 2269): add `onEditBlock` to the destructured props. After the `editingRowIds` state (line 2287) add:
+- `BlockDetailModal` (line 2409): add `onEditBlock` to the destructured props. After `const anyRowEditing = editingRowIds.size > 0` (line 2428) add:
 
 ```js
   // BLOCKEDIT.1 — the shift editor is a half-filled form too.
@@ -3198,13 +3198,13 @@ This uses a ternary, never `&&`: a non-null empty string rendered bare outside `
 
 - [ ] **Step 2: `mobile/components/schedule/BlockCard.jsx`** (Manage mode, manager)
 
-Import after line 7:
+Import after line 7 (the `schedule-manage` import, which now also brings `emptyBlockText`):
 
 ```js
 import { briefingOf } from 'shared/shift-briefing'
 ```
 
-In the component, after `const fill = …` (line 19): `const briefing = briefingOf(block)`. After the time row's closing `</View>` (line 33):
+In the component, after `const fill = …` (line 19): `const briefing = briefingOf(block)`. After the time row's closing `</View>` (line 33, directly before `{coaches.length === 0 ? (`):
 
 ```jsx
       {/* BLOCKEDIT.1 — the shift's briefing, as its coaches read it. Edited on the web. */}
@@ -3254,7 +3254,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
   })
 ```
 
-- [ ] **Step 2: Implement.** In `src/lib/openapi.js`, after the DELETE `registerPath` for `/api/schedule/blocks/{id}` (ends line 4391):
+- [ ] **Step 2: Implement.** In `src/lib/openapi.js`, after the DELETE `registerPath` for `/api/schedule/blocks/{id}` (starts line 4411, ends line 4425):
 
 ```js
 registry.registerPath({
