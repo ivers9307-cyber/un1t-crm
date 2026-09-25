@@ -262,6 +262,21 @@ describe('shapeRosterChange — details whitelist', () => {
     expect(shapeRosterChange(raw(1, { details: { reason: { note: 'x' } } })).details).toEqual({})
   })
 
+  it('REPLACE.1a — a replace undone before anyone was told carries its reason out, beside its via', () => {
+    expect(shapeRosterChange(raw(1, { details: { via: 'replace', reason: 'replace_undone' } })).details)
+      .toEqual({ via: 'replace', reason: 'replace_undone' })
+  })
+
+  it('REPLACE.1a review 3 — and so does a replace stamped because its shift had started', () => {
+    expect(shapeRosterChange(raw(1, { details: { via: 'replace', reason: 'replace_shift_started' } })).details)
+      .toEqual({ via: 'replace', reason: 'replace_shift_started' })
+  })
+
+  it('REPLACE.1a review 4 — and a replace stamped because its shift was deleted', () => {
+    expect(shapeRosterChange(raw(1, { details: { via: 'replace', reason: 'replace_shift_deleted' } })).details)
+      .toEqual({ via: 'replace', reason: 'replace_shift_deleted' })
+  })
+
   it('roster_status passes by known value, and keeps its KEY when unreadable (a draft, to the reader)', () => {
     expect(shapeRosterChange(raw(1, { details: { via: 'swap_drop', roster_status: 'draft' } })).details).toEqual({ via: 'swap_drop', roster_status: 'draft' })
     expect(shapeRosterChange(raw(1, { details: { via: 'swap_drop', roster_status: null } })).details).toEqual({ via: 'swap_drop', roster_status: null })

@@ -338,6 +338,13 @@ describe('getOpenApiSpec', () => {
     expect(path.delete.description).toMatch(/swap/i)
   })
 
+  it('REPLACE.1a — documents POST /api/schedule/assignments/{id}/replace', () => {
+    const path = spec.paths['/api/schedule/assignments/{id}/replace']
+    expect(path?.post?.responses).toHaveProperty('409')
+    expect(path.post.description).toMatch(/swap_conflicts/)
+    expect(path.post.description).toMatch(/manager/i)
+  })
+
   // DATECHECK.1 — every schedule read that now refuses an impossible date
   // says so in its 400.
   it('documents the schedule date refusals on the list reads', () => {
@@ -364,6 +371,21 @@ describe('getOpenApiSpec', () => {
     expect(spec.components.schemas).toHaveProperty('TemplateCloneRequest')
     expect(spec.components.schemas.TemplateCloneRequest.properties).toHaveProperty('copy_weekdays')
     expect(spec.components.schemas).toHaveProperty('TemplateCloneResponse')
+  })
+
+  // GRID.1
+  it('documents the coach grid read as manager-only, hours only, one organisation', () => {
+    const op = spec.paths['/api/schedule/grid']?.get
+    expect(op).toBeDefined()
+    expect(op.security).toContainEqual({ CookieAuth: [] })
+    expect(op.description).toMatch(/manager-only/i)
+    expect(op.description).toMatch(/no rate/i)
+    expect(op.description).toMatch(/same organisation/i)
+    // GRID.1 review 1 — who sees contracted hours.
+    expect(op.description).toMatch(/contract_visible is true for owner, manager and master/)
+    expect(op.description).toMatch(/head coach it is false/)
+    expect(Object.keys(op.responses)).toEqual(expect.arrayContaining(['200', '400', '403', '500']))
+    expect(op.responses['400'].description).toMatch(/real calendar date/)
   })
 
   // CANDIDATES.1 — the ranked picker list. Its two audiences and its

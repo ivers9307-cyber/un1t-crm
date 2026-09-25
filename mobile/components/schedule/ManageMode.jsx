@@ -12,12 +12,16 @@ import { View, Text, ActivityIndicator, Alert, Pressable } from 'react-native'
 import { useFocusEffect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import {
-  getScheduleBlocks, getLocationStaff, assignCoachToBlock, removeAssignment, getBlockCandidates,
+  getScheduleBlocks, getLocationStaff, assignCoachToBlock, removeAssignment, replaceAssignment, getBlockCandidates,
 } from '../../lib/schedule-api'
 // CANDIDATES.1 — the picker's ranked list: request lifecycle (pure, tested).
 import { NO_CANDIDATES, candidatesStarted, candidatesSettled, candidatesFor } from '../../lib/candidates-view'
 import { effShiftStart } from '../../lib/schedule-team'
-import { adjustTargetFor, rosterKey, rosterLoadOutcome, staffLoadOutcome, isCurrentLoad } from '../../lib/schedule-manage'
+import {
+  adjustTargetFor, rosterKey, rosterLoadOutcome, staffLoadOutcome, isCurrentLoad,
+  coachPressActions, replacePickerTitle, replaceResultAlert,
+} from '../../lib/schedule-manage'
+import { dublinTodayIso } from '../../lib/dates'
 import BlockCard from './BlockCard'
 import CoachPickerSheet from './CoachPickerSheet'
 
@@ -35,6 +39,7 @@ export default function ManageMode({ activeLocation, weekStart, weekEnd, selecte
   const [staffLoading, setStaffLoading] = useState(false)
   const [staffError, setStaffError] = useState(null)
   const [pickerBlock, setPickerBlock] = useState(null)
+  const [replaceTarget, setReplaceTarget] = useState(null) // REPLACE.1a — { block, assignment }
   // CANDIDATES.1 — the ranked list for the block the picker is open on. One
   // ask per open; only the newest ask for the open block lands.
   const [candidates, setCandidates] = useState(NO_CANDIDATES)
@@ -156,6 +161,7 @@ export default function ManageMode({ activeLocation, weekStart, weekEnd, selecte
     staffGeneration.current += 1
     staffRef.current = null
     setStaff(null); setStaffError(null); setStaffLoading(false); setPickerBlock(null)
+    setReplaceTarget(null) // REPLACE.1a — a studio switch closes this picker too
   }, [locationId])
 
   // Refetch only when the pool was already loaded — a manager who never opened
@@ -211,15 +217,46 @@ export default function ManageMode({ activeLocation, weekStart, weekEnd, selecte
   }
 
   function onCoachPress(block, assignment) {
+    // REPLACE.1a — which actions, and in what order: coachPressActions.
+    const buttons = {
+      adjust: { text: 'Adjust times', onPress: () => onAdjust(adjustTargetFor(block, assignment)) },
+      replace: { text: 'Replace coach', onPress: () => openReplace(block, assignment) },
+      remove: { text: 'Remove from shift', style: 'destructive', onPress: () => confirmRemove(block, assignment) },
+    }
     Alert.alert(
       assignment.profiles?.full_name || 'Coach',
       `${block.shift_templates?.name || 'Shift'} · ${block.block_date}`,
-      [
-        { text: 'Adjust times', onPress: () => onAdjust(adjustTargetFor(block, assignment)) },
-        { text: 'Remove from shift', style: 'destructive', onPress: () => confirmRemove(block, assignment) },
-        { text: 'Cancel', style: 'cancel' },
-      ],
+      [...coachPressActions(block, dublinTodayIso()).map((k) => buttons[k]), { text: 'Cancel', style: 'cancel' }],
     )
+  }
+
+  // REPLACE.1a — the Add-coach picker, titled for the coach going off, on
+  // CANDIDATES.1's ranked list for this block (which leaves out everyone live
+  // on it, the outgoing coach included; the A-Z staff list is the fallback,
+  // as for Add coach). The two sheets share the candidates state: only one is
+  // ever open, and candidatesFor hands a sheet only its own block's answer.
+  // The pick IS the confirmation (as for Add coach); an Alert is shown only
+  // after the network answer.
+  async function openReplace(block, assignment) {
+    setReplaceTarget({ block, assignment })
+    loadCandidates(block) // not awaited: the staff list below is the fallback
+    if (staff === null && !staffLoading) await loadStaff()
+  }
+
+  async function runReplace(target, coach, confirmConflicts = false) {
+    setBusyId(target.block.id)
+    const res = await replaceAssignment(target.assignment.id, { profileId: coach.id, confirmConflicts, locationId })
+    setBusyId(null)
+    const out = replaceResultAlert(res, { fromName: target.assignment.profiles?.full_name, toName: coach.full_name })
+    if (out.kind === 'confirm') {
+      Alert.alert(out.title, out.message, [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Replace anyway', onPress: () => runReplace(target, coach, true) },
+      ])
+      return
+    }
+    Alert.alert(out.title, out.message)
+    if (out.kind === 'done') { load(); refreshStaffIfLoaded() }
   }
   function confirmRemove(block, assignment) {
     Alert.alert('Remove from shift?', `Remove ${assignment.profiles?.full_name || 'this coach'} from ${block.shift_templates?.name || 'this shift'}?`, [
@@ -265,6 +302,15 @@ export default function ManageMode({ activeLocation, weekStart, weekEnd, selecte
         staff={staff} loading={staffLoading} error={staff === null ? staffError : null} onRetry={loadStaff}
         {...candidatesFor(candidates, pickerBlock?.id)}
         onPick={pickCoach} onClose={() => setPickerBlock(null)} />
+
+      {/* REPLACE.1a — the same sheet, one pick, titled for the coach going off. */}
+      <CoachPickerSheet visible={!!replaceTarget} block={replaceTarget?.block ?? null} locationId={locationId}
+        staff={staff} loading={staffLoading} error={staff === null ? staffError : null} onRetry={loadStaff}
+        {...candidatesFor(candidates, replaceTarget?.block?.id)}
+        title={replaceTarget ? replacePickerTitle(replaceTarget.assignment) : ''}
+        emptyText="No other coaches at this studio."
+        onPick={(coach) => { const t = replaceTarget; setReplaceTarget(null); if (t) runReplace(t, coach) }}
+        onClose={() => setReplaceTarget(null)} />
     </View>
   )
 }

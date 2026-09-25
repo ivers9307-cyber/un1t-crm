@@ -240,8 +240,8 @@ export const NOTIFICATION_REGISTRY = Object.freeze([
   {
     category: 'shift_adjusted',
     label: 'Shift changes',
-    description: 'A manager added you to, removed you from, or changed the times on one of your shifts.',
-    trigger: { kind: 'event', source: 'PUT/DELETE /api/schedule/assignments/[id] + POST /api/schedule/blocks/[id]/assignments + bulk-assign + copy-week/copy-month' },
+    description: "A manager added you to, removed you from, or changed the times on one of your shifts. A manager replacing one coach with another tells each of them once, with the shift's day and start time; outside 07:00-22:00 studio time that notice waits for 07:00.",
+    trigger: { kind: 'event', source: 'PUT/DELETE /api/schedule/assignments/[id] + POST /api/schedule/assignments/[id]/replace (held notices: the */5 send-push-reminders cron) + POST /api/schedule/blocks/[id]/assignments + bulk-assign + copy-week/copy-month' },
     recipients: { kind: 'assignee', detail: 'Coach whose shift was edited' },
     configurable: { leadTimes: false, roles: false },
     fallbackEmail: true,

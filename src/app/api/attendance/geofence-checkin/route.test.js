@@ -52,7 +52,11 @@ function mockDb({
   shiftRows = [], shiftSelectError = null,
   claimError = null, stampError = null, stampRowsTouched = 1,
   releaseError = null, relabelError = null,
+  // REPLACE.1a review 2 — what a re-read of the matched row answers after a
+  // zero-row stamp (the second shift_assignments select).
+  rereadRow = { profile_id: 'prof-1' },
 } = {}) {
+  let assignmentSelects = 0
   const calls = []
   const inserted = []
   const updates = []
@@ -90,7 +94,9 @@ function mockDb({
       }
       if (table === 'shift_assignments') {
         return {
-          select: (...a) => builder('assignments.select', { data: shiftSelectError ? null : shiftRows, error: shiftSelectError }, calls).select(...a),
+          select: (...a) => (assignmentSelects++ === 0
+            ? builder('assignments.select', { data: shiftSelectError ? null : shiftRows, error: shiftSelectError }, calls)
+            : builder('assignments.reread', { data: rereadRow, error: null }, calls)).select(...a),
           update: (patch) => {
             updates.push({ table, patch })
             calls.push(['assignments.update'])
@@ -334,6 +340,35 @@ describe('POST /api/attendance/geofence-checkin', () => {
     expect(body.data.match_outcome).toBe('already_stamped')
     expect(db.updates).toContainEqual({ table: 'staff_attendance_events', patch: { match_outcome: 'already_stamped' } })
     expect(db.calls).toContainEqual(['events.update', 'eq', 'id', 'ev-new'])
+  })
+
+  // REPLACE.1a review 2 — a replace hands the row to another coach under the
+  // same id. The stamp is pinned to THIS coach, and a zero-row stamp whose row
+  // now belongs to someone else (or is gone) is no match at all: the audit row
+  // must not keep pointing at the other coach's shift (a matched event counts
+  // as an arrival, mig 622).
+  it('the main stamp is pinned to this coach and to a live row', async () => {
+    getCurrentUser.mockResolvedValue(staff)
+    const db = mockDb({ shiftRows: [shiftRow()] })
+    await POST(postReq(validBody()))
+    expect(db.calls).toContainEqual(['assignments.update', 'eq', 'id', 'assign-1'])
+    expect(db.calls).toContainEqual(['assignments.update', 'eq', 'profile_id', 'prof-1'])
+    expect(db.calls).toContainEqual(['assignments.update', 'neq', 'status', 'cancelled'])
+  })
+
+  it('a zero-row stamp on a row that changed hands → no_shift_in_window, and the audit row no longer names it', async () => {
+    getCurrentUser.mockResolvedValue(staff)
+    const db = mockDb({ shiftRows: [shiftRow()], stampRowsTouched: 0, rereadRow: { profile_id: 'someone-else' } })
+    const body = await (await POST(postReq(validBody()))).json()
+    expect(body.data.match_outcome).toBe('no_shift_in_window')
+    expect(db.updates).toContainEqual({ table: 'staff_attendance_events', patch: { match_outcome: 'no_shift_in_window', matched_assignment_id: null } })
+  })
+
+  it('a zero-row stamp on a row that is gone → the same', async () => {
+    getCurrentUser.mockResolvedValue(staff)
+    const db = mockDb({ shiftRows: [shiftRow()], stampRowsTouched: 0, rereadRow: null })
+    expect((await (await POST(postReq(validBody()))).json()).data.match_outcome).toBe('no_shift_in_window')
+    expect(db.updates).toContainEqual({ table: 'staff_attendance_events', patch: { match_outcome: 'no_shift_in_window', matched_assignment_id: null } })
   })
 
   it('a zero-row stamp whose relabel ALSO errors still returns already_stamped and logs a warning', async () => {

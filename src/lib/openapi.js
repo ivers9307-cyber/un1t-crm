@@ -4792,6 +4792,23 @@ registry.registerPath({
   },
 })
 
+// GRID.1 — the coach-by-day grid's read (Schedule → Week → Coaches).
+registry.registerPath({
+  method: 'get',
+  path: '/api/schedule/grid',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Coach-by-day grid for one week (manager-only)',
+  description: "GRID.1. Query: location_id (uuid) and start_date (any day of the target Mon-Sun week; snapped to its Monday). Returns members: the studio's team (profile_locations, active and not deleted) plus anyone holding a live shift at the studio that week (member: false), each with profile_id, full_name, employment_type and, only when contract_visible is true, contracted_hours (employees only, else null). contract_visible is true for owner, manager and master AT location_id; for a head coach it is false and no member carries a contracted_hours key (the column is not read); and shifts: every live shift those people have from the Sunday before to the Monday after, at this studio and at the other studios of the SAME organisation (never another organisation), with block_id, block_date, the block, override and template times, the template name and kind (class | admin), location_name and here. cross_studio_checked is false when the other studios could not be read; the shifts are then this studio's only. Hours and times only: no rate, salary, cost or euro figure is read or returned. Manager-only (master, owner, manager, head_coach AT location_id), scoped by assertLocationAccess: a studio outside the caller's assignments is a 403.",
+  request: { query: z.object({ location_id: uuidLike, start_date: z.string() }) },
+  responses: {
+    200: { description: '{ week_start, week_end, contract_visible, members: [...], shifts: [...], cross_studio_checked }' },
+    400: { description: 'Missing or malformed location_id / start_date, or start_date is not a real calendar date', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — needs a manager role at that location', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The grid could not be read (never answered as an empty grid)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // CANDIDATES.1 — ranked candidates for one block (every coach picker).
 registry.registerPath({
   method: 'get',
@@ -4949,6 +4966,27 @@ registry.registerPath({
     200: { description: 'Assignment removed' },
     403: { description: 'Forbidden — ask for a swap to drop this shift', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Assignment not found, or at a location you do not own', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// REPLACE.1a — hand one assignment to another coach in one action.
+registry.registerPath({
+  method: 'post',
+  path: '/api/schedule/assignments/{id}/replace',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Replace the coach on a shift (manager-only)',
+  description: "Moves one shift_assignments row from its coach to `profile_id` in a single guarded update: overrides, partial reason, arrival stamp and notes are cleared, status becomes scheduled. Manager at the shift's studio only (404 outside it, 403 for a non-manager there). Refused once the shift has started (studio clock) or the coach has arrived, for a coach who is not a rosterable member of the studio, or who is already on it. Approved leave or another shift that day answers 409 `swap_conflicts` with the sentences unless `confirm_conflicts: true`. Open swaps on the shift are closed. On a published roster: two change-log rows (via replace) and one notice to each coach, sent now inside 07:00-22:00 studio time and from 07:00 otherwise; `data.notice` is now, morning or none (draft).",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ profile_id: uuidLike, confirm_conflicts: z.boolean().optional() }) } } },
+  },
+  responses: {
+    200: { description: 'Replaced; `data.notice` says when the coaches are told' },
+    400: { description: 'Not a member of this studio, not rosterable, or the same coach', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — a manager at this studio only', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Assignment not found, or at a location you do not own', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Started, arrived, already on the shift, changed meanwhile, or `swap_conflicts` (confirm to proceed)', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

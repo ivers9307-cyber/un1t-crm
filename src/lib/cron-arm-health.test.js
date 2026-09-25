@@ -19,11 +19,13 @@ const {
   shiftReminderArmHealthy, runwayArmHealthy,
   SHIFT_TIME_CHANGES_HEARTBEAT, TIME_CHANGE_ARM_FAULT_KEYS, timeChangeArmHealthy,
   QUALIFICATION_DIGEST_HEARTBEAT, qualificationDigestArmHealthy,
+  REPLACE_NOTICES_HEARTBEAT, replaceNoticeArmHealthy,
 } = await import('./cron-arm-health')
 const { runShiftReminders } = await import('./shift-reminders')
 const { runRosterRunwayAlerts } = await import('./roster-runway-notify')
 const { runShiftTimeChangeNotices } = await import('./block-edit-notify')
 const { runQualificationDigest } = await import('./qualification-digest')
+const { runReplaceNotices } = await import('./shift-replace-notify')
 
 const SHIFT_CLEAN = {
   quiet_hours: 0, shift_candidates: 2, shift_pushed: 1, shift_emailed: 0, shift_skipped_dup: 1,
@@ -35,6 +37,10 @@ describe('heartbeat row names', () => {
   it('are the kebab-case names mig 633 seeds (the migration test cross-checks the SQL)', () => {
     expect(SHIFT_REMINDERS_HEARTBEAT).toBe('shift-reminders')
     expect(ROSTER_RUNWAY_HEARTBEAT).toBe('roster-runway')
+  })
+
+  it('REPLACE.1a — the held replace-notice arm has its own row, the name mig 640 seeds (the migration test cross-checks the SQL)', () => {
+    expect(REPLACE_NOTICES_HEARTBEAT).toBe('replace-notices')
   })
 })
 
@@ -92,6 +98,32 @@ describe('runwayArmHealthy', () => {
   })
 })
 
+describe('replaceNoticeArmHealthy (REPLACE.1a)', () => {
+  const CLEAN = { rows: 2, groups: 1, silent: 0, quiet: 0, fresh: 0, errors: 0 }
+
+  it('a clean run is healthy, and so are a quiet-hours tick and a tick with nothing held', () => {
+    expect(replaceNoticeArmHealthy(CLEAN)).toBe(true)
+    expect(replaceNoticeArmHealthy({ ...CLEAN, groups: 0, quiet: 2 })).toBe(true)
+    expect(replaceNoticeArmHealthy({ rows: 0, groups: 0, silent: 0, quiet: 0, fresh: 0, errors: 0 })).toBe(true)
+  })
+
+  it('errors > 0 (the held-row read or the silent stamp failed) is a fault in the arm itself', () => {
+    expect(replaceNoticeArmHealthy({ ...CLEAN, errors: 1 })).toBe(false)
+  })
+
+  it('review 1 — a delivered notice whose stamp failed (it will be told again) is a fault', () => {
+    expect(replaceNoticeArmHealthy({ ...CLEAN, stamp_failed: 1 })).toBe(false)
+  })
+
+  it('a failed send or an unreachable coach is a delivery outcome, not an arm fault', () => {
+    expect(replaceNoticeArmHealthy({ ...CLEAN, send_failed: 2, undelivered: 1 })).toBe(true)
+  })
+
+  it.each([undefined, null, 'ok', 0, [CLEAN]])('a run that returned %j has not shown it ran: not healthy', (v) => {
+    expect(replaceNoticeArmHealthy(v)).toBe(false)
+  })
+})
+
 // Drift guards: the arms' REAL zero-work outcomes must read as healthy.
 describe('the real arms, on their zero-work paths', () => {
   it('runShiftReminders with no locations returns its full summary shape, every fault key 0, and it is healthy', async () => {
@@ -115,6 +147,15 @@ describe('the real arms, on their zero-work paths', () => {
     const outcome = await runRosterRunwayAlerts({ from: () => b }, { nowMs: Date.UTC(2026, 8, 25, 8, 0) })
     expect(outcome).toEqual({ locations: 0, alerts: 0, quiet_hours: 0, sent: 0, emailed: 0, deduped: 0, failed: 0 })
     expect(runwayArmHealthy(outcome)).toBe(true)
+  })
+
+  it('runReplaceNotices with nothing held returns its counts, errors 0, and it is healthy', async () => {
+    const b = {}
+    for (const m of ['select', 'is', 'eq', 'gte', 'order', 'limit']) b[m] = () => b
+    b.then = (res, rej) => Promise.resolve({ data: [], error: null }).then(res, rej)
+    const stats = await runReplaceNotices({ from: () => b }, { nowMs: Date.UTC(2026, 8, 25, 8, 0), todayStr: '2026-09-25' })
+    expect(stats).toEqual({ rows: 0, groups: 0, told: 0, silent: 0, started: 0, gone: 0, quiet: 0, fresh: 0, undelivered: 0, send_failed: 0, stamp_failed: 0, errors: 0 })
+    expect(replaceNoticeArmHealthy(stats)).toBe(true)
   })
 })
 

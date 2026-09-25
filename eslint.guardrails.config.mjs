@@ -310,6 +310,13 @@ const config = [
       'src/lib/qualification-digest.js',
       'src/app/api/qualifications/**',
       'src/app/api/schedule/template-qualifications/**',
+      // REPLACE.1a — the replace move, the held-notice arm (its silent stamp)
+      // and the replace route. Born clean, armed on arrival: every write
+      // destructures error and judges its rows. `*` stands for the [id]
+      // segment, which a glob would read as a character class.
+      'src/lib/shift-replace-server.js',
+      'src/lib/shift-replace-notify.js',
+      'src/app/api/schedule/assignments/*/replace/**',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },

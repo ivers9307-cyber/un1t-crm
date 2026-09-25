@@ -207,6 +207,16 @@ export function removeAssignment(assignmentId, { locationId }) {
   return api(`/api/schedule/assignments/${assignmentId}`, { method: 'DELETE', locationId })
 }
 
+// REPLACE.1a — hand this assignment to another coach in one action.
+// MANAGER-ONLY (at the shift's studio). A 409 { code: 'swap_conflicts' }
+// asks the manager to confirm (leave or another shift that day): resend with
+// confirmConflicts. Read the answer with replaceResultAlert (schedule-manage).
+export function replaceAssignment(assignmentId, { profileId, confirmConflicts = false, locationId }) {
+  const body = { profile_id: profileId }
+  if (confirmConflicts) body.confirm_conflicts = true
+  return api(`/api/schedule/assignments/${assignmentId}/replace`, { method: 'POST', locationId, body })
+}
+
 // Approve / reject a time-off request (MANAGER_ROLES).
 export function respondToTimeOff(id, status, reviewNote, locationId) {
   return api(`/api/schedule/time-off/${id}`, {
