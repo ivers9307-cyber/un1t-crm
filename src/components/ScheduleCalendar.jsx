@@ -23,10 +23,12 @@
 // (RETIRE-SHIFTS-MIRROR.5c). The legacy public.shifts mirror is gone (mig 238).
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import { Plus, Clock, X, ArrowLeftRight, CalendarOff, Palmtree, ThermometerSun, Ban, Wallet, CircleEllipsis, AlertTriangle, AlertCircle, Pencil, Check } from 'lucide-react'
+import { Plus, Clock, X, ArrowLeftRight, CalendarOff, Palmtree, ThermometerSun, Ban, Wallet, CircleEllipsis, AlertTriangle, AlertCircle, Pencil, Check, Repeat } from 'lucide-react'
 import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 import { indexByDate } from '@/lib/bank-holidays'
 import { MANAGER_ROLES } from '@/lib/schemas'
+// REPLACE.1a — the replace picker's words and the toast after it.
+import { replacePickerCopy, replaceResponseOutcome } from '@/lib/shift-replace'
 // ROSTER-FIX.6c — getMonday / addDays / formatDate were re-implemented here,
 // byte-for-byte, beside the lib copies this file already imported from. One
 // definition now: a change to the local-day rule cannot land on the server
@@ -199,6 +201,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
 
   const [viewMode, setViewMode] = useState('all') // 'my' or 'all'
   const [assignTarget, setAssignTarget] = useState(null) // { block } when picking a coach
+  const [replaceTarget, setReplaceTarget] = useState(null) // REPLACE.1a — { block, assignment }
   const [createTarget, setCreateTarget] = useState(null) // { date } when adding an ad-hoc block
   const [publishing, setPublishing] = useState(false)
   const [copying, setCopying] = useState(false)
@@ -624,6 +627,40 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
     } catch {
       showToast('Network error, please try again')
     }
+  }
+
+  // REPLACE.1a — hand one coach's shift to another in one action. A clash
+  // (leave, another shift that day) asks first, in the server's sentences,
+  // and resends with confirm_conflicts. Words: replaceResponseOutcome.
+  async function handleReplaceCoach(assignment, profileId, { confirmConflicts = false } = {}) {
+    const toName = locationStaff.find((s) => s.id === profileId)?.full_name
+    let res
+    let data
+    try {
+      res = await fetch(`/api/schedule/assignments/${assignment.id}/replace`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ profile_id: profileId, ...(confirmConflicts ? { confirm_conflicts: true } : {}) }),
+      })
+      data = await res.json().catch(() => ({}))
+    } catch {
+      showToast('Network error, please try again')
+      return
+    }
+    const outcome = replaceResponseOutcome(res.status, data, { fromName: assignment.profiles?.full_name, toName })
+    if (outcome.kind === 'confirm') {
+      if (confirm(`${outcome.message}\n\nReplace anyway?`)) {
+        await handleReplaceCoach(assignment, profileId, { confirmConflicts: true })
+      }
+      return
+    }
+    if (outcome.kind === 'error') {
+      showToast(outcome.message)
+      return
+    }
+    showToast(outcome.message, outcome.tone)
+    setReplaceTarget(null)
+    refreshAfterMutation()
   }
 
   // (handleUnassign was dead code — assignment-removal logic now lives
@@ -1416,6 +1453,23 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
         />
       )}
 
+      {/* REPLACE.1a — the same picker (every badge kept), one pick. */}
+      {replaceTarget && (
+        <AssignCoachModal
+          mode="replace"
+          replacing={replaceTarget.assignment}
+          block={replaceTarget.block}
+          staff={locationStaff}
+          blocks={blocks}
+          timeOff={timeOff}
+          unavailableReason={staffUnavailable}
+          leaveMissing={leaveMissing}
+          onAssign={(ids) => handleReplaceCoach(replaceTarget.assignment, ids[0])}
+          onClose={() => setReplaceTarget(null)}
+          restoreFocusRef={calendarRef}
+        />
+      )}
+
       {/* Add Block (ad-hoc) Modal */}
       {createTarget && (
         <CreateBlockModal
@@ -1434,13 +1488,18 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
           isn't staring at a doubled overlay; re-renders automatically
           (with the new assignment baked in via the blocks-sync effect)
           once the assign-coach modal closes. */}
-      {blockDetail && !assignTarget && (
+      {blockDetail && !assignTarget && !replaceTarget && (
         <BlockDetailModal
           block={blockDetail}
           user={user}
           isManager={isManager}
           onClose={() => setBlockDetail(null)}
           onAddCoach={() => setAssignTarget({ block: blockDetail })}
+          // REPLACE.1a — hidden on a past day only; the route has the last
+          // word on "started" (studio clock).
+          onReplace={isManager && blockDetail.block_date >= todayStr
+            ? (assignment) => setReplaceTarget({ block: blockDetail, assignment })
+            : null}
           busy={rowBusy}
           onUnassign={async (assignmentId) => {
             if (rowBusy) return
@@ -1670,7 +1729,10 @@ function CopyRosterModal({ job, onChoose, onClose }) {
 // picker says so and cannot submit, instead of showing an empty list that reads
 // as "everyone is already assigned". `leaveMissing`: leave failed to load, so
 // the on-leave badge cannot fire and the picker says that too.
-function AssignCoachModal({ block, staff, blocks, timeOff, unavailableReason = null, leaveMissing = false, onAssign, onClose, restoreFocusRef }) {
+function AssignCoachModal({ block, staff, blocks, timeOff, unavailableReason = null, leaveMissing = false, onAssign, onClose, restoreFocusRef, mode = 'assign', replacing = null }) {
+  // REPLACE.1a — mode 'replace': one pick (radio), titled for the coach going
+  // off, no capacity line (a replace keeps the count). Every badge stays.
+  const isReplace = mode === 'replace'
   const [selectedIds, setSelectedIds] = useState(() => new Set())
   const [saving, setSaving] = useState(false)
   const tmpl = block.shift_templates || {}
@@ -1724,6 +1786,8 @@ function AssignCoachModal({ block, staff, blocks, timeOff, unavailableReason = n
   }
 
   function toggle(id) {
+    // REPLACE.1a — replace takes exactly one coach.
+    if (isReplace) { setSelectedIds(new Set([id])); return }
     setSelectedIds((prev) => {
       const next = new Set(prev)
       if (next.has(id)) next.delete(id)
@@ -1739,17 +1803,21 @@ function AssignCoachModal({ block, staff, blocks, timeOff, unavailableReason = n
     setSaving(false)
   }
 
-  const overCapacity = selectedIds.size > slotsLeft
-  const submitLabel = saving
-    ? 'Assigning…'
-    : selectedIds.size === 0
-      ? 'Assign coaches'
-      : `Assign ${selectedIds.size} coach${selectedIds.size === 1 ? '' : 'es'}`
+  const pickedName = isReplace ? available.find((s) => selectedIds.has(s.id))?.full_name : null
+  const replaceCopy = isReplace ? replacePickerCopy({ fromName: replacing?.profiles?.full_name, pickedName, saving }) : null
+  const overCapacity = !isReplace && selectedIds.size > slotsLeft
+  const submitLabel = isReplace
+    ? replaceCopy.submit
+    : saving
+      ? 'Assigning…'
+      : selectedIds.size === 0
+        ? 'Assign coaches'
+        : `Assign ${selectedIds.size} coach${selectedIds.size === 1 ? '' : 'es'}`
 
   return (
     // ROSTER-FIX.6b — dismissOnBackdrop goes false the moment a coach is
     // ticked: the operator has made a selection they would have to redo.
-    <Modal open onClose={onClose} title="Assign coaches" dismissOnBackdrop={selectedIds.size === 0} restoreFocusRef={restoreFocusRef}>
+    <Modal open onClose={onClose} title={isReplace ? replaceCopy.title : 'Assign coaches'} dismissOnBackdrop={selectedIds.size === 0} restoreFocusRef={restoreFocusRef}>
       <div>
         {/* ROSTER-FIX.6b-8 — this summary block was `bg-black/30`, which was a
             legible dark inset while the overlay was a hand-rolled dark div.
@@ -1762,11 +1830,12 @@ function AssignCoachModal({ block, staff, blocks, timeOff, unavailableReason = n
         <div className="bg-un1t-surface border border-un1t-border rounded-lg p-3 mb-4 text-sm text-un1t-text">
           <div className="font-medium">{tmpl.name || 'Shift'} — {dayLabel}</div>
           <div className="text-un1t-subtle text-xs mt-1">
-            {formatTime(block.start_time)}–{formatTime(block.end_time)} · {currentCount}/{block.max_coaches} assigned · {slotsLeft} slot{slotsLeft === 1 ? '' : 's'} open
+            {formatTime(block.start_time)}–{formatTime(block.end_time)}
+            {!isReplace && <> · {currentCount}/{block.max_coaches} assigned · {slotsLeft} slot{slotsLeft === 1 ? '' : 's'} open</>}
           </div>
         </div>
         <div>
-          <label className="block text-xs text-un1t-subtle mb-2">Pick one or more coaches</label>
+          <label className="block text-xs text-un1t-subtle mb-2">{isReplace ? replaceCopy.label : 'Pick one or more coaches'}</label>
           {!unavailableReason && leaveMissing && (
             <p className="mb-2 text-[11px] px-2 py-1.5 rounded bg-amber-500/10 text-amber-700">{LEAVE_NOT_FLAGGED_MESSAGE}</p>
           )}
@@ -1798,7 +1867,8 @@ function AssignCoachModal({ block, staff, blocks, timeOff, unavailableReason = n
                   <li key={s.id}>
                     <label className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-un1t-border/30">
                       <input
-                        type="checkbox"
+                        type={isReplace ? 'radio' : 'checkbox'}
+                        name={isReplace ? 'replace-coach' : undefined}
                         checked={checked}
                         onChange={() => toggle(s.id)}
                         className="accent-un1t-text"
@@ -2408,7 +2478,7 @@ const DELETE_SLOT_CONFIRM =
 // modal updates live as overrides are saved without a re-mount.
 function BlockDetailModal({
   block, user, isManager, busy,
-  onClose, onAddCoach, onUnassign, onPartialSave, onDeleteBlock, onSwapRequest,
+  onClose, onAddCoach, onUnassign, onReplace = null, onPartialSave, onDeleteBlock, onSwapRequest,
 }) {
   const tmpl = block.shift_templates || {}
   const assignments = liveAssignments(block.shift_assignments)
@@ -2472,6 +2542,7 @@ function BlockDetailModal({
                 canEdit={isManager}
                 busy={busy}
                 onUnassign={() => onUnassign(a.id)}
+                onReplace={onReplace ? () => onReplace(a) : null}
                 onSave={(payload) => onPartialSave(a.id, payload)}
                 onSwapRequest={
                   a.profile_id === user.id
@@ -2520,7 +2591,7 @@ function BlockDetailModal({
 // One coach's row inside BlockDetailModal — shows their effective
 // times, lets a manager (or the coach themselves) override the
 // times for partial shifts, request a swap, or be removed.
-function AssignmentRow({ assignment, block, isMe, canEdit, busy, onUnassign, onSave, onSwapRequest, onEditingChange }) {
+function AssignmentRow({ assignment, block, isMe, canEdit, busy, onUnassign, onReplace = null, onSave, onSwapRequest, onEditingChange }) {
   const blockStart = (block.start_time || '').slice(0, 5)
   const blockEnd = (block.end_time || '').slice(0, 5)
   const coachName = assignment.profiles?.full_name || 'this coach'
@@ -2625,6 +2696,19 @@ function AssignmentRow({ assignment, block, isMe, canEdit, busy, onUnassign, onS
             >
               <Pencil size={11} aria-hidden="true" />
               {hasOverride ? 'Edit' : 'Adjust'}
+            </button>
+          )}
+          {/* REPLACE.1a — hand this coach's shift to another in one action. */}
+          {canEdit && !editing && onReplace && (
+            <button
+              type="button"
+              onClick={onReplace}
+              disabled={busy}
+              className="text-[11px] text-un1t-subtle hover:text-un1t-text disabled:opacity-50 inline-flex items-center gap-1 px-2 py-1 rounded hover:bg-un1t-border/40"
+              aria-label={`Replace ${coachName} with another coach`}
+              title="Replace coach"
+            >
+              <Repeat size={11} aria-hidden="true" />
             </button>
           )}
           {canEdit && !editing && (
