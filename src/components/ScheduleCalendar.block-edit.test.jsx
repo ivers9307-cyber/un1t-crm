@@ -72,7 +72,7 @@ describe('shift dialog — briefing and edit (BLOCKEDIT.1)', () => {
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save shift' })) })
     const put = global.fetch.mock.calls.find(([, init]) => init?.method === 'PUT')
     expect(put[0]).toBe('/api/schedule/blocks/b1')
-    expect(JSON.parse(put[1].body)).toEqual({ start_time: '09:30' })
+    expect(JSON.parse(put[1].body)).toEqual({ start_time: '09:30', expected: { start_time: '09:00', end_time: '12:00', min_coaches: 1, max_coaches: 3 } })
     expect(await screen.findByText('Saved. The coach on this shift will be told in the next few minutes.')).toBeTruthy()
   })
 

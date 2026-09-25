@@ -282,3 +282,41 @@ describe('PUT /api/schedule/blocks/[id] — change log and notice (published onl
     expect(body.notice).toBeUndefined()
   })
 })
+
+// Review fix 2 — the guard must compare against what the manager OPENED, not
+// only against the route's own read a few ms earlier.
+describe('PUT /api/schedule/blocks/[id] — expected (review fix 2)', () => {
+  const OPENED = { start_time: '09:00', end_time: '12:00', min_coaches: 1, max_coaches: 3 }
+
+  it('409 block_changed when the stored shift differs from what the form opened with; nothing written', async () => {
+    const db = makeDb({ block: { ...BLOCK, start_time: '08:00:00' } })
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(req({ briefing: 'x', expected: OPENED }), params)
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error).toBe('block_changed')
+    expect(body.message).toMatch(/Someone changed this shift since you opened it/)
+    expect(db.captured.savePatch).toBeNull()
+  })
+
+  it('a stale capacity is caught too', async () => {
+    createServerClient.mockReturnValue(makeDb({ block: { ...BLOCK, max_coaches: 4 } }))
+    expect((await PUT(req({ briefing: 'x', expected: OPENED }), params)).status).toBe(409)
+  })
+
+  it('matching expected values (HH:MM vs HH:MM:SS) save, and the conditional UPDATE still guards', async () => {
+    const db = makeDb()
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(req({ start_time: '10:00', expected: OPENED }), params)
+    expect(res.status).toBe(200)
+    expect(db.captured.save).toEqual(expect.arrayContaining([['eq', 'start_time', '09:00:00'], ['eq', 'max_coaches', 3]]))
+    expect(db.captured.savePatch).toEqual({ start_time: '10:00:00' })
+  })
+
+  it('expected is not an edit on its own', async () => {
+    createServerClient.mockReturnValue(makeDb())
+    const res = await PUT(req({ expected: OPENED }), params)
+    expect((await res.json()).error).toBe('nothing_to_change')
+  })
+})
+

@@ -4440,6 +4440,8 @@ registry.registerPath({
       max_coaches: z.number().int().optional(),
       briefing: z.string().nullable().optional(),
       allow_below_assigned: z.boolean().optional(),
+      expected: z.object({ start_time: z.string(), end_time: z.string(), min_coaches: z.number().int(), max_coaches: z.number().int() }).optional()
+        .describe('The values the editor opened with; a stored value that differs is 409 block_changed'),
     }) } } },
   },
   responses: {
@@ -4447,7 +4449,7 @@ registry.registerPath({
     400: { description: 'Validation error or a rule above', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: "Forbidden — needs a manager role at the shift's studio", content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Shift not found (or the id is not UUID-shaped)', content: { 'application/json': { schema: ErrorResponse } } },
-    409: { description: 'below_assigned, or block_changed', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'below_assigned, coach_window_invalid, or block_changed (including a stale `expected`)', content: { 'application/json': { schema: ErrorResponse } } },
     503: { description: 'The shift could not be read; retry', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })

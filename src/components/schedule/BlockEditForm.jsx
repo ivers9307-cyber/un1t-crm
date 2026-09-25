@@ -40,6 +40,15 @@ export default function BlockEditForm({ block, onSave, onDone }) {
     if (!admin && min !== initial.min) out.min_coaches = Number(min)
     if (max !== initial.max) out.max_coaches = Number(max)
     if (briefing.trim() !== initial.briefing.trim()) out.briefing = briefing.trim() === '' ? null : briefing
+    if (Object.keys(out).length === 0) return out
+    // Review fix 2 — the values this form opened with. The server refuses the
+    // save (409 block_changed) if the shift changed since.
+    out.expected = {
+      start_time: initial.start,
+      end_time: initial.end,
+      min_coaches: block.min_coaches ?? 0,
+      max_coaches: block.max_coaches ?? 1,
+    }
     return out
   }
 

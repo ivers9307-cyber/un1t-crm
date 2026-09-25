@@ -53,7 +53,7 @@ import { validateBody } from '@/lib/validate'
 import { isLiveAssignment } from '@/lib/roster'
 import { logAndNotifyUnassignments } from '@/lib/shift-unassign'
 import { logRosterChange, logBlockEdit, markChangesNotified } from '@/lib/roster-change-log'
-import { planBlockEdit, sameWindow, TIME_CHANGE_SOURCE } from '@/lib/block-edit'
+import { planBlockEdit, sameWindow, matchesExpected, TIME_CHANGE_SOURCE } from '@/lib/block-edit'
 import { inStaffPushHours } from '@/lib/staff-push-hours'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { BRIEFING_MAX_LENGTH } from '@shared/shift-briefing'
@@ -181,6 +181,15 @@ const BlockEditSchema = z.object({
   max_coaches: z.number().int().min(1).max(50).optional(),
   briefing: z.string().max(BRIEFING_MAX_LENGTH).nullable().optional(),
   allow_below_assigned: z.boolean().optional(),
+  // Review fix 2 — what the editor OPENED with. The web form always sends it;
+  // a stored value that differs is a 409, so a form left open while another
+  // manager saved cannot silently overwrite their change.
+  expected: z.object({
+    start_time: timeOfDay,
+    end_time: timeOfDay,
+    min_coaches: z.number().int(),
+    max_coaches: z.number().int(),
+  }).optional(),
 })
 
 export async function PUT(request, props) {
@@ -228,6 +237,13 @@ export async function PUT(request, props) {
   if (notHere) return notHere
   if (!hasRoleAtLocation(user, block.location_id, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  }
+
+  if (!matchesExpected(block, validation.data.expected)) {
+    return NextResponse.json({
+      success: false, error: 'block_changed',
+      message: 'Someone changed this shift since you opened it — reload it and try again.',
+    }, { status: 409 })
   }
 
   const plan = planBlockEdit({ block, body: validation.data })

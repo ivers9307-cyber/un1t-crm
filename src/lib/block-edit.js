@@ -35,6 +35,20 @@ export function toHms(t) {
   return null
 }
 
+/**
+ * Review fix 2 — does the stored block still hold what the manager's form
+ * OPENED with? `expected` is { start_time, end_time, min_coaches, max_coaches }.
+ * The route's conditional UPDATE only guards against a change between its own
+ * read and its write; this catches a change made while the form sat open.
+ */
+export function matchesExpected(block, expected) {
+  if (!expected) return true
+  return toHms(block?.start_time) === toHms(expected.start_time)
+    && toHms(block?.end_time) === toHms(expected.end_time)
+    && block?.min_coaches === expected.min_coaches
+    && block?.max_coaches === expected.max_coaches
+}
+
 /** Two { start_time, end_time } windows are the same time. */
 export function sameWindow(a, b) {
   return toHms(a?.start_time) === toHms(b?.start_time) && toHms(a?.end_time) === toHms(b?.end_time)

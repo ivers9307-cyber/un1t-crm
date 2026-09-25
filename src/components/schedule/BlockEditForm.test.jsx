@@ -12,6 +12,9 @@ const BLOCK = {
   shift_templates: { name: 'Morning', kind: 'class' },
 }
 
+// Review fix 2 — every save carries the values the form opened with.
+const OPENED = { start_time: '09:00', end_time: '12:00', min_coaches: 1, max_coaches: 3 }
+
 async function save() {
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save shift' })) })
 }
@@ -34,7 +37,7 @@ describe('BlockEditForm', () => {
     fireEvent.change(screen.getByLabelText('Start'), { target: { value: '09:30' } })
     fireEvent.change(screen.getByLabelText('Briefing for the coaches'), { target: { value: 'Fire drill at 10' } })
     await save()
-    expect(onSave).toHaveBeenCalledWith({ start_time: '09:30', briefing: 'Fire drill at 10' })
+    expect(onSave).toHaveBeenCalledWith({ start_time: '09:30', briefing: 'Fire drill at 10', expected: OPENED })
     expect(onDone).toHaveBeenCalled()
   })
 
@@ -52,7 +55,7 @@ describe('BlockEditForm', () => {
     render(<BlockEditForm block={{ ...BLOCK, briefing: 'Old note' }} onSave={onSave} onDone={vi.fn()} />)
     fireEvent.change(screen.getByLabelText('Briefing for the coaches'), { target: { value: '   ' } })
     await save()
-    expect(onSave).toHaveBeenCalledWith({ briefing: null })
+    expect(onSave).toHaveBeenCalledWith({ briefing: null, expected: OPENED })
   })
 
   it('an admin shift has no minimum field to send', () => {
@@ -70,7 +73,7 @@ describe('BlockEditForm', () => {
     render(<BlockEditForm block={BLOCK} onSave={onSave} onDone={onDone} />)
     fireEvent.change(screen.getByLabelText('Maximum coaches'), { target: { value: '1' } })
     await save()
-    expect(onSave).toHaveBeenLastCalledWith({ max_coaches: 1, allow_below_assigned: true })
+    expect(onSave).toHaveBeenLastCalledWith({ max_coaches: 1, expected: OPENED, allow_below_assigned: true })
     expect(onDone).toHaveBeenCalled()
   })
 
