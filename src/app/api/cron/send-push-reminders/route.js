@@ -28,6 +28,9 @@
 //     The shift arm has its own heartbeat row, 'shift-reminders' (HEARTBEAT.1,
 //     mig 633), stamped only when it ran clean; 'send-push-reminders' still
 //     means "the tick ran".
+//   - Shift time changes (BLOCKEDIT.1) → one shift_adjusted notice per coach
+//     per edited shift, src/lib/block-edit-notify.js. Own heartbeat row
+//     'shift-time-changes' (mig 639).
 //
 // Bookings fan out to a role-set rather than a single staff member
 // because the bookings table has no "assigned coach" column — the
@@ -45,7 +48,7 @@ import { localToUtc, formatLocalTime } from '@/lib/push-reminders'
 import { getEffectiveConfig, getEffectiveLeadTimesForUser } from '@/lib/notification-config'
 import { selectAll } from '@/lib/select-all'
 import { runShiftReminders } from '@/lib/shift-reminders'
-import { SHIFT_REMINDERS_HEARTBEAT, shiftReminderArmHealthy } from '@/lib/cron-arm-health'
+import { SHIFT_REMINDERS_HEARTBEAT, shiftReminderArmHealthy, SHIFT_TIME_CHANGES_HEARTBEAT, timeChangeArmHealthy } from '@/lib/cron-arm-health'
 import { runShiftTimeChangeNotices } from '@/lib/block-edit-notify'
 
 export const runtime = 'nodejs'
@@ -423,13 +426,23 @@ export async function GET(request) {
   // studio. The rule lives in src/lib/block-edit-notify.js. Isolated like the
   // arms above: its failure costs nothing else, and is VISIBLE in the response.
   // Placed AFTER the shift arm's own heartbeat stamp, so it can never cost it.
-  // It has no heartbeat row of its own (yet): a throw here shows only in
-  // time_change_arm_failed, which pages nobody.
+  // Its own heartbeat row, 'shift-time-changes' (mig 639), is stamped below.
+  let timeChangeSummary = null
   try {
-    Object.assign(summary, await runShiftTimeChangeNotices(db, { nowMs, locations: locations || [] }))
+    timeChangeSummary = await runShiftTimeChangeNotices(db, { nowMs, locations: locations || [] })
+    Object.assign(summary, timeChangeSummary)
   } catch (err) {
     summary.time_change_arm_failed = 1
     logError('cron-push-reminders', 'time-change block threw', { err })
+  }
+
+  // The time-change arm's OWN heartbeat row (the CLAUDE.md arm rule, mig 639):
+  // stamped ONLY on a clean run (src/lib/cron-arm-health.js timeChangeArmHealthy),
+  // quiet-hours ticks included; never on a throw, a failed or capped read, or a
+  // failed not-needed stamp. Its own catch: it cannot cost the parent's stamp.
+  if (summary.time_change_arm_failed === 0 && timeChangeArmHealthy(timeChangeSummary)) {
+    await stampHeartbeat(SHIFT_TIME_CHANGES_HEARTBEAT, timeChangeSummary).catch((err) =>
+      logWarn('cron-push-reminders', 'shift-time-changes heartbeat failed', { err }))
   }
 
   // quiet_hours alone is not news: it is 1 on every tick from 22:00 to 07:00.
