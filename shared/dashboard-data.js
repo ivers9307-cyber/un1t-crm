@@ -694,8 +694,10 @@ export async function fetchTodayOps(supabase, locationId, now = new Date()) {
       .select('id, shift_assignments(profile_id, status)')
       .eq('location_id', locationId).eq('block_date', todayIso)
       .limit(200),
+    // LABOURWEEK.1 — published rosters only: a draft week is not labour yet
+    // (the same rule LABOUR.1 costs by). Cancelled rows are dropped below.
     fetchDashboardShifts(supabase, {
-      locationId, startDate: isoDate(weekStart), endDate: isoDate(weekEnd), withProfiles: true,
+      locationId, startDate: isoDate(weekStart), endDate: isoDate(weekEnd), withProfiles: true, publishedOnly: true,
     }),
   ])
   if (e1) return { success: false, error: e1.message }
@@ -707,7 +709,9 @@ export async function fetchTodayOps(supabase, locationId, now = new Date()) {
   for (const b of blocks || []) for (const a of (b.shift_assignments || []).filter(isLiveRow)) if (a.profile_id) staffToday.add(a.profile_id)
   let labourCents = 0
   let hours = 0
-  for (const s of weekShifts || []) {
+  // LABOURWEEK.1 — a cancelled assignment (an approved swap-drop, a removed
+  // coach) is not labour: it was costed and counted in the hours until now.
+  for (const s of (weekShifts || []).filter(isLiveRow)) {
     const h = shiftDurationHours(s)
     hours += h
     labourCents += Math.round(h * (hourlyRateFor(s.profiles) || 0) * 100)
