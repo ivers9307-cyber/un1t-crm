@@ -5,7 +5,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   FEED_DAYS_BACK, FEED_DAYS_AHEAD, feedWindow, wallInstant, isPublishedLiveRow,
-  shiftToFeedEvent, buildStaffShiftFeed,
+  shiftToFeedEvent, buildStaffShiftFeed, feedSequence,
 } from './staff-calendar-feed'
 
 const STUDIO = { id: 'loc-1', name: 'Studio One', address: '1 Example Street, Dublin', timezone: 'Europe/Dublin' }
@@ -98,7 +98,25 @@ describe('shiftToFeedEvent', () => {
       summary: 'Morning · Studio One',
       location: 'Studio One, 1 Example Street, Dublin',
       description: 'Rostered shift, as published. Open the app for swaps and changes.',
+      sequence: Math.floor((Date.parse('2026-09-21T08:15:00Z') - Date.UTC(2026, 0, 1)) / 1000),
     })
+  })
+
+  it('SEQUENCE rises when the assignment OR its block is edited, so Outlook applies the change', () => {
+    const before = shiftToFeedEvent(row(), STUDIO, GEN).sequence
+    const assignmentEdited = shiftToFeedEvent(row({ updated_at: '2026-09-24T12:00:00Z' }), STUDIO, GEN).sequence
+    const blockEdited = shiftToFeedEvent(row({}, { updated_at: '2026-09-24T12:00:00Z' }), STUDIO, GEN).sequence
+    expect(assignmentEdited).toBeGreaterThan(before)
+    expect(blockEdited).toBeGreaterThan(before)
+    expect(shiftToFeedEvent(row(), STUDIO, GEN + 3_600_000).sequence).toBe(before)
+  })
+
+  it('SEQUENCE is a valid iCalendar INTEGER: 0 with no readable stamp or one before 2026, never negative or over 2^31-1', () => {
+    expect(feedSequence(null)).toBe(0)
+    expect(feedSequence(Date.UTC(2025, 11, 31))).toBe(0)
+    expect(feedSequence(Date.UTC(2026, 0, 1, 0, 0, 7))).toBe(7)
+    expect(feedSequence(Date.UTC(2200, 0, 1))).toBe(2 ** 31 - 1)
+    expect(shiftToFeedEvent(row({ updated_at: null }, { updated_at: null }), STUDIO, GEN).sequence).toBe(0)
   })
 
   it("uses the coach's override where there is one (the effective time, not the block's)", () => {
@@ -176,6 +194,15 @@ describe('buildStaffShiftFeed', () => {
       generatedAtMs: GEN,
     })
     expect(ics).not.toContain('PRIVATE')
+  })
+
+  it('writes SEQUENCE per event, bumped by an edit and stable otherwise', () => {
+    const seqOf = (rows) => unfoldedLines(buildStaffShiftFeed({ rows, locationsById: LOCS, generatedAtMs: GEN }))
+      .find((l) => l.startsWith('SEQUENCE:'))
+    const a = seqOf([row()])
+    expect(a).toMatch(/^SEQUENCE:\d+$/)
+    expect(seqOf([row()])).toBe(a)
+    expect(seqOf([row({ updated_at: '2026-09-24T12:00:00Z' })])).not.toBe(a)
   })
 
   it('is deterministic for a given roster (DTSTAMP is the revision time, not now)', () => {

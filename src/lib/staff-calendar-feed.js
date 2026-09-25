@@ -18,12 +18,16 @@
 // UID = shift-<assignment id>@repset.ie, stable for the assignment's life, so
 // an edit replaces the event and a removed or cancelled shift disappears on the
 // next poll. DTSTAMP/LAST-MODIFIED = the later updated_at of assignment and
-// block, so the output is byte-identical until the roster changes.
+// block, so the output is byte-identical until the roster changes. SEQUENCE
+// is derived from the same instant (feedSequence), so an edit raises it and
+// Outlook applies the change. Known gap: renaming a template or editing a
+// studio's name/address changes SUMMARY/LOCATION without touching either
+// updated_at, so SEQUENCE does not move for that alone.
 
 import { addDaysISO } from '@/lib/dublin-time'
 import { dayStartMsInTz, resolveTz, wallMsInTz } from '@/lib/tz-time'
 import { isLiveAssignment } from '@/lib/roster'
-import { buildIcsCalendar } from '@/lib/ics'
+import { buildIcsCalendar, MAX_ICS_INTEGER } from '@/lib/ics'
 
 export const FEED_DAYS_BACK = 14
 export const FEED_DAYS_AHEAD = 56
@@ -55,6 +59,22 @@ export function wallInstant(dateIso, time, tz) {
     return dayStartMsInTz(addDaysISO(dateIso, 1), tz)
   }
   return wallMsInTz(dateIso, t, tz)
+}
+
+// SEQUENCE counts in whole seconds from this fixed instant, so it starts small
+// and stays a valid 32-bit iCalendar INTEGER until the 2090s.
+const SEQUENCE_EPOCH_MS = Date.UTC(2026, 0, 1)
+
+/**
+ * RFC 5545 SEQUENCE for a shift last revised at `modifiedMs`: seconds since
+ * 2026-01-01, clamped to [0, 2^31-1]. Both updated_at columns are maintained
+ * by BEFORE UPDATE triggers (mig 067), so any edit to the assignment or its
+ * block raises it, and an unchanged shift keeps it. 0 when there is no stamp.
+ */
+export function feedSequence(modifiedMs) {
+  if (modifiedMs == null || !Number.isFinite(modifiedMs)) return 0
+  const s = Math.floor((modifiedMs - SEQUENCE_EPOCH_MS) / 1000)
+  return Math.min(Math.max(s, 0), MAX_ICS_INTEGER)
 }
 
 function msOrNull(iso) {
@@ -89,6 +109,7 @@ export function shiftToFeedEvent(a, location, generatedAtMs) {
     summary: studio ? `${shiftName} · ${studio}` : shiftName,
     location: [studio, location?.address].filter(Boolean).join(', ') || null,
     description: FEED_EVENT_DESCRIPTION,
+    sequence: feedSequence(modified),
   }
 }
 

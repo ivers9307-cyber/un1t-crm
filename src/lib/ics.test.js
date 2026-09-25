@@ -112,6 +112,15 @@ describe('buildIcsCalendar', () => {
     ]))
   })
 
+  it('writes SEQUENCE when given a non-negative integer, and omits it otherwise', () => {
+    const withSeq = unfold(buildIcsCalendar({ prodId: '-//T//T//EN', events: [{ ...EVENT, sequence: 42 }] })).split('\r\n')
+    expect(withSeq).toContain('SEQUENCE:42')
+    expect(withSeq.indexOf('SEQUENCE:42')).toBeGreaterThan(withSeq.indexOf('DTSTAMP:20260921T081500Z'))
+    for (const sequence of [undefined, null, -1, 1.5, NaN, 2 ** 31]) {
+      expect(buildIcsCalendar({ prodId: '-//T//T//EN', events: [{ ...EVENT, sequence }] }), String(sequence)).not.toContain('SEQUENCE')
+    }
+  })
+
   it('omits DTEND when the end is not after the start (RFC 5545 §3.6.1: the event ends at DTSTART)', () => {
     const out = buildIcsCalendar({ prodId: '-//T//T//EN', events: [{ ...EVENT, endMs: EVENT.startMs }] })
     expect(out).not.toContain('DTEND')

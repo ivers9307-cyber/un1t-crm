@@ -15,6 +15,7 @@
 
 const CRLF = '\r\n'
 const MAX_OCTETS = 75
+export const MAX_ICS_INTEGER = 2 ** 31 - 1 // RFC 5545 §3.3.8 INTEGER range
 
 function utf8Length(codePoint) {
   if (codePoint < 0x80) return 1
@@ -87,7 +88,7 @@ export function formatIcsUtc(ms) {
  * @param {number} [cal.refreshMinutes] polling hint (RFC 7986 REFRESH-INTERVAL + X-PUBLISHED-TTL)
  * @param {Array<{uid:string, dtstampMs:number, lastModifiedMs?:number|null, startMs:number,
  *   endMs?:number|null, summary:string, location?:string|null, description?:string|null,
- *   status?:string}>} cal.events
+ *   status?:string, sequence?:number}>} cal.events
  * @returns {string} the calendar, CRLF line ends, folded
  */
 export function buildIcsCalendar({ prodId, name = null, refreshMinutes = null, events = [] }) {
@@ -98,6 +99,12 @@ export function buildIcsCalendar({ prodId, name = null, refreshMinutes = null, e
   }
   for (const e of events) {
     lines.push('BEGIN:VEVENT', `UID:${e.uid}`, `DTSTAMP:${formatIcsUtc(e.dtstampMs)}`)
+    // RFC 5545 §3.8.7.4: a revision counter. Outlook only applies an edit to a
+    // subscribed event whose SEQUENCE went up. INTEGER is signed 32-bit, so
+    // anything that is not a non-negative int in range is left out.
+    if (Number.isInteger(e.sequence) && e.sequence >= 0 && e.sequence <= MAX_ICS_INTEGER) {
+      lines.push(`SEQUENCE:${e.sequence}`)
+    }
     if (e.lastModifiedMs != null) lines.push(`LAST-MODIFIED:${formatIcsUtc(e.lastModifiedMs)}`)
     lines.push(`DTSTART:${formatIcsUtc(e.startMs)}`)
     if (e.endMs != null && e.endMs > e.startMs) lines.push(`DTEND:${formatIcsUtc(e.endMs)}`)
