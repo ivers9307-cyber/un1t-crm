@@ -8,6 +8,7 @@ import {
   ROSTER_LAYOUTS, DEFAULT_ROSTER_LAYOUT, rosterLayoutStorageKey, loadRosterLayout, saveRosterLayout,
   gridWeekDays, buildRosterGrid, adminBalanceLabel, restGapTitle, untimedLabel, GRID_COPY,
 } from './roster-grid-model'
+import { untimedShiftCount } from '@shared/working-time'
 
 const HERE = 'loc-north'
 const SOUTH = 'loc-south'
@@ -483,5 +484,51 @@ describe('working-time flags per row (WORKTIME.1 rules, every studio)', () => {
     const alex = rowOf(buildRosterGrid({ weekStart: WEEK, grid: GRID }), 'p-emp')
     expect(alex.longWeekMinutes).toBeNull()
     expect(alex.restGaps).toEqual([])
+  })
+})
+
+// GRID.1 review 3 — the small ones.
+describe('review nits', () => {
+  const one = (shifts, availability = [], member = M('p1', 'Alex Example', 'fte', 10)) =>
+    buildRosterGrid({ weekStart: WEEK, grid: { ...GRID, members: [member], shifts }, availability }).rows[0]
+  const wedRule = (over) => ({ id: 'r', profile_id: 'p1', kind: 'weekly', weekday: 'wed', start_date: null, end_date: null, all_day: false, note: null, ...over })
+
+  // unavailableFor reads an end not after the start as "the whole day". A
+  // shift ENDING at midnight has a real window (CANDIDATES.1 review 6 made the
+  // same call in shared/candidates.js), so it is judged on it.
+  for (const end of ['24:00:00', '00:00:00']) {
+    it(`a shift ending at midnight (${end}) is judged on its window, not the whole day`, () => {
+      const late = [S('p1', '2026-09-23', '22:00:00', end)]
+      expect(one(late, [wedRule({ start_time: '09:00', end_time: '10:00' })]).cells[2].here[0].unavailable).toBe(false)
+      expect(one(late, [wedRule({ start_time: '23:00', end_time: '23:30' })]).cells[2].here[0].unavailable).toBe(true)
+      expect(one(late, [wedRule({ start_time: '21:00', end_time: '22:00' })]).cells[2].here[0].unavailable).toBe(false)
+      expect(one(late, [wedRule({ all_day: true, start_time: null, end_time: null })]).cells[2].here[0].unavailable).toBe(true)
+      expect(one(late).cells[2].here[0].minutes).toBe(120)
+    })
+  }
+
+  // shared/working-time.js untimedShiftCount calls a zero-length shift TIMED
+  // (0 hours, as payroll says); the grid must agree, or its "not counted" line
+  // and the publish preview's disagree about the same shift.
+  it('a zero-length shift is timed: 0 minutes, its time shown, not counted as untimed', () => {
+    const row = one([S('p1', WEEK, '09:00:00', '09:00:00')])
+    expect(row.cells[0].here[0]).toMatchObject({ minutes: 0, time: '9–9am', start: '09:00' })
+    expect(row.totals.untimed).toBe(0)
+    expect(row.totals.minutes).toBe(0)
+    expect(untimedShiftCount([S('p1', WEEK, '09:00:00', '09:00:00')])).toBe(0)
+    // And a shift with no times at all is still untimed in both.
+    expect(one([S('p1', WEEK, null, null)]).totals.untimed).toBe(1)
+    expect(untimedShiftCount([S('p1', WEEK, null, null)])).toBe(1)
+  })
+
+  it('the balance title says when shifts without times were not counted', () => {
+    const row = one([S('p1', WEEK, '09:00:00', '10:00:00'), S('p1', '2026-09-22', null, null)])
+    expect(adminBalanceLabel(row).title).toBe('10h contract − 1h class − 0m placed admin = 9h to place. 1 shift without times, not counted')
+    const two = one([S('p1', WEEK, null, null), S('p1', '2026-09-22', null, null)])
+    expect(adminBalanceLabel(two).title).toMatch(/\. 2 shifts without times, not counted$/)
+  })
+
+  it('My shifts with no row of your own has its own words', () => {
+    expect(GRID_COPY.noRowsMine).toBe('You have no shifts at this studio this week.')
   })
 })

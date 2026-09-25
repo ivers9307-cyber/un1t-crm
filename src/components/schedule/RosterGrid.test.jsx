@@ -169,6 +169,15 @@ describe('RosterGrid', () => {
     expect(screen.queryByRole('table')).toBeNull()
   })
 
+  // GRID.1 review 3 — a manager with no row of their own is not told the
+  // studio has nobody on its team.
+  it('My shifts for a viewer with no row: says so, not "nobody is on the team"', () => {
+    render(<RosterGrid model={model()} onlyProfileId="someone-else" onOpenBlock={vi.fn()} />)
+    const text = screen.getByTestId('roster-grid').textContent
+    expect(text).toMatch(/You have no shifts at this studio this week\./)
+    expect(text).not.toMatch(/Nobody is on this studio/)
+  })
+
   it("My shifts: only the viewer's row", () => {
     render(<RosterGrid model={model()} onlyProfileId="p-over" onOpenBlock={vi.fn()} />)
     expect(screen.getAllByRole('rowheader').map((h) => h.textContent)).toEqual(['Max Beta'])

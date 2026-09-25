@@ -15,7 +15,8 @@
 // No clock, no network, no host timezone. Dates are 'YYYY-MM-DD' strings and
 // all day arithmetic is Date.UTC, so a 23h or 25h day cannot move a column.
 
-import { workingWindow, workingTimeAdvisories, hoursMinutesLabel, EMPLOYEE_TYPE } from '@shared/working-time'
+import { workingWindow, workingTimeAdvisories, untimedShiftCount, hoursMinutesLabel, EMPLOYEE_TYPE } from '@shared/working-time'
+import { effectiveShiftStart, effectiveShiftEnd } from '@shared/roster-month'
 import { formatTime12h, formatTimeRange12h } from './schedule-overlap'
 import { unavailableFor, unavailableSummary, describeRule } from '@shared/availability'
 import { timeOffLeaveLabel } from '@shared/time-off'
@@ -96,6 +97,8 @@ export const GRID_COPY = Object.freeze({
   leaveMissing: 'Leave could not be loaded, so nobody is shown on leave.',
   availabilityMissing: 'Availability could not be loaded, so nobody is shown as unavailable.',
   noRows: 'Nobody is on this studio’s team this week.',
+  // GRID.1 review 3 — My shifts, and the viewer has no row here.
+  noRowsMine: 'You have no shifts at this studio this week.',
   legend: 'Hours only. Week = every studio in this organisation. Admin balance = contract − class − placed admin, for employees with contracted hours.',
   // GRID.1 review 1 — a head coach's grid (contract_visible false).
   legendContractHidden: 'Hours only. Week = every studio in this organisation. Contracted hours and the admin balance are shown to owners and managers only.',
@@ -114,8 +117,25 @@ const byStart = (a, b) => String(a.start ?? '99:99').localeCompare(String(b.star
 // workingWindow (override → block → template, Dublin wall clock → instants),
 // the same measure as the 48-hour rule; null = no usable times (shown, not
 // counted). `flags` comes from the overlays (Task 4).
+const hhmm = (t) => (typeof t === 'string' && /^\d{1,2}:\d{2}/.test(t) ? t.slice(0, 5).padStart(5, '0') : null)
+
+// unavailableFor asks about the whole day when the end is not after the
+// start. A window ENDING at midnight ('24:00', or '00:00' after a start) is
+// not that: it is asked as ending '23:59', which no rule can tell apart from
+// midnight (rule times stop at 23:59). Same call as CANDIDATES.1 review 6 in
+// shared/candidates.js (inline there, not exported). A true overnight window
+// keeps the whole-day reading (GRID.1 review 3).
+const availabilityEnd = (w) => (w.end === '00:00' && w.start !== '00:00' ? '23:59' : w.end)
+
 function chipOf(s, flags) {
   const w = workingWindow(s)
+  // workingWindow drops a zero-length shift, but untimedShiftCount (the
+  // publish preview's "not counted" line) calls it TIMED, 0 hours, as payroll
+  // does. The grid agrees: 0 minutes, its time shown (GRID.1 review 3).
+  const zero = !w && untimedShiftCount([s]) === 0
+    ? { start: hhmm(effectiveShiftStart(s)), end: hhmm(effectiveShiftEnd(s)) }
+    : null
+  const shown = w || zero
   return {
     key: String(s.assignment_id || `${s.block_id}|${s.profile_id}`),
     block_id: s.block_id ?? null,
@@ -124,11 +144,11 @@ function chipOf(s, flags) {
     location_name: s.location_name || null,
     name: s.name || 'Shift',
     kind: s.kind === 'admin' ? 'admin' : 'class',
-    start: w ? w.start : null,
-    time: w ? formatTimeRange12h(w.start, w.end) : 'No times',
-    minutes: w ? Math.round((w.endMs - w.startMs) / 60000) : null,
+    start: shown ? shown.start : null,
+    time: shown ? formatTimeRange12h(shown.start, shown.end) : 'No times',
+    minutes: w ? Math.round((w.endMs - w.startMs) / 60000) : zero ? 0 : null,
     onLeave: flags.onLeave,
-    unavailable: Boolean(w && !flags.onLeave && flags.unavailableDuring(w.start, w.end)),
+    unavailable: Boolean(w && !flags.onLeave && flags.unavailableDuring(w.start, availabilityEnd(w))),
   }
 }
 
@@ -276,7 +296,9 @@ export function adminBalanceLabel(row) {
   const h = hoursMinutesLabel
   const sum = `${h(row.contractMinutes)} contract − ${h(row.totals.class_minutes)} class − ${h(row.totals.admin_minutes)} placed admin`
   const n = row.leaveDays || 0
-  const leaveNote = n > 0 ? `. ${n} day${n === 1 ? '' : 's'} of approved leave this week ${n === 1 ? 'is' : 'are'} not deducted` : ''
+  const leaveNote = (n > 0 ? `. ${n} day${n === 1 ? '' : 's'} of approved leave this week ${n === 1 ? 'is' : 'are'} not deducted` : '')
+    // GRID.1 review 3 — a balance built without some shifts says so.
+    + (row.totals?.untimed > 0 ? `. ${untimedLabel(row.totals.untimed)}` : '')
   const { minutes, state } = row.balance
   if (state === 'over') {
     return { text: `−${h(-minutes)}`, tone: 'over', srText: `${h(-minutes)} over contract`, title: `${sum} = ${h(-minutes)} over contract${leaveNote}` }

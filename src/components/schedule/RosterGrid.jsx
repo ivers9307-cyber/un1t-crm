@@ -100,7 +100,7 @@ export default function RosterGrid({
           <tbody>
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={11} className={`${CELL} py-8 text-center text-un1t-muted`}>{GRID_COPY.noRows}</td>
+                <td colSpan={11} className={`${CELL} py-8 text-center text-un1t-muted`}>{onlyProfileId ? GRID_COPY.noRowsMine : GRID_COPY.noRows}</td>
               </tr>
             ) : rows.map((row) => (
               <GridRow
