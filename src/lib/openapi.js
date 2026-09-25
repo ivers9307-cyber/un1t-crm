@@ -4768,6 +4768,27 @@ registry.registerPath({
   },
 })
 
+// REPLACE.1a — hand one assignment to another coach in one action.
+registry.registerPath({
+  method: 'post',
+  path: '/api/schedule/assignments/{id}/replace',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Replace the coach on a shift (manager-only)',
+  description: "Moves one shift_assignments row from its coach to `profile_id` in a single guarded update: overrides, partial reason, arrival stamp and notes are cleared, status becomes scheduled. Manager at the shift's studio only (404 outside it, 403 for a non-manager there). Refused once the shift has started (studio clock) or the coach has arrived, for a coach who is not a rosterable member of the studio, or who is already on it. Approved leave or another shift that day answers 409 `swap_conflicts` with the sentences unless `confirm_conflicts: true`. Open swaps on the shift are closed. On a published roster: two change-log rows (via replace) and one notice to each coach, sent now inside 07:00-22:00 studio time and from 07:00 otherwise; `data.notice` is now, morning or none (draft).",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ profile_id: uuidLike, confirm_conflicts: z.boolean().optional() }) } } },
+  },
+  responses: {
+    200: { description: 'Replaced; `data.notice` says when the coaches are told' },
+    400: { description: 'Not a member of this studio, not rosterable, or the same coach', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — a manager at this studio only', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Assignment not found, or at a location you do not own', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Started, arrived, already on the shift, changed meanwhile, or `swap_conflicts` (confirm to proceed)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // BUDGETAPPROVE.1 — approve re-projects the budget and reports whether it moved.
 registry.registerPath({
   method: 'post',

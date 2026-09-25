@@ -323,6 +323,13 @@ describe('getOpenApiSpec', () => {
     expect(path.delete.description).toMatch(/swap/i)
   })
 
+  it('REPLACE.1a — documents POST /api/schedule/assignments/{id}/replace', () => {
+    const path = spec.paths['/api/schedule/assignments/{id}/replace']
+    expect(path?.post?.responses).toHaveProperty('409')
+    expect(path.post.description).toMatch(/swap_conflicts/)
+    expect(path.post.description).toMatch(/manager/i)
+  })
+
   // DATECHECK.1 — every schedule read that now refuses an impossible date
   // says so in its 400.
   it('documents the schedule date refusals on the list reads', () => {
