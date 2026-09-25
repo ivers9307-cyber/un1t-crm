@@ -18,6 +18,10 @@ export const TEMPLATES_UNAVAILABLE_MESSAGE =
 // just look like no coach being on leave.
 export const LEAVE_NOT_FLAGGED_MESSAGE =
   'Leave could not be loaded, so coaches on leave are not flagged here.'
+// Shown inside the assign picker (AVAIL.1), where missing availability would
+// otherwise look like every coach being free.
+export const AVAILABILITY_NOT_FLAGGED_MESSAGE =
+  'Availability could not be loaded, so unavailable coaches are not flagged here.'
 
 // [slice, managerOnly, copy when cleared, copy when an earlier load is kept,
 //  optional coach copy when cleared]
@@ -40,6 +44,10 @@ const COPY = [
   ['contractorSpend', true,
     'Contractor spend could not be loaded.',
     'Contractor spend could not be refreshed. Showing the last figure that loaded.'],
+  // AVAIL.1 — manager-only: a coach's calendar never reads availability.
+  ['availability', true,
+    'Availability could not be loaded, so unavailable coaches are not shaded or flagged.',
+    'Availability could not be refreshed. Showing it as it last loaded.'],
 ]
 
 /**
