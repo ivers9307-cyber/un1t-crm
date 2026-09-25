@@ -120,6 +120,30 @@ export function parseTimeInput(text) {
   return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`
 }
 
+/**
+ * A bare hour of 1-5 ('5', '530', '1:15') reads as the morning, which is
+ * rarely what a coach means by "can't work from 5". It still reads that way
+ * (no guessing), but the card says how to write the afternoon. Nothing for
+ * an explicit am/pm, a leading zero ('05': a 24-hour time), or 06:00 on.
+ */
+export function earlyTimeHint(text) {
+  const s = String(text ?? '').trim().toLowerCase().replace(/\s+/g, '')
+  if (!s || /[ap]m$/.test(s) || s.startsWith('0')) return null
+  const hhmm = parseTimeInput(s)
+  if (!hhmm) return null
+  const h = Number(hhmm.slice(0, 2))
+  if (h < 1 || h > 5) return null
+  const mm = hhmm.slice(3)
+  const pm = mm === '00' ? `${h}pm` : `${h}:${mm}pm`
+  return `That reads as ${hhmm} in the morning. For ${pm}, type ${pm}.`
+}
+
+/** The early-time hint for a card with a window (From first, then To); null when all day. */
+export function rowTimeHint(row) {
+  if (!row || row.all_day) return null
+  return earlyTimeHint(row.start_time) || earlyTimeHint(row.end_time)
+}
+
 /** Leaving a time field: tidy what reads ('930' → '09:30'); leave the rest for the coach to see. */
 export function timeOnBlur(text) {
   return parseTimeInput(text) ?? String(text ?? '')

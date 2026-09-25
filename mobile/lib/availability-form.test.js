@@ -10,7 +10,7 @@
 import { describe, it, expect } from 'vitest'
 import { AVAILABILITY_LIMITS, normaliseAvailability, carryStartedRules, availabilityProblems } from 'shared/availability'
 import {
-  AVAILABILITY_COPY, WEEKDAY_CHIPS, createRowKeys, parseTimeInput, timeOnBlur, rowFromRule, rowsFromServer,
+  AVAILABILITY_COPY, WEEKDAY_CHIPS, createRowKeys, parseTimeInput, timeOnBlur, earlyTimeHint, rowTimeHint, rowFromRule, rowsFromServer,
   newRow, rowToRule, datesLabel, calendarRange, rangeFromCalendar,
   hasEnded, startedRules, rowProblem, formProblems, canAdd, duplicateKeys, startedNote, rowSummary,
   buildSaveBody, isDirty,
@@ -53,6 +53,25 @@ describe('parseTimeInput', () => {
   it.each([
     '', '   ', null, undefined, '24:00', '2400', '9:5', '9:60', '13pm', '0am', '17:30pm', 'noon', '9-30', '12345', '09:30:00',
   ])('%j does not read (no overnight, no seconds, no guessing)', (typed) => expect(parseTimeInput(typed)).toBeNull())
+})
+
+describe('earlyTimeHint', () => {
+  it('a bare 1-5 still reads as the morning, but says how to write the afternoon', () => {
+    expect(earlyTimeHint('5')).toBe('That reads as 05:00 in the morning. For 5pm, type 5pm.')
+    expect(earlyTimeHint('530')).toBe('That reads as 05:30 in the morning. For 5:30pm, type 5:30pm.')
+    expect(earlyTimeHint('1:15')).toBe('That reads as 01:15 in the morning. For 1:15pm, type 1:15pm.')
+  })
+  it('no hint when the coach said am, typed a 24-hour time, or wrote from 06:00 on', () => {
+    for (const typed of ['5am', '5:30 AM', '05', '05:00', '17', '6', '0', '12', '', 'x', null]) {
+      expect(earlyTimeHint(typed)).toBeNull()
+    }
+  })
+  it('rowTimeHint: the first early field on a card with a window; none when all day', () => {
+    const row = { kind: 'weekly', weekday: 'tue', all_day: false, start_time: '9', end_time: '5', note: '' }
+    expect(rowTimeHint(row)).toBe(earlyTimeHint('5'))
+    expect(rowTimeHint({ ...row, all_day: true })).toBeNull()
+    expect(rowTimeHint({ ...row, end_time: '5pm' })).toBeNull()
+  })
 })
 
 describe('timeOnBlur', () => {

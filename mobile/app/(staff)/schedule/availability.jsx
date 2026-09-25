@@ -22,7 +22,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../../lib/auth-context'
 import { getMyAvailability, saveMyAvailability } from '../../../lib/availability-api'
 import {
-  AVAILABILITY_COPY as COPY, AVAILABILITY_TITLE, AVAILABILITY_INTRO, AVAILABILITY_NO_OVERNIGHT, WEEKDAY_CHIPS,
+  AVAILABILITY_COPY as COPY, AVAILABILITY_TITLE, AVAILABILITY_INTRO, AVAILABILITY_NO_OVERNIGHT, WEEKDAY_CHIPS, rowTimeHint,
   createRowKeys, rowsFromServer, newRow, timeOnBlur, datesLabel, calendarRange, rangeFromCalendar,
   hasEnded, isStarted, startedRules, formProblems, duplicateKeys, canAdd, startedNote, rowSummary,
   buildSaveBody, isDirty, loadOutcome, saveOutcome, closeAction, saveButtonState, impersonationLine, cardsEditable,
@@ -450,6 +450,7 @@ function RuleCard({ row, today, problem, duplicate, frozen, calendarOpen, onTogg
           <TimeField label="To" value={row.end_time} locked={locked || frozen} onChange={(t) => onChange({ end_time: t })} />
         </View>
       ) : null}
+      {!locked && rowTimeHint(row) ? <Text className="text-xs text-amber-700 mb-3 -mt-1">{rowTimeHint(row)}</Text> : null}
 
       <Text className="text-xs uppercase font-semibold text-un1t-subtle mb-1.5 mt-1">Note (optional)</Text>
       <TextInput
@@ -487,7 +488,7 @@ function TimeField({ label, value, locked, onChange }) {
         placeholder="09:30"
         placeholderTextColor="#64748B"
         keyboardType="numbers-and-punctuation"
-        maxLength={7}
+        maxLength={8}
         autoCorrect={false}
         autoCapitalize="none"
         returnKeyType="done"
