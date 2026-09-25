@@ -63,7 +63,7 @@ const ANSWER = {
       { ...none, profile_id: 'c-busy', full_name: 'Busy Coach', role: 'staff', rank: 5, tier: 'blocked', free: false, week_minutes: 60,
         busy: { block_id: 'b-busy', date: '2026-05-06', start: '09:30', end: '10:30', name: 'Morning HIIT', location_name: null } },
       { ...none, profile_id: 'c-leave', full_name: 'Leave Coach', role: 'staff', rank: 6, tier: 'blocked', week_minutes: 0,
-        on_leave: { type: 'holiday', label: 'Holiday', start_date: '2026-05-05', end_date: '2026-05-07' } },
+        on_leave: { label: 'Holiday', start_date: '2026-05-05', end_date: '2026-05-07' } },
     ],
   },
 }

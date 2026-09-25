@@ -11,7 +11,7 @@
 //                     organisation (effective windows as real instants; ends
 //                     that only touch are not an overlap)
 //   busy              the earliest such overlapping shift, or null
-//   on_leave          approved leave covering the day { type, label, start_date, end_date }
+//   on_leave          approved leave covering the day { label, start_date, end_date }
 //   unavailable       an AVAIL.1 rule touching the shift { summary, detail }
 //   on_site           the nearest other live shift at THIS studio that day
 //                     { block_id, start, end, name, gap_minutes }
@@ -357,7 +357,8 @@ export function candidateFacts({
       .filter((l) => l?.start_date && l.end_date && l.start_date <= date && l.end_date >= date)
       .sort((a, b) => String(a.start_date).localeCompare(String(b.start_date)))[0]
     facts.on_leave = hit
-      ? { type: hit.type ?? null, label: timeOffLeaveLabel(hit.type), start_date: hit.start_date, end_date: hit.end_date }
+      // The label only: the raw type value never leaves the server (review 5).
+      ? { label: timeOffLeaveLabel(hit.type), start_date: hit.start_date, end_date: hit.end_date }
       : null
   }
 

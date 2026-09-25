@@ -153,7 +153,7 @@ describe('loadBlockCandidates — manager', () => {
     expect(out.checked).toEqual({ shifts: true, cross_studio: true, leave: true, availability: true, contract: true })
     expect(out.candidates.map((c) => [c.profile_id, c.tier])).toEqual([['ann', 'ready'], ['nul', 'unavailable'], ['con', 'blocked']])
     expect(out.candidates[0]).toMatchObject({ contracted_hours: 39, week_minutes: 240, reason: 'Free · 4h of 39h this week' })
-    expect(out.candidates[2].on_leave).toMatchObject({ type: 'holiday' })
+    expect(out.candidates[2].on_leave).toEqual({ label: 'Holiday', start_date: '2026-09-22', end_date: '2026-09-24' })
   })
 
   it('never selects or returns a pay column', async () => {

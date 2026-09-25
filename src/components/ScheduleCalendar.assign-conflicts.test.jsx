@@ -80,7 +80,7 @@ const CANDIDATES = {
       { ...free, profile_id: 'c-clash', full_name: 'Clash Coach', role: 'staff', rank: 2, tier: 'blocked', free: false, week_minutes: 90,
         busy: { block_id: 'b-other', date: DATE, start: '09:30', end: '11:00', name: 'Morning HIIT', location_name: null } },
       { ...free, profile_id: 'c-leave', full_name: 'Leave Coach', role: 'staff', rank: 3, tier: 'blocked',
-        on_leave: { type: 'holiday', label: 'Holiday', start_date: '2026-05-05', end_date: '2026-05-07' } },
+        on_leave: { label: 'Holiday', start_date: '2026-05-05', end_date: '2026-05-07' } },
     ],
   },
 }

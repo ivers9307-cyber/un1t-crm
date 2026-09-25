@@ -65,7 +65,7 @@ describe('words', () => {
   const FACTS = {
     profile_id: 'p', full_name: 'P', role: 'staff', free: false,
     busy: { block_id: 'b', date: '2026-05-06', start: '09:30', end: '10:30', name: 'Morning HIIT', location_name: 'Studio South' },
-    on_leave: { type: 'sick', label: 'Sick leave', start_date: '2026-05-06', end_date: '2026-05-06' },
+    on_leave: { label: 'Sick leave', start_date: '2026-05-06', end_date: '2026-05-06' },
     unavailable: { summary: 'all day', detail: '6 May, all day' },
     rest_gap: { rest_minutes: 570, side: 'before', other: { block_id: 'x', date: '2026-05-05', start: '20:00', end: '21:30', name: 'Evening', location_name: 'Studio South' } },
     week_over: { week_start: '2026-05-04', minutes: 2910 },
@@ -202,7 +202,8 @@ describe('buildCandidates — manager', () => {
     const by = Object.fromEntries(build().candidates.map((c) => [c.profile_id, c]))
     expect(by.bob).toMatchObject({ free: true, busy: null, on_site: { start: '07:00', end: '09:00', name: 'Early', gap_minutes: 60 }, week_minutes: 120, contracted_hours: null, rest_gap: null })
     expect(by.cat).toMatchObject({ free: false, busy: { date: '2026-09-23', start: '11:00', end: '13:00', name: 'Lunch Pilates', location_name: 'Studio South' }, tier: 'blocked' })
-    expect(by.dan.on_leave).toEqual({ type: 'holiday', label: 'Holiday', start_date: '2026-09-22', end_date: '2026-09-24' })
+    // CANDIDATES.1 review 5 — the label, never the raw type value.
+    expect(by.dan.on_leave).toEqual({ label: 'Holiday', start_date: '2026-09-22', end_date: '2026-09-24' })
     expect(by.eve.unavailable).toEqual({ summary: '9am–11am', detail: 'Wednesdays, 9am–11am (School run)' })
     expect(by.fay.rest_gap).toMatchObject({ rest_minutes: 630, side: 'before', other: { date: '2026-09-22', start: '21:00', end: '23:30', name: 'Late', location_name: 'Studio South' } })
     expect(by.hal.week_minutes).toBe(0)
@@ -307,6 +308,7 @@ describe('candidateFacts', () => {
       rules: [{ kind: 'weekly', weekday: 'wed', all_day: false, start_time: '18:00', end_time: '19:00' }],
       checked: ALL_CHECKED,
     })
-    expect(f).toMatchObject({ free: null, week_minutes: null, on_leave: { type: 'sick', label: 'Sick leave' }, unavailable: { summary: '6pm–7pm' } })
+    expect(f).toMatchObject({ free: null, week_minutes: null, on_leave: { label: 'Sick leave' }, unavailable: { summary: '6pm–7pm' } })
+    expect(f.on_leave).not.toHaveProperty('type')
   })
 })
