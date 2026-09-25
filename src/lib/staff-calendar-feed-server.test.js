@@ -128,22 +128,37 @@ describe('touchFeedFetched (D10)', () => {
   it('stamps a feed never fetched, or last fetched 15+ minutes ago', async () => {
     for (const last of [null, new Date(NOW - TOUCH_INTERVAL_MS).toISOString()]) {
       const db = touchDb()
-      await touchFeedFetched(db, { profile_id: ME, last_fetched_at: last }, NOW)
+      await touchFeedFetched(db, { profile_id: ME, last_fetched_at: last }, NOW, HASH)
       const [u] = queriesOf(db, 'staff_calendar_feeds', 'update')
       expect(u.payload).toEqual({ last_fetched_at: '2026-09-25T10:00:00.000Z' })
-      expect(u.eq).toEqual({ profile_id: ME })
+      expect(u.eq).toEqual({ profile_id: ME, token_hash: HASH })
     }
+  })
+
+  it('stamps only the link that was fetched: a poll on an OLD token racing a rotation never marks the NEW link as checked', async () => {
+    const db = touchDb()
+    await touchFeedFetched(db, { profile_id: ME, last_fetched_at: null }, NOW, HASH)
+    const [u] = queriesOf(db, 'staff_calendar_feeds', 'update')
+    // Pinned by the hash as well as the person: after a rotation this matches
+    // zero rows, which is the right answer (the old link was not "checked").
+    expect(u.eq.token_hash).toBe(HASH)
+  })
+
+  it('with no hash to pin to, stamps nothing rather than stamping by person alone', async () => {
+    const db = touchDb()
+    await touchFeedFetched(db, { profile_id: ME, last_fetched_at: null }, NOW)
+    expect(db.queries).toEqual([])
   })
 
   it('skips a feed fetched in the last 15 minutes', async () => {
     const db = touchDb()
-    await touchFeedFetched(db, { profile_id: ME, last_fetched_at: new Date(NOW - 60_000).toISOString() }, NOW)
+    await touchFeedFetched(db, { profile_id: ME, last_fetched_at: new Date(NOW - 60_000).toISOString() }, NOW, HASH)
     expect(db.queries).toEqual([])
   })
 
   it('a failed stamp resolves (logged), it never fails the feed', async () => {
     const { logWarn } = await import('@/lib/log')
-    await expect(touchFeedFetched(touchDb({ message: 'boom' }), { profile_id: ME, last_fetched_at: null }, NOW)).resolves.toBeUndefined()
+    await expect(touchFeedFetched(touchDb({ message: 'boom' }), { profile_id: ME, last_fetched_at: null }, NOW, HASH)).resolves.toBeUndefined()
     expect(logWarn).toHaveBeenCalled()
   })
 })

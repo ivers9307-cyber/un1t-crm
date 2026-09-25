@@ -104,8 +104,17 @@ export async function loadFeedShifts(db, profileId, { from, to }) {
   return { rows, locationsById: Object.fromEntries((locs || []).map((l) => [l.id, l])), error: null }
 }
 
-/** D10 — stamp last_fetched_at when older than 15 minutes. Never throws, never fails the feed. */
-export async function touchFeedFetched(db, feed, nowMs) {
+/**
+ * D10 — stamp last_fetched_at when older than 15 minutes. Never throws, never
+ * fails the feed.
+ *
+ * Pinned by the fetched link's HASH as well as the person: a poll on the OLD
+ * token that resolved just before a rotation must not mark the NEW link as
+ * "checked by your calendar" (the new row has a different hash, so the
+ * UPDATE matches nothing, which is the truth). No hash, no stamp.
+ */
+export async function touchFeedFetched(db, feed, nowMs, tokenHash) {
+  if (!tokenHash || !feed?.profile_id) return
   const last = Date.parse(feed?.last_fetched_at ?? '')
   if (Number.isFinite(last) && nowMs - last < TOUCH_INTERVAL_MS) return
   try {
@@ -113,6 +122,7 @@ export async function touchFeedFetched(db, feed, nowMs) {
       .from('staff_calendar_feeds')
       .update({ last_fetched_at: new Date(nowMs).toISOString() })
       .eq('profile_id', feed.profile_id)
+      .eq('token_hash', tokenHash)
     if (error) logWarn('calendar-feed', 'last_fetched_at stamp failed', { err: error })
   } catch (e) {
     logWarn('calendar-feed', 'last_fetched_at stamp threw', { err: e })

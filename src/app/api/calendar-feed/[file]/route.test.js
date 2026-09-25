@@ -160,6 +160,8 @@ describe('GET /api/calendar-feed/[file] — the feed', () => {
     let db = makeDb()
     await call(`${TOKEN}.ics`)
     expect(queriesOf(db, 'staff_calendar_feeds', 'update')).toHaveLength(1)
+    // Pinned to the link that was fetched, never just the person (a rotation race).
+    expect(queriesOf(db, 'staff_calendar_feeds', 'update')[0].eq).toEqual({ profile_id: ME, token_hash: HASH })
     db = makeDb({ feed: { profile_id: ME, last_fetched_at: new Date(Date.now() - 60_000).toISOString() } })
     await call(`${TOKEN}.ics`)
     expect(queriesOf(db, 'staff_calendar_feeds', 'update')).toEqual([])

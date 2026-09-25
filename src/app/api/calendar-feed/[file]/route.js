@@ -66,7 +66,7 @@ export async function GET(request, props) {
   if (error) return unavailable()
 
   const body = buildStaffShiftFeed({ rows, locationsById, generatedAtMs: nowMs })
-  await touchFeedFetched(db, resolved.feed, nowMs)
+  await touchFeedFetched(db, resolved.feed, nowMs, resolved.tokenHash)
 
   return new NextResponse(body, {
     status: 200,
