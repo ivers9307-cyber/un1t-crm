@@ -327,7 +327,7 @@ describe('runAvailabilityNoticeSweep', () => {
     const out = await runAvailabilityNoticeSweep(db, { nowMs: t })
     expect(sendPushOnce.mock.calls[0][1]).toBe(availabilityRetryKey('ch-1', t))
     expect(out).toMatchObject({ sent: 1, errors: 0 })
-    expect(sendPushOnce.mock.results[0].value).resolves.toMatchObject({ sent: 4 })
+    await expect(sendPushOnce.mock.results[0].value).resolves.toMatchObject({ sent: 4 })
     expect(stamps(db)[0].ops).toContainEqual(['update', { notified_at: new Date(t).toISOString(), notice_outcome: 'sent' }])
   })
 
