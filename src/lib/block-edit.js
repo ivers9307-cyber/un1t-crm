@@ -18,6 +18,8 @@ import { adminMinimumRefusal } from './shift-template-kind'
 import { formatTime12h, formatTimeRange12h } from './schedule-overlap'
 import { shiftKindOf } from '@shared/shift-kind'
 import { normaliseBriefing } from '@shared/shift-briefing'
+import { inStaffPushHours, staffWallClockHHMM, STAFF_PUSH_FROM } from './staff-push-hours'
+import { dublinDayStr, addDaysISO } from './dublin-time'
 
 export const BLOCK_EDIT_FIELDS = ['start_time', 'end_time', 'min_coaches', 'max_coaches', 'briefing']
 
@@ -202,10 +204,34 @@ export function planBlockEdit({ block, body = {} }) {
   return { ok: true, unchanged: false, patch, next, changed, followUpdates, affected, kept, warnings, blockDetails }
 }
 
+/**
+ * When will the coaches hear about a time change? The 5-minute notice arm sends
+ * only inside staff quiet hours (07:00-22:00 at the studio).
+ *   'shortly'  in band now: the next tick.
+ *   'morning'  quiet now: from 07:00 on the next morning.
+ *   'too_late' quiet now, and the shift is on that very morning with a start
+ *              (old OR new, any coach) before 07:00: it will have started
+ *              before anyone is told, so the manager must ring them.
+ * @param {{ nowMs: number, timeZone?: string|null, blockDate: string,
+ *           windows: Array<{ from: {start_time}, to: {start_time} }> }} args
+ */
+export function blockEditNoticeWhen({ nowMs, timeZone, blockDate, windows = [] }) {
+  if (inStaffPushHours(nowMs, timeZone)) return 'shortly'
+  const wall = staffWallClockHHMM(nowMs, timeZone) || '00:00'
+  const today = dublinDayStr(nowMs)
+  const noticeDay = wall < STAFF_PUSH_FROM ? today : addDaysISO(today, 1)
+  const early = windows.some((w) => [w.from?.start_time, w.to?.start_time]
+    .some((t) => toHms(t) !== null && toHms(t).slice(0, 5) < STAFF_PUSH_FROM))
+  return blockDate === noticeDay && early ? 'too_late' : 'morning'
+}
+
 /** The web toast's second half, from the PUT response's `notice`. '' when nobody is told. */
 export function blockEditNoticeText(notice) {
   if (!notice || !(notice.coaches > 0)) return ''
   const who = notice.coaches === 1 ? 'The coach on this shift' : `The ${notice.coaches} coaches on this shift`
+  if (notice.when === 'too_late') {
+    return `Saved. ${who} will NOT be told before it starts (no notifications before 7am). Ring them.`
+  }
   return notice.when === 'morning'
     ? `Saved. ${who} will be told after 7am (no notifications overnight).`
     : `Saved. ${who} will be told in the next few minutes.`

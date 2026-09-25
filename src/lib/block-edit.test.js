@@ -154,6 +154,8 @@ describe('blockEditNoticeText', () => {
     expect(blockEditNoticeText({ coaches: 0, when: 'shortly' })).toBe('')
     expect(blockEditNoticeText({ coaches: 1, when: 'shortly' })).toBe('Saved. The coach on this shift will be told in the next few minutes.')
     expect(blockEditNoticeText({ coaches: 2, when: 'morning' })).toBe('Saved. The 2 coaches on this shift will be told after 7am (no notifications overnight).')
+    // Review fix 3 — the shift starts before anyone can be told: say so.
+    expect(blockEditNoticeText({ coaches: 1, when: 'too_late' })).toBe('Saved. The coach on this shift will NOT be told before it starts (no notifications before 7am). Ring them.')
   })
 })
 

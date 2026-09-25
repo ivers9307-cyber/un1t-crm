@@ -67,10 +67,26 @@ describe('planTimeChangeNotices', () => {
     expect(planTimeChangeNotices([off, gone], opts)).toEqual({ send: [], silent: [off, gone] })
   })
 
-  it('a shift that has already started today: no message', () => {
-    const today = row('r1', { block_date: '2026-09-29' })
-    expect(planTimeChangeNotices([today], opts).send).toEqual([])
-    expect(planTimeChangeNotices([today], { ...opts, nowHHMMByLocation: { 'loc-1': '09:59' } }).send).toHaveLength(1)
+  // Review fix 3 — "started" is judged on the ORIGINAL start (the time the
+  // coach was working to), and a running shift whose END moved is still news.
+  it('started (by its ORIGINAL start) and only the start moved: no message', () => {
+    const r = row('r1', { block_date: '2026-09-29', shift_blocks: blockEmbed({ start_time: '10:00:00', end_time: '12:00:00' }) })
+    // from 09:00-12:00, now 10:00-12:00, clock 11:00.
+    expect(planTimeChangeNotices([r], opts)).toEqual({ send: [], silent: [r] })
+  })
+
+  it('started, and the END moved: still told', () => {
+    const r = row('r1', { block_date: '2026-09-29' }) // from 09:00-12:00, now 10:00-13:00
+    expect(planTimeChangeNotices([r], opts).send).toHaveLength(1)
+  })
+
+  it('not started by its original start, even though the NEW start has passed: told (they are now late)', () => {
+    const r = row('r1', {
+      block_date: '2026-09-29',
+      details: { source: 'block_edit', from: { start_time: '14:00:00', end_time: '16:00:00' }, to: { start_time: '10:00:00', end_time: '16:00:00' } },
+      shift_blocks: blockEmbed({ start_time: '10:00:00', end_time: '16:00:00' }),
+    })
+    expect(planTimeChangeNotices([r], opts).send[0].to).toEqual({ start_time: '10:00:00', end_time: '16:00:00' })
   })
 
   it("the coach's own override counts as their window now", () => {

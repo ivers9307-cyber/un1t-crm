@@ -53,8 +53,7 @@ import { validateBody } from '@/lib/validate'
 import { isLiveAssignment } from '@/lib/roster'
 import { logAndNotifyUnassignments } from '@/lib/shift-unassign'
 import { logRosterChange, logBlockEdit, markChangesNotified } from '@/lib/roster-change-log'
-import { planBlockEdit, sameWindow, matchesExpected, TIME_CHANGE_SOURCE } from '@/lib/block-edit'
-import { inStaffPushHours } from '@/lib/staff-push-hours'
+import { planBlockEdit, sameWindow, matchesExpected, blockEditNoticeWhen, TIME_CHANGE_SOURCE } from '@/lib/block-edit'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { BRIEFING_MAX_LENGTH } from '@shared/shift-briefing'
 import { logWarn } from '@/lib/log'
@@ -332,17 +331,23 @@ export async function PUT(request, props) {
         blockDate: block.block_date,
         details: { source: TIME_CHANGE_SOURCE, from: a.from, to: a.to },
       })
-      if (r?.logged) logged.push({ id: r.id, coachId: a.coachId })
+      if (r?.logged) logged.push({ id: r.id, coachId: a.coachId, from: a.from, to: a.to })
     }
     // Nobody to tell: a shift already in the past, or the manager moved their
     // own shift. Stamped now so the notice arm and the re-publish safety net
     // leave them alone (stampMeansTold rules 3 and 4).
     const past = block.block_date < dublinTodayStr()
-    const silentIds = logged.filter((r) => past || r.coachId === user.id).map((r) => r.id)
+    const silent = logged.filter((r) => past || r.coachId === user.id)
+    const silentIds = silent.map((r) => r.id)
     if (silentIds.length > 0) await markChangesNotified(db, silentIds)
-    const toTell = logged.length - silentIds.length
-    if (toTell > 0) {
-      notice = { coaches: toTell, when: inStaffPushHours(Date.now(), block.locations?.timezone) ? 'shortly' : 'morning' }
+    const toTell = logged.filter((r) => !silentIds.includes(r.id))
+    if (toTell.length > 0) {
+      // Review fix 3 — 'too_late' when the shift starts before anyone can be
+      // told (quiet hours now, a start before 07:00 on the notice morning).
+      notice = {
+        coaches: toTell.length,
+        when: blockEditNoticeWhen({ nowMs: Date.now(), timeZone: block.locations?.timezone, blockDate: block.block_date, windows: toTell }),
+      }
     }
   }
 

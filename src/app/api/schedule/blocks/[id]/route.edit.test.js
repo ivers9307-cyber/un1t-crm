@@ -243,6 +243,36 @@ describe('PUT /api/schedule/blocks/[id] — change log and notice (published onl
     expect(body.notice).toEqual({ coaches: 1, when: 'morning' })
   })
 
+  // Review fix 3 — a shift that starts before 07:00 on the morning the notice
+  // could first go out will have started before anyone is told.
+  it("in quiet hours, a new start before 7am on the notice morning: 'too_late'", async () => {
+    vi.setSystemTime(new Date('2026-09-29T22:30:00Z')) // 23:30 Dublin; notices from 07:00 on the 30th
+    createServerClient.mockReturnValue(makeDb())
+    const body = await (await PUT(req({ start_time: '06:30' }), params)).json()
+    expect(body.notice).toEqual({ coaches: 1, when: 'too_late' })
+  })
+
+  it("an OLD start before 7am counts too (the coach may turn up at the old time)", async () => {
+    vi.setSystemTime(new Date('2026-09-29T22:30:00Z'))
+    createServerClient.mockReturnValue(makeDb({ block: { ...BLOCK, start_time: '06:00:00' } }))
+    const body = await (await PUT(req({ start_time: '08:00' }), params)).json()
+    expect(body.notice).toEqual({ coaches: 1, when: 'too_late' })
+  })
+
+  it("before 07:00 the same day's early shift is too late as well", async () => {
+    vi.setSystemTime(new Date('2026-09-30T04:00:00Z')) // 05:00 Dublin on the shift's own day
+    createServerClient.mockReturnValue(makeDb())
+    const body = await (await PUT(req({ start_time: '06:30' }), params)).json()
+    expect(body.notice).toEqual({ coaches: 1, when: 'too_late' })
+  })
+
+  it('a start before 7am on a LATER day is only morning', async () => {
+    vi.setSystemTime(new Date('2026-09-28T22:30:00Z')) // 23:30 on the 28th; notice morning is the 29th
+    createServerClient.mockReturnValue(makeDb())
+    const body = await (await PUT(req({ start_time: '06:30' }), params)).json()
+    expect(body.notice).toEqual({ coaches: 1, when: 'morning' })
+  })
+
   it('a draft block is saved but not logged and nobody is told (drafts ride the first publish)', async () => {
     createServerClient.mockReturnValue(makeDb({ block: { ...BLOCK, rosters: { status: 'draft' } } }))
     const body = await (await PUT(req({ start_time: '10:00' }), params)).json()

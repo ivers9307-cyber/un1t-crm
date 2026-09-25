@@ -687,7 +687,8 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
     if (res.ok && data.success) {
       await refreshAfterMutation()
       const told = blockEditNoticeText(data.notice)
-      if (data.warning) showToast([data.warning, told].filter(Boolean).join(' '), 'warning')
+      // Review fix 3 — 'too_late' asks the manager to ring the coaches: a warning, not a success.
+      if (data.warning || data.notice?.when === 'too_late') showToast([data.warning, told].filter(Boolean).join(' '), 'warning')
       else showToast(told || 'Shift saved.', 'success')
       return { ok: true }
     }

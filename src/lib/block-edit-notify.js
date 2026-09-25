@@ -15,7 +15,8 @@
 //     Net no change (edited and put back) = no message.
 //   - Not sent, stamped with details.notice = 'not_needed' (the drawer then
 //     shows no told time): the coach is no longer on the shift, the shift was
-//     deleted, the net change is nothing, or it has already started today.
+//     deleted, the net change is nothing, or it has already started today
+//     (judged on the ORIGINAL start) and only its start moved.
 //   - Stamped only on DELIVERY (push or email fallback). Opted out, no
 //     device, or a failed send: left UNSTAMPED for the re-publish safety net
 //     (renotifyChangedCoaches); the per-row claim key stops this arm
@@ -95,8 +96,14 @@ export function planTimeChangeNotices(rows, { todayStr, nowHHMMByLocation = {} }
       end_time: toHms(mine.end_time_override || block.end_time),
     }
     const nowHHMM = nowHHMMByLocation[oldest.location_id]
-    const started = oldest.block_date === todayStr && Boolean(nowHHMM) && now.start_time.slice(0, 5) <= nowHHMM
-    if (sameWindow(from, now) || started || oldest.block_date < todayStr) {
+    // Review fix 3 — "started" is judged on the ORIGINAL start: the time the
+    // coach was working to. A shift moved EARLIER past the clock has not
+    // started for them, and they must hear they are now late. A running
+    // shift whose END moved is still news; one whose only change is its
+    // (already passed) start is not.
+    const started = oldest.block_date === todayStr && Boolean(nowHHMM) && toHms(from.start_time).slice(0, 5) <= nowHHMM
+    const endMoved = toHms(from.end_time) !== now.end_time
+    if (sameWindow(from, now) || (started && !endMoved) || oldest.block_date < todayStr) {
       silent.push(...list)
       continue
     }
