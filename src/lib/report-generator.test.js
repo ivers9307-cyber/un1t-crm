@@ -734,3 +734,20 @@ describe('generateReport — leavers keep their history (STAFFDELETE.1)', () => 
     expect(roles).toEqual({ 'Former Coach': 'head_coach', 'p-here': 'staff' })
   })
 })
+
+// DATECHECK.1 — the routes refuse an impossible period before calling this;
+// this is the floor for any other caller, checked before a single read.
+describe('generateReport — a period the calendar does not have', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+
+  for (const [period_start, period_end] of [['2026-02-30', '2026-03-06'], ['2026-04-01', '2026-04-31'], ['2026-13-01', '2026-13-07']]) {
+    it(`${period_start} to ${period_end} is refused, and nothing is read`, async () => {
+      const { db } = makeReportDb({})
+      createServerClient.mockReturnValue(db)
+
+      const res = await generateReport({ report_type: 'roster_coverage', period_start, period_end, location_id: 'loc1' })
+      expect(res).toEqual({ success: false, error: 'period_start and period_end must be real dates, YYYY-MM-DD' })
+      expect(db.from).not.toHaveBeenCalled()
+    })
+  }
+})
