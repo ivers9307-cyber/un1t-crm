@@ -62,12 +62,22 @@ afterEach(() => {
 describe('ScheduleTabs — tabs render as links to the real sibling pages', () => {
   // AVAIL.1 — every staff member edits their own availability, so the tab
   // has no gate.
-  it('renders Schedule and Availability for a plain staffer with no grants', () => {
+  it('renders Schedule, Availability and Qualifications for a plain staffer with no grants', () => {
     render(<ScheduleTabs user={user()} />)
     const links = screen.getAllByRole('link')
-    expect(links.map((l) => l.textContent)).toEqual(['Schedule', 'Availability'])
+    expect(links.map((l) => l.textContent)).toEqual(['Schedule', 'Availability', 'Qualifications'])
     expect(links[0].getAttribute('href')).toBe('/schedule')
     expect(links[1].getAttribute('href')).toBe('/schedule/availability')
+    expect(links[2].getAttribute('href')).toBe('/schedule/qualifications')
+  })
+
+  // QUALS.1 — everyone sees their own qualifications; managers manage them.
+  it('shows Qualifications to every role, linking to /schedule/qualifications', () => {
+    for (const role of ['staff', 'head_coach', 'manager', 'owner']) {
+      render(<ScheduleTabs user={user({ role })} />)
+      expect(linkFor('Qualifications').getAttribute('href'), role).toBe('/schedule/qualifications')
+      cleanup()
+    }
   })
 
   it('shows Reporting, Time Off and Swaps to managers, hidden from staff (MANAGER_ROLES gate carried over from the old Approvals tab)', () => {

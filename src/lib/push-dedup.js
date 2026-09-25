@@ -96,9 +96,11 @@ async function sendOnce(db, eventKey, userIds, payload, sendFn, label) {
   if (!claimedIds.length) return { ...EMPTY, deduped }
 
   let result = null
+  let threw = false
   try {
     result = await sendFn(claimedIds, payload)
   } catch (err) {
+    threw = true
     logWarn('push-dedup', `${label} threw`, { event_key: eventKey, err: err?.message })
   }
 
@@ -112,6 +114,10 @@ async function sendOnce(db, eventKey, userIds, payload, sendFn, label) {
     await releaseEventSends(db, eventKey, claimedIds)
   }
 
+  // QUALS.1 review — a throw is a FAILED send for every claimed recipient.
+  // Reporting it as EMPTY (sent 0, failed 0) read as a quiet "no device" to
+  // callers, which treat that as settled and never retry.
+  if (threw) return { ...EMPTY, failed: claimedIds.length, deduped }
   return { ...(result || EMPTY), deduped }
 }
 

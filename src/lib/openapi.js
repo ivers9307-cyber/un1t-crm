@@ -28,6 +28,10 @@ import { LeadSchema } from './leads.js'
 import { MAX_STORED_EXAMPLE_CHARS, MAX_STORED_EXAMPLES } from '@/lib/hyrox/constants'
 import { WindowBase } from '@/lib/schedule/windows'
 import { AvailabilityPutSchema } from '@/lib/availability-server'
+import {
+  QualificationRecordCreateSchema, QualificationRecordPatchSchema,
+  QualificationTypeCreateSchema, QualificationTypePatchSchema, TemplateQualificationsPutSchema,
+} from '@/lib/qualifications-schemas'
 import { ROSTER_CHANGE_LOG_MAX_ROWS } from '@/lib/roster-change-format'
 // SHELLY-UI.9 — the /api/shelly/* request vocabulary. Aliased on import so
 // the .openapi()-decorated re-derivations below can carry the canonical
@@ -4637,6 +4641,136 @@ registry.registerPath({
     400: { description: 'Invalid body or rule (end not after start, not a real date, a date that has passed, over the limits)', content: { 'application/json': { schema: ErrorResponse } } },
     401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'The save failed; nothing was changed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// QUALS.1 — staff qualifications with expiry (mig 635).
+registry.registerPath({
+  method: 'get',
+  path: '/api/qualifications',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: "Qualifications at one studio: everyone (owner or manager) or your own",
+  description: "QUALS.1. location_id must be a studio the caller belongs to. An owner or manager AT that studio (masters bypass) gets audience 'manager': every current member (deactivated and permanently deleted people are never listed), A-Z, each with their records in the studio's organisation. Anyone else gets audience 'self': their own records, read-only. Always returns the organisation's catalogue (types, archived ones flagged active: false), today (Dublin) and can_edit_types (owner at the studio, or master). A record: { id, qualification_type_id, issued_on, expires_on (null = does not expire), note, updated_at }. Status (valid, expiring within 30 days, expired, not on record) is computed by the client from today with shared/qualifications.js.",
+  request: { query: z.object({ location_id: uuidLike }) },
+  responses: {
+    200: { description: '{ success, data: { audience, today, organization_id, can_edit_types, types, people: [{ profile_id, full_name, records }] } }' },
+    400: { description: 'Missing or malformed location_id', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Studio outside your assignments', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'A read failed (never answered as an empty list)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/qualifications',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Record a qualification for someone',
+  description: "QUALS.1. The caller must be an owner or manager (masters bypass) at a studio the person currently belongs to, in the type's organisation; otherwise 404 (the person and the type are never confirmed). One record per person per type (409 if one exists: edit it). expires_on null or absent = does not expire. A blank note is stored as null. The type must not be archived (400).",
+  request: { body: { content: { 'application/json': { schema: QualificationRecordCreateSchema } } } },
+  responses: {
+    201: { description: '{ success, data: record }' },
+    400: { description: 'Invalid body (a date that is not real, expiry before issue, note over 300) or an archived type', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not an owner or manager anywhere', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Unknown type, or a person the caller may not manage', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'The person already has a record of that type', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'patch',
+  path: '/api/qualifications/{id}',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: "Change a qualification record's dates or note",
+  description: 'QUALS.1. Same authority as POST, judged on the record. The dates are judged as they will be after the change (a new expiry before the stored issue date is a 400). The type and the person are fixed.',
+  request: { params: z.object({ id: uuidLike }), body: { content: { 'application/json': { schema: QualificationRecordPatchSchema } } } },
+  responses: {
+    200: { description: '{ success, data: record }' },
+    400: { description: 'Nothing to change, or impossible dates', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not an owner or manager anywhere', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such record, or not one the caller may manage', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/qualifications/{id}',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Delete a qualification record',
+  description: 'QUALS.1. Same authority as POST, judged on the record.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ success, data: { id, deleted: true } }' },
+    403: { description: 'Not an owner or manager anywhere', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such record, or not one the caller may manage', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/qualifications/types',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: "Add a qualification type to your organisation's list",
+  description: "QUALS.1. Owners (and masters) at location_id; the type belongs to that studio's organisation. Names are one line, 1-60 characters, unique per organisation ignoring case (409).",
+  request: { body: { content: { 'application/json': { schema: QualificationTypeCreateSchema } } } },
+  responses: {
+    201: { description: '{ success, data: type }' },
+    400: { description: 'Invalid name', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Studio outside your assignments, or not an owner there', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'A type with that name exists', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'patch',
+  path: '/api/qualifications/types/{id}',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Rename, archive or restore a qualification type',
+  description: 'QUALS.1. Owners (and masters) of the type\'s organisation. Archiving (active: false) keeps every record and requirement; archived types are left out of the owner digest and the picker advisory. Types are never deleted.',
+  request: { params: z.object({ id: uuidLike }), body: { content: { 'application/json': { schema: QualificationTypePatchSchema } } } },
+  responses: {
+    200: { description: '{ success, data: type }' },
+    400: { description: 'Nothing to change, or an invalid name', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not an owner anywhere', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such type, or not in an organisation you own a studio of', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'A type with that name exists', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/schedule/template-qualifications',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'The qualifications each shift template at a studio asks for',
+  description: "QUALS.1. Advisory: the ranked coach picker badges a coach with no current record of a required type on the shift's date; nothing refuses an assignment. Manager roles (master, owner, manager, head_coach) AT location_id. Returns the organisation's catalogue and { [template_id]: [type_id] }.",
+  request: { query: z.object({ location_id: uuidLike }) },
+  responses: {
+    200: { description: '{ success, data: { types, requirements } }' },
+    400: { description: 'Missing or malformed location_id', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Studio outside your assignments, or no manager role there', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/schedule/template-qualifications',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: "Replace one shift template's required qualifications (advisory)",
+  description: "QUALS.1. Advisory only: requirements badge the coach picker and never refuse an assignment. At most 5 types, all in the template's organisation (400 otherwise; the database refuses another organisation's type too). A newly added type must not be archived; an archived type already required may stay. Manager roles AT the template's studio (404 outside it, 403 for a member who is not a manager there).",
+  request: { body: { content: { 'application/json': { schema: TemplateQualificationsPutSchema } } } },
+  responses: {
+    200: { description: '{ success, data: { template_id, qualification_type_ids, added, removed } }' },
+    400: { description: 'Invalid body, too many types, an unknown or archived type', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'No manager role at the template\'s studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such template, or not at a studio the caller belongs to', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

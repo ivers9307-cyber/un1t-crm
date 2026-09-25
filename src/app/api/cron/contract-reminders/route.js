@@ -21,6 +21,8 @@
 // RUNWAY.1 — also runs the daily roster-runway push (second arm, top of GET).
 // HEARTBEAT.1 — that arm stamps its own heartbeat row, 'roster-runway' (mig
 // 633), only when it ran clean; 'contract-reminders' is unchanged.
+// QUALS.1 — also runs the weekly qualification digest (third arm), with its
+// own heartbeat row 'qualification-digest' (mig 635).
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
@@ -29,7 +31,11 @@ import { sendContractReminderEmail } from '@/lib/contracts-email'
 import { sendPush } from '@/lib/push'
 import { logWarn, logError } from '@/lib/log'
 import { runRosterRunwayAlerts } from '@/lib/roster-runway-notify'
-import { ROSTER_RUNWAY_HEARTBEAT, runwayArmHealthy } from '@/lib/cron-arm-health'
+import { runQualificationDigest } from '@/lib/qualification-digest'
+import {
+  ROSTER_RUNWAY_HEARTBEAT, runwayArmHealthy,
+  QUALIFICATION_DIGEST_HEARTBEAT, qualificationDigestArmHealthy,
+} from '@/lib/cron-arm-health'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -81,6 +87,29 @@ export async function GET(request) {
   if (runwayArmFailed === 0 && runwayArmHealthy(runway)) {
     await stampHeartbeat(ROSTER_RUNWAY_HEARTBEAT, runway).catch((err) =>
       logWarn('cron-contract-reminders', 'roster-runway heartbeat failed', { err }))
+  }
+
+  // QUALS.1 — third arm: the weekly qualification digest to owners
+  // (src/lib/qualification-digest.js). Runs every day; each owner hears at
+  // most once per Dublin week, on the first run with something expired or
+  // expiring (a week stamp in push_event_sends, written AFTER the send),
+  // inside 07:00-22:00 studio time. Isolated both ways, like the runway arm:
+  // its own try/catch, and its own heartbeat row ('qualification-digest', mig
+  // 635) stamped under its own .catch BEFORE the contract half runs, so a
+  // contract crash cannot cost a clean digest its stamp. Only a returned
+  // outcome with no { error } stamps.
+  let qualifications
+  let qualificationArmFailed = 0
+  try {
+    qualifications = await runQualificationDigest(db)
+  } catch (err) {
+    qualificationArmFailed = 1
+    logError('cron-contract-reminders', 'qualification digest arm threw', { err })
+    qualifications = { error: err?.message || 'qualification digest arm failed' }
+  }
+  if (qualificationArmFailed === 0 && qualificationDigestArmHealthy(qualifications)) {
+    await stampHeartbeat(QUALIFICATION_DIGEST_HEARTBEAT, qualifications).catch((err) =>
+      logWarn('cron-contract-reminders', 'qualification-digest heartbeat failed', { err }))
   }
 
   // Candidate contracts — status in ('issued','viewed') and not yet at the
@@ -169,7 +198,11 @@ export async function GET(request) {
     }
   }
 
-  const outcome = { checked: candidates.length, sent, emailFailed, rowErrors, runway, runway_arm_failed: runwayArmFailed }
+  const outcome = {
+    checked: candidates.length, sent, emailFailed, rowErrors,
+    runway, runway_arm_failed: runwayArmFailed,
+    qualifications, qualification_arm_failed: qualificationArmFailed,
+  }
   await stampHeartbeat('contract-reminders', outcome).catch((err) =>
     logWarn('cron-contract-reminders', 'heartbeat failed', { err }))
 

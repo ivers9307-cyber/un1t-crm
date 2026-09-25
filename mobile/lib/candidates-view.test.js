@@ -81,6 +81,15 @@ describe('candidatePickerView', () => {
     expect(view.note).toBe('Could not check the other studios, so the order may be off.')
   })
 
+  // QUALS.1 review 4 — the phone shows no qualification badge, so an unread
+  // qualification check is not mentioned at all (it never moves the order).
+  it('an unread qualification check says nothing on the phone', () => {
+    const res = { success: true, data: { audience: 'manager', checked: { shifts: true, qualifications: false }, candidates: [
+      { profile_id: 'zed', full_name: 'Zed', role: 'staff', rank: 1, tier: 'ready', reason: 'Free', free: true },
+    ] } }
+    expect(candidatePickerView({ answer: answerOf(res), staff, block, locationId: LOC }).note).toBeNull()
+  })
+
   it('while ranking: the studio A–Z (never the coach already on it), labelled', () => {
     const view = candidatePickerView({ answer: null, pending: true, staff, block, locationId: LOC })
     expect(view.rows.map((r) => r.id)).toEqual(['amy', 'zed'])

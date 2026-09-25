@@ -100,6 +100,7 @@ const CATEGORY_CHANNELS = Object.freeze({
   schedule: 'updates',
   shift_adjusted: 'updates',
   availability_change: 'updates', // AVAIL.1 — a coach changed their availability; an FYI
+  qualification_expiry: 'reminders', // QUALS.1 — the weekly qualification-expiry digest (owners)
   invoice_approved: 'updates',
   invoice_declined: 'updates',
   expense_approved: 'updates',
