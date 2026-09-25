@@ -34,7 +34,7 @@ Size: S under a day, M one to three days, L a week or more. "Mig" = new migratio
 | 13 | SHIFTTYPE.1 | M | Templates gain a kind, `class` or `admin`. Admin: no minimum, never a gap, out of the contractor budget gate, still counted in hours. Card tone per kind | 628 | yes | |
 | 14 | BLOCKEDIT.1 | M | Edit one shift: times, minimum, maximum, logged in the change log and notified when published. A separate coach-visible briefing note on web and phone | 629 | yes | 13 |
 | 15 | WORKTIME.1 | M | Working-time advisories for employees: 11-hour rest between shifts, 48 hours in a rostered week, across both studios. Advisory only: publish check, assign picker | | yes (shared) | |
-| 16 | AVAIL.1 | L | Coach availability: weekly unavailable windows plus dated exceptions, per person. API, manager notification on change, web calendar shading and picker badges | 630 | | |
+| 16 | AVAIL.1 | L | Coach availability: weekly unavailable windows plus dated exceptions, per person. Split: **1a** API + manager notice (OTA: `shared/`), **1b** web editor, calendar shading, picker badges | 630 | 1a yes | |
 | 17 | AVAIL.2 | M | Phone screen for a coach to set their own availability | | yes | 16 |
 | 18 | AVAIL.3 | S | Contractors' "unavailable" time off moves into availability: stop offering the type, carry future rows across | 631 | yes | 16, 17 |
 | 19 | CANDIDATES.1 | M | Ranked candidates wherever a coach is picked (web and phone): free or not, leave, availability, already on site, week hours both studios, rest gap. Hours only | | yes | 15, 16 |
@@ -95,6 +95,10 @@ These are marked **REVIEW** in the artifact until he confirms or changes them. E
 13. **Changing a template's kind changes its past shifts too** (kind lives on the template, not copied onto each shift). Hours are unaffected either way; only staffing gaps and contractor spend read the kind.
 14. **Contractor spend leaves admin shifts out,** as decided, so if a contractor does placed admin work the spend figure under-reports what they will invoice.
 15. **Someone has to mark Stillorgan's admin templates** after SHIFTTYPE.1 merges (front desk, sales calls, consultations?). Until then every template stays a class template and nothing changes.
+16. **Managers see the note a coach writes on an availability rule,** and the editor tells the coach so.
+17. **A permanently deleted coach's availability rules are kept, not wiped** (they stop mattering because the person can't be rostered). The availability change log is kept indefinitely for now.
+18. **The availability-change notice is on by default for every role,** not just managers: a push can't be scoped to one studio, so a manager who is plain staff at another studio would otherwise never get it. Outside 07:00–22:00 it waits for 07:00 and overnight saves fold into one notice.
+19. **Managers can't set availability on a coach's behalf** in this cut.
 
 ## Follow-ups found along the way (not in any PR yet)
 
@@ -109,6 +113,7 @@ These are marked **REVIEW** in the artifact until he confirms or changes them. E
 
 Updated by the loop. Newest first.
 
+- 25 Sep: 16 AVAIL.1 plan written, split 1a (mig 630, API, notice, sweep arm, OTA) / 1b (web). AVAIL.1a implementer started (`~/code/un1t-crm-avail1a`). WORKTIME.1 fixes done, in my gate. Batch 4 plans (14 BLOCKEDIT.1, 22 ICSFEED.1) commissioned.
 - 25 Sep ~12:25 IST: **#1756 TPLCLONE.1 MERGED** (11:18Z). 11 DATECHECK.1 = [PR #1757](https://github.com/ivers9307-cyber/un1t-crm/pull/1757) (gate 27,730 + build; 2 review rounds; main merged in, one openapi.test.js conflict kept both), auto-merge on. 15 WORKTIME.1 review approved w/ should-fixes (picker loading state, 2027 spring-forward test, `24:00` end time) → fixes in progress. 31 HEARTBEAT.1 implementer started (`~/code/un1t-crm-heartbeat1`). Review artifact v7 (status table, 15 review items, follow-ups section).
 - 25 Sep: 11 DATECHECK.1 fixes landed (reports now refuse a reversed period or one over 366 days, checked in the route and again in `generateReport`; guard tightened; GET /blocks and GET /overview newly in the API docs). Short second review running. 13 SHIFTTYPE.1 implementer started in `~/code/un1t-crm-shifttype1`.
 - 25 Sep: 31 HEARTBEAT.1 plan written (arms ride `send-push-reminders` every 5 min and `contract-reminders` daily; mig 633 rows `shift-reminders` and `roster-runway`; build will use `ON CONFLICT DO UPDATE` like migs 601/623 so a slow deploy cannot page). Queue for the next two slots: 13 SHIFTTYPE.1, then 31 HEARTBEAT.1.
