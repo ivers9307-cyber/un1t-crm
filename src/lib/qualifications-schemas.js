@@ -51,5 +51,9 @@ export const QualificationTypePatchSchema = z.object({
 
 export const TemplateQualificationsPutSchema = z.object({
   template_id: uuidLike,
-  qualification_type_ids: z.array(uuidLike).max(MAX_TEMPLATE_REQUIREMENTS, 'At most 5 qualifications'),
+  // The cap counts DISTINCT types (the data layer de-duplicates); a raw
+  // ceiling still bounds the body.
+  qualification_type_ids: z.array(uuidLike)
+    .max(50, 'Too many entries')
+    .refine((ids) => new Set(ids).size <= MAX_TEMPLATE_REQUIREMENTS, 'At most 5 qualifications'),
 })

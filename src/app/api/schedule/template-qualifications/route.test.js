@@ -78,6 +78,14 @@ describe('PUT', () => {
     expect(replaceTemplateRequirements).not.toHaveBeenCalled()
   })
 
+  // QUALS.1 review 5 — the cap of 5 counts DISTINCT types.
+  it('six entries that are five distinct types pass (six distinct are refused above)', async () => {
+    getCurrentUser.mockResolvedValue(headCoach)
+    const body = { template_id: TPL, qualification_type_ids: [1, 2, 3, 4, 5, 5].map(T) }
+    expect((await PUT(putReq(body))).status).toBe(200)
+    expect(replaceTemplateRequirements).toHaveBeenCalledTimes(1)
+  })
+
   it('delegates; the data layer judges the template\'s studio on the row', async () => {
     getCurrentUser.mockResolvedValue(headCoach)
     const body = { template_id: TPL, qualification_type_ids: [T(1)] }

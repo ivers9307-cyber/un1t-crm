@@ -232,3 +232,25 @@ describe('migration 635 — template requirements', () => {
     expect(rows[0]).toEqual({ auth: false, anon: false })
   })
 })
+
+// QUALS.1 review 5 — the self-check confirms the same-organisation trigger,
+// so a file edited to drop it cannot apply.
+describe('migration 635 — self-check', () => {
+  it('refuses to apply (nothing applied) without the same-organisation trigger', async () => {
+    const trigger = /CREATE TRIGGER shift_template_qualification_same_org[\s\S]*?EXECUTE FUNCTION private\.shift_template_qualification_same_org\(\);/
+    expect(MIGRATION).toMatch(trigger)
+    const broken = MIGRATION.replace(trigger, '')
+    const fresh = new PGlite()
+    const run = (text) => Reflect.apply(fresh.exec, fresh, [text])
+    try {
+      await run(BASE_SCHEMA)
+      await run(SEED)
+      await expect(run(broken)).rejects.toThrow(/mig 635: the same-organisation trigger/)
+      await run('ROLLBACK')
+      const { rows } = await fresh.query("SELECT to_regclass('public.staff_qualification_types') AS t")
+      expect(rows[0].t).toBeNull()
+    } finally {
+      await fresh.close()
+    }
+  }, 60_000)
+})

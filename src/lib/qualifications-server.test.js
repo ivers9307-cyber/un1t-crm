@@ -165,6 +165,16 @@ describe('createQualificationRecord', () => {
     const boom = await createQualificationRecord(createDb({ insert: { data: null, error: { code: 'XX000', message: 'boom' } } }), { user: manager, input: INPUT })
     expect(boom.status).toBe(500)
   })
+
+  // QUALS.1 review 5 — a CHECK refusal names what broke it, from the constraint.
+  it.each([
+    ['staff_qualifications_dates', /expiry date is before the issue date/],
+    ['staff_qualifications_note', /note is at most 300 characters/],
+  ])('a %s refusal says so', async (constraint, words) => {
+    const msg = `new row for relation "staff_qualifications" violates check constraint "${constraint}"`
+    const out = await createQualificationRecord(createDb({ insert: { data: null, error: { code: '23514', message: msg } } }), { user: manager, input: INPUT })
+    expect(out).toMatchObject({ status: 400, body: { error: expect.stringMatching(words) } })
+  })
 })
 
 describe('updateQualificationRecord and deleteQualificationRecord', () => {
@@ -232,6 +242,17 @@ describe('the catalogue', () => {
       'staff_qualification_types.insert': { data: null, error: { code: '23505', message: 'dup' } },
     }))
     expect((await createQualificationType(dupDb, { user: owner, input: { location_id: STILL, name: 'First aid' } })).status).toBe(409)
+  })
+
+  it('a type-name CHECK refusal talks about the name, never dates or notes (review 5)', async () => {
+    const db = mockDb(byTable({
+      locations: { data: { id: STILL, organization_id: ORG }, error: null },
+      'staff_qualification_types.insert': { data: null, error: { code: '23514', message: 'new row for relation "staff_qualification_types" violates check constraint "staff_qualification_types_name"' } },
+    }))
+    const out = await createQualificationType(db, { user: owner, input: { location_id: STILL, name: 'X' } })
+    expect(out.status).toBe(400)
+    expect(out.body.error).toMatch(/name/i)
+    expect(out.body.error).not.toMatch(/date|note/i)
   })
 
   it('renames or archives a type for an owner of its organisation; 404 for anyone else', async () => {

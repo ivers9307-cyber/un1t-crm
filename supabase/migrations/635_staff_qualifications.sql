@@ -293,6 +293,22 @@ BEGIN
     RAISE EXCEPTION 'mig 635: an organisation has no qualification types after the seed; nothing was applied';
   END IF;
 
+  -- The same-organisation trigger is what stops another organisation's type
+  -- on a template, whoever writes; confirm it from the catalog.
+  PERFORM 1
+     FROM pg_trigger tg
+     JOIN pg_proc pr ON pr.oid = tg.tgfoid
+    WHERE tg.tgrelid = 'public.shift_template_qualification_requirements'::regclass
+      AND tg.tgname = 'shift_template_qualification_same_org'
+      AND NOT tg.tgisinternal
+      AND tg.tgenabled <> 'D'
+      AND pr.proname = 'shift_template_qualification_same_org'
+      AND pr.pronamespace = 'private'::regnamespace
+      AND pr.prosecdef;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'mig 635: the same-organisation trigger on public.shift_template_qualification_requirements is missing, disabled or not SECURITY DEFINER; nothing was applied';
+  END IF;
+
   PERFORM 1 FROM public.cron_heartbeats h
    WHERE h.name = 'qualification-digest' AND h.expected_interval_seconds = 86400 AND h.grace_seconds = 43200;
   IF NOT FOUND THEN

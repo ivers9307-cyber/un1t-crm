@@ -55,7 +55,15 @@ function readFailed(what, error) {
 
 function writeFailed(error) {
   if (error?.code === '23505') return fail(409, 'This person already has a record of that qualification. Edit it instead.')
-  if (error?.code === '23514') return fail(400, 'Check the dates and the note: the expiry cannot be before the issue date, and a note is at most 300 characters.')
+  // A CHECK refusal says which rule it was, read from the constraint name
+  // (QUALS.1 review 5: a type name must never be answered with dates/notes).
+  if (error?.code === '23514') {
+    const text = String(error?.message || '')
+    if (text.includes('staff_qualification_types_name')) return fail(400, 'A qualification name is one line of 1 to 60 characters, with no spaces at either end.')
+    if (text.includes('staff_qualifications_dates')) return fail(400, 'The expiry date is before the issue date.')
+    if (text.includes('staff_qualifications_note')) return fail(400, 'A note is at most 300 characters and cannot be blank.')
+    return fail(400, 'That value is not allowed.')
+  }
   if (/^qualification_requirement_other_org/.test(String(error?.message || ''))) return fail(400, 'Unknown qualification type')
   logWarn('qualifications', 'write failed', { code: error?.code, err: error?.message })
   return fail(500, 'Could not save the change')
