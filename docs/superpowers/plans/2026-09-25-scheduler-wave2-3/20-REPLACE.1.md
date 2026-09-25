@@ -1076,7 +1076,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 // REPLACE.1a — the route's contract: the manager-at-the-studio gate, the
 // refusals, the conflicts confirm step, the log pair on a published roster,
 // and ONE notice each, now in band or from 07:00 out of it.
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('next/server', async (importOriginal) => {
   const actual = await importOriginal()
@@ -1141,6 +1141,7 @@ beforeEach(() => {
   replaceShiftAssignment.mockResolvedValue({ ok: true, closedSwapIds: [] })
   findSwapConflicts.mockResolvedValue([])
 })
+afterEach(() => vi.useRealTimers())
 
 describe('POST /replace — who may', () => {
   it('401 signed out, 403 for someone who manages nowhere, with nothing read', async () => {
@@ -1244,7 +1245,7 @@ describe('POST /replace — the log pair and ONE notice each', () => {
 })
 ```
 
-Note `vi.useFakeTimers({ toFake: ['Date'] })` fakes only `Date` (no React here, so the fake-timer-act rule does not apply); add `afterEach(() => vi.useRealTimers())` at the top of the file.
+`vi.useFakeTimers({ toFake: ['Date'] })` fakes only `Date` (no React here, so the fake-timer-act rule does not apply); the `afterEach` above restores real timers.
 
 - [ ] **Step 2: Run, expect failure** (route missing): `npx vitest run 'src/app/api/schedule/assignments/[id]/replace/route.test.js'`.
 
@@ -1943,7 +1944,7 @@ describe('REPLACE.1a — replaceAssignment', () => {
 })
 ```
 
-In `mobile/lib/schedule-manage.test.js` add:
+In `mobile/lib/schedule-manage.test.js` add the three names to the file's EXISTING import from `./schedule-manage` (shown below as its own line for reading only; one import per module), then add:
 
 ```js
 import { coachPressActions, replacePickerTitle, replaceResultAlert } from './schedule-manage'
@@ -2132,9 +2133,9 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 **Files:** Modify `src/lib/notifications-registry.js`.
 
-- [ ] **Step 1:** In the `category: 'shift_adjusted'` entry (line ~241), append to its `description` string: ` A manager replacing one coach with another tells each of them once, with the shift's day and start time; outside 07:00-22:00 studio time that notice waits for 07:00.` If there is a registry test that snapshots descriptions (`grep -rn "shift_adjusted" src/lib/notifications-registry.test.js`), update it in the same commit.
+- [ ] **Step 1:** In the `category: 'shift_adjusted'` entry (line ~241), append to its `description` string: ` A manager replacing one coach with another tells each of them once, with the shift's day and start time; outside 07:00-22:00 studio time that notice waits for 07:00.` There is no `notifications-registry.test.js`; the registry is read by `src/lib/push-channels.test.js` and `src/lib/shared-permissions.test.js`, which must stay green.
 
-- [ ] **Step 2:** `npx vitest run src/lib/notifications-registry.test.js tests/push-category-literals.test.js` → `0 failed`.
+- [ ] **Step 2:** `npx vitest run src/lib/push-channels.test.js src/lib/shared-permissions.test.js tests/push-category-literals.test.js` → `0 failed`.
 
 - [ ] **Step 3: Commit.**
 
@@ -4005,3 +4006,1715 @@ Closing (expired / filled) is state and happens at any hour.
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
+---
+
+### Task 1b-5: The four routes
+
+**Files:** Create `src/app/api/schedule/blocks/[id]/offer/route.js` (+ `.test.js`), `src/app/api/schedule/offers/route.js` (+ `.test.js`), `src/app/api/schedule/offers/[id]/route.js` (+ `.test.js`), `src/app/api/schedule/offers/[id]/claim/route.js` (+ `.test.js`). Modify `src/lib/openapi.js`, `src/lib/openapi.test.js`.
+
+No route file calls `.from()` itself: every read and write is a `shift-offer-server.js` function, and every route authorises the row's studio first. `check:location-scoping` therefore sees no tenant query in a route; the scoping is the `assertLocationAccess*` call on the row's `location_id` plus the `.eq('location_id')` inside `listOpenOffers`.
+
+- [ ] **Step 1: The claim route test first (it carries the most rules).**
+
+```js
+// src/app/api/schedule/offers/[id]/claim/route.test.js
+// REPLACE.1b — a coach claims an offered shift: member of the studio (404
+// otherwise), open, not started, not on leave or on another shift; the
+// database lock decides between two claimers; the log row is stamped (a self
+// change tells nobody); the managers' "taken" notice goes through processOffer.
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+
+vi.mock('next/server', async (importOriginal) => {
+  const actual = await importOriginal()
+  return { ...actual, after: vi.fn((fn) => fn()) }
+})
+vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => ({})) }))
+vi.mock('@/lib/auth', async (importOriginal) => {
+  const real = await importOriginal()
+  return { getCurrentUser: vi.fn(), assertLocationAccessOr404: real.assertLocationAccessOr404 }
+})
+vi.mock('@/lib/shift-offer-server', () => ({
+  readOffer: vi.fn(), readOfferFacts: vi.fn(), claimOffer: vi.fn(), processOffer: vi.fn(async () => 'sent'),
+}))
+vi.mock('@/lib/roster-change-log', () => ({ logRosterChange: vi.fn(async () => ({ logged: true, id: 'log-1' })), markChangesNotified: vi.fn(async () => {}) }))
+vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn() }))
+
+const { getCurrentUser } = await import('@/lib/auth')
+const { readOffer, readOfferFacts, claimOffer, processOffer } = await import('@/lib/shift-offer-server')
+const { logRosterChange, markChangesNotified } = await import('@/lib/roster-change-log')
+const { POST } = await import('./route.js')
+
+const COACH = { id: 'c1', full_name: 'Coach B', profileRole: 'staff', rolesByLocation: { 'loc-1': 'staff' }, locations: [{ id: 'loc-1' }] }
+const BLOCK = { id: 'b1', location_id: 'loc-1', block_date: '2026-09-29', start_time: '06:00:00', end_time: '07:00:00', min_coaches: 1, max_coaches: 3, rosters: { status: 'published' }, shift_templates: { name: 'Morning', kind: 'class' }, shift_assignments: [] }
+const OFFER = { id: 'o1', location_id: 'loc-1', block_id: 'b1', status: 'open', offered_by: 'mgr', notice_attempts: 0, notice_lease_until: null, shift_blocks: BLOCK, locations: { name: 'Studio North', timezone: 'Europe/Dublin' } }
+const FREE = { error: null, members: [{ profile_id: 'c1', location_id: 'loc-1', profiles: { active: true } }], orgLocationIds: ['loc-1'], liveOnBlockIds: [], timeOff: [], assignments: [], unavailability: [] }
+const PROPS = { params: Promise.resolve({ id: 'o1' }) }
+const call = () => POST({ json: () => Promise.resolve({}), headers: { get: () => '' } }, PROPS)
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  vi.useFakeTimers({ toFake: ['Date'], now: Date.parse('2026-09-28T10:00:00Z') })
+  getCurrentUser.mockResolvedValue(COACH)
+  readOffer.mockResolvedValue({ offer: OFFER, error: null })
+  readOfferFacts.mockResolvedValue(FREE)
+  claimOffer.mockResolvedValue({ result: { outcome: 'claimed', assignment_id: 'as-9', block_date: '2026-09-29' }, error: null })
+})
+afterEach(() => vi.useRealTimers())
+
+describe('POST /api/schedule/offers/[id]/claim', () => {
+  it('401 signed out; 404 unknown offer; 404 for someone who is not at the studio (never confirms the id)', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    expect((await call()).status).toBe(401)
+    getCurrentUser.mockResolvedValue(COACH)
+    readOffer.mockResolvedValue({ offer: null, error: null })
+    expect((await call()).status).toBe(404)
+    readOffer.mockResolvedValue({ offer: OFFER, error: null })
+    getCurrentUser.mockResolvedValue({ ...COACH, locations: [{ id: 'loc-9' }] })
+    expect((await call()).status).toBe(404)
+    expect(claimOffer).not.toHaveBeenCalled()
+  })
+
+  it('a closed offer is 409 in words a coach understands', async () => {
+    readOffer.mockResolvedValue({ offer: { ...OFFER, status: 'claimed' }, error: null })
+    const res = await call()
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toBe('Someone else has just taken this shift.')
+  })
+
+  it('a started shift is 409, nothing claimed', async () => {
+    vi.setSystemTime(Date.parse('2026-09-29T05:00:00Z'))
+    expect((await call()).status).toBe(409)
+    expect(claimOffer).not.toHaveBeenCalled()
+  })
+
+  it('on leave or on another shift at that time: refused before the database is asked', async () => {
+    readOfferFacts.mockResolvedValue({ ...FREE, timeOff: [{ profile_id: 'c1', status: 'approved', start_date: '2026-09-29', end_date: '2026-09-29', total_days: '1' }] })
+    const res = await call()
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toMatch(/approved leave/)
+    expect(claimOffer).not.toHaveBeenCalled()
+  })
+
+  it('unavailability does NOT block a claim (claiming says you are free)', async () => {
+    readOfferFacts.mockResolvedValue({ ...FREE, unavailability: [{ profile_id: 'c1', kind: 'weekly', weekday: 'tue', all_day: true }] })
+    expect((await call()).status).toBe(200)
+  })
+
+  it('an unreadable check is 503 (try again), never a claim on a guess', async () => {
+    readOfferFacts.mockResolvedValue({ ...FREE, error: { message: 'down' } })
+    expect((await call()).status).toBe(503)
+    expect(claimOffer).not.toHaveBeenCalled()
+  })
+
+  it('the second of two claimers gets the lock\'s answer', async () => {
+    claimOffer.mockResolvedValue({ result: null, error: { code: 'P0001', message: 'offer_not_open: offer is already claimed' } })
+    const res = await call()
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toBe('Someone else has just taken this shift.')
+    expect(logRosterChange).not.toHaveBeenCalled()
+  })
+
+  it('filled meanwhile: 409 "no longer needs cover"', async () => {
+    claimOffer.mockResolvedValue({ result: { outcome: 'filled', offer_id: 'o1' }, error: null })
+    const res = await call()
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toBe('This shift no longer needs cover.')
+  })
+
+  it('claimed: one log row (via offer), stamped at once (nobody to tell), then the managers\' notice', async () => {
+    const res = await call()
+    expect(res.status).toBe(200)
+    expect((await res.json()).data).toEqual({ assignment_id: 'as-9', block_date: '2026-09-29' })
+    expect(claimOffer).toHaveBeenCalledWith(expect.anything(), { offerId: 'o1', profileId: 'c1' })
+    expect(logRosterChange).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      isPublished: true, locationId: 'loc-1', blockId: 'b1', blockDate: '2026-09-29', actorId: 'c1', coachId: 'c1', action: 'assigned', details: { via: 'offer' },
+    }))
+    expect(markChangesNotified).toHaveBeenCalledWith(expect.anything(), ['log-1'])
+    expect(processOffer).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      id: 'o1', status: 'claimed', claimed_by: 'c1', taken_notified_at: null, notice_attempts: 0, claimer: { full_name: 'Coach B' },
+    }), { nowMs: Date.parse('2026-09-28T10:00:00Z') })
+  })
+})
+```
+
+- [ ] **Step 2: The claim route.**
+
+```js
+// src/app/api/schedule/offers/[id]/claim/route.js
+//
+// REPLACE.1b — POST: a coach takes an offered shift. First to claim gets it;
+// claim_shift_offer (mig 640) is the lock that decides.
+//   - the caller must belong to the offer's studio (404 otherwise: the id is
+//     never confirmed to an outsider);
+//   - the offer is open, the shift has not started (swapShiftHasStarted, the
+//     one predicate, studio clock);
+//   - the caller is not on approved leave that day or on another live shift
+//     at that time in the organisation (they cannot be in two places). A read
+//     that fails is 503: a claim is never made on a guess. Unavailability
+//     does not block: claiming says they are free;
+//   - then the RPC; its refusals map through offerClaimRpcError.
+// On success: one roster_change_log row (via 'offer'), stamped at once (a
+// self change tells nobody), and the managers' "taken" notice through
+// processOffer (07:00-22:00 only; the */5 arm sends it otherwise).
+
+import { NextResponse, after } from 'next/server'
+import { createServerClient } from '@/lib/supabase'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { readOffer, readOfferFacts, claimOffer, processOffer } from '@/lib/shift-offer-server'
+import { offerEligibility, offerClaimRefusal, offerClaimRpcError } from '@/lib/shift-offer-notice'
+import { swapShiftHasStarted } from '@/lib/swap-cover'
+import { logRosterChange, markChangesNotified } from '@/lib/roster-change-log'
+import { logError } from '@/lib/log'
+
+const CLOSED_WORDS = {
+  claimed: 'Someone else has just taken this shift.',
+  withdrawn: 'This shift is no longer on offer.',
+  expired: 'This shift is no longer on offer.',
+  filled: 'This shift no longer needs cover.',
+}
+
+export async function POST(_request, props) {
+  const params = await props.params
+  const user = await getCurrentUser()
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+
+  const db = createServerClient()
+  const { offer, error } = await readOffer(db, params.id)
+  if (error) return NextResponse.json({ success: false, error: 'Could not read the offer' }, { status: 500 })
+  if (!offer) return NextResponse.json({ success: false, error: 'Offer not found' }, { status: 404 })
+  const notHere = assertLocationAccessOr404(user, offer.location_id)
+  if (notHere) return notHere
+
+  if (offer.status !== 'open') {
+    return NextResponse.json({ success: false, error: CLOSED_WORDS[offer.status] || 'This shift is no longer on offer.' }, { status: 409 })
+  }
+  const block = { ...offer.shift_blocks, location_id: offer.location_id }
+  const nowMs = Date.now()
+  if (swapShiftHasStarted({ block_date: block.block_date, start_time: block.start_time }, nowMs, offer.locations?.timezone ?? null)) {
+    return NextResponse.json({ success: false, error: 'This shift has already started.' }, { status: 409 })
+  }
+
+  const facts = await readOfferFacts(db, { block, profileIds: [user.id] })
+  if (facts.error) {
+    return NextResponse.json({ success: false, error: 'Could not check your other shifts. Try again.' }, { status: 503 })
+  }
+  const blocked = offerClaimRefusal(offerEligibility(user.id, facts, block).reasons)
+  if (blocked) return NextResponse.json({ success: false, code: blocked.code, error: blocked.error }, { status: blocked.status })
+
+  const { result, error: rpcErr } = await claimOffer(db, { offerId: offer.id, profileId: user.id })
+  if (rpcErr) {
+    const m = offerClaimRpcError(rpcErr)
+    if (m.status === 500) logError('shift-offer', 'claim_shift_offer failed', { offerId: offer.id, err: rpcErr.message })
+    return NextResponse.json({ success: false, error: m.error }, { status: m.status })
+  }
+  if (result?.outcome !== 'claimed') {
+    return NextResponse.json({ success: false, error: CLOSED_WORDS.filled }, { status: 409 })
+  }
+
+  // The RPC only claims on a published roster, so the row is logged; the coach
+  // made the change, so there is nobody to tell and it is stamped at once
+  // (roster-change-format.js rule 4, self_change).
+  const log = await logRosterChange(db, {
+    isPublished: true,
+    locationId: offer.location_id,
+    blockId: block.id,
+    blockDate: block.block_date,
+    actorId: user.id,
+    coachId: user.id,
+    action: 'assigned',
+    details: { via: 'offer' },
+  })
+  if (log?.logged && log.id) await markChangesNotified(db, [log.id])
+
+  const claimed = {
+    ...offer,
+    status: 'claimed',
+    claimed_by: user.id,
+    claimed_at: new Date(nowMs).toISOString(),
+    taken_notified_at: null,
+    notice_attempts: 0,
+    notice_lease_until: null,
+    claimer: { full_name: user.full_name ?? null },
+  }
+  after(() => processOffer(db, claimed, { nowMs })
+    .catch((err) => logError('shift-offer', 'taken notice failed; the */5 arm retries it', { offerId: offer.id, err: err?.message })))
+
+  return NextResponse.json({ success: true, data: { assignment_id: result.assignment_id, block_date: block.block_date } })
+}
+```
+
+- [ ] **Step 3: `POST /api/schedule/blocks/[id]/offer`** — test, then route.
+
+```js
+// src/app/api/schedule/blocks/[id]/offer/route.test.js
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+
+vi.mock('next/server', async (importOriginal) => ({ ...(await importOriginal()), after: vi.fn((fn) => fn()) }))
+vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => ({})) }))
+vi.mock('@/lib/auth', async (importOriginal) => {
+  const real = await importOriginal()
+  return { getCurrentUser: vi.fn(), assertLocationAccessOr404: real.assertLocationAccessOr404, hasRoleAtLocation: real.hasRoleAtLocation, hasRoleAtAnyLocation: real.hasRoleAtAnyLocation }
+})
+vi.mock('@/lib/shift-offer-server', () => ({ readOfferBlock: vi.fn(), createOffer: vi.fn(), processOffer: vi.fn(async () => 'sent') }))
+vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn() }))
+
+const { getCurrentUser } = await import('@/lib/auth')
+const { readOfferBlock, createOffer, processOffer } = await import('@/lib/shift-offer-server')
+const { POST } = await import('./route.js')
+
+const MANAGER = { id: 'mgr', profileRole: 'manager', rolesByLocation: { 'loc-1': 'manager' }, locations: [{ id: 'loc-1' }] }
+const BLOCK = { id: 'b1', location_id: 'loc-1', block_date: '2026-09-29', start_time: '06:00:00', end_time: '07:00:00', min_coaches: 1, max_coaches: 3, rosters: { status: 'published' }, shift_templates: { name: 'Morning', kind: 'class' }, shift_assignments: [], locations: { name: 'Studio North', timezone: 'Europe/Dublin' } }
+const call = () => POST({ json: () => Promise.resolve({}), headers: { get: () => '' } }, { params: Promise.resolve({ id: 'b1' }) })
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  vi.useFakeTimers({ toFake: ['Date'], now: Date.parse('2026-09-28T10:00:00Z') })
+  getCurrentUser.mockResolvedValue(MANAGER)
+  readOfferBlock.mockResolvedValue({ block: BLOCK, error: null })
+  createOffer.mockResolvedValue({ offer: { id: 'o1', status: 'open', location_id: 'loc-1', block_id: 'b1', notice_attempts: 0, shift_blocks: BLOCK, locations: BLOCK.locations } })
+})
+afterEach(() => vi.useRealTimers())
+
+describe('POST /api/schedule/blocks/[id]/offer', () => {
+  it('gates: 401, 403 manages nowhere, 404 unknown or foreign, 403 staff there', async () => {
+    getCurrentUser.mockResolvedValue(null); expect((await call()).status).toBe(401)
+    getCurrentUser.mockResolvedValue({ ...MANAGER, rolesByLocation: { 'loc-1': 'staff' }, profileRole: 'staff' }); expect((await call()).status).toBe(403)
+    getCurrentUser.mockResolvedValue(MANAGER); readOfferBlock.mockResolvedValue({ block: null, error: null }); expect((await call()).status).toBe(404)
+    readOfferBlock.mockResolvedValue({ block: BLOCK, error: null })
+    getCurrentUser.mockResolvedValue({ ...MANAGER, rolesByLocation: { 'loc-9': 'manager' }, locations: [{ id: 'loc-9' }] }); expect((await call()).status).toBe(404)
+    getCurrentUser.mockResolvedValue({ ...MANAGER, rolesByLocation: { 'loc-1': 'staff', 'loc-2': 'manager' }, profileRole: 'staff', locations: [{ id: 'loc-1' }, { id: 'loc-2' }] }); expect((await call()).status).toBe(403)
+    expect(createOffer).not.toHaveBeenCalled()
+  })
+  it('the shared rule refuses: a draft, a staffed shift, a started one (409 with the words)', async () => {
+    readOfferBlock.mockResolvedValue({ block: { ...BLOCK, rosters: { status: 'draft' } }, error: null })
+    let res = await call(); expect(res.status).toBe(409); expect((await res.json()).code).toBe('not_published')
+    readOfferBlock.mockResolvedValue({ block: { ...BLOCK, shift_assignments: [{ profile_id: 'x', status: 'scheduled' }] }, error: null })
+    expect((await (await call()).json()).code).toBe('staffed')
+    readOfferBlock.mockResolvedValue({ block: BLOCK, error: null })
+    vi.setSystemTime(Date.parse('2026-09-29T05:00:00Z'))
+    expect((await (await call()).json()).code).toBe('started')
+    expect(createOffer).not.toHaveBeenCalled()
+  })
+  it('already offered (the unique index) is 409', async () => {
+    createOffer.mockResolvedValue({ code: 'already_offered' })
+    const res = await call(); expect(res.status).toBe(409); expect((await res.json()).code).toBe('already_offered')
+  })
+  it('201: the offer exists at once; the broadcast goes through processOffer; notice now / morning', async () => {
+    const res = await call()
+    expect(res.status).toBe(201)
+    expect((await res.json()).data).toEqual({ offer_id: 'o1', notice: 'now' })
+    expect(createOffer).toHaveBeenCalledWith(expect.anything(), { block: BLOCK, actorId: 'mgr' })
+    expect(processOffer).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: 'o1' }), { nowMs: Date.parse('2026-09-28T10:00:00Z') })
+    vi.setSystemTime(Date.parse('2026-09-28T22:30:00Z'))
+    expect((await (await call()).json()).data.notice).toBe('morning')
+  })
+})
+```
+
+```js
+// src/app/api/schedule/blocks/[id]/offer/route.js
+//
+// REPLACE.1b — POST: a manager offers this shift to the team. Manager at the
+// shift's studio only. May it be offered is shared/offer-to-team.js
+// offerRefusal (the rule the buttons use), with "started" read here on the
+// studio clock (swapShiftHasStarted). The offer is live at once; the push
+// goes through processOffer (07:00-22:00 only; the */5 arm sends it from 07:00).
+
+import { NextResponse, after } from 'next/server'
+import { createServerClient } from '@/lib/supabase'
+import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { MANAGER_ROLES } from '@/lib/schemas'
+import { readOfferBlock, createOffer, processOffer } from '@/lib/shift-offer-server'
+import { offerRefusal, OFFER_REFUSALS } from '@shared/offer-to-team'
+import { swapShiftHasStarted } from '@/lib/swap-cover'
+import { inStaffPushHours } from '@/lib/staff-push-hours'
+import { dublinTodayStr } from '@/lib/dublin-time'
+import { logError } from '@/lib/log'
+
+export async function POST(_request, props) {
+  const params = await props.params
+  const user = await getCurrentUser()
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Only a manager can offer a shift to the team' }, { status: 403 })
+  }
+
+  const db = createServerClient()
+  const { block, error } = await readOfferBlock(db, params.id)
+  if (error) return NextResponse.json({ success: false, error: 'Could not read the shift' }, { status: 500 })
+  if (!block) return NextResponse.json({ success: false, error: 'Shift not found' }, { status: 404 })
+  const notHere = assertLocationAccessOr404(user, block.location_id)
+  if (notHere) return notHere
+  if (!hasRoleAtLocation(user, block.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Only a manager at this studio can offer this shift' }, { status: 403 })
+  }
+
+  const nowMs = Date.now()
+  const tz = block.locations?.timezone ?? null
+  const started = swapShiftHasStarted({ block_date: block.block_date, start_time: block.start_time }, nowMs, tz)
+  const refusal = offerRefusal(block, { todayIso: dublinTodayStr(), started })
+  if (refusal) return NextResponse.json({ success: false, code: refusal, error: OFFER_REFUSALS[refusal] }, { status: 409 })
+
+  const created = await createOffer(db, { block, actorId: user.id })
+  if (created.code === 'already_offered') {
+    return NextResponse.json({ success: false, code: 'already_offered', error: OFFER_REFUSALS.already_offered }, { status: 409 })
+  }
+  if (created.error) return NextResponse.json({ success: false, error: 'Could not offer the shift' }, { status: 500 })
+
+  after(() => processOffer(db, created.offer, { nowMs })
+    .catch((err) => logError('shift-offer', 'offer broadcast failed; the */5 arm retries it', { offerId: created.offer.id, err: err?.message })))
+
+  return NextResponse.json({
+    success: true,
+    data: { offer_id: created.offer.id, notice: inStaffPushHours(nowMs, tz) ? 'now' : 'morning' },
+  }, { status: 201 })
+}
+```
+
+- [ ] **Step 4: `DELETE /api/schedule/offers/[id]`** (withdraw) — test, then route.
+
+```js
+// src/app/api/schedule/offers/[id]/route.test.js
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => ({})) }))
+vi.mock('@/lib/auth', async (importOriginal) => {
+  const real = await importOriginal()
+  return { getCurrentUser: vi.fn(), assertLocationAccessOr404: real.assertLocationAccessOr404, hasRoleAtLocation: real.hasRoleAtLocation }
+})
+vi.mock('@/lib/shift-offer-server', () => ({ readOffer: vi.fn(), withdrawOffer: vi.fn() }))
+
+const { getCurrentUser } = await import('@/lib/auth')
+const { readOffer, withdrawOffer } = await import('@/lib/shift-offer-server')
+const { DELETE } = await import('./route.js')
+
+const MANAGER = { id: 'mgr', profileRole: 'manager', rolesByLocation: { 'loc-1': 'manager' }, locations: [{ id: 'loc-1' }] }
+const call = () => DELETE({ headers: { get: () => '' } }, { params: Promise.resolve({ id: 'o1' }) })
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  getCurrentUser.mockResolvedValue(MANAGER)
+  readOffer.mockResolvedValue({ offer: { id: 'o1', location_id: 'loc-1', status: 'open' }, error: null })
+  withdrawOffer.mockResolvedValue({ closed: true })
+})
+
+describe('DELETE /api/schedule/offers/[id]', () => {
+  it('a manager at the studio withdraws an open offer', async () => {
+    expect((await call()).status).toBe(200)
+    expect(withdrawOffer).toHaveBeenCalledWith(expect.anything(), { offerId: 'o1', nowIso: expect.any(String) })
+  })
+  it('404 outside the studio, 403 for staff there, 409 when it is no longer open', async () => {
+    getCurrentUser.mockResolvedValue({ ...MANAGER, rolesByLocation: { 'loc-9': 'manager' }, locations: [{ id: 'loc-9' }] })
+    expect((await call()).status).toBe(404)
+    getCurrentUser.mockResolvedValue({ ...MANAGER, profileRole: 'staff', rolesByLocation: { 'loc-1': 'staff' } })
+    expect((await call()).status).toBe(403)
+    getCurrentUser.mockResolvedValue(MANAGER)
+    readOffer.mockResolvedValue({ offer: { id: 'o1', location_id: 'loc-1', status: 'claimed' }, error: null })
+    expect((await call()).status).toBe(409)
+    readOffer.mockResolvedValue({ offer: { id: 'o1', location_id: 'loc-1', status: 'open' }, error: null })
+    withdrawOffer.mockResolvedValue({ closed: false })
+    expect((await call()).status).toBe(409)
+  })
+})
+```
+
+```js
+// src/app/api/schedule/offers/[id]/route.js
+//
+// REPLACE.1b — DELETE: a manager at the offer's studio withdraws an OPEN
+// offer. Guarded on still open (a claim may have just won). Nobody is told:
+// the coaches' cards disappear.
+
+import { NextResponse } from 'next/server'
+import { createServerClient } from '@/lib/supabase'
+import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation } from '@/lib/auth'
+import { MANAGER_ROLES } from '@/lib/schemas'
+import { readOffer, withdrawOffer } from '@/lib/shift-offer-server'
+
+export async function DELETE(_request, props) {
+  const params = await props.params
+  const user = await getCurrentUser()
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  const db = createServerClient()
+  const { offer, error } = await readOffer(db, params.id)
+  if (error) return NextResponse.json({ success: false, error: 'Could not read the offer' }, { status: 500 })
+  if (!offer) return NextResponse.json({ success: false, error: 'Offer not found' }, { status: 404 })
+  const notHere = assertLocationAccessOr404(user, offer.location_id)
+  if (notHere) return notHere
+  if (!hasRoleAtLocation(user, offer.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Only a manager at this studio can withdraw this offer' }, { status: 403 })
+  }
+  if (offer.status !== 'open') return NextResponse.json({ success: false, error: 'This offer is already closed.' }, { status: 409 })
+  const res = await withdrawOffer(db, { offerId: offer.id, nowIso: new Date().toISOString() })
+  if (res.error) return NextResponse.json({ success: false, error: 'Could not withdraw the offer' }, { status: 500 })
+  if (!res.closed) return NextResponse.json({ success: false, error: 'This offer has just changed. Refresh and try again.' }, { status: 409 })
+  return NextResponse.json({ success: true })
+}
+```
+
+- [ ] **Step 5: `GET /api/schedule/offers`** — the coach's list (default) and the manager's (`view=manage`). Test, then route.
+
+```js
+// src/app/api/schedule/offers/route.test.js
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+
+vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => ({})) }))
+vi.mock('@/lib/auth', async (importOriginal) => {
+  const real = await importOriginal()
+  return { getCurrentUser: vi.fn(), assertLocationAccess: real.assertLocationAccess, hasRoleAtLocation: real.hasRoleAtLocation }
+})
+vi.mock('@/lib/shift-offer-server', () => ({ listOpenOffers: vi.fn(), readOfferFacts: vi.fn() }))
+vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
+
+const { getCurrentUser } = await import('@/lib/auth')
+const { listOpenOffers, readOfferFacts } = await import('@/lib/shift-offer-server')
+const { GET } = await import('./route.js')
+
+const COACH = { id: 'c1', profileRole: 'staff', rolesByLocation: { 'loc-1': 'staff' }, locations: [{ id: 'loc-1' }] }
+const MANAGER = { ...COACH, id: 'mgr', profileRole: 'manager', rolesByLocation: { 'loc-1': 'manager' } }
+const B = (over = {}) => ({ id: 'b1', block_date: '2026-09-29', start_time: '06:00:00', end_time: '07:00:00', min_coaches: 1, max_coaches: 3, rosters: { status: 'published' }, shift_templates: { name: 'Morning', kind: 'class' }, shift_assignments: [], ...over })
+const O = (id, block, over = {}) => ({ id, location_id: 'loc-1', block_id: block.id, status: 'open', created_at: 'c', broadcast_at: null, broadcast_count: null, shift_blocks: block, locations: { name: 'Studio North', timezone: 'Europe/Dublin' }, ...over })
+const FREE = { error: null, members: [{ profile_id: 'c1', location_id: 'loc-1', profiles: { active: true } }], orgLocationIds: ['loc-1'], liveOnBlockIds: [], timeOff: [], assignments: [], unavailability: [] }
+const call = (qs) => GET({ url: `https://x/api/schedule/offers?${qs}`, headers: { get: () => '' } })
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  vi.useFakeTimers({ toFake: ['Date'], now: Date.parse('2026-09-28T10:00:00Z') })
+  getCurrentUser.mockResolvedValue(COACH)
+  readOfferFacts.mockResolvedValue(FREE)
+})
+afterEach(() => vi.useRealTimers())
+
+describe('GET /api/schedule/offers — coach view', () => {
+  it('400 without a studio; 403 for a studio that is not yours', async () => {
+    expect((await call('')).status).toBe(400)
+    expect((await call('location_id=loc-9')).status).toBe(403)
+  })
+  it('only offers that still need someone, have not started and are for the caller (default 6): when, what, where', async () => {
+    listOpenOffers.mockResolvedValue({ offers: [
+      O('o1', B()),
+      O('o2', B({ id: 'b2', shift_assignments: [{ profile_id: 'x', status: 'scheduled' }] })), // filled
+      O('o3', B({ id: 'b3', block_date: '2026-09-27' })),                                   // started
+    ], error: null })
+    const body = await (await call('location_id=loc-1')).json()
+    expect(body.data).toEqual([{ id: 'o1', block_id: 'b1', block_date: '2026-09-29', start_time: '06:00:00', end_time: '07:00:00', shift_name: 'Morning', studio_name: 'Studio North' }])
+    expect(readOfferFacts).toHaveBeenCalledWith(expect.anything(), { block: expect.objectContaining({ id: 'b1', location_id: 'loc-1' }), profileIds: ['c1'] })
+  })
+  it('not for someone who is busy then; an unreadable check still SHOWS it (the claim re-checks)', async () => {
+    listOpenOffers.mockResolvedValue({ offers: [O('o1', B())], error: null })
+    readOfferFacts.mockResolvedValue({ ...FREE, liveOnBlockIds: ['c1'] })
+    expect((await (await call('location_id=loc-1')).json()).data).toEqual([])
+    readOfferFacts.mockResolvedValue({ ...FREE, error: { message: 'down' } })
+    expect((await (await call('location_id=loc-1')).json()).data).toHaveLength(1)
+  })
+})
+
+describe('GET /api/schedule/offers — manager view', () => {
+  it('403 for a coach; a manager gets the period\'s open offers with their notice state', async () => {
+    listOpenOffers.mockResolvedValue({ offers: [O('o1', B()), O('o9', B({ id: 'b9', block_date: '2026-10-20' }))], error: null })
+    expect((await call('location_id=loc-1&view=manage&start_date=2026-09-28&end_date=2026-10-04')).status).toBe(403)
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const body = await (await call('location_id=loc-1&view=manage&start_date=2026-09-28&end_date=2026-10-04')).json()
+    expect(body.data).toEqual([{ id: 'o1', block_id: 'b1', block_date: '2026-09-29', created_at: 'c', notice_state: 'sending', broadcast_count: 0 }])
+  })
+  it('refuses a date the calendar does not have (DATECHECK.1)', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    expect((await call('location_id=loc-1&view=manage&start_date=2026-02-30&end_date=2026-03-04')).status).toBe(400)
+  })
+})
+```
+
+```js
+// src/app/api/schedule/offers/route.js
+//
+// REPLACE.1b — GET open "Offer to team" offers at one studio.
+//   default (coach): offers the CALLER could take (default 6, the same
+//     predicate as the push), that still need someone and have not started.
+//     When, what, where only: no counts, no minimums (COACHSCOPE.1). A check
+//     that could not be read still SHOWS the offer: the claim re-checks, and
+//     hiding it would lose an offer the push already announced.
+//   view=manage (a manager AT the studio): the period's open offers with
+//     their notice state, for the calendar and Manage mode.
+
+import { NextResponse } from 'next/server'
+import { createServerClient } from '@/lib/supabase'
+import { getCurrentUser, assertLocationAccess, hasRoleAtLocation } from '@/lib/auth'
+import { MANAGER_ROLES, isRealCalendarDate } from '@/lib/schemas'
+import { listOpenOffers, readOfferFacts } from '@/lib/shift-offer-server'
+import { offerEligibility, coachOfferRow, managerOfferRow } from '@/lib/shift-offer-notice'
+import { offerStillNeeded } from '@shared/offer-to-team'
+import { swapShiftHasStarted } from '@/lib/swap-cover'
+import { logWarn } from '@/lib/log'
+
+export async function GET(request) {
+  const user = await getCurrentUser()
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  const { searchParams } = new URL(request.url)
+  const locationId = searchParams.get('location_id')
+  if (!locationId) return NextResponse.json({ success: false, error: 'location_id is required' }, { status: 400 })
+  const guard = assertLocationAccess(user, locationId)
+  if (guard) return guard
+
+  const manage = searchParams.get('view') === 'manage'
+  const startDate = searchParams.get('start_date')
+  const endDate = searchParams.get('end_date')
+  if (manage) {
+    if (!hasRoleAtLocation(user, locationId, MANAGER_ROLES)) {
+      return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+    }
+    for (const [name, value] of [['start_date', startDate], ['end_date', endDate]]) {
+      if (value && !isRealCalendarDate(value)) {
+        return NextResponse.json({ success: false, error: `${name}: not a real date` }, { status: 400 })
+      }
+    }
+  }
+
+  const db = createServerClient()
+  const { offers, error } = await listOpenOffers(db, { locationId })
+  if (error) return NextResponse.json({ success: false, error: 'Could not read offers' }, { status: 500 })
+  const nowMs = Date.now()
+
+  if (manage) {
+    const inRange = (d) => !!d && (!startDate || d >= startDate) && (!endDate || d <= endDate)
+    return NextResponse.json({
+      success: true,
+      data: offers.filter((o) => inRange(o.shift_blocks?.block_date)).map((o) => managerOfferRow(o, { nowMs })),
+    })
+  }
+
+  const rows = []
+  for (const o of offers) {
+    const b = o.shift_blocks
+    if (!b || b.rosters?.status !== 'published' || !offerStillNeeded(b)) continue
+    if (swapShiftHasStarted({ block_date: b.block_date, start_time: b.start_time }, nowMs, o.locations?.timezone ?? null)) continue
+    const block = { ...b, location_id: o.location_id }
+    const facts = await readOfferFacts(db, { block, profileIds: [user.id] })
+    if (facts.error) {
+      logWarn('shift-offer', 'coach offer list: eligibility unreadable; showing the offer (the claim re-checks)', { offerId: o.id, err: facts.error.message })
+      rows.push(coachOfferRow(o))
+      continue
+    }
+    if (offerEligibility(user.id, facts, block).eligible) rows.push(coachOfferRow(o))
+  }
+  return NextResponse.json({ success: true, data: rows })
+}
+```
+
+- [ ] **Step 6: Register the four paths in `src/lib/openapi.js`** directly after the REPLACE.1a registration:
+
+```js
+// REPLACE.1b — "Offer to team".
+registry.registerPath({
+  method: 'post', path: '/api/schedule/blocks/{id}/offer', tags: ['Schedule'], security: [{ CookieAuth: [] }],
+  summary: 'Offer an unfilled shift to the team (manager-only)',
+  description: "Creates an open offer for a published shift that is today or later, has not started (studio clock) and still needs a coach: a class shift below its minimum, or an empty admin shift. One open offer per shift. Every coach at the studio who is free then (not on approved leave, not on another shift in the organisation, not unavailable) is pushed, inside 07:00-22:00 studio time (from 07:00 otherwise); the offer is visible at once. `data.notice` is now or morning.",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    201: { description: 'Offered' },
+    403: { description: 'Forbidden — a manager at this studio only', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Shift not found, or at a location you do not own', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'not_published, past, started, staffed or already_offered', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'get', path: '/api/schedule/offers', tags: ['Schedule'], security: [{ CookieAuth: [] }],
+  summary: 'Open shift offers at a studio',
+  description: 'Default: the offers the caller could take (free, not on leave, not unavailable, not already on the shift), when/what/where only. `view=manage` (a manager at the studio): the period\'s open offers with `notice_state` (sent, nobody, sending, morning, failed) and `broadcast_count`.',
+  request: { query: z.object({ location_id: uuidLike, view: z.enum(['manage']).optional(), start_date: z.string().optional(), end_date: z.string().optional() }) },
+  responses: { 200: { description: 'Offers' }, 400: { description: 'No studio, or a date the calendar does not have', content: { 'application/json': { schema: ErrorResponse } } }, 403: { description: 'Not your studio, or manage view without a manager role there', content: { 'application/json': { schema: ErrorResponse } } } },
+})
+registry.registerPath({
+  method: 'post', path: '/api/schedule/offers/{id}/claim', tags: ['Schedule'], security: [{ CookieAuth: [] }],
+  summary: 'Claim an offered shift',
+  description: 'First to claim gets it (claim_shift_offer locks the offer). The caller must belong to the studio, and must not be on approved leave that day or on another shift at that time. The managers are told who took it (07:00-22:00 studio time).',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Claimed; the shift is on the caller\'s roster' },
+    403: { description: 'Not on the staff of this studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Offer not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Taken, withdrawn, filled, started, or the caller is on leave / another shift', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'The leave / shift check could not be read; try again', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'delete', path: '/api/schedule/offers/{id}', tags: ['Schedule'], security: [{ CookieAuth: [] }],
+  summary: 'Withdraw a shift offer (manager-only)',
+  description: 'Closes an open offer as withdrawn. Nobody is notified.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: { 200: { description: 'Withdrawn' }, 403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } }, 404: { description: 'Offer not found', content: { 'application/json': { schema: ErrorResponse } } }, 409: { description: 'Already closed', content: { 'application/json': { schema: ErrorResponse } } } },
+})
+```
+And in `src/lib/openapi.test.js`:
+
+```js
+  it('REPLACE.1b — documents the four offer paths', () => {
+    expect(spec.paths['/api/schedule/blocks/{id}/offer']?.post).toBeTruthy()
+    expect(spec.paths['/api/schedule/offers']?.get).toBeTruthy()
+    expect(spec.paths['/api/schedule/offers/{id}/claim']?.post?.responses).toHaveProperty('503')
+    expect(spec.paths['/api/schedule/offers/{id}']?.delete).toBeTruthy()
+  })
+```
+
+- [ ] **Step 7: Run, expect pass.**
+
+```bash
+npx vitest run 'src/app/api/schedule/blocks/[id]/offer/route.test.js' src/app/api/schedule/offers/route.test.js \
+  'src/app/api/schedule/offers/[id]/route.test.js' 'src/app/api/schedule/offers/[id]/claim/route.test.js' src/lib/openapi.test.js \
+  src/app/api/schedule/date-inputs.test.js
+TZ=America/Los_Angeles npx vitest run 'src/app/api/schedule/offers/[id]/claim/route.test.js' src/app/api/schedule/offers/route.test.js
+npm run check:route-guards && npm run check:location-scoping
+```
+Expected: `0 failed`; both checks exit 0. `date-inputs.test.js` (DATECHECK.1) passes because `start_date`/`end_date` go through `isRealCalendarDate` in the `[['start_date', …], ['end_date', …]]` loop it recognises.
+
+- [ ] **Step 8: Commit.**
+
+```bash
+git add 'src/app/api/schedule/blocks/[id]/offer' src/app/api/schedule/offers src/lib/openapi.js src/lib/openapi.test.js
+git commit -m "REPLACE.1b — the four offer routes: offer, list (coach / manage), claim, withdraw
+
+Offer: manager at the shift's studio, shared offerRefusal + the studio-clock
+started check, live at once, broadcast via processOffer. Claim: member (404
+otherwise), open, not started, not on leave or another shift (503 on an
+unreadable check), then claim_shift_offer; one log row via 'offer', stamped;
+the managers' notice via processOffer. List: the caller's default-6 offers,
+when/what/where only; view=manage for the period with the notice state.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 1b-6: Words and routing: the drawer, the registry, the phone's tap (OTA)
+
+**Files:** Modify `src/lib/roster-change-format.js` (+ test), `src/lib/notifications-registry.js`, `mobile/lib/notification-nav.js` (+ test).
+
+- [ ] **Step 1: Failing tests.** `src/lib/roster-change-format.test.js`:
+
+```js
+  it('REPLACE.1b — a claimed offer names itself', () => {
+    expect(rosterChangeSentence({ action: 'assigned', coach_name: 'Coach B', block_date: '2026-09-29', start_time: '06:00:00', details: { via: 'offer' } }))
+      .toBe('Assigned Coach B to Tue 29 Sep 6am (took an offered shift)')
+  })
+```
+`mobile/lib/notification-nav.test.js`:
+
+```js
+  it('REPLACE.1b — an offer opens the Dashboard (Claim is there); "taken" opens Manage mode on that day', () => {
+    expect(routeForNotification({ type: 'shift_offer', offer_id: 'o1', block_date: '2026-09-29' })).toBe('/(tabs)/dashboard')
+    expect(routeForNotification({ type: 'shift_offer_taken', offer_id: 'o1', block_date: '2026-09-29' })).toBe('/(tabs)/schedule?date=2026-09-29&view=manage')
+    expect(routeForNotification({ type: 'shift_offer_taken', block_date: 'nope' })).toBe('/(tabs)/schedule?view=manage')
+  })
+```
+Run both → the new cases fail.
+
+- [ ] **Step 2: Implement.** `VIA_NOTE` gains `offer: 'took an offered shift', // REPLACE.1b`. In `mobile/lib/notification-nav.js`, after the `case 'swap_decision':` return (line 69-71):
+
+```js
+    // REPLACE.1b — "A shift is up for grabs": Claim is on the Dashboard.
+    case 'shift_offer':
+      return '/(tabs)/dashboard'
+    // REPLACE.1b — manager: "Coach B took …": that day in Manage mode
+    // (schedule.jsx honours view=manage for manager roles only).
+    case 'shift_offer_taken':
+      return isIsoDay(data.block_date) ? `/(tabs)/schedule?date=${data.block_date}&view=manage` : '/(tabs)/schedule?view=manage'
+```
+Add both types to the file header's list of swap-family types. A phone without this update gets `undefined` for these types (the default branch): the push still shows; the tap opens the app without navigating.
+
+In `src/lib/notifications-registry.js`, the `category: 'swap'` entry: append to `description` ` Also "Offer to team": a shift a manager offers goes to every coach at the studio who is free then (07:00-22:00 studio time), and the managers are told who took it.`; and to `recipients.detail` `, coaches free for an offered shift, managers when it is taken`.
+
+- [ ] **Step 3: Run, expect pass.**
+
+```bash
+npx vitest run src/lib/roster-change-format.test.js mobile/lib/notification-nav.test.js src/lib/push-channels.test.js src/lib/shared-permissions.test.js tests/push-category-literals.test.js
+```
+
+- [ ] **Step 4: Commit.**
+
+```bash
+git add src/lib/roster-change-format.js src/lib/roster-change-format.test.js src/lib/notifications-registry.js mobile/lib/notification-nav.js mobile/lib/notification-nav.test.js
+git commit -m "REPLACE.1b — words and taps: '(took an offered shift)', the swap registry entry, shift_offer / shift_offer_taken routing (OTA)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 1b-7: The offer arm on the `*/5` cron, and both heartbeat stamps
+
+**Files:** Modify `src/lib/cron-arm-health.js` (+ `.test.js`), `src/app/api/cron/send-push-reminders/route.js` (+ `.test.js`).
+
+- [ ] **Step 1: Failing tests.** In `src/lib/cron-arm-health.test.js`, add the four names to its existing `} = await import('./cron-arm-health')` destructure (line 20; the file mocks before it imports), then add the describe below. The import line is shown for reading only:
+
+```js
+import { replaceNoticeArmHealthy, offerSweepArmHealthy, REPLACE_NOTICES_HEARTBEAT, SHIFT_OFFER_SWEEP_HEARTBEAT } from './cron-arm-health'
+
+describe('REPLACE.1 — the two */5 arms', () => {
+  it('names the rows mig 640 seeds', () => {
+    expect(REPLACE_NOTICES_HEARTBEAT).toBe('replace-notices')
+    expect(SHIFT_OFFER_SWEEP_HEARTBEAT).toBe('shift-offer-sweep')
+  })
+  it('healthy = an outcome object with errors 0 (quiet ticks and retries are healthy)', () => {
+    for (const fn of [replaceNoticeArmHealthy, offerSweepArmHealthy]) {
+      expect(fn({ errors: 0, quiet: 3 })).toBe(true)
+      expect(fn({ errors: 0, retry: 2 })).toBe(true)
+      expect(fn({ errors: 1 })).toBe(false)
+      expect(fn(null)).toBe(false)
+      expect(fn([])).toBe(false)
+    }
+  })
+})
+```
+In `src/app/api/cron/send-push-reminders/route.test.js`: add `vi.mock('@/lib/shift-offer-server', () => ({ runShiftOfferSweep: vi.fn() }))`, import it, and in `beforeEach` `runShiftOfferSweep.mockResolvedValue({ open: 0, errors: 0 })`. **Every existing assertion on `stampedNames()` gains the two new rows, in the order the route stamps them:** `shift-reminders`, `replace-notices`, `shift-offer-sweep`, (BLOCKEDIT.1's arm row if it has one, in its place), then `send-push-reminders`. Then add:
+
+```js
+describe('GET /api/cron/send-push-reminders — REPLACE.1 arm heartbeats', () => {
+  it('a clean tick stamps replace-notices and shift-offer-sweep with their own outcomes', async () => {
+    runReplaceNotices.mockResolvedValue({ rows: 1, groups: 1, silent: 0, quiet: 0, errors: 0 })
+    runShiftOfferSweep.mockResolvedValue({ open: 2, sent: 1, errors: 0 })
+    await GET(req())
+    expect(stampHeartbeat).toHaveBeenCalledWith('replace-notices', expect.objectContaining({ groups: 1 }))
+    expect(stampHeartbeat).toHaveBeenCalledWith('shift-offer-sweep', expect.objectContaining({ open: 2 }))
+  })
+  it('an arm with errors, or one that throws, is NOT stamped; the other arm and the parent are', async () => {
+    runShiftOfferSweep.mockRejectedValue(new Error('boom'))
+    const body = await (await GET(req())).json()
+    expect(body.offer_arm_failed).toBe(1)
+    expect(stampedNames()).not.toContain('shift-offer-sweep')
+    expect(stampedNames()).toContain('replace-notices')
+    expect(stampedNames()).toContain('send-push-reminders')
+    runShiftOfferSweep.mockResolvedValue({ open: 0, errors: 1 })
+    vi.clearAllMocks(); runReplaceNotices.mockResolvedValue({ errors: 1 })
+    await GET(req())
+    expect(stampedNames()).not.toContain('replace-notices')
+  })
+})
+```
+
+- [ ] **Step 2: Implement.** `src/lib/cron-arm-health.js` (the two names already exist from Task 1b-1): add below `runwayArmHealthy`:
+
+```js
+// REPLACE.1 — the two arms that ride the */5 send-push-reminders cron (mig 640
+// seeds both rows). Each reports errors > 0 only for a fault of its own (an
+// unreadable list, a failed write); a quiet-hours tick or a released-lease
+// retry is healthy.
+export function replaceNoticeArmHealthy(summary) {
+  return isOutcome(summary) && count(summary.errors) === 0
+}
+export function offerSweepArmHealthy(summary) {
+  return isOutcome(summary) && count(summary.errors) === 0
+}
+```
+Update the header's list of rows with both names.
+
+In `src/app/api/cron/send-push-reminders/route.js`: import `runShiftOfferSweep` from `@/lib/shift-offer-server`, and `REPLACE_NOTICES_HEARTBEAT, SHIFT_OFFER_SWEEP_HEARTBEAT, replaceNoticeArmHealthy, offerSweepArmHealthy` beside `SHIFT_REMINDERS_HEARTBEAT`. Add `offer_arm_failed: 0,` to `summary`. Replace 1a's HELD REPLACE NOTICES block with:
+
+```js
+  // -------------------------- HELD REPLACE NOTICES --------------------------
+  // REPLACE.1a — see src/lib/shift-replace-notify.js. Own heartbeat row
+  // 'replace-notices' (mig 640), stamped only on a clean run.
+  let replaceSummary = null
+  try {
+    replaceSummary = await runReplaceNotices(db, { nowMs })
+    summary.replace_notices = replaceSummary
+    if (!replaceNoticeArmHealthy(replaceSummary)) summary.replace_arm_failed = 1
+  } catch (err) {
+    summary.replace_arm_failed = 1
+    logError('cron-push-reminders', 'replace notice arm threw', { err })
+  }
+  if (summary.replace_arm_failed === 0) {
+    await stampHeartbeat(REPLACE_NOTICES_HEARTBEAT, replaceSummary).catch((err) =>
+      logWarn('cron-push-reminders', 'replace-notices heartbeat failed', { err }))
+  }
+
+  // -------------------------- SHIFT OFFERS --------------------------
+  // REPLACE.1b — close offers whose shift started / was filled / left a
+  // published roster, and send owed broadcast / taken notices inside
+  // 07:00-22:00 studio time (src/lib/shift-offer-server.js). Isolated; own
+  // heartbeat row 'shift-offer-sweep' (mig 640), stamped only on a clean run.
+  let offerSummary = null
+  try {
+    offerSummary = await runShiftOfferSweep(db, { nowMs })
+    summary.shift_offers = offerSummary
+    if (!offerSweepArmHealthy(offerSummary)) summary.offer_arm_failed = 1
+  } catch (err) {
+    summary.offer_arm_failed = 1
+    logError('cron-push-reminders', 'shift offer arm threw', { err })
+  }
+  if (summary.offer_arm_failed === 0) {
+    await stampHeartbeat(SHIFT_OFFER_SWEEP_HEARTBEAT, offerSummary).catch((err) =>
+      logWarn('cron-push-reminders', 'shift-offer-sweep heartbeat failed', { err }))
+  }
+```
+Header bullet: `- Shift offers (REPLACE.1b): src/lib/shift-offer-server.js runShiftOfferSweep; own heartbeat 'shift-offer-sweep'. Held replace notices now stamp 'replace-notices'.`
+
+- [ ] **Step 3: Run, expect pass.**
+
+```bash
+npx vitest run src/lib/cron-arm-health.test.js src/app/api/cron/send-push-reminders/route.test.js tests/migration-640-shift-offers.test.js tests/vercel-crons.test.js
+```
+Expected: `0 failed`. `grep -L stampHeartbeat src/app/api/cron/*/route.js` still lists only `health-check` and `ad-insights-backfill`.
+
+- [ ] **Step 4: Commit.**
+
+```bash
+git add src/lib/cron-arm-health.js src/lib/cron-arm-health.test.js src/app/api/cron/send-push-reminders/route.js src/app/api/cron/send-push-reminders/route.test.js
+git commit -m "REPLACE.1b — the offer arm on the */5 cron; replace-notices and shift-offer-sweep heartbeats stamped only on a clean run
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 1b-8: Arm the write rule on the offer write paths
+
+- [ ] **Step 1:** In `eslint.guardrails.config.mjs`, after 1a's three lines, add:
+
+```js
+      // REPLACE.1b — the offer sender/sweep and the four routes. Born clean.
+      'src/lib/shift-offer-server.js',
+      'src/app/api/schedule/offers/**',
+      'src/app/api/schedule/blocks/*/offer/route.js',
+```
+- [ ] **Step 2:** `npm run check:guardrails` → exit 0.
+- [ ] **Step 3: Commit** `REPLACE.1b — arm no-unchecked-supabase-write on the offer write paths` (with the Co-Authored-By line).
+
+---
+
+### Task 1b-9: Web manager: "Offer to team" in the block dialog
+
+**Files:** Create `src/components/schedule/useShiftOffers.js`, `src/components/schedule/useShiftOffers.test.js`, `src/components/schedule/OfferToTeamControl.jsx`, `src/components/schedule/OfferToTeamControl.test.jsx`. Modify `src/components/ScheduleCalendar.jsx`.
+
+- [ ] **Step 1: Failing tests.**
+
+```jsx
+// src/components/schedule/OfferToTeamControl.test.jsx
+// @vitest-environment jsdom
+//
+// REPLACE.1b — the block dialog's offer control: a button when the shared
+// rule allows an offer, the offer's state + Withdraw when one is open,
+// nothing otherwise. Where it is DRAWN is a browser check (jsdom cannot see
+// layout).
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { render, cleanup, screen, fireEvent } from '@testing-library/react'
+import OfferToTeamControl from '@/components/schedule/OfferToTeamControl'
+
+afterEach(() => cleanup())
+const TODAY = '2026-09-28'
+const BLOCK = { id: 'b1', block_date: '2026-09-29', min_coaches: 1, max_coaches: 3, rosters: { status: 'published' }, shift_templates: { kind: 'class' }, shift_assignments: [] }
+
+describe('OfferToTeamControl', () => {
+  it('an empty published future shift offers "Offer to team"', () => {
+    const onOffer = vi.fn()
+    render(<OfferToTeamControl block={BLOCK} offer={null} todayIso={TODAY} onOffer={onOffer} onWithdraw={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Offer to team' }))
+    expect(onOffer).toHaveBeenCalledTimes(1)
+  })
+  it('a staffed shift, a draft or a past one shows nothing', () => {
+    const { container, rerender } = render(<OfferToTeamControl block={{ ...BLOCK, shift_assignments: [{ profile_id: 'x', status: 'scheduled' }] }} todayIso={TODAY} onOffer={vi.fn()} onWithdraw={vi.fn()} />)
+    expect(container.innerHTML).toBe('')
+    rerender(<OfferToTeamControl block={{ ...BLOCK, rosters: { status: 'draft' } }} todayIso={TODAY} onOffer={vi.fn()} onWithdraw={vi.fn()} />)
+    expect(container.innerHTML).toBe('')
+    rerender(<OfferToTeamControl block={{ ...BLOCK, block_date: '2026-09-27' }} todayIso={TODAY} onOffer={vi.fn()} onWithdraw={vi.fn()} />)
+    expect(container.innerHTML).toBe('')
+  })
+  it('an open offer shows its state and Withdraw', () => {
+    const onWithdraw = vi.fn()
+    render(<OfferToTeamControl block={BLOCK} offer={{ id: 'o1', notice_state: 'sent', broadcast_count: 3 }} todayIso={TODAY} onOffer={vi.fn()} onWithdraw={onWithdraw} />)
+    expect(screen.getByText('Offered to the team · sent to 3 coaches')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Withdraw offer' }))
+    expect(onWithdraw).toHaveBeenCalledTimes(1)
+  })
+  it('busy disables both buttons', () => {
+    render(<OfferToTeamControl block={BLOCK} offer={null} todayIso={TODAY} busy onOffer={vi.fn()} onWithdraw={vi.fn()} />)
+    expect(screen.getByRole('button', { name: 'Offer to team' }).disabled).toBe(true)
+  })
+})
+```
+
+```js
+// src/components/schedule/useShiftOffers.test.js
+// @vitest-environment jsdom
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
+import { renderHook, waitFor, cleanup, act } from '@testing-library/react'
+import { useShiftOffers } from '@/components/schedule/useShiftOffers'
+
+const okJson = (data) => ({ ok: true, json: async () => ({ success: true, data }) })
+beforeEach(() => { globalThis.fetch = vi.fn() })
+afterEach(() => { cleanup(); vi.restoreAllMocks() })
+
+describe('useShiftOffers', () => {
+  it('loads the period\'s open offers keyed by shift, manager view', async () => {
+    fetch.mockResolvedValue(okJson([{ id: 'o1', block_id: 'b1', notice_state: 'sent', broadcast_count: 2 }]))
+    const { result } = renderHook(() => useShiftOffers({ locationId: 'loc-1', startDate: '2026-09-28', endDate: '2026-10-04', enabled: true }))
+    await waitFor(() => expect(result.current.byBlockId.b1?.id).toBe('o1'))
+    expect(fetch.mock.calls[0][0]).toBe('/api/schedule/offers?location_id=loc-1&view=manage&start_date=2026-09-28&end_date=2026-10-04')
+  })
+  it('does nothing when disabled (a coach never asks)', async () => {
+    renderHook(() => useShiftOffers({ locationId: 'loc-1', startDate: 'a', endDate: 'b', enabled: false }))
+    await act(async () => {})
+    expect(fetch).not.toHaveBeenCalled()
+  })
+  it('a failed reload keeps what was loaded and says so', async () => {
+    fetch.mockResolvedValueOnce(okJson([{ id: 'o1', block_id: 'b1' }])).mockResolvedValueOnce({ ok: false, json: async () => ({ success: false }) })
+    const { result } = renderHook(() => useShiftOffers({ locationId: 'loc-1', startDate: 's', endDate: 'e', enabled: true }))
+    await waitFor(() => expect(result.current.byBlockId.b1).toBeTruthy())
+    await act(async () => { await result.current.reload() })
+    expect(result.current.failed).toBe(true)
+    expect(result.current.byBlockId.b1).toBeTruthy()
+  })
+})
+```
+(These tests use real timers throughout, so `tests/fake-timer-act.test.js` has nothing to flag.)
+
+- [ ] **Step 2: Implement.**
+
+```jsx
+// src/components/schedule/OfferToTeamControl.jsx
+'use client'
+// REPLACE.1b — the block dialog's "Offer to team" control. The rule is
+// shared/offer-to-team.js (the same one the phone and the route use); the
+// route has the last word on "started".
+import { Megaphone } from 'lucide-react'
+import { offerRefusal, offerStateLabel } from '@shared/offer-to-team'
+
+export default function OfferToTeamControl({ block, offer = null, todayIso, busy = false, onOffer, onWithdraw }) {
+  if (offer) {
+    return (
+      <div className="flex items-center justify-between gap-2 rounded-md border border-un1t-border bg-un1t-surface px-3 py-2">
+        <span className="text-xs text-un1t-text inline-flex items-center gap-1.5">
+          <Megaphone size={12} aria-hidden="true" />
+          {offerStateLabel(offer)}
+        </span>
+        <button
+          type="button"
+          onClick={onWithdraw}
+          disabled={busy}
+          className="text-[11px] text-un1t-subtle hover:text-red-700 disabled:opacity-50 px-2 py-1 rounded hover:bg-red-500/10"
+        >
+          Withdraw offer
+        </button>
+      </div>
+    )
+  }
+  if (offerRefusal(block, { todayIso })) return null
+  return (
+    <button
+      type="button"
+      onClick={onOffer}
+      disabled={busy}
+      className="text-xs bg-un1t-surface text-un1t-text border border-un1t-border hover:border-un1t-text/40 disabled:opacity-50 px-3 py-2 rounded-md font-medium inline-flex items-center gap-1.5"
+    >
+      <Megaphone size={12} aria-hidden="true" /> Offer to team
+    </button>
+  )
+}
+```
+
+```js
+// src/components/schedule/useShiftOffers.js
+'use client'
+// REPLACE.1b — the manager's open offers for the visible period, keyed by
+// shift. Only the newest load writes (a slow answer for a period just left
+// cannot paint over the current one); a failed reload keeps what is there.
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { indexOffersByBlock } from '@shared/offer-to-team'
+
+export function useShiftOffers({ locationId, startDate, endDate, enabled }) {
+  const [byBlockId, setByBlockId] = useState({})
+  const [failed, setFailed] = useState(false)
+  const seq = useRef(0)
+  const reload = useCallback(async () => {
+    const mine = ++seq.current
+    if (!enabled || !locationId || !startDate || !endDate) { setByBlockId({}); setFailed(false); return }
+    const qs = new URLSearchParams({ location_id: locationId, view: 'manage', start_date: startDate, end_date: endDate })
+    try {
+      const res = await fetch(`/api/schedule/offers?${qs}`)
+      const json = await res.json().catch(() => ({}))
+      if (mine !== seq.current) return
+      if (!res.ok || json.success !== true) { setFailed(true); return }
+      setFailed(false)
+      setByBlockId(indexOffersByBlock(json.data))
+    } catch {
+      if (mine === seq.current) setFailed(true)
+    }
+  }, [enabled, locationId, startDate, endDate])
+  useEffect(() => { reload() }, [reload])
+  return { byBlockId, failed, reload }
+}
+```
+
+- [ ] **Step 3: Wire `ScheduleCalendar.jsx`.**
+- Imports: `import { useShiftOffers } from './schedule/useShiftOffers'`, `import OfferToTeamControl from './schedule/OfferToTeamControl'`, `import { offerPostResultText } from '@shared/offer-to-team'`.
+- After `const visiblePeriodEnd = …` (line 568): `const offers = useShiftOffers({ locationId, startDate: visiblePeriodStart, endDate: visiblePeriodEnd, enabled: isManager })`
+- Handlers next to `handleReplaceCoach`:
+
+```js
+  // REPLACE.1b — offer a shift to the team, or withdraw an open offer.
+  async function handleOfferBlock(block) {
+    if (rowBusy) return
+    setRowBusy(true)
+    try {
+      const res = await fetch(`/api/schedule/blocks/${block.id}/offer`, { method: 'POST' })
+      const json = await res.json().catch(() => ({}))
+      const out = offerPostResultText(res.status, json)
+      showToast(out.text, out.tone)
+      offers.reload()
+    } catch {
+      showToast('Network error, please try again')
+    } finally {
+      setRowBusy(false)
+    }
+  }
+  async function handleWithdrawOffer(offer) {
+    if (rowBusy || !confirm('Withdraw this offer? Coaches will no longer see it.')) return
+    setRowBusy(true)
+    try {
+      const res = await fetch(`/api/schedule/offers/${offer.id}`, { method: 'DELETE' })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok || !json.success) showToast(json.error || 'Could not withdraw the offer')
+      else showToast('Offer withdrawn.', 'success')
+      offers.reload()
+    } catch {
+      showToast('Network error, please try again')
+    } finally {
+      setRowBusy(false)
+    }
+  }
+```
+- `refreshAfterMutation` callers that change staffing (assign, remove, replace) also call `offers.reload()` so a filled shift's offer line goes (the server closes it; the list reads it live).
+- Pass to `BlockDetailModal` (next to `onReplace=`): `offer={offers.byBlockId[blockDetail.id] ?? null}`, `todayIso={todayStr}`, `onOffer={() => handleOfferBlock(blockDetail)}`, `onWithdrawOffer={(o) => handleWithdrawOffer(o)}`.
+- In `BlockDetailModal`, add those four props to the destructured list and, directly ABOVE the `{/* Action footer */}` block:
+
+```jsx
+        {/* REPLACE.1b — Offer to team (managers). The shared rule decides whether it shows. */}
+        {isManager && (
+          <div className="mb-4">
+            <OfferToTeamControl block={block} offer={offer} todayIso={todayIso} busy={busy}
+              onOffer={onOffer} onWithdraw={() => offer && onWithdrawOffer(offer)} />
+          </div>
+        )}
+```
+
+- [ ] **Step 4: Run, lint, build.**
+
+```bash
+npx vitest run src/components/schedule/OfferToTeamControl.test.jsx src/components/schedule/useShiftOffers.test.js tests/rtl-cleanup-after-each.test.js tests/fake-timer-act.test.js
+npm run lint && npm run check:guardrails && npm run build
+```
+Browser check on the Vercel preview (prod data, **look only**): an empty future published shift's dialog shows "Offer to team" above the footer; a staffed one shows nothing; at 390px the control wraps without overflow.
+
+- [ ] **Step 5: Commit.**
+
+```bash
+git add src/components/schedule/useShiftOffers.js src/components/schedule/useShiftOffers.test.js src/components/schedule/OfferToTeamControl.jsx src/components/schedule/OfferToTeamControl.test.jsx src/components/ScheduleCalendar.jsx
+git commit -m "REPLACE.1b — web: Offer to team in the block dialog, the offer's state and Withdraw
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 1b-10: Web coach: "Shifts up for grabs" on Today
+
+**Files:** Create `src/components/dashboard/OfferedShifts.jsx`, `src/components/dashboard/OfferedShifts.test.jsx`. Modify `src/app/dashboard/today/page.js`.
+
+- [ ] **Step 1: Failing test.**
+
+```jsx
+// src/components/dashboard/OfferedShifts.test.jsx
+// @vitest-environment jsdom
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/react'
+
+const refresh = vi.fn()
+vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh }) }))
+const { default: OfferedShifts } = await import('@/components/dashboard/OfferedShifts')
+
+const ROW = { id: 'o1', block_id: 'b1', block_date: '2026-09-29', start_time: '06:00:00', end_time: '07:00:00', shift_name: 'Morning', studio_name: 'Studio North' }
+const json = (status, body) => ({ ok: status >= 200 && status < 300, status, json: async () => body })
+
+beforeEach(() => { globalThis.fetch = vi.fn(); refresh.mockClear() })
+afterEach(() => { cleanup(); vi.restoreAllMocks() })
+
+describe('OfferedShifts', () => {
+  it('renders nothing when nothing is on offer', async () => {
+    fetch.mockResolvedValue(json(200, { success: true, data: [] }))
+    const { container } = render(<OfferedShifts locationId="loc-1" />)
+    await waitFor(() => expect(fetch).toHaveBeenCalled())
+    expect(container.innerHTML).toBe('')
+  })
+  it('lists each offer with when, what and where; Claim posts and says it is yours', async () => {
+    fetch.mockResolvedValueOnce(json(200, { success: true, data: [ROW] }))
+      .mockResolvedValueOnce(json(200, { success: true, data: { assignment_id: 'as-9' } }))
+      .mockResolvedValueOnce(json(200, { success: true, data: [] }))
+    render(<OfferedShifts locationId="loc-1" />)
+    expect(await screen.findByText('Morning · Studio North')).toBeTruthy()
+    expect(screen.getByText('Tue 29 Sep · 06:00-07:00')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Claim Morning, Tue 29 Sep · 06:00-07:00' }))
+    expect(await screen.findByText("It's yours. It is on your roster now.")).toBeTruthy()
+    expect(fetch.mock.calls[1]).toEqual(['/api/schedule/offers/o1/claim', { method: 'POST' }])
+    expect(refresh).toHaveBeenCalled()
+  })
+  it('a lost race says so in the server\'s words and reloads the list', async () => {
+    fetch.mockResolvedValueOnce(json(200, { success: true, data: [ROW] }))
+      .mockResolvedValueOnce(json(409, { success: false, error: 'Someone else has just taken this shift.' }))
+      .mockResolvedValueOnce(json(200, { success: true, data: [] }))
+    render(<OfferedShifts locationId="loc-1" />)
+    fireEvent.click(await screen.findByRole('button', { name: /^Claim / }))
+    expect(await screen.findByText('Someone else has just taken this shift.')).toBeTruthy()
+    expect(refresh).not.toHaveBeenCalled()
+  })
+})
+```
+
+- [ ] **Step 2: Implement.**
+
+```jsx
+// src/components/dashboard/OfferedShifts.jsx
+'use client'
+// REPLACE.1b — "Shifts up for grabs" on /dashboard/today: shifts a manager
+// offered to the team that the viewer could take (GET /api/schedule/offers,
+// the same default-6 rule as the push). Claim = first come, first served;
+// the server's words say who won. Renders nothing when nothing is on offer.
+import { useCallback, useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { Megaphone } from 'lucide-react'
+import { SectionHeader } from '@/components/dashboard/Cards'
+import { offerWhenLine, offerClaimResultText } from '@shared/offer-to-team'
+
+export default function OfferedShifts({ locationId }) {
+  const router = useRouter()
+  const [offers, setOffers] = useState([])
+  const [busyId, setBusyId] = useState(null)
+  const [message, setMessage] = useState(null) // { tone, text }
+
+  const load = useCallback(async () => {
+    if (!locationId) return
+    try {
+      const res = await fetch(`/api/schedule/offers?location_id=${encodeURIComponent(locationId)}`)
+      const json = await res.json().catch(() => ({}))
+      setOffers(res.ok && json.success ? (json.data || []) : [])
+    } catch (e) {
+      console.error('[OfferedShifts] load error:', e?.message || e)
+    }
+  }, [locationId])
+
+  useEffect(() => { load() }, [load])
+
+  async function claim(offer) {
+    if (busyId) return
+    setBusyId(offer.id)
+    setMessage(null)
+    try {
+      const res = await fetch(`/api/schedule/offers/${offer.id}/claim`, { method: 'POST' })
+      const json = await res.json().catch(() => ({}))
+      setMessage(offerClaimResultText(res.status, json))
+      await load()
+      if (res.ok && json.success) router.refresh()
+    } catch {
+      setMessage({ tone: 'error', text: 'Network error. Please try again.' })
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  if (offers.length === 0 && !message) return null
+  return (
+    <>
+      <SectionHeader title="Shifts up for grabs" count={offers.length || null} />
+      {message && (
+        <p role="status" className={`mb-2 text-xs px-3 py-2 rounded-md ${message.tone === 'success' ? 'bg-green-500/10 text-green-700' : 'bg-red-500/10 text-red-700'}`}>
+          {message.text}
+        </p>
+      )}
+      {offers.length > 0 && (
+        <div className="bg-un1t-surface border border-un1t-border rounded-2xl overflow-hidden mb-3">
+          {offers.map((o, i) => {
+            const when = offerWhenLine(o)
+            const title = [o.shift_name || 'Shift', o.studio_name].filter(Boolean).join(' · ')
+            return (
+              <div key={o.id} className={`flex items-center gap-3 px-4 py-3 ${i < offers.length - 1 ? 'border-b border-un1t-border' : ''}`}>
+                <Megaphone size={16} className="text-un1t-subtle flex-shrink-0" aria-hidden="true" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium text-un1t-text truncate">{title}</div>
+                  {when ? <div className="text-xs text-un1t-subtle truncate">{when}</div> : null}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => claim(o)}
+                  disabled={!!busyId}
+                  aria-label={`Claim ${o.shift_name || 'shift'}, ${when}`}
+                  className="text-xs font-semibold px-3 py-1.5 rounded-md bg-un1t-text text-un1t-bg hover:bg-un1t-accent disabled:opacity-50"
+                >
+                  {busyId === o.id ? '…' : 'Claim'}
+                </button>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </>
+  )
+}
+```
+
+In `src/app/dashboard/today/page.js`: `import OfferedShifts from '@/components/dashboard/OfferedShifts'` beside the `SwapActions` import (line 47), and mount it directly ABOVE `<SwapActions` (line 461):
+
+```jsx
+      {/* REPLACE.1b — shifts a manager offered to the team that I could take. */}
+      <OfferedShifts locationId={user.activeLocation?.id} />
+```
+
+- [ ] **Step 3: Run, lint, build.**
+
+```bash
+npx vitest run src/components/dashboard/OfferedShifts.test.jsx tests/dashboard-today-dublin-day.test.js
+npm run lint && npm run check:guardrails && npm run build
+```
+(`no-low-contrast-chip`: the message uses the `-500/10` + `-700` pairing.)
+
+- [ ] **Step 4: Commit.**
+
+```bash
+git add src/components/dashboard/OfferedShifts.jsx src/components/dashboard/OfferedShifts.test.jsx src/app/dashboard/today/page.js
+git commit -m "REPLACE.1b — web Today: Shifts up for grabs, with Claim
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 1b-11: Phone: the API wrappers and `mobile/lib/offer-cards.js` (OTA)
+
+**Files:** Modify `mobile/lib/schedule-api.js`, `mobile/lib/schedule-api.test.js`. Create `mobile/lib/offer-cards.js`, `mobile/lib/offer-cards.test.js`.
+
+- [ ] **Step 1: Failing tests.** Add `'claimShiftOffer', 'getManagedOffers', 'getOffersForMe', 'offerBlockToTeam', 'withdrawShiftOffer'` to the sorted export list in `mobile/lib/schedule-api.test.js`, and:
+
+```js
+describe('REPLACE.1b — offer wrappers', () => {
+  it('coach list, manager list, offer, claim, withdraw', () => {
+    schedule.getOffersForMe({ locationId: LOC })
+    expect(lastPathname()).toBe('/api/schedule/offers'); expect(lastQuery()).toEqual({ location_id: LOC }); api.mockClear()
+    schedule.getManagedOffers({ locationId: LOC, startDate: '2026-09-28', endDate: '2026-10-04' })
+    expect(lastQuery()).toEqual({ location_id: LOC, view: 'manage', start_date: '2026-09-28', end_date: '2026-10-04' }); api.mockClear()
+    schedule.offerBlockToTeam('b1', { locationId: LOC })
+    expect(lastCall()).toEqual(['/api/schedule/blocks/b1/offer', { method: 'POST', locationId: LOC }]); api.mockClear()
+    schedule.claimShiftOffer('o1', { locationId: LOC })
+    expect(lastCall()).toEqual(['/api/schedule/offers/o1/claim', { method: 'POST', locationId: LOC }]); api.mockClear()
+    schedule.withdrawShiftOffer('o1', { locationId: LOC })
+    expect(lastCall()).toEqual(['/api/schedule/offers/o1', { method: 'DELETE', locationId: LOC }])
+  })
+})
+```
+
+```js
+// mobile/lib/offer-cards.test.js
+// REPLACE.1b — what the phone's offer surfaces say and decide (no RN runner).
+import { describe, it, expect } from 'vitest'
+import { offerCardLines, offerClaimAlert, offerPostAlert, blockOfferControl } from './offer-cards'
+
+const ROW = { id: 'o1', block_date: '2026-09-29', start_time: '06:00:00', end_time: '07:00:00', shift_name: 'Morning', studio_name: 'Studio North' }
+const BLOCK = { id: 'b1', block_date: '2026-09-29', min_coaches: 1, max_coaches: 3, rosters: { status: 'published' }, shift_templates: { kind: 'class' }, shift_assignments: [] }
+
+describe('offerCardLines', () => {
+  it('title and when-line', () => {
+    expect(offerCardLines(ROW)).toEqual({ title: 'Morning · Studio North', when: 'Tue 29 Sep · 06:00-07:00' })
+    expect(offerCardLines({ ...ROW, shift_name: null, studio_name: null }).title).toBe('Shift')
+  })
+})
+
+describe('offerClaimAlert', () => {
+  it('won, lost, offline', () => {
+    expect(offerClaimAlert({ success: true })).toEqual({ title: 'Shift claimed', message: "It's yours. It is on your roster now." })
+    expect(offerClaimAlert({ success: false, status: 409, error: 'Someone else has just taken this shift.' })).toEqual({ title: "Couldn't claim", message: 'Someone else has just taken this shift.' })
+    expect(offerClaimAlert({ success: false, transport: true, error: 'Network error: x' }).message).toBe("Couldn't reach the server. Check your connection and try again.")
+  })
+})
+
+describe('offerPostAlert', () => {
+  it('now, morning, refused', () => {
+    expect(offerPostAlert({ success: true, data: { notice: 'now' } })).toEqual({ title: 'Offered to the team', message: 'Offered to the team. Coaches who are free are being told now.' })
+    expect(offerPostAlert({ success: true, data: { notice: 'morning' } }).message).toMatch(/from 7am/)
+    expect(offerPostAlert({ success: false, status: 409, error: 'This shift is already offered to the team.' })).toEqual({ title: "Couldn't offer", message: 'This shift is already offered to the team.' })
+  })
+})
+
+describe('blockOfferControl (Manage card)', () => {
+  it('offer / offered / nothing, by the shared rule', () => {
+    expect(blockOfferControl(BLOCK, null, '2026-09-28')).toEqual({ kind: 'offer' })
+    expect(blockOfferControl(BLOCK, { id: 'o1', notice_state: 'morning' }, '2026-09-28')).toEqual({ kind: 'offered', label: 'Offered to the team · coaches are told from 7am' })
+    expect(blockOfferControl({ ...BLOCK, shift_assignments: [{ profile_id: 'x', status: 'scheduled' }] }, null, '2026-09-28')).toBeNull()
+    expect(blockOfferControl({ ...BLOCK, rosters: { status: 'draft' } }, null, '2026-09-28')).toBeNull()
+  })
+})
+```
+
+- [ ] **Step 2: Implement.** In `mobile/lib/schedule-api.js`, after `replaceAssignment`:
+
+```js
+// --- REPLACE.1b "Offer to team" ------------------------------------------
+// Offers the caller could take (coach view; default 6 decided server-side).
+export function getOffersForMe({ locationId }) {
+  const qs = new URLSearchParams({ location_id: locationId })
+  return api(`/api/schedule/offers?${qs.toString()}`, { locationId })
+}
+// A manager's open offers for a week (Manage mode). MANAGER at the studio.
+export function getManagedOffers({ locationId, startDate, endDate }) {
+  const qs = new URLSearchParams({ location_id: locationId, view: 'manage', start_date: startDate, end_date: endDate })
+  return api(`/api/schedule/offers?${qs.toString()}`, { locationId })
+}
+export function offerBlockToTeam(blockId, { locationId }) {
+  return api(`/api/schedule/blocks/${blockId}/offer`, { method: 'POST', locationId })
+}
+export function claimShiftOffer(offerId, { locationId }) {
+  return api(`/api/schedule/offers/${offerId}/claim`, { method: 'POST', locationId })
+}
+export function withdrawShiftOffer(offerId, { locationId }) {
+  return api(`/api/schedule/offers/${offerId}`, { method: 'DELETE', locationId })
+}
+```
+
+```js
+// mobile/lib/offer-cards.js
+//
+// REPLACE.1b — what the phone's "Offer to team" surfaces SAY and DECIDE: the
+// Dashboard card's lines, the alerts after offer / claim, and the Manage
+// card's control. Pure (no React Native), vitest-tested. The rule itself is
+// shared/offer-to-team.js, the one the web and the route use.
+import { offerRefusal, offerStateLabel, offerWhenLine, offerPostResultText, offerClaimResultText } from 'shared/offer-to-team'
+
+const OFFLINE = "Couldn't reach the server. Check your connection and try again."
+const status = (res) => (res?.success ? 200 : (res?.status || 0))
+
+export function offerCardLines(offer) {
+  return {
+    title: [offer?.shift_name || 'Shift', offer?.studio_name].filter(Boolean).join(' · '),
+    when: offerWhenLine(offer),
+  }
+}
+
+export function offerClaimAlert(res) {
+  if (res?.transport) return { title: "Couldn't claim", message: OFFLINE }
+  const out = offerClaimResultText(status(res), res)
+  return { title: out.tone === 'success' ? 'Shift claimed' : "Couldn't claim", message: out.text }
+}
+
+export function offerPostAlert(res) {
+  if (res?.transport) return { title: "Couldn't offer", message: OFFLINE }
+  const out = offerPostResultText(res?.success ? 201 : (res?.status || 0), res)
+  return { title: out.tone === 'error' ? "Couldn't offer" : 'Offered to the team', message: out.text }
+}
+
+/** The Manage card's offer control: { kind: 'offer' } | { kind: 'offered', label } | null. */
+export function blockOfferControl(block, offer, todayIso) {
+  if (offer) return { kind: 'offered', label: offerStateLabel(offer) }
+  return offerRefusal(block, { todayIso }) ? null : { kind: 'offer' }
+}
+```
+
+- [ ] **Step 3: Run, expect pass.**
+
+```bash
+npx vitest run mobile/lib/schedule-api.test.js mobile/lib/offer-cards.test.js
+npm run check:mobile-imports
+```
+
+- [ ] **Step 4: Commit.**
+
+```bash
+git add mobile/lib/schedule-api.js mobile/lib/schedule-api.test.js mobile/lib/offer-cards.js mobile/lib/offer-cards.test.js
+git commit -m "REPLACE.1b — phone: offer API wrappers and offer-cards.js decisions (OTA)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 1b-12: Phone: "Shifts up for grabs" on the Dashboard; the offer control in Manage mode (OTA)
+
+**Files:** Modify `mobile/components/dashboard/PersonalDashboard.jsx`, `mobile/components/schedule/ManageMode.jsx`, `mobile/components/schedule/BlockCard.jsx`.
+
+- [ ] **Step 1: PersonalDashboard.**
+- Imports: add `getOffersForMe, claimShiftOffer` to the `../../lib/schedule-api` import (line 25-30); `import { offerCardLines, offerClaimAlert } from '../../lib/offer-cards'`.
+- State after `const [openPool, setOpenPool] = useState([])` (line 419): `const [upForGrabs, setUpForGrabs] = useState([]) // REPLACE.1b`.
+- In `loadSwaps` (line 470): fetch it in the same `Promise.all` and set it the same best-effort way:
+
+```js
+      const [forMe, open, offers] = await Promise.all([
+        getSwapsForMe({ locationId }),
+        getOpenSwaps({ locationId }),
+        getOffersForMe({ locationId }),
+      ])
+      setOffered(forMe.success ? (forMe.data || []) : [])
+      setOpenPool(open.success ? (open.data || []) : [])
+      setUpForGrabs(offers.success ? (offers.data || []) : [])
+```
+(and `setUpForGrabs([])` in the two places that clear `setOpenPool([])`).
+- A claim handler beside `mutateSwap` (same in-flight latch state):
+
+```js
+  // REPLACE.1b — first to claim gets it; the server's words say who won.
+  async function claimOfferPress(offer) {
+    if (swapBusy) return
+    setSwapBusy(`${offer.id}:claim-offer`)
+    try {
+      const res = await claimShiftOffer(offer.id, { locationId: activeLocation?.id })
+      const out = offerClaimAlert(res)
+      await loadSwaps()
+      if (res.success) load()
+      Alert.alert(out.title, out.message)
+    } finally {
+      setSwapBusy(null)
+    }
+  }
+```
+- The section, directly ABOVE `{/* CT-P3b — Open swaps you can take …` (line 868), same card recipe as the open pool:
+
+```jsx
+      {/* REPLACE.1b — Shifts a manager offered to the team that I could take. */}
+      {upForGrabs.length > 0 && (
+        <>
+          <SectionHeader title="Shifts up for grabs" count={upForGrabs.length} />
+          <View className="bg-un1t-surface border border-un1t-border rounded-2xl overflow-hidden mb-3">
+            {upForGrabs.map((o, i) => {
+              const { title, when } = offerCardLines(o)
+              return (
+                <View key={o.id} className={`flex-row items-center px-4 py-3 ${i < upForGrabs.length - 1 ? 'border-b border-un1t-border' : ''}`}>
+                  <View className="w-8 h-8 rounded-full bg-un1t-border/40 items-center justify-center mr-3">
+                    <Ionicons name="megaphone-outline" size={16} color="#111827" />
+                  </View>
+                  <View className="flex-1">
+                    <Text className="text-sm font-medium text-un1t-text" numberOfLines={1}>{title}</Text>
+                    {when ? <Text className="text-xs text-un1t-subtle" numberOfLines={1}>{when}</Text> : null}
+                  </View>
+                  <Pressable
+                    disabled={!!swapBusy}
+                    onPress={() => claimOfferPress(o)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Claim ${title}, ${when}`}
+                    className="px-2.5 py-1 rounded-lg bg-un1t-text active:opacity-70"
+                  >
+                    <Text className="text-xs font-semibold text-un1t-bg">{swapBusy === `${o.id}:claim-offer` ? '…' : 'Claim'}</Text>
+                  </Pressable>
+                </View>
+              )
+            })}
+          </View>
+        </>
+      )}
+```
+
+- [ ] **Step 2: BlockCard.** Add props `offerControl = null, onOffer, onOfferPress` and render after the "Add coach" `Pressable`:
+
+```jsx
+      {offerControl?.kind === 'offer' ? (
+        <Pressable onPress={onOffer} disabled={busy} accessibilityRole="button"
+          className="flex-row items-center justify-center mt-2 py-2 rounded-xl border border-un1t-border active:opacity-60">
+          <Ionicons name="megaphone-outline" size={15} color="#111827" />
+          <Text className="text-sm font-medium text-un1t-text ml-1">Offer to team</Text>
+        </Pressable>
+      ) : null}
+      {offerControl?.kind === 'offered' ? (
+        <Pressable onPress={onOfferPress} disabled={busy} accessibilityRole="button"
+          className="flex-row items-center mt-2 py-1.5 active:opacity-60">
+          <Ionicons name="megaphone-outline" size={14} color="#64748B" />
+          <Text className="text-[12px] text-un1t-subtle ml-1 flex-1" numberOfLines={2}>{offerControl.label}</Text>
+        </Pressable>
+      ) : null}
+```
+
+- [ ] **Step 3: ManageMode.**
+- Imports: `getManagedOffers, offerBlockToTeam, withdrawShiftOffer` from schedule-api; `import { blockOfferControl, offerPostAlert } from '../../lib/offer-cards'`; `import { indexOffersByBlock } from 'shared/offer-to-team'`.
+- State: `const [offers, setOffers] = useState({}) // REPLACE.1b — open offers by block id`.
+- In `load`, fetch offers with the blocks, under the same generation guard:
+
+```js
+    let res
+    let offersRes = null
+    try {
+      const both = await Promise.all([
+        getScheduleBlocks({ locationId, startDate: weekStart, endDate: weekEnd }),
+        getManagedOffers({ locationId, startDate: weekStart, endDate: weekEnd }),
+      ])
+      res = both[0]
+      offersRes = both[1]
+    } catch (e) {
+      res = { success: false, error: e?.message }
+    }
+    if (!isCurrentLoad({ gen, currentGen: generation.current, requestedKey, currentKey: currentKey.current })) return
+    // An unreadable offer list shows no offer lines; "Offer to team" may then
+    // show on an offered shift, and the route answers "already offered".
+    setOffers(offersRes?.success ? indexOffersByBlock(offersRes.data) : {})
+```
+(the rest of `load` unchanged). In the `[locationId]` effect also `setOffers({})`.
+- Handlers:
+
+```js
+  // REPLACE.1b — offer a shift to the team. The confirm Alert comes from a
+  // tap on the card (no Modal is dismissing), and the result Alert only after
+  // the network answer.
+  function offerToTeam(block) {
+    Alert.alert('Offer to the team?', `${block.shift_templates?.name || 'This shift'} goes to every coach at this studio who is free then. The first to claim it gets it.`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Offer', onPress: async () => {
+        setBusyId(block.id)
+        const res = await offerBlockToTeam(block.id, { locationId })
+        setBusyId(null)
+        const out = offerPostAlert(res)
+        Alert.alert(out.title, out.message)
+        load()
+      } },
+    ])
+  }
+  function onOfferPress(block, offer) {
+    Alert.alert(block.shift_templates?.name || 'Offered shift', blockOfferControl(block, offer, dublinTodayIso()).label, [
+      { text: 'Close', style: 'cancel' },
+      { text: 'Withdraw offer', style: 'destructive', onPress: async () => {
+        setBusyId(block.id)
+        const res = await withdrawShiftOffer(offer.id, { locationId })
+        setBusyId(null)
+        if (!res.success) Alert.alert('Could not withdraw', res.error || 'Unknown error')
+        load()
+      } },
+    ])
+  }
+```
+- `BlockCard` gets `offerControl={blockOfferControl(b, offers[b.id] ?? null, dublinTodayIso())} onOffer={() => offerToTeam(b)} onOfferPress={() => onOfferPress(b, offers[b.id])}`.
+
+- [ ] **Step 4: Checks.**
+
+```bash
+npx vitest run mobile/lib/offer-cards.test.js mobile/lib/schedule-manage.test.js mobile/lib/schedule-api.test.js
+npm run check:mobile-imports && npm run check:mobile-lint && npm run check:ota-paths
+```
+iOS Simulator pass (Claude Code iOS Simulator panel; 🔴 it talks to PROD: look, do not tap Offer/Claim on real shifts): Dashboard section renders only when there is an offer; Manage card shows "Offer to team" on an empty published future shift, nothing on a staffed one; at the largest text size the offered line wraps to two lines without overlapping "Add coach".
+
+- [ ] **Step 5: Commit.**
+
+```bash
+git add mobile/components/dashboard/PersonalDashboard.jsx mobile/components/schedule/ManageMode.jsx mobile/components/schedule/BlockCard.jsx
+git commit -m "REPLACE.1b — phone: Shifts up for grabs on the Dashboard, Offer to team / Withdraw in Manage mode (OTA)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Migration apply steps (mig 640, at merge time, by me via Supabase MCP)
+
+Merge authority (index): pre-checks, a rollback record in the scratchpad, apply via MCP, post-checks, `get_advisors`. Project **un1t-crm** `iyvtbjjxdggiadzwwvdj` (confirm with `list_projects`; NOT sentinel).
+
+1. **Pre-checks** (`execute_sql`), each with its expected answer:
+```sql
+-- (a) not applied yet
+SELECT to_regclass('public.shift_offers') IS NULL AS free, to_regprocedure('public.claim_shift_offer(uuid,uuid)') IS NULL AS fn_free;  -- true, true
+-- (b) what the function reads exists (628 kind, 622 deleted_at, 177 min_coaches)
+SELECT table_name, column_name FROM information_schema.columns
+ WHERE table_schema = 'public' AND ((table_name, column_name) IN (('shift_templates','kind'), ('profiles','deleted_at'), ('shift_blocks','min_coaches'), ('shift_blocks','max_coaches'), ('shift_blocks','roster_id'), ('rosters','status')))
+ ORDER BY 1, 2;  -- 6 rows
+-- (c) AVAIL.1a's table is there (1b's code reads it)
+SELECT to_regclass('public.staff_unavailability') IS NOT NULL AS ok;  -- true
+-- (d) the heartbeat names are free
+SELECT name FROM public.cron_heartbeats WHERE name IN ('shift-offer-sweep', 'replace-notices');  -- 0 rows
+-- (e) the browser roles really are named anon/authenticated here, and hold default grants a REVOKE must remove
+SELECT rolname FROM pg_roles WHERE rolname IN ('anon', 'authenticated', 'service_role') ORDER BY 1;  -- 3 rows
+```
+2. **Rollback record** → scratchpad `mig640-rollback-<date>.txt` (forward-only: if ever needed, it ships as a NEW migration):
+```sql
+DROP FUNCTION IF EXISTS public.claim_shift_offer(uuid, uuid);
+DROP TABLE IF EXISTS public.shift_offers;   -- no FK points INTO it
+DELETE FROM public.cron_heartbeats WHERE name IN ('shift-offer-sweep', 'replace-notices');
+```
+3. **Apply** `apply_migration` name `640_shift_offers`, the file's content, **immediately before merging 1b** (the table must exist before the code deploys; the heartbeat clock starts now).
+4. **Post-checks:**
+```sql
+SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'shift_offers' ORDER BY ordinal_position;  -- 16 columns
+SELECT relrowsecurity FROM pg_class WHERE oid = 'public.shift_offers'::regclass;  -- true
+SELECT count(*) FROM pg_policies WHERE tablename = 'shift_offers';  -- 0
+SELECT grantee, privilege_type FROM information_schema.table_privileges WHERE table_schema = 'public' AND table_name = 'shift_offers' ORDER BY 1, 2;  -- postgres + service_role only
+SELECT has_function_privilege('authenticated', 'public.claim_shift_offer(uuid,uuid)', 'EXECUTE') AS auth, has_function_privilege('service_role', 'public.claim_shift_offer(uuid,uuid)', 'EXECUTE') AS svc;  -- false, true
+SELECT conname FROM pg_constraint WHERE conrelid = 'public.shift_offers'::regclass AND contype = 'c' ORDER BY 1;  -- 5 checks
+SELECT indexname FROM pg_indexes WHERE tablename = 'shift_offers' ORDER BY 1;  -- pkey + 7
+SELECT name, expected_interval_seconds, grace_seconds FROM public.cron_heartbeats WHERE name IN ('shift-offer-sweep', 'replace-notices');  -- 2 rows, 300/900
+SELECT count(*) FROM public.shift_offers;  -- 0
+```
+5. **`get_advisors` (security):** expect +1 INFO `rls_enabled_no_policy` on `shift_offers` (by design, as mig 632), nothing else new. Note the counts in the status log.
+6. **After the deploy lands:** within 5 minutes both heartbeat rows show a fresh `last_ok_at` with a `last_outcome`. If the deploy has not landed within ~15 minutes of the apply, re-run the file (replay re-arms both rows) before the health-check pages.
+
+### REPLACE.1b gate
+
+- [ ] **Focused tests, both zones:**
+```bash
+npx vitest run tests/migration-640-shift-offers.test.js shared/offer-to-team.test.js src/lib/shift-offer-notice.test.js src/lib/shift-offer-server.test.js \
+  'src/app/api/schedule/blocks/[id]/offer/route.test.js' src/app/api/schedule/offers/route.test.js 'src/app/api/schedule/offers/[id]/route.test.js' \
+  'src/app/api/schedule/offers/[id]/claim/route.test.js' src/lib/cron-arm-health.test.js src/app/api/cron/send-push-reminders/route.test.js \
+  src/components/schedule/OfferToTeamControl.test.jsx src/components/schedule/useShiftOffers.test.js src/components/dashboard/OfferedShifts.test.jsx \
+  mobile/lib/offer-cards.test.js mobile/lib/schedule-api.test.js mobile/lib/notification-nav.test.js src/lib/openapi.test.js \
+  tests/shared-pair-sync.test.js tests/ota-trigger-paths.test.js tests/rtl-cleanup-after-each.test.js tests/fake-timer-act.test.js
+for tz in Europe/Dublin America/Los_Angeles; do
+  TZ=$tz npx vitest run shared/offer-to-team.test.js src/lib/shift-offer-notice.test.js src/lib/shift-offer-server.test.js 'src/app/api/schedule/offers/[id]/claim/route.test.js'
+done
+```
+- [ ] **The 12-command CI mirror:**
+```bash
+npm test && npm run lint && npm run check:mobile-parity && npm run check:mobile-imports && npm run check:mobile-lint && npm run check:route-guards && npm run check:location-scoping && npm run check:rls-restrictive && npm run check:guardrails && npm run check:select-columns && npm run check:bundle-sql && npm run check:ota-paths
+```
+Expected: all exit 0. `check:select-columns` resolves `shift_offers` (mig 640), `staff_unavailability` (mig 630), and the `claimer:profiles!claimed_by(full_name)` embed. `check:rls-restrictive`: `shift_offers` has no policy at all, so nothing to flag. `check:mobile-parity`: no new permission key.
+- [ ] **The build:** `npm run build` → `✓ Compiled successfully`.
+- [ ] **On the PR:** Test & lint, Next build, Mobile bundle export green on the final rebase.
+- [ ] **Independent review.** Point the reviewer at: E1 (why not the swap table); the claim function's lock order (offer, then shift) against the replace's single-row UPDATE (no lock cycle: nothing locks a shift then an offer); E4's predicate and its three consumers; the lease (`deliver`): the lease UPDATE's four guards, release on read failure and on total send failure, the stamp guarded on the attempt, the attempt-numbered key; the coach list showing an offer when its check is unreadable (and the claim's 503 on the same failure); the admin-shift rule (empty only) in BOTH `shared/offer-to-team.js` and the SQL.
+
+### REPLACE.1b merge steps
+
+1. REPLACE.1a merged and its EAS Update run green (one phone update at a time).
+2. Rebase on `origin/main` (hotspots: `ScheduleCalendar.jsx` with GRID.1, `PersonalDashboard.jsx`, `ManageMode.jsx`, `send-push-reminders` route + test, `cron-arm-health.js`, `openapi.js`, `notification-nav.js`, `docs/CHANGELOG.md`). Re-run the gate if anything but CHANGELOG conflicted.
+3. **Apply mig 640** (steps above), then merge at once.
+4. Watch the prod deploy, then both heartbeat rows (step 6 above).
+5. **Watch the EAS Update run.** Nothing else OTA merges until it is green.
+
+### REPLACE.1b PR
+
+**Title:** `REPLACE.1b — Offer to team: post an unfilled shift, first coach to claim gets it (mig 640)`
+
+**Body, in order:**
+1. What: a manager offers an unfilled (class: empty or short; admin: empty only) PUBLISHED shift from the web block dialog or phone Manage mode. Every coach at that studio who is free then (not on approved leave, not on another shift in the organisation, not unavailable) is pushed once, 07:00-22:00 studio time; the offer is visible at once on web Today and the phone Dashboard ("Shifts up for grabs"). First to claim gets it; the managers are told who took it.
+2. **Mig 640 (applied before merge):** `shift_offers` (one open offer per shift; service-role only; lease columns for the notices), `claim_shift_offer` (locks the offer, so the second claimer gets "Someone else has just taken this shift"; re-checks published / active member / not on it / still needed, else closes as filled), heartbeat rows `shift-offer-sweep` and `replace-notices`. Advisors: +1 INFO by design.
+3. Why a new table and not the swap table (E1): a swap needs an assignment, a giver and an approval; an offer has none, and the cover sweep closes a swap with no shift on its first tick.
+4. The rule: one `shared/offer-to-team.js` for both buttons and the route; one default-6 predicate for the push audience, the coach's list and the claim (unavailability does not block a claim).
+5. Notices: lease + attempt-numbered ledger keys: a crash re-sends (a duplicate), never loses; 5 attempts then "the notification couldn't be sent" on the manager's line. A new `*/5` arm closes offers when the shift starts or is filled another way, and sends owed notices from 07:00.
+6. **🔴 This merge publishes an OTA at 100%** (`shared/offer-to-team.js`, `mobile/lib/**`, `mobile/components/**`). No native dependency. A phone without the update shows the push; the tap opens the app without navigating.
+7. **Handset/desk checks** (after the update lands; first real offer on a quiet day with Richard or a test coach):
+   - [ ] Web: an empty future published class shift → "Offer to team" → toast; the dialog line shows "sent to N coaches" (or "told from 7am" after 22:00).
+   - [ ] A free coach's phone gets "A shift is up for grabs"; the tap opens the Dashboard; "Shifts up for grabs" lists it; a coach on leave that day gets nothing and does not see it.
+   - [ ] Two phones tap Claim together: one "Shift claimed", the other "Someone else has just taken this shift."; the manager gets "Coach B took …" and the tap opens Manage mode on that day; the drawer shows "(took an offered shift)".
+   - [ ] Assign someone by hand while an offer is open: the coaches' card disappears; within 5 minutes the offer is closed (filled).
+   - [ ] Withdraw from the web and from Manage mode: the card disappears.
+   - [ ] An admin shift: "Offer to team" only while nobody is on it.
+   - [ ] Posted at 22:30: visible on Today at once; pushes at 07:0x; a shift that starts before 07:00 simply expires.
+   - [ ] Both heartbeat rows fresh in `cron_heartbeats` after the first tick.
+8. End with `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
+
+### REPLACE.1b CHANGELOG
+
+```
+| #<PR> | REPLACE.1b — Offer to team: post an unfilled shift, first coach to claim gets it (mig 640) | 2026-09-2x. Wave 2 PR 20b. **Mig 640** (applied before merge): shift_offers (one open offer per shift, partial unique index; RLS on, no policy, no browser grants; notice lease columns), claim_shift_offer(offer, profile) (locks the offer = the race; re-checks published / active member / not on it / still needed, else closes as filled and returns; clears a tombstone; inserts; closes as claimed; service_role only), heartbeat rows shift-offer-sweep + replace-notices (300/900). **OTA** (shared/offer-to-team.js, mobile/lib, mobile/components). Rule: shared/offer-to-team.js (published, today+, not started, no open offer, still needed: class = min at least 1, admin = 1 so empty only). Default 6: offerEligibility (src/lib/shift-offer-notice.js; evaluateSwapMoveConflicts in the org + half-day rule + AVAIL unavailableFor) for the push audience, the coach list and the claim (unavailability does not block a claim). Routes: POST /api/schedule/blocks/[id]/offer, GET /api/schedule/offers (coach / view=manage), POST /api/schedule/offers/[id]/claim, DELETE /api/schedule/offers/[id]. Notices (category swap; shift_offer / shift_offer_taken): processOffer leases on the row, sends under shift_offer_<kind>:<id>:a<n>, stamps after; 07:00-22:00 only; */5 arm runShiftOfferSweep closes expired / filled offers. Web: block dialog Offer to team / Withdraw; Today "Shifts up for grabs". Phone: Dashboard section with Claim; Manage card offer control. |
+```
+
+---
+
+### Review notes / open questions
+
+1. **Nothing carries on a replace (D2).** B starts on the block's window; A's override, partial reason, arrival stamp and notes are cleared. If Richard wants B to inherit a partial window ("A was only doing 6-8"), it is a one-line change in `replaceShiftAssignment` (keep the two override columns), but then B would be paid for a window nobody set for them.
+2. **The existing single assign/remove still pushes at any hour** (NOTIFY.1, pre-dating `staff-push-hours.js`). Replace follows the band (D7), as BLOCKEDIT.1 did for time edits. So a manager who removes a coach at 23:00 still wakes them; one who replaces a coach at 23:00 does not. Aligning assign/remove means routing them through the held-notice arm too (it already nets per coach and shift); a small follow-up if Richard wants it.
+3. **A replace closes open swaps on the shift silently** (D5). A colleague who had CLAIMED A's posted swap (awaiting approval) is not told; their card just goes. A one-line notice to `target_id` is possible; left out because it is rare and every message needs the quiet-hours treatment.
+4. **Leave/clash on replace is a confirm step, not a wall** (D4), as for swap approvals and the assign route's advisories. Working-time and availability are CANDIDATES.1's picker badges, not re-checked by the route. `findSwapConflicts` reads B's other shifts by PERSON, not by organisation (its SWAPS.2 posture), so a coach who also works for another organisation could have that shift named in the confirm sentence; pre-existing in the swap approval, flagged here because replace reuses it.
+5. **One place per offer** (E2). A class shift two coaches short is offered twice (offer, claimed, offer again). A `places` column would let one offer fill several; say if that is wanted.
+6. **No notice when an offer expires or is withdrawn** (E6). The manager sees the gap on the calendar and the Today chip. A "Nobody took the Tue 06:00 offer" push at T-12h (the swap nudge's shape) is a small follow-up in the same arm.
+7. **Managers and head coaches are in the audience** (E4); only the poster is excluded. If Richard wants "coaches" to mean `staff` role only, it is one filter in `offerAudience`.
+8. **The coach list shows an offer whose eligibility could not be read** (the route's degraded mode), so a coach might see a shift they would not have been pushed; the claim re-checks leave and clashes. The push itself never goes out on an unread check (it retries).
+9. **CANDIDATES.1 was not planned when this was written.** 1b Task 0 step 4 says how `offerEligibility` adopts its fact builder if one exists; the tests pin default 6 regardless. If CANDIDATES.1 treats half-day leave or cross-organisation shifts differently, one rule must win before 1b merges.
+10. **AVAIL.1a is a hard dependency of 1b** (the audience and the list read `staff_unavailability`). If AVAIL.1a slips, 1b waits; 1a does not.
+11. **Admin offers escalate nowhere.** An admin swap nobody takes escalates as "Shift still uncovered" (index default 20); an admin offer nobody takes simply expires. Consistent with note 6.
+12. **The replace arm's 2-minute route window** means a replace whose `after()` died is told 2-5 minutes late, not at once. Acceptable; the alternative (sending twice) is worse.
+13. **Phone Manage mode loads offers with every roster load** (one extra GET per week page). If that proves slow on 5G, load offers lazily on the day view instead.
+14. **Follow-up found planning (not in any PR):** `resolveRoleRecipientIds` (`src/lib/push.js`) discards its read error (already on the index's follow-up list); the "taken" notice inherits it, so a failed managers read looks like "no managers" and is stamped. Fixing the helper fixes both.
