@@ -39,7 +39,8 @@ import {
   restoreRosterPeriods,
   publishAftermathNote,
 } from '@/lib/roster-publish'
-import { logWarn } from '@/lib/log'
+import { logWarn, logError } from '@/lib/log'
+import { writePublishSnapshot } from '@/lib/roster-snapshot'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { APPROVAL_CATEGORY_PERMISSION } from '@shared/permissions'
 
@@ -331,6 +332,16 @@ export async function POST(_request, props) {
       ...projectionBody,
       warning: `Roster approved but block tagging failed: ${tagErr.message}.${stranded}`,
     })
+  }
+
+  // SNAPSHOT.1 — approving IS publishing: record what it published (mig
+  // 634), now that the period's blocks carry this roster's id. Best-effort,
+  // exactly as in POST /api/schedule/rosters: nothing may fail an approval
+  // that already landed.
+  try {
+    await writePublishSnapshot(db, updated)
+  } catch (e) {
+    logError('rosters/approve', 'publish snapshot threw past its own guard', { err: e, roster_id: roster.id })
   }
 
   // ROSTER-SUPERSEDE.1 — phase 2, AFTER the re-tag: the recount inside reads

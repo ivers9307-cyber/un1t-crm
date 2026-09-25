@@ -213,3 +213,58 @@ describe('RosterChangeLogDrawer', () => {
     expect(onClose).toHaveBeenCalledTimes(1)
   })
 })
+
+// SNAPSHOT.1 — the dialog's second view. Opening it still reads ONE thing
+// (the change log); the comparison is read on first switch.
+describe('RosterChangeLogDrawer — Published vs now (SNAPSHOT.1)', () => {
+  const MISSING = {
+    roster: { id: 'r1', status: 'published', period_start: '2026-09-14', period_end: '2026-09-20', published_at: '2026-09-12T13:02:00Z' },
+    window: null, baseline: null, missing_reason: 'before_snapshots', snapshots_began_at: null,
+    publishes: [], blocks: [], totals: null,
+  }
+  const byUrl = () => vi.fn(async (url) => ({
+    ok: true,
+    status: 200,
+    json: async () => (String(url).startsWith('/api/schedule/change-log')
+      ? { success: true, data: { changes: [], truncated: false } }
+      : { success: true, data: MISSING }),
+  }))
+
+  it('offers no comparison when nothing in the period is on a published roster', async () => {
+    global.fetch = byUrl()
+    render(<RosterChangeLogDrawer {...props} />)
+    await screen.findByText(/No changes since this was published/)
+    expect(screen.queryByRole('button', { name: 'Published vs now' })).toBeNull()
+  })
+
+  it('switches to the comparison, which reads each roster for the period; switching back reads nothing again', async () => {
+    global.fetch = byUrl()
+    render(<RosterChangeLogDrawer {...props} rosterIds={['r1']} />)
+    await screen.findByText(/No changes since this was published/)
+    expect(global.fetch).toHaveBeenCalledTimes(1)
+
+    const compare = screen.getByRole('button', { name: 'Published vs now' })
+    const changesBtn = screen.getByRole('button', { name: 'Changes' })
+    expect(changesBtn.getAttribute('aria-pressed')).toBe('true')
+    expect(compare.getAttribute('aria-pressed')).toBe('false')
+
+    await act(async () => { compare.click() })
+    expect(compare.getAttribute('aria-pressed')).toBe('true')
+    await screen.findByTestId('roster-compare-missing')
+    expect(global.fetch.mock.calls.map((c) => String(c[0])))
+      .toContain('/api/schedule/rosters/r1/compare?from=2026-09-14&to=2026-09-20')
+
+    await act(async () => { changesBtn.click() })
+    expect(await screen.findByText(/No changes since this was published/)).toBeTruthy()
+    expect(global.fetch.mock.calls.filter((c) => String(c[0]).startsWith('/api/schedule/change-log'))).toHaveLength(1)
+  })
+
+  it('the switch buttons are typed buttons, so they can never submit anything', async () => {
+    global.fetch = byUrl()
+    render(<RosterChangeLogDrawer {...props} rosterIds={['r1']} />)
+    await screen.findByText(/No changes since this was published/)
+    for (const name of ['Changes', 'Published vs now']) {
+      expect(screen.getByRole('button', { name }).getAttribute('type')).toBe('button')
+    }
+  })
+})

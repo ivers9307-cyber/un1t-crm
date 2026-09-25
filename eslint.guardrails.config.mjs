@@ -304,6 +304,13 @@ const config = [
       // exactly the shape that reads as handled and is not. Born clean, armed
       // on arrival.
       'src/lib/staff-calendar-feed-server.js',
+      // SNAPSHOT.1 — the publish snapshot write (best-effort by contract, one
+      // retry, logError) and the comparison route. Best-effort writes are
+      // exactly the shape that reads as handled and is not. Born clean, armed
+      // on arrival. `*` stands for the [id] segment (a bracket is a glob
+      // character class).
+      'src/lib/roster-snapshot.js',
+      'src/app/api/schedule/rosters/*/compare/**',
       // REPLACE.1a — the replace move, the held-notice arm (its silent stamp)
       // and the replace route. Born clean, armed on arrival: every write
       // destructures error and judges its rows. `*` stands for the [id]
