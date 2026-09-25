@@ -268,8 +268,10 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
   // (remove coach, delete slot). Double-clicking either used to fire two
   // DELETEs, the second 404ing into an alert about a row that was already gone.
   const [rowBusy, setRowBusy] = useState(false)
-  function showToast(message, kind = 'error') {
-    setToast({ id: ++toastSeq.current, kind, message })
+  // REPLACE.1a review 3 — `sticky`: a non-error toast that asks the manager
+  // to do something (ring the coaches) stays until dismissed, like an error.
+  function showToast(message, kind = 'error', { sticky = false } = {}) {
+    setToast({ id: ++toastSeq.current, kind, message, sticky })
   }
 
   // ROSTER-FIX.6a-8 — success and warning toasts expire on their own; an
@@ -279,7 +281,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
   // a replacement toast cancels the outgoing one's timer, and unmount clears
   // it, so a late timer can never blank a newer message.
   useEffect(() => {
-    if (!toast || toast.kind === 'error') return undefined
+    if (!toast || toast.kind === 'error' || toast.sticky) return undefined
     const timer = setTimeout(() => {
       setToast((current) => (current && current.id === toast.id ? null : current))
     }, TOAST_TTL_MS)
@@ -667,7 +669,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
       showToast(outcome.message)
       return
     }
-    showToast(outcome.message, outcome.tone)
+    showToast(outcome.message, outcome.tone, { sticky: outcome.sticky === true })
     setReplaceTarget(null)
     refreshAfterMutation()
   }

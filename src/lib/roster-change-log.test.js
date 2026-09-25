@@ -267,6 +267,11 @@ describe('shapeRosterChange — details whitelist', () => {
       .toEqual({ via: 'replace', reason: 'replace_undone' })
   })
 
+  it('REPLACE.1a review 3 — and so does a replace stamped because its shift had started', () => {
+    expect(shapeRosterChange(raw(1, { details: { via: 'replace', reason: 'replace_shift_started' } })).details)
+      .toEqual({ via: 'replace', reason: 'replace_shift_started' })
+  })
+
   it('roster_status passes by known value, and keeps its KEY when unreadable (a draft, to the reader)', () => {
     expect(shapeRosterChange(raw(1, { details: { via: 'swap_drop', roster_status: 'draft' } })).details).toEqual({ via: 'swap_drop', roster_status: 'draft' })
     expect(shapeRosterChange(raw(1, { details: { via: 'swap_drop', roster_status: null } })).details).toEqual({ via: 'swap_drop', roster_status: null })

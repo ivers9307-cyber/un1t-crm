@@ -41,6 +41,15 @@ export const REPLACE_SWAP_CLOSE_NOTE = 'Closed: a manager gave this shift to ano
  */
 export const REPLACE_UNDONE_REASON = 'replace_undone'
 
+/**
+ * REPLACE.1a review 3 — roster_change_log.details.reason on the rows of a
+ * replace whose shift had STARTED (studio clock) before its held notice could
+ * go out. Telling B at 07:00 about a 06:00 shift is no use; the manager was
+ * told to ring. The arm stamps them with no message; the drawer reads the
+ * reason as "nobody was told".
+ */
+export const REPLACE_STARTED_REASON = 'replace_shift_started'
+
 // The route's after() owns a fresh replace notice for this long; after it the
 // */5 arm may send it (the arm is also the recovery for an after() that died).
 export const REPLACE_NOTICE_ROUTE_OWNS_MS = 2 * 60 * 1000
@@ -141,7 +150,10 @@ export function replaceResponseOutcome(status, body, { fromName, toName } = {}) 
   }
   const notice = body?.data?.notice
   if (notice === 'morning') {
-    return { kind: 'done', tone: 'warning', message: `${to} is on the shift. ${from} and ${to} are told after 7am; if the shift is before then, ring them.` }
+    // Review 3 — it asks the manager to ring, so it stays until dismissed.
+    // "At or before 7am": the arm stamps a shift that has started by the time
+    // it may send (07:00 at the earliest) without telling anyone.
+    return { kind: 'done', tone: 'warning', sticky: true, message: `${to} is on the shift. ${from} and ${to} are told after 7am; if the shift is at or before 7am, ring them.` }
   }
   if (notice === 'none') {
     return { kind: 'done', tone: 'success', message: `${to} is on the shift. The roster is a draft, so nobody is told until it is published.` }

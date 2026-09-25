@@ -11,7 +11,7 @@
 
 import React from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup, waitFor, fireEvent } from '@testing-library/react'
+import { render, screen, cleanup, waitFor, fireEvent, act } from '@testing-library/react'
 
 // A week far enough ahead that it is "today or later" whatever day the suite runs.
 let searchParams = 'view=week&week=2099-05-04&month=2099-05-01'
@@ -147,6 +147,40 @@ describe('REPLACE.1a — the picker in replace mode', () => {
     expect(window.confirm).toHaveBeenCalledWith('Coach B has approved holiday on 2099-05-06.\n\nReplace anyway?')
     expect(JSON.parse(replaceCalls()[1][1].body)).toEqual({ profile_id: 'c-b', confirm_conflicts: true })
     await waitFor(() => expect(screen.getByText(/are told after 7am/)).toBeTruthy(), WAIT)
+  })
+
+  // Review 3 — the "told after 7am" toast asks the manager to ring the
+  // coaches, so it stays until they dismiss it (the error toast's rule), where
+  // an ordinary success or warning toast times out.
+  it('the quiet-hours toast stays up until dismissed', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      replaceAnswers = [okResponse({ success: true, data: { notice: 'morning' } })]
+      await openReplacePicker()
+      fireEvent.click(screen.getByText('Coach B').closest('label').querySelector('input'))
+      fireEvent.click(screen.getByRole('button', { name: 'Replace with Coach B' }))
+      await waitFor(() => expect(screen.getByText(/at or before 7am, ring them/)).toBeTruthy(), WAIT)
+      await act(async () => { await vi.advanceTimersByTimeAsync(30000) })
+      expect(screen.getByText(/at or before 7am, ring them/)).toBeTruthy()
+      fireEvent.click(screen.getByRole('button', { name: 'Dismiss this message' }))
+      expect(screen.queryByText(/at or before 7am, ring them/)).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('the ordinary "have been told" toast still times out', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      await openReplacePicker()
+      fireEvent.click(screen.getByText('Coach B').closest('label').querySelector('input'))
+      fireEvent.click(screen.getByRole('button', { name: 'Replace with Coach B' }))
+      await waitFor(() => expect(screen.getByText(/have been told/)).toBeTruthy(), WAIT)
+      await act(async () => { await vi.advanceTimersByTimeAsync(6001) })
+      expect(screen.queryByText(/have been told/)).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('declining the clash sends nothing more and keeps the picker open', async () => {

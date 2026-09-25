@@ -41,10 +41,11 @@
 
 import { notifyRosterChanges } from './roster-change-notify'
 import { inStaffPushHours } from './staff-push-hours'
+import { swapShiftHasStarted } from './swap-cover'
 import { dublinTodayStr } from './dublin-time'
 import { logError, logWarn } from './log'
 import {
-  netReplaceChanges, bandSeenBetween, REPLACE_VIA, REPLACE_UNDONE_REASON, REPLACE_NOTICE_ROUTE_OWNS_MS, REPLACE_NOTICE_MAX_AGE_MS,
+  netReplaceChanges, bandSeenBetween, REPLACE_VIA, REPLACE_UNDONE_REASON, REPLACE_STARTED_REASON, REPLACE_NOTICE_ROUTE_OWNS_MS, REPLACE_NOTICE_MAX_AGE_MS,
 } from './shift-replace'
 
 // Literal: check:select-columns resolves only literal selects.
@@ -57,7 +58,7 @@ const iso = (ms) => new Date(ms).toISOString()
 const pileKey = (r) => `${r.location_id}|${r.coach_id}|${r.block_id}`
 
 export async function runReplaceNotices(db, { nowMs = Date.now(), todayStr = dublinTodayStr() } = {}) {
-  const stats = { rows: 0, groups: 0, told: 0, silent: 0, quiet: 0, fresh: 0, undelivered: 0, send_failed: 0, stamp_failed: 0, errors: 0 }
+  const stats = { rows: 0, groups: 0, told: 0, silent: 0, started: 0, quiet: 0, fresh: 0, undelivered: 0, send_failed: 0, stamp_failed: 0, errors: 0 }
   let rows
   try {
     const { data, error } = await db.from('roster_change_log')
@@ -100,26 +101,18 @@ export async function runReplaceNotices(db, { nowMs = Date.now(), todayStr = dub
   // Review 1 — a row that may already have been told (made in band, or
   // around since an in-band tick) keeps its pile out of the silent path.
   const mayHaveBeenTold = (r) => bandSeenBetween(Date.parse(r.created_at), nowMs, tzOf(r.location_id))
-  const { send, silent } = netReplaceChanges(settled, { mayHaveBeenTold })
-  if (silent.length) {
-    const rowIds = silent.flatMap((s) => s.rowIds)
-    try {
-      const { data, error } = await db.from('roster_change_log')
-        .update({ notified_at: iso(nowMs), details: { via: REPLACE_VIA, reason: REPLACE_UNDONE_REASON } })
-        .in('id', rowIds)
-        .is('notified_at', null)
-        .select('id')
-      if (error) throw new Error(error.message)
-      stats.silent += silent.length
-      if ((data || []).length < rowIds.length) {
-        // Someone stamped a row meanwhile (a re-publish, an ordinary assign):
-        // it is theirs now, nothing is owed.
-        logWarn('shift-replace-notify', 'some undone replace rows were already stamped', { expected: rowIds.length, stamped: (data || []).length })
-      }
-    } catch (e) {
-      stats.errors++
-      logError('shift-replace-notify', 'could not stamp undone replace rows; the next tick retries', { rows: rowIds.length, err: e?.message })
-    }
+  const { send: planned, silent } = netReplaceChanges(settled, { mayHaveBeenTold })
+  if (silent.length && await stampSilently(db, { rowIds: silent.flatMap((p) => p.rowIds), reason: REPLACE_UNDONE_REASON, nowMs, stats })) {
+    stats.silent += silent.length
+  }
+
+  // Review 3 — a pile whose shift has started (studio clock, the one
+  // predicate) is no use to tell: stamped with no message, at any hour.
+  const hasStarted = (p) => swapShiftHasStarted({ block_date: p.blockDate, start_time: p.startTime }, nowMs, tzOf(p.locationId))
+  const started = planned.filter(hasStarted)
+  const send = planned.filter((p) => !hasStarted(p))
+  if (started.length && await stampSilently(db, { rowIds: started.flatMap((p) => p.rowIds), reason: REPLACE_STARTED_REASON, nowMs, stats })) {
+    stats.started += started.length
   }
 
   const groups = new Map()
@@ -152,6 +145,27 @@ export async function runReplaceNotices(db, { nowMs = Date.now(), todayStr = dub
     }
   }
   return stats
+}
+
+// A stamp with no message, marked with `reason` so the drawer never prints a
+// told time for it. Guarded by notified_at IS NULL: a row another writer
+// stamped meanwhile is theirs, and nothing is owed. A failure is an arm
+// fault (errors) and the next tick retries. Returns true when it landed.
+async function stampSilently(db, { rowIds, reason, nowMs, stats }) {
+  const { data, error } = await db.from('roster_change_log')
+    .update({ notified_at: iso(nowMs), details: { via: REPLACE_VIA, reason } })
+    .in('id', rowIds)
+    .is('notified_at', null)
+    .select('id')
+  if (error) {
+    stats.errors++
+    logError('shift-replace-notify', 'could not stamp replace rows that owe no message; the next tick retries', { reason, rows: rowIds.length, err: error.message })
+    return false
+  }
+  if ((data || []).length < rowIds.length) {
+    logWarn('shift-replace-notify', 'some replace rows were already stamped by another writer', { reason, expected: rowIds.length, stamped: (data || []).length })
+  }
+  return true
 }
 
 // Review 1 — the post-delivery stamp, by row id. A failure is COUNTED

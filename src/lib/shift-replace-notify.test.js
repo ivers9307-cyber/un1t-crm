@@ -11,7 +11,7 @@ vi.mock('./log', () => ({ logError: vi.fn(), logWarn: vi.fn() }))
 const { notifyRosterChanges } = await import('./roster-change-notify')
 const { logError } = await import('./log')
 const { runReplaceNotices } = await import('./shift-replace-notify')
-const { REPLACE_UNDONE_REASON } = await import('./shift-replace')
+const { REPLACE_UNDONE_REASON, REPLACE_STARTED_REASON } = await import('./shift-replace')
 
 const IN_BAND = Date.parse('2026-09-29T06:05:00Z')  // 07:05 Dublin
 const QUIET = Date.parse('2026-09-29T04:00:00Z')    // 05:00 Dublin
@@ -122,7 +122,7 @@ describe('runReplaceNotices', () => {
     })
     const stats = await runReplaceNotices(db, { nowMs: QUIET, todayStr: '2026-09-29' })
     expect(stats).toMatchObject({ silent: 0, errors: 1 })
-    expect(logError).toHaveBeenCalledWith('shift-replace-notify', expect.stringMatching(/undone/), expect.anything())
+    expect(logError).toHaveBeenCalledWith('shift-replace-notify', expect.stringMatching(/owe no message/), expect.objectContaining({ reason: REPLACE_UNDONE_REASON }))
   })
 
   it('an unreadable log is an error in the stats, logged, and nothing else runs', async () => {
@@ -203,5 +203,56 @@ describe('runReplaceNotices', () => {
     const db = scriptedDb({ roster_change_log: [{ data: pile, error: null }, STAMPED(['r2', 'r3'])], locations: [LOC] })
     expect(await runReplaceNotices(db, { nowMs: QUIET, todayStr: '2026-09-29' })).toMatchObject({ silent: 1 })
     expect(notifyRosterChanges).not.toHaveBeenCalled()
+  })
+
+  // Review 3 — a notice about a shift that has already started is no use:
+  // the 07:00 arm must not tell B about a 06:00 shift. The pile is stamped
+  // with no message, marked so the drawer never says "told". The manager was
+  // warned to ring (the toast), and it happens at any hour.
+  it('a pile whose shift has started (studio clock) is stamped silently with the started reason, and nobody is told', async () => {
+    const early = { shift_blocks: { start_time: '06:00:00' } }
+    const db = scriptedDb({
+      roster_change_log: [
+        { data: [row('r1', 'coach-a', 'unassigned', early), row('r2', 'coach-b', 'assigned', early)], error: null },
+        STAMPED(['r1', 'r2']),
+      ],
+      locations: [LOC],
+    })
+    const stats = await runReplaceNotices(db, { nowMs: IN_BAND, todayStr: '2026-09-29' }) // 07:05 Dublin
+    expect(notifyRosterChanges).not.toHaveBeenCalled()
+    const [, stamp] = chainsFor(db, 'roster_change_log')
+    expect(argsOf(stamp, 'update')[0]).toEqual({ notified_at: new Date(IN_BAND).toISOString(), details: { via: 'replace', reason: REPLACE_STARTED_REASON } })
+    expect(argsOf(stamp, 'in')).toEqual(['id', ['r1', 'r2']])
+    expect(argsOf(stamp, 'is')).toEqual(['notified_at', null])
+    expect(stats).toMatchObject({ started: 2, told: 0, errors: 0 })
+  })
+
+  it('in quiet hours too: a 04:30 shift at 05:00 is stamped, not held for 07:00', async () => {
+    const db = scriptedDb({
+      roster_change_log: [{ data: [row('r1', 'coach-a', 'unassigned', { shift_blocks: { start_time: '04:30:00' } })], error: null }, STAMPED(['r1'])],
+      locations: [LOC],
+    })
+    expect(await runReplaceNotices(db, { nowMs: QUIET, todayStr: '2026-09-29' })).toMatchObject({ started: 1, quiet: 0 })
+  })
+
+  it('a shift not yet started is told as usual, and one that has started beside it is not', async () => {
+    const db = scriptedDb({
+      roster_change_log: [
+        { data: [row('r1', 'coach-a', 'unassigned', { shift_blocks: { start_time: '06:00:00' } }), row('r2', 'coach-b', 'assigned', { block_id: 'b2' })], error: null },
+        STAMPED(['r1']), STAMPED(['r2']),
+      ],
+      locations: [LOC],
+    })
+    const stats = await runReplaceNotices(db, { nowMs: IN_BAND, todayStr: '2026-09-29' })
+    expect(notifyRosterChanges.mock.calls[0][1].changes.map((c) => c.coachId)).toEqual(['coach-b'])
+    expect(stats).toMatchObject({ started: 1, told: 1 })
+  })
+
+  it('a failed started-stamp is an error; the next tick retries', async () => {
+    const db = scriptedDb({
+      roster_change_log: [{ data: [row('r1', 'coach-a', 'unassigned', { shift_blocks: { start_time: '06:00:00' } })], error: null }, { data: null, error: { message: 'down' } }],
+      locations: [LOC],
+    })
+    expect(await runReplaceNotices(db, { nowMs: IN_BAND, todayStr: '2026-09-29' })).toMatchObject({ started: 0, errors: 1 })
   })
 })

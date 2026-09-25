@@ -167,7 +167,7 @@ export function replaceResultAlert(res, { fromName, toName } = {}) {
   if (!res?.success) return { kind: 'error', title: 'Could not replace', message: res?.error || 'Unknown error' }
   const notice = res?.data?.notice
   const tail = notice === 'morning'
-    ? `${from} and ${to} are told after 7am; if the shift is before then, ring them.`
+    ? `${from} and ${to} are told after 7am; if the shift is at or before 7am, ring them.`
     : notice === 'none'
       ? 'The roster is a draft, so nobody is told until it is published.'
       : `${from} and ${to} have been told.`

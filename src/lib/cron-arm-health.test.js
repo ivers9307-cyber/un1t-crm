@@ -152,7 +152,7 @@ describe('the real arms, on their zero-work paths', () => {
     for (const m of ['select', 'is', 'eq', 'gte', 'order', 'limit']) b[m] = () => b
     b.then = (res, rej) => Promise.resolve({ data: [], error: null }).then(res, rej)
     const stats = await runReplaceNotices({ from: () => b }, { nowMs: Date.UTC(2026, 8, 25, 8, 0), todayStr: '2026-09-25' })
-    expect(stats).toEqual({ rows: 0, groups: 0, told: 0, silent: 0, quiet: 0, fresh: 0, undelivered: 0, send_failed: 0, stamp_failed: 0, errors: 0 })
+    expect(stats).toEqual({ rows: 0, groups: 0, told: 0, silent: 0, started: 0, quiet: 0, fresh: 0, undelivered: 0, send_failed: 0, stamp_failed: 0, errors: 0 })
     expect(replaceNoticeArmHealthy(stats)).toBe(true)
   })
 })

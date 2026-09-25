@@ -411,7 +411,7 @@ describe('REPLACE.1a — replaceResultAlert', () => {
   it('done says who is told and when (the web\'s words)', () => {
     const done = (notice) => replaceResultAlert({ success: true, data: { notice } }, names)
     expect(done('now')).toEqual({ kind: 'done', title: 'Coach replaced', message: 'Coach B is on the shift. Coach A and Coach B have been told.' })
-    expect(done('morning').message).toBe('Coach B is on the shift. Coach A and Coach B are told after 7am; if the shift is before then, ring them.')
+    expect(done('morning').message).toBe('Coach B is on the shift. Coach A and Coach B are told after 7am; if the shift is at or before 7am, ring them.')
     expect(done('none').message).toBe('Coach B is on the shift. The roster is a draft, so nobody is told until it is published.')
   })
 })

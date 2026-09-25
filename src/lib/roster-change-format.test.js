@@ -164,6 +164,17 @@ describe('REPLACE.1a — a replace undone before anyone was told (the held-notic
   })
 })
 
+describe('REPLACE.1a review 3 — a replace whose shift started before its held notice could go out', () => {
+  const started = (over = {}) => row({ action: 'assigned', details: { via: 'replace', reason: 'replace_shift_started' }, ...over })
+  it('says so', () => {
+    expect(rosterChangeSentence(started())).toBe('Assigned Coach A to Tue 15 Sep 6am (coach replaced, not sent: the shift had started)')
+  })
+  it('its stamp is not a message', () => {
+    expect(NO_MESSAGE_REASONS).toContain('replace_shift_started')
+    expect(rosterChangeTold(started())).toBeNull()
+  })
+})
+
 describe('stampMeansTold — a stamp is not always a message', () => {
   const future = { block_date: '2026-09-20' }
 

@@ -6,7 +6,7 @@ import { describe, it, expect } from 'vitest'
 import {
   replaceRefusal, replaceRefusalResponse, replaceShiftStarted, replaceChanges,
   replaceNoticeWhen, replaceResponseOutcome, replacePickerCopy, netReplaceChanges, bandSeenBetween,
-  REPLACE_VIA, REPLACE_SWAP_CLOSE_NOTE, REPLACE_UNDONE_REASON,
+  REPLACE_VIA, REPLACE_SWAP_CLOSE_NOTE, REPLACE_UNDONE_REASON, REPLACE_STARTED_REASON,
 } from './shift-replace'
 // The phone's Alert says the same words (mobile cannot import src/lib).
 import { replaceResultAlert } from '../../mobile/lib/schedule-manage'
@@ -112,7 +112,7 @@ describe('replaceResponseOutcome (the web toast)', () => {
   it('success says who is told and when', () => {
     const done = (notice) => replaceResponseOutcome(200, { success: true, data: { notice } }, names)
     expect(done('now')).toEqual({ kind: 'done', tone: 'success', message: 'Coach B is on the shift. Coach A and Coach B have been told.' })
-    expect(done('morning')).toEqual({ kind: 'done', tone: 'warning', message: 'Coach B is on the shift. Coach A and Coach B are told after 7am; if the shift is before then, ring them.' })
+    expect(done('morning')).toEqual({ kind: 'done', tone: 'warning', sticky: true, message: 'Coach B is on the shift. Coach A and Coach B are told after 7am; if the shift is at or before 7am, ring them.' })
     expect(done('none')).toEqual({ kind: 'done', tone: 'success', message: 'Coach B is on the shift. The roster is a draft, so nobody is told until it is published.' })
   })
 })
@@ -220,5 +220,6 @@ describe('constants', () => {
     // roster_change_log.details.reason on a replace undone before anyone was
     // told; roster-change-log.js passes it by value and the drawer reads it.
     expect(REPLACE_UNDONE_REASON).toBe('replace_undone')
+    expect(REPLACE_STARTED_REASON).toBe('replace_shift_started')
   })
 })
