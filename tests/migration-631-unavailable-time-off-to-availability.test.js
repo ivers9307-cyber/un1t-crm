@@ -534,6 +534,46 @@ describe('migration 631 — restore', () => {
     expect(await rowJson(R.FUTURE)).not.toBeNull()
   }))
 
+  // Review 2 — a later restore must only weigh ledger rows it is settling now
+  // (or ones an earlier restore left 'in use'), never rows an earlier restore
+  // already settled: their rule is long gone.
+  const reqFor = (id, reason) => `INSERT INTO public.time_off_requests (id, profile_id, location_id, type, start_date, end_date, total_days, reason, status)
+    VALUES ('${id}', '${CON_C}', '${LOC}', 'unavailable', '2026-11-03', '2026-11-05', 3, '${reason}', 'approved')`
+  const X = '20000000-0000-0000-0000-0000000000c1'
+  const Y = '20000000-0000-0000-0000-0000000000c2'
+  const outcomes = async () => Object.fromEntries((await q(
+    `SELECT time_off_request_id AS id, restore_outcome FROM public.time_off_availability_moves WHERE profile_id = $1`, [CON_C]))
+    .map((r) => [r.id, r.restore_outcome]))
+
+  it('P3: a second restore leaves an earlier, settled row\'s outcome alone', () => inTx(async () => {
+    await runSql(reqFor(X, 'a'))
+    await move()
+    await restore()
+    expect(await outcomes()).toEqual({ [X]: 'restored' })
+    // A straggler for the same range, different note: inserts its own rule.
+    await runSql(reqFor(Y, 'b'))
+    expect(await move()).toMatchObject({ moved: 1, rules_inserted: 1 })
+    expect(await restore()).toMatchObject({ restored: 1, rules_removed: 1, rules_changed_since: 0, rules_kept_in_use: 0 })
+    expect(await outcomes()).toEqual({ [X]: 'restored', [Y]: 'restored' })
+    expect(await rulesOf(CON_C)).toEqual([])
+  }))
+
+  it('P4: a second restore never deletes the coach\'s own rule that a straggler reused', () => inTx(async () => {
+    await runSql(reqFor(X, 'a'))
+    await move()
+    await restore()
+    // The coach declares the same range, same words, themselves.
+    await runSql(`INSERT INTO public.staff_unavailability (profile_id, kind, start_date, end_date, all_day, note)
+                  VALUES ('${CON_C}', 'dated', '2026-11-03', '2026-11-05', true, 'a')`)
+    await runSql(reqFor(Y, 'z'))
+    expect(await move()).toMatchObject({ moved: 1, rules_inserted: 0, rules_reused: 1 })
+    expect(await restore()).toMatchObject({ restored: 1, rules_removed: 0, rules_changed_since: 0, rules_kept_in_use: 0 })
+    expect(await rulesOf(CON_C)).toEqual([
+      { kind: 'dated', start_date: '2026-11-03', end_date: '2026-11-05', all_day: true, start_time: null, end_time: null, note: 'a' },
+    ])
+    expect(await outcomes()).toEqual({ [X]: 'restored', [Y]: 'restored' })
+  }))
+
   it('restoring everything at once removes a rule shared across batches exactly once', () => inTx(async () => {
     const before = await allTimeOff()
     await move()

@@ -565,19 +565,25 @@ BEGIN
   --    batch inserted (rule_inserted = false), and its request is gone from
   --    time off, so that rule is the only record of its days. It is removed
   --    only when NO ledger row of that range is left un-restored, and then
-  --    once for each ledger row (any batch) that inserted one.
+  --    once for each UNSETTLED ledger row (any batch) that inserted one.
   FOR k IN
     SELECT DISTINCT l.profile_id, l.rule->>'start_date' AS s, l.rule->>'end_date' AS e
       FROM public.time_off_availability_moves l
      WHERE l.time_off_request_id = ANY (v_ids)
      ORDER BY 1, 2, 3
   LOOP
-    -- The move never inserted a rule for this range (the person's own was
-    -- reused): nothing of ours to remove.
+    -- Only UNSETTLED inserting rows count: restored by this call, or left
+    -- 'restored_rule_in_use' by an earlier one. A row an earlier restore
+    -- settled has had its rule removed (or reported changed) already; any
+    -- rule of this range now is someone else's (the person's own, or a later
+    -- batch's), and neither its deletion nor that row's outcome is ours.
+    -- No unsettled inserter (the person's own rule was reused): nothing of
+    -- ours to remove.
     CONTINUE WHEN NOT EXISTS (
       SELECT 1 FROM public.time_off_availability_moves l
        WHERE l.profile_id = k.profile_id AND l.rule->>'start_date' = k.s AND l.rule->>'end_date' = k.e
-         AND l.rule_inserted);
+         AND l.rule_inserted
+         AND (l.time_off_request_id = ANY (v_ids) OR l.restore_outcome = 'restored_rule_in_use'));
 
     -- Still relied on by a move this call is not restoring: keep it.
     IF EXISTS (
@@ -597,6 +603,7 @@ BEGIN
         FROM public.time_off_availability_moves l
        WHERE l.profile_id = k.profile_id AND l.rule->>'start_date' = k.s AND l.rule->>'end_date' = k.e
          AND l.rule_inserted
+         AND (l.time_off_request_id = ANY (v_ids) OR l.restore_outcome = 'restored_rule_in_use')
        ORDER BY l.moved_at, l.time_off_request_id
     LOOP
       SELECT u.id INTO v_rule_id
