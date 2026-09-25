@@ -269,5 +269,10 @@ describe('migration 630 — replace_staff_unavailability', () => {
       .rejects.toThrow(/staff_availability_changes_notice_pair/)
     await expect(runSql(`UPDATE public.staff_availability_changes SET notified_at = now(), notice_outcome = 'maybe'`))
       .rejects.toThrow(/staff_availability_changes_notice_outcome/)
+    for (const outcome of ['sent', 'no_recipients', 'stale', 'reverted', 'gave_up']) {
+      await runSql('BEGIN')
+      await runSql(`UPDATE public.staff_availability_changes SET notified_at = now(), notice_outcome = '${outcome}'`)
+      await runSql('ROLLBACK')
+    }
   })
 })

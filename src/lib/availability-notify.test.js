@@ -9,9 +9,9 @@ vi.mock('@/lib/push-dedup', () => ({ sendPushOnce: vi.fn() }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
 
 const { sendPushOnce } = await import('@/lib/push-dedup')
-const { logError } = await import('@/lib/log')
+const { logError, logWarn } = await import('@/lib/log')
 const {
-  AVAILABILITY_NOTIFY_ROLES, AVAILABILITY_NOTICE_MAX_AGE_MS, AVAILABILITY_NOTICE_LEASE_MS, AVAILABILITY_RETRY_SLOT_MS,
+  AVAILABILITY_NOTIFY_ROLES, AVAILABILITY_NOTICE_MAX_AGE_MS, AVAILABILITY_NOTICE_LEASE_MS, AVAILABILITY_RETRY_SLOT_MS, AVAILABILITY_MAX_RETRIES,
   availabilityEventKey, availabilityRetryKey, availabilityNoticeText,
   splitStudiosByBand, deliverAvailabilityNotice, deliverOwedAvailabilityNotices, runAvailabilityNoticeSweep,
 } = await import('./availability-notify')
@@ -38,7 +38,7 @@ function fakeDb(handlers) {
       const call = { table, ops: [] }
       calls.push(call)
       const b = {}
-      for (const m of ['select', 'eq', 'in', 'is', 'order', 'limit', 'update', 'maybeSingle']) {
+      for (const m of ['select', 'eq', 'in', 'is', 'like', 'order', 'limit', 'update', 'maybeSingle']) {
         b[m] = (...args) => { call.ops.push([m, ...args]); return b }
       }
       b.then = (resolve, reject) => Promise.resolve().then(() => handlers[table](call)).then(resolve, reject)
@@ -51,7 +51,7 @@ const stamps = (db) => db.calls.filter((c) => c.table === 'staff_availability_ch
 
 // profile_locations answers two different reads: the coach's studios (.eq)
 // and the recipients at those studios (.in). Fictional people only.
-function world({ coachStudios = [LOC_A, LOC_B], tz = 'Europe/Dublin', members, linkError = null, stampError = null, queue = [], queueError = null } = {}) {
+function world({ coachStudios = [LOC_A, LOC_B], tz = 'Europe/Dublin', members, linkError = null, stampError = null, queue = [], queueError = null, claims = [], claimsError = null } = {}) {
   const roster = members || [
     { profile_id: 'mgr-a', location_id: LOC_A, role: 'manager', profiles: { id: 'mgr-a', role: 'staff', active: true } },
     { profile_id: 'hc-b', location_id: LOC_B, role: 'head_coach', profiles: { id: 'hc-b', role: 'staff', active: true } },
@@ -71,6 +71,7 @@ function world({ coachStudios = [LOC_A, LOC_B], tz = 'Europe/Dublin', members, l
       return { data: roster, error: null }
     },
     profiles: () => ({ data: { full_name: 'Sam Demo' }, error: null }),
+    push_event_sends: () => (claimsError ? { data: null, error: claimsError } : { data: claims, error: null }),
     staff_availability_changes: (call) => (has(call, 'update')
       ? { data: null, error: stampError }
       : { data: queueError ? null : (typeof queue === 'function' ? queue(call) : queue), error: queueError }),
@@ -81,6 +82,7 @@ beforeEach(() => {
   sendPushOnce.mockReset()
   sendPushOnce.mockResolvedValue({ sent: 3, skipped: 0, invalidated: 0, failed: 0, deduped: 0 })
   logError.mockReset()
+  logWarn.mockReset()
 })
 
 describe('constants and text', () => {
@@ -335,6 +337,34 @@ describe('runAvailabilityNoticeSweep', () => {
     db = world({ queue: (call) => (has(call, 'eq') ? [] : [A]) })
     expect(await runAvailabilityNoticeSweep(db, { nowMs: NOON })).toMatchObject({ settled_elsewhere: 1, sent: 0, errors: 0 })
     expect(sendPushOnce).not.toHaveBeenCalled()
+  })
+
+  it(`RETRY CAP: after ${4} sweep retries that each claimed and sent, it gives up (settled gave_up, warned), so a stamp that keeps failing cannot push ~95 times`, async () => {
+    expect(AVAILABILITY_MAX_RETRIES).toBe(4)
+    const old = { id: 'ch-1', profile_id: COACH, before: [MON], after: [TUE], created_at: new Date(NOON - 90 * 60_000).toISOString() }
+    const claimRows = (n) => Array.from({ length: n }, (_, i) => [
+      { event_key: `availability_changed:ch-1:r${i}` }, { event_key: `availability_changed:ch-1:r${i}` }, // two recipients per attempt
+    ]).flat()
+    let db = world({ queue: [old], claims: claimRows(4) })
+    expect(await runAvailabilityNoticeSweep(db, { nowMs: NOON })).toMatchObject({ gave_up: 1, sent: 0, errors: 0 })
+    expect(sendPushOnce).not.toHaveBeenCalled()
+    expect(stamps(db)[0].ops).toContainEqual(['update', { notified_at: new Date(NOON).toISOString(), notice_outcome: 'gave_up' }])
+    expect(logWarn).toHaveBeenCalledWith('availability-notify', expect.stringMatching(/giving up/), expect.objectContaining({ attempts: 4 }))
+    const read = db.calls.find((c) => c.table === 'push_event_sends')
+    // escapeLikePattern makes the `_` in the key literal; only the trailing % is a wildcard.
+    expect(read.ops).toContainEqual(['like', 'event_key', 'availability\\_changed:ch-1:r%'])
+
+    db = world({ queue: [old], claims: claimRows(3) })
+    await runAvailabilityNoticeSweep(db, { nowMs: NOON })
+    expect(sendPushOnce).toHaveBeenCalledTimes(1)
+  })
+
+  it('an unreadable attempt count sends anyway (a duplicate beats a loss) and warns', async () => {
+    const old = { id: 'ch-1', profile_id: COACH, before: [MON], after: [TUE], created_at: new Date(NOON - 90 * 60_000).toISOString() }
+    const db = world({ queue: [old], claimsError: { message: 'down' } })
+    await runAvailabilityNoticeSweep(db, { nowMs: NOON })
+    expect(sendPushOnce).toHaveBeenCalledTimes(1)
+    expect(logWarn).toHaveBeenCalled()
   })
 
   it('reads only un-notified rows, oldest first, capped', async () => {

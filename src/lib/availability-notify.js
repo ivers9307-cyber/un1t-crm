@@ -37,16 +37,21 @@
 // stamped AFTER the send. A push that failed outright is not stamped, so a
 // later tick retries it inside the 24h window.
 //
+// RETRY CAP: a lost stamp would otherwise re-send every tick until the 24h
+// stale cut (~95 pushes). After AVAILABILITY_MAX_RETRIES retry attempts that
+// claimed recipients, the sweep stops and settles the change 'gave_up'.
+//
 // KNOWN LIMIT: a coach whose studios straddle 07:00 in different timezones is
 // sent to the in-band studios and left owed for the rest; each later tick
-// re-sends under a new retry key until every studio is in band. Every studio
-// is Europe/Dublin today, so this cannot happen yet.
+// re-sends under a new retry key until every studio is in band (or the retry
+// cap gives up). Every studio is Europe/Dublin today, so this cannot happen yet.
 
 import { sendPushOnce } from '@/lib/push-dedup'
 import { inStaffPushHours, resolveStaffTimeZone } from '@/lib/staff-push-hours'
 import { RUNWAY_NOTIFY_ROLES } from '@/lib/roster-runway-notify'
 import { diffAvailability, sameAvailability, describeRule } from '@shared/availability'
 import { logWarn, logError } from '@/lib/log'
+import { escapeLikePattern } from '@/lib/like-escape'
 
 export const AVAILABILITY_NOTIFY_ROLES = RUNWAY_NOTIFY_ROLES
 export const AVAILABILITY_NOTICE_MAX_AGE_MS = 24 * 60 * 60 * 1000
@@ -57,6 +62,11 @@ export const AVAILABILITY_NOTICE_LEASE_MS = 10 * 60 * 1000
 // One retry key per cron tick slot: concurrent sweeps in one slot dedup
 // against each other, and the next slot gets a fresh key.
 export const AVAILABILITY_RETRY_SLOT_MS = 15 * 60 * 1000
+// The sweep re-sends a change at most this many times under retry keys that
+// actually claimed recipients (read back from the push_event_sends ledger,
+// which is written by the claim, so the count holds even when our own stamp
+// keeps failing). Then it gives up: settled 'gave_up', logWarn.
+export const AVAILABILITY_MAX_RETRIES = 4
 export const availabilityEventKey = (changeId) => `availability_changed:${changeId}`
 export const availabilityRetryKey = (changeId, nowMs) =>
   `availability_changed:${changeId}:r${Math.floor(nowMs / AVAILABILITY_RETRY_SLOT_MS)}`
@@ -230,6 +240,22 @@ export async function deliverOwedAvailabilityNotices(db, profileId, { nowMs = Da
   }
 }
 
+/**
+ * How many sweep retries of this change actually claimed recipients: distinct
+ * 'availability_changed:<id>:r<slot>' keys in the push_event_sends ledger.
+ */
+async function countRetryAttempts(db, changeId) {
+  const { data, error } = await db
+    .from('push_event_sends')
+    .select('event_key')
+    .like('event_key', `${escapeLikePattern(availabilityEventKey(changeId))}:r%`)
+    // One row per recipient per attempt: a few studios' roster builders times
+    // AVAILABILITY_MAX_RETRIES fits well inside this.
+    .limit(500)
+  if (error) return { attempts: null, error }
+  return { attempts: new Set((data || []).map((r) => r.event_key)).size, error: null }
+}
+
 /** One coach's change rows still owed a notice, oldest first. */
 async function readOwedRows(db, profileId) {
   const { data, error } = await db
@@ -248,7 +274,7 @@ async function readOwedRows(db, profileId) {
  * coach. Never throws; `errors` > 0 keeps its heartbeat from stamping.
  */
 export async function runAvailabilityNoticeSweep(db, { nowMs = Date.now() } = {}) {
-  const out = { pending: 0, groups: 0, leased: 0, settled_elsewhere: 0, sent: 0, deferred: 0, stale: 0, reverted: 0, no_recipients: 0, errors: 0 }
+  const out = { pending: 0, groups: 0, leased: 0, settled_elsewhere: 0, gave_up: 0, sent: 0, deferred: 0, stale: 0, reverted: 0, no_recipients: 0, errors: 0 }
   const { data, error } = await db
     .from('staff_availability_changes')
     .select('id, profile_id, created_at')
@@ -285,7 +311,19 @@ export async function runAvailabilityNoticeSweep(db, { nowMs = Date.now() } = {}
       out.leased++
       continue
     }
-    const r = await deliverAvailabilityNotice(db, foldChanges(rows), { nowMs, eventKey: availabilityRetryKey(last.id, nowMs) })
+    const notice = foldChanges(rows)
+    const { attempts, error: countError } = await countRetryAttempts(db, last.id)
+    if (countError) {
+      // Not knowing the count must not cost the notice: send (a duplicate at worst).
+      logWarn('availability-notify', 'could not count earlier retries; sending anyway', { change_id: last.id, err: countError.message })
+    } else if (attempts >= AVAILABILITY_MAX_RETRIES) {
+      logWarn('availability-notify', 'giving up re-sending an availability notice', { ids: notice.ids, attempts })
+      const g = await settle(db, notice.ids, 'gave_up', nowMs)
+      if (g.status === 'error') out.errors++
+      else out.gave_up++
+      continue
+    }
+    const r = await deliverAvailabilityNotice(db, notice, { nowMs, eventKey: availabilityRetryKey(last.id, nowMs) })
     if (r.status === 'error') out.errors++
     else out[r.status] = (out[r.status] || 0) + 1
   }

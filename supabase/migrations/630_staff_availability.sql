@@ -152,7 +152,7 @@ CREATE TABLE IF NOT EXISTS public.staff_availability_changes (
   notified_at    timestamptz,
   notice_outcome text,
   CONSTRAINT staff_availability_changes_notice_outcome CHECK (
-    notice_outcome IS NULL OR notice_outcome IN ('sent', 'no_recipients', 'stale', 'reverted')
+    notice_outcome IS NULL OR notice_outcome IN ('sent', 'no_recipients', 'stale', 'reverted', 'gave_up')
   ),
   CONSTRAINT staff_availability_changes_notice_pair CHECK ((notified_at IS NULL) = (notice_outcome IS NULL))
 );
@@ -174,7 +174,7 @@ REVOKE ALL ON public.staff_availability_changes FROM anon, authenticated, PUBLIC
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.staff_availability_changes TO service_role;
 
 COMMENT ON TABLE public.staff_availability_changes IS
-  'AVAIL.1 (mig 630) — one row per real change to a coach''s availability (the RPC writes none for a no-op save): before/after snapshots of the weekly + current/future dated rules, actor_id (the master under View as user). Also the notice queue: notified_at NULL = the managers are still owed a push (sent at once inside 07:00-22:00 studio time, else by the checklist-sweep cron''s availability arm); notice_outcome says how it ended (sent | no_recipients | stale after 24h | reverted when later saves undid it). Service-role only.';
+  'AVAIL.1 (mig 630) — one row per real change to a coach''s availability (the RPC writes none for a no-op save): before/after snapshots of the weekly + current/future dated rules, actor_id (the master under View as user). Also the notice queue: notified_at NULL = the managers are still owed a push (sent at once inside 07:00-22:00 studio time, else by the checklist-sweep cron''s availability arm); notice_outcome says how it ended (sent | no_recipients | stale after 24h | reverted when later saves undid it | gave_up after the sweep retry cap). Service-role only.';
 
 -- ── The save ─────────────────────────────────────────────────────────────
 CREATE OR REPLACE FUNCTION public.replace_staff_unavailability(
