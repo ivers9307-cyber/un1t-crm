@@ -247,7 +247,17 @@ describe('buildLabourMonth', () => {
       forecast_pct: 33.4, actual_pct: 33.7,
       draft_hours: 1,
       ratio_excludes: ['UN1T Hatch Street'],
+      // Review 2 — the ratio is on a SUBSET, so its base is carried with it.
+      ratio_base: { studios: ['UN1T Stillorgan'], forecast_cost_cents: 334_000, actual_cost_cents: 168_500 },
     })
+  })
+
+  it('total with every studio tracked: the ratio is on the whole total, no separate base', () => {
+    const revenue = new Map([...REVENUE, [HATCH, { mrrCents: 500_000, recurringMembers: 90, yieldCents: 5555 }]])
+    const t = build({ revenue }).total
+    expect(t.ratio_excludes).toEqual([])
+    expect(t.ratio_base).toBe(null)
+    expect(t.forecast_pct).toBe(34.3) // 514,426 on 1,500,000
   })
 
   it('uncosted: someone who worked with no salary is named with their hours; no-one who did not work is', () => {
@@ -280,6 +290,7 @@ describe('buildLabourMonth', () => {
     expect(rowOf(vm, STILL)).toMatchObject({ revenue_status: 'unavailable', mrr_cents: null, forecast_pct: null, actual_pct: null })
     expect(vm.total).toMatchObject({ revenue_status: 'none', mrr_cents: null, forecast_pct: null, actual_pct: null })
     expect(vm.total.ratio_excludes).toEqual(['UN1T Stillorgan', 'UN1T Hatch Street'])
+    expect(vm.total.ratio_base).toBe(null)
   })
 
   it('no "so far" ratio at the first instant of the month (no revenue to date yet)', () => {

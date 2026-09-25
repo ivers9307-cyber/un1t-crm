@@ -25,15 +25,23 @@ function pctLabel(p) {
 
 function revenueLine(row) {
   if (row.revenue_status === 'tracked') {
-    return `${euros(row.mrr_cents)}/month recurring (MRR), ${row.recurring_members} members`
+    const only = row.ratio_base ? `, ${row.ratio_base.studios.join(' and ')} only` : ''
+    return `${euros(row.mrr_cents)}/month recurring (MRR), ${row.recurring_members} members${only}`
   }
   if (row.revenue_status === 'unavailable') return 'Could not be read'
   return 'Not tracked here'
 }
 
+// Review 2 — "33.4% on UN1T Stillorgan: €3,340 of €10,000 MRR": a ratio over
+// SOME of the studios is printed with its base, never beside the total's euros.
+function baseLine(pct, studios, costCents, revenueCents, suffix) {
+  return `${pctLabel(pct)} on ${studios.join(' and ')}: ${euros(costCents)} of ${euros(revenueCents)} ${suffix}`
+}
+
 function StudioLabour({ row, isTotal = false }) {
-  const f = pctLabel(row.forecast_pct)
-  const a = pctLabel(row.actual_pct)
+  const base = isTotal ? row.ratio_base : null
+  const f = base ? null : pctLabel(row.forecast_pct)
+  const a = base ? null : pctLabel(row.actual_pct)
   return (
     <div className={`rounded-md border border-un1t-border px-3 py-2 ${isTotal ? 'bg-un1t-bg' : ''}`}>
       <p className="text-sm font-medium text-un1t-text">{row.name}</p>
@@ -48,6 +56,18 @@ function StudioLabour({ row, isTotal = false }) {
           <span className="font-semibold">{euros(row.actual.cost_cents)}</span>
           {a ? ` · ${a} of revenue to date` : ''} · {row.actual.hours}h
         </dd>
+        {base && row.forecast_pct != null ? (
+          <>
+            <dt className="text-un1t-muted">Forecast share</dt>
+            <dd className="text-un1t-text">{baseLine(row.forecast_pct, base.studios, base.forecast_cost_cents, row.mrr_cents, 'MRR')}</dd>
+          </>
+        ) : null}
+        {base && row.actual_pct != null ? (
+          <>
+            <dt className="text-un1t-muted">So far share</dt>
+            <dd className="text-un1t-text">{baseLine(row.actual_pct, base.studios, base.actual_cost_cents, row.revenue_to_date_cents, 'to date')}</dd>
+          </>
+        ) : null}
         <dt className="text-un1t-muted">Revenue</dt>
         <dd className="text-un1t-text">{revenueLine(row)}</dd>
         <dt className="text-un1t-muted">Forecast split</dt>

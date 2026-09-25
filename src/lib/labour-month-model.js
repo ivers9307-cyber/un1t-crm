@@ -233,6 +233,9 @@ function totalOf(rows) {
   const any = tracked.length > 0
   const mrr = any ? sum(tracked, (r) => r.mrr_cents) : null
   const toDate = any ? sum(tracked, (r) => r.revenue_to_date_cents) : null
+  const excluded = rows.filter((r) => r.revenue_status !== 'tracked')
+  const trackedForecast = sum(tracked, (r) => r.forecast.cost_cents)
+  const trackedActual = sum(tracked, (r) => r.actual.cost_cents)
   const part = (k) => ({
     employees_cents: sum(rows, (r) => r[k].employees_cents),
     contractors_cents: sum(rows, (r) => r[k].contractors_cents),
@@ -249,10 +252,16 @@ function totalOf(rows) {
     actual: part('actual'),
     // Ratios over the studios that HAVE revenue only: Hatch's labour on
     // Stillorgan's revenue would overstate the percentage.
-    forecast_pct: labourPct(sum(tracked, (r) => r.forecast.cost_cents), mrr),
-    actual_pct: labourPct(sum(tracked, (r) => r.actual.cost_cents), toDate),
+    forecast_pct: labourPct(trackedForecast, mrr),
+    actual_pct: labourPct(trackedActual, toDate),
     draft_hours: round1(sum(rows, (r) => r.draft_hours)),
-    ratio_excludes: rows.filter((r) => r.revenue_status !== 'tracked').map((r) => r.name),
+    ratio_excludes: excluded.map((r) => r.name),
+    // Review 2 — when the ratio covers only SOME of the studios, its base
+    // (which studios, and their labour) rides with it, so the panel never
+    // prints a subset's percentage beside totals that include the rest.
+    ratio_base: any && excluded.length > 0
+      ? { studios: tracked.map((r) => r.name), forecast_cost_cents: trackedForecast, actual_cost_cents: trackedActual }
+      : null,
   }
 }
 
