@@ -41,6 +41,7 @@ import { createInFlightGuard } from '../../../lib/swap-flow'
 import LeaveFloatingButtons from '../../../components/LeaveFloatingButtons'
 import ManageMode from '../../../components/schedule/ManageMode'
 import CalendarSubscribeRow from '../../../components/schedule/CalendarSubscribeRow'
+import MyAvailabilityRow from '../../../components/schedule/MyAvailabilityRow'
 // LEAVE.2 — one label per leave type (unpaid/other used to read "Time off").
 import { timeOffLeaveLabel } from 'shared/time-off'
 
@@ -747,6 +748,8 @@ export default function Schedule() {
 
         {/* ICSFEED.1 — own published shifts in the coach's calendar app. Me view only, phone and iPad. */}
         {view === 'me' && <CalendarSubscribeRow />}
+        {/* AVAIL.2 — when the coach can't work. Me view, phone and iPad, every role. */}
+        {view === 'me' && <MyAvailabilityRow onPress={() => router.push('/schedule/availability')} />}
       </ScrollView>
 
       {/* Floating Request Time Off button — MOBILE-PERMS: gated on the
