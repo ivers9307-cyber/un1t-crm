@@ -4357,6 +4357,7 @@ registry.registerPath({
   responses: {
     200: { description: 'Blocks with template and assignments' },
     400: { description: 'start_date or end_date is not a real calendar date (YYYY-MM-DD), e.g. 2026-02-30 (`<name>: not a real date`), or the read failed', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'No session', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'location_id outside the caller’s assignments', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -5052,6 +5053,29 @@ registry.registerPath({
 })
 
 // Schedule reports
+// DATECHECK.1 — run one report now. The period is checked before anything is
+// read: real dates, end on or after start, at most 366 days inclusive.
+registry.registerPath({
+  method: 'post',
+  path: '/api/schedule/reports',
+  tags: ['Schedule', 'Reports'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Generate a report for a period now (manager+)',
+  description: 'Runs report_type over period_start..period_end (inclusive) at location_id (default: the active studio) and stores the result in the report history. staff_cost carries pay rates, so it is owner/manager/master only at that studio.',
+  request: { body: { content: { 'application/json': { schema: z.object({
+    report_type: z.string().openapi({ description: 'One of the report types the Reporting tab offers (e.g. staff_hours, staff_cost, roster_coverage, time_off_summary)' }),
+    period_start: z.string().openapi({ description: 'YYYY-MM-DD, a real calendar date' }),
+    period_end: z.string().openapi({ description: 'YYYY-MM-DD, a real calendar date, on or after period_start, at most 366 days after it inclusive' }),
+    location_id: z.string().optional(),
+  }).openapi('ScheduleReportRunRequest') } } } },
+  responses: {
+    201: { description: 'Report generated and stored' },
+    400: { description: 'A period date is not a real calendar date (e.g. 2026-02-30), period_end is before period_start, the period is longer than 366 days, or the report failed', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'No session', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not a manager at the location, or a head coach asking for staff_cost', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 registry.registerPath({
   method: 'post',
   path: '/api/schedule/reports/scheduled',

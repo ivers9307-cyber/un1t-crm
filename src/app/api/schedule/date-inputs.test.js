@@ -20,6 +20,10 @@
 // isRealCalendarDate(x) directly, or it sits in the [['label', x], …] list
 // the routes loop over with isRealCalendarDate.
 //
+// FALSE ALARMS it can raise (it fails closed): a non-date param whose name
+// ends in a date-like suffix, e.g. `assigned_to` or `created_by_day`, is
+// treated as a date. Rename or calendar-check it; don't loosen the pattern.
+//
 // BLIND SPOTS — still a reviewer's job, deliberately not chased with regex:
 //   - a date in a path segment ([date]/route.js), a header, or a body field
 //     read without a schema (`body.start_date` straight into a query);
