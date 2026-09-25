@@ -45,6 +45,7 @@ import {
 import MonthRoster from '@/components/dashboard/MonthRoster'
 import MyRequests from '@/components/dashboard/MyRequests'
 import SwapActions from '@/components/dashboard/SwapActions'
+import OfferedShifts from '@/components/dashboard/OfferedShifts'
 
 // Icon per triage row id (assembleTodayFeed in shared/today-feed.js owns
 // the ids). Kept here — icons are a web rendering concern. HOME.3 —
@@ -454,6 +455,10 @@ export default async function PersonalDashboardPage() {
           </div>
         </Link>
       )}
+
+      {/* REPLACE.1b — shifts a manager offered to the team that I could take
+          ("Shifts up for grabs", Claim). Renders nothing when none is. */}
+      <OfferedShifts locationId={user.activeLocation?.id} />
 
       {/* CT-P3b — coach self-service swap surfaces: accept/decline swaps
           offered to you, claim open-pool swaps, and "on with you today".
