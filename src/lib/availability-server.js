@@ -73,10 +73,11 @@ export async function readOwnAvailability(db, profileId, todayIso) {
  * The route uses them to tell a rule the coach already has from a new one:
  * an ended rule sent back by a stale tab is history, a new one is refused.
  * A failed read is an error, never "none known".
- * @returns {{ keys: Set<string> | null, error }}
+ * `rules` (canonical) feed carryStartedRules: a started rule whose end moved.
+ * @returns {{ keys: Set<string> | null, rules: object[] | null, error }}
  */
 export async function readKnownDatedKeys(db, profileId, todayIso, startDates) {
-  if (!startDates || startDates.length === 0) return { keys: new Set(), error: null }
+  if (!startDates || startDates.length === 0) return { keys: new Set(), rules: [], error: null }
   const { data, error } = await db
     .from('staff_unavailability')
     .select('kind, weekday, start_date, end_date, all_day, start_time, end_time, note')
@@ -84,8 +85,9 @@ export async function readKnownDatedKeys(db, profileId, todayIso, startDates) {
     .eq('kind', 'dated')
     .lt('start_date', todayIso)
     .in('start_date', startDates)
-  if (error) return { keys: null, error }
-  return { keys: new Set((data || []).map(ruleKey)), error: null }
+  if (error) return { keys: null, rules: null, error }
+  const rules = (data || []).map(normaliseRule)
+  return { keys: new Set(rules.map(ruleKey)), rules, error: null }
 }
 
 /**

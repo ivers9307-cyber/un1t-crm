@@ -26,7 +26,7 @@ import {
   AvailabilityPutSchema, AVAILABILITY_RANGE_MAX_DAYS, readOwnAvailability, saveOwnAvailability,
   readStudioAvailability, isAvailabilityInputError, readKnownDatedKeys,
 } from '@/lib/availability-server'
-import { normaliseAvailability, availabilityProblems, splitRules, withoutEnded } from '@shared/availability'
+import { normaliseAvailability, availabilityProblems, splitRules, withoutEnded, carryStartedRules } from '@shared/availability'
 import { deliverOwedAvailabilityNotices } from '@/lib/availability-notify'
 import { logError, logWarn } from '@/lib/log'
 
@@ -91,19 +91,22 @@ export async function PUT(request) {
   // open over midnight (no problem; dropped below), a new one is refused.
   // Dates are validated YYYY-MM-DD, so a string compare orders them.
   const startedDates = [...new Set(input.dated.filter((r) => r.start_date < todayIso).map((r) => r.start_date))]
-  const { keys: knownKeys, error: knownError } = startedDates.length
+  const { rules: storedStarted, error: knownError } = startedDates.length
     ? await readKnownDatedKeys(db, user.id, todayIso, startedDates)
-    : { keys: new Set(), error: null }
+    : { rules: [], error: null }
   if (knownError) {
     logError('api/schedule/availability', 'history read failed', { err: knownError.message })
     return bad('Could not save your availability', 500)
   }
 
-  const issues = availabilityProblems(input, { todayIso, knownKeys })
+  // A started rule whose END moved continues from today; its elapsed days
+  // stay history (the contract is in shared/availability.js carryStartedRules).
+  const carried = carryStartedRules(input, storedStarted, todayIso)
+  const issues = availabilityProblems(carried.input, { todayIso, knownKeys: carried.knownKeys })
   if (issues.length) {
     return NextResponse.json({ success: false, error: 'Invalid availability', issues }, { status: 400 })
   }
-  const toSave = withoutEnded(input, todayIso)
+  const toSave = withoutEnded(carried.input, todayIso)
 
   const { result, error } = await saveOwnAvailability(db, {
     profileId: user.id,

@@ -206,7 +206,10 @@ describe('migration 630 — replace_staff_unavailability', () => {
     const G = '10000000-0000-0000-0000-0000000000f2'
     await runSql(`INSERT INTO public.profiles (id, full_name) VALUES ('${G}', 'Coach G')`)
     await save(G, [], [{ start_date: '2026-09-20', end_date: '2026-09-30', all_day: true }], { today: '2026-09-20' })
+    const changesBefore = await count('staff_availability_changes', `profile_id = '${G}'`)
+    // What the route sends for "20-30 with its end moved to 27" on the 25th (carryStartedRules).
     await save(G, [], [{ start_date: '2026-09-25', end_date: '2026-09-27', all_day: true }])
+    expect(await count('staff_availability_changes', `profile_id = '${G}'`)).toBe(changesBefore + 1)
     const { rows } = await db.query(`SELECT start_date::text, end_date::text FROM public.staff_unavailability WHERE profile_id = $1 ORDER BY start_date`, [G])
     expect(rows).toEqual([{ start_date: '2026-09-20', end_date: '2026-09-24' }, { start_date: '2026-09-25', end_date: '2026-09-27' }])
   })

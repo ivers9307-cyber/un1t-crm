@@ -186,6 +186,48 @@ export function ruleProblem(rule, { todayIso = null, knownKeys = null } = {}) {
   return null
 }
 
+/**
+ * THE STARTED-RULE CONTRACT (server side; web and phone just send the edited
+ * rule). A dated rule that has already started (start_date < today) may come
+ * back from a client in only three shapes:
+ *   * unchanged, or with only its note edited: kept as it is;
+ *   * with only its END moved (same start_date, all_day and times as a stored
+ *     rule that is still current): the days already gone are history, so the
+ *     rule is carried to continue FROM TODAY (start_date := today), and the
+ *     save (replace_staff_unavailability, mig 630) keeps start..yesterday of
+ *     the stored rule as a history row. 20-30 Sep edited to end on the 27th,
+ *     saved on the 25th, becomes history 20-24 + current 25-27. An end moved
+ *     to before today means "not from today": the rule is marked known, so
+ *     validation passes it and withoutEnded() drops it (the RPC keeps its
+ *     elapsed days as history, as for a delete);
+ *   * anything else (a new rule, a moved start, a changed window): left as
+ *     sent, so ruleProblem refuses it ('Start today or later').
+ * `stored` = the person's stored dated rules that started before today (the
+ * route reads them). Returns the carried input (same order and length, so
+ * issue paths still index what was validated) and the knownKeys to validate
+ * with.
+ */
+export function carryStartedRules(input, stored, todayIso) {
+  const today = dayIndex(todayIso)
+  const known = (stored || []).map(normaliseRule).filter((r) => r && r.kind === 'dated')
+  const knownKeys = new Set(known.map(windowKey))
+  if (today === null) return { input, knownKeys }
+  const sameWindow = (a, b) => a.all_day === b.all_day && (a.all_day || (a.start_time === b.start_time && a.end_time === b.end_time))
+  const dated = input.dated.map((r) => {
+    const start = dayIndex(r.start_date)
+    const end = dayIndex(r.end_date)
+    if (start === null || end === null || start >= today || knownKeys.has(windowKey(r))) return r
+    const match = known.find((k) => k.start_date === r.start_date && dayIndex(k.end_date) >= today && sameWindow(k, r))
+    if (!match) return r
+    if (end < today) {
+      knownKeys.add(windowKey(r))
+      return r
+    }
+    return { ...r, start_date: todayIso }
+  })
+  return { input: { weekly: input.weekly, dated }, knownKeys }
+}
+
 /** { weekly, dated } without the dated rules that ended before todayIso (history is never re-saved). */
 export function withoutEnded(input, todayIso) {
   const today = dayIndex(todayIso)
