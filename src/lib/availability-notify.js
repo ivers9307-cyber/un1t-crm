@@ -15,11 +15,28 @@
 // first tick at or after 07:00. A coach's overnight saves become ONE notice.
 // Older than 24h: dropped as stale (the swap expiry notice's rule).
 //
-// ONCE: sendPushOnce keyed 'availability_changed:<change id>', so the route,
-// a retry and the sweep can never double-push; a manager at both studios gets
-// one. notified_at is stamped AFTER the send (BAREWRITE (c): no claim-before-
-// send without a lease). A push that failed outright is not stamped, so the
-// next tick retries it inside the 24h window.
+// ONCE, AND NEVER LOST: sendPushOnce CLAIMS (event key, recipient) in
+// push_event_sends BEFORE it sends, and that claim has no lease. So a process
+// that dies between the claim and the send (Vercel freezing the save's
+// after()) leaves a claim with no push behind it, and a retry under the SAME
+// key would be deduped to nothing and then stamped 'sent': a silent loss
+// (CLAUDE.md BAREWRITE (c)). The lease lives here instead:
+//   * the save's own attempt uses the plain key 'availability_changed:<id>';
+//   * the sweep leaves a coach alone while their newest owed change is younger
+//     than AVAILABILITY_NOTICE_LEASE_MS (that attempt may still be running);
+//   * after that, the sweep sends under a RETRY key, 'availability_changed:
+//     <id>:r<slot>', fresh for every 15-minute tick slot, so neither a dead
+//     save nor a sweep that dies mid-send can swallow the notice.
+// The price is a possible DUPLICATE (a push that landed but whose stamp was
+// lost is sent again next tick), never a loss. Within one attempt the key
+// still dedups: a manager at both studios gets one push. notified_at is
+// stamped AFTER the send. A push that failed outright is not stamped, so a
+// later tick retries it inside the 24h window.
+//
+// KNOWN LIMIT: a coach whose studios straddle 07:00 in different timezones is
+// sent to the in-band studios and left owed for the rest; each later tick
+// re-sends under a new retry key until every studio is in band. Every studio
+// is Europe/Dublin today, so this cannot happen yet.
 
 import { sendPushOnce } from '@/lib/push-dedup'
 import { inStaffPushHours, resolveStaffTimeZone } from '@/lib/staff-push-hours'
@@ -30,7 +47,15 @@ import { logWarn, logError } from '@/lib/log'
 export const AVAILABILITY_NOTIFY_ROLES = RUNWAY_NOTIFY_ROLES
 export const AVAILABILITY_NOTICE_MAX_AGE_MS = 24 * 60 * 60 * 1000
 export const AVAILABILITY_SWEEP_BATCH = 200
+// The save's own attempt owns an owed change for this long (it runs in the
+// route's after(), seconds at most); the */15 sweep waits it out.
+export const AVAILABILITY_NOTICE_LEASE_MS = 10 * 60 * 1000
+// One retry key per cron tick slot: concurrent sweeps in one slot dedup
+// against each other, and the next slot gets a fresh key.
+export const AVAILABILITY_RETRY_SLOT_MS = 15 * 60 * 1000
 export const availabilityEventKey = (changeId) => `availability_changed:${changeId}`
+export const availabilityRetryKey = (changeId, nowMs) =>
+  `availability_changed:${changeId}:r${Math.floor(nowMs / AVAILABILITY_RETRY_SLOT_MS)}`
 
 function listRules(rules, max = 3) {
   const shown = rules.slice(0, max).map(describeRule)
@@ -97,7 +122,7 @@ async function settle(db, ids, outcome, nowMs, sent = 0) {
  * changes: `ids` lists every row it settles, `id` is the newest).
  * Never throws. status: sent | deferred | stale | reverted | no_recipients | error.
  */
-export async function deliverAvailabilityNotice(db, change, { nowMs = Date.now() } = {}) {
+export async function deliverAvailabilityNotice(db, change, { nowMs = Date.now(), eventKey = null } = {}) {
   try {
     const ids = Array.isArray(change.ids) && change.ids.length ? change.ids : [change.id]
     const createdMs = Date.parse(change.created_at)
@@ -134,7 +159,7 @@ export async function deliverAvailabilityNotice(db, change, { nowMs = Date.now()
       // A failed name read only costs the name ("A coach"), never the notice.
       const { data: person } = await db.from('profiles').select('full_name').eq('id', change.profile_id).maybeSingle()
       const { title, body } = availabilityNoticeText({ coachName: person?.full_name, before: change.before, after: change.after })
-      const r = await sendPushOnce(db, availabilityEventKey(change.id), recipients, {
+      const r = await sendPushOnce(db, eventKey || availabilityEventKey(change.id), recipients, {
         title,
         body,
         category: 'availability_change',
@@ -144,7 +169,7 @@ export async function deliverAvailabilityNotice(db, change, { nowMs = Date.now()
       failedOutright = (r?.failed || 0) > 0 && sent === 0
     }
     // A studio still in quiet hours, or a push that failed outright: leave it
-    // owed. The dedup key means the managers already told are never told twice.
+    // owed for a later tick (see KNOWN LIMIT in the header).
     if (quiet.length > 0 || failedOutright) return { status: 'deferred', sent }
     return settle(db, ids, recipients.length > 0 ? 'sent' : 'no_recipients', nowMs, sent)
   } catch (err) {
@@ -158,7 +183,7 @@ export async function deliverAvailabilityNotice(db, change, { nowMs = Date.now()
  * coach. Never throws; `errors` > 0 keeps its heartbeat from stamping.
  */
 export async function runAvailabilityNoticeSweep(db, { nowMs = Date.now() } = {}) {
-  const out = { pending: 0, groups: 0, sent: 0, deferred: 0, stale: 0, reverted: 0, no_recipients: 0, errors: 0 }
+  const out = { pending: 0, groups: 0, leased: 0, sent: 0, deferred: 0, stale: 0, reverted: 0, no_recipients: 0, errors: 0 }
   const { data, error } = await db
     .from('staff_availability_changes')
     .select('id, profile_id, actor_id, before, after, created_at')
@@ -180,6 +205,12 @@ export async function runAvailabilityNoticeSweep(db, { nowMs = Date.now() } = {}
     out.groups++
     const first = rows[0]
     const last = rows[rows.length - 1]
+    // Inside the lease the save's own attempt may still be sending; leave it.
+    const lastMs = Date.parse(last.created_at)
+    if (Number.isFinite(lastMs) && nowMs - lastMs < AVAILABILITY_NOTICE_LEASE_MS) {
+      out.leased++
+      continue
+    }
     const r = await deliverAvailabilityNotice(db, {
       id: last.id,
       ids: rows.map((x) => x.id),
@@ -188,7 +219,7 @@ export async function runAvailabilityNoticeSweep(db, { nowMs = Date.now() } = {}
       before: first.before,
       after: last.after,
       created_at: last.created_at,
-    }, { nowMs })
+    }, { nowMs, eventKey: availabilityRetryKey(last.id, nowMs) })
     if (r.status === 'error') out.errors++
     else out[r.status] = (out[r.status] || 0) + 1
   }

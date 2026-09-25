@@ -11,7 +11,8 @@ vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.f
 const { sendPushOnce } = await import('@/lib/push-dedup')
 const { logError } = await import('@/lib/log')
 const {
-  AVAILABILITY_NOTIFY_ROLES, AVAILABILITY_NOTICE_MAX_AGE_MS, availabilityEventKey, availabilityNoticeText,
+  AVAILABILITY_NOTIFY_ROLES, AVAILABILITY_NOTICE_MAX_AGE_MS, AVAILABILITY_NOTICE_LEASE_MS, AVAILABILITY_RETRY_SLOT_MS,
+  availabilityEventKey, availabilityRetryKey, availabilityNoticeText,
   splitStudiosByBand, deliverAvailabilityNotice, runAvailabilityNoticeSweep,
 } = await import('./availability-notify')
 const { RUNWAY_NOTIFY_ROLES } = await import('./roster-runway-notify')
@@ -205,7 +206,7 @@ describe('runAvailabilityNoticeSweep', () => {
     const out = await runAvailabilityNoticeSweep(db, { nowMs: Date.parse('2026-09-25T06:05:00Z') }) // 07:05 Dublin
     expect(out).toMatchObject({ pending: 2, groups: 1, sent: 1, errors: 0 })
     const [, key, , payload] = sendPushOnce.mock.calls[0]
-    expect(key).toBe('availability_changed:ch-2')
+    expect(key).toBe(availabilityRetryKey('ch-2', Date.parse('2026-09-25T06:05:00Z')))
     expect(payload.body).toBe('Sam Demo is now unavailable Tuesdays, all day; available again Mondays, 9am–12pm.')
     expect(stamps(db)[0].ops).toContainEqual(['in', 'id', ['ch-1', 'ch-2']])
   })
@@ -220,6 +221,39 @@ describe('runAvailabilityNoticeSweep', () => {
     sendPushOnce.mockClear()
     await runAvailabilityNoticeSweep(world({ queue: q(COACH) }), { nowMs: Date.parse('2026-09-25T06:05:00Z') })
     expect(sendPushOnce.mock.calls[0][2]).toContain('master')
+  })
+
+  it('leaves a coach alone while their newest owed change is inside the lease (the save may still be sending it)', async () => {
+    const db = world({ queue: [{ id: 'ch-1', profile_id: COACH, before: [MON], after: [TUE], created_at: new Date(NOON - AVAILABILITY_NOTICE_LEASE_MS + 60_000).toISOString() }] })
+    expect(await runAvailabilityNoticeSweep(db, { nowMs: NOON })).toMatchObject({ leased: 1, sent: 0, errors: 0 })
+    expect(sendPushOnce).not.toHaveBeenCalled()
+    expect(stamps(db)).toHaveLength(0)
+  })
+
+  it('CRASH between claim and send: the save claimed the plain key and died; the sweep still delivers (a duplicate at worst, never a loss)', async () => {
+    // A ledger-faithful sendPushOnce: a claimed (key, recipient) is never sent again.
+    const claimed = new Set()
+    sendPushOnce.mockImplementation(async (_db, key, ids) => {
+      const fresh = ids.filter((id) => !claimed.has(`${key}|${id}`))
+      fresh.forEach((id) => claimed.add(`${key}|${id}`))
+      return { sent: fresh.length, skipped: 0, invalidated: 0, failed: 0, deduped: ids.length - fresh.length }
+    })
+    // The route's after() claimed every recipient under the plain key, then the process died before sendPush.
+    for (const id of ['hc-b', 'master', 'mgr-a', 'own']) claimed.add(`${availabilityEventKey('ch-1')}|${id}`)
+    const t = NOON + 20 * 60_000
+    const db = world({ queue: [{ id: 'ch-1', profile_id: COACH, before: [MON], after: [TUE], created_at: new Date(NOON).toISOString() }] })
+    const out = await runAvailabilityNoticeSweep(db, { nowMs: t })
+    expect(sendPushOnce.mock.calls[0][1]).toBe(availabilityRetryKey('ch-1', t))
+    expect(out).toMatchObject({ sent: 1, errors: 0 })
+    expect(sendPushOnce.mock.results[0].value).resolves.toMatchObject({ sent: 4 })
+    expect(stamps(db)[0].ops).toContainEqual(['update', { notified_at: new Date(t).toISOString(), notice_outcome: 'sent' }])
+  })
+
+  it('the retry key is fresh each tick slot, so a sweep that dies mid-send is retried, and shared within one slot', () => {
+    expect(availabilityRetryKey('x', NOON)).toMatch(/^availability_changed:x:r\d+$/)
+    expect(availabilityRetryKey('x', NOON)).toBe(availabilityRetryKey('x', NOON + 1000))
+    expect(availabilityRetryKey('x', NOON)).not.toBe(availabilityRetryKey('x', NOON + AVAILABILITY_RETRY_SLOT_MS))
+    expect(availabilityRetryKey('x', NOON)).not.toBe(availabilityEventKey('x'))
   })
 
   it('reads only un-notified rows, oldest first, capped', async () => {
