@@ -81,6 +81,9 @@ import { useDraftRosters } from './schedule/useDraftRosters'
 import RosterToolbar from './schedule/RosterToolbar'
 import DayHeader from './schedule/DayHeader'
 import ShiftCard from './schedule/ShiftCard'
+import BlockEditForm from './schedule/BlockEditForm'
+import { blockEditNoticeText } from '@/lib/block-edit'
+import { briefingOf } from '@shared/shift-briefing'
 import MonthCell from './schedule/MonthCell'
 import { rosterToolbarModel, dayHeaderStatus, shiftCardModel, monthCellLines, dayLeaveBars } from '@/lib/roster-card-model'
 
@@ -663,6 +666,32 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
       return { ok: true }
     }
     return { ok: false, error: data.error || 'Failed to save partial shift' }
+  }
+
+  // BLOCKEDIT.1 — one shift's times, min/max and briefing. Returns
+  // { ok } | { ok: false, error, code } for BlockEditForm to show inline;
+  // a saved edit refreshes the calendar and says who will be told, and when.
+  async function handleBlockEdit(blockId, payload) {
+    let res
+    let data
+    try {
+      res = await fetch(`/api/schedule/blocks/${blockId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      data = await res.json().catch(() => ({}))
+    } catch {
+      return { ok: false, error: 'Network error, please try again' }
+    }
+    if (res.ok && data.success) {
+      await refreshAfterMutation()
+      const told = blockEditNoticeText(data.notice)
+      if (data.warning) showToast([data.warning, told].filter(Boolean).join(' '), 'warning')
+      else showToast(told || 'Shift saved.', 'success')
+      return { ok: true }
+    }
+    return { ok: false, error: data.message || data.error || 'Could not save this shift', code: data.error }
   }
 
   // CAL-UI-LOW.2 — "open the shift the Studio Overview just named".
@@ -1461,6 +1490,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
             }
           }}
           onPartialSave={handlePartialSave}
+          onEditBlock={handleBlockEdit}
           onDeleteBlock={async () => {
             if (rowBusy) return
             if (!confirm(DELETE_SLOT_CONFIRM)) return
@@ -2408,7 +2438,7 @@ const DELETE_SLOT_CONFIRM =
 // modal updates live as overrides are saved without a re-mount.
 function BlockDetailModal({
   block, user, isManager, busy,
-  onClose, onAddCoach, onUnassign, onPartialSave, onDeleteBlock, onSwapRequest,
+  onClose, onAddCoach, onUnassign, onPartialSave, onDeleteBlock, onSwapRequest, onEditBlock,
 }) {
   const tmpl = block.shift_templates || {}
   const assignments = liveAssignments(block.shift_assignments)
@@ -2426,9 +2456,12 @@ function BlockDetailModal({
   // close button still work, which is why this is not `dismissable={false}`.
   const [editingRowIds, setEditingRowIds] = useState(() => new Set())
   const anyRowEditing = editingRowIds.size > 0
+  // BLOCKEDIT.1 — the shift editor is a half-filled form too.
+  const [editingBlock, setEditingBlock] = useState(false)
+  const briefing = briefingOf(block)
 
   return (
-    <Modal open onClose={onClose} title={tmpl.name || 'Shift'} dismissOnBackdrop={!anyRowEditing}>
+    <Modal open onClose={onClose} title={tmpl.name || 'Shift'} dismissOnBackdrop={!anyRowEditing && !editingBlock}>
       <div>
         {/* Sub-header — the template name is the dialog's accessible title. */}
         <div className="mb-4">
@@ -2448,6 +2481,17 @@ function BlockDetailModal({
             </p>
           </div>
         </div>
+
+        {/* BLOCKEDIT.1 — the briefing, for everyone who can open this shift
+            (a coach reaches this dialog for their own shift). */}
+        {isManager && editingBlock ? (
+          <BlockEditForm block={block} onSave={(payload) => onEditBlock(block.id, payload)} onDone={() => setEditingBlock(false)} />
+        ) : briefing ? (
+          <div data-testid="block-briefing" className="mb-4 rounded-md border border-un1t-border bg-un1t-bg/40 p-3">
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-un1t-subtle">Briefing</div>
+            <p className="mt-1 whitespace-pre-line text-sm text-un1t-text">{briefing}</p>
+          </div>
+        ) : null}
 
         {/* Assigned coaches */}
         <div className="space-y-2 mb-4">
@@ -2500,17 +2544,30 @@ function BlockDetailModal({
               <Plus size={12} /> Add coach
             </button>
           ) : <span />}
-          {isManager && (
-            <button
-              type="button"
-              onClick={onDeleteBlock}
-              disabled={busy}
-              className="text-xs bg-red-500/15 text-red-700 border border-red-500/30 hover:bg-red-500/25 disabled:opacity-50 px-3 py-2 rounded-md font-medium inline-flex items-center gap-1.5"
-              title="Delete this entire shift slot"
-            >
-              <X size={12} aria-hidden="true" /> {busy ? 'Working…' : 'Delete this slot'}
-            </button>
-          )}
+          {/* BLOCKEDIT.1 — Edit and Delete share the right-hand group, so
+              justify-between keeps "Add coach" on the left. */}
+          <div className="flex items-center gap-2">
+            {isManager && !editingBlock && (
+              <button
+                type="button"
+                onClick={() => setEditingBlock(true)}
+                className="text-xs bg-un1t-surface text-un1t-text border border-un1t-border hover:bg-un1t-bg px-3 py-2 rounded-md font-medium inline-flex items-center gap-1.5"
+              >
+                <Pencil size={12} aria-hidden="true" /> Edit shift
+              </button>
+            )}
+            {isManager && (
+              <button
+                type="button"
+                onClick={onDeleteBlock}
+                disabled={busy}
+                className="text-xs bg-red-500/15 text-red-700 border border-red-500/30 hover:bg-red-500/25 disabled:opacity-50 px-3 py-2 rounded-md font-medium inline-flex items-center gap-1.5"
+                title="Delete this entire shift slot"
+              >
+                <X size={12} aria-hidden="true" /> {busy ? 'Working…' : 'Delete this slot'}
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </Modal>
