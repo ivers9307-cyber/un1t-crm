@@ -24,6 +24,12 @@ vi.mock('./RosterSummaryPanel', () => ({ default: () => null }))
 
 import ScheduleCalendar from './ScheduleCalendar.jsx'
 
+// The whole calendar mounts in jsdom; under a full-suite run the waits below
+// can take seconds, so they get room and the test budget covers them
+// (tests/test-timeout-budgets.test.js, the ScheduleCalendar.errors precedent).
+vi.setConfig({ testTimeout: 20000 })
+const WAIT = { timeout: 5000 }
+
 const LOC = 'loc1'
 const manager = { id: 'u1', role: 'manager', activeLocation: { id: LOC, name: 'Studio North' } }
 
@@ -55,7 +61,7 @@ beforeEach(() => {
   searchParams = 'view=week&week=2099-05-04&month=2099-05-01'
   block = blockOn('2099-05-06')
   replaceAnswers = [okResponse({ success: true, data: { notice: 'now' } })]
-  global.fetch = vi.fn(async (url, init) => {
+  global.fetch = vi.fn(async (url) => {
     if (String(url).includes('/replace')) return replaceAnswers.shift()
     if (url.includes('/schedule/blocks')) return okResponse({ success: true, data: [block] })
     if (url.includes('/schedule/time-off')) {
@@ -70,14 +76,14 @@ afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
 async function openBlock() {
   render(<ScheduleCalendar user={manager} />)
-  fireEvent.click(await screen.findByRole('button', { name: /^Manage 10am Midday Strength shift/ }))
-  await waitFor(() => expect(screen.getByText('Add coach')).toBeTruthy())
+  fireEvent.click(await screen.findByRole('button', { name: /^Manage 10am Midday Strength shift/ }, WAIT))
+  await waitFor(() => expect(screen.getByText('Add coach')).toBeTruthy(), WAIT)
 }
 
 async function openReplacePicker() {
   await openBlock()
   fireEvent.click(screen.getByRole('button', { name: 'Replace Coach A with another coach' }))
-  await waitFor(() => expect(screen.getByText('Pick the coach who takes this shift')).toBeTruthy())
+  await waitFor(() => expect(screen.getByText('Pick the coach who takes this shift')).toBeTruthy(), WAIT)
 }
 
 describe('REPLACE.1a — the Replace button', () => {
@@ -121,7 +127,7 @@ describe('REPLACE.1a — the picker in replace mode', () => {
     await openReplacePicker()
     fireEvent.click(screen.getByText('Coach B').closest('label').querySelector('input'))
     fireEvent.click(screen.getByRole('button', { name: 'Replace with Coach B' }))
-    await waitFor(() => expect(screen.getByText('Coach B is on the shift. Coach A and Coach B have been told.')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('Coach B is on the shift. Coach A and Coach B have been told.')).toBeTruthy(), WAIT)
     const [[url, init]] = replaceCalls()
     expect(url).toBe('/api/schedule/assignments/as-a/replace')
     expect(init.method).toBe('POST')
@@ -137,10 +143,10 @@ describe('REPLACE.1a — the picker in replace mode', () => {
     await openReplacePicker()
     fireEvent.click(screen.getByText('Coach B').closest('label').querySelector('input'))
     fireEvent.click(screen.getByRole('button', { name: 'Replace with Coach B' }))
-    await waitFor(() => expect(replaceCalls()).toHaveLength(2))
+    await waitFor(() => expect(replaceCalls()).toHaveLength(2), WAIT)
     expect(window.confirm).toHaveBeenCalledWith('Coach B has approved holiday on 2099-05-06.\n\nReplace anyway?')
     expect(JSON.parse(replaceCalls()[1][1].body)).toEqual({ profile_id: 'c-b', confirm_conflicts: true })
-    await waitFor(() => expect(screen.getByText(/are told after 7am/)).toBeTruthy())
+    await waitFor(() => expect(screen.getByText(/are told after 7am/)).toBeTruthy(), WAIT)
   })
 
   it('declining the clash sends nothing more and keeps the picker open', async () => {
@@ -149,7 +155,7 @@ describe('REPLACE.1a — the picker in replace mode', () => {
     await openReplacePicker()
     fireEvent.click(screen.getByText('Coach B').closest('label').querySelector('input'))
     fireEvent.click(screen.getByRole('button', { name: 'Replace with Coach B' }))
-    await waitFor(() => expect(window.confirm).toHaveBeenCalled())
+    await waitFor(() => expect(window.confirm).toHaveBeenCalled(), WAIT)
     expect(replaceCalls()).toHaveLength(1)
     expect(screen.getByText('Pick the coach who takes this shift')).toBeTruthy()
   })
@@ -159,7 +165,7 @@ describe('REPLACE.1a — the picker in replace mode', () => {
     await openReplacePicker()
     fireEvent.click(screen.getByText('Coach B').closest('label').querySelector('input'))
     fireEvent.click(screen.getByRole('button', { name: 'Replace with Coach B' }))
-    await waitFor(() => expect(screen.getByText('This shift has already started.')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('This shift has already started.')).toBeTruthy(), WAIT)
     expect(screen.getByText('Pick the coach who takes this shift')).toBeTruthy()
   })
 })
