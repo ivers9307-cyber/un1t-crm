@@ -192,6 +192,7 @@ export function offerClaimRpcError(err) {
     case 'offer_not_published': return { status: 409, error: 'This shift is no longer on offer.' }
     case 'offer_not_eligible': return { status: 403, error: 'You are not on the staff of this studio.' }
     case 'offer_already_on': return { status: 409, error: 'You are already on this shift.' }
+    case 'claimant_overlap': return { status: 409, error: "You're already on another shift at that time." }
     default: return { status: 500, error: 'Could not claim the shift.' }
   }
 }

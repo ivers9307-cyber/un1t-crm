@@ -276,11 +276,13 @@ describe('mig 641 — claim_shift_offer', () => {
 // catalog stores it) and the outcomes it leads to are driven for real.
 describe('mig 641 — lock order (review 2): the shift, then the offer', () => {
   const body = async () => (await db.query(`SELECT prosrc FROM pg_proc WHERE oid = 'public.claim_shift_offer(uuid, uuid)'::regprocedure`)).rows[0].prosrc
-  it('the shift is locked FOR UPDATE before the offer is', async () => {
+  it('the shift is locked FOR UPDATE before the offer is, and the claimant\'s advisory lock before either (review 5)', async () => {
     const src = await body()
+    const advisory = src.search(/pg_advisory_xact_lock\(pg_catalog\.hashtextextended\('claim_shift_offer:'/)
     const shiftLock = src.search(/FROM public\.shift_blocks[\s\S]*?FOR UPDATE/)
     const offerLock = src.search(/FROM public\.shift_offers[^;]*WHERE id = p_offer_id[^;]*FOR UPDATE/)
-    expect(shiftLock).toBeGreaterThan(-1)
+    expect(advisory).toBeGreaterThan(-1)
+    expect(shiftLock).toBeGreaterThan(advisory)
     expect(offerLock).toBeGreaterThan(shiftLock)
     // The only read of the offer before the shift lock takes no lock.
     const firstOfferRead = src.search(/FROM public\.shift_offers/)
@@ -298,6 +300,57 @@ describe('mig 641 — lock order (review 2): the shift, then the offer', () => {
   it('the offer read and the offer locked must be the same shift\'s', async () => {
     const src = await body()
     expect(src).toMatch(/v_offer\.block_id IS DISTINCT FROM v_block_id/)
+  })
+})
+
+// REPLACE.1b review 5 — the same coach claiming two overlapping offers at
+// once: each claim's route check read the other shift as free. Inside the
+// function, under a per-claimant advisory lock, the claimant's live PUBLISHED
+// shifts that day are checked against the offered window (effective windows;
+// ends that only touch are not an overlap). A draft never refuses (review 4).
+describe('mig 641 — the claimant is not already working then (review 5)', () => {
+  const TPL_OTHER = '40000000-0000-4000-8000-000000000009'
+  const other = async ({ id, start, end, roster = ROSTER_PUB, loc = LOC, date = '2099-01-01' }) => runSql(`
+    INSERT INTO public.shift_templates VALUES ('${id.replace(/^2/, '4')}', 'Other ${id.slice(-2)}', 'class') ON CONFLICT DO NOTHING;
+    INSERT INTO public.shift_blocks (id, location_id, template_id, block_date, start_time, end_time, min_coaches, max_coaches, roster_id)
+      VALUES ('${id}', '${loc}', '${id.replace(/^2/, '4')}', '${date}', '${start}', '${end}', 1, 3, '${roster}');`)
+  const on = async (block, who, over = '') => runSql(`INSERT INTO public.shift_assignments (block_id, profile_id${over ? ', start_time_override' : ''}) VALUES ('${block}', '${who}'${over ? `, '${over}'` : ''})`)
+
+  it('a live published shift overlapping the offered one refuses: claimant_overlap, nothing inserted, the offer stays open', async () => {
+    await other({ id: '20000000-0000-4000-8000-000000000011', start: '06:30', end: '08:00' })
+    await on('20000000-0000-4000-8000-000000000011', C1)
+    const id = await offer(BLK)
+    await expect(claim(id, C1)).rejects.toThrow(/^claimant_overlap/)
+    expect(await liveOn(BLK)).toEqual([])
+    expect((await offerRow(id)).status).toBe('open')
+  })
+  it('at ANOTHER studio too (they cannot be in two places)', async () => {
+    await other({ id: '20000000-0000-4000-8000-000000000012', start: '05:30', end: '06:30', loc: LOC_OTHER })
+    await on('20000000-0000-4000-8000-000000000012', C1)
+    await expect(claim(await offer(BLK), C1)).rejects.toThrow(/^claimant_overlap/)
+  })
+  it('an override that stretches another shift over this one counts (effective window)', async () => {
+    await other({ id: '20000000-0000-4000-8000-000000000013', start: '07:00', end: '09:00' })
+    await on('20000000-0000-4000-8000-000000000013', C1, '06:30')
+    await expect(claim(await offer(BLK), C1)).rejects.toThrow(/^claimant_overlap/)
+  })
+  it('ends that only touch, another day, a cancelled row or a DRAFT shift never refuse', async () => {
+    await other({ id: '20000000-0000-4000-8000-000000000014', start: '05:00', end: '06:00' })
+    await other({ id: '20000000-0000-4000-8000-000000000015', start: '06:00', end: '07:00', date: '2099-01-02' })
+    await other({ id: '20000000-0000-4000-8000-000000000016', start: '06:00', end: '07:00', roster: ROSTER_DRAFT })
+    await other({ id: '20000000-0000-4000-8000-000000000017', start: '06:15', end: '06:45' })
+    await on('20000000-0000-4000-8000-000000000014', C1)
+    await on('20000000-0000-4000-8000-000000000015', C1)
+    await on('20000000-0000-4000-8000-000000000016', C1)
+    await runSql(`INSERT INTO public.shift_assignments (block_id, profile_id, status) VALUES ('20000000-0000-4000-8000-000000000017', '${C1}', 'cancelled')`)
+    expect((await claim(await offer(BLK), C1)).outcome).toBe('claimed')
+  })
+  it('two offers the same coach claims back to back: the second, overlapping, is refused', async () => {
+    await other({ id: '20000000-0000-4000-8000-000000000018', start: '06:30', end: '07:30' })
+    const first = await offer(BLK)
+    const second = await asService(`INSERT INTO public.shift_offers (location_id, block_id, offered_by) VALUES ($1, $2, $3) RETURNING id`, [LOC, '20000000-0000-4000-8000-000000000018', MGR])
+    expect((await claim(first, C1)).outcome).toBe('claimed')
+    await expect(claim(second[0].id, C1)).rejects.toThrow(/^claimant_overlap/)
   })
 })
 

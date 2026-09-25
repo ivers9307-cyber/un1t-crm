@@ -198,6 +198,7 @@ describe('offerClaimRpcError', () => {
     expect(offerClaimRpcError(e('offer_not_eligible: x')).status).toBe(403)
     expect(offerClaimRpcError(e('offer_already_on: x'))).toEqual({ status: 409, error: 'You are already on this shift.' })
     expect(offerClaimRpcError(e('dup', '23505'))).toEqual({ status: 409, error: 'You are already on this shift.' })
+    expect(offerClaimRpcError(e('claimant_overlap: x'))).toEqual({ status: 409, error: "You're already on another shift at that time." })
     expect(offerClaimRpcError(e('boom', 'XX000'))).toEqual({ status: 500, error: 'Could not claim the shift.' })
   })
 })

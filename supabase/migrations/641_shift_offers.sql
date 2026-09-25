@@ -53,7 +53,12 @@
 --    its lock and must still name the locked shift.
 --    Errors: P0001 with a message prefix the route maps: offer_bad_request,
 --    offer_not_found, offer_not_open, offer_not_published,
---    offer_not_eligible, offer_already_on.
+--    offer_not_eligible, offer_already_on, claimant_overlap.
+--    Per-claimant advisory lock + overlap check (review 5): the same coach
+--    claiming two overlapping offers at once serialises on
+--    pg_advisory_xact_lock('claim_shift_offer:' || profile), taken before any
+--    row lock, and the second finds the first's PUBLISHED assignment and
+--    raises claimant_overlap. A draft never refuses a claim (review 4).
 --    The route checks, BEFORE calling it: the shift has not started (the one
 --    predicate, swapShiftHasStarted, on the studio clock), and the claimant is
 --    not on approved leave or on an overlapping shift (CANDIDATES.1's
@@ -145,6 +150,13 @@ BEGIN
     RAISE EXCEPTION 'offer_bad_request: an offer and a profile are required';
   END IF;
 
+  -- 0. One claim per CLAIMANT at a time (review 5): the same coach tapping
+  --    Claim on two overlapping offers at once must not win both, and each
+  --    claim's overlap check (step 6) is only race-proof if the other is not
+  --    inserting meanwhile. Taken FIRST, before any row lock, so the order is
+  --    always claimant -> shift -> offer. Released at commit/rollback.
+  PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('claim_shift_offer:' || p_profile_id::text, 0));
+
   -- 1. Which shift? An UNLOCKED read: locking the offer here would take the
   --    offer before the shift, the order a cascading shift delete reverses.
   SELECT o.block_id INTO v_block_id FROM public.shift_offers o WHERE o.id = p_offer_id;
@@ -153,7 +165,7 @@ BEGIN
   END IF;
 
   -- 2. Lock the shift and read what the claim depends on.
-  SELECT b.id, b.location_id, b.block_date, b.min_coaches, b.max_coaches,
+  SELECT b.id, b.location_id, b.block_date, b.start_time, b.end_time, b.min_coaches, b.max_coaches,
          r.status AS roster_status,
          COALESCE(t.kind, 'class') AS kind
     INTO v_block
@@ -204,7 +216,30 @@ BEGIN
     RAISE EXCEPTION 'offer_already_on: the claimant is already on this shift';
   END IF;
 
-  -- 6. Still needed? Filled meanwhile closes the offer and RETURNS (a raise
+  -- 6. Not already working then (review 5): a live assignment of the claimant
+  --    on a PUBLISHED roster (a draft never refuses: review 4, the coach cannot
+  --    see it), at ANY studio, the same day, whose effective window (its
+  --    overrides, else its shift's times) overlaps the offered shift's window.
+  --    Ends that only touch are not an overlap. The route asks CANDIDATES.1
+  --    first; this is the half two concurrent claims cannot race past, under
+  --    the claimant's advisory lock (step 0).
+  IF EXISTS (
+    SELECT 1
+      FROM public.shift_assignments a
+      JOIN public.shift_blocks ob ON ob.id = a.block_id
+      JOIN public.rosters orr ON orr.id = ob.roster_id
+     WHERE a.profile_id = p_profile_id
+       AND a.block_id <> v_block.id
+       AND COALESCE(a.status, 'scheduled') <> 'cancelled'
+       AND orr.status = 'published'
+       AND ob.block_date = v_block.block_date
+       AND COALESCE(a.start_time_override, ob.start_time) < v_block.end_time
+       AND COALESCE(a.end_time_override, ob.end_time) > v_block.start_time
+  ) THEN
+    RAISE EXCEPTION 'claimant_overlap: the claimant is already on another shift at that time';
+  END IF;
+
+  -- 7. Still needed? Filled meanwhile closes the offer and RETURNS (a raise
   --    would roll the close back).
   SELECT count(*) INTO v_live
     FROM public.shift_assignments a
@@ -217,16 +252,16 @@ BEGIN
     RETURN jsonb_build_object('outcome', 'filled', 'offer_id', v_offer.id);
   END IF;
 
-  -- 7. The claimant's cancelled tombstone would trip the (block, profile) key.
+  -- 8. The claimant's cancelled tombstone would trip the (block, profile) key.
   DELETE FROM public.shift_assignments a
    WHERE a.block_id = v_block.id AND a.profile_id = p_profile_id AND a.status = 'cancelled';
 
-  -- 8. Put them on the shift. assigned_by = the claimant: they did it.
+  -- 9. Put them on the shift. assigned_by = the claimant: they did it.
   INSERT INTO public.shift_assignments (block_id, profile_id, status, assigned_by)
   VALUES (v_block.id, p_profile_id, 'scheduled', p_profile_id)
   RETURNING id INTO v_assignment_id;
 
-  -- 9. Close the offer. The lease resets: the managers' "taken" notice is a
+  -- 10. Close the offer. The lease resets: the managers' "taken" notice is a
   --    new phase with its own attempts.
   UPDATE public.shift_offers
      SET status = 'claimed', claimed_by = p_profile_id, claimed_at = now(), closed_at = now(),

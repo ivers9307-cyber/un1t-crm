@@ -5026,7 +5026,7 @@ registry.registerPath({
   tags: ['Schedule'],
   security: [{ CookieAuth: [] }],
   summary: 'Claim an offered shift',
-  description: 'First to claim gets it (claim_shift_offer locks the offer). The caller must belong to the studio (404 otherwise), and must not be on approved leave that day or on another shift at that time; unavailability does not block a claim. The managers are told who took it (07:00-22:00 studio time).',
+  description: 'First to claim gets it (claim_shift_offer locks the shift, then the offer). The caller must belong to the studio (404 otherwise), and must not be on approved leave that day or on another PUBLISHED shift at that time (checked again inside the database, per claimant, so two overlapping claims cannot both win); unavailability and draft shifts do not block a claim. The managers are told who took it (07:00-22:00 studio time).',
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: "Claimed; the shift is on the caller's roster" },
