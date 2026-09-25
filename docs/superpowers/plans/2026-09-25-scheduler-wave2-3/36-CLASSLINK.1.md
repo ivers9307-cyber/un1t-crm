@@ -28,8 +28,8 @@
 **Live data (counts only):** 632 rows, all UN1T Stillorgan, 18 Jun → 27 Sep 2026 (the sync fetches 48 hours ahead), 1.5 MB. 0 null `glofox_event_id`. 184 rows in the last 28 days, 8 ahead. `raw->'trainers'` is an array of 24-hex STRINGS on every row (656 entries, 24 rows carry two trainers, max 2), **5 distinct trainer ids**. **`instructor` is NULL on 632 of 632 rows** (see Follow-ups). Hatch Street has no rows and no working Glofox credentials (`settings.glofox` has no `branch_id`/`api_key`; its `channel_connections` Glofox row is inactive). All studios' `locations.timezone` = `Europe/Dublin`. Stillorgan has 12 active members, Hatch 5.
 
 **The one writer.** `syncOccurrencesForLocation` (`src/lib/class-occurrences.js:223-338`), called every 15 minutes by `src/app/api/cron/sync-class-occurrences/route.js`:
-- maps each active, non-private Glofox event with `mapEventToOccurrence` (`:96-129`) to `{ location_id, glofox_event_id, name, program, starts_at, ends_at, capacity, instructor, raw, synced_at }` and upserts with `onConflict: 'location_id,glofox_event_id'` (`:255-258`);
-- reconciles cancellations inside the fetched window: reads `glofox_event_id` for the window (`:272-279`), keeps ids not seen (`.filter((id) => id && …)`, `:280-282`), stamps `cancelled_at` with `.in('glofox_event_id', goneIds)` (`:283-289`). **A row with a null `glofox_event_id` can never be cancelled by it** (the `id &&` filter and the `.in`);
+- maps each active, non-private Glofox event with `mapEventToOccurrence` (`:96-123`) to `{ location_id, glofox_event_id, name, program, starts_at, ends_at, capacity, instructor, raw, synced_at }` and upserts with `onConflict: 'location_id,glofox_event_id'` (`:256-258`);
+- reconciles cancellations inside the fetched window: reads `glofox_event_id` for the window (`:272-278`), keeps ids not seen (`.filter((id) => id && …)`, `:279-281`), stamps `cancelled_at` with `.in('glofox_event_id', goneIds)` (`:283-289`). **A row with a null `glofox_event_id` can never be cancelled by it** (the `id &&` filter and the `.in`);
 - backfills `instructor` by `raw->trainers->>0` (`:310-335`).
 Rows are never deleted, only stamped, so a row's `id` is stable across syncs (the upsert keeps the row). CLASSLINK.2 can therefore reference `class_occurrences.id`.
 
@@ -42,7 +42,7 @@ Rows are never deleted, only stamped, so a row's `id` is stable across syncs (th
 | `class-climate-runner.js:43-49` via `planClassClimate` (`class-climate.js:82-98`) | **Yes**: `automation_fire_log` (mig 284) is keyed `(automation_key, glofox_event_id, device_id, action_step)`, `glofox_event_id NOT NULL` | already skipped (`class-climate.js:86` `if (!occ?.glofox_event_id …) continue`). **Pinned.** |
 | `bathroom-climate-runner.js:56-62` via `planBathroomClimate` (`bathroom-climate.js:54-70`) | **Yes** (same fire log) | already skipped (`bathroom-climate.js:58`). **Pinned.** |
 | sync reconcile (above) | **Yes** | never cancelled. **Pinned.** |
-| `shared/studio-kpis.js:287-296` → `computeFloor` (`shared/studio-kpi-math.js:192-196`) | joins bookings by it | counted as a class with no Glofox bookings (a null key never matches a booking). Harmless; `shared/` untouched (no OTA). |
+| `shared/studio-kpis.js:288-296` → `computeFloor` (`shared/studio-kpi-math.js:192-196`) | joins bookings by it | counted as a class with no Glofox bookings (a null key never matches a booking). Harmless; `shared/` untouched (no OTA). |
 | `automations/[key]/schedule/route.js:38-45` → `ClassClimateCard.jsx:225`, `BathroomClimateCard.jsx:225` (`key={c.glofox_event_id}`) | React list key only | a duplicate `null` key warning; listed as a follow-up for the PR that writes non-Glofox rows. |
 | `auto-end-stale-hr-sessions/route.js:90`, `credit-attendance/route.js:129-132`, `bridge-samples.js:442-447`, `class-bookings.js:232-236` | look up BY ids taken from other tables | a null never matches. Safe. |
 | `fleet-health/route.js:313`, `hyrox/publish-runner.js:26`, `hyrox/reminder-runner.js:23`, `(members)/hyrox/page.js:63`, `shelly/reconcile.js:223`, `shared/dashboard-data.js:684`, `class-categories.js:43` | no | unaffected (time and name only). |
@@ -52,11 +52,11 @@ Nothing in `mobile/` or `champ-app` reads `class_occurrences`. No reader uses `s
 
 **Customer class screens do NOT read the spine.** `src/lib/public-classes.js:13-30` (the `/start` picker, `/api/public/classes`) and `src/lib/today-feed-data.js` read Glofox live via `fetchUpcomingEvents`, and carry the Glofox event id (`event_id: e._id || e.id`, `public-classes.js:21`). So CLASSLINK.3 will need event id → spine row, which is exactly the kept `UNIQUE (location_id, glofox_event_id)` (D2).
 
-**Trainers today.** STUDIO-KPI.4 maps a trainer id to a display NAME: operator overrides in `settings.glofox.trainer_names` (edited as "id = Name" lines in `GlofoxIntegrationTab.jsx:203-230`, owner/master only; `src/lib/glofox-trainer-names.js`), else `GET /2.0/trainers`, else `GET /2.0/members/{id}` per id (cap 10 per run) (`resolveTrainerNames`, `class-occurrences.js:149-209`). **No override is set anywhere** (neither `locations.settings.glofox` nor `channel_connections.config`) and the API resolves none, so all 632 `instructor` values are NULL. There is no trainer id → staff PROFILE mapping anywhere. `extractTrainerIds` (`:55-66`) is the id rule: 24-hex, lowercased, strings or objects' `_id`.
+**Trainers today.** STUDIO-KPI.4 maps a trainer id to a display NAME: operator overrides in `settings.glofox.trainer_names` (edited as "id = Name" lines in `GlofoxIntegrationTab.jsx:214-238`, owner/master only; `src/lib/glofox-trainer-names.js`), else `GET /2.0/trainers`, else `GET /2.0/members/{id}` per id (cap 10 per run) (`resolveTrainerNames`, `class-occurrences.js:149-190`). **No override is set anywhere** (neither `locations.settings.glofox` nor `channel_connections.config`) and the API resolves none, so all 632 `instructor` values are NULL. There is no trainer id → staff PROFILE mapping anywhere. `extractTrainerIds` (`:55-65`) is the id rule: 24-hex, lowercased, strings or objects' `_id`.
 
 **The un1t.online design draft disagrees with row 36.** `~/code/un1t-crm/docs/superpowers/specs/2026-09-01-un1t-online-hatch-integration-design.md` (untracked in the primary checkout, NOT on `main`) §3.3 decided to write Hatch event ids INTO `glofox_event_id` and add a `source_platform` column. Row 36 (25 Sep) says `glofox_event_id` becomes optional. This plan follows row 36 and says why in D2; open question 1 asks Richard to confirm so the spec can be corrected.
 
-**Access pattern to copy:** `src/app/api/schedule/grid/route.js:38-62` (query-param studio): `hasRoleAtAnyLocation(user, MANAGER_ROLES)` → 403; zod on the query → 400; `assertLocationAccess(user, location_id)` → 403; `hasRoleAtLocation(user, location_id, MANAGER_ROLES)` → 403. Its test harness (`grid/route.test.js:1-60`) mocks `@/lib/auth` keeping the REAL role helpers.
+**Access pattern to copy:** `src/app/api/schedule/grid/route.js:40-62` (query-param studio): `hasRoleAtAnyLocation(user, MANAGER_ROLES)` → 403; zod on the query → 400; `assertLocationAccess(user, location_id)` → 403; `hasRoleAtLocation(user, location_id, MANAGER_ROLES)` → 403. Its test harness (`grid/route.test.js:1-60`) mocks `@/lib/auth` keeping the REAL role helpers.
 
 **Migration style to copy:** mig 634 (new service-role-only table, `supabase/migrations/634_roster_publish_snapshots.sql`) and mig 628 (additive ALTER with a self-check, `628_shift_template_kind.sql`); PGlite replay `tests/migration-634-roster-publish-snapshots.test.js`.
 
@@ -70,7 +70,7 @@ Nothing in `mobile/` or `champ-app` reads `class_occurrences`. No reader uses `s
 
 **D3. The database derives the Glofox columns; the Glofox writer names none of them.** A `BEFORE INSERT OR UPDATE OF source, glofox_event_id, raw, source_ref, instructor_refs` trigger sets, for a Glofox row only, `source_ref := glofox_event_id` and `instructor_refs :=` the trainer ids in `raw.trainers` by `extractTrainerIds`'s rule (24-hex, strings or objects' `_id`, lowercased, first-seen order, no repeats). Why in SQL, not in `mapEventToOccurrence`: a `NOT NULL` column the running writer does not name would fail EVERY sync from the moment the migration lands until the deploy (the spine goes stale; the AC and HR linking read it), and naming the new columns in the writer would 400 every sync if the deploy ever came first. With the trigger, the unchanged writer is correct before, during and after, and no writer can desync the derived columns (an UPDATE that sets them is re-derived). Rows of other sources are left exactly as their writer set them. *Pinned:* replay "the UNCHANGED Glofox writer still works", "the PostgREST-shaped upsert … re-derives on a trainer change and keeps the row id", "a write cannot desync the derived columns", "backfills every existing row" (the `extractTrainerIds` fixtures); `class-occurrences-source.test.js` "the Glofox writer names none of the new columns".
 
-**D4. `instructor_refs text[]` on the occurrence, not a join table.** Tiny (≤ 2 per class today), always read with its occurrence, ordered (the first is Glofox's lead trainer, which the name backfill already treats specially, `class-occurrences.js:301-309`). CLASSLINK.2 joins it to `class_instructor_links` on `(location_id, source, ref)`. No index: 1.5 MB table, per-studio reads bounded by `(location_id, starts_at)`.
+**D4. `instructor_refs text[]` on the occurrence, not a join table.** Tiny (≤ 2 per class today), always read with its occurrence, ordered (the first is Glofox's lead trainer, which the name backfill already treats specially, `class-occurrences.js:297-309`). CLASSLINK.2 joins it to `class_instructor_links` on `(location_id, source, ref)`. No index: 1.5 MB table, per-studio reads bounded by `(location_id, starts_at)`.
 
 **D5. The mapping is its own table, per studio: `class_instructor_links (location_id, source, external_instructor_id) → profile_id`.** Per studio because Glofox trainer ids belong to a branch, and a coach at both studios is two ids anyway. `UNIQUE (location_id, source, external_instructor_id)`: one id is exactly one person; one person may have several ids (a duplicate trainer account). Glofox ids are stored lowercase 24-hex (CHECK). `profile_id → profiles ON DELETE CASCADE` (a staff profile is never deleted, CLAUDE.md, so it never fires; the mig 622 tombstone needs nothing), `location_id → locations ON DELETE CASCADE`, `updated_by` a plain uuid with no FK (the mig 634 D5 reasoning). Service role only: RLS on, no policies, browser privileges revoked, `service_role` SELECT/INSERT/UPDATE/DELETE only. **Kept apart from `settings.glofox.trainer_names`**, which maps an id to a display NAME for the scorecard, is owner-only, and may name someone who is not staff; nothing here changes names, `instructor` or the scorecard (open question 2). *Pinned:* replay `class_instructor_links` describe.
 
@@ -107,7 +107,7 @@ Nothing in `mobile/` or `champ-app` reads `class_occurrences`. No reader uses `s
 | `src/app/settings/shifts/page.js` | Modify (whole file shown) | Render the section |
 | `src/lib/openapi.js` | Modify (import block; after the `/api/locations/{id}/glofox-trainers` registration, which closes at line 3772) | GET + PUT |
 | `src/lib/openapi.test.js` | Modify (append one `it` before the final `})`) | |
-| `eslint.guardrails.config.mjs` | Modify (`no-unchecked-supabase-write` `files`, after `'src/app/api/schedule/assignments/*/replace/**',` at line 319) | Arm the new IO + route |
+| `eslint.guardrails.config.mjs` | Modify (`no-unchecked-supabase-write` `files`, after `'src/app/api/schedule/assignments/*/replace/**',` at line 320) | Arm the new IO + route |
 | `docs/roster-v2.md` | Modify (append after "Publish snapshots", line 239 onward) | Section "Class schedule sources and timetable coaches" |
 | `docs/CHANGELOG.md` | Modify (after `gh pr create`) | One row |
 
@@ -498,7 +498,7 @@ Expected: FAIL, `ENOENT: no such file or directory … 636_class_schedule_platfo
 --       only, source_ref := glofox_event_id and instructor_refs := the 24-hex
 --       ids in raw.trainers (string entries, or objects' _id), lowercased,
 --       first-seen order, no repeats. That is extractTrainerIds's rule
---       (src/lib/class-occurrences.js:55-66); the replay runs its fixtures.
+--       (src/lib/class-occurrences.js:55-65); the replay runs its fixtures.
 --       Rows of any other source are left exactly as their writer set them.
 --   public.class_instructor_links (new): which staff profile an instructor id
 --     is, per studio. UNIQUE (location_id, source, external_instructor_id):
@@ -2118,3 +2118,850 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ---
 
+### Task 5: Glofox-keyed readers skip rows without a Glofox id (D7), and the writer is pinned (D3)
+
+**Files:**
+- Create: `src/lib/class-occurrences-source.test.js`
+- Modify: `src/lib/class-occurrences.js` (header comment lines 1-7; the loop at 380-384 in `resolveCurrentOccurrence`; the loop at 406-410 in `resolveCurrentClassForTv`)
+- Modify: `src/lib/class-climate-runner.test.js` (one `it` at the end of `describe('runClassClimateForLocation', …)`, after "is idempotent — a prior fired fire-log row blocks a re-fire"; one `it` at the end of `describe('syncOccurrencesForLocation: cancellation reconciliation', …)`, after "un-cancels a reinstated class")
+- Modify: `src/lib/bathroom-climate.test.js` (append one `describe` at the end of the file)
+
+- [ ] **Step 1: Write the failing test** at `src/lib/class-occurrences-source.test.js`:
+
+```js
+// CLASSLINK.1 (mig 636) — the spine is platform-neutral; its Glofox-keyed
+// readers are not yet. Pinned here:
+//   D3: the Glofox writer names none of the columns the database derives, so
+//       it is correct whichever of migration and deploy came first;
+//   D7: the two "class on now" resolvers skip a row with no Glofox id, because
+//       every caller keys something by it (HR sessions, detections, the timer,
+//       the TV card).
+
+import { describe, it, expect } from 'vitest'
+import { mapEventToOccurrence, resolveCurrentOccurrence, resolveCurrentClassForTv } from './class-occurrences.js'
+
+const LOC = 'a0000000-0000-0000-0000-000000000001'
+const NOW = Date.parse('2026-09-28T05:40:00.000Z')
+
+// Answers every select with `rows`, in the order given (the resolvers order
+// newest-started first in SQL; the fake trusts the caller's order).
+function dbReturning(rows) {
+  const chain = {
+    select() { return chain },
+    eq() { return chain },
+    gte() { return chain },
+    lte() { return chain },
+    is() { return chain },
+    order() { return chain },
+    then(resolve, reject) { return Promise.resolve({ data: rows, error: null }).then(resolve, reject) },
+  }
+  return { from: () => chain }
+}
+
+const glofoxRow = {
+  glofox_event_id: 'evt-1', name: 'Strength 45', program: 'Strength',
+  starts_at: '2026-09-28T05:30:00.000Z', ends_at: '2026-09-28T06:15:00.000Z',
+}
+// Live and started more recently, so it would win if it were not skipped.
+const otherRow = {
+  glofox_event_id: null, name: 'Engine', program: null,
+  starts_at: '2026-09-28T05:35:00.000Z', ends_at: '2026-09-28T06:20:00.000Z',
+}
+
+describe('the Glofox writer (D3)', () => {
+  it('names none of the columns the database derives', () => {
+    const row = mapEventToOccurrence({
+      _id: 'evt-1', name: 'Strength 45', time_start: Math.floor(NOW / 1000), duration: 45,
+      trainers: ['61a38e7d0cf1970aae0fb3a9'],
+    }, LOC)
+    expect(row.glofox_event_id).toBe('evt-1')
+    for (const col of ['source', 'source_ref', 'instructor_refs']) expect(row).not.toHaveProperty(col)
+  })
+})
+
+describe('resolveCurrentOccurrence (D7)', () => {
+  it('skips a live class with no Glofox id and answers with the Glofox one', async () => {
+    const out = await resolveCurrentOccurrence(dbReturning([otherRow, glofoxRow]), { locationId: LOC, nowMs: NOW })
+    expect(out).toEqual({ glofox_event_id: 'evt-1', class_name: 'Strength 45', ends_at: glofoxRow.ends_at })
+  })
+
+  it('answers null when the only live class has no Glofox id', async () => {
+    expect(await resolveCurrentOccurrence(dbReturning([otherRow]), { locationId: LOC, nowMs: NOW })).toBeNull()
+  })
+})
+
+describe('resolveCurrentClassForTv (D7)', () => {
+  it('skips a live class with no Glofox id and answers with the Glofox one', async () => {
+    const out = await resolveCurrentClassForTv(dbReturning([otherRow, glofoxRow]), { locationId: LOC, nowMs: NOW })
+    expect(out).toEqual({ glofox_event_id: 'evt-1', class_name: 'Strength 45', program: 'Strength', starts_at: glofoxRow.starts_at })
+  })
+
+  it('answers null when the only live class has no Glofox id', async () => {
+    expect(await resolveCurrentClassForTv(dbReturning([otherRow]), { locationId: LOC, nowMs: NOW })).toBeNull()
+  })
+})
+```
+
+- [ ] **Step 2: Run it to see what fails**
+
+Run: `npx vitest run src/lib/class-occurrences-source.test.js`
+Expected: the D3 test PASSES (it pins today's writer); the four D7 tests FAIL (the resolvers return the id-less `Engine` row, or it, instead of `null`).
+
+- [ ] **Step 3: Make the resolvers skip rows without a Glofox id.** In `src/lib/class-occurrences.js`:
+
+Replace the header comment (lines 1-7):
+
+```js
+// CLASS-CLIMATE.1 — the schedule "spine": mirror the Glofox timetable
+// into class_occurrences so schedule-driven automations (and, later, HR
+// allocation) can read "what class runs when, where" without a live
+// Glofox call on every tick.
+//
+// Pure mappers are exported + unit-tested; syncOccurrencesForLocation
+// does the IO (fetch + upsert).
+```
+
+with:
+
+```js
+// CLASS-CLIMATE.1 — the schedule "spine": mirror the Glofox timetable
+// into class_occurrences so schedule-driven automations (and, later, HR
+// allocation) can read "what class runs when, where" without a live
+// Glofox call on every tick.
+//
+// Pure mappers are exported + unit-tested; syncOccurrencesForLocation
+// does the IO (fetch + upsert).
+//
+// CLASSLINK.1 (mig 636) — the spine is platform-neutral: every row has a
+// source ('glofox' for everything written here), a source_ref and
+// instructor_refs. For Glofox rows the DATABASE derives source_ref and
+// instructor_refs (trigger class_occurrences_derive_refs), so this writer
+// deliberately names none of the three: it stays correct whichever of the
+// migration and the deploy came first. glofox_event_id is optional now
+// (Glofox rows only). The two resolvers at the end skip a row without one,
+// because every caller keys something by it (HR sessions, detections, the
+// timer, the TV card); re-key them before any other source writes rows.
+```
+
+In `resolveCurrentOccurrence`, replace:
+
+```js
+  for (const occ of data || []) {
+    if (occurrenceIsLive(occ, nowMs)) {
+      return { glofox_event_id: occ.glofox_event_id, class_name: occ.name || null, ends_at: occ.ends_at ?? null }
+    }
+  }
+```
+
+with:
+
+```js
+  for (const occ of data || []) {
+    // CLASSLINK.1 — a class from another source has no Glofox id to stamp.
+    if (!occ.glofox_event_id) continue
+    if (occurrenceIsLive(occ, nowMs)) {
+      return { glofox_event_id: occ.glofox_event_id, class_name: occ.name || null, ends_at: occ.ends_at ?? null }
+    }
+  }
+```
+
+In `resolveCurrentClassForTv`, replace:
+
+```js
+  for (const occ of data || []) {
+    if (occurrenceIsLive(occ, nowMs)) {
+      return { glofox_event_id: occ.glofox_event_id, class_name: occ.name || null, program: occ.program || null, starts_at: occ.starts_at }
+    }
+  }
+```
+
+with:
+
+```js
+  for (const occ of data || []) {
+    // CLASSLINK.1 — the TV card is keyed by the Glofox id; another source has none.
+    if (!occ.glofox_event_id) continue
+    if (occurrenceIsLive(occ, nowMs)) {
+      return { glofox_event_id: occ.glofox_event_id, class_name: occ.name || null, program: occ.program || null, starts_at: occ.starts_at }
+    }
+  }
+```
+
+- [ ] **Step 4: Pin the readers that already behave.** In `src/lib/class-climate-runner.test.js`, add at the end of `describe('runClassClimateForLocation', …)` (after the "is idempotent" `it`):
+
+```js
+  it('CLASSLINK.1: never plans or fires for an occurrence with no Glofox id (the fire log is keyed by it)', async () => {
+    const db = makeDb({ class_occurrences: [{ ...occ(null), source: 'un1t_online', source_ref: 'u-1' }] })
+    const out = await runClassClimateForLocation(db, { location_id: LOC, config: CONFIG }, { nowMs: NOW })
+    expect(out.planned).toEqual([])
+    expect(out.actions).toEqual([])
+    expect(vendorTurnOn).not.toHaveBeenCalled()
+    expect(db._calls.upserts.filter((u) => u.table === 'automation_fire_log')).toEqual([])
+    expect(db._store.ac_sessions).toHaveLength(0)
+  })
+```
+
+and at the end of `describe('syncOccurrencesForLocation: cancellation reconciliation', …)` (after "un-cancels a reinstated class"):
+
+```js
+  it('CLASSLINK.1: never cancels a row from another source (it has no Glofox id), even inside the window', async () => {
+    const other = { ...occ(null, { startOffsetMin: 90 }), source: 'un1t_online', source_ref: 'u-1' }
+    const db = makeDb({ class_occurrences: [occ('evt-live', { startOffsetMin: 60 }), other] })
+    fetchUpcomingEvents.mockResolvedValue({ ok: true, events: [glofoxEvent('evt-live', 60)] })
+
+    const out = await syncOccurrencesForLocation(db, { locationId: LOC, creds, nowMs: NOW })
+    expect(out.ok).toBe(true)
+    expect(out.cancelled).toBe(0)
+    expect(db._store.class_occurrences.find((r) => r.source_ref === 'u-1').cancelled_at).toBeNull()
+  })
+```
+
+In `src/lib/bathroom-climate.test.js`, append at the end of the file:
+
+```js
+describe('CLASSLINK.1: an occurrence with no Glofox id', () => {
+  it('is never planned (the fire log is keyed by it); the same class with an id is', () => {
+    const inWindow = at('2026-07-27T10:50:00.000Z')
+    expect(planBathroomClimate({ occurrences: [occ({ glofox_event_id: null, source: 'un1t_online' })], config: CFG, nowMs: inWindow })).toEqual([])
+    expect(planBathroomClimate({ occurrences: [occ()], config: CFG, nowMs: inWindow })).toHaveLength(1)
+  })
+})
+```
+
+- [ ] **Step 5: Run everything that reads the spine**
+
+Run: `npx vitest run src/lib/class-occurrences-source.test.js src/lib/class-climate-runner.test.js src/lib/bathroom-climate.test.js src/lib/class-climate.test.js src/lib/class-occurrences-trainers.test.js src/lib/bathroom-climate-runner.test.js src/lib/live-class.test.js src/lib/bridge-samples.test.js src/lib/hr-detections.test.js 'src/app/api/public/live/[locationId]/route.test.js' src/app/api/wearables/apple-health/ingest/route.test.js`
+Expected: PASS. The three pins pass on arrival (they record behaviour that already holds); the four D7 tests now pass; nothing else moved (every existing fixture carries a Glofox id).
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/lib/class-occurrences.js src/lib/class-occurrences-source.test.js src/lib/class-climate-runner.test.js src/lib/bathroom-climate.test.js
+git commit -m "CLASSLINK.1 — the class-on-now resolvers skip a row with no Glofox id; pin the writer, the climate planners and the reconcile
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 6: "Timetable coaches" on the shift templates page
+
+**Files:**
+- Create: `src/components/schedule/ClassInstructorLinks.jsx`
+- Create: `src/components/schedule/ClassInstructorLinks.test.jsx`
+- Modify: `src/app/settings/shifts/page.js` (whole file below)
+
+- [ ] **Step 1: Write the failing test** at `src/components/schedule/ClassInstructorLinks.test.jsx`:
+
+```jsx
+// @vitest-environment jsdom
+//
+// CLASSLINK.1 — the "Timetable coaches" section on /settings/shifts. One read
+// on open; each instructor id shown by what a manager recognises (class count,
+// weekly slots, the raw id); one select per id; a link or unlink is one PUT;
+// a refusal is shown on its row and the old choice stays.
+
+import React from 'react'
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { render, screen, cleanup, fireEvent, act, waitFor } from '@testing-library/react'
+
+import ClassInstructorLinks from './ClassInstructorLinks'
+
+const LOC = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+const ID1 = '61a38e7d0cf1970aae0fb3a9'
+const ID2 = 'deadbeefdeadbeefdeadbeef'
+const P1 = '11111111-1111-4111-8111-111111111111'
+const P2 = '22222222-2222-4222-8222-222222222222'
+const P3 = '33333333-3333-4333-8333-333333333333'
+const ROW1 = 'Team member for Glofox coach …0fb3a9'
+const ROW2 = 'Team member for Jess Murphy'
+
+const DATA = {
+  window_days: 28,
+  instructors: [
+    {
+      source: 'glofox', external_id: ID1, classes: 12, label: null,
+      slots: [
+        { name: 'Strength 45', weekday: 'Mon', time: '06:30', count: 4 },
+        { name: 'HYROX', weekday: 'Wed', time: '18:00', count: 3 },
+      ],
+      link: null,
+    },
+    {
+      source: 'glofox', external_id: ID2, classes: 1, label: 'Jess Murphy', slots: [],
+      link: { profile_id: P3, full_name: 'Cal Former', at_studio: false },
+    },
+  ],
+  coaches: [{ id: P1, full_name: 'Alex Example' }, { id: P2, full_name: 'Bea Sample' }],
+}
+
+const reply = (body, status = 200) => ({ ok: status < 400, status, redirected: false, json: async () => body })
+
+function mockFetch(handler) {
+  global.fetch = vi.fn(async (url, opts = {}) => handler(String(url), opts))
+}
+const puts = () => global.fetch.mock.calls.filter(([, o]) => o?.method === 'PUT')
+
+async function open(props = {}) {
+  await act(async () => {
+    render(<ClassInstructorLinks locationId={LOC} locationName="Studio North" {...props} />)
+  })
+}
+
+afterEach(() => { cleanup(); vi.restoreAllMocks() })
+
+describe('ClassInstructorLinks (CLASSLINK.1)', () => {
+  it('asks for this studio\'s timetable coaches once, and shows each by what a manager recognises', async () => {
+    mockFetch(() => reply({ success: true, data: DATA }))
+    await open()
+    expect(await screen.findByText('Glofox coach …0fb3a9')).toBeTruthy()
+    expect(global.fetch).toHaveBeenCalledTimes(1)
+    expect(global.fetch.mock.calls[0][0]).toBe(`/api/schedule/class-instructors?location_id=${LOC}`)
+    expect(screen.getByText('12 classes · Strength 45 · Mon 06:30 · HYROX · Wed 18:00')).toBeTruthy()
+    expect(screen.getByText(ID1)).toBeTruthy()
+    expect(screen.getByText('Jess Murphy')).toBeTruthy()
+    expect(screen.getByText('1 class')).toBeTruthy()
+    expect(screen.getByText('Counts cover the last 28 days and the classes already on the timetable.')).toBeTruthy()
+  })
+
+  it('offers "Not linked" and the team, and shows a stale link as no longer at this studio', async () => {
+    mockFetch(() => reply({ success: true, data: DATA }))
+    await open()
+    const first = await screen.findByLabelText(ROW1)
+    expect(first.value).toBe('')
+    expect([...first.options].map((o) => o.textContent)).toEqual(['Not linked', 'Alex Example', 'Bea Sample'])
+    const stale = screen.getByLabelText(ROW2)
+    expect(stale.value).toBe(P3)
+    const staleOption = [...stale.options].find((o) => o.value === P3)
+    expect(staleOption.textContent).toBe('Cal Former (no longer at this studio)')
+    expect(staleOption.disabled).toBe(true)
+  })
+
+  it('linking sends one PUT with the studio, source, id and person, and shows the choice', async () => {
+    mockFetch((url, opts) => (opts.method === 'PUT'
+      ? reply({ success: true, data: { link: { id: 'l1', source: 'glofox', external_instructor_id: ID1, profile_id: P2, updated_at: '2026-09-25T16:00:00Z' }, removed: 0 } })
+      : reply({ success: true, data: DATA })))
+    await open()
+    const select = await screen.findByLabelText(ROW1)
+    await act(async () => { fireEvent.change(select, { target: { value: P2 } }) })
+    expect(puts()).toHaveLength(1)
+    expect(puts()[0][0]).toBe('/api/schedule/class-instructors')
+    expect(JSON.parse(puts()[0][1].body)).toEqual({ location_id: LOC, source: 'glofox', external_id: ID1, profile_id: P2 })
+    await waitFor(() => expect(screen.getByLabelText(ROW1).value).toBe(P2))
+  })
+
+  it('choosing "Not linked" unlinks (profile_id null) and the stale entry goes', async () => {
+    mockFetch((url, opts) => (opts.method === 'PUT'
+      ? reply({ success: true, data: { link: null, removed: 1 } })
+      : reply({ success: true, data: DATA })))
+    await open()
+    const stale = await screen.findByLabelText(ROW2)
+    await act(async () => { fireEvent.change(stale, { target: { value: '' } }) })
+    expect(JSON.parse(puts()[0][1].body)).toEqual({ location_id: LOC, source: 'glofox', external_id: ID2, profile_id: null })
+    await waitFor(() => expect(screen.getByLabelText(ROW2).value).toBe(''))
+    expect(screen.queryByText('Cal Former (no longer at this studio)')).toBeNull()
+  })
+
+  it('a refused link shows the server\'s words on that row and keeps the old choice', async () => {
+    mockFetch((url, opts) => (opts.method === 'PUT'
+      ? reply({ success: false, error: 'Pick someone who is an active member of this studio' }, 400)
+      : reply({ success: true, data: DATA })))
+    await open()
+    const select = await screen.findByLabelText(ROW1)
+    await act(async () => { fireEvent.change(select, { target: { value: P1 } }) })
+    expect((await screen.findByRole('alert')).textContent).toBe('Pick someone who is an active member of this studio')
+    expect(screen.getByLabelText(ROW1).value).toBe('')
+  })
+
+  it('a studio with no timetable says so, by name', async () => {
+    mockFetch(() => reply({ success: true, data: { ...DATA, instructors: [] } }))
+    await open()
+    expect(await screen.findByText('No classes from a booking system at Studio North in the last 28 days, so there is nothing to link yet.')).toBeTruthy()
+    expect(screen.queryByRole('combobox')).toBeNull()
+  })
+
+  it('a failed load says why and retries', async () => {
+    let calls = 0
+    mockFetch(() => (++calls === 1 ? reply({ success: false, error: 'boom' }, 500) : reply({ success: true, data: DATA })))
+    await open()
+    expect(await screen.findByText('Could not load the timetable coaches')).toBeTruthy()
+    expect(screen.getByText('boom')).toBeTruthy()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })) })
+    expect(await screen.findByText('Glofox coach …0fb3a9')).toBeTruthy()
+    expect(global.fetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('reads nothing without a studio', async () => {
+    mockFetch(() => reply({ success: true, data: DATA }))
+    await open({ locationId: null })
+    expect(global.fetch).not.toHaveBeenCalled()
+  })
+})
+```
+
+- [ ] **Step 2: Run it to see it fail**
+
+Run: `npx vitest run src/components/schedule/ClassInstructorLinks.test.jsx`
+Expected: FAIL, `Failed to resolve import "./ClassInstructorLinks"`.
+
+- [ ] **Step 3: Write the component** at `src/components/schedule/ClassInstructorLinks.jsx`:
+
+```jsx
+'use client'
+
+// CLASSLINK.1 — "Timetable coaches", under the shift templates on
+// /settings/shifts. The class timetable (class_occurrences, from Glofox at
+// Stillorgan today) names each class's coach by an opaque id, and Glofox does
+// not give us their names; this is where a manager says which person on the
+// team each id is. CLASSLINK.2 will use the links to check shifts against the
+// timetable. Nothing here reaches members.
+//
+// Names only: the route sends ids, names, class counts and weekly slots. No
+// capacity, no booked counts, no contracted hours.
+
+import { useCallback, useEffect, useState } from 'react'
+import ScheduleErrorBanner from './ScheduleErrorBanner'
+import { readJson } from './useScheduleData'
+import { instructorKey, sourceLabel, shortRef } from '@/lib/class-instructors'
+
+const ROUTE = '/api/schedule/class-instructors'
+
+function titleOf(i) {
+  return i.label || `${sourceLabel(i.source)} coach ${shortRef(i.external_id)}`
+}
+
+function detailOf(i) {
+  const parts = [i.classes === 1 ? '1 class' : `${i.classes} classes`]
+  for (const s of i.slots || []) parts.push(`${s.name} · ${s.weekday} ${s.time}`)
+  return parts.join(' · ')
+}
+
+export default function ClassInstructorLinks({ locationId, locationName = 'this studio' }) {
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(!!locationId)
+  const [loadError, setLoadError] = useState(null)
+  const [saving, setSaving] = useState({})
+  const [rowErrors, setRowErrors] = useState({})
+
+  const load = useCallback(async () => {
+    if (!locationId) return
+    setLoading(true)
+    setLoadError(null)
+    try {
+      const body = await readJson(`${ROUTE}?location_id=${encodeURIComponent(locationId)}`)
+      setData(body.data || null)
+    } catch (err) {
+      setLoadError(err?.message || 'Could not load the timetable coaches')
+    } finally {
+      setLoading(false)
+    }
+  }, [locationId])
+
+  useEffect(() => { load() }, [load])
+
+  async function choose(instructor, profileId) {
+    const key = instructorKey(instructor.source, instructor.external_id)
+    setSaving((s) => ({ ...s, [key]: true }))
+    setRowErrors((e) => {
+      const next = { ...e }
+      delete next[key]
+      return next
+    })
+    try {
+      const body = await readJson(ROUTE, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          location_id: locationId,
+          source: instructor.source,
+          external_id: instructor.external_id,
+          profile_id: profileId || null,
+        }),
+      })
+      const saved = body.data?.link || null
+      setData((d) => ({
+        ...d,
+        instructors: d.instructors.map((i) => (instructorKey(i.source, i.external_id) === key
+          ? {
+              ...i,
+              link: saved
+                ? { profile_id: saved.profile_id, full_name: d.coaches.find((c) => c.id === saved.profile_id)?.full_name || null, at_studio: true }
+                : null,
+            }
+          : i)),
+      }))
+    } catch (err) {
+      setRowErrors((e) => ({ ...e, [key]: err?.message || 'Could not save that link' }))
+    } finally {
+      setSaving((s) => ({ ...s, [key]: false }))
+    }
+  }
+
+  return (
+    <section aria-labelledby="class-instructors-heading" className="max-w-3xl">
+      <h2 id="class-instructors-heading" className="text-lg font-semibold text-un1t-text">Timetable coaches</h2>
+      <p className="text-sm text-un1t-subtle mt-1">
+        The class timetable names each coach by an id from the booking system. Link each one to the person on
+        your team. The roster will use these links to check shifts against the timetable. Members never see this.
+      </p>
+
+      {loadError && (
+        <div className="mt-3">
+          <ScheduleErrorBanner title="Could not load the timetable coaches" message={loadError} onRetry={load} busy={loading} />
+        </div>
+      )}
+
+      {!loadError && loading && <p className="text-sm text-un1t-muted mt-3">Loading timetable coaches…</p>}
+
+      {!loadError && !loading && data && data.instructors.length === 0 && (
+        <p className="text-sm text-un1t-muted mt-3">
+          No classes from a booking system at {locationName} in the last {data.window_days} days, so there is nothing to link yet.
+        </p>
+      )}
+
+      {!loadError && !loading && data && data.instructors.length > 0 && (
+        <>
+          <p className="text-xs text-un1t-muted mt-3">
+            Counts cover the last {data.window_days} days and the classes already on the timetable.
+          </p>
+          <ul className="mt-2 divide-y divide-un1t-border border border-un1t-border rounded-lg bg-un1t-surface">
+            {data.instructors.map((i) => {
+              const key = instructorKey(i.source, i.external_id)
+              const selectId = `class-instructor-${i.source}-${i.external_id}`
+              const title = titleOf(i)
+              const stale = i.link && !i.link.at_studio
+              return (
+                <li key={key} className="flex flex-col gap-2 p-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-un1t-text">{title}</p>
+                    <p className="text-xs text-un1t-subtle break-words">{detailOf(i)}</p>
+                    <p className="text-[11px] text-un1t-muted font-mono break-all">{i.external_id}</p>
+                    {rowErrors[key] && <p role="alert" className="text-xs text-red-700 mt-1">{rowErrors[key]}</p>}
+                  </div>
+                  <div className="shrink-0">
+                    <label htmlFor={selectId} className="sr-only">Team member for {title}</label>
+                    <select
+                      id={selectId}
+                      value={i.link?.profile_id || ''}
+                      disabled={!!saving[key]}
+                      onChange={(e) => choose(i, e.target.value)}
+                      className="w-full sm:w-56 bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-sm text-un1t-text disabled:opacity-50"
+                    >
+                      <option value="">Not linked</option>
+                      {stale && (
+                        <option value={i.link.profile_id} disabled>
+                          {`${i.link.full_name || 'Someone'} (no longer at this studio)`}
+                        </option>
+                      )}
+                      {data.coaches.map((c) => <option key={c.id} value={c.id}>{c.full_name}</option>)}
+                    </select>
+                  </div>
+                </li>
+              )
+            })}
+          </ul>
+        </>
+      )}
+    </section>
+  )
+}
+```
+
+- [ ] **Step 4: Render it on the page.** Replace `src/app/settings/shifts/page.js` with:
+
+```js
+import { getCurrentUser } from '@/lib/auth'
+import { redirect } from 'next/navigation'
+import ShiftTemplateManager from '@/components/ShiftTemplateManager'
+import ClassInstructorLinks from '@/components/schedule/ClassInstructorLinks'
+import { MANAGER_ROLES } from '@/lib/schemas'
+
+export const dynamic = 'force-dynamic'
+
+export default async function ShiftSettingsPage() {
+  const user = await getCurrentUser()
+  if (!user || !MANAGER_ROLES.includes(user.role)) {
+    redirect('/')
+  }
+
+  return (
+    <div className="p-8 space-y-10">
+      <ShiftTemplateManager user={user} />
+      {/* CLASSLINK.1 — the class timetable's coaches, linked to the team. */}
+      <ClassInstructorLinks
+        locationId={user.activeLocation?.id || null}
+        locationName={user.activeLocation?.name || 'this studio'}
+      />
+    </div>
+  )
+}
+```
+
+- [ ] **Step 5: Run the tests to see them pass**
+
+Run: `npx vitest run src/components/schedule/ClassInstructorLinks.test.jsx`
+Expected: PASS, 8 tests.
+
+- [ ] **Step 6: The UI rules**
+
+Run: `npm run check:guardrails && npm run lint`
+Expected: exit 0. (No `<form>`, so no button-type rule applies; the banner's buttons already carry `type`. Chip/contrast rules: only `text-red-700` on light, and the `un1t-*` tokens `text`/`subtle`/`muted`/`border`/`surface`/`bg`, all live names.)
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src/components/schedule/ClassInstructorLinks.jsx src/components/schedule/ClassInstructorLinks.test.jsx src/app/settings/shifts/page.js
+git commit -m "CLASSLINK.1 — Timetable coaches on Settings > Shifts: each timetable instructor id, its classes and weekly slots, linked to a team member
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 7: OpenAPI, the guardrail arm, and the roster doc
+
+**Files:**
+- Modify: `src/lib/openapi.js` (import after line 30 `import { AvailabilityPutSchema } from '@/lib/availability-server'`; registrations after the `/api/locations/{id}/glofox-trainers` registration, which closes at line 3772)
+- Modify: `src/lib/openapi.test.js` (one `it` before the final `})` at line 451)
+- Modify: `eslint.guardrails.config.mjs` (`no-unchecked-supabase-write` `files`, after `'src/app/api/schedule/assignments/*/replace/**',` at line 320)
+- Modify: `docs/roster-v2.md` (append at the end)
+
+- [ ] **Step 1: Write the failing spec test.** In `src/lib/openapi.test.js`, before the final `})`:
+
+```js
+  // CLASSLINK.1 — timetable instructors linked to the team, manager-only, names only.
+  it('documents the class-instructor mapping (GET + PUT): manager-only, names only', () => {
+    const path = spec.paths['/api/schedule/class-instructors']
+    expect(path?.get, 'missing GET /api/schedule/class-instructors').toBeTruthy()
+    expect(path?.put, 'missing PUT /api/schedule/class-instructors').toBeTruthy()
+    for (const op of [path.get, path.put]) {
+      expect(op.tags).toContain('Schedule')
+      expect(op.security).toContainEqual({ CookieAuth: [] })
+      expect(Object.keys(op.responses)).toEqual(expect.arrayContaining(['200', '400', '403', '500']))
+      expect(op.description).toMatch(/head_coach AT location_id/)
+    }
+    expect(path.get.description).toMatch(/never a capacity/i)
+    expect(path.put.requestBody).toBeDefined()
+    expect(path.put.description).toMatch(/active member/i)
+  })
+```
+
+Run: `npx vitest run src/lib/openapi.test.js`
+Expected: this one `it` fails (`missing GET /api/schedule/class-instructors`).
+
+- [ ] **Step 2: Register both operations.** In `src/lib/openapi.js`, after line 30 add:
+
+```js
+import { ClassInstructorPutSchema } from '@/lib/class-instructors-server'
+```
+
+and directly after the glofox-trainers registration's closing `})` (line 3772):
+
+```js
+// CLASSLINK.1 — the class timetable's instructors, linked to the team (mig 636).
+registry.registerPath({
+  method: 'get',
+  path: '/api/schedule/class-instructors',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: "A studio's class timetable instructors and the team member each is linked to (manager-only)",
+  description: "Every instructor id the studio's class timetable (class_occurrences; source glofox today, un1t_online reserved) named in the last 28 days or holds ahead, plus any already linked: source, external_id, classes (count, cancelled classes excluded), slots (up to three most common weekly slots: class name, weekday, HH:MM on the studio's clock), label (the booking system's own name for it, when it gave one), link ({ profile_id, full_name, at_studio } or null; at_studio false = no longer an active member there). Plus coaches: the studio's active team as link options, id and full_name only. Manager-only (master, owner, manager, head_coach AT location_id). Names only: never a capacity, a booked count, contracted hours or pay. A failed read is a 500, never an empty list.",
+  request: { query: z.object({ location_id: uuidLike }) },
+  responses: {
+    200: { description: '{ success, data: { window_days, instructors, coaches } }' },
+    400: { description: 'Missing or malformed location_id', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Studio outside your assignments, or no manager role there', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The read failed (never answered as "nothing to link")', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/schedule/class-instructors',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Link one timetable instructor id to a team member, or unlink it (manager-only)',
+  description: "Links (location_id, source, external_id) to profile_id, replacing any earlier link for that id at that studio; profile_id null unlinks. A Glofox id is 24 hexadecimal characters and is stored lowercase; another source's id is kept as written (1..200 characters). The person must be an active member of the studio (400 otherwise, nothing written). One id is one person; one person may hold several ids. Manager-only (master, owner, manager, head_coach AT location_id). Nothing members see changes.",
+  request: { body: { content: { 'application/json': { schema: ClassInstructorPutSchema } } } },
+  responses: {
+    200: { description: '{ success, data: { link: { id, source, external_instructor_id, profile_id, updated_at } | null, removed } }' },
+    400: { description: 'Invalid body, an id that is not valid for its source, or a person who is not an active member of the studio', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Studio outside your assignments, or no manager role there', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The write failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+```
+
+Run: `npx vitest run src/lib/openapi.test.js`
+Expected: PASS.
+
+- [ ] **Step 3: Arm the write rule on the new IO.** In `eslint.guardrails.config.mjs`, after `'src/app/api/schedule/assignments/*/replace/**',` (line 320), add:
+
+```js
+      // CLASSLINK.1 — the timetable-instructor link write (an upsert that must
+      // hand back its row, a delete that reports its rows) and its route.
+      // Born clean, armed on arrival.
+      'src/lib/class-instructors-server.js',
+      'src/app/api/schedule/class-instructors/**',
+```
+
+Run: `npm run check:guardrails`
+Expected: exit 0.
+
+- [ ] **Step 4: Document it.** Append to `docs/roster-v2.md`:
+
+```markdown
+## Class schedule sources and timetable coaches (CLASSLINK.1, mig 636, 2026-09)
+
+`class_occurrences`, the class schedule spine (mig 284), is platform-neutral:
+every row has a `source` (`glofox` today; `un1t_online` reserved for Hatch
+Street), a `source_ref` (that system's id for the occurrence, unique per studio
+and source) and `instructor_refs` (that system's ids for the class's
+instructors). `glofox_event_id` is set for Glofox rows only and stays unique per
+studio (the Glofox sync upserts on it). For Glofox rows the database derives
+`source_ref` and `instructor_refs` (trigger `class_occurrences_derive_refs`), so
+the Glofox sync names neither and no write can make them disagree.
+
+Readers that key other tables by `glofox_event_id` (the climate automations'
+fire log, HR session stamping, HR detections, the TV card) skip rows without
+one. They must be re-keyed before any writer adds rows from another source.
+
+`class_instructor_links` says which person on the team each instructor id is,
+per studio (service role only; one id is one person, a person may hold several
+ids). Managers and head coaches set it under **Timetable coaches** on
+Settings › Shifts (`/settings/shifts`): each id is shown with its class count,
+its most common weekly slots and the raw id, because Glofox does not give us
+trainer names. Only an active member of the studio can be linked; a link to
+someone who has since left stays, flagged "(no longer at this studio)", until
+re-pointed. This is separate from the Glofox tab's "Trainer names" (id → display
+name for the Studio scorecard). Nothing here reaches members. CLASSLINK.2 uses
+the links to compare the roster with the timetable.
+```
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/lib/openapi.js src/lib/openapi.test.js eslint.guardrails.config.mjs docs/roster-v2.md
+git commit -m "CLASSLINK.1 — OpenAPI for /api/schedule/class-instructors, arm the write rule, roster doc
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### PR gate
+
+Close the dev server and any other worktree's watchers first (8GB machine). Rebase on `origin/main` (18 AVAIL.3 may have landed; both touch `openapi.js`, `openapi.test.js`, `eslint.guardrails.config.mjs`) and re-run the focused suites before the full gate:
+
+```bash
+git fetch origin main && git rebase origin/main
+npx vitest run tests/migration-636-class-schedule-platform-neutral.test.js src/lib/class-instructors.test.js src/lib/class-instructors-server.test.js 'src/app/api/schedule/class-instructors' src/components/schedule/ClassInstructorLinks.test.jsx src/lib/class-occurrences-source.test.js src/lib/class-climate-runner.test.js src/lib/bathroom-climate.test.js src/lib/class-climate.test.js src/lib/class-occurrences-trainers.test.js src/lib/openapi.test.js tests/staff-tombstone-readers.test.js
+TZ=America/New_York npx vitest run src/lib/class-instructors.test.js src/lib/class-instructors-server.test.js
+```
+
+Expected: all green.
+
+- [ ] **The 12-command CI mirror (CLAUDE.md "Build, test & ship"):**
+
+```bash
+npm test && npm run lint && npm run check:mobile-parity && npm run check:mobile-imports && npm run check:mobile-lint && npm run check:route-guards && npm run check:location-scoping && npm run check:rls-restrictive && npm run check:guardrails && npm run check:select-columns && npm run check:bundle-sql && npm run check:ota-paths
+```
+
+Expected: every command exits 0 and vitest reports `0 failed`.
+- `check:route-guards`: the new route calls `getCurrentUser`.
+- `check:location-scoping`: `class_instructor_links` carries `location_id`, so it joins the tenant-table set; the route queries no table itself (the IO pins `location_id` on every read and write).
+- `check:select-columns`: `class_occurrences (id, source, name, starts_at, instructor, instructor_refs)`, `class_instructor_links (id, source, external_instructor_id, profile_id, updated_at)`, `profile_locations (profile_id)`, `profiles (id, full_name, active, deleted_at)` and `(id, active, deleted_at)`, `locations (id, timezone)` resolve against the replayed migrations (004, 051, 284, 344, 622, 636; `locations (id, timezone)` is the select `src/lib/roster-snapshot.js:150` already passes with an empty allowlist).
+- `tests/staff-tombstone-readers.test.js` (in `npm test`): both new `from('profiles')` reads carry `.in('id'` / `.eq('id'`, which it counts as safe.
+- `check:mobile-parity`, `check:mobile-imports`, `check:mobile-lint`, `check:ota-paths`: untouched (no permission key, nothing under `mobile/` or `shared/`).
+- `check:rls-restrictive`: the new table has no policies at all.
+
+- [ ] **The build:**
+
+```bash
+npm run build
+```
+
+Expected: `✓ Compiled successfully`, and the route table lists `ƒ /api/schedule/class-instructors`. This is the only check that catches a bad `@/lib/…` import (vitest runs on mocked imports): `class-instructors.js` enters a client bundle through the component, so it must stay free of `zod`, `next/*` and server imports; `openapi.js` now imports the server module.
+
+- [ ] **Independent review** (standing rule). Point the reviewer at: D2 (why `glofox_event_id` stays and becomes optional, against the un1t.online draft); D3 (the trigger: the deploy-order argument, `UPDATE OF` column list, the SQL derivation vs `extractTrainerIds`); D5/D6 (per-studio links, active members only, stale links kept and flagged); D7 (the two resolver lines and the three pins; what must be re-keyed before a second source); the self-check literals; the PUT's id normalisation; `loadInstructorMapping`'s "a failed read is an error, never an empty mapping".
+
+- [ ] **Browser checks** (memory `jsdom-cannot-see-layout`: a green suite cannot see layout). On the Vercel preview once mig 636 is applied, signed in as a manager with Stillorgan active, `/settings/shifts`. **The preview runs against prod**: a link made there is a real row. Linking is reversible and reaches nobody, so either link an id you are certain of (Richard's call which) or link and then set it back to "Not linked", and confirm with `SELECT count(*) FROM class_instructor_links` that nothing was left behind unintentionally.
+  1. Below the templates: "Timetable coaches", 5 or fewer rows (Stillorgan had 5 trainer ids on 25 Sep; only those with classes in 28 days plus ahead show), each "Glofox coach …xxxxxx", a class count, up to three slots whose times match the real timetable in Dublin time, the raw id in small type.
+  2. Pick a person on one row → the select shows them after the save; reload → still linked. Set it back to "Not linked" → reload → unlinked.
+  3. Switch the active studio to Hatch Street → "No classes from a booking system at UN1T Hatch Street in the last 28 days, so there is nothing to link yet."
+  4. At 390px wide (DevTools device toolbar): each row stacks (text above the select), the raw id wraps, no horizontal scroll.
+  5. Keyboard: Tab reaches each select; the screen reader (or the Accessibility pane) names it "Team member for …".
+  Record what each showed in the PR.
+
+---
+
+### Migration apply steps (after review is approved, BEFORE merge)
+
+The operator is the orchestrating session, under Richard's 25 Sep merge authority.
+
+1. `list_projects` → confirm `iyvtbjjxdggiadzwwvdj` is **un1t-crm**, not the sentinel project. `list_migrations` → confirm there is no 636.
+2. Run pre-checks **(a)–(e)** from the migration header with `execute_sql`. Stop if (a), (b) or (d) differ from "Expected"; keep (c). Check the clock: not within a minute of :00/:15/:30/:45.
+3. Write the rollback record to the scratchpad (`mig636-rollback-2026-09-2x.txt`): the output of (b) and (c), and the ROLLBACK block from the header, noting "revert code first; record the links first".
+4. `apply_migration` with name `636_class_schedule_platform_neutral` and the file's contents verbatim.
+5. Run post-checks **(f)–(k)**. Then `get_advisors` type `security`, then type `performance` (check **(l)**).
+6. At the next sync tick, run **(m)**: the sync stamped its heartbeat and every row it wrote has `source_ref = glofox_event_id`. **This is the check that the unchanged writer survived the migration** (D3). If the heartbeat does not move or (m) shows a mismatch, stop: do not merge, investigate `sync-class-occurrences` logs.
+7. Only now: rebase, wait for **Test & lint** and **Next build** to go green on the final rebase, and merge. **No OTA** (nothing under `mobile/` or `shared/`), so this merge neither waits on nor blocks an EAS run.
+8. After the deploy: open `/settings/shifts` at Stillorgan and see the section load (browser check 1 on prod); check Vercel logs for `api/schedule/class-instructors` (expect none).
+
+### PR
+
+**Title:** `CLASSLINK.1 — the class schedule goes platform-neutral; timetable coaches link to the team (mig 636)`
+
+**Body must say, in this order:**
+1. **Migration 636 is applied BEFORE merge** (steps above), away from a sync tick, and the next sync tick was checked (step 6). If the order ever slips, only the new mapping route fails; the sync keeps working (the trigger derives the new columns).
+2. **No OTA.** Web only; nothing under `mobile/` or `shared/`.
+3. The spine: `source` (`glofox` | `un1t_online`), `source_ref` (UNIQUE per studio and source), `instructor_refs`; `glofox_event_id` optional (Glofox rows only, CHECKed), its UNIQUE kept. Derived for Glofox rows by trigger; the Glofox writer is unchanged. Why not the un1t.online draft's "un1t ids in `glofox_event_id`" (D2).
+4. The readers: `resolveCurrentOccurrence` and `resolveCurrentClassForTv` skip a row with no Glofox id; the climate planners and the sync reconcile already did (pinned). No behaviour change today (0 such rows). The list of readers to re-key before a second source writes rows.
+5. The mapping: `class_instructor_links` (per studio, service role only; one id is one person); GET/PUT `/api/schedule/class-instructors` (manager or head coach AT the studio; active members only); "Timetable coaches" on Settings › Shifts, ids shown by class count and weekly slots because Glofox names never resolved (0 of 632). Names only.
+6. What it deliberately does not do: no sync widening (default 9), no reconcile, no shift link, nothing customer-facing, no change to trainer display names or the scorecard.
+7. Browser-check results (the five checks above; say which link, if any, was left in place).
+8. Follow-ups found (see below).
+9. End the body with `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
+
+### CHANGELOG
+
+After `gh pr create`, add ONE row directly under the table header in `docs/CHANGELOG.md`, then commit and push. Never edit another row: `merge=union` duplicates an edited row.
+
+```
+| #<PR> | CLASSLINK.1 — the class schedule goes platform-neutral; timetable coaches link to the team | 2026-09-2x. Wave 3 PR 36. **Mig 636 applied before merge (away from a sync tick; the next tick checked); no OTA.** `class_occurrences`: `source` (glofox \| un1t_online, default glofox), `source_ref` (UNIQUE location+source+ref), `instructor_refs text[]`; `glofox_event_id` NOT NULL dropped with CHECK (source='glofox') = (glofox_event_id IS NOT NULL), `class_occurrences_unique` kept (the sync's conflict target; CLASSLINK.3's event lookup). Trigger `class_occurrences_derive_refs` (BEFORE INSERT OR UPDATE OF source, glofox_event_id, raw, source_ref, instructor_refs) derives source_ref + instructor_refs for Glofox rows from glofox_event_id + raw.trainers (extractTrainerIds's rule), so the unchanged sync is correct before and after the migration and nothing can desync them (PGlite replay incl. a PostgREST-shaped upsert). New `class_instructor_links` (location, source, external id → profile; one id one person; Glofox ids lowercase 24-hex CHECK; service role SELECT/INSERT/UPDATE/DELETE only, RLS no policies). `resolveCurrentOccurrence` / `resolveCurrentClassForTv` skip rows with no Glofox id; climate planners + sync reconcile pinned. GET/PUT `/api/schedule/class-instructors` (MANAGER_ROLES AT the studio; active members only; a failed read is 500 never empty) + "Timetable coaches" on Settings › Shifts (ids by class count + weekly slots, since Glofox trainer names resolve for 0 of 632 rows). Names only. No sync widening, reconcile or customer display (CLASSLINK.2/.3). |
+```
+
+---
+
+### How #37 and #38 build on this
+
+- **CLASSLINK.2 (mig 637)** links shift blocks to classes and lists mismatches. It can reference `class_occurrences.id` (stable: the Glofox upsert keeps the row, rows are only ever stamped `cancelled_at`, never deleted) and compare `shift_assignments.profile_id` with `instructor_refs ⋈ class_instructor_links` on `(location_id, source, ref)`; an unlinked ref or a link with `at_studio` false reads as "timetable coach not known". Its horizon problem is its own: the sync fetches **48 hours** ahead (`syncOccurrencesForLocation` `windowHours = 48`, `limit: 200`, `class-occurrences.js:223-226`), while rosters are built weeks ahead. Default 9: measure first. Today each 15-minute run costs one `/2.0/branches/{id}/events` call plus the trainer-name attempts in the follow-up below.
+- **CLASSLINK.3 (mig 638)** shows the rostered coach's name on customer class screens, off by default. Those screens read Glofox live (`src/lib/public-classes.js`, `event_id: e._id || e.id`), so it goes event id → spine row by the kept `UNIQUE (location_id, glofox_event_id)` → #37's block link → the rostered coaches' names; for a un1t.online class, by `(location_id, 'un1t_online', source_ref)`. The toggle is operator-editable copy territory (memory `customer-comms-editable`), and the capacity rule still holds: names and times only.
+- **Hatch on un1t.online:** its future sync writes `source = 'un1t_online'`, `source_ref` = the event id, `instructor_refs` = its coaches' ids, `glofox_event_id` NULL, and upserts on `(location_id, source, source_ref)`. Before it does, re-key the readers in D7's list (follow-up), or Hatch classes will not drive the AC, HR linking or the TV card.
+
+---
+
+### Open questions for Richard
+
+1. **Row 36 vs the un1t.online draft (1 Sep, §3.3).** The draft wrote Hatch event ids into `glofox_event_id` plus a `source_platform` column; this plan keeps `glofox_event_id` for Glofox only, adds `source`/`source_ref`, and makes the Glofox-keyed readers skip other rows until they are re-keyed (D2, D7). Confirm, and the draft (untracked in `~/code/un1t-crm/docs/superpowers/specs/`) gets corrected before anyone builds the un1t.online sync.
+2. **Should a link also give the timetable its coach's name?** Today `instructor` is NULL everywhere, so the Studio scorecard's per-coach floor table never splits by coach and the automations schedule shows no instructor. Once ids are linked, the sync could name a linked id from the person's `full_name` (staff-only surfaces). Not in this PR; a small follow-up if wanted.
+3. **Head coaches can link** (they can edit templates on the same page). Narrow to owner/manager/master?
+4. **No `manual` source.** If Hatch needs a timetable before un1t.online is integrated (for #37's mismatch list), a `manual` source is a one-line CHECK change in both tables plus an editor; not planned.
+5. **A link to someone who has left stays, flagged** (D6), rather than being removed automatically. OK?
+6. **Placement:** Settings › Shifts, not the owner-only Glofox tab. OK?
+
+### Follow-ups found while planning (not in this PR)
+
+- 🔴 **Glofox trainer names never resolve, and every sync keeps trying.** `class_occurrences.instructor` is NULL on 632 of 632 rows (18 Jun → 27 Sep): no `trainer_names` override exists (neither `locations.settings.glofox` nor `channel_connections.config`), and `resolveTrainerNames` (`class-occurrences.js:149-190`) resolves none through the API. So STUDIO-KPI.4's per-coach split has never worked (the scorecard falls back to per-class, `shared/studio-kpi-math.js:185-198`), and each 15-minute sync spends one `/2.0/trainers` call plus one `/2.0/members/{id}` call per unresolved trainer id in its window (cap 10), 96 runs a day, to learn nothing: a few hundred futile Glofox calls a day, which matters to default 9's call budget. Fix: remember an unresolvable id for a day, or stop calling `/2.0/trainers` once it has answered empty; or name linked ids from `class_instructor_links` (open question 2).
+- **The spine's heartbeat is 26 hours for a 15-minute cron.** `cron_heartbeats.sync-class-occurrences` expects 86,400 s + 7,200 s grace while `vercel.json:139-142` runs it every 15 minutes, and the spine only holds 48 hours ahead: a dead sync is noticed a day late, with half the spine already gone. Tighten to e.g. 3,600 + 1,800 (a one-row migration). (The `class-climate-v0` memory also still says the sync is daily.)
+- **Re-key the Glofox-keyed readers before any second source writes rows** (D7): `automation_fire_log` (NOT NULL `glofox_event_id` in its unique key), `resolveCurrentOccurrence` / `resolveCurrentClassForTv` and their callers (`heart_rate_sessions.glofox_event_id`, HR detections, the timer, the TV card), and the automations schedule list's React key (`ClassClimateCard.jsx:225`, `BathroomClimateCard.jsx:225`). Required before the un1t.online sync.
+- 🔴 **`/api/public/classes` sends a raw spots count to anonymous callers.** `shapePublicClass` (`src/lib/public-classes.js:13-30`) returns `spots_left` (size − booked) in the public JSON. The `/start` UI renders only `full`, but the "never surface capacity" rule is about what customers can see, and the count is one devtools tab away. Drop `spots_left` from the public shape (keep `full`); the staff `BookPanel` reads its own route (`/api/glofox/classes`).
+- `GET /api/locations/[id]/glofox-trainers` judges `user.role` (the ACTIVE studio's role) plus membership, not the role AT the requested studio (`route.js:27-40`), the SCHEDROLES.1 class: a manager at Hatch who is staff at Stillorgan can read Stillorgan's trainer list. Low impact (ids and class counts). Its comment's "28d of Stillorgan is ~850 rows" is ~184 today.
+
+---
+
+### Self-review (done while writing)
+
+- **Spec coverage:** "`class_occurrences` gains a source": D1, Task 1 (`source`, CHECK, default). "`glofox_event_id` becomes optional": D2, Task 1 (DROP NOT NULL + CHECK + kept UNIQUE), with every consumer that assumed non-null inventoried in "What was found" and handled or pinned in Task 5 (D7). "Coaches map to trainer ids": D4/D5/D6, Task 1 (`instructor_refs`, `class_instructor_links`), Tasks 2-4 (model, IO, route), Task 6 (the manager's view). "Mig 636": Task 1, with pre/post checks, rollback, self-check and PGlite replay. Designed for #37/#38: "How #37 and #38 build on this". Scope fence (no reconcile, no customer display, no sync widening): D10. Gate (focused suites, 12-command mirror, build), apply steps, PR, CHANGELOG, open questions, follow-ups: above.
+- **Placeholders:** none; every code step carries its code. The only placeholders are the CHANGELOG date and PR number and the apply time in post-check (m), filled at PR/apply time.
+- **Names:** `CLASS_SOURCES`, `INSTRUCTOR_WINDOW_DAYS`, `normalizeInstructorRef`, `instructorKey`, `sourceLabel`, `shortRef`, `weeklySlot`, `summariseInstructors`, `ClassInstructorPutSchema`, `loadInstructorMapping`, `saveInstructorLink`, `class_occurrences_derive_refs`, `class_instructor_links_ref_key` are used with the same names and argument shapes in every task and test. `saveInstructorLink` takes `{ locationId, source, externalId, profileId, actorId, nowMs }` in Task 3, and the route passes exactly `{ locationId, source, externalId, profileId, actorId }` in Task 4.
