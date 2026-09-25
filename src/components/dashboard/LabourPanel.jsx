@@ -1,7 +1,7 @@
 // src/components/dashboard/LabourPanel.jsx
 //
 // LABOUR.1 — the owner's "Labour against revenue" block. Presentational and
-// server-component-safe (no state, no 'use client'): it is rendered to HTML on
+// server-component-safe (no state, no client directive): it is rendered to HTML on
 // the server by LabourBlock, so its props never travel to the browser as data.
 // The view model (src/lib/labour-month-model.js) carries totals, ratios, hours
 // and names only.
