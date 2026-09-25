@@ -53,6 +53,12 @@ describe('workingWindow', () => {
     expect(fwd.endMs - fwd.startMs).toBe(2 * HOUR)
   })
 
+  it('the next spring-forward night too (Sun 28 Mar 2027): 00:30-03:30 is 2 real hours', () => {
+    const fwd = workingWindow(S('p1', '2027-03-28', '00:30', '03:30'))
+    expect(fwd.startMs).toBe(Date.UTC(2027, 2, 28, 0, 30)) // 00:30 GMT
+    expect(fwd.endMs - fwd.startMs).toBe(2 * HOUR)
+  })
+
   it('an end before the start runs into the next day, and the shift stays on its block date', () => {
     const w = workingWindow(S('p1', '2026-09-22', '22:00', '02:00'))
     expect(w.date).toBe('2026-09-22')
@@ -120,6 +126,11 @@ describe('restGapViolations', () => {
 
   it('clocks going forward: Sat 28 Mar 21:00 to Sun 29 Mar 08:00 is 10 real hours', () => {
     expect(restGapViolations([S('p1', '2026-03-28', '18:00', '21:00'), S('p1', '2026-03-29', '08:00', '12:00')])
+      .map((v) => v.rest_minutes)).toEqual([600])
+  })
+
+  it('clocks going forward in 2027: Sat 27 Mar 21:00 to Sun 28 Mar 08:00 is 10 real hours', () => {
+    expect(restGapViolations([S('p1', '2027-03-27', '18:00', '21:00'), S('p1', '2027-03-28', '08:00', '12:00')])
       .map((v) => v.rest_minutes)).toEqual([600])
   })
 
