@@ -103,6 +103,7 @@ These are marked **REVIEW** in the artifact until he confirms or changes them. E
 21. **Reactivating a coach brings their old calendar-feed link back** (the feed simply refuses while they are inactive). A new link can be made any time from the Subscribe screen.
 22. **An edit to a shift made overnight is told from 07:00,** even when the shift starts before then (quiet hours gate the notice). The edit itself is saved at once, and the manager's toast says coaches hear after 7am.
 23. **A standing weekly briefing** (the same note every Monday) would need a template field; BLOCKEDIT.1 adds a briefing per shift only.
+24. **Availability: the last save wins** if a coach edits on the web and the phone at once (no conflict check). New weekly rows on the phone default to all day; the web defaults to a time window.
 
 ## Follow-ups found along the way (not in any PR yet)
 
@@ -121,6 +122,7 @@ These are marked **REVIEW** in the artifact until he confirms or changes them. E
 
 Updated by the loop. Newest first.
 
+- 25 Sep ~12:40Z: 17 AVAIL.2 plan written (modal from the Schedule tab Me view; reuses the leave form's MonthCalendar; typed times; no native module → pure OTA; save blocked until a load succeeded; tap on the managers' notice opens Manage mode). Waits for AVAIL.1a to merge.
 - 25 Sep ~12:33Z: ✅ **MIG 632 APPLIED** (`staff_calendar_feeds`): pre (a)–(d) as expected; post 5 cols, RLS on, 0 policies, grants postgres + service_role only, 4 constraints, 0 rows; advisors +1 INFO by design (48 INFO + 2 WARN). Rollback record `mig632-rollback-2026-09-25.txt`. ICSFEED.1 fixes landed (phone always offers Share/copy link; last-fetched keyed by token; DST-day tests; SEQUENCE), full gate running.
 - 25 Sep 12:30Z: ✅ HEARTBEAT.1 verified live: `shift-reminders` stamped by the */5 cron at 12:25Z with its counters in `last_outcome`; `roster-runway` first real stamp due 26 Sep 08:00Z. 22 ICSFEED.1 review approved w/ should-fixes (phone could lose the one-time link on Android; last-fetched keyed by person not token; DST-day tests; SEQUENCE for Outlook) → fixing; **mig 632 must be applied BEFORE its merge** (the /api/me route 500s without it). AVAIL.1a second review → 3 more should-fixes (fully-deduped attempt must not stamp; re-read owed rows before the sweep sends; shortening a started rule handled server-side) → fixing.
 - 25 Sep 12:20Z: **#1760 HEARTBEAT.1 MERGED** (12:18Z), prod deploy success, then ✅ **MIG 633 APPLIED**: `shift-reminders` (300+900) and `roster-runway` (86400+43200) present, not stale. Rollback note in scratchpad `mig633-rollback-2026-09-25.txt`. To verify at next tick: the */5 cron stamps `shift-reminders` with a `last_outcome`. Follow-up: 633's file header still says "apply BEFORE the code deploys" (contradicts the new CLAUDE.md line; harmless because the file re-arms).
