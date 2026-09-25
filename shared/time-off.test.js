@@ -3,6 +3,8 @@ import {
   TIME_OFF_TYPES, timeOffTypesFor, defaultTimeOffTypeFor, timeOffTypeLabel,
   isTimeOffTypeAllowedFor, timeOffLeaveLabel, isExpiredPendingRequest, effectiveTimeOffStatus, leaveClashLabel,
   leaveClashPrompt, leaveDateRangeLabel, leavePreviewLine,
+  isRequestableTimeOffType, canRequestTimeOff, UNAVAILABLE_MOVED_ERROR, RESTRICTED_TYPE_ERROR,
+  CONTRACTOR_DECIDE_ERROR, AVAILABILITY_INSTEAD,
 } from './time-off'
 
 describe('time-off catalogue + gating', () => {
@@ -16,10 +18,11 @@ describe('time-off catalogue + gating', () => {
     expect(defaultTimeOffTypeFor('fte')).toBe('holiday')
   })
 
-  it('restricts contractors + casual to unavailable only', () => {
+  it('AVAIL.3 — contractors + casual have nothing to request: no types, no default', () => {
     for (const et of ['contractor', 'casual']) {
-      expect(timeOffTypesFor(et).map(t => t.value)).toEqual(['unavailable'])
-      expect(defaultTimeOffTypeFor(et)).toBe('unavailable')
+      expect(timeOffTypesFor(et)).toEqual([])
+      expect(defaultTimeOffTypeFor(et)).toBeNull()
+      expect(canRequestTimeOff(et)).toBe(false)
     }
   })
 
@@ -117,5 +120,52 @@ describe('leavePreviewLine', () => {
   it('leaves out whatever is missing rather than printing "null"', () => {
     expect(leavePreviewLine({ block_date: '2026-10-05', start_time: '06:00:00' })).toBe('Mon 5 Oct · 06:00')
     expect(leavePreviewLine({ block_date: '2026-10-05' })).toBe('Mon 5 Oct')
+  })
+})
+
+// AVAIL.3 — "unavailable" moved into availability (mig 631).
+describe('AVAIL.3 — unavailable is no longer requested', () => {
+  it('no employment type is offered unavailable, and employees keep their four types', () => {
+    for (const et of ['fte', 'contractor', 'casual', null, undefined, 'weird']) {
+      expect(timeOffTypesFor(et).map((t) => t.value)).not.toContain('unavailable')
+    }
+    expect(timeOffTypesFor('fte').map((t) => t.value)).toEqual(['holiday', 'sick', 'unpaid', 'other'])
+    expect(canRequestTimeOff('fte')).toBe(true)
+    expect(canRequestTimeOff(null)).toBe(true)
+  })
+
+  it('isRequestableTimeOffType refuses unavailable only', () => {
+    expect(isRequestableTimeOffType('unavailable')).toBe(false)
+    for (const t of ['holiday', 'sick', 'unpaid', 'other']) expect(isRequestableTimeOffType(t)).toBe(true)
+  })
+
+  it('history keeps its label: the catalogue, the leave label and the decision gate are unchanged', () => {
+    expect(TIME_OFF_TYPES.map((t) => t.value)).toContain('unavailable')
+    expect(timeOffTypeLabel('unavailable')).toBe('Unavailable')
+    expect(timeOffLeaveLabel('unavailable')).toBe('Unavailable')
+    // Deciding a pending unavailable request still works for a contractor.
+    expect(isTimeOffTypeAllowedFor('contractor', 'unavailable')).toBe(true)
+    expect(isTimeOffTypeAllowedFor('contractor', 'holiday')).toBe(false)
+  })
+
+  it('every message names My availability; none tells anyone to file Unavailable', () => {
+    expect(UNAVAILABLE_MOVED_ERROR).toMatch(/^Unavailable is no longer a time-off request\./)
+    expect(UNAVAILABLE_MOVED_ERROR).toMatch(/My availability/)
+    expect(UNAVAILABLE_MOVED_ERROR).toMatch(/No approval is needed/)
+    expect(RESTRICTED_TYPE_ERROR).toMatch(/^Contractors.*My availability/)
+    expect(CONTRACTOR_DECIDE_ERROR).toMatch(/^Contractors don’t take leave\. Decline this request/)
+    expect(CONTRACTOR_DECIDE_ERROR).not.toMatch(/file it as Unavailable/)
+    expect(AVAILABILITY_INSTEAD).toEqual({
+      title: 'Use My availability instead',
+      message: expect.stringMatching(/My availability/),
+      action: 'Open My availability',
+      onBehalf: expect.stringMatching(/^Contractors don’t take leave, so there is nothing to record here/),
+    })
+  })
+
+  it('no em dashes in any of the words (staff copy follows the customer-copy rule)', () => {
+    for (const s of [UNAVAILABLE_MOVED_ERROR, RESTRICTED_TYPE_ERROR, CONTRACTOR_DECIDE_ERROR, ...Object.values(AVAILABILITY_INSTEAD)]) {
+      expect(s).not.toMatch(/—/)
+    }
   })
 })
