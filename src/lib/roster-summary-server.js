@@ -72,7 +72,7 @@ export async function computeMonthlyContractorSpend({ db, locationId, referenceD
       id, location_id, block_date, start_time, end_time,
       template_id, max_coaches,
       shift_assignments(profile_id, start_time_override, end_time_override, status),
-      shift_templates(start_time, end_time)
+      shift_templates(start_time, end_time, kind)
     `)
     .eq('location_id', locationId)
     .gte('block_date', startIso)
