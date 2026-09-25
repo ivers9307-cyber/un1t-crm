@@ -30,6 +30,13 @@ export function formatShiftDate(isoDay) {
   return `${WEEKDAYS[date.getUTCDay()]} ${d} ${MONTHS[m - 1]}`
 }
 
+// REPLACE.1a — 'HH:MM(:SS)' -> 'HH:MM'; '' for anything else, so a bad value
+// is left out of the sentence rather than printed.
+function shiftStartLabel(t) {
+  const m = String(t ?? '').match(/^([01]\d|2[0-3]):([0-5]\d)(:[0-5]\d)?$/)
+  return m ? `${m[1]}:${m[2]}` : ''
+}
+
 const shifts = (n) => `${n} ${n === 1 ? 'shift' : 'shifts'}`
 
 /** Pure. One coach's changes → { title, body }. */
@@ -42,9 +49,13 @@ export function buildRosterChangeMessage(changes) {
 
   if (changes.length === 1) {
     const day = formatShiftDate(first)
+    // REPLACE.1a — a change that carries its start names it: a replace tells
+    // the outgoing and the incoming coach about the same 06:00 shift.
+    const at = shiftStartLabel(changes[0].startTime)
+    const when = at ? `${day} at ${at}` : day
     return added === 1
-      ? { title: 'Added to a shift', body: `You're now on the roster for ${day}.` }
-      : { title: 'Removed from a shift', body: `You're no longer on the roster for ${day}.` }
+      ? { title: 'Added to a shift', body: `You're now on the roster for ${when}.` }
+      : { title: 'Removed from a shift', body: `You're no longer on the roster for ${when}.` }
   }
 
   const parts = []
@@ -109,7 +120,7 @@ async function markNotified(db, { locationId, coachId, blockIds }) {
  * @param {object} opts
  * @param {string} opts.locationId
  * @param {string} opts.actorId      the manager making the change
- * @param {Array<{coachId: string, blockId: string, blockDate: string, action: string}>} opts.changes
+ * @param {Array<{coachId: string, blockId: string, blockDate: string, action: string, startTime?: string|null}>} opts.changes
  * @param {string} [opts.todayStr]   YYYY-MM-DD (Dublin); injectable for tests
  */
 export async function notifyRosterChanges(db, { locationId, actorId, changes, todayStr } = {}) {

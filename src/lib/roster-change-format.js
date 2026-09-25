@@ -87,6 +87,7 @@ const VIA_NOTE = {
   slot_deleted: 'slot deleted',
   swap: 'shift swap',
   swap_drop: 'dropped shift approved',
+  replace: 'coach replaced', // REPLACE.1a
 }
 
 function dateParts(iso) {

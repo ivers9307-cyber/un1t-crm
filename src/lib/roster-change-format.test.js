@@ -35,6 +35,14 @@ describe('rosterChangeSentence', () => {
       .toBe('Removed Coach A from Tue 15 Sep 6am (dropped shift approved)')
   })
 
+  it('REPLACE.1a — a replace names itself on both rows', () => {
+    const base = { block_date: '2026-09-29', start_time: '06:00:00', details: { via: 'replace' } }
+    expect(rosterChangeSentence({ ...base, action: 'assigned', coach_name: 'Coach B' }))
+      .toBe('Assigned Coach B to Tue 29 Sep 6am (coach replaced)')
+    expect(rosterChangeSentence({ ...base, action: 'unassigned', coach_name: 'Coach A' }))
+      .toBe('Removed Coach A from Tue 29 Sep 6am (coach replaced)')
+  })
+
   it('a deleted slot has no block left to read a time from: the date alone', () => {
     expect(rosterChangeSentence(row({ action: 'unassigned', start_time: null, end_time: null, details: { via: 'slot_deleted' } })))
       .toBe('Removed Coach A from Tue 15 Sep (slot deleted)')

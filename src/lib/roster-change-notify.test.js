@@ -72,6 +72,29 @@ describe('buildRosterChangeMessage', () => {
     })
   })
 
+  // REPLACE.1a — a change may carry the shift's start ('HH:MM:SS'); a single
+  // change then names it. Every caller that passes none keeps its words.
+  it('one addition with its start time', () => {
+    expect(buildRosterChangeMessage([{ ...change('c1', '2026-09-29'), startTime: '06:00:00' }])).toEqual({
+      title: 'Added to a shift',
+      body: "You're now on the roster for Tue 29 Sep at 06:00.",
+    })
+  })
+
+  it('one removal with its start time', () => {
+    expect(buildRosterChangeMessage([{ ...change('c1', '2026-09-29', 'unassigned'), startTime: '17:30' }])).toEqual({
+      title: 'Removed from a shift',
+      body: "You're no longer on the roster for Tue 29 Sep at 17:30.",
+    })
+  })
+
+  it('an unreadable start time is left out, never printed', () => {
+    for (const startTime of [null, '', '25:00:00', '6am', undefined]) {
+      expect(buildRosterChangeMessage([{ ...change('c1', '2026-09-29'), startTime }]).body)
+        .toBe("You're now on the roster for Tue 29 Sep.")
+    }
+  })
+
   it('a mix across days', () => {
     const msg = buildRosterChangeMessage([
       change('c1', '2026-09-20'),
