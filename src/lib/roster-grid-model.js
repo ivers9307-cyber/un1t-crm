@@ -15,8 +15,8 @@
 // No clock, no network, no host timezone. Dates are 'YYYY-MM-DD' strings and
 // all day arithmetic is Date.UTC, so a 23h or 25h day cannot move a column.
 
-import { workingWindow, hoursMinutesLabel, EMPLOYEE_TYPE } from '@shared/working-time'
-import { formatTimeRange12h } from './schedule-overlap'
+import { workingWindow, workingTimeAdvisories, hoursMinutesLabel, EMPLOYEE_TYPE } from '@shared/working-time'
+import { formatTime12h, formatTimeRange12h } from './schedule-overlap'
 import { unavailableFor, unavailableSummary, describeRule } from '@shared/availability'
 import { timeOffLeaveLabel } from '@shared/time-off'
 import { dayLeaveBars, dayAvailabilityRules } from './roster-card-model'
@@ -293,7 +293,44 @@ function overlaysFor(days, timeOff, availability, todayIso) {
   }
 }
 
-// Task 5 replaces this stub.
-function advisoriesFor() {
-  return { ok: true, restGapsOf: () => [], longWeekOf: () => null }
+// WORKTIME.1's own rules over the grid's shifts: employees only (the helper
+// filters on `people`), every studio, the week's days plus one either side for
+// rest. `todayIso: null` on purpose: this is a view, not a publish gate, so a
+// past week shows its flags too. `people` is a Map, the shape
+// loadWorkingTimeShifts returns and roster-publish.js passes. If the helper
+// throws, the grid says it could not check (`ok: false` → checked false)
+// rather than implying an all-clear.
+function advisoriesFor(days, members, live) {
+  const people = new Map((members || []).filter((m) => m?.profile_id).map((m) => [
+    m.profile_id, { full_name: m.full_name ?? null, employment_type: m.employment_type ?? null },
+  ]))
+  try {
+    const { restGaps, longWeeks } = workingTimeAdvisories(live, { people, from: days[0], to: days[6], todayIso: null })
+    return {
+      ok: true,
+      restGapsOf: (id) => (restGaps || [])
+        .filter((g) => g.profile_id === id)
+        .map((g) => ({ rest_minutes: g.rest_minutes, before: g.before, after: g.after })),
+      longWeekOf: (id) => (longWeeks || []).find((w) => w.profile_id === id && w.week_start === days[0])?.minutes ?? null,
+    }
+  } catch {
+    return { ok: false, restGapsOf: () => [], longWeekOf: () => null }
+  }
+}
+
+const WEEKDAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+function dayLabel(iso) {
+  const ms = dayMs(iso)
+  if (ms === null) return String(iso ?? '')
+  const d = new Date(ms)
+  return `${WEEKDAY_SHORT[d.getUTCDay()]} ${d.getUTCDate()} ${MONTH_SHORT[d.getUTCMonth()]}`
+}
+
+/** '8h rest: ends Mon 21 Sep 10pm (Studio South), starts Tue 22 Sep 6am'. */
+export function restGapTitle(gap) {
+  if (!gap) return ''
+  const where = (s) => (s?.location_name ? ` (${s.location_name})` : '')
+  return `${hoursMinutesLabel(gap.rest_minutes)} rest: ends ${dayLabel(gap.before?.date)} ${formatTime12h(gap.before?.end)}${where(gap.before)}, `
+    + `starts ${dayLabel(gap.after?.date)} ${formatTime12h(gap.after?.start)}${where(gap.after)}`
 }

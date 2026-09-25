@@ -384,3 +384,54 @@ describe('leave and unavailability, per cell', () => {
     expect(rowOf(g, 'p-con').cells[3].unavailable).toEqual({ text: 'Unavailable 6pm–7pm', title: 'Thursdays, 6pm–7pm' })
   })
 })
+
+describe('working-time flags per row (WORKTIME.1 rules, every studio)', () => {
+  // 2h at Studio South Monday night, 1h here Tuesday at 6am, then four 12h days.
+  const heavy = (pid) => [
+    S(pid, '2026-09-21', '20:00:00', '22:00:00', SOUTH_SHIFT),
+    S(pid, '2026-09-22', '06:00:00', '07:00:00'),
+    ...['2026-09-23', '2026-09-24', '2026-09-25', '2026-09-26'].map((d) => S(pid, d, '08:00:00', '20:00:00')),
+  ]
+  const build = () => buildRosterGrid({
+    weekStart: WEEK,
+    grid: {
+      ...GRID,
+      members: [M('p-emp', 'Alex Example', 'fte', 39), M('p-con', 'Jordan Sample', 'contractor', null)],
+      shifts: [...heavy('p-emp'), ...heavy('p-con')],
+    },
+  })
+
+  it('an employee over 48 hours and short of rest is flagged on their row, the other studio counted', () => {
+    const alex = rowOf(build(), 'p-emp')
+    expect(alex.totals.minutes).toBe(3060)
+    expect(alex.longWeekMinutes).toBe(3060)
+    expect(alex.restGaps).toHaveLength(1)
+    expect(alex.restGaps[0]).toMatchObject({
+      rest_minutes: 480,
+      before: { date: '2026-09-21', end: '22:00' },
+      after: { date: '2026-09-22', start: '06:00' },
+    })
+  })
+
+  it('a contractor with the same week is never flagged (the Act covers employees)', () => {
+    const jordan = rowOf(build(), 'p-con')
+    expect(jordan.totals.minutes).toBe(3060)
+    expect(jordan.longWeekMinutes).toBeNull()
+    expect(jordan.restGaps).toEqual([])
+  })
+
+  it('the rest title names both ends, their days and studios', () => {
+    expect(restGapTitle({
+      rest_minutes: 480,
+      before: { date: '2026-09-21', end: '22:00', location_name: 'Studio South' },
+      after: { date: '2026-09-22', start: '06:00', location_name: null },
+    })).toBe('8h rest: ends Mon 21 Sep 10pm (Studio South), starts Tue 22 Sep 6am')
+    expect(restGapTitle(null)).toBe('')
+  })
+
+  it('a week with nothing to flag says nothing', () => {
+    const alex = rowOf(buildRosterGrid({ weekStart: WEEK, grid: GRID }), 'p-emp')
+    expect(alex.longWeekMinutes).toBeNull()
+    expect(alex.restGaps).toEqual([])
+  })
+})
