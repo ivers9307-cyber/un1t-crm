@@ -217,6 +217,30 @@ export function replaceAssignment(assignmentId, { profileId, confirmConflicts = 
   return api(`/api/schedule/assignments/${assignmentId}/replace`, { method: 'POST', locationId, body })
 }
 
+// --- REPLACE.1b "Offer to team" ------------------------------------------
+// Offers the caller could take (coach view; default 6 decided server-side).
+export function getOffersForMe({ locationId }) {
+  const qs = new URLSearchParams({ location_id: locationId })
+  return api(`/api/schedule/offers?${qs.toString()}`, { locationId })
+}
+// A manager's open offers for a period (Manage mode). MANAGER at the studio.
+export function getManagedOffers({ locationId, startDate, endDate }) {
+  const qs = new URLSearchParams({ location_id: locationId, view: 'manage', start_date: startDate, end_date: endDate })
+  return api(`/api/schedule/offers?${qs.toString()}`, { locationId })
+}
+// A manager offers an unfilled published shift to the team.
+export function offerBlockToTeam(blockId, { locationId }) {
+  return api(`/api/schedule/blocks/${blockId}/offer`, { method: 'POST', locationId })
+}
+// A coach claims an offered shift: first to claim gets it.
+export function claimShiftOffer(offerId, { locationId }) {
+  return api(`/api/schedule/offers/${offerId}/claim`, { method: 'POST', locationId })
+}
+// A manager withdraws an open offer.
+export function withdrawShiftOffer(offerId, { locationId }) {
+  return api(`/api/schedule/offers/${offerId}`, { method: 'DELETE', locationId })
+}
+
 // Approve / reject a time-off request (MANAGER_ROLES).
 export function respondToTimeOff(id, status, reviewNote, locationId) {
   return api(`/api/schedule/time-off/${id}`, {

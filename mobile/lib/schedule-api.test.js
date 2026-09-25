@@ -43,24 +43,29 @@ describe('schedule-api — every helper is exercised', () => {
       'assignCoachToBlock',
       'cancelSwapRequest',
       'cancelTimeOffRequest',
+      'claimShiftOffer',
       'createSwapRequest',
       'createTimeOffRequest',
       'getBlockCandidates',
       'getLeavePreview',
       'getLocationStaff',
+      'getManagedOffers',
       'getMyAllowance',
       'getMyShifts',
       'getMyTimeOff',
+      'getOffersForMe',
       'getOpenSwaps',
       'getScheduleBlocks',
       'getSwapsForMe',
       'getTeamShifts',
+      'offerBlockToTeam',
       'removeAssignment',
       'replaceAssignment',
       'respondToSwap',
       'respondToTimeOff',
       'unassignLeaveClashes',
       'withdrawLeaveCancelRequest',
+      'withdrawShiftOffer',
     ])
   })
 })
@@ -295,5 +300,20 @@ describe('REPLACE.1a — replaceAssignment', () => {
     api.mockClear()
     schedule.replaceAssignment('as-1', { profileId: 'p2', confirmConflicts: true, locationId: LOC })
     expect(lastCall()[1].body).toEqual({ profile_id: 'p2', confirm_conflicts: true })
+  })
+})
+
+describe('REPLACE.1b — offer wrappers', () => {
+  it('coach list, manager list, offer, claim, withdraw', () => {
+    schedule.getOffersForMe({ locationId: LOC })
+    expect(lastPathname()).toBe('/api/schedule/offers'); expect(lastQuery()).toEqual({ location_id: LOC }); api.mockClear()
+    schedule.getManagedOffers({ locationId: LOC, startDate: '2026-09-28', endDate: '2026-10-04' })
+    expect(lastQuery()).toEqual({ location_id: LOC, view: 'manage', start_date: '2026-09-28', end_date: '2026-10-04' }); api.mockClear()
+    schedule.offerBlockToTeam('b1', { locationId: LOC })
+    expect(lastCall()).toEqual(['/api/schedule/blocks/b1/offer', { method: 'POST', locationId: LOC }]); api.mockClear()
+    schedule.claimShiftOffer('o1', { locationId: LOC })
+    expect(lastCall()).toEqual(['/api/schedule/offers/o1/claim', { method: 'POST', locationId: LOC }]); api.mockClear()
+    schedule.withdrawShiftOffer('o1', { locationId: LOC })
+    expect(lastCall()).toEqual(['/api/schedule/offers/o1', { method: 'DELETE', locationId: LOC }])
   })
 })
