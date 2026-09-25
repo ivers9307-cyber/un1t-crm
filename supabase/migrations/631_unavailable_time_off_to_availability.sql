@@ -64,7 +64,9 @@
 --     carries anything eligible that is not in the ledger yet (a straggler
 --     filed before the code deployed). Idempotent.
 --   restore_moved_unavailable_time_off(p_batch_id uuid DEFAULT NULL) -> jsonb
---     THE ROLLBACK: re-inserts every moved row byte-for-byte (same id),
+--     THE ROLLBACK: re-inserts every moved row byte-for-byte (same id; a
+--     column ADDED to time_off_requests since takes its default; a saved
+--     column since DROPPED refuses the whole restore, avail3_restore_shape),
 --     re-extends every split row, deletes each carried rule the person has
 --     not changed since (a changed one is left and reported as
 --     restored_rule_changed). Rules are keyed by (person, start, end): one a
@@ -471,8 +473,28 @@ DECLARE
   v_rules_removed   int := 0;
   v_rules_changed   int := 0;
   v_rules_kept      int := 0;
+  v_missing         text;
+  v_cols            text;
 BEGIN
   LOCK TABLE public.time_off_requests IN SHARE ROW EXCLUSIVE MODE;
+
+  -- 0. THE SHAPE. The ledger's copies are to_jsonb of the row as it was at
+  --    the move. A column ADDED to time_off_requests since is fine: the
+  --    INSERT below names only the saved columns, so a new one takes its
+  --    default. A saved column that NO LONGER EXISTS cannot come back, and a
+  --    restore that silently lost it would not be byte-for-byte, so refuse
+  --    before anything is written and say which.
+  SELECT string_agg(DISTINCT sk.key, ', ' ORDER BY sk.key) INTO v_missing
+    FROM public.time_off_availability_moves l,
+         jsonb_object_keys(l.original) AS sk(key)
+   WHERE l.restored_at IS NULL AND (p_batch_id IS NULL OR l.batch_id = p_batch_id)
+     AND l.action = 'moved'
+     AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_attribute a
+                      WHERE a.attrelid = 'public.time_off_requests'::regclass
+                        AND a.attname = sk.key AND a.attnum > 0 AND NOT a.attisdropped);
+  IF v_missing IS NOT NULL THEN
+    RAISE EXCEPTION 'avail3_restore_shape: saved column(s) % no longer exist on time_off_requests; restore those rows by hand from time_off_availability_moves.original', v_missing;
+  END IF;
 
   -- 1. THE TIME OFF: every ledger row in scope goes back.
   FOR m IN
@@ -483,10 +505,17 @@ BEGIN
     PERFORM pg_advisory_xact_lock(hashtextextended('staff_unavailability:' || m.profile_id::text, 0));
 
     IF m.action = 'moved' THEN
-      -- The exact row, same id, every column as it was.
-      INSERT INTO public.time_off_requests
-      SELECT * FROM jsonb_populate_record(NULL::public.time_off_requests, m.original)
-      ON CONFLICT (id) DO NOTHING;
+      -- The exact row, same id, every SAVED column as it was; a column added
+      -- since takes its default (dynamic, so the row type is read now, not
+      -- when this function was first planned).
+      SELECT string_agg(quote_ident(a.attname), ', ' ORDER BY a.attnum) INTO v_cols
+        FROM pg_catalog.pg_attribute a
+       WHERE a.attrelid = 'public.time_off_requests'::regclass
+         AND a.attnum > 0 AND NOT a.attisdropped AND a.attgenerated = ''
+         AND m.original ? a.attname;
+      EXECUTE format(
+        'INSERT INTO public.time_off_requests (%1$s) SELECT %1$s FROM pg_catalog.jsonb_populate_record(NULL::public.time_off_requests, $1) ON CONFLICT (id) DO NOTHING',
+        v_cols) USING m.original;
     ELSE
       -- AFTER UPDATE trigger: type 'unavailable', so no allowance moves.
       UPDATE public.time_off_requests r
@@ -579,7 +608,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION public.restore_moved_unavailable_time_off(uuid) IS
-  'AVAIL.3 (mig 631) — the rollback of move_unavailable_time_off_to_availability: re-inserts every moved row byte-for-byte (same id), re-extends every split row, and deletes each carried rule the person has not changed since (else restore_outcome = restored_rule_changed and their rule stays). A rule is removed only once no un-restored ledger row of the same (person, start, end) remains, so restoring one batch never deletes a rule a later batch reused (restore_outcome = restored_rule_in_use until that batch is restored too). One batch, or all when p_batch_id is NULL. Idempotent (restored_at). service_role only.';
+  'AVAIL.3 (mig 631) — the rollback of move_unavailable_time_off_to_availability: re-inserts every moved row byte-for-byte (same id; a column added since takes its default, a saved column since dropped refuses with avail3_restore_shape), re-extends every split row, and deletes each carried rule the person has not changed since (else restore_outcome = restored_rule_changed and their rule stays). A rule is removed only once no un-restored ledger row of the same (person, start, end) remains, so restoring one batch never deletes a rule a later batch reused (restore_outcome = restored_rule_in_use until that batch is restored too). One batch, or all when p_batch_id is NULL. Idempotent (restored_at). service_role only.';
 
 REVOKE ALL ON FUNCTION public.restore_moved_unavailable_time_off(uuid) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.restore_moved_unavailable_time_off(uuid) TO service_role;

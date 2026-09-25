@@ -409,6 +409,25 @@ describe('migration 631 — restore', () => {
       .toEqual([{ restore_outcome: 'restored_rule_changed' }])
   }))
 
+  // Review D4 — the ledger's copy predates any later column. A column added
+  // since takes its default; the saved columns come back exactly.
+  it('still restores after time_off_requests gains a NOT NULL DEFAULT column', () => inTx(async () => {
+    const before = await allTimeOff()
+    await move()
+    await runSql(`ALTER TABLE public.time_off_requests ADD COLUMN source text NOT NULL DEFAULT 'app'`)
+    expect(await restore()).toMatchObject({ restored: 3, rules_removed: 3 })
+    expect(await allTimeOff()).toEqual(before.map(({ j }) => ({ j: { ...j, source: 'app' } })))
+  }))
+
+  it('refuses, clearly and before touching anything, when a saved column no longer exists', () => inTx(async () => {
+    await move()
+    const after = await allTimeOff()
+    await runSql('ALTER TABLE public.time_off_requests DROP COLUMN review_note')
+    await expectRaise('SELECT public.restore_moved_unavailable_time_off()', [], /avail3_restore_shape: .*review_note/)
+    expect((await allTimeOff()).length).toBe(after.length)
+    expect(await q('SELECT count(*)::int AS n FROM public.time_off_availability_moves WHERE restored_at IS NOT NULL')).toEqual([{ n: 0 }])
+  }))
+
   it('is idempotent', () => inTx(async () => {
     await move()
     await restore()
