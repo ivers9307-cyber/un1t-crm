@@ -130,6 +130,7 @@ These are marked **REVIEW** in the artifact until he confirms or changes them. E
 
 ## Follow-ups found along the way (not in any PR yet)
 
+- `check:select-columns` does not check columns inside an ALIASED embed (`locations:location_id ( … )`) — a misspelled column there passed; only `table!inner ( … )` embeds are resolved (found building 35).
 - 🔴 **`/api/public/classes` returns `spots_left` (a raw capacity count) to anonymous callers** (`src/lib/public-classes.js`) — the page doesn't render it but the response carries it, against the never-surface-capacity rule. Small fix: drop the field (found planning 36).
 - 🔴 `class_occurrences.instructor` is NULL on all 632 rows (no name override; Glofox resolves none), so the STUDIO-KPI.4 per-coach split has never worked, and each 15-min sync makes ~1+N futile trainer-name calls (a few hundred a day) (found planning 36).
 - The `sync-class-occurrences` heartbeat expects a DAILY run (86,400s + 2h) but the cron runs every 15 min and the spine holds only 48h ahead — a dead sync is noticed a day late (found planning 36).
