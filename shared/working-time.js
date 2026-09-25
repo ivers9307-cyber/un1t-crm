@@ -38,6 +38,12 @@ export const MAX_WEEK_HOURS = 48
 // profiles.employment_type of an employee. Mig 070 pins the column to
 // 'fte' | 'contractor', NOT NULL DEFAULT 'fte'. Nothing else is covered.
 export const EMPLOYEE_TYPE = 'fte'
+// OWNER REVIEW: what a "rest" is measured between. 'working_day' = the last
+// end of one block_date to the first start of the next (split shifts inside a
+// day never flag each other). 'shift' = every consecutive pair of shifts, the
+// literal "end of one shift to the start of the next" reading, which flags
+// every split shift. One-line switch; both readings are tested.
+export const REST_GAP_SCOPE = 'working_day'
 
 const MINUTE_MS = 60 * 1000
 const HOUR_MS = 60 * MINUTE_MS
@@ -135,4 +141,93 @@ export function workingWindow(row) {
     startMs: dublinWallMs(date, start),
     endMs: dublinWallMs(endDate, end),
   }
+}
+
+// Every usable window, once per (person, block): the same block reached by two
+// reads must not count twice.
+function windowsOf(shifts) {
+  const seen = new Set()
+  const out = []
+  for (const row of shifts || []) {
+    const w = workingWindow(row)
+    if (!w) continue
+    const key = `${w.profile_id}|${w.block_id ?? `${w.date}|${w.start}|${w.end}|${w.location_id}`}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(w)
+  }
+  return out
+}
+
+const slotOf = (w) => ({
+  block_id: w.block_id,
+  date: w.date,
+  start: w.start,
+  end: w.end,
+  name: w.name,
+  location_id: w.location_id,
+  location_name: w.location_name,
+})
+
+// One person's windows as the UNITS a rest is measured between, in order:
+// { first, last } = the unit's earliest-starting and latest-ending window.
+//   'working_day'  one unit per block_date (split shifts inside a day are one
+//                  working day; the overnight gap is the rest).
+//   'shift'        one unit per shift (every consecutive pair is a rest).
+function restUnits(windows, restScope) {
+  if (restScope === 'shift') {
+    return [...windows]
+      .sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs)
+      .map((w) => ({ first: w, last: w }))
+  }
+  const byDate = new Map()
+  for (const w of windows) {
+    const day = byDate.get(w.date)
+    if (!day) {
+      byDate.set(w.date, { first: w, last: w })
+      continue
+    }
+    if (w.startMs < day.first.startMs) day.first = w
+    if (w.endMs > day.last.endMs) day.last = w
+  }
+  return [...byDate.keys()].sort().map((d) => byDate.get(d))
+}
+
+/**
+ * Per person, each pair of consecutive rest units (working days by default,
+ * REST_GAP_SCOPE) whose rest (the later unit's first start minus the earlier
+ * unit's latest end) is under `minRestHours`. A negative rest (an overnight
+ * shift running into the next day's first) reports 0.
+ *
+ * @returns {Array<{ profile_id, rest_minutes, before: Slot, after: Slot }>}
+ *   Slot = { block_id, date, start, end, name, location_id, location_name }
+ */
+export function restGapViolations(shifts, { minRestHours = MIN_REST_HOURS, restScope = REST_GAP_SCOPE } = {}) {
+  const minMs = minRestHours * HOUR_MS
+  const byPerson = new Map()
+  for (const w of windowsOf(shifts)) {
+    if (!byPerson.has(w.profile_id)) byPerson.set(w.profile_id, [])
+    byPerson.get(w.profile_id).push(w)
+  }
+
+  const out = []
+  for (const [profileId, windows] of byPerson) {
+    const units = restUnits(windows, restScope)
+    for (let i = 1; i < units.length; i++) {
+      const before = units[i - 1].last
+      const after = units[i].first
+      const restMs = after.startMs - before.endMs
+      if (restMs >= minMs) continue
+      out.push({
+        profile_id: profileId,
+        rest_minutes: Math.max(0, Math.floor(restMs / MINUTE_MS)),
+        before: slotOf(before),
+        after: slotOf(after),
+      })
+    }
+  }
+  return out.sort((a, b) =>
+    a.after.date.localeCompare(b.after.date)
+    || a.after.start.localeCompare(b.after.start)
+    || String(a.profile_id).localeCompare(String(b.profile_id)))
 }
