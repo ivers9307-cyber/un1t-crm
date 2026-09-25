@@ -131,6 +131,14 @@ function dublinOffsetMs(ms) {
 // AT the corrected instant. The second pass matters only inside the skipped
 // spring-forward hour (a wall 01:30 on 29 Mar 2026 lands on 02:30 IST, never
 // on 00:30 GMT); every real wall time is right after either pass.
+//
+// The AMBIGUOUS hour: on the October change (25 Oct 2026) the wall clock runs
+// 01:00-01:59 twice, first IST then GMT. A wall time in it resolves to the
+// SECOND (GMT) occurrence, because the naive guess (the wall time read as
+// UTC) already sits after the 01:00 UTC change, where the offset is 0. That is
+// harmless here: no studio shift starts or ends between 01:00 and 02:00, and
+// for one that did the choice moves a rest or a week total by at most the one
+// repeated hour, on the side of counting it as later.
 // shared/dublin-time.js dublinDayStartMs does the one-pass version for midnight.
 function dublinWallMs(date, time) {
   const naive = Date.UTC(date.y, date.mo - 1, date.d, time.h, time.mi, time.s)

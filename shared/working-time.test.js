@@ -54,6 +54,10 @@ describe('workingWindow', () => {
     expect(fwd.endMs - fwd.startMs).toBe(2 * HOUR)
   })
 
+  it('an ambiguous wall time on the October change resolves to its second (GMT) occurrence', () => {
+    expect(workingWindow(S('p1', '2026-10-25', '01:30', '03:00')).startMs).toBe(Date.UTC(2026, 9, 25, 1, 30)) // 01:30 GMT, not 00:30 UTC
+  })
+
   it('the next spring-forward night too (Sun 28 Mar 2027): 00:30-03:30 is 2 real hours', () => {
     const fwd = workingWindow(S('p1', '2027-03-28', '00:30', '03:30'))
     expect(fwd.startMs).toBe(Date.UTC(2027, 2, 28, 0, 30)) // 00:30 GMT
