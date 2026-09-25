@@ -7336,7 +7336,7 @@ registry.registerPath({
   tags: ['Public'],
   summary: "A person's own published shifts as an iCalendar feed",
   description:
-    'Anonymous; `file` is `<rcf_ token>.ics` (the suffix is optional). RFC 5545, times in UTC. Contains the token holder\'s OWN published, not-cancelled shifts at every studio, Dublin today −14 to +56 days: template name · studio, the studio address, stable UIDs per assignment. No colleague, note or pay. ' +
+    'Anonymous; `file` is `<rcf_ token>.ics` (the suffix is optional). RFC 5545, times in UTC. Contains the token holder\'s OWN published, not-cancelled shifts at every studio they are rostered at, across organisations if they work in more than one (their own diary, deliberately not narrowed to one organisation), Dublin today −14 to +56 days: template name · studio, the studio address, stable UIDs per assignment, SEQUENCE raised by any edit. No colleague, note or pay. ' +
     'One 404 for every refusal (not a token, unknown, replaced, turned off, or the person is deactivated or deleted). 429 per token (never per IP). 503 on a read failure, never an empty 200, because a subscribed calendar replaces its whole copy. Public on the CRM hosts only.',
   request: { params: z.object({ file: z.string().openapi({ description: '`<token>.ics`' }) }) },
   responses: {

@@ -6,6 +6,9 @@
 // resolves to (the feed) or the session's own id (management). There is no id
 // parameter anywhere a caller controls. That is the tenant boundary: a person's
 // own shifts, at whichever studios they are rostered, and nobody else's rows.
+// Deliberately NOT organisation-scoped: someone rostered in two organisations
+// sees both in their own calendar. It is their diary, not a tenant's report,
+// and no other person's row is ever read, so no tenant data crosses over.
 //
 // DEACTIVATION (D5): resolveCalendarFeed refuses a profile with active=false
 // or deleted_at set. That one check covers PUT active:false, DELETE

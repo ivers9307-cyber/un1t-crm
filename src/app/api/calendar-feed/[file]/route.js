@@ -2,6 +2,10 @@
 // ICSFEED.1 — GET /api/calendar-feed/<token>.ics — a person's own published
 // shifts as an iCalendar feed, for Apple, Google and Outlook to subscribe to.
 //
+// SCOPE: the token holder's OWN assignments at every studio they are rostered
+// at, across organisations if they work in more than one (their own diary; no
+// other person's row is read). Deliberately not narrowed to one organisation.
+//
 // ANONYMOUS BY DESIGN. Calendar apps poll a URL and can hold no session, so
 // the rcf_ token in the path IS the credential (256 random bits; only its
 // sha256 is stored, mig 632). Public via the proxy's publicExactPaths

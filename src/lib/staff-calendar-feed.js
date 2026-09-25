@@ -23,6 +23,11 @@
 // Outlook applies the change. Known gap: renaming a template or editing a
 // studio's name/address changes SUMMARY/LOCATION without touching either
 // updated_at, so SEQUENCE does not move for that alone.
+//
+// SCOPE is the PERSON, not an organisation: the feed carries the person's own
+// assignments at every studio they are rostered at, across organisations if
+// they work in more than one. Deliberate: it is their own diary, and nothing
+// about anyone else is read.
 
 import { addDaysISO } from '@/lib/dublin-time'
 import { dayStartMsInTz, resolveTz, wallMsInTz } from '@/lib/tz-time'
