@@ -100,6 +100,7 @@ These are marked **REVIEW** in the artifact until he confirms or changes them. E
 18. **The availability-change notice is on by default for every role,** not just managers: a push can't be scoped to one studio, so a manager who is plain staff at another studio would otherwise never get it. Outside 07:00–22:00 it waits for 07:00 and overnight saves fold into one notice.
 19. **Managers can't set availability on a coach's behalf** in this cut.
 20. **A posted admin shift nobody takes still escalates as "Shift still uncovered"** (`src/lib/swap-cover.js` ~413). The admin work still needs its person, so it stays.
+21. **Reactivating a coach brings their old calendar-feed link back** (the feed simply refuses while they are inactive). A new link can be made any time from the Subscribe screen.
 
 ## Follow-ups found along the way (not in any PR yet)
 
@@ -116,6 +117,7 @@ These are marked **REVIEW** in the artifact until he confirms or changes them. E
 
 Updated by the loop. Newest first.
 
+- 25 Sep ~13:15Z: **#1759 SHIFTTYPE.1 MERGED** (auto-merge, CI green); its EAS run being watched. 22 ICSFEED.1 plan written (feed on the proxy's public list only — an API route, not a page; UTC times; 503 never an empty calendar); implementer started (`~/code/un1t-crm-icsfeed1`). Operator step now due for Richard: mark admin templates once the phone update reaches phones.
 - 25 Sep ~13:05Z: **#1758 WORKTIME.1 MERGED** (11:47Z), EAS Update run 36131346625 SUCCESS. 13 SHIFTTYPE.1 = [PR #1759](https://github.com/ivers9307-cyber/un1t-crm/pull/1759) (gate 27,887 + build; merged with WORKTIME, 1 test conflict kept both, 588 affected tests green), auto-merge on; check ITS EAS run before any other OTA merge.
 - 25 Sep ~13:10Z: 31 HEARTBEAT.1 review APPROVED (no defects); I corrected its CLAUDE.md line. Ops rule: apply mig 633 right AFTER the prod deploy (a row seeded early goes stale in 20 min if CI is slow). Queued for gate after SHIFTTYPE.1. 16 AVAIL.1a built (8 commits, mig 630, 430 tests), in independent review. AVAIL.1b implementer started, stacked on `avail-1a` (`~/code/un1t-crm-avail1b`). SHIFTTYPE.1 re-gating after resolving 2 test-file conflicts with DATECHECK.1.
 - 25 Sep ~12:45Z: ✅ **MIG 628 APPLIED** (`628_shift_template_kind`). Pre-checks (a)–(e) as expected; post (f) `text | NO | 'class'`, (g) 23 class, (h) both CHECKs, (i) true,true; security advisors unchanged (47 INFO + 2 WARN). Rollback record: scratchpad `mig628-rollback-2026-09-25.txt`. SHIFTTYPE.1 review nits fixed, full gate running; merges after #1758's EAS Update succeeds.
