@@ -205,12 +205,19 @@ export function planBlockEdit({ block, body = {} }) {
 }
 
 /**
+ * Second review nit — a shift starting before this, on the first morning a
+ * notice can go out (07:00), is 'too_late': a notice at 07:00 is no use for a
+ * 07:10 start.
+ */
+export const TOO_LATE_BEFORE = '07:30'
+
+/**
  * When will the coaches hear about a time change? The 5-minute notice arm sends
  * only inside staff quiet hours (07:00-22:00 at the studio).
  *   'shortly'  in band now: the next tick.
  *   'morning'  quiet now: from 07:00 on the next morning.
  *   'too_late' quiet now, and the shift is on that very morning with a start
- *              (old OR new, any coach) before 07:00: it will have started
+ *              (old OR new, any coach) before TOO_LATE_BEFORE (07:30): it will have started
  *              before anyone is told, so the manager must ring them.
  * @param {{ nowMs: number, timeZone?: string|null, blockDate: string,
  *           windows: Array<{ from: {start_time}, to: {start_time} }> }} args
@@ -221,7 +228,7 @@ export function blockEditNoticeWhen({ nowMs, timeZone, blockDate, windows = [] }
   const today = dublinDayStr(nowMs)
   const noticeDay = wall < STAFF_PUSH_FROM ? today : addDaysISO(today, 1)
   const early = windows.some((w) => [w.from?.start_time, w.to?.start_time]
-    .some((t) => toHms(t) !== null && toHms(t).slice(0, 5) < STAFF_PUSH_FROM))
+    .some((t) => toHms(t) !== null && toHms(t).slice(0, 5) < TOO_LATE_BEFORE))
   return blockDate === noticeDay && early ? 'too_late' : 'morning'
 }
 

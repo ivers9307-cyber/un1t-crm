@@ -465,3 +465,32 @@ describe('PUT /api/schedule/blocks/[id] — a shift that already ended today (se
   })
 })
 
+// Second review nit — when clearing an override fails, the coach keeps the old
+// override, and against the new block times that can be a window that ends
+// before it starts. Say so, by name, and do not announce a backwards window.
+describe('PUT /api/schedule/blocks/[id] — a stuck override that no longer fits (second review nit)', () => {
+  it('warns naming the coach, and logs no time change for them', async () => {
+    const db = makeDb({
+      block: { ...BLOCK, shift_assignments: [on('u1', 'Coach A', { start_time_override: '09:00:00' })] },
+      followResult: { data: [], error: null },
+    })
+    createServerClient.mockReturnValue(db)
+    const body = await (await PUT(req({ start_time: '06:00', end_time: '08:00' }), params)).json()
+    expect(body.success).toBe(true)
+    expect(body.warning).toMatch(/Coach A's own hours are now 9am–8am, which ends before it starts/)
+    expect(logRosterChange).not.toHaveBeenCalled()
+  })
+})
+
+// Second review nit — 'too_late' covers starts before 07:30: a notice sent at
+// 07:00 is no use for a 07:10 start.
+describe('PUT /api/schedule/blocks/[id] — too_late threshold (second review nit)', () => {
+  it('07:10 is too late; 07:30 is morning', async () => {
+    vi.setSystemTime(new Date('2026-09-29T22:30:00Z')) // 23:30 Dublin
+    createServerClient.mockReturnValue(makeDb({ block: { ...BLOCK, start_time: '07:10:00' } }))
+    expect((await (await PUT(req({ end_time: '11:00' }), params)).json()).notice).toEqual({ coaches: 1, when: 'too_late' })
+    createServerClient.mockReturnValue(makeDb({ block: { ...BLOCK, start_time: '07:30:00' } }))
+    expect((await (await PUT(req({ end_time: '11:00' }), params)).json()).notice).toEqual({ coaches: 1, when: 'morning' })
+  })
+})
+

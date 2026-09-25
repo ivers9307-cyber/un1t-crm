@@ -57,6 +57,7 @@ import { planBlockEdit, sameWindow, matchesExpected, blockEditNoticeWhen, coachS
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { BRIEFING_MAX_LENGTH } from '@shared/shift-briefing'
 import { findShiftOverlaps } from '@/lib/shift-overlaps'
+import { formatTime12h } from '@/lib/schedule-overlap'
 import { logWarn } from '@/lib/log'
 
 export async function DELETE(_request, props) {
@@ -322,7 +323,20 @@ export async function PUT(request, props) {
   if (stuckNames.length > 0) {
     warnings.push(`${stuckNames.join(', ')} still ${stuckNames.length === 1 ? 'has' : 'have'} the old hours: their own times could not be moved with the shift. Adjust them in the coach's row.`)
   }
+  // Second review nit — a coach whose override could not follow keeps it, and
+  // against the new block times that window can end at or before it starts.
+  // Named in the warning, and not announced: a backwards window is not a
+  // shift anyone can be told about. The manager fixes it in the coach's row
+  // (whose own PUT tells the coach).
+  const backwards = new Set()
+  for (const a of plan.affected) {
+    if (!stuck.has(a.assignmentId) || a.toIfStuck.end_time > a.toIfStuck.start_time) continue
+    backwards.add(a.assignmentId)
+    const name = (block.shift_assignments || []).find((x) => x.id === a.assignmentId)?.profiles?.full_name || 'A coach'
+    warnings.push(`${name}'s own hours are now ${formatTime12h(a.toIfStuck.start_time)}–${formatTime12h(a.toIfStuck.end_time)}, which ends before it starts: fix their hours in the coach's row.`)
+  }
   const affected = plan.affected
+    .filter((a) => !backwards.has(a.assignmentId))
     .map((a) => (stuck.has(a.assignmentId) ? { ...a, to: a.toIfStuck } : a))
     .filter((a) => !sameWindow(a.from, a.to))
 

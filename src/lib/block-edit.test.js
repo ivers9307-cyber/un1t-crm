@@ -1,7 +1,7 @@
 // src/lib/block-edit.test.js
 // BLOCKEDIT.1 — what editing ONE shift block means. Pure; table-driven.
 import { describe, it, expect } from 'vitest'
-import { planBlockEdit, toHms, sameWindow, blockEditNoticeText } from './block-edit'
+import { planBlockEdit, toHms, sameWindow, blockEditNoticeText, TOO_LATE_BEFORE } from './block-edit'
 
 const coach = (id, name, over = {}) => ({
   id: `a-${id}`, profile_id: id, status: 'scheduled',
@@ -197,3 +197,10 @@ describe('planBlockEdit — a coach window that no longer makes sense (review fi
     expect(p.warnings.join(' ')).not.toMatch(/outside/)
   })
 })
+
+describe('TOO_LATE_BEFORE (second review nit)', () => {
+  it('is 07:30: a notice at 07:00 is no use for a shift that starts before then', () => {
+    expect(TOO_LATE_BEFORE).toBe('07:30')
+  })
+})
+
