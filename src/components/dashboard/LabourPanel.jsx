@@ -14,6 +14,12 @@ const REASONS = {
   unknown_person: 'profile not found',
 }
 
+// Review 3 — why a studio is left out of the total's ratio.
+const EXCLUDED = {
+  none: 'no revenue tracked there',
+  unavailable: 'revenue could not be read',
+}
+
 function euros(cents) {
   if (cents == null) return '—'
   return `€${Math.round(cents / 100).toLocaleString('en-IE')}`
@@ -80,7 +86,8 @@ function StudioLabour({ row, isTotal = false }) {
       ) : null}
       {isTotal && row.ratio_excludes?.length > 0 ? (
         <p className="mt-1 text-xs text-un1t-muted">
-          Ratios leave out {row.ratio_excludes.join(', ')}: no revenue tracked there.
+          {row.revenue_status === 'tracked' ? 'Ratios leave out' : 'No ratio:'}{' '}
+          {row.ratio_excludes.map((x) => `${x.name} (${EXCLUDED[x.status] || EXCLUDED.none})`).join(', ')}.
         </p>
       ) : null}
     </div>

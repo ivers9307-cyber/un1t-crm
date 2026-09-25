@@ -26,7 +26,7 @@ const VM = {
   total: {
     name: 'All studios shown', revenue_status: 'tracked', mrr_cents: 1_000_000, recurring_members: 191,
     revenue_to_date_cents: 500_000, forecast: part(500_000, 14_426, 10), actual: part(250_000, 11_426, 8),
-    forecast_pct: 33.4, actual_pct: 33.7, draft_hours: 1, ratio_excludes: ['UN1T Hatch Street'],
+    forecast_pct: 33.4, actual_pct: 33.7, draft_hours: 1, ratio_excludes: [{ name: 'UN1T Hatch Street', status: 'none' }],
     ratio_base: { studios: ['UN1T Stillorgan'], forecast_cost_cents: 334_000, actual_cost_cents: 168_500 },
   },
   uncosted: [{ name: 'Sam Demo', reason: 'no_salary', hours: 1 }],
@@ -61,10 +61,23 @@ describe('LabourPanel', () => {
     expect(html({ ...VM, studios: [{ ...HATCH, revenue_status: 'unavailable' }], total: null })).toContain('Could not be read')
   })
 
-  it('the total, and which studios its ratios leave out', () => {
+  it('the total, and which studios its ratios leave out, with why', () => {
     const out = html()
     expect(out).toContain('All studios shown')
-    expect(out).toContain('Ratios leave out UN1T Hatch Street')
+    expect(out).toContain('Ratios leave out UN1T Hatch Street (no revenue tracked there).')
+  })
+
+  it('an excluded studio whose revenue could not be read says so, and a total with no revenue read says "Could not be read"', () => {
+    const total = {
+      ...VM.total, revenue_status: 'unavailable', mrr_cents: null, recurring_members: null, revenue_to_date_cents: null,
+      forecast_pct: null, actual_pct: null, ratio_base: null,
+      ratio_excludes: [{ name: 'UN1T Stillorgan', status: 'unavailable' }, { name: 'UN1T Hatch Street', status: 'none' }],
+    }
+    const out = html({ ...VM, studios: [{ ...STILL, revenue_status: 'unavailable', forecast_pct: null, actual_pct: null }, HATCH], total })
+    expect(out).toContain('No ratio: UN1T Stillorgan (revenue could not be read), UN1T Hatch Street (no revenue tracked there).')
+    const totalCard = out.slice(out.indexOf('All studios shown'))
+    expect(totalCard).toContain('Could not be read')
+    expect(totalCard).not.toContain('Not tracked here')
   })
 
   it('the total never puts a subset ratio beside totals that include excluded studios: it names the base', () => {

@@ -246,7 +246,7 @@ describe('buildLabourMonth', () => {
       actual: { employees_cents: 250_000, contractors_cents: 11_426, cost_cents: 261_426, hours: 8 },
       forecast_pct: 33.4, actual_pct: 33.7,
       draft_hours: 1,
-      ratio_excludes: ['UN1T Hatch Street'],
+      ratio_excludes: [{ name: 'UN1T Hatch Street', status: 'none' }],
       // Review 2 — the ratio is on a SUBSET, so its base is carried with it.
       ratio_base: { studios: ['UN1T Stillorgan'], forecast_cost_cents: 334_000, actual_cost_cents: 168_500 },
     })
@@ -288,9 +288,19 @@ describe('buildLabourMonth', () => {
   it('revenue that could not be read: labour shown, ratio blank, left out of the total ratio', () => {
     const vm = build({ revenue: new Map([[STILL, null], [HATCH, REVENUE.get(HATCH)]]) })
     expect(rowOf(vm, STILL)).toMatchObject({ revenue_status: 'unavailable', mrr_cents: null, forecast_pct: null, actual_pct: null })
-    expect(vm.total).toMatchObject({ revenue_status: 'none', mrr_cents: null, forecast_pct: null, actual_pct: null })
-    expect(vm.total.ratio_excludes).toEqual(['UN1T Stillorgan', 'UN1T Hatch Street'])
+    // Review 3 — no ratio because a read FAILED is not "no revenue tracked".
+    expect(vm.total).toMatchObject({ revenue_status: 'unavailable', mrr_cents: null, forecast_pct: null, actual_pct: null })
+    expect(vm.total.ratio_excludes).toEqual([
+      { name: 'UN1T Stillorgan', status: 'unavailable' },
+      { name: 'UN1T Hatch Street', status: 'none' },
+    ])
     expect(vm.total.ratio_base).toBe(null)
+  })
+
+  it('a total with no revenue tracked anywhere (and nothing failed) says none', () => {
+    const vm = build({ revenue: new Map([[STILL, REVENUE.get(HATCH)], [HATCH, REVENUE.get(HATCH)]]) })
+    expect(vm.total.revenue_status).toBe('none')
+    expect(vm.total.ratio_excludes.map((x) => x.status)).toEqual(['none', 'none'])
   })
 
   it('no "so far" ratio at the first instant of the month (no revenue to date yet)', () => {

@@ -244,7 +244,9 @@ function totalOf(rows) {
   })
   return {
     name: 'All studios shown',
-    revenue_status: any ? 'tracked' : 'none',
+    // Review 3 — no studio tracked: "could not be read" if any read failed
+    // (the ratio is missing because of the failure), else "not tracked".
+    revenue_status: any ? 'tracked' : (excluded.some((r) => r.revenue_status === 'unavailable') ? 'unavailable' : 'none'),
     mrr_cents: mrr,
     recurring_members: any ? sum(tracked, (r) => r.recurring_members) : null,
     revenue_to_date_cents: toDate,
@@ -255,7 +257,7 @@ function totalOf(rows) {
     forecast_pct: labourPct(trackedForecast, mrr),
     actual_pct: labourPct(trackedActual, toDate),
     draft_hours: round1(sum(rows, (r) => r.draft_hours)),
-    ratio_excludes: excluded.map((r) => r.name),
+    ratio_excludes: excluded.map((r) => ({ name: r.name, status: r.revenue_status })),
     // Review 2 — when the ratio covers only SOME of the studios, its base
     // (which studios, and their labour) rides with it, so the panel never
     // prints a subset's percentage beside totals that include the rest.
