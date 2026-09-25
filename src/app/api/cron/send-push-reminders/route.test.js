@@ -303,8 +303,7 @@ describe('GET /api/cron/send-push-reminders — shift-time-changes heartbeat', (
 // REPLACE.1a — the held replace-notice arm (src/lib/shift-replace-notify.js).
 // Isolated like the shift arm: it can cost no reminder and no parent stamp.
 // Its own heartbeat row, 'replace-notices', is stamped only on a clean run;
-// the row is seeded by mig 640 (REPLACE.1b), so until then that stamp is a
-// logged no-op (stampHeartbeat is UPDATE-only).
+// the row is seeded by mig 640, applied right after the deploy.
 describe('GET /api/cron/send-push-reminders — REPLACE.1a held replace notices', () => {
   const REPLACE_CLEAN = { rows: 2, groups: 1, silent: 0, quiet: 0, fresh: 0, errors: 0 }
 

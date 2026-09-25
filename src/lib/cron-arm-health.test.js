@@ -37,7 +37,7 @@ describe('heartbeat row names', () => {
     expect(ROSTER_RUNWAY_HEARTBEAT).toBe('roster-runway')
   })
 
-  it('REPLACE.1a — the held replace-notice arm has its own row name (seeded later; stampHeartbeat is UPDATE-only, so until then a stamp is a logged no-op)', () => {
+  it('REPLACE.1a — the held replace-notice arm has its own row, the name mig 640 seeds (the migration test cross-checks the SQL)', () => {
     expect(REPLACE_NOTICES_HEARTBEAT).toBe('replace-notices')
   })
 })
