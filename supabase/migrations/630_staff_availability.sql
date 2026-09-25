@@ -13,6 +13,8 @@
 --   * A save REPLACES the person's weekly rules and their dated rules that
 --     have not ended (end_date >= the caller's Dublin today). A dated rule
 --     that ended before today is history: kept, never replaced, never added.
+--     A dated rule may not START before today unless it is one the person
+--     already has with the same dates and window (no backdating).
 --   * Every real change writes ONE staff_availability_changes row (before and
 --     after snapshots, the actor). That row is also the notice queue: the
 --     route tells the managers at once inside 07:00-22:00 studio time, and
@@ -261,6 +263,25 @@ BEGIN
     RAISE EXCEPTION 'availability_past_date: a date that has already passed cannot be added';
   END IF;
 
+  -- No backdating: a dated rule that starts before today must be one the
+  -- person already has, current (end_date >= today), with the same content
+  -- (dates, all_day, times; the note may change). A new or changed one would
+  -- claim days that are already gone.
+  IF EXISTS (
+    SELECT 1
+      FROM jsonb_to_recordset(v_after) AS x(kind text, start_date date, end_date date,
+                                            all_day boolean, start_time time, end_time time)
+     WHERE x.kind = 'dated' AND x.start_date < p_today
+       AND NOT EXISTS (
+         SELECT 1 FROM public.staff_unavailability u
+          WHERE u.profile_id = p_profile_id AND u.kind = 'dated' AND u.end_date >= p_today
+            AND u.start_date = x.start_date AND u.end_date = x.end_date AND u.all_day = x.all_day
+            AND u.start_time IS NOT DISTINCT FROM x.start_time
+            AND u.end_time IS NOT DISTINCT FROM x.end_time)
+  ) THEN
+    RAISE EXCEPTION 'availability_past_start: a new date cannot start before today';
+  END IF;
+
   IF v_after = v_before THEN
     RETURN jsonb_build_object('changed', false, 'change_id', NULL, 'before', v_before, 'after', v_after);
   END IF;
@@ -286,7 +307,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION public.replace_staff_unavailability(uuid, uuid, date, jsonb, jsonb) IS
-  'AVAIL.1 (mig 630) — replaces a coach''s weekly rules and their dated rules ending on/after p_today with p_weekly/p_dated, atomically, and logs ONE staff_availability_changes row. Returns { changed, change_id, before, after } (canonical snapshots); changed=false writes nothing. Refuses a dated rule ending before p_today (availability_past_date), a tombstoned or unknown profile (availability_no_profile), non-array input (availability_bad_args); the table CHECKs refuse malformed rules (23514). service_role only.';
+  'AVAIL.1 (mig 630) — replaces a coach''s weekly rules and their dated rules ending on/after p_today with p_weekly/p_dated, atomically, and logs ONE staff_availability_changes row. Returns { changed, change_id, before, after } (canonical snapshots); changed=false writes nothing. Refuses a dated rule ending before p_today (availability_past_date), a new or changed dated rule starting before p_today (availability_past_start), a tombstoned or unknown profile (availability_no_profile), non-array input (availability_bad_args); the table CHECKs refuse malformed rules (23514). service_role only.';
 
 REVOKE ALL ON FUNCTION public.replace_staff_unavailability(uuid, uuid, date, jsonb, jsonb) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.replace_staff_unavailability(uuid, uuid, date, jsonb, jsonb) TO service_role;

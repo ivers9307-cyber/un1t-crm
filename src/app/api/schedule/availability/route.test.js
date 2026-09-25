@@ -156,6 +156,19 @@ describe('PUT own', () => {
     expect((await PUT(putReq({ dated: [{ start_date: '2026-09-23', end_date: '2026-09-24', all_day: true }] }))).status).toBe(500)
     expect(saveOwnAvailability).not.toHaveBeenCalled()
   })
+  it('a NEW rule that starts before today (backdating) is refused; one the coach already has is kept', async () => {
+    getCurrentUser.mockResolvedValue(coach)
+    const started = { start_date: '2026-09-20', end_date: '2026-09-30', all_day: true }
+    let res = await PUT(putReq({ dated: [started] }))
+    expect(res.status).toBe(400)
+    expect((await res.json()).issues).toEqual([{ path: 'dated.0', message: 'Start today or later' }])
+    expect(saveOwnAvailability).not.toHaveBeenCalled()
+
+    readKnownDatedKeys.mockResolvedValue({ keys: new Set([ruleKey({ kind: 'dated', ...started })]), error: null })
+    res = await PUT(putReq({ dated: [{ ...started, note: 'edited note' }] }))
+    expect(res.status).toBe(200)
+    expect(saveOwnAvailability.mock.calls[0][1].dated).toEqual([expect.objectContaining({ start_date: '2026-09-20', end_date: '2026-09-30', note: 'edited note' })])
+  })
   it('no dated rule before today: the history is not read at all', async () => {
     getCurrentUser.mockResolvedValue(coach)
     await PUT(putReq({ weekly: [MON], dated: [{ start_date: '2026-10-03', all_day: true }] }))

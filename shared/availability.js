@@ -152,7 +152,9 @@ export function ruleKey(rule) {
  * started before today. A dated rule that ended before today is refused
  * ('That date has passed') unless it is one of them: then it is history the
  * client merely sent back (a tab left open over midnight), which is no
- * problem, and the caller drops it with withoutEnded() before saving.
+ * problem, and the caller drops it with withoutEnded() before saving. A dated
+ * rule that STARTS before today and is not one of them is refused too ('Start
+ * today or later'): no backdating.
  */
 export function ruleProblem(rule, { todayIso = null, knownKeys = null } = {}) {
   if (!rule) return 'This entry could not be read'
@@ -166,6 +168,12 @@ export function ruleProblem(rule, { todayIso = null, knownKeys = null } = {}) {
     if (end - start + 1 > AVAILABILITY_LIMITS.spanDays) return 'Up to a year at a time'
     const today = dayIndex(todayIso)
     if (today !== null && end < today) return knownKeys?.has(windowKey(rule)) ? null : 'That date has passed'
+    // Backdating: a NEW or CHANGED rule may not start before today (its past
+    // days would read as "now unavailable" on days already gone). One the
+    // coach already has, by content (a note edit is fine), stays. Judged only
+    // when knownKeys is given: the route always gives it; a client that has
+    // not loaded them leaves it to the route.
+    if (knownKeys && today !== null && start < today && !knownKeys.has(windowKey(rule))) return 'Start today or later'
     if (today !== null && start > today + AVAILABILITY_LIMITS.aheadDays) return 'Up to two years ahead'
   }
   if (!rule.all_day) {

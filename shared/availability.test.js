@@ -100,6 +100,23 @@ describe('stale tab over midnight: an ended rule the coach already has', () => {
   })
 })
 
+describe('a dated rule that starts before today (backdating)', () => {
+  const today = '2026-09-25'
+  const started = normaliseRule(dated('2026-09-20', '2026-09-30'))
+  it('is refused when it is new or changed', () => {
+    expect(ruleProblem(started, { todayIso: today, knownKeys: new Set() })).toBe('Start today or later')
+    const other = new Set([ruleKey(dated('2026-09-20', '2026-09-29'))])
+    expect(ruleProblem(started, { todayIso: today, knownKeys: other })).toBe('Start today or later')
+  })
+  it('is fine when the coach already has it (a note edit included)', () => {
+    const knownKeys = new Set([ruleKey({ ...started, note: 'before the edit' })])
+    expect(ruleProblem({ ...started, note: 'after the edit' }, { todayIso: today, knownKeys })).toBeNull()
+  })
+  it('without knownKeys (a client that has not loaded them) it is not judged; the server always judges it', () => {
+    expect(ruleProblem(started, { todayIso: today })).toBeNull()
+  })
+})
+
 describe('rulesOnDate / unavailableFor', () => {
   const rules = [weekly('wed', '10:00', '11:00', 'School run'), dated('2026-05-07', '2026-05-08', null, null, 'Wedding')]
 

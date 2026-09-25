@@ -198,6 +198,17 @@ describe('migration 630 — replace_staff_unavailability', () => {
     expect(await count('staff_availability_changes', `profile_id = '${COACH_B}'`)).toBe(before)
   })
 
+  it('refuses a NEW or CHANGED rule that starts before today; an unchanged started rule (a note edit too) is fine', async () => {
+    const E = '10000000-0000-0000-0000-0000000000e1'
+    await runSql(`INSERT INTO public.profiles (id, full_name) VALUES ('${E}', 'Coach E')`)
+    const rule = { start_date: '2026-09-20', end_date: '2026-09-30', all_day: true, note: 'Trip' }
+    await save(E, [], [rule], { today: '2026-09-20' })
+    await expect(save(E, [], [{ ...rule, end_date: '2026-09-29' }])).rejects.toThrow(/availability_past_start/)
+    await expect(save(E, [], [rule, { start_date: '2026-09-01', end_date: '2026-09-26', all_day: true }])).rejects.toThrow(/availability_past_start/)
+    await expect(save(E, [], [rule])).resolves.toMatchObject({ changed: false })
+    await expect(save(E, [], [{ ...rule, note: 'Trip, edited' }])).resolves.toMatchObject({ changed: true })
+  })
+
   it('a malformed rule aborts the whole save: the old set survives', async () => {
     const before = await count('staff_unavailability', `profile_id = '${COACH_A}'`)
     await expect(save(COACH_A, [{ weekday: 'mon', all_day: false, start_time: '12:00', end_time: '09:00' }], []))
