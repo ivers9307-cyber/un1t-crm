@@ -24,10 +24,11 @@
 --    costs a duplicate on the next attempt, never the notice (CLAUDE.md
 --    invariant (c): a claim taken before a send carries a lease).
 -- 2. public.claim_shift_offer(p_offer_id, p_profile_id) RETURNS jsonb.
---    Locks the offer FOR UPDATE: two claimers serialise on that lock, and the
---    second reads 'claimed'. Then locks the shift (FOR UPDATE, which also
---    waits for a manager's assignment insert in flight: its FK check holds
---    KEY SHARE on the block) and re-checks, in the same transaction,
+--    Reads the offer's shift id WITHOUT a lock, locks the shift FOR UPDATE
+--    (which also waits for a manager's assignment insert in flight: its FK
+--    check holds KEY SHARE on the block), THEN locks the offer FOR UPDATE:
+--    two claimers serialise on those locks, and the second reads 'claimed'.
+--    It then re-checks, in the same transaction,
 --    everything a claim depends on: the roster is published, the claimant is
 --    an active, undeleted member of the offer's studio and not already on the
 --    shift, and the shift still needs someone (live coaches below its target
@@ -39,9 +40,17 @@
 --    Otherwise it clears the claimant's cancelled tombstone (the mig 067
 --    (block_id, profile_id) key does not care about status), inserts the
 --    assignment and closes the offer as claimed.
---    Lock order: offer, then shift. Nothing else locks a shift and then an
---    offer (REPLACE.1a's replace is one UPDATE of an assignment row), so
---    there is no cycle.
+--    LOCK ORDER: the shift, then the offer (REPLACE.1b review 2). It was
+--    offer-then-shift, and that CAN deadlock: DELETE /api/schedule/blocks/[id]
+--    locks the shift row and its ON DELETE CASCADE then locks the offer, the
+--    opposite order. Now every path that holds both takes the shift first:
+--    the delete (shift, then cascaded offer) and this function (shift, then
+--    offer). Paths that lock only an offer (withdraw, the sweep's close, the
+--    notice lease) or only a shift (an assignment insert's FK KEY SHARE, a
+--    shift edit) cannot close a cycle with either. If the shift is deleted
+--    between the unlocked read and the lock, the lock finds nothing and the
+--    cascade has taken the offer: offer_not_found. The offer is re-read under
+--    its lock and must still name the locked shift.
 --    Errors: P0001 with a message prefix the route maps: offer_bad_request,
 --    offer_not_found, offer_not_open, offer_not_published,
 --    offer_not_eligible, offer_already_on.
@@ -126,6 +135,7 @@ SET search_path = ''
 AS $$
 DECLARE
   v_offer  public.shift_offers;
+  v_block_id uuid;
   v_block  record;
   v_live   integer;
   v_target integer;
@@ -135,13 +145,11 @@ BEGIN
     RAISE EXCEPTION 'offer_bad_request: an offer and a profile are required';
   END IF;
 
-  -- 1. Lock the offer. This is where two claimers are serialised.
-  SELECT * INTO v_offer FROM public.shift_offers WHERE id = p_offer_id FOR UPDATE;
+  -- 1. Which shift? An UNLOCKED read: locking the offer here would take the
+  --    offer before the shift, the order a cascading shift delete reverses.
+  SELECT o.block_id INTO v_block_id FROM public.shift_offers o WHERE o.id = p_offer_id;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'offer_not_found: offer % does not exist', p_offer_id;
-  END IF;
-  IF v_offer.status <> 'open' THEN
-    RAISE EXCEPTION 'offer_not_open: offer is already %', v_offer.status;
   END IF;
 
   -- 2. Lock the shift and read what the claim depends on.
@@ -152,16 +160,27 @@ BEGIN
     FROM public.shift_blocks b
     LEFT JOIN public.rosters r ON r.id = b.roster_id
     LEFT JOIN public.shift_templates t ON t.id = b.template_id
-   WHERE b.id = v_offer.block_id
+   WHERE b.id = v_block_id
    FOR UPDATE OF b;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'offer_not_found: the shift no longer exists';
   END IF;
+
+  -- 3. Lock the offer. This is where two claimers are serialised (both hold
+  --    or wait on the shift first, so the order is the same for both).
+  SELECT * INTO v_offer FROM public.shift_offers WHERE id = p_offer_id FOR UPDATE;
+  IF NOT FOUND OR v_offer.block_id IS DISTINCT FROM v_block_id THEN
+    RAISE EXCEPTION 'offer_not_found: offer % does not exist', p_offer_id;
+  END IF;
+  IF v_offer.status <> 'open' THEN
+    RAISE EXCEPTION 'offer_not_open: offer is already %', v_offer.status;
+  END IF;
+
   IF v_block.roster_status IS DISTINCT FROM 'published' THEN
     RAISE EXCEPTION 'offer_not_published: the shift is not on a published roster';
   END IF;
 
-  -- 3. The claimant: an active, undeleted member of the offer's studio
+  -- 4. The claimant: an active, undeleted member of the offer's studio
   --    (mig 626's staff predicate: a NULL active still counts; mig 622: never
   --    a tombstone). Same rule as isRosterableProfile + membership.
   IF NOT EXISTS (
@@ -176,7 +195,7 @@ BEGIN
     RAISE EXCEPTION 'offer_not_eligible: the claimant is not an active member of this studio';
   END IF;
 
-  -- 4. Not already on it.
+  -- 5. Not already on it.
   IF EXISTS (
     SELECT 1 FROM public.shift_assignments a
      WHERE a.block_id = v_block.id AND a.profile_id = p_profile_id
@@ -185,7 +204,7 @@ BEGIN
     RAISE EXCEPTION 'offer_already_on: the claimant is already on this shift';
   END IF;
 
-  -- 5. Still needed? Filled meanwhile closes the offer and RETURNS (a raise
+  -- 6. Still needed? Filled meanwhile closes the offer and RETURNS (a raise
   --    would roll the close back).
   SELECT count(*) INTO v_live
     FROM public.shift_assignments a
@@ -198,16 +217,16 @@ BEGIN
     RETURN jsonb_build_object('outcome', 'filled', 'offer_id', v_offer.id);
   END IF;
 
-  -- 6. The claimant's cancelled tombstone would trip the (block, profile) key.
+  -- 7. The claimant's cancelled tombstone would trip the (block, profile) key.
   DELETE FROM public.shift_assignments a
    WHERE a.block_id = v_block.id AND a.profile_id = p_profile_id AND a.status = 'cancelled';
 
-  -- 7. Put them on the shift. assigned_by = the claimant: they did it.
+  -- 8. Put them on the shift. assigned_by = the claimant: they did it.
   INSERT INTO public.shift_assignments (block_id, profile_id, status, assigned_by)
   VALUES (v_block.id, p_profile_id, 'scheduled', p_profile_id)
   RETURNING id INTO v_assignment_id;
 
-  -- 8. Close the offer. The lease resets: the managers' "taken" notice is a
+  -- 9. Close the offer. The lease resets: the managers' "taken" notice is a
   --    new phase with its own attempts.
   UPDATE public.shift_offers
      SET status = 'claimed', claimed_by = p_profile_id, claimed_at = now(), closed_at = now(),
@@ -226,7 +245,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION public.claim_shift_offer(uuid, uuid) IS
-  'REPLACE.1b (mig 641) — claims an open shift offer atomically: locks the offer (second claimer reads claimed), locks the shift, re-checks published / active member / not already on it / still needed (else closes the offer as filled and returns outcome filled), clears the claimant''s cancelled tombstone, inserts the assignment and closes the offer. P0001 with an offer_* message prefix. SECURITY INVOKER, service_role only.';
+  'REPLACE.1b (mig 641) — claims an open shift offer atomically: locks the shift, then the offer (the order a cascading shift delete uses; the second claimer reads claimed), re-checks published / active member / not already on it / still needed (else closes the offer as filled and returns outcome filled), clears the claimant''s cancelled tombstone, inserts the assignment and closes the offer. P0001 with an offer_* message prefix. SECURITY INVOKER, service_role only.';
 
 REVOKE ALL ON FUNCTION public.claim_shift_offer(uuid, uuid) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.claim_shift_offer(uuid, uuid) TO service_role;

@@ -269,6 +269,38 @@ describe('mig 641 — claim_shift_offer', () => {
   })
 })
 
+// REPLACE.1b review 2 — DELETE /api/schedule/blocks/[id] locks the SHIFT and
+// its ON DELETE CASCADE then locks the offer. A claim that locked the offer
+// first and the shift second could deadlock against it. PGlite is one
+// connection, so the order is pinned on the function's own text (as the
+// catalog stores it) and the outcomes it leads to are driven for real.
+describe('mig 641 — lock order (review 2): the shift, then the offer', () => {
+  const body = async () => (await db.query(`SELECT prosrc FROM pg_proc WHERE oid = 'public.claim_shift_offer(uuid, uuid)'::regprocedure`)).rows[0].prosrc
+  it('the shift is locked FOR UPDATE before the offer is', async () => {
+    const src = await body()
+    const shiftLock = src.search(/FROM public\.shift_blocks[\s\S]*?FOR UPDATE/)
+    const offerLock = src.search(/FROM public\.shift_offers[^;]*WHERE id = p_offer_id[^;]*FOR UPDATE/)
+    expect(shiftLock).toBeGreaterThan(-1)
+    expect(offerLock).toBeGreaterThan(shiftLock)
+    // The only read of the offer before the shift lock takes no lock.
+    const firstOfferRead = src.search(/FROM public\.shift_offers/)
+    expect(src.slice(firstOfferRead, src.indexOf(';', firstOfferRead))).not.toMatch(/FOR UPDATE/)
+  })
+  it('the header no longer claims a lock order with no cycle for offer-then-shift', () => {
+    expect(MIG_641).toMatch(/DELETE \/api\/schedule\/blocks/)
+    expect(MIG_641).not.toMatch(/Lock order: offer, then shift/)
+  })
+  it('a shift deleted before the claim: offer_not_found (the cascade took the offer)', async () => {
+    const id = await offer(BLK)
+    await runSql(`DELETE FROM public.shift_blocks WHERE id = '${BLK}'`)
+    await expect(claim(id, C1)).rejects.toThrow(/^offer_not_found/)
+  })
+  it('the offer read and the offer locked must be the same shift\'s', async () => {
+    const src = await body()
+    expect(src).toMatch(/v_offer\.block_id IS DISTINCT FROM v_block_id/)
+  })
+})
+
 describe('mig 641 — replay', () => {
   it('replaying the file is safe and changes nothing', async () => {
     const id = await offer(BLK)
