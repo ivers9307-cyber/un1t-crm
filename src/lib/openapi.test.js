@@ -440,4 +440,27 @@ describe('getOpenApiSpec', () => {
     }
     expect(Object.keys(spec.paths['/api/me/calendar-feed'].post.responses)).toEqual(expect.arrayContaining(['200', '403', '409']))
   })
+
+  // SNAPSHOT.1 — published vs now vs arrived, manager-only.
+  it('documents the roster comparison', () => {
+    const op = spec.paths['/api/schedule/rosters/{id}/compare']?.get
+    expect(op, 'missing GET /api/schedule/rosters/{id}/compare').toBeTruthy()
+    expect(op.tags).toContain('Schedule')
+    expect(op.security).toContainEqual({ CookieAuth: [] })
+    expect(Object.keys(op.responses)).toEqual(expect.arrayContaining(['200', '400', '403', '404', '409', '500']))
+    expect(op.description).toMatch(/advisory/i)
+    expect(op.description).toMatch(/never a rate or a cost/i)
+  })
+
+  it('says the roster comparison carries the briefing as a kind of change, never its text', () => {
+    const op = spec.paths['/api/schedule/rosters/{id}/compare'].get
+    expect(op.description).toMatch(/briefing_change/)
+    expect(op.description).toMatch(/never the text/i)
+  })
+
+  it('says a baseline of other dates is refused and one outside the window is its own state (review 3)', () => {
+    const op = spec.paths['/api/schedule/rosters/{id}/compare'].get
+    expect(op.description).toMatch(/outside_window/)
+    expect(op.responses['409'].description).toMatch(/against snapshot covers none/)
+  })
 })
