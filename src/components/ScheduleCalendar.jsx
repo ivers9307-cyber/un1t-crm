@@ -92,6 +92,10 @@ import { blockEditNoticeText } from '@/lib/block-edit'
 import { briefingOf } from '@shared/shift-briefing'
 import MonthCell from './schedule/MonthCell'
 import { rosterToolbarModel, dayHeaderStatus, shiftCardModel, monthCellLines, dayLeaveBars, dayUnavailableBars } from '@/lib/roster-card-model'
+// GRID.1 — the Coaches layout: the coach-by-day grid, its read, and its pure model.
+import RosterGrid from './schedule/RosterGrid'
+import { useRosterGrid, browserStorage } from './schedule/useRosterGrid'
+import { buildRosterGrid, loadRosterLayout, saveRosterLayout, DEFAULT_ROSTER_LAYOUT } from '@/lib/roster-grid-model'
 
 // LEAVE.2 — every leave type gets its own label (timeOffLeaveLabel) and
 // colour. Unpaid and "other" were missing, so approved unpaid/other leave
@@ -214,6 +218,18 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
   }, [weekStart, monthStart, viewType, onRangeChange])
 
   const [viewMode, setViewMode] = useState('all') // 'my' or 'all'
+  // GRID.1 — Days (the day-column cards, the default) or Coaches (the coach-by-
+  // day grid, managers in week view). Per viewer, per browser, in localStorage;
+  // every access is inside loadRosterLayout/saveRosterLayout's try/catch. Read
+  // AFTER mount, not in the useState initialiser: the server render has no
+  // storage, and a different first client render is a hydration mismatch. The
+  // cost is one Days paint before the grid on a reload (a browser check).
+  const [rosterLayout, setRosterLayout] = useState(DEFAULT_ROSTER_LAYOUT)
+  useEffect(() => { setRosterLayout(loadRosterLayout(browserStorage(), user.id)) }, [user.id])
+  const chooseRosterLayout = useCallback((next) => {
+    setRosterLayout(next)
+    saveRosterLayout(browserStorage(), user.id, next)
+  }, [user.id])
   const [assignTarget, setAssignTarget] = useState(null) // { block } when picking a coach
   const [createTarget, setCreateTarget] = useState(null) // { date } when adding an ad-hoc block
   const [publishing, setPublishing] = useState(false)
@@ -429,6 +445,9 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
   const staffUnavailable = partialErrors?.staff && !partialErrors.staff.kept ? STAFF_UNAVAILABLE_MESSAGE : null
   const templatesUnavailable = partialErrors?.templates && !partialErrors.templates.kept ? TEMPLATES_UNAVAILABLE_MESSAGE : null
   const leaveMissing = Boolean(partialErrors?.timeOff && !partialErrors.timeOff.kept)
+  // GRID.1 — the Coaches grid's own "availability not shown" note (CANDIDATES.1
+  // removed the picker's use of this flag; the grid still needs it).
+  const availabilityMissing = Boolean(partialErrors?.availability && !partialErrors.availability.kept)
   // ROSTER-FIX.6c — its own hook, not a seventh slice of the fan-out above: a
   // summary panel must not be able to take the roster down with it. See its
   // header. Manager-gated on the client too, so a coach's calendar never fires
@@ -441,6 +460,20 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
   // ROSTERVIS.1 — drafts awaiting approval, for the publication chip. Manager
   // only: a coach's feed is published-only, so there is nothing to tell them.
   const { draftRosters, refreshDraftRosters } = useDraftRosters({ locationId, enabled: isManager })
+  // GRID.1 — the grid's own read, made only while the grid is on screen. Its
+  // own hook, like useWeekCost: the grid failing must never take the roster
+  // down. Leave, availability and bank holidays are NOT re-read: this calendar
+  // already holds them for exactly this week (the week view's range), and the
+  // availability overlay applies the Days view's own per-day rule
+  // (dayAvailabilityRules, todayIso) so the two layouts cannot disagree.
+  const showCoachGrid = isManager && viewType === 'week' && rosterLayout === 'coaches'
+  const { grid: gridData, gridError, gridLoading, refreshGrid } = useRosterGrid({
+    locationId, weekStart: formatDate(weekStart), enabled: showCoachGrid,
+  })
+  const rosterGridModel = useMemo(
+    () => (gridData ? buildRosterGrid({ weekStart: formatDate(weekStart), grid: gridData, timeOff, availability, todayIso: todayStr }) : null),
+    [gridData, weekStart, timeOff, availability, todayStr],
+  )
   // Dismissed separately from the hook's own state so the operator can clear a
   // banner without it reappearing until the next failure.
   //
@@ -499,6 +532,9 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
     // ROSTER-FIX.6c — the hours panel used to be derived from `blocks`, so it
     // moved on its own. It is a separate fetch now and has to be told.
     refreshWeekCost()
+    // GRID.1 — the grid is a separate read too; it must follow every edit.
+    // A no-op while the grid is not on screen (useRosterGrid's `enabled`).
+    refreshGrid()
     // ROSTERVIS.1 — a publish can create (or an approval elsewhere clear) a
     // draft; re-read so the header chip follows.
     refreshDraftRosters()
@@ -509,7 +545,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
     if (opts.markDirty !== false) {
       setDirtyPeriods((prev) => new Set(prev).add(visiblePeriodKey))
     }
-  }, [fetchData, refreshWeekCost, refreshDraftRosters, onDataChange, visiblePeriodKey])
+  }, [fetchData, refreshWeekCost, refreshGrid, refreshDraftRosters, onDataChange, visiblePeriodKey])
 
   // ROSTER-FIX.6a — switching location swaps the whole roster out from under
   // the guard; the old location's unpublished edits are no longer reachable
@@ -1041,6 +1077,16 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
   // state). SCHEDULE-TEMPLATES-SHORTCUT.1 — "Manage templates" is every
   // manager-class role's one-click path to /settings/shifts, which head_coach
   // could not otherwise reach. Both rules now live in rosterToolbarModel.
+  // GRID.1 — a grid shift opens the block dialog a day card opens, or in
+  // select mode toggles it, exactly as ShiftCard's onActivate does. Only this
+  // studio's blocks can be opened: they are the ones this calendar holds.
+  function openBlockFromGrid(blockId) {
+    const block = blocks.find((b) => b.id === blockId)
+    if (!block) return
+    if (selectMode) toggleBlockSelection(block.id)
+    else setBlockDetail(block)
+  }
+
   const toolbarModel = rosterToolbarModel({
     isManager,
     viewType,
@@ -1100,6 +1146,8 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
         onCopyMonth={handleCopyMonth}
         onPublish={handlePublishClick}
         publishing={publishing}
+        layout={rosterLayout}
+        onLayout={chooseRosterLayout}
       />
 
       {/* ROSTER-FIX.6a — a failed load used to leave the screen on
@@ -1287,6 +1335,26 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
           </div>
           </div>
         </div>
+      ) : showCoachGrid ? (
+        // ── COACHES VIEW (GRID.1) ──
+        // One row per coach, seven day columns, every studio of the
+        // organisation summed. Read-only: a shift here opens the same block
+        // dialog the day cards open. Manager + week view only (showCoachGrid).
+        // Layout (sticky column, scroll, 1280/390) is a browser check.
+        <RosterGrid
+          model={rosterGridModel}
+          loading={gridLoading}
+          error={gridError}
+          onRetry={refreshGrid}
+          onOpenBlock={openBlockFromGrid}
+          canOpenBlock={(id) => blocks.some((b) => b.id === id)}
+          selectMode={selectMode}
+          selectedBlockIds={selectedBlockIds}
+          onlyProfileId={viewMode === 'my' ? user.id : null}
+          holidays={holidays}
+          leaveMissing={leaveMissing}
+          availabilityMissing={availabilityMissing}
+        />
       ) : (
         // ── WEEK VIEW ──
         // Roster v2: one card per BLOCK. Each card is a

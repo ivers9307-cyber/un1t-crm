@@ -5,7 +5,7 @@
 //
 // Was: an H2 + subtitle, EIGHT buttons wrapping onto two rows, then a separate
 // week navigator with the publish chip under it: about 200px before the first
-// banner. Now: [prev  period  next  Today  chip]   [My|All  Week|Month  More  Publish].
+// banner. Now: [prev  period  next  Today  chip]   [My|All  Week|Month  Days|Coaches  More  Publish].
 //
 // Everything is still here and still gated as before; rosterToolbarModel
 // (src/lib/roster-card-model.js) is where the gating is written down and
@@ -25,9 +25,12 @@
 // shares that line, it takes the next one, and Publish (about 85px) sits
 // beside it or under it. Every control is a nowrap flex item narrower than the
 // 358px content box inside a flex-wrap group, so none can leave the screen.
+// GRID.1 added a third toggle for managers in week view: at 390px the actions
+// group now takes two lines before Publish; still every control is a nowrap
+// flex item narrower than the content box (browser check in the GRID.1 PR).
 
 import Link from 'next/link'
-import { ChevronLeft, ChevronRight, Send, Users, User, CalendarDays, CalendarRange, CalendarOff, Check, Copy, Settings } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Send, Users, User, CalendarDays, CalendarRange, CalendarOff, Check, Copy, Settings, Columns3, Rows3 } from 'lucide-react'
 import MoreMenu from './MoreMenu'
 
 const MORE_ICONS = { 'time-off': CalendarOff, select: Check, 'copy-week': Copy, 'copy-month': Copy, templates: Settings }
@@ -45,6 +48,7 @@ export default function RosterToolbar({
   viewType, periodLabel, onPrev, onNext, onToday, statusChip,
   viewMode, onViewMode, onViewType,
   model, onSelectToggle, onCopyWeek, onCopyMonth, onPublish, publishing,
+  layout = 'days', onLayout,
 }) {
   const period = viewType === 'month' ? 'month' : 'week'
   // Menu key → the handler ScheduleCalendar has always had for that action.
@@ -91,6 +95,20 @@ export default function RosterToolbar({
             <CalendarRange size={14} className="hidden sm:inline" aria-hidden="true" /> Month
           </button>
         </div>
+
+        {/* GRID.1 — Days (the day-column cards) | Coaches (the coach-by-day
+            grid). A manager in week view only (model.showLayoutToggle). Same
+            segmented style and wrapping rules as the two toggles before it. */}
+        {model.showLayoutToggle && (
+          <div className={SEGMENTED} role="group" aria-label="Roster layout">
+            <button type="button" aria-pressed={layout !== 'coaches'} onClick={() => onLayout?.('days')} className={segment(layout !== 'coaches')}>
+              <Columns3 size={14} className="hidden sm:inline" aria-hidden="true" /> Days
+            </button>
+            <button type="button" aria-pressed={layout === 'coaches'} onClick={() => onLayout?.('coaches')} className={segment(layout === 'coaches')}>
+              <Rows3 size={14} className="hidden sm:inline" aria-hidden="true" /> Coaches
+            </button>
+          </div>
+        )}
 
         {model.timeOffInline && (
           <Link
