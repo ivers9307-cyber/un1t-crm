@@ -187,9 +187,37 @@ describe('netReplaceChanges (the held-notice arm)', () => {
     expect(netReplaceChanges(rows, { mayHaveBeenTold: () => false }).silent).toHaveLength(1)
   })
 
-  it('a row with no coach, no block or no date is ignored', () => {
-    expect(netReplaceChanges([row('r1', null, 'assigned', '10'), row('r2', 'coach-a', 'assigned', '10', { block_id: null })]))
-      .toEqual({ send: [], silent: [] })
+  it('a row with no coach or no date is ignored', () => {
+    expect(netReplaceChanges([row('r1', null, 'assigned', '10'), row('r2', 'coach-a', 'assigned', '10', { block_date: null })]))
+      .toEqual({ send: [], silent: [], gone: [] })
+  })
+
+  // Review 4 — the slot was deleted before the held notice went out
+  // (roster_change_log.block_id is ON DELETE SET NULL). A is still owed
+  // "you're no longer on the roster" for that day; B's "added" is about a
+  // shift that no longer exists (and deleting it told B through the slot
+  // delete's own path), so it is stamped with no message. Each such row is
+  // its own pile, keyed by row id: without a block there is nothing to net on.
+  it('a row whose shift was deleted is its own pile: "unassigned" is told on its date, "assigned" is gone', () => {
+    const rows = [
+      row('r1', 'coach-a', 'unassigned', '10', { block_id: null, shift_blocks: null }),
+      row('r2', 'coach-b', 'assigned', '10', { block_id: null, shift_blocks: null }),
+    ]
+    expect(netReplaceChanges(rows)).toEqual({
+      send: [{ locationId: 'loc-1', actorId: 'mgr-1', coachId: 'coach-a', blockId: null, blockDate: '2026-09-29', startTime: null, action: 'unassigned', rowIds: ['r1'] }],
+      silent: [],
+      gone: [{ locationId: 'loc-1', coachId: 'coach-b', rowIds: ['r2'] }],
+    })
+  })
+
+  it('two blockless rows for one coach are two piles, never netted against each other', () => {
+    const rows = [
+      row('r1', 'coach-a', 'unassigned', '10', { block_id: null, shift_blocks: null }),
+      row('r2', 'coach-a', 'assigned', '20', { block_id: null, shift_blocks: null }),
+    ]
+    const out = netReplaceChanges(rows)
+    expect(out.send.map((p) => p.rowIds)).toEqual([['r1']])
+    expect(out.gone.map((p) => p.rowIds)).toEqual([['r2']])
   })
 })
 

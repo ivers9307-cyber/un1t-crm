@@ -39,6 +39,7 @@ const REASON_NOTE = {
   staff_permanent_delete: 'staff member deleted',
   replace_undone: 'coach replaced, then undone before anyone was told', // REPLACE.1a
   replace_shift_started: 'coach replaced, not sent: the shift had started', // REPLACE.1a review 3
+  replace_shift_deleted: 'coach replaced, not sent: the shift was deleted', // REPLACE.1a review 4
 }
 
 const BRIEFING_NOTE = { added: 'briefing added', changed: 'briefing changed', removed: 'briefing removed' }
@@ -77,7 +78,8 @@ const BRIEFING_NOTE = { added: 'briefing added', changed: 'briefing changed', re
 //      details.reason = 'replace_undone' in the same UPDATE (checked with
 //      rule 1, by reason). Review 3: a replace whose shift had STARTED before
 //      its held notice could go out is stamped the same way with
-//      details.reason = 'replace_shift_started'.
+//      details.reason = 'replace_shift_started', and review 4: an "added"
+//      row whose shift was DELETED first, 'replace_shift_deleted'.
 //
 // For these the drawer shows NO told state, rather than a time nobody was told at.
 //
@@ -99,7 +101,7 @@ const BRIEFING_NOTE = { added: 'briefing added', changed: 'briefing changed', re
 //      { reason } and nothing else; a swap drop is 'unassigned' with `via`),
 //      so that ordering is a guard, not a case.
 const OWN_STAMP_WINDOW_MS = 10 * 60 * 1000
-export const NO_MESSAGE_REASONS = Object.freeze(['staff_permanent_delete', 'replace_undone', 'replace_shift_started'])
+export const NO_MESSAGE_REASONS = Object.freeze(['staff_permanent_delete', 'replace_undone', 'replace_shift_started', 'replace_shift_deleted'])
 
 const VIA_NOTE = {
   copy_week: 'copied from another week',

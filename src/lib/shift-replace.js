@@ -50,6 +50,14 @@ export const REPLACE_UNDONE_REASON = 'replace_undone'
  */
 export const REPLACE_STARTED_REASON = 'replace_shift_started'
 
+/**
+ * REPLACE.1a review 4 — details.reason on a replace "assigned" row whose shift
+ * was DELETED before its held notice went out: telling the incoming coach
+ * about a shift that is gone is wrong (the slot delete told whoever was on
+ * it). Stamped with no message.
+ */
+export const REPLACE_DELETED_REASON = 'replace_shift_deleted'
+
 // The route's after() owns a fresh replace notice for this long; after it the
 // */5 arm may send it (the arm is also the recovery for an after() that died).
 export const REPLACE_NOTICE_ROUTE_OWNS_MS = 2 * 60 * 1000
@@ -207,23 +215,33 @@ const byTime = (x, y) => String(x.created_at).localeCompare(String(y.created_at)
  * without "removed".
  *
  * @returns {{ send: Array<{locationId, actorId, coachId, blockId, blockDate, startTime, action, rowIds}>,
- *             silent: Array<{ locationId, coachId, rowIds }> }}
+ *             silent: Array<{ locationId, coachId, rowIds }>,
+ *             gone: Array<{ locationId, coachId, rowIds }> }}  gone: review 4
  */
 export function netReplaceChanges(rows, { mayHaveBeenTold = () => false } = {}) {
   const groups = new Map()
   for (const r of rows || []) {
-    if (!r?.coach_id || !r.block_id || !r.block_date || !r.location_id) continue
+    if (!r?.coach_id || !r.block_date || !r.location_id) continue
     if (r.action !== 'assigned' && r.action !== 'unassigned') continue
-    const key = `${r.location_id}|${r.coach_id}|${r.block_id}`
+    const key = replacePileKey(r)
     if (!groups.has(key)) groups.set(key, [])
     groups.get(key).push(r)
   }
   const send = []
   const silent = []
+  const gone = []
   for (const list of groups.values()) {
     list.sort(byTime)
     const last = list[list.length - 1]
     const rowIds = list.map((r) => r.id)
+    // Review 4 — the slot was deleted (block_id is ON DELETE SET NULL). A
+    // blockless row is its own pile. "Added" to a shift that no longer exists
+    // is not news (the slot delete told whoever was on it): stamped silently.
+    // "Removed" is still owed, on the row's date.
+    if (!last.block_id && last.action === 'assigned') {
+      gone.push({ locationId: last.location_id, coachId: last.coach_id, rowIds })
+      continue
+    }
     const on = list.filter((r) => r.action === 'assigned').length
     if (on * 2 === list.length && !list.some((r) => mayHaveBeenTold(r))) {
       silent.push({ locationId: last.location_id, coachId: last.coach_id, rowIds })
@@ -233,12 +251,21 @@ export function netReplaceChanges(rows, { mayHaveBeenTold = () => false } = {}) 
       locationId: last.location_id,
       actorId: last.actor_id ?? null,
       coachId: last.coach_id,
-      blockId: last.block_id,
+      blockId: last.block_id ?? null,
       blockDate: last.block_date,
       startTime: last.shift_blocks?.start_time ?? null,
       action: last.action,
       rowIds,
     })
   }
-  return { send, silent }
+  return { send, silent, gone }
+}
+
+/**
+ * The pile a replace row belongs to: its coach on its shift, or, once the
+ * shift is deleted (block_id null), the row alone. Exported so the arm's
+ * "is anyone in this pile still changing?" check groups exactly the same way.
+ */
+export function replacePileKey(r) {
+  return r?.block_id ? `${r.location_id}|${r.coach_id}|${r.block_id}` : `row|${r?.id}`
 }

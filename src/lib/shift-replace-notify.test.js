@@ -11,7 +11,7 @@ vi.mock('./log', () => ({ logError: vi.fn(), logWarn: vi.fn() }))
 const { notifyRosterChanges } = await import('./roster-change-notify')
 const { logError } = await import('./log')
 const { runReplaceNotices } = await import('./shift-replace-notify')
-const { REPLACE_UNDONE_REASON, REPLACE_STARTED_REASON } = await import('./shift-replace')
+const { REPLACE_UNDONE_REASON, REPLACE_STARTED_REASON, REPLACE_DELETED_REASON } = await import('./shift-replace')
 
 const IN_BAND = Date.parse('2026-09-29T06:05:00Z')  // 07:05 Dublin
 const QUIET = Date.parse('2026-09-29T04:00:00Z')    // 05:00 Dublin
@@ -254,5 +254,28 @@ describe('runReplaceNotices', () => {
       locations: [LOC],
     })
     expect(await runReplaceNotices(db, { nowMs: IN_BAND, todayStr: '2026-09-29' })).toMatchObject({ started: 0, errors: 1 })
+  })
+
+  // Review 4 — the slot went before the held notice did. A is still told
+  // "no longer on the roster" for that day; B's row is stamped with no
+  // message; both by row id, so neither is re-read every tick for 48 hours.
+  it('a deleted shift: A is told on the date, B\'s row is stamped silently, both by row id', async () => {
+    const gone = { block_id: null, shift_blocks: null }
+    const db = scriptedDb({
+      roster_change_log: [
+        { data: [row('r1', 'coach-a', 'unassigned', gone), row('r2', 'coach-b', 'assigned', gone)], error: null },
+        STAMPED(['r2']), STAMPED(['r1']),
+      ],
+      locations: [LOC],
+    })
+    const stats = await runReplaceNotices(db, { nowMs: IN_BAND, todayStr: '2026-09-29' })
+    expect(notifyRosterChanges.mock.calls[0][1].changes).toEqual([
+      { coachId: 'coach-a', blockId: null, blockDate: '2026-09-29', startTime: null, action: 'unassigned' },
+    ])
+    const [, goneStamp, toldStamp] = chainsFor(db, 'roster_change_log')
+    expect(argsOf(goneStamp, 'update')[0]).toEqual({ notified_at: new Date(IN_BAND).toISOString(), details: { via: 'replace', reason: REPLACE_DELETED_REASON } })
+    expect(argsOf(goneStamp, 'in')).toEqual(['id', ['r2']])
+    expect(argsOf(toldStamp, 'in')).toEqual(['id', ['r1']])
+    expect(stats).toMatchObject({ told: 1, gone: 1, errors: 0 })
   })
 })

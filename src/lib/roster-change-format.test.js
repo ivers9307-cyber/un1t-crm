@@ -175,6 +175,17 @@ describe('REPLACE.1a review 3 — a replace whose shift started before its held 
   })
 })
 
+describe('REPLACE.1a review 4 — a replace whose shift was deleted before its held notice went out', () => {
+  const gone = (over = {}) => row({ action: 'assigned', start_time: null, end_time: null, details: { via: 'replace', reason: 'replace_shift_deleted' }, ...over })
+  it('says so', () => {
+    expect(rosterChangeSentence(gone())).toBe('Assigned Coach A to Tue 15 Sep (coach replaced, not sent: the shift was deleted)')
+  })
+  it('its stamp is not a message', () => {
+    expect(NO_MESSAGE_REASONS).toContain('replace_shift_deleted')
+    expect(rosterChangeTold(gone())).toBeNull()
+  })
+})
+
 describe('stampMeansTold — a stamp is not always a message', () => {
   const future = { block_date: '2026-09-20' }
 

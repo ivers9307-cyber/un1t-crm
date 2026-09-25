@@ -23,6 +23,14 @@
 // NOT silent and tells its last action (bandSeenBetween). A duplicate at
 // worst; never B told "added" and not "removed".
 //
+// Stamped with no message too, each with its own details.reason so the drawer
+// shows no told time: a pile whose shift has STARTED by the time the arm may
+// send (review 3, 'replace_shift_started'; the manager's toast said to ring),
+// and an "added" row whose shift was DELETED first (review 4,
+// 'replace_shift_deleted'). A deleted shift's rows have block_id null (ON
+// DELETE SET NULL): each is its own pile by row id, and a "removed" among them
+// is still told, on the row's date, then stamped by id like every other.
+//
 // Everything else goes through notifyRosterChanges (NOTIFY.1's message and
 // send path) with markNotified: false, and THIS arm stamps exactly its own
 // rows by id after a delivery (or a self / past outcome). So a lost stamp is
@@ -45,7 +53,7 @@ import { swapShiftHasStarted } from './swap-cover'
 import { dublinTodayStr } from './dublin-time'
 import { logError, logWarn } from './log'
 import {
-  netReplaceChanges, bandSeenBetween, REPLACE_VIA, REPLACE_UNDONE_REASON, REPLACE_STARTED_REASON, REPLACE_NOTICE_ROUTE_OWNS_MS, REPLACE_NOTICE_MAX_AGE_MS,
+  netReplaceChanges, replacePileKey, bandSeenBetween, REPLACE_VIA, REPLACE_UNDONE_REASON, REPLACE_STARTED_REASON, REPLACE_DELETED_REASON, REPLACE_NOTICE_ROUTE_OWNS_MS, REPLACE_NOTICE_MAX_AGE_MS,
 } from './shift-replace'
 
 // Literal: check:select-columns resolves only literal selects.
@@ -55,10 +63,9 @@ const HELD_SELECT = 'id, location_id, block_id, block_date, actor_id, coach_id, 
 const HELD_LIMIT = 500
 
 const iso = (ms) => new Date(ms).toISOString()
-const pileKey = (r) => `${r.location_id}|${r.coach_id}|${r.block_id}`
 
 export async function runReplaceNotices(db, { nowMs = Date.now(), todayStr = dublinTodayStr() } = {}) {
-  const stats = { rows: 0, groups: 0, told: 0, silent: 0, started: 0, quiet: 0, fresh: 0, undelivered: 0, send_failed: 0, stamp_failed: 0, errors: 0 }
+  const stats = { rows: 0, groups: 0, told: 0, silent: 0, started: 0, gone: 0, quiet: 0, fresh: 0, undelivered: 0, send_failed: 0, stamp_failed: 0, errors: 0 }
   let rows
   try {
     const { data, error } = await db.from('roster_change_log')
@@ -82,9 +89,9 @@ export async function runReplaceNotices(db, { nowMs = Date.now(), todayStr = dub
 
   // A pile the route still owns (or the manager is still changing) waits.
   const ownedSince = nowMs - REPLACE_NOTICE_ROUTE_OWNS_MS
-  const freshPiles = new Set(rows.filter((r) => Date.parse(r.created_at) > ownedSince).map(pileKey))
+  const freshPiles = new Set(rows.filter((r) => Date.parse(r.created_at) > ownedSince).map(replacePileKey))
   stats.fresh = freshPiles.size
-  const settled = rows.filter((r) => !freshPiles.has(pileKey(r)))
+  const settled = rows.filter((r) => !freshPiles.has(replacePileKey(r)))
   if (!settled.length) return stats
 
   const tzById = new Map()
@@ -101,7 +108,11 @@ export async function runReplaceNotices(db, { nowMs = Date.now(), todayStr = dub
   // Review 1 — a row that may already have been told (made in band, or
   // around since an in-band tick) keeps its pile out of the silent path.
   const mayHaveBeenTold = (r) => bandSeenBetween(Date.parse(r.created_at), nowMs, tzOf(r.location_id))
-  const { send: planned, silent } = netReplaceChanges(settled, { mayHaveBeenTold })
+  const { send: planned, silent, gone } = netReplaceChanges(settled, { mayHaveBeenTold })
+  // Review 4 — "added" to a shift deleted before the notice went out.
+  if (gone.length && await stampSilently(db, { rowIds: gone.flatMap((p) => p.rowIds), reason: REPLACE_DELETED_REASON, nowMs, stats })) {
+    stats.gone += gone.length
+  }
   if (silent.length && await stampSilently(db, { rowIds: silent.flatMap((p) => p.rowIds), reason: REPLACE_UNDONE_REASON, nowMs, stats })) {
     stats.silent += silent.length
   }
