@@ -116,8 +116,16 @@ These are marked **REVIEW** in the artifact until he confirms or changes them. E
 
 31. **ARRIVALSHOW.1 shows "No arrival recorded" in grey** on a coach's ended shift when their studio tracks arrivals (about 70% of ended shifts today, since only 19% of shifts get a stamp), no minutes late/early, Me view only, own shifts only. Help line under the list: "They don't change your hours".
 
+32. **LABOUR.1 revenue = the Studio scorecard's MRR** (its only trusted revenue figure), current month only, "so far" = MRR × month elapsed; paid Glofox invoices rejected (VAT, refunds, other months). **Employees cost 1/12 of annual salary a month** whatever the roster, split between studios by published hours; **contractors cost published hours × rate, admin shifts included** (they invoice them; contractor spend prices admin at €0 only for the budget gate). Forecast = the whole month's published roster, actual = published shifts that have ended. Owner/master only, on the Business dashboard, rendered on the server so no rate reaches the browser. Hatch shows labour but no ratio (no revenue source). 9 open questions at the end of the plan (overtime, PRSI/pension, 4 employees with no salary on file).
+
 ## Follow-ups found along the way (not in any PR yet)
 
+- 🔴 "Labour this week" on the Business dashboard and the phone's Business tab (`fetchTodayOps`, `shared/dashboard-data.js:659-724`) counts CANCELLED and DRAFT shifts; `fetchDashboardShifts` never filters status (found planning 35).
+- Contractor spend skips contractors deactivated mid-month (`roster-summary.js:336`) and the sibling studio's contractors (`roster-summary-server.js:86-102`), so worked shifts go uncounted; `summarizeMonth` parses its reference date as UTC (`:322`, latent on Vercel) (found planning 35).
+- The contractor invoice review's "scheduled hours" (`computeScheduledForPeriod`, `contractor-invoices.js:115-131`) counts cancelled shifts (found planning 35).
+- "Revenue MTD" starts the month at UTC midnight, not Dublin (`shared/dashboard-data.js:541`) (found planning 35).
+- Product question: contractor invoices are one per contractor per month across BOTH studios (`101_contractor_invoices.sql:66`), so a contractor at both can only invoice one (found planning 35).
+- `getCompensationForProfiles` (`src/lib/profile-compensation.js`) returns empty on a failed read; LABOUR.1 makes it throw (no callers today).
 - 🔴 Colleagues' contracted hours already reach EVERY role: `STAFF_PICKER_FIELDS` (`src/lib/staff.js:25`) and `STAFF_PUBLIC_FIELDS` send `contracted_hours_per_week`, and `/api/schedule/week-cost` (MANAGER_ROLES, incl. head coaches) returns `contracted_hours`. CANDIDATES.1 and GRID.1 hide them from head coaches; narrowing the old paths together is a separate PR for Richard to call (found reviewing 21).
 - 🔴 Nothing writes a MANUAL arrival (`arrival_source='manual'`), so neither a coach nor a manager can correct a wrong or missing stamp. Blocks the late/no-show alert half (found planning 34).
 - Arrival coverage is low for a geofence reason, not permissions: stamps on 19% of shifts; 48% of coach-days have no ping at all; on 11 of 23 ping-but-no-stamp days the ping came >45 min before the shift and the region never re-fires while the coach stays inside (found planning 34).
@@ -143,6 +151,7 @@ These are marked **REVIEW** in the artifact until he confirms or changes them. E
 
 Updated by the loop. Newest first.
 
+- 25 Sep ~16:15Z: 35 LABOUR.1 plan written (web only, no mig, no route; server-rendered owner block on the Business dashboard; MRR revenue; salary/12 + contractor hours × rate). All batch 7–8 plans now written. 19 CANDIDATES.1 fixes done (published-only for the coach, "Free here", throwing reads, contract hours owner/manager/master) → fix re-check + full gate running. 21 GRID.1 fixes in progress. 20 REPLACE.1a fixes still in progress.
 - 25 Sep ~16:00Z: ✅ #1765 AVAIL.2 EAS Update SUCCESS; worktree removed. 21 GRID.1 review: NOT APPROVED, one blocker (head coaches got contracted hours + admin balance via MANAGER_ROLES) + a stale-grid-under-new-dates should-fix → fixes queued for the next implementer slot (head coaches keep the grid with contract hidden). Review page v13.
 - 25 Sep ~15:45Z: #1765 AVAIL.2 MERGED; EAS run watched. 21 GRID.1 built (12 commits, web only) → independent review. 34 ARRIVALSHOW.1 plan written (web + OTA, no mig; the check-in no longer writes the paid window since ARRIVAL.1/2, so display only; own rows only; server sends instants + studio-local strings, the phone does no tz maths). Worktrees avail1b + blockedit1 removed.
 - 25 Sep ~15:35Z: 19 CANDIDATES.1 review: approved w/ should-fixes (coach-for-cover saw DRAFT shifts as 'Working then'; 'Free' said unqualified when the other studio couldn't be read; a throwing side read failed the request) → fixes in progress, plus contracted hours narrowed to owner/manager/master (default 25 rewritten).
