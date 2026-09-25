@@ -235,3 +235,46 @@ Deactivation: the feed answers 404 for a profile with `active = false` or
 reactivation resumes the same link. A read failure is 503, never an empty
 calendar (a subscriber would lose every shift). Rate limit is per token, never
 per IP. Public on the CRM hosts only (`publicExactPaths` in `src/proxy.js`).
+
+## Publish snapshots (SNAPSHOT.1, mig 634, 2026-09)
+
+Every publish (POST `/api/schedule/rosters`, or an owner approving a draft)
+writes one row to `roster_publish_snapshots`: the period's shift blocks (slot
+`template_id|date`, template name and kind, times, minimum, maximum) and each
+block's live coaches (profile id, effective window: override, else the block's
+own time), as one `jsonb` document with `format_version` 1. One row per
+`rosters` row (`UNIQUE (roster_id)`): every publish and re-publish inserts its
+own roster row, so this is one per publish.
+
+- **When:** after the publish has tagged the period's blocks, before the
+  supersede sweep and the notifications. Not on a draft, not on a dry run,
+  not when the tag failed (those blocks were not published by this roster).
+- **Never blocks a publish:** `writePublishSnapshot` (`src/lib/roster-snapshot.js`)
+  never throws, retries its insert once, and logs a failure with
+  `logError('roster-snapshot', …)`. There is no publish transaction to join
+  (the publish is a chain of PostgREST writes), and a lost audit record must
+  not cost coaches their notification.
+- **Immutable:** service role holds SELECT and INSERT only; a trigger refuses
+  any UPDATE, the owner's included. Rows go only by cascade (a deleted draft
+  roster, which never has one; a deleted location).
+- **No names, no pay:** profile ids only; names are read when compared (a
+  tombstone keeps `full_name`).
+- **Briefing as a fingerprint:** each block records BLOCKEDIT.1's briefing as
+  `briefing_hash` (SHA-256 of the trimmed text, null when none), never the
+  text: an immutable row could never be corrected or erased, and free text can
+  name a person. The comparison reports `briefing_change` (added, changed,
+  removed after publish), the change log's own vocabulary. A block without the
+  key reads as not recorded, never as a change.
+- **No backfill:** rosters published before the studio's first snapshot have
+  none, and the view says from when they exist.
+
+**Reading it:** `GET /api/schedule/rosters/[id]/compare?from&to&against`
+(manager at the roster's studio) returns, per shift and coach, published vs
+current window, the change (unchanged, moved, added after publish, removed
+after publish) and the arrival stamp, with totals. Blocks match on the slot,
+coaches on profile id within it (a swap reads as removed + added). Hours are
+wall-clock like payroll's, except that `'24:00'` counts as midnight here.
+"No arrival recorded" (`no_show_candidate`) is advisory: stamps exist for a
+minority of shifts, and nothing alerts. The web view is "Published vs now" in
+the change-log dialog (the Published chip), one section per published roster
+the period sits on.
