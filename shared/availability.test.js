@@ -200,6 +200,26 @@ describe('diffAvailability / sameAvailability', () => {
     expect(removed).toEqual([])
     expect(sameAvailability(before, after)).toBe(false)
   })
+  it('with fromIso: dated rules clip to that day, and same-window overlaps cancel (a started rule cut short)', () => {
+    const from = '2026-09-25'
+    // 20-30 Sep cut to end on the 27th on the 25th: the RPC stores 25-27 and history 20-24.
+    let d = diffAvailability([dated('2026-09-20', '2026-09-30')], [dated('2026-09-25', '2026-09-27')], { fromIso: from })
+    expect(d.added).toEqual([])
+    expect(d.removed.map(describeRule)).toEqual(['28 Sep – 30 Sep, all day'])
+    // deleted outright: only the days from today come back
+    d = diffAvailability([dated('2026-09-20', '2026-09-30')], [], { fromIso: from })
+    expect(d.removed.map(describeRule)).toEqual(['25 Sep – 30 Sep, all day'])
+    // extended: only the new days are added
+    d = diffAvailability([dated('2026-09-20', '2026-09-30')], [dated('2026-09-25', '2026-10-03')], { fromIso: from })
+    expect(d.added.map(describeRule)).toEqual(['1 Oct – 3 Oct, all day'])
+    expect(d.removed).toEqual([])
+    // a different window never cancels, and a middle cut leaves two pieces
+    d = diffAvailability([dated('2026-10-01', '2026-10-10')], [dated('2026-10-04', '2026-10-05', '09:00', '10:00')], { fromIso: from })
+    expect(d.removed.map(describeRule)).toEqual(['1 Oct – 10 Oct, all day'])
+    d = diffAvailability([dated('2026-10-01', '2026-10-10')], [dated('2026-10-01', '2026-10-03'), dated('2026-10-06', '2026-10-10')], { fromIso: from })
+    expect(d.removed.map(describeRule)).toEqual(['4 Oct – 5 Oct, all day'])
+    expect(d.added).toEqual([])
+  })
   it('accepts either flat arrays or { weekly, dated }', () => {
     expect(sameAvailability({ weekly: [weekly('mon', null, null)], dated: [] }, [weekly('mon', null, null)])).toBe(true)
   })

@@ -52,6 +52,7 @@ import { RUNWAY_NOTIFY_ROLES } from '@/lib/roster-runway-notify'
 import { diffAvailability, sameAvailability, describeRule } from '@shared/availability'
 import { logWarn, logError } from '@/lib/log'
 import { escapeLikePattern } from '@/lib/like-escape'
+import { dublinDayStr } from '@/lib/dublin-time'
 
 export const AVAILABILITY_NOTIFY_ROLES = RUNWAY_NOTIFY_ROLES
 export const AVAILABILITY_NOTICE_MAX_AGE_MS = 24 * 60 * 60 * 1000
@@ -78,9 +79,10 @@ function listRules(rules, max = 3) {
 }
 
 /** The push text. Pure. */
-export function availabilityNoticeText({ coachName, before, after }) {
+export function availabilityNoticeText({ coachName, before, after, fromIso = null }) {
   const name = (typeof coachName === 'string' && coachName.trim()) || 'A coach'
-  const { added, removed } = diffAvailability(before, after)
+  // fromIso = the save's Dublin day: only what changes from that day on is news.
+  const { added, removed } = diffAvailability(before, after, { fromIso })
   const parts = []
   if (added.length) parts.push(`now unavailable ${listRules(added)}`)
   if (removed.length) parts.push(`available again ${listRules(removed)}`)
@@ -198,7 +200,8 @@ export async function deliverAvailabilityNotice(db, change, { nowMs = Date.now()
     if (recipients.length > 0) {
       // A failed name read only costs the name ("A coach"), never the notice.
       const { data: person } = await db.from('profiles').select('full_name').eq('id', change.profile_id).maybeSingle()
-      const { title, body } = availabilityNoticeText({ coachName: person?.full_name, before: change.before, after: change.after })
+      const fromIso = Number.isFinite(createdMs) ? dublinDayStr(createdMs) : null
+      const { title, body } = availabilityNoticeText({ coachName: person?.full_name, before: change.before, after: change.after, fromIso })
       const r = await sendPushOnce(db, eventKey || availabilityEventKey(change.id), recipients, {
         title,
         body,

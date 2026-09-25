@@ -313,15 +313,68 @@ export function unavailableSummary(matches) {
   return [...new Set(matches.map(describeWindow))].join(', ')
 }
 
-/** What a save added and removed, by content (a note-only edit is neither). */
-export function diffAvailability(before, after) {
-  const b = flat(splitRules(flat(before)))
-  const a = flat(splitRules(flat(after)))
+/** 'YYYY-MM-DD' for a whole-day index (dayIndex's inverse). UTC arithmetic: no host timezone. */
+function isoFromDayIndex(n) {
+  const d = new Date(n * DAY_MS)
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`
+}
+
+const windowSig = (r) => (r.all_day ? 'all' : `${r.start_time}-${r.end_time}`)
+
+// The parts of each dated rule in `rules` not covered by a same-window rule in
+// `others` (a range minus ranges: a middle cut leaves two pieces).
+function subtractRanges(rules, others) {
+  const out = []
+  for (const r of rules) {
+    let pieces = [[dayIndex(r.start_date), dayIndex(r.end_date)]]
+    for (const o of others) {
+      if (windowSig(o) !== windowSig(r)) continue
+      const os = dayIndex(o.start_date)
+      const oe = dayIndex(o.end_date)
+      pieces = pieces.flatMap(([ps, pe]) => {
+        if (oe < ps || os > pe) return [[ps, pe]]
+        const keep = []
+        if (ps < os) keep.push([ps, os - 1])
+        if (pe > oe) keep.push([oe + 1, pe])
+        return keep
+      })
+    }
+    for (const [ps, pe] of pieces) out.push({ ...r, start_date: isoFromDayIndex(ps), end_date: isoFromDayIndex(pe) })
+  }
+  return out
+}
+
+/**
+ * What a save added and removed, by content (a note-only edit is neither).
+ * With `fromIso` (the day of the save), dated rules are judged from that day
+ * on: the days before it are history the save cannot change (mig 630 keeps a
+ * started rule's elapsed days), so they are clipped away, and a removed and an
+ * added dated rule with the same window cancel where they overlap. 20-30 Sep
+ * cut to 25-27 on the 25th is then "removed 28-30", not "removed 20-30, added
+ * 25-27".
+ */
+export function diffAvailability(before, after, { fromIso = null } = {}) {
+  const from = dayIndex(fromIso)
+  const clip = (rules) => (from === null ? rules : rules.flatMap((r) => {
+    if (r.kind !== 'dated') return [r]
+    const s = dayIndex(r.start_date)
+    const e = dayIndex(r.end_date)
+    if (s === null || e === null) return [r]
+    if (e < from) return []
+    return [s < from ? { ...r, start_date: fromIso } : r]
+  }))
+  const b = clip(flat(splitRules(flat(before))))
+  const a = clip(flat(splitRules(flat(after))))
   const bKeys = new Set(b.map(windowKey))
   const aKeys = new Set(a.map(windowKey))
+  const added = a.filter((r) => !bKeys.has(windowKey(r)))
+  const removed = b.filter((r) => !aKeys.has(windowKey(r)))
+  if (from === null) return { added, removed }
+  const dated = (list) => list.filter((r) => r.kind === 'dated' && dayIndex(r.start_date) !== null && dayIndex(r.end_date) !== null)
+  const other = (list) => list.filter((r) => !dated([r]).length)
   return {
-    added: a.filter((r) => !bKeys.has(windowKey(r))),
-    removed: b.filter((r) => !aKeys.has(windowKey(r))),
+    added: [...other(added), ...subtractRanges(dated(added), dated(removed))],
+    removed: [...other(removed), ...subtractRanges(dated(removed), dated(added))],
   }
 }
 

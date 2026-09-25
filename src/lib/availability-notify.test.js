@@ -104,6 +104,19 @@ describe('constants and text', () => {
     expect(availabilityNoticeText({ coachName: ' ', before: [MON], after: [{ ...MON, note: 'x' }] }).body)
       .toBe('A coach updated the notes on their availability.')
   })
+  it('a started rule cut short (20-30 -> 25-27 saved on the 25th) says only what is freed from that day on', () => {
+    const d = (from, to) => ({ kind: 'dated', start_date: from, end_date: to, all_day: true, start_time: null, end_time: null, note: null })
+    expect(availabilityNoticeText({ coachName: 'Sam Demo', before: [d('2026-09-20', '2026-09-30')], after: [d('2026-09-25', '2026-09-27')], fromIso: '2026-09-25' }).body)
+      .toBe('Sam Demo is available again 28 Sep – 30 Sep, all day.')
+  })
+
+  it('the notice clips to the Dublin day of the newest change', async () => {
+    const d = (from, to) => ({ kind: 'dated', start_date: from, end_date: to, all_day: true, start_time: null, end_time: null, note: null })
+    await deliverAvailabilityNotice(world(), change({ before: [d('2026-09-20', '2026-09-30')], after: [], created_at: '2026-09-24T23:30:00Z' }), { nowMs: NOON })
+    // 23:30 UTC on the 24th is 00:30 on the 25th in Dublin (BST).
+    expect(sendPushOnce.mock.calls[0][3].body).toBe('Sam Demo is available again 25 Sep – 30 Sep, all day.')
+  })
+
   it("splits studios by the 07:00-22:00 band at each studio's own clock", () => {
     const split = splitStudiosByBand([{ id: LOC_A, timezone: 'Europe/Dublin' }, { id: LOC_B, timezone: 'America/New_York' }], LATE)
     expect(split.inBand.map((s) => s.id)).toEqual([LOC_B]) // 18:30 in New York
