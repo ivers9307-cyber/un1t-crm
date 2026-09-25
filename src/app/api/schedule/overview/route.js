@@ -31,6 +31,7 @@ import {
   sumStaffRequired,
   classifyDayLoad,
   leaveOnDate,
+  underMinEntry,
 } from '@/lib/schedule-overview'
 import { logWarn } from '@/lib/log'
 
@@ -181,7 +182,7 @@ async function handleGet(request) {
     db.from('shift_blocks')
       .select(`
         id, block_date, start_time, end_time, min_coaches, max_coaches,
-        shift_templates ( name, color ),
+        shift_templates ( name, color, kind ),
         shift_assignments ( profile_id, status )
       `)
       .eq('location_id', location_id)
@@ -231,16 +232,12 @@ async function handleGet(request) {
       if (!staffByDate.has(block.block_date)) staffByDate.set(block.block_date, new Set())
       staffByDate.get(block.block_date).add(a.profile_id)
     }
-    const min = block.min_coaches || 0
-    if (min > 0 && activeAssignments.length < min) {
+    // SHIFTTYPE.1 — the rule lives in underMinEntry (admin is never a row).
+    // Supply above still counts an admin-rostered person: they are on site.
+    const entry = underMinEntry(block)
+    if (entry) {
       if (!underMinByDate.has(block.block_date)) underMinByDate.set(block.block_date, [])
-      underMinByDate.get(block.block_date).push({
-        id: block.id,
-        label: block.shift_templates?.name || 'Shift',
-        time: `${String(block.start_time || '').slice(0, 5)}–${String(block.end_time || '').slice(0, 5)}`,
-        assigned: activeAssignments.length,
-        min,
-      })
+      underMinByDate.get(block.block_date).push(entry)
     }
   }
 

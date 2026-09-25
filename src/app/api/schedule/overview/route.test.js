@@ -88,4 +88,22 @@ describe('GET /api/schedule/overview — role at the requested studio', () => {
     getCurrentUser.mockResolvedValue(null)
     expect((await GET(req(LOC_A))).status).toBe(401)
   })
+
+  // SHIFTTYPE.1 — the day dialog needs each block's kind to leave admin out.
+  it("reads each block's template kind", async () => {
+    getCurrentUser.mockResolvedValue(MGR_A_STAFF_B(LOC_A))
+    const selects = {}
+    createServerClient.mockReturnValue({
+      from(t) {
+        const b = {
+          select: (s) => { selects[t] = s; return b },
+          eq: () => b, gte: () => b, lte: () => b, in: () => b, or: () => b,
+          then: (resolve) => resolve({ data: [], error: null }),
+        }
+        return b
+      },
+    })
+    expect((await GET(req(LOC_A))).status).toBe(200)
+    expect(selects.shift_blocks).toMatch(/shift_templates \( name, color, kind \)/)
+  })
 })
