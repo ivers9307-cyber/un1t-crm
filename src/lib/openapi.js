@@ -4430,7 +4430,7 @@ registry.registerPath({
   tags: ['Schedule'],
   security: [{ CookieAuth: [] }],
   summary: 'Edit one shift: times, minimum and maximum coaches, and the coach briefing (manager-only)',
-  description: "BLOCKEDIT.1. Every field optional; omitted = unchanged; briefing null or blank clears it (at most 500 characters; mig 629). Refuses: end not after start (400 end_not_after_start), minimum above maximum (400 min_above_max), a minimum on an admin shift (400 admin_has_no_minimum), a maximum below the live coaches already on it (409 below_assigned, unless allow_below_assigned: true, which saves with a warning), and a shift changed by someone else since it was read (409 block_changed). A coach's own start/end override equal to the shift's OLD time moves with it; any other override stays and is listed in kept_overrides with a warning. On a PUBLISHED roster the edit writes a change-log row, and each coach whose own hours moved gets a time_changed row; the */5 push cron tells them once, only inside staff quiet hours (07:00-22:00 at the studio). `notice.when` is 'shortly' or 'morning'. Nothing is logged or sent for a draft. Manager role AT the shift's studio; a shift outside the caller's studios is a 404.",
+  description: "BLOCKEDIT.1. Every field optional; omitted = unchanged; briefing null or blank clears it (at most 500 characters; mig 629). Refuses: end not after start (400 end_not_after_start), minimum above maximum (400 min_above_max), a minimum on an admin shift (400 admin_has_no_minimum), a maximum below the live coaches already on it (409 below_assigned, unless allow_below_assigned: true, which saves with a warning), a coach whose own hours would end at or before they start (409 coach_window_invalid, naming them), a shift changed by someone else since the editor opened it (409 block_changed; send `expected`), and a shift dated before today without confirm_past: true (409 past_shift). A coach's own start/end override equal to the shift's OLD time moves with it; any other override stays and is listed in kept_overrides with a warning. On a PUBLISHED roster the edit writes a change-log row, and each coach whose own hours moved gets a time_changed row; the */5 push cron tells them once, only inside staff quiet hours (07:00-22:00 at the studio). `notice.when` is 'shortly', 'morning', or 'too_late' (the shift starts before 07:00 on the first morning a notice can go out: ring the coaches). Coaches moved onto a time that overlaps another of their shifts at any studio of the organisation are listed in `overlaps` (a warning, never a refusal). Nothing is logged or sent for a draft. Manager role AT the shift's studio; a shift outside the caller's studios is a 404.",
   request: {
     params: z.object({ id: uuidLike }),
     body: { content: { 'application/json': { schema: z.object({
@@ -4440,6 +4440,7 @@ registry.registerPath({
       max_coaches: z.number().int().optional(),
       briefing: z.string().nullable().optional(),
       allow_below_assigned: z.boolean().optional(),
+      confirm_past: z.boolean().optional(),
       expected: z.object({ start_time: z.string(), end_time: z.string(), min_coaches: z.number().int(), max_coaches: z.number().int() }).optional()
         .describe('The values the editor opened with; a stored value that differs is 409 block_changed'),
     }) } } },
@@ -4449,7 +4450,7 @@ registry.registerPath({
     400: { description: 'Validation error or a rule above', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: "Forbidden — needs a manager role at the shift's studio", content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Shift not found (or the id is not UUID-shaped)', content: { 'application/json': { schema: ErrorResponse } } },
-    409: { description: 'below_assigned, coach_window_invalid, or block_changed (including a stale `expected`)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'below_assigned, coach_window_invalid, past_shift, or block_changed (including a stale `expected`)', content: { 'application/json': { schema: ErrorResponse } } },
     503: { description: 'The shift could not be read; retry', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })

@@ -64,6 +64,13 @@ export default function BlockEditForm({ block, onSave, onDone }) {
       onDone()
       return
     }
+    // Review nit — a past shift's hours are paid hours: ask, then resend.
+    if (result?.code === 'past_shift' && !payload.confirm_past) {
+      if (confirm('This shift is in the past — change its hours anyway? Paid hours will change.')) {
+        await send({ ...payload, confirm_past: true })
+      }
+      return
+    }
     if (result?.code === 'below_assigned' && !payload.allow_below_assigned) {
       if (confirm(`${result.error}\n\nSave anyway? Nobody is removed from the shift.`)) {
         await send({ ...payload, allow_below_assigned: true })

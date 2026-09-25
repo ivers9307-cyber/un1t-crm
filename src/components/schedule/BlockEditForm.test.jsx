@@ -100,5 +100,32 @@ describe('BlockEditForm', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Done' }))
     expect(onDone).toHaveBeenCalled()
   })
+
+  // Review nit — a past shift's hours are paid hours.
+  it('a past shift: asks, and resends with confirm_past on yes', async () => {
+    const ask = vi.fn(() => true)
+    vi.stubGlobal('confirm', ask)
+    const onSave = vi.fn()
+      .mockResolvedValueOnce({ ok: false, code: 'past_shift', error: 'This shift is in the past.' })
+      .mockResolvedValueOnce({ ok: true })
+    const onDone = vi.fn()
+    render(<BlockEditForm block={BLOCK} onSave={onSave} onDone={onDone} />)
+    fireEvent.change(screen.getByLabelText('End'), { target: { value: '13:00' } })
+    await save()
+    expect(ask).toHaveBeenCalledWith('This shift is in the past — change its hours anyway? Paid hours will change.')
+    expect(onSave).toHaveBeenLastCalledWith({ end_time: '13:00', expected: OPENED, confirm_past: true })
+    expect(onDone).toHaveBeenCalled()
+  })
+
+  it('a past shift: no on the question sends nothing more and stays open', async () => {
+    vi.stubGlobal('confirm', vi.fn(() => false))
+    const onSave = vi.fn().mockResolvedValueOnce({ ok: false, code: 'past_shift', error: 'This shift is in the past.' })
+    const onDone = vi.fn()
+    render(<BlockEditForm block={BLOCK} onSave={onSave} onDone={onDone} />)
+    fireEvent.change(screen.getByLabelText('End'), { target: { value: '13:00' } })
+    await save()
+    expect(onSave).toHaveBeenCalledTimes(1)
+    expect(onDone).not.toHaveBeenCalled()
+  })
 })
 

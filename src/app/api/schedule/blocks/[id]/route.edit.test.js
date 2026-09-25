@@ -286,7 +286,7 @@ describe('PUT /api/schedule/blocks/[id] — change log and notice (published onl
 
   it('a past shift, or the manager moving their own shift: logged, stamped at once, nobody told', async () => {
     createServerClient.mockReturnValue(makeDb({ block: { ...BLOCK, block_date: '2026-09-28' } }))
-    let body = await (await PUT(req({ start_time: '10:00' }), params)).json()
+    let body = await (await PUT(req({ start_time: '10:00', confirm_past: true }), params)).json()
     expect(markChangesNotified).toHaveBeenCalledWith(expect.anything(), ['log-1'])
     expect(body.notice).toBeUndefined()
 
@@ -393,3 +393,36 @@ describe('PUT /api/schedule/blocks/[id] — briefing length (review nit)', () =>
     expect((await PUT(req({ briefing: 'a'.repeat(501) }), params)).status).toBe(400)
   })
 })
+
+// Review nit — changing a past shift changes paid hours, so it is asked for
+// explicitly (the form confirms first).
+describe('PUT /api/schedule/blocks/[id] — past shifts need confirm_past (review nit)', () => {
+  const PAST = { ...BLOCK, block_date: '2026-09-28' } // today is 2026-09-29 (Dublin)
+
+  it('409 past_shift without confirm_past; nothing written', async () => {
+    const db = makeDb({ block: PAST })
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(req({ start_time: '10:00' }), params)
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toBe('past_shift')
+    expect(db.captured.savePatch).toBeNull()
+  })
+
+  it('saves with confirm_past: true', async () => {
+    const db = makeDb({ block: PAST })
+    createServerClient.mockReturnValue(db)
+    expect((await PUT(req({ start_time: '10:00', confirm_past: true }), params)).status).toBe(200)
+    expect(db.captured.savePatch).toEqual({ start_time: '10:00:00' })
+  })
+
+  it("today's shift is not past", async () => {
+    createServerClient.mockReturnValue(makeDb({ block: { ...BLOCK, block_date: '2026-09-29' } }))
+    expect((await PUT(req({ start_time: '10:00' }), params)).status).toBe(200)
+  })
+
+  it('confirm_past alone is not an edit', async () => {
+    createServerClient.mockReturnValue(makeDb({ block: PAST }))
+    expect((await (await PUT(req({ confirm_past: true }), params)).json()).error).toBe('nothing_to_change')
+  })
+})
+

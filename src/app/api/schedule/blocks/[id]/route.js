@@ -183,6 +183,9 @@ const BlockEditSchema = z.object({
   // so 500 characters padded with whitespace is a valid briefing.
   briefing: z.string().trim().max(BRIEFING_MAX_LENGTH).nullable().optional(),
   allow_below_assigned: z.boolean().optional(),
+  // Review nit — a shift dated before today (Dublin) is paid history; changing
+  // it must be asked for explicitly.
+  confirm_past: z.boolean().optional(),
   // Review fix 2 — what the editor OPENED with. The web form always sends it;
   // a stored value that differs is a 409, so a form left open while another
   // manager saved cannot silently overwrite their change.
@@ -255,6 +258,15 @@ export async function PUT(request, props) {
       id: block.id, start_time: block.start_time, end_time: block.end_time,
       min_coaches: block.min_coaches, max_coaches: block.max_coaches, briefing: block.briefing ?? null,
     } })
+  }
+
+  // Review nit — past shifts are paid hours: edit only when the caller says
+  // so (the form asks first). An unchanged body never reaches here.
+  if (block.block_date < dublinTodayStr() && validation.data.confirm_past !== true) {
+    return NextResponse.json({
+      success: false, error: 'past_shift',
+      message: 'This shift is in the past. Changing it changes paid hours; confirm to go ahead.',
+    }, { status: 409 })
   }
 
   // 1. The block, guarded on what was read (D9): a concurrent edit is a 409,
