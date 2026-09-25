@@ -4325,6 +4325,7 @@ registry.registerPath({
   description: "Returns shifts for the caller's locations, optionally filtered by location_id, start_date, end_date, profile_id. Each row is judged against the caller's role at THAT row's location: where the caller is not owner/manager/head_coach, draft shifts are omitted and the row is slimmed — the assignee profile carries id, full_name, avatar_url and role only (no email), and notes / partial_reason are null on colleagues' rows. (The legacy create / update / delete shift endpoints were retired — use the block-based assignment routes.) Each row also carries open_swap_status: 'pending' or 'awaiting_approval' when the CALLER has an open swap request on that shift of their own, otherwise null (never set on a colleague's row).",
   responses: {
     200: { description: 'Shifts' },
+    400: { description: 'start_date or end_date is not a real calendar date (YYYY-MM-DD), or the read failed', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -4358,7 +4359,7 @@ registry.registerPath({
     body: { content: { 'application/json': { schema: z.object({
       location_id: z.string(),
       template_id: z.string(),
-      block_date: z.string().openapi({ description: 'YYYY-MM-DD' }),
+      block_date: z.string().openapi({ description: 'YYYY-MM-DD, a real calendar date (2026-02-30 is refused with a 400)' }),
       start_time: z.string().optional(),
       end_time: z.string().optional(),
       max_coaches: z.number().int().optional(),
@@ -4450,7 +4451,7 @@ registry.registerPath({
   description: "Per-coach allocated hours, contracted hours and overtime for the Mon-Sun week containing week_start, plus week totals. Manager-only (master, owner, manager, head_coach), and scoped by assertLocationAccess — a location outside the caller's assignments is a 403, since location_id is a caller-supplied query param rather than a path id. The response deliberately carries NO rate, salary or euro figure: the calendar used to compute this in the browser from /api/staff pay fields, which put the studio's pay data in every manager's tab to render a panel that only ever showed hours. week_start may be any day inside the target week; it is snapped to that week's Monday.",
   responses: {
     200: { description: 'Per-coach hours + week totals' },
-    400: { description: 'Missing or malformed location_id / week_start', content: { 'application/json': { schema: ErrorResponse } } },
+    400: { description: 'Missing or malformed location_id / week_start, or week_start is not a real calendar date', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — needs a manager role at that location', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
