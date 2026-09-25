@@ -113,6 +113,7 @@ These are marked **REVIEW** in the artifact until he confirms or changes them. E
 - Two dead staffing readers (`shared/dashboard-data.js` `fetchUnstaffedBlocksThisWeek`, `src/lib/roster.js` `isBlockUnstaffedFuture`) would treat an admin shift as a gap if revived; delete them (found reviewing 13).
 - `src/lib/cron-heartbeat.js` docstring out of date (found building 31).
 - 🔴 A shift block's MANAGER `notes` reach a coach's own phone row through `toApiShiftRow` (`notes: a.notes ?? b.notes`); COACHSCOPE.1 meant block notes as manager working notes. Check whether coaches should see them; BLOCKEDIT.1's briefing is the coach-facing field (found planning 14).
+- Migration 633's header still says "apply before the code deploys"; the CLAUDE.md rule it added says after. Harmless (the file re-arms) but fix the header next time the file is touched.
 - The staff assistant's `generate_report` tool passes model-supplied report periods unchecked (Postgres refuses a bad one; harmless) (found reviewing 11).
 - The staff assistant's `create_shift` and `get_time_off` tools take dates with no calendar check (found planning 11; the assistant is off everywhere).
 
@@ -120,6 +121,7 @@ These are marked **REVIEW** in the artifact until he confirms or changes them. E
 
 Updated by the loop. Newest first.
 
+- 25 Sep 12:20Z: **#1760 HEARTBEAT.1 MERGED** (12:18Z), prod deploy success, then ✅ **MIG 633 APPLIED**: `shift-reminders` (300+900) and `roster-runway` (86400+43200) present, not stale. Rollback note in scratchpad `mig633-rollback-2026-09-25.txt`. To verify at next tick: the */5 cron stamps `shift-reminders` with a `last_outcome`. Follow-up: 633's file header still says "apply BEFORE the code deploys" (contradicts the new CLAUDE.md line; harmless because the file re-arms).
 - 25 Sep ~13:45Z: 31 HEARTBEAT.1 = [PR #1760](https://github.com/ivers9307-cyber/un1t-crm/pull/1760) (gate 28,025 + build), auto-merge on; mig 633 AFTER its deploy. AVAIL.1a: all 7 review fixes landed (retry key makes a crashed notice a duplicate not a loss; immediate path folds owed changes; elapsed days kept; no backdating; actor excluded) → focused second review. 14 BLOCKEDIT.1 implementer started (`~/code/un1t-crm-blockedit1`).
 - 25 Sep ~13:35Z: #1759 SHIFTTYPE.1 EAS Update run 36132835551 SUCCESS. Operator step now open for Richard: mark admin templates once phones have taken the update.
 - 25 Sep ~13:30Z: 14 BLOCKEDIT.1 plan written (PUT /api/schedule/blocks/[id] with optimistic concurrency; mig 629: `shift_blocks.briefing` ≤500 + change-log `block_edited`; notices via a new send-push-reminders arm, 07:00–22:00; OTA). Queued for the next implementer slot.
