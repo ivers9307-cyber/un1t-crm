@@ -59,23 +59,26 @@ import { hasRoleAtLocation } from '@/lib/role-at-location'
 import { blocksToShiftRows } from '@/lib/roster-summary'
 // ROSTER-FIX.6c — the 12-hour shift label, previously a local copy here and
 // two more in the manager screens. NOT fmtTime: see the note beside it.
-import { coachConflictsForBlock, formatTime12h as formatTime } from '@/lib/schedule-overlap'
+import { formatTime12h as formatTime } from '@/lib/schedule-overlap'
 import Modal from '@/components/ui/Modal'
 import { COPY_MODE_OPTIONS, copyResultToast } from '@/lib/roster-copy'
 // COPYLEAVE.1 — the publish modal's clash wording (pure, unit-tested there).
 import { leaveClashesHeadline, leaveRangeLabel } from '@/lib/roster-publish-advisories'
 // WORKTIME.1 — working-time copy and limits (pure, unit-tested in shared/).
 import { hoursMinutesLabel, longWeeksHeadline, restGapsHeadline, untimedShiftsLabel, MIN_REST_HOURS, MAX_WEEK_HOURS, REST_BETWEEN_LABEL } from '@shared/working-time'
+// CANDIDATES.1 — the ranked picker list: words, badges and parsing (pure, unit-tested in shared/).
+import {
+  parseCandidatesAnswer, candidateBadges, candidateMeta, candidatesUncheckedNote,
+  CANDIDATES_RANKING_NOTE, CANDIDATES_UNRANKED_NOTE,
+} from '@shared/candidates'
 import RosterSummaryPanel from './RosterSummaryPanel'
 import ScheduleErrorBanner from './schedule/ScheduleErrorBanner'
 import SchedulePartialLoadNote, {
-  STAFF_UNAVAILABLE_MESSAGE, TEMPLATES_UNAVAILABLE_MESSAGE, LEAVE_NOT_FLAGGED_MESSAGE, AVAILABILITY_NOT_FLAGGED_MESSAGE,
+  STAFF_UNAVAILABLE_MESSAGE, TEMPLATES_UNAVAILABLE_MESSAGE,
 } from './schedule/SchedulePartialLoadNote'
 import RosterChangeLogDrawer from './schedule/RosterChangeLogDrawer'
 import PublicationStatusChip from './schedule/PublicationStatusChip'
 import { timeOffLeaveLabel } from '@shared/time-off'
-// AVAIL.1 — the picker's advisory badge (pure, unit-tested in shared/).
-import { unavailableFor, unavailableSummary, describeRule } from '@shared/availability'
 // ROSTER-FIX.6a — the six-endpoint fan-out, its error handling and its
 // request-ordering guard live in the hook now; see its header for why.
 import { useScheduleData } from './schedule/useScheduleData'
@@ -110,6 +113,13 @@ const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 // ROSTER-FIX.6a-8 — how long a success/warning toast stays up. Errors never
 // expire; see the effect that consumes this.
 const TOAST_TTL_MS = 6000
+// CANDIDATES.1 — badge tones from shared/candidates candidateBadges(); the
+// recipes the picker's badges already used (light cards need the -700 ramp).
+const CANDIDATE_BADGE_CLASS = {
+  bad: 'bg-red-500/15 text-red-700',
+  warn: 'bg-amber-500/15 text-amber-700',
+  muted: 'bg-slate-500/15 text-slate-700',
+}
 const canManage = (role) => MANAGER_ROLES.includes(role)
 
 // Inverse of formatDate — parse a YYYY-MM-DD URL param into a local
@@ -423,8 +433,6 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
   const staffUnavailable = partialErrors?.staff && !partialErrors.staff.kept ? STAFF_UNAVAILABLE_MESSAGE : null
   const templatesUnavailable = partialErrors?.templates && !partialErrors.templates.kept ? TEMPLATES_UNAVAILABLE_MESSAGE : null
   const leaveMissing = Boolean(partialErrors?.timeOff && !partialErrors.timeOff.kept)
-  // AVAIL.1 — like leaveMissing: the picker must SAY it cannot flag anyone.
-  const availabilityMissing = Boolean(partialErrors?.availability && !partialErrors.availability.kept)
   // ROSTER-FIX.6c — its own hook, not a seventh slice of the fan-out above: a
   // summary panel must not be able to take the roster down with it. See its
   // header. Manager-gated on the client too, so a coach's calendar never fires
@@ -1509,12 +1517,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
         <AssignCoachModal
           block={assignTarget.block}
           staff={locationStaff}
-          blocks={blocks}
-          timeOff={timeOff}
           unavailableReason={staffUnavailable}
-          leaveMissing={leaveMissing}
-          availability={availability}
-          availabilityMissing={availabilityMissing}
           onAssign={(profileIds) => handleAssignCoaches(assignTarget.block.id, profileIds)}
           onClose={() => setAssignTarget(null)}
           // ROSTER-FIX.6b-7 — the Add-coach button that opened this lives in
@@ -1523,19 +1526,15 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
         />
       )}
 
-      {/* REPLACE.1a — the same picker (every badge kept), one pick. */}
+      {/* REPLACE.1a — the same picker (CANDIDATES.1's ranked list and its
+          badges), one pick. */}
       {replaceTarget && (
         <AssignCoachModal
           mode="replace"
           replacing={replaceTarget.assignment}
           block={replaceTarget.block}
           staff={locationStaff}
-          blocks={blocks}
-          timeOff={timeOff}
           unavailableReason={staffUnavailable}
-          leaveMissing={leaveMissing}
-          availability={availability}
-          availabilityMissing={availabilityMissing}
           onAssign={(ids) => handleReplaceCoach(replaceTarget.assignment, ids[0])}
           onClose={() => setReplaceTarget(null)}
           restoreFocusRef={calendarRef}
@@ -1805,16 +1804,26 @@ function CopyRosterModal({ job, onChoose, onClose }) {
 
 // ROSTERLOAD.1 — `unavailableReason`: the coach list failed to load, so the
 // picker says so and cannot submit, instead of showing an empty list that reads
-// as "everyone is already assigned". `leaveMissing`: leave failed to load, so
-// the on-leave badge cannot fire and the picker says that too.
-// AVAIL.1 — `availability`: the studio's unavailability rules (flat, with
-// profile_id), for an advisory badge per coach. `availabilityMissing`: they
-// failed to load, so the picker says nobody can be flagged.
-// REPLACE.1a — mode 'replace': one pick (radio), titled for the coach going
-// off, no capacity line (a replace keeps the count). Every badge stays.
+// as "everyone is already assigned".
+//
+// CANDIDATES.1 — the list comes from GET /api/schedule/blocks/[id]/candidates:
+// every rosterable coach of the block's studio, RANKED (free, on site and a
+// lighter week first; on leave or already working then, at ANY studio of the
+// organisation, last), with the badges and an hours line. That answer is the
+// ONE source of the picker's warnings: it replaced ROSTER-FIX.6c's clash and
+// leave badges (this studio's visible range only, block times only), AVAIL.1b's
+// availability badge (block times only) and WORKTIME.1's per-open ask, which
+// read the same week of shifts for the same rule. One ask per open. Advisory
+// everywhere: every row stays tickable. Until the answer lands, or when it
+// fails or is not understood (an older server), the picker is this studio's
+// staff A–Z with NO warnings, and a note says so, so an unbadged row never
+// reads as an all-clear.
+//
+// REPLACE.1a — mode 'replace' sits on top of this picker: one pick (radio),
+// titled for the coach going off (`replacing`), no capacity line (a replace
+// keeps the count). The ranked answer's badges are its warnings too.
 function AssignCoachModal({
-  block, staff, blocks, timeOff, unavailableReason = null, leaveMissing = false,
-  availability = [], availabilityMissing = false, onAssign, onClose, restoreFocusRef,
+  block, staff, unavailableReason = null, onAssign, onClose, restoreFocusRef,
   mode = 'assign', replacing = null,
 }) {
   const isReplace = mode === 'replace'
@@ -1827,48 +1836,33 @@ function AssignCoachModal({
   const currentCount = liveAssignments(block.shift_assignments).length
   const slotsLeft = Math.max(0, (block.max_coaches || 0) - currentCount)
 
-  // WORKTIME.1 — would assigning this coach leave an EMPLOYEE under 11 hours
-  // between working days, or over 48 hours in the week, counting every studio
-  // of the organisation? Asked once per open. Advisory, like the clash badge.
-  // A failed ask says so; an answer this screen does not recognise (an older
-  // server) says nothing. No list (the coach list failed) = nothing to ask.
-  // `pending` until the answer lands: an unbadged row must not read as "all
-  // clear" while the check is still in flight.
-  const [workingTime, setWorkingTime] = useState({ byProfile: {}, failed: false, pending: true, untimed: 0 })
+  // `pending` until the answer lands, so the A–Z list is labelled "Ranking
+  // coaches…" rather than read as the ranking. No list (the coach list
+  // failed) = nothing to ask, as before.
+  const [ranking, setRanking] = useState({ answer: null, pending: true })
   useEffect(() => {
     if (unavailableReason) return undefined
     let cancelled = false
-    async function loadWorkingTime() {
-      let res = null
+    async function loadCandidates() {
       let json = null
       try {
-        res = await fetch(`/api/schedule/working-time?block_id=${encodeURIComponent(block.id)}`)
-        json = await res.json()
+        const res = await fetch(`/api/schedule/blocks/${encodeURIComponent(block.id)}/candidates`)
+        json = res.ok ? await res.json() : null
       } catch {
         json = null
       }
       if (cancelled) return
-      if (!res?.ok || !json || json.success === false) {
-        setWorkingTime({ byProfile: {}, failed: true, pending: false, untimed: 0 })
-        return
-      }
-      const by = json.data?.byProfile
-      setWorkingTime({
-        byProfile: by && typeof by === 'object' && !Array.isArray(by) ? by : {},
-        failed: json.data?.checked === false,
-        pending: false,
-        untimed: Number(json.data?.untimed) > 0 ? Number(json.data.untimed) : 0,
-      })
+      setRanking({ answer: parseCandidatesAnswer(json), pending: false })
     }
-    loadWorkingTime()
+    loadCandidates()
     return () => { cancelled = true }
   }, [block.id, unavailableReason])
-  const wtDay = (iso) => new Date(`${iso}T00:00:00`).toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short' })
-  function restGapTitle(g) {
-    const o = g.other || {}
-    const where = o.location_name ? ` at ${o.location_name}` : ''
-    return `Only ${hoursMinutesLabel(g.rest_minutes)} between this shift and ${o.name || 'another shift'} ${formatTime(o.start)}–${formatTime(o.end)}${where} on ${wtDay(o.date)}. Employees need ${MIN_REST_HOURS} hours ${REST_BETWEEN_LABEL}.`
-  }
+  const ranked = ranking.answer?.ok ? ranking.answer : null
+  // Failed and unrecognised read the same here: either way nothing was
+  // checked, and the note must say so.
+  const rankNote = ranked
+    ? candidatesUncheckedNote(ranked.checked)
+    : ranking.pending ? CANDIDATES_RANKING_NOTE : CANDIDATES_UNRANKED_NOTE
 
   function toggle(id) {
     // REPLACE.1a — replace takes exactly one coach.
@@ -1888,16 +1882,12 @@ function AssignCoachModal({
     setSaving(false)
   }
 
-  // AVAIL.1 — each coach's rules, once per render. Not a hook: placed here,
-  // away from the hooks above, so no hook order can depend on it.
-  const rulesByProfile = new Map()
-  for (const rule of availability || []) {
-    if (!rule?.profile_id) continue
-    if (!rulesByProfile.has(rule.profile_id)) rulesByProfile.set(rule.profile_id, [])
-    rulesByProfile.get(rule.profile_id).push(rule)
-  }
+  // The server's list when it answered; otherwise the studio's staff A–Z.
+  const rows = ranked
+    ? ranked.candidates.map((c) => ({ id: c.profile_id, full_name: c.full_name || 'Coach', role: c.role, candidate: c }))
+    : available.map((s) => ({ id: s.id, full_name: s.full_name, role: s.role, candidate: null }))
 
-  const pickedName = isReplace ? available.find((s) => selectedIds.has(s.id))?.full_name : null
+  const pickedName = isReplace ? rows.find((r) => selectedIds.has(r.id))?.full_name : null
   const replaceCopy = isReplace ? replacePickerCopy({ fromName: replacing?.profiles?.full_name, pickedName, saving }) : null
   const overCapacity = !isReplace && selectedIds.size > slotsLeft
   const submitLabel = isReplace
@@ -1930,91 +1920,51 @@ function AssignCoachModal({
         </div>
         <div>
           <label className="block text-xs text-un1t-subtle mb-2">{isReplace ? replaceCopy.label : 'Pick one or more coaches'}</label>
-          {!unavailableReason && availabilityMissing && (
-            <p className="mb-2 text-[11px] px-2 py-1.5 rounded bg-amber-500/10 text-amber-700">{AVAILABILITY_NOT_FLAGGED_MESSAGE}</p>
+          {!unavailableReason && rankNote && (
+            <p className="mb-2 text-[11px] text-un1t-subtle" role="status">{rankNote}</p>
           )}
-          {!unavailableReason && leaveMissing && (
-            <p className="mb-2 text-[11px] px-2 py-1.5 rounded bg-amber-500/10 text-amber-700">{LEAVE_NOT_FLAGGED_MESSAGE}</p>
-          )}
-          {!unavailableReason && workingTime.pending && (
-            <p className="mb-2 text-[11px] text-un1t-subtle" role="status">Checking rest and weekly hours…</p>
-          )}
-          {!unavailableReason && workingTime.failed && (
-            <p className="mb-2 text-[11px] text-un1t-subtle">Rest and weekly-hours check could not be completed.</p>
-          )}
-          {!unavailableReason && workingTime.untimed > 0 && (
-            <p className="mb-2 text-[11px] text-un1t-subtle">{untimedShiftsLabel(workingTime.untimed)}</p>
+          {!unavailableReason && ranked?.untimed > 0 && (
+            <p className="mb-2 text-[11px] text-un1t-subtle">{untimedShiftsLabel(ranked.untimed)}</p>
           )}
           {unavailableReason ? (
             <p className="text-[11px] px-2 py-1.5 rounded bg-amber-500/10 text-amber-700">{unavailableReason}</p>
-          ) : available.length === 0 ? (
+          ) : rows.length === 0 ? (
             <p className="text-[11px] text-un1t-subtle">All staff already assigned to this slot.</p>
           ) : (
             <ul className="max-h-72 overflow-y-auto border border-un1t-border rounded-md divide-y divide-un1t-border/50">
-              {available.map((s) => {
-                const checked = selectedIds.has(s.id)
-                // AVAIL.1 — advisory like the two below: the row stays tickable.
-                const unavailable = unavailableFor(rulesByProfile.get(s.id), block.block_date, block.start_time, block.end_time)
-                // ROSTER-FIX.6c — advisory, never a block: the row stays
-                // tickable. A coach really does cover two adjacent slots
-                // sometimes, and the manager staffing the studio is the judge.
-                const { clash, onLeave } = coachConflictsForBlock({
-                  coachId: s.id, block, blocks, timeOff,
-                })
-                const wt = workingTime.byProfile[s.id]
+              {rows.map((row) => {
+                const checked = selectedIds.has(row.id)
+                const c = row.candidate
+                // "Free here" when the other studios could not be read.
+                const meta = c ? candidateMeta(c, { crossStudioChecked: ranked.checked?.cross_studio !== false }) : null
                 return (
-                  <li key={s.id}>
+                  <li key={row.id}>
                     <label className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-un1t-border/30">
                       <input
                         type={isReplace ? 'radio' : 'checkbox'}
                         name={isReplace ? 'replace-coach' : undefined}
                         checked={checked}
-                        onChange={() => toggle(s.id)}
+                        onChange={() => toggle(row.id)}
                         className="accent-un1t-text"
                       />
                       <span className="text-sm text-un1t-text flex-1">
-                        {s.full_name}
-                        {onLeave && (
-                          <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded bg-red-500/15 text-red-700 whitespace-nowrap">
-                            on approved leave
-                          </span>
-                        )}
-                        {unavailable && (
+                        {row.full_name}
+                        {/* Advisory, never a block: the row stays tickable. A
+                            coach really does cover two adjacent slots
+                            sometimes, and the manager staffing the studio is
+                            the judge (ROSTER-FIX.6c). */}
+                        {c && candidateBadges(c).map((b) => (
                           <span
-                            className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded bg-slate-500/15 text-slate-700 whitespace-nowrap"
-                            title={unavailable.map((r) => (r.note ? `${describeRule(r)} (${r.note})` : describeRule(r))).join('; ')}
+                            key={b.key}
+                            className={`ml-1.5 text-[10px] px-1.5 py-0.5 rounded whitespace-nowrap ${CANDIDATE_BADGE_CLASS[b.tone] || CANDIDATE_BADGE_CLASS.muted}`}
+                            title={b.title || undefined}
                           >
-                            Unavailable: {unavailableSummary(unavailable)}
+                            {b.text}
                           </span>
-                        )}
-                        {clash && (
-                          <span
-                            className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 whitespace-nowrap"
-                            title={`Already on ${clash.name}, ${clash.startTime}–${clash.endTime}`}
-                          >
-                            clashes with {clash.startTime} {clash.name}
-                          </span>
-                        )}
-                        {/* WORKTIME.1 — employees only (the route never lists
-                            a contractor); advisory, the row stays tickable. */}
-                        {wt?.restGap && (
-                          <span
-                            className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 whitespace-nowrap"
-                            title={restGapTitle(wt.restGap)}
-                          >
-                            {hoursMinutesLabel(wt.restGap.rest_minutes)} rest
-                          </span>
-                        )}
-                        {wt?.weekHours && (
-                          <span
-                            className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 whitespace-nowrap"
-                            title={`Assigning this shift brings their week to ${hoursMinutesLabel(wt.weekHours.minutes)} across every studio, over the ${MAX_WEEK_HOURS}-hour limit.`}
-                          >
-                            {hoursMinutesLabel(wt.weekHours.minutes)} this week
-                          </span>
-                        )}
+                        ))}
+                        {meta && <span className="block text-[11px] text-un1t-subtle mt-0.5">{meta}</span>}
                       </span>
-                      <span className="text-[10px] text-un1t-subtle">{s.role}</span>
+                      <span className="text-[10px] text-un1t-subtle">{row.role}</span>
                     </label>
                   </li>
                 )
@@ -2030,7 +1980,7 @@ function AssignCoachModal({
         <button
           type="button"
           onClick={handleClick}
-          disabled={selectedIds.size === 0 || saving || available.length === 0 || Boolean(unavailableReason)}
+          disabled={selectedIds.size === 0 || saving || rows.length === 0 || Boolean(unavailableReason)}
           className="w-full mt-4 bg-un1t-text text-un1t-bg font-medium text-sm py-2.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
         >
           {submitLabel}

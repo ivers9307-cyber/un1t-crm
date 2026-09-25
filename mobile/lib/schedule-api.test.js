@@ -45,6 +45,7 @@ describe('schedule-api — every helper is exercised', () => {
       'cancelTimeOffRequest',
       'createSwapRequest',
       'createTimeOffRequest',
+      'getBlockCandidates',
       'getLeavePreview',
       'getLocationStaff',
       'getMyAllowance',
@@ -246,6 +247,14 @@ describe('assignments and blocks (manager surfaces)', () => {
     // fields=picker is load-bearing: plain /api/staff hands an admin caller
     // hourly_rate and annual_salary just to render a dropdown.
     expect(lastCall()).toEqual(['/api/staff?fields=picker', { locationId: LOC }])
+  })
+
+  it('getBlockCandidates GETs the ranked list for one block through api(), escaping the id (CANDIDATES.1)', () => {
+    schedule.getBlockCandidates('b1', { locationId: LOC })
+    expect(lastCall()).toEqual(['/api/schedule/blocks/b1/candidates', { locationId: LOC }])
+    api.mockClear()
+    schedule.getBlockCandidates('a/b', { locationId: LOC })
+    expect(lastCall()[0]).toBe('/api/schedule/blocks/a%2Fb/candidates')
   })
 })
 

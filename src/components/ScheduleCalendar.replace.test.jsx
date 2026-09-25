@@ -51,6 +51,23 @@ const staff = [
   { id: 'c-leave', full_name: 'Coach C', role: 'staff', active: true, profile_locations: [{ location_id: LOC }] },
 ]
 
+// CANDIDATES.1 — the picker's ranked answer is the ONE source of its badges;
+// replace mode sits on top of it. Everyone live on the block (Coach A) is left
+// out by the server.
+const none = { free: true, busy: null, on_leave: null, unavailable: null, on_site: null, rest_gap: null, week_over: null, contracted_hours: null }
+const rankedFor = (block) => ({
+  success: true,
+  data: {
+    audience: 'manager', block_id: block.id, untimed: 0,
+    checked: { shifts: true, cross_studio: true, leave: true, availability: true, contract: true },
+    candidates: [
+      { ...none, profile_id: 'c-b', full_name: 'Coach B', role: 'staff', rank: 1, tier: 'ready', week_minutes: 0 },
+      { ...none, profile_id: 'c-leave', full_name: 'Coach C', role: 'staff', rank: 2, tier: 'blocked', week_minutes: 0,
+        on_leave: { label: 'Holiday', start_date: block.block_date, end_date: block.block_date } },
+    ],
+  },
+})
+
 const okResponse = (body, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => body })
 
 let block
@@ -63,6 +80,8 @@ beforeEach(() => {
   replaceAnswers = [okResponse({ success: true, data: { notice: 'now' } })]
   global.fetch = vi.fn(async (url) => {
     if (String(url).includes('/replace')) return replaceAnswers.shift()
+    // Before '/schedule/blocks': the candidates URL contains it too.
+    if (String(url).includes('/candidates')) return okResponse(rankedFor(block))
     if (url.includes('/schedule/blocks')) return okResponse({ success: true, data: [block] })
     if (url.includes('/schedule/time-off')) {
       return okResponse({ success: true, data: [{ id: 'to1', profile_id: 'c-leave', status: 'approved', type: 'holiday', start_date: block.block_date, end_date: block.block_date, profiles: { full_name: 'Coach C' } }] })
@@ -101,8 +120,11 @@ describe('REPLACE.1a — the Replace button', () => {
 })
 
 describe('REPLACE.1a — the picker in replace mode', () => {
-  it('is titled for the coach going off, one pick (radio), no capacity line, and keeps the badges', async () => {
+  it('is titled for the coach going off, one pick (radio), no capacity line, and keeps the ranked badges', async () => {
     await openReplacePicker()
+    await screen.findByText('on approved leave')
+    expect(global.fetch.mock.calls.map(([u]) => String(u)).filter((u) => u.includes('/candidates')))
+      .toEqual(['/api/schedule/blocks/b-1/candidates'])
     expect(screen.getByRole('dialog', { name: 'Replace Coach A' })).toBeTruthy()
     const dialog = screen.getByRole('dialog', { name: 'Replace Coach A' })
     expect(dialog.textContent).not.toMatch(/assigned ·|slots? open/)

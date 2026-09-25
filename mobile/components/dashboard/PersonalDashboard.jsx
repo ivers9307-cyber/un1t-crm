@@ -26,11 +26,13 @@ import {
   createSwapRequest,
   cancelSwapRequest, cancelTimeOffRequest,
   getSwapsForMe, getOpenSwaps, getTeamShifts, respondToSwap,
-  getLocationStaff,
+  getLocationStaff, getBlockCandidates,
 } from '../../lib/schedule-api'
 import { myLeaveCancelOutcome } from '../../lib/my-leave'
 // CT-P3b — reuse the schedule Manage-mode colleague picker for targeted swaps.
 import CoachPickerSheet from '../schedule/CoachPickerSheet'
+// CANDIDATES.1 — colleagues ranked free-first for the shift being covered.
+import { NO_CANDIDATES, candidatesStarted, candidatesSettled, candidatesFor } from '../../lib/candidates-view'
 // COVERLOOP.2 — the confirm step, and every swap-card decision (pure, tested).
 import SwapConfirmSheet from '../schedule/SwapConfirmSheet'
 import {
@@ -423,6 +425,10 @@ export default function PersonalDashboard({ refreshKey }) {
   const [swapPickerShift, setSwapPickerShift] = useState(null)
   const [swapStaff, setSwapStaff] = useState(null) // null = not loaded
   const [swapStaffLoading, setSwapStaffLoading] = useState(false)
+  // CANDIDATES.1 — the ranked colleagues for the shift the picker is open on
+  // (the server gives a coach free/working only).
+  const [swapCandidates, setSwapCandidates] = useState(NO_CANDIDATES)
+  const swapCandidatesSeq = useRef(0)
   // COVERLOOP.2 — the request waiting on the confirm sheet: { shift, coach },
   // coach null = an open post. Nothing is POSTed until the sheet confirms.
   const [swapConfirm, setSwapConfirm] = useState(null)
@@ -638,11 +644,26 @@ export default function PersonalDashboard({ refreshKey }) {
   // Open the colleague picker for a targeted swap. Reuses CoachPickerSheet by
   // synthesising a block-like object: shift_assignments carries the current
   // user so the picker excludes them; shift_templates feeds the sheet title.
+  async function loadSwapCandidates(shift) {
+    const blockId = shift?.block_id
+    const requestId = ++swapCandidatesSeq.current
+    if (!blockId) { setSwapCandidates(NO_CANDIDATES); return } // an older row: the A–Z list
+    setSwapCandidates(candidatesStarted(blockId, requestId))
+    let res
+    try {
+      res = await getBlockCandidates(blockId, { locationId: shift.location_id || activeLocation?.id })
+    } catch (e) {
+      res = { success: false, error: e?.message }
+    }
+    setSwapCandidates((prev) => candidatesSettled(prev, { blockId, requestId, res }))
+  }
+
   async function openSwapPicker(shift) {
     // A fresh start: drop anything an earlier run left behind (a sheet state
     // with no sheet, a parked pick whose dismiss never came).
     swapFlowRef.current.dispatch('start')
     setSwapPickerShift(shift)
+    loadSwapCandidates(shift) // not awaited: the staff list below is the fallback
     if (swapStaff === null && !swapStaffLoading) {
       setSwapStaffLoading(true)
       const res = await getLocationStaff({ locationId: activeLocation?.id })
@@ -1093,6 +1114,7 @@ export default function PersonalDashboard({ refreshKey }) {
         locationId={activeLocation?.id}
         staff={swapStaff}
         loading={swapStaffLoading}
+        {...candidatesFor(swapCandidates, swapPickerShift?.block_id)}
         onPick={pickSwapCoach}
         onClose={cancelSwapPicker}
         onDismiss={onSwapPickerDismissed}

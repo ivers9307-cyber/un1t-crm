@@ -421,7 +421,7 @@ describe('fetchPersonalDashboardData — draft shifts (D1)', () => {
       },
     }
     const res = await fetchPersonalDashboardData(db, 'p1')
-    expect(selects.find(([t]) => t === 'shift_assignments')[1]).toMatch(/shift_blocks!inner \( block_date, start_time, end_time, briefing,/)
+    expect(selects.find(([t]) => t === 'shift_assignments')[1]).toMatch(/shift_blocks!inner \( [^)]*\bbriefing\b/)
     expect(res.data.monthShifts[0].briefing).toBe('Fire drill at 10')
   })
 
@@ -471,6 +471,31 @@ describe('fetchPersonalDashboardData — draft shifts (D1)', () => {
     const res = await fetchPersonalDashboardData(db, 'p1')
     expect(res.data.monthShifts[0]).toMatchObject({ block_start_time: '07:00:00', block_end_time: '12:00:00' })
     expect(res.data.hoursThisMonth).toBe(5)
+  })
+
+  // CANDIDATES.1 — the "Ask a coach to cover" picker ranks colleagues for the
+  // shift's BLOCK; the row's `id` is the assignment id, so the block id rides
+  // along too, and the select asks for it.
+  it('carries the block id, and asks for it', async () => {
+    const selects = []
+    const withId = { ...block('published'), id: 'blk-1' }
+    const base = makePersonalDb({
+      shift_assignments: {
+        data: [{ id: 'a1', profile_id: 'p1', start_time_override: null, end_time_override: null, status: 'scheduled', shift_blocks: withId }],
+        error: null,
+      },
+    })
+    const db = {
+      from(table) {
+        const b = base.from(table)
+        const sel = b.select
+        b.select = function (cols) { selects.push([table, cols]); return sel.call(this) }
+        return b
+      },
+    }
+    const res = await fetchPersonalDashboardData(db, 'p1')
+    expect(res.data.monthShifts[0]).toMatchObject({ id: 'a1', block_id: 'blk-1' })
+    expect(selects.find(([t]) => t === 'shift_assignments')[1]).toMatch(/shift_blocks!inner \( id, block_date/)
   })
 
   // MOBILESCHED.2 — the swaps-targeting-me read fed a key (pendingSwapsForMe)

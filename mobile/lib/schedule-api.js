@@ -193,6 +193,14 @@ export function assignCoachToBlock(blockId, { profileId, allowOverCapacity, loca
   })
 }
 
+// CANDIDATES.1 — the ranked coaches for one block. A manager at the block's
+// studio gets every fact; a coach live on the block (asking for cover) gets
+// free/working only. The server decides; see
+// src/app/api/schedule/blocks/[id]/candidates/route.js.
+export function getBlockCandidates(blockId, { locationId } = {}) {
+  return api(`/api/schedule/blocks/${encodeURIComponent(blockId)}/candidates`, { locationId })
+}
+
 // Remove a coach from a shift (delete the assignment). ROSTER-FIX.3 (D2) —
 // MANAGER-ONLY: a coach who cannot work a shift posts a swap instead.
 export function removeAssignment(assignmentId, { locationId }) {

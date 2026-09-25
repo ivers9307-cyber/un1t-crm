@@ -14,14 +14,10 @@ export const STAFF_UNAVAILABLE_MESSAGE =
   'The coach list could not be loaded, so assigning coaches is unavailable.'
 export const TEMPLATES_UNAVAILABLE_MESSAGE =
   'Shift templates could not be loaded, so adding a shift slot is unavailable.'
-// Shown inside the assign picker, where the missing leave would otherwise
-// just look like no coach being on leave.
-export const LEAVE_NOT_FLAGGED_MESSAGE =
-  'Leave could not be loaded, so coaches on leave are not flagged here.'
-// Shown inside the assign picker (AVAIL.1), where missing availability would
-// otherwise look like every coach being free.
-export const AVAILABILITY_NOT_FLAGGED_MESSAGE =
-  'Availability could not be loaded, so unavailable coaches are not flagged here.'
+// CANDIDATES.1 — the assign picker's leave and availability flags come from
+// the server's ranked answer, which says itself what it could not check, so
+// the two "not flagged here" lines the picker showed for a missing calendar
+// slice are gone.
 
 // [slice, managerOnly, copy when cleared, copy when an earlier load is kept,
 //  optional coach copy when cleared]
@@ -45,8 +41,9 @@ const COPY = [
     'Contractor spend could not be loaded.',
     'Contractor spend could not be refreshed. Showing the last figure that loaded.'],
   // AVAIL.1 — manager-only: a coach's calendar never reads availability.
+  // (The assign picker is flagged from the server's answer, CANDIDATES.1.)
   ['availability', true,
-    'Availability could not be loaded, so unavailable coaches are not shaded or flagged.',
+    'Availability could not be loaded, so unavailable coaches are not shaded on the calendar.',
     'Availability could not be refreshed. Showing it as it last loaded.'],
 ]
 

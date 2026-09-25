@@ -12,8 +12,10 @@ import { View, Text, ActivityIndicator, Alert, Pressable } from 'react-native'
 import { useFocusEffect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import {
-  getScheduleBlocks, getLocationStaff, assignCoachToBlock, removeAssignment, replaceAssignment,
+  getScheduleBlocks, getLocationStaff, assignCoachToBlock, removeAssignment, replaceAssignment, getBlockCandidates,
 } from '../../lib/schedule-api'
+// CANDIDATES.1 — the picker's ranked list: request lifecycle (pure, tested).
+import { NO_CANDIDATES, candidatesStarted, candidatesSettled, candidatesFor } from '../../lib/candidates-view'
 import { effShiftStart } from '../../lib/schedule-team'
 import {
   adjustTargetFor, rosterKey, rosterLoadOutcome, staffLoadOutcome, isCurrentLoad,
@@ -38,6 +40,10 @@ export default function ManageMode({ activeLocation, weekStart, weekEnd, selecte
   const [staffError, setStaffError] = useState(null)
   const [pickerBlock, setPickerBlock] = useState(null)
   const [replaceTarget, setReplaceTarget] = useState(null) // REPLACE.1a — { block, assignment }
+  // CANDIDATES.1 — the ranked list for the block the picker is open on. One
+  // ask per open; only the newest ask for the open block lands.
+  const [candidates, setCandidates] = useState(NO_CANDIDATES)
+  const candidatesSeq = useRef(0)
 
   // MANAGEMODE.1 — only the newest load may write state. Paging weeks fast, a
   // slow answer for the week just left used to land after the new week's and
@@ -150,6 +156,8 @@ export default function ManageMode({ activeLocation, weekStart, weekEnd, selecte
   // new studio: an empty list, then a reload of coaches for a block that
   // belongs to the studio the manager just left.
   useEffect(() => {
+    candidatesSeq.current += 1
+    setCandidates(NO_CANDIDATES)
     staffGeneration.current += 1
     staffRef.current = null
     setStaff(null); setStaffError(null); setStaffLoading(false); setPickerBlock(null)
@@ -162,8 +170,23 @@ export default function ManageMode({ activeLocation, weekStart, weekEnd, selecte
     if (staff !== null) loadStaff()
   }, [staff, loadStaff])
 
+  async function loadCandidates(block) {
+    const requestId = ++candidatesSeq.current
+    setCandidates(candidatesStarted(block.id, requestId))
+    let res
+    try {
+      res = await getBlockCandidates(block.id, { locationId })
+    } catch (e) {
+      res = { success: false, error: e?.message }
+    }
+    // A studio the manager has since left: its answer is not for this screen.
+    if (locationId !== currentLocation.current) return
+    setCandidates((prev) => candidatesSettled(prev, { blockId: block.id, requestId, res }))
+  }
+
   async function openPicker(block) {
     setPickerBlock(block)
+    loadCandidates(block) // not awaited: the staff list below is the fallback
     if (staff === null && !staffLoading) await loadStaff()
   }
 
@@ -207,12 +230,16 @@ export default function ManageMode({ activeLocation, weekStart, weekEnd, selecte
     )
   }
 
-  // REPLACE.1a — the Add-coach picker, titled for the coach going off. It
-  // already leaves out everyone live on the block, the outgoing coach
-  // included. The pick IS the confirmation (as for Add coach); an Alert is
-  // shown only after the network answer.
+  // REPLACE.1a — the Add-coach picker, titled for the coach going off, on
+  // CANDIDATES.1's ranked list for this block (which leaves out everyone live
+  // on it, the outgoing coach included; the A-Z staff list is the fallback,
+  // as for Add coach). The two sheets share the candidates state: only one is
+  // ever open, and candidatesFor hands a sheet only its own block's answer.
+  // The pick IS the confirmation (as for Add coach); an Alert is shown only
+  // after the network answer.
   async function openReplace(block, assignment) {
     setReplaceTarget({ block, assignment })
+    loadCandidates(block) // not awaited: the staff list below is the fallback
     if (staff === null && !staffLoading) await loadStaff()
   }
 
@@ -273,11 +300,13 @@ export default function ManageMode({ activeLocation, weekStart, weekEnd, selecte
 
       <CoachPickerSheet visible={!!pickerBlock} block={pickerBlock} locationId={locationId}
         staff={staff} loading={staffLoading} error={staff === null ? staffError : null} onRetry={loadStaff}
+        {...candidatesFor(candidates, pickerBlock?.id)}
         onPick={pickCoach} onClose={() => setPickerBlock(null)} />
 
       {/* REPLACE.1a — the same sheet, one pick, titled for the coach going off. */}
       <CoachPickerSheet visible={!!replaceTarget} block={replaceTarget?.block ?? null} locationId={locationId}
         staff={staff} loading={staffLoading} error={staff === null ? staffError : null} onRetry={loadStaff}
+        {...candidatesFor(candidates, replaceTarget?.block?.id)}
         title={replaceTarget ? replacePickerTitle(replaceTarget.assignment) : ''}
         emptyText="No other coaches at this studio."
         onPick={(coach) => { const t = replaceTarget; setReplaceTarget(null); if (t) runReplace(t, coach) }}
