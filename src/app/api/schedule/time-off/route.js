@@ -19,6 +19,7 @@ import {
 import { logError } from '@/lib/log'
 import {
   isTimeOffTypeAllowedFor, RESTRICTED_TYPE_ERROR, isExpiredPendingRequest, effectiveTimeOffStatus,
+  isRequestableTimeOffType, UNAVAILABLE_MOVED_ERROR,
 } from '@shared/time-off'
 
 // SCHEDHYGIENE.1 — the shared shape check plus the shared calendar check. The
@@ -266,6 +267,17 @@ export async function POST(request) {
   if (!validation.ok) return validation.response
   const { type, start_date, end_date, reason, location_id, profile_id } = validation.data
 
+  // AVAIL.3 — 'unavailable' moved into availability (mig 631): self-declared
+  // in My availability, no approval. The forms no longer offer it; an old
+  // phone or a stale tab still can, so refuse it here, before any read, with
+  // words that say where to go (the old phone shows `error` in its alert).
+  // Refused, not converted: a second writer to staff_unavailability outside
+  // the replace RPC would race the coach's own editor, and the old phone
+  // would then claim "your manager has been notified… track it under My leave".
+  if (!isRequestableTimeOffType(type)) {
+    return NextResponse.json({ success: false, error: UNAVAILABLE_MOVED_ERROR }, { status: 400 })
+  }
+
   // If location_id is explicitly passed, it must be one the caller belongs to.
   // Otherwise fall through to user.activeLocation below.
   if (location_id) {
@@ -314,8 +326,8 @@ export async function POST(request) {
     }
   }
 
-  // LEAVE.3 — contractors may only mark themselves unavailable; the forms
-  // hide the other types, this is the server's half. Fail closed: an
+  // LEAVE.3 — contractors take no leave types (AVAIL.3: and 'unavailable' is
+  // refused above for everyone); the forms hide them, this is the server's half. Fail closed: an
   // unreadable employment type must not let a holiday through.
   const { employmentType, error: employmentError } = await getEmploymentType(db, subjectId)
   if (employmentError) {

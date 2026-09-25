@@ -523,20 +523,16 @@ describe('POST /api/schedule/time-off — LEAVE.2', () => {
     profile_id, location_id, role, permissions: {}, profiles: { id: profile_id, active: true, role: 'staff', employment_type: 'fte' }, ...extra,
   })
 
-  it('400 when a contractor files holiday, sick or unpaid leave; unavailable is accepted', async () => {
+  it('400 when a contractor files holiday, sick, unpaid or other leave, pointing at My availability', async () => {
     getCurrentUser.mockResolvedValue(USER)
     for (const type of ['holiday', 'sick', 'unpaid', 'other']) {
       const { db, insertSpy } = buildDb({ employmentType: 'contractor' })
       createServerClient.mockReturnValue(db)
       const res = await POST(req({ type, start_date: '2026-06-01', end_date: '2026-06-02' }))
       expect(res.status).toBe(400)
-      expect((await res.json()).error).toMatch(/Contractors/)
+      expect((await res.json()).error).toMatch(/^Contractors.*My availability/)
       expect(insertSpy).not.toHaveBeenCalled()
     }
-    const { db, insertSpy } = buildDb({ employmentType: 'contractor' })
-    createServerClient.mockReturnValue(db)
-    expect((await POST(req({ type: 'unavailable', start_date: '2026-06-01', end_date: '2026-06-02' }))).status).toBe(201)
-    expect(insertSpy).toHaveBeenCalled()
   })
 
   it('checks the balance on the FIRST holiday of the year, against the contract entitlement', async () => {
@@ -663,6 +659,45 @@ describe('POST /api/schedule/time-off — LEAVE.2', () => {
       expect(res.status).toBe(500)
       expect((await res.json()).error).toMatch(/Recorded as pending/)
     })
+  })
+})
+
+// AVAIL.3 — "unavailable" moved into availability (mig 631). An old phone or a
+// stale tab can still send it; the answer must say where to go, and nothing
+// may be read or written first.
+describe('POST /api/schedule/time-off — AVAIL.3: unavailable is refused', () => {
+  const COACH9 = '99999999-9999-4999-8999-999999999999'
+  const HC = { id: 'hc', role: 'head_coach', profileRole: 'staff', full_name: 'Head', activeLocation: { id: 'loc-1' }, locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': 'head_coach' } }
+
+  it.each([
+    ['a contractor, for themselves', USER, 'contractor', {}],
+    ['an employee, for themselves', USER, 'fte', {}],
+    ['an approver, on a contractor\'s behalf', HC, 'contractor', { profile_id: COACH9 }],
+  ])('400 with the My availability message: %s', async (_label, who, employmentType, extra) => {
+    getCurrentUser.mockResolvedValue(who)
+    const { db, insertSpy } = buildDb({ employmentType })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(req({ type: 'unavailable', start_date: '2026-10-03', end_date: '2026-10-05', ...extra }))
+    expect(res.status).toBe(400)
+    expect(await res.json()).toEqual({
+      success: false,
+      error: expect.stringMatching(/^Unavailable is no longer a time-off request\..*My availability/),
+    })
+    expect(insertSpy).not.toHaveBeenCalled()
+    // Refused before the database is even opened: no read, no write, no notice.
+    expect(createServerClient).not.toHaveBeenCalled()
+    expect(notifyUsersOnce).not.toHaveBeenCalled()
+  })
+
+  it('401 still comes first for a signed-out caller', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    const res = await POST(req({ type: 'unavailable', start_date: '2026-10-03', end_date: '2026-10-05' }))
+    expect(res.status).toBe(401)
+  })
+
+  it('the type still parses, so the refusal (not "Invalid request body") is what an old phone sees', async () => {
+    const { timeOffTypeSchema } = await import('@/lib/schemas')
+    expect(timeOffTypeSchema.safeParse('unavailable').success).toBe(true)
   })
 })
 
