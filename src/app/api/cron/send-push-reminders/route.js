@@ -33,6 +33,8 @@
 //     'shift-time-changes' (mig 639).
 //   - Held replace notices (REPLACE.1a): src/lib/shift-replace-notify.js.
 //     Own heartbeat row 'replace-notices' (mig 640).
+//   - Shift offers (REPLACE.1b, "Offer to team"): src/lib/shift-offer-server.js
+//     runShiftOfferSweep. Own heartbeat row 'shift-offer-sweep' (mig 642).
 //
 // Bookings fan out to a role-set rather than a single staff member
 // because the bookings table has no "assigned coach" column — the
@@ -55,6 +57,9 @@ import { runShiftTimeChangeNotices } from '@/lib/block-edit-notify'
 // REPLACE.1a — the held replace-notice arm, self-contained (see its block below).
 import { runReplaceNotices } from '@/lib/shift-replace-notify'
 import { REPLACE_NOTICES_HEARTBEAT, replaceNoticeArmHealthy } from '@/lib/cron-arm-health'
+// REPLACE.1b — the "Offer to team" arm, self-contained (see its block below).
+import { runShiftOfferSweep } from '@/lib/shift-offer-server'
+import { SHIFT_OFFER_SWEEP_HEARTBEAT, offerSweepArmHealthy } from '@/lib/cron-arm-health'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -131,6 +136,7 @@ export async function GET(request) {
     shift_arm_failed: 0, // 1 = the shift arm THREW this tick (see the SHIFTS block)
     time_change_arm_failed: 0, // 1 = the time-change arm THREW this tick (BLOCKEDIT.1)
     replace_arm_failed: 0, // 1 = the held replace-notice arm threw or reported errors (REPLACE.1a)
+    offer_arm_failed: 0, // 1 = the shift-offer arm threw or reported a fault of its own (REPLACE.1b)
     lead_time_buckets: [], // for logging / debugging
   }
 
@@ -471,6 +477,30 @@ export async function GET(request) {
   if (summary.replace_arm_failed === 0 && replaceNoticeArmHealthy(replaceSummary)) {
     await stampHeartbeat(REPLACE_NOTICES_HEARTBEAT, replaceSummary).catch((err) =>
       logWarn('cron-push-reminders', 'replace-notices heartbeat failed', { err }))
+  }
+
+  // -------------------------- SHIFT OFFERS --------------------------
+  // REPLACE.1b — "Offer to team": close offers whose shift started, got its
+  // coach another way or left a published roster (STATE, any hour), and send
+  // the owed "up for grabs" / "taken" notices inside 07:00-22:00 studio time
+  // (a MESSAGE; quiet hours gate it, never the state). The rule is in
+  // src/lib/shift-offer-notice.js, the sender in src/lib/shift-offer-server.js.
+  // Isolated like the arms above: it can cost no reminder and no other
+  // heartbeat, and placed after their stamps so it can never cost them. Its
+  // OWN row, 'shift-offer-sweep' (mig 642), is stamped only on a clean run
+  // (cron-arm-health.js offerSweepArmHealthy), under its own catch.
+  let offerSummary = null
+  try {
+    offerSummary = await runShiftOfferSweep(db, { nowMs })
+    summary.shift_offers = offerSummary
+    if (offerSummary && !offerSweepArmHealthy(offerSummary)) summary.offer_arm_failed = 1
+  } catch (err) {
+    summary.offer_arm_failed = 1
+    logError('cron-push-reminders', 'shift offer arm threw', { err })
+  }
+  if (summary.offer_arm_failed === 0 && offerSweepArmHealthy(offerSummary)) {
+    await stampHeartbeat(SHIFT_OFFER_SWEEP_HEARTBEAT, offerSummary).catch((err) =>
+      logWarn('cron-push-reminders', 'shift-offer-sweep heartbeat failed', { err }))
   }
 
   // quiet_hours alone is not news: it is 1 on every tick from 22:00 to 07:00.
