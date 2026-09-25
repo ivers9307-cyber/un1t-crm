@@ -5,6 +5,7 @@ import { fetchApiShiftRows } from '@/lib/roster-read'
 import { fetchOwnOpenSwaps, annotateOwnOpenSwaps, ownShiftIds } from '@/lib/shift-open-swaps'
 import { fetchOwnArrivalFacts, annotateOwnArrivals, ownLocationIds } from '@/lib/shift-arrivals'
 import { MANAGER_ROLES, isRealCalendarDate } from '@/lib/schemas'
+import { logError } from '@/lib/log'
 
 // RETIRE-SHIFTS-MIRROR.5d — GET reads the Roster v2 model (shift_blocks +
 // shift_assignments) directly via fetchApiShiftRows, normalised to the legacy
@@ -74,5 +75,15 @@ export async function GET(request) {
     fetchOwnArrivalFacts(db, user.id, ownIds, ownLocationIds(rows, user.id)),
   ])
   const withSwaps = annotateOwnOpenSwaps(rows, ownOpenSwaps, user.id)
-  return NextResponse.json({ success: true, data: annotateOwnArrivals(withSwaps, arrivalFacts, user.id) })
+  // Review 3 — the arrival line is never worth the roster: if the annotate
+  // itself throws, every row goes out with arrival: null (unknown, which the
+  // phone renders as nothing) and the failure is logged.
+  let data
+  try {
+    data = annotateOwnArrivals(withSwaps, arrivalFacts, user.id)
+  } catch (err) {
+    logError('schedule', 'own arrival annotate failed; shifts returned without arrival', { err: err?.message || String(err) })
+    data = withSwaps.map((r) => ({ ...r, arrival: null }))
+  }
+  return NextResponse.json({ success: true, data })
 }

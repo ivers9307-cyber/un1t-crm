@@ -27,14 +27,21 @@ vi.mock('@/lib/shift-open-swaps', async (importOriginal) => ({
 }))
 // ARRIVALSHOW.1 — keep the real annotate (pure); stub only the read. The
 // default answers "stamps unreadable", so every row carries arrival: null.
-vi.mock('@/lib/shift-arrivals', async (importOriginal) => ({
-  ...(await importOriginal()),
-  fetchOwnArrivalFacts: vi.fn(() => Promise.resolve({ stamps: null, timezones: new Map(), tracked: null })),
-}))
+vi.mock('@/lib/shift-arrivals', async (importOriginal) => {
+  const real = await importOriginal()
+  return {
+    ...real,
+    fetchOwnArrivalFacts: vi.fn(() => Promise.resolve({ stamps: null, timezones: new Map(), tracked: null })),
+    // Real by default; one test makes it throw (review 3).
+    annotateOwnArrivals: vi.fn(real.annotateOwnArrivals),
+  }
+})
+vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logError: vi.fn() }))
 const { getCurrentUser } = await import('@/lib/auth')
 const { fetchApiShiftRows } = await import('@/lib/roster-read')
 const { fetchOwnOpenSwaps } = await import('@/lib/shift-open-swaps')
-const { fetchOwnArrivalFacts } = await import('@/lib/shift-arrivals')
+const { fetchOwnArrivalFacts, annotateOwnArrivals } = await import('@/lib/shift-arrivals')
+const { logError } = await import('@/lib/log')
 const { GET } = await import('./route.js')
 const req = (url = 'http://x/api/schedule/shifts?location_id=loc-1') => ({ url })
 beforeEach(() => { getCurrentUser.mockReset(); fetchApiShiftRows.mockClear() })
@@ -194,5 +201,19 @@ describe('GET /api/schedule/shifts — own arrival (ARRIVALSHOW.1)', () => {
     const body = await res.json()
     expect(body.success).toBe(true)
     expect(body.data.map((r) => r.arrival)).toEqual([null])
+  })
+
+  it('an annotate that throws still returns the roster, with arrival: null on every row, and logs', async () => {
+    getCurrentUser.mockResolvedValue(coach)
+    fetchApiShiftRows.mockResolvedValueOnce({ rows: [shiftRow('a1', 'c'), shiftRow('a2', 'other')], error: null })
+    fetchOwnOpenSwaps.mockResolvedValueOnce([{ requester_shift_id: 'a1', status: 'pending' }])
+    annotateOwnArrivals.mockImplementationOnce(() => { throw new Error('boom') })
+    logError.mockClear()
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.success).toBe(true)
+    expect(body.data.map((r) => [r.id, r.arrival, r.open_swap_status])).toEqual([['a1', null, 'pending'], ['a2', null, null]])
+    expect(logError).toHaveBeenCalledWith('schedule', expect.stringContaining('arrival'), expect.anything())
   })
 })
