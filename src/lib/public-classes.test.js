@@ -6,7 +6,7 @@ vi.mock('@/lib/glofox', () => ({
     { _id: 'e1', name: 'S&C', time_start: 4102444800, duration: 60, size: 12, booked: 4, active: true, private: false },
   ] })),
 }))
-import { shapePublicClass, listPublicClasses, parseHiddenKeywords, isClassHidden } from './public-classes'
+import { shapePublicClass, listPublicClasses, parseHiddenKeywords, isClassHidden, isEventFull, PUBLIC_CLASS_KEYS } from './public-classes'
 import { fetchUpcomingEvents } from '@/lib/glofox'
 
 // db stub for listPublicClasses' settings read (db.from('locations')...maybeSingle()).
@@ -16,18 +16,34 @@ function makeDb(settings) {
 }
 
 beforeEach(() => vi.clearAllMocks())
+// PUBCAP.1 — any key that could tell a customer how full a class is.
+const CAPACITY_KEY = /spot|capacity|size|booked|remaining|left|place|seat|full|waiting|limit/i
+
 describe('shapePublicClass', () => {
   it('maps a glofox event to the UI shape with Dublin day + time', () => {
     const c = shapePublicClass({ _id: 'e1', name: 'S&C', time_start: 1751959800, size: 12, booked: 4 })
     expect(c.event_id).toBe('e1')
     expect(c.name).toBe('S&C')
-    expect(c.spots_left).toBe(8)
-    expect(c.full).toBe(false)
     expect(typeof c.day).toBe('string')
     expect(/^\d{2}:\d{2}$/.test(c.time)).toBe(true)
   })
-  it('marks full when no spots', () => {
-    expect(shapePublicClass({ _id: 'e', name: 'x', time_start: 1751959800, size: 5, booked: 5 }).full).toBe(true)
+
+  it('PUBCAP.1: carries exactly the display keys and never a capacity figure', () => {
+    const c = shapePublicClass({ _id: 'e1', name: 'S&C', time_start: 1751959800, size: 12, booked: 4, waiting: 2, spots_left: 8 })
+    expect(Object.keys(c).sort()).toEqual([...PUBLIC_CLASS_KEYS].sort())
+    for (const k of Object.keys(c)) expect(k).not.toMatch(CAPACITY_KEY)
+    // No number that could be a count rides along in any value either.
+    expect(JSON.stringify(c)).not.toMatch(/"(?:8|12|4)"|:\s*(?:8|12|4)[,}]/)
+  })
+})
+
+describe('isEventFull (server-side only)', () => {
+  it('is full when booked reaches size; an unknown size is never full', () => {
+    expect(isEventFull({ size: 5, booked: 5 })).toBe(true)
+    expect(isEventFull({ size: 5, booked: 6 })).toBe(true)
+    expect(isEventFull({ size: 5, booked: 4 })).toBe(false)
+    expect(isEventFull({ size: 0, booked: 3 })).toBe(false)
+    expect(isEventFull({})).toBe(false)
   })
 })
 
@@ -65,5 +81,20 @@ describe('listPublicClasses deny-list', () => {
     ] })
     const out = await listPublicClasses(makeDb({}), 'L', 7)
     expect(out.map((c) => c.name).sort()).toEqual(['BASE - STRENGTH', 'EL1TES CLASS'])
+  })
+})
+
+describe('listPublicClasses — PUBCAP.1 no capacity leaves the server', () => {
+  it('drops a full class and returns only display keys for the rest', async () => {
+    fetchUpcomingEvents.mockResolvedValueOnce({ ok: true, events: [
+      { _id: 'open', name: 'BASE', time_start: 4102444800, size: 12, booked: 11, waiting: 0, active: true, private: false },
+      { _id: 'full', name: 'HIIT', time_start: 4102448400, size: 12, booked: 12, waiting: 3, active: true, private: false },
+    ] })
+    const out = await listPublicClasses(makeDb({}), 'L', 7)
+    expect(out.map((c) => c.event_id)).toEqual(['open'])
+    for (const c of out) {
+      expect(Object.keys(c).sort()).toEqual([...PUBLIC_CLASS_KEYS].sort())
+      for (const k of Object.keys(c)) expect(k).not.toMatch(CAPACITY_KEY)
+    }
   })
 })

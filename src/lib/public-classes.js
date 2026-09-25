@@ -1,7 +1,11 @@
 // Public class listing for the /start wizard. Reuses the Glofox event fetch
 // the agent uses, but shapes each class with a structured day (YYYY-MM-DD,
 // Europe/Dublin) + HH:MM time so the UI can group by day. No auth — display-
-// safe class data only (name/time/spots), same as the agent's class list.
+// safe class data only: name and time. PUBCAP.1: NEVER a capacity figure
+// (Richard's rule: class/event capacity is never surfaced to customers — no
+// spots left, no size, no booked count, not even a "full" flag). Fullness is
+// judged on the RAW Glofox event before shaping, and a full class is simply
+// left out of the list.
 import { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, fetchUpcomingEvents } from '@/lib/glofox'
 import { getGlofoxConfig } from '@/lib/connection-registry'
 
@@ -10,12 +14,20 @@ const dayFmt = new Intl.DateTimeFormat('en-CA', { timeZone: DUBLIN, year: 'numer
 const timeFmt = new Intl.DateTimeFormat('en-GB', { timeZone: DUBLIN, hour: '2-digit', minute: '2-digit', hour12: false })
 const labelFmt = new Intl.DateTimeFormat('en-IE', { timeZone: DUBLIN, weekday: 'short', day: 'numeric', month: 'short' })
 
+// The ONLY keys a public class carries. tests/public-classes pin this list so
+// a new field has to be added here on purpose, never leak in via a spread.
+export const PUBLIC_CLASS_KEYS = Object.freeze(['event_id', 'name', 'starts_at', 'day', 'day_label', 'time'])
+
+// Server-side only: is this raw Glofox event full? Never sent to a client.
+export function isEventFull(e) {
+  const size = Number(e?.size) || 0
+  const booked = Number(e?.booked) || 0
+  return size > 0 && booked >= size
+}
+
 export function shapePublicClass(e) {
   const startSec = Number(e.time_start) || 0
   const ms = startSec * 1000
-  const size = Number(e.size) || 0
-  const booked = Number(e.booked) || 0
-  const spots = Math.max(0, size - booked)
   const d = new Date(ms)
   return {
     event_id: e._id || e.id,
@@ -24,8 +36,6 @@ export function shapePublicClass(e) {
     day: dayFmt.format(d),
     day_label: labelFmt.format(d),
     time: timeFmt.format(d),
-    spots_left: spots,
-    full: size > 0 && spots === 0,
   }
 }
 
@@ -61,8 +71,8 @@ export async function listPublicClasses(db, locationId, days = 7) {
   const now = Date.now()
   return events
     .filter((e) => e && e.active !== false && e.private !== true && (Number(e.time_start) || 0) * 1000 > now)
+    .filter((e) => !isEventFull(e))
     .map(shapePublicClass)
-    .filter((c) => !c.full)
     .filter((c) => !isClassHidden(c.name, hidden))
     .sort((a, b) => a.starts_at.localeCompare(b.starts_at))
 }
