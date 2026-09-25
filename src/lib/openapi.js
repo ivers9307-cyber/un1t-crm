@@ -4472,6 +4472,59 @@ registry.registerPath({
   },
 })
 
+// TPLCLONE.1 — copy shift templates between two studios of ONE organisation.
+const TemplateCloneItem = z.object({
+  id: z.string().optional().openapi({ description: 'The new template id. Absent on a dry run.' }),
+  source_id: z.string(),
+  name: z.string(),
+  start_time: z.string(),
+  end_time: z.string(),
+  days_of_week: z.array(z.string()).openapi({ description: 'The weekdays the COPY runs on: empty unless copy_weekdays was true.' }),
+  source_days_of_week: z.array(z.string()).openapi({ description: 'The weekdays the source template runs on, copied or not.' }),
+})
+const TemplateCloneResponse = z.object({
+  success: z.literal(true),
+  data: z.object({
+    dry_run: z.boolean(),
+    created: z.array(TemplateCloneItem).openapi({ description: 'What was created, or on a dry run what would be.' }),
+    skipped: z.array(z.object({
+      source_id: z.string(),
+      name: z.string().nullable().openapi({ description: 'Null for not_found: an id that is not a template of the source studio is never answered with a name.' }),
+      reason: z.enum(['name_exists', 'duplicate_in_source', 'inactive', 'not_found']),
+    })),
+    generated_blocks: z.number().int().openapi({ description: 'Empty shift slots added over the next 8 weeks for copied templates with weekdays (always 0 without copy_weekdays).' }),
+  }),
+  warning: z.string().optional().openapi({ description: 'The templates were copied but the calendar could not be filled for some; the nightly schedule run adds them.' }),
+}).openapi('TemplateCloneResponse')
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/schedule/templates/clone',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Copy shift templates from another studio in the same organisation (manager at both)',
+  description: 'Copies shift templates from from_location_id into to_location_id (the two must differ). Both studios must belong to the same organisation (403 otherwise, a master included) and the caller needs a manager role (owner, manager or head coach, or master) at BOTH. Only active templates are copied; template_ids narrows the copy, and an inactive one named there comes back skipped `inactive`, an id that is not a template of the source studio `not_found`. Copied: name, times, colour, role label, minimum and maximum coaches, and, only with copy_weekdays: true, the weekdays. Without copy_weekdays (the default) each copy has no weekdays, so it puts nothing on the calendar and the target studio\'s roster alerts are unchanged. The copies are active and ordered after the target\'s existing templates, in the source order. A name the target already has (any case, active or not) is skipped `name_exists`, as is one the target gained while the copy ran; a second source template of the same name is skipped `duplicate_in_source`. The insert is one statement: all or nothing. dry_run answers the same lists and writes nothing. With copy_weekdays, a copied template with weekdays gets its next 8 weeks of empty shifts at once, as creating one does; if that fails the copy stands, the answer carries `warning`, and the nightly schedule run adds them.',
+  request: {
+    body: { content: { 'application/json': { schema: z.object({
+      from_location_id: uuidLike,
+      // Plain uuidLike: it is built in validate.js before extendZodWithOpenApi
+      // runs, so it has no .openapi(). "Must differ" is in the description above.
+      to_location_id: uuidLike,
+      template_ids: z.array(uuidLike).min(1).max(200).optional().openapi({ description: 'Source template ids to copy. Omitted: every active template at the source.' }),
+      copy_weekdays: z.boolean().optional().openapi({ description: 'Also copy the weekdays each template repeats on (default false). True fills the next 8 weeks at the target with empty shifts to staff.' }),
+      dry_run: z.boolean().optional().openapi({ description: 'Answer what would be created and skipped; write nothing.' }),
+    }).openapi('TemplateCloneRequest') } } },
+  },
+  responses: {
+    200: { description: 'Dry run, or nothing left to create (created is empty)', content: { 'application/json': { schema: TemplateCloneResponse } } },
+    201: { description: 'Copied', content: { 'application/json': { schema: TemplateCloneResponse } } },
+    400: { description: 'Validation error (including copying a studio onto itself)', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not a member of both studios, not a manager at both, or the studios are in different organisations', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'A studio no longer exists', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The studios or templates could not be read, or the insert failed; nothing was copied', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // ROSTER-FIX.6c — the FTE weekly-hours panel's arithmetic, moved off the
 // browser. The panel prints hours, never money, so the payload carries hours
 // and the rates stay on the server.

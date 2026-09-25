@@ -324,6 +324,20 @@ describe('getOpenApiSpec', () => {
     }
   })
 
+  // TPLCLONE.1
+  it('documents the template copy, including the one-organisation rule and the weekdays default', () => {
+    const op = spec.paths['/api/schedule/templates/clone']?.post
+    expect(op).toBeDefined()
+    expect(op.security).toContainEqual({ CookieAuth: [] })
+    expect(op.description).toMatch(/same organisation/i)
+    expect(op.description).toMatch(/both/i)
+    expect(op.description).toMatch(/copy_weekdays/)
+    expect(Object.keys(op.responses)).toEqual(expect.arrayContaining(['200', '201', '400', '403', '404', '500']))
+    expect(spec.components.schemas).toHaveProperty('TemplateCloneRequest')
+    expect(spec.components.schemas.TemplateCloneRequest.properties).toHaveProperty('copy_weekdays')
+    expect(spec.components.schemas).toHaveProperty('TemplateCloneResponse')
+  })
+
   it('declares webhook + bridge auth schemes', () => {
     const s = spec.components.securitySchemes
     expect(s).toHaveProperty('GlofoxHmac')
