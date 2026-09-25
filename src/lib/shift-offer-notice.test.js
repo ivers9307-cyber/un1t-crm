@@ -121,6 +121,12 @@ describe('offerSweepAction', () => {
     expect(offerSweepAction(open({ notice_lease_until: '2026-09-28T09:55:00Z' }), { nowMs: IN_BAND, tz: TZ }).action).toBe('notify')
     expect(offerSweepAction(open({ notice_attempts: OFFER_MAX_ATTEMPTS }), { nowMs: IN_BAND, tz: TZ })).toEqual({ action: 'give_up', kind: 'broadcast' })
   })
+  it('review 5 — the last attempt still in flight (its lease live) is waited for, never a false "gave up"', () => {
+    expect(offerSweepAction(open({ notice_attempts: OFFER_MAX_ATTEMPTS, notice_lease_until: '2026-09-28T10:05:00Z' }), { nowMs: IN_BAND, tz: TZ }))
+      .toEqual({ action: 'none', reason: 'leased' })
+    expect(offerSweepAction(open({ notice_attempts: OFFER_MAX_ATTEMPTS, notice_lease_until: '2026-09-28T09:55:00Z' }), { nowMs: IN_BAND, tz: TZ }))
+      .toEqual({ action: 'give_up', kind: 'broadcast' })
+  })
   it('already broadcast: nothing', () => {
     expect(offerSweepAction(open({ broadcast_at: '2026-09-28T09:00:00Z' }), { nowMs: IN_BAND, tz: TZ })).toEqual({ action: 'none' })
   })

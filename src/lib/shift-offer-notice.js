@@ -94,9 +94,11 @@ export function offerClaimRefusal(result, { profileId, liveOnBlockIds = [] }) {
 }
 
 function noticeStep(offer, kind, nowMs, tz) {
-  if ((offer.notice_attempts || 0) >= OFFER_MAX_ATTEMPTS) return { action: 'give_up', kind }
+  // A live lease FIRST (review 5): attempt 5 still in flight must not be
+  // stamped "gave up" by the next tick while it may yet be delivered.
   const leaseMs = Date.parse(offer.notice_lease_until)
   if (Number.isFinite(leaseMs) && leaseMs > nowMs) return { action: 'none', reason: 'leased' }
+  if ((offer.notice_attempts || 0) >= OFFER_MAX_ATTEMPTS) return { action: 'give_up', kind }
   if (!inStaffPushHours(nowMs, tz)) return { action: 'none', reason: 'quiet_hours' }
   return { action: 'notify', kind }
 }
