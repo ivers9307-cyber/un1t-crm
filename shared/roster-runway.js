@@ -20,6 +20,11 @@
 // amber "1 of 2" badges and the publish preview already show it. The body
 // still reports "N below the minimum" when a week alerts for another reason.
 //
+// SHIFTTYPE.1: admin shifts are not on the runway at all. futureBlockStaffing
+// returns null for them, so they count toward none of blocks / staffed /
+// published, and a week whose only unstaffed or unpublished blocks are admin
+// is ready. A week of only admin blocks is "0 blocks", which says nothing.
+//
 // ACCEPTED: on its Monday a week drops off the runway even if it is staffed
 // but still unpublished. By then its amber and its red have both fired and
 // the chip has shown for ten days; from Monday it is the banner's job.
@@ -171,7 +176,7 @@ export function runwayWeeksFromBlocks(blocks, todayIso) {
   )
   for (const b of blocks || []) {
     const s = futureBlockStaffing(b, todayIso)
-    if (!s) continue // unreadable (or past, which the window excludes anyway)
+    if (!s) continue // unreadable, an admin shift (SHIFTTYPE.1), or past (the window excludes those anyway)
     const week = byWeek.get(weekStartIso(b.block_date))
     if (!week) continue // the current week, or beyond the second upcoming one
     week.blocks++

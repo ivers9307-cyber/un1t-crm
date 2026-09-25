@@ -160,6 +160,38 @@ describe('GET /api/schedule/blocks — manager view', () => {
   })
 })
 
+// SHIFTTYPE.1 — the calendar and the phone read a block's kind from its
+// template. A coach's slim shape keeps it (a coach's admin card gets the admin
+// tone); it is not a capacity fact, so the capacity stripping is unchanged.
+describe('GET /api/schedule/blocks — shift kind (SHIFTTYPE.1)', () => {
+  function capturingDb(rows) {
+    const captured = {}
+    const q = {}
+    for (const op of ['eq', 'in', 'gte', 'lte', 'order']) q[op] = () => q
+    q.then = (res, rej) => Promise.resolve({ data: rows, error: null }).then(res, rej)
+    return { captured, from: () => ({ select: (s) => { captured.select = s; return q } }) }
+  }
+  const ADMIN_BLOCK = { ...PUBLISHED_BLOCK, id: 'b-admin', shift_templates: { ...PUBLISHED_BLOCK.shift_templates, kind: 'admin' } }
+
+  it('embeds the template kind for a manager', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'm', role: 'manager', profileRole: 'manager', rolesByLocation: { 'loc-1': 'manager' } })
+    const db = capturingDb([ADMIN_BLOCK])
+    createServerClient.mockReturnValue(db)
+    const body = await (await GET(req())).json()
+    expect(db.captured.select).toMatch(/shift_templates\(id, name, color, role_label, start_time, end_time, days_of_week, max_coaches, kind\)/)
+    expect(body.data[0].shift_templates.kind).toBe('admin')
+  })
+
+  it("keeps the kind in a coach's slim shape, and still no capacity", async () => {
+    getCurrentUser.mockResolvedValue({ id: 'c', role: 'staff', profileRole: 'staff', rolesByLocation: { 'loc-1': 'staff' } })
+    createServerClient.mockReturnValue(capturingDb([ADMIN_BLOCK]))
+    const body = await (await GET(req())).json()
+    expect(body.data[0].shift_templates.kind).toBe('admin')
+    expect('max_coaches' in body.data[0].shift_templates).toBe(false)
+    expect('min_coaches' in body.data[0]).toBe(false)
+  })
+})
+
 // DATECHECK.1 — the range bounds went to Postgres unchecked, and the route
 // answered 400 with Postgres's own "date/time field value out of range".
 describe('GET /api/schedule/blocks — a date the calendar does not have', () => {
@@ -203,7 +235,7 @@ describe('POST /api/schedule/blocks — post-publish blocks join the roster', ()
   const TPL = 'a0000000-0000-0000-0000-000000000002'
 
   // templateAt: the studio TPL belongs to (null = whichever is asked).
-  function postDb({ publishedRoster = null, restoreError = null, insertError = null, templateAt = null } = {}) {
+  function postDb({ publishedRoster = null, restoreError = null, insertError = null, templateAt = null, templateKind = 'class' } = {}) {
     const captured = { insert: null, restore: null }
     const db = {
       captured,
@@ -236,7 +268,7 @@ describe('POST /api/schedule/blocks — post-publish blocks join the roster', ()
             eq: (col, val) => { f[col] = val; return chain },
             maybeSingle: () => Promise.resolve({
               data: f.id === TPL && f.location_id === (templateAt ?? f.location_id)
-                ? { start_time: '09:00', end_time: '10:00', max_coaches: 5, min_coaches: 1 }
+                ? { start_time: '09:00', end_time: '10:00', max_coaches: 5, min_coaches: templateKind === 'admin' ? 0 : 1, kind: templateKind }
                 : null,
               error: null,
             }),
@@ -398,6 +430,40 @@ describe('POST /api/schedule/blocks — post-publish blocks join the roster', ()
       createServerClient.mockReturnValue(postDb())
       const { POST } = await import('./route.js')
       expect((await POST(postReq({ location_id: LOC_B, template_id: TPL, block_date: '2026-06-06' }))).status).toBe(201)
+    })
+  })
+
+  // SHIFTTYPE.1 — a manual slot of an admin template has no minimum.
+  describe('admin template (SHIFTTYPE.1)', () => {
+    const MGR = { id: 'm', role: 'manager', profileRole: 'manager', locations: [{ id: LOC }], rolesByLocation: { [LOC]: 'manager' } }
+
+    it("an admin template's slot is created with minimum 0", async () => {
+      getCurrentUser.mockResolvedValue(MGR)
+      const db = postDb({ templateKind: 'admin' })
+      createServerClient.mockReturnValue(db)
+      const { POST } = await import('./route.js')
+      expect((await POST(postReq({ location_id: LOC, template_id: TPL, block_date: '2026-06-06' }))).status).toBe(201)
+      expect(db.captured.insert.min_coaches).toBe(0)
+    })
+
+    it("refuses an explicit minimum on an admin template's slot, and inserts nothing", async () => {
+      getCurrentUser.mockResolvedValue(MGR)
+      const db = postDb({ templateKind: 'admin' })
+      createServerClient.mockReturnValue(db)
+      const { POST } = await import('./route.js')
+      const res = await POST(postReq({ location_id: LOC, template_id: TPL, block_date: '2026-06-06', min_coaches: 2 }))
+      expect(res.status).toBe(400)
+      expect((await res.json()).error).toBe('admin_has_no_minimum')
+      expect(db.captured.insert).toBeNull()
+    })
+
+    it("a class template's slot still takes the template minimum", async () => {
+      getCurrentUser.mockResolvedValue(MGR)
+      const db = postDb()
+      createServerClient.mockReturnValue(db)
+      const { POST } = await import('./route.js')
+      await POST(postReq({ location_id: LOC, template_id: TPL, block_date: '2026-06-06' }))
+      expect(db.captured.insert.min_coaches).toBe(1)
     })
   })
 })

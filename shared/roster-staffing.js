@@ -25,7 +25,10 @@
 //      approval does NOT tag blocks (only a publish/approve re-tags them), so a
 //      draft is invisible from the blocks alone.
 //
-// Dependency-free: `shared/` is the mobile seam and cannot import src/lib.
+// Depends only on ./shift-kind.js: `shared/` is the mobile seam and cannot
+// import src/lib.
+
+import { isAdminShift } from './shift-kind.js'
 
 // "This assignment still puts a coach on the block." Private, and kept in step
 // with isLiveAssignment (src/lib/roster.js) and shared/dashboard-data.js's
@@ -64,13 +67,22 @@ export function staffingStatus(liveCount, minCoaches) {
  * a past shift nobody covered is history, not something to act on (the same
  * rule isBlockUnstaffedFuture has always applied).
  *
- * @param {object} block      shift_blocks row: block_date, min_coaches, shift_assignments[]
+ * SHIFTTYPE.1 — an ADMIN block also returns null. An admin shift has no
+ * minimum staffing (Richard, 25 Sep 2026), so there is no staffing question to
+ * ask of it: every surface that reads this (the calendar banner, day headers,
+ * cards and month cells, the Today chip, the publish preview, the runway, the
+ * phone's Manage chip) already treats null as "nothing to flag". A block whose
+ * kind cannot be read is class (shared/shift-kind.js), so a reader that forgot
+ * `shift_templates(kind)` flags it as before rather than hiding a class gap.
+ *
+ * @param {object} block      shift_blocks row: block_date, min_coaches, shift_assignments[], shift_templates.kind
  * @param {string} todayIso   YYYY-MM-DD
  * @returns {{ status: 'empty'|'short'|'ok', count: number, min: number } | null}
  */
 export function futureBlockStaffing(block, todayIso) {
   if (!block || !block.block_date || !todayIso) return null
   if (block.block_date < todayIso) return null
+  if (isAdminShift(block)) return null
   const count = countLive(block.shift_assignments)
   const min = Number(block.min_coaches) || 0
   return { status: staffingStatus(count, min), count, min }

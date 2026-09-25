@@ -89,6 +89,24 @@ describe('GET /api/schedule/overview — role at the requested studio', () => {
     expect((await GET(req(LOC_A))).status).toBe(401)
   })
 
+  // SHIFTTYPE.1 — the day dialog needs each block's kind to leave admin out.
+  it("reads each block's template kind", async () => {
+    getCurrentUser.mockResolvedValue(MGR_A_STAFF_B(LOC_A))
+    const selects = {}
+    createServerClient.mockReturnValue({
+      from(t) {
+        const b = {
+          select: (s) => { selects[t] = s; return b },
+          eq: () => b, gte: () => b, lte: () => b, in: () => b, or: () => b,
+          then: (resolve) => resolve({ data: [], error: null }),
+        }
+        return b
+      },
+    })
+    expect((await GET(req(LOC_A))).status).toBe(200)
+    expect(selects.shift_blocks).toMatch(/shift_templates \( name, color, kind \)/)
+  })
+
   // DATECHECK.1 — Date.UTC rolled 2026-02-30 to 2 March, the span check
   // passed, and the reads then 500'd on Postgres's refusal.
   it('a manager sending a date the calendar does not have gets a 400, and nothing is read', async () => {

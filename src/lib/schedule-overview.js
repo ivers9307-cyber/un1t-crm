@@ -19,6 +19,8 @@
 // means tests cover every branch and the API stays focused on
 // data assembly.
 
+import { isAdminShift } from '@shared/shift-kind'
+
 const DAY_NAMES = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
 
 /**
@@ -134,6 +136,34 @@ export function classifyDayLoad({ demand, staff_scheduled, staff_on_leave, block
   // discovers it at 9:00am.
   if ((blocks_below_min || 0) > 0) return 'amber'
   return 'green'
+}
+
+/**
+ * SHIFTMIN.1 / SHIFTTYPE.1 — the day dialog's row for a block below its
+ * minimum, or null. Moved out of the overview route so the rule is testable.
+ *
+ * An ADMIN block is never a row (Richard, 25 Sep 2026: admin shifts carry no
+ * minimum staffing), whatever min_coaches it still carries. Only live
+ * (non-cancelled) assignments with a profile count. A minimum of 0 is "no
+ * floor" and never a row. Empty at a positive minimum IS a row (0 of N), as
+ * it always was here.
+ *
+ * @param {object} block  shift_blocks row: id, start_time, end_time, min_coaches,
+ *                        shift_templates { name, kind }, shift_assignments[]
+ * @returns {{ id: string, label: string, time: string, assigned: number, min: number } | null}
+ */
+export function underMinEntry(block) {
+  if (!block || isAdminShift(block)) return null
+  const live = (block.shift_assignments || []).filter((a) => a.status !== 'cancelled' && a.profile_id)
+  const min = block.min_coaches || 0
+  if (!(min > 0 && live.length < min)) return null
+  return {
+    id: block.id,
+    label: block.shift_templates?.name || 'Shift',
+    time: `${String(block.start_time || '').slice(0, 5)}–${String(block.end_time || '').slice(0, 5)}`,
+    assigned: live.length,
+    min,
+  }
 }
 
 /**

@@ -8,6 +8,7 @@ import {
   aggregateDayDemand,
   classifyDayLoad,
   leaveOnDate,
+  underMinEntry,
 } from './schedule-overview.js'
 
 describe('eventTypeHasWindowForDate', () => {
@@ -208,5 +209,27 @@ describe('leaveOnDate', () => {
     expect(leaveOnDate([row('p1', '2026-09-21', '2026-09-22', 'Coach A')], '2026-09-23').names).toEqual([])
     expect(leaveOnDate([{ profile_id: 'p3', start_date: '2026-09-23', end_date: '2026-09-23' }], '2026-09-23').names).toEqual(['Unknown'])
     expect(leaveOnDate(null, '2026-09-23')).toEqual({ names: [], profileIds: [] })
+  })
+})
+
+describe('underMinEntry (SHIFTMIN.1 / SHIFTTYPE.1)', () => {
+  const b = (over = {}) => ({
+    id: 'b1', block_date: '2026-09-22', start_time: '09:30:00', end_time: '10:30:00', min_coaches: 2,
+    shift_templates: { name: 'Morning', kind: 'class' },
+    shift_assignments: [{ profile_id: 'p1', status: 'scheduled' }, { profile_id: 'p2', status: 'cancelled' }],
+    ...over,
+  })
+
+  it('names a class block below its minimum, counting live coaches only', () => {
+    expect(underMinEntry(b())).toEqual({ id: 'b1', label: 'Morning', time: '09:30–10:30', assigned: 1, min: 2 })
+  })
+
+  it('is null at or above the minimum, and with no minimum', () => {
+    expect(underMinEntry(b({ min_coaches: 1 }))).toBeNull()
+    expect(underMinEntry(b({ min_coaches: 0 }))).toBeNull()
+  })
+
+  it('is null for an admin block, even one still carrying a minimum', () => {
+    expect(underMinEntry(b({ shift_templates: { name: 'Admin', kind: 'admin' } }))).toBeNull()
   })
 })
