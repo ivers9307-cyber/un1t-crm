@@ -161,6 +161,14 @@ describe('RosterGrid', () => {
     expect(screen.getAllByTestId('roster-grid-row')).toHaveLength(3)
   })
 
+  // GRID.1 review 2 — a stale model (a grid for another week) is loading,
+  // never an empty table saying nobody is on the team.
+  it('a stale model reads as loading, not as an empty team', () => {
+    render(<RosterGrid model={buildRosterGrid({ weekStart: '2026-09-28', grid: { ...GRID, week_start: WEEK } })} loading onOpenBlock={vi.fn()} />)
+    expect(screen.getByTestId('roster-grid-loading').textContent).toBe('Loading coaches…')
+    expect(screen.queryByRole('table')).toBeNull()
+  })
+
   it("My shifts: only the viewer's row", () => {
     render(<RosterGrid model={model()} onlyProfileId="p-over" onOpenBlock={vi.fn()} />)
     expect(screen.getAllByRole('rowheader').map((h) => h.textContent)).toEqual(['Max Beta'])

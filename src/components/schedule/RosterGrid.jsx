@@ -50,7 +50,9 @@ export default function RosterGrid({
   selectMode = false, selectedBlockIds = null, onlyProfileId = null, holidays = [],
   leaveMissing = false, availabilityMissing = false,
 }) {
-  if (!model) {
+  // A stale model is a grid for another week (GRID.1 review 2): not this
+  // week's answer, so it is shown exactly as "not loaded yet".
+  if (!model || model.stale) {
     if (error) return <ScheduleErrorBanner title="Could not load the coach grid" message={error} onRetry={onRetry} busy={loading} />
     return (
       <div data-testid="roster-grid-loading" className="text-center py-20 text-un1t-subtle">

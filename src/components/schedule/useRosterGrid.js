@@ -33,42 +33,46 @@ export function browserStorage() {
 }
 
 export function useRosterGrid({ locationId, weekStart, enabled = false }) {
-  const [grid, setGrid] = useState(null)
-  const [error, setError] = useState(null)
+  // GRID.1 review 2 — the grid and the failure are stored WITH the
+  // `${locationId}|${weekStart}` they belong to, and handed back only while
+  // that is still the studio and week asked for. Clearing them in the effect
+  // was a frame too late: the first render after a week change still held last
+  // week's grid, and the calendar built the new week's rows from it (everyone
+  // 0h, every contract "to place", no flags: a false all-clear).
+  const key = enabled && locationId && weekStart ? `${locationId}|${weekStart}` : null
+  const [loaded, setLoaded] = useState({ key: null, data: null })
+  const [failure, setFailure] = useState({ key: null, message: null })
   const [loading, setLoading] = useState(false)
   const generation = useRef(0)
-  // The `${locationId}|${weekStart}` the grid in state was loaded for.
-  const loadedKey = useRef(null)
 
   const refresh = useCallback(async () => {
     const gen = ++generation.current
-    if (!enabled || !locationId || !weekStart) {
+    if (!key) {
       setLoading(false)
       return
-    }
-    const key = `${locationId}|${weekStart}`
-    if (loadedKey.current !== key) {
-      // Another studio or week is in state: never show it under these dates.
-      setGrid(null)
-      loadedKey.current = null
     }
     setLoading(true)
     try {
       const body = await readJson(`/api/schedule/grid?location_id=${locationId}&start_date=${weekStart}`)
       if (gen !== generation.current) return
-      setGrid(body.data ?? null)
-      loadedKey.current = key
-      setError(null)
+      setLoaded({ key, data: body.data ?? null })
+      setFailure({ key: null, message: null })
     } catch (e) {
       if (gen !== generation.current) return
-      setError(e?.message || 'Could not load the coach grid')
-      if (loadedKey.current !== key) setGrid(null)
+      // A refresh of the week on screen keeps its grid (`loaded` is untouched,
+      // and still matches); a first load of this week shows no grid at all.
+      setFailure({ key, message: e?.message || 'Could not load the coach grid' })
     } finally {
       if (gen === generation.current) setLoading(false)
     }
-  }, [locationId, weekStart, enabled])
+  }, [key, locationId, weekStart])
 
   useEffect(() => { refresh() }, [refresh])
 
-  return { grid, gridError: error, gridLoading: loading, refreshGrid: refresh }
+  const grid = key && loaded.key === key ? loaded.data : null
+  const gridError = key && failure.key === key ? failure.message : null
+  // Asked for, and neither answered nor failed yet: loading, from the very
+  // first render with the new key (never "nothing to show" for a frame).
+  const pending = Boolean(key) && loaded.key !== key && failure.key !== key
+  return { grid, gridError, gridLoading: loading || pending, refreshGrid: refresh }
 }

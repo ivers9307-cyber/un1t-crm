@@ -208,12 +208,28 @@ describe('buildRosterGrid — rows, cells and week totals', () => {
   })
 })
 
+// GRID.1 review 2 — a grid read for ANOTHER week is never laid under this
+// one's dates: that would read as everyone 0h and every contract "to place".
+describe('buildRosterGrid — a grid for another week', () => {
+  it('is not built: no rows, not checked, and marked stale so the screen shows loading', () => {
+    const g = buildRosterGrid({ weekStart: '2026-09-28', grid: GRID })
+    expect(g).toEqual({ days: gridWeekDays('2026-09-28'), rows: [], checked: false, untimed: 0, contractVisible: false, stale: true })
+  })
+
+  it('any day of the matching week is the same week; a grid without a week_start is judged as before', () => {
+    expect(buildRosterGrid({ weekStart: '2026-09-24', grid: GRID }).rows).toHaveLength(5)
+    const { week_start: _w, ...undated } = GRID
+    expect(buildRosterGrid({ weekStart: WEEK, grid: undated }).rows).toHaveLength(5)
+  })
+})
+
 describe('buildRosterGrid — the clock-change weeks', () => {
   it('autumn (Sun 25 Oct 2026): Sunday is in the week, a normal shift is its length, a shift over the change its REAL length', () => {
     const g = buildRosterGrid({
       weekStart: '2026-10-21',
       grid: {
         ...GRID,
+        week_start: '2026-10-19',
         members: [M('p1', 'Alex Example', 'fte', 40)],
         shifts: [
           S('p1', '2026-10-25', '09:00:00', '12:00:00'),
@@ -233,6 +249,7 @@ describe('buildRosterGrid — the clock-change weeks', () => {
       weekStart: '2026-03-23',
       grid: {
         ...GRID,
+        week_start: '2026-03-23',
         members: [M('p1', 'Alex Example', 'fte', 40)],
         shifts: [S('p1', '2026-03-29', '09:00:00', '12:00:00'), S('p1', '2026-03-29', '00:30:00', '03:30:00')],
       },

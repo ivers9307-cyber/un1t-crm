@@ -150,6 +150,13 @@ export function buildRosterGrid({ weekStart, grid, timeOff = [], availability = 
   if (days.length !== 7 || !grid || !Array.isArray(grid.members) || !Array.isArray(grid.shifts)) {
     return { days, rows: [], checked: false, untimed: 0, contractVisible: false }
   }
+  // GRID.1 review 2 — a grid read for ANOTHER week (the calendar moved on
+  // and the new read has not answered yet) is never laid under these dates:
+  // it would read as everyone 0h, every contract "to place" and no flags.
+  // `stale` tells the screen to show loading instead.
+  if (grid.week_start && grid.week_start !== days[0]) {
+    return { days, rows: [], checked: false, untimed: 0, contractVisible: false, stale: true }
+  }
   const week = new Set(days)
   // GRID.1 review 1 — contracted hours are for owner, manager and master
   // only; the route says which with contract_visible. FAILS CLOSED: anything

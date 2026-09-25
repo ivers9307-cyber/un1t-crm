@@ -107,6 +107,21 @@ describe('ScheduleCalendar: the Coaches layout (GRID.1)', () => {
     expect(grid.textContent).not.toMatch(/No contract hours|to place/)
   })
 
+  // GRID.1 review 2 — moving to the next week never lays this week's grid
+  // under the new dates. Here the server (wrongly) answers the next week with
+  // this week's grid: the screen must not draw it (no table, no 0h rows).
+  it('the next week never shows the previous week\'s grid under its dates', async () => {
+    window.localStorage.setItem(KEY('u1'), 'coaches')
+    await renderLoaded()
+    await screen.findByTestId('roster-grid')
+    fireEvent.click(screen.getByRole('button', { name: 'Next week' }))
+    await waitFor(() => expect(gridCalls().map(([u]) => String(u))).toContain(`/api/schedule/grid?location_id=${LOC}&start_date=2026-05-11`))
+    await waitFor(() => expect(screen.queryByText(/Loading roster/)).toBeNull())
+    expect(screen.queryByTestId('roster-grid')).toBeNull()
+    expect(screen.getByTestId('roster-grid-loading')).toBeTruthy()
+    expect(screen.queryByText('Alex Example')).toBeNull()
+  })
+
   it('a shift in the grid opens the same block dialog a day card opens', async () => {
     window.localStorage.setItem(KEY('u1'), 'coaches')
     await renderLoaded()

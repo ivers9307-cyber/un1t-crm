@@ -65,6 +65,55 @@ describe('useRosterGrid', () => {
     expect(result.current.grid.week_start).toBe('2026-09-28')
   })
 
+  // GRID.1 review 2 — the grid in state belongs to ONE studio and week. The
+  // first render after the manager moves must not hand back the old one: the
+  // calendar would build the new week's rows from last week's shifts, which
+  // reads as everyone 0h and every contract "to place" (a false all-clear).
+  // Every render is recorded, so the frame BEFORE the effect runs is checked.
+  for (const [what, next] of [
+    ['a week change', { weekStart: '2026-09-28' }],
+    ['a studio change', { locationId: 'loc2' }],
+  ]) {
+    it(`${what}: not one render hands back the previous grid, and it reads as loading, not empty`, async () => {
+      const renders = []
+      const { result, rerender } = renderHook((props) => {
+        const r = useRosterGrid(props)
+        renders.push({ props, ...r })
+        return r
+      }, { initialProps: ARGS })
+      await waitFor(() => expect(result.current.grid).toEqual(GRID))
+      let release
+      global.fetch = vi.fn(() => new Promise((resolve) => { release = resolve }))
+      const from = renders.length
+      rerender({ ...ARGS, ...next })
+      const after = renders.slice(from)
+      expect(after.length).toBeGreaterThan(0)
+      for (const r of after) {
+        expect(r.grid).toBeNull()
+        expect(r.gridLoading).toBe(true)
+        expect(r.gridError).toBeNull()
+      }
+      await act(async () => { release(ok({ success: true, data: { ...GRID, week_start: next.weekStart || GRID.week_start } })) })
+      expect(result.current.grid).not.toBeNull()
+      expect(result.current.gridLoading).toBe(false)
+    })
+  }
+
+  it("a failure for the previous week is not shown under the new one", async () => {
+    global.fetch = vi.fn(async () => ({ ok: false, status: 500, redirected: false, json: async () => ({ success: false, error: 'db down' }) }))
+    const renders = []
+    const { result, rerender } = renderHook((props) => {
+      const r = useRosterGrid(props)
+      renders.push(r)
+      return r
+    }, { initialProps: ARGS })
+    await waitFor(() => expect(result.current.gridError).toBe('db down'))
+    global.fetch = vi.fn(() => new Promise(() => {}))
+    const from = renders.length
+    rerender({ ...ARGS, weekStart: '2026-09-28' })
+    for (const r of renders.slice(from)) expect(r.gridError).toBeNull()
+  })
+
   it('browserStorage is localStorage, or null when the browser refuses it', () => {
     expect(browserStorage()).toBe(window.localStorage)
     const spy = vi.spyOn(window, 'localStorage', 'get').mockImplementation(() => { throw new Error('SecurityError') })
