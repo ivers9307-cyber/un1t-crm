@@ -110,6 +110,12 @@ describe('routeForNotification', () => {
     }
   })
 
+  it('REPLACE.1b — an offer opens the Dashboard (Claim is there); "taken" opens Manage mode on that day', () => {
+    expect(routeForNotification({ type: 'shift_offer', offer_id: 'o1', block_date: '2026-09-29' })).toBe('/(tabs)/dashboard')
+    expect(routeForNotification({ type: 'shift_offer_taken', offer_id: 'o1', block_date: '2026-09-29' })).toBe('/(tabs)/schedule?date=2026-09-29&view=manage')
+    expect(routeForNotification({ type: 'shift_offer_taken', block_date: 'nope' })).toBe('/(tabs)/schedule?view=manage')
+  })
+
   it('appends ?date= for roster types when the payload carries the affected date', () => {
     expect(routeForNotification({ type: 'schedule_published', start_date: '2026-07-06', end_date: '2026-07-12' }))
       .toBe('/(tabs)/schedule?date=2026-07-06')
