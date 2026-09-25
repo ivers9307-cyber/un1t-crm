@@ -358,4 +358,23 @@ describe('getOpenApiSpec', () => {
     expect(s).toHaveProperty('WebhookToken')
     expect(s).toHaveProperty('BridgeAuth')
   })
+
+  // ICSFEED.1 — an anonymous token feed and the session-only management route.
+  it('documents the calendar feed and its self-service management', () => {
+    const feed = spec.paths['/api/calendar-feed/{file}']?.get
+    expect(feed, 'missing GET /api/calendar-feed/{file}').toBeTruthy()
+    expect(feed.security ?? []).toHaveLength(0)
+    expect(feed.tags).toContain('Public')
+    expect(Object.keys(feed.responses['200'].content)).toEqual(['text/calendar'])
+    expect(Object.keys(feed.responses)).toEqual(expect.arrayContaining(['200', '404', '429', '503']))
+    // Scope is the PERSON across organisations, stated so nobody "fixes" it into a tenant filter.
+    expect(feed.description).toMatch(/across organisations/)
+    for (const m of ['get', 'post', 'delete']) {
+      const op = spec.paths['/api/me/calendar-feed']?.[m]
+      expect(op, `missing ${m.toUpperCase()} /api/me/calendar-feed`).toBeTruthy()
+      expect(op.security).toContainEqual({ CookieAuth: [] })
+      expect(op.tags).toContain('Me')
+    }
+    expect(Object.keys(spec.paths['/api/me/calendar-feed'].post.responses)).toEqual(expect.arrayContaining(['200', '403', '409']))
+  })
 })
