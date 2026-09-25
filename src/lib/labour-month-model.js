@@ -77,3 +77,231 @@ export function canSeeLabour(user) {
   const activeId = user?.activeLocation?.id
   return !!activeId && labourStudiosFor(user).some((s) => s.id === activeId)
 }
+
+/**
+ * Flatten shift_blocks (with their embedded roster, template and
+ * assignments) to one row per LIVE assignment, in the shape workingWindow
+ * reads: override, then the block's own time, then the template's.
+ */
+export function labourShiftRows(blocks) {
+  const rows = []
+  for (const b of blocks || []) {
+    const tpl = b?.shift_templates || {}
+    const published = b?.rosters?.status === 'published'
+    for (const a of b?.shift_assignments || []) {
+      if (!a?.profile_id || !isLiveAssignment(a)) continue
+      rows.push({
+        assignment_id: a.id,
+        block_id: b.id,
+        profile_id: a.profile_id,
+        location_id: b.location_id,
+        block_date: b.block_date,
+        published,
+        status: a.status ?? null,
+        start_time: b.start_time ?? null,
+        end_time: b.end_time ?? null,
+        start_time_override: a.start_time_override ?? null,
+        end_time_override: a.end_time_override ?? null,
+        shift_templates: { start_time: tpl.start_time ?? null, end_time: tpl.end_time ?? null },
+      })
+    }
+  }
+  return rows
+}
+
+function round1(n) { return Math.round(n * 10) / 10 }
+
+/** Labour as a % of revenue, one decimal; null when there is no revenue to divide by. */
+export function labourPct(costCents, revenueCents) {
+  if (costCents == null || !(Number(revenueCents) > 0)) return null
+  return Math.round((costCents / revenueCents) * 1000) / 10
+}
+
+function uncostedReason(person, type, current) {
+  if (!person) return 'unknown_person'
+  if (type === EMPLOYEE_TYPE) return current ? 'no_salary' : 'inactive_employee'
+  if (type === CONTRACTOR_TYPE) return 'no_rate'
+  return 'unknown_type'
+}
+
+function emptyAcc() {
+  return {
+    employees: { forecast: 0, actual: 0 },
+    contractors: { forecast: 0, actual: 0 },
+    minutes: { forecast: 0, actual: 0 },
+  }
+}
+
+function shapeStudio({ studio, acc, rev, draftMinutes, elapsed }) {
+  const status = rev == null
+    ? 'unavailable'
+    : (Number(rev.mrrCents) > 0 && Number(rev.recurringMembers) > 0 ? 'tracked' : 'none')
+  const mrrCents = status === 'tracked' ? Math.round(Number(rev.mrrCents)) : null
+  const revenueToDate = mrrCents != null ? Math.round(mrrCents * elapsed) : null
+  const part = (k) => {
+    const employees = Math.round(acc.employees[k])
+    const contractors = Math.round(acc.contractors[k])
+    return { employees_cents: employees, contractors_cents: contractors, cost_cents: employees + contractors, hours: round1(acc.minutes[k] / 60) }
+  }
+  const forecast = part('forecast')
+  const actual = part('actual')
+  return {
+    location_id: studio.id,
+    name: studio.name,
+    revenue_status: status,
+    mrr_cents: mrrCents,
+    recurring_members: status === 'tracked' ? Number(rev.recurringMembers) : null,
+    revenue_to_date_cents: revenueToDate,
+    forecast,
+    actual,
+    forecast_pct: labourPct(forecast.cost_cents, mrrCents),
+    actual_pct: labourPct(actual.cost_cents, revenueToDate),
+    draft_hours: round1(draftMinutes / 60),
+  }
+}
+
+function totalOf(rows) {
+  if (rows.length < 2) return null
+  const sum = (list, f) => list.reduce((t, r) => t + f(r), 0)
+  const tracked = rows.filter((r) => r.revenue_status === 'tracked')
+  const any = tracked.length > 0
+  const mrr = any ? sum(tracked, (r) => r.mrr_cents) : null
+  const toDate = any ? sum(tracked, (r) => r.revenue_to_date_cents) : null
+  const part = (k) => ({
+    employees_cents: sum(rows, (r) => r[k].employees_cents),
+    contractors_cents: sum(rows, (r) => r[k].contractors_cents),
+    cost_cents: sum(rows, (r) => r[k].cost_cents),
+    hours: round1(sum(rows, (r) => r[k].hours)),
+  })
+  return {
+    name: 'All studios shown',
+    revenue_status: any ? 'tracked' : 'none',
+    mrr_cents: mrr,
+    recurring_members: any ? sum(tracked, (r) => r.recurring_members) : null,
+    revenue_to_date_cents: toDate,
+    forecast: part('forecast'),
+    actual: part('actual'),
+    // Ratios over the studios that HAVE revenue only: Hatch's labour on
+    // Stillorgan's revenue would overstate the percentage.
+    forecast_pct: labourPct(sum(tracked, (r) => r.forecast.cost_cents), mrr),
+    actual_pct: labourPct(sum(tracked, (r) => r.actual.cost_cents), toDate),
+    draft_hours: round1(sum(rows, (r) => r.draft_hours)),
+    ratio_excludes: rows.filter((r) => r.revenue_status !== 'tracked').map((r) => r.name),
+  }
+}
+
+/**
+ * The owner's view model. TOTALS, RATIOS, HOURS AND NAMES ONLY.
+ *
+ * @param {object} args
+ * @param {ReturnType<typeof labourMonthWindow>} args.period
+ * @param {number} args.nowMs
+ * @param {{id:string,name:string}[]} args.studios        the studios to show
+ * @param {object[]} args.rows                              labourShiftRows over EVERY studio of the organisation
+ * @param {Map<string, object>} args.people                 id → { full_name, employment_type, active, deleted_at, annual_salary, hourly_rate }
+ * @param {Map<string, Set<string>>} args.memberships       id → the organisation's studios they belong to
+ * @param {Map<string, {mrrCents:number, recurringMembers:number}|null>} args.revenue  per studio shown; null = could not be read
+ * @param {boolean} [args.countUnrostered]
+ */
+export function buildLabourMonth({
+  period, nowMs, studios, rows, people, memberships, revenue,
+  countUnrostered = COUNT_UNROSTERED_SALARIES,
+}) {
+  const shownIds = new Set(studios.map((s) => s.id))
+
+  // Published minutes per person per studio (forecast = all, actual = ended);
+  // draft minutes per studio; untimed published shifts at a studio shown.
+  const worked = new Map()
+  const draftMinutes = new Map()
+  let untimed = 0
+  for (const r of rows || []) {
+    const w = workingWindow(r)
+    if (!w) {
+      if (r.published && shownIds.has(r.location_id)) untimed += 1
+      continue
+    }
+    const minutes = (w.endMs - w.startMs) / MINUTE_MS
+    if (!r.published) {
+      draftMinutes.set(r.location_id, (draftMinutes.get(r.location_id) || 0) + minutes)
+      continue
+    }
+    if (!worked.has(r.profile_id)) worked.set(r.profile_id, new Map())
+    const cells = worked.get(r.profile_id)
+    const cell = cells.get(r.location_id) || { forecast: 0, actual: 0 }
+    cell.forecast += minutes
+    if (w.endMs <= nowMs) cell.actual += minutes
+    cells.set(r.location_id, cell)
+  }
+
+  const acc = new Map(studios.map((s) => [s.id, emptyAcc()]))
+  const uncosted = []
+  const ids = new Set([...worked.keys(), ...(memberships ? memberships.keys() : [])])
+  for (const id of ids) {
+    const person = people?.get(id) || null
+    const cells = worked.get(id) || new Map()
+    let workedMinutes = 0
+    let workedShownMinutes = 0
+    for (const [loc, c] of cells) {
+      workedMinutes += c.forecast
+      const a = acc.get(loc)
+      if (!a) continue
+      a.minutes.forecast += c.forecast
+      a.minutes.actual += c.actual
+      workedShownMinutes += c.forecast
+    }
+    const type = person?.employment_type ?? null
+    const salary = Number(person?.annual_salary) || 0
+    const rate = Number(person?.hourly_rate) || 0
+    const current = !!person && person.active !== false && !person.deleted_at
+
+    if (type === EMPLOYEE_TYPE && salary > 0 && current) {
+      const monthlyCents = (salary * 100) / 12
+      let shares = []
+      if (workedMinutes > 0) {
+        shares = [...cells].map(([loc, c]) => [loc, c.forecast / workedMinutes])
+      } else if (countUnrostered) {
+        const locs = [...(memberships?.get(id) || [])]
+        shares = locs.map((loc) => [loc, 1 / locs.length])
+      }
+      for (const [loc, share] of shares) {
+        const a = acc.get(loc)
+        if (!a) continue
+        a.employees.forecast += monthlyCents * share
+        a.employees.actual += monthlyCents * share * period.elapsedFraction
+      }
+      continue
+    }
+
+    if (type === CONTRACTOR_TYPE && rate > 0) {
+      for (const [loc, c] of cells) {
+        const a = acc.get(loc)
+        if (!a) continue
+        a.contractors.forecast += (c.forecast / 60) * rate * 100
+        a.contractors.actual += (c.actual / 60) * rate * 100
+      }
+      continue
+    }
+
+    if (workedShownMinutes <= 0) continue // did not work here: nothing is missing
+    uncosted.push({ name: person?.full_name || 'Unknown person', reason: uncostedReason(person, type, current), hours: round1(workedShownMinutes / 60) })
+  }
+
+  const studioRows = studios.map((s) => shapeStudio({
+    studio: s,
+    acc: acc.get(s.id),
+    rev: revenue?.get(s.id) ?? null,
+    draftMinutes: draftMinutes.get(s.id) || 0,
+    elapsed: period.elapsedFraction,
+  }))
+
+  return {
+    month: period.month,
+    month_label: period.monthLabel,
+    day_of_month: period.dayOfMonth,
+    days_in_month: period.daysInMonth,
+    studios: studioRows,
+    total: totalOf(studioRows),
+    uncosted: uncosted.sort((x, y) => x.name.localeCompare(y.name)),
+    untimed_shifts: untimed,
+  }
+}
