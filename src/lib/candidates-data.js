@@ -109,7 +109,8 @@ export async function readApprovedLeaveOn(db, profileIds, dateIso) {
  * profile_id → contracted hours per week (> 0 only), from profile_compensation
  * (mig 152; profiles.contracted_hours_per_week is DEPRECATED). ONE column by
  * name: never getCompensationForProfiles, which reads all five pay columns
- * and discards its error. Chunked at 200 like that helper, for .in() URL length.
+ * (it throws on a failed read since LABOUR.1; it used to discard the error).
+ * Chunked at 200 like that helper, for .in() URL length.
  */
 export async function readContractedHours(db, profileIds) {
   const byProfile = new Map()

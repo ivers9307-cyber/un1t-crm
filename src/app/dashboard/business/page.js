@@ -19,6 +19,8 @@ import { MembershipPanel } from '@/components/dashboard/MembershipPanel'
 import {
   BriefingLine, FunnelMini, AdsSummaryPanel, TodayStrip, NeedsYouRail, BlockSkeleton, BlockError,
 } from '@/components/dashboard/BusinessBlocks'
+import { LabourBlock } from '@/components/dashboard/LabourBlock'
+import { canSeeLabour, labourStudiosFor } from '@/lib/labour-month-model'
 
 export const dynamic = 'force-dynamic'
 
@@ -137,6 +139,11 @@ export default async function BusinessDashboardPage() {
   if (!hasPermission(user, 'dashboard_business')) redirect('/dashboard')
   const locationId = user.activeLocation?.id
   const locationName = user.activeLocation?.name
+  // LABOUR.1 — owners only, by ROLE at the active studio (a master too).
+  // dashboard_business alone is not enough: an owner can grant it to a
+  // manager, and a studio's labour total can be one person's pay.
+  const showLabour = canSeeLabour(user)
+  const labourStudios = showLabour ? labourStudiosFor(user) : []
 
   return (
     <>
@@ -151,6 +158,11 @@ export default async function BusinessDashboardPage() {
           <Suspense fallback={<BlockSkeleton lines={5} />}>
             <MembershipBlock locationId={locationId} />
           </Suspense>
+          {showLabour ? (
+            <Suspense fallback={<BlockSkeleton lines={5} />}>
+              <LabourBlock activeLocationId={locationId} studios={labourStudios} />
+            </Suspense>
+          ) : null}
           <Suspense fallback={<BlockSkeleton lines={2} />}>
             <TodayBlock locationId={locationId} locationName={locationName} />
           </Suspense>
