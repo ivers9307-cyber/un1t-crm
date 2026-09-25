@@ -26,6 +26,12 @@
 // row's upsert is (re-)run RIGHT AFTER the deploy that stamps it: a row
 // seeded before that code is live goes stale after interval + grace.
 //
+// REPLACE.1b adds a fifth:
+//
+//   'shift-offer-sweep' — runShiftOfferSweep (src/lib/shift-offer-server.js),
+//                       the "Offer to team" arm of the */5 send-push-reminders
+//                       cron. Seeded by mig 642, applied RIGHT AFTER the deploy.
+//
 // THE RULE. Stamp only when the arm RETURNED an outcome object (a throw, or a
 // resolved non-object, has not shown it ran) and that outcome carries no
 // fault in the arm's own machinery. A run with nothing to send is healthy (a
@@ -40,6 +46,9 @@ export const ROSTER_RUNWAY_HEARTBEAT = 'roster-runway'
 // runShiftTimeChangeNotices) of the */5 send-push-reminders cron. Seeded by mig 639.
 export const SHIFT_TIME_CHANGES_HEARTBEAT = 'shift-time-changes'
 export const REPLACE_NOTICES_HEARTBEAT = 'replace-notices'
+// REPLACE.1b — the shift-offer arm (src/lib/shift-offer-server.js
+// runShiftOfferSweep) of the */5 send-push-reminders cron. Seeded by mig 642.
+export const SHIFT_OFFER_SWEEP_HEARTBEAT = 'shift-offer-sweep'
 
 // runShiftReminders' counters that mean the ARM went wrong, not a device:
 //   shift_claim_failed — a ledger claim insert failed; that reminder was NOT sent.
@@ -111,6 +120,24 @@ export function timeChangeArmHealthy(summary) {
  * undelivered (opted out / unreachable, left for the re-publish safety net).
  */
 export function replaceNoticeArmHealthy(outcome) {
+  if (!isOutcome(outcome)) return false
+  return count(outcome.errors) === 0 && count(outcome.stamp_failed) === 0
+}
+
+/**
+ * REPLACE.1b — true when a runShiftOfferSweep() outcome shows a clean run.
+ * Faults in the arm's own machinery, each retried next tick:
+ *   errors       — an offer list could not be read, a list filled its 200-row
+ *                  guard (capped: the rest waited), or a lease / close /
+ *                  give-up write failed.
+ *   stamp_failed — a notice was DELIVERED but its stamp did not land: it is
+ *                  sent again once the lease expires, until the stamp lands.
+ * A quiet-hours tick, a tick with no offers and a busy lease are healthy. NOT
+ * a fault: retry (the audience could not be read, or the send failed
+ * outright: the lease is released and the next tick retries) and gave_up
+ * (logged loudly on its own, and shown on the manager's line).
+ */
+export function offerSweepArmHealthy(outcome) {
   if (!isOutcome(outcome)) return false
   return count(outcome.errors) === 0 && count(outcome.stamp_failed) === 0
 }

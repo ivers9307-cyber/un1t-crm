@@ -345,6 +345,13 @@ describe('getOpenApiSpec', () => {
     expect(path.post.description).toMatch(/manager/i)
   })
 
+  it('REPLACE.1b — documents the four offer paths', () => {
+    expect(spec.paths['/api/schedule/blocks/{id}/offer']?.post?.responses).toHaveProperty('409')
+    expect(spec.paths['/api/schedule/offers']?.get).toBeTruthy()
+    expect(spec.paths['/api/schedule/offers/{id}/claim']?.post?.responses).toHaveProperty('503')
+    expect(spec.paths['/api/schedule/offers/{id}']?.delete).toBeTruthy()
+  })
+
   // DATECHECK.1 — every schedule read that now refuses an impossible date
   // says so in its 400.
   it('documents the schedule date refusals on the list reads', () => {

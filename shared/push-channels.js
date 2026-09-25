@@ -122,6 +122,10 @@ const TYPE_CHANNELS = Object.freeze({
   swap_withdrawn: 'updates',
   swap_declined: 'updates',
   swap_decision: 'updates',
+  // REPLACE.1b — "Coach B took the offered shift" is an FYI to the managers;
+  // the "up for grabs" broadcast (shift_offer) stays on the category's
+  // 'approvals', as the open-pool swap broadcast does.
+  shift_offer_taken: 'updates',
   // 'time_off' decision back to the requester is an FYI.
   time_off_decision: 'updates',
   // STAFF-DEV.8 — the "your app is out of date" nudge. It rides NO

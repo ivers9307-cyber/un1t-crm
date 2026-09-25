@@ -359,14 +359,29 @@ export async function sendPush(userIds, payload, opts = {}) {
  * @param {object} db          service-role supabase client
  * @param {string} locationId
  * @param {string[]} roles     e.g. ['owner', 'manager']
- * @returns {Promise<string[]>} profile ids
+ * @returns {Promise<string[]>} profile ids ([] on a failed read too: a caller
+ *   that must tell "nobody" from "could not read" uses readRoleRecipientIds)
  */
 export async function resolveRoleRecipientIds(db, locationId, roles) {
-  if (!locationId || !roles?.length) return []
-  const { data: links } = await db
+  return (await readRoleRecipientIds(db, locationId, roles)).ids
+}
+
+/**
+ * resolveRoleRecipientIds with the read error kept. REPLACE.1b review 1: the
+ * "taken" notice of a claimed shift offer stamped itself done on the empty
+ * list a failed read returned, so the managers' only signal was lost. A
+ * caller that stamps after sending must treat `error` as "try again", never
+ * as "nobody to tell".
+ *
+ * @returns {Promise<{ ids: string[], error: object|null }>}
+ */
+export async function readRoleRecipientIds(db, locationId, roles) {
+  if (!locationId || !roles?.length) return { ids: [], error: null }
+  const { data: links, error } = await db
     .from('profile_locations')
     .select('profile_id, role, profiles!inner(id, role, active)')
     .eq('location_id', locationId)
+  if (error) return { ids: [], error }
 
   // PUSH-ROLES.1 — judge the PER-LOCATION role (roles are per-location, mig
   // 051), not the global profiles.role: filtering on the global role both
@@ -375,9 +390,10 @@ export async function resolveRoleRecipientIds(db, locationId, roles) {
   // hold every decision right, so they are always included. Live miss:
   // Richard (global role master, owner at Stillorgan) never received the
   // new-time-off-request push, 2026-07-27.
-  return (links || [])
+  const ids = (links || [])
     .filter(l => l.profiles?.active && (roles.includes(l.role) || l.profiles.role === 'master'))
     .map(l => l.profile_id)
+  return { ids, error: null }
 }
 
 /**

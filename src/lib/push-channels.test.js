@@ -28,6 +28,7 @@ const STAFF_TYPES = [
   'issue_submitted', 'issue_resolved',
   'wa_quality', 'number_health', 'flow_health', 'template_status',
   'email_inbound',
+  'shift_offer', 'shift_offer_taken', // REPLACE.1b — ride category 'swap'
 ]
 
 const CUSTOMER_TYPES = [
@@ -77,6 +78,9 @@ describe('staff push channels (shared/push-channels)', () => {
     expect(androidChannelId({ category: 'swap', type: 'swap_claimed' })).toBe('updates')
     // but the inbound/awaiting decision types stay on approvals
     expect(androidChannelId({ category: 'swap', type: 'swap_awaiting' })).toBe('approvals')
+    // REPLACE.1b — the offer broadcast is a call to act; "taken" is an FYI
+    expect(androidChannelId({ category: 'swap', type: 'shift_offer' })).toBe('approvals')
+    expect(androidChannelId({ category: 'swap', type: 'shift_offer_taken' })).toBe('updates')
     // WA health rides category whatsapp but is an ops alert, not chat
     expect(androidChannelId({ category: 'whatsapp', type: 'number_health' })).toBe('alerts')
     expect(androidChannelId({ category: 'whatsapp', type: 'whatsapp_inbound' })).toBe('messages')

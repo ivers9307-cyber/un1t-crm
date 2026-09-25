@@ -27,7 +27,10 @@ import {
   cancelSwapRequest, cancelTimeOffRequest,
   getSwapsForMe, getOpenSwaps, getTeamShifts, respondToSwap,
   getLocationStaff, getBlockCandidates,
+  getOffersForMe, claimShiftOffer,
 } from '../../lib/schedule-api'
+// REPLACE.1b — "Shifts up for grabs": the card's lines and the claim alert.
+import { offerCardLines, offerClaimAlert } from '../../lib/offer-cards'
 import { myLeaveCancelOutcome } from '../../lib/my-leave'
 // CT-P3b — reuse the schedule Manage-mode colleague picker for targeted swaps.
 import CoachPickerSheet from '../schedule/CoachPickerSheet'
@@ -419,6 +422,7 @@ export default function PersonalDashboard({ refreshKey }) {
   // shared dashboard data (which can't embed profiles on mobile).
   const [offered, setOffered] = useState([])
   const [openPool, setOpenPool] = useState([])
+  const [upForGrabs, setUpForGrabs] = useState([]) // REPLACE.1b — offered shifts I could take
   const [onToday, setOnToday] = useState([])
   const [swapBusy, setSwapBusy] = useState(null) // `${id}:${verb}` while mutating
   // Targeted-swap colleague picker state (reuses CoachPickerSheet).
@@ -477,16 +481,18 @@ export default function PersonalDashboard({ refreshKey }) {
   // empty rather than blocking the roster.
   const loadSwaps = useCallback(async () => {
     const locationId = activeLocation?.id
-    if (!locationId) { setOffered([]); setOpenPool([]); return }
+    if (!locationId) { setOffered([]); setOpenPool([]); setUpForGrabs([]); return }
     try {
-      const [forMe, open] = await Promise.all([
+      const [forMe, open, offers] = await Promise.all([
         getSwapsForMe({ locationId }),
         getOpenSwaps({ locationId }),
+        getOffersForMe({ locationId }),
       ])
       setOffered(forMe.success ? (forMe.data || []) : [])
       setOpenPool(open.success ? (open.data || []) : [])
+      setUpForGrabs(offers.success ? (offers.data || []) : [])
     } catch {
-      setOffered([]); setOpenPool([])
+      setOffered([]); setOpenPool([]); setUpForGrabs([])
     }
   }, [activeLocation])
 
@@ -631,6 +637,23 @@ export default function PersonalDashboard({ refreshKey }) {
       } else {
         Alert.alert(`Couldn't ${verb}`, res.error || 'Unknown error')
       }
+    } finally {
+      setSwapBusy(null)
+    }
+  }
+
+  // REPLACE.1b — claim a shift a manager offered to the team. First to claim
+  // gets it; the server's words say who won (offer-cards.js offerClaimAlert).
+  // Same in-flight latch as the swap buttons, so one tap at a time.
+  async function claimOfferPress(offer) {
+    if (swapBusy) return
+    setSwapBusy(`${offer.id}:claim-offer`)
+    try {
+      const res = await claimShiftOffer(offer.id, { locationId: activeLocation?.id })
+      const out = offerClaimAlert(res)
+      await loadSwaps()
+      if (res.success) load()
+      Alert.alert(out.title, out.message)
     } finally {
       setSwapBusy(null)
     }
@@ -879,6 +902,39 @@ export default function PersonalDashboard({ refreshKey }) {
                       </Pressable>
                     </View>
                   )}
+                </View>
+              )
+            })}
+          </View>
+        </>
+      )}
+
+      {/* REPLACE.1b — Shifts a manager offered to the team that I could take.
+          When, what, where only; Claim is first come, first served. */}
+      {upForGrabs.length > 0 && (
+        <>
+          <SectionHeader title="Shifts up for grabs" count={upForGrabs.length} />
+          <View className="bg-un1t-surface border border-un1t-border rounded-2xl overflow-hidden mb-3">
+            {upForGrabs.map((o, i) => {
+              const { title, when } = offerCardLines(o)
+              return (
+                <View key={o.id} className={`flex-row items-center px-4 py-3 ${i < upForGrabs.length - 1 ? 'border-b border-un1t-border' : ''}`}>
+                  <View className="w-8 h-8 rounded-full bg-un1t-border/40 items-center justify-center mr-3">
+                    <Ionicons name="megaphone-outline" size={16} color="#111827" />
+                  </View>
+                  <View className="flex-1">
+                    <Text className="text-sm font-medium text-un1t-text" numberOfLines={1}>{title}</Text>
+                    {when ? <Text className="text-xs text-un1t-subtle" numberOfLines={1}>{when}</Text> : null}
+                  </View>
+                  <Pressable
+                    disabled={!!swapBusy}
+                    onPress={() => claimOfferPress(o)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Claim ${title}, ${when}`}
+                    className="px-2.5 py-1 rounded-lg bg-un1t-text active:opacity-70"
+                  >
+                    <Text className="text-xs font-semibold text-un1t-bg">{swapBusy === `${o.id}:claim-offer` ? '…' : 'Claim'}</Text>
+                  </Pressable>
                 </View>
               )
             })}
