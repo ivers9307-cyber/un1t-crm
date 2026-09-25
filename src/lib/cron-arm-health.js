@@ -14,17 +14,17 @@
 //                       the first arm of the daily 08:00 UTC contract-reminders cron.
 //   'shift-time-changes' — runShiftTimeChangeNotices (src/lib/block-edit-notify.js,
 //                       BLOCKEDIT.1), the time-change notice arm of send-push-reminders.
+//   'replace-notices' — runReplaceNotices (src/lib/shift-replace-notify.js,
+//                       REPLACE.1a), the held replace-notice arm of the */5
+//                       send-push-reminders cron.
+//   'qualification-digest' — runQualificationDigest (src/lib/qualification-digest.js,
+//                       QUALS.1), the third arm of the daily contract-reminders cron.
 //
-// The first two rows are seeded by mig 633, the third by mig 639
-// (stampHeartbeat is UPDATE-only).
-//
-// REPLACE.1a adds a fourth:
-//
-//   'replace-notices' — runReplaceNotices (src/lib/shift-replace-notify.js),
-//                       the held replace-notice arm of the */5
-//                       send-push-reminders cron. Seeded by mig 640, applied
-//                       RIGHT AFTER the deploy (a row seeded before the code
-//                       that stamps it goes stale after interval + grace).
+// Seeding (stampHeartbeat is UPDATE-only): 'shift-reminders' and
+// 'roster-runway' by mig 633, 'shift-time-changes' by mig 639,
+// 'replace-notices' by mig 640, 'qualification-digest' by mig 635. Each
+// row's upsert is (re-)run RIGHT AFTER the deploy that stamps it: a row
+// seeded before that code is live goes stale after interval + grace.
 //
 // THE RULE. Stamp only when the arm RETURNED an outcome object (a throw, or a
 // resolved non-object, has not shown it ran) and that outcome carries no
@@ -64,6 +64,22 @@ export function shiftReminderArmHealthy(summary) {
  * claims are released for the next daily run, so it does not block the stamp.
  */
 export function runwayArmHealthy(outcome) {
+  if (!isOutcome(outcome)) return false
+  return !Object.prototype.hasOwnProperty.call(outcome, 'error')
+}
+
+// QUALS.1 — the weekly qualification digest arm of contract-reminders. Seeded by mig 635.
+export const QUALIFICATION_DIGEST_HEARTBEAT = 'qualification-digest'
+
+/**
+ * True when a runQualificationDigest() outcome shows a clean run. The arm
+ * throws on every failure of its own (a read, the week's stamps included),
+ * which the cron records as { error }. NOT faults: `failed` (a delivery that
+ * failed outright, not stamped, retried the next day) and `stamp_failed` (the
+ * digest WAS delivered; a lost week stamp costs a duplicate the next day,
+ * logged). A week with nothing due, and a quiet-hours run, are clean.
+ */
+export function qualificationDigestArmHealthy(outcome) {
   if (!isOutcome(outcome)) return false
   return !Object.prototype.hasOwnProperty.call(outcome, 'error')
 }

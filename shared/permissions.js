@@ -725,6 +725,11 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   // src/lib/availability-change-registration.test.js for why not only the
   // manager roles).
   { key: 'notify_availability_change', label: '… Availability changes', hint: 'Notify when a coach at your studio changes when they are unavailable (roster builders)', mobileOnly: true, isNotify: true },
+  // QUALS.1 — the weekly qualification-expiry digest: what has expired or
+  // expires in 30 days, for the people at your studios. Recipients are owners
+  // (and masters) only, narrowed in src/lib/qualification-digest.js. Default
+  // ON for every role (see src/lib/qualification-expiry-registration.test.js).
+  { key: 'notify_qualification_expiry', label: '… Qualification expiry', hint: 'Weekly: qualifications at your studios that have expired or expire within 30 days (owners)', mobileOnly: true, isNotify: true },
   // Digital contracts (mig 106). Recipient gets a push when a
   // master/owner issues them a contract for signature. Default-on
   // for every role because the prompt-to-sign flow depends on it.
@@ -793,6 +798,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_shift_adjusted: true,
     notify_shift_reminder: true,
     notify_availability_change: true,
+    notify_qualification_expiry: true,
     notify_contract_issued: true,
     notify_tasks: true, notify_bookings: true,
     notify_checklist_overdue: true, notify_checklist_compliance: true,
@@ -833,6 +839,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_shift_adjusted: true,
     notify_shift_reminder: true,
     notify_availability_change: true,
+    notify_qualification_expiry: true,
     notify_contract_issued: true,
     notify_tasks: true, notify_bookings: false,
     // Staff get the 'you missed items' push but NOT the compliance
@@ -876,6 +883,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_shift_adjusted: true,
     notify_shift_reminder: true,
     notify_availability_change: true,
+    notify_qualification_expiry: true,
     notify_contract_issued: true,
     notify_tasks: true, notify_bookings: true,
     notify_checklist_overdue: true, notify_checklist_compliance: false,
@@ -913,6 +921,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_shift_adjusted: true,
     notify_shift_reminder: true,
     notify_availability_change: true,
+    notify_qualification_expiry: true,
     notify_contract_issued: true,
     notify_tasks: true, notify_bookings: true,
     // Head coach owns the floor — gets both the personal heads-up
@@ -954,6 +963,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_shift_adjusted: true,
     notify_shift_reminder: true,
     notify_availability_change: true,
+    notify_qualification_expiry: true,
     notify_contract_issued: true,
     notify_tasks: true, notify_bookings: true,
     // Managers oversee front-of-house + sometimes work a shift —
@@ -997,6 +1007,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_shift_adjusted: true,
     notify_shift_reminder: true,
     notify_availability_change: true,
+    notify_qualification_expiry: true,
     notify_contract_issued: true,
     notify_tasks: true, notify_bookings: true,
     // Owners get both — they get the compliance summary as

@@ -40,6 +40,7 @@ import {
 } from './working-time.js'
 import { unavailableFor, unavailableSummary, describeRule } from './availability.js'
 import { timeOffLeaveLabel } from './time-off.js'
+import { qualificationGapBadge } from './qualifications.js'
 
 export const CANDIDATE_TIERS = Object.freeze(['ready', 'advisory', 'unavailable', 'blocked'])
 const CANDIDATE_TONES = Object.freeze({ ready: 'good', advisory: 'warn', unavailable: 'muted', blocked: 'bad' })
@@ -196,6 +197,11 @@ export function candidateBadges(c) {
       title: `Assigning this shift brings their week to ${hm} across every studio, over the ${MAX_WEEK_HOURS}-hour limit.`,
     })
   }
+  // QUALS.1 — the template's required qualifications, judged on the shift's
+  // date and attached server-side for the manager audience only. Advisory: a
+  // badge, never a tier, a rank or a line in `reason`.
+  const quals = qualificationGapBadge(c.qualification_gaps)
+  if (quals) out.push(quals)
   return out
 }
 
@@ -255,10 +261,20 @@ const UNCHECKED_LABELS = [
   ['contract', 'contracted hours'],
 ]
 
-/** 'Could not check leave and availability, so the order may be off.' or null. */
-export function candidatesUncheckedNote(checked) {
+/**
+ * 'Could not check leave and availability, so the order may be off.' or null.
+ * QUALS.1 — `checked.qualifications === false` never changes the order (the
+ * qualification advisory is a badge, not a rank), so it gets its own
+ * sentence, 'Could not check qualifications.', and only when the caller shows
+ * that badge (`withQualifications`: the web picker). The phone shows no
+ * qualification badge, so by default nothing is said about them.
+ */
+export function candidatesUncheckedNote(checked, { withQualifications = false } = {}) {
   const missing = UNCHECKED_LABELS.filter(([key]) => checked?.[key] === false).map(([, label]) => label)
-  return missing.length ? `Could not check ${joinList(missing)}, so the order may be off.` : null
+  const parts = []
+  if (missing.length) parts.push(`Could not check ${joinList(missing)}, so the order may be off.`)
+  if (withQualifications && checked?.qualifications === false) parts.push('Could not check qualifications.')
+  return parts.length ? parts.join(' ') : null
 }
 
 /**
