@@ -114,8 +114,13 @@ These are marked **REVIEW** in the artifact until he confirms or changes them. E
 29. **Qualifications live per organisation, not per studio** (a coach at both studios holds one certificate). First aid, Insurance and Garda vetting are seeded; **expiry is optional** (Garda vetting has none). Requirements on a template are advisory only (a picker badge, never a block), at most 5 per template.
 30. **The qualification expiry digest goes weekly to owners and linked masters,** covering only their own studios' people, through a new `qualification_expiry` push toggle (push = the count, the fallback email = the list). The plan lists 13 more questions at its end.
 
+31. **ARRIVALSHOW.1 shows "No arrival recorded" in grey** on a coach's ended shift when their studio tracks arrivals (about 70% of ended shifts today, since only 19% of shifts get a stamp), no minutes late/early, Me view only, own shifts only. Help line under the list: "They don't change your hours".
+
 ## Follow-ups found along the way (not in any PR yet)
 
+- 🔴 Nothing writes a MANUAL arrival (`arrival_source='manual'`), so neither a coach nor a manager can correct a wrong or missing stamp. Blocks the late/no-show alert half (found planning 34).
+- Arrival coverage is low for a geofence reason, not permissions: stamps on 19% of shifts; 48% of coach-days have no ping at all; on 11 of 23 ping-but-no-stamp days the ping came >45 min before the shift and the region never re-fires while the coach stays inside (found planning 34).
+- The attendance report (`src/app/api/attendance/route.js`) measures lateness against the rostered start ignoring a manager's adjusted start (:115-147), defaults its window on UTC today (:36-39), checks dates by shape only (:44, 30 Feb → 500), doesn't page its select, and discards the attendance-events read error (:90-94) (found planning 34).
 - 🔴 `payroll.timeToHours` (`src/lib/payroll.js:25-34`) refuses hour 24, so payroll counts a shift ending `'24:00'` as **0 hours** (found planning 32).
 - After CANDIDATES.1: `coachConflictsForBlock` in `src/lib/schedule-overlap.js` (and its tests) is unused; delete with the old working-time route.
 - CANDIDATES.1 reads leave and shifts with one unchunked `.in()` of member ids and AVAIL.1a's `readStudioAvailability` reads members unpaged; fine at 13 members, revisit before a large studio.
@@ -137,6 +142,7 @@ These are marked **REVIEW** in the artifact until he confirms or changes them. E
 
 Updated by the loop. Newest first.
 
+- 25 Sep ~15:45Z: #1765 AVAIL.2 MERGED; EAS run watched. 21 GRID.1 built (12 commits, web only) → independent review. 34 ARRIVALSHOW.1 plan written (web + OTA, no mig; the check-in no longer writes the paid window since ARRIVAL.1/2, so display only; own rows only; server sends instants + studio-local strings, the phone does no tz maths). Worktrees avail1b + blockedit1 removed.
 - 25 Sep ~15:35Z: 19 CANDIDATES.1 review: approved w/ should-fixes (coach-for-cover saw DRAFT shifts as 'Working then'; 'Free' said unqualified when the other studio couldn't be read; a throwing side read failed the request) → fixes in progress, plus contracted hours narrowed to owner/manager/master (default 25 rewritten).
 - 25 Sep ~15:25Z: 33 QUALS.1 plan written (mig 635: org-level catalogue, one record per person per type, template requirements ≤5 with a same-org trigger; Schedule › Qualifications page; advisory picker badge via CANDIDATES.1; weekly digest arm on `contract-reminders` with its own `qualification-digest` row). **Correction: QUALS.1 publishes an OTA** (shared + a push toggle). At apply time re-run the heartbeat upsert right after the deploy (the arm rule), though its 36h budget makes the pre-deploy seed harmless.
 - 25 Sep 14:15Z: ✅ #1764 BLOCKEDIT.1 EAS Update SUCCESS + prod deploy; **mig 639 APPLIED after the deploy**, `shift-time-changes` stamped by the 14:15Z tick with a clean outcome. BLOCKEDIT.1 DONE. #1765 AVAIL.2 brought up to date (3,307 mobile/shared tests), auto-merge on (next OTA). Review page v12.
