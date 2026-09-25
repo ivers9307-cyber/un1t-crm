@@ -18,6 +18,14 @@
 // The first two rows are seeded by mig 633, the third by mig 639
 // (stampHeartbeat is UPDATE-only).
 //
+// REPLACE.1a adds a fourth:
+//
+//   'replace-notices' — runReplaceNotices (src/lib/shift-replace-notify.js),
+//                       the held replace-notice arm of the */5
+//                       send-push-reminders cron. Seeded by mig 640, applied
+//                       RIGHT AFTER the deploy (a row seeded before the code
+//                       that stamps it goes stale after interval + grace).
+//
 // THE RULE. Stamp only when the arm RETURNED an outcome object (a throw, or a
 // resolved non-object, has not shown it ran) and that outcome carries no
 // fault in the arm's own machinery. A run with nothing to send is healthy (a
@@ -31,6 +39,7 @@ export const ROSTER_RUNWAY_HEARTBEAT = 'roster-runway'
 // BLOCKEDIT.1 — the time-change notice arm (src/lib/block-edit-notify.js
 // runShiftTimeChangeNotices) of the */5 send-push-reminders cron. Seeded by mig 639.
 export const SHIFT_TIME_CHANGES_HEARTBEAT = 'shift-time-changes'
+export const REPLACE_NOTICES_HEARTBEAT = 'replace-notices'
 
 // runShiftReminders' counters that mean the ARM went wrong, not a device:
 //   shift_claim_failed — a ledger claim insert failed; that reminder was NOT sent.
@@ -75,3 +84,17 @@ export function timeChangeArmHealthy(summary) {
   return TIME_CHANGE_ARM_FAULT_KEYS.every((key) => count(summary[key]) === 0)
 }
 
+/**
+ * REPLACE.1a — true when a runReplaceNotices() outcome shows a clean run.
+ * Faults in the arm's own machinery, each retried next tick:
+ *   errors       — the held-row read, or the silent (no-message) stamp, failed.
+ *   stamp_failed — a notice was DELIVERED but its rows could not be stamped:
+ *                  the coach is told again next tick, until the stamp lands.
+ * A quiet-hours tick and a tick with nothing held are healthy. NOT a fault:
+ * send_failed (nothing delivered, nothing stamped, next tick retries) and
+ * undelivered (opted out / unreachable, left for the re-publish safety net).
+ */
+export function replaceNoticeArmHealthy(outcome) {
+  if (!isOutcome(outcome)) return false
+  return count(outcome.errors) === 0 && count(outcome.stamp_failed) === 0
+}
