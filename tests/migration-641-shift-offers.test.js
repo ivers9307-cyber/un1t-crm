@@ -13,6 +13,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { PGlite } from '@electric-sql/pglite'
+import { offerTargetCount } from '@shared/offer-to-team'
 
 const mig = (f) => readFileSync(path.resolve(import.meta.dirname, '../supabase/migrations', f), 'utf8')
 const MIG_604 = mig('604_shift_assignment_overlap_guard.sql')
@@ -238,6 +239,16 @@ describe('mig 641 — claim_shift_offer', () => {
     expect((await claim(id, C1)).outcome).toBe('claimed')
     const again = await offer(BLK)
     expect((await claim(again, C2)).outcome).toBe('filled')
+  })
+
+  it('the SQL target agrees with shared/offer-to-team.js offerTargetCount (the button and the lock use one rule)', async () => {
+    const sqlTarget = `CASE WHEN COALESCE(t.kind, 'class') = 'admin' THEN 1 ELSE GREATEST(COALESCE(b.min_coaches, 1), 1) END`
+    expect(MIG_641).toContain(`v_target := CASE WHEN v_block.kind = 'admin' THEN 1 ELSE GREATEST(COALESCE(v_block.min_coaches, 1), 1) END`)
+    for (const [kind, min] of [['class', 0], ['class', 1], ['class', 3], ['admin', 0], ['admin', 2]]) {
+      await runSql(`UPDATE public.shift_templates SET kind = '${kind}' WHERE id = '${TPL_CLASS}'; UPDATE public.shift_blocks SET min_coaches = ${min} WHERE id = '${BLK}'`)
+      const { target } = (await db.query(`SELECT ${sqlTarget} AS target FROM public.shift_blocks b LEFT JOIN public.shift_templates t ON t.id = b.template_id WHERE b.id = $1`, [BLK])).rows[0]
+      expect(target).toBe(offerTargetCount({ min_coaches: min, shift_templates: { kind } }))
+    }
   })
 
   it('a cancelled tombstone of the claimant is cleared, not a unique-key error', async () => {
