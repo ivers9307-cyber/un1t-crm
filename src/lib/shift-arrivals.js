@@ -55,6 +55,11 @@ function nextDateKey(dateKey) {
   return `${t.getUTCFullYear()}-${pad(t.getUTCMonth() + 1)}-${pad(t.getUTCDate())}`
 }
 
+// Review 3 — no studio shift runs longer than this. A longer effective window
+// is a data error (e.g. an end override that wraps a whole day), and an
+// absence judged on it would be wrong for most of a day, so none is sent.
+const MAX_WINDOW_MS = 16 * 60 * 60 * 1000
+
 // The EFFECTIVE window as instants (override → block → template, the card's
 // times). An end at or before the start ends the next day (payroll's rule).
 function effectiveWindow(row, tz) {
@@ -63,6 +68,7 @@ function effectiveWindow(row, tz) {
   const start = resolveScheduledAt(row.shift_date, startT, tz)
   let end = resolveScheduledAt(row.shift_date, endT, tz)
   if (start && end && end.getTime() <= start.getTime()) end = resolveScheduledAt(nextDateKey(row.shift_date), endT, tz)
+  if (start && end && end.getTime() - start.getTime() > MAX_WINDOW_MS) return { starts_at: null, ends_at: null }
   return {
     starts_at: start && Number.isFinite(start.getTime()) ? start.toISOString() : null,
     ends_at: end && Number.isFinite(end.getTime()) ? end.toISOString() : null,

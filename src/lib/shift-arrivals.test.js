@@ -168,6 +168,21 @@ describe('annotateOwnArrivals — the window the absence line is judged on (D5)'
     expect(arrivalOf([r], facts([]), 'a1')).toMatchObject({ starts_at: '2026-10-01T21:00:00.000Z', ends_at: '2026-10-02T00:00:00.000Z' })
   })
 
+  it('a window longer than 16 hours is not a window (no absence can be judged on it)', () => {
+    const r = row('a1', { start_time_override: '06:00:00', end_time_override: '05:00:00' }) // wraps: 23h
+    expect(arrivalOf([r], facts([]), 'a1')).toMatchObject({ starts_at: null, ends_at: null })
+  })
+
+  it('exactly 16 hours is still a window', () => {
+    const r = row('a1', { start_time_override: '06:00:00', end_time_override: '22:00:00' })
+    expect(arrivalOf([r], facts([]), 'a1')).toMatchObject({ starts_at: '2026-10-01T05:00:00.000Z', ends_at: '2026-10-01T21:00:00.000Z' })
+  })
+
+  it('an over-long window never hides a stamp', () => {
+    const r = row('a1', { start_time_override: '06:00:00', end_time_override: '05:00:00' })
+    expect(arrivalOf([r], facts([stamp('a1', '2026-10-01T04:52:00.000Z')]), 'a1').at_local).toBe('05:52')
+  })
+
   it('winter time (GMT)', () => {
     const r = row('a1', { shift_date: '2026-01-10', block_start_time: '09:00:00', block_end_time: '10:00:00' })
     expect(arrivalOf([r], facts([]), 'a1').starts_at).toBe('2026-01-10T09:00:00.000Z')
