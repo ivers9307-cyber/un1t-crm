@@ -31,7 +31,8 @@
 --              elapsed days); today..end_date moves. The days already gone
 --              stay history, and no day is ever in both places.
 --   RULE       kind 'dated', all day, greatest(start_date, today)..end_date,
---              note = the trimmed reason (blank -> NULL). One rule per
+--              note = the reason trimmed as JS .trim() trims it (every
+--              Unicode space and line break, not only ' '; blank -> NULL). One rule per
 --              distinct (person, start, end); an identical all-day rule the
 --              person already has is reused. The earliest request's note wins
 --              a collapse; every other note stays in the ledger's copy.
@@ -318,7 +319,13 @@ BEGIN
            'all_day', true,
            'start_time', NULL,
            'end_time', NULL,
-           'note', NULLIF(btrim(COALESCE(r.reason, '')), ''))
+           -- Trimmed exactly as JS String.prototype.trim() trims (the
+           -- editor and the route normalise notes with .trim()), so the
+           -- coach's first save of an untouched editor is a no-op. btrim()
+           -- strips spaces only; a tab, newline or no-break space would
+           -- survive it and read as a changed note.
+           'note', NULLIF(regexp_replace(COALESCE(r.reason, ''),
+                                         '^[\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+|[\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+$', '', 'g'), ''))
     FROM public.time_off_requests r
     JOIN public.profiles p ON p.id = r.profile_id
    WHERE r.type = 'unavailable'

@@ -264,6 +264,32 @@ describe('migration 631 — the move', () => {
     expect(rows[0].r).toMatchObject({ changed: false, change_id: null })
   }))
 
+  // Review N1 — the note is trimmed exactly as JS .trim() trims it (the
+  // editor and the route normalise with .trim()), so the coach's first save
+  // of an untouched editor is still a no-op.
+  it('the note is trimmed like JS .trim() (tabs, newlines, no-break spaces), so a first save is a no-op', () => inTx(async () => {
+    const reason = '\t\u00a0Hospital visit\n\u2003\ufeff'
+    await runSql(`UPDATE public.time_off_requests SET reason = E'${reason.replace(/\n/g, '\\n').replace(/\t/g, '\\t')}' WHERE id = '${R.FUTURE}'`)
+    expect((await rowJson(R.FUTURE)).reason).toBe(reason)
+    await move()
+    const notes = (await rulesOf(CON_A)).map((x) => x.note)
+    expect(notes).toEqual(['Away', reason.trim()])
+    const dated = [
+      { start_date: '2026-09-25', end_date: '2026-09-30', all_day: true, note: 'Away' },
+      { start_date: '2026-10-03', end_date: '2026-10-05', all_day: true, note: reason.trim() },
+    ]
+    const { rows } = await asRole('service_role',
+      'SELECT public.replace_staff_unavailability($1, $1, $2::date, $3::jsonb, $4::jsonb) AS r',
+      [CON_A, TODAY, '[]', JSON.stringify(dated)])
+    expect(rows[0].r).toMatchObject({ changed: false, change_id: null })
+  }))
+
+  it('a reason that is only whitespace (any kind) carries as no note', () => inTx(async () => {
+    await runSql(`UPDATE public.time_off_requests SET reason = E'\\n\\t ' || chr(160) WHERE id = '${R.FUTURE}'`)
+    await move()
+    expect((await rulesOf(CON_A)).map((x) => x.note)).toEqual(['Away', null])
+  }))
+
   it('every carried day is covered, every elapsed day kept, and no day is in both', () => inTx(async () => {
     await move()
     const lost = await q(`
