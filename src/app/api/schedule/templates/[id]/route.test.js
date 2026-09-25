@@ -158,8 +158,8 @@ const PAST = '2020-01-01'
 
 function templates() {
   return [
-    { id: 'tmpl-a', location_id: 'loc-a', name: 'A morning', start_time: '09:00', end_time: '10:00', days_of_week: ['mon', 'tue'], max_coaches: 10, active: true },
-    { id: 'tmpl-b', location_id: 'loc-b', name: 'B morning', start_time: '09:00', end_time: '10:00', days_of_week: ['mon', 'tue'], max_coaches: 10, active: true },
+    { id: 'tmpl-a', location_id: 'loc-a', name: 'A morning', start_time: '09:00', end_time: '10:00', days_of_week: ['mon', 'tue'], max_coaches: 10, min_coaches: 1, active: true },
+    { id: 'tmpl-b', location_id: 'loc-b', name: 'B morning', start_time: '09:00', end_time: '10:00', days_of_week: ['mon', 'tue'], max_coaches: 10, min_coaches: 1, active: true },
   ]
 }
 
@@ -950,3 +950,48 @@ describe('PUT /api/schedule/templates/[id] — one-off block edits survive (BLOC
     expect(logs.map((l) => l.payload.coach_id)).toEqual(['coach-1'])
   })
 })
+
+// BLOCKEDIT.1 second review 2 — the same rule for staffing, PER FIELD: a
+// template minimum/maximum edit reaches only future blocks still at the
+// template's OLD value. (A block whose own value was edited to coincide with
+// the template's old value is indistinguishable from an unedited one, and is
+// treated as unedited.)
+describe('PUT /api/schedule/templates/[id] — one-off staffing edits survive (BLOCKEDIT.1 second review 2)', () => {
+  const blk = (id, over) => ({ id, location_id: 'loc-a', template_id: 'tmpl-a', block_date: FUTURE, start_time: '09:00', end_time: '10:00', min_coaches: 1, max_coaches: 10, shift_assignments: [], ...over })
+  const touched = (db) => db._writes.filter((w) => w.table === 'shift_blocks' && w.op === 'update')
+    .flatMap((w) => w.filters.find((f) => f.type === 'in')?.val || [])
+
+  it('a minimum edit leaves a block whose minimum was edited on its own', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    const db = useDb({ shift_templates: templates(), rosters: [], shift_blocks: [blk('blk-follows'), blk('blk-edited', { min_coaches: 3 })] })
+    const body = await (await PUT(req({ min_coaches: 2 }), { params: { id: 'tmpl-a' } })).json()
+    expect(touched(db)).toEqual(['blk-follows'])
+    expect(body.propagation.futureBlocksKeptEdited).toBe(1)
+  })
+
+  it('a maximum edit leaves a block whose maximum was edited on its own', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    const db = useDb({ shift_templates: templates(), rosters: [], shift_blocks: [blk('blk-follows'), blk('blk-edited', { max_coaches: 4 })] })
+    const body = await (await PUT(req({ max_coaches: 8 }), { params: { id: 'tmpl-a' } })).json()
+    expect(touched(db)).toEqual(['blk-follows'])
+    expect(body.propagation.futureBlocksKeptEdited).toBe(1)
+  })
+
+  it('switching to admin still zeroes EVERY future minimum (an admin shift has none)', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    const db = useDb({
+      shift_templates: templates().map((t) => ({ ...t, kind: 'class', min_coaches: 2 })),
+      rosters: [], shift_blocks: [blk('blk-follows', { min_coaches: 2 }), blk('blk-edited', { min_coaches: 3 })],
+    })
+    await PUT(req({ kind: 'admin' }), { params: { id: 'tmpl-a' } })
+    expect(touched(db).sort()).toEqual(['blk-edited', 'blk-follows'])
+  })
+
+  it('re-saving the SAME times reports nothing kept (nothing was going to change)', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    const db = useDb({ shift_templates: templates(), rosters: [], shift_blocks: [blk('blk-edited', { start_time: '09:30' })] })
+    const body = await (await PUT(req({ start_time: '09:00', end_time: '10:00' }), { params: { id: 'tmpl-a' } })).json()
+    expect(body.propagation.futureBlocksKeptEdited).toBe(0)
+  })
+})
+

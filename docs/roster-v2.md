@@ -209,6 +209,7 @@ template or slot (400 `admin_has_no_minimum`) and normalises an omitted one.
 ## Editing one shift and the briefing (BLOCKEDIT.1, mig 629, 2026-09)
 
 - `PUT /api/schedule/blocks/[id]` edits one shift's start/end, min/max coaches and **briefing**. Rules: `src/lib/block-edit.js` (`planBlockEdit`). Manager at the shift's studio; 404 outside the caller's studios.
+- **Template edits leave one-off edits alone:** a template's start/end, minimum or maximum reaches only future blocks still at the template's OLD value, per field (`PUT /api/schedule/templates/[id]`, `propagation.futureBlocksKeptEdited`, shown in the template manager). A switch to admin still zeroes every minimum. A block edited to a value that happens to equal the template's old one cannot be told apart from an unedited block and is treated as unedited.
 - **Overrides:** a coach's override equal to the shift's OLD time moves with it (cleared); any other override is a deliberate partial shift and stays (the response names who kept their hours).
 - **Change log (published only):** one coachless `block_edited` row per edit (born stamped: nobody is messaged about it; `details` never holds the briefing text), and one `time_changed` row, `details.source = 'block_edit'`, per coach whose own hours moved.
 - **Notice:** the route sends nothing. `runShiftTimeChangeNotices` (`src/lib/block-edit-notify.js`) on the */5 `send-push-reminders` cron tells each coach once, inside staff quiet hours, stamped on delivery. Not needed (off the shift, put back, started) = stamped with `details.notice = 'not_needed'`.
