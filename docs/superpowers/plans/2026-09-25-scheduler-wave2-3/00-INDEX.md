@@ -109,6 +109,8 @@ These are marked **REVIEW** in the artifact until he confirms or changes them. E
 
 Updated by the loop. Newest first.
 
+- 25 Sep ~12:25 IST: **#1756 TPLCLONE.1 MERGED** (11:18Z). 11 DATECHECK.1 = [PR #1757](https://github.com/ivers9307-cyber/un1t-crm/pull/1757) (gate 27,730 + build; 2 review rounds; main merged in, one openapi.test.js conflict kept both), auto-merge on. 15 WORKTIME.1 review approved w/ should-fixes (picker loading state, 2027 spring-forward test, `24:00` end time) → fixes in progress. 31 HEARTBEAT.1 implementer started (`~/code/un1t-crm-heartbeat1`). Review artifact v7 (status table, 15 review items, follow-ups section).
+- 25 Sep: 11 DATECHECK.1 fixes landed (reports now refuse a reversed period or one over 366 days, checked in the route and again in `generateReport`; guard tightened; GET /blocks and GET /overview newly in the API docs). Short second review running. 13 SHIFTTYPE.1 implementer started in `~/code/un1t-crm-shifttype1`.
 - 25 Sep: 31 HEARTBEAT.1 plan written (arms ride `send-push-reminders` every 5 min and `contract-reminders` daily; mig 633 rows `shift-reminders` and `roster-runway`; build will use `ON CONFLICT DO UPDATE` like migs 601/623 so a slow deploy cannot page). Queue for the next two slots: 13 SHIFTTYPE.1, then 31 HEARTBEAT.1.
 - 25 Sep: 12 TPLCLONE.1 = [PR #1756](https://github.com/ivers9307-cyber/un1t-crm/pull/1756): review approved (no defects), 4 dialog nits fixed, gate green (27,751 tests + build), auto-merge on.
 - 25 Sep: 13 SHIFTTYPE.1 plan written (14 tasks; `kind` on templates only; mig 628 with a DB CHECK that admin min = 0; admin priced at €0 in the one contractor-cost function; phone Manage chip gets an admin state). Waiting for an implementer slot.
