@@ -995,3 +995,32 @@ describe('PUT /api/schedule/templates/[id] — one-off staffing edits survive (B
   })
 })
 
+// BLOCKEDIT.1 third check 2 — the min/max writes are guarded on the values the
+// block was READ with, so a manager editing that block between the read and
+// the write is not overwritten.
+describe('PUT /api/schedule/templates/[id] — staffing writes guarded on the values read (third check 2)', () => {
+  it('a block whose minimum changed after the read is not written', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    const db = useDb({
+      shift_templates: templates(), rosters: [],
+      shift_blocks: [{ id: 'blk-follows', location_id: 'loc-a', template_id: 'tmpl-a', block_date: FUTURE, start_time: '09:00', end_time: '10:00', min_coaches: 1, max_coaches: 10, shift_assignments: [] }],
+    })
+    const realFrom = db.from
+    db.from = (t) => {
+      const chain = realFrom(t)
+      if (t === 'shift_blocks') {
+        const update = chain.update
+        // Another manager saves this block's minimum between our read and our write.
+        chain.update = (patch) => { db._fixtures.shift_blocks[0].min_coaches = 3; return update(patch) }
+      }
+      return chain
+    }
+    const body = await (await PUT(req({ min_coaches: 2 }), { params: { id: 'tmpl-a' } })).json()
+    const write = db._writes.find((w) => w.table === 'shift_blocks' && w.op === 'update')
+    expect(write.filters).toEqual(expect.arrayContaining([
+      { type: 'eq', col: 'min_coaches', val: 1 }, { type: 'eq', col: 'max_coaches', val: 10 },
+    ]))
+    expect(write.affected).toBe(0)
+    expect(body.propagation.futureBlocksUpdated).toBe(0)
+  })
+})

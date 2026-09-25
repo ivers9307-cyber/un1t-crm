@@ -287,6 +287,11 @@ export async function PUT(request, props) {
         .update(g.patch)
         .in('id', g.ids)
         .eq('location_id', locationId)
+        // BLOCKEDIT.1 third check — only if still at the values READ (for a
+        // following block, the template's OLD value): a manager who edited
+        // the block in the meantime keeps their edit.
+        .eq('min_coaches', g.expect.min_coaches)
+        .eq('max_coaches', g.expect.max_coaches)
         .select('id')
       // One failing group must not abandon the rest: the whole point is that
       // the blocks are no longer all-or-nothing.
