@@ -36,6 +36,21 @@ describe('getOpenApiSpec', () => {
     expect(path.put.description).toMatch(/only its end date moved/)
   })
 
+  it('documents staff qualifications (QUALS.1): records, the catalogue and template requirements', () => {
+    expect(spec.paths['/api/qualifications']).toHaveProperty('get')
+    expect(spec.paths['/api/qualifications']).toHaveProperty('post')
+    expect(spec.paths['/api/qualifications/{id}']).toHaveProperty('patch')
+    expect(spec.paths['/api/qualifications/{id}']).toHaveProperty('delete')
+    expect(spec.paths['/api/qualifications/types']).toHaveProperty('post')
+    expect(spec.paths['/api/qualifications/types/{id}']).toHaveProperty('patch')
+    expect(spec.paths['/api/schedule/template-qualifications']).toHaveProperty('get')
+    expect(spec.paths['/api/schedule/template-qualifications']).toHaveProperty('put')
+    expect(spec.paths['/api/qualifications'].post.requestBody).toBeDefined()
+    // The contract says what the brief decided: advisory, and who may write.
+    expect(spec.paths['/api/schedule/template-qualifications'].put.description).toMatch(/advisory/i)
+    expect(spec.paths['/api/qualifications'].post.description).toMatch(/owner or manager/i)
+  })
+
   it('declares the pre-existing browser/integration auth schemes', () => {
     expect(spec.components.securitySchemes).toHaveProperty('BearerAuth')
     expect(spec.components.securitySchemes).toHaveProperty('CookieAuth')
