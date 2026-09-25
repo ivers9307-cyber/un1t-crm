@@ -584,3 +584,56 @@ describe('blocksToShiftRows', () => {
     expect(shiftHours(blocksToShiftRows([adhoc])[0])).toBe(1)
   })
 })
+
+// SHIFTTYPE.1 — admin shifts: out of the contractor spend, still in hours.
+describe('SHIFTTYPE.1 — admin shifts in the week and month summaries', () => {
+  const asAdmin = (b) => ({ ...b, shift_templates: { ...b.shift_templates, kind: 'admin' } })
+  const weekStart = new Date('2026-05-04T00:00:00')
+  const today = new Date('2026-05-01T12:00:00')
+  const refMay = new Date('2026-05-15T12:00:00')
+
+  it('summarizeMonth: a contractor on an admin shift costs the budget nothing', () => {
+    const blocks = [
+      block({ id: 'class', date: '2026-05-04', start: '09:00', end: '11:00', coaches: ['dan'] }),          // 2h x 35 = 70
+      asAdmin(block({ id: 'admin', date: '2026-05-05', start: '09:00', end: '13:00', coaches: ['dan'] })), // not priced
+    ]
+    const r = summarizeMonth({ blocks, staff: [contractorDan], referenceDate: refMay, monthlyBudgetEur: 100 })
+    expect(r.contractorCostEur).toBe(70)
+    expect(r.remainingEur).toBe(30)
+    expect(r.overBudget).toBe(false)
+  })
+
+  it('summarizeMonth: an FTE on an admin shift still carries implicit cost (hours are hours)', () => {
+    const blocks = [asAdmin(block({ id: 'admin', date: '2026-05-04', start: '09:00', end: '13:00', coaches: ['sarah'] }))]
+    const r = summarizeMonth({ blocks, staff: [fteSarah], referenceDate: refMay, monthlyBudgetEur: 1000 })
+    expect(r.fteImplicitCostEur).toBe(100) // 4h x EUR 25
+  })
+
+  it("summarizeWeek: admin hours count toward an FTE's allocated hours, and not toward contractor spend", () => {
+    const blocks = [
+      asAdmin(block({ id: 'a1', date: '2026-05-04', start: '09:00', end: '12:00', coaches: ['sarah', 'dan'] })),
+      block({ id: 'c1', date: '2026-05-05', start: '09:00', end: '10:00', coaches: ['sarah', 'dan'] }),
+    ]
+    const r = summarizeWeek({ blocks, staff: [fteSarah, contractorDan], weekStart, today })
+    expect(r.fte[0]).toMatchObject({ profile_id: 'sarah', allocated_hours: 4 })
+    expect(r.contractorWeekCostEur).toBe(35) // the 1h class shift only
+  })
+
+  it('summarizeWeek: an empty future admin shift is not "unstaffed", but is still a block', () => {
+    const blocks = [
+      asAdmin(block({ id: 'a-empty', date: '2026-05-06', start: '09:00', end: '10:00' })),
+      block({ id: 'c-empty', date: '2026-05-06', start: '11:00', end: '12:00' }),
+    ]
+    const r = summarizeWeek({ blocks, staff: [], weekStart, today })
+    expect(r.unstaffedCount).toBe(1)
+    expect(r.blockCount).toBe(2)
+  })
+
+  it("blocksToShiftRows carries each row's kind", () => {
+    const rows = blocksToShiftRows([
+      asAdmin(block({ id: 'a', date: '2026-05-04', start: '09:00', end: '10:00', coaches: ['sarah'] })),
+      block({ id: 'c', date: '2026-05-04', start: '11:00', end: '12:00', coaches: ['sarah'] }),
+    ])
+    expect(rows.map((r) => [r.block_id, r.kind])).toEqual([['a', 'admin'], ['c', 'class']])
+  })
+})

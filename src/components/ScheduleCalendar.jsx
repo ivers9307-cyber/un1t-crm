@@ -62,6 +62,8 @@ import Modal from '@/components/ui/Modal'
 import { COPY_MODE_OPTIONS, copyResultToast } from '@/lib/roster-copy'
 // COPYLEAVE.1 — the publish modal's clash wording (pure, unit-tested there).
 import { leaveClashesHeadline, leaveRangeLabel } from '@/lib/roster-publish-advisories'
+// WORKTIME.1 — working-time copy and limits (pure, unit-tested in shared/).
+import { hoursMinutesLabel, longWeeksHeadline, restGapsHeadline, untimedShiftsLabel, MIN_REST_HOURS, MAX_WEEK_HOURS, REST_BETWEEN_LABEL } from '@shared/working-time'
 import RosterSummaryPanel from './RosterSummaryPanel'
 import ScheduleErrorBanner from './schedule/ScheduleErrorBanner'
 import SchedulePartialLoadNote, {
@@ -1715,6 +1717,49 @@ function AssignCoachModal({
   const currentCount = liveAssignments(block.shift_assignments).length
   const slotsLeft = Math.max(0, (block.max_coaches || 0) - currentCount)
 
+  // WORKTIME.1 — would assigning this coach leave an EMPLOYEE under 11 hours
+  // between working days, or over 48 hours in the week, counting every studio
+  // of the organisation? Asked once per open. Advisory, like the clash badge.
+  // A failed ask says so; an answer this screen does not recognise (an older
+  // server) says nothing. No list (the coach list failed) = nothing to ask.
+  // `pending` until the answer lands: an unbadged row must not read as "all
+  // clear" while the check is still in flight.
+  const [workingTime, setWorkingTime] = useState({ byProfile: {}, failed: false, pending: true, untimed: 0 })
+  useEffect(() => {
+    if (unavailableReason) return undefined
+    let cancelled = false
+    async function loadWorkingTime() {
+      let res = null
+      let json = null
+      try {
+        res = await fetch(`/api/schedule/working-time?block_id=${encodeURIComponent(block.id)}`)
+        json = await res.json()
+      } catch {
+        json = null
+      }
+      if (cancelled) return
+      if (!res?.ok || !json || json.success === false) {
+        setWorkingTime({ byProfile: {}, failed: true, pending: false, untimed: 0 })
+        return
+      }
+      const by = json.data?.byProfile
+      setWorkingTime({
+        byProfile: by && typeof by === 'object' && !Array.isArray(by) ? by : {},
+        failed: json.data?.checked === false,
+        pending: false,
+        untimed: Number(json.data?.untimed) > 0 ? Number(json.data.untimed) : 0,
+      })
+    }
+    loadWorkingTime()
+    return () => { cancelled = true }
+  }, [block.id, unavailableReason])
+  const wtDay = (iso) => new Date(`${iso}T00:00:00`).toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short' })
+  function restGapTitle(g) {
+    const o = g.other || {}
+    const where = o.location_name ? ` at ${o.location_name}` : ''
+    return `Only ${hoursMinutesLabel(g.rest_minutes)} between this shift and ${o.name || 'another shift'} ${formatTime(o.start)}–${formatTime(o.end)}${where} on ${wtDay(o.date)}. Employees need ${MIN_REST_HOURS} hours ${REST_BETWEEN_LABEL}.`
+  }
+
   function toggle(id) {
     setSelectedIds((prev) => {
       const next = new Set(prev)
@@ -1774,6 +1819,15 @@ function AssignCoachModal({
           {!unavailableReason && leaveMissing && (
             <p className="mb-2 text-[11px] px-2 py-1.5 rounded bg-amber-500/10 text-amber-700">{LEAVE_NOT_FLAGGED_MESSAGE}</p>
           )}
+          {!unavailableReason && workingTime.pending && (
+            <p className="mb-2 text-[11px] text-un1t-subtle" role="status">Checking rest and weekly hours…</p>
+          )}
+          {!unavailableReason && workingTime.failed && (
+            <p className="mb-2 text-[11px] text-un1t-subtle">Rest and weekly-hours check could not be completed.</p>
+          )}
+          {!unavailableReason && workingTime.untimed > 0 && (
+            <p className="mb-2 text-[11px] text-un1t-subtle">{untimedShiftsLabel(workingTime.untimed)}</p>
+          )}
           {unavailableReason ? (
             <p className="text-[11px] px-2 py-1.5 rounded bg-amber-500/10 text-amber-700">{unavailableReason}</p>
           ) : available.length === 0 ? (
@@ -1790,6 +1844,7 @@ function AssignCoachModal({
                 const { clash, onLeave } = coachConflictsForBlock({
                   coachId: s.id, block, blocks, timeOff,
                 })
+                const wt = workingTime.byProfile[s.id]
                 return (
                   <li key={s.id}>
                     <label className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-un1t-border/30">
@@ -1820,6 +1875,24 @@ function AssignCoachModal({
                             title={`Already on ${clash.name}, ${clash.startTime}–${clash.endTime}`}
                           >
                             clashes with {clash.startTime} {clash.name}
+                          </span>
+                        )}
+                        {/* WORKTIME.1 — employees only (the route never lists
+                            a contractor); advisory, the row stays tickable. */}
+                        {wt?.restGap && (
+                          <span
+                            className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 whitespace-nowrap"
+                            title={restGapTitle(wt.restGap)}
+                          >
+                            {hoursMinutesLabel(wt.restGap.rest_minutes)} rest
+                          </span>
+                        )}
+                        {wt?.weekHours && (
+                          <span
+                            className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 whitespace-nowrap"
+                            title={`Assigning this shift brings their week to ${hoursMinutesLabel(wt.weekHours.minutes)} across every studio, over the ${MAX_WEEK_HOURS}-hour limit.`}
+                          >
+                            {hoursMinutesLabel(wt.weekHours.minutes)} this week
                           </span>
                         )}
                       </span>
@@ -2091,6 +2164,10 @@ function PublishRosterModal({ locationId, isOwner, period, onSubmit, onClose, pu
               doubleBookings={impact.doubleBookings}
               crossLocationChecked={impact.crossLocationChecked}
             />
+            {/* WORKTIME.1 — employees over 48 hours in a week, or under 11
+                hours between working days, every studio counted. Information
+                only. */}
+            <PublishWorkingTime workingTime={impact.workingTime} />
             <div className="grid grid-cols-2 gap-3 mb-4 text-sm">
               <div className="rounded-lg border border-un1t-border p-3">
                 <div className="text-[10px] uppercase tracking-wider text-un1t-subtle">Blocks in period</div>
@@ -2261,6 +2338,69 @@ function PublishRosterClashes({ leaveClashes, doubleBookings, crossLocationCheck
         <div className="text-xs text-un1t-subtle mt-2">Some clash checks could not be completed.</div>
       )}
       <div className="text-xs text-un1t-subtle mt-2">You can still publish.</div>
+    </div>
+  )
+}
+
+// WORKTIME.1 — from projectPublishImpact's `workingTime`. An older server that
+// sends none renders nothing; `checked: false` says the check is incomplete
+// instead of implying an all-clear. Names, dates, times and hours only.
+function PublishWorkingTime({ workingTime }) {
+  if (!workingTime || !Array.isArray(workingTime.restGaps) || !Array.isArray(workingTime.longWeeks)) return null
+  const { restGaps, longWeeks } = workingTime
+  const unchecked = workingTime.checked === false
+  // Shifts with no usable times were not counted: the check is partial.
+  const untimed = Number(workingTime.untimed) > 0 ? Number(workingTime.untimed) : 0
+  if (restGaps.length === 0 && longWeeks.length === 0 && !unchecked && untimed === 0) return null
+  const dayOf = (iso) => new Date(`${iso}T00:00:00`).toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short' })
+  const shortDay = (iso) => new Date(`${iso}T00:00:00`).toLocaleDateString('en-IE', { day: 'numeric', month: 'short' })
+  const where = (s) => (s.location_name ? ` (${s.location_name})` : '')
+  return (
+    <div
+      data-testid="publish-working-time"
+      className="mb-4 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm"
+    >
+      {longWeeks.length > 0 && (
+        <div>
+          <div className="font-medium text-amber-700 flex items-center gap-1.5">
+            <AlertTriangle size={14} aria-hidden="true" />
+            {longWeeksHeadline(longWeeks)}
+          </div>
+          <ul className="mt-1.5 max-h-32 overflow-y-auto space-y-1">
+            {longWeeks.map((w) => (
+              <li key={`${w.profile_id}|${w.week_start}`} className="text-xs text-un1t-text">
+                <span className="font-medium">{w.coach_name}</span> · week of {shortDay(w.week_start)} · {hoursMinutesLabel(w.minutes)} rostered
+                {w.studio_count > 1 && <span className="text-un1t-subtle">, across {w.studio_count} studios</span>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {restGaps.length > 0 && (
+        <div className={longWeeks.length > 0 ? 'mt-3' : ''}>
+          <div className="font-medium text-amber-700 flex items-center gap-1.5">
+            <AlertTriangle size={14} aria-hidden="true" />
+            {restGapsHeadline(restGaps)}
+          </div>
+          <ul className="mt-1.5 max-h-32 overflow-y-auto space-y-1">
+            {restGaps.map((g) => (
+              <li key={`${g.profile_id}|${g.before.block_id}|${g.after.block_id}`} className="text-xs text-un1t-text">
+                <span className="font-medium">{g.coach_name}</span> · {dayOf(g.before.date)} ends {formatTime(g.before.end)}{where(g.before)}, {dayOf(g.after.date)} starts {formatTime(g.after.start)}{where(g.after)}
+                <span className="text-un1t-subtle"> · {hoursMinutesLabel(g.rest_minutes)} rest</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {unchecked && (
+        <div className="text-xs text-un1t-subtle mt-2">The working-time check could not be completed.</div>
+      )}
+      {untimed > 0 && (
+        <div className="text-xs text-un1t-subtle mt-2">{untimedShiftsLabel(untimed)}</div>
+      )}
+      <div className="text-xs text-un1t-subtle mt-2">
+        Employees only, every studio counted: {MIN_REST_HOURS} hours {REST_BETWEEN_LABEL}, {MAX_WEEK_HOURS} hours in a Monday to Sunday week. You can still publish.
+      </div>
     </div>
   )
 }

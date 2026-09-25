@@ -15,10 +15,14 @@ const block = (over = {}) => ({
 const coach = (id, name, over = {}) => ({ id: `a-${id}`, profile_id: id, status: 'confirmed', profiles: { full_name: name }, ...over })
 
 describe('cardTone', () => {
-  it("is 'neutral' for every block today; Wave 2 returns 'admin' here without touching the card", () => {
+  it("is 'neutral' for a class block, and for anything whose kind cannot be read", () => {
     expect(cardTone(block())).toBe('neutral')
     expect(cardTone(block({ shift_templates: { name: 'Admin', color: '#000000' } }))).toBe('neutral')
     expect(cardTone(null)).toBe('neutral')
+  })
+
+  it("is 'admin' for a block whose template is an admin shift (SHIFTTYPE.1)", () => {
+    expect(cardTone(block({ shift_templates: { name: 'Ops', kind: 'admin' } }))).toBe('admin')
   })
 })
 
@@ -257,6 +261,18 @@ describe('monthCellLines', () => {
     const two = [mb('a', '06:00', '07:00', 1, on('A B')), mb('b', '07:00', '08:00', 1, on('C D'))]
     expect(monthCellLines(two, { todayIso: TODAY, limit: 1 }).more).toBe(1)
   })
+
+  // SHIFTTYPE.1 — an empty admin block is not a gap: it reads like the week
+  // card ("Nobody assigned"), never "No coach" or "Needs coach".
+  it('an empty admin block reads "Nobody assigned", quietly, for a manager and a coach', () => {
+    const admin = { ...mb('x', '09:00', '10:00', 0, []), shift_templates: { name: 'Stock take', kind: 'admin' } }
+    for (const isManager of [true, false]) {
+      const { lines } = monthCellLines([admin], { todayIso: TODAY, isManager })
+      expect(lines[0]).toMatchObject({ tone: 'quiet', text: '9 Nobody assigned' })
+    }
+    // A class block keeps its wording.
+    expect(monthCellLines([mb('y', '09:00', '10:00', 1, [])], { todayIso: TODAY, isManager: false }).lines[0].text).toBe('9 No coach')
+  })
 })
 
 describe('rosterToolbarModel', () => {
@@ -418,5 +434,38 @@ describe('dayUnavailableBars (AVAIL.1)', () => {
     expect(dayUnavailableBars(rules, '2026-05-04', staff)).toEqual([])
     expect(dayUnavailableBars(null, '2026-05-06', staff)).toEqual([])
     expect(dayUnavailableBars(rules, '2026-05-06', null)).toEqual([])
+  })
+})
+
+describe('shiftCardModel — admin shifts (SHIFTTYPE.1)', () => {
+  const adminBlock = block({ block_date: '2026-09-22', min_coaches: 0, shift_templates: { name: 'Stock take', kind: 'admin' } })
+
+  it('carries the admin tone and a word for it, for a manager and a coach alike', () => {
+    for (const isManager of [true, false]) {
+      const m = shiftCardModel(adminBlock, [coach('u2', 'Coach A')], null, { isManager, viewerId: 'u9' })
+      expect(m.tone).toBe('admin')
+      expect(m.kindLabel).toBe('Admin')
+      expect(m.status).toBeNull()
+      expect(m.hoverTitle.startsWith('Stock take · Admin · ')).toBe(true)
+    }
+  })
+
+  it('an unassigned future admin shift says so plainly: never "No coach (past)", never "Needs coach"', () => {
+    const m = shiftCardModel(adminBlock, [], null, { isManager: true })
+    expect(m.status).toBeNull()
+    expect(m.emptyText).toBe('Nobody assigned')
+  })
+
+  it('a class card carries no kind label, and its empty text is unchanged', () => {
+    expect(shiftCardModel(block(), [], { status: 'empty', count: 0, min: 2 }, { isManager: true }).kindLabel).toBeNull()
+    expect(shiftCardModel(block(), [], null, { isManager: true }).emptyText).toBe('No coach (past)')
+    expect(shiftCardModel(block(), [], null, { isManager: false }).emptyText).toBe('No coach assigned')
+  })
+})
+
+describe('dayHeaderStatus — admin shifts (SHIFTTYPE.1)', () => {
+  it('a day whose only future shifts are admin says nothing', () => {
+    const adminEmpty = block({ id: 'a', block_date: '2026-09-22', min_coaches: 0, shift_templates: { name: 'Ops', kind: 'admin' }, shift_assignments: [] })
+    expect(dayHeaderStatus([adminEmpty], { todayIso: TODAY }).tone).toBe('none')
   })
 })

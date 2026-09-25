@@ -861,3 +861,50 @@ describe('PUT /api/schedule/templates/[id] — a reorder is just a reorder', () 
     expect(db._writes.some((w) => w.table === 'shift_blocks' && w.op === 'upsert')).toBe(true)
   })
 })
+
+// SHIFTTYPE.1 — kind on an edit.
+describe('PUT /api/schedule/templates/[id] — kind (SHIFTTYPE.1)', () => {
+  it('class -> admin writes kind and minimum 0 together, and takes FUTURE blocks to minimum 0', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    const db = useDb({
+      shift_templates: templates().map((t) => ({ ...t, kind: 'class', min_coaches: 2 })),
+      rosters: [],
+      shift_blocks: [
+        { id: 'blk-future', location_id: 'loc-a', template_id: 'tmpl-a', block_date: FUTURE, min_coaches: 2, max_coaches: 10, shift_assignments: [] },
+        { id: 'blk-past', location_id: 'loc-a', template_id: 'tmpl-a', block_date: PAST, min_coaches: 2, max_coaches: 10, shift_assignments: [] },
+      ],
+    })
+    const res = await PUT(req({ kind: 'admin' }), { params: { id: 'tmpl-a' } })
+    expect(res.status).toBe(200)
+    const tplWrite = db._writes.find((w) => w.table === 'shift_templates' && w.op === 'update')
+    expect(tplWrite.payload).toEqual({ kind: 'admin', min_coaches: 0 })
+    const blockWrites = db._writes.filter((w) => w.table === 'shift_blocks' && w.op === 'update')
+    expect(blockWrites).toHaveLength(1)
+    expect(blockWrites[0].payload).toEqual({ min_coaches: 0 })
+    expect(blockWrites[0].filters.find((f) => f.type === 'in').val).toEqual(['blk-future'])
+  })
+
+  it('refuses a minimum on an admin template with 400 and writes nothing', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    const db = useDb({ shift_templates: templates().map((t) => ({ ...t, kind: 'admin', min_coaches: 0 })), rosters: [], shift_blocks: [] })
+    const res = await PUT(req({ min_coaches: 2 }), { params: { id: 'tmpl-a' } })
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toBe('admin_has_no_minimum')
+    expect(db._writes).toEqual([])
+  })
+
+  it('renaming an admin template leaves its kind and minimum alone', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    const db = useDb({ shift_templates: templates().map((t) => ({ ...t, kind: 'admin', min_coaches: 0 })), rosters: [], shift_blocks: [] })
+    expect((await PUT(req({ name: 'Stock take' }), { params: { id: 'tmpl-a' } })).status).toBe(200)
+    const tplWrite = db._writes.find((w) => w.table === 'shift_templates' && w.op === 'update')
+    expect(tplWrite.payload).toEqual({ name: 'Stock take' })
+  })
+
+  it('refuses a kind it does not know, before any write', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    const db = useDb({ shift_templates: templates(), rosters: [], shift_blocks: [] })
+    expect((await PUT(req({ kind: 'desk' }), { params: { id: 'tmpl-a' } })).status).toBe(400)
+    expect(db._writes).toEqual([])
+  })
+})
