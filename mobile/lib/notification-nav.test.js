@@ -81,6 +81,14 @@ describe('routeForNotification', () => {
     expect(routeForNotification({ type: 'roster_runway', week_start: '28 Sep' })).toBe('/(tabs)/schedule?view=manage')
   })
 
+  // AVAIL.2 — manager: a coach changed when they can't work (AVAIL.1a's
+  // notice). The phone has no per-coach availability view, so the tap opens
+  // the roster they build. Before this it was an unknown type: a dead tap.
+  it('opens Manage mode for an availability change', () => {
+    expect(routeForNotification({ type: 'availability_changed', profile_id: 'p1', change_id: 'c1' })).toBe('/(tabs)/schedule?view=manage')
+    expect(routeForNotification({ type: 'availability_changed' })).toBe('/(tabs)/schedule?view=manage')
+  })
+
   // COVERLOOP.2 — the server has sent this type with "Tap to take it" since
   // ROSTER-FIX.8d and the tap went nowhere (undefined = unknown type). The
   // "Open swaps you can take" card is on the Dashboard tab.
