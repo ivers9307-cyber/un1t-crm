@@ -120,7 +120,7 @@ const DETAIL_OVERRIDE_KEYS = ['start_time_override', 'end_time_override']
 const DETAIL_TIME_KEYS = ['from', 'to']
 // `reason` passes by KNOWN VALUE only: it is the one key whose name invites
 // free text. Add a value here AND a sentence for it in roster-change-format.js.
-const DETAIL_REASONS = ['staff_permanent_delete'] // mig 622
+const DETAIL_REASONS = ['staff_permanent_delete', 'replace_undone'] // mig 622; REPLACE.1a
 const ROSTER_STATUSES = ['draft', 'published', 'superseded'] // migs 072, 602
 const TIME_SHAPE = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/
 

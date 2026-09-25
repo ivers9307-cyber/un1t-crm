@@ -31,9 +31,11 @@ vi.mock('@/lib/push', () => ({ sendPush: vi.fn(async () => ({ sent: 0, skipped: 
 vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: vi.fn(async () => {}) }))
 vi.mock('@/lib/log', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
 vi.mock('@/lib/shift-reminders', () => ({ runShiftReminders: vi.fn() }))
+vi.mock('@/lib/shift-replace-notify', () => ({ runReplaceNotices: vi.fn() }))
 
 const { GET } = await import('./route.js')
 const { runShiftReminders } = await import('@/lib/shift-reminders')
+const { runReplaceNotices } = await import('@/lib/shift-replace-notify')
 const { stampHeartbeat } = await import('@/lib/cron-heartbeat')
 const { logError, logInfo, logWarn } = await import('@/lib/log')
 
@@ -49,6 +51,9 @@ beforeEach(() => {
   throwOnTables = []
   locationsError = null
   stampHeartbeat.mockImplementation(async () => {})
+  // REPLACE.1a — idle by default: resolves nothing, so it stamps nothing and
+  // the shift arm's exact stamp lists below stay as they are.
+  runReplaceNotices.mockReset()
   runShiftReminders.mockResolvedValue({
     shift_candidates: 2, shift_pushed: 1, shift_emailed: 0,
     shift_skipped_dup: 1, shift_skipped_no_recipient: 0, shift_send_failed: 0,
@@ -200,5 +205,75 @@ describe('GET /api/cron/send-push-reminders — shift-reminders heartbeat', () =
     expect(res.status).toBe(200)
     expect(stampedNames()).toEqual(['shift-reminders', 'send-push-reminders'])
     expect(logWarn).toHaveBeenCalledWith('cron-push-reminders', 'shift-reminders heartbeat failed', expect.anything())
+  })
+})
+
+// REPLACE.1a — the held replace-notice arm (src/lib/shift-replace-notify.js).
+// Isolated like the shift arm: it can cost no reminder and no parent stamp.
+// Its own heartbeat row, 'replace-notices', is stamped only on a clean run;
+// the row is seeded by mig 640 (REPLACE.1b), so until then that stamp is a
+// logged no-op (stampHeartbeat is UPDATE-only).
+describe('GET /api/cron/send-push-reminders — REPLACE.1a held replace notices', () => {
+  const REPLACE_CLEAN = { rows: 2, groups: 1, silent: 0, quiet: 0, fresh: 0, errors: 0 }
+
+  it('runs the arm with the tick clock and reports its counts', async () => {
+    runReplaceNotices.mockResolvedValue(REPLACE_CLEAN)
+    const before = Date.now()
+    const body = await (await GET(req())).json()
+    expect(runReplaceNotices).toHaveBeenCalledTimes(1)
+    const [db, opts] = runReplaceNotices.mock.calls[0]
+    expect(db).toBe(fakeDb)
+    expect(opts).toEqual({ nowMs: expect.any(Number) })
+    expect(opts.nowMs).toBeGreaterThanOrEqual(before)
+    expect(body).toMatchObject({ replace_notices: { rows: 2, groups: 1 }, replace_arm_failed: 0 })
+  })
+
+  it('a clean run stamps replace-notices with its counts, before the parent', async () => {
+    runReplaceNotices.mockResolvedValue(REPLACE_CLEAN)
+    runShiftReminders.mockResolvedValue(CLEAN)
+    await GET(req())
+    expect(stampedNames()).toEqual(['shift-reminders', 'replace-notices', 'send-push-reminders'])
+    expect(stampHeartbeat).toHaveBeenCalledWith('replace-notices', REPLACE_CLEAN)
+  })
+
+  it('a throwing arm is VISIBLE and costs nothing else: 200, not stamped, parent stamped', async () => {
+    runReplaceNotices.mockRejectedValue(new Error('boom'))
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    expect((await res.json()).replace_arm_failed).toBe(1)
+    expect(logError).toHaveBeenCalledWith('cron-push-reminders', 'replace notice arm threw', expect.anything())
+    expect(stampedNames()).not.toContain('replace-notices')
+    expect(stampHeartbeat).toHaveBeenCalledWith('send-push-reminders')
+  })
+
+  it('an arm that reports errors is flagged and not stamped', async () => {
+    runReplaceNotices.mockResolvedValue({ ...REPLACE_CLEAN, errors: 1 })
+    expect((await (await GET(req())).json()).replace_arm_failed).toBe(1)
+    expect(stampedNames()).not.toContain('replace-notices')
+  })
+
+  it('a rejecting replace-notices stamp costs the parent nothing', async () => {
+    runReplaceNotices.mockResolvedValue(REPLACE_CLEAN)
+    stampHeartbeat.mockImplementation((name) =>
+      name === 'replace-notices' ? Promise.reject(new Error('stamp down')) : Promise.resolve())
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    expect(stampedNames()).toContain('send-push-reminders')
+    expect(logWarn).toHaveBeenCalledWith('cron-push-reminders', 'replace-notices heartbeat failed', expect.anything())
+  })
+
+  it('the shift arm throwing does not stop this arm', async () => {
+    runShiftReminders.mockRejectedValue(new Error('x'))
+    runReplaceNotices.mockResolvedValue(REPLACE_CLEAN)
+    await GET(req())
+    expect(runReplaceNotices).toHaveBeenCalledTimes(1)
+    expect(stampedNames()).toEqual(['replace-notices', 'send-push-reminders'])
+  })
+
+  it('a quiet tick with nothing held writes no tick log line', async () => {
+    runShiftReminders.mockResolvedValue({ quiet_hours: 1, shift_candidates: 0, shift_pushed: 0 })
+    runReplaceNotices.mockResolvedValue({ rows: 0, groups: 0, silent: 0, quiet: 0, fresh: 0, errors: 0 })
+    await GET(req())
+    expect(logInfo).not.toHaveBeenCalled()
   })
 })

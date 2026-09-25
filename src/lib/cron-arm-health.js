@@ -15,6 +15,17 @@
 //
 // Both rows are seeded by mig 633 (stampHeartbeat is UPDATE-only).
 //
+// REPLACE.1a adds a third:
+//
+//   'replace-notices' — runReplaceNotices (src/lib/shift-replace-notify.js),
+//                       the held replace-notice arm of the */5
+//                       send-push-reminders cron.
+//
+// Its row is NOT seeded yet: it arrives with mig 640 (REPLACE.1b). Until
+// then the cron's stamp matches 0 rows, which stampHeartbeat logs as a
+// warning and otherwise ignores, so the stamp is a logged no-op and a broken
+// arm shows only as replace_arm_failed in the cron's response and logError.
+//
 // THE RULE. Stamp only when the arm RETURNED an outcome object (a throw, or a
 // resolved non-object, has not shown it ran) and that outcome carries no
 // fault in the arm's own machinery. A run with nothing to send is healthy (a
@@ -25,6 +36,7 @@
 
 export const SHIFT_REMINDERS_HEARTBEAT = 'shift-reminders'
 export const ROSTER_RUNWAY_HEARTBEAT = 'roster-runway'
+export const REPLACE_NOTICES_HEARTBEAT = 'replace-notices'
 
 // runShiftReminders' counters that mean the ARM went wrong, not a device:
 //   shift_claim_failed — a ledger claim insert failed; that reminder was NOT sent.
@@ -51,4 +63,17 @@ export function shiftReminderArmHealthy(summary) {
 export function runwayArmHealthy(outcome) {
   if (!isOutcome(outcome)) return false
   return !Object.prototype.hasOwnProperty.call(outcome, 'error')
+}
+
+/**
+ * REPLACE.1a — true when a runReplaceNotices() outcome shows a clean run. The
+ * arm never throws; `errors` counts its own failures (the held-row read, a
+ * silent stamp, a notifyRosterChanges that threw), each retried next tick.
+ * A quiet-hours tick and a tick with nothing held are healthy. A coach who
+ * could not be reached is not an arm fault: notifyRosterChanges leaves their
+ * rows for the re-publish safety net.
+ */
+export function replaceNoticeArmHealthy(outcome) {
+  if (!isOutcome(outcome)) return false
+  return count(outcome.errors) === 0
 }

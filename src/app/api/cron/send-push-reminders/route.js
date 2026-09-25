@@ -28,6 +28,9 @@
 //     The shift arm has its own heartbeat row, 'shift-reminders' (HEARTBEAT.1,
 //     mig 633), stamped only when it ran clean; 'send-push-reminders' still
 //     means "the tick ran".
+//   - Held replace notices (REPLACE.1a): src/lib/shift-replace-notify.js.
+//     Its own heartbeat row, 'replace-notices', arrives with mig 640
+//     (REPLACE.1b); until then its stamp is a logged no-op.
 //
 // Bookings fan out to a role-set rather than a single staff member
 // because the bookings table has no "assigned coach" column — the
@@ -46,6 +49,9 @@ import { getEffectiveConfig, getEffectiveLeadTimesForUser } from '@/lib/notifica
 import { selectAll } from '@/lib/select-all'
 import { runShiftReminders } from '@/lib/shift-reminders'
 import { SHIFT_REMINDERS_HEARTBEAT, shiftReminderArmHealthy } from '@/lib/cron-arm-health'
+// REPLACE.1a — the held replace-notice arm, self-contained (see its block below).
+import { runReplaceNotices } from '@/lib/shift-replace-notify'
+import { REPLACE_NOTICES_HEARTBEAT, replaceNoticeArmHealthy } from '@/lib/cron-arm-health'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -120,6 +126,7 @@ export async function GET(request) {
     booking_skipped_dup: 0,
     booking_send_failed: 0,
     shift_arm_failed: 0, // 1 = the shift arm THREW this tick (see the SHIFTS block)
+    replace_arm_failed: 0, // 1 = the held replace-notice arm threw or reported errors (REPLACE.1a)
     lead_time_buckets: [], // for logging / debugging
   }
 
@@ -411,6 +418,29 @@ export async function GET(request) {
   if (summary.shift_arm_failed === 0 && shiftReminderArmHealthy(shiftSummary)) {
     await stampHeartbeat(SHIFT_REMINDERS_HEARTBEAT, shiftSummary).catch((err) =>
       logWarn('cron-push-reminders', 'shift-reminders heartbeat failed', { err }))
+  }
+
+  // -------------------------- HELD REPLACE NOTICES --------------------------
+  // REPLACE.1a — replace notices made in quiet hours (or lost with a dead
+  // after()) go out from here, from 07:00 studio time. The rule is in
+  // src/lib/shift-replace-notify.js. Isolated like the arms above: it can cost
+  // no reminder and no other heartbeat. Its OWN row, 'replace-notices', is
+  // stamped only on a clean run (cron-arm-health.js), under its own catch.
+  // That row is seeded by mig 640 (REPLACE.1b): until it exists the stamp
+  // matches 0 rows, which stampHeartbeat logs and ignores, and a failing arm
+  // shows as replace_arm_failed in the response, the tick log and logError.
+  let replaceSummary = null
+  try {
+    replaceSummary = await runReplaceNotices(db, { nowMs })
+    summary.replace_notices = replaceSummary
+    if ((replaceSummary?.errors || 0) > 0) summary.replace_arm_failed = 1
+  } catch (err) {
+    summary.replace_arm_failed = 1
+    logError('cron-push-reminders', 'replace notice arm threw', { err })
+  }
+  if (summary.replace_arm_failed === 0 && replaceNoticeArmHealthy(replaceSummary)) {
+    await stampHeartbeat(REPLACE_NOTICES_HEARTBEAT, replaceSummary).catch((err) =>
+      logWarn('cron-push-reminders', 'replace-notices heartbeat failed', { err }))
   }
 
   // quiet_hours alone is not news: it is 1 on every tick from 22:00 to 07:00.

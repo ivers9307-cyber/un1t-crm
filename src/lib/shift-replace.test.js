@@ -6,7 +6,7 @@ import { describe, it, expect } from 'vitest'
 import {
   replaceRefusal, replaceRefusalResponse, replaceShiftStarted, replaceChanges,
   replaceNoticeWhen, replaceResponseOutcome, replacePickerCopy, netReplaceChanges,
-  REPLACE_VIA, REPLACE_SWAP_CLOSE_NOTE,
+  REPLACE_VIA, REPLACE_SWAP_CLOSE_NOTE, REPLACE_UNDONE_REASON,
 } from './shift-replace'
 
 // Tue 29 Sep 2026, Dublin summer time (UTC+1): 06:00 Dublin = 05:00Z.
@@ -169,5 +169,8 @@ describe('constants', () => {
   it('the via label and the swap close note are fixed strings (matched elsewhere)', () => {
     expect(REPLACE_VIA).toBe('replace')
     expect(REPLACE_SWAP_CLOSE_NOTE).toBe('Closed: a manager gave this shift to another coach.')
+    // roster_change_log.details.reason on a replace undone before anyone was
+    // told; roster-change-log.js passes it by value and the drawer reads it.
+    expect(REPLACE_UNDONE_REASON).toBe('replace_undone')
   })
 })

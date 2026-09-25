@@ -150,6 +150,20 @@ describe('a row written because the staff member was deleted (mig 622)', () => {
   })
 })
 
+describe('REPLACE.1a — a replace undone before anyone was told (the held-notice arm stamps it silently)', () => {
+  const undone = (over = {}) => row({ action: 'unassigned', details: { via: 'replace', reason: 'replace_undone' }, ...over })
+
+  it('says so, in place of "(coach replaced)"', () => {
+    expect(rosterChangeSentence(undone())).toBe('Removed Coach A from Tue 15 Sep 6am (coach replaced, then undone before anyone was told)')
+  })
+
+  it('its stamp is not a message: no told state', () => {
+    expect(NO_MESSAGE_REASONS).toContain('replace_undone')
+    expect(stampMeansTold(undone())).toBe(false)
+    expect(rosterChangeTold(undone())).toBeNull()
+  })
+})
+
 describe('stampMeansTold — a stamp is not always a message', () => {
   const future = { block_date: '2026-09-20' }
 

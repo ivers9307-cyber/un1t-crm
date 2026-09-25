@@ -32,6 +32,14 @@ export const REPLACE_VIA = 'replace'
  */
 export const REPLACE_SWAP_CLOSE_NOTE = 'Closed: a manager gave this shift to another coach.'
 
+/**
+ * roster_change_log.details.reason on the rows of a replace undone before its
+ * held notice went out (netReplaceChanges' `silent`). The arm stamps them with
+ * no message; the drawer reads the reason as "nobody was told"
+ * (roster-change-format.js NO_MESSAGE_REASONS) instead of printing a told time.
+ */
+export const REPLACE_UNDONE_REASON = 'replace_undone'
+
 // The route's after() owns a fresh replace notice for this long; after it the
 // */5 arm may send it (the arm is also the recovery for an after() that died).
 export const REPLACE_NOTICE_ROUTE_OWNS_MS = 2 * 60 * 1000

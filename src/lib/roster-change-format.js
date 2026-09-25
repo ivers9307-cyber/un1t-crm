@@ -37,6 +37,7 @@ export const ROSTER_CHANGE_LOG_MAX_ROWS = 5000
 
 const REASON_NOTE = {
   staff_permanent_delete: 'staff member deleted',
+  replace_undone: 'coach replaced, then undone before anyone was told', // REPLACE.1a
 }
 
 // ── A stamp is not always a message ─────────────────────────────────────────
@@ -58,6 +59,11 @@ const REASON_NOTE = {
 //      future ones only).
 //   4. notifyRosterChanges, coach === actor: they made the change themselves,
 //      so there was nobody to tell. The API row carries it as `self_change`.
+//   6. REPLACE.1a, the held replace-notice arm (shift-replace-notify.js): a
+//      coach replaced and put back before their held notice went out nets to
+//      nothing, so those rows are stamped with no message and marked
+//      details.reason = 'replace_undone' in the same UPDATE (checked with
+//      rule 1, by reason). Numbered after 5, the always-told writer below.
 //
 // For these the drawer shows NO told state, rather than a time nobody was told at.
 //
@@ -79,7 +85,7 @@ const REASON_NOTE = {
 //      { reason } and nothing else; a swap drop is 'unassigned' with `via`),
 //      so that ordering is a guard, not a case.
 const OWN_STAMP_WINDOW_MS = 10 * 60 * 1000
-export const NO_MESSAGE_REASONS = Object.freeze(['staff_permanent_delete'])
+export const NO_MESSAGE_REASONS = Object.freeze(['staff_permanent_delete', 'replace_undone'])
 
 const VIA_NOTE = {
   copy_week: 'copied from another week',
