@@ -343,3 +343,25 @@ describe('isCurrentLoad (MANAGEMODE.1 review)', () => {
     expect(isCurrentLoad({ gen: 4, currentGen: 4, requestedKey: A, currentKey: B })).toBe(false)
   })
 })
+
+// SHIFTTYPE.1 — an admin shift has no minimum: never 'empty', never 'short'.
+describe('blockFillState — admin shifts (SHIFTTYPE.1)', () => {
+  const admin = (n, max = 3) => block(n, 0, max, { shift_templates: { name: 'Stock take', kind: 'admin' } })
+
+  it('reads "Admin" whether or not anyone is on it', () => {
+    expect(blockFillState(admin(0), TODAY)).toEqual({ state: 'admin', count: 0, min: 0, max: 3, label: 'Admin' })
+    expect(blockFillState(admin(2), TODAY)).toMatchObject({ state: 'admin', count: 2, label: 'Admin' })
+  })
+
+  it('even when the block still carries a minimum', () => {
+    expect(blockFillState(block(1, 2, 3, { shift_templates: { kind: 'admin' } }), TODAY).state).toBe('admin')
+  })
+
+  it('over capacity is still over', () => {
+    expect(blockFillState(admin(4, 3), TODAY)).toMatchObject({ state: 'over', label: '4/3' })
+  })
+
+  it('a class block is unchanged', () => {
+    expect(blockFillState(block(0, 1, 3, { shift_templates: { kind: 'class' } }), TODAY)).toMatchObject({ state: 'empty', label: 'No coach' })
+  })
+})

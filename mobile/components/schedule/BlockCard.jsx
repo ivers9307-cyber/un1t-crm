@@ -7,9 +7,10 @@ import { effShiftStart, effShiftEnd, initials } from '../../lib/schedule-team'
 import { blockFillState, liveBlockAssignments, assignmentWindow } from '../../lib/schedule-manage'
 
 // MOBILESCHED.2 — empty and short are different chips, as on the web calendar:
-// red "No coach", amber "1 of 2". Over capacity stays red.
-const CHIP_BG = { empty: 'bg-red-500/10', short: 'bg-amber-500/10', over: 'bg-red-500/10', ok: 'bg-un1t-border' }
-const CHIP_TX = { empty: 'text-red-700', short: 'text-amber-700', over: 'text-red-700', ok: 'text-un1t-subtle' }
+// red "No coach", amber "1 of 2". Over capacity stays red. SHIFTTYPE.1 — an
+// admin shift is slate "Admin", the web card's admin tone: never red or amber.
+const CHIP_BG = { empty: 'bg-red-500/10', short: 'bg-amber-500/10', over: 'bg-red-500/10', admin: 'bg-slate-500/10', ok: 'bg-un1t-border' }
+const CHIP_TX = { empty: 'text-red-700', short: 'text-amber-700', over: 'text-red-700', admin: 'text-slate-700', ok: 'text-un1t-subtle' }
 
 export default function BlockCard({ block, busy, onAddCoach, onCoachPress }) {
   const tpl = block.shift_templates

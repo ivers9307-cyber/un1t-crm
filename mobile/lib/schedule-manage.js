@@ -4,6 +4,7 @@
 // Lives in mobile/lib so the root vitest picks it up (config includes mobile/lib/**).
 
 import { futureBlockStaffing } from 'shared/roster-staffing'
+import { isAdminShift } from 'shared/shift-kind'
 import { effectiveShiftStart, effectiveShiftEnd } from 'shared/roster-month'
 
 // MOBILESCHED.2 — "this assignment still puts a coach on the block". Only
@@ -24,14 +25,23 @@ export function liveBlockAssignments(block) {
 //                       block is flagged whatever the minimum; a past block is
 //                       history and never flagged).
 //   'over'            — more live coaches than max_coaches (capacity, any date).
+//   'admin'           — SHIFTTYPE.1: an admin shift has no minimum staffing, so
+//                       it is never 'empty' or 'short'. Capacity still applies:
+//                       over max is 'over'.
 //   'ok'              — otherwise.
 //
 // Was a local count of every assignment row, cancelled included, so a shift
 // with a dropped coach read fuller than it was, and "nobody on it" and "1 of 2"
 // were one amber 'under' state.
 //
-// @returns {{ state: 'empty'|'short'|'over'|'ok', count: number, min: number, max: number|null, label: string }}
+// @returns {{ state: 'empty'|'short'|'over'|'admin'|'ok', count: number, min: number, max: number|null, label: string }}
 export function blockFillState(block, todayIso) {
+  if (isAdminShift(block)) {
+    const count = liveBlockAssignments(block).length
+    const max = block?.max_coaches ?? null
+    if (max != null && count > max) return { state: 'over', count, min: 0, max, label: `${count}/${max}` }
+    return { state: 'admin', count, min: 0, max, label: 'Admin' }
+  }
   const count = liveBlockAssignments(block).length
   const min = Number(block?.min_coaches) || 0
   const max = block?.max_coaches ?? null
