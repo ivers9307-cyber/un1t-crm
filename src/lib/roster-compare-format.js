@@ -125,8 +125,11 @@ export function blockChangeNotes(b) {
   return notes
 }
 
-/** No backfill (SNAPSHOT.1 D11): why there is nothing to compare. */
+/** Why there is nothing to compare: no backfill (SNAPSHOT.1 D11), or a baseline outside the window (review 3). */
 export function missingSnapshotMessage({ missing_reason: reason, snapshots_began_at: beganAt } = {}) {
+  if (reason === 'outside_window') {
+    return 'This publish does not cover the days on screen, so there is nothing to compare here.'
+  }
   if (reason === 'not_saved') {
     return 'The record of this publish could not be saved at the time, so there is nothing to compare it with. The next publish of this period will be recorded.'
   }

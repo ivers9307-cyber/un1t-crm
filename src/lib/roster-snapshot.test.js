@@ -334,4 +334,41 @@ describe('loadRosterComparison', () => {
     expect(out.data.totals.blocks_briefing_changed).toBe(1)
     expect(JSON.stringify(out.data)).not.toMatch(/Fire drill|briefing_hash/)
   })
+
+  // SNAPSHOT.1 review 3 — a baseline must be a publish of THESE dates.
+  it('refuses an against snapshot whose period does not overlap the roster\'s published period, before any live read', async () => {
+    const elsewhere = { ...SNAP_ROW, id: 's-9', roster_id: 'r-9', period_start: '2026-10-05', period_end: '2026-10-11' }
+    const db = compareDb({ against: elsewhere })
+    const out = await loadRosterComparison(db, { roster: ROSTER_FOR_COMPARE, againstId: 's-9', nowMs: NOW })
+    expect(out.data).toBeUndefined()
+    expect(out.conflict).toMatch(/Mon 5 Oct – Sun 11 Oct/)
+    expect(out.conflict).toMatch(/does not overlap/)
+    expect(db.log.some((q) => q.table === 'shift_blocks')).toBe(false)
+  })
+
+  it("judges the overlap on the roster's OWN snapshot period, not its (possibly since shrunk) rosters row", async () => {
+    // The rosters row was trimmed to 14-15 Sep by a later publish; its
+    // snapshot still records 14-20 Sep, and a baseline of 18-20 Sep overlaps that.
+    const shrunk = { ...ROSTER, period_end: '2026-09-15' }
+    const later = { ...SNAP_ROW, id: 's-2', roster_id: 'r-2', period_start: '2026-09-18', period_end: '2026-09-20' }
+    const out = await loadRosterComparison(compareDb({ against: later }), { roster: shrunk, againstId: 's-2', nowMs: NOW })
+    expect(out.conflict).toBeUndefined()
+    expect(out.data.baseline.snapshot_id).toBe('s-2')
+  })
+
+  it('with no snapshot of its own, the overlap is judged on the rosters row', async () => {
+    const later = { ...SNAP_ROW, id: 's-2', roster_id: 'r-2', period_start: '2026-09-21', period_end: '2026-09-27' }
+    const out = await loadRosterComparison(compareDb({ own: null, against: later }), { roster: ROSTER_FOR_COMPARE, againstId: 's-2', nowMs: NOW })
+    expect(out.conflict).toMatch(/does not overlap/)
+  })
+
+  it('a window that misses the baseline is outside_window: the baseline named, no totals, no live read', async () => {
+    const db = compareDb()
+    const out = await loadRosterComparison(db, { roster: ROSTER_FOR_COMPARE, from: '2026-09-28', to: '2026-10-04', nowMs: NOW })
+    expect(out.data).toMatchObject({
+      window: null, missing_reason: 'outside_window', blocks: [], totals: null,
+      baseline: { snapshot_id: 's-1', published_by_name: 'Manager M' },
+    })
+    expect(db.log.some((q) => q.table === 'shift_blocks')).toBe(false)
+  })
 })

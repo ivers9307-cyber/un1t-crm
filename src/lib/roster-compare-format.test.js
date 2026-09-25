@@ -112,6 +112,10 @@ describe('missing snapshots (no backfill)', () => {
     expect(missingSnapshotMessage({ missing_reason: 'before_snapshots', snapshots_began_at: null }))
       .toBe('Published vs now starts with the next publish at this studio. Rosters published before it have no record of what was published.')
   })
+  it('a baseline whose dates miss the period on screen (review 3)', () => {
+    expect(missingSnapshotMessage({ missing_reason: 'outside_window' }))
+      .toBe('This publish does not cover the days on screen, so there is nothing to compare here.')
+  })
   it('one should exist and was not saved', () => {
     expect(missingSnapshotMessage({ missing_reason: 'not_saved' })).toMatch(/could not be saved at the time/)
   })

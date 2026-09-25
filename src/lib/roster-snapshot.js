@@ -19,6 +19,7 @@
 
 import { buildPublishSnapshot, clipWindow, compareSnapshot, SNAPSHOT_FORMAT_VERSION } from './roster-compare'
 import { logError, logWarn } from './log'
+import { periodLabel } from './roster-compare-format'
 
 export const SNAPSHOT_BLOCK_PAGE = 1000
 
@@ -133,7 +134,9 @@ const NAME_CHUNK = 200
  * @param {string|null} [args.from]       YYYY-MM-DD window (the period on screen)
  * @param {string|null} [args.to]
  * @param {number} args.nowMs
- * @returns {Promise<{ data: object } | { notFound: true } | { error: object }>}
+ * @returns {Promise<{ data: object } | { notFound: true } | { conflict: string } | { error: object }>}
+ *   conflict: the against snapshot is at this studio but covers none of this
+ *   roster's published dates (review 3), so comparing them would be nonsense.
  */
 export async function loadRosterComparison(db, { roster, againstId = null, from = null, to = null, nowMs = Date.now() }) {
   const meta = { roster_id: roster.id, location_id: roster.location_id }
@@ -149,8 +152,22 @@ export async function loadRosterComparison(db, { roster, againstId = null, from 
     .maybeSingle()
   if (locErr) return fail('location read failed', locErr)
 
-  let baseline = null
-  if (againstId) {
+  // The roster's OWN snapshot is always read: it is the default baseline and
+  // its period is what "these dates" means for a chosen one (the rosters row's
+  // period can have been shrunk by a later publish; the snapshot's cannot).
+  const own = await db
+    .from('roster_publish_snapshots')
+    .select('id, roster_id, location_id, period_start, period_end, published_at, published_by, format_version, snapshot')
+    .eq('roster_id', roster.id)
+    .eq('location_id', roster.location_id)
+    .maybeSingle()
+  if (own.error) return fail('snapshot read failed', own.error)
+  const rosterPeriod = own.data
+    ? { from: own.data.period_start, to: own.data.period_end }
+    : { from: roster.period_start, to: roster.period_end }
+
+  let baseline = own.data || null
+  if (againstId && againstId !== own.data?.id) {
     const { data, error } = await db
       .from('roster_publish_snapshots')
       .select('id, roster_id, location_id, period_start, period_end, published_at, published_by, format_version, snapshot')
@@ -159,16 +176,14 @@ export async function loadRosterComparison(db, { roster, againstId = null, from 
       .maybeSingle()
     if (error) return fail('snapshot read failed', error)
     if (!data) return { notFound: true }
+    // Review 3 — same studio is not enough: a publish of other dates would
+    // read as every shift "added after publish".
+    if (data.period_start > rosterPeriod.to || data.period_end < rosterPeriod.from) {
+      return {
+        conflict: `That publish covers ${periodLabel(data.period_start, data.period_end)}, which does not overlap this roster's dates (${periodLabel(rosterPeriod.from, rosterPeriod.to)}), so it cannot be compared with it.`,
+      }
+    }
     baseline = data
-  } else {
-    const { data, error } = await db
-      .from('roster_publish_snapshots')
-      .select('id, roster_id, location_id, period_start, period_end, published_at, published_by, format_version, snapshot')
-      .eq('roster_id', roster.id)
-      .eq('location_id', roster.location_id)
-      .maybeSingle()
-    if (error) return fail('snapshot read failed', error)
-    baseline = data || null
   }
   if (baseline && Number(baseline.format_version) > SNAPSHOT_FORMAT_VERSION) {
     return fail(`snapshot format ${baseline.format_version} is newer than this code reads`, null)
@@ -258,15 +273,30 @@ export async function loadRosterComparison(db, { roster, againstId = null, from 
     snapshot: baseline.snapshot, currentBlocks: current, from, to, nowMs, tz: location?.timezone ?? null, names,
   })
 
+  const baselineSummary = {
+    snapshot_id: baseline.id, roster_id: baseline.roster_id, published_at: baseline.published_at,
+    period_start: baseline.period_start, period_end: baseline.period_end,
+    published_by_name: baseline.published_by ? (names[baseline.published_by] ?? null) : null,
+  }
+
+  // Review 3 — a baseline whose dates miss the window has nothing to compare.
+  // It is its own state, never an empty comparison (which would read as
+  // "every shift is as it was published").
+  if (!window) {
+    return {
+      data: {
+        roster: rosterSummary, window: null, baseline: baselineSummary,
+        missing_reason: 'outside_window', snapshots_began_at: snapshotsBeganAt,
+        publishes, blocks: [], totals: null,
+      },
+    }
+  }
+
   return {
     data: {
       roster: rosterSummary,
       window: result.window,
-      baseline: {
-        snapshot_id: baseline.id, roster_id: baseline.roster_id, published_at: baseline.published_at,
-        period_start: baseline.period_start, period_end: baseline.period_end,
-        published_by_name: baseline.published_by ? (names[baseline.published_by] ?? null) : null,
-      },
+      baseline: baselineSummary,
       missing_reason: null,
       snapshots_began_at: snapshotsBeganAt,
       publishes,

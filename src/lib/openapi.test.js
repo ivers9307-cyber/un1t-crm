@@ -420,4 +420,10 @@ describe('getOpenApiSpec', () => {
     expect(op.description).toMatch(/briefing_change/)
     expect(op.description).toMatch(/never the text/i)
   })
+
+  it('says a baseline of other dates is refused and one outside the window is its own state (review 3)', () => {
+    const op = spec.paths['/api/schedule/rosters/{id}/compare'].get
+    expect(op.description).toMatch(/outside_window/)
+    expect(op.responses['409'].description).toMatch(/against snapshot covers none/)
+  })
 })

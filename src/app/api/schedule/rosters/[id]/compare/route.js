@@ -19,7 +19,8 @@
 //   from, to   optional YYYY-MM-DD real dates, the period on screen; clipped to
 //              the published period
 //   against    optional snapshot id at the same studio to compare with instead
-//              of this roster's own (the first publish of the week, say)
+//              of this roster's own (the first publish of the week, say); it
+//              must overlap this roster's published dates, else 409
 //
 // Names, times, hours and arrival stamps only. Never a rate or a cost.
 
@@ -88,6 +89,8 @@ export async function GET(request, props) {
     nowMs: Date.now(),
   })
   if (result.notFound) return fail(404, 'Snapshot not found')
+  // Review 3 — a baseline at this studio but of other dates.
+  if (result.conflict) return fail(409, result.conflict)
   // A failed read is a 500, never an empty comparison: "nothing changed" would
   // be a lie. loadRosterComparison has already logged it.
   if (result.error || !result.data) return fail(500, 'The comparison could not be read')

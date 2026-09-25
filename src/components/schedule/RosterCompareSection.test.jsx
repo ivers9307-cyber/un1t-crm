@@ -127,6 +127,32 @@ describe('RosterCompareSection', () => {
     expect(screen.queryByTestId('roster-compare-totals')).toBeNull()
   })
 
+  // Review 3 — a baseline that covers none of the days on screen is its own
+  // state: never totals, never "Every shift is as it was published".
+  it('a baseline outside the period on screen says so, and never claims every shift is as published', async () => {
+    const earlier = { ...PUB, snapshot_id: 's0', roster_id: 'r0', published_at: '2026-09-10T08:00:00Z' }
+    const outside = {
+      ...DATA, window: null, missing_reason: 'outside_window', blocks: [], totals: null,
+      publishes: [PUB, earlier],
+    }
+    global.fetch = answer(200, { success: true, data: outside })
+    render(<RosterCompareSection {...props} />)
+    expect((await screen.findByTestId('roster-compare-missing')).textContent)
+      .toBe('This publish does not cover the days on screen, so there is nothing to compare here.')
+    expect(screen.queryByText('Every shift is as it was published.')).toBeNull()
+    expect(screen.queryByTestId('roster-compare-totals')).toBeNull()
+    // The baseline is still named, and another publish can still be chosen.
+    expect(screen.getByText(/Compared with the publish of Sat 12 Sep, 14:02/)).toBeTruthy()
+    expect(screen.getByLabelText('Compare with')).toBeTruthy()
+  })
+
+  it('a baseline refused as other dates (409) is an error in its own words', async () => {
+    global.fetch = answer(409, { success: false, error: 'That publish covers Mon 5 Oct – Sun 11 Oct, which does not overlap this roster\'s dates' })
+    render(<RosterCompareSection {...props} />)
+    expect((await screen.findByRole('alert')).textContent).toMatch(/does not overlap/)
+    expect(screen.queryByText('Every shift is as it was published.')).toBeNull()
+  })
+
   it('a failed read is an ERROR, never "every shift is as it was published"', async () => {
     global.fetch = answer(500, { success: false, error: 'The comparison could not be read' })
     render(<RosterCompareSection {...props} />)

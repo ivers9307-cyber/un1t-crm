@@ -131,9 +131,14 @@ function CompareBody({ data, rosterId, showUnchanged, onChooseBaseline }) {
       </p>
     )
   }
+  // Review 3 — a baseline whose dates miss the period on screen has no
+  // window and no totals. It is named (and another publish can be chosen),
+  // but nothing below the chooser may render: an empty list here would read
+  // "Every shift is as it was published", which nobody checked.
+  const comparable = Boolean(data.window && data.totals && !data.missing_reason)
   const t = data.totals
-  const shown = visibleCompareBlocks(data.blocks, showUnchanged)
-  const arrival = arrivalSentence(t)
+  const shown = comparable ? visibleCompareBlocks(data.blocks, showUnchanged) : []
+  const arrival = comparable ? arrivalSentence(t) : null
   const selectId = `roster-compare-against-${rosterId}`
   return (
     <div className="mt-1">
@@ -156,54 +161,62 @@ function CompareBody({ data, rosterId, showUnchanged, onChooseBaseline }) {
           </select>
         </div>
       )}
-      <div data-testid="roster-compare-totals" className="mt-2 text-sm text-un1t-text">{totalsSentence(t)}</div>
-      <div className="text-xs text-un1t-subtle">{changeCountsSentence(t)}</div>
-      {arrival && <div className="mt-1 text-xs text-un1t-subtle">{arrival}. {ARRIVAL_CAVEAT}</div>}
-
-      {shown.length === 0 ? (
-        <p className="mt-3 text-sm text-un1t-subtle">
-          {showUnchanged ? 'No shifts in this period.' : 'Every shift is as it was published.'}
+      {!comparable ? (
+        <p data-testid="roster-compare-missing" className="mt-2 text-sm text-un1t-subtle">
+          {missingSnapshotMessage(data)}
         </p>
       ) : (
-        <ul data-testid="roster-compare-list" className="mt-3 divide-y divide-un1t-border">
-          {shown.map((b) => (
-            <li key={b.slot} className="py-2">
-              <div className="text-sm text-un1t-text">
-                {dayLabel(b.date)} · {windowLabel(b.current || b.published)} · {b.template_name || 'Shift'}
-              </div>
-              {blockChangeNotes(b).map((note) => (
-                <div key={note} className="text-[11px] text-amber-700">{note}</div>
-              ))}
-              {b.coaches.length > 0 && (
-                <ul className="mt-1 space-y-1">
-                  {b.coaches.map((r) => {
-                    const arrivalText = arrivalLabel(r)
-                    return (
-                      <li
-                        key={r.profile_id}
-                        data-testid="roster-compare-coach"
-                        className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs"
-                      >
-                        <span className="text-un1t-text">{r.name || 'Name unavailable'}</span>
-                        <span className="text-un1t-subtle">{compareRowSummary(r)}</span>
-                        <span className={`px-1.5 py-0.5 rounded font-medium ${COMPARE_CHANGE_CHIP[r.change]}`}>
-                          {COMPARE_CHANGE_LABELS[r.change]}
-                        </span>
-                        {arrivalText && (
-                          <span
-                            className={`px-1.5 py-0.5 rounded font-medium ${r.no_show_candidate ? 'bg-amber-500/10 text-amber-700' : 'bg-green-500/10 text-green-700'}`}
+        <>
+          <div data-testid="roster-compare-totals" className="mt-2 text-sm text-un1t-text">{totalsSentence(t)}</div>
+          <div className="text-xs text-un1t-subtle">{changeCountsSentence(t)}</div>
+          {arrival && <div className="mt-1 text-xs text-un1t-subtle">{arrival}. {ARRIVAL_CAVEAT}</div>}
+
+          {shown.length === 0 ? (
+            <p className="mt-3 text-sm text-un1t-subtle">
+              {showUnchanged ? 'No shifts in this period.' : 'Every shift is as it was published.'}
+            </p>
+          ) : (
+            <ul data-testid="roster-compare-list" className="mt-3 divide-y divide-un1t-border">
+              {shown.map((b) => (
+                <li key={b.slot} className="py-2">
+                  <div className="text-sm text-un1t-text">
+                    {dayLabel(b.date)} · {windowLabel(b.current || b.published)} · {b.template_name || 'Shift'}
+                  </div>
+                  {blockChangeNotes(b).map((note) => (
+                    <div key={note} className="text-[11px] text-amber-700">{note}</div>
+                  ))}
+                  {b.coaches.length > 0 && (
+                    <ul className="mt-1 space-y-1">
+                      {b.coaches.map((r) => {
+                        const arrivalText = arrivalLabel(r)
+                        return (
+                          <li
+                            key={r.profile_id}
+                            data-testid="roster-compare-coach"
+                            className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs"
                           >
-                            {arrivalText}
-                          </span>
-                        )}
-                      </li>
-                    )
-                  })}
-                </ul>
-              )}
-            </li>
-          ))}
-        </ul>
+                            <span className="text-un1t-text">{r.name || 'Name unavailable'}</span>
+                            <span className="text-un1t-subtle">{compareRowSummary(r)}</span>
+                            <span className={`px-1.5 py-0.5 rounded font-medium ${COMPARE_CHANGE_CHIP[r.change]}`}>
+                              {COMPARE_CHANGE_LABELS[r.change]}
+                            </span>
+                            {arrivalText && (
+                              <span
+                                className={`px-1.5 py-0.5 rounded font-medium ${r.no_show_candidate ? 'bg-amber-500/10 text-amber-700' : 'bg-green-500/10 text-green-700'}`}
+                              >
+                                {arrivalText}
+                              </span>
+                            )}
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
       )}
     </div>
   )

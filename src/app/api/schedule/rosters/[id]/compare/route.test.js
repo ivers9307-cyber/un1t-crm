@@ -165,6 +165,14 @@ describe('GET /api/schedule/rosters/[id]/compare', () => {
     expect((await GET(get(`?against=${SID}`), props())).status).toBe(404)
   })
 
+  it('a chosen baseline of other dates: 409 with the reason, never a comparison', async () => {
+    createServerClient.mockReturnValue(rosterDb())
+    loadRosterComparison.mockResolvedValue({ conflict: 'That publish covers Mon 5 Oct – Sun 11 Oct, which does not overlap this roster\'s dates' })
+    const res = await GET(get(`?against=${SID}`), props())
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ success: false, error: expect.stringMatching(/does not overlap/) })
+  })
+
   it('a failed comparison read is a 500, never an empty comparison', async () => {
     createServerClient.mockReturnValue(rosterDb())
     loadRosterComparison.mockResolvedValue({ error: { message: 'down' } })
