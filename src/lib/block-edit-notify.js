@@ -28,7 +28,6 @@
 // + block_date to that week.
 
 import { notifyUsersOnce } from './push-dedup'
-import { markChangesNotified } from './roster-change-log'
 import { formatShiftDate } from './roster-change-notify'
 import { formatTimeRange12h } from './schedule-overlap'
 import { inStaffPushHours, staffWallClockHHMM } from './staff-push-hours'
@@ -48,7 +47,7 @@ export function emptyTimeChangeSummary() {
   return {
     time_change_quiet: 0, time_change_rows: 0, time_change_told: 0, time_change_not_needed: 0,
     time_change_deduped: 0, time_change_undelivered: 0, time_change_send_failed: 0,
-    time_change_stamp_failed: 0, time_change_read_failed: 0, time_change_read_capped: 0,
+    time_change_stamp_failed: 0, time_change_told_stamp_failed: 0, time_change_read_failed: 0, time_change_read_capped: 0,
   }
 }
 
@@ -201,7 +200,19 @@ export async function runShiftTimeChangeNotices(db, { nowMs = Date.now(), locati
       const delivered = (result?.sent || 0) + (result?.emailed || 0) > 0
       if (delivered) {
         summary.time_change_told++
-        await markChangesNotified(db, n.rowIds)
+        // Stamped here, not through markChangesNotified (which logs and
+        // swallows), so a lost stamp is COUNTED. It is not fatal: the claim
+        // key stops this arm re-sending; an unstamped row can at worst be
+        // re-announced by the re-publish safety net.
+        const { error: toldErr } = await db
+          .from('roster_change_log')
+          .update({ notified_at: new Date(nowMs).toISOString() })
+          .in('id', n.rowIds)
+          .is('notified_at', null)
+        if (toldErr) {
+          summary.time_change_told_stamp_failed++
+          logWarn('block-edit-notify', 'post-delivery stamp failed', { rowIds: n.rowIds, err: toldErr.message })
+        }
       } else if ((result?.deduped || 0) > 0) {
         summary.time_change_deduped++
       } else if ((result?.failed || 0) > 0) {

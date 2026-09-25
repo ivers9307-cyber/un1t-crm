@@ -4,11 +4,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('./push-dedup', () => ({ notifyUsersOnce: vi.fn() }))
-vi.mock('./roster-change-log', () => ({ markChangesNotified: vi.fn(async () => {}) }))
 vi.mock('./log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
 
 const { notifyUsersOnce } = await import('./push-dedup')
-const { markChangesNotified } = await import('./roster-change-log')
+const { logWarn } = await import('./log')
 const { planTimeChangeNotices, timeChangeMessage, runShiftTimeChangeNotices } = await import('./block-edit-notify')
 
 // Tue 29 Sep 2026, Dublin summer time (UTC+1).
@@ -95,7 +94,7 @@ describe('planTimeChangeNotices', () => {
   })
 })
 
-function makeDb({ rows = [], readError = null } = {}) {
+function makeDb({ rows = [], readError = null, stampError = null } = {}) {
   const captured = { reads: [], stamps: [] }
   const db = {
     captured,
@@ -110,9 +109,9 @@ function makeDb({ rows = [], readError = null } = {}) {
         },
         update(patch) {
           const u = { patch, calls: [] }
-          for (const m of ['eq', 'is']) u[m] = (...a) => { u.calls.push([m, ...a]); return u }
+          for (const m of ['eq', 'is', 'in']) u[m] = (...a) => { u.calls.push([m, ...a]); return u }
           u.select = () => u
-          u.then = (res, rej) => { captured.stamps.push(u); return Promise.resolve({ data: [{ id: 'x' }], error: null }).then(res, rej) }
+          u.then = (res, rej) => { captured.stamps.push(u); return Promise.resolve(stampError ? { data: null, error: stampError } : { data: [{ id: 'x' }], error: null }).then(res, rej) }
           return u
         },
       }
@@ -158,7 +157,9 @@ describe('runShiftTimeChangeNotices', () => {
       title: 'Shift time changed', category: 'shift_adjusted',
       data: { type: 'shift_adjusted', block_date: '2026-09-30', location_id: 'loc-1' },
     })
-    expect(markChangesNotified).toHaveBeenCalledWith(db, ['r1', 'r2'])
+    expect(db.captured.stamps).toHaveLength(1)
+    expect(db.captured.stamps[0].calls).toEqual([['in', 'id', ['r1', 'r2']], ['is', 'notified_at', null]])
+    expect(Object.keys(db.captured.stamps[0].patch)).toEqual(['notified_at'])
     expect(s.time_change_told).toBe(1)
   })
 
@@ -170,8 +171,9 @@ describe('runShiftTimeChangeNotices', () => {
     ]) {
       vi.clearAllMocks()
       notifyUsersOnce.mockResolvedValue(result)
-      const s = await runShiftTimeChangeNotices(makeDb({ rows: [row('r1')] }), { nowMs: IN_BAND, locations: [LOC] })
-      expect(markChangesNotified).not.toHaveBeenCalled()
+      const db = makeDb({ rows: [row('r1')] })
+      const s = await runShiftTimeChangeNotices(db, { nowMs: IN_BAND, locations: [LOC] })
+      expect(db.captured.stamps).toEqual([])
       expect(s[key]).toBe(1)
     }
   })
@@ -201,4 +203,14 @@ describe('runShiftTimeChangeNotices', () => {
     expect(s.time_change_send_failed).toBe(1)
     expect(s.time_change_told).toBe(1)
   })
+
+  // Review nit — the stamp AFTER a delivered message used to vanish into
+  // markChangesNotified's own log. It is counted and logged here.
+  it('a failed post-delivery stamp is counted and logged, and the message still counts as told', async () => {
+    const s = await runShiftTimeChangeNotices(makeDb({ rows: [row('r1')], stampError: { message: 'deadlock' } }), { nowMs: IN_BAND, locations: [LOC] })
+    expect(s.time_change_told).toBe(1)
+    expect(s.time_change_told_stamp_failed).toBe(1)
+    expect(logWarn).toHaveBeenCalledWith('block-edit-notify', 'post-delivery stamp failed', expect.objectContaining({ rowIds: ['r1'], err: 'deadlock' }))
+  })
 })
+
