@@ -318,6 +318,11 @@ const config = [
       'src/lib/shift-replace-server.js',
       'src/lib/shift-replace-notify.js',
       'src/app/api/schedule/assignments/*/replace/**',
+      // REPLACE.1b — the offer sender / sweep and the four offer routes. Born
+      // clean: every write destructures error; guarded UPDATEs judge rows.
+      'src/lib/shift-offer-server.js',
+      'src/app/api/schedule/offers/**',
+      'src/app/api/schedule/blocks/*/offer/**',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },
