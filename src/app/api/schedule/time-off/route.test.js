@@ -1163,3 +1163,39 @@ describe('GET /api/schedule/time-off — approved_locked_to_owner (LEAVEGUARD.1)
     }
   })
 })
+
+// DATECHECK.1 — the list's range (the Time Off page, the roster's leave read,
+// the phone's My leave) reached Postgres unchecked and came back as a 400 with
+// its error text, after the member read had already run. preview=1 and the
+// POST were checked already (SCHEDHYGIENE.1).
+describe('GET /api/schedule/time-off — a date the calendar does not have', () => {
+  const getReq = (qs) => ({ url: `http://x/api/schedule/time-off${qs}`, headers: { get: () => '' } })
+  const MANAGER = { id: 'boss', role: 'manager', profileRole: 'staff', activeLocation: { id: 'loc-1' }, locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': 'manager' } }
+
+  it('400s in the route\'s own words, before any read', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    for (const [qs, name] of [
+      ['?location_id=loc-1&start_date=2026-02-30&end_date=2026-03-06', 'start_date'],
+      ['?location_id=loc-1&start_date=2026-04-01&end_date=2026-04-31', 'end_date'],
+      ['?location_id=loc-1&start_date=2026-13-01', 'start_date'],
+    ]) {
+      const db = fakeDb(() => ({ data: [], error: null }))
+      createServerClient.mockReturnValue(db)
+      const res = await GET(getReq(qs))
+      expect(res.status).toBe(400)
+      expect(await res.json()).toEqual({ success: false, error: `${name}: not a real date` })
+      expect(db.queries).toHaveLength(0)
+    }
+  })
+
+  it('a real range still lists the requests that overlap it', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const db = fakeDb(() => ({ data: [], error: null }))
+    createServerClient.mockReturnValue(db)
+    const res = await GET(getReq('?location_id=loc-1&start_date=2026-02-23&end_date=2026-03-01'))
+    expect(res.status).toBe(200)
+    const list = queriesOf(db, 'time_off_requests')[0]
+    expect(list.calls).toContainEqual(['lte', 'start_date', '2026-03-01'])
+    expect(list.calls).toContainEqual(['gte', 'end_date', '2026-02-23'])
+  })
+})

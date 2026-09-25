@@ -4,6 +4,7 @@ import { computeWeeklyCost, implicitHourlyRate, mondayOf, shiftHours } from '@/l
 import { isLiveAssignment, formatDate } from '@/lib/roster'
 import { logWarn } from '@/lib/log'
 import { roleAtDeletion } from '@/lib/staff-tombstone'
+import { reportPeriodError, eachReportDay } from '@/lib/report-period'
 
 // RETIRE-SHIFTS-MIRROR.1 — reports now read the Roster v2 source of truth
 // (shift_assignments + shift_blocks) instead of the legacy public.shifts
@@ -147,6 +148,14 @@ export async function generateReport({ report_type, period_start, period_end, lo
   if (!report_type || !period_start || !period_end || !locId) {
     return { success: false, error: 'report_type, period_start, period_end, and location_id are required' }
   }
+
+  // DATECHECK.1 — POST /api/schedule/reports refuses a bad period before
+  // calling this (the same rule), and the cron builds its period from real
+  // Dates; this is the floor for any other caller. Real dates, in order, at
+  // most 366 days: it also keeps roster_coverage's day walk short (9999-12-31
+  // used to spin it to the function timeout).
+  const periodError = reportPeriodError(period_start, period_end)
+  if (periodError) return { success: false, error: periodError }
 
   let reportData = {}
   let summary = {}
@@ -342,11 +351,14 @@ export async function generateReport({ report_type, period_start, period_end, lo
       ])
       if (shiftsError) return { success: false, error: shiftsError }
 
+      // DATECHECK.1 — walk the period as calendar strings. The old walk built
+      // LOCAL-midnight Dates and keyed them with toISOString(), which is UTC:
+      // under Irish summer time every key slid back a day (the report started
+      // on the Sunday before and lost its last day, and the spring-forward
+      // week keyed one day twice). Vercel runs in UTC, where both readings
+      // agree, so live reports were right; any process east of UTC was not.
       const days = {}
-      const start = new Date(period_start + 'T00:00:00')
-      const end = new Date(period_end + 'T00:00:00')
-      for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-        const ds = d.toISOString().split('T')[0]
+      for (const ds of eachReportDay(period_start, period_end)) {
         days[ds] = { shifts: 0, staff_on_shift: [], staff_off: [] }
       }
 
@@ -359,14 +371,13 @@ export async function generateReport({ report_type, period_start, period_end, lo
         }
       }
 
+      // Only the part of the leave inside the period can land on a day, so the
+      // walk is clipped to it (a year-long request no longer walks a year).
       for (const t of (timeOff || [])) {
-        const ts = new Date(t.start_date + 'T00:00:00')
-        const te = new Date(t.end_date + 'T00:00:00')
-        for (let d = new Date(ts); d <= te; d.setDate(d.getDate() + 1)) {
-          const ds = d.toISOString().split('T')[0]
-          if (days[ds]) {
-            days[ds].staff_off.push(t.profiles?.full_name || 'Unknown')
-          }
+        const from = t.start_date > period_start ? t.start_date : period_start
+        const to = t.end_date < period_end ? t.end_date : period_end
+        for (const ds of eachReportDay(from, to)) {
+          if (days[ds]) days[ds].staff_off.push(t.profiles?.full_name || 'Unknown')
         }
       }
 

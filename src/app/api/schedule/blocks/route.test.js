@@ -160,6 +160,41 @@ describe('GET /api/schedule/blocks — manager view', () => {
   })
 })
 
+// DATECHECK.1 — the range bounds went to Postgres unchecked, and the route
+// answered 400 with Postgres's own "date/time field value out of range".
+describe('GET /api/schedule/blocks — a date the calendar does not have', () => {
+  const MANAGER = { id: 'm', role: 'manager', profileRole: 'manager', rolesByLocation: { 'loc-1': 'manager' } }
+
+  it('400s in the route\'s own words, before any read', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    for (const [qs, name] of [
+      ['&start_date=2026-02-30&end_date=2026-03-06', 'start_date'],
+      ['&start_date=2026-04-27&end_date=2026-04-31', 'end_date'],
+      ['&start_date=2026-13-01', 'start_date'],
+      ['&end_date=soon', 'end_date'],
+    ]) {
+      const res = await GET(req(`http://x/api/schedule/blocks?location_id=loc-1${qs}`))
+      expect(res.status).toBe(400)
+      expect(await res.json()).toEqual({ success: false, error: `${name}: not a real date` })
+    }
+    expect(createServerClient).not.toHaveBeenCalled()
+  })
+
+  it('a real range (leap day included) still reads, bounded on block_date', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const calls = []
+    const q = {}
+    for (const op of ['eq', 'in', 'gte', 'lte', 'order']) q[op] = (...args) => { calls.push([op, ...args]); return q }
+    q.then = (res, rej) => Promise.resolve({ data: [], error: null }).then(res, rej)
+    createServerClient.mockReturnValue({ from: () => ({ select: () => q }) })
+
+    const res = await GET(req('http://x/api/schedule/blocks?location_id=loc-1&start_date=2028-02-28&end_date=2028-02-29'))
+    expect(res.status).toBe(200)
+    expect(calls).toContainEqual(['gte', 'block_date', '2028-02-28'])
+    expect(calls).toContainEqual(['lte', 'block_date', '2028-02-29'])
+  })
+})
+
 // ROSTER-FIX.4 — a manually-added block for a date inside an
 // already-published period must join that roster, or the extra Saturday slot
 // a manager just created is invisible to every coach.
@@ -291,6 +326,23 @@ describe('POST /api/schedule/blocks — post-publish blocks join the roster', ()
     const res = await POST(postReq({ location_id: LOC, template_id: TPL, block_date: '2026-06-06' }))
     expect(res.status).toBe(409)
     expect(db.captured.restore).toBeNull()
+  })
+
+  // DATECHECK.1 — an impossible date used to reach the insert, which Postgres
+  // refused with its own text as a 400, after a rosters read that logged a
+  // warning and answered "not published".
+  it('400s on a block_date the calendar does not have, and reads or writes nothing', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'm', role: 'manager', profileRole: 'manager', locations: [{ id: LOC }], rolesByLocation: { [LOC]: 'manager' } })
+    const { POST } = await import('./route.js')
+
+    for (const block_date of ['2026-02-30', '2026-06-31', '2027-02-29']) {
+      const res = await POST(postReq({ location_id: LOC, template_id: TPL, block_date }))
+      expect(res.status).toBe(400)
+      const json = await res.json()
+      expect(json.error).toBe('Invalid request body')
+      expect(json.issues).toEqual([{ path: 'block_date', message: 'Use a real date, YYYY-MM-DD' }])
+    }
+    expect(createServerClient).not.toHaveBeenCalled()
   })
 
   // SCHEDROLES.1 — manager at LOC (their ACTIVE studio), staff at LOC_B. The

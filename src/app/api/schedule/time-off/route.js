@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds, assertLocationAccess, hasRoleAtLocation } from '@/lib/auth'
 import { validateBody, uuidLike } from '@/lib/validate'
-import { timeOffTypeSchema, MANAGER_ROLES, isoDate, isRealCalendarDate } from '@/lib/schemas'
+import { timeOffTypeSchema, MANAGER_ROLES, realIsoDate, isRealCalendarDate } from '@/lib/schemas'
 import { notifyUsersOnce } from '@/lib/push-dedup'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import {
@@ -23,8 +23,10 @@ import {
 
 // SCHEDHYGIENE.1 — the shared shape check plus the shared calendar check. The
 // pattern alone let 2026-02-30 through: V8 rolled it to 2 March for the day
-// count, and Postgres refused it at the insert with a 500.
-const ISO_DATE = isoDate.refine(isRealCalendarDate, 'Use a real date, YYYY-MM-DD')
+// count, and Postgres refused it at the insert with a 500. DATECHECK.1 moved
+// the pair into schemas.js as realIsoDate (same message), shared by every
+// schedule route.
+const ISO_DATE = realIsoDate
 
 const TimeOffRequestSchema = z.object({
   // Use the shared catalogue (holiday/sick/unpaid/other/unavailable) — the
@@ -62,6 +64,15 @@ export async function GET(request) {
   const endDate = searchParams.get('end_date')
   const status = searchParams.get('status')
   const profileId = searchParams.get('profile_id')
+  // DATECHECK.1 — the list's range bounds reach Postgres as they are, and it
+  // refuses 2026-02-30 with a 400 carrying its own text (after the member read
+  // had run). Refuse it first, in change-log's words. The preview above has its
+  // own check. Absent or empty = no bound, as before.
+  for (const [name, value] of [['start_date', startDate], ['end_date', endDate]]) {
+    if (value && !isRealCalendarDate(value)) {
+      return NextResponse.json({ success: false, error: `${name}: not a real date` }, { status: 400 })
+    }
+  }
   const db = createServerClient()
 
   // Every filter is recorded, then applied to whichever select is sent, so the

@@ -29,7 +29,7 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess, getUserLocationIds, hasRoleAtLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { uuidLike, isoDate, MANAGER_ROLES } from '@/lib/schemas'
+import { uuidLike, realIsoDate, MANAGER_ROLES } from '@/lib/schemas'
 import {
   projectPublishImpact,
   findConflictingPublishedRosters,
@@ -49,8 +49,10 @@ import { logWarn } from '@/lib/log'
 
 const PublishSchema = z.object({
   location_id: uuidLike,
-  period_start: isoDate,
-  period_end: isoDate,
+  // DATECHECK.1 — real dates, not just the shape: 2026-02-30 reached the
+  // overlap probe and came back as Postgres's own 400.
+  period_start: realIsoDate,
+  period_end: realIsoDate,
   // Set true on a retry to acknowledge the over-budget warning.
   // Only honoured if the caller is owner-at-this-location or master.
   force_over_budget: z.boolean().optional(),
