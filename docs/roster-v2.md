@@ -254,9 +254,12 @@ own roster row, so this is one per publish.
   `logError('roster-snapshot', …)`. There is no publish transaction to join
   (the publish is a chain of PostgREST writes), and a lost audit record must
   not cost coaches their notification.
-- **Immutable:** service role holds SELECT and INSERT only; a trigger refuses
-  any UPDATE, the owner's included. Rows go only by cascade (a deleted draft
-  roster, which never has one; a deleted location).
+- **Immutable:** service role holds SELECT and INSERT only; triggers refuse
+  any UPDATE, DELETE or TRUNCATE, the owner's included. The one way out is a
+  deleted location (its cascade is let through). The roster FK is NO ACTION,
+  so a roster with a snapshot (one that was published) cannot be deleted at
+  all: only drafts are ever deleted, and reject pins its delete to
+  `status = 'draft'`.
 - **No names, no pay:** profile ids only; names are read when compared (a
   tombstone keeps `full_name`).
 - **Briefing as a fingerprint:** each block records BLOCKEDIT.1's briefing as

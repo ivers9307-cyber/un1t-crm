@@ -12,7 +12,7 @@
 -- WHAT
 --   public.roster_publish_snapshots — ONE row per published rosters row.
 --     id               uuid PK
---     roster_id        uuid NOT NULL UNIQUE → rosters(id) ON DELETE CASCADE
+--     roster_id        uuid NOT NULL UNIQUE → rosters(id) ON DELETE NO ACTION
 --     location_id      uuid NOT NULL → locations(id) ON DELETE CASCADE
 --     period_start/end date NOT NULL (the period the publish covered)
 --     published_at     timestamptz NOT NULL (copied from the rosters row)
@@ -22,9 +22,17 @@
 --     assignment_count int NOT NULL (live coaches across those blocks)
 --     snapshot         jsonb NOT NULL: { v, period_start, period_end, blocks: [
 --                        { slot, block_id, date, template_id, template_name,
---                          kind, start, end, min, max,
+--                          kind, start, end, min, max, briefing_hash,
 --                          coaches: [{ assignment_id, profile_id, start, end,
 --                                      overridden }] } ] }
+--                      briefing_hash is the SHA-256 hex of the block's trimmed
+--                      briefing (BLOCKEDIT.1, mig 629), null when none: the
+--                      text itself is never stored: free text can name a
+--                      person, and this row can never be corrected.
+--                      It is an UNSALTED digest, so a short, guessable
+--                      briefing could be confirmed by hashing a guess; the
+--                      table is service role only, and the digest exists to
+--                      tell "changed" from "unchanged", nothing more.
 --     created_at       timestamptz NOT NULL DEFAULT now()
 --
 -- WHY ONE jsonb DOCUMENT (not normalised rows)
@@ -44,12 +52,30 @@
 --
 -- WHY IMMUTABLE, TWICE
 --   service_role gets SELECT and INSERT only (Supabase's default ALL is revoked
---   first), so no route can UPDATE, DELETE or TRUNCATE a snapshot. A BEFORE
---   UPDATE trigger refuses the owner as well (dashboard edits, hand-run SQL).
---   Rows leave only by cascade: a deleted rosters row (only a rejected DRAFT is
---   ever deleted, and a draft has no snapshot) or a deleted location.
---   Referential actions run as the table owner, so the cascade needs no DELETE
---   grant.
+--   first), so no route can UPDATE, DELETE or TRUNCATE a snapshot. Triggers
+--   refuse the owner as well (dashboard edits, hand-run SQL): BEFORE UPDATE
+--   always, BEFORE TRUNCATE always, BEFORE DELETE unless the delete is the
+--   location's cascade (see below).
+--
+-- WHY THE ROSTER FK IS NO ACTION, NOT CASCADE
+--   Only a DRAFT roster is ever deleted (POST .../[id]/reject), and a draft
+--   has no snapshot, so a CASCADE here could only ever fire on a PUBLISHED
+--   roster, which is exactly when the record must survive. That is not
+--   hypothetical: reject reads the roster as a draft and then deletes it, and
+--   an approval landing between the two publishes and snapshots it. So a
+--   snapshotted roster cannot be deleted at all (the reject route also pins
+--   its delete to status = 'draft' since SNAPSHOT.1 review 2).
+--
+-- WHY A DELETED LOCATION STILL TAKES ITS SNAPSHOTS
+--   location_id keeps ON DELETE CASCADE (and rosters.location_id cascades
+--   too), so removing a whole studio removes its history with it; nothing
+--   else can. The BEFORE DELETE trigger lets a delete through only at
+--   pg_trigger_depth() >= 2, i.e. when it is fired from inside another
+--   trigger: the RI cascade from locations is such a trigger, a direct DELETE
+--   (depth 1) is not. The rosters rows the same cascade deletes pass the NO
+--   ACTION check because it runs at the end of the statement, after their
+--   snapshots are gone (proven in the replay). Referential actions run as the
+--   table owner, so the cascade needs no DELETE grant.
 --
 -- WHY published_by HAS NO FK
 --   rosters.published_by carries the FK already; staff profiles are never
@@ -77,8 +103,9 @@
 -- ─────────────────────────────────────────────────────────────────────────
 -- (a) The names are free:
 --       SELECT to_regclass('public.roster_publish_snapshots') AS t,
---              to_regprocedure('public.roster_publish_snapshots_refuse_update()') AS f;
---     Expected: t = NULL, f = NULL.
+--              to_regprocedure('public.roster_publish_snapshots_refuse_update()') AS f,
+--              to_regprocedure('public.roster_publish_snapshots_refuse_delete()') AS g;
+--     Expected: t = NULL, f = NULL, g = NULL.
 -- (b) The FK targets are what the file assumes:
 --       SELECT table_name, data_type FROM information_schema.columns
 --        WHERE table_schema='public' AND column_name='id' AND table_name IN ('rosters','locations')
@@ -128,14 +155,20 @@
 --     roster_publish_snapshots_roster_id_key,
 --     roster_publish_snapshots_shape_check.
 -- (j) SELECT tgname, tgenabled FROM pg_trigger
---      WHERE tgrelid = 'public.roster_publish_snapshots'::regclass AND NOT tgisinternal;
---     Expected: roster_publish_snapshots_immutable | O.
+--      WHERE tgrelid = 'public.roster_publish_snapshots'::regclass AND NOT tgisinternal
+--      ORDER BY 1;
+--     Expected 3, all O: roster_publish_snapshots_immutable,
+--     roster_publish_snapshots_no_delete, roster_publish_snapshots_no_truncate.
+--     SELECT conname, confdeltype FROM pg_constraint
+--      WHERE conrelid = 'public.roster_publish_snapshots'::regclass AND contype = 'f' ORDER BY 1;
+--     Expected: location_id_fkey c, roster_id_fkey a (NO ACTION).
 -- (k) SELECT count(*) FROM public.roster_publish_snapshots;   Expected: 0.
 -- (l) get_advisors (security, then performance). Expected: INFO
 --     rls_enabled_no_policy on roster_publish_snapshots (by design, see
 --     ACCESS); possibly INFO unused_index on the new index until the first
 --     compare; nothing else new. function_search_path_mutable must NOT appear
---     for roster_publish_snapshots_refuse_update (it pins search_path = '').
+--     for roster_publish_snapshots_refuse_update or _refuse_delete (both pin
+--     search_path = '').
 --
 -- AFTER THE FIRST REAL PUBLISH post-deploy (read-only):
 --   SELECT s.roster_id, s.block_count, s.assignment_count, pg_column_size(s.snapshot) AS bytes,
@@ -151,6 +184,7 @@
 --     BEGIN;
 --       DROP TABLE IF EXISTS public.roster_publish_snapshots;
 --       DROP FUNCTION IF EXISTS public.roster_publish_snapshots_refuse_update();
+--       DROP FUNCTION IF EXISTS public.roster_publish_snapshots_refuse_delete();
 --     COMMIT;
 --   Every snapshot is lost for good (they cannot be rebuilt: that is the point
 --   of them). Usually unnecessary: the table is inert without the code.
@@ -173,7 +207,8 @@ CREATE TABLE IF NOT EXISTS public.roster_publish_snapshots (
   CONSTRAINT roster_publish_snapshots_pkey PRIMARY KEY (id),
   CONSTRAINT roster_publish_snapshots_roster_id_key UNIQUE (roster_id),
   CONSTRAINT roster_publish_snapshots_roster_id_fkey
-    FOREIGN KEY (roster_id) REFERENCES public.rosters(id) ON DELETE CASCADE,
+    -- NO ACTION, never CASCADE: see WHY THE ROSTER FK IS NO ACTION.
+    FOREIGN KEY (roster_id) REFERENCES public.rosters(id) ON DELETE NO ACTION,
   CONSTRAINT roster_publish_snapshots_location_id_fkey
     FOREIGN KEY (location_id) REFERENCES public.locations(id) ON DELETE CASCADE,
   CONSTRAINT roster_publish_snapshots_period_check CHECK (period_end >= period_start),
@@ -213,6 +248,34 @@ DROP TRIGGER IF EXISTS roster_publish_snapshots_immutable ON public.roster_publi
 CREATE TRIGGER roster_publish_snapshots_immutable
   BEFORE UPDATE ON public.roster_publish_snapshots
   FOR EACH ROW EXECUTE FUNCTION public.roster_publish_snapshots_refuse_update();
+
+-- A direct DELETE (depth 1) and any TRUNCATE are refused; a DELETE fired from
+-- inside another trigger (the locations cascade, depth >= 2) goes through.
+CREATE OR REPLACE FUNCTION public.roster_publish_snapshots_refuse_delete()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = ''
+AS $$
+BEGIN
+  IF TG_OP = 'DELETE' AND pg_trigger_depth() >= 2 THEN
+    RETURN OLD;
+  END IF;
+  RAISE EXCEPTION 'roster_publish_snapshots rows are never deleted (SNAPSHOT.1, mig 634): they go only with their location'
+    USING ERRCODE = 'check_violation';
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.roster_publish_snapshots_refuse_delete() FROM PUBLIC, anon, authenticated;
+
+DROP TRIGGER IF EXISTS roster_publish_snapshots_no_delete ON public.roster_publish_snapshots;
+CREATE TRIGGER roster_publish_snapshots_no_delete
+  BEFORE DELETE ON public.roster_publish_snapshots
+  FOR EACH ROW EXECUTE FUNCTION public.roster_publish_snapshots_refuse_delete();
+
+DROP TRIGGER IF EXISTS roster_publish_snapshots_no_truncate ON public.roster_publish_snapshots;
+CREATE TRIGGER roster_publish_snapshots_no_truncate
+  BEFORE TRUNCATE ON public.roster_publish_snapshots
+  FOR EACH STATEMENT EXECUTE FUNCTION public.roster_publish_snapshots_refuse_delete();
 
 ALTER TABLE public.roster_publish_snapshots ENABLE ROW LEVEL SECURITY;
 
@@ -254,10 +317,24 @@ BEGIN
   SELECT count(*) INTO v_trig
     FROM pg_trigger
    WHERE tgrelid = 'public.roster_publish_snapshots'::regclass
-     AND tgname = 'roster_publish_snapshots_immutable'
+     AND tgname IN ('roster_publish_snapshots_immutable', 'roster_publish_snapshots_no_delete',
+                    'roster_publish_snapshots_no_truncate')
      AND NOT tgisinternal AND tgenabled = 'O';
-  IF v_trig <> 1 THEN
-    RAISE EXCEPTION 'mig 634: the immutability trigger is missing or disabled';
+  IF v_trig <> 3 THEN
+    RAISE EXCEPTION 'mig 634: an immutability trigger is missing or disabled (found % of 3)', v_trig;
+  END IF;
+
+  -- The roster FK must NOT cascade (a published roster's record outlives it);
+  -- the location FK must.
+  IF (SELECT confdeltype FROM pg_constraint
+       WHERE conname = 'roster_publish_snapshots_roster_id_fkey'
+         AND conrelid = 'public.roster_publish_snapshots'::regclass) IS DISTINCT FROM 'a' THEN
+    RAISE EXCEPTION 'mig 634: roster_publish_snapshots_roster_id_fkey must be ON DELETE NO ACTION';
+  END IF;
+  IF (SELECT confdeltype FROM pg_constraint
+       WHERE conname = 'roster_publish_snapshots_location_id_fkey'
+         AND conrelid = 'public.roster_publish_snapshots'::regclass) IS DISTINCT FROM 'c' THEN
+    RAISE EXCEPTION 'mig 634: roster_publish_snapshots_location_id_fkey must be ON DELETE CASCADE';
   END IF;
 
   IF NOT (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.roster_publish_snapshots'::regclass) THEN
@@ -288,7 +365,7 @@ BEGIN
 END $$;
 
 COMMENT ON TABLE public.roster_publish_snapshots IS
-  'SNAPSHOT.1 (mig 634): what each roster publish published: every shift block in the period (date, template, kind, times, min/max) and every live coach on it (profile id, effective window), as one jsonb document per rosters row. Written once, after the publish tagged its blocks; immutable (service_role SELECT/INSERT only, UPDATE refused by trigger). Service role only. Read by GET /api/schedule/rosters/[id]/compare.';
+  'SNAPSHOT.1 (mig 634): what each roster publish published: every shift block in the period (date, template, kind, times, min/max) and every live coach on it (profile id, effective window), as one jsonb document per rosters row. Written once, after the publish tagged its blocks; immutable (service_role SELECT/INSERT only; UPDATE, DELETE and TRUNCATE refused by trigger, except the cascade from a deleted location; a snapshotted roster cannot be deleted). Service role only. Read by GET /api/schedule/rosters/[id]/compare.';
 COMMENT ON COLUMN public.roster_publish_snapshots.format_version IS
   'Shape of the snapshot document (1 = { v, period_start, period_end, blocks: [...] }). Readers refuse a version newer than they know.';
 COMMENT ON COLUMN public.roster_publish_snapshots.published_by IS

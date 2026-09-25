@@ -22,6 +22,9 @@ const MIG_634 = readFileSync(
 const LOC = '20000000-0000-0000-0000-000000000001'
 const R1 = '30000000-0000-0000-0000-000000000001'
 const R2 = '30000000-0000-0000-0000-000000000002'
+const R3 = '30000000-0000-0000-0000-000000000003' // a draft
+const LOC2 = '20000000-0000-0000-0000-000000000002'
+const R4 = '30000000-0000-0000-0000-000000000004' // published, at LOC2
 
 const BASE_SCHEMA = `
   CREATE ROLE anon NOLOGIN;
@@ -39,6 +42,7 @@ const BASE_SCHEMA = `
   );
   INSERT INTO public.locations (id) VALUES ('${LOC}');
   INSERT INTO public.rosters (id, location_id) VALUES ('${R1}', '${LOC}'), ('${R2}', '${LOC}');
+  INSERT INTO public.rosters (id, location_id, status) VALUES ('${R3}', '${LOC}', 'draft');
 `
 
 function snapshotJson(blocks) {
@@ -50,10 +54,10 @@ function snapshotJson(blocks) {
   })
 }
 
-function insertSql(rosterId, { blocks = 1, blockCount = blocks, snapshot = snapshotJson(blocks), periodEnd = '2026-09-20' } = {}) {
+function insertSql(rosterId, { blocks = 1, blockCount = blocks, snapshot = snapshotJson(blocks), periodEnd = '2026-09-20', loc = LOC } = {}) {
   return `INSERT INTO public.roster_publish_snapshots
       (roster_id, location_id, period_start, period_end, published_at, block_count, assignment_count, snapshot)
-    VALUES ('${rosterId}', '${LOC}', '2026-09-14', '${periodEnd}', now(), ${blockCount}, 0, '${snapshot}'::jsonb)`
+    VALUES ('${rosterId}', '${loc}', '2026-09-14', '${periodEnd}', now(), ${blockCount}, 0, '${snapshot}'::jsonb)`
 }
 
 let db
@@ -180,22 +184,80 @@ describe('migration 634 — roster_publish_snapshots', () => {
     await expect(db.exec(insertSql(R1, { periodEnd: '2026-09-13' }))).rejects.toThrow(/roster_publish_snapshots_period_check/)
   })
 
-  it('goes with its roster (a rejected draft is deleted by the service role; the cascade needs no DELETE grant)', async () => {
+  // Review 1 — a snapshot must outlive any attempt to delete its PUBLISHED
+  // roster: the reject route's check-then-delete race could otherwise delete a
+  // roster an approval had just published, and a cascade would take the
+  // record with it. Only a draft (never snapshotted) is ever deleted.
+  async function refused(sql, pattern) {
+    await db.exec('SAVEPOINT refused')
+    await expect(db.exec(sql)).rejects.toThrow(pattern)
+    await db.exec('ROLLBACK TO SAVEPOINT refused')
+  }
+
+  it('the roster FK is NO ACTION and the location FK CASCADE', async () => {
+    const { rows } = await db.query(`SELECT conname, confdeltype FROM pg_constraint
+      WHERE conrelid = 'public.roster_publish_snapshots'::regclass AND contype = 'f' ORDER BY conname`)
+    expect(rows).toEqual([
+      { conname: 'roster_publish_snapshots_location_id_fkey', confdeltype: 'c' },
+      { conname: 'roster_publish_snapshots_roster_id_fkey', confdeltype: 'a' },
+    ])
+  })
+
+  it('a published roster with a snapshot cannot be deleted, by the service role or the owner', async () => {
     await inTx(async () => {
       await db.exec(insertSql(R2))
       await asRole('service_role', async () => {
-        await db.exec(`DELETE FROM public.rosters WHERE id = '${R2}'`)
+        await refused(`DELETE FROM public.rosters WHERE id = '${R2}'`, /roster_publish_snapshots_roster_id_fkey/)
       })
-      const { rows } = await db.query(`SELECT count(*)::int AS n FROM public.roster_publish_snapshots`)
+      await refused(`DELETE FROM public.rosters WHERE id = '${R2}'`, /roster_publish_snapshots_roster_id_fkey/)
+      const { rows } = await db.query(`SELECT count(*)::int AS n FROM public.roster_publish_snapshots WHERE roster_id = '${R2}'`)
+      expect(rows).toEqual([{ n: 1 }])
+    })
+  })
+
+  it('a draft (which has no snapshot) is still deleted by the service role, as the reject route does', async () => {
+    await inTx(async () => {
+      await asRole('service_role', async () => {
+        await db.exec(`DELETE FROM public.rosters WHERE id = '${R3}'`)
+      })
+      const { rows } = await db.query(`SELECT count(*)::int AS n FROM public.rosters WHERE id = '${R3}'`)
       expect(rows).toEqual([{ n: 0 }])
     })
   })
 
-  it('the trigger function is not callable by the browser roles', async () => {
-    for (const role of ['anon', 'authenticated']) {
-      const { rows } = await db.query(
-        `SELECT has_function_privilege($1, 'public.roster_publish_snapshots_refuse_update()', 'EXECUTE') AS ok`, [role])
-      expect(rows[0].ok, `${role} can execute the trigger function`).toBe(false)
+  it('a direct DELETE of a snapshot is refused: the service role has no privilege, the owner meets the trigger', async () => {
+    await inTx(async () => {
+      await db.exec(insertSql(R1))
+      await asRole('service_role', async () => {
+        await refused(`DELETE FROM public.roster_publish_snapshots WHERE roster_id = '${R1}'`, /permission denied/)
+      })
+      await refused(`DELETE FROM public.roster_publish_snapshots WHERE roster_id = '${R1}'`, /never deleted/)
+      await refused('TRUNCATE public.roster_publish_snapshots', /never deleted/)
+      const { rows } = await db.query(`SELECT count(*)::int AS n FROM public.roster_publish_snapshots`)
+      expect(rows).toEqual([{ n: 1 }])
+    })
+  })
+
+  it('deleting a location removes its rosters and their snapshots, and only theirs', async () => {
+    await inTx(async () => {
+      await db.exec(`INSERT INTO public.locations (id) VALUES ('${LOC2}')`)
+      await db.exec(`INSERT INTO public.rosters (id, location_id) VALUES ('${R4}', '${LOC2}')`)
+      await db.exec(insertSql(R4, { loc: LOC2 }))
+      await db.exec(insertSql(R1))
+      await db.exec(`DELETE FROM public.locations WHERE id = '${LOC2}'`)
+      const { rows } = await db.query(`SELECT roster_id FROM public.roster_publish_snapshots ORDER BY roster_id`)
+      expect(rows).toEqual([{ roster_id: R1 }])
+      const r = await db.query(`SELECT count(*)::int AS n FROM public.rosters WHERE id = '${R4}'`)
+      expect(r.rows).toEqual([{ n: 0 }])
+    })
+  })
+
+  it('the trigger functions are not callable by the browser roles', async () => {
+    for (const fn of ['roster_publish_snapshots_refuse_update()', 'roster_publish_snapshots_refuse_delete()']) {
+      for (const role of ['anon', 'authenticated']) {
+        const { rows } = await db.query(`SELECT has_function_privilege($1, $2, 'EXECUTE') AS ok`, [role, `public.${fn}`])
+        expect(rows[0].ok, `${role} can execute ${fn}`).toBe(false)
+      }
     }
   })
 
@@ -203,6 +265,6 @@ describe('migration 634 — roster_publish_snapshots', () => {
     await db.exec(MIG_634)
     const { rows } = await db.query(`SELECT count(*)::int AS n FROM pg_trigger
       WHERE tgrelid = 'public.roster_publish_snapshots'::regclass AND NOT tgisinternal`)
-    expect(rows).toEqual([{ n: 1 }])
+    expect(rows).toEqual([{ n: 3 }])
   })
 })
