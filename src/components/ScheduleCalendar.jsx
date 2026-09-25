@@ -77,6 +77,10 @@ import SchedulePartialLoadNote, {
   STAFF_UNAVAILABLE_MESSAGE, TEMPLATES_UNAVAILABLE_MESSAGE,
 } from './schedule/SchedulePartialLoadNote'
 import RosterChangeLogDrawer from './schedule/RosterChangeLogDrawer'
+// REPLACE.1b — "Offer to team" in the block dialog.
+import { useShiftOffers } from './schedule/useShiftOffers'
+import OfferToTeamControl from './schedule/OfferToTeamControl'
+import { offerPostResultText } from '@shared/offer-to-team'
 import { publishedRosterIdsIn } from '@/lib/roster-compare-format'
 import PublicationStatusChip from './schedule/PublicationStatusChip'
 import { timeOffLeaveLabel } from '@shared/time-off'
@@ -625,6 +629,9 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
   // publish modal's month scope uses.
   const visiblePeriodStart = viewType === 'month' ? formatDate(monthStart) : formatDate(weekStart)
   const visiblePeriodEnd = viewType === 'month' ? formatDate(visibleMonthEnd) : formatDate(weekEnd)
+  // REPLACE.1b — the open "Offer to team" offers on screen, keyed by shift
+  // (managers only; a coach never asks).
+  const offers = useShiftOffers({ locationId, startDate: visiblePeriodStart, endDate: visiblePeriodEnd, enabled: isManager })
 
   // CHANGELOG.1 — what the publication chip calls. Named, so the chip can move
   // (it lives in its own component) and carry one prop with it. A plain
@@ -683,6 +690,8 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
       }
       setAssignTarget(null)
       refreshAfterMutation()
+      // REPLACE.1b — a filled shift's offer closes server-side; re-read the line.
+      offers.reload()
     } catch {
       showToast('Network error, please try again')
     }
@@ -720,6 +729,40 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
     showToast(outcome.message, outcome.tone, { sticky: outcome.sticky === true })
     setReplaceTarget(null)
     refreshAfterMutation()
+    offers.reload()
+  }
+
+  // REPLACE.1b — offer a shift to the team, or withdraw an open offer. The
+  // words are shared/offer-to-team.js (the phone says the same).
+  async function handleOfferBlock(block) {
+    if (rowBusy) return
+    setRowBusy(true)
+    try {
+      const res = await fetch(`/api/schedule/blocks/${block.id}/offer`, { method: 'POST' })
+      const json = await res.json().catch(() => ({}))
+      const out = offerPostResultText(res.status, json)
+      showToast(out.text, out.tone)
+      offers.reload()
+    } catch {
+      showToast('Network error, please try again')
+    } finally {
+      setRowBusy(false)
+    }
+  }
+  async function handleWithdrawOffer(offer) {
+    if (rowBusy || !confirm('Withdraw this offer? Coaches will no longer see it.')) return
+    setRowBusy(true)
+    try {
+      const res = await fetch(`/api/schedule/offers/${offer.id}`, { method: 'DELETE' })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok || !json.success) showToast(json.error || 'Could not withdraw the offer')
+      else showToast('Offer withdrawn.', 'success')
+      offers.reload()
+    } catch {
+      showToast('Network error, please try again')
+    } finally {
+      setRowBusy(false)
+    }
   }
 
   // (handleUnassign was dead code — assignment-removal logic now lives
@@ -1648,6 +1691,12 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
           onReplace={isManager && blockDetail.block_date >= todayStr
             ? (assignment) => setReplaceTarget({ block: blockDetail, assignment })
             : null}
+          // REPLACE.1b — "Offer to team": the shared rule decides whether the
+          // button shows; an open offer shows its state and Withdraw.
+          offer={offers.byBlockId[blockDetail.id] ?? null}
+          todayIso={todayStr}
+          onOffer={() => handleOfferBlock(blockDetail)}
+          onWithdrawOffer={(o) => handleWithdrawOffer(o)}
           busy={rowBusy}
           onUnassign={async (assignmentId) => {
             if (rowBusy) return
@@ -1661,6 +1710,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
                 return
               }
               await refreshAfterMutation()
+              offers.reload()
             } catch {
               showToast('Network error, please try again')
             } finally {
@@ -2609,6 +2659,7 @@ const DELETE_SLOT_CONFIRM =
 function BlockDetailModal({
   block, user, isManager, busy,
   onClose, onAddCoach, onUnassign, onReplace = null, onPartialSave, onDeleteBlock, onSwapRequest, onEditBlock,
+  offer = null, todayIso, onOffer, onWithdrawOffer,
 }) {
   const tmpl = block.shift_templates || {}
   const assignments = liveAssignments(block.shift_assignments)
@@ -2703,6 +2754,14 @@ function BlockDetailModal({
             ))
           )}
         </div>
+
+        {/* REPLACE.1b — Offer to team (managers). The shared rule decides whether it shows. */}
+        {isManager && onOffer && (
+          <div className="mb-4">
+            <OfferToTeamControl block={block} offer={offer} todayIso={todayIso} busy={busy}
+              onOffer={onOffer} onWithdraw={() => offer && onWithdrawOffer?.(offer)} />
+          </div>
+        )}
 
         {/* Action footer */}
         <div className="border-t border-un1t-border pt-4 flex items-center justify-between gap-2">
