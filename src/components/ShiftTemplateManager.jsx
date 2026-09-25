@@ -30,6 +30,13 @@ const DAY_OPTIONS = [
   { code: 'sun', label: 'Sun' },
 ]
 
+// SHIFTTYPE.1 (mig 628) — what kind of shift a template makes. The hint is
+// the rule in the operator's words, so the choice explains itself.
+const KIND_OPTIONS = [
+  { value: 'class', label: 'Class', hint: 'Needs coaches. Flagged when below its minimum.' },
+  { value: 'admin', label: 'Admin', hint: 'No minimum. Never flagged as a gap, outside the contractor budget; hours still count.' },
+]
+
 function formatDays(days) {
   if (!days || days.length === 0) return null
   const order = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
@@ -337,6 +344,14 @@ export default function ShiftTemplateManager({ user }) {
                           never shown again, so the number driving every
                           understaffed flag in the estate was invisible here. */}
                       <span className="flex items-center gap-1"><Users size={12} /> {coachRangeLabel(t)}</span>
+                      {t.kind === 'admin' && (
+                        <span
+                          className="text-xs px-1.5 py-0.5 rounded font-medium bg-slate-500/10 text-slate-700"
+                          title="Admin shift: no minimum, never flagged as a gap, outside the contractor budget. Hours still count."
+                        >
+                          Admin
+                        </span>
+                      )}
                       {oneOff ? (
                         <span
                           className="text-xs px-1.5 py-0.5 rounded font-medium bg-slate-500/10 text-slate-700"
@@ -471,6 +486,17 @@ function TemplateFormModal({ template, onSave, onClose }) {
   const [minCoaches, setMinCoaches] = useState(
     template?.min_coaches === 0 ? 0 : (template?.min_coaches || 1)
   )
+  // SHIFTTYPE.1 — an admin template has no minimum; the API refuses one
+  // (admin_has_no_minimum), so the field is locked at 0 while Admin is chosen.
+  const [kind, setKind] = useState(template?.kind === 'admin' ? 'admin' : 'class')
+
+  function chooseKind(next) {
+    if (next === kind) return
+    setKind(next)
+    if (next === 'admin') setMinCoaches(0)
+    // Leaving admin: the same default a new class template gets (SHIFTMIN.1).
+    else if (minCoaches === 0) setMinCoaches(1)
+  }
 
   function toggleDay(code) {
     setDays(prev => prev.includes(code) ? prev.filter(d => d !== code) : [...prev, code])
@@ -509,6 +535,33 @@ function TemplateFormModal({ template, onSave, onClose }) {
               className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
             />
           </div>
+
+          <fieldset>
+            <legend className="block text-xs text-un1t-subtle mb-1">Kind *</legend>
+            <div className="grid grid-cols-2 gap-2">
+              {KIND_OPTIONS.map((k) => (
+                <label
+                  key={k.value}
+                  className={`flex items-start gap-2 rounded-md border px-3 py-2 cursor-pointer bg-un1t-bg ${
+                    kind === k.value ? 'border-un1t-text' : 'border-un1t-border'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="template-kind"
+                    value={k.value}
+                    checked={kind === k.value}
+                    onChange={() => chooseKind(k.value)}
+                    className="mt-0.5"
+                  />
+                  <span>
+                    <span className="block text-sm font-medium text-un1t-text">{k.label}</span>
+                    <span className="block text-[11px] text-un1t-subtle">{k.hint}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -568,20 +621,24 @@ function TemplateFormModal({ template, onSave, onClose }) {
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs text-un1t-subtle mb-1">Minimum coaches *</label>
+              <label htmlFor="template-min-coaches" className="block text-xs text-un1t-subtle mb-1">Minimum coaches *</label>
               <input
+                id="template-min-coaches"
                 type="number"
                 min={0}
                 max={maxCoaches}
                 value={minCoaches}
+                disabled={kind === 'admin'}
                 onChange={e => {
                   const v = Math.max(0, Math.min(maxCoaches, parseInt(e.target.value || '0', 10)))
                   setMinCoaches(v)
                 }}
-                className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+                className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text disabled:opacity-60"
               />
               <p className="text-[11px] text-un1t-subtle mt-1.5">
-                Blocks with fewer assigned flip the Studio Overview to amber. 0 = no floor.
+                {kind === 'admin'
+                  ? 'Admin shifts have no minimum.'
+                  : 'Blocks with fewer assigned flip the Studio Overview to amber. 0 = no floor.'}
               </p>
             </div>
             <div>
@@ -651,6 +708,7 @@ function TemplateFormModal({ template, onSave, onClose }) {
               days_of_week: days,
               max_coaches: maxCoaches,
               min_coaches: minCoaches,
+              kind,
             })
           }
           disabled={!name || !startTime || !endTime}
