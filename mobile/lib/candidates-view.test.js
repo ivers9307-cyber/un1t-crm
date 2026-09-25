@@ -70,6 +70,17 @@ describe('candidatePickerView', () => {
       .toEqual({ id: 'zed', full_name: 'Zed', role: 'staff', reason: 'Free then', tone: 'good' })
   })
 
+  // CANDIDATES.1 review 2 — the server words a free colleague "Free here then"
+  // when the other studios could not be read; the sheet shows it verbatim.
+  it('the other studios unchecked: the reason says "here", and the note says why', () => {
+    const res = { success: true, data: { audience: 'colleague', checked: { shifts: true, cross_studio: false }, candidates: [
+      { profile_id: 'zed', full_name: 'Zed', role: 'staff', rank: 1, tier: 'ready', reason: 'Free here then', free: true },
+    ] } }
+    const view = candidatePickerView({ answer: answerOf(res), staff, block, locationId: LOC })
+    expect(view.rows[0].reason).toBe('Free here then')
+    expect(view.note).toBe('Could not check the other studios, so the order may be off.')
+  })
+
   it('while ranking: the studio A–Z (never the coach already on it), labelled', () => {
     const view = candidatePickerView({ answer: null, pending: true, staff, block, locationId: LOC })
     expect(view.rows.map((r) => r.id)).toEqual(['amy', 'zed'])

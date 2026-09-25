@@ -149,6 +149,27 @@ describe('assign picker: ranked candidates (CANDIDATES.1)', () => {
   })
 })
 
+// CANDIDATES.1 review 2 — the other studios unread: free means free HERE.
+describe('assign picker: the other studios could not be checked', () => {
+  it('says so, and a free row reads "Free here", never a bare all-clear', async () => {
+    global.fetch = mockFetch({ answer: { ...ANSWER, data: { ...ANSWER.data, checked: { ...ANSWER.data.checked, cross_studio: false } } } })
+    await openAssignPicker()
+    expect(await screen.findByText('Could not check the other studios, so the order may be off.')).toBeTruthy()
+    const rest = items()[1]
+    expect(rest.textContent).toContain('Rest Coach')
+    expect(rest.textContent).toContain('Free here · 1h 30m of 39h this week')
+    // On site, on leave or unavailable rows lead with that instead.
+    expect(items()[0].textContent).not.toContain('Free here')
+    expect(items()[3].textContent).not.toContain('Free here')
+  })
+
+  it('checked: no "Free here" anywhere', async () => {
+    await openAssignPicker()
+    await screen.findByText('9h 30m rest')
+    expect(screen.getByRole('dialog').textContent).not.toContain('Free here')
+  })
+})
+
 describe('assign picker: before, or without, a ranked answer (CANDIDATES.1)', () => {
   it('shows the studio A–Z while ranking, then the ranked order', async () => {
     let answer

@@ -44,6 +44,9 @@ import { timeOffLeaveLabel } from './time-off.js'
 export const CANDIDATE_TIERS = Object.freeze(['ready', 'advisory', 'unavailable', 'blocked'])
 const CANDIDATE_TONES = Object.freeze({ ready: 'good', advisory: 'warn', unavailable: 'muted', blocked: 'bad' })
 
+// Free at this studio; the organisation's other studios could not be read.
+const FREE_HERE = 'Free here'
+
 export const CANDIDATES_RANKING_NOTE = 'Ranking coaches…'
 export const CANDIDATES_UNRANKED_NOTE = 'Coaches could not be checked or ranked, so they are listed A–Z.'
 
@@ -140,12 +143,12 @@ export function compareCandidates(a, b) {
  * Rank the PROJECTED facts: a colleague's list must be ranked on what a
  * colleague may see, or the order itself leaks the rest.
  */
-export function rankCandidates(list, audience = 'manager') {
+export function rankCandidates(list, audience = 'manager', { crossStudioChecked = true } = {}) {
   return (list || [])
     .filter(Boolean)
     .map((c) => ({ ...c, tier: candidateTier(c) }))
     .sort(compareCandidates)
-    .map((c, i) => ({ ...c, rank: i + 1, reason: candidateReason(c, audience) }))
+    .map((c, i) => ({ ...c, rank: i + 1, reason: candidateReason(c, audience, { crossStudioChecked }) }))
 }
 
 // ── Words ───────────────────────────────────────────────────────────────────
@@ -203,11 +206,17 @@ export function candidateHoursLine(c) {
   return c.week_minutes === 0 ? 'No shifts this week' : `${hoursMinutesLabel(c.week_minutes)} this week`
 }
 
-/** The web row's second line: 'Here 7am–9am · 2h this week'. */
-export function candidateMeta(c) {
+/**
+ * The web row's second line: 'Here 7am–9am · 2h this week'. When the other
+ * studios could not be read (`crossStudioChecked` false), a free row with
+ * nothing worse to say leads 'Free here', so an unbadged row is not read as
+ * free everywhere.
+ */
+export function candidateMeta(c, { crossStudioChecked = true } = {}) {
   if (!c) return null
   const parts = []
   if (c.on_site) parts.push(`Here ${time12(c.on_site.start)}–${time12(c.on_site.end)}`)
+  else if (!crossStudioChecked && c.free === true && !c.on_leave && !c.unavailable) parts.push(FREE_HERE)
   const hours = candidateHoursLine(c)
   if (hours) parts.push(hours)
   return parts.length ? parts.join(' · ') : null
@@ -216,12 +225,13 @@ export function candidateMeta(c) {
 /**
  * The phone row's one line (and `reason` in the API). The worst thing first,
  * then the hours. A colleague (the coach asking for cover) is told free or
- * working, nothing else.
+ * working, nothing else. `crossStudioChecked` false (the other studios could
+ * not be read): "free" is only known HERE, and the words say so.
  */
-export function candidateReason(c, audience = 'manager') {
+export function candidateReason(c, audience = 'manager', { crossStudioChecked = true } = {}) {
   if (!c) return null
   if (audience === 'colleague') {
-    if (c.free === true) return 'Free then'
+    if (c.free === true) return crossStudioChecked ? 'Free then' : `${FREE_HERE} then`
     if (c.free === false) return 'Working then'
     return null
   }
@@ -232,7 +242,7 @@ export function candidateReason(c, audience = 'manager') {
   else if (c.rest_gap) lead = `Only ${hoursMinutesLabel(c.rest_gap.rest_minutes)} rest`
   else if (c.week_over) lead = `${hoursMinutesLabel(c.week_over.minutes)} with this shift`
   else if (c.on_site) lead = `Here ${time12(c.on_site.start)}–${time12(c.on_site.end)}`
-  else if (c.free === true) lead = 'Free'
+  else if (c.free === true) lead = crossStudioChecked ? 'Free' : FREE_HERE
   const line = [lead, candidateHoursLine(c)].filter(Boolean).join(' · ')
   return line || null
 }
@@ -442,5 +452,8 @@ export function buildCandidates({
   const untimed = colleague || people.length === 0
     ? 0
     : untimedShiftCount((shifts || []).filter((s) => ids.has(s?.profile_id))) + (target ? 0 : 1)
-  return { candidates: rankCandidates(facts, colleague ? 'colleague' : 'manager'), untimed }
+  return {
+    candidates: rankCandidates(facts, colleague ? 'colleague' : 'manager', { crossStudioChecked: checked?.cross_studio !== false }),
+    untimed,
+  }
 }

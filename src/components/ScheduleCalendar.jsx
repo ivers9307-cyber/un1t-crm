@@ -1863,7 +1863,8 @@ function AssignCoachModal({
               {rows.map((row) => {
                 const checked = selectedIds.has(row.id)
                 const c = row.candidate
-                const meta = c ? candidateMeta(c) : null
+                // "Free here" when the other studios could not be read.
+                const meta = c ? candidateMeta(c, { crossStudioChecked: ranked.checked?.cross_studio !== false }) : null
                 return (
                   <li key={row.id}>
                     <label className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-un1t-border/30">

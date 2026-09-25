@@ -253,6 +253,39 @@ describe('buildCandidates — manager', () => {
   })
 })
 
+// CANDIDATES.1 review 2 — when the other studios could not be read, "free"
+// only means free HERE, and every surface says so.
+describe('the other studios unchecked: "Free here", never a bare "Free"', () => {
+  const NOT_ELSEWHERE = { crossStudioChecked: false }
+
+  it('reason, manager and colleague', () => {
+    expect(candidateReason({ free: true, week_minutes: 240, contracted_hours: 39 }, 'manager', NOT_ELSEWHERE)).toBe('Free here · 4h of 39h this week')
+    expect(candidateReason({ free: true }, 'colleague', NOT_ELSEWHERE)).toBe('Free here then')
+    expect(candidateReason({ free: false }, 'colleague', NOT_ELSEWHERE)).toBe('Working then')
+    // Checked (the default): unchanged.
+    expect(candidateReason({ free: true, week_minutes: 240, contracted_hours: 39 })).toBe('Free · 4h of 39h this week')
+    expect(candidateReason({ free: true }, 'colleague')).toBe('Free then')
+  })
+
+  it("the web row's meta line says it too, only when nothing worse leads", () => {
+    expect(candidateMeta({ free: true, week_minutes: 120 }, NOT_ELSEWHERE)).toBe('Free here · 2h this week')
+    expect(candidateMeta({ free: true, week_minutes: 120 })).toBe('2h this week')
+    expect(candidateMeta({ free: true, on_site: { start: '07:00', end: '09:00' }, week_minutes: 120 }, NOT_ELSEWHERE)).toBe('Here 7am–9am · 2h this week')
+    expect(candidateMeta({ free: true, on_leave: { label: 'Holiday' }, week_minutes: 0 }, NOT_ELSEWHERE)).toBe('No shifts this week')
+    expect(candidateMeta({ free: null, week_minutes: null }, NOT_ELSEWHERE)).toBeNull()
+  })
+
+  it('buildCandidates words it from checked.cross_studio, for both audiences', () => {
+    const unchecked = { ...ALL_CHECKED, cross_studio: false }
+    const manager = Object.fromEntries(build({ checked: unchecked }).candidates.map((c) => [c.profile_id, c.reason]))
+    expect(manager.ann).toBe('Free here · 4h of 39h this week')
+    expect(manager.hal).toBe('Free here · No shifts this week')
+    const colleague = build({ checked: unchecked, audience: 'colleague' }).candidates
+    expect(colleague[0].reason).toBe('Free here then')
+    expect(colleague.find((c) => c.profile_id === 'cat').reason).toBe('Working then')
+  })
+})
+
 describe('buildCandidates — colleague (the coach asking for cover)', () => {
   it('free or working only, ranked on that alone: leave and availability cannot leak through the order', () => {
     const { candidates, untimed } = build({ audience: 'colleague' })
