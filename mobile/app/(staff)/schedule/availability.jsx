@@ -25,7 +25,7 @@ import {
   AVAILABILITY_COPY as COPY, AVAILABILITY_TITLE, AVAILABILITY_INTRO, AVAILABILITY_NO_OVERNIGHT, WEEKDAY_CHIPS,
   createRowKeys, rowsFromServer, newRow, timeOnBlur, datesLabel, calendarRange, rangeFromCalendar,
   hasEnded, startedRules, formProblems, duplicateKeys, canAdd, startedNote, rowSummary,
-  buildSaveBody, isDirty, loadOutcome, saveOutcome, closeAction, saveButtonState, impersonationLine,
+  buildSaveBody, isDirty, loadOutcome, saveOutcome, closeAction, saveButtonState, impersonationLine, cardsEditable,
 } from '../../../lib/availability-form'
 import { createInFlightGuard } from '../../../lib/in-flight-guard'
 import { dublinTodayIso } from '../../../lib/dates'
@@ -123,7 +123,11 @@ export default function MyAvailability() {
     else router.replace('/(tabs)/schedule')
   }
 
+  // A save in flight owns the cards: its answer replaces them, so an edit
+  // made meanwhile would vanish. The inputs are disabled (cardsEditable);
+  // the latch is the belt for a tap that lands in the same frame.
   function update(key, patch) {
+    if (saveGuard.current.busy) return
     setRows((prev) => prev.map((r) => (r.key === key ? { ...r, ...patch } : r)))
     setServerErrors((prev) => {
       if (!prev[key]) return prev
@@ -135,6 +139,7 @@ export default function MyAvailability() {
   }
 
   function add(kind) {
+    if (saveGuard.current.busy) return
     const row = newRow(kind, { nextKey: nextKey.current })
     setRows((prev) => [...prev, row])
     if (kind === 'dated') setOpenCalendar(row.key)
@@ -142,6 +147,7 @@ export default function MyAvailability() {
   }
 
   function remove(key) {
+    if (saveGuard.current.busy) return
     setRows((prev) => prev.filter((r) => r.key !== key))
     setOpenCalendar((open) => (open === key ? null : open))
     setMessage(null)
@@ -200,6 +206,7 @@ export default function MyAvailability() {
   const problems = formProblems(rows, { todayIso: today, started: startedRules(baseline, today) })
   const dups = duplicateKeys(rows, { todayIso: today })
   const button = saveButtonState({ loaded, saving, dirty })
+  const editable = cardsEditable({ loaded, saving })
   const viewingAs = impersonationLine(impersonatingFrom, profile)
   const problemFor = (row) => serverErrors[row.key] || (showProblems ? problems.byKey[row.key] : null) || null
 
@@ -282,7 +289,7 @@ export default function MyAvailability() {
               const cards = rows.filter((r) => r.kind === kind)
               return (
                 <View key={kind} className="mb-6">
-                  <SectionHeader kind={kind} canAddMore={canAdd(rows, kind, { todayIso: today })} onAdd={() => add(kind)} />
+                  <SectionHeader kind={kind} canAddMore={canAdd(rows, kind, { todayIso: today })} disabled={!editable} onAdd={() => add(kind)} />
                   {cards.length === 0 ? (
                     <Text className="text-sm text-un1t-subtle px-1">{kind === 'weekly' ? COPY.weeklyEmpty : COPY.datedEmpty}</Text>
                   ) : cards.map((row) => (
@@ -292,6 +299,7 @@ export default function MyAvailability() {
                       today={today}
                       problem={problemFor(row)}
                       duplicate={dups.has(row.key)}
+                      frozen={!editable}
                       calendarOpen={openCalendar === row.key}
                       onToggleCalendar={() => setOpenCalendar((open) => (open === row.key ? null : row.key))}
                       onChange={(patch) => update(row.key, patch)}
@@ -308,7 +316,7 @@ export default function MyAvailability() {
   )
 }
 
-function SectionHeader({ kind, canAddMore, onAdd }) {
+function SectionHeader({ kind, canAddMore, disabled, onAdd }) {
   const heading = kind === 'weekly' ? COPY.weeklyHeading : COPY.datedHeading
   const label = kind === 'weekly' ? COPY.addWeekly : COPY.addDated
   return (
@@ -317,10 +325,12 @@ function SectionHeader({ kind, canAddMore, onAdd }) {
       {canAddMore ? (
         <Pressable
           onPress={onAdd}
+          disabled={disabled}
           hitSlop={8}
           accessibilityRole="button"
           accessibilityLabel={label}
-          className="flex-row items-center px-3 py-1.5 rounded-full bg-un1t-surface border border-un1t-border active:opacity-70"
+          accessibilityState={{ disabled: !!disabled }}
+          className={`${disabled ? 'opacity-50 ' : ''}flex-row items-center px-3 py-1.5 rounded-full bg-un1t-surface border border-un1t-border active:opacity-70`}
         >
           <Ionicons name="add" size={16} color="#111827" />
           <Text className="text-sm font-semibold text-un1t-text ml-1">{label}</Text>
@@ -332,7 +342,8 @@ function SectionHeader({ kind, canAddMore, onAdd }) {
   )
 }
 
-function RuleCard({ row, today, problem, duplicate, calendarOpen, onToggleCalendar, onChange, onRemove }) {
+// `frozen`: a save is in flight; nothing on the card takes input.
+function RuleCard({ row, today, problem, duplicate, frozen, calendarOpen, onToggleCalendar, onChange, onRemove }) {
   const summary = rowSummary(row, { todayIso: today })
 
   // Ended while the screen was open: history, shown but not editable, not sent.
@@ -357,7 +368,15 @@ function RuleCard({ row, today, problem, duplicate, calendarOpen, onToggleCalend
     <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 mb-3">
       <View className="flex-row items-start justify-between mb-3">
         <Text className="text-sm font-semibold text-un1t-text flex-1 mr-3">{summary}</Text>
-        <Pressable onPress={onRemove} hitSlop={10} accessibilityRole="button" accessibilityLabel={`Remove ${summary}`} className="p-1 active:opacity-60">
+        <Pressable
+          onPress={onRemove}
+          disabled={frozen}
+          hitSlop={10}
+          accessibilityRole="button"
+          accessibilityLabel={`Remove ${summary}`}
+          accessibilityState={{ disabled: !!frozen }}
+          className="p-1 active:opacity-60"
+        >
           <Ionicons name="trash-outline" size={20} color="#DC2626" />
         </Pressable>
       </View>
@@ -370,9 +389,10 @@ function RuleCard({ row, today, problem, duplicate, calendarOpen, onToggleCalend
               <Pressable
                 key={d.code}
                 onPress={() => onChange({ weekday: d.code })}
+                disabled={frozen}
                 accessibilityRole="radio"
                 accessibilityLabel={d.label}
-                accessibilityState={{ checked: on }}
+                accessibilityState={{ checked: on, disabled: !!frozen }}
                 className={`flex-1 items-center py-2 rounded-lg border ${on ? 'bg-un1t-text border-un1t-text' : 'bg-un1t-bg border-un1t-border'}`}
               >
                 <Text numberOfLines={1} adjustsFontSizeToFit className={`text-xs font-semibold ${on ? 'text-un1t-bg' : 'text-un1t-subtle'}`}>
@@ -386,16 +406,17 @@ function RuleCard({ row, today, problem, duplicate, calendarOpen, onToggleCalend
         <View className="mb-3">
           <Pressable
             onPress={onToggleCalendar}
+            disabled={frozen}
             accessibilityRole="button"
             accessibilityLabel={`Dates, ${dates}`}
             accessibilityHint={calendarOpen ? 'Closes the calendar' : locked ? 'Opens a calendar to choose a new last day' : 'Opens a calendar to choose the first and last day'}
-            accessibilityState={{ expanded: calendarOpen }}
+            accessibilityState={{ expanded: calendarOpen, disabled: !!frozen }}
             className="flex-row items-center justify-between bg-un1t-bg border border-un1t-border rounded-xl px-3 py-3 active:opacity-70"
           >
             <Text className="text-base text-un1t-text flex-1 mr-2">{dates}</Text>
             <Ionicons name={calendarOpen ? 'chevron-up' : 'chevron-down'} size={18} color="#64748B" />
           </Pressable>
-          {calendarOpen ? (
+          {calendarOpen && !frozen ? (
             <View className="mt-2">
               <MonthCalendar
                 startDate={range.startDate}
@@ -416,15 +437,15 @@ function RuleCard({ row, today, problem, duplicate, calendarOpen, onToggleCalend
         <Switch
           value={row.all_day}
           onValueChange={(v) => onChange({ all_day: v })}
-          disabled={locked}
+          disabled={locked || frozen}
           accessibilityLabel="All day"
-          accessibilityState={{ disabled: locked }}
+          accessibilityState={{ disabled: locked || !!frozen }}
         />
       </View>
       {!row.all_day ? (
         <View className="flex-row gap-3 mb-3">
-          <TimeField label="From" value={row.start_time} locked={locked} onChange={(t) => onChange({ start_time: t })} />
-          <TimeField label="To" value={row.end_time} locked={locked} onChange={(t) => onChange({ end_time: t })} />
+          <TimeField label="From" value={row.start_time} locked={locked || frozen} onChange={(t) => onChange({ start_time: t })} />
+          <TimeField label="To" value={row.end_time} locked={locked || frozen} onChange={(t) => onChange({ end_time: t })} />
         </View>
       ) : null}
 
@@ -432,6 +453,7 @@ function RuleCard({ row, today, problem, duplicate, calendarOpen, onToggleCalend
       <TextInput
         value={row.note}
         onChangeText={(t) => onChange({ note: t })}
+        editable={!frozen}
         maxLength={AVAILABILITY_LIMITS.noteChars}
         placeholder="e.g. college on Tuesdays"
         placeholderTextColor="#64748B"

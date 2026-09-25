@@ -14,7 +14,7 @@ import {
   newRow, rowToRule, datesLabel, calendarRange, rangeFromCalendar,
   hasEnded, startedRules, rowProblem, formProblems, canAdd, duplicateKeys, startedNote, rowSummary,
   buildSaveBody, isDirty,
-  loadOutcome, saveOutcome, closeAction, saveButtonState, impersonationLine,
+  loadOutcome, saveOutcome, closeAction, saveButtonState, impersonationLine, cardsEditable,
 } from './availability-form'
 import { calendarTap } from './month-calendar'
 
@@ -509,6 +509,13 @@ describe('leaving and saving', () => {
     expect(saveButtonState({ loaded: true, dirty: false })).toEqual({ disabled: true, busy: false })
     expect(saveButtonState({ loaded: true, dirty: true })).toEqual({ disabled: false, busy: false })
     expect(saveButtonState({ loaded: true, dirty: true, saving: true })).toEqual({ disabled: true, busy: true })
+  })
+
+  it('cardsEditable: nothing on the cards takes input while a save is in flight (its answer replaces them)', () => {
+    expect(cardsEditable({ loaded: true, saving: false })).toBe(true)
+    expect(cardsEditable({ loaded: true, saving: true })).toBe(false)
+    expect(cardsEditable({ loaded: false, saving: false })).toBe(false)
+    expect(cardsEditable()).toBe(false)
   })
 
   it('impersonationLine: says whose availability a master is editing', () => {

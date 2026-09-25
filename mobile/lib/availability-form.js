@@ -457,6 +457,15 @@ export function saveButtonState({ loaded = false, saving = false, dirty = false 
   return { disabled: !loaded || saving || !dirty, busy: saving }
 }
 
+/**
+ * May the coach edit the cards? Not before a load, and not while a save is in
+ * flight: a successful save REPLACES the cards with what the server stored,
+ * so an edit typed mid-save would vanish without a word.
+ */
+export function cardsEditable({ loaded = false, saving = false } = {}) {
+  return loaded && !saving
+}
+
 /** A master under "View as user" is editing someone else's availability: say whose. */
 export function impersonationLine(impersonatingFrom, profile) {
   if (!impersonatingFrom) return null
