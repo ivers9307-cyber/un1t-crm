@@ -23,7 +23,7 @@
 // (RETIRE-SHIFTS-MIRROR.5c). The legacy public.shifts mirror is gone (mig 238).
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import { Plus, Clock, X, ArrowLeftRight, CalendarOff, Palmtree, ThermometerSun, Ban, Wallet, CircleEllipsis, AlertTriangle, AlertCircle, Pencil, Check } from 'lucide-react'
+import { Plus, Clock, X, ArrowLeftRight, CalendarOff, Palmtree, ThermometerSun, Ban, Wallet, CircleEllipsis, AlertTriangle, AlertCircle, Pencil, Check, CalendarX } from 'lucide-react'
 import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 import { indexByDate } from '@/lib/bank-holidays'
 import { MANAGER_ROLES } from '@/lib/schemas'
@@ -67,11 +67,13 @@ import { hoursMinutesLabel, longWeeksHeadline, restGapsHeadline, untimedShiftsLa
 import RosterSummaryPanel from './RosterSummaryPanel'
 import ScheduleErrorBanner from './schedule/ScheduleErrorBanner'
 import SchedulePartialLoadNote, {
-  STAFF_UNAVAILABLE_MESSAGE, TEMPLATES_UNAVAILABLE_MESSAGE, LEAVE_NOT_FLAGGED_MESSAGE,
+  STAFF_UNAVAILABLE_MESSAGE, TEMPLATES_UNAVAILABLE_MESSAGE, LEAVE_NOT_FLAGGED_MESSAGE, AVAILABILITY_NOT_FLAGGED_MESSAGE,
 } from './schedule/SchedulePartialLoadNote'
 import RosterChangeLogDrawer from './schedule/RosterChangeLogDrawer'
 import PublicationStatusChip from './schedule/PublicationStatusChip'
 import { timeOffLeaveLabel } from '@shared/time-off'
+// AVAIL.1 — the picker's advisory badge (pure, unit-tested in shared/).
+import { unavailableFor, unavailableSummary, describeRule } from '@shared/availability'
 // ROSTER-FIX.6a — the six-endpoint fan-out, its error handling and its
 // request-ordering guard live in the hook now; see its header for why.
 import { useScheduleData } from './schedule/useScheduleData'
@@ -85,7 +87,7 @@ import BlockEditForm from './schedule/BlockEditForm'
 import { blockEditNoticeText } from '@/lib/block-edit'
 import { briefingOf } from '@shared/shift-briefing'
 import MonthCell from './schedule/MonthCell'
-import { rosterToolbarModel, dayHeaderStatus, shiftCardModel, monthCellLines, dayLeaveBars } from '@/lib/roster-card-model'
+import { rosterToolbarModel, dayHeaderStatus, shiftCardModel, monthCellLines, dayLeaveBars, dayUnavailableBars } from '@/lib/roster-card-model'
 
 // LEAVE.2 — every leave type gets its own label (timeOffLeaveLabel) and
 // colour. Unpaid and "other" were missing, so approved unpaid/other leave
@@ -394,7 +396,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
   const rangeStart = formatDate(viewType === 'month' ? monthGrid.start : weekStart)
   const rangeEnd = formatDate(viewType === 'month' ? monthGrid.end : weekEnd)
   const {
-    blocks, templates, staff, timeOff, holidays, contractorSpend,
+    blocks, templates, staff, timeOff, holidays, contractorSpend, availability,
     loading, error, showingStaleData, partialErrors, successCount, refresh: fetchData,
   } = useScheduleData({
     locationId,
@@ -406,6 +408,8 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
     // every coach's load, which on main blanked the whole roster. Same gate
     // useWeekCost is enabled on, below.
     canReadSpend: isManager,
+    // AVAIL.1 — manager-only, same gate as spend (the route is MANAGER_ROLES at the studio).
+    canReadAvailability: isManager,
   })
   // ROSTERLOAD.1 — a side read can fail now without failing the roster, so
   // the actions that depend on it must not offer an empty list as if it were
@@ -414,6 +418,8 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
   const staffUnavailable = partialErrors?.staff && !partialErrors.staff.kept ? STAFF_UNAVAILABLE_MESSAGE : null
   const templatesUnavailable = partialErrors?.templates && !partialErrors.templates.kept ? TEMPLATES_UNAVAILABLE_MESSAGE : null
   const leaveMissing = Boolean(partialErrors?.timeOff && !partialErrors.timeOff.kept)
+  // AVAIL.1 — like leaveMissing: the picker must SAY it cannot flag anyone.
+  const availabilityMissing = Boolean(partialErrors?.availability && !partialErrors.availability.kept)
   // ROSTER-FIX.6c — its own hook, not a seventh slice of the fan-out above: a
   // summary panel must not be able to take the roster down with it. See its
   // header. Manager-gated on the client too, so a coach's calendar never fires
@@ -1349,6 +1355,35 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
                       )
                     })}
 
+                    {/* AVAIL.1 — who has said they cannot work that day.
+                        Manager and "All" only (a coach is never shown other
+                        coaches' availability); a person with a leave bar
+                        today is not drawn twice. Advisory: nothing here
+                        blocks an assignment. The words are
+                        dayUnavailableBars' (pure, tested). */}
+                    {isManager && viewMode === 'all' && dayUnavailableBars(
+                      availability,
+                      dateStr,
+                      locationStaff,
+                      // Weekly rules from today on only: on a past week they
+                      // would claim an unavailability nobody declared then.
+                      { skipProfileIds: dayLeaveBars(timeOff, dateStr).map((b) => b.profileId), todayIso: todayStr },
+                    ).map((bar) => (
+                      <div
+                        key={bar.id}
+                        data-testid="unavailable-bar"
+                        title={bar.title}
+                        // Dashed and hatched, not a filled slate card: an admin
+                        // shift (SHIFTTYPE.1) is a slate-500/10 surface, and an
+                        // absence must not read as a shift. Text is zinc-800
+                        // (about 13:1 on the lightest stripe).
+                        className="rounded-md px-2 py-1.5 text-xs flex items-center gap-1.5 border border-dashed border-zinc-500 bg-[repeating-linear-gradient(135deg,transparent_0_5px,rgb(113_113_122/0.12)_5px_10px)]"
+                      >
+                        <CalendarX size={12} className="shrink-0 text-zinc-800" aria-hidden="true" />
+                        <span className="font-medium truncate text-zinc-800">{bar.text}</span>
+                      </div>
+                    ))}
+
                     {dayBlocks.length === 0 && timeOff.filter(t => t.start_date <= dateStr && t.end_date >= dateStr).length === 0 && (
                       <div className="text-center py-6 text-xs text-un1t-muted">No shifts</div>
                     )}
@@ -1439,6 +1474,8 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
           timeOff={timeOff}
           unavailableReason={staffUnavailable}
           leaveMissing={leaveMissing}
+          availability={availability}
+          availabilityMissing={availabilityMissing}
           onAssign={(profileIds) => handleAssignCoaches(assignTarget.block.id, profileIds)}
           onClose={() => setAssignTarget(null)}
           // ROSTER-FIX.6b-7 — the Add-coach button that opened this lives in
@@ -1707,7 +1744,13 @@ function CopyRosterModal({ job, onChoose, onClose }) {
 // picker says so and cannot submit, instead of showing an empty list that reads
 // as "everyone is already assigned". `leaveMissing`: leave failed to load, so
 // the on-leave badge cannot fire and the picker says that too.
-function AssignCoachModal({ block, staff, blocks, timeOff, unavailableReason = null, leaveMissing = false, onAssign, onClose, restoreFocusRef }) {
+// AVAIL.1 — `availability`: the studio's unavailability rules (flat, with
+// profile_id), for an advisory badge per coach. `availabilityMissing`: they
+// failed to load, so the picker says nobody can be flagged.
+function AssignCoachModal({
+  block, staff, blocks, timeOff, unavailableReason = null, leaveMissing = false,
+  availability = [], availabilityMissing = false, onAssign, onClose, restoreFocusRef,
+}) {
   const [selectedIds, setSelectedIds] = useState(() => new Set())
   const [saving, setSaving] = useState(false)
   const tmpl = block.shift_templates || {}
@@ -1776,6 +1819,15 @@ function AssignCoachModal({ block, staff, blocks, timeOff, unavailableReason = n
     setSaving(false)
   }
 
+  // AVAIL.1 — each coach's rules, once per render. Not a hook: placed here,
+  // away from the hooks above, so no hook order can depend on it.
+  const rulesByProfile = new Map()
+  for (const rule of availability || []) {
+    if (!rule?.profile_id) continue
+    if (!rulesByProfile.has(rule.profile_id)) rulesByProfile.set(rule.profile_id, [])
+    rulesByProfile.get(rule.profile_id).push(rule)
+  }
+
   const overCapacity = selectedIds.size > slotsLeft
   const submitLabel = saving
     ? 'Assigning…'
@@ -1804,6 +1856,9 @@ function AssignCoachModal({ block, staff, blocks, timeOff, unavailableReason = n
         </div>
         <div>
           <label className="block text-xs text-un1t-subtle mb-2">Pick one or more coaches</label>
+          {!unavailableReason && availabilityMissing && (
+            <p className="mb-2 text-[11px] px-2 py-1.5 rounded bg-amber-500/10 text-amber-700">{AVAILABILITY_NOT_FLAGGED_MESSAGE}</p>
+          )}
           {!unavailableReason && leaveMissing && (
             <p className="mb-2 text-[11px] px-2 py-1.5 rounded bg-amber-500/10 text-amber-700">{LEAVE_NOT_FLAGGED_MESSAGE}</p>
           )}
@@ -1824,6 +1879,8 @@ function AssignCoachModal({ block, staff, blocks, timeOff, unavailableReason = n
             <ul className="max-h-72 overflow-y-auto border border-un1t-border rounded-md divide-y divide-un1t-border/50">
               {available.map((s) => {
                 const checked = selectedIds.has(s.id)
+                // AVAIL.1 — advisory like the two below: the row stays tickable.
+                const unavailable = unavailableFor(rulesByProfile.get(s.id), block.block_date, block.start_time, block.end_time)
                 // ROSTER-FIX.6c — advisory, never a block: the row stays
                 // tickable. A coach really does cover two adjacent slots
                 // sometimes, and the manager staffing the studio is the judge.
@@ -1845,6 +1902,14 @@ function AssignCoachModal({ block, staff, blocks, timeOff, unavailableReason = n
                         {onLeave && (
                           <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded bg-red-500/15 text-red-700 whitespace-nowrap">
                             on approved leave
+                          </span>
+                        )}
+                        {unavailable && (
+                          <span
+                            className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded bg-slate-500/15 text-slate-700 whitespace-nowrap"
+                            title={unavailable.map((r) => (r.note ? `${describeRule(r)} (${r.note})` : describeRule(r))).join('; ')}
+                          >
+                            Unavailable: {unavailableSummary(unavailable)}
                           </span>
                         )}
                         {clash && (

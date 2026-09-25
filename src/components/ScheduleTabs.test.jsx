@@ -60,12 +60,14 @@ afterEach(() => {
 })
 
 describe('ScheduleTabs — tabs render as links to the real sibling pages', () => {
-  it('renders only Schedule for a plain staffer with no grants', () => {
+  // AVAIL.1 — every staff member edits their own availability, so the tab
+  // has no gate.
+  it('renders Schedule and Availability for a plain staffer with no grants', () => {
     render(<ScheduleTabs user={user()} />)
     const links = screen.getAllByRole('link')
-    expect(links).toHaveLength(1)
-    expect(links[0].textContent).toBe('Schedule')
+    expect(links.map((l) => l.textContent)).toEqual(['Schedule', 'Availability'])
     expect(links[0].getAttribute('href')).toBe('/schedule')
+    expect(links[1].getAttribute('href')).toBe('/schedule/availability')
   })
 
   it('shows Reporting, Time Off and Swaps to managers, hidden from staff (MANAGER_ROLES gate carried over from the old Approvals tab)', () => {
@@ -126,7 +128,7 @@ describe('ScheduleTabs — tabs render as links to the real sibling pages', () =
 
   it('shows every tab to a master, including Attendance (master defaults attendance_reports true)', () => {
     render(<ScheduleTabs user={user({ role: 'master' })} />)
-    for (const label of ['Schedule', 'Reporting', 'Time Off', 'Swaps', 'Invoices', 'Expenses', 'Attendance']) {
+    for (const label of ['Schedule', 'Availability', 'Reporting', 'Time Off', 'Swaps', 'Invoices', 'Expenses', 'Attendance']) {
       expect(screen.getByText(label)).toBeTruthy()
     }
   })
@@ -153,6 +155,13 @@ describe('ScheduleTabs — active state (longest-match, incl. the reporting pseu
     mockPathname.mockReturnValue('/schedule/invoices')
     render(<ScheduleTabs user={user({ employment_type: 'contractor' })} />)
     expect(linkFor('Invoices').className).toContain('border-un1t-text')
+    expect(linkFor('Schedule').className).not.toContain('border-un1t-text')
+  })
+
+  it('marks Availability active on /schedule/availability, not Schedule (AVAIL.1)', () => {
+    mockPathname.mockReturnValue('/schedule/availability')
+    render(<ScheduleTabs user={user()} />)
+    expect(linkFor('Availability').className).toContain('border-un1t-text')
     expect(linkFor('Schedule').className).not.toContain('border-un1t-text')
   })
 
