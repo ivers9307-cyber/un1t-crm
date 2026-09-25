@@ -78,3 +78,12 @@ Transient DB errors in the match/stamp path return **503 with `transient: true`*
 - `mobile/index.js` (custom entry), `mobile/lib/geofence.js` (task + retry queue + `syncGeofences`), `mobile/components/LocationGate.jsx`
 - `/schedule/attendance` Source column gains the Geofence badge
 
+
+### What coaches see (ARRIVALSHOW.1)
+
+The phone's Schedule tab (Me view, phone and iPad) shows one line under each of the coach's OWN shifts: "Arrived 06:52", "On site from your earlier shift (arrived 06:52)", "No arrival recorded yet" (the shift has started) or "No arrival recorded" (it has ended). Nothing is shown before a shift starts, at a studio with the geofence off, for a geofence-exempt coach, on a draft, or when the server could not read the arrivals. It never shows minutes late, and no alert is sent (late and no-show alerts are held until coverage is above ~80%).
+
+- Source: `GET /api/schedule/shifts` adds `arrival` on the caller's own rows only (`src/lib/shift-arrivals.js`); colleagues' rows, and a manager's Team feed, carry `null`.
+- **Arrived = `shift_assignments.arrived_at`, nothing else.** The manager-set `start_time_override` is the paid window and is never an arrival; it only moves the window the "No arrival recorded" line is judged on (the times the card shows).
+- **On site** = the attendance report's carry-over (`inferContinuousArrivals`: the same coach, day and studio, the next shift starting ≤ 60 min after the previous block's end), plus a stamp at the same instant as the earlier shift's arrival (the old double-stamp shape; display only).
+- The server sends the studio-local `HH:MM`; the phone does no timezone maths (`mobile/lib/shift-arrival.js`).
