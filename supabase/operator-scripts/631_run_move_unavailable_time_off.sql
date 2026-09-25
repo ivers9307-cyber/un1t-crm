@@ -1,0 +1,41 @@
+-- ═════════════════════════════════════════════════════════════════════════
+-- NOT A MIGRATION. AVAIL.3 OPERATOR SCRIPT — THE DATA MOVE FOR MIG 631.
+-- 🔴 HELD FOR THE OWNER'S EXPLICIT GO. Do not run it on anything less.
+-- ═════════════════════════════════════════════════════════════════════════
+--
+-- Carries every current time_off_requests row of type 'unavailable'
+-- (approved or pending, ending today or later in Dublin, person not
+-- tombstoned) into staff_unavailability as all-day dated rules: future rows
+-- are deleted (full row kept in the ledger), started rows are split at today
+-- (the elapsed days stay time off). No staff_availability_changes row, so no
+-- manager notice; the allowance trigger acts on 'holiday' only, so no balance
+-- moves. The function proves no carried day was lost before it returns, and
+-- any guard (avail3_*) aborts the whole move. Full contract, and pre-checks
+-- (a)-(h) / post-checks (i)-(q): the header of
+-- supabase/migrations/631_unavailable_time_off_to_availability.sql.
+--
+-- PRECONDITIONS (all four, in this order):
+--   1. The AVAIL.3 code is deployed to production (the POST refuses new
+--      'unavailable' requests, so nothing is filed behind the move).
+--   2. Mig 631 is applied on un1t-crm (iyvtbjjxdggiadzwwvdj — confirm with
+--      list_projects, never the sentinel project). Applying it moved nothing.
+--   3. Pre-checks (b)-(h) from the mig 631 header have been run and saved to
+--      the scratchpad as mig631-rollback-<date>.txt (the carry set and the
+--      fingerprints the rollback is judged against).
+--   4. It is not within 15 minutes of Dublin midnight ("today" is taken once,
+--      from the instant this runs).
+--
+-- RUN: exactly the one statement below (Supabase MCP execute_sql on
+-- iyvtbjjxdggiadzwwvdj). It is a single statement, so it is atomic on its own:
+-- no BEGIN/COMMIT is needed (and an MCP BEGIN without COMMIT rolls back).
+-- The result is { batch_id, moved, split, rules_inserted, rules_reused,
+-- people }. Save it with the pre-checks. Re-running it is safe: it carries
+-- only rows not already in the ledger (a straggler), else returns zeros.
+--
+-- THEN: post-checks (i)-(o) at once, (p) in the browser, (q) 30 minutes on,
+-- and get_advisors security AND performance.
+--
+-- ROLLBACK (data):  SELECT public.restore_moved_unavailable_time_off();
+--   then all_unavailable_fp must equal pre-check (e) again.
+
+SELECT public.move_unavailable_time_off_to_availability((now() AT TIME ZONE 'Europe/Dublin')::date) AS result;
