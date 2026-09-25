@@ -31,7 +31,8 @@
 // keeps the days already gone as history and carries it on from today.
 
 import {
-  AVAILABILITY_LIMITS, AVAILABILITY_WEEKDAYS, AVAILABILITY_WEEKDAY_LABELS, normaliseRule,
+  AVAILABILITY_LIMITS, AVAILABILITY_WEEKDAYS, AVAILABILITY_WEEKDAY_LABELS, normaliseRule, normaliseAvailability,
+  ruleProblem, carryStartedRules, withoutEnded, sameAvailability, describeRule,
 } from 'shared/availability'
 import { leaveDateRangeLabel } from 'shared/time-off'
 
@@ -212,4 +213,158 @@ export function calendarRange(row) {
 export function rangeFromCalendar({ start, end } = {}, row = null) {
   if (row?.startedOn) return { start_date: row.startedOn, end_date: end || start || row.end_date || row.startedOn }
   return { start_date: start || '', end_date: end || start || '' }
+}
+
+/** A dated row whose last day is before today: history. Shown, never edited, never sent. */
+export function hasEnded(row, todayIso) {
+  if (row?.kind !== 'dated') return false
+  return withoutEnded({ weekly: [], dated: [rowToRule(row)] }, todayIso).dated.length === 0
+}
+
+/**
+ * The LOADED dated rules that started before today, canonical: the phone's
+ * copy of what the route reads as `stored` for carryStartedRules (the
+ * person's stored dated rules starting before today). Judged with the today
+ * of the moment asked, so a screen left open over midnight agrees with the
+ * server at save time.
+ */
+export function startedRules(baselineRows, todayIso) {
+  return (baselineRows || [])
+    .filter((r) => r?.kind === 'dated' && r.start_date && todayIso && r.start_date < todayIso)
+    .map(rowToRule)
+}
+
+/**
+ * What is wrong with one card, in the coach's words; null if nothing.
+ * `started` (startedRules of the load) switches on the server's started-rule
+ * contract: a started rule the coach already has, or with only its note or
+ * last day changed, is fine; anything else starting before today is 'Start
+ * today or later'. Without it (nothing loaded) backdating is left to the route.
+ */
+export function rowProblem(row, { todayIso = null, started = null } = {}) {
+  if (!row?.all_day) {
+    for (const typed of [row?.start_time, row?.end_time]) {
+      if (String(typed ?? '').trim() && parseTimeInput(typed) === null) return AVAILABILITY_COPY.timeFormat
+    }
+  }
+  const rule = rowToRule(row)
+  if (rule?.kind !== 'dated' || !started) return ruleProblem(rule, { todayIso })
+  const carried = carryStartedRules({ weekly: [], dated: [rule] }, started, todayIso)
+  return ruleProblem(carried.input.dated[0], { todayIso, knownKeys: carried.knownKeys })
+}
+
+const liveRows = (rows, todayIso) => (rows || []).filter((r) => !hasEnded(r, todayIso))
+
+/** Everything that stops a save: { byKey, banner, ok }. Ended cards are never judged (they are not sent). */
+export function formProblems(rows, { todayIso = null, started = null } = {}) {
+  const live = liveRows(rows, todayIso)
+  const byKey = {}
+  for (const row of live) {
+    const problem = rowProblem(row, { todayIso, started })
+    if (problem) byKey[row.key] = problem
+  }
+  const banner = []
+  if (live.filter((r) => r.kind === 'weekly').length > AVAILABILITY_LIMITS.weekly) banner.push(AVAILABILITY_COPY.weeklyFull)
+  if (live.filter((r) => r.kind === 'dated').length > AVAILABILITY_LIMITS.dated) banner.push(AVAILABILITY_COPY.datedFull)
+  return { byKey, banner: banner.length ? banner.join(' ') : null, ok: Object.keys(byKey).length === 0 && banner.length === 0 }
+}
+
+/** May the coach add another card of this kind? (The route caps each list.) */
+export function canAdd(rows, kind, { todayIso = null } = {}) {
+  return liveRows(rows, todayIso).filter((r) => r.kind === kind).length < AVAILABILITY_LIMITS[kind]
+}
+
+// normaliseRule's output has a fixed key order, so its JSON is its identity:
+// equal JSON = same kind, day or dates, window AND note, which is exactly
+// what normaliseAvailability treats as a duplicate.
+const identity = (rule) => JSON.stringify(rule)
+
+/** Cards that repeat an earlier card exactly: only one of them is saved. */
+export function duplicateKeys(rows, { todayIso = null } = {}) {
+  const seen = new Set()
+  const dup = new Set()
+  for (const row of liveRows(rows, todayIso)) {
+    if (rowProblem(row, { todayIso })) continue
+    const id = identity(rowToRule(row))
+    if (seen.has(id)) dup.add(row.key)
+    else seen.add(id)
+  }
+  return dup
+}
+
+// '2026-09-20' → '20 Sep'. String digits only: no Date, so no timezone moves a day.
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+const dayMonth = (iso) => `${Number(String(iso).slice(8, 10))} ${MONTHS[Number(String(iso).slice(5, 7)) - 1] || ''}`.trim()
+
+/** The line under a started dated card that has not ended (the web editor's words); else null. */
+export function startedNote(row, { todayIso = null } = {}) {
+  if (row?.kind !== 'dated' || !row.startedOn || hasEnded(row, todayIso)) return null
+  return `Started ${dayMonth(row.startedOn)}. The days already gone stay as they are: you can change the last day or the note, or remove it from today.`
+}
+
+/** A card's one-line name, 'Mondays, all day'; an unfinished card says so. */
+export function rowSummary(row, { todayIso = null } = {}) {
+  if (!hasEnded(row, todayIso) && rowProblem(row, { todayIso })) {
+    return row?.kind === 'dated' ? 'Unfinished date' : 'Unfinished weekly time'
+  }
+  return describeRule(rowToRule(row))
+}
+
+// The route's body schema (AvailabilityPutSchema): no `kind`, the list says it.
+function toPayload(rule) {
+  const span = { all_day: rule.all_day, start_time: rule.start_time, end_time: rule.end_time, note: rule.note }
+  return rule.kind === 'weekly'
+    ? { weekday: rule.weekday, ...span }
+    : { start_date: rule.start_date, end_date: rule.end_date, ...span }
+}
+
+/**
+ * The PUT body for these cards: ended dated cards left out, exact copies
+ * sent once, both lists in the server's canonical order. A started card goes
+ * with its stored start (the server carries it on from today).
+ *   body       { weekly, dated } for PUT /api/schedule/availability
+ *   canonical  the same as canonical rules (what isDirty compares)
+ *   keysByPath 'weekly.0' → the card keys that became that entry (the
+ *              server's issue paths index these sorted lists; its carry
+ *              keeps their order and length)
+ *   endedKeys  the cards left out because they ended
+ */
+export function buildSaveBody(rows, { todayIso = null } = {}) {
+  const endedKeys = []
+  const keysById = new Map()
+  const lists = { weekly: [], dated: [] }
+  for (const row of rows || []) {
+    if (hasEnded(row, todayIso)) {
+      endedKeys.push(row.key)
+      continue
+    }
+    const rule = rowToRule(row)
+    const id = identity(rule)
+    if (!keysById.has(id)) {
+      keysById.set(id, [])
+      lists[rule.kind].push(rule)
+    }
+    keysById.get(id).push(row.key)
+  }
+  const canonical = normaliseAvailability(lists)
+  const keysByPath = {}
+  for (const kind of ['weekly', 'dated']) {
+    canonical[kind].forEach((rule, i) => { keysByPath[`${kind}.${i}`] = keysById.get(identity(rule)) || [] })
+  }
+  return {
+    body: { weekly: canonical.weekly.map(toPayload), dated: canonical.dated.map(toPayload) },
+    canonical,
+    keysByPath,
+    endedKeys,
+  }
+}
+
+/**
+ * Would saving change anything? Compares what WOULD BE SENT: the same rules
+ * and notes in any order, typed any way, are no change. Nothing loaded
+ * (baselineRows null) is never dirty, so it can never be saved over.
+ */
+export function isDirty(baselineRows, rows, { todayIso = null } = {}) {
+  if (!baselineRows) return false
+  return !sameAvailability(buildSaveBody(baselineRows, { todayIso }).canonical, buildSaveBody(rows, { todayIso }).canonical)
 }

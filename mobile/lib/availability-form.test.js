@@ -8,9 +8,12 @@
 // under any TZ (the PR gate runs it under two).
 
 import { describe, it, expect } from 'vitest'
+import { AVAILABILITY_LIMITS, normaliseAvailability, carryStartedRules, availabilityProblems } from 'shared/availability'
 import {
   AVAILABILITY_COPY, WEEKDAY_CHIPS, createRowKeys, parseTimeInput, timeOnBlur, rowFromRule, rowsFromServer,
   newRow, rowToRule, datesLabel, calendarRange, rangeFromCalendar,
+  hasEnded, startedRules, rowProblem, formProblems, canAdd, duplicateKeys, startedNote, rowSummary,
+  buildSaveBody, isDirty,
 } from './availability-form'
 
 const TODAY = '2026-09-25' // a Friday
@@ -152,5 +155,240 @@ describe('dates on a card', () => {
     expect(rangeFromCalendar({ start: '2026-10-02', end: null }, started)).toEqual({ start_date: '2026-09-20', end_date: '2026-10-02' })
     expect(rangeFromCalendar({ start: '2026-09-27', end: null }, started)).toEqual({ start_date: '2026-09-20', end_date: '2026-09-27' })
     expect(rangeFromCalendar({ start: '2026-09-26', end: '2026-09-28' }, started)).toEqual({ start_date: '2026-09-20', end_date: '2026-09-28' })
+  })
+})
+
+// A dated row by hand (the key is 'x' unless given).
+const datedRow = (start, end, extra = {}) => ({
+  key: 'x', kind: 'dated', weekday: 'mon', start_date: start, end_date: end, all_day: true, start_time: '', end_time: '', note: '', startedOn: null, ...extra,
+})
+
+describe('hasEnded', () => {
+  it('a dated row whose last day is before today has ended; one ending today has not', () => {
+    expect(hasEnded(datedRow('2026-09-20', '2026-09-24'), TODAY)).toBe(true)
+    expect(hasEnded(datedRow('2026-09-24', ''), TODAY)).toBe(true) // one day, yesterday
+    expect(hasEnded(datedRow('2026-09-20', '2026-09-25'), TODAY)).toBe(false)
+  })
+  it('a weekly row never ends; with no today nothing is judged ended', () => {
+    expect(hasEnded(loaded()[0], TODAY)).toBe(false)
+    expect(hasEnded(datedRow('2026-09-20', '2026-09-24'), null)).toBe(false)
+  })
+})
+
+describe('startedRules', () => {
+  it("the loaded dated rules that started before today, canonical (the server's `stored` for carryStartedRules)", () => {
+    const rows = loaded()
+    expect(startedRules(rows, TODAY)).toEqual([rowToRule(rows[2])])
+    expect(startedRules(null, TODAY)).toEqual([])
+  })
+  it("judged at the moment asked: a rule that started today becomes 'started' after midnight", () => {
+    const rows = loaded()
+    expect(startedRules(rows, '2026-10-04').map((r) => r.start_date)).toEqual(['2026-09-20', '2026-10-03'])
+  })
+})
+
+describe('rowProblem', () => {
+  const [mon, tue, started, future] = loaded()
+  const stored = startedRules(loaded(), TODAY)
+
+  it('a typed time that does not read says how to write one, before anything else', () => {
+    expect(rowProblem({ ...tue, start_time: '9:5' }, { todayIso: TODAY })).toBe(AVAILABILITY_COPY.timeFormat)
+    expect(rowProblem({ ...tue, end_time: 'late' }, { todayIso: TODAY })).toBe(AVAILABILITY_COPY.timeFormat)
+  })
+
+  it("otherwise the shared rules' own words", () => {
+    expect(rowProblem({ ...tue, start_time: '12:00', end_time: '09:00' }, { todayIso: TODAY })).toBe('The end time must be after the start time')
+    expect(rowProblem({ ...tue, start_time: '', end_time: '' }, { todayIso: TODAY })).toBe('Give a start and an end time, or choose all day')
+    expect(rowProblem({ ...future, start_date: '2026-10-10', end_date: '2026-10-01' }, { todayIso: TODAY })).toBe('The last day is before the first day')
+  })
+
+  it('all day ignores whatever is left in the time fields', () => {
+    expect(rowProblem({ ...mon, start_time: 'x', end_time: 'y' }, { todayIso: TODAY })).toBeNull()
+  })
+
+  it('a started rule the coach already has is fine, and so is a note edit', () => {
+    expect(rowProblem(started, { todayIso: TODAY, started: stored })).toBeNull()
+    expect(rowProblem({ ...started, note: 'new words' }, { todayIso: TODAY, started: stored })).toBeNull()
+  })
+
+  it('a started rule whose LAST DAY moved (still from today) is fine: the server carries it on from today', () => {
+    expect(rowProblem({ ...started, end_date: '2026-10-02' }, { todayIso: TODAY, started: stored })).toBeNull()
+    expect(rowProblem({ ...started, end_date: TODAY }, { todayIso: TODAY, started: stored })).toBeNull()
+    expect(rowProblem({ ...started, end_date: '2026-10-02', note: 'moved' }, { todayIso: TODAY, started: stored })).toBeNull()
+  })
+
+  it('a started rule with a moved start or a changed window, or a new rule before today: start today or later', () => {
+    expect(rowProblem({ ...started, all_day: false, start_time: '09:00', end_time: '10:00' }, { todayIso: TODAY, started: stored }))
+      .toBe('Start today or later')
+    expect(rowProblem({ ...started, start_date: '2026-09-21' }, { todayIso: TODAY, started: stored })).toBe('Start today or later')
+    // A card added yesterday on a screen left open over midnight.
+    expect(rowProblem(datedRow('2026-09-24', '2026-09-26'), { todayIso: TODAY, started: stored })).toBe('Start today or later')
+  })
+
+  it('with nothing loaded to compare against, backdating is left to the server', () => {
+    expect(rowProblem(datedRow('2026-09-24', '2026-09-26'), { todayIso: TODAY })).toBeNull()
+  })
+
+  it("agrees with the route, rule for rule (carryStartedRules + availabilityProblems on the whole body)", () => {
+    const cases = [
+      started,
+      { ...started, note: 'n' },
+      { ...started, end_date: '2026-10-02' },
+      { ...started, start_date: '2026-09-21' },
+      { ...started, all_day: false, start_time: '09:00', end_time: '10:00' },
+      datedRow('2026-09-24', '2026-09-26'),
+      future,
+    ]
+    for (const row of cases) {
+      const input = normaliseAvailability({ weekly: [], dated: [rowToRule(row)] })
+      const carried = carryStartedRules(input, stored, TODAY)
+      const server = availabilityProblems(carried.input, { todayIso: TODAY, knownKeys: carried.knownKeys })[0]?.message ?? null
+      expect(rowProblem(row, { todayIso: TODAY, started: stored })).toBe(server)
+    }
+  })
+})
+
+describe('formProblems', () => {
+  it('a clean form is ok', () => {
+    expect(formProblems(loaded(), { todayIso: TODAY, started: startedRules(loaded(), TODAY) }))
+      .toEqual({ byKey: {}, banner: null, ok: true })
+  })
+
+  it('marks each broken row by key; an ended row is never judged (it is not sent)', () => {
+    const rows = [...loaded(), datedRow('2026-09-01', '2026-09-02', { key: 'old', all_day: false, start_time: 'x' })]
+    rows[1] = { ...rows[1], end_time: '08:00' }
+    const out = formProblems(rows, { todayIso: TODAY, started: startedRules(loaded(), TODAY) })
+    expect(out.byKey).toEqual({ r2: 'The end time must be after the start time' })
+    expect(out.ok).toBe(false)
+  })
+
+  it('says so when a list is over its cap', () => {
+    const next = createRowKeys()
+    const many = Array.from({ length: AVAILABILITY_LIMITS.weekly + 1 }, () => newRow('weekly', { todayIso: TODAY, nextKey: next }))
+    expect(formProblems(many, { todayIso: TODAY })).toMatchObject({ banner: AVAILABILITY_COPY.weeklyFull, ok: false })
+  })
+})
+
+describe('canAdd', () => {
+  it('stops at the cap for that list only', () => {
+    const next = createRowKeys()
+    const full = Array.from({ length: AVAILABILITY_LIMITS.weekly }, () => newRow('weekly', { todayIso: TODAY, nextKey: next }))
+    expect(canAdd(full, 'weekly', { todayIso: TODAY })).toBe(false)
+    expect(canAdd(full, 'dated', { todayIso: TODAY })).toBe(true)
+    expect(canAdd(full.slice(1), 'weekly', { todayIso: TODAY })).toBe(true)
+  })
+})
+
+describe('duplicateKeys', () => {
+  const [mon, tue] = loaded()
+  it('a later exact copy (same day, window and note) is flagged; the first is not', () => {
+    expect([...duplicateKeys([mon, { ...mon, key: 'copy' }], { todayIso: TODAY })]).toEqual(['copy'])
+    expect([...duplicateKeys([tue, { ...tue, key: 'typed', start_time: '9', end_time: '12' }], { todayIso: TODAY })]).toEqual(['typed'])
+  })
+  it('a different note is a different entry', () => {
+    expect(duplicateKeys([mon, { ...mon, key: 'b', note: 'other' }], { todayIso: TODAY }).size).toBe(0)
+  })
+})
+
+describe('startedNote / rowSummary', () => {
+  const [mon, tue, started, future] = loaded()
+  it('only a started dated row that has not ended gets the started note, naming the day it started', () => {
+    expect(startedNote(started, { todayIso: TODAY }))
+      .toBe('Started 20 Sep. The days already gone stay as they are: you can change the last day or the note, or remove it from today.')
+    expect(startedNote(future, { todayIso: TODAY })).toBeNull()
+    expect(startedNote(mon, { todayIso: TODAY })).toBeNull()
+    expect(startedNote({ ...started, end_date: '2026-09-24' }, { todayIso: TODAY })).toBeNull()
+  })
+  it("a card's one-line name is the shared description; an unfinished card says so", () => {
+    expect(rowSummary(mon, { todayIso: TODAY })).toBe('Mondays, all day')
+    expect(rowSummary(tue, { todayIso: TODAY })).toBe('Tuesdays, 9am–12pm')
+    expect(rowSummary(future, { todayIso: TODAY })).toBe('3 Oct – 5 Oct, 5pm–7:30pm')
+    expect(rowSummary({ ...tue, start_time: '' }, { todayIso: TODAY })).toBe('Unfinished weekly time')
+    expect(rowSummary({ ...future, start_date: '' }, { todayIso: TODAY })).toBe('Unfinished date')
+    expect(rowSummary({ ...started, end_date: '2026-09-24' }, { todayIso: TODAY })).toBe('20 Sep – 24 Sep, all day')
+  })
+})
+
+describe('buildSaveBody', () => {
+  it('both lists in canonical order, without kind, whatever order the cards are in; each path names its card', () => {
+    const rows = loaded()
+    const { body, keysByPath, endedKeys } = buildSaveBody([rows[3], rows[1], rows[2], rows[0]], { todayIso: TODAY })
+    expect(body).toEqual({
+      weekly: [
+        { weekday: 'mon', all_day: true, start_time: null, end_time: null, note: null },
+        { weekday: 'tue', all_day: false, start_time: '09:00', end_time: '12:00', note: 'college' },
+      ],
+      dated: [
+        { start_date: '2026-09-20', end_date: '2026-09-30', all_day: true, start_time: null, end_time: null, note: null },
+        { start_date: '2026-10-03', end_date: '2026-10-05', all_day: false, start_time: '17:00', end_time: '19:30', note: 'wedding' },
+      ],
+    })
+    expect(keysByPath).toEqual({ 'weekly.0': ['r1'], 'weekly.1': ['r2'], 'dated.0': ['r3'], 'dated.1': ['r4'] })
+    expect(endedKeys).toEqual([])
+  })
+
+  it('a started card goes back with its STORED start and its new last day (the server carries it on from today)', () => {
+    const rows = loaded()
+    const moved = rangeFromCalendar({ start: '2026-10-02', end: null }, rows[2])
+    const { body } = buildSaveBody([rows[0], rows[1], { ...rows[2], ...moved }, rows[3]], { todayIso: TODAY })
+    expect(body.dated[0]).toEqual({ start_date: '2026-09-20', end_date: '2026-10-02', all_day: true, start_time: null, end_time: null, note: null })
+    // The route validates the carried body with no issue.
+    const carried = carryStartedRules(normaliseAvailability(body), startedRules(rows, TODAY), TODAY)
+    expect(availabilityProblems(carried.input, { todayIso: TODAY, knownKeys: carried.knownKeys })).toEqual([])
+    expect(carried.input.dated[0].start_date).toBe(TODAY)
+  })
+
+  it('an exact copy is sent once, and its path points at every card that made it', () => {
+    const [mon] = loaded()
+    const { body, keysByPath } = buildSaveBody([mon, { ...mon, key: 'copy' }], { todayIso: TODAY })
+    expect(body.weekly).toHaveLength(1)
+    expect(keysByPath).toEqual({ 'weekly.0': ['r1', 'copy'] })
+  })
+
+  it('a dated card that ended (a screen left open over midnight) is left out, not sent back', () => {
+    const rows = loaded()
+    const gone = { ...rows[2], key: 'gone', start_date: '2026-09-01', end_date: '2026-09-24' }
+    const { body, endedKeys, keysByPath } = buildSaveBody([...rows, gone], { todayIso: TODAY })
+    expect(body.dated.map((d) => d.start_date)).toEqual(['2026-09-20', '2026-10-03'])
+    expect(endedKeys).toEqual(['gone'])
+    expect(Object.values(keysByPath).flat()).not.toContain('gone')
+  })
+
+  it('typed times go out as HH:MM; a one-day date carries its end', () => {
+    const next = createRowKeys('n')
+    const w = { ...newRow('weekly', { todayIso: TODAY, nextKey: next }), weekday: 'fri', all_day: false, start_time: '5pm', end_time: '1930' }
+    const d = { ...newRow('dated', { todayIso: TODAY, nextKey: next }), start_date: '2026-10-09', end_date: '' }
+    expect(buildSaveBody([w, d], { todayIso: TODAY }).body).toEqual({
+      weekly: [{ weekday: 'fri', all_day: false, start_time: '17:00', end_time: '19:30', note: null }],
+      dated: [{ start_date: '2026-10-09', end_date: '2026-10-09', all_day: true, start_time: null, end_time: null, note: null }],
+    })
+  })
+})
+
+describe('isDirty', () => {
+  it('nothing loaded is never dirty, so a failed load can never be saved over', () => {
+    expect(isDirty(null, loaded(), { todayIso: TODAY })).toBe(false)
+  })
+
+  it('the same rules in another order, or typed differently, are not a change', () => {
+    const base = loaded()
+    expect(isDirty(base, [...base].reverse(), { todayIso: TODAY })).toBe(false)
+    const retyped = base.map((r) => (r.key === 'r2' ? { ...r, start_time: '9', end_time: '12pm' } : r))
+    expect(isDirty(base, retyped, { todayIso: TODAY })).toBe(false)
+  })
+
+  it("a note-only edit, a started card's new last day, a removed card or a new card IS a change", () => {
+    const base = loaded()
+    expect(isDirty(base, base.map((r) => (r.key === 'r1' ? { ...r, note: 'school run' } : r)), { todayIso: TODAY })).toBe(true)
+    expect(isDirty(base, base.map((r) => (r.key === 'r3' ? { ...r, end_date: '2026-09-27' } : r)), { todayIso: TODAY })).toBe(true)
+    expect(isDirty(base, base.slice(1), { todayIso: TODAY })).toBe(true)
+    expect(isDirty(base, [...base, newRow('dated', { todayIso: TODAY, nextKey: createRowKeys('n') })], { todayIso: TODAY })).toBe(true)
+  })
+
+  it('adding an exact copy, or dropping a card that has ended, is not a change', () => {
+    const base = loaded()
+    expect(isDirty(base, [...base, { ...base[0], key: 'copy' }], { todayIso: TODAY })).toBe(false)
+    const withOld = [...base, { ...base[2], key: 'old', start_date: '2026-09-01', end_date: '2026-09-24' }]
+    expect(isDirty(withOld, base, { todayIso: TODAY })).toBe(false)
   })
 })
