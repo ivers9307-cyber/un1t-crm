@@ -8,7 +8,12 @@ import { filterAssignableCoaches } from '../../lib/schedule-manage'
 // onDismiss (optional, iOS only — Android never fires it): called once the
 // sheet has FINISHED animating out. A caller that opens another Modal after a
 // pick must wait for it; iOS refuses a present while this one is dismissing.
-export default function CoachPickerSheet({ visible, block, locationId, staff, loading, onPick, onClose, onDismiss, title = 'Add coach', emptyText = 'No available coaches to add.' }) {
+//
+// error / onRetry (optional) — MANAGEMODE.1: the coach list failed to load.
+// Shown instead of emptyText, which would tell the manager there are no
+// coaches when the truth is the list never arrived. Callers that pass
+// neither keep the old rendering.
+export default function CoachPickerSheet({ visible, block, locationId, staff, loading, error, onRetry, onPick, onClose, onDismiss, title = 'Add coach', emptyText = 'No available coaches to add.' }) {
   const coaches = block ? filterAssignableCoaches(staff || [], block, locationId) : []
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose} onDismiss={onDismiss}>
@@ -21,6 +26,15 @@ export default function CoachPickerSheet({ visible, block, locationId, staff, lo
           </View>
           {loading && staff === null ? (
             <View className="py-8 items-center"><ActivityIndicator /></View>
+          ) : error ? (
+            <View className="py-6 items-center">
+              <Text className="text-sm text-red-500 text-center">{error}</Text>
+              {onRetry ? (
+                <Pressable onPress={onRetry} hitSlop={8} className="mt-3 active:opacity-60">
+                  <Text className="text-sm font-semibold text-un1t-text">Try again</Text>
+                </Pressable>
+              ) : null}
+            </View>
           ) : coaches.length === 0 ? (
             <Text className="text-sm text-un1t-subtle py-6 text-center">{emptyText}</Text>
           ) : (
