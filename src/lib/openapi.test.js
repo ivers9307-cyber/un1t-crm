@@ -351,6 +351,18 @@ describe('getOpenApiSpec', () => {
     expect(spec.components.schemas).toHaveProperty('TemplateCloneResponse')
   })
 
+  // GRID.1
+  it('documents the coach grid read as manager-only, hours only, one organisation', () => {
+    const op = spec.paths['/api/schedule/grid']?.get
+    expect(op).toBeDefined()
+    expect(op.security).toContainEqual({ CookieAuth: [] })
+    expect(op.description).toMatch(/manager-only/i)
+    expect(op.description).toMatch(/no rate/i)
+    expect(op.description).toMatch(/same organisation/i)
+    expect(Object.keys(op.responses)).toEqual(expect.arrayContaining(['200', '400', '403', '500']))
+    expect(op.responses['400'].description).toMatch(/real calendar date/)
+  })
+
   it('declares webhook + bridge auth schemes', () => {
     const s = spec.components.securitySchemes
     expect(s).toHaveProperty('GlofoxHmac')
