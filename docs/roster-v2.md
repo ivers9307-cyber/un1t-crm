@@ -277,6 +277,10 @@ current window, the change (unchanged, moved, added after publish, removed
 after publish) and the arrival stamp, with totals. Blocks match on the slot,
 coaches on profile id within it (a swap reads as removed + added). Hours are
 wall-clock like payroll's, except that `'24:00'` counts as midnight here.
+Arrival is `arrived_at`, carried onto a back-to-back shift exactly as the
+attendance report carries it: the gap (at most an hour, same coach, same day)
+is measured on the BLOCKS' times, never an override. "Ended" uses the coach's
+own window (override, else the block's time).
 "No arrival recorded" (`no_show_candidate`) is advisory: stamps exist for a
 minority of shifts, and nothing alerts. The web view is "Published vs now" in
 the change-log dialog (the Published chip), one section per published roster

@@ -407,6 +407,43 @@ describe('compareSnapshot — as arrived (advisory)', () => {
   })
 })
 
+// Review 4 — the back-to-back carry-over is the attendance report's rule to
+// the letter (src/app/api/attendance/route.js): the gap is measured between
+// the BLOCKS' times, never a coach's override window, so the two surfaces
+// never disagree about whether an arrival carried.
+describe('compareSnapshot — the carry-over uses the blocks\' times, as the attendance report does', () => {
+  const early = (over = {}) => blk({ start_time: '06:00:00', end_time: '09:00:00', ...over })
+  const late = (over = {}) => blk({
+    id: 'b-late', template_id: 't-late', start_time: '09:30:00', end_time: '10:30:00',
+    shift_templates: { name: 'Late', kind: 'class' }, ...over,
+  })
+
+  it('blocks 30 min apart carry, even when the coach\'s override left early (07:00, 150 min before)', () => {
+    const b = [
+      early({ shift_assignments: [asg('a', { end_time_override: '07:00:00', arrived_at: '2026-09-15T04:55:00Z' })] }),
+      late({ shift_assignments: [asg('a', { id: 'a-a2' })] }),
+    ]
+    const r = cmp(snap(b), b)
+    expect(r.blocks[1].coaches[0]).toMatchObject({ arrival_inferred: true, arrived_local: '05:55', no_show_candidate: false })
+  })
+
+  it('blocks 2h apart do not carry, even when the coach\'s override ran on to 30 min before', () => {
+    const b = [
+      blk({ start_time: '06:00:00', end_time: '07:00:00', shift_assignments: [asg('a', { end_time_override: '09:00:00', arrived_at: '2026-09-15T04:55:00Z' })] }),
+      late({ shift_assignments: [asg('a', { id: 'a-a2' })] }),
+    ]
+    const r = cmp(snap(b), b)
+    expect(r.blocks[1].coaches[0]).toMatchObject({ arrival_inferred: false, arrived_at: null, no_show_candidate: true })
+  })
+
+  it("'ended' stays on the coach's own window (an override that ends later ends later)", () => {
+    const b = [early({ shift_assignments: [asg('a', { end_time_override: '10:00:00' })] })]
+    // 09:00 IST (block end) is 08:00Z; the coach's 10:00 is 09:00Z.
+    expect(coach(cmp(snap(b), b, { nowMs: Date.UTC(2026, 8, 15, 8, 30) }), '2026-09-15', 'a').ended).toBe(false)
+    expect(coach(cmp(snap(b), b, { nowMs: Date.UTC(2026, 8, 15, 9, 0) }), '2026-09-15', 'a').ended).toBe(true)
+  })
+})
+
 describe('compareSnapshot — clocks', () => {
   it("judges 'ended' on the studio's clock across the spring change (29 Mar 2026: 07:00 IST is 06:00Z)", () => {
     const b = [blk({ block_date: '2026-03-29', shift_assignments: [asg('a')] })]

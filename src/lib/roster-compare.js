@@ -28,7 +28,11 @@
 //
 // ENDED / NO ARRIVAL are judged on real instants in the studio's zone
 // (wallInstant: DST-exact, '24:00' = the next midnight; an end before the start
-// ends on the next day). "No arrival recorded" is ADVISORY: arrival stamps
+// ends on the next day). "Ended" is the COACH's own window (override, else the
+// block). The back-to-back CARRY-OVER is the attendance report's rule to the
+// letter (src/app/api/attendance/route.js): the gap between the same coach's
+// shifts that day is measured on the BLOCKS' times (resolveScheduledAt),
+// never an override, so the two surfaces never disagree about a carry. "No arrival recorded" is ADVISORY: arrival stamps
 // exist for a minority of shifts, so it is a prompt to check, never a
 // no-show, and nothing here alerts anyone.
 //
@@ -49,7 +53,7 @@ import { normaliseBriefing } from '@shared/shift-briefing'
 import { wallInstant } from './staff-calendar-feed'
 import { resolveTz } from './tz-time'
 import { addDaysISO } from './dublin-time'
-import { inferContinuousArrivals, arrivalToTimeOnly } from './staff-attendance'
+import { inferContinuousArrivals, arrivalToTimeOnly, resolveScheduledAt } from './staff-attendance'
 
 export const SNAPSHOT_FORMAT_VERSION = 1
 
@@ -302,10 +306,15 @@ export function compareSnapshot({ snapshot, currentBlocks, from = null, to = nul
         const arrivedMs = Date.parse(arrivals.get(`${slot}|${pid}`) || '')
         timed.push({
           row,
+          // "Ended" is the COACH's own window (override, else block).
+          endMs: endInstant(c.date, n, zone),
           profileId: pid,
           blockDate: c.date,
-          scheduledAt: wallInstant(c.date, n.start, zone),
-          scheduledEndAt: endInstant(c.date, n, zone),
+          // Review 4 — the carry-over is measured on the BLOCK's times, as
+          // the attendance report measures it (attendance/route.js), never
+          // the coach's override window, so the two never disagree.
+          scheduledAt: resolveScheduledAt(c.date, c.start, zone),
+          scheduledEndAt: resolveScheduledAt(c.date, c.end, zone),
           arrivalAt: Number.isFinite(arrivedMs) ? arrivedMs : null,
         })
       }
@@ -319,8 +328,8 @@ export function compareSnapshot({ snapshot, currentBlocks, from = null, to = nul
   // coach's previous shift's arrival that day when the gap is at most an hour.
   // Returned in input order.
   inferContinuousArrivals(timed).forEach((r, i) => {
-    const row = timed[i].row
-    row.ended = Number.isFinite(r.scheduledEndAt) && r.scheduledEndAt <= nowMs
+    const { row, endMs } = timed[i]
+    row.ended = Number.isFinite(endMs) && endMs <= nowMs
     if (Number.isFinite(r.arrivalAt)) {
       row.arrived_at = new Date(r.arrivalAt).toISOString()
       row.arrived_local = (arrivalToTimeOnly(r.arrivalAt, zone) || '').slice(0, 5) || null
