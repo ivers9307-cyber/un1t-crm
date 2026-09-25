@@ -156,3 +156,39 @@ describe('blockEditNoticeText', () => {
     expect(blockEditNoticeText({ coaches: 2, when: 'morning' })).toBe('Saved. The 2 coaches on this shift will be told after 7am (no notifications overnight).')
   })
 })
+
+// Review fix 1 — an edit must never leave a coach with an end at or before
+// their start (payroll's shiftHours wraps it to ~23.5h, and the notice would
+// read "10:30am–10am").
+describe('planBlockEdit — a coach window that no longer makes sense (review fix 1)', () => {
+  it('refuses 409 coach_window_invalid, naming the coach, when a kept END is now at or before the new start', () => {
+    const b = block({ shift_assignments: [coach('u1', 'Coach A', { end_time_override: '10:00:00' }), coach('u2', 'Coach B')] })
+    const p = planBlockEdit({ block: b, body: { start_time: '10:30' } })
+    expect(p).toMatchObject({ ok: false, status: 409, body: { error: 'coach_window_invalid', coaches: ['Coach A'] } })
+    expect(p.body.message).toMatch(/Coach A/)
+  })
+
+  it('refuses when a kept START is now at or after the new end', () => {
+    const b = block({ shift_assignments: [coach('u1', 'Coach A', { start_time_override: '11:00:00' })] })
+    expect(planBlockEdit({ block: b, body: { end_time: '11:00' } }).body.error).toBe('coach_window_invalid')
+  })
+
+  it('cancelled rows are not judged', () => {
+    const b = block({ shift_assignments: [coach('u1', 'Coach A', { status: 'cancelled', end_time_override: '10:00:00' })] })
+    expect(planBlockEdit({ block: b, body: { start_time: '10:30' } }).ok).toBe(true)
+  })
+
+  it('warns (does not refuse) when an override on the field that did NOT move falls outside the new window', () => {
+    // End override 13:00 runs past the block end (12:00); only the start moves.
+    const b = block({ shift_assignments: [coach('u1', 'Coach A', { end_time_override: '13:00:00' })] })
+    const p = planBlockEdit({ block: b, body: { start_time: '09:30' } })
+    expect(p.ok).toBe(true)
+    expect(p.warnings.join(' ')).toMatch(/Coach A's own finish time \(1pm\) is outside the shift's new hours \(9:30am–12pm\)/)
+  })
+
+  it('no warning when the unmoved override is still inside the new window', () => {
+    const b = block({ shift_assignments: [coach('u1', 'Coach A', { end_time_override: '11:00:00' })] })
+    const p = planBlockEdit({ block: b, body: { start_time: '09:30' } })
+    expect(p.warnings.join(' ')).not.toMatch(/outside/)
+  })
+})

@@ -15,7 +15,7 @@
 
 import { liveAssignments } from './roster'
 import { adminMinimumRefusal } from './shift-template-kind'
-import { formatTimeRange12h } from './schedule-overlap'
+import { formatTime12h, formatTimeRange12h } from './schedule-overlap'
 import { shiftKindOf } from '@shared/shift-kind'
 import { normaliseBriefing } from '@shared/shift-briefing'
 
@@ -111,6 +111,8 @@ export function planBlockEdit({ block, body = {} }) {
   const followUpdates = []
   const affected = []
   const kept = []
+  const invalid = []
+  const outside = []
   if (timesChanged) {
     for (const a of live) {
       const sOv = toHms(a.start_time_override)
@@ -134,14 +136,41 @@ export function planBlockEdit({ block, body = {} }) {
           expect: { ...(sFollows ? { start_time_override: a.start_time_override } : {}), ...(eFollows ? { end_time_override: a.end_time_override } : {}) },
         })
       }
+      const name = a.profiles?.full_name || 'A coach'
+      // Review fix 1 — a window that ends at or before it starts is not a
+      // shift: payroll's shiftHours wraps it (~23.5h) and the notice would
+      // read backwards. Refused below, naming every such coach.
+      if (to.end_time <= to.start_time) {
+        invalid.push(name)
+        continue
+      }
+      // An override on a field the edit did NOT move stays; if it now sits
+      // outside the shift's new hours the manager is told (not refused: a
+      // coach may genuinely start early or stay late).
+      if (!changed.start && sOv !== null && (sOv < next.start || sOv > next.end)) {
+        outside.push({ name, which: 'start', time: sOv })
+      }
+      if (!changed.end && eOv !== null && (eOv < next.start || eOv > next.end)) {
+        outside.push({ name, which: 'finish', time: eOv })
+      }
       if (!sameWindow(from, to)) affected.push({ assignmentId: a.id, coachId: a.profile_id, from, to, toIfStuck })
       if ((changed.start && sKept !== null) || (changed.end && eKept !== null)) {
         kept.push({ assignmentId: a.id, coachId: a.profile_id, name: a.profiles?.full_name || 'A coach', window: to })
       }
     }
   }
+  if (invalid.length > 0) {
+    return refuse(409, 'coach_window_invalid',
+      `${invalid.join(', ')} would finish at or before they start: their own hours do not fit the new times. Change their hours first.`,
+      { coaches: invalid })
+  }
   for (const k of kept) {
     warnings.push(`${k.name} keeps their own hours (${formatTimeRange12h(k.window.start_time, k.window.end_time)}), which did not move with the shift.`)
+  }
+
+  const newRange = formatTimeRange12h(next.start, next.end)
+  for (const o of outside) {
+    warnings.push(`${o.name}'s own ${o.which} time (${formatTime12h(o.time)}) is outside the shift's new hours (${newRange}).`)
   }
 
   // D4 — the coachless block_edited row. What changed, never the briefing text.
