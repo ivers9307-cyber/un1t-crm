@@ -118,6 +118,7 @@ These are marked **REVIEW** in the artifact until he confirms or changes them. E
 - 🔴 A shift block's MANAGER `notes` reach a coach's own phone row through `toApiShiftRow` (`notes: a.notes ?? b.notes`); COACHSCOPE.1 meant block notes as manager working notes. Check whether coaches should see them; BLOCKEDIT.1's briefing is the coach-facing field (found planning 14).
 - Migration 633's header still says "apply before the code deploys"; the CLAUDE.md rule it added says after. Harmless (the file re-arms) but fix the header next time the file is touched.
 - Delete the old `GET /api/schedule/working-time` route one deploy after CANDIDATES.1 ships (kept so open tabs keep working).
+- An un-awaited `expect(...).resolves` in a test races the test's end and flakes CI (bit #1762 once). A lint rule (vitest `valid-expect` with `alwaysAwait`, or a guard test) would catch the class repo-wide.
 - The staff assistant's `generate_report` tool passes model-supplied report periods unchecked (Postgres refuses a bad one; harmless) (found reviewing 11).
 - The staff assistant's `create_shift` and `get_time_off` tools take dates with no calendar check (found planning 11; the assistant is off everywhere).
 
@@ -125,6 +126,7 @@ These are marked **REVIEW** in the artifact until he confirms or changes them. E
 
 Updated by the loop. Newest first.
 
+- 25 Sep ~13:12Z: #1762 AVAIL.1a CI failed on ONE test: an un-awaited `expect(...).resolves` raced the test's end (code fine). Awaited, pushed `7998cb03`, auto-merge still on. BLOCKEDIT.1 fixes all landed (incl. mig 639 heartbeat) → second full review. AVAIL.1b fixes landed (waits for #1762 to rebase onto main).
 - 25 Sep ~13:15Z: **#1761 ICSFEED.1 MERGED** (12:51Z), EAS Update SUCCESS. ✅ **MIG 630 APPLIED** (post: 0 browser privileges, RPC exec service_role only, heartbeat 900+1800, 6 indexes; perf advisors only INFO unused_index on the new tables; rollback record `mig630-rollback-2026-09-25.txt`). 16 AVAIL.1a = [PR #1762](https://github.com/ivers9307-cyber/un1t-crm/pull/1762) (gate 28,189 + build; 2 more main merges resolved: openapi + guardrail config), auto-merge on — check its EAS run. AVAIL.1b review approved w/ 3 editor should-fixes → fixing.
 - 25 Sep ~13:15Z: 🔴 14 BLOCKEDIT.1 review **NOT APPROVED**: (1) an edit could leave a coach with an end-before-start window that payroll pays as 23.5h; (2) the two-manager overwrite guard never fired (form sent no baseline). Should-fixes: notices silent for started/early shifts, no double-booking warning on a move, a template edit undid one-off edits. All sent back with decisions (refuse invalid windows 409; `expected` baseline; judge started on the old start; overlap warning; template PUT only rewrites un-edited blocks; past-shift edits need confirmation) plus the arm heartbeat (mig 639). AVAIL.1b rebased + in review. AVAIL.1a re-gating after an openapi conflict.
 - 25 Sep ~13:05Z: 19 CANDIDATES.1 plan written (one endpoint `GET /api/schedule/blocks/[id]/candidates`, two audiences; `shared/candidates.js` ranking; replaces WORKTIME's per-open picker GET; old working-time route kept one deploy then deleted as a follow-up; Task 0 waits for AVAIL.1a/1b).
