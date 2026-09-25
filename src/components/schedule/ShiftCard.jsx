@@ -124,11 +124,12 @@ export default function ShiftCard({ model, dayLabel, isMine = false, showHint = 
         </div>
       )}
       {/* SHIFTTYPE.1 — the admin word. An admin shift never has a staffing
-          badge (no minimum), so this is the only chip it can carry. */}
+          badge (no minimum), so this is the only chip it can carry. It sits
+          on the slate admin surface, so it needs a border to have an edge. */}
       {model.kindLabel && (
         <div
           data-testid="shift-kind"
-          className="mt-1 inline-flex items-center rounded bg-slate-500/10 px-1.5 py-0.5 text-[11px] font-medium text-slate-700"
+          className="mt-1 inline-flex items-center rounded border border-slate-300 bg-slate-500/10 px-1.5 py-0.5 text-[11px] font-medium text-slate-700"
         >
           {model.kindLabel}
         </div>

@@ -190,6 +190,11 @@ describe('ShiftCard — admin shifts (SHIFTTYPE.1)', () => {
     expect(card.className).toMatch(/\bbg-slate-500\/10\b/)
     expect(card.className).not.toMatch(/border-dashed|border-red|border-amber/)
     expect(screen.getByTestId('shift-kind').textContent).toBe('Admin')
+    // The chip sits ON the slate surface, so a slate fill alone has no edge.
+    const chip = screen.getByTestId('shift-kind')
+    expect(chip.className).toMatch(/\bborder\b/)
+    expect(chip.className).toMatch(/\bborder-slate-300\b/)
+    expect(chip.className).toMatch(/\btext-slate-700\b/)
     expect(screen.queryByTestId('needs-coach-badge')).toBeNull()
     expect(screen.getByText('Nobody assigned')).toBeTruthy()
   })
