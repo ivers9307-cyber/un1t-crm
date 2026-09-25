@@ -8,6 +8,12 @@
 // Three states that must never be confused: loading, an ERROR, and a genuinely
 // empty period. An error is rendered as an error; "No changes" is only ever
 // said about a read that succeeded.
+//
+// SNAPSHOT.1 — and "Published vs now". When the period's shifts sit on at
+// least one published roster (`rosterIds`, from the blocks the calendar
+// already holds), a two-button switch shows RosterCompareSection instead of
+// the change list. The comparison is read on first switch, so opening the
+// dialog still reads exactly one thing.
 
 import { useEffect, useState } from 'react'
 import Modal from '@/components/ui/Modal'
@@ -15,10 +21,17 @@ import {
   rosterChangeSentence, rosterChangeTold, rosterChangeByline, ROSTER_CHANGE_LOG_MAX_ROWS,
 } from '@/lib/roster-change-format'
 import { readJson } from './useScheduleData'
+import RosterCompareSection from './RosterCompareSection'
 
-export default function RosterChangeLogDrawer({ locationId, periodStart, periodEnd, periodLabel, onClose, restoreFocusRef }) {
+function switchCls(on) {
+  return `px-3 py-1.5 ${on ? 'bg-un1t-surface text-un1t-text font-medium' : 'text-un1t-subtle hover:text-un1t-text'} focus:outline-none focus-visible:ring-2 focus-visible:ring-un1t-accent`
+}
+
+export default function RosterChangeLogDrawer({ locationId, periodStart, periodEnd, periodLabel, rosterIds = [], onClose, restoreFocusRef }) {
   // Starts in `loading`, so the effect below never sets state synchronously.
   const [state, setState] = useState({ loading: true, error: null, changes: [], truncated: false })
+  // SNAPSHOT.1 — 'changes' | 'compare'.
+  const [view, setView] = useState('changes')
 
   useEffect(() => {
     // The generation guard in its effect-scoped form: a response for a period
@@ -52,6 +65,7 @@ export default function RosterChangeLogDrawer({ locationId, periodStart, periodE
 
   const { loading, error, changes, truncated } = state
   const untold = changes.filter((c) => !c.notified_at).length
+  const canCompare = (rosterIds || []).length > 0
 
   return (
     <Modal
@@ -73,80 +87,98 @@ export default function RosterChangeLogDrawer({ locationId, periodStart, periodE
       <div>
         <div className="text-xs text-un1t-subtle mb-3">{periodLabel}</div>
 
-        {loading && (
-          <div className="text-center py-6 text-sm text-un1t-subtle">Loading changes…</div>
-        )}
-
-        {!loading && error && (
-          <div role="alert" className="rounded-lg border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-700">
-            {error}
+        {canCompare && (
+          <div role="group" aria-label="Show" className="mb-3 inline-flex overflow-hidden rounded-md border border-un1t-border text-xs">
+            <button type="button" aria-pressed={view === 'changes'} onClick={() => setView('changes')} className={switchCls(view === 'changes')}>
+              Changes
+            </button>
+            <button type="button" aria-pressed={view === 'compare'} onClick={() => setView('compare')} className={`border-l border-un1t-border ${switchCls(view === 'compare')}`}>
+              Published vs now
+            </button>
           </div>
         )}
 
-        {!loading && !error && changes.length === 0 && (
-          <div className="py-6 text-center">
-            <div className="text-sm text-un1t-text">No changes since this was published.</div>
-            <p className="text-xs text-un1t-subtle mt-1">
-              Only edits to shifts on a published roster are recorded here. Edits to a week that is not published yet are part of its first publish.
-            </p>
-          </div>
-        )}
-
-        {!loading && !error && changes.length > 0 && (
+        {view === 'compare' ? (
+          <RosterCompareSection rosterIds={rosterIds} from={periodStart} to={periodEnd} />
+        ) : (
           <>
-            <div data-testid="roster-change-summary" className="text-xs text-un1t-subtle mb-2">
-              {changes.length} change{changes.length === 1 ? '' : 's'}
-              {untold > 0 && (
-                <span className="text-amber-700"> · {untold} not told yet. Publish again to tell them.</span>
-              )}
-            </div>
-            {/* A scrolling box with nothing focusable inside cannot be scrolled
-                from the keyboard, so the box itself takes focus and a name.
+            {loading && (
+              <div className="text-center py-6 text-sm text-un1t-subtle">Loading changes…</div>
+            )}
 
-                ONE scroller, not two. Modal's body scrolls too, and a fixed
-                60vh list inside it double-scrolled on a short viewport. The cap
-                is the viewport minus everything else the dialog stacks: 2rem
-                of backdrop padding, the header and footer bars (~3.1rem and
-                ~3.6rem), the body's 2rem of padding, and the period, summary
-                and cut-short lines above and below the list (~5rem). 17rem
-                leaves a little slack, so the body never needs its own scroll
-                while the list has room; min-h keeps a usable list on a very
-                short screen, where the body scrolling is the lesser evil. */}
-            <div
-              role="region"
-              aria-label="Changes, newest first"
-              tabIndex={0}
-              className="max-h-[calc(100vh-17rem)] min-h-[6rem] overflow-y-auto rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-un1t-accent"
-            >
-              <ul data-testid="roster-change-list" className="divide-y divide-un1t-border">
-                {changes.map((c) => {
-                // null = stamped, but the stamp does not mean anybody was told
-                // (stampMeansTold): no chip, rather than a time nobody was told at.
-                const told = rosterChangeTold(c)
-                return (
-                  <li key={c.id} className="py-2">
-                    <div className="flex items-start justify-between gap-3">
-                      <span className="text-sm text-un1t-text">
-                        {rosterChangeSentence(c)}
-                        {c.shift_name ? <span className="text-un1t-subtle"> · {c.shift_name}</span> : null}
-                      </span>
-                      {told && (
-                        <span
-                          data-testid="roster-change-told"
-                          className={`flex-shrink-0 text-[11px] font-medium px-1.5 py-0.5 rounded ${c.notified_at ? 'bg-green-500/10 text-green-700' : 'bg-amber-500/10 text-amber-700'}`}
-                        >
-                          {told}
-                        </span>
-                      )}
-                    </div>
-                    <div className="text-[11px] text-un1t-subtle mt-0.5">{rosterChangeByline(c)}</div>
-                  </li>
-                )
-              })}
-              </ul>
-            </div>
-            {truncated && (
-              <p className="text-xs text-un1t-subtle mt-2">Showing the most recent {ROSTER_CHANGE_LOG_MAX_ROWS.toLocaleString('en-IE')}. Pick a shorter period to see older ones.</p>
+            {!loading && error && (
+              <div role="alert" className="rounded-lg border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-700">
+                {error}
+              </div>
+            )}
+
+            {!loading && !error && changes.length === 0 && (
+              <div className="py-6 text-center">
+                <div className="text-sm text-un1t-text">No changes since this was published.</div>
+                <p className="text-xs text-un1t-subtle mt-1">
+                  Only edits to shifts on a published roster are recorded here. Edits to a week that is not published yet are part of its first publish.
+                </p>
+              </div>
+            )}
+
+            {!loading && !error && changes.length > 0 && (
+              <>
+                <div data-testid="roster-change-summary" className="text-xs text-un1t-subtle mb-2">
+                  {changes.length} change{changes.length === 1 ? '' : 's'}
+                  {untold > 0 && (
+                    <span className="text-amber-700"> · {untold} not told yet. Publish again to tell them.</span>
+                  )}
+                </div>
+                {/* A scrolling box with nothing focusable inside cannot be scrolled
+                    from the keyboard, so the box itself takes focus and a name.
+
+                    ONE scroller, not two. Modal's body scrolls too, and a fixed
+                    60vh list inside it double-scrolled on a short viewport. The cap
+                    is the viewport minus everything else the dialog stacks: 2rem
+                    of backdrop padding, the header and footer bars (~3.1rem and
+                    ~3.6rem), the body's 2rem of padding, and the period, summary
+                    and cut-short lines above and below the list (~5rem). 17rem
+                    leaves a little slack, so the body never needs its own scroll
+                    while the list has room; min-h keeps a usable list on a very
+                    short screen, where the body scrolling is the lesser evil.
+                    SNAPSHOT.1 — the switch row adds ~2.5rem when it shows. */}
+                <div
+                  role="region"
+                  aria-label="Changes, newest first"
+                  tabIndex={0}
+                  className={`${canCompare ? 'max-h-[calc(100vh-19.5rem)]' : 'max-h-[calc(100vh-17rem)]'} min-h-[6rem] overflow-y-auto rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-un1t-accent`}
+                >
+                  <ul data-testid="roster-change-list" className="divide-y divide-un1t-border">
+                    {changes.map((c) => {
+                    // null = stamped, but the stamp does not mean anybody was told
+                    // (stampMeansTold): no chip, rather than a time nobody was told at.
+                    const told = rosterChangeTold(c)
+                    return (
+                      <li key={c.id} className="py-2">
+                        <div className="flex items-start justify-between gap-3">
+                          <span className="text-sm text-un1t-text">
+                            {rosterChangeSentence(c)}
+                            {c.shift_name ? <span className="text-un1t-subtle"> · {c.shift_name}</span> : null}
+                          </span>
+                          {told && (
+                            <span
+                              data-testid="roster-change-told"
+                              className={`flex-shrink-0 text-[11px] font-medium px-1.5 py-0.5 rounded ${c.notified_at ? 'bg-green-500/10 text-green-700' : 'bg-amber-500/10 text-amber-700'}`}
+                            >
+                              {told}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[11px] text-un1t-subtle mt-0.5">{rosterChangeByline(c)}</div>
+                      </li>
+                    )
+                  })}
+                  </ul>
+                </div>
+                {truncated && (
+                  <p className="text-xs text-un1t-subtle mt-2">Showing the most recent {ROSTER_CHANGE_LOG_MAX_ROWS.toLocaleString('en-IE')}. Pick a shorter period to see older ones.</p>
+                )}
+              </>
             )}
           </>
         )}

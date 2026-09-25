@@ -4892,6 +4892,29 @@ registry.registerPath({
   },
 })
 
+// SNAPSHOT.1 — a roster as published (mig 634 snapshot), as rostered now, and
+// as arrived. Manager-only; advisory.
+registry.registerPath({
+  method: 'get',
+  path: '/api/schedule/rosters/{id}/compare',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'A published roster as published, as rostered now, and as arrived (manager-only)',
+  description: "Compares the snapshot written when this roster was published (roster_publish_snapshots, mig 634; one per publish, immutable, taken after the publish tagged its blocks) with the live shift blocks and assignments, and with arrival stamps (shift_assignments.arrived_at, carried onto a back-to-back shift as the attendance report does). Query: from and to (optional real YYYY-MM-DD dates, the period on screen, clipped to the published period); against (optional snapshot id at the same studio whose period overlaps this roster's published dates, to compare with another publish of the period, such as the first; other dates answer 409). Returns roster, window, baseline (snapshot_id, roster_id, published_at, period, published_by_name), publishes (the snapshots at the studio of this roster's published dates, narrowed to the window, newest first, at most 20 plus the baseline, which is always listed), blocks (per shift: published and current times and minimum/maximum, change unchanged | moved | added | removed, staffing_changed, briefing_change added | changed | removed | null (the snapshot keeps a fingerprint of BLOCKEDIT.1's briefing, never the text); per coach: name, published and current windows, change, arrived_at, arrived_local, arrival_inferred, ended, no_show_candidate) and totals (published and current shifts and wall-clock hours, hours_delta, counts per change, ended, arrived, no_show_candidates). no_show_candidate is ADVISORY (an ended shift with no arrival stamp; stamps exist for a minority of shifts) and nothing alerts anyone. A roster with no snapshot answers 200 with baseline null and missing_reason 'before_snapshots' (published before the studio's first snapshot, snapshots_began_at says when that was; there is no backfill) or 'not_saved' (the write failed at the time and was logged); a baseline whose dates miss the window asked answers baseline set, window null, totals null and missing_reason 'outside_window', never an empty comparison. Manager-only (master, owner, manager, head_coach AT the roster's studio): an outsider gets 404, a member without the role there 403. Names, times, hours and arrival stamps only, never a rate or a cost.",
+  request: {
+    params: z.object({ id: uuidLike }),
+    query: z.object({ from: isoDate.optional(), to: isoDate.optional(), against: uuidLike.optional() }),
+  },
+  responses: {
+    200: { description: '{ success, data: { roster, window, baseline, missing_reason, snapshots_began_at, publishes, blocks, totals } }' },
+    400: { description: 'from or to not a real date, to before from, or a malformed against id', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — needs a manager role at the roster\'s location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Roster not found (or at a studio outside your assignments), or the against snapshot is not at this studio', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'The roster is a draft (nothing was published), or the against snapshot covers none of this roster\'s published dates', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The comparison could not be read (never answered as an empty comparison)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 registry.registerPath({
   method: 'post',
   path: '/api/schedule/swaps',

@@ -35,7 +35,10 @@ vi.mock('@/lib/roster-publish', async (importOriginal) => ({
 }))
 // ROSTERTIDY.1 — spied so a remnant-supersede failure can be shown to LOG
 // rather than fail the publish.
-vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logWarn: vi.fn() }))
+vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logWarn: vi.fn(), logError: vi.fn() }))
+// SNAPSHOT.1 — the snapshot writer is its own module with its own tests
+// (src/lib/roster-snapshot.test.js); here only WHEN it is called matters.
+vi.mock('@/lib/roster-snapshot', () => ({ writePublishSnapshot: vi.fn(() => Promise.resolve({ saved: true })) }))
 vi.mock('@/lib/roster-email', () => ({ sendOverBudgetApprovalEmail: vi.fn(() => Promise.resolve()) }))
 vi.mock('@/lib/roster-notify', () => ({
   notifyStaffOfPublish: vi.fn(() => Promise.resolve()),
@@ -47,6 +50,7 @@ const { createServerClient } = await import('@/lib/supabase')
 const { getCurrentUser } = await import('@/lib/auth')
 const { projectPublishImpact } = await import('@/lib/roster-publish')
 const { logWarn } = await import('@/lib/log')
+const { writePublishSnapshot } = await import('@/lib/roster-snapshot')
 const { POST, GET } = await import('./route.js')
 
 // location_id is validated as UUID-shaped, so the fixture has to be one.
@@ -993,5 +997,84 @@ describe('POST /api/schedule/rosters — a period the calendar does not have', (
     }
     expect(createServerClient).not.toHaveBeenCalled()
     expect(projectPublishImpact).not.toHaveBeenCalled()
+  })
+})
+
+// SNAPSHOT.1 — every publish records what it published, AFTER its blocks are
+// tagged, and a snapshot that fails never fails the publish (CLAUDE.md: never
+// create a louder failure).
+describe('POST /api/schedule/rosters — publish snapshot (SNAPSHOT.1)', () => {
+  beforeEach(() => {
+    writePublishSnapshot.mockReset()
+    writePublishSnapshot.mockResolvedValue({ saved: true })
+  })
+
+  it('writes one snapshot with the roster row the publish inserted', async () => {
+    const { db } = buildDb()
+    createServerClient.mockReturnValue(db)
+    const res = await publish()
+    expect(res.status).toBe(201)
+    expect(writePublishSnapshot).toHaveBeenCalledTimes(1)
+    const [dbArg, roster] = writePublishSnapshot.mock.calls[0]
+    expect(dbArg).toBe(db)
+    expect(roster).toMatchObject({
+      id: 'roster-new', location_id: LOC_1, period_start: '2026-05-04', period_end: '2026-05-10',
+      status: 'published', published_by: 'owner-1',
+    })
+    expect(typeof roster.published_at).toBe('string')
+  })
+
+  it('writes it before the coaches are re-notified (the record is of the publish, not of what came after)', async () => {
+    const { db } = buildDb()
+    createServerClient.mockReturnValue(db)
+    await publish()
+    const { renotifyChangedCoaches } = await import('@/lib/roster-notify')
+    expect(writePublishSnapshot.mock.invocationCallOrder[0]).toBeLessThan(renotifyChangedCoaches.mock.invocationCallOrder[0])
+  })
+
+  it('a failed block tagging writes no snapshot: those blocks were not published by this roster', async () => {
+    const { db } = buildDb({ tagError: { message: 'deadlock detected' } })
+    createServerClient.mockReturnValue(db)
+    const res = await publish()
+    expect(res.status).toBe(201)
+    expect(writePublishSnapshot).not.toHaveBeenCalled()
+  })
+
+  it('a dry run writes no snapshot', async () => {
+    const { db } = buildDb()
+    createServerClient.mockReturnValue(db)
+    const res = await publish({ dry_run: true })
+    expect(res.status).toBe(200)
+    expect(writePublishSnapshot).not.toHaveBeenCalled()
+  })
+
+  it('a manager over budget makes a DRAFT, and a draft writes no snapshot', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'mgr-1', role: 'manager', locations: [{ id: LOC_1 }], rolesByLocation: { [LOC_1]: 'manager' } })
+    projectPublishImpact.mockResolvedValue({ ...UNDER_BUDGET, overBudget: true, overrunEur: 50 })
+    const { db } = buildDb()
+    createServerClient.mockReturnValue(db)
+    const res = await publish()
+    expect(res.status).toBe(202)
+    expect(writePublishSnapshot).not.toHaveBeenCalled()
+  })
+
+  it('a snapshot that is not saved leaves the publish exactly as it was: 201, no warning', async () => {
+    writePublishSnapshot.mockResolvedValue({ saved: false, reason: 'insert_failed' })
+    const { db } = buildDb()
+    createServerClient.mockReturnValue(db)
+    const res = await publish()
+    expect(res.status).toBe(201)
+    const body = await res.json()
+    expect(body.success).toBe(true)
+    expect(body.warning).toBeUndefined()
+  })
+
+  it('even a writer that throws past its own guard never fails the publish', async () => {
+    writePublishSnapshot.mockRejectedValue(new Error('boom'))
+    const { db } = buildDb()
+    createServerClient.mockReturnValue(db)
+    const res = await publish()
+    expect(res.status).toBe(201)
+    expect((await res.json()).success).toBe(true)
   })
 })
