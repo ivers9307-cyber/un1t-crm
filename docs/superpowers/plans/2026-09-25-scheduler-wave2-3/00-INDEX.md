@@ -116,6 +116,7 @@ These are marked **REVIEW** in the artifact until he confirms or changes them. E
 
 Updated by the loop. Newest first.
 
+- 25 Sep ~12:45Z: ✅ **MIG 628 APPLIED** (`628_shift_template_kind`). Pre-checks (a)–(e) as expected; post (f) `text | NO | 'class'`, (g) 23 class, (h) both CHECKs, (i) true,true; security advisors unchanged (47 INFO + 2 WARN). Rollback record: scratchpad `mig628-rollback-2026-09-25.txt`. SHIFTTYPE.1 review nits fixed, full gate running; merges after #1758's EAS Update succeeds.
 - 25 Sep ~13:35 IST: **#1757 DATECHECK.1 MERGED** (11:33Z). 15 WORKTIME.1 = [PR #1758](https://github.com/ivers9307-cyber/un1t-crm/pull/1758) (gate 27,838 + build; main merged in cleanly), auto-merge on; **check its EAS Update run before SHIFTTYPE.1 merges** (both publish).
 - 25 Sep: 13 SHIFTTYPE.1 review approved w/ should-fixes (4 UI nits → fixing). HARD GATE before its merge: mig 628 applied and in `list_migrations` (every roster read names `kind`). 31 HEARTBEAT.1 built (mig 633, DO UPDATE re-arm), in review.
 - 25 Sep: 16 AVAIL.1 plan written, split 1a (mig 630, API, notice, sweep arm, OTA) / 1b (web). AVAIL.1a implementer started (`~/code/un1t-crm-avail1a`). WORKTIME.1 fixes done, in my gate. Batch 4 plans (14 BLOCKEDIT.1, 22 ICSFEED.1) commissioned.
