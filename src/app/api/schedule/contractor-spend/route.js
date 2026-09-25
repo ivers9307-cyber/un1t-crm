@@ -25,7 +25,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
-import { uuidLike, isoDate, MANAGER_ROLES } from '@/lib/schemas'
+import { uuidLike, realIsoDate, MANAGER_ROLES } from '@/lib/schemas'
 import { computeMonthlyContractorSpend } from '@/lib/roster-summary-server'
 
 export const runtime = 'nodejs'
@@ -33,7 +33,9 @@ export const dynamic = 'force-dynamic'
 
 const QuerySchema = z.object({
   location_id: uuidLike,
-  reference_date: isoDate,
+  // DATECHECK.1 — a real date, not just the shape: 2026-02-30 was read as
+  // 2 March and answered 200 with March's spend and budget, silently.
+  reference_date: realIsoDate,
 })
 
 export async function GET(request) {
