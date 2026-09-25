@@ -366,6 +366,9 @@ describe('getOpenApiSpec', () => {
     for (const code of ['200', '400', '403', '404', '409', '503']) expect(op.responses).toHaveProperty(code)
     expect(op.description).toMatch(/briefing/)
     expect(op.description).toMatch(/quiet hours/)
+    // Third check 4 — every notice.when value, and what too_late means.
+    expect(op.description).toMatch(/'past'/)
+    expect(op.description).toMatch(/too_late.*before 07:30/)
     // The DELETE on the same path is still there.
     expect(spec.paths['/api/schedule/blocks/{id}'].delete).toBeTruthy()
   })
