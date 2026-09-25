@@ -3,7 +3,7 @@
 // and toolbar make is made HERE, in pure functions, because jsdom cannot see
 // layout and a component test can only say "this text is present".
 import { describe, it, expect } from 'vitest'
-import { cardTone, shiftCardModel, dayHeaderStatus, monthCellLines, rosterToolbarModel, dayLeaveBars } from './roster-card-model'
+import { cardTone, shiftCardModel, dayHeaderStatus, monthCellLines, rosterToolbarModel, dayLeaveBars, dayUnavailableBars } from './roster-card-model'
 
 const TODAY = '2026-09-21'
 const block = (over = {}) => ({
@@ -373,5 +373,50 @@ describe('dayLeaveBars', () => {
     const bars = dayLeaveBars([req('r1', 'p9', 'Coach Z', 'holiday', DAY, DAY)], DAY)
     expect(bars).toHaveLength(1)
     expect(bars[0].profileId).toBe('p9')
+  })
+})
+
+describe('dayUnavailableBars (AVAIL.1)', () => {
+  const staff = [
+    { id: 'c1', full_name: 'Alex Beta' },
+    { id: 'c2', full_name: 'Alex Gamma' },
+    { id: 'c3', full_name: 'Casey Delta' },
+  ]
+  const rules = [
+    { id: 'r1', profile_id: 'c1', kind: 'weekly', weekday: 'wed', all_day: false, start_time: '10:00', end_time: '11:00', note: 'School run' },
+    { id: 'r2', profile_id: 'c1', kind: 'weekly', weekday: 'wed', all_day: false, start_time: '17:00', end_time: '19:00', note: null },
+    { id: 'r3', profile_id: 'c2', kind: 'dated', start_date: '2026-05-05', end_date: '2026-05-07', all_day: true, note: null },
+    { id: 'r4', profile_id: 'c3', kind: 'weekly', weekday: 'wed', all_day: true, note: null },
+    { id: 'r5', profile_id: 'stranger', kind: 'weekly', weekday: 'wed', all_day: true, note: null },
+  ]
+
+  it('one bar per person that day, first names told apart, windows summarised, notes in the title', () => {
+    const bars = dayUnavailableBars(rules, '2026-05-06', staff)
+    expect(bars.map((b) => b.text)).toEqual([
+      'Alex B · Unavailable 10am–11am, 5pm–7pm',
+      'Alex G · Unavailable all day',
+      'Casey · Unavailable all day',
+    ])
+    expect(bars[0].title).toBe('Alex Beta: unavailable Wednesdays, 10am–11am (School run); Wednesdays, 5pm–7pm')
+    expect(bars.map((b) => b.id)).toEqual(['unavail-c1-2026-05-06', 'unavail-c2-2026-05-06', 'unavail-c3-2026-05-06'])
+  })
+
+  it("skips people not in the studio's staff list and people already shown on leave", () => {
+    const bars = dayUnavailableBars(rules, '2026-05-06', staff, { skipProfileIds: ['c3'] })
+    expect(bars.map((b) => b.profileId)).toEqual(['c1', 'c2'])
+  })
+
+  it('reads the times Postgres sends (HH:MM:SS)', () => {
+    const bars = dayUnavailableBars(
+      [{ id: 'r9', profile_id: 'c3', kind: 'weekly', weekday: 'wed', all_day: false, start_time: '09:00:00', end_time: '12:30:00', note: null }],
+      '2026-05-06', staff,
+    )
+    expect(bars.map((b) => b.text)).toEqual(['Casey · Unavailable 9am–12:30pm'])
+  })
+
+  it('nothing on a day no rule touches', () => {
+    expect(dayUnavailableBars(rules, '2026-05-04', staff)).toEqual([])
+    expect(dayUnavailableBars(null, '2026-05-06', staff)).toEqual([])
+    expect(dayUnavailableBars(rules, '2026-05-06', null)).toEqual([])
   })
 })

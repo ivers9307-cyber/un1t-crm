@@ -19,6 +19,7 @@ import { liveAssignments } from './roster'
 import { futureBlockStaffing, countStaffingGaps, staffingGapsHeadline, staffingGapsBreakdown } from './roster-staffing'
 import { formatTime12h, formatTimeRange12h } from './schedule-overlap'
 import { timeOffLeaveLabel } from '../../shared/time-off'
+import { unavailableFor, unavailableSummary, describeRule } from '../../shared/availability'
 
 /**
  * The card's surface tone. 'neutral' for every block today: the template's
@@ -324,4 +325,45 @@ export function dayLeaveBars(timeOff, dateStr) {
       title: `${row.profiles?.full_name || 'Unknown'} — ${label}, ${range}${more}`,
     }
   })
+}
+
+/**
+ * AVAIL.1 — the unavailability bars of ONE day in the manager's week view:
+ * one per person with any rule that day, "Firstname · Unavailable 9am–12pm".
+ * The title has the full name, every rule and its note.
+ *
+ * Only people in `staff` (the studio's coaches, which the calendar already
+ * holds) are drawn: a rule for anyone else has no name to show. People in
+ * `skipProfileIds` are left out: the caller passes the day's leave bars, and
+ * leave already says more than "unavailable". ADVISORY: nothing is blocked
+ * by a bar. Pure.
+ *
+ * @param {Array} availability  flat rules from GET /api/schedule/availability?location_id=
+ * @param {string} dateStr YYYY-MM-DD
+ * @param {Array<{id:string, full_name:string}>} staff
+ * @returns {Array<{id:string, profileId:string, text:string, title:string}>}
+ */
+export function dayUnavailableBars(availability, dateStr, staff, { skipProfileIds = [] } = {}) {
+  const skip = new Set(skipProfileIds)
+  const nameById = new Map((staff || []).map((s) => [s.id, s.full_name]))
+  const byPerson = new Map()
+  for (const rule of availability || []) {
+    const id = rule?.profile_id
+    if (!id || skip.has(id) || !nameById.has(id)) continue
+    if (!byPerson.has(id)) byPerson.set(id, [])
+    byPerson.get(id).push(rule)
+  }
+  const people = []
+  for (const [profileId, rules] of byPerson) {
+    const hits = unavailableFor(rules, dateStr)
+    if (hits) people.push({ profileId, fullName: nameById.get(profileId) || 'Unknown', hits })
+  }
+  people.sort((a, b) => a.fullName.localeCompare(b.fullName) || a.profileId.localeCompare(b.profileId))
+  const names = firstNames(people.map((p) => ({ profiles: { full_name: p.fullName } })))
+  return people.map((p, i) => ({
+    id: `unavail-${p.profileId}-${dateStr}`,
+    profileId: p.profileId,
+    text: `${names[i]} · Unavailable ${unavailableSummary(p.hits)}`,
+    title: `${p.fullName}: unavailable ${p.hits.map((r) => (r.note ? `${describeRule(r)} (${r.note})` : describeRule(r))).join('; ')}`,
+  }))
 }
