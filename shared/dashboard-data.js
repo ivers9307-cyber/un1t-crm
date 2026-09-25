@@ -90,8 +90,8 @@ export function hourlyRateFor(profile) {
 // (publishing is a roster concept now: a shift is published iff its block
 // belongs to a published roster). Returns { data, error } so it drops into
 // the existing Promise.all destructuring unchanged. `id` is the assignment
-// id — used only as a display key here (the swap flow reads shift ids from
-// the schedule screen, not the dashboard).
+// id (the Today swap flow posts it as requester_shift_id); `block_id` is its
+// block (CANDIDATES.1's colleague ranking).
 async function fetchDashboardShifts(supabase, { profileId, locationId, startDate, endDate, withProfiles = false, publishedOnly = false }) {
   const profileSelect = withProfiles
     ? ', profiles:profile_id ( annual_salary, hourly_rate, contracted_hours_per_week, employment_type )'
@@ -100,7 +100,7 @@ async function fetchDashboardShifts(supabase, { profileId, locationId, startDate
     .from('shift_assignments')
     .select(`
       id, profile_id, start_time_override, end_time_override, status,
-      shift_blocks!inner ( block_date, start_time, end_time, location_id, roster_id, rosters:roster_id ( status ), shift_templates ( name, start_time, end_time ), locations:location_id ( id, name ) )${profileSelect}
+      shift_blocks!inner ( id, block_date, start_time, end_time, location_id, roster_id, rosters:roster_id ( status ), shift_templates ( name, start_time, end_time ), locations:location_id ( id, name ) )${profileSelect}
     `)
     .gte('shift_blocks.block_date', startDate)
     .lte('shift_blocks.block_date', endDate)
@@ -112,6 +112,8 @@ async function fetchDashboardShifts(supabase, { profileId, locationId, startDate
     const block = r.shift_blocks || {}
     return {
       id: r.id,
+      // CANDIDATES.1 — the swap picker ranks colleagues for this BLOCK.
+      block_id: block.id ?? null,
       shift_date: block.block_date,
       start_time_override: r.start_time_override,
       end_time_override: r.end_time_override,
