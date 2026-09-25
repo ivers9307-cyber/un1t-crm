@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 //
-// WORKTIME.1 — the working-time advisory reaches both web surfaces: the
-// publish preview's list and the assign picker's badges. The rules are pinned
-// in shared/working-time.test.js, the read in src/lib/working-time-data.test.js
-// and the route in src/app/api/schedule/working-time/route.test.js. This file is
-// the wiring, and that both stay ADVISORY: Publish stays enabled and a flagged
-// coach stays tickable. jsdom has no layout, so only text, roles and presence
-// are asserted.
+// WORKTIME.1 — the working-time advisory reaches the publish preview's list.
+// (The assign picker's rest and week badges come from CANDIDATES.1's ranked
+// answer now: src/components/ScheduleCalendar.candidates.test.jsx.) The rules
+// are pinned in shared/working-time.test.js and the read in
+// src/lib/working-time-data.test.js. This file is the wiring, and that it stays
+// ADVISORY: Publish stays enabled. jsdom has no layout, so only text, roles and
+// presence are asserted.
 
 import React from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -45,20 +45,6 @@ const staff = [
   { id: 'c-free', full_name: 'Free Coach', role: 'staff', active: true, profile_locations: [{ location_id: LOC }] },
 ]
 
-const PICKER_ANSWER = {
-  success: true,
-  data: {
-    checked: true,
-    byProfile: {
-      'c-rest': {
-        restGap: { rest_minutes: 570, side: 'before', other: { block_id: 'x', date: '2026-05-05', start: '20:00', end: '21:30', name: 'Evening', location_name: 'Studio South' } },
-        weekHours: null,
-      },
-      'c-week': { restGap: null, weekHours: { week_start: '2026-05-04', minutes: 2910 } },
-    },
-  },
-}
-
 const BASE_IMPACT = {
   blockCount: 1, periodProjectedEur: 0, monthProjectedTotalEur: 0, monthlyBudgetEur: null,
   overBudget: false, overrunEur: 0, months: [], staffingGaps: [],
@@ -78,10 +64,9 @@ function okResponse(body, status = 200) {
   return { ok: status < 400, status, json: async () => body }
 }
 
-function mockFetch({ picker = PICKER_ANSWER, pickerStatus = 200, impact = { ...BASE_IMPACT, workingTime: WORKING_TIME } } = {}) {
+function mockFetch({ impact = { ...BASE_IMPACT, workingTime: WORKING_TIME } } = {}) {
   return vi.fn(async (url, opts) => {
     const u = String(url)
-    if (u.includes('/api/schedule/working-time')) return okResponse(picker, pickerStatus)
     if (u.includes('/schedule/rosters') && opts?.method === 'POST') return okResponse({ success: true, impact })
     if (u.includes('/schedule/blocks')) return okResponse({ success: true, data: [targetBlock] })
     if (u.includes('/api/staff')) return okResponse({ success: true, data: staff })
@@ -137,90 +122,10 @@ describe('publish preview: working time (WORKTIME.1)', () => {
   })
 })
 
-async function openAssignPicker() {
-  render(<ScheduleCalendar user={user} />)
-  fireEvent.click(await screen.findByRole('button', { name: /^Manage 10am Midday Strength shift/ }))
-  await waitFor(() => expect(screen.getByText('Add coach')).toBeTruthy())
-  fireEvent.click(screen.getByText('Add coach'))
-  await waitFor(() => expect(screen.getByText('Pick one or more coaches')).toBeTruthy())
-}
-
-describe('assign picker: working time (WORKTIME.1)', () => {
-  it('badges an employee this shift would leave short of rest, naming the other shift in its title', async () => {
-    await openAssignPicker()
-    const badge = await screen.findByText('9h 30m rest')
-    expect(badge.closest('li').textContent).toMatch(/Rest Coach/)
-    expect(badge.getAttribute('title')).toMatch(/Evening 8pm–9:30pm at Studio South/)
-    expect(badge.getAttribute('title')).toMatch(/11 hours between working days/)
-  })
-
-  it('badges an employee this shift would take over 48 hours in the week', async () => {
-    await openAssignPicker()
-    const badge = await screen.findByText('48h 30m this week')
-    expect(badge.closest('li').textContent).toMatch(/Week Coach/)
-    expect(badge.getAttribute('title')).toMatch(/over the 48-hour limit/)
-  })
-
-  it('asks once, for this block, and says nothing about a free coach', async () => {
-    await openAssignPicker()
-    await screen.findByText('9h 30m rest')
-    const asks = global.fetch.mock.calls.map(([u]) => String(u)).filter((u) => u.includes('/api/schedule/working-time'))
-    expect(asks).toEqual(['/api/schedule/working-time?block_id=b-target'])
-    expect(screen.getByText('Free Coach').closest('li').textContent).not.toMatch(/ rest|this week/)
-  })
-
-  it('is advisory: a flagged coach can still be ticked', async () => {
-    await openAssignPicker()
-    const badge = await screen.findByText('9h 30m rest')
-    const checkbox = badge.closest('label').querySelector('input[type="checkbox"]')
-    expect(checkbox.disabled).toBe(false)
-    fireEvent.click(checkbox)
-    expect(checkbox.checked).toBe(true)
-    expect(screen.getByText('Assign 1 coach')).toBeTruthy()
-  })
-
-  it('a failed check says so and badges nobody', async () => {
-    global.fetch = mockFetch({ picker: { success: false, error: 'boom' }, pickerStatus: 500 })
-    await openAssignPicker()
-    expect(await screen.findByText('Rest and weekly-hours check could not be completed.')).toBeTruthy()
-    expect(screen.queryByText('9h 30m rest')).toBeNull()
-  })
-})
-
-describe('assign picker: working time while the check is in flight (WORKTIME.1 review)', () => {
-  it('says it is checking until the answer arrives, so no row reads as all clear early', async () => {
-    let answer
-    const base = mockFetch()
-    global.fetch = vi.fn((url, opts) => (String(url).includes('/api/schedule/working-time')
-      ? new Promise((resolve) => { answer = resolve })
-      : base(url, opts)))
-    await openAssignPicker()
-    expect(await screen.findByText('Checking rest and weekly hours…')).toBeTruthy()
-    expect(screen.queryByText('9h 30m rest')).toBeNull()
-    answer(okResponse(PICKER_ANSWER))
-    expect(await screen.findByText('9h 30m rest')).toBeTruthy()
-    expect(screen.queryByText('Checking rest and weekly hours…')).toBeNull()
-  })
-
-  it('a failure replaces the checking line with the existing wording', async () => {
-    global.fetch = mockFetch({ picker: { success: false, error: 'boom' }, pickerStatus: 500 })
-    await openAssignPicker()
-    expect(await screen.findByText('Rest and weekly-hours check could not be completed.')).toBeTruthy()
-    expect(screen.queryByText('Checking rest and weekly hours…')).toBeNull()
-  })
-})
-
 describe('shifts without times (WORKTIME.1 review)', () => {
   it('the publish preview says how many shifts it could not count, even with nothing else to list', async () => {
     global.fetch = mockFetch({ impact: { ...BASE_IMPACT, workingTime: { restGaps: [], longWeeks: [], checked: true, untimed: 2 } } })
     await openPublishPreview()
     expect(screen.getByTestId('publish-working-time').textContent).toMatch(/2 shifts without times were not counted\./)
-  })
-
-  it('the picker says so too', async () => {
-    global.fetch = mockFetch({ picker: { ...PICKER_ANSWER, data: { ...PICKER_ANSWER.data, untimed: 1 } } })
-    await openAssignPicker()
-    expect(await screen.findByText('1 shift without times was not counted.')).toBeTruthy()
-    expect(screen.getByText('9h 30m rest')).toBeTruthy()
   })
 })

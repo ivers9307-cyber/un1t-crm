@@ -366,6 +366,18 @@ describe('getOpenApiSpec', () => {
     expect(op.responses['400'].description).toMatch(/real calendar date/)
   })
 
+  // CANDIDATES.1 — the ranked picker list. Its two audiences and its
+  // hours-only promise are the contract, so they are pinned in the document.
+  it('documents the block candidates route', () => {
+    const op = spec.paths['/api/schedule/blocks/{id}/candidates']?.get
+    expect(op).toBeDefined()
+    expect(op.tags).toContain('Schedule')
+    expect(op.security).toContainEqual({ CookieAuth: [] })
+    expect(Object.keys(op.responses)).toEqual(expect.arrayContaining(['200', '400', '401', '403', '404', '500']))
+    expect(op.description).toMatch(/colleague/)
+    expect(op.description).toMatch(/never a rate/i)
+  })
+
   it('declares webhook + bridge auth schemes', () => {
     const s = spec.components.securitySchemes
     expect(s).toHaveProperty('GlofoxHmac')
