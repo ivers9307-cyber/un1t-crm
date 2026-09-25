@@ -64,7 +64,9 @@ export async function POST(_request, props) {
     return NextResponse.json({ success: false, error: 'This shift has already started.' }, { status: 409 })
   }
 
-  const answer = await loadBlockCandidates(db, { block, audience: 'manager' })
+  // Review 4 (owner decision) — published shifts only: a coach is never
+  // refused over a draft they cannot see (the push and the list agree).
+  const answer = await loadBlockCandidates(db, { block, audience: 'manager', publishedShiftsOnly: true })
   const blocked = offerClaimRefusal(answer, {
     profileId: user.id,
     liveOnBlockIds: liveAssignments(block.shift_assignments).map((a) => a.profile_id),

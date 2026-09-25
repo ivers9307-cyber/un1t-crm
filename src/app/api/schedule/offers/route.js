@@ -74,7 +74,7 @@ export async function GET(request) {
   const rows = []
   for (const o of offers) {
     if (!live(o)) continue
-    const answer = await loadBlockCandidates(db, { block: offerBlock(o), audience: 'manager' })
+    const answer = await loadBlockCandidates(db, { block: offerBlock(o), audience: 'manager', publishedShiftsOnly: true })
     const mine = offerIsFor(answer, user.id)
     if (mine === null) {
       logWarn('shift-offer', 'coach offer list: eligibility unreadable; showing the offer (the claim re-checks)', { offerId: o.id, err: answer?.error?.message })

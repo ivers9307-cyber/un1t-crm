@@ -58,7 +58,7 @@ describe('GET /api/schedule/offers — coach view', () => {
     expect(body.data).toEqual([{ id: 'o1', block_id: 'b1', block_date: '2026-09-29', start_time: '06:00:00', end_time: '07:00:00', shift_name: 'Morning', studio_name: 'Studio North' }])
     expect(JSON.stringify(body.data)).not.toMatch(/min_coaches|max_coaches|broadcast/)
     expect(loadBlockCandidates).toHaveBeenCalledTimes(1)
-    expect(loadBlockCandidates).toHaveBeenCalledWith(expect.anything(), { block: expect.objectContaining({ id: 'b1', location_id: 'loc-1' }), audience: 'manager' })
+    expect(loadBlockCandidates).toHaveBeenCalledWith(expect.anything(), { block: expect.objectContaining({ id: 'b1', location_id: 'loc-1' }), audience: 'manager', publishedShiftsOnly: true })
   })
   it('not for someone busy, on leave or unavailable then; an unreadable check still SHOWS it (the claim re-checks)', async () => {
     listOpenOffers.mockResolvedValue({ offers: [O('o1', B())], error: null })

@@ -17,6 +17,9 @@
 //   - the coach's list (offerIsFor): the same tiers; null = could not tell;
 //   - the claim (offerClaimRefusal): leave or a clash refuses; unavailability
 //     does not (a coach claiming is telling us they are free).
+// All three ask with publishedShiftsOnly (review 4, owner decision): "free"
+// means no PUBLISHED overlapping shift. A coach is never skipped or refused
+// over a draft they cannot see.
 // Consequence, on purpose: CANDIDATES counts ANY approved leave covering the
 // day (a half-day too) as blocked, so a coach on a half-day is neither pushed
 // nor allowed to claim; the picker and the offer agree.

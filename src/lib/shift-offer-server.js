@@ -160,7 +160,7 @@ async function deliver(db, offer, kind, nowMs) {
   const block = offer.shift_blocks
   let ids
   if (kind === 'broadcast') {
-    const answer = await loadBlockCandidates(db, { block: offerBlock(offer), audience: 'manager' })
+    const answer = await loadBlockCandidates(db, { block: offerBlock(offer), audience: 'manager', publishedShiftsOnly: true })
     const audience = offerAudienceFrom(answer, offer.offered_by)
     if (audience.retry) {
       logWarn('shift-offer', 'offer audience unreadable; nobody told yet, retried next tick', { offerId: offer.id, why: audience.retry, err: answer?.error?.message })

@@ -50,7 +50,8 @@ describe('processOffer — the broadcast', () => {
     expect(argsOf(lease, 'update')[0]).toEqual({ notice_lease_until: '2026-09-28T10:10:00.000Z', notice_attempts: 1 })
     expect(allArgsOf(lease, 'eq')).toEqual([['id', 'o1'], ['status', 'open'], ['notice_attempts', 0]])
     expect(argsOf(lease, 'or')).toEqual(['notice_lease_until.is.null,notice_lease_until.lt.2026-09-28T10:00:00.000Z'])
-    expect(loadBlockCandidates).toHaveBeenCalledWith(db, { block: { ...BLOCK, location_id: 'loc-1' }, audience: 'manager' })
+    // Review 4 — published shifts only: nobody is skipped over a draft they cannot see.
+    expect(loadBlockCandidates).toHaveBeenCalledWith(db, { block: { ...BLOCK, location_id: 'loc-1' }, audience: 'manager', publishedShiftsOnly: true })
     // c2 is on leave (blocked), mgr posted it: only c1.
     expect(notifyUsersOnce).toHaveBeenCalledWith(db, 'shift_offer_broadcast:o1:a1', ['c1'], expect.objectContaining({ category: 'swap', data: expect.objectContaining({ type: 'shift_offer' }) }))
     expect(argsOf(stamp, 'update')[0]).toEqual({ broadcast_at: '2026-09-28T10:00:00.000Z', broadcast_count: 1, broadcast_outcome: 'sent', notice_lease_until: null })

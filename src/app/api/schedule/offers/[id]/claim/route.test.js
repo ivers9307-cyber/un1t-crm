@@ -86,7 +86,8 @@ describe('POST /api/schedule/offers/[id]/claim', () => {
     res = await call()
     expect((await res.json()).error).toMatch(/another shift/)
     expect(claimOffer).not.toHaveBeenCalled()
-    expect(loadBlockCandidates).toHaveBeenCalledWith(expect.anything(), { block: { ...BLOCK, location_id: 'loc-1' }, audience: 'manager' })
+    // Review 4 — a claim is never refused over a draft the coach cannot see.
+    expect(loadBlockCandidates).toHaveBeenCalledWith(expect.anything(), { block: { ...BLOCK, location_id: 'loc-1' }, audience: 'manager', publishedShiftsOnly: true })
   })
 
   it('already on the shift is 409; a member the candidates do not list is 403', async () => {
