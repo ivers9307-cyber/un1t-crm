@@ -89,9 +89,21 @@ These are marked **REVIEW** in the artifact until he confirms or changes them. E
 7. **Qualifications have no document upload** in the first cut (phone uploads are dead, `mobile-multipart-upload-dead`); a manager records the type, the expiry and a note.
 8. **Labour against revenue** uses whatever revenue source the studio scorecard already trusts; the LABOUR.1 plan names it before any code.
 9. **The class link does not widen the Glofox sync** beyond what the API can bear; CLASSLINK.2's plan measures the call cost first.
+10. **Copying templates does not copy their weekdays unless the manager ticks a box.** Copying them fills the target studio's next eight weeks with empty shifts and starts its unbuilt-week alerts at once.
+
+## Follow-ups found along the way (not in any PR yet)
+
+- The time-off summary report ignores a failed read and saves an empty report (found planning 11).
+- In `ShiftTemplateManager.jsx` the warning after deactivating or reactivating a template is wiped by the list reload before it can show (found planning 12).
+- No schedule range route checks that the start comes before the end; `allowances?year=` is not validated (found building 11).
+- The staff assistant's `create_shift` and `get_time_off` tools take dates with no calendar check (found planning 11; the assistant is off everywhere).
 
 ## Status log
 
 Updated by the loop. Newest first.
 
+- 25 Sep: 12 TPLCLONE.1 built (9 commits, 226 targeted tests; copies land as "One-off" templates unless weekdays are ticked). In independent review. Batch 3 plans (16 AVAIL.1, 31 HEARTBEAT.1) commissioned.
+- 25 Sep: 11 DATECHECK.1 built (10 commits, 32 tests; `week-cost` and `contractor-spend` used to answer 200 for 30 Feb with March's figures). In independent review.
+- 25 Sep: 12 TPLCLONE.1 plan written (no migration: the unique (studio, name) key already exists); implementer started in `~/code/un1t-crm-tplclone1` with weekdays NOT copied by default (default 10).
+- 25 Sep: 11 DATECHECK.1 plan written (10 routes; `blocks` GET, `shifts` GET and the time-off list had no date check at all; `week-cost`/`contractor-spend` answered 200 for the wrong period); implementer started in `~/code/un1t-crm-datecheck1`.
 - 25 Sep: plan index written. Batch 1 and 2 detail plans commissioned.
