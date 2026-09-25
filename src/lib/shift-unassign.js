@@ -14,6 +14,9 @@
 import { logRosterChange } from '@/lib/roster-change-log'
 import { notifyRosterChanges } from '@/lib/roster-change-notify'
 
+/** The words for a row that changed under the caller (review 2). */
+export const SHIFT_CHANGED_ERROR = 'This shift has just changed. Refresh and try again.'
+
 /**
  * @param {object} db   service-role client
  * @param {object} args
@@ -28,10 +31,24 @@ export async function unassignShiftAssignments(db, { actorId, assignments }) {
 
   // One DELETE per row, each judged on its own: a failure on one shift must
   // not be reported as the whole set failing, nor hide the ones that went.
+  //
+  // REPLACE.1a review 2 — pinned to the coach it was READ for. A replace
+  // hands a row to another coach under the same id, so a delete by id alone,
+  // racing a replace, would take the NEW coach off and log and tell the old
+  // one. Zero rows = the row changed hands or is gone: 'changed', nothing
+  // logged, nobody told.
   for (const a of assignments || []) {
-    const { error } = await db.from('shift_assignments').delete().eq('id', a.id)
+    const { data, error } = await db.from('shift_assignments')
+      .delete()
+      .eq('id', a.id)
+      .eq('profile_id', a.profile_id)
+      .select('id')
     if (error) {
       failed.push({ id: a.id, error: error.message || 'delete_failed' })
+      continue
+    }
+    if (!data || data.length === 0) {
+      failed.push({ id: a.id, error: SHIFT_CHANGED_ERROR, code: 'changed' })
       continue
     }
     removed.push(a)

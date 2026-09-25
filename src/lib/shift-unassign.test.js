@@ -19,7 +19,7 @@ beforeEach(() => vi.clearAllMocks())
 
 describe('unassignShiftAssignments', () => {
   it('deletes each row, logs published ones, and notifies once per studio', async () => {
-    const db = fakeDb(() => ({ data: null, error: null }))
+    const db = fakeDb((q) => ({ data: [{ id: q.eq.id }], error: null }))
     const out = await unassignShiftAssignments(db, {
       actorId: 'mgr',
       assignments: [a('1', 'loc-1'), a('2', 'loc-1', 'published', '2026-06-02'), a('3', 'loc-2', 'draft')],
@@ -34,12 +34,34 @@ describe('unassignShiftAssignments', () => {
   })
 
   it('a failed delete is reported and neither logged nor notified; the others still go', async () => {
-    const db = fakeDb((q) => (q.eq.id === '1' ? { error: { message: 'locked' } } : { error: null }))
+    const db = fakeDb((q) => (q.eq.id === '1' ? { error: { message: 'locked' } } : { data: [{ id: q.eq.id }], error: null }))
     const out = await unassignShiftAssignments(db, { actorId: 'mgr', assignments: [a('1', 'loc-1'), a('2', 'loc-1')] })
     expect(out.failed).toEqual([{ id: '1', error: 'locked' }])
     expect(out.removed.map((r) => r.id)).toEqual(['2'])
     expect(logRosterChange).toHaveBeenCalledTimes(1)
     expect(notifyRosterChanges.mock.calls[0][1].changes.map((c) => c.blockId)).toEqual(['b-2'])
+  })
+})
+
+// REPLACE.1a review 2 — a replace moves a row to ANOTHER coach under the same
+// id. A delete read as "coach A's row" must not remove coach B, who holds the
+// row now: it is pinned to the coach it was read for, and zero rows is
+// "changed", neither logged nor notified (nobody was taken off anything).
+describe('unassignShiftAssignments — pinned to the coach it read (review 2)', () => {
+  it('deletes by id AND profile_id, and judges the rows it removed', async () => {
+    const db = fakeDb((q) => ({ data: [{ id: q.eq.id }], error: null }))
+    await unassignShiftAssignments(db, { actorId: 'mgr', assignments: [a('1', 'loc-1')] })
+    const [del] = queriesOf(db, 'shift_assignments', 'delete')
+    expect(del.eq).toEqual({ id: '1', profile_id: 'coach' })
+    expect(del.columns).toBe('id')
+  })
+
+  it('zero rows (the row now belongs to someone else, or is gone) is failed "changed": not logged, not notified', async () => {
+    const db = fakeDb(() => ({ data: [], error: null }))
+    const out = await unassignShiftAssignments(db, { actorId: 'mgr', assignments: [a('1', 'loc-1')] })
+    expect(out).toEqual({ removed: [], failed: [{ id: '1', error: 'This shift has just changed. Refresh and try again.', code: 'changed' }] })
+    expect(logRosterChange).not.toHaveBeenCalled()
+    expect(notifyRosterChanges).not.toHaveBeenCalled()
   })
 })
 
