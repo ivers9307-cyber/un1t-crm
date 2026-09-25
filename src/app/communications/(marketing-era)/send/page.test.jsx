@@ -6,7 +6,7 @@
 //   ?segment_id=<uuid> → applies a saved contact_segments filter wholesale
 // The tag form predates this change and must keep working untouched.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 
 vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn() }))
@@ -23,8 +23,11 @@ import SendPage from './page.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 
+// Unmount AFTER each test, so the last test's tree is gone before jsdom is
+// torn down (see tests/rtl-cleanup-after-each.test.js).
+afterEach(cleanup)
+
 beforeEach(() => {
-  cleanup()
   getCurrentUser.mockResolvedValue({ id: 'u1', activeLocation: { id: 'loc-1' } })
   // WhatsApp templates query — chainable stub ending in an awaited order().
   createServerClient.mockReturnValue({
