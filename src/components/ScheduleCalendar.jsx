@@ -1685,7 +1685,9 @@ function AssignCoachModal({ block, staff, blocks, timeOff, unavailableReason = n
   // of the organisation? Asked once per open. Advisory, like the clash badge.
   // A failed ask says so; an answer this screen does not recognise (an older
   // server) says nothing. No list (the coach list failed) = nothing to ask.
-  const [workingTime, setWorkingTime] = useState({ byProfile: {}, failed: false })
+  // `pending` until the answer lands: an unbadged row must not read as "all
+  // clear" while the check is still in flight.
+  const [workingTime, setWorkingTime] = useState({ byProfile: {}, failed: false, pending: true })
   useEffect(() => {
     if (unavailableReason) return undefined
     let cancelled = false
@@ -1700,13 +1702,14 @@ function AssignCoachModal({ block, staff, blocks, timeOff, unavailableReason = n
       }
       if (cancelled) return
       if (!res?.ok || !json || json.success === false) {
-        setWorkingTime({ byProfile: {}, failed: true })
+        setWorkingTime({ byProfile: {}, failed: true, pending: false })
         return
       }
       const by = json.data?.byProfile
       setWorkingTime({
         byProfile: by && typeof by === 'object' && !Array.isArray(by) ? by : {},
         failed: json.data?.checked === false,
+        pending: false,
       })
     }
     loadWorkingTime()
@@ -1765,6 +1768,9 @@ function AssignCoachModal({ block, staff, blocks, timeOff, unavailableReason = n
           <label className="block text-xs text-un1t-subtle mb-2">Pick one or more coaches</label>
           {!unavailableReason && leaveMissing && (
             <p className="mb-2 text-[11px] px-2 py-1.5 rounded bg-amber-500/10 text-amber-700">{LEAVE_NOT_FLAGGED_MESSAGE}</p>
+          )}
+          {!unavailableReason && workingTime.pending && (
+            <p className="mb-2 text-[11px] text-un1t-subtle" role="status">Checking rest and weekly hours…</p>
           )}
           {!unavailableReason && workingTime.failed && (
             <p className="mb-2 text-[11px] text-un1t-subtle">Rest and weekly-hours check could not be completed.</p>

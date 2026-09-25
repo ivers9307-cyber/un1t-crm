@@ -186,3 +186,26 @@ describe('assign picker: working time (WORKTIME.1)', () => {
     expect(screen.queryByText('9h 30m rest')).toBeNull()
   })
 })
+
+describe('assign picker: working time while the check is in flight (WORKTIME.1 review)', () => {
+  it('says it is checking until the answer arrives, so no row reads as all clear early', async () => {
+    let answer
+    const base = mockFetch()
+    global.fetch = vi.fn((url, opts) => (String(url).includes('/api/schedule/working-time')
+      ? new Promise((resolve) => { answer = resolve })
+      : base(url, opts)))
+    await openAssignPicker()
+    expect(await screen.findByText('Checking rest and weekly hours…')).toBeTruthy()
+    expect(screen.queryByText('9h 30m rest')).toBeNull()
+    answer(okResponse(PICKER_ANSWER))
+    expect(await screen.findByText('9h 30m rest')).toBeTruthy()
+    expect(screen.queryByText('Checking rest and weekly hours…')).toBeNull()
+  })
+
+  it('a failure replaces the checking line with the existing wording', async () => {
+    global.fetch = mockFetch({ picker: { success: false, error: 'boom' }, pickerStatus: 500 })
+    await openAssignPicker()
+    expect(await screen.findByText('Rest and weekly-hours check could not be completed.')).toBeTruthy()
+    expect(screen.queryByText('Checking rest and weekly hours…')).toBeNull()
+  })
+})
