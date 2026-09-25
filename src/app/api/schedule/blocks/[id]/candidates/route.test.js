@@ -109,11 +109,29 @@ describe('GET /api/schedule/blocks/[id]/candidates', () => {
     expect(db.log.eq).toEqual(['id', BLOCK_ID])
     expect(db.log.select).toBe('id, location_id, block_date, start_time, end_time, roster_id, rosters:roster_id(status), shift_templates(name, start_time, end_time), shift_assignments(profile_id, status)')
     expect(loadBlockCandidates).toHaveBeenCalledTimes(1)
-    expect(loadBlockCandidates).toHaveBeenCalledWith(db, { block: BLOCK, audience: 'manager' })
+    expect(loadBlockCandidates).toHaveBeenCalledWith(db, { block: BLOCK, audience: 'manager', withContract: false })
     expect(await res.json()).toEqual({
       success: true,
       data: { audience: 'manager', block_id: BLOCK_ID, candidates: LOADED.candidates, checked: LOADED.checked, untimed: 0 },
     })
+  })
+
+  // CANDIDATES.1 review 4 — contracted hours: owner, manager, master only.
+  it('contracted hours go to an owner, a manager or a master AT the studio, never a head coach', async () => {
+    const cases = [
+      [userWith('o1', { [LOC]: 'owner' }), true],
+      [userWith('m1', { [LOC]: 'manager' }), true],
+      [userWith('boss', {}, 'master'), true],
+      [userWith('h1', { [LOC]: 'head_coach' }), false],
+      // Manager elsewhere, head coach here: the role HERE decides.
+      [userWith('h2', { [LOC]: 'head_coach', [OTHER]: 'manager' }), false],
+    ]
+    for (const [u, expected] of cases) {
+      loadBlockCandidates.mockClear()
+      getCurrentUser.mockResolvedValue(u)
+      expect((await call()).status).toBe(200)
+      expect(loadBlockCandidates.mock.calls[0][1]).toMatchObject({ audience: 'manager', withContract: expected })
+    }
   })
 
   it('200 master anywhere: manager audience', async () => {
@@ -126,7 +144,7 @@ describe('GET /api/schedule/blocks/[id]/candidates', () => {
     getCurrentUser.mockResolvedValue(userWith('coach-on', { [LOC]: 'staff' }))
     const res = await call()
     expect(res.status).toBe(200)
-    expect(loadBlockCandidates).toHaveBeenCalledWith(db, { block: BLOCK, audience: 'colleague' })
+    expect(loadBlockCandidates).toHaveBeenCalledWith(db, { block: BLOCK, audience: 'colleague', withContract: false })
     expect((await res.json()).data.audience).toBe('colleague')
   })
 

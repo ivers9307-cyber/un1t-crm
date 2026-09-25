@@ -137,7 +137,7 @@ describe('readContractedHours', () => {
 describe('loadBlockCandidates — manager', () => {
   it('reads the week at every studio of the organisation, leave on the day, availability, and employees\' contracts', async () => {
     const db = mockDb()
-    const out = await loadBlockCandidates(db, { block: BLOCK, audience: 'manager' })
+    const out = await loadBlockCandidates(db, { block: BLOCK, audience: 'manager', withContract: true })
     expect(siblingLocationIds).toHaveBeenCalledWith(db, 'loc1')
     expect(readOrgShiftRows).toHaveBeenCalledWith(db, {
       locationId: 'loc1', scopeIds: ['loc1', 'loc2'], profileIds: ['ann', 'con', 'nul'], from: '2026-09-20', to: '2026-09-28', publishedOnly: false,
@@ -158,7 +158,7 @@ describe('loadBlockCandidates — manager', () => {
 
   it('never selects or returns a pay column', async () => {
     const db = mockDb()
-    const out = await loadBlockCandidates(db, { block: BLOCK, audience: 'manager' })
+    const out = await loadBlockCandidates(db, { block: BLOCK, audience: 'manager', withContract: true })
     expect(db.log.map((q) => q.select).join(' ')).not.toMatch(/salary|hourly_rate|overtime|annual_leave/)
     expect(JSON.stringify(out)).not.toMatch(/salary|hourly_rate|overtime|rate"/)
   })
@@ -168,13 +168,13 @@ describe('loadBlockCandidates — manager', () => {
     readStudioAvailability.mockResolvedValue({ data: null, error: { message: 'relation "staff_unavailability" does not exist' } })
     siblingLocationIds.mockResolvedValue({ ids: [], error: { message: 'siblings unreadable' } })
     const db = mockDb({ fail: { time_off_requests: true, profile_compensation: true } })
-    const out = await loadBlockCandidates(db, { block: BLOCK, audience: 'manager' })
+    const out = await loadBlockCandidates(db, { block: BLOCK, audience: 'manager', withContract: true })
     expect(out.checked).toEqual({ shifts: false, cross_studio: false, leave: false, availability: false, contract: false })
     expect(readOrgShiftRows.mock.calls[0][1].scopeIds).toEqual(['loc1'])
     expect(out.candidates.map((c) => c.profile_id)).toEqual(['ann', 'con', 'nul'])
     expect(out.candidates.every((c) => c.free === null && c.on_leave === null && c.contracted_hours === null)).toBe(true)
 
-    const broken = await loadBlockCandidates(mockDb({ fail: { profile_locations: true } }), { block: BLOCK, audience: 'manager' })
+    const broken = await loadBlockCandidates(mockDb({ fail: { profile_locations: true } }), { block: BLOCK, audience: 'manager', withContract: true })
     expect(broken.error).toEqual({ message: 'profile_locations unreadable' })
   })
 
@@ -184,7 +184,7 @@ describe('loadBlockCandidates — manager', () => {
     readOrgShiftRows.mockRejectedValue(new Error('shift reader exploded'))
     readStudioAvailability.mockRejectedValue(new Error('availability reader exploded'))
     const db = mockDb({ throwOn: ['time_off_requests', 'profile_compensation'] })
-    const out = await loadBlockCandidates(db, { block: BLOCK, audience: 'manager' })
+    const out = await loadBlockCandidates(db, { block: BLOCK, audience: 'manager', withContract: true })
     expect(out.error).toBeNull()
     expect(out.checked).toEqual({ shifts: false, cross_studio: true, leave: false, availability: false, contract: false })
     expect(out.candidates.map((c) => c.profile_id)).toEqual(['ann', 'con', 'nul'])
@@ -193,7 +193,7 @@ describe('loadBlockCandidates — manager', () => {
 
   it('a throwing sibling read narrows to this studio and says so, not a 500', async () => {
     siblingLocationIds.mockRejectedValue(new Error('siblings exploded'))
-    const out = await loadBlockCandidates(mockDb(), { block: BLOCK, audience: 'manager' })
+    const out = await loadBlockCandidates(mockDb(), { block: BLOCK, audience: 'manager', withContract: true })
     expect(out.error).toBeNull()
     expect(out.checked.cross_studio).toBe(false)
     expect(readOrgShiftRows.mock.calls[0][1].scopeIds).toEqual(['loc1'])
@@ -201,7 +201,7 @@ describe('loadBlockCandidates — manager', () => {
 
   it('one throwing read does not cost the others their answer', async () => {
     readStudioAvailability.mockRejectedValue(new Error('availability reader exploded'))
-    const out = await loadBlockCandidates(mockDb(), { block: BLOCK, audience: 'manager' })
+    const out = await loadBlockCandidates(mockDb(), { block: BLOCK, audience: 'manager', withContract: true })
     expect(out.checked).toEqual({ shifts: true, cross_studio: true, leave: true, availability: false, contract: true })
     expect(out.candidates.find((c) => c.profile_id === 'con').on_leave).toMatchObject({ label: 'Holiday' })
     expect(out.candidates.find((c) => c.profile_id === 'ann')).toMatchObject({ contracted_hours: 39, week_minutes: 240 })
@@ -209,10 +209,38 @@ describe('loadBlockCandidates — manager', () => {
 
   it('nobody eligible: no further reads', async () => {
     const db = mockDb({ links: [link('onblk')] })
-    const out = await loadBlockCandidates(db, { block: BLOCK, audience: 'manager' })
+    const out = await loadBlockCandidates(db, { block: BLOCK, audience: 'manager', withContract: true })
     expect(out).toMatchObject({ candidates: [], untimed: 0, error: null })
     expect(siblingLocationIds).not.toHaveBeenCalled()
     expect(readOrgShiftRows).not.toHaveBeenCalled()
+  })
+})
+
+// CANDIDATES.1 review 4 — contracted hours reach owners, managers and
+// masters only (withContract, decided by the route). A head coach gets the
+// same list without them: no read, no field, and the ranking falls back to
+// fewest hours this week, with no "could not check" note.
+describe('loadBlockCandidates — manager audience without contracted hours (a head coach)', () => {
+  it('reads no profile_compensation, returns no contracted_hours key, ranks by fewest hours', async () => {
+    const two = [link('ann'), link('bea', { full_name: 'Bea Light' })]
+    const db = mockDb({ links: two })
+    readOrgShiftRows.mockResolvedValue({ shifts: [
+      ...SHIFTS,
+      { ...SHIFTS[0], profile_id: 'bea', block_id: 'x2', start_time: '09:00:00', end_time: '10:00:00', shift_templates: { start_time: '09:00:00', end_time: '10:00:00' } },
+    ], error: null })
+    readStudioAvailability.mockResolvedValue({ data: [], error: null })
+    const without = await loadBlockCandidates(db, { block: BLOCK, audience: 'manager' }) // the default: no contract
+    expect(db.log.some((q) => q.table === 'profile_compensation')).toBe(false)
+    expect(without.checked).toEqual({ shifts: true, cross_studio: true, leave: true, availability: true })
+    for (const c of without.candidates) expect(c).not.toHaveProperty('contracted_hours')
+    expect(without.candidates.map((c) => [c.profile_id, c.tier, c.reason])).toEqual([
+      ['bea', 'ready', 'Free · 1h this week'],
+      ['ann', 'ready', 'Free · 4h this week'],
+    ])
+
+    // An owner or manager, for contrast: ann's contract (39h) is read and shown.
+    const withIt = await loadBlockCandidates(mockDb({ links: two }), { block: BLOCK, audience: 'manager', withContract: true })
+    expect(withIt.candidates.find((c) => c.profile_id === 'ann')).toMatchObject({ contracted_hours: 39, reason: 'Free · 4h of 39h this week' })
   })
 })
 

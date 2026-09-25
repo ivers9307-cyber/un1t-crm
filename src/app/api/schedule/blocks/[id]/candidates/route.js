@@ -8,9 +8,10 @@
 //
 // Two audiences (decided here, never by the client):
 //   manager    MANAGER_ROLES AT the block's studio (master bypasses): every
-//              fact — free/busy at any studio of the organisation, leave with
-//              its type, availability with its note, on site, week minutes,
-//              employees' contracted hours, rest and 48h advisories.
+//              fact — free/busy at any studio of the organisation, leave,
+//              availability with its note, on site, week minutes, rest and
+//              48h advisories; employees' contracted hours ONLY for an
+//              owner, a manager or a master (never a head coach).
 //   colleague  a coach LIVE on the block (the one asking for cover): free or
 //              working only, ranked on that alone. A coach never sees a
 //              colleague's leave, availability, hours or contract.
@@ -23,7 +24,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation } from '@/lib/auth'
-import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
+import { uuidLike, MANAGER_ROLES, ADMIN_ROLES } from '@/lib/schemas'
 import { liveAssignments } from '@/lib/roster'
 import { loadBlockCandidates } from '@/lib/candidates-data'
 
@@ -65,7 +66,12 @@ export async function GET(request, props) {
     return NextResponse.json({ success: false, error: 'That shift is not published yet' }, { status: 400 })
   }
 
-  const out = await loadBlockCandidates(db, { block, audience })
+  // CANDIDATES.1 review 4 (owner decision pending; the conservative side):
+  // contracted hours reach an owner, a manager or a master AT this studio,
+  // never a head coach, though a head coach gets the ranked list.
+  const withContract = audience === 'manager' && hasRoleAtLocation(user, block.location_id, ADMIN_ROLES)
+
+  const out = await loadBlockCandidates(db, { block, audience, withContract })
   if (out.error) {
     return NextResponse.json({ success: false, error: out.error.message || 'Candidates could not be read' }, { status: 500 })
   }

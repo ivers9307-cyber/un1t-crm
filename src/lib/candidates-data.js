@@ -14,7 +14,9 @@
 // block's Mon–Sun week of shifts, one day either side, at every studio of
 // the organisation (readOrgShiftRows, WORKTIME.1's reader); approved leave on
 // the day; availability rules (AVAIL.1a readStudioAvailability); contracted
-// hours of the EMPLOYEES. Colleague: members, siblings, shifts. Nothing else.
+// hours of the EMPLOYEES, only when `withContract` (an owner, a manager or a
+// master; never a head coach). Colleague: members, siblings, PUBLISHED
+// shifts. Nothing else.
 //
 // Pay never enters: profiles is read for id, full_name, active, deleted_at,
 // employment_type; profile_compensation for profile_id and
@@ -37,6 +39,9 @@ import { isWorkingTimeCovered } from '@shared/working-time'
 
 const PAGE = 1000
 const CHUNK = 200
+
+// The contracted-hours key removed, for a caller who may not see it.
+const withoutContract = (list) => (list || []).map(({ contracted_hours: _omit, ...rest }) => rest)
 
 // CANDIDATES.1 review 3 — a side read that THROWS (a client bug, a network
 // fault) is the same as one that returns an error: its facet is "not
@@ -126,11 +131,16 @@ export async function readContractedHours(db, profileIds) {
  *   audience: 'manager'|'colleague' }} opts
  * @returns {Promise<{ candidates?: object[], untimed?: number, checked?: object, error: object|null }>}
  */
-export async function loadBlockCandidates(db, { block, audience = 'manager' } = {}) {
+export async function loadBlockCandidates(db, { block, audience = 'manager', withContract = false } = {}) {
   const manager = audience !== 'colleague'
   const who = manager ? 'manager' : 'colleague'
+  // CANDIDATES.1 review 4 — contracted hours reach an owner, a manager or a
+  // master only (the route decides withContract; a head coach is a manager
+  // audience WITHOUT it). Off: no read, no field, no "not checked" note, and
+  // the ranking falls back to fewest hours this week for everyone.
+  const contract = manager && withContract === true
   const checked = manager
-    ? { shifts: true, cross_studio: true, leave: true, availability: true, contract: true }
+    ? { shifts: true, cross_studio: true, leave: true, availability: true, ...(contract ? { contract: true } : {}) }
     : { shifts: true, cross_studio: true }
   try {
     const onBlock = liveAssignments(block?.shift_assignments).map((a) => a.profile_id)
@@ -160,7 +170,7 @@ export async function loadBlockCandidates(db, { block, audience = 'manager' } = 
       })),
       manager ? settle(() => readApprovedLeaveOn(db, ids, block.block_date)) : null,
       manager ? settle(() => readStudioAvailability(db, { locationId: block.location_id, startDate: block.block_date, endDate: block.block_date })) : null,
-      manager ? settle(() => readContractedHours(db, employees)) : null,
+      contract ? settle(() => readContractedHours(db, employees)) : null,
     ])
 
     const note = (facet, err) => {
@@ -176,14 +186,16 @@ export async function loadBlockCandidates(db, { block, audience = 'manager' } = 
       else leave = leaveRead.leave
       if (availRead.error) note('availability', availRead.error)
       else rules = (availRead.data || []).filter((r) => memberIds.has(r.profile_id))
-      if (contractRead.error) note('contract', contractRead.error)
-      else contracts = contractRead.byProfile
+      if (contract) {
+        if (contractRead.error) note('contract', contractRead.error)
+        else contracts = contractRead.byProfile
+      }
     }
 
     const built = buildCandidates({
       block, members, shifts: shiftRead.error ? [] : shiftRead.shifts, leave, rules, contracts, checked, audience: who,
     })
-    return { ...built, checked, error: null }
+    return { ...built, candidates: contract ? built.candidates : withoutContract(built.candidates), checked, error: null }
   } catch (e) {
     return { error: { message: e?.message || 'candidates read threw' } }
   }
