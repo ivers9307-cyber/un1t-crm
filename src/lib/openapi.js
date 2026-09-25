@@ -4658,6 +4658,23 @@ registry.registerPath({
   },
 })
 
+// GRID.1 — the coach-by-day grid's read (Schedule → Week → Coaches).
+registry.registerPath({
+  method: 'get',
+  path: '/api/schedule/grid',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Coach-by-day grid for one week (manager-only)',
+  description: "GRID.1. Query: location_id (uuid) and start_date (any day of the target Mon-Sun week; snapped to its Monday). Returns members: the studio's team (profile_locations, active and not deleted) plus anyone holding a live shift at the studio that week (member: false), each with profile_id, full_name, employment_type and, only when contract_visible is true, contracted_hours (employees only, else null). contract_visible is true for owner, manager and master AT location_id; for a head coach it is false and no member carries a contracted_hours key (the column is not read); and shifts: every live shift those people have from the Sunday before to the Monday after, at this studio and at the other studios of the SAME organisation (never another organisation), with block_id, block_date, the block, override and template times, the template name and kind (class | admin), location_name and here. cross_studio_checked is false when the other studios could not be read; the shifts are then this studio's only. Hours and times only: no rate, salary, cost or euro figure is read or returned. Manager-only (master, owner, manager, head_coach AT location_id), scoped by assertLocationAccess: a studio outside the caller's assignments is a 403.",
+  request: { query: z.object({ location_id: uuidLike, start_date: z.string() }) },
+  responses: {
+    200: { description: '{ week_start, week_end, contract_visible, members: [...], shifts: [...], cross_studio_checked }' },
+    400: { description: 'Missing or malformed location_id / start_date, or start_date is not a real calendar date', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — needs a manager role at that location', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The grid could not be read (never answered as an empty grid)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // CANDIDATES.1 — ranked candidates for one block (every coach picker).
 registry.registerPath({
   method: 'get',

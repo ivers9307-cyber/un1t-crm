@@ -151,4 +151,39 @@ describe('RosterToolbar', () => {
     setup({ statusChip: null })
     expect(screen.queryByTestId('publication-status')).toBeNull()
   })
+
+  // GRID.1 — Days | Coaches. jsdom cannot say it fits on a 390px row (PR body).
+  it('a manager in week view: Days | Coaches after Week | Month, Days on by default, Publish still last', () => {
+    const onLayout = vi.fn()
+    setup({ onLayout })
+    const group = screen.getByRole('group', { name: 'Roster layout' })
+    const days = within(group).getByRole('button', { name: 'Days' })
+    const coaches = within(group).getByRole('button', { name: 'Coaches' })
+    expect(days.getAttribute('aria-pressed')).toBe('true')
+    expect(coaches.getAttribute('aria-pressed')).toBe('false')
+    expect(screen.getByRole('button', { name: 'Week' }).compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.getByTestId('schedule-toolbar-actions').lastElementChild).toBe(screen.getByRole('button', { name: 'Publish' }))
+    for (const b of [days, coaches]) {
+      expect(b.getAttribute('type')).toBe('button')
+      expect(b.className).toMatch(/whitespace-nowrap/)
+    }
+    fireEvent.click(coaches)
+    expect(onLayout).toHaveBeenCalledWith('coaches')
+  })
+
+  it('says Coaches is on when it is, and Days reports back', () => {
+    const onLayout = vi.fn()
+    setup({ layout: 'coaches', onLayout })
+    expect(screen.getByRole('button', { name: 'Coaches' }).getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(screen.getByRole('button', { name: 'Days' }))
+    expect(onLayout).toHaveBeenCalledWith('days')
+  })
+
+  it('no layout control in month view, or for a coach', () => {
+    setup({ viewType: 'month' }, { viewType: 'month' })
+    expect(screen.queryByRole('group', { name: 'Roster layout' })).toBeNull()
+    cleanup()
+    setup({}, { isManager: false })
+    expect(screen.queryByRole('group', { name: 'Roster layout' })).toBeNull()
+  })
 })
