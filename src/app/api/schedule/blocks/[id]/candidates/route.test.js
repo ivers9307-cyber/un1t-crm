@@ -107,7 +107,7 @@ describe('GET /api/schedule/blocks/[id]/candidates', () => {
     const res = await call()
     expect(res.status).toBe(200)
     expect(db.log.eq).toEqual(['id', BLOCK_ID])
-    expect(db.log.select).toBe('id, location_id, block_date, start_time, end_time, roster_id, rosters:roster_id(status), shift_templates(name, start_time, end_time), shift_assignments(profile_id, status)')
+    expect(db.log.select).toBe('id, location_id, template_id, block_date, start_time, end_time, roster_id, rosters:roster_id(status), shift_templates(name, start_time, end_time), shift_assignments(profile_id, status)')
     expect(loadBlockCandidates).toHaveBeenCalledTimes(1)
     expect(loadBlockCandidates).toHaveBeenCalledWith(db, { block: BLOCK, audience: 'manager', withContract: false })
     expect(await res.json()).toEqual({

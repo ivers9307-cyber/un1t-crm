@@ -40,6 +40,7 @@ import {
 } from './working-time.js'
 import { unavailableFor, unavailableSummary, describeRule } from './availability.js'
 import { timeOffLeaveLabel } from './time-off.js'
+import { qualificationGapBadge } from './qualifications.js'
 
 export const CANDIDATE_TIERS = Object.freeze(['ready', 'advisory', 'unavailable', 'blocked'])
 const CANDIDATE_TONES = Object.freeze({ ready: 'good', advisory: 'warn', unavailable: 'muted', blocked: 'bad' })
@@ -196,6 +197,11 @@ export function candidateBadges(c) {
       title: `Assigning this shift brings their week to ${hm} across every studio, over the ${MAX_WEEK_HOURS}-hour limit.`,
     })
   }
+  // QUALS.1 — the template's required qualifications, judged on the shift's
+  // date and attached server-side for the manager audience only. Advisory: a
+  // badge, never a tier, a rank or a line in `reason`.
+  const quals = qualificationGapBadge(c.qualification_gaps)
+  if (quals) out.push(quals)
   return out
 }
 
@@ -253,6 +259,7 @@ const UNCHECKED_LABELS = [
   ['leave', 'leave'],
   ['availability', 'availability'],
   ['contract', 'contracted hours'],
+  ['qualifications', 'qualifications'],
 ]
 
 /** 'Could not check leave and availability, so the order may be off.' or null. */

@@ -335,3 +335,31 @@ describe('candidateFacts', () => {
     expect(f.on_leave).not.toHaveProperty('type')
   })
 })
+
+describe('QUALS.1 — qualification gaps', () => {
+  const GAP = [{ type_id: 'fa', name: 'First aid', status: 'missing', expires_on: null }]
+
+  it('a gap is one warn badge, after the others', () => {
+    expect(candidateBadges({ free: true, qualification_gaps: GAP })).toEqual([{
+      key: 'qualifications', tone: 'warn', text: 'First aid: not on record',
+      title: 'This shift asks for First aid (not on record). Advisory only: you can still assign them.',
+    }])
+    const withRest = candidateBadges({ rest_gap: { rest_minutes: 600, other: {} }, qualification_gaps: GAP })
+    expect(withRest.map((b) => b.key)).toEqual(['rest', 'qualifications'])
+    expect(candidateBadges({ free: true, qualification_gaps: [] })).toEqual([])
+  })
+
+  it('never changes the tier, the order or the phone\'s reason line', () => {
+    expect(candidateTier({ free: true, qualification_gaps: GAP })).toBe('ready')
+    const ranked = rankCandidates([
+      { profile_id: 'a', full_name: 'Abe', free: true, week_minutes: 0, qualification_gaps: GAP },
+      { profile_id: 'b', full_name: 'Bea', free: true, week_minutes: 0 },
+    ])
+    expect(ranked.map((c) => c.profile_id)).toEqual(['a', 'b'])
+    expect(ranked[0].reason).toBe(candidateReason({ free: true, week_minutes: 0 }))
+  })
+
+  it('an unread qualification check is named in the note', () => {
+    expect(candidatesUncheckedNote({ qualifications: false })).toBe('Could not check qualifications, so the order may be off.')
+  })
+})

@@ -8,11 +8,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('./sibling-locations', () => ({ siblingLocationIds: vi.fn() }))
 vi.mock('./working-time-data', () => ({ readOrgShiftRows: vi.fn() }))
 vi.mock('./availability-server', () => ({ readStudioAvailability: vi.fn() }))
+vi.mock('./qualifications-server', () => ({ readBlockQualificationFacts: vi.fn() }))
 vi.mock('./log', async () => ({ ...(await vi.importActual('./log')), logWarn: vi.fn() }))
 
 import { siblingLocationIds } from './sibling-locations'
 import { readOrgShiftRows } from './working-time-data'
 import { readStudioAvailability } from './availability-server'
+import { readBlockQualificationFacts } from './qualifications-server'
 import { loadBlockCandidates, readEligibleMembers, readContractedHours } from './candidates-data'
 
 const NAMES = { ann: 'Ann Free', con: 'Con Tractor', off: 'Off Duty', gone: 'Gone Away', onblk: 'On Block', nul: 'Nul Active' }
@@ -256,5 +258,46 @@ describe('loadBlockCandidates — colleague', () => {
     expect(out.checked).toEqual({ shifts: true, cross_studio: true })
     expect(out.candidates.map((c) => c.profile_id)).toEqual(['ann', 'con', 'nul'])
     expect(Object.keys(out.candidates[0]).sort()).toEqual(['free', 'full_name', 'profile_id', 'rank', 'reason', 'role', 'tier'])
+  })
+})
+
+describe('QUALS.1 — qualification gaps (manager audience only)', () => {
+  const TPL_BLOCK = { ...BLOCK, template_id: 'tpl-1' }
+  beforeEach(() => {
+    readBlockQualificationFacts.mockReset().mockResolvedValue({
+      required: [{ id: 'fa', name: 'First aid', organization_id: 'org-1' }],
+      records: [{ profile_id: 'ann', qualification_type_id: 'fa', expires_on: '2027-01-01' }],
+      error: null,
+    })
+  })
+
+  it('attaches gaps judged on the block date, and says it checked', async () => {
+    const out = await loadBlockCandidates(mockDb(), { block: TPL_BLOCK, audience: 'manager' })
+    expect(readBlockQualificationFacts).toHaveBeenCalledWith(expect.anything(), { templateId: 'tpl-1', profileIds: ['ann', 'con', 'nul'] })
+    const gaps = Object.fromEntries(out.candidates.map((c) => [c.profile_id, c.qualification_gaps]))
+    expect(gaps.ann).toEqual([])
+    expect(gaps.con).toEqual([{ type_id: 'fa', name: 'First aid', status: 'missing', expires_on: null }])
+    expect(out.checked.qualifications).toBe(true)
+  })
+
+  it('a colleague never gets them, and nothing is read', async () => {
+    const out = await loadBlockCandidates(mockDb(), { block: TPL_BLOCK, audience: 'colleague' })
+    expect(readBlockQualificationFacts).not.toHaveBeenCalled()
+    expect(out.candidates.every((c) => !('qualification_gaps' in c))).toBe(true)
+  })
+
+  it('a failed read is "not checked"; the list still comes back without gaps', async () => {
+    readBlockQualificationFacts.mockResolvedValue({ required: null, records: null, error: { message: 'down' } })
+    const out = await loadBlockCandidates(mockDb(), { block: TPL_BLOCK, audience: 'manager' })
+    expect(out.error).toBeNull()
+    expect(out.checked.qualifications).toBe(false)
+    expect(out.candidates.every((c) => !('qualification_gaps' in c))).toBe(true)
+  })
+
+  it('a template that requires nothing adds no field and no checked key', async () => {
+    readBlockQualificationFacts.mockResolvedValue({ required: [], records: [], error: null })
+    const out = await loadBlockCandidates(mockDb(), { block: TPL_BLOCK, audience: 'manager' })
+    expect(out.candidates.every((c) => !('qualification_gaps' in c))).toBe(true)
+    expect(out.checked).not.toHaveProperty('qualifications')
   })
 })
