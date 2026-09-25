@@ -31,9 +31,11 @@ vi.mock('@/lib/push', () => ({ sendPush: vi.fn(async () => ({ sent: 0, skipped: 
 vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: vi.fn(async () => {}) }))
 vi.mock('@/lib/log', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
 vi.mock('@/lib/shift-reminders', () => ({ runShiftReminders: vi.fn() }))
+vi.mock('@/lib/block-edit-notify', () => ({ runShiftTimeChangeNotices: vi.fn() }))
 
 const { GET } = await import('./route.js')
 const { runShiftReminders } = await import('@/lib/shift-reminders')
+const { runShiftTimeChangeNotices } = await import('@/lib/block-edit-notify')
 const { stampHeartbeat } = await import('@/lib/cron-heartbeat')
 const { logError, logInfo, logWarn } = await import('@/lib/log')
 
@@ -53,6 +55,7 @@ beforeEach(() => {
     shift_candidates: 2, shift_pushed: 1, shift_emailed: 0,
     shift_skipped_dup: 1, shift_skipped_no_recipient: 0, shift_send_failed: 0,
   })
+  runShiftTimeChangeNotices.mockResolvedValue({ time_change_rows: 1, time_change_told: 1 })
 })
 
 describe('GET /api/cron/send-push-reminders — shift arm', () => {
@@ -111,8 +114,11 @@ describe('GET /api/cron/send-push-reminders — shift arm', () => {
 
   it('a quiet-hours tick (nothing but quiet_hours: 1) does not write a tick log line 108 times a night', async () => {
     runShiftReminders.mockResolvedValue({ quiet_hours: 1, shift_candidates: 0, shift_pushed: 0 })
+    // BLOCKEDIT.1 — the time-change arm is quiet on the same ticks.
+    runShiftTimeChangeNotices.mockResolvedValue({ time_change_quiet: 1, time_change_rows: 0 })
     const body = await (await GET(req())).json()
     expect(body.quiet_hours).toBe(1)
+    expect(body.time_change_quiet).toBe(1)
     expect(logInfo).not.toHaveBeenCalled()
   })
 })
@@ -200,5 +206,35 @@ describe('GET /api/cron/send-push-reminders — shift-reminders heartbeat', () =
     expect(res.status).toBe(200)
     expect(stampedNames()).toEqual(['shift-reminders', 'send-push-reminders'])
     expect(logWarn).toHaveBeenCalledWith('cron-push-reminders', 'shift-reminders heartbeat failed', expect.anything())
+  })
+})
+
+// BLOCKEDIT.1 — the time-change notice arm: the later tick that lets quiet
+// hours gate a shift-edit notice without losing it.
+describe('GET /api/cron/send-push-reminders — time-change arm', () => {
+  it('runs with the tick clock and the location rows, and reports its counters', async () => {
+    const before = Date.now()
+    const body = await (await GET(req())).json()
+    expect(runShiftTimeChangeNotices).toHaveBeenCalledTimes(1)
+    const [db, opts] = runShiftTimeChangeNotices.mock.calls[0]
+    expect(db).toBe(fakeDb)
+    expect(opts.locations).toEqual(LOCATIONS)
+    expect(opts.nowMs).toBeGreaterThanOrEqual(before)
+    expect(body.time_change_told).toBe(1)
+  })
+
+  it('a throwing arm is visible in the response, costs the shift arm nothing, and the heartbeat still stamps', async () => {
+    runShiftTimeChangeNotices.mockRejectedValue(new Error('select 400'))
+    const body = await (await GET(req())).json()
+    expect(body.time_change_arm_failed).toBe(1)
+    expect(runShiftReminders).toHaveBeenCalledTimes(1)
+    expect(stampHeartbeat).toHaveBeenCalledWith('send-push-reminders')
+    expect(logError).toHaveBeenCalledWith('cron-push-reminders', 'time-change block threw', expect.anything())
+  })
+
+  it('a throwing SHIFT arm still lets the time-change arm run', async () => {
+    runShiftReminders.mockRejectedValue(new Error('boom'))
+    await GET(req())
+    expect(runShiftTimeChangeNotices).toHaveBeenCalledTimes(1)
   })
 })
