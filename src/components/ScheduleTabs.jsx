@@ -54,7 +54,7 @@
 
 import Link from 'next/link'
 import { usePathname, useSearchParams } from 'next/navigation'
-import { CalendarClock, BarChart3, Receipt, UserCheck, Wallet, CalendarOff, ArrowLeftRight } from 'lucide-react'
+import { CalendarClock, BarChart3, Receipt, UserCheck, Wallet, CalendarOff, ArrowLeftRight, CalendarX } from 'lucide-react'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { hasPermission } from '@/lib/permissions'
 
@@ -105,6 +105,8 @@ export default function ScheduleTabs({ user }) {
   // coverage and utilisation remain theirs (src/lib/report-access.js).
   const tabs = [
     { key: 'schedule',  label: 'Schedule',   icon: CalendarClock,  href: ROOT_HREF,                    show: true },
+    // AVAIL.1 — every staff member's own availability, so no gate.
+    { key: 'availability', label: 'Availability', icon: CalendarX, href: '/schedule/availability', show: true },
     { key: 'reporting',  label: 'Reporting',  icon: BarChart3,      href: `${ROOT_HREF}?view=reporting`, show: isManager },
     { key: 'time-off',   label: 'Time Off',   icon: CalendarOff,    href: '/schedule/time-off',          show: isManager },
     { key: 'swaps',      label: 'Swaps',      icon: ArrowLeftRight, href: '/schedule/swaps',             show: isManager },
@@ -123,7 +125,7 @@ export default function ScheduleTabs({ user }) {
   }
 
   return (
-    // TABWRAP.1 — seven tabs don't fit a phone. They used to shrink until
+    // TABWRAP.1 — seven (eight since AVAIL.1) tabs don't fit a phone. They used to shrink until
     // "Time Off" wrapped onto two lines; now each label stays on one line and
     // the strip scrolls sideways instead. The scroll is phone-only (max-sm):
     // a scrolling box clips the tabs' -mb-px overlap onto the grey rule, so the

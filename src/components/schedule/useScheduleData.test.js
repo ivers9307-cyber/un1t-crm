@@ -22,6 +22,8 @@ const ARGS = {
   // ROSTERLOAD.1 (B1) — the spend route is manager-only; the default suite
   // runs as a manager so the six-read fan-out stays under test.
   canReadSpend: true,
+  // AVAIL.1 — manager-only, like spend
+  canReadAvailability: true,
 }
 
 // Every endpoint the hook fans out to, keyed by the path fragment that
@@ -37,6 +39,7 @@ function defaultBody(url) {
   if (url.includes('/schedule/time-off')) return { data: [{ id: 'to1' }] }
   if (url.includes('/holidays')) return { data: [{ date: '2026-05-04' }] }
   if (url.includes('contractor-spend')) return { success: true, data: { spend: 100 } }
+  if (url.includes('/schedule/availability')) return { success: true, data: [{ id: 'av1', profile_id: 's1', kind: 'weekly', weekday: 'mon', all_day: true }] }
   return { data: [] }
 }
 
@@ -412,6 +415,41 @@ describe('each slice settles on its own (ROSTERLOAD.1)', () => {
     expect(result.current.partialErrors.contractorSpend.kept).toBe(false)
   })
 
+  describe('availability (AVAIL.1) — manager-only, a side slice', () => {
+    it('loads with the range and the location', async () => {
+      const { result } = await loaded()
+      expect(result.current.availability).toHaveLength(1)
+      const url = global.fetch.mock.calls.map(([u]) => u).find((u) => u.includes('/schedule/availability'))
+      expect(url).toBe('/api/schedule/availability?location_id=loc1&start_date=2026-05-04&end_date=2026-05-10')
+    })
+    it('without canReadAvailability: no request, an empty list, nothing partial', async () => {
+      const { result } = await loaded({ ...ARGS, canReadAvailability: false })
+      expect(global.fetch.mock.calls.some(([u]) => u.includes('/schedule/availability'))).toBe(false)
+      expect(result.current.availability).toEqual([])
+      expect(result.current.partialErrors).toBeNull()
+    })
+    it('a failed read is a named partial error and never fails the roster', async () => {
+      global.fetch = failing('/schedule/availability')
+      const { result } = await loaded()
+      expect(result.current.error).toBeNull()
+      expect(result.current.blocks).toHaveLength(1)
+      expect(Object.keys(result.current.partialErrors)).toEqual(['availability'])
+      expect(result.current.partialErrors.availability.kept).toBe(false)
+    })
+    it('kept on a same-range refresh, cleared on a new week', async () => {
+      const { result, rerender } = await loaded()
+      global.fetch = failing('/schedule/availability')
+      await act(async () => { await result.current.refresh() })
+      expect(result.current.availability).toHaveLength(1)
+      expect(result.current.partialErrors.availability.kept).toBe(true)
+
+      rerender(WEEK_B)
+      await waitFor(() => expect(result.current.successCount).toBe(3))
+      expect(result.current.availability).toEqual([])
+      expect(result.current.partialErrors.availability.kept).toBe(false)
+    })
+  })
+
   it('contractor spend failing on the very first load leaves it null and says so', async () => {
     global.fetch = failing('contractor-spend')
     const { result } = await loaded()
@@ -595,7 +633,7 @@ describe('each slice settles on its own (ROSTERLOAD.1)', () => {
   // The generation guard must hold for EVERY slice now that they settle
   // separately: a late loser for week A may neither write its data nor its
   // failure over week B.
-  for (const fragment of ['/schedule/blocks', '/schedule/templates', '/api/staff', '/schedule/time-off', '/holidays', 'contractor-spend']) {
+  for (const fragment of ['/schedule/blocks', '/schedule/templates', '/api/staff', '/schedule/time-off', '/holidays', 'contractor-spend', '/schedule/availability']) {
     for (const outcome of ['resolves', 'rejects']) {
     it(`a late loser cannot write ${fragment} over the current week when it ${outcome}`, async () => {
       const held = []
@@ -620,7 +658,7 @@ describe('each slice settles on its own (ROSTERLOAD.1)', () => {
       })
       expect(result.current.error).toBeNull()
       expect(result.current.partialErrors).toBeNull()
-      for (const k of ['blocks', 'templates', 'staff', 'timeOff', 'holidays', 'contractorSpend']) {
+      for (const k of ['blocks', 'templates', 'staff', 'timeOff', 'holidays', 'contractorSpend', 'availability']) {
         expect(result.current[k]).toEqual(before[k])
       }
       expect(result.current.loading).toBe(false)
