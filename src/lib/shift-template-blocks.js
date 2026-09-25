@@ -116,15 +116,28 @@ export async function clearEmptyFutureBlocks(db, { templateId, locationId, today
  * to. A block whose values would not change is not written at all.
  *
  * @param {Array<{id: string, min_coaches?: number, max_coaches?: number}>} blocks
- * @param {{ minCoaches?: number|null, maxCoaches?: number|null }} edit  null/undefined = not being edited
- * @returns {Array<{ patch: {min_coaches?: number, max_coaches?: number}, ids: string[] }>}
+ * BLOCKEDIT.1 second review 2 — `followMin` / `followMax` are the template's
+ * OLD values. When given, a field reaches only blocks still AT that value: a
+ * block whose own minimum/maximum was edited (PUT /api/schedule/blocks/[id])
+ * keeps it. Per field, so a block with its own maximum still takes a new
+ * template minimum (clamped to its own ceiling). A block edited to a value
+ * that happens to equal the template's old one cannot be told apart from an
+ * unedited block and is treated as unedited. Omit `followMin` to force the
+ * minimum everywhere (a switch to admin: an admin shift has no minimum).
+ *
+ * @param {{ minCoaches?: number|null, maxCoaches?: number|null, followMin?: number, followMax?: number }} edit
+ *        min/max null/undefined = not being edited
+ * @returns {Array<{ patch: {min_coaches?: number, max_coaches?: number}, expect: {min_coaches, max_coaches}, ids: string[] }>}
+ *          `expect` = the values the group's blocks were read with (guard the write on them)
  */
-export function planBlockCapacityUpdates(blocks, { minCoaches = null, maxCoaches = null } = {}) {
-  if (minCoaches == null && maxCoaches == null) return []
+export function planBlockCapacityUpdates(blocks, { minCoaches: minEdit = null, maxCoaches: maxEdit = null, followMin, followMax } = {}) {
+  if (minEdit == null && maxEdit == null) return []
   const groups = new Map()
   for (const b of blocks || []) {
     const currentMax = Number(b.max_coaches)
     const currentMin = Number(b.min_coaches)
+    const minCoaches = minEdit != null && (followMin === undefined || currentMin === Number(followMin)) ? minEdit : null
+    const maxCoaches = maxEdit != null && (followMax === undefined || currentMax === Number(followMax)) ? maxEdit : null
     const nextMax = maxCoaches == null ? currentMax : maxCoaches
     // An unreadable max cannot be clamped against, so leave the block's own
     // ceiling out of the sum rather than inventing one.
@@ -137,8 +150,13 @@ export function planBlockCapacityUpdates(blocks, { minCoaches = null, maxCoaches
     if (Number.isFinite(nextMin) && nextMin !== currentMin) patch.min_coaches = nextMin
     if (Object.keys(patch).length === 0) continue
 
-    const key = JSON.stringify(patch)
-    if (!groups.has(key)) groups.set(key, { patch, ids: [] })
+    // BLOCKEDIT.1 third check — the values this block was READ with. The
+    // caller guards the write on them, so a block a manager edited between
+    // the read and the write is left alone; blocks read differently never
+    // share a statement.
+    const expect = { min_coaches: b.min_coaches, max_coaches: b.max_coaches }
+    const key = JSON.stringify([patch, expect])
+    if (!groups.has(key)) groups.set(key, { patch, expect, ids: [] })
     groups.get(key).ids.push(b.id)
   }
   return [...groups.values()]

@@ -100,7 +100,7 @@ const API_SHIFT_SELECT = `
   id, profile_id, status, notes, partial_reason,
   start_time_override, end_time_override, assigned_by, assigned_at, updated_at,
   shift_blocks!inner (
-    location_id, template_id, block_date, start_time, end_time, notes, roster_id,
+    location_id, template_id, block_date, start_time, end_time, notes, briefing, roster_id,
     rosters:roster_id ( status ),
     shift_templates (*)
   ),
@@ -126,6 +126,9 @@ function toApiShiftRow(a) {
     end_time_override: effectiveOverride(a.end_time_override, b.end_time, tpl.end_time),
     role_label: tpl.role_label ?? null,
     notes: a.notes ?? b.notes ?? null,
+    // BLOCKEDIT.1 (mig 629) — written FOR the coaches on this shift, so it is
+    // on every row and slimShiftRowForCoach keeps it (its spread does).
+    briefing: b.briefing ?? null,
     status: a.status,
     // ROSTER-FIX.1 — publishing is a roster concept: a shift is published
     // iff its block belongs to a published roster (same derivation as
@@ -152,6 +155,7 @@ function toApiShiftRow(a) {
  * because assignment notes / partial_reason are a manager's working notes
  * about that person. Email is dropped from every row, own included — the app
  * already knows the caller's own address and no coach screen renders one.
+ * The briefing (BLOCKEDIT.1) is a coach fact and passes on every row.
  *
  * Allow-list on the profile embed, not a delete-list: a column added to the
  * embed later stays manager-only until someone lists it here on purpose.

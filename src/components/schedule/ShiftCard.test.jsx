@@ -205,3 +205,15 @@ describe('ShiftCard — admin shifts (SHIFTTYPE.1)', () => {
     expect(screen.queryByTestId('shift-kind')).toBeNull()
   })
 })
+
+describe('ShiftCard — briefing marker (BLOCKEDIT.1)', () => {
+  it('shows a Briefing word when the shift has one, and not otherwise', () => {
+    const withIt = shiftCardModel({ ...BLOCK, briefing: 'Fire drill at 10' }, [on('u2', 'Coach A')], null, { isManager: false })
+    const { unmount } = render(<ShiftCard model={withIt} dayLabel="Monday 21 September" onActivate={() => {}} />)
+    expect(screen.getByTestId('shift-briefing').textContent).toBe('Briefing')
+    unmount()
+    const without = shiftCardModel(BLOCK, [on('u2', 'Coach A')], null, { isManager: false })
+    render(<ShiftCard model={without} dayLabel="Monday 21 September" onActivate={() => {}} />)
+    expect(screen.queryByTestId('shift-briefing')).toBeNull()
+  })
+})

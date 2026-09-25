@@ -2,7 +2,7 @@
 // effectiveOverride (collapse block + assignment override vs template)
 // (fetchSourceShiftRows moved to roster-copy.js as fetchSourceBlocks, COPYMODES.1).
 import { describe, it, expect } from 'vitest'
-import { effectiveOverride, swapShiftShape, fetchApiShiftRows } from './roster-read'
+import { effectiveOverride, swapShiftShape, fetchApiShiftRows, slimShiftRowForCoach } from './roster-read'
 
 describe('effectiveOverride', () => {
   it('prefers the per-assignment override when set', () => {
@@ -308,5 +308,38 @@ describe('fetchApiShiftRows', () => {
     const res = await fetchApiShiftRows(makeDb({ data: null, error: { message: 'nope' } }), { locationIds: ['l'] })
     expect(res.error?.message).toBe('nope')
     expect(res.rows).toEqual([])
+  })
+})
+
+// BLOCKEDIT.1 — the briefing is a block fact written FOR coaches: the /shifts
+// feed carries it, and the coach projection keeps it on every row.
+describe('briefing (BLOCKEDIT.1)', () => {
+  const assignment = (id, profileId, briefing) => ({
+    id, profile_id: profileId, status: 'scheduled', notes: 'mgr note', partial_reason: null,
+    start_time_override: null, end_time_override: null, assigned_by: 'mgr', updated_at: 't',
+    shift_blocks: {
+      location_id: 'loc1', template_id: 't1', block_date: '2026-06-08', start_time: '09:00:00', end_time: '10:00:00',
+      notes: 'blk', briefing, roster_id: 'r1', rosters: { status: 'published' },
+      shift_templates: { id: 't1', name: 'AM', start_time: '09:00:00', end_time: '10:00:00', role_label: 'Coach' },
+    },
+    profiles: { id: profileId, full_name: 'Coach A', email: 'a@x.ie', avatar_url: null, role: 'staff' },
+  })
+
+  it('asks for shift_blocks.briefing and puts it on the row (null when absent)', async () => {
+    const selects = []
+    const db = makeDb({ data: [assignment('a1', 'p1', 'Fire drill at 10'), assignment('a2', 'p2', null)], error: null })
+    const from = db.from
+    db.from = (t) => { const b = from(t); const sel = b.select; b.select = function (c) { selects.push(c); return sel.call(this) }; return b }
+    const { rows } = await fetchApiShiftRows(db, { locationIds: ['loc1'] })
+    expect(selects[0]).toMatch(/shift_blocks!inner \(\s*location_id, template_id, block_date, start_time, end_time, notes, briefing, roster_id/)
+    expect(rows.map((r) => r.briefing)).toEqual(['Fire drill at 10', null])
+  })
+
+  it("slimShiftRowForCoach keeps the briefing on the coach's own row AND a colleague's", () => {
+    const row = { profile_id: 'p2', notes: 'n', partial_reason: 'x', briefing: 'Fire drill at 10', profiles: { id: 'p2', full_name: 'B', email: 'b@x.ie' } }
+    expect(slimShiftRowForCoach(row, 'p2').briefing).toBe('Fire drill at 10')
+    const colleague = slimShiftRowForCoach(row, 'someone-else')
+    expect(colleague.briefing).toBe('Fire drill at 10')
+    expect(colleague.notes).toBeNull()
   })
 })

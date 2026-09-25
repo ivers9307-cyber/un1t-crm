@@ -359,6 +359,20 @@ describe('getOpenApiSpec', () => {
     expect(s).toHaveProperty('BridgeAuth')
   })
 
+  it('documents PUT /api/schedule/blocks/{id} (BLOCKEDIT.1), its 400/409 codes and the briefing', () => {
+    const op = spec.paths['/api/schedule/blocks/{id}'].put
+    expect(op.tags).toContain('Schedule')
+    expect(op.security).toContainEqual({ CookieAuth: [] })
+    for (const code of ['200', '400', '403', '404', '409', '503']) expect(op.responses).toHaveProperty(code)
+    expect(op.description).toMatch(/briefing/)
+    expect(op.description).toMatch(/quiet hours/)
+    // Third check 4 — every notice.when value, and what too_late means.
+    expect(op.description).toMatch(/'past'/)
+    expect(op.description).toMatch(/too_late.*before 07:30/)
+    // The DELETE on the same path is still there.
+    expect(spec.paths['/api/schedule/blocks/{id}'].delete).toBeTruthy()
+  })
+
   // ICSFEED.1 — an anonymous token feed and the session-only management route.
   it('documents the calendar feed and its self-service management', () => {
     const feed = spec.paths['/api/calendar-feed/{file}']?.get

@@ -137,6 +137,9 @@ function slimBlockForCoach(block) {
     end_time: block.end_time,
     roster_id: block.roster_id,
     rosters: block.rosters,
+    // BLOCKEDIT.1 (mig 629) — the one block text a coach DOES read: written
+    // for them. `notes` stays out (a manager's working note).
+    briefing: block.briefing ?? null,
     // The template embed carries max_coaches as well — same capacity fact,
     // one join further out. Dropped here so the slim shape has no back door.
     shift_templates: tpl
