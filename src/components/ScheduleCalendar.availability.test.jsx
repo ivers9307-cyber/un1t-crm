@@ -42,7 +42,14 @@ const availability = [
 
 const ok = (body) => ({ ok: true, status: 200, json: async () => body })
 
+// "Today" is the Wednesday on screen, so weekly rules are drawn (they are
+// drawn from today on only). Only Date is faked: RTL's findBy/waitFor keep
+// the real timers, so no clock is advanced anywhere in this file.
+const setToday = (y, m, d) => vi.setSystemTime(new Date(y, m - 1, d, 12, 0, 0))
+
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  setToday(2026, 5, 6)
   global.fetch = vi.fn(async (url) => {
     if (url.includes('/schedule/availability')) return ok({ success: true, data: availability })
     if (url.includes('/schedule/blocks')) return ok({ success: true, data: [block] })
@@ -50,7 +57,7 @@ beforeEach(() => {
     return ok({ success: true, data: [] })
   })
 })
-afterEach(() => { cleanup(); vi.restoreAllMocks() })
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks() })
 
 async function openAssignPicker(user = manager) {
   render(<ScheduleCalendar user={user} />)
@@ -67,6 +74,26 @@ describe("availability on the manager's week view (AVAIL.1)", () => {
     expect(bar.closest('[data-testid="unavailable-bar"]').getAttribute('title'))
       .toBe('Busy Coach: unavailable Wednesdays, 10am–11am (School run)')
     expect(screen.getAllByTestId('unavailable-bar')).toHaveLength(1) // only Wednesday
+  })
+
+  it("reads as its own thing, not as SHIFTTYPE's slate admin card", async () => {
+    render(<ScheduleCalendar user={manager} />)
+    const bar = (await screen.findByText('Busy · Unavailable 10am–11am')).closest('[data-testid="unavailable-bar"]')
+    expect(bar.className).not.toMatch(/bg-slate-500\/10/)
+    expect(bar.className).toMatch(/border-dashed/)
+  })
+
+  it('a weekly rule is not drawn on a day already gone; a dated one still is', async () => {
+    setToday(2026, 5, 7) // Thursday: Wednesday is past
+    const dated = { id: 'av2', profile_id: 'c-free', kind: 'dated', weekday: null, start_date: DATE, end_date: DATE, all_day: true, start_time: null, end_time: null, note: null }
+    const base = global.fetch
+    global.fetch = vi.fn(async (url) => (url.includes('/schedule/availability')
+      ? ok({ success: true, data: [...availability, dated] })
+      : base(url)))
+    render(<ScheduleCalendar user={manager} />)
+    await screen.findByText('Free · Unavailable all day')
+    expect(screen.getAllByTestId('unavailable-bar')).toHaveLength(1)
+    expect(screen.queryByText(/^Busy · Unavailable/)).toBeNull()
   })
 
   it('a coach with a leave bar that day is not drawn twice', async () => {

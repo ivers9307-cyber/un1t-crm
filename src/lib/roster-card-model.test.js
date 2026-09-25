@@ -430,6 +430,16 @@ describe('dayUnavailableBars (AVAIL.1)', () => {
     expect(bars.map((b) => b.text)).toEqual(['Casey · Unavailable 9am–12:30pm'])
   })
 
+  // A weekly rule is what the coach says NOW about every such weekday; drawn
+  // on a past week it would claim they were unavailable then, which nobody
+  // said. A dated rule is about its own dates, so it stays (history).
+  it('weekly rules are drawn from today on only; dated ones on any day', () => {
+    const past = dayUnavailableBars(rules, '2026-05-06', staff, { todayIso: '2026-05-07' })
+    expect(past.map((b) => b.text)).toEqual(['Alex · Unavailable all day']) // the one dated rule
+    const today = dayUnavailableBars(rules, '2026-05-06', staff, { todayIso: '2026-05-06' })
+    expect(today).toHaveLength(3)
+  })
+
   it('nothing on a day no rule touches', () => {
     expect(dayUnavailableBars(rules, '2026-05-04', staff)).toEqual([])
     expect(dayUnavailableBars(null, '2026-05-06', staff)).toEqual([])

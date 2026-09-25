@@ -353,18 +353,25 @@ export function dayLeaveBars(timeOff, dateStr) {
  * leave already says more than "unavailable". ADVISORY: nothing is blocked
  * by a bar. Pure.
  *
+ * With `todayIso`, a WEEKLY rule is drawn only on today and later: it is
+ * what the coach says now about every such weekday, and on a past week it
+ * would claim an unavailability nobody declared then. Dated rules are about
+ * their own dates, so they are drawn on any day (the kept history rows).
+ *
  * @param {Array} availability  flat rules from GET /api/schedule/availability?location_id=
  * @param {string} dateStr YYYY-MM-DD
  * @param {Array<{id:string, full_name:string}>} staff
  * @returns {Array<{id:string, profileId:string, text:string, title:string}>}
  */
-export function dayUnavailableBars(availability, dateStr, staff, { skipProfileIds = [] } = {}) {
+export function dayUnavailableBars(availability, dateStr, staff, { skipProfileIds = [], todayIso = null } = {}) {
   const skip = new Set(skipProfileIds)
+  const pastDay = Boolean(todayIso) && dateStr < todayIso
   const nameById = new Map((staff || []).map((s) => [s.id, s.full_name]))
   const byPerson = new Map()
   for (const rule of availability || []) {
     const id = rule?.profile_id
     if (!id || skip.has(id) || !nameById.has(id)) continue
+    if (pastDay && rule.kind === 'weekly') continue
     if (!byPerson.has(id)) byPerson.set(id, [])
     byPerson.get(id).push(rule)
   }

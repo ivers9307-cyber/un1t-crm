@@ -1334,16 +1334,22 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
                       availability,
                       dateStr,
                       locationStaff,
-                      { skipProfileIds: dayLeaveBars(timeOff, dateStr).map((b) => b.profileId) },
+                      // Weekly rules from today on only: on a past week they
+                      // would claim an unavailability nobody declared then.
+                      { skipProfileIds: dayLeaveBars(timeOff, dateStr).map((b) => b.profileId), todayIso: todayStr },
                     ).map((bar) => (
                       <div
                         key={bar.id}
                         data-testid="unavailable-bar"
                         title={bar.title}
-                        className="rounded-md px-2 py-1.5 text-xs flex items-center gap-1.5 bg-slate-500/10 border-l-[3px] border-slate-400"
+                        // Dashed and hatched, not a filled slate card: an admin
+                        // shift (SHIFTTYPE.1) is a slate-500/10 surface, and an
+                        // absence must not read as a shift. Text is zinc-800
+                        // (about 13:1 on the lightest stripe).
+                        className="rounded-md px-2 py-1.5 text-xs flex items-center gap-1.5 border border-dashed border-zinc-500 bg-[repeating-linear-gradient(135deg,transparent_0_5px,rgb(113_113_122/0.12)_5px_10px)]"
                       >
-                        <CalendarX size={12} className="shrink-0 text-slate-700" aria-hidden="true" />
-                        <span className="font-medium truncate text-slate-700">{bar.text}</span>
+                        <CalendarX size={12} className="shrink-0 text-zinc-800" aria-hidden="true" />
+                        <span className="font-medium truncate text-zinc-800">{bar.text}</span>
                       </div>
                     ))}
 
