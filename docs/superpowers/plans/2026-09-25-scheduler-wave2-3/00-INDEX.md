@@ -38,7 +38,7 @@ Size: S under a day, M one to three days, L a week or more. "Mig" = new migratio
 | 17 | AVAIL.2 | M | Phone screen for a coach to set their own availability | | yes | 16 |
 | 18 | AVAIL.3 | S | Contractors' "unavailable" time off moves into availability: stop offering the type, carry future rows across | 631 | yes | 16, 17 |
 | 19 | CANDIDATES.1 | M | Ranked candidates wherever a coach is picked (web and phone): free or not, leave, availability, already on site, week hours both studios, rest gap. Hours only | | yes | 15, 16 |
-| 20 | REPLACE.1 | M | Split: **1a** Replace coach (one guarded UPDATE, one notice each; mig 640 = its `replace-notices` arm heartbeat row, applied AFTER deploy) → **1b** Offer to team (`shift_offers`, locked claim RPC, mig 641) | 640, 641 | yes | 1b needs 19 |
+| 20 | REPLACE.1 | M | Split: **1a** Replace coach (MERGED #1767; mig 640 = its `replace-notices` arm heartbeat, applied after deploy) → **1b** Offer to team (`shift_offers` + `claim_shift_offer` RPC = mig 641 before deploy; `shift-offer-sweep` heartbeat = mig 642 right AFTER deploy) | 640, 641, 642 | yes | 1b needs 19 |
 | 21 | GRID.1 | M | Coach-by-day grid: one row per coach, week total, contracted hours, admin balance, leave and availability overlaid, both studios summed | | | 13, 16 |
 | 14b | (BLOCKEDIT heartbeat) | S | Heartbeat row for BLOCKEDIT.1's time-change notice arm, applied AFTER its deploy (the arm rule) | 639 | | 14 |
 | 22 | ICSFEED.1 | M | Per-coach calendar subscription of published shifts across both studios; secret token, rotate, revoked on deactivation; all four public-path allowlists | 632 | yes | |
@@ -156,6 +156,7 @@ These are marked **REVIEW** in the artifact until he confirms or changes them. E
 
 Updated by the loop. Newest first.
 
+- 25 Sep ~16:20Z: 35 LABOUR.1 built (6 commits; a strict no-pay-value leak test through the real read path; `getCompensationForProfiles` now throws — reviewer checking callers) → independent review. 20 REPLACE.1b implementer started (`~/code/un1t-crm-replace1b`): **mig 641** table + claim RPC (before deploy), **mig 642** `shift-offer-sweep` heartbeat (after deploy); builds on CANDIDATES.1's ranked list.
 - 25 Sep ~16:00Z: ✅ `replace-notices` stamped clean by the 15:55Z tick → **REPLACE.1a DONE**. ✅ **#1769 SNAPSHOT.1 MERGED** (15:51Z, web). 33 QUALS.1 fixes done (week stamped only on delivery; `sendOnce` reports a throw as failed — availability-notify and block-edit-notify now retry it; editor snapshot; own qualifications sentence) → fix re-check. 34 ARRIVALSHOW.1 fixes in progress (positive lines only). Review page v14.
 - 25 Sep ~16:10Z: 34 ARRIVALSHOW.1 review: approved w/ should-fixes → my call: absence lines OFF (positive lines only), fixes queued for the next slot (as_of clock, tracked cutoff, try/catch, 16h window cap, skip reads off the Me view). 35 LABOUR.1 implementer started (`~/code/un1t-crm-labour1`). Batch 9 plans commissioned (36 CLASSLINK.1, 18 AVAIL.3). REPLACE.1b (mig 641, offer to team) takes the slot after.
 - 25 Sep ~15:55Z: 33 QUALS.1 review: approved w/ should-fixes (the digest could stamp the week after a FAILED email or a swallowed throw → a week's digest lost; the template editor could wipe a template's requirements if Edit opened before the GET; a false "order may be off" note) → fixes in progress.
