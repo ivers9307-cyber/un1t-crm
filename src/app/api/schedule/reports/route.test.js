@@ -259,3 +259,22 @@ describe('POST /api/schedule/reports — generate', () => {
     expect(generateReport).not.toHaveBeenCalled()
   })
 })
+
+// DATECHECK.1 — an impossible period reached generateReport, whose reads (or,
+// for time_off_summary, the save) Postgres refused: a 400 with its text.
+describe('POST /api/schedule/reports — a period the calendar does not have', () => {
+  it('400s and generates nothing', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    for (const [period_start, period_end, path] of [
+      ['2026-02-30', '2026-03-06', 'period_start'],
+      ['2026-04-01', '2026-04-31', 'period_end'],
+    ]) {
+      const res = await POST(postReq({ report_type: 'staff_hours', period_start, period_end, location_id: LOC_A }))
+      expect(res.status).toBe(400)
+      const json = await res.json()
+      expect(json.error).toBe('Invalid request body')
+      expect(json.issues).toEqual([{ path, message: 'Use a real date, YYYY-MM-DD' }])
+    }
+    expect(generateReport).not.toHaveBeenCalled()
+  })
+})

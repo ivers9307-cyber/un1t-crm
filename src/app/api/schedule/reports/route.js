@@ -4,7 +4,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess, getUserLocationIds, hasRoleAtLocation } from '@/lib/auth'
 import { generateReport } from '@/lib/report-generator'
 import { validateBody } from '@/lib/validate'
-import { uuidLike, isoDate, reportTypeSchema, MANAGER_ROLES } from '@/lib/schemas'
+import { uuidLike, realIsoDate, reportTypeSchema, MANAGER_ROLES } from '@/lib/schemas'
 import {
   canViewReportType, isRateReportType, RATE_REPORT_VIEWER_ROLES, RATE_REPORT_TYPES_IN_LIST,
 } from '@/lib/report-access'
@@ -21,8 +21,9 @@ import {
 
 const ReportRunSchema = z.object({
   report_type: reportTypeSchema,
-  period_start: isoDate,
-  period_end: isoDate,
+  // DATECHECK.1 — real dates, not just the shape.
+  period_start: realIsoDate,
+  period_end: realIsoDate,
   location_id: uuidLike.optional(),
 })
 
