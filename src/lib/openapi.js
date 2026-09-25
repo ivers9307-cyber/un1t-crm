@@ -4497,7 +4497,7 @@ registry.registerPath({
   description: "WORKTIME.1. For each employee (profiles.employment_type = 'fte') of the block's studio who is not already live on it: would assigning them leave under 11 hours between the end of one working day and the start of the next, or over 48 rostered hours in the block's Monday-to-Sunday week, counting their live shifts at every studio of the same organisation (effective window: override, then block, then template; Dublin wall clock as real time)? Advisory only; POST /api/schedule/blocks/{id}/assignments never consults it. byProfile lists only people with a flag: restGap { rest_minutes, side, other { block_id, date, start, end, name, location_name } } and weekHours { week_start, minutes }. Contractors are never listed. No names, rates, costs, contracted hours or employment type are returned. checked is false when the read failed or the organisation's other studios could not be read. Manager-only (master, owner, manager, head_coach AT the block's studio); an outsider gets 404.",
   request: { query: z.object({ block_id: uuidLike }) },
   responses: {
-    200: { description: '{ byProfile: { [profileId]: { restGap, weekHours } }, checked }' },
+    200: { description: '{ byProfile: { [profileId]: { restGap, weekHours } }, checked, untimed } (untimed = shifts with no usable start or end, not counted)' },
     400: { description: 'Missing or malformed block_id', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: "Forbidden: needs a manager role at the block's studio", content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Block not found (or not at a studio the caller belongs to)', content: { 'application/json': { schema: ErrorResponse } } },

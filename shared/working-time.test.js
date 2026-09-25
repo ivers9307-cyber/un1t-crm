@@ -9,6 +9,7 @@ import {
   workingWindow, restGapViolations, weekHoursOver,
   workingTimeAdvisories, candidateWorkingTime,
   hoursMinutesLabel, longWeeksHeadline, restGapsHeadline,
+  untimedShiftCount, untimedShiftsLabel,
 } from './working-time.js'
 
 const HOUR = 60 * 60 * 1000
@@ -64,6 +65,21 @@ describe('workingWindow', () => {
     expect(w.date).toBe('2026-09-22')
     expect(w.endMs).toBe(Date.UTC(2026, 8, 23, 1, 0)) // 02:00 IST on the 23rd
     expect(w.endMs - w.startMs).toBe(4 * HOUR)
+  })
+
+  it('an end of 24:00 is midnight at the END of the block date, never a dropped shift', () => {
+    for (const end of ['24:00', '24:00:00']) {
+      const w = workingWindow(S('p1', '2026-09-22', '20:00', end))
+      expect(w).toMatchObject({ date: '2026-09-22', start: '20:00', end: '00:00' })
+      expect(w.endMs).toBe(Date.UTC(2026, 8, 22, 23, 0)) // 00:00 IST on the 23rd
+      expect(w.endMs - w.startMs).toBe(4 * HOUR)
+    }
+    // A whole day, 00:00-24:00, is 24 hours, not zero length.
+    const day = workingWindow(S('p1', '2026-11-03', '00:00', '24:00:00'))
+    expect(day.endMs - day.startMs).toBe(24 * HOUR)
+    // 24:00 is an END only, and nothing past it parses.
+    expect(workingWindow(S('p1', '2026-09-22', '24:00', '23:00'))).toBeNull()
+    expect(workingWindow(S('p1', '2026-09-22', '20:00', '24:01'))).toBeNull()
   })
 
   it('is null for a cancelled row, no person, an unreadable date or time, or zero length', () => {
@@ -155,6 +171,46 @@ describe('restGapViolations', () => {
   })
 })
 
+describe('24:00 ends and shifts without times (WORKTIME.1 review)', () => {
+  it('a 24:00 end counts its hours in the week and ends the day for the rest', () => {
+    const SIX = ['2026-09-21', '2026-09-22', '2026-09-23', '2026-09-24', '2026-09-25']
+    const rows = [...SIX.map((d) => S('p1', d, '09:00', '17:00')), S('p1', '2026-09-26', '15:45', '24:00:00')] // 40h + 8h15m
+    expect(weekHoursOver(rows)).toMatchObject([{ minutes: 2895 }])
+    expect(restGapViolations([S('p1', '2026-09-22', '18:00', '24:00:00'), S('p1', '2026-09-23', '08:00', '10:00')])
+      .map((v) => [v.rest_minutes, v.before.end])).toEqual([[480, '00:00']])
+  })
+
+  it('untimedShiftCount counts live shifts with no usable start or end, once per block', () => {
+    const noTimes = S('p1', '2026-09-22', null, null)
+    expect(untimedShiftCount([
+      noTimes, noTimes, // the same block reached twice
+      S('p1', '2026-09-23', '09:00', null),
+      S('p1', '2026-09-24', 'late', '12:00'),
+      S('p1', '2026-09-25', '09:00', '12:00'), // timed
+      S('p1', '2026-09-25', '09:00', '24:00'), // timed: 24:00 is an end
+      S('p1', '2026-09-26', null, null, { status: 'cancelled' }), // not a shift
+      S(null, '2026-09-26', null, null), // nobody on it
+      S('p1', '2026-09-27', '09:00', '09:00'), // zero length is timed, it is 0 hours
+    ])).toBe(3)
+    expect(untimedShiftCount(null)).toBe(0)
+  })
+
+  it('the publish list carries the count, for covered people only', () => {
+    const out = workingTimeAdvisories([
+      S('emp', '2026-09-22', null, null),
+      S('con', '2026-09-22', null, null),
+    ], { people: new Map([['emp', { employment_type: 'fte' }], ['con', { employment_type: 'contractor' }]]) })
+    expect(out).toEqual({ restGaps: [], longWeeks: [], untimed: 1 })
+  })
+
+  it('untimedShiftsLabel', () => {
+    expect([1, 3].map(untimedShiftsLabel)).toEqual([
+      '1 shift without times was not counted.',
+      '3 shifts without times were not counted.',
+    ])
+  })
+})
+
 describe('weekHoursOver', () => {
   const SIX = ['2026-09-21', '2026-09-22', '2026-09-23', '2026-09-24', '2026-09-25', '2026-09-26']
   const six = (lastEnd = '17:00') => SIX.map((d, i) => S('p1', d, '09:00', i === 5 ? lastEnd : '17:00'))
@@ -232,8 +288,8 @@ describe('workingTimeAdvisories', () => {
   })
 
   it('a person whose employment type is unknown is not flagged', () => {
-    expect(workingTimeAdvisories(heavy('ghost', WEEK), OPTS)).toEqual({ restGaps: [], longWeeks: [] })
-    expect(workingTimeAdvisories(heavy('emp', WEEK), { ...OPTS, people: null })).toEqual({ restGaps: [], longWeeks: [] })
+    expect(workingTimeAdvisories(heavy('ghost', WEEK), OPTS)).toEqual({ restGaps: [], longWeeks: [], untimed: 0 })
+    expect(workingTimeAdvisories(heavy('emp', WEEK), { ...OPTS, people: null })).toEqual({ restGaps: [], longWeeks: [], untimed: 0 })
   })
 
   it('names the other studio, never this one, and the coach', () => {
@@ -251,7 +307,7 @@ describe('workingTimeAdvisories', () => {
 
   it('lists only what this studio\'s publish is about: nothing that lives entirely at the other studio', () => {
     const away = heavy('emp', WEEK, { location_id: 'loc2', location_name: 'Studio South' })
-    expect(workingTimeAdvisories(away, OPTS)).toEqual({ restGaps: [], longWeeks: [] })
+    expect(workingTimeAdvisories(away, OPTS)).toEqual({ restGaps: [], longWeeks: [], untimed: 0 })
     const unscoped = workingTimeAdvisories(away, { ...OPTS, hereLocationId: null })
     expect(unscoped.restGaps).toHaveLength(1)
     expect(unscoped.longWeeks).toMatchObject([{ studio_count: 1, shift_count: 5 }])

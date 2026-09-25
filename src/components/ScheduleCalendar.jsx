@@ -63,7 +63,7 @@ import { COPY_MODE_OPTIONS, copyResultToast } from '@/lib/roster-copy'
 // COPYLEAVE.1 — the publish modal's clash wording (pure, unit-tested there).
 import { leaveClashesHeadline, leaveRangeLabel } from '@/lib/roster-publish-advisories'
 // WORKTIME.1 — working-time copy and limits (pure, unit-tested in shared/).
-import { hoursMinutesLabel, longWeeksHeadline, restGapsHeadline, MIN_REST_HOURS, MAX_WEEK_HOURS, REST_BETWEEN_LABEL } from '@shared/working-time'
+import { hoursMinutesLabel, longWeeksHeadline, restGapsHeadline, untimedShiftsLabel, MIN_REST_HOURS, MAX_WEEK_HOURS, REST_BETWEEN_LABEL } from '@shared/working-time'
 import RosterSummaryPanel from './RosterSummaryPanel'
 import ScheduleErrorBanner from './schedule/ScheduleErrorBanner'
 import SchedulePartialLoadNote, {
@@ -1687,7 +1687,7 @@ function AssignCoachModal({ block, staff, blocks, timeOff, unavailableReason = n
   // server) says nothing. No list (the coach list failed) = nothing to ask.
   // `pending` until the answer lands: an unbadged row must not read as "all
   // clear" while the check is still in flight.
-  const [workingTime, setWorkingTime] = useState({ byProfile: {}, failed: false, pending: true })
+  const [workingTime, setWorkingTime] = useState({ byProfile: {}, failed: false, pending: true, untimed: 0 })
   useEffect(() => {
     if (unavailableReason) return undefined
     let cancelled = false
@@ -1702,7 +1702,7 @@ function AssignCoachModal({ block, staff, blocks, timeOff, unavailableReason = n
       }
       if (cancelled) return
       if (!res?.ok || !json || json.success === false) {
-        setWorkingTime({ byProfile: {}, failed: true, pending: false })
+        setWorkingTime({ byProfile: {}, failed: true, pending: false, untimed: 0 })
         return
       }
       const by = json.data?.byProfile
@@ -1710,6 +1710,7 @@ function AssignCoachModal({ block, staff, blocks, timeOff, unavailableReason = n
         byProfile: by && typeof by === 'object' && !Array.isArray(by) ? by : {},
         failed: json.data?.checked === false,
         pending: false,
+        untimed: Number(json.data?.untimed) > 0 ? Number(json.data.untimed) : 0,
       })
     }
     loadWorkingTime()
@@ -1774,6 +1775,9 @@ function AssignCoachModal({ block, staff, blocks, timeOff, unavailableReason = n
           )}
           {!unavailableReason && workingTime.failed && (
             <p className="mb-2 text-[11px] text-un1t-subtle">Rest and weekly-hours check could not be completed.</p>
+          )}
+          {!unavailableReason && workingTime.untimed > 0 && (
+            <p className="mb-2 text-[11px] text-un1t-subtle">{untimedShiftsLabel(workingTime.untimed)}</p>
           )}
           {unavailableReason ? (
             <p className="text-[11px] px-2 py-1.5 rounded bg-amber-500/10 text-amber-700">{unavailableReason}</p>
@@ -2286,7 +2290,9 @@ function PublishWorkingTime({ workingTime }) {
   if (!workingTime || !Array.isArray(workingTime.restGaps) || !Array.isArray(workingTime.longWeeks)) return null
   const { restGaps, longWeeks } = workingTime
   const unchecked = workingTime.checked === false
-  if (restGaps.length === 0 && longWeeks.length === 0 && !unchecked) return null
+  // Shifts with no usable times were not counted: the check is partial.
+  const untimed = Number(workingTime.untimed) > 0 ? Number(workingTime.untimed) : 0
+  if (restGaps.length === 0 && longWeeks.length === 0 && !unchecked && untimed === 0) return null
   const dayOf = (iso) => new Date(`${iso}T00:00:00`).toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short' })
   const shortDay = (iso) => new Date(`${iso}T00:00:00`).toLocaleDateString('en-IE', { day: 'numeric', month: 'short' })
   const where = (s) => (s.location_name ? ` (${s.location_name})` : '')
@@ -2329,6 +2335,9 @@ function PublishWorkingTime({ workingTime }) {
       )}
       {unchecked && (
         <div className="text-xs text-un1t-subtle mt-2">The working-time check could not be completed.</div>
+      )}
+      {untimed > 0 && (
+        <div className="text-xs text-un1t-subtle mt-2">{untimedShiftsLabel(untimed)}</div>
       )}
       <div className="text-xs text-un1t-subtle mt-2">
         Employees only, every studio counted: {MIN_REST_HOURS} hours {REST_BETWEEN_LABEL}, {MAX_WEEK_HOURS} hours in a Monday to Sunday week. You can still publish.

@@ -2066,6 +2066,7 @@ describe('projectPublishImpact — working time (WORKTIME.1)', () => {
     const r = await projectPublishImpact(fixture(), PERIOD)
     expect(r.workingTime).toEqual({
       checked: true,
+      untimed: 0,
       restGaps: [],
       longWeeks: [{ profile_id: 'sarah', coach_name: 'Sam Demo', week_start: '2026-05-04', minutes: 2970, shift_count: 6, studio_count: 1 }],
     })
@@ -2091,7 +2092,7 @@ describe('projectPublishImpact — working time (WORKTIME.1)', () => {
     ]) {
       setup()
       const r = await projectPublishImpact(fixture(), PERIOD)
-      expect(r.workingTime).toEqual({ restGaps: [], longWeeks: [], checked: false })
+      expect(r.workingTime).toEqual({ restGaps: [], longWeeks: [], untimed: 0, checked: false })
       expect(r.crossLocationChecked).toBe(true)
       expect(r.periodProjectedEur).toBe(baseline.periodProjectedEur)
       expect(r.overBudget).toBe(baseline.overBudget)
@@ -2121,6 +2122,12 @@ describe('projectPublishImpact — working time (WORKTIME.1)', () => {
     }))
     const r = await projectPublishImpact(fixture(), PERIOD)
     expect(r.workingTime.longWeeks.map((w) => w.profile_id)).toEqual(['sarah'])
+  })
+
+  it('counts the shifts it could not time, so the modal can say the check is partial', async () => {
+    loadWorkingTimeShifts.mockResolvedValue(read({ shifts: [row('nt', '2026-05-06', null, null), row('ok', '2026-05-07', '09:00', '10:00')] }))
+    const r = await projectPublishImpact(fixture(), PERIOD)
+    expect(r.workingTime).toMatchObject({ untimed: 1, checked: true })
   })
 
   it('a real publish (advisories: false) never reads it and carries no workingTime key', async () => {

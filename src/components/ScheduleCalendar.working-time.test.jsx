@@ -209,3 +209,18 @@ describe('assign picker: working time while the check is in flight (WORKTIME.1 r
     expect(screen.queryByText('Checking rest and weekly hours…')).toBeNull()
   })
 })
+
+describe('shifts without times (WORKTIME.1 review)', () => {
+  it('the publish preview says how many shifts it could not count, even with nothing else to list', async () => {
+    global.fetch = mockFetch({ impact: { ...BASE_IMPACT, workingTime: { restGaps: [], longWeeks: [], checked: true, untimed: 2 } } })
+    await openPublishPreview()
+    expect(screen.getByTestId('publish-working-time').textContent).toMatch(/2 shifts without times were not counted\./)
+  })
+
+  it('the picker says so too', async () => {
+    global.fetch = mockFetch({ picker: { ...PICKER_ANSWER, data: { ...PICKER_ANSWER.data, untimed: 1 } } })
+    await openAssignPicker()
+    expect(await screen.findByText('1 shift without times was not counted.')).toBeTruthy()
+    expect(screen.getByText('9h 30m rest')).toBeTruthy()
+  })
+})

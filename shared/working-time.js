@@ -71,6 +71,17 @@ function parseTime(value) {
   return { h, mi, s }
 }
 
+// An END time. Postgres `time` accepts '24:00:00', and it means midnight at
+// the END of the day: without this a shift ending at 24:00 failed the parse
+// and was dropped, undercounting its week. `endOfDay` = 00:00 on the next day.
+function parseEndTime(value) {
+  const m = String(value ?? '').match(TIME_RE)
+  if (m && Number(m[1]) === 24 && Number(m[2]) === 0 && !Number(m[3] || 0)) {
+    return { h: 0, mi: 0, s: 0, endOfDay: true }
+  }
+  return parseTime(value)
+}
+
 function parseDate(value) {
   const m = String(value ?? '').match(DATE_RE)
   return m ? { y: Number(m[1]), mo: Number(m[2]), d: Number(m[3]) } : null
@@ -144,12 +155,14 @@ export function workingWindow(row) {
   if (!row?.profile_id || row.status === 'cancelled') return null
   const date = parseDate(row.block_date)
   const start = parseTime(effectiveShiftStart(row))
-  const end = parseTime(effectiveShiftEnd(row))
+  const end = parseEndTime(effectiveShiftEnd(row))
   if (!date || !start || !end) return null
   const startSecs = start.h * 3600 + start.mi * 60 + start.s
-  const endSecs = end.h * 3600 + end.mi * 60 + end.s
+  const endSecs = end.endOfDay ? DAY_MS / 1000 : end.h * 3600 + end.mi * 60 + end.s
   if (endSecs === startSecs) return null
-  const endDate = endSecs < startSecs ? parseDate(addDays(row.block_date, 1)) : date
+  // 24:00, or an end before the start (defence: overnight shifts cannot be
+  // created today), is on the next calendar day.
+  const endDate = end.endOfDay || endSecs < startSecs ? parseDate(addDays(row.block_date, 1)) : date
   return {
     profile_id: row.profile_id,
     block_id: row.block_id ?? null,
@@ -162,6 +175,26 @@ export function workingWindow(row) {
     startMs: dublinWallMs(date, start),
     endMs: dublinWallMs(endDate, end),
   }
+}
+
+// Per (person, block) identity, so the same block reached by two reads is one.
+const rowKey = (row) => `${row.profile_id}|${row.block_id ?? `${row.block_date}|${row.start_time}|${row.end_time}|${row.location_id}`}`
+
+/**
+ * How many live, staffed shifts have no usable start or end (missing, or not a
+ * time), once per (person, block). workingWindow drops them, so every rule
+ * here is silent about their hours; this count lets a screen say the check is
+ * partial instead of implying it saw everything. A zero-length shift is timed
+ * (it is 0 hours, as payroll says), and so is a 24:00 end.
+ */
+export function untimedShiftCount(shifts) {
+  const seen = new Set()
+  for (const row of shifts || []) {
+    if (!row?.profile_id || row.status === 'cancelled') continue
+    if (parseTime(effectiveShiftStart(row)) && parseEndTime(effectiveShiftEnd(row))) continue
+    seen.add(rowKey(row))
+  }
+  return seen.size
 }
 
 // Every usable window, once per (person, block): the same block reached by two
@@ -311,6 +344,7 @@ function personOf(people, id) {
  * @returns {{
  *   restGaps: Array<{ profile_id, coach_name, rest_minutes, before, after }>,
  *   longWeeks: Array<{ profile_id, coach_name, week_start, minutes, shift_count, studio_count }>,
+ *   untimed: number,   // covered people's shifts with no usable times: not counted
  * }}
  */
 export function workingTimeAdvisories(shifts, {
@@ -351,7 +385,7 @@ export function workingTimeAdvisories(shifts, {
       studio_count: w.location_ids.length,
     }))
 
-  return { restGaps, longWeeks }
+  return { restGaps, longWeeks, untimed: untimedShiftCount(covered) }
 }
 
 /**
@@ -414,4 +448,9 @@ export function longWeeksHeadline(longWeeks) {
 export function restGapsHeadline(restGaps) {
   const n = (restGaps || []).length
   return `${n} rest${n === 1 ? '' : 's'} under ${MIN_REST_HOURS} hours ${REST_BETWEEN_LABEL}`
+}
+
+/** 1 → '1 shift without times was not counted.' */
+export function untimedShiftsLabel(n) {
+  return n === 1 ? '1 shift without times was not counted.' : `${n} shifts without times were not counted.`
 }

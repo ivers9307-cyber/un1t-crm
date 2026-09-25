@@ -138,6 +138,7 @@ describe('GET /api/schedule/working-time', () => {
       success: true,
       data: {
         checked: true,
+        untimed: 0,
         byProfile: {
           late: {
             restGap: { rest_minutes: 510, side: 'before', other: { block_id: 'hs-1', date: '2026-09-22', start: '20:00', end: '22:00', name: 'Evening', location_name: 'Studio South' } },
@@ -161,7 +162,17 @@ describe('GET /api/schedule/working-time', () => {
     loadWorkingTimeShifts.mockResolvedValue({ shifts: [], people: new Map(), crossStudioChecked: false, error: { message: 'down' } })
     const res = await GET(req({ block_id: BLOCK_ID }))
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ success: true, data: { byProfile: {}, checked: false } })
+    expect(await res.json()).toEqual({ success: true, data: { byProfile: {}, checked: false, untimed: 0 } })
+  })
+
+  it('counts the candidates\' shifts it could not time, and the shift itself if it has none', async () => {
+    getCurrentUser.mockResolvedValue(userWith({ [LOC]: 'manager' }))
+    loadWorkingTimeShifts.mockResolvedValue({ ...READ, shifts: [...READ.shifts, row('free', 'nt', '2026-09-24', null, null), row('con', 'nt2', '2026-09-24', null, null)] })
+    expect((await (await GET(req({ block_id: BLOCK_ID }))).json()).data.untimed).toBe(1)
+    db = dbWith({ block: { ...BLOCK, start_time: null, end_time: null, shift_templates: { name: 'Early' } } })
+    loadWorkingTimeShifts.mockResolvedValue(READ)
+    const body = await (await GET(req({ block_id: BLOCK_ID }))).json()
+    expect(body.data).toMatchObject({ byProfile: {}, untimed: 1 })
   })
 
   it('500 when the block read fails', async () => {

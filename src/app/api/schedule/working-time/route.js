@@ -11,8 +11,9 @@
 // outsider to that studio gets 404, so the block id is never confirmed.
 //
 // Returns { success, data: { byProfile: { [profileId]: { restGap, weekHours } },
-// checked } }. Only people with something to say are listed; contractors never
-// are. Shift times and hours only: no name, rate, cost, contract hours or
+// checked, untimed } }. `untimed` = shifts with no usable times, which the
+// rules could not count. Only people with something to say are listed;
+// contractors never are. Shift times and hours only: no name, rate, cost, contract hours or
 // employment type leaves this route. `checked: false` = the read failed or
 // could not see the other studios, so an empty map is not an all-clear.
 //
@@ -28,7 +29,7 @@ import { liveAssignments } from '@/lib/roster'
 import { mondayOf } from '@/lib/payroll'
 import { addDaysISO } from '@/lib/dublin-time'
 import { loadWorkingTimeShifts } from '@/lib/working-time-data'
-import { candidateWorkingTime, isWorkingTimeCovered } from '@shared/working-time'
+import { candidateWorkingTime, isWorkingTimeCovered, untimedShiftCount } from '@shared/working-time'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -87,28 +88,36 @@ export async function GET(request) {
     to: addDaysISO(monday, 7),
   })
 
+  const candidateRow = (profileId) => ({
+    profile_id: profileId,
+    block_id: block.id,
+    block_date: block.block_date,
+    location_id: block.location_id,
+    location_name: null,
+    name: block.shift_templates?.name || 'Shift',
+    start_time: block.start_time,
+    end_time: block.end_time,
+    shift_templates: block.shift_templates,
+  })
+
   const byProfile = {}
+  // Shifts with no usable times are dropped by the rules; count them so the
+  // picker can say the check is partial. The block itself counts once.
+  let untimed = 0
   if (!wt.error) {
-    for (const profileId of candidateIds) {
-      if (!isWorkingTimeCovered(wt.people.get(profileId)?.employment_type)) continue
+    const covered = candidateIds.filter((id) => isWorkingTimeCovered(wt.people.get(id)?.employment_type))
+    const coveredSet = new Set(covered)
+    untimed = untimedShiftCount(wt.shifts.filter((s) => coveredSet.has(s.profile_id)))
+      + (covered.length > 0 ? untimedShiftCount([candidateRow(covered[0])]) : 0)
+    for (const profileId of covered) {
       const result = candidateWorkingTime(
         wt.shifts.filter((s) => s.profile_id === profileId),
-        {
-          profile_id: profileId,
-          block_id: block.id,
-          block_date: block.block_date,
-          location_id: block.location_id,
-          location_name: null,
-          name: block.shift_templates?.name || 'Shift',
-          start_time: block.start_time,
-          end_time: block.end_time,
-          shift_templates: block.shift_templates,
-        },
+        candidateRow(profileId),
         { hereLocationId: block.location_id },
       )
       if (result.restGap || result.weekHours) byProfile[profileId] = result
     }
   }
 
-  return NextResponse.json({ success: true, data: { byProfile, checked: !wt.error && wt.crossStudioChecked !== false } })
+  return NextResponse.json({ success: true, data: { byProfile, checked: !wt.error && wt.crossStudioChecked !== false, untimed } })
 }

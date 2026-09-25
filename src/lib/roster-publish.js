@@ -356,6 +356,7 @@ function blockContractorCost(block, contractorRateById, leaveByProfile) {
  *   // WORKTIME.1 — with `advisories: true` only. Employees, hours only.
  *   workingTime: { restGaps: Array<{ profile_id, coach_name, rest_minutes, before, after }>,
  *                  longWeeks: Array<{ profile_id, coach_name, week_start, minutes, shift_count, studio_count }>,
+ *                  untimed: number,   // shifts with no usable times, not counted
  *                  checked: boolean },
  *   months: Array<{
  *     monthStart, monthEnd, monthlyBudgetEur, alreadyPublishedEur,
@@ -461,15 +462,15 @@ export async function projectPublishImpactBatch(db, periods, { todayIso = dublin
  * the pure helper threw: an empty list is then "not checked", never "clear".
  */
 function workingTimeList(wt, { locationId, monthBlocks, periodStart, periodEnd, todayIso }) {
-  const unchecked = { restGaps: [], longWeeks: [], checked: false }
+  const unchecked = { restGaps: [], longWeeks: [], untimed: 0, checked: false }
   if (!wt || wt.error) return unchecked
   try {
     const here = new Set(rosteredHereIn(monthBlocks, periodStart, periodEnd))
-    const { restGaps, longWeeks } = workingTimeAdvisories(
+    const { restGaps, longWeeks, untimed } = workingTimeAdvisories(
       (wt.shifts || []).filter((s) => here.has(s.profile_id)),
       { people: wt.people, hereLocationId: locationId, from: periodStart, to: periodEnd, todayIso },
     )
-    return { restGaps, longWeeks, checked: wt.crossStudioChecked !== false }
+    return { restGaps, longWeeks, untimed, checked: wt.crossStudioChecked !== false }
   } catch (e) {
     logWarn('roster-publish', 'working-time advisory threw; omitted from the publish preview', { locationId, err: e?.message })
     return unchecked
