@@ -10,7 +10,7 @@ import { describe, it, expect, vi } from 'vitest'
 // zero-work paths below return before touching any of them.
 vi.mock('./roster-read', () => ({ fetchApiShiftRows: vi.fn() }))
 vi.mock('./notify', () => ({ notifyUsers: vi.fn() }))
-vi.mock('./push-dedup', () => ({ notifyUsersAtRolesOnce: vi.fn() }))
+vi.mock('./push-dedup', () => ({ notifyUsersAtRolesOnce: vi.fn(), notifyUsersOnce: vi.fn() }))
 vi.mock('./roster-runway-data', () => ({ fetchRosterRunways: vi.fn() }))
 vi.mock('./log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
 
@@ -18,10 +18,12 @@ const {
   SHIFT_REMINDERS_HEARTBEAT, ROSTER_RUNWAY_HEARTBEAT, SHIFT_ARM_FAULT_KEYS,
   shiftReminderArmHealthy, runwayArmHealthy,
   SHIFT_TIME_CHANGES_HEARTBEAT, TIME_CHANGE_ARM_FAULT_KEYS, timeChangeArmHealthy,
+  QUALIFICATION_DIGEST_HEARTBEAT, qualificationDigestArmHealthy,
 } = await import('./cron-arm-health')
 const { runShiftReminders } = await import('./shift-reminders')
 const { runRosterRunwayAlerts } = await import('./roster-runway-notify')
 const { runShiftTimeChangeNotices } = await import('./block-edit-notify')
+const { runQualificationDigest } = await import('./qualification-digest')
 
 const SHIFT_CLEAN = {
   quiet_hours: 0, shift_candidates: 2, shift_pushed: 1, shift_emailed: 0, shift_skipped_dup: 1,
@@ -161,3 +163,22 @@ describe('timeChangeArmHealthy', () => {
   })
 })
 
+// QUALS.1 — the weekly qualification digest arm of contract-reminders.
+describe('qualification-digest', () => {
+  it('names its row, and judges an outcome the way the runway arm does', () => {
+    expect(QUALIFICATION_DIGEST_HEARTBEAT).toBe('qualification-digest')
+    const clean = { organizations: 1, recipients: 1, rows: 0, nothing_due: 1, quiet_hours: 0, sent: 0, emailed: 0, email_failed: 0, deduped: 0, failed: 1, stamp_failed: 1 }
+    expect(qualificationDigestArmHealthy(clean)).toBe(true) // a delivery failure or a lost week stamp is not an arm fault
+    expect(qualificationDigestArmHealthy({ error: 'locations read failed: down' })).toBe(false)
+    expect(qualificationDigestArmHealthy(undefined)).toBe(false)
+    expect(qualificationDigestArmHealthy([])).toBe(false)
+  })
+
+  it('drift guard: the REAL arm with no studios returns an outcome that stamps', async () => {
+    const empty = { data: [], error: null }
+    const db = { from: () => { const b = { select: () => b, eq: () => b, then: (r, j) => Promise.resolve(empty).then(r, j) }; return b } }
+    const outcome = await runQualificationDigest(db, { nowMs: Date.parse('2026-09-28T08:00:00Z') })
+    expect(outcome).toMatchObject({ organizations: 0, recipients: 0, sent: 0 })
+    expect(qualificationDigestArmHealthy(outcome)).toBe(true)
+  })
+})
