@@ -38,7 +38,8 @@ function req(body, url = 'http://x/api/schedule/allowances') {
 }
 
 // links: which locations PID belongs to. existing: current allowance row or null.
-function buildDb({ links = ['loc-1'], existing = null, existingError = null, employmentType = 'fte', entitlement = null }) {
+function buildDb({ links = ['loc-1'], existing = null, existingError = null, employmentType = 'fte', entitlement = null, pending = [], pendingError = null }) {
+  const pendingCalls = []
   const upsertSpy = vi.fn()
   const one = (data) => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data, error: null }) }) })
   const db = {
@@ -57,10 +58,21 @@ function buildDb({ links = ['loc-1'], existing = null, existingError = null, emp
           upsert: (row) => { upsertSpy(row); return { select: () => ({ single: () => Promise.resolve({ data: row, error: null }) }) } },
         }
       }
+      // LEAVEDAYS.1 — getPendingHolidayDays: select → eq ×3 → gte → lte, awaited.
+      if (t === 'time_off_requests') {
+        const chain = {
+          select: (cols) => { pendingCalls.push(['select', cols]); return chain },
+          eq: (...a) => { pendingCalls.push(['eq', ...a]); return chain },
+          gte: (...a) => { pendingCalls.push(['gte', ...a]); return chain },
+          lte: (...a) => { pendingCalls.push(['lte', ...a]); return chain },
+          then: (res, rej) => Promise.resolve({ data: pendingError ? null : pending, error: pendingError }).then(res, rej),
+        }
+        return chain
+      }
       throw new Error(t)
     },
   }
-  return { db, upsertSpy }
+  return { db, upsertSpy, pendingCalls }
 }
 
 beforeEach(() => { createServerClient.mockReset(); getCurrentUser.mockReset() })
@@ -188,5 +200,52 @@ describe('allowance defaults', () => {
     createServerClient.mockReturnValue(buildDb({ employmentType: 'contractor', existing: { total_days: 20, used_days: 1, carried_over: 0 } }).db)
     const json = await (await GET(req(null, url))).json()
     expect(json.data.not_applicable).toBe(true)
+  })
+})
+
+// LEAVEDAYS.1 — the form judged "exceeds balance" on `remaining`, while the
+// POST refuses on remaining MINUS pending holiday days. The GET now reports
+// that sum, from the function the POST uses (getPendingHolidayDays).
+describe('pending_days', () => {
+  const ME = { id: PID, ...at('staff') }
+  const url = `http://x/api/schedule/allowances?profile_id=${PID}&year=2026`
+
+  it('is reported beside an existing row, and `remaining` keeps its meaning (pending NOT deducted)', async () => {
+    getCurrentUser.mockResolvedValue(ME)
+    const { db, pendingCalls } = buildDb({ existing: { total_days: 20, used_days: 17, carried_over: 0 }, pending: [{ total_days: 1 }, { total_days: '1.0' }] })
+    createServerClient.mockReturnValue(db)
+    const json = await (await GET(req(null, url))).json()
+    expect(json.data).toMatchObject({ total_days: 20, used_days: 17, remaining: 3, pending_days: 2 })
+    expect(pendingCalls).toEqual([
+      ['select', 'total_days'],
+      ['eq', 'profile_id', PID], ['eq', 'type', 'holiday'], ['eq', 'status', 'pending'],
+      ['gte', 'start_date', '2026-01-01'], ['lte', 'start_date', '2026-12-31'],
+    ])
+  })
+
+  it('is reported when there is no row yet', async () => {
+    getCurrentUser.mockResolvedValue(ME)
+    createServerClient.mockReturnValue(buildDb({ entitlement: 15, pending: [{ total_days: 4 }] }).db)
+    const json = await (await GET(req(null, url))).json()
+    expect(json.data).toMatchObject({ total_days: 15, remaining: 15, pending_days: 4 })
+  })
+
+  it('is 0, not absent, when nothing is pending', async () => {
+    getCurrentUser.mockResolvedValue(ME)
+    createServerClient.mockReturnValue(buildDb({}).db)
+    expect((await (await GET(req(null, url))).json()).data.pending_days).toBe(0)
+  })
+
+  it('an unreadable sum is OMITTED, never 0, and the allowance still loads', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    getCurrentUser.mockResolvedValue(ME)
+    createServerClient.mockReturnValue(buildDb({ existing: { total_days: 20, used_days: 2, carried_over: 0 }, pendingError: { message: 'down' } }).db)
+    const res = await GET(req(null, url))
+    const json = await res.json()
+    expect(res.status).toBe(200)
+    expect(json.data.remaining).toBe(18)
+    expect(json.data).not.toHaveProperty('pending_days')
+    expect(errors).toHaveBeenCalled()
+    errors.mockRestore()
   })
 })

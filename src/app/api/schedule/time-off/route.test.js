@@ -41,7 +41,7 @@ function req(body) {
 function buildDb({
   overlapping = [], overlappingError = null,
   allowance = null, allowanceByYear = null,
-  pendingHoliday = [],
+  pendingHoliday = [], pendingError = null,
   employmentType = 'fte',
   entitlement = null,
   subjectLocations = ['loc-1'],
@@ -89,7 +89,7 @@ function buildDb({
       }
       // The holiday allowance check reads only total_days; everything
       // else selected here is the overlap probe.
-      if (cols === 'total_days') return { data: pendingHoliday, error: null }
+      if (cols === 'total_days') return { data: pendingError ? null : pendingHoliday, error: pendingError }
       return { data: overlappingError ? null : overlapping, error: overlappingError }
     }
     throw new Error(q.table)
@@ -191,6 +191,45 @@ describe('POST /api/schedule/time-off — request integrity', () => {
 
 // HOLIDAYLEAVE.1 — a bank holiday, or a day the studio is closed, inside a
 // holiday request costs no allowance.
+// LEAVEDAYS.1 — the pending sum moved into getPendingHolidayDays so the
+// allowances GET can report the same number the refusal is judged on. These pin
+// the refusal itself across that move.
+describe('POST /api/schedule/time-off — pending holiday requests count against the balance', () => {
+  it('3 remaining with 2 pending: a 2-day request is refused, naming the NET figure', async () => {
+    getCurrentUser.mockResolvedValue(USER)
+    const { db, insertSpy } = buildDb({
+      allowance: { total_days: 20, used_days: 17, carried_over: 0 },
+      pendingHoliday: [{ total_days: 2 }],
+    })
+    createServerClient.mockReturnValue(db)
+    // Fri 12 Jun to Mon 15 Jun: 2 working days.
+    const res = await POST(req({ type: 'holiday', start_date: '2026-06-12', end_date: '2026-06-15' }))
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toBe('Insufficient holiday balance. You have 1 days remaining (including pending requests).')
+    expect(insertSpy).not.toHaveBeenCalled()
+    const pendingRead = db.queries.find((q) => q.table === 'time_off_requests' && q.columns === 'total_days')
+    expect(pendingRead.eq).toEqual({ profile_id: 'c', type: 'holiday', status: 'pending' })
+    expect(pendingRead.calls).toContainEqual(['gte', 'start_date', '2026-01-01'])
+    expect(pendingRead.calls).toContainEqual(['lte', 'start_date', '2026-12-31'])
+  })
+
+  it('the same request fits once nothing is pending', async () => {
+    getCurrentUser.mockResolvedValue(USER)
+    const { db } = buildDb({ allowance: { total_days: 20, used_days: 17, carried_over: 0 } })
+    createServerClient.mockReturnValue(db)
+    expect((await POST(req({ type: 'holiday', start_date: '2026-06-12', end_date: '2026-06-15' }))).status).toBe(201)
+  })
+
+  it('500 (no insert) when the pending read fails: an unreadable sum is not "nothing pending"', async () => {
+    getCurrentUser.mockResolvedValue(USER)
+    const { db, insertSpy } = buildDb({ pendingError: { message: 'down' } })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(req({ type: 'holiday', start_date: '2026-06-12', end_date: '2026-06-15' }))
+    expect(res.status).toBe(500)
+    expect(insertSpy).not.toHaveBeenCalled()
+  })
+})
+
 describe('POST /api/schedule/time-off — bank holidays are not charged', () => {
   it('Mon 1 Jun (June Public Holiday) to Sun 7 Jun is 4 days, not 5', async () => {
     getCurrentUser.mockResolvedValue(USER)
