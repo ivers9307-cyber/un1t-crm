@@ -67,29 +67,25 @@ export async function readReplaceContext(db, { assignmentId, toProfileId }) {
 }
 
 /**
- * The move. Returns { ok: true, closedSwapIds } | { code } (a
- * refusal code for replaceRefusalResponse) | { error } (500).
+ * The move. Returns { ok: true, closedSwapIds } | { code } (a refusal code
+ * for replaceRefusalResponse) | { error } (500).
  *
- *   1. B's cancelled tombstone on the block is deleted: the (block_id,
- *      profile_id) key (mig 067) does not care that it is cancelled.
- *   2. ONE UPDATE moves A's row to B under four guards: the id, A still owns
- *      it, it is live, A has not arrived. Zero rows = it changed since the read.
- *      23505 = B is on the block (the key is the race-proof half of the check).
- *      Everything that described A's shift is cleared (SWAP_MOVE_CLEARS +
- *      notes); B starts clean on the block's window.
+ *   1. ONE UPDATE moves A's row to B under four guards: the id, A still owns
+ *      it, it is live, A has not arrived. Zero rows = it changed since the
+ *      read. Everything that described A's shift is cleared (SWAP_MOVE_CLEARS
+ *      + notes); B starts clean on the block's window.
+ *   2. 23505 on the (block_id, profile_id) key (mig 067): B already has a row
+ *      on the block. If it is B's CANCELLED tombstone, that row is deleted and
+ *      the move tried once more (the key does not care that it is cancelled;
+ *      the assign route clears it the same way). Review 5: the tombstone is
+ *      history, so it is deleted only when it is what refuses the move, never
+ *      up front. No tombstone to clear, or 23505 again = B is live on it.
  *   3. Open swaps about that row are closed as the manager's decision. A
  *      failure here is logged and the replace stands: the approval RPCs
  *      (mig 615) refuse such a swap as swap_stale.
  */
 export async function replaceShiftAssignment(db, { assignment, toProfileId, actorId, nowIso }) {
-  const { error: tombErr } = await db.from('shift_assignments')
-    .delete()
-    .eq('block_id', assignment.block_id)
-    .eq('profile_id', toProfileId)
-    .eq('status', 'cancelled')
-  if (tombErr) return { error: tombErr }
-
-  const { data: moved, error: moveErr } = await db.from('shift_assignments')
+  const move = () => db.from('shift_assignments')
     .update({
       profile_id: toProfileId,
       status: 'scheduled',
@@ -103,7 +99,20 @@ export async function replaceShiftAssignment(db, { assignment, toProfileId, acto
     .neq('status', 'cancelled')
     .is('arrived_at', null)
     .select('id')
-  if (moveErr?.code === '23505') return { code: 'already_on_shift' }
+
+  let { data: moved, error: moveErr } = await move()
+  if (moveErr?.code === '23505') {
+    const { data: cleared, error: tombErr } = await db.from('shift_assignments')
+      .delete()
+      .eq('block_id', assignment.block_id)
+      .eq('profile_id', toProfileId)
+      .eq('status', 'cancelled')
+      .select('id')
+    if (tombErr) return { error: tombErr }
+    if (!cleared || cleared.length === 0) return { code: 'already_on_shift' }
+    ;({ data: moved, error: moveErr } = await move())
+    if (moveErr?.code === '23505') return { code: 'already_on_shift' }
+  }
   if (moveErr) return { error: moveErr }
   if (!moved || moved.length === 0) return { code: 'changed' }
 

@@ -185,9 +185,24 @@ describe('POST /replace — the log pair and ONE notice each', () => {
     expect(logRosterChange).toHaveBeenCalledTimes(2)
     expect(notifyRosterChanges).not.toHaveBeenCalled()
   })
-  it('quiet hours and a log row not written: that held notice is lost, so it is logged loudly', async () => {
+  // Review 5 — out of band the row IS the held notice, so a failed insert is
+  // tried once more before the loss is logged.
+  it('quiet hours: a change-log insert that fails once is retried, and nothing is logged when the retry lands', async () => {
     vi.setSystemTime(QUIET)
     logRosterChange.mockResolvedValueOnce({ logged: false, reason: 'error' })
+    expect((await call()).status).toBe(200)
+    expect(logRosterChange).toHaveBeenCalledTimes(3) // A's twice, B's once
+    expect(logRosterChange.mock.calls[1][1]).toEqual(logRosterChange.mock.calls[0][1])
+    expect(logError).not.toHaveBeenCalled()
+  })
+  it('in band the insert is not retried: the notice does not depend on it', async () => {
+    logRosterChange.mockResolvedValueOnce({ logged: false, reason: 'error' })
+    await call()
+    expect(logRosterChange).toHaveBeenCalledTimes(2)
+  })
+  it('quiet hours and a log row not written twice: that held notice is lost, so it is logged loudly', async () => {
+    vi.setSystemTime(QUIET)
+    logRosterChange.mockResolvedValueOnce({ logged: false, reason: 'error' }).mockResolvedValueOnce({ logged: false, reason: 'error' })
     const res = await call()
     expect(res.status).toBe(200)
     expect(logError).toHaveBeenCalledWith('shift-replace', expect.stringMatching(/will not be sent/),

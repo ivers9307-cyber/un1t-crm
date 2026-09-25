@@ -153,8 +153,8 @@ describe('a row written because the staff member was deleted (mig 622)', () => {
 describe('REPLACE.1a — a replace undone before anyone was told (the held-notice arm stamps it silently)', () => {
   const undone = (over = {}) => row({ action: 'unassigned', details: { via: 'replace', reason: 'replace_undone' }, ...over })
 
-  it('says so, in place of "(coach replaced)"', () => {
-    expect(rosterChangeSentence(undone())).toBe('Removed Coach A from Tue 15 Sep 6am (coach replaced, then undone before anyone was told)')
+  it('says so, neutrally, in place of "(coach replaced)"', () => {
+    expect(rosterChangeSentence(undone())).toBe('Removed Coach A from Tue 15 Sep 6am (changed again before anyone was told)')
   })
 
   it('its stamp is not a message: no told state', () => {

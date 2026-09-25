@@ -69,17 +69,17 @@ describe('replaceShiftAssignment', () => {
   const NOW = '2026-09-28T20:00:00.000Z'
   const run = (db) => replaceShiftAssignment(db, { assignment: A_ROW, toProfileId: 'coach-b', actorId: 'mgr-1', nowIso: NOW })
 
-  it('clears B\'s tombstone, moves the row under all four guards, clears what described A, closes open swaps', async () => {
+  const MOVED = { data: [{ id: 'as-1' }], error: null }
+  const DUP = { data: null, error: { code: '23505', message: 'dup' } }
+
+  it('moves the row under all four guards, clears what described A, closes open swaps; no tombstone is touched when none is in the way', async () => {
     const db = scriptedDb({
-      shift_assignments: [{ data: null, error: null }, { data: [{ id: 'as-1' }], error: null }],
+      shift_assignments: [MOVED],
       shift_swap_requests: [{ data: [{ id: 'sw-1' }], error: null }],
     })
     expect(await run(db)).toEqual({ ok: true, closedSwapIds: ['sw-1'] })
 
-    const [tomb, move] = chainsFor(db, 'shift_assignments')
-    expect(argsOf(tomb, 'delete')).toEqual([])
-    expect(allArgsOf(tomb, 'eq')).toEqual([['block_id', 'b1'], ['profile_id', 'coach-b'], ['status', 'cancelled']])
-
+    const [move] = chainsFor(db, 'shift_assignments')
     expect(argsOf(move, 'update')[0]).toEqual({
       profile_id: 'coach-b', status: 'scheduled',
       start_time_override: null, end_time_override: null, partial_reason: null, arrived_at: null, arrival_source: null,
@@ -96,28 +96,52 @@ describe('replaceShiftAssignment', () => {
     expect(argsOf(swaps, 'in')).toEqual(['status', ['pending', 'awaiting_approval']])
   })
 
-  it('zero rows moved = the shift changed underneath: no swap is touched', async () => {
-    const db = scriptedDb({ shift_assignments: [{ data: null, error: null }, { data: [], error: null }] })
-    expect(await run(db)).toEqual({ code: 'changed' })
-    expect(chainsFor(db, 'shift_swap_requests')).toEqual([])
+  // Review 5 — B's cancelled tombstone on the block is history ("was rostered,
+  // pulled out"). It is deleted only when it is what refuses the move (the
+  // (block_id, profile_id) key does not care that it is cancelled), and the
+  // move is then tried once more.
+  it('a 23505 from B\'s cancelled tombstone: that row is deleted, then the move is retried once', async () => {
+    const db = scriptedDb({
+      shift_assignments: [DUP, { data: [{ id: 'tomb-b' }], error: null }, MOVED],
+      shift_swap_requests: [{ data: [], error: null }],
+    })
+    expect(await run(db)).toEqual({ ok: true, closedSwapIds: [] })
+    const [, tomb, retry] = chainsFor(db, 'shift_assignments')
+    expect(argsOf(tomb, 'delete')).toEqual([])
+    expect(allArgsOf(tomb, 'eq')).toEqual([['block_id', 'b1'], ['profile_id', 'coach-b'], ['status', 'cancelled']])
+    expect(argsOf(tomb, 'select')).toEqual(['id'])
+    expect(allArgsOf(retry, 'eq')).toEqual([['id', 'as-1'], ['profile_id', 'coach-a']])
   })
 
-  it('23505 = B is already on the block (the unique key is the race-proof half)', async () => {
-    const db = scriptedDb({ shift_assignments: [{ data: null, error: null }, { data: null, error: { code: '23505', message: 'dup' } }] })
+  it('23505 with no tombstone to clear = B is live on the block: already_on_shift, no retry', async () => {
+    const db = scriptedDb({ shift_assignments: [DUP, { data: [], error: null }] })
+    expect(await run(db)).toEqual({ code: 'already_on_shift' })
+    expect(chainsFor(db, 'shift_assignments')).toHaveLength(2)
+  })
+
+  it('23505 again on the retry = already_on_shift (B arrived on it meanwhile)', async () => {
+    const db = scriptedDb({ shift_assignments: [DUP, { data: [{ id: 'tomb-b' }], error: null }, DUP] })
     expect(await run(db)).toEqual({ code: 'already_on_shift' })
   })
 
-  it('a failed tombstone clear or move is an error; nothing after it runs', async () => {
-    const db1 = scriptedDb({ shift_assignments: [{ data: null, error: { message: 'no' } }] })
-    expect(await run(db1)).toEqual({ error: { message: 'no' } })
-    const db2 = scriptedDb({ shift_assignments: [{ data: null, error: null }, { data: null, error: { message: 'down' } }] })
-    expect(await run(db2)).toEqual({ error: { message: 'down' } })
-    expect(chainsFor(db2, 'shift_swap_requests')).toEqual([])
+  it('zero rows moved = the shift changed underneath: no swap is touched, no tombstone deleted', async () => {
+    const db = scriptedDb({ shift_assignments: [{ data: [], error: null }] })
+    expect(await run(db)).toEqual({ code: 'changed' })
+    expect(chainsFor(db, 'shift_swap_requests')).toEqual([])
+    expect(chainsFor(db, 'shift_assignments')).toHaveLength(1)
+  })
+
+  it('a failed move or tombstone clear is an error; nothing after it runs', async () => {
+    const db1 = scriptedDb({ shift_assignments: [{ data: null, error: { message: 'down' } }] })
+    expect(await run(db1)).toEqual({ error: { message: 'down' } })
+    expect(chainsFor(db1, 'shift_swap_requests')).toEqual([])
+    const db2 = scriptedDb({ shift_assignments: [DUP, { data: null, error: { message: 'no' } }] })
+    expect(await run(db2)).toEqual({ error: { message: 'no' } })
   })
 
   it('a failed swap close is LOGGED and the replace stands (the approval RPC refuses a stale swap anyway)', async () => {
     const db = scriptedDb({
-      shift_assignments: [{ data: null, error: null }, { data: [{ id: 'as-1' }], error: null }],
+      shift_assignments: [MOVED],
       shift_swap_requests: [{ data: null, error: { message: 'swap table down' } }],
     })
     expect(await run(db)).toEqual({ ok: true, closedSwapIds: [] })

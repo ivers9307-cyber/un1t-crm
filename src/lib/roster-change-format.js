@@ -37,7 +37,7 @@ export const ROSTER_CHANGE_LOG_MAX_ROWS = 5000
 
 const REASON_NOTE = {
   staff_permanent_delete: 'staff member deleted',
-  replace_undone: 'coach replaced, then undone before anyone was told', // REPLACE.1a
+  replace_undone: 'changed again before anyone was told', // REPLACE.1a (review 5: neutral)
   replace_shift_started: 'coach replaced, not sent: the shift had started', // REPLACE.1a review 3
   replace_shift_deleted: 'coach replaced, not sent: the shift was deleted', // REPLACE.1a review 4
 }

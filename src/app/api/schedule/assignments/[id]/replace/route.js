@@ -104,7 +104,7 @@ export async function POST(request, props) {
     // Best-effort (logRosterChange never throws). Written after the move
     // succeeded, so the log never claims a replace that did not happen.
     for (const c of changes) {
-      const logged = await logRosterChange(db, {
+      const row = {
         isPublished: true,
         locationId: ctx.block.location_id,
         blockId: c.blockId,
@@ -113,10 +113,15 @@ export async function POST(request, props) {
         coachId: c.coachId,
         action: c.action,
         details: { via: REPLACE_VIA },
-      })
+      }
+      let logged = await logRosterChange(db, row)
       // Out of band the row IS the held notice: the */5 arm sends what it
-      // finds. A row that was not written is a notice nobody will send, so
-      // say so loudly (the replace itself stands).
+      // finds. So a failed insert is tried once more (review 5), and a row
+      // still not written is a notice nobody will send: said loudly (the
+      // replace itself stands). In band the notice goes from after() either way.
+      if (!logged?.logged && logged?.reason === 'error' && notice === 'morning') {
+        logged = await logRosterChange(db, row)
+      }
       if (!logged?.logged && notice === 'morning') {
         logError('shift-replace', 'replace change-log row not written; its held notice will not be sent', {
           assignmentId: ctx.assignment.id, coachId: c.coachId, action: c.action, reason: logged?.reason ?? null,
