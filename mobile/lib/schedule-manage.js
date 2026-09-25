@@ -128,3 +128,87 @@ export function canCancelTimeOff(row, profile) {
   if (!row?.profile_id || !profile?.id) return false
   return row.profile_id === profile.id
 }
+
+// MANAGEMODE.1 — Manage mode's roster load, decided here so it can be tested
+// (there is no React Native component runner). The web calendar learnt these
+// rules in ROSTER-FIX.6a / 6a-9 / ROSTERLOAD.1 (src/components/schedule/
+// useScheduleData.js); the phone blanked the roster on ANY failed load,
+// including a background refresh of the week already on screen.
+//
+//   success                        → replace, remember what it was loaded for
+//   fail, SAME location+week       → keep what is on screen, say it is stale
+//   fail, different location/week  → clear: the old week's blocks under the
+//                                    new week's dates read as "nobody is
+//                                    rostered", and a manager acts on it
+//   401                            → today's handling, unchanged: clear and
+//                                    show the server's words, no Retry (a
+//                                    retry of a dead session fails the same
+//                                    way). Deliberately NOT the web's rule,
+//                                    which keeps a same-week roster on a 401.
+//
+// `blocks: undefined` means "leave state alone". Request ORDERING (a slow
+// older answer landing after a newer one) is the caller's generation counter;
+// this only judges an answer that is still current.
+
+/** What a loaded roster belongs to: location AND week. */
+export function rosterKey(locationId, weekStart, weekEnd) {
+  return `${locationId}|${weekStart}..${weekEnd}`
+}
+
+export const ROSTER_LOAD_FAILED = 'Failed to load roster'
+
+/**
+ * @param {{ res: any, requestedKey: string, loadedKey: string|null }} args
+ * @returns {{ blocks?: any[], loadedKey: string|null, error: string|null, stale: boolean, canRetry: boolean }}
+ */
+export function rosterLoadOutcome({ res, requestedKey, loadedKey }) {
+  if (res?.success) {
+    const data = res.data
+    if (data == null) return { blocks: [], loadedKey: requestedKey, error: null, stale: false, canRetry: false }
+    if (Array.isArray(data)) return { blocks: data, loadedKey: requestedKey, error: null, stale: false, canRetry: false }
+    res = { success: false, error: 'The server sent an answer this screen could not read.' }
+  }
+  const reason = res?.error || ROSTER_LOAD_FAILED
+  if (res?.status === 401) return { blocks: [], loadedKey: null, error: reason, stale: false, canRetry: false }
+  if (loadedKey !== null && loadedKey === requestedKey) {
+    return { loadedKey, error: reason, stale: true, canRetry: true }
+  }
+  return { blocks: [], loadedKey: null, error: `The roster could not be loaded. ${reason}`, stale: false, canRetry: true }
+}
+
+// MANAGEMODE.1 (review) — may a load write state? Two independent reasons it
+// may not, and the generation counter alone only covers the first:
+//   - a NEWER load started since (gen !== currentGen), or
+//   - it asked for a location+week the screen has since LEFT. An assign or
+//     remove calls load() from the render it started in; if the manager
+//     paged weeks or switched studio while it was in flight, that load
+//     fetches the old key, and being the newest it would beat the correct
+//     one and paint studio A's roster under studio B. The caller checks this
+//     BEFORE bumping the generation too, so such a load never starts.
+export function isCurrentLoad({ gen, currentGen, requestedKey, currentKey }) {
+  return gen === currentGen && requestedKey === currentKey
+}
+
+// MANAGEMODE.1 — the coach picker's pool. A failed load used to store `[]`,
+// which (a) the picker rendered as "No available coaches to add." and (b)
+// ManageMode's openPicker, which only fetches while the pool is `null`, never
+// retried for the life of the mount. A failed FIRST load now stays `null`
+// (the next open retries) and says why; a failed REFRESH of a pool already
+// loaded keeps that pool, since an assign/remove refresh is background work.
+export const STAFF_LOAD_FAILED = 'The coach list could not be loaded. Try again.'
+
+/**
+ * @param {{ res: any, current: any[]|null }} args
+ * @returns {{ staff: any[]|null, error: string|null }}
+ */
+export function staffLoadOutcome({ res, current }) {
+  if (res?.success) {
+    if (res.data == null) return { staff: [], error: null }
+    if (Array.isArray(res.data)) return { staff: res.data, error: null }
+  }
+  if (Array.isArray(current)) return { staff: current, error: null }
+  // The server's reason rides along: a 403 and a network blip are different
+  // things to act on (the Alert this replaced showed it too).
+  const reason = !res?.success && res?.error ? ` (${res.error})` : ''
+  return { staff: null, error: `${STAFF_LOAD_FAILED}${reason}` }
+}

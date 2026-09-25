@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   blockFillState, liveBlockAssignments, adjustTargetFor, assignmentWindow,
   filterAssignableCoaches, canAdjustShiftTimes, canCancelTimeOff, scheduleViewFromParam,
+  rosterKey, rosterLoadOutcome, staffLoadOutcome, STAFF_LOAD_FAILED, isCurrentLoad,
 } from './schedule-manage'
 import { blockStart, blockEnd } from './schedule-team'
 
@@ -206,5 +207,139 @@ describe('scheduleViewFromParam', () => {
     for (const v of ['', 'me', 'team', 'MANAGE', undefined, null, ['manage']]) {
       expect(scheduleViewFromParam(v, 'owner')).toBeNull()
     }
+  })
+})
+
+describe('rosterLoadOutcome (MANAGEMODE.1)', () => {
+  const KEY = rosterKey('loc-a', '2026-09-21', '2026-09-27')
+  const OTHER_WEEK = rosterKey('loc-a', '2026-09-28', '2026-10-04')
+  const OTHER_LOC = rosterKey('loc-b', '2026-09-21', '2026-09-27')
+  const rows = [{ id: 'b1' }, { id: 'b2' }]
+
+  it('keys the roster by location AND week', () => {
+    expect(KEY).not.toBe(OTHER_WEEK)
+    expect(KEY).not.toBe(OTHER_LOC)
+  })
+
+  it('a success replaces the roster and records what it was loaded for', () => {
+    const out = rosterLoadOutcome({ res: { success: true, data: rows }, requestedKey: KEY, loadedKey: null })
+    expect(out).toEqual({ blocks: rows, loadedKey: KEY, error: null, stale: false, canRetry: false })
+  })
+
+  it('a success with no data is an empty roster, as before', () => {
+    expect(rosterLoadOutcome({ res: { success: true }, requestedKey: KEY, loadedKey: null }).blocks).toEqual([])
+  })
+
+  it('a success whose data is not a list is a failure, not a crash in .filter', () => {
+    const out = rosterLoadOutcome({ res: { success: true, data: { oops: 1 } }, requestedKey: KEY, loadedKey: KEY })
+    expect(out.blocks).toBeUndefined()
+    expect(out.stale).toBe(true)
+    expect(out.error).toMatch(/could not read/i)
+  })
+
+  it('a failed refresh of the SAME week+location keeps the roster on screen and says it is stale', () => {
+    const out = rosterLoadOutcome({ res: { success: false, transport: true, error: 'Network error: offline' }, requestedKey: KEY, loadedKey: KEY })
+    expect(out.blocks).toBeUndefined() // undefined = leave state alone
+    expect(out.loadedKey).toBe(KEY)
+    expect(out.stale).toBe(true)
+    expect(out.error).toBe('Network error: offline')
+  })
+
+  it('a failed load of a DIFFERENT week clears rather than mislabelling the old week', () => {
+    const out = rosterLoadOutcome({ res: { success: false, status: 500, error: 'HTTP 500' }, requestedKey: OTHER_WEEK, loadedKey: KEY })
+    expect(out.blocks).toEqual([])
+    expect(out.loadedKey).toBe(null)
+    expect(out.stale).toBe(false)
+    expect(out.error).toMatch(/could not be loaded/i)
+    expect(out.error).toMatch(/HTTP 500/)
+  })
+
+  it('a failed load of a DIFFERENT location clears too', () => {
+    const out = rosterLoadOutcome({ res: { success: false, error: 'x' }, requestedKey: OTHER_LOC, loadedKey: KEY })
+    expect(out.blocks).toEqual([])
+    expect(out.stale).toBe(false)
+  })
+
+  it('a first load that fails clears (nothing to keep)', () => {
+    const out = rosterLoadOutcome({ res: { success: false, error: 'x' }, requestedKey: KEY, loadedKey: null })
+    expect(out.blocks).toEqual([])
+    expect(out.stale).toBe(false)
+  })
+
+  it('a 401 keeps today\'s handling: the roster clears and the server\'s words show', () => {
+    const out = rosterLoadOutcome({ res: { success: false, status: 401, error: 'Unauthorized' }, requestedKey: KEY, loadedKey: KEY })
+    expect(out.blocks).toEqual([])
+    expect(out.loadedKey).toBe(null)
+    expect(out.stale).toBe(false)
+    expect(out.error).toBe('Unauthorized')
+  })
+
+  it('a 401 with nothing loaded, or on another week, also clears with no Retry', () => {
+    for (const loadedKey of [null, OTHER_WEEK]) {
+      const out = rosterLoadOutcome({ res: { success: false, status: 401, error: 'Unauthorized' }, requestedKey: KEY, loadedKey })
+      expect(out).toEqual({ blocks: [], loadedKey: null, error: 'Unauthorized', stale: false, canRetry: false })
+    }
+  })
+
+  it('every other failure offers Retry', () => {
+    expect(rosterLoadOutcome({ res: { success: false }, requestedKey: KEY, loadedKey: KEY }).canRetry).toBe(true)
+    expect(rosterLoadOutcome({ res: { success: false }, requestedKey: KEY, loadedKey: OTHER_WEEK }).canRetry).toBe(true)
+  })
+
+  it('a non-list body for a DIFFERENT key clears with the could-not-read reason', () => {
+    const out = rosterLoadOutcome({ res: { success: true, data: 'nope' }, requestedKey: OTHER_WEEK, loadedKey: KEY })
+    expect(out.blocks).toEqual([])
+    expect(out.stale).toBe(false)
+    expect(out.error).toMatch(/could not read/i)
+  })
+
+  it('a failure with no message still says something', () => {
+    expect(rosterLoadOutcome({ res: { success: false }, requestedKey: KEY, loadedKey: KEY }).error).toBeTruthy()
+    expect(rosterLoadOutcome({ res: undefined, requestedKey: KEY, loadedKey: null }).error).toBeTruthy()
+  })
+})
+
+describe('staffLoadOutcome (MANAGEMODE.1)', () => {
+  const coaches = [{ id: 'c1', full_name: 'A' }]
+
+  it('a success stores the list and clears any error', () => {
+    expect(staffLoadOutcome({ res: { success: true, data: coaches }, current: null })).toEqual({ staff: coaches, error: null })
+  })
+
+  it('a success with no data is an empty (loaded) list', () => {
+    expect(staffLoadOutcome({ res: { success: true }, current: null })).toEqual({ staff: [], error: null })
+  })
+
+  it('a failed FIRST load stays null so the next picker open retries, and says why', () => {
+    const out = staffLoadOutcome({ res: { success: false, error: 'HTTP 500' }, current: null })
+    expect(out.staff).toBe(null)
+    expect(out.error).toBe(`${STAFF_LOAD_FAILED} (HTTP 500)`)
+  })
+
+  it('a failed REFRESH keeps the list already loaded (no empty picker, no error)', () => {
+    expect(staffLoadOutcome({ res: { success: false, error: 'x' }, current: coaches })).toEqual({ staff: coaches, error: null })
+  })
+
+  it('a non-list body is a failure', () => {
+    expect(staffLoadOutcome({ res: { success: true, data: 'nope' }, current: null })).toEqual({ staff: null, error: STAFF_LOAD_FAILED })
+  })
+
+  it('a non-list body on REFRESH keeps the loaded list', () => {
+    expect(staffLoadOutcome({ res: { success: true, data: 'nope' }, current: coaches })).toEqual({ staff: coaches, error: null })
+  })
+})
+
+describe('isCurrentLoad (MANAGEMODE.1 review)', () => {
+  const A = rosterKey('loc-a', '2026-09-21', '2026-09-27')
+  const B = rosterKey('loc-b', '2026-09-21', '2026-09-27')
+  it('the newest load for the key on screen may write', () => {
+    expect(isCurrentLoad({ gen: 3, currentGen: 3, requestedKey: A, currentKey: A })).toBe(true)
+  })
+  it('a superseded load may not', () => {
+    expect(isCurrentLoad({ gen: 2, currentGen: 3, requestedKey: A, currentKey: A })).toBe(false)
+  })
+  it('the NEWEST load may not write if it asked for a studio or week the screen has left', () => {
+    // An assign's refresh fired from studio A's render after a switch to B.
+    expect(isCurrentLoad({ gen: 4, currentGen: 4, requestedKey: A, currentKey: B })).toBe(false)
   })
 })

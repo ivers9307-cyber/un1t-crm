@@ -7,15 +7,15 @@
 // collapsible approvals section". There is none and there never was: approvals
 // (time-off, swaps) live on the Approvals tab. Corrected rather than built,
 // because the approvals surface is not this screen's job.
-import { useState, useEffect, useCallback } from 'react'
-import { View, Text, ActivityIndicator, Alert } from 'react-native'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { View, Text, ActivityIndicator, Alert, Pressable } from 'react-native'
 import { useFocusEffect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import {
   getScheduleBlocks, getLocationStaff, assignCoachToBlock, removeAssignment,
 } from '../../lib/schedule-api'
 import { effShiftStart } from '../../lib/schedule-team'
-import { adjustTargetFor } from '../../lib/schedule-manage'
+import { adjustTargetFor, rosterKey, rosterLoadOutcome, staffLoadOutcome, isCurrentLoad } from '../../lib/schedule-manage'
 import BlockCard from './BlockCard'
 import CoachPickerSheet from './CoachPickerSheet'
 
@@ -24,17 +24,59 @@ export default function ManageMode({ activeLocation, weekStart, weekEnd, selecte
   const [blocks, setBlocks] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  // MANAGEMODE.1 — true while a failed refresh left the last good roster of
+  // THIS location+week on screen (rosterLoadOutcome decides).
+  const [stale, setStale] = useState(false)
+  const [canRetry, setCanRetry] = useState(false)
   const [busyId, setBusyId] = useState(null)
   const [staff, setStaff] = useState(null) // null = not loaded
   const [staffLoading, setStaffLoading] = useState(false)
+  const [staffError, setStaffError] = useState(null)
   const [pickerBlock, setPickerBlock] = useState(null)
 
-  const load = useCallback(async () => {
-    if (!locationId) return
-    setError(null)
-    const b = await getScheduleBlocks({ locationId, startDate: weekStart, endDate: weekEnd })
-    if (!b.success) setError(b.error || 'Failed to load roster')
-    setBlocks(b.success ? b.data || [] : [])
+  // MANAGEMODE.1 — only the newest load may write state. Paging weeks fast, a
+  // slow answer for the week just left used to land after the new week's and
+  // paint it under the new dates. `loadedKey` is what `blocks` belongs to.
+  const generation = useRef(0)
+  const loadedKey = useRef(null)
+  // MANAGEMODE.1 (review) — what is on screen NOW, read by loads that were
+  // started from an older render (an assign/remove's refresh). See
+  // isCurrentLoad: such a load for a key the screen has left never starts.
+  const currentKey = useRef(null)
+  const currentLocation = useRef(null)
+  currentKey.current = locationId ? rosterKey(locationId, weekStart, weekEnd) : null
+  currentLocation.current = locationId ?? null
+
+  // The error is NOT cleared when a load starts, only when one settles, so a
+  // persistent failure does not blink on every refresh (the web's rule).
+  //
+  // `spinner` covers the screen until THIS load settles. Only the newest load
+  // clears it: a superseded one finishing first used to drop the spinner and
+  // show the week just left under the new week's dates until the winner came.
+  const load = useCallback(async ({ spinner = false } = {}) => {
+    if (!locationId) {
+      generation.current += 1 // an in-flight answer for the old studio is dropped
+      setLoading(false)
+      return
+    }
+    const requestedKey = rosterKey(locationId, weekStart, weekEnd)
+    if (requestedKey !== currentKey.current) return
+    const gen = ++generation.current
+    if (spinner) setLoading(true)
+    let res
+    try {
+      res = await getScheduleBlocks({ locationId, startDate: weekStart, endDate: weekEnd })
+    } catch (e) {
+      res = { success: false, error: e?.message }
+    }
+    if (!isCurrentLoad({ gen, currentGen: generation.current, requestedKey, currentKey: currentKey.current })) return
+    const out = rosterLoadOutcome({ res, requestedKey, loadedKey: loadedKey.current })
+    if (out.blocks !== undefined) setBlocks(out.blocks)
+    loadedKey.current = out.loadedKey
+    setError(out.error)
+    setStale(out.stale)
+    setCanRetry(out.canRetry)
+    setLoading(false)
   }, [locationId, weekStart, weekEnd])
 
   // ROSTER-FIX.7h — ONE fetch, not two. A plain useEffect on [load] and a
@@ -47,9 +89,12 @@ export default function ManageMode({ activeLocation, weekStart, weekEnd, selecte
     // refreshKey is a bump from the screen after an adjust saves; nothing reads
     // its value, being in this dependency list IS its job.
     void refreshKey
-    setLoading(true)
-    load().finally(() => setLoading(false))
+    load({ spinner: true })
   }, [load, refreshKey]))
+
+  function retry() {
+    load({ spinner: true })
+  }
 
   const dayBlocks = blocks
     .filter((b) => b.block_date === selectedIso)
@@ -63,20 +108,47 @@ export default function ManageMode({ activeLocation, weekStart, weekEnd, selecte
   // assigning one 404s at the block. (2) `active` and `profile_locations` can
   // change under the operator, and the pool is what CoachPickerSheet filters,
   // so a stale copy re-offers someone who has just been removed everywhere.
+  //
+  // MANAGEMODE.1 — a failed load stored `[]`: the picker said "No available
+  // coaches to add." and, since openPicker only fetches while the pool is
+  // null, never tried again. staffLoadOutcome keeps a failed first load null
+  // (the next open, or the sheet's Try again, retries) with a reason for the
+  // sheet to show; a failed refresh keeps the pool already loaded. The
+  // generation drops an answer for a studio the manager has since left.
+  const staffGeneration = useRef(0)
+  // The pool as last written, for staffLoadOutcome's keep-on-refresh rule
+  // without making loadStaff depend on (and re-create with) `staff`.
+  const staffRef = useRef(null)
   const loadStaff = useCallback(async () => {
-    if (!locationId) return
+    // Same rule as load(): a refresh fired from a render for a studio the
+    // manager has since left must not start, let alone write that studio's
+    // coaches into this one's picker.
+    if (!locationId || locationId !== currentLocation.current) return
+    const gen = ++staffGeneration.current
     setStaffLoading(true)
-    const res = await getLocationStaff({ locationId })
+    let res
+    try {
+      res = await getLocationStaff({ locationId })
+    } catch (e) {
+      res = { success: false, error: e?.message }
+    }
+    if (gen !== staffGeneration.current || locationId !== currentLocation.current) return
     setStaffLoading(false)
-    setStaff(res.success ? res.data || [] : [])
-    if (!res.success) Alert.alert('Could not load staff', res.error || 'Unknown error')
+    const out = staffLoadOutcome({ res, current: staffRef.current })
+    staffRef.current = out.staff
+    setStaff(out.staff)
+    setStaffError(out.error)
   }, [locationId])
 
   // ROSTER-FIX.7h — close the picker with the pool. Dropping the staff list on
   // a location switch while the sheet stayed open left it mid-flight over the
   // new studio: an empty list, then a reload of coaches for a block that
   // belongs to the studio the manager just left.
-  useEffect(() => { setStaff(null); setPickerBlock(null) }, [locationId])
+  useEffect(() => {
+    staffGeneration.current += 1
+    staffRef.current = null
+    setStaff(null); setStaffError(null); setStaffLoading(false); setPickerBlock(null)
+  }, [locationId])
 
   // Refetch only when the pool was already loaded — a manager who never opened
   // the picker should not pay for a staff call on every assign/remove.
@@ -146,6 +218,12 @@ export default function ManageMode({ activeLocation, weekStart, weekEnd, selecte
       {error ? (
         <View className="bg-red-500/10 border border-red-500/30 rounded-xl p-3 mb-3">
           <Text className="text-red-500 text-sm">{error}</Text>
+          {stale ? <Text className="text-un1t-subtle text-xs mt-1">Showing the last roster that loaded.</Text> : null}
+          {canRetry ? (
+            <Pressable onPress={retry} hitSlop={8} className="mt-2 self-start active:opacity-60">
+              <Text className="text-sm font-semibold text-un1t-text">Retry</Text>
+            </Pressable>
+          ) : null}
         </View>
       ) : null}
 
@@ -161,7 +239,8 @@ export default function ManageMode({ activeLocation, weekStart, weekEnd, selecte
       ))}
 
       <CoachPickerSheet visible={!!pickerBlock} block={pickerBlock} locationId={locationId}
-        staff={staff} loading={staffLoading} onPick={pickCoach} onClose={() => setPickerBlock(null)} />
+        staff={staff} loading={staffLoading} error={staff === null ? staffError : null} onRetry={loadStaff}
+        onPick={pickCoach} onClose={() => setPickerBlock(null)} />
     </View>
   )
 }
