@@ -6,7 +6,7 @@
 
 import React from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, waitFor, act } from '@testing-library/react'
 import AvailabilityEditor from './AvailabilityEditor.jsx'
 
 const TODAY = '2026-09-25'
@@ -138,6 +138,43 @@ describe('AvailabilityEditor', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await screen.findByText('Start today or later')
     expect(putCount).toBe(0)
+  })
+
+  it('editing while saving is blocked, and comes back when the save settles', async () => {
+    let answer
+    global.fetch = vi.fn((url, options) => (options?.method === 'PUT'
+      ? new Promise((resolve) => { answer = resolve })
+      : Promise.resolve(ok({ success: true, data: { weekly: [MON], dated: [] } }))))
+    render(<AvailabilityEditor todayIso={TODAY} />)
+    await screen.findByLabelText('Day of the week')
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(answer).toBeTypeOf('function'))
+    // A save replaces every row with the server's answer, so anything typed
+    // now would be lost: nothing in the editor takes input until it settles.
+    for (const el of [
+      screen.getByLabelText('Day of the week'), screen.getByLabelText('From'), screen.getByLabelText('Note'),
+      screen.getByRole('button', { name: 'Remove' }),
+      screen.getByRole('button', { name: 'Add a weekly time' }), screen.getByRole('button', { name: 'Add a date' }),
+    ]) expect(el.matches(':disabled')).toBe(true)
+    await act(async () => { answer(ok({ success: true, data: { changed: false, weekly: [MON], dated: [] } })) })
+    await screen.findByText('Nothing changed.')
+    expect(screen.getByLabelText('From').matches(':disabled')).toBe(false)
+    expect(screen.getByRole('button', { name: 'Add a date' }).matches(':disabled')).toBe(false)
+  })
+
+  it('a failed save keeps edits', async () => {
+    global.fetch = vi.fn(async (url, options) => (options?.method === 'PUT'
+      ? ok({ success: false, error: 'Could not save your availability' }, 500)
+      : ok({ success: true, data: { weekly: [MON], dated: [] } })))
+    render(<AvailabilityEditor todayIso={TODAY} />)
+    await screen.findByLabelText('Day of the week')
+    fireEvent.change(screen.getByLabelText('Note'), { target: { value: 'Gym class of my own' } })
+    fireEvent.change(screen.getByLabelText('To'), { target: { value: '13:00' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await screen.findByText('Could not save your availability')
+    expect(screen.getByLabelText('Note').value).toBe('Gym class of my own')
+    expect(screen.getByLabelText('To').value).toBe('13:00')
+    expect(screen.getByLabelText('Note').matches(':disabled')).toBe(false)
   })
 
   it("shows the server's issues when it refuses", async () => {

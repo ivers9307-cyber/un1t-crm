@@ -219,17 +219,24 @@ export default function AvailabilityEditor({ todayIso }) {
         </p>
       </div>
 
-      <Card title="Every week" actions={<Button variant="secondary" size="sm" icon={Plus} onClick={() => add('weekly')}>Add a weekly time</Button>}>
-        {section('weekly').length === 0
-          ? <p className="text-sm text-un1t-subtle">No weekly times. Add one for a day you can never work, or part of one.</p>
-          : list('weekly')}
-      </Card>
+      {/* While a save is in flight nothing here takes input: a success
+          replaces every row with the server's answer, so an edit typed now
+          would silently vanish. A disabled fieldset disables every control
+          inside it, the Add and Remove buttons included. min-w-0 undoes a
+          fieldset's min-content width, which would push a phone sideways. */}
+      <fieldset disabled={saving} className="min-w-0 m-0 p-0 border-0 space-y-6">
+        <Card title="Every week" actions={<Button variant="secondary" size="sm" icon={Plus} onClick={() => add('weekly')}>Add a weekly time</Button>}>
+          {section('weekly').length === 0
+            ? <p className="text-sm text-un1t-subtle">No weekly times. Add one for a day you can never work, or part of one.</p>
+            : list('weekly')}
+        </Card>
 
-      <Card title="Dates" actions={<Button variant="secondary" size="sm" icon={Plus} onClick={() => add('dated')}>Add a date</Button>}>
-        {section('dated').length === 0
-          ? <p className="text-sm text-un1t-subtle">No dates. Add one for a day or a run of days you can&apos;t work.</p>
-          : list('dated')}
-      </Card>
+        <Card title="Dates" actions={<Button variant="secondary" size="sm" icon={Plus} onClick={() => add('dated')}>Add a date</Button>}>
+          {section('dated').length === 0
+            ? <p className="text-sm text-un1t-subtle">No dates. Add one for a day or a run of days you can&apos;t work.</p>
+            : list('dated')}
+        </Card>
+      </fieldset>
 
       <div className="flex items-center gap-3">
         <Button onClick={save} loading={saving}>Save</Button>
