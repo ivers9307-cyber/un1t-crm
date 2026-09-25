@@ -3,7 +3,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess, getUserLocationIds, hasRoleAtLocation } from '@/lib/auth'
 import { fetchApiShiftRows } from '@/lib/roster-read'
 import { fetchOwnOpenSwaps, annotateOwnOpenSwaps, ownShiftIds } from '@/lib/shift-open-swaps'
-import { MANAGER_ROLES } from '@/lib/schemas'
+import { MANAGER_ROLES, isRealCalendarDate } from '@/lib/schemas'
 
 // RETIRE-SHIFTS-MIRROR.5d — GET reads the Roster v2 model (shift_blocks +
 // shift_assignments) directly via fetchApiShiftRows, normalised to the legacy
@@ -23,6 +23,14 @@ export async function GET(request) {
   const startDate = searchParams.get('start_date')
   const endDate = searchParams.get('end_date')
   const profileId = searchParams.get('profile_id')
+  // DATECHECK.1 — these bounds reach Postgres as they are, and it refuses
+  // 2026-02-30 (the route used to hand back its error text as the 400). Refuse
+  // it here, in change-log's words. Absent or empty = no bound, as before.
+  for (const [name, value] of [['start_date', startDate], ['end_date', endDate]]) {
+    if (value && !isRealCalendarDate(value)) {
+      return NextResponse.json({ success: false, error: `${name}: not a real date` }, { status: 400 })
+    }
+  }
   const db = createServerClient()
 
   // Specific location, or fall back to all of the caller's own locations.

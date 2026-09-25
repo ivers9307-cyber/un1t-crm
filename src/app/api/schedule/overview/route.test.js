@@ -88,4 +88,16 @@ describe('GET /api/schedule/overview — role at the requested studio', () => {
     getCurrentUser.mockResolvedValue(null)
     expect((await GET(req(LOC_A))).status).toBe(401)
   })
+
+  // DATECHECK.1 — Date.UTC rolled 2026-02-30 to 2 March, the span check
+  // passed, and the reads then 500'd on Postgres's refusal.
+  it('a manager sending a date the calendar does not have gets a 400, and nothing is read', async () => {
+    getCurrentUser.mockResolvedValue(MGR_A_STAFF_B(LOC_A))
+    for (const [qs, name] of [['from=2026-02-30&to=2026-03-06', 'from'], ['from=2026-09-01&to=2026-09-31', 'to']]) {
+      const res = await GET({ url: `http://test/api/schedule/overview?${qs}&location_id=${LOC_A}` })
+      expect(res.status).toBe(400)
+      expect((await res.json()).error).toBe(`${name}: Use a real date, YYYY-MM-DD`)
+    }
+    expect(db.tables).toEqual([])
+  })
 })

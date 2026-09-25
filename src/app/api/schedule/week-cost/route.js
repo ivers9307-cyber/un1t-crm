@@ -29,7 +29,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
-import { uuidLike, isoDate, MANAGER_ROLES } from '@/lib/schemas'
+import { uuidLike, realIsoDate, MANAGER_ROLES } from '@/lib/schemas'
 import { computeWeeklyFteHours } from '@/lib/roster-week-cost'
 
 export const runtime = 'nodejs'
@@ -37,7 +37,9 @@ export const dynamic = 'force-dynamic'
 
 const QuerySchema = z.object({
   location_id: uuidLike,
-  week_start: isoDate,
+  // DATECHECK.1 — a real date, not just the shape: 2026-02-30 was parsed as
+  // 2 March and answered 200 with the week of 2 March, silently.
+  week_start: realIsoDate,
 })
 
 export async function GET(request) {
