@@ -14,13 +14,17 @@
 // is a 403, as week-cost), then MANAGER_ROLES AT that studio (SCHEDROLES.1:
 // never user.role). The date is a real calendar date (DATECHECK.1).
 //
+// Contracted hours: owner, manager and master AT the studio only
+// (ADMIN_ROLES; GRID.1 review 1, the CANDIDATES.1 decision). A head coach
+// gets the grid with contract_visible false and no contracted_hours key.
+//
 // Hours and times only. No rate, salary, cost or euro figure is read or sent.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
-import { uuidLike, realIsoDate, MANAGER_ROLES } from '@/lib/schemas'
+import { uuidLike, realIsoDate, MANAGER_ROLES, ADMIN_ROLES } from '@/lib/schemas'
 import { mondayOf } from '@/lib/payroll'
 import { loadRosterGrid } from '@/lib/roster-grid-data'
 import { logError } from '@/lib/log'
@@ -58,11 +62,26 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: 'Forbidden — needs a manager role at that location' }, { status: 403 })
   }
 
+  // GRID.1 review 1 — contracted hours (and so the admin balance) go to
+  // owner, manager and master only (the CANDIDATES.1 decision), judged AT
+  // this studio. A head coach keeps the grid with the contract hidden.
+  const showContract = hasRoleAtLocation(user, location_id, ADMIN_ROLES)
+
   const db = createServerClient()
-  const { data, error } = await loadRosterGrid(db, { locationId: location_id, weekStart: mondayOf(start_date) })
+  const { data, error } = await loadRosterGrid(db, { locationId: location_id, weekStart: mondayOf(start_date), showContract })
   if (error) {
     logError('api/schedule/grid', 'grid read failed', { location_id, err: error.message })
     return NextResponse.json({ success: false, error: 'Could not load the coach grid' }, { status: 500 })
   }
-  return NextResponse.json({ success: true, data })
+  if (showContract) return NextResponse.json({ success: true, data })
+  // The reader neither reads nor returns the column when told not to; this
+  // strip is the second lock, so no future reader change can leak it here.
+  return NextResponse.json({
+    success: true,
+    data: {
+      ...data,
+      contract_visible: false,
+      members: (data?.members || []).map(({ contracted_hours: _hidden, ...m }) => m),
+    },
+  })
 }

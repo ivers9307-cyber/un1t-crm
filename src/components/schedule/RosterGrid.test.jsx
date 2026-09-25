@@ -32,6 +32,7 @@ const GRID = {
     S('p-con', '2026-09-24', '17:00:00', '18:00:00', { block_id: 'b-thu' }),
     S('p-over', '2026-09-25', '06:00:00', '07:30:00', { block_id: 'b-fri' }),
   ],
+  contract_visible: true,
   cross_studio_checked: true,
 }
 const LEAVE = [{ id: 't1', profile_id: 'p-con', type: 'holiday', start_date: '2026-09-26', end_date: '2026-09-26', profiles: { full_name: 'Jordan Sample' } }]
@@ -88,6 +89,24 @@ describe('RosterGrid', () => {
     expect(shown(within(jordan).getByTestId('grid-balance')).textContent).toBe('Contractor')
   })
 
+  // GRID.1 review 1 — a head coach's grid: the columns stay (so the table
+  // does not change shape), each cell is a dash that a screen reader hears as
+  // "hidden", and nothing reads "No contract hours" or "Contractor".
+  it('contract hidden: Contract and Admin balance are a dash, "hidden" to a screen reader', () => {
+    render(<RosterGrid model={model({ contract_visible: false })} onOpenBlock={vi.fn()} />)
+    for (const id of ['p-emp', 'p-con', 'p-over']) {
+      for (const testId of ['grid-contract', 'grid-balance']) {
+        const cell = within(rowEl(id)).getByTestId(testId)
+        expect(shown(cell).textContent).toBe('—')
+        expect(cell.querySelector('.sr-only').textContent).toBe('hidden')
+      }
+    }
+    const text = screen.getByTestId('roster-grid').textContent
+    expect(text).not.toMatch(/No contract hours|Contractor|39h|to place/)
+    expect(within(rowEl('p-emp')).getByTestId('grid-week-total').textContent).toBe('6h 30m2h other studio')
+    expect(text).toMatch(/owners and managers/)
+  })
+
   it('leave and unavailability sit in their day; a shift inside a window says so', () => {
     render(<RosterGrid model={model()} onOpenBlock={vi.fn()} />)
     expect(within(rowEl('p-con')).getByTestId('grid-leave').textContent).toBe('Holiday')
@@ -110,6 +129,7 @@ describe('RosterGrid', () => {
           S('p-emp', '2026-09-22', '06:00:00', '07:00:00'),
           ...['2026-09-23', '2026-09-24', '2026-09-25', '2026-09-26'].map((d) => S('p-emp', d, '08:00:00', '20:00:00')),
         ],
+        contract_visible: true,
         cross_studio_checked: true,
       },
     })

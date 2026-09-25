@@ -115,7 +115,7 @@ export default function RosterGrid({
       </div>
 
       <p className="mt-2 text-[11px] text-un1t-muted">
-        {GRID_COPY.legend} Flags (employees): over {MAX_WEEK_HOURS} hours in a week, under {MIN_REST_HOURS} hours between working days.
+        {model.contractVisible === false ? GRID_COPY.legendContractHidden : GRID_COPY.legend} Flags (employees): over {MAX_WEEK_HOURS} hours in a week, under {MIN_REST_HOURS} hours between working days.
         {model.untimed > 0 && ` ${untimedLabel(model.untimed)}.`}
       </p>
     </section>
@@ -160,8 +160,17 @@ function GridRow({ row, onOpenBlock, canOpenBlock, selectMode, selected }) {
         )}
         {row.totals.untimed > 0 && <div className="text-[11px] text-un1t-muted">{untimedLabel(row.totals.untimed)}</div>}
       </td>
-      <td data-testid="grid-contract" className={`${CELL} text-right tabular-nums whitespace-nowrap text-un1t-text`}>
-        {row.contractMinutes !== null ? hoursMinutesLabel(row.contractMinutes) : <span className="text-un1t-muted">—</span>}
+      <td
+        data-testid="grid-contract"
+        title={row.contractHidden ? GRID_COPY.contractHiddenTitle : undefined}
+        className={`${CELL} text-right tabular-nums whitespace-nowrap text-un1t-text`}
+      >
+        {row.contractHidden ? (
+          <>
+            <span aria-hidden="true" className="text-un1t-muted">—</span>
+            <span className="sr-only">hidden</span>
+          </>
+        ) : row.contractMinutes !== null ? hoursMinutesLabel(row.contractMinutes) : <span className="text-un1t-muted">—</span>}
       </td>
       <td data-testid="grid-balance" title={balance.title || undefined} className={`${CELL} text-right tabular-nums whitespace-nowrap border-r`}>
         <span aria-hidden="true" className={TONE[balance.tone] || TONE.none}>{balance.text}</span>

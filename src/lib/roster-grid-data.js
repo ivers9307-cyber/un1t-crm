@@ -15,6 +15,12 @@
 // against it afterwards, like the working-time reader, so a studio of another
 // organisation is dropped even if it comes back.
 //
+// CONTRACT VISIBILITY (GRID.1 review 1, the CANDIDATES.1 decision): contracted
+// hours go to owner, manager and master only. The route passes
+// `showContract` (ADMIN_ROLES AT the studio); when false the column is not
+// read, no member carries a `contracted_hours` key, and `contract_visible`
+// says so. It defaults to FALSE: a caller that forgets to ask gets less.
+//
 // PAY NEVER ENTERS. profiles is read BY NAME for id, full_name, active,
 // deleted_at, employment_type and contracted_hours_per_week (CLAUDE.md: name
 // your columns; profiles still carries the pay columns). Contracted hours are
@@ -120,11 +126,13 @@ function contractedHoursOf(p) {
 
 /**
  * @param {import('@supabase/supabase-js').SupabaseClient} db service-role client
- * @param {{ locationId: string, weekStart: string }} opts  weekStart is the week's MONDAY
+ * @param {{ locationId: string, weekStart: string, showContract?: boolean }} opts
+ *   weekStart is the week's MONDAY; showContract (default false) = the caller
+ *   may see contracted hours (ADMIN_ROLES at the studio)
  * @returns {Promise<{
  *   data: null | {
- *     week_start: string, week_end: string,
- *     members: Array<{ profile_id, full_name, employment_type, contracted_hours, member }>,
+ *     week_start: string, week_end: string, contract_visible: boolean,
+ *     members: Array<{ profile_id, full_name, employment_type, contracted_hours?, member }>,
  *     shifts: Array<{ assignment_id, profile_id, status, block_id, block_date, location_id,
  *       location_name, here, kind, name, start_time, end_time, start_time_override,
  *       end_time_override, shift_templates }>,
@@ -133,7 +141,7 @@ function contractedHoursOf(p) {
  *   error: null | { message: string },
  * }>}
  */
-export async function loadRosterGrid(db, { locationId, weekStart } = {}) {
+export async function loadRosterGrid(db, { locationId, weekStart, showContract = false } = {}) {
   const fail = (error) => ({ data: null, error: { message: error?.message || 'grid read failed' } })
   if (!locationId || !weekStart) return fail({ message: 'location and week are required' })
   const weekEnd = addDaysISO(weekStart, 6)
@@ -157,10 +165,17 @@ export async function loadRosterGrid(db, { locationId, weekStart } = {}) {
     const ids = [...new Set([...teamIds, ...heldHere])]
     const profiles = new Map()
     for (const slice of chunks(ids)) {
-      const { data, error } = await db
-        .from('profiles')
-        .select('id, full_name, active, deleted_at, employment_type, contracted_hours_per_week')
-        .in('id', slice)
+      // Two LITERAL selects (check:select-columns reads literals only): the
+      // contract column is not even read for a caller who may not see it.
+      const { data, error } = showContract
+        ? await db
+          .from('profiles')
+          .select('id, full_name, active, deleted_at, employment_type, contracted_hours_per_week')
+          .in('id', slice)
+        : await db
+          .from('profiles')
+          .select('id, full_name, active, deleted_at, employment_type')
+          .in('id', slice)
       if (error) return fail(error)
       for (const p of data || []) if (p?.id) profiles.set(p.id, p)
     }
@@ -174,7 +189,9 @@ export async function loadRosterGrid(db, { locationId, weekStart } = {}) {
         profile_id: id,
         full_name: p?.full_name ?? null,
         employment_type: p?.employment_type ?? null,
-        contracted_hours: contractedHoursOf(p),
+        // Absent, not null, when hidden: null means "an employee with no
+        // contract set", which is a statement a head coach must not receive.
+        ...(showContract ? { contracted_hours: contractedHoursOf(p) } : {}),
         member: onTeam,
       })
     }
@@ -208,7 +225,14 @@ export async function loadRosterGrid(db, { locationId, weekStart } = {}) {
       .map((a) => flatten(a, locationId))
 
     return {
-      data: { week_start: weekStart, week_end: weekEnd, members, shifts, cross_studio_checked: crossStudioChecked },
+      data: {
+        week_start: weekStart,
+        week_end: weekEnd,
+        contract_visible: Boolean(showContract),
+        members,
+        shifts,
+        cross_studio_checked: crossStudioChecked,
+      },
       error: null,
     }
   } catch (e) {

@@ -97,6 +97,9 @@ export const GRID_COPY = Object.freeze({
   availabilityMissing: 'Availability could not be loaded, so nobody is shown as unavailable.',
   noRows: 'Nobody is on this studio’s team this week.',
   legend: 'Hours only. Week = every studio in this organisation. Admin balance = contract − class − placed admin, for employees with contracted hours.',
+  // GRID.1 review 1 — a head coach's grid (contract_visible false).
+  legendContractHidden: 'Hours only. Week = every studio in this organisation. Contracted hours and the admin balance are shown to owners and managers only.',
+  contractHiddenTitle: 'Contracted hours and the admin balance are shown to owners and managers only.',
 })
 
 export function untimedLabel(n) {
@@ -145,9 +148,14 @@ function chipOf(s, flags) {
 export function buildRosterGrid({ weekStart, grid, timeOff = [], availability = [], todayIso = null } = {}) {
   const days = gridWeekDays(weekStart)
   if (days.length !== 7 || !grid || !Array.isArray(grid.members) || !Array.isArray(grid.shifts)) {
-    return { days, rows: [], checked: false, untimed: 0 }
+    return { days, rows: [], checked: false, untimed: 0, contractVisible: false }
   }
   const week = new Set(days)
+  // GRID.1 review 1 — contracted hours are for owner, manager and master
+  // only; the route says which with contract_visible. FAILS CLOSED: anything
+  // but a literal true hides the contract and the balance, even if a payload
+  // carried hours anyway.
+  const contractVisible = grid.contract_visible === true
   // The server already drops cancelled rows; the same rule again here so a
   // stale or hand-made payload can never count one. The window days (Sunday
   // before, Monday after) stay in `live` for the rest-gap rule only.
@@ -197,7 +205,8 @@ export function buildRosterGrid({ weekStart, grid, timeOff = [], availability = 
       full_name: m.full_name || 'Unknown coach',
       member: m.member !== false,
       employment_type: m.employment_type ?? null,
-      ...balanceFor(m, totals),
+      ...(contractVisible ? balanceFor(m, totals) : { isEmployee: m.employment_type === EMPLOYEE_TYPE, contractMinutes: null, balance: null }),
+      contractHidden: !contractVisible,
       cells,
       totals,
       leaveDays,
@@ -212,6 +221,7 @@ export function buildRosterGrid({ weekStart, grid, timeOff = [], availability = 
     days,
     rows,
     checked: grid.cross_studio_checked !== false && advice.ok,
+    contractVisible,
     untimed: rows.reduce((n, r) => n + r.totals.untimed, 0),
   }
 }
@@ -242,6 +252,11 @@ function balanceFor(m, totals) {
  * arithmetic. Hours only.
  */
 export function adminBalanceLabel(row) {
+  // Hidden says nothing about the person: not "No contract hours", not
+  // "Contractor" (GRID.1 review 1).
+  if (row?.contractHidden) {
+    return { text: '—', tone: 'none', srText: 'hidden', title: GRID_COPY.contractHiddenTitle }
+  }
   if (!row?.balance) {
     if (row?.employment_type === 'contractor') {
       return { text: 'Contractor', tone: 'none', srText: 'contractor, no admin balance', title: 'Contractors have no contracted hours, so there is no admin balance.' }

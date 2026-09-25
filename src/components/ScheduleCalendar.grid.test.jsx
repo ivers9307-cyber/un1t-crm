@@ -47,15 +47,16 @@ const GRID = {
     start_time: '10:00:00', end_time: '12:00:00', start_time_override: null, end_time_override: null,
     shift_templates: { start_time: '10:00:00', end_time: '12:00:00' },
   }],
+  contract_visible: true,
   cross_studio_checked: true,
 }
 const GRID_URL = `/api/schedule/grid?location_id=${LOC}&start_date=2026-05-04`
 
 const ok = (body, status = 200) => ({ ok: status < 400, status, redirected: false, json: async () => body })
-function mockFetch() {
+function mockFetch(grid = GRID) {
   return vi.fn(async (url) => {
     const u = String(url)
-    if (u.startsWith('/api/schedule/grid')) return ok({ success: true, data: GRID })
+    if (u.startsWith('/api/schedule/grid')) return ok({ success: true, data: grid })
     if (u.includes('/schedule/blocks')) return ok({ success: true, data: [targetBlock] })
     if (u.includes('/api/staff')) return ok({ success: true, data: staff })
     return ok({ success: true, data: [] })
@@ -90,6 +91,20 @@ describe('ScheduleCalendar: the Coaches layout (GRID.1)', () => {
     expect(within(grid).getByTestId('grid-balance').textContent).toMatch(/^8h/)
     expect(screen.queryByText('Add Slot')).toBeNull()
     expect(screen.getByRole('button', { name: 'Coaches' }).getAttribute('aria-pressed')).toBe('true')
+  })
+
+  // GRID.1 review 1 — what the route sends a head coach: the grid, no contract.
+  it('a head coach gets the grid with Contract and Admin balance hidden', async () => {
+    const headCoach = { ...manager, id: 'u3', role: 'head_coach', profileRole: 'head_coach', rolesByLocation: { [LOC]: 'head_coach' } }
+    const { contracted_hours: _c, ...member } = GRID.members[0]
+    global.fetch = mockFetch({ ...GRID, contract_visible: false, members: [member] })
+    window.localStorage.setItem(KEY('u3'), 'coaches')
+    await renderLoaded(headCoach)
+    const grid = await screen.findByTestId('roster-grid')
+    expect(within(grid).getByTestId('grid-week-total').textContent).toMatch(/^2h/)
+    expect(within(grid).getByTestId('grid-contract').textContent).toBe('—hidden')
+    expect(within(grid).getByTestId('grid-balance').textContent).toBe('—hidden')
+    expect(grid.textContent).not.toMatch(/No contract hours|to place/)
   })
 
   it('a shift in the grid opens the same block dialog a day card opens', async () => {

@@ -60,7 +60,7 @@ const SHIFTS = [
   S('p-nocon', '2026-09-26', null, null),
   S('p-gone', '2026-09-22', '10:00:00', '11:00:00'),
 ]
-const GRID = { week_start: WEEK, week_end: '2026-09-27', members: MEMBERS, shifts: SHIFTS, cross_studio_checked: true }
+const GRID = { week_start: WEEK, week_end: '2026-09-27', contract_visible: true, members: MEMBERS, shifts: SHIFTS, cross_studio_checked: true }
 const rowOf = (model, id) => model.rows.find((r) => r.profile_id === id)
 
 describe('gridWeekDays', () => {
@@ -202,7 +202,7 @@ describe('buildRosterGrid — rows, cells and week totals', () => {
   })
 
   it('nothing to build: no grid, a malformed one, or a date the calendar does not have', () => {
-    expect(buildRosterGrid({ weekStart: WEEK, grid: null })).toEqual({ days: gridWeekDays(WEEK), rows: [], checked: false, untimed: 0 })
+    expect(buildRosterGrid({ weekStart: WEEK, grid: null })).toEqual({ days: gridWeekDays(WEEK), rows: [], checked: false, untimed: 0, contractVisible: false })
     expect(buildRosterGrid({ weekStart: WEEK, grid: { members: 'x', shifts: [] } }).rows).toEqual([])
     expect(buildRosterGrid({ weekStart: '2026-02-30', grid: GRID }).rows).toEqual([])
   })
@@ -240,6 +240,39 @@ describe('buildRosterGrid — the clock-change weeks', () => {
     expect(g.days[6]).toBe('2026-03-29')
     expect(g.rows[0].cells[6].here.map((c) => c.minutes)).toEqual([120, 180])
     expect(g.rows[0].totals.minutes).toBe(300)
+  })
+})
+
+// GRID.1 review 1 — a head coach's grid (contract_visible false): the same
+// rows, totals, leave and flags, but no contract and no balance, and never a
+// sentence that implies one ("No contract hours" would say something about
+// the person). Fails closed: only contract_visible === true shows them.
+describe('contract hidden: a head coach keeps the grid, not the contract', () => {
+  const hidden = (grid) => buildRosterGrid({ weekStart: WEEK, grid })
+  const HIDDEN = { ...GRID, contract_visible: false, members: MEMBERS.map(({ contracted_hours: _c, ...m }) => m) }
+
+  it('every row is hidden: no contract minutes, no balance, the label says hidden', () => {
+    const g = hidden(HIDDEN)
+    expect(g.contractVisible).toBe(false)
+    for (const row of g.rows) {
+      expect(row.contractHidden).toBe(true)
+      expect(row.contractMinutes).toBeNull()
+      expect(row.balance).toBeNull()
+      const label = adminBalanceLabel(row)
+      expect(label).toMatchObject({ text: '—', tone: 'none', srText: 'hidden' })
+      expect(label.text).not.toMatch(/No contract|Contractor/)
+    }
+  })
+
+  it('totals and flags are unchanged by hiding the contract', () => {
+    expect(rowOf(hidden(HIDDEN), 'p-emp').totals).toEqual(rowOf(buildRosterGrid({ weekStart: WEEK, grid: GRID }), 'p-emp').totals)
+  })
+
+  it('fails closed: a payload that says nothing, or carries hours anyway, is still hidden', () => {
+    const { contract_visible: _v, ...silent } = GRID
+    expect(rowOf(hidden(silent), 'p-emp').contractMinutes).toBeNull()
+    expect(rowOf(hidden({ ...GRID, contract_visible: false }), 'p-emp').balance).toBeNull()
+    expect(rowOf(hidden({ ...GRID, contract_visible: 'yes' }), 'p-emp').contractHidden).toBe(true)
   })
 })
 

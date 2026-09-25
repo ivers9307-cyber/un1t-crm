@@ -107,8 +107,9 @@ beforeEach(() => {
 
 describe('loadRosterGrid', () => {
   it('the team, plus anyone holding a shift here that week; contracted hours for employees only', async () => {
-    const { data, error } = await loadRosterGrid(fakeDb(), { locationId: HERE, weekStart: WEEK })
+    const { data, error } = await loadRosterGrid(fakeDb(), { locationId: HERE, weekStart: WEEK, showContract: true })
     expect(error).toBeNull()
+    expect(data.contract_visible).toBe(true)
     expect(data.week_start).toBe(WEEK)
     expect(data.week_end).toBe('2026-09-27')
     expect(data.members).toEqual([
@@ -154,7 +155,7 @@ describe('loadRosterGrid', () => {
 
   it('names its columns: no pay column is ever selected, and profile_compensation is never read', async () => {
     const db = fakeDb()
-    await loadRosterGrid(db, { locationId: HERE, weekStart: WEEK })
+    await loadRosterGrid(db, { locationId: HERE, weekStart: WEEK, showContract: true })
     expect(db.calls.find((q) => q.table === 'profiles').select)
       .toBe('id, full_name, active, deleted_at, employment_type, contracted_hours_per_week')
     expect(db.calls.some((q) => q.table === 'profile_compensation')).toBe(false)
@@ -204,6 +205,23 @@ describe('loadRosterGrid', () => {
     const { error } = await loadRosterGrid(db, { locationId: HERE, weekStart: WEEK })
     expect(error).toBeNull()
     expect(db.calls.filter((q) => q.table === 'profile_locations').map((q) => q.range)).toEqual([[0, 999], [1000, 1999]])
+  })
+
+  // GRID.1 review 1 — contracted hours go to owner, manager and master only
+  // (CANDIDATES.1). A head coach keeps the grid, but the column is not even
+  // read for them, and no member carries the key.
+  it('contract hidden (the default): contracted hours are neither read nor returned', async () => {
+    for (const opts of [{ showContract: false }, {}]) {
+      const db = fakeDb()
+      const { data, error } = await loadRosterGrid(db, { locationId: HERE, weekStart: WEEK, ...opts })
+      expect(error).toBeNull()
+      expect(data.contract_visible).toBe(false)
+      expect(db.calls.find((q) => q.table === 'profiles').select)
+        .toBe('id, full_name, active, deleted_at, employment_type')
+      for (const m of data.members) expect(m).not.toHaveProperty('contracted_hours')
+      expect(data.members.map((m) => m.profile_id)).toEqual(['p-emp', 'p-con', 'p-visit', 'p-gone'])
+      expect(JSON.stringify(data)).not.toMatch(/contracted/)
+    }
   })
 
   it('never throws', async () => {

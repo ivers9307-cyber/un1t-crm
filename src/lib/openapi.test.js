@@ -359,6 +359,9 @@ describe('getOpenApiSpec', () => {
     expect(op.description).toMatch(/manager-only/i)
     expect(op.description).toMatch(/no rate/i)
     expect(op.description).toMatch(/same organisation/i)
+    // GRID.1 review 1 — who sees contracted hours.
+    expect(op.description).toMatch(/contract_visible is true for owner, manager and master/)
+    expect(op.description).toMatch(/head coach it is false/)
     expect(Object.keys(op.responses)).toEqual(expect.arrayContaining(['200', '400', '403', '500']))
     expect(op.responses['400'].description).toMatch(/real calendar date/)
   })

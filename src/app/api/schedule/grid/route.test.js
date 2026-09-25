@@ -29,6 +29,7 @@ const OTHER = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
 const GRID = {
   week_start: '2026-09-21',
   week_end: '2026-09-27',
+  contract_visible: true,
   members: [{ profile_id: 'p1', full_name: 'Alex Example', employment_type: 'fte', contracted_hours: 39, member: true }],
   shifts: [{
     assignment_id: 'a1', profile_id: 'p1', status: 'scheduled', block_id: 'b1', block_date: '2026-09-21',
@@ -91,13 +92,46 @@ describe('GET /api/schedule/grid', () => {
     expect(loadRosterGrid).not.toHaveBeenCalled()
   })
 
-  it('200 for a head coach at the studio: any day of the week is snapped to its Monday, one read', async () => {
-    getCurrentUser.mockResolvedValue(as({ [LOC]: 'head_coach' }))
+  it('200 for a manager at the studio: any day of the week is snapped to its Monday, one read, contract shown', async () => {
+    getCurrentUser.mockResolvedValue(as({ [LOC]: 'manager' }))
     const res = await GET(req(ok))
     expect(res.status).toBe(200)
     expect(loadRosterGrid).toHaveBeenCalledTimes(1)
-    expect(loadRosterGrid).toHaveBeenCalledWith({ tag: 'db' }, { locationId: LOC, weekStart: '2026-09-21' })
+    expect(loadRosterGrid).toHaveBeenCalledWith({ tag: 'db' }, { locationId: LOC, weekStart: '2026-09-21', showContract: true })
     expect(await res.json()).toEqual({ success: true, data: GRID })
+  })
+
+  // GRID.1 review 1 — contracted hours go to owner, manager and master only
+  // (CANDIDATES.1). A head coach keeps the grid with the contract hidden. The
+  // mock here IGNORES the flag and answers with contracted hours anyway: the
+  // route must still not send them (the reader not reading them is pinned in
+  // roster-grid-data.test.js).
+  it('200 for a head coach at the studio, but no contracted hours: not asked for, not sent', async () => {
+    getCurrentUser.mockResolvedValue(as({ [LOC]: 'head_coach' }))
+    const res = await GET(req(ok))
+    expect(res.status).toBe(200)
+    expect(loadRosterGrid).toHaveBeenCalledWith({ tag: 'db' }, { locationId: LOC, weekStart: '2026-09-21', showContract: false })
+    const body = await res.json()
+    expect(body.data.contract_visible).toBe(false)
+    expect(body.data.members).toHaveLength(1)
+    expect(body.data.members[0]).not.toHaveProperty('contracted_hours')
+    expect(JSON.stringify(body)).not.toMatch(/contracted/)
+    expect(body.data.shifts).toEqual(GRID.shifts)
+  })
+
+  it('the contract follows the role AT this studio: a manager elsewhere who is head coach here does not see it', async () => {
+    getCurrentUser.mockResolvedValue(as({ [LOC]: 'head_coach', [OTHER]: 'manager' }))
+    const body = await (await GET(req(ok))).json()
+    expect(loadRosterGrid).toHaveBeenCalledWith({ tag: 'db' }, expect.objectContaining({ showContract: false }))
+    expect(body.data.contract_visible).toBe(false)
+    expect(body.data.members[0]).not.toHaveProperty('contracted_hours')
+  })
+
+  it('owner at the studio sees the contract', async () => {
+    getCurrentUser.mockResolvedValue(as({ [LOC]: 'owner' }))
+    const body = await (await GET(req(ok))).json()
+    expect(loadRosterGrid).toHaveBeenCalledWith({ tag: 'db' }, expect.objectContaining({ showContract: true }))
+    expect(body.data.members[0].contracted_hours).toBe(39)
   })
 
   it('the Sunday of a clock-change week snaps to that week’s Monday (29 Mar, 25 Oct 2026)', async () => {
@@ -105,13 +139,16 @@ describe('GET /api/schedule/grid', () => {
     for (const [day, monday] of [['2026-03-29', '2026-03-23'], ['2026-10-25', '2026-10-19'], ['2026-10-26', '2026-10-26']]) {
       loadRosterGrid.mockClear()
       expect((await GET(req({ location_id: LOC, start_date: day }))).status).toBe(200)
-      expect(loadRosterGrid).toHaveBeenCalledWith({ tag: 'db' }, { locationId: LOC, weekStart: monday })
+      expect(loadRosterGrid).toHaveBeenCalledWith({ tag: 'db' }, { locationId: LOC, weekStart: monday, showContract: true })
     }
   })
 
-  it('master is allowed', async () => {
+  it('master is allowed, and sees the contract', async () => {
     getCurrentUser.mockResolvedValue({ id: 'boss', role: 'master', profileRole: 'master', locations: [], rolesByLocation: {} })
-    expect((await GET(req(ok))).status).toBe(200)
+    const res = await GET(req(ok))
+    expect(res.status).toBe(200)
+    expect(loadRosterGrid).toHaveBeenCalledWith({ tag: 'db' }, expect.objectContaining({ showContract: true }))
+    expect((await res.json()).data.contract_visible).toBe(true)
   })
 
   it('the body carries hours and names, never pay', async () => {
