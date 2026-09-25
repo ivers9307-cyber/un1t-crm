@@ -3,12 +3,15 @@
 
 import { api } from './api'
 
-export function getMyShifts({ locationId, profileId, startDate, endDate }) {
+// withArrivals (ARRIVALSHOW.1) — the Schedule tab's Me view asks the server
+// for the caller's own arrival facts; nobody else pays for that read.
+export function getMyShifts({ locationId, profileId, startDate, endDate, withArrivals = false }) {
   const qs = new URLSearchParams()
   if (locationId) qs.set('location_id', locationId)
   if (profileId) qs.set('profile_id', profileId)
   if (startDate) qs.set('start_date', startDate)
   if (endDate) qs.set('end_date', endDate)
+  if (withArrivals) qs.set('include', 'arrival')
   return api(`/api/schedule/shifts?${qs.toString()}`, { locationId })
 }
 

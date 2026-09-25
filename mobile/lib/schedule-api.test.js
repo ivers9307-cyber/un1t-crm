@@ -81,6 +81,13 @@ describe('shift reads', () => {
     expect(lastCall()[1]).toEqual({ locationId: LOC })
   })
 
+  it('getMyShifts asks for arrivals only when told to (ARRIVALSHOW.1: the Schedule tab Me view)', () => {
+    schedule.getMyShifts({ locationId: LOC, profileId: 'p1', startDate: '2026-09-07', endDate: '2026-09-13', withArrivals: true })
+    expect(lastQuery()).toEqual({
+      location_id: LOC, profile_id: 'p1', start_date: '2026-09-07', end_date: '2026-09-13', include: 'arrival',
+    })
+  })
+
   it('getTeamShifts hits the SAME route with no profile_id — that omission is the whole difference', () => {
     schedule.getTeamShifts({ locationId: LOC, startDate: '2026-09-07', endDate: '2026-09-13' })
     expect(lastPathname()).toBe('/api/schedule/shifts')

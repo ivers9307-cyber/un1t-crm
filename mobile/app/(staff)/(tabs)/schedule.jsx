@@ -45,6 +45,8 @@ import MyAvailabilityRow from '../../../components/schedule/MyAvailabilityRow'
 // LEAVE.2 — one label per leave type (unpaid/other used to read "Time off").
 import { timeOffLeaveLabel } from 'shared/time-off'
 import { briefingOf } from 'shared/shift-briefing'
+import ArrivalLine from '../../../components/schedule/ArrivalLine'
+import { arrivalHelpFor, ARRIVAL_WORDS } from '../../../lib/shift-arrival'
 
 // ROSTER-FIX.3 — MANAGER_ROLES comes from lib/schedule-manage, the module that
 // already owns canAdjustShiftTimes. It was duplicated here (a HOTFIX for
@@ -89,7 +91,7 @@ function WeekStrip({ anchor, selected, onSelect, byDate }) {
 // effShiftStart / effShiftEnd now live in ../../lib/schedule-team (imported
 // above) — single definition shared with the Team sort helper.
 
-function ShiftCard({ shift, onPress, onLongPress, teamMode, selfId }) {
+function ShiftCard({ shift, onPress, onLongPress, teamMode, selfId, nowMs, arrivalStale }) {
   const tpl = shift.shift_templates
   const effStart = effShiftStart(shift)
   const effEnd = effShiftEnd(shift)
@@ -118,6 +120,8 @@ function ShiftCard({ shift, onPress, onLongPress, teamMode, selfId }) {
       <Text className="text-[11px] text-un1t-subtle mt-0.5">
         {timeRange(effStart, effEnd)}
       </Text>
+      {/* ARRIVALSHOW.1 — own shifts only (Me grid); the Team grid never shows arrivals. */}
+      {!teamMode && <ArrivalLine shift={shift} nowMs={nowMs} stale={arrivalStale} compact />}
       <View className="flex-row gap-1 mt-1.5">
         {adjusted && (
           <View className="px-1.5 py-0.5 rounded-full bg-amber-400">
@@ -153,7 +157,7 @@ function ShiftCard({ shift, onPress, onLongPress, teamMode, selfId }) {
 // Per-column shift cards reuse the same onPress / onLongPress
 // handlers as the phone's ShiftRow, so adjust + swap flows work
 // identically.
-function WeekGridView({ anchor, shiftsByDate, timeOff, todayIso, canAdjust, openAdjust, requestSwap, teamMode, selfId }) {
+function WeekGridView({ anchor, shiftsByDate, timeOff, todayIso, canAdjust, openAdjust, requestSwap, teamMode, selfId, nowMs, arrivalStale }) {
   const days = daysOfWeek(anchor)
   return (
     <View className="flex-row gap-2">
@@ -194,6 +198,8 @@ function WeekGridView({ anchor, shiftsByDate, timeOff, todayIso, canAdjust, open
                 shift={s}
                 teamMode={teamMode}
                 selfId={selfId}
+                nowMs={nowMs}
+                arrivalStale={arrivalStale}
                 onPress={teamMode ? undefined : (canAdjust(s) ? () => openAdjust(s) : undefined)}
                 onLongPress={teamMode ? undefined : () => requestSwap(s)}
               />
@@ -249,7 +255,7 @@ function TeamShiftRow({ shift }) {
   )
 }
 
-function ShiftRow({ shift, onPress, onLongPress }) {
+function ShiftRow({ shift, onPress, onLongPress, nowMs, arrivalStale }) {
   const tpl = shift.shift_templates
   // Override-aware effective times. mig 099/100 mirror trigger
   // pushes assignment-level overrides into the legacy shifts row,
@@ -298,6 +304,9 @@ function ShiftRow({ shift, onPress, onLongPress }) {
           {timeRange(effStart, effEnd)} · {hours}h
         </Text>
       </View>
+      {/* ARRIVALSHOW.1 — what the app recorded as your arrival (arrived_at,
+          never the Adjusted paid time below). */}
+      <ArrivalLine shift={shift} nowMs={nowMs} stale={arrivalStale} />
       {adjusted && (
         // MOBILESCHED.2 — the /shifts row carries the block's time as
         // block_start_time (no top-level start_time), so this read the
@@ -420,6 +429,7 @@ export default function Schedule() {
         profileId: profile.id,
         startDate: start,
         endDate: end,
+        withArrivals: true,
       }),
       getMyTimeOff({
         locationId: activeLocation.id,
@@ -594,6 +604,16 @@ export default function Schedule() {
     )
   }
 
+  // ARRIVALSHOW.1 — "now" for the arrival lines, read at render. The tab
+  // refetches (and so re-renders) on every focus, so no ticking timer.
+  // Review 2 — rows kept through a failed refresh (the amber TRANSPORT_ERROR
+  // bar) are stale: a stamp may have landed since, so they never claim absence.
+  const nowMs = Date.now()
+  const arrivalStale = error === TRANSPORT_ERROR
+  const arrivalHelp = view === 'me' && !loading
+    ? arrivalHelpFor(isTablet ? shifts : todays, nowMs, { stale: arrivalStale })
+    : null
+
   return (
     <View className="flex-1 bg-un1t-bg">
       <ScrollView
@@ -694,6 +714,8 @@ export default function Schedule() {
               requestSwap={requestSwapForShift}
               teamMode={view === 'team'}
               selfId={profile?.id}
+              nowMs={nowMs}
+              arrivalStale={arrivalStale}
             />
           </View>
         ) : view === 'team' ? (
@@ -743,6 +765,8 @@ export default function Schedule() {
                 shift={s}
                 onPress={canAdjust(s) ? () => setAdjustingShift(s) : undefined}
                 onLongPress={() => requestSwapForShift(s)}
+                nowMs={nowMs}
+                arrivalStale={arrivalStale}
               />
             ))}
             {todays.length > 0 && (
@@ -754,6 +778,11 @@ export default function Schedule() {
             )}
           </>
         )}
+
+        {/* ARRIVALSHOW.1 — what the arrival lines are, once, when one shows. */}
+        {arrivalHelp ? (
+          <Text className="text-[11px] text-un1t-muted text-center mt-2 px-4">{ARRIVAL_WORDS.help}</Text>
+        ) : null}
 
         {/* ICSFEED.1 — own published shifts in the coach's calendar app. Me view only, phone and iPad. */}
         {view === 'me' && <CalendarSubscribeRow />}
