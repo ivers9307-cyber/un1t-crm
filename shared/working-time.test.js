@@ -5,7 +5,7 @@
 
 import { describe, it, expect } from 'vitest'
 import {
-  MIN_REST_HOURS, MAX_WEEK_HOURS, EMPLOYEE_TYPE, REST_GAP_SCOPE,
+  MIN_REST_HOURS, MAX_WEEK_HOURS, EMPLOYEE_TYPE, REST_GAP_SCOPE, REST_BETWEEN_LABEL, isWorkingTimeCovered,
   workingWindow, restGapViolations, weekHoursOver,
   workingTimeAdvisories, candidateWorkingTime,
   hoursMinutesLabel, longWeeksHeadline, restGapsHeadline,
@@ -193,5 +193,141 @@ describe('weekHoursOver', () => {
     const rows = six('17:15')
     expect(weekHoursOver([...rows, rows[0], S('p1', '2026-09-27', '09:00', '17:00', { status: 'cancelled' })]))
       .toMatchObject([{ minutes: 2895, shift_count: 6 }])
+  })
+})
+
+const PEOPLE = new Map([
+  ['emp', { full_name: 'Sam Demo', employment_type: 'fte' }],
+  ['emp2', { full_name: 'Toby Beta', employment_type: 'fte' }],
+  ['con', { full_name: 'Max Beta', employment_type: 'contractor' }],
+])
+const WEEK = ['2026-09-21', '2026-09-22', '2026-09-23', '2026-09-24', '2026-09-25']
+const NEXT_WEEK = ['2026-09-28', '2026-09-29', '2026-09-30', '2026-10-01', '2026-10-02']
+// 50 hours in five days, and 8 hours' rest after the first day.
+const heavy = (pid, [d1, d2, d3, d4, d5], over = {}) => [
+  S(pid, d1, '12:00', '22:00', over),
+  S(pid, d2, '06:00', '16:00', over),
+  S(pid, d3, '06:00', '16:00', over),
+  S(pid, d4, '06:00', '16:00', over),
+  S(pid, d5, '06:00', '16:00', over),
+]
+const OPTS = { people: PEOPLE, hereLocationId: 'loc1', from: '2026-09-21', to: '2026-09-27', todayIso: '2026-09-21' }
+
+describe('workingTimeAdvisories', () => {
+  it('a contractor is never flagged, whatever their hours or rest', () => {
+    const out = workingTimeAdvisories([...heavy('emp', WEEK), ...heavy('con', WEEK)], OPTS)
+    expect(out.restGaps.map((g) => [g.profile_id, g.rest_minutes])).toEqual([['emp', 480]])
+    expect(out.longWeeks.map((w) => [w.profile_id, w.minutes])).toEqual([['emp', 3000]])
+  })
+
+  it('a person whose employment type is unknown is not flagged', () => {
+    expect(workingTimeAdvisories(heavy('ghost', WEEK), OPTS)).toEqual({ restGaps: [], longWeeks: [] })
+    expect(workingTimeAdvisories(heavy('emp', WEEK), { ...OPTS, people: null })).toEqual({ restGaps: [], longWeeks: [] })
+  })
+
+  it('names the other studio, never this one, and the coach', () => {
+    const out = workingTimeAdvisories([
+      S('emp', '2026-09-22', '20:00', '22:00', { location_id: 'loc2', location_name: 'Studio South', name: 'Evening' }),
+      S('emp', '2026-09-23', '06:30', '09:00', { name: 'Early' }),
+    ], OPTS)
+    expect(out.restGaps).toEqual([{
+      profile_id: 'emp', coach_name: 'Sam Demo', rest_minutes: 510,
+      before: { block_id: 'emp-2026-09-22-20:00', date: '2026-09-22', start: '20:00', end: '22:00', name: 'Evening', location_name: 'Studio South' },
+      after: { block_id: 'emp-2026-09-23-06:30', date: '2026-09-23', start: '06:30', end: '09:00', name: 'Early', location_name: null },
+    }])
+    expect(out.longWeeks).toEqual([])
+  })
+
+  it('lists only what this studio\'s publish is about: nothing that lives entirely at the other studio', () => {
+    const away = heavy('emp', WEEK, { location_id: 'loc2', location_name: 'Studio South' })
+    expect(workingTimeAdvisories(away, OPTS)).toEqual({ restGaps: [], longWeeks: [] })
+    const unscoped = workingTimeAdvisories(away, { ...OPTS, hereLocationId: null })
+    expect(unscoped.restGaps).toHaveLength(1)
+    expect(unscoped.longWeeks).toMatchObject([{ studio_count: 1, shift_count: 5 }])
+  })
+
+  it('period and today: a past pair is dropped, a Sunday-close-Monday-open pair across the period end is kept', () => {
+    const out = workingTimeAdvisories([
+      S('emp', '2026-09-21', '20:00', '22:00'), S('emp', '2026-09-22', '06:00', '08:00'), // before today: history
+      S('emp', '2026-09-27', '19:00', '22:00'), // last day of the period, here
+      S('emp', '2026-09-28', '06:00', '08:00', { location_id: 'loc2', location_name: 'Studio South' }), // day after, elsewhere
+      S('emp', '2026-09-28', '20:00', '22:00'), S('emp', '2026-09-29', '06:00', '08:00'), // wholly after the period
+      ...heavy('emp2', NEXT_WEEK), // a long week that is next week's publish
+    ], { ...OPTS, todayIso: '2026-09-23' })
+    expect(out.restGaps.map((g) => [g.profile_id, g.before.date, g.after.date, g.after.location_name]))
+      .toEqual([['emp', '2026-09-27', '2026-09-28', 'Studio South']])
+    expect(out.longWeeks).toEqual([])
+  })
+
+  it('hours only: no pay, cost or employment field in the answer', () => {
+    const out = workingTimeAdvisories(heavy('emp', WEEK), OPTS)
+    expect(out.longWeeks).toEqual([{ profile_id: 'emp', coach_name: 'Sam Demo', week_start: '2026-09-21', minutes: 3000, shift_count: 5, studio_count: 1 }])
+    expect(JSON.stringify(out)).not.toMatch(/rate|salary|cost|€|employment/i)
+  })
+})
+
+describe('candidateWorkingTime', () => {
+  const HERE = { hereLocationId: 'loc1' }
+
+  it('flags the short rest assigning would create, naming the other shift, on either side', () => {
+    const late = S('emp', '2026-09-22', '20:00', '22:00', { location_id: 'loc2', location_name: 'Studio South', name: 'Evening' })
+    expect(candidateWorkingTime([late], S('emp', '2026-09-23', '06:30', '08:00'), HERE)).toEqual({
+      restGap: {
+        rest_minutes: 510, side: 'before',
+        other: { block_id: 'emp-2026-09-22-20:00', date: '2026-09-22', start: '20:00', end: '22:00', name: 'Evening', location_name: 'Studio South' },
+      },
+      weekHours: null,
+    })
+    expect(candidateWorkingTime([S('emp', '2026-09-24', '06:00', '08:00')], S('emp', '2026-09-23', '19:00', '22:00'), HERE).restGap)
+      .toEqual({
+        rest_minutes: 480, side: 'after',
+        other: { block_id: 'emp-2026-09-24-06:00', date: '2026-09-24', start: '06:00', end: '08:00', name: 'Class', location_name: null },
+      })
+  })
+
+  it('says nothing when the rest stays at 11 hours or more', () => {
+    expect(candidateWorkingTime([S('emp', '2026-09-22', '12:00', '19:00')], S('emp', '2026-09-23', '06:30', '08:00'), HERE))
+      .toEqual({ restGap: null, weekHours: null })
+  })
+
+  it('does not blame the candidate for a short rest it does not touch', () => {
+    const own = [S('emp', '2026-09-21', '18:00', '21:00'), S('emp', '2026-09-22', '06:00', '08:00')] // 9h already
+    expect(candidateWorkingTime(own, S('emp', '2026-09-24', '10:00', '12:00'), HERE).restGap).toBeNull()
+  })
+
+  it('flags a week the shift would take over 48 hours; exactly 48 is fine', () => {
+    const own = WEEK.map((d) => S('emp', d, '09:00', '18:00')) // 45h
+    expect(candidateWorkingTime(own, S('emp', '2026-09-26', '09:00', '13:00'), HERE).weekHours)
+      .toEqual({ week_start: '2026-09-21', minutes: 2940 })
+    expect(candidateWorkingTime(own, S('emp', '2026-09-26', '09:00', '12:00'), HERE).weekHours).toBeNull()
+  })
+
+  it('ignores the candidate block already in the list, and other people\'s shifts', () => {
+    const cand = S('emp', '2026-09-23', '06:30', '08:00')
+    const others = [S('other', '2026-09-22', '20:00', '22:00'), cand]
+    expect(candidateWorkingTime(others, cand, HERE)).toEqual({ restGap: null, weekHours: null })
+  })
+})
+
+describe('copy', () => {
+  it('hoursMinutesLabel', () => {
+    expect([659, 660, 45, 2895, 0, -5].map(hoursMinutesLabel)).toEqual(['10h 59m', '11h', '45m', '48h 15m', '0m', '0m'])
+  })
+
+  it('headlines count people for weeks and rests for rests, and the limits are pinned', () => {
+    expect(longWeeksHeadline([{ profile_id: 'a' }, { profile_id: 'a' }])).toBe('1 employee over 48 hours in a week')
+    expect(longWeeksHeadline([{ profile_id: 'a' }, { profile_id: 'b' }])).toBe('2 employees over 48 hours in a week')
+    expect(restGapsHeadline([{}])).toBe('1 rest under 11 hours between working days')
+    expect(restGapsHeadline([{}, {}])).toBe('2 rests under 11 hours between working days')
+    expect([MIN_REST_HOURS, MAX_WEEK_HOURS, EMPLOYEE_TYPE, REST_BETWEEN_LABEL]).toEqual([11, 48, 'fte', 'between working days'])
+  })
+})
+
+describe('isWorkingTimeCovered', () => {
+  // OWNER REVIEW: who the Act's rules are applied to. EMPLOYEE_TYPE is the one
+  // line to change; every reader and rule asks through this.
+  it('covers an employee only: never a contractor, never an unknown type', () => {
+    expect(['fte', 'contractor', null, undefined, '', 'casual'].map(isWorkingTimeCovered))
+      .toEqual([true, false, false, false, false, false])
   })
 })

@@ -35,15 +35,24 @@ import { effectiveShiftStart, effectiveShiftEnd } from './roster-month.js'
 
 export const MIN_REST_HOURS = 11
 export const MAX_WEEK_HOURS = 48
-// profiles.employment_type of an employee. Mig 070 pins the column to
-// 'fte' | 'contractor', NOT NULL DEFAULT 'fte'. Nothing else is covered.
+// OWNER REVIEW: who is covered. profiles.employment_type of an employee; mig
+// 070 pins the column to 'fte' | 'contractor', NOT NULL DEFAULT 'fte'. Every
+// reader and rule asks isWorkingTimeCovered, so this is the one line to change.
 export const EMPLOYEE_TYPE = 'fte'
+
+/** Is a person of this employment_type covered by the Act's rules here? */
+export function isWorkingTimeCovered(employmentType) {
+  return employmentType === EMPLOYEE_TYPE
+}
 // OWNER REVIEW: what a "rest" is measured between. 'working_day' = the last
 // end of one block_date to the first start of the next (split shifts inside a
 // day never flag each other). 'shift' = every consecutive pair of shifts, the
 // literal "end of one shift to the start of the next" reading, which flags
 // every split shift. One-line switch; both readings are tested.
 export const REST_GAP_SCOPE = 'working_day'
+// The copy follows the switch, so flipping it never leaves a screen saying
+// "working days" about a per-shift rule.
+export const REST_BETWEEN_LABEL = REST_GAP_SCOPE === 'shift' ? 'between shifts' : 'between working days'
 
 const MINUTE_MS = 60 * 1000
 const HOUR_MS = 60 * MINUTE_MS
@@ -276,4 +285,133 @@ export function weekHoursOver(shifts, limit = MAX_WEEK_HOURS) {
       location_ids: [...acc.location_ids],
     }))
     .sort((a, b) => a.week_start.localeCompare(b.week_start) || String(a.profile_id).localeCompare(String(b.profile_id)))
+}
+
+// A slot as a list shows it: the studio is named only when it is ANOTHER one
+// (null = the studio being published or assigned at), and location_id stays
+// behind.
+function displaySlot({ location_id: locationId, ...slot }, hereLocationId) {
+  return { ...slot, location_name: hereLocationId && locationId === hereLocationId ? null : (slot.location_name ?? null) }
+}
+
+// `people` is a Map or a plain object: id → { full_name, employment_type }.
+function personOf(people, id) {
+  if (!people || !id) return null
+  return (typeof people.get === 'function' ? people.get(id) : people[id]) || null
+}
+
+/**
+ * The publish preview's list. Covered people only (isWorkingTimeCovered; an
+ * unknown type is not flagged). A rest gap is listed when its later day is
+ * today or later, one of its two days is in [from, to], and one of its two
+ * shifts is at `hereLocationId`. A long week is listed when it overlaps
+ * [from, to], has not ended before today, and has a shift at
+ * `hereLocationId`. A null bound or a null hereLocationId does not filter.
+ *
+ * @returns {{
+ *   restGaps: Array<{ profile_id, coach_name, rest_minutes, before, after }>,
+ *   longWeeks: Array<{ profile_id, coach_name, week_start, minutes, shift_count, studio_count }>,
+ * }}
+ */
+export function workingTimeAdvisories(shifts, {
+  people, hereLocationId = null, from = null, to = null, todayIso = null,
+  minRestHours = MIN_REST_HOURS, maxWeekHours = MAX_WEEK_HOURS,
+} = {}) {
+  const covered = (shifts || []).filter((s) => isWorkingTimeCovered(personOf(people, s?.profile_id)?.employment_type))
+  const inPeriod = (d) => (!from || d >= from) && (!to || d <= to)
+  const isHere = (locationId) => !hereLocationId || locationId === hereLocationId
+  const coachName = (id) => personOf(people, id)?.full_name || 'Coach'
+
+  const restGaps = restGapViolations(covered, { minRestHours })
+    .filter((v) => (!todayIso || v.after.date >= todayIso)
+      && (inPeriod(v.before.date) || inPeriod(v.after.date))
+      && (isHere(v.before.location_id) || isHere(v.after.location_id)))
+    .map((v) => ({
+      profile_id: v.profile_id,
+      coach_name: coachName(v.profile_id),
+      rest_minutes: v.rest_minutes,
+      before: displaySlot(v.before, hereLocationId),
+      after: displaySlot(v.after, hereLocationId),
+    }))
+
+  const longWeeks = weekHoursOver(covered, maxWeekHours)
+    .filter((w) => {
+      const weekEnd = addDays(w.week_start, 6)
+      return (!todayIso || weekEnd >= todayIso)
+        && (!to || w.week_start <= to)
+        && (!from || weekEnd >= from)
+        && (!hereLocationId || w.location_ids.includes(hereLocationId))
+    })
+    .map((w) => ({
+      profile_id: w.profile_id,
+      coach_name: coachName(w.profile_id),
+      week_start: w.week_start,
+      minutes: w.minutes,
+      shift_count: w.shift_count,
+      studio_count: w.location_ids.length,
+    }))
+
+  return { restGaps, longWeeks }
+}
+
+/**
+ * The assign picker's question for ONE person: what would adding `candidate`
+ * to their shifts create? The caller checks the person is covered.
+ *
+ *   restGap    the shortest NEW short rest (violations with the candidate,
+ *              minus those without it), with the other shift and which side
+ *              of the candidate it is on; null when none.
+ *   weekHours  the candidate's week total when it is over the limit WITH the
+ *              candidate (even if it already was); null otherwise.
+ *
+ * `shifts` may hold other people and the candidate's own block: both ignored.
+ */
+export function candidateWorkingTime(shifts, candidate, {
+  hereLocationId = null, minRestHours = MIN_REST_HOURS, maxWeekHours = MAX_WEEK_HOURS,
+} = {}) {
+  const cand = workingWindow(candidate)
+  if (!cand) return { restGap: null, weekHours: null }
+  const own = (shifts || []).filter((s) => s?.profile_id === cand.profile_id && s.block_id !== cand.block_id)
+  const withCandidate = [...own, candidate]
+
+  const pairKey = (v) => `${v.before.block_id}|${v.after.block_id}`
+  const existing = new Set(restGapViolations(own, { minRestHours }).map(pairKey))
+  const worst = restGapViolations(withCandidate, { minRestHours })
+    .filter((v) => !existing.has(pairKey(v)))
+    .filter((v) => v.before.block_id === cand.block_id || v.after.block_id === cand.block_id)
+    .sort((a, b) => a.rest_minutes - b.rest_minutes)[0]
+  const candidateFirst = worst?.before.block_id === cand.block_id
+  const restGap = worst
+    ? {
+      rest_minutes: worst.rest_minutes,
+      side: candidateFirst ? 'after' : 'before',
+      other: displaySlot(candidateFirst ? worst.after : worst.before, hereLocationId),
+    }
+    : null
+
+  const weekStart = weekStartOf(cand.date)
+  const week = weekHoursOver(withCandidate, maxWeekHours).find((w) => w.week_start === weekStart)
+  return { restGap, weekHours: week ? { week_start: weekStart, minutes: week.minutes } : null }
+}
+
+// ── Copy ────────────────────────────────────────────────────────────────────
+
+/** 659 → '10h 59m', 660 → '11h', 45 → '45m'. Negative or garbage → '0m'. */
+export function hoursMinutesLabel(minutes) {
+  const m = Math.max(0, Math.round(Number(minutes) || 0))
+  const h = Math.floor(m / 60)
+  const r = m % 60
+  if (h === 0) return `${r}m`
+  return r === 0 ? `${h}h` : `${h}h ${r}m`
+}
+
+/** Counts PEOPLE: one person over in two weeks is still one employee. */
+export function longWeeksHeadline(longWeeks) {
+  const n = new Set((longWeeks || []).map((w) => w.profile_id)).size
+  return `${n} employee${n === 1 ? '' : 's'} over ${MAX_WEEK_HOURS} hours in a week`
+}
+
+export function restGapsHeadline(restGaps) {
+  const n = (restGaps || []).length
+  return `${n} rest${n === 1 ? '' : 's'} under ${MIN_REST_HOURS} hours ${REST_BETWEEN_LABEL}`
 }
