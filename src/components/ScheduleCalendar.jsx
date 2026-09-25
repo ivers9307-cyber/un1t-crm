@@ -70,6 +70,7 @@ import SchedulePartialLoadNote, {
   STAFF_UNAVAILABLE_MESSAGE, TEMPLATES_UNAVAILABLE_MESSAGE, LEAVE_NOT_FLAGGED_MESSAGE, AVAILABILITY_NOT_FLAGGED_MESSAGE,
 } from './schedule/SchedulePartialLoadNote'
 import RosterChangeLogDrawer from './schedule/RosterChangeLogDrawer'
+import { publishedRosterIdsIn } from '@/lib/roster-compare-format'
 import PublicationStatusChip from './schedule/PublicationStatusChip'
 import { timeOffLeaveLabel } from '@shared/time-off'
 // AVAIL.1 — the picker's advisory badge (pure, unit-tested in shared/).
@@ -586,6 +587,9 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
       start: visiblePeriodStart,
       end: visiblePeriodEnd,
       label: viewType === 'month' ? monthLabel : weekLabel,
+      // SNAPSHOT.1 — the published rosters this period's shifts sit on, for
+      // the dialog's Published vs now view. Read from the blocks already held.
+      rosterIds: publishedRosterIdsIn(blocks, visiblePeriodStart, visiblePeriodEnd),
     })
   }
   const publication = periodPublicationStatus({
@@ -1607,6 +1611,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
           periodStart={changeLog.start}
           periodEnd={changeLog.end}
           periodLabel={changeLog.label}
+          rosterIds={changeLog.rosterIds}
           restoreFocusRef={changeLogTriggerRef}
           onClose={() => setChangeLog(null)}
         />

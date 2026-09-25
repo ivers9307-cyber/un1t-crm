@@ -348,6 +348,20 @@ describe('changes since publish (CHANGELOG.1)', () => {
     expect(screen.getByTestId('publication-status').tagName).toBe('BUTTON')
   })
 
+  // SNAPSHOT.1 — the calendar already holds each block's roster_id, so the
+  // dialog is told which published rosters the week sits on at no cost.
+  it('offers Published vs now for the rosters the week sits on, and reads that roster for the week', async () => {
+    await renderCalendar({ blocks: [{ ...SHORT_BLOCK, roster_id: 'r1' }, { ...OK_BLOCK, roster_id: 'r1' }] })
+    fireEvent.click(screen.getByTestId('publication-status'))
+    const dialog = await screen.findByRole('dialog')
+    const compare = within(dialog).getByRole('button', { name: 'Published vs now' })
+    await act(async () => { fireEvent.click(compare) })
+    const sunday = new Date(`${isoMonday()}T00:00:00`)
+    sunday.setDate(sunday.getDate() + 6)
+    await waitFor(() => expect(global.fetch.mock.calls.map(([u]) => String(u)))
+      .toContain(`/api/schedule/rosters/r1/compare?from=${isoMonday()}&to=${iso(sunday)}`))
+  })
+
   it('an unpublished week has nothing to show: the chip stays plain text', async () => {
     await renderCalendar({ blocks: [EMPTY_BLOCK] })
     expect(screen.getByTestId('publication-status').tagName).toBe('SPAN')
