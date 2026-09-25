@@ -285,6 +285,22 @@ describe('readOrgShiftRows (CANDIDATES.1)', () => {
     expect(out.shifts).toHaveLength(1001)
   })
 
+  // CANDIDATES.1 review 1 — the coach asking for cover must never learn of a
+  // draft: publishedOnly drops every unpublished row, this studio's included.
+  it('publishedOnly keeps published rosters only, at every studio including this one', async () => {
+    const db = mockDb({ assignments: [
+      row('a1', 'emp', 'loc1', '2026-09-22', '09:00:00', '12:00:00', {}, 'published'),
+      row('a2', 'emp', 'loc1', '2026-09-23', '09:00:00', '12:00:00', {}, 'draft'),
+      row('a3', 'emp', 'loc2', '2026-09-24', '09:00:00', '12:00:00', {}, 'draft'),
+      row('a4', 'emp', 'loc2', '2026-09-25', '09:00:00', '12:00:00', {}, null),
+      row('a5', 'emp', 'loc2', '2026-09-26', '09:00:00', '12:00:00', {}, 'published'),
+    ] })
+    const out = await readOrgShiftRows(db, { ...SCOPE, profileIds: ['emp'], publishedOnly: true })
+    expect(out.shifts.map((s) => s.block_id)).toEqual(['b-a1', 'b-a5'])
+    const all = await readOrgShiftRows(db, { ...SCOPE, profileIds: ['emp'] })
+    expect(all.shifts).toHaveLength(5)
+  })
+
   it('nobody to read: no query at all', async () => {
     const db = mockDb()
     const out = await readOrgShiftRows(db, { ...SCOPE, profileIds: [] })

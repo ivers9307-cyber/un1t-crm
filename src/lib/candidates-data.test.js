@@ -139,7 +139,7 @@ describe('loadBlockCandidates — manager', () => {
     const out = await loadBlockCandidates(db, { block: BLOCK, audience: 'manager' })
     expect(siblingLocationIds).toHaveBeenCalledWith(db, 'loc1')
     expect(readOrgShiftRows).toHaveBeenCalledWith(db, {
-      locationId: 'loc1', scopeIds: ['loc1', 'loc2'], profileIds: ['ann', 'con', 'nul'], from: '2026-09-20', to: '2026-09-28',
+      locationId: 'loc1', scopeIds: ['loc1', 'loc2'], profileIds: ['ann', 'con', 'nul'], from: '2026-09-20', to: '2026-09-28', publishedOnly: false,
     })
     const leave = read(db, 'time_off_requests')
     expect(leave.select).toBe('id, profile_id, type, start_date, end_date')
@@ -193,6 +193,8 @@ describe('loadBlockCandidates — colleague', () => {
     expect(db.log.map((q) => q.table)).toEqual(['profile_locations'])
     expect(readStudioAvailability).not.toHaveBeenCalled()
     expect(readOrgShiftRows).toHaveBeenCalledTimes(1)
+    // CANDIDATES.1 review 1 — a coach is never told about a draft shift.
+    expect(readOrgShiftRows.mock.calls[0][1].publishedOnly).toBe(true)
     expect(out.checked).toEqual({ shifts: true, cross_studio: true })
     expect(out.candidates.map((c) => c.profile_id)).toEqual(['ann', 'con', 'nul'])
     expect(Object.keys(out.candidates[0]).sort()).toEqual(['free', 'full_name', 'profile_id', 'rank', 'reason', 'role', 'tier'])

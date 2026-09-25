@@ -43,7 +43,7 @@ export async function GET(request, props) {
   // Block lookup: also the studio-ownership gate.
   const { data: block, error: blockErr } = await db
     .from('shift_blocks')
-    .select('id, location_id, block_date, start_time, end_time, shift_templates(name, start_time, end_time), shift_assignments(profile_id, status)')
+    .select('id, location_id, block_date, start_time, end_time, roster_id, rosters:roster_id(status), shift_templates(name, start_time, end_time), shift_assignments(profile_id, status)')
     .eq('id', parsed.data)
     .maybeSingle()
   if (blockErr) return NextResponse.json({ success: false, error: blockErr.message }, { status: 500 })
@@ -58,6 +58,12 @@ export async function GET(request, props) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
   const audience = isManager ? 'manager' : 'colleague'
+  // A coach never sees a draft (ROSTER-FIX.1 D1): the swap POST refuses a
+  // shift on an unpublished roster with the same words, so no cover can be
+  // asked for one anyway. A manager plans drafts, so is not refused.
+  if (audience === 'colleague' && block.rosters?.status !== 'published') {
+    return NextResponse.json({ success: false, error: 'That shift is not published yet' }, { status: 400 })
+  }
 
   const out = await loadBlockCandidates(db, { block, audience })
   if (out.error) {

@@ -79,7 +79,8 @@ async function readApprovedLeave(db, profileIds, from, to) {
  * is re-checked against it afterwards. `countUnpublishedElsewhere` false drops
  * rows on an unpublished roster at a studio other than `locationId`.
  * `skip(profileId, blockDate)` true drops a row (approved leave, for WORKTIME's
- * switch). Paged at 1,000, ordered by id. Never throws: a failed read returns
+ * switch). `publishedOnly` true keeps rows on a PUBLISHED roster only, at every
+ * studio this one included (CANDIDATES.1: a coach is never told of a draft). Paged at 1,000, ordered by id. Never throws: a failed read returns
  * `error` with NO shifts.
  *
  * @returns {Promise<{ shifts: object[], error: { message: string } | null }>}
@@ -88,6 +89,7 @@ export async function readOrgShiftRows(db, {
   locationId, scopeIds, profileIds, from, to,
   countUnpublishedElsewhere = COUNT_UNPUBLISHED_ELSEWHERE,
   skip = null,
+  publishedOnly = false,
 } = {}) {
   const ids = [...new Set((profileIds || []).filter(Boolean))]
   const scope = [...new Set([locationId, ...(scopeIds || [])].filter(Boolean))]
@@ -112,6 +114,7 @@ export async function readOrgShiftRows(db, {
         // how PostgREST applies an embedded filter.
         if (!b || !scope.includes(b.location_id) || !isLiveAssignment(a)) continue
         if (!countUnpublishedElsewhere && b.location_id !== locationId && b.rosters?.status !== 'published') continue
+        if (publishedOnly && b.rosters?.status !== 'published') continue
         if (skip && skip(a.profile_id, b.block_date)) continue
         shifts.push({
           profile_id: a.profile_id,

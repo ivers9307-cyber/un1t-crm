@@ -139,7 +139,12 @@ export async function loadBlockCandidates(db, { block, audience = 'manager' } = 
     const memberIds = new Set(ids)
 
     const [shiftRead, leaveRead, availRead, contractRead] = await Promise.all([
-      readOrgShiftRows(db, { locationId: block.location_id, scopeIds, profileIds: ids, from: addDaysISO(monday, -1), to: addDaysISO(monday, 7) }),
+      // A coach is never told of a draft (ROSTER-FIX.1 D1): published rosters
+      // only for the colleague audience. A manager counts drafts, as WORKTIME.
+      readOrgShiftRows(db, {
+        locationId: block.location_id, scopeIds, profileIds: ids,
+        from: addDaysISO(monday, -1), to: addDaysISO(monday, 7), publishedOnly: !manager,
+      }),
       manager ? readApprovedLeaveOn(db, ids, block.block_date) : null,
       manager ? readStudioAvailability(db, { locationId: block.location_id, startDate: block.block_date, endDate: block.block_date }) : null,
       manager ? readContractedHours(db, employees) : null,

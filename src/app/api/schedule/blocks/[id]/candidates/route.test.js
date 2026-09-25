@@ -29,6 +29,7 @@ const BLOCK = {
   id: BLOCK_ID, location_id: LOC, block_date: '2026-09-23', start_time: '10:00:00', end_time: '12:00:00',
   shift_templates: { name: 'Midday Strength', start_time: '10:00:00', end_time: '12:00:00' },
   shift_assignments: [{ profile_id: 'coach-on', status: 'scheduled' }, { profile_id: 'coach-dropped', status: 'cancelled' }],
+  rosters: { status: 'published' },
 }
 const LOADED = {
   candidates: [{ profile_id: 'p1', full_name: 'Ann Free', role: 'staff', rank: 1, tier: 'ready', reason: 'Free · 4h of 39h this week', free: true }],
@@ -106,7 +107,7 @@ describe('GET /api/schedule/blocks/[id]/candidates', () => {
     const res = await call()
     expect(res.status).toBe(200)
     expect(db.log.eq).toEqual(['id', BLOCK_ID])
-    expect(db.log.select).toBe('id, location_id, block_date, start_time, end_time, shift_templates(name, start_time, end_time), shift_assignments(profile_id, status)')
+    expect(db.log.select).toBe('id, location_id, block_date, start_time, end_time, roster_id, rosters:roster_id(status), shift_templates(name, start_time, end_time), shift_assignments(profile_id, status)')
     expect(loadBlockCandidates).toHaveBeenCalledTimes(1)
     expect(loadBlockCandidates).toHaveBeenCalledWith(db, { block: BLOCK, audience: 'manager' })
     expect(await res.json()).toEqual({
@@ -127,6 +128,23 @@ describe('GET /api/schedule/blocks/[id]/candidates', () => {
     expect(res.status).toBe(200)
     expect(loadBlockCandidates).toHaveBeenCalledWith(db, { block: BLOCK, audience: 'colleague' })
     expect((await res.json()).data.audience).toBe('colleague')
+  })
+
+  // CANDIDATES.1 review 1 — a coach never sees a draft (ROSTER-FIX.1 D1). The
+  // swap POST refuses a shift on an unpublished roster the same way.
+  it('400 for the coach on the block when its roster is not published; a manager still gets the list', async () => {
+    for (const rosters of [{ status: 'draft' }, null]) {
+      db = dbWith({ block: { ...BLOCK, rosters } })
+      getCurrentUser.mockResolvedValue(userWith('coach-on', { [LOC]: 'staff' }))
+      const res = await call()
+      expect(res.status).toBe(400)
+      expect((await res.json()).error).toBe('That shift is not published yet')
+    }
+    expect(loadBlockCandidates).not.toHaveBeenCalled()
+    db = dbWith({ block: { ...BLOCK, rosters: { status: 'draft' } } })
+    getCurrentUser.mockResolvedValue(userWith('m1', { [LOC]: 'manager' }))
+    expect((await call()).status).toBe(200)
+    expect(loadBlockCandidates.mock.calls[0][1].audience).toBe('manager')
   })
 
   it('500 when the member list cannot be read: there is nothing to rank', async () => {
