@@ -363,7 +363,13 @@ export function candidateFacts({
   }
 
   if (checked.availability !== false && date) {
-    const matches = unavailableFor(rules, date, target?.start ?? null, target?.end ?? null)
+    // unavailableFor reads an end not after the start as "ask about the whole
+    // day" (a shift crossing midnight). A shift ENDING at midnight ('24:00',
+    // or '00:00' after a start) has a real window, so it is asked as ending
+    // '23:59': rule times stop at 23:59 and a rule must end after it starts,
+    // so no rule can tell the two apart (review 6).
+    const endsAtMidnight = target?.end === '00:00' && target.start !== '00:00'
+    const matches = unavailableFor(rules, date, target?.start ?? null, endsAtMidnight ? '23:59' : (target?.end ?? null))
     facts.unavailable = matches
       ? {
         summary: unavailableSummary(matches),

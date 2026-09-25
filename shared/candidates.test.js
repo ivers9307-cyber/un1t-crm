@@ -300,6 +300,29 @@ describe('buildCandidates — colleague (the coach asking for cover)', () => {
   })
 })
 
+// CANDIDATES.1 review 6 — a shift ending at midnight ('24:00', or '00:00'
+// after a start) is judged on its own window for availability, not as a
+// whole day: its effective end reads '00:00', which unavailableFor took for
+// "no usable end".
+describe('availability against a shift that ends at midnight', () => {
+  const lateBlock = (end) => ({
+    ...BLOCK, id: 'late', start_time: '22:00:00', end_time: end,
+    shift_templates: { name: 'Late', start_time: '22:00:00', end_time: end, kind: 'class' },
+  })
+  const rule = (over) => ({ profile_id: 'eve', kind: 'weekly', weekday: 'wed', all_day: false, note: null, ...over })
+  const eveOn = (block, rules) => buildCandidates({ block, checked: ALL_CHECKED, members: [M('eve', 'Eve')], rules }).candidates[0]
+
+  for (const end of ['24:00:00', '00:00:00']) {
+    it(`${end}: a morning rule does not touch it; an evening rule and an all-day rule do`, () => {
+      expect(eveOn(lateBlock(end), [rule({ start_time: '09:00', end_time: '10:00' })]).unavailable).toBeNull()
+      expect(eveOn(lateBlock(end), [rule({ start_time: '23:00', end_time: '23:30' })]).unavailable).toEqual({ summary: '11pm–11:30pm', detail: 'Wednesdays, 11pm–11:30pm' })
+      expect(eveOn(lateBlock(end), [rule({ all_day: true, start_time: null, end_time: null })]).unavailable).toMatchObject({ summary: 'all day' })
+      // A rule that ends as the shift starts is fine (overlap is strict).
+      expect(eveOn(lateBlock(end), [rule({ start_time: '21:00', end_time: '22:00' })]).unavailable).toBeNull()
+    })
+  }
+})
+
 describe('candidateFacts', () => {
   it('no target window (a block without times): shift facts unknown, leave and availability judged on the day', () => {
     const f = candidateFacts({
