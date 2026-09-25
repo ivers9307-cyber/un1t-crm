@@ -84,6 +84,18 @@ describe('GET /api/schedule/offers — manager view', () => {
     expect(body.data).toEqual([{ id: 'o1', block_id: 'b1', block_date: '2026-09-29', created_at: 'c', notice_state: 'sending', broadcast_count: 0 }])
     expect(loadBlockCandidates).not.toHaveBeenCalled()
   })
+  it('review 3 — a filled, unpublished or started shift\'s offer is not shown (the sweep has not closed it yet)', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    listOpenOffers.mockResolvedValue({ offers: [
+      O('o1', B()),
+      O('o2', B({ id: 'b2', shift_assignments: [{ profile_id: 'x', status: 'scheduled' }] })), // filled by hand
+      O('o3', B({ id: 'b3', rosters: { status: 'draft' } })),                                  // unpublished
+      O('o4', B({ id: 'b4', block_date: '2026-09-28', start_time: '09:00:00' })),              // started (10:00Z = 11:00 Dublin)
+    ], error: null })
+    const body = await (await call('location_id=loc-1&view=manage&start_date=2026-09-28&end_date=2026-10-04')).json()
+    expect(body.data.map((r) => r.id)).toEqual(['o1'])
+  })
+
   it('refuses a date the calendar does not have (DATECHECK.1)', async () => {
     getCurrentUser.mockResolvedValue(MANAGER)
     expect((await call('location_id=loc-1&view=manage&start_date=2026-02-30&end_date=2026-03-04')).status).toBe(400)

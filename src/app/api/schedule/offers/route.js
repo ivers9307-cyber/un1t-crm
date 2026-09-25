@@ -8,7 +8,11 @@
 //     the claim re-checks, and hiding it would lose an offer the push may
 //     already have announced.
 //   view=manage (a manager AT the studio): the period's open offers with
-//     their notice state, for the calendar and Manage mode.
+//     their notice state, for the calendar and Manage mode. The SAME live
+//     filter as the coach view (review 3): an offer whose shift has been
+//     filled by hand, left a published roster or started is not shown, so the
+//     dialog stops saying "Offered to the team" / Withdraw the moment the
+//     shift gets its coach, not up to five minutes later when the sweep closes it.
 // A studio that is not the caller's is 403 (a list route: the location comes
 // from the query, not from a row).
 
@@ -51,20 +55,25 @@ export async function GET(request) {
   const { offers, error } = await listOpenOffers(db, { locationId })
   if (error) return NextResponse.json({ success: false, error: 'Could not read offers' }, { status: 500 })
   const nowMs = Date.now()
+  // Still live: published, still needs someone, not started. The sweep closes
+  // anything else within five minutes; every list reads it live meanwhile.
+  const live = (o) => {
+    const b = o.shift_blocks
+    if (!b || b.rosters?.status !== 'published' || !offerStillNeeded(b)) return false
+    return !swapShiftHasStarted({ block_date: b.block_date, start_time: b.start_time }, nowMs, o.locations?.timezone ?? null)
+  }
 
   if (manage) {
     const inRange = (d) => !!d && (!startDate || d >= startDate) && (!endDate || d <= endDate)
     return NextResponse.json({
       success: true,
-      data: offers.filter((o) => inRange(o.shift_blocks?.block_date)).map((o) => managerOfferRow(o, { nowMs })),
+      data: offers.filter((o) => live(o) && inRange(o.shift_blocks?.block_date)).map((o) => managerOfferRow(o, { nowMs })),
     })
   }
 
   const rows = []
   for (const o of offers) {
-    const b = o.shift_blocks
-    if (!b || b.rosters?.status !== 'published' || !offerStillNeeded(b)) continue
-    if (swapShiftHasStarted({ block_date: b.block_date, start_time: b.start_time }, nowMs, o.locations?.timezone ?? null)) continue
+    if (!live(o)) continue
     const answer = await loadBlockCandidates(db, { block: offerBlock(o), audience: 'manager' })
     const mine = offerIsFor(answer, user.id)
     if (mine === null) {

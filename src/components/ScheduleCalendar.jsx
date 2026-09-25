@@ -690,7 +690,9 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
       }
       setAssignTarget(null)
       refreshAfterMutation()
-      // REPLACE.1b — a filled shift's offer closes server-side; re-read the line.
+      // REPLACE.1b — a filled shift's offer drops out of the list at once (the
+      // manage view filters on still-needed live; the sweep closes it within
+      // five minutes); re-read so the dialog's offer line goes.
       offers.reload()
     } catch {
       showToast('Network error, please try again')
