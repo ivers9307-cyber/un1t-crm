@@ -147,6 +147,14 @@ describe('assign picker: ranked candidates (CANDIDATES.1)', () => {
     expect(await screen.findByText('Could not check leave, so the order may be off.')).toBeTruthy()
     expect(screen.getByText('1 shift without times was not counted.')).toBeTruthy()
   })
+
+  // QUALS.1 review 4 — qualifications never move the order: their own sentence.
+  it('an unread qualification check is its own sentence, not "the order may be off"', async () => {
+    global.fetch = mockFetch({ answer: { ...ANSWER, data: { ...ANSWER.data, checked: { ...ANSWER.data.checked, qualifications: false } } } })
+    await openAssignPicker()
+    expect(await screen.findByText('Could not check qualifications.')).toBeTruthy()
+    expect(screen.queryByText(/order may be off/)).toBeNull()
+  })
 })
 
 // CANDIDATES.1 review 2 — the other studios unread: free means free HERE.

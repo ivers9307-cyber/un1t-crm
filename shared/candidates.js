@@ -259,13 +259,22 @@ const UNCHECKED_LABELS = [
   ['leave', 'leave'],
   ['availability', 'availability'],
   ['contract', 'contracted hours'],
-  ['qualifications', 'qualifications'],
 ]
 
-/** 'Could not check leave and availability, so the order may be off.' or null. */
-export function candidatesUncheckedNote(checked) {
+/**
+ * 'Could not check leave and availability, so the order may be off.' or null.
+ * QUALS.1 — `checked.qualifications === false` never changes the order (the
+ * qualification advisory is a badge, not a rank), so it gets its own
+ * sentence, 'Could not check qualifications.', and only when the caller shows
+ * that badge (`withQualifications`: the web picker). The phone shows no
+ * qualification badge, so by default nothing is said about them.
+ */
+export function candidatesUncheckedNote(checked, { withQualifications = false } = {}) {
   const missing = UNCHECKED_LABELS.filter(([key]) => checked?.[key] === false).map(([, label]) => label)
-  return missing.length ? `Could not check ${joinList(missing)}, so the order may be off.` : null
+  const parts = []
+  if (missing.length) parts.push(`Could not check ${joinList(missing)}, so the order may be off.`)
+  if (withQualifications && checked?.qualifications === false) parts.push('Could not check qualifications.')
+  return parts.length ? parts.join(' ') : null
 }
 
 /**

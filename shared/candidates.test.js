@@ -360,6 +360,15 @@ describe('QUALS.1 — qualification gaps', () => {
   })
 
   it('an unread qualification check is named in the note', () => {
-    expect(candidatesUncheckedNote({ qualifications: false })).toBe('Could not check qualifications, so the order may be off.')
+    // QUALS.1 review 4 — qualifications never move the order, so they are not
+    // in the "order may be off" clause. Their own sentence, and only for a
+    // caller that shows the badge (the web picker); the phone shows no badge,
+    // so by default it says nothing about them.
+    expect(candidatesUncheckedNote({ qualifications: false }, { withQualifications: true })).toBe('Could not check qualifications.')
+    expect(candidatesUncheckedNote({ leave: false, qualifications: false }, { withQualifications: true }))
+      .toBe('Could not check leave, so the order may be off. Could not check qualifications.')
+    expect(candidatesUncheckedNote({ qualifications: false })).toBeNull()
+    expect(candidatesUncheckedNote({ leave: false, qualifications: false })).toBe('Could not check leave, so the order may be off.')
+    expect(candidatesUncheckedNote({ qualifications: true }, { withQualifications: true })).toBeNull()
   })
 })
