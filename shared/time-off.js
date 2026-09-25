@@ -4,8 +4,14 @@
 // approval screen + reports render/bucket them.
 //
 // Gating (product decision 2026-06-17): full-time employees get the four leave
-// types; contractors + casual staff get 'unavailable' only. Unknown/null
+// types; contractors + casual staff got 'unavailable' only. Unknown/null
 // employment defaults to the full menu (don't over-restrict a mis-typed FTE).
+//
+// AVAIL.3 (mig 631): 'unavailable' is no longer REQUESTED by anyone. Saying
+// when you can't work is My availability (AVAIL.1/2): self-declared, no
+// approval, managers told. So contractors and casual staff have nothing to
+// request here at all, and every form sends them there instead. The type stays
+// in TIME_OFF_TYPES, the labels and the DB CHECK because past rows keep it.
 
 export const TIME_OFF_TYPES = [
   { value: 'holiday', label: 'Holiday' },
@@ -20,28 +26,41 @@ const RESTRICTED_EMPLOYMENT = ['contractor', 'casual']
 const FTE_VALUES = ['holiday', 'sick', 'unpaid', 'other']
 const RESTRICTED_VALUES = ['unavailable']
 
+// AVAIL.3 — types nobody may file as a NEW request (history keeps them).
+export const NON_REQUESTABLE_TYPES = Object.freeze(['unavailable'])
+
+export function isRequestableTimeOffType(type) {
+  return !NON_REQUESTABLE_TYPES.includes(type)
+}
+
 export function allowedTimeOffValues(employmentType) {
   return RESTRICTED_EMPLOYMENT.includes(employmentType) ? RESTRICTED_VALUES : FTE_VALUES
 }
 
 export function timeOffTypesFor(employmentType) {
   const allowed = allowedTimeOffValues(employmentType)
-  return TIME_OFF_TYPES.filter(t => allowed.includes(t.value))
+  return TIME_OFF_TYPES.filter(t => allowed.includes(t.value) && isRequestableTimeOffType(t.value))
 }
 
+// null when there is nothing to request (AVAIL.3: contractors, casual staff).
 export function defaultTimeOffTypeFor(employmentType) {
-  return RESTRICTED_EMPLOYMENT.includes(employmentType) ? 'unavailable' : 'holiday'
+  return timeOffTypesFor(employmentType)[0]?.value ?? null
+}
+
+// AVAIL.3 — false = send this person to My availability instead of a form.
+export function canRequestTimeOff(employmentType) {
+  return timeOffTypesFor(employmentType).length > 0
 }
 
 export function timeOffTypeLabel(value) {
   return TIME_OFF_TYPES.find(t => t.value === value)?.label || value
 }
 
-// LEAVE.2 — employment gate as a yes/no, for the SERVER. The forms offer
-// `timeOffTypesFor`; the API refuses what a restricted employment may not
-// file. Only the restriction is enforced: an FTE filing `unavailable` is not
-// refused (36 approved `unavailable` rows predate this and the form simply
-// does not offer it), so this can only narrow what contractors send.
+// LEAVE.2 — employment gate as a yes/no, for the SERVER'S DECISIONS on
+// existing rows (approve). A restricted employment may only ever hold
+// 'unavailable'; since AVAIL.3 nobody files a NEW one (the POST refuses it
+// with UNAVAILABLE_MOVED_ERROR before this gate), but a pending one filed
+// before the move can still be decided.
 export function isRestrictedEmployment(employmentType) {
   return RESTRICTED_EMPLOYMENT.includes(employmentType)
 }
@@ -51,7 +70,34 @@ export function isTimeOffTypeAllowedFor(employmentType, type) {
 }
 
 export const RESTRICTED_TYPE_ERROR =
-  'Contractors can only mark themselves Unavailable. Holiday, sick and unpaid leave are for employees.'
+  'Contractors don’t book leave. Set the days and times you can’t work in My availability, on the Schedule screen.'
+
+// AVAIL.3 — recording leave for a contractor (an approver on their behalf).
+export const RESTRICTED_TYPE_ON_BEHALF_ERROR =
+  'Contractors don’t take leave, so there is nothing to record for them. They set the days and times they can’t work in My availability, on the Schedule screen.'
+
+// AVAIL.3 — the POST's answer to a new 'unavailable' request (an old phone
+// or a stale tab still offers it). The old phone shows it in its
+// "Couldn't submit" alert, so it must say where to go.
+export const UNAVAILABLE_MOVED_ERROR =
+  'Unavailable is no longer a time-off request. Set the days and times you can’t work in My availability, on the Schedule screen. No approval is needed, and your managers are told.'
+
+// AVAIL.3 — the same refusal when an approver records it for someone else:
+// they are not the person who can't work, so it speaks about that person.
+export const UNAVAILABLE_MOVED_ON_BEHALF_ERROR =
+  'Unavailable is no longer a time-off request. Each person sets the days and times they can’t work themselves, in My availability on the Schedule screen. No approval is needed, and managers are told.'
+
+// AVAIL.3 — approving a contractor's holiday/sick/unpaid/other (existing rows).
+export const CONTRACTOR_DECIDE_ERROR =
+  'Contractors don’t take leave. Decline this request: they can set when they can’t work in My availability.'
+
+// AVAIL.3 — what a form shows instead of itself when there is nothing to request.
+export const AVAILABILITY_INSTEAD = Object.freeze({
+  title: 'Use My availability instead',
+  message: 'Contractors don’t request time off. Say when you can’t work in My availability: no approval is needed, and your managers are told.',
+  action: 'Open My availability',
+  onBehalf: 'Contractors don’t take leave, so there is nothing to record here. They set when they can’t work in their own availability.',
+})
 
 // LEAVE.2 — the calendar/card label for a leave type. The calendars used to
 // know holiday, sick and unavailable only, so approved unpaid and "other"

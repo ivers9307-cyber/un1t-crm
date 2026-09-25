@@ -105,15 +105,11 @@ describe('TimeOffManager — LEAVE.2', () => {
     expect(screen.getByRole('button', { name: 'Reject Holiday request from Toby Beta' })).toBeTruthy()
   })
 
-  it('a contractor is offered Unavailable only', async () => {
+  it('AVAIL.3 — a contractor gets a My availability link instead of Request Time Off', async () => {
     mockFetch({ requests: [] })
     await act(async () => { render(<TimeOffManager user={CONTRACTOR} canApprove={false} />) })
-    fireEvent.click(screen.getByRole('button', { name: /Request Time Off/ }))
-    const dialog = screen.getByRole('dialog')
-    for (const label of ['Holiday', 'Sick', 'Unpaid', 'Other']) {
-      expect(Array.from(dialog.querySelectorAll('button')).some((b) => b.textContent.trim() === label)).toBe(false)
-    }
-    expect(Array.from(dialog.querySelectorAll('button')).some((b) => b.textContent.trim() === 'Unavailable')).toBe(true)
+    expect(screen.getByRole('link', { name: 'My availability' }).getAttribute('href')).toBe('/schedule/availability')
+    expect(screen.queryByRole('button', { name: /Request Time Off/ })).toBeNull()
   })
 
   it('an approver can record leave for a colleague; types follow that person', async () => {
@@ -133,9 +129,12 @@ describe('TimeOffManager — LEAVE.2', () => {
     // The viewer is "Myself", never listed twice.
     expect(Array.from(select.options).map((o) => o.textContent)).toEqual(['Myself', 'Ciara Contractor', 'Fiona FTE'])
 
+    // AVAIL.3 — a contractor has nothing to record: a note, no types, no submit.
     fireEvent.change(select, { target: { value: 'c1' } })
     let dialog = screen.getByRole('dialog')
-    expect(Array.from(dialog.querySelectorAll('button[aria-pressed]')).map((b) => b.textContent.trim())).toEqual(['Unavailable'])
+    expect(dialog.querySelectorAll('button[aria-pressed]')).toHaveLength(0)
+    expect(dialog.textContent).toMatch(/Contractors don’t take leave, so there is nothing to record here/)
+    expect(screen.queryByRole('button', { name: 'Record Time Off' })).toBeNull()
 
     fireEvent.change(select, { target: { value: 'f1' } })
     dialog = screen.getByRole('dialog')

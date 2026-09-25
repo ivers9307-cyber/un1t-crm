@@ -10,7 +10,7 @@ import {
   canDecideTimeOff, decidingLocationIds, getProfileLocationIds, getEmploymentType, ensureHolidayAllowanceRow, findLeaveClashes,
   getOrgAdminLocationIdsByProfile,
 } from '@/lib/time-off-leave'
-import { isExpiredPendingRequest, isTimeOffTypeAllowedFor, timeOffLeaveLabel } from '@shared/time-off'
+import { isExpiredPendingRequest, isTimeOffTypeAllowedFor, timeOffLeaveLabel, CONTRACTOR_DECIDE_ERROR } from '@shared/time-off'
 import {
   selfCancelMode, isOpenCancelAsk, leaveActingLocationIds, resolveLeaveCancelDeciderIds,
   cancelAskNoticeKey, reAskBlockedUntil, leaveRangeText, CLEARED_CANCEL_ASK,
@@ -221,10 +221,7 @@ export async function PUT(request, props) {
       return NextResponse.json({ success: false, error: employmentError.message }, { status: 500 })
     }
     if (!isTimeOffTypeAllowedFor(employmentType, existing.type)) {
-      return NextResponse.json({
-        success: false,
-        error: 'Contractors can only be marked Unavailable. Decline this request and ask them to file it as Unavailable.',
-      }, { status: 400 })
+      return NextResponse.json({ success: false, error: CONTRACTOR_DECIDE_ERROR }, { status: 400 })
     }
 
     // LEAVE.4 — seed this year's allowance from the contract entitlement

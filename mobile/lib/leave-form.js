@@ -15,7 +15,9 @@
 //     POST refuses on `remaining - pendingDays`, so the form subtracts the same
 //     sum from the coach's own requests (whose total_days are the server's).
 
-import { isRestrictedEmployment, timeOffTypeLabel, leaveDateRangeLabel, leavePreviewLine } from 'shared/time-off'
+import {
+  isRestrictedEmployment, timeOffTypeLabel, leaveDateRangeLabel, leavePreviewLine, canRequestTimeOff, AVAILABILITY_INSTEAD,
+} from 'shared/time-off'
 
 const unknownPreview = () => ({ known: false, days: null, clashes: [] })
 const plural = (n, one, many) => (n === 1 ? one : many)
@@ -177,18 +179,66 @@ export function leaveSubmittedMessage({ type, startIso, endIso, days, clashCount
 // accessibility label never does. The row also wraps (the screen's container
 // is flex-wrap), which is the net for the largest accessibility text sizes
 // that even the short labels overflow.
+//
+// AVAIL.3 (review N9) — the compact label is the one left at the LARGEST
+// sizes, so it is checked there. 190pt for the 24 characters of the two full
+// labels is ~7.9pt a character at 1.0; each button's own chrome (padding,
+// icon, gap) is ~66pt and does not scale; the row's margins take 48pt. At the
+// largest iOS accessibility size (fontScale ~3.1) on a 375pt phone, a button
+// alone on its wrapped row has 327pt: "Time off" (8) needs ~262pt and fits;
+// "Availability" (12) needed ~360pt and overflowed. So a contractor's
+// compact label is "Avail." (6), and no compact label may be longer than
+// "Time off" (pinned in the test). "My availability" (15) is one character
+// shorter than "Request time off", so the full-label estimate holds as is.
 const FLOATING_TEXT_PT = 190
 const FLOATING_CHROME_PT = 190
 
-export function leaveFloatingButtons({ width, fontScale } = {}) {
+export function leaveFloatingButtons({ width, fontScale, employmentType } = {}) {
   const w = Number(width)
   const scale = Number(fontScale) > 0 ? Number(fontScale) : 1
   const compact = !(Number.isFinite(w) && w >= FLOATING_TEXT_PT * scale + FLOATING_CHROME_PT)
+  // AVAIL.3 — "My availability" is one character shorter than "Request time
+  // off", so the same width estimate holds for both (compact: see above).
+  const entry = leaveRequestEntry(employmentType)
   return {
     compact,
-    requestLabel: compact ? 'Time off' : 'Request time off',
+    requestLabel: compact ? entry.shortLabel : entry.label,
     myLeaveLabel: 'My leave',
-    requestA11y: 'Request time off',
+    requestA11y: entry.a11y,
     myLeaveA11y: 'My leave, your time-off requests',
+    requestIcon: entry.icon,
+    requestTarget: entry.target,
+  }
+}
+
+// ── AVAIL.3: where "Request time off" goes ────────────────────────────────
+//
+// "Unavailable" moved into availability (mig 631). Contractors and casual
+// staff had no other type, so for them every entry point that said "Request
+// time off" (the Schedule tab's floating button, the Today shortcut) opens My
+// availability instead. Unknown employment keeps the leave form, matching
+// shared/time-off's "don't over-restrict a mis-typed FTE" (and a profile still
+// loading never sends anyone the wrong way for long).
+export function leaveRequestEntry(employmentType) {
+  if (canRequestTimeOff(employmentType)) {
+    return {
+      target: '/schedule/time-off-new', label: 'Request time off', shortLabel: 'Time off',
+      a11y: 'Request time off', icon: 'add', rowIcon: 'calendar-outline',
+    }
+  }
+  return {
+    target: '/schedule/availability', label: 'My availability', shortLabel: 'Avail.',
+    a11y: 'My availability, when you can’t work', icon: 'time-outline', rowIcon: 'time-outline',
+  }
+}
+
+/** What the leave form shows INSTEAD of itself, or null to show the form. */
+export function leaveFormGate(employmentType) {
+  if (canRequestTimeOff(employmentType)) return null
+  return {
+    title: AVAILABILITY_INSTEAD.title,
+    message: AVAILABILITY_INSTEAD.message,
+    action: AVAILABILITY_INSTEAD.action,
+    target: '/schedule/availability',
   }
 }

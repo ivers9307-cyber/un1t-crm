@@ -32,6 +32,7 @@ import {
 // REPLACE.1b — "Shifts up for grabs": the card's lines and the claim alert.
 import { offerCardLines, offerClaimAlert } from '../../lib/offer-cards'
 import { myLeaveCancelOutcome } from '../../lib/my-leave'
+import { leaveRequestEntry } from '../../lib/leave-form'
 // CT-P3b — reuse the schedule Manage-mode colleague picker for targeted swaps.
 import CoachPickerSheet from '../schedule/CoachPickerSheet'
 // CANDIDATES.1 — colleagues ranked free-first for the shift being covered.
@@ -406,6 +407,8 @@ function RosterToggle({ value, onChange }) {
 
 export default function PersonalDashboard({ refreshKey }) {
   const { profile, activeLocation, locations } = useAuth()
+  // AVAIL.3 — the Today shortcut: "Request time off", or My availability for a contractor.
+  const requestEntry = leaveRequestEntry(profile?.employment_type)
   const router = useRouter()
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -794,13 +797,16 @@ export default function PersonalDashboard({ refreshKey }) {
 
       {/* Request time off — top-of-page shortcut, directly under Needs
           attention, so a coach can request leave without scrolling past the
-          roster or hopping to the Schedule tab. */}
+          roster or hopping to the Schedule tab. AVAIL.3: for a contractor it
+          opens My availability (they have no leave types). */}
       <Pressable
-        onPress={() => router.push('/schedule/time-off-new')}
+        onPress={() => router.push(requestEntry.target)}
+        accessibilityRole="button"
+        accessibilityLabel={requestEntry.a11y}
         className="flex-row items-center bg-un1t-surface border border-un1t-border rounded-2xl px-4 py-3.5 mb-3 active:opacity-70"
       >
-        <Ionicons name="calendar-outline" size={18} color="#64748B" />
-        <Text className="text-sm font-medium text-un1t-text ml-2.5">Request time off</Text>
+        <Ionicons name={requestEntry.rowIcon} size={18} color="#64748B" />
+        <Text className="text-sm font-medium text-un1t-text ml-2.5">{requestEntry.label}</Text>
         <View className="flex-1" />
         <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
       </Pressable>

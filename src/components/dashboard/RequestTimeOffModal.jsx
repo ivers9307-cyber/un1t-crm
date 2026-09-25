@@ -9,7 +9,8 @@
 import { useState } from 'react'
 import Modal from '@/components/ui/Modal'
 import Button from '@/components/ui/Button'
-import { timeOffTypesFor, defaultTimeOffTypeFor } from '@shared/time-off'
+import Link from 'next/link'
+import { timeOffTypesFor, defaultTimeOffTypeFor, canRequestTimeOff, AVAILABILITY_INSTEAD } from '@shared/time-off'
 
 function todayIso() {
   const d = new Date()
@@ -78,6 +79,26 @@ export default function RequestTimeOffModal({ open, onClose, onSuccess, employme
     }
   }
 
+  // AVAIL.3 — nothing to request (a contractor): "unavailable" moved into My
+  // availability, so say where to go instead of showing an empty form.
+  if (!canRequestTimeOff(employmentType)) {
+    return (
+      <Modal
+        open={open}
+        onClose={handleClose}
+        title={AVAILABILITY_INSTEAD.title}
+        size="sm"
+        footer={<Button type="button" variant="secondary" onClick={handleClose}>Close</Button>}
+      >
+        <p className="text-sm text-un1t-subtle">{AVAILABILITY_INSTEAD.message}</p>
+        <Link href="/schedule/availability" className="mt-3 inline-block text-sm font-medium text-un1t-text underline">
+          {AVAILABILITY_INSTEAD.action}
+        </Link>
+      </Modal>
+    )
+  }
+
+
   return (
     <Modal
       open={open}
@@ -96,8 +117,7 @@ export default function RequestTimeOffModal({ open, onClose, onSuccess, employme
       }
     >
       <form id="time-off-form" onSubmit={handleSubmit} className="space-y-4">
-        {/* Type — dropdown when the employee has a choice; a static line
-            when only one type is allowed (contractor / casual → Unavailable). */}
+        {/* Type — dropdown when the employee has a choice; a static line when only one type is allowed. Contractors never reach here (AVAIL.3). */}
         <div>
           <label className="block text-xs font-medium text-un1t-subtle mb-1" htmlFor="tof-type">
             Type
