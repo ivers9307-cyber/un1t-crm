@@ -4856,6 +4856,68 @@ registry.registerPath({
   },
 })
 
+// REPLACE.1b — "Offer to team".
+registry.registerPath({
+  method: 'post',
+  path: '/api/schedule/blocks/{id}/offer',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Offer an unfilled shift to the team (manager-only)',
+  description: "Creates an open offer for a published shift that is today or later, has not started (studio clock) and still needs a coach: a class shift below its minimum (at least 1), or an empty admin shift. One open offer per shift. Manager at the shift's studio only (404 outside it, 403 for a non-manager there). Every coach at the studio who is free then (not on approved leave, not on another shift in the organisation, not unavailable) is pushed, inside 07:00-22:00 studio time (from 07:00 otherwise); the offer is visible at once. `data.notice` is now or morning.",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    201: { description: 'Offered; `data.offer_id` and `data.notice`' },
+    403: { description: 'Forbidden — a manager at this studio only', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Shift not found, or at a location you do not own', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: '`code` not_published, past, started, staffed or already_offered', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'get',
+  path: '/api/schedule/offers',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Open shift offers at a studio',
+  description: "Default: the offers the caller could take (free, not on leave, not unavailable, not already on the shift), when/what/where only: never counts or minimums. `view=manage` (a manager at the studio): the period's open offers with `notice_state` (sent, nobody, sending, morning, failed) and `broadcast_count`.",
+  request: { query: z.object({ location_id: uuidLike, view: z.enum(['manage']).optional(), start_date: z.string().optional(), end_date: z.string().optional() }) },
+  responses: {
+    200: { description: 'Offers' },
+    400: { description: 'No studio, or a date the calendar does not have', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not your studio, or manage view without a manager role there', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'post',
+  path: '/api/schedule/offers/{id}/claim',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Claim an offered shift',
+  description: 'First to claim gets it (claim_shift_offer locks the offer). The caller must belong to the studio (404 otherwise), and must not be on approved leave that day or on another shift at that time; unavailability does not block a claim. The managers are told who took it (07:00-22:00 studio time).',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: "Claimed; the shift is on the caller's roster" },
+    403: { description: 'Not on the staff of this studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Offer not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Taken, withdrawn, filled, started, or the caller is on leave / another shift / already on it', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'The leave / shift check could not be read; try again', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'delete',
+  path: '/api/schedule/offers/{id}',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Withdraw a shift offer (manager-only)',
+  description: "Closes an open offer as withdrawn. Manager at the offer's studio only (404 outside it, 403 for a non-manager there). Nobody is notified.",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Withdrawn' },
+    403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Offer not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Already closed, or changed meanwhile', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // BUDGETAPPROVE.1 — approve re-projects the budget and reports whether it moved.
 registry.registerPath({
   method: 'post',
