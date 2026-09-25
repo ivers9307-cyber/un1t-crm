@@ -49,7 +49,7 @@ Size: S under a day, M one to three days, L a week or more. "Mig" = new migratio
 |---|---|---|---|---|---|---|
 | 31 | HEARTBEAT.1 | S | Shift-reminder and unbuilt-week arms get heartbeat rows of their own, stamped only on success | 633 | | |
 | 32 | SNAPSHOT.1 | M | Publish snapshot: what was published, so "as published", "as finally rostered" and "as arrived" can be compared (manager view) | 634 | | |
-| 33 | QUALS.1 | M | Qualifications with expiry (first aid, insurance, vetting), an optional requirement on a template (advisory in the picker), an expiry digest to owners | 635 | | 19 |
+| 33 | QUALS.1 | M | Qualifications with expiry (first aid, insurance, vetting), an optional requirement on a template (advisory in the picker), an expiry digest to owners | 635 | yes (shared; one new push toggle) | 19 |
 | 34 | ARRIVALSHOW.1 | S | Coaches see their own arrival stamp on the phone. The first half of late and no-show alerts | | yes | |
 | 35 | LABOUR.1 | M | Owner-only labour against revenue, and the month's forecast against actual. Server-computed ratios; rates never reach the browser | | | 13 |
 | 36 | CLASSLINK.1 | M | Class schedule goes platform-neutral: `class_occurrences` gains a source, `glofox_event_id` becomes optional, coaches map to trainer ids | 636 | | |
@@ -111,6 +111,9 @@ These are marked **REVIEW** in the artifact until he confirms or changes them. E
 27. **The coach picker has ONE source of warnings** (CANDIDATES.1): the server's ranked list. If that request fails, the web picker lists the studio A–Z with a note saying nobody could be checked, and shows none of the clash, leave or availability badges it shows today. Ranking puts employees under their contract ahead of contractors, and a coach already on site ahead of one with a lighter week.
 28. **On the phone, an existing one-day availability card plus a tap on a later day makes a range** (3 Oct, then a tap on 10 Oct, gives 3–10 Oct) rather than moving the day. Deliberate and documented; worth a look on a real phone.
 
+29. **Qualifications live per organisation, not per studio** (a coach at both studios holds one certificate). First aid, Insurance and Garda vetting are seeded; **expiry is optional** (Garda vetting has none). Requirements on a template are advisory only (a picker badge, never a block), at most 5 per template.
+30. **The qualification expiry digest goes weekly to owners and linked masters,** covering only their own studios' people, through a new `qualification_expiry` push toggle (push = the count, the fallback email = the list). The plan lists 13 more questions at its end.
+
 ## Follow-ups found along the way (not in any PR yet)
 
 - 🔴 `payroll.timeToHours` (`src/lib/payroll.js:25-34`) refuses hour 24, so payroll counts a shift ending `'24:00'` as **0 hours** (found planning 32).
@@ -134,6 +137,7 @@ These are marked **REVIEW** in the artifact until he confirms or changes them. E
 
 Updated by the loop. Newest first.
 
+- 25 Sep ~15:25Z: 33 QUALS.1 plan written (mig 635: org-level catalogue, one record per person per type, template requirements ≤5 with a same-org trigger; Schedule › Qualifications page; advisory picker badge via CANDIDATES.1; weekly digest arm on `contract-reminders` with its own `qualification-digest` row). **Correction: QUALS.1 publishes an OTA** (shared + a push toggle). At apply time re-run the heartbeat upsert right after the deploy (the arm rule), though its 36h budget makes the pre-deploy seed harmless.
 - 25 Sep 14:15Z: ✅ #1764 BLOCKEDIT.1 EAS Update SUCCESS + prod deploy; **mig 639 APPLIED after the deploy**, `shift-time-changes` stamped by the 14:15Z tick with a clean outcome. BLOCKEDIT.1 DONE. #1765 AVAIL.2 brought up to date (3,307 mobile/shared tests), auto-merge on (next OTA). Review page v12.
 - 25 Sep ~15:15Z: **#1764 BLOCKEDIT.1 MERGED** (14:04Z); EAS run + prod deploy being watched, then mig 639. 32 SNAPSHOT.1 plan written (mig 634 `roster_publish_snapshots`, immutable jsonb per publish; best-effort writer; compare route). 19 CANDIDATES.1 built (11 commits; picker now has one source of warnings) → main merged (dashboard select keeps `id` + `briefing`) → independent review. 20 REPLACE.1a review: approved w/ should-fixes (stamp failure resends + green heartbeat; three older writers not pinned to the read profile — incl. a PUT that could land A's paid window on B; notices for already-started shifts; a deleted slot loses A's notice) → fixes + mig 640 in progress. Batch 8 plans commissioned (34 ARRIVALSHOW.1, 35 LABOUR.1).
 - 25 Sep ~14:35Z: 17 AVAIL.2 = [PR #1765](https://github.com/ivers9307-cyber/un1t-crm/pull/1765): gate 28,488 + build; fix check APPROVED; merges after #1764's EAS run (OTAs one at a time). 20 REPLACE.1a built (10 commits) → independent review. **Renumber:** 1a's arm heartbeat row `replace-notices` moves into its own mig 640 (applied after 1a's deploy, else the arm logs ~288 missing-row warnings/day); 1b's `shift_offers` becomes mig 641. 21 GRID.1 implementer started (`~/code/un1t-crm-grid1`). Handset item for Richard: an existing one-day availability card + a tap on a later day makes a range, by design — check it feels right.
