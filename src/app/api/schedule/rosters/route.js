@@ -45,7 +45,8 @@ import {
 } from '@/lib/roster-publish'
 import { sendOverBudgetApprovalEmail } from '@/lib/roster-email'
 import { notifyStaffOfPublish, publishNotifyRowsForBlocks, renotifyChangedCoaches } from '@/lib/roster-notify'
-import { logWarn } from '@/lib/log'
+import { logWarn, logError } from '@/lib/log'
+import { writePublishSnapshot } from '@/lib/roster-snapshot'
 
 const PublishSchema = z.object({
   location_id: uuidLike,
@@ -482,6 +483,21 @@ export async function POST(request) {
         data: roster,
         warning: `Roster published but block tagging failed: ${tagErr.message}.${stranded}`,
       }, { status: 201 })
+    }
+
+    // SNAPSHOT.1 — record what this publish published (mig 634), now that
+    // every block in the period carries this roster's id. BEST-EFFORT BY
+    // DESIGN: this publish is a chain of PostgREST writes with no transaction
+    // to join, and failing it over a lost audit record would leave coaches
+    // untold about their week (CLAUDE.md: never create a louder failure).
+    // writePublishSnapshot never throws, retries once and logs a failure with
+    // logError; this try/catch is the second fence, not the first. Nothing is
+    // added to the response: the manager has nothing to act on (the compare
+    // view says "could not be saved at the time" instead).
+    try {
+      await writePublishSnapshot(db, roster)
+    } catch (e) {
+      logError('rosters', 'publish snapshot threw past its own guard', { err: e, roster_id: roster.id })
     }
 
     // ROSTER-SUPERSEDE.1 — phase 2, and it has to be AFTER the re-tag above:

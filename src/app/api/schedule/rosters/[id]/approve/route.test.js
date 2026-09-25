@@ -34,7 +34,9 @@ vi.mock('@/lib/roster-publish', async (importOriginal) => ({
 }))
 // ROSTERTIDY.1 — spied so a remnant-supersede failure can be shown to LOG
 // rather than fail the approval.
-vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logWarn: vi.fn() }))
+vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logWarn: vi.fn(), logError: vi.fn() }))
+// SNAPSHOT.1 — only WHEN the writer is called matters here.
+vi.mock('@/lib/roster-snapshot', () => ({ writePublishSnapshot: vi.fn(() => Promise.resolve({ saved: true })) }))
 vi.mock('@/lib/roster-notify', () => ({
   notifyStaffOfPublish: vi.fn(() => Promise.resolve()),
   publishNotifyRowsForBlocks: vi.fn(() => Promise.resolve([])),
@@ -47,6 +49,7 @@ const { hasPermissionForLocation } = await import('@/lib/permissions')
 const { notifyStaffOfPublish, renotifyChangedCoaches } = await import('@/lib/roster-notify')
 const { projectPublishImpact } = await import('@/lib/roster-publish')
 const { logWarn } = await import('@/lib/log')
+const { writePublishSnapshot } = await import('@/lib/roster-snapshot')
 const { POST } = await import('./route.js')
 
 const FRESH = {
@@ -812,5 +815,51 @@ describe('POST /api/schedule/rosters/[id]/approve — approver role at the roste
     const res = await POST({}, PROPS)
     expect(res.status).toBe(200)
     expect(updates.find((u) => u.payload.status === 'published').payload.over_budget_approval_by).toBe('split-2')
+  })
+})
+
+// SNAPSHOT.1 — approving IS publishing, so it records what it published too.
+describe('POST /api/schedule/rosters/[id]/approve — publish snapshot (SNAPSHOT.1)', () => {
+  beforeEach(() => {
+    writePublishSnapshot.mockReset()
+    writePublishSnapshot.mockResolvedValue({ saved: true })
+  })
+
+  it('writes one snapshot with the roster as the approval flipped it', async () => {
+    const { db } = buildDb({ roster: draft(), publishedRosters: [] })
+    createServerClient.mockReturnValue(db)
+    const res = await POST({}, PROPS)
+    expect(res.status).toBe(200)
+    expect(writePublishSnapshot).toHaveBeenCalledTimes(1)
+    const [dbArg, roster] = writePublishSnapshot.mock.calls[0]
+    expect(dbArg).toBe(db)
+    expect(roster).toMatchObject({ id: 'roster-1', location_id: 'loc-1', status: 'published', period_start: '2026-05-04', period_end: '2026-05-10' })
+  })
+
+  it('a failed block tagging writes no snapshot', async () => {
+    const { db } = buildDb({ roster: draft(), tagError: { message: 'deadlock detected' } })
+    createServerClient.mockReturnValue(db)
+    const res = await POST({}, PROPS)
+    expect(res.status).toBe(200)
+    expect(writePublishSnapshot).not.toHaveBeenCalled()
+  })
+
+  it('a refused approval (not a draft) writes no snapshot', async () => {
+    const { db } = buildDb({ roster: draft({ status: 'published' }) })
+    createServerClient.mockReturnValue(db)
+    const res = await POST({}, PROPS)
+    expect(res.status).toBe(409)
+    expect(writePublishSnapshot).not.toHaveBeenCalled()
+  })
+
+  it('a writer that throws never fails the approval', async () => {
+    writePublishSnapshot.mockRejectedValue(new Error('boom'))
+    const { db } = buildDb({ roster: draft(), publishedRosters: [] })
+    createServerClient.mockReturnValue(db)
+    const res = await POST({}, PROPS)
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.success).toBe(true)
+    expect(body.warning).toBeUndefined()
   })
 })
