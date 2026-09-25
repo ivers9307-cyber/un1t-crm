@@ -12,6 +12,8 @@
 // them: capacity is not read for ANYONE (the "1/15" chip is gone), and staffing
 // status exists only when `isManager` is true. A component cannot leak what its
 // model does not contain.
+// The briefing (BLOCKEDIT.1) is written for coaches; the model carries only
+// that one exists.
 //
 // Web-only on purpose: anything under shared/ publishes an OTA.
 
@@ -20,6 +22,7 @@ import { futureBlockStaffing, countStaffingGaps, staffingGapsHeadline, staffingG
 import { formatTime12h, formatTimeRange12h } from './schedule-overlap'
 import { timeOffLeaveLabel } from '../../shared/time-off'
 import { isAdminShift, SHIFT_KIND_LABELS } from '../../shared/shift-kind'
+import { briefingOf } from '../../shared/shift-briefing'
 
 /**
  * The card's surface tone. The template's colour is no longer a fill, because
@@ -54,6 +57,9 @@ export function shiftCardModel(block, assignments, staffing, { isManager = false
   // futureBlockStaffing's null for it.
   const isAdmin = isAdminShift(block)
   const kindLabel = isAdmin ? SHIFT_KIND_LABELS.admin : null
+  // BLOCKEDIT.1 — whether the shift carries a coach briefing. The TEXT stays
+  // out of the model: the card only says one exists; the dialog shows it.
+  const hasBriefing = Boolean(briefingOf(block))
   const coaches = liveAssignments(assignments).map((a) => {
     const hasOverride = !!(a.start_time_override || a.end_time_override)
     const from = formatTime12h(a.start_time_override || block?.start_time)
@@ -98,6 +104,7 @@ export function shiftCardModel(block, assignments, staffing, { isManager = false
   const hoverTitle = [
     templateName,
     kindLabel,
+    hasBriefing ? 'Has a briefing' : null,
     timeLabel,
     coaches.map((c) => (c.adjusted ? `${c.name} (${c.adjusted.title})` : c.name)).join(', '),
     status?.title,
@@ -112,6 +119,7 @@ export function shiftCardModel(block, assignments, staffing, { isManager = false
     shortLabel: `${formatTime12h(block?.start_time)} ${templateName} shift`,
     templateName,
     kindLabel,
+    hasBriefing,
     coaches,
     status,
     emptyText,

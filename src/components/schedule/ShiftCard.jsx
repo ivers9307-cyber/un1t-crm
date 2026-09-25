@@ -135,6 +135,16 @@ export default function ShiftCard({ model, dayLabel, isMine = false, showHint = 
         </div>
       )}
 
+      {/* BLOCKEDIT.1 — the shift has a note for its coaches; the dialog shows it. */}
+      {model.hasBriefing && (
+        <div
+          data-testid="shift-briefing"
+          className="mt-1 inline-flex items-center rounded bg-blue-500/10 px-1.5 py-0.5 text-[11px] font-medium text-blue-700"
+        >
+          Briefing
+        </div>
+      )}
+
       {/* What — small and muted, but the FULL name, with a title for when the
           column still truncates it. un1t-subtle, not un1t-muted: this is small
           text and #94A3B8 on white is 2.6:1. */}
