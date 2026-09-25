@@ -13,7 +13,11 @@ import { useFocusEffect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import {
   getScheduleBlocks, getLocationStaff, assignCoachToBlock, removeAssignment, replaceAssignment, getBlockCandidates,
+  getManagedOffers, offerBlockToTeam, withdrawShiftOffer,
 } from '../../lib/schedule-api'
+// REPLACE.1b — "Offer to team" on the block card (decisions: offer-cards.js).
+import { blockOfferControl, offerPostAlert } from '../../lib/offer-cards'
+import { indexOffersByBlock } from 'shared/offer-to-team'
 // CANDIDATES.1 — the picker's ranked list: request lifecycle (pure, tested).
 import { NO_CANDIDATES, candidatesStarted, candidatesSettled, candidatesFor } from '../../lib/candidates-view'
 import { effShiftStart } from '../../lib/schedule-team'
@@ -40,6 +44,7 @@ export default function ManageMode({ activeLocation, weekStart, weekEnd, selecte
   const [staffError, setStaffError] = useState(null)
   const [pickerBlock, setPickerBlock] = useState(null)
   const [replaceTarget, setReplaceTarget] = useState(null) // REPLACE.1a — { block, assignment }
+  const [offers, setOffers] = useState({}) // REPLACE.1b — open offers by block id
   // CANDIDATES.1 — the ranked list for the block the picker is open on. One
   // ask per open; only the newest ask for the open block lands.
   const [candidates, setCandidates] = useState(NO_CANDIDATES)
@@ -75,12 +80,23 @@ export default function ManageMode({ activeLocation, weekStart, weekEnd, selecte
     const gen = ++generation.current
     if (spinner) setLoading(true)
     let res
+    let offersRes = null
     try {
-      res = await getScheduleBlocks({ locationId, startDate: weekStart, endDate: weekEnd })
+      // REPLACE.1b — the week's open offers ride the same load (and the same
+      // generation guard). Their failure is on its own: it never costs the roster.
+      const both = await Promise.all([
+        getScheduleBlocks({ locationId, startDate: weekStart, endDate: weekEnd }),
+        getManagedOffers({ locationId, startDate: weekStart, endDate: weekEnd }).catch(() => null),
+      ])
+      res = both[0]
+      offersRes = both[1]
     } catch (e) {
       res = { success: false, error: e?.message }
     }
     if (!isCurrentLoad({ gen, currentGen: generation.current, requestedKey, currentKey: currentKey.current })) return
+    // An unreadable offer list shows no offer lines; "Offer to team" may then
+    // show on an offered shift, and the route answers "already offered".
+    setOffers(offersRes?.success ? indexOffersByBlock(offersRes.data) : {})
     const out = rosterLoadOutcome({ res, requestedKey, loadedKey: loadedKey.current })
     if (out.blocks !== undefined) setBlocks(out.blocks)
     loadedKey.current = out.loadedKey
@@ -162,6 +178,7 @@ export default function ManageMode({ activeLocation, weekStart, weekEnd, selecte
     staffRef.current = null
     setStaff(null); setStaffError(null); setStaffLoading(false); setPickerBlock(null)
     setReplaceTarget(null) // REPLACE.1a — a studio switch closes this picker too
+    setOffers({}) // REPLACE.1b — the old studio's offers are not this one's
   }, [locationId])
 
   // Refetch only when the pool was already loaded — a manager who never opened
@@ -258,6 +275,37 @@ export default function ManageMode({ activeLocation, weekStart, weekEnd, selecte
     Alert.alert(out.title, out.message)
     if (out.kind === 'done') { load(); refreshStaffIfLoaded() }
   }
+  // REPLACE.1b — offer a shift to the team. The confirm Alert comes from a
+  // tap on the card (no Modal is dismissing), and the result Alert only after
+  // the network answer.
+  function offerToTeam(block) {
+    Alert.alert('Offer to the team?', `${block.shift_templates?.name || 'This shift'} goes to every coach at this studio who is free then. The first to claim it gets it.`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Offer', onPress: async () => {
+        setBusyId(block.id)
+        const res = await offerBlockToTeam(block.id, { locationId })
+        setBusyId(null)
+        const out = offerPostAlert(res)
+        Alert.alert(out.title, out.message)
+        load()
+      } },
+    ])
+  }
+  // REPLACE.1b — the offer line opens its state and "Withdraw offer".
+  function onOfferPress(block, offer) {
+    if (!offer) return
+    Alert.alert(block.shift_templates?.name || 'Offered shift', blockOfferControl(block, offer, dublinTodayIso()).label, [
+      { text: 'Close', style: 'cancel' },
+      { text: 'Withdraw offer', style: 'destructive', onPress: async () => {
+        setBusyId(block.id)
+        const res = await withdrawShiftOffer(offer.id, { locationId })
+        setBusyId(null)
+        if (!res.success) Alert.alert('Could not withdraw', res.error || 'Unknown error')
+        load()
+      } },
+    ])
+  }
+
   function confirmRemove(block, assignment) {
     Alert.alert('Remove from shift?', `Remove ${assignment.profiles?.full_name || 'this coach'} from ${block.shift_templates?.name || 'this shift'}?`, [
       { text: 'Cancel', style: 'cancel' },
@@ -295,7 +343,9 @@ export default function ManageMode({ activeLocation, weekStart, weekEnd, selecte
         </View>
       ) : dayBlocks.map((b) => (
         <BlockCard key={b.id} block={b} busy={busyId === b.id}
-          onAddCoach={() => openPicker(b)} onCoachPress={(a) => onCoachPress(b, a)} />
+          onAddCoach={() => openPicker(b)} onCoachPress={(a) => onCoachPress(b, a)}
+          offerControl={blockOfferControl(b, offers[b.id] ?? null, dublinTodayIso())}
+          onOffer={() => offerToTeam(b)} onOfferPress={() => onOfferPress(b, offers[b.id])} />
       ))}
 
       <CoachPickerSheet visible={!!pickerBlock} block={pickerBlock} locationId={locationId}
