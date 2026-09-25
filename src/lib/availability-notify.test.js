@@ -13,7 +13,7 @@ const { logError } = await import('@/lib/log')
 const {
   AVAILABILITY_NOTIFY_ROLES, AVAILABILITY_NOTICE_MAX_AGE_MS, AVAILABILITY_NOTICE_LEASE_MS, AVAILABILITY_RETRY_SLOT_MS,
   availabilityEventKey, availabilityRetryKey, availabilityNoticeText,
-  splitStudiosByBand, deliverAvailabilityNotice, runAvailabilityNoticeSweep,
+  splitStudiosByBand, deliverAvailabilityNotice, deliverOwedAvailabilityNotices, runAvailabilityNoticeSweep,
 } = await import('./availability-notify')
 const { RUNWAY_NOTIFY_ROLES } = await import('./roster-runway-notify')
 
@@ -192,6 +192,48 @@ describe('deliverAvailabilityNotice', () => {
     const db = world({ stampError: { message: 'down' } })
     expect((await deliverAvailabilityNotice(db, change(), { nowMs: NOON })).status).toBe('error')
     expect(sendPushOnce).toHaveBeenCalledTimes(1)
+  })
+})
+
+// The save's own attempt: it folds the coach's OLDER still-owed changes in,
+// exactly as the sweep does, so managers never get the newest state first and
+// a stale one after it.
+describe('deliverOwedAvailabilityNotices (the save)', () => {
+  it("owed change 1 + in-band change 2: ONE notice under change 2's plain key, both rows stamped", async () => {
+    const db = world({
+      queue: [
+        { id: 'ch-1', profile_id: COACH, actor_id: COACH, before: [MON], after: [], created_at: '2026-09-24T22:30:00Z' },
+        { id: 'ch-2', profile_id: COACH, actor_id: COACH, before: [], after: [TUE], created_at: new Date(NOON).toISOString() },
+      ],
+    })
+    expect(await deliverOwedAvailabilityNotices(db, COACH, { nowMs: NOON })).toEqual({ status: 'sent', sent: 3 })
+    expect(sendPushOnce).toHaveBeenCalledTimes(1)
+    const [, key, , payload] = sendPushOnce.mock.calls[0]
+    expect(key).toBe(availabilityEventKey('ch-2'))
+    expect(payload.body).toBe('Sam Demo is now unavailable Tuesdays, all day; available again Mondays, 9am–12pm.')
+    const read = db.calls.find((c) => c.table === 'staff_availability_changes' && !has(c, 'update'))
+    expect(read.ops).toContainEqual(['eq', 'profile_id', COACH])
+    expect(read.ops).toContainEqual(['is', 'notified_at', null])
+    expect(read.ops).toContainEqual(['order', 'created_at', { ascending: true }])
+    expect(stamps(db)[0].ops).toContainEqual(['in', 'id', ['ch-1', 'ch-2']])
+  })
+
+  it('a later save that undoes an owed one: both settled reverted, nobody pushed', async () => {
+    const db = world({
+      queue: [
+        { id: 'ch-1', profile_id: COACH, before: [MON], after: [TUE], created_at: '2026-09-24T22:30:00Z' },
+        { id: 'ch-2', profile_id: COACH, before: [TUE], after: [MON], created_at: new Date(NOON).toISOString() },
+      ],
+    })
+    expect((await deliverOwedAvailabilityNotices(db, COACH, { nowMs: NOON })).status).toBe('reverted')
+    expect(sendPushOnce).not.toHaveBeenCalled()
+    expect(stamps(db)[0].ops).toContainEqual(['in', 'id', ['ch-1', 'ch-2']])
+  })
+
+  it('nothing owed (already settled elsewhere): nothing sent; an unreadable queue is an error', async () => {
+    expect(await deliverOwedAvailabilityNotices(world({ queue: [] }), COACH, { nowMs: NOON })).toEqual({ status: 'none', sent: 0 })
+    expect((await deliverOwedAvailabilityNotices(world({ queueError: { message: 'down' } }), COACH, { nowMs: NOON })).status).toBe('error')
+    expect(sendPushOnce).not.toHaveBeenCalled()
   })
 })
 

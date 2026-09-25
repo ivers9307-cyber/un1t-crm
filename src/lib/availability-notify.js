@@ -9,10 +9,14 @@
 // stamped as "nobody to tell".
 //
 // WHEN: staff quiet hours (src/lib/staff-push-hours.js) gate the NOTICE, never
-// the save. The route calls deliverAvailabilityNotice straight after a save;
-// in band it sends, otherwise the change row stays un-notified and the
-// checklist-sweep cron's arm (runAvailabilityNoticeSweep) sends it on the
-// first tick at or after 07:00. A coach's overnight saves become ONE notice.
+// the save. The route calls deliverOwedAvailabilityNotices straight after a
+// save; in band it sends, otherwise the change rows stay un-notified and the
+// checklist-sweep cron's arm (runAvailabilityNoticeSweep) sends them on the
+// first tick at or after 07:00. BOTH paths fold every change still owed for a
+// coach into ONE notice (foldChanges: the oldest before, the newest after,
+// every id settled), so managers never see the newest state first and an
+// older one after it, and a later save that undoes an owed one is settled
+// 'reverted' with nobody pushed.
 // Older than 24h: dropped as stale (the swap expiry notice's rule).
 //
 // ONCE, AND NEVER LOST: sendPushOnce CLAIMS (event key, recipient) in
@@ -118,6 +122,25 @@ async function settle(db, ids, outcome, nowMs, sent = 0) {
 }
 
 /**
+ * One coach's owed change rows, OLDEST FIRST, as one notice: the oldest
+ * before-snapshot against the newest after-snapshot, the newest id and
+ * created_at, every id to settle, and the actor only when all rows share one.
+ */
+export function foldChanges(rows) {
+  const first = rows[0]
+  const last = rows[rows.length - 1]
+  return {
+    id: last.id,
+    ids: rows.map((x) => x.id),
+    profile_id: last.profile_id,
+    actor_id: new Set(rows.map((x) => x.actor_id)).size === 1 ? (last.actor_id ?? null) : null,
+    before: first.before,
+    after: last.after,
+    created_at: last.created_at,
+  }
+}
+
+/**
  * Tell the managers about one change (or, from the sweep, one coach's folded
  * changes: `ids` lists every row it settles, `id` is the newest).
  * Never throws. status: sent | deferred | stale | reverted | no_recipients | error.
@@ -179,6 +202,34 @@ export async function deliverAvailabilityNotice(db, change, { nowMs = Date.now()
 }
 
 /**
+ * The save's own attempt (the route's after()): every change still owed for
+ * this coach, folded, under the NEWEST change's plain key (a key nothing has
+ * claimed yet). Never throws. status as deliverAvailabilityNotice, plus
+ * 'none' when nothing is owed any more.
+ */
+export async function deliverOwedAvailabilityNotices(db, profileId, { nowMs = Date.now() } = {}) {
+  try {
+    const { data, error } = await db
+      .from('staff_availability_changes')
+      .select('id, profile_id, actor_id, before, after, created_at')
+      .eq('profile_id', profileId)
+      .is('notified_at', null)
+      .order('created_at', { ascending: true })
+      .limit(AVAILABILITY_SWEEP_BATCH)
+    if (error) {
+      // The sweep picks it up once the lease has run out.
+      logError('availability-notify', "could not read the coach's owed notices", { profile_id: profileId, err: error.message })
+      return { status: 'error', sent: 0 }
+    }
+    if (!data || data.length === 0) return { status: 'none', sent: 0 }
+    return await deliverAvailabilityNotice(db, foldChanges(data), { nowMs })
+  } catch (err) {
+    logError('availability-notify', 'deliver owed threw', { profile_id: profileId, err: err?.message })
+    return { status: 'error', sent: 0 }
+  }
+}
+
+/**
  * The checklist-sweep cron's third arm: every notice still owed, one per
  * coach. Never throws; `errors` > 0 keeps its heartbeat from stamping.
  */
@@ -203,7 +254,6 @@ export async function runAvailabilityNoticeSweep(db, { nowMs = Date.now() } = {}
   }
   for (const rows of byCoach.values()) {
     out.groups++
-    const first = rows[0]
     const last = rows[rows.length - 1]
     // Inside the lease the save's own attempt may still be sending; leave it.
     const lastMs = Date.parse(last.created_at)
@@ -211,15 +261,7 @@ export async function runAvailabilityNoticeSweep(db, { nowMs = Date.now() } = {}
       out.leased++
       continue
     }
-    const r = await deliverAvailabilityNotice(db, {
-      id: last.id,
-      ids: rows.map((x) => x.id),
-      profile_id: last.profile_id,
-      actor_id: new Set(rows.map((x) => x.actor_id)).size === 1 ? last.actor_id : null,
-      before: first.before,
-      after: last.after,
-      created_at: last.created_at,
-    }, { nowMs, eventKey: availabilityRetryKey(last.id, nowMs) })
+    const r = await deliverAvailabilityNotice(db, foldChanges(rows), { nowMs, eventKey: availabilityRetryKey(last.id, nowMs) })
     if (r.status === 'error') out.errors++
     else out[r.status] = (out[r.status] || 0) + 1
   }

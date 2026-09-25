@@ -27,7 +27,7 @@ import {
   readStudioAvailability, isAvailabilityInputError,
 } from '@/lib/availability-server'
 import { normaliseAvailability, availabilityProblems, splitRules } from '@shared/availability'
-import { deliverAvailabilityNotice } from '@/lib/availability-notify'
+import { deliverOwedAvailabilityNotices } from '@/lib/availability-notify'
 import { logError, logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -112,11 +112,13 @@ export async function PUT(request) {
   }
 
   if (result.changed && result.changeId) {
-    const change = { id: result.changeId, profile_id: user.id, before: result.before, after: result.after, created_at: new Date().toISOString() }
     // after(): an un-awaited promise past the response is the shape Vercel can
-    // freeze mid-flight (SWAPNOTIFY.1). deliverAvailabilityNotice never throws,
-    // and anything it does not settle the checklist-sweep arm picks up.
-    after(() => deliverAvailabilityNotice(db, change))
+    // freeze mid-flight (SWAPNOTIFY.1). It tells the managers about THIS save
+    // folded together with any older change of this coach still owed (so they
+    // never get the newest state first and a stale one after). It never
+    // throws, and anything it does not settle the checklist-sweep arm picks up
+    // once the 10-minute lease has run out (src/lib/availability-notify.js).
+    after(() => deliverOwedAvailabilityNotices(db, user.id))
   }
 
   return NextResponse.json({ success: true, data: { changed: result.changed, ...splitRules(result.after) } })

@@ -25,13 +25,13 @@ vi.mock('@/lib/availability-server', async (importOriginal) => ({
   saveOwnAvailability: vi.fn(),
   readStudioAvailability: vi.fn(),
 }))
-vi.mock('@/lib/availability-notify', () => ({ deliverAvailabilityNotice: vi.fn(async () => ({ status: 'sent', sent: 1 })) }))
+vi.mock('@/lib/availability-notify', () => ({ deliverOwedAvailabilityNotices: vi.fn(async () => ({ status: 'sent', sent: 1 })) }))
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn() }))
 
 const { after, NextResponse } = await import('next/server')
 const { getCurrentUser, assertLocationAccess } = await import('@/lib/auth')
 const { readOwnAvailability, saveOwnAvailability, readStudioAvailability } = await import('@/lib/availability-server')
-const { deliverAvailabilityNotice } = await import('@/lib/availability-notify')
+const { deliverOwedAvailabilityNotices } = await import('@/lib/availability-notify')
 const { GET, PUT } = await import('./route.js')
 
 const LOC = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
@@ -141,7 +141,8 @@ describe('PUT own', () => {
     expect(args).toMatchObject({ profileId: 'u1', actorId: 'u1', todayIso: '2026-09-25' })
     expect(args.weekly).toHaveLength(1) // duplicate collapsed
     expect(after).toHaveBeenCalledTimes(1)
-    expect(deliverAvailabilityNotice).toHaveBeenCalledWith({ db: true }, expect.objectContaining({ id: 'ch-1', profile_id: 'u1', before: [] }))
+    // The save's notice folds in any older owed change of this coach (not just this one).
+    expect(deliverOwedAvailabilityNotices).toHaveBeenCalledWith({ db: true }, 'u1')
   })
   it('an unchanged save notifies nobody', async () => {
     getCurrentUser.mockResolvedValue(coach)
