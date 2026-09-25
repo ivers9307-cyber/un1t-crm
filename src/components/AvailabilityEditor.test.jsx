@@ -197,6 +197,55 @@ describe('AvailabilityEditor', () => {
     expect(rowsOnScreen[0].textContent).not.toContain('Pick another day')
   })
 
+  describe('unsaved changes', () => {
+    it('says so after an edit, and not after the save', async () => {
+      render(<AvailabilityEditor todayIso={TODAY} />)
+      await screen.findByLabelText('Day of the week')
+      expect(screen.queryByText('Unsaved changes')).toBeNull()
+      fireEvent.change(screen.getByLabelText('Note'), { target: { value: 'Nursery run' } })
+      expect(screen.getByText('Unsaved changes')).toBeTruthy()
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+      await screen.findByText('Saved. Your managers will get a notification.')
+      expect(screen.queryByText('Unsaved changes')).toBeNull()
+    })
+
+    it('asks before leaving the page (beforeunload) only while there are unsaved changes', async () => {
+      render(<AvailabilityEditor todayIso={TODAY} />)
+      await screen.findByLabelText('Day of the week')
+      const clean = new Event('beforeunload', { cancelable: true })
+      window.dispatchEvent(clean)
+      expect(clean.defaultPrevented).toBe(false)
+      fireEvent.change(screen.getByLabelText('Note'), { target: { value: 'Nursery run' } })
+      const dirty = new Event('beforeunload', { cancelable: true })
+      window.dispatchEvent(dirty)
+      expect(dirty.defaultPrevented).toBe(true)
+    })
+
+    // The schedule tabs are <Link>s: an in-app move never fires beforeunload.
+    it('asks before following an in-app link, and stays when the answer is no', async () => {
+      render(<><a href="/schedule">Schedule</a><AvailabilityEditor todayIso={TODAY} /></>)
+      await screen.findByLabelText('Day of the week')
+      const link = screen.getByRole('link', { name: 'Schedule' })
+      const followed = vi.fn((e) => e.preventDefault()) // stands in for Link's router push
+      link.addEventListener('click', followed)
+      const confirm = vi.spyOn(window, 'confirm')
+
+      fireEvent.click(link)
+      expect(confirm).not.toHaveBeenCalled() // nothing unsaved: no question
+      expect(followed).toHaveBeenCalledTimes(1)
+
+      fireEvent.change(screen.getByLabelText('Note'), { target: { value: 'Nursery run' } })
+      confirm.mockReturnValueOnce(false)
+      fireEvent.click(link)
+      expect(confirm).toHaveBeenCalledTimes(1)
+      expect(followed).toHaveBeenCalledTimes(1) // stayed
+
+      confirm.mockReturnValueOnce(true)
+      fireEvent.click(link)
+      expect(followed).toHaveBeenCalledTimes(2) // left
+    })
+  })
+
   it("shows the server's issues when it refuses", async () => {
     global.fetch = vi.fn(async (url, options) => (options?.method === 'PUT'
       ? ok({ success: false, error: 'Invalid availability', issues: [{ path: 'dated.0', message: 'That date has passed' }] }, 400)

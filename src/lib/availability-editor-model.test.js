@@ -2,7 +2,7 @@
 // save sends (the server's own canonical order, so its issue paths index the
 // rows on screen) and where each issue the server returns belongs.
 import { describe, it, expect } from 'vitest'
-import { planSave, placeIssues } from './availability-editor-model'
+import { planSave, placeIssues, isDirty } from './availability-editor-model'
 
 const row = (over) => ({
   key: 1, kind: 'weekly', weekday: 'mon', start_date: '', end_date: '', all_day: false,
@@ -63,5 +63,34 @@ describe('placeIssues', () => {
 
   it('nothing to place', () => {
     expect(placeIssues(null, sent)).toEqual({ byRow: {}, general: [] })
+  })
+})
+
+describe('isDirty — does the screen differ from what is saved?', () => {
+  const saved = {
+    weekly: [{ kind: 'weekly', weekday: 'mon', start_date: null, end_date: null, all_day: false, start_time: '09:00', end_time: '12:00', note: 'School run' }],
+    dated: [{ kind: 'dated', weekday: null, start_date: '2026-10-02', end_date: '2026-10-03', all_day: true, start_time: null, end_time: null, note: null }],
+  }
+  const asLoaded = () => [
+    row({ key: 1, weekday: 'mon', note: 'School run' }),
+    row({ key: 2, kind: 'dated', start_date: '2026-10-02', end_date: '2026-10-03', all_day: true, start_time: '', end_time: '' }),
+  ]
+
+  it.each([
+    ['as loaded', (rows) => rows, false],
+    ['rows in another order', (rows) => [...rows].reverse(), false],
+    ['a note with only extra spaces', (rows) => [{ ...rows[0], note: '  School run ' }, rows[1]], false],
+    ['the same rule typed twice', (rows) => [...rows, { ...rows[0], key: 9 }], false],
+    ['a note edited', (rows) => [{ ...rows[0], note: 'Nursery run' }, rows[1]], true],
+    ['a time moved', (rows) => [{ ...rows[0], end_time: '13:00' }, rows[1]], true],
+    ['a row removed', (rows) => [rows[0]], true],
+    ['an empty new row', (rows) => [...rows, row({ key: 9, start_time: '', end_time: '' })], true],
+  ])('%s', (_label, change, expected) => {
+    expect(isDirty(change(asLoaded()), saved)).toBe(expected)
+  })
+
+  it('nothing loaded yet is never dirty', () => {
+    expect(isDirty(null, saved)).toBe(false)
+    expect(isDirty(asLoaded(), null)).toBe(false)
   })
 })

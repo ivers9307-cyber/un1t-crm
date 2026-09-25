@@ -10,7 +10,7 @@
 //     start_time, end_time, note, startedOn }
 // with '' for an empty input.
 
-import { normaliseAvailability, normaliseRule, ruleKey, describeRule } from '@shared/availability'
+import { normaliseAvailability, normaliseRule, ruleKey, describeRule, sameAvailability } from '@shared/availability'
 
 // What the PUT body carries for one row: the route's schema, no `kind` (the
 // list it sits in says it), times null when the whole day is out.
@@ -81,4 +81,18 @@ export function placeIssues(issues, sent) {
     else general.push(message)
   }
   return { byRow, general }
+}
+
+/**
+ * Does what is on screen differ from what is saved? Compared as the server
+ * would store it (canonical, sorted, de-duplicated, notes trimmed), so
+ * reordering rows or typing a rule twice is not a change, and a half-filled
+ * new row is. `saved` is the last { weekly, dated } the server answered
+ * (the load, or the last successful save). Nothing loaded = never dirty.
+ */
+export function isDirty(rows, saved) {
+  if (!rows || !saved) return false
+  const { sent } = planSave(rows)
+  const onScreen = { weekly: sent.weekly.map((e) => e.rule), dated: sent.dated.map((e) => e.rule) }
+  return !sameAvailability(onScreen, saved)
 }

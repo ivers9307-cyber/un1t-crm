@@ -23,7 +23,7 @@ import {
   carryStartedRules,
 } from '@shared/availability'
 import { readJson } from './schedule/useScheduleData'
-import { rowToPayload, planSave, placeIssues } from '@/lib/availability-editor-model'
+import { rowToPayload, planSave, placeIssues, isDirty } from '@/lib/availability-editor-model'
 
 // A stable React key per row: rules have no id in the own GET's shape, and
 // an index key would move a half-typed note onto the wrong row on Remove.
@@ -60,6 +60,44 @@ function rowProblem(row, todayIso, stored) {
 // '2026-09-20' → '20 Sep', from the digits (no Date, so no timezone moves a day).
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const dayMonth = (iso) => `${Number(iso.slice(8, 10))} ${MONTHS[Number(iso.slice(5, 7)) - 1] || ''}`.trim()
+
+const LEAVE_MESSAGE = 'You have unsaved changes to your availability. Leave without saving?'
+
+// Leaving with unsaved changes. A reload, a closed tab or another site fires
+// beforeunload; the schedule tabs and the sidebar are <Link>s, whose in-app
+// navigation never does, so a click on a same-site link is asked about here,
+// in the capture phase (before Link's own handler), and stopped on "no".
+// Both are wrapped: a browser that refuses either must not break the page.
+function useLeaveGuard(active) {
+  useEffect(() => {
+    if (!active) return undefined
+    const onBeforeUnload = (e) => {
+      try {
+        e.preventDefault()
+        e.returnValue = ''
+      } catch { /* the browser's own prompt, or none */ }
+    }
+    const onClick = (e) => {
+      try {
+        if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+        const link = e.target instanceof Element ? e.target.closest('a[href]') : null
+        if (!link || (link.target && link.target !== '_self') || link.hasAttribute('download')) return
+        const to = new URL(link.href, window.location.href)
+        if (to.origin !== window.location.origin) return // beforeunload asks
+        if (to.pathname === window.location.pathname && to.search === window.location.search) return
+        if (window.confirm(LEAVE_MESSAGE)) return
+        e.preventDefault()
+        e.stopPropagation()
+      } catch { /* never block navigation because the guard failed */ }
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    document.addEventListener('click', onClick, true)
+    return () => {
+      window.removeEventListener('beforeunload', onBeforeUnload)
+      document.removeEventListener('click', onClick, true)
+    }
+  }, [active])
+}
 
 const inputClass = 'rounded-md border border-un1t-border bg-un1t-bg px-2 py-1.5 text-sm text-un1t-text'
 const labelClass = 'flex flex-col text-xs text-un1t-subtle gap-1'
@@ -133,6 +171,9 @@ function RuleRow({ row, todayIso, stored, showProblem, serverIssues, onChange, o
 export default function AvailabilityEditor({ todayIso }) {
   const [rows, setRows] = useState(null)
   const [stored, setStored] = useState([])
+  // The last { weekly, dated } the server answered (load or save): what
+  // "unsaved changes" is measured against.
+  const [saved, setSaved] = useState(null)
   const [loadError, setLoadError] = useState(null)
   const [saving, setSaving] = useState(false)
   const [showProblems, setShowProblems] = useState(false)
@@ -148,6 +189,7 @@ export default function AvailabilityEditor({ todayIso }) {
         if (!live) return
         setRows(rowsFrom(body.data, todayIso))
         setStored(startedFrom(body.data, todayIso))
+        setSaved(body.data)
       })
       .catch((e) => { if (live) setLoadError(e?.message || 'Could not load your availability') })
     return () => { live = false }
@@ -199,6 +241,7 @@ export default function AvailabilityEditor({ todayIso }) {
       }
       setRows(rowsFrom(body.data, todayIso))
       setStored(startedFrom(body.data, todayIso))
+      setSaved(body.data)
       setShowProblems(false)
       setMessage({ tone: 'ok', text: body.data?.changed ? 'Saved. Your managers will get a notification.' : 'Nothing changed.' })
     } catch {
@@ -207,6 +250,9 @@ export default function AvailabilityEditor({ todayIso }) {
       setSaving(false)
     }
   }
+
+  const dirty = isDirty(rows, saved)
+  useLeaveGuard(dirty)
 
   if (loadError) return <p className="text-sm text-red-700">{loadError}</p>
   if (!rows) return <p className="text-sm text-un1t-subtle">Loading your availability…</p>
@@ -251,6 +297,7 @@ export default function AvailabilityEditor({ todayIso }) {
 
       <div className="flex items-center gap-3">
         <Button onClick={save} loading={saving}>Save</Button>
+        {dirty && !saving && <span className="text-sm text-amber-700">Unsaved changes</span>}
         {message && (
           <p role="status" className={`text-sm ${message.tone === 'ok' ? 'text-green-700' : 'text-red-700'}`}>{message.text}</p>
         )}
