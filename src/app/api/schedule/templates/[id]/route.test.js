@@ -908,3 +908,45 @@ describe('PUT /api/schedule/templates/[id] — kind (SHIFTTYPE.1)', () => {
     expect(db._writes).toEqual([])
   })
 })
+
+// BLOCKEDIT.1 review 5 — a template time edit must not undo a one-off shift
+// edit (PUT /api/schedule/blocks/[id]). Only future blocks whose times still
+// equal the template's OLD times are rewritten; an edited block keeps its
+// own hours, and is neither rewritten nor change-logged.
+describe('PUT /api/schedule/templates/[id] — one-off block edits survive (BLOCKEDIT.1 review 5)', () => {
+  const blocks = () => [
+    {
+      id: 'blk-template', location_id: 'loc-a', template_id: 'tmpl-a', block_date: FUTURE,
+      start_time: '09:00', end_time: '10:00', max_coaches: 10,
+      roster_id: 'r-pub', rosters: PUBLISHED,
+      shift_assignments: [{ profile_id: 'coach-1', status: 'scheduled' }],
+    },
+    {
+      id: 'blk-edited', location_id: 'loc-a', template_id: 'tmpl-a', block_date: '2099-12-30',
+      start_time: '09:30', end_time: '10:00', max_coaches: 10,
+      roster_id: 'r-pub', rosters: PUBLISHED,
+      shift_assignments: [{ profile_id: 'coach-2', status: 'scheduled' }],
+    },
+  ]
+
+  it('rewrites only the block still at the template times, and reports the one it kept', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    const db = useDb({ shift_templates: templates(), shift_blocks: blocks(), roster_change_log: [] })
+    const body = await (await PUT(req({ start_time: '08:30' }), { params: { id: 'tmpl-a' } })).json()
+    const upd = db._writes.find((w) => w.table === 'shift_blocks' && w.op === 'update')
+    expect(upd.affected).toBe(1)
+    expect(upd.filters).toEqual(expect.arrayContaining([
+      { type: 'eq', col: 'start_time', val: '09:00' }, { type: 'eq', col: 'end_time', val: '10:00' },
+    ]))
+    expect(body.propagation.futureBlocksUpdated).toBe(1)
+    expect(body.propagation.futureBlocksKeptEdited).toBe(1)
+  })
+
+  it('change-logs only the coach whose block really moved', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    const db = useDb({ shift_templates: templates(), shift_blocks: blocks(), roster_change_log: [] })
+    await PUT(req({ end_time: '10:30' }), { params: { id: 'tmpl-a' } })
+    const logs = db._writes.filter((w) => w.table === 'roster_change_log' && w.op === 'insert')
+    expect(logs.map((l) => l.payload.coach_id)).toEqual(['coach-1'])
+  })
+})
