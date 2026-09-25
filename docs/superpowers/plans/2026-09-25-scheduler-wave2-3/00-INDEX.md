@@ -118,6 +118,7 @@ These are marked **REVIEW** in the artifact until he confirms or changes them. E
 
 ## Follow-ups found along the way (not in any PR yet)
 
+- 🔴 Colleagues' contracted hours already reach EVERY role: `STAFF_PICKER_FIELDS` (`src/lib/staff.js:25`) and `STAFF_PUBLIC_FIELDS` send `contracted_hours_per_week`, and `/api/schedule/week-cost` (MANAGER_ROLES, incl. head coaches) returns `contracted_hours`. CANDIDATES.1 and GRID.1 hide them from head coaches; narrowing the old paths together is a separate PR for Richard to call (found reviewing 21).
 - 🔴 Nothing writes a MANUAL arrival (`arrival_source='manual'`), so neither a coach nor a manager can correct a wrong or missing stamp. Blocks the late/no-show alert half (found planning 34).
 - Arrival coverage is low for a geofence reason, not permissions: stamps on 19% of shifts; 48% of coach-days have no ping at all; on 11 of 23 ping-but-no-stamp days the ping came >45 min before the shift and the region never re-fires while the coach stays inside (found planning 34).
 - The attendance report (`src/app/api/attendance/route.js`) measures lateness against the rostered start ignoring a manager's adjusted start (:115-147), defaults its window on UTC today (:36-39), checks dates by shape only (:44, 30 Feb → 500), doesn't page its select, and discards the attendance-events read error (:90-94) (found planning 34).
@@ -142,6 +143,7 @@ These are marked **REVIEW** in the artifact until he confirms or changes them. E
 
 Updated by the loop. Newest first.
 
+- 25 Sep ~16:00Z: ✅ #1765 AVAIL.2 EAS Update SUCCESS; worktree removed. 21 GRID.1 review: NOT APPROVED, one blocker (head coaches got contracted hours + admin balance via MANAGER_ROLES) + a stale-grid-under-new-dates should-fix → fixes queued for the next implementer slot (head coaches keep the grid with contract hidden). Review page v13.
 - 25 Sep ~15:45Z: #1765 AVAIL.2 MERGED; EAS run watched. 21 GRID.1 built (12 commits, web only) → independent review. 34 ARRIVALSHOW.1 plan written (web + OTA, no mig; the check-in no longer writes the paid window since ARRIVAL.1/2, so display only; own rows only; server sends instants + studio-local strings, the phone does no tz maths). Worktrees avail1b + blockedit1 removed.
 - 25 Sep ~15:35Z: 19 CANDIDATES.1 review: approved w/ should-fixes (coach-for-cover saw DRAFT shifts as 'Working then'; 'Free' said unqualified when the other studio couldn't be read; a throwing side read failed the request) → fixes in progress, plus contracted hours narrowed to owner/manager/master (default 25 rewritten).
 - 25 Sep ~15:25Z: 33 QUALS.1 plan written (mig 635: org-level catalogue, one record per person per type, template requirements ≤5 with a same-org trigger; Schedule › Qualifications page; advisory picker badge via CANDIDATES.1; weekly digest arm on `contract-reminders` with its own `qualification-digest` row). **Correction: QUALS.1 publishes an OTA** (shared + a push toggle). At apply time re-run the heartbeat upsert right after the deploy (the arm rule), though its 36h budget makes the pre-deploy seed harmless.
