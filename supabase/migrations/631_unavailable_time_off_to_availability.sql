@@ -67,7 +67,10 @@
 --     THE ROLLBACK: re-inserts every moved row byte-for-byte (same id),
 --     re-extends every split row, deletes each carried rule the person has
 --     not changed since (a changed one is left and reported as
---     restored_rule_changed). Idempotent. A restored row stays remembered by
+--     restored_rule_changed). Rules are keyed by (person, start, end): one a
+--     LATER batch reused is kept until that batch is restored too
+--     (restored_rule_in_use), so restoring one batch never strands another
+--     batch's days. Idempotent. A restored row stays remembered by
 --     the ledger, so a later move leaves it alone; to move it again, delete
 --     its ledger row first.
 --
@@ -241,7 +244,7 @@ CREATE TABLE IF NOT EXISTS public.time_off_availability_moves (
   CONSTRAINT time_off_availability_moves_action CHECK (action IN ('moved', 'split')),
   CONSTRAINT time_off_availability_moves_restore CHECK (
     (restored_at IS NULL AND restore_outcome IS NULL)
-    OR (restored_at IS NOT NULL AND restore_outcome IN ('restored', 'restored_rule_changed'))
+    OR (restored_at IS NOT NULL AND restore_outcome IN ('restored', 'restored_rule_changed', 'restored_rule_in_use'))
   )
 );
 
@@ -438,13 +441,18 @@ SET search_path = ''
 AS $$
 DECLARE
   m                 record;
+  k                 record;
+  ins               record;
+  v_ids             uuid[] := '{}';
   v_rule_id         uuid;
   v_restored        int := 0;
   v_rules_removed   int := 0;
   v_rules_changed   int := 0;
+  v_rules_kept      int := 0;
 BEGIN
   LOCK TABLE public.time_off_requests IN SHARE ROW EXCLUSIVE MODE;
 
+  -- 1. THE TIME OFF: every ledger row in scope goes back.
   FOR m IN
     SELECT * FROM public.time_off_availability_moves
      WHERE restored_at IS NULL AND (p_batch_id IS NULL OR batch_id = p_batch_id)
@@ -466,39 +474,90 @@ BEGIN
        WHERE r.id = m.time_off_request_id;
     END IF;
 
-    v_rule_id := NULL;
-    IF m.rule_inserted THEN
+    UPDATE public.time_off_availability_moves
+       SET restored_at = now(), restore_outcome = 'restored'
+     WHERE time_off_request_id = m.time_off_request_id;
+    v_ids := v_ids || m.time_off_request_id;
+    v_restored := v_restored + 1;
+  END LOOP;
+
+  -- 2. THE RULES, one decision per (person, start, end) this call touched.
+  --    A rule is keyed by its range, not by the ledger row that inserted it:
+  --    a straggler moved in a LATER batch reuses an identical rule an earlier
+  --    batch inserted (rule_inserted = false), and its request is gone from
+  --    time off, so that rule is the only record of its days. It is removed
+  --    only when NO ledger row of that range is left un-restored, and then
+  --    once for each ledger row (any batch) that inserted one.
+  FOR k IN
+    SELECT DISTINCT l.profile_id, l.rule->>'start_date' AS s, l.rule->>'end_date' AS e
+      FROM public.time_off_availability_moves l
+     WHERE l.time_off_request_id = ANY (v_ids)
+     ORDER BY 1, 2, 3
+  LOOP
+    -- The move never inserted a rule for this range (the person's own was
+    -- reused): nothing of ours to remove.
+    CONTINUE WHEN NOT EXISTS (
+      SELECT 1 FROM public.time_off_availability_moves l
+       WHERE l.profile_id = k.profile_id AND l.rule->>'start_date' = k.s AND l.rule->>'end_date' = k.e
+         AND l.rule_inserted);
+
+    -- Still relied on by a move this call is not restoring: keep it.
+    IF EXISTS (
+      SELECT 1 FROM public.time_off_availability_moves l
+       WHERE l.profile_id = k.profile_id AND l.rule->>'start_date' = k.s AND l.rule->>'end_date' = k.e
+         AND l.restored_at IS NULL) THEN
+      UPDATE public.time_off_availability_moves l
+         SET restore_outcome = 'restored_rule_in_use'
+       WHERE l.time_off_request_id = ANY (v_ids)
+         AND l.profile_id = k.profile_id AND l.rule->>'start_date' = k.s AND l.rule->>'end_date' = k.e;
+      v_rules_kept := v_rules_kept + 1;
+      CONTINUE;
+    END IF;
+
+    FOR ins IN
+      SELECT l.time_off_request_id, l.rule->>'note' AS note
+        FROM public.time_off_availability_moves l
+       WHERE l.profile_id = k.profile_id AND l.rule->>'start_date' = k.s AND l.rule->>'end_date' = k.e
+         AND l.rule_inserted
+       ORDER BY l.moved_at, l.time_off_request_id
+    LOOP
       SELECT u.id INTO v_rule_id
         FROM public.staff_unavailability u
-       WHERE u.profile_id = m.profile_id AND u.kind = 'dated' AND u.all_day
-         AND u.start_date = (m.rule->>'start_date')::date
-         AND u.end_date = (m.rule->>'end_date')::date
-         AND u.note IS NOT DISTINCT FROM (m.rule->>'note')
+       WHERE u.profile_id = k.profile_id AND u.kind = 'dated' AND u.all_day
+         AND u.start_date = k.s::date AND u.end_date = k.e::date
+         AND u.note IS NOT DISTINCT FROM ins.note
        ORDER BY u.created_at, u.id
        LIMIT 1;
       IF v_rule_id IS NOT NULL THEN
         DELETE FROM public.staff_unavailability WHERE id = v_rule_id;
         v_rules_removed := v_rules_removed + 1;
+        -- The inserting row may have been restored by an earlier call
+        -- ('restored_rule_in_use'); its rule is gone now.
+        UPDATE public.time_off_availability_moves
+           SET restore_outcome = 'restored'
+         WHERE time_off_request_id = ins.time_off_request_id;
       ELSE
+        -- The person changed or removed it since: their rule stays.
         v_rules_changed := v_rules_changed + 1;
+        UPDATE public.time_off_availability_moves
+           SET restore_outcome = 'restored_rule_changed'
+         WHERE time_off_request_id = ins.time_off_request_id;
       END IF;
-    END IF;
-
-    UPDATE public.time_off_availability_moves
-       SET restored_at = now(),
-           restore_outcome = CASE WHEN m.rule_inserted AND v_rule_id IS NULL
-                                  THEN 'restored_rule_changed' ELSE 'restored' END
-     WHERE time_off_request_id = m.time_off_request_id;
-    v_restored := v_restored + 1;
+    END LOOP;
+    -- Every reuser of this range restored earlier as 'in use' is settled too.
+    UPDATE public.time_off_availability_moves l
+       SET restore_outcome = 'restored'
+     WHERE l.profile_id = k.profile_id AND l.rule->>'start_date' = k.s AND l.rule->>'end_date' = k.e
+       AND NOT l.rule_inserted AND l.restore_outcome = 'restored_rule_in_use';
   END LOOP;
 
   RETURN jsonb_build_object('restored', v_restored, 'rules_removed', v_rules_removed,
-                            'rules_changed_since', v_rules_changed);
+                            'rules_changed_since', v_rules_changed, 'rules_kept_in_use', v_rules_kept);
 END;
 $$;
 
 COMMENT ON FUNCTION public.restore_moved_unavailable_time_off(uuid) IS
-  'AVAIL.3 (mig 631) — the rollback of move_unavailable_time_off_to_availability: re-inserts every moved row byte-for-byte (same id), re-extends every split row, and deletes each carried rule the person has not changed since (else restore_outcome = restored_rule_changed and their rule stays). One batch, or all when p_batch_id is NULL. Idempotent (restored_at). service_role only.';
+  'AVAIL.3 (mig 631) — the rollback of move_unavailable_time_off_to_availability: re-inserts every moved row byte-for-byte (same id), re-extends every split row, and deletes each carried rule the person has not changed since (else restore_outcome = restored_rule_changed and their rule stays). A rule is removed only once no un-restored ledger row of the same (person, start, end) remains, so restoring one batch never deletes a rule a later batch reused (restore_outcome = restored_rule_in_use until that batch is restored too). One batch, or all when p_batch_id is NULL. Idempotent (restored_at). service_role only.';
 
 REVOKE ALL ON FUNCTION public.restore_moved_unavailable_time_off(uuid) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.restore_moved_unavailable_time_off(uuid) TO service_role;

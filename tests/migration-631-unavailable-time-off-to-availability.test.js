@@ -139,6 +139,8 @@ async function asRole(role, sql, params = []) {
 }
 
 const move = async (today = TODAY) => (await asRole('service_role', MOVE_SQL, [today])).rows[0].r
+const restoreBatch = async (batchId) =>
+  (await asRole('service_role', 'SELECT public.restore_moved_unavailable_time_off($1::uuid) AS r', [batchId])).rows[0].r
 const restore = async () =>
   (await asRole('service_role', 'SELECT public.restore_moved_unavailable_time_off() AS r')).rows[0].r
 
@@ -404,6 +406,44 @@ describe('migration 631 — restore', () => {
     const timeOff = await allTimeOff()
     expect(await restore()).toMatchObject({ restored: 0, rules_removed: 0, rules_changed_since: 0 })
     expect(await allTimeOff()).toEqual(timeOff)
+  }))
+
+  // Review D2 — a rule one batch inserted and a LATER batch reused must not be
+  // deleted by restoring the first batch alone: the later batch's request is
+  // gone from time off, so the rule is the only record of its days.
+  it('restoring one batch keeps a rule a later batch still relies on; the last restore removes it', () => inTx(async () => {
+    const first = await move()
+    const straggler = '20000000-0000-0000-0000-0000000000d2'
+    // Filed after the first move (an old phone), same dates as R.FUTURE.
+    await runSql(`INSERT INTO public.time_off_requests (id, profile_id, location_id, type, start_date, end_date, total_days, reason, status, created_at)
+                  VALUES ('${straggler}', '${CON_A}', '${LOC}', 'unavailable', '2026-10-03', '2026-10-05', 3, 'Wedding', 'approved', '2026-09-25T12:00:00Z')`)
+    const stragglerRow = await rowJson(straggler)
+    const second = await move()
+    expect(second).toMatchObject({ moved: 1, split: 0, rules_inserted: 0, rules_reused: 1 })
+
+    expect(await restoreBatch(first.batch_id)).toMatchObject({ restored: 3, rules_removed: 2, rules_changed_since: 0, rules_kept_in_use: 1 })
+    // The straggler is still moved, so its days must still be covered.
+    expect(await rowJson(straggler)).toBeNull()
+    expect((await rulesOf(CON_A)).map((x) => [x.start_date, x.end_date])).toEqual([['2026-10-03', '2026-10-05']])
+    expect(await q('SELECT restore_outcome FROM public.time_off_availability_moves WHERE time_off_request_id = $1', [R.FUTURE]))
+      .toEqual([{ restore_outcome: 'restored_rule_in_use' }])
+
+    // Restoring the later batch too: the rule goes, every row is back.
+    expect(await restoreBatch(second.batch_id)).toMatchObject({ restored: 1, rules_removed: 1, rules_changed_since: 0, rules_kept_in_use: 0 })
+    expect(await rulesOf(CON_A)).toEqual([])
+    expect(await rowJson(straggler)).toEqual(stragglerRow)
+    expect(await rowJson(R.FUTURE)).not.toBeNull()
+  }))
+
+  it('restoring everything at once removes a rule shared across batches exactly once', () => inTx(async () => {
+    const before = await allTimeOff()
+    await move()
+    await runSql(`INSERT INTO public.time_off_requests (profile_id, location_id, type, start_date, end_date, total_days, reason, status)
+                  VALUES ('${CON_A}', '${LOC}', 'unavailable', '2026-10-03', '2026-10-05', 3, 'Wedding', 'approved')`)
+    await move()
+    expect(await restore()).toMatchObject({ restored: 4, rules_removed: 3, rules_changed_since: 0, rules_kept_in_use: 0 })
+    expect(await q('SELECT count(*)::int AS n FROM public.staff_unavailability')).toEqual([{ n: 0 }])
+    expect((await allTimeOff()).length).toBe(before.length + 1)
   }))
 
   it('a restored row is not moved again by a later run (the ledger remembers it)', () => inTx(async () => {
