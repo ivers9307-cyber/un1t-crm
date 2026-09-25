@@ -17,9 +17,9 @@ const STILL = 'loc-still'
 const HATCH = 'loc-hatch'
 const CARS = 'loc-cars'
 const LOCS = [
-  { id: STILL, name: 'UN1T Stillorgan', organization_id: ORG },
-  { id: HATCH, name: 'UN1T Hatch Street', organization_id: ORG },
-  { id: CARS, name: 'CCF Autos', organization_id: 'org-ccf' },
+  { id: STILL, name: 'UN1T Stillorgan', organization_id: ORG, active: true, is_host_anchor: false },
+  { id: HATCH, name: 'UN1T Hatch Street', organization_id: ORG, active: true, is_host_anchor: false },
+  { id: CARS, name: 'CCF Autos', organization_id: 'org-ccf', active: true, is_host_anchor: false },
 ]
 
 describe('labourMonthWindow', () => {
@@ -92,6 +92,20 @@ describe('labourStudiosFor / canSeeLabour (owner only, by role at the studio)', 
   it('a master sees every studio of the active organisation and no other', () => {
     const u = user({}, { profileRole: 'master', locations: LOCS })
     expect(labourStudiosFor(u).map((s) => s.id)).toEqual([HATCH, STILL])
+  })
+
+  it('a master\'s set is the organisation\'s ACTIVE studios, never a host-event anchor', () => {
+    const anchor = { id: 'loc-anchor', name: 'Host anchor', organization_id: ORG, active: true, is_host_anchor: true }
+    const closed = { id: 'loc-closed', name: 'Closed studio', organization_id: ORG, active: false, is_host_anchor: false }
+    const u = user({}, { profileRole: 'master', locations: [...LOCS, anchor, closed] })
+    expect(labourStudiosFor(u).map((s) => s.id)).toEqual([HATCH, STILL])
+  })
+
+  it('an owner at an inactive studio does not see it (profile_locations embeds do not filter active)', () => {
+    const closedHatch = { ...LOCS[1], active: false }
+    const u = user({ [STILL]: 'owner', [HATCH]: 'owner' }, { profileRole: 'owner', locations: [LOCS[0], closedHatch] })
+    expect(labourStudiosFor(u).map((s) => s.id)).toEqual([STILL])
+    expect(canSeeLabour({ ...u, activeLocation: closedHatch })).toBe(false)
   })
 
   it('nothing without an active studio', () => {

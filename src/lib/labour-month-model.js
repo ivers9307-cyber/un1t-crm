@@ -64,13 +64,20 @@ export function labourMonthWindow(nowMs) {
 /**
  * The studios of the ACTIVE organisation where `user` may see labour: owner
  * at that studio (a master everywhere). Ordered by name.
+ *
+ * Only countable studios (isCountableStudio: `active` and not a host-event
+ * anchor — the rule the location pickers apply, e.g. `/api/locations`).
+ * user.locations does not guarantee it: an owner's rows come from a
+ * profile_locations embed that never filters `active`, and a master's list
+ * (active only) still holds host anchors.
  * @returns {{ id: string, name: string }[]}
  */
 export function labourStudiosFor(user) {
   const orgId = user?.activeLocation?.organization_id
   if (!user?.activeLocation?.id || !orgId) return []
   return (user.locations || [])
-    .filter((l) => l?.id && l.organization_id === orgId && hasRoleAtLocation(user, l.id, LABOUR_VIEWER_ROLES))
+    .filter((l) => l?.id && l.organization_id === orgId && isCountableStudio(l)
+      && hasRoleAtLocation(user, l.id, LABOUR_VIEWER_ROLES))
     .map((l) => ({ id: l.id, name: l.name || 'Studio' }))
     .sort((a, b) => a.name.localeCompare(b.name))
 }
