@@ -30,12 +30,14 @@
 //     re-invocation of the same cron, and it is fresh every day, so a dead
 //     attempt is retried by the next day's run;
 //   * the WEEK key, qualification_digest:<org>:<Monday>, is STAMPED into the
-//     same ledger only AFTER a send that did not fail outright. The run reads
-//     the week's stamps first and skips a recipient who has one.
+//     same ledger only AFTER a send that DELIVERED (a push sent, or a
+//     fallback email accepted). The run reads the week's stamps first and
+//     skips a recipient who has one.
 // The price is a possible DUPLICATE (a digest that landed but whose stamp was
 // lost is sent again the next day: counted in `stamp_failed`), never a loss.
-// A delivery that fails outright is not stamped (and notifyUsersOnce releases
-// its attempt claim), so the next day retries.
+// Nothing delivered (a failed push or email, a send that threw, no device and
+// no email) is not stamped, so the next day tries again: at worst one attempt
+// row a day for an owner who cannot be reached.
 //
 // QUIET HOURS (src/lib/staff-push-hours.js): nothing is planned, so nothing is
 // claimed or stamped, unless the wall clock is inside [07:00, 22:00) at EVERY
@@ -210,14 +212,16 @@ async function readWeekStamps(db, eventKeys) {
   return new Set(rows.map((r) => `${r.event_key}|${r.recipient_id}`))
 }
 
-// The send did not fail outright, and it was ours (not deduped against a
+// Stamp the week ONLY when something reached the person: a push sent or a
+// fallback email accepted, and the attempt was ours (not deduped against a
 // concurrent run holding today's attempt claim, which stamps for itself).
-// Mirrors push-dedup's release rule: sent 0 + failed 0 (no device and no
-// email to fall back to) keeps the claim, so it stamps too.
-function deliveredOrSettled(r) {
+// Anything else (a failed email fallback, a send that threw inside
+// push-dedup, no device and no email) leaves the week open: the cost is one
+// harmless attempt row a day for an owner who cannot be reached, never a
+// lost week (QUALS.1 review).
+function delivered(r) {
   if (!r || (r.deduped || 0) > 0) return false
-  const delivered = (r.sent || 0) > 0 || (r.emailed || 0) > 0
-  return delivered || (r.failed || 0) === 0
+  return (r.sent || 0) > 0 || (r.emailed || 0) > 0
 }
 
 /**
@@ -299,7 +303,7 @@ export async function runQualificationDigest(db, { nowMs = Date.now() } = {}) {
     outcome.email_failed += r?.email_failed || 0
     outcome.deduped += r?.deduped || 0
     outcome.failed += r?.failed || 0
-    if (!deliveredOrSettled(r)) continue
+    if (!delivered(r)) continue
 
     // The week's stamp, AFTER the send. Lost = a duplicate tomorrow, never a loss.
     const { error: stampErr } = await db

@@ -185,15 +185,40 @@ describe('runQualificationDigest', () => {
     expect(stamps(db)[0].options).toEqual({ onConflict: 'event_key,recipient_id', ignoreDuplicates: true })
   })
 
-  it('an email fallback, or no device and no email (nothing to retry), also stamps', async () => {
+  it('a push or an email fallback that LANDED stamps the week', async () => {
     notifyUsersOnce
+      .mockResolvedValueOnce({ sent: 0, failed: 1, emailed: 1, email_failed: 0, deduped: 0 }) // push failed, email landed
+      .mockResolvedValueOnce({ sent: 1, failed: 0, emailed: 0, email_failed: 0, deduped: 0 })
       .mockResolvedValueOnce({ sent: 0, failed: 0, emailed: 1, email_failed: 0, deduped: 0 })
-      .mockResolvedValueOnce({ sent: 0, failed: 0, emailed: 0, email_failed: 0, deduped: 0 })
-      .mockResolvedValueOnce({ sent: 0, failed: 0, emailed: 0, email_failed: 1, deduped: 0 })
     const db = runDb()
     const out = await runQualificationDigest(db, { nowMs: MON_0800Z })
-    expect(stamps(db)).toHaveLength(3)
-    expect(out).toMatchObject({ emailed: 1, email_failed: 1, stamp_failed: 0 })
+    expect(stamps(db).map((q) => q.payload.recipient_id)).toEqual(['howner', 'master', 'owner'])
+    expect(out).toMatchObject({ sent: 1, emailed: 2, stamp_failed: 0 })
+  })
+
+  // QUALS.1 review — the week is stamped ONLY when something was delivered.
+  // Anything else costs a harmless daily attempt row, never the week.
+  it('a FAILED email fallback does not stamp: the next day retries', async () => {
+    notifyUsersOnce.mockResolvedValueOnce({ sent: 0, failed: 0, emailed: 0, email_failed: 1, deduped: 0 })
+    const db = runDb()
+    const out = await runQualificationDigest(db, { nowMs: MON_0800Z })
+    expect(stamps(db).map((q) => q.payload.recipient_id)).toEqual(['master', 'owner'])
+    expect(out).toMatchObject({ email_failed: 1, sent: 2 })
+  })
+
+  it('a send that threw inside push-dedup (reported as failed, nothing delivered) does not stamp', async () => {
+    notifyUsersOnce.mockResolvedValueOnce({ sent: 0, skipped: 0, invalidated: 0, failed: 1, deduped: 0 })
+    const db = runDb()
+    const out = await runQualificationDigest(db, { nowMs: MON_0800Z })
+    expect(stamps(db).map((q) => q.payload.recipient_id)).toEqual(['master', 'owner'])
+    expect(out).toMatchObject({ failed: 1, sent: 2 })
+  })
+
+  it('nothing delivered and nothing failed (no device, fallback off or opted out) does not stamp either', async () => {
+    notifyUsersOnce.mockResolvedValueOnce({ sent: 0, failed: 0, emailed: 0, email_failed: 0, deduped: 0 })
+    const db = runDb()
+    await runQualificationDigest(db, { nowMs: MON_0800Z })
+    expect(stamps(db).map((q) => q.payload.recipient_id)).toEqual(['master', 'owner'])
   })
 
   it('a recipient already stamped this week is not sent again', async () => {
