@@ -7,11 +7,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const LOCATIONS = [{ id: 'loc-1', name: 'Studio North', timezone: 'Europe/Dublin', notification_config: null }]
 
+let locationsError = null
 function makeBuilder(table) {
   const b = {}
   for (const m of ['select', 'eq', 'in', 'not', 'gte', 'lte', 'order', 'range']) b[m] = () => b
-  b.then = (resolve, reject) =>
-    Promise.resolve({ data: table === 'locations' ? LOCATIONS : [], error: null }).then(resolve, reject)
+  b.then = (resolve, reject) => Promise.resolve(
+    table === 'locations'
+      ? { data: locationsError ? null : LOCATIONS, error: locationsError }
+      : { data: [], error: null },
+  ).then(resolve, reject)
   return b
 }
 let throwOnTables = []
@@ -31,16 +35,20 @@ vi.mock('@/lib/shift-reminders', () => ({ runShiftReminders: vi.fn() }))
 const { GET } = await import('./route.js')
 const { runShiftReminders } = await import('@/lib/shift-reminders')
 const { stampHeartbeat } = await import('@/lib/cron-heartbeat')
-const { logError, logInfo } = await import('@/lib/log')
+const { logError, logInfo, logWarn } = await import('@/lib/log')
 
 const req = (auth = 'Bearer test-secret') => ({
   headers: { get: (k) => (k.toLowerCase() === 'authorization' ? auth : null) },
 })
+// HEARTBEAT.1 — the heartbeat rows this tick stamped, in call order.
+const stampedNames = () => stampHeartbeat.mock.calls.map((c) => c[0])
 
 beforeEach(() => {
   process.env.CRON_SECRET = 'test-secret'
   vi.clearAllMocks()
   throwOnTables = []
+  locationsError = null
+  stampHeartbeat.mockImplementation(async () => {})
   runShiftReminders.mockResolvedValue({
     shift_candidates: 2, shift_pushed: 1, shift_emailed: 0,
     shift_skipped_dup: 1, shift_skipped_no_recipient: 0, shift_send_failed: 0,
@@ -106,5 +114,91 @@ describe('GET /api/cron/send-push-reminders — shift arm', () => {
     const body = await (await GET(req())).json()
     expect(body.quiet_hours).toBe(1)
     expect(logInfo).not.toHaveBeenCalled()
+  })
+})
+
+// HEARTBEAT.1 — the shift arm has a heartbeat row of its own ('shift-reminders',
+// mig 633). 'send-push-reminders' is stamped whatever the shift arm did and the
+// health-check reads only is_stale, so an arm that threw on every tick paged
+// nobody. The row is stamped ONLY when the arm returned a summary with no
+// fault of its own (src/lib/cron-arm-health.js), with the arm's counters.
+const CLEAN = {
+  quiet_hours: 0, shift_candidates: 2, shift_pushed: 1, shift_emailed: 0, shift_skipped_dup: 1,
+  shift_skipped_no_recipient: 0, shift_send_failed: 0, shift_send_threw: 0, shift_claim_failed: 0, shift_read_capped: 0,
+}
+
+describe('GET /api/cron/send-push-reminders — shift-reminders heartbeat', () => {
+  // The parent's stamp is unchanged by HEARTBEAT.1: once per tick, no outcome.
+  const expectParentStampUnchanged = () =>
+    expect(stampHeartbeat.mock.calls.filter((c) => c[0] === 'send-push-reminders')).toEqual([['send-push-reminders']])
+
+  it('a clean arm: shift-reminders is stamped with the arm\'s own counters, then send-push-reminders as before', async () => {
+    runShiftReminders.mockResolvedValue(CLEAN)
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    expect(stampedNames()).toEqual(['shift-reminders', 'send-push-reminders'])
+    expect(stampHeartbeat).toHaveBeenCalledWith('shift-reminders', CLEAN)
+    expectParentStampUnchanged()
+  })
+
+  it('a tick with nothing to send stamps: a quiet day is healthy', async () => {
+    const idle = { ...CLEAN, shift_candidates: 0, shift_pushed: 0, shift_skipped_dup: 0 }
+    runShiftReminders.mockResolvedValue(idle)
+    await GET(req())
+    expect(stampHeartbeat).toHaveBeenCalledWith('shift-reminders', idle)
+  })
+
+  it('a quiet-hours tick stamps, so the row cannot go stale overnight', async () => {
+    const quiet = { ...CLEAN, quiet_hours: 1, shift_candidates: 0, shift_pushed: 0, shift_skipped_dup: 0 }
+    runShiftReminders.mockResolvedValue(quiet)
+    await GET(req())
+    expect(stampHeartbeat).toHaveBeenCalledWith('shift-reminders', quiet)
+  })
+
+  it('a failed delivery (claim released, retried next tick) still stamps, and the count reaches last_outcome', async () => {
+    runShiftReminders.mockResolvedValue({ ...CLEAN, shift_send_failed: 1 })
+    await GET(req())
+    expect(stampHeartbeat).toHaveBeenCalledWith('shift-reminders', expect.objectContaining({ shift_send_failed: 1 }))
+  })
+
+  it('the arm THROWS: shift-reminders is NOT stamped; the parent is, unchanged, and the tick is still a 200', async () => {
+    runShiftReminders.mockRejectedValue(new Error('shift read failed: column does not exist'))
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ ok: true, shift_arm_failed: 1 })
+    expect(stampedNames()).toEqual(['send-push-reminders'])
+    expectParentStampUnchanged()
+  })
+
+  it.each(['shift_claim_failed', 'shift_send_threw', 'shift_read_capped'])('the arm reports %s: shift-reminders NOT stamped, parent unchanged', async (key) => {
+    runShiftReminders.mockResolvedValue({ ...CLEAN, [key]: 1 })
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    expect(stampedNames()).toEqual(['send-push-reminders'])
+    expectParentStampUnchanged()
+  })
+
+  it('an arm that resolves with nothing has not shown it ran: not stamped', async () => {
+    runShiftReminders.mockResolvedValue(undefined)
+    await GET(req())
+    expect(stampedNames()).toEqual(['send-push-reminders'])
+  })
+
+  it('a failed locations read is a 500 that stamps NEITHER row (unchanged: the arm never ran)', async () => {
+    locationsError = { message: 'locations down' }
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    expect(runShiftReminders).not.toHaveBeenCalled()
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+
+  it('a rejecting shift-reminders stamp cannot cost the parent its stamp or its 200', async () => {
+    runShiftReminders.mockResolvedValue(CLEAN)
+    stampHeartbeat.mockImplementation((name) =>
+      name === 'shift-reminders' ? Promise.reject(new Error('stamp down')) : Promise.resolve())
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    expect(stampedNames()).toEqual(['shift-reminders', 'send-push-reminders'])
+    expect(logWarn).toHaveBeenCalledWith('cron-push-reminders', 'shift-reminders heartbeat failed', expect.anything())
   })
 })
