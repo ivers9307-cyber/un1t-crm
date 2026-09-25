@@ -244,7 +244,7 @@ describe('loadLabourMonth', () => {
   it('pages the roster past the 1,000-row cap', async () => {
     const filler = Array.from({ length: 1000 }, (_, i) => ({
       id: `f${String(i).padStart(4, '0')}`, location_id: STILL, block_date: '2026-09-10', start_time: '09:00:00', end_time: '10:00:00',
-      rosters: { status: 'draft' }, shift_templates: null, shift_assignments: [],
+      rosters: null, shift_templates: null, shift_assignments: [],
     }))
     const pages = []
     const db = fakeDb(okSpec({

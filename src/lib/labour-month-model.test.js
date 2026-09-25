@@ -128,7 +128,8 @@ describe('labourStudiosFor / canSeeLabour (owner only, by role at the studio)', 
 //   Max   (employee, €24,000/yr = €2,000/month): no shifts, belongs to both
 //         studios → €1,000 each forecast, €500 each so far.
 //   Jordan (contractor, €30/h): 2h ADMIN Stillorgan 2 Sep (ended), 1h 22 Sep
-//         (upcoming), 1h on a DRAFT block, 1 cancelled → €90 forecast, €60 so far.
+//         (upcoming), 1h on an UNPUBLISHED block (its roster was stood down:
+//         'superseded'), 1 cancelled → €90 forecast, €60 so far.
 //   Casey (contractor, €27.13/h, DEACTIVATED since): 22:00-24:00 Hatch 3 Sep
 //         → 2h → €54.26 forecast and so far.
 //   Sam   (employee, no salary): 1h Stillorgan 4 Sep → named, not costed.
@@ -146,11 +147,14 @@ let seq = 0
 const A = (profile_id, over = {}) => ({
   id: `a${++seq}`, profile_id, start_time_override: null, end_time_override: null, status: 'scheduled', ...over,
 })
-// `roster` is the embedded rosters row: published by default; null = a block
-// no roster owns yet; { status: 'superseded' } = a stood-down roster's block.
-const B = (location_id, block_date, start_time, end_time, assignments, { published = true, kind = 'class', roster } = {}) => ({
+// `roster` is the embedded rosters row: published by default. The real
+// unpublished shapes (roster statuses are draft|published|superseded, mig 602,
+// and nothing tags a block to a draft today — shared/roster-staffing.js):
+// null = a block no roster owns yet; { status: 'superseded' } = a block still
+// hanging off a stood-down roster (src/lib/roster-publish.js).
+const B = (location_id, block_date, start_time, end_time, assignments, { kind = 'class', roster = { status: 'published' } } = {}) => ({
   id: `b${++seq}`, location_id, block_date, start_time, end_time,
-  rosters: roster !== undefined ? roster : (published ? { status: 'published' } : { status: 'draft' }),
+  rosters: roster,
   shift_templates: { start_time, end_time, kind },
   shift_assignments: assignments,
 })
@@ -160,7 +164,7 @@ const BLOCKS = [
   B(HATCH, '2026-09-20', '09:00:00', '10:00:00', [A('p-alex')]),
   B(STILL, '2026-09-02', '17:00:00', '19:00:00', [A('p-jordan')], { kind: 'admin' }),
   B(STILL, '2026-09-22', '17:00:00', '18:00:00', [A('p-jordan')]),
-  B(STILL, '2026-09-29', '10:00:00', '11:00:00', [A('p-jordan')], { published: false }),
+  B(STILL, '2026-09-29', '10:00:00', '11:00:00', [A('p-jordan')], { roster: { status: 'superseded' } }),
   B(STILL, '2026-09-05', '09:00:00', '10:00:00', [A('p-jordan', { status: 'cancelled' })]),
   B(HATCH, '2026-09-03', '22:00:00', '24:00:00', [A('p-casey')]),
   B(STILL, '2026-09-04', '07:00:00', '08:00:00', [A('p-sam')]),
@@ -209,9 +213,19 @@ describe('labourShiftRows', () => {
     })
   })
 
-  it('a block with no roster is not published', () => {
-    const [row] = labourShiftRows([{ ...BLOCKS[0], rosters: null }])
-    expect(row.published).toBe(false)
+  it('a block no roster owns, or one on a stood-down (superseded) roster, is not published', () => {
+    expect(labourShiftRows([{ ...BLOCKS[0], rosters: null }])[0].published).toBe(false)
+    expect(labourShiftRows([{ ...BLOCKS[0], rosters: { status: 'superseded' } }])[0].published).toBe(false)
+  })
+
+  it('both unpublished shapes: hours shown as unpublished, never costed', () => {
+    const rows = labourShiftRows([
+      B(STILL, '2026-09-10', '09:00:00', '11:00:00', [A('p-jordan')], { roster: null }),
+      B(STILL, '2026-09-11', '09:00:00', '10:00:00', [A('p-jordan')], { roster: { status: 'superseded' } }),
+    ])
+    const r = rowOf(build({ rows, memberships: new Map() }), STILL)
+    expect(r.unpublished_hours).toBe(3)
+    expect(r.forecast).toMatchObject({ contractors_cents: 0, hours: 0 })
   })
 })
 
@@ -237,7 +251,7 @@ describe('buildLabourMonth', () => {
       forecast: { employees_cents: 325_000, contractors_cents: 9_000, cost_cents: 334_000, hours: 7 },
       actual: { employees_cents: 162_500, contractors_cents: 6_000, cost_cents: 168_500, hours: 6 },
       forecast_pct: 33.4, actual_pct: 33.7,
-      draft_hours: 1,
+      unpublished_hours: 1,
     })
   })
 
@@ -248,7 +262,7 @@ describe('buildLabourMonth', () => {
       forecast: { employees_cents: 175_000, contractors_cents: 5_426, cost_cents: 180_426, hours: 3 },
       actual: { employees_cents: 87_500, contractors_cents: 5_426, cost_cents: 92_926, hours: 2 },
       forecast_pct: null, actual_pct: null,
-      draft_hours: 0,
+      unpublished_hours: 0,
     })
   })
 
@@ -259,7 +273,7 @@ describe('buildLabourMonth', () => {
       forecast: { employees_cents: 500_000, contractors_cents: 14_426, cost_cents: 514_426, hours: 10 },
       actual: { employees_cents: 250_000, contractors_cents: 11_426, cost_cents: 261_426, hours: 8 },
       forecast_pct: 33.4, actual_pct: 33.7,
-      draft_hours: 1,
+      unpublished_hours: 1,
       ratio_excludes: [{ name: 'UN1T Hatch Street', status: 'none' }],
       // Review 2 — the ratio is on a SUBSET, so its base is carried with it.
       ratio_base: { studios: ['UN1T Stillorgan'], forecast_cost_cents: 334_000, actual_cost_cents: 168_500 },

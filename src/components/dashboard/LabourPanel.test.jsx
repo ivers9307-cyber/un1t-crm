@@ -12,13 +12,13 @@ const STILL = {
   location_id: 'loc-still', name: 'UN1T Stillorgan',
   revenue_status: 'tracked', mrr_cents: 1_000_000, recurring_members: 191, revenue_to_date_cents: 500_000,
   forecast: part(325_000, 9_000, 7), actual: part(162_500, 6_000, 6),
-  forecast_pct: 33.4, actual_pct: 33.7, draft_hours: 1,
+  forecast_pct: 33.4, actual_pct: 33.7, unpublished_hours: 1,
 }
 const HATCH = {
   location_id: 'loc-hatch', name: 'UN1T Hatch Street',
   revenue_status: 'none', mrr_cents: null, recurring_members: null, revenue_to_date_cents: null,
   forecast: part(175_000, 5_426, 3), actual: part(87_500, 5_426, 2),
-  forecast_pct: null, actual_pct: null, draft_hours: 0,
+  forecast_pct: null, actual_pct: null, unpublished_hours: 0,
 }
 const VM = {
   month: '2026-09', month_label: 'September 2026', day_of_month: 16, days_in_month: 30,
@@ -26,7 +26,7 @@ const VM = {
   total: {
     name: 'All studios shown', revenue_status: 'tracked', mrr_cents: 1_000_000, recurring_members: 191,
     revenue_to_date_cents: 500_000, forecast: part(500_000, 14_426, 10), actual: part(250_000, 11_426, 8),
-    forecast_pct: 33.4, actual_pct: 33.7, draft_hours: 1, ratio_excludes: [{ name: 'UN1T Hatch Street', status: 'none' }],
+    forecast_pct: 33.4, actual_pct: 33.7, unpublished_hours: 1, ratio_excludes: [{ name: 'UN1T Hatch Street', status: 'none' }],
     ratio_base: { studios: ['UN1T Stillorgan'], forecast_cost_cents: 334_000, actual_cost_cents: 168_500 },
   },
   uncosted: [{ name: 'Sam Demo', reason: 'no_salary', hours: 1 }],
@@ -114,8 +114,8 @@ describe('LabourPanel', () => {
     expect(html()).toContain('split between their studios in every organisation by rostered hours')
   })
 
-  it('says how many draft hours the forecast leaves out, and any untimed shifts', () => {
-    expect(html()).toContain('1h in draft rosters not counted')
+  it('says how many unpublished hours the forecast leaves out, and any untimed shifts', () => {
+    expect(html()).toContain('1h on unpublished shifts not counted')
     expect(html({ ...VM, untimed_shifts: 2 })).toContain('2 published shifts have no times and are not counted')
   })
 

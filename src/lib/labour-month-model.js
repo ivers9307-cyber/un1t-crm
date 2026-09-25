@@ -15,7 +15,9 @@
 //   contractors = published hours × hourly_rate, ADMIN SHIFTS INCLUDED (unlike
 //               contractor spend's budget gate: an admin shift is still paid).
 //   forecast  = the published roster for the whole month; actual = published
-//               shifts that have ended. Drafts are never costed.
+//               shifts that have ended. Unpublished shifts (a block no roster
+//               owns, or one on a stood-down 'superseded' roster) are never
+//               costed; their hours are shown.
 //
 // PAY NEVER LEAVES THIS MODULE AS A RATE. buildLabourMonth takes each person's
 // annual_salary / hourly_rate and returns studio TOTALS, ratios and hours, plus
@@ -205,7 +207,7 @@ function emptyAcc() {
   }
 }
 
-function shapeStudio({ studio, acc, rev, draftMinutes, elapsed }) {
+function shapeStudio({ studio, acc, rev, unpublishedMinutes, elapsed }) {
   const status = rev == null
     ? 'unavailable'
     : (Number(rev.mrrCents) > 0 && Number(rev.recurringMembers) > 0 ? 'tracked' : 'none')
@@ -229,7 +231,7 @@ function shapeStudio({ studio, acc, rev, draftMinutes, elapsed }) {
     actual,
     forecast_pct: labourPct(forecast.cost_cents, mrrCents),
     actual_pct: labourPct(actual.cost_cents, revenueToDate),
-    draft_hours: round1(draftMinutes / 60),
+    unpublished_hours: round1(unpublishedMinutes / 60),
   }
 }
 
@@ -263,7 +265,7 @@ function totalOf(rows) {
     // Stillorgan's revenue would overstate the percentage.
     forecast_pct: labourPct(trackedForecast, mrr),
     actual_pct: labourPct(trackedActual, toDate),
-    draft_hours: round1(sum(rows, (r) => r.draft_hours)),
+    unpublished_hours: round1(sum(rows, (r) => r.unpublished_hours)),
     ratio_excludes: excluded.map((r) => ({ name: r.name, status: r.revenue_status })),
     // Review 2 — when the ratio covers only SOME of the studios, its base
     // (which studios, and their labour) rides with it, so the panel never
@@ -300,9 +302,9 @@ export function buildLabourMonth({
   const shownIds = new Set(studios.map((s) => s.id))
 
   // Published minutes per person per studio (forecast = all, actual = ended);
-  // draft minutes per studio; untimed published shifts at a studio shown.
+  // unpublished minutes per studio; untimed published shifts at a studio shown.
   const worked = new Map()
-  const draftMinutes = new Map()
+  const unpublishedMinutes = new Map()
   let untimed = 0
   for (const r of rows || []) {
     const w = workingWindow(r)
@@ -312,7 +314,7 @@ export function buildLabourMonth({
     }
     const minutes = (w.endMs - w.startMs) / MINUTE_MS
     if (!r.published) {
-      draftMinutes.set(r.location_id, (draftMinutes.get(r.location_id) || 0) + minutes)
+      unpublishedMinutes.set(r.location_id, (unpublishedMinutes.get(r.location_id) || 0) + minutes)
       continue
     }
     if (!worked.has(r.profile_id)) worked.set(r.profile_id, new Map())
@@ -382,7 +384,7 @@ export function buildLabourMonth({
     studio: s,
     acc: acc.get(s.id),
     rev: revenue?.get(s.id) ?? null,
-    draftMinutes: draftMinutes.get(s.id) || 0,
+    unpublishedMinutes: unpublishedMinutes.get(s.id) || 0,
     elapsed: period.elapsedFraction,
   }))
 

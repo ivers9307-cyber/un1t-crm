@@ -81,8 +81,8 @@ function StudioLabour({ row, isTotal = false }) {
           employees {euros(row.forecast.employees_cents)} · contractors {euros(row.forecast.contractors_cents)}
         </dd>
       </dl>
-      {row.draft_hours > 0 ? (
-        <p className="mt-1 text-xs text-un1t-muted">{row.draft_hours}h in draft rosters not counted</p>
+      {row.unpublished_hours > 0 ? (
+        <p className="mt-1 text-xs text-un1t-muted">{row.unpublished_hours}h on unpublished shifts not counted</p>
       ) : null}
       {isTotal && row.ratio_excludes?.length > 0 ? (
         <p className="mt-1 text-xs text-un1t-muted">
