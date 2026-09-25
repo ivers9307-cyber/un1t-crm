@@ -23,6 +23,7 @@ const STAFF_TYPES = [
   'expense_submitted', 'expense_approved', 'expense_declined',
   'contract_issued', 'checklist_overdue', 'checklist_compliance',
   'roster_runway', // RUNWAY.1 — rides category 'schedule'
+  'availability_changed', // AVAIL.1 — rides category 'availability_change'
   'issue_submitted', 'issue_resolved',
   'wa_quality', 'number_health', 'flow_health', 'template_status',
   'email_inbound',

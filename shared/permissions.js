@@ -718,6 +718,13 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   // send-push-reminders cron: 2 hours before the first start, or 8pm the
   // evening before for a start before 09:00. Default ON for every role.
   { key: 'notify_shift_reminder',   label: '… Shift reminders',    hint: 'One reminder before your shifts: 8pm the evening before for a start before 9am, otherwise 2 hours before', mobileOnly: true, isNotify: true },
+  // AVAIL.1 — a coach at your studio changed when they are unavailable.
+  // Recipients are the roster builders (owner, manager, head coach) at each
+  // of the coach's studios; sent 07:00-22:00 studio time, later if saved
+  // outside it. Default ON for every role (see
+  // src/lib/availability-change-registration.test.js for why not only the
+  // manager roles).
+  { key: 'notify_availability_change', label: '… Availability changes', hint: 'Notify when a coach at your studio changes when they are unavailable (roster builders)', mobileOnly: true, isNotify: true },
   // Digital contracts (mig 106). Recipient gets a push when a
   // master/owner issues them a contract for signature. Default-on
   // for every role because the prompt-to-sign flow depends on it.
@@ -785,6 +792,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_expense_submitted: true, notify_expense_approved: true, notify_expense_declined: true,
     notify_shift_adjusted: true,
     notify_shift_reminder: true,
+    notify_availability_change: true,
     notify_contract_issued: true,
     notify_tasks: true, notify_bookings: true,
     notify_checklist_overdue: true, notify_checklist_compliance: true,
@@ -824,6 +832,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_expense_submitted: false, notify_expense_approved: true, notify_expense_declined: true,
     notify_shift_adjusted: true,
     notify_shift_reminder: true,
+    notify_availability_change: true,
     notify_contract_issued: true,
     notify_tasks: true, notify_bookings: false,
     // Staff get the 'you missed items' push but NOT the compliance
@@ -866,6 +875,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_expense_submitted: false, notify_expense_approved: true, notify_expense_declined: true,
     notify_shift_adjusted: true,
     notify_shift_reminder: true,
+    notify_availability_change: true,
     notify_contract_issued: true,
     notify_tasks: true, notify_bookings: true,
     notify_checklist_overdue: true, notify_checklist_compliance: false,
@@ -902,6 +912,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_expense_submitted: true, notify_expense_approved: true, notify_expense_declined: true,
     notify_shift_adjusted: true,
     notify_shift_reminder: true,
+    notify_availability_change: true,
     notify_contract_issued: true,
     notify_tasks: true, notify_bookings: true,
     // Head coach owns the floor — gets both the personal heads-up
@@ -942,6 +953,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_expense_submitted: true, notify_expense_approved: true, notify_expense_declined: true,
     notify_shift_adjusted: true,
     notify_shift_reminder: true,
+    notify_availability_change: true,
     notify_contract_issued: true,
     notify_tasks: true, notify_bookings: true,
     // Managers oversee front-of-house + sometimes work a shift —
@@ -984,6 +996,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_expense_submitted: true, notify_expense_approved: true, notify_expense_declined: true,
     notify_shift_adjusted: true,
     notify_shift_reminder: true,
+    notify_availability_change: true,
     notify_contract_issued: true,
     notify_tasks: true, notify_bookings: true,
     // Owners get both — they get the compliance summary as

@@ -23,6 +23,19 @@ describe('getOpenApiSpec', () => {
     expect(spec.servers.map((s) => s.url)).toContain('https://crm.un1tdublin.com')
   })
 
+  it('documents coach availability (AVAIL.1): own GET/PUT and the manager range read, cookie or Bearer', () => {
+    const path = spec.paths['/api/schedule/availability']
+    expect(path).toHaveProperty('get')
+    expect(path).toHaveProperty('put')
+    expect(path.put.requestBody).toBeDefined()
+    expect(path.get.security).toEqual([{ CookieAuth: [] }, { BearerAuth: [] }])
+    // Owner's decision: managers see a coach's note, and the contract says so.
+    expect(path.get.description).toMatch(/shown to managers/)
+    expect(path.put.description).toMatch(/managers/)
+    // The started-rule contract (shared/availability.js carryStartedRules).
+    expect(path.put.description).toMatch(/only its end date moved/)
+  })
+
   it('declares the pre-existing browser/integration auth schemes', () => {
     expect(spec.components.securitySchemes).toHaveProperty('BearerAuth')
     expect(spec.components.securitySchemes).toHaveProperty('CookieAuth')

@@ -27,6 +27,7 @@ import {
 import { LeadSchema } from './leads.js'
 import { MAX_STORED_EXAMPLE_CHARS, MAX_STORED_EXAMPLES } from '@/lib/hyrox/constants'
 import { WindowBase } from '@/lib/schedule/windows'
+import { AvailabilityPutSchema } from '@/lib/availability-server'
 import { ROSTER_CHANGE_LOG_MAX_ROWS } from '@/lib/roster-change-format'
 // SHELLY-UI.9 — the /api/shelly/* request vocabulary. Aliased on import so
 // the .openapi()-decorated re-derivations below can carry the canonical
@@ -4571,6 +4572,40 @@ registry.registerPath({
     400: { description: 'Missing or malformed location_id', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — needs a manager role at that location', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'The roster read failed (never reported as "ready")', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// AVAIL.1 — coach availability (mig 630). Own read/replace, and a manager's
+// read of a studio's members for a date range.
+registry.registerPath({
+  method: 'get',
+  path: '/api/schedule/availability',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "A coach's availability: your own, or a studio's (manager)",
+  description: "Without location_id: the caller's own unavailability as { weekly, dated } (weekly: weekday mon..sun + all_day or start_time/end_time HH:MM; dated: start_date..end_date + the same, optional note). Dated rules that ended before today (Dublin) are history and not returned. With location_id + start_date + end_date (real dates, at most 92 days): every active member of that studio's weekly rules and the dated rules overlapping the range, as flat rows with id and profile_id. The studio read is manager-only (master, owner, manager, head_coach AT location_id) and scoped by assertLocationAccess. Notes are the coach's own words and are shown to managers. Advisory data: nothing in the API refuses an assignment because of it.",
+  responses: {
+    200: { description: '{ success, data }' },
+    400: { description: 'Malformed location_id, a date that is not real, end before start, or a range over 92 days', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Studio outside your assignments, or no manager role there', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The read failed (never answered as "nobody is unavailable")', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/schedule/availability',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Replace your own availability',
+  description: "Replaces the caller's weekly rules and their dated rules that have not ended, atomically. No approval. A save that changes something tells the owner, managers and head coaches at every studio the caller belongs to (one push per save, 07:00-22:00 studio time; outside it, at 07:00). A save identical to what is stored changes nothing and tells nobody (data.changed false). Notes are the coach's own words and are shown to those managers (the studio read and the roster). A dated rule that has already started may be sent back unchanged, with its note edited, or with only its end date moved: the days already gone stay as history and the rule continues from today (20-30 Sep with its end moved to the 27th, saved on the 25th, becomes history 20-24 plus 25-27; an end moved to before today ends it from today). A dated rule that ended before today and is sent back as stored is ignored (history). Any other started rule (a new one, a moved start, a changed window) is refused ('Start today or later'), as is a new rule that has already ended. 400 issues use validateBody's { path, message } shape; paths index the SORTED lists.",
+  request: { body: { content: { 'application/json': { schema: AvailabilityPutSchema } } } },
+  responses: {
+    200: { description: '{ success, data: { changed, weekly, dated } }' },
+    400: { description: 'Invalid body or rule (end not after start, not a real date, a date that has passed, over the limits)', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The save failed; nothing was changed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
