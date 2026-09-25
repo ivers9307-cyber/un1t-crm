@@ -177,6 +177,26 @@ describe('AvailabilityEditor', () => {
     expect(screen.getByLabelText('Note').matches(':disabled')).toBe(false)
   })
 
+  it("puts each server issue under its row, whatever order the rows are in on screen", async () => {
+    // On screen: 12 Oct first, then 3 Oct. The server sorts, so its dated.0
+    // is 3 Oct: the issue must land under the SECOND row, not the first.
+    const LATER = { kind: 'dated', weekday: null, start_date: '2026-10-12', end_date: '2026-10-12', all_day: true, start_time: null, end_time: null, note: 'Later' }
+    const SOONER = { ...LATER, start_date: '2026-10-03', end_date: '2026-10-03', note: 'Sooner' }
+    global.fetch = vi.fn(async (url, options) => {
+      if (options?.method !== 'PUT') return ok({ success: true, data: { weekly: [], dated: [LATER, SOONER] } })
+      putBody = JSON.parse(options.body)
+      return ok({ success: false, error: 'Invalid availability', issues: [{ path: 'dated.0', message: 'Pick another day' }] }, 400)
+    })
+    render(<AvailabilityEditor todayIso={TODAY} />)
+    await screen.findAllByLabelText('Last day')
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    const issue = await screen.findByText('Pick another day')
+    expect(putBody.dated.map((r) => r.start_date)).toEqual(['2026-10-03', '2026-10-12'])
+    const rowsOnScreen = screen.getAllByRole('listitem')
+    expect(rowsOnScreen[1].contains(issue)).toBe(true)
+    expect(rowsOnScreen[0].textContent).not.toContain('Pick another day')
+  })
+
   it("shows the server's issues when it refuses", async () => {
     global.fetch = vi.fn(async (url, options) => (options?.method === 'PUT'
       ? ok({ success: false, error: 'Invalid availability', issues: [{ path: 'dated.0', message: 'That date has passed' }] }, 400)

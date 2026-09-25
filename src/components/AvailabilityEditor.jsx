@@ -23,6 +23,7 @@ import {
   carryStartedRules,
 } from '@shared/availability'
 import { readJson } from './schedule/useScheduleData'
+import { rowToPayload, planSave, placeIssues } from '@/lib/availability-editor-model'
 
 // A stable React key per row: rules have no id in the own GET's shape, and
 // an index key would move a half-typed note onto the wrong row on Remove.
@@ -50,17 +51,6 @@ const rowsFrom = (data, todayIso) => [...(data?.weekly || []), ...(data?.dated |
 // `stored`, exactly what the route reads back before it judges a save.
 const startedFrom = (data, todayIso) => (data?.dated || []).map(normaliseRule).filter((r) => r && r.start_date < todayIso)
 
-// What the PUT body carries for one row: the route's schema, no `kind` (the
-// list it sits in says it), times null when the whole day is out.
-export function rowToPayload(row) {
-  const times = row.all_day
-    ? { start_time: null, end_time: null }
-    : { start_time: row.start_time || null, end_time: row.end_time || null }
-  const note = row.note.trim() || null
-  return row.kind === 'weekly'
-    ? { weekday: row.weekday, all_day: row.all_day, ...times, note }
-    : { start_date: row.start_date, end_date: row.end_date || row.start_date, all_day: row.all_day, ...times, note }
-}
 function rowProblem(row, todayIso, stored) {
   const rule = normaliseRule({ ...rowToPayload(row), kind: row.kind })
   if (row.kind !== 'dated') return ruleProblem(rule, { todayIso })
@@ -74,9 +64,12 @@ const dayMonth = (iso) => `${Number(iso.slice(8, 10))} ${MONTHS[Number(iso.slice
 const inputClass = 'rounded-md border border-un1t-border bg-un1t-bg px-2 py-1.5 text-sm text-un1t-text'
 const labelClass = 'flex flex-col text-xs text-un1t-subtle gap-1'
 
-function RuleRow({ row, todayIso, stored, showProblem, onChange, onRemove }) {
+function RuleRow({ row, todayIso, stored, showProblem, serverIssues, onChange, onRemove }) {
   const set = (patch) => onChange({ ...row, ...patch })
-  const problem = showProblem ? rowProblem(row, todayIso, stored) : null
+  // The client's own check first; else what the server said about this row
+  // (placed by placeIssues against the order the server indexed).
+  const problem = (showProblem ? rowProblem(row, todayIso, stored) : null)
+    || (serverIssues?.length ? serverIssues.join('. ') : null)
   const started = Boolean(row.startedOn)
   return (
     <li className="py-3">
@@ -144,6 +137,9 @@ export default function AvailabilityEditor({ todayIso }) {
   const [saving, setSaving] = useState(false)
   const [showProblems, setShowProblems] = useState(false)
   const [message, setMessage] = useState(null) // { tone: 'ok' | 'error', text }
+  // { [rowKey]: [message] } from the last refused save; a row's entry goes
+  // when that row is edited or removed.
+  const [serverIssues, setServerIssues] = useState({})
 
   useEffect(() => {
     let live = true
@@ -157,8 +153,20 @@ export default function AvailabilityEditor({ todayIso }) {
     return () => { live = false }
   }, [todayIso])
 
-  const update = (key, next) => setRows((prev) => prev.map((r) => (r.key === key ? next : r)))
-  const remove = (key) => setRows((prev) => prev.filter((r) => r.key !== key))
+  const dropIssues = (key) => setServerIssues((prev) => {
+    if (!(key in prev)) return prev
+    const next = { ...prev }
+    delete next[key]
+    return next
+  })
+  const update = (key, next) => {
+    setRows((prev) => prev.map((r) => (r.key === key ? next : r)))
+    dropIssues(key)
+  }
+  const remove = (key) => {
+    setRows((prev) => prev.filter((r) => r.key !== key))
+    dropIssues(key)
+  }
   const add = (kind) => setRows((prev) => [...prev, kind === 'weekly'
     ? { key: nextKey(), kind, weekday: 'mon', start_date: '', end_date: '', all_day: false, start_time: '', end_time: '', note: '' }
     : { key: nextKey(), kind, weekday: 'mon', start_date: todayIso, end_date: todayIso, all_day: true, start_time: '', end_time: '', note: '' }])
@@ -171,19 +179,22 @@ export default function AvailabilityEditor({ todayIso }) {
     }
     setSaving(true)
     setMessage(null)
+    setServerIssues({})
+    // The server's own order, so the issue paths it answers index `sent`.
+    const { body: payload, sent } = planSave(rows)
     try {
       const res = await fetch('/api/schedule/availability', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          weekly: rows.filter((r) => r.kind === 'weekly').map(rowToPayload),
-          dated: rows.filter((r) => r.kind === 'dated').map(rowToPayload),
-        }),
+        body: JSON.stringify(payload),
       })
       const body = await res.json().catch(() => null)
       if (!res.ok || !body?.success) {
-        const issues = Array.isArray(body?.issues) && body.issues.length ? body.issues.map((i) => i.message).join('. ') : null
-        setMessage({ tone: 'error', text: issues || body?.error || `Could not save (${res.status}).` })
+        const placed = placeIssues(body?.issues, sent)
+        setServerIssues(placed.byRow)
+        const general = placed.general.length ? placed.general.join('. ') : null
+        const marked = Object.keys(placed.byRow).length ? 'Fix the entries marked below, then save.' : null
+        setMessage({ tone: 'error', text: general || marked || body?.error || `Could not save (${res.status}).` })
         return
       }
       setRows(rowsFrom(body.data, todayIso))
@@ -204,7 +215,7 @@ export default function AvailabilityEditor({ todayIso }) {
   const list = (kind) => (
     <ul className="divide-y divide-un1t-border">
       {section(kind).map((r) => (
-        <RuleRow key={r.key} row={r} todayIso={todayIso} stored={stored} showProblem={showProblems} onChange={(next) => update(r.key, next)} onRemove={() => remove(r.key)} />
+        <RuleRow key={r.key} row={r} todayIso={todayIso} stored={stored} showProblem={showProblems} serverIssues={serverIssues[r.key]} onChange={(next) => update(r.key, next)} onRemove={() => remove(r.key)} />
       ))}
     </ul>
   )
