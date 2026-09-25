@@ -14,6 +14,10 @@ import { formatTime12h as formatTime } from '@/lib/schedule-overlap'
 // TPLCLONE.1 — copy templates in from another studio of the same organisation.
 import CopyTemplatesModal from './schedule/CopyTemplatesModal'
 import { cloneSourceStudios, cloneResultNotice } from '@/lib/shift-template-clone'
+// QUALS.1 — what a template asks for (advisory: the coach picker badges, it
+// never refuses). Saved by its own route after the template.
+import { parseTemplateQualificationsAnswer } from '@shared/qualifications'
+import { MAX_TEMPLATE_REQUIREMENTS } from '@/lib/qualifications-schemas'
 
 const PRESET_COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#06B6D4', '#F97316']
 // ROSTER-FIX.6b — the swatches are eight empty buttons whose only content is
@@ -127,13 +131,67 @@ export default function ShiftTemplateManager({ user }) {
 
   useEffect(() => { fetchTemplates() }, [fetchTemplates])
 
+  // QUALS.1 — the organisation's catalogue and every template's requirements.
+  // null = not loaded, refused, or not understood: the editor then shows no
+  // field and saves nothing about requirements (the template saves as before).
+  const [quals, setQuals] = useState(null)
+  const fetchQuals = useCallback(async () => {
+    if (!locationId) return
+    try {
+      const res = await fetch(`/api/schedule/template-qualifications?location_id=${locationId}`)
+      const parsed = parseTemplateQualificationsAnswer(await res.json().catch(() => null))
+      setQuals(parsed.ok ? parsed : null)
+    } catch {
+      setQuals(null)
+    }
+  }, [locationId])
+  useEffect(() => { fetchQuals() }, [fetchQuals])
+
+  const requiredIdsFor = (templateId) => (templateId && quals?.requirements?.[templateId]) || []
+  // The list chip names ACTIVE types only: the picker does not advise on an
+  // archived one, so the chip would promise a check that never happens.
+  const requiredNamesFor = (templateId) => requiredIdsFor(templateId)
+    .map((id) => quals?.types.find((t) => t.id === id && t.active !== false)?.name)
+    .filter(Boolean)
+  // The editor offers active types, plus any archived type this template
+  // already asks for (so it can be seen and removed).
+  const editorTypesFor = (templateId) => (quals
+    ? quals.types.filter((t) => t.active !== false || requiredIdsFor(templateId).includes(t.id))
+    : null)
+
+  // PUT only when the set changed. A failure is reported, never swallowed:
+  // the template itself did save.
+  async function saveRequirements(templateId, before, wanted) {
+    if (!templateId) return
+    if (before.length === wanted.length && before.every((id) => wanted.includes(id))) return
+    try {
+      await readJson('/api/schedule/template-qualifications', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ template_id: templateId, qualification_type_ids: wanted }),
+      })
+    } catch (e) {
+      failWith('Template saved, but not what it asks for', e?.message || 'Could not save the required qualifications')
+    }
+    fetchQuals()
+  }
+
   async function handleSave(formData) {
     const isEdit = typeof showForm === 'object'
     const url = isEdit ? `/api/schedule/templates/${showForm.id}` : '/api/schedule/templates'
     const method = isEdit ? 'PUT' : 'POST'
 
+    // QUALS.1 — requirements ride their own route, AFTER the template (a new
+    // one has no id until it is created). Absent = the field was not shown.
+    // The form sends both halves from the snapshot it took when it OPENED
+    // (TemplateFormModal), never from a catalogue that landed later.
+    const {
+      required_qualification_type_ids: wantedQuals,
+      required_qualification_type_ids_before: beforeQuals,
+      ...templateFields
+    } = formData
     const payload = {
-      ...formData,
+      ...templateFields,
       location_id: locationId,
     }
 
@@ -152,6 +210,9 @@ export default function ShiftTemplateManager({ user }) {
       }
       setShowForm(false)
       fetchTemplates()
+      if (Array.isArray(wantedQuals)) {
+        await saveRequirements(isEdit ? showForm.id : data.data?.id, Array.isArray(beforeQuals) ? beforeQuals : [], wantedQuals)
+      }
       // BLOCKEDIT.1 — shifts edited on their own on the calendar keep their
       // own times/staffing; say how many, so a template edit that did not
       // reach them is not a surprise.
@@ -402,6 +463,14 @@ export default function ShiftTemplateManager({ user }) {
                           Admin
                         </span>
                       )}
+                      {requiredNamesFor(t.id).length > 0 && (
+                        <span
+                          className="text-xs px-1.5 py-0.5 rounded font-medium bg-sky-500/10 text-sky-700"
+                          title="Advisory: the coach picker flags anyone without a current record on the day. It never stops an assignment."
+                        >
+                          Requires {requiredNamesFor(t.id).join(', ')}
+                        </span>
+                      )}
                       {oneOff ? (
                         <span
                           className="text-xs px-1.5 py-0.5 rounded font-medium bg-slate-500/10 text-slate-700"
@@ -516,6 +585,8 @@ export default function ShiftTemplateManager({ user }) {
           template={typeof showForm === 'object' ? showForm : null}
           onSave={handleSave}
           onClose={() => setShowForm(false)}
+          qualificationTypes={editorTypesFor(typeof showForm === 'object' ? showForm.id : null)}
+          requiredIds={requiredIdsFor(typeof showForm === 'object' ? showForm.id : null)}
         />
       )}
 
@@ -531,7 +602,7 @@ export default function ShiftTemplateManager({ user }) {
   )
 }
 
-function TemplateFormModal({ template, onSave, onClose }) {
+function TemplateFormModal({ template, onSave, onClose, qualificationTypes = null, requiredIds = [] }) {
   const [name, setName] = useState(template?.name || '')
   const [startTime, setStartTime] = useState(template?.start_time?.slice(0, 5) || '06:00')
   const [endTime, setEndTime] = useState(template?.end_time?.slice(0, 5) || '14:00')
@@ -552,6 +623,17 @@ function TemplateFormModal({ template, onSave, onClose }) {
   // restores it (a deliberate 0 included). null = none known: a template that
   // opened as admin, which gets the new-class-template default of 1.
   const [classMin, setClassMin] = useState(null)
+  // QUALS.1 — null types = the catalogue did not load: no field, and the
+  // save carries no requirements at all.
+  // QUALS.1 review 3 — a SNAPSHOT taken once, when the form opens. If the
+  // catalogue had not loaded by then, the form shows no field and sends no
+  // requirements key at all for its whole life (the PUT is skipped and the
+  // server keeps what it has), even if the catalogue lands while it is open:
+  // a form that opened with [] would otherwise save "requires nothing".
+  const [qualSnapshot] = useState(() => (Array.isArray(qualificationTypes)
+    ? { types: qualificationTypes, before: [...(requiredIds || [])] }
+    : null))
+  const [requiredQuals, setRequiredQuals] = useState(() => qualSnapshot?.before || [])
 
   function chooseKind(next) {
     if (next === kind) return
@@ -743,6 +825,8 @@ function TemplateFormModal({ template, onSave, onClose }) {
             />
           </div>
 
+          <TemplateQualificationsField types={qualSnapshot?.types || null} selected={requiredQuals} onChange={setRequiredQuals} />
+
           <div>
             <label className="block text-xs text-un1t-subtle mb-2">Colour</label>
             <div className="flex gap-2 flex-wrap">
@@ -778,6 +862,9 @@ function TemplateFormModal({ template, onSave, onClose }) {
               max_coaches: maxCoaches,
               min_coaches: minCoaches,
               kind,
+              ...(qualSnapshot
+                ? { required_qualification_type_ids: requiredQuals, required_qualification_type_ids_before: qualSnapshot.before }
+                : {}),
             })
           }
           disabled={!name || !startTime || !endTime}
@@ -787,5 +874,39 @@ function TemplateFormModal({ template, onSave, onClose }) {
         </button>
       </div>
     </Modal>
+  )
+}
+
+// QUALS.1 — what a template asks for. Advisory: the coach picker badges a
+// coach without a current record on the shift's date; nothing refuses.
+function TemplateQualificationsField({ types, selected, onChange }) {
+  if (!types || types.length === 0) return null
+  const full = selected.length >= MAX_TEMPLATE_REQUIREMENTS
+  return (
+    <fieldset>
+      <legend className="block text-xs text-un1t-subtle mb-2">Requires (advisory)</legend>
+      <div className="flex flex-wrap gap-2">
+        {types.map((t) => {
+          const on = selected.includes(t.id)
+          return (
+            <label
+              key={t.id}
+              className={`flex items-center gap-1.5 text-sm px-2 py-1 rounded-md border ${on ? 'border-un1t-text' : 'border-un1t-border'}`}
+            >
+              <input
+                type="checkbox"
+                checked={on}
+                disabled={!on && full}
+                onChange={() => onChange(on ? selected.filter((id) => id !== t.id) : [...selected, t.id])}
+              />
+              {t.name}{t.active === false ? ' (archived)' : ''}
+            </label>
+          )
+        })}
+      </div>
+      <p className="text-[11px] text-un1t-subtle mt-1.5">
+        The coach picker flags anyone without a current record on the day. It never stops you assigning them. Up to {MAX_TEMPLATE_REQUIREMENTS}.
+      </p>
+    </fieldset>
   )
 }

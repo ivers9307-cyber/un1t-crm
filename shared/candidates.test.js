@@ -335,3 +335,40 @@ describe('candidateFacts', () => {
     expect(f.on_leave).not.toHaveProperty('type')
   })
 })
+
+describe('QUALS.1 — qualification gaps', () => {
+  const GAP = [{ type_id: 'fa', name: 'First aid', status: 'missing', expires_on: null }]
+
+  it('a gap is one warn badge, after the others', () => {
+    expect(candidateBadges({ free: true, qualification_gaps: GAP })).toEqual([{
+      key: 'qualifications', tone: 'warn', text: 'First aid: not on record',
+      title: 'This shift asks for First aid (not on record). Advisory only: you can still assign them.',
+    }])
+    const withRest = candidateBadges({ rest_gap: { rest_minutes: 600, other: {} }, qualification_gaps: GAP })
+    expect(withRest.map((b) => b.key)).toEqual(['rest', 'qualifications'])
+    expect(candidateBadges({ free: true, qualification_gaps: [] })).toEqual([])
+  })
+
+  it('never changes the tier, the order or the phone\'s reason line', () => {
+    expect(candidateTier({ free: true, qualification_gaps: GAP })).toBe('ready')
+    const ranked = rankCandidates([
+      { profile_id: 'a', full_name: 'Abe', free: true, week_minutes: 0, qualification_gaps: GAP },
+      { profile_id: 'b', full_name: 'Bea', free: true, week_minutes: 0 },
+    ])
+    expect(ranked.map((c) => c.profile_id)).toEqual(['a', 'b'])
+    expect(ranked[0].reason).toBe(candidateReason({ free: true, week_minutes: 0 }))
+  })
+
+  it('an unread qualification check is named in the note', () => {
+    // QUALS.1 review 4 — qualifications never move the order, so they are not
+    // in the "order may be off" clause. Their own sentence, and only for a
+    // caller that shows the badge (the web picker); the phone shows no badge,
+    // so by default it says nothing about them.
+    expect(candidatesUncheckedNote({ qualifications: false }, { withQualifications: true })).toBe('Could not check qualifications.')
+    expect(candidatesUncheckedNote({ leave: false, qualifications: false }, { withQualifications: true }))
+      .toBe('Could not check leave, so the order may be off. Could not check qualifications.')
+    expect(candidatesUncheckedNote({ qualifications: false })).toBeNull()
+    expect(candidatesUncheckedNote({ leave: false, qualifications: false })).toBe('Could not check leave, so the order may be off.')
+    expect(candidatesUncheckedNote({ qualifications: true }, { withQualifications: true })).toBeNull()
+  })
+})
