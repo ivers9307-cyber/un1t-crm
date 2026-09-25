@@ -40,6 +40,9 @@ export const ROSTER_RUNWAY_HEARTBEAT = 'roster-runway'
 // runShiftTimeChangeNotices) of the */5 send-push-reminders cron. Seeded by mig 639.
 export const SHIFT_TIME_CHANGES_HEARTBEAT = 'shift-time-changes'
 export const REPLACE_NOTICES_HEARTBEAT = 'replace-notices'
+// REPLACE.1b — the shift-offer arm (src/lib/shift-offer-server.js
+// runShiftOfferSweep) of the */5 send-push-reminders cron. Seeded by mig 642.
+export const SHIFT_OFFER_SWEEP_HEARTBEAT = 'shift-offer-sweep'
 
 // runShiftReminders' counters that mean the ARM went wrong, not a device:
 //   shift_claim_failed — a ledger claim insert failed; that reminder was NOT sent.
