@@ -257,6 +257,16 @@ export const NOTIFICATION_REGISTRY = Object.freeze([
     fallbackEmail: true,
     emailSubject: 'New contract ready for your signature',
   },
+  {
+    category: 'availability_change',
+    label: 'Availability changes',
+    description: 'A coach at your studio saved a change to when they are unavailable: which weekly times or dates were added or removed. One notification per save. Sent between 7am and 10pm studio time; a change saved outside those hours is sent at 7am, and several overnight changes by one coach arrive as one.',
+    trigger: { kind: 'event', source: 'PUT /api/schedule/availability (inside 07:00-22:00) + the checklist-sweep cron (deferred ones) -> src/lib/availability-notify.js' },
+    recipients: { kind: 'roles_at_location', detail: 'Owner, manager and head coach (and masters) at every studio the coach belongs to, never the coach' },
+    configurable: { leadTimes: false, roles: false },
+    // An FYI with nothing to decide, and the roster shows it: no email.
+    fallbackEmail: false,
+  },
 ])
 
 /**

@@ -99,6 +99,7 @@ const CATEGORY_CHANNELS = Object.freeze({
   agent_activity: 'updates', // "Mia is handling a chat" — an ambient FYI, not a heads-up
   schedule: 'updates',
   shift_adjusted: 'updates',
+  availability_change: 'updates', // AVAIL.1 — a coach changed their availability; an FYI
   invoice_approved: 'updates',
   invoice_declined: 'updates',
   expense_approved: 'updates',
