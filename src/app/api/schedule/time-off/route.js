@@ -11,6 +11,7 @@ import {
   resolveTimeOffApproverIds, getEmploymentType, getHolidayAllowance, ensureHolidayAllowanceRow,
   countLeaveClashes, findLeaveClashes, chargeableLeaveSegments, findOwnPublishedShifts, isRealIsoDate,
   getLocationIdsByProfile, getOrgAdminLocationIdsByProfile,
+  getPendingHolidayDays,
 } from '@/lib/time-off-leave'
 import {
   annotateCancelAsk, isMissingCancelSchemaError, CANCEL_ASK_OFF, annotateApprovedLeaveGuard, requesterLeaveTier,
@@ -369,18 +370,12 @@ export async function POST(request) {
         return NextResponse.json({ success: false, error: allowanceError.message }, { status: 500 })
       }
       const remaining = allowance.total_days + allowance.carried_over - allowance.used_days
-      const { data: pending, error: pendingError } = await db.from('time_off_requests')
-        .select('total_days')
-        .eq('profile_id', subjectId)
-        .eq('type', 'holiday')
-        .eq('status', 'pending')
-        .gte('start_date', `${year}-01-01`)
-        .lte('start_date', `${year}-12-31`)
-
+      // LEAVEDAYS.1 — the same sum GET /api/schedule/allowances reports as
+      // `pending_days`, so the form warns on the figure this refuses on.
+      const { days: pendingDays, error: pendingError } = await getPendingHolidayDays(db, subjectId, year)
       if (pendingError) {
         return NextResponse.json({ success: false, error: pendingError.message }, { status: 500 })
       }
-      const pendingDays = (pending || []).reduce((sum, r) => sum + Number(r.total_days), 0)
       if (seg.days > remaining - pendingDays) {
         const who = onBehalf ? 'They have' : 'You have'
         return NextResponse.json({

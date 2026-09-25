@@ -9,6 +9,8 @@ import { timeOffTypesFor, defaultTimeOffTypeFor, leaveClashLabel, leaveClashProm
 import { Modal, Button } from '@/components/ui'
 // LEAVECANCEL.1 — shared with the dashboard's My requests card.
 import { LEAVE_CANCEL_NOTICES, cancelledAtRequestText } from '@/lib/time-off-cancel-copy'
+// LEAVEDAYS.1 — what the form's "days requested" line says, and when.
+import { LEAVE_PREVIEW_DEBOUNCE_MS, leavePreviewRequest, leavePreviewFrom, leavePreviewState, leaveDaysView } from '@/lib/leave-days-preview'
 // ROSTER-FIX.6a — one failure shape and one banner across the schedule
 // screens, so no call site can quietly forget to check the response.
 import ScheduleErrorBanner from './schedule/ScheduleErrorBanner'
@@ -773,6 +775,40 @@ function TimeOffFormModal({ user, canRecordForOthers = false, allowance, onClose
     ? Math.max(1, Math.round((new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24)) + 1)
     : 0
 
+  // LEAVEDAYS.1 — `totalDays` above is a CALENDAR count. The server charges a
+  // holiday in working days (no weekends, bank holidays or studio closures —
+  // HOLIDAYLEAVE.1), so the line under the dates shows the server's number,
+  // from the preview the phone already uses (LEAVEPHONE.1), and judges
+  // "exceeds balance" on that alone. Asked for the studio this form POSTs to,
+  // and only for a holiday: every other type IS charged in calendar days.
+  // The days depend on the studio and the dates, not the person, so this is
+  // right for an on-behalf request too; the preview's `clashes` are the
+  // CALLER's own shifts and are never read here.
+  const previewRequest = leavePreviewRequest({ type: effectiveType, startDate, endDate, locationId })
+  const previewKey = previewRequest?.key || null
+  const previewUrl = previewRequest?.url || null
+  // { key, known, days } — only ever shown for the key it was asked with.
+  const [previewResult, setPreviewResult] = useState(null)
+  useEffect(() => {
+    if (!previewUrl) return
+    // Date inputs fire on every change: wait for a pause, and let only the
+    // newest request speak. The abort covers the network; the flag covers a
+    // body that arrives anyway.
+    const controller = new AbortController()
+    const timer = setTimeout(() => {
+      readJson(previewUrl, { signal: controller.signal })
+        .then((res) => leavePreviewFrom(res), () => leavePreviewFrom(null))
+        .then((next) => {
+          if (!controller.signal.aborted) setPreviewResult({ key: previewKey, ...next })
+        })
+    }, LEAVE_PREVIEW_DEBOUNCE_MS)
+    return () => { clearTimeout(timer); controller.abort() }
+  }, [previewKey, previewUrl])
+  const daysView = leaveDaysView({
+    calendarDays: totalDays, preview: leavePreviewState(previewRequest, previewResult),
+    type: effectiveType, onBehalf, allowance, startDate, endDate,
+  })
+
   async function handleSubmit(e) {
     e.preventDefault()
     setError(null)
@@ -893,22 +929,34 @@ function TimeOffFormModal({ user, canRecordForOthers = false, allowance, onClose
             </div>
           </div>
 
-          {totalDays > 0 && (
-            <div className="text-sm text-un1t-subtle">
-              {totalDays} day{totalDays !== 1 ? 's' : ''} requested
-              {effectiveType === 'holiday' && allowance && !onBehalf && !allowance.not_applicable && (
-                <span className="ml-2">
-                  · {allowance.remaining} remaining
-                  {totalDays > allowance.remaining && (
-                    <span className="text-red-700 ml-1">(exceeds balance)</span>
-                  )}
-                </span>
-              )}
-            </div>
-          )}
-
           {/* Reason */}
           <div>
+            {/* LEAVEDAYS.1 — the days line is the form's only warning before
+                submit, so it is a live region, and one that is ALWAYS mounted:
+                a region that arrives together with its content is not
+                announced. It sits inside this block rather than as its own
+                child of the form because the form is `space-y-4`, which would
+                give an empty region a 1rem gap of its own; the line carries
+                that gap itself (`mb-4`). "Counting days..." is aria-hidden so
+                each settled line is announced once, whole (aria-atomic), and
+                the wait before it is not. */}
+            <div aria-live="polite" aria-atomic="true">
+              {daysView && (
+                <div className="text-sm text-un1t-subtle mb-4" aria-hidden={daysView.transient ? 'true' : undefined}>
+                  {daysView.text}
+                  {daysView.balance && (
+                    <span className="ml-2">
+                      · {daysView.balance}
+                      {daysView.exceeds && (
+                        <span className="text-red-700 ml-1">(exceeds balance)</span>
+                      )}
+                    </span>
+                  )}
+                  {daysView.hint && <div className="text-xs text-un1t-subtle mt-1">{daysView.hint}</div>}
+                  {daysView.note && <div className="text-xs text-un1t-subtle mt-1">{daysView.note}</div>}
+                </div>
+              )}
+            </div>
             <label className="block text-xs text-un1t-subtle mb-1">Reason (optional)</label>
             <textarea
               value={reason}

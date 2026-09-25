@@ -10,6 +10,7 @@ import {
   getNonWorkingDates, findLeaveClashes, decidingLocationIds, countLeaveClashes,
   ownShiftPreviewRow, findOwnPublishedShifts, chargeableLeaveSegments, isRealIsoDate,
   getOrgAdminLocationIdsByProfile, getProfileLocationIds,
+  getPendingHolidayDays,
 } from './time-off-leave.js'
 import { fakeDb, queriesOf, resolveLocations, scopedAssignments, locationScopeOf } from './time-off.test-helpers.js'
 
@@ -716,5 +717,37 @@ describe('getProfileLocationIds — memberships carry the per-studio role', () =
       memberships: [{ location_id: 'loc-1', role: 'manager' }, { location_id: 'loc-2', role: 'staff' }],
       error: null,
     })
+  })
+})
+
+// LEAVEDAYS.1 — the pending-holiday sum the POST refuses on, now also what
+// GET /api/schedule/allowances reports as `pending_days`. One function, so the
+// form's "remaining, pending" line and the POST's refusal cannot disagree.
+describe('getPendingHolidayDays — the one pending sum (LEAVEDAYS.1)', () => {
+  it('asks for exactly the rows the POST always judged: holiday, RAW pending, start_date in the year, this person', async () => {
+    const db = fakeDb(() => ({ data: [{ total_days: 2 }, { total_days: '1.0' }], error: null }))
+    const out = await getPendingHolidayDays(db, 'p1', 2026)
+    expect(out).toEqual({ days: 3, error: null })
+    const [q] = queriesOf(db, 'time_off_requests')
+    expect(q.columns).toBe('total_days')
+    expect(q.eq).toEqual({ profile_id: 'p1', type: 'holiday', status: 'pending' })
+    expect(q.calls).toContainEqual(['gte', 'start_date', '2026-01-01'])
+    expect(q.calls).toContainEqual(['lte', 'start_date', '2026-12-31'])
+    // An EXPIRED pending request (end_date passed) still counts: the POST never
+    // filtered on end_date, so neither does this.
+    expect(q.calls.some(([, col]) => col === 'end_date')).toBe(false)
+  })
+
+  it('no rows is 0; a year given as a query-string is the same year', async () => {
+    const db = fakeDb(() => ({ data: [], error: null }))
+    expect(await getPendingHolidayDays(db, 'p1', '2027')).toEqual({ days: 0, error: null })
+    expect(queriesOf(db, 'time_off_requests')[0].calls).toContainEqual(['gte', 'start_date', '2027-01-01'])
+  })
+
+  it('a read error is returned, never read as "nothing pending"', async () => {
+    const db = fakeDb(() => ({ data: null, error: { message: 'down' } }))
+    const out = await getPendingHolidayDays(db, 'p1', 2026)
+    expect(out.days).toBeNull()
+    expect(out.error.message).toBe('down')
   })
 })
