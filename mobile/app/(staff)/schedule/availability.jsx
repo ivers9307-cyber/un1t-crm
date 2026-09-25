@@ -135,7 +135,7 @@ export default function MyAvailability() {
   }
 
   function add(kind) {
-    const row = newRow(kind, { todayIso: dublinTodayIso(), nextKey: nextKey.current })
+    const row = newRow(kind, { nextKey: nextKey.current })
     setRows((prev) => [...prev, row])
     if (kind === 'dated') setOpenCalendar(row.key)
     setMessage(null)

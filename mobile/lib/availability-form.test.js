@@ -16,6 +16,7 @@ import {
   buildSaveBody, isDirty,
   loadOutcome, saveOutcome, closeAction, saveButtonState, impersonationLine,
 } from './availability-form'
+import { calendarTap } from './month-calendar'
 
 const TODAY = '2026-09-25' // a Friday
 
@@ -104,9 +105,25 @@ describe('newRow', () => {
     expect(newRow('weekly', { todayIso: TODAY, nextKey: next })).toEqual({
       key: 'n1', kind: 'weekly', weekday: 'mon', start_date: '', end_date: '', all_day: true, start_time: '', end_time: '', note: '', startedOn: null,
     })
+    // No dates until one is tapped: a card opened on today made the first
+    // tap EXTEND from today (review fix 1).
     expect(newRow('dated', { todayIso: TODAY, nextKey: next })).toEqual({
-      key: 'n2', kind: 'dated', weekday: 'mon', start_date: TODAY, end_date: TODAY, all_day: true, start_time: '', end_time: '', note: '', startedOn: null,
+      key: 'n2', kind: 'dated', weekday: 'mon', start_date: '', end_date: '', all_day: true, start_time: '', end_time: '', note: '', startedOn: null,
     })
+  })
+
+  it('the first tap on a fresh date card selects exactly that day; a second tap makes the range', () => {
+    const fresh = newRow('dated', { todayIso: TODAY, nextKey: createRowKeys('n') })
+    const once = { ...fresh, ...rangeFromCalendar(calendarTap({ ...calendarRange(fresh), minDate: TODAY }, '2026-10-03'), fresh) }
+    expect([once.start_date, once.end_date]).toEqual(['2026-10-03', '2026-10-03'])
+    const twice = { ...once, ...rangeFromCalendar(calendarTap({ ...calendarRange(once), minDate: TODAY }, '2026-10-05'), once) }
+    expect([twice.start_date, twice.end_date]).toEqual(['2026-10-03', '2026-10-05'])
+  })
+
+  it('a fresh date card cannot be saved until a day is chosen', () => {
+    const fresh = newRow('dated', { todayIso: TODAY, nextKey: createRowKeys('n') })
+    expect(rowProblem(fresh, { todayIso: TODAY, started: [] })).toBe(AVAILABILITY_COPY.chooseDay)
+    expect(formProblems([fresh], { todayIso: TODAY, started: [] }).byKey).toEqual({ n1: AVAILABILITY_COPY.chooseDay })
   })
 })
 

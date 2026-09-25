@@ -17,6 +17,7 @@ import { useState } from 'react'
 import { View, Text, Pressable } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { monthBounds, buildMonthMatrix } from 'shared/roster-month'
+import { calendarTap } from '../lib/month-calendar'
 
 const WEEKDAY_LABELS = ['M', 'T', 'W', 'T', 'F', 'S', 'S']
 
@@ -69,19 +70,10 @@ export default function MonthCalendar({ startDate, endDate, minDate, onChange, i
   }
 
   function tap(iso) {
-    // Disabled days never reach here (Pressable disabled), but guard anyway.
-    if (minDate && iso < minDate) return
-    // No start yet, or a full range already chosen → start fresh.
-    if (!startDate || (startDate && endDate)) {
-      onChange({ start: iso, end: null })
-      return
-    }
-    // start set, no end: extend forward, or restart if before start.
-    if (iso >= startDate) {
-      onChange({ start: startDate, end: iso })
-    } else {
-      onChange({ start: iso, end: null })
-    }
+    // Disabled days never reach here (Pressable disabled), but the rule
+    // guards anyway (lib/month-calendar.js, tested there).
+    const next = calendarTap({ startDate, endDate, minDate }, iso)
+    if (next) onChange(next)
   }
 
   function cellState(iso, inMonth) {

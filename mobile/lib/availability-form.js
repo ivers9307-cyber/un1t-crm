@@ -62,6 +62,7 @@ export const AVAILABILITY_COPY = Object.freeze({
   weeklyFull: `Up to ${AVAILABILITY_LIMITS.weekly} weekly times.`,
   datedFull: `Up to ${AVAILABILITY_LIMITS.dated} dates.`,
   chooseDates: 'Choose dates',
+  chooseDay: 'Choose a day in the calendar',
   calendarHint: 'Tap a day, then tap another to make it a range.',
   calendarHintStarted: 'Tap the new last day.',
   timeFormat: 'Use a time like 09:30, 17:30 or 5:30pm',
@@ -163,11 +164,15 @@ export function rowsFromServer(data, nextKey, { todayIso = null } = {}) {
     .map(([r, kind]) => rowFromRule({ ...r, kind }, nextKey(), { todayIso }))
 }
 
-/** A new card: all day; a weekly one on Monday, a dated one today. */
-export function newRow(kind, { todayIso, nextKey }) {
+/**
+ * A new card, all day: a weekly one on Monday; a dated one with NO dates
+ * until the coach taps one. (Opened on today, the calendar held a start and
+ * no end, so the first tap EXTENDED from today: 3 Oct became 25 Sep – 3 Oct.)
+ */
+export function newRow(kind, { nextKey }) {
   return kind === 'weekly'
     ? { key: nextKey(), kind: 'weekly', ...BLANK }
-    : { key: nextKey(), kind: 'dated', ...BLANK, start_date: todayIso, end_date: todayIso }
+    : { key: nextKey(), kind: 'dated', ...BLANK }
 }
 
 /** A row as the canonical rule the server will read (typed times parsed; a one-day date ends where it starts). */
@@ -247,6 +252,7 @@ export function rowProblem(row, { todayIso = null, started = null } = {}) {
       if (String(typed ?? '').trim() && parseTimeInput(typed) === null) return AVAILABILITY_COPY.timeFormat
     }
   }
+  if (row?.kind === 'dated' && !row.start_date) return AVAILABILITY_COPY.chooseDay
   const rule = rowToRule(row)
   if (rule?.kind !== 'dated' || !started) return ruleProblem(rule, { todayIso })
   const carried = carryStartedRules({ weekly: [], dated: [rule] }, started, todayIso)
