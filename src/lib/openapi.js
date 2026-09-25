@@ -4345,6 +4345,38 @@ const CopyShiftsResponse = z.object({
   mode: z.enum(['exact', 'template']),
 }).openapi('CopyShiftsResponse')
 
+// DATECHECK.1 — the calendar's block feed and the studio overview strip,
+// registered for their date refusals.
+registry.registerPath({
+  method: 'get',
+  path: '/api/schedule/blocks',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'List shift slots with their assignments (the schedule calendar feed)',
+  description: "Each shift_blocks row with its template and assignments, optionally bounded by start_date / end_date (YYYY-MM-DD, inclusive, on block_date; absent or empty = no bound) at location_id, or across the caller's studios. Where the caller is not a manager at the block's studio, draft blocks are omitted and capacity, block notes and assignment notes / partial_reason are stripped.",
+  responses: {
+    200: { description: 'Blocks with template and assignments' },
+    400: { description: 'start_date or end_date is not a real calendar date (YYYY-MM-DD), e.g. 2026-02-30 (`<name>: not a real date`), or the read failed', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'location_id outside the caller’s assignments', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/schedule/overview',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Per-day staffing demand against supply for one studio (manager-only)',
+  description: 'For each day from..to (YYYY-MM-DD, inclusive, at most 60 days): demand from scheduled events and Calendly templates, supply from scheduled staff minus approved leave, and a red / amber / green load. Needs a manager role and the schedule feature at location_id.',
+  responses: {
+    200: { description: 'One summary per day' },
+    400: { description: 'from / to missing, malformed or not a real calendar date (e.g. 2026-02-30), to before from, or a range over 60 days', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'No session', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not a manager at location_id, or the schedule feature is off there', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'A read failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // SLOTREMOVAL.1 — manual slot create/delete. A deleted slot is remembered in
 // shift_block_removals so the nightly horizon generator and roster copies
 // don't bring it back; a manual create is the undo.
@@ -4497,7 +4529,7 @@ registry.registerPath({
   description: "Default: time-off requests, scoped per studio role — a non-manager sees only their own; a manager sees leave filed at, or taken by members of, the studios they manage. Filters: location_id, start_date, end_date, status (pending excludes expired; expired asks for exactly those), profile_id (managers), with_clashes=1. Each row carries `approved_locked_to_owner` (LEAVEGUARD.1): true on a colleague's APPROVED leave whose requester is manager-tier at a studio it belongs to (or an org admin of its organisation) when the caller is not an owner there nor a master, or whose requester is a master when the caller is not another master, so PUT /api/schedule/time-off/{id} would refuse to cancel, reject or reopen it. With preview=1&type=&start_date=&end_date=[&location_id=] (LEAVEPHONE.1) it answers a different question, for the CALLER only: data.days { total, segments[{ year, start_date, end_date, days }] } is exactly what POST would charge at the studio POST would file at — location_id, else the active studio (holiday = Mon-Fri minus the studio country's bank holidays minus that studio's closures; other types = calendar days; one segment per year; total 0 where POST would answer 'No working days'), and data.clashes[{ id, block_date, start_time, end_time, template_name, location_name }] are the caller's own published, live shifts in the range from today on, at any studio, with effective times. profile_id is ignored in preview mode and unpublished rosters are never included. Preview does not judge the balance, overlap or employment gate; POST does.",
   responses: {
     200: { description: 'Array of requests; or, with preview=1, { type, start_date, end_date, days, clashes }' },
-    400: { description: 'preview=1 with an unknown type, missing/malformed dates, an inverted range, a span over a year, or no studio to file against', content: { 'application/json': { schema: ErrorResponse } } },
+    400: { description: 'start_date or end_date is not a real calendar date (YYYY-MM-DD; the list answers `<name>: not a real date`), or, with preview=1, an unknown type, missing dates, an inverted range, a span over a year, or no studio to file against', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'location_id outside the caller’s assignments', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'preview=1 and the holiday list or the roster could not be read (fails closed)', content: { 'application/json': { schema: ErrorResponse } } },
   },
