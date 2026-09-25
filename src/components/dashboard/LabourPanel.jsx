@@ -95,6 +95,11 @@ function StudioLabour({ row, isTotal = false }) {
 }
 
 export function LabourPanel({ vm }) {
+  // Review nit — a salaried person with nowhere to charge the salary (no
+  // published hours and no active studio in any organisation) has pay on file;
+  // they get their own line.
+  const noStudio = vm.uncosted.filter((u) => u.reason === 'no_studio')
+  const noPay = vm.uncosted.filter((u) => u.reason !== 'no_studio')
   return (
     <section aria-labelledby="labour-heading" className="bg-un1t-surface border border-un1t-border rounded-lg px-4 py-3">
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
@@ -107,9 +112,14 @@ export function LabourPanel({ vm }) {
         {vm.studios.map((row) => <StudioLabour key={row.location_id} row={row} />)}
         {vm.total ? <StudioLabour row={vm.total} isTotal /> : null}
       </div>
-      {vm.uncosted.length > 0 ? (
+      {noPay.length > 0 ? (
         <p className="mt-3 text-xs text-amber-700">
-          No pay on file, so not counted: {vm.uncosted.map((u) => `${u.name} (${u.hours}h, ${REASONS[u.reason] || u.reason})`).join(', ')}.
+          No pay on file, so not counted: {noPay.map((u) => `${u.name} (${u.hours}h, ${REASONS[u.reason] || 'not costed'})`).join(', ')}.
+        </p>
+      ) : null}
+      {noStudio.length > 0 ? (
+        <p className="mt-1 text-xs text-amber-700">
+          Salary not counted (no active studio): {noStudio.map((u) => u.name).join(', ')}.
         </p>
       ) : null}
       {vm.untimed_shifts > 0 ? (
@@ -121,7 +131,8 @@ export function LabourPanel({ vm }) {
         Revenue is the recurring membership base billing now (the Studio scorecard&apos;s MRR), pro-rated to today for
         &quot;so far&quot;. Class packs, drop-ins and one-off charges are not in it. Forecast is the published roster for
         the whole month. Salaries count in full (a twelfth a month, pro-rated to today for &quot;so far&quot;), split
-        between studios by rostered hours. Contractors count per rostered hour at their rate, admin shifts included.
+        between their studios in every organisation by rostered hours (equally when not rostered); this block
+        counts only these studios&apos; share. Contractors count per rostered hour at their rate, admin shifts included.
       </p>
     </section>
   )

@@ -102,6 +102,18 @@ describe('LabourPanel', () => {
     expect(html()).toContain('No pay on file, so not counted: Sam Demo (1h, no salary)')
   })
 
+  it('a salaried person with no studio to charge is named on their own line, not as "no pay on file"', () => {
+    const out = html({ ...VM, uncosted: [...VM.uncosted, { name: 'Max Beta', reason: 'no_studio', hours: 0 }] })
+    expect(out).toContain('No pay on file, so not counted: Sam Demo (1h, no salary).')
+    expect(out).toContain('Salary not counted (no active studio): Max Beta.')
+    expect(out).not.toContain('no_studio')
+    expect(out).not.toContain('Max Beta (0h')
+  })
+
+  it('says a salary is split across every organisation the person works for', () => {
+    expect(html()).toContain('split between their studios in every organisation by rostered hours')
+  })
+
   it('says how many draft hours the forecast leaves out, and any untimed shifts', () => {
     expect(html()).toContain('1h in draft rosters not counted')
     expect(html({ ...VM, untimed_shifts: 2 })).toContain('2 published shifts have no times and are not counted')
