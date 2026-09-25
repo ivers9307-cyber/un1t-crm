@@ -46,6 +46,10 @@ import { createHash } from 'node:crypto'
 import { isLiveAssignment, slotKey } from './roster'
 import { shiftKindOf } from '@shared/shift-kind'
 import { normaliseBriefing } from '@shared/shift-briefing'
+import { wallInstant } from './staff-calendar-feed'
+import { resolveTz } from './tz-time'
+import { addDaysISO } from './dublin-time'
+import { inferContinuousArrivals, arrivalToTimeOnly } from './staff-attendance'
 
 export const SNAPSHOT_FORMAT_VERSION = 1
 
@@ -145,4 +149,218 @@ export function buildPublishSnapshot({ periodStart, periodEnd, blocks }) {
     blockCount: out.length,
     assignmentCount: out.reduce((n, b) => n + b.coaches.length, 0),
   }
+}
+
+export const COMPARE_CHANGES = Object.freeze(['unchanged', 'moved', 'added', 'removed'])
+
+/** The published period narrowed to [from, to]; null when they do not overlap. */
+export function clipWindow(snapshot, from, to) {
+  const lo = from && from > snapshot.period_start ? from : snapshot.period_start
+  const hi = to && to < snapshot.period_end ? to : snapshot.period_end
+  return lo <= hi ? { from: lo, to: hi } : null
+}
+
+function sameWindow(a, b) {
+  return (a?.start ?? null) === (b?.start ?? null) && (a?.end ?? null) === (b?.end ?? null)
+}
+
+function changeOf(was, now) {
+  if (!was) return 'added'
+  if (!now) return 'removed'
+  return sameWindow(was, now) ? 'unchanged' : 'moved'
+}
+
+// The instant a window ends in `tz`: an end before the start is the next day's
+// wall clock ('24:00' compares after every start, and wallInstant reads it as
+// the next midnight).
+function endInstant(date, win, tz) {
+  if (!win?.start || !win?.end) return null
+  const endDate = win.end < win.start ? addDaysISO(date, 1) : date
+  return wallInstant(endDate, win.end, tz)
+}
+
+// null when nothing changed, when either side is missing (a block added or
+// removed after publish says so itself), or when the snapshot predates the
+// briefing_hash key (undefined = not recorded, never a change).
+function briefingChangeOf(p, c) {
+  if (!p || !c || p.briefing_hash === undefined) return null
+  const was = p.briefing_hash ?? null
+  const now = c.briefing_hash ?? null
+  if (was === now) return null
+  if (!was) return 'added'
+  if (!now) return 'removed'
+  return 'changed'
+}
+
+function round2(n) {
+  return Math.round(n * 100) / 100
+}
+
+function emptyTotals() {
+  return {
+    published_shifts: 0, published_hours: 0,
+    current_shifts: 0, current_hours: 0, hours_delta: 0,
+    unchanged: 0, moved: 0, added: 0, removed: 0,
+    ended: 0, arrived: 0, arrived_inferred: 0, no_show_candidates: 0,
+    blocks_added: 0, blocks_removed: 0, blocks_moved: 0, blocks_staffing_changed: 0,
+    blocks_briefing_changed: 0,
+  }
+}
+
+function coachOrder(x, y) {
+  return String(x.name ?? '\uFFFF').localeCompare(String(y.name ?? '\uFFFF'))
+    || String(x.profile_id).localeCompare(String(y.profile_id))
+}
+
+function compareBlockOrder(x, y) {
+  const xs = (x.current || x.published)?.start ?? ''
+  const ys = (y.current || y.published)?.start ?? ''
+  return String(x.date).localeCompare(String(y.date))
+    || String(xs).localeCompare(String(ys))
+    || String(x.template_name ?? '').localeCompare(String(y.template_name ?? ''))
+    || String(x.slot).localeCompare(String(y.slot))
+}
+
+/**
+ * A snapshot against the live roster and its arrival stamps.
+ *
+ * @param {object} args
+ * @param {object} args.snapshot       roster_publish_snapshots.snapshot (format 1)
+ * @param {object[]} args.currentBlocks live shift_blocks rows (loadWindowBlocks shape,
+ *                                      assignments embedded with arrived_at and profiles(full_name))
+ * @param {string|null} [args.from]    YYYY-MM-DD; narrows the window
+ * @param {string|null} [args.to]
+ * @param {number} args.nowMs          what "ended" is judged against
+ * @param {string|null} [args.tz]      locations.timezone; unknown -> Europe/Dublin
+ * @param {Record<string,string>} [args.names]  profile_id -> full_name for coaches
+ *                                      not on the live roster any more
+ * @returns {{ window: {from,to}|null, blocks: object[], totals: object }}
+ */
+export function compareSnapshot({ snapshot, currentBlocks, from = null, to = null, nowMs = Date.now(), tz = null, names = {} }) {
+  const zone = resolveTz(tz)
+  const totals = emptyTotals()
+  const window = snapshot ? clipWindow(snapshot, from, to) : null
+  if (!window) return { window: null, blocks: [], totals }
+  const inWindow = (d) => d >= window.from && d <= window.to
+
+  const published = new Map()
+  for (const b of snapshot.blocks || []) if (inWindow(b.date)) published.set(b.slot, b)
+
+  const current = new Map()
+  const arrivals = new Map() // `${slot}|${profile_id}` -> arrived_at of the LIVE assignment
+  const nameOf = { ...names }
+  for (const raw of currentBlocks || []) {
+    if (!raw?.template_id || !raw?.block_date) continue
+    const b = normaliseBlock(raw)
+    if (!inWindow(b.date)) continue
+    current.set(b.slot, b)
+    for (const a of raw.shift_assignments || []) {
+      if (!a?.profile_id) continue
+      // Any embedded row names its coach, cancelled or not: a removed coach
+      // still reads by name.
+      if (a.profiles?.full_name && !nameOf[a.profile_id]) nameOf[a.profile_id] = a.profiles.full_name
+      if (isLiveAssignment(a) && a.arrived_at) arrivals.set(`${b.slot}|${a.profile_id}`, a.arrived_at)
+    }
+  }
+
+  const blocks = []
+  const timed = [] // rows on the live roster, for the arrival carry-over
+  for (const slot of new Set([...published.keys(), ...current.keys()])) {
+    const p = published.get(slot) || null
+    const c = current.get(slot) || null
+    const block = {
+      slot,
+      date: (c || p).date,
+      template_name: c?.template_name ?? p?.template_name ?? null,
+      kind: (c || p).kind,
+      published: p ? { start: p.start, end: p.end, min: p.min, max: p.max } : null,
+      current: c ? { start: c.start, end: c.end, min: c.min, max: c.max } : null,
+      change: changeOf(p, c),
+      staffing_changed: Boolean(p && c && (p.min !== c.min || p.max !== c.max)),
+      // 'added' | 'changed' | 'removed' | null. Never the text (see BRIEFING).
+      briefing_change: briefingChangeOf(p, c),
+      coaches: [],
+    }
+    const was = new Map((p?.coaches || []).map((x) => [x.profile_id, x]))
+    const now = new Map((c?.coaches || []).map((x) => [x.profile_id, x]))
+    for (const pid of new Set([...was.keys(), ...now.keys()])) {
+      const w = was.get(pid) || null
+      const n = now.get(pid) || null
+      const row = {
+        profile_id: pid,
+        name: nameOf[pid] ?? null,
+        published: w ? { start: w.start, end: w.end } : null,
+        current: n ? { start: n.start, end: n.end } : null,
+        change: changeOf(w, n),
+        arrived_at: null,
+        arrived_local: null,
+        arrival_inferred: false,
+        ended: false,
+        no_show_candidate: false,
+      }
+      if (n) {
+        const arrivedMs = Date.parse(arrivals.get(`${slot}|${pid}`) || '')
+        timed.push({
+          row,
+          profileId: pid,
+          blockDate: c.date,
+          scheduledAt: wallInstant(c.date, n.start, zone),
+          scheduledEndAt: endInstant(c.date, n, zone),
+          arrivalAt: Number.isFinite(arrivedMs) ? arrivedMs : null,
+        })
+      }
+      block.coaches.push(row)
+    }
+    block.coaches.sort(coachOrder)
+    blocks.push(block)
+  }
+
+  // The attendance report's rule: a shift with no stamp inherits the same
+  // coach's previous shift's arrival that day when the gap is at most an hour.
+  // Returned in input order.
+  inferContinuousArrivals(timed).forEach((r, i) => {
+    const row = timed[i].row
+    row.ended = Number.isFinite(r.scheduledEndAt) && r.scheduledEndAt <= nowMs
+    if (Number.isFinite(r.arrivalAt)) {
+      row.arrived_at = new Date(r.arrivalAt).toISOString()
+      row.arrived_local = (arrivalToTimeOnly(r.arrivalAt, zone) || '').slice(0, 5) || null
+      row.arrival_inferred = Boolean(r.arrivalInferred)
+    }
+    row.no_show_candidate = row.ended && !row.arrived_at
+  })
+
+  blocks.sort(compareBlockOrder)
+
+  for (const b of blocks) {
+    if (b.change === 'added') totals.blocks_added += 1
+    else if (b.change === 'removed') totals.blocks_removed += 1
+    else if (b.change === 'moved') totals.blocks_moved += 1
+    if (b.staffing_changed) totals.blocks_staffing_changed += 1
+    if (b.briefing_change) totals.blocks_briefing_changed += 1
+    for (const r of b.coaches) {
+      totals[r.change] += 1
+      if (r.published) {
+        totals.published_shifts += 1
+        totals.published_hours += windowHours(r.published)
+      }
+      if (r.current) {
+        totals.current_shifts += 1
+        totals.current_hours += windowHours(r.current)
+      }
+      if (r.ended) {
+        totals.ended += 1
+        if (r.arrived_at) {
+          totals.arrived += 1
+          if (r.arrival_inferred) totals.arrived_inferred += 1
+        } else {
+          totals.no_show_candidates += 1
+        }
+      }
+    }
+  }
+  totals.published_hours = round2(totals.published_hours)
+  totals.current_hours = round2(totals.current_hours)
+  totals.hours_delta = round2(totals.current_hours - totals.published_hours)
+
+  return { window, blocks, totals }
 }
