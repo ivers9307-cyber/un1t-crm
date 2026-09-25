@@ -1,7 +1,7 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
-import { Plus, Clock, Pencil, Trash2, Users, Ban, ChevronUp, ChevronDown, Check } from 'lucide-react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
+import { Plus, Clock, Pencil, Trash2, Users, Ban, ChevronUp, ChevronDown, Check, Copy } from 'lucide-react'
 import Modal from '@/components/ui/Modal'
 // ROSTER-FIX.6a — one failure shape and one banner across the schedule
 // screens, so no call site can quietly forget to check the response.
@@ -11,6 +11,9 @@ import { readJson } from './schedule/useScheduleData'
 // three schedule screens. One definition now, in the lib that already owns
 // schedule time formatting.
 import { formatTime12h as formatTime } from '@/lib/schedule-overlap'
+// TPLCLONE.1 — copy templates in from another studio of the same organisation.
+import CopyTemplatesModal from './schedule/CopyTemplatesModal'
+import { cloneSourceStudios, cloneResultNotice } from '@/lib/shift-template-clone'
 
 const PRESET_COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#06B6D4', '#F97316']
 // ROSTER-FIX.6b — the swatches are eight empty buttons whose only content is
@@ -92,6 +95,11 @@ export default function ShiftTemplateManager({ user }) {
   const [notice, setNotice] = useState(null)
   const [busyId, setBusyId] = useState(null)
   const locationId = user.activeLocation?.id
+  // TPLCLONE.1 — the studios this caller could copy templates FROM into this
+  // one: same organisation, and a manager at both. Only what the screen
+  // offers; the route re-checks all of it.
+  const copySources = useMemo(() => cloneSourceStudios(user, locationId), [user, locationId])
+  const [showCopy, setShowCopy] = useState(false)
 
   // One place that sets both, so a new call site cannot forget the title.
   const failWith = useCallback((title, message) => {
@@ -222,6 +230,16 @@ export default function ShiftTemplateManager({ user }) {
     }
   }
 
+  // TPLCLONE.1 — fetchTemplates clears the error banner as it starts, so it
+  // runs FIRST and the outcome is written after it: a warning set before the
+  // re-read would be wiped by it.
+  async function handleCopied(result) {
+    setShowCopy(false)
+    await fetchTemplates()
+    setNotice(cloneResultNotice(result, result.fromName))
+    if (result.warning) failWith('Templates copied, but the calendar did not fully follow', result.warning)
+  }
+
   // SHIFTTPL.1 — `display_order` has existed since the table did and nothing
   // ever wrote it, so every template sat at 0 and the list fell back to
   // start_time. Moving a row writes a dense 0..n-1 order for the ACTIVE list
@@ -273,13 +291,24 @@ export default function ShiftTemplateManager({ user }) {
           <h2 className="text-2xl font-bold">Shift Templates</h2>
           <p className="text-sm text-un1t-subtle mt-1">{user.activeLocation?.name} — Define your demand windows (when the studio needs coaches)</p>
         </div>
-        <button
-          type="button"
-          onClick={() => setShowForm('new')}
-          className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium px-4 py-2.5 rounded-lg transition-colors"
-        >
-          <Plus size={16} /> New Shift
-        </button>
+        <div className="flex items-center gap-2">
+          {copySources.length > 0 && (
+            <button
+              type="button"
+              onClick={() => { setNotice(null); setShowCopy(true) }}
+              className="flex items-center gap-2 border border-un1t-border bg-un1t-surface hover:bg-un1t-border/50 text-un1t-text text-sm font-medium px-4 py-2.5 rounded-lg transition-colors"
+            >
+              <Copy size={16} aria-hidden="true" /> Copy from another studio
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setShowForm('new')}
+            className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium px-4 py-2.5 rounded-lg transition-colors"
+          >
+            <Plus size={16} /> New Shift
+          </button>
+        </div>
       </div>
 
       {/* SHIFTTPL.1 — the "N templates without applicable days" warning is
@@ -319,13 +348,26 @@ export default function ShiftTemplateManager({ user }) {
           <Clock size={40} className="mx-auto mb-4 text-un1t-subtle" />
           <h3 className="text-lg font-semibold mb-2">No shift templates yet</h3>
           <p className="text-sm text-un1t-subtle mb-4">Create your first shift to start building rosters</p>
-          <button
-            type="button"
-            onClick={() => setShowForm('new')}
-            className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium px-4 py-2.5 rounded-lg transition-colors"
-          >
-            <Plus size={16} /> Create Shift
-          </button>
+          <div className="flex items-center justify-center gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={() => setShowForm('new')}
+              className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium px-4 py-2.5 rounded-lg transition-colors"
+            >
+              <Plus size={16} /> Create Shift
+            </button>
+            {/* TPLCLONE.1 — an empty studio (Hatch Street had none) is exactly
+                where copying another studio's templates saves the most typing. */}
+            {copySources.length > 0 && (
+              <button
+                type="button"
+                onClick={() => { setNotice(null); setShowCopy(true) }}
+                className="inline-flex items-center gap-2 border border-un1t-border bg-un1t-surface hover:bg-un1t-border/50 text-un1t-text text-sm font-medium px-4 py-2.5 rounded-lg transition-colors"
+              >
+                <Copy size={16} aria-hidden="true" /> Copy from another studio
+              </button>
+            )}
+          </div>
         </div>
       ) : (
         <div className="grid gap-3">
@@ -466,6 +508,15 @@ export default function ShiftTemplateManager({ user }) {
           template={typeof showForm === 'object' ? showForm : null}
           onSave={handleSave}
           onClose={() => setShowForm(false)}
+        />
+      )}
+
+      {showCopy && (
+        <CopyTemplatesModal
+          sources={copySources}
+          target={{ id: locationId, name: user.activeLocation?.name || 'this studio' }}
+          onClose={() => setShowCopy(false)}
+          onDone={handleCopied}
         />
       )}
     </div>
