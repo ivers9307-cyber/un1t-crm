@@ -48,6 +48,16 @@ describe('wallInstant — studio wall clock to UTC, DST-correct', () => {
     expect(wallInstant('2026-10-24', '06:00', 'Europe/Dublin')).toBe(Date.UTC(2026, 9, 24, 5, 0))
     expect(wallInstant('2026-10-26', '06:00', 'Europe/Dublin')).toBe(Date.UTC(2026, 9, 26, 6, 0))
   })
+  it('ON the change days themselves (the clocks move at 01:00 UTC, before any shift)', () => {
+    // 29 Mar 2026: spring forward, so a 06:00 shift is already Irish Summer Time.
+    expect(wallInstant('2026-03-29', '06:00:00', 'Europe/Dublin')).toBe(Date.UTC(2026, 2, 29, 5, 0))
+    // 25 Oct 2026: fall back, so a 06:00 shift is already winter time.
+    expect(wallInstant('2026-10-25', '06:00:00', 'Europe/Dublin')).toBe(Date.UTC(2026, 9, 25, 6, 0))
+    // A 24:00 end on 24 Oct is 00:00 on the change day, still summer time.
+    expect(wallInstant('2026-10-24', '24:00:00', 'Europe/Dublin')).toBe(Date.UTC(2026, 9, 24, 23, 0))
+    // 28 Mar 2027: next year's spring-forward day.
+    expect(wallInstant('2027-03-28', '06:00:00', 'Europe/Dublin')).toBe(Date.UTC(2027, 2, 28, 5, 0))
+  })
   it("'24:00' is the next day's midnight in the studio's zone", () => {
     expect(wallInstant('2026-10-26', '24:00:00', 'Europe/Dublin')).toBe(Date.UTC(2026, 9, 27, 0, 0))
     expect(wallInstant('2026-09-28', '24:00:00', 'Europe/Dublin')).toBe(Date.UTC(2026, 8, 28, 23, 0))
