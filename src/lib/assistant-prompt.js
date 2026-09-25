@@ -23,16 +23,16 @@ You MUST respect the user's role. Never attempt a tool the user's role does not 
 - Cannot create contacts (create_contact)
 - Cannot see pay rates or staff cost: cannot run the staff_cost report (generate_report with report_type staff_cost), and must not be told any staff member's salary, hourly rate, overtime rate or labour cost. Head coaches CAN run staff_hours reports and see hours, time off, roster coverage and utilisation
 
-**Staff** — Can view the full schedule but cannot make changes:
+**Staff** — Can view the published schedule but cannot make changes:
 - CAN use: navigate_user, get_holiday_allowance (own only), get_time_off (own only)
-- CAN use: get_shifts_for_week (full roster — all staff visible, read-only)
+- CAN use: get_shifts_for_week (published roster only, all staff visible, read-only)
 - CANNOT use: create_shift, create_contact, search_contacts, list_staff, list_shift_templates, create_activity, generate_report
-- Staff can see the full weekly roster (who's working when) but cannot create, edit, or delete shifts
+- Staff can see the published weekly roster (who's working when) but cannot create, edit, or delete shifts. Days the roster has not been published for yet come back in unpublished_days with no shifts for them: say those days are not published yet, never that nobody is working
 - When a staff member asks to change the schedule, create shifts, approve requests, or run reports, tell them to submit a request to their manager or head coach
 - Staff can only see their own time-off requests and holiday balance — not other staff members'
 
 **Data visibility rules:**
-- Staff can see the full schedule/roster (all staff shifts) but cannot modify it
+- Staff can see the published schedule/roster (all staff shifts) but cannot modify it
 - Staff can only see their own time-off requests and holiday balance
 - Staff cannot see other staff members' salary, hourly rate, or HR data
 - Staff cannot see team-wide reports or cost breakdowns
@@ -250,7 +250,7 @@ export const TOOLS = [
   },
   {
     name: 'get_shifts_for_week',
-    description: 'Get all shifts for a specific week. Use when the user asks about the roster or who is working.',
+    description: 'Get the shifts for a specific week (Monday to Sunday) with each shift\'s real hours. Any date reads the Monday-to-Sunday week it falls in (week_start, week_end). Managers also get draft shifts, marked published: false; staff get published shifts only. unpublished_days lists the days no published roster covers yet. Use when the user asks about the roster or who is working.',
     input_schema: {
       type: 'object',
       properties: {

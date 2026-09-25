@@ -151,6 +151,19 @@ describe('POST /api/schedule/time-off — request integrity', () => {
     expect(body.data_all).toHaveLength(2)
   })
 
+  it('400 for a date the calendar does not have, before anything is written', async () => {
+    // SCHEDHYGIENE.1 — the pattern alone let 2026-02-30 through; V8 rolled it
+    // to 2 March for the day count and Postgres refused it at insert.
+    getCurrentUser.mockResolvedValue(USER)
+    const { db, insertSpy } = buildDb({})
+    createServerClient.mockReturnValue(db)
+    for (const [start_date, end_date] of [['2026-02-30', '2026-03-06'], ['2026-02-23', '2026-02-30'], ['2026-13-01', '2026-13-02']]) {
+      const res = await POST(req({ type: 'holiday', start_date, end_date }))
+      expect(res.status).toBe(400)
+    }
+    expect(insertSpy).not.toHaveBeenCalled()
+  })
+
   it('400 when the range is longer than a year', async () => {
     getCurrentUser.mockResolvedValue(USER)
     const { db, insertSpy } = buildDb({})

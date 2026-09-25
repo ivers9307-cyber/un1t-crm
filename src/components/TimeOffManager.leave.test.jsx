@@ -17,11 +17,11 @@ const CONTRACTOR = { id: 'u9', role: 'staff', employment_type: 'contractor', act
 
 const PENDING = {
   id: 'r1', profile_id: 'u2', type: 'unavailable', status: 'pending', effective_status: 'pending', expired: false,
-  start_date: '2026-10-01', end_date: '2026-10-03', total_days: 3, clash_count: 2, profiles: { full_name: 'Sarah Doyle' },
+  start_date: '2026-10-01', end_date: '2026-10-03', total_days: 3, clash_count: 2, profiles: { full_name: 'Sam Demo' },
 }
 const EXPIRED = {
   id: 'r2', profile_id: 'u3', type: 'holiday', status: 'pending', effective_status: 'expired', expired: true,
-  start_date: '2026-08-26', end_date: '2026-08-26', total_days: 1, profiles: { full_name: 'Tom Byrne' },
+  start_date: '2026-08-26', end_date: '2026-08-26', total_days: 1, profiles: { full_name: 'Toby Beta' },
 }
 
 function mockFetch({ requests = [PENDING], staff = [], onPut, onPost } = {}) {
@@ -44,10 +44,10 @@ describe('TimeOffManager — LEAVE.2', () => {
   it('approvers land on team requests, with their own allowance in a section below', async () => {
     const calls = mockFetch()
     await act(async () => { render(<TimeOffManager user={APPROVER} canApprove />) })
-    await waitFor(() => expect(screen.getByText('Sarah Doyle')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('Sam Demo')).toBeTruthy())
     const heading = screen.getByRole('heading', { name: 'Your allowance' })
     // The list precedes the allowance in document order.
-    expect(screen.getByText('Sarah Doyle').compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.getByText('Sam Demo').compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     const listCall = calls.find(([u]) => u.startsWith('/api/schedule/time-off?'))[0]
     expect(listCall).toContain('with_clashes=1')
     expect(listCall).not.toContain('profile_id=')
@@ -73,7 +73,7 @@ describe('TimeOffManager — LEAVE.2', () => {
     await act(async () => { render(<TimeOffManager user={APPROVER} canApprove />) })
     await waitFor(() => expect(screen.getByText('Clashes with 2 rostered shifts')).toBeTruthy())
 
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Approve Unavailable request from Sarah Doyle' })) })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Approve Unavailable request from Sam Demo' })) })
     await waitFor(() => expect(screen.getByRole('button', { name: 'Unassign them' })).toBeTruthy())
     expect(posted).toHaveLength(0) // nothing is unassigned without the click
 
@@ -89,8 +89,8 @@ describe('TimeOffManager — LEAVE.2', () => {
       onPost: (url) => { posted.push(url); return { success: true } },
     })
     await act(async () => { render(<TimeOffManager user={APPROVER} canApprove />) })
-    await waitFor(() => expect(screen.getByText('Sarah Doyle')).toBeTruthy())
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Approve Unavailable request from Sarah Doyle' })) })
+    await waitFor(() => expect(screen.getByText('Sam Demo')).toBeTruthy())
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Approve Unavailable request from Sam Demo' })) })
     await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'Keep them' })) })
     expect(screen.queryByRole('button', { name: 'Unassign them' })).toBeNull()
     expect(posted).toHaveLength(0)
@@ -99,10 +99,10 @@ describe('TimeOffManager — LEAVE.2', () => {
   it('an expired request shows EXPIRED and cannot be approved, only rejected', async () => {
     mockFetch({ requests: [EXPIRED] })
     await act(async () => { render(<TimeOffManager user={APPROVER} canApprove />) })
-    await waitFor(() => expect(screen.getByText('Tom Byrne')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('Toby Beta')).toBeTruthy())
     expect(screen.getByText('expired')).toBeTruthy()
     expect(screen.queryByRole('button', { name: /^Approve/ })).toBeNull()
-    expect(screen.getByRole('button', { name: 'Reject Holiday request from Tom Byrne' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Reject Holiday request from Toby Beta' })).toBeTruthy()
   })
 
   it('a contractor is offered Unavailable only', async () => {
