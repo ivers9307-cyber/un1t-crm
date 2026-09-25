@@ -120,6 +120,7 @@ These are marked **REVIEW** in the artifact until he confirms or changes them. E
 
 Updated by the loop. Newest first.
 
+- 25 Sep ~13:45Z: 31 HEARTBEAT.1 = [PR #1760](https://github.com/ivers9307-cyber/un1t-crm/pull/1760) (gate 28,025 + build), auto-merge on; mig 633 AFTER its deploy. AVAIL.1a: all 7 review fixes landed (retry key makes a crashed notice a duplicate not a loss; immediate path folds owed changes; elapsed days kept; no backdating; actor excluded) → focused second review. 14 BLOCKEDIT.1 implementer started (`~/code/un1t-crm-blockedit1`).
 - 25 Sep ~13:35Z: #1759 SHIFTTYPE.1 EAS Update run 36132835551 SUCCESS. Operator step now open for Richard: mark admin templates once phones have taken the update.
 - 25 Sep ~13:30Z: 14 BLOCKEDIT.1 plan written (PUT /api/schedule/blocks/[id] with optimistic concurrency; mig 629: `shift_blocks.briefing` ≤500 + change-log `block_edited`; notices via a new send-push-reminders arm, 07:00–22:00; OTA). Queued for the next implementer slot.
 - 25 Sep ~13:25Z: 16 AVAIL.1a review approved w/ should-fixes: a crash between claim and send could LOSE a manager notice (invariant (c)), and an older owed notice could land after a newer one → fixing (+ keep elapsed days of a shortened rule, refuse backdated rules, never notify the actor). AVAIL.1b built (4 commits, 180 tests), waiting to rebase on fixed 1a + main (SHIFTTYPE/WORKTIME); browser-only checks owed (grey bar vs leave bars, 390px editor, native date inputs).
