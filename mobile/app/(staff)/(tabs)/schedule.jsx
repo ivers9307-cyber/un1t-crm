@@ -313,7 +313,7 @@ function ShiftRow({ shift, onPress, onLongPress }) {
       {briefingOf(shift) ? (
         <View className="flex-row items-start mt-1.5">
           <Ionicons name="document-text-outline" size={13} color="#64748B" />
-          <Text className="text-xs text-un1t-text ml-1 flex-1">{briefingOf(shift)}</Text>
+          <Text className="text-xs text-un1t-text ml-1 flex-1" numberOfLines={3}>{briefingOf(shift)}</Text>
         </View>
       ) : null}
     </Pressable>
