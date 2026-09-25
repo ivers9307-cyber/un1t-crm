@@ -25,6 +25,9 @@
 //   - Shifts (published, live shift_assignments, grouped into runs) → one
 //     push per run to the coach, category='shift_reminder'. See
 //     src/lib/shift-reminders.js.
+//     The shift arm has its own heartbeat row, 'shift-reminders' (HEARTBEAT.1,
+//     mig 633), stamped only when it ran clean; 'send-push-reminders' still
+//     means "the tick ran".
 //
 // Bookings fan out to a role-set rather than a single staff member
 // because the bookings table has no "assigned coach" column — the
@@ -42,6 +45,7 @@ import { localToUtc, formatLocalTime } from '@/lib/push-reminders'
 import { getEffectiveConfig, getEffectiveLeadTimesForUser } from '@/lib/notification-config'
 import { selectAll } from '@/lib/select-all'
 import { runShiftReminders } from '@/lib/shift-reminders'
+import { SHIFT_REMINDERS_HEARTBEAT, shiftReminderArmHealthy } from '@/lib/cron-arm-health'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -383,15 +387,30 @@ export async function GET(request) {
   // The rule, the ledger use and the failure posture live in
   // src/lib/shift-reminders.js. Isolated like the two blocks above: a shift
   // failure must never cost a task or booking reminder, or the heartbeat.
+  let shiftSummary = null
   try {
-    Object.assign(summary, await runShiftReminders(db, { nowMs, locations: locations || [] }))
+    shiftSummary = await runShiftReminders(db, { nowMs, locations: locations || [] })
+    Object.assign(summary, shiftSummary)
   } catch (err) {
-    // VISIBLE, not just logged: the heartbeat below is stamped either way and
-    // the response is ok:true, so without this key an arm that throws on every
-    // tick (a select 400, say) would look exactly like a quiet day. Same class
-    // as the 24-day silent enrolment outage (#1685).
+    // VISIBLE, not just logged: the send-push-reminders heartbeat below is
+    // stamped either way and the response is ok:true, so without this key an
+    // arm that throws on every tick (a select 400, say) would look exactly
+    // like a quiet day in the response. Same class as the 24-day silent
+    // enrolment outage (#1685).
     summary.shift_arm_failed = 1
     logError('cron-push-reminders', 'shift block threw', { err })
+  }
+
+  // HEARTBEAT.1 — the shift arm's OWN heartbeat row ('shift-reminders', mig
+  // 633). The health-check reads only is_stale, so the key above pages nobody;
+  // this row does. Stamped ONLY when the arm returned a summary with no fault of
+  // its own (src/lib/cron-arm-health.js): a quiet-hours tick or a tick with
+  // nothing due stamps, a throw / claim failure / notify throw / capped read
+  // does not, so an arm broken for 20 minutes goes STALE. Its own catch: this
+  // stamp can never cost the parent's stamp below or the response.
+  if (summary.shift_arm_failed === 0 && shiftReminderArmHealthy(shiftSummary)) {
+    await stampHeartbeat(SHIFT_REMINDERS_HEARTBEAT, shiftSummary).catch((err) =>
+      logWarn('cron-push-reminders', 'shift-reminders heartbeat failed', { err }))
   }
 
   // quiet_hours alone is not news: it is 1 on every tick from 22:00 to 07:00.
