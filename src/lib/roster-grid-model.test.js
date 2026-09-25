@@ -310,3 +310,77 @@ describe('admin balance: contract − class − placed admin, employees only, ho
     expect(rowOf(build(), 'p-gone').balance).toEqual({ minutes: 1140, state: 'to_place' })
   })
 })
+
+describe('leave and unavailability, per cell', () => {
+  const LEAVE = [
+    { id: 't1', profile_id: 'p-emp', type: 'holiday', start_date: '2026-09-25', end_date: '2026-09-26', profiles: { full_name: 'Alex Example' } },
+    { id: 't2', profile_id: 'p-emp', type: 'unavailable', start_date: '2026-09-26', end_date: '2026-09-26', profiles: { full_name: 'Alex Example' } },
+  ]
+  const RULES = [
+    { id: 'r1', profile_id: 'p-emp', kind: 'weekly', weekday: 'mon', start_date: null, end_date: null, all_day: false, start_time: '10:00', end_time: '11:00', note: 'School run' },
+    { id: 'r2', profile_id: 'p-emp', kind: 'dated', weekday: null, start_date: '2026-09-25', end_date: '2026-09-25', all_day: true, start_time: null, end_time: null, note: null },
+    { id: 'r3', profile_id: 'p-con', kind: 'weekly', weekday: 'thu', start_date: null, end_date: null, all_day: false, start_time: '18:00', end_time: '19:00', note: null },
+  ]
+  const build = () => buildRosterGrid({ weekStart: WEEK, grid: GRID, timeOff: LEAVE, availability: RULES })
+
+  it('approved leave sits in its days: one per person per day, the most specific type', () => {
+    const alex = rowOf(build(), 'p-emp')
+    expect(alex.cells[4].leave).toEqual({ label: 'Holiday', title: 'Alex Example — Holiday, 25 Sep – 26 Sep' })
+    expect(alex.cells[5].leave.label).toBe('Holiday')
+    expect(alex.cells[5].leave.title).toMatch(/\+1 overlapping request/)
+    expect(alex.cells[3].leave).toBeNull()
+    expect(alex.leaveDays).toBe(2)
+  })
+
+  it('the leave days are named in the balance, not deducted from it (program default 4)', () => {
+    const alex = rowOf(build(), 'p-emp')
+    expect(alex.balance.minutes).toBe(1830)
+    expect(adminBalanceLabel(alex).title).toBe(
+      '39h contract − 7h class − 1h 30m placed admin = 30h 30m to place. 2 days of approved leave this week are not deducted',
+    )
+  })
+
+  it('an unavailability window sits in its day, with the rule and its note in the title', () => {
+    expect(rowOf(build(), 'p-emp').cells[0].unavailable).toEqual({ text: 'Unavailable 10am–11am', title: 'Mondays, 10am–11am (School run)' })
+    expect(rowOf(build(), 'p-con').cells[3].unavailable).toEqual({ text: 'Unavailable 6pm–7pm', title: 'Thursdays, 6pm–7pm' })
+  })
+
+  it('leave wins over unavailability on the same day, as in the Days view', () => {
+    const fri = rowOf(build(), 'p-emp').cells[4]
+    expect(fri.leave).not.toBeNull()
+    expect(fri.unavailable).toBeNull()
+  })
+
+  it('a shift on a leave day, or inside an unavailable window, is flagged; touching a window is not', () => {
+    const alex = rowOf(build(), 'p-emp')
+    // 6:30–7:30 is clear of 10–11; 9–12 overlaps it.
+    expect(alex.cells[0].here.map((c) => c.unavailable)).toEqual([false, true])
+    expect(alex.cells[4].here[0]).toMatchObject({ onLeave: true, unavailable: false })
+    // Jordan's 17:00–18:00 ends as the 18:00 window starts.
+    expect(rowOf(build(), 'p-con').cells[3].here[0].unavailable).toBe(false)
+  })
+
+  it("one person's leave or rules never land on another row", () => {
+    const max = rowOf(build(), 'p-over')
+    expect(max.cells.every((c) => c.leave === null && c.unavailable === null)).toBe(true)
+    expect(max.leaveDays).toBe(0)
+  })
+
+  // The Days view's own rule (AVAIL.1b, dayAvailabilityRules): a WEEKLY rule
+  // is what the coach says NOW about every such weekday, so on a day before
+  // today it would claim an unavailability nobody declared then. A dated rule
+  // is about its own dates and is drawn on any day.
+  it('before today a weekly rule is not drawn, on the cell or on a shift; a dated rule still is', () => {
+    const past = [
+      ...RULES,
+      { id: 'r4', profile_id: 'p-over', kind: 'dated', weekday: null, start_date: '2026-09-22', end_date: '2026-09-22', all_day: true, start_time: null, end_time: null, note: null },
+    ]
+    const g = buildRosterGrid({ weekStart: WEEK, grid: GRID, timeOff: [], availability: past, todayIso: '2026-09-24' })
+    const alex = rowOf(g, 'p-emp')
+    expect(alex.cells[0].unavailable).toBeNull()
+    expect(alex.cells[0].here.map((c) => c.unavailable)).toEqual([false, false])
+    expect(rowOf(g, 'p-over').cells[1].unavailable).toEqual({ text: 'Unavailable all day', title: '22 Sep, all day' })
+    // Today and later: the weekly rule speaks again (Jordan's Thursday window).
+    expect(rowOf(g, 'p-con').cells[3].unavailable).toEqual({ text: 'Unavailable 6pm–7pm', title: 'Thursdays, 6pm–7pm' })
+  })
+})

@@ -3,7 +3,7 @@
 // and toolbar make is made HERE, in pure functions, because jsdom cannot see
 // layout and a component test can only say "this text is present".
 import { describe, it, expect } from 'vitest'
-import { cardTone, shiftCardModel, dayHeaderStatus, monthCellLines, rosterToolbarModel, dayLeaveBars, dayUnavailableBars } from './roster-card-model'
+import { cardTone, shiftCardModel, dayHeaderStatus, monthCellLines, rosterToolbarModel, dayLeaveBars, dayUnavailableBars, dayAvailabilityRules } from './roster-card-model'
 
 const TODAY = '2026-09-21'
 const block = (over = {}) => ({
@@ -444,6 +444,18 @@ describe('dayUnavailableBars (AVAIL.1)', () => {
     expect(dayUnavailableBars(rules, '2026-05-04', staff)).toEqual([])
     expect(dayUnavailableBars(null, '2026-05-06', staff)).toEqual([])
     expect(dayUnavailableBars(rules, '2026-05-06', null)).toEqual([])
+  })
+
+  // GRID.1 — the per-day rule set the bars above and the Coaches grid share,
+  // so the two layouts cannot disagree about who is unavailable on a day.
+  it('dayAvailabilityRules: every rule per person, weekly ones dropped before today, strangers kept for the caller to judge', () => {
+    const all = dayAvailabilityRules(rules, '2026-05-06')
+    expect([...all.keys()]).toEqual(['c1', 'c2', 'c3', 'stranger'])
+    expect(all.get('c1').map((r) => r.id)).toEqual(['r1', 'r2'])
+    const past = dayAvailabilityRules(rules, '2026-05-06', { todayIso: '2026-05-07' })
+    expect([...past.keys()]).toEqual(['c2'])
+    expect(dayAvailabilityRules(null, '2026-05-06').size).toBe(0)
+    expect(dayAvailabilityRules([{ id: 'x', kind: 'weekly' }], '2026-05-06').size).toBe(0)
   })
 })
 

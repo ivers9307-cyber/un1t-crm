@@ -351,6 +351,36 @@ export function dayLeaveBars(timeOff, dateStr) {
 }
 
 /**
+ * AVAIL.1 — the availability rules that speak for ONE day, per person:
+ * Map<profile_id, rules[]>. The one place the "which rules apply on this day"
+ * decision lives, so the Days view's bars (dayUnavailableBars) and the
+ * Coaches grid (GRID.1, roster-grid-model.js) can never disagree about it.
+ *
+ * With `todayIso`, a WEEKLY rule is dropped on a day before today: it is what
+ * the coach says now about every such weekday, and on a past week it would
+ * claim an unavailability nobody declared then. Dated rules are about their
+ * own dates, so they are kept on any day (the kept history rows). Whether a
+ * kept rule actually covers `dateStr`, or a given time, is unavailableFor's
+ * question (shared/availability.js). Pure.
+ *
+ * @param {Array} availability  flat rules from GET /api/schedule/availability?location_id=
+ * @param {string} dateStr YYYY-MM-DD
+ * @returns {Map<string, Array>}
+ */
+export function dayAvailabilityRules(availability, dateStr, { todayIso = null } = {}) {
+  const pastDay = Boolean(todayIso) && dateStr < todayIso
+  const byPerson = new Map()
+  for (const rule of availability || []) {
+    const id = rule?.profile_id
+    if (!id) continue
+    if (pastDay && rule.kind === 'weekly') continue
+    if (!byPerson.has(id)) byPerson.set(id, [])
+    byPerson.get(id).push(rule)
+  }
+  return byPerson
+}
+
+/**
  * AVAIL.1 — the unavailability bars of ONE day in the manager's week view:
  * one per person with any rule that day, "Firstname · Unavailable 9am–12pm".
  * The title has the full name, every rule and its note.
@@ -373,18 +403,10 @@ export function dayLeaveBars(timeOff, dateStr) {
  */
 export function dayUnavailableBars(availability, dateStr, staff, { skipProfileIds = [], todayIso = null } = {}) {
   const skip = new Set(skipProfileIds)
-  const pastDay = Boolean(todayIso) && dateStr < todayIso
   const nameById = new Map((staff || []).map((s) => [s.id, s.full_name]))
-  const byPerson = new Map()
-  for (const rule of availability || []) {
-    const id = rule?.profile_id
-    if (!id || skip.has(id) || !nameById.has(id)) continue
-    if (pastDay && rule.kind === 'weekly') continue
-    if (!byPerson.has(id)) byPerson.set(id, [])
-    byPerson.get(id).push(rule)
-  }
   const people = []
-  for (const [profileId, rules] of byPerson) {
+  for (const [profileId, rules] of dayAvailabilityRules(availability, dateStr, { todayIso })) {
+    if (skip.has(profileId) || !nameById.has(profileId)) continue
     const hits = unavailableFor(rules, dateStr)
     if (hits) people.push({ profileId, fullName: nameById.get(profileId) || 'Unknown', hits })
   }

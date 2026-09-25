@@ -17,6 +17,9 @@
 
 import { workingWindow, hoursMinutesLabel, EMPLOYEE_TYPE } from '@shared/working-time'
 import { formatTimeRange12h } from './schedule-overlap'
+import { unavailableFor, unavailableSummary, describeRule } from '@shared/availability'
+import { timeOffLeaveLabel } from '@shared/time-off'
+import { dayLeaveBars, dayAvailabilityRules } from './roster-card-model'
 
 export const ROSTER_LAYOUTS = Object.freeze(['days', 'coaches'])
 export const DEFAULT_ROSTER_LAYOUT = 'days'
@@ -135,9 +138,11 @@ function chipOf(s, flags) {
  *        GET /api/schedule/grid's `data`
  * @param {Array} [args.timeOff]       the calendar's approved-leave slice
  * @param {Array} [args.availability]  the calendar's availability slice (AVAIL.1)
+ * @param {string|null} [args.todayIso]  Dublin today: before it, a weekly
+ *        availability rule is not drawn (the Days view's rule). null = no cut.
  * @returns {{ days: string[], rows: Array, checked: boolean, untimed: number }}
  */
-export function buildRosterGrid({ weekStart, grid, timeOff = [], availability = [] } = {}) {
+export function buildRosterGrid({ weekStart, grid, timeOff = [], availability = [], todayIso = null } = {}) {
   const days = gridWeekDays(weekStart)
   if (days.length !== 7 || !grid || !Array.isArray(grid.members) || !Array.isArray(grid.shifts)) {
     return { days, rows: [], checked: false, untimed: 0 }
@@ -153,7 +158,7 @@ export function buildRosterGrid({ weekStart, grid, timeOff = [], availability = 
     if (!byPerson.has(s.profile_id)) byPerson.set(s.profile_id, [])
     byPerson.get(s.profile_id).push(s)
   }
-  const overlays = overlaysFor(days, timeOff, availability)
+  const overlays = overlaysFor(days, timeOff, availability, todayIso)
   const advice = advisoriesFor(days, grid.members, live)
 
   const rows = grid.members.filter((m) => m?.profile_id).map((m) => {
@@ -260,9 +265,32 @@ export function adminBalanceLabel(row) {
   return { text: h(minutes), tone: 'to_place', srText: `${h(minutes)} of admin to place`, title: `${sum} = ${h(minutes)} to place${leaveNote}` }
 }
 
-// Task 4 replaces this stub.
-function overlaysFor() {
-  return { leaveOn: () => null, unavailableCell: () => null, unavailableDuring: () => false }
+// Leave: dayLeaveBars (the Days view's own rule: one bar per person per day,
+// the most specific type wins) keyed by person and date. Availability:
+// dayAvailabilityRules (the Days view's own rule, AVAIL.1b: before today a
+// WEEKLY rule is not drawn) per day, then unavailableFor for the cell and for
+// each shift. So the grid and the day cards can never disagree about who is
+// on leave or unavailable on a day. ADVISORY everywhere: nothing here blocks
+// anything.
+function overlaysFor(days, timeOff, availability, todayIso) {
+  const leave = new Map()
+  const rulesByDay = new Map()
+  for (const date of days) {
+    for (const bar of dayLeaveBars(timeOff, date)) {
+      if (bar.profileId) leave.set(`${bar.profileId}|${date}`, { label: timeOffLeaveLabel(bar.type), title: bar.title })
+    }
+    rulesByDay.set(date, dayAvailabilityRules(availability, date, { todayIso }))
+  }
+  const rulesOf = (id, date) => rulesByDay.get(date)?.get(id)
+  const titleOf = (hits) => hits.map((r) => (r.note ? `${describeRule(r)} (${r.note})` : describeRule(r))).join('; ')
+  return {
+    leaveOn: (id, date) => leave.get(`${id}|${date}`) || null,
+    unavailableCell: (id, date) => {
+      const hits = unavailableFor(rulesOf(id, date), date)
+      return hits ? { text: `Unavailable ${unavailableSummary(hits)}`, title: titleOf(hits) } : null
+    },
+    unavailableDuring: (id, date, start, end) => Boolean(unavailableFor(rulesOf(id, date), date, start, end)),
+  }
 }
 
 // Task 5 replaces this stub.
