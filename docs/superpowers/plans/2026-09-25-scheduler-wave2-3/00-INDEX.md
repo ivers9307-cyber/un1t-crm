@@ -40,6 +40,7 @@ Size: S under a day, M one to three days, L a week or more. "Mig" = new migratio
 | 19 | CANDIDATES.1 | M | Ranked candidates wherever a coach is picked (web and phone): free or not, leave, availability, already on site, week hours both studios, rest gap. Hours only | | yes | 15, 16 |
 | 20 | REPLACE.1 | M | Replace coach (one action, one notice) and "Offer to team" for an unfilled published shift | | yes | 19 |
 | 21 | GRID.1 | M | Coach-by-day grid: one row per coach, week total, contracted hours, admin balance, leave and availability overlaid, both studios summed | | | 13, 16 |
+| 14b | (BLOCKEDIT heartbeat) | S | Heartbeat row for BLOCKEDIT.1's time-change notice arm, applied AFTER its deploy (the arm rule) | 639 | | 14 |
 | 22 | ICSFEED.1 | M | Per-coach calendar subscription of published shifts across both studios; secret token, rotate, revoked on deactivation; all four public-path allowlists | 632 | yes | |
 
 ### Wave 3 · the roster as the source of truth
@@ -122,6 +123,7 @@ These are marked **REVIEW** in the artifact until he confirms or changes them. E
 
 Updated by the loop. Newest first.
 
+- 25 Sep ~12:50Z: 14 BLOCKEDIT.1 built (14 commits, mig 629, 805 tests; fixed the plan's `btrim()` blank check, a newline-only briefing slipped past it), in independent review. Its new notice arm gets its OWN heartbeat row in a separate mig **639** (applied after the deploy, per the arm rule; 629 must go before). AVAIL.1a round-3 fixes landed (fully-deduped attempts don't stamp; sweep re-reads before sending; `carryStartedRules`; give-up after 4 retries = `gave_up`), short third check running. Batch 6 plans commissioned (20 REPLACE.1 — uses mig 640 if needed; 21 GRID.1).
 - 25 Sep ~12:40Z: 17 AVAIL.2 plan written (modal from the Schedule tab Me view; reuses the leave form's MonthCalendar; typed times; no native module → pure OTA; save blocked until a load succeeded; tap on the managers' notice opens Manage mode). Waits for AVAIL.1a to merge.
 - 25 Sep ~12:33Z: ✅ **MIG 632 APPLIED** (`staff_calendar_feeds`): pre (a)–(d) as expected; post 5 cols, RLS on, 0 policies, grants postgres + service_role only, 4 constraints, 0 rows; advisors +1 INFO by design (48 INFO + 2 WARN). Rollback record `mig632-rollback-2026-09-25.txt`. ICSFEED.1 fixes landed (phone always offers Share/copy link; last-fetched keyed by token; DST-day tests; SEQUENCE), full gate running.
 - 25 Sep 12:30Z: ✅ HEARTBEAT.1 verified live: `shift-reminders` stamped by the */5 cron at 12:25Z with its counters in `last_outcome`; `roster-runway` first real stamp due 26 Sep 08:00Z. 22 ICSFEED.1 review approved w/ should-fixes (phone could lose the one-time link on Android; last-fetched keyed by person not token; DST-day tests; SEQUENCE for Outlook) → fixing; **mig 632 must be applied BEFORE its merge** (the /api/me route 500s without it). AVAIL.1a second review → 3 more should-fixes (fully-deduped attempt must not stamp; re-read owed rows before the sweep sends; shortening a started rule handled server-side) → fixing.
