@@ -24,7 +24,7 @@
 // per-component, on purpose: they are what would catch a body dropping the
 // shared header on its way to re-rolling a bespoke one.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup } from '@testing-library/react'
 
 vi.mock('next/navigation', () => ({
@@ -54,7 +54,9 @@ function firstLink(container) {
   return container.querySelector('a')?.getAttribute('href')
 }
 
-beforeEach(() => cleanup())
+// Unmount AFTER each test, so the last test's tree is gone before jsdom is
+// torn down (see tests/rtl-cleanup-after-each.test.js).
+afterEach(cleanup)
 
 describe('channel detail back-links (COMMSLAYOUT.4)', () => {
   it('email campaign detail goes back to the Sent list', () => {

@@ -10,7 +10,7 @@
 // These pin both.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { renderHook, waitFor, act } from '@testing-library/react'
+import { renderHook, waitFor, act, cleanup } from '@testing-library/react'
 
 import { useScheduleData, readJson, SESSION_ENDED_MESSAGE, NO_ACCESS_MESSAGE } from './useScheduleData'
 
@@ -43,7 +43,9 @@ function defaultBody(url) {
 beforeEach(() => {
   global.fetch = vi.fn(async (url) => okResponse(defaultBody(url)))
 })
-afterEach(() => { vi.restoreAllMocks() })
+// cleanup unmounts each hook's host tree before jsdom is torn down
+// (see tests/rtl-cleanup-after-each.test.js).
+afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
 describe('useScheduleData', () => {
   it('loads every slice and clears loading', async () => {

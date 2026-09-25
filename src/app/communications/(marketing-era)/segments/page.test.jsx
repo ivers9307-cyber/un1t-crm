@@ -5,7 +5,7 @@
 // filters (SavedSegmentsList). Before this, only the tag cards rendered, so a
 // segment saved on /contacts appeared nowhere in Communications.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 
 vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn() }))
@@ -20,8 +20,11 @@ vi.mock('@/components/SavedSegmentsList', () => ({
 import SegmentsTabPage from './page.js'
 import { getCurrentUser } from '@/lib/auth'
 
+// Unmount AFTER each test, so the last test's tree is gone before jsdom is
+// torn down (see tests/rtl-cleanup-after-each.test.js).
+afterEach(cleanup)
+
 beforeEach(() => {
-  cleanup()
   getCurrentUser.mockResolvedValue({ id: 'u1', role: 'owner', activeLocation: { id: 'loc-1' } })
 })
 

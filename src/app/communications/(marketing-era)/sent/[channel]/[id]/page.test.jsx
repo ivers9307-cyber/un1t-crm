@@ -12,7 +12,7 @@
 // row at another location is a 404 (never a 403 — foreign ids stay
 // non-enumerable, per CLAUDE.md).
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 
 vi.mock('@/lib/auth', () => ({
@@ -69,8 +69,11 @@ function args(channel, id, searchParams = {}) {
   return { params: Promise.resolve({ channel, id }), searchParams: Promise.resolve(searchParams) }
 }
 
+// Unmount AFTER each test, so the last test's tree is gone before jsdom is
+// torn down (see tests/rtl-cleanup-after-each.test.js).
+afterEach(cleanup)
+
 beforeEach(() => {
-  cleanup()
   vi.clearAllMocks()
   getCurrentUser.mockResolvedValue({ id: 'u1', role: 'owner', activeLocation: { id: 'loc-1' } })
   hasPermission.mockReturnValue(true)
