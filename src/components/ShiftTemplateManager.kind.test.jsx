@@ -72,6 +72,26 @@ describe('template editor — Kind', () => {
     expect(writes[0].body).toMatchObject({ kind: 'class', min_coaches: 1 })
   })
 
+  it('a class template with a deliberate minimum of 0 comes back at 0 after Admin and back', async () => {
+    const writes = await renderManager([{ ...CLASS_T, min_coaches: 0 }, ADMIN_T])
+    fireEvent.click(screen.getByRole('button', { name: 'Edit the Morning template' }))
+    fireEvent.click(screen.getByRole('radio', { name: /^Admin/ }))
+    fireEvent.click(screen.getByRole('radio', { name: /^Class/ }))
+    expect(screen.getByLabelText(/Minimum coaches/).value).toBe('0')
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save Changes' })) })
+    expect(writes[0].body).toMatchObject({ kind: 'class', min_coaches: 0 })
+  })
+
+  it('a class template with minimum 3 comes back at 3 after Admin and back', async () => {
+    await renderManager()
+    fireEvent.click(screen.getByRole('button', { name: 'Edit the Morning template' }))
+    fireEvent.change(screen.getByLabelText(/Minimum coaches/), { target: { value: '3' } })
+    fireEvent.click(screen.getByRole('radio', { name: /^Admin/ }))
+    expect(screen.getByLabelText(/Minimum coaches/).value).toBe('0')
+    fireEvent.click(screen.getByRole('radio', { name: /^Class/ }))
+    expect(screen.getByLabelText(/Minimum coaches/).value).toBe('3')
+  })
+
   it('a new template starts as Class', async () => {
     await renderManager()
     fireEvent.click(screen.getByRole('button', { name: /New Shift/ }))

@@ -540,13 +540,23 @@ function TemplateFormModal({ template, onSave, onClose }) {
   // SHIFTTYPE.1 — an admin template has no minimum; the API refuses one
   // (admin_has_no_minimum), so the field is locked at 0 while Admin is chosen.
   const [kind, setKind] = useState(template?.kind === 'admin' ? 'admin' : 'class')
+  // The class minimum in force when Admin was chosen, so flipping back
+  // restores it (a deliberate 0 included). null = none known: a template that
+  // opened as admin, which gets the new-class-template default of 1.
+  const [classMin, setClassMin] = useState(null)
 
   function chooseKind(next) {
     if (next === kind) return
     setKind(next)
-    if (next === 'admin') setMinCoaches(0)
-    // Leaving admin: the same default a new class template gets (SHIFTMIN.1).
-    else if (minCoaches === 0) setMinCoaches(1)
+    if (next === 'admin') {
+      setClassMin(minCoaches)
+      setMinCoaches(0)
+    } else {
+      // Leaving admin: the minimum this template had as a class shift, or the
+      // same default a new class template gets (SHIFTMIN.1). Kept at or under
+      // the maximum, which may have been lowered while Admin was chosen.
+      setMinCoaches(Math.min(classMin ?? 1, maxCoaches))
+    }
   }
 
   function toggleDay(code) {
