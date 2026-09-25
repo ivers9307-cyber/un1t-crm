@@ -15,7 +15,7 @@
 // No clock, no network, no host timezone. Dates are 'YYYY-MM-DD' strings and
 // all day arithmetic is Date.UTC, so a 23h or 25h day cannot move a column.
 
-import { workingWindow } from '@shared/working-time'
+import { workingWindow, hoursMinutesLabel, EMPLOYEE_TYPE } from '@shared/working-time'
 import { formatTimeRange12h } from './schedule-overlap'
 
 export const ROSTER_LAYOUTS = Object.freeze(['days', 'coaches'])
@@ -211,9 +211,53 @@ export function buildRosterGrid({ weekStart, grid, timeOff = [], availability = 
   }
 }
 
-// Task 3 replaces this stub.
-function balanceFor() {
-  return { isEmployee: false, contractMinutes: null, balance: null }
+// Program default 4: contract − class − placed admin, every studio, EMPLOYEES
+// WITH A CONTRACT ONLY. Hours only: `contracted_hours` is the only contract
+// field the route sends, and only for employment_type 'fte'. The model checks
+// the type again, so a payload carrying a contractor's old default of 40
+// (mig 012) still gets no balance. Leave is NOT deducted (the default's
+// literal formula); adminBalanceLabel says so when there is leave.
+function balanceFor(m, totals) {
+  const isEmployee = m.employment_type === EMPLOYEE_TYPE
+  const hours = m.contracted_hours == null || m.contracted_hours === '' ? NaN : Number(m.contracted_hours)
+  const contractMinutes = isEmployee && Number.isFinite(hours) && hours > 0 ? Math.round(hours * 60) : null
+  if (contractMinutes === null) return { isEmployee, contractMinutes: null, balance: null }
+  const minutes = contractMinutes - totals.class_minutes - totals.admin_minutes
+  return {
+    isEmployee,
+    contractMinutes,
+    balance: { minutes, state: minutes > 0 ? 'to_place' : minutes < 0 ? 'over' : 'met' },
+  }
+}
+
+/**
+ * What the admin-balance column says for a row: `text` (visible, aria-hidden),
+ * `srText` (the same in words for a screen reader, since "−30m" alone reads
+ * as a hyphen), `tone` (to_place | met | over | none) and a `title` with the
+ * arithmetic. Hours only.
+ */
+export function adminBalanceLabel(row) {
+  if (!row?.balance) {
+    if (row?.employment_type === 'contractor') {
+      return { text: 'Contractor', tone: 'none', srText: 'contractor, no admin balance', title: 'Contractors have no contracted hours, so there is no admin balance.' }
+    }
+    if (row?.isEmployee) {
+      return { text: 'No contract hours', tone: 'none', srText: 'no contracted hours set', title: 'No contracted weekly hours are set for this employee.' }
+    }
+    return { text: '—', tone: 'none', srText: 'no admin balance', title: 'No admin balance.' }
+  }
+  const h = hoursMinutesLabel
+  const sum = `${h(row.contractMinutes)} contract − ${h(row.totals.class_minutes)} class − ${h(row.totals.admin_minutes)} placed admin`
+  const n = row.leaveDays || 0
+  const leaveNote = n > 0 ? `. ${n} day${n === 1 ? '' : 's'} of approved leave this week ${n === 1 ? 'is' : 'are'} not deducted` : ''
+  const { minutes, state } = row.balance
+  if (state === 'over') {
+    return { text: `−${h(-minutes)}`, tone: 'over', srText: `${h(-minutes)} over contract`, title: `${sum} = ${h(-minutes)} over contract${leaveNote}` }
+  }
+  if (state === 'met') {
+    return { text: '0h', tone: 'met', srText: 'contract met', title: `${sum} = contract met${leaveNote}` }
+  }
+  return { text: h(minutes), tone: 'to_place', srText: `${h(minutes)} of admin to place`, title: `${sum} = ${h(minutes)} to place${leaveNote}` }
 }
 
 // Task 4 replaces this stub.

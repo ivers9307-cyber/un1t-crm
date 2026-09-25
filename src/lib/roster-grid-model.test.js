@@ -242,3 +242,71 @@ describe('buildRosterGrid — the clock-change weeks', () => {
     expect(g.rows[0].totals.minutes).toBe(300)
   })
 })
+
+describe('admin balance: contract − class − placed admin, employees only, hours only', () => {
+  const build = () => buildRosterGrid({ weekStart: WEEK, grid: GRID })
+  const one = (member, shifts = []) => buildRosterGrid({ weekStart: WEEK, grid: { ...GRID, members: [member], shifts } }).rows[0]
+
+  it('an employee under contract has the rest to place, every studio counted', () => {
+    const alex = rowOf(build(), 'p-emp')
+    expect(alex.isEmployee).toBe(true)
+    expect(alex.contractMinutes).toBe(2340)
+    // 2340 − 420 class − 90 placed admin = 1830.
+    expect(alex.balance).toEqual({ minutes: 1830, state: 'to_place' })
+    expect(adminBalanceLabel(alex)).toEqual({
+      text: '30h 30m',
+      tone: 'to_place',
+      srText: '30h 30m of admin to place',
+      title: '39h contract − 7h class − 1h 30m placed admin = 30h 30m to place',
+    })
+  })
+
+  it('over contract is a negative balance, shown with a minus and said in words', () => {
+    const max = rowOf(build(), 'p-over')
+    expect(max.balance).toEqual({ minutes: -30, state: 'over' })
+    expect(adminBalanceLabel(max)).toEqual({
+      text: '−30m',
+      tone: 'over',
+      srText: '30m over contract',
+      title: '1h contract − 1h 30m class − 0m placed admin = 30m over contract',
+    })
+  })
+
+  it('exactly on contract is met, and a half-hour contract is kept to the minute', () => {
+    const met = one(M('p1', 'Alex Example', 'fte', 1.5), [S('p1', WEEK, '09:00:00', '10:30:00')])
+    expect(met.balance).toEqual({ minutes: 0, state: 'met' })
+    expect(adminBalanceLabel(met)).toMatchObject({ text: '0h', tone: 'met', srText: 'contract met' })
+    const half = one(M('p1', 'Alex Example', 'fte', '37.5'))
+    expect(half.contractMinutes).toBe(2250)
+    expect(adminBalanceLabel(half).text).toBe('37h 30m')
+  })
+
+  it('an employee with no contracted hours (null or 0) has no balance, and says why', () => {
+    const sam = rowOf(build(), 'p-nocon')
+    expect(sam.balance).toBeNull()
+    expect(adminBalanceLabel(sam)).toMatchObject({ text: 'No contract hours', tone: 'none' })
+    const zero = one(M('p1', 'Alex Example', 'fte', 0))
+    expect(zero.contractMinutes).toBeNull()
+    expect(zero.balance).toBeNull()
+  })
+
+  it('a contractor never has a balance, even if hours were sent', () => {
+    expect(adminBalanceLabel(rowOf(build(), 'p-con'))).toMatchObject({ text: 'Contractor', tone: 'none' })
+    const sent = one(M('p1', 'Jordan Sample', 'contractor', 40))
+    expect(sent.isEmployee).toBe(false)
+    expect(sent.contractMinutes).toBeNull()
+    expect(sent.balance).toBeNull()
+  })
+
+  it('an unreadable employment type is neither: no contract, no balance, a dash', () => {
+    const x = one(M('p1', 'Alex Example', null, 39))
+    expect(x.isEmployee).toBe(false)
+    expect(x.balance).toBeNull()
+    expect(adminBalanceLabel(x).text).toBe('—')
+  })
+
+  it('someone no longer on the team keeps a balance for the week they were rostered', () => {
+    // 1200 − 60 = 1140.
+    expect(rowOf(build(), 'p-gone').balance).toEqual({ minutes: 1140, state: 'to_place' })
+  })
+})
