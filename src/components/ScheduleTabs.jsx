@@ -54,7 +54,7 @@
 
 import Link from 'next/link'
 import { usePathname, useSearchParams } from 'next/navigation'
-import { CalendarClock, BarChart3, Receipt, UserCheck, Wallet, CalendarOff, ArrowLeftRight, CalendarX } from 'lucide-react'
+import { CalendarClock, BarChart3, Receipt, UserCheck, Wallet, CalendarOff, ArrowLeftRight, CalendarX, BadgeCheck } from 'lucide-react'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { hasPermission } from '@/lib/permissions'
 
@@ -113,6 +113,9 @@ export default function ScheduleTabs({ user }) {
     { key: 'invoices',   label: 'Invoices',   icon: Receipt,        href: '/schedule/invoices',          show: showInvoices },
     { key: 'expenses',   label: 'Expenses',   icon: Wallet,         href: '/schedule/expenses',          show: showExpenses },
     { key: 'attendance', label: 'Attendance', icon: UserCheck,      href: '/schedule/attendance',        show: showAttendance },
+    // QUALS.1 — everyone: managers manage the studio's records, everyone else
+    // sees their own (the page decides which; its routes re-judge).
+    { key: 'qualifications', label: 'Qualifications', icon: BadgeCheck, href: '/schedule/qualifications', show: true },
   ].filter(t => t.show)
 
   // Longest-match, CalendlyTabs/HubTabs style — with one wrinkle: Schedule
