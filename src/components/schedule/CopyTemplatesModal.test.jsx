@@ -127,6 +127,43 @@ describe('CopyTemplatesModal (TPLCLONE.1)', () => {
     expect(screen.getByRole('button', { name: 'Copy templates' }).disabled).toBe(true)
   })
 
+  it('says the source has no active templates, rather than blaming names, when there is nothing at all', async () => {
+    mockRoute(() => reply({ success: true, data: { dry_run: true, created: [], skipped: [], generated_blocks: 0 } }))
+    await open()
+    expect(await screen.findByText('No active templates at Studio A.')).toBeTruthy()
+    expect(screen.queryByText(/already has a template of the same name/)).toBeNull()
+  })
+
+  it('titles a failed preview as a read, not a copy', async () => {
+    mockRoute(() => reply({ success: false, error: 'Could not read the templates; nothing was copied.' }, 500))
+    await open()
+    await screen.findByText('Could not read the templates; nothing was copied.')
+    expect(screen.getByText('Could not read templates')).toBeTruthy()
+    expect(screen.queryByText('Could not copy templates')).toBeNull()
+  })
+
+  it('hides the weekdays choice once every template with weekdays is unticked', async () => {
+    mockRoute(() => reply({ success: true, data: PREVIEW }))
+    await open()
+    await screen.findByText('Early')
+    expect(screen.getByRole('checkbox', { name: WEEKDAYS_BOX })).toBeTruthy()
+    fireEvent.click(screen.getByRole('checkbox', { name: /Early/ }))
+    expect(screen.queryByRole('checkbox', { name: WEEKDAYS_BOX })).toBeNull()
+  })
+
+  it('locks the studio choice while a copy is in flight', async () => {
+    mockRoute((b) => (b.dry_run ? reply({ success: true, data: PREVIEW }) : new Promise(() => {})))
+    await open({ sources: [{ id: 'studio-a', name: 'Studio A' }, { id: 'studio-c', name: 'Studio C' }] })
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Copy from'), { target: { value: 'studio-c' } })
+    })
+    await screen.findByText('Early')
+    expect(screen.getByLabelText('Copy from').disabled).toBe(false)
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Copy 2 templates' })) })
+    expect(screen.getByRole('button', { name: 'Copying…' })).toBeTruthy()
+    expect(screen.getByLabelText('Copy from').disabled).toBe(true)
+  })
+
   it('with two possible studios, asks first and previews the one chosen', async () => {
     mockRoute(() => reply({ success: true, data: PREVIEW }))
     await open({ sources: [{ id: 'studio-a', name: 'Studio A' }, { id: 'studio-c', name: 'Studio C' }] })

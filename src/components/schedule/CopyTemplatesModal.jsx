@@ -73,7 +73,9 @@ export default function CopyTemplatesModal({ sources, target, onClose, onDone })
   const skipped = preview?.skipped || []
   const chosen = created.filter((c) => selected.has(c.source_id))
   const hasWeekdays = (c) => (c.source_days_of_week || []).length > 0
-  const anyWeekdays = created.some(hasWeekdays)
+  // From what is still TICKED: once every template with weekdays is
+  // unticked, there is nothing left for the choice to change.
+  const anyWeekdays = chosen.some(hasWeekdays)
   const withDays = copyWeekdays ? chosen.filter(hasWeekdays).length : 0
 
   function toggle(id) {
@@ -145,6 +147,9 @@ export default function CopyTemplatesModal({ sources, target, onClose, onDone })
               id={selectId}
               value={fromId}
               onChange={(e) => setFromId(e.target.value)}
+              // Changing studio mid-copy would clear the preview and name the
+              // wrong studio in the notice.
+              disabled={saving}
               className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
             >
               <option value="">Choose a studio</option>
@@ -160,7 +165,7 @@ export default function CopyTemplatesModal({ sources, target, onClose, onDone })
 
         {error && (
           <ScheduleErrorBanner
-            title="Could not copy templates"
+            title={preview ? 'Could not copy templates' : 'Could not read templates'}
             message={error}
             onRetry={preview ? undefined : loadPreview}
             busy={loading}
@@ -172,7 +177,9 @@ export default function CopyTemplatesModal({ sources, target, onClose, onDone })
 
         {preview && created.length === 0 && (
           <p className="text-sm text-un1t-subtle">
-            Nothing to copy: every active template at {fromName} already has a template of the same name here.
+            {skipped.length === 0
+              ? `No active templates at ${fromName}.`
+              : `Nothing to copy: every active template at ${fromName} already has a template of the same name here.`}
           </p>
         )}
 
