@@ -1680,6 +1680,45 @@ function AssignCoachModal({ block, staff, blocks, timeOff, unavailableReason = n
   const currentCount = liveAssignments(block.shift_assignments).length
   const slotsLeft = Math.max(0, (block.max_coaches || 0) - currentCount)
 
+  // WORKTIME.1 — would assigning this coach leave an EMPLOYEE under 11 hours
+  // between working days, or over 48 hours in the week, counting every studio
+  // of the organisation? Asked once per open. Advisory, like the clash badge.
+  // A failed ask says so; an answer this screen does not recognise (an older
+  // server) says nothing. No list (the coach list failed) = nothing to ask.
+  const [workingTime, setWorkingTime] = useState({ byProfile: {}, failed: false })
+  useEffect(() => {
+    if (unavailableReason) return undefined
+    let cancelled = false
+    async function loadWorkingTime() {
+      let res = null
+      let json = null
+      try {
+        res = await fetch(`/api/schedule/working-time?block_id=${encodeURIComponent(block.id)}`)
+        json = await res.json()
+      } catch {
+        json = null
+      }
+      if (cancelled) return
+      if (!res?.ok || !json || json.success === false) {
+        setWorkingTime({ byProfile: {}, failed: true })
+        return
+      }
+      const by = json.data?.byProfile
+      setWorkingTime({
+        byProfile: by && typeof by === 'object' && !Array.isArray(by) ? by : {},
+        failed: json.data?.checked === false,
+      })
+    }
+    loadWorkingTime()
+    return () => { cancelled = true }
+  }, [block.id, unavailableReason])
+  const wtDay = (iso) => new Date(`${iso}T00:00:00`).toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short' })
+  function restGapTitle(g) {
+    const o = g.other || {}
+    const where = o.location_name ? ` at ${o.location_name}` : ''
+    return `Only ${hoursMinutesLabel(g.rest_minutes)} between this shift and ${o.name || 'another shift'} ${formatTime(o.start)}–${formatTime(o.end)}${where} on ${wtDay(o.date)}. Employees need ${MIN_REST_HOURS} hours ${REST_BETWEEN_LABEL}.`
+  }
+
   function toggle(id) {
     setSelectedIds((prev) => {
       const next = new Set(prev)
@@ -1727,6 +1766,9 @@ function AssignCoachModal({ block, staff, blocks, timeOff, unavailableReason = n
           {!unavailableReason && leaveMissing && (
             <p className="mb-2 text-[11px] px-2 py-1.5 rounded bg-amber-500/10 text-amber-700">{LEAVE_NOT_FLAGGED_MESSAGE}</p>
           )}
+          {!unavailableReason && workingTime.failed && (
+            <p className="mb-2 text-[11px] text-un1t-subtle">Rest and weekly-hours check could not be completed.</p>
+          )}
           {unavailableReason ? (
             <p className="text-[11px] px-2 py-1.5 rounded bg-amber-500/10 text-amber-700">{unavailableReason}</p>
           ) : available.length === 0 ? (
@@ -1741,6 +1783,7 @@ function AssignCoachModal({ block, staff, blocks, timeOff, unavailableReason = n
                 const { clash, onLeave } = coachConflictsForBlock({
                   coachId: s.id, block, blocks, timeOff,
                 })
+                const wt = workingTime.byProfile[s.id]
                 return (
                   <li key={s.id}>
                     <label className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-un1t-border/30">
@@ -1763,6 +1806,24 @@ function AssignCoachModal({ block, staff, blocks, timeOff, unavailableReason = n
                             title={`Already on ${clash.name}, ${clash.startTime}–${clash.endTime}`}
                           >
                             clashes with {clash.startTime} {clash.name}
+                          </span>
+                        )}
+                        {/* WORKTIME.1 — employees only (the route never lists
+                            a contractor); advisory, the row stays tickable. */}
+                        {wt?.restGap && (
+                          <span
+                            className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 whitespace-nowrap"
+                            title={restGapTitle(wt.restGap)}
+                          >
+                            {hoursMinutesLabel(wt.restGap.rest_minutes)} rest
+                          </span>
+                        )}
+                        {wt?.weekHours && (
+                          <span
+                            className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 whitespace-nowrap"
+                            title={`Assigning this shift brings their week to ${hoursMinutesLabel(wt.weekHours.minutes)} across every studio, over the ${MAX_WEEK_HOURS}-hour limit.`}
+                          >
+                            {hoursMinutesLabel(wt.weekHours.minutes)} this week
                           </span>
                         )}
                       </span>

@@ -136,3 +136,53 @@ describe('publish preview: working time (WORKTIME.1)', () => {
     expect(screen.queryByTestId('publish-working-time')).toBeNull()
   })
 })
+
+async function openAssignPicker() {
+  render(<ScheduleCalendar user={user} />)
+  fireEvent.click(await screen.findByRole('button', { name: /^Manage 10am Midday Strength shift/ }))
+  await waitFor(() => expect(screen.getByText('Add coach')).toBeTruthy())
+  fireEvent.click(screen.getByText('Add coach'))
+  await waitFor(() => expect(screen.getByText('Pick one or more coaches')).toBeTruthy())
+}
+
+describe('assign picker: working time (WORKTIME.1)', () => {
+  it('badges an employee this shift would leave short of rest, naming the other shift in its title', async () => {
+    await openAssignPicker()
+    const badge = await screen.findByText('9h 30m rest')
+    expect(badge.closest('li').textContent).toMatch(/Rest Coach/)
+    expect(badge.getAttribute('title')).toMatch(/Evening 8pm–9:30pm at Studio South/)
+    expect(badge.getAttribute('title')).toMatch(/11 hours between working days/)
+  })
+
+  it('badges an employee this shift would take over 48 hours in the week', async () => {
+    await openAssignPicker()
+    const badge = await screen.findByText('48h 30m this week')
+    expect(badge.closest('li').textContent).toMatch(/Week Coach/)
+    expect(badge.getAttribute('title')).toMatch(/over the 48-hour limit/)
+  })
+
+  it('asks once, for this block, and says nothing about a free coach', async () => {
+    await openAssignPicker()
+    await screen.findByText('9h 30m rest')
+    const asks = global.fetch.mock.calls.map(([u]) => String(u)).filter((u) => u.includes('/api/schedule/working-time'))
+    expect(asks).toEqual(['/api/schedule/working-time?block_id=b-target'])
+    expect(screen.getByText('Free Coach').closest('li').textContent).not.toMatch(/ rest|this week/)
+  })
+
+  it('is advisory: a flagged coach can still be ticked', async () => {
+    await openAssignPicker()
+    const badge = await screen.findByText('9h 30m rest')
+    const checkbox = badge.closest('label').querySelector('input[type="checkbox"]')
+    expect(checkbox.disabled).toBe(false)
+    fireEvent.click(checkbox)
+    expect(checkbox.checked).toBe(true)
+    expect(screen.getByText('Assign 1 coach')).toBeTruthy()
+  })
+
+  it('a failed check says so and badges nobody', async () => {
+    global.fetch = mockFetch({ picker: { success: false, error: 'boom' }, pickerStatus: 500 })
+    await openAssignPicker()
+    expect(await screen.findByText('Rest and weekly-hours check could not be completed.')).toBeTruthy()
+    expect(screen.queryByText('9h 30m rest')).toBeNull()
+  })
+})
