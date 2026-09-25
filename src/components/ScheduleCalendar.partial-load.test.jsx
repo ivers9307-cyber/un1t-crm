@@ -27,7 +27,6 @@ import {
   partialLoadLines,
   STAFF_UNAVAILABLE_MESSAGE,
   TEMPLATES_UNAVAILABLE_MESSAGE,
-  LEAVE_NOT_FLAGGED_MESSAGE,
 } from './schedule/SchedulePartialLoadNote'
 import { SESSION_ENDED_MESSAGE } from './schedule/useScheduleData'
 
@@ -192,12 +191,22 @@ describe('actions that depend on a missing list are disabled with the reason', (
     expect(submit.disabled).toBe(true)
   })
 
-  it('leave missing: the picker says leave is not flagged, and coaches stay pickable', async () => {
-    global.fetch = fetchFailing(['/schedule/time-off'])
+  // CANDIDATES.1 — the picker's leave flag comes from the server's ranked
+  // answer now, not the calendar's leave slice; what it could not check, it
+  // says.
+  it('leave the server could not check: the picker says so, and coaches stay pickable', async () => {
+    const base = fetchFailing(['/schedule/time-off'])
+    global.fetch = vi.fn(async (url) => (url.includes('/candidates')
+      ? okResponse({ success: true, data: {
+        audience: 'manager', block_id: 'b1', untimed: 0,
+        checked: { shifts: true, cross_studio: true, leave: false, availability: true, contract: true },
+        candidates: [{ profile_id: 'c1', full_name: 'Free Coach', role: 'staff', rank: 1, tier: 'ready', free: true, on_leave: null, week_minutes: 0 }],
+      } })
+      : base(url)))
     await openAssignPicker()
-    const dialog = screen.getByRole('dialog')
-    expect(dialog.textContent).toContain(LEAVE_NOT_FLAGGED_MESSAGE)
-    expect(screen.getByText('Free Coach')).toBeTruthy()
+    expect(await screen.findByText('Could not check leave, so the order may be off.')).toBeTruthy()
+    const box = screen.getByText('Free Coach').closest('label').querySelector('input[type="checkbox"]')
+    expect(box.disabled).toBe(false)
   })
 
   it('templates missing: Add Slot says why and cannot submit', async () => {
@@ -245,7 +254,7 @@ describe('partialLoadLines', () => {
 
   it('names missing availability to a manager only (AVAIL.1)', () => {
     expect(partialLoadLines({ availability: { kept: false } }, { isManager: true }))
-      .toEqual(['Availability could not be loaded, so unavailable coaches are not shaded or flagged.'])
+      .toEqual(['Availability could not be loaded, so unavailable coaches are not shaded on the calendar.'])
     expect(partialLoadLines({ availability: { kept: true } }, { isManager: true }))
       .toEqual(['Availability could not be refreshed. Showing it as it last loaded.'])
     expect(partialLoadLines({ availability: { kept: false } }, { isManager: false })).toEqual([])

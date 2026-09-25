@@ -4658,6 +4658,25 @@ registry.registerPath({
   },
 })
 
+// CANDIDATES.1 — ranked candidates for one block (every coach picker).
+registry.registerPath({
+  method: 'get',
+  path: '/api/schedule/blocks/{id}/candidates',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Ranked coaches who could take one shift (advisory)',
+  description: "CANDIDATES.1. Every rosterable member of the block's studio (active, a member there, not live on the block), ranked: tier (ready, advisory = under 11h rest or over 48h in the week for an employee, unavailable = an AVAIL.1 rule touching the shift, blocked = approved leave or already working then at ANY studio of the organisation), then on site that day, then an employee under their contracted hours by share of it, then everyone else by fewest rostered hours Mon-Sun, then name. Advisory only: POST /api/schedule/blocks/{id}/assignments and POST /api/schedule/swaps never consult it. Two audiences, decided by the server: `manager` (MANAGER_ROLES at the block's studio, or master) gets each candidate's { profile_id, full_name, role, rank, tier, reason, free, busy, on_leave { label, start_date, end_date }, unavailable { summary, detail }, on_site { start, end, name, gap_minutes }, week_minutes, contracted_hours (employees only, and only for an owner, manager or master caller: a head coach gets no such key and the ranking uses fewest hours), rest_gap, week_over }; `colleague` (a coach live on the block, asking for cover; the block's roster must be published) gets { profile_id, full_name, role, rank, tier, reason, free } only, ranked on free alone and judged on published shifts only. Times are Dublin wall clock; windows are effective (override, then block, then template). A fact that could not be read is null and `checked.<facet>` is false (shifts, cross_studio, leave, availability, contract). Hours only: never a rate, salary or cost.",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ audience, block_id, candidates (by rank), checked, untimed } (untimed = shifts with no usable times, not counted)' },
+    400: { description: 'Malformed block id, or (the coach on it) a shift whose roster is not published yet', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'No session', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: "A member of the block's studio who neither manages there nor is live on the block", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Block not found (or not at a studio the caller belongs to)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: "The block or the studio's member list could not be read", content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 registry.registerPath({
   method: 'get',
   path: '/api/schedule/time-off',

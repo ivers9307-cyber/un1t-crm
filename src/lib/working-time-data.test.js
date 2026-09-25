@@ -8,7 +8,7 @@ vi.mock('./sibling-locations', () => ({ siblingLocationIds: vi.fn() }))
 vi.mock('./log', async () => ({ ...(await vi.importActual('./log')), logWarn: vi.fn() }))
 
 import { siblingLocationIds } from './sibling-locations'
-import { loadWorkingTimeShifts, COUNT_UNPUBLISHED_ELSEWHERE, SUBTRACT_APPROVED_LEAVE } from './working-time-data'
+import { loadWorkingTimeShifts, readOrgShiftRows, COUNT_UNPUBLISHED_ELSEWHERE, SUBTRACT_APPROVED_LEAVE } from './working-time-data'
 
 const PEOPLE = [
   { id: 'emp', full_name: 'Sam Demo', employment_type: 'fte' },
@@ -236,5 +236,82 @@ describe('loadWorkingTimeShifts — owner-review switches', () => {
       { ...ARGS, subtractApprovedLeave: true },
     )
     expect(out).toMatchObject({ shifts: [], error: { message: 'leave unreadable' } })
+  })
+})
+
+// CANDIDATES.1 — the assignments loop, extracted so the candidate list reads
+// the same rows (same boundary, same shape) for EVERYONE, contractors too.
+describe('readOrgShiftRows (CANDIDATES.1)', () => {
+  const SCOPE = { locationId: 'loc1', scopeIds: ['loc1', 'loc2'], from: '2026-09-20', to: '2026-09-28' }
+
+  it('reads whoever it is given, contractors included, and reads no profiles', async () => {
+    const db = mockDb({ assignments: [
+      row('a1', 'con', 'loc1', '2026-09-22', '09:00:00', '12:00:00'),
+      row('a2', 'emp', 'loc2', '2026-09-22', '20:00:00', '22:00:00'),
+    ] })
+    const out = await readOrgShiftRows(db, { ...SCOPE, profileIds: ['emp', 'con'] })
+    expect(db.log.profiles).toHaveLength(0)
+    expect(db.log.assignments[0].profileIds).toEqual(['emp', 'con'])
+    expect(out.error).toBeNull()
+    expect(out.shifts.map((s) => [s.profile_id, s.location_id])).toEqual([['con', 'loc1'], ['emp', 'loc2']])
+  })
+
+  it('keeps this studio first in the scope and drops a row from outside it even if it comes back', async () => {
+    const db = mockDb({ assignments: [
+      row('a1', 'emp', 'loc1', '2026-09-22', '09:00:00', '12:00:00'),
+      row('a9', 'emp', 'loc9', '2026-09-23', '06:00:00', '08:00:00'),
+    ] })
+    const out = await readOrgShiftRows(db, { ...SCOPE, scopeIds: ['loc2', 'loc1'], profileIds: ['emp'] })
+    expect(db.log.assignments[0].locIds).toEqual(['loc1', 'loc2'])
+    expect(out.shifts.map((s) => s.block_id)).toEqual(['b-a1'])
+  })
+
+  it('skip() drops the rows it names; cancelled rows never come back', async () => {
+    const db = mockDb({ assignments: [
+      row('a1', 'emp', 'loc1', '2026-09-22', '09:00:00', '12:00:00'),
+      row('a2', 'emp', 'loc1', '2026-09-23', '09:00:00', '12:00:00'),
+      row('a3', 'emp', 'loc1', '2026-09-24', '09:00:00', '12:00:00', { status: 'cancelled' }),
+    ] })
+    const out = await readOrgShiftRows(db, { ...SCOPE, profileIds: ['emp'], skip: (_id, date) => date === '2026-09-22' })
+    expect(out.shifts.map((s) => s.block_date)).toEqual(['2026-09-23'])
+  })
+
+  it('pages past 1,000 rows, ordered by id', async () => {
+    const many = Array.from({ length: 1001 }, (_, i) => row(`a${String(i).padStart(4, '0')}`, 'emp', 'loc1', '2026-09-22', '09:00:00', '10:00:00'))
+    const db = mockDb({ assignments: many })
+    const out = await readOrgShiftRows(db, { ...SCOPE, profileIds: ['emp'] })
+    expect(db.log.assignments).toHaveLength(2)
+    expect(db.log.assignments[0].orders).toEqual(['id'])
+    expect(out.shifts).toHaveLength(1001)
+  })
+
+  // CANDIDATES.1 review 1 — the coach asking for cover must never learn of a
+  // draft: publishedOnly drops every unpublished row, this studio's included.
+  it('publishedOnly keeps published rosters only, at every studio including this one', async () => {
+    const db = mockDb({ assignments: [
+      row('a1', 'emp', 'loc1', '2026-09-22', '09:00:00', '12:00:00', {}, 'published'),
+      row('a2', 'emp', 'loc1', '2026-09-23', '09:00:00', '12:00:00', {}, 'draft'),
+      row('a3', 'emp', 'loc2', '2026-09-24', '09:00:00', '12:00:00', {}, 'draft'),
+      row('a4', 'emp', 'loc2', '2026-09-25', '09:00:00', '12:00:00', {}, null),
+      row('a5', 'emp', 'loc2', '2026-09-26', '09:00:00', '12:00:00', {}, 'published'),
+    ] })
+    const out = await readOrgShiftRows(db, { ...SCOPE, profileIds: ['emp'], publishedOnly: true })
+    expect(out.shifts.map((s) => s.block_id)).toEqual(['b-a1', 'b-a5'])
+    const all = await readOrgShiftRows(db, { ...SCOPE, profileIds: ['emp'] })
+    expect(all.shifts).toHaveLength(5)
+  })
+
+  it('nobody to read: no query at all', async () => {
+    const db = mockDb()
+    const out = await readOrgShiftRows(db, { ...SCOPE, profileIds: [] })
+    expect(db.log.assignments).toHaveLength(0)
+    expect(out).toEqual({ shifts: [], error: null })
+  })
+
+  it('a failed or throwing read is an error with NO shifts, never an empty all-clear', async () => {
+    const failed = await readOrgShiftRows(mockDb({ failAssignments: true, assignments: [row('a1', 'emp', 'loc1', '2026-09-22', '09:00:00', '12:00:00')] }), { ...SCOPE, profileIds: ['emp'] })
+    expect(failed).toEqual({ shifts: [], error: { message: 'assignments unreadable' } })
+    const thrown = await readOrgShiftRows(mockDb({ throwOn: 'shift_assignments' }), { ...SCOPE, profileIds: ['emp'] })
+    expect(thrown).toEqual({ shifts: [], error: { message: 'shift_assignments: client exploded' } })
   })
 })
