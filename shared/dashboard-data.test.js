@@ -631,3 +631,61 @@ describe('fetchTodayOps — staffToday ignores cancelled assignments', () => {
     expect(res.data.staffToday).toBe(2)
   })
 })
+
+// LABOURWEEK.1 — "labour this week" (Business dashboard + phone Business tab)
+// summed every assignment in the week window: cancelled rows (swap-drops,
+// removed coaches) and draft rosters included. It now costs live rows on
+// published rosters only.
+describe('fetchTodayOps — labour this week counts live, published shifts only', () => {
+  function assignment(id, { status = 'scheduled', rosterStatus = 'published', rosterId = 'r1', rate = 20 } = {}) {
+    return {
+      id, profile_id: `p-${id}`, start_time_override: null, end_time_override: null, status,
+      shift_blocks: {
+        id: `b-${id}`, block_date: '2026-09-28', start_time: '09:00', end_time: '11:00', briefing: null,
+        location_id: 'loc-1', roster_id: rosterId, rosters: rosterId ? { status: rosterStatus } : null,
+        shift_templates: { name: 'Class', start_time: '09:00', end_time: '11:00' }, locations: { id: 'loc-1', name: 'S' },
+      },
+      profiles: { hourly_rate: rate, annual_salary: null, contracted_hours_per_week: null, employment_type: 'contractor' },
+    }
+  }
+  function makeOpsDb(assignments) {
+    return {
+      from(table) {
+        const response = table === 'shift_assignments'
+          ? { data: assignments, error: null }
+          : table === 'shift_blocks'
+            ? { data: [], error: null }
+            : { count: 0, error: null }
+        return chainableBuilder(response)
+      },
+    }
+  }
+
+  it('costs a live shift on a published roster (2h at 20/h = 4000 cents)', async () => {
+    const res = await fetchTodayOps(makeOpsDb([assignment('a')]), 'loc-1')
+    expect(res.success).toBe(true)
+    expect(res.data.labourWeekCents).toBe(4000)
+    expect(res.data.hoursWeek).toBe(2)
+  })
+
+  it('leaves out cancelled rows, draft rosters and blocks on no roster', async () => {
+    const res = await fetchTodayOps(makeOpsDb([
+      assignment('live'),
+      assignment('dropped', { status: 'cancelled' }),
+      assignment('draft', { rosterStatus: 'draft' }),
+      assignment('superseded', { rosterStatus: 'superseded' }),
+      assignment('unrostered', { rosterId: null }),
+    ]), 'loc-1')
+    expect(res.data.labourWeekCents).toBe(4000)
+    expect(res.data.hoursWeek).toBe(2)
+  })
+
+  it('still counts a swapped row (a real shift now owned by the taker) and a statusless legacy row', async () => {
+    const res = await fetchTodayOps(makeOpsDb([
+      assignment('swapped', { status: 'swapped' }),
+      assignment('legacy', { status: null }),
+    ]), 'loc-1')
+    expect(res.data.labourWeekCents).toBe(8000)
+    expect(res.data.hoursWeek).toBe(4)
+  })
+})
