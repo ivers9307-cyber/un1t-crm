@@ -63,29 +63,29 @@ export async function loadLabourMonth(db, { activeLocationId, studios, nowMs = D
   const shown = studios.filter((s) => s?.id && orgStudioIds.includes(s.id))
   if (shown.length === 0) return { error: 'No studio to report on' }
 
-  let blocks
-  let links
-  try {
-    ;[blocks, links] = await Promise.all([
-      selectAll((from, to) => db
-        .from('shift_blocks')
-        .select('id, location_id, block_date, start_time, end_time, rosters:roster_id ( status ), shift_templates ( start_time, end_time, kind ), shift_assignments ( id, profile_id, start_time_override, end_time_override, status )')
-        .in('location_id', orgStudioIds)
-        .gte('block_date', period.startDate)
-        .lte('block_date', period.endDate)
-        .order('id', { ascending: true })
-        .range(from, to)),
-      selectAll((from, to) => db
-        .from('profile_locations')
-        .select('profile_id, location_id')
-        .in('location_id', orgStudioIds)
-        .order('profile_id', { ascending: true })
-        .order('location_id', { ascending: true })
-        .range(from, to)),
-    ])
-  } catch (e) {
-    return failed('the roster', e)
-  }
+  // Both in parallel, each judged on its own so a failure is logged as what
+  // actually failed (review nit: a memberships failure read as "the roster").
+  const [blocksRes, linksRes] = await Promise.allSettled([
+    selectAll((from, to) => db
+      .from('shift_blocks')
+      .select('id, location_id, block_date, start_time, end_time, rosters:roster_id ( status ), shift_templates ( start_time, end_time, kind ), shift_assignments ( id, profile_id, start_time_override, end_time_override, status )')
+      .in('location_id', orgStudioIds)
+      .gte('block_date', period.startDate)
+      .lte('block_date', period.endDate)
+      .order('id', { ascending: true })
+      .range(from, to)),
+    selectAll((from, to) => db
+      .from('profile_locations')
+      .select('profile_id, location_id')
+      .in('location_id', orgStudioIds)
+      .order('profile_id', { ascending: true })
+      .order('location_id', { ascending: true })
+      .range(from, to)),
+  ])
+  if (blocksRes.status === 'rejected') return failed('the roster', blocksRes.reason)
+  if (linksRes.status === 'rejected') return failed('studio memberships', linksRes.reason)
+  const blocks = blocksRes.value
+  const links = linksRes.value
 
   const rows = labourShiftRows(blocks)
   const memberships = new Map()

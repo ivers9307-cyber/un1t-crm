@@ -234,9 +234,11 @@ describe('loadLabourMonth', () => {
     expect(res).toEqual({ error: 'No studio to report on' })
   })
 
-  it('a failed memberships read is an error too', async () => {
+  it('a failed memberships read is an error too, logged as memberships (not as the roster)', async () => {
     const res = await loadLabourMonth(fakeDb(okSpec({ profile_locations: { data: null, error: { message: 'x' } } })), { activeLocationId: STILL, studios: STUDIOS, nowMs: NOW })
-    expect(res).toEqual({ error: 'Could not read the roster' })
+    expect(res).toEqual({ error: 'Could not read studio memberships' })
+    expect(logError).toHaveBeenCalledWith('labour-month', 'studio memberships read failed', expect.objectContaining({ err: 'x' }))
+    expect(logError).not.toHaveBeenCalledWith('labour-month', 'the roster read failed', expect.anything())
   })
 
   it('pages the roster past the 1,000-row cap', async () => {
