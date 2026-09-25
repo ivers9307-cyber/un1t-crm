@@ -8,6 +8,7 @@ import {
   labourMonthWindow, labourStudiosFor, canSeeLabour,
   labourShiftRows, labourPct, buildLabourMonth,
   COUNT_UNROSTERED_SALARIES, LABOUR_VIEWER_ROLES,
+  salaryShares, salaryBasisFrom, isSalaried,
 } from './labour-month-model'
 
 const HOUR = 3_600_000
@@ -131,9 +132,11 @@ let seq = 0
 const A = (profile_id, over = {}) => ({
   id: `a${++seq}`, profile_id, start_time_override: null, end_time_override: null, status: 'scheduled', ...over,
 })
-const B = (location_id, block_date, start_time, end_time, assignments, { published = true, kind = 'class' } = {}) => ({
+// `roster` is the embedded rosters row: published by default; null = a block
+// no roster owns yet; { status: 'superseded' } = a stood-down roster's block.
+const B = (location_id, block_date, start_time, end_time, assignments, { published = true, kind = 'class', roster } = {}) => ({
   id: `b${++seq}`, location_id, block_date, start_time, end_time,
-  rosters: published ? { status: 'published' } : { status: 'draft' },
+  rosters: roster !== undefined ? roster : (published ? { status: 'published' } : { status: 'draft' }),
   shift_templates: { start_time, end_time, kind },
   shift_assignments: assignments,
 })
@@ -326,5 +329,113 @@ describe('buildLabourMonth', () => {
     const vm = build({ rows, memberships: new Map() })
     expect(vm.untimed_shifts).toBe(1)
     expect(rowOf(vm, STILL).forecast.cost_cents).toBe(0)
+  })
+})
+
+// ── LABOUR.1 review 1: a salary is split across EVERY organisation ──────────
+//
+// The master profile is linked to studios in three organisations (UN1T Group:
+// Stillorgan + Hatch; CCF Autos; Givers Consultancy). Each organisation's
+// owner sees only their share; the shares add up to ONE salary.
+describe('salary split across organisations', () => {
+  const GIV = 'loc-givers'
+  const ORG_STUDIOS = {
+    un1t: [{ id: STILL, name: 'UN1T Stillorgan' }, { id: HATCH, name: 'UN1T Hatch Street' }],
+    ccf: [{ id: CARS, name: 'CCF Autos' }],
+    givers: [{ id: GIV, name: 'Givers Consultancy' }],
+  }
+  const MASTER = new Map([['p-master', P('Richard Master', 'fte', { annual_salary: 36000 })]])
+  const LINKS = [STILL, HATCH, CARS, GIV].map((location_id) => ({
+    profile_id: 'p-master', location_id, locations: { active: true, is_host_anchor: false },
+  }))
+  const orgMembers = (org) => new Map([['p-master', new Set(ORG_STUDIOS[org].map((s) => s.id))]])
+  const viewOf = (org, { rows = [], basis }) => buildLabourMonth({
+    period: PERIOD, nowMs: NOW, studios: ORG_STUDIOS[org],
+    rows: rows.filter((r) => ORG_STUDIOS[org].some((s) => s.id === r.location_id)),
+    people: MASTER, memberships: orgMembers(org), revenue: new Map(), salaryBasis: basis,
+  })
+  const employeesOf = (vm) => vm.studios.reduce((t, r) => t + r.forecast.employees_cents, 0)
+
+  it('unrostered: split equally over all four studios; each org sees only its share; the orgs sum to one salary', () => {
+    const basis = salaryBasisFrom({ ids: ['p-master'], rows: [], links: LINKS })
+    const un1t = viewOf('un1t', { basis })
+    const ccf = viewOf('ccf', { basis })
+    const givers = viewOf('givers', { basis })
+    expect(rowOf(un1t, STILL).forecast.employees_cents).toBe(75_000)
+    expect(rowOf(un1t, HATCH).forecast.employees_cents).toBe(75_000)
+    expect(employeesOf(ccf)).toBe(75_000)
+    expect(employeesOf(givers)).toBe(75_000)
+    expect(employeesOf(un1t) + employeesOf(ccf) + employeesOf(givers)).toBe(300_000)
+  })
+
+  it('rostered in two orgs: split by published hours across both; the third org is charged nothing', () => {
+    const rows = labourShiftRows([
+      B(STILL, '2026-09-01', '09:00:00', '11:00:00', [A('p-master')]),
+      B(CARS, '2026-09-02', '09:00:00', '15:00:00', [A('p-master')]),
+      B(GIV, '2026-09-03', '09:00:00', '12:00:00', [A('p-master')], { roster: null }), // unpublished: no weight
+    ])
+    const basis = salaryBasisFrom({ ids: ['p-master'], rows, links: LINKS })
+    const un1t = viewOf('un1t', { rows, basis })
+    const ccf = viewOf('ccf', { rows, basis })
+    const givers = viewOf('givers', { rows, basis })
+    expect(rowOf(un1t, STILL).forecast.employees_cents).toBe(75_000) // 2h of 8
+    expect(rowOf(un1t, HATCH).forecast.employees_cents).toBe(0)
+    expect(employeesOf(ccf)).toBe(225_000) // 6h of 8
+    expect(employeesOf(givers)).toBe(0)
+    expect(employeesOf(un1t) + employeesOf(ccf) + employeesOf(givers)).toBe(300_000)
+  })
+
+  it('without the cross-org basis the old bug is visible: every org charges the whole salary', () => {
+    // Guard on the test itself: salaryBasis is what prevents the triple count.
+    const legacy = ['un1t', 'ccf', 'givers'].map((org) => employeesOf(viewOf(org, { basis: undefined })))
+    expect(legacy).toEqual([300_000, 300_000, 300_000])
+  })
+
+  it('a salaried person with no active studio anywhere is named "no studio", not dropped', () => {
+    const basis = salaryBasisFrom({
+      ids: ['p-master'], rows: [],
+      links: [{ profile_id: 'p-master', location_id: STILL, locations: { active: false, is_host_anchor: false } }],
+    })
+    const vm = viewOf('un1t', { basis })
+    expect(employeesOf(vm)).toBe(0)
+    expect(vm.uncosted).toEqual([{ name: 'Richard Master', reason: 'no_studio', hours: 0 }])
+  })
+
+  it('with a basis passed, a salaried person missing from it has no studio (never the org-only fallback)', () => {
+    const vm = viewOf('un1t', { basis: new Map() })
+    expect(employeesOf(vm)).toBe(0)
+    expect(vm.uncosted.map((u) => u.reason)).toEqual(['no_studio'])
+  })
+
+  it('host-anchor and inactive studios never take a share', () => {
+    const basis = salaryBasisFrom({
+      ids: ['p-master'], rows: [],
+      links: [
+        { profile_id: 'p-master', location_id: STILL, locations: { active: true, is_host_anchor: false } },
+        { profile_id: 'p-master', location_id: 'loc-anchor', locations: { active: true, is_host_anchor: true } },
+        { profile_id: 'p-master', location_id: HATCH, locations: { active: false, is_host_anchor: false } },
+        { profile_id: 'p-master', location_id: CARS, locations: null },
+      ],
+    })
+    expect([...basis.get('p-master').studios]).toEqual([STILL])
+  })
+
+  it('salaryShares is the one split rule: by published hours where any, else equally, else nothing', () => {
+    expect(salaryShares({ minutes: new Map([[STILL, 180], [HATCH, 60]]), studios: new Set([CARS]) }))
+      .toEqual([[STILL, 0.75], [HATCH, 0.25]])
+    expect(salaryShares({ minutes: new Map(), studios: new Set([STILL, HATCH]) }))
+      .toEqual([[STILL, 0.5], [HATCH, 0.5]])
+    expect(salaryShares({ minutes: new Map(), studios: new Set([STILL]) }, { countUnrostered: false })).toEqual([])
+    expect(salaryShares({ minutes: new Map(), studios: new Set() })).toEqual([])
+    expect(salaryShares(undefined)).toEqual([])
+  })
+
+  it('isSalaried: an active, undeleted employee with a salary', () => {
+    expect(isSalaried(P('A', 'fte', { annual_salary: 1 }))).toBe(true)
+    expect(isSalaried(P('A', 'fte', { annual_salary: 1 }, { active: false }))).toBe(false)
+    expect(isSalaried(P('A', 'fte', { annual_salary: 1 }, { deleted_at: '2026-09-01' }))).toBe(false)
+    expect(isSalaried(P('A', 'fte'))).toBe(false)
+    expect(isSalaried(P('A', 'contractor', { annual_salary: 1 }))).toBe(false)
+    expect(isSalaried(null)).toBe(false)
   })
 })

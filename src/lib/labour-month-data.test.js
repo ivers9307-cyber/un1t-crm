@@ -60,6 +60,15 @@ const BLOCKS = [
   },
 ]
 const LINKS = [{ profile_id: 'p-alex', location_id: STILL }, { profile_id: 'p-jordan', location_id: STILL }]
+// Review 1 — the salaried people's links and published shifts in EVERY
+// organisation, read by profile id (Alex: Stillorgan only, by default).
+const ALL_LINKS = [{ profile_id: 'p-alex', location_id: STILL, locations: { active: true, is_host_anchor: false } }]
+const byProfile = (chain) => chain.some((c) => c[0] === 'in' && c[1] === 'profile_id')
+const assignmentOf = (block, i = 0) => {
+  const { shift_assignments: list, ...b } = block
+  return { ...list[i], shift_blocks: b }
+}
+const ALEX_SHIFTS = [assignmentOf(BLOCKS[0])]
 const PROFILES = [
   { id: 'p-alex', full_name: 'Alex Example', active: true, deleted_at: null, employment_type: 'fte' },
   { id: 'p-jordan', full_name: 'Jordan Sample', active: true, deleted_at: null, employment_type: 'contractor' },
@@ -71,7 +80,8 @@ const COMP = [
 const okSpec = (over = {}) => ({
   locations: LOCATIONS,
   shift_blocks: { data: BLOCKS, error: null },
-  profile_locations: { data: LINKS, error: null },
+  profile_locations: (chain) => (byProfile(chain) ? { data: ALL_LINKS, error: null } : { data: LINKS, error: null }),
+  shift_assignments: { data: ALEX_SHIFTS, error: null },
   profiles: { data: PROFILES, error: null },
   profile_compensation: { data: COMP, error: null },
   ...over,
@@ -163,6 +173,60 @@ describe('loadLabourMonth', () => {
     expect(p).toEqual({ error: 'Could not read staff' })
     const c = await loadLabourMonth(fakeDb(okSpec({ profile_compensation: { data: null, error: { message: 'x' } } })), { activeLocationId: STILL, studios: STUDIOS, nowMs: NOW })
     expect(c).toEqual({ error: 'Could not read pay' })
+  })
+
+  it('reads the salaried people\'s studios and published shifts in EVERY organisation, by profile id', async () => {
+    const db = fakeDb(okSpec())
+    await loadLabourMonth(db, { activeLocationId: STILL, studios: STUDIOS, nowMs: NOW })
+    const links = db.calls.filter((c) => c.table === 'profile_locations').map((c) => c.chain).find(byProfile)
+    expect(links[0]).toEqual(['select', 'profile_id, location_id, locations:location_id ( active, is_host_anchor )'])
+    expect(links).toContainEqual(['in', 'profile_id', ['p-alex']]) // salaried only: not Jordan
+    expect(links.some((c) => c[1] === 'location_id' && c[0] !== 'order')).toBe(false) // no studio filter
+    expect(links).toContainEqual(['range', 0, 999])
+    const shifts = chainOf(db, 'shift_assignments')
+    expect(shifts).toContainEqual(['in', 'profile_id', ['p-alex']])
+    expect(shifts).toContainEqual(['gte', 'shift_blocks.block_date', '2026-09-01'])
+    expect(shifts).toContainEqual(['lte', 'shift_blocks.block_date', '2026-09-30'])
+    expect(shifts).toContainEqual(['order', 'id', { ascending: true }])
+    expect(shifts).toContainEqual(['range', 0, 999])
+  })
+
+  it('charges this organisation only its share of a salary split with another organisation', async () => {
+    const carsBlock = { ...BLOCKS[0], id: 'b-cars', location_id: 'loc-cars', block_date: '2026-09-03' }
+    const db = fakeDb(okSpec({
+      shift_assignments: { data: [assignmentOf(BLOCKS[0]), assignmentOf(carsBlock)], error: null },
+    }))
+    const { data } = await loadLabourMonth(db, { activeLocationId: STILL, studios: STUDIOS, nowMs: NOW })
+    // 3h here, 3h at CCF Autos: half of €3,000 is Stillorgan's.
+    expect(data.studios[0].forecast.employees_cents).toBe(150_000)
+  })
+
+  it('a salaried person with no published shift is split over their studios in every organisation', async () => {
+    const db = fakeDb(okSpec({
+      shift_blocks: { data: [BLOCKS[1]], error: null }, // Jordan only
+      shift_assignments: { data: [], error: null },
+      profile_locations: (chain) => (byProfile(chain)
+        ? { data: [...ALL_LINKS, { profile_id: 'p-alex', location_id: 'loc-cars', locations: { active: true, is_host_anchor: false } }], error: null }
+        : { data: LINKS, error: null }),
+    }))
+    const { data } = await loadLabourMonth(db, { activeLocationId: STILL, studios: STUDIOS, nowMs: NOW })
+    expect(data.studios[0].forecast.employees_cents).toBe(150_000)
+  })
+
+  it('a failed cross-organisation read is an error, never a whole salary charged here', async () => {
+    const a = await loadLabourMonth(fakeDb(okSpec({ shift_assignments: { data: null, error: { message: 'x' } } })), { activeLocationId: STILL, studios: STUDIOS, nowMs: NOW })
+    expect(a).toEqual({ error: "Could not read salaried staff's studios" })
+    const b = await loadLabourMonth(fakeDb(okSpec({
+      profile_locations: (chain) => (byProfile(chain) ? { data: null, error: { message: 'x' } } : { data: LINKS, error: null }),
+    })), { activeLocationId: STILL, studios: STUDIOS, nowMs: NOW })
+    expect(b).toEqual({ error: "Could not read salaried staff's studios" })
+  })
+
+  it('no salaried people: no cross-organisation reads', async () => {
+    const db = fakeDb(okSpec({ profile_compensation: { data: [COMP[1]], error: null } }))
+    await loadLabourMonth(db, { activeLocationId: STILL, studios: STUDIOS, nowMs: NOW })
+    expect(chainOf(db, 'shift_assignments')).toBeUndefined()
+    expect(db.calls.filter((c) => c.table === 'profile_locations').map((c) => c.chain).find(byProfile)).toBeUndefined()
   })
 
   it('refuses with no studio', async () => {

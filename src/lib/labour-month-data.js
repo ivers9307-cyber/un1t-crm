@@ -12,6 +12,10 @@
 //   people        = profiles by id, NAMED columns only (profiles still carries
 //                   pay columns: CLAUDE.md "name your columns").
 //   pay           = profile_compensation (mig 152, the canonical copy) by id.
+//   salary basis  = for SALARIED people only: profile_locations and published
+//                   shift_assignments at ANY studio, by profile id (review 1:
+//                   a salary is split across every organisation, and this
+//                   one is charged only its share).
 //   revenue       = the Studio scorecard's own fetchMrr, per studio shown.
 //
 // Never throws. A failed organisation, roster, membership, profiles or pay read
@@ -28,7 +32,9 @@ import { siblingLocationIds } from './sibling-locations'
 import { getCompensationForProfiles } from './profile-compensation'
 import { logError, logWarn } from './log'
 import { fetchMrr } from '@shared/studio-kpis'
-import { labourMonthWindow, labourShiftRows, buildLabourMonth } from './labour-month-model'
+import {
+  labourMonthWindow, labourShiftRows, buildLabourMonth, isSalaried, salaryBasisFrom,
+} from './labour-month-model'
 
 const ID_CHUNK = 200
 
@@ -117,6 +123,47 @@ export async function loadLabourMonth(db, { activeLocationId, studios, nowMs = D
     p.hourly_rate = c.hourly_rate
   }
 
+  // Review 1 — a salary is split over the person's studios in EVERY
+  // organisation, and this organisation is charged only its share. So for the
+  // salaried people only: their links and published shifts anywhere, by
+  // profile id. These rows never reach the view model; they only weight the
+  // split. A failed read is an error: this organisation alone would otherwise
+  // be charged a whole salary shared with another.
+  const salaried = ids.filter((id) => isSalaried(people.get(id)))
+  let salaryBasis = new Map()
+  if (salaried.length > 0) {
+    try {
+      const allLinks = []
+      const assignments = []
+      for (let i = 0; i < salaried.length; i += ID_CHUNK) {
+        const slice = salaried.slice(i, i + ID_CHUNK)
+        const [l, a] = await Promise.all([
+          selectAll((from, to) => db
+            .from('profile_locations')
+            .select('profile_id, location_id, locations:location_id ( active, is_host_anchor )')
+            .in('profile_id', slice)
+            .order('profile_id', { ascending: true })
+            .order('location_id', { ascending: true })
+            .range(from, to)),
+          selectAll((from, to) => db
+            .from('shift_assignments')
+            .select('id, profile_id, start_time_override, end_time_override, status, shift_blocks!inner ( id, location_id, block_date, start_time, end_time, rosters:roster_id ( status ), shift_templates ( start_time, end_time ) )')
+            .in('profile_id', slice)
+            .gte('shift_blocks.block_date', period.startDate)
+            .lte('shift_blocks.block_date', period.endDate)
+            .order('id', { ascending: true })
+            .range(from, to)),
+        ])
+        allLinks.push(...l)
+        assignments.push(...a)
+      }
+      const anywhere = labourShiftRows(assignments.map(({ shift_blocks: b, ...a }) => ({ ...b, shift_assignments: [a] })))
+      salaryBasis = salaryBasisFrom({ ids: salaried, rows: anywhere, links: allLinks })
+    } catch (e) {
+      return failed("salaried staff's studios", e)
+    }
+  }
+
   const revenue = new Map(await Promise.all(shown.map(async (s) => {
     try {
       const res = await fetchMrr(db, s.id)
@@ -128,5 +175,5 @@ export async function loadLabourMonth(db, { activeLocationId, studios, nowMs = D
     return [s.id, null]
   })))
 
-  return { data: buildLabourMonth({ period, nowMs, studios: shown, rows, people, memberships, revenue }) }
+  return { data: buildLabourMonth({ period, nowMs, studios: shown, rows, people, memberships, revenue, salaryBasis }) }
 }
