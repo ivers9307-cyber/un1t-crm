@@ -140,7 +140,7 @@ describe('sanitizeSearchTerm', () => {
   })
   it('leaves a normal email/name search untouched', () => {
     expect(sanitizeSearchTerm('sarah@example.com')).toBe('sarah@example.com')
-    expect(sanitizeSearchTerm('Sarah Doyle')).toBe('Sarah Doyle')
+    expect(sanitizeSearchTerm('Sam Demo')).toBe('Sam Demo')
   })
 })
 

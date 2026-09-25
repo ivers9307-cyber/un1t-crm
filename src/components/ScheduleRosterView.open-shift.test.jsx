@@ -63,7 +63,7 @@ const BLOCK = {
   start_time: '17:00', end_time: '20:00', max_coaches: 3, min_coaches: 2,
   shift_templates: TEMPLATE, shift_assignments: [], rosters: null,
 }
-const STAFF = [{ id: 'u1', full_name: 'Colm Manager', role: 'manager', active: true, profile_locations: [{ location_id: 'loc1' }] }]
+const STAFF = [{ id: 'u1', full_name: 'Casey Manager', role: 'manager', active: true, profile_locations: [{ location_id: 'loc1' }] }]
 const MANAGER = { id: 'u1', role: 'manager', activeLocation: { id: 'loc1', name: 'Stillorgan' } }
 
 const NEAR_TEMPLATE = { ...TEMPLATE, id: 't2', name: 'Morning', start_time: '06:30', end_time: '09:00' }

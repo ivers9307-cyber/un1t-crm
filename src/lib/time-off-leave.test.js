@@ -8,7 +8,7 @@ import {
   leaveScopeOrFilter, canDecideTimeOff, timeOffApproverIdsFrom, entitlementDays,
   clashWindow, bucketClashCounts, getHolidayAllowance, ensureHolidayAllowanceRow,
   getNonWorkingDates, findLeaveClashes, decidingLocationIds, countLeaveClashes,
-  ownShiftPreviewRow, findOwnPublishedShifts, chargeableLeaveSegments, isRealIsoDate,
+  ownShiftPreviewRow, findOwnPublishedShifts, chargeableLeaveSegments,
   getOrgAdminLocationIdsByProfile, getProfileLocationIds,
   getPendingHolidayDays,
 } from './time-off-leave.js'
@@ -652,20 +652,6 @@ describe('chargeableLeaveSegments — who writes the no-holiday-list warning (LE
     const quiet = await chargeableLeaveSegments(db(), { ...args, quiet: true })
     expect(quiet).toEqual(loud)
     expect(logWarn).not.toHaveBeenCalled()
-  })
-})
-
-describe('isRealIsoDate (LEAVEPHONE.1)', () => {
-  it('accepts real calendar dates, leap days included', () => {
-    for (const d of ['2026-01-01', '2026-12-31', '2024-02-29', '2000-02-29', '2026-02-28']) expect(isRealIsoDate(d)).toBe(true)
-  })
-  it('refuses a date the calendar does not have — V8 would roll 30 Feb over to 2 Mar', () => {
-    for (const d of ['2026-02-30', '2026-02-29', '1900-02-29', '2026-04-31', '2026-13-01', '2026-00-10', '2026-06-00', '2026-13-45']) {
-      expect(isRealIsoDate(d)).toBe(false)
-    }
-  })
-  it('refuses anything that is not YYYY-MM-DD', () => {
-    for (const d of ['05/10/2026', '2026-6-1', '2026-06-01T00:00:00Z', '', null, undefined, 20260601]) expect(isRealIsoDate(d)).toBe(false)
   })
 })
 

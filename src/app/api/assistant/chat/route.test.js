@@ -500,6 +500,106 @@ describe('executeTool — safe empties when there is no active location', () => 
   })
 })
 
+// ── get_shifts_for_week — what a staff member may see, and the true times ──
+// SCHEDHYGIENE.1 — the tool reported the TEMPLATE's hours (a block moved off
+// its template, or a coach's own override, was invisible), showed a coach
+// the DRAFT roster no coach screen shows, and built the week's end from a
+// local-midnight Date read back as UTC: in Irish summer time the "week" ended
+// on Saturday.
+describe('executeTool get_shifts_for_week — published only for staff, true times, whole week', () => {
+  const STAFF = { locationId: 'loc-a', role: 'staff', userId: 'u-2' }
+  const tpl = { name: 'AM', start_time: '09:00:00', end_time: '17:00:00' }
+  const row = (id, date, { published = true, block = {}, override = {}, loc = 'loc-a' } = {}) => ({
+    id, profile_id: `p-${id}`, status: 'scheduled', profiles: { full_name: `Coach ${id}` },
+    start_time_override: override.start ?? null, end_time_override: override.end ?? null,
+    shift_blocks: {
+      location_id: loc, block_date: date, start_time: block.start ?? null, end_time: block.end ?? null,
+      shift_templates: tpl, rosters: { status: published ? 'published' : 'draft' },
+    },
+  })
+
+  // A published roster covering the whole test week, at loc-a only.
+  const WEEK_ROSTER = [{ location_id: 'loc-a', status: 'published', period_start: '2026-07-06', period_end: '2026-07-12' }]
+
+  it('a staff member sees published shifts only', async () => {
+    useDb({ rosters: WEEK_ROSTER, shift_assignments: [row('pub', '2026-07-07'), row('draft', '2026-07-08', { published: false })] })
+    const res = await executeTool('get_shifts_for_week', { start_date: '2026-07-06' }, STAFF)
+    expect(res.shifts.map(s => s.staff)).toEqual(['Coach pub'])
+  })
+
+  it('a manager sees the draft too, labelled as not published', async () => {
+    useDb({ rosters: WEEK_ROSTER, shift_assignments: [row('pub', '2026-07-07'), row('draft', '2026-07-08', { published: false })] })
+    const res = await executeTool('get_shifts_for_week', { start_date: '2026-07-06' }, MANAGER)
+    expect(res.shifts.map(s => [s.staff, s.published])).toEqual([['Coach pub', true], ['Coach draft', false]])
+  })
+
+  it('reports the shift\'s real hours: override, then block, then template', async () => {
+    useDb({ rosters: WEEK_ROSTER, shift_assignments: [
+      row('tpl', '2026-07-06'),
+      row('blk', '2026-07-07', { block: { start: '06:00:00', end: '10:00:00' } }),
+      row('ovr', '2026-07-08', { block: { start: '06:00:00', end: '10:00:00' }, override: { start: '07:30:00' } }),
+    ] })
+    const res = await executeTool('get_shifts_for_week', { start_date: '2026-07-06' }, MANAGER)
+    expect(res.shifts.map(s => s.time)).toEqual(['09:00–17:00', '06:00–10:00', '07:30–10:00'])
+  })
+
+  it('the week runs Monday to Sunday inclusive, in summer time too', async () => {
+    // Pinned: the old bug (a local-midnight Date read back as UTC) only shows
+    // on a clock ahead of UTC, so a CI box on UTC would pass it.
+    const tz = process.env.TZ
+    process.env.TZ = 'Europe/Dublin'
+    try {
+      useDb({ rosters: WEEK_ROSTER, shift_assignments: [row('mon', '2026-07-06'), row('sun', '2026-07-12'), row('next', '2026-07-13')] })
+      const res = await executeTool('get_shifts_for_week', { start_date: '2026-07-06' }, MANAGER)
+      expect(res.shifts.map(s => s.date)).toEqual(['2026-07-06', '2026-07-12'])
+      expect([res.week_start, res.week_end]).toEqual(['2026-07-06', '2026-07-12'])
+    } finally {
+      if (tz === undefined) delete process.env.TZ
+      else process.env.TZ = tz
+    }
+  })
+
+  it('any day of the week reads that whole Monday-to-Sunday week', async () => {
+    useDb({ rosters: WEEK_ROSTER, shift_assignments: [row('mon', '2026-07-06'), row('sun', '2026-07-12')] })
+    const res = await executeTool('get_shifts_for_week', { start_date: '2026-07-09' }, MANAGER)
+    expect([res.week_start, res.week_end]).toEqual(['2026-07-06', '2026-07-12'])
+    expect(res.shifts.map(s => s.date)).toEqual(['2026-07-06', '2026-07-12'])
+  })
+
+  it('names the days with no published roster, so a half-published week is not "nobody working"', async () => {
+    useDb({
+      rosters: [
+        { location_id: 'loc-a', status: 'published', period_start: '2026-07-06', period_end: '2026-07-08' },
+        { location_id: 'loc-a', status: 'draft', period_start: '2026-07-09', period_end: '2026-07-12' },
+        { location_id: 'loc-b', status: 'published', period_start: '2026-07-09', period_end: '2026-07-12' },
+      ],
+      shift_assignments: [row('mon', '2026-07-06'), row('thu', '2026-07-09', { published: false })],
+    })
+    const res = await executeTool('get_shifts_for_week', { start_date: '2026-07-06' }, STAFF)
+    expect(res.shifts.map(s => s.staff)).toEqual(['Coach mon'])
+    expect(res.unpublished_days).toEqual(['2026-07-09', '2026-07-10', '2026-07-11', '2026-07-12'])
+  })
+
+  it('a fully published week has no unpublished days, even with no shifts in it', async () => {
+    useDb({ rosters: WEEK_ROSTER, shift_assignments: [] })
+    const res = await executeTool('get_shifts_for_week', { start_date: '2026-07-06' }, STAFF)
+    expect(res).toMatchObject({ shifts: [], unpublished_days: [] })
+  })
+
+  it('never reads another studio', async () => {
+    useDb({ rosters: WEEK_ROSTER, shift_assignments: [row('a', '2026-07-07'), row('b', '2026-07-07', { loc: 'loc-b' })] })
+    const res = await executeTool('get_shifts_for_week', { start_date: '2026-07-06' }, MANAGER)
+    expect(res.shifts.map(s => s.staff)).toEqual(['Coach a'])
+  })
+
+  it('refuses a date the calendar does not have instead of guessing a week', async () => {
+    useDb({ shift_assignments: [row('a', '2026-03-02')] })
+    const res = await executeTool('get_shifts_for_week', { start_date: '2026-02-30' }, MANAGER)
+    expect(res.error).toMatch(/real date/i)
+    expect(res.shifts).toBeUndefined()
+  })
+})
+
 // ── TOOL_PERMISSIONS role gate still holds ───────────────────────────
 describe('executeTool — TOOL_PERMISSIONS gate is unchanged', () => {
   it('denies a staff role the manager-gated search_contacts (no query issued)', async () => {

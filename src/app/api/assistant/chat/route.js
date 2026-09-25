@@ -3,8 +3,10 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { anthropicMessages } from '@/lib/anthropic'
 import { recordUsage } from '@/lib/usage'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { dublinTodayStr, addDaysISO } from '@/lib/dublin-time'
 import { fetchScheduledShiftRows } from '@/lib/report-generator'
+import { fetchApiShiftRows } from '@/lib/roster-read'
+import { effectiveShiftStart, effectiveShiftEnd } from '@shared/roster-month'
 import { RATE_REPORT_VIEWER_ROLES } from '@/lib/report-access'
 import { shiftHours } from '@/lib/payroll'
 import { upsertShiftAssignment } from '@/lib/roster-write'
@@ -12,7 +14,7 @@ import { SYSTEM_PROMPT, TOOLS } from '@/lib/assistant-prompt'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
-import { MANAGER_ROLES, ADMIN_ROLES } from '@/lib/schemas'
+import { MANAGER_ROLES, ADMIN_ROLES, isRealCalendarDate } from '@/lib/schemas'
 import {
   splitSSEEvents,
   initTurn,
@@ -181,23 +183,56 @@ export async function executeTool(toolName, input, context) {
     case 'get_shifts_for_week': {
       // No location → no unscoped read.
       if (!locationId) return { shifts: [] }
-      const startDate = input.start_date
-      const endDate = new Date(new Date(startDate + 'T00:00:00').getTime() + 6 * 86400000).toISOString().split('T')[0]
-      // RETIRE-SHIFTS-MIRROR.3 — reads shift_assignments+shift_blocks now.
-      // ROSTER-FIX.5 — fetchScheduledShiftRows now returns { rows, error }; a
-      // failed read must reach the assistant as an error, not as an empty week
-      // it will happily narrate as "nobody is on shift".
-      const { rows: data, error: shiftsError } = await fetchScheduledShiftRows(db, { locationId, periodStart: startDate, periodEnd: endDate })
-      if (shiftsError) return { error: shiftsError }
-      data.sort((a, b) => String(a.shift_date).localeCompare(String(b.shift_date)))
+      if (!isRealCalendarDate(input.start_date)) return { error: 'start_date must be a real date, YYYY-MM-DD.' }
+      // SCHEDHYGIENE.1 — pure date arithmetic, snapped to the Monday of the
+      // week the date falls in (the tool promises Monday to Sunday; a model
+      // that passes a Thursday gets that Thursday's week). The end used to be
+      // a local-midnight Date read back through toISOString, so under Irish
+      // summer time it landed on Saturday and Sunday was never read.
+      const weekday = new Date(`${input.start_date}T00:00:00Z`).getUTCDay() // 0 = Sunday
+      const startDate = addDaysISO(input.start_date, -((weekday + 6) % 7))
+      const endDate = addDaysISO(startDate, 6)
+      // SCHEDHYGIENE.1 — the same read, and the same draft rule, as the
+      // coach's own schedule (GET /api/schedule/shifts): a non-manager sees
+      // published rosters only. This tool used to show a coach the draft
+      // week, which no coach screen shows. A failed read reaches the assistant
+      // as an error, never as an empty week it would narrate as "nobody is
+      // on shift" (ROSTER-FIX.5), and so does a truncated one.
+      const { rows, error: shiftsError, capped } = await fetchApiShiftRows(db, {
+        locationIds: [locationId], startDate, endDate, publishedOnly: !MANAGER_ROLES.includes(role),
+      })
+      if (shiftsError) return { error: `Failed to load shifts: ${shiftsError.message || shiftsError}` }
+      if (capped) return { error: 'Too many shifts to read for this week in one go.' }
+      // SCHEDHYGIENE.1 (review) — which days no published roster covers. A
+      // roster's period is whatever was requested, so a week can be half
+      // published: a coach then gets Monday to Wednesday and nothing after,
+      // which must read as "not published yet", never as "nobody working".
+      // Read here rather than through findPublishedRosterIdsByDate, which
+      // answers a failed read with "no roster" and would call every day
+      // unpublished.
+      const { data: published, error: rostersError } = await db.from('rosters')
+        .select('period_start, period_end')
+        .eq('location_id', locationId)
+        .eq('status', 'published')
+        .lte('period_start', endDate)
+        .gte('period_end', startDate)
+      if (rostersError) return { error: `Failed to load rosters: ${rostersError.message}` }
+      const weekDays = Array.from({ length: 7 }, (_, i) => addDaysISO(startDate, i))
+      const unpublishedDays = weekDays.filter(d => !(published || []).some(r => r.period_start <= d && r.period_end >= d))
       return {
-        shifts: (data || []).map(s => ({
+        week_start: startDate,
+        week_end: endDate,
+        unpublished_days: unpublishedDays,
+        shifts: rows.map(s => ({
           date: s.shift_date,
           staff: s.profiles?.full_name,
           shift: s.shift_templates?.name,
-          time: `${s.shift_templates?.start_time?.slice(0,5)}–${s.shift_templates?.end_time?.slice(0,5)}`,
+          // The hours the calendar shows: the coach's override, then the
+          // block, then the template. Was the template's alone.
+          time: `${effectiveShiftStart(s)?.slice(0, 5)}–${effectiveShiftEnd(s)?.slice(0, 5)}`,
           status: s.status,
-        }))
+          published: s.published,
+        })),
       }
     }
 

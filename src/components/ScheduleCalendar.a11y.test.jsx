@@ -69,7 +69,7 @@ const STAFFED_BLOCK = {
     start_time_override: '09:30',
     end_time_override: null,
     partial_reason: 'covered until 12',
-    profiles: { full_name: 'Sarah Doyle' },
+    profiles: { full_name: 'Sam Demo' },
   }],
 }
 
@@ -86,9 +86,9 @@ const UNSTAFFED_BLOCK = {
 }
 
 const STAFF = [
-  { id: 'u1', full_name: 'Colm Manager', role: 'manager', active: true, profile_locations: [{ location_id: 'loc1' }] },
-  { id: 'u2', full_name: 'Sarah Doyle', role: 'coach', active: true, profile_locations: [{ location_id: 'loc1' }] },
-  { id: 'u3', full_name: 'Mike Byrne', role: 'coach', active: true, profile_locations: [{ location_id: 'loc1' }] },
+  { id: 'u1', full_name: 'Casey Manager', role: 'manager', active: true, profile_locations: [{ location_id: 'loc1' }] },
+  { id: 'u2', full_name: 'Sam Demo', role: 'coach', active: true, profile_locations: [{ location_id: 'loc1' }] },
+  { id: 'u3', full_name: 'Max Beta', role: 'coach', active: true, profile_locations: [{ location_id: 'loc1' }] },
 ]
 
 const MANAGER = { id: 'u1', role: 'manager', activeLocation: { id: 'loc1', name: 'Stillorgan' } }
@@ -153,7 +153,7 @@ describe('week-view block card (ROSTER-FIX.6b)', () => {
     expect(card.getAttribute('role')).toBeNull()
     expect(card.getAttribute('tabindex')).toBeNull()
     // Its contents are separate nodes a screen reader can walk.
-    expect(card.textContent).toContain('Sarah Doyle')
+    expect(card.textContent).toContain('Sam Demo')
     expect(card.textContent).toContain('Adjusted hours')
     // The mouse-only hover hint is out of the accessibility tree.
     const hint = Array.from(card.querySelectorAll('div')).find(n => n.textContent.trim() === 'Click to manage')
@@ -165,7 +165,7 @@ describe('week-view block card (ROSTER-FIX.6b)', () => {
     // Seven columns of "Manage this shift" would be indistinguishable in a
     // controls list, and the whole card as a name is unreadable.
     expect(trigger.textContent).toMatch(/^Manage 9am Morning shift, \w+day,? \d+ \w+$/)
-    expect(trigger.textContent).not.toContain('Sarah Doyle')
+    expect(trigger.textContent).not.toContain('Sam Demo')
   })
 
   it('keeps aria-pressed on the button in select mode', async () => {
@@ -252,7 +252,7 @@ describe('the calendar overlays are dialogs (ROSTER-FIX.6b)', () => {
   it('SwapModal: a coach opens it from their own row and Escape closes it', async () => {
     const card = await renderCalendar(COACH)
     fireEvent.click(card)
-    fireEvent.click(screen.getByRole('button', { name: /Request a swap for Sarah Doyle/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Request a swap for Sam Demo/ }))
 
     const dialog = screen.getByRole('dialog')
     expect(dialogName(dialog)).toBe('Request Shift Swap')
@@ -274,9 +274,9 @@ describe('BlockDetailModal keeps an open row editor (ROSTER-FIX.6b-7)', () => {
     fireEvent.mouseDown(dialog.parentElement)
     expect(screen.queryByRole('dialog')).toBeNull()
 
-    // Re-open it and put Sarah's row into its inline times editor.
+    // Re-open it and put Sam's row into its inline times editor.
     fireEvent.click(cardButton('Morning'))
-    fireEvent.click(screen.getByRole('button', { name: 'Edit adjusted times for Sarah Doyle' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Edit adjusted times for Sam Demo' }))
     // The inline editor is open and holds unsaved times.
     expect(screen.getByRole('button', { name: /Save/ })).toBeTruthy()
 
@@ -309,7 +309,7 @@ describe('dismissOnBackdrop at the calendar call sites (ROSTER-FIX.6b-9)', () =>
     expect(dialogName(screen.getByRole('dialog'))).toBe('Morning')
 
     fireEvent.click(screen.getByRole('button', { name: /Add coach/i }))
-    fireEvent.click(screen.getByLabelText(/Mike Byrne/i, { selector: 'input' }))
+    fireEvent.click(screen.getByLabelText(/Max Beta/i, { selector: 'input' }))
     fireEvent.mouseDown(screen.getByRole('dialog').parentElement)
     expect(dialogName(screen.getByRole('dialog'))).toBe('Assign coaches')
   })
@@ -341,12 +341,12 @@ describe('dismissOnBackdrop at the calendar call sites (ROSTER-FIX.6b-9)', () =>
   it('SwapModal: dismisses while empty, refuses once a reason is typed', async () => {
     const card = await renderCalendar(COACH)
     fireEvent.click(card)
-    fireEvent.click(screen.getByRole('button', { name: /Request a swap for Sarah Doyle/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Request a swap for Sam Demo/ }))
     fireEvent.mouseDown(screen.getByRole('dialog').parentElement)
     expect(screen.queryByRole('dialog')).toBeNull()
 
     fireEvent.click(cardButton('Morning'))
-    fireEvent.click(screen.getByRole('button', { name: /Request a swap for Sarah Doyle/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Request a swap for Sam Demo/ }))
     fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Dentist' } })
     fireEvent.mouseDown(screen.getByRole('dialog').parentElement)
     expect(dialogName(screen.getByRole('dialog'))).toBe('Request Shift Swap')
@@ -368,9 +368,9 @@ describe('every icon-only control on the calendar has a name (ROSTER-FIX.6b)', (
   it('names the per-coach swap / adjust / remove icons after the coach', async () => {
     const card = await renderCalendar()
     fireEvent.click(card)
-    // Sarah's row carries an override, so the control offers to EDIT it.
-    expect(screen.getByRole('button', { name: 'Edit adjusted times for Sarah Doyle' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Remove Sarah Doyle from this shift' })).toBeTruthy()
+    // Sam's row carries an override, so the control offers to EDIT it.
+    expect(screen.getByRole('button', { name: 'Edit adjusted times for Sam Demo' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Remove Sam Demo from this shift' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Close' })).toBeTruthy()
   })
 
@@ -406,7 +406,7 @@ describe('unstaffed and adjusted read as text (ROSTER-FIX.6b)', () => {
     const lines = screen.getAllByTestId('month-line').map((n) => n.textContent)
     expect(lines).toContain('5pm Needs coach')
     // The staffed block names its coach instead of printing "9am 1/3".
-    expect(lines).toContain('9 Sarah')
+    expect(lines).toContain('9 Sam')
     // And the cell's "!1" is a status with words behind it.
     const spoken = screen.getAllByTestId('status-dot').map((n) => n.querySelector('.sr-only').textContent)
     expect(spoken).toContain('1 shift needs coaches: 1 with no coach')

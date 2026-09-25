@@ -3,13 +3,13 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds, assertLocationAccess, hasRoleAtLocation } from '@/lib/auth'
 import { validateBody, uuidLike } from '@/lib/validate'
-import { timeOffTypeSchema, MANAGER_ROLES } from '@/lib/schemas'
+import { timeOffTypeSchema, MANAGER_ROLES, isoDate, isRealCalendarDate } from '@/lib/schemas'
 import { notifyUsersOnce } from '@/lib/push-dedup'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import {
   getLocationMemberIds, getProfileLocationIds, leaveScopeOrFilter, canDecideTimeOff,
   resolveTimeOffApproverIds, getEmploymentType, getHolidayAllowance, ensureHolidayAllowanceRow,
-  countLeaveClashes, findLeaveClashes, chargeableLeaveSegments, findOwnPublishedShifts, isRealIsoDate,
+  countLeaveClashes, findLeaveClashes, chargeableLeaveSegments, findOwnPublishedShifts,
   getLocationIdsByProfile, getOrgAdminLocationIdsByProfile,
   getPendingHolidayDays,
 } from '@/lib/time-off-leave'
@@ -21,7 +21,10 @@ import {
   isTimeOffTypeAllowedFor, RESTRICTED_TYPE_ERROR, isExpiredPendingRequest, effectiveTimeOffStatus,
 } from '@shared/time-off'
 
-const ISO_DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD')
+// SCHEDHYGIENE.1 — the shared shape check plus the shared calendar check. The
+// pattern alone let 2026-02-30 through: V8 rolled it to 2 March for the day
+// count, and Postgres refused it at the insert with a 500.
+const ISO_DATE = isoDate.refine(isRealCalendarDate, 'Use a real date, YYYY-MM-DD')
 
 const TimeOffRequestSchema = z.object({
   // Use the shared catalogue (holiday/sick/unpaid/other/unavailable) — the
@@ -549,7 +552,7 @@ async function previewOwnLeave(user, searchParams) {
   const end = searchParams.get('end_date') || start
   // Real calendar dates, not only the pattern: 2026-02-30 fits YYYY-MM-DD and
   // V8 rolls it over to 2 March, which would answer 200 with a nonsense count.
-  if (!isRealIsoDate(start) || !isRealIsoDate(end)) {
+  if (!isRealCalendarDate(start) || !isRealCalendarDate(end)) {
     return NextResponse.json({ success: false, error: 'start_date and end_date must be real dates, YYYY-MM-DD' }, { status: 400 })
   }
   if (end < start) {

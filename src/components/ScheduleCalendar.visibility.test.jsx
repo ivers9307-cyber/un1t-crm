@@ -53,18 +53,18 @@ const SHORT_BLOCK = mkBlock({
   id: 'short', min_coaches: 2, rosters: PUBLISHED,
   shift_templates: { ...TEMPLATE, name: 'Early' },
   // One live coach plus a cancelled row, which must not count.
-  shift_assignments: [liveAssignment('u2', 'Sarah Doyle'), { id: 'x', profile_id: 'u3', status: 'cancelled', profiles: { full_name: 'Mike Byrne' } }],
+  shift_assignments: [liveAssignment('u2', 'Sam Demo'), { id: 'x', profile_id: 'u3', status: 'cancelled', profiles: { full_name: 'Max Beta' } }],
 })
 const EMPTY_BLOCK = mkBlock({ id: 'empty', start_time: '17:00', end_time: '18:00', shift_templates: { ...TEMPLATE, name: 'Consultation' } })
 const OK_BLOCK = mkBlock({
   id: 'ok', start_time: '12:00', end_time: '13:00', min_coaches: 1, rosters: PUBLISHED,
-  shift_templates: { ...TEMPLATE, name: 'Lunch' }, shift_assignments: [liveAssignment('u3', 'Mike Byrne')],
+  shift_templates: { ...TEMPLATE, name: 'Lunch' }, shift_assignments: [liveAssignment('u3', 'Max Beta')],
 })
 
 const STAFF = [
-  { id: 'u1', full_name: 'Colm Manager', role: 'manager', active: true, profile_locations: [{ location_id: 'loc1' }] },
-  { id: 'u2', full_name: 'Sarah Doyle', role: 'coach', active: true, profile_locations: [{ location_id: 'loc1' }] },
-  { id: 'u3', full_name: 'Mike Byrne', role: 'coach', active: true, profile_locations: [{ location_id: 'loc1' }] },
+  { id: 'u1', full_name: 'Casey Manager', role: 'manager', active: true, profile_locations: [{ location_id: 'loc1' }] },
+  { id: 'u2', full_name: 'Sam Demo', role: 'coach', active: true, profile_locations: [{ location_id: 'loc1' }] },
+  { id: 'u3', full_name: 'Max Beta', role: 'coach', active: true, profile_locations: [{ location_id: 'loc1' }] },
 ]
 const MANAGER = { id: 'u1', role: 'manager', activeLocation: { id: 'loc1', name: 'Stillorgan' } }
 const COACH = { id: 'u2', role: 'coach', activeLocation: { id: 'loc1', name: 'Stillorgan' } }
@@ -126,7 +126,7 @@ describe('below-minimum shifts (ROSTERVIS.1)', () => {
     await renderCalendar({ blocks: [OK_BLOCK] })
     const card = screen.getByTestId('shift-card')
     expect(within(card).getByTestId('shift-time').textContent).toBe('12–1pm')
-    expect(within(card).getByText('Mike Byrne')).toBeTruthy()
+    expect(within(card).getByText('Max Beta')).toBeTruthy()
     expect(within(card).getByTestId('shift-template').textContent).toBe('Lunch')
   })
 
@@ -467,7 +467,7 @@ describe('month view names the coaches (ROSTERLOOK.1)', () => {
   it('a manager reads time + first names, numbers only on the short line, and no "!1" / "↓1"', async () => {
     await renderMonth({ blocks: [SHORT_BLOCK, EMPTY_BLOCK, OK_BLOCK] })
     const lines = screen.getAllByTestId('month-line').map((n) => n.textContent)
-    expect(lines).toEqual(['9 Sarah (1 of 2)', '12pm Mike', '5pm Needs coach'])
+    expect(lines).toEqual(['9 Sam (1 of 2)', '12pm Max', '5pm Needs coach'])
     expect(document.body.textContent).not.toMatch(/[!↓]\d/)
     expect(document.body.textContent).not.toMatch(/\d+\/\d+/) // the old "1/3"
     const dot = screen.getByTestId('status-dot')
@@ -527,13 +527,13 @@ describe('the roster scrolls inside its own container, not the page (ROSTERLOOK.
 })
 
 describe('leave bars: one per person per day (ROSTERLOOK.1)', () => {
-  const leave = (id, type, start_date, end_date) => ({ id, profile_id: 'u2', type, status: 'approved', start_date, end_date, profiles: { full_name: 'Sarah Doyle' } })
+  const leave = (id, type, start_date, end_date) => ({ id, profile_id: 'u2', type, status: 'approved', start_date, end_date, profiles: { full_name: 'Sam Demo' } })
 
   it('two overlapping requests from one coach draw ONE bar, short enough for the column, with the rest in its title', async () => {
     await renderCalendar({ blocks: [OK_BLOCK], timeOff: [leave('t1', 'unavailable', BLOCK_DATE, BLOCK_DATE), leave('t2', 'unavailable', BLOCK_DATE, BLOCK_DATE)] })
     const bars = screen.getAllByTestId('leave-bar')
     expect(bars).toHaveLength(1)
-    expect(bars[0].textContent).toBe('Sarah · Unavailable')
-    expect(bars[0].getAttribute('title')).toMatch(/^Sarah Doyle — Unavailable, \d+ \w+ \(\+1 overlapping request\)$/)
+    expect(bars[0].textContent).toBe('Sam · Unavailable')
+    expect(bars[0].getAttribute('title')).toMatch(/^Sam Demo — Unavailable, \d+ \w+ \(\+1 overlapping request\)$/)
   })
 })
