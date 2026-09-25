@@ -148,8 +148,10 @@ export default function ShiftTemplateManager({ user }) {
   useEffect(() => { fetchQuals() }, [fetchQuals])
 
   const requiredIdsFor = (templateId) => (templateId && quals?.requirements?.[templateId]) || []
+  // The list chip names ACTIVE types only: the picker does not advise on an
+  // archived one, so the chip would promise a check that never happens.
   const requiredNamesFor = (templateId) => requiredIdsFor(templateId)
-    .map((id) => quals?.types.find((t) => t.id === id)?.name)
+    .map((id) => quals?.types.find((t) => t.id === id && t.active !== false)?.name)
     .filter(Boolean)
   // The editor offers active types, plus any archived type this template
   // already asks for (so it can be seen and removed).
@@ -181,7 +183,13 @@ export default function ShiftTemplateManager({ user }) {
 
     // QUALS.1 — requirements ride their own route, AFTER the template (a new
     // one has no id until it is created). Absent = the field was not shown.
-    const { required_qualification_type_ids: wantedQuals, ...templateFields } = formData
+    // The form sends both halves from the snapshot it took when it OPENED
+    // (TemplateFormModal), never from a catalogue that landed later.
+    const {
+      required_qualification_type_ids: wantedQuals,
+      required_qualification_type_ids_before: beforeQuals,
+      ...templateFields
+    } = formData
     const payload = {
       ...templateFields,
       location_id: locationId,
@@ -203,7 +211,7 @@ export default function ShiftTemplateManager({ user }) {
       setShowForm(false)
       fetchTemplates()
       if (Array.isArray(wantedQuals)) {
-        await saveRequirements(isEdit ? showForm.id : data.data?.id, isEdit ? requiredIdsFor(showForm.id) : [], wantedQuals)
+        await saveRequirements(isEdit ? showForm.id : data.data?.id, Array.isArray(beforeQuals) ? beforeQuals : [], wantedQuals)
       }
       // BLOCKEDIT.1 — shifts edited on their own on the calendar keep their
       // own times/staffing; say how many, so a template edit that did not
@@ -617,7 +625,15 @@ function TemplateFormModal({ template, onSave, onClose, qualificationTypes = nul
   const [classMin, setClassMin] = useState(null)
   // QUALS.1 — null types = the catalogue did not load: no field, and the
   // save carries no requirements at all.
-  const [requiredQuals, setRequiredQuals] = useState(requiredIds)
+  // QUALS.1 review 3 — a SNAPSHOT taken once, when the form opens. If the
+  // catalogue had not loaded by then, the form shows no field and sends no
+  // requirements key at all for its whole life (the PUT is skipped and the
+  // server keeps what it has), even if the catalogue lands while it is open:
+  // a form that opened with [] would otherwise save "requires nothing".
+  const [qualSnapshot] = useState(() => (Array.isArray(qualificationTypes)
+    ? { types: qualificationTypes, before: [...(requiredIds || [])] }
+    : null))
+  const [requiredQuals, setRequiredQuals] = useState(() => qualSnapshot?.before || [])
 
   function chooseKind(next) {
     if (next === kind) return
@@ -809,7 +825,7 @@ function TemplateFormModal({ template, onSave, onClose, qualificationTypes = nul
             />
           </div>
 
-          <TemplateQualificationsField types={qualificationTypes} selected={requiredQuals} onChange={setRequiredQuals} />
+          <TemplateQualificationsField types={qualSnapshot?.types || null} selected={requiredQuals} onChange={setRequiredQuals} />
 
           <div>
             <label className="block text-xs text-un1t-subtle mb-2">Colour</label>
@@ -846,7 +862,9 @@ function TemplateFormModal({ template, onSave, onClose, qualificationTypes = nul
               max_coaches: maxCoaches,
               min_coaches: minCoaches,
               kind,
-              ...(qualificationTypes ? { required_qualification_type_ids: requiredQuals } : {}),
+              ...(qualSnapshot
+                ? { required_qualification_type_ids: requiredQuals, required_qualification_type_ids_before: qualSnapshot.before }
+                : {}),
             })
           }
           disabled={!name || !startTime || !endTime}

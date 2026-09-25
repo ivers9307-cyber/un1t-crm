@@ -22,7 +22,7 @@ const TYPES = [
   { id: 'old', name: 'Old cert', active: false },
 ]
 
-async function renderManager({ quals = { types: TYPES, requirements: { 't-class': ['fa'] } }, qualsFail = false } = {}) {
+async function renderManager({ quals = { types: TYPES, requirements: { 't-class': ['fa'] } }, qualsFail = false, qualsGate = null } = {}) {
   const writes = []
   global.fetch = vi.fn(async (url, opts) => {
     const u = String(url)
@@ -31,6 +31,7 @@ async function renderManager({ quals = { types: TYPES, requirements: { 't-class'
       return { ok: true, status: opts.method === 'POST' ? 201 : 200, json: async () => ({ success: true, data: { id: 't-new' } }) }
     }
     if (u.startsWith('/api/schedule/template-qualifications')) {
+      if (qualsGate) await qualsGate
       return qualsFail
         ? { ok: false, status: 500, json: async () => ({ success: false, error: 'down' }) }
         : { ok: true, status: 200, json: async () => ({ success: true, data: quals }) }
@@ -73,6 +74,7 @@ describe('template editor — Requires', () => {
       'PUT /api/schedule/template-qualifications',
     ])
     expect(writes[0].body).not.toHaveProperty('required_qualification_type_ids')
+    expect(writes[0].body).not.toHaveProperty('required_qualification_type_ids_before')
     expect(writes[1].body).toEqual({ template_id: 't-class', qualification_type_ids: ['fa', 'ins'] })
   })
 
@@ -122,5 +124,47 @@ describe('template editor — Requires', () => {
     await save()
     expect(writes).toHaveLength(1)
     expect(writes[0].body).not.toHaveProperty('required_qualification_type_ids')
+  })
+})
+
+// QUALS.1 review 3 — the editor must never save requirements it did not load.
+describe('template editor — a slow catalogue', () => {
+  it('Edit opened before the catalogue lands: no field, and the save carries no requirements (the server keeps them)', async () => {
+    let release
+    const gate = new Promise((r) => { release = r })
+    const writes = await renderManager({ qualsGate: gate })
+    fireEvent.click(screen.getByRole('button', { name: 'Edit the Morning template' }))
+    expect(screen.queryByRole('checkbox', { name: 'First aid' })).toBeNull()
+    // The catalogue lands while the form is open: the form it opened with stays as it was.
+    await act(async () => { release(); await gate })
+    expect(screen.getByText('Requires First aid')).toBeTruthy()
+    expect(screen.queryByRole('checkbox', { name: 'First aid' })).toBeNull()
+    fireEvent.change(screen.getByPlaceholderText(/e\.g\. Morning/), { target: { value: 'Morning renamed' } })
+    await save()
+    expect(writes.map((w) => `${w.method} ${w.url}`)).toEqual(['PUT /api/schedule/templates/t-class'])
+    expect(writes[0].body).not.toHaveProperty('required_qualification_type_ids')
+    expect(writes[0].body.name).toBe('Morning renamed')
+  })
+
+  it('the requirements are the ones seen when the form opened: a refresh underneath does not change what is compared', async () => {
+    const writes = await renderManager()
+    fireEvent.click(screen.getByRole('button', { name: 'Edit the Morning template' }))
+    expect(screen.getByRole('checkbox', { name: 'First aid' }).checked).toBe(true)
+    fireEvent.click(screen.getByRole('checkbox', { name: 'First aid' }))
+    await save()
+    expect(writes[1]).toEqual({ url: '/api/schedule/template-qualifications', method: 'PUT', body: { template_id: 't-class', qualification_type_ids: [] } })
+  })
+})
+
+describe('template list — archived types', () => {
+  it('the chip leaves out an archived type (the picker does not advise on it)', async () => {
+    await renderManager({ quals: { types: TYPES, requirements: { 't-class': ['fa', 'old'] } } })
+    expect(screen.getByText('Requires First aid')).toBeTruthy()
+    expect(screen.queryByText(/Old cert/)).toBeNull()
+  })
+
+  it('a template whose only requirement is archived shows no chip', async () => {
+    await renderManager({ quals: { types: TYPES, requirements: { 't-class': ['old'] } } })
+    expect(screen.queryByText(/^Requires /)).toBeNull()
   })
 })
