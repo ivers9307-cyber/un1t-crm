@@ -21,6 +21,12 @@ import { normaliseBriefing } from '@shared/shift-briefing'
 
 export const BLOCK_EDIT_FIELDS = ['start_time', 'end_time', 'min_coaches', 'max_coaches', 'briefing']
 
+// The `details.source` every change-log row this edit writes carries: the
+// coachless block_edited row and each coach's time_changed row. The notice arm
+// (block-edit-notify.js) reads rows by it. Declared here, in the pure module,
+// so the route does not import the push stack just for a string.
+export const TIME_CHANGE_SOURCE = 'block_edit'
+
 /** 'HH:MM' or 'HH:MM:SS…' → 'HH:MM:SS'; null for anything else. Postgres `time` renders HH:MM:SS. */
 export function toHms(t) {
   if (typeof t !== 'string') return null
@@ -139,7 +145,7 @@ export function planBlockEdit({ block, body = {} }) {
   }
 
   // D4 — the coachless block_edited row. What changed, never the briefing text.
-  const blockDetails = { source: 'block_edit' }
+  const blockDetails = { source: TIME_CHANGE_SOURCE }
   if (timesChanged) {
     blockDetails.from = { start_time: prior.start, end_time: prior.end }
     blockDetails.to = { start_time: next.start, end_time: next.end }

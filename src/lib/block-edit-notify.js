@@ -32,11 +32,11 @@ import { formatShiftDate } from './roster-change-notify'
 import { formatTimeRange12h } from './schedule-overlap'
 import { inStaffPushHours, staffWallClockHHMM } from './staff-push-hours'
 import { isLiveAssignment } from './roster'
-import { toHms, sameWindow } from './block-edit'
+import { toHms, sameWindow, TIME_CHANGE_SOURCE } from './block-edit'
 import { dublinDayStr } from './dublin-time'
 import { logWarn, logError } from './log'
 
-export const TIME_CHANGE_SOURCE = 'block_edit'
+export { TIME_CHANGE_SOURCE }
 export const TIME_CHANGE_WINDOW_MS = 48 * 60 * 60 * 1000
 // PostgREST returns at most 1,000 rows per select (CLAUDE.md). A backlog that
 // size means something upstream is broken; it is reported, and the rest is
