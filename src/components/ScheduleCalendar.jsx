@@ -1467,6 +1467,11 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
           once the assign-coach modal closes. */}
       {blockDetail && !assignTarget && (
         <BlockDetailModal
+          // BLOCKEDIT.1 third check — keyed by the shift, so a deep link
+          // (focusShift → pendingShift) that swaps the block while the edit
+          // form is open REMOUNTS the dialog: the form's opened values belong
+          // to the shift it was opened on, never the one that replaced it.
+          key={blockDetail.id}
           block={blockDetail}
           user={user}
           isManager={isManager}

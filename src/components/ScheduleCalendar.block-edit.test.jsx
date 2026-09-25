@@ -34,11 +34,11 @@ const STAFF = [
 const MANAGER = { id: 'u1', role: 'manager', activeLocation: { id: 'loc1', name: 'Stillorgan' } }
 const COACH = { id: 'u2', role: 'coach', activeLocation: { id: 'loc1', name: 'Stillorgan' } }
 
-function mockFetch() {
+function mockFetch(blocks = [BLOCK]) {
   return vi.fn((url, init) => {
     const body = init?.method === 'PUT'
       ? { success: true, data: { id: 'b1' }, notice: { coaches: 1, when: 'shortly' } }
-      : url.includes('/api/schedule/blocks') ? { success: true, data: [BLOCK] }
+      : url.includes('/api/schedule/blocks') ? { success: true, data: blocks }
         : url.includes('/api/schedule/templates') ? { success: true, data: [TEMPLATE] }
           : url.includes('/api/staff') ? { success: true, data: STAFF }
             : url.includes('/api/schedule/time-off') ? { success: true, data: [] }
@@ -89,3 +89,24 @@ describe('shift dialog — briefing and edit (BLOCKEDIT.1)', () => {
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 })
+
+// Third check 1 — a deep link (focusShift, e.g. from the Studio Overview)
+// swaps the block shown while the edit form is open. The dialog must remount,
+// or the form would carry the FIRST shift's opened values into a save against
+// the second.
+describe('shift dialog — a deep link to another shift while editing (third check 1)', () => {
+  it('remounts the dialog: the edit form closes and the new shift is shown', async () => {
+    const EVENING = { ...BLOCK, id: 'b2', start_time: '17:00', end_time: '20:00', briefing: null, shift_templates: { ...TEMPLATE, name: 'Evening' }, shift_assignments: [] }
+    global.fetch = mockFetch([BLOCK, EVENING])
+    let rerender
+    await act(async () => { ({ rerender } = render(<ScheduleCalendar user={MANAGER} />)) })
+    fireEvent.click(screen.getByRole('button', { name: /^Manage .*Morning shift,/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Edit shift' }))
+    expect(screen.getByRole('form', { name: 'Edit shift' })).toBeTruthy()
+
+    await act(async () => { rerender(<ScheduleCalendar user={MANAGER} focusShift={{ seq: 1, date: BLOCK_DATE, blockId: 'b2' }} />) })
+    expect(screen.getByRole('dialog').textContent).toMatch(/Evening/)
+    expect(screen.queryByRole('form', { name: 'Edit shift' })).toBeNull()
+  })
+})
+
