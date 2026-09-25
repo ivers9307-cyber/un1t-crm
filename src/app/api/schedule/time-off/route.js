@@ -64,6 +64,15 @@ export async function GET(request) {
   const endDate = searchParams.get('end_date')
   const status = searchParams.get('status')
   const profileId = searchParams.get('profile_id')
+  // DATECHECK.1 — the list's range bounds reach Postgres as they are, and it
+  // refuses 2026-02-30 with a 400 carrying its own text (after the member read
+  // had run). Refuse it first, in change-log's words. The preview above has its
+  // own check. Absent or empty = no bound, as before.
+  for (const [name, value] of [['start_date', startDate], ['end_date', endDate]]) {
+    if (value && !isRealCalendarDate(value)) {
+      return NextResponse.json({ success: false, error: `${name}: not a real date` }, { status: 400 })
+    }
+  }
   const db = createServerClient()
 
   // Every filter is recorded, then applied to whichever select is sent, so the
