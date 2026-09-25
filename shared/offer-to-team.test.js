@@ -63,8 +63,8 @@ describe('offerRefusal', () => {
 
 describe('offerStateLabel (the manager\'s line)', () => {
   it('says whether and how the team was told', () => {
-    expect(offerStateLabel({ notice_state: 'sent', broadcast_count: 4 })).toBe('Offered to the team · sent to 4 coaches')
-    expect(offerStateLabel({ notice_state: 'sent', broadcast_count: 1 })).toBe('Offered to the team · sent to 1 coach')
+    expect(offerStateLabel({ notice_state: 'sent', broadcast_count: 4 })).toBe('Offered to 4 coaches')
+    expect(offerStateLabel({ notice_state: 'sent', broadcast_count: 1 })).toBe('Offered to 1 coach')
     expect(offerStateLabel({ notice_state: 'nobody', broadcast_count: 0 })).toBe('Offered to the team · nobody is free to ask')
     expect(offerStateLabel({ notice_state: 'sending' })).toBe('Offered to the team · telling coaches now')
     expect(offerStateLabel({ notice_state: 'morning' })).toBe('Offered to the team · coaches are told from 7am')

@@ -30,7 +30,7 @@ describe('OfferToTeamControl', () => {
   it('an open offer shows its state and Withdraw', () => {
     const onWithdraw = vi.fn()
     render(<OfferToTeamControl block={BLOCK} offer={{ id: 'o1', notice_state: 'sent', broadcast_count: 3 }} todayIso={TODAY} onOffer={vi.fn()} onWithdraw={onWithdraw} />)
-    expect(screen.getByText('Offered to the team · sent to 3 coaches')).toBeTruthy()
+    expect(screen.getByText('Offered to 3 coaches')).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Offer to team' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Withdraw offer' }))
     expect(onWithdraw).toHaveBeenCalledTimes(1)

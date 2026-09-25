@@ -67,12 +67,17 @@ export function offerRefusal(block, { todayIso, started = false, hasOpenOffer = 
   return null
 }
 
-/** The manager's one-line state of an open offer (GET ?view=manage row). */
+/**
+ * The manager's one-line state of an open offer (GET ?view=manage row).
+ * 'sent' reads "Offered to N coaches" (review 5): broadcast_count is how many
+ * coaches it was OFFERED to, the recipients asked, not how many phones took
+ * the push (an opted-out coach is still offered it, on Today).
+ */
 export function offerStateLabel(offer) {
   const base = 'Offered to the team'
   const n = Number(offer?.broadcast_count) || 0
   switch (offer?.notice_state) {
-    case 'sent': return `${base} · sent to ${n} ${n === 1 ? 'coach' : 'coaches'}`
+    case 'sent': return `Offered to ${n} ${n === 1 ? 'coach' : 'coaches'}`
     case 'nobody': return `${base} · nobody is free to ask`
     case 'sending': return `${base} · telling coaches now`
     case 'morning': return `${base} · coaches are told from 7am`
