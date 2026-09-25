@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  blockFillState, liveBlockAssignments, adjustTargetFor, assignmentWindow,
+  blockFillState, emptyBlockText, liveBlockAssignments, adjustTargetFor, assignmentWindow,
   filterAssignableCoaches, canAdjustShiftTimes, canCancelTimeOff, scheduleViewFromParam,
   rosterKey, rosterLoadOutcome, staffLoadOutcome, STAFF_LOAD_FAILED, isCurrentLoad,
 } from './schedule-manage'
@@ -363,5 +363,17 @@ describe('blockFillState — admin shifts (SHIFTTYPE.1)', () => {
 
   it('a class block is unchanged', () => {
     expect(blockFillState(block(0, 1, 3, { shift_templates: { kind: 'class' } }), TODAY)).toMatchObject({ state: 'empty', label: 'No coach' })
+  })
+})
+
+// SHIFTTYPE.1 — the line an empty block shows. Admin matches the web card
+// ("Nobody assigned"); a class block keeps its wording.
+describe('emptyBlockText', () => {
+  it('an admin block reads "Nobody assigned"', () => {
+    expect(emptyBlockText(block(0, 0, 3, { shift_templates: { kind: 'admin' } }))).toBe('Nobody assigned')
+  })
+  it('a class block, or one whose kind cannot be read, is unchanged', () => {
+    expect(emptyBlockText(block(0, 1, 3, { shift_templates: { kind: 'class' } }))).toBe('No one assigned yet.')
+    expect(emptyBlockText(block(0, 1, 3))).toBe('No one assigned yet.')
   })
 })

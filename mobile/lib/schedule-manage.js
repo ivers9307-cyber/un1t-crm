@@ -56,6 +56,13 @@ export function blockFillState(block, todayIso) {
   return { state, count, min, max, label }
 }
 
+// SHIFTTYPE.1 — the line under an empty block. An admin shift has no minimum,
+// so it says what the web card says ("Nobody assigned"); a class block keeps
+// its wording.
+export function emptyBlockText(block) {
+  return isAdminShift(block) ? 'Nobody assigned' : 'No one assigned yet.'
+}
+
 // MOBILESCHED.2 — the shift-like row Manage mode hands the screen's
 // AdjustSheet. AdjustSheet measures an edit against `block_start_time` /
 // `block_end_time` (the /shifts row's keys) and saves `null` = "inherit the

@@ -4,7 +4,7 @@ import { View, Text, Pressable } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { timeRange, dublinTodayIso } from '../../lib/dates'
 import { effShiftStart, effShiftEnd, initials } from '../../lib/schedule-team'
-import { blockFillState, liveBlockAssignments, assignmentWindow } from '../../lib/schedule-manage'
+import { blockFillState, emptyBlockText, liveBlockAssignments, assignmentWindow } from '../../lib/schedule-manage'
 
 // MOBILESCHED.2 — empty and short are different chips, as on the web calendar:
 // red "No coach", amber "1 of 2". Over capacity stays red. SHIFTTYPE.1 — an
@@ -33,7 +33,7 @@ export default function BlockCard({ block, busy, onAddCoach, onCoachPress }) {
       </View>
 
       {coaches.length === 0 ? (
-        <Text className="text-[12px] text-un1t-muted italic mb-1">No one assigned yet.</Text>
+        <Text className="text-[12px] text-un1t-muted italic mb-1">{emptyBlockText(block)}</Text>
       ) : coaches.map((a) => {
         const adj = !!(a.start_time_override || a.end_time_override)
         const win = adj ? assignmentWindow(block, a) : null
