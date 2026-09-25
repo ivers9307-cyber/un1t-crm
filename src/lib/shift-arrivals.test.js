@@ -234,3 +234,123 @@ describe('ownLocationIds', () => {
     expect(ownLocationIds(null, ME)).toEqual([])
   })
 })
+
+// ── fetchOwnArrivalFacts ──────────────────────────────────────────
+const { fetchOwnArrivalFacts, OWN_ARRIVAL_ID_CHUNK } = await import('./shift-arrivals')
+const { logWarn } = await import('./log')
+
+// Records EVERY query with its filters; `result(q)` answers per query.
+function mockDb(result) {
+  const queries = []
+  return {
+    queries,
+    from(t) {
+      const q = { table: t, select: null, filters: [] }
+      queries.push(q)
+      const b = {
+        select: (c) => { q.select = c; return b },
+        eq: (c, v) => { q.filters.push(['eq', c, v]); return b },
+        in: (c, v) => { q.filters.push(['in', c, v]); return b },
+        then: (res, rej) => Promise.resolve(result(q)).then(res, rej),
+      }
+      return b
+    },
+  }
+}
+const ok = (data) => ({ data, error: null })
+const answers = (byTable) => (q) => byTable[q.table](q)
+const geoOn = { geofence: { enabled: true, latitude: 53.29, longitude: -6.2, radius_m: 100 } }
+
+describe('fetchOwnArrivalFacts', () => {
+  it('reads stamps keyed on the caller AND bounded to their own ids; tracking keyed on the caller', async () => {
+    const db = mockDb(answers({
+      shift_assignments: () => ok([{ id: 'a1', arrived_at: '2026-09-24T05:52:00.000Z', arrival_source: 'geofence' }, { id: 'a2', arrived_at: null, arrival_source: null }]),
+      locations: () => ok([{ id: L1, timezone: 'Europe/Dublin', settings: geoOn }, { id: L2, timezone: 'Europe/Dublin', settings: {} }]),
+      profile_locations: () => ok([{ location_id: L1, geofence_exempt: false }, { location_id: L2, geofence_exempt: false }]),
+    }))
+    const f = await fetchOwnArrivalFacts(db, ME, ['a1', 'a2'], [L1, L2])
+
+    const sa = db.queries.find((q) => q.table === 'shift_assignments')
+    expect(sa.select).toBe('id, arrived_at, arrival_source')
+    expect(sa.filters).toEqual([['eq', 'profile_id', ME], ['in', 'id', ['a1', 'a2']]])
+    const pl = db.queries.find((q) => q.table === 'profile_locations')
+    expect(pl.select).toBe('location_id, geofence_exempt')
+    expect(pl.filters).toEqual([['eq', 'profile_id', ME], ['in', 'location_id', [L1, L2]]])
+    const lo = db.queries.find((q) => q.table === 'locations')
+    expect(lo.select).toBe('id, timezone, settings')
+    expect(lo.filters).toEqual([['in', 'id', [L1, L2]]])
+
+    expect([...f.stamps.keys()]).toEqual(['a1'])           // a row with no arrival is not a stamp
+    expect(f.timezones.get(L1)).toBe('Europe/Dublin')
+    expect(Object.fromEntries(f.tracked)).toEqual({ [L1]: true, [L2]: false }) // L2 geofence not configured
+  })
+
+  it('an exempt coach is not tracked; no membership row is not tracked', async () => {
+    const db = mockDb(answers({
+      shift_assignments: () => ok([]),
+      locations: () => ok([{ id: L1, timezone: null, settings: geoOn }, { id: L2, timezone: null, settings: geoOn }]),
+      profile_locations: () => ok([{ location_id: L1, geofence_exempt: true }]),
+    }))
+    const f = await fetchOwnArrivalFacts(db, ME, ['a1'], [L1, L2])
+    expect(Object.fromEntries(f.tracked)).toEqual({ [L1]: false, [L2]: false })
+  })
+
+  it('chunks the stamps read past OWN_ARRIVAL_ID_CHUNK ids', async () => {
+    const ids = Array.from({ length: OWN_ARRIVAL_ID_CHUNK + 5 }, (_, i) => `a${i}`)
+    const db = mockDb(answers({ shift_assignments: () => ok([]), locations: () => ok([]), profile_locations: () => ok([]) }))
+    await fetchOwnArrivalFacts(db, ME, ids, [L1])
+    const reads = db.queries.filter((q) => q.table === 'shift_assignments')
+    expect(reads).toHaveLength(2)
+    expect(reads[0].filters[1][2]).toHaveLength(OWN_ARRIVAL_ID_CHUNK)
+    expect(reads[1].filters[1][2]).toHaveLength(5)
+  })
+
+  it('no viewer or no own ids costs no query at all', async () => {
+    const db = mockDb(() => { throw new Error('should not query') })
+    expect(await fetchOwnArrivalFacts(db, ME, [], [L1])).toEqual({ stamps: new Map(), timezones: new Map(), tracked: new Map() })
+    expect(await fetchOwnArrivalFacts(db, null, ['a1'], [L1])).toEqual({ stamps: new Map(), timezones: new Map(), tracked: new Map() })
+    expect(db.queries).toHaveLength(0)
+  })
+
+  it('a failed stamps read is null (unknown), logged, never thrown', async () => {
+    logWarn.mockClear()
+    const db = mockDb(answers({
+      shift_assignments: () => ({ data: null, error: { message: 'boom' } }),
+      locations: () => ok([{ id: L1, timezone: 'Europe/Dublin', settings: geoOn }]),
+      profile_locations: () => ok([{ location_id: L1, geofence_exempt: false }]),
+    }))
+    const f = await fetchOwnArrivalFacts(db, ME, ['a1'], [L1])
+    expect(f.stamps).toBeNull()
+    expect(f.tracked.get(L1)).toBe(true)
+    expect(logWarn).toHaveBeenCalledWith('schedule', expect.stringContaining('arrivals'), expect.anything())
+  })
+
+  it('a failed membership read makes tracking unknown (null) but keeps the timezones', async () => {
+    const db = mockDb(answers({
+      shift_assignments: () => ok([]),
+      locations: () => ok([{ id: L1, timezone: 'Europe/Dublin', settings: geoOn }]),
+      profile_locations: () => ({ data: null, error: { message: 'boom' } }),
+    }))
+    const f = await fetchOwnArrivalFacts(db, ME, ['a1'], [L1])
+    expect(f.tracked).toBeNull()
+    expect(f.timezones.get(L1)).toBe('Europe/Dublin')
+  })
+
+  it('a failed locations read makes tracking unknown and leaves the timezones empty (Dublin)', async () => {
+    const db = mockDb(answers({
+      shift_assignments: () => ok([]),
+      locations: () => ({ data: null, error: { message: 'boom' } }),
+      profile_locations: () => ok([]),
+    }))
+    const f = await fetchOwnArrivalFacts(db, ME, ['a1'], [L1])
+    expect(f.tracked).toBeNull()
+    expect(f.timezones.size).toBe(0)
+  })
+
+  it('a read that throws is caught', async () => {
+    const db = mockDb(() => { throw new Error('socket hang up') })
+    const f = await fetchOwnArrivalFacts(db, ME, ['a1'], [L1])
+    expect(f.stamps).toBeNull()
+    expect(f.tracked).toBeNull()
+  })
+})

@@ -30,7 +30,9 @@
 // stamps read gives every row `arrival: null`, which the phone renders as
 // nothing, not as "No arrival recorded".
 
+import { logWarn } from './log'
 import { resolveScheduledAt, inferContinuousArrivals, arrivalToTimeOnly } from './staff-attendance'
+import { geofenceFromLocationSettings, geofenceIsConfigured } from './geofence-attendance'
 import { resolveTz, dayStrInTz } from './tz-time'
 import { effectiveShiftStart, effectiveShiftEnd } from '@shared/roster-month'
 
@@ -151,4 +153,69 @@ export function annotateOwnArrivals(rows, facts, viewerId) {
       },
     }
   })
+}
+
+// Ids per stamps query. A coach has a handful of shifts a week, so a chunk
+// is far under the 1,000-row select cap and ~4KB of `in.(…)` on the URL
+// (the same bound as shift-open-swaps.js).
+export const OWN_ARRIVAL_ID_CHUNK = 100
+
+const uniq = (xs) => [...new Set((Array.isArray(xs) ? xs : []).filter(Boolean))]
+
+async function readStamps(db, viewerId, ids) {
+  try {
+    const out = new Map()
+    for (let i = 0; i < ids.length; i += OWN_ARRIVAL_ID_CHUNK) {
+      const { data, error } = await db.from('shift_assignments')
+        .select('id, arrived_at, arrival_source')
+        .eq('profile_id', viewerId)
+        .in('id', ids.slice(i, i + OWN_ARRIVAL_ID_CHUNK))
+      if (error) throw error
+      for (const r of data || []) if (r?.id && r.arrived_at) out.set(r.id, r)
+    }
+    return out
+  } catch (err) {
+    logWarn('schedule', 'own arrivals read failed; shifts returned without arrival', { err: err?.message || String(err) })
+    return null
+  }
+}
+
+// Tracking = the studio's geofence is configured AND the caller is not exempt
+// there: the same rule GET /api/attendance/geofence-config uses to pick the
+// regions the phone registers. Timezones survive a failed membership read.
+async function readTracking(db, viewerId, locIds) {
+  const timezones = new Map()
+  if (locIds.length === 0) return { timezones, tracked: new Map() }
+  try {
+    const [locRes, linkRes] = await Promise.all([
+      db.from('locations').select('id, timezone, settings').in('id', locIds),
+      db.from('profile_locations').select('location_id, geofence_exempt').eq('profile_id', viewerId).in('location_id', locIds),
+    ])
+    if (locRes.error) throw locRes.error
+    for (const l of locRes.data || []) timezones.set(l.id, l.timezone ?? null)
+    if (linkRes.error) throw linkRes.error
+    const notExempt = new Set((linkRes.data || []).filter((l) => !l.geofence_exempt).map((l) => l.location_id))
+    const tracked = new Map()
+    for (const l of locRes.data || []) {
+      tracked.set(l.id, notExempt.has(l.id) && geofenceIsConfigured(geofenceFromLocationSettings(l.settings)))
+    }
+    return { timezones, tracked }
+  } catch (err) {
+    logWarn('schedule', 'arrival tracking read failed; absence will not be shown', { err: err?.message || String(err) })
+    return { timezones, tracked: null }
+  }
+}
+
+/**
+ * Facts for annotateOwnArrivals. Bounded twice: keyed on the caller (a per-user
+ * row: the owner check IS the access rule) and on the caller's own assignment
+ * ids / studios in the payload. A caller with no own row costs no query.
+ * Never throws: a failed read is `null` (unknown), never "no arrival".
+ */
+export async function fetchOwnArrivalFacts(db, viewerId, ownIds, locationIds) {
+  const ids = uniq(ownIds)
+  const locs = uniq(locationIds)
+  if (!viewerId || ids.length === 0) return { stamps: new Map(), timezones: new Map(), tracked: new Map() }
+  const [stamps, tracking] = await Promise.all([readStamps(db, viewerId, ids), readTracking(db, viewerId, locs)])
+  return { stamps, ...tracking }
 }
