@@ -3,6 +3,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess, getUserLocationIds, hasRoleAtLocation } from '@/lib/auth'
 import { fetchApiShiftRows } from '@/lib/roster-read'
 import { fetchOwnOpenSwaps, annotateOwnOpenSwaps, ownShiftIds } from '@/lib/shift-open-swaps'
+import { fetchOwnArrivalFacts, annotateOwnArrivals, ownLocationIds } from '@/lib/shift-arrivals'
 import { MANAGER_ROLES, isRealCalendarDate } from '@/lib/schemas'
 
 // RETIRE-SHIFTS-MIRROR.5d — GET reads the Roster v2 model (shift_blocks +
@@ -64,6 +65,14 @@ export async function GET(request) {
   // COVERLOOP.2 — the caller's OWN rows say whether a swap is open on them
   // (the phone's "Swap pending" chip). Keyed on the caller AND bounded to the
   // caller's own assignment ids in this payload; no own rows = no query.
-  const ownOpenSwaps = await fetchOwnOpenSwaps(db, user.id, ownShiftIds(rows, user.id))
-  return NextResponse.json({ success: true, data: annotateOwnOpenSwaps(rows, ownOpenSwaps, user.id) })
+  // ARRIVALSHOW.1 — and what the app recorded as their arrival (the Schedule
+  // tab's arrival line). Same bounds, same rule: own rows only, never throws,
+  // and an unreadable arrival is null on every row, never "not recorded".
+  const ownIds = ownShiftIds(rows, user.id)
+  const [ownOpenSwaps, arrivalFacts] = await Promise.all([
+    fetchOwnOpenSwaps(db, user.id, ownIds),
+    fetchOwnArrivalFacts(db, user.id, ownIds, ownLocationIds(rows, user.id)),
+  ])
+  const withSwaps = annotateOwnOpenSwaps(rows, ownOpenSwaps, user.id)
+  return NextResponse.json({ success: true, data: annotateOwnArrivals(withSwaps, arrivalFacts, user.id) })
 }
