@@ -4,6 +4,12 @@
 // the leave bars, and the assign picker badges them. Advisory: the row stays
 // tickable. A coach's calendar never asks for availability at all. No fake
 // timers anywhere in this file.
+//
+// CANDIDATES.1 moved the picker badge's SOURCE: it is the server's ranked
+// answer (GET /api/schedule/blocks/[id]/candidates, judged against the
+// effective window), not the rules the calendar loaded for its shading. The
+// words and the title are unchanged. The shading still reads the calendar's
+// rules.
 
 import React from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -20,7 +26,6 @@ vi.mock('next/navigation', () => ({
 vi.mock('./RosterSummaryPanel', () => ({ default: () => null }))
 
 import ScheduleCalendar from './ScheduleCalendar.jsx'
-import { AVAILABILITY_NOT_FLAGGED_MESSAGE } from './schedule/SchedulePartialLoadNote'
 
 const LOC = 'loc1'
 const manager = { id: 'u1', role: 'manager', activeLocation: { id: LOC, name: 'Studio A' } }
@@ -42,6 +47,24 @@ const availability = [
 
 const ok = (body) => ({ ok: true, status: 200, json: async () => body })
 
+// The server's answer for the picker: Busy Coach has a rule touching the
+// shift, Free Coach is free. `over` patches the answer per test.
+const free = { free: true, busy: null, on_leave: null, unavailable: null, on_site: null, rest_gap: null, week_over: null, contracted_hours: null, week_minutes: 0 }
+function candidatesAnswer({ busyUnavailable = { summary: '10am–11am', detail: 'Wednesdays, 10am–11am (School run)' }, checked = {} } = {}) {
+  return {
+    success: true,
+    data: {
+      audience: 'manager', block_id: 'b1', untimed: 0,
+      checked: { shifts: true, cross_studio: true, leave: true, availability: true, contract: true, ...checked },
+      candidates: [
+        { ...free, profile_id: 'c-free', full_name: 'Free Coach', role: 'staff', rank: 1, tier: 'ready' },
+        { ...free, profile_id: 'c-busy', full_name: 'Busy Coach', role: 'staff', rank: 2, tier: busyUnavailable ? 'unavailable' : 'ready', unavailable: busyUnavailable },
+      ],
+    },
+  }
+}
+let answer = candidatesAnswer()
+
 // "Today" is the Wednesday on screen, so weekly rules are drawn (they are
 // drawn from today on only). Only Date is faked: RTL's findBy/waitFor keep
 // the real timers, so no clock is advanced anywhere in this file.
@@ -50,7 +73,10 @@ const setToday = (y, m, d) => vi.setSystemTime(new Date(y, m - 1, d, 12, 0, 0))
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] })
   setToday(2026, 5, 6)
+  answer = candidatesAnswer()
   global.fetch = vi.fn(async (url) => {
+    // Before '/schedule/blocks': the candidates URL contains it too.
+    if (url.includes('/candidates')) return ok(answer)
     if (url.includes('/schedule/availability')) return ok({ success: true, data: availability })
     if (url.includes('/schedule/blocks')) return ok({ success: true, data: [block] })
     if (url.includes('/api/staff')) return ok({ success: true, data: staff })
@@ -107,7 +133,7 @@ describe("availability on the manager's week view (AVAIL.1)", () => {
 
   it('badges the coach in the picker, and the row can still be ticked', async () => {
     await openAssignPicker()
-    const badge = screen.getByText('Unavailable: 10am–11am')
+    const badge = await screen.findByText('Unavailable: 10am–11am')
     expect(badge.getAttribute('title')).toBe('Wednesdays, 10am–11am (School run)')
     const checkbox = badge.closest('label').querySelector('input[type="checkbox"]')
     expect(checkbox.disabled).toBe(false)
@@ -118,26 +144,31 @@ describe("availability on the manager's week view (AVAIL.1)", () => {
     expect(submit.disabled).toBe(false)
   })
 
-  it('no badge when the window does not touch the shift', async () => {
-    availability[0] = { ...availability[0], start_time: '12:00', end_time: '13:00' }
-    try {
-      await openAssignPicker()
-      expect(screen.getByText('Busy Coach').closest('li').textContent).not.toMatch(/Unavailable/)
-    } finally {
-      availability[0] = { ...availability[0], start_time: '10:00', end_time: '11:00' }
-    }
+  it("no badge when the server says the rule does not touch the shift, whatever the calendar's own rules say", async () => {
+    // The calendar still holds the 10–11 rule (it shades the day with it);
+    // the picker shows the server's judgement, which is the one source.
+    answer = candidatesAnswer({ busyUnavailable: null })
+    await openAssignPicker()
+    await waitFor(() => expect(screen.queryByText('Ranking coaches…')).toBeNull())
+    expect(screen.getByText('Busy Coach').closest('li').textContent).not.toMatch(/Unavailable/)
   })
 
-  it('a failed availability read is said in the picker, and nobody is badged', async () => {
+  it('availability the server could not check is said in the picker, and nobody is badged', async () => {
+    answer = candidatesAnswer({ busyUnavailable: null, checked: { availability: false } })
+    await openAssignPicker()
+    const dialog = screen.getByRole('dialog')
+    expect(await screen.findByText('Could not check availability, so the order may be off.')).toBeTruthy()
+    expect(dialog.textContent).not.toMatch(/Unavailable:/)
+    expect(screen.getByText('Busy Coach')).toBeTruthy()
+  })
+
+  it("the calendar's availability read failing does not blank the picker's badge", async () => {
     const base = global.fetch
     global.fetch = vi.fn(async (url) => (url.includes('/schedule/availability')
       ? { ok: false, status: 500, json: async () => ({ error: 'Could not load availability' }) }
       : base(url)))
     await openAssignPicker()
-    const dialog = screen.getByRole('dialog')
-    expect(dialog.textContent).toContain(AVAILABILITY_NOT_FLAGGED_MESSAGE)
-    expect(dialog.textContent).not.toMatch(/Unavailable:/)
-    expect(screen.getByText('Busy Coach')).toBeTruthy()
+    expect(await screen.findByText('Unavailable: 10am–11am')).toBeTruthy()
   })
 
   it("a coach's calendar never asks for availability", async () => {
