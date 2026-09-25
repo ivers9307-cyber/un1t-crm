@@ -288,6 +288,11 @@ const config = [
       // resolves with { data, error } instead of throwing. Born clean, armed
       // on arrival.
       'src/lib/waitlist-entry.js',
+      // ICSFEED.1 — the calendar link's writes (issue, replace, revoke, the
+      // last_fetched_at stamp). The stamp is best-effort by contract, which is
+      // exactly the shape that reads as handled and is not. Born clean, armed
+      // on arrival.
+      'src/lib/staff-calendar-feed-server.js',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },
