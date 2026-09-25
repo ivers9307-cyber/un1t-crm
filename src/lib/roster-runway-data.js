@@ -17,6 +17,7 @@
 import { selectAll } from './select-all'
 import { dublinTodayStr } from './dublin-time'
 import { runwayWindow, runwayWeeksFromBlocks, rosterRunwayWeeks } from '@shared/roster-runway'
+import { isAdminShift } from '@shared/shift-kind'
 
 /**
  * Roster runway per location.
@@ -24,7 +25,8 @@ import { runwayWindow, runwayWeeksFromBlocks, rosterRunwayWeeks } from '@shared/
  * A location with no ACTIVE shift template that has at least one weekday is
  * skipped outright (Hatch Street today, and every non-gym location): it has
  * nothing to roster, and leftover blocks from a retired template must not
- * raise an alert nobody can clear.
+ * raise an alert nobody can clear. A location whose only active templates are
+ * admin is skipped the same way (SHIFTTYPE.1).
  *
  * @param {object} db  service-role supabase client
  * @param {string[]} locationIds
@@ -49,7 +51,7 @@ export async function fetchRosterRunways(db, locationIds, { todayIso = dublinTod
   try {
     templates = await selectAll((lo, hi) => db
       .from('shift_templates')
-      .select('id, location_id, days_of_week')
+      .select('id, location_id, days_of_week, kind')
       .eq('active', true)
       .in('location_id', ids)
       .order('id', { ascending: true })
@@ -58,9 +60,12 @@ export async function fetchRosterRunways(db, locationIds, { todayIso = dublinTod
     return { success: false, error: e?.message || 'Failed to read shift templates' }
   }
 
+  // SHIFTTYPE.1 — only a CLASS template puts a studio on the runway. A studio
+  // whose only active templates are admin has no shift that needs a coach
+  // (admin carries no minimum staffing), so it has nothing to roster.
   const rostered = [...new Set(
     (templates || [])
-      .filter((t) => Array.isArray(t.days_of_week) && t.days_of_week.length > 0)
+      .filter((t) => Array.isArray(t.days_of_week) && t.days_of_week.length > 0 && !isAdminShift(t))
       .map((t) => t.location_id),
   )]
   if (rostered.length === 0) return { success: true, data: { byLocation, weeksByLocation } }
@@ -72,7 +77,7 @@ export async function fetchRosterRunways(db, locationIds, { todayIso = dublinTod
     // select cap, and a truncated read would silently call a week "ready".
     blocks = await selectAll((lo, hi) => db
       .from('shift_blocks')
-      .select('id, location_id, block_date, min_coaches, rosters:roster_id ( status ), shift_assignments(profile_id, status)')
+      .select('id, location_id, block_date, min_coaches, shift_templates ( kind ), rosters:roster_id ( status ), shift_assignments(profile_id, status)')
       .in('location_id', rostered)
       .gte('block_date', from)
       .lte('block_date', to)
