@@ -102,20 +102,28 @@ function useLeaveGuard(active) {
 const inputClass = 'rounded-md border border-un1t-border bg-un1t-bg px-2 py-1.5 text-sm text-un1t-text'
 const labelClass = 'flex flex-col text-xs text-un1t-subtle gap-1'
 
-function RuleRow({ row, todayIso, stored, showProblem, serverIssues, onChange, onRemove }) {
+// `name` ('weekly time 2', 'date 1') makes every input's accessible name
+// unique on the page ("From, weekly time 2"), so a screen reader's form list
+// says which row a field belongs to. A problem is tied to the row's inputs
+// with aria-describedby and aria-invalid; so is the "already started" note.
+function RuleRow({ row, name, todayIso, stored, showProblem, serverIssues, onChange, onRemove }) {
   const set = (patch) => onChange({ ...row, ...patch })
   // The client's own check first; else what the server said about this row
   // (placed by placeIssues against the order the server indexed).
   const problem = (showProblem ? rowProblem(row, todayIso, stored) : null)
     || (serverIssues?.length ? serverIssues.join('. ') : null)
   const started = Boolean(row.startedOn)
+  const problemId = `availability-row-${row.key}-problem`
+  const startedId = `availability-row-${row.key}-started`
+  const describedBy = [started && startedId, problem && problemId].filter(Boolean).join(' ') || undefined
+  const a11y = (field) => ({ 'aria-label': `${field}, ${name}`, 'aria-describedby': describedBy, 'aria-invalid': problem ? true : undefined })
   return (
     <li className="py-3">
       <div className="flex flex-wrap items-end gap-3">
         {row.kind === 'weekly' ? (
           <label className={labelClass}>
             Day
-            <select aria-label="Day of the week" className={inputClass} value={row.weekday} onChange={(e) => set({ weekday: e.target.value })}>
+            <select {...a11y('Day of the week')} className={inputClass} value={row.weekday} onChange={(e) => set({ weekday: e.target.value })}>
               {AVAILABILITY_WEEKDAYS.map((d) => <option key={d} value={d}>{AVAILABILITY_WEEKDAY_LABELS[d]}</option>)}
             </select>
           </label>
@@ -124,7 +132,7 @@ function RuleRow({ row, todayIso, stored, showProblem, serverIssues, onChange, o
             <label className={labelClass}>
               First day
               <input
-                aria-label="First day" type="date" min={todayIso} className={inputClass} value={row.start_date} disabled={started}
+                {...a11y('First day')} type="date" min={todayIso} className={inputClass} value={row.start_date} disabled={started}
                 // Moving the first day past the last drags the last day with
                 // it, so a one-day entry stays one day.
                 onChange={(e) => set({ start_date: e.target.value, end_date: row.end_date && row.end_date >= e.target.value ? row.end_date : e.target.value })}
@@ -132,38 +140,38 @@ function RuleRow({ row, todayIso, stored, showProblem, serverIssues, onChange, o
             </label>
             <label className={labelClass}>
               Last day
-              <input aria-label="Last day" type="date" min={started ? todayIso : (row.start_date || todayIso)} className={inputClass} value={row.end_date} onChange={(e) => set({ end_date: e.target.value })} />
+              <input {...a11y('Last day')} type="date" min={started ? todayIso : (row.start_date || todayIso)} className={inputClass} value={row.end_date} onChange={(e) => set({ end_date: e.target.value })} />
             </label>
           </>
         )}
         <label className="flex items-center gap-1.5 text-sm text-un1t-text pb-1.5">
-          <input aria-label="All day" type="checkbox" className="accent-un1t-text" checked={row.all_day} disabled={started} onChange={(e) => set({ all_day: e.target.checked })} />
+          <input {...a11y('All day')} type="checkbox" className="accent-un1t-text" checked={row.all_day} disabled={started} onChange={(e) => set({ all_day: e.target.checked })} />
           All day
         </label>
         {!row.all_day && (
           <>
             <label className={labelClass}>
               From
-              <input aria-label="From" type="time" className={inputClass} value={row.start_time} disabled={started} onChange={(e) => set({ start_time: e.target.value })} />
+              <input {...a11y('From')} type="time" className={inputClass} value={row.start_time} disabled={started} onChange={(e) => set({ start_time: e.target.value })} />
             </label>
             <label className={labelClass}>
               To
-              <input aria-label="To" type="time" className={inputClass} value={row.end_time} disabled={started} onChange={(e) => set({ end_time: e.target.value })} />
+              <input {...a11y('To')} type="time" className={inputClass} value={row.end_time} disabled={started} onChange={(e) => set({ end_time: e.target.value })} />
             </label>
           </>
         )}
         <label className={`${labelClass} grow min-w-[10rem]`}>
           Note (optional)
-          <input aria-label="Note" type="text" maxLength={AVAILABILITY_LIMITS.noteChars} className={inputClass} value={row.note} onChange={(e) => set({ note: e.target.value })} />
+          <input {...a11y('Note')} type="text" maxLength={AVAILABILITY_LIMITS.noteChars} className={inputClass} value={row.note} onChange={(e) => set({ note: e.target.value })} />
         </label>
-        <Button variant="ghost" size="sm" icon={Trash2} onClick={onRemove}>Remove</Button>
+        <Button variant="ghost" size="sm" icon={Trash2} onClick={onRemove} aria-label={`Remove ${name}`}>Remove</Button>
       </div>
       {started && (
-        <p className="mt-1 text-xs text-un1t-subtle">
+        <p id={startedId} className="mt-1 text-xs text-un1t-subtle">
           Started {dayMonth(row.startedOn)}. The days already gone stay as they are: you can change the last day or the note, or remove it from today.
         </p>
       )}
-      {problem && <p className="mt-1 text-xs text-red-700">{problem}</p>}
+      {problem && <p id={problemId} className="mt-1 text-xs text-red-700">{problem}</p>}
     </li>
   )
 }
@@ -260,8 +268,8 @@ export default function AvailabilityEditor({ todayIso }) {
   const section = (kind) => rows.filter((r) => r.kind === kind)
   const list = (kind) => (
     <ul className="divide-y divide-un1t-border">
-      {section(kind).map((r) => (
-        <RuleRow key={r.key} row={r} todayIso={todayIso} stored={stored} showProblem={showProblems} serverIssues={serverIssues[r.key]} onChange={(next) => update(r.key, next)} onRemove={() => remove(r.key)} />
+      {section(kind).map((r, i) => (
+        <RuleRow key={r.key} row={r} name={`${kind === 'weekly' ? 'weekly time' : 'date'} ${i + 1}`} todayIso={todayIso} stored={stored} showProblem={showProblems} serverIssues={serverIssues[r.key]} onChange={(next) => update(r.key, next)} onRemove={() => remove(r.key)} />
       ))}
     </ul>
   )

@@ -32,21 +32,20 @@ afterEach(() => { cleanup(); vi.restoreAllMocks() })
 describe('AvailabilityEditor', () => {
   it('shows what is saved', async () => {
     render(<AvailabilityEditor todayIso={TODAY} />)
-    const day = await screen.findByLabelText('Day of the week')
+    const day = await screen.findByLabelText('Day of the week, weekly time 1')
     expect(day.value).toBe('mon')
-    expect(screen.getByLabelText('From').value).toBe('09:00')
-    expect(screen.getByLabelText('To').value).toBe('12:00')
+    expect(screen.getByLabelText('From, weekly time 1').value).toBe('09:00')
+    expect(screen.getByLabelText('To, weekly time 1').value).toBe('12:00')
     expect(screen.getByText(/Your managers can see your notes/)).toBeTruthy()
     expect(global.fetch.mock.calls[0][0]).toBe('/api/schedule/availability')
   })
 
   it('adds a weekly time and saves exactly the lists on screen', async () => {
     render(<AvailabilityEditor todayIso={TODAY} />)
-    await screen.findByLabelText('Day of the week')
+    await screen.findByLabelText('Day of the week, weekly time 1')
     fireEvent.click(screen.getByRole('button', { name: 'Add a weekly time' }))
-    const days = screen.getAllByLabelText('Day of the week')
-    fireEvent.change(days[1], { target: { value: 'tue' } })
-    fireEvent.click(screen.getAllByLabelText('All day')[1])
+    fireEvent.change(screen.getByLabelText('Day of the week, weekly time 2'), { target: { value: 'tue' } })
+    fireEvent.click(screen.getByLabelText('All day, weekly time 2'))
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await screen.findByText('Saved. Your managers will get a notification.')
     expect(putBody).toEqual({
@@ -63,15 +62,15 @@ describe('AvailabilityEditor', () => {
       ? ok({ success: true, data: { changed: false, weekly: [MON], dated: [] } })
       : ok({ success: true, data: { weekly: [MON], dated: [] } })))
     render(<AvailabilityEditor todayIso={TODAY} />)
-    await screen.findByLabelText('Day of the week')
+    await screen.findByLabelText('Day of the week, weekly time 1')
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await screen.findByText('Nothing changed.')
   })
 
   it('says what is wrong and does not save', async () => {
     render(<AvailabilityEditor todayIso={TODAY} />)
-    await screen.findByLabelText('Day of the week')
-    fireEvent.change(screen.getByLabelText('To'), { target: { value: '08:00' } })
+    await screen.findByLabelText('Day of the week, weekly time 1')
+    fireEvent.change(screen.getByLabelText('To, weekly time 1'), { target: { value: '08:00' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await screen.findByText('The end time must be after the start time')
     expect(putCount).toBe(0)
@@ -79,11 +78,11 @@ describe('AvailabilityEditor', () => {
 
   it('adds a date, one day, all day by default, starting today', async () => {
     render(<AvailabilityEditor todayIso={TODAY} />)
-    await screen.findByLabelText('Day of the week')
+    await screen.findByLabelText('Day of the week, weekly time 1')
     fireEvent.click(screen.getByRole('button', { name: 'Add a date' }))
-    expect(screen.getByLabelText('First day').value).toBe(TODAY)
-    expect(screen.getByLabelText('Last day').value).toBe(TODAY)
-    fireEvent.change(screen.getAllByLabelText('Note')[1], { target: { value: 'Wedding' } })
+    expect(screen.getByLabelText('First day, date 1').value).toBe(TODAY)
+    expect(screen.getByLabelText('Last day, date 1').value).toBe(TODAY)
+    fireEvent.change(screen.getByLabelText('Note, date 1'), { target: { value: 'Wedding' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(putBody).not.toBeNull())
     expect(putBody.dated).toEqual([{ start_date: TODAY, end_date: TODAY, all_day: true, start_time: null, end_time: null, note: 'Wedding' }])
@@ -91,9 +90,9 @@ describe('AvailabilityEditor', () => {
 
   it('a removed row is not sent', async () => {
     render(<AvailabilityEditor todayIso={TODAY} />)
-    await screen.findByLabelText('Day of the week')
-    fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
-    expect(screen.queryByLabelText('Day of the week')).toBeNull()
+    await screen.findByLabelText('Day of the week, weekly time 1')
+    fireEvent.click(screen.getByRole('button', { name: 'Remove weekly time 1' }))
+    expect(screen.queryByLabelText('Day of the week, weekly time 1')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(putBody).not.toBeNull())
     expect(putBody).toEqual({ weekly: [], dated: [] })
@@ -113,17 +112,17 @@ describe('AvailabilityEditor', () => {
 
     it('says it has started, and only its last day and note can change', async () => {
       render(<AvailabilityEditor todayIso={TODAY} />)
-      await screen.findByLabelText('Last day')
+      await screen.findByLabelText('Last day, date 1')
       expect(screen.getByText(/Started 20 Sep/)).toBeTruthy()
-      expect(screen.getByLabelText('First day').disabled).toBe(true)
-      expect(screen.getByLabelText('All day').disabled).toBe(true)
-      expect(screen.getByLabelText('Last day').disabled).toBe(false)
-      expect(screen.getByLabelText('Note').disabled).toBe(false)
+      expect(screen.getByLabelText('First day, date 1').disabled).toBe(true)
+      expect(screen.getByLabelText('All day, date 1').disabled).toBe(true)
+      expect(screen.getByLabelText('Last day, date 1').disabled).toBe(false)
+      expect(screen.getByLabelText('Note, date 1').disabled).toBe(false)
     })
 
     it('moving only its end saves it with its stored start (the server carries it from today)', async () => {
       render(<AvailabilityEditor todayIso={TODAY} />)
-      fireEvent.change(await screen.findByLabelText('Last day'), { target: { value: '2026-09-27' } })
+      fireEvent.change(await screen.findByLabelText('Last day, date 1'), { target: { value: '2026-09-27' } })
       fireEvent.click(screen.getByRole('button', { name: 'Save' }))
       await waitFor(() => expect(putBody).not.toBeNull())
       expect(putBody.dated).toEqual([{ start_date: '2026-09-20', end_date: '2026-09-27', all_day: true, start_time: null, end_time: null, note: 'Away' }])
@@ -132,9 +131,9 @@ describe('AvailabilityEditor', () => {
 
   it('a new date may not start before today (no backdating), and is not sent', async () => {
     render(<AvailabilityEditor todayIso={TODAY} />)
-    await screen.findByLabelText('Day of the week')
+    await screen.findByLabelText('Day of the week, weekly time 1')
     fireEvent.click(screen.getByRole('button', { name: 'Add a date' }))
-    fireEvent.change(screen.getByLabelText('First day'), { target: { value: '2026-09-24' } })
+    fireEvent.change(screen.getByLabelText('First day, date 1'), { target: { value: '2026-09-24' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await screen.findByText('Start today or later')
     expect(putCount).toBe(0)
@@ -146,19 +145,19 @@ describe('AvailabilityEditor', () => {
       ? new Promise((resolve) => { answer = resolve })
       : Promise.resolve(ok({ success: true, data: { weekly: [MON], dated: [] } }))))
     render(<AvailabilityEditor todayIso={TODAY} />)
-    await screen.findByLabelText('Day of the week')
+    await screen.findByLabelText('Day of the week, weekly time 1')
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(answer).toBeTypeOf('function'))
     // A save replaces every row with the server's answer, so anything typed
     // now would be lost: nothing in the editor takes input until it settles.
     for (const el of [
-      screen.getByLabelText('Day of the week'), screen.getByLabelText('From'), screen.getByLabelText('Note'),
-      screen.getByRole('button', { name: 'Remove' }),
+      screen.getByLabelText('Day of the week, weekly time 1'), screen.getByLabelText('From, weekly time 1'), screen.getByLabelText('Note, weekly time 1'),
+      screen.getByRole('button', { name: 'Remove weekly time 1' }),
       screen.getByRole('button', { name: 'Add a weekly time' }), screen.getByRole('button', { name: 'Add a date' }),
     ]) expect(el.matches(':disabled')).toBe(true)
     await act(async () => { answer(ok({ success: true, data: { changed: false, weekly: [MON], dated: [] } })) })
     await screen.findByText('Nothing changed.')
-    expect(screen.getByLabelText('From').matches(':disabled')).toBe(false)
+    expect(screen.getByLabelText('From, weekly time 1').matches(':disabled')).toBe(false)
     expect(screen.getByRole('button', { name: 'Add a date' }).matches(':disabled')).toBe(false)
   })
 
@@ -167,14 +166,14 @@ describe('AvailabilityEditor', () => {
       ? ok({ success: false, error: 'Could not save your availability' }, 500)
       : ok({ success: true, data: { weekly: [MON], dated: [] } })))
     render(<AvailabilityEditor todayIso={TODAY} />)
-    await screen.findByLabelText('Day of the week')
-    fireEvent.change(screen.getByLabelText('Note'), { target: { value: 'Gym class of my own' } })
-    fireEvent.change(screen.getByLabelText('To'), { target: { value: '13:00' } })
+    await screen.findByLabelText('Day of the week, weekly time 1')
+    fireEvent.change(screen.getByLabelText('Note, weekly time 1'), { target: { value: 'Gym class of my own' } })
+    fireEvent.change(screen.getByLabelText('To, weekly time 1'), { target: { value: '13:00' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await screen.findByText('Could not save your availability')
-    expect(screen.getByLabelText('Note').value).toBe('Gym class of my own')
-    expect(screen.getByLabelText('To').value).toBe('13:00')
-    expect(screen.getByLabelText('Note').matches(':disabled')).toBe(false)
+    expect(screen.getByLabelText('Note, weekly time 1').value).toBe('Gym class of my own')
+    expect(screen.getByLabelText('To, weekly time 1').value).toBe('13:00')
+    expect(screen.getByLabelText('Note, weekly time 1').matches(':disabled')).toBe(false)
   })
 
   it("puts each server issue under its row, whatever order the rows are in on screen", async () => {
@@ -188,7 +187,7 @@ describe('AvailabilityEditor', () => {
       return ok({ success: false, error: 'Invalid availability', issues: [{ path: 'dated.0', message: 'Pick another day' }] }, 400)
     })
     render(<AvailabilityEditor todayIso={TODAY} />)
-    await screen.findAllByLabelText('Last day')
+    await screen.findByLabelText('Last day, date 2')
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     const issue = await screen.findByText('Pick another day')
     expect(putBody.dated.map((r) => r.start_date)).toEqual(['2026-10-03', '2026-10-12'])
@@ -200,9 +199,9 @@ describe('AvailabilityEditor', () => {
   describe('unsaved changes', () => {
     it('says so after an edit, and not after the save', async () => {
       render(<AvailabilityEditor todayIso={TODAY} />)
-      await screen.findByLabelText('Day of the week')
+      await screen.findByLabelText('Day of the week, weekly time 1')
       expect(screen.queryByText('Unsaved changes')).toBeNull()
-      fireEvent.change(screen.getByLabelText('Note'), { target: { value: 'Nursery run' } })
+      fireEvent.change(screen.getByLabelText('Note, weekly time 1'), { target: { value: 'Nursery run' } })
       expect(screen.getByText('Unsaved changes')).toBeTruthy()
       fireEvent.click(screen.getByRole('button', { name: 'Save' }))
       await screen.findByText('Saved. Your managers will get a notification.')
@@ -211,11 +210,11 @@ describe('AvailabilityEditor', () => {
 
     it('asks before leaving the page (beforeunload) only while there are unsaved changes', async () => {
       render(<AvailabilityEditor todayIso={TODAY} />)
-      await screen.findByLabelText('Day of the week')
+      await screen.findByLabelText('Day of the week, weekly time 1')
       const clean = new Event('beforeunload', { cancelable: true })
       window.dispatchEvent(clean)
       expect(clean.defaultPrevented).toBe(false)
-      fireEvent.change(screen.getByLabelText('Note'), { target: { value: 'Nursery run' } })
+      fireEvent.change(screen.getByLabelText('Note, weekly time 1'), { target: { value: 'Nursery run' } })
       const dirty = new Event('beforeunload', { cancelable: true })
       window.dispatchEvent(dirty)
       expect(dirty.defaultPrevented).toBe(true)
@@ -224,7 +223,7 @@ describe('AvailabilityEditor', () => {
     // The schedule tabs are <Link>s: an in-app move never fires beforeunload.
     it('asks before following an in-app link, and stays when the answer is no', async () => {
       render(<><a href="/schedule">Schedule</a><AvailabilityEditor todayIso={TODAY} /></>)
-      await screen.findByLabelText('Day of the week')
+      await screen.findByLabelText('Day of the week, weekly time 1')
       const link = screen.getByRole('link', { name: 'Schedule' })
       const followed = vi.fn((e) => e.preventDefault()) // stands in for Link's router push
       link.addEventListener('click', followed)
@@ -234,7 +233,7 @@ describe('AvailabilityEditor', () => {
       expect(confirm).not.toHaveBeenCalled() // nothing unsaved: no question
       expect(followed).toHaveBeenCalledTimes(1)
 
-      fireEvent.change(screen.getByLabelText('Note'), { target: { value: 'Nursery run' } })
+      fireEvent.change(screen.getByLabelText('Note, weekly time 1'), { target: { value: 'Nursery run' } })
       confirm.mockReturnValueOnce(false)
       fireEvent.click(link)
       expect(confirm).toHaveBeenCalledTimes(1)
@@ -246,12 +245,27 @@ describe('AvailabilityEditor', () => {
     })
   })
 
+  it("names every row's inputs apart, and ties a problem to the inputs it is about", async () => {
+    render(<AvailabilityEditor todayIso={TODAY} />)
+    await screen.findByLabelText('Day of the week, weekly time 1')
+    fireEvent.click(screen.getByRole('button', { name: 'Add a weekly time' }))
+    expect(screen.getByLabelText('From, weekly time 2')).not.toBe(screen.getByLabelText('From, weekly time 1'))
+    fireEvent.change(screen.getByLabelText('To, weekly time 1'), { target: { value: '08:00' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    const problem = await screen.findByText('The end time must be after the start time')
+    const to = screen.getByLabelText('To, weekly time 1')
+    expect(to.getAttribute('aria-invalid')).toBe('true')
+    expect(to.getAttribute('aria-describedby').split(' ')).toContain(problem.id)
+    expect(screen.getByLabelText('Note, weekly time 2').getAttribute('aria-invalid')).toBe('true') // no times yet
+    expect(screen.getByRole('button', { name: 'Remove weekly time 2' })).toBeTruthy()
+  })
+
   it("shows the server's issues when it refuses", async () => {
     global.fetch = vi.fn(async (url, options) => (options?.method === 'PUT'
       ? ok({ success: false, error: 'Invalid availability', issues: [{ path: 'dated.0', message: 'That date has passed' }] }, 400)
       : ok({ success: true, data: { weekly: [MON], dated: [] } })))
     render(<AvailabilityEditor todayIso={TODAY} />)
-    await screen.findByLabelText('Day of the week')
+    await screen.findByLabelText('Day of the week, weekly time 1')
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await screen.findByText('That date has passed')
   })
