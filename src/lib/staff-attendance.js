@@ -255,10 +255,12 @@ export function inferContinuousArrivals(rows, opts = {}) {
     const sameRun = prev
       && prev.profileId != null && r.profileId != null && prev.profileId === r.profileId
       && prev.blockDate != null && r.blockDate != null && prev.blockDate === r.blockDate
+    // An arrival is one that parses: an Invalid Date is a truthy object, and a
+    // bare truthiness test carried it onward as if it were a time.
     if (
-      !r.arrivalAt
+      !Number.isFinite(toMs(r.arrivalAt))
       && sameRun
-      && prev.arrivalAt
+      && Number.isFinite(toMs(prev.arrivalAt))
       && Number.isFinite(toMs(prev.scheduledEndAt))
       && toMs(r.scheduledAt) - toMs(prev.scheduledEndAt) <= maxGapMs
     ) {
