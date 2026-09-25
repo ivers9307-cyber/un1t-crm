@@ -19,7 +19,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess, hasRoleAtLocation } from '@/lib/auth'
-import { MANAGER_ROLES, isRealCalendarDate } from '@/lib/schemas'
+import { MANAGER_ROLES, isRealCalendarDate, uuidLike } from '@/lib/schemas'
 import { listOpenOffers } from '@/lib/shift-offer-server'
 import { loadBlockCandidates } from '@/lib/candidates-data'
 import { offerIsFor, coachOfferRow, managerOfferRow, offerBlock } from '@/lib/shift-offer-notice'
@@ -36,6 +36,10 @@ export async function GET(request) {
   const { searchParams } = new URL(request.url)
   const locationId = searchParams.get('location_id')
   if (!locationId) return NextResponse.json({ success: false, error: 'location_id is required' }, { status: 400 })
+  // Review 5 — a studio id is UUID-shaped, or nothing is read.
+  if (!uuidLike.safeParse(locationId).success) {
+    return NextResponse.json({ success: false, error: 'location_id must be a UUID' }, { status: 400 })
+  }
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
 
