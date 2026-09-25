@@ -376,3 +376,20 @@ describe('PUT /api/schedule/blocks/[id] — double-booking advisory (review fix 
   })
 })
 
+
+// Review nit — the cap is on the TRIMMED briefing: 500 characters padded with
+// whitespace (a pasted note) is a valid briefing, not a 400.
+describe('PUT /api/schedule/blocks/[id] — briefing length (review nit)', () => {
+  it('trims before the 500 cap', async () => {
+    const db = makeDb()
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(req({ briefing: `  ${'a'.repeat(500)}\n\n` }), params)
+    expect(res.status).toBe(200)
+    expect(db.captured.savePatch).toEqual({ briefing: 'a'.repeat(500) })
+  })
+
+  it('501 real characters is still a 400', async () => {
+    createServerClient.mockReturnValue(makeDb())
+    expect((await PUT(req({ briefing: 'a'.repeat(501) }), params)).status).toBe(400)
+  })
+})

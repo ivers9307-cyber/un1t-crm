@@ -179,7 +179,9 @@ const BlockEditSchema = z.object({
   end_time: timeOfDay.optional(),
   min_coaches: z.number().int().min(0).max(50).optional(),
   max_coaches: z.number().int().min(1).max(50).optional(),
-  briefing: z.string().max(BRIEFING_MAX_LENGTH).nullable().optional(),
+  // Trimmed BEFORE the cap (review nit): the stored text is the trimmed one,
+  // so 500 characters padded with whitespace is a valid briefing.
+  briefing: z.string().trim().max(BRIEFING_MAX_LENGTH).nullable().optional(),
   allow_below_assigned: z.boolean().optional(),
   // Review fix 2 — what the editor OPENED with. The web form always sends it;
   // a stored value that differs is a 409, so a form left open while another
