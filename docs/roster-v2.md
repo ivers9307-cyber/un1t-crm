@@ -214,3 +214,24 @@ template or slot (400 `admin_has_no_minimum`) and normalises an omitted one.
 - **Change log (published only):** one coachless `block_edited` row per edit (born stamped: nobody is messaged about it; `details` never holds the briefing text), and one `time_changed` row, `details.source = 'block_edit'`, per coach whose own hours moved.
 - **Notice:** the route sends nothing. `runShiftTimeChangeNotices` (`src/lib/block-edit-notify.js`) on the */5 `send-push-reminders` cron tells each coach once, inside staff quiet hours, stamped on delivery. Not needed (off the shift, put back, started) = stamped with `details.notice = 'not_needed'`.
 - **Briefing:** `shift_blocks.briefing`, ≤ 500 characters, never blank (DB CHECK). Written by managers for the coaches on that shift. Separate from `notes` (manager-only). Read on the web shift dialog, the calendar card ("Briefing"), Today's week list, the phone Me list and the Manage card. Not copied by copy week/month.
+
+## Calendar subscription (ICSFEED.1, mig 632, 2026-09)
+
+Every staff member can subscribe their calendar app to their OWN published
+shifts: `/account` on web, "Subscribe to my shifts" on the phone's Schedule tab
+(Me view). The feed is `GET /api/calendar-feed/<rcf_token>.ics`, anonymous by
+design; only `sha256(token)` is stored (`staff_calendar_feeds`, one row per
+person, service role only), so the URL is shown once and "Make a new link"
+kills the old one in the same UPDATE.
+
+Contents: own assignments, `rosters.status = 'published'`, not cancelled, every
+studio, Dublin today −14 to +56 days. Effective time = override, else the
+block's time; written in UTC from `locations.timezone` (no VTIMEZONE). UID =
+`shift-<assignment id>@repset.ie`, so edits replace and removals disappear on
+the next poll. No colleague, no assignment notes, no pay.
+
+Deactivation: the feed answers 404 for a profile with `active = false` or
+`deleted_at` set, so every deactivation path stops it with no write here;
+reactivation resumes the same link. A read failure is 503, never an empty
+calendar (a subscriber would lose every shift). Rate limit is per token, never
+per IP. Public on the CRM hosts only (`publicExactPaths` in `src/proxy.js`).

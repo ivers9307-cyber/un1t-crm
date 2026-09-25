@@ -294,6 +294,16 @@ const config = [
       // bare `[id]` is a character class.
       'src/app/api/schedule/blocks/[[]id]/route.js',
       'src/lib/block-edit-notify.js',
+      // AVAIL.1 — coach availability: the save, the studio read and the
+      // notice stamps. Born clean, armed on arrival.
+      'src/lib/availability-server.js',
+      'src/lib/availability-notify.js',
+      'src/app/api/schedule/availability/**',
+      // ICSFEED.1 — the calendar link's writes (issue, replace, revoke, the
+      // last_fetched_at stamp). The stamp is best-effort by contract, which is
+      // exactly the shape that reads as handled and is not. Born clean, armed
+      // on arrival.
+      'src/lib/staff-calendar-feed-server.js',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },

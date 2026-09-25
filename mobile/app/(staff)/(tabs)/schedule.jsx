@@ -40,6 +40,7 @@ import { hasOpenSwap, swapShiftWhen, swapPostedCopy, SWAP_PENDING_LABEL, SWAP_AL
 import { createInFlightGuard } from '../../../lib/swap-flow'
 import LeaveFloatingButtons from '../../../components/LeaveFloatingButtons'
 import ManageMode from '../../../components/schedule/ManageMode'
+import CalendarSubscribeRow from '../../../components/schedule/CalendarSubscribeRow'
 // LEAVE.2 — one label per leave type (unpaid/other used to read "Time off").
 import { timeOffLeaveLabel } from 'shared/time-off'
 import { briefingOf } from 'shared/shift-briefing'
@@ -752,6 +753,9 @@ export default function Schedule() {
             )}
           </>
         )}
+
+        {/* ICSFEED.1 — own published shifts in the coach's calendar app. Me view only, phone and iPad. */}
+        {view === 'me' && <CalendarSubscribeRow />}
       </ScrollView>
 
       {/* Floating Request Time Off button — MOBILE-PERMS: gated on the

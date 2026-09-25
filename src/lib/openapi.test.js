@@ -23,6 +23,19 @@ describe('getOpenApiSpec', () => {
     expect(spec.servers.map((s) => s.url)).toContain('https://crm.un1tdublin.com')
   })
 
+  it('documents coach availability (AVAIL.1): own GET/PUT and the manager range read, cookie or Bearer', () => {
+    const path = spec.paths['/api/schedule/availability']
+    expect(path).toHaveProperty('get')
+    expect(path).toHaveProperty('put')
+    expect(path.put.requestBody).toBeDefined()
+    expect(path.get.security).toEqual([{ CookieAuth: [] }, { BearerAuth: [] }])
+    // Owner's decision: managers see a coach's note, and the contract says so.
+    expect(path.get.description).toMatch(/shown to managers/)
+    expect(path.put.description).toMatch(/managers/)
+    // The started-rule contract (shared/availability.js carryStartedRules).
+    expect(path.put.description).toMatch(/only its end date moved/)
+  })
+
   it('declares the pre-existing browser/integration auth schemes', () => {
     expect(spec.components.securitySchemes).toHaveProperty('BearerAuth')
     expect(spec.components.securitySchemes).toHaveProperty('CookieAuth')
@@ -355,5 +368,24 @@ describe('getOpenApiSpec', () => {
     expect(op.description).toMatch(/quiet hours/)
     // The DELETE on the same path is still there.
     expect(spec.paths['/api/schedule/blocks/{id}'].delete).toBeTruthy()
+  })
+
+  // ICSFEED.1 — an anonymous token feed and the session-only management route.
+  it('documents the calendar feed and its self-service management', () => {
+    const feed = spec.paths['/api/calendar-feed/{file}']?.get
+    expect(feed, 'missing GET /api/calendar-feed/{file}').toBeTruthy()
+    expect(feed.security ?? []).toHaveLength(0)
+    expect(feed.tags).toContain('Public')
+    expect(Object.keys(feed.responses['200'].content)).toEqual(['text/calendar'])
+    expect(Object.keys(feed.responses)).toEqual(expect.arrayContaining(['200', '404', '429', '503']))
+    // Scope is the PERSON across organisations, stated so nobody "fixes" it into a tenant filter.
+    expect(feed.description).toMatch(/across organisations/)
+    for (const m of ['get', 'post', 'delete']) {
+      const op = spec.paths['/api/me/calendar-feed']?.[m]
+      expect(op, `missing ${m.toUpperCase()} /api/me/calendar-feed`).toBeTruthy()
+      expect(op.security).toContainEqual({ CookieAuth: [] })
+      expect(op.tags).toContain('Me')
+    }
+    expect(Object.keys(spec.paths['/api/me/calendar-feed'].post.responses)).toEqual(expect.arrayContaining(['200', '403', '409']))
   })
 })

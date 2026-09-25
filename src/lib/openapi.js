@@ -27,6 +27,7 @@ import {
 import { LeadSchema } from './leads.js'
 import { MAX_STORED_EXAMPLE_CHARS, MAX_STORED_EXAMPLES } from '@/lib/hyrox/constants'
 import { WindowBase } from '@/lib/schedule/windows'
+import { AvailabilityPutSchema } from '@/lib/availability-server'
 import { ROSTER_CHANGE_LOG_MAX_ROWS } from '@/lib/roster-change-format'
 // SHELLY-UI.9 — the /api/shelly/* request vocabulary. Aliased on import so
 // the .openapi()-decorated re-derivations below can carry the canonical
@@ -4605,6 +4606,40 @@ registry.registerPath({
   },
 })
 
+// AVAIL.1 — coach availability (mig 630). Own read/replace, and a manager's
+// read of a studio's members for a date range.
+registry.registerPath({
+  method: 'get',
+  path: '/api/schedule/availability',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "A coach's availability: your own, or a studio's (manager)",
+  description: "Without location_id: the caller's own unavailability as { weekly, dated } (weekly: weekday mon..sun + all_day or start_time/end_time HH:MM; dated: start_date..end_date + the same, optional note). Dated rules that ended before today (Dublin) are history and not returned. With location_id + start_date + end_date (real dates, at most 92 days): every active member of that studio's weekly rules and the dated rules overlapping the range, as flat rows with id and profile_id. The studio read is manager-only (master, owner, manager, head_coach AT location_id) and scoped by assertLocationAccess. Notes are the coach's own words and are shown to managers. Advisory data: nothing in the API refuses an assignment because of it.",
+  responses: {
+    200: { description: '{ success, data }' },
+    400: { description: 'Malformed location_id, a date that is not real, end before start, or a range over 92 days', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Studio outside your assignments, or no manager role there', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The read failed (never answered as "nobody is unavailable")', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/schedule/availability',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Replace your own availability',
+  description: "Replaces the caller's weekly rules and their dated rules that have not ended, atomically. No approval. A save that changes something tells the owner, managers and head coaches at every studio the caller belongs to (one push per save, 07:00-22:00 studio time; outside it, at 07:00). A save identical to what is stored changes nothing and tells nobody (data.changed false). Notes are the coach's own words and are shown to those managers (the studio read and the roster). A dated rule that has already started may be sent back unchanged, with its note edited, or with only its end date moved: the days already gone stay as history and the rule continues from today (20-30 Sep with its end moved to the 27th, saved on the 25th, becomes history 20-24 plus 25-27; an end moved to before today ends it from today). A dated rule that ended before today and is sent back as stored is ignored (history). Any other started rule (a new one, a moved start, a changed window) is refused ('Start today or later'), as is a new rule that has already ended. 400 issues use validateBody's { path, message } shape; paths index the SORTED lists.",
+  request: { body: { content: { 'application/json': { schema: AvailabilityPutSchema } } } },
+  responses: {
+    200: { description: '{ success, data: { changed, weekly, dated } }' },
+    400: { description: 'Invalid body or rule (end not after start, not a real date, a date that has passed, over the limits)', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The save failed; nothing was changed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // WORKTIME.1 — the assign picker's working-time advisory for one block.
 registry.registerPath({
   method: 'get',
@@ -7337,6 +7372,88 @@ registry.registerPath({
     200: { description: 'Revoked', content: { 'application/json': { schema: z.object({ success: z.literal(true) }).openapi('WidgetTokenRevokeResponse') } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Not found (missing, or another profile\'s token without staff_management)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// ============================================================================
+// ICSFEED.1 — per-person calendar subscription (mig 632)
+// ============================================================================
+// The feed is anonymous by design (calendar apps hold no session); the rcf_
+// token in the path is the credential. Management is session-only and acts on
+// the caller's own link; no id parameter exists.
+
+const CalendarFeedStatus = z.object({
+  active: z.boolean(),
+  created_at: z.string().nullable(),
+  rotated_at: z.string().nullable(),
+  last_fetched_at: z.string().nullable(),
+}).openapi('CalendarFeedStatus')
+
+const CalendarFeedLinks = z.object({
+  url: z.string().openapi({ description: 'https feed URL. Shown ONCE: only its sha256 is stored (mig 632).' }),
+  webcal_url: z.string().openapi({ description: 'webcal:// form: Apple Calendar and Outlook open a subscribe dialog.' }),
+  google_url: z.string().openapi({ description: "Google Calendar's add-by-URL page for this feed." }),
+  replaced: z.boolean(),
+}).openapi('CalendarFeedLinks')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/calendar-feed/{file}',
+  tags: ['Public'],
+  summary: "A person's own published shifts as an iCalendar feed",
+  description:
+    'Anonymous; `file` is `<rcf_ token>.ics` (the suffix is optional). RFC 5545, times in UTC. Contains the token holder\'s OWN published, not-cancelled shifts at every studio they are rostered at, across organisations if they work in more than one (their own diary, deliberately not narrowed to one organisation), Dublin today −14 to +56 days: template name · studio, the studio address, stable UIDs per assignment, SEQUENCE raised by any edit. No colleague, note or pay. ' +
+    'One 404 for every refusal (not a token, unknown, replaced, turned off, or the person is deactivated or deleted). 429 per token (never per IP). 503 on a read failure, never an empty 200, because a subscribed calendar replaces its whole copy. Public on the CRM hosts only.',
+  request: { params: z.object({ file: z.string().openapi({ description: '`<token>.ics`' }) }) },
+  responses: {
+    200: { description: 'iCalendar body', content: { 'text/calendar': { schema: z.string() } } },
+    404: { description: 'Not found (every refusal)' },
+    429: { description: 'Rate limited (per token)' },
+    503: { description: 'Temporarily unavailable; Retry-After: 900' },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/me/calendar-feed',
+  tags: ['Me'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "The caller's calendar link status",
+  description: 'Never the URL: only its hash is stored, so it cannot be shown again. `last_fetched_at` is stamped at most every 15 minutes.',
+  responses: {
+    200: { description: 'Status', content: { 'application/json': { schema: SuccessResponse(CalendarFeedStatus) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/me/calendar-feed',
+  tags: ['Me'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Make (or replace) the caller\'s calendar link',
+  description: 'Returns the links ONCE (Cache-Control: no-store). An existing link without `replace: true` is 409 `feed_exists`; `replace: true` swaps it in one statement (the old link stops at once). Refused (403) while a master is viewing as someone.',
+  request: { body: { content: { 'application/json': { schema: z.object({ replace: z.boolean().optional() }).strict().openapi('CalendarFeedIssueBody') } } } },
+  responses: {
+    200: { description: 'The links, shown once', content: { 'application/json': { schema: SuccessResponse(CalendarFeedLinks) } } },
+    400: { description: 'Validation failed', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Viewing as someone else', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'A link already exists (feed_exists)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/me/calendar-feed',
+  tags: ['Me'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Turn the caller\'s calendar link off',
+  description: 'Idempotent: `revoked` says whether there was one. Refused (403) while a master is viewing as someone.',
+  responses: {
+    200: { description: '{ revoked }', content: { 'application/json': { schema: SuccessResponse(z.object({ revoked: z.boolean() })) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Viewing as someone else', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
