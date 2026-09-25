@@ -35,10 +35,13 @@ import {
   OFFER_NOTICE_LEASE_MS, OFFER_TAKEN_MAX_AGE_MS,
 } from './shift-offer-notice'
 
-// Literal selects: check:select-columns resolves only literals. shift_offers has
-// two FKs to profiles (offered_by, claimed_by), so the embed names its column.
-// The block embed is what loadBlockCandidates reads (template times = the
-// window fallback) plus what the sweep and the rows read.
+// Shared select lists. check:select-columns SKIPS a select passed through a
+// constant (it reads only a literal written at the call), so these two are
+// resolved against the replayed schema by shift-offer-server.test.js instead:
+// a phantom column here fails that test, not prod. shift_offers has two FKs to
+// profiles (offered_by, claimed_by), so the embed names its column. The block
+// embed is what loadBlockCandidates reads (template times = the window
+// fallback) plus what the sweep and the rows read.
 export const OFFER_SELECT = `
   id, location_id, block_id, status, offered_by, created_at, closed_at, claimed_by, claimed_at,
   broadcast_at, broadcast_count, broadcast_outcome, taken_notified_at, notice_lease_until, notice_attempts,
@@ -46,7 +49,7 @@ export const OFFER_SELECT = `
   locations(name, timezone),
   claimer:profiles!claimed_by(full_name)
 `
-const BLOCK_SELECT = 'id, location_id, block_date, start_time, end_time, min_coaches, max_coaches, rosters:roster_id(status), shift_templates(name, kind, start_time, end_time), shift_assignments(profile_id, status), locations(name, timezone)'
+export const BLOCK_SELECT = 'id, location_id, block_date, start_time, end_time, min_coaches, max_coaches, rosters:roster_id(status), shift_templates(name, kind, start_time, end_time), shift_assignments(profile_id, status), locations(name, timezone)'
 // Open offers are single digits. A guard, not a page size: a read that FILLS
 // it is reported (capped) and counted as the arm's own fault.
 export const SWEEP_LIMIT = 200

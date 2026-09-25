@@ -3,6 +3,7 @@
 // duplicates at worst), closing, the */5 sweep, create / withdraw / claim.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { scriptedDb, chainsFor, argsOf, allArgsOf } from './scripted-db.test-helpers'
+import { collectSchema, parseSelect } from '../../scripts/check-select-columns.mjs'
 
 vi.mock('./push-dedup', () => ({ notifyUsersOnce: vi.fn(async () => ({ sent: 1, emailed: 0, failed: 0 })) }))
 vi.mock('./push', () => ({ resolveRoleRecipientIds: vi.fn(async () => ['mgr', 'c1']) }))
@@ -14,6 +15,7 @@ const { loadBlockCandidates } = await import('./candidates-data')
 const { logError, logWarn } = await import('./log')
 const {
   processOffer, runShiftOfferSweep, createOffer, withdrawOffer, claimOffer, readOffer, listOpenOffers, SWEEP_LIMIT,
+  OFFER_SELECT, BLOCK_SELECT,
 } = await import('./shift-offer-server')
 
 const BLOCK = {
@@ -243,5 +245,27 @@ describe('reads and writes', () => {
   it('readOffer: 0 rows is null, not an error', async () => {
     const db = scriptedDb({ shift_offers: [{ data: null, error: null }] })
     expect(await readOffer(db, 'o9')).toEqual({ offer: null, error: null })
+  })
+})
+
+// CLAUDE.md: a column named in a .select() is a claim about the schema, and no
+// mock checks it. check:select-columns skips these two (they reach .select()
+// through a constant), so this resolves them against the same replay.
+describe('the select lists name only real columns (the check:select-columns replay)', () => {
+  const { schema } = collectSchema('supabase/migrations')
+  const phantoms = (sel, table) => parseSelect(sel, table, schema).filter((r) => !schema.get(r.table)?.has(r.column))
+
+  it('OFFER_SELECT on shift_offers, its block, studio and claimer', () => {
+    const refs = parseSelect(OFFER_SELECT, 'shift_offers', schema)
+    expect(phantoms(OFFER_SELECT, 'shift_offers')).toEqual([])
+    // The replay really descended into the embeds (a floor that read nothing proves nothing).
+    for (const [table, column] of [['shift_offers', 'notice_lease_until'], ['shift_blocks', 'min_coaches'], ['shift_templates', 'kind'], ['shift_assignments', 'status'], ['locations', 'timezone'], ['profiles', 'full_name']]) {
+      expect(refs).toContainEqual({ table, column })
+    }
+  })
+
+  it('BLOCK_SELECT on shift_blocks', () => {
+    expect(phantoms(BLOCK_SELECT, 'shift_blocks')).toEqual([])
+    expect(parseSelect(BLOCK_SELECT, 'shift_blocks', schema)).toContainEqual({ table: 'shift_blocks', column: 'max_coaches' })
   })
 })
