@@ -101,6 +101,8 @@ These are marked **REVIEW** in the artifact until he confirms or changes them. E
 19. **Managers can't set availability on a coach's behalf** in this cut.
 20. **A posted admin shift nobody takes still escalates as "Shift still uncovered"** (`src/lib/swap-cover.js` ~413). The admin work still needs its person, so it stays.
 21. **Reactivating a coach brings their old calendar-feed link back** (the feed simply refuses while they are inactive). A new link can be made any time from the Subscribe screen.
+22. **An edit to a shift made overnight is told from 07:00,** even when the shift starts before then (quiet hours gate the notice). The edit itself is saved at once, and the manager's toast says coaches hear after 7am.
+23. **A standing weekly briefing** (the same note every Monday) would need a template field; BLOCKEDIT.1 adds a briefing per shift only.
 
 ## Follow-ups found along the way (not in any PR yet)
 
@@ -110,6 +112,7 @@ These are marked **REVIEW** in the artifact until he confirms or changes them. E
 - `resolveRoleRecipientIds` in `src/lib/push.js` discards its read error, so a failed read looks like a clean runway run with nobody to notify (found planning 31).
 - Two dead staffing readers (`shared/dashboard-data.js` `fetchUnstaffedBlocksThisWeek`, `src/lib/roster.js` `isBlockUnstaffedFuture`) would treat an admin shift as a gap if revived; delete them (found reviewing 13).
 - `src/lib/cron-heartbeat.js` docstring out of date (found building 31).
+- 🔴 A shift block's MANAGER `notes` reach a coach's own phone row through `toApiShiftRow` (`notes: a.notes ?? b.notes`); COACHSCOPE.1 meant block notes as manager working notes. Check whether coaches should see them; BLOCKEDIT.1's briefing is the coach-facing field (found planning 14).
 - The staff assistant's `generate_report` tool passes model-supplied report periods unchecked (Postgres refuses a bad one; harmless) (found reviewing 11).
 - The staff assistant's `create_shift` and `get_time_off` tools take dates with no calendar check (found planning 11; the assistant is off everywhere).
 
@@ -117,6 +120,7 @@ These are marked **REVIEW** in the artifact until he confirms or changes them. E
 
 Updated by the loop. Newest first.
 
+- 25 Sep ~13:30Z: 14 BLOCKEDIT.1 plan written (PUT /api/schedule/blocks/[id] with optimistic concurrency; mig 629: `shift_blocks.briefing` ≤500 + change-log `block_edited`; notices via a new send-push-reminders arm, 07:00–22:00; OTA). Queued for the next implementer slot.
 - 25 Sep ~13:25Z: 16 AVAIL.1a review approved w/ should-fixes: a crash between claim and send could LOSE a manager notice (invariant (c)), and an older owed notice could land after a newer one → fixing (+ keep elapsed days of a shortened rule, refuse backdated rules, never notify the actor). AVAIL.1b built (4 commits, 180 tests), waiting to rebase on fixed 1a + main (SHIFTTYPE/WORKTIME); browser-only checks owed (grey bar vs leave bars, 390px editor, native date inputs).
 - 25 Sep ~13:15Z: **#1759 SHIFTTYPE.1 MERGED** (auto-merge, CI green); its EAS run being watched. 22 ICSFEED.1 plan written (feed on the proxy's public list only — an API route, not a page; UTC times; 503 never an empty calendar); implementer started (`~/code/un1t-crm-icsfeed1`). Operator step now due for Richard: mark admin templates once the phone update reaches phones.
 - 25 Sep ~13:05Z: **#1758 WORKTIME.1 MERGED** (11:47Z), EAS Update run 36131346625 SUCCESS. 13 SHIFTTYPE.1 = [PR #1759](https://github.com/ivers9307-cyber/un1t-crm/pull/1759) (gate 27,887 + build; merged with WORKTIME, 1 test conflict kept both, 588 affected tests green), auto-merge on; check ITS EAS run before any other OTA merge.
