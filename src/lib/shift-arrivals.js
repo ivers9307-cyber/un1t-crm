@@ -17,9 +17,10 @@
 //     arrival and this one starts within 60 minutes of its BLOCK end: "on
 //     site" (the attendance report's rule, inferContinuousArrivals).
 //   - The double-stamp shape (16 Sep review; fixed by ARRIVAL.1/.2, cleaned
-//     by mig 610): a stamp at the same instant as the earlier same-day
-//     shift's arrival at the same studio IS that earlier arrival, so it also
-//     reads "on site", never a second walk-in. Display only.
+//     by mig 610): a stamp at the same instant as the stamp on ANY earlier-
+//     starting shift that day, at any studio (mig 610's duplicate_orphan),
+//     IS that earlier arrival, so it also reads "on site", never a second
+//     walk-in. Display only.
 //
 // Own rows only. The feed also serves the Team view: a coach or a manager
 // gets the field on their OWN rows and null on everybody else's. The read is
@@ -46,7 +47,6 @@ import { effectiveShiftStart, effectiveShiftEnd } from '@shared/roster-month'
 export const ARRIVAL_TRACKING_FROM = '2026-09-25'
 
 const ms = (d) => (d instanceof Date ? d.getTime() : NaN)
-const sortMs = (d) => { const v = ms(d); return Number.isFinite(v) ? v : Infinity }
 
 function nextDateKey(dateKey) {
   const [y, m, d] = String(dateKey).split('-').map(Number)
@@ -75,23 +75,23 @@ function effectiveWindow(row, tz) {
   }
 }
 
-// Ids of rows whose OWN stamp is the same instant as the previous shift's
-// arrival (same studio, same date): the double-stamp shape.
+// Ids of rows whose OWN stored stamp is the same instant as the stored stamp
+// of ANY strictly earlier-starting shift of the viewer's on the same date, at
+// any studio: the double-stamp shape, exactly mig 610's duplicate_orphan (same
+// coach, same block_date, same value, t.block_start < s.block_start, no studio
+// condition — one ping cannot be two walk-ins). Stored stamps only (the rows
+// BEFORE inference), like the migration. Every row here is the viewer's own.
 function sameInstantAsEarlier(rows) {
   const out = new Set()
-  const ordered = [...rows].sort((a, b) => (
-    a.profileId.localeCompare(b.profileId)
-    || String(a.blockDate).localeCompare(String(b.blockDate))
-    || sortMs(a.scheduledAt) - sortMs(b.scheduledAt)
-  ))
-  let prev = null
-  for (const r of ordered) {
-    if (
-      prev && prev.profileId === r.profileId && prev.blockDate === r.blockDate
-      && !r.arrivalInferred && r.arrivalAt && prev.arrivalAt
-      && new Date(r.arrivalAt).getTime() === new Date(prev.arrivalAt).getTime()
-    ) out.add(r.id)
-    prev = r
+  const stamped = rows.filter((r) => Number.isFinite(ms(r.arrivalAt)) && Number.isFinite(ms(r.scheduledAt)))
+  for (const r of stamped) {
+    const hit = stamped.some((t) => (
+      t.id !== r.id
+      && t.blockDate === r.blockDate
+      && ms(t.arrivalAt) === ms(r.arrivalAt)
+      && ms(t.scheduledAt) < ms(r.scheduledAt)
+    ))
+    if (hit) out.add(r.id)
   }
   return out
 }
@@ -161,7 +161,7 @@ export function annotateOwnArrivals(rows, facts, viewerId, { now = new Date() } 
       }
     })
   const inferred = inferContinuousArrivals(base)
-  const dup = sameInstantAsEarlier(inferred)
+  const dup = sameInstantAsEarlier(base)
   const byId = new Map(inferred.map((b) => [b.id, b]))
 
   return list.map((r) => {

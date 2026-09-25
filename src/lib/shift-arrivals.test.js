@@ -142,8 +142,39 @@ describe('annotateOwnArrivals — the double-stamp shape (D3)', () => {
     expect(annotateOwnArrivals(rows, f, ME).map((r) => r.arrival.carried)).toEqual([false, false])
   })
 
-  it('the same instant at two different studios is not folded', () => {
+  // Review 3 — aligned with mig 610's duplicate_orphan: same coach, same date,
+  // the same value on ANY strictly earlier-starting shift, at ANY studio (one
+  // ping cannot be two walk-ins).
+  it('the same instant at two different studios is folded (mig 610 has no studio condition)', () => {
     const rows = [row('a1'), row('a2', { location_id: L2, block_start_time: '07:30:00', block_end_time: '08:30:00' })]
+    const f = facts([stamp('a1', '2026-10-01T05:52:00.000Z'), stamp('a2', '2026-10-01T05:52:00.000Z')])
+    const out = annotateOwnArrivals(rows, f, ME)
+    expect(out[0].arrival.carried).toBe(false)
+    expect(out[1].arrival).toMatchObject({ at: '2026-10-01T05:52:00.000Z', carried: true })
+  })
+
+  it('the same instant as ANY earlier shift that day is folded, not only the one just before', () => {
+    const rows = [
+      row('a1'),
+      row('a2', { block_start_time: '12:00:00', block_end_time: '13:00:00' }),
+      row('a3', { block_start_time: '18:00:00', block_end_time: '19:00:00' }),
+    ]
+    const f = facts([
+      stamp('a1', '2026-10-01T05:52:00.000Z'),
+      stamp('a2', '2026-10-01T10:40:00.000Z'),
+      stamp('a3', '2026-10-01T05:52:00.000Z'),
+    ])
+    expect(annotateOwnArrivals(rows, f, ME).map((r) => r.arrival.carried)).toEqual([false, false, true])
+  })
+
+  it('two shifts starting at the same time are not folded (strictly earlier only)', () => {
+    const rows = [row('a1'), row('a2', { location_id: L2 })]
+    const f = facts([stamp('a1', '2026-10-01T05:52:00.000Z'), stamp('a2', '2026-10-01T05:52:00.000Z')])
+    expect(annotateOwnArrivals(rows, f, ME).map((r) => r.arrival.carried)).toEqual([false, false])
+  })
+
+  it('the same instant on another day is not folded', () => {
+    const rows = [row('a1'), row('a2', { shift_date: '2026-10-02', block_start_time: '00:30:00', block_end_time: '01:30:00' })]
     const f = facts([stamp('a1', '2026-10-01T05:52:00.000Z'), stamp('a2', '2026-10-01T05:52:00.000Z')])
     expect(annotateOwnArrivals(rows, f, ME)[1].arrival.carried).toBe(false)
   })
