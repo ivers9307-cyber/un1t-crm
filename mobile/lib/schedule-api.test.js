@@ -55,6 +55,7 @@ describe('schedule-api — every helper is exercised', () => {
       'getSwapsForMe',
       'getTeamShifts',
       'removeAssignment',
+      'replaceAssignment',
       'respondToSwap',
       'respondToTimeOff',
       'unassignLeaveClashes',
@@ -275,5 +276,15 @@ describe('LEAVEPHONE.1 — leave form reads', () => {
     await schedule.createTimeOffRequest({ type: 'holiday', startDate: '2026-06-01', endDate: '2026-06-07', locationId: LOC })
     expect(lastCall()[1].body.location_id).toBe(previewStudio)
     expect(previewStudio).toBe(LOC)
+  })
+})
+
+describe('REPLACE.1a — replaceAssignment', () => {
+  it('POSTs the new coach to /assignments/:id/replace, confirm only when asked', () => {
+    schedule.replaceAssignment('as-1', { profileId: 'p2', locationId: LOC })
+    expect(lastCall()).toEqual(['/api/schedule/assignments/as-1/replace', { method: 'POST', locationId: LOC, body: { profile_id: 'p2' } }])
+    api.mockClear()
+    schedule.replaceAssignment('as-1', { profileId: 'p2', confirmConflicts: true, locationId: LOC })
+    expect(lastCall()[1].body).toEqual({ profile_id: 'p2', confirm_conflicts: true })
   })
 })

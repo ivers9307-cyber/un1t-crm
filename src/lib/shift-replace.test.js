@@ -8,6 +8,8 @@ import {
   replaceNoticeWhen, replaceResponseOutcome, replacePickerCopy, netReplaceChanges,
   REPLACE_VIA, REPLACE_SWAP_CLOSE_NOTE, REPLACE_UNDONE_REASON,
 } from './shift-replace'
+// The phone's Alert says the same words (mobile cannot import src/lib).
+import { replaceResultAlert } from '../../mobile/lib/schedule-manage'
 
 // Tue 29 Sep 2026, Dublin summer time (UTC+1): 06:00 Dublin = 05:00Z.
 const BLOCK = { id: 'b1', location_id: 'loc-1', block_date: '2026-09-29', start_time: '06:00:00', end_time: '07:00:00' }
@@ -112,6 +114,14 @@ describe('replaceResponseOutcome (the web toast)', () => {
     expect(done('now')).toEqual({ kind: 'done', tone: 'success', message: 'Coach B is on the shift. Coach A and Coach B have been told.' })
     expect(done('morning')).toEqual({ kind: 'done', tone: 'warning', message: 'Coach B is on the shift. Coach A and Coach B are told after 7am; if the shift is before then, ring them.' })
     expect(done('none')).toEqual({ kind: 'done', tone: 'success', message: 'Coach B is on the shift. The roster is a draft, so nobody is told until it is published.' })
+  })
+})
+
+describe('the phone says exactly what the web says', () => {
+  it.each(['now', 'morning', 'none'])('notice %s', (notice) => {
+    const names = { fromName: 'Coach A', toName: 'Coach B' }
+    expect(replaceResultAlert({ success: true, data: { notice } }, names).message)
+      .toBe(replaceResponseOutcome(200, { success: true, data: { notice } }, names).message)
   })
 })
 
