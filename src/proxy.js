@@ -238,7 +238,18 @@ export async function proxy(request) {
   // public PAGE, so the other three allowlists (AppShell, brands,
   // tenant-domains) don't apply — nothing renders a shell, and the mobile app
   // calls the canonical CRM host, never a brand hostname.
-  const publicExactPaths = ['/api/mobile/review-login']
+  //
+  // /api/calendar-feed — ICSFEED.1, a person's own published shifts as an
+  // iCalendar feed. Apple, Google and Outlook poll it with no session, so the
+  // rcf_ token in the path is the credential; the route self-guards (sha256
+  // lookup, refuses an inactive or deleted profile, per-token rate limit) and
+  // is in check:route-guards EXEMPT. Segment-matched here, not a bare prefix,
+  // so a future /api/calendar-feeds or /api/calendar-feed-admin is NOT public
+  // by inheritance. Like review-login it is not a PAGE, and the URL is always
+  // minted on the CRM host (getAppUrl), so AppShell, brands and tenant-domains
+  // do not list it: on a brand host it SHOULD fall back
+  // (src/calendar-feed-path.test.js pins both directions).
+  const publicExactPaths = ['/api/mobile/review-login', '/api/calendar-feed']
 
   const pathname = request.nextUrl.pathname
   const isPublic =
