@@ -100,7 +100,7 @@ async function fetchDashboardShifts(supabase, { profileId, locationId, startDate
     .from('shift_assignments')
     .select(`
       id, profile_id, start_time_override, end_time_override, status,
-      shift_blocks!inner ( id, block_date, start_time, end_time, location_id, roster_id, rosters:roster_id ( status ), shift_templates ( name, start_time, end_time ), locations:location_id ( id, name ) )${profileSelect}
+      shift_blocks!inner ( id, block_date, start_time, end_time, briefing, location_id, roster_id, rosters:roster_id ( status ), shift_templates ( name, start_time, end_time ), locations:location_id ( id, name ) )${profileSelect}
     `)
     .gte('shift_blocks.block_date', startDate)
     .lte('shift_blocks.block_date', endDate)
@@ -122,6 +122,8 @@ async function fetchDashboardShifts(supabase, { profileId, locationId, startDate
       // its template displays, sorts and totals at its real hours.
       block_start_time: block.start_time ?? null,
       block_end_time: block.end_time ?? null,
+      // BLOCKEDIT.1 (mig 629) — the shift's coach-visible briefing.
+      briefing: block.briefing ?? null,
       status: r.status,
       published: block.rosters?.status === 'published',
       location_id: block.location_id,

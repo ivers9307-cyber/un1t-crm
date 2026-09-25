@@ -479,3 +479,19 @@ describe('dayHeaderStatus — admin shifts (SHIFTTYPE.1)', () => {
     expect(dayHeaderStatus([adminEmpty], { todayIso: TODAY }).tone).toBe('none')
   })
 })
+
+describe('shiftCardModel — briefing (BLOCKEDIT.1)', () => {
+  it('says a shift has a briefing, for a manager and a coach alike, and never copies the text', () => {
+    for (const isManager of [true, false]) {
+      const m = shiftCardModel(block({ briefing: 'Fire drill at 10' }), [coach('u2', 'Coach A')], null, { isManager })
+      expect(m.hasBriefing).toBe(true)
+      expect(m.hoverTitle).toMatch(/Has a briefing/)
+      expect(JSON.stringify(m)).not.toMatch(/Fire drill/)
+    }
+  })
+
+  it('no briefing (or a blank one) is no marker', () => {
+    expect(shiftCardModel(block(), [], null).hasBriefing).toBe(false)
+    expect(shiftCardModel(block({ briefing: '  ' }), [], null).hasBriefing).toBe(false)
+  })
+})

@@ -28,6 +28,7 @@ import { useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { CalendarOff, RefreshCw } from 'lucide-react'
 import { pickLocationColor } from '@shared/location-colors'
+import { briefingOf } from '@shared/shift-briefing'
 import { effectiveShiftStart, effectiveShiftEnd } from '@shared/roster-month'
 import Modal from '@/components/ui/Modal'
 import Button from '@/components/ui/Button'
@@ -411,6 +412,12 @@ function WeekPanel({ title, startIso, endIso, shifts, showLocation, onShiftClick
                           )
                         })()}
                       </div>
+                      {/* BLOCKEDIT.1 — the manager's note for the coaches on this shift. */}
+                      {!day.isPast && briefingOf(s) && (
+                        <p data-testid="shift-briefing-line" className="mt-0.5 text-xs text-un1t-text whitespace-pre-line">
+                          <span className="font-semibold">Briefing: </span>{briefingOf(s)}
+                        </p>
+                      )}
                     </div>
                   )
                 })

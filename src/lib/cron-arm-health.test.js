@@ -17,9 +17,11 @@ vi.mock('./log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() 
 const {
   SHIFT_REMINDERS_HEARTBEAT, ROSTER_RUNWAY_HEARTBEAT, SHIFT_ARM_FAULT_KEYS,
   shiftReminderArmHealthy, runwayArmHealthy,
+  SHIFT_TIME_CHANGES_HEARTBEAT, TIME_CHANGE_ARM_FAULT_KEYS, timeChangeArmHealthy,
 } = await import('./cron-arm-health')
 const { runShiftReminders } = await import('./shift-reminders')
 const { runRosterRunwayAlerts } = await import('./roster-runway-notify')
+const { runShiftTimeChangeNotices } = await import('./block-edit-notify')
 
 const SHIFT_CLEAN = {
   quiet_hours: 0, shift_candidates: 2, shift_pushed: 1, shift_emailed: 0, shift_skipped_dup: 1,
@@ -113,3 +115,49 @@ describe('the real arms, on their zero-work paths', () => {
     expect(runwayArmHealthy(outcome)).toBe(true)
   })
 })
+
+// BLOCKEDIT.1 review — the time-change notice arm (block-edit-notify.js) of
+// send-push-reminders gets its own row, 'shift-time-changes' (mig 639).
+describe('timeChangeArmHealthy', () => {
+  const CLEAN = {
+    time_change_quiet: 0, time_change_rows: 2, time_change_told: 1, time_change_not_needed: 1,
+    time_change_deduped: 0, time_change_undelivered: 0, time_change_send_failed: 0,
+    time_change_stamp_failed: 0, time_change_told_stamp_failed: 0, time_change_read_failed: 0, time_change_read_capped: 0,
+  }
+
+  it('the row name is the one mig 639 seeds', () => {
+    expect(SHIFT_TIME_CHANGES_HEARTBEAT).toBe('shift-time-changes')
+  })
+
+  it('a clean run, an idle run and a quiet-hours tick are healthy', () => {
+    expect(timeChangeArmHealthy(CLEAN)).toBe(true)
+    expect(timeChangeArmHealthy({ ...CLEAN, time_change_rows: 0, time_change_told: 0, time_change_not_needed: 0 })).toBe(true)
+    expect(timeChangeArmHealthy({ time_change_quiet: 1 })).toBe(true)
+  })
+
+  it('a failed delivery, a dedup, an opted-out coach or a lost post-delivery stamp is not an arm fault', () => {
+    for (const k of ['time_change_send_failed', 'time_change_deduped', 'time_change_undelivered', 'time_change_told_stamp_failed']) {
+      expect(timeChangeArmHealthy({ ...CLEAN, [k]: 1 })).toBe(true)
+    }
+  })
+
+  it('a failed read, a capped read or a failed not-needed stamp is a fault; so is no outcome', () => {
+    expect(TIME_CHANGE_ARM_FAULT_KEYS).toEqual(['time_change_read_failed', 'time_change_read_capped', 'time_change_stamp_failed'])
+    for (const k of TIME_CHANGE_ARM_FAULT_KEYS) expect(timeChangeArmHealthy({ ...CLEAN, [k]: 1 })).toBe(false)
+    expect(timeChangeArmHealthy(undefined)).toBe(false)
+    expect(timeChangeArmHealthy([])).toBe(false)
+  })
+
+  it('the REAL arm on its zero-work paths is healthy: no locations, and a quiet-hours tick that reads nothing', async () => {
+    expect(timeChangeArmHealthy(await runShiftTimeChangeNotices(null, { locations: [] }))).toBe(true)
+    const db = { from: () => { throw new Error('quiet hours must not read') } }
+    const quiet = await runShiftTimeChangeNotices(db, {
+      nowMs: Date.UTC(2026, 8, 25, 1, 0), // 02:00 IST
+      locations: [{ id: 'loc-1', timezone: 'Europe/Dublin' }],
+    })
+    expect(quiet.time_change_quiet).toBe(1)
+    for (const k of TIME_CHANGE_ARM_FAULT_KEYS) expect(quiet).toHaveProperty(k, 0)
+    expect(timeChangeArmHealthy(quiet)).toBe(true)
+  })
+})
+

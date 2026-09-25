@@ -402,6 +402,29 @@ describe('fetchPersonalDashboardData — draft shifts (D1)', () => {
     locations: { id: 'loc-1', name: 'Studio' },
   })
 
+  // BLOCKEDIT.1 — Today (web) and the phone's personal dashboard read the
+  // coach's own shifts here; each row carries its shift's briefing.
+  it("asks for the block's briefing and carries it on each row", async () => {
+    const selects = []
+    const base = makePersonalDb({
+      shift_assignments: {
+        data: [{ id: 'pub', profile_id: 'p1', start_time_override: null, end_time_override: null, status: 'scheduled', shift_blocks: { ...block('published'), briefing: 'Fire drill at 10' } }],
+        error: null,
+      },
+    })
+    const db = {
+      from(table) {
+        const b = base.from(table)
+        const sel = b.select
+        b.select = function (cols) { selects.push([table, cols]); return sel.call(this) }
+        return b
+      },
+    }
+    const res = await fetchPersonalDashboardData(db, 'p1')
+    expect(selects.find(([t]) => t === 'shift_assignments')[1]).toMatch(/shift_blocks!inner \( [^)]*\bbriefing\b/)
+    expect(res.data.monthShifts[0].briefing).toBe('Fire drill at 10')
+  })
+
   it('returns published shifts only, dropping a draft-roster shift', async () => {
     const db = makePersonalDb({
       shift_assignments: {

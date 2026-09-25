@@ -1,4 +1,4 @@
-// /api/schedule/blocks/[id] — DELETE
+// /api/schedule/blocks/[id] — DELETE, PUT
 //
 // Removes a shift_block. Cascades to shift_assignments via the FK
 // on delete. (The old public.shifts mirror that the mig 068 trigger
@@ -35,13 +35,29 @@
 // the generator and both roster copy modes skip. Creating the block again
 // by hand (POST /api/schedule/blocks) deletes that row — the undo. To stop a
 // slot on EVERY week, deactivate the template instead.
+//
+// BLOCKEDIT.1 — PUT edits ONE shift: start/end time, min/max coaches and the
+// coach-visible briefing (mig 629). The rules are in src/lib/block-edit.js
+// (planBlockEdit). Same gate as DELETE: manager AT the block's studio, 404
+// outside the caller's studios. On a PUBLISHED roster every edit writes a
+// coachless `block_edited` change-log row, and each coach whose own hours moved
+// gets a `time_changed` row that the */5 notice arm (src/lib/block-edit-notify.js)
+// turns into ONE message inside quiet hours. The route itself sends nothing.
 
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
-import { MANAGER_ROLES } from '@/lib/schemas'
+import { MANAGER_ROLES, timeOfDay, uuidLike } from '@/lib/schemas'
+import { validateBody } from '@/lib/validate'
 import { isLiveAssignment } from '@/lib/roster'
 import { logAndNotifyUnassignments } from '@/lib/shift-unassign'
+import { logRosterChange, logBlockEdit, markChangesNotified } from '@/lib/roster-change-log'
+import { planBlockEdit, sameWindow, matchesExpected, blockEditNoticeWhen, coachShiftOver, TIME_CHANGE_SOURCE } from '@/lib/block-edit'
+import { dublinTodayStr } from '@/lib/dublin-time'
+import { BRIEFING_MAX_LENGTH } from '@shared/shift-briefing'
+import { findShiftOverlaps } from '@/lib/shift-overlaps'
+import { formatTime12h } from '@/lib/schedule-overlap'
 import { logWarn } from '@/lib/log'
 
 export async function DELETE(_request, props) {
@@ -154,4 +170,245 @@ export async function DELETE(_request, props) {
   }
 
   return NextResponse.json({ success: true })
+}
+
+// BLOCKEDIT.1 — every field optional; omitted = unchanged. briefing: null or
+// blank clears it. allow_below_assigned is the assign route's
+// allow_over_capacity in reverse: a max under the coaches already on it.
+const BlockEditSchema = z.object({
+  start_time: timeOfDay.optional(),
+  end_time: timeOfDay.optional(),
+  min_coaches: z.number().int().min(0).max(50).optional(),
+  max_coaches: z.number().int().min(1).max(50).optional(),
+  // Trimmed BEFORE the cap (review nit): the stored text is the trimmed one,
+  // so 500 characters padded with whitespace is a valid briefing.
+  briefing: z.string().trim().max(BRIEFING_MAX_LENGTH).nullable().optional(),
+  allow_below_assigned: z.boolean().optional(),
+  // Review nit — a shift dated before today (Dublin) is paid history; changing
+  // it must be asked for explicitly.
+  confirm_past: z.boolean().optional(),
+  // Review fix 2 — what the editor OPENED with. The web form always sends it;
+  // a stored value that differs is a 409, so a form left open while another
+  // manager saved cannot silently overwrite their change.
+  expected: z.object({
+    start_time: timeOfDay,
+    end_time: timeOfDay,
+    min_coaches: z.number().int(),
+    max_coaches: z.number().int(),
+  }).optional(),
+})
+
+export async function PUT(request, props) {
+  const params = await props.params
+  const user = await getCurrentUser()
+  if (!user || !hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+  }
+
+  // Not UUID-shaped: no such shift. Checked before the read, because Postgres
+  // answers a malformed uuid with an ERROR (22P02), which would surface as the
+  // read-failed 503 below and invite a retry that can never succeed.
+  if (!uuidLike.safeParse(params.id).success) {
+    return NextResponse.json({ success: false, error: 'Block not found' }, { status: 404 })
+  }
+
+  const validation = await validateBody(request, BlockEditSchema)
+  if (!validation.ok) return validation.response
+
+  const db = createServerClient()
+  const { data: block, error: readErr } = await db
+    .from('shift_blocks')
+    // Literal IN the call on purpose: check:select-columns resolves only a
+    // literal passed to .select() (a const holding the string is skipped in
+    // silence). kind: SHIFTTYPE.1 (an admin shift has no minimum);
+    // locations.timezone: the studio clock the quiet-hours answer is read in.
+    .select(`
+      id, location_id, template_id, block_date, start_time, end_time, min_coaches, max_coaches, briefing, roster_id,
+      rosters:roster_id ( status ),
+      locations:location_id ( timezone ),
+      shift_templates ( name, kind ),
+      shift_assignments ( id, profile_id, status, start_time_override, end_time_override, profiles:profile_id ( full_name ) )
+    `)
+    .eq('id', params.id)
+    .maybeSingle()
+  if (readErr) {
+    // Not a 404: a failed read must not tell the manager the shift is gone.
+    logWarn('schedule-blocks', 'block edit: could not read the block', { blockId: params.id, err: readErr })
+    return NextResponse.json({ success: false, error: 'Could not read this shift. Try again.', transient: true }, { status: 503 })
+  }
+  if (!block) {
+    return NextResponse.json({ success: false, error: 'Block not found' }, { status: 404 })
+  }
+  const notHere = assertLocationAccessOr404(user, block.location_id)
+  if (notHere) return notHere
+  if (!hasRoleAtLocation(user, block.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  }
+
+  if (!matchesExpected(block, validation.data.expected)) {
+    return NextResponse.json({
+      success: false, error: 'block_changed',
+      message: 'Someone changed this shift since you opened it — reload it and try again.',
+    }, { status: 409 })
+  }
+
+  const plan = planBlockEdit({ block, body: validation.data })
+  if (!plan.ok) return NextResponse.json(plan.body, { status: plan.status })
+  if (plan.unchanged) {
+    return NextResponse.json({ success: true, unchanged: true, data: {
+      id: block.id, start_time: block.start_time, end_time: block.end_time,
+      min_coaches: block.min_coaches, max_coaches: block.max_coaches, briefing: block.briefing ?? null,
+    } })
+  }
+
+  // Review nit — past shifts are paid hours: edit only when the caller says
+  // so (the form asks first). An unchanged body never reaches here.
+  if (block.block_date < dublinTodayStr() && validation.data.confirm_past !== true) {
+    return NextResponse.json({
+      success: false, error: 'past_shift',
+      message: 'This shift is in the past. Changing it changes paid hours; confirm to go ahead.',
+    }, { status: 409 })
+  }
+
+  // 1. The block, guarded on what was read (D9): a concurrent edit is a 409,
+  //    never a silent overwrite. A zero-row UPDATE is not an error in
+  //    PostgREST, so the rows are judged.
+  const { data: saved, error: saveErr } = await db
+    .from('shift_blocks')
+    .update(plan.patch)
+    .eq('id', block.id)
+    .eq('location_id', block.location_id)
+    .eq('start_time', block.start_time)
+    .eq('end_time', block.end_time)
+    .eq('min_coaches', block.min_coaches)
+    .eq('max_coaches', block.max_coaches)
+    .select('id, start_time, end_time, min_coaches, max_coaches, briefing')
+  if (saveErr) {
+    if (saveErr.code === '23514') {
+      return NextResponse.json({
+        success: false, error: 'check_failed',
+        message: 'That does not fit the rules for a shift: the end must be after the start, the minimum no more than the maximum, and a briefing at most 500 characters.',
+      }, { status: 400 })
+    }
+    logWarn('schedule-blocks', 'block edit: update failed', { blockId: block.id, err: saveErr })
+    return NextResponse.json({ success: false, error: saveErr.message }, { status: 500 })
+  }
+  if (!saved || saved.length === 0) {
+    return NextResponse.json({
+      success: false, error: 'block_changed',
+      message: 'This shift changed while you were editing it. Close it, open it again and retry.',
+    }, { status: 409 })
+  }
+
+  // 2. D3 — overrides equal to the OLD block time follow it. Guarded on the
+  //    old value. A failure keeps that coach at the old override: the block
+  //    edit stands, the coach is logged at the window they really have, and
+  //    the manager is told.
+  const stuck = new Set()
+  for (const f of plan.followUpdates) {
+    let q = db.from('shift_assignments').update(f.patch).eq('id', f.assignmentId).eq('block_id', block.id)
+    for (const [col, val] of Object.entries(f.expect)) q = q.eq(col, val)
+    const { data: moved, error: moveErr } = await q.select('id')
+    if (moveErr || !moved || moved.length === 0) {
+      stuck.add(f.assignmentId)
+      logWarn('schedule-blocks', 'block edit: an override did not follow the shift', {
+        blockId: block.id, assignmentId: f.assignmentId, err: moveErr || 'no row matched',
+      })
+    }
+  }
+  const warnings = [...plan.warnings]
+  const stuckNames = (block.shift_assignments || [])
+    .filter((a) => stuck.has(a.id))
+    .map((a) => a.profiles?.full_name || 'A coach')
+  if (stuckNames.length > 0) {
+    warnings.push(`${stuckNames.join(', ')} still ${stuckNames.length === 1 ? 'has' : 'have'} the old hours: their own times could not be moved with the shift. Adjust them in the coach's row.`)
+  }
+  // Second review nit — a coach whose override could not follow keeps it, and
+  // against the new block times that window can end at or before it starts.
+  // Named in the warning, and not announced: a backwards window is not a
+  // shift anyone can be told about. The manager fixes it in the coach's row
+  // (whose own PUT tells the coach).
+  const backwards = new Set()
+  for (const a of plan.affected) {
+    if (!stuck.has(a.assignmentId) || a.toIfStuck.end_time > a.toIfStuck.start_time) continue
+    backwards.add(a.assignmentId)
+    const name = (block.shift_assignments || []).find((x) => x.id === a.assignmentId)?.profiles?.full_name || 'A coach'
+    warnings.push(`${name}'s own hours are now ${formatTime12h(a.toIfStuck.start_time)}–${formatTime12h(a.toIfStuck.end_time)}, which ends before it starts: fix their hours in the coach's row.`)
+  }
+  const affected = plan.affected
+    .filter((a) => !backwards.has(a.assignmentId))
+    .map((a) => (stuck.has(a.assignmentId) ? { ...a, to: a.toIfStuck } : a))
+    .filter((a) => !sameWindow(a.from, a.to))
+
+  // Review fix 4 — a moved or stretched shift can put a coach on two shifts at
+  // once. The assign route's org-scoped advisory, on each moved coach's NEW
+  // window: warned, never blocked, never throws (src/lib/shift-overlaps.js).
+  let overlaps = []
+  if (affected.length > 0) {
+    const { clashes } = await findShiftOverlaps(db, {
+      locationId: block.location_id,
+      blockId: block.id,
+      blockDate: block.block_date,
+      windows: affected.map((a) => ({ profileId: a.coachId, start_time: a.to.start_time, end_time: a.to.end_time })),
+      logTag: 'schedule-blocks',
+    })
+    overlaps = clashes.map((c) => ({ profile_id: c.profileId, message: c.text }))
+    warnings.push(...clashes.map((c) => c.text))
+  }
+
+  // 3. D4/D5 — change log, published only. Best-effort: a lost audit row never
+  //    fails a save that already happened.
+  let notice = null
+  if (block.rosters?.status === 'published') {
+    await logBlockEdit(db, {
+      isPublished: true, locationId: block.location_id, blockId: block.id,
+      blockDate: block.block_date, actorId: user.id, details: plan.blockDetails,
+    })
+    const logged = []
+    const nowMs = Date.now()
+    for (const a of affected) {
+      // Second review 3 — a shift already OVER (earlier date, or ended today)
+      // is never messaged (D8). Logged as not_needed and stamped below, so the
+      // drawer shows no told time and the notice arm never picks it up.
+      const over = coachShiftOver({ blockDate: block.block_date, from: a.from, to: a.to, nowMs, timeZone: block.locations?.timezone })
+      const r = await logRosterChange(db, {
+        isPublished: true,
+        locationId: block.location_id,
+        action: 'time_changed',
+        coachId: a.coachId,
+        actorId: user.id,
+        blockId: block.id,
+        blockDate: block.block_date,
+        details: { source: TIME_CHANGE_SOURCE, from: a.from, to: a.to, ...(over ? { notice: 'not_needed' } : {}) },
+      })
+      if (r?.logged) logged.push({ id: r.id, coachId: a.coachId, from: a.from, to: a.to, over })
+    }
+    // Nobody to tell: a shift already over, or the manager moved their own
+    // shift. Stamped now so the notice arm and the re-publish safety net
+    // leave them alone (stampMeansTold: notice not_needed, rule 4).
+    const silent = logged.filter((r) => r.over || r.coachId === user.id)
+    const silentIds = silent.map((r) => r.id)
+    const pastCount = logged.filter((r) => r.over && r.coachId !== user.id).length
+    if (silentIds.length > 0) await markChangesNotified(db, silentIds)
+    const toTell = logged.filter((r) => !silentIds.includes(r.id))
+    if (toTell.length > 0) {
+      // Review fix 3 — 'too_late' when the shift starts before anyone can be
+      // told (quiet hours now, a start before 07:00 on the notice morning).
+      notice = {
+        coaches: toTell.length,
+        when: blockEditNoticeWhen({ nowMs, timeZone: block.locations?.timezone, blockDate: block.block_date, windows: toTell }),
+      }
+    } else if (pastCount > 0) {
+      notice = { coaches: pastCount, when: 'past' }
+    }
+  }
+
+  return NextResponse.json({
+    success: true,
+    data: saved[0],
+    ...(notice ? { notice } : {}),
+    ...(plan.kept.length > 0 ? { kept_overrides: plan.kept.map((k) => ({ assignment_id: k.assignmentId, profile_id: k.coachId })) } : {}),
+    ...(overlaps.length > 0 ? { overlaps } : {}),
+    ...(warnings.length > 0 ? { warning: warnings.join(' ') } : {}),
+  })
 }
