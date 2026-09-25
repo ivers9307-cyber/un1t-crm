@@ -85,14 +85,16 @@ export function timeChangeArmHealthy(summary) {
 }
 
 /**
- * REPLACE.1a — true when a runReplaceNotices() outcome shows a clean run. The
- * arm never throws; `errors` counts its own failures (the held-row read, a
- * silent stamp, a notifyRosterChanges that threw), each retried next tick.
- * A quiet-hours tick and a tick with nothing held are healthy. A coach who
- * could not be reached is not an arm fault: notifyRosterChanges leaves their
- * rows for the re-publish safety net.
+ * REPLACE.1a — true when a runReplaceNotices() outcome shows a clean run.
+ * Faults in the arm's own machinery, each retried next tick:
+ *   errors       — the held-row read, or the silent (no-message) stamp, failed.
+ *   stamp_failed — a notice was DELIVERED but its rows could not be stamped:
+ *                  the coach is told again next tick, until the stamp lands.
+ * A quiet-hours tick and a tick with nothing held are healthy. NOT a fault:
+ * send_failed (nothing delivered, nothing stamped, next tick retries) and
+ * undelivered (opted out / unreachable, left for the re-publish safety net).
  */
 export function replaceNoticeArmHealthy(outcome) {
   if (!isOutcome(outcome)) return false
-  return count(outcome.errors) === 0
+  return count(outcome.errors) === 0 && count(outcome.stamp_failed) === 0
 }

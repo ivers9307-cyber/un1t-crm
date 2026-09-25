@@ -164,6 +164,20 @@ describe('POST /replace — the log pair and ONE notice each', () => {
       ],
     })
   })
+  // Review 1 — notifyRosterChanges never throws, so a .catch on it could
+  // never fire. What CAN go wrong is reported in its result: a stamp lost
+  // after a delivery (the arm will tell that coach again) or a failed send.
+  it('in band: a lost post-delivery stamp or a failed send is logged from after(), never thrown', async () => {
+    notifyRosterChanges.mockResolvedValueOnce({ notified: 2, stampFailed: 1, failed: 0, byCoach: {} })
+    expect((await call()).status).toBe(200)
+    expect(logError).toHaveBeenCalledWith('shift-replace', expect.stringMatching(/told again/),
+      expect.objectContaining({ assignmentId: 'as-1', stampFailed: 1, failed: 0 }))
+  })
+  it('in band, clean: nothing logged', async () => {
+    notifyRosterChanges.mockResolvedValueOnce({ notified: 2, stampFailed: 0, failed: 0, byCoach: {} })
+    await call()
+    expect(logError).not.toHaveBeenCalled()
+  })
   it('published, quiet hours: logged, NOT sent (the */5 arm sends from 07:00), notice morning', async () => {
     vi.setSystemTime(QUIET)
     const body = await (await call()).json()

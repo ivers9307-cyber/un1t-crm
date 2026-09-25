@@ -4,7 +4,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { scriptedDb, chainsFor, argsOf, allArgsOf } from './scripted-db.test-helpers'
 
-vi.mock('./roster-change-notify', () => ({ notifyRosterChanges: vi.fn(async () => ({ notified: 1 })) }))
+// Every coach it is asked about was told, unless a test says otherwise.
+const toldAll = async (_db, { changes }) => ({ byCoach: Object.fromEntries(changes.map((c) => [c.coachId, 'delivered'])) })
+vi.mock('./roster-change-notify', () => ({ notifyRosterChanges: vi.fn() }))
 vi.mock('./log', () => ({ logError: vi.fn(), logWarn: vi.fn() }))
 const { notifyRosterChanges } = await import('./roster-change-notify')
 const { logError } = await import('./log')
@@ -19,7 +21,11 @@ const row = (id, coach, action, over = {}) => ({
 })
 const LOC = { data: [{ id: 'loc-1', timezone: 'Europe/Dublin' }], error: null }
 
-beforeEach(() => vi.clearAllMocks())
+beforeEach(() => {
+  vi.clearAllMocks()
+  notifyRosterChanges.mockImplementation(toldAll)
+})
+const STAMPED = (ids) => ({ data: ids.map((id) => ({ id })), error: null })
 
 describe('runReplaceNotices', () => {
   it('reads only unstamped replace rows, up to 48 h old, for today or later', async () => {
@@ -31,21 +37,29 @@ describe('runReplaceNotices', () => {
     expect(allArgsOf(c, 'gte')).toEqual([['created_at', '2026-09-27T06:05:00.000Z'], ['block_date', '2026-09-29']])
   })
 
-  it('in band: ONE notifyRosterChanges per studio and actor, with the net change and the start time', async () => {
+  it('in band: ONE notifyRosterChanges per studio and actor, with the net change and the start time; the arm stamps its OWN rows after delivery', async () => {
     const db = scriptedDb({
-      roster_change_log: [{ data: [row('r1', 'coach-a', 'unassigned'), row('r2', 'coach-b', 'assigned')], error: null }],
+      roster_change_log: [
+        { data: [row('r1', 'coach-a', 'unassigned'), row('r2', 'coach-b', 'assigned')], error: null },
+        STAMPED(['r1']), STAMPED(['r2']),
+      ],
       locations: [LOC],
     })
     const stats = await runReplaceNotices(db, { nowMs: IN_BAND, todayStr: '2026-09-29' })
     expect(notifyRosterChanges).toHaveBeenCalledTimes(1)
     expect(notifyRosterChanges).toHaveBeenCalledWith(db, {
-      locationId: 'loc-1', actorId: 'mgr-1', todayStr: '2026-09-29',
+      locationId: 'loc-1', actorId: 'mgr-1', todayStr: '2026-09-29', markNotified: false,
       changes: [
         { coachId: 'coach-a', blockId: 'b1', blockDate: '2026-09-29', startTime: '09:00:00', action: 'unassigned' },
         { coachId: 'coach-b', blockId: 'b1', blockDate: '2026-09-29', startTime: '09:00:00', action: 'assigned' },
       ],
     })
-    expect(stats).toMatchObject({ rows: 2, groups: 1, quiet: 0, silent: 0, fresh: 0, errors: 0 })
+    expect(stats).toMatchObject({ rows: 2, groups: 1, told: 2, quiet: 0, silent: 0, fresh: 0, stamp_failed: 0, errors: 0 })
+    const [, stampA, stampB] = chainsFor(db, 'roster_change_log')
+    expect(argsOf(stampA, 'update')[0]).toEqual({ notified_at: new Date(IN_BAND).toISOString() })
+    expect(argsOf(stampA, 'in')).toEqual(['id', ['r1']])
+    expect(argsOf(stampA, 'is')).toEqual(['notified_at', null])
+    expect(argsOf(stampB, 'in')).toEqual(['id', ['r2']])
   })
 
   it('a coach whose newest row is under 2 minutes old is left to the route this tick (it is still changing)', async () => {
@@ -58,7 +72,7 @@ describe('runReplaceNotices', () => {
         row('r2', 'coach-b', 'assigned', { created_at: '2026-09-29T05:00:00Z' }),
         row('r3', 'coach-b', 'unassigned', { created_at: young }),
         row('r4', 'coach-c', 'assigned', { created_at: young }),
-      ], error: null }],
+      ], error: null }, STAMPED(['r1'])],
       locations: [LOC],
     })
     const stats = await runReplaceNotices(db, { nowMs: IN_BAND, todayStr: '2026-09-29' })
@@ -119,21 +133,75 @@ describe('runReplaceNotices', () => {
 
   it('an unreadable timezone is Europe/Dublin, never a skipped studio', async () => {
     const db = scriptedDb({
-      roster_change_log: [{ data: [row('r1', 'coach-a', 'unassigned')], error: null }],
+      roster_change_log: [{ data: [row('r1', 'coach-a', 'unassigned')], error: null }, STAMPED(['r1'])],
       locations: [{ data: null, error: { message: 'x' } }],
     })
     await runReplaceNotices(db, { nowMs: IN_BAND, todayStr: '2026-09-29' })
     expect(notifyRosterChanges).toHaveBeenCalledTimes(1)
   })
 
-  it('one group throwing costs neither the others nor the arm', async () => {
-    notifyRosterChanges.mockRejectedValueOnce(new Error('boom'))
+  // REPLACE.1a review 1 — a delivered notice whose stamp fails would be sent
+  // again next tick. That is the right failure (a duplicate, never a loss),
+  // but it must be COUNTED so the arm's heartbeat goes stale instead of green.
+  it('a delivered notice whose stamp fails is stamp_failed (not healthy); the other coach is still stamped', async () => {
     const db = scriptedDb({
-      roster_change_log: [{ data: [row('r1', 'coach-a', 'unassigned'), row('r2', 'coach-b', 'assigned', { actor_id: 'mgr-2' })], error: null }],
+      roster_change_log: [
+        { data: [row('r1', 'coach-a', 'unassigned'), row('r2', 'coach-b', 'assigned')], error: null },
+        { data: null, error: { message: 'down' } }, STAMPED(['r2']),
+      ],
       locations: [LOC],
     })
     const stats = await runReplaceNotices(db, { nowMs: IN_BAND, todayStr: '2026-09-29' })
-    expect(notifyRosterChanges).toHaveBeenCalledTimes(2)
-    expect(stats).toMatchObject({ groups: 1, errors: 1 })
+    expect(stats).toMatchObject({ told: 2, stamp_failed: 1, errors: 0 })
+    expect(logError).toHaveBeenCalledWith('shift-replace-notify', expect.stringMatching(/told again/), expect.objectContaining({ rowIds: ['r1'] }))
+  })
+
+  it('a coach told about the same rows by someone else meanwhile (0 rows stamped) is fine: nothing owed, not a fault', async () => {
+    const db = scriptedDb({
+      roster_change_log: [{ data: [row('r1', 'coach-a', 'unassigned')], error: null }, STAMPED([])],
+      locations: [LOC],
+    })
+    expect(await runReplaceNotices(db, { nowMs: IN_BAND, todayStr: '2026-09-29' })).toMatchObject({ told: 1, stamp_failed: 0 })
+  })
+
+  it('self and past outcomes are stamped too; opted-out / unreachable / failed are left for the next tick and counted', async () => {
+    notifyRosterChanges.mockImplementation(async () => ({ byCoach: { 'coach-a': 'self', 'coach-b': 'opted_out', 'coach-c': 'undelivered', 'coach-d': 'failed' } }))
+    const db = scriptedDb({
+      roster_change_log: [
+        { data: [row('r1', 'coach-a', 'unassigned'), row('r2', 'coach-b', 'assigned'), row('r3', 'coach-c', 'assigned'), row('r4', 'coach-d', 'assigned')], error: null },
+        STAMPED(['r1']),
+      ],
+      locations: [LOC],
+    })
+    const stats = await runReplaceNotices(db, { nowMs: IN_BAND, todayStr: '2026-09-29' })
+    expect(chainsFor(db, 'roster_change_log')).toHaveLength(2) // the read + coach-a's stamp
+    expect(stats).toMatchObject({ told: 0, undelivered: 2, send_failed: 1, stamp_failed: 0, errors: 0 })
+  })
+
+  // The undo trap: B was told "added" (the route's after(), in band) but the
+  // stamp failed; the manager puts A back overnight. B's pile balances, yet B
+  // must hear "removed", or B turns up to a shift they are no longer on.
+  it('a pile whose "added" row may already have been told is not silent: B is told "removed" in the morning', async () => {
+    const pile = [
+      row('r2', 'coach-b', 'assigned', { created_at: '2026-09-28T20:00:00Z' }),   // 21:00 Dublin, in band
+      row('r3', 'coach-b', 'unassigned', { created_at: '2026-09-28T22:30:00Z' }), // 23:30 Dublin, quiet
+    ]
+    const night = scriptedDb({ roster_change_log: [{ data: pile, error: null }], locations: [LOC] })
+    expect(await runReplaceNotices(night, { nowMs: QUIET, todayStr: '2026-09-29' })).toMatchObject({ silent: 0, quiet: 1 })
+    expect(chainsFor(night, 'roster_change_log')).toHaveLength(1) // nothing stamped overnight
+
+    const morning = scriptedDb({ roster_change_log: [{ data: pile, error: null }, STAMPED(['r2', 'r3'])], locations: [LOC] })
+    await runReplaceNotices(morning, { nowMs: IN_BAND, todayStr: '2026-09-29' })
+    expect(notifyRosterChanges.mock.calls.at(-1)[1].changes).toEqual([expect.objectContaining({ coachId: 'coach-b', action: 'unassigned' })])
+  })
+
+  it('the same pile made entirely overnight IS silent (nobody could have been told)', async () => {
+    const pile = [
+      row('r2', 'coach-b', 'assigned', { created_at: '2026-09-28T22:00:00Z' }),
+      row('r3', 'coach-b', 'unassigned', { created_at: '2026-09-28T22:30:00Z' }),
+    ]
+    const db = scriptedDb({ roster_change_log: [{ data: pile, error: null }, STAMPED(['r2', 'r3'])], locations: [LOC] })
+    expect(await runReplaceNotices(db, { nowMs: QUIET, todayStr: '2026-09-29' })).toMatchObject({ silent: 1 })
+    expect(notifyRosterChanges).not.toHaveBeenCalled()
   })
 })

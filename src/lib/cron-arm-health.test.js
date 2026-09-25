@@ -105,8 +105,16 @@ describe('replaceNoticeArmHealthy (REPLACE.1a)', () => {
     expect(replaceNoticeArmHealthy({ rows: 0, groups: 0, silent: 0, quiet: 0, fresh: 0, errors: 0 })).toBe(true)
   })
 
-  it('errors > 0 (a read, a stamp or a notify that threw) is a fault in the arm itself', () => {
+  it('errors > 0 (the held-row read or the silent stamp failed) is a fault in the arm itself', () => {
     expect(replaceNoticeArmHealthy({ ...CLEAN, errors: 1 })).toBe(false)
+  })
+
+  it('review 1 — a delivered notice whose stamp failed (it will be told again) is a fault', () => {
+    expect(replaceNoticeArmHealthy({ ...CLEAN, stamp_failed: 1 })).toBe(false)
+  })
+
+  it('a failed send or an unreachable coach is a delivery outcome, not an arm fault', () => {
+    expect(replaceNoticeArmHealthy({ ...CLEAN, send_failed: 2, undelivered: 1 })).toBe(true)
   })
 
   it.each([undefined, null, 'ok', 0, [CLEAN]])('a run that returned %j has not shown it ran: not healthy', (v) => {
@@ -144,7 +152,7 @@ describe('the real arms, on their zero-work paths', () => {
     for (const m of ['select', 'is', 'eq', 'gte', 'order', 'limit']) b[m] = () => b
     b.then = (res, rej) => Promise.resolve({ data: [], error: null }).then(res, rej)
     const stats = await runReplaceNotices({ from: () => b }, { nowMs: Date.UTC(2026, 8, 25, 8, 0), todayStr: '2026-09-25' })
-    expect(stats).toEqual({ rows: 0, groups: 0, silent: 0, quiet: 0, fresh: 0, errors: 0 })
+    expect(stats).toEqual({ rows: 0, groups: 0, told: 0, silent: 0, quiet: 0, fresh: 0, undelivered: 0, send_failed: 0, stamp_failed: 0, errors: 0 })
     expect(replaceNoticeArmHealthy(stats)).toBe(true)
   })
 })

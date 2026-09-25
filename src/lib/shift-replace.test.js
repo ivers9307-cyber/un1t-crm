@@ -5,7 +5,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   replaceRefusal, replaceRefusalResponse, replaceShiftStarted, replaceChanges,
-  replaceNoticeWhen, replaceResponseOutcome, replacePickerCopy, netReplaceChanges,
+  replaceNoticeWhen, replaceResponseOutcome, replacePickerCopy, netReplaceChanges, bandSeenBetween,
   REPLACE_VIA, REPLACE_SWAP_CLOSE_NOTE, REPLACE_UNDONE_REASON,
 } from './shift-replace'
 // The phone's Alert says the same words (mobile cannot import src/lib).
@@ -169,9 +169,47 @@ describe('netReplaceChanges (the held-notice arm)', () => {
     ])
   })
 
+  // REPLACE.1a review 1 — "put back before anyone was told" is only true if
+  // nobody COULD have been told. A row the route's after() sent (created in
+  // band) or an earlier in-band tick sent, whose stamp then failed, is still
+  // unstamped: treating its pile as net zero would tell B "added" and never
+  // "removed". Such a pile tells the LAST action instead (a duplicate at
+  // worst, never a loss).
+  it('a balanced pile with a row that may already have been told is NOT silent: the last action is told', () => {
+    const rows = [row('r2', 'coach-b', 'assigned', '10'), row('r3', 'coach-b', 'unassigned', '40')]
+    const { send, silent } = netReplaceChanges(rows, { mayHaveBeenTold: (r) => r.id === 'r2' })
+    expect(silent).toEqual([])
+    expect(send).toEqual([expect.objectContaining({ coachId: 'coach-b', action: 'unassigned', rowIds: ['r2', 'r3'] })])
+  })
+
+  it('a balanced pile nobody could have been told about stays silent', () => {
+    const rows = [row('r2', 'coach-b', 'assigned', '10'), row('r3', 'coach-b', 'unassigned', '40')]
+    expect(netReplaceChanges(rows, { mayHaveBeenTold: () => false }).silent).toHaveLength(1)
+  })
+
   it('a row with no coach, no block or no date is ignored', () => {
     expect(netReplaceChanges([row('r1', null, 'assigned', '10'), row('r2', 'coach-a', 'assigned', '10', { block_id: null })]))
       .toEqual({ send: [], silent: [] })
+  })
+})
+
+describe('bandSeenBetween: was there a moment in [from, to) when a notice could have gone out?', () => {
+  const TZ = 'Europe/Dublin'
+  // 28-29 Sep 2026: Dublin is UTC+1, so the quiet night is 21:00Z-06:00Z.
+  it('a row made at 23:00 and read at 06:55 the same night: no, never in band', () => {
+    expect(bandSeenBetween(Date.parse('2026-09-28T22:00:00Z'), Date.parse('2026-09-29T05:55:00Z'), TZ)).toBe(false)
+  })
+  it('a row made in band: yes (the route sent it from after())', () => {
+    expect(bandSeenBetween(Date.parse('2026-09-28T20:30:00Z'), Date.parse('2026-09-28T22:00:00Z'), TZ)).toBe(true)
+  })
+  it('a row made overnight and read after 07:00: yes (an earlier in-band tick may have sent it)', () => {
+    expect(bandSeenBetween(Date.parse('2026-09-28T22:00:00Z'), Date.parse('2026-09-29T06:10:00Z'), TZ)).toBe(true)
+  })
+  it('the read moment itself does not count (this tick has not sent yet)', () => {
+    expect(bandSeenBetween(Date.parse('2026-09-28T22:00:00Z'), Date.parse('2026-09-29T06:00:00Z'), TZ)).toBe(false)
+  })
+  it('an unreadable instant says yes: assume it may have been told', () => {
+    expect(bandSeenBetween(NaN, Date.parse('2026-09-29T05:00:00Z'), TZ)).toBe(true)
   })
 })
 

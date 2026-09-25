@@ -81,9 +81,12 @@ export function buildRosterChangeMessage(changes) {
  * @param {string} opts.coachId
  * @param {string[]} opts.blockIds
  * @param {string} [opts.action]  one of ROSTER_CHANGE_ACTIONS; omit to match any
+ * @returns {Promise<{ error: object|null }>} REPLACE.1a review 1 — the error
+ *   comes back (as well as being logged): a stamp lost after a delivery means
+ *   the next sender tells the coach again, and a caller must be able to count it.
  */
 export async function markRosterChangesNotified(db, { locationId, coachId, blockIds, action } = {}) {
-  if (!locationId || !blockIds || blockIds.length === 0) return
+  if (!locationId || !blockIds || blockIds.length === 0) return { error: null }
   let query = db
     .from('roster_change_log')
     .update({ notified_at: new Date().toISOString() })
@@ -94,6 +97,7 @@ export async function markRosterChangesNotified(db, { locationId, coachId, block
   if (action) query = query.eq('action', action)
   const { error } = await query
   if (error) logWarn('roster-change-notify', 'mark notified failed', { coachId, err: error.message })
+  return { error: error || null }
 }
 
 async function markNotified(db, { locationId, coachId, blockIds }) {
@@ -122,10 +126,23 @@ async function markNotified(db, { locationId, coachId, blockIds }) {
  * @param {string} opts.actorId      the manager making the change
  * @param {Array<{coachId: string, blockId: string, blockDate: string, action: string, startTime?: string|null}>} opts.changes
  * @param {string} [opts.todayStr]   YYYY-MM-DD (Dublin); injectable for tests
+ * @param {boolean} [opts.markNotified=true]  REPLACE.1a review 1 — false: send
+ *   exactly as usual but stamp NOTHING; the caller reads `byCoach` and stamps
+ *   its own rows (the held replace-notice arm stamps by row id).
+ * @returns {Promise<object>} counts, plus (REPLACE.1a review 1) `failed` (a
+ *   send that failed outright or threw; also counted in `undelivered`),
+ *   `stampFailed` (a stamp this call made that errored: the coach may be told
+ *   again by the next sender) and `byCoach`, coachId -> 'delivered' | 'self' |
+ *   'past' | 'opted_out' | 'undelivered' | 'failed'.
  */
-export async function notifyRosterChanges(db, { locationId, actorId, changes, todayStr } = {}) {
+export async function notifyRosterChanges(db, { locationId, actorId, changes, todayStr, markNotified: stamp = true } = {}) {
   const today = todayStr || dublinTodayStr()
-  const result = { notified: 0, skippedSelf: 0, skippedPast: 0, undelivered: 0, optedOut: 0 }
+  const result = { notified: 0, skippedSelf: 0, skippedPast: 0, undelivered: 0, optedOut: 0, failed: 0, stampFailed: 0, byCoach: {} }
+  const stampRows = async (coachId, blockIds) => {
+    if (!stamp) return
+    const { error } = await markNotified(db, { locationId, coachId, blockIds })
+    if (error) result.stampFailed++
+  }
   try {
     const byCoach = new Map()
     for (const c of changes || []) {
@@ -144,14 +161,16 @@ export async function notifyRosterChanges(db, { locationId, actorId, changes, to
         if (future.length === 0) {
           // Nothing left to tell them about, but stamp so the re-publish
           // safety net doesn't message them about a shift already over.
-          await markNotified(db, { locationId, coachId, blockIds: allBlockIds })
+          result.byCoach[coachId] = 'past'
+          await stampRows(coachId, allBlockIds)
           continue
         }
 
         if (coachId === actorId) {
           // They made the change themselves; there is nobody to tell.
           result.skippedSelf++
-          await markNotified(db, { locationId, coachId, blockIds: allBlockIds })
+          result.byCoach[coachId] = 'self'
+          await stampRows(coachId, allBlockIds)
           continue
         }
 
@@ -168,7 +187,8 @@ export async function notifyRosterChanges(db, { locationId, actorId, changes, to
         const failed = (totals?.failed || 0) > 0
         if (delivered) {
           result.notified++
-          await markNotified(db, { locationId, coachId, blockIds: allBlockIds })
+          result.byCoach[coachId] = 'delivered'
+          await stampRows(coachId, allBlockIds)
         } else if (!failed && (totals?.skipped || 0) > 0) {
           // The coach turned shift_adjusted off, but may still have the
           // broader `schedule` category on — two live staff did exactly
@@ -179,13 +199,21 @@ export async function notifyRosterChanges(db, { locationId, actorId, changes, to
           // that same reason, so opting out of one category must not look
           // like delivery and go silent forever.
           result.optedOut++
+          result.byCoach[coachId] = 'opted_out'
         } else {
           // No token, no email, and no explicit opt-out: leave the rows for
           // the re-publish safety net.
           result.undelivered++
+          if (failed) result.failed++
+          result.byCoach[coachId] = failed ? 'failed' : 'undelivered'
         }
       } catch (e) {
-        // One coach's failure must not stop the rest of the batch.
+        // One coach's failure must not stop the rest of the batch. Nothing
+        // is stamped for them, so a later sender retries.
+        if (result.byCoach[coachId] === undefined) {
+          result.failed++
+          result.byCoach[coachId] = 'failed'
+        }
         logWarn('roster-change-notify', 'notify failed for coach', { locationId, coachId, err: e?.message })
       }
     }

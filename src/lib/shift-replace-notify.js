@@ -14,25 +14,37 @@
 // must not tell B "added" now and "removed" five minutes on).
 //
 // netReplaceChanges nets each coach's rows per shift. A replace undone before
-// its notice went out nets to nothing: those rows are stamped with no message
-// and marked details.reason = REPLACE_UNDONE_REASON, so the drawer never
-// prints a "told" time for them (roster-change-format.js, writer 6).
-// Everything else goes through notifyRosterChanges, NOTIFY.1's one path, which
-// stamps only on delivery and leaves an opted-out or unreachable coach for the
-// re-publish safety net (this arm then retries that coach every tick until the
-// rows age out: a push nobody can receive, never a duplicate). A crash between
-// its send and its stamp re-sends next tick: a duplicate, never a loss.
+// its notice could have gone out nets to nothing: those rows are stamped with
+// no message and marked details.reason = REPLACE_UNDONE_REASON, so the drawer
+// never prints a "told" time for them (roster-change-format.js, writer 8).
+// "Could have gone out" (review 1): a row made in band was sent by the
+// route's after(), and one around since an in-band tick may have been sent by
+// the arm; if its stamp then failed it is still unstamped here, so its pile is
+// NOT silent and tells its last action (bandSeenBetween). A duplicate at
+// worst; never B told "added" and not "removed".
 //
-// Never throws. Returns counts for the cron's response; `errors` > 0 means the
-// arm's own machinery failed (a read or a stamp), which keeps its heartbeat
-// row from being stamped (cron-arm-health.js replaceNoticeArmHealthy).
+// Everything else goes through notifyRosterChanges (NOTIFY.1's message and
+// send path) with markNotified: false, and THIS arm stamps exactly its own
+// rows by id after a delivery (or a self / past outcome). So a lost stamp is
+// counted (stamp_failed, which keeps the heartbeat from stamping) rather than
+// swallowed, and the arm never stamps another writer's rows for the same
+// coach and shift. A stamp lost, or a crash between send and stamp, means the
+// coach is told again next tick: a duplicate, never a loss. An opted-out or
+// unreachable coach is left unstamped for the re-publish safety net; this arm
+// retries them every tick until the rows age out (a send nobody receives).
+//
+// Never throws on a read or a send. Returns counts for the cron's response;
+// `errors` (the held-row read, a silent stamp) and `stamp_failed` are faults
+// in the arm's own machinery (cron-arm-health.js replaceNoticeArmHealthy).
+// `send_failed` is a delivery failure, retried next tick, and not a fault
+// (the THE RULE of cron-arm-health.js).
 
 import { notifyRosterChanges } from './roster-change-notify'
 import { inStaffPushHours } from './staff-push-hours'
 import { dublinTodayStr } from './dublin-time'
 import { logError, logWarn } from './log'
 import {
-  netReplaceChanges, REPLACE_VIA, REPLACE_UNDONE_REASON, REPLACE_NOTICE_ROUTE_OWNS_MS, REPLACE_NOTICE_MAX_AGE_MS,
+  netReplaceChanges, bandSeenBetween, REPLACE_VIA, REPLACE_UNDONE_REASON, REPLACE_NOTICE_ROUTE_OWNS_MS, REPLACE_NOTICE_MAX_AGE_MS,
 } from './shift-replace'
 
 // Literal: check:select-columns resolves only literal selects.
@@ -45,7 +57,7 @@ const iso = (ms) => new Date(ms).toISOString()
 const pileKey = (r) => `${r.location_id}|${r.coach_id}|${r.block_id}`
 
 export async function runReplaceNotices(db, { nowMs = Date.now(), todayStr = dublinTodayStr() } = {}) {
-  const stats = { rows: 0, groups: 0, silent: 0, quiet: 0, fresh: 0, errors: 0 }
+  const stats = { rows: 0, groups: 0, told: 0, silent: 0, quiet: 0, fresh: 0, undelivered: 0, send_failed: 0, stamp_failed: 0, errors: 0 }
   let rows
   try {
     const { data, error } = await db.from('roster_change_log')
@@ -84,7 +96,11 @@ export async function runReplaceNotices(db, { nowMs = Date.now(), todayStr = dub
     logWarn('shift-replace-notify', 'studio timezones unreadable; using Europe/Dublin', { err: e?.message })
   }
 
-  const { send, silent } = netReplaceChanges(settled)
+  const tzOf = (locationId) => tzById.get(locationId) ?? null
+  // Review 1 — a row that may already have been told (made in band, or
+  // around since an in-band tick) keeps its pile out of the silent path.
+  const mayHaveBeenTold = (r) => bandSeenBetween(Date.parse(r.created_at), nowMs, tzOf(r.location_id))
+  const { send, silent } = netReplaceChanges(settled, { mayHaveBeenTold })
   if (silent.length) {
     const rowIds = silent.flatMap((s) => s.rowIds)
     try {
@@ -108,19 +124,50 @@ export async function runReplaceNotices(db, { nowMs = Date.now(), todayStr = dub
 
   const groups = new Map()
   for (const s of send) {
-    if (!inStaffPushHours(nowMs, tzById.get(s.locationId) ?? null)) { stats.quiet++; continue }
+    if (!inStaffPushHours(nowMs, tzOf(s.locationId))) { stats.quiet++; continue }
     const key = `${s.locationId}|${s.actorId ?? ''}`
-    if (!groups.has(key)) groups.set(key, { locationId: s.locationId, actorId: s.actorId, changes: [] })
-    groups.get(key).changes.push({ coachId: s.coachId, blockId: s.blockId, blockDate: s.blockDate, startTime: s.startTime, action: s.action })
+    if (!groups.has(key)) groups.set(key, { locationId: s.locationId, actorId: s.actorId, changes: [], rowIdsByCoach: new Map() })
+    const g = groups.get(key)
+    g.changes.push({ coachId: s.coachId, blockId: s.blockId, blockDate: s.blockDate, startTime: s.startTime, action: s.action })
+    g.rowIdsByCoach.set(s.coachId, [...(g.rowIdsByCoach.get(s.coachId) || []), ...s.rowIds])
   }
   for (const g of groups.values()) {
-    try {
-      await notifyRosterChanges(db, { locationId: g.locationId, actorId: g.actorId, changes: g.changes, todayStr })
-      stats.groups++
-    } catch (e) {
-      stats.errors++
-      logError('shift-replace-notify', 'a held replace notice failed; its rows stay unstamped for the next tick', { locationId: g.locationId, err: e?.message })
+    // notifyRosterChanges never throws (it catches per coach). It stamps
+    // nothing here (markNotified: false): the arm stamps exactly its OWN rows
+    // below, so it can count a lost stamp and never stamps another writer's.
+    const res = await notifyRosterChanges(db, {
+      locationId: g.locationId, actorId: g.actorId, changes: g.changes, todayStr, markNotified: false,
+    })
+    stats.groups++
+    for (const [coachId, rowIds] of g.rowIdsByCoach) {
+      const outcome = res?.byCoach?.[coachId]
+      if (outcome === 'delivered' || outcome === 'self' || outcome === 'past') {
+        if (outcome === 'delivered') stats.told++
+        await stampTold(db, { rowIds, nowMs, stats, coachId })
+      } else if (outcome === 'failed') {
+        stats.send_failed++ // nothing stamped: the next tick retries
+      } else {
+        stats.undelivered++ // opted out or unreachable: left for the re-publish safety net
+      }
     }
   }
   return stats
+}
+
+// Review 1 — the post-delivery stamp, by row id. A failure is COUNTED
+// (stamp_failed keeps the arm's heartbeat from stamping) and logged: those
+// rows are told again next tick, a duplicate and never a loss. Zero rows
+// matched means another writer stamped them meanwhile: nothing is owed.
+async function stampTold(db, { rowIds, nowMs, stats, coachId }) {
+  const { error } = await db.from('roster_change_log')
+    .update({ notified_at: iso(nowMs) })
+    .in('id', rowIds)
+    .is('notified_at', null)
+    .select('id')
+  if (error) {
+    stats.stamp_failed++
+    logError('shift-replace-notify', 'replace notice delivered but not stamped; the coach will be told again next tick', {
+      coachId, rowIds, err: error.message,
+    })
+  }
 }

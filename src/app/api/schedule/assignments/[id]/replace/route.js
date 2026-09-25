@@ -126,10 +126,18 @@ export async function POST(request, props) {
   }
 
   if (notice === 'now') {
-    after(() => notifyRosterChanges(db, { locationId: ctx.block.location_id, actorId: user.id, changes })
-      .catch((err) => logError('shift-replace', 'replace notice failed; the */5 arm re-sends unstamped rows', {
-        assignmentId: ctx.assignment.id, err: err?.message,
-      })))
+    // notifyRosterChanges never throws (it catches per coach); what can go
+    // wrong comes back in its result. A lost stamp after a delivery, or a
+    // failed send, leaves that coach's rows unstamped, and the */5 arm sends
+    // them again after its 2-minute window: a duplicate at worst, never a loss.
+    after(async () => {
+      const res = await notifyRosterChanges(db, { locationId: ctx.block.location_id, actorId: user.id, changes })
+      if ((res?.stampFailed || 0) > 0 || (res?.failed || 0) > 0) {
+        logError('shift-replace', 'replace notice not fully settled; the */5 arm sends the unstamped rows (a coach may be told again)', {
+          assignmentId: ctx.assignment.id, stampFailed: res?.stampFailed || 0, failed: res?.failed || 0,
+        })
+      }
+    })
   }
 
   return NextResponse.json({

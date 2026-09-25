@@ -17,6 +17,7 @@
 // the replace).
 
 import { swapShiftHasStarted } from './swap-cover'
+import { inStaffPushHours } from './staff-push-hours'
 import { SWAP_CONFLICTS_CODE } from './swap-lifecycle'
 import { isLiveAssignment } from './roster'
 import { isRosterableProfile, notRosterableError } from './roster-write'
@@ -157,6 +158,27 @@ export function replacePickerCopy({ fromName, pickedName = null, saving = false 
   }
 }
 
+// The */5 cron's tick. Quiet hours are a 9-hour band, so stepping at the
+// tick never jumps over a band.
+const TICK_MS = 5 * 60 * 1000
+
+/**
+ * REPLACE.1a review 1 — was there any moment in [fromMs, toMs) inside
+ * 07:00-22:00 at `tz`? A replace row made in band was sent by the route's
+ * after(), and one made overnight may have been sent by an earlier in-band
+ * tick; either way its coach may already have heard, even though the row is
+ * unstamped (a stamp can fail after a delivery). `toMs` itself is excluded:
+ * the tick asking has not sent anything yet. Unreadable input says true, the
+ * answer that can only cost a duplicate.
+ */
+export function bandSeenBetween(fromMs, toMs, tz) {
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs)) return true
+  for (let t = fromMs; t < toMs; t += TICK_MS) {
+    if (inStaffPushHours(t, tz)) return true
+  }
+  return false
+}
+
 const byTime = (x, y) => String(x.created_at).localeCompare(String(y.created_at)) || String(x.id).localeCompare(String(y.id))
 
 /**
@@ -166,10 +188,16 @@ const byTime = (x, y) => String(x.created_at).localeCompare(String(y.created_at)
  * silently; otherwise the LAST row's action is the net change, told once, on
  * behalf of that row's actor.
  *
+ * REPLACE.1a review 1 — "nothing" is only nothing if nobody could have heard
+ * of any of it. When `mayHaveBeenTold(row)` is true for a row of a balanced
+ * pile (its notice may have gone out and only the stamp failed), the pile
+ * tells its LAST action instead: at worst a coach hears again, never "added"
+ * without "removed".
+ *
  * @returns {{ send: Array<{locationId, actorId, coachId, blockId, blockDate, startTime, action, rowIds}>,
  *             silent: Array<{ locationId, coachId, rowIds }> }}
  */
-export function netReplaceChanges(rows) {
+export function netReplaceChanges(rows, { mayHaveBeenTold = () => false } = {}) {
   const groups = new Map()
   for (const r of rows || []) {
     if (!r?.coach_id || !r.block_id || !r.block_date || !r.location_id) continue
@@ -185,7 +213,7 @@ export function netReplaceChanges(rows) {
     const last = list[list.length - 1]
     const rowIds = list.map((r) => r.id)
     const on = list.filter((r) => r.action === 'assigned').length
-    if (on * 2 === list.length) {
+    if (on * 2 === list.length && !list.some((r) => mayHaveBeenTold(r))) {
       silent.push({ locationId: last.location_id, coachId: last.coach_id, rowIds })
       continue
     }

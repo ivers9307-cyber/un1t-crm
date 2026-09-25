@@ -16,7 +16,7 @@ import {
   markRosterChangesNotified,
 } from './roster-change-notify'
 
-function makeDb({ insertError = null } = {}) {
+function makeDb({ insertError = null, updateError = null } = {}) {
   const updates = []
   const inserts = []
   return {
@@ -34,7 +34,7 @@ function makeDb({ insertError = null } = {}) {
             inserts.push(rows)
             return { then(onF, onR) { return Promise.resolve({ error: insertError }).then(onF, onR) } }
           },
-          then(onF, onR) { return Promise.resolve({ error: null }).then(onF, onR) },
+          then(onF, onR) { return Promise.resolve({ error: updateError }).then(onF, onR) },
         }
         return chain
       }
@@ -233,7 +233,55 @@ describe('notifyRosterChanges', () => {
   })
 })
 
+// REPLACE.1a review 1 — a stamp that fails after a delivery is a duplicate
+// waiting to happen, so it is COUNTED, never swallowed; and a caller that
+// stamps its own rows (the held replace-notice arm) can turn the stamp off
+// and read each coach's outcome instead.
+describe('notifyRosterChanges — what happened, per coach (REPLACE.1a review 1)', () => {
+  const opts = (changes, actorId = 'mgr-1') => ({ locationId: 'loc-1', actorId, changes, todayStr: '2026-09-16' })
+  it('a delivered notice whose stamp fails is counted as stampFailed', async () => {
+    const db = makeDb({ updateError: { message: 'down' } })
+    const res = await notifyRosterChanges(db, opts([change('c1', '2026-09-18')]))
+    expect(res).toMatchObject({ notified: 1, stampFailed: 1, byCoach: { c1: 'delivered' } })
+  })
+
+  it('a self or all-past stamp that fails is counted too', async () => {
+    const db = makeDb({ updateError: { message: 'down' } })
+    const res = await notifyRosterChanges(db, opts([change('mgr-1', '2026-09-18'), change('c2', '2026-09-15')], 'mgr-1'))
+    expect(res).toMatchObject({ stampFailed: 2, byCoach: { 'mgr-1': 'self', c2: 'past' } })
+  })
+
+  it('a send that failed outright is counted as failed, distinct from a coach with no way to be reached', async () => {
+    notifyUsers.mockResolvedValueOnce({ sent: 0, emailed: 0, failed: 1 })
+    notifyUsers.mockResolvedValueOnce({ sent: 0, emailed: 0 })
+    notifyUsers.mockResolvedValueOnce({ sent: 0, emailed: 0, skipped: 1 })
+    const res = await notifyRosterChanges(makeDb(), opts([change('c1', '2026-09-18'), change('c2', '2026-09-18'), change('c3', '2026-09-18')]))
+    expect(res).toMatchObject({ failed: 1, undelivered: 2, optedOut: 1, byCoach: { c1: 'failed', c2: 'undelivered', c3: 'opted_out' } })
+  })
+
+  it('a send that threw is a failed coach', async () => {
+    notifyUsers.mockRejectedValueOnce(new Error('push down'))
+    const res = await notifyRosterChanges(makeDb(), opts([change('c1', '2026-09-18')]))
+    expect(res).toMatchObject({ failed: 1, byCoach: { c1: 'failed' } })
+  })
+
+  it('markNotified: false sends exactly as before but stamps nothing (the caller stamps its own rows)', async () => {
+    const db = makeDb()
+    const res = await notifyRosterChanges(db, { ...opts([change('c1', '2026-09-18'), change('mgr-1', '2026-09-18'), change('c2', '2026-09-15')], 'mgr-1'), markNotified: false })
+    expect(notifyUsers).toHaveBeenCalledTimes(1)
+    expect(db.updates).toHaveLength(0)
+    expect(res).toMatchObject({ notified: 1, stampFailed: 0, byCoach: { c1: 'delivered', 'mgr-1': 'self', c2: 'past' } })
+  })
+})
+
 describe('markRosterChangesNotified', () => {
+  it('REPLACE.1a review 1 — returns the error instead of only logging it', async () => {
+    expect(await markRosterChangesNotified(makeDb({ updateError: { message: 'down' } }), { locationId: 'loc-1', coachId: 'c1', blockIds: ['blk-1'] }))
+      .toEqual({ error: { message: 'down' } })
+    expect(await markRosterChangesNotified(makeDb(), { locationId: 'loc-1', coachId: 'c1', blockIds: ['blk-1'] })).toEqual({ error: null })
+    expect(await markRosterChangesNotified(makeDb(), { locationId: 'loc-1', coachId: 'c1', blockIds: [] })).toEqual({ error: null })
+  })
+
   it('adds an action filter when one is given', async () => {
     const db = makeDb()
     await markRosterChangesNotified(db, { locationId: 'loc-1', coachId: 'c1', blockIds: ['blk-1'], action: 'time_changed' })
