@@ -4,6 +4,7 @@ import { describe, it, expect } from 'vitest'
 import {
   leavePreviewFrom, leaveDaysLabel, leaveDaysHint, pendingHolidayDays, leaveBalanceView, leaveBalanceLines,
   leaveClashSummary, submittedDays, leaveSubmittedMessage, leaveFloatingButtons,
+  leaveRequestEntry, leaveFormGate,
 } from './leave-form'
 
 const ALLOWANCE = { year: 2026, total_days: 20, used_days: 6, carried_over: 1, remaining: 15, not_applicable: false }
@@ -225,7 +226,16 @@ describe('leaveFloatingButtons — do "My leave" and "Request time off" fit side
     expect(leaveFloatingButtons({ width: 390, fontScale: 1 })).toEqual({
       compact: false, requestLabel: 'Request time off', myLeaveLabel: 'My leave',
       requestA11y: 'Request time off', myLeaveA11y: 'My leave, your time-off requests',
+      requestIcon: 'add', requestTarget: '/schedule/time-off-new',
     })
+  })
+  it('AVAIL.3 — a contractor\'s request button opens My availability, full and compact', () => {
+    expect(leaveFloatingButtons({ width: 390, fontScale: 1, employmentType: 'contractor' })).toMatchObject({
+      compact: false, requestLabel: 'My availability', requestA11y: 'My availability, when you can’t work',
+      requestIcon: 'time-outline', requestTarget: '/schedule/availability', myLeaveLabel: 'My leave',
+    })
+    expect(leaveFloatingButtons({ width: 320, fontScale: 1, employmentType: 'casual' }))
+      .toMatchObject({ compact: true, requestLabel: 'Availability', requestTarget: '/schedule/availability' })
   })
   it('a 360pt phone, or larger text on a 390pt one, shortens the visible label only', () => {
     for (const dims of [{ width: 360, fontScale: 1 }, { width: 390, fontScale: 1.3 }, { width: 320, fontScale: 1 }]) {
@@ -242,5 +252,41 @@ describe('leaveFloatingButtons — do "My leave" and "Request time off" fit side
   })
   it('a wide screen keeps the full label even with larger text', () => {
     expect(leaveFloatingButtons({ width: 768, fontScale: 1.5 }).compact).toBe(false)
+  })
+})
+
+// AVAIL.3 — "unavailable" moved into availability: a contractor has nothing to
+// request, so every entry that said "Request time off" opens My availability.
+describe('leaveRequestEntry', () => {
+  it('an employee (or unknown employment) requests time off', () => {
+    for (const et of ['fte', null, undefined]) {
+      expect(leaveRequestEntry(et)).toEqual({
+        target: '/schedule/time-off-new', label: 'Request time off', shortLabel: 'Time off',
+        a11y: 'Request time off', icon: 'add', rowIcon: 'calendar-outline',
+      })
+    }
+  })
+  it('a contractor or casual staff member is sent to My availability', () => {
+    for (const et of ['contractor', 'casual']) {
+      expect(leaveRequestEntry(et)).toEqual({
+        target: '/schedule/availability', label: 'My availability', shortLabel: 'Availability',
+        a11y: 'My availability, when you can’t work', icon: 'time-outline', rowIcon: 'time-outline',
+      })
+    }
+  })
+})
+
+describe('leaveFormGate', () => {
+  it('no gate for anyone with something to request', () => {
+    expect(leaveFormGate('fte')).toBeNull()
+    expect(leaveFormGate(undefined)).toBeNull() // profile still loading: never a false gate
+  })
+  it('a contractor reaching the form (old link, notification) is told where to go', () => {
+    expect(leaveFormGate('contractor')).toEqual({
+      title: 'Use My availability instead',
+      message: expect.stringMatching(/My availability/),
+      action: 'Open My availability',
+      target: '/schedule/availability',
+    })
   })
 })
