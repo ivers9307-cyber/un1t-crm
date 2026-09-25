@@ -16,8 +16,10 @@ One phone update at a time: after 1a merges, wait for its EAS Update run to go g
 
 **Depends on:**
 - **13 SHIFTTYPE.1, merged** (#1759, mig 628): `shift_templates.kind`, `shared/shift-kind.js`, admin min = 0.
-- **19 CANDIDATES.1, soft.** The replace picker IS the assign picker in single-select mode (web `AssignCoachModal`, phone `CoachPickerSheet`), so whatever ranking CANDIDATES.1 puts into those two pickers is what the manager sees. REPLACE adds no ranking or filtering of its own. If CANDIDATES.1 has not merged, both pickers work exactly as today. **No `19-CANDIDATES.1.md` existed when this was written**, so there was no eligibility module to reuse; see 1b Task 0 for how 1b adopts it if it exists at build time.
-- **16 AVAIL.1a, HARD for 1b only** (mig 630 `staff_unavailability`, `shared/availability.js` `unavailableFor`). 1a does not read availability.
+- **19 CANDIDATES.1** (`19-CANDIDATES.1.md`, batch 5): **soft for 1a, HARD for 1b.**
+  - 1a: the replace picker IS the assign picker in single-select mode (web `AssignCoachModal`, phone `CoachPickerSheet`), so CANDIDATES.1's ranked list (its Tasks 7 and 11) is what the manager sees. REPLACE adds no ranking or filtering of its own. If CANDIDATES.1 has not merged, both pickers work exactly as today.
+  - 1b: default 6 IS CANDIDATES.1's answer. `loadBlockCandidates(db, { block, audience: 'manager' })` (`src/lib/candidates-data.js`) lists every rosterable member of the shift's studio who is not live on it, each with a `tier` (`candidateTier`, `shared/candidates.js`): `ready`, `advisory`, `unavailable`, `blocked`, and a `checked` map. "Free, not on leave, not unavailable" is `tier ∈ {ready, advisory}`. 1b reads that answer and never re-derives it.
+- **16 AVAIL.1a** (merged #1762, mig 630 applied): CANDIDATES.1 reads availability through it. 1a does not read availability.
 - **14 BLOCKEDIT.1:** not a dependency, but it rewrites `BlockDetailModal` and adds an arm to the same cron. Find every anchor below by its quoted text, not its line number.
 
 **Anchors** are verified against `origin/main` `d11e6971` (#1760). Batch 4 and 5 PRs (BLOCKEDIT.1, ICSFEED.1, AVAIL.2, CANDIDATES.1) will have moved lines by build time; the quoted text is the anchor.
@@ -95,7 +97,7 @@ UPDATE shift_assignments SET profile_id = B, status = 'scheduled', <clears>, ass
 - `requester_id` is `NOT NULL` (mig 010): an offer has no giver.
 - A swap claim is `awaiting_approval` until a manager approves (`resolveSwapTransition`, the approvals provider, the approvals badge, the T-48/T-12 nudges all count it). An offer is first-come, no approval. Reusing the table would put every offer into the approvals inbox and the nudge sweep.
 - The open-pool GET (`src/app/api/schedule/swaps/route.js:83,99`: `target_id IS NULL AND status = 'pending'`) would list offers as "X needs cover" with no shift.
-What IS reused: `swapShiftHasStarted` (start predicate), `evaluateSwapMoveConflicts` + the open pool's half-day rule (who is free), `shiftWhenLabel` (copy), `notifyUsersOnce` (ledger), the COVERLOOP audience posture (a failed read shrinks or delays the audience, never widens it), and the phone's open-swaps card pattern.
+What IS reused: CANDIDATES.1's `loadBlockCandidates` (who is free, on leave, unavailable), `swapShiftHasStarted` (start predicate), `shiftWhenLabel` (copy), `notifyUsersOnce` (ledger), the COVERLOOP audience posture (a failed read shrinks or delays the audience, never widens it), and the phone's open-swaps card pattern.
 
 **E2. One open offer per shift, one place per offer.** A partial unique index `(block_id) WHERE status = 'open'` makes a second open offer impossible (race-proof; the route maps `23505` to 409 "already offered"). An offer fills ONE place. A class shift two coaches short is offered, claimed, then offered again. Flagged as review note 5.
 
@@ -105,15 +107,13 @@ What IS reused: `swapShiftHasStarted` (start predicate), `evaluateSwapMoveConfli
 - there is no open offer for it;
 - it still needs someone: live coaches below the target and below `max_coaches`. **Target: a class shift's `min_coaches` (at least 1); an admin shift: 1.** An admin shift has no minimum (SHIFTTYPE.1), so "short" never applies to it: it can be offered only while EMPTY. Index default 20 already keeps a posted admin swap nobody takes escalating; an admin offer follows the same logic.
 
-**E4. Who is offered it (default 6), one predicate:** `offerEligibility` in `src/lib/shift-offer-notice.js`. A person is eligible for a shift when they are:
-- a member of the shift's studio (`profile_locations`), active, not deleted (`isRosterableProfile`'s rule);
-- not already live on the shift;
-- not on APPROVED leave covering the date, whole day (a half-day request passes, as in the open pool, `src/lib/swap-cover.js:81`: which half is not recorded);
-- not on another LIVE shift overlapping the window at any studio of the same organisation (`evaluateSwapMoveConflicts`, `src/lib/swap-lifecycle.js:428`; the organisation boundary via `siblingLocationIds`, `src/lib/sibling-locations.js`);
-- not unavailable for the window (`unavailableFor`, AVAIL.1a `shared/availability.js`).
-The audience is every eligible member except the manager who posted it. **Managers and head coaches are included** (they coach classes); the open-pool rule excluded them only because they were already told by `swap_open`. The SAME predicate decides the coach's list (a coach sees an offer only if it would have been pushed to them) and, minus `unavailable`, the claim (below).
+**E4. Who is offered it (default 6): CANDIDATES.1's tiers, read three ways.** `loadBlockCandidates` answers every rosterable member of the shift's studio who is not live on it (active, not deleted, a member there: the assign route's rule), each with a tier: `blocked` = approved leave covering the day, or a live overlapping shift at any studio of the organisation (effective windows, WORKTIME.1's `workingWindow`); `unavailable` = an AVAIL.1 rule touching the shift; `advisory` = a short rest or a week over 48h (employees); `ready` = otherwise. `src/lib/shift-offer-notice.js` reads it:
+- **the push** (`offerAudienceFrom`): `ready` + `advisory`, minus the manager who posted it. An unreadable answer, or any of `shifts`, `cross_studio`, `leave`, `availability` unchecked, tells NOBODY yet (the lease is released and the next tick retries): an unread fact must never push someone on leave. `contract` only ranks, so it never blocks.
+- **the coach's list** (`offerIsFor`): the same tiers, so a coach sees an offer only if it would have been pushed to them. Unreadable = shown (the claim re-checks).
+- **the claim** (`offerClaimRefusal`): `on_leave` or `free === false` refuses; `unavailable` does NOT (a coach claiming is telling us they are free); unreadable `shifts`/`cross_studio`/`leave` is 503.
+**Managers and head coaches are included** (they coach classes); the open-pool rule excluded them only because they were already told by `swap_open`. **Half-day leave follows CANDIDATES.1:** any approved leave covering the day is `blocked`, so a coach on a half-day is neither pushed nor allowed to claim (the open pool lets a half-day through; the picker does not, and the offer follows the picker).
 
-**E5. The claim is decided in the database.** `claim_shift_offer(p_offer_id, p_profile_id)` (mig 640, service_role only) locks the offer row `FOR UPDATE`, so two coaches claiming at once serialise on it: the first sees `open` and wins, the second waits, then sees `claimed` and gets `offer_not_open` (409 "Someone else has just taken this shift."). Inside the same transaction it locks the shift, re-checks membership and activity, "already on it", the roster still published, and still needed (a manager may have filled it meanwhile: then the offer closes as `filled` and the claim is refused), clears the claimant's cancelled tombstone, inserts the assignment and closes the offer. **The route** checks, before calling it: the shift has not started (the one predicate), and the claimant is not on approved leave that day or on an overlapping shift (they cannot be in two places). **Unavailability does not block a claim**: the coach claiming is telling us they are free.
+**E5. The claim is decided in the database.** `claim_shift_offer(p_offer_id, p_profile_id)` (mig 640, service_role only) locks the offer row `FOR UPDATE`, so two coaches claiming at once serialise on it: the first sees `open` and wins, the second waits, then sees `claimed` and gets `offer_not_open` (409 "Someone else has just taken this shift."). Inside the same transaction it locks the shift, re-checks membership and activity, "already on it", the roster still published, and still needed (a manager may have filled it meanwhile: then the offer closes as `filled` and the claim is refused), clears the claimant's cancelled tombstone, inserts the assignment and closes the offer. **The route** checks, before calling it: the shift has not started (the one predicate), and CANDIDATES.1 does not have the claimant on approved leave that day or on an overlapping shift (they cannot be in two places). **Unavailability does not block a claim**: the coach claiming is telling us they are free.
 
 **E6. Notices.**
 - **Broadcast**: one push per eligible coach, category `swap` (registered, email fallback), `data.type: 'shift_offer'`. "A shift is up for grabs: Morning, Tue 29 Sep, 06:00 to 07:00 at Studio North. First to claim it gets it. Tap to take it."
@@ -169,9 +169,9 @@ The audience is every eligible member except the manager who posted it. **Manage
 | `supabase/migrations/640_shift_offers.sql` | Create: table, claim RPC, two heartbeat rows | |
 | `tests/migration-640-shift-offers.test.js` | Create (PGlite) | |
 | `shared/offer-to-team.js`, `shared/offer-to-team.test.js` | Create: offerability, target, labels | yes |
-| `src/lib/swap-cover.js` | Modify: `export` `isHalfDayLeave` (one word) | |
-| `src/lib/shift-offer-notice.js`, `.test.js` | Create: eligibility, audience, sweep decision, payloads, RPC error map | |
-| `src/lib/shift-offer-server.js`, `.test.js` | Create: reads, lease + deliver + stamp, sweep, create/withdraw/claim/list | |
+| `src/lib/shift-offer-notice.js`, `.test.js` | Create: CANDIDATES.1's answer read three ways, sweep decision, payloads, RPC error map | |
+| `src/lib/shift-offer-server.js`, `.test.js` | Create: reads, lease + deliver + stamp (audience = `loadBlockCandidates`), sweep, create/withdraw/claim/list | |
+| `src/lib/candidates-data.js`, `shared/candidates.js` | Read only (CANDIDATES.1): `loadBlockCandidates`, `candidateTier` | |
 | `src/app/api/schedule/blocks/[id]/offer/route.js`, `.test.js` | Create: `POST` | |
 | `src/app/api/schedule/offers/route.js`, `.test.js` | Create: `GET` (coach view, manager view) | |
 | `src/app/api/schedule/offers/[id]/route.js`, `.test.js` | Create: `DELETE` (withdraw) | |
@@ -1848,7 +1848,7 @@ Change the `BlockDetailModal` mount condition from `{blockDetail && !assignTarge
 ```
 (The date test only hides the button on a past day; the route has the last word on "started".)
 
-- [ ] **Step 4: `AssignCoachModal` gains `mode` and `replacing`.** Change its signature (line 1673) to
+- [ ] **Step 4: `AssignCoachModal` gains `mode` and `replacing`.** CANDIDATES.1 (its Task 7) replaces this function wholesale: it fetches `GET /api/schedule/blocks/[id]/candidates`, renders `rows` (each with `row.id`, `row.full_name`) and keeps the pre-CANDIDATES A–Z list as the fallback. Make the four changes below on THAT version: where the snippets say `available` and `s.id`, it is `rows` and `row.id` (and `checked = selectedIds.has(row.id)`, `onChange={() => toggle(row.id)}`). Its existing signature gains the two props:
 `function AssignCoachModal({ block, staff, blocks, timeOff, unavailableReason = null, leaveMissing = false, onAssign, onClose, restoreFocusRef, mode = 'assign', replacing = null }) {`
 and make these four changes inside it:
 
@@ -2074,6 +2074,7 @@ Run the two test files → `0 failed`.
   // the network answer, so it never tries to present over the dismissing sheet.
   async function openReplace(block, assignment) {
     setReplaceTarget({ block, assignment })
+    loadCandidates(block) // CANDIDATES.1 (its Task 11): the ranked list for this block; not awaited
     if (staff === null && !staffLoading) await loadStaff()
   }
 
@@ -2098,12 +2099,13 @@ Run the two test files → `0 failed`.
 ```jsx
       <CoachPickerSheet visible={!!replaceTarget} block={replaceTarget?.block ?? null} locationId={locationId}
         staff={staff} loading={staffLoading} error={staff === null ? staffError : null} onRetry={loadStaff}
+        {...candidatesFor(candidates, replaceTarget?.block?.id)}
         title={replaceTarget ? replacePickerTitle(replaceTarget.assignment) : ''}
         emptyText="No other coaches at this studio."
         onPick={(coach) => { const t = replaceTarget; setReplaceTarget(null); if (t) runReplace(t, coach) }}
         onClose={() => setReplaceTarget(null)} />
 ```
-(`CoachPickerSheet` already excludes everyone live on the block, the outgoing coach included; CANDIDATES.1's ranking in it comes along.)
+The two sheets share CANDIDATES.1's `candidates` state and `loadCandidates` (its Task 11 step 2): only one sheet is ever open, and `candidatesFor(state, blockId)` hands a sheet only the answer for ITS block. The ranked rows exclude everyone live on the block, the outgoing coach included, and `onPick` receives `{ id, full_name, role, reason, tone }`; `runReplace` reads only `coach.id` and `coach.full_name`. If CANDIDATES.1 has not merged, drop the `loadCandidates(block)` line and the `{...candidatesFor(…)}` prop: today's sheet filters with `filterAssignableCoaches`, which also excludes everyone on the block.
 
 - [ ] **Step 4: Checks.**
 
@@ -2240,18 +2242,18 @@ Via Supabase MCP `execute_sql` on `iyvtbjjxdggiadzwwvdj`: `SELECT to_regclass('p
 
 - [ ] **Step 3: 640 is still free.** `ls supabase/migrations | grep '^640_'` → nothing. `list_migrations` (MCP) has no `640`. If BLOCKEDIT's heartbeat took 639 as planned, 640 is ours; if anything else took 640, take the next free number and rename everywhere (file, test, header, this plan's commands).
 
-- [ ] **Step 4: CANDIDATES.1's eligibility, if it exists.** No `19-CANDIDATES.1.md` existed when this plan was written.
+- [ ] **Step 4: CANDIDATES.1 is merged, and says what 1b assumes** (HARD dependency).
 
 ```bash
 git log origin/main --oneline -40 | grep 'CANDIDATES.1'
-grep -rln "candidate" src/lib shared --include='*.js' | grep -v test
+grep -n "export async function loadBlockCandidates" src/lib/candidates-data.js
+grep -n "export function candidateTier\|export const CANDIDATE_TIERS" shared/candidates.js
 ```
-If CANDIDATES.1 merged a PURE per-person fact builder or predicate ("free", "on leave", "unavailable" for a shift), `offerEligibility` (Task 1b-3) must CALL it for those three facts instead of composing them, and keep `not_member`, `inactive`, `on_block` and the `CLAIM_BLOCKING` split here. Keep every test in `shift-offer-notice.test.js` unchanged: they pin default 6 whichever module computes it. If CANDIDATES.1's rule disagrees with a test (e.g. it treats half-day leave as a whole day), stop and raise it: one rule must win, and the offer audience follows the picker.
+Expected: the merge commit; `loadBlockCandidates(db, { block, audience = 'manager' })` returning `{ candidates, untimed, checked, error }`; `CANDIDATE_TIERS = ['ready', 'advisory', 'unavailable', 'blocked']` with `blocked` = `on_leave || free === false`. If CANDIDATES.1 is not merged, STOP: 1b waits. If a name or the answer's shape differs, adapt the imports and `offerAudienceFrom` / `offerIsFor` / `offerClaimRefusal` to it and keep their tests' MEANING (default 6 = free, not on leave, not unavailable; unread = nobody told).
 
 - [ ] **Step 5: anchors.**
 
 ```bash
-grep -n "export function isHalfDayLeave\|^function isHalfDayLeave" src/lib/swap-cover.js
 grep -n "replace_arm_failed\|runReplaceNotices\|SHIFT_REMINDERS_HEARTBEAT" src/app/api/cron/send-push-reminders/route.js
 grep -n "export const SHIFT_REMINDERS_HEARTBEAT\|export function shiftReminderArmHealthy" src/lib/cron-arm-health.js
 grep -n "case 'swap_decision'" mobile/lib/notification-nav.js
@@ -3069,86 +3071,108 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ---
 
-### Task 1b-3: `src/lib/shift-offer-notice.js` — who, when, and what is said
+### Task 1b-3: `src/lib/shift-offer-notice.js` — who (CANDIDATES.1's tiers), when, and what is said
 
-**Files:** Modify `src/lib/swap-cover.js` (export `isHalfDayLeave`). Create `src/lib/shift-offer-notice.js`, `src/lib/shift-offer-notice.test.js`.
+**Files:** Create `src/lib/shift-offer-notice.js`, `src/lib/shift-offer-notice.test.js`.
 
-- [ ] **Step 1:** In `src/lib/swap-cover.js` line 81, change `function isHalfDayLeave(t) {` to `export function isHalfDayLeave(t) {` and add one line to its comment: `// Exported for REPLACE.1b (the offer audience applies the same half-day rule).`
+Default 6 is NOT re-derived here. CANDIDATES.1 already answers, for one shift, every eligible coach at its studio (rosterable member, not live on the shift) with a `tier`: `ready`, `advisory` (short rest / week over 48h), `unavailable` (an AVAIL rule) or `blocked` (approved leave covering the day, or live on an overlapping shift at any studio of the organisation), and a `checked` map saying which facts it could read (`loadBlockCandidates`, `src/lib/candidates-data.js`; `candidateTier`, `shared/candidates.js`; 19-CANDIDATES.1 Tasks 2-4). "Free, not on leave, not unavailable" is exactly `tier ∈ {ready, advisory}`. This module only reads that answer three ways (audience, coach list, claim), plus the sweep decision and the words. Consequence, on purpose: CANDIDATES counts ANY approved leave covering the day (a half-day too) as blocked, so a coach on a half-day is neither pushed nor allowed to claim; the picker and the offer agree (review note 9).
 
-- [ ] **Step 2: Write the failing test.**
+- [ ] **Step 1: Write the failing test.**
 
 ```js
 // src/lib/shift-offer-notice.test.js
-// REPLACE.1b — default 6 (who an offer goes to), the claim check, the sweep's
-// decision for one offer, and the words.
+// REPLACE.1b — reading CANDIDATES.1's answer three ways (the push audience,
+// the coach's list, the claim), the sweep's decision for one offer, the words.
 import { describe, it, expect } from 'vitest'
 import {
-  offerEligibility, offerAudience, offerClaimRefusal, offerSweepAction, offerNoticeState,
-  offerBroadcastPayload, offerTakenPayload, offerNoticeKey, offerClaimRpcError, coachOfferRow, managerOfferRow,
-  OFFER_MAX_ATTEMPTS,
+  offerAudienceFrom, offerIsFor, offerClaimRefusal, offerChecksComplete, OFFER_TIERS,
+  offerSweepAction, offerNoticeState, offerBroadcastPayload, offerTakenPayload, offerNoticeKey,
+  offerClaimRpcError, coachOfferRow, managerOfferRow, offerBlock, OFFER_MAX_ATTEMPTS,
 } from './shift-offer-notice'
 
 const BLOCK = {
   id: 'b1', location_id: 'loc-1', block_date: '2026-09-29', start_time: '06:00:00', end_time: '07:00:00',
   min_coaches: 1, max_coaches: 3, rosters: { status: 'published' }, shift_templates: { name: 'Morning', kind: 'class' }, shift_assignments: [],
 }
-const member = (id, over = {}) => ({ profile_id: id, location_id: 'loc-1', role: 'staff', profiles: { id, active: true, deleted_at: null }, ...over })
-const FACTS = {
-  members: [member('mgr', { role: 'manager' }), member('c1'), member('c2'), member('c3'), member('c4'), member('c5'), member('gone', { profiles: { id: 'gone', active: false } })],
-  orgLocationIds: ['loc-1', 'loc-2'],
-  liveOnBlockIds: ['c5'],
-  timeOff: [
-    { profile_id: 'c2', status: 'approved', type: 'holiday', start_date: '2026-09-28', end_date: '2026-09-30', total_days: '3' },
-    { profile_id: 'c3', status: 'approved', type: 'other', start_date: '2026-09-29', end_date: '2026-09-29', total_days: '0.5' },
+const CHECKED = { shifts: true, cross_studio: true, leave: true, availability: true, contract: true }
+// A loadBlockCandidates answer (manager audience): ranked, each with its tier.
+const ANSWER = {
+  error: null,
+  checked: CHECKED,
+  candidates: [
+    { profile_id: 'mgr', tier: 'ready', free: true },
+    { profile_id: 'c1', tier: 'ready', free: true },
+    { profile_id: 'c6', tier: 'advisory', free: true, rest_gap: { rest_minutes: 600 } },
+    { profile_id: 'c4', tier: 'unavailable', free: true, unavailable: { summary: 'Tuesdays 5am–9am' } },
+    { profile_id: 'c2', tier: 'blocked', free: true, on_leave: { type: 'holiday' } },
+    { profile_id: 'c3', tier: 'blocked', free: false, busy: { name: 'Morning' } },
   ],
-  assignments: [
-    { id: 'x1', profile_id: 'c3', block_id: 'b9', status: 'scheduled', shift_blocks: { id: 'b9', location_id: 'loc-2', block_date: '2026-09-29', start_time: '06:30:00', end_time: '08:00:00' } },
-    { id: 'x2', profile_id: 'c1', block_id: 'b8', status: 'scheduled', shift_blocks: { id: 'b8', location_id: 'loc-OTHER-ORG', block_date: '2026-09-29', start_time: '06:00:00', end_time: '07:00:00' } },
-  ],
-  unavailability: [{ profile_id: 'c4', kind: 'weekly', weekday: 'tue', all_day: false, start_time: '05:00', end_time: '09:00' }],
 }
 
-describe('offerEligibility — default 6, one predicate', () => {
-  const ask = (id) => offerEligibility(id, FACTS, BLOCK)
-  it('a free member is eligible; managers are coaches too', () => {
-    expect(ask('c1')).toEqual({ eligible: true, reasons: [] })
-    expect(ask('mgr').eligible).toBe(true)
-  })
-  it('each reason, on its own', () => {
-    expect(ask('c2').reasons).toEqual(['leave'])        // whole-day approved leave
-    expect(ask('c3').reasons).toEqual(['overlap'])      // half-day leave passes; the other studio's shift does not
-    expect(ask('c4').reasons).toEqual(['unavailable'])  // AVAIL: Tuesdays 5-9
-    expect(ask('c5').reasons).toEqual(['on_block'])
-    expect(ask('gone').reasons).toEqual(['inactive'])
-    expect(ask('stranger').reasons).toEqual(['not_member'])
-  })
-  it('a shift at a studio OUTSIDE the organisation is never read as a clash (tenancy re-check)', () => {
-    expect(ask('c1').reasons).not.toContain('overlap')
-  })
-  it('unreadable availability (null) is not a reason', () => {
-    expect(offerEligibility('c4', { ...FACTS, unavailability: null }, BLOCK).eligible).toBe(true)
+describe('OFFER_TIERS — default 6 is CANDIDATES.1\'s "ready or advisory"', () => {
+  it('free, not on leave, not unavailable; a short rest or a long week is still offered (advisory)', () => {
+    expect(OFFER_TIERS).toEqual(['ready', 'advisory'])
   })
 })
 
-describe('offerAudience', () => {
-  it('every eligible member except the poster, once each, in member order', () => {
-    expect(offerAudience(FACTS, BLOCK, 'mgr')).toEqual(['c1'])
-    expect(offerAudience({ ...FACTS, members: [...FACTS.members, member('c1')] }, BLOCK, 'nobody')).toEqual(['mgr', 'c1'])
+describe('offerAudienceFrom (the push)', () => {
+  it('ready + advisory, minus the poster; managers are coaches too', () => {
+    expect(offerAudienceFrom(ANSWER, 'mgr')).toEqual({ ids: ['c1', 'c6'] })
+    expect(offerAudienceFrom(ANSWER, 'nobody')).toEqual({ ids: ['mgr', 'c1', 'c6'] })
   })
-  it('only members of THIS studio', () => {
-    expect(offerAudience({ ...FACTS, members: [member('c9', { location_id: 'loc-2' })] }, BLOCK, 'mgr')).toEqual([])
+  it('a candidate without a tier is judged by candidateTier', () => {
+    expect(offerAudienceFrom({ ...ANSWER, candidates: [{ profile_id: 'x', free: true }, { profile_id: 'y', on_leave: { type: 'sick' } }] }, 'mgr'))
+      .toEqual({ ids: ['x'] })
+  })
+  it('nobody is pushed on an unread fact: an error, or any of shifts / other studios / leave / availability unchecked, is a retry', () => {
+    expect(offerAudienceFrom({ error: { message: 'x' } }, 'mgr')).toEqual({ retry: 'candidates_unreadable' })
+    for (const facet of ['shifts', 'cross_studio', 'leave', 'availability']) {
+      expect(offerAudienceFrom({ ...ANSWER, checked: { ...CHECKED, [facet]: false } }, 'mgr')).toEqual({ retry: 'candidates_unchecked' })
+    }
+    // contracted hours only rank; they never decide who is told.
+    expect(offerAudienceFrom({ ...ANSWER, checked: { ...CHECKED, contract: false } }, 'mgr').ids).toEqual(['c1', 'c6'])
   })
 })
 
-describe('offerClaimRefusal — what blocks a claim (unavailability does NOT: claiming says you are free)', () => {
-  it('maps the first blocking reason', () => {
-    expect(offerClaimRefusal([])).toBeNull()
-    expect(offerClaimRefusal(['unavailable'])).toBeNull()
-    expect(offerClaimRefusal(['leave'])).toEqual({ status: 409, code: 'leave', error: "You're on approved leave that day, so you can't take this shift." })
-    expect(offerClaimRefusal(['overlap']).error).toBe("You're already on another shift at that time.")
-    expect(offerClaimRefusal(['on_block']).status).toBe(409)
-    expect(offerClaimRefusal(['not_member']).status).toBe(403)
-    expect(offerClaimRefusal(['inactive']).status).toBe(403)
+describe('offerIsFor (the coach\'s list)', () => {
+  it('true for ready/advisory, false otherwise or when absent, null when it could not tell', () => {
+    expect(offerIsFor(ANSWER, 'c1')).toBe(true)
+    expect(offerIsFor(ANSWER, 'c6')).toBe(true)
+    expect(offerIsFor(ANSWER, 'c4')).toBe(false)
+    expect(offerIsFor(ANSWER, 'c2')).toBe(false)
+    expect(offerIsFor(ANSWER, 'stranger')).toBe(false)
+    expect(offerIsFor({ error: { message: 'x' } }, 'c1')).toBeNull()
+    expect(offerIsFor({ ...ANSWER, checked: { ...CHECKED, leave: false } }, 'c1')).toBeNull()
+  })
+})
+
+describe('offerClaimRefusal (unavailability does NOT block: claiming says you are free)', () => {
+  const ask = (id, over = {}) => offerClaimRefusal({ ...ANSWER, ...over }, { profileId: id, liveOnBlockIds: ['c5'] })
+  it('ready, advisory and unavailable may claim', () => {
+    expect(ask('c1')).toBeNull()
+    expect(ask('c6')).toBeNull()
+    expect(ask('c4')).toBeNull()
+  })
+  it('leave, a clash, already on it, not a member', () => {
+    expect(ask('c2')).toEqual({ status: 409, code: 'leave', error: "You're on approved leave that day, so you can't take this shift." })
+    expect(ask('c3')).toEqual({ status: 409, code: 'overlap', error: "You're already on another shift at that time." })
+    expect(ask('c5')).toEqual({ status: 409, code: 'on_block', error: 'You are already on this shift.' })
+    expect(ask('stranger')).toEqual({ status: 403, code: 'not_member', error: 'You are not on the staff of this studio.' })
+  })
+  it('never a claim on a guess: an unreadable answer, or shifts / other studios / leave unchecked, is 503', () => {
+    const failed = { status: 503, code: 'check_failed', error: 'Could not check your other shifts. Try again.' }
+    expect(offerClaimRefusal({ error: { message: 'x' } }, { profileId: 'c1' })).toEqual(failed)
+    for (const facet of ['shifts', 'cross_studio', 'leave']) expect(ask('c1', { checked: { ...CHECKED, [facet]: false } })).toEqual(failed)
+    expect(ask('c1', { checked: { ...CHECKED, availability: false } })).toBeNull()
+  })
+})
+
+describe('offerChecksComplete', () => {
+  it('only the facts that decide default 6', () => {
+    expect(offerChecksComplete(CHECKED)).toBe(true)
+    expect(offerChecksComplete({ ...CHECKED, contract: false })).toBe(true)
+    expect(offerChecksComplete({ ...CHECKED, availability: false })).toBe(false)
+    expect(offerChecksComplete(undefined)).toBe(true) // absent = read (loadBlockCandidates always sends it)
   })
 })
 
@@ -3239,6 +3263,12 @@ describe('offerClaimRpcError', () => {
   })
 })
 
+describe('offerBlock', () => {
+  it('the shift as loadBlockCandidates wants it: the offer\'s studio is the shift\'s', () => {
+    expect(offerBlock({ location_id: 'loc-1', shift_blocks: { id: 'b1', block_date: '2026-09-29' } })).toEqual({ id: 'b1', block_date: '2026-09-29', location_id: 'loc-1' })
+  })
+})
+
 describe('API rows', () => {
   const row = { id: 'o1', block_id: 'b1', location_id: 'loc-1', created_at: 'c', broadcast_at: null, broadcast_count: null, broadcast_outcome: null, shift_blocks: BLOCK, locations: { name: 'Studio North', timezone: TZ } }
   it('a coach sees when, what and where: never counts or minimums', () => {
@@ -3250,97 +3280,93 @@ describe('API rows', () => {
 })
 ```
 
-- [ ] **Step 3: Run, expect failure** (module missing).
+- [ ] **Step 2: Run, expect failure** (module missing).
 
-- [ ] **Step 4: Implement.**
+- [ ] **Step 3: Implement.**
 
 ```js
 // src/lib/shift-offer-notice.js
 //
 // REPLACE.1b — the PURE half of "Offer to team" on the server: who an offer
-// goes to (default 6), what blocks a claim, what the */5 sweep does with one
-// offer, and every word the pushes say. The DB half is ./shift-offer-server.js;
-// what may be offered at all is shared/offer-to-team.js.
+// goes to, what blocks a claim, what the */5 sweep does with one offer, and
+// every word the pushes say. The DB half is ./shift-offer-server.js; what may
+// be offered at all is shared/offer-to-team.js.
 //
-// Default 6 (scheduler Wave 2 index): studio members who are free at that time
-// across the organisation's studios, not on approved leave, not unavailable.
-// ONE predicate (offerEligibility) decides the push audience, the coach's list
-// and, minus 'unavailable', the claim. Each fact reuses the rule that already
-// decides it elsewhere: leave and clashes are evaluateSwapMoveConflicts (the
-// swap claim warning and the approval check), half-day leave passes as in the
-// open pool (isHalfDayLeave), availability is AVAIL.1a's unavailableFor.
+// WHO is not decided here. Default 6 ("studio members who are free at that
+// time across the organisation's studios, not on approved leave, not
+// unavailable") is CANDIDATES.1's answer for the shift
+// (loadBlockCandidates, src/lib/candidates-data.js): every rosterable member
+// of the studio not live on the shift, each with a tier. ready and advisory
+// are "free, not on leave, not unavailable"; unavailable and blocked are not.
+// This file only reads that answer, three ways:
+//   - the push (offerAudienceFrom): ready + advisory minus the poster; an
+//     unread fact means NOBODY is told yet (retry), never a guess;
+//   - the coach's list (offerIsFor): the same tiers; null = could not tell;
+//   - the claim (offerClaimRefusal): leave or a clash refuses; unavailability
+//     does not (a coach claiming is telling us they are free).
 
-import { evaluateSwapMoveConflicts } from './swap-lifecycle'
-import { isHalfDayLeave, shiftWhenLabel, swapShiftHasStarted } from './swap-cover'
+import { candidateTier } from '@shared/candidates'
+import { shiftWhenLabel, swapShiftHasStarted } from './swap-cover'
 import { inStaffPushHours } from './staff-push-hours'
-import { unavailableFor } from '@shared/availability'
 import { offerStillNeeded } from '@shared/offer-to-team'
 
 export const OFFER_NOTICE_LEASE_MS = 10 * 60 * 1000
 export const OFFER_MAX_ATTEMPTS = 5
 export const OFFER_TAKEN_MAX_AGE_MS = 24 * 60 * 60 * 1000
 
+/** CANDIDATES.1 tiers that are "free, not on leave, not unavailable". */
+export const OFFER_TIERS = Object.freeze(['ready', 'advisory'])
+
+// The facts that decide default 6. contract only ranks, so it never blocks.
+const DECIDING_FACTS = ['shifts', 'cross_studio', 'leave', 'availability']
+// The facts that decide a CLAIM (availability does not block one).
+const CLAIM_FACTS = ['shifts', 'cross_studio', 'leave']
+
+export function offerChecksComplete(checked, facts = DECIDING_FACTS) {
+  return facts.every((k) => checked?.[k] !== false)
+}
+
+const tierOf = (c) => c?.tier ?? candidateTier(c)
+
 /**
- * Is `profileId` eligible for this shift? Pure.
- * @param {string} profileId
- * @param {object} facts  readOfferFacts: { members, orgLocationIds, liveOnBlockIds, timeOff, assignments, unavailability }
- *   unavailability: null when it was not read (then it is not a reason).
- * @param {object} block  shift_blocks row: id, location_id, block_date, start_time, end_time
- * @returns {{ eligible: boolean, reasons: string[] }}
- *   reasons ⊆ not_member | inactive | on_block | leave | overlap | unavailable
+ * The push audience, from a loadBlockCandidates answer (audience 'manager').
+ * @returns {{ ids: string[] } | { retry: 'candidates_unreadable'|'candidates_unchecked' }}
  */
-export function offerEligibility(profileId, facts, block) {
-  const reasons = []
-  const link = (facts?.members || []).find((m) => m?.profile_id === profileId && m.location_id === block?.location_id)
-  if (!link) reasons.push('not_member')
-  else if (link.profiles?.active === false || link.profiles?.deleted_at) reasons.push('inactive')
-  if ((facts?.liveOnBlockIds || []).includes(profileId)) reasons.push('on_block')
-
-  // Tenancy: a row is only USED if its studio is in this organisation (the
-  // DB half never reads outside it; this is the belt to that brace).
-  const org = new Set([block?.location_id, ...(facts?.orgLocationIds || [])])
-  const assignments = (facts?.assignments || []).filter((a) => a && org.has(a.shift_blocks?.location_id))
-  const wholeDay = (facts?.timeOff || []).filter((t) => t && !isHalfDayLeave(t))
-  const move = { role: 'taker', coachId: profileId, block, leavingAssignmentId: null }
-  for (const c of evaluateSwapMoveConflicts(move, { timeOff: wholeDay, assignments })) {
-    if (!reasons.includes(c.kind)) reasons.push(c.kind)
-  }
-
-  if (Array.isArray(facts?.unavailability)) {
-    const mine = facts.unavailability.filter((r) => r?.profile_id === profileId)
-    if (unavailableFor(mine, block?.block_date, block?.start_time, block?.end_time)) reasons.push('unavailable')
-  }
-  return { eligible: reasons.length === 0, reasons }
+export function offerAudienceFrom(result, posterId) {
+  if (!result || result.error) return { retry: 'candidates_unreadable' }
+  if (!offerChecksComplete(result.checked)) return { retry: 'candidates_unchecked' }
+  const ids = (result.candidates || [])
+    .filter((c) => c?.profile_id && c.profile_id !== posterId && OFFER_TIERS.includes(tierOf(c)))
+    .map((c) => c.profile_id)
+  return { ids }
 }
 
-/** Every eligible member of the shift's studio except the poster, once each, in member order. */
-export function offerAudience(facts, block, posterId) {
-  const out = []
-  const seen = new Set()
-  for (const m of facts?.members || []) {
-    const id = m?.profile_id
-    if (!id || seen.has(id) || m.location_id !== block?.location_id) continue
-    seen.add(id)
-    if (id === posterId) continue
-    if (offerEligibility(id, facts, block).eligible) out.push(id)
-  }
-  return out
+/** Is this offer for `profileId`? true / false, or null when it could not be told. */
+export function offerIsFor(result, profileId) {
+  if (!result || result.error || !offerChecksComplete(result.checked)) return null
+  const c = (result.candidates || []).find((x) => x?.profile_id === profileId)
+  return !!c && OFFER_TIERS.includes(tierOf(c))
 }
 
-// What blocks a CLAIM, first match wins. 'unavailable' is not here: a coach
-// claiming is telling us they are free.
-const CLAIM_BLOCKERS = [
-  ['not_member', 403, 'You are not on the staff of this studio.'],
-  ['inactive', 403, 'You are not on the staff of this studio.'],
-  ['on_block', 409, 'You are already on this shift.'],
-  ['leave', 409, "You're on approved leave that day, so you can't take this shift."],
-  ['overlap', 409, "You're already on another shift at that time."],
-]
-
-export function offerClaimRefusal(reasons) {
-  for (const [code, status, error] of CLAIM_BLOCKERS) {
-    if ((reasons || []).includes(code)) return { status, code, error }
+/**
+ * May `profileId` claim? null = yes. Never a claim on a guess: an unreadable
+ * answer (or an unread deciding fact) is 503, try again.
+ * @returns {null | { status: number, code: string, error: string }}
+ */
+export function offerClaimRefusal(result, { profileId, liveOnBlockIds = [] }) {
+  if (!result || result.error || !offerChecksComplete(result.checked, CLAIM_FACTS)) {
+    return { status: 503, code: 'check_failed', error: 'Could not check your other shifts. Try again.' }
   }
+  const c = (result.candidates || []).find((x) => x?.profile_id === profileId)
+  if (!c) {
+    // loadBlockCandidates lists rosterable members NOT on the shift, so an
+    // absent caller is either on it already or not a member here.
+    return liveOnBlockIds.includes(profileId)
+      ? { status: 409, code: 'on_block', error: 'You are already on this shift.' }
+      : { status: 403, code: 'not_member', error: 'You are not on the staff of this studio.' }
+  }
+  if (c.on_leave) return { status: 409, code: 'leave', error: "You're on approved leave that day, so you can't take this shift." }
+  if (c.free === false) return { status: 409, code: 'overlap', error: "You're already on another shift at that time." }
   return null
 }
 
@@ -3422,6 +3448,9 @@ export function offerTakenPayload({ offer, block, claimerName }) {
   }
 }
 
+/** The shift as loadBlockCandidates wants it (the offer's studio is the shift's). */
+export const offerBlock = (offer) => ({ ...offer.shift_blocks, location_id: offer.location_id })
+
 /** push_event_sends key, numbered by attempt: a crashed attempt's claim never dedups the retry. */
 export const offerNoticeKey = (kind, offerId, attempt) => `shift_offer_${kind}:${offerId}:a${attempt}`
 
@@ -3429,8 +3458,7 @@ export const offerNoticeKey = (kind, offerId, attempt) => `shift_offer_${kind}:$
 export function offerClaimRpcError(err) {
   if (err?.code === '23505') return { status: 409, error: 'You are already on this shift.' }
   const msg = String(err?.message || '')
-  const prefix = msg.split(':')[0]
-  switch (prefix) {
+  switch (msg.split(':')[0]) {
     case 'offer_not_open':
       return { status: 409, error: /claimed/.test(msg) ? 'Someone else has just taken this shift.' : 'This shift is no longer on offer.' }
     case 'offer_not_found': return { status: 404, error: 'Offer not found' }
@@ -3468,23 +3496,24 @@ export function managerOfferRow(offer, { nowMs }) {
 }
 ```
 
-- [ ] **Step 5: Run, expect pass**, both zones:
+- [ ] **Step 4: Run, expect pass**, both zones:
 
 ```bash
-npx vitest run src/lib/shift-offer-notice.test.js src/lib/swap-cover.test.js
+npx vitest run src/lib/shift-offer-notice.test.js shared/candidates.test.js
 TZ=America/Los_Angeles npx vitest run src/lib/shift-offer-notice.test.js
 ```
 Expected: `0 failed`.
 
-- [ ] **Step 6: Commit.**
+- [ ] **Step 5: Commit.**
 
 ```bash
-git add src/lib/swap-cover.js src/lib/shift-offer-notice.js src/lib/shift-offer-notice.test.js
-git commit -m "REPLACE.1b — shift-offer-notice.js: default 6 as one predicate, the claim check, the sweep decision, the words
+git add src/lib/shift-offer-notice.js src/lib/shift-offer-notice.test.js
+git commit -m "REPLACE.1b — shift-offer-notice.js: default 6 read from CANDIDATES.1's tiers, the claim check, the sweep decision, the words
 
-Eligibility reuses evaluateSwapMoveConflicts (leave, clash in the org), the open
-pool's half-day rule and AVAIL's unavailableFor. Closing is state (any hour);
-notices wait for 07:00-22:00 and lease with attempt-numbered keys.
+Push = ready + advisory minus the poster (an unread deciding fact = retry, not
+a guess); coach list = the same tiers; claim = leave or a clash refuses,
+unavailability does not. Closing is state (any hour); notices wait for
+07:00-22:00 and lease with attempt-numbered keys.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -3495,27 +3524,29 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 **Files:** Create `src/lib/shift-offer-server.js`, `src/lib/shift-offer-server.test.js`.
 
+The audience read is CANDIDATES.1's `loadBlockCandidates(db, { block, audience: 'manager' })` (`src/lib/candidates-data.js`). It needs the shift with `id, location_id, block_date, start_time, end_time, shift_templates (start_time, end_time for the window fallback), shift_assignments`, so every offer read embeds exactly that.
+
 - [ ] **Step 1: Write the failing test.**
 
 ```js
 // src/lib/shift-offer-server.test.js
-// REPLACE.1b — the DB half: facts for default 6, the leased sender (never
-// loses a notice, duplicates at worst), closing, the */5 sweep.
+// REPLACE.1b — the DB half: the leased sender (never loses a notice,
+// duplicates at worst), closing, the */5 sweep, create / withdraw.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { scriptedDb, chainsFor, argsOf, allArgsOf } from './scripted-db.test-helpers'
 
 vi.mock('./push-dedup', () => ({ notifyUsersOnce: vi.fn(async () => ({ sent: 1, emailed: 0, failed: 0 })) }))
 vi.mock('./push', () => ({ resolveRoleRecipientIds: vi.fn(async () => ['mgr', 'c1']) }))
-vi.mock('./sibling-locations', () => ({ siblingLocationIds: vi.fn(async () => ({ ids: ['loc-2'], error: null })) }))
+vi.mock('./candidates-data', () => ({ loadBlockCandidates: vi.fn() }))
 vi.mock('./log', () => ({ logError: vi.fn(), logWarn: vi.fn() }))
 const { notifyUsersOnce } = await import('./push-dedup')
-const { siblingLocationIds } = await import('./sibling-locations')
+const { loadBlockCandidates } = await import('./candidates-data')
 const { logError } = await import('./log')
-const { readOfferFacts, processOffer, runShiftOfferSweep, createOffer, withdrawOffer } = await import('./shift-offer-server')
+const { processOffer, runShiftOfferSweep, createOffer, withdrawOffer } = await import('./shift-offer-server')
 
 const BLOCK = {
   id: 'b1', location_id: 'loc-1', block_date: '2026-09-29', start_time: '06:00:00', end_time: '07:00:00',
-  min_coaches: 1, max_coaches: 3, rosters: { status: 'published' }, shift_templates: { name: 'Morning', kind: 'class' }, shift_assignments: [],
+  min_coaches: 1, max_coaches: 3, rosters: { status: 'published' }, shift_templates: { name: 'Morning', kind: 'class', start_time: '06:00:00', end_time: '07:00:00' }, shift_assignments: [],
 }
 const IN_BAND = Date.parse('2026-09-28T10:00:00Z')
 const QUIET = Date.parse('2026-09-28T22:30:00Z')
@@ -3523,96 +3554,69 @@ const OFFER = {
   id: 'o1', location_id: 'loc-1', block_id: 'b1', status: 'open', offered_by: 'mgr', broadcast_at: null,
   notice_attempts: 0, notice_lease_until: null, shift_blocks: BLOCK, locations: { name: 'Studio North', timezone: 'Europe/Dublin' },
 }
-const MEMBERS = { data: [
-  { profile_id: 'mgr', location_id: 'loc-1', role: 'manager', profiles: { id: 'mgr', active: true } },
-  { profile_id: 'c1', location_id: 'loc-1', role: 'staff', profiles: { id: 'c1', active: true } },
-  { profile_id: 'c2', location_id: 'loc-1', role: 'staff', profiles: { id: 'c2', active: true } },
-], error: null }
-const FACT_READS = {
-  profile_locations: [MEMBERS],
-  time_off_requests: [{ data: [{ profile_id: 'c2', status: 'approved', start_date: '2026-09-29', end_date: '2026-09-29', total_days: '1' }], error: null }],
-  shift_assignments: [{ data: [], error: null }],
-  staff_unavailability: [{ data: [], error: null }],
-}
+const CHECKED = { shifts: true, cross_studio: true, leave: true, availability: true, contract: true }
+const ANSWER = { error: null, checked: CHECKED, candidates: [
+  { profile_id: 'mgr', tier: 'ready' }, { profile_id: 'c1', tier: 'ready' }, { profile_id: 'c2', tier: 'blocked', on_leave: { type: 'holiday' } },
+] }
 const ok = { data: [{ id: 'o1' }], error: null }
 
 beforeEach(() => {
   vi.clearAllMocks()
   notifyUsersOnce.mockResolvedValue({ sent: 1, emailed: 0, failed: 0 })
-  siblingLocationIds.mockResolvedValue({ ids: ['loc-2'], error: null })
-})
-
-describe('readOfferFacts', () => {
-  it('members of the shift\'s studio; leave, that day\'s shifts in the ORG, availability for them', async () => {
-    const db = scriptedDb(FACT_READS)
-    const facts = await readOfferFacts(db, { block: BLOCK })
-    expect(facts.error).toBeNull()
-    expect(facts.orgLocationIds).toEqual(['loc-1', 'loc-2'])
-    expect(facts.members.map((m) => m.profile_id)).toEqual(['mgr', 'c1', 'c2'])
-    const [sa] = chainsFor(db, 'shift_assignments')
-    expect(argsOf(sa, 'in')).toEqual(['profile_id', ['mgr', 'c1', 'c2']])
-    expect(allArgsOf(sa, 'in')[1]).toEqual(['shift_blocks.location_id', ['loc-1', 'loc-2']])
-    expect(argsOf(sa, 'eq')).toEqual(['shift_blocks.block_date', '2026-09-29'])
-    const [un] = chainsFor(db, 'staff_unavailability')
-    expect(argsOf(un, 'or')).toEqual(['kind.eq.weekly,and(start_date.lte.2026-09-29,end_date.gte.2026-09-29)'])
-  })
-  it('narrowed to given people (the coach view and the claim read only the caller)', async () => {
-    const db = scriptedDb({ ...FACT_READS, profile_locations: [{ data: [MEMBERS.data[1]], error: null }] })
-    await readOfferFacts(db, { block: BLOCK, profileIds: ['c1'] })
-    expect(allArgsOf(chainsFor(db, 'profile_locations')[0], 'in')).toEqual([['profile_id', ['c1']]])
-  })
-  it('any failed read is an error, never "nobody is busy" (an unreadable org is too)', async () => {
-    const db = scriptedDb({ ...FACT_READS, time_off_requests: [{ data: null, error: { message: 'down' } }] })
-    expect((await readOfferFacts(db, { block: BLOCK })).error).toEqual({ message: 'down' })
-    siblingLocationIds.mockResolvedValue({ ids: [], error: { message: 'x' } })
-    expect((await readOfferFacts(scriptedDb(FACT_READS), { block: BLOCK })).error).toEqual({ message: 'x' })
-  })
+  loadBlockCandidates.mockResolvedValue(ANSWER)
 })
 
 describe('processOffer — the broadcast', () => {
-  it('lease (guarded), audience, send under the attempt key, stamp (guarded on the attempt)', async () => {
-    const db = scriptedDb({ shift_offers: [ok, ok], ...FACT_READS })
+  it('lease (guarded), CANDIDATES.1\'s audience, send under the attempt key, stamp (guarded on the attempt)', async () => {
+    const db = scriptedDb({ shift_offers: [ok, ok] })
     expect(await processOffer(db, OFFER, { nowMs: IN_BAND })).toBe('sent')
     const [lease, stamp] = chainsFor(db, 'shift_offers')
     expect(argsOf(lease, 'update')[0]).toEqual({ notice_lease_until: '2026-09-28T10:10:00.000Z', notice_attempts: 1 })
     expect(allArgsOf(lease, 'eq')).toEqual([['id', 'o1'], ['status', 'open'], ['notice_attempts', 0]])
     expect(argsOf(lease, 'or')).toEqual(['notice_lease_until.is.null,notice_lease_until.lt.2026-09-28T10:00:00.000Z'])
-    // c2 is on leave, mgr posted it: only c1.
+    expect(loadBlockCandidates).toHaveBeenCalledWith(db, { block: { ...BLOCK, location_id: 'loc-1' }, audience: 'manager' })
+    // c2 is on leave (blocked), mgr posted it: only c1.
     expect(notifyUsersOnce).toHaveBeenCalledWith(db, 'shift_offer_broadcast:o1:a1', ['c1'], expect.objectContaining({ category: 'swap', data: expect.objectContaining({ type: 'shift_offer' }) }))
     expect(argsOf(stamp, 'update')[0]).toEqual({ broadcast_at: '2026-09-28T10:00:00.000Z', broadcast_count: 1, broadcast_outcome: 'sent', notice_lease_until: null })
     expect(allArgsOf(stamp, 'eq')).toEqual([['id', 'o1'], ['notice_attempts', 1]])
   })
-  it('someone else holds the lease: nothing is sent', async () => {
+  it('someone else holds the lease: nothing is read or sent', async () => {
     const db = scriptedDb({ shift_offers: [{ data: [], error: null }] })
     expect(await processOffer(db, OFFER, { nowMs: IN_BAND })).toBe('busy')
+    expect(loadBlockCandidates).not.toHaveBeenCalled()
     expect(notifyUsersOnce).not.toHaveBeenCalled()
   })
-  it('quiet hours: no write at all', async () => {
-    const db = scriptedDb({})
-    expect(await processOffer(db, OFFER, { nowMs: QUIET })).toBe('quiet_hours')
+  it('quiet hours: no read, no write', async () => {
+    expect(await processOffer(scriptedDb({}), OFFER, { nowMs: QUIET })).toBe('quiet_hours')
+    expect(loadBlockCandidates).not.toHaveBeenCalled()
   })
-  it('an unreadable fact releases the lease and sends nothing (retried next tick)', async () => {
-    const db = scriptedDb({ shift_offers: [ok, ok], ...FACT_READS, time_off_requests: [{ data: null, error: { message: 'down' } }] })
-    expect(await processOffer(db, OFFER, { nowMs: IN_BAND })).toBe('retry')
-    expect(notifyUsersOnce).not.toHaveBeenCalled()
-    const release = chainsFor(db, 'shift_offers')[1]
-    expect(argsOf(release, 'update')[0]).toEqual({ notice_lease_until: null })
-    expect(allArgsOf(release, 'eq')).toEqual([['id', 'o1'], ['notice_attempts', 1]])
+  it('an unreadable or unchecked candidates answer releases the lease and tells nobody (retried next tick)', async () => {
+    for (const answer of [{ error: { message: 'down' } }, { ...ANSWER, checked: { ...CHECKED, leave: false } }]) {
+      vi.clearAllMocks()
+      loadBlockCandidates.mockResolvedValue(answer)
+      const db = scriptedDb({ shift_offers: [ok, ok] })
+      expect(await processOffer(db, OFFER, { nowMs: IN_BAND })).toBe('retry')
+      expect(notifyUsersOnce).not.toHaveBeenCalled()
+      const release = chainsFor(db, 'shift_offers')[1]
+      expect(argsOf(release, 'update')[0]).toEqual({ notice_lease_until: null })
+      expect(allArgsOf(release, 'eq')).toEqual([['id', 'o1'], ['notice_attempts', 1]])
+    }
   })
   it('a send that failed outright releases the lease; a partial one stamps', async () => {
     notifyUsersOnce.mockResolvedValueOnce({ sent: 0, emailed: 0, failed: 1 })
-    const db = scriptedDb({ shift_offers: [ok, ok], ...FACT_READS })
+    const db = scriptedDb({ shift_offers: [ok, ok] })
     expect(await processOffer(db, OFFER, { nowMs: IN_BAND })).toBe('retry')
     expect(argsOf(chainsFor(db, 'shift_offers')[1], 'update')[0]).toEqual({ notice_lease_until: null })
   })
   it('nobody eligible: stamped no_recipients, count 0, nothing sent', async () => {
-    const db = scriptedDb({ shift_offers: [ok, ok], ...FACT_READS, profile_locations: [{ data: [MEMBERS.data[0]], error: null }] })
+    loadBlockCandidates.mockResolvedValue({ ...ANSWER, candidates: [{ profile_id: 'mgr', tier: 'ready' }] })
+    const db = scriptedDb({ shift_offers: [ok, ok] })
     expect(await processOffer(db, OFFER, { nowMs: IN_BAND })).toBe('sent')
     expect(notifyUsersOnce).not.toHaveBeenCalled()
     expect(argsOf(chainsFor(db, 'shift_offers')[1], 'update')[0]).toMatchObject({ broadcast_count: 0, broadcast_outcome: 'no_recipients' })
   })
   it('a lost stamp is logged; the expired lease re-sends under a NEW key (duplicate, never loss)', async () => {
-    const db = scriptedDb({ shift_offers: [ok, { data: null, error: { message: 'stamp failed' } }], ...FACT_READS })
+    const db = scriptedDb({ shift_offers: [ok, { data: null, error: { message: 'stamp failed' } }] })
     expect(await processOffer(db, OFFER, { nowMs: IN_BAND })).toBe('sent')
     expect(logError).toHaveBeenCalledWith('shift-offer', expect.stringMatching(/stamp/), expect.anything())
   })
@@ -3643,19 +3647,17 @@ describe('processOffer — closing and the taken notice', () => {
     expect(notifyUsersOnce).toHaveBeenCalledWith(db, 'shift_offer_taken:o1:a1', ['mgr'], expect.objectContaining({ title: 'Offered shift taken' }))
     expect(allArgsOf(chainsFor(db, 'shift_offers')[0], 'eq')).toEqual([['id', 'o1'], ['status', 'claimed'], ['notice_attempts', 0]])
     expect(argsOf(chainsFor(db, 'shift_offers')[1], 'update')[0]).toEqual({ taken_notified_at: '2026-09-28T10:00:00.000Z', notice_lease_until: null })
+    expect(loadBlockCandidates).not.toHaveBeenCalled()
   })
 })
 
 describe('runShiftOfferSweep', () => {
   it('open offers and claimed ones owed a notice; each processed; counts by outcome', async () => {
-    const db = scriptedDb({
-      shift_offers: [
-        { data: [OFFER, { ...OFFER, id: 'o2', broadcast_at: 'x' }], error: null },
-        { data: [], error: null },
-        ok, ok,
-      ],
-      ...FACT_READS,
-    })
+    const db = scriptedDb({ shift_offers: [
+      { data: [OFFER, { ...OFFER, id: 'o2', broadcast_at: 'x' }], error: null },
+      { data: [], error: null },
+      ok, ok,
+    ] })
     const stats = await runShiftOfferSweep(db, { nowMs: IN_BAND })
     expect(stats).toMatchObject({ open: 2, claimed_owed: 0, sent: 1, none: 1, errors: 0 })
     const [openRead, owedRead] = chainsFor(db, 'shift_offers')
@@ -3669,7 +3671,10 @@ describe('runShiftOfferSweep', () => {
     expect((await runShiftOfferSweep(db, { nowMs: IN_BAND })).errors).toBe(1)
   })
   it('one offer throwing costs the others nothing', async () => {
-    const db = scriptedDb({ shift_offers: [{ data: [OFFER, { ...OFFER, id: 'o2' }], error: null }, { data: [], error: null }, { data: null, error: { message: 'lease write failed' } }, { data: [], error: null }] })
+    const db = scriptedDb({ shift_offers: [
+      { data: [OFFER, { ...OFFER, id: 'o2' }], error: null }, { data: [], error: null },
+      { data: null, error: { message: 'lease write failed' } }, { data: [], error: null },
+    ] })
     const stats = await runShiftOfferSweep(db, { nowMs: IN_BAND })
     expect(stats.errors).toBe(1)
     expect(stats.busy).toBe(1)
@@ -3700,47 +3705,47 @@ describe('createOffer / withdrawOffer', () => {
 // src/lib/shift-offer-server.js
 //
 // REPLACE.1b — the DB half of "Offer to team". Decisions are in
-// ./shift-offer-notice.js and shared/offer-to-team.js; this file reads, sends
-// and writes. Service-role client: callers (routes) have authorised the
-// studio; the */5 arm fans out across studios by design.
+// ./shift-offer-notice.js and shared/offer-to-team.js; WHO is CANDIDATES.1's
+// loadBlockCandidates. This file reads, sends and writes. Service-role
+// client: callers (routes) have authorised the studio; the */5 arm fans out
+// across studios by design.
 //
 // THE SENDER (processOffer) is the ONE path for both the route's after() and
 // the arm, so there is no route-vs-cron race beyond the lease:
 //   1. lease: a guarded UPDATE (id + status read + attempts read + lease free)
 //      sets notice_lease_until = now + 10 min and notice_attempts + 1;
 //      zero rows = someone else holds it ('busy');
-//   2. recipients: the audience (broadcast) or the studio's managers minus
-//      the claimant (taken); an unreadable fact RELEASES the lease ('retry');
+//   2. recipients: CANDIDATES.1's ready + advisory minus the poster
+//      (broadcast) or the studio's managers minus the claimant (taken); an
+//      unreadable or unchecked answer RELEASES the lease ('retry');
 //   3. send: notifyUsersOnce under shift_offer_<kind>:<id>:a<attempt>; a send
 //      that failed outright releases the lease ('retry');
 //   4. stamp, guarded on the attempt. A process killed between 3 and 4 leaves
 //      an expired lease: the next attempt uses a NEW key and sends again. A
 //      duplicate, never a loss (CLAUDE.md invariant (c)).
-// Never throws to the route's after(): the route wraps it; the arm catches.
 
 import { notifyUsersOnce } from './push-dedup'
 import { resolveRoleRecipientIds } from './push'
-import { siblingLocationIds } from './sibling-locations'
+import { loadBlockCandidates } from './candidates-data'
 import { MANAGER_ROLES } from './schemas'
 import { logError, logWarn } from './log'
 import {
-  offerAudience, offerSweepAction, offerBroadcastPayload, offerTakenPayload, offerNoticeKey,
+  offerAudienceFrom, offerSweepAction, offerBroadcastPayload, offerTakenPayload, offerNoticeKey, offerBlock,
   OFFER_NOTICE_LEASE_MS, OFFER_TAKEN_MAX_AGE_MS,
 } from './shift-offer-notice'
 
 // Literal selects: check:select-columns resolves only literals. shift_offers has
 // two FKs to profiles (offered_by, claimed_by), so the embed names its column.
+// The block embed is what loadBlockCandidates reads (template times = the
+// window fallback) plus what the sweep and the rows read.
 export const OFFER_SELECT = `
   id, location_id, block_id, status, offered_by, created_at, closed_at, claimed_by, claimed_at,
   broadcast_at, broadcast_count, broadcast_outcome, taken_notified_at, notice_lease_until, notice_attempts,
-  shift_blocks!block_id(id, location_id, block_date, start_time, end_time, min_coaches, max_coaches, rosters:roster_id(status), shift_templates(name, kind), shift_assignments(profile_id, status)),
+  shift_blocks!block_id(id, location_id, block_date, start_time, end_time, min_coaches, max_coaches, rosters:roster_id(status), shift_templates(name, kind, start_time, end_time), shift_assignments(profile_id, status)),
   locations(name, timezone),
   claimer:profiles!claimed_by(full_name)
 `
-const BLOCK_SELECT = 'id, location_id, block_date, start_time, end_time, min_coaches, max_coaches, rosters:roster_id(status), shift_templates(name, kind), shift_assignments(profile_id, status), locations(name, timezone)'
-const MEMBER_SELECT = 'profile_id, location_id, role, profiles!inner(id, active, deleted_at)'
-const DAY_ASSIGNMENT_SELECT = 'id, profile_id, block_id, status, start_time_override, end_time_override, shift_blocks!inner(id, location_id, block_date, start_time, end_time, shift_templates(name), locations(name))'
-const UNAVAILABILITY_SELECT = 'id, profile_id, kind, weekday, start_date, end_date, all_day, start_time, end_time'
+const BLOCK_SELECT = 'id, location_id, block_date, start_time, end_time, min_coaches, max_coaches, rosters:roster_id(status), shift_templates(name, kind, start_time, end_time), shift_assignments(profile_id, status), locations(name, timezone)'
 // Open offers are single digits. A guard, not a page size.
 const SWEEP_LIMIT = 200
 
@@ -3768,62 +3773,6 @@ export async function listOpenOffers(db, { locationId }) {
     .order('created_at', { ascending: true })
     .limit(SWEEP_LIMIT)
   return { offers: data || [], error: error || null }
-}
-
-/**
- * The facts default 6 is decided on, for one shift. `profileIds` narrows to
- * those people (the coach view and the claim read only the caller). Any read
- * error comes back as `error`: nothing here may read "unreadable" as "free".
- * The organisation boundary (siblingLocationIds) is a read too; failing it is
- * an error, never "this studio only", because a coach busy at the other studio
- * would then be offered a shift they cannot work.
- *
- * @returns {{ error, members, orgLocationIds, liveOnBlockIds, timeOff, assignments, unavailability }}
- */
-export async function readOfferFacts(db, { block, profileIds = null }) {
-  const empty = { members: [], orgLocationIds: [], liveOnBlockIds: [], timeOff: [], assignments: [], unavailability: [] }
-  let q = db.from('profile_locations').select(MEMBER_SELECT).eq('location_id', block.location_id)
-  if (profileIds) q = q.in('profile_id', profileIds)
-  const { data: members, error: mErr } = await q
-  if (mErr) return { ...empty, error: mErr }
-
-  const { ids: siblings, error: sErr } = await siblingLocationIds(db, block.location_id)
-  if (sErr) return { ...empty, error: sErr }
-  const orgLocationIds = [block.location_id, ...siblings]
-
-  const liveOnBlockIds = (block.shift_assignments || []).filter((a) => a && a.status !== 'cancelled').map((a) => a.profile_id)
-  const ids = [...new Set((members || []).map((m) => m.profile_id).filter(Boolean))]
-  if (ids.length === 0) return { ...empty, error: null, members: members || [], orgLocationIds, liveOnBlockIds }
-  const d = block.block_date
-
-  const [leave, day, rules] = await Promise.all([
-    db.from('time_off_requests')
-      .select('id, profile_id, type, start_date, end_date, total_days, status')
-      .in('profile_id', ids)
-      .eq('status', 'approved')
-      .lte('start_date', d)
-      .gte('end_date', d),
-    db.from('shift_assignments')
-      .select(DAY_ASSIGNMENT_SELECT)
-      .in('profile_id', ids)
-      .eq('shift_blocks.block_date', d)
-      .in('shift_blocks.location_id', orgLocationIds),
-    db.from('staff_unavailability')
-      .select(UNAVAILABILITY_SELECT)
-      .in('profile_id', ids)
-      .or(`kind.eq.weekly,and(start_date.lte.${d},end_date.gte.${d})`),
-  ])
-  const err = leave.error || day.error || rules.error
-  if (err) return { ...empty, error: err }
-  return {
-    error: null,
-    members: members || [],
-    orgLocationIds,
-    liveOnBlockIds,
-    timeOff: leave.data || [],
-    assignments: day.data || [],
-    unavailability: rules.data || [],
-  }
 }
 
 /** Insert an open offer. 23505 = the shift already has one (the partial unique index). */
@@ -3901,13 +3850,14 @@ async function deliver(db, offer, kind, nowMs) {
   const block = offer.shift_blocks
   let ids
   if (kind === 'broadcast') {
-    const facts = await readOfferFacts(db, { block: { ...block, location_id: offer.location_id } })
-    if (facts.error) {
-      logWarn('shift-offer', 'offer audience unreadable; nobody told yet, retried next tick', { offerId: offer.id, err: facts.error.message })
+    const answer = await loadBlockCandidates(db, { block: offerBlock(offer), audience: 'manager' })
+    const audience = offerAudienceFrom(answer, offer.offered_by)
+    if (audience.retry) {
+      logWarn('shift-offer', 'offer audience unreadable; nobody told yet, retried next tick', { offerId: offer.id, why: audience.retry, err: answer?.error?.message })
       await releaseLease(db, offer.id, attempt)
       return 'retry'
     }
-    ids = offerAudience(facts, { ...block, location_id: offer.location_id }, offer.offered_by)
+    ids = audience.ids
   } else {
     ids = (await resolveRoleRecipientIds(db, offer.location_id, MANAGER_ROLES)).filter((id) => id && id !== offer.claimed_by)
   }
@@ -3982,7 +3932,7 @@ export async function runShiftOfferSweep(db, { nowMs = Date.now() } = {}) {
 }
 ```
 
-Note on the sweep test "one offer throwing": the first offer's lease write returns `{ data: null, error }` → `deliver` throws → `errors: 1`; the second offer's lease returns `{ data: [] }` → `busy`. The scripted answers are consumed in call order (`open` read, `owed` read, then the leases), which is why `Promise.all` order matters: the open read is created first.
+Note on the sweep test "one offer throwing": the first offer's lease write returns `{ data: null, error }` → `deliver` throws → `errors: 1`; the second offer's lease returns `{ data: [] }` → `busy`. Scripted answers are consumed in call order (the open read, the owed read, then the leases); `Promise.all` creates the open read's builder first.
 
 - [ ] **Step 4: Run, expect pass**, both zones:
 
@@ -3990,18 +3940,19 @@ Note on the sweep test "one offer throwing": the first offer's lease write retur
 npx vitest run src/lib/shift-offer-server.test.js
 TZ=America/Los_Angeles npx vitest run src/lib/shift-offer-server.test.js
 ```
-Expected: `0 failed`. If a scripted-answer order assumption fails because `readOfferFacts`'s `Promise.all` creates its three builders in a different order, fix the TEST's script (each table has its own queue, so only same-table order matters).
+Expected: `0 failed`.
 
 - [ ] **Step 5: Commit.**
 
 ```bash
 git add src/lib/shift-offer-server.js src/lib/shift-offer-server.test.js
-git commit -m "REPLACE.1b — shift-offer-server.js: facts for default 6, the leased sender, the */5 sweep
+git commit -m "REPLACE.1b — shift-offer-server.js: the leased sender over CANDIDATES.1's audience, closing, the */5 sweep
 
-One sender for the route's after() and the arm: lease, recipients, send under
-an attempt-numbered key, stamp guarded on the attempt. An unreadable fact or a
-failed send releases the lease; a lost stamp re-sends (duplicate, never loss).
-Closing (expired / filled) is state and happens at any hour.
+One sender for the route's after() and the arm: lease, recipients
+(loadBlockCandidates ready + advisory, or the studio's managers), send under an
+attempt-numbered key, stamp guarded on the attempt. An unreadable or unchecked
+answer or a failed send releases the lease; a lost stamp re-sends (duplicate,
+never loss). Closing (expired / filled) is state and happens at any hour.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -4019,9 +3970,10 @@ No route file calls `.from()` itself: every read and write is a `shift-offer-ser
 ```js
 // src/app/api/schedule/offers/[id]/claim/route.test.js
 // REPLACE.1b — a coach claims an offered shift: member of the studio (404
-// otherwise), open, not started, not on leave or on another shift; the
-// database lock decides between two claimers; the log row is stamped (a self
-// change tells nobody); the managers' "taken" notice goes through processOffer.
+// otherwise), open, not started, not on leave or on another shift (CANDIDATES.1's
+// facts); the database lock decides between two claimers; the log row is
+// stamped (a self change tells nobody); the managers' "taken" notice goes
+// through processOffer.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('next/server', async (importOriginal) => {
@@ -4033,21 +3985,22 @@ vi.mock('@/lib/auth', async (importOriginal) => {
   const real = await importOriginal()
   return { getCurrentUser: vi.fn(), assertLocationAccessOr404: real.assertLocationAccessOr404 }
 })
-vi.mock('@/lib/shift-offer-server', () => ({
-  readOffer: vi.fn(), readOfferFacts: vi.fn(), claimOffer: vi.fn(), processOffer: vi.fn(async () => 'sent'),
-}))
+vi.mock('@/lib/shift-offer-server', () => ({ readOffer: vi.fn(), claimOffer: vi.fn(), processOffer: vi.fn(async () => 'sent') }))
+vi.mock('@/lib/candidates-data', () => ({ loadBlockCandidates: vi.fn() }))
 vi.mock('@/lib/roster-change-log', () => ({ logRosterChange: vi.fn(async () => ({ logged: true, id: 'log-1' })), markChangesNotified: vi.fn(async () => {}) }))
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn() }))
 
 const { getCurrentUser } = await import('@/lib/auth')
-const { readOffer, readOfferFacts, claimOffer, processOffer } = await import('@/lib/shift-offer-server')
+const { readOffer, claimOffer, processOffer } = await import('@/lib/shift-offer-server')
+const { loadBlockCandidates } = await import('@/lib/candidates-data')
 const { logRosterChange, markChangesNotified } = await import('@/lib/roster-change-log')
 const { POST } = await import('./route.js')
 
 const COACH = { id: 'c1', full_name: 'Coach B', profileRole: 'staff', rolesByLocation: { 'loc-1': 'staff' }, locations: [{ id: 'loc-1' }] }
 const BLOCK = { id: 'b1', location_id: 'loc-1', block_date: '2026-09-29', start_time: '06:00:00', end_time: '07:00:00', min_coaches: 1, max_coaches: 3, rosters: { status: 'published' }, shift_templates: { name: 'Morning', kind: 'class' }, shift_assignments: [] }
 const OFFER = { id: 'o1', location_id: 'loc-1', block_id: 'b1', status: 'open', offered_by: 'mgr', notice_attempts: 0, notice_lease_until: null, shift_blocks: BLOCK, locations: { name: 'Studio North', timezone: 'Europe/Dublin' } }
-const FREE = { error: null, members: [{ profile_id: 'c1', location_id: 'loc-1', profiles: { active: true } }], orgLocationIds: ['loc-1'], liveOnBlockIds: [], timeOff: [], assignments: [], unavailability: [] }
+const CHECKED = { shifts: true, cross_studio: true, leave: true, availability: true, contract: true }
+const answer = (me) => ({ error: null, checked: CHECKED, candidates: [{ profile_id: 'c1', tier: 'ready', free: true, ...me }] })
 const PROPS = { params: Promise.resolve({ id: 'o1' }) }
 const call = () => POST({ json: () => Promise.resolve({}), headers: { get: () => '' } }, PROPS)
 
@@ -4056,7 +4009,7 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'], now: Date.parse('2026-09-28T10:00:00Z') })
   getCurrentUser.mockResolvedValue(COACH)
   readOffer.mockResolvedValue({ offer: OFFER, error: null })
-  readOfferFacts.mockResolvedValue(FREE)
+  loadBlockCandidates.mockResolvedValue(answer())
   claimOffer.mockResolvedValue({ result: { outcome: 'claimed', assignment_id: 'as-9', block_date: '2026-09-29' }, error: null })
 })
 afterEach(() => vi.useRealTimers())
@@ -4087,21 +4040,27 @@ describe('POST /api/schedule/offers/[id]/claim', () => {
     expect(claimOffer).not.toHaveBeenCalled()
   })
 
-  it('on leave or on another shift at that time: refused before the database is asked', async () => {
-    readOfferFacts.mockResolvedValue({ ...FREE, timeOff: [{ profile_id: 'c1', status: 'approved', start_date: '2026-09-29', end_date: '2026-09-29', total_days: '1' }] })
-    const res = await call()
+  it('on leave or on another shift at that time (CANDIDATES.1\'s facts): refused before the database is asked', async () => {
+    loadBlockCandidates.mockResolvedValue(answer({ tier: 'blocked', on_leave: { type: 'holiday' } }))
+    let res = await call()
     expect(res.status).toBe(409)
     expect((await res.json()).error).toMatch(/approved leave/)
+    loadBlockCandidates.mockResolvedValue(answer({ tier: 'blocked', free: false }))
+    res = await call()
+    expect((await res.json()).error).toMatch(/another shift/)
     expect(claimOffer).not.toHaveBeenCalled()
+    expect(loadBlockCandidates).toHaveBeenCalledWith(expect.anything(), { block: { ...BLOCK, location_id: 'loc-1' }, audience: 'manager' })
   })
 
   it('unavailability does NOT block a claim (claiming says you are free)', async () => {
-    readOfferFacts.mockResolvedValue({ ...FREE, unavailability: [{ profile_id: 'c1', kind: 'weekly', weekday: 'tue', all_day: true }] })
+    loadBlockCandidates.mockResolvedValue(answer({ tier: 'unavailable', unavailable: { summary: 'all day' } }))
     expect((await call()).status).toBe(200)
   })
 
   it('an unreadable check is 503 (try again), never a claim on a guess', async () => {
-    readOfferFacts.mockResolvedValue({ ...FREE, error: { message: 'down' } })
+    loadBlockCandidates.mockResolvedValue({ error: { message: 'down' } })
+    expect((await call()).status).toBe(503)
+    loadBlockCandidates.mockResolvedValue({ ...answer(), checked: { ...CHECKED, leave: false } })
     expect((await call()).status).toBe(503)
     expect(claimOffer).not.toHaveBeenCalled()
   })
@@ -4148,10 +4107,10 @@ describe('POST /api/schedule/offers/[id]/claim', () => {
 //     never confirmed to an outsider);
 //   - the offer is open, the shift has not started (swapShiftHasStarted, the
 //     one predicate, studio clock);
-//   - the caller is not on approved leave that day or on another live shift
-//     at that time in the organisation (they cannot be in two places). A read
-//     that fails is 503: a claim is never made on a guess. Unavailability
-//     does not block: claiming says they are free;
+//   - CANDIDATES.1's facts for the shift (loadBlockCandidates): approved leave
+//     that day or a live overlapping shift in the organisation refuses (they
+//     cannot be in two places); an unreadable answer is 503, never a claim on
+//     a guess. Unavailability does not block: claiming says they are free;
 //   - then the RPC; its refusals map through offerClaimRpcError.
 // On success: one roster_change_log row (via 'offer'), stamped at once (a
 // self change tells nobody), and the managers' "taken" notice through
@@ -4160,9 +4119,11 @@ describe('POST /api/schedule/offers/[id]/claim', () => {
 import { NextResponse, after } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { readOffer, readOfferFacts, claimOffer, processOffer } from '@/lib/shift-offer-server'
-import { offerEligibility, offerClaimRefusal, offerClaimRpcError } from '@/lib/shift-offer-notice'
+import { readOffer, claimOffer, processOffer } from '@/lib/shift-offer-server'
+import { loadBlockCandidates } from '@/lib/candidates-data'
+import { offerClaimRefusal, offerClaimRpcError, offerBlock } from '@/lib/shift-offer-notice'
 import { swapShiftHasStarted } from '@/lib/swap-cover'
+import { liveAssignments } from '@/lib/roster'
 import { logRosterChange, markChangesNotified } from '@/lib/roster-change-log'
 import { logError } from '@/lib/log'
 
@@ -4188,17 +4149,17 @@ export async function POST(_request, props) {
   if (offer.status !== 'open') {
     return NextResponse.json({ success: false, error: CLOSED_WORDS[offer.status] || 'This shift is no longer on offer.' }, { status: 409 })
   }
-  const block = { ...offer.shift_blocks, location_id: offer.location_id }
+  const block = offerBlock(offer)
   const nowMs = Date.now()
   if (swapShiftHasStarted({ block_date: block.block_date, start_time: block.start_time }, nowMs, offer.locations?.timezone ?? null)) {
     return NextResponse.json({ success: false, error: 'This shift has already started.' }, { status: 409 })
   }
 
-  const facts = await readOfferFacts(db, { block, profileIds: [user.id] })
-  if (facts.error) {
-    return NextResponse.json({ success: false, error: 'Could not check your other shifts. Try again.' }, { status: 503 })
-  }
-  const blocked = offerClaimRefusal(offerEligibility(user.id, facts, block).reasons)
+  const answer = await loadBlockCandidates(db, { block, audience: 'manager' })
+  const blocked = offerClaimRefusal(answer, {
+    profileId: user.id,
+    liveOnBlockIds: liveAssignments(block.shift_assignments).map((a) => a.profile_id),
+  })
   if (blocked) return NextResponse.json({ success: false, code: blocked.code, error: blocked.error }, { status: blocked.status })
 
   const { result, error: rpcErr } = await claimOffer(db, { offerId: offer.id, profileId: user.id })
@@ -4242,6 +4203,8 @@ export async function POST(_request, props) {
   return NextResponse.json({ success: true, data: { assignment_id: result.assignment_id, block_date: block.block_date } })
 }
 ```
+
+A claim reads CANDIDATES.1's whole answer for the shift (its manager query budget: 9 queries, 13 members at the largest studio today). That is once per claim tap; acceptable, and it keeps ONE rule.
 
 - [ ] **Step 3: `POST /api/schedule/blocks/[id]/offer`** — test, then route.
 
@@ -4463,25 +4426,28 @@ vi.mock('@/lib/auth', async (importOriginal) => {
   const real = await importOriginal()
   return { getCurrentUser: vi.fn(), assertLocationAccess: real.assertLocationAccess, hasRoleAtLocation: real.hasRoleAtLocation }
 })
-vi.mock('@/lib/shift-offer-server', () => ({ listOpenOffers: vi.fn(), readOfferFacts: vi.fn() }))
+vi.mock('@/lib/shift-offer-server', () => ({ listOpenOffers: vi.fn() }))
+vi.mock('@/lib/candidates-data', () => ({ loadBlockCandidates: vi.fn() }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
 
 const { getCurrentUser } = await import('@/lib/auth')
-const { listOpenOffers, readOfferFacts } = await import('@/lib/shift-offer-server')
+const { listOpenOffers } = await import('@/lib/shift-offer-server')
+const { loadBlockCandidates } = await import('@/lib/candidates-data')
 const { GET } = await import('./route.js')
 
 const COACH = { id: 'c1', profileRole: 'staff', rolesByLocation: { 'loc-1': 'staff' }, locations: [{ id: 'loc-1' }] }
 const MANAGER = { ...COACH, id: 'mgr', profileRole: 'manager', rolesByLocation: { 'loc-1': 'manager' } }
 const B = (over = {}) => ({ id: 'b1', block_date: '2026-09-29', start_time: '06:00:00', end_time: '07:00:00', min_coaches: 1, max_coaches: 3, rosters: { status: 'published' }, shift_templates: { name: 'Morning', kind: 'class' }, shift_assignments: [], ...over })
 const O = (id, block, over = {}) => ({ id, location_id: 'loc-1', block_id: block.id, status: 'open', created_at: 'c', broadcast_at: null, broadcast_count: null, shift_blocks: block, locations: { name: 'Studio North', timezone: 'Europe/Dublin' }, ...over })
-const FREE = { error: null, members: [{ profile_id: 'c1', location_id: 'loc-1', profiles: { active: true } }], orgLocationIds: ['loc-1'], liveOnBlockIds: [], timeOff: [], assignments: [], unavailability: [] }
+const CHECKED = { shifts: true, cross_studio: true, leave: true, availability: true, contract: true }
+const FOR_ME = { error: null, checked: CHECKED, candidates: [{ profile_id: 'c1', tier: 'ready' }] }
 const call = (qs) => GET({ url: `https://x/api/schedule/offers?${qs}`, headers: { get: () => '' } })
 
 beforeEach(() => {
   vi.clearAllMocks()
   vi.useFakeTimers({ toFake: ['Date'], now: Date.parse('2026-09-28T10:00:00Z') })
   getCurrentUser.mockResolvedValue(COACH)
-  readOfferFacts.mockResolvedValue(FREE)
+  loadBlockCandidates.mockResolvedValue(FOR_ME)
 })
 afterEach(() => vi.useRealTimers())
 
@@ -4498,13 +4464,16 @@ describe('GET /api/schedule/offers — coach view', () => {
     ], error: null })
     const body = await (await call('location_id=loc-1')).json()
     expect(body.data).toEqual([{ id: 'o1', block_id: 'b1', block_date: '2026-09-29', start_time: '06:00:00', end_time: '07:00:00', shift_name: 'Morning', studio_name: 'Studio North' }])
-    expect(readOfferFacts).toHaveBeenCalledWith(expect.anything(), { block: expect.objectContaining({ id: 'b1', location_id: 'loc-1' }), profileIds: ['c1'] })
+    expect(loadBlockCandidates).toHaveBeenCalledTimes(1)
+    expect(loadBlockCandidates).toHaveBeenCalledWith(expect.anything(), { block: expect.objectContaining({ id: 'b1', location_id: 'loc-1' }), audience: 'manager' })
   })
-  it('not for someone who is busy then; an unreadable check still SHOWS it (the claim re-checks)', async () => {
+  it('not for someone busy, on leave or unavailable then; an unreadable check still SHOWS it (the claim re-checks)', async () => {
     listOpenOffers.mockResolvedValue({ offers: [O('o1', B())], error: null })
-    readOfferFacts.mockResolvedValue({ ...FREE, liveOnBlockIds: ['c1'] })
-    expect((await (await call('location_id=loc-1')).json()).data).toEqual([])
-    readOfferFacts.mockResolvedValue({ ...FREE, error: { message: 'down' } })
+    for (const tier of ['blocked', 'unavailable']) {
+      loadBlockCandidates.mockResolvedValue({ ...FOR_ME, candidates: [{ profile_id: 'c1', tier }] })
+      expect((await (await call('location_id=loc-1')).json()).data).toEqual([])
+    }
+    loadBlockCandidates.mockResolvedValue({ error: { message: 'down' } })
     expect((await (await call('location_id=loc-1')).json()).data).toHaveLength(1)
   })
 })
@@ -4516,6 +4485,7 @@ describe('GET /api/schedule/offers — manager view', () => {
     getCurrentUser.mockResolvedValue(MANAGER)
     const body = await (await call('location_id=loc-1&view=manage&start_date=2026-09-28&end_date=2026-10-04')).json()
     expect(body.data).toEqual([{ id: 'o1', block_id: 'b1', block_date: '2026-09-29', created_at: 'c', notice_state: 'sending', broadcast_count: 0 }])
+    expect(loadBlockCandidates).not.toHaveBeenCalled()
   })
   it('refuses a date the calendar does not have (DATECHECK.1)', async () => {
     getCurrentUser.mockResolvedValue(MANAGER)
@@ -4528,11 +4498,12 @@ describe('GET /api/schedule/offers — manager view', () => {
 // src/app/api/schedule/offers/route.js
 //
 // REPLACE.1b — GET open "Offer to team" offers at one studio.
-//   default (coach): offers the CALLER could take (default 6, the same
-//     predicate as the push), that still need someone and have not started.
-//     When, what, where only: no counts, no minimums (COACHSCOPE.1). A check
-//     that could not be read still SHOWS the offer: the claim re-checks, and
-//     hiding it would lose an offer the push already announced.
+//   default (coach): offers the CALLER could take (CANDIDATES.1's tier ready
+//     or advisory, the same rule as the push), that still need someone and
+//     have not started. When, what, where only: no counts, no minimums
+//     (COACHSCOPE.1). A check that could not be read still SHOWS the offer:
+//     the claim re-checks, and hiding it would lose an offer the push may
+//     already have announced.
 //   view=manage (a manager AT the studio): the period's open offers with
 //     their notice state, for the calendar and Manage mode.
 
@@ -4540,8 +4511,9 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess, hasRoleAtLocation } from '@/lib/auth'
 import { MANAGER_ROLES, isRealCalendarDate } from '@/lib/schemas'
-import { listOpenOffers, readOfferFacts } from '@/lib/shift-offer-server'
-import { offerEligibility, coachOfferRow, managerOfferRow } from '@/lib/shift-offer-notice'
+import { listOpenOffers } from '@/lib/shift-offer-server'
+import { loadBlockCandidates } from '@/lib/candidates-data'
+import { offerIsFor, coachOfferRow, managerOfferRow, offerBlock } from '@/lib/shift-offer-notice'
 import { offerStillNeeded } from '@shared/offer-to-team'
 import { swapShiftHasStarted } from '@/lib/swap-cover'
 import { logWarn } from '@/lib/log'
@@ -4587,18 +4559,20 @@ export async function GET(request) {
     const b = o.shift_blocks
     if (!b || b.rosters?.status !== 'published' || !offerStillNeeded(b)) continue
     if (swapShiftHasStarted({ block_date: b.block_date, start_time: b.start_time }, nowMs, o.locations?.timezone ?? null)) continue
-    const block = { ...b, location_id: o.location_id }
-    const facts = await readOfferFacts(db, { block, profileIds: [user.id] })
-    if (facts.error) {
-      logWarn('shift-offer', 'coach offer list: eligibility unreadable; showing the offer (the claim re-checks)', { offerId: o.id, err: facts.error.message })
+    const answer = await loadBlockCandidates(db, { block: offerBlock(o), audience: 'manager' })
+    const mine = offerIsFor(answer, user.id)
+    if (mine === null) {
+      logWarn('shift-offer', 'coach offer list: eligibility unreadable; showing the offer (the claim re-checks)', { offerId: o.id, err: answer?.error?.message })
       rows.push(coachOfferRow(o))
-      continue
+    } else if (mine) {
+      rows.push(coachOfferRow(o))
     }
-    if (offerEligibility(user.id, facts, block).eligible) rows.push(coachOfferRow(o))
   }
   return NextResponse.json({ success: true, data: rows })
 }
 ```
+
+The coach list asks CANDIDATES.1 once per open offer at the studio (open offers are a handful; 9 queries each). If that grows, `loadBlockCandidates` gains a `profileIds` narrowing; not needed now (review note 13).
 
 - [ ] **Step 6: Register the four paths in `src/lib/openapi.js`** directly after the REPLACE.1a registration:
 
@@ -5680,7 +5654,7 @@ Expected: all exit 0. `check:select-columns` resolves `shift_offers` (mig 640), 
 1. What: a manager offers an unfilled (class: empty or short; admin: empty only) PUBLISHED shift from the web block dialog or phone Manage mode. Every coach at that studio who is free then (not on approved leave, not on another shift in the organisation, not unavailable) is pushed once, 07:00-22:00 studio time; the offer is visible at once on web Today and the phone Dashboard ("Shifts up for grabs"). First to claim gets it; the managers are told who took it.
 2. **Mig 640 (applied before merge):** `shift_offers` (one open offer per shift; service-role only; lease columns for the notices), `claim_shift_offer` (locks the offer, so the second claimer gets "Someone else has just taken this shift"; re-checks published / active member / not on it / still needed, else closes as filled), heartbeat rows `shift-offer-sweep` and `replace-notices`. Advisors: +1 INFO by design.
 3. Why a new table and not the swap table (E1): a swap needs an assignment, a giver and an approval; an offer has none, and the cover sweep closes a swap with no shift on its first tick.
-4. The rule: one `shared/offer-to-team.js` for both buttons and the route; one default-6 predicate for the push audience, the coach's list and the claim (unavailability does not block a claim).
+4. The rule: one `shared/offer-to-team.js` for both buttons and the route; default 6 is CANDIDATES.1's answer (`loadBlockCandidates`, tier ready or advisory) for the push audience, the coach's list and the claim (unavailability does not block a claim; an unread fact tells nobody).
 5. Notices: lease + attempt-numbered ledger keys: a crash re-sends (a duplicate), never loses; 5 attempts then "the notification couldn't be sent" on the manager's line. A new `*/5` arm closes offers when the shift starts or is filled another way, and sends owed notices from 07:00.
 6. **🔴 This merge publishes an OTA at 100%** (`shared/offer-to-team.js`, `mobile/lib/**`, `mobile/components/**`). No native dependency. A phone without the update shows the push; the tap opens the app without navigating.
 7. **Handset/desk checks** (after the update lands; first real offer on a quiet day with Richard or a test coach):
@@ -5697,7 +5671,7 @@ Expected: all exit 0. `check:select-columns` resolves `shift_offers` (mig 640), 
 ### REPLACE.1b CHANGELOG
 
 ```
-| #<PR> | REPLACE.1b — Offer to team: post an unfilled shift, first coach to claim gets it (mig 640) | 2026-09-2x. Wave 2 PR 20b. **Mig 640** (applied before merge): shift_offers (one open offer per shift, partial unique index; RLS on, no policy, no browser grants; notice lease columns), claim_shift_offer(offer, profile) (locks the offer = the race; re-checks published / active member / not on it / still needed, else closes as filled and returns; clears a tombstone; inserts; closes as claimed; service_role only), heartbeat rows shift-offer-sweep + replace-notices (300/900). **OTA** (shared/offer-to-team.js, mobile/lib, mobile/components). Rule: shared/offer-to-team.js (published, today+, not started, no open offer, still needed: class = min at least 1, admin = 1 so empty only). Default 6: offerEligibility (src/lib/shift-offer-notice.js; evaluateSwapMoveConflicts in the org + half-day rule + AVAIL unavailableFor) for the push audience, the coach list and the claim (unavailability does not block a claim). Routes: POST /api/schedule/blocks/[id]/offer, GET /api/schedule/offers (coach / view=manage), POST /api/schedule/offers/[id]/claim, DELETE /api/schedule/offers/[id]. Notices (category swap; shift_offer / shift_offer_taken): processOffer leases on the row, sends under shift_offer_<kind>:<id>:a<n>, stamps after; 07:00-22:00 only; */5 arm runShiftOfferSweep closes expired / filled offers. Web: block dialog Offer to team / Withdraw; Today "Shifts up for grabs". Phone: Dashboard section with Claim; Manage card offer control. |
+| #<PR> | REPLACE.1b — Offer to team: post an unfilled shift, first coach to claim gets it (mig 640) | 2026-09-2x. Wave 2 PR 20b. **Mig 640** (applied before merge): shift_offers (one open offer per shift, partial unique index; RLS on, no policy, no browser grants; notice lease columns), claim_shift_offer(offer, profile) (locks the offer = the race; re-checks published / active member / not on it / still needed, else closes as filled and returns; clears a tombstone; inserts; closes as claimed; service_role only), heartbeat rows shift-offer-sweep + replace-notices (300/900). **OTA** (shared/offer-to-team.js, mobile/lib, mobile/components). Rule: shared/offer-to-team.js (published, today+, not started, no open offer, still needed: class = min at least 1, admin = 1 so empty only). Default 6 = CANDIDATES.1's loadBlockCandidates tiers ready + advisory (src/lib/shift-offer-notice.js reads it for the push audience, the coach list and the claim; an unread deciding fact tells nobody; unavailability does not block a claim). Routes: POST /api/schedule/blocks/[id]/offer, GET /api/schedule/offers (coach / view=manage), POST /api/schedule/offers/[id]/claim, DELETE /api/schedule/offers/[id]. Notices (category swap; shift_offer / shift_offer_taken): processOffer leases on the row, sends under shift_offer_<kind>:<id>:a<n>, stamps after; 07:00-22:00 only; */5 arm runShiftOfferSweep closes expired / filled offers. Web: block dialog Offer to team / Withdraw; Today "Shifts up for grabs". Phone: Dashboard section with Claim; Manage card offer control. |
 ```
 
 ---
@@ -5711,10 +5685,10 @@ Expected: all exit 0. `check:select-columns` resolves `shift_offers` (mig 640), 
 5. **One place per offer** (E2). A class shift two coaches short is offered twice (offer, claimed, offer again). A `places` column would let one offer fill several; say if that is wanted.
 6. **No notice when an offer expires or is withdrawn** (E6). The manager sees the gap on the calendar and the Today chip. A "Nobody took the Tue 06:00 offer" push at T-12h (the swap nudge's shape) is a small follow-up in the same arm.
 7. **Managers and head coaches are in the audience** (E4); only the poster is excluded. If Richard wants "coaches" to mean `staff` role only, it is one filter in `offerAudience`.
-8. **The coach list shows an offer whose eligibility could not be read** (the route's degraded mode), so a coach might see a shift they would not have been pushed; the claim re-checks leave and clashes. The push itself never goes out on an unread check (it retries).
-9. **CANDIDATES.1 was not planned when this was written.** 1b Task 0 step 4 says how `offerEligibility` adopts its fact builder if one exists; the tests pin default 6 regardless. If CANDIDATES.1 treats half-day leave or cross-organisation shifts differently, one rule must win before 1b merges.
-10. **AVAIL.1a is a hard dependency of 1b** (the audience and the list read `staff_unavailability`). If AVAIL.1a slips, 1b waits; 1a does not.
+8. **The coach list shows an offer whose eligibility could not be read** (the route's degraded mode), so a coach might see a shift they would not have been pushed; the claim re-checks leave and clashes. The push itself never goes out on an unread fact (it retries).
+9. **Default 6 is CANDIDATES.1's rule, including its edges:** half-day leave counts as leave (the open pool lets it through; the picker and the offer do not), and a clash is judged on effective windows across the organisation. Change it in CANDIDATES.1 and the offer follows.
+10. **CANDIDATES.1 is a hard dependency of 1b** (and, through it, AVAIL.1a). If CANDIDATES.1 slips, 1b waits; 1a does not.
 11. **Admin offers escalate nowhere.** An admin swap nobody takes escalates as "Shift still uncovered" (index default 20); an admin offer nobody takes simply expires. Consistent with note 6.
 12. **The replace arm's 2-minute route window** means a replace whose `after()` died is told 2-5 minutes late, not at once. Acceptable; the alternative (sending twice) is worse.
-13. **Phone Manage mode loads offers with every roster load** (one extra GET per week page). If that proves slow on 5G, load offers lazily on the day view instead.
+13. **Query cost.** Phone Manage mode loads offers with every roster load (one extra GET per week page). The coach list asks `loadBlockCandidates` once per open offer at the studio (9 queries each), and a claim asks it once. Open offers are a handful; if that grows, give `loadBlockCandidates` a `profileIds` narrowing (the coach list and the claim need one person), or load offers lazily on the phone's day view.
 14. **Follow-up found planning (not in any PR):** `resolveRoleRecipientIds` (`src/lib/push.js`) discards its read error (already on the index's follow-up list); the "taken" notice inherits it, so a failed managers read looks like "no managers" and is stamped. Fixing the helper fixes both.

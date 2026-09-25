@@ -38,7 +38,7 @@ Size: S under a day, M one to three days, L a week or more. "Mig" = new migratio
 | 17 | AVAIL.2 | M | Phone screen for a coach to set their own availability | | yes | 16 |
 | 18 | AVAIL.3 | S | Contractors' "unavailable" time off moves into availability: stop offering the type, carry future rows across | 631 | yes | 16, 17 |
 | 19 | CANDIDATES.1 | M | Ranked candidates wherever a coach is picked (web and phone): free or not, leave, availability, already on site, week hours both studios, rest gap. Hours only | | yes | 15, 16 |
-| 20 | REPLACE.1 | M | Replace coach (one action, one notice) and "Offer to team" for an unfilled published shift | | yes | 19 |
+| 20 | REPLACE.1 | M | Split: **1a** Replace coach (one guarded UPDATE, one notice each, no mig) → **1b** Offer to team (`shift_offers`, locked claim RPC, mig 640) | 640 | yes | 1b needs 19 |
 | 21 | GRID.1 | M | Coach-by-day grid: one row per coach, week total, contracted hours, admin balance, leave and availability overlaid, both studios summed | | | 13, 16 |
 | 14b | (BLOCKEDIT heartbeat) | S | Heartbeat row for BLOCKEDIT.1's time-change notice arm, applied AFTER its deploy (the arm rule) | 639 | | 14 |
 | 22 | ICSFEED.1 | M | Per-coach calendar subscription of published shifts across both studios; secret token, rotate, revoked on deactivation; all four public-path allowlists | 632 | yes | |
@@ -127,6 +127,7 @@ These are marked **REVIEW** in the artifact until he confirms or changes them. E
 
 Updated by the loop. Newest first.
 
+- 25 Sep ~13:30Z: 20 REPLACE.1 plan written (1a replace; 1b offer-to-team with a new `shift_offers` table, not the swap table; mig 640 also seeds 1a's held-notice arm heartbeat; 14 open questions in the plan). Batch 7 plans commissioned (32 SNAPSHOT.1, 33 QUALS.1). BLOCKEDIT.1 third round landed → short third check.
 - 25 Sep 13:25Z: #1762 AVAIL.1a EAS Update SUCCESS; prod deploy 13:21Z. VERIFY at the next tick: `availability-notice-sweep` stamped by the 13:30Z checklist-sweep (stale threshold 13:41Z; re-run mig 630's heartbeat insert if not). AVAIL.1b: resolved a 1a test conflict by taking main's copy; diff vs main = 15 1b files only; full gate re-running.
 - 25 Sep ~13:35Z: **#1762 AVAIL.1a MERGED**; EAS run watched. AVAIL.1b merging main + full gate. 17 AVAIL.2 implementer started (`~/code/un1t-crm-avail2`). 21 GRID.1 plan written (new `GET /api/schedule/grid`, contracted hours from the `profiles` copy by name, pure `roster-grid-model.js`). BLOCKEDIT.1 second review approved w/ should-fixes (form captured opened values each render → could still undo another manager; template min/max propagation; ended-today shifts) → third round.
 - 25 Sep ~13:12Z: #1762 AVAIL.1a CI failed on ONE test: an un-awaited `expect(...).resolves` raced the test's end (code fine). Awaited, pushed `7998cb03`, auto-merge still on. BLOCKEDIT.1 fixes all landed (incl. mig 639 heartbeat) → second full review. AVAIL.1b fixes landed (waits for #1762 to rebase onto main).
