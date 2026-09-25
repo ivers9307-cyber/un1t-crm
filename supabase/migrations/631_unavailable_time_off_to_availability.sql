@@ -80,8 +80,9 @@
 -- GUARDS (any one aborts the whole move, nothing half-moved):
 --   avail3_open_cancel_ask  a carry row has a cancellation ask no owner has
 --                           decided (decide it first, then re-run the move)
---   avail3_note_too_long    a reason over 200 characters (mig 630's note
---                           CHECK); never silently truncated
+--   avail3_note_too_long    a trimmed reason over 200 UTF-16 units (the
+--                           editor's count; stricter than mig 630's
+--                           character CHECK); never silently truncated
 --   avail3_too_far_ahead    a rule starting more than 730 days ahead
 --                           (AVAILABILITY_LIMITS.aheadDays: the coach's next
 --                           save would be refused)
@@ -133,7 +134,9 @@
 --       c AS (SELECT r.* FROM public.time_off_requests r JOIN public.profiles p ON p.id = r.profile_id, t
 --              WHERE r.type = 'unavailable' AND r.status IN ('approved','pending') AND r.end_date >= t.d AND p.deleted_at IS NULL)
 --       SELECT (SELECT count(*) FROM c WHERE cancel_requested_at IS NOT NULL AND cancel_decided_at IS NULL) AS open_asks,
---              (SELECT count(*) FROM c WHERE char_length(btrim(coalesce(reason, ''))) > 200) AS long_notes,
+--              (SELECT count(*) FROM c WHERE char_length(reason)
+--                   + char_length(regexp_replace(reason, '[^\U00010000-\U0010FFFF]', '', 'g')) > 200) AS long_notes,
+--                   -- UTF-16 units of the UNTRIMMED reason: an upper bound.
 --              (SELECT count(*) FROM c, t WHERE greatest(c.start_date, t.d) > t.d + 730) AS too_far,
 --              (SELECT count(*) FROM (SELECT profile_id FROM (
 --                  SELECT profile_id FROM c
@@ -348,8 +351,16 @@ BEGIN
     RAISE EXCEPTION 'avail3_open_cancel_ask: a request being carried has a cancellation no owner has decided; decide it first';
   END IF;
   IF EXISTS (SELECT 1 FROM public.time_off_availability_moves m
-              WHERE m.batch_id = v_batch AND char_length(m.rule->>'note') > 200) THEN
-    RAISE EXCEPTION 'avail3_note_too_long: a reason is over 200 characters, the availability note limit';
+              -- Counted in UTF-16 code units, as the editor counts them
+              -- (shared/availability.js: note.length > noteChars): a
+              -- character outside the BMP (an emoji) is ONE Postgres
+              -- character but TWO units. Mig 630's CHECK counts characters,
+              -- so a note it accepts could still be refused at the coach's
+              -- next save; this is the stricter of the two.
+              WHERE m.batch_id = v_batch
+                AND char_length(m.rule->>'note')
+                    + char_length(regexp_replace(m.rule->>'note', '[^\U00010000-\U0010FFFF]', '', 'g')) > 200) THEN
+    RAISE EXCEPTION 'avail3_note_too_long: a reason is over 200 characters (UTF-16 units, as the editor counts), the availability note limit';
   END IF;
   IF EXISTS (SELECT 1 FROM public.time_off_availability_moves m
               WHERE m.batch_id = v_batch AND (m.rule->>'start_date')::date > p_today + 730) THEN

@@ -380,6 +380,25 @@ describe('migration 631 — guards abort the whole move', () => {
     await nothingMoved()
   }))
 
+  // Review N2 — the editor counts UTF-16 units (shared/availability.js:
+  // note.length > 200). 100 emoji + 1 letter is 101 Postgres characters but
+  // 201 units: carried, the coach's next save would be refused.
+  it('a note over 200 UTF-16 units, even under 200 Postgres characters', () => inTx(async () => {
+    const note = '😀'.repeat(100) + 'x'
+    expect(note.length).toBe(201)
+    await runSql(`UPDATE public.time_off_requests SET reason = '${note}' WHERE id = '${R.FUTURE}'`)
+    expect((await q('SELECT char_length(reason)::int AS n FROM public.time_off_requests WHERE id = $1', [R.FUTURE]))).toEqual([{ n: 101 }])
+    await expectRaise(MOVE_SQL, [TODAY], /avail3_note_too_long/)
+    await nothingMoved()
+  }))
+
+  it('exactly 200 UTF-16 units carries', () => inTx(async () => {
+    const note = '😀'.repeat(100)
+    await runSql(`UPDATE public.time_off_requests SET reason = '${note}' WHERE id = '${R.FUTURE}'`)
+    await move()
+    expect((await rulesOf(CON_A)).map((x) => x.note)).toEqual(['Away', note])
+  }))
+
   it('a date more than two years ahead', () => inTx(async () => {
     await runSql(`INSERT INTO public.time_off_requests (profile_id, location_id, type, start_date, end_date, total_days, status)
                   VALUES ('${CON_C}', '${LOC}', 'unavailable', '2028-09-26', '2028-09-26', 1, 'approved')`)
