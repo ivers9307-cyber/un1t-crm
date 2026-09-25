@@ -129,8 +129,18 @@ export function annotateOwnArrivals(rows, facts, viewerId, { now = new Date() } 
   // the viewer's own, so the group key carries the STUDIO instead: an arrival
   // at one studio never makes the coach "on site" at another (the report is
   // per studio too). Block times, like the report.
+  //
+  // Review 3 — a stamp that does not parse is an arrival we cannot read: that
+  // row's whole `arrival` is null (unknown, never an absence), and it is kept
+  // out of the chain so it is never carried onto the next shift either.
+  const unreadable = new Set()
+  for (const r of list) {
+    if (!r || r.profile_id !== viewerId) continue
+    const s = stamps.get(r.id)
+    if (s?.arrived_at && !Number.isFinite(new Date(s.arrived_at).getTime())) unreadable.add(r.id)
+  }
   const base = list
-    .filter((r) => r && r.profile_id === viewerId)
+    .filter((r) => r && r.profile_id === viewerId && !unreadable.has(r.id))
     .map((r) => {
       const tz = tzOf(r.location_id)
       const s = stamps.get(r.id)
@@ -149,7 +159,7 @@ export function annotateOwnArrivals(rows, facts, viewerId, { now = new Date() } 
   const byId = new Map(inferred.map((b) => [b.id, b]))
 
   return list.map((r) => {
-    if (!r || r.profile_id !== viewerId) return { ...r, arrival: null }
+    if (!r || r.profile_id !== viewerId || unreadable.has(r.id)) return { ...r, arrival: null }
     const b = byId.get(r.id)
     const tz = tzOf(r.location_id)
     const at = b?.arrivalAt ? new Date(b.arrivalAt) : null

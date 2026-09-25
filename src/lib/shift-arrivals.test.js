@@ -109,6 +109,24 @@ describe('annotateOwnArrivals — on site from an earlier shift (the report rule
   })
 })
 
+describe('annotateOwnArrivals — an unparseable stamp (review 3)', () => {
+  it('makes the whole arrival null on that row: never an absence', () => {
+    expect(arrivalOf([row('a1')], facts([stamp('a1', 'not-a-time')]), 'a1')).toBeNull()
+  })
+
+  it('is never carried onto the next shift', () => {
+    const rows = [row('a1'), row('a2', { block_start_time: '08:30:00', block_end_time: '09:30:00' })]
+    expect(arrivalOf(rows, facts([stamp('a1', 'not-a-time')]), 'a2')).toMatchObject({ at: null, carried: false })
+  })
+
+  it('does not stop a real arrival two rows back from being judged on its own', () => {
+    const rows = [row('a1'), row('a2', { block_start_time: '08:30:00', block_end_time: '09:30:00' })]
+    const out = annotateOwnArrivals(rows, facts([stamp('a1', '2026-10-01T05:52:00.000Z'), stamp('a2', 'garbage')]), ME, { now: NOW })
+    expect(out[0].arrival.at).toBe('2026-10-01T05:52:00.000Z')
+    expect(out[1].arrival).toBeNull()
+  })
+})
+
 describe('annotateOwnArrivals — the double-stamp shape (D3)', () => {
   it('the same instant on two shifts reads the second as on site, not a second arrival', () => {
     const rows = [row('a1'), row('a2', { block_start_time: '07:30:00', block_end_time: '08:30:00' })]

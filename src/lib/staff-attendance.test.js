@@ -272,6 +272,27 @@ describe('inferContinuousArrivals', () => {
     const byId = Object.fromEntries(inferContinuousArrivals(input).map((r) => [r.id, r]))
     expect(byId.b).toMatchObject({ arrivalAt: null, arrivalInferred: false })
   })
+
+  // ARRIVALSHOW.1 review 3 — an Invalid Date is a truthy object, so a bare
+  // truthiness test carried "Invalid Date" onto the next shift as an arrival.
+  it('an unparseable arrival is not an arrival: it is never carried onward', () => {
+    const input = [
+      { ...row('a', 'p1', '08:00', '09:00'), arrivalAt: new Date('not-a-date') },
+      row('b', 'p1', '09:15', '10:30'),
+    ]
+    const byId = Object.fromEntries(inferContinuousArrivals(input).map((r) => [r.id, r]))
+    expect(byId.b).toMatchObject({ arrivalAt: null, arrivalInferred: false })
+  })
+
+  it('a row holding an unparseable arrival can still be carried onto from a real one', () => {
+    const input = [
+      row('a', 'p1', '08:00', '09:00', '07:39'),
+      { ...row('b', 'p1', '09:15', '10:30'), arrivalAt: new Date('not-a-date') },
+    ]
+    const byId = Object.fromEntries(inferContinuousArrivals(input).map((r) => [r.id, r]))
+    expect(byId.b.arrivalInferred).toBe(true)
+    expect(byId.b.arrivalAt).toEqual(at('07:39'))
+  })
 })
 
 describe('arrivalToTimeOnly', () => {
