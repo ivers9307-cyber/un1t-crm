@@ -1,11 +1,12 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
+import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
-import { CalendarOff, Plus, Check, X, Palmtree, ThermometerSun, Ban, Wallet, CircleEllipsis, AlertTriangle } from 'lucide-react'
+import { CalendarOff, CalendarX, Plus, Check, X, Palmtree, ThermometerSun, Ban, Wallet, CircleEllipsis, AlertTriangle } from 'lucide-react'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { dublinTodayStr } from '@/lib/dublin-time'
-import { timeOffTypesFor, defaultTimeOffTypeFor, leaveClashLabel, leaveClashPrompt } from '@shared/time-off'
+import { timeOffTypesFor, defaultTimeOffTypeFor, leaveClashLabel, leaveClashPrompt, canRequestTimeOff, AVAILABILITY_INSTEAD } from '@shared/time-off'
 import { Modal, Button } from '@/components/ui'
 // LEAVECANCEL.1 — shared with the dashboard's My requests card.
 import { LEAVE_CANCEL_NOTICES, cancelledAtRequestText } from '@/lib/time-off-cancel-copy'
@@ -306,13 +307,25 @@ export default function TimeOffManager({ user, canApprove, canDecideCancellation
             {user.activeLocation?.name} — Holiday & leave management
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => setShowForm(true)}
-          className="flex items-center gap-1.5 text-sm px-4 py-2 rounded-lg bg-un1t-text text-un1t-bg font-medium hover:bg-un1t-accent transition-colors"
-        >
-          <Plus size={16} /> Request Time Off
-        </button>
+        {/* AVAIL.3 — a contractor who is not an approver has nothing to request
+            ("unavailable" moved into My availability). An approver keeps the
+            button: they record leave for colleagues. */}
+        {!isManager && !canRequestTimeOff(user.employment_type) ? (
+          <Link
+            href="/schedule/availability"
+            className="flex items-center gap-1.5 text-sm px-4 py-2 rounded-lg bg-un1t-text text-un1t-bg font-medium hover:bg-un1t-accent transition-colors"
+          >
+            <CalendarX size={16} aria-hidden="true" /> My availability
+          </Link>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setShowForm(true)}
+            className="flex items-center gap-1.5 text-sm px-4 py-2 rounded-lg bg-un1t-text text-un1t-bg font-medium hover:bg-un1t-accent transition-colors"
+          >
+            <Plus size={16} /> Request Time Off
+          </button>
+        )}
       </div>
 
       {/* Allowance — the viewer's own. Coaches see it first; approvers see
@@ -763,11 +776,14 @@ function TimeOffFormModal({ user, canRecordForOthers = false, allowance, onClose
 
   const subject = subjectId ? staff.find((p) => p.id === subjectId) || null : null
   const onBehalf = !!subject
-  // LEAVE.3 — the menu follows the PERSON the leave is for: a contractor is
-  // only offered Unavailable. The server enforces the same rule.
+  // LEAVE.3 — the menu follows the PERSON the leave is for. AVAIL.3: a
+  // contractor has no types left ("unavailable" moved into availability), so
+  // the form shows AVAILABILITY_INSTEAD in place of itself. The server
+  // enforces the same rule.
   const employmentType = onBehalf ? subject.employment_type : user.employment_type
   const typeOptions = timeOffTypesFor(employmentType)
   const effectiveType = typeOptions.some((t) => t.value === type) ? type : defaultTimeOffTypeFor(employmentType)
+  const nothingToRequest = typeOptions.length === 0
 
   const dirty = !!(startDate || endDate || reason.trim() || subjectId)
 
@@ -811,6 +827,7 @@ function TimeOffFormModal({ user, canRecordForOthers = false, allowance, onClose
 
   async function handleSubmit(e) {
     e.preventDefault()
+    if (nothingToRequest) return
     setError(null)
     setSaving(true)
 
@@ -871,6 +888,19 @@ function TimeOffFormModal({ user, canRecordForOthers = false, allowance, onClose
             </div>
           )}
 
+          {nothingToRequest ? (
+            <div role="note" className="rounded-lg border border-un1t-border bg-un1t-surface p-3 text-sm text-un1t-subtle">
+              {onBehalf ? AVAILABILITY_INSTEAD.onBehalf : (
+                <>
+                  {AVAILABILITY_INSTEAD.message}{' '}
+                  <Link href="/schedule/availability" className="font-medium text-un1t-text underline">
+                    {AVAILABILITY_INSTEAD.action}
+                  </Link>
+                </>
+              )}
+            </div>
+          ) : (
+          <>
           {/* Type selection — the shared catalogue, gated by the employment
               type of the person the leave is for (LEAVE.3). Icon + colour come
               from TYPE_CONFIG, with a neutral fallback. */}
@@ -979,6 +1009,8 @@ function TimeOffFormModal({ user, canRecordForOthers = false, allowance, onClose
               ? `Recorded as approved for ${subject.full_name}. They will be notified.`
               : 'Your request will be reviewed by a manager'}
           </p>
+          </>
+          )}
         </form>
       </div>
     </Modal>
