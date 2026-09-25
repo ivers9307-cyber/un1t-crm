@@ -159,7 +159,13 @@ export async function deliverAvailabilityNotice(db, change, { nowMs = Date.now()
   try {
     const ids = Array.isArray(change.ids) && change.ids.length ? change.ids : [change.id]
     const createdMs = Date.parse(change.created_at)
-    if (Number.isFinite(createdMs) && nowMs - createdMs > AVAILABILITY_NOTICE_MAX_AGE_MS) return settle(db, ids, 'stale', nowMs)
+    if (Number.isFinite(createdMs) && nowMs - createdMs > AVAILABILITY_NOTICE_MAX_AGE_MS) {
+      // Dropped without a word to anyone, so say whether any attempt ever
+      // claimed recipients: 'never sent' and 'sent but the stamp was lost'
+      // read very differently in the logs.
+      logWarn('availability-notify', 'notice dropped as stale (older than 24h)', { ids, ever_sent: await everClaimed(db, ids, change.id) })
+      return settle(db, ids, 'stale', nowMs)
+    }
     if (sameAvailability(change.before, change.after)) return settle(db, ids, 'reverted', nowMs)
 
     const { data: links, error: linkError } = await db
@@ -254,6 +260,24 @@ async function countRetryAttempts(db, changeId) {
     .limit(500)
   if (error) return { attempts: null, error }
   return { attempts: new Set((data || []).map((r) => r.event_key)).size, error: null }
+}
+
+/**
+ * Did any attempt ever claim recipients for these changes? The plain keys of
+ * every id (the saves' attempts) or a retry key of the newest (the sweep's).
+ * true | false | 'unknown' (a failed read). For a log line only.
+ */
+async function everClaimed(db, ids, newestId) {
+  const { data, error } = await db
+    .from('push_event_sends')
+    .select('event_key')
+    .in('event_key', ids.map(availabilityEventKey))
+    .limit(1)
+  if (error) return 'unknown'
+  if ((data || []).length > 0) return true
+  const { attempts, error: retryError } = await countRetryAttempts(db, newestId)
+  if (retryError) return 'unknown'
+  return attempts > 0
 }
 
 /** One coach's change rows still owed a notice, oldest first. */

@@ -197,6 +197,18 @@ describe('deliverAvailabilityNotice', () => {
     expect(sendPushOnce).not.toHaveBeenCalled()
   })
 
+  it('a stale drop is WARNED, saying whether it was ever sent (never sent vs sent but unstamped)', async () => {
+    const old = change({ created_at: new Date(NOON - AVAILABILITY_NOTICE_MAX_AGE_MS - 1).toISOString() })
+    await deliverAvailabilityNotice(world({ claims: [] }), old, { nowMs: NOON })
+    expect(logWarn).toHaveBeenCalledWith('availability-notify', expect.stringMatching(/stale/), expect.objectContaining({ ids: ['ch-1'], ever_sent: false }))
+    logWarn.mockClear()
+    await deliverAvailabilityNotice(world({ claims: [{ event_key: 'availability_changed:ch-1' }] }), old, { nowMs: NOON })
+    expect(logWarn).toHaveBeenCalledWith('availability-notify', expect.stringMatching(/stale/), expect.objectContaining({ ever_sent: true }))
+    logWarn.mockClear()
+    await deliverAvailabilityNotice(world({ claimsError: { message: 'down' } }), old, { nowMs: NOON })
+    expect(logWarn).toHaveBeenCalledWith('availability-notify', expect.stringMatching(/stale/), expect.objectContaining({ ever_sent: 'unknown' }))
+  })
+
   it('a later save that undid it: stamped reverted, never sent', async () => {
     const db = world()
     expect((await deliverAvailabilityNotice(db, change({ after: [MON] }), { nowMs: NOON })).status).toBe('reverted')
