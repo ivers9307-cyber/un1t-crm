@@ -62,6 +62,8 @@ import Modal from '@/components/ui/Modal'
 import { COPY_MODE_OPTIONS, copyResultToast } from '@/lib/roster-copy'
 // COPYLEAVE.1 — the publish modal's clash wording (pure, unit-tested there).
 import { leaveClashesHeadline, leaveRangeLabel } from '@/lib/roster-publish-advisories'
+// WORKTIME.1 — working-time copy and limits (pure, unit-tested in shared/).
+import { hoursMinutesLabel, longWeeksHeadline, restGapsHeadline, MIN_REST_HOURS, MAX_WEEK_HOURS, REST_BETWEEN_LABEL } from '@shared/working-time'
 import RosterSummaryPanel from './RosterSummaryPanel'
 import ScheduleErrorBanner from './schedule/ScheduleErrorBanner'
 import SchedulePartialLoadNote, {
@@ -2032,6 +2034,10 @@ function PublishRosterModal({ locationId, isOwner, period, onSubmit, onClose, pu
               doubleBookings={impact.doubleBookings}
               crossLocationChecked={impact.crossLocationChecked}
             />
+            {/* WORKTIME.1 — employees over 48 hours in a week, or under 11
+                hours between working days, every studio counted. Information
+                only. */}
+            <PublishWorkingTime workingTime={impact.workingTime} />
             <div className="grid grid-cols-2 gap-3 mb-4 text-sm">
               <div className="rounded-lg border border-un1t-border p-3">
                 <div className="text-[10px] uppercase tracking-wider text-un1t-subtle">Blocks in period</div>
@@ -2202,6 +2208,64 @@ function PublishRosterClashes({ leaveClashes, doubleBookings, crossLocationCheck
         <div className="text-xs text-un1t-subtle mt-2">Some clash checks could not be completed.</div>
       )}
       <div className="text-xs text-un1t-subtle mt-2">You can still publish.</div>
+    </div>
+  )
+}
+
+// WORKTIME.1 — from projectPublishImpact's `workingTime`. An older server that
+// sends none renders nothing; `checked: false` says the check is incomplete
+// instead of implying an all-clear. Names, dates, times and hours only.
+function PublishWorkingTime({ workingTime }) {
+  if (!workingTime || !Array.isArray(workingTime.restGaps) || !Array.isArray(workingTime.longWeeks)) return null
+  const { restGaps, longWeeks } = workingTime
+  const unchecked = workingTime.checked === false
+  if (restGaps.length === 0 && longWeeks.length === 0 && !unchecked) return null
+  const dayOf = (iso) => new Date(`${iso}T00:00:00`).toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short' })
+  const shortDay = (iso) => new Date(`${iso}T00:00:00`).toLocaleDateString('en-IE', { day: 'numeric', month: 'short' })
+  const where = (s) => (s.location_name ? ` (${s.location_name})` : '')
+  return (
+    <div
+      data-testid="publish-working-time"
+      className="mb-4 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm"
+    >
+      {longWeeks.length > 0 && (
+        <div>
+          <div className="font-medium text-amber-700 flex items-center gap-1.5">
+            <AlertTriangle size={14} aria-hidden="true" />
+            {longWeeksHeadline(longWeeks)}
+          </div>
+          <ul className="mt-1.5 max-h-32 overflow-y-auto space-y-1">
+            {longWeeks.map((w) => (
+              <li key={`${w.profile_id}|${w.week_start}`} className="text-xs text-un1t-text">
+                <span className="font-medium">{w.coach_name}</span> · week of {shortDay(w.week_start)} · {hoursMinutesLabel(w.minutes)} rostered
+                {w.studio_count > 1 && <span className="text-un1t-subtle">, across {w.studio_count} studios</span>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {restGaps.length > 0 && (
+        <div className={longWeeks.length > 0 ? 'mt-3' : ''}>
+          <div className="font-medium text-amber-700 flex items-center gap-1.5">
+            <AlertTriangle size={14} aria-hidden="true" />
+            {restGapsHeadline(restGaps)}
+          </div>
+          <ul className="mt-1.5 max-h-32 overflow-y-auto space-y-1">
+            {restGaps.map((g) => (
+              <li key={`${g.profile_id}|${g.before.block_id}|${g.after.block_id}`} className="text-xs text-un1t-text">
+                <span className="font-medium">{g.coach_name}</span> · {dayOf(g.before.date)} ends {formatTime(g.before.end)}{where(g.before)}, {dayOf(g.after.date)} starts {formatTime(g.after.start)}{where(g.after)}
+                <span className="text-un1t-subtle"> · {hoursMinutesLabel(g.rest_minutes)} rest</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {unchecked && (
+        <div className="text-xs text-un1t-subtle mt-2">The working-time check could not be completed.</div>
+      )}
+      <div className="text-xs text-un1t-subtle mt-2">
+        Employees only, every studio counted: {MIN_REST_HOURS} hours {REST_BETWEEN_LABEL}, {MAX_WEEK_HOURS} hours in a Monday to Sunday week. You can still publish.
+      </div>
     </div>
   )
 }
