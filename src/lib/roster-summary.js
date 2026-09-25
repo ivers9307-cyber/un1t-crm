@@ -19,10 +19,14 @@
 //     utilisation metric ("are we using what we're paying for?").
 //   - Contractor shifts cost (hours × hourly_rate) and that
 //     total is what the monthly budget is measured against.
+//   - SHIFTTYPE.1 (Richard, 25 Sep 2026): an ADMIN shift is out of the
+//     contractor budget entirely. Its hours still count as hours (FTE
+//     utilisation, implicit cost, week-cost, payroll).
 
 import { shiftHours, implicitHourlyRate } from './payroll'
 import { addDays, formatDate, liveAssignments } from './roster'
 import { effectiveOverride } from './roster-read'
+import { shiftKindOf, isAdminShift } from '@shared/shift-kind'
 
 // Roster v2 phase 6 — leave-aware availability.
 //
@@ -134,6 +138,10 @@ export function blocksToShiftRows(blocks) {
         location_id: block.location_id,
         profile_id: a.profile_id,
         shift_template_id: block.template_id,
+        // SHIFTTYPE.1 — class | admin, read through the embedded template.
+        // Contractor spend skips admin rows (sumHoursForProfile's classOnly);
+        // nothing that counts HOURS looks at it.
+        kind: shiftKindOf(block),
         // Two spellings of the same day on purpose: the legacy shift shape the
         // payroll + swap helpers read says `shift_date`, this module's own
         // range filter says `block_date`.
@@ -159,14 +167,16 @@ export function blocksToShiftRows(blocks) {
 
 /**
  * Sum (date, hours) tuples for a single profile, across the date
- * range supplied. Returns total hours.
+ * range supplied. Returns total hours. `classOnly` (SHIFTTYPE.1) skips
+ * admin rows: set ONLY where the hours become contractor euros.
  */
-function sumHoursForProfile(rows, profileId, startIso, endIso) {
+function sumHoursForProfile(rows, profileId, startIso, endIso, { classOnly = false } = {}) {
   let total = 0
   for (const r of rows) {
     if (r.profile_id !== profileId) continue
     if (startIso && r.block_date < startIso) continue
     if (endIso && r.block_date > endIso) continue
+    if (classOnly && r.kind === 'admin') continue
     total += shiftHours(r)
   }
   return total
@@ -274,7 +284,8 @@ export function summarizeWeek({ blocks, staff, weekStart, timeOff = [], today = 
       if (rate <= 0) {
         incompleteProfileNames.push(s.full_name)
       }
-      contractorWeekCostEur += allocated * rate
+      // SHIFTTYPE.1 — admin shifts are out of contractor spend.
+      contractorWeekCostEur += sumHoursForProfile(rows, s.id, startIso, endIso, { classOnly: true }) * rate
     }
   }
 
@@ -285,8 +296,10 @@ export function summarizeWeek({ blocks, staff, weekStart, timeOff = [], today = 
   fteSummaries.sort((a, b) => order[a.status] - order[b.status])
 
   const blockCount = weekBlocks.length
+  // SHIFTTYPE.1 — an admin shift has no minimum staffing, so an empty one is
+  // not "unstaffed" (it is still counted in blockCount).
   const unstaffedCount = weekBlocks.filter(
-    b => liveAssignments(b.shift_assignments).length === 0 && b.block_date >= todayIso
+    b => !isAdminShift(b) && liveAssignments(b.shift_assignments).length === 0 && b.block_date >= todayIso
   ).length
 
   return {
@@ -325,7 +338,8 @@ export function summarizeMonth({ blocks, staff, referenceDate, monthlyBudgetEur 
     if (allocated <= 0) continue
     if (s.employment_type === 'contractor') {
       const rate = Number(s.hourly_rate) || 0
-      contractorCostEur += allocated * rate
+      // SHIFTTYPE.1 — admin shifts are out of the contractor budget.
+      contractorCostEur += sumHoursForProfile(rows, s.id, startIso, endIso, { classOnly: true }) * rate
     } else if (s.employment_type === 'fte') {
       fteImplicitCostEur += allocated * implicitHourlyRate(s)
     }

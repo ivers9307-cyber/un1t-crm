@@ -155,6 +155,23 @@ describe('GET /api/schedule/week-cost — contract', () => {
     expect(computeWeeklyFteHours).not.toHaveBeenCalled()
   })
 
+  // DATECHECK.1 — 2026-02-30 was parsed as 2 March and answered 200 with the
+  // week of 2 March: numbers for a week nobody asked about, with no error.
+  it('400 on a week_start the calendar does not have, and computes nothing', async () => {
+    for (const week_start of ['2026-02-30', '2026-04-31', '2026-13-01', '2027-02-29']) {
+      const res = await GET(buildReq({ location_id: LOC, week_start }))
+      expect(res.status).toBe(400)
+      expect((await res.json()).error).toBe('week_start: Use a real date, YYYY-MM-DD')
+    }
+    expect(computeWeeklyFteHours).not.toHaveBeenCalled()
+  })
+
+  it('29 Feb in a leap year is a real date', async () => {
+    const res = await GET(buildReq({ location_id: LOC, week_start: '2028-02-29' }))
+    expect(res.status).toBe(200)
+    expect(computeWeeklyFteHours).toHaveBeenCalledWith(expect.objectContaining({ weekStart: '2028-02-29' }))
+  })
+
   it('passes the location and week straight through', async () => {
     await GET(buildReq(okParams))
     expect(computeWeeklyFteHours).toHaveBeenCalledWith(

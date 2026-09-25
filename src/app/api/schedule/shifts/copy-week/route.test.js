@@ -439,3 +439,24 @@ describe('POST /api/schedule/shifts/copy-week — people no longer at the studio
     expect(json.skipped_not_at_studio).toBe(0)
   })
 })
+
+// DATECHECK.1 — an impossible source week 400'd on Postgres's text from the
+// source read; an impossible target week 500'd from the leave read.
+describe('POST /api/schedule/shifts/copy-week — a date the calendar does not have', () => {
+  it('400s and reads or writes nothing', async () => {
+    for (const [over, path] of [
+      [{ source_start: '2026-02-30' }, 'source_start'],
+      [{ target_start: '2026-02-30' }, 'target_start'],
+      [{ target_start: '2026-13-02' }, 'target_start'],
+    ]) {
+      const res = await POST(req({ location_id: LOC, source_start: '2026-06-01', target_start: '2026-06-08', ...over }))
+      expect(res.status).toBe(400)
+      const json = await res.json()
+      expect(json.error).toBe('Invalid request body')
+      expect(json.issues).toEqual([{ path, message: 'Use a real date, YYYY-MM-DD' }])
+    }
+    expect(fetchSourceBlocks).not.toHaveBeenCalled()
+    expect(fetchLeaveLookup).not.toHaveBeenCalled()
+    expect(bulkUpsertShiftAssignments).not.toHaveBeenCalled()
+  })
+})

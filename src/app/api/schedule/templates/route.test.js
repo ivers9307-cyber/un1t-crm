@@ -103,3 +103,42 @@ describe('POST /api/schedule/templates — role at body.location_id (SCHEDROLES.
     expect((await POST(req(body(LOC_B)))).status).toBe(201)
   })
 })
+
+// SHIFTTYPE.1 — kind on create.
+describe('POST /api/schedule/templates — kind (SHIFTTYPE.1)', () => {
+  const MGR = { id: 'm', role: 'manager', profileRole: 'manager', activeLocation: { id: LOC_A }, locations: [{ id: LOC_A }], rolesByLocation: { [LOC_A]: 'manager' } }
+
+  it('creates a class template with minimum 1 by default', async () => {
+    getCurrentUser.mockResolvedValue(MGR)
+    const { db, insertSpy } = buildDb()
+    createServerClient.mockReturnValue(db)
+    expect((await POST(req(body(LOC_A)))).status).toBe(201)
+    expect(insertSpy).toHaveBeenCalledWith(expect.objectContaining({ kind: 'class', min_coaches: 1 }))
+  })
+
+  it('creates an admin template with minimum 0', async () => {
+    getCurrentUser.mockResolvedValue(MGR)
+    const { db, insertSpy } = buildDb()
+    createServerClient.mockReturnValue(db)
+    expect((await POST(req({ ...body(LOC_A), kind: 'admin' }))).status).toBe(201)
+    expect(insertSpy).toHaveBeenCalledWith(expect.objectContaining({ kind: 'admin', min_coaches: 0 }))
+  })
+
+  it('refuses an admin template with a minimum, and inserts nothing', async () => {
+    getCurrentUser.mockResolvedValue(MGR)
+    const { db, insertSpy } = buildDb()
+    createServerClient.mockReturnValue(db)
+    const res = await POST(req({ ...body(LOC_A), kind: 'admin', min_coaches: 2 }))
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toBe('admin_has_no_minimum')
+    expect(insertSpy).not.toHaveBeenCalled()
+  })
+
+  it('refuses a kind it does not know', async () => {
+    getCurrentUser.mockResolvedValue(MGR)
+    const { db, insertSpy } = buildDb()
+    createServerClient.mockReturnValue(db)
+    expect((await POST(req({ ...body(LOC_A), kind: 'desk' }))).status).toBe(400)
+    expect(insertSpy).not.toHaveBeenCalled()
+  })
+})

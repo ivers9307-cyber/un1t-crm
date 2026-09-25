@@ -68,7 +68,8 @@ export async function fetchStaffingGapsThisWeek(db, locationIds, { todayIso = du
   // 1,000-row select cap.
   const { data, error } = await db
     .from('shift_blocks')
-    .select('id, location_id, block_date, start_time, min_coaches, shift_assignments(profile_id, status)')
+    // SHIFTTYPE.1 — the template's kind rides along: an admin block is never a gap.
+    .select('id, location_id, block_date, start_time, min_coaches, shift_templates(kind), shift_assignments(profile_id, status)')
     .in('location_id', locationIds)
     .gte('block_date', todayIso)
     .lte('block_date', weekEndIso)

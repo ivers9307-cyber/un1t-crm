@@ -26,8 +26,8 @@ import { MANAGER_ROLES } from './schemas'
  * weekly pattern makes the target studio's calendar generate eight weeks of
  * empty shifts at once and switches its roster runway alerts on.
  *
- * SHIFTTYPE.1 (Wave 2 PR 13) adds `kind`: add it here, one line, and the copy
- * carries it. tests/shift-template-clone.guards.test.js fails until every
+ * SHIFTTYPE.1 (mig 628) added `kind` here, so an admin template stays admin.
+ * tests/shift-template-clone.guards.test.js fails until every
  * column of shift_templates in supabase/migrations is in exactly one of these
  * two lists, so a new column can never be dropped by a copy in silence.
  */
@@ -40,6 +40,9 @@ export const TEMPLATE_CLONE_COLUMNS = Object.freeze([
   'days_of_week',
   'min_coaches',
   'max_coaches',
+  // SHIFTTYPE.1 (mig 628) — an admin template stays admin at the new studio.
+  // Safe with the admin CHECK: an admin source already carries min_coaches 0.
+  'kind',
 ])
 
 /** Never copied: identity, or set by the copy (active = true, display_order = after the target's). */

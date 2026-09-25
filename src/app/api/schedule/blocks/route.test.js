@@ -160,6 +160,73 @@ describe('GET /api/schedule/blocks — manager view', () => {
   })
 })
 
+// SHIFTTYPE.1 — the calendar and the phone read a block's kind from its
+// template. A coach's slim shape keeps it (a coach's admin card gets the admin
+// tone); it is not a capacity fact, so the capacity stripping is unchanged.
+describe('GET /api/schedule/blocks — shift kind (SHIFTTYPE.1)', () => {
+  function capturingDb(rows) {
+    const captured = {}
+    const q = {}
+    for (const op of ['eq', 'in', 'gte', 'lte', 'order']) q[op] = () => q
+    q.then = (res, rej) => Promise.resolve({ data: rows, error: null }).then(res, rej)
+    return { captured, from: () => ({ select: (s) => { captured.select = s; return q } }) }
+  }
+  const ADMIN_BLOCK = { ...PUBLISHED_BLOCK, id: 'b-admin', shift_templates: { ...PUBLISHED_BLOCK.shift_templates, kind: 'admin' } }
+
+  it('embeds the template kind for a manager', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'm', role: 'manager', profileRole: 'manager', rolesByLocation: { 'loc-1': 'manager' } })
+    const db = capturingDb([ADMIN_BLOCK])
+    createServerClient.mockReturnValue(db)
+    const body = await (await GET(req())).json()
+    expect(db.captured.select).toMatch(/shift_templates\(id, name, color, role_label, start_time, end_time, days_of_week, max_coaches, kind\)/)
+    expect(body.data[0].shift_templates.kind).toBe('admin')
+  })
+
+  it("keeps the kind in a coach's slim shape, and still no capacity", async () => {
+    getCurrentUser.mockResolvedValue({ id: 'c', role: 'staff', profileRole: 'staff', rolesByLocation: { 'loc-1': 'staff' } })
+    createServerClient.mockReturnValue(capturingDb([ADMIN_BLOCK]))
+    const body = await (await GET(req())).json()
+    expect(body.data[0].shift_templates.kind).toBe('admin')
+    expect('max_coaches' in body.data[0].shift_templates).toBe(false)
+    expect('min_coaches' in body.data[0]).toBe(false)
+  })
+})
+
+// DATECHECK.1 — the range bounds went to Postgres unchecked, and the route
+// answered 400 with Postgres's own "date/time field value out of range".
+describe('GET /api/schedule/blocks — a date the calendar does not have', () => {
+  const MANAGER = { id: 'm', role: 'manager', profileRole: 'manager', rolesByLocation: { 'loc-1': 'manager' } }
+
+  it('400s in the route\'s own words, before any read', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    for (const [qs, name] of [
+      ['&start_date=2026-02-30&end_date=2026-03-06', 'start_date'],
+      ['&start_date=2026-04-27&end_date=2026-04-31', 'end_date'],
+      ['&start_date=2026-13-01', 'start_date'],
+      ['&end_date=soon', 'end_date'],
+    ]) {
+      const res = await GET(req(`http://x/api/schedule/blocks?location_id=loc-1${qs}`))
+      expect(res.status).toBe(400)
+      expect(await res.json()).toEqual({ success: false, error: `${name}: not a real date` })
+    }
+    expect(createServerClient).not.toHaveBeenCalled()
+  })
+
+  it('a real range (leap day included) still reads, bounded on block_date', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    const calls = []
+    const q = {}
+    for (const op of ['eq', 'in', 'gte', 'lte', 'order']) q[op] = (...args) => { calls.push([op, ...args]); return q }
+    q.then = (res, rej) => Promise.resolve({ data: [], error: null }).then(res, rej)
+    createServerClient.mockReturnValue({ from: () => ({ select: () => q }) })
+
+    const res = await GET(req('http://x/api/schedule/blocks?location_id=loc-1&start_date=2028-02-28&end_date=2028-02-29'))
+    expect(res.status).toBe(200)
+    expect(calls).toContainEqual(['gte', 'block_date', '2028-02-28'])
+    expect(calls).toContainEqual(['lte', 'block_date', '2028-02-29'])
+  })
+})
+
 // ROSTER-FIX.4 — a manually-added block for a date inside an
 // already-published period must join that roster, or the extra Saturday slot
 // a manager just created is invisible to every coach.
@@ -168,7 +235,7 @@ describe('POST /api/schedule/blocks — post-publish blocks join the roster', ()
   const TPL = 'a0000000-0000-0000-0000-000000000002'
 
   // templateAt: the studio TPL belongs to (null = whichever is asked).
-  function postDb({ publishedRoster = null, restoreError = null, insertError = null, templateAt = null } = {}) {
+  function postDb({ publishedRoster = null, restoreError = null, insertError = null, templateAt = null, templateKind = 'class' } = {}) {
     const captured = { insert: null, restore: null }
     const db = {
       captured,
@@ -201,7 +268,7 @@ describe('POST /api/schedule/blocks — post-publish blocks join the roster', ()
             eq: (col, val) => { f[col] = val; return chain },
             maybeSingle: () => Promise.resolve({
               data: f.id === TPL && f.location_id === (templateAt ?? f.location_id)
-                ? { start_time: '09:00', end_time: '10:00', max_coaches: 5, min_coaches: 1 }
+                ? { start_time: '09:00', end_time: '10:00', max_coaches: 5, min_coaches: templateKind === 'admin' ? 0 : 1, kind: templateKind }
                 : null,
               error: null,
             }),
@@ -293,6 +360,23 @@ describe('POST /api/schedule/blocks — post-publish blocks join the roster', ()
     expect(db.captured.restore).toBeNull()
   })
 
+  // DATECHECK.1 — an impossible date used to reach the insert, which Postgres
+  // refused with its own text as a 400, after a rosters read that logged a
+  // warning and answered "not published".
+  it('400s on a block_date the calendar does not have, and reads or writes nothing', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'm', role: 'manager', profileRole: 'manager', locations: [{ id: LOC }], rolesByLocation: { [LOC]: 'manager' } })
+    const { POST } = await import('./route.js')
+
+    for (const block_date of ['2026-02-30', '2026-06-31', '2027-02-29']) {
+      const res = await POST(postReq({ location_id: LOC, template_id: TPL, block_date }))
+      expect(res.status).toBe(400)
+      const json = await res.json()
+      expect(json.error).toBe('Invalid request body')
+      expect(json.issues).toEqual([{ path: 'block_date', message: 'Use a real date, YYYY-MM-DD' }])
+    }
+    expect(createServerClient).not.toHaveBeenCalled()
+  })
+
   // SCHEDROLES.1 — manager at LOC (their ACTIVE studio), staff at LOC_B. The
   // route used to read `user.role` and check only membership of the target.
   describe('role at body.location_id (SCHEDROLES.1)', () => {
@@ -346,6 +430,40 @@ describe('POST /api/schedule/blocks — post-publish blocks join the roster', ()
       createServerClient.mockReturnValue(postDb())
       const { POST } = await import('./route.js')
       expect((await POST(postReq({ location_id: LOC_B, template_id: TPL, block_date: '2026-06-06' }))).status).toBe(201)
+    })
+  })
+
+  // SHIFTTYPE.1 — a manual slot of an admin template has no minimum.
+  describe('admin template (SHIFTTYPE.1)', () => {
+    const MGR = { id: 'm', role: 'manager', profileRole: 'manager', locations: [{ id: LOC }], rolesByLocation: { [LOC]: 'manager' } }
+
+    it("an admin template's slot is created with minimum 0", async () => {
+      getCurrentUser.mockResolvedValue(MGR)
+      const db = postDb({ templateKind: 'admin' })
+      createServerClient.mockReturnValue(db)
+      const { POST } = await import('./route.js')
+      expect((await POST(postReq({ location_id: LOC, template_id: TPL, block_date: '2026-06-06' }))).status).toBe(201)
+      expect(db.captured.insert.min_coaches).toBe(0)
+    })
+
+    it("refuses an explicit minimum on an admin template's slot, and inserts nothing", async () => {
+      getCurrentUser.mockResolvedValue(MGR)
+      const db = postDb({ templateKind: 'admin' })
+      createServerClient.mockReturnValue(db)
+      const { POST } = await import('./route.js')
+      const res = await POST(postReq({ location_id: LOC, template_id: TPL, block_date: '2026-06-06', min_coaches: 2 }))
+      expect(res.status).toBe(400)
+      expect((await res.json()).error).toBe('admin_has_no_minimum')
+      expect(db.captured.insert).toBeNull()
+    })
+
+    it("a class template's slot still takes the template minimum", async () => {
+      getCurrentUser.mockResolvedValue(MGR)
+      const db = postDb()
+      createServerClient.mockReturnValue(db)
+      const { POST } = await import('./route.js')
+      await POST(postReq({ location_id: LOC, template_id: TPL, block_date: '2026-06-06' }))
+      expect(db.captured.insert.min_coaches).toBe(1)
     })
   })
 })

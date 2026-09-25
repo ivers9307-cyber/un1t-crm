@@ -191,3 +191,17 @@ before tagging, and a swallowed week's blocks already carried the old roster's
 id. The change-log path covers the coaches whose shifts actually *changed*,
 which is the case that matters most; re-notifying the rest is a separate
 decision about how much noise a widening publish should make.
+
+## Shift kinds (SHIFTTYPE.1, mig 628, 2026-09)
+
+`shift_templates.kind` is `class` (default) or `admin`; a block reads its kind
+through its template (not snapshotted). Richard's rule (25 Sep 2026): an admin
+shift has **no minimum staffing** (`min_coaches = 0`, DB CHECK
+`shift_templates_admin_no_minimum`), so it is never an empty or short gap:
+`futureBlockStaffing` returns null for it, which removes it from the calendar
+banner, day headers, cards, the Today chip, the publish preview, the runway and
+the phone's Manage chip; the Studio Overview's `underMinEntry` skips it. It is
+**out of the contractor budget** (`blockContractorCost`, `summarizeMonth`,
+`summarizeWeek`) and **in every hours figure** (payroll, week-cost, reports).
+An unreadable kind is `class`. The API refuses an explicit minimum on an admin
+template or slot (400 `admin_has_no_minimum`) and normalises an omitted one.

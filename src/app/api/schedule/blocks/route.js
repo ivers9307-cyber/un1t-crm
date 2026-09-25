@@ -19,14 +19,15 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess, getUserLocationIds, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { uuidLike, isoDate, timeOfDay, MANAGER_ROLES } from '@/lib/schemas'
+import { uuidLike, realIsoDate, isRealCalendarDate, timeOfDay, MANAGER_ROLES } from '@/lib/schemas'
 import { findPublishedRosterFor } from '@/lib/roster'
 import { logWarn } from '@/lib/log'
+import { adminMinimumRefusal } from '@/lib/shift-template-kind'
 
 const BlockCreateSchema = z.object({
   location_id: uuidLike,
   template_id: uuidLike,
-  block_date: isoDate,
+  block_date: realIsoDate,
   start_time: timeOfDay.optional(),
   end_time: timeOfDay.optional(),
   max_coaches: z.number().int().min(1).max(50).optional(),
@@ -44,6 +45,14 @@ export async function GET(request) {
 
   const startDate = searchParams.get('start_date')
   const endDate = searchParams.get('end_date')
+  // DATECHECK.1 — these bounds reach Postgres as they are, and it refuses
+  // 2026-02-30 (the route used to hand back its error text as the 400). Refuse
+  // it here, in change-log's words. Absent or empty = no bound, as before.
+  for (const [name, value] of [['start_date', startDate], ['end_date', endDate]]) {
+    if (value && !isRealCalendarDate(value)) {
+      return NextResponse.json({ success: false, error: `${name}: not a real date` }, { status: 400 })
+    }
+  }
   const db = createServerClient()
 
   let query = db
@@ -51,7 +60,7 @@ export async function GET(request) {
     .select(`
       *,
       rosters:roster_id ( status ),
-      shift_templates(id, name, color, role_label, start_time, end_time, days_of_week, max_coaches),
+      shift_templates(id, name, color, role_label, start_time, end_time, days_of_week, max_coaches, kind),
       shift_assignments(
         id,
         profile_id,
@@ -139,6 +148,9 @@ function slimBlockForCoach(block) {
           start_time: tpl.start_time,
           end_time: tpl.end_time,
           days_of_week: tpl.days_of_week,
+          // SHIFTTYPE.1 — class | admin. Not a capacity fact: a coach's admin
+          // shift is drawn in the admin tone too.
+          kind: tpl.kind,
         }
       : tpl,
     shift_assignments: (block.shift_assignments || [])
@@ -198,7 +210,7 @@ export async function POST(request) {
   let min = body.min_coaches
   const { data: tpl, error: tplErr } = await db
     .from('shift_templates')
-    .select('start_time, end_time, max_coaches, min_coaches')
+    .select('start_time, end_time, max_coaches, min_coaches, kind')
     .eq('id', body.template_id)
     .eq('location_id', body.location_id)
     .maybeSingle()
@@ -211,10 +223,15 @@ export async function POST(request) {
       { status: 404 }
     )
   }
+  // SHIFTTYPE.1 — an admin shift has no minimum staffing. An explicit
+  // minimum is a contradiction the caller should hear about (400, the same
+  // answer as the template routes); an omitted one is 0.
+  const refusal = adminMinimumRefusal(tpl.kind, body.min_coaches)
+  if (refusal) return NextResponse.json(refusal.body, { status: refusal.status })
   start = start || tpl.start_time
   end = end || tpl.end_time
   max = max || tpl.max_coaches || 15
-  min = min ?? (tpl.min_coaches ?? 1)
+  min = tpl.kind === 'admin' ? 0 : (min ?? (tpl.min_coaches ?? 1))
 
   // ROSTER-FIX.4 — if this date already sits inside a PUBLISHED period, the
   // new block joins that roster. Publishing tags the blocks that exist at
@@ -239,7 +256,7 @@ export async function POST(request) {
     })
     .select(`
       *,
-      shift_templates(id, name, color, role_label, start_time, end_time, days_of_week, max_coaches),
+      shift_templates(id, name, color, role_label, start_time, end_time, days_of_week, max_coaches, kind),
       shift_assignments(
         id, profile_id, notes, status, assigned_at,
         profiles:profile_id(id, full_name, email, avatar_url, role)

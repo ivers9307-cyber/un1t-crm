@@ -119,3 +119,29 @@ describe('GET /api/schedule/shifts — open_swap_status', () => {
     expect(body.data).toEqual([{ id: 'a1', profile_id: 'coach-a', open_swap_status: null }])
   })
 })
+
+// DATECHECK.1 — the phone's Schedule tab feed. Its range went to Postgres
+// unchecked and came back as a 400 carrying Postgres's error text.
+describe('GET /api/schedule/shifts — a date the calendar does not have', () => {
+  const COACH = { id: 'c', role: 'staff', profileRole: 'staff', rolesByLocation: { 'loc-1': 'staff' }, locations: [{ id: 'loc-1' }] }
+
+  it('400s in the route\'s own words, before any read', async () => {
+    getCurrentUser.mockResolvedValue(COACH)
+    for (const [qs, name] of [
+      ['&start_date=2026-02-30&end_date=2026-03-06', 'start_date'],
+      ['&start_date=2026-06-01&end_date=2026-06-31', 'end_date'],
+    ]) {
+      const res = await GET(req(`http://x/api/schedule/shifts?location_id=loc-1${qs}`))
+      expect(res.status).toBe(400)
+      expect(await res.json()).toEqual({ success: false, error: `${name}: not a real date` })
+    }
+    expect(fetchApiShiftRows).not.toHaveBeenCalled()
+  })
+
+  it('a real range (leap day included) is handed to the reader unchanged', async () => {
+    getCurrentUser.mockResolvedValue(COACH)
+    const res = await GET(req('http://x/api/schedule/shifts?location_id=loc-1&start_date=2028-02-28&end_date=2028-02-29'))
+    expect(res.status).toBe(200)
+    expect(fetchApiShiftRows.mock.calls[0][1]).toMatchObject({ startDate: '2028-02-28', endDate: '2028-02-29' })
+  })
+})

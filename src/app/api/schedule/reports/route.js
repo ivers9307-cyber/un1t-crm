@@ -3,8 +3,9 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess, getUserLocationIds, hasRoleAtLocation } from '@/lib/auth'
 import { generateReport } from '@/lib/report-generator'
+import { reportPeriodError } from '@/lib/report-period'
 import { validateBody } from '@/lib/validate'
-import { uuidLike, isoDate, reportTypeSchema, MANAGER_ROLES } from '@/lib/schemas'
+import { uuidLike, realIsoDate, reportTypeSchema, MANAGER_ROLES } from '@/lib/schemas'
 import {
   canViewReportType, isRateReportType, RATE_REPORT_VIEWER_ROLES, RATE_REPORT_TYPES_IN_LIST,
 } from '@/lib/report-access'
@@ -21,8 +22,9 @@ import {
 
 const ReportRunSchema = z.object({
   report_type: reportTypeSchema,
-  period_start: isoDate,
-  period_end: isoDate,
+  // DATECHECK.1 — real dates, not just the shape.
+  period_start: realIsoDate,
+  period_end: realIsoDate,
   location_id: uuidLike.optional(),
 })
 
@@ -82,6 +84,10 @@ export async function POST(request) {
   const validation = await validateBody(request, ReportRunSchema)
   if (!validation.ok) return validation.response
   const { report_type, period_start, period_end, location_id } = validation.data
+  // DATECHECK.1 (review) — in order, and at most 366 days: the same rule
+  // generateReport applies, answered here as a readable 400 before any work.
+  const periodError = reportPeriodError(period_start, period_end)
+  if (periodError) return NextResponse.json({ success: false, error: periodError }, { status: 400 })
   const locId = location_id || user.activeLocation?.id
 
   const guard = assertLocationAccess(user, locId)

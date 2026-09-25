@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { uuidLike, isoDate , MANAGER_ROLES} from '@/lib/schemas'
+import { uuidLike, realIsoDate, MANAGER_ROLES } from '@/lib/schemas'
 import { bulkUpsertShiftAssignments } from '@/lib/roster-write'
 import { fetchSourceBlocks, fetchLeaveLookup, buildCopyPlan, COPY_MODES } from '@/lib/roster-copy'
 import { formatDate, fetchSlotRemovalKeys } from '@/lib/roster'
@@ -11,8 +11,9 @@ import { readAssignmentKeysInRange, logAndNotifyCopiedShifts } from '@/lib/roste
 
 const CopyWeekSchema = z.object({
   location_id: uuidLike,
-  source_start: isoDate,
-  target_start: isoDate,
+  // DATECHECK.1 — real dates, not just the shape.
+  source_start: realIsoDate,
+  target_start: realIsoDate,
   // COPYMODES.1 — 'exact' is a carbon copy (today's behaviour, the default so
   // an old client is unchanged); 'template' re-applies the template slots.
   mode: z.enum(COPY_MODES).default('exact'),

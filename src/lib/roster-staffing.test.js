@@ -197,3 +197,47 @@ describe('periodPublicationStatus', () => {
     expect(periodPublicationStatus({ ...period, blocks: null }).status).toBe('none')
   })
 })
+
+// SHIFTTYPE.1 — an admin shift carries no minimum staffing (Richard, 25 Sep):
+// it is never empty and never short, on any surface.
+describe('SHIFTTYPE.1 — admin shifts are never a staffing gap', () => {
+  const admin = (over = {}) => block({ min_coaches: 0, shift_templates: { name: 'Admin', kind: 'admin' }, ...over })
+
+  it('futureBlockStaffing asks no staffing question of a future admin block, empty or not', () => {
+    expect(futureBlockStaffing(admin(), '2026-09-17')).toBeNull()
+    expect(futureBlockStaffing(admin({ shift_assignments: [live('a')] }), '2026-09-17')).toBeNull()
+    // Even one still carrying a minimum (a block made before its template became admin).
+    expect(futureBlockStaffing(admin({ min_coaches: 2, shift_assignments: [live('a')] }), '2026-09-17')).toBeNull()
+  })
+
+  it('class blocks are unchanged, and a block with no readable kind is class', () => {
+    expect(futureBlockStaffing(block({ shift_templates: { kind: 'class' } }), '2026-09-17').status).toBe('empty')
+    expect(futureBlockStaffing(block({ shift_templates: { kind: 'class' }, shift_assignments: [live('a')] }), '2026-09-17'))
+      .toEqual({ status: 'short', count: 1, min: 2 })
+    expect(futureBlockStaffing(block(), '2026-09-17').status).toBe('empty')
+  })
+
+  it('staffingGaps and countStaffingGaps leave admin blocks out', () => {
+    const blocks = [
+      admin({ id: 'admin-empty', block_date: '2026-09-18' }),
+      block({ id: 'class-empty', block_date: '2026-09-18' }),
+      block({ id: 'class-short', block_date: '2026-09-19', shift_assignments: [live('a')] }),
+    ]
+    expect(staffingGaps(blocks, { todayIso: '2026-09-17' }).map((g) => g.block.id)).toEqual(['class-empty', 'class-short'])
+    expect(countStaffingGaps(blocks, { todayIso: '2026-09-17' })).toEqual({ empty: 1, short: 1, total: 2 })
+    expect(countStaffingGaps([admin(), admin({ id: 'a2' })], { todayIso: '2026-09-17' })).toEqual({ empty: 0, short: 0, total: 0 })
+  })
+
+  it('the Today chip reads each block with its template kind and does not count an admin block', async () => {
+    const calls = {}
+    const chain = {
+      select: (s) => { calls.select = s; return chain },
+      in: () => chain,
+      gte: () => chain,
+      lte: () => Promise.resolve({ data: [admin({ block_date: '2026-09-18' }), block({ block_date: '2026-09-19' })], error: null }),
+    }
+    const res = await fetchStaffingGapsThisWeek({ from: () => chain }, ['loc-1'], { todayIso: '2026-09-17' })
+    expect(res).toEqual({ success: true, data: { empty: 1, short: 0, total: 1 } })
+    expect(calls.select).toMatch(/shift_templates\(kind\)/)
+  })
+})
