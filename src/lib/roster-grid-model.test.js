@@ -131,3 +131,114 @@ describe('roster layout preference', () => {
     expect(s.m.size).toBe(0)
   })
 })
+
+describe('buildRosterGrid — rows, cells and week totals', () => {
+  const build = () => buildRosterGrid({ weekStart: WEEK, grid: GRID })
+
+  it('one row per person: the team by name, then anyone no longer on it', () => {
+    const g = build()
+    expect(g.days).toEqual(gridWeekDays(WEEK))
+    expect(g.rows.map((r) => r.full_name)).toEqual(['Alex Example', 'Jordan Sample', 'Max Beta', 'Sam Demo', 'Toby Beta'])
+    expect(g.rows.map((r) => r.member)).toEqual([true, true, true, true, false])
+    expect(g.checked).toBe(true)
+  })
+
+  it("a cell holds this studio's shifts as chips, earliest first, and the other studio's as markers", () => {
+    const [mon, tue, wed] = rowOf(build(), 'p-emp').cells
+    expect(mon.date).toBe('2026-09-21')
+    expect(mon.here.map((c) => c.time)).toEqual(['6:30–7:30am', '9am–12pm'])
+    expect(mon.here[1]).toMatchObject({
+      block_id: 'b-p-emp-2026-09-21-09:00:00', here: true, kind: 'class', name: 'Strength', minutes: 180,
+    })
+    expect(mon.elsewhere).toEqual([])
+    expect(tue.here).toEqual([])
+    expect(tue.elsewhere).toHaveLength(1)
+    expect(tue.elsewhere[0]).toMatchObject({ here: false, location_name: 'Studio South', name: 'Evening', time: '6–8pm', minutes: 120 })
+    expect(wed.here[0]).toMatchObject({ kind: 'admin', name: 'Front desk', time: '1–2:30pm', minutes: 90 })
+  })
+
+  it('the week total is every studio together, split into here, elsewhere, class and placed admin', () => {
+    // Class: 60 + 180 (Mon) + 120 (Tue, Studio South) + 60 (Fri) = 420. Admin: 90 (Wed).
+    expect(rowOf(build(), 'p-emp').totals).toEqual({
+      minutes: 510, here_minutes: 390, elsewhere_minutes: 120, class_minutes: 420, admin_minutes: 90, untimed: 0,
+    })
+  })
+
+  it('only the seven days count: the Sunday before and the Monday after are never shown or totalled', () => {
+    const chips = rowOf(build(), 'p-emp').cells.flatMap((c) => [...c.here, ...c.elsewhere])
+    expect(chips.map((c) => c.date).sort()).toEqual(['2026-09-21', '2026-09-21', '2026-09-22', '2026-09-23', '2026-09-25'])
+  })
+
+  it('a cancelled assignment is not a shift', () => {
+    expect(rowOf(build(), 'p-emp').cells[3].here).toEqual([])
+  })
+
+  it('a shift with no usable times is shown, not counted, and counted as untimed', () => {
+    const g = build()
+    const sam = rowOf(g, 'p-nocon')
+    expect(sam.cells[5].here).toHaveLength(1)
+    expect(sam.cells[5].here[0]).toMatchObject({ minutes: null, time: 'No times' })
+    expect(sam.totals.minutes).toBe(60)
+    expect(sam.totals.untimed).toBe(1)
+    expect(g.untimed).toBe(1)
+    expect(untimedLabel(1)).toBe('1 shift without times, not counted')
+    expect(untimedLabel(2)).toBe('2 shifts without times, not counted')
+  })
+
+  it('the effective window counts: an override beats the block (a geofence arrival included)', () => {
+    const g = buildRosterGrid({
+      weekStart: WEEK,
+      grid: { ...GRID, members: [M('p1', 'Alex Example', 'fte', 10)], shifts: [S('p1', WEEK, '09:00:00', '12:00:00', { start_time_override: '09:40:00' })] },
+    })
+    expect(g.rows[0].totals.minutes).toBe(140)
+    expect(g.rows[0].cells[0].here[0].time).toBe('9:40am–12pm')
+  })
+
+  it('other studios unread: checked is false, so nobody reads the totals as complete', () => {
+    expect(buildRosterGrid({ weekStart: WEEK, grid: { ...GRID, cross_studio_checked: false } }).checked).toBe(false)
+    expect(GRID_COPY.crossStudioUnchecked).toMatch(/this studio only/)
+    expect(GRID_COPY.leaveMissing).toMatch(/nobody is shown on leave/)
+    expect(GRID_COPY.availabilityMissing).toMatch(/nobody is shown as unavailable/)
+  })
+
+  it('nothing to build: no grid, a malformed one, or a date the calendar does not have', () => {
+    expect(buildRosterGrid({ weekStart: WEEK, grid: null })).toEqual({ days: gridWeekDays(WEEK), rows: [], checked: false, untimed: 0 })
+    expect(buildRosterGrid({ weekStart: WEEK, grid: { members: 'x', shifts: [] } }).rows).toEqual([])
+    expect(buildRosterGrid({ weekStart: '2026-02-30', grid: GRID }).rows).toEqual([])
+  })
+})
+
+describe('buildRosterGrid — the clock-change weeks', () => {
+  it('autumn (Sun 25 Oct 2026): Sunday is in the week, a normal shift is its length, a shift over the change its REAL length', () => {
+    const g = buildRosterGrid({
+      weekStart: '2026-10-21',
+      grid: {
+        ...GRID,
+        members: [M('p1', 'Alex Example', 'fte', 40)],
+        shifts: [
+          S('p1', '2026-10-25', '09:00:00', '12:00:00'),
+          S('p1', '2026-10-25', '00:30:00', '03:30:00'), // 00:30 IST to 03:30 GMT: four real hours
+          S('p1', '2026-10-26', '09:00:00', '10:00:00'), // the Monday after: not this week
+        ],
+      },
+    })
+    expect(g.days[0]).toBe('2026-10-19')
+    expect(g.days[6]).toBe('2026-10-25')
+    expect(g.rows[0].cells[6].here.map((c) => c.minutes)).toEqual([240, 180])
+    expect(g.rows[0].totals.minutes).toBe(420)
+  })
+
+  it('spring (Sun 29 Mar 2026): the short night is two real hours', () => {
+    const g = buildRosterGrid({
+      weekStart: '2026-03-23',
+      grid: {
+        ...GRID,
+        members: [M('p1', 'Alex Example', 'fte', 40)],
+        shifts: [S('p1', '2026-03-29', '09:00:00', '12:00:00'), S('p1', '2026-03-29', '00:30:00', '03:30:00')],
+      },
+    })
+    expect(g.days[6]).toBe('2026-03-29')
+    expect(g.rows[0].cells[6].here.map((c) => c.minutes)).toEqual([120, 180])
+    expect(g.rows[0].totals.minutes).toBe(300)
+  })
+})

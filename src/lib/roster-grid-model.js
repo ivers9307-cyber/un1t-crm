@@ -15,6 +15,9 @@
 // No clock, no network, no host timezone. Dates are 'YYYY-MM-DD' strings and
 // all day arithmetic is Date.UTC, so a 23h or 25h day cannot move a column.
 
+import { workingWindow } from '@shared/working-time'
+import { formatTimeRange12h } from './schedule-overlap'
+
 export const ROSTER_LAYOUTS = Object.freeze(['days', 'coaches'])
 export const DEFAULT_ROSTER_LAYOUT = 'days'
 
@@ -81,4 +84,144 @@ export function saveRosterLayout(storage, viewerId, layout) {
   } catch {
     return false
   }
+}
+
+// ── The grid ────────────────────────────────────────────────────────────────
+
+export const GRID_COPY = Object.freeze({
+  crossStudioUnchecked: 'The other studios could not be read, so week totals, balances and working-time flags count this studio only.',
+  leaveMissing: 'Leave could not be loaded, so nobody is shown on leave.',
+  availabilityMissing: 'Availability could not be loaded, so nobody is shown as unavailable.',
+  noRows: 'Nobody is on this studio’s team this week.',
+  legend: 'Hours only. Week = every studio in this organisation. Admin balance = contract − class − placed admin, for employees with contracted hours.',
+})
+
+export function untimedLabel(n) {
+  const k = Math.max(0, Math.round(Number(n) || 0))
+  return `${k} shift${k === 1 ? '' : 's'} without times, not counted`
+}
+
+const byStart = (a, b) => String(a.start ?? '99:99').localeCompare(String(b.start ?? '99:99'))
+  || String(a.key).localeCompare(String(b.key))
+
+// One shift as a chip or a marker. Minutes are REAL elapsed time from
+// workingWindow (override → block → template, Dublin wall clock → instants),
+// the same measure as the 48-hour rule; null = no usable times (shown, not
+// counted). `flags` comes from the overlays (Task 4).
+function chipOf(s, flags) {
+  const w = workingWindow(s)
+  return {
+    key: String(s.assignment_id || `${s.block_id}|${s.profile_id}`),
+    block_id: s.block_id ?? null,
+    date: s.block_date,
+    here: s.here === true,
+    location_name: s.location_name || null,
+    name: s.name || 'Shift',
+    kind: s.kind === 'admin' ? 'admin' : 'class',
+    start: w ? w.start : null,
+    time: w ? formatTimeRange12h(w.start, w.end) : 'No times',
+    minutes: w ? Math.round((w.endMs - w.startMs) / 60000) : null,
+    onLeave: flags.onLeave,
+    unavailable: Boolean(w && !flags.onLeave && flags.unavailableDuring(w.start, w.end)),
+  }
+}
+
+/**
+ * The grid for one week.
+ *
+ * @param {object} args
+ * @param {string} args.weekStart  any day of the week (snapped to its Monday)
+ * @param {{ members: Array, shifts: Array, cross_studio_checked?: boolean }} args.grid
+ *        GET /api/schedule/grid's `data`
+ * @param {Array} [args.timeOff]       the calendar's approved-leave slice
+ * @param {Array} [args.availability]  the calendar's availability slice (AVAIL.1)
+ * @returns {{ days: string[], rows: Array, checked: boolean, untimed: number }}
+ */
+export function buildRosterGrid({ weekStart, grid, timeOff = [], availability = [] } = {}) {
+  const days = gridWeekDays(weekStart)
+  if (days.length !== 7 || !grid || !Array.isArray(grid.members) || !Array.isArray(grid.shifts)) {
+    return { days, rows: [], checked: false, untimed: 0 }
+  }
+  const week = new Set(days)
+  // The server already drops cancelled rows; the same rule again here so a
+  // stale or hand-made payload can never count one. The window days (Sunday
+  // before, Monday after) stay in `live` for the rest-gap rule only.
+  const live = grid.shifts.filter((s) => s?.profile_id && s.status !== 'cancelled')
+  const byPerson = new Map()
+  for (const s of live) {
+    if (!week.has(s.block_date)) continue
+    if (!byPerson.has(s.profile_id)) byPerson.set(s.profile_id, [])
+    byPerson.get(s.profile_id).push(s)
+  }
+  const overlays = overlaysFor(days, timeOff, availability)
+  const advice = advisoriesFor(days, grid.members, live)
+
+  const rows = grid.members.filter((m) => m?.profile_id).map((m) => {
+    const mine = byPerson.get(m.profile_id) || []
+    const totals = { minutes: 0, here_minutes: 0, elsewhere_minutes: 0, class_minutes: 0, admin_minutes: 0, untimed: 0 }
+    let leaveDays = 0
+    const cells = days.map((date) => {
+      const leave = overlays.leaveOn(m.profile_id, date)
+      if (leave) leaveDays += 1
+      const chips = mine
+        .filter((s) => s.block_date === date)
+        .map((s) => chipOf(s, {
+          onLeave: Boolean(leave),
+          unavailableDuring: (start, end) => overlays.unavailableDuring(m.profile_id, date, start, end),
+        }))
+        .sort(byStart)
+      for (const c of chips) {
+        if (c.minutes === null) { totals.untimed += 1; continue }
+        totals.minutes += c.minutes
+        if (c.here) totals.here_minutes += c.minutes
+        else totals.elsewhere_minutes += c.minutes
+        if (c.kind === 'admin') totals.admin_minutes += c.minutes
+        else totals.class_minutes += c.minutes
+      }
+      return {
+        date,
+        here: chips.filter((c) => c.here),
+        elsewhere: chips.filter((c) => !c.here),
+        leave: leave ? { label: leave.label, title: leave.title } : null,
+        // Leave says more than "unavailable", as in the Days view (AVAIL.1b).
+        unavailable: leave ? null : overlays.unavailableCell(m.profile_id, date),
+      }
+    })
+    return {
+      profile_id: m.profile_id,
+      full_name: m.full_name || 'Unknown coach',
+      member: m.member !== false,
+      employment_type: m.employment_type ?? null,
+      ...balanceFor(m, totals),
+      cells,
+      totals,
+      leaveDays,
+      restGaps: advice.restGapsOf(m.profile_id),
+      longWeekMinutes: advice.longWeekOf(m.profile_id),
+    }
+  })
+  rows.sort((a, b) => (a.member === b.member ? 0 : a.member ? -1 : 1)
+    || a.full_name.localeCompare(b.full_name)
+    || String(a.profile_id).localeCompare(String(b.profile_id)))
+  return {
+    days,
+    rows,
+    checked: grid.cross_studio_checked !== false && advice.ok,
+    untimed: rows.reduce((n, r) => n + r.totals.untimed, 0),
+  }
+}
+
+// Task 3 replaces this stub.
+function balanceFor() {
+  return { isEmployee: false, contractMinutes: null, balance: null }
+}
+
+// Task 4 replaces this stub.
+function overlaysFor() {
+  return { leaveOn: () => null, unavailableCell: () => null, unavailableDuring: () => false }
+}
+
+// Task 5 replaces this stub.
+function advisoriesFor() {
+  return { ok: true, restGapsOf: () => [], longWeekOf: () => null }
 }
