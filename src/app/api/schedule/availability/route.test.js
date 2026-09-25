@@ -24,13 +24,15 @@ vi.mock('@/lib/availability-server', async (importOriginal) => ({
   readOwnAvailability: vi.fn(),
   saveOwnAvailability: vi.fn(),
   readStudioAvailability: vi.fn(),
+  readKnownDatedKeys: vi.fn(),
 }))
 vi.mock('@/lib/availability-notify', () => ({ deliverOwedAvailabilityNotices: vi.fn(async () => ({ status: 'sent', sent: 1 })) }))
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn() }))
 
 const { after, NextResponse } = await import('next/server')
 const { getCurrentUser, assertLocationAccess } = await import('@/lib/auth')
-const { readOwnAvailability, saveOwnAvailability, readStudioAvailability } = await import('@/lib/availability-server')
+const { readOwnAvailability, saveOwnAvailability, readStudioAvailability, readKnownDatedKeys } = await import('@/lib/availability-server')
+const { ruleKey } = await import('@shared/availability')
 const { deliverOwedAvailabilityNotices } = await import('@/lib/availability-notify')
 const { GET, PUT } = await import('./route.js')
 
@@ -52,6 +54,7 @@ beforeEach(() => {
   assertLocationAccess.mockReturnValue(null)
   readOwnAvailability.mockResolvedValue({ data: { weekly: [], dated: [] }, error: null })
   readStudioAvailability.mockResolvedValue({ data: [{ id: 'r1', profile_id: 'c1' }], error: null })
+  readKnownDatedKeys.mockResolvedValue({ keys: new Set(), error: null })
   saveOwnAvailability.mockResolvedValue({
     result: { changed: true, changeId: 'ch-1', before: [], after: [{ kind: 'weekly', weekday: 'mon', all_day: false, start_time: '09:00', end_time: '12:00', note: null }] },
     error: null,
@@ -130,6 +133,33 @@ describe('PUT own', () => {
       { path: 'dated.0', message: 'That date has passed' },
     ])
     expect(saveOwnAvailability).not.toHaveBeenCalled()
+  })
+  it('stale tab over midnight: an ENDED rule the coach already has is dropped (history), not refused', async () => {
+    getCurrentUser.mockResolvedValue(coach)
+    const stale = { start_date: '2026-09-23', end_date: '2026-09-24', all_day: true, note: 'Wedding' }
+    readKnownDatedKeys.mockResolvedValue({ keys: new Set([ruleKey({ kind: 'dated', ...stale })]), error: null })
+    const res = await PUT(putReq({ weekly: [MON], dated: [stale, { start_date: '2026-10-03', all_day: true }] }))
+    expect(res.status).toBe(200)
+    expect(readKnownDatedKeys).toHaveBeenCalledWith({ db: true }, 'u1', '2026-09-25', ['2026-09-23'])
+    expect(saveOwnAvailability.mock.calls[0][1].dated.map((r) => r.start_date)).toEqual(['2026-10-03'])
+  })
+  it('a NEW rule that ended before today is still refused', async () => {
+    getCurrentUser.mockResolvedValue(coach)
+    const res = await PUT(putReq({ dated: [{ start_date: '2026-09-23', end_date: '2026-09-24', all_day: true }] }))
+    expect(res.status).toBe(400)
+    expect((await res.json()).issues).toEqual([{ path: 'dated.0', message: 'That date has passed' }])
+    expect(saveOwnAvailability).not.toHaveBeenCalled()
+  })
+  it('an unreadable history is a 500, never a guess', async () => {
+    getCurrentUser.mockResolvedValue(coach)
+    readKnownDatedKeys.mockResolvedValue({ keys: null, error: { message: 'down' } })
+    expect((await PUT(putReq({ dated: [{ start_date: '2026-09-23', end_date: '2026-09-24', all_day: true }] }))).status).toBe(500)
+    expect(saveOwnAvailability).not.toHaveBeenCalled()
+  })
+  it('no dated rule before today: the history is not read at all', async () => {
+    getCurrentUser.mockResolvedValue(coach)
+    await PUT(putReq({ weekly: [MON], dated: [{ start_date: '2026-10-03', all_day: true }] }))
+    expect(readKnownDatedKeys).not.toHaveBeenCalled()
   })
   it('saves the canonical lists for the caller and hands the notice to after()', async () => {
     getCurrentUser.mockResolvedValue(coach)

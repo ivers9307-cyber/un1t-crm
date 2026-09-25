@@ -6,7 +6,7 @@ import { describe, it, expect } from 'vitest'
 import {
   AVAILABILITY_WEEKDAYS, AVAILABILITY_LIMITS, weekdayOf, normaliseRule, normaliseAvailability,
   splitRules, ruleProblem, availabilityProblems, rulesOnDate, unavailableFor, unavailableSummary,
-  describeWindow, describeRule, diffAvailability, sameAvailability,
+  describeWindow, describeRule, diffAvailability, sameAvailability, ruleKey, withoutEnded,
 } from './availability'
 
 const weekly = (weekday, start, end, note = null) =>
@@ -78,6 +78,25 @@ describe('ruleProblem', () => {
     const issues = availabilityProblems(normaliseAvailability({ weekly: many, dated: [dated('2026-09-01', '2026-09-01')] }), { todayIso: today })
     expect(issues).toContainEqual({ path: 'weekly', message: `Up to ${AVAILABILITY_LIMITS.weekly} weekly entries` })
     expect(issues).toContainEqual({ path: 'dated.0', message: 'That date has passed' })
+  })
+})
+
+describe('stale tab over midnight: an ended rule the coach already has', () => {
+  const today = '2026-09-25'
+  const ended = normaliseRule(dated('2026-09-23', '2026-09-24', null, null, 'Wedding'))
+  it('is not a problem when it is a rule already stored (history), whatever its note', () => {
+    const knownKeys = new Set([ruleKey({ ...ended, note: 'old words' })])
+    expect(ruleProblem(ended, { todayIso: today, knownKeys })).toBeNull()
+  })
+  it('is still refused when it is NEW (not stored)', () => {
+    expect(ruleProblem(ended, { todayIso: today, knownKeys: new Set() })).toBe('That date has passed')
+    expect(ruleProblem(ended, { todayIso: today })).toBe('That date has passed')
+  })
+  it('withoutEnded drops dated rules that ended before today and keeps the rest', () => {
+    const input = normaliseAvailability({ weekly: [weekly('mon', null, null)], dated: [ended, dated('2026-09-25', '2026-09-25')] })
+    const out = withoutEnded(input, today)
+    expect(out.weekly).toHaveLength(1)
+    expect(out.dated.map((r) => r.start_date)).toEqual(['2026-09-25'])
   })
 })
 

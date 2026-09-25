@@ -10,7 +10,7 @@
 
 import { z } from 'zod'
 import { timeOfDay, realIsoDate } from '@/lib/schemas'
-import { AVAILABILITY_WEEKDAYS, AVAILABILITY_LIMITS, normaliseRule, splitRules } from '@shared/availability'
+import { AVAILABILITY_WEEKDAYS, AVAILABILITY_LIMITS, normaliseRule, splitRules, ruleKey } from '@shared/availability'
 
 export const AVAILABILITY_RANGE_MAX_DAYS = 92
 const PAGE = 1000
@@ -65,6 +65,27 @@ export async function readOwnAvailability(db, profileId, todayIso) {
     .order('created_at', { ascending: true })
   if (error) return { data: null, error }
   return { data: splitRules(data || []), error: null }
+}
+
+/**
+ * ruleKey()s of the person's STORED dated rules that started before today, on
+ * the given start dates (the ones the body carries that start before today).
+ * The route uses them to tell a rule the coach already has from a new one:
+ * an ended rule sent back by a stale tab is history, a new one is refused.
+ * A failed read is an error, never "none known".
+ * @returns {{ keys: Set<string> | null, error }}
+ */
+export async function readKnownDatedKeys(db, profileId, todayIso, startDates) {
+  if (!startDates || startDates.length === 0) return { keys: new Set(), error: null }
+  const { data, error } = await db
+    .from('staff_unavailability')
+    .select('kind, weekday, start_date, end_date, all_day, start_time, end_time, note')
+    .eq('profile_id', profileId)
+    .eq('kind', 'dated')
+    .lt('start_date', todayIso)
+    .in('start_date', startDates)
+  if (error) return { keys: null, error }
+  return { keys: new Set((data || []).map(ruleKey)), error: null }
 }
 
 /**

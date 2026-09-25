@@ -5,9 +5,10 @@
 
 import { describe, it, expect } from 'vitest'
 import { WEEKDAY_CODES } from '@/lib/roster'
-import { AVAILABILITY_WEEKDAYS } from '@shared/availability'
+import { AVAILABILITY_WEEKDAYS, ruleKey } from '@shared/availability'
 import {
   AvailabilityPutSchema, readOwnAvailability, saveOwnAvailability, readStudioAvailability, isAvailabilityInputError,
+  readKnownDatedKeys,
 } from './availability-server'
 
 // A recording fake: each from() gets a builder whose chain methods record
@@ -21,7 +22,7 @@ function fakeDb(handlers, rpc = null) {
       const call = { table, ops: [] }
       calls.push(call)
       const b = {}
-      for (const m of ['select', 'eq', 'in', 'is', 'or', 'order', 'limit', 'range']) {
+      for (const m of ['select', 'eq', 'in', 'is', 'or', 'lt', 'order', 'limit', 'range']) {
         b[m] = (...args) => { call.ops.push([m, ...args]); return b }
       }
       b.then = (resolve, reject) => Promise.resolve().then(() => handlers[table](call)).then(resolve, reject)
@@ -150,5 +151,31 @@ describe('readStudioAvailability', () => {
     expect((await readStudioAvailability(a, { locationId: 'L1', startDate: '2026-05-04', endDate: '2026-05-10' })).error).toBe(down)
     const b = fakeDb({ profile_locations: () => ({ data: links, error: null }), staff_unavailability: () => ({ data: null, error: down }) })
     expect((await readStudioAvailability(b, { locationId: 'L1', startDate: '2026-05-04', endDate: '2026-05-10' })).error).toBe(down)
+  })
+})
+
+describe('readKnownDatedKeys', () => {
+  it("reads the person's stored dated rules that started before today, on the given start dates, as content keys", async () => {
+    const db = fakeDb({
+      staff_unavailability: () => ({
+        data: [{ kind: 'dated', weekday: null, start_date: '2026-09-23', end_date: '2026-09-24', all_day: true, start_time: null, end_time: null, note: 'x' }],
+        error: null,
+      }),
+    })
+    const { keys, error } = await readKnownDatedKeys(db, 'p1', '2026-09-25', ['2026-09-23'])
+    expect(error).toBeNull()
+    expect([...keys]).toEqual([ruleKey({ kind: 'dated', start_date: '2026-09-23', end_date: '2026-09-24', all_day: true })])
+    const call = db.calls[0]
+    expect(call.ops).toContainEqual(['eq', 'profile_id', 'p1'])
+    expect(call.ops).toContainEqual(['eq', 'kind', 'dated'])
+    expect(call.ops).toContainEqual(['lt', 'start_date', '2026-09-25'])
+    expect(call.ops).toContainEqual(['in', 'start_date', ['2026-09-23']])
+  })
+  it('no start dates: no read; a failed read is an error, never "none known"', async () => {
+    const a = fakeDb({})
+    expect((await readKnownDatedKeys(a, 'p1', '2026-09-25', [])).keys.size).toBe(0)
+    expect(a.calls).toHaveLength(0)
+    const b = fakeDb({ staff_unavailability: () => ({ data: null, error: { message: 'down' } }) })
+    expect(await readKnownDatedKeys(b, 'p1', '2026-09-25', ['2026-09-23'])).toEqual({ keys: null, error: { message: 'down' } })
   })
 })

@@ -137,8 +137,24 @@ export function splitRules(rows) {
   })
 }
 
-/** What is wrong with one canonical rule, in the coach's words; null if nothing. */
-export function ruleProblem(rule, { todayIso = null } = {}) {
+/**
+ * A rule's CONTENT identity (kind, day or dates, window; not the note), for
+ * matching what a client sends back against what is stored.
+ */
+export function ruleKey(rule) {
+  const r = normaliseRule(rule)
+  return r ? windowKey(r) : ''
+}
+
+/**
+ * What is wrong with one canonical rule, in the coach's words; null if nothing.
+ * `knownKeys` (optional): ruleKey()s of the person's STORED dated rules that
+ * started before today. A dated rule that ended before today is refused
+ * ('That date has passed') unless it is one of them: then it is history the
+ * client merely sent back (a tab left open over midnight), which is no
+ * problem, and the caller drops it with withoutEnded() before saving.
+ */
+export function ruleProblem(rule, { todayIso = null, knownKeys = null } = {}) {
   if (!rule) return 'This entry could not be read'
   if (rule.kind === 'weekly') {
     if (!AVAILABILITY_WEEKDAYS.includes(rule.weekday)) return 'Choose a day of the week'
@@ -149,7 +165,7 @@ export function ruleProblem(rule, { todayIso = null } = {}) {
     if (end < start) return 'The last day is before the first day'
     if (end - start + 1 > AVAILABILITY_LIMITS.spanDays) return 'Up to a year at a time'
     const today = dayIndex(todayIso)
-    if (today !== null && end < today) return 'That date has passed'
+    if (today !== null && end < today) return knownKeys?.has(windowKey(rule)) ? null : 'That date has passed'
     if (today !== null && start > today + AVAILABILITY_LIMITS.aheadDays) return 'Up to two years ahead'
   }
   if (!rule.all_day) {
@@ -160,6 +176,18 @@ export function ruleProblem(rule, { todayIso = null } = {}) {
   }
   if (rule.note && rule.note.length > AVAILABILITY_LIMITS.noteChars) return `Keep the note to ${AVAILABILITY_LIMITS.noteChars} characters`
   return null
+}
+
+/** { weekly, dated } without the dated rules that ended before todayIso (history is never re-saved). */
+export function withoutEnded(input, todayIso) {
+  const today = dayIndex(todayIso)
+  return {
+    weekly: input.weekly,
+    dated: input.dated.filter((r) => {
+      const end = dayIndex(r.end_date)
+      return today === null || end === null || end >= today
+    }),
+  }
 }
 
 /** Every problem with a canonical { weekly, dated }: [{ path, message }] (validateBody's issue shape). */
