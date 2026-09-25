@@ -14,6 +14,7 @@ import {
   newRow, rowToRule, datesLabel, calendarRange, rangeFromCalendar,
   hasEnded, startedRules, rowProblem, formProblems, canAdd, duplicateKeys, startedNote, rowSummary,
   buildSaveBody, isDirty,
+  loadOutcome, saveOutcome, closeAction, saveButtonState, impersonationLine,
 } from './availability-form'
 
 const TODAY = '2026-09-25' // a Friday
@@ -390,5 +391,114 @@ describe('isDirty', () => {
     expect(isDirty(base, [...base, { ...base[0], key: 'copy' }], { todayIso: TODAY })).toBe(false)
     const withOld = [...base, { ...base[2], key: 'old', start_date: '2026-09-01', end_date: '2026-09-24' }]
     expect(isDirty(withOld, base, { todayIso: TODAY })).toBe(false)
+  })
+})
+
+describe('loadOutcome', () => {
+  it('a readable { weekly, dated } is a load', () => {
+    expect(loadOutcome({ success: true, data: { weekly: [], dated: [] } })).toEqual({ ok: true, data: { weekly: [], dated: [] } })
+  })
+
+  it('anything else is a failed load, which can never be saved over', () => {
+    const failed = { ok: false, message: `${AVAILABILITY_COPY.loadFailed} Try again in a moment.`, canRetry: true }
+    for (const res of [{ success: true, data: [] }, { success: true, data: { weekly: [] } }, { success: true }, undefined,
+      { success: false, status: 500, error: 'Could not load your availability' }]) {
+      expect(loadOutcome(res)).toEqual(failed)
+    }
+  })
+
+  it('no answer asks for a connection; a 401 offers no retry (a dead session fails the same way)', () => {
+    expect(loadOutcome({ success: false, transport: true, error: 'Network error: offline' }))
+      .toEqual({ ok: false, message: `${AVAILABILITY_COPY.loadFailed} Check your connection and try again.`, canRetry: true })
+    expect(loadOutcome({ success: false, status: 401, error: 'Unauthorized' }))
+      .toEqual({ ok: false, message: AVAILABILITY_COPY.loadSignedOut, canRetry: false })
+  })
+})
+
+describe('saveOutcome', () => {
+  const PATHS = { 'weekly.0': ['r1', 'copy'], 'weekly.1': ['r2'], 'dated.0': ['r3'], 'dated.1': ['r4'] }
+
+  it('saved: green, "Saved", and the rules the server now holds', () => {
+    const data = { changed: true, weekly: [SERVER.weekly[0]], dated: [] }
+    expect(saveOutcome({ success: true, data }, { keysByPath: PATHS })).toEqual({
+      tone: 'ok', message: AVAILABILITY_COPY.saved, saved: { weekly: [SERVER.weekly[0]], dated: [] }, rowErrors: {},
+    })
+  })
+
+  it('saved with nothing changed says nobody was notified', () => {
+    expect(saveOutcome({ success: true, data: { changed: false, weekly: [], dated: [] } }).message).toBe(AVAILABILITY_COPY.unchanged)
+  })
+
+  it('saved, but an answer the phone cannot read: saved is null, so the screen reads the rules back', () => {
+    expect(saveOutcome({ success: true, data: { changed: true } })).toMatchObject({ tone: 'ok', message: AVAILABILITY_COPY.saved, saved: null })
+  })
+
+  it('no answer (offline, or an edge page after the PUT may have landed) is amber: edits kept, saving again is safe', () => {
+    const offline = { tone: 'warn', message: AVAILABILITY_COPY.noAnswer, saved: null, rowErrors: {} }
+    expect(saveOutcome({ success: false, transport: true, error: 'Network error: x' })).toEqual(offline)
+    expect(saveOutcome({ success: false, transport: true, status: 504, error: 'Non-JSON response (504)' })).toEqual(offline)
+  })
+
+  it('401: red, the sign-in has expired', () => {
+    expect(saveOutcome({ success: false, status: 401, error: 'Unauthorized' }))
+      .toEqual({ tone: 'error', message: AVAILABILITY_COPY.sessionEnded, saved: null, rowErrors: {} })
+  })
+
+  it("the server's issues land under the cards that made them (a merged copy: under both)", () => {
+    const res = {
+      success: false, status: 400, error: 'Invalid availability',
+      issues: [{ path: 'dated.1', message: 'Start today or later' }, { path: 'weekly.0.note', message: 'Too long' }],
+    }
+    expect(saveOutcome(res, { keysByPath: PATHS })).toEqual({
+      tone: 'error', message: AVAILABILITY_COPY.invalid, saved: null,
+      rowErrors: { r4: 'Start today or later', r1: 'Too long', copy: 'Too long' },
+    })
+  })
+
+  it('dated.10 is not dated.1; an issue with no card joins the banner', () => {
+    const out = saveOutcome({ success: false, status: 400, issues: [{ path: 'dated.10', message: 'Use a real date' }] }, { keysByPath: PATHS })
+    expect(out.rowErrors).toEqual({})
+    expect(out.message).toBe(`${AVAILABILITY_COPY.failed} Use a real date. ${AVAILABILITY_COPY.keptHere}`)
+  })
+
+  it('list-level issues join the banner beside the marked cards', () => {
+    const out = saveOutcome({
+      success: false, status: 400, error: 'Invalid availability',
+      issues: [{ path: 'dated.0', message: 'Use a real date' }, { path: 'weekly', message: 'Up to 28 weekly entries' }],
+    }, { keysByPath: PATHS })
+    expect(out.rowErrors).toEqual({ r3: 'Use a real date' })
+    expect(out.message).toBe(`${AVAILABILITY_COPY.invalid} Up to 28 weekly entries.`)
+  })
+
+  it("with no issues, the server's own words", () => {
+    expect(saveOutcome({ success: false, status: 400, error: 'a new date cannot start before today' }).message)
+      .toBe(`${AVAILABILITY_COPY.failed} A new date cannot start before today. ${AVAILABILITY_COPY.keptHere}`)
+    expect(saveOutcome({ success: false, status: 500, error: 'Could not save your availability' }).message)
+      .toBe(`${AVAILABILITY_COPY.failed} Could not save your availability. ${AVAILABILITY_COPY.keptHere}`)
+    expect(saveOutcome(undefined).message).toBe(`${AVAILABILITY_COPY.failed} Something went wrong. ${AVAILABILITY_COPY.keptHere}`)
+  })
+})
+
+describe('leaving and saving', () => {
+  it('closeAction: mid-save stays, unsaved edits ask first, otherwise go', () => {
+    expect(closeAction({ saving: true, dirty: true })).toBe('block')
+    expect(closeAction({ saving: true, dirty: false })).toBe('block')
+    expect(closeAction({ dirty: true })).toBe('confirm')
+    expect(closeAction({})).toBe('close')
+  })
+
+  it('saveButtonState: only after a successful load, only with something to save, never twice', () => {
+    expect(saveButtonState({ loaded: false, dirty: true })).toEqual({ disabled: true, busy: false })
+    expect(saveButtonState({ loaded: true, dirty: false })).toEqual({ disabled: true, busy: false })
+    expect(saveButtonState({ loaded: true, dirty: true })).toEqual({ disabled: false, busy: false })
+    expect(saveButtonState({ loaded: true, dirty: true, saving: true })).toEqual({ disabled: true, busy: true })
+  })
+
+  it('impersonationLine: says whose availability a master is editing', () => {
+    expect(impersonationLine(null, { full_name: 'Coach A' })).toBeNull()
+    expect(impersonationLine({ masterName: 'Master M' }, { full_name: 'Coach A' }))
+      .toBe('You are viewing as Coach A. Saving changes their availability, and their managers are told.')
+    expect(impersonationLine({ masterName: 'Master M' }, null))
+      .toBe('You are viewing as this person. Saving changes their availability, and their managers are told.')
   })
 })

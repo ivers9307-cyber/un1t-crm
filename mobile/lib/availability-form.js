@@ -368,3 +368,92 @@ export function isDirty(baselineRows, rows, { todayIso = null } = {}) {
   if (!baselineRows) return false
   return !sameAvailability(buildSaveBody(baselineRows, { todayIso }).canonical, buildSaveBody(rows, { todayIso }).canonical)
 }
+
+// 'a new date cannot start before today' → 'A new date cannot start before today.'
+function sentence(text) {
+  const t = String(text ?? '').trim()
+  if (!t) return ''
+  const s = t[0].toUpperCase() + t.slice(1)
+  return /[.!?]$/.test(s) ? s : `${s}.`
+}
+
+// 'dated.3' (the shared rules) or 'weekly.0.note' (the route's shape check).
+const ISSUE_PATH = /^(weekly|dated)\.(\d+)(?:\.|$)/
+
+/**
+ * The GET's answer → { ok: true, data } or { ok: false, message, canRetry }.
+ * Anything but a readable { weekly, dated } is a failed load, and a failed
+ * load can never be saved over (saveButtonState needs `loaded`).
+ */
+export function loadOutcome(res) {
+  const d = res?.data
+  if (res?.success && d && Array.isArray(d.weekly) && Array.isArray(d.dated)) {
+    return { ok: true, data: { weekly: d.weekly, dated: d.dated } }
+  }
+  if (res?.status === 401) return { ok: false, message: AVAILABILITY_COPY.loadSignedOut, canRetry: false }
+  const hint = res?.transport ? 'Check your connection and try again.' : 'Try again in a moment.'
+  return { ok: false, message: `${AVAILABILITY_COPY.loadFailed} ${hint}`, canRetry: true }
+}
+
+/**
+ * The PUT's answer → what the screen does and says.
+ *   tone       'ok' (green) | 'warn' (amber: it may or may not have saved) | 'error' (red)
+ *   saved      the server's { weekly, dated } after the save (the form becomes
+ *              it), or null (on 'ok': read the rules back)
+ *   rowErrors  { [cardKey]: message } from the server's issues
+ * Every failure keeps the coach's edits: the screen replaces them only on 'ok'.
+ */
+export function saveOutcome(res, { keysByPath = {} } = {}) {
+  if (res?.success) {
+    const d = res.data
+    const readable = !!d && Array.isArray(d.weekly) && Array.isArray(d.dated)
+    return {
+      tone: 'ok',
+      message: d?.changed === false ? AVAILABILITY_COPY.unchanged : AVAILABILITY_COPY.saved,
+      saved: readable ? { weekly: d.weekly, dated: d.dated } : null,
+      rowErrors: {},
+    }
+  }
+  // transport: api() minted it with no server answer: no connection, OR a
+  // non-JSON edge page after the request may already have landed. The PUT
+  // replaces, so it is idempotent: "saving again is safe" holds either way.
+  if (res?.transport) return { tone: 'warn', message: AVAILABILITY_COPY.noAnswer, saved: null, rowErrors: {} }
+  if (res?.status === 401) return { tone: 'error', message: AVAILABILITY_COPY.sessionEnded, saved: null, rowErrors: {} }
+
+  const rowErrors = {}
+  const loose = []
+  for (const issue of Array.isArray(res?.issues) ? res.issues : []) {
+    const m = String(issue?.path ?? '').match(ISSUE_PATH)
+    const keys = m ? keysByPath[`${m[1]}.${m[2]}`] : null
+    if (keys && keys.length) {
+      for (const k of keys) {
+        if (!rowErrors[k]) rowErrors[k] = String(issue.message || 'Check this entry')
+      }
+    } else if (issue?.message) {
+      loose.push(sentence(issue.message))
+    }
+  }
+  if (Object.keys(rowErrors).length) {
+    return { tone: 'error', message: [AVAILABILITY_COPY.invalid, ...loose].join(' '), saved: null, rowErrors }
+  }
+  const reason = loose.length ? loose.join(' ') : sentence(res?.error || 'Something went wrong')
+  return { tone: 'error', message: `${AVAILABILITY_COPY.failed} ${reason} ${AVAILABILITY_COPY.keptHere}`, saved: null, rowErrors }
+}
+
+/** Leaving the screen: mid-save stays, unsaved edits ask first, otherwise go (mail-compose's rule). */
+export function closeAction({ saving = false, dirty = false } = {}) {
+  if (saving) return 'block'
+  return dirty ? 'confirm' : 'close'
+}
+
+/** The header Save: only after a successful load, only with something to save, never twice. */
+export function saveButtonState({ loaded = false, saving = false, dirty = false } = {}) {
+  return { disabled: !loaded || saving || !dirty, busy: saving }
+}
+
+/** A master under "View as user" is editing someone else's availability: say whose. */
+export function impersonationLine(impersonatingFrom, profile) {
+  if (!impersonatingFrom) return null
+  const name = profile?.full_name || 'this person'
+  return `You are viewing as ${name}. Saving changes their availability, and their managers are told.`
+}
