@@ -139,6 +139,17 @@ describe('sendPushOnce — fail-open + release semantics', () => {
     expect(releasedCalls).toEqual([{ eventKey: 'k', ids: ['u1'] }])
     expect(res.deduped).toBe(0)
     expect(res.sent).toBe(0)
+    // QUALS.1 review — a throw is a FAILED send, not a quiet "no device"
+    // (sent 0, failed 0), which callers read as settled and never retry.
+    expect(res.failed).toBe(1)
+  })
+
+  it('a throw counts every claimed recipient as failed (deduped ones are not)', async () => {
+    existingClaims.add('k|u1')
+    notifyUsers.mockRejectedValue(new Error('boom'))
+    const res = await notifyUsersOnce(fakeDb, 'k', ['u1', 'u2', 'u3'], { title: 't' })
+    expect(res).toMatchObject({ sent: 0, failed: 2, deduped: 1 })
+    expect(res.emailed || 0).toBe(0)
   })
 
   it('keeps claims on partial delivery (re-send would double-notify)', async () => {

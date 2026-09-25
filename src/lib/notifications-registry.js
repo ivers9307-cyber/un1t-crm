@@ -267,6 +267,18 @@ export const NOTIFICATION_REGISTRY = Object.freeze([
     // An FYI with nothing to decide, and the roster shows it: no email.
     fallbackEmail: false,
   },
+  {
+    category: 'qualification_expiry',
+    label: 'Qualification expiry',
+    description: 'At most once a week, and only when something is due: the qualifications (first aid, insurance, vetting and any others your organisation tracks) of the people at the studios you own that have expired or expire in the next 30 days. Sent between 7am and 10pm studio time.',
+    trigger: { kind: 'cron', source: '/api/cron/contract-reminders (daily 08:00 UTC) -> src/lib/qualification-digest.js' },
+    recipients: { kind: 'roles_at_location', detail: 'Owners (and masters linked to the studio); the list covers the people at the studios where they are owner, never another organisation' },
+    configurable: { leadTimes: false, roles: false },
+    // The push can only say how many; the fallback email carries the list,
+    // and an owner without the app would otherwise never hear at all.
+    fallbackEmail: true,
+    emailSubject: 'Qualifications to renew',
+  },
 ])
 
 /**

@@ -35,6 +35,8 @@ import { mondayOf } from './payroll'
 import { addDaysISO } from './dublin-time'
 import { logWarn } from './log'
 import { buildCandidates } from '@shared/candidates'
+import { attachQualificationGaps } from '@shared/qualifications'
+import { readBlockQualificationFacts } from './qualifications-server'
 import { isWorkingTimeCovered } from '@shared/working-time'
 
 const PAGE = 1000
@@ -161,7 +163,7 @@ export async function loadBlockCandidates(db, { block, audience = 'manager', wit
 
     // Each read settles on its own (settle): one that throws clears only its
     // own checked flag, and never costs the others their answer.
-    const [shiftRead, leaveRead, availRead, contractRead] = await Promise.all([
+    const [shiftRead, leaveRead, availRead, contractRead, qualRead] = await Promise.all([
       // A coach is never told of a draft (ROSTER-FIX.1 D1): published rosters
       // only for the colleague audience. A manager counts drafts, as WORKTIME.
       settle(() => readOrgShiftRows(db, {
@@ -171,6 +173,8 @@ export async function loadBlockCandidates(db, { block, audience = 'manager', wit
       manager ? settle(() => readApprovedLeaveOn(db, ids, block.block_date)) : null,
       manager ? settle(() => readStudioAvailability(db, { locationId: block.location_id, startDate: block.block_date, endDate: block.block_date })) : null,
       contract ? settle(() => readContractedHours(db, employees)) : null,
+      // QUALS.1 — manager only: a colleague never learns a colleague's qualifications.
+      manager && block.template_id ? settle(() => readBlockQualificationFacts(db, { templateId: block.template_id, profileIds: ids })) : null,
     ])
 
     const note = (facet, err) => {
@@ -195,7 +199,14 @@ export async function loadBlockCandidates(db, { block, audience = 'manager', wit
     const built = buildCandidates({
       block, members, shifts: shiftRead.error ? [] : shiftRead.shifts, leave, rules, contracts, checked, audience: who,
     })
-    return { ...built, candidates: contract ? built.candidates : withoutContract(built.candidates), checked, error: null }
+    // QUALS.1 — attach the gaps AFTER ranking: they badge, they never re-rank.
+    let candidates = contract ? built.candidates : withoutContract(built.candidates)
+    if (qualRead?.error) note('qualifications', qualRead.error)
+    else if (qualRead?.required?.length) {
+      checked.qualifications = true
+      candidates = attachQualificationGaps(candidates, { required: qualRead.required, records: qualRead.records, onISO: block.block_date })
+    }
+    return { ...built, candidates, checked, error: null }
   } catch (e) {
     return { error: { message: e?.message || 'candidates read threw' } }
   }

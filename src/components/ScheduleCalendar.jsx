@@ -1934,7 +1934,7 @@ function AssignCoachModal({
   // Failed and unrecognised read the same here: either way nothing was
   // checked, and the note must say so.
   const rankNote = ranked
-    ? candidatesUncheckedNote(ranked.checked)
+    ? candidatesUncheckedNote(ranked.checked, { withQualifications: true }) // QUALS.1: the web shows the badge
     : ranking.pending ? CANDIDATES_RANKING_NOTE : CANDIDATES_UNRANKED_NOTE
 
   function toggle(id) {

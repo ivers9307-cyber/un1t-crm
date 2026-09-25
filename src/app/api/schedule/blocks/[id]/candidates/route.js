@@ -44,7 +44,7 @@ export async function GET(request, props) {
   // Block lookup: also the studio-ownership gate.
   const { data: block, error: blockErr } = await db
     .from('shift_blocks')
-    .select('id, location_id, block_date, start_time, end_time, roster_id, rosters:roster_id(status), shift_templates(name, start_time, end_time), shift_assignments(profile_id, status)')
+    .select('id, location_id, template_id, block_date, start_time, end_time, roster_id, rosters:roster_id(status), shift_templates(name, start_time, end_time), shift_assignments(profile_id, status)')
     .eq('id', parsed.data)
     .maybeSingle()
   if (blockErr) return NextResponse.json({ success: false, error: blockErr.message }, { status: 500 })

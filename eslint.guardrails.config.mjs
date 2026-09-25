@@ -304,6 +304,12 @@ const config = [
       // exactly the shape that reads as handled and is not. Born clean, armed
       // on arrival.
       'src/lib/staff-calendar-feed-server.js',
+      // QUALS.1 — qualification records, the catalogue, template requirements
+      // and the digest. Born clean, armed on arrival.
+      'src/lib/qualifications-server.js',
+      'src/lib/qualification-digest.js',
+      'src/app/api/qualifications/**',
+      'src/app/api/schedule/template-qualifications/**',
       // SNAPSHOT.1 — the publish snapshot write (best-effort by contract, one
       // retry, logError) and the comparison route. Best-effort writes are
       // exactly the shape that reads as handled and is not. Born clean, armed
