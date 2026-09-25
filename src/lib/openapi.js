@@ -4425,6 +4425,34 @@ registry.registerPath({
 })
 
 registry.registerPath({
+  method: 'put',
+  path: '/api/schedule/blocks/{id}',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Edit one shift: times, minimum and maximum coaches, and the coach briefing (manager-only)',
+  description: "BLOCKEDIT.1. Every field optional; omitted = unchanged; briefing null or blank clears it (at most 500 characters; mig 629). Refuses: end not after start (400 end_not_after_start), minimum above maximum (400 min_above_max), a minimum on an admin shift (400 admin_has_no_minimum), a maximum below the live coaches already on it (409 below_assigned, unless allow_below_assigned: true, which saves with a warning), and a shift changed by someone else since it was read (409 block_changed). A coach's own start/end override equal to the shift's OLD time moves with it; any other override stays and is listed in kept_overrides with a warning. On a PUBLISHED roster the edit writes a change-log row, and each coach whose own hours moved gets a time_changed row; the */5 push cron tells them once, only inside staff quiet hours (07:00-22:00 at the studio). `notice.when` is 'shortly' or 'morning'. Nothing is logged or sent for a draft. Manager role AT the shift's studio; a shift outside the caller's studios is a 404.",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      start_time: z.string().optional(),
+      end_time: z.string().optional(),
+      min_coaches: z.number().int().optional(),
+      max_coaches: z.number().int().optional(),
+      briefing: z.string().nullable().optional(),
+      allow_below_assigned: z.boolean().optional(),
+    }) } } },
+  },
+  responses: {
+    200: { description: 'Saved (or `unchanged: true`); `notice`, `kept_overrides` and `warning` when they apply' },
+    400: { description: 'Validation error or a rule above', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: "Forbidden — needs a manager role at the shift's studio", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Shift not found (or the id is not UUID-shaped)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'below_assigned, or block_changed', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'The shift could not be read; retry', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
   method: 'post',
   path: '/api/schedule/shifts/copy-week',
   tags: ['Schedule'],

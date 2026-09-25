@@ -345,4 +345,15 @@ describe('getOpenApiSpec', () => {
     expect(s).toHaveProperty('WebhookToken')
     expect(s).toHaveProperty('BridgeAuth')
   })
+
+  it('documents PUT /api/schedule/blocks/{id} (BLOCKEDIT.1), its 400/409 codes and the briefing', () => {
+    const op = spec.paths['/api/schedule/blocks/{id}'].put
+    expect(op.tags).toContain('Schedule')
+    expect(op.security).toContainEqual({ CookieAuth: [] })
+    for (const code of ['200', '400', '403', '404', '409', '503']) expect(op.responses).toHaveProperty(code)
+    expect(op.description).toMatch(/briefing/)
+    expect(op.description).toMatch(/quiet hours/)
+    // The DELETE on the same path is still there.
+    expect(spec.paths['/api/schedule/blocks/{id}'].delete).toBeTruthy()
+  })
 })
