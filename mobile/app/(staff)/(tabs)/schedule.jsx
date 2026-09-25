@@ -42,6 +42,7 @@ import LeaveFloatingButtons from '../../../components/LeaveFloatingButtons'
 import ManageMode from '../../../components/schedule/ManageMode'
 // LEAVE.2 — one label per leave type (unpaid/other used to read "Time off").
 import { timeOffLeaveLabel } from 'shared/time-off'
+import { briefingOf } from 'shared/shift-briefing'
 
 // ROSTER-FIX.3 — MANAGER_ROLES comes from lib/schedule-manage, the module that
 // already owns canAdjustShiftTimes. It was duplicated here (a HOTFIX for
@@ -307,6 +308,14 @@ function ShiftRow({ shift, onPress, onLongPress }) {
       {shift.notes && (
         <Text className="text-xs text-un1t-subtle mt-1.5">{shift.notes}</Text>
       )}
+      {/* BLOCKEDIT.1 — the manager's note for the coaches on this shift
+          (GET /api/schedule/shifts carries it on every row). */}
+      {briefingOf(shift) ? (
+        <View className="flex-row items-start mt-1.5">
+          <Ionicons name="document-text-outline" size={13} color="#64748B" />
+          <Text className="text-xs text-un1t-text ml-1 flex-1">{briefingOf(shift)}</Text>
+        </View>
+      ) : null}
     </Pressable>
   )
 }
