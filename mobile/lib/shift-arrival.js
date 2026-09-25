@@ -40,10 +40,13 @@ const DATE = /^\d{4}-\d{2}-\d{2}$/
 /**
  * @param {object|null} shift  a GET /api/schedule/shifts row
  * @param {number} nowMs       Date.now() at render
- * @param {{ showAbsence?: boolean }} [opts]  showAbsence defaults to SHOW_ABSENCE_LINES
+ * @param {{ showAbsence?: boolean, stale?: boolean }} [opts]
+ *   showAbsence defaults to SHOW_ABSENCE_LINES. stale = the rows on screen are
+ *   the last good fetch kept through a failed refresh (TRANSPORT_ERROR): a
+ *   stamp may have landed since, so no absence is claimed.
  * @returns {{ kind: 'arrived'|'on_site'|'not_yet'|'not_recorded', text: string } | null}
  */
-export function arrivalLine(shift, nowMs, { showAbsence = SHOW_ABSENCE_LINES } = {}) {
+export function arrivalLine(shift, nowMs, { showAbsence = SHOW_ABSENCE_LINES, stale = false } = {}) {
   const a = shift?.arrival
   if (!a || typeof a !== 'object') return null
 
@@ -58,13 +61,19 @@ export function arrivalLine(shift, nowMs, { showAbsence = SHOW_ABSENCE_LINES } =
 
   // No stamp: say so only when absence lines are on, where arrivals are really
   // tracked, on a published shift, once it has started.
-  if (showAbsence !== true) return null
+  if (showAbsence !== true || stale === true) return null
   if (a.tracked !== true || shift.published === false) return null
   const starts = Date.parse(a.starts_at ?? '')
   const ends = Date.parse(a.ends_at ?? '')
-  if (!Number.isFinite(starts) || !Number.isFinite(ends) || !Number.isFinite(nowMs)) return null
-  if (nowMs < starts) return null
-  if (nowMs < ends) return { kind: 'not_yet', text: ARRIVAL_WORDS.notYet }
+  // Review 2 — judged at the EARLIER of the phone's clock and the server's
+  // clock at the read (as_of): a phone set ahead, or rows fetched a while ago,
+  // never make a shift look further on than the stamps were read. No server
+  // clock, no absence.
+  const asOf = Date.parse(a.as_of ?? '')
+  if (!Number.isFinite(starts) || !Number.isFinite(ends) || !Number.isFinite(nowMs) || !Number.isFinite(asOf)) return null
+  const judgedAt = Math.min(nowMs, asOf)
+  if (judgedAt < starts) return null
+  if (judgedAt < ends) return { kind: 'not_yet', text: ARRIVAL_WORDS.notYet }
   return { kind: 'not_recorded', text: ARRIVAL_WORDS.notRecorded }
 }
 

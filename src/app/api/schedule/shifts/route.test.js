@@ -158,7 +158,7 @@ describe('GET /api/schedule/shifts — a date the calendar does not have', () =>
 describe('GET /api/schedule/shifts — own arrival (ARRIVALSHOW.1)', () => {
   const coach = { id: 'c', role: 'staff', profileRole: 'staff', rolesByLocation: { 'loc-1': 'staff' }, locations: [{ id: 'loc-1' }] }
   const shiftRow = (id, profileId) => ({
-    id, profile_id: profileId, location_id: 'loc-1', shift_date: '2026-09-24',
+    id, profile_id: profileId, location_id: 'loc-1', shift_date: '2026-10-01',
     block_start_time: '07:00:00', block_end_time: '08:00:00', start_time_override: null, end_time_override: null,
   })
 
@@ -174,14 +174,15 @@ describe('GET /api/schedule/shifts — own arrival (ARRIVALSHOW.1)', () => {
     fetchApiShiftRows.mockResolvedValueOnce({ rows: [shiftRow('a1', 'c'), shiftRow('a2', 'other')], error: null })
     fetchOwnArrivalFacts.mockResolvedValueOnce({
       stamps: new Map([
-        ['a1', { id: 'a1', arrived_at: '2026-09-24T05:52:00.000Z', arrival_source: 'geofence' }],
-        ['a2', { id: 'a2', arrived_at: '2026-09-24T05:40:00.000Z', arrival_source: 'geofence' }],
+        ['a1', { id: 'a1', arrived_at: '2026-10-01T05:52:00.000Z', arrival_source: 'geofence' }],
+        ['a2', { id: 'a2', arrived_at: '2026-10-01T05:40:00.000Z', arrival_source: 'geofence' }],
       ]),
       timezones: new Map([['loc-1', 'Europe/Dublin']]),
       tracked: new Map([['loc-1', true]]),
     })
     const body = await (await GET(req())).json()
-    expect(body.data[0].arrival).toMatchObject({ at: '2026-09-24T05:52:00.000Z', at_local: '06:52', carried: false, tracked: true })
+    expect(body.data[0].arrival).toMatchObject({ at: '2026-10-01T05:52:00.000Z', at_local: '06:52', carried: false, tracked: true })
+    expect(Number.isFinite(Date.parse(body.data[0].arrival.as_of))).toBe(true)
     expect(body.data[1].arrival).toBeNull()
   })
 

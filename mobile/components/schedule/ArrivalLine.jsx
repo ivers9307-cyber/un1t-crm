@@ -16,8 +16,8 @@ const TONE = {
   not_recorded: { icon: 'remove-circle-outline', color: '#64748B', text: 'text-un1t-subtle' },
 }
 
-export default function ArrivalLine({ shift, nowMs, compact = false }) {
-  const line = arrivalLine(shift, nowMs)
+export default function ArrivalLine({ shift, nowMs, stale = false, compact = false }) {
+  const line = arrivalLine(shift, nowMs, { stale })
   if (!line) return null
   const tone = TONE[line.kind]
   return (

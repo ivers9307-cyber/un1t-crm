@@ -2,13 +2,13 @@
 //
 // ARRIVALSHOW.1 — what "arrived" means on a coach's own shift, as the phone
 // is told it. Every row in the table in the plan
-// (docs/superpowers/plans/2026-09-25-scheduler-wave2-3/34-ARRIVALSHOW.1.md)
+// (docs/superpowers/plans/2026-10-02-scheduler-wave2-3/34-ARRIVALSHOW.1.md)
 // is a case here. Fixture names are made up (the repo is public).
 
 import { describe, it, expect, vi } from 'vitest'
 
 vi.mock('./log', () => ({ logWarn: vi.fn() }))
-const { annotateOwnArrivals, ownLocationIds } = await import('./shift-arrivals')
+const { annotateOwnArrivals, ownLocationIds, ARRIVAL_TRACKING_FROM } = await import('./shift-arrivals')
 
 const L1 = 'loc-still'
 const L2 = 'loc-hatch'
@@ -20,7 +20,7 @@ const row = (id, over = {}) => ({
   id,
   profile_id: ME,
   location_id: L1,
-  shift_date: '2026-09-24',
+  shift_date: '2026-10-01',
   block_start_time: '07:00:00',
   block_end_time: '08:00:00',
   start_time_override: null,
@@ -34,32 +34,35 @@ const facts = (stamps, over = {}) => ({
   tracked: new Map([[L1, true], [L2, true]]),
   ...over,
 })
-const arrivalOf = (rows, f, id) => annotateOwnArrivals(rows, f, ME).find((r) => r.id === id).arrival
+// The server's clock at the read (review 2: the phone judges absence against it).
+const NOW = new Date('2026-10-01T12:00:00.000Z')
+const arrivalOf = (rows, f, id) => annotateOwnArrivals(rows, f, ME, { now: NOW }).find((r) => r.id === id).arrival
 
 describe('annotateOwnArrivals — a stamp on this shift', () => {
   it('reads as arrived, with the studio-local time and the effective window (BST)', () => {
-    expect(arrivalOf([row('a1')], facts([stamp('a1', '2026-09-24T05:52:00.000Z')]), 'a1')).toEqual({
-      at: '2026-09-24T05:52:00.000Z',
+    expect(arrivalOf([row('a1')], facts([stamp('a1', '2026-10-01T05:52:00.000Z')]), 'a1')).toEqual({
+      at: '2026-10-01T05:52:00.000Z',
       at_local: '06:52',
-      at_local_date: '2026-09-24',
+      at_local_date: '2026-10-01',
       source: 'geofence',
       carried: false,
       tracked: true,
-      starts_at: '2026-09-24T06:00:00.000Z',
-      ends_at: '2026-09-24T07:00:00.000Z',
+      starts_at: '2026-10-01T06:00:00.000Z',
+      ends_at: '2026-10-01T07:00:00.000Z',
+      as_of: '2026-10-01T12:00:00.000Z',
     })
   })
 
   it('an arrival before midnight for a 00:30 shift keeps its own local date', () => {
-    const r = row('a1', { shift_date: '2026-09-25', block_start_time: '00:30:00', block_end_time: '01:30:00' })
-    const a = arrivalOf([r], facts([stamp('a1', '2026-09-24T22:50:00.000Z')]), 'a1')
+    const r = row('a1', { shift_date: '2026-10-02', block_start_time: '00:30:00', block_end_time: '01:30:00' })
+    const a = arrivalOf([r], facts([stamp('a1', '2026-10-01T22:50:00.000Z')]), 'a1')
     expect(a.at_local).toBe('23:50')
-    expect(a.at_local_date).toBe('2026-09-24')
+    expect(a.at_local_date).toBe('2026-10-01')
   })
 
   it('a stamp is shown even where arrivals are no longer tracked (exempted later)', () => {
-    const a = arrivalOf([row('a1')], facts([stamp('a1', '2026-09-24T05:52:00.000Z')], { tracked: new Map([[L1, false]]) }), 'a1')
-    expect(a.at).toBe('2026-09-24T05:52:00.000Z')
+    const a = arrivalOf([row('a1')], facts([stamp('a1', '2026-10-01T05:52:00.000Z')], { tracked: new Map([[L1, false]]) }), 'a1')
+    expect(a.at).toBe('2026-10-01T05:52:00.000Z')
     expect(a.tracked).toBe(false)
   })
 })
@@ -67,24 +70,24 @@ describe('annotateOwnArrivals — a stamp on this shift', () => {
 describe('annotateOwnArrivals — on site from an earlier shift (the report rule, D2)', () => {
   it('a back-to-back shift within 60 minutes of the earlier BLOCK end is on site', () => {
     const rows = [row('a1'), row('a2', { block_start_time: '08:30:00', block_end_time: '09:30:00' })]
-    const a = arrivalOf(rows, facts([stamp('a1', '2026-09-24T05:52:00.000Z')]), 'a2')
-    expect(a).toMatchObject({ at: '2026-09-24T05:52:00.000Z', at_local: '06:52', carried: true, source: null })
+    const a = arrivalOf(rows, facts([stamp('a1', '2026-10-01T05:52:00.000Z')]), 'a2')
+    expect(a).toMatchObject({ at: '2026-10-01T05:52:00.000Z', at_local: '06:52', carried: true, source: null })
   })
 
   it('61 minutes after is not on site', () => {
     const rows = [row('a1'), row('a2', { block_start_time: '09:01:00', block_end_time: '10:00:00' })]
-    const a = arrivalOf(rows, facts([stamp('a1', '2026-09-24T05:52:00.000Z')]), 'a2')
+    const a = arrivalOf(rows, facts([stamp('a1', '2026-10-01T05:52:00.000Z')]), 'a2')
     expect(a).toMatchObject({ at: null, at_local: null, carried: false })
   })
 
   it('another studio the same day is not on site', () => {
     const rows = [row('a1'), row('a2', { location_id: L2, block_start_time: '08:30:00', block_end_time: '09:30:00' })]
-    expect(arrivalOf(rows, facts([stamp('a1', '2026-09-24T05:52:00.000Z')]), 'a2').carried).toBe(false)
+    expect(arrivalOf(rows, facts([stamp('a1', '2026-10-01T05:52:00.000Z')]), 'a2').carried).toBe(false)
   })
 
   it('another day is not on site', () => {
-    const rows = [row('a1'), row('a2', { shift_date: '2026-09-25' })]
-    expect(arrivalOf(rows, facts([stamp('a1', '2026-09-24T05:52:00.000Z')]), 'a2').carried).toBe(false)
+    const rows = [row('a1'), row('a2', { shift_date: '2026-10-02' })]
+    expect(arrivalOf(rows, facts([stamp('a1', '2026-10-01T05:52:00.000Z')]), 'a2').carried).toBe(false)
   })
 
   it('a carry chains across three back-to-back shifts', () => {
@@ -93,14 +96,14 @@ describe('annotateOwnArrivals — on site from an earlier shift (the report rule
       row('a2', { block_start_time: '08:00:00', block_end_time: '09:00:00' }),
       row('a3', { block_start_time: '09:30:00', block_end_time: '10:30:00' }),
     ]
-    const out = annotateOwnArrivals(rows, facts([stamp('a1', '2026-09-24T05:52:00.000Z')]), ME)
+    const out = annotateOwnArrivals(rows, facts([stamp('a1', '2026-10-01T05:52:00.000Z')]), ME)
     expect(out.map((r) => r.arrival.carried)).toEqual([false, true, true])
     expect(out[2].arrival.at_local).toBe('06:52')
   })
 
   it('order in the payload does not matter', () => {
     const rows = [row('a2', { block_start_time: '08:30:00', block_end_time: '09:30:00' }), row('a1')]
-    const out = annotateOwnArrivals(rows, facts([stamp('a1', '2026-09-24T05:52:00.000Z')]), ME)
+    const out = annotateOwnArrivals(rows, facts([stamp('a1', '2026-10-01T05:52:00.000Z')]), ME)
     expect(out.map((r) => r.id)).toEqual(['a2', 'a1'])
     expect(out[0].arrival.carried).toBe(true)
   })
@@ -109,21 +112,21 @@ describe('annotateOwnArrivals — on site from an earlier shift (the report rule
 describe('annotateOwnArrivals — the double-stamp shape (D3)', () => {
   it('the same instant on two shifts reads the second as on site, not a second arrival', () => {
     const rows = [row('a1'), row('a2', { block_start_time: '07:30:00', block_end_time: '08:30:00' })]
-    const f = facts([stamp('a1', '2026-09-24T05:52:00.000Z'), stamp('a2', '2026-09-24T05:52:00.000Z')])
+    const f = facts([stamp('a1', '2026-10-01T05:52:00.000Z'), stamp('a2', '2026-10-01T05:52:00.000Z')])
     const out = annotateOwnArrivals(rows, f, ME)
     expect(out[0].arrival.carried).toBe(false)
-    expect(out[1].arrival).toMatchObject({ at: '2026-09-24T05:52:00.000Z', carried: true })
+    expect(out[1].arrival).toMatchObject({ at: '2026-10-01T05:52:00.000Z', carried: true })
   })
 
   it('two different instants are two arrivals', () => {
     const rows = [row('a1'), row('a2', { block_start_time: '12:00:00', block_end_time: '13:00:00' })]
-    const f = facts([stamp('a1', '2026-09-24T05:52:00.000Z'), stamp('a2', '2026-09-24T10:40:00.000Z')])
+    const f = facts([stamp('a1', '2026-10-01T05:52:00.000Z'), stamp('a2', '2026-10-01T10:40:00.000Z')])
     expect(annotateOwnArrivals(rows, f, ME).map((r) => r.arrival.carried)).toEqual([false, false])
   })
 
   it('the same instant at two different studios is not folded', () => {
     const rows = [row('a1'), row('a2', { location_id: L2, block_start_time: '07:30:00', block_end_time: '08:30:00' })]
-    const f = facts([stamp('a1', '2026-09-24T05:52:00.000Z'), stamp('a2', '2026-09-24T05:52:00.000Z')])
+    const f = facts([stamp('a1', '2026-10-01T05:52:00.000Z'), stamp('a2', '2026-10-01T05:52:00.000Z')])
     expect(annotateOwnArrivals(rows, f, ME)[1].arrival.carried).toBe(false)
   })
 })
@@ -132,18 +135,19 @@ describe('annotateOwnArrivals — the window the absence line is judged on (D5)'
   it('no stamp: the window is still sent, for the phone to judge against now', () => {
     expect(arrivalOf([row('a1')], facts([]), 'a1')).toEqual({
       at: null, at_local: null, at_local_date: null, source: null, carried: false, tracked: true,
-      starts_at: '2026-09-24T06:00:00.000Z', ends_at: '2026-09-24T07:00:00.000Z',
+      starts_at: '2026-10-01T06:00:00.000Z', ends_at: '2026-10-01T07:00:00.000Z',
+      as_of: '2026-10-01T12:00:00.000Z',
     })
   })
 
   it('an override moves the window; the override is never an arrival', () => {
     const r = row('a1', { block_start_time: '07:00:00', block_end_time: '10:00:00', start_time_override: '08:00:00' })
-    expect(arrivalOf([r], facts([]), 'a1')).toMatchObject({ at: null, starts_at: '2026-09-24T07:00:00.000Z', ends_at: '2026-09-24T09:00:00.000Z' })
+    expect(arrivalOf([r], facts([]), 'a1')).toMatchObject({ at: null, starts_at: '2026-10-01T07:00:00.000Z', ends_at: '2026-10-01T09:00:00.000Z' })
   })
 
   it('an override ending after midnight wraps to the next day', () => {
     const r = row('a1', { start_time_override: '22:00:00', end_time_override: '01:00:00' })
-    expect(arrivalOf([r], facts([]), 'a1')).toMatchObject({ starts_at: '2026-09-24T21:00:00.000Z', ends_at: '2026-09-25T00:00:00.000Z' })
+    expect(arrivalOf([r], facts([]), 'a1')).toMatchObject({ starts_at: '2026-10-01T21:00:00.000Z', ends_at: '2026-10-02T00:00:00.000Z' })
   })
 
   it('winter time (GMT)', () => {
@@ -162,7 +166,7 @@ describe('annotateOwnArrivals — the window the absence line is judged on (D5)'
   })
 
   it('an unknown studio timezone falls back to Dublin', () => {
-    expect(arrivalOf([row('a1')], facts([], { timezones: new Map() }), 'a1').starts_at).toBe('2026-09-24T06:00:00.000Z')
+    expect(arrivalOf([row('a1')], facts([], { timezones: new Map() }), 'a1').starts_at).toBe('2026-10-01T06:00:00.000Z')
   })
 })
 
@@ -174,31 +178,63 @@ describe('annotateOwnArrivals — tracking (D8)', () => {
     expect(arrivalOf([row('a1')], facts([], { tracked: new Map() }), 'a1').tracked).toBe(false)
   })
   it('a failed tracking read is unknown (null), and the stamps still ride', () => {
-    const a = arrivalOf([row('a1')], facts([stamp('a1', '2026-09-24T05:52:00.000Z')], { tracked: null }), 'a1')
+    const a = arrivalOf([row('a1')], facts([stamp('a1', '2026-10-01T05:52:00.000Z')], { tracked: null }), 'a1')
     expect(a.tracked).toBeNull()
-    expect(a.at).toBe('2026-09-24T05:52:00.000Z')
+    expect(a.at).toBe('2026-10-01T05:52:00.000Z')
+  })
+})
+
+describe('annotateOwnArrivals — the server clock and the tracking cutoff (review 2)', () => {
+  it('every own arrival carries the server clock it was read at', () => {
+    expect(arrivalOf([row('a1')], facts([]), 'a1').as_of).toBe('2026-10-01T12:00:00.000Z')
+  })
+
+  it('without an injected clock, as_of is the real server time', () => {
+    const before = Date.now()
+    const a = annotateOwnArrivals([row('a1')], facts([]), ME)[0].arrival
+    expect(Date.parse(a.as_of)).toBeGreaterThanOrEqual(before)
+    expect(Date.parse(a.as_of)).toBeLessThanOrEqual(Date.now())
+  })
+
+  it('tracking starts on ARRIVAL_TRACKING_FROM (25 Sep 2026)', () => {
+    expect(ARRIVAL_TRACKING_FROM).toBe('2026-09-25')
+  })
+
+  it('a shift before the cutoff is never tracked, even at a tracked studio', () => {
+    expect(arrivalOf([row('a1', { shift_date: '2026-09-24' })], facts([]), 'a1').tracked).toBe(false)
+    expect(arrivalOf([row('a1', { shift_date: '2026-09-24' })], facts([], { tracked: null }), 'a1').tracked).toBe(false)
+  })
+
+  it('a shift on the cutoff day is tracked', () => {
+    expect(arrivalOf([row('a1', { shift_date: '2026-09-25' })], facts([]), 'a1').tracked).toBe(true)
+  })
+
+  it('a stamp before the cutoff still shows (a stored fact), untracked', () => {
+    const r = row('a1', { shift_date: '2026-09-24' })
+    const a = arrivalOf([r], facts([stamp('a1', '2026-09-24T05:52:00.000Z')]), 'a1')
+    expect(a).toMatchObject({ at: '2026-09-24T05:52:00.000Z', at_local: '06:52', tracked: false })
   })
 })
 
 describe('annotateOwnArrivals — own rows only, unknown is never absence (D1, D6)', () => {
   it("a colleague's row is null even when the facts name it", () => {
     const rows = [row('a1'), row('c1', { profile_id: 'colleague' })]
-    const f = facts([stamp('a1', '2026-09-24T05:52:00.000Z'), stamp('c1', '2026-09-24T05:40:00.000Z')])
+    const f = facts([stamp('a1', '2026-10-01T05:52:00.000Z'), stamp('c1', '2026-10-01T05:40:00.000Z')])
     const out = annotateOwnArrivals(rows, f, ME)
     expect(out[1].arrival).toBeNull()
-    expect(out[0].arrival.at).toBe('2026-09-24T05:52:00.000Z')
+    expect(out[0].arrival.at).toBe('2026-10-01T05:52:00.000Z')
   })
 
   it("a manager's team feed carries nobody else's arrival", () => {
     const rows = [row('m1', { profile_id: 'manager' }), row('c1', { profile_id: 'coach-a' }), row('c2', { profile_id: 'coach-b' })]
-    const f = facts([stamp('m1', '2026-09-24T05:50:00.000Z'), stamp('c1', '2026-09-24T05:51:00.000Z'), stamp('c2', '2026-09-24T05:52:00.000Z')])
+    const f = facts([stamp('m1', '2026-10-01T05:50:00.000Z'), stamp('c1', '2026-10-01T05:51:00.000Z'), stamp('c2', '2026-10-01T05:52:00.000Z')])
     const out = annotateOwnArrivals(rows, f, 'manager')
-    expect(out.map((r) => r.arrival?.at ?? null)).toEqual(['2026-09-24T05:50:00.000Z', null, null])
+    expect(out.map((r) => r.arrival?.at ?? null)).toEqual(['2026-10-01T05:50:00.000Z', null, null])
   })
 
   it("a colleague's stamp is never carried onto the viewer's shift", () => {
     const rows = [row('c1', { profile_id: 'colleague' }), row('a2', { block_start_time: '08:30:00', block_end_time: '09:30:00' })]
-    const out = annotateOwnArrivals(rows, facts([stamp('c1', '2026-09-24T05:52:00.000Z')]), ME)
+    const out = annotateOwnArrivals(rows, facts([stamp('c1', '2026-10-01T05:52:00.000Z')]), ME)
     expect(out[1].arrival.carried).toBe(false)
   })
 
@@ -208,7 +244,7 @@ describe('annotateOwnArrivals — own rows only, unknown is never absence (D1, D
   })
 
   it('no viewer: every row is null', () => {
-    expect(annotateOwnArrivals([row('a1')], facts([stamp('a1', '2026-09-24T05:52:00.000Z')]), null).map((r) => r.arrival)).toEqual([null])
+    expect(annotateOwnArrivals([row('a1')], facts([stamp('a1', '2026-10-01T05:52:00.000Z')]), null).map((r) => r.arrival)).toEqual([null])
   })
 
   it('keeps every other field and does not mutate its input', () => {
@@ -264,7 +300,7 @@ const geoOn = { geofence: { enabled: true, latitude: 53.29, longitude: -6.2, rad
 describe('fetchOwnArrivalFacts', () => {
   it('reads stamps keyed on the caller AND bounded to their own ids; tracking keyed on the caller', async () => {
     const db = mockDb(answers({
-      shift_assignments: () => ok([{ id: 'a1', arrived_at: '2026-09-24T05:52:00.000Z', arrival_source: 'geofence' }, { id: 'a2', arrived_at: null, arrival_source: null }]),
+      shift_assignments: () => ok([{ id: 'a1', arrived_at: '2026-10-01T05:52:00.000Z', arrival_source: 'geofence' }, { id: 'a2', arrived_at: null, arrival_source: null }]),
       locations: () => ok([{ id: L1, timezone: 'Europe/Dublin', settings: geoOn }, { id: L2, timezone: 'Europe/Dublin', settings: {} }]),
       profile_locations: () => ok([{ location_id: L1, geofence_exempt: false }, { location_id: L2, geofence_exempt: false }]),
     }))

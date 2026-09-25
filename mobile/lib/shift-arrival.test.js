@@ -18,7 +18,11 @@ const ON = { showAbsence: true }
 const shift = (arrival, over = {}) => ({ id: 'a1', shift_date: '2026-09-24', published: true, arrival, ...over })
 const none = (over = {}) => ({
   at: null, at_local: null, at_local_date: null, source: null, carried: false, tracked: true,
-  starts_at: START, ends_at: END, ...over,
+  starts_at: START, ends_at: END,
+  // The server's clock at the read; far ahead so the phone's "now" decides
+  // unless a test says otherwise.
+  as_of: '2026-12-31T00:00:00.000Z',
+  ...over,
 })
 const stamped = (over = {}) => none({ at: '2026-09-24T05:52:00.000Z', at_local: '06:52', at_local_date: '2026-09-24', source: 'geofence', ...over })
 
@@ -88,6 +92,29 @@ describe('arrivalLine — no stamp', () => {
   it('a missing "now" shows no absence line', () => {
     expect(arrivalLine(shift(none()), undefined, ON)).toBeNull()
     expect(arrivalLine(shift(none()), NaN, ON)).toBeNull()
+  })
+})
+
+describe('arrivalLine — judged against min(phone now, server as_of) (review 2)', () => {
+  const AFTER = at('2026-09-24T09:00:00Z') // after the shift ends
+  it('a phone clock past the end, but a server read taken during the shift: not yet', () => {
+    expect(arrivalLine(shift(none({ as_of: '2026-09-24T06:30:00.000Z' })), AFTER, ON)?.kind).toBe('not_yet')
+  })
+  it('a server read taken before the shift started: nothing, whatever the phone clock says', () => {
+    expect(arrivalLine(shift(none({ as_of: '2026-09-24T05:00:00.000Z' })), AFTER, ON)).toBeNull()
+  })
+  it('the earlier of the two wins the other way too', () => {
+    expect(arrivalLine(shift(none({ as_of: '2026-09-24T09:00:00.000Z' })), at('2026-09-24T06:30:00Z'), ON)?.kind).toBe('not_yet')
+  })
+  it('no server clock, or an unreadable one: no absence line', () => {
+    expect(arrivalLine(shift(none({ as_of: undefined })), AFTER, ON)).toBeNull()
+    expect(arrivalLine(shift(none({ as_of: null })), AFTER, ON)).toBeNull()
+    expect(arrivalLine(shift(none({ as_of: 'yesterday' })), AFTER, ON)).toBeNull()
+  })
+  it('rows kept on screen after a failed refresh (stale): no absence line, stamps still show', () => {
+    expect(arrivalLine(shift(none()), AFTER, { ...ON, stale: true })).toBeNull()
+    expect(arrivalLine(shift(stamped()), AFTER, { stale: true })?.kind).toBe('arrived')
+    expect(arrivalHelpFor([shift(none())], AFTER, { ...ON, stale: true })).toBeNull()
   })
 })
 

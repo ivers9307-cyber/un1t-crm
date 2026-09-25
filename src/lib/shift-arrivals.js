@@ -36,6 +36,15 @@ import { geofenceFromLocationSettings, geofenceIsConfigured } from './geofence-a
 import { resolveTz, dayStrInTz } from './tz-time'
 import { effectiveShiftStart, effectiveShiftEnd } from '@shared/roster-month'
 
+// Review 2 — arrivals are tracked, for the absence rule, only on shifts on or
+// after this Dublin date. Stamps before it came from a matcher that has since
+// changed (ARRIVAL.1/.2, mig 610) and from coaches never told arrivals are
+// shown, so a missing one there means nothing. locations.settings.geofence has
+// no enabled_at (checked on prod 25 Sep: enabled, latitude, longitude,
+// radius_m, gate_copy only), so this is one estate-wide constant. A stamp
+// before it is still shown; only `tracked` is forced false.
+export const ARRIVAL_TRACKING_FROM = '2026-09-25'
+
 const ms = (d) => (d instanceof Date ? d.getTime() : NaN)
 const sortMs = (d) => { const v = ms(d); return Number.isFinite(v) ? v : Infinity }
 
@@ -100,16 +109,21 @@ export function ownLocationIds(rows, viewerId) {
  *           timezones: Map<string,string|null>|null,
  *           tracked: Map<string,boolean>|null }} facts  fetchOwnArrivalFacts()
  * @param {string|null} viewerId
+ * @param {{ now?: Date }} [opts]  the server clock (injected by tests)
  * @returns {Array<object>} new rows, each with `arrival`: an object on the
  *   viewer's own rows (when the stamps read succeeded), otherwise null.
+ *   `arrival.as_of` is the server clock at the read: the phone judges any
+ *   absence against min(its own now, as_of), so a phone clock set ahead, or a
+ *   row kept on screen from an earlier fetch, never reads as a later "now".
  */
-export function annotateOwnArrivals(rows, facts, viewerId) {
+export function annotateOwnArrivals(rows, facts, viewerId, { now = new Date() } = {}) {
   const list = Array.isArray(rows) ? rows : []
   const stamps = facts?.stamps instanceof Map ? facts.stamps : null
   if (!viewerId || !stamps) return list.map((r) => ({ ...r, arrival: null }))
 
   const tzOf = (loc) => resolveTz(facts.timezones instanceof Map ? facts.timezones.get(loc) : null)
   const trackedOf = (loc) => (facts.tracked instanceof Map ? facts.tracked.get(loc) === true : null)
+  const asOf = now instanceof Date && Number.isFinite(now.getTime()) ? now.toISOString() : null
 
   // inferContinuousArrivals groups by (profileId, blockDate). Every row here is
   // the viewer's own, so the group key carries the STUDIO instead: an arrival
@@ -148,8 +162,9 @@ export function annotateOwnArrivals(rows, facts, viewerId) {
         at_local_date: atOk ? dayStrInTz(at, tz) : null,
         source: b?.arrivalInferred ? null : (b?.source ?? null),
         carried: !!b?.arrivalInferred || dup.has(r.id),
-        tracked: trackedOf(r.location_id),
+        tracked: String(r.shift_date ?? '') < ARRIVAL_TRACKING_FROM ? false : trackedOf(r.location_id),
         ...effectiveWindow(r, tz),
+        as_of: asOf,
       },
     }
   })
