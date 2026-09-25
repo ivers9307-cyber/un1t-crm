@@ -15,6 +15,9 @@
 --     that ended before today is history: kept, never replaced, never added.
 --     A dated rule may not START before today unless it is one the person
 --     already has with the same dates and window (no backdating).
+--     A started rule that a save deletes or cuts short keeps its elapsed days
+--     (start_date..yesterday) as a history row: what was declared for a day
+--     that has gone is never rewritten.
 --   * Every real change writes ONE staff_availability_changes row (before and
 --     after snapshots, the actor). That row is also the notice queue: the
 --     route tells the managers at once inside 07:00-22:00 studio time, and
@@ -285,6 +288,28 @@ BEGIN
   IF v_after = v_before THEN
     RETURN jsonb_build_object('changed', false, 'change_id', NULL, 'before', v_before, 'after', v_after);
   END IF;
+
+  -- The days already gone are history. A dated rule that has STARTED
+  -- (start_date < today <= end_date) and is not kept as it is (same dates and
+  -- window; a note edit keeps it whole) is deleted or cut short by this save:
+  -- first keep its elapsed part, start_date..yesterday, as a row of its own.
+  -- It ends before today, so the DELETE below never touches it.
+  INSERT INTO public.staff_unavailability
+         (profile_id, kind, start_date, end_date, all_day, start_time, end_time, note)
+  SELECT u.profile_id, 'dated', u.start_date, p_today - 1, u.all_day, u.start_time, u.end_time, u.note
+    FROM public.staff_unavailability u
+   WHERE u.profile_id = p_profile_id
+     AND u.kind = 'dated'
+     AND u.start_date < p_today
+     AND u.end_date >= p_today
+     AND NOT EXISTS (
+       SELECT 1
+         FROM jsonb_to_recordset(v_after) AS x(kind text, start_date date, end_date date,
+                                               all_day boolean, start_time time, end_time time)
+        WHERE x.kind = 'dated'
+          AND x.start_date = u.start_date AND x.end_date = u.end_date AND x.all_day = u.all_day
+          AND x.start_time IS NOT DISTINCT FROM u.start_time
+          AND x.end_time IS NOT DISTINCT FROM u.end_time);
 
   DELETE FROM public.staff_unavailability u
    WHERE u.profile_id = p_profile_id
