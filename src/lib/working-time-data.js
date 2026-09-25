@@ -17,6 +17,7 @@
 // Cost: four fixed reads whatever the number of blocks (two small locations
 // reads in siblingLocationIds, one profiles read, the assignments paged at
 // 1,000). A fifth (approved leave) only if SUBTRACT_APPROVED_LEAVE is flipped.
+// The assignments read is readOrgShiftRows, shared with CANDIDATES.1.
 //
 // Never throws. Unreadable siblings narrow the read to this studio and set
 // crossStudioChecked false. A failed profiles, assignments or leave read
@@ -66,6 +67,73 @@ async function readApprovedLeave(db, profileIds, from, to) {
     if (!page || page.length < PAGE) break
   }
   return { byProfile, error: null }
+}
+
+/**
+ * Every LIVE assignment of `profileIds` on block dates [from, to] at the
+ * studios in `scopeIds` (this studio first), flattened to the shape the
+ * shared rules read. WORKTIME.1's loop, extracted for CANDIDATES.1, which
+ * needs everyone's shifts (a contractor can be busy), not employees only.
+ *
+ * The embedded `.in('shift_blocks.location_id', …)` is the boundary; every row
+ * is re-checked against it afterwards. `countUnpublishedElsewhere` false drops
+ * rows on an unpublished roster at a studio other than `locationId`.
+ * `skip(profileId, blockDate)` true drops a row (approved leave, for WORKTIME's
+ * switch). Paged at 1,000, ordered by id. Never throws: a failed read returns
+ * `error` with NO shifts.
+ *
+ * @returns {Promise<{ shifts: object[], error: { message: string } | null }>}
+ */
+export async function readOrgShiftRows(db, {
+  locationId, scopeIds, profileIds, from, to,
+  countUnpublishedElsewhere = COUNT_UNPUBLISHED_ELSEWHERE,
+  skip = null,
+} = {}) {
+  const ids = [...new Set((profileIds || []).filter(Boolean))]
+  const scope = [...new Set([locationId, ...(scopeIds || [])].filter(Boolean))]
+  if (ids.length === 0 || scope.length === 0) return { shifts: [], error: null }
+  try {
+    const shifts = []
+    for (let offset = 0; ; offset += PAGE) {
+      const { data: page, error } = await db
+        .from('shift_assignments')
+        // One literal string, so check:select-columns can resolve every column.
+        .select('id, profile_id, status, start_time_override, end_time_override, shift_blocks!inner(id, location_id, block_date, start_time, end_time, roster_id, shift_templates(name, start_time, end_time), locations(name), rosters:roster_id(status))')
+        .in('profile_id', ids)
+        .in('shift_blocks.location_id', scope)
+        .gte('shift_blocks.block_date', from)
+        .lte('shift_blocks.block_date', to)
+        .order('id', { ascending: true })
+        .range(offset, offset + PAGE - 1)
+      if (error) return { shifts: [], error }
+      for (const a of page || []) {
+        const b = a?.shift_blocks
+        // The filter above is the boundary; this re-check does not depend on
+        // how PostgREST applies an embedded filter.
+        if (!b || !scope.includes(b.location_id) || !isLiveAssignment(a)) continue
+        if (!countUnpublishedElsewhere && b.location_id !== locationId && b.rosters?.status !== 'published') continue
+        if (skip && skip(a.profile_id, b.block_date)) continue
+        shifts.push({
+          profile_id: a.profile_id,
+          block_id: b.id,
+          block_date: b.block_date,
+          location_id: b.location_id,
+          location_name: b.locations?.name ?? null,
+          name: b.shift_templates?.name || 'Shift',
+          status: a.status ?? null,
+          start_time_override: a.start_time_override ?? null,
+          end_time_override: a.end_time_override ?? null,
+          start_time: b.start_time ?? null,
+          end_time: b.end_time ?? null,
+          shift_templates: { start_time: b.shift_templates?.start_time ?? null, end_time: b.shift_templates?.end_time ?? null },
+        })
+      }
+      if (!page || page.length < PAGE) break
+    }
+    return { shifts, error: null }
+  } catch (e) {
+    return { shifts: [], error: { message: e?.message || 'shift read threw' } }
+  }
 }
 
 /**
@@ -120,44 +188,11 @@ export async function loadWorkingTimeShifts(db, {
     const onLeave = (profileId, date) => Boolean(leaveByProfile?.get(profileId)
       ?.some((l) => l.start_date <= date && l.end_date >= date))
 
-    const shifts = []
-    for (let offset = 0; ; offset += PAGE) {
-      const { data: page, error } = await db
-        .from('shift_assignments')
-        // One literal string, so check:select-columns can resolve every column.
-        .select('id, profile_id, status, start_time_override, end_time_override, shift_blocks!inner(id, location_id, block_date, start_time, end_time, roster_id, shift_templates(name, start_time, end_time), locations(name), rosters:roster_id(status))')
-        .in('profile_id', coveredIds)
-        .in('shift_blocks.location_id', scopeIds)
-        .gte('shift_blocks.block_date', from)
-        .lte('shift_blocks.block_date', to)
-        .order('id', { ascending: true })
-        .range(offset, offset + PAGE - 1)
-      if (error) return failed(error)
-      for (const a of page || []) {
-        const b = a?.shift_blocks
-        // The filter above is the boundary; this re-check does not depend on
-        // how PostgREST applies an embedded filter.
-        if (!b || !scopeIds.includes(b.location_id) || !isLiveAssignment(a)) continue
-        if (!countUnpublishedElsewhere && b.location_id !== locationId && b.rosters?.status !== 'published') continue
-        if (onLeave(a.profile_id, b.block_date)) continue
-        shifts.push({
-          profile_id: a.profile_id,
-          block_id: b.id,
-          block_date: b.block_date,
-          location_id: b.location_id,
-          location_name: b.locations?.name ?? null,
-          name: b.shift_templates?.name || 'Shift',
-          status: a.status ?? null,
-          start_time_override: a.start_time_override ?? null,
-          end_time_override: a.end_time_override ?? null,
-          start_time: b.start_time ?? null,
-          end_time: b.end_time ?? null,
-          shift_templates: { start_time: b.shift_templates?.start_time ?? null, end_time: b.shift_templates?.end_time ?? null },
-        })
-      }
-      if (!page || page.length < PAGE) break
-    }
-    return { shifts, people, crossStudioChecked, error: null }
+    const read = await readOrgShiftRows(db, {
+      locationId, scopeIds, profileIds: coveredIds, from, to, countUnpublishedElsewhere, skip: onLeave,
+    })
+    if (read.error) return failed(read.error)
+    return { shifts: read.shifts, people, crossStudioChecked, error: null }
   } catch (e) {
     return failed({ message: e?.message || 'working-time read threw' })
   }
