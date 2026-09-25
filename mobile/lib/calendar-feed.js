@@ -3,14 +3,28 @@
 // and which link it hands the OS. Pure, so it is tested here (there is no RN
 // component test runner). The server builds every URL; this only chooses.
 //
+// The link is shown ONCE (only its hash is stored), so it must never be lost
+// to a silent hand-off. Opening a URL "succeeds" whenever any app takes it:
+// on Android a browser always takes Google's add-by-URL page, which is a
+// desktop-web flow that often does nothing useful on a phone. So the row never
+// guesses: after making a link it offers a CHOICE (subscribeChoices) that
+// always includes Share / copy of the https link, and keeps the link in hand
+// for the rest of the session so the coach can come back to the choice.
+//
 // Why no Linking.canOpenURL: on iOS it answers false for any scheme missing
 // from LSApplicationQueriesSchemes, and on Android 11+ for anything missing
 // from <queries> — both native config an OTA cannot change. openURL needs
-// neither, so the row tries each link in order and falls back on a throw.
+// neither; a throw falls back to the share sheet.
 
 export const REPLACE_PROMPT = Object.freeze({
   title: 'Your calendar link',
   body: 'Make a new link to add your shifts on this phone? Calendars using your current link will stop updating.',
+})
+
+export const CHOOSE_PROMPT = Object.freeze({
+  title: 'Add your shifts to a calendar',
+  body: 'This link is shown once. If you lose it, make a new link (the old one stops). ' +
+    'For Google Calendar, Share / copy the link and add it at calendar.google.com on a computer ("From URL") if the Google option does not work on this phone.',
 })
 
 export const TURN_OFF_PROMPT = Object.freeze({
@@ -30,8 +44,19 @@ export function lastSyncedLabel(iso, nowMs) {
   return `${Math.round(hours / 24)} days ago`
 }
 
-/** { title, subtitle, action: 'create' | 'manage' } for a GET /api/me/calendar-feed status. */
-export function feedRowModel(status, nowMs) {
+/**
+ * { title, subtitle, action: 'create' | 'manage' | 'choose' } for a GET
+ * /api/me/calendar-feed status. `linkInHand`: a link made this session is
+ * still held, so the row offers the choice again instead of "make a new one".
+ */
+export function feedRowModel(status, nowMs, { linkInHand = false } = {}) {
+  if (linkInHand) {
+    return {
+      title: 'Add my shifts to a calendar',
+      subtitle: 'Tap to open or share your new link. It is shown once: if you lose it, make a new one.',
+      action: 'choose',
+    }
+  }
   if (status?.active !== true) {
     return { title: 'Subscribe to my shifts', subtitle: 'Add your published shifts to your calendar app.', action: 'create' }
   }
@@ -44,14 +69,24 @@ export function feedRowModel(status, nowMs) {
 }
 
 const OPENABLE = /^(webcal|https):\/\//
+const HTTPS = /^https:\/\//
 
-/** The links to try with Linking.openURL, in order. Only webcal:// and https:// ever reach the OS. */
-export function subscribeOpenOrder(os, urls) {
+/**
+ * The choices offered once a link exists, in order. `open` choices go to
+ * Linking.openURL; the `share` choice hands the https link to the share sheet
+ * (which has Copy on both platforms) and is ALWAYS last and always present
+ * when there is an https link. Android gets two (an Alert holds three buttons
+ * including Cancel); nothing but webcal:// or https:// ever reaches the OS.
+ */
+export function subscribeChoices(os, urls) {
   if (!urls) return []
-  const order = os === 'ios'
-    ? [urls.webcal_url]
-    : os === 'android'
-      ? [urls.google_url, urls.webcal_url]
-      : [urls.webcal_url, urls.google_url]
-  return order.filter((u) => typeof u === 'string' && OPENABLE.test(u))
+  const apple = { key: 'apple', label: 'Apple Calendar', kind: 'open', url: urls.webcal_url }
+  const calendar = { key: 'calendar', label: 'Calendar app', kind: 'open', url: urls.webcal_url }
+  const google = { key: 'google', label: 'Google Calendar', kind: 'open', url: urls.google_url }
+  const opens = os === 'ios' ? [apple, google] : os === 'android' ? [google] : [calendar, google]
+  const out = opens.filter((c) => typeof c.url === 'string' && OPENABLE.test(c.url))
+  if (typeof urls.url === 'string' && HTTPS.test(urls.url)) {
+    out.push({ key: 'share', label: 'Share / copy link', kind: 'share', url: urls.url })
+  }
+  return out
 }

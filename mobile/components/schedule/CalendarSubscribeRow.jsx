@@ -1,23 +1,29 @@
 // mobile/components/schedule/CalendarSubscribeRow.jsx
 // ICSFEED.1 — "Subscribe to my shifts" on the Schedule tab (Me view).
 //
-// No link yet → tap makes one and hands it straight to the calendar app
-// (iOS: webcal:// → Apple Calendar's subscribe sheet; Android: Google
-// Calendar's add-by-URL page). A link already exists → tap asks whether to make
-// a new one here (the old one stops) or turn it off. If no calendar app takes
-// the link, the Share sheet offers it instead, so the coach can paste it
-// anywhere. Every decision lives in lib/calendar-feed.js.
+// No link yet → tap makes one, then offers a CHOICE: Apple Calendar (iOS,
+// webcal://), Google Calendar, and always Share / copy link (the https URL, so
+// a Google Calendar user on iOS can get it too). The link is shown once, so it
+// is kept in state for the rest of the session: the row then reads "Add my
+// shifts to a calendar" and tapping it offers the choice again. A link that
+// already exists (and is not in hand) → tap asks whether to make a new one
+// (the old one stops) or turn it off. An open that throws falls back to the
+// share sheet. A long press always reaches "new link / turn off". Every
+// decision lives in lib/calendar-feed.js.
 
 import { useCallback, useState } from 'react'
 import { View, Text, Pressable, Alert, Linking, Platform, Share, ActivityIndicator } from 'react-native'
 import { useFocusEffect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { getMyCalendarFeed, createMyCalendarFeed, turnOffMyCalendarFeed } from '../../lib/calendar-feed-api'
-import { feedRowModel, subscribeOpenOrder, REPLACE_PROMPT, TURN_OFF_PROMPT } from '../../lib/calendar-feed'
+import { feedRowModel, subscribeChoices, CHOOSE_PROMPT, REPLACE_PROMPT, TURN_OFF_PROMPT } from '../../lib/calendar-feed'
 
 export default function CalendarSubscribeRow() {
   const [status, setStatus] = useState(null)
   const [busy, setBusy] = useState(false)
+  // The one-time links, held for this session only (never persisted: they are
+  // a secret). Cleared when the link is turned off.
+  const [links, setLinks] = useState(null)
 
   const load = useCallback(async () => {
     const r = await getMyCalendarFeed()
@@ -28,16 +34,32 @@ export default function CalendarSubscribeRow() {
 
   useFocusEffect(useCallback(() => { load() }, [load]))
 
-  async function openSubscription(urls) {
-    for (const url of subscribeOpenOrder(Platform.OS, urls)) {
-      try {
-        await Linking.openURL(url)
-        return
-      } catch {
-        // No app took it; try the next link.
-      }
+  async function share(urls) {
+    try {
+      await Share.share({ message: urls.url })
+    } catch {
+      // The share sheet itself failed; the row still holds the link, so the
+      // coach can tap again.
     }
-    await Share.share({ message: urls.url }).catch(() => {})
+  }
+
+  async function runChoice(choice, urls) {
+    if (choice.kind === 'share') return share(urls)
+    try {
+      await Linking.openURL(choice.url)
+    } catch {
+      // No app took it: offer the link to paste anywhere instead.
+      await share(urls)
+    }
+  }
+
+  function offerChoices(urls) {
+    const choices = subscribeChoices(Platform.OS, urls)
+    if (choices.length === 0) return
+    Alert.alert(CHOOSE_PROMPT.title, CHOOSE_PROMPT.body, [
+      ...choices.map((c) => ({ text: c.label, onPress: () => { runChoice(c, urls) } })),
+      { text: 'Cancel', style: 'cancel' },
+    ])
   }
 
   async function issue(replace) {
@@ -50,8 +72,9 @@ export default function CalendarSubscribeRow() {
         Alert.alert('Couldn’t make your calendar link', r?.error || 'Try again in a moment.')
         return
       }
-      await openSubscription(r.data)
+      setLinks(r.data)
       await load()
+      offerChoices(r.data)
     } finally {
       setBusy(false)
     }
@@ -68,6 +91,7 @@ export default function CalendarSubscribeRow() {
           try {
             const r = await turnOffMyCalendarFeed()
             if (!r?.success) Alert.alert('Couldn’t turn it off', r?.error || 'Try again in a moment.')
+            else setLinks(null)
             await load()
           } finally {
             setBusy(false)
@@ -77,13 +101,21 @@ export default function CalendarSubscribeRow() {
     ])
   }
 
-  const model = feedRowModel(status, Date.now())
+  const model = feedRowModel(status, Date.now(), { linkInHand: !!links })
 
   function onPress() {
     if (model.action === 'create') {
       issue(false)
       return
     }
+    if (model.action === 'choose') {
+      offerChoices(links)
+      return
+    }
+    manage()
+  }
+
+  function manage() {
     Alert.alert(REPLACE_PROMPT.title, REPLACE_PROMPT.body, [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Turn off', style: 'destructive', onPress: confirmTurnOff },
@@ -94,6 +126,9 @@ export default function CalendarSubscribeRow() {
   return (
     <Pressable
       onPress={onPress}
+      // While a new link is in hand the tap offers it again, so "new link" and
+      // "turn off" stay reachable on a long press (and on the next launch).
+      onLongPress={status?.active ? manage : undefined}
       disabled={busy}
       accessibilityRole="button"
       accessibilityLabel={model.title}
