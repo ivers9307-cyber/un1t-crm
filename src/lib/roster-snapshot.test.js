@@ -9,7 +9,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('./log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 
 const { logError, logWarn } = await import('./log')
-const { writePublishSnapshot, loadWindowBlocks, SNAPSHOT_BLOCK_PAGE } = await import('./roster-snapshot')
+const { writePublishSnapshot, loadWindowBlocks, loadRosterComparison, SNAPSHOT_BLOCK_PAGE } = await import('./roster-snapshot')
+const { buildPublishSnapshot } = await import('./roster-compare')
 
 const LOC = 'a0000000-0000-0000-0000-000000000001'
 const ROSTER = {
@@ -173,5 +174,164 @@ describe('writePublishSnapshot', () => {
     const db = { from() { throw new Error('client gone') } }
     await expect(writePublishSnapshot(db, ROSTER)).resolves.toEqual({ saved: false, reason: 'threw' })
     expect(logError).toHaveBeenCalled()
+  })
+})
+
+// ── loadRosterComparison ─────────────────────────────────────────────────
+
+const NOW = Date.UTC(2026, 8, 25, 12)
+
+const PUBLISHED_BLOCKS = [block(1, {
+  shift_assignments: [
+    { id: 'a1', profile_id: 'p1', status: 'scheduled' },
+    { id: 'a2', profile_id: 'p2', status: 'scheduled' },
+  ],
+})]
+
+const SNAP_ROW = {
+  id: 's-1', roster_id: 'r-1', location_id: LOC,
+  period_start: '2026-09-14', period_end: '2026-09-20',
+  published_at: '2026-09-12T13:02:00+00:00', published_by: 'mgr-1', format_version: 1,
+  snapshot: buildPublishSnapshot({ periodStart: '2026-09-14', periodEnd: '2026-09-20', blocks: PUBLISHED_BLOCKS }).snapshot,
+}
+
+// p1 still on, p2 gone; p1's name comes from the live embed.
+const LIVE_BLOCKS = [block(1, {
+  shift_assignments: [{ id: 'a1', profile_id: 'p1', status: 'scheduled', arrived_at: null, profiles: { full_name: 'Coach One' } }],
+})]
+
+function compareDb({
+  location = { id: LOC, timezone: 'Europe/Dublin' },
+  own = SNAP_ROW,
+  against = null,
+  first = { published_at: SNAP_ROW.published_at },
+  publishes = [SNAP_ROW],
+  blocks = LIVE_BLOCKS,
+  names = [{ id: 'p2', full_name: 'Coach Two' }, { id: 'mgr-1', full_name: 'Manager M' }],
+  fail = {},
+} = {}) {
+  return fakeDb((q) => {
+    const eqCols = opsOf(q, 'eq').map(([, col]) => col)
+    const selected = opsOf(q, 'select')[0]?.[1]
+    if (q.table === 'locations') return fail.location ? { data: null, error: fail.location } : { data: location, error: null }
+    if (q.table === 'roster_publish_snapshots') {
+      if (eqCols.includes('roster_id')) return fail.own ? { data: null, error: fail.own } : { data: own, error: null }
+      if (eqCols.includes('id')) return { data: against, error: null }
+      if (selected === 'published_at') return { data: first, error: null }
+      return fail.publishes ? { data: null, error: fail.publishes } : { data: publishes, error: null }
+    }
+    if (q.table === 'shift_blocks') return fail.blocks ? { data: null, error: fail.blocks } : { data: blocks, error: null }
+    if (q.table === 'profiles') return fail.names ? { data: null, error: fail.names } : { data: names, error: null }
+    throw new Error(`unexpected table ${q.table}`)
+  })
+}
+
+const ROSTER_FOR_COMPARE = { ...ROSTER }
+
+describe('loadRosterComparison', () => {
+  it("compares the roster's own snapshot with the live roster, for the window asked", async () => {
+    const db = compareDb()
+    const out = await loadRosterComparison(db, { roster: ROSTER_FOR_COMPARE, from: '2026-09-15', to: '2026-09-16', nowMs: NOW })
+    expect(out.error).toBeUndefined()
+    const d = out.data
+    expect(d.roster).toEqual({ id: 'r-1', status: 'published', period_start: '2026-09-14', period_end: '2026-09-20', published_at: ROSTER.published_at })
+    expect(d.window).toEqual({ from: '2026-09-15', to: '2026-09-16' })
+    expect(d.baseline).toEqual({
+      snapshot_id: 's-1', roster_id: 'r-1', published_at: SNAP_ROW.published_at,
+      period_start: '2026-09-14', period_end: '2026-09-20', published_by_name: 'Manager M',
+    })
+    expect(d.missing_reason).toBeNull()
+    expect(d.snapshots_began_at).toBe(SNAP_ROW.published_at)
+    expect(d.publishes).toEqual([{ snapshot_id: 's-1', roster_id: 'r-1', published_at: SNAP_ROW.published_at, period_start: '2026-09-14', period_end: '2026-09-20' }])
+    expect(d.blocks[0].coaches.map((c) => [c.name, c.change])).toEqual([['Coach One', 'unchanged'], ['Coach Two', 'removed']])
+    expect(d.totals).toMatchObject({ unchanged: 1, removed: 1, published_shifts: 2, current_shifts: 1 })
+
+    // The live read is the WINDOW, not the whole roster period.
+    const live = db.log.find((q) => q.table === 'shift_blocks')
+    expect(live.ops).toContainEqual(['gte', 'block_date', '2026-09-15'])
+    expect(live.ops).toContainEqual(['lte', 'block_date', '2026-09-16'])
+    // Names are read only for people the live embed does not already name.
+    const names = db.log.find((q) => q.table === 'profiles')
+    expect(opsOf(names, 'in')[0][2].sort()).toEqual(['mgr-1', 'p2'])
+    // Every snapshot read is pinned to the roster's studio.
+    for (const q of db.log.filter((x) => x.table === 'roster_publish_snapshots')) {
+      expect(q.ops).toContainEqual(['eq', 'location_id', LOC])
+    }
+  })
+
+  it('compares against another publish at the same studio when asked', async () => {
+    const earlier = { ...SNAP_ROW, id: 's-0', roster_id: 'r-0', published_at: '2026-09-10T08:00:00+00:00' }
+    const db = compareDb({ against: earlier })
+    const out = await loadRosterComparison(db, { roster: ROSTER_FOR_COMPARE, againstId: 's-0', nowMs: NOW })
+    expect(out.data.baseline).toMatchObject({ snapshot_id: 's-0', roster_id: 'r-0' })
+    const q = db.log.find((x) => x.table === 'roster_publish_snapshots' && opsOf(x, 'eq').some(([, c]) => c === 'id'))
+    expect(q.ops).toContainEqual(['eq', 'id', 's-0'])
+    expect(q.ops).toContainEqual(['eq', 'location_id', LOC])
+  })
+
+  it('an against snapshot that is not at this studio (or does not exist) is not found', async () => {
+    const out = await loadRosterComparison(compareDb({ against: null }), { roster: ROSTER_FOR_COMPARE, againstId: 's-x', nowMs: NOW })
+    expect(out).toEqual({ notFound: true })
+  })
+
+  it('a roster published before the studio\'s first snapshot: before_snapshots, with the date, and no live read', async () => {
+    const db = compareDb({ own: null, first: { published_at: '2026-09-26T08:00:00+00:00' }, publishes: [] })
+    const out = await loadRosterComparison(db, { roster: ROSTER_FOR_COMPARE, nowMs: NOW })
+    expect(out.data).toMatchObject({
+      baseline: null, missing_reason: 'before_snapshots', snapshots_began_at: '2026-09-26T08:00:00+00:00',
+      window: null, blocks: [], totals: null,
+    })
+    expect(db.log.some((q) => q.table === 'shift_blocks')).toBe(false)
+  })
+
+  it('no snapshot at the studio at all: before_snapshots, date null', async () => {
+    const out = await loadRosterComparison(compareDb({ own: null, first: null, publishes: [] }), { roster: ROSTER_FOR_COMPARE, nowMs: NOW })
+    expect(out.data).toMatchObject({ missing_reason: 'before_snapshots', snapshots_began_at: null })
+  })
+
+  it('published after snapshots began but none saved: not_saved', async () => {
+    const out = await loadRosterComparison(
+      compareDb({ own: null, first: { published_at: '2026-09-01T08:00:00+00:00' } }),
+      { roster: ROSTER_FOR_COMPARE, nowMs: NOW },
+    )
+    expect(out.data.missing_reason).toBe('not_saved')
+  })
+
+  it('a failed read is an error, logged, never an empty comparison', async () => {
+    for (const key of ['location', 'own', 'publishes', 'blocks']) {
+      logError.mockClear()
+      const out = await loadRosterComparison(compareDb({ fail: { [key]: { message: `${key} down` } } }), { roster: ROSTER_FOR_COMPARE, nowMs: NOW })
+      expect(out.error, key).toEqual({ message: `${key} down` })
+      expect(out.data, key).toBeUndefined()
+      expect(logError, key).toHaveBeenCalledWith('roster-snapshot', expect.any(String), expect.objectContaining({ roster_id: 'r-1' }))
+    }
+  })
+
+  it('a failed names read degrades to unknown names, logged; the comparison still answers', async () => {
+    const out = await loadRosterComparison(compareDb({ fail: { names: { message: 'names down' } } }), { roster: ROSTER_FOR_COMPARE, nowMs: NOW })
+    expect(out.data.blocks[0].coaches.find((c) => c.profile_id === 'p2').name).toBeNull()
+    expect(out.data.baseline.published_by_name).toBeNull()
+    expect(logWarn).toHaveBeenCalled()
+  })
+
+  it('a snapshot written by newer code is refused rather than misread', async () => {
+    const out = await loadRosterComparison(compareDb({ own: { ...SNAP_ROW, format_version: 2 } }), { roster: ROSTER_FOR_COMPARE, nowMs: NOW })
+    expect(out.error).toBeTruthy()
+    expect(out.data).toBeUndefined()
+  })
+
+  it('a briefing edited after publish reaches the block as briefing_change, never as text', async () => {
+    const own = {
+      ...SNAP_ROW,
+      snapshot: buildPublishSnapshot({
+        periodStart: '2026-09-14', periodEnd: '2026-09-20',
+        blocks: [block(1, { briefing: 'Fire drill at 10', shift_assignments: PUBLISHED_BLOCKS[0].shift_assignments })],
+      }).snapshot,
+    }
+    const live = [{ ...LIVE_BLOCKS[0], briefing: 'Fire drill at 11' }]
+    const out = await loadRosterComparison(compareDb({ own, blocks: live }), { roster: ROSTER_FOR_COMPARE, nowMs: NOW })
+    expect(out.data.blocks[0].briefing_change).toBe('changed')
+    expect(out.data.totals.blocks_briefing_changed).toBe(1)
+    expect(JSON.stringify(out.data)).not.toMatch(/Fire drill|briefing_hash/)
   })
 })

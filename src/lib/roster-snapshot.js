@@ -17,8 +17,8 @@
 // read is scoped to the roster's location_id. Service role only; the caller
 // has already checked the manager's access to that location.
 
-import { buildPublishSnapshot, SNAPSHOT_FORMAT_VERSION } from './roster-compare'
-import { logError } from './log'
+import { buildPublishSnapshot, clipWindow, compareSnapshot, SNAPSHOT_FORMAT_VERSION } from './roster-compare'
+import { logError, logWarn } from './log'
 
 export const SNAPSHOT_BLOCK_PAGE = 1000
 
@@ -113,5 +113,165 @@ export async function writePublishSnapshot(db, roster) {
   } catch (e) {
     logError('roster-snapshot', 'publish snapshot not saved: threw', { ...meta, err: e })
     return { saved: false, reason: 'threw' }
+  }
+}
+
+export const COMPARE_PUBLISHES_LISTED = 20
+const NAME_CHUNK = 200
+
+// The two snapshot reads below spell their columns as LITERALS, not a shared
+// constant, so check:select-columns can prove them against mig 634.
+
+/**
+ * Everything GET /api/schedule/rosters/[id]/compare returns. The caller has
+ * loaded the roster and checked the manager's access to roster.location_id;
+ * every read here is pinned to that location.
+ *
+ * @param {object} args
+ * @param {object} args.roster     { id, location_id, status, period_start, period_end, published_at }
+ * @param {string|null} [args.againstId]  compare with this snapshot instead of the roster's own
+ * @param {string|null} [args.from]       YYYY-MM-DD window (the period on screen)
+ * @param {string|null} [args.to]
+ * @param {number} args.nowMs
+ * @returns {Promise<{ data: object } | { notFound: true } | { error: object }>}
+ */
+export async function loadRosterComparison(db, { roster, againstId = null, from = null, to = null, nowMs = Date.now() }) {
+  const meta = { roster_id: roster.id, location_id: roster.location_id }
+  const fail = (what, err) => {
+    logError('roster-snapshot', `compare: ${what}`, { ...meta, err })
+    return { error: err || { message: what } }
+  }
+
+  const { data: location, error: locErr } = await db
+    .from('locations')
+    .select('id, timezone')
+    .eq('id', roster.location_id)
+    .maybeSingle()
+  if (locErr) return fail('location read failed', locErr)
+
+  let baseline = null
+  if (againstId) {
+    const { data, error } = await db
+      .from('roster_publish_snapshots')
+      .select('id, roster_id, location_id, period_start, period_end, published_at, published_by, format_version, snapshot')
+      .eq('id', againstId)
+      .eq('location_id', roster.location_id)
+      .maybeSingle()
+    if (error) return fail('snapshot read failed', error)
+    if (!data) return { notFound: true }
+    baseline = data
+  } else {
+    const { data, error } = await db
+      .from('roster_publish_snapshots')
+      .select('id, roster_id, location_id, period_start, period_end, published_at, published_by, format_version, snapshot')
+      .eq('roster_id', roster.id)
+      .eq('location_id', roster.location_id)
+      .maybeSingle()
+    if (error) return fail('snapshot read failed', error)
+    baseline = data || null
+  }
+  if (baseline && Number(baseline.format_version) > SNAPSHOT_FORMAT_VERSION) {
+    return fail(`snapshot format ${baseline.format_version} is newer than this code reads`, null)
+  }
+
+  // The studio's first snapshot: the date the view names for older rosters.
+  const { data: first, error: firstErr } = await db
+    .from('roster_publish_snapshots')
+    .select('published_at')
+    .eq('location_id', roster.location_id)
+    .order('published_at', { ascending: true })
+    .limit(1)
+    .maybeSingle()
+  if (firstErr) return fail('first-snapshot read failed', firstErr)
+  const snapshotsBeganAt = first?.published_at ?? null
+
+  // Every publish at this studio overlapping the window, newest first: the
+  // "compare with" choices (the first publish of the week, say).
+  const askFrom = from || roster.period_start
+  const askTo = to || roster.period_end
+  const { data: pubs, error: pubsErr } = await db
+    .from('roster_publish_snapshots')
+    .select('id, roster_id, published_at, period_start, period_end')
+    .eq('location_id', roster.location_id)
+    .lte('period_start', askTo)
+    .gte('period_end', askFrom)
+    .order('published_at', { ascending: false })
+    .limit(COMPARE_PUBLISHES_LISTED)
+  if (pubsErr) return fail('publish list read failed', pubsErr)
+  const publishes = (pubs || []).map((p) => ({
+    snapshot_id: p.id, roster_id: p.roster_id, published_at: p.published_at,
+    period_start: p.period_start, period_end: p.period_end,
+  }))
+
+  const rosterSummary = {
+    id: roster.id, status: roster.status,
+    period_start: roster.period_start, period_end: roster.period_end,
+    published_at: roster.published_at ?? null,
+  }
+
+  if (!baseline) {
+    // No backfill (D11): a roster published before the studio's first
+    // snapshot never had one; after it, one should have been written and was
+    // not (the write failed and was logged at the time).
+    const publishedMs = Date.parse(roster.published_at || '')
+    const beganMs = Date.parse(snapshotsBeganAt || '')
+    const before = !Number.isFinite(beganMs) || !Number.isFinite(publishedMs) || publishedMs < beganMs
+    return {
+      data: {
+        roster: rosterSummary, window: null, baseline: null,
+        missing_reason: before ? 'before_snapshots' : 'not_saved',
+        snapshots_began_at: snapshotsBeganAt, publishes, blocks: [], totals: null,
+      },
+    }
+  }
+
+  const window = clipWindow(baseline.snapshot, from, to)
+  let current = []
+  if (window) {
+    const { blocks, error: curErr } = await loadWindowBlocks(db, { locationId: roster.location_id, from: window.from, to: window.to })
+    if (curErr) return fail('current blocks read failed', curErr)
+    current = blocks
+  }
+
+  // Names for coaches the live embed does not already name (removed since
+  // publish), plus whoever published. A failed read costs names, not the view.
+  const namedNow = new Set(current.flatMap((b) => (b.shift_assignments || [])
+    .filter((a) => a?.profiles?.full_name).map((a) => a.profile_id)))
+  const wanted = new Set()
+  for (const b of baseline.snapshot.blocks || []) {
+    if (!window || b.date < window.from || b.date > window.to) continue
+    for (const c of b.coaches || []) if (!namedNow.has(c.profile_id)) wanted.add(c.profile_id)
+  }
+  if (baseline.published_by) wanted.add(baseline.published_by)
+  const names = {}
+  const ids = [...wanted]
+  for (let i = 0; i < ids.length; i += NAME_CHUNK) {
+    const { data, error } = await db.from('profiles').select('id, full_name').in('id', ids.slice(i, i + NAME_CHUNK))
+    if (error) {
+      logWarn('roster-snapshot', 'compare: names read failed; showing the comparison without them', { ...meta, err: error })
+      break
+    }
+    for (const p of data || []) names[p.id] = p.full_name
+  }
+
+  const result = compareSnapshot({
+    snapshot: baseline.snapshot, currentBlocks: current, from, to, nowMs, tz: location?.timezone ?? null, names,
+  })
+
+  return {
+    data: {
+      roster: rosterSummary,
+      window: result.window,
+      baseline: {
+        snapshot_id: baseline.id, roster_id: baseline.roster_id, published_at: baseline.published_at,
+        period_start: baseline.period_start, period_end: baseline.period_end,
+        published_by_name: baseline.published_by ? (names[baseline.published_by] ?? null) : null,
+      },
+      missing_reason: null,
+      snapshots_began_at: snapshotsBeganAt,
+      publishes,
+      blocks: result.blocks,
+      totals: result.totals,
+    },
   }
 }
