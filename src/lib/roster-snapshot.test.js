@@ -371,4 +371,36 @@ describe('loadRosterComparison', () => {
     })
     expect(db.log.some((q) => q.table === 'shift_blocks')).toBe(false)
   })
+
+  // Review 5 — the "Compare with" choices are publishes of THIS roster's
+  // dates (a month view straddling two rosters must not offer roster B's
+  // publishes under roster A's heading), and always include the baseline.
+  const pubsQuery = (db) => db.log.find((q) => q.table === 'roster_publish_snapshots'
+    && opsOf(q, 'select')[0]?.[1] === 'id, roster_id, published_at, period_start, period_end')
+
+  it("offers only publishes overlapping this roster's published period, narrowed to the window", async () => {
+    const week = compareDb()
+    await loadRosterComparison(week, { roster: ROSTER_FOR_COMPARE, from: '2026-09-15', to: '2026-09-16', nowMs: NOW })
+    expect(pubsQuery(week).ops).toContainEqual(['lte', 'period_start', '2026-09-16'])
+    expect(pubsQuery(week).ops).toContainEqual(['gte', 'period_end', '2026-09-15'])
+
+    // A month view reaching into the next roster's days: clipped to this one.
+    const month = compareDb()
+    await loadRosterComparison(month, { roster: ROSTER_FOR_COMPARE, from: '2026-09-01', to: '2026-10-04', nowMs: NOW })
+    expect(pubsQuery(month).ops).toContainEqual(['lte', 'period_start', '2026-09-20'])
+    expect(pubsQuery(month).ops).toContainEqual(['gte', 'period_end', '2026-09-14'])
+  })
+
+  it('always lists the baseline, even when it is older than the newest 20', async () => {
+    const newer = Array.from({ length: 20 }, (_, i) => ({
+      id: `s-n${i}`, roster_id: `r-n${i}`, published_at: `2026-09-${String(13 + (i % 9)).padStart(2, '0')}T0${i % 10}:00:00+00:00`,
+      period_start: '2026-09-14', period_end: '2026-09-20',
+    }))
+    const out = await loadRosterComparison(compareDb({ publishes: newer }), { roster: ROSTER_FOR_COMPARE, nowMs: NOW })
+    const ids = out.data.publishes.map((p) => p.snapshot_id)
+    expect(ids).toHaveLength(21)
+    expect(ids).toContain('s-1')
+    const times = out.data.publishes.map((p) => Date.parse(p.published_at))
+    expect([...times].sort((a, b) => b - a)).toEqual(times)
+  })
 })

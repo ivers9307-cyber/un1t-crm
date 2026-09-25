@@ -200,23 +200,33 @@ export async function loadRosterComparison(db, { roster, againstId = null, from 
   if (firstErr) return fail('first-snapshot read failed', firstErr)
   const snapshotsBeganAt = first?.published_at ?? null
 
-  // Every publish at this studio overlapping the window, newest first: the
-  // "compare with" choices (the first publish of the week, say).
-  const askFrom = from || roster.period_start
-  const askTo = to || roster.period_end
+  // The "compare with" choices: every publish at this studio of THIS
+  // roster's dates (review 5: a month view straddling two rosters must not
+  // offer the other roster's publishes under this one's heading), narrowed to
+  // the window on screen when the two overlap, newest first. The baseline is
+  // always among them, even when it is older than the newest
+  // COMPARE_PUBLISHES_LISTED.
+  const lo = from && from > rosterPeriod.from ? from : rosterPeriod.from
+  const hi = to && to < rosterPeriod.to ? to : rosterPeriod.to
+  const listFrom = lo <= hi ? lo : rosterPeriod.from
+  const listTo = lo <= hi ? hi : rosterPeriod.to
   const { data: pubs, error: pubsErr } = await db
     .from('roster_publish_snapshots')
     .select('id, roster_id, published_at, period_start, period_end')
     .eq('location_id', roster.location_id)
-    .lte('period_start', askTo)
-    .gte('period_end', askFrom)
+    .lte('period_start', listTo)
+    .gte('period_end', listFrom)
     .order('published_at', { ascending: false })
     .limit(COMPARE_PUBLISHES_LISTED)
   if (pubsErr) return fail('publish list read failed', pubsErr)
-  const publishes = (pubs || []).map((p) => ({
-    snapshot_id: p.id, roster_id: p.roster_id, published_at: p.published_at,
-    period_start: p.period_start, period_end: p.period_end,
-  }))
+  const listed = [...(pubs || [])]
+  if (baseline && !listed.some((p) => p.id === baseline.id)) listed.push(baseline)
+  const publishes = listed
+    .sort((x, y) => (Date.parse(y.published_at) || 0) - (Date.parse(x.published_at) || 0))
+    .map((p) => ({
+      snapshot_id: p.id, roster_id: p.roster_id, published_at: p.published_at,
+      period_start: p.period_start, period_end: p.period_end,
+    }))
 
   const rosterSummary = {
     id: roster.id, status: roster.status,

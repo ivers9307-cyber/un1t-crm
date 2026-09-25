@@ -267,7 +267,10 @@ own roster row, so this is one per publish.
   text: an immutable row could never be corrected or erased, and free text can
   name a person. The comparison reports `briefing_change` (added, changed,
   removed after publish), the change log's own vocabulary. A block without the
-  key reads as not recorded, never as a change.
+  key reads as not recorded, never as a change. It is an **unsalted** digest:
+  a short, guessable briefing could be confirmed by hashing a guess. That is
+  accepted because the table is service role only and the digest only has to
+  tell changed from unchanged.
 - **No backfill:** rosters published before the studio's first snapshot have
   none, and the view says from when they exist.
 
@@ -284,4 +287,8 @@ own window (override, else the block's time).
 "No arrival recorded" (`no_show_candidate`) is advisory: stamps exist for a
 minority of shifts, and nothing alerts. The web view is "Published vs now" in
 the change-log dialog (the Published chip), one section per published roster
-the period sits on.
+the period sits on. `against` must be a publish at the same studio whose
+period overlaps this roster's published dates (else 409); the "Compare with"
+list offers only those, always including the current baseline. A baseline
+whose dates miss the period on screen answers `missing_reason:
+'outside_window'` and is never shown as an empty comparison.
