@@ -205,3 +205,24 @@ the phone's Manage chip; the Studio Overview's `underMinEntry` skips it. It is
 `summarizeWeek`) and **in every hours figure** (payroll, week-cost, reports).
 An unreadable kind is `class`. The API refuses an explicit minimum on an admin
 template or slot (400 `admin_has_no_minimum`) and normalises an omitted one.
+
+## Calendar subscription (ICSFEED.1, mig 632, 2026-09)
+
+Every staff member can subscribe their calendar app to their OWN published
+shifts: `/account` on web, "Subscribe to my shifts" on the phone's Schedule tab
+(Me view). The feed is `GET /api/calendar-feed/<rcf_token>.ics`, anonymous by
+design; only `sha256(token)` is stored (`staff_calendar_feeds`, one row per
+person, service role only), so the URL is shown once and "Make a new link"
+kills the old one in the same UPDATE.
+
+Contents: own assignments, `rosters.status = 'published'`, not cancelled, every
+studio, Dublin today −14 to +56 days. Effective time = override, else the
+block's time; written in UTC from `locations.timezone` (no VTIMEZONE). UID =
+`shift-<assignment id>@repset.ie`, so edits replace and removals disappear on
+the next poll. No colleague, no assignment notes, no pay.
+
+Deactivation: the feed answers 404 for a profile with `active = false` or
+`deleted_at` set, so every deactivation path stops it with no write here;
+reactivation resumes the same link. A read failure is 503, never an empty
+calendar (a subscriber would lose every shift). Rate limit is per token, never
+per IP. Public on the CRM hosts only (`publicExactPaths` in `src/proxy.js`).
