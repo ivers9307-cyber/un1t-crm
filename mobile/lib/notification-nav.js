@@ -105,6 +105,10 @@ export function routeForNotification(data) {
     // the phone, so open the roster they build: Manage mode (schedule.jsx
     // honours ?view=manage for manager roles only; anyone else lands on their
     // own week). The payload's profile_id is there for a better target later.
+    // Same pattern as RUNWAY.1's roster_runway above, kept deliberately
+    // (AVAIL.2 review): a manager who mutes the notice (notify_availability_
+    // change) gets no push; one who is not a manager at the studio the
+    // phone has active lands on their own week, which is harmless.
     case 'availability_changed':
       return '/(tabs)/schedule?view=manage'
     case 'schedule_published':
