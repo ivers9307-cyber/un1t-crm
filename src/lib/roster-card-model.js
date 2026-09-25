@@ -220,7 +220,9 @@ export function monthCellLines(blocks, { todayIso, isManager = false, limit = 3 
         statusWords = 'No coach is assigned to this shift'
       } else {
         tone = 'quiet'
-        text = `${time} No coach`
+        // SHIFTTYPE.1 — an admin shift has no minimum, so "No coach" would
+        // read as a gap; say what the week card says.
+        text = isAdminShift(blk) ? `${time} Nobody assigned` : `${time} No coach`
       }
     } else if (staffing?.status === 'short') {
       tone = 'short'

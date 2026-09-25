@@ -261,6 +261,18 @@ describe('monthCellLines', () => {
     const two = [mb('a', '06:00', '07:00', 1, on('A B')), mb('b', '07:00', '08:00', 1, on('C D'))]
     expect(monthCellLines(two, { todayIso: TODAY, limit: 1 }).more).toBe(1)
   })
+
+  // SHIFTTYPE.1 — an empty admin block is not a gap: it reads like the week
+  // card ("Nobody assigned"), never "No coach" or "Needs coach".
+  it('an empty admin block reads "Nobody assigned", quietly, for a manager and a coach', () => {
+    const admin = { ...mb('x', '09:00', '10:00', 0, []), shift_templates: { name: 'Stock take', kind: 'admin' } }
+    for (const isManager of [true, false]) {
+      const { lines } = monthCellLines([admin], { todayIso: TODAY, isManager })
+      expect(lines[0]).toMatchObject({ tone: 'quiet', text: '9 Nobody assigned' })
+    }
+    // A class block keeps its wording.
+    expect(monthCellLines([mb('y', '09:00', '10:00', 1, [])], { todayIso: TODAY, isManager: false }).lines[0].text).toBe('9 No coach')
+  })
 })
 
 describe('rosterToolbarModel', () => {
