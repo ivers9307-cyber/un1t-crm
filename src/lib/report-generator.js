@@ -4,8 +4,7 @@ import { computeWeeklyCost, implicitHourlyRate, mondayOf, shiftHours } from '@/l
 import { isLiveAssignment, formatDate } from '@/lib/roster'
 import { logWarn } from '@/lib/log'
 import { roleAtDeletion } from '@/lib/staff-tombstone'
-import { isRealCalendarDate } from '@/lib/schemas'
-import { addDaysISO } from '@/lib/dublin-time'
+import { reportPeriodError, eachReportDay } from '@/lib/report-period'
 
 // RETIRE-SHIFTS-MIRROR.1 — reports now read the Roster v2 source of truth
 // (shift_assignments + shift_blocks) instead of the legacy public.shifts
@@ -150,14 +149,13 @@ export async function generateReport({ report_type, period_start, period_end, lo
     return { success: false, error: 'report_type, period_start, period_end, and location_id are required' }
   }
 
-  // DATECHECK.1 — POST /api/schedule/reports refuses an impossible date before
-  // calling this, and the cron builds its period from real Dates; this is the
-  // floor for any other caller. It also keeps roster_coverage's day walk
-  // finite: that walk steps a calendar string forward until it passes
-  // period_end.
-  if (!isRealCalendarDate(period_start) || !isRealCalendarDate(period_end)) {
-    return { success: false, error: 'period_start and period_end must be real dates, YYYY-MM-DD' }
-  }
+  // DATECHECK.1 — POST /api/schedule/reports refuses a bad period before
+  // calling this (the same rule), and the cron builds its period from real
+  // Dates; this is the floor for any other caller. Real dates, in order, at
+  // most 366 days: it also keeps roster_coverage's day walk short (9999-12-31
+  // used to spin it to the function timeout).
+  const periodError = reportPeriodError(period_start, period_end)
+  if (periodError) return { success: false, error: periodError }
 
   let reportData = {}
   let summary = {}
@@ -360,7 +358,7 @@ export async function generateReport({ report_type, period_start, period_end, lo
       // week keyed one day twice). Vercel runs in UTC, where both readings
       // agree, so live reports were right; any process east of UTC was not.
       const days = {}
-      for (let ds = period_start; ds <= period_end; ds = addDaysISO(ds, 1)) {
+      for (const ds of eachReportDay(period_start, period_end)) {
         days[ds] = { shifts: 0, staff_on_shift: [], staff_off: [] }
       }
 
@@ -378,7 +376,7 @@ export async function generateReport({ report_type, period_start, period_end, lo
       for (const t of (timeOff || [])) {
         const from = t.start_date > period_start ? t.start_date : period_start
         const to = t.end_date < period_end ? t.end_date : period_end
-        for (let ds = from; ds <= to; ds = addDaysISO(ds, 1)) {
+        for (const ds of eachReportDay(from, to)) {
           if (days[ds]) days[ds].staff_off.push(t.profiles?.full_name || 'Unknown')
         }
       }

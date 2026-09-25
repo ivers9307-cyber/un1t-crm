@@ -278,3 +278,29 @@ describe('POST /api/schedule/reports — a period the calendar does not have', (
     expect(generateReport).not.toHaveBeenCalled()
   })
 })
+
+// DATECHECK.1 (review) — 9999-12-31 is a real date, and the coverage walk spun
+// on it; a reversed period saved a report of nothing. One rule
+// (src/lib/report-period.js), answered in the route's own { success, error }.
+describe('POST /api/schedule/reports — a period out of order or too long', () => {
+  it('400s with a readable error and generates nothing', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    for (const [period_start, period_end, error] of [
+      ['2026-01-01', '9999-12-31', 'A report can cover at most 366 days'],
+      ['2026-01-01', '2027-01-02', 'A report can cover at most 366 days'],
+      ['2026-05-10', '2026-05-04', 'period_end must be on or after period_start'],
+    ]) {
+      const res = await POST(postReq({ report_type: 'roster_coverage', period_start, period_end, location_id: LOC_A }))
+      expect(res.status).toBe(400)
+      expect(await res.json()).toEqual({ success: false, error })
+    }
+    expect(generateReport).not.toHaveBeenCalled()
+  })
+
+  it('a 366-day period is generated', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    const res = await POST(postReq({ report_type: 'roster_coverage', period_start: '2026-01-01', period_end: '2027-01-01', location_id: LOC_A }))
+    expect(res.status).toBe(201)
+    expect(generateReport).toHaveBeenCalledTimes(1)
+  })
+})

@@ -751,3 +751,36 @@ describe('generateReport — a period the calendar does not have', () => {
     })
   }
 })
+
+// DATECHECK.1 (review) — realIsoDate accepts 9999-12-31, and the string walk
+// stepped from it to '+010000-01', which still sorts below '9999-12-31': the
+// coverage report spun to the function timeout. The period rule refuses it
+// (and any span over 366 days, and a reversed one) before a single read.
+describe('generateReport — a period out of order or too long', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+
+  for (const [period_start, period_end, error] of [
+    ['2026-01-01', '9999-12-31', 'A report can cover at most 366 days'],
+    ['2026-01-01', '2027-01-02', 'A report can cover at most 366 days'],
+    ['2026-05-10', '2026-05-04', 'period_end must be on or after period_start'],
+  ]) {
+    it(`${period_start} to ${period_end} is refused, and nothing is read`, async () => {
+      const { db } = makeReportDb({})
+      createServerClient.mockReturnValue(db)
+      const res = await generateReport({ report_type: 'roster_coverage', period_start, period_end, location_id: 'loc1' })
+      expect(res).toEqual({ success: false, error })
+      expect(db.from).not.toHaveBeenCalled()
+    })
+  }
+
+  it('a 366-day coverage report has 366 days', async () => {
+    const { db, captured } = makeReportDb({})
+    createServerClient.mockReturnValue(db)
+    const res = await generateReport({ report_type: 'roster_coverage', period_start: '2026-01-01', period_end: '2027-01-01', location_id: 'loc1' })
+    expect(res.success).toBe(true)
+    const days = captured.inserted.report_data.days
+    expect(days).toHaveLength(366)
+    expect(days[0].date).toBe('2026-01-01')
+    expect(days[365].date).toBe('2027-01-01')
+  })
+})
