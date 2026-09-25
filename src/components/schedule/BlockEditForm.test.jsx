@@ -127,5 +127,18 @@ describe('BlockEditForm', () => {
     expect(onSave).toHaveBeenCalledTimes(1)
     expect(onDone).not.toHaveBeenCalled()
   })
+
+  // Second review 1 — the calendar reloads (after this form's own save, or
+  // any refresh) and hands the form a NEW block. The form must still judge
+  // "changed" and send `expected` from the values it OPENED with, or an
+  // untouched field goes back as a change and undoes another manager's edit.
+  it('a block swapped underneath the open form: sends only what the manager changed, expected = the opened values', async () => {
+    const onSave = vi.fn(async () => ({ ok: true }))
+    const { rerender } = render(<BlockEditForm block={BLOCK} onSave={onSave} onDone={vi.fn()} />)
+    rerender(<BlockEditForm block={{ ...BLOCK, start_time: '08:00:00', max_coaches: 4 }} onSave={onSave} onDone={vi.fn()} />)
+    fireEvent.change(screen.getByLabelText('Briefing for the coaches'), { target: { value: 'Fire drill at 10' } })
+    await save()
+    expect(onSave).toHaveBeenCalledWith({ briefing: 'Fire drill at 10', expected: OPENED })
+  })
 })
 

@@ -17,14 +17,22 @@ const inputCls = 'mt-1 w-full rounded-md border border-un1t-border bg-un1t-surfa
 const labelCls = 'block text-[11px] font-semibold uppercase tracking-wider text-un1t-subtle'
 
 export default function BlockEditForm({ block, onSave, onDone }) {
-  const admin = isAdminShift(block)
-  const initial = {
+  // Second review 1 — the values this form OPENED with, captured ONCE. The
+  // calendar reloads (after a save, or any refresh) and hands a new `block`;
+  // judging "changed" against the live prop sent an untouched field back as a
+  // change, with `expected` = the NEW values, silently undoing another
+  // manager's edit.
+  const [initial] = useState(() => ({
+    admin: isAdminShift(block),
     start: hhmm(block.start_time),
     end: hhmm(block.end_time),
     min: String(block.min_coaches ?? 0),
     max: String(block.max_coaches ?? 1),
+    minRaw: block.min_coaches ?? 0,
+    maxRaw: block.max_coaches ?? 1,
     briefing: block.briefing || '',
-  }
+  }))
+  const admin = initial.admin
   const [start, setStart] = useState(initial.start)
   const [end, setEnd] = useState(initial.end)
   const [min, setMin] = useState(initial.min)
@@ -48,8 +56,8 @@ export default function BlockEditForm({ block, onSave, onDone }) {
     out.expected = {
       start_time: initial.start,
       end_time: initial.end,
-      min_coaches: block.min_coaches ?? 0,
-      max_coaches: block.max_coaches ?? 1,
+      min_coaches: initial.minRaw,
+      max_coaches: initial.maxRaw,
     }
     return out
   }
