@@ -5,6 +5,8 @@ import { isLiveAssignment, formatDate } from '@/lib/roster'
 import { logWarn } from '@/lib/log'
 import { roleAtDeletion } from '@/lib/staff-tombstone'
 import { reportPeriodError, eachReportDay } from '@/lib/report-period'
+import { countLeaveDays } from '@/lib/time-off-days'
+import { getNonWorkingDates } from '@/lib/time-off-leave'
 
 // RETIRE-SHIFTS-MIRROR.1 — reports now read the Roster v2 source of truth
 // (shift_assignments + shift_blocks) instead of the legacy public.shifts
@@ -128,6 +130,49 @@ export async function fetchScheduledShiftRows(db, { locationId, periodStart, per
     shift_templates: r.shift_blocks?.shift_templates,
   }))
   return { rows, error: null }
+}
+
+/**
+ * TIMEOFFREPORT.1 — every time-off request at a studio that OVERLAPS
+ * [periodStart, periodEnd] (starts on or before the end, ends on or after the
+ * start), paged past the 1,000-row cap. Both time-off reports read through
+ * it: the summary used to ask for requests CONTAINED in the period, so leave
+ * spanning a month end fell out of both months' reports. A failed read is an
+ * error, never an empty list (the summary used to save an empty report).
+ * @returns {Promise<{ rows: Array<object>, error: string|null }>}
+ */
+export async function fetchOverlappingTimeOff(db, { locationId, periodStart, periodEnd, select, status = null }) {
+  const PAGE = 1000
+  const rows = []
+  for (let from = 0; ; from += PAGE) {
+    let q = db.from('time_off_requests')
+      .select(select)
+      .eq('location_id', locationId)
+      .lte('start_date', periodEnd)
+      .gte('end_date', periodStart)
+    if (status) q = q.eq('status', status)
+    const { data, error } = await q.order('start_date').order('id').range(from, from + PAGE - 1)
+    if (error) return { rows: [], error: error.message || 'Could not read time off' }
+    rows.push(...(data || []))
+    if (!data || data.length < PAGE) break
+  }
+  return { rows, error: null }
+}
+
+/**
+ * TIMEOFFREPORT.1 — pure. The days of `req` that fall inside the period. A
+ * request wholly inside keeps its stored total_days (the figure it was charged
+ * at, half days included); one that crosses an edge is recounted over the
+ * part inside with the charging rule (countLeaveDays: working days for a
+ * holiday, minus `nonWorkingDates`; calendar days for every other type), so a
+ * request spanning two reports is split between them, never counted twice.
+ */
+export function timeOffDaysInPeriod(req, periodStart, periodEnd, nonWorkingDates = null) {
+  const crosses = req.start_date < periodStart || req.end_date > periodEnd
+  if (!crosses) return { days: Number(req.total_days) || 0, crosses: false }
+  const from = req.start_date > periodStart ? req.start_date : periodStart
+  const to = req.end_date < periodEnd ? req.end_date : periodEnd
+  return { days: countLeaveDays(req.type, from, to, nonWorkingDates), crosses: true }
 }
 
 /**
@@ -309,12 +354,25 @@ export async function generateReport({ report_type, period_start, period_end, lo
 
     case 'time_off_summary': {
       reportName = 'Time Off Summary'
-      const { data: requests } = await db.from('time_off_requests')
-        .select('*, profiles!profile_id(full_name, role)')
-        .eq('location_id', locId)
-        .gte('start_date', period_start)
-        .lte('end_date', period_end)
-        .order('start_date')
+      // TIMEOFFREPORT.1 — every request that touches the period, each counted
+      // for the days INSIDE it (timeOffDaysInPeriod), so leave spanning a
+      // month end lands in both months' reports and in neither twice.
+      const { rows: requests, error: requestsError } = await fetchOverlappingTimeOff(db, {
+        locationId: locId, periodStart: period_start, periodEnd: period_end,
+        select: '*, profiles!profile_id(full_name, role)',
+      })
+      if (requestsError) return { success: false, error: requestsError }
+
+      // Only a holiday that crosses an edge is recounted against the studio's
+      // bank holidays and closures, so the list is read only then. Fail
+      // closed like the time-off POST: an unreadable list is an error, never
+      // "no bank holidays" (that would over-count).
+      let nonWorkingDates = null
+      if (requests.some((r) => r.type === 'holiday' && (r.start_date < period_start || r.end_date > period_end))) {
+        const { dates, error: datesError } = await getNonWorkingDates(db, locId, period_start, period_end, { quiet: true })
+        if (datesError) return { success: false, error: datesError.message || 'Could not read the studio holidays' }
+        nonWorkingDates = dates
+      }
 
       // Seed all five types (mig 283) so unpaid/other/unavailable are bucketed,
       // not dropped. The `byType[req.type] = …` accumulator below tolerates any
@@ -322,34 +380,38 @@ export async function generateReport({ report_type, period_start, period_end, lo
       const byType = { holiday: 0, sick: 0, unpaid: 0, other: 0, unavailable: 0 }
       const byStatus = { pending: 0, approved: 0, rejected: 0, cancelled: 0 }
       const byStaff = {}
+      const reported = []
 
-      for (const req of (requests || [])) {
-        byType[req.type] = (byType[req.type] || 0) + Number(req.total_days)
+      for (const req of requests) {
+        const { days, crosses } = timeOffDaysInPeriod(req, period_start, period_end, nonWorkingDates)
+        reported.push({ ...req, days_in_period: days, crosses_period: crosses })
+        byType[req.type] = (byType[req.type] || 0) + days
         byStatus[req.status] = (byStatus[req.status] || 0) + 1
         const name = req.profiles?.full_name || 'Unknown'
         if (!byStaff[name]) byStaff[name] = { holiday: 0, sick: 0, unpaid: 0, other: 0, unavailable: 0, total: 0 }
-        byStaff[name][req.type] = (byStaff[name][req.type] || 0) + Number(req.total_days)
-        byStaff[name].total += Number(req.total_days)
+        byStaff[name][req.type] = (byStaff[name][req.type] || 0) + days
+        byStaff[name].total += days
       }
 
-      reportData = { requests: requests || [], by_type: byType, by_status: byStatus, by_staff: byStaff }
-      summary = { total_requests: (requests || []).length, total_days: Object.values(byType).reduce((a, b) => a + b, 0), ...byType }
+      reportData = { requests: reported, by_type: byType, by_status: byStatus, by_staff: byStaff }
+      summary = { total_requests: reported.length, total_days: Object.values(byType).reduce((a, b) => a + b, 0), ...byType }
       break
     }
 
     case 'roster_coverage': {
       reportName = 'Roster Coverage'
       // shifts and approved time-off are independent — fetch in parallel.
-      const [{ rows: shifts, error: shiftsError }, { data: timeOff }] = await Promise.all([
+      const [{ rows: shifts, error: shiftsError }, { rows: timeOff, error: timeOffError }] = await Promise.all([
         fetchScheduledShiftRows(db, { locationId: locId, periodStart: period_start, periodEnd: period_end }),
-        db.from('time_off_requests')
-          .select('start_date, end_date, profile_id, type, profiles!profile_id(full_name)')
-          .eq('location_id', locId)
-          .eq('status', 'approved')
-          .lte('start_date', period_end)
-          .gte('end_date', period_start),
+        // TIMEOFFREPORT.1 — paged, and a failed read fails the report instead
+        // of saving days with nobody off.
+        fetchOverlappingTimeOff(db, {
+          locationId: locId, periodStart: period_start, periodEnd: period_end, status: 'approved',
+          select: 'id, start_date, end_date, profile_id, type, profiles!profile_id(full_name)',
+        }),
       ])
       if (shiftsError) return { success: false, error: shiftsError }
+      if (timeOffError) return { success: false, error: timeOffError }
 
       // DATECHECK.1 — walk the period as calendar strings. The old walk built
       // LOCAL-midnight Dates and keyed them with toISOString(), which is UTC:
