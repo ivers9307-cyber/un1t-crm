@@ -5025,9 +5025,10 @@ registry.registerPath({
   description: 'Deletes one shift_assignments row. Manager-only (master, owner, manager, head_coach): a coach cannot remove themselves from a shift — they post a swap request instead (POST /api/schedule/swaps), which a manager approves. A non-master manager is scoped to their own locations; an assignment at another location returns 404.',
   request: { params: z.object({ id: uuidLike }) },
   responses: {
-    200: { description: 'Assignment removed' },
+    200: { description: 'Assignment removed. A repeat of a removal another request already carried out (a double submit) is also 200, with `data.already_removed: true`; nothing is logged or sent twice.' },
     403: { description: 'Forbidden — ask for a swap to drop this shift', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Assignment not found, or at a location you do not own', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'The shift changed hands since it was read (`code: changed`): refresh and try again', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
