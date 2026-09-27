@@ -30,7 +30,9 @@ export default async function AttendanceReportPage() {
       <p className="text-sm text-un1t-subtle mb-8 max-w-3xl">
         Arrivals come from the staff app: the first time a coach&apos;s phone
         enters the studio area before a shift. On time means that arrival was
-        within 60 seconds of the scheduled start. &ldquo;On site&rdquo; means
+        within 60 seconds of the start the coach was given: a manager&apos;s
+        adjusted start if there is one (marked &ldquo;adjusted&rdquo;), else the
+        rostered start. &ldquo;On site&rdquo; means
         the coach was already in from a back-to-back shift. Pending means the
         shift is still in progress with no arrival yet. No-show means the shift
         ended with no arrival recorded. Arrivals never change paid hours.
