@@ -25,12 +25,19 @@
 //                    has no pay column (mig 011) → head coaches keep it;
 //                    they already approve time off.
 //   roster_coverage  shifts per day, staff working / off. No pay → kept.
-//   utilisation      contracted vs actual hours and a percentage. Contracted
-//                    hours are not pay data (staff.js ships them to every
-//                    role in STAFF_PUBLIC_FIELDS) → kept.
+//   utilisation      contracted vs actual hours and a percentage, per person.
+//                    CONTRACTVIS.1 (Richard, 27 Sep): a colleague's contracted
+//                    hours are owner / manager / master only → admin only.
 //
 // A NEW report type that carries a rate or a cost must be added to
 // RATE_REPORT_TYPES; report-access.test.js pins the set.
+//
+// CONTRACTVIS.1 — the set is now "admin-only reports": a rate, a cost, or a
+// colleague's contract. The export names stay so every gate built on them
+// (generate, list, schedule, PATCH, the cron's email recipients, the UI tile)
+// covers utilisation with no further change. The generated_reports RLS
+// (mig 643) names the same two types; a new admin-only type needs a migration
+// like that one too.
 //
 // This module is PURE and client-safe (ScheduleReporting imports it to hide
 // the tile). @/lib/auth is server-only, so the role-at-location check is
@@ -40,11 +47,23 @@
 
 import { ADMIN_ROLES, MANAGER_ROLES } from '@/lib/schemas'
 
-export const RATE_REPORT_TYPES = Object.freeze(['staff_cost'])
+export const RATE_REPORT_TYPES = Object.freeze(['staff_cost', 'utilisation'])
 export const RATE_REPORT_VIEWER_ROLES = ADMIN_ROLES
 
 export function isRateReportType(reportType) {
   return RATE_REPORT_TYPES.includes(reportType)
+}
+
+const ADMIN_REPORT_NAMES = Object.freeze({ staff_cost: 'staff cost', utilisation: 'staff utilisation' })
+
+/** The lower-case name of an admin-only report type, for copy ('these' for any other type). */
+export function adminOnlyReportName(reportType) {
+  return ADMIN_REPORT_NAMES[reportType] || 'these'
+}
+
+/** The refusal for a non-admin asking to `verb` ('run' | 'schedule') an admin-only report. */
+export function adminOnlyReportRefusal(verb, reportType) {
+  return `Only owners and managers can ${verb} ${adminOnlyReportName(reportType)} reports.`
 }
 
 // PostgREST list literal for `.not('report_type', 'in', …)` and `.or(…)`.

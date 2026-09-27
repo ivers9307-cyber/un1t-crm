@@ -17,20 +17,29 @@
 // SCHEDROLES.1 — "MANAGER_ROLES" is the role AT location_id
 // (hasRoleAtLocation), never `user.role`, the ACTIVE studio's role.
 //
+// CONTRACTVIS.1 (Richard, 27 Sep) — every figure here is measured against a
+// contract (overtime = allocated − contract; the status says which side of it
+// a coach is), so only owner / manager / master AT location_id get rows. A
+// head coach gets 200 with contract_visible false and no rows, and nothing is
+// computed: a 200, not a 403, so a tab still on the old bundle shows an empty
+// panel rather than an error (the grid's convention).
+//
 // Query params:
 //   location_id  uuid (required)
 //   week_start   YYYY-MM-DD anywhere inside the target week (required; the
 //                helper snaps it to that week's Monday)
 //
 // Returns:
-//   { success, data: { weekStartIso, weekEndIso, coaches: [...], totals } }
+//   { success, data: { weekStartIso, weekEndIso, contract_visible, coaches: [...], totals } }
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
-import { uuidLike, realIsoDate, MANAGER_ROLES } from '@/lib/schemas'
+import { uuidLike, realIsoDate, MANAGER_ROLES, ADMIN_ROLES } from '@/lib/schemas'
 import { computeWeeklyFteHours } from '@/lib/roster-week-cost'
+import { mondayOf } from '@/lib/payroll'
+import { addDaysISO } from '@/lib/dublin-time'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -67,10 +76,24 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
+  if (!hasRoleAtLocation(user, location_id, ADMIN_ROLES)) {
+    const weekStartIso = mondayOf(week_start)
+    return NextResponse.json({
+      success: true,
+      data: {
+        weekStartIso,
+        weekEndIso: addDaysISO(weekStartIso, 6),
+        contract_visible: false,
+        coaches: [],
+        totals: { coaches: 0, allocated_hours: 0, overtime_hours: 0, over_threshold: 0 },
+      },
+    })
+  }
+
   try {
     const db = createServerClient()
     const data = await computeWeeklyFteHours({ db, locationId: location_id, weekStart: week_start })
-    return NextResponse.json({ success: true, data })
+    return NextResponse.json({ success: true, data: { ...data, contract_visible: true } })
   } catch (e) {
     return NextResponse.json(
       { success: false, error: e?.message || 'Failed to compute weekly hours' },

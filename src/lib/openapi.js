@@ -4631,8 +4631,8 @@ registry.registerPath({
   path: '/api/schedule/week-cost',
   tags: ['Schedule'],
   security: [{ CookieAuth: [] }],
-  summary: 'FTE hours against contract for one week (manager-only)',
-  description: "Per-coach allocated hours, contracted hours and overtime for the Mon-Sun week containing week_start, plus week totals. Manager-only (master, owner, manager, head_coach), and scoped by assertLocationAccess — a location outside the caller's assignments is a 403, since location_id is a caller-supplied query param rather than a path id. The response deliberately carries NO rate, salary or euro figure: the calendar used to compute this in the browser from /api/staff pay fields, which put the studio's pay data in every manager's tab to render a panel that only ever showed hours. week_start may be any day inside the target week; it is snapped to that week's Monday.",
+  summary: 'FTE hours against contract for one week (owner/manager/master see the rows)',
+  description: "Per-coach allocated hours, contracted hours and overtime for the Mon-Sun week containing week_start, plus week totals, and contract_visible: true. Gate: master, owner, manager or head_coach AT location_id, and assertLocationAccess (a location outside the caller's assignments is a 403). CONTRACTVIS.1: every figure is measured against a contract, so only owner, manager or master at location_id get rows; a head coach gets 200 with contract_visible false, coaches [] and zero totals, and nothing is computed. The response carries NO rate, salary or euro figure. week_start may be any day inside the target week; it is snapped to that week's Monday.",
   responses: {
     200: { description: 'Per-coach hours + week totals' },
     400: { description: 'Missing or malformed location_id / week_start, or week_start is not a real calendar date', content: { 'application/json': { schema: ErrorResponse } } },
@@ -5536,7 +5536,7 @@ registry.registerPath({
   tags: ['Schedule', 'Reports'],
   security: [{ CookieAuth: [] }],
   summary: 'Generate a report for a period now (manager+)',
-  description: 'Runs report_type over period_start..period_end (inclusive) at location_id (default: the active studio) and stores the result in the report history. staff_cost carries pay rates, so it is owner/manager/master only at that studio.',
+  description: 'Runs report_type over period_start..period_end (inclusive) at location_id (default: the active studio) and stores the result in the report history. staff_cost (pay rates) and utilisation (each colleague\'s contracted hours; CONTRACTVIS.1) are owner/manager/master only at that studio.',
   request: { body: { content: { 'application/json': { schema: z.object({
     report_type: z.string().openapi({ description: 'One of the report types the Reporting tab offers (e.g. staff_hours, staff_cost, roster_coverage, time_off_summary)' }),
     period_start: z.string().openapi({ description: 'YYYY-MM-DD, a real calendar date' }),
@@ -5557,7 +5557,7 @@ registry.registerPath({
   tags: ['Schedule', 'Reports'],
   security: [{ CookieAuth: [] }],
   summary: 'Schedule a recurring report (manager+)',
-  description: 'STAFFCOST.1 — staff_cost carries pay rates and cost, so it is owner/manager/master only at the schedule\'s location (a head coach gets 403). When the cron emails a staff_cost report, any recipient address belonging to a staff profile without that role at the location is withheld.',
+  description: 'STAFFCOST.1 — staff_cost carries pay rates and cost, and (CONTRACTVIS.1) utilisation carries each colleague\'s contracted hours, so both are owner/manager/master only at the schedule\'s location (a head coach gets 403). When the cron emails either report, any recipient address belonging to a staff profile without that role at the location is withheld.',
   request: { body: { content: { 'application/json': { schema: ScheduledReport } } } },
   responses: {
     201: { description: 'Schedule created' },

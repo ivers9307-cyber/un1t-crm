@@ -39,12 +39,12 @@ describe('RosterSummaryPanel with a slice missing', () => {
   })
 
   it('leave missing: says utilisation does not include leave', () => {
-    renderPanel({ staff: [FTE], leaveMissing: true })
+    renderPanel({ staff: [FTE], leaveMissing: true, contractVisible: true })
     expect(screen.getByText('Leave not included')).toBeTruthy()
   })
 
   it('leave loaded: no such caveat', () => {
-    renderPanel({ staff: [FTE] })
+    renderPanel({ staff: [FTE], contractVisible: true })
     expect(screen.queryByText('Leave not included')).toBeNull()
   })
 
