@@ -79,6 +79,16 @@ Transient DB errors in the match/stamp path return **503 with `transient: true`*
 - `/schedule/attendance` Source column gains the Geofence badge
 
 
+### The report (`/schedule/attendance`, `GET /api/attendance`)
+
+One row per live shift at the active studio (owner / manager / master by default, the `attendance_reports` permission judged at that studio). ATTENDREPORT.1 (follow-ups C4) set the rules:
+
+- **Lateness is measured from the start the coach was given:** the manager's adjusted start (`start_time_override`), else the rostered block start. **Pending vs no-show** uses the adjusted end likewise; an end before the start ends the next day. The page marks an adjusted start "adjusted", and the CSV carries both "Scheduled start" (the one lateness uses) and "Rostered start". An adjusted time is never an arrival: arrived = `arrived_at` only.
+- **"On site"** (a back-to-back shift) is still measured on the **rostered** times, the same rule as the published-vs-now view (`roster-compare.js`) and the phone's arrival line (`shift-arrivals.js`); a test pins the report and the compare to the same answer.
+- The period is Dublin days: defaults are the 14 days before today and today; `from`/`to` must be real dates, ordered, at most 366 days (`reportPeriodError`), or the API answers 400.
+- Every row is read (`.range()` paging), and the event sources in chunks of 100 ids. A failed location or shift read is a logged 500; a failed event-source read keeps the report and shows "some Source badges may be missing".
+- Rules: `src/lib/attendance-report.js`; the instants: `effectiveWindowAt` / `resolveScheduledAt` in `src/lib/staff-attendance.js` (two-pass, so a studio in any zone is right on its DST days).
+
 ### What coaches see (ARRIVALSHOW.1)
 
 The phone's Schedule tab (Me view, phone and iPad) shows one line under each of the coach's OWN shifts: "Arrived 06:52", "On site from your earlier shift (arrived 06:52)", "No arrival recorded yet" (the shift has started) or "No arrival recorded" (it has ended). Nothing is shown before a shift starts, at a studio with the geofence off, for a geofence-exempt coach, on a draft, or when the server could not read the arrivals. It never shows minutes late, and no alert is sent (late and no-show alerts are held until coverage is above ~80%).
