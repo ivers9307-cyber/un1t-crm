@@ -20,8 +20,11 @@
 //   arrival line (shift-arrivals.js) measure it "as the attendance report
 //   does", and the geofence matcher judges its windows on block times too. The
 //   tests run the compare on the same rows and require the same answer.
-//   A carried arrival is never late (minutes_late null): the coach didn't walk
-//   in at that instant.
+//   A carried arrival is judged against THIS shift's effective start like any
+//   other, so it can read Late (on site at 08:30 for an 08:00 shift is late).
+//   A carried row keeps its minutes when it reads Late, so the number agrees
+//   with the status; one that reads on time has minutes_late null (the coach
+//   didn't walk in at that instant, so "10 early" would be noise).
 
 import { addDaysISO } from './dublin-time'
 import { resolveTz } from './tz-time'
@@ -147,6 +150,7 @@ export function buildAttendanceReport({ assignments, events = [], tz = null, now
     // one even when no event row matched (or the events read failed).
     const sourceSet = new Set(sources.get(a.id) || [])
     if (a.arrival_source) sourceSet.add(a.arrival_source)
+    const status = bucketLateness(r.effectiveStartAt, arrivedAt, { scheduledEndAt: r.effectiveEndAt, nowMs })
     return {
       assignment_id: a.id,
       profile_id: a.profile_id,
@@ -168,8 +172,8 @@ export function buildAttendanceReport({ assignments, events = [], tz = null, now
       arrival_inferred: r.arrivalInferred,
       // The manager-set paid start, if any. Not an arrival.
       paid_start_override: a.start_time_override || null,
-      status: bucketLateness(r.effectiveStartAt, arrivedAt, { scheduledEndAt: r.effectiveEndAt, nowMs }),
-      minutes_late: r.arrivalInferred ? null : minutesLate(r.effectiveStartAt, arrivedAt),
+      status,
+      minutes_late: r.arrivalInferred && status !== 'late' ? null : minutesLate(r.effectiveStartAt, arrivedAt),
       sources: Array.from(sourceSet).sort(),
     }
   }).sort(rowOrder)

@@ -80,12 +80,39 @@ const CARRY_EFFECTIVE_NOT_BLOCK = [
   asg('a1', { start: '07:00:00', end: '08:00:00', arrived_at: '2026-07-15T05:55:00Z' }),
   asg('a2', { start: '09:30:00', end: '10:30:00', start_time_override: '08:30:00' }), // 90 min after by block, 30 by override
 ]
+// Two fixtures where the carried arrival is after the next shift's effective start.
+const CARRY_LATE_OVERLAP = [
+  asg('a1', { start: '07:00:00', end: '09:00:00', arrived_at: '2026-07-15T07:30:00Z' }), // 08:30 Dublin
+  asg('b1', { start: '08:00:00', end: '09:00:00' }),
+]
+const CARRY_LATE_ADJUSTED = [
+  asg('a1', { start: '07:00:00', end: '08:00:00', arrived_at: '2026-07-15T06:50:00Z' }), // 07:50 Dublin
+  asg('b1', { start: '08:30:00', end: '09:30:00', start_time_override: '07:45:00' }),
+]
 
 describe('the back-to-back carry stays on block times (D3)', () => {
   it('the block gap carries even when the adjusted end would not', () => {
     expect(rowOf(report(CARRY_BLOCK_NOT_EFFECTIVE), 'a2')).toMatchObject({
       arrival_inferred: true, status: 'on_time', minutes_late: null, actual_start: '06:55:00',
     })
+  })
+
+  // Review: a carried arrival is judged against THIS shift's effective start, so
+  // it can read Late. When it does, the number agrees with the status.
+  it('an overlapping block: a carried 08:30 arrival is 30 late on the 08:00 shift', () => {
+    const res = report(CARRY_LATE_OVERLAP)
+    expect(rowOf(res, 'b1')).toMatchObject({ arrival_inferred: true, status: 'late', minutes_late: 30, actual_start: '08:30:00' })
+    expect(rowOf(res, 'a1')).toMatchObject({ arrival_inferred: false, status: 'late', minutes_late: 90 })
+  })
+
+  it('an earlier adjusted start: a carried 07:50 arrival is 5 late on the 07:45 shift', () => {
+    expect(rowOf(report(CARRY_LATE_ADJUSTED), 'b1')).toMatchObject({
+      arrival_inferred: true, status: 'late', minutes_late: 5, effective_start: '07:45:00', actual_start: '07:50:00',
+    })
+  })
+
+  it('a carried arrival that reads on time still has no minutes', () => {
+    expect(rowOf(report(CARRY_BLOCK_NOT_EFFECTIVE), 'a2')).toMatchObject({ status: 'on_time', minutes_late: null })
   })
 
   it('the adjusted start does not create a carry the block gap would not', () => {
@@ -121,7 +148,7 @@ describe('the back-to-back carry stays on block times (D3)', () => {
       for (const b of out.blocks) for (const c of b.coaches) map[`${b.date} ${b.current.start}`] = c.arrival_inferred
       return map
     }
-    for (const fixture of [CARRY_BLOCK_NOT_EFFECTIVE, CARRY_EFFECTIVE_NOT_BLOCK]) {
+    for (const fixture of [CARRY_BLOCK_NOT_EFFECTIVE, CARRY_EFFECTIVE_NOT_BLOCK, CARRY_LATE_OVERLAP, CARRY_LATE_ADJUSTED]) {
       const mine = Object.fromEntries(report(fixture).rows.map((r) => [`${r.block_date} ${r.scheduled_start.slice(0, 5)}`, r.arrival_inferred]))
       expect(mine).toEqual(compareInferred(fixture))
     }
