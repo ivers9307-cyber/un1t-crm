@@ -6,7 +6,7 @@
 // in the phase 4 panel.
 
 import { describe, it, expect, vi } from 'vitest'
-import { fetchIncompletePayProfiles, fetchPendingRosterApprovalsCount, paginatedSumCents, fetchAdsSummary, fetchStudioDashboardData, fetchPersonalDashboardData, fetchUnstaffedBlocksThisWeek, fetchTodayOps } from './dashboard-data'
+import { fetchIncompletePayProfiles, fetchPendingRosterApprovalsCount, paginatedSumCents, fetchAdsSummary, fetchStudioDashboardData, fetchPersonalDashboardData, fetchUnstaffedBlocksThisWeek, fetchTodayOps, fetchRevenueMTD, fetchFunnelCounts } from './dashboard-data'
 
 function mockSupabaseFor(rows) {
   return {
@@ -759,5 +759,119 @@ describe('fetchTodayOps — today and this week are Dublin days', () => {
     expect(arg(db.builders.bookings[0], 'eq', 'booking_date')).toBe('2026-12-01')
     expect(arg(db.builders.class_occurrences[0], 'gte', 'starts_at')).toBe('2026-12-01T00:00:00.000Z')
     expect(arg(db.builders.class_occurrences[0], 'lt', 'starts_at')).toBe('2026-12-02T00:00:00.000Z')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// A4 REVENUEMTD.1 — the Business dashboard's windows are Europe/Dublin days.
+// They were the server's local days (UTC on Vercel).
+
+// A stub that APPLIES the recorded filters, so a test can say which payments
+// land in which month, not only which strings were sent: eq on a column,
+// gte/gt/lt/lte on an instant, then the .range() page.
+function filteringDb(rows) {
+  const builders = []
+  const cmp = { gte: (a, b) => a >= b, gt: (a, b) => a > b, lt: (a, b) => a < b, lte: (a, b) => a <= b }
+  return {
+    builders,
+    from(table) {
+      const b = chainableBuilder((calls) => {
+        let out = rows
+        for (const [m, col, v] of calls) {
+          if (m === 'eq') out = out.filter((r) => r[col] === v)
+          else if (cmp[m]) out = out.filter((r) => cmp[m](Date.parse(r[col]), Date.parse(v)))
+        }
+        const range = calls.find((c) => c[0] === 'range')
+        return { data: range ? out.slice(range[1], range[2] + 1) : out, error: null }
+      })
+      b.table = table
+      builders.push(b)
+      return b
+    },
+  }
+}
+const paid = (invoice_date, amount_cents) => ({ location_id: 'loc-1', status: 'PAID', invoice_date, amount_cents })
+const callArg = (b, method, col) => b.calls.find((c) => c[0] === method && c[1] === col)?.[2]
+
+describe('fetchRevenueMTD — the month is a Dublin month (A4 REVENUEMTD.1)', () => {
+  it('a payment at 00:30 Dublin on 1 Oct 2026 (23:30 UTC on 30 Sep) counts in October', async () => {
+    const db = filteringDb([
+      paid('2026-09-30T23:30:00Z', 5000), // 00:30 Dublin, 1 Oct: October
+      paid('2026-09-30T22:30:00Z', 7000), // 23:30 Dublin, 30 Sep: September, and past last month's 1-day window
+      paid('2026-09-01T10:00:00Z', 4000), // 1 Sep: last month's same-day window
+    ])
+    const res = await fetchRevenueMTD(db, 'loc-1', new Date('2026-10-01T10:00:00Z'))
+    expect(res.success).toBe(true)
+    expect(res.data.totalCents).toBe(5000)
+    expect(res.data.paidCount).toBe(1)
+    expect(res.data.deltaPct).toBe(25) // 5000 vs 4000
+  })
+
+  it('in the first Dublin hour of the 1st, MTD is the new month, not the whole of the last one', async () => {
+    const db = filteringDb([
+      paid('2026-09-15T12:00:00Z', 9000), // September
+      paid('2026-09-30T23:10:00Z', 5000), // 00:10 Dublin, 1 Oct
+    ])
+    const res = await fetchRevenueMTD(db, 'loc-1', new Date('2026-09-30T23:30:00Z')) // 00:30 Dublin, 1 Oct
+    expect(res.data.totalCents).toBe(5000)
+    expect(res.data.paidCount).toBe(1)
+  })
+
+  it('asks for half-open Dublin windows: [1st 00:00, …) and [last month 1st, the day after the same day)', async () => {
+    const db = filteringDb([])
+    await fetchRevenueMTD(db, 'loc-1', new Date('2026-09-30T23:30:00Z'))
+    const [cur, prev] = db.builders
+    // Irish summer time: Dublin midnight is 23:00 UTC the day before.
+    expect(callArg(cur, 'gte', 'invoice_date')).toBe('2026-09-30T23:00:00.000Z')
+    expect(cur.calls.some((c) => c[0] === 'lt' || c[0] === 'lte')).toBe(false)
+    expect(callArg(prev, 'gte', 'invoice_date')).toBe('2026-08-31T23:00:00.000Z')
+    expect(callArg(prev, 'lt', 'invoice_date')).toBe('2026-09-01T23:00:00.000Z')
+    expect(prev.calls.some((c) => c[0] === 'lte')).toBe(false)
+  })
+
+  it("last month's comparison across the 25 Oct clock change: 1 Oct 00:00 IST to 26 Oct 00:00 GMT", async () => {
+    const db = filteringDb([
+      paid('2026-09-30T22:30:00Z', 8000), // 23:30 Dublin, 30 Sep: September, out
+      paid('2026-09-30T23:30:00Z', 1000), // 00:30 Dublin, 1 Oct (IST): in
+      paid('2026-10-25T23:30:00Z', 2000), // 23:30 Dublin, 25 Oct (GMT, after the change): in
+      paid('2026-10-26T00:30:00Z', 4000), // 26 Oct: past the same day, out
+      paid('2026-11-01T00:30:00Z', 3000), // November
+    ])
+    const res = await fetchRevenueMTD(db, 'loc-1', new Date('2026-11-25T12:00:00Z'))
+    const [cur, prev] = db.builders
+    expect(callArg(cur, 'gte', 'invoice_date')).toBe('2026-11-01T00:00:00.000Z')
+    expect(callArg(prev, 'gte', 'invoice_date')).toBe('2026-09-30T23:00:00.000Z')
+    expect(callArg(prev, 'lt', 'invoice_date')).toBe('2026-10-26T00:00:00.000Z')
+    expect(res.data.totalCents).toBe(3000)
+    expect(res.data.deltaPct).toBe(0) // 3000 vs 1000 + 2000
+  })
+
+  it('on the 31st after a 30-day month, last month is all of it and never spills into this one', async () => {
+    const db = filteringDb([
+      paid('2026-09-15T12:00:00Z', 3000), // September
+      paid('2026-10-01T10:00:00Z', 6000), // 1 Oct: this month only
+    ])
+    const res = await fetchRevenueMTD(db, 'loc-1', new Date('2026-10-31T12:00:00Z'))
+    expect(res.data.totalCents).toBe(6000)
+    expect(res.data.deltaPct).toBe(100) // 6000 vs 3000, not vs 9000
+  })
+
+  it.each([
+    ['31 Oct: all of September', '2026-10-31T12:00:00Z', '2026-08-31T23:00:00.000Z', '2026-09-30T23:00:00.000Z'],
+    ['31 Mar: all of February', '2026-03-31T12:00:00Z', '2026-02-01T00:00:00.000Z', '2026-03-01T00:00:00.000Z'],
+    ['30 Mar: all of February', '2026-03-30T12:00:00Z', '2026-02-01T00:00:00.000Z', '2026-03-01T00:00:00.000Z'],
+    ['15 Jan: 1-15 Dec of the year before', '2027-01-15T12:00:00Z', '2026-12-01T00:00:00.000Z', '2026-12-16T00:00:00.000Z'],
+  ])('%s', async (_label, nowIso, gte, lt) => {
+    const db = filteringDb([])
+    await fetchRevenueMTD(db, 'loc-1', new Date(nowIso))
+    const prev = db.builders[1]
+    expect(callArg(prev, 'gte', 'invoice_date')).toBe(gte)
+    expect(callArg(prev, 'lt', 'invoice_date')).toBe(lt)
+  })
+
+  it('a failed read is an error, never a zero month', async () => {
+    const db = { from: () => chainableBuilder({ data: null, error: { message: 'invoices down' } }) }
+    const res = await fetchRevenueMTD(db, 'loc-1', new Date('2026-10-01T10:00:00Z'))
+    expect(res).toEqual({ success: false, error: 'invoices down' })
   })
 })

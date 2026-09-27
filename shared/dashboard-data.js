@@ -54,6 +54,18 @@ export function startOfMonth(d = new Date()) {
   return new Date(d.getFullYear(), d.getMonth(), 1)
 }
 
+// A4 REVENUEMTD.1 — the Europe/Dublin calendar, for the fetchers that run on
+// the SERVER: fetchTodayOps, fetchRevenueMTD, fetchFunnelCounts and
+// fetchAdsSummary (the Business dashboard, on web and, via
+// /api/dashboard/business, on the phone). Loaded on first use, never at module
+// scope: the staff app imports this module, and a Hermes build without full
+// ICU throws on the timeZone formatters dublin-time.js builds at import
+// (mobile/lib/dates.js, ROSTER-FIX.7f). The phone never calls those four, so it
+// never loads it.
+function loadDublinTime() {
+  return import('./dublin-time.js')
+}
+
 // ============================================================
 // Shift-cost helpers (used by Business dashboard's labour estimate)
 // ============================================================
@@ -531,22 +543,41 @@ export async function paginatedSumCents(supabase, filters) {
 // Revenue MTD from PAID invoices only (glofox_invoices is stale for
 // anything else — mig 324's daily reconcile keeps statuses honest).
 // Delta compares against the same day-window of last month.
+// A4 REVENUEMTD.1 — both windows are Europe/Dublin calendar days, as half-open
+// UTC ranges over invoice_date (timestamptz, mig 140):
+//   this month  [1st 00:00 Dublin, …)
+//   last month  [its 1st 00:00 Dublin, 00:00 Dublin the day after the same
+//               day-of-month), the same day clamped to last month's length.
+// They were the server's local midnights (UTC on Vercel): from 00:00 to 01:00
+// Dublin on the 1st in summer "MTD" was the whole previous month, and a
+// payment in that hour never counted in its own month. And with no clamp, on
+// the 31st after a 30-day month "last month" ran on into this one.
 export async function fetchRevenueMTD(supabase, locationId, now = new Date()) {
-  const monthStart = startOfMonth(now)
-  const lastMonthStart = startOfMonth(new Date(now.getFullYear(), now.getMonth() - 1, 1))
-  const lastMonthSameDay = new Date(lastMonthStart)
-  lastMonthSameDay.setDate(lastMonthSameDay.getDate() + (now.getDate() - 1))
-  lastMonthSameDay.setHours(23, 59, 59, 999)
+  const { dublinDateKey, dublinMonthStartMs, dublinDayRangeMs } = await loadDublinTime()
+  const nowMs = now.getTime()
+  const [y, m, d] = dublinDateKey(nowMs).split('-').map(Number)
+  const monthStartIso = new Date(dublinMonthStartMs(nowMs)).toISOString()
+  const prevY = m === 1 ? y - 1 : y
+  const prevM = m === 1 ? 12 : m - 1
+  // Day 0 of this month is the last day of the previous one.
+  const daysInPrev = new Date(Date.UTC(y, m - 1, 0)).getUTCDate()
+  const pad = (n) => String(n).padStart(2, '0')
+  const prevRange = dublinDayRangeMs(
+    `${prevY}-${pad(prevM)}-01`,
+    `${prevY}-${pad(prevM)}-${pad(Math.min(d, daysInPrev))}`,
+  )
+  const prevStartIso = new Date(prevRange.startMs).toISOString()
+  const prevEndIso = new Date(prevRange.endMs).toISOString()
 
   const cur = await paginatedSumCents(supabase, q => q
     .eq('location_id', locationId).eq('status', 'PAID')
-    .gte('invoice_date', monthStart.toISOString()))
+    .gte('invoice_date', monthStartIso))
   if (cur.error) return { success: false, error: cur.error.message }
 
   const prev = await paginatedSumCents(supabase, q => q
     .eq('location_id', locationId).eq('status', 'PAID')
-    .gte('invoice_date', lastMonthStart.toISOString())
-    .lte('invoice_date', lastMonthSameDay.toISOString()))
+    .gte('invoice_date', prevStartIso)
+    .lt('invoice_date', prevEndIso))
   if (prev.error) return { success: false, error: prev.error.message }
 
   return {
