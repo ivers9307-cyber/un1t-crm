@@ -637,3 +637,25 @@ describe('SHIFTTYPE.1 — admin shifts in the week and month summaries', () => {
     expect(rows.map((r) => [r.block_id, r.kind])).toEqual([['a', 'admin'], ['c', 'class']])
   })
 })
+
+// PAYROLL24.1 — contractor spend and the week panel read hours through
+// payroll.shiftHours, which counted a shift ending at 24:00 as 0.
+describe('a shift ending at 24:00 (PAYROLL24.1)', () => {
+  const refMay = new Date('2026-05-15T12:00:00')
+  const weekStart = new Date('2026-05-04T00:00:00')
+  const today = new Date('2026-05-01T12:00:00')
+
+  it('summarizeMonth prices its 2 contractor hours', () => {
+    const blocks = [block({ id: 'late', date: '2026-05-04', start: '22:00:00', end: '24:00:00', coaches: ['dan'] })]
+    const r = summarizeMonth({ blocks, staff: [contractorDan], referenceDate: refMay, monthlyBudgetEur: 100 })
+    expect(r.contractorCostEur).toBe(70) // 2h × €35
+    expect(r.remainingEur).toBe(30)
+  })
+
+  it('summarizeWeek allocates its 2 hours to the FTE and prices the contractor', () => {
+    const blocks = [block({ id: 'late', date: '2026-05-05', start: '22:00:00', end: '24:00:00', coaches: ['sarah', 'dan'] })]
+    const r = summarizeWeek({ blocks, staff: [fteSarah, contractorDan], weekStart, today })
+    expect(r.fte[0]).toMatchObject({ profile_id: 'sarah', allocated_hours: 2 })
+    expect(r.contractorWeekCostEur).toBe(70)
+  })
+})
