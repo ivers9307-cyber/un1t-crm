@@ -49,8 +49,8 @@ Size: S under half a day, M a day or two. "Mig" = new migration. "OTA" = merging
 | # | Key | Size | What | Mig | OTA | Anchors |
 |---|---|---|---|---|---|---|
 | B1 | TRAINERSROLE.1 | S | `/api/locations/[id]/glofox-trainers` checks the caller's role at their **active** studio, not the studio in the path (the SCHEDROLES class): a manager at A with B active can read B's trainer list, or be refused at their own. Gate on the path's location (`hasRoleAtLocation(user, id, …)`, 404 for outsiders). Fix the stale "~850 rows" comment (it's 184). | | | `src/app/api/locations/[id]/glofox-trainers/route.js` |
-| B2 | CONTRACTVIS.1 | M | **DECISION.** Colleagues' `contracted_hours_per_week` reaches **every role** through `STAFF_PICKER_FIELDS` and `STAFF_PUBLIC_FIELDS`, and `/api/schedule/week-cost` (MANAGER_ROLES, head coaches included) returns `contracted_hours`. CANDIDATES.1 and GRID.1 already restrict it to owner/manager/master. **Proposal:** the same rule everywhere. Drop the column from the picker/public field lists, and have week-cost omit it below ADMIN_ROLES. Build only after Richard says yes: it removes a number head coaches and staff see today. | | maybe (if a mobile reader of those fields exists; the plan checks) | `src/lib/staff.js:25` and the `STAFF_PUBLIC_FIELDS` definition, `src/app/api/schedule/week-cost/route.js` |
-| B3 | COACHNOTES.1 | S | **DECISION.** A shift block's manager `notes` reach the coach's own row through `toApiShiftRow` (`notes: a.notes ?? b.notes`). COACHSCOPE.1 meant block notes as manager working notes, and BLOCKEDIT.1 added `briefing` as the coach-facing field. **Proposal:** coach-audience rows carry the assignment's own note and the block's `briefing`, never the block's `notes`; manager views are unchanged. Richard to confirm, since coaches may be reading those notes today. | | yes (if the phone renders `notes`; the plan checks) | `src/lib/roster-read.js:66, 98-128` |
+| B2 | CONTRACTVIS.1 | M | **APPROVED (Richard, 27 Sep).** Colleagues' `contracted_hours_per_week` reaches **every role** through `STAFF_PICKER_FIELDS` and `STAFF_PUBLIC_FIELDS`, and `/api/schedule/week-cost` (MANAGER_ROLES, head coaches included) returns `contracted_hours`. CANDIDATES.1 and GRID.1 already restrict it to owner/manager/master. **Proposal:** the same rule everywhere. Drop the column from the picker/public field lists, and have week-cost omit it below ADMIN_ROLES. Build only after Richard says yes: it removes a number head coaches and staff see today. | | maybe (if a mobile reader of those fields exists; the plan checks) | `src/lib/staff.js:25` and the `STAFF_PUBLIC_FIELDS` definition, `src/app/api/schedule/week-cost/route.js` |
+| B3 | COACHNOTES.1 | S | **APPROVED (Richard, 27 Sep).** A shift block's manager `notes` reach the coach's own row through `toApiShiftRow` (`notes: a.notes ?? b.notes`). COACHSCOPE.1 meant block notes as manager working notes, and BLOCKEDIT.1 added `briefing` as the coach-facing field. **Proposal:** coach-audience rows carry the assignment's own note and the block's `briefing`, never the block's `notes`; manager views are unchanged. Richard to confirm, since coaches may be reading those notes today. | | yes (if the phone renders `notes`; the plan checks) | `src/lib/roster-read.js:66, 98-128` |
 
 ### Batch C: silent failures and reliability
 
@@ -99,11 +99,11 @@ Two implementers at a time (8GB machine). Merge OTAs one at a time.
 | 6 | C6 RANGEVALID.1 · D1 DEADCODE.1 | D1 is an OTA |
 | 7 | D2 EXPECTLINT.1 · D3 SELCOLS2.1 | guard rails last, so they lint the finished code |
 | 8 | D4 UINITS.1 · D5 REVIEWNITS.1 | D4 is an OTA |
-| on Richard's go | B2 CONTRACTVIS.1 · B3 COACHNOTES.1 | each changes what people see today |
+| 4b (approved 27 Sep) | B2 CONTRACTVIS.1 · B3 COACHNOTES.1 | Richard said yes to both; each changes what people see today, so each PR body says exactly what disappears for whom |
 
 **Conflict hotspots:** `src/lib/payroll.js` (A1; read by A2's pricing, so A1 merges first), `shared/dashboard-data.js` (A4, D1), `src/lib/push.js` (C1), `src/app/api/cron/send-push-reminders/route.js` (C1 via runway, C5), `src/lib/openapi.js` (B1, D1).
 
-## Decisions for Richard (both default to "no change" until he answers)
+## Decisions for Richard — ANSWERED 27 Sep: YES to both
 
 1. **CONTRACTVIS.1:** restrict colleagues' contracted hours to owner/manager/master everywhere (the rule the new picker and grid already use)?
 2. **COACHNOTES.1:** stop showing a block's manager notes on a coach's own shift row, leaving their own note plus the briefing?
@@ -112,5 +112,6 @@ Two implementers at a time (8GB machine). Merge OTAs one at a time.
 
 Newest first.
 
+- 27 Sep 2026: **Richard said YES to both decisions**: B2 CONTRACTVIS.1 (colleagues' contracted hours to owner/manager/master only, everywhere) and B3 COACHNOTES.1 (coach rows carry their own note + the briefing, never the block's manager notes). Both now buildable; detail plans commissioned.
 - 27 Sep 2026 (loop started): wave 1 detail plans commissioned (A1 PAYROLL24.1, B1 TRAINERSROLE.1) and wave 2 one ahead (A2 CONTRACTORSPEND.1, A3 INVOICEHOURS.1).
 - 27 Sep 2026: index written. The open follow-ups → 18 PRs: 16 across 8 waves plus 2 waiting on a decision (B2, B3); 7 items held with reasons; 6 already fixed (#1772, #1775–#1779).
