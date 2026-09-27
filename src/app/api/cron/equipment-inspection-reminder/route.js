@@ -7,6 +7,8 @@
 //
 // Per-location error isolation: one bad location never stops the loop.
 // Push delivery is best-effort; sendPush returns counts and never throws.
+// A failed recipients read (recipients_failed) is not recorded or audited
+// as a sent reminder (C1 RECIPIENTS.1).
 //
 // Auth: CRON_SECRET Bearer, same as every other cron.
 
@@ -57,7 +59,7 @@ export async function GET(request) {
         continue
       }
 
-      await sendPushToRolesAtLocation(settings.location_id, ROLES, {
+      const r = await sendPushToRolesAtLocation(settings.location_id, ROLES, {
         title: 'Equipment inspections due',
         body: buildReminderBody(outstanding),
         data: { type: 'equipment_inspection' },
@@ -67,6 +69,14 @@ export async function GET(request) {
         // and reaches no one but master (PUSHCAT.1).
         category: 'inspection_due',
       })
+
+      // C1 RECIPIENTS.1 — the recipients read failed (push.js logged it):
+      // nobody was told, so this is not a sent reminder and is not audited
+      // as one. The 19:00 overdue sweep chases the same assets today.
+      if (r?.recipients_failed) {
+        results.push({ locationId: settings.location_id, due: outstanding.length, pushed: false, recipients_failed: true })
+        continue
+      }
 
       await logAuditEvent({
         category: 'business',
