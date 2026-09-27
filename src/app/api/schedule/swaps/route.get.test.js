@@ -24,7 +24,7 @@ vi.mock('@/lib/auth', () => ({
   },
 }))
 vi.mock('@/lib/push-dedup', () => ({ notifyUsersOnce: vi.fn(), notifyUsersAtRolesOnce: vi.fn() }))
-vi.mock('@/lib/push', () => ({ resolveRoleRecipientIds: vi.fn() }))
+vi.mock('@/lib/push', () => ({ readRoleRecipientIds: vi.fn() }))
 
 const { createServerClient } = await import('@/lib/supabase')
 const { getCurrentUser } = await import('@/lib/auth')

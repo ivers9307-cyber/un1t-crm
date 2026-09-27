@@ -8,7 +8,7 @@
 // after the swap is committed and the 201 is decided, and the sweep runs as an
 // arm of a cron whose own job must not be starved.
 
-import { resolveRoleRecipientIds } from './push'
+import { readRoleRecipientIds, roleRecipientIdsFromLinks } from './push'
 import { notifyUsersOnce } from './push-dedup'
 import { MANAGER_ROLES } from './schemas'
 import { logWarn, logError } from './log'
@@ -21,9 +21,10 @@ import {
 } from './swap-cover'
 
 // profile_locations for one studio. The same table and embed
-// resolveLocationMemberIds (src/lib/push.js) reads, but with the ERROR kept
-// (that helper discards it) and the role columns, so the pure rule can judge
-// membership, activity and manager-ness on the row itself.
+// readLocationMemberIds (src/lib/push.js) reads, with the ERROR kept and the
+// role columns, so the pure rule can judge membership, activity and
+// manager-ness on the row itself — and the pool's managers come from these
+// same rows (C1 RECIPIENTS.1).
 const MEMBER_SELECT = 'profile_id, location_id, role, profiles!inner(id, role, active)'
 
 // The shape evaluateSwapMoveConflicts reads (src/lib/swap-lifecycle.js), plus
@@ -58,10 +59,11 @@ async function sameOrgLocationIds(db, locationId) {
  *
  * Recipients (decided by openPoolRecipients, pure): active members of THIS
  * studio (the SCHEDROLES.1 "belongs to the block's studio" rule), minus the
- * requester, minus managers (told by swap_open, resolved with the same helper
- * so the sets cannot drift), minus approved whole-day leave covering the date,
- * minus an overlapping live shift at any studio in the same organisation.
- * Bulk reads, never one pair per coach.
+ * requester, minus managers (told by swap_open; worked out from the members
+ * read below by the resolver's own rule, roleRecipientIdsFromLinks, so the
+ * sets cannot drift and there is no second read to fail), minus approved
+ * whole-day leave covering the date, minus an overlapping live shift at any
+ * studio in the same organisation. Bulk reads, never one pair per coach.
  *
  * FAILURE MODES. The broadcast still goes out where it safely can, but a
  * failed read may only make the audience SMALLER, never larger than the
@@ -84,19 +86,21 @@ async function sameOrgLocationIds(db, locationId) {
 export async function notifyOpenPool(db, { swapId, locationId, block, requester }) {
   if (!swapId || !locationId || !block?.block_date) return { notified: 0, degraded: false }
 
-  const [membersRes, managerIds] = await Promise.all([
-    db.from('profile_locations').select(MEMBER_SELECT).eq('location_id', locationId),
-    resolveRoleRecipientIds(db, locationId, MANAGER_ROLES),
-  ])
+  const membersRes = await db.from('profile_locations').select(MEMBER_SELECT).eq('location_id', locationId)
   if (membersRes.error) {
     logError('swap-cover', 'open-pool members read failed; nobody was notified (managers still were)', { swapId, err: membersRes.error.message })
     return { notified: 0, degraded: true }
   }
 
+  const members = membersRes.data || []
   const rule = {
     locationId,
-    members: membersRes.data || [],
-    managerIds,
+    members,
+    // C1 RECIPIENTS.1 — swap_open's managers, from THIS read (MEMBER_SELECT
+    // carries role + profiles(role, active)). A second resolver read used to
+    // sit here; its failure came back as [], and only isManagerLink kept
+    // managers out of the pool. That belt stays in openPoolRecipients.
+    managerIds: roleRecipientIdsFromLinks(members, MANAGER_ROLES),
     requesterId: requester?.id,
     block,
   }
@@ -280,8 +284,19 @@ export async function runSwapCoverSweep(db, { nowMs = Date.now() } = {}) {
         // MANAGER_ROLES at the swap's own studio), minus the requester: a
         // manager who posted their own swap is not chased to review it.
         // At-most-once per (swap, status, stage, recipient) via the ledger.
-        const approvers = (await resolveRoleRecipientIds(db, swap.location_id, MANAGER_ROLES))
-          .filter((id) => id && id !== swap.requester_id)
+        // C1 RECIPIENTS.1 — a FAILED read is an arm fault, not "nobody": no
+        // claim is taken, the stage is a RANGE, so the next tick nudges; and
+        // errors>0 withholds this tick's swap-cover-sweep stamp, so a read
+        // that keeps failing turns the row stale (900 s + 1,800 s).
+        const { ids, error: approverErr } = await readRoleRecipientIds(db, swap.location_id, MANAGER_ROLES)
+        if (approverErr) {
+          logError('swap-cover', 'sweep nudge: the approvers could not be read; nobody was nudged, the next tick retries', {
+            swapId: swap.id, stage: decision.stage, err: approverErr.message,
+          })
+          stats.errors++
+          continue
+        }
+        const approvers = ids.filter((id) => id && id !== swap.requester_id)
         const result = approvers.length ? await notifyUsersOnce(db, key, approvers, payload) : null
         if (delivered(result)) stats.nudged++
         else stats.skipped++

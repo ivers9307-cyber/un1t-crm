@@ -25,9 +25,11 @@
 // WHO. People who can publish a roster AT THAT STUDIO, and nobody else. The
 // publish gate (POST /api/schedule/rosters) is hasRoleAtLocation(user,
 // location_id, MANAGER_ROLES) = master, owner, manager, head_coach, judged on
-// the per-location role. resolveRoleRecipientIds (src/lib/push.js) reads the
-// same per-location role off profile_locations FOR THIS LOCATION ONLY, keeps
-// active profiles only, and adds masters who hold a row here. So: never a
+// the per-location role. readRoleRecipientIds (src/lib/push.js, via
+// notifyUsersAtRolesOnce) reads the same per-location role off
+// profile_locations FOR THIS LOCATION ONLY, keeps active profiles only, and
+// adds masters who hold a row here. A FAILED read is counted as
+// recipients_failed, never as "nobody" (C1 RECIPIENTS.1). So: never a
 // coach, never a deactivated profile, never someone whose only link is to
 // another studio (and so never another organisation).
 
@@ -42,7 +44,7 @@ import { isInSendWindow, isValidTimeZone, NO_REMINDER_BEFORE, NO_REMINDER_FROM }
 import { rosterRunwayHeadline, rosterRunwayDetail } from '@shared/roster-runway'
 import { logWarn } from './log'
 
-// `master` is not listed because resolveRoleRecipientIds always includes the
+// `master` is not listed because readRoleRecipientIds always includes the
 // masters linked to the location.
 export const RUNWAY_NOTIFY_ROLES = Object.freeze(['owner', 'manager', 'head_coach'])
 
@@ -115,12 +117,15 @@ export function decideRunwayPush({ runway, location, nowMs }) {
  * @param {{ nowMs?: number }} [opts]  the instant; "today" is its Dublin day
  * `alerts` counts unready (studio, week) pairs; `quiet_hours` how many of them
  * were held back by the band.
- * @returns {Promise<{ locations: number, alerts: number, quiet_hours: number, sent: number, emailed: number, deduped: number, failed: number }>}
+ * @returns {Promise<{ locations: number, alerts: number, quiet_hours: number, sent: number, emailed: number, deduped: number, failed: number, recipients_failed: number }>}
  *   throws when the locations or runway read fails, BEFORE anything is sent
- *   (the cron records it).
+ *   (the cron records it). `recipients_failed` (C1 RECIPIENTS.1) counts
+ *   weeks whose "who can publish here" read failed: nobody was told, no key
+ *   was claimed, so the next daily run tries again; the arm's heartbeat
+ *   treats it as a fault (cron-arm-health.js runwayArmHealthy).
  */
 export async function runRosterRunwayAlerts(db, { nowMs = Date.now() } = {}) {
-  const outcome = { locations: 0, alerts: 0, quiet_hours: 0, sent: 0, emailed: 0, deduped: 0, failed: 0 }
+  const outcome = { locations: 0, alerts: 0, quiet_hours: 0, sent: 0, emailed: 0, deduped: 0, failed: 0, recipients_failed: 0 }
   const todayIso = dublinDayStr(nowMs)
 
   const { data: locations, error: locErr } = await db.from('locations').select('id, name, timezone')
@@ -156,6 +161,7 @@ export async function runRosterRunwayAlerts(db, { nowMs = Date.now() } = {}) {
         outcome.emailed += r.emailed || 0
         outcome.deduped += r.deduped || 0
         outcome.failed += r.failed || 0
+        outcome.recipients_failed += r.recipients_failed || 0
       } catch (err) {
         // One send's failure must not cost the next week or studio its alert.
         outcome.failed++

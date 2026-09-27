@@ -518,7 +518,7 @@ describe('resolvePushAllowedIds — per-location gating', () => {
   })
 })
 
-describe('resolveRoleRecipientIds — per-location role + master inclusion (PUSH-ROLES.1)', () => {
+describe('readRoleRecipientIds — per-location role + master inclusion (PUSH-ROLES.1)', () => {
   const db = {
     from: () => ({
       select: () => ({
@@ -537,7 +537,7 @@ describe('resolveRoleRecipientIds — per-location role + master inclusion (PUSH
   }
 
   it('judges the PER-LOCATION role, not the stale global profiles.role', async () => {
-    const ids = await resolveRoleRecipientIds(db, 'loc1', ['owner', 'manager'])
+    const { ids } = await readRoleRecipientIds(db, 'loc1', ['owner', 'manager'])
     expect(ids).toContain('garrett')
     expect(ids).not.toContain('demoted')
     expect(ids).not.toContain('james')
@@ -545,7 +545,7 @@ describe('resolveRoleRecipientIds — per-location role + master inclusion (PUSH
   })
 
   it('always includes active masters assigned to the location (they hold every decision right)', async () => {
-    const ids = await resolveRoleRecipientIds(db, 'loc1', ['owner', 'manager'])
+    const { ids } = await readRoleRecipientIds(db, 'loc1', ['owner', 'manager'])
     expect(ids).toContain('richard')
   })
 })
