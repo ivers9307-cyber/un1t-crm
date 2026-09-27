@@ -475,11 +475,23 @@ describe('getOpenApiSpec', () => {
   // the path location, and a non-member gets a 404 (not a 403).
   it.each([
     '/api/locations/{id}/glofox-trainers',
+    '/api/locations/{id}/glofox-memberships',
+    '/api/locations/{id}/unifi-users',
+    '/api/locations/{id}/unifi-doors',
   ])('documents %s as owner/manager at the path location, 404 for a non-member', (p) => {
     const op = spec.paths[p]?.get
     expect(op).toBeDefined()
     expect(op.description).toMatch(/owner\/manager AT this location/)
     expect(op.responses['403'].description).toMatch(/at this location/)
     expect(op.responses['404'].description).toMatch(/Not a member/)
+  })
+
+  it.each([
+    '/api/locations/{id}/unifi-users',
+    '/api/locations/{id}/unifi-doors',
+  ])('documents %s: a failed location read is a 500, a missing row a 404', (p) => {
+    const op = spec.paths[p].get
+    expect(op.responses['500'].description).toMatch(/location_read_failed/)
+    expect(op.responses['404'].description).toMatch(/location_not_found/)
   })
 })
