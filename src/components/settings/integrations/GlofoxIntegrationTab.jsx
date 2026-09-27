@@ -220,7 +220,7 @@ export default function GlofoxIntegrationTab({ location, canEdit }) {
           value={trainerNames}
           onChange={e => setTrainerNames(e.target.value)}
           rows={3}
-          placeholder="61a38e7d0cf1970aae0fb3a9 = Jess Murphy"
+          placeholder="<24-character trainer id> = Coach name"
           className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text"
         />
         {seenTrainers.length > 0 && (
