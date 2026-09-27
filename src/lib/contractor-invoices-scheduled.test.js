@@ -221,6 +221,26 @@ describe('computeScheduledForPeriod', () => {
     expect(ranges).toEqual([[0, 999], [1000, 1999]])
   })
 
+  // Approved snapshots were stored as round2(UNROUNDED hours × rate), and
+  // selectReviewComparison compares estimated_cost with strict !==. Pricing
+  // the ROUNDED hours made an unchanged roster read "changed since approval"
+  // whenever the total is not a whole multiple of 0.01h. Synthetic figures.
+  it('prices the UNROUNDED hours (40h40m at a synthetic 25.5/h → 1037, not 1037.09)', async () => {
+    const rate = 25.5
+    const eight = () => row()                                                  // 8h
+    const fortyMin = row({ start: '09:00:00', end: '09:40:00', tpl: null })    // 40m
+    const db = fakeDb({
+      profile: { hourly_rate: rate, employment_type: 'contractor' },
+      pages: [[eight(), eight(), eight(), eight(), eight(), fortyMin]],
+    })
+    const out = await computeScheduledForPeriod(db, ARGS)
+    const rawHours = 40 + 40 / 60
+    const r2 = (n) => Math.round(n * 100) / 100
+    expect(out.scheduled_hours).toBe(40.67)                                    // display stays rounded
+    expect(out.estimated_cost).toBe(r2(rawHours * rate))                       // 1037
+    expect(out.estimated_cost).not.toBe(r2(r2(rawHours) * rate))               // 1037.09
+  })
+
   it('the assignment read fails → throws, never 0', async () => {
     const db = fakeDb({ rowsError: { message: 'boom' } })
     await expect(computeScheduledForPeriod(db, ARGS)).rejects.toThrow(/Assignment lookup failed: boom/)

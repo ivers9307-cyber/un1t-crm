@@ -99,6 +99,18 @@ const round2 = (n) => +n.toFixed(2)
  *   unpublished_hours: number, unpublished_shift_count: number }}
  */
 export function scheduledFromAssignments(rows) {
+  const t = tallyAssignments(rows)
+  return {
+    scheduled_hours: round2(t.hours),
+    shift_count: t.shifts,
+    unpublished_hours: round2(t.unpublishedHours),
+    unpublished_shift_count: t.unpublishedShifts,
+  }
+}
+
+// The unrounded tally behind scheduledFromAssignments. The estimate is priced
+// from these raw hours (see computeScheduledForPeriod), never the rounded ones.
+function tallyAssignments(rows) {
   let hours = 0
   let shifts = 0
   let unpublishedHours = 0
@@ -122,12 +134,7 @@ export function scheduledFromAssignments(rows) {
       unpublishedShifts += 1
     }
   }
-  return {
-    scheduled_hours: round2(hours),
-    shift_count: shifts,
-    unpublished_hours: round2(unpublishedHours),
-    unpublished_shift_count: unpublishedShifts,
-  }
+  return { hours, shifts, unpublishedHours, unpublishedShifts }
 }
 
 /**
@@ -192,7 +199,11 @@ export async function computeScheduledForPeriod(db, args) {
 
   const hourlyRate = Number(profile?.hourly_rate)
   const validRate = Number.isFinite(hourlyRate) && hourlyRate > 0
-  const estimated = validRate ? round2(scheduled.scheduled_hours * hourlyRate) : null
+  // Priced from the UNROUNDED hours, as main priced it: approved snapshots
+  // hold round2(raw hours × rate), and selectReviewComparison compares
+  // estimated_cost with strict !==, so pricing the rounded display hours
+  // (40h40m → 40.67h) made an unchanged roster read "changed since approval".
+  const estimated = validRate ? round2(tallyAssignments(rows).hours * hourlyRate) : null
 
   return {
     scheduled_hours: scheduled.scheduled_hours,
