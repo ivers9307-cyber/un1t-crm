@@ -700,8 +700,11 @@ export async function fetchTodayOps(supabase, locationId, now = new Date()) {
     // ROSTER-FIX.1 — `status` rides along so staffToday can drop cancelled
     // rows. Without it an approved swap-drop still counted its coach as
     // working today, so the Today strip reported a body that isn't in.
+    // STAFFTODAY.1 — the block's roster status rides along too: a shift on a
+    // draft roster (or on no roster) is not published, so nobody has been
+    // told to come in. Same rule as labour this week (LABOURWEEK.1).
     supabase.from('shift_blocks')
-      .select('id, shift_assignments(profile_id, status)')
+      .select('id, roster_id, rosters:roster_id ( status ), shift_assignments(profile_id, status)')
       .eq('location_id', locationId).eq('block_date', todayIso)
       .limit(200),
     // LABOURWEEK.1 — published rosters only: a draft week is not labour yet
@@ -716,7 +719,9 @@ export async function fetchTodayOps(supabase, locationId, now = new Date()) {
   if (e4) return { success: false, error: e4.message }
 
   const staffToday = new Set()
-  for (const b of blocks || []) for (const a of (b.shift_assignments || []).filter(isLiveRow)) if (a.profile_id) staffToday.add(a.profile_id)
+  for (const b of (blocks || []).filter((blk) => blk.rosters?.status === 'published')) {
+    for (const a of (b.shift_assignments || []).filter(isLiveRow)) if (a.profile_id) staffToday.add(a.profile_id)
+  }
   let labourCents = 0
   let hours = 0
   // LABOURWEEK.1 — a cancelled assignment (an approved swap-drop, a removed
