@@ -157,7 +157,7 @@ async function fetchDashboardShifts(supabase, { profileId, locationId, startDate
 // Personal — your shifts, your swaps, your inbox.
 // ============================================================
 
-export async function fetchPersonalDashboardData(supabase, profileId, locationId, { todayIso: callerTodayIso } = {}) {
+export async function fetchPersonalDashboardData(supabase, profileId, locationId, opts) {
   if (!profileId) return { success: false, error: 'No profile' }
 
   // A4 REVENUEMTD.1 — whose "today"? This runs in two places. The web Today
@@ -166,9 +166,15 @@ export async function fetchPersonalDashboardData(supabase, profileId, locationId
   // Monday "This week" was last week. The phone passes nothing and keeps its
   // device day: Dublin for staff in Ireland, and no Intl, which a Hermes build
   // without full ICU cannot construct (mobile/lib/dates.js, ROSTER-FIX.7f).
-  const todayIso = typeof callerTodayIso === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(callerTodayIso)
-    ? callerTodayIso
-    : isoDate(new Date())
+  // A real calendar date only: '2027-13-45' or '2027-02-30' would otherwise
+  // reach upcomingWeeksBounds and come back as NaN. Date.parse + toISOString
+  // is plain UTC maths, no Intl, so it is Hermes-safe.
+  const callerTodayIso = opts?.todayIso
+  const isRealDay = typeof callerTodayIso === 'string'
+    && /^\d{4}-\d{2}-\d{2}$/.test(callerTodayIso)
+    && !Number.isNaN(Date.parse(`${callerTodayIso}T00:00:00Z`))
+    && new Date(`${callerTodayIso}T00:00:00Z`).toISOString().slice(0, 10) === callerTodayIso
+  const todayIso = isRealDay ? callerTodayIso : isoDate(new Date())
 
   // 14-day window — this Monday → next Sunday — fetched as a single
   // query and split client-side. Cheaper than two queries. Pure date-string
@@ -664,8 +670,10 @@ export async function fetchFunnelCounts(supabase, locationId, now = new Date()) 
 // silently truncate spend (order by id for stable pages, like
 // paginatedSumCents above).
 export async function fetchAdsSummary(supabase, locationId, now = new Date()) {
-  // A4 REVENUEMTD.1 — ad_insights_daily.date is a Dublin day (src/lib/ads/read.js
-  // reads it that way); the server's local day is UTC's. Leads are a rolling
+  // A4 REVENUEMTD.1 — ad_insights_daily.date is a Dublin day, as src/lib/ads/read.js
+  // reads it (that file steps back 168 h and formats a Dublin date, which differs
+  // from calendar minus 7 only in the first Dublin hour after spring-forward);
+  // the server's local day is UTC's. Leads are a rolling
   // 7 x 24 h over attributed_at (timestamptz), with no local time involved.
   const { dublinDateKey, dublinAddDays, DUBLIN_DAY_MS } = await loadDublinTime()
   const nowMs = now.getTime()

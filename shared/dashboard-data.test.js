@@ -991,10 +991,13 @@ describe("fetchPersonalDashboardData — the weeks hang off the caller's today (
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date(2027, 2, 3, 12, 0, 0))
     try {
-      for (const todayIso of ['3 March', '2027-3-7', '', null, 20270307]) {
+      for (const todayIso of ['3 March', '2027-3-7', '', null, 20270307, '2027-13-45', '2027-02-30']) {
         const res = await fetchPersonalDashboardData(recordingDb(), 'p1', 'loc-1', { todayIso })
         expect(res.data.weekStartIso, String(todayIso)).toBe('2027-03-01')
       }
+      // A null options object (not just a null field) is also the device day.
+      const nullOpts = await fetchPersonalDashboardData(recordingDb(), 'p1', 'loc-1', null)
+      expect(nullOpts.data.weekStartIso).toBe('2027-03-01')
     } finally {
       vi.useRealTimers()
     }
@@ -1019,6 +1022,8 @@ describe('dashboard-data stays loadable on the phone, and the server reads Dubli
   it('never imports dublin-time at module scope', () => {
     expect(code).not.toMatch(/^\s*import\s[^\n]*dublin-time/m)
     expect(code).not.toMatch(/^\s*export\s[^\n]*from\s+['"][^'"]*dublin-time/m)
+    // Catches a multi-line `import {\n …\n} from './dublin-time.js'` too.
+    expect(code).not.toMatch(/from\s+['"][^'"]*dublin-time/)
     expect(code).not.toMatch(/new Intl\.DateTimeFormat/)
     expect(code).toMatch(/import\(\s*['"]\.\/dublin-time\.js['"]\s*\)/)
   })
