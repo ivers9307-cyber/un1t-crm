@@ -62,6 +62,7 @@ export const PRODUCERS = {
   'src/lib/roster-grid-data.js': 'loadRosterGrid({ showContract })',
   'src/lib/report-generator.js': 'generateReport — staff_cost and utilisation rows carry contracts',
   'src/lib/staff.js': 'listStaffForUser / getStaffForUser — the full shape for managed rows',
+  'src/lib/shift-holder-pay.js': 'loadHolderPay — per-holder rate, salary and contracted hours (CONTRACTORSPEND.1)',
 }
 
 const SPECIFIER = /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*)['"]([^'"]+)['"]/g
@@ -125,10 +126,12 @@ const REVIEWED = {
   'src/lib/report-generator.js': 'writes staff_cost and utilisation, both admin-only report types',
   'src/lib/roster-grid-data.js': 'reads the column only when showContract',
   'src/lib/roster-grid-model.js': 'pure; the key exists only when the grid route sent it',
-  'src/lib/roster-summary-server.js': 'server-only contractor spend aggregates',
+  'src/lib/roster-publish.js': 'publish gate: loadHolderPay on the server for the budget check; returns euro totals and advisories, never a person\'s contract',
+  'src/lib/roster-summary-server.js': 'server-only contractor spend aggregates via loadHolderPay; the response is pinned to an exact key list with no per-person pay (the FTE labour total is B4 FTECOSTVIS.1)',
   'src/lib/roster-summary.js': 'pure; measures only rows the caller was sent',
   'src/lib/roster-week-cost.js': 'server arithmetic behind week-cost',
   'src/lib/schemas.js': 'a comment on the column\'s range',
+  'src/lib/shift-holder-pay.js': 'server-only pay loader for contractor spend and the publish gate; both callers return aggregates only',
   'src/lib/shift-offer-server.js': 'loadBlockCandidates without withContract (defaults false): no contract read',
   'src/lib/staff-write.js': 'owner/master writes',
   'src/lib/staff.js': 'adds the column only for rows the caller manages, and their own (CONTRACTVIS.1)',
