@@ -875,3 +875,66 @@ describe('fetchRevenueMTD — the month is a Dublin month (A4 REVENUEMTD.1)', ()
     expect(res).toEqual({ success: false, error: 'invoices down' })
   })
 })
+
+describe('fetchFunnelCounts — "this month" is a Dublin month (A4 REVENUEMTD.1)', () => {
+  function countingDb() {
+    const builders = []
+    return {
+      builders,
+      from(table) {
+        const b = chainableBuilder({ count: 0, error: null })
+        b.table = table
+        builders.push(b)
+        return b
+      },
+    }
+  }
+  const monthStarts = (db, col) =>
+    db.builders.map((b) => callArg(b, 'gte', col)).filter(Boolean)
+
+  it('00:30 Dublin on 1 Oct 2026 counts from 1 Oct 00:00 Dublin (23:00 UTC)', async () => {
+    const db = countingDb()
+    const res = await fetchFunnelCounts(db, 'loc-1', new Date('2026-09-30T23:30:00Z'))
+    expect(res.success).toBe(true)
+    expect(monthStarts(db, 'joined_at')).toEqual(['2026-09-30T23:00:00.000Z'])
+    expect(monthStarts(db, 'converted_at')).toEqual(['2026-09-30T23:00:00.000Z'])
+  })
+
+  it('in winter (GMT) the Dublin month starts at UTC midnight', async () => {
+    const db = countingDb()
+    await fetchFunnelCounts(db, 'loc-1', new Date('2026-12-01T00:30:00Z'))
+    expect(monthStarts(db, 'joined_at')).toEqual(['2026-12-01T00:00:00.000Z'])
+    expect(monthStarts(db, 'converted_at')).toEqual(['2026-12-01T00:00:00.000Z'])
+  })
+})
+
+describe('fetchAdsSummary — the last 7 days are Dublin days (A4 REVENUEMTD.1)', () => {
+  function adsDb() {
+    const builders = { ad_insights_daily: [], contacts: [] }
+    return {
+      builders,
+      from(table) {
+        const b = table === 'ad_insights_daily'
+          ? chainableBuilder({ data: [], error: null })
+          : chainableBuilder({ count: 0, error: null })
+        builders[table].push(b)
+        return b
+      },
+    }
+  }
+
+  it('00:30 Dublin on 1 Oct 2026: spend from 24 Sep (Dublin), leads from exactly 7 x 24 h ago', async () => {
+    const db = adsDb()
+    const res = await fetchAdsSummary(db, 'loc-1', new Date('2026-09-30T23:30:00Z'))
+    expect(res.success).toBe(true)
+    expect(callArg(db.builders.ad_insights_daily[0], 'gte', 'date')).toBe('2026-09-24')
+    expect(callArg(db.builders.contacts[0], 'gte', 'attributed_at')).toBe('2026-09-23T23:30:00.000Z')
+  })
+
+  it('a week across the 25 Oct clock change is still 7 x 24 h for leads', async () => {
+    const db = adsDb()
+    await fetchAdsSummary(db, 'loc-1', new Date('2026-10-31T12:00:00Z'))
+    expect(callArg(db.builders.ad_insights_daily[0], 'gte', 'date')).toBe('2026-10-24')
+    expect(callArg(db.builders.contacts[0], 'gte', 'attributed_at')).toBe('2026-10-24T12:00:00.000Z')
+  })
+})

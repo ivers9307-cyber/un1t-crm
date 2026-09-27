@@ -617,7 +617,10 @@ export async function fetchArrearsSummary(supabase, locationId) {
 // entered uses joined_at (lead_created_at is import-poisoned);
 // conversions use converted_at (mig 350).
 export async function fetchFunnelCounts(supabase, locationId, now = new Date()) {
-  const monthStartIso = startOfMonth(now).toISOString()
+  // A4 REVENUEMTD.1 — the same Dublin month as Revenue MTD (was the server's
+  // local month: UTC on Vercel).
+  const { dublinMonthStartMs } = await loadDublinTime()
+  const monthStartIso = new Date(dublinMonthStartMs(now.getTime())).toISOString()
 
   // All 7 head-counts are independent — run them in one Promise.all.
   const results = await Promise.all([
@@ -653,8 +656,13 @@ export async function fetchFunnelCounts(supabase, locationId, now = new Date()) 
 // silently truncate spend (order by id for stable pages, like
 // paginatedSumCents above).
 export async function fetchAdsSummary(supabase, locationId, now = new Date()) {
-  const since = new Date(now); since.setDate(since.getDate() - 7)
-  const sinceIso = isoDate(since)
+  // A4 REVENUEMTD.1 — ad_insights_daily.date is a Dublin day (src/lib/ads/read.js
+  // reads it that way); the server's local day is UTC's. Leads are a rolling
+  // 7 x 24 h over attributed_at (timestamptz), with no local time involved.
+  const { dublinDateKey, dublinAddDays, DUBLIN_DAY_MS } = await loadDublinTime()
+  const nowMs = now.getTime()
+  const sinceIso = dublinAddDays(dublinDateKey(nowMs), -7)
+  const attributedSinceIso = new Date(nowMs - 7 * DUBLIN_DAY_MS).toISOString()
   let from = 0
   const page = 1000
   const rows = []
@@ -676,7 +684,7 @@ export async function fetchAdsSummary(supabase, locationId, now = new Date()) {
     .select('id', { count: 'exact', head: true })
     .eq('location_id', locationId)
     .not('ad_provider', 'is', null)
-    .gte('attributed_at', since.toISOString())
+    .gte('attributed_at', attributedSinceIso)
   if (e2) return { success: false, error: e2.message }
   return {
     success: true,
