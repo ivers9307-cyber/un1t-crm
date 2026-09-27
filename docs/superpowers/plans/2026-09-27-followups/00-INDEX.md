@@ -112,4 +112,5 @@ Two implementers at a time (8GB machine). Merge OTAs one at a time.
 
 Newest first.
 
+- 27 Sep 2026 (loop started): wave 1 detail plans commissioned (A1 PAYROLL24.1, B1 TRAINERSROLE.1) and wave 2 one ahead (A2 CONTRACTORSPEND.1, A3 INVOICEHOURS.1).
 - 27 Sep 2026: index written. The open follow-ups → 18 PRs: 16 across 8 waves plus 2 waiting on a decision (B2, B3); 7 items held with reasons; 6 already fixed (#1772, #1775–#1779).
