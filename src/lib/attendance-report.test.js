@@ -266,4 +266,26 @@ describe("the page's default period and CSV (D6, D10)", () => {
     expect(lines).toContain('2026-07-15,"Coach, A",staff,08:00:00,07:00:00,07:50:00,,on_time,-10')
     expect(lines).toContain('2026-07-15,Coach B,staff,08:45:00,08:45:00,,,no_show,')
   })
+
+  // Review: a name or role a spreadsheet would run as a formula is defused.
+  describe('CSV injection', () => {
+    const one = (row) => attendanceCsv([{ block_date: '2026-07-15', scheduled_start: '07:00:00', status: 'late', ...row }]).split('\n')[1]
+
+    for (const [lead, label] of [['=', 'equals'], ['+', 'plus'], ['-', 'minus'], ['@', 'at'], ['\t', 'tab'], ['\r', 'carriage return']]) {
+      it(`a text cell starting with ${label} gets a leading apostrophe`, () => {
+        const cells = one({ profile_name: `${lead}SUM(A1)`, profile_role: `${lead}cmd` })
+        const expectCell = (v) => (/[",\n\r]/.test(v) ? `"${v}"` : v)
+        expect(cells.startsWith(`2026-07-15,${expectCell(`'${lead}SUM(A1)`)},${expectCell(`'${lead}cmd`)},`)).toBe(true)
+      })
+    }
+
+    it('a carriage return anywhere in a text cell is quoted', () => {
+      expect(one({ profile_name: 'Coach\rA', profile_role: 'staff' })).toContain(',"Coach\rA",staff,')
+    })
+
+    it('an ordinary name is untouched, and a negative minutes_late stays a number', () => {
+      expect(one({ profile_name: 'Coach A', profile_role: 'staff', minutes_late: -10, status: 'on_time' }))
+        .toBe('2026-07-15,Coach A,staff,07:00:00,07:00:00,,,on_time,-10')
+    })
+  })
 })

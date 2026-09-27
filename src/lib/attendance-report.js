@@ -191,9 +191,19 @@ export const ATTENDANCE_CSV_HEADER = Object.freeze([
   'Date', 'Staff', 'Role', 'Scheduled start', 'Rostered start', 'Actual start', 'On site (inferred)', 'Status', 'Minutes late',
 ])
 
+// Quoted when it holds a quote, comma or line break.
 function csvCell(s) {
   const v = String(s ?? '')
-  return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v
+  return /[",\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v
+}
+
+// A free-text cell (a name, a role). One that starts with = + - @, a tab or a
+// CR is one a spreadsheet may run as a formula, so it gets a leading ' (the
+// OWASP CSV-injection defence). Only text cells: minutes_late (-10) stays a
+// number.
+function csvText(s) {
+  const v = String(s ?? '')
+  return csvCell(/^[=+\-@\t\r]/.test(v) ? `'${v}` : v)
 }
 
 /** The page's CSV. "Scheduled start" is the effective start; "Rostered start" the block's. */
@@ -202,8 +212,8 @@ export function attendanceCsv(rows) {
   for (const r of Array.isArray(rows) ? rows : []) {
     lines.push([
       r.block_date,
-      csvCell(r.profile_name),
-      csvCell(r.profile_role || ''),
+      csvText(r.profile_name),
+      csvText(r.profile_role || ''),
       r.effective_start || r.scheduled_start || '',
       r.scheduled_start || '',
       r.actual_start || '',
