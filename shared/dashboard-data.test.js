@@ -615,13 +615,13 @@ describe('fetchTodayOps — staffToday ignores cancelled assignments', () => {
 
   it('counts only live assignees, and dedupes a coach on two blocks', async () => {
     const db = makeTodayDb([
-      { id: 'b1', shift_assignments: [
+      { id: 'b1', roster_id: 'r1', rosters: { status: 'published' }, shift_assignments: [
         { profile_id: 'coach-live', status: 'scheduled' },
         { profile_id: 'coach-dropped', status: 'cancelled' },
       ] },
       // A swapped row is a real shift owned by the taker, and a statusless
       // legacy row is live — both count. coach-live is on both blocks.
-      { id: 'b2', shift_assignments: [
+      { id: 'b2', roster_id: 'r1', rosters: { status: 'published' }, shift_assignments: [
         { profile_id: 'coach-live', status: 'swapped' },
         { profile_id: 'coach-legacy' },
       ] },
@@ -629,6 +629,19 @@ describe('fetchTodayOps — staffToday ignores cancelled assignments', () => {
     const res = await fetchTodayOps(db, 'loc-1')
     expect(res.success).toBe(true)
     expect(res.data.staffToday).toBe(2)
+  })
+
+  // STAFFTODAY.1 — only a published roster puts a coach in today.
+  it('leaves out coaches on draft, superseded and unrostered blocks', async () => {
+    const db = makeTodayDb([
+      { id: 'pub', roster_id: 'r1', rosters: { status: 'published' }, shift_assignments: [{ profile_id: 'coach-in', status: 'scheduled' }] },
+      { id: 'draft', roster_id: 'r2', rosters: { status: 'draft' }, shift_assignments: [{ profile_id: 'coach-draft', status: 'scheduled' }] },
+      { id: 'old', roster_id: 'r3', rosters: { status: 'superseded' }, shift_assignments: [{ profile_id: 'coach-old', status: 'scheduled' }] },
+      { id: 'loose', roster_id: null, rosters: null, shift_assignments: [{ profile_id: 'coach-loose', status: 'scheduled' }] },
+    ])
+    const res = await fetchTodayOps(db, 'loc-1')
+    expect(res.success).toBe(true)
+    expect(res.data.staffToday).toBe(1)
   })
 })
 
