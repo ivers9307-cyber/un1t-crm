@@ -86,6 +86,8 @@ Size: S under half a day, M a day or two. "Mig" = new migration. "OTA" = merging
 | **Scale limits:** CANDIDATES.1's unchunked `.in()` and AVAIL.1a's unpaged `readStudioAvailability` | Fine at 13 members; revisit before a large studio | A studio over about 150 members |
 | **LABOUR.1:** a salary share weighted to a studio deactivated mid-month shows in no view | 0 inactive studios today | The first studio deactivation |
 | **Invoice rate source:** the invoice review prices at `profiles.hourly_rate` (the deprecated copy), not `profile_compensation` | The two copies never disagree today (LABOUR.1's check) | The profiles pay columns being dropped |
+| **More deprecated pay-column readers:** A2 moves contractor spend and the publish gate to `profile_compensation`; other readers of `profiles` pay columns remain (listed in the A2 plan) | 0 drift between the two copies today | The profiles pay columns being dropped (one sweep PR) |
+| **`summarizeWeek`** skips inactive staff too, and its `contractorWeekCostEur` has no reader; the week-cost panel has the membership shape A2 fixes for the month | Browser-side and advisory; no live effect today | Fold into A2 if its review asks, else a clean-up PR |
 | **Mig 633's header** says "apply before the deploy" (it went after) | A comment in an applied migration; forward-only files aren't edited | The next migration that touches that row can say so |
 
 ## Order and batching
@@ -116,6 +118,7 @@ Two implementers at a time (8GB machine). Merge OTAs one at a time.
 
 Newest first.
 
+- 27 Sep 2026: A2 CONTRACTORSPEND.1 plan written (M, no mig, no OTA): prices every live holder on a published block at this studio (active or not, either studio); drafts on their own line (panel headline relabelled "Spent" → "Published" + "€X more in shifts not yet published"); month from date strings (`monthBounds`); pay from `profile_compensation` via a new `shift-holder-pay.js` shared with the publish gate; still totals-only. **Branches after A1 merges** (A1 appends a test A2 adapts). For Richard (not blocking): the relabel; effective-dated rates later; a warning for a contractor with no rate.
 - 27 Sep 2026: B3 COACHNOTES.1 review APPROVED (no defects) → full gate running. New row **C8 NOTESGRANT.1**: coaches can still read the notes columns straight from Supabase with their own session (row-scoped RLS, no column grants) — latent, needs a column-grant migration.
 - 27 Sep 2026: A1 PAYROLL24.1 plan written — latent (0 blocks/assignments/templates/snapshots end at 24:00; schedule writes refuse hour 24); one-line guard in `timeToHours`, parity test across every hours reader, no OTA → implementer started. B3 COACHNOTES.1 built (3 new tests fail on main) → independent review. Open for Richard (from A1): make 24:00 enterable as an END time? (own PR if yes).
 - 27 Sep 2026: A3 INVOICEHOURS.1 plan written (latent on prod: 0 cancelled of 181 in-period assignments, 2 unrostered in a revoked invoice; approve route will 503 rather than save a null snapshot on a failed read). A3 grows to M: it also fixes the **revoked-invoice resubmit 409** found while planning. A2 planner told to use `shiftHours` like A3.
