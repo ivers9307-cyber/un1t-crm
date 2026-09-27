@@ -14,6 +14,7 @@
 import { getUserLocationIds } from '@/lib/auth'
 import { ADMIN_ROLES } from '@/lib/schemas'
 import { hasRoleAtLocation } from '@/lib/role-at-location'
+import { logError } from '@/lib/log'
 import { mergeTemplates } from '@shared/permissions'
 
 // CONTRACTVIS.1 (Richard, 27 Sep 2026) — neither shape below carries
@@ -134,11 +135,18 @@ export async function getStaffForUser({ db, user, id }) {
 
   // CONTRACTVIS.1 — every SHARED link, not `.limit(1)`: whether the caller
   // manages this person depends on WHICH shared studio they are an admin at.
-  const { data: links } = await db
+  const { data: links, error: linksError } = await db
     .from('profile_locations')
     .select('location_id')
     .eq('profile_id', id)
     .in('location_id', userLocationIds)
+  // A failed read is not "this person is not yours": 404 would tell the
+  // caller a colleague who exists does not. Same reasoning as the profile
+  // read below — a DB error is a 500. Zero links is the real 404.
+  if (linksError) {
+    logError('staff', 'could not read the staff member\'s location links', { profile_id: id, err: linksError.message })
+    return { ok: false, status: 500, error: linksError.message }
+  }
   if (!links || links.length === 0) return { ok: false, status: 404, error: 'Not found' }
 
   const managed = links.some((l) => managesAt(user, l.location_id))

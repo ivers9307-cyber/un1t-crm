@@ -1,7 +1,10 @@
-import { describe, it, expect } from 'vitest'
-import { listStaffForUser, getStaffForUser, STAFF_PUBLIC_FIELDS, STAFF_PICKER_FIELDS } from './staff.js'
+import { describe, it, expect, vi } from 'vitest'
 
-function mockDb({ links = [], profiles = [], detailLinks = null } = {}) {
+vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
+const { logError } = await import('@/lib/log')
+const { listStaffForUser, getStaffForUser, STAFF_PUBLIC_FIELDS, STAFF_PICKER_FIELDS } = await import('./staff.js')
+
+function mockDb({ links = [], profiles = [], detailLinks = null, detailLinksError = null } = {}) {
   const calls = { profilesSelect: null, linkLocationIds: null, linkSelect: null }
   // A link with no location_id (the older fixtures) is kept by any filter.
   const inScope = (rows, ids) => rows.filter((l) => !l.location_id || ids.includes(l.location_id))
@@ -17,7 +20,11 @@ function mockDb({ links = [], profiles = [], detailLinks = null } = {}) {
                 calls.linkLocationIds = ids
                 return Promise.resolve({ data: inScope(links, ids), error: null })
               },
-              eq: () => ({ in: (_c, ids) => Promise.resolve({ data: inScope(detailLinks ?? links, ids), error: null }) }),
+              eq: () => ({
+                in: (_c, ids) => Promise.resolve(detailLinksError
+                  ? { data: null, error: detailLinksError }
+                  : { data: inScope(detailLinks ?? links, ids), error: null }),
+              }),
             }
           },
         }
@@ -79,6 +86,24 @@ describe('getStaffForUser', () => {
     const res = await getStaffForUser({ db, user: adminUser, id: 'p-other' })
     expect(res.ok).toBe(false)
     expect(res.status).toBe(404)
+  })
+  // CONTRACTVIS.1 review — a failed link read is not "this person is not
+  // yours": a transient DB error must be a 500 the caller retries, never a 404
+  // that tells them a colleague who exists does not.
+  it('500 (not 404) when the link read fails, and the error is logged', async () => {
+    logError.mockClear()
+    const db = mockDb({ detailLinksError: { message: 'connection reset' }, profiles: [{ id: 'p1' }] })
+    const res = await getStaffForUser({ db, user: adminUser, id: 'p1' })
+    expect(res).toEqual({ ok: false, status: 500, error: 'connection reset' })
+    expect(db.calls.profilesSelect).toBeNull()
+    expect(logError).toHaveBeenCalledWith('staff', expect.any(String), expect.objectContaining({ profile_id: 'p1', err: 'connection reset' }))
+  })
+  it('still 404 when the link read succeeds with zero links, and logs nothing', async () => {
+    logError.mockClear()
+    const db = mockDb({ detailLinks: [], profiles: [{ id: 'p1' }] })
+    const res = await getStaffForUser({ db, user: adminUser, id: 'p1' })
+    expect(res).toEqual({ ok: false, status: 404, error: 'Not found' })
+    expect(logError).not.toHaveBeenCalled()
   })
   it('returns the profile when the target shares a location', async () => {
     const db = mockDb({ detailLinks: [{ location_id: 'loc-1' }], profiles: [{ id: 'p1', full_name: 'Ada' }] })
