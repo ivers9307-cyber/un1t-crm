@@ -40,11 +40,16 @@
 --   process-class-bookings  120 + 240    stale at 6 min: the */2 drain
 --   process-contact-imports 120 + 240    convention (process-invoice-analysis, mig 377)
 --
--- What each row's STALE means is unchanged: all four routes stamp on every run
--- that did not crash, including runs whose external call failed
--- (sync-class-occurrences stamps on a Glofox-down tick; ad-insights-sync when
--- an account's sync failed). So a Glofox outage does not page from here; a
--- cron that stopped running, or crashes, does.
+-- What each row's STALE means is unchanged: all four routes stamp at the END
+-- of every run that gets there, including runs whose external call answered
+-- with an error (sync-class-occurrences stamps on a tick where Glofox returned
+-- an error; ad-insights-sync when an account's sync failed). So a Glofox that
+-- ANSWERS with an error does not page from here. One that HANGS or
+-- RATE-LIMITS does: glofoxFetch has no timeout and retries 429/5xx up to 3
+-- times honouring Retry-After (<=30 s per wait), so a slow or throttling
+-- Glofox can outlast the class sync's 60 s maxDuration, which kills the tick
+-- before its stamp; a ~35-min outage like that pages. A cron that stopped
+-- running, or crashes, pages too.
 --
 -- ON CONFLICT DO UPDATE OF THE SCHEDULE ONLY — NEVER last_ok_at
 -- ─────────────────────────────────────────────────────────────
@@ -73,7 +78,7 @@ VALUES
     'sync-class-occurrences',
     900,
     1200,
-    'CLASS-CLIMATE.1 (mig 284), re-sized by CLASSSYNCHB.1 (mig 644). Refreshes the class_occurrences spine (the next 48 h) from Glofox for every Glofox-connected location, and reconciles cancellations. Vercel cron */15 * * * * (restored by HR-WAVE1 P0-8 on 2 Jul after migs 285/286 had widened this row for an hourly then daily schedule). Stamped at the end of every tick that read the locations list, INCLUDING ticks where a location''s Glofox fetch or upsert failed (stats.errors + a cron-sync-class-occurrences logWarn): STALE means the cron is not running or is crashing, not that Glofox is down. 900 + 1200: one missed tick never pages, two in a row do (35 min).'
+    'CLASS-CLIMATE.1 (mig 284), re-sized by CLASSSYNCHB.1 (mig 644). Refreshes the class_occurrences spine (next 48 h) from Glofox for every Glofox-connected location. Vercel cron */15 * * * * (restored by HR-WAVE1 P0-8, 2 Jul). Stamped at the end of every tick that finishes, even when Glofox answered with an error (stats.errors + logWarn), so an erroring Glofox does not page; a Glofox that hangs or rate-limits past the 60 s maxDuration kills the tick before its stamp, so it does. 900 + 1200: one missed tick never pages, two in a row do (35 min).'
   ),
   (
     'ad-insights-sync',

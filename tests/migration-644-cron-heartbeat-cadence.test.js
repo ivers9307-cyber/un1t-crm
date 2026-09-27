@@ -103,6 +103,20 @@ describe('mig 644 puts each row on its real cadence', () => {
     expect((await row(name)).notes).toMatch(/Vercel cron /)
   })
 
+  it('sync-class-occurrences notes: an erroring Glofox does not page, a hanging one does (at the route\'s real maxDuration)', async () => {
+    // glofoxFetch has no timeout and retries 429/5xx honouring Retry-After, so
+    // a hanging or throttling Glofox outlasts maxDuration and kills the tick
+    // before its stamp. The live note must not claim "a Glofox outage cannot page".
+    const route = readFileSync(path.resolve(import.meta.dirname, '../src/app/api/cron/sync-class-occurrences/route.js'), 'utf8')
+    const maxDuration = Number(route.match(/export const maxDuration = (\d+)/)?.[1])
+    expect(maxDuration).toBeGreaterThan(0)
+    await seedLiveDrift(); await runSql(MIG_644)
+    const { notes } = await row('sync-class-occurrences')
+    expect(notes).toMatch(/an erroring Glofox does not page/)
+    expect(notes).toContain(`hangs or rate-limits past the ${maxDuration} s maxDuration`)
+    expect(notes).not.toMatch(/not that Glofox is down/)
+  })
+
   it('sync-class-occurrences (*/15): one missed tick never pages, two in a row do (35 min)', async () => {
     await seedLiveDrift(); await runSql(MIG_644)
     expect(await staleAfter('sync-class-occurrences', 31 * 60)).toBe(false)  // one miss + 60 s run
