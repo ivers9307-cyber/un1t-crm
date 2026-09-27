@@ -175,7 +175,9 @@ export default async function PersonalDashboardPage() {
   // getPendingApprovalsCount fired once here and once more inside
   // assembleHomeQueue, every page load).
   const [res, feedRows, queue] = await Promise.all([
-    fetchPersonalDashboardData(db, user.id, user.activeLocation?.id),
+    // A4 REVENUEMTD.1 — the same Dublin today as the month grid, so "This
+    // week" never lags a day behind it between 00:00 and 01:00 Dublin.
+    fetchPersonalDashboardData(db, user.id, user.activeLocation?.id, { todayIso }),
     fetchTodayFeed(db, user, user.activeLocation?.id, { skip: QUEUE_MIGRATED_IDS }),
     assembleHomeQueue(db, user),
   ])

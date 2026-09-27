@@ -288,3 +288,33 @@ describe('GET /api/staff — ?location_id=', () => {
     expect(listStaffForUser).not.toHaveBeenCalled()
   })
 })
+
+// CONTRACTVIS.1 — the picker's opt-in. The read service decides per row who
+// may see a contract; the route only forwards the ask, and only with the picker.
+describe('GET /api/staff — ?include=contract', () => {
+  beforeEach(() => {
+    getCurrentUser.mockResolvedValue({ id: 'u', role: 'manager', locations: [{ id: LOC }] })
+    createServerClient.mockReturnValue({})
+  })
+
+  it('forwards the opt-in with the picker shape', async () => {
+    const { listStaffForUser } = await import('@/lib/staff')
+    listStaffForUser.mockResolvedValue({ ok: true, data: [] })
+    await GET({ url: 'http://x/api/staff?fields=picker&include=contract', headers: { get: () => '' } })
+    expect(listStaffForUser).toHaveBeenLastCalledWith(expect.objectContaining({ fields: 'picker', includeContract: true }))
+  })
+
+  it('ignores it without fields=picker', async () => {
+    const { listStaffForUser } = await import('@/lib/staff')
+    listStaffForUser.mockResolvedValue({ ok: true, data: [] })
+    await GET({ url: 'http://x/api/staff?include=contract', headers: { get: () => '' } })
+    expect(listStaffForUser).toHaveBeenLastCalledWith(expect.objectContaining({ fields: null, includeContract: false }))
+  })
+
+  it('is off by default', async () => {
+    const { listStaffForUser } = await import('@/lib/staff')
+    listStaffForUser.mockResolvedValue({ ok: true, data: [] })
+    await GET({ url: 'http://x/api/staff?fields=picker', headers: { get: () => '' } })
+    expect(listStaffForUser).toHaveBeenLastCalledWith(expect.objectContaining({ includeContract: false }))
+  })
+})

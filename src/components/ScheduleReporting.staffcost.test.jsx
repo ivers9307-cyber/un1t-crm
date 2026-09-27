@@ -78,10 +78,12 @@ describe('ScheduleReporting — Staff Cost tile visibility', () => {
     await act(async () => { render(<ScheduleReporting user={user} />) })
   }
 
-  it('is hidden from a head coach, who keeps the other four reports', async () => {
+  it('is hidden from a head coach, who keeps the three reports without a rate or a contract', async () => {
     await renderAs({ id: 'hc', role: 'head_coach', profileRole: 'head_coach', rolesByLocation: { loc1: 'head_coach' }, activeLocation: { id: 'loc1', name: 'Stillorgan' } })
     expect(screen.queryByRole('button', { name: /Staff Cost Breakdown/ })).toBeNull()
-    for (const label of ['Staff Hours Worked', 'Time Off Summary', 'Roster Coverage', 'Staff Utilisation']) {
+    // CONTRACTVIS.1 — utilisation carries each colleague's contracted hours.
+    expect(screen.queryByRole('button', { name: /Staff Utilisation/ })).toBeNull()
+    for (const label of ['Staff Hours Worked', 'Time Off Summary', 'Roster Coverage']) {
       expect(screen.getByRole('button', { name: new RegExp(label) })).toBeTruthy()
     }
   })
