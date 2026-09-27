@@ -7,9 +7,17 @@
 // A new reader fails here until someone decides — the same shape as
 // tests/staff-tombstone-readers.test.js.
 //
+// Two nets, one list:
+//   1. NAMES — a file that spells `contracted_hours` or STAFF_CONTRACT_FIELD
+//      (the constant src/lib/staff.js reads the column through).
+//   2. IMPORTS — a file under src/ that imports a PRODUCER of contract-bearing
+//      rows (PRODUCERS below). A consumer can hand the rows on without ever
+//      naming the column, so importing one is itself a decision to review.
+//
 // A FLOOR, NOT A PROOF: a `select('*')` never names the column (that is why
-// src/lib/staff.js projects every row it does not manage), and a value that
-// travels under another name is invisible.
+// src/lib/staff.js projects every row it does not manage), a value that
+// travels under another name is invisible, and net 2 is one hop deep (a
+// consumer of a consumer is not followed).
 
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
@@ -30,11 +38,57 @@ function walk(dir, out = []) {
   return out
 }
 
+const rel = (root, file) => relative(root, file).split(sep).join('/')
+
+// Net 1. STAFF_CONTRACT_FIELD is how src/lib/staff.js names the column; a
+// file importing the constant reads contracts without spelling them.
+const NAMES_CONTRACT = /contracted_hours|STAFF_CONTRACT_FIELD/
+
 export function contractHoursReaders(root) {
   const hits = []
   for (const top of ROOTS) {
     for (const file of walk(join(root, top))) {
-      if (readFileSync(file, 'utf8').includes('contracted_hours')) hits.push(relative(root, file).split(sep).join('/'))
+      if (NAMES_CONTRACT.test(readFileSync(file, 'utf8'))) hits.push(rel(root, file))
+    }
+  }
+  return hits.sort()
+}
+
+// Net 2. Modules whose exports hand back rows that carry a colleague's
+// contract (or a figure measured against one). Each is itself in REVIEWED.
+export const PRODUCERS = {
+  'src/lib/roster-week-cost.js': 'computeWeeklyFteHours — per-coach contract, overtime and status',
+  'src/lib/candidates-data.js': 'loadBlockCandidates({ withContract }) / readContractedHours',
+  'src/lib/roster-grid-data.js': 'loadRosterGrid({ showContract })',
+  'src/lib/report-generator.js': 'generateReport — staff_cost and utilisation rows carry contracts',
+  'src/lib/staff.js': 'listStaffForUser / getStaffForUser — the full shape for managed rows',
+}
+
+const SPECIFIER = /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*)['"]([^'"]+)['"]/g
+
+// Resolve an import specifier to a repo-relative path without an extension,
+// or null for a package import. Only the aliases the repo uses: '@/' (src/)
+// and '@shared/' (shared/).
+function resolveSpecifier(root, fromFile, spec) {
+  let abs
+  if (spec.startsWith('@/')) abs = join(root, 'src', spec.slice(2))
+  else if (spec.startsWith('@shared/')) abs = join(root, 'shared', spec.slice(8))
+  else if (spec.startsWith('.')) abs = join(dirname(fromFile), spec)
+  else return null
+  return rel(root, abs).replace(/\.(js|jsx|mjs)$/, '').replace(/\/index$/, '')
+}
+
+const PRODUCER_STEMS = new Map(Object.keys(PRODUCERS).map((f) => [f.replace(/\.(js|jsx|mjs)$/, ''), f]))
+
+export function producerConsumers(root) {
+  const hits = []
+  for (const file of walk(join(root, 'src'))) {
+    const self = rel(root, file)
+    if (PRODUCERS[self]) continue
+    const src = readFileSync(file, 'utf8')
+    for (const m of src.matchAll(SPECIFIER)) {
+      const target = resolveSpecifier(root, file, m[1])
+      if (target && PRODUCER_STEMS.has(target)) { hits.push(self); break }
     }
   }
   return hits.sort()
@@ -46,7 +100,13 @@ const REVIEWED = {
   'src/app/api/assistant/chat/route.js': 'staff_cost tool, RATE_REPORT_VIEWER_ROLES at the active studio only (the assistant is off everywhere)',
   'src/app/api/contracts/[id]/route.js': 'the contract\'s recipient (own), master, or an owner of its organisation',
   'src/app/api/contracts/route.js': 'issuing a contract: master or owner only',
+  'src/app/api/cron/run-scheduled-reports/route.js': 'emails staff_cost / utilisation only to recipients filterRateReportRecipients allows',
+  'src/app/api/schedule/blocks/[id]/candidates/route.js': 'withContract only for the manager audience AND ADMIN_ROLES at the block\'s studio (CANDIDATES.1)',
   'src/app/api/schedule/grid/route.js': 'ADMIN_ROLES at the studio only (showContract), stripped again otherwise',
+  'src/app/api/schedule/offers/[id]/claim/route.js': 'loadBlockCandidates without withContract (defaults false): no contract read',
+  'src/app/api/schedule/offers/route.js': 'loadBlockCandidates without withContract (defaults false): no contract read',
+  'src/app/api/schedule/reports/route.js': 'generate and list refuse staff_cost / utilisation below RATE_REPORT_VIEWER_ROLES at the studio',
+  'src/app/api/schedule/reports/scheduled/route.js': 'imports calculateNextRun only; scheduling a staff_cost / utilisation report is RATE_REPORT_VIEWER_ROLES',
   'src/app/api/schedule/week-cost/route.js': 'ADMIN_ROLES at the studio only; contract_visible false otherwise (CONTRACTVIS.1)',
   'src/app/api/staff/[id]/route.js': 'write schema (PUT is owner/master); reads go through src/lib/staff.js',
   'src/app/api/staff/route.js': 'write schema (POST is owner/master); reads go through src/lib/staff.js',
@@ -69,13 +129,18 @@ const REVIEWED = {
   'src/lib/roster-summary.js': 'pure; measures only rows the caller was sent',
   'src/lib/roster-week-cost.js': 'server arithmetic behind week-cost',
   'src/lib/schemas.js': 'a comment on the column\'s range',
+  'src/lib/shift-offer-server.js': 'loadBlockCandidates without withContract (defaults false): no contract read',
   'src/lib/staff-write.js': 'owner/master writes',
   'src/lib/staff.js': 'adds the column only for rows the caller manages, and their own (CONTRACTVIS.1)',
 }
 
 describe('every reader of contracted hours has been reviewed (CONTRACTVIS.1)', () => {
-  it('no unreviewed file names the column', () => {
-    const unreviewed = contractHoursReaders(repo).filter((f) => !REVIEWED[f])
+  // One walk per net for the whole file; the tests below only compare.
+  const namers = contractHoursReaders(repo)
+  const consumers = producerConsumers(repo)
+
+  it('no unreviewed file names the column (or STAFF_CONTRACT_FIELD)', () => {
+    const unreviewed = namers.filter((f) => !REVIEWED[f])
     expect(
       unreviewed,
       'A file names contracted hours and is not in REVIEWED. Colleagues\' contracted hours go to ' +
@@ -84,8 +149,21 @@ describe('every reader of contracted hours has been reviewed (CONTRACTVIS.1)', (
     ).toEqual([])
   })
 
+  it('no unreviewed file imports a producer of contract-bearing rows', () => {
+    const unreviewed = consumers.filter((f) => !REVIEWED[f])
+    expect(
+      unreviewed,
+      'A file imports a module in PRODUCERS (it can hand on a colleague\'s contract without naming it) and ' +
+      'is not in REVIEWED. Check who receives what it returns (CONTRACTVIS.1), then add the file with that reason.',
+    ).toEqual([])
+  })
+
+  it('every producer is itself reviewed', () => {
+    expect(Object.keys(PRODUCERS).filter((f) => !REVIEWED[f])).toEqual([])
+  })
+
   it('REVIEWED has no stale entries', () => {
-    const found = new Set(contractHoursReaders(repo))
+    const found = new Set([...namers, ...consumers])
     expect(Object.keys(REVIEWED).filter((f) => !found.has(f))).toEqual([])
   })
 })
