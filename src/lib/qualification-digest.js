@@ -6,7 +6,7 @@
 //
 // WHO. Per organisation, each ACTIVE, non-tombstoned profile that is `owner`
 // at one of its studios, or a `master` holding a row there (the
-// resolveRoleRecipientIds rule, src/lib/push.js, re-read here so a failed
+// readRoleRecipientIds rule, src/lib/push.js, re-read here so a failed
 // read throws instead of looking like "nobody to tell"). Their list covers
 // the current people at THE STUDIOS WHERE THEY QUALIFY, and nobody else:
 // an owner of Stillorgan never sees a Hatch-only coach, and nobody ever sees

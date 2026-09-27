@@ -22,6 +22,7 @@ import {
   RECEIPT_MIME_TYPES, sniffReceiptMime, loadQueueRowsForInvoices,
 } from '@/lib/contractor-invoices'
 import { contractorInvoiceLifecycle } from '@shared/contractor-invoice-review'
+import { logError } from '@/lib/log'
 
 // JSON submit mode (INVOICE-UPLOAD.1): the PDF is already in storage via
 // /api/invoices/upload-sign + a signed direct upload; the body carries a
@@ -42,6 +43,17 @@ const STORAGE_BUCKET = 'contractor-invoices'
 const MAX_RECEIPT_BYTES = 10 * 1024 * 1024 // 10 MB
 // SPEND.P1 — an invoice may be a PDF or a phone photo of a paper receipt.
 const ALLOWED_MIME = RECEIPT_MIME_TYPES
+
+// The 409 for "this period already has an active invoice". `status` is
+// null when the unique index (23505) refused the insert and the row's
+// status is unknown.
+function activeInvoiceConflict(period, status) {
+  let error
+  if (status === 'approved') error = `An invoice for ${period.label} has already been approved.`
+  else if (status) error = `You already have a submission pending review for ${period.label}.`
+  else error = `You already have an invoice for ${period.label} that is pending review or approved.`
+  return NextResponse.json({ success: false, error }, { status: 409 })
+}
 
 function isOwnerOrMaster(user) {
   return user?.role === 'master' || user?.role === 'owner'
@@ -154,24 +166,33 @@ export async function POST(request) {
 
   const db = createServerClient()
 
-  // Pre-check: existing active row blocks resubmit.
-  const { data: existingActive } = await db
+  // Pre-check: existing active row blocks resubmit. "Active" is EXACTLY the
+  // unique index's predicate — contractor_invoices_one_active_per_period
+  // (mig 101, redefined by mig 102) is WHERE status NOT IN ('declined',
+  // 'revoked'): a declined OR revoked row makes way for a fresh submission.
+  // INVOICEHOURS.1 — this excluded only 'declined', so a revoked row answered
+  // a false 409. The pre-check is only the friendlier early answer: the
+  // unique index is the authoritative guard. So a failed read is logged
+  // structurally and falls through to the insert (main discarded the error
+  // and did the same); failing it closed would refuse a submission main
+  // filed and orphan the already-uploaded PDF. A real duplicate then comes
+  // back from the insert as 23505, answered below with the same 409.
+  const { data: existingActive, error: activeErr } = await db
     .from('contractor_invoices')
     .select('id, status')
     .eq('contractor_id', user.id)
     .eq('period_start', period.period_start)
-    .neq('status', 'declined')
+    .not('status', 'in', '(declined,revoked)')
     .maybeSingle()
+  if (activeErr) {
+    logError('invoice-submit', 'active-invoice pre-check failed; leaving it to the unique index', {
+      err: activeErr.message || String(activeErr),
+      contractorId: user.id,
+      periodStart: period.period_start,
+    })
+  }
   if (existingActive) {
-    return NextResponse.json(
-      {
-        success: false,
-        error: existingActive.status === 'approved'
-          ? `An invoice for ${period.label} has already been approved.`
-          : `You already have a submission pending review for ${period.label}.`,
-      },
-      { status: 409 }
-    )
+    return activeInvoiceConflict(period, existingActive.status)
   }
 
   // PDF: verify the direct-to-storage object (JSON mode) or upload the
@@ -257,7 +278,19 @@ export async function POST(request) {
     // `.catch(() => {})` here threw a TypeError at runtime and turned a
     // clean insert-failure response into a 500 (repo lesson: two-arg
     // .then is the safe best-effort form).
-    await db.storage.from(STORAGE_BUCKET).remove([pdfPath]).then(() => {}, () => {})
+    //
+    // 23505 = contractor_invoices_one_active_per_period refused a second
+    // active row (the pre-check read failed, or a concurrent submit won):
+    // the same friendly 409 as the pre-check, never the raw Postgres text.
+    // In JSON mode the pdf_path is client-supplied, and a retried request
+    // carries the SAME path as the row that won the index, so it is left
+    // alone exactly as the pre-check's 409 leaves it. Multipart paths are
+    // minted fresh above, so removing one never touches another row's PDF.
+    const duplicate = error.code === '23505'
+    if (!(duplicate && isJsonMode)) {
+      await db.storage.from(STORAGE_BUCKET).remove([pdfPath]).then(() => {}, () => {})
+    }
+    if (duplicate) return activeInvoiceConflict(period, null)
     return NextResponse.json({ success: false, error: error.message }, { status: 400 })
   }
 

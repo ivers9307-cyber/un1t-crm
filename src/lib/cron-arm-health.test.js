@@ -94,6 +94,13 @@ describe('runwayArmHealthy', () => {
     expect(runwayArmHealthy({ ...RUNWAY_CLEAN, failed: 1 })).toBe(true)
   })
 
+  it('a failed recipients read is a fault: nobody was told, and the week waits for tomorrow (C1 RECIPIENTS.1)', () => {
+    expect(runwayArmHealthy({ ...RUNWAY_CLEAN, recipients_failed: 1 })).toBe(false)
+    expect(runwayArmHealthy({ ...RUNWAY_CLEAN, recipients_failed: 0 })).toBe(true)
+    // An outcome from before the counter existed is judged as it was.
+    expect(runwayArmHealthy(RUNWAY_CLEAN)).toBe(true)
+  })
+
   it('the parent\'s error outcome ({ error }) is not healthy, whatever else it carries', () => {
     expect(runwayArmHealthy({ error: 'runway read failed: blocks down' })).toBe(false)
     expect(runwayArmHealthy({ ...RUNWAY_CLEAN, error: 'x' })).toBe(false)
@@ -176,7 +183,7 @@ describe('the real arms, on their zero-work paths', () => {
   it('runRosterRunwayAlerts with no locations returns its outcome, and it is healthy', async () => {
     const b = { select: () => b, then: (res, rej) => Promise.resolve({ data: [], error: null }).then(res, rej) }
     const outcome = await runRosterRunwayAlerts({ from: () => b }, { nowMs: Date.UTC(2026, 8, 25, 8, 0) })
-    expect(outcome).toEqual({ locations: 0, alerts: 0, quiet_hours: 0, sent: 0, emailed: 0, deduped: 0, failed: 0 })
+    expect(outcome).toEqual({ locations: 0, alerts: 0, quiet_hours: 0, sent: 0, emailed: 0, deduped: 0, failed: 0, recipients_failed: 0 })
     expect(runwayArmHealthy(outcome)).toBe(true)
   })
 

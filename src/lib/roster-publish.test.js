@@ -57,7 +57,7 @@ const DEFAULT_ORG_LOCATIONS = [
   { id: 'loc9', organization_id: 'org2' },
 ]
 
-function mockDb({ location, locationsById = null, failLocationIds = [], contractors = [], blocks = [], timeOff = [], otherAssignments = [], failOtherAssignments = false, orgLocations = DEFAULT_ORG_LOCATIONS, failSiblings = false, throwOn = null }) {
+function mockDb({ location, locationsById = null, failLocationIds = [], contractors = [], blocks = [], timeOff = [], otherAssignments = [], failOtherAssignments = false, orgLocations = DEFAULT_ORG_LOCATIONS, failSiblings = false, throwOn = null, guests = [], failPay = false }) {
   // Mock the chained Supabase queries the helper makes:
   //   from('locations').select(...).eq(...).single() → location
   //   from('profile_locations').select(...).eq(...) → contractor links
@@ -67,6 +67,7 @@ function mockDb({ location, locationsById = null, failLocationIds = [], contract
   const leaveQueries = []
   const assignmentQueries = []
   const siblingQueries = []
+  const payQueries = []
   // A fixture location that names no organisation is in org1.
   const withOrg = (l) => (l ? { organization_id: 'org1', ...l } : l)
   return {
@@ -75,6 +76,7 @@ function mockDb({ location, locationsById = null, failLocationIds = [], contract
     leaveQueries,
     assignmentQueries,
     siblingQueries,
+    payQueries,
     from(table) {
       calls.push(table)
       if (table === 'locations') {
@@ -185,6 +187,27 @@ function mockDb({ location, locationsById = null, failLocationIds = [], contract
         }
         return chain
       }
+      // CONTRACTORSPEND.1 — pay is read by HOLDER: the type from profiles, the
+      // rate from profile_compensation. `contractors` are this studio's members
+      // (profile_locations, above); `guests` hold shifts here without being one.
+      if (table === 'profiles' || table === 'profile_compensation') {
+        const f = { table, select: null, col: null, ids: [] }
+        payQueries.push(f)
+        const people = [...contractors, ...guests]
+        const chain = {
+          select: (s) => { f.select = s; return chain },
+          in: (c, ids) => { f.col = c; f.ids = ids; return chain },
+          then: (onF, onR) => Promise.resolve(failPay
+            ? { data: null, error: { message: `${table} unreadable` } }
+            : {
+              data: people.filter((p) => f.ids.includes(p.id)).map((p) => (table === 'profiles'
+                ? { id: p.id, employment_type: p.employment_type }
+                : { profile_id: p.id, hourly_rate: p.hourly_rate ?? null, annual_salary: null, contracted_hours_per_week: null, annual_leave_entitlement: null, overtime_rate: null })),
+              error: null,
+            }).then(onF, onR),
+        }
+        return chain
+      }
       throw new Error('unexpected table: ' + table)
     },
   }
@@ -193,6 +216,7 @@ function mockDb({ location, locationsById = null, failLocationIds = [], contract
 const dan = { id: 'dan', employment_type: 'contractor', hourly_rate: 35, active: true }
 const eve = { id: 'eve', employment_type: 'contractor', hourly_rate: 40, active: true }
 const sarah = { id: 'sarah', employment_type: 'fte', hourly_rate: null, active: true }
+const gus = { id: 'gus', employment_type: 'contractor', hourly_rate: 40, active: true } // a member of the SIBLING studio only
 
 function block({ id, date, start, end, coaches = [], roster = null, loc = 'loc1' }) {
   return {
@@ -347,6 +371,79 @@ describe('projectPublishImpact', () => {
     // ROSTERVIS.1 — every block in the period counts, FTE-only ones included.
     // It used to be 1 (cost=0 blocks were skipped), which under-read the week.
     expect(r.blockCount).toBe(2)
+  })
+})
+
+// CONTRACTORSPEND.1 — the gate prices whoever HOLDS a shift here (the same
+// loader as the contractor-spend panel), and sees every holder's leave in both
+// modes, or a guest contractor would be billed while on approved leave.
+describe('CONTRACTORSPEND.1 — the gate prices every holder', () => {
+  const PERIOD = { locationId: 'loc1', periodStart: '2026-05-04', periodEnd: '2026-05-10', todayIso: '2026-05-01' }
+
+  it('prices a contractor from the sibling studio who holds a shift here', async () => {
+    const published = { id: 'r-pub', status: 'published' }
+    const db = mockDb({
+      location: { id: 'loc1', monthly_contractor_budget_eur: 100 },
+      contractors: [dan],
+      guests: [gus],
+      blocks: [
+        block({ id: 'in', date: '2026-05-06', start: '09:00', end: '11:00', coaches: ['gus'] }), // 2h × 40 = 80
+        block({ id: 'out', date: '2026-05-20', start: '09:00', end: '10:00', coaches: ['gus'], roster: published }), // 1h × 40 = 40
+      ],
+    })
+    const r = await projectPublishImpact(db, PERIOD)
+    expect(r.periodProjectedEur).toBe(80)
+    expect(r.alreadyPublishedEur).toBe(40)
+    expect(r.overBudget).toBe(true)
+  })
+
+  for (const advisories of [true, false]) {
+    it(`a guest contractor on approved leave is not billed (advisories: ${advisories})`, async () => {
+      const db = mockDb({
+        location: { id: 'loc1', monthly_contractor_budget_eur: null },
+        contractors: [dan],
+        guests: [gus],
+        blocks: [block({ id: 'b1', date: '2026-05-06', start: '09:00', end: '11:00', coaches: ['gus'] })],
+        timeOff: [{ id: 't1', profile_id: 'gus', start_date: '2026-05-06', end_date: '2026-05-06' }],
+      })
+      const r = await projectPublishImpact(db, { ...PERIOD, advisories })
+      expect(db.leaveQueries[0].or).toContain('gus')
+      expect(r.periodProjectedEur).toBe(0)
+    })
+  }
+
+  it('reads pay by holder from profile_compensation, and profiles by named columns only', async () => {
+    const db = mockDb({
+      location: { id: 'loc1', monthly_contractor_budget_eur: null },
+      contractors: [dan, eve],
+      blocks: [block({ id: 'b1', date: '2026-05-06', start: '09:00', end: '11:00', coaches: ['dan'] })],
+    })
+    await projectPublishImpact(db, PERIOD)
+    const profiles = db.payQueries.find((q) => q.table === 'profiles')
+    expect(profiles.select).toBe('id, employment_type')
+    expect(profiles.ids).toEqual(['dan']) // holders only; eve holds nothing
+    expect(db.calls).toContain('profile_compensation')
+  })
+
+  it('a failed pay read fails the projection (a budget input), never a EUR 0 price', async () => {
+    const db = mockDb({
+      location: { id: 'loc1', monthly_contractor_budget_eur: 100 },
+      contractors: [dan],
+      failPay: true,
+      blocks: [block({ id: 'b1', date: '2026-05-06', start: '09:00', end: '11:00', coaches: ['dan'] })],
+    })
+    await expect(projectPublishImpact(db, PERIOD)).rejects.toThrow(/Pay lookup failed/)
+  })
+
+  it('no live holder in the months = no pay read', async () => {
+    const db = mockDb({
+      location: { id: 'loc1', monthly_contractor_budget_eur: 100 },
+      contractors: [dan],
+      blocks: [block({ id: 'b1', date: '2026-05-06', start: '09:00', end: '11:00', coaches: [{ profile_id: 'dan', status: 'cancelled' }] })],
+    })
+    const r = await projectPublishImpact(db, PERIOD)
+    expect(db.payQueries).toEqual([])
+    expect(r.periodProjectedEur).toBe(0)
   })
 })
 
@@ -697,7 +794,7 @@ describe('projectPublishImpact — leave clashes and double bookings', () => {
   })
 
   // Review (cost) — a caller that never shows the lists must not pay for them.
-  it('advisories: false does none of the advisory work: no other-studio query, no lists, the leave scope as it was, the same money', async () => {
+  it('advisories: false does none of the advisory work: no other-studio query, no lists, the leave scope still covers every holder, the same money', async () => {
     const fx = () => mockDb({
       location: { id: 'loc1', monthly_contractor_budget_eur: 500 },
       contractors: [dan],
@@ -714,7 +811,9 @@ describe('projectPublishImpact — leave clashes and double bookings', () => {
     expect('leaveClashes' in r).toBe(false)
     expect('doubleBookings' in r).toBe(false)
     expect('crossLocationChecked' in r).toBe(false)
-    expect(db.leaveQueries[0].or).not.toContain('guest-1')
+    // CONTRACTORSPEND.1 — guests are PRICED now, so their leave is read in
+    // both modes (it used to be members-only here).
+    expect(db.leaveQueries[0].or).toContain('guest-1')
     const withLists = await projectPublishImpact(fx(), PERIOD)
     expect(withLists.doubleBookings.length).toBeGreaterThan(0)
     expect(r.periodProjectedEur).toBe(withLists.periodProjectedEur)
@@ -906,6 +1005,7 @@ describe('projectPublishImpactBatch', () => {
     await projectPublishImpactBatch(db, DRAFTS, { todayIso: TODAY })
     expect(db.calls.filter((t) => t === 'locations')).toHaveLength(1)
     expect(db.calls.filter((t) => t === 'profile_locations')).toHaveLength(1)
+    expect(db.calls.filter((t) => t === 'profile_compensation')).toHaveLength(1)
     expect(db.blockQueries).toHaveLength(1)
     expect(db.blockQueries[0]).toMatchObject({ loc: 'loc1', gte: '2026-08-01', lte: '2026-11-30' })
     expect(db.leaveQueries).toHaveLength(1)

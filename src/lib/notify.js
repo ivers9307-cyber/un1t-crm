@@ -31,7 +31,7 @@
 // Best-effort throughout — never throws.
 
 import { createServerClient } from './supabase'
-import { sendPush, resolvePushAllowedIds, resolveRoleRecipientIds } from './push'
+import { sendPush, resolvePushAllowedIds } from './push'
 import { sendEmail } from './postmark'
 import { getNotificationCategory } from './notifications-registry'
 import { logInfo, logWarn } from './log'
@@ -178,26 +178,4 @@ function escapeHtml(s) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;')
-}
-
-/**
- * Sister of notifyUsers for the fan-out shape — notify every active
- * staff member at `locationId` with one of the supplied `roles`.
- *
- * Replaces the existing push.js sendPushToRolesAtLocation pattern
- * for callers that want email fallback (e.g. "new time-off request"
- * to owner/manager). Resolves the role set to a user-id list, then
- * delegates to notifyUsers — so it gets fallback eligibility from
- * the same registry flag.
- *
- * Same { sent, skipped, invalidated, emailed, email_failed } return
- * shape as notifyUsers.
- */
-export async function notifyUsersAtRoles(locationId, roles, payload) {
-  if (!locationId || !roles?.length) {
-    return { sent: 0, skipped: 0, invalidated: 0, failed: 0, emailed: 0, email_failed: 0 }
-  }
-  const db = createServerClient()
-  const ids = await resolveRoleRecipientIds(db, locationId, roles)
-  return notifyUsers(ids, payload)
 }

@@ -61,6 +61,7 @@ export async function GET(_request, props) {
   // self caller can't pull it via the API either.
   const reviewerView = isMaster || isOwnerHere
   let computed = null
+  let rosterUnavailable = false
   if (reviewerView) {
     try {
       computed = await computeScheduledForPeriod(db, {
@@ -72,7 +73,9 @@ export async function GET(_request, props) {
     } catch (e) {
       // INVOICEREVIEW.2 — an approved invoice still has its saved
       // snapshot to show, so a live-recompute failure must not 500 the
-      // whole detail view.
+      // whole detail view. INVOICEHOURS.1 D9 — but it must not be silent
+      // either: the reviewer is told the roster could not be read.
+      rosterUnavailable = true
       logWarn('invoice-detail', 'live roster recompute failed', { err: e, invoiceId: inv.id })
     }
   }
@@ -102,6 +105,7 @@ export async function GET(_request, props) {
     data: {
       ...row,
       computed_scheduled: computed,
+      roster_unavailable: rosterUnavailable,
       review_comparison: reviewComparison,
       lifecycle,
       // Convenience flags for the client to render the right view.

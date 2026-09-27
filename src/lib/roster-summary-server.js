@@ -1,57 +1,43 @@
 // SCHEDULE-SPEND-AGG.1 — server-side contractor-spend aggregation.
 //
-// summarizeMonth (roster-summary.js) is a pure transform that runs
-// client-side today. It needs every coach's hourly_rate to compute
-// contractor euro spend, which is HR-sensitive — `/api/staff`
-// intentionally withholds rates from non-admin roles like
-// head_coach. Result: head_coach reads the panel and sees a flat
-// €0 contractor spend, with no signal when the month is over
-// budget.
+// summarizeMonth (roster-summary.js) needs every holder's pay to compute
+// contractor euro spend, which is HR-sensitive — `/api/staff` withholds rates
+// from non-admin roles like head_coach. So the transform runs HERE with the
+// service-role client and returns AGGREGATE figures only — no per-coach value
+// crosses the wire. Drives /api/schedule/contractor-spend (MANAGER_ROLES at
+// the location), so a head coach sees totals and over-budget signals without
+// ever being granted anyone's rate.
 //
-// This helper runs the same transform server-side with full pay
-// data (service-role bypasses RLS) and returns AGGREGATE figures
-// only — no per-coach euro values cross the wire. Drives the
-// /api/schedule/contractor-spend endpoint, which is gated to
-// MANAGER_ROLES so head_coach can see totals + over-budget
-// signals without ever being granted visibility of individual
-// rates.
+// CONTRACTORSPEND.1 (27 Sep 2026):
+//   - the month is monthBounds(referenceDate): string arithmetic on the Dublin
+//     calendar date the route validated. It was parsed into a Date here AND in
+//     summarizeMonth, and west of UTC the two disagreed (EUR 0);
+//   - pay is read for the HOLDERS of the month's shifts (loadHolderPay:
+//     profiles by named columns + profile_compensation), not for this studio's
+//     members from the deprecated profiles pay columns — a contractor from the
+//     sibling studio who covered a class here was priced at EUR 0;
+//   - the block read carries roster status (published vs not) and pages.
+// Every read failure throws; the route answers 500 and the panel says
+// "Could not be loaded" rather than showing EUR 0.
 
 import { summarizeMonth } from './roster-summary'
+import { monthBounds } from '@shared/roster-month'
+import { selectAll } from './select-all'
+import { loadHolderPay, liveHolderIds } from './shift-holder-pay'
 
 /**
- * Resolve the calendar-month boundary dates for the month
- * containing `referenceDate`. Mirrors summarizeMonth's own internal
- * calc so we can scope the block fetch tightly.
- */
-function monthBoundsIso(referenceDate) {
-  const ref = new Date(referenceDate + 'T00:00:00')
-  const start = new Date(ref.getFullYear(), ref.getMonth(), 1)
-  const end = new Date(ref.getFullYear(), ref.getMonth() + 1, 0)
-  return { startIso: toIso(start), endIso: toIso(end) }
-}
-
-function toIso(date) {
-  const y = date.getFullYear()
-  const m = String(date.getMonth() + 1).padStart(2, '0')
-  const d = String(date.getDate()).padStart(2, '0')
-  return `${y}-${m}-${d}`
-}
-
-/**
- * Fetch the inputs and compute monthly contractor spend totals for
- * `locationId` at `referenceDate`. Returns the same shape
- * summarizeMonth produces — already aggregate-only.
+ * Monthly contractor spend totals for `locationId` in the month holding
+ * `referenceDate`. Returns summarizeMonth's shape — aggregate only.
  *
- * Auth is the caller's responsibility (MANAGER_ROLES + location
- * membership). This helper trusts its inputs.
+ * Auth is the caller's responsibility (MANAGER_ROLES at the location).
  *
  * @param {object} args
  * @param {object} args.db            service-role Supabase client
  * @param {string} args.locationId    uuid
- * @param {string} args.referenceDate ISO date YYYY-MM-DD inside the target month
+ * @param {string} args.referenceDate YYYY-MM-DD inside the target month
  */
 export async function computeMonthlyContractorSpend({ db, locationId, referenceDate }) {
-  const { startIso, endIso } = monthBoundsIso(referenceDate)
+  const { monthStartIso, monthEndIso } = monthBounds(referenceDate)
 
   // Location budget (null = not configured).
   const { data: loc, error: locErr } = await db
@@ -65,47 +51,23 @@ export async function computeMonthlyContractorSpend({ db, locationId, referenceD
     throw err
   }
 
-  // Blocks for the calendar month — same shape summarizeMonth expects.
-  const { data: blocks, error: blocksErr } = await db
+  // Every block at this studio in the month, with its roster status, template
+  // times + kind, and assignments. Paged: PostgREST caps a select at 1,000 rows.
+  const blocks = await selectAll((from, to) => db
     .from('shift_blocks')
-    .select(`
-      id, location_id, block_date, start_time, end_time,
-      template_id, max_coaches,
-      shift_assignments(profile_id, start_time_override, end_time_override, status),
-      shift_templates(start_time, end_time, kind)
-    `)
+    .select('id, location_id, block_date, start_time, end_time, template_id, rosters:roster_id ( status ), shift_assignments(id, profile_id, start_time_override, end_time_override, status), shift_templates(start_time, end_time, kind)')
     .eq('location_id', locationId)
-    .gte('block_date', startIso)
-    .lte('block_date', endIso)
-  if (blocksErr) throw new Error(blocksErr.message)
+    .gte('block_date', monthStartIso)
+    .lte('block_date', monthEndIso)
+    .order('id', { ascending: true })
+    .range(from, to))
 
-  // Staff assigned to this location with FULL pay fields — service-
-  // role bypasses the privacy-shaped slim payload `/api/staff` serves
-  // to non-admin roles. Per-coach figures NEVER leave this helper;
-  // they're consumed in-memory by summarizeMonth.
-  const { data: links, error: linksErr } = await db
-    .from('profile_locations')
-    .select('profile_id')
-    .eq('location_id', locationId)
-  if (linksErr) throw new Error(linksErr.message)
-  const profileIds = (links || []).map((l) => l.profile_id)
-
-  let staff = []
-  if (profileIds.length > 0) {
-    const { data: profiles, error: profilesErr } = await db
-      .from('profiles')
-      .select(`
-        id, full_name, active, employment_type,
-        contracted_hours_per_week, hourly_rate, annual_salary, overtime_rate
-      `)
-      .in('id', profileIds)
-    if (profilesErr) throw new Error(profilesErr.message)
-    staff = profiles || []
-  }
+  // Pay for whoever holds those shifts — consumed in-memory, never returned.
+  const pay = await loadHolderPay(db, liveHolderIds(blocks))
 
   return summarizeMonth({
-    blocks: blocks || [],
-    staff,
+    blocks,
+    pay,
     referenceDate,
     monthlyBudgetEur: loc.monthly_contractor_budget_eur,
   })
