@@ -120,3 +120,41 @@ describe('GET /api/invoices/[id] — review snapshot + lifecycle', () => {
     expect(computeScheduledForPeriod).not.toHaveBeenCalled()
   })
 })
+
+// INVOICEHOURS.1 D9 — a failed live read is never a figure and never silent:
+// the reviewer gets roster_unavailable (the web says so; the phone's Approvals
+// card already prints "No roster comparison available.").
+describe('GET /api/invoices/[id] — INVOICEHOURS.1 roster read failure', () => {
+  const SUBMITTED = { id: 'inv1', contractor_id: 'c1', location_id: 'locA', status: 'submitted', invoice_amount: '800.00' }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    createServerClient.mockReturnValue(mockDb({ data: SUBMITTED, error: null }))
+  })
+
+  it('a reviewer is told the roster could not be read, never shown 0 h', async () => {
+    computeScheduledForPeriod.mockRejectedValueOnce(new Error('boom'))
+    getCurrentUser.mockResolvedValue({ id: 'o1', role: 'owner', rolesByLocation: { locA: 'owner' } })
+    const res = await GET({}, props)
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.roster_unavailable).toBe(true)
+    expect(body.data.computed_scheduled).toBeNull()
+    expect(body.data.review_comparison).toBeNull()
+  })
+
+  it('a good read says roster_unavailable: false', async () => {
+    computeScheduledForPeriod.mockResolvedValueOnce({ scheduled_hours: 40, shift_count: 10, hourly_rate: 20, estimated_cost: 800, unpublished_hours: 0, unpublished_shift_count: 0 })
+    getCurrentUser.mockResolvedValue({ id: 'o1', role: 'owner', rolesByLocation: { locA: 'owner' } })
+    const body = await (await GET({}, props)).json()
+    expect(body.data.roster_unavailable).toBe(false)
+    expect(body.data.review_comparison.primary.scheduled_hours).toBe(40)
+  })
+
+  it('the contractor never gets the flag (nothing was read for them)', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'c1', role: 'staff', rolesByLocation: {} })
+    const body = await (await GET({}, props)).json()
+    expect(body.data.roster_unavailable).toBe(false)
+    expect(computeScheduledForPeriod).not.toHaveBeenCalled()
+  })
+})

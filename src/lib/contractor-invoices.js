@@ -12,9 +12,15 @@
 // parent block's times. So a contractor adjusted to 9-1 on a 9-5
 // block contributes 4 hours, not 8 — matches what payroll.js does
 // downstream.
+//
+// INVOICEHOURS.1 — "scheduled" means a LIVE assignment on a PUBLISHED
+// roster (scheduledFromAssignments): cancelled rows and shifts on rosters
+// nobody published are never priced; the latter are reported apart.
 
 import { shiftHours } from './payroll.js'
 import { logWarn } from './log.js'
+import { isLiveAssignment } from './roster.js'
+import { selectAll } from './select-all.js'
 import { latestQueueRowByInvoice } from '@shared/contractor-invoice-review'
 
 /**
@@ -70,16 +76,81 @@ export function defaultMonthKey(now = new Date()) {
   return `${prev.getUTCFullYear()}-${String(prev.getUTCMonth() + 1).padStart(2, '0')}`
 }
 
+const round2 = (n) => +n.toFixed(2)
+
+/**
+ * INVOICEHOURS.1 — the scheduled-hours rule for a contractor invoice review,
+ * pure. The LABOUR.1 rule for money read off the roster:
+ *   - live only (isLiveAssignment): a cancelled row counts NOWHERE;
+ *     'swapped' is live and already belongs to the taker (swap approval moves
+ *     profile_id), so a contractor-scoped read gives the giver nothing;
+ *   - published only (block.rosters.status === 'published'): a block with no
+ *     roster, or on a draft / superseded one, was never rostered for real. Its
+ *     hours are tallied apart as unpublished_* so the review can say so;
+ *   - admin shifts count (a contractor invoices them; no kind filter);
+ *   - hours by payroll's shiftHours (override → block → template, wall clock,
+ *     '24:00' = midnight once PAYROLL24.1 lands), so the review, the approval
+ *     snapshot, payroll and the staff_cost report agree.
+ *
+ * @param {Array<{ status?: string|null, start_time_override?: string|null,
+ *   end_time_override?: string|null, shift_blocks?: { start_time, end_time,
+ *   rosters?: { status?: string }|null, shift_templates?: object|null }|null }>} rows
+ * @returns {{ scheduled_hours: number, shift_count: number,
+ *   unpublished_hours: number, unpublished_shift_count: number }}
+ */
+export function scheduledFromAssignments(rows) {
+  const t = tallyAssignments(rows)
+  return {
+    scheduled_hours: round2(t.hours),
+    shift_count: t.shifts,
+    unpublished_hours: round2(t.unpublishedHours),
+    unpublished_shift_count: t.unpublishedShifts,
+  }
+}
+
+// The unrounded tally behind scheduledFromAssignments. The estimate is priced
+// from these raw hours (see computeScheduledForPeriod), never the rounded ones.
+function tallyAssignments(rows) {
+  let hours = 0
+  let shifts = 0
+  let unpublishedHours = 0
+  let unpublishedShifts = 0
+  for (const row of rows || []) {
+    const block = row?.shift_blocks
+    if (!block || !isLiveAssignment(row)) continue
+    const tpl = block.shift_templates || {}
+    const h = shiftHours({
+      start_time_override: row.start_time_override,
+      end_time_override: row.end_time_override,
+      start_time: block.start_time,
+      end_time: block.end_time,
+      shift_templates: { start_time: tpl.start_time, end_time: tpl.end_time },
+    })
+    if (block.rosters?.status === 'published') {
+      hours += h
+      shifts += 1
+    } else {
+      unpublishedHours += h
+      unpublishedShifts += 1
+    }
+  }
+  return { hours, shifts, unpublishedHours, unpublishedShifts }
+}
+
 /**
  * Compute the contractor's scheduled hours + estimated cost for a
- * given period. Pulls every shift_assignment where:
- *   - profile_id = contractor
- *   - parent block.location_id = location
- *   - parent block.block_date in [period_start, period_end]
+ * given period. Reads every shift_assignment where:
+ *   - profile_id = contractor (a swapped shift is the taker's: swap
+ *     approval moves profile_id)
+ *   - parent block.location_id = the INVOICE's studio (INVOICEHOURS.1 D6:
+ *     the bill is filed into that studio's Xero organisation)
+ *   - parent block.block_date in [period_start, period_end] (date strings,
+ *     inclusive; no Date parsing, so no host-timezone effect)
+ * paged past the 1,000-row cap, then applies scheduledFromAssignments
+ * (live + published only; unpublished hours tallied apart).
  *
- * Hours are summed using payroll.shiftHours() so the override-aware
- * priority (assignment override → block-vs-template diff → template
- * default) is consistent everywhere.
+ * Throws on a failed read. Callers must never show a figure for a read
+ * that failed (INVOICEHOURS.1 D9).
  *
  * @param {SupabaseClient} db   service-role client
  * @param {object} args
@@ -92,6 +163,8 @@ export function defaultMonthKey(now = new Date()) {
  *   shift_count: number,
  *   hourly_rate: number | null,
  *   estimated_cost: number | null,
+ *   unpublished_hours: number,
+ *   unpublished_shift_count: number,
  * }>}
  */
 export async function computeScheduledForPeriod(db, args) {
@@ -105,56 +178,40 @@ export async function computeScheduledForPeriod(db, args) {
     .single()
   if (profileErr) throw new Error(`Profile lookup failed: ${profileErr.message}`)
 
-  // Pull every assignment in the period for this contractor at this
-  // location. We need the override columns + the parent block's
-  // template times to feed shiftHours(). The select shape mirrors
-  // what payroll.computeWeeklyCost expects (legacy shift-row shape):
-  //   { start_time, end_time, start_time_override, end_time_override,
-  //     shift_templates: { start_time, end_time } }
-  const { data: rows, error: rowsErr } = await db
-    .from('shift_assignments')
-    .select(`
-      id,
-      start_time_override,
-      end_time_override,
-      shift_blocks!inner (
-        block_date,
-        start_time,
-        end_time,
-        location_id,
-        shift_templates ( start_time, end_time )
-      )
-    `)
-    .eq('profile_id', contractor_id)
-    .eq('shift_blocks.location_id', location_id)
-    .gte('shift_blocks.block_date', period_start)
-    .lte('shift_blocks.block_date', period_end)
-  if (rowsErr) throw new Error(`Assignment lookup failed: ${rowsErr.message}`)
-
-  // Adapt each assignment to the shape shiftHours() expects.
-  let totalHours = 0
-  for (const row of rows || []) {
-    const block = row.shift_blocks
-    if (!block) continue
-    const tpl = block.shift_templates || {}
-    totalHours += shiftHours({
-      start_time_override: row.start_time_override,
-      end_time_override: row.end_time_override,
-      start_time: block.start_time,
-      end_time: block.end_time,
-      shift_templates: { start_time: tpl.start_time, end_time: tpl.end_time },
-    })
+  // Status (live test) and the block's roster status (published test) ride
+  // along with the override + block + template times shiftHours() needs.
+  let rows
+  try {
+    rows = await selectAll((from, to) => db
+      .from('shift_assignments')
+      .select('id, status, start_time_override, end_time_override, shift_blocks!inner ( block_date, start_time, end_time, location_id, rosters:roster_id ( status ), shift_templates ( start_time, end_time ) )')
+      .eq('profile_id', contractor_id)
+      .eq('shift_blocks.location_id', location_id)
+      .gte('shift_blocks.block_date', period_start)
+      .lte('shift_blocks.block_date', period_end)
+      .order('id', { ascending: true })
+      .range(from, to))
+  } catch (e) {
+    throw new Error(`Assignment lookup failed: ${e?.message || String(e)}`)
   }
+
+  const scheduled = scheduledFromAssignments(rows)
 
   const hourlyRate = Number(profile?.hourly_rate)
   const validRate = Number.isFinite(hourlyRate) && hourlyRate > 0
-  const estimated = validRate ? +(totalHours * hourlyRate).toFixed(2) : null
+  // Priced from the UNROUNDED hours, as main priced it: approved snapshots
+  // hold round2(raw hours × rate), and selectReviewComparison compares
+  // estimated_cost with strict !==, so pricing the rounded display hours
+  // (40h40m → 40.67h) made an unchanged roster read "changed since approval".
+  const estimated = validRate ? round2(tallyAssignments(rows).hours * hourlyRate) : null
 
   return {
-    scheduled_hours: +totalHours.toFixed(2),
-    shift_count: (rows || []).length,
+    scheduled_hours: scheduled.scheduled_hours,
+    shift_count: scheduled.shift_count,
     hourly_rate: validRate ? hourlyRate : null,
     estimated_cost: estimated,
+    unpublished_hours: scheduled.unpublished_hours,
+    unpublished_shift_count: scheduled.unpublished_shift_count,
   }
 }
 
