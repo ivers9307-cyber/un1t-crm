@@ -11,10 +11,24 @@ import { RosterCheckNotes } from './InvoicesManager.jsx'
 afterEach(cleanup)
 
 describe('RosterCheckNotes', () => {
-  it('unavailable: says the roster could not be read when there is no comparison', () => {
-    render(<RosterCheckNotes data={{ roster_unavailable: true, review_comparison: null, computed_scheduled: null }} />)
-    expect(screen.getByRole('alert').textContent).toMatch(/Could not read the roster for this period/)
+  it('unavailable on a submitted invoice: says so, and to refresh before approving', () => {
+    render(<RosterCheckNotes data={{ status: 'submitted', roster_unavailable: true, review_comparison: null, computed_scheduled: null }} />)
+    const alert = screen.getByRole('alert').textContent
+    expect(alert).toMatch(/Could not read the roster for this period/)
+    expect(alert).toMatch(/Refresh before approving/)
     expect(screen.queryByText(/0 h/)).toBeNull()
+  })
+
+  // Only a 'submitted' invoice can be approved (approve route 409s anything
+  // else), so the approving advice is wrong on every other status.
+  it('unavailable on an invoice past approval: a neutral line, no approving advice', () => {
+    for (const status of ['awaiting_accountant_review', 'approved', 'declined', 'revoked']) {
+      render(<RosterCheckNotes data={{ status, roster_unavailable: true, review_comparison: null, computed_scheduled: null }} />)
+      const alert = screen.getByRole('alert').textContent
+      expect(alert, status).toMatch(/Couldn't read the roster for this period\./)
+      expect(alert, status).not.toMatch(/approv/i)
+      cleanup()
+    }
   })
 
   it('unavailable but an approval snapshot is showing: no alert (the snapshot is the record)', () => {
