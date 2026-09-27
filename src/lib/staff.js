@@ -8,22 +8,26 @@ import { getUserLocationIds } from '@/lib/auth'
 import { ADMIN_ROLES } from '@/lib/schemas'
 import { mergeTemplates } from '@shared/permissions'
 
+// CONTRACTVIS.1 (Richard, 27 Sep 2026) — neither shape below carries
+// contracted_hours_per_week. A colleague's contract goes to a master, or to an
+// owner or manager at a studio that colleague works at, and nobody else: the
+// rule CANDIDATES.1 and GRID.1 already applied. ROSTER-FIX.6c had put the
+// column in both lists on the grounds that hours are not pay and "every role
+// has always received them"; Richard's decision replaces that reasoning.
+// The column is added back per row, only for people the caller manages (and
+// their own row), by listStaffForUser / getStaffForUser below.
 export const STAFF_PUBLIC_FIELDS =
-  'id, full_name, email, role, avatar_url, active, employment_type, contracted_hours_per_week'
+  'id, full_name, email, role, avatar_url, active, employment_type'
 
-// ROSTER-FIX.2 — the roster coach picker only ever renders a name, an
-// avatar and the active flag, but it fetched the same list an HR screen
-// does, so an admin caller's browser received `*` — hourly_rate,
-// annual_salary and the rest — to populate a dropdown. `?fields=picker`
-// pins this shape for EVERY role, master included.
-//
-// ROSTER-FIX.6c — `employment_type` and `contracted_hours_per_week` joined the
-// list when the calendar itself moved onto this shape. The FTE utilisation bars
-// under the roster read both (allocated vs contract), and neither is pay data:
-// they are already in STAFF_PUBLIC_FIELDS, so every role has always received
-// them. The rates — hourly_rate, annual_salary, overtime_rate — stay out.
+// ROSTER-FIX.2 — the roster coach picker only ever renders a name, an avatar,
+// the role, the active flag and the employment type. `?fields=picker` pins this
+// shape for EVERY role, master included: never `*`, never a rate.
 export const STAFF_PICKER_FIELDS =
-  'id, full_name, active, role, avatar_url, employment_type, contracted_hours_per_week'
+  'id, full_name, active, role, avatar_url, employment_type'
+
+// The one contract column, named once. Added to a read only by the per-row
+// rule below; never part of either shape above.
+export const STAFF_CONTRACT_FIELD = 'contracted_hours_per_week'
 
 function selectClause(isAdmin, fields) {
   if (fields === 'picker') {

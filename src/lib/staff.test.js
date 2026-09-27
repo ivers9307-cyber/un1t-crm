@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { listStaffForUser, getStaffForUser, STAFF_PUBLIC_FIELDS } from './staff.js'
+import { listStaffForUser, getStaffForUser, STAFF_PUBLIC_FIELDS, STAFF_PICKER_FIELDS } from './staff.js'
 
 function mockDb({ links = [], profiles = [], detailLinks = null } = {}) {
   const calls = { profilesSelect: null, linkLocationIds: null }
@@ -142,4 +142,17 @@ describe('listStaffForUser — one location', () => {
     expect(res).toEqual({ ok: true, data: [] })
     expect(db.calls.linkLocationIds).toBeNull()
   })
+})
+
+// CONTRACTVIS.1 (Richard, 27 Sep) — a colleague's contracted hours go to
+// owner / manager / master at their studio only. The two shapes every other
+// caller receives never carry the column, or any pay column.
+describe('CONTRACTVIS.1 — the slim shapes', () => {
+  const BANNED = ['contracted_hours_per_week', 'annual_salary', 'hourly_rate', 'overtime_rate', 'annual_leave_entitlement']
+  for (const [name, fields] of [['STAFF_PUBLIC_FIELDS', STAFF_PUBLIC_FIELDS], ['STAFF_PICKER_FIELDS', STAFF_PICKER_FIELDS]]) {
+    it(`${name} carries no contract and no pay column`, () => {
+      const cols = fields.split(',').map((c) => c.trim())
+      for (const banned of BANNED) expect(cols).not.toContain(banned)
+    })
+  }
 })
