@@ -23,9 +23,9 @@
 //
 // PAY NEVER ENTERS. profiles is read BY NAME for id, full_name, active,
 // deleted_at, employment_type and contracted_hours_per_week (CLAUDE.md: name
-// your columns; profiles still carries the pay columns). Contracted hours are
-// hours, not pay: STAFF_PICKER_FIELDS has shipped them to every role since
-// ROSTER-FIX.6c. They are returned for employees only. profile_compensation is
+// your columns; profiles still carries the pay columns). Contracted hours go
+// to owner, manager and master only (CONTRACTVIS.1); the staff picker no longer
+// carries them. They are returned for employees only. profile_compensation is
 // NOT read. The profiles copy (deprecated by mig 152, dual-written, REVOKEd
 // from the browser roles by mig 153b) is the one the Weekly hours notice, the
 // FTE bars and payroll read, and one screen must not show two contracts for
