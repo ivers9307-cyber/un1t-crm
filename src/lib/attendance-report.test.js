@@ -246,6 +246,12 @@ describe('parseAttendanceQuery (D6)', () => {
     }
   })
 
+  // Review N2: the caller never sent a `to`, so the message must not blame one.
+  it('a future `from` alone names the `to` it was compared with: today, by default', () => {
+    expect(q('from=2026-07-20')).toEqual({ error: 'from must be on or before today (2026-07-15) when to is not sent' })
+    expect(q('from=2026-07-15')).toMatchObject({ from: '2026-07-15', to: '2026-07-15' })
+  })
+
   it('refuses a reversed period and more than 366 days', () => {
     expect(q('from=2026-07-15&to=2026-07-01')).toEqual({ error: 'to must be on or after from' })
     expect(q('from=2026-01-01&to=2027-01-02')).toEqual({ error: 'A report can cover at most 366 days' })

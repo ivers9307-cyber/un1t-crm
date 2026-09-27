@@ -58,10 +58,16 @@ export function parseAttendanceQuery(searchParams, today) {
     const v = searchParams?.get?.(k)
     return typeof v === 'string' && v.trim() ? v.trim() : null
   }
-  const to = get('to') ?? today
+  const sentTo = get('to')
+  const to = sentTo ?? today
   // Checked before it is counted back from: addDaysISO throws on a bad date.
   if (!isRealCalendarDate(to)) return { error: `${PERIOD_NAMES.startName} and ${PERIOD_NAMES.endName} must be real dates, YYYY-MM-DD` }
   const from = get('from') ?? addDaysISO(to, -DEFAULT_WINDOW_DAYS)
+  // A future `from` sent alone: the caller never sent a `to`, so say what
+  // it was compared with (today) rather than "to must be on or after from".
+  if (sentTo == null && isRealCalendarDate(from) && from > to) {
+    return { error: `${PERIOD_NAMES.startName} must be on or before today (${to}) when ${PERIOD_NAMES.endName} is not sent` }
+  }
   const periodError = reportPeriodError(from, to, PERIOD_NAMES)
   if (periodError) return { error: periodError }
   const profileId = get('profile_id')
