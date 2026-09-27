@@ -26,7 +26,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { Plus, Clock, X, ArrowLeftRight, CalendarOff, Palmtree, ThermometerSun, Ban, Wallet, CircleEllipsis, AlertTriangle, AlertCircle, Pencil, Check, CalendarX, Repeat } from 'lucide-react'
 import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 import { indexByDate } from '@/lib/bank-holidays'
-import { MANAGER_ROLES } from '@/lib/schemas'
+import { MANAGER_ROLES, ADMIN_ROLES } from '@/lib/schemas'
 // REPLACE.1a — the replace picker's words and the toast after it.
 import { replacePickerCopy, replaceResponseOutcome } from '@/lib/shift-replace'
 // ROSTER-FIX.6c — getMonday / addDays / formatDate were re-implemented here,
@@ -381,6 +381,12 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
 
   const locationId = user.activeLocation?.id
   const isManager = canManage(user.role)
+  // CONTRACTVIS.1 (Richard, 27 Sep) — a colleague's contracted hours are for
+  // owner / manager / master at THIS studio only. The calendar always shows the
+  // active studio, and user.role is the role there. It gates the staff read's
+  // include=contract, the week-cost read, the Weekly hours notice and the FTE
+  // bars; the servers enforce the same rule on their own.
+  const canSeeContract = ADMIN_ROLES.includes(user.role)
   const todayStr = formatDate(new Date())
 
   const weekEnd = addDays(weekStart, 6)
@@ -446,6 +452,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
     canReadSpend: isManager,
     // AVAIL.1 — manager-only, same gate as spend (the route is MANAGER_ROLES at the studio).
     canReadAvailability: isManager,
+    canReadContract: canSeeContract,
   })
   // ROSTERLOAD.1 — a side read can fail now without failing the roster, so
   // the actions that depend on it must not offer an empty list as if it were
@@ -459,12 +466,13 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
   const availabilityMissing = Boolean(partialErrors?.availability && !partialErrors.availability.kept)
   // ROSTER-FIX.6c — its own hook, not a seventh slice of the fan-out above: a
   // summary panel must not be able to take the roster down with it. See its
-  // header. Manager-gated on the client too, so a coach's calendar never fires
-  // a request the route would answer 403 anyway.
+  // header. Owner/manager/master-gated on the client too (CONTRACTVIS.1): a
+  // coach's calendar never fires a request the route would answer 403, and a
+  // head coach's never asks for contract-measured hours the route withholds.
   const { weekCost, refreshWeekCost } = useWeekCost({
     locationId,
     weekStart: formatDate(weekStart),
-    enabled: isManager,
+    enabled: canSeeContract,
   })
   // ROSTERVIS.1 — drafts awaiting approval, for the publication chip. Manager
   // only: a coach's feed is published-only, so there is nothing to tell them.
@@ -1299,7 +1307,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
           scoped to one Mon-Sun week, which is what the caption underneath has
           always claimed — the browser version summed whatever range was loaded,
           so in month view it billed six weeks against a weekly contract. */}
-      {!loading && canManage(user.role) && (() => {
+      {!loading && canSeeContract && (() => {
         const overOrAt = (weekCost?.coaches || []).filter((c) => c.status !== 'under')
         if (overOrAt.length === 0) return null
 
@@ -1626,6 +1634,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
           staffUnavailable={Boolean(staffUnavailable)}
           leaveMissing={leaveMissing}
           spendOtherMonthStart={spendMonth.straddles ? formatDate(spendMonth.otherMonthStart) : null}
+          contractVisible={canSeeContract}
         />
       )}
 

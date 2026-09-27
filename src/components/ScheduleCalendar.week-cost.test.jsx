@@ -16,13 +16,15 @@ vi.mock('next/navigation', () => ({
   usePathname: () => '/schedule',
   useSearchParams: () => new URLSearchParams('view=week&week=2026-05-04&month=2026-05-01'),
 }))
-vi.mock('./RosterSummaryPanel', () => ({ default: () => null }))
+const panel = vi.hoisted(() => ({ props: null }))
+vi.mock('./RosterSummaryPanel', () => ({ default: (p) => { panel.props = p; return null } }))
 
 import ScheduleCalendar from './ScheduleCalendar.jsx'
 
 const LOC = 'loc1'
 const manager = { id: 'u1', role: 'manager', activeLocation: { id: LOC, name: 'Stillorgan' } }
 const coach = { id: 'u2', role: 'staff', activeLocation: { id: LOC, name: 'Stillorgan' } }
+const headCoach = { id: 'u3', role: 'head_coach', activeLocation: { id: LOC, name: 'Stillorgan' } }
 
 // The slim /api/staff shape — no annual_salary, no hourly_rate, no
 // overtime_rate. This is what a non-admin manager actually receives.
@@ -55,7 +57,7 @@ function mockFetch(weekCostBody) {
   })
 }
 
-beforeEach(() => { mockFetch(okResponse({ success: true, data: WEEK_COST })) })
+beforeEach(() => { panel.props = null; mockFetch(okResponse({ success: true, data: WEEK_COST })) })
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
 describe('weekly hours panel (ROSTER-FIX.6c)', () => {
@@ -92,5 +94,32 @@ describe('weekly hours panel (ROSTER-FIX.6c)', () => {
     render(<ScheduleCalendar user={coach} />)
     await waitFor(() => expect(screen.queryByText(/Loading roster/)).toBeNull())
     expect(calls.some((u) => u.includes('/schedule/week-cost'))).toBe(false)
+  })
+
+  // CONTRACTVIS.1 — the notice is a colleague's contract; a head coach does
+  // not ask for it, does not see it, and does not ask /api/staff for contracts.
+  it('a head coach never asks for week-cost and never sees the notice', async () => {
+    render(<ScheduleCalendar user={headCoach} />)
+    await waitFor(() => expect(screen.queryByText(/Loading roster/)).toBeNull())
+    expect(calls.some((u) => u.includes('/schedule/week-cost'))).toBe(false)
+    expect(screen.queryByText('Weekly hours notice')).toBeNull()
+  })
+
+  it('a manager asks /api/staff for contracts and the panel may show them', async () => {
+    render(<ScheduleCalendar user={manager} />)
+    await waitFor(() => expect(screen.getByText('Weekly hours notice')).toBeTruthy())
+    const staffUrls = calls.filter((u) => u.includes('/api/staff'))
+    expect(staffUrls.length).toBeGreaterThan(0)
+    expect(staffUrls.every((u) => u.includes('include=contract'))).toBe(true)
+    expect(panel.props?.contractVisible).toBe(true)
+  })
+
+  it('a head coach never asks /api/staff for contracts and the panel shows hours only', async () => {
+    render(<ScheduleCalendar user={headCoach} />)
+    await waitFor(() => expect(screen.queryByText(/Loading roster/)).toBeNull())
+    const staffUrls = calls.filter((u) => u.includes('/api/staff'))
+    expect(staffUrls.length).toBeGreaterThan(0)
+    expect(staffUrls.some((u) => u.includes('include=contract'))).toBe(false)
+    expect(panel.props?.contractVisible).toBe(false)
   })
 })
