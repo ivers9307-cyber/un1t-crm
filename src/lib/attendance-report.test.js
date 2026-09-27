@@ -58,6 +58,13 @@ describe("lateness is judged from the coach's effective start (D1)", () => {
 })
 
 describe('pending and no-show use the effective end (D2)', () => {
+  it('flags an end that differs from the rostered one', () => {
+    expect(rowOf(report([asg('a1', { end_time_override: '09:00:00' })]), 'a1'))
+      .toMatchObject({ scheduled_end: '08:00:00', effective_end: '09:00:00', end_adjusted: true, end_next_day: false })
+    expect(rowOf(report([asg('a1', { end_time_override: '08:00' })]), 'a1')).toMatchObject({ end_adjusted: false, end_next_day: false })
+    expect(rowOf(report([asg('a1')]), 'a1')).toMatchObject({ end_adjusted: false, end_next_day: false })
+  })
+
   it('an extended end keeps it pending', () => {
     const a = asg('a1', { end_time_override: '09:00:00' })
     expect(rowOf(report([a], { now: '2026-07-15T07:30:00Z' }), 'a1').status).toBe('pending')
@@ -66,7 +73,8 @@ describe('pending and no-show use the effective end (D2)', () => {
 
   it('an override end after midnight wraps to the next day', () => {
     const a = asg('a1', { start: '20:00:00', end: '21:00:00', end_time_override: '00:30:00' })
-    expect(rowOf(report([a], { now: '2026-07-15T22:59:00Z' }), 'a1')).toMatchObject({ status: 'pending', effective_end: '00:30:00' })
+    expect(rowOf(report([a], { now: '2026-07-15T22:59:00Z' }), 'a1'))
+      .toMatchObject({ status: 'pending', effective_end: '00:30:00', end_adjusted: true, end_next_day: true })
     expect(rowOf(report([a], { now: '2026-07-15T23:31:00Z' }), 'a1').status).toBe('no_show')
   })
 })

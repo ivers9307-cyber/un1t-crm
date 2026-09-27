@@ -164,6 +164,11 @@ export function buildAttendanceReport({ assignments, events = [], tz = null, now
       effective_start: effectiveShiftStart(wr),
       effective_end: effectiveShiftEnd(wr),
       start_adjusted: !!a.start_time_override && hms(a.start_time_override) !== hms(a.block.start_time),
+      // Pending/no-show is judged on the effective end, so the page shows it
+      // when it differs; an end at or before the start is the next day
+      // (effectiveWindowAt's rule).
+      end_adjusted: !!a.end_time_override && hms(a.end_time_override) !== hms(a.block.end_time),
+      end_next_day: hms(effectiveShiftEnd(wr)) <= hms(effectiveShiftStart(wr)),
       // The instant lateness is measured from (the effective start).
       scheduled_at: iso(r.effectiveStartAt),
       arrival_at: iso(arrivedAt),

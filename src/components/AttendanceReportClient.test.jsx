@@ -63,6 +63,30 @@ describe('AttendanceReportClient (ATTENDREPORT.1)', () => {
     expect(marker.parentElement.textContent).toBe('08:00adjusted')
   })
 
+  // Review N1: pending/no-show is judged on the effective END, so show it.
+  it('shows an adjusted end, and says when it runs into the next day', async () => {
+    fetchMock.mockReturnValue(ok({ rows: [
+      { ...ROW, effective_end: '11:00:00', end_adjusted: true, end_next_day: false },
+      { ...ROW, assignment_id: 'a2', profile_name: 'Coach B', block_date: '2026-07-14', start_adjusted: false,
+        scheduled_start: '20:00:00', scheduled_end: '21:00:00', effective_start: '20:00:00', effective_end: '00:30:00',
+        end_adjusted: true, end_next_day: true },
+    ] }))
+    render(<AttendanceReportClient activeLocationName="Studio One" />)
+    const later = await screen.findByText('ends 11:00')
+    expect(later.getAttribute('title')).toBe('Rostered end 10:00')
+    expect(later.parentElement.textContent).toBe('08:00adjustedends 11:00')
+    const wraps = screen.getByText('ends 00:30 next day')
+    expect(wraps.getAttribute('title')).toBe('Rostered end 21:00')
+    expect(wraps.parentElement.textContent).toBe('20:00ends 00:30 next day')
+  })
+
+  it('an unchanged end says nothing', async () => {
+    fetchMock.mockReturnValue(ok({ rows: [{ ...ROW, end_adjusted: false, end_next_day: false }] }))
+    render(<AttendanceReportClient activeLocationName="Studio One" />)
+    await screen.findByText('Coach A')
+    expect(screen.queryByText(/^ends /)).toBeNull()
+  })
+
   it('says when the Source badges may be incomplete', async () => {
     fetchMock.mockReturnValue(ok({ warnings: ['sources_unavailable'] }))
     render(<AttendanceReportClient activeLocationName="Studio One" />)

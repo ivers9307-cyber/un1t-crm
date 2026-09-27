@@ -5,7 +5,9 @@
 // ATTENDREPORT.1: the default window and the CSV come from
 // src/lib/attendance-report.js (the route uses the same default); "Scheduled"
 // is the start the coach was given (a manager's adjusted start, else the
-// rostered one), which is what lateness is measured from.
+// rostered one), which is what lateness is measured from. An adjusted end is
+// shown beside it ("ends 23:00", "ends 00:30 next day"), since pending vs
+// no-show is judged on it.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Loader2, Download, RefreshCw } from 'lucide-react'
@@ -179,6 +181,11 @@ export default function AttendanceReportClient({ activeLocationName }) {
                   {(r.effective_start || r.scheduled_start || '').slice(0, 5)}
                   {r.start_adjusted && (
                     <span className="ml-1 font-sans text-un1t-subtle" title={`Rostered ${(r.scheduled_start || '').slice(0, 5)}`}>adjusted</span>
+                  )}
+                  {r.end_adjusted && (
+                    <span className="ml-1 font-sans text-un1t-subtle" title={`Rostered end ${(r.scheduled_end || '').slice(0, 5)}`}>
+                      {`ends ${(r.effective_end || '').slice(0, 5)}${r.end_next_day ? ' next day' : ''}`}
+                    </span>
                   )}
                 </td>
                 <td className="px-3 py-2 font-mono text-xs">
