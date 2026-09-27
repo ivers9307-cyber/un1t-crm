@@ -470,4 +470,16 @@ describe('getOpenApiSpec', () => {
     expect(op.description).toMatch(/outside_window/)
     expect(op.responses['409'].description).toMatch(/against snapshot covers none/)
   })
+
+  // TRAINERSROLE.1 — the /api/locations/{id} lookup routes judge the role AT
+  // the path location, and a non-member gets a 404 (not a 403).
+  it.each([
+    '/api/locations/{id}/glofox-trainers',
+  ])('documents %s as owner/manager at the path location, 404 for a non-member', (p) => {
+    const op = spec.paths[p]?.get
+    expect(op).toBeDefined()
+    expect(op.description).toMatch(/owner\/manager AT this location/)
+    expect(op.responses['403'].description).toMatch(/at this location/)
+    expect(op.responses['404'].description).toMatch(/Not a member/)
+  })
 })

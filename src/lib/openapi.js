@@ -3766,12 +3766,13 @@ registry.registerPath({
   tags: ['Locations'],
   security: [{ CookieAuth: [] }],
   summary: 'Trainer ids seen in the Glofox timetable + their resolved names',
-  description: 'STUDIO-KPI.4 — distinct trainer ids from the last 28 days of class_occurrences with how each resolves (operator override from settings.glofox.trainer_names, the Glofox API, or unresolved). Powers the Trainer-names reference list in the Glofox settings tab. Master/owner/manager only.',
+  description: 'STUDIO-KPI.4 — distinct trainer ids from the last 28 days of class_occurrences with how each resolves (operator override from settings.glofox.trainer_names, the Glofox API, or unresolved). Powers the Trainer-names reference list in the Glofox settings tab. Master, or owner/manager AT this location (judged at the path id, not the active studio).',
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: '{ trainers: [{ id, name, source, classes }], windowDays }' },
     400: { description: 'Glofox not configured on this location', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — owner or manager at this location required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not a member of this location (indistinguishable from a missing id)', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
