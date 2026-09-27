@@ -34,3 +34,48 @@ describe('RosterSummaryPanel contractor spend month', () => {
     expect(screen.getByText('This week runs into August. Showing September, which has most of its days.')).toBeTruthy()
   })
 })
+
+// CONTRACTORSPEND.1 — the headline is PUBLISHED shifts; anything not yet
+// published is one line beside it, so a month being drafted still shows where
+// it is heading.
+describe('RosterSummaryPanel contractor spend: published and not yet published', () => {
+  it('labels the headline Published', () => {
+    renderPanel()
+    expect(screen.getByText('Published')).toBeTruthy()
+    expect(screen.queryByText('Spent')).toBeNull()
+  })
+
+  it('says nothing about unpublished shifts when there are none (or an older server sent no figure)', () => {
+    const { container } = renderPanel({ contractorSpend: { ...SPEND, unpublishedContractorCostEur: 0 } })
+    expect(container.textContent).not.toMatch(/not yet published/)
+    cleanup()
+    const { container: old } = renderPanel()
+    expect(old.textContent).not.toMatch(/not yet published/)
+  })
+
+  it('shows the unpublished amount when the month stays within budget', () => {
+    const { container } = renderPanel({
+      contractorSpend: { ...SPEND, unpublishedContractorCostEur: 300, projectedContractorCostEur: 1500, projectedOverBudget: false },
+    })
+    expect(container.textContent).toContain('€300 more in shifts not yet published.')
+    expect(container.textContent).not.toMatch(/over budget once published/)
+  })
+
+  it('says how far over budget the month goes once published, when only the projection is over', () => {
+    const { container } = renderPanel({
+      contractorSpend: { ...SPEND, unpublishedContractorCostEur: 1300, projectedContractorCostEur: 2500, projectedOverBudget: true },
+    })
+    expect(container.textContent).toContain('€1,300 more in shifts not yet published: €500 over budget once published.')
+  })
+
+  it('does not repeat "over budget" when the published figure is already over', () => {
+    const { container } = renderPanel({
+      contractorSpend: {
+        ...SPEND, contractorCostEur: 2100, remainingEur: -100, overBudget: true, utilisationPct: 105,
+        unpublishedContractorCostEur: 200, projectedContractorCostEur: 2300, projectedOverBudget: true,
+      },
+    })
+    expect(container.textContent).toContain('€200 more in shifts not yet published.')
+    expect(container.textContent).not.toMatch(/over budget once published/)
+  })
+})

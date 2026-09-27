@@ -14,11 +14,15 @@
 //   location_id     uuid (required)
 //   reference_date  YYYY-MM-DD inside the target month (required)
 //
-// Returns:
+// Returns (studio TOTALS only — CONTRACTORSPEND.1 pins the key list in
+// src/lib/roster-summary-server.test.js):
 //   { success, data: {
 //       monthStartIso, monthEndIso,
-//       contractorCostEur, fteImplicitCostEur,
-//       monthlyBudgetEur, remainingEur, overBudget, utilisationPct
+//       contractorCostEur,              // PUBLISHED shifts, every holder
+//       unpublishedContractorCostEur,   // drafts + shifts no roster owns yet
+//       projectedContractorCostEur,     // the two together
+//       fteImplicitCostEur,             // published, context only
+//       monthlyBudgetEur, remainingEur, overBudget, projectedOverBudget, utilisationPct
 //   }}
 
 import { NextResponse } from 'next/server'
