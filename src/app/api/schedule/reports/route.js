@@ -8,6 +8,7 @@ import { validateBody } from '@/lib/validate'
 import { uuidLike, realIsoDate, reportTypeSchema, MANAGER_ROLES } from '@/lib/schemas'
 import {
   canViewReportType, isRateReportType, RATE_REPORT_VIEWER_ROLES, RATE_REPORT_TYPES_IN_LIST,
+  adminOnlyReportRefusal,
 } from '@/lib/report-access'
 
 // STAFFCOST.1 — every check is made at the REPORT's location via
@@ -98,7 +99,7 @@ export async function POST(request) {
   if (!hasRoleAtLocation(user, locId, MANAGER_ROLES)) return forbidden()
   if (isRateReportType(report_type) && !hasRoleAtLocation(user, locId, RATE_REPORT_VIEWER_ROLES)) {
     return NextResponse.json(
-      { success: false, error: 'Only owners and managers can run staff cost reports.' },
+      { success: false, error: adminOnlyReportRefusal('run', report_type) },
       { status: 403 },
     )
   }
