@@ -22,9 +22,16 @@ vi.mock('./RosterSummaryPanel', () => ({ default: (p) => { panel.props = p; retu
 import ScheduleCalendar from './ScheduleCalendar.jsx'
 
 const LOC = 'loc1'
-const manager = { id: 'u1', role: 'manager', activeLocation: { id: LOC, name: 'Stillorgan' } }
-const coach = { id: 'u2', role: 'staff', activeLocation: { id: LOC, name: 'Stillorgan' } }
-const headCoach = { id: 'u3', role: 'head_coach', activeLocation: { id: LOC, name: 'Stillorgan' } }
+const OTHER = 'loc2'
+// Fixtures carry profileRole + rolesByLocation, as getCurrentUser does: the
+// calendar judges contract visibility AT the studio on screen (CONTRACTVIS.1).
+const at = (id, role, extra = {}) => ({
+  id, role, profileRole: role, activeLocation: { id: LOC, name: 'Stillorgan' }, rolesByLocation: { [LOC]: role }, ...extra,
+})
+const manager = at('u1', 'manager')
+const coach = at('u2', 'staff')
+const headCoach = at('u3', 'head_coach')
+const master = { id: 'u4', role: 'master', profileRole: 'master', activeLocation: { id: LOC, name: 'Stillorgan' }, rolesByLocation: {} }
 
 // The slim /api/staff shape — no annual_salary, no hourly_rate, no
 // overtime_rate. This is what a non-admin manager actually receives.
@@ -121,5 +128,38 @@ describe('weekly hours panel (ROSTER-FIX.6c)', () => {
     expect(staffUrls.length).toBeGreaterThan(0)
     expect(staffUrls.some((u) => u.includes('include=contract'))).toBe(false)
     expect(panel.props?.contractVisible).toBe(false)
+  })
+})
+
+// CONTRACTVIS.1 review — the calendar asks hasRoleAtLocation(user, <the
+// calendar's studio>, ADMIN_ROLES), as SCHEDROLES does, not
+// ADMIN_ROLES.includes(user.role). Today the two agree (the calendar shows the
+// active studio); the per-studio check survives a future switcher, and a
+// user.role that fell back to a role held at ANOTHER studio.
+describe('who the calendar treats as seeing contracts (CONTRACTVIS.1)', () => {
+  const visible = async (user) => {
+    render(<ScheduleCalendar user={user} />)
+    await waitFor(() => expect(panel.props).not.toBeNull())
+    return panel.props.contractVisible
+  }
+
+  it('a manager at the active studio: true', async () => {
+    expect(await visible(manager)).toBe(true)
+  })
+
+  it('a head coach at the active studio: false', async () => {
+    expect(await visible(headCoach)).toBe(false)
+  })
+
+  it('a master (no per-studio rows): true', async () => {
+    expect(await visible(master)).toBe(true)
+  })
+
+  it('manager elsewhere, head coach here: false, whatever user.role says', async () => {
+    // user.role reads 'manager' by fallback to the highest role held anywhere;
+    // the role AT this studio is what decides.
+    const mixed = { ...headCoach, role: 'manager', profileRole: 'manager', rolesByLocation: { [LOC]: 'head_coach', [OTHER]: 'manager' } }
+    expect(await visible(mixed)).toBe(false)
+    expect(calls.some((u) => u.includes('/schedule/week-cost'))).toBe(false)
   })
 })

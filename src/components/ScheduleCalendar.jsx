@@ -382,11 +382,14 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
   const locationId = user.activeLocation?.id
   const isManager = canManage(user.role)
   // CONTRACTVIS.1 (Richard, 27 Sep) — a colleague's contracted hours are for
-  // owner / manager / master at THIS studio only. The calendar always shows the
-  // active studio, and user.role is the role there. It gates the staff read's
-  // include=contract, the week-cost read, the Weekly hours notice and the FTE
-  // bars; the servers enforce the same rule on their own.
-  const canSeeContract = ADMIN_ROLES.includes(user.role)
+  // owner / manager / master at THIS studio only, judged AT the calendar's
+  // studio (hasRoleAtLocation, as SCHEDROLES does) rather than by user.role:
+  // the two agree while the calendar only shows the active studio, but the
+  // per-studio check survives a studio switcher and a user.role that fell back
+  // to a role held elsewhere. It gates the staff read's include=contract, the
+  // week-cost read, the Weekly hours notice and the FTE bars; the servers
+  // enforce the same rule on their own.
+  const canSeeContract = hasRoleAtLocation(user, locationId, ADMIN_ROLES)
   const todayStr = formatDate(new Date())
 
   const weekEnd = addDays(weekStart, 6)
