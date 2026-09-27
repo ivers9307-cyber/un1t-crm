@@ -10,7 +10,8 @@
 //
 // Per-location error isolation: one bad location never stops the loop.
 // Push delivery is best-effort; sendPushOnce returns counts and never
-// throws.
+// throws. A failed owner/master read is logged and reported per location
+// (recipients_failed), never read as "nobody to chase" (C1 RECIPIENTS.1).
 //
 // Auth: CRON_SECRET Bearer, same as every other cron.
 
@@ -18,12 +19,12 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { listEnabledSettings, listActiveEquipment, listSubmittedSince } from '@/lib/equipment-db'
 import { selectOutstanding, buildOverdueBody } from '@/lib/equipment-cron'
-import { resolveRoleRecipientIds } from '@/lib/push'
+import { readRoleRecipientIds } from '@/lib/push'
 import { sendPushOnce } from '@/lib/push-dedup'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { logAuditEvent } from '@/lib/audit'
-import { logWarn } from '@/lib/log'
+import { logWarn, logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -65,7 +66,17 @@ export async function GET(request) {
       // takes user ids, not roles — resolve the recipients first, then
       // dedup on (location, day) so a Vercel retry on the same day is a
       // no-op while tomorrow's run still fires.
-      const ids = await resolveRoleRecipientIds(db, settings.location_id, ROLES)
+      // C1 RECIPIENTS.1 — a FAILED read is not "nobody to chase": logged,
+      // nothing claimed (so the key stays free), and said in the result.
+      // Tomorrow's run chases again: the asset is still overdue and the key
+      // is per day. The audit row still records the overdue count (true).
+      const recipients = await readRoleRecipientIds(db, settings.location_id, ROLES)
+      if (recipients.error) {
+        logError('equipment-cron', 'owner/master read failed; nobody was chased today', {
+          locationId: settings.location_id, overdue: outstanding.length, err: recipients.error.message,
+        })
+      }
+      const ids = recipients.error ? [] : recipients.ids
       if (ids.length) {
         await sendPushOnce(db, `equip-overdue:${settings.location_id}:${today}`, ids, {
           title: 'Equipment inspections not done',
@@ -87,7 +98,12 @@ export async function GET(request) {
         locationId: settings.location_id,
         details: { overdue_count: outstanding.length, today },
       })
-      results.push({ locationId: settings.location_id, overdue: outstanding.length, pushed: ids.length > 0 })
+      results.push({
+        locationId: settings.location_id,
+        overdue: outstanding.length,
+        pushed: ids.length > 0,
+        ...(recipients.error ? { recipients_failed: true } : {}),
+      })
     } catch (err) {
       logWarn('equipment-cron', 'sweep failed for location', {
         locationId: settings.location_id, error: err.message,

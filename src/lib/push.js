@@ -39,6 +39,7 @@
  */
 
 import { createServerClient } from './supabase'
+import { logError } from './log'
 import { androidChannelId } from '@shared/push-channels'
 import { resolvePermission, mergeTemplates, DEFAULT_MOBILE_PERMISSIONS_BY_ROLE } from '@shared/permissions'
 
@@ -351,28 +352,52 @@ export async function sendPush(userIds, payload, opts = {}) {
 }
 
 /**
- * Resolve the active profile ids holding one of `roles` at `locationId`.
- * Shared by the role fan-out senders here, in notify.js, and in
- * push-dedup.js (which must know the recipient list BEFORE sending so it
- * can claim per-recipient dedup rows).
+ * The role rule, pure. PUSH-ROLES.1 — judge the PER-LOCATION role (roles are
+ * per-location, mig 051), not the global profiles.role: filtering on the
+ * global role both over-notified (global owner holding a staff row here) and,
+ * worse, silently excluded every `master` from owner/manager fan-outs —
+ * masters hold every decision right, so they are always included. Live miss:
+ * Richard (global role master, owner at Stillorgan) never received the
+ * new-time-off-request push, 2026-07-27.
  *
- * @param {object} db          service-role supabase client
- * @param {string} locationId
- * @param {string[]} roles     e.g. ['owner', 'manager']
- * @returns {Promise<string[]>} profile ids ([] on a failed read too: a caller
- *   that must tell "nobody" from "could not read" uses readRoleRecipientIds)
+ * Exported so a caller that has ALREADY read the studio's profile_locations
+ * rows (with `role` and `profiles(role, active)`) applies the same rule
+ * without a second read (swap-cover-server.js notifyOpenPool).
+ *
+ * @param {object[]|null} links  profile_locations rows: { profile_id, role, profiles: { role, active } }
+ * @param {string[]} roles
+ * @returns {string[]} profile ids, in row order
+ */
+export function roleRecipientIdsFromLinks(links, roles) {
+  if (!roles?.length) return []
+  return (links || [])
+    .filter(l => l?.profiles?.active && (roles.includes(l.role) || l.profiles.role === 'master'))
+    .map(l => l.profile_id)
+}
+
+/**
+ * @deprecated C1 RECIPIENTS.1 — no callers left; use readRoleRecipientIds,
+ * which keeps the read error. This returns [] on a FAILED read, which reads
+ * as "nobody to tell". Kept for one deploy; deleted by D1 DEADCODE.1.
+ * tests/role-recipients-callers.test.js fails if anything calls it.
+ *
+ * @returns {Promise<string[]>}
  */
 export async function resolveRoleRecipientIds(db, locationId, roles) {
   return (await readRoleRecipientIds(db, locationId, roles)).ids
 }
 
 /**
- * resolveRoleRecipientIds with the read error kept. REPLACE.1b review 1: the
- * "taken" notice of a claimed shift offer stamped itself done on the empty
- * list a failed read returned, so the managers' only signal was lost. A
- * caller that stamps after sending must treat `error` as "try again", never
- * as "nobody to tell".
+ * The active profile ids holding one of `roles` at `locationId`, WITH the
+ * read error. REPLACE.1b review 1: the "taken" notice of a claimed shift
+ * offer stamped itself done on the empty list a failed read returned, so the
+ * managers' only signal was lost. C1 RECIPIENTS.1 moved every caller here.
+ * A caller that stamps, claims or reports after sending must treat `error`
+ * as "try again" (or as a fault), never as "nobody to tell".
  *
+ * @param {object} db          service-role supabase client
+ * @param {string} locationId
+ * @param {string[]} roles     e.g. ['owner', 'manager']
  * @returns {Promise<{ ids: string[], error: object|null }>}
  */
 export async function readRoleRecipientIds(db, locationId, roles) {
@@ -382,18 +407,17 @@ export async function readRoleRecipientIds(db, locationId, roles) {
     .select('profile_id, role, profiles!inner(id, role, active)')
     .eq('location_id', locationId)
   if (error) return { ids: [], error }
+  return { ids: roleRecipientIdsFromLinks(links, roles), error: null }
+}
 
-  // PUSH-ROLES.1 — judge the PER-LOCATION role (roles are per-location, mig
-  // 051), not the global profiles.role: filtering on the global role both
-  // over-notified (global owner holding a staff row here) and, worse,
-  // silently excluded every `master` from owner/manager fan-outs — masters
-  // hold every decision right, so they are always included. Live miss:
-  // Richard (global role master, owner at Stillorgan) never received the
-  // new-time-off-request push, 2026-07-27.
-  const ids = (links || [])
-    .filter(l => l.profiles?.active && (roles.includes(l.role) || l.profiles.role === 'master'))
-    .map(l => l.profile_id)
-  return { ids, error: null }
+// C1 RECIPIENTS.1 — the fan-out wrappers' answer to a FAILED recipients read:
+// logged once, structurally, and said in the result beside the zero counts,
+// so it never passes for "nobody to tell" (plain zeros, no key).
+function recipientsReadFailed(what, meta, payload, error) {
+  logError('push', `${what} recipients read failed; nobody was told`, {
+    ...meta, type: payload?.data?.type ?? null, category: payload?.category ?? null, err: error?.message ?? String(error),
+  })
+  return { sent: 0, skipped: 0, invalidated: 0, failed: 0, recipients_failed: 1 }
 }
 
 /**
@@ -401,13 +425,19 @@ export async function readRoleRecipientIds(db, locationId, roles) {
  * given location. Useful for fan-out events like "new time-off request
  * needs approval" → notify all managers at the requester's location.
  *
+ * Never throws. C1 RECIPIENTS.1: a FAILED recipients read is logged here,
+ * once, with logError, and returned as `recipients_failed: 1` beside the zero
+ * counts, so it can never pass for "nobody holds the role" (plain zeros, no
+ * key). Callers are one-shot best-effort alerts; the log is their signal.
+ *
  * @param {string} locationId
  * @param {string[]} roles     e.g. ['owner', 'manager']
  * @param {object} payload     Same shape as sendPush()
  */
 export async function sendPushToRolesAtLocation(locationId, roles, payload) {
   const db = createServerClient()
-  const ids = await resolveRoleRecipientIds(db, locationId, roles)
+  const { ids, error } = await readRoleRecipientIds(db, locationId, roles)
+  if (error) return recipientsReadFailed('role', { locationId, roles }, payload, error)
   if (!ids.length) return { sent: 0, skipped: 0, invalidated: 0, failed: 0 }
   // PUSH-LOC.1 — this fan-out is location-scoped by definition, so the
   // per-category opt-out is judged at THIS location, not any other
@@ -416,17 +446,24 @@ export async function sendPushToRolesAtLocation(locationId, roles, payload) {
 }
 
 /**
- * Every active profile linked to a location (any role). Candidate set for a
- * fan-out that is then narrowed by a capability gate (e.g. inbox access) +
- * the per-category opt-out inside sendPush.
+ * Every active profile linked to a location (any role), WITH the read error.
+ * Candidate set for a fan-out that is then narrowed by a capability gate
+ * (e.g. inbox access) + the per-category opt-out inside sendPush.
+ *
+ * C1 RECIPIENTS.1 — was resolveLocationMemberIds, which discarded the error
+ * and returned [] on a failed read ("nobody here"). Renamed so no caller can
+ * keep reading the old string[] shape by accident.
+ *
+ * @returns {Promise<{ ids: string[], error: object|null }>}
  */
-export async function resolveLocationMemberIds(db, locationId) {
-  if (!locationId) return []
-  const { data: links } = await db
+export async function readLocationMemberIds(db, locationId) {
+  if (!locationId) return { ids: [], error: null }
+  const { data: links, error } = await db
     .from('profile_locations')
     .select('profile_id, profiles!inner(id, active)')
     .eq('location_id', locationId)
-  return (links || []).filter(l => l.profiles?.active).map(l => l.profile_id)
+  if (error) return { ids: [], error }
+  return { ids: (links || []).filter(l => l?.profiles?.active).map(l => l.profile_id), error: null }
 }
 
 /**
@@ -435,12 +472,16 @@ export async function resolveLocationMemberIds(db, locationId) {
  * `whatsapp` permission), not just managers. Used for the "Mia is handling a
  * chat" agent-activity ping. Category opt-out + master switch still apply.
  *
+ * Never throws. A FAILED member read is logged and returned as
+ * `recipients_failed: 1`, exactly as sendPushToRolesAtLocation does.
+ *
  * @param {string} locationId
  * @param {object} payload   Same shape as sendPush() (set payload.category)
  */
 export async function sendPushToInboxStaffAtLocation(locationId, payload) {
   const db = createServerClient()
-  const ids = await resolveLocationMemberIds(db, locationId)
+  const { ids, error } = await readLocationMemberIds(db, locationId)
+  if (error) return recipientsReadFailed('inbox-staff', { locationId }, payload, error)
   if (!ids.length) return { sent: 0, skipped: 0, invalidated: 0, failed: 0 }
   return sendPush(ids, payload, { locationId, requireMobileKey: 'whatsapp' })
 }

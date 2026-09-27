@@ -15,7 +15,9 @@
 // Two halves:
 //   - Per-coach FTE utilisation bars (allocated / contracted)
 //   - Contractor euro spend for the focused month vs the
-//     location's monthly_contractor_budget_eur
+//     location's monthly_contractor_budget_eur: PUBLISHED shifts as the
+//     headline, anything not yet published on one line beside it
+//     (CONTRACTORSPEND.1)
 //
 // RSC-AUDIT.2: no own state / events / refs / browser APIs —
 // pure data transformation via summarizeWeek / summarizeMonth +
@@ -92,6 +94,13 @@ export default function RosterSummaryPanel({
     timeOff,
   })
   const month = contractorSpend
+  // CONTRACTORSPEND.1 — the server counts PUBLISHED shifts as spend and sends
+  // the rest (drafts, shifts no roster owns yet) as its own total. `|| 0`: a
+  // response from before this change has no such field.
+  const unpublishedEur = Number(month?.unpublishedContractorCostEur) || 0
+  const overOncePublishedEur = month?.projectedOverBudget && !month?.overBudget && month?.monthlyBudgetEur != null
+    ? Number(month.projectedContractorCostEur) - Number(month.monthlyBudgetEur)
+    : null
 
   return (
     <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-3">
@@ -197,7 +206,7 @@ export default function RosterSummaryPanel({
 
             <div className="grid grid-cols-2 gap-3 mb-3">
               <div>
-                <div className="text-[10px] uppercase tracking-wider text-un1t-subtle">Spent</div>
+                <div className="text-[10px] uppercase tracking-wider text-un1t-subtle">Published</div>
                 <div className={`text-xl font-semibold ${month.overBudget ? 'text-red-700' : 'text-un1t-text'}`}>
                   {formatEur(month.contractorCostEur)}
                 </div>
@@ -227,6 +236,16 @@ export default function RosterSummaryPanel({
                   <span className="text-un1t-muted">FTE labour (sunk cost): {formatEur(month.fteImplicitCostEur)}</span>
                 </div>
               </>
+            )}
+
+            {/* formatEur shows whole euros: gate on what renders, never "€0 more". */}
+            {Math.round(unpublishedEur) > 0 && (
+              <p className="text-[11px] text-un1t-subtle mt-2">
+                {formatEur(unpublishedEur)} more in shifts not yet published
+                {overOncePublishedEur != null && Math.round(overOncePublishedEur) > 0
+                  ? <>: <span className="text-amber-700 font-medium">{formatEur(overOncePublishedEur)} over budget once published</span>.</>
+                  : '.'}
+              </p>
             )}
 
             {spendOtherMonthStart && (

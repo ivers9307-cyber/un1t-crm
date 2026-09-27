@@ -44,6 +44,7 @@ import { GET } from './route.js'
 import { listEnabledSettings, listActiveEquipment, listSubmittedSince } from '@/lib/equipment-db'
 import { sendPushToRolesAtLocation } from '@/lib/push'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { logAuditEvent } from '@/lib/audit'
 
 function req(auth = 'Bearer test-secret') {
   return { headers: { get: (k) => (k.toLowerCase() === 'authorization' ? auth : null) } }
@@ -132,6 +133,22 @@ describe('GET /api/cron/equipment-inspection-reminder', () => {
     expect(sendPushToRolesAtLocation).toHaveBeenCalledWith(
       'loc-tue-2', expect.any(Array), expect.anything()
     )
+  })
+
+  // C1 RECIPIENTS.1 — the reminder recorded pushed:true and audited
+  // "reminder_sent" whatever happened. The 19:00 overdue sweep is the same
+  // day's recovery (it chases every outstanding asset, any weekday).
+  it('a failed owner/master read is not recorded as a sent reminder', async () => {
+    listEnabledSettings.mockResolvedValue([TUESDAY_SETTINGS])
+    listActiveEquipment.mockResolvedValue(ASSETS)
+    listSubmittedSince.mockResolvedValue([])
+    sendPushToRolesAtLocation.mockResolvedValueOnce({ sent: 0, skipped: 0, invalidated: 0, failed: 0, recipients_failed: 1 })
+    const body = await (await GET(req())).json()
+    expect(body.data.locations).toEqual([
+      expect.objectContaining({ locationId: 'loc-tue', pushed: false, recipients_failed: true }),
+    ])
+    expect(logAuditEvent).not.toHaveBeenCalled()
+    expect(stampHeartbeat).toHaveBeenCalledWith('equipment-inspection-reminder')
   })
 
   it('calls stampHeartbeat with the exact mig-470 name', async () => {

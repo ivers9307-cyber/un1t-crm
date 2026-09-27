@@ -4,16 +4,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('./log', () => ({ logWarn: vi.fn(), logError: vi.fn() }))
-vi.mock('./push', () => ({
-  resolveRoleRecipientIds: vi.fn(),
-}))
+vi.mock('./push', async (importOriginal) => {
+  const real = await importOriginal()
+  return {
+    readRoleRecipientIds: vi.fn(),
+    // REAL: the pool derives managers from its members read with this rule.
+    roleRecipientIdsFromLinks: real.roleRecipientIdsFromLinks,
+  }
+})
 vi.mock('./push-dedup', () => ({
   notifyUsersOnce: vi.fn(),
   notifyUsersAtRolesOnce: vi.fn(),
 }))
 
 const { logWarn, logError } = await import('./log')
-const { resolveRoleRecipientIds } = await import('./push')
+const { readRoleRecipientIds } = await import('./push')
 const { notifyUsersOnce, notifyUsersAtRolesOnce } = await import('./push-dedup')
 const { MANAGER_ROLES } = await import('./schemas')
 const { notifyOpenPool, runSwapCoverSweep } = await import('./swap-cover-server')
@@ -81,7 +86,7 @@ const shiftHere = (profile_id, start, end, over = {}) => ({
 
 beforeEach(() => {
   vi.clearAllMocks()
-  resolveRoleRecipientIds.mockResolvedValue(['mgr'])
+  readRoleRecipientIds.mockResolvedValue({ ids: ['mgr'], error: null })
   notifyUsersOnce.mockResolvedValue({ sent: 1, emailed: 0, deduped: 0 })
   notifyUsersAtRolesOnce.mockResolvedValue({ sent: 1, emailed: 0, deduped: 0 })
 })
@@ -94,8 +99,10 @@ describe('notifyOpenPool', () => {
     // Members of THIS studio only.
     const members = db.queries.find((q) => q.table === 'profile_locations')
     expect(members.filters).toEqual([['eq', 'location_id', LOC]])
-    // The SAME resolver and role set notifyUsersAtRolesOnce uses for swap_open.
-    expect(resolveRoleRecipientIds).toHaveBeenCalledWith(db, LOC, MANAGER_ROLES)
+    // C1 RECIPIENTS.1 — managers come from THIS read, by the resolver's own
+    // rule (roleRecipientIdsFromLinks): no second read to fail.
+    expect(db.queries.filter((q) => q.table === 'profile_locations')).toHaveLength(1)
+    expect(readRoleRecipientIds).not.toHaveBeenCalled()
 
     expect(notifyUsersOnce).toHaveBeenCalledTimes(1)
     const [dbArg, key, ids, payload] = notifyUsersOnce.mock.calls[0]
@@ -207,10 +214,11 @@ describe('notifyOpenPool', () => {
       expect(logWarn).toHaveBeenCalledWith('swap-cover', expect.stringContaining('organisation'), expect.objectContaining({ swapId: 'swap-1', err: 'boom' }))
     })
 
-    it('the manager resolver coming back empty does not turn managers into pool recipients', async () => {
-      resolveRoleRecipientIds.mockResolvedValue([])
-      await notifyOpenPool(mockDb(healthy()), ARGS)
+    it('managers come from the members read itself: a manager, and a master whatever their role here, are never pool recipients', async () => {
+      const members = [...MEMBERS, link('boss', { profiles: { id: 'boss', role: 'master', active: true } })]
+      await notifyOpenPool(mockDb(healthy({ profile_locations: { data: members, error: null } })), ARGS)
       expect(notifyUsersOnce.mock.calls[0][2]).toEqual(['a', 'b'])
+      expect(readRoleRecipientIds).not.toHaveBeenCalled()
     })
   })
 
@@ -232,7 +240,7 @@ describe('notifyOpenPool', () => {
     const db = mockDb(healthy())
     expect(await notifyOpenPool(db, { ...ARGS, block: { id: 'blk-1' } })).toEqual({ notified: 0, degraded: false })
     expect(db.queries).toHaveLength(0)
-    expect(resolveRoleRecipientIds).not.toHaveBeenCalled()
+    expect(readRoleRecipientIds).not.toHaveBeenCalled()
   })
 })
 
@@ -319,7 +327,7 @@ describe('runSwapCoverSweep', () => {
 
     // The same recipients swap_open reached: the SAME resolver, the same role
     // set, at the swap's own studio.
-    expect(resolveRoleRecipientIds).toHaveBeenCalledWith(db, LOC, MANAGER_ROLES)
+    expect(readRoleRecipientIds).toHaveBeenCalledWith(db, LOC, MANAGER_ROLES)
     expect(notifyUsersOnce).toHaveBeenCalledTimes(1)
     const [dbArg, key, ids, payload] = notifyUsersOnce.mock.calls[0]
     expect(dbArg).toBe(db)
@@ -331,6 +339,24 @@ describe('runSwapCoverSweep', () => {
     // a nudge writes nothing
     expect(db.queries.some((q) => q.update)).toBe(false)
     expect(logWarn).not.toHaveBeenCalled()
+  })
+
+  // C1 RECIPIENTS.1 — a failed approver read came back as [] and was counted
+  // `skipped`, so a read that kept failing never showed on the arm's row.
+  it('a failed approver read nudges nobody, claims nothing, is an arm fault; the next tick nudges', async () => {
+    readRoleRecipientIds.mockResolvedValueOnce({ ids: [], error: { message: 'down' } })
+    const db = mockDb({ shift_swap_requests: swapsTable([sweepSwap()]), locations: DUBLIN })
+    const first = await runSwapCoverSweep(db, { nowMs: START - 48 * H })
+    expect(notifyUsersOnce).not.toHaveBeenCalled()
+    expect(first).toMatchObject({ open: 1, nudged: 0, skipped: 0, errors: 1 })
+    expect(logError).toHaveBeenCalledWith('swap-cover', expect.stringContaining('approvers could not be read'),
+      expect.objectContaining({ swapId: 's1', stage: 't48', err: 'down' }))
+
+    // 15 minutes later, still inside the T-48h range: the same stage fires.
+    const second = await runSwapCoverSweep(db, { nowMs: START - 48 * H + 15 * 60 * 1000 })
+    expect(notifyUsersOnce).toHaveBeenCalledTimes(1)
+    expect(notifyUsersOnce.mock.calls[0][1]).toBe('swap_cover_nudge:s1:pending:t48')
+    expect(second).toMatchObject({ nudged: 1, errors: 0 })
   })
 
   it('the sweep row carries what the pure decision needs: the claim time and the effective start', async () => {
@@ -387,14 +413,14 @@ describe('runSwapCoverSweep', () => {
 
   // A manager who posts their OWN swap is not chased to review it.
   it('never nudges the requester about their own swap', async () => {
-    resolveRoleRecipientIds.mockResolvedValue(['mgr', 'req', 'mgr2'])
+    readRoleRecipientIds.mockResolvedValue({ ids: ['mgr', 'req', 'mgr2'], error: null })
     const db = mockDb({ shift_swap_requests: swapsTable([sweepSwap()]), locations: DUBLIN })
     await runSwapCoverSweep(db, { nowMs: START - 48 * H })
     expect(notifyUsersOnce.mock.calls[0][2]).toEqual(['mgr', 'mgr2'])
   })
 
   it('a studio whose only approver is the requester: nobody to nudge, nothing sent, not an error', async () => {
-    resolveRoleRecipientIds.mockResolvedValue(['req'])
+    readRoleRecipientIds.mockResolvedValue({ ids: ['req'], error: null })
     const db = mockDb({ shift_swap_requests: swapsTable([sweepSwap()]), locations: DUBLIN })
     const stats = await runSwapCoverSweep(db, { nowMs: START - 48 * H })
     expect(notifyUsersOnce).not.toHaveBeenCalled()

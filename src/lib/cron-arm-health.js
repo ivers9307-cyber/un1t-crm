@@ -71,10 +71,15 @@ export function shiftReminderArmHealthy(summary) {
  * on every failure of its own (a locations or runway read), which the parent
  * cron records as { error }; `failed` is a per-recipient delivery count whose
  * claims are released for the next daily run, so it does not block the stamp.
+ * C1 RECIPIENTS.1: `recipients_failed` DOES block it: the arm's own "who can
+ * publish here" read failed, so nobody was told. Nothing was claimed and the
+ * next daily run retries, but a stamp would call the run clean. With the
+ * row's 86,400 s + 43,200 s, one bad day turns it stale that evening.
  */
 export function runwayArmHealthy(outcome) {
   if (!isOutcome(outcome)) return false
-  return !Object.prototype.hasOwnProperty.call(outcome, 'error')
+  if (Object.prototype.hasOwnProperty.call(outcome, 'error')) return false
+  return count(outcome.recipients_failed) === 0
 }
 
 // QUALS.1 — the weekly qualification digest arm of contract-reminders. Seeded by mig 635.
