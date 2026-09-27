@@ -3771,8 +3771,10 @@ registry.registerPath({
   responses: {
     200: { description: '{ trainers: [{ id, name, source, classes }], windowDays }' },
     400: { description: 'Glofox not configured on this location', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'unauthenticated — no session', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — owner or manager at this location required', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Not a member of this location (indistinguishable from a missing id)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'class_occurrences_read_failed — the timetable read failed (logged)', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -3788,6 +3790,7 @@ registry.registerPath({
   responses: {
     200: { description: '{ memberships: [{ _id, name, plans: [...] }], count }' },
     400: { description: 'glofox_not_configured — Glofox credentials not set on this location', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'unauthenticated — no session', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — owner or manager at this location required', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Not a member of this location (indistinguishable from a missing id)', content: { 'application/json': { schema: ErrorResponse } } },
     502: { description: 'glofox_request_failed — the Glofox API call failed', content: { 'application/json': { schema: ErrorResponse } } },
@@ -3806,6 +3809,7 @@ registry.registerPath({
   responses: {
     200: { description: '{ users: [{ id, full_name, user_email, employee_number, status, nfc_count }], count }' },
     400: { description: 'unifi_not_configured — UniFi Access not configured on this location', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'unauthenticated — no session', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — owner or manager at this location required', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Not a member of this location (indistinguishable from a missing id), or location_not_found', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'location_read_failed — the location could not be read (logged)', content: { 'application/json': { schema: ErrorResponse } } },
@@ -3825,6 +3829,7 @@ registry.registerPath({
   responses: {
     200: { description: '{ doors: [{ id, name }], count }' },
     400: { description: 'unifi_not_configured — UniFi Access not configured on this location', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'unauthenticated — no session', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — owner or manager at this location required', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Not a member of this location (indistinguishable from a missing id), or location_not_found', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'location_read_failed — the location could not be read (logged)', content: { 'application/json': { schema: ErrorResponse } } },

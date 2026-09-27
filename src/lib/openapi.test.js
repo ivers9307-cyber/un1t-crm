@@ -484,6 +484,12 @@ describe('getOpenApiSpec', () => {
     expect(op.description).toMatch(/owner\/manager AT this location/)
     expect(op.responses['403'].description).toMatch(/at this location/)
     expect(op.responses['404'].description).toMatch(/Not a member/)
+    expect(op.responses['401'].description).toMatch(/unauthenticated/)
+  })
+
+  it('documents the glofox-trainers class_occurrences read failure as a 500', () => {
+    const op = spec.paths['/api/locations/{id}/glofox-trainers'].get
+    expect(op.responses['500'].description).toMatch(/class_occurrences_read_failed/)
   })
 
   it.each([
