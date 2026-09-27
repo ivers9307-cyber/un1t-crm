@@ -53,13 +53,13 @@ The web review panel gains one small presentational component that states those 
 
 **The roster facts the rule rests on.**
 - `isLiveAssignment(a)` = `a?.status !== 'cancelled'` (`src/lib/roster.js:440-442`). A missing status is a legacy live row; `swapped` is live.
-- `cancelled` is still allowed by the table's CHECK (`src/lib/schemas.js:249-251`, mig 337), but ROSTER-FIX.1 stopped writing it (the roster DELETEs an assignment), mig 603 deleted every tombstone (`supabase/migrations/603_rostering_indexes_fks_tombstones.sql:214`), and the assignment route's schema refuses it (`src/lib/schemas.js:258`). So today the "counts cancelled" half is **latent**: only a hand edit or an old code path could create one.
+- `cancelled` is still allowed by the table's CHECK (`src/lib/schemas.js:249-251`, mig 337), but ROSTER-FIX.1 stopped writing it (the roster DELETEs an assignment), mig 603 deleted every tombstone (`supabase/migrations/603_rostering_indexes_fks_tombstones.sql:214`), and the assignment route's schema refuses it (`src/lib/schemas.js:260`). So today the "counts cancelled" half is **latent**: only a hand edit or an old code path could create one.
 - A swap moves the row: mig 612/615's approve functions set `profile_id` to the taker and `status = 'swapped'` (`src/lib/swap-lifecycle.js:212-223`). Filtering by `profile_id` therefore gives the taker the hours and the giver none.
 - Published = `block.rosters.status === 'published'`, via `rosters:roster_id ( status )`, the test used by LABOUR.1 (`src/lib/labour-month-model.js:102`), `src/lib/roster-read.js:137` and `shared/dashboard-data.js`. `rosters.status` is `draft | published | superseded` (`supabase/migrations/602_rosters_no_overlap.sql:194`). A block with no `roster_id` belongs to no published roster.
 - `selectAll` (`src/lib/select-all.js`) pages at 1,000 with a stable `.order()` and throws on a page error.
 
 **Scope facts.**
-- One invoice per contractor per month **across all studios**: `contractor_invoices_one_active_per_period ON (contractor_id, period_start) WHERE status <> 'declined'` (`supabase/migrations/101_contractor_invoices.sql:65-67`). The invoice is filed against one `location_id`, and approval enqueues it for that studio's Xero organisation (CLAUDE.md: one location = one Xero organisation).
+- One invoice per contractor per month **across all studios**: `contractor_invoices_one_active_per_period ON (contractor_id, period_start)`, created in `supabase/migrations/101_contractor_invoices.sql:65-67` and redefined in `102_contractor_invoice_revoke.sql:20-23` as `WHERE status NOT IN ('declined', 'revoked')`; no later migration touches it. There is no `location_id` in the key. The invoice is filed against one `location_id`, and approval enqueues it for that studio's Xero organisation (CLAUDE.md: one location = one Xero organisation).
 - 00-INDEX "Held" already lists that per-month rule as Richard's product call.
 
 **Measured on prod, 27 Sep (read-only aggregates, counts only):**
@@ -1153,7 +1153,7 @@ Expected: `✓ Compiled successfully`. This matters here: `InvoicesManager.jsx` 
 3. Hours on shifts whose roster was never published are shown ("Not counted: X h on N shifts…"), never priced.
 4. Failure handling: a failed roster read is flagged on the detail (`roster_unavailable`, web note), and approval answers 503 and writes nothing until the read works. Previously the detail silently dropped the comparison, and approval threw a bare 500.
 5. Measured on prod (counts only): 181 assignments inside the 10 invoice periods, 0 cancelled, 2 unpublished (in one revoked invoice), 0 contractor-months at two studios. **No live figure changes today**; the fix is for the next draft week or cancelled row. Snapshots untouched.
-6. What it deliberately does not do: count a sibling studio's shifts (held product item: one invoice per contractor per month across studios, mig 101:65-67); move the rate to `profile_compensation`; change the phone.
+6. What it deliberately does not do: count a sibling studio's shifts (held product item: one invoice per contractor per month across studios, mig 101:65-67 as redefined by mig 102:20-23); move the rate to `profile_compensation`; change the phone.
 7. Browser-check results (the five above).
 8. Open questions for Richard (below) and follow-ups found.
 9. End the body with `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
@@ -1170,7 +1170,7 @@ After `gh pr create`, add ONE row directly under the table header in `docs/CHANG
 
 ### Open questions for the owner (Richard)
 
-1. **A contractor who works at both studios** can file only one invoice a month, against one studio (mig 101:65-67). This PR prices only the invoice's own studio, so such an invoice would read "over roster" by the other studio's hours. None has happened yet (0 contractor-months at two studios). When it does, should they file one invoice per studio (a unique-index change, the held item), or should the review add a line "also rostered at <other studio>: X h"?
+1. **A contractor who works at both studios** can file only one invoice a month, against one studio (mig 101:65-67, redefined by mig 102:20-23). This PR prices only the invoice's own studio, so such an invoice would read "over roster" by the other studio's hours. None has happened yet (0 contractor-months at two studios). When it does, should they file one invoice per studio (a unique-index change, the held item), or should the review add a line "also rostered at <other studio>: X h"?
 2. **Shifts on rosters that were never published** are not priced; their hours are shown beside the estimate. If a contractor worked such a shift, is the fix to publish the week (the figures then correct themselves), or should the review price it?
 3. **Clock-change nights.** The review uses payroll's wall-clock hours, so a shift across the 01:00-02:00 change is an hour short (autumn) or long (spring) compared with LABOUR.1. Nobody has been rostered in those hours. Leave it, or move payroll and this review to elapsed time together?
 
@@ -1185,7 +1185,7 @@ After `gh pr create`, add ONE row directly under the table header in `docs/CHANG
 
 - **The phone invoice detail says nothing when the roster read fails** (`mobile/app/(staff)/invoices/[id].jsx:129` renders `reviewComparisonView(data)`, `null` → no block), and it does not show the unpublished line. The Approvals card already prints "No roster comparison available." A small OTA: teach `mobile/lib/invoice-review.js` to read `roster_unavailable` and `computed_scheduled.unpublished_*`. Fits D4 UINITS.1.
 - **The rate comes from the deprecated `profiles.hourly_rate`** (`contractor-invoices.js:101-105`) and the detail route's `contractor:contractor_id ( …, hourly_rate, … )` embed (`src/app/api/invoices/[id]/route.js:32`). The canonical copy is `profile_compensation` (mig 152). LABOUR.1 measured 0 drift; move both reads when the `profiles` pay columns are dropped.
-- **`contractor_invoices_one_active_per_period` excludes only `declined`**, so a **revoked** invoice also blocks a fresh one for the month, contrary to the revoke copy "A fresh submission can be made for the same period" (`InvoicesManager.jsx:600-601`, `637-639`). Check the submit route before believing either side: it may clear or reuse the revoked row. Found reading mig 101:65-67; not verified end to end.
+- **A revoked invoice still blocks a resubmit.** Mig 102 (`102_contractor_invoice_revoke.sql:20-23`) let a revoked row make way for a fresh submission, and the UI promises it ("A fresh submission can be made for the same period", `InvoicesManager.jsx:600-601`, `637-639`). But the submit route's pre-check (`src/app/api/invoices/route.js:157-175`) filters only `.neq('status', 'declined')`, so a revoked row answers 409 "You already have a submission pending review". The pre-check also discards the `.maybeSingle()` error, so a failed read lets the insert through to the unique index. Fix: `.not('status', 'in', '(declined,revoked)')` and handle `error`. Prod has 4 declined-or-revoked rows of 10 (27 Sep), so the path has been used; check with Richard whether any contractor has hit the 409.
 
 ---
 
@@ -1228,5 +1228,5 @@ After `gh pr create`, add ONE row directly under the table header in `docs/CHANG
   - `RosterComparison.jsx`: 57-90;
   - `payroll.js`: 25-34, 44-61;
   - `roster.js`: 440-442;
-  - `schemas.js`: 249-258;
-  - migrations: 067:70-71, 067:77, 101:65-67, 602:194, 603:214.
+  - `schemas.js`: 249-251, 260;
+  - migrations: 067:70-71, 067:77, 101:65-67, 102:20-23, 602:194, 603:214; `src/app/api/invoices/route.js:157-175`.
