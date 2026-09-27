@@ -72,7 +72,10 @@ export async function GET(request) {
 
       // C1 RECIPIENTS.1 — the recipients read failed (push.js logged it):
       // nobody was told, so this is not a sent reminder and is not audited
-      // as one. The 19:00 overdue sweep chases the same assets today.
+      // as one. The 19:00 UTC overdue sweep does chase the same assets
+      // today, but it notifies ONLY owner + master; this reminder goes to all
+      // six ROLES, including the staff who do the inspections. Those staff
+      // (and manager, head_coach, reception) are NOT re-chased the same day.
       if (r?.recipients_failed) {
         results.push({ locationId: settings.location_id, due: outstanding.length, pushed: false, recipients_failed: true })
         continue
