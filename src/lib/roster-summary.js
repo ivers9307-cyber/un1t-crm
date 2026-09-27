@@ -33,6 +33,7 @@ import { addDays, formatDate, liveAssignments } from './roster'
 import { effectiveOverride } from './roster-read'
 import { shiftKindOf, isAdminShift } from '@shared/shift-kind'
 import { monthBounds } from '@shared/roster-month'
+import { isRealCalendarDate } from './schemas'
 
 // Roster v2 phase 6 — leave-aware availability.
 //
@@ -340,7 +341,8 @@ export function summarizeWeek({ blocks, staff, weekStart, timeOff = [], today = 
  *   - WHEN: `referenceDate` is a 'YYYY-MM-DD' Dublin calendar date and the
  *     month is string arithmetic (monthBounds). It was `new Date(referenceDate)`
  *     read with local getters: UTC midnight, so west of UTC the 1st was the
- *     month before and the sum came back €0. A Date is refused.
+ *     month before and the sum came back €0. A Date, and an impossible date
+ *     (2026-02-30, 2026-13-01), are refused.
  * SHIFTTYPE.1 unchanged: an admin shift costs the contractor budget nothing.
  * Employment type is the holder's CURRENT one for the whole month (no history).
  *
@@ -351,8 +353,10 @@ export function summarizeWeek({ blocks, staff, weekStart, timeOff = [], today = 
  * @param {number|string|null} args.monthlyBudgetEur
  */
 export function summarizeMonth({ blocks, pay, referenceDate, monthlyBudgetEur }) {
-  if (typeof referenceDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(referenceDate)) {
-    throw new TypeError('summarizeMonth: referenceDate must be a YYYY-MM-DD string (a Dublin calendar date)')
+  // The shape alone is not enough: monthBounds('2026-02-30') is March and
+  // '2026-13-01' is NaN-NaN-NaN, which matches no block and reads as €0 spent.
+  if (!isRealCalendarDate(referenceDate)) {
+    throw new TypeError('summarizeMonth: referenceDate must be a real YYYY-MM-DD string (a Dublin calendar date)')
   }
   const { monthStartIso, monthEndIso } = monthBounds(referenceDate)
 

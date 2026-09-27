@@ -578,6 +578,18 @@ describe('CONTRACTORSPEND.1 — who and what summarizeMonth prices', () => {
       .toThrow(TypeError)
   })
 
+  it('refuses a well-shaped impossible date instead of summing another month (or none) to €0', () => {
+    // monthBounds('2026-02-30') is March; '2026-13-01' is NaN-NaN-NaN, which
+    // matches no block, so every figure came back €0 with overBudget false.
+    const run = referenceDate => summarizeMonth({ blocks: [], pay: new Map(), referenceDate, monthlyBudgetEur: 100 })
+    for (const bad of ['2026-02-30', '2026-13-01', '2026-00-10', '2026-04-31', '2026-05-00']) {
+      expect(() => run(bad), bad).toThrow(TypeError)
+    }
+    const leap = run('2028-02-29')
+    expect(leap.monthStartIso).toBe('2028-02-01')
+    expect(leap.monthEndIso).toBe('2028-02-29')
+  })
+
   it('a shift across the clocks-back hour is priced at its ROSTERED hours (D7)', () => {
     // 25 Oct 2026, Dublin: 02:00 IST becomes 01:00 GMT, so 01:00-03:00 is three
     // real hours. Contractor spend prices rostered hours (payroll's shiftHours),
