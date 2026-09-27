@@ -95,7 +95,11 @@ export function swapShiftShape(a) {
 //   - published derives from block → roster (ROSTER-FIX.1) — it was hard-coded
 //     true here (and by the mig 100 forward trigger), which showed draft and
 //     copied shifts to every coach's phone as if they were live
-//   - notes = assignment.notes ?? block.notes (matches the trigger's coalesce)
+//   - notes = assignment.notes ?? block.notes for a MANAGER-audience row (the
+//     legacy mig 068/100 mirror's coalesce; that trigger went in mig 238).
+//     COACHNOTES.1: a coach-audience row carries the assignment's own note
+//     only. Block notes are a manager's working note; the coach-facing block
+//     text is `briefing` (BLOCKEDIT.1, mig 629).
 const API_SHIFT_SELECT = `
   id, profile_id, status, notes, partial_reason,
   start_time_override, end_time_override, assigned_by, assigned_at, updated_at,
@@ -107,7 +111,15 @@ const API_SHIFT_SELECT = `
   profiles!profile_id ( id, full_name, email, avatar_url, role )
 `
 
-function toApiShiftRow(a) {
+/**
+ * @param {object} a  embedded shift_assignments row (API_SHIFT_SELECT)
+ * @param {{ forCoach?: boolean }} [opts]
+ *   forCoach — COACHNOTES.1: the row is for someone who is NOT a manager at
+ *   its studio. `notes` is then the assignment's own note only, never the
+ *   block's manager note. Decide this BEFORE building the row: once the two
+ *   are collapsed nobody can tell them apart (slimShiftRowForCoach can't).
+ */
+function toApiShiftRow(a, { forCoach = false } = {}) {
   const b = a.shift_blocks || {}
   const tpl = b.shift_templates || {}
   return {
@@ -125,7 +137,9 @@ function toApiShiftRow(a) {
     start_time_override: effectiveOverride(a.start_time_override, b.start_time, tpl.start_time),
     end_time_override: effectiveOverride(a.end_time_override, b.end_time, tpl.end_time),
     role_label: tpl.role_label ?? null,
-    notes: a.notes ?? b.notes ?? null,
+    // COACHNOTES.1 — block notes are a manager's working note: manager rows
+    // fall back to them, coach rows never do (a coach reads the briefing).
+    notes: forCoach ? (a.notes ?? null) : (a.notes ?? b.notes ?? null),
     // BLOCKEDIT.1 (mig 629) — written FOR the coaches on this shift, so it is
     // on every row and slimShiftRowForCoach keeps it (its spread does).
     briefing: b.briefing ?? null,
@@ -151,7 +165,10 @@ function toApiShiftRow(a) {
  * you today"), and it used to hand every coach each colleague's EMAIL and
  * NOTES. What a coach needs about a colleague is who they are and when they
  * are on: id, name, avatar, role label. Their own row keeps its notes and
- * partial_reason (the Me view renders both); a colleague's row loses them,
+ * partial_reason (the Me view renders both). Those notes are the ASSIGNMENT's
+ * own note only, because the row must be built with toApiShiftRow(a, { forCoach:
+ * true }) (COACHNOTES.1): this function cannot tell a block note from an
+ * assignment note once they are collapsed. A colleague's row loses them,
  * because assignment notes / partial_reason are a manager's working notes
  * about that person. Email is dropped from every row, own included — the app
  * already knows the caller's own address and no coach screen renders one.
@@ -214,13 +231,19 @@ export async function fetchApiShiftRows(db, { locationIds, startDate, endDate, p
 
   const rows = (data || [])
     .filter((a) => a.shift_blocks && isLiveAssignment(a))
-    .map(toApiShiftRow)
-    // D1 — coaches see published shifts only; managers pass publishedOnly:false.
-    .filter((r) => !publishedOnly || r.published)
-    // COACHSCOPE.1 — per-location: a non-manager at this row's studio gets
-    // published rows only, slimmed.
-    .filter((r) => !viewer || r.published || viewer.isManagerAt(r.location_id))
-    .map((r) => (!viewer || viewer.isManagerAt(r.location_id) ? r : slimShiftRowForCoach(r, viewer.id)))
+    .flatMap((a) => {
+      // COACHSCOPE.1 — the audience is judged per row, against the caller's
+      // role AT THIS ROW'S STUDIO. No viewer (cron, assistant) = manager shape.
+      // COACHNOTES.1 — and it is judged BEFORE the row is built, so a coach
+      // row never holds the block's manager notes (toApiShiftRow forCoach).
+      const manager = !viewer || viewer.isManagerAt(a.shift_blocks.location_id)
+      const r = toApiShiftRow(a, { forCoach: !manager })
+      // D1 — coaches see published shifts only; managers pass publishedOnly:false.
+      if (publishedOnly && !r.published) return []
+      // COACHSCOPE.1 — a non-manager at this row's studio gets published rows only, slimmed.
+      if (!manager && !r.published) return []
+      return [manager ? r : slimShiftRowForCoach(r, viewer.id)]
+    })
     .sort((x, y) => (x.shift_date < y.shift_date ? -1 : x.shift_date > y.shift_date ? 1 : 0))
   // SHIFTREMIND.1 — this read is not paged, and PostgREST caps a select at
   // 1,000 rows without saying so. A FULL page is therefore reported (`capped`,
