@@ -22,7 +22,7 @@ import { computeScheduledForPeriod, periodLabel } from '@/lib/contractor-invoice
 import { sendInvoiceApprovedEmail } from '@/lib/contractor-invoice-email'
 import { notifyUsersOnce } from '@/lib/push-dedup'
 import { enqueueFromContractorInvoice } from '@/lib/invoices-queue/enqueue'
-import { logWarn } from '@/lib/log'
+import { logWarn, logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 
@@ -59,13 +59,28 @@ export async function POST(_request, props) {
     )
   }
 
-  // Snapshot the at-review numbers for audit.
-  const computed = await computeScheduledForPeriod(db, {
-    contractor_id: inv.contractor_id,
-    location_id: inv.location_id,
-    period_start: inv.period_start,
-    period_end: inv.period_end,
-  })
+  // Snapshot the at-review numbers for audit. INVOICEHOURS.1 D9 — a failed
+  // roster read refuses the approval (nothing written, invoice stays
+  // 'submitted'): approving without a snapshot would save nulls that later
+  // read "approved before snapshots were saved", and the reviewer may not
+  // have seen any comparison. Retrying is one click; nothing is lost.
+  let computed
+  try {
+    computed = await computeScheduledForPeriod(db, {
+      contractor_id: inv.contractor_id,
+      location_id: inv.location_id,
+      period_start: inv.period_start,
+      period_end: inv.period_end,
+    })
+  } catch (e) {
+    logError('invoice-approve', 'roster read failed; approval refused', {
+      err: e?.message || String(e), invoiceId: inv.id,
+    })
+    return NextResponse.json(
+      { success: false, error: 'Could not read the roster for this period, so the invoice was not approved. Try again in a moment.' },
+      { status: 503 },
+    )
+  }
 
   const now = new Date().toISOString()
   // INVOICES-QUEUE.1 — owner approval flips status straight to
