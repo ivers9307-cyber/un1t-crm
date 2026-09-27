@@ -22,8 +22,11 @@ const SKIP_DIRS = new Set(['node_modules', 'ios', 'android', 'dist', 'build'])
 const SOURCE = /\.(js|jsx|mjs)$/
 const SELF = 'tests/role-recipients-callers.test.js'
 // ~4,400 files: a loaded runner took >5 s, so the tree is read once, at
-// collection, and each test only matches.
+// collection, and each test only matches. Each file is tested against every
+// name as it is read and only the PATHS that name one are kept: holding the
+// text itself pinned ~39 MB of source for the life of the file.
 const SCAN_TIMEOUT_MS = 30_000
+const NAMES = ['resolveRoleRecipientIds', 'resolveLocationMemberIds']
 
 function walk(dir, out = []) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -35,13 +38,20 @@ function walk(dir, out = []) {
   return out
 }
 
-const SOURCES = SCAN
-  .flatMap((d) => walk(join(ROOT, d)))
-  .map((full) => ({ rel: relative(ROOT, full).split(sep).join('/'), text: readFileSync(full, 'utf8') }))
+// name -> the repo-relative paths whose source names it.
+const HITS = (() => {
+  const patterns = NAMES.map((name) => [name, new RegExp(`\\b${name}\\b`)])
+  const hits = Object.fromEntries(NAMES.map((name) => [name, []]))
+  for (const full of SCAN.flatMap((d) => walk(join(ROOT, d)))) {
+    const text = readFileSync(full, 'utf8')
+    const rel = relative(ROOT, full).split(sep).join('/')
+    for (const [name, re] of patterns) if (re.test(text)) hits[name].push(rel)
+  }
+  return hits
+})()
 
 function namers(name, allowed) {
-  const re = new RegExp(`\\b${name}\\b`)
-  return SOURCES.filter(({ rel, text }) => !allowed.has(rel) && re.test(text)).map(({ rel }) => rel)
+  return HITS[name].filter((rel) => !allowed.has(rel))
 }
 
 describe('the swallowed-error recipient readers have no callers (C1 RECIPIENTS.1)', () => {
