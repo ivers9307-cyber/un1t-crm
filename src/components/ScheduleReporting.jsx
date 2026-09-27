@@ -813,7 +813,9 @@ function ScheduleReportModal({ reportType: initialReportType, schedule, allowedR
                 />
                 {rateReport && (
                   <p className="text-xs text-un1t-subtle mt-1">
-                    Staff cost figures go only to owners and managers at this studio, or to outside addresses you confirm.
+                    {reportType === 'utilisation'
+                      ? 'Utilisation figures go only to owners and managers at this studio, or to outside addresses you confirm.'
+                      : 'Staff cost figures go only to owners and managers at this studio, or to outside addresses you confirm.'}
                   </p>
                 )}
               </div>
@@ -828,7 +830,7 @@ function ScheduleReportModal({ reportType: initialReportType, schedule, allowedR
               {externalToConfirm.map(e => <li key={e}>{e}</li>)}
             </ul>
             <p className="mt-2 text-un1t-subtle text-xs">
-              They will receive this studio&apos;s staff cost figures every time the report runs. Only confirm addresses outside the team, like your accountant.
+              They will receive this studio&apos;s {reportType === 'utilisation' ? 'utilisation' : 'staff cost'} figures every time the report runs. Only confirm addresses outside the team, like your accountant.
             </p>
             <div className="mt-3 flex gap-2">
               <button

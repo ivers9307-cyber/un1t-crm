@@ -189,8 +189,13 @@ const EMPTY = { templates: [], staff: [], timeOff: [], holidays: [], contractorS
 // fire a request the route will refuse.
 //
 // `canReadAvailability` — AVAIL.1: the same rule for the availability read.
+//
+// `canReadContract` — CONTRACTVIS.1: owner / manager / master at this studio.
+// Adds include=contract to the staff read, so the FTE bars can measure against
+// the contract. The server decides per row either way.
 export function useScheduleData({
   locationId, startDate, endDate, spendReferenceDate, canReadSpend = false, canReadAvailability = false,
+  canReadContract = false,
 }) {
   const [blocks, setBlocks] = useState([])
   const [templates, setTemplates] = useState([])
@@ -268,8 +273,10 @@ export function useScheduleData({
         // received `*` (hourly_rate, annual_salary, overtime_rate) on every
         // calendar load, to render a coach dropdown and an hours panel. The
         // picker shape carries the names, the active flag, the role, the
-        // location links and the contract hours the bars compare against.
-        readJson('/api/staff?fields=picker'),
+        // location links. CONTRACTVIS.1 — the contract hours the bars compare
+        // against come only with include=contract, asked only by a caller who
+        // may read them (canReadContract); the server decides per row anyway.
+        readJson(canReadContract ? '/api/staff?fields=picker&include=contract' : '/api/staff?fields=picker'),
         readJson(`/api/schedule/time-off?location_id=${locationId}&start_date=${startDate}&end_date=${endDate}&status=approved`),
         readJson(`/api/locations/${locationId}/holidays?start=${startDate}&end=${endDate}`),
         // ROSTERLOAD.1 (review B1) — no request a non-manager's session is
@@ -369,7 +376,7 @@ export function useScheduleData({
         loadedRange.current = null
       }
     }
-  }, [locationId, startDate, endDate, spendReferenceDate, canReadSpend, canReadAvailability])
+  }, [locationId, startDate, endDate, spendReferenceDate, canReadSpend, canReadAvailability, canReadContract])
 
   useEffect(() => { refresh() }, [refresh])
 

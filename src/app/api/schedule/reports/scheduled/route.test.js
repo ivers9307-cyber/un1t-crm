@@ -110,7 +110,7 @@ describe('GET scheduled', () => {
     const body = await (await GET(getReq(LOC_A))).json()
     expect(body.data.map(r => r.id)).toEqual(['s-hours'])
     // The QUERY excludes it, not only the defence-in-depth filter after it.
-    expect(db.calls).toContainEqual(['not', 'report_type', 'in', '(staff_cost)'])
+    expect(db.calls).toContainEqual(['not', 'report_type', 'in', '(staff_cost,utilisation)'])
   })
 
   it('a manager sees both, with no report_type filter on the query', async () => {
