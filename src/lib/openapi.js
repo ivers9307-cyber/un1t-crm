@@ -5096,7 +5096,7 @@ registry.registerPath({
     200: { description: "Claimed; the shift is on the caller's roster" },
     403: { description: 'Not on the staff of this studio', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Offer not found', content: { 'application/json': { schema: ErrorResponse } } },
-    409: { description: 'Taken, withdrawn, filled, started, or the caller is on leave / another shift / already on it', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Taken, withdrawn, filled, started, or the caller is on leave / another shift / already on it; or someone was changing the shift at that same moment (`code: try_again`: try again)', content: { 'application/json': { schema: ErrorResponse } } },
     503: { description: 'The leave / shift check could not be read; try again', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })

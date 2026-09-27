@@ -220,3 +220,23 @@ describe('API rows', () => {
     expect(managerOfferRow(row, { nowMs: QUIET })).toEqual({ id: 'o1', block_id: 'b1', block_date: '2026-09-29', created_at: 'c', notice_state: 'morning', broadcast_count: 0 })
   })
 })
+
+// C5 REPLACENITS.1 — claim_shift_offer can lose a deadlock (SQLSTATE 40P01)
+// to a manager adding the SAME coach at the same moment: the manager's insert
+// holds its (block, coach) index entry and waits for KEY SHARE on the shift,
+// while the claim holds the shift FOR UPDATE and waits on that index entry.
+// The claim's transaction rolled back, so nothing was claimed, and trying
+// again gives the true answer. A 409 the coach can act on, not a 500.
+describe('offerClaimRpcError — a deadlock is "try again" (REPLACENITS.1)', () => {
+  it('40P01 is a 409 with code try_again and words a coach can act on', () => {
+    expect(offerClaimRpcError({ code: '40P01', message: 'deadlock detected' })).toEqual({
+      status: 409, code: 'try_again', error: 'Someone was changing this shift at the same moment. Try again.',
+    })
+  })
+
+  it('every other mapping is unchanged and carries no code', () => {
+    expect(offerClaimRpcError({ code: 'XX000', message: 'boom' })).toEqual({ status: 500, error: 'Could not claim the shift.' })
+    expect(offerClaimRpcError({ code: '23505', message: 'dup' })).toEqual({ status: 409, error: 'You already have this shift.' })
+    expect(offerClaimRpcError({ code: 'P0001', message: 'offer_not_open: offer is already claimed' })).toEqual({ status: 409, error: 'Someone else has just taken this shift.' })
+  })
+})

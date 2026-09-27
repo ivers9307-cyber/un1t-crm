@@ -24,6 +24,7 @@ const { getCurrentUser } = await import('@/lib/auth')
 const { readOffer, claimOffer, processOffer } = await import('@/lib/shift-offer-server')
 const { loadBlockCandidates } = await import('@/lib/candidates-data')
 const { logRosterChange, markChangesNotified } = await import('@/lib/roster-change-log')
+const { logError, logWarn } = await import('@/lib/log')
 const { POST } = await import('./route.js')
 
 const OFFER_ID = '0ffe0000-0000-4000-8000-000000000001'
@@ -137,6 +138,24 @@ describe('POST /api/schedule/offers/[id]/claim', () => {
   it('an unexpected RPC failure is a logged 500', async () => {
     claimOffer.mockResolvedValue({ result: null, error: { code: 'XX000', message: 'boom' } })
     expect((await call()).status).toBe(500)
+  })
+
+  it('REPLACENITS.1 — the claim lost a deadlock with a manager adding the same coach: 409 try_again, a warning not an error, nothing logged or told', async () => {
+    claimOffer.mockResolvedValue({ result: null, error: { code: '40P01', message: 'deadlock detected' } })
+    const res = await call()
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ success: false, code: 'try_again', error: 'Someone was changing this shift at the same moment. Try again.' })
+    expect(logWarn).toHaveBeenCalledWith('shift-offer', 'claim_shift_offer lost a deadlock; the coach is asked to try again', { offerId: OFFER_ID, err: 'deadlock detected' })
+    expect(logError).not.toHaveBeenCalled()
+    expect(logRosterChange).not.toHaveBeenCalled()
+    expect(processOffer).not.toHaveBeenCalled()
+  })
+
+  it('REPLACENITS.1 — every other RPC refusal keeps its body shape (no code key)', async () => {
+    claimOffer.mockResolvedValue({ result: null, error: { code: 'XX000', message: 'boom' } })
+    const res = await call()
+    expect(await res.json()).toEqual({ success: false, error: 'Could not claim the shift.' })
+    expect(logError).toHaveBeenCalledWith('shift-offer', 'claim_shift_offer failed', { offerId: OFFER_ID, err: 'boom' })
   })
 
   it('filled meanwhile: 409 "no longer needs cover"', async () => {
