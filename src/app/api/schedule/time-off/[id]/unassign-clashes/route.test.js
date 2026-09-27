@@ -13,6 +13,8 @@ vi.mock('@/lib/auth', async (importOriginal) => {
 vi.mock('@/lib/permissions', () => ({ hasPermissionForLocation: vi.fn(() => true) }))
 vi.mock('@/lib/shift-unassign', () => ({
   unassignShiftAssignments: vi.fn(async (_db, { assignments }) => ({ removed: assignments, failed: [] })),
+  SHIFT_CHANGED_ERROR: 'This shift has just changed. Refresh and try again.',
+  SHIFTS_CHANGED_ERROR: 'These shifts have just changed. Refresh and try again.',
 }))
 
 const { createServerClient } = await import('@/lib/supabase')
@@ -129,5 +131,68 @@ describe('POST /api/schedule/time-off/[id]/unassign-clashes', () => {
     createServerClient.mockReturnValue(buildDb({ leave: LEAVE, assignments: ASSIGNMENTS }))
     await POST(req(), PROPS)
     expect(unassignShiftAssignments.mock.calls[0][1].assignments.map((a) => a.id)).toEqual(['a2'])
+  })
+})
+
+// C5 REPLACENITS.1 — the outcome's status. Every row "changed" (the roster
+// moved since the approver was shown it) is a 409 "refresh", not a 500 that
+// reads as our fault. A real delete error with nothing removed is still 500.
+// Rows already gone (a double submit) are not failures.
+describe('POST /api/schedule/time-off/[id]/unassign-clashes — outcome status (REPLACENITS.1)', () => {
+  const BOSS = { id: 'boss', role: 'master', profileRole: 'master', locations: [], rolesByLocation: {} }
+  const CHANGED = (id) => ({ id, error: 'This shift has just changed. Refresh and try again.', code: 'changed' })
+  const clash = (id, block_date) => ({ id, block_date, location_name: 'loc-1' })
+
+  beforeEach(() => {
+    getCurrentUser.mockResolvedValue(BOSS)
+    createServerClient.mockReturnValue(buildDb({ leave: LEAVE, assignments: ASSIGNMENTS }))
+  })
+
+  it('every row changed under the approver: 409 changed, with the rows listed', async () => {
+    unassignShiftAssignments.mockResolvedValueOnce({ removed: [], failed: [CHANGED('a1'), CHANGED('a2')], gone: [] })
+    const res = await POST(req(), PROPS)
+    expect(res.status).toBe(409)
+    const json = await res.json()
+    expect(json).toMatchObject({ success: false, code: 'changed', error: 'These shifts have just changed. Refresh and try again.' })
+    expect(json.data.failed.map((f) => f.id)).toEqual(['a1', 'a2'])
+  })
+
+  it('one row changed: the singular words', async () => {
+    unassignShiftAssignments.mockResolvedValueOnce({ removed: [], failed: [CHANGED('a1')], gone: [] })
+    const res = await POST(req(), PROPS)
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toBe('This shift has just changed. Refresh and try again.')
+  })
+
+  it('a real delete error among them, nothing removed: still 500 (ours), no changed code', async () => {
+    unassignShiftAssignments.mockResolvedValueOnce({ removed: [], failed: [CHANGED('a1'), { id: 'a2', error: 'locked' }], gone: [] })
+    const res = await POST(req(), PROPS)
+    expect(res.status).toBe(500)
+    const json = await res.json()
+    expect(json.code).toBeUndefined()
+    expect(json.error).toBe('2 shifts could not be unassigned')
+  })
+
+  it('some removed, one changed: 200 with success false, as before', async () => {
+    unassignShiftAssignments.mockResolvedValueOnce({ removed: [clash('a1', '2026-06-01')], failed: [CHANGED('a2')], gone: [] })
+    const res = await POST(req(), PROPS)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ success: false, error: '1 shift could not be unassigned' })
+  })
+
+  it('rows already gone (a double submit): not failures, listed as already_removed, 200 success', async () => {
+    unassignShiftAssignments.mockResolvedValueOnce({ removed: [], failed: [], gone: [clash('a1', '2026-06-01')] })
+    const res = await POST(req(), PROPS)
+    expect(res.status).toBe(200)
+    const json = await res.json()
+    expect(json.success).toBe(true)
+    expect(json.data.removed).toEqual([])
+    expect(json.data.already_removed).toEqual([{ assignment_id: 'a1', block_date: '2026-06-01', location_name: 'loc-1' }])
+  })
+
+  it('a helper answer with no `gone` key (the old shape) still works: already_removed is empty', async () => {
+    const res = await POST(req(), PROPS)
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.already_removed).toEqual([])
   })
 })

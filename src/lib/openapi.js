@@ -4992,9 +4992,10 @@ registry.registerPath({
     body: { content: { 'application/json': { schema: z.object({ assignment_ids: z.array(uuidLike).optional() }) } } },
   },
   responses: {
-    200: { description: '{ removed, skipped, failed }' },
+    200: { description: '{ removed, already_removed, skipped, failed }. already_removed = shifts another request had already taken off (a double submit); not failures.' },
     404: { description: 'Not found, or not decidable by the caller', content: { 'application/json': { schema: ErrorResponse } } },
-    409: { description: 'The leave is not approved', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'The leave is not approved; or every shift changed since it was shown (`code: changed`: refresh and try again)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Nothing was removed and at least one delete failed for a server reason', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
