@@ -8,7 +8,7 @@
 // window's rows after a failed load. Synthetic names only (public repo).
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup, fireEvent } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, act } from '@testing-library/react'
 import AttendanceReportClient from './AttendanceReportClient'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { defaultAttendancePeriod } from '@/lib/attendance-report'
@@ -77,6 +77,41 @@ describe('AttendanceReportClient (ATTENDREPORT.1)', () => {
     await screen.findByText('Could not load the attendance report. Try again.')
     expect(screen.queryByText('Coach A')).toBeNull()
     expect(screen.queryByText('No shifts in this window.')).toBeNull()
+  })
+
+  // Review: a slow earlier request must never land over a later one.
+  it('overlapping loads: only the latest request\'s answer shows', async () => {
+    const deferred = () => { let resolve; const promise = new Promise((r) => { resolve = r }); return { promise, resolve } }
+    const slow = deferred()
+    fetchMock.mockReturnValueOnce(slow.promise).mockReturnValueOnce(fail('to must be on or after from'))
+    render(<AttendanceReportClient activeLocationName="Studio One" />)
+    // Window B: the second request answers first, with a 400.
+    fireEvent.change(screen.getByLabelText('From'), { target: { value: '2026-08-01' } })
+    await screen.findByText('to must be on or after from')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    // Window A's slow success lands afterwards: dropped.
+    await act(async () => { slow.resolve({ json: () => Promise.resolve({ success: true, rows: [ROW], summary: SUMMARY, warnings: [] }) }) })
+    expect(screen.queryByText('Coach A')).toBeNull()
+    expect(screen.getByText('to must be on or after from')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Refresh/ }).disabled).toBe(false)
+  })
+
+  it('overlapping loads: a stale failure never clears the latest rows, and only the latest ends loading', async () => {
+    const deferred = () => { let resolve; const promise = new Promise((r) => { resolve = r }); return { promise, resolve } }
+    const slow = deferred()
+    const fast = deferred()
+    fetchMock.mockReturnValueOnce(slow.promise).mockReturnValueOnce(fast.promise)
+    render(<AttendanceReportClient activeLocationName="Studio One" />)
+    fireEvent.change(screen.getByLabelText('From'), { target: { value: '2026-08-01' } })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    // The older request fails first: the newer one is still loading.
+    await act(async () => { slow.resolve({ json: () => Promise.resolve({ success: false, error: 'stale failure' }) }) })
+    expect(screen.queryByText('stale failure')).toBeNull()
+    expect(screen.getByRole('button', { name: /Refresh/ }).disabled).toBe(true)
+    await act(async () => { fast.resolve({ json: () => Promise.resolve({ success: true, rows: [ROW], summary: SUMMARY, warnings: [] }) }) })
+    expect(screen.getByText('Coach A')).toBeTruthy()
+    expect(screen.queryByText('stale failure')).toBeNull()
+    expect(screen.getByRole('button', { name: /Refresh/ }).disabled).toBe(false)
   })
 
   it('an empty window still says so', async () => {

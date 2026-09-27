@@ -7,7 +7,7 @@
 // is the start the coach was given (a manager's adjusted start, else the
 // rostered one), which is what lateness is measured from.
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Loader2, Download, RefreshCw } from 'lucide-react'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { defaultAttendancePeriod, attendanceCsv } from '@/lib/attendance-report'
@@ -29,7 +29,15 @@ export default function AttendanceReportClient({ activeLocationName }) {
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(false)
 
+  // Every load takes a number; only the latest one's answer (success or
+  // failure) is shown, and only it ends `loading`. Without this a slow earlier
+  // request could land after a fast later one and show window A's rows under
+  // window B's dates.
+  const requestSeq = useRef(0)
+
   async function load() {
+    const id = ++requestSeq.current
+    const isLatest = () => id === requestSeq.current
     setLoading(true); setError(null)
     try {
       const url = new URL('/api/attendance', window.location.origin)
@@ -38,13 +46,14 @@ export default function AttendanceReportClient({ activeLocationName }) {
       const res = await fetch(url.toString(), { cache: 'no-store' })
       const json = await res.json()
       if (!json.success) throw new Error(json.error || 'failed')
-      setData(json)
+      if (isLatest()) setData(json)
     } catch (e) {
+      if (!isLatest()) return
       // Drop the last window's rows: a failed load never shows old data.
       setData(null)
       setError(e.message || 'Network error')
     } finally {
-      setLoading(false)
+      if (isLatest()) setLoading(false)
     }
   }
 
@@ -81,13 +90,13 @@ export default function AttendanceReportClient({ activeLocationName }) {
       {/* Filter bar */}
       <div className="mb-4 flex flex-wrap items-end gap-3 rounded-lg border border-neutral-200 bg-white p-3">
         <div>
-          <label className="mb-1 block text-xs font-medium text-neutral-700">From</label>
-          <input type="date" value={from} onChange={(e) => setFrom(e.target.value)}
+          <label htmlFor="attendance-from" className="mb-1 block text-xs font-medium text-neutral-700">From</label>
+          <input id="attendance-from" type="date" value={from} onChange={(e) => setFrom(e.target.value)}
             className="rounded-md border border-neutral-300 px-2 py-1.5 text-sm" />
         </div>
         <div>
-          <label className="mb-1 block text-xs font-medium text-neutral-700">To</label>
-          <input type="date" value={to} onChange={(e) => setTo(e.target.value)}
+          <label htmlFor="attendance-to" className="mb-1 block text-xs font-medium text-neutral-700">To</label>
+          <input id="attendance-to" type="date" value={to} onChange={(e) => setTo(e.target.value)}
             className="rounded-md border border-neutral-300 px-2 py-1.5 text-sm" />
         </div>
         <div>
