@@ -23,8 +23,8 @@
 // Hours are WALL-CLOCK minutes, wrapping past midnight when the end is before
 // the start, which is payroll.shiftHours's rule, so these totals agree with
 // every other hours figure (a shift across a DST change counts its wall-clock
-// length there too). One deliberate difference: '24:00' is midnight here;
-// payroll.timeToHours refuses hour 24 and counts such a shift 0h.
+// length there too). '24:00' is midnight at the end of the day, here and in
+// payroll (PAYROLL24.1; src/lib/hours-24.test.js pins the agreement).
 //
 // ENDED / NO ARRIVAL are judged on real instants in the studio's zone
 // (wallInstant: DST-exact, '24:00' = the next midnight; an end before the start

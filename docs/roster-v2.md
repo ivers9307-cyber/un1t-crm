@@ -279,7 +279,7 @@ own roster row, so this is one per publish.
 current window, the change (unchanged, moved, added after publish, removed
 after publish) and the arrival stamp, with totals. Blocks match on the slot,
 coaches on profile id within it (a swap reads as removed + added). Hours are
-wall-clock like payroll's, except that `'24:00'` counts as midnight here.
+wall-clock like payroll's; `'24:00'` counts as midnight in both (PAYROLL24.1).
 Arrival is `arrived_at`, carried onto a back-to-back shift exactly as the
 attendance report carries it: the gap (at most an hour, same coach, same day)
 is measured on the BLOCKS' times, never an override. "Ended" uses the coach's
