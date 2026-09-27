@@ -154,7 +154,7 @@ describe('fetchPendingRosterApprovalsCount', () => {
 function chainableBuilder(response) {
   const calls = []
   const b = { calls }
-  for (const m of ['select', 'eq', 'neq', 'gt', 'gte', 'lte', 'is', 'not', 'in', 'order', 'range', 'limit']) {
+  for (const m of ['select', 'eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'is', 'not', 'in', 'order', 'range', 'limit']) {
     b[m] = (...args) => { calls.push([m, ...args]); return b }
   }
   b.then = (resolve, reject) => Promise.resolve()
@@ -700,5 +700,64 @@ describe('fetchTodayOps — labour this week counts live, published shifts only'
     ]), 'loc-1')
     expect(res.data.labourWeekCents).toBe(8000)
     expect(res.data.hoursWeek).toBe(4)
+  })
+})
+
+// DUBLINDAY.1 — the Today strip's "today" and "this week" are Dublin calendar
+// days. They were the server's local days, and the server runs in UTC, so
+// from 00:00 to 01:00 Dublin in summer the strip read yesterday.
+describe('fetchTodayOps — today and this week are Dublin days', () => {
+  function recordingDb() {
+    const builders = {}
+    return {
+      builders,
+      from(table) {
+        const response = table === 'shift_blocks' || table === 'shift_assignments'
+          ? { data: [], error: null }
+          : { count: 0, error: null }
+        const b = chainableBuilder(response)
+        ;(builders[table] ||= []).push(b)
+        return b
+      },
+    }
+  }
+  const arg = (b, method, col) => b.calls.find((c) => c[0] === method && c[1] === col)?.[2]
+
+  it('00:30 Dublin on Monday 28 Sep 2026 (23:30 UTC Sunday) is Monday, in a Monday week', async () => {
+    const db = recordingDb()
+    const res = await fetchTodayOps(db, 'loc-1', new Date('2026-09-27T23:30:00Z'))
+    expect(res.success).toBe(true)
+    expect(arg(db.builders.bookings[0], 'eq', 'booking_date')).toBe('2026-09-28')
+    expect(arg(db.builders.shift_blocks[0], 'eq', 'block_date')).toBe('2026-09-28')
+    // Irish summer time: Dublin midnight is 23:00 UTC the day before.
+    expect(arg(db.builders.class_occurrences[0], 'gte', 'starts_at')).toBe('2026-09-27T23:00:00.000Z')
+    expect(arg(db.builders.class_occurrences[0], 'lt', 'starts_at')).toBe('2026-09-28T23:00:00.000Z')
+    const shifts = db.builders.shift_assignments[0]
+    expect(arg(shifts, 'gte', 'shift_blocks.block_date')).toBe('2026-09-28')
+    expect(arg(shifts, 'lte', 'shift_blocks.block_date')).toBe('2026-10-04')
+  })
+
+  it('23:30 Dublin on Sunday 4 Oct 2026 is still Sunday, in the week that began Monday 28 Sep', async () => {
+    const db = recordingDb()
+    await fetchTodayOps(db, 'loc-1', new Date('2026-10-04T22:30:00Z'))
+    expect(arg(db.builders.bookings[0], 'eq', 'booking_date')).toBe('2026-10-04')
+    const shifts = db.builders.shift_assignments[0]
+    expect(arg(shifts, 'gte', 'shift_blocks.block_date')).toBe('2026-09-28')
+    expect(arg(shifts, 'lte', 'shift_blocks.block_date')).toBe('2026-10-04')
+  })
+
+  it('the clocks-back day (25 Oct 2026) is a 25-hour window from 23:00 UTC to 00:00 UTC', async () => {
+    const db = recordingDb()
+    await fetchTodayOps(db, 'loc-1', new Date('2026-10-25T12:00:00Z'))
+    expect(arg(db.builders.class_occurrences[0], 'gte', 'starts_at')).toBe('2026-10-24T23:00:00.000Z')
+    expect(arg(db.builders.class_occurrences[0], 'lt', 'starts_at')).toBe('2026-10-26T00:00:00.000Z')
+  })
+
+  it('in winter (GMT) Dublin midnight is UTC midnight', async () => {
+    const db = recordingDb()
+    await fetchTodayOps(db, 'loc-1', new Date('2026-12-01T00:30:00Z'))
+    expect(arg(db.builders.bookings[0], 'eq', 'booking_date')).toBe('2026-12-01')
+    expect(arg(db.builders.class_occurrences[0], 'gte', 'starts_at')).toBe('2026-12-01T00:00:00.000Z')
+    expect(arg(db.builders.class_occurrences[0], 'lt', 'starts_at')).toBe('2026-12-02T00:00:00.000Z')
   })
 })

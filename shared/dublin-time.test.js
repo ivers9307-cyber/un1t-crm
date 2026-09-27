@@ -146,3 +146,26 @@ describe('DUBLIN_DAY_MS', () => {
     expect(DUBLIN_DAY_MS).toBe(24 * 3600 * 1000)
   })
 })
+
+// DUBLINDAY.1 — the end of a range ending on the clocks-back day was that
+// day's own start (midnight + 24h lands at 23:00 the same Dublin day), so the
+// window was empty; a month ending on it (October 2027) was too.
+describe('dublinDayRangeMs — a range ending on the clocks-back day', () => {
+  it('25 Oct 2026 alone is a 25-hour window', () => {
+    const { startMs, endMs } = dublinDayRangeMs('2026-10-25', '2026-10-25')
+    expect(new Date(startMs).toISOString()).toBe('2026-10-24T23:00:00.000Z')
+    expect(new Date(endMs).toISOString()).toBe('2026-10-26T00:00:00.000Z')
+    expect(endMs - startMs).toBe(25 * 3600 * 1000)
+  })
+
+  it('October 2027 (which ends on the clocks-back Sunday) ends at 00:00 UTC on 1 Nov', () => {
+    const { startMs, endMs } = dublinDayRangeMs('2027-10-01', '2027-10-31')
+    expect(new Date(startMs).toISOString()).toBe('2027-09-30T23:00:00.000Z')
+    expect(new Date(endMs).toISOString()).toBe('2027-11-01T00:00:00.000Z')
+  })
+
+  it('the spring-forward day (29 Mar 2026) is a 23-hour window', () => {
+    const { startMs, endMs } = dublinDayRangeMs('2026-03-29', '2026-03-29')
+    expect(endMs - startMs).toBe(23 * 3600 * 1000)
+  })
+})

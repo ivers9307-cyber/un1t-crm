@@ -659,16 +659,26 @@ export async function fetchAdsSummary(supabase, locationId, now = new Date()) {
 
 // Today's operations strip. Labour reuses the existing week window.
 export async function fetchTodayOps(supabase, locationId, now = new Date()) {
-  const todayIso = isoDate(now)
-
+  // DUBLINDAY.1 — "today" and "this week" are Europe/Dublin calendar days.
+  // They were the SERVER's local days (isoDate/startOfWeek read local time),
+  // and both callers run on Vercel in UTC: from 00:00 to 01:00 Dublin in
+  // summer the strip showed YESTERDAY's bookings, classes and staff, and on a
+  // Monday in that hour it costed LAST week's labour.
+  // Loaded lazily, not at module scope: this module is also imported by the
+  // staff app, and a Hermes build without full ICU throws on a timeZone
+  // formatter built at import (mobile/lib/dates.js, ROSTER-FIX.7f). This
+  // function only ever runs on the server, so the phone never loads it.
+  const { dublinDateKey, dublinDayRangeMs, dublinWeekStartMs, dublinAddDays } = await import('./dublin-time.js')
+  const nowMs = now.getTime()
+  const todayIso = dublinDateKey(nowMs)
   // class_occurrences (mig 284) has no date column — it stores starts_at
-  // (timestamptz). Count today's classes via a Dublin wall-clock day window
-  // and exclude cancelled occurrences (cancelled_at, mig 344 — live reads
-  // always filter .is('cancelled_at', null)).
-  const dayStart = new Date(now); dayStart.setHours(0, 0, 0, 0)
-  const dayEnd = new Date(now); dayEnd.setHours(23, 59, 59, 999)
-  const weekStart = startOfWeek(now)
-  const weekEnd = endOfWeek(now)
+  // (timestamptz). Count today's classes over the Dublin day as a half-open
+  // UTC window [00:00 Dublin, next 00:00 Dublin), and exclude cancelled
+  // occurrences (cancelled_at, mig 344 — live reads always filter
+  // .is('cancelled_at', null)).
+  const { startMs: dayStartMs, endMs: dayEndMs } = dublinDayRangeMs(todayIso, todayIso)
+  const weekStartIso = dublinDateKey(dublinWeekStartMs(nowMs))
+  const weekEndIso = dublinAddDays(weekStartIso, 6)
 
   // All four queries are independent — run them in one Promise.all.
   const [
@@ -684,8 +694,8 @@ export async function fetchTodayOps(supabase, locationId, now = new Date()) {
     supabase.from('class_occurrences')
       .select('id', { count: 'exact', head: true })
       .eq('location_id', locationId)
-      .gte('starts_at', dayStart.toISOString())
-      .lte('starts_at', dayEnd.toISOString())
+      .gte('starts_at', new Date(dayStartMs).toISOString())
+      .lt('starts_at', new Date(dayEndMs).toISOString())
       .is('cancelled_at', null),
     // ROSTER-FIX.1 — `status` rides along so staffToday can drop cancelled
     // rows. Without it an approved swap-drop still counted its coach as
@@ -700,7 +710,7 @@ export async function fetchTodayOps(supabase, locationId, now = new Date()) {
     // LABOURWEEK.1 — published rosters only: a draft week is not labour yet
     // (the same rule LABOUR.1 costs by). Cancelled rows are dropped below.
     fetchDashboardShifts(supabase, {
-      locationId, startDate: isoDate(weekStart), endDate: isoDate(weekEnd), withProfiles: true, publishedOnly: true,
+      locationId, startDate: weekStartIso, endDate: weekEndIso, withProfiles: true, publishedOnly: true,
     }),
   ])
   if (e1) return { success: false, error: e1.message }
