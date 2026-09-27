@@ -71,7 +71,7 @@ describe('sendPushToRolesAtLocation — a failed read is not "nobody"', () => {
   })
 })
 
-// C1 RECIPIENTS.1 (owner addition) — resolveLocationMemberIds had the same
+// C1 RECIPIENTS.1 (owner addition) — the old member resolver had the same
 // shape: `const { data: links } = …`, the error discarded, [] on a failed
 // read. Its one caller is the inbox-staff "Mia is handling a chat" ping.
 describe('readLocationMemberIds — every active member, with the read error', () => {

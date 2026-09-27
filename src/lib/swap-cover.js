@@ -85,9 +85,10 @@ function isHalfDayLeave(t) {
   return Number.isFinite(days) && days < 1
 }
 
-// The rule resolveRoleRecipientIds (src/lib/push.js) applies, re-stated on the
-// link row itself: a swallowed read failure inside that resolver returns [],
-// and an empty manager list must not turn every manager into a pool recipient.
+// The rule readRoleRecipientIds (src/lib/push.js, roleRecipientIdsFromLinks)
+// applies, re-stated on the link row itself: a belt to the server half, which
+// derives managerIds from the same rows. An empty manager list must never turn
+// every manager into a pool recipient.
 function isManagerLink(link) {
   return MANAGER_ROLES.includes(link?.role) || link?.profiles?.role === 'master'
 }
@@ -117,7 +118,7 @@ function isManagerLink(link) {
  * @param {string} args.locationId        the swap's studio
  * @param {string[]} [args.orgLocationIds] studios in the same organisation (incl. this one)
  * @param {object[]} args.members         profile_locations rows: { profile_id, location_id, role, profiles: { role, active } }
- * @param {string[]} args.managerIds      swap_open recipients (resolveRoleRecipientIds)
+ * @param {string[]} args.managerIds      swap_open recipients (roleRecipientIdsFromLinks over `members`)
  * @param {string} args.requesterId
  * @param {{id?:string, block_date:string, start_time?:string, end_time?:string}} args.block
  * @param {object[]} [args.timeOff]       time_off_requests rows for the candidates
