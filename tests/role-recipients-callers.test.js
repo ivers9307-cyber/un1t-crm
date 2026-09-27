@@ -12,7 +12,7 @@
 // name at runtime. The behavioural proof is in push-roles.test.js,
 // push-dedup.test.js and each migrated caller's own suite.
 import { describe, it, expect } from 'vitest'
-import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -21,26 +21,27 @@ const SCAN = ['src', 'shared', 'mobile', 'scripts', 'tests']
 const SKIP_DIRS = new Set(['node_modules', 'ios', 'android', 'dist', 'build'])
 const SOURCE = /\.(js|jsx|mjs)$/
 const SELF = 'tests/role-recipients-callers.test.js'
+// ~4,400 files: a loaded runner took >5 s, so the tree is read once, at
+// collection, and each test only matches.
+const SCAN_TIMEOUT_MS = 30_000
 
 function walk(dir, out = []) {
-  for (const name of readdirSync(dir)) {
-    if (name.startsWith('.') || SKIP_DIRS.has(name)) continue
-    const full = join(dir, name)
-    if (statSync(full).isDirectory()) walk(full, out)
-    else if (SOURCE.test(name)) out.push(full)
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name.startsWith('.') || SKIP_DIRS.has(entry.name)) continue
+    const full = join(dir, entry.name)
+    if (entry.isDirectory()) walk(full, out)
+    else if (SOURCE.test(entry.name)) out.push(full)
   }
   return out
 }
 
-const FILES = SCAN
+const SOURCES = SCAN
   .flatMap((d) => walk(join(ROOT, d)))
-  .map((full) => relative(ROOT, full).split(sep).join('/'))
+  .map((full) => ({ rel: relative(ROOT, full).split(sep).join('/'), text: readFileSync(full, 'utf8') }))
 
 function namers(name, allowed) {
   const re = new RegExp(`\\b${name}\\b`)
-  return FILES
-    .filter((rel) => !allowed.has(rel))
-    .filter((rel) => re.test(readFileSync(join(ROOT, rel), 'utf8')))
+  return SOURCES.filter(({ rel, text }) => !allowed.has(rel) && re.test(text)).map(({ rel }) => rel)
 }
 
 describe('the swallowed-error recipient readers have no callers (C1 RECIPIENTS.1)', () => {
@@ -51,9 +52,11 @@ describe('the swallowed-error recipient readers have no callers (C1 RECIPIENTS.1
       SELF,
     ])
     expect(namers('resolveRoleRecipientIds', allowed)).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('nothing names resolveLocationMemberIds (replaced by readLocationMemberIds)', () => {
+    // push.js keeps the old name in the replacement's docstring (a pointer
+    // for whoever greps for it); nothing else may name it.
     expect(namers('resolveLocationMemberIds', new Set([SELF, 'src/lib/push.js']))).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 })
