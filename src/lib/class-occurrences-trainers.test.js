@@ -33,9 +33,9 @@ import { dublinDateKey } from '@/lib/dublin-time'
 
 const LOC = 'a0000000-0000-0000-0000-000000000001'
 const NOW = Date.parse('2026-08-04T10:00:00.000Z')
-const ID1 = '61a38e7d0cf1970aae0fb3a9'
-const ID2 = 'deadbeefdeadbeefdeadbeef'
-const ID3 = 'cafebabecafebabecafebabe'
+const ID1 = 'aaaaaaaaaaaaaaaaaaaaaaa1'
+const ID2 = 'aaaaaaaaaaaaaaaaaaaaaaa2'
+const ID3 = 'aaaaaaaaaaaaaaaaaaaaaaa3'
 
 beforeEach(() => {
   fetchUpcomingEvents.mockReset()
@@ -56,33 +56,33 @@ describe('resolveTrainerNames', () => {
   })
 
   it('operator overrides win and skip the API entirely', async () => {
-    const out = await resolveTrainerNames(creds({ trainerNames: { [ID1]: 'Jess Murphy' } }), [ID1])
-    expect(out).toEqual({ [ID1]: 'Jess Murphy' })
+    const out = await resolveTrainerNames(creds({ trainerNames: { [ID1]: 'Coach One' } }), [ID1])
+    expect(out).toEqual({ [ID1]: 'Coach One' })
     expect(fetchGlofoxTrainers).not.toHaveBeenCalled()
   })
 
   it('override keys match case-insensitively (map keys stored lowercase)', async () => {
     const out = await resolveTrainerNames(
-      creds({ trainerNames: { [ID1.toUpperCase()]: 'Jess' } }), [ID1])
-    expect(out).toEqual({ [ID1]: 'Jess' })
+      creds({ trainerNames: { [ID1.toUpperCase()]: 'Coach One' } }), [ID1])
+    expect(out).toEqual({ [ID1]: 'Coach One' })
   })
 
   it('resolves remaining ids via the /2.0/trainers list', async () => {
     fetchGlofoxTrainers.mockResolvedValue([
-      { _id: ID1, name: 'Jess Murphy' },
-      { _id: ID2, first_name: 'Dan', last_name: 'Byrne' },
+      { _id: ID1, name: 'Coach One' },
+      { _id: ID2, first_name: 'Coach', last_name: 'Two' },
     ])
     const out = await resolveTrainerNames(creds(), [ID1, ID2])
-    expect(out).toEqual({ [ID1]: 'Jess Murphy', [ID2]: 'Dan Byrne' })
+    expect(out).toEqual({ [ID1]: 'Coach One', [ID2]: 'Coach Two' })
     expect(fetchGlofoxTrainers).toHaveBeenCalledTimes(1)
     expect(fetchMemberResult).not.toHaveBeenCalled()
   })
 
   it('falls back to /2.0/members per id the list missed', async () => {
-    fetchGlofoxTrainers.mockResolvedValue([{ _id: ID1, name: 'Jess' }])
-    fetchMemberResult.mockResolvedValue({ ok: true, member: { _id: ID2, first_name: 'Dan' } })
+    fetchGlofoxTrainers.mockResolvedValue([{ _id: ID1, name: 'Coach One' }])
+    fetchMemberResult.mockResolvedValue({ ok: true, member: { _id: ID2, first_name: 'Coach', last_name: 'Two' } })
     const out = await resolveTrainerNames(creds(), [ID1, ID2])
-    expect(out).toEqual({ [ID1]: 'Jess', [ID2]: 'Dan' })
+    expect(out).toEqual({ [ID1]: 'Coach One', [ID2]: 'Coach Two' })
     expect(fetchMemberResult).toHaveBeenCalledTimes(1)
     expect(fetchMemberResult).toHaveBeenCalledWith(expect.anything(), ID2)
   })
@@ -213,11 +213,11 @@ describe('syncOccurrencesForLocation: trainer-name mapping + backfill', () => {
     const db = makeDb()
     fetchUpcomingEvents.mockResolvedValue({ ok: true, events: [glofoxEvent('evt1', { trainers: [ID1] })] })
     const out = await syncOccurrencesForLocation(db, {
-      locationId: LOC, creds: creds({ trainerNames: { [ID1]: 'Jess Murphy' } }), nowMs: NOW,
+      locationId: LOC, creds: creds({ trainerNames: { [ID1]: 'Coach One' } }), nowMs: NOW,
     })
     expect(out.ok).toBe(true)
     const row = db._calls.upserts.flatMap((u) => u.rows).find((r) => r.glofox_event_id === 'evt1')
-    expect(row.instructor).toBe('Jess Murphy')
+    expect(row.instructor).toBe('Coach One')
   })
 
   it('backfills PAST rows whose instructor is null from raw.trainers[0]', async () => {
@@ -231,11 +231,11 @@ describe('syncOccurrencesForLocation: trainer-name mapping + backfill', () => {
     })
     fetchUpcomingEvents.mockResolvedValue({ ok: true, events: [glofoxEvent('evt1', { trainers: [ID1] })] })
     await syncOccurrencesForLocation(db, {
-      locationId: LOC, creds: creds({ trainerNames: { [ID1]: 'Jess Murphy' } }), nowMs: NOW,
+      locationId: LOC, creds: creds({ trainerNames: { [ID1]: 'Coach One' } }), nowMs: NOW,
     })
     const byId = Object.fromEntries(db._store.class_occurrences.map((r) => [r.glofox_event_id, r]))
-    expect(byId['old-1'].instructor).toBe('Jess Murphy')
-    expect(byId['old-2'].instructor).toBe('Jess Murphy')
+    expect(byId['old-1'].instructor).toBe('Coach One')
+    expect(byId['old-2'].instructor).toBe('Coach One')
     expect(byId['old-other'].instructor).toBeNull() // different (unmapped) trainer
     expect(byId['too-old'].instructor).toBeNull()   // outside the 35-day backfill window
   })
@@ -243,19 +243,19 @@ describe('syncOccurrencesForLocation: trainer-name mapping + backfill', () => {
   it('corrects single-trainer rows when the operator override changes', async () => {
     const db = makeDb({
       class_occurrences: [
-        pastOcc('wrong', { daysAgo: 5, instructor: 'J. Murphy' }),
-        pastOcc('multi', { daysAgo: 5, instructor: 'J. Murphy, Dan', trainers: [ID1, ID2] }),
+        pastOcc('wrong', { daysAgo: 5, instructor: 'C. One' }),
+        pastOcc('multi', { daysAgo: 5, instructor: 'C. One, Coach Two', trainers: [ID1, ID2] }),
       ],
     })
     fetchUpcomingEvents.mockResolvedValue({ ok: true, events: [glofoxEvent('evt1', { trainers: [ID1] })] })
     await syncOccurrencesForLocation(db, {
-      locationId: LOC, creds: creds({ trainerNames: { [ID1]: 'Jess Murphy' } }), nowMs: NOW,
+      locationId: LOC, creds: creds({ trainerNames: { [ID1]: 'Coach One' } }), nowMs: NOW,
     })
     const byId = Object.fromEntries(db._store.class_occurrences.map((r) => [r.glofox_event_id, r]))
-    expect(byId['wrong'].instructor).toBe('Jess Murphy')
+    expect(byId['wrong'].instructor).toBe('Coach One')
     // Multi-trainer rows are owned by the upsert path (joined names) —
     // the correction UPDATE must not stomp them down to trainers[0].
-    expect(byId['multi'].instructor).toBe('J. Murphy, Dan')
+    expect(byId['multi'].instructor).toBe('C. One, Coach Two')
   })
 
   it('runs no backfill when nothing resolves (unmapped ids stay null, no updates fire)', async () => {
@@ -272,7 +272,7 @@ describe('syncOccurrencesForLocation: trainer-name mapping + backfill', () => {
     const db = makeDb({ class_occurrences: [pastOcc('old-1', { daysAgo: 5 })] })
     fetchUpcomingEvents.mockResolvedValue({ ok: false, status: 502, body: {} })
     const out = await syncOccurrencesForLocation(db, {
-      locationId: LOC, creds: creds({ trainerNames: { [ID1]: 'Jess' } }), nowMs: NOW,
+      locationId: LOC, creds: creds({ trainerNames: { [ID1]: 'Coach One' } }), nowMs: NOW,
     })
     expect(out.ok).toBe(false)
     expect(db._store.class_occurrences[0].instructor).toBeNull()
@@ -328,7 +328,7 @@ describe('isTrainerLookupTick', () => {
 
 describe('readSpineTrainerNames (the names the spine already holds)', () => {
   const OTHER_LOC = 'b0000000-0000-0000-0000-000000000002'
-  const OTHER_ID = '0123456789abcdef01234567'
+  const OTHER_ID = 'aaaaaaaaaaaaaaaaaaaaaaa9'
 
   it('returns the newest single-trainer label per id inside the 35-day window', async () => {
     const db = makeDb({
