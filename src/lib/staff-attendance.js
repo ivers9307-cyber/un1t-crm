@@ -48,6 +48,14 @@ const DEFAULT_GRACE_MS = 60 * 1000          // 1 min
  * offset. This is the standard offset-detection pattern that
  * survives DST without needing the IANA tz database client-side.
  *
+ * ATTENDREPORT.1 — two passes (the tz-time.js solveWallMs technique). Pass 1
+ * reads the zone's offset at the wall clock taken AS IF it were UTC; for a zone
+ * west of UTC that instant is on the wrong side of the change for part of each
+ * DST day (Los Angeles 07:00 on 8 Mar read as 15:00Z, not 14:00Z). Pass 2
+ * re-reads the offset at pass 1's answer and is kept only when it reads back as
+ * exactly the wall time asked. A time in a spring-forward gap, or in a repeated
+ * hour, keeps pass 1's answer, so Europe/Dublin's answers are unchanged.
+ *
  * @param {string} dateStr   YYYY-MM-DD (Postgres `date` columns)
  * @param {string} timeStr   HH:MM[:SS] (Postgres `time` columns)
  * @param {string} tz        IANA zone, e.g. 'Europe/Dublin'
@@ -59,30 +67,27 @@ export function resolveScheduledAt(dateStr, timeStr, tz = 'UTC') {
   const [hh = 0, mi = 0, ss = 0] = String(timeStr).split(':').map(Number)
   if ([yy, mm, dd, hh, mi].some((n) => !Number.isFinite(n))) return null
 
-  // Treat the wall clock values AS IF they were UTC — we'll fix the
-  // offset in a moment.
-  const guess = new Date(Date.UTC(yy, mm - 1, dd, hh, mi, ss))
-
-  // What does that UTC instant look like in the target tz?
   const fmt = new Intl.DateTimeFormat('en-CA', {
     timeZone: tz,
     year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', second: '2-digit',
     hour12: false,
   })
-  const parts = Object.fromEntries(fmt.formatToParts(guess).map((p) => [p.type, p.value]))
-  const tzY  = +parts.year
-  const tzM  = +parts.month
-  const tzD  = +parts.day
-  // Intl reports midnight as '24' in some locales — normalise.
-  const tzH  = (+parts.hour === 24) ? 0 : +parts.hour
-  const tzMi = +parts.minute
-  const tzS  = +parts.second
+  // The zone's wall clock at instant `ms`, re-encoded as if it were UTC.
+  const wallAt = (ms) => {
+    const parts = Object.fromEntries(fmt.formatToParts(new Date(ms)).map((p) => [p.type, p.value]))
+    // Intl reports midnight as '24' in some locales — normalise.
+    const h = (+parts.hour === 24) ? 0 : +parts.hour
+    return Date.UTC(+parts.year, +parts.month - 1, +parts.day, h, +parts.minute, +parts.second)
+  }
 
-  const desiredUtc = Date.UTC(yy, mm - 1, dd, hh, mi, ss)
-  const observedUtc = Date.UTC(tzY, tzM - 1, tzD, tzH, tzMi, tzS)
-  const offsetMs = desiredUtc - observedUtc
-  return new Date(guess.getTime() + offsetMs)
+  // The wall clock values AS IF they were UTC.
+  const want = Date.UTC(yy, mm - 1, dd, hh, mi, ss)
+  // Pass 1: the offset read at `want` itself (the old single pass).
+  const ms1 = want - (wallAt(want) - want)
+  // Pass 2: the offset read at pass 1's answer, kept only when exact.
+  const ms2 = want - (wallAt(ms1) - ms1)
+  return new Date(ms2 !== ms1 && wallAt(ms2) === want ? ms2 : ms1)
 }
 
 // ── Lateness bucketing ────────────────────────────────────────
