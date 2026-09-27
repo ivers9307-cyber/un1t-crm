@@ -24,7 +24,12 @@ import { pctDelta, sumCampaignRows, shapeFunnel, FUNNEL_SLUGS } from './dashboar
 const isLiveRow = (a) => a?.status !== 'cancelled'
 
 // ============================================================
-// Date helpers (shared across all three fetchers)
+// Date helpers — the RUNNING device's local calendar.
+// A4 REVENUEMTD.1: on a staff phone in Ireland, local IS Dublin, which is what
+// the phone-run fetchers want (fetchPersonalDashboardData's fallback,
+// fetchStudioDashboardData). On the server local is UTC (Vercel), so a
+// server-run fetcher must never use these: it loads the Dublin calendar with
+// loadDublinTime() instead (pinned in dashboard-data.test.js).
 // ============================================================
 
 export function isoDate(d) {
@@ -706,11 +711,9 @@ export async function fetchTodayOps(supabase, locationId, now = new Date()) {
   // and both callers run on Vercel in UTC: from 00:00 to 01:00 Dublin in
   // summer the strip showed YESTERDAY's bookings, classes and staff, and on a
   // Monday in that hour it costed LAST week's labour.
-  // Loaded lazily, not at module scope: this module is also imported by the
-  // staff app, and a Hermes build without full ICU throws on a timeZone
-  // formatter built at import (mobile/lib/dates.js, ROSTER-FIX.7f). This
-  // function only ever runs on the server, so the phone never loads it.
-  const { dublinDateKey, dublinDayRangeMs, dublinWeekStartMs, dublinAddDays } = await import('./dublin-time.js')
+  // Loaded lazily through loadDublinTime (see there): this function only ever
+  // runs on the server, so the phone never loads it.
+  const { dublinDateKey, dublinDayRangeMs, dublinWeekStartMs, dublinAddDays } = await loadDublinTime()
   const nowMs = now.getTime()
   const todayIso = dublinDateKey(nowMs)
   // class_occurrences (mig 284) has no date column — it stores starts_at

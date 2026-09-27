@@ -6,6 +6,8 @@
 // in the phase 4 panel.
 
 import { describe, it, expect, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { fetchIncompletePayProfiles, fetchPendingRosterApprovalsCount, paginatedSumCents, fetchAdsSummary, fetchStudioDashboardData, fetchPersonalDashboardData, fetchUnstaffedBlocksThisWeek, fetchTodayOps, fetchRevenueMTD, fetchFunnelCounts } from './dashboard-data'
 
 function mockSupabaseFor(rows) {
@@ -995,6 +997,60 @@ describe("fetchPersonalDashboardData — the weeks hang off the caller's today (
       }
     } finally {
       vi.useRealTimers()
+    }
+  })
+})
+
+// A4 REVENUEMTD.1 — the staff app imports this module. Hermes without full
+// ICU throws on a timeZone'd Intl.DateTimeFormat, and shared/dublin-time.js
+// builds two at import, so it may only ever be loaded lazily, from the
+// functions that run on the server. And those functions may never fall back to
+// the local calendar, which on the server is UTC's.
+describe('dashboard-data stays loadable on the phone, and the server reads Dublin (A4 REVENUEMTD.1)', () => {
+  const source = readFileSync(path.resolve(import.meta.dirname, './dashboard-data.js'), 'utf8')
+  // Whole-line comments first (they name the old helpers on purpose), then blocks.
+  const code = source.replace(/^\s*\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '')
+  const body = (name) => {
+    const start = code.indexOf(`export async function ${name}(`)
+    const next = code.indexOf('\nexport ', start + 1)
+    return start === -1 ? '' : code.slice(start, next === -1 ? undefined : next)
+  }
+
+  it('never imports dublin-time at module scope', () => {
+    expect(code).not.toMatch(/^\s*import\s[^\n]*dublin-time/m)
+    expect(code).not.toMatch(/^\s*export\s[^\n]*from\s+['"][^'"]*dublin-time/m)
+    expect(code).not.toMatch(/new Intl\.DateTimeFormat/)
+    expect(code).toMatch(/import\(\s*['"]\.\/dublin-time\.js['"]\s*\)/)
+  })
+
+  it.each(['fetchTodayOps', 'fetchRevenueMTD', 'fetchFunnelCounts', 'fetchAdsSummary'])(
+    '%s (server-run) builds no window from the local calendar',
+    (name) => {
+      const b = body(name)
+      expect(b.length, `${name} not found`).toBeGreaterThan(50)
+      expect(b).toMatch(/loadDublinTime\(\)/)
+      expect(b).not.toMatch(/\b(startOfMonth|startOfWeek|endOfWeek|isoDate)\(/)
+      expect(b).not.toMatch(/\.(setHours|setDate|getDate|getDay|getMonth|getFullYear)\(/)
+    },
+  )
+
+  it('imports and runs the phone-run fetchers when a timeZone formatter throws (Hermes without ICU)', async () => {
+    // A `function`, not an arrow: vitest warns on an arrow-bodied constructor
+    // mock (the mobile/lib/dates.test.js ROSTER-FIX.7f pattern).
+    const intlSpy = vi.spyOn(Intl, 'DateTimeFormat').mockImplementation(function () {
+      throw new Error('no icu')
+    })
+    try {
+      vi.resetModules()
+      const fresh = await import('./dashboard-data.js')
+      const db = { from: () => chainableBuilder({ data: [], count: 0, error: null }) }
+      const personal = await fresh.fetchPersonalDashboardData(db, 'p1', 'loc-1')
+      expect(personal.success).toBe(true)
+      const studio = await fresh.fetchStudioDashboardData(db, 'loc-1')
+      expect(studio.success).toBe(true)
+    } finally {
+      intlSpy.mockRestore()
+      vi.resetModules()
     }
   })
 })
