@@ -3766,12 +3766,74 @@ registry.registerPath({
   tags: ['Locations'],
   security: [{ CookieAuth: [] }],
   summary: 'Trainer ids seen in the Glofox timetable + their resolved names',
-  description: 'STUDIO-KPI.4 — distinct trainer ids from the last 28 days of class_occurrences with how each resolves (operator override from settings.glofox.trainer_names, the Glofox API, or unresolved). Powers the Trainer-names reference list in the Glofox settings tab. Master/owner/manager only.',
+  description: 'STUDIO-KPI.4 — distinct trainer ids from the last 28 days of class_occurrences with how each resolves (operator override from settings.glofox.trainer_names, the Glofox API, or unresolved). Powers the Trainer-names reference list in the Glofox settings tab. Master, or owner/manager AT this location (judged at the path id, not the active studio).',
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: '{ trainers: [{ id, name, source, classes }], windowDays }' },
     400: { description: 'Glofox not configured on this location', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'unauthenticated — no session', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — owner or manager at this location required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not a member of this location (indistinguishable from a missing id)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'class_occurrences_read_failed — the timetable read failed (logged)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// Glofox membership catalogue for the trial-membership picker (GLOFOX3.1)
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/glofox-memberships',
+  tags: ['Locations'],
+  security: [{ CookieAuth: [] }],
+  summary: 'The Glofox membership catalogue (memberships + plans) at this location',
+  description: 'GLOFOX3.1 — the studio\'s Glofox memberships with their plans, read live from the Glofox API. Powers the trial-membership picker in the Glofox settings tab and the landing-page settings form. Master, or owner/manager AT this location (judged at the path id, not the active studio). Returns { memberships, count }.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ memberships: [{ _id, name, plans: [...] }], count }' },
+    400: { description: 'glofox_not_configured — Glofox credentials not set on this location', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'unauthenticated — no session', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — owner or manager at this location required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not a member of this location (indistinguishable from a missing id)', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'glofox_request_failed — the Glofox API call failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// UniFi Access user list for the staff-form picker (mig 120)
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/unifi-users',
+  tags: ['Locations'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Every UniFi Access user at this location\'s controller',
+  description: 'The full UniFi Access user list at the studio\'s controller (names, emails, employee numbers, NFC card counts), for linking a staff profile to its UniFi user on the staff edit page. Sensitive: master, or owner/manager AT this location (judged at the path id, not the active studio). Returns { users, count }.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ users: [{ id, full_name, user_email, employee_number, status, nfc_count }], count }' },
+    400: { description: 'unifi_not_configured — UniFi Access not configured on this location', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'unauthenticated — no session', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — owner or manager at this location required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not a member of this location (indistinguishable from a missing id), or location_not_found', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'location_read_failed — the location could not be read (logged)', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'unifi_request_failed — the controller call failed (or the controller\'s own status)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// UniFi Access door list for the staff-form door picker (mig 182)
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/unifi-doors',
+  tags: ['Locations'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Every door at this location\'s UniFi Access controller',
+  description: 'The studio\'s UniFi Access doors, normalised to { id, name } and sorted by name, for the per-location remote-unlock door picker on the staff edit page. Master, or owner/manager AT this location (judged at the path id, not the active studio). Returns { doors, count }.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ doors: [{ id, name }], count }' },
+    400: { description: 'unifi_not_configured — UniFi Access not configured on this location', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'unauthenticated — no session', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — owner or manager at this location required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not a member of this location (indistinguishable from a missing id), or location_not_found', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'location_read_failed — the location could not be read (logged)', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'unifi_request_failed — the controller call failed (or the controller\'s own status)', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
