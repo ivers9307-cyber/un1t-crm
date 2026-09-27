@@ -27,8 +27,12 @@
 --     cut) moved both to */2. Stale after 180 s against a 120 s cadence, so
 --     ONE missed tick paged.
 --
--- CADENCE — one rule: a single missed invocation never pages, two in a row do
--- ───────────────────────────────────────────────────────────────────────────
+-- CADENCE — one rule: a single missed invocation never pages
+-- ──────────────────────────────────────────────────────────
+-- For the class sync and the ad sync two missed in a row also page. For the
+-- */2 drains they need not: at 120 + 240 two missed ticks put the gap at
+-- 360 s, exactly on the boundary, so jitter decides; three always page.
+--
 -- The gap between two stamps is the interval plus Vercel's invocation jitter
 -- plus the run time (each route stamps at the END of its run), so the grace
 -- clears one missed tick with room to spare (mig 119's jitter lesson; mig
@@ -39,6 +43,8 @@
 --                           <=300 s maxDuration; two misses 43200 s)
 --   process-class-bookings  120 + 240    stale at 6 min: the */2 drain
 --   process-contact-imports 120 + 240    convention (process-invoice-analysis, mig 377)
+--                           (one miss ~240 s + jitter; two misses 360 s, on
+--                           the boundary; three misses 480 s)
 --
 -- What each row's STALE means is unchanged: all four routes stamp at the END
 -- of every run that gets there, including runs whose external call answered
