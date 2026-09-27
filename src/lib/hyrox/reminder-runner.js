@@ -5,16 +5,44 @@
 // class time (hyrox_coaches_on_shift, TZ-safe in SQL); if the roster has a gap,
 // fall back to the location's Hyrox-approver roles so a reminder never goes to
 // nobody. sendPush gates on the master push switch + the `hyrox` mobile feature.
+//
+// C1 RECIPIENTS.1 — WHO is worked out BEFORE the class is claimed. The claim
+// used to come first, so a failed approver read (which came back as [])
+// claimed the class with nobody told, and every later tick skipped it: the
+// reminder was lost for good. Now a failed read claims nothing and the next
+// tick (5 minutes later, still inside the 30-minute lead) tries again; so
+// does "nobody to tell", in case a coach is rostered in the meantime.
 import { normalizeClassName } from '@/lib/hr-analytics'
 import { weekNoFor, slotFor } from './mapping'
-import { sendPush, resolveRoleRecipientIds } from '@/lib/push'
-import { logWarn } from '@/lib/log'
+import { sendPush, readRoleRecipientIds } from '@/lib/push'
+import { logWarn, logError } from '@/lib/log'
 
 const LEAD_MS = 30 * 60_000        // remind 30 min before the class
 const FALLBACK_ROLES = ['owner', 'manager', 'head_coach']
 
+// Who's on shift at the class time; else the Hyrox-approver roles.
+// { ids, error }: error is set ONLY when the fallback roles read failed. A
+// failed on-shift read degrades to the fallback, as it always has, logged.
+async function classRecipients(db, locationId, occ) {
+  const endIso = occ.ends_at || new Date(new Date(occ.starts_at).getTime() + 60 * 60_000).toISOString()
+  const { data: onShift, error: shiftErr } = await db.rpc('hyrox_coaches_on_shift', {
+    p_location: locationId, p_start: occ.starts_at, p_end: endIso,
+  })
+  if (shiftErr) {
+    logWarn('hyrox-reminder', 'on-shift read failed; reminding the approver roles instead', {
+      locationId, class_starts_at: occ.starts_at, err: shiftErr.message,
+    })
+  }
+  const ids = (shiftErr ? [] : (onShift || [])).map((r) => r.profile_id).filter(Boolean)
+  if (ids.length) return { ids, error: null }
+
+  const fallback = await readRoleRecipientIds(db, locationId, FALLBACK_ROLES)
+  if (fallback.error) return { ids: [], error: fallback.error.message }
+  return { ids: [...fallback.ids], error: null }
+}
+
 export async function runHyroxClassReminder(db, { nowMs = Date.now() } = {}) {
-  const stats = { classes: 0, reminded: 0, recipients: 0 }
+  const stats = { classes: 0, reminded: 0, recipients: 0, recipients_failed: 0 }
   const { data: blocks } = await db
     .from('hyrox_blocks').select('id, location_id, starts_on, weeks, session_weekdays').eq('status', 'active')
 
@@ -31,6 +59,27 @@ export async function runHyroxClassReminder(db, { nowMs = Date.now() } = {}) {
       for (const occ of occs || []) {
         if (!normalizeClassName(occ.name).includes('hyrox')) continue
         stats.classes++
+
+        // Already reminded? Skip BEFORE reading recipients, so a transient
+        // recipients-read failure on a later tick cannot log "nothing claimed,
+        // the next tick retries" (and count recipients_failed) for a class that
+        // was reminded long ago. Only an early-out: if this read errors we fall
+        // through, and the ON CONFLICT claim below stays the real guard.
+        const { data: already, error: alreadyErr } = await db.from('hyrox_class_reminders')
+          .select('id').eq('location_id', block.location_id).eq('class_starts_at', occ.starts_at)
+          .maybeSingle()
+        if (!alreadyErr && already) continue
+
+        const recipients = await classRecipients(db, block.location_id, occ)
+        if (recipients.error) {
+          stats.recipients_failed++
+          logError('hyrox-reminder', 'approver read failed; nothing claimed, the next tick retries', {
+            locationId: block.location_id, class_starts_at: occ.starts_at, err: recipients.error,
+          })
+          continue
+        }
+        const recipientIds = recipients.ids
+        if (!recipientIds.length) continue
 
         // Claim this occurrence race-safely — ON CONFLICT DO NOTHING. Only the
         // insert that actually wrote a row proceeds to send; a second tick (or a
@@ -52,18 +101,6 @@ export async function runHyroxClassReminder(db, { nowMs = Date.now() } = {}) {
             .select('id, focus').eq('block_id', block.id).eq('week_no', wk).eq('slot', slot).maybeSingle()
           session = s || null
         }
-
-        // Who's on shift at the class time; else the Hyrox-approver roles.
-        const endIso = occ.ends_at || new Date(new Date(occ.starts_at).getTime() + 60 * 60_000).toISOString()
-        const { data: onShift } = await db.rpc('hyrox_coaches_on_shift', {
-          p_location: block.location_id, p_start: occ.starts_at, p_end: endIso,
-        })
-        let recipientIds = (onShift || []).map((r) => r.profile_id).filter(Boolean)
-        if (!recipientIds.length) {
-          const fallback = await resolveRoleRecipientIds(db, block.location_id, FALLBACK_ROLES)
-          recipientIds = [...(fallback || [])]
-        }
-        if (!recipientIds.length) continue
 
         const timeStr = new Date(occ.starts_at).toLocaleTimeString('en-IE', {
           timeZone: 'Europe/Dublin', hour: '2-digit', minute: '2-digit',

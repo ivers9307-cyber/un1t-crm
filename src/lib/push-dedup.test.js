@@ -8,18 +8,19 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('./push.js', () => ({
   sendPush: vi.fn(),
-  resolveRoleRecipientIds: vi.fn(),
+  readRoleRecipientIds: vi.fn(),
 }))
 vi.mock('./notify.js', () => ({
   notifyUsers: vi.fn(),
 }))
 vi.mock('./log.js', () => ({
   logWarn: vi.fn(),
+  logError: vi.fn(),
 }))
 
-import { sendPush, resolveRoleRecipientIds } from './push.js'
+import { sendPush, readRoleRecipientIds } from './push.js'
 import { notifyUsers } from './notify.js'
-import { logWarn } from './log.js'
+import { logWarn, logError } from './log.js'
 import {
   sendPushOnce,
   notifyUsersOnce,
@@ -187,25 +188,59 @@ describe('notifyUsersOnce — email fallback counts as delivered', () => {
 })
 
 describe('role fan-out variants — ids resolved BEFORE claiming', () => {
+  const found = (ids) => readRoleRecipientIds.mockResolvedValue({ ids, error: null })
+  const readFails = () => readRoleRecipientIds.mockResolvedValue({ ids: [], error: { message: 'down' } })
+
   it('sendPushToRolesAtLocationOnce claims per resolved recipient', async () => {
-    resolveRoleRecipientIds.mockResolvedValue(['m1', 'm2'])
+    found(['m1', 'm2'])
     existingClaims.add('k|m1')
     const res = await sendPushToRolesAtLocationOnce(fakeDb, 'k', 'loc1', ['owner'], { title: 't' })
-    expect(resolveRoleRecipientIds).toHaveBeenCalledWith(fakeDb, 'loc1', ['owner'])
+    expect(readRoleRecipientIds).toHaveBeenCalledWith(fakeDb, 'loc1', ['owner'])
     expect(sendPush).toHaveBeenCalledWith(['m2'], { title: 't' })
     expect(res.deduped).toBe(1)
+    expect(res.recipients_failed).toBeUndefined()
   })
 
   it('notifyUsersAtRolesOnce resolves then claims the same way', async () => {
-    resolveRoleRecipientIds.mockResolvedValue(['m1'])
+    found(['m1'])
     await notifyUsersAtRolesOnce(fakeDb, 'k', 'loc1', ['owner', 'manager'], { title: 't' })
     expect(notifyUsers).toHaveBeenCalledWith(['m1'], { title: 't' })
   })
 
-  it('no recipients resolved → no claim, no send', async () => {
-    resolveRoleRecipientIds.mockResolvedValue([])
+  it('nobody holds the role → no claim, no send, no recipients_failed, no log', async () => {
+    found([])
     const res = await sendPushToRolesAtLocationOnce(fakeDb, 'k', 'loc1', ['owner'], { title: 't' })
     expect(sendPush).not.toHaveBeenCalled()
-    expect(res.sent).toBe(0)
+    expect(upsertedRows).toEqual([])
+    expect(res).toEqual({ sent: 0, skipped: 0, invalidated: 0, failed: 0, deduped: 0 })
+    expect(logError).not.toHaveBeenCalled()
+  })
+
+  // C1 RECIPIENTS.1 — a failed read was EMPTY, the same as "nobody holds the
+  // role", so the roster-runway arm reported a clean run and stamped.
+  it.each([
+    ['sendPushToRolesAtLocationOnce', () => sendPushToRolesAtLocationOnce(fakeDb, 'k', 'loc1', ['owner'], { title: 't' })],
+    ['notifyUsersAtRolesOnce', () => notifyUsersAtRolesOnce(fakeDb, 'k', 'loc1', ['owner'], { title: 't' })],
+  ])('%s: a failed recipients read claims nothing, sends nothing, and says so', async (_name, call) => {
+    readFails()
+    const res = await call()
+    expect(res).toEqual({ sent: 0, skipped: 0, invalidated: 0, failed: 0, deduped: 0, recipients_failed: 1 })
+    expect(upsertedRows).toEqual([])
+    expect(sendPush).not.toHaveBeenCalled()
+    expect(notifyUsers).not.toHaveBeenCalled()
+    expect(logError).toHaveBeenCalledTimes(1)
+    expect(logError).toHaveBeenCalledWith('push-dedup', expect.stringContaining('recipients read failed'),
+      expect.objectContaining({ event_key: 'k', locationId: 'loc1', roles: ['owner'], err: 'down' }))
+  })
+
+  it('after a failed read the same key still sends on the next call: nothing was claimed', async () => {
+    readFails()
+    await notifyUsersAtRolesOnce(fakeDb, 'k', 'loc1', ['owner'], { title: 't' })
+    found(['m1'])
+    const res = await notifyUsersAtRolesOnce(fakeDb, 'k', 'loc1', ['owner'], { title: 't' })
+    expect(notifyUsers).toHaveBeenCalledTimes(1)
+    expect(notifyUsers).toHaveBeenCalledWith(['m1'], { title: 't' })
+    expect(res).toMatchObject({ sent: 1, deduped: 0 })
+    expect(res.recipients_failed).toBeUndefined()
   })
 })
