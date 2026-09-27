@@ -60,6 +60,16 @@ export async function runHyroxClassReminder(db, { nowMs = Date.now() } = {}) {
         if (!normalizeClassName(occ.name).includes('hyrox')) continue
         stats.classes++
 
+        // Already reminded? Skip BEFORE reading recipients, so a transient
+        // recipients-read failure on a later tick cannot log "nothing claimed,
+        // the next tick retries" (and count recipients_failed) for a class that
+        // was reminded long ago. Only an early-out: if this read errors we fall
+        // through, and the ON CONFLICT claim below stays the real guard.
+        const { data: already, error: alreadyErr } = await db.from('hyrox_class_reminders')
+          .select('id').eq('location_id', block.location_id).eq('class_starts_at', occ.starts_at)
+          .maybeSingle()
+        if (!alreadyErr && already) continue
+
         const recipients = await classRecipients(db, block.location_id, occ)
         if (recipients.error) {
           stats.recipients_failed++

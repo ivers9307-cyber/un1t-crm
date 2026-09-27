@@ -27,8 +27,9 @@ function chain(result) {
 
 // `claimed` is the hyrox_class_reminders unique index, kept across runs so a
 // test can follow one class over two ticks.
-function makeDb({ onShift = [], onShiftError = null, claimed = new Set() } = {}) {
-  const calls = { upserts: [], updates: [], rpc: [] }
+// `existsError` makes the cheap "already reminded?" read fail.
+function makeDb({ onShift = [], onShiftError = null, claimed = new Set(), existsError = null } = {}) {
+  const calls = { upserts: [], updates: [], rpc: [], existsReads: [] }
   return {
     calls,
     claimed,
@@ -38,6 +39,19 @@ function makeDb({ onShift = [], onShiftError = null, claimed = new Set() } = {})
       if (table === 'hyrox_sessions') return chain({ data: null, error: null })
       if (table === 'hyrox_class_reminders') {
         return {
+          select: (cols) => {
+            const filters = {}
+            const q = {
+              eq: (col, val) => { filters[col] = val; return q },
+              maybeSingle: () => {
+                calls.existsReads.push({ cols, filters: { ...filters } })
+                if (existsError) return thenable({ data: null, error: existsError })
+                const key = `${filters.location_id}|${filters.class_starts_at}`
+                return thenable({ data: claimed.has(key) ? { id: 'rem-old' } : null, error: null })
+              },
+            }
+            return q
+          },
           upsert: (row) => ({
             select: () => {
               calls.upserts.push(row)
@@ -123,5 +137,42 @@ describe('runHyroxClassReminder', () => {
     const stats = await runHyroxClassReminder(db, { nowMs: NOW })
     expect(sendPush).not.toHaveBeenCalled()
     expect(stats).toMatchObject({ classes: 1, reminded: 0 })
+  })
+
+  // A class already claimed is skipped BEFORE its recipients are read, so a
+  // transient recipients-read failure on a later tick cannot raise a false
+  // "nothing claimed, the next tick retries" for a class that was reminded.
+  it('an already-reminded class reads no recipients, logs nothing, sends nothing', async () => {
+    readRoleRecipientIds.mockResolvedValue({ ids: [], error: { message: 'down' } })
+    const db = makeDb({ claimed: new Set([`loc-1|${OCC.starts_at}`]) })
+    const stats = await runHyroxClassReminder(db, { nowMs: NOW })
+    expect(db.calls.existsReads).toEqual([{ cols: 'id', filters: { location_id: 'loc-1', class_starts_at: OCC.starts_at } }])
+    expect(db.calls.rpc).toEqual([])
+    expect(readRoleRecipientIds).not.toHaveBeenCalled()
+    expect(db.calls.upserts).toEqual([])
+    expect(logError).not.toHaveBeenCalled()
+    expect(sendPush).not.toHaveBeenCalled()
+    expect(stats).toEqual({ classes: 1, reminded: 0, recipients: 0, recipients_failed: 0 })
+  })
+
+  // The existence read is only an early-out; the ON CONFLICT claim stays the
+  // real guard. A failed existence read must not fail louder than main did.
+  it('a failed existence read falls through: recipients read, claimed, sent once', async () => {
+    const db = makeDb({ onShift: [{ profile_id: 'c1' }], existsError: { message: 'blip' } })
+    const stats = await runHyroxClassReminder(db, { nowMs: NOW })
+    expect(db.calls.rpc).toHaveLength(1)
+    expect(db.calls.upserts).toHaveLength(1)
+    expect(sendPush).toHaveBeenCalledTimes(1)
+    expect(sendPush.mock.calls[0][0]).toEqual(['c1'])
+    expect(logError).not.toHaveBeenCalled()
+    expect(stats).toEqual({ classes: 1, reminded: 1, recipients: 1, recipients_failed: 0 })
+  })
+
+  it('a failed existence read on an already-claimed class still never sends twice', async () => {
+    const db = makeDb({ onShift: [{ profile_id: 'c1' }], existsError: { message: 'blip' },
+      claimed: new Set([`loc-1|${OCC.starts_at}`]) })
+    const stats = await runHyroxClassReminder(db, { nowMs: NOW })
+    expect(sendPush).not.toHaveBeenCalled()
+    expect(stats).toMatchObject({ reminded: 0 })
   })
 })
