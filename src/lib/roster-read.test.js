@@ -343,3 +343,94 @@ describe('briefing (BLOCKEDIT.1)', () => {
     expect(colleague.notes).toBeNull()
   })
 })
+
+// COACHNOTES.1 — a coach's view of a shift carries the assignment's OWN note
+// and the block's briefing, never the block's manager `notes`. Manager views,
+// and callers with no viewer (the reminder cron, the assistant), are unchanged.
+// Fictional people only: the repo is public.
+describe('block notes stay manager-only (COACHNOTES.1)', () => {
+  const BLOCK_NOTE = 'MGR-BLOCK-NOTE: short-staffed, keep an eye on Sam'
+  const mk = (id, loc, profileId, assignmentNote) => ({
+    id, profile_id: profileId, status: 'scheduled', notes: assignmentNote, partial_reason: null,
+    start_time_override: null, end_time_override: null, assigned_by: 'mgr', updated_at: 't',
+    shift_blocks: {
+      location_id: loc, template_id: 't1', block_date: '2026-06-10', start_time: '09:00:00', end_time: '10:00:00',
+      notes: BLOCK_NOTE, briefing: 'Fire drill at 10', roster_id: 'r1', rosters: { status: 'published' },
+      shift_templates: { id: 't1', name: 'AM', start_time: '09:00:00', end_time: '10:00:00', role_label: 'Coach' },
+    },
+    profiles: { id: profileId, full_name: `Name ${profileId}`, email: `${profileId}@x.ie`, avatar_url: null, role: 'staff' },
+  })
+  const read = (data, opts = {}) =>
+    fetchApiShiftRows(makeDb({ data, error: null }), { locationIds: ['loc-coach', 'loc-mgr'], ...opts })
+  const byId = (rows) => Object.fromEntries(rows.map((r) => [r.id, r]))
+  const coachEverywhere = { id: 'me', isManagerAt: () => false }
+
+  it("a coach's own row with no note of its own carries null, not the block's notes", async () => {
+    const { rows } = await read([mk('own', 'loc-coach', 'me', null)], { viewer: coachEverywhere })
+    expect(rows).toHaveLength(1)
+    expect(rows[0].notes).toBeNull()
+    // The coach-facing text still arrives.
+    expect(rows[0].briefing).toBe('Fire drill at 10')
+  })
+
+  it("a coach's own row keeps the assignment's own note", async () => {
+    const { rows } = await read([mk('own', 'loc-coach', 'me', 'Bring the rower keys')], { viewer: coachEverywhere })
+    expect(rows[0].notes).toBe('Bring the rower keys')
+  })
+
+  it('no block note reaches any coach row, own or colleague', async () => {
+    const { rows } = await read([
+      mk('own-empty', 'loc-coach', 'me', null),
+      mk('own-noted', 'loc-coach', 'me', 'Bring the rower keys'),
+      mk('mate', 'loc-coach', 'sam', null),
+    ], { viewer: coachEverywhere })
+    expect(rows).toHaveLength(3)
+    expect(JSON.stringify(rows)).not.toContain('MGR-BLOCK-NOTE')
+  })
+
+  it('a manager at the studio still gets the block notes as the fallback, own row included', async () => {
+    const managerEverywhere = { id: 'me', isManagerAt: () => true }
+    const { rows } = await read([
+      mk('mgr-own', 'loc-mgr', 'me', null),
+      mk('mgr-mate', 'loc-mgr', 'sam', null),
+      mk('mgr-noted', 'loc-mgr', 'sam', 'Own note wins'),
+    ], { viewer: managerEverywhere })
+    const r = byId(rows)
+    expect(r['mgr-own'].notes).toBe(BLOCK_NOTE)
+    expect(r['mgr-mate'].notes).toBe(BLOCK_NOTE)
+    expect(r['mgr-noted'].notes).toBe('Own note wins')
+  })
+
+  it('judged per studio: the same caller loses block notes where they coach and keeps them where they manage', async () => {
+    // e.g. a head coach at loc-mgr who is plain staff at loc-coach (the route's
+    // isManagerAt is hasRoleAtLocation(user, loc, MANAGER_ROLES)).
+    const viewer = { id: 'me', isManagerAt: (loc) => loc === 'loc-mgr' }
+    const { rows } = await read([
+      mk('at-coach-studio', 'loc-coach', 'me', null),
+      mk('at-mgr-studio', 'loc-mgr', 'me', null),
+    ], { viewer })
+    const r = byId(rows)
+    expect(r['at-coach-studio'].notes).toBeNull()
+    expect(r['at-mgr-studio'].notes).toBe(BLOCK_NOTE)
+    // Briefing on both.
+    expect(r['at-coach-studio'].briefing).toBe('Fire drill at 10')
+    expect(r['at-mgr-studio'].briefing).toBe('Fire drill at 10')
+  })
+
+  it('with no viewer (the reminder cron, the assistant) the row is unchanged', async () => {
+    const { rows } = await read([mk('cron', 'loc-coach', 'me', null)])
+    expect(rows[0].notes).toBe(BLOCK_NOTE)
+  })
+
+  it('the coach rules around notes are otherwise untouched: drafts dropped, email slimmed, publishedOnly honoured', async () => {
+    const draft = mk('draft', 'loc-coach', 'me', null)
+    draft.shift_blocks = { ...draft.shift_blocks, rosters: { status: 'draft' } }
+    const { rows } = await read([mk('own', 'loc-coach', 'me', null), draft], { viewer: coachEverywhere })
+    expect(rows.map((x) => x.id)).toEqual(['own'])
+    expect(rows[0].profiles).toEqual({ id: 'me', full_name: 'Name me', avatar_url: null, role: 'staff' })
+    const pubOnly = await read([mk('mgr-own', 'loc-mgr', 'me', null), draft], {
+      viewer: { id: 'me', isManagerAt: () => true }, publishedOnly: true,
+    })
+    expect(pubOnly.rows.map((x) => x.id)).toEqual(['mgr-own'])
+  })
+})
