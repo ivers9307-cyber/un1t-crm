@@ -141,9 +141,13 @@ const BACKFILL_DAYS = 35
 // success:false, Resource not available"), ~480 futile calls a day, and
 // instructor was NULL on 647/647 rows. Overrides still apply on every tick
 // (they cost no call), and every other tick reuses the names the spine
-// already holds (readSpineTrainerNames), so a name never flaps to NULL
-// between lookups. Stateless on purpose: a Vercel function instance is not a
-// cache (consecutive ticks ran on different deployments).
+// already holds (readSpineTrainerNames) for ids that LEAD A SINGLE-TRAINER
+// class, so those names do not flap to NULL between lookups. An id seen only
+// in multi-trainer classes has no such memory: on a non-lookup tick its name
+// drops out of the joined label ("A, B" becomes "A"), and past multi-trainer
+// rows keep whatever label they had (CLASSLINK.1 inherits this; pinned by a
+// test). Stateless on purpose: a Vercel function instance is not a cache
+// (consecutive ticks ran on different deployments).
 // vercel.json's */15 schedule is asserted by the route's test.
 export const TRAINER_LOOKUP_DUBLIN_HOUR = 4
 const TRAINER_LOOKUP_WINDOW_MIN = 15
@@ -165,6 +169,8 @@ export function isTrainerLookupTick(nowMs) {
  * location's single-trainer rows of the last BACKFILL_DAYS whose
  * instructor is set, raw.trainers[0] → that label, the newest row winning.
  * (Multi-trainer rows carry a joined "A, B" label, not one person's name.)
+ * So only an id that LEADS A SINGLE-TRAINER class in the window can be
+ * remembered; an id that only ever co-teaches gets no name here.
  *
  * A failed read is an ERROR, never "no names": the caller asks Glofox this
  * tick instead (the behaviour before TRAINERCALLS.1).
@@ -215,7 +221,8 @@ export async function readSpineTrainerNames(db, { locationId, trainerIds, nowMs 
  *      returns []), then GET /2.0/members/{id} per remaining id (trainers are
  *      users in Glofox's model), capped at TRAINER_MEMBER_LOOKUP_CAP;
  *   3. `known` — names the caller already holds (the sync passes the
- *      spine's, readSpineTrainerNames), for ids steps 1-2 left unnamed.
+ *      spine's, readSpineTrainerNames: ids that lead a single-trainer
+ *      class only), for ids steps 1-2 left unnamed.
  *
  * @param {object} creds  per-location credentials (+ trainerNames)
  * @param {string[]} trainerIds
@@ -331,8 +338,10 @@ export async function syncOccurrencesForLocation(db, { locationId, creds, window
   // STUDIO-KPI.4 — resolve trainer ids to names so class_occurrences.instructor
   // populates and the scorecard's floor table can group per coach.
   // TRAINERCALLS.1 — the Glofox API is asked on the day's lookup tick only;
-  // every tick applies overrides and the names the spine already holds. A
-  // failed spine read asks Glofox this tick (the old behaviour), logged.
+  // every tick applies overrides and the names the spine already holds for
+  // ids that lead a single-trainer class (a multi-trainer-only id goes
+  // unnamed until the next lookup tick). A failed spine read asks Glofox
+  // this tick (the old behaviour), logged.
   const trainerIds = extractTrainerIds(result.events)
   let trainerNames = {}
   let trainerLookup = 'none'

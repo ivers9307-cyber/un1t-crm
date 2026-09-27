@@ -286,7 +286,9 @@ describe('syncOccurrencesForLocation: trainer-name mapping + backfill', () => {
 // /2.0/members call per trainer id in the window (4), each answered
 // "200 success:false, Resource not available": ~480 futile calls a day.
 // The lookup now runs on the tick in [04:00, 04:15) Dublin; every other tick
-// uses overrides (free) and the names the spine already holds.
+// uses overrides (free) and the names the spine already holds for ids that
+// lead a single-trainer class. A multi-trainer-only id has no memory (pinned
+// below; CLASSLINK.1 inherits it).
 
 // 04:05 Dublin (IST) on 4 Aug: the daily lookup tick. NOW (11:00 IST) is not.
 const DAY_TICK = Date.parse('2026-08-04T03:05:00.000Z')
@@ -429,12 +431,37 @@ describe('syncOccurrencesForLocation: Glofox is asked for trainer names once a d
     expect(fetchMemberResult).toHaveBeenCalledTimes(3)
   })
 
-  it('an ordinary tick reuses a name the spine already holds (no flap to NULL between lookups)', async () => {
+  it('an ordinary tick reuses a name the spine holds for an id that leads a single-trainer class (no flap to NULL between lookups)', async () => {
     const db = makeDb({ class_occurrences: [pastOcc('old-1', { daysAgo: 5, instructor: 'Coach A', trainers: [ID1] })] })
     fetchUpcomingEvents.mockResolvedValue({ ok: true, events: [glofoxEvent('evt1', { trainers: [ID1] })] })
     const out = await syncOccurrencesForLocation(db, { locationId: LOC, creds: creds(), nowMs: NOW })
     expect(upserted(db, 'evt1').instructor).toBe('Coach A')
     expect(out).toMatchObject({ trainerLookup: 'skipped', trainerApiCalls: 0 })
+    expect(fetchGlofoxTrainers).not.toHaveBeenCalled()
+  })
+
+  // KNOWN LIMITATION (review of TRAINERCALLS.1, option (a) chosen): the spine
+  // memory keys on raw.trainers[0] of SINGLE-trainer rows, so an id that only
+  // ever appears in multi-trainer classes is never remembered. On a non-lookup
+  // tick its name drops out of the joined label ("A, B" becomes "A") until the
+  // next 04:00 Dublin lookup names it again, and past multi-trainer rows keep
+  // whatever label they already had. Latent today (no trainer is named at
+  // all). CLASSLINK.1 inherits this; if it adds a per-id identity source, this
+  // test is the one to flip.
+  it('KNOWN LIMITATION: a multi-trainer-only id gets no remembered name on a non-lookup tick', async () => {
+    const db = makeDb({
+      class_occurrences: [
+        pastOcc('solo', { daysAgo: 3, instructor: 'Coach A', trainers: [ID1] }),
+        pastOcc('pair', { daysAgo: 2, instructor: 'Coach A, Coach B', trainers: [ID1, ID2] }),
+      ],
+    })
+    fetchUpcomingEvents.mockResolvedValue({ ok: true, events: [glofoxEvent('evt1', { trainers: [ID1, ID2] })] })
+    const out = await syncOccurrencesForLocation(db, { locationId: LOC, creds: creds(), nowMs: NOW })
+    expect(out).toMatchObject({ ok: true, trainerLookup: 'skipped', trainerApiCalls: 0 })
+    const spine = await readSpineTrainerNames(db, { locationId: LOC, trainerIds: [ID1, ID2], nowMs: NOW })
+    expect(spine.names).toEqual({ [ID1]: 'Coach A' }) // ID2 has no memory
+    expect(upserted(db, 'evt1').instructor).toBe('Coach A') // "Coach A, Coach B" lost its second name
+    expect(db._store.class_occurrences.find((r) => r.glofox_event_id === 'pair').instructor).toBe('Coach A, Coach B')
     expect(fetchGlofoxTrainers).not.toHaveBeenCalled()
   })
 
