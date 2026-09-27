@@ -19,6 +19,10 @@ vi.mock('@/lib/glofox', () => ({
   fetchMemberResult: vi.fn(),
   glofoxDisplayName: vi.fn(),
 }))
+vi.mock('@/lib/log', async () => {
+  const actual = await vi.importActual('@/lib/log')
+  return { ...actual, logError: vi.fn() }
+})
 vi.mock('@/lib/class-occurrences', async () => {
   const actual = await vi.importActual('@/lib/class-occurrences')
   return { ...actual, resolveTrainerNames: vi.fn() }
@@ -29,6 +33,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { glofoxCredentialsForLocation } from '@/lib/glofox'
 import { resolveTrainerNames } from '@/lib/class-occurrences'
+import { logError } from '@/lib/log'
 import { ROLE_GATE_CASES, LOC_B, MASTER } from '../_role-gate-cases.js'
 
 const ID1 = 'aaaaaaaaaaaaaaaaaaaaaaaa'
@@ -38,14 +43,14 @@ const CREDS = {
   trainerNames: { [ID1.toUpperCase()]: '  Coach One  ' },
 }
 
-function fakeDb(rows) {
+function fakeDb(rows, readError = null) {
   const calls = { from: [], eq: [], gte: [] }
   const chain = {
     select: () => chain,
     eq: (col, val) => { calls.eq.push([col, val]); return chain },
     gte: (col, val) => { calls.gte.push([col, val]); return chain },
     order: () => chain,
-    limit: () => Promise.resolve({ data: rows, error: null }),
+    limit: () => Promise.resolve({ data: readError ? null : rows, error: readError }),
   }
   return { calls, client: { from: (t) => { calls.from.push(t); return chain } } }
 }
@@ -111,5 +116,19 @@ describe('GET glofox-trainers — role judged at the path location', () => {
     expect(db.calls.from).toEqual(['class_occurrences'])
     expect(db.calls.eq).toEqual([['location_id', LOC_B]])
     expect(resolveTrainerNames).toHaveBeenCalledWith(CREDS, [ID1, ID2])
+  })
+
+  // Review 2: a failed class_occurrences read is a logged 500 with a fixed
+  // code, never the raw PostgREST message and never unlogged.
+  it('500s with a fixed code, and logs, when the class_occurrences read fails', async () => {
+    db = fakeDb(null, { message: 'column "raw" does not exist', code: '42703' })
+    createServerClient.mockReturnValue(db.client)
+    getCurrentUser.mockResolvedValue(MASTER)
+    const res = await call(LOC_B)
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ success: false, error: 'class_occurrences_read_failed' })
+    expect(logError).toHaveBeenCalledWith(expect.any(String), expect.any(String),
+      expect.objectContaining({ locationId: LOC_B, error: 'column "raw" does not exist' }))
+    expect(resolveTrainerNames).not.toHaveBeenCalled()
   })
 })

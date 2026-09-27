@@ -22,12 +22,14 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation } from '@/lib/auth'
 import { ADMIN_ROLES } from '@/lib/schemas'
+import { logError } from '@/lib/log'
 import { glofoxCredentialsForLocation } from '@/lib/glofox'
 import { extractTrainerIds, resolveTrainerNames } from '@/lib/class-occurrences'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
+const MODULE = 'locations-glofox-trainers'
 const WINDOW_DAYS = 28
 
 export async function GET(_request, { params }) {
@@ -68,7 +70,10 @@ export async function GET(_request, { params }) {
     .order('starts_at', { ascending: false })
     .limit(1000)
   if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    // Review 2: logged, and a fixed code rather than the raw PostgREST
+    // message (which names columns and SQL state to the browser).
+    logError(MODULE, 'could not read class_occurrences', { locationId, error: error.message })
+    return NextResponse.json({ success: false, error: 'class_occurrences_read_failed' }, { status: 500 })
   }
 
   const ids = extractTrainerIds(rows || [])
