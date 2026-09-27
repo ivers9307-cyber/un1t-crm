@@ -2,14 +2,14 @@
 //
 // roster-runway-notify.test.js mocks the dedup sender, so it cannot see any of
 // this. Here the arm runs against the REAL push-dedup (the push_event_sends
-// claim ledger), the REAL resolveRoleRecipientIds (per-location role, active
+// claim ledger), the REAL readRoleRecipientIds (per-location role, active
 // only, masters linked here), the REAL notifyUsers (the email fallback) and
 // the REAL notifications registry. Only the edges are faked: the database,
 // Expo (sendPush), Postmark (sendEmail) and the runway read.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const state = { locations: [], links: [], claims: new Set(), tokens: [], profiles: [] }
+const state = { locations: [], links: [], linksError: null, claims: new Set(), tokens: [], profiles: [] }
 
 function thenable(result) {
   return { then: (res, rej) => Promise.resolve(result).then(res, rej) }
@@ -25,6 +25,7 @@ const fakeDb = {
         select: () => ({
           eq: (col, locationId) => {
             if (col !== 'location_id') throw new Error(`unexpected filter ${col}`)
+            if (state.linksError) return thenable({ data: null, error: state.linksError })
             return thenable({ data: state.links.filter((l) => l.location_id === locationId), error: null })
           },
         }),
@@ -64,7 +65,7 @@ vi.mock('./push', async (importOriginal) => {
   const real = await importOriginal()
   return {
     // REAL: who holds a publishing role AT this location is what is under test.
-    resolveRoleRecipientIds: real.resolveRoleRecipientIds,
+    readRoleRecipientIds: real.readRoleRecipientIds,
     sendPush: vi.fn(),
     // The per-category opt-out is push.js's own tested business; allow all.
     resolvePushAllowedIds: vi.fn(async (_db, ids) => new Set(ids)),
@@ -79,6 +80,7 @@ const { sendEmail } = await import('./postmark')
 const { fetchRosterRunways } = await import('./roster-runway-data')
 const { getNotificationCategory } = await import('./notifications-registry')
 const { runRosterRunwayAlerts } = await import('./roster-runway-notify')
+const { runwayArmHealthy } = await import('./cron-arm-health')
 
 const NORTH = { id: 'loc-north', name: 'Studio North', timezone: 'Europe/Dublin' }
 const SOUTH = { id: 'loc-south', name: 'Studio South', timezone: 'Europe/Dublin' } // another studio (and, here, another organisation)
@@ -127,6 +129,7 @@ beforeEach(() => {
     link('split-1', NORTH.id, 'staff'),
   ]
   state.claims = new Set()
+  state.linksError = null
   // manager-n has no device: the email fallback is their only channel.
   state.tokens = ['owner-n', 'headcoach-n', 'master-n'].map((user_id) => ({ user_id }))
   state.profiles = PUBLISHERS.map((id) => ({ id, full_name: `Person ${id}`, email: `${id}@example.test` }))
@@ -267,5 +270,26 @@ describe('roster runway push — once per studio, week and severity', () => {
     expect(state.claims.size).toBe(0)
     const retry = await runRosterRunwayAlerts(fakeDb, { nowMs: DAY_9 + 24 * 3600_000 })
     expect(retry).toMatchObject({ sent: 4, deduped: 0 })
+  })
+})
+
+// C1 RECIPIENTS.1 — end to end through the REAL push-dedup and the REAL
+// readRoleRecipientIds: a failed profile_locations read claims no key, tells
+// nobody, withholds the arm's stamp, and the next daily run still sends.
+describe('roster runway push — a failed recipients read', () => {
+  it('claims nothing, tells nobody, is a fault, and the next day\'s run still sends', async () => {
+    state.linksError = { message: 'profile_locations down' }
+    const day9 = await runRosterRunwayAlerts(fakeDb, { nowMs: DAY_9 })
+    expect(day9).toMatchObject({ alerts: 1, sent: 0, emailed: 0, failed: 0, recipients_failed: 1 })
+    expect(sendPush).not.toHaveBeenCalled()
+    expect(sendEmail).not.toHaveBeenCalled()
+    expect(state.claims.size).toBe(0)
+    expect(runwayArmHealthy(day9)).toBe(false)
+
+    state.linksError = null
+    const day8 = await runRosterRunwayAlerts(fakeDb, { nowMs: DAY_9 + 24 * 3600 * 1000 })
+    expect(day8).toMatchObject({ recipients_failed: 0 })
+    expect([...sendPush.mock.calls[0][0]].sort()).toEqual([...PUBLISHERS].sort())
+    expect(runwayArmHealthy(day8)).toBe(true)
   })
 })
