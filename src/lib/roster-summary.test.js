@@ -411,11 +411,17 @@ describe('summarizeWeek leave-awareness (phase 6)', () => {
   })
 })
 
+// CONTRACTORSPEND.1 — summarizeMonth prices by HOLDER (a Map id → pay, built by
+// loadHolderPay), takes a 'YYYY-MM-DD' Dublin calendar date, and counts a shift
+// as spend only when its block is on a PUBLISHED roster.
+const pub = (b) => ({ ...b, rosters: { status: 'published' } })
+const payOf = (...people) => new Map(people.map((p) => [p.id, p]))
+
 describe('summarizeMonth', () => {
-  const refMay = new Date('2026-05-15T12:00:00')
+  const refMay = '2026-05-15'
 
   it('zero spend with no blocks', () => {
-    const r = summarizeMonth({ blocks: [], staff: [contractorDan], referenceDate: refMay, monthlyBudgetEur: 1000 })
+    const r = summarizeMonth({ blocks: [], pay: payOf(contractorDan), referenceDate: refMay, monthlyBudgetEur: 1000 })
     expect(r.contractorCostEur).toBe(0)
     expect(r.remainingEur).toBe(1000)
     expect(r.overBudget).toBe(false)
@@ -424,12 +430,14 @@ describe('summarizeMonth', () => {
 
   it('sums contractor cost across the month, ignores other months', () => {
     const blocks = [
-      block({ id: 'in-may', date: '2026-05-04', start: '09:00', end: '12:00', coaches: ['dan'] }), // 3h × 35 = 105
-      block({ id: 'in-may-2', date: '2026-05-30', start: '09:00', end: '11:00', coaches: ['dan'] }), // 2h × 35 = 70
-      block({ id: 'in-jun', date: '2026-06-01', start: '09:00', end: '12:00', coaches: ['dan'] }), // ignored
-      block({ id: 'in-apr', date: '2026-04-30', start: '09:00', end: '12:00', coaches: ['dan'] }), // ignored
+      pub(block({ id: 'in-may', date: '2026-05-04', start: '09:00', end: '12:00', coaches: ['dan'] })), // 3h × 35 = 105
+      pub(block({ id: 'in-may-2', date: '2026-05-30', start: '09:00', end: '11:00', coaches: ['dan'] })), // 2h × 35 = 70
+      pub(block({ id: 'in-jun', date: '2026-06-01', start: '09:00', end: '12:00', coaches: ['dan'] })), // ignored
+      pub(block({ id: 'in-apr', date: '2026-04-30', start: '09:00', end: '12:00', coaches: ['dan'] })), // ignored
     ]
-    const r = summarizeMonth({ blocks, staff: [contractorDan], referenceDate: refMay, monthlyBudgetEur: 200 })
+    const r = summarizeMonth({ blocks, pay: payOf(contractorDan), referenceDate: refMay, monthlyBudgetEur: 200 })
+    expect(r.monthStartIso).toBe('2026-05-01')
+    expect(r.monthEndIso).toBe('2026-05-31')
     expect(r.contractorCostEur).toBe(175)
     expect(r.remainingEur).toBe(25)
     expect(r.overBudget).toBe(false)
@@ -437,54 +445,148 @@ describe('summarizeMonth', () => {
   })
 
   it('flags overBudget when spend > budget', () => {
-    const blocks = [
-      block({ id: 'b1', date: '2026-05-04', start: '09:00', end: '13:00', coaches: ['dan'] }), // 4h × 35 = 140
-    ]
-    const r = summarizeMonth({ blocks, staff: [contractorDan], referenceDate: refMay, monthlyBudgetEur: 100 })
+    const blocks = [pub(block({ id: 'b1', date: '2026-05-04', start: '09:00', end: '13:00', coaches: ['dan'] }))] // 4h × 35 = 140
+    const r = summarizeMonth({ blocks, pay: payOf(contractorDan), referenceDate: refMay, monthlyBudgetEur: 100 })
     expect(r.overBudget).toBe(true)
     expect(r.remainingEur).toBe(-40)
     expect(r.utilisationPct).toBe(140)
   })
 
   it('handles null budget — returns spend total only, no over/under', () => {
-    const blocks = [
-      block({ id: 'b1', date: '2026-05-04', start: '09:00', end: '12:00', coaches: ['dan'] }),
-    ]
-    const r = summarizeMonth({ blocks, staff: [contractorDan], referenceDate: refMay, monthlyBudgetEur: null })
+    const blocks = [pub(block({ id: 'b1', date: '2026-05-04', start: '09:00', end: '12:00', coaches: ['dan'] }))]
+    const r = summarizeMonth({ blocks, pay: payOf(contractorDan), referenceDate: refMay, monthlyBudgetEur: null })
     expect(r.contractorCostEur).toBe(105)
     expect(r.monthlyBudgetEur).toBeNull()
     expect(r.remainingEur).toBeNull()
     expect(r.overBudget).toBe(false)
+    expect(r.projectedOverBudget).toBe(false)
     expect(r.utilisationPct).toBeNull()
   })
 
   // ROSTER-HOURS.1 — contractor euros follow the per-assignment window too.
-  // This figure gates the over-budget confirmation on POST /api/schedule/rosters,
-  // so billing the whole block for a coach who worked half of it asked an owner
-  // to approve an overrun that was never real.
   it("bills a contractor's per-assignment window, not the whole block", () => {
     const blocks = [
       // 8h block; Dan is on it 09:00-12:00 → 3h x EUR 35 = EUR 105, not 8h x 35 = EUR 280.
-      block({
+      pub(block({
         id: 'b1', date: '2026-05-04', start: '09:00', end: '17:00',
         coaches: [{ profile_id: 'dan', start_time_override: '09:00', end_time_override: '12:00' }],
-      }),
+      })),
     ]
-    const r = summarizeMonth({ blocks, staff: [contractorDan], referenceDate: refMay, monthlyBudgetEur: 200 })
+    const r = summarizeMonth({ blocks, pay: payOf(contractorDan), referenceDate: refMay, monthlyBudgetEur: 200 })
     expect(r.contractorCostEur).toBe(105)
     expect(r.overBudget).toBe(false)
     expect(r.remainingEur).toBe(95)
   })
 
   it('exposes FTE implicit cost separately (context, not budget input)', () => {
-    const blocks = [
-      block({ id: 'b1', date: '2026-05-04', start: '09:00', end: '13:00', coaches: ['sarah'] }),
-    ]
-    const r = summarizeMonth({ blocks, staff: [fteSarah], referenceDate: refMay, monthlyBudgetEur: 1000 })
+    const blocks = [pub(block({ id: 'b1', date: '2026-05-04', start: '09:00', end: '13:00', coaches: ['sarah'] }))]
+    const r = summarizeMonth({ blocks, pay: payOf(fteSarah), referenceDate: refMay, monthlyBudgetEur: 1000 })
     // 4h × (39000/52/30 = €25/h) = €100
     expect(r.fteImplicitCostEur).toBe(100)
     // FTE doesn't hit the contractor budget
     expect(r.contractorCostEur).toBe(0)
+  })
+})
+
+describe('CONTRACTORSPEND.1 — who and what summarizeMonth prices', () => {
+  const ref = '2026-05-15'
+  const may4 = (coaches) => pub(block({ id: 'b-may4', date: '2026-05-04', start: '09:00', end: '11:00', coaches }))
+  const admin = (b) => ({ ...b, shift_templates: { ...b.shift_templates, kind: 'admin' } })
+
+  it('prices a contractor deactivated mid-month for the shifts they worked', () => {
+    const r = summarizeMonth({ blocks: [may4(['dan'])], pay: payOf({ ...contractorDan, active: false }), referenceDate: ref, monthlyBudgetEur: 100 })
+    expect(r.contractorCostEur).toBe(70)
+  })
+
+  it('prices a permanently deleted (tombstoned) contractor for the shifts they worked', () => {
+    const tomb = { ...contractorDan, active: false, deleted_at: '2026-05-20T10:00:00Z' }
+    const r = summarizeMonth({ blocks: [may4(['dan'])], pay: payOf(tomb), referenceDate: ref, monthlyBudgetEur: 100 })
+    expect(r.contractorCostEur).toBe(70)
+  })
+
+  it('a holder with no pay entry costs nothing and does not throw', () => {
+    const r = summarizeMonth({ blocks: [may4(['ghost'])], pay: payOf(contractorDan), referenceDate: ref, monthlyBudgetEur: 100 })
+    expect(r.contractorCostEur).toBe(0)
+    expect(r.unpublishedContractorCostEur).toBe(0)
+  })
+
+  it('counts published shifts as spend and the rest (no roster, draft, superseded) as not yet published', () => {
+    const blocks = [
+      pub(block({ id: 'p', date: '2026-05-04', start: '09:00', end: '11:00', coaches: ['dan'] })), // 70 published
+      block({ id: 'none', date: '2026-05-05', start: '09:00', end: '12:00', coaches: ['dan'] }), // 105, no roster
+      { ...block({ id: 'draft', date: '2026-05-06', start: '09:00', end: '10:00', coaches: ['dan'] }), rosters: { status: 'draft' } }, // 35
+      { ...block({ id: 'sup', date: '2026-05-07', start: '09:00', end: '10:00', coaches: ['dan'] }), rosters: { status: 'superseded' } }, // 35
+    ]
+    const r = summarizeMonth({ blocks, pay: payOf(contractorDan), referenceDate: ref, monthlyBudgetEur: 200 })
+    expect(r.contractorCostEur).toBe(70)
+    expect(r.unpublishedContractorCostEur).toBe(175)
+    expect(r.projectedContractorCostEur).toBe(245)
+    expect(r.overBudget).toBe(false)
+    expect(r.remainingEur).toBe(130)
+    expect(r.utilisationPct).toBe(35)
+    expect(r.projectedOverBudget).toBe(true)
+  })
+
+  it('a cancelled assignment costs nothing, published or not', () => {
+    const cancelled = { profile_id: 'dan', status: 'cancelled' }
+    const blocks = [
+      pub(block({ id: 'p', date: '2026-05-04', start: '09:00', end: '11:00', coaches: [cancelled] })),
+      block({ id: 'u', date: '2026-05-05', start: '09:00', end: '11:00', coaches: [cancelled] }),
+    ]
+    const r = summarizeMonth({ blocks, pay: payOf(contractorDan), referenceDate: ref, monthlyBudgetEur: 100 })
+    expect(r.contractorCostEur).toBe(0)
+    expect(r.unpublishedContractorCostEur).toBe(0)
+  })
+
+  it('an admin shift stays out of both contractor figures (SHIFTTYPE.1)', () => {
+    const blocks = [
+      admin(pub(block({ id: 'ap', date: '2026-05-04', start: '09:00', end: '11:00', coaches: ['dan'] }))),
+      admin(block({ id: 'au', date: '2026-05-05', start: '09:00', end: '11:00', coaches: ['dan'] })),
+    ]
+    const r = summarizeMonth({ blocks, pay: payOf(contractorDan), referenceDate: ref, monthlyBudgetEur: 100 })
+    expect(r.contractorCostEur).toBe(0)
+    expect(r.unpublishedContractorCostEur).toBe(0)
+  })
+
+  it('FTE implicit cost counts published shifts, whoever holds them, active or not', () => {
+    const blocks = [
+      pub(block({ id: 'p', date: '2026-05-04', start: '09:00', end: '13:00', coaches: ['sarah'] })), // 4h × 25 = 100
+      block({ id: 'u', date: '2026-05-05', start: '09:00', end: '13:00', coaches: ['sarah'] }), // unpublished: not costed
+    ]
+    const r = summarizeMonth({ blocks, pay: payOf({ ...fteSarah, active: false }), referenceDate: ref, monthlyBudgetEur: 1000 })
+    expect(r.fteImplicitCostEur).toBe(100)
+    expect(r.contractorCostEur).toBe(0)
+  })
+
+  it("prices every shift of the month by the holder's CURRENT employment type (no history exists)", () => {
+    // Dan was a contractor until the 10th and an employee after. profiles keeps
+    // ONE employment_type, so the whole month reads as an employee (D5).
+    const blocks = [
+      pub(block({ id: 'early', date: '2026-05-04', start: '09:00', end: '11:00', coaches: ['dan'] })),
+      pub(block({ id: 'late', date: '2026-05-20', start: '09:00', end: '11:00', coaches: ['dan'] })),
+    ]
+    const nowEmployee = { ...contractorDan, employment_type: 'fte', hourly_rate: null, annual_salary: 39000, contracted_hours_per_week: 30 }
+    const r = summarizeMonth({ blocks, pay: payOf(nowEmployee), referenceDate: ref, monthlyBudgetEur: 100 })
+    expect(r.contractorCostEur).toBe(0)
+    expect(r.fteImplicitCostEur).toBe(100) // 4h × 25
+  })
+
+  it('refuses a Date reference: the month comes from the Dublin calendar string', () => {
+    expect(() => summarizeMonth({ blocks: [], pay: new Map(), referenceDate: new Date('2026-05-15T12:00:00'), monthlyBudgetEur: null }))
+      .toThrow(TypeError)
+    expect(() => summarizeMonth({ blocks: [], pay: new Map(), referenceDate: '15/05/2026', monthlyBudgetEur: null }))
+      .toThrow(TypeError)
+  })
+
+  it('a shift across the clocks-back hour is priced at its ROSTERED hours (D7)', () => {
+    // 25 Oct 2026, Dublin: 02:00 IST becomes 01:00 GMT, so 01:00-03:00 is three
+    // real hours. Contractor spend prices rostered hours (payroll's shiftHours),
+    // as the publish gate and the invoice review do: 2h.
+    const blocks = [pub(block({ id: 'dst', date: '2026-10-25', start: '01:00', end: '03:00', coaches: ['dan'] }))]
+    const r = summarizeMonth({ blocks, pay: payOf(contractorDan), referenceDate: '2026-10-25', monthlyBudgetEur: null })
+    expect(r.monthStartIso).toBe('2026-10-01')
+    expect(r.monthEndIso).toBe('2026-10-31')
+    expect(r.contractorCostEur).toBe(70)
   })
 })
 
@@ -518,6 +620,16 @@ describe('blocksToShiftRows', () => {
       notes: 'block note',
       status: 'scheduled',
     })
+  })
+
+  it("CONTRACTORSPEND.1 — marks each row published or not, from its block's roster", () => {
+    const rows = blocksToShiftRows([
+      { ...b, rosters: { status: 'published' } },
+      { ...b, id: 'b2', rosters: { status: 'draft' } },
+      { ...b, id: 'b3', rosters: { status: 'superseded' } },
+      { ...b, id: 'b4' },
+    ])
+    expect(rows.map((r) => r.published)).toEqual([true, false, false, false])
   })
 
   it('leaves the override null when the block still matches its template', () => {
@@ -590,22 +702,24 @@ describe('SHIFTTYPE.1 — admin shifts in the week and month summaries', () => {
   const asAdmin = (b) => ({ ...b, shift_templates: { ...b.shift_templates, kind: 'admin' } })
   const weekStart = new Date('2026-05-04T00:00:00')
   const today = new Date('2026-05-01T12:00:00')
-  const refMay = new Date('2026-05-15T12:00:00')
+  const refMay = '2026-05-15'
+  const published = (b) => ({ ...b, rosters: { status: 'published' } })
+  const payOfMonth = (...people) => new Map(people.map((p) => [p.id, p]))
 
   it('summarizeMonth: a contractor on an admin shift costs the budget nothing', () => {
     const blocks = [
-      block({ id: 'class', date: '2026-05-04', start: '09:00', end: '11:00', coaches: ['dan'] }),          // 2h x 35 = 70
-      asAdmin(block({ id: 'admin', date: '2026-05-05', start: '09:00', end: '13:00', coaches: ['dan'] })), // not priced
+      published(block({ id: 'class', date: '2026-05-04', start: '09:00', end: '11:00', coaches: ['dan'] })), // 2h x 35 = 70
+      published(asAdmin(block({ id: 'admin', date: '2026-05-05', start: '09:00', end: '13:00', coaches: ['dan'] }))), // not priced
     ]
-    const r = summarizeMonth({ blocks, staff: [contractorDan], referenceDate: refMay, monthlyBudgetEur: 100 })
+    const r = summarizeMonth({ blocks, pay: payOfMonth(contractorDan), referenceDate: refMay, monthlyBudgetEur: 100 })
     expect(r.contractorCostEur).toBe(70)
     expect(r.remainingEur).toBe(30)
     expect(r.overBudget).toBe(false)
   })
 
   it('summarizeMonth: an FTE on an admin shift still carries implicit cost (hours are hours)', () => {
-    const blocks = [asAdmin(block({ id: 'admin', date: '2026-05-04', start: '09:00', end: '13:00', coaches: ['sarah'] }))]
-    const r = summarizeMonth({ blocks, staff: [fteSarah], referenceDate: refMay, monthlyBudgetEur: 1000 })
+    const blocks = [published(asAdmin(block({ id: 'admin', date: '2026-05-04', start: '09:00', end: '13:00', coaches: ['sarah'] })))]
+    const r = summarizeMonth({ blocks, pay: payOfMonth(fteSarah), referenceDate: refMay, monthlyBudgetEur: 1000 })
     expect(r.fteImplicitCostEur).toBe(100) // 4h x EUR 25
   })
 
@@ -641,13 +755,14 @@ describe('SHIFTTYPE.1 — admin shifts in the week and month summaries', () => {
 // PAYROLL24.1 — contractor spend and the week panel read hours through
 // payroll.shiftHours, which counted a shift ending at 24:00 as 0.
 describe('a shift ending at 24:00 (PAYROLL24.1)', () => {
-  const refMay = new Date('2026-05-15T12:00:00')
   const weekStart = new Date('2026-05-04T00:00:00')
   const today = new Date('2026-05-01T12:00:00')
 
   it('summarizeMonth prices its 2 contractor hours', () => {
-    const blocks = [block({ id: 'late', date: '2026-05-04', start: '22:00:00', end: '24:00:00', coaches: ['dan'] })]
-    const r = summarizeMonth({ blocks, staff: [contractorDan], referenceDate: refMay, monthlyBudgetEur: 100 })
+    // CONTRACTORSPEND.1 — pay keyed by holder, a Dublin date string, and a
+    // PUBLISHED block (only published shifts are spend).
+    const blocks = [{ ...block({ id: 'late', date: '2026-05-04', start: '22:00:00', end: '24:00:00', coaches: ['dan'] }), rosters: { status: 'published' } }]
+    const r = summarizeMonth({ blocks, pay: new Map([['dan', contractorDan]]), referenceDate: '2026-05-15', monthlyBudgetEur: 100 })
     expect(r.contractorCostEur).toBe(70) // 2h × €35
     expect(r.remainingEur).toBe(30)
   })
