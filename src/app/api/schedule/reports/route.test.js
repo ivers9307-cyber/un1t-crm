@@ -129,7 +129,7 @@ describe('GET /api/schedule/reports — list', () => {
     expect(wire).not.toContain('staff_cost')
     expect(wire).not.toContain('regular_rate')
     expect(wire).not.toContain('total_cost')
-    expect(db.calls).toContainEqual(['not', 'report_type', 'in', '(staff_cost)'])
+    expect(db.calls).toContainEqual(['not', 'report_type', 'in', '(staff_cost,utilisation)'])
   })
 
   it('a manager at the location gets every type', async () => {
@@ -141,15 +141,17 @@ describe('GET /api/schedule/reports — list', () => {
   it('judges the REPORT location, not the active one: manager at A, head coach at B', async () => {
     getCurrentUser.mockResolvedValue(MIXED)
     const body = await (await GET(listReq(LOC_B))).json()
-    expect(body.data.map(r => r.id)).toEqual(['r4'])
+    // CONTRACTVIS.1 — r4 is a utilisation report at B, where they are head coach.
+    expect(body.data.map(r => r.id)).toEqual([])
   })
 
   it('unscoped list: rate rows only from locations where the caller is an admin', async () => {
     getCurrentUser.mockResolvedValue(MIXED)
     const body = await (await GET(listReq(null))).json()
-    expect(body.data.map(r => r.id)).toEqual(['r1', 'r2', 'r4'])
+    // CONTRACTVIS.1 — r4 (utilisation at B, where they are head coach) goes too.
+    expect(body.data.map(r => r.id)).toEqual(['r1', 'r2'])
     // The QUERY excludes them, not only the defence-in-depth filter after it.
-    expect(db.calls).toContainEqual(['or', `location_id.in.(${LOC_A}),report_type.not.in.(staff_cost)`])
+    expect(db.calls).toContainEqual(['or', `location_id.in.(${LOC_A}),report_type.not.in.(staff_cost,utilisation)`])
   })
 
   it('unscoped list for an owner at A and manager at B: every row, no report_type filter, no or()', async () => {
@@ -162,7 +164,8 @@ describe('GET /api/schedule/reports — list', () => {
   it('unscoped list for a head coach everywhere excludes every rate row', async () => {
     getCurrentUser.mockResolvedValue({ ...HEAD_COACH_A, locations: locs(LOC_A, LOC_B), rolesByLocation: { [LOC_A]: 'head_coach', [LOC_B]: 'head_coach' } })
     const body = await (await GET(listReq(null))).json()
-    expect(body.data.map(r => r.id)).toEqual(['r2', 'r4'])
+    // CONTRACTVIS.1 — utilisation carries colleagues' contracts: admin-only.
+    expect(body.data.map(r => r.id)).toEqual(['r2'])
   })
 
   it('master sees everything', async () => {
@@ -302,5 +305,28 @@ describe('POST /api/schedule/reports — a period out of order or too long', () 
     const res = await POST(postReq({ report_type: 'roster_coverage', period_start: '2026-01-01', period_end: '2027-01-01', location_id: LOC_A }))
     expect(res.status).toBe(201)
     expect(generateReport).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('POST /api/schedule/reports — utilisation (CONTRACTVIS.1)', () => {
+  const body = (location_id = LOC_A) => ({ report_type: 'utilisation', period_start: '2026-09-01', period_end: '2026-09-07', location_id })
+
+  it('403 for a head coach, named, and nothing is generated', async () => {
+    getCurrentUser.mockResolvedValue(HEAD_COACH_A)
+    const res = await POST(postReq(body()))
+    expect(res.status).toBe(403)
+    expect((await res.json()).error).toBe('Only owners and managers can run staff utilisation reports.')
+    expect(generateReport).not.toHaveBeenCalled()
+  })
+
+  it('a manager at the location can generate it', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER_A)
+    expect((await POST(postReq(body()))).status).toBe(201)
+  })
+
+  it('manager at A cannot generate it for B, where they are head coach', async () => {
+    getCurrentUser.mockResolvedValue(MIXED)
+    expect((await POST(postReq(body(LOC_B)))).status).toBe(403)
+    expect(generateReport).not.toHaveBeenCalled()
   })
 })

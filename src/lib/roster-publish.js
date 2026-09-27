@@ -26,6 +26,7 @@ import { leaveScopeOrFilter } from './time-off-leave'
 import { logWarn } from './log'
 import { leaveCovering, leaveClashes, doubleBookings } from './roster-publish-advisories'
 import { loadWorkingTimeShifts } from './working-time-data'
+import { loadHolderPay, liveHolderIds } from './shift-holder-pay'
 import { workingTimeAdvisories } from '@shared/working-time'
 
 function isoFirstOfMonth(iso) {
@@ -100,20 +101,14 @@ async function loadBudgetContext(db, locationId, periodStart, periodEnd = period
     .single()
   if (locErr) throw new Error(`Location lookup failed: ${locErr.message}`)
 
-  // Contractor profiles assigned to this location with their rates.
+  // This studio's members. Only their LEAVE is read from this list (a coach on
+  // approved leave is not working the shift, LEAVE.2); who is PRICED is decided
+  // by who holds the shifts, below (CONTRACTORSPEND.1).
   const { data: links, error: linksErr } = await db
     .from('profile_locations')
-    .select('profile_id, profiles:profile_id(id, employment_type, hourly_rate, active)')
+    .select('profile_id')
     .eq('location_id', locationId)
   if (linksErr) throw new Error(`Profile lookup failed: ${linksErr.message}`)
-
-  const contractorRateById = {}
-  for (const link of links || []) {
-    const p = link.profiles
-    if (!p) continue
-    if (p.employment_type !== 'contractor') continue
-    contractorRateById[p.id] = Number(p.hourly_rate) || 0
-  }
 
   // All blocks in the calendar months the period touches, with
   // their assignments and roster join. We consider the union of
@@ -142,14 +137,29 @@ async function loadBudgetContext(db, locationId, periodStart, periodEnd = period
     if (!page || page.length < BLOCK_PAGE_SIZE) break
   }
 
-  // COPYLEAVE.1 — everyone with a live shift on these blocks. Used twice
-  // below, both times for the advisory lists only: to widen the leave scope to
-  // a guest coach so leaveClashes can name them (leave covers the PERSON,
-  // LEAVE.2; the money is unaffected, a guest has no rate here), and to look
-  // for the same people's shifts at other studios.
-  const rosteredIds = advisories
-    ? [...new Set(monthBlocks.flatMap((b) => liveAssignments(b.shift_assignments).map((a) => a.profile_id)).filter(Boolean))]
-    : []
+  // CONTRACTORSPEND.1 — price every HOLDER of a live shift here, not only this
+  // studio's members: a contractor from the sibling studio covering a class was
+  // priced at EUR 0, so their hours never reached the budget. Pay comes from
+  // profile_compensation (mig 152's canonical copy; the profiles columns are
+  // deprecated) and the type from profiles by named columns, through the SAME
+  // loader as the contractor-spend panel, so the two price the same people.
+  // A failed read is a budget input: it throws, as the reads above do.
+  const holderIds = liveHolderIds(monthBlocks)
+  let pay
+  try {
+    pay = await loadHolderPay(db, holderIds)
+  } catch (e) {
+    throw new Error(`Pay lookup failed: ${e?.message || e}`)
+  }
+  const contractorRateById = {}
+  for (const [id, p] of pay) {
+    if (p.employment_type !== 'contractor') continue
+    contractorRateById[id] = Number(p.hourly_rate) || 0
+  }
+
+  // COPYLEAVE.1 — everyone with a live shift on these blocks, for the advisory
+  // lists only: to look for the same people's shifts at other studios.
+  const rosteredIds = advisories ? holderIds : []
 
   // ROSTER-FIX.4 — approved leave for the months, in ONE query. A coach on
   // approved leave is not working the shift they are still rostered on, so
@@ -157,6 +167,8 @@ async function loadBudgetContext(db, locationId, periodStart, periodEnd = period
   // actually within budget.
   // LEAVE.2 — leave covers the person: a coach here who filed leave from
   // another studio is still not working this studio's shifts.
+  // CONTRACTORSPEND.1 — every HOLDER's leave, in both modes: a guest contractor
+  // is priced now, so their leave must be seen or the gate bills them while off.
   // ROSTERTIDY.1 — paged like the block read. One month of approved leave
   // never approaches 1,000 rows, but the batch projection loads the whole span
   // a queue of drafts touches, and a silently-truncated leave list would bill
@@ -166,7 +178,7 @@ async function loadBudgetContext(db, locationId, periodStart, periodEnd = period
     const { data: page, error: leaveErr } = await db
       .from('time_off_requests')
       .select('id, profile_id, start_date, end_date')
-      .or(leaveScopeOrFilter([locationId], [...(links || []).map((l) => l.profile_id), ...rosteredIds]))
+      .or(leaveScopeOrFilter([locationId], [...(links || []).map((l) => l.profile_id), ...holderIds]))
       .eq('status', 'approved')
       .lte('start_date', monthEnd)
       .gte('end_date', monthStart)

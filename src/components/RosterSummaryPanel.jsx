@@ -15,7 +15,16 @@
 // Two halves:
 //   - Per-coach FTE utilisation bars (allocated / contracted)
 //   - Contractor euro spend for the focused month vs the
-//     location's monthly_contractor_budget_eur
+//     location's monthly_contractor_budget_eur: PUBLISHED shifts as the
+//     headline, anything not yet published on one line beside it
+//     (CONTRACTORSPEND.1)
+//
+// CONTRACTVIS.1 — `contractVisible` (owner / manager / master at this studio;
+// the calendar decides) switches the FTE half between utilisation against the
+// contract and a plain list of rostered hours. It defaults to FALSE: a caller
+// that forgets to say gets hours only. The staff rows a head coach's calendar
+// receives carry no contract anyway; this keeps the panel from labelling every
+// one of them "No contract".
 //
 // RSC-AUDIT.2: no own state / events / refs / browser APIs —
 // pure data transformation via summarizeWeek / summarizeMonth +
@@ -62,6 +71,7 @@ function monthLabel(iso) {
 
 export default function RosterSummaryPanel({
   blocks, staff, weekStart, timeOff,
+  contractVisible = false,
   // SCHEDULE-SPEND-AGG.1 — the month half (contractor spend vs
   // budget) is now sourced from a server-computed aggregate via the
   // `contractorSpend` prop. It's null while the parent is fetching.
@@ -92,6 +102,18 @@ export default function RosterSummaryPanel({
     timeOff,
   })
   const month = contractorSpend
+  // Hours-only rows: heaviest week first, then name. Nothing measured against a contract.
+  const hoursRows = contractVisible
+    ? null
+    : [...week.fte].sort((a, b) => (b.allocated_hours - a.allocated_hours)
+      || String(a.full_name || '').localeCompare(String(b.full_name || '')))
+  // CONTRACTORSPEND.1 — the server counts PUBLISHED shifts as spend and sends
+  // the rest (drafts, shifts no roster owns yet) as its own total. `|| 0`: a
+  // response from before this change has no such field.
+  const unpublishedEur = Number(month?.unpublishedContractorCostEur) || 0
+  const overOncePublishedEur = month?.projectedOverBudget && !month?.overBudget && month?.monthlyBudgetEur != null
+    ? Number(month.projectedContractorCostEur) - Number(month.monthlyBudgetEur)
+    : null
 
   return (
     <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-3">
@@ -100,13 +122,13 @@ export default function RosterSummaryPanel({
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-semibold flex items-center gap-2">
             <TrendingUp size={14} className="text-blue-400" />
-            FTE utilisation — this week
+            {contractVisible ? 'FTE utilisation — this week' : 'FTE hours — this week'}
           </h3>
           <span className="text-[11px] text-un1t-subtle">
             {staffUnavailable
               ? null
               : <>{week.fte.length} {week.fte.length === 1 ? 'coach' : 'coaches'} rostered</>}
-            {!staffUnavailable && leaveMissing && (
+            {!staffUnavailable && leaveMissing && contractVisible && (
               <span className="ml-1.5 px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-700">Leave not included</span>
             )}
           </span>
@@ -118,6 +140,16 @@ export default function RosterSummaryPanel({
           <p className="text-xs text-un1t-subtle py-2">
             No FTE coaches assigned to this week yet.
           </p>
+        ) : !contractVisible ? (
+          <div className="space-y-1.5">
+            {hoursRows.map(row => (
+              <div key={row.profile_id} className="flex items-center justify-between text-xs gap-2">
+                <span className="font-medium text-un1t-text truncate">{row.full_name}</span>
+                <span className="flex-shrink-0 text-un1t-subtle">{row.allocated_hours}h</span>
+              </div>
+            ))}
+            <p className="text-[11px] text-un1t-muted pt-1">Contracted hours are shown to owners and managers.</p>
+          </div>
         ) : (
           <div className="space-y-2.5">
             {week.fte.map(row => {
@@ -197,7 +229,7 @@ export default function RosterSummaryPanel({
 
             <div className="grid grid-cols-2 gap-3 mb-3">
               <div>
-                <div className="text-[10px] uppercase tracking-wider text-un1t-subtle">Spent</div>
+                <div className="text-[10px] uppercase tracking-wider text-un1t-subtle">Published</div>
                 <div className={`text-xl font-semibold ${month.overBudget ? 'text-red-700' : 'text-un1t-text'}`}>
                   {formatEur(month.contractorCostEur)}
                 </div>
@@ -227,6 +259,16 @@ export default function RosterSummaryPanel({
                   <span className="text-un1t-muted">FTE labour (sunk cost): {formatEur(month.fteImplicitCostEur)}</span>
                 </div>
               </>
+            )}
+
+            {/* formatEur shows whole euros: gate on what renders, never "€0 more". */}
+            {Math.round(unpublishedEur) > 0 && (
+              <p className="text-[11px] text-un1t-subtle mt-2">
+                {formatEur(unpublishedEur)} more in shifts not yet published
+                {overOncePublishedEur != null && Math.round(overOncePublishedEur) > 0
+                  ? <>: <span className="text-amber-700 font-medium">{formatEur(overOncePublishedEur)} over budget once published</span>.</>
+                  : '.'}
+              </p>
             )}
 
             {spendOtherMonthStart && (
