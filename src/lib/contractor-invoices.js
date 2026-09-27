@@ -15,6 +15,8 @@
 
 import { shiftHours } from './payroll.js'
 import { logWarn } from './log.js'
+import { isLiveAssignment } from './roster.js'
+import { selectAll } from './select-all.js'
 import { latestQueueRowByInvoice } from '@shared/contractor-invoice-review'
 
 /**
@@ -68,6 +70,60 @@ export function recentMonthOptions(now = new Date(), count = 12) {
 export function defaultMonthKey(now = new Date()) {
   const prev = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1))
   return `${prev.getUTCFullYear()}-${String(prev.getUTCMonth() + 1).padStart(2, '0')}`
+}
+
+const round2 = (n) => +n.toFixed(2)
+
+/**
+ * INVOICEHOURS.1 — the scheduled-hours rule for a contractor invoice review,
+ * pure. The LABOUR.1 rule for money read off the roster:
+ *   - live only (isLiveAssignment): a cancelled row counts NOWHERE;
+ *     'swapped' is live and already belongs to the taker (swap approval moves
+ *     profile_id), so a contractor-scoped read gives the giver nothing;
+ *   - published only (block.rosters.status === 'published'): a block with no
+ *     roster, or on a draft / superseded one, was never rostered for real. Its
+ *     hours are tallied apart as unpublished_* so the review can say so;
+ *   - admin shifts count (a contractor invoices them; no kind filter);
+ *   - hours by payroll's shiftHours (override → block → template, wall clock,
+ *     '24:00' = midnight once PAYROLL24.1 lands), so the review, the approval
+ *     snapshot, payroll and the staff_cost report agree.
+ *
+ * @param {Array<{ status?: string|null, start_time_override?: string|null,
+ *   end_time_override?: string|null, shift_blocks?: { start_time, end_time,
+ *   rosters?: { status?: string }|null, shift_templates?: object|null }|null }>} rows
+ * @returns {{ scheduled_hours: number, shift_count: number,
+ *   unpublished_hours: number, unpublished_shift_count: number }}
+ */
+export function scheduledFromAssignments(rows) {
+  let hours = 0
+  let shifts = 0
+  let unpublishedHours = 0
+  let unpublishedShifts = 0
+  for (const row of rows || []) {
+    const block = row?.shift_blocks
+    if (!block || !isLiveAssignment(row)) continue
+    const tpl = block.shift_templates || {}
+    const h = shiftHours({
+      start_time_override: row.start_time_override,
+      end_time_override: row.end_time_override,
+      start_time: block.start_time,
+      end_time: block.end_time,
+      shift_templates: { start_time: tpl.start_time, end_time: tpl.end_time },
+    })
+    if (block.rosters?.status === 'published') {
+      hours += h
+      shifts += 1
+    } else {
+      unpublishedHours += h
+      unpublishedShifts += 1
+    }
+  }
+  return {
+    scheduled_hours: round2(hours),
+    shift_count: shifts,
+    unpublished_hours: round2(unpublishedHours),
+    unpublished_shift_count: unpublishedShifts,
+  }
 }
 
 /**
