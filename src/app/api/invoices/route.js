@@ -22,6 +22,7 @@ import {
   RECEIPT_MIME_TYPES, sniffReceiptMime, loadQueueRowsForInvoices,
 } from '@/lib/contractor-invoices'
 import { contractorInvoiceLifecycle } from '@shared/contractor-invoice-review'
+import { logError } from '@/lib/log'
 
 // JSON submit mode (INVOICE-UPLOAD.1): the PDF is already in storage via
 // /api/invoices/upload-sign + a signed direct upload; the body carries a
@@ -154,14 +155,32 @@ export async function POST(request) {
 
   const db = createServerClient()
 
-  // Pre-check: existing active row blocks resubmit.
-  const { data: existingActive } = await db
+  // Pre-check: existing active row blocks resubmit. "Active" is EXACTLY the
+  // unique index's predicate — contractor_invoices_one_active_per_period
+  // (mig 101, redefined by mig 102) is WHERE status NOT IN ('declined',
+  // 'revoked'): a declined OR revoked row makes way for a fresh submission.
+  // INVOICEHOURS.1 — this excluded only 'declined', so a revoked row answered
+  // a false 409. The index allows at most one active row, so maybeSingle's
+  // error is a failed read, never "many rows": answer 500, never a false 409
+  // and never a silent pass through to the insert.
+  const { data: existingActive, error: activeErr } = await db
     .from('contractor_invoices')
     .select('id, status')
     .eq('contractor_id', user.id)
     .eq('period_start', period.period_start)
-    .neq('status', 'declined')
+    .not('status', 'in', '(declined,revoked)')
     .maybeSingle()
+  if (activeErr) {
+    logError('invoice-submit', 'active-invoice pre-check failed', {
+      err: activeErr.message || String(activeErr),
+      contractorId: user.id,
+      periodStart: period.period_start,
+    })
+    return NextResponse.json(
+      { success: false, error: 'Could not check for an existing invoice for this month. Nothing was submitted; please try again.' },
+      { status: 500 }
+    )
+  }
   if (existingActive) {
     return NextResponse.json(
       {
