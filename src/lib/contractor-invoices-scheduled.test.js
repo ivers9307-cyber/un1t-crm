@@ -5,7 +5,7 @@
 // case runs under Dublin and a US zone.
 
 import { describe, it, expect, afterEach } from 'vitest'
-import { scheduledFromAssignments } from './contractor-invoices'
+import { scheduledFromAssignments, computeScheduledForPeriod } from './contractor-invoices'
 import { shiftHours, timeToHours } from './payroll'
 
 const realTz = process.env.TZ
@@ -134,3 +134,107 @@ for (const tz of ['Europe/Dublin', 'America/Los_Angeles']) {
     })
   })
 }
+
+// A recording fake of the two reads. profiles: .select().eq().single();
+// shift_assignments: .select().eq().eq().gte().lte().order().range() awaited
+// (selectAll), one page per await.
+function fakeDb({
+  profile = { hourly_rate: 20, employment_type: 'contractor' },
+  profileError = null, pages = [[]], rowsError = null,
+} = {}) {
+  const calls = []
+  let page = 0
+  return {
+    calls,
+    from(table) {
+      const q = { table, filters: [], select: null, order: null, range: null }
+      calls.push(q)
+      const b = {
+        select(cols) { q.select = cols; return b },
+        eq(col, val) { q.filters.push(['eq', col, val]); return b },
+        gte(col, val) { q.filters.push(['gte', col, val]); return b },
+        lte(col, val) { q.filters.push(['lte', col, val]); return b },
+        order(col, opts) { q.order = [col, opts]; return b },
+        range(from, to) { q.range = [from, to]; return b },
+        single() {
+          return Promise.resolve(profileError
+            ? { data: null, error: profileError }
+            : { data: profile, error: null })
+        },
+        then(res, rej) {
+          const out = rowsError
+            ? { data: null, error: rowsError }
+            : { data: pages[page++] || [], error: null }
+          return Promise.resolve(out).then(res, rej)
+        },
+      }
+      return b
+    },
+  }
+}
+
+const ARGS = { contractor_id: 'c1', location_id: 'locA', period_start: '2026-10-01', period_end: '2026-10-31' }
+
+for (const tz of ['Europe/Dublin', 'America/Los_Angeles']) {
+  describe(`computeScheduledForPeriod (TZ=${tz})`, () => {
+    it("reads the invoice's studio and period, by string, with status and roster", async () => {
+      process.env.TZ = tz
+      const db = fakeDb()
+      await computeScheduledForPeriod(db, ARGS)
+      const q = db.calls.find((c) => c.table === 'shift_assignments')
+      expect(q.filters).toEqual([
+        ['eq', 'profile_id', 'c1'],
+        ['eq', 'shift_blocks.location_id', 'locA'],
+        ['gte', 'shift_blocks.block_date', '2026-10-01'],
+        ['lte', 'shift_blocks.block_date', '2026-10-31'],
+      ])
+      expect(q.select).toMatch(/\bstatus\b/)
+      expect(q.select).toMatch(/rosters:roster_id \( status \)/)
+      expect(q.order).toEqual(['id', { ascending: true }])
+      expect(q.range).toEqual([0, 999])
+    })
+  })
+}
+
+describe('computeScheduledForPeriod', () => {
+  it('published-only figures and the unpublished tally reach the result', async () => {
+    const db = fakeDb({ pages: [[
+      row(),                                                          // 8h published
+      row({ roster: 'draft', start: '10:00:00', end: '12:00:00', tpl: null }), // 2h draft
+      row({ status: 'cancelled' }),                                   // nowhere
+    ]] })
+    await expect(computeScheduledForPeriod(db, ARGS)).resolves.toEqual({
+      scheduled_hours: 8, shift_count: 1,
+      hourly_rate: 20, estimated_cost: 160,
+      unpublished_hours: 2, unpublished_shift_count: 1,
+    })
+  })
+
+  it('pages past 1,000 rows (a truncated read would be an under-count)', async () => {
+    const oneHour = () => row({ start: '09:00:00', end: '10:00:00', tpl: null })
+    const db = fakeDb({ pages: [Array.from({ length: 1000 }, oneHour), Array.from({ length: 5 }, oneHour)] })
+    const out = await computeScheduledForPeriod(db, ARGS)
+    expect(out.shift_count).toBe(1005)
+    expect(out.scheduled_hours).toBe(1005)
+    expect(out.estimated_cost).toBe(20100)
+    const ranges = db.calls.filter((c) => c.table === 'shift_assignments').map((c) => c.range)
+    expect(ranges).toEqual([[0, 999], [1000, 1999]])
+  })
+
+  it('the assignment read fails → throws, never 0', async () => {
+    const db = fakeDb({ rowsError: { message: 'boom' } })
+    await expect(computeScheduledForPeriod(db, ARGS)).rejects.toThrow(/Assignment lookup failed: boom/)
+  })
+
+  it('the profile read fails → throws', async () => {
+    const db = fakeDb({ profileError: { message: 'nope' } })
+    await expect(computeScheduledForPeriod(db, ARGS)).rejects.toThrow(/Profile lookup failed: nope/)
+  })
+
+  it('no hourly rate → hours, but no estimated cost', async () => {
+    const db = fakeDb({ profile: { hourly_rate: null, employment_type: 'contractor' }, pages: [[row()]] })
+    await expect(computeScheduledForPeriod(db, ARGS)).resolves.toMatchObject({
+      scheduled_hours: 8, shift_count: 1, hourly_rate: null, estimated_cost: null,
+    })
+  })
+})
