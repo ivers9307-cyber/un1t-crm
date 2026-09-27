@@ -23,6 +23,19 @@ describe('timeToHours', () => {
     expect(timeToHours('25:00')).toBeNull()    // hour out of range
     expect(timeToHours('12:60')).toBeNull()    // minute out of range
   })
+
+  // PAYROLL24.1 — Postgres `time` holds '24:00:00': midnight at the END of the
+  // day. It used to parse as null, so every shift ending at 24:00 was 0 hours.
+  it('reads exactly 24:00 as the end of the day (PAYROLL24.1)', () => {
+    expect(timeToHours('24:00')).toBe(24)
+    expect(timeToHours('24:00:00')).toBe(24)
+  })
+
+  it('refuses everything past 24:00 (PAYROLL24.1)', () => {
+    for (const t of ['24:01', '24:00:01', '24:30', '24:60', '25:00', '99:00']) {
+      expect(timeToHours(t), t).toBeNull()
+    }
+  })
 })
 
 describe('shiftHours', () => {
@@ -207,5 +220,82 @@ describe('groupShiftsByWeek', () => {
   it('skips shifts without a date', () => {
     const m = groupShiftsByWeek([{ id: 'no-date' }])
     expect(m.size).toBe(0)
+  })
+})
+
+// ─── PAYROLL24.1 — a shift ending at 24:00 ───────────────────────────────────
+//
+// shiftHours needs no change of its own: once 24 parses, end - start is never
+// negative for a 24:00 end, so the overnight wrap never fires. These pin it in
+// the three row shapes the callers hand over.
+
+describe('shiftHours — a 24:00 end (PAYROLL24.1)', () => {
+  it('a 24:00 end runs to the end of the day', () => {
+    // report-generator / roster-week-cost / roster-summary: block times on the row.
+    expect(shiftHours({ start_time: '22:00', end_time: '24:00' })).toBe(2)
+    // What Postgres hands back.
+    expect(shiftHours({ start_time: '22:00:00', end_time: '24:00:00' })).toBe(2)
+    expect(shiftHours({ start_time: '18:30:00', end_time: '24:00:00' })).toBe(5.5)
+    expect(shiftHours({ start_time: '00:00', end_time: '24:00' })).toBe(24)
+    // fetchScheduledShiftRows' normalised shape.
+    expect(shiftHours({ block_start_time: '22:00:00', block_end_time: '24:00:00' })).toBe(2)
+    // roster-publish.js blockContractorCost: block times inside shift_templates.
+    expect(shiftHours({ shift_templates: { start_time: '22:00:00', end_time: '24:00:00' } })).toBe(2)
+    // contractor-invoices.js: overrides + block times + template.
+    expect(shiftHours({
+      start_time_override: null, end_time_override: null,
+      start_time: '22:00:00', end_time: '24:00:00',
+      shift_templates: { start_time: '09:00:00', end_time: '10:00:00' },
+    })).toBe(2)
+  })
+
+  it('an override ending at 24:00 wins over the block end', () => {
+    expect(shiftHours({ start_time: '21:00:00', end_time: '23:00:00', end_time_override: '24:00:00' })).toBe(3)
+  })
+
+  it('00:00 and 24:00 as an end are the same 2 hours; 00:00-00:00 stays 0', () => {
+    expect(shiftHours({ start_time: '22:00', end_time: '00:00' })).toBe(2)
+    expect(shiftHours({ start_time: '22:00', end_time: '24:00' })).toBe(2)
+    expect(shiftHours({ start_time: '00:00', end_time: '00:00' })).toBe(0)
+  })
+
+  // Decision D4: a 24:00 START is that same midnight, with the usual wrap. A
+  // block cannot start at 24:00 (shift_blocks_time_order, mig 067:90); only an
+  // override written by hand could. shared/roster-month and roster-compare
+  // read it the same way; workingWindow calls it untimed (hours-24.test.js).
+  it('a 24:00 start reads as the same midnight, wrapping', () => {
+    expect(shiftHours({ start_time: '24:00', end_time: '02:00' })).toBe(2)
+    expect(shiftHours({ start_time: '24:00', end_time: '24:00' })).toBe(0)
+  })
+
+  it('a time past 24:00 still counts 0, never NaN', () => {
+    expect(shiftHours({ start_time: '22:00', end_time: '24:30' })).toBe(0)
+    expect(shiftHours({ start_time: '22:00', end_time: '24:00:01' })).toBe(0)
+  })
+})
+
+describe('computeWeeklyCost — a 24:00 end is paid (PAYROLL24.1)', () => {
+  const fte = { employment_type: 'fte', annual_salary: 52000, contracted_hours_per_week: 40, overtime_rate: 35 } // 25/h
+  const late = { start_time: '22:00:00', end_time: '24:00:00' }
+  const day = (h) => ({ start_time: '09:00', end_time: `${String(9 + h).padStart(2, '0')}:00` })
+
+  it('counts and costs the 2 hours', () => {
+    const r = computeWeeklyCost({ shifts: [late], profile: fte })
+    expect(r.actual_hours).toBe(2)
+    expect(r.regular_cost).toBe(50)
+    expect(r.total_cost).toBe(50)
+  })
+
+  it('a 24:00 shift can be the one that crosses into overtime', () => {
+    const r = computeWeeklyCost({ shifts: [day(10), day(10), day(10), day(10), late], profile: fte }) // 42h
+    expect(r.regular_hours).toBe(40)
+    expect(r.overtime_hours).toBe(2)
+    expect(r.overtime_cost).toBe(70) // 2 × 35
+    expect(r.over_threshold).toBe(true)
+  })
+
+  it('a contractor is paid for it', () => {
+    const r = computeWeeklyCost({ shifts: [late], profile: { employment_type: 'contractor', hourly_rate: 30 } })
+    expect(r.total_cost).toBe(60)
   })
 })
