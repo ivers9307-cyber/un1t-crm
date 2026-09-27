@@ -8,6 +8,11 @@
 //       DST-correct via Intl.DateTimeFormat — no dependency on
 //       date-fns-tz.
 //
+//   effectiveWindowAt(blockDate, row, tz)
+//     → the coach's EFFECTIVE window as instants: override → block →
+//       template (shared/roster-month.js). What lateness and
+//       pending/no-show are judged on (ATTENDREPORT.1).
+//
 //   bucketLateness(scheduledAt, arrivalAt, opts)
 //     → 'on_time' | 'late' | 'no_show', honouring a configurable
 //       grace window (default 60s — Stillorgan's policy).
@@ -31,6 +36,8 @@
 //   - 60s grace covers card-tap-on-the-second wobble
 //   - No-show classification is done at REPORT time (when the
 //     shift end is in the past and no arrival is recorded)
+
+import { effectiveShiftStart, effectiveShiftEnd } from '@shared/roster-month'
 
 const MS_PER_MIN = 60 * 1000
 const DEFAULT_GRACE_MS = 60 * 1000          // 1 min
@@ -88,6 +95,45 @@ export function resolveScheduledAt(dateStr, timeStr, tz = 'UTC') {
   // Pass 2: the offset read at pass 1's answer, kept only when exact.
   const ms2 = want - (wallAt(ms1) - ms1)
   return new Date(ms2 !== ms1 && wallAt(ms2) === want ? ms2 : ms1)
+}
+
+// The calendar day after a YYYY-MM-DD key (UTC arithmetic, so no DST hour).
+// Never throws, unlike a Date round trip through toISOString.
+function nextDateKey(dateKey) {
+  const [y, m, d] = String(dateKey).split('-').map(Number)
+  const t = new Date(Date.UTC(y, m - 1, d + 1))
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${t.getUTCFullYear()}-${pad(t.getUTCMonth() + 1)}-${pad(t.getUTCDate())}`
+}
+
+const validDate = (d) => (d instanceof Date && Number.isFinite(d.getTime()) ? d : null)
+
+/**
+ * ATTENDREPORT.1 — a coach's EFFECTIVE window on a shift as real instants in
+ * `tz`: the manager's override, else the block's own time, else the template
+ * (shared/roster-month.js effectiveShiftStart/End, the times the coach was
+ * told and is paid for). An end at or before the start ends the next day
+ * (payroll's rule); '24:00' is the next midnight (resolveScheduledAt rolls it).
+ * The attendance report judges lateness and pending/no-show on this; the
+ * phone's arrival line judges its window on it (shift-arrivals.js). The
+ * back-to-back carry-over does NOT: it stays on the block's times.
+ *
+ * @param {string} dateStr  YYYY-MM-DD, the block's date
+ * @param {object} row      anything effectiveShiftStart/End read:
+ *   start_time_override, end_time_override, block_start_time/block_end_time
+ *   or start_time/end_time, shift_templates
+ * @param {string} [tz]     IANA zone
+ * @returns {{ start: Date|null, end: Date|null }}
+ */
+export function effectiveWindowAt(dateStr, row, tz = 'UTC') {
+  const startT = effectiveShiftStart(row)
+  const endT = effectiveShiftEnd(row)
+  const start = validDate(resolveScheduledAt(dateStr, startT, tz))
+  let end = validDate(resolveScheduledAt(dateStr, endT, tz))
+  if (start && end && end.getTime() <= start.getTime()) {
+    end = validDate(resolveScheduledAt(nextDateKey(dateStr), endT, tz))
+  }
+  return { start, end }
 }
 
 // ── Lateness bucketing ────────────────────────────────────────
