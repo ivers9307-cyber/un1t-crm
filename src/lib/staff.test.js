@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { listStaffForUser, getStaffForUser, STAFF_PUBLIC_FIELDS, STAFF_PICKER_FIELDS } from './staff.js'
 
 function mockDb({ links = [], profiles = [], detailLinks = null } = {}) {
