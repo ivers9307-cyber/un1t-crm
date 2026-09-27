@@ -5,7 +5,8 @@ vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 
 import {
   RATE_REPORT_TYPES, RATE_REPORT_VIEWER_ROLES, RATE_REPORT_TYPES_IN_LIST,
-  canViewReportType, isRateReportType, roleAllowedAtLocationForUi,
+  canViewReportType, isRateReportType, roleAllowedAtLocationForUi, adminOnlyReportRefusal,
+  adminOnlyReportName,
 } from './report-access'
 import { reportTypeSchema, ADMIN_ROLES } from './schemas'
 import { hasRoleAtLocation } from './auth'
@@ -15,11 +16,20 @@ const OTHER = 'loc-b'
 const user = (role, extra = {}) => ({ role, profileRole: role, rolesByLocation: { [LOC]: role }, activeLocation: { id: LOC }, ...extra })
 
 describe('report-access', () => {
-  it('only staff_cost is rate-bearing (a new type carrying rates or cost must be added here)', () => {
-    expect([...RATE_REPORT_TYPES]).toEqual(['staff_cost'])
-    expect(RATE_REPORT_TYPES_IN_LIST).toBe('(staff_cost)')
-    // Every rate type is a real report type.
+  it('staff_cost and utilisation are admin-only: a rate, a cost, or a colleague\'s contract (CONTRACTVIS.1)', () => {
+    expect([...RATE_REPORT_TYPES]).toEqual(['staff_cost', 'utilisation'])
+    expect(RATE_REPORT_TYPES_IN_LIST).toBe('(staff_cost,utilisation)')
     for (const t of RATE_REPORT_TYPES) expect(reportTypeSchema.safeParse(t).success).toBe(true)
+  })
+
+  it('names the report in its refusal', () => {
+    expect(adminOnlyReportRefusal('run', 'staff_cost')).toBe('Only owners and managers can run staff cost reports.')
+    expect(adminOnlyReportRefusal('schedule', 'utilisation')).toBe('Only owners and managers can schedule staff utilisation reports.')
+  })
+
+  it('every admin-only type has a name, so no refusal reads "these reports"', () => {
+    for (const t of RATE_REPORT_TYPES) expect(adminOnlyReportName(t)).not.toBe('these')
+    expect(adminOnlyReportName('staff_hours')).toBe('these')
   })
 
   it('rate viewers are the same set that sees HR fields on the staff list', () => {

@@ -41,8 +41,10 @@ const CreateStaffSchema = z.object({
 })
 
 // GET /api/staff — List staff in the caller's locations.
-//   - master/owner/manager: full profile + HR fields
-//   - head_coach/staff: slim public roster (no salary, etc.)
+//   - a person the caller MANAGES (master, or owner/manager at a studio that
+//     person works at): full profile + HR fields
+//   - everyone else: the slim public roster (no salary, no contract); the
+//     caller's own row keeps their contract (CONTRACTVIS.1)
 // Read logic lives in src/lib/staff.js (shared with GET /api/staff/[id]
 // and consumed on mobile via the SDK).
 export async function GET(request) {
@@ -56,6 +58,10 @@ export async function GET(request) {
   // default, full shape rather than throwing.
   const params = request?.url ? new URL(request.url).searchParams : null
   const fields = params?.get('fields') === 'picker' ? 'picker' : null
+  // CONTRACTVIS.1 — the picker's opt-in for contracted hours. Asking is not
+  // being told: listStaffForUser adds them only to rows the caller manages
+  // (and their own). Without the picker the full shape already decides.
+  const includeContract = fields === 'picker' && params?.get('include') === 'contract'
 
   // ROSTER-FIX.6c — `?location_id=` was ACCEPTED and ignored: callers had been
   // sending it for months (the roster's colleague picker among them) while
@@ -76,7 +82,7 @@ export async function GET(request) {
   }
 
   const db = createServerClient()
-  const result = await listStaffForUser({ db, user, fields, locationId })
+  const result = await listStaffForUser({ db, user, fields, locationId, includeContract })
   if (!result.ok) return NextResponse.json({ success: false, error: result.error }, { status: 400 })
   return NextResponse.json({ success: true, data: result.data })
 }

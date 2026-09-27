@@ -77,6 +77,21 @@ describe('useScheduleData', () => {
     expect(staffUrls[0]).toContain('fields=picker')
   })
 
+  // CONTRACTVIS.1 — colleagues' contracted hours are asked for only by a caller
+  // who may read them (owner / manager / master at this studio). The server
+  // decides per row either way; this keeps a head coach from even asking.
+  it('asks /api/staff for contracted hours only with canReadContract', async () => {
+    const staffUrls = () => global.fetch.mock.calls.map(([u]) => u).filter((u) => u.includes('/api/staff'))
+    const first = renderHook(() => useScheduleData({ ...ARGS, canReadContract: true }))
+    await waitFor(() => expect(first.result.current.loading).toBe(false))
+    expect(staffUrls()).toEqual(['/api/staff?fields=picker&include=contract'])
+    first.unmount()
+    global.fetch.mockClear()
+    const second = renderHook(() => useScheduleData(ARGS))
+    await waitFor(() => expect(second.result.current.loading).toBe(false))
+    expect(staffUrls()).toEqual(['/api/staff?fields=picker'])
+  })
+
   it('does not fetch without a location', async () => {
     const { result } = renderHook(() => useScheduleData({ ...ARGS, locationId: null }))
     await waitFor(() => expect(result.current.loading).toBe(false))
