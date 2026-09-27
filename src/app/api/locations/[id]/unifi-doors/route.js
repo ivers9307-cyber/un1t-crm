@@ -19,6 +19,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation } from '@/lib/auth'
 import { ADMIN_ROLES } from '@/lib/schemas'
+import { logError } from '@/lib/log'
 import {
   getUnifiConfig,
   listDoors,
@@ -27,6 +28,8 @@ import {
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+
+const MODULE = 'locations-unifi-doors'
 
 export async function GET(_request, { params }) {
   const user = await getCurrentUser()
@@ -44,11 +47,18 @@ export async function GET(_request, { params }) {
   }
 
   const db = createServerClient()
-  const { data: location } = await db
+  const { data: location, error: locErr } = await db
     .from('locations')
     .select('id, name, settings')
     .eq('id', locationId)
     .maybeSingle()
+  // F3 (TRAINERSROLE.1): a failed read is a 500, logged. The error used to be
+  // discarded, so a failed read fell into the 404 below and told the picker
+  // "location not found" for a transient error.
+  if (locErr) {
+    logError(MODULE, 'could not read the location', { locationId, error: locErr.message })
+    return NextResponse.json({ success: false, error: 'location_read_failed' }, { status: 500 })
+  }
   if (!location) {
     return NextResponse.json({ success: false, error: 'location_not_found' }, { status: 404 })
   }
