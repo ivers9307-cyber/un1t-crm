@@ -94,10 +94,14 @@ describe('resolveTrainerNames', () => {
 
 // In-memory Supabase fake. Extends the class-climate-runner harness with
 // neq + JSON-path column resolution (raw->trainers->>N) so the backfill
-// UPDATE filters are honoured rather than assumed.
-function makeDb(tables = {}) {
+// UPDATE filters are honoured rather than assumed. TRAINERCALLS.1: a select
+// now PROJECTS its column list (incl. PostgREST's `alias:json->path`), so a
+// reader that selects `trainer_id:raw->trainers->>0` gets `trainer_id` back
+// exactly as it would from PostgREST; `.not(col,'is',null)` is honoured; and
+// a select or upsert can be made to fail.
+function makeDb(tables = {}, { failSelect = null, failUpsert = false } = {}) {
   const store = { class_occurrences: [], ...tables }
-  const calls = { upserts: [], updates: [] }
+  const calls = { upserts: [], updates: [], selects: [] }
 
   const colValue = (row, col) => {
     if (!col.includes('->')) return row[col]
@@ -110,10 +114,22 @@ function makeDb(tables = {}) {
     return typeof cur === 'object' ? cur : String(cur)
   }
 
+  const project = (row, cols) => {
+    if (typeof cols !== 'string' || !cols.trim() || cols.trim() === '*') return row
+    const out = {}
+    for (const part of cols.split(',').map((s) => s.trim()).filter(Boolean)) {
+      const i = part.indexOf(':')
+      const [alias, path] = i > 0 ? [part.slice(0, i), part.slice(i + 1)] : [part, part]
+      out[alias] = colValue(row, path)
+    }
+    return out
+  }
+
   function builder(table) {
     const filters = []
     let op = 'select'
     let payload = null
+    let cols = null
     const applyFilters = (rows) =>
       rows.filter((r) =>
         filters.every(([kind, col, val]) => {
@@ -124,17 +140,19 @@ function makeDb(tables = {}) {
           if (kind === 'lte') return v != null && v <= val
           if (kind === 'in') return val.includes(v)
           if (kind === 'is') return val === null ? v == null : v === val
+          if (kind === 'not_is') return val === null ? v != null : v !== val
           return true
         }),
       )
     const chain = {
-      select() { return chain },
+      select(c) { cols = c ?? null; return chain },
       eq(col, val) { filters.push(['eq', col, val]); return chain },
       neq(col, val) { filters.push(['neq', col, val]); return chain },
       gte(col, val) { filters.push(['gte', col, val]); return chain },
       lte(col, val) { filters.push(['lte', col, val]); return chain },
       in(col, val) { filters.push(['in', col, val]); return chain },
       is(col, val) { filters.push(['is', col, val]); return chain },
+      not(col, operator, val) { filters.push([`not_${operator}`, col, val]); return chain },
       order() { return chain },
       limit() { return chain },
       update(patch) { op = 'update'; payload = patch; return chain },
@@ -147,9 +165,13 @@ function makeDb(tables = {}) {
           return Promise.resolve({ data: null, error: null }).then(resolve)
         }
         if (op === 'upsert') {
-          return Promise.resolve({ data: null, error: null }).then(resolve)
+          return Promise.resolve({ data: null, error: failUpsert ? { message: 'upsert failed' } : null }).then(resolve)
         }
-        return Promise.resolve({ data: applyFilters(store[table]), error: null }).then(resolve)
+        calls.selects.push({ table, cols, filters: [...filters] })
+        if (failSelect && failSelect(table, cols)) {
+          return Promise.resolve({ data: null, error: { message: 'select failed' } }).then(resolve)
+        }
+        return Promise.resolve({ data: applyFilters(store[table]).map((r) => project(r, cols)), error: null }).then(resolve)
       },
     }
     return chain
