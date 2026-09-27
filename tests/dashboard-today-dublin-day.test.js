@@ -53,6 +53,13 @@ describe('/dashboard/today — "today" is a Dublin day', () => {
     expect(code.match(/dublinTodayStr\(\)/g)).toHaveLength(1)
   })
 
+  // A4 REVENUEMTD.1 — fetchPersonalDashboardData runs HERE on the server (UTC),
+  // so from 00:00 to 01:00 Dublin on a Monday in summer its "This week" was
+  // last week while the grid above highlighted Dublin's Monday. Same today.
+  it('hands the same Dublin today to fetchPersonalDashboardData', () => {
+    expect(code).toMatch(/fetchPersonalDashboardData\(\s*db\s*,\s*user\.id\s*,\s*user\.activeLocation\?\.id\s*,\s*\{\s*todayIso\s*\}\s*\)/)
+  })
+
   it('dublinTodayStr really answers a Dublin calendar day', () => {
     expect(dublinTodayStr()).toMatch(/^\d{4}-\d{2}-\d{2}$/)
     expect(dublinTodayStr()).toBe(

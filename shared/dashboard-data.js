@@ -152,22 +152,25 @@ async function fetchDashboardShifts(supabase, { profileId, locationId, startDate
 // Personal — your shifts, your swaps, your inbox.
 // ============================================================
 
-export async function fetchPersonalDashboardData(supabase, profileId, locationId) {
+export async function fetchPersonalDashboardData(supabase, profileId, locationId, { todayIso: callerTodayIso } = {}) {
   if (!profileId) return { success: false, error: 'No profile' }
 
-  // 14-day window — this Monday → next Sunday — fetched as a single
-  // query and split client-side. Cheaper than two queries.
-  const today = new Date()
-  const todayIso = isoDate(today)
-  const thisWeekStart = startOfWeek(today)
-  const thisWeekEnd = endOfWeek(today)
-  const nextWeekStart = new Date(thisWeekEnd); nextWeekStart.setDate(nextWeekStart.getDate() + 1)
-  const nextWeekEnd = new Date(nextWeekStart); nextWeekEnd.setDate(nextWeekEnd.getDate() + 6); nextWeekEnd.setHours(23, 59, 59, 999)
+  // A4 REVENUEMTD.1 — whose "today"? This runs in two places. The web Today
+  // page runs it on the SERVER (UTC on Vercel) and passes its Dublin today
+  // (dublinTodayStr); without that, from 00:00 to 01:00 Dublin on a summer
+  // Monday "This week" was last week. The phone passes nothing and keeps its
+  // device day: Dublin for staff in Ireland, and no Intl, which a Hermes build
+  // without full ICU cannot construct (mobile/lib/dates.js, ROSTER-FIX.7f).
+  const todayIso = typeof callerTodayIso === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(callerTodayIso)
+    ? callerTodayIso
+    : isoDate(new Date())
 
-  const thisWeekStartIso = isoDate(thisWeekStart)
-  const thisWeekEndIso = isoDate(thisWeekEnd)
-  const nextWeekStartIso = isoDate(nextWeekStart)
-  const nextWeekEndIso = isoDate(nextWeekEnd)
+  // 14-day window — this Monday → next Sunday — fetched as a single
+  // query and split client-side. Cheaper than two queries. Pure date-string
+  // maths from here (upcomingWeeksBounds), so no clock or zone is read again.
+  const { monthStartIso: thisWeekStartIso, monthEndIso: thisWeekEndIso } = upcomingWeeksBounds(todayIso, 1)
+  const { monthEndIso: nextWeekEndIso } = upcomingWeeksBounds(todayIso, 2)
+  const { monthStartIso: nextWeekStartIso } = upcomingWeeksBounds(nextWeekEndIso, 1)
 
   // Rolling 7-week roster window (this week + the next 6), anchored on the same
   // "today" as the week dates. Kept under the monthStartIso/monthEndIso/monthShifts

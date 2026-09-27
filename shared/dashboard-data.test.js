@@ -938,3 +938,63 @@ describe('fetchAdsSummary — the last 7 days are Dublin days (A4 REVENUEMTD.1)'
     expect(callArg(db.builders.contacts[0], 'gte', 'attributed_at')).toBe('2026-10-24T12:00:00.000Z')
   })
 })
+
+describe("fetchPersonalDashboardData — the weeks hang off the caller's today (A4 REVENUEMTD.1)", () => {
+  function recordingDb() {
+    const builders = []
+    return {
+      builders,
+      from(table) {
+        const b = chainableBuilder({ data: [], error: null })
+        b.table = table
+        builders.push(b)
+        return b
+      },
+    }
+  }
+  const WEEKS_OF_3_MAR_2027 = {
+    weekStartIso: '2027-03-01', weekEndIso: '2027-03-07',
+    nextWeekStartIso: '2027-03-08', nextWeekEndIso: '2027-03-14',
+    monthStartIso: '2027-03-01', monthEndIso: '2027-04-18',
+  }
+
+  it('a Dublin today from the server anchors this week, next week and the 7-week roster', async () => {
+    const db = recordingDb()
+    const res = await fetchPersonalDashboardData(db, 'p1', 'loc-1', { todayIso: '2027-03-07' }) // a Sunday
+    expect(res.success).toBe(true)
+    expect(res.data).toMatchObject(WEEKS_OF_3_MAR_2027)
+    // The two shift reads: the 14-day window, then the 7-week roster.
+    const shiftReads = db.builders.filter((b) => b.table === 'shift_assignments')
+    expect(shiftReads.map((b) => [
+      callArg(b, 'gte', 'shift_blocks.block_date'),
+      callArg(b, 'lte', 'shift_blocks.block_date'),
+    ])).toEqual([['2027-03-01', '2027-03-14'], ['2027-03-01', '2027-04-18']])
+  })
+
+  // The phone passes no today. Its device day is Dublin's for staff in
+  // Ireland, and reading it needs no Intl (Hermes without ICU). This pins
+  // that the refactor changed nothing for it, in whatever zone the run uses.
+  it("with no today (the phone), the device's calendar day is used, exactly as before", async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2027, 2, 3, 12, 0, 0)) // local noon, Wednesday 3 Mar 2027
+    try {
+      const res = await fetchPersonalDashboardData(recordingDb(), 'p1', 'loc-1')
+      expect(res.data).toMatchObject(WEEKS_OF_3_MAR_2027)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a malformed today falls back to the device day', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2027, 2, 3, 12, 0, 0))
+    try {
+      for (const todayIso of ['3 March', '2027-3-7', '', null, 20270307]) {
+        const res = await fetchPersonalDashboardData(recordingDb(), 'p1', 'loc-1', { todayIso })
+        expect(res.data.weekStartIso, String(todayIso)).toBe('2027-03-01')
+      }
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
