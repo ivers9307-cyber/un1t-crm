@@ -5,8 +5,10 @@
 // Auth: CRON_SECRET (same pattern as the other crons).
 //
 // Heartbeat: stamped after the loop on every run that read the locations
-// list, including runs where a location's sync failed (the row watches the
-// cron, not Glofox — CLASSSYNCHB.1). TRAINERCALLS.1: the stamp carries the
+// list, including runs where a location's sync failed, so a Glofox that
+// ANSWERS with an error does not page. One that HANGS or RATE-LIMITS past
+// the 60 s maxDuration kills the tick before its stamp, so it does (mig 644,
+// CLASSSYNCHB.1). TRAINERCALLS.1: the stamp carries the
 // run's stats as last_outcome; trainer_api_calls is 0 on every tick but the
 // daily trainer-lookup tick (04:00 Dublin, src/lib/class-occurrences.js).
 

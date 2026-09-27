@@ -2,8 +2,10 @@
 // stats as last_outcome (CLASSSYNCHB.1 open question 3a): trainer_api_calls
 // is how the once-a-day trainer lookup is verified in prod (0 on every tick
 // but the 04:00 Dublin one) without calling Glofox. What STALE means is
-// unchanged: the stamp is unconditional after the loop, so a Glofox-down
-// tick still stamps (the row watches the cron, not Glofox).
+// unchanged: the stamp is unconditional after the loop, so a tick where
+// Glofox ANSWERS with an error still stamps and does not page; a Glofox that
+// HANGS or RATE-LIMITS past the 60 s maxDuration kills the tick before its
+// stamp, so that does page (mig 644's note).
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { readFileSync } from 'node:fs'
