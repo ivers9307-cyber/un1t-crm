@@ -238,10 +238,11 @@ export default function RosterSummaryPanel({
               </>
             )}
 
-            {unpublishedEur > 0 && (
+            {/* formatEur shows whole euros: gate on what renders, never "€0 more". */}
+            {Math.round(unpublishedEur) > 0 && (
               <p className="text-[11px] text-un1t-subtle mt-2">
                 {formatEur(unpublishedEur)} more in shifts not yet published
-                {overOncePublishedEur != null
+                {overOncePublishedEur != null && Math.round(overOncePublishedEur) > 0
                   ? <>: <span className="text-amber-700 font-medium">{formatEur(overOncePublishedEur)} over budget once published</span>.</>
                   : '.'}
               </p>

@@ -78,4 +78,30 @@ describe('RosterSummaryPanel contractor spend: published and not yet published',
     expect(container.textContent).toContain('€200 more in shifts not yet published.')
     expect(container.textContent).not.toMatch(/over budget once published/)
   })
+
+  // Amounts render to the whole euro: gate on what is SHOWN, never "€0 more".
+  it('hides a sub-euro unpublished amount that would render as €0', () => {
+    const { container } = renderPanel({ contractorSpend: { ...SPEND, unpublishedContractorCostEur: 0.3 } })
+    expect(container.textContent).not.toMatch(/not yet published/)
+  })
+
+  it('shows an unpublished amount that rounds up to €1', () => {
+    const { container } = renderPanel({ contractorSpend: { ...SPEND, unpublishedContractorCostEur: 0.6 } })
+    expect(container.textContent).toContain('€1 more in shifts not yet published.')
+  })
+
+  it('drops the over-budget phrase when the overshoot would render as €0', () => {
+    const { container } = renderPanel({
+      contractorSpend: { ...SPEND, unpublishedContractorCostEur: 800.3, projectedContractorCostEur: 2000.3, projectedOverBudget: true },
+    })
+    expect(container.textContent).toContain('€800 more in shifts not yet published.')
+    expect(container.textContent).not.toMatch(/over budget once published/)
+  })
+
+  it('shows an over-budget overshoot that rounds up to €1', () => {
+    const { container } = renderPanel({
+      contractorSpend: { ...SPEND, unpublishedContractorCostEur: 800.6, projectedContractorCostEur: 2000.6, projectedOverBudget: true },
+    })
+    expect(container.textContent).toContain('€801 more in shifts not yet published: €1 over budget once published.')
+  })
 })
