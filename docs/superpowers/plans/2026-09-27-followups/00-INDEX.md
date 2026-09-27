@@ -124,6 +124,7 @@ Two implementers at a time (8GB machine). Merge OTAs one at a time.
 
 Newest first.
 
+- 27 Sep 2026: ✅ **#1780 COACHNOTES.1 MERGED** (web). B1 TRAINERSROLE.1 fixes done (guard widened; trainers read error logged; 3 more role-gate rows; OpenAPI 401/500) → fix re-check. C1 RECIPIENTS.1 implementer started (`~/code/un1t-crm-recipients`).
 - 27 Sep 2026: A3 INVOICEHOURS.1 built (6 commits; 35/48 new tests fail on main; the resubmit tests also exposed a second main bug: revoked + live rows made `.maybeSingle()` error, the error was discarded and the insert hit the unique index as a raw 400) → review. Two 24:00 tests skip until A1 merges, then run by themselves.
 - 27 Sep 2026: C1 RECIPIENTS.1 plan written (web only, 9 direct callers + 28 transitive; no throw — each caller retries or logs; Hyrox claim-after-recipients; runway + swap-sweep arms treat a failed read as a fault). Wave 3 fully planned; wave 4 plans commissioned (C4 ATTENDREPORT.1, A4 REVENUEMTD.1).
 - 27 Sep 2026: C2 CLASSSYNCHB.1 plan written (mig 644, four rows, pin test). Found live: **`instagram-feed-sync` has not stamped since 26 Sep 12:00 UTC** (~34h vs 8h) → spawned a separate investigation task. New row **C10 CRONREADERR.1** (three crons stamp after a failed read).
