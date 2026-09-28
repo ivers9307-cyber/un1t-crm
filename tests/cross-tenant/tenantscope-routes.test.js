@@ -318,3 +318,35 @@ describe('POST /api/admin/migrate-host-leads — your organisation only (TENANTS
     expect(runHostLeadMigration).not.toHaveBeenCalled()
   })
 })
+
+// ─── the cars export ─────────────────────────────────────────────────
+describe('GET /api/cars/reports/export — one studio, one legal entity (TENANTSCOPE.1)', () => {
+  const exportReq = () => makeReq('/api/cars/reports/export?type=outstanding-vat')
+
+  it('refuses a caller with no active studio instead of exporting every tenant', async () => {
+    // Unreachable for a real non-master today (no activeAssignment → the
+    // role default, false); pinned so the fail-open can't come back.
+    as(noActive(withPerm(users.ownerA1(), 'car_processing')))
+    const res = await carsExport.GET(exportReq())
+    expect(res.status).toBe(400) // main: 200 with both tenants' cars
+    const body = await res.text()
+    expect(body).not.toContain('AA11 AAA')
+    expect(body).not.toContain('BB22 BBB')
+  })
+
+  it("a master exports the ACTIVE studio's cars, as the Reports page shows them", async () => {
+    as(withActiveLocation(users.master(), LOC_B1))
+    const res = await carsExport.GET(exportReq())
+    expect(res.status).toBe(200)
+    const csv = await res.text()
+    expect(csv).toContain('BB22 BBB')
+    expect(csv).not.toContain('AA11 AAA') // main: a master got every tenant's cars
+  })
+
+  it("an owner with car_processing at A One exports A One's cars only", async () => {
+    as(withPerm(users.ownerA1(), 'car_processing'))
+    const csv = await (await carsExport.GET(exportReq())).text()
+    expect(csv).toContain('AA11 AAA')
+    expect(csv).not.toContain('BB22 BBB')
+  })
+})
